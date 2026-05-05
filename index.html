@@ -862,6 +862,10 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
 .cfg-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
   padding:4px 10px;border-radius:5px;background:var(--s4);color:var(--t3)}
+/* details/summary do backend collapsable */
+details.cfg-card summary::-webkit-details-marker{display:none}
+details.cfg-card[open] .details-chev{transform:rotate(180deg)}
+details.cfg-card summary:hover{background:rgba(255,255,255,.02)}
 .cfg-status.on{background:var(--grd);color:var(--gr)}
 
 .cfg-profile-row{display:flex;align-items:center;gap:13px;padding:12px 16px;cursor:pointer;
@@ -7025,35 +7029,38 @@ function cfgIntegracoes(){
   <div class="cfg-section">
     <div class="cfg-h"><h2>Integrações & Webhooks</h2><p>Configure plataformas de venda, rastreio e automações</p></div>
 
-    <!-- ─── Backend AXION (multi-usuário) ─── -->
-    <div class="cfg-card" style="border:1.5px solid ${connected?'var(--gr)':'var(--am)'};background:${connected?'rgba(16,185,129,.06)':'rgba(245,158,11,.05)'}">
-      <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px">
-        <div style="font-size:28px">${connected?'🔗':'⚠'}</div>
+    <!-- ─── Backend AXION (multi-usuário) — colapsável ─── -->
+    <details class="cfg-card" style="border:1.5px solid ${connected?'var(--gr)':'var(--am)'};background:${connected?'rgba(16,185,129,.06)':'rgba(245,158,11,.05)'};padding:0;overflow:hidden" ${connected?'':'open'}>
+      <summary style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer;user-select:none;list-style:none">
+        <div style="font-size:22px">${connected?'🔗':'⚠'}</div>
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:3px">
+          <div style="font-size:13.5px;font-weight:700;color:var(--tx);display:flex;align-items:center;gap:8px">
             Backend AXION (banco D1)
-            <span class="cfg-status ${connected?'on':''}" style="margin-left:8px">${connected?'Conectado':'Não conectado'}</span>
+            <span class="cfg-status ${connected?'on':''}" style="font-size:10px">${connected?'Conectado':'Não conectado'}</span>
           </div>
-          <div class="muted" style="font-size:12.5px;line-height:1.5">
-            ${connected
-              ?'A Dashboard está sincronizando dados em tempo real com o banco. Múltiplos usuários podem usar simultaneamente.'
-              :'Sem o backend, a Dashboard funciona só localmente (cada navegador tem dados separados). Configure abaixo pra ativar multi-usuário.'}
+          <div class="muted" style="font-size:11.5px;margin-top:2px">
+            ${connected?'Sincronização ativa · clique para configurar':'Configure pra ativar multi-usuário'}
           </div>
         </div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-        <div style="flex:1;min-width:280px">
-          <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
-          <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
-            style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
+        <div style="font-size:14px;color:var(--t3);transition:transform .2s" class="details-chev">▾</div>
+      </summary>
+      <div style="padding:0 18px 16px 18px;border-top:1px solid ${connected?'rgba(16,185,129,.2)':'rgba(245,158,11,.2)'}">
+        <div class="muted" style="font-size:12px;line-height:1.55;margin:12px 0">
+          ${connected
+            ?'A Dashboard está sincronizando dados em tempo real com o banco da Cloudflare. Múltiplos usuários podem trabalhar ao mesmo tempo.'
+            :'Sem o backend, cada navegador tem dados isolados. Crie o Worker D1 seguindo <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">backend/setup.md</code> e cole a URL aqui.'}
         </div>
-        <button class="btn btn-bl btn-sm" onclick="saveApiUrl()">Salvar</button>
-        ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:280px">
+            <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
+            <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
+              style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
+          </div>
+          <button class="btn btn-bl btn-sm" onclick="saveApiUrl()">Salvar</button>
+          ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
+        </div>
       </div>
-      <div class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5">
-        Pra criar o backend pela 1ª vez, siga as instruções em <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">backend/setup.md</code> do repositório.
-      </div>
-    </div>
+    </details>
 
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
       <div style="font-size:28px">💸</div>

@@ -11,7 +11,7 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]
 binding       = "DB"
 database_name = "axion"
-database_id   = "REPLACE-ME"
+database_id   = "a21e7bc2-98fe-4811-b6b0-b016e10a5137"
 
 # ─── Observabilidade ───────────────────────────────────────────
 [observability]
