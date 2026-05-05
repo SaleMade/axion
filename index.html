@@ -46,6 +46,9 @@ body{
     radial-gradient(circle at 12% 8%,rgba(59,130,246,.08),transparent 40%),
     radial-gradient(circle at 88% 92%,rgba(6,182,212,.05),transparent 50%);
 }
+/* Negrito mais leve em todo o app — 700 (default do browser) renderiza
+   muito grosso em texto branco sobre fundo escuro, fazendo letras "grudarem". */
+b, strong { font-weight: 600 }
 /* Global: força tema dark em TODOS os selects/inputs nativos
    (corrige dropdowns brancos no Windows) */
 select,input,textarea,button{color-scheme:dark;font-family:inherit}
@@ -7360,20 +7363,23 @@ function cfgSobre(){
     <div class="cfg-h" style="margin-top:24px"><h2>Recursos disponíveis</h2></div>
     <div class="cfg-card">
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
-        <div><b style="color:var(--tx)">CRM Kanban</b><div class="muted" style="font-size:12px">9 etapas · drag & drop · filtros avançados</div></div>
-        <div><b style="color:var(--tx)">Pedidos COD/Antecipado</b><div class="muted" style="font-size:12px">com comprovantes obrigatórios</div></div>
-        <div><b style="color:var(--tx)">Webhook PAYT</b><div class="muted" style="font-size:12px">7 eventos + automações</div></div>
-        <div><b style="color:var(--tx)">Pagamentos quinzenais</b><div class="muted" style="font-size:12px">fechamentos por período</div></div>
-        <div><b style="color:var(--tx)">Análise por vendedor</b><div class="muted" style="font-size:12px">ROAS individual + taxa receb.</div></div>
-        <div><b style="color:var(--tx)">Multi-papel + ACL</b><div class="muted" style="font-size:12px">5 papéis + 8 permissões</div></div>
+        <div><span style="color:var(--tx);font-weight:600">CRM Kanban</span><div class="muted" style="font-size:12px;margin-top:2px">Etapas customizáveis · drag & drop · filtros avançados</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Pedidos COD / Antecipado</span><div class="muted" style="font-size:12px;margin-top:2px">com comprovantes obrigatórios</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Webhook PAYT</span><div class="muted" style="font-size:12px;margin-top:2px">13 eventos + automações configuráveis</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Pagamentos por período</span><div class="muted" style="font-size:12px;margin-top:2px">fechamentos quinzenais / mensais</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Análise por vendedor</span><div class="muted" style="font-size:12px;margin-top:2px">ROAS individual + taxa de fechamento</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Multi-papel + ACL</span><div class="muted" style="font-size:12px;margin-top:2px">7 papéis + permissões granulares</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Tags configuráveis</span><div class="muted" style="font-size:12px;margin-top:2px">customizáveis + auto-aplicadas (sistema)</div></div>
+        <div><span style="color:var(--tx);font-weight:600">Backend multi-usuário</span><div class="muted" style="font-size:12px;margin-top:2px">Cloudflare D1 + sync em tempo real</div></div>
       </div>
     </div>
 
     <div class="cfg-h" style="margin-top:24px"><h2>Documentação</h2></div>
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:10px">
-      <div style="display:flex;align-items:center;gap:11px">📚 <span style="color:var(--t2)">Schema PostgreSQL: <b style="color:var(--bl2)">schema.sql</b></span></div>
-      <div style="display:flex;align-items:center;gap:11px">⚡ <span style="color:var(--t2)">Cloudflare Worker: <b style="color:var(--bl2)">worker.js</b></span></div>
-      <div style="display:flex;align-items:center;gap:11px">⚙ <span style="color:var(--t2)">Wrangler config: <b style="color:var(--bl2)">wrangler.toml</b></span></div>
+      <div style="display:flex;align-items:center;gap:11px">📚 <span style="color:var(--t2)">Setup do backend: <span style="color:var(--bl2);font-weight:600">backend/setup.md</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px">⚡ <span style="color:var(--t2)">Worker da API: <span style="color:var(--bl2);font-weight:600">backend/worker.js</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px">🗄 <span style="color:var(--t2)">Schema D1 (SQLite): <span style="color:var(--bl2);font-weight:600">backend/schema.sql</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px">⚙ <span style="color:var(--t2)">Config Wrangler: <span style="color:var(--bl2);font-weight:600">backend/wrangler.toml</span></span></div>
     </div>
   </div>`;
 }
