@@ -2414,8 +2414,121 @@ function chartPeriodDays(){
 /* ═══════════════════════════════════════════════════════
    PERSISTÊNCIA
 ═══════════════════════════════════════════════════════ */
-function persist(){try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}}
+function persist(){
+  try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
+  // Se backend configurado, dispara sync (debounced 2s) com servidor
+  if(apiEnabled()&&apiToken())debouncedServerSync();
+}
 function hydrate(){try{const v=localStorage.getItem('axion_db_v2');return v?JSON.parse(v):null}catch(e){return null}}
+
+/* ═══════════════════════════════════════════════════════
+   API CLIENT (Cloudflare Worker + D1)
+   Multi-usuário real. Se API_URL não setada, fallback local.
+═══════════════════════════════════════════════════════ */
+const apiUrl=()=>{try{return localStorage.getItem('axion_api_url')||''}catch(e){return ''}};
+const apiToken=()=>{try{return localStorage.getItem('axion_api_token')||''}catch(e){return ''}};
+const apiEnabled=()=>!!apiUrl();
+let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency)
+
+const api={
+  async _fetch(path,opts={}){
+    const base=apiUrl();
+    if(!base)throw new Error('Backend não configurado');
+    const headers={'content-type':'application/json',...(opts.headers||{})};
+    const tok=apiToken();
+    if(tok)headers.authorization='Bearer '+tok;
+    const r=await fetch(base.replace(/\/+$/,'')+path,{...opts,headers});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok)throw Object.assign(new Error(data.error||('HTTP '+r.status)),{status:r.status,data});
+    return data;
+  },
+  ping:()=>api._fetch('/'),
+  login:(login,password)=>api._fetch('/auth/login',{method:'POST',body:JSON.stringify({login,password})}),
+  logout:()=>api._fetch('/auth/logout',{method:'POST'}),
+  me:()=>api._fetch('/auth/me'),
+  getState:()=>api._fetch('/api/state'),
+  postState:(data,base_version)=>api._fetch('/api/state',{method:'POST',body:JSON.stringify({data,base_version})}),
+  listUsers:()=>api._fetch('/api/users'),
+  saveUser:(payload)=>api._fetch('/api/users',{method:'POST',body:JSON.stringify(payload)}),
+  deleteUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id),{method:'DELETE'}),
+};
+
+// ─── Sync state com servidor ───
+let _syncTimer=null;
+function debouncedServerSync(){
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(serverSyncNow,2000);
+}
+async function serverSyncNow(){
+  if(!apiEnabled()||!apiToken())return;
+  try{
+    // Não envia DB.team — usuários ficam no /api/users (fonte de verdade separada)
+    const blob={...DB};delete blob.team;
+    const r=await api.postState(blob,serverVersion);
+    serverVersion=r.version;
+  }catch(e){
+    if(e.status===409){
+      // Outro usuário escreveu antes — puxa do servidor
+      await syncFromServer();
+      refreshUI();
+      toast('Estado atualizado por outro usuário','info');
+    } else if(e.status===401){
+      // Sessão expirou — força logout
+      try{localStorage.removeItem('axion_api_token')}catch(_){}
+      toast('Sessão expirou. Faça login novamente.','err');
+      setTimeout(()=>logout(),1500);
+    } else {
+      console.warn('sync falhou:',e);
+    }
+  }
+}
+async function syncFromServer(){
+  if(!apiEnabled()||!apiToken())return;
+  try{
+    const r=await api.getState();
+    if(r.data&&typeof r.data==='object'){
+      // Mescla: campos do servidor sobrescrevem, mas DB.team continua local (vem de /api/users)
+      const team=DB.team;
+      DB=Object.assign({},DB,r.data);
+      DB.team=team; // preserva — users são gerenciados separadamente
+      serverVersion=r.version;
+      try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
+    }
+    // Sincroniza users do servidor
+    try{
+      const u=await api.listUsers();
+      if(u&&Array.isArray(u.users)){
+        DB.team=u.users.map(srv=>{
+          const local=DB.team.find(t=>t.id===srv.id)||{};
+          return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):''};
+        });
+        TEAM=DB.team;
+        try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
+      }
+    }catch(_){}
+  }catch(e){
+    console.warn('syncFromServer falhou:',e);
+  }
+}
+
+// Polling: a cada 30s, checa se outro usuário mudou o estado
+let _pollTimer=null;
+function startStateSync(){
+  stopStateSync();
+  if(!apiEnabled()||!apiToken())return;
+  _pollTimer=setInterval(async()=>{
+    try{
+      const r=await api.getState();
+      if(r.version>serverVersion){
+        await syncFromServer();
+        refreshUI();
+      }
+    }catch(e){/* silencioso */}
+  },30000);
+}
+function stopStateSync(){
+  if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null}
+}
 
 /* ═══════════════════════════════════════════════════════
    UTILS
@@ -2579,15 +2692,40 @@ function lgError(msg){
 }
 
 // Mostra a tela apropriada (primeiro acesso / quick / login normal)
-function initLogin(){
+async function initLogin(){
+  // Tentativa 1: backend ativo + token salvo → auto-login via /auth/me
+  if(apiEnabled()&&apiToken()){
+    try{
+      const r=await api.me();
+      if(r&&r.user){
+        const i=DB.team.findIndex(t=>t.id===r.user.id);
+        const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
+        if(i>=0)DB.team[i]=merged; else DB.team.push(merged);
+        TEAM=DB.team;
+        await syncFromServer();
+        saveSession(r.user.id);
+        enterApp(getTeam(r.user.id)||merged);
+        startStateSync();
+        return;
+      }
+    }catch(e){
+      // Token inválido → limpa e segue pro login normal
+      try{localStorage.removeItem('axion_api_token')}catch(_){}
+    }
+  }
   // Algum membro tem senha cadastrada?
   const someoneHasPwd=TEAM.some(t=>t.pwd_hash);
-  if(!someoneHasPwd){
-    // Primeiro acesso — pede pra criar senha do Diretor
+  if(!someoneHasPwd&&!apiEnabled()){
+    // Primeiro acesso (só local, sem backend) — pede pra criar senha do Diretor
     $('login-first').classList.remove('hidden');
     $('login-quick').classList.add('hidden');
     $('login-form').classList.add('hidden');
     setTimeout(()=>$('lf-pwd')?.focus(),100);
+    return;
+  }
+  // Backend ativo mas sem token → login form
+  if(apiEnabled()){
+    showFullLogin();
     return;
   }
   // Tem senha cadastrada — quick login do último usuário
@@ -2634,6 +2772,24 @@ async function doLogin(){
   const u=$('lg-user').value.trim().toLowerCase();
   const p=$('lg-pwd').value;
   if(!u||!p){lgError('Preencha login e senha');return}
+  // Se backend configurado, valida via API
+  if(apiEnabled()){
+    try{
+      const r=await api.login(u,p);
+      try{localStorage.setItem('axion_api_token',r.token)}catch(_){}
+      // Mescla user retornado em DB.team
+      const i=DB.team.findIndex(t=>t.id===r.user.id);
+      const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
+      if(i>=0)DB.team[i]=merged; else DB.team.push(merged);
+      TEAM=DB.team;
+      await syncFromServer();
+      saveSession(r.user.id);
+      enterApp(getTeam(r.user.id)||merged);
+      startStateSync();
+      return;
+    }catch(e){lgError(e.message||'Falha no login');return}
+  }
+  // Fallback local (sem backend)
   const member=TEAM.find(t=>(t.login||'').toLowerCase()===u||t.id===u);
   if(!member){lgError('Usuário não encontrado');return}
   if(!member.pwd_hash){lgError('Esse usuário ainda não tem senha. Peça ao Diretor pra cadastrar.');return}
@@ -2650,6 +2806,21 @@ async function quickLogin(){
   if(!member){showFullLogin();return}
   const p=$('lq-pwd').value;
   if(!p){lgError('Digite sua senha');return}
+  if(apiEnabled()){
+    try{
+      const r=await api.login(member.login||member.id,p);
+      try{localStorage.setItem('axion_api_token',r.token)}catch(_){}
+      const i=DB.team.findIndex(t=>t.id===r.user.id);
+      const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
+      if(i>=0)DB.team[i]=merged; else DB.team.push(merged);
+      TEAM=DB.team;
+      await syncFromServer();
+      saveSession(r.user.id);
+      enterApp(getTeam(r.user.id)||merged);
+      startStateSync();
+      return;
+    }catch(e){lgError(e.message||'Falha no login');return}
+  }
   const hash=await hashPwd(p);
   if(hash!==member.pwd_hash){lgError('Senha incorreta');return}
   saveSession(member.id);
@@ -2721,6 +2892,12 @@ function updateImpersonateBanner(){
 
 function logout(){
   if(IMPERSONATING){stopImpersonate();return}
+  // Invalida sessão no servidor (best-effort)
+  if(apiEnabled()&&apiToken()){
+    api.logout().catch(()=>{});
+    try{localStorage.removeItem('axion_api_token')}catch(_){}
+  }
+  stopStateSync();
   clearSession();
   CUR=null;
   $('login-screen').style.display='flex';
@@ -5752,7 +5929,7 @@ async function saveMember(){
   const pwd=$('mb-pwd').value;
   if(!name){toast('Nome obrigatório','err');return}
   if(!login){toast('Login (username) obrigatório','err');return}
-  // Login deve ser único
+  // Login deve ser único (validação local — server também checa)
   const existing=DB.team.find(t=>t.login===login&&t.id!==editingMemberId);
   if(existing){toast(`Login "${login}" já está em uso`,'err');return}
   if(pwd&&pwd.length<6){toast('Senha precisa de no mínimo 6 caracteres','err');return}
@@ -5761,8 +5938,32 @@ async function saveMember(){
   const color=$('mb-color').value;
   const bg=color+'26';
   const com_pct=Number($('mb-com').value)||0;
-  const pwd_hash=pwd?await hashPwd(pwd):undefined;
 
+  // Se backend ativo, salva via API
+  if(apiEnabled()&&apiToken()){
+    try{
+      const payload={id:editingMemberId||undefined,login,name,abbr,role,color,bg,com_pct};
+      if(pwd)payload.password=pwd;
+      const r=await api.saveUser(payload);
+      // Re-busca lista de users do server pra ficar 100% sincronizado
+      const u=await api.listUsers();
+      if(u&&u.users){
+        DB.team=u.users.map(srv=>{
+          const local=DB.team.find(t=>t.id===srv.id)||{};
+          return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):''};
+        });
+      }
+      TEAM=DB.team;persist();closeM('m-member');refreshUI();
+      toast(r.action==='created'?'Membro adicionado':'Membro atualizado','ok');
+      return;
+    }catch(e){
+      toast(e.message||'Erro ao salvar membro','err');
+      return;
+    }
+  }
+
+  // Fallback local (sem backend)
+  const pwd_hash=pwd?await hashPwd(pwd):undefined;
   if(editingMemberId){
     const m=DB.team.find(t=>t.id===editingMemberId);
     Object.assign(m,{name,login,abbr,role,color,bg,com_pct});
@@ -5781,6 +5982,18 @@ async function resetMemberPassword(){
   const novaSenha=prompt(`Defina uma nova senha para ${m.name}:`,'');
   if(!novaSenha)return;
   if(novaSenha.length<6){toast('Senha precisa de no mínimo 6 caracteres','err');return}
+  // Backend: usa saveUser pra trocar senha
+  if(apiEnabled()&&apiToken()){
+    try{
+      await api.saveUser({id:m.id,login:m.login,name:m.name,abbr:m.abbr,role:m.role,color:m.color,bg:m.bg,com_pct:m.com_pct,password:novaSenha});
+      m.pwd_hash='__set__';
+      persist();
+      toast(`Senha de ${m.name} resetada. Avise a ele/ela.`,'ok');
+      $('mb-pwd-hint').textContent='✓ Senha redefinida';
+      return;
+    }catch(e){toast(e.message||'Erro ao resetar senha','err');return}
+  }
+  // Fallback local
   m.pwd_hash=await hashPwd(novaSenha);
   persist();
   toast(`Senha de ${m.name} resetada. Avise a ele/ela.`,'ok');
@@ -5790,6 +6003,10 @@ async function confirmDeleteMember(){
   if(!editingMemberId)return;
   const m=DB.team.find(t=>t.id===editingMemberId);
   if(!await axConfirm(`Excluir <b>${m.name}</b>?<br><span class="muted" style="font-size:13px">Os leads/vendas atribuídos permanecem, mas perdem o nome do responsável.</span>`,{okLabel:'Excluir membro'}))return;
+  // Backend: deleta no server primeiro
+  if(apiEnabled()&&apiToken()){
+    try{await api.deleteUser(editingMemberId)}catch(e){toast(e.message||'Erro ao excluir','err');return}
+  }
   DB.team=DB.team.filter(t=>t.id!==editingMemberId);
   TEAM=DB.team;persist();closeM('m-member');refreshUI();
   toast('Membro excluído','ok');
@@ -6257,7 +6474,7 @@ function renderEquipe(){
   <div class="ph">
     <div><h1>Meus <em>Vendedores</em></h1><p>Desempenho dos seus vendedores · ${rangeLabel()}</p></div>
     <div class="ph-r">
-      <button class="btn btn-bl btn-sm" onclick="openMemberNew()">+ Adicionar membro</button>
+      ${isDir()?`<button class="btn btn-gh btn-sm" onclick="configTab='equipe';goPage('config')">⚙ Gerenciar equipe</button>`:''}
     </div>
   </div>
 
@@ -6583,6 +6800,7 @@ function setConfigTab(t){configTab=t;renderConfig()}
 
 const CONFIG_TABS=[
   {k:'conta',      l:'Conta & Perfil',  ic:'👤', all:true},                  // todos
+  {k:'equipe',     l:'Gerenciar Equipe', ic:'👥', dirOnly:true},             // diretor/sócio
   {k:'integracoes',l:'Integrações',     ic:'⚡', dirOnly:true},              // diretor/sócio
   {k:'permissoes', l:'Permissões',      ic:'🔒', dirOnly:true},              // diretor/sócio
   {k:'notif',      l:'Notificações',    ic:'🔔', all:true},                  // todos (próprias)
@@ -6623,6 +6841,7 @@ function renderConfig(){
 function renderConfigContent(){
   const w=$('cfg-content');if(!w)return;
   if(configTab==='conta')      w.innerHTML=cfgConta();
+  else if(configTab==='equipe')      w.innerHTML=cfgEquipe();
   else if(configTab==='integracoes') w.innerHTML=cfgIntegracoes();
   else if(configTab==='permissoes')  w.innerHTML=cfgPermissoes();
   else if(configTab==='notif')       w.innerHTML=cfgNotif();
@@ -6708,11 +6927,133 @@ async function changeMyPassword(){
   toast('Senha atualizada','ok');
 }
 
+// ─── Seção Gerenciar Equipe ────────────────────────────
+function cfgEquipe(){
+  const team=DB.team||[];
+  const ROLE_LBL={diretor:'Diretor',socio:'Sócio',produtor:'Produtor',
+    afiliado:'Afiliado',atendente:'Atendente',cobrador:'Cobrador',gestor:'Gestor de Tráfego'};
+  return `
+  <div class="cfg-section">
+    <div class="cfg-h" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px">
+      <div>
+        <h2>Gerenciar Equipe</h2>
+        <p>Adicione, edite e remova membros do seu time. Senhas são salvas com hash SHA-256.</p>
+      </div>
+      <button class="btn btn-bl btn-sm" onclick="openMemberNew()">+ Adicionar membro</button>
+    </div>
+    <div class="cfg-card" style="padding:0;overflow:hidden">
+      <table class="tbl" style="margin:0">
+        <thead><tr>
+          <th style="text-align:left">Nome</th>
+          <th style="text-align:left">Login</th>
+          <th style="text-align:left">Função</th>
+          <th class="right">Comissão</th>
+          <th class="right">Senha</th>
+          <th class="right" style="width:90px">Ações</th>
+        </tr></thead>
+        <tbody>
+          ${team.map(m=>{
+            const isMe=m.id===CUR.id;
+            const hasPwd=!!m.pwd_hash;
+            return `<tr>
+              <td>
+                <div style="display:flex;align-items:center;gap:9px">
+                  <span class="sav" style="width:28px;height:28px;font-size:11px;background:${m.bg};color:${m.color}">${m.abbr}</span>
+                  <div>
+                    <b style="color:var(--tx);font-weight:600">${m.name}</b>
+                    ${isMe?'<span class="muted" style="font-size:11px"> (você)</span>':''}
+                  </div>
+                </div>
+              </td>
+              <td><code style="font-size:11.5px;background:var(--s3);padding:2px 6px;border-radius:4px;color:var(--cy)">${m.login||'—'}</code></td>
+              <td><span class="muted" style="font-size:12px">${ROLE_LBL[m.role]||m.role}</span></td>
+              <td class="right" style="font-variant-numeric:tabular-nums;color:var(--gr);font-weight:600">${m.com_pct||0}%</td>
+              <td class="right">
+                ${hasPwd
+                  ?'<span style="font-size:11px;background:var(--grd);color:var(--gr);padding:2px 7px;border-radius:5px;font-weight:600">✓ Definida</span>'
+                  :'<span style="font-size:11px;background:var(--rdd);color:var(--rd);padding:2px 7px;border-radius:5px;font-weight:600">⚠ Sem senha</span>'}
+              </td>
+              <td class="right">
+                <button class="btn-act btn-act-gh btn-act-icon" onclick="openMemberEdit('${m.id}')" title="Editar">✎</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="cfg-card" style="background:var(--bld);border-color:var(--bl)">
+      <div style="display:flex;gap:11px;align-items:flex-start">
+        <div style="font-size:22px">💡</div>
+        <div style="font-size:12.5px;color:var(--t2);line-height:1.55">
+          <b style="color:var(--bl2)">Dica:</b> ao criar um membro, defina uma senha inicial (mín. 6 caracteres).
+          O membro pode trocar a senha depois em <b>Conta & Perfil</b>. Se esquecer, você reseta aqui mesmo.
+          <br><br>
+          <b style="color:var(--bl2)">Funções disponíveis:</b> Atendente, Afiliado, Cobrador, Gestor de Tráfego, Produtor, Sócio.
+          As permissões de cada função são configuradas em <a onclick="setConfigTab('permissoes')" style="color:var(--bl);cursor:pointer;font-weight:600">⚙ Permissões</a>.
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 // ─── Seção Integrações ─────────────────────────────────
+async function saveApiUrl(){
+  let url=($('cfg-api-url').value||'').trim().replace(/\/+$/,'');
+  if(url&&!/^https?:\/\//i.test(url)){toast('URL precisa começar com https:// ou http://','err');return}
+  try{
+    if(url)localStorage.setItem('axion_api_url',url);
+    else localStorage.removeItem('axion_api_url');
+  }catch(e){}
+  // Limpa token velho — usuário precisa fazer login de novo
+  try{localStorage.removeItem('axion_api_token')}catch(_){}
+  toast(url?'Backend configurado. Faça logout e login novamente pra conectar.':'Backend desativado','ok');
+  refreshUI();
+}
+async function testApi(){
+  try{
+    const r=await api.ping();
+    toast(`✓ Backend respondendo (v${r.version||'?'})`,'ok');
+  }catch(e){
+    toast(`✗ Erro: ${e.message}`,'err');
+  }
+}
+
 function cfgIntegracoes(){
+  const curUrl=apiUrl();
+  const connected=!!(curUrl&&apiToken());
   return `
   <div class="cfg-section">
     <div class="cfg-h"><h2>Integrações & Webhooks</h2><p>Configure plataformas de venda, rastreio e automações</p></div>
+
+    <!-- ─── Backend AXION (multi-usuário) ─── -->
+    <div class="cfg-card" style="border:1.5px solid ${connected?'var(--gr)':'var(--am)'};background:${connected?'rgba(16,185,129,.06)':'rgba(245,158,11,.05)'}">
+      <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px">
+        <div style="font-size:28px">${connected?'🔗':'⚠'}</div>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:3px">
+            Backend AXION (banco D1)
+            <span class="cfg-status ${connected?'on':''}" style="margin-left:8px">${connected?'Conectado':'Não conectado'}</span>
+          </div>
+          <div class="muted" style="font-size:12.5px;line-height:1.5">
+            ${connected
+              ?'A Dashboard está sincronizando dados em tempo real com o banco. Múltiplos usuários podem usar simultaneamente.'
+              :'Sem o backend, a Dashboard funciona só localmente (cada navegador tem dados separados). Configure abaixo pra ativar multi-usuário.'}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:1;min-width:280px">
+          <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
+          <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
+            style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
+        </div>
+        <button class="btn btn-bl btn-sm" onclick="saveApiUrl()">Salvar</button>
+        ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5">
+        Pra criar o backend pela 1ª vez, siga as instruções em <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">backend/setup.md</code> do repositório.
+      </div>
+    </div>
 
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
       <div style="font-size:28px">💸</div>
