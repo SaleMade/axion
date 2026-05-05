@@ -1,0 +1,39 @@
+# ════════════════════════════════════════════════════════════════
+# AXION — Cloudflare Worker config
+# Deploy: wrangler deploy
+# ════════════════════════════════════════════════════════════════
+name = "axion-webhooks"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# ─── Variáveis públicas (não-secretas) ─────────────────────────
+[vars]
+PAYT_PUBLIC_TOKEN   = "axn_pyt_abc123def456"   # vai na URL pública
+CUSTOM_PUBLIC_TOKEN = "axn_xyz789"
+# IPs publicados pela API dos Correios (atualizar conforme docs)
+CORREIOS_IP_ALLOWLIST = "200.252.60.0,200.252.60.1"
+
+# ─── Secrets (configurar via CLI) ──────────────────────────────
+# wrangler secret put PAYT_WEBHOOK_SECRET
+# (cole o token gerado em PAYT > Configurações > Webhooks)
+
+# ─── D1 (SQLite gerenciado) ────────────────────────────────────
+[[d1_databases]]
+binding       = "DB"
+database_name = "axion"
+database_id   = "REPLACE-WITH-YOUR-D1-ID"
+migrations_dir = "migrations"
+
+# ─── KV opcional (rate limit, dedupe) ──────────────────────────
+# [[kv_namespaces]]
+# binding = "AXION_RATE"
+# id      = "REPLACE-WITH-YOUR-KV-ID"
+
+# ─── Domínio customizado (opcional) ────────────────────────────
+# routes = [
+#   { pattern = "api.axion.app/webhook/*", zone_name = "axion.app" }
+# ]
+
+# ─── Observabilidade ───────────────────────────────────────────
+[observability]
+enabled = true

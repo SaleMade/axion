@@ -1,0 +1,20 @@
+# Config local do Claude Code
+.claude/
+
+# Dependências (caso adicione build no futuro)
+node_modules/
+
+# Logs e cache
+*.log
+.cache/
+.wrangler/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
