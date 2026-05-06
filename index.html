@@ -5909,6 +5909,48 @@ function renderInvest(){
     </div>
   </div>
 
+  <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h"><h3>📦 Investimentos da Operação</h3>
+      <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
+    </div>
+
+    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
+      ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
+        <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
+          <div class="mc-ic" style="background:${c.cor}22;color:${c.cor}">${c.icon}</div>
+          <div class="mc-lbl">${c.nome}</div>
+          <div class="mc-val" style="color:${c.cor};letter-spacing:.01em">${fmt(v)}</div>
+        </div>`}).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
+    </div>
+
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Descrição</th>
+          <th style="text-align:left">Categoria</th>
+          <th class="right">Valor</th>
+          <th class="right" style="width:80px">Ações</th>
+        </tr></thead>
+        <tbody>
+          ${invests.length?invests.map(i=>{const ct=catFor(i.cat);return `<tr>
+            <td>${i.dt}</td>
+            <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
+            <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
+            <td class="right" style="color:var(--rd);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
+            <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
+          </tr>`}).join(''):'<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
+          <tr style="background:var(--s1);font-weight:700">
+            <td colspan="3" style="color:var(--tx)">Total investido</td>
+            <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
   <div class="panel" style="margin-bottom:18px">
     <div class="panel-h">
@@ -6027,48 +6069,6 @@ function renderInvest(){
       <span style="color:var(--gold);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
     </div>`:''}
     `:`<div class="muted" style="text-align:center;padding:20px;font-size:13px">Cadastre membros com função <b>Sócio</b>, <b>Diretor</b> ou <b>Produtor</b> em Configurações → Gerenciar Equipe pra registrar aportes.</div>`}
-  </div>
-
-  <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
-  <div class="panel" style="margin-bottom:18px">
-    <div class="panel-h"><h3>📦 Investimentos da Operação</h3>
-      <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
-    </div>
-
-    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
-      ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
-        <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
-          <div class="mc-ic" style="background:${c.cor}22;color:${c.cor}">${c.icon}</div>
-          <div class="mc-lbl">${c.nome}</div>
-          <div class="mc-val" style="color:${c.cor};letter-spacing:.01em">${fmt(v)}</div>
-        </div>`}).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
-    </div>
-
-    <div class="tbl-wrap">
-      <table class="tbl">
-        <thead><tr>
-          <th style="text-align:left">Data</th>
-          <th style="text-align:left">Descrição</th>
-          <th style="text-align:left">Categoria</th>
-          <th class="right">Valor</th>
-          <th class="right" style="width:80px">Ações</th>
-        </tr></thead>
-        <tbody>
-          ${invests.length?invests.map(i=>{const ct=catFor(i.cat);return `<tr>
-            <td>${i.dt}</td>
-            <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
-            <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
-            <td class="right" style="color:var(--rd);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
-            <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
-          </tr>`}).join(''):'<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
-          <tr style="background:var(--s1);font-weight:700">
-            <td colspan="3" style="color:var(--tx)">Total investido</td>
-            <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
-            <td></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
   </div>
 
   <!-- ═══ SALDO DE CAPITAL — relação aporte vs consumo (rodapé) ═══ -->
