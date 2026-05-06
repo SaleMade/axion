@@ -2475,7 +2475,26 @@ const DEFAULT_TAGS=[
 // Compat — funções abaixo substituem o lookup direto
 const TAG_COLORS={'vip':'#fbbf24','urgente':'#ef4444','retorno':'#a855f7','quente':'#f59e0b','frio':'#64748b'};
 
-const SALES_STATE={'São Paulo':12,'Bahia':9,'Maranhão':7,'Minas Gerais':6,'Ceará':5,'Goiás':4,'Pará':3,'Rondônia':2,'Rio de Janeiro':5,'Pernambuco':4};
+// Mapa UF → nome do estado (usado pra resolver lead.uf em chave do SALES_STATE)
+const UF_TO_NAME={
+  AC:'Acre',AL:'Alagoas',AP:'Amapá',AM:'Amazonas',BA:'Bahia',CE:'Ceará',
+  DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',
+  MT:'Mato Grosso',MS:'Mato Grosso do Sul',MG:'Minas Gerais',PA:'Pará',
+  PB:'Paraíba',PR:'Paraná',PE:'Pernambuco',PI:'Piauí',RJ:'Rio de Janeiro',
+  RN:'Rio Grande do Norte',RS:'Rio Grande do Sul',RO:'Rondônia',RR:'Roraima',
+  SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins',
+};
+// Calcula vendas por estado a partir dos leads reais (substitui mock antigo).
+// Considera só leads com status "Pago" (compra confirmada).
+function computeSalesByState(){
+  const out={};
+  (DB.leads||[]).forEach(l=>{
+    if(l.col!=='Pago'||!l.uf)return;
+    const nm=UF_TO_NAME[l.uf]||l.uf;
+    out[nm]=(out[nm]||0)+1;
+  });
+  return out;
+}
 const ST_ABBR={Acre:'AC',Alagoas:'AL',Amapá:'AP',Amazonas:'AM',Bahia:'BA',Ceará:'CE','Distrito Federal':'DF','Espírito Santo':'ES',Goiás:'GO',Maranhão:'MA','Mato Grosso':'MT','Mato Grosso do Sul':'MS','Minas Gerais':'MG',Pará:'PA',Paraíba:'PB',Paraná:'PR',Pernambuco:'PE',Piauí:'PI','Rio de Janeiro':'RJ','Rio Grande do Norte':'RN','Rio Grande do Sul':'RS',Rondônia:'RO',Roraima:'RR','Santa Catarina':'SC','São Paulo':'SP',Sergipe:'SE',Tocantins:'TO'};
 
 /* dados mock — agora com CPF, endereço, modalidade, follow_up, etc. */
@@ -5582,6 +5601,7 @@ function confirmRechargeId(id){
 ═══════════════════════════════════════════════════════ */
 function pageRegioes(){
   // estatísticas computadas a partir de DB.leads
+  const SALES_STATE=computeSalesByState(); // nome local pra reusar template
   const stByState={};
   DB.leads.forEach(l=>{
     if(!l.uf)return;
@@ -5601,15 +5621,17 @@ function pageRegioes(){
         <div class="panel" style="margin-bottom:14px">
           <div class="panel-h"><h3>Vendas por Estado</h3><span class="ph-c">${Object.keys(SALES_STATE).length} ativos</span></div>
           <div class="reg-list">
-            ${Object.entries(SALES_STATE).sort((a,b)=>b[1]-a[1]).map(([nm,v])=>{
-              const max=Math.max(...Object.values(SALES_STATE));
-              return `<div class="reg-row">
-                <span class="reg-uf">${ST_ABBR[nm]||'?'}</span>
-                <span class="reg-nm">${nm}</span>
-                <div class="reg-bar"><div class="reg-bar-fill" style="width:${v/max*100}%"></div></div>
-                <span class="reg-cnt">${v}</span>
-              </div>`;
-            }).join('')}
+            ${Object.keys(SALES_STATE).length===0
+              ? `<div class="muted" style="text-align:center;padding:30px;font-size:13px">Nenhuma venda registrada ainda.<br><span style="font-size:11.5px;opacity:.7">Quando leads forem marcados como Pago, os estados aparecem aqui.</span></div>`
+              : Object.entries(SALES_STATE).sort((a,b)=>b[1]-a[1]).map(([nm,v])=>{
+                  const max=Math.max(...Object.values(SALES_STATE));
+                  return `<div class="reg-row">
+                    <span class="reg-uf">${ST_ABBR[nm]||'?'}</span>
+                    <span class="reg-nm">${nm}</span>
+                    <div class="reg-bar"><div class="reg-bar-fill" style="width:${v/max*100}%"></div></div>
+                    <span class="reg-cnt">${v}</span>
+                  </div>`;
+                }).join('')}
           </div>
         </div>
 
@@ -9683,7 +9705,19 @@ function getHeat(v){
   return '#3b82f6';
 }
 async function buildMap(){
-  const wrap=$('brazil-map');if(!wrap||mapBuilt)return;
+  const wrap=$('brazil-map');if(!wrap)return;
+  // Recalcula vendas por estado a partir de DB.leads (não mais mock fixo)
+  const SALES_STATE=computeSalesByState();
+  // Se já foi montado, só atualiza as cores (não rebaixa o GeoJSON de novo)
+  if(mapBuilt){
+    wrap.querySelectorAll('path[data-state]').forEach(p=>{
+      const nm=p.getAttribute('data-state');
+      const sales=SALES_STATE[nm]||0;
+      p.setAttribute('fill',getHeat(sales));
+      p.dataset.sales=sales;
+    });
+    return;
+  }
   try{
     const r=await fetch('https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson');
     const geo=await r.json();
@@ -9713,6 +9747,8 @@ async function buildMap(){
         const path=document.createElementNS('http://www.w3.org/2000/svg','path');
         path.setAttribute('d',d.trim());path.setAttribute('fill',fill);
         path.setAttribute('stroke','#1f2a44');path.setAttribute('stroke-width','0.6');
+        path.setAttribute('data-state',nm);  // pra rebuild incremental ao atualizar dados
+        path.dataset.sales=sales;
         path.style.cursor='pointer';path.style.transition='fill .18s';
         path.addEventListener('mouseenter',e=>{
           path.setAttribute('fill',sales>0?'#60a5fa':'#243152');
