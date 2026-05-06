@@ -6161,10 +6161,10 @@ function renderPagEquip(){
               <span style="color:var(--tx);font-weight:600">${i.name}</span>
             </div></td>
             <td style="text-transform:capitalize;color:var(--t2)">${i.role}</td>
-            <td class="right" style="font-weight:600">${i.vendas}</td>
-            <td class="right" style="color:var(--gr);font-weight:600;letter-spacing:.01em">${fmt(i.faturamento)}</td>
-            <td class="right" style="color:var(--gold);font-weight:700;letter-spacing:.01em">${fmt(i.comissao)}</td>
-            <td class="right">${i.conv}%</td>
+            <td class="right" style="font-weight:600;color:var(--t2)">${i.vendas}</td>
+            <td class="right" style="color:var(--t2);font-weight:500;letter-spacing:.01em">${fmt(i.faturamento)}</td>
+            <td class="right" style="color:var(--tx);font-weight:700;letter-spacing:.01em">${fmt(i.comissao)}</td>
+            <td class="right" style="color:var(--t2)">${i.conv}%</td>
             <td class="right"><span class="tbl-st" style="background:${stBg[status]};color:${stColors[status]}">${status}</span></td>
           </tr>`;
         }).join('')}
@@ -6194,8 +6194,8 @@ function renderPagEquip(){
               <span style="color:var(--tx);font-weight:600">${u.name}</span>
             </div></td>
             <td class="muted">${p.obs||'—'}</td>
-            <td class="right" style="color:var(--am);font-weight:700;letter-spacing:.01em">${fmt(p.valor)}</td>
-            <td class="right">${p.comp?'<span style="color:var(--gr)">📎 ver</span>':'—'}</td>
+            <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(p.valor)}</td>
+            <td class="right">${p.comp?'<span style="color:var(--t2)">📎 ver</span>':'—'}</td>
             <td class="right">
               <button class="btn-act btn-act-gh btn-act-icon" onclick="openPayoutEdit(${p.id})" title="Editar">✎</button>
             </td>
@@ -6574,8 +6574,8 @@ function renderInvest(){
             <div style="font-size:13px;font-weight:700;color:${saldoColor};font-variant-numeric:tabular-nums;line-height:1.1">${fmt(saldo)}</div>
           </div>`:''}
           <div class="mc-lbl">${cat.nome}</div>
-          <div class="mc-val" style="color:${cat.cor};letter-spacing:.01em">${fmt(gasto)}</div>
-          ${hasBudget?`<div class="mc-sub" style="font-size:10.5px">de <b style="color:var(--gold)">${fmt(budget)}</b> reservado</div>`:''}
+          <div class="mc-val" style="letter-spacing:.01em">${fmt(gasto)}</div>
+          ${hasBudget?`<div class="mc-sub" style="font-size:10.5px">de <b style="color:var(--t2);font-weight:600">${fmt(budget)}</b> reservado</div>`:''}
         </div>`;
       }).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
     </div>
@@ -6595,15 +6595,14 @@ function renderInvest(){
             const ct=catFor(i.cat);
             const isBudget=!!i.is_budget;
             const tipoBadge=isBudget
-              ?`<span class="tbl-st" style="background:rgba(251,191,36,.16);color:var(--gold)">🎯 Budget</span>`
-              :`<span class="tbl-st" style="background:rgba(239,68,68,.14);color:var(--rd)">💸 Gasto</span>`;
-            const valorColor=isBudget?'var(--gold)':'var(--rd)';
+              ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold)">🎯 Budget</span>`
+              :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">💸 Gasto</span>`;
             return `<tr>
-              <td>${i.dt}</td>
+              <td style="color:var(--t2)">${i.dt}</td>
               <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
-              <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
+              <td><span class="tbl-st" style="background:${ct.cor}14;color:var(--t2)">${ct.icon} ${ct.nome}</span></td>
               <td>${tipoBadge}</td>
-              <td class="right" style="color:${valorColor};font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
+              <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
               <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
             </tr>`;
           }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
@@ -7687,14 +7686,14 @@ function renderTrafego(){
       <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
         <div style="text-align:right">
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Designado</div>
-          <div style="font-size:15px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(budgetTrafego)}</div>
+          <div style="font-size:15px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums">${fmt(budgetTrafego)}</div>
         </div>
         <div style="text-align:right">
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Investido</div>
-          <div style="font-size:15px;font-weight:700;color:var(--rd);font-variant-numeric:tabular-nums">${fmt(gastoTrafegoTotal)}</div>
+          <div style="font-size:15px;font-weight:700;color:var(--t2);font-variant-numeric:tabular-nums">${fmt(gastoTrafegoTotal)}</div>
         </div>
         <div style="text-align:right;padding-left:14px;border-left:1px solid var(--b1)">
-          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:${saldoTrafego>=0?'var(--gr)':'var(--rd)'}">Saldo disponível</div>
+          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Saldo disponível</div>
           <div style="font-size:18px;font-weight:700;color:${saldoTrafego>=0?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums">${fmt(saldoTrafego)}</div>
         </div>
       </div>
@@ -7756,17 +7755,17 @@ function renderTrafego(){
           const at=g.at?getTeam(g.at):(chip?getTeam(chip.at):null);
           const chipCell=chip||at
             ?`<div style="display:flex;align-items:center;gap:6px">
-                ${chip?`<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--cy)">${chip.num}</span>`:''}
+                ${chip?`<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--t2)">${chip.num}</span>`:''}
                 ${at?`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span>`:''}
               </div>`
             :'<span class="muted" style="font-size:11.5px">— geral —</span>';
           return `<tr>
-          <td>${g.data}</td>
+          <td style="color:var(--t2)">${g.data}</td>
           <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
           <td>${chipCell}</td>
-          <td class="right" style="color:var(--rd);font-weight:700">${fmt(g.valor)}</td>
-          <td class="right">${g.leads}</td>
-          <td class="right">${fmt(g.valor/g.leads)}</td>
+          <td class="right" style="color:var(--tx);font-weight:600">${fmt(g.valor)}</td>
+          <td class="right" style="color:var(--t2)">${g.leads}</td>
+          <td class="right" style="color:var(--t2)">${fmt(g.valor/g.leads)}</td>
           ${canEdit?`<td class="right">
             <button class="btn-act btn-act-gh btn-act-icon" onclick="editGasto(${DB.gastos.indexOf(g)})" title="Editar">✎</button>
             <button class="btn-act btn-act-gh btn-act-icon" onclick="delGasto(${DB.gastos.indexOf(g)})" title="Excluir">×</button>
