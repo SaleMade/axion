@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>AXION — Premium</title>
+<link rel="icon" type="image/png" href="Logo.png">
+<link rel="apple-touch-icon" href="Logo.png">
 <style>
 /* ═══════════════════════════════════════════════════════════════
    AXION v2 — Premium Blue / Dark
@@ -70,11 +72,9 @@ input[type=date],input[type=datetime-local],input[type=number],input[type=time]{
 .lbox{background:linear-gradient(180deg,var(--s1),var(--s2));
   border:1px solid var(--b2);border-radius:var(--rxl);padding:42px 38px;
   width:400px;text-align:center;box-shadow:var(--sh2),0 0 80px rgba(59,130,246,.08)}
-.l-logo{width:60px;height:60px;
-  background:linear-gradient(135deg,var(--bl),var(--bl4));
-  border-radius:14px;display:flex;align-items:center;justify-content:center;
-  font-weight:900;font-size:24px;color:#fff;margin:0 auto 14px;
-  box-shadow:0 0 24px var(--blg)}
+.l-logo{width:60px;height:60px;display:flex;align-items:center;justify-content:center;
+  margin:0 auto 14px}
+.l-logo img{width:100%;height:100%;object-fit:cover;border-radius:14px;box-shadow:0 0 24px var(--blg);display:block}
 .l-title{font-size:26px;font-weight:800;letter-spacing:.04em;margin-bottom:4px}
 .l-title em{background:linear-gradient(90deg,var(--bl2),var(--cy));
   -webkit-background-clip:text;background-clip:text;color:transparent;font-style:normal}
@@ -124,11 +124,8 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
 .sb-brand{padding:18px 18px 14px;border-bottom:1px solid var(--b1);
   display:flex;align-items:center;gap:11px}
-.sb-logo{width:36px;height:36px;
-  background:linear-gradient(135deg,var(--bl),var(--bl4));
-  border-radius:9px;display:flex;align-items:center;justify-content:center;
-  font-weight:900;font-size:14px;color:#fff;
-  box-shadow:0 0 12px var(--blg)}
+.sb-logo{width:36px;height:36px;display:flex;align-items:center;justify-content:center;flex:none}
+.sb-logo img{width:100%;height:100%;object-fit:cover;border-radius:9px;box-shadow:0 0 12px var(--blg);display:block}
 .sb-name{font-size:17px;font-weight:800;letter-spacing:.04em;color:var(--tx)}
 .sb-name em{background:linear-gradient(90deg,var(--bl2),var(--cy));
   -webkit-background-clip:text;background-clip:text;color:transparent;font-style:normal}
@@ -1150,7 +1147,7 @@ h1 em{font-weight:700}
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
   <div class="lbox">
-    <div class="l-logo">A</div>
+    <div class="l-logo"><img src="Logo.png" alt="AXION"></div>
     <div class="l-title">AX<em>ION</em></div>
     <div class="l-sub">Plataforma operacional · Marketing Direto</div>
 
@@ -1203,7 +1200,7 @@ h1 em{font-weight:700}
 <!-- ═══ APP ═══ -->
 <aside class="sb" id="sidebar" style="display:none">
   <div class="sb-brand">
-    <div class="sb-logo">A</div>
+    <div class="sb-logo"><img src="Logo.png" alt="AXION"></div>
     <div><div class="sb-name">AX<em>ION</em></div><div class="sb-tagline">Premium</div></div>
   </div>
   <div class="sb-user" id="sb-user"></div>
@@ -7580,7 +7577,7 @@ function cfgSobre(){
     <div class="cfg-h"><h2>Sobre AXION</h2><p>Informações do sistema</p></div>
 
     <div class="cfg-card" style="display:flex;align-items:center;gap:18px">
-      <div class="l-logo" style="width:64px;height:64px;font-size:28px">A</div>
+      <div class="l-logo" style="width:64px;height:64px;margin:0"><img src="Logo.png" alt="AXION"></div>
       <div style="flex:1">
         <div style="font-size:22px;font-weight:800;color:var(--tx);letter-spacing:.04em">AX<em style="background:linear-gradient(90deg,var(--bl2),var(--cy));-webkit-background-clip:text;background-clip:text;color:transparent;font-style:normal">ION</em></div>
         <div class="muted" style="font-size:13px">Plataforma operacional · Marketing Direto</div>
