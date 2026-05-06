@@ -1217,6 +1217,17 @@ h1 em{font-weight:700}
 
     <!-- Erro -->
     <div id="lg-error" class="lg-error hidden"></div>
+
+    <!-- Configurar backend (1ª vez num dispositivo novo) -->
+    <div id="lg-backend-info" style="margin-top:18px;padding:11px 13px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;text-align:center">
+      <div style="font-size:11px;color:var(--t4);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
+        <span id="lg-backend-status">🔌 Conexão</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--t3);line-height:1.5" id="lg-backend-desc">
+        Verificando configuração...
+      </div>
+      <a class="lg-link" style="font-size:11.5px;display:inline-block;margin-top:6px" onclick="configureBackendFromLogin()">⚙ Conectar a outro servidor</a>
+    </div>
   </div>
 </div>
 
@@ -2943,6 +2954,8 @@ function lgError(msg){
 
 // Mostra a tela apropriada (primeiro acesso / quick / login normal)
 async function initLogin(){
+  // Atualiza o card de status do backend (mostra URL conectada ou aviso de modo local)
+  setTimeout(updateBackendStatus,30);
   // Tentativa 1: backend ativo + token salvo → auto-login via /auth/me
   if(apiEnabled()&&apiToken()){
     try{
@@ -3079,6 +3092,52 @@ async function quickLogin(){
   if(hash!==member.pwd_hash){lgError('Senha incorreta');return}
   saveSession(member.id);
   enterApp(member);
+}
+
+// Atualiza o card de status do backend na tela de login
+function updateBackendStatus(){
+  const url=apiUrl();
+  const statusEl=$('lg-backend-status');
+  const descEl=$('lg-backend-desc');
+  if(!statusEl||!descEl)return;
+  if(url){
+    statusEl.innerHTML='✓ Conectado ao servidor';
+    statusEl.style.color='var(--gr)';
+    descEl.innerHTML=`Logando via: <code style="background:var(--s3);padding:1px 5px;border-radius:3px;color:var(--cy);font-size:11px">${url.replace(/^https?:\/\//,'')}</code>`;
+  } else {
+    statusEl.innerHTML='⚠ Modo local (sem servidor)';
+    statusEl.style.color='var(--am)';
+    descEl.innerHTML='Sem backend configurado. Login funciona apenas neste navegador. <b>Conecte-se ao servidor</b> pra usar de qualquer dispositivo.';
+  }
+}
+
+// Permite o usuário configurar a URL do Worker direto na tela de login
+async function configureBackendFromLogin(){
+  const cur=apiUrl();
+  const url=prompt('Cole a URL do Worker AXION (sem barra final):',cur||'https://axion-api.SEU-USUARIO.workers.dev');
+  if(url===null)return;
+  const trimmed=(url||'').trim().replace(/\/+$/,'');
+  if(!trimmed){
+    if(confirm('Remover backend e usar modo local?')){
+      try{localStorage.removeItem('axion_api_url')}catch(_){}
+      try{localStorage.removeItem('axion_api_token')}catch(_){}
+      location.reload();
+    }
+    return;
+  }
+  if(!/^https?:\/\//i.test(trimmed)){toast('URL precisa começar com https:// ou http://','err');return}
+  try{localStorage.setItem('axion_api_url',trimmed)}catch(_){}
+  try{localStorage.removeItem('axion_api_token')}catch(_){}
+  // Testa conexão antes de recarregar
+  try{
+    const r=await fetch(trimmed+'/');
+    if(!r.ok)throw new Error('servidor respondeu '+r.status);
+    toast('✓ Backend conectado — recarregando...','ok');
+    setTimeout(()=>location.reload(),800);
+  }catch(e){
+    toast('⚠ URL salva mas servidor não respondeu — verifique e tente login mesmo assim','err');
+    updateBackendStatus();
+  }
 }
 
 function forgotPassword(){
@@ -8087,6 +8146,32 @@ async function changeMyPassword(){
   if(!cur||!nw){toast('Preencha as duas senhas','err');return}
   if(nw.length<6){toast('Nova senha precisa de no mínimo 6 caracteres','err');return}
   const m=getTeam(CUR.id);
+  if(!m){toast('Membro não encontrado','err');return}
+
+  // Backend ativo: valida senha atual via api.login (servidor confere o hash real)
+  // e atualiza via api.saveUser. Local não tem o hash real (vem como placeholder
+  // '__set__' depois do login via API), então comparação local não funciona.
+  if(apiEnabled()&&apiToken()){
+    try{
+      // Re-valida a senha atual fazendo um login adicional. Se 401, é senha errada.
+      await api.login(m.login||m.id,cur);
+      // Senha atual confere — atualiza via saveUser
+      await api.saveUser({
+        id:m.id, login:m.login, password:nw,
+        name:m.name, abbr:m.abbr, role:m.role,
+        color:m.color, bg:m.bg, com_pct:m.com_pct,
+      });
+      $('cf-pwd-cur').value='';$('cf-pwd-new').value='';
+      toast('Senha atualizada no servidor — use a nova senha em outros dispositivos','ok');
+      return;
+    }catch(e){
+      if(e.status===401){toast('Senha atual incorreta','err');return}
+      toast(e.message||'Erro ao atualizar senha no servidor','err');
+      return;
+    }
+  }
+
+  // Modo local (sem backend): comparação direta de hash
   const curHash=await hashPwd(cur);
   if(curHash!==m.pwd_hash){toast('Senha atual incorreta','err');return}
   m.pwd_hash=await hashPwd(nw);
