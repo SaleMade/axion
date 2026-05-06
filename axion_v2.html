@@ -1659,6 +1659,23 @@ h1 em{font-weight:700}
           Pra registrar gastos com <b>Meta · Google · TikTok · YouTube</b>, use <a onclick="closeM('m-inv');goPage('trafego')" style="color:var(--bl);cursor:pointer;font-weight:600">Tráfego Pago →</a> (lá conta no ROAS).
         </div>
       </div>
+
+      <!-- ─── Tipo: Gasto (já desembolsado) ou Budget (reservado) ─── -->
+      <div class="field" style="margin-bottom:14px">
+        <label>Tipo de lançamento</label>
+        <div style="display:flex;gap:6px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:3px">
+          <button type="button" id="inv-type-gasto" onclick="setInvType('gasto')"
+            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;transition:all .15s">
+            💸 Gasto<br><span style="font-size:10.5px;font-weight:500;opacity:.85">já desembolsado · entra no DRE</span>
+          </button>
+          <button type="button" id="inv-type-budget" onclick="setInvType('budget')"
+            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;transition:all .15s">
+            🎯 Budget<br><span style="font-size:10.5px;font-weight:500;opacity:.85">reservado · não entra no DRE ainda</span>
+          </button>
+        </div>
+      </div>
+      <input type="hidden" id="inv-is-budget" value="0">
+
       <div class="fg">
         <div class="field"><label>Categoria</label>
           <div style="display:flex;gap:6px">
@@ -5203,7 +5220,9 @@ function calcFin(){
   const taxa=recBruta*gatewayPct/100;
   const impostos=recBruta*impostosPct/100;
   const traf=gastos.reduce((s,g)=>s+g.valor,0);
-  const inv=invests.reduce((s,i)=>s+i.vl,0);
+  // Exclui budgets (is_budget:true) do total de investimentos consumidos —
+  // budgets são reservas, não saída de caixa real
+  const inv=invests.filter(i=>!i.is_budget).reduce((s,i)=>s+i.vl,0);
   const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
   // Lucro depende do modo:
   //   Afiliado: receita = comissões recebidas (já vem líquida da plataforma)
@@ -5892,12 +5911,21 @@ function renderInvest(){
   const consumido=fin.traf+fin.inv; // gastos + investimentos do período
   const saldoCapital=totAportes-consumido;
   // Acumulado: total já aportado ever - total já consumido ever
+  // (Budgets de invest NÃO contam como consumido — são reservas)
   const allConsumido=(DB.gastos||[]).reduce((s,g)=>s+(Number(g.valor)||0),0)
-                   +(DB.invest||[]).reduce((s,i)=>s+(Number(i.vl)||0),0);
+                   +(DB.invest||[]).filter(i=>!i.is_budget).reduce((s,i)=>s+(Number(i.vl)||0),0);
   const totAportesAll=(DB.aportes||[]).reduce((s,a)=>s+(Number(a.valor||0)),0);
   const saldoTotal=totAportesAll-allConsumido;
   // Lucro distribuível do período (vem do DRE, respeitando modo Afiliado/Produtor)
   const lucroDistribuivel=Math.max(0,fin.lucro);
+
+  // ─── Budget de Investimentos (acumulado, sem filtro de data) ───
+  // Soma todos invest com is_budget=true vs invest com is_budget=false (gastos reais)
+  const allInvests=DB.invest||[];
+  const invBudgetTotal=allInvests.filter(i=>i.is_budget).reduce((s,i)=>s+Number(i.vl||0),0);
+  const invSpentTotal =allInvests.filter(i=>!i.is_budget).reduce((s,i)=>s+Number(i.vl||0),0);
+  const invBudgetSaldo=invBudgetTotal-invSpentTotal;
+  const invBudgetPct  =invBudgetTotal>0?Math.round(invSpentTotal/invBudgetTotal*100):0;
 
   c.innerHTML=`
   <div class="ph">
@@ -5915,6 +5943,37 @@ function renderInvest(){
       <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
     </div>
 
+    <!-- Resumo de Budget vs Gasto (acumulado) -->
+    ${invBudgetTotal>0||invSpentTotal>0?`
+    <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 14px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="font-size:18px">📊</div>
+        <div style="flex:1;min-width:140px">
+          <div style="font-size:12.5px;font-weight:600;color:var(--tx)">Budget vs Gasto</div>
+          <div class="muted" style="font-size:11px">acumulado · Budgets reservam o valor sem afetar o DRE</div>
+        </div>
+        <div style="text-align:right">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Budget</div>
+          <div style="font-size:14px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(invBudgetTotal)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Gasto</div>
+          <div style="font-size:14px;font-weight:700;color:var(--rd);font-variant-numeric:tabular-nums">${fmt(invSpentTotal)}</div>
+        </div>
+        <div style="text-align:right;padding-left:12px;border-left:1px solid var(--b1)">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${invBudgetSaldo>=0?'var(--gr)':'var(--rd)'}">Saldo</div>
+          <div style="font-size:16px;font-weight:700;color:${invBudgetSaldo>=0?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums">${fmt(invBudgetSaldo)}</div>
+        </div>
+      </div>
+      ${invBudgetTotal>0?`
+      <div style="height:5px;background:var(--s4);border-radius:3px;overflow:hidden;margin-top:9px">
+        <div style="height:100%;width:${Math.min(100,invBudgetPct)}%;background:linear-gradient(90deg,var(--gr),${invBudgetPct>=90?'var(--rd)':'var(--am)'});border-radius:3px;transition:width .3s"></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--t4);margin-top:3px">${invBudgetPct}% consumido${invBudgetSaldo<0?' · ⚠ excedeu':''}</div>
+      `:''}
+    </div>
+    `:''}
+
     <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
       ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
         <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
@@ -5930,19 +5989,29 @@ function renderInvest(){
           <th style="text-align:left">Data</th>
           <th style="text-align:left">Descrição</th>
           <th style="text-align:left">Categoria</th>
+          <th style="text-align:left">Tipo</th>
           <th class="right">Valor</th>
           <th class="right" style="width:80px">Ações</th>
         </tr></thead>
         <tbody>
-          ${invests.length?invests.map(i=>{const ct=catFor(i.cat);return `<tr>
-            <td>${i.dt}</td>
-            <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
-            <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
-            <td class="right" style="color:var(--rd);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
-            <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
-          </tr>`}).join(''):'<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
+          ${invests.length?invests.map(i=>{
+            const ct=catFor(i.cat);
+            const isBudget=!!i.is_budget;
+            const tipoBadge=isBudget
+              ?`<span class="tbl-st" style="background:rgba(251,191,36,.16);color:var(--gold)">🎯 Budget</span>`
+              :`<span class="tbl-st" style="background:rgba(239,68,68,.14);color:var(--rd)">💸 Gasto</span>`;
+            const valorColor=isBudget?'var(--gold)':'var(--rd)';
+            return `<tr>
+              <td>${i.dt}</td>
+              <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
+              <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
+              <td>${tipoBadge}</td>
+              <td class="right" style="color:${valorColor};font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
+              <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
+            </tr>`;
+          }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
           <tr style="background:var(--s1);font-weight:700">
-            <td colspan="3" style="color:var(--tx)">Total investido</td>
+            <td colspan="4" style="color:var(--tx)">Total gasto (sem budgets)</td>
             <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
             <td></td>
           </tr>
@@ -6882,7 +6951,24 @@ function updPro(){
 function openInvest(){
   selOpts($('inv-cat'),DB.invCats.map(c=>({v:c.id,l:c.icon+' '+c.nome})));
   $('inv-desc').value='';$('inv-vl').value='';
+  setInvType('gasto'); // default: gasto desembolsado
+  if($('inv-dt'))$('inv-dt').value=new Date().toISOString().split('T')[0];
   openM('m-inv');
+}
+
+// Toggle entre Gasto (já desembolsado, entra no DRE) e Budget (reservado, fora do DRE)
+function setInvType(type){
+  const isBudget=type==='budget';
+  $('inv-is-budget').value=isBudget?'1':'0';
+  const g=$('inv-type-gasto'), b=$('inv-type-budget');
+  if(g){
+    g.style.background=isBudget?'transparent':'var(--rdd)';
+    g.style.color=isBudget?'var(--t3)':'var(--rd)';
+  }
+  if(b){
+    b.style.background=isBudget?'var(--goldd)':'transparent';
+    b.style.color=isBudget?'var(--gold)':'var(--t3)';
+  }
 }
 function openInvCats(){
   closeM('m-inv');
@@ -6911,8 +6997,12 @@ function delInvCat(id){
 function addInvest(){
   const desc=$('inv-desc').value.trim();
   if(!desc){toast('Descrição obrigatória','err');return}
-  DB.invest.unshift({id:DB.nextInv++,cat:$('inv-cat').value,desc,vl:Number($('inv-vl').value)||0,dt:$('inv-dt').value});
-  persist();closeM('m-inv');refreshUI();toast('Investimento adicionado','ok');
+  const isBudget=$('inv-is-budget').value==='1';
+  DB.invest.unshift({id:DB.nextInv++,cat:$('inv-cat').value,desc,
+    vl:Number($('inv-vl').value)||0,dt:$('inv-dt').value,
+    is_budget:isBudget});
+  persist();closeM('m-inv');refreshUI();
+  toast(isBudget?'Budget reservado':'Gasto registrado','ok');
 }
 async function delInvest(id){
   const i=DB.invest.find(x=>x.id===id);if(!i)return;
