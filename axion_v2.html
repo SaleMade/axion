@@ -4535,6 +4535,23 @@ function quickMoveModal(col){
 function openLeadDetail(id){
   const lead=DB.leads.find(l=>l.id===id);if(!lead)return;
   editingLeadId=id;
+  // Wrap em try/catch pra evitar modal "vazio" — qualquer erro de propriedade
+  // ausente (ex: KB_COLS stale após sync) era silencioso e parava a renderização
+  try{
+    return _openLeadDetailUnsafe(lead);
+  }catch(e){
+    console.error('[openLeadDetail] erro renderizando lead',id,e);
+    toast('Erro ao abrir detalhes — abra o console (F12) e me passe a mensagem','err');
+    closeM('m-lead-detail');
+    return;
+  }
+}
+function _openLeadDetailUnsafe(lead){
+  // Auto-recovery: se KB_COLS estiver vazio/stale, re-vincula antes de prosseguir
+  if(!Array.isArray(KB_COLS)||!KB_COLS.length){
+    console.warn('[openLeadDetail] KB_COLS vazio, fazendo rebindGlobals');
+    rebindGlobals();
+  }
 
   // ─── Header: nome do lead + status pill ───
   $('mld-title').textContent=lead.nome;
