@@ -1786,8 +1786,27 @@ h1 em{font-weight:700}
       </div>
     </div>
     <div class="m-b">
+      <!-- ─── Avatar (foto opcional ou iniciais coloridas) ─── -->
+      <div style="display:flex;gap:16px;align-items:center;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px;margin-bottom:14px">
+        <div id="mb-avatar-preview" style="position:relative;flex:none;width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--s3);font-weight:700;font-size:22px;color:#fff;letter-spacing:.04em">
+          <!-- preview dinâmico injetado em renderMbAvatar() -->
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:5px">Foto de perfil</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <label class="btn btn-gh btn-sm" style="cursor:pointer">
+              <input type="file" accept="image/*" id="mb-photo-input" style="display:none" onchange="onMbPhotoUpload(event)">
+              📷 Enviar foto
+            </label>
+            <button class="btn btn-gh btn-sm" id="mb-photo-clear" onclick="clearMbPhoto()" style="display:none">🗑 Remover foto</button>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:5px">Sem foto, mostra as iniciais com a cor abaixo. Limite 2MB.</div>
+        </div>
+      </div>
+      <input type="hidden" id="mb-photo">
+
       <div class="fg fg2">
-        <div class="field" style="grid-column:span 2"><label>Nome completo</label><input id="mb-name" placeholder="Ex: João Silva"></div>
+        <div class="field" style="grid-column:span 2"><label>Nome completo</label><input id="mb-name" placeholder="Ex: João Silva" oninput="renderMbAvatar()"></div>
         <div class="field"><label>Função</label>
           <select id="mb-role">
             <option value="atendente">Atendente</option>
@@ -1798,9 +1817,9 @@ h1 em{font-weight:700}
             <option value="socio">Sócio / Operações (acesso total)</option>
           </select>
         </div>
-        <div class="field"><label>Iniciais (avatar)</label><input id="mb-abbr" maxlength="3" placeholder="JS" style="text-transform:uppercase"></div>
+        <div class="field"><label>Iniciais (avatar)</label><input id="mb-abbr" maxlength="3" placeholder="JS" style="text-transform:uppercase" oninput="renderMbAvatar()"></div>
         <div class="field"><label>Comissão padrão (%)</label><input id="mb-com" type="number" step="0.5" value="12"></div>
-        <div class="field"><label>Cor do avatar</label><input id="mb-color" type="color" value="#3b82f6" style="height:42px;cursor:pointer"></div>
+        <div class="field"><label>Cor do avatar</label><input id="mb-color" type="color" value="#3b82f6" style="height:42px;cursor:pointer" oninput="renderMbAvatar()"></div>
       </div>
 
       <div class="section-title" style="margin-top:14px">Acesso ao sistema</div>
@@ -2605,6 +2624,21 @@ const isGT =()=>CUR?.role==='gestor';
 const today=()=>new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
 const nowTime=()=>new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 const getTeam=id=>TEAM.find(t=>t.id===id);
+// Helper que retorna o HTML do avatar — usa member.photo se houver, senão iniciais coloridas.
+// opts: {size, fontSize, style, className}
+function avatar(member,opts={}){
+  const size=opts.size||32;
+  const fs=opts.fontSize||(size<=24?10:size<=32?12:size<=48?16:22);
+  const extra=opts.style||'';
+  const cls=opts.className||'sav';
+  if(member?.photo){
+    return `<span class="${cls}" style="width:${size}px;height:${size}px;padding:0;overflow:hidden;border-radius:50%;display:inline-flex;flex:none;${extra}"><img src="${member.photo}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></span>`;
+  }
+  const bg=member?.bg||'var(--s4)';
+  const color=member?.color||'var(--t2)';
+  const abbr=member?.abbr||'?';
+  return `<span class="${cls}" style="width:${size}px;height:${size}px;font-size:${fs}px;background:${bg};color:${color};${extra}">${abbr}</span>`;
+}
 // ─── Helpers de Tags ───
 const getTag=id=>(DB.tags||[]).find(t=>t.id===id);
 const tagColor=id=>{const t=getTag(id);return t?t.color:(TAG_COLORS[id]||'#64748b')};
@@ -3026,7 +3060,7 @@ function defaultPage(){
 ═══════════════════════════════════════════════════════ */
 function buildSidebar(){
   const u=CUR;
-  $('sb-user').innerHTML=`<div class="sb-uav" style="background:${u.bg};color:${u.color}">${u.abbr}</div>
+  $('sb-user').innerHTML=`${avatar(u,{size:32,className:'sb-uav'})}
     <div><div class="sb-uname">${u.name}</div><div class="sb-urole">${u.role}</div></div>`;
 
   const dir=isDir(),afi=isAfi(),at=isAt(),rec=isRec(),gt=isGT();
@@ -6048,15 +6082,82 @@ async function deletePayout(){
 
 // ─── EQUIPE CRUD ──────────────────────────────────────────
 let editingMemberId=null;
+
+// Atualiza o preview do avatar no modal de membro com base no estado atual dos campos.
+// Mostra a foto se houver, senão mostra iniciais sobre a cor de fundo.
+function renderMbAvatar(){
+  const preview=$('mb-avatar-preview');if(!preview)return;
+  const photo=$('mb-photo')?.value||'';
+  const color=$('mb-color')?.value||'#3b82f6';
+  const name=$('mb-name')?.value||'';
+  const abbrInput=$('mb-abbr')?.value||'';
+  const abbr=(abbrInput||name.split(' ').map(w=>w[0]).join('').slice(0,3)||'?').toUpperCase();
+  if(photo){
+    preview.innerHTML=`<img src="${photo}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">`;
+    preview.style.background='transparent';
+    $('mb-photo-clear').style.display='';
+  } else {
+    preview.innerHTML=abbr;
+    preview.style.background=color;
+    $('mb-photo-clear').style.display='none';
+  }
+}
+
+// Upload de foto — redimensiona pra 256x256 (cobre o avatar) e comprime JPEG @0.85.
+// Resultado típico: ~20-40 KB no localStorage, mesmo upando uma foto de 5MB.
+async function onMbPhotoUpload(ev){
+  const f=ev.target.files[0];if(!f)return;
+  if(f.size>10*1024*1024){toast('Imagem muito grande (máx 10MB)','err');ev.target.value='';return}
+  try{
+    const dataUrl=await resizeAvatar(f,256,0.85);
+    $('mb-photo').value=dataUrl;
+    renderMbAvatar();
+    toast('Foto carregada — clique Salvar pra confirmar','ok');
+  }catch(e){toast('Erro ao processar imagem: '+(e.message||''),'err')}
+  ev.target.value=''; // permite re-upload do mesmo arquivo
+}
+
+// Resize centralizado mantendo proporção (cover) — saída em JPEG base64.
+function resizeAvatar(file,size,quality){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('Falha ao ler arquivo'));
+    reader.onload=e=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('Imagem inválida'));
+      img.onload=()=>{
+        try{
+          const c=document.createElement('canvas');
+          c.width=size;c.height=size;
+          const ctx=c.getContext('2d');
+          // cover crop — pega o lado menor e centraliza
+          const r=Math.max(size/img.width,size/img.height);
+          const w=img.width*r, h=img.height*r;
+          ctx.drawImage(img,(size-w)/2,(size-h)/2,w,h);
+          resolve(c.toDataURL('image/jpeg',quality));
+        }catch(err){reject(err)}
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function clearMbPhoto(){
+  $('mb-photo').value='';
+  renderMbAvatar();
+}
+
 function openMemberNew(){
   editingMemberId=null;
   $('mb-title').textContent='+ Novo membro';
   $('mb-name').value='';$('mb-abbr').value='';$('mb-com').value=12;
   $('mb-role').value='atendente';$('mb-color').value='#3b82f6';
   $('mb-login').value='';$('mb-pwd').value='';
+  $('mb-photo').value='';
   $('mb-pwd-hint').textContent='mín. 6 caracteres';
   $('mb-del').style.display='none';
   $('mb-reset-pwd').style.display='none';
+  renderMbAvatar();
   openM('m-member');
 }
 function openMemberEdit(id){
@@ -6087,6 +6188,8 @@ function openMemberEdit(id){
   $('mb-color').value=m.color;
   $('mb-login').value=m.login||'';
   $('mb-pwd').value='';
+  $('mb-photo').value=m.photo||'';
+  renderMbAvatar();
   $('mb-pwd-hint').textContent=m.pwd_hash?'Deixe em branco para manter a senha atual':'⚠ Sem senha cadastrada — defina uma para o acesso funcionar';
   $('mb-del').style.display=(m.id==='dir'||m.id===CUR?.id)?'none':'';
   $('mb-reset-pwd').style.display=(isDir()&&m.id!==CUR?.id&&m.pwd_hash)?'':'none';
@@ -6112,8 +6215,10 @@ async function saveMember(){
   const color=$('mb-color').value;
   const bg=color+'26';
   const com_pct=Number($('mb-com').value)||0;
+  const photo=$('mb-photo').value||'';
 
   // Se backend ativo, salva via API
+  // (foto fica só no estado local — não vai pro servidor pra não estourar a tabela users)
   if(apiEnabled()&&apiToken()){
     try{
       const payload={id:editingMemberId||undefined,login,name,abbr,role,color,bg,com_pct};
@@ -6127,6 +6232,10 @@ async function saveMember(){
           return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):''};
         });
       }
+      // Aplica foto local após sync (server não armazena imagem)
+      const targetId=r.id||editingMemberId;
+      const t=DB.team.find(x=>x.id===targetId);
+      if(t)t.photo=photo;
       TEAM=DB.team;persist();closeM('m-member');refreshUI();
       toast(r.action==='created'?'Membro adicionado':'Membro atualizado','ok');
       return;
@@ -6140,12 +6249,17 @@ async function saveMember(){
   const pwd_hash=pwd?await hashPwd(pwd):undefined;
   if(editingMemberId){
     const m=DB.team.find(t=>t.id===editingMemberId);
-    Object.assign(m,{name,login,abbr,role,color,bg,com_pct});
+    Object.assign(m,{name,login,abbr,role,color,bg,com_pct,photo});
     if(pwd_hash)m.pwd_hash=pwd_hash;  // só atualiza senha se forneceu
   }else{
     const id=role+'_'+Date.now().toString(36).slice(-5);
     if(!pwd_hash){toast('Senha obrigatória ao criar novo membro','err');return}
-    DB.team.push({id,name,login,abbr,role,color,bg,com_pct,pwd_hash});
+    DB.team.push({id,name,login,abbr,role,color,bg,com_pct,pwd_hash,photo});
+  }
+  // Sincroniza CUR caso o user esteja editando o próprio perfil
+  if(editingMemberId===CUR?.id){
+    const updated=DB.team.find(t=>t.id===CUR.id);
+    if(updated)CUR=updated;
   }
   TEAM=DB.team;persist();closeM('m-member');refreshUI();
   toast(editingMemberId?'Membro atualizado':'Membro adicionado','ok');
@@ -6752,7 +6866,7 @@ function renderEquipe(){
           ${stats.map(s=>`<tr style="cursor:pointer" onclick="openMemberAnalysis('${s.id}')">
             <td style="text-align:left">
               <div style="display:flex;align-items:center;gap:10px">
-                <div class="sav" style="background:${s.bg};color:${s.color};width:32px;height:32px;font-size:12px">${s.abbr}</div>
+                ${avatar(s,{size:32,fontSize:12})}
                 <b style="color:var(--tx)">${s.name}</b>
               </div>
             </td>
@@ -7065,7 +7179,7 @@ function cfgConta(){
     </div>
 
     <div class="cfg-card" style="display:flex;align-items:center;gap:18px">
-      <div class="sav" style="background:${u.bg};color:${u.color};width:64px;height:64px;font-size:22px;flex-shrink:0">${u.abbr}</div>
+      ${avatar(u,{size:64,fontSize:22,style:'flex-shrink:0'})}
       <div style="flex:1">
         <div style="font-size:18px;font-weight:700;color:var(--tx)">${u.name}</div>
         <div style="font-size:13px;color:var(--t3);text-transform:capitalize;margin-top:2px">${u.role} · login: <code style="background:var(--s4);padding:2px 7px;border-radius:4px;color:var(--bl2)">${u.login||'—'}</code></div>
@@ -7100,7 +7214,7 @@ function cfgConta(){
       <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Membros do time</div>
       <div class="cfg-card" style="padding:0;margin-bottom:14px">
         ${realMembers.map(t=>`<div class="cfg-profile-row ${IMPERSONATING&&IMPERSONATING.viewing_as===t.id?'on':''}" onclick="impersonate('${t.id}')">
-          <div class="sav" style="background:${t.bg};color:${t.color};width:36px;height:36px;font-size:13px">${t.abbr}</div>
+          ${avatar(t,{size:36,fontSize:13})}
           <div style="flex:1">
             <div style="font-size:14px;font-weight:600;color:var(--tx)">${t.name}</div>
             <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${t.role} · ${t.login||'sem login'}${t.pwd_hash?'':' · ⚠ sem senha'}</div>
@@ -7193,7 +7307,7 @@ function cfgEquipe(){
             return `<tr>
               <td>
                 <div style="display:flex;align-items:center;gap:9px">
-                  <span class="sav" style="width:28px;height:28px;font-size:11px;background:${m.bg};color:${m.color}">${m.abbr}</span>
+                  ${avatar(m,{size:28,fontSize:11})}
                   <div>
                     <b style="color:var(--tx);font-weight:600">${m.name}</b>
                     ${isMe?'<span class="muted" style="font-size:11px"> (você)</span>':''}
