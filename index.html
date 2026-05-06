@@ -2527,6 +2527,10 @@ if(typeof DB.demConfig.gatewayPct!=='number')DB.demConfig.gatewayPct=3;
 if(typeof DB.demConfig.impostosPct!=='number')DB.demConfig.impostosPct=6;
 // Aportes
 if(!DB.aportes){DB.aportes=[];DB.nextAporte=1}
+// Map de fotos de perfil { userId: base64DataUrl } — sincronizado com o blob
+// pra que a foto siga o usuário entre dispositivos. Foto fica também em
+// member.photo (cache rápido), mas o team_photos é a fonte de verdade no sync.
+if(!DB.team_photos){DB.team_photos={}}
 // Tags do CRM — migra TAG_COLORS antigo para estrutura editável + auto-cria tags órfãs vindas de leads existentes
 if(!DB.tags){DB.tags=JSON.parse(JSON.stringify(DEFAULT_TAGS))}
 (function migrateOrphanTags(){
@@ -2731,7 +2735,9 @@ async function syncFromServer(){
         const previews=DB.team.filter(t=>t._preview);
         DB.team=u.users.map(srv=>{
           const local=DB.team.find(t=>t.id===srv.id)||{};
-          return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):''};
+          // Restaura foto do team_photos (vem do blob sincronizado)
+          const photo=DB.team_photos?.[srv.id]||local.photo||'';
+          return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):'',photo};
         });
         if(previews.length)DB.team.push(...previews);
         TEAM=DB.team;
@@ -7009,7 +7015,8 @@ async function saveMember(){
   const photo=$('mb-photo').value||'';
 
   // Se backend ativo, salva via API
-  // (foto fica só no estado local — não vai pro servidor pra não estourar a tabela users)
+  // (foto vai pro DB.team_photos, sincronizado com o blob de estado pra
+  // seguir o user em qualquer dispositivo)
   if(apiEnabled()&&apiToken()){
     try{
       const payload={id:editingMemberId||undefined,login,name,abbr,role,color,bg,com_pct};
@@ -7023,8 +7030,11 @@ async function saveMember(){
           return {...local,...srv,pwd_hash:srv.has_password?(local.pwd_hash||'__set__'):''};
         });
       }
-      // Aplica foto local após sync (server não armazena imagem)
+      // Salva foto em DB.team_photos (sincroniza via blob) + cache em member.photo
       const targetId=r.id||editingMemberId;
+      DB.team_photos=DB.team_photos||{};
+      if(photo)DB.team_photos[targetId]=photo;
+      else delete DB.team_photos[targetId];
       const t=DB.team.find(x=>x.id===targetId);
       if(t)t.photo=photo;
       TEAM=DB.team;persist();closeM('m-member');refreshUI();
@@ -7042,10 +7052,14 @@ async function saveMember(){
     const m=DB.team.find(t=>t.id===editingMemberId);
     Object.assign(m,{name,login,abbr,role,color,bg,com_pct,photo});
     if(pwd_hash)m.pwd_hash=pwd_hash;  // só atualiza senha se forneceu
+    DB.team_photos=DB.team_photos||{};
+    if(photo)DB.team_photos[editingMemberId]=photo;
+    else delete DB.team_photos[editingMemberId];
   }else{
     const id=role+'_'+Date.now().toString(36).slice(-5);
     if(!pwd_hash){toast('Senha obrigatória ao criar novo membro','err');return}
     DB.team.push({id,name,login,abbr,role,color,bg,com_pct,pwd_hash,photo});
+    if(photo){DB.team_photos=DB.team_photos||{};DB.team_photos[id]=photo}
   }
   // Sincroniza CUR caso o user esteja editando o próprio perfil
   if(editingMemberId===CUR?.id){
