@@ -2590,7 +2590,18 @@ function hydrate(){try{const v=localStorage.getItem('axion_db_v2');return v?JSON
    API CLIENT (Cloudflare Worker + D1)
    Multi-usuário real. Se API_URL não setada, fallback local.
 ═══════════════════════════════════════════════════════ */
-const apiUrl=()=>{try{return localStorage.getItem('axion_api_url')||''}catch(e){return ''}};
+// URL padrão do backend AXION — embutida no código pra que qualquer dispositivo
+// que abra a Dash já se conecte automaticamente ao mesmo banco compartilhado.
+// O usuário pode sobrescrever via Configurações (caso queira testar outro backend),
+// mas por default todo o time trabalha no MESMO servidor sem configuração manual.
+const DEFAULT_API_URL='https://axion-api.axion-dash.workers.dev';
+const apiUrl=()=>{
+  try{
+    const saved=localStorage.getItem('axion_api_url');
+    if(saved!==null)return saved; // string vazia = explicitamente desativado pelo user
+    return DEFAULT_API_URL;
+  }catch(e){return DEFAULT_API_URL}
+};
 const apiToken=()=>{try{return localStorage.getItem('axion_api_token')||''}catch(e){return ''}};
 const apiEnabled=()=>!!apiUrl();
 let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency)
@@ -3111,18 +3122,25 @@ function updateBackendStatus(){
   }
 }
 
-// Permite o usuário configurar a URL do Worker direto na tela de login
+// Permite o usuário configurar a URL do Worker direto na tela de login.
+// Casos esperados: trocar pra um backend diferente (homologação, etc).
+// Por default, todo dispositivo já conecta no DEFAULT_API_URL (compartilhado pelo time).
 async function configureBackendFromLogin(){
   const cur=apiUrl();
-  const url=prompt('Cole a URL do Worker AXION (sem barra final):',cur||'https://axion-api.SEU-USUARIO.workers.dev');
+  const url=prompt(
+    'Cole a URL do servidor AXION:\n\n'+
+    '• Padrão do time: '+DEFAULT_API_URL+'\n'+
+    '• Deixe vazio pra usar o padrão de novo',
+    cur===DEFAULT_API_URL?'':cur
+  );
   if(url===null)return;
   const trimmed=(url||'').trim().replace(/\/+$/,'');
   if(!trimmed){
-    if(confirm('Remover backend e usar modo local?')){
-      try{localStorage.removeItem('axion_api_url')}catch(_){}
-      try{localStorage.removeItem('axion_api_token')}catch(_){}
-      location.reload();
-    }
+    // Vazio = volta pro default (não desativa — todo time precisa estar conectado)
+    try{localStorage.removeItem('axion_api_url')}catch(_){}
+    try{localStorage.removeItem('axion_api_token')}catch(_){}
+    toast('✓ Voltou pro servidor padrão — recarregando...','ok');
+    setTimeout(()=>location.reload(),800);
     return;
   }
   if(!/^https?:\/\//i.test(trimmed)){toast('URL precisa começar com https:// ou http://','err');return}
