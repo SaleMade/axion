@@ -1824,12 +1824,18 @@ h1 em{font-weight:700}
         <div class="field" style="grid-column:span 2"><label>Nome completo</label><input id="mb-name" placeholder="Ex: João Silva" oninput="renderMbAvatar()"></div>
         <div class="field"><label>Função</label>
           <select id="mb-role">
-            <option value="atendente">Atendente</option>
-            <option value="afiliado">Afiliado</option>
-            <option value="cobrador">Cobrador</option>
-            <option value="gestor">Gestor de Tráfego</option>
-            <option value="produtor">Produtor</option>
-            <option value="socio">Sócio / Operações (acesso total)</option>
+            <optgroup label="🏛 Gerência (acesso total)">
+              <option value="socio">Sócio</option>
+              <option value="produtor">Produtor</option>
+            </optgroup>
+            <optgroup label="💼 Operação">
+              <option value="atendente" selected>Atendente</option>
+              <option value="cobrador">Cobrador</option>
+              <option value="gestor">Gestor de Tráfego</option>
+            </optgroup>
+            <optgroup label="🤝 Parceiro">
+              <option value="afiliado">Afiliado</option>
+            </optgroup>
           </select>
         </div>
         <div class="field"><label>Iniciais (avatar)</label><input id="mb-abbr" maxlength="3" placeholder="JS" style="text-transform:uppercase" oninput="renderMbAvatar()"></div>
@@ -6440,11 +6446,21 @@ function clearMbPhoto(){
   renderMbAvatar();
 }
 
-function openMemberNew(){
+function openMemberNew(presetRole){
   editingMemberId=null;
-  $('mb-title').textContent='+ Novo membro';
-  $('mb-name').value='';$('mb-abbr').value='';$('mb-com').value=12;
-  $('mb-role').value='atendente';$('mb-color').value='#3b82f6';
+  // Título e defaults variam se for atalho de Sócio
+  const titles={socio:'🤝 Novo Sócio',produtor:'🏭 Novo Produtor'};
+  $('mb-title').textContent=titles[presetRole]||'+ Novo membro';
+  $('mb-name').value='';$('mb-abbr').value='';
+  // Sócio/Produtor não têm comissão por venda (recebem participação no lucro)
+  $('mb-com').value=(presetRole==='socio'||presetRole==='produtor')?0:12;
+  // Reabilita o select (caso tenha sido bloqueado em edição anterior do Diretor)
+  const roleSel=$('mb-role');
+  roleSel.disabled=false;
+  roleSel.style.cursor='';roleSel.style.opacity='';roleSel.title='';
+  roleSel.value=presetRole||'atendente';
+  // Cor padrão diferente por categoria (sócio/produtor = dourado/verde)
+  $('mb-color').value=presetRole==='socio'?'#fbbf24':presetRole==='produtor'?'#10b981':'#3b82f6';
   $('mb-login').value='';$('mb-pwd').value='';
   $('mb-photo').value='';
   $('mb-pwd-hint').textContent='mín. 6 caracteres';
@@ -7576,12 +7592,15 @@ function cfgEquipe(){
     afiliado:'Afiliado',atendente:'Atendente',cobrador:'Cobrador',gestor:'Gestor de Tráfego'};
   return `
   <div class="cfg-section">
-    <div class="cfg-h" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px">
+    <div class="cfg-h" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap">
       <div>
         <h2>Gerenciar Equipe</h2>
         <p>Adicione, edite e remova membros do seu time. Senhas são salvas com hash SHA-256.</p>
       </div>
-      <button class="btn btn-bl btn-sm" onclick="openMemberNew()">+ Adicionar membro</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-gold btn-sm" onclick="openMemberNew('socio')" title="Atalho: pré-seleciona Sócio (acesso total)">🤝 Adicionar Sócio</button>
+        <button class="btn btn-bl btn-sm" onclick="openMemberNew()">+ Adicionar membro</button>
+      </div>
     </div>
     <div class="cfg-card" style="padding:0;overflow:hidden">
       <table class="tbl" style="margin:0">
