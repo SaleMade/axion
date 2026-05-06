@@ -535,27 +535,56 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   try { body = await req.json(); }
   catch (e) { return json({ error: 'payload JSON inválido' }, 400); }
 
-  // Extração flexível — tenta vários nomes de campo (nome PT-BR e EN)
-  const lead_data = {
-    nome:      body.nome || body.name || body.cliente || body.customer || '',
-    cpf:       body.cpf || body.document || body.documento || '',
-    telefone:  body.telefone || body.phone || body.whatsapp || body.celular || body.wa || '',
-    email:     body.email || body.e_mail || '',
-    cep:       body.cep || body.zipcode || body.zip || '',
-    endereco:  body.endereco || body.address || body.end || body.rua || '',
-    numero:    body.numero || body.num || body.number || '',
-    bairro:    body.bairro || body.neighborhood || '',
-    cidade:    body.cidade || body.city || '',
-    uf:        body.uf || body.state || body.estado || '',
-    produto:   body.produto || body.product || body.item || '',
-    valor:     Number(body.valor || body.amount || body.preco || body.price || 0),
-    modalidade:body.modalidade || body.mod || body.tipo || 'antecipado',
-    origem:    body.origem || body.fonte || body.source || body.platform || 'Fornecedor',
-    obs:       body.obs || body.notes || body.observacao || body.comment || '',
-    external_id: body.external_id || body.id || body.order_id || '',
+  // Aceita raiz E formato aninhado (body.order.*, body.address.*, body.customer.*)
+  const o = body.order || body.pedido || {};
+  const a = (body.address || body.endereco || o.address || o.endereco || {});
+  const c = (body.customer || body.cliente || o.customer || o.cliente || {});
+
+  const pick = (...vals) => {
+    for (const v of vals) {
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return '';
   };
 
-  if (!lead_data.nome) return json({ error: 'campo "nome" obrigatório' }, 400);
+  // Extração flexível — tenta vários nomes (PT-BR + EN, raiz + aninhado)
+  const lead_data = {
+    nome:      String(pick(body.nome, body.name, body.client_name, body.cliente, body.customer_name,
+                           o.client_name, o.customer_name, o.name, o.nome, c.name, c.nome) || ''),
+    cpf:       String(pick(body.cpf, body.document, body.documento, o.cpf, o.document, c.cpf, c.document) || ''),
+    telefone:  String(pick(body.telefone, body.phone, body.whatsapp, body.celular, body.wa, body.client_whatsapp,
+                           o.client_whatsapp, o.whatsapp, o.phone, o.telefone, c.phone, c.whatsapp) || ''),
+    email:     String(pick(body.email, body.e_mail, o.email, c.email) || ''),
+    cep:       String(pick(body.cep, body.zipcode, body.zip, a.cep, a.zipcode, a.zip, a.postal_code) || ''),
+    endereco:  String(pick(body.endereco, body.address, body.end, body.rua, body.street,
+                           a.street, a.rua, a.endereco, a.address) || ''),
+    numero:    String(pick(body.numero, body.num, body.number, a.number, a.numero, a.num) || ''),
+    complemento: String(pick(body.complemento, body.comp, body.complement, a.complement, a.complemento) || ''),
+    bairro:    String(pick(body.bairro, body.neighborhood, a.neighborhood, a.bairro) || ''),
+    cidade:    String(pick(body.cidade, body.city, a.city, a.cidade) || ''),
+    uf:        String(pick(body.uf, body.state, body.estado, a.state, a.uf, a.estado) || ''),
+    produto:   String(pick(body.produto, body.product, body.item, body.brand,
+                           o.product, o.produto, o.brand, o.item) || ''),
+    valor:     Number(pick(body.valor, body.amount, body.preco, body.price, body.total,
+                           o.total_amount, o.amount, o.valor, o.total, o.price) || 0),
+    modalidade:String(pick(body.modalidade, body.mod, body.tipo, body.payment_modality,
+                           o.payment_modality, o.modalidade, o.modality) || 'antecipado'),
+    origem:    String(pick(body.origem, body.fonte, body.source, body.platform,
+                           o.source, o.platform, o.origem) || 'Fornecedor'),
+    obs:       String(pick(body.obs, body.notes, body.observacao, body.comment,
+                           o.notes, o.obs, o.observacao) || ''),
+    external_id: String(pick(body.external_id, body.id, body.order_id,
+                             o.id, o.order_id, o.external_id) || ''),
+    track:     String(pick(body.track, body.tracking, body.tracking_code,
+                           o.tracking_code, o.tracking) || ''),
+  };
+
+  if (!lead_data.nome) {
+    return json({
+      error: 'campo "nome" (ou "name" / "client_name") obrigatório',
+      hint: 'aceito: nome, name, client_name, cliente, customer_name — na raiz ou em order.*'
+    }, 400);
+  }
 
   // Normaliza modalidade
   const modNorm = String(lead_data.modalidade).toLowerCase();
@@ -592,7 +621,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     cep: lead_data.cep,
     end: lead_data.endereco,
     num: lead_data.numero,
-    comp: '',
+    comp: lead_data.complemento,
     bairro: lead_data.bairro,
     cidade: lead_data.cidade,
     uf: lead_data.uf,
@@ -602,7 +631,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     trat: '',
     vl: lead_data.valor,
     com_pct: 12,
-    track: '',
+    track: lead_data.track,
     pgto: '',
     spg: 'Pendente',
     mod: mod,
