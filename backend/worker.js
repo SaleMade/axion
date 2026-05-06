@@ -240,24 +240,85 @@ async function handleDeleteUser(req, env, userId) {
 
 const norm = s => String(s || '').replace(/\D/g, '');
 
-// Extrai dados do customer/order numa estrutura comum (PAYT varia campos)
+// Mapeia evento+status real da PAYT pra chave de mapeamento usada na Dash.
+// PAYT envia algo tipo {event:"new_order", order:{status:"confirmed", payment_modality:"on_delivery"}}
+// e nossa Dash tem keys como "aguardando_pagamento","finalizada","cancelada", etc.
+function mapPaytEvent(eventRaw, status, modality) {
+  const e = String(eventRaw || '').toLowerCase();
+  const s = String(status || '').toLowerCase();
+  const m = String(modality || '').toLowerCase();
+  const isCOD = m.includes('on_delivery') || m.includes('cod') || m.includes('apos_receber') || m.includes('entrega');
+
+  // Se já vier com chave canônica (legacy/manual), passa direto
+  const known = ['aguardando_pagamento','finalizada','faturada','cancelada','cancelada_chargeback',
+    'cancelada_reembolsada','abandono_checkout','entrega_atualizada','solicitacao_reembolso',
+    'pagamento_expirado','aguardando_confirmacao','pedido_confirmado','pedido_frustrado'];
+  if (known.includes(e)) return e;
+
+  // Mapeamento por status (mais específico)
+  if (s === 'pending' || s === 'awaiting_payment') return 'aguardando_pagamento';
+  if (s === 'paid')        return 'finalizada';
+  if (s === 'confirmed')   return isCOD ? 'aguardando_confirmacao' : 'finalizada';
+  if (s === 'canceled' || s === 'cancelled') return 'cancelada';
+  if (s === 'refunded')    return 'cancelada_reembolsada';
+  if (s === 'chargeback' || s === 'charged_back') return 'cancelada_chargeback';
+  if (s === 'expired')     return 'pagamento_expirado';
+  if (s === 'delivered')   return 'pedido_confirmado';
+  if (s === 'returned' || s === 'frustrated' || s === 'failed') return 'pedido_frustrado';
+  if (s === 'abandoned')   return 'abandono_checkout';
+
+  // Mapeamento por event (fallback)
+  if (e === 'new_order')         return isCOD ? 'aguardando_confirmacao' : 'aguardando_pagamento';
+  if (e === 'order_paid')        return 'finalizada';
+  if (e === 'order_canceled')    return 'cancelada';
+  if (e === 'order_refunded')    return 'cancelada_reembolsada';
+  if (e === 'order_chargeback')  return 'cancelada_chargeback';
+  if (e === 'order_delivered')   return 'pedido_confirmado';
+  if (e === 'order_expired')     return 'pagamento_expirado';
+  if (e === 'checkout_abandoned')return 'abandono_checkout';
+  if (e === 'tracking_updated' || e === 'shipping_updated') return 'entrega_atualizada';
+
+  return e || 'unknown';
+}
+
+// Extrai dados do payload PAYT (formato real + variações legadas)
 function extractPaytData(body) {
   const order = body?.order || body?.pedido || body || {};
+  // PAYT real: client_* direto no order, address como objeto separado
+  const address = order.address || order.endereco || {};
+  // Legacy: customer/cliente como objeto
   const customer = order.customer || order.cliente || body?.customer || body?.cliente || {};
+
+  const eventRaw = String(body?.event || body?.evento || body?.tipo || '').toLowerCase();
+  const status = order.status || body?.status || '';
+  const modality = order.payment_modality || order.modalidade_pagamento || '';
+  const event = mapPaytEvent(eventRaw, status, modality);
+
   return {
-    event: String(body?.event || body?.evento || body?.tipo || '').toLowerCase(),
+    event,           // chave canônica usada no payt_mapping
+    event_raw: eventRaw,
+    status,
+    modality,
     order_id: order.id || order.order_id || body?.id || body?.pedido_id || '',
-    name: customer.name || customer.nome || '',
-    email: customer.email || '',
-    phone: customer.phone || customer.telefone || customer.whatsapp || customer.celular || '',
-    cpf: customer.cpf || customer.document || customer.documento || '',
-    amount: Number(order.amount || order.valor || order.total || body?.amount || body?.valor || 0),
-    product: order.product || order.produto || (Array.isArray(order.products) ? order.products[0]?.name : '') || '',
-    address: customer.address || order.address || {},
-    city: customer.city || (customer.address?.city) || '',
-    state: customer.state || customer.uf || (customer.address?.state) || '',
-    zipcode: customer.zipcode || customer.cep || (customer.address?.zipcode) || '',
-    payment_method: order.payment_method || order.metodo_pagamento || body?.payment_method || '',
+    name: order.client_name || customer.name || customer.nome || '',
+    email: order.client_email || customer.email || '',
+    phone: order.client_whatsapp || order.client_phone || customer.phone || customer.telefone || customer.whatsapp || customer.celular || '',
+    cpf: order.cpf || order.client_cpf || customer.cpf || customer.document || customer.documento || '',
+    amount: Number(order.total_amount || order.amount || order.valor || order.total || body?.amount || body?.valor || 0),
+    product: body?.treatment?.name || order.treatment?.name || order.product || order.produto || (Array.isArray(order.products) ? order.products[0]?.name : '') || '',
+    payment_method: order.payment_method || order.metodo_pagamento || '',
+    tracking_code: order.tracking_code || '',
+    brand: order.brand || '',
+    seller_id: body?.seller?.id || '',
+    seller_name: body?.seller?.name || '',
+    // Endereço estruturado da PAYT
+    cep: address.cep || address.zipcode || customer.zipcode || customer.cep || '',
+    street: address.street || address.endereco || customer.endereco || '',
+    number: address.number || address.numero || '',
+    complement: address.complement || address.complemento || '',
+    neighborhood: address.neighborhood || address.bairro || '',
+    city: address.city || customer.city || '',
+    state: address.state || customer.state || customer.uf || '',
     raw: body,
   };
 }
@@ -324,6 +385,14 @@ async function handlePaytWebhook(req, env, urlToken) {
   let action_taken = '';
   let lead_id_result = null;
 
+  // Detecta modalidade COD baseado no payload
+  const isCOD = data.modality && (
+    data.modality.toLowerCase().includes('on_delivery') ||
+    data.modality.toLowerCase().includes('cod') ||
+    data.modality.toLowerCase().includes('apos_receber') ||
+    data.modality.toLowerCase().includes('entrega')
+  );
+
   if (lead) {
     // Aplica mapeamento sobre lead existente
     const prev = lead.col;
@@ -333,6 +402,10 @@ async function handlePaytWebhook(req, env, urlToken) {
       lead.tags = Array.isArray(lead.tags) ? lead.tags : [];
       if (!lead.tags.includes(mapping.tag)) lead.tags.push(mapping.tag);
     }
+    // Atualiza dados do lead com info nova vinda da PAYT (se chegou)
+    if (data.tracking_code && !lead.track) lead.track = data.tracking_code;
+    if (data.payment_method && !lead.pgto) lead.pgto = data.payment_method;
+    if (data.amount && !lead.vl) lead.vl = data.amount;
     // Histórico do lead
     lead.hist = Array.isArray(lead.hist) ? lead.hist : [];
     lead.hist.push({
@@ -340,7 +413,7 @@ async function handlePaytWebhook(req, env, urlToken) {
       to: lead.col,
       who: 'payt',
       time: `${todayBR()} ${nowTimeBR()}`,
-      note: `PAYT: ${data.event}`,
+      note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
     });
     // Se ação for 'pagar' e ainda não houver venda correspondente, registra
     if (mapping?.action === 'pagar') {
@@ -367,43 +440,45 @@ async function handlePaytWebhook(req, env, urlToken) {
     }
     action_taken = 'updated';
     lead_id_result = lead.id;
-  } else if (mapping || data.event === 'aguardando_pagamento' || data.event === 'finalizada') {
+  } else if (mapping || ['aguardando_pagamento','aguardando_confirmacao','finalizada'].includes(data.event)) {
     // Cria lead novo se evento for de início de pedido
     state.nextLead = state.nextLead || 1;
     const newLead = {
       id: state.nextLead++,
+      external_id: data.order_id,
       nome: data.name || '(sem nome)',
       cpf: data.cpf || '',
       wa: data.phone || '',
       email: data.email || '',
-      cep: data.zipcode || '',
-      end: '',
-      num: '',
-      bairro: '',
+      cep: data.cep || '',
+      end: data.street || '',
+      num: data.number || '',
+      comp: data.complement || '',
+      bairro: data.neighborhood || '',
       cidade: data.city || '',
       uf: data.state || '',
       data: todayBR(),
       orig: 'PAYT',
       prod: data.product || '',
-      trat: '',
+      trat: data.product || '',
       vl: data.amount || 0,
       com_pct: 12,
-      track: '',
+      track: data.tracking_code || '',
       pgto: data.payment_method || '',
       spg: mapping?.spg || 'Pendente',
-      mod: 'antecipado',
+      mod: isCOD ? 'entrega' : 'antecipado',
       at: null,
-      col: mapping?.etapa || 'A Enviar',
-      obs: `Criado via PAYT (order ${data.order_id})`,
+      col: mapping?.etapa || (isCOD ? 'A Enviar' : 'A Enviar'),
+      obs: `Pedido PAYT ${data.order_id}${data.brand?` · brand: ${data.brand}`:''}${data.seller_name?` · seller: ${data.seller_name}`:''}`,
       link: '',
-      tags: mapping?.action === 'tag' && mapping.tag ? [mapping.tag] : [],
+      tags: mapping?.action === 'tag' && mapping.tag ? [mapping.tag, 'payt'] : ['payt'],
       fu: null,
       hist: [{
         from: '—',
         to: mapping?.etapa || 'A Enviar',
         who: 'payt',
         time: `${todayBR()} ${nowTimeBR()}`,
-        note: `PAYT: ${data.event}`,
+        note: `Pedido criado via PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
       }],
       comments: [],
     };
@@ -436,7 +511,10 @@ async function handlePaytWebhook(req, env, urlToken) {
 
   return json({
     ok: true,
-    event: data.event,
+    event_raw: data.event_raw,
+    event_mapped: data.event,
+    status: data.status,
+    modality: data.modality,
     action: action_taken,
     lead_id: lead_id_result,
     mapping_found: !!mapping,
