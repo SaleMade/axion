@@ -18,15 +18,15 @@
   --b1:#1f2a44;--b2:#2c3a5c;--b3:#3d4d72;
   /* primária — azul premium */
   --bl:#3b82f6;--bl2:#60a5fa;--bl3:#2563eb;--bl4:#1d4ed8;
-  --blg:rgba(59,130,246,.18);--bld:rgba(59,130,246,.10);
-  /* acentos */
-  --cy:#06b6d4;--cyd:rgba(6,182,212,.14);
-  --gold:#fbbf24;--goldd:rgba(251,191,36,.14);
-  --gr:#10b981;--grd:rgba(16,185,129,.14);
-  --rd:#ef4444;--rdd:rgba(239,68,68,.14);
-  --pu:#a855f7;--pud:rgba(168,85,247,.14);
-  --am:#f59e0b;--amd:rgba(245,158,11,.14);
-  --or:#fb923c;--ord:rgba(251,146,60,.14);
+  --blg:rgba(59,130,246,.10);--bld:rgba(59,130,246,.06);
+  /* acentos — fundos mais sóbrios (alpha reduzido pra não saturar UI) */
+  --cy:#06b6d4;--cyd:rgba(6,182,212,.07);
+  --gold:#fbbf24;--goldd:rgba(251,191,36,.07);
+  --gr:#10b981;--grd:rgba(16,185,129,.07);
+  --rd:#ef4444;--rdd:rgba(239,68,68,.08);
+  --pu:#a855f7;--pud:rgba(168,85,247,.07);
+  --am:#f59e0b;--amd:rgba(245,158,11,.07);
+  --or:#fb923c;--ord:rgba(251,146,60,.07);
   /* tipografia — alto contraste */
   --tx:#f8fafc;--t2:#cbd5e1;--t3:#94a3b8;--t4:#64748b;
   /* layout */
@@ -44,9 +44,7 @@ body{
   display:flex;height:100vh;overflow:hidden;
   font-size:16px;line-height:1.5;
   -webkit-font-smoothing:antialiased;
-  background-image:
-    radial-gradient(circle at 12% 8%,rgba(59,130,246,.08),transparent 40%),
-    radial-gradient(circle at 88% 92%,rgba(6,182,212,.05),transparent 50%);
+  /* Gradientes de fundo removidos — UI mais limpa */
 }
 /* Quando Modo Visualização ativo, empurra UI 26px pra baixo pra dar espaço pro banner */
 body.view-mode-on{padding-top:26px;height:calc(100vh - 26px)}
@@ -289,27 +287,29 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 
 /* ─── METRICS ─────────────────────────────────────────── */
 .mg{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:22px}
-.mc{background:linear-gradient(180deg,var(--s2),var(--s1));
+.mc{background:var(--s2);
   border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px;
   position:relative;overflow:hidden;transition:all .2s}
 .mc:hover{border-color:var(--b2);transform:translateY(-2px);box-shadow:var(--sh1)}
-.mc-gl{position:absolute;top:-32px;right:-32px;width:90px;height:90px;
-  border-radius:50%;opacity:.32;filter:blur(28px);pointer-events:none}
-.mc-ic{width:32px;height:32px;border-radius:8px;display:flex;
-  align-items:center;justify-content:center;font-size:15px;margin-bottom:10px}
+/* Halo colorido removido — era fonte de saturação visual */
+.mc-gl{display:none}
+.mc-ic{width:30px;height:30px;border-radius:7px;display:flex;
+  align-items:center;justify-content:center;font-size:14px;margin-bottom:10px}
 .mc-lbl{font-size:11px;color:var(--t3);font-weight:700;
   text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
-.mc-val{font-size:24px;font-weight:800;line-height:1.1;margin-bottom:3px;letter-spacing:-.02em}
+/* Número agora é neutro (branco) — cor só fica no ícone como "categoria" */
+.mc-val{font-size:24px;font-weight:800;line-height:1.1;margin-bottom:3px;letter-spacing:-.02em;color:var(--tx)}
 .mc-sub{font-size:12px;color:var(--t3);font-weight:500}
 .mc-sub .delta{font-weight:700}
 .delta.up{color:var(--gr)}.delta.down{color:var(--rd)}
-.mc-bl .mc-gl{background:var(--bl)} .mc-bl .mc-val{color:var(--bl2)} .mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
-.mc-cy .mc-gl{background:var(--cy)} .mc-cy .mc-val{color:var(--cy)}  .mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
-.mc-gr .mc-gl{background:var(--gr)} .mc-gr .mc-val{color:var(--gr)}  .mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
-.mc-re .mc-gl{background:var(--rd)} .mc-re .mc-val{color:var(--rd)}  .mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
-.mc-pu .mc-gl{background:var(--pu)} .mc-pu .mc-val{color:var(--pu)}  .mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
-.mc-go .mc-gl{background:var(--gold)} .mc-go .mc-val{color:var(--gold)} .mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
-.mc-am .mc-gl{background:var(--am)} .mc-am .mc-val{color:var(--am)}  .mc-am .mc-ic{background:var(--amd);color:var(--am)}
+/* Cards monocromáticos: ícone com fundo levemente colorido + barra lateral fina */
+.mc-bl{border-left:2px solid var(--bl)}   .mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
+.mc-cy{border-left:2px solid var(--cy)}   .mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
+.mc-gr{border-left:2px solid var(--gr)}   .mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
+.mc-re{border-left:2px solid var(--rd)}   .mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
+.mc-pu{border-left:2px solid var(--pu)}   .mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
+.mc-go{border-left:2px solid var(--gold)} .mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
+.mc-am{border-left:2px solid var(--am)}   .mc-am .mc-ic{background:var(--amd);color:var(--am)}
 
 /* destaque "afiliado" */
 /* mc-feat: card de destaque — sutil, sem contorno azul brilhante */
@@ -4541,9 +4541,9 @@ function renderKanban(){
     const dz=document.createElement('div');
     dz.className='kb-col'+(canMove?'':' no-move');
     // Coluna inteira ganha cor da etapa em ~8% de opacidade; header em ~22%
-    dz.style.background=col.c+'14'; // 8%
+    dz.style.background=col.c+'0a'; // 4% — coluna mais sóbria
     dz.innerHTML=`
-      <div class="kb-ch" style="background:${col.c}38"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
+      <div class="kb-ch" style="background:${col.c}1f"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
       <div class="kb-ccards"></div>
       ${leads.length===0?'<div class="kb-dz">'+(canMove?'Solte aqui':'Sem leads')+'</div>':''}`;
     const cards=dz.querySelector('.kb-ccards');
