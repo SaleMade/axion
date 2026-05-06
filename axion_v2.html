@@ -3040,7 +3040,8 @@ function enterApp(member){
 // Diretor "trocar perfil" — entra como outro usuário SEM senha (impersonate)
 let IMPERSONATING=null;  // {original_uid, viewing_as, preview?}
 function impersonate(uid){
-  if(!CUR||CUR.role!=='diretor'){toast('Só o Diretor pode trocar perfil','err');return}
+  // Liberado pra Diretor, Sócio e Produtor (todos com acesso total)
+  if(!CUR||!['diretor','socio','produtor'].includes(CUR.role)){toast('Apenas Diretor, Sócio ou Produtor podem trocar perfil','err');return}
   const target=getTeam(uid);
   if(!target){toast('Usuário não encontrado','err');return}
   IMPERSONATING={original_uid:CUR.id,viewing_as:uid};
@@ -3063,7 +3064,7 @@ const PREVIEW_ROLE_INFO={
   socio:    {label:'Sócio',         color:'#f59e0b',bg:'rgba(245,158,11,.15)',abbr:'SO'},
 };
 function impersonatePreview(role){
-  if(!CUR||CUR.role!=='diretor'){toast('Só o Diretor pode trocar perfil','err');return}
+  if(!CUR||!['diretor','socio','produtor'].includes(CUR.role)){toast('Apenas Diretor, Sócio ou Produtor podem trocar perfil','err');return}
   const info=PREVIEW_ROLE_INFO[role];
   if(!info){toast('Função inválida','err');return}
   // Cria usuário virtual em memória (não persiste)
@@ -7720,7 +7721,9 @@ function renderConfigContent(){
 function cfgConta(){
   const u=CUR;if(!u)return '';
   const realDir=IMPERSONATING?getTeam(IMPERSONATING.original_uid):u;
-  const isRealDir=realDir?.role==='diretor';
+  // Visualizar como outro perfil + Preview de função: liberado pra Diretor, Sócio e Produtor
+  // (roles com acesso total à operação)
+  const isRealDir=['diretor','socio','produtor'].includes(realDir?.role);
   return `
   <div class="cfg-section">
     <div class="cfg-h">
@@ -7756,7 +7759,7 @@ function cfgConta(){
       return `
     <div class="cfg-h" style="margin-top:24px">
       <h2>👁 Visualizar como outro perfil</h2>
-      <p>Como Diretor, você pode entrar na visão de qualquer membro <b>sem precisar da senha</b> — útil pra verificar o que ele/ela vê</p>
+      <p>Como ${realDir?.role==='diretor'?'Diretor':realDir?.role==='socio'?'Sócio':'Produtor'}, você pode entrar na visão de qualquer membro <b>sem precisar da senha</b> — útil pra verificar o que ele/ela vê</p>
     </div>
 
     <!-- Membros reais cadastrados -->
@@ -7798,7 +7801,7 @@ function cfgConta(){
       </div>
     </div>
 
-    ${IMPERSONATING?`<div style="margin-top:10px"><button class="btn btn-am btn-sm" onclick="stopImpersonate()" style="width:100%">↩ Voltar pro meu perfil (Diretor)</button></div>`:''}
+    ${IMPERSONATING?`<div style="margin-top:10px"><button class="btn btn-am btn-sm" onclick="stopImpersonate()" style="width:100%">↩ Voltar pro meu perfil</button></div>`:''}
     `;})():''}
 
     <!-- Sair -->
