@@ -1011,8 +1011,22 @@ h1 em{font-weight:700}
   font-size:12px;padding:6px 8px;border-radius:5px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
 @media(max-width:900px){.payt-map-row{grid-template-columns:1fr}}
 
-/* ─── Webhooks Modal — tabs + regras ──────────────── */
+/* ─── Webhooks Modal — acordeão + regras ──────────── */
 .wh-tab.on{background:var(--bld);color:var(--bl2);border-color:var(--bl)}
+.wh-acc-list{display:flex;flex-direction:column;gap:10px}
+.wh-acc-item{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden;transition:border-color .15s}
+.wh-acc-item.on{border-color:var(--bl)}
+.wh-acc-head{width:100%;display:flex;align-items:center;gap:12px;padding:13px 16px;background:transparent;border:0;color:var(--tx);cursor:pointer;font-family:inherit;text-align:left;transition:background .12s}
+.wh-acc-head:hover{background:var(--s3)}
+.wh-acc-item.on .wh-acc-head{background:var(--s3);border-bottom:1px solid var(--b1)}
+.wh-acc-ic{font-size:18px;width:24px;text-align:center;flex-shrink:0}
+.wh-acc-lbl{font-size:14px;font-weight:600;color:var(--tx)}
+.wh-acc-sub{font-size:12px;color:var(--t3);flex:1;margin-left:4px}
+.wh-acc-chev{font-size:13px;color:var(--t3);transition:transform .2s;flex-shrink:0}
+.wh-acc-item.on .wh-acc-chev{transform:rotate(180deg);color:var(--bl2)}
+.wh-acc-item .wh-pane{padding:16px;animation:whAccIn .25s ease}
+.wh-acc-item .wh-pane.hidden{display:none}
+@keyframes whAccIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .wh-evt-row{display:flex;align-items:center;gap:11px;padding:9px 12px;
   background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);
   font-size:12.5px;color:var(--t2)}
@@ -2164,18 +2178,15 @@ h1 em{font-weight:700}
     </div>
     <div class="m-b">
 
-      <!-- Tabs -->
-      <div style="display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap">
-        <button class="btn-act btn-act-gh wh-tab on" data-wh="payt" onclick="switchWhTab('payt')">
-          <span style="display:inline-flex;align-items:center;gap:6px"><b style="color:#10b981">●</b> PAYT</span>
-        </button>
-        <button class="btn-act btn-act-gh wh-tab" data-wh="fornecedor" onclick="switchWhTab('fornecedor')">🚚 Fornecedor</button>
-        <button class="btn-act btn-act-gh wh-tab" data-wh="correios" onclick="switchWhTab('correios')">📦 Correios</button>
-        <button class="btn-act btn-act-gh wh-tab" data-wh="custom" onclick="switchWhTab('custom')">⚙ Genérico</button>
-        <button class="btn-act btn-act-gh wh-tab" data-wh="autom" onclick="switchWhTab('autom')">🔁 Automações</button>
-      </div>
-
-      <!-- Pane: PAYT -->
+      <!-- Acordeão de integrações -->
+      <div class="wh-acc-list">
+      <div class="wh-acc-item on" data-wh="payt">
+      <button class="wh-acc-head" onclick="toggleWhSection('payt')">
+        <span class="wh-acc-ic"><b style="color:#10b981">●</b></span>
+        <span class="wh-acc-lbl">PAYT</span>
+        <span class="wh-acc-sub">Plataforma de pagamento</span>
+        <span class="wh-acc-chev">▾</span>
+      </button>
       <div class="wh-pane" id="wh-pane-payt">
         <div style="display:flex;align-items:center;gap:11px;background:var(--grd);border:1px solid var(--gr);border-radius:var(--rl);padding:13px 16px;margin-bottom:14px">
           <div style="font-size:22px">💸</div>
@@ -2217,11 +2228,18 @@ h1 em{font-weight:700}
           <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog()">🔄 Atualizar do servidor</button>
         </div>
       </div>
+      </div>
 
-      <!-- Pane: Fornecedor -->
+      <div class="wh-acc-item" data-wh="fornecedor">
+      <button class="wh-acc-head" onclick="toggleWhSection('fornecedor')">
+        <span class="wh-acc-ic">📦</span>
+        <span class="wh-acc-lbl">Fornecedor</span>
+        <span class="wh-acc-sub">Recebe leads + status de entrega (Five)</span>
+        <span class="wh-acc-chev">▾</span>
+      </button>
       <div class="wh-pane hidden" id="wh-pane-fornecedor">
         <div style="display:flex;align-items:center;gap:11px;background:var(--amd);border:1px solid var(--am);border-radius:var(--rl);padding:13px 16px;margin-bottom:14px">
-          <div style="font-size:22px">🚚</div>
+          <div style="font-size:22px">📦</div>
           <div style="flex:1">
             <div style="font-size:14px;font-weight:700;color:var(--am)">Webhook do Fornecedor</div>
             <div style="font-size:12px;color:var(--t2)">Receba leads automaticamente quando seu fornecedor / plataforma de captação criar um novo registro.</div>
@@ -2311,28 +2329,15 @@ h1 em{font-weight:700}
           <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('forn')">🔄 Atualizar do servidor</button>
         </div>
       </div>
-
-      <!-- Pane: Correios -->
-      <div class="wh-pane hidden" id="wh-pane-correios">
-        <div style="display:flex;align-items:center;gap:11px;background:var(--bld);border:1px solid var(--bl);border-radius:var(--rl);padding:13px 16px;margin-bottom:14px">
-          <div style="font-size:22px">📦</div>
-          <div style="flex:1">
-            <div style="font-size:14px;font-weight:700;color:var(--bl2)">Rastreio dos Correios</div>
-            <div style="font-size:12px;color:var(--t2)">Atualiza status do pedido conforme o objeto se movimenta.</div>
-          </div>
-        </div>
-        <div class="section-title" style="margin-top:6px">Eventos suportados</div>
-        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">rastreio.postado</span><span>Postagem confirmada → status <b>Enviado</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--amd);color:var(--am)">rastreio.cidade_destino</span><span>Chegou na cidade → <b>follow-up piscando</b> no card (contate o cliente!)</span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--pud);color:var(--pu)">rastreio.saiu_entrega</span><span>Saiu para entrega → tag <b>entrega-hoje</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">rastreio.entregue</span><span>Entrega confirmada → status <b>Retirada</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--rdd);color:var(--rd)">rastreio.devolvido</span><span>Objeto retornou → status <b>Devolvido</b></span></div>
-        </div>
-        <p class="muted" style="font-size:12px">Configure rastreio automático no campo "Cód. rastreio" do lead — Axion consulta a cada 6h.</p>
       </div>
 
-      <!-- Pane: Custom -->
+      <div class="wh-acc-item" data-wh="custom">
+      <button class="wh-acc-head" onclick="toggleWhSection('custom')">
+        <span class="wh-acc-ic">⚙</span>
+        <span class="wh-acc-lbl">Genérico</span>
+        <span class="wh-acc-sub">Outras plataformas (Hotmart, Kiwify, etc.)</span>
+        <span class="wh-acc-chev">▾</span>
+      </button>
       <div class="wh-pane hidden" id="wh-pane-custom">
         <div class="section-title" style="margin-top:0">Endpoint genérico</div>
         <p class="muted" style="font-size:13px;margin-bottom:10px">Use para qualquer outra plataforma (Hotmart, Kiwify, Eduzz, etc.):</p>
@@ -2341,8 +2346,15 @@ h1 em{font-weight:700}
         </div>
         <p class="muted" style="font-size:12px">Payload JSON: <code style="background:var(--s3);padding:2px 6px;border-radius:4px;color:var(--cy)">{ "event": "...", "lead_id": "...", "...": "..." }</code></p>
       </div>
+      </div>
 
-      <!-- Pane: Automações -->
+      <div class="wh-acc-item" data-wh="autom">
+      <button class="wh-acc-head" onclick="toggleWhSection('autom')">
+        <span class="wh-acc-ic">🔁</span>
+        <span class="wh-acc-lbl">Automações</span>
+        <span class="wh-acc-sub">Regras automáticas no funil</span>
+        <span class="wh-acc-chev">▾</span>
+      </button>
       <div class="wh-pane hidden" id="wh-pane-autom">
         <div class="section-title" style="margin-top:0">Automações ativas no funil</div>
         <p class="muted" style="font-size:13px;margin-bottom:14px">Regras automáticas disparadas pelos webhooks:</p>
@@ -2378,10 +2390,13 @@ h1 em{font-weight:700}
             <label class="autom-tog"><input type="checkbox" checked> Ativo</label>
           </div>
         </div>
+
+        <div class="section-title" style="margin-top:18px">Últimos eventos recebidos (simulação local)</div>
+        <div id="wh-log" style="max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace;background:var(--s3);border-radius:var(--r);padding:10px;border:1px solid var(--b1)"></div>
+      </div>
       </div>
 
-      <div class="section-title" style="margin-top:18px">Últimos eventos recebidos</div>
-      <div id="wh-log" style="max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace;background:var(--s3);border-radius:var(--r);padding:10px;border:1px solid var(--b1)"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -8607,11 +8622,11 @@ function cfgIntegracoes(){
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
       <div style="font-size:28px">📦</div>
       <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:var(--bl2);margin-bottom:2px">Correios</div>
-        <div class="muted" style="font-size:12.5px">Atualização automática do status do pedido conforme rastreio</div>
+        <div style="font-size:14px;font-weight:700;color:var(--am);margin-bottom:2px">Fornecedor</div>
+        <div class="muted" style="font-size:12.5px">Recebe leads + status de entrega (Five) automaticamente</div>
       </div>
-      <span class="cfg-status">Pendente</span>
-      <button class="btn btn-gh btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('correios')">Configurar →</button>
+      <span class="cfg-status on">Conectado</span>
+      <button class="btn btn-bl btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('fornecedor')">Configurar →</button>
     </div>
 
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
@@ -9246,9 +9261,26 @@ function renderWebhookSimLog(){
     </div>`).join('')
     :'<div class="muted">Sem eventos.</div>';
 }
+// Acordeão de webhooks: clicar no header abre/fecha aquela seção (1 só aberta por vez)
+function toggleWhSection(t){
+  const target=document.querySelector(`.wh-acc-item[data-wh="${t}"]`);
+  if(!target)return;
+  const wasOpen=target.classList.contains('on');
+  $$('.wh-acc-item').forEach(it=>{
+    const open=!wasOpen&&it.dataset.wh===t;
+    it.classList.toggle('on',open);
+    const pane=it.querySelector('.wh-pane');
+    if(pane)pane.classList.toggle('hidden',!open);
+  });
+}
+// Força abrir uma seção (usado por botões "Configurar →" externos)
 function switchWhTab(t){
-  $$('.wh-tab').forEach(b=>b.classList.toggle('on',b.dataset.wh===t));
-  $$('.wh-pane').forEach(p=>p.classList.toggle('hidden',p.id!=='wh-pane-'+t));
+  $$('.wh-acc-item').forEach(it=>{
+    const open=it.dataset.wh===t;
+    it.classList.toggle('on',open);
+    const pane=it.querySelector('.wh-pane');
+    if(pane)pane.classList.toggle('hidden',!open);
+  });
 }
 
 // Processa um evento PAYT usando o mapeamento configurado em DB.payt_mapping
