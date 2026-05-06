@@ -4706,8 +4706,22 @@ function autoFillCheckoutLink(){
 }
 
 function renderComments(lead){
-  // Conta comentários + comprovante (se houver) pra badge
-  const hasOrderProof=!!lead.comprovante_img;
+  // Detecta comprovante em vários formatos possíveis (resiliente a leads
+  // antigos / formatos legados / dados truncados)
+  const proofImg=lead.comprovante_img||lead.comprovanteImg||lead.proof_img||'';
+  const proofName=lead.comprovante_img_name||lead.comprovanteImgName||lead.proof_img_name||'comprovante.jpg';
+  const audName=lead.comprovante_aud_name||lead.comprovanteAudName||'';
+  const hasOrderProof=!!proofImg && proofImg.length>20; // base64 válido tem >20 chars
+  // Debug log — ajuda diagnosticar quando o user diz "não aparece"
+  if(!hasOrderProof && lead.mod==='entrega'){
+    console.log('[renderComments] Lead Entrega sem comprovante:',{
+      id:lead.id,nome:lead.nome,mod:lead.mod,
+      comprovante_img_existe:!!lead.comprovante_img,
+      comprovante_img_tamanho:lead.comprovante_img?.length||0,
+      comprovante_img_preview:typeof lead.comprovante_img==='string'?lead.comprovante_img.slice(0,60):'(não-string)',
+      campos_disponiveis:Object.keys(lead),
+    });
+  }
   const totalCount=(lead.comments?.length||0)+(hasOrderProof?1:0);
   $('mld-com-c').textContent=totalCount?`(${totalCount})`:'';
   const sizeStr=b=>b<1024?(b+' B'):b<1024*1024?((b/1024).toFixed(1)+' KB'):((b/1048576).toFixed(2)+' MB');
@@ -4715,7 +4729,6 @@ function renderComments(lead){
   // ─── Comprovante de criação do pedido (se houver) — fica fixo no topo ───
   let orderProofHTML='';
   if(hasOrderProof){
-    const audName=lead.comprovante_aud_name;
     orderProofHTML=`<div class="com-item" style="border-color:var(--gold);background:rgba(251,191,36,.05)">
       <div class="com-h">
         <span class="com-by" style="color:var(--gold)">📦 Comprovante de criação do pedido</span>
@@ -4723,14 +4736,24 @@ function renderComments(lead){
       </div>
       <div class="com-tx" style="font-size:12px;color:var(--t3)">Anexado no momento do cadastro do pedido</div>
       <div class="com-attach">
-        <img src="${lead.comprovante_img}" alt="${lead.comprovante_img_name||'comprovante'}"
-          onclick="window.open('${lead.comprovante_img}','_blank')">
+        <img src="${proofImg}" alt="${proofName}"
+          onclick="window.open('${proofImg}','_blank')">
         <div class="com-file-meta">
           <span class="com-attach-tag" style="background:rgba(251,191,36,.18);color:var(--gold)">📷 PRINT WHATSAPP</span>
-          <span>${lead.comprovante_img_name||'comprovante.jpg'}</span>
+          <span>${proofName}</span>
           ${audName?`<span style="margin-left:auto;font-size:10.5px;color:var(--t4)">+ áudio: ${audName}</span>`:''}
         </div>
       </div>
+    </div>`;
+  } else if(lead.mod==='entrega'){
+    // Aviso: pedido Entrega que não tem comprovante (pode ter sido criado antes
+    // da feature, ou criado em modo Antecipado e movido pra entrega)
+    orderProofHTML=`<div class="com-item" style="border-color:var(--am);background:rgba(245,158,11,.05);border-style:dashed">
+      <div class="com-h">
+        <span class="com-by" style="color:var(--am)">⚠ Sem comprovante de criação</span>
+        <span class="com-time">Entrega</span>
+      </div>
+      <div class="com-tx" style="font-size:12px;color:var(--t3)">Pedido Entrega sem print do WhatsApp anexado. Pode adicionar manualmente abaixo via 📷</div>
     </div>`;
   }
 
