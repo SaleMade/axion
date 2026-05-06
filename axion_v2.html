@@ -2048,10 +2048,15 @@ h1 em{font-weight:700}
           </select>
         </div>
         <div class="field" style="grid-column:span 2"><label>Campanha (opcional)</label><input id="mg-camp" placeholder="Nome da campanha / conjunto"></div>
+        <div class="field" style="grid-column:span 2"><label>WhatsApp / Atendente vinculado <span class="muted" style="font-size:11px;font-weight:500">(opcional)</span></label>
+          <select id="mg-chip">
+            <option value="">— sem vínculo (campanha geral) —</option>
+          </select>
+        </div>
         <div class="field"><label>Investido (R$)</label><input id="mg-vl" type="number" step="0.01"></div>
         <div class="field"><label>Leads gerados</label><input id="mg-leads" type="number"></div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin-top:6px">Dica: importe via CSV — formato aceito: <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">data,plataforma,investido,leads,campanha</code></p>
+      <p class="muted" style="font-size:11.5px;margin-top:6px">💡 Dica: vincular o WhatsApp permite calcular CPL e ROAS por número/atendente. Importe via CSV — formato: <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">data,plataforma,investido,leads,campanha</code></p>
     </div>
   </div>
 </div>
@@ -6968,15 +6973,26 @@ function renderTrafego(){
       <thead><tr>
         <th style="text-align:left">Data</th>
         <th style="text-align:left">Plataforma</th>
+        <th style="text-align:left">WhatsApp / Atendente</th>
         <th class="right">Investido</th>
         <th class="right">Leads</th>
         <th class="right">CPL</th>
         ${canEdit?'<th></th>':''}
       </tr></thead>
       <tbody>
-        ${gastos.length?gastos.map((g,i)=>`<tr>
+        ${gastos.length?gastos.map((g,i)=>{
+          const chip=g.chip_id?(DB.chips||[]).find(c=>c.id===g.chip_id):null;
+          const at=g.at?getTeam(g.at):(chip?getTeam(chip.at):null);
+          const chipCell=chip||at
+            ?`<div style="display:flex;align-items:center;gap:6px">
+                ${chip?`<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--cy)">${chip.num}</span>`:''}
+                ${at?`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span>`:''}
+              </div>`
+            :'<span class="muted" style="font-size:11.5px">— geral —</span>';
+          return `<tr>
           <td>${g.data}</td>
           <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
+          <td>${chipCell}</td>
           <td class="right" style="color:var(--rd);font-weight:700">${fmt(g.valor)}</td>
           <td class="right">${g.leads}</td>
           <td class="right">${fmt(g.valor/g.leads)}</td>
@@ -6984,7 +7000,8 @@ function renderTrafego(){
             <button class="btn-act btn-act-gh btn-act-icon" onclick="editGasto(${DB.gastos.indexOf(g)})" title="Editar">✎</button>
             <button class="btn-act btn-act-gh btn-act-icon" onclick="delGasto(${DB.gastos.indexOf(g)})" title="Excluir">×</button>
           </td>`:''}
-        </tr>`).join(''):`<tr><td colspan="${canEdit?6:5}" class="muted" style="text-align:center;padding:24px">Sem registros no período.</td></tr>`}
+        </tr>`;
+        }).join(''):`<tr><td colspan="${canEdit?7:6}" class="muted" style="text-align:center;padding:24px">Sem registros no período.</td></tr>`}
       </tbody>
     </table>
   </div>`;
@@ -6992,11 +7009,25 @@ function renderTrafego(){
 
 // ─── CRUD de gastos de tráfego ─────────────────────────────────
 let editingGastoIdx=null;
+// Popula o select de chips com WhatsApp + atendente associado.
+// Chamado em openGastoNew/editGasto pra refletir mudanças em DB.chips.
+function populateGastoChipSelect(selectedId){
+  const sel=$('mg-chip');if(!sel)return;
+  const chips=DB.chips||[];
+  sel.innerHTML='<option value="">— sem vínculo (campanha geral) —</option>'+
+    chips.map(c=>{
+      const at=getTeam(c.at);
+      const label=`${c.num}${at?' · '+at.name:''}${c.st?' · '+c.st:''}`;
+      return `<option value="${c.id}" ${c.id===selectedId?'selected':''}>${label}</option>`;
+    }).join('');
+}
+
 function openGastoNew(){
   editingGastoIdx=null;
   $('mg-data').value=new Date().toISOString().split('T')[0];
   $('mg-plat').value='TikTok';$('mg-camp').value='';
   $('mg-vl').value='';$('mg-leads').value='';
+  populateGastoChipSelect(null);
   $('mg-title').textContent='+ Novo gasto de tráfego';
   $('mg-del').style.display='none';
   openM('m-gasto');
@@ -7009,6 +7040,7 @@ function editGasto(idx){
   $('mg-data').value=dt?dt.toISOString().split('T')[0]:'';
   $('mg-plat').value=g.plat;$('mg-camp').value=g.campanha||'';
   $('mg-vl').value=g.valor;$('mg-leads').value=g.leads;
+  populateGastoChipSelect(g.chip_id||null);
   $('mg-title').textContent='Editar gasto';
   $('mg-del').style.display='';
   openM('m-gasto');
@@ -7017,8 +7049,13 @@ function saveGasto(){
   const dtIso=$('mg-data').value;
   const dt=dtIso?new Date(dtIso+'T12:00:00'):new Date();
   const data=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+  const chipIdVal=$('mg-chip').value;
+  const chipId=chipIdVal?Number(chipIdVal):null;
+  // Quando chip vinculado, também guarda o atendente correspondente pra facilitar relatórios
+  const chip=chipId?(DB.chips||[]).find(c=>c.id===chipId):null;
   const obj={data,plat:$('mg-plat').value,campanha:$('mg-camp').value,
-    valor:Number($('mg-vl').value)||0,leads:Number($('mg-leads').value)||0};
+    valor:Number($('mg-vl').value)||0,leads:Number($('mg-leads').value)||0,
+    chip_id:chipId, chip_num:chip?chip.num:'', at:chip?chip.at:null};
   if(editingGastoIdx===null){DB.gastos.unshift(obj)}
   else {DB.gastos[editingGastoIdx]=obj}
   persist();closeM('m-gasto');refreshUI();toast('Gasto salvo','ok');
