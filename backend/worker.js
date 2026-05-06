@@ -29,6 +29,10 @@ const ROLE_DIRETOR = ['diretor','socio','produtor'];
 // Pra trocar: editar aqui ou configurar como secret via `wrangler secret put PAYT_TOKEN`
 const PAYT_TOKEN_DEFAULT = 'b562d560380649cbc6c8ade3550eb7f8';
 
+// Chave única do webhook do FORNECEDOR — leads vindos de plataformas externas
+// (ex: ferramenta de captação, planilha automática, integração com landing page)
+const FORN_TOKEN_DEFAULT = 'frn_a47c9f8e3b21d5046ec8fa9d2b7e4513';
+
 // ─── Helpers ───
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -439,6 +443,136 @@ async function handlePaytWebhook(req, env, urlToken) {
   });
 }
 
+// ─── FORNECEDOR WEBHOOK ──────────────────────────────────────
+// Recebe leads enviados por fornecedor / plataforma de captação.
+// URL: /webhook/fornecedor/<chave>
+// Aceita payload flexível com várias variações de nome de campo.
+async function handleFornecedorWebhook(req, env, urlToken) {
+  const expected = (env && env.FORN_TOKEN) || FORN_TOKEN_DEFAULT;
+  if (urlToken !== expected) {
+    return json({ error: 'token inválido' }, 401);
+  }
+
+  let body;
+  try { body = await req.json(); }
+  catch (e) { return json({ error: 'payload JSON inválido' }, 400); }
+
+  // Extração flexível — tenta vários nomes de campo (nome PT-BR e EN)
+  const lead_data = {
+    nome:      body.nome || body.name || body.cliente || body.customer || '',
+    cpf:       body.cpf || body.document || body.documento || '',
+    telefone:  body.telefone || body.phone || body.whatsapp || body.celular || body.wa || '',
+    email:     body.email || body.e_mail || '',
+    cep:       body.cep || body.zipcode || body.zip || '',
+    endereco:  body.endereco || body.address || body.end || body.rua || '',
+    numero:    body.numero || body.num || body.number || '',
+    bairro:    body.bairro || body.neighborhood || '',
+    cidade:    body.cidade || body.city || '',
+    uf:        body.uf || body.state || body.estado || '',
+    produto:   body.produto || body.product || body.item || '',
+    valor:     Number(body.valor || body.amount || body.preco || body.price || 0),
+    modalidade:body.modalidade || body.mod || body.tipo || 'antecipado',
+    origem:    body.origem || body.fonte || body.source || body.platform || 'Fornecedor',
+    obs:       body.obs || body.notes || body.observacao || body.comment || '',
+    external_id: body.external_id || body.id || body.order_id || '',
+  };
+
+  if (!lead_data.nome) return json({ error: 'campo "nome" obrigatório' }, 400);
+
+  // Normaliza modalidade
+  const modNorm = String(lead_data.modalidade).toLowerCase();
+  const mod = (modNorm === 'entrega' || modNorm === 'cod' || modNorm === 'pague_apos_receber') ? 'entrega' : 'antecipado';
+
+  // Carrega state
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  let state = {};
+  let curVer = 0;
+  if (row) {
+    try { state = JSON.parse(row.data); } catch (e) { state = {}; }
+    curVer = row.version || 0;
+  }
+  state.leads = state.leads || [];
+  state.wh_log_server = state.wh_log_server || [];
+  state.nextLead = state.nextLead || 1;
+
+  // Idempotência: se external_id já existe, não duplica
+  if (lead_data.external_id) {
+    const dup = state.leads.find(l => l.external_id === lead_data.external_id);
+    if (dup) {
+      return json({ ok: true, action: 'skipped_duplicate', lead_id: dup.id });
+    }
+  }
+
+  // Cria o lead
+  const newLead = {
+    id: state.nextLead++,
+    external_id: lead_data.external_id || '',
+    nome: lead_data.nome,
+    cpf: lead_data.cpf,
+    wa: lead_data.telefone,
+    email: lead_data.email,
+    cep: lead_data.cep,
+    end: lead_data.endereco,
+    num: lead_data.numero,
+    comp: '',
+    bairro: lead_data.bairro,
+    cidade: lead_data.cidade,
+    uf: lead_data.uf,
+    data: todayBR(),
+    orig: lead_data.origem,
+    prod: lead_data.produto,
+    trat: '',
+    vl: lead_data.valor,
+    com_pct: 12,
+    track: '',
+    pgto: '',
+    spg: 'Pendente',
+    mod: mod,
+    at: null,
+    col: 'A Enviar',
+    obs: lead_data.obs,
+    link: '',
+    tags: ['fornecedor'],
+    fu: null,
+    hist: [{
+      from: '—',
+      to: 'A Enviar',
+      who: 'fornecedor',
+      time: `${todayBR()} ${nowTimeBR()}`,
+      note: `Lead recebido de ${lead_data.origem}`,
+    }],
+    comments: [],
+  };
+  state.leads.unshift(newLead);
+
+  // Log
+  state.wh_log_server.unshift({
+    ts: Math.floor(Date.now() / 1000),
+    org: 'Fornecedor',
+    evt: 'novo_lead',
+    lid: newLead.id,
+    action: 'created',
+    origem: lead_data.origem,
+  });
+  state.wh_log_server = state.wh_log_server.slice(0, 100);
+
+  // Persiste
+  const newVer = curVer + 1;
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(
+    `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
+       updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(JSON.stringify(state), newVer, now, 'fornecedor-webhook').run();
+
+  return json({
+    ok: true,
+    action: 'created',
+    lead_id: newLead.id,
+    nome: newLead.nome,
+  });
+}
+
 // ─── Router ───
 
 export default {
@@ -485,6 +619,20 @@ export default {
           return json({ name: 'axion-payt-webhook', ok: true, ready: true });
         }
         return handlePaytWebhook(req, env, paytMatch[1]);
+      }
+
+      // Fornecedor Webhook — recebe leads de plataforma externa de captação
+      const fornMatch = path.match(/^\/webhook\/fornecedor\/([a-zA-Z0-9_-]+)$/);
+      if (fornMatch && (req.method === 'POST' || req.method === 'GET')) {
+        if (req.method === 'GET') {
+          return json({
+            name: 'axion-fornecedor-webhook',
+            ok: true,
+            ready: true,
+            doc: 'POST com body JSON. Campos: nome (obrigatório), cpf, telefone/whatsapp, email, cep, endereco, cidade, uf, produto, valor, modalidade (antecipado|entrega), origem, obs, external_id'
+          });
+        }
+        return handleFornecedorWebhook(req, env, fornMatch[1]);
       }
 
       return err('Rota não encontrada', 404);
