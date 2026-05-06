@@ -5976,7 +5976,8 @@ function renderInvest(){
         </div>
         <div class="field" style="flex:1;min-width:140px"><label>Categoria</label>
           <select id="ap-cat">
-            <option value="marketing">📢 Marketing</option>
+            <option value="trafego">📊 Tráfego Pago (budget)</option>
+            <option value="marketing">📢 Marketing (geral)</option>
             <option value="infraestrutura">🏗 Infraestrutura</option>
             <option value="ferramentas">🔧 Ferramentas</option>
             <option value="salarios">💰 Salários</option>
@@ -6049,7 +6050,7 @@ function renderInvest(){
         <tbody>
           ${aportes.length?aportes.slice().sort((a,b)=>(b.dt||'').localeCompare(a.dt||'')).map(a=>{
             const s=getTeam(a.socio_id);
-            const catLbl={marketing:'📢 Marketing',infraestrutura:'🏗 Infraestrutura',ferramentas:'🔧 Ferramentas',salarios:'💰 Salários',outros:'📦 Outros'}[a.cat||'outros'];
+            const catLbl={trafego:'📊 Tráfego Pago',marketing:'📢 Marketing',infraestrutura:'🏗 Infraestrutura',ferramentas:'🔧 Ferramentas',salarios:'💰 Salários',outros:'📦 Outros'}[a.cat||'outros'];
             return `<tr>
               <td class="muted">${ddmmFromIso(a.dt)}</td>
               <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
@@ -6934,6 +6935,15 @@ function renderTrafego(){
   const recBruta=DB.vendas.filter(v=>inRange(v.data)).reduce((s,v)=>s+v.vl,0);
   const roas=tot?recBruta/tot:0;
 
+  // ─── Budget de Tráfego ───
+  // Soma TODOS os aportes com categoria "trafego" (sem filtro de data — é orçamento acumulado)
+  // vs TODO o gasto consumido de DB.gastos (acumulado).
+  // Diferença = saldo disponível pro Gestor de Tráfego investir.
+  const budgetTrafego=(DB.aportes||[]).filter(a=>a.cat==='trafego').reduce((s,a)=>s+Number(a.valor||0),0);
+  const gastoTrafegoTotal=(DB.gastos||[]).reduce((s,g)=>s+Number(g.valor||0),0);
+  const saldoTrafego=budgetTrafego-gastoTrafegoTotal;
+  const pctConsumido=budgetTrafego>0?Math.round(gastoTrafegoTotal/budgetTrafego*100):0;
+
   // Por plataforma (agregado) — TikTok prioritário (foco do Gestor)
   const plats={};
   gastos.forEach(g=>{
@@ -6964,6 +6974,44 @@ function renderTrafego(){
       <button class="btn btn-bl ${gtOnly?'btn-lg':'btn-sm'}" onclick="openGastoNew()">+ Registrar gasto do dia</button>
     </div>`:''}
   </div>
+
+  <!-- ═══ BUDGET DE TRÁFEGO — designado pelos sócios via Aportes (cat: Tráfego Pago) ═══ -->
+  ${budgetTrafego>0||gastoTrafegoTotal>0?`
+  <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:13px 16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:9px">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
+        <span style="font-size:18px">🎯</span>
+        <div>
+          <div style="font-size:12.5px;font-weight:600;color:var(--tx)">Budget de Tráfego</div>
+          <div class="muted" style="font-size:11px">Designado pelos sócios via aportes · acumulado</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+        <div style="text-align:right">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Designado</div>
+          <div style="font-size:15px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(budgetTrafego)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Investido</div>
+          <div style="font-size:15px;font-weight:700;color:var(--rd);font-variant-numeric:tabular-nums">${fmt(gastoTrafegoTotal)}</div>
+        </div>
+        <div style="text-align:right;padding-left:14px;border-left:1px solid var(--b1)">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:${saldoTrafego>=0?'var(--gr)':'var(--rd)'}">Saldo disponível</div>
+          <div style="font-size:18px;font-weight:700;color:${saldoTrafego>=0?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums">${fmt(saldoTrafego)}</div>
+        </div>
+      </div>
+    </div>
+    ${budgetTrafego>0?`
+    <div style="height:6px;background:var(--s4);border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:${Math.min(100,pctConsumido)}%;background:linear-gradient(90deg,var(--gr),${pctConsumido>=90?'var(--rd)':'var(--am)'});border-radius:3px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--t4);margin-top:4px">
+      <span>${pctConsumido}% consumido</span>
+      <span>${saldoTrafego<0?'⚠ excedeu o budget':budgetTrafego>0&&pctConsumido>=90?'🟡 budget quase esgotado':''}</span>
+    </div>
+    `:`<div class="muted" style="font-size:11.5px;padding:5px 0">${gastoTrafegoTotal>0?'⚠ Há gasto registrado mas nenhum aporte de tráfego ainda — registre um aporte com categoria "Tráfego Pago" em Investimentos.':'Nenhum budget designado ainda.'}</div>`}
+  </div>
+  `:''}
 
   <div class="mg" style="${gtOnly?'grid-template-columns:repeat(3,1fr)':''}">
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">●</div>
