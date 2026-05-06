@@ -1643,6 +1643,14 @@ h1 em{font-weight:700}
   <div class="modal sm">
     <div class="m-h"><span class="mt">+ Investimento</span><button class="m-x" onclick="closeM('m-inv')">×</button></div>
     <div class="m-b">
+      <!-- Aviso: investimentos ≠ tráfego pago (Meta/Google/TikTok) -->
+      <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:10px 13px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start;font-size:12.5px">
+        <div style="font-size:18px">💡</div>
+        <div style="flex:1;color:var(--t2);line-height:1.55">
+          <b style="color:var(--bl2)">Esta área é pra ativos da operação</b> — Hardware, Software, Cursos, Ferramentas, etc.<br>
+          Pra registrar gastos com <b>Meta · Google · TikTok · YouTube</b>, use <a onclick="closeM('m-inv');goPage('trafego')" style="color:var(--bl);cursor:pointer;font-weight:600">Tráfego Pago →</a> (lá conta no ROAS).
+        </div>
+      </div>
       <div class="fg">
         <div class="field"><label>Categoria</label>
           <div style="display:flex;gap:6px">
@@ -5854,68 +5862,13 @@ function renderInvest(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Investimentos</em></h1><p>Investimentos da operação (mídia, ferramentas, cursos) e aportes de sócios · ${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Investimentos</em></h1><p>Ativos da operação (ferramentas, cursos, infra) + aportes de sócios · ${rangeLabel()}</p></div>
     <div class="ph-r">
+      <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">📊 Tráfego Pago →</button>
       <button class="btn btn-gh btn-sm" onclick="openInvCats()">⚙ Categorias</button>
       <button class="btn btn-bl btn-sm" onclick="openInvest()">+ Novo Investimento</button>
     </div>
   </div>
-
-  <!-- ═══ QUICK INPUT — Tráfego/Marketing (entrada rápida diária) ═══ -->
-  <div class="cfg-card" style="background:linear-gradient(135deg,rgba(59,130,246,.08),rgba(168,85,247,.06));border:1.5px solid var(--bl);margin-bottom:18px">
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <div style="font-size:32px">⚡</div>
-      <div style="flex:1;min-width:200px">
-        <div style="font-size:14px;font-weight:600;color:var(--tx);margin-bottom:2px">Entrada rápida — Tráfego/Marketing</div>
-        <div class="muted" style="font-size:12px">Lance o gasto do dia em segundos. Atualiza ROAS instantaneamente.</div>
-      </div>
-      <input type="number" id="qi-tr-val" step="0.01" placeholder="Valor (R$)" style="width:140px;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:7px;font-size:14px;font-weight:600" onkeypress="if(event.key==='Enter')quickInputTrafego()">
-      <select id="qi-tr-plat" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:7px;font-size:13px">
-        <option value="Meta">Meta</option>
-        <option value="TikTok">TikTok</option>
-        <option value="Google">Google Ads</option>
-        <option value="YouTube">YouTube Ads</option>
-        <option value="Outro">Outro</option>
-      </select>
-      <button class="btn btn-bl btn-sm" onclick="quickInputTrafego()">⚡ Lançar</button>
-    </div>
-  </div>
-
-  <!-- ═══ SALDO DE CAPITAL — relação aporte vs consumo ═══ -->
-  ${totAportesAll>0||consumido>0?`
-  <div class="panel" style="margin-bottom:18px;background:linear-gradient(180deg,rgba(251,191,36,.04),transparent)">
-    <div class="panel-h">
-      <h3>💰 Saldo de Capital</h3>
-      <span class="muted" style="font-size:11.5px">aportes vs gastos · acumulado e período</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
-      <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Aportado (acumulado)</div>
-        <div style="font-size:22px;font-weight:700;color:var(--gold);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(totAportesAll)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(totAportes)}</b></div>
-      </div>
-      <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.25);border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Consumido (acumulado)</div>
-        <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(allConsumido)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(consumido)}</b> · tráfego + invest.</div>
-      </div>
-      <div style="background:${saldoTotal>=0?'rgba(16,185,129,.08)':'rgba(239,68,68,.10)'};border:1.5px solid ${saldoTotal>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'}">Saldo de caixa de aportes</div>
-        <div style="font-size:22px;font-weight:700;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};margin-top:3px;font-variant-numeric:tabular-nums">${fmt(saldoTotal)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">${saldoTotal>=0?'pode investir':'⚠ excedeu o aportado'}</div>
-      </div>
-    </div>
-    ${totAportesAll>0?`
-    <div style="height:8px;background:var(--s4);border-radius:4px;overflow:hidden;margin-top:8px">
-      <div style="height:100%;width:${Math.min(100,Math.round(allConsumido/totAportesAll*100))}%;background:linear-gradient(90deg,var(--gold),var(--rd));border-radius:4px;transition:width .3s"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:5px">
-      <span>${Math.round(allConsumido/totAportesAll*100)}% do capital aportado consumido</span>
-      <span>${totAportesAll?fmt(allConsumido)+' de '+fmt(totAportesAll):'—'}</span>
-    </div>
-    `:''}
-  </div>
-  `:''}
 
   <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
   <div class="panel" style="margin-bottom:18px">
@@ -6032,7 +5985,7 @@ function renderInvest(){
   </div>
 
   <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
-  <div class="panel">
+  <div class="panel" style="margin-bottom:18px">
     <div class="panel-h"><h3>📦 Investimentos da Operação</h3>
       <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
     </div>
@@ -6071,19 +6024,43 @@ function renderInvest(){
         </tbody>
       </table>
     </div>
-  </div>`;
-}
+  </div>
 
-// ─── Quick Input — gasto de tráfego com 1 click ───────
-function quickInputTrafego(){
-  const v=Number($('qi-tr-val').value);
-  const plat=$('qi-tr-plat').value;
-  if(!v||v<=0){toast('Digite um valor válido','err');return}
-  DB.gastos=DB.gastos||[];
-  DB.gastos.unshift({data:today(),plat,valor:v,leads:0,note:'Quick input'});
-  $('qi-tr-val').value='';
-  persist();refreshUI();
-  toast(`+${fmt(v)} em ${plat} registrado`,'ok');
+  <!-- ═══ SALDO DE CAPITAL — relação aporte vs consumo (rodapé) ═══ -->
+  ${totAportesAll>0||consumido>0?`
+  <div class="panel" style="background:linear-gradient(180deg,rgba(251,191,36,.04),transparent)">
+    <div class="panel-h">
+      <h3>💰 Saldo de Capital</h3>
+      <span class="muted" style="font-size:11.5px">aportes vs gastos · acumulado e período</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
+      <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Aportado (acumulado)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--gold);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(totAportesAll)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(totAportes)}</b></div>
+      </div>
+      <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.25);border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Consumido (acumulado)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(allConsumido)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(consumido)}</b> · tráfego + invest.</div>
+      </div>
+      <div style="background:${saldoTotal>=0?'rgba(16,185,129,.08)':'rgba(239,68,68,.10)'};border:1.5px solid ${saldoTotal>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'}">Saldo de caixa de aportes</div>
+        <div style="font-size:22px;font-weight:700;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};margin-top:3px;font-variant-numeric:tabular-nums">${fmt(saldoTotal)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">${saldoTotal>=0?'pode investir':'⚠ excedeu o aportado'}</div>
+      </div>
+    </div>
+    ${totAportesAll>0?`
+    <div style="height:8px;background:var(--s4);border-radius:4px;overflow:hidden;margin-top:8px">
+      <div style="height:100%;width:${Math.min(100,Math.round(allConsumido/totAportesAll*100))}%;background:linear-gradient(90deg,var(--gold),var(--rd));border-radius:4px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:5px">
+      <span>${Math.round(allConsumido/totAportesAll*100)}% do capital aportado consumido</span>
+      <span>${totAportesAll?fmt(allConsumido)+' de '+fmt(totAportesAll):'—'}</span>
+    </div>
+    `:''}
+  </div>
+  `:''}`;
 }
 
 // ─── Aportes de sócios ─────────────────────────────────
