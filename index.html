@@ -2609,28 +2609,72 @@ const api={
 
 // ─── Sync state com servidor ───
 let _syncTimer=null;
+let _409retry=false; // flag pra evitar loop infinito em retry de conflito
+
+// Monta o blob enviado pro servidor — sem campos locais (team, feed, wh_log)
+function _buildSyncBlob(){
+  const blob={...DB};
+  delete blob.team;     // team vai por /api/users
+  delete blob.feed;     // log visual local
+  delete blob.wh_log;   // log de webhooks local
+  return blob;
+}
+
 function debouncedServerSync(){
   clearTimeout(_syncTimer);
   _syncTimer=setTimeout(serverSyncNow,2000);
 }
+
+// Flush SÍNCRONO via sendBeacon — garante que o último state vai pro servidor
+// quando o usuário fecha a aba/navega (debounce de 2s não dispara nesses casos).
+function flushSyncBeacon(){
+  if(!apiEnabled()||!apiToken())return false;
+  if(!_syncTimer&&!_409retry)return false; // nada pendente
+  clearTimeout(_syncTimer);_syncTimer=null;
+  try{
+    const url=apiUrl().replace(/\/+$/,'')+'/api/state';
+    const body=JSON.stringify({data:_buildSyncBlob(),base_version:serverVersion});
+    // sendBeacon não suporta auth header customizado — passamos token na query
+    // (worker.js precisa aceitar isso; alternativa é fetch com keepalive)
+    const blob=new Blob([body],{type:'application/json'});
+    if(navigator.sendBeacon){
+      // Beacon não permite Authorization header — usar fetch com keepalive
+      fetch(url,{method:'POST',body,
+        headers:{'content-type':'application/json','authorization':'Bearer '+apiToken()},
+        keepalive:true}).catch(()=>{});
+    }
+    return true;
+  }catch(e){return false}
+}
+
+// Listener: dispara flush ao fechar aba ou navegar pra outro site
+window.addEventListener('beforeunload',flushSyncBeacon);
+// pagehide é mais confiável em mobile/Safari
+window.addEventListener('pagehide',flushSyncBeacon);
+
 async function serverSyncNow(){
   if(!apiEnabled()||!apiToken())return;
   try{
-    // Não envia DB.team — usuários ficam no /api/users (fonte de verdade separada)
-    // Não envia: team (gerenciado por /api/users); feed/wh_log (logs locais visuais
-    // que poluiriam estado entre máquinas se sincronizados)
-    const blob={...DB};
-    delete blob.team;
-    delete blob.feed;
-    delete blob.wh_log;
-    const r=await api.postState(blob,serverVersion);
+    const r=await api.postState(_buildSyncBlob(),serverVersion);
     serverVersion=r.version;
+    _409retry=false; // sucesso resetar flag
   }catch(e){
     if(e.status===409){
-      // Outro usuário escreveu antes — puxa do servidor
+      // CONFLITO: outro usuário escreveu antes.
+      // Estratégia: tenta UMA vez com versão atualizada (mantém edições locais).
+      // Se falhar de novo, pull do server e avisa pra evitar loop infinito.
+      const newVer=e.data?.current_version;
+      if(typeof newVer==='number')serverVersion=newVer;
+      if(!_409retry){
+        _409retry=true;
+        setTimeout(()=>{_409retry=false;serverSyncNow()},300);
+        return;
+      }
+      // Retry também falhou — backup do estado local antes de sobrescrever
+      try{localStorage.setItem('axion_db_v2_conflict_'+Date.now(),JSON.stringify(DB))}catch(_){}
       await syncFromServer();
       refreshUI();
-      toast('Estado atualizado por outro usuário','info');
+      toast('⚠ Outro usuário editou ao mesmo tempo. Suas mudanças foram salvas em backup local. Reaplique se necessário.','err');
     } else if(e.status===401){
       // Sessão expirou — força logout
       try{localStorage.removeItem('axion_api_token')}catch(_){}
@@ -2874,6 +2918,23 @@ function clearSession(){localStorage.removeItem('axion_session')}
 function getSession(){try{return JSON.parse(localStorage.getItem('axion_session'))}catch(e){return null}}
 function getLastUser(){return localStorage.getItem('axion_last_user')}
 
+// Se o usuário que vai logar é DIFERENTE do último que fez logout neste navegador,
+// limpa o cache do DB local pra evitar vazamento de dados entre membros (até o
+// syncFromServer popular a versão atual do servidor). Photos e configs locais
+// (preview users) são apagados juntos — aceitável já que photo é por-membro.
+function clearDBCacheIfDifferentUser(newUid){
+  if(!newUid)return;
+  const lastLogout=localStorage.getItem('axion_last_user_logout')||'';
+  if(lastLogout&&lastLogout!==newUid){
+    try{localStorage.removeItem('axion_db_v2')}catch(_){}
+    // Reseta DB em memória pros defaults — syncFromServer logo vai mesclar com o servidor
+    DB=JSON.parse(JSON.stringify(DEFAULT_DB));
+    if(!DB.team)DB.team=JSON.parse(JSON.stringify(DEFAULT_TEAM));
+    TEAM=DB.team;
+  }
+  localStorage.removeItem('axion_last_user_logout');
+}
+
 // Mostra erro no login screen
 function lgError(msg){
   const e=$('lg-error');e.textContent=msg;e.classList.remove('hidden');
@@ -2887,6 +2948,7 @@ async function initLogin(){
     try{
       const r=await api.me();
       if(r&&r.user){
+        clearDBCacheIfDifferentUser(r.user.id);
         const i=DB.team.findIndex(t=>t.id===r.user.id);
         const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
         if(i>=0)DB.team[i]=merged; else DB.team.push(merged);
@@ -2966,6 +3028,8 @@ async function doLogin(){
     try{
       const r=await api.login(u,p);
       try{localStorage.setItem('axion_api_token',r.token)}catch(_){}
+      // Limpa cache local se outro user usou esse navegador antes
+      clearDBCacheIfDifferentUser(r.user.id);
       // Mescla user retornado em DB.team
       const i=DB.team.findIndex(t=>t.id===r.user.id);
       const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
@@ -2999,6 +3063,7 @@ async function quickLogin(){
     try{
       const r=await api.login(member.login||member.id,p);
       try{localStorage.setItem('axion_api_token',r.token)}catch(_){}
+      clearDBCacheIfDifferentUser(r.user.id);
       const i=DB.team.findIndex(t=>t.id===r.user.id);
       const merged={...(i>=0?DB.team[i]:{}),...r.user,pwd_hash:'__set__'};
       if(i>=0)DB.team[i]=merged; else DB.team.push(merged);
@@ -3124,8 +3189,17 @@ function updateImpersonateBanner(){
   }
 }
 
-function logout(){
+async function logout(){
   if(IMPERSONATING){stopImpersonate();return}
+  // FLUSH FINAL: se há sync pendente (debounce ainda não disparou), garante envio
+  // antes de invalidar a sessão. Sem isso, edições dos últimos 2s seriam perdidas.
+  if(apiEnabled()&&apiToken()&&_syncTimer){
+    clearTimeout(_syncTimer);_syncTimer=null;
+    try{await serverSyncNow()}catch(_){}
+  }
+  // Lembra qual user estava logado pra detectar troca de usuário no próximo login
+  const prevUid=CUR?.id;
+  try{localStorage.setItem('axion_last_user_logout',prevUid||'')}catch(_){}
   // Invalida sessão no servidor (best-effort)
   if(apiEnabled()&&apiToken()){
     api.logout().catch(()=>{});
