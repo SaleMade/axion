@@ -860,14 +860,22 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .dem-dots:hover{background:var(--s3);color:var(--tx)}
 .dem-menu{position:absolute;top:48px;right:14px;z-index:50;
   background:var(--s2);border:1px solid var(--b2);border-radius:var(--rl);
-  box-shadow:0 14px 36px rgba(0,0,0,.5);padding:6px;display:none;min-width:240px}
+  box-shadow:0 14px 36px rgba(0,0,0,.5);padding:6px;display:none;min-width:300px}
 .dem-menu.open{display:block}
+.dem-menu-mode{padding:9px 12px;border-bottom:1px solid var(--b1);margin-bottom:5px;
+  display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}
 .dem-menu-h{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;
-  letter-spacing:.06em;padding:9px 12px 7px;border-bottom:1px solid var(--b1);margin-bottom:5px}
-.dem-menu-item{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;
-  border-radius:6px;font-size:13px;color:var(--t2);transition:all .12s}
+  letter-spacing:.06em;padding:9px 12px 6px}
+.dem-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;
+  border-radius:6px;font-size:13px;color:var(--t2);transition:all .12s;justify-content:space-between}
 .dem-menu-item:hover{background:var(--s3);color:var(--tx)}
-.dem-menu-item input{accent-color:var(--bl);cursor:pointer}
+.dem-menu-item input[type=checkbox]{accent-color:var(--bl);cursor:pointer;flex:none}
+.dem-menu-item .dem-label{flex:1;display:flex;align-items:center;gap:9px;min-width:0}
+.dem-menu-item .dem-pct{flex:none;display:flex;align-items:center;gap:3px;
+  background:var(--s3);border:1px solid var(--b1);border-radius:5px;padding:2px 4px 2px 6px}
+.dem-menu-item .dem-pct input{width:36px;background:transparent;border:none;color:var(--bl2);
+  font-size:12px;font-weight:600;text-align:right;outline:none;padding:0;font-family:inherit}
+.dem-menu-item .dem-pct span{color:var(--t4);font-size:11px;font-weight:600}
 
 /* ─── Configuração de Etapas do CRM ──────────────────── */
 .col-item{background:var(--s3);border:1px solid var(--b1);border-radius:var(--rl);
@@ -5292,47 +5300,54 @@ function renderDRE(){
         <button class="dem-dots" onclick="event.stopPropagation();toggleDemMenu()" title="Configurar métricas">⋮</button>
       </div>
       <div class="dem-menu" id="dem-menu">
-        <div class="dem-menu-h">Taxas (% sobre receita)</div>
-        <div style="display:flex;gap:6px;padding:6px 12px 4px">
-          <label style="flex:1;font-size:11px;color:var(--t3)">Gateway %
-            <input type="number" step="0.5" min="0" max="100" value="${gatewayPct}"
-              onchange="DB.demConfig.gatewayPct=Number(this.value)||0;persist();refreshUI()"
-              style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:5px 8px;border-radius:5px;font-size:13px;margin-top:3px">
-          </label>
-          <label style="flex:1;font-size:11px;color:var(--t3)">Impostos %
-            <input type="number" step="0.5" min="0" max="100" value="${impostosPct}"
-              onchange="DB.demConfig.impostosPct=Number(this.value)||0;persist();refreshUI()"
-              style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:5px 8px;border-radius:5px;font-size:13px;margin-top:3px">
-          </label>
+        <!-- Indicador do modo atual — métricas exibidas dependem dele -->
+        <div class="dem-menu-mode" style="background:${isAfi?'rgba(59,130,246,.08)':'rgba(16,185,129,.08)'};color:${isAfi?'var(--bl2)':'var(--gr)'}">
+          ${isAfi?'🤝 Modo Afiliado':'🏭 Modo Produtor'}
+          <span class="muted" style="font-size:11px;font-weight:500;margin-left:auto">${isAfi?'recebe líquido':'receita bruta'}</span>
         </div>
-        <div class="dem-menu-h" style="margin-top:6px">Métricas no demonstrativo</div>
+        <div class="dem-menu-h">Métricas no demonstrativo</div>
         ${(isAfi
           ? [
-              {k:'trafego',     l:'Tráfego Pago'},
-              {k:'investimentos',l:'Investimentos'},
-              {k:'impostos',    l:'Impostos sobre comissão'},
-              {k:'custo_fixo',  l:'Custos Fixos'},
+              // Modo AFILIADO — 4 métricas (sem custo fornec, sem taxa gateway, sem comissões equipe, sem reembolsos/frete)
+              {k:'trafego',     l:'Tráfego Pago',                desc:'gastos com mídia paga'},
+              {k:'investimentos',l:'Investimentos',              desc:'ativos da operação'},
+              {k:'impostos',    l:'Impostos sobre comissão',     desc:'IRPF/IRPJ sobre comissão recebida',pct:'impostosPct'},
+              {k:'custo_fixo',  l:'Custos Fixos',                desc:'aluguel, contas, serviços'},
             ]
           : [
-              {k:'custo_fornec',l:'Custo Fornecedor'},
-              {k:'comissoes',   l:'Comissões da Equipe'},
-              {k:'taxas',       l:'Taxas Gateway'},
-              {k:'trafego',     l:'Tráfego Pago'},
-              {k:'investimentos',l:'Investimentos'},
-              {k:'impostos',    l:'Impostos sobre venda'},
-              {k:'reembolsos',  l:'Reembolsos / Estornos'},
-              {k:'frete',       l:'Frete / Logística'},
-              {k:'chargeback',  l:'Chargebacks'},
-              {k:'custo_fixo',  l:'Custos Fixos'},
+              // Modo PRODUTOR — métricas completas (você é dono do produto)
+              {k:'custo_fornec',l:'Custo Fornecedor',            desc:'custo do produto vendido'},
+              {k:'comissoes',   l:'Comissões da Equipe',         desc:'comissão paga aos atendentes'},
+              {k:'taxas',       l:'Taxas Gateway',               desc:'taxa cobrada pela plataforma',pct:'gatewayPct'},
+              {k:'trafego',     l:'Tráfego Pago',                desc:'gastos com mídia paga'},
+              {k:'investimentos',l:'Investimentos',              desc:'ativos da operação'},
+              {k:'impostos',    l:'Impostos sobre venda',        desc:'tributos sobre o faturamento',pct:'impostosPct'},
+              {k:'reembolsos',  l:'Reembolsos / Estornos',       desc:'devoluções aos clientes'},
+              {k:'frete',       l:'Frete / Logística',           desc:'custos de envio'},
+              {k:'chargeback',  l:'Chargebacks',                 desc:'estornos forçados pelo banco'},
+              {k:'custo_fixo',  l:'Custos Fixos',                desc:'aluguel, contas, serviços'},
             ]
         ).map(o=>{
           const defaultOn=['comissoes','taxas','trafego','investimentos','custo_fornec'].includes(o.k);
           const checked=sh[o.k]===undefined?defaultOn:sh[o.k];
-          return `<label class="dem-menu-item">
-          <input type="checkbox" ${checked?'checked':''}
-            onchange="DB.demConfig.show['${o.k}']=this.checked;persist();refreshUI()">
-          <span>${o.l}</span>
-        </label>`;
+          // Input de % inline — só pra métricas que usam taxa percentual (taxa gateway, impostos)
+          const pctInput=o.pct?(()=>{
+            const cur=o.pct==='gatewayPct'?gatewayPct:impostosPct;
+            return `<span class="dem-pct" title="% aplicado nesta linha do demonstrativo">
+              <input type="number" step="0.5" min="0" max="100" value="${cur}"
+                onclick="event.stopPropagation()"
+                onchange="DB.demConfig.${o.pct}=Number(this.value)||0;persist();refreshUI()">
+              <span>%</span>
+            </span>`;
+          })():'';
+          return `<label class="dem-menu-item" title="${o.desc}">
+            <span class="dem-label">
+              <input type="checkbox" ${checked?'checked':''}
+                onchange="DB.demConfig.show['${o.k}']=this.checked;persist();refreshUI()">
+              <span>${o.l}</span>
+            </span>
+            ${pctInput}
+          </label>`;
         }).join('')}
       </div>
       ${rows.map(r=>{
