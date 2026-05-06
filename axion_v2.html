@@ -3534,7 +3534,12 @@ function buildSidebar(){
         {id:'equipe',lbl:'Equipe'},
         ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
       ]}]:[]),
-      ...(dir?[{g:'Integrações',items:[{id:'webhooks',lbl:'Webhooks',action:true}]}]:[]),
+      ...(dir?[{g:'Integrações',items:[
+        {id:'wh-payt',     lbl:'PAYT',       icon:'●',  iconColor:'#10b981', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('payt')"},
+        {id:'wh-fornec',   lbl:'Fornecedor', icon:'📦', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('fornecedor')"},
+        {id:'wh-generico', lbl:'Genérico',   icon:'⚙', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('custom')"},
+        {id:'wh-autom',    lbl:'Automações', icon:'🔁', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('autom')"},
+      ]}]:[]),
     ];
   }
 
@@ -3559,11 +3564,21 @@ function buildSidebar(){
     </div>
     <div class="sg-items ${isOpen?'on':''}">
       ${g.items.map(i=>{
-        const click=i.action?`onclick="event.stopPropagation();openM('m-wh');renderWebhookSim()"`:`onclick="event.stopPropagation();goPage('${i.id}')"`;
+        // 3 tipos de item: navegação (goPage), action genérica (action:true → modal webhooks),
+        // ou actionFn customizada (string com código JS inline)
+        const click=i.actionFn
+          ? `onclick="event.stopPropagation();${i.actionFn.replace(/"/g,'&quot;')}"`
+          : i.action
+            ? `onclick="event.stopPropagation();openM('m-wh');renderWebhookSim()"`
+            : `onclick="event.stopPropagation();goPage('${i.id}')"`;
         const badge=i.badge?`<span class="badge-n">${i.badge}</span>`:'';
         const live=i.live?'<span class="ldot"></span>':'';
+        // Ícone customizado (ex: ● PAYT, 📦 Fornecedor) substitui o ▸ default
+        const ic=i.icon
+          ? `<span class="ic" style="font-size:11px${i.iconColor?`;color:${i.iconColor}`:''}">${i.icon}</span>`
+          : `<span class="ic">▸</span>`;
         return `<div class="si" data-page="${i.id}" ${click}>
-          <span class="ic">▸</span>${i.lbl}${live}${badge}
+          ${ic}${i.lbl}${live}${badge}
         </div>`;
       }).join('')}
     </div>`;
