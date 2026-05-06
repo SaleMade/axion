@@ -3264,6 +3264,11 @@ function buildSidebar(){
         {id:'pagequip',lbl:'Pagamentos de Equipe'},
         {id:'invest',  lbl:'Investimentos'},
       ]}]:[]),
+      // "Meus Pagamentos" — visível pra membros que recebem comissão/salário
+      // (atendente/afiliado/cobrador/gestor). Diretor já tem visão geral em Pagamentos de Equipe.
+      ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
+        {id:'meuspag',lbl:'Meus Pagamentos'},
+      ]}]:[]),
       ...(can('ver_equipe')?[{g:'Equipe',items:[
         {id:'equipe',lbl:'Equipe'},
         ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
@@ -3277,7 +3282,7 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIcons={Dashboard:'⬚',Operacional:'◫',Financeiro:'$',Equipe:'👥','Integrações':'⚡'};
+  const navIcons={Dashboard:'⬚',Operacional:'◫',Financeiro:'$',Pessoal:'💵',Equipe:'👥','Integrações':'⚡'};
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
     // Default: só o PRIMEIRO acordeão aberto. Outros começam fechados.
@@ -3343,6 +3348,7 @@ const PNAMES={
   produtos:'Operacional / <b>Produtos</b>',
   cobranca:'Operacional / <b>Follows</b>',
   pagequip:'Financeiro / <b>Pagamentos de Equipe</b>',
+  meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
   contingencia:"Operacional / <b>WhatsApp's</b>",
   regioes:'Operacional / <b>Regiões</b>',
@@ -3373,7 +3379,7 @@ function buildApp(){
   const p=$('pages');
   p.innerHTML=[
     pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),
-    pageRegioes(),pageDRE(),pagePagEquip(),pageInvest(),pageCobranca(),
+    pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageConfig()
   ].join('');
 
@@ -3471,6 +3477,7 @@ function goPage(id){
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
   if(id==='pagequip')    renderPagEquip();
+  if(id==='meuspag')     renderMeusPag();
   if(id==='invest')      renderInvest();
   if(id==='cobranca')    renderCobranca();
   if(id==='recuperacao') renderRecup();
@@ -3572,6 +3579,7 @@ function refreshActive(){
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
     pedidos:renderPedidos,produtos:renderProdutos,contingencia:renderChips,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
+    meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
     recuperacao:renderRecup,config:renderConfig};
   if(map[id])map[id]();
@@ -5949,6 +5957,178 @@ function closePeriod(){
   });
   persist();closeM('m-close-period');refreshUI();
   toast(`Período fechado: ${lbl} — ${fmt(totCom)} em comissões`,'ok');
+}
+
+/* ═══════════════════════════════════════════════════════
+   PAGE — MEUS PAGAMENTOS (visão pessoal do membro)
+   Visível pra atendente/afiliado/cobrador/gestor
+   Mostra: comissões geradas, pagamentos recebidos, saldo a receber
+═══════════════════════════════════════════════════════ */
+function pageMeusPag(){return `<div class="page" id="meuspag-pg"></div>`}
+function renderMeusPag(){
+  const c=$('meuspag-pg');if(!c)return;
+  const uid=CUR?.id;if(!uid)return;
+
+  // Vendas próprias (acumulado total)
+  const minhasVendasAll=DB.vendas.filter(v=>v.at===uid);
+  // Vendas do período (filtro do topo)
+  const minhasVendasPer=minhasVendasAll.filter(v=>inRange(v.data));
+
+  // Pagamentos recebidos (DB.payouts) — acumulado e do período
+  const meusPayoutsAll=(DB.payouts||[]).filter(p=>p.user_id===uid);
+  const meusPayoutsPer=meusPayoutsAll.filter(p=>inRange(p.data));
+
+  // Comissão TOTAL gerada (acumulada — todas as vendas próprias)
+  const comAcumulada=minhasVendasAll.reduce((s,v)=>s+(Number(v.comiss)||0),0);
+  // Comissão do período
+  const comPeriodo=minhasVendasPer.reduce((s,v)=>s+(Number(v.comiss)||0),0);
+  // Total já recebido (acumulado)
+  const recebidoAcumulado=meusPayoutsAll.reduce((s,p)=>s+(Number(p.valor)||0),0);
+  // Total recebido no período
+  const recebidoPeriodo=meusPayoutsPer.reduce((s,p)=>s+(Number(p.valor)||0),0);
+  // Saldo a receber = comissão acumulada - já recebido
+  const aReceber=Math.max(0,comAcumulada-recebidoAcumulado);
+
+  // Fechamentos onde aparece (pra mostrar histórico de períodos consolidados)
+  const meusFechamentos=(DB.fechamentos||[]).filter(f=>(f.items||[]).some(i=>i.user_id===uid));
+
+  c.innerHTML=`
+  <div class="ph">
+    <div><h1>Meus <em>Pagamentos</em></h1>
+    <p>Histórico de comissões geradas e recebidas · ${rangeLabel()}</p></div>
+  </div>
+
+  <!-- KPIs principais -->
+  <div class="mg" style="grid-template-columns:repeat(4,1fr)">
+    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">$</div>
+      <div class="mc-lbl">A Receber</div>
+      <div class="mc-val">${fmt(aReceber)}</div>
+      <div class="mc-sub">comissões geradas - já recebido</div>
+    </div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">✓</div>
+      <div class="mc-lbl">Recebido (período)</div>
+      <div class="mc-val">${fmt(recebidoPeriodo)}</div>
+      <div class="mc-sub">${meusPayoutsPer.length} pagamento${meusPayoutsPer.length!==1?'s':''}</div>
+    </div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">∑</div>
+      <div class="mc-lbl">Recebido (total)</div>
+      <div class="mc-val">${fmt(recebidoAcumulado)}</div>
+      <div class="mc-sub">acumulado</div>
+    </div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">⚙</div>
+      <div class="mc-lbl">Comissão (período)</div>
+      <div class="mc-val">${fmt(comPeriodo)}</div>
+      <div class="mc-sub">${minhasVendasPer.length} venda${minhasVendasPer.length!==1?'s':''}</div>
+    </div>
+  </div>
+
+  <!-- Histórico de pagamentos recebidos -->
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h">
+      <h3>💰 Pagamentos Recebidos</h3>
+      <span class="muted" style="font-size:12px">${meusPayoutsAll.length} pagamento${meusPayoutsAll.length!==1?'s':''} no histórico</span>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Observação</th>
+          <th style="text-align:left">Comprovante</th>
+          <th class="right">Valor</th>
+        </tr></thead>
+        <tbody>
+          ${meusPayoutsAll.length
+            ?meusPayoutsAll.slice().sort((a,b)=>{
+              const da=ddmmToDate(a.data),db=ddmmToDate(b.data);
+              return (db?db.getTime():0)-(da?da.getTime():0);
+            }).map(p=>`<tr>
+              <td><b style="color:var(--tx);font-weight:600">${p.data}</b></td>
+              <td class="muted">${p.obs||'—'}</td>
+              <td>${p.comp
+                ?`<a onclick="window.open('${p.comp}','_blank')" style="color:var(--bl2);cursor:pointer;font-size:12px;font-weight:600">📎 ${p.comp_name||'comprovante'}</a>`
+                :'<span class="muted" style="font-size:11.5px">— sem anexo —</span>'}</td>
+              <td class="right" style="color:var(--gr);font-weight:700;font-size:15px;font-variant-numeric:tabular-nums">${fmt(p.valor)}</td>
+            </tr>`).join('')
+            :'<tr><td colspan="4" class="muted" style="text-align:center;padding:30px">Nenhum pagamento recebido ainda. As comissões aparecem aqui quando o Diretor registrar o pagamento.</td></tr>'}
+          ${meusPayoutsAll.length?`<tr style="background:var(--s1);font-weight:700">
+            <td colspan="3" style="color:var(--tx)">Total recebido (acumulado)</td>
+            <td class="right" style="color:var(--gr);font-size:16px">${fmt(recebidoAcumulado)}</td>
+          </tr>`:''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Histórico de fechamentos onde apareço -->
+  ${meusFechamentos.length?`
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h">
+      <h3>📅 Fechamentos de Período</h3>
+      <span class="muted" style="font-size:12px">${meusFechamentos.length} fechamento${meusFechamentos.length!==1?'s':''} consolidado${meusFechamentos.length!==1?'s':''}</span>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Período</th>
+          <th class="right">Vendas</th>
+          <th class="right">Faturamento</th>
+          <th class="right">Comissão</th>
+          <th style="text-align:left">Fechado em</th>
+        </tr></thead>
+        <tbody>
+          ${meusFechamentos.slice().reverse().map(f=>{
+            const meu=(f.items||[]).find(i=>i.user_id===uid);
+            if(!meu)return '';
+            return `<tr>
+              <td><b style="color:var(--tx);font-weight:600">${f.label||'Fechamento'}</b></td>
+              <td class="right">${meu.vendas||0}</td>
+              <td class="right" style="color:var(--gr);font-variant-numeric:tabular-nums">${fmt(meu.faturamento||0)}</td>
+              <td class="right" style="color:var(--gold);font-weight:700;font-variant-numeric:tabular-nums">${fmt(meu.comissao||0)}</td>
+              <td class="muted" style="font-size:11.5px">${f.fechado_em||'—'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `:''}
+
+  <!-- Minhas vendas no período -->
+  <div class="panel">
+    <div class="panel-h">
+      <h3>🛒 Minhas Vendas no Período</h3>
+      <span class="muted" style="font-size:12px">${minhasVendasPer.length} venda${minhasVendasPer.length!==1?'s':''} · ${fmt(comPeriodo)} de comissão</span>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Cliente</th>
+          <th style="text-align:left">Produto</th>
+          <th class="right">Valor</th>
+          <th class="right">Minha comissão</th>
+        </tr></thead>
+        <tbody>
+          ${minhasVendasPer.length
+            ?minhasVendasPer.slice().sort((a,b)=>{
+              const da=ddmmToDate(a.data),db=ddmmToDate(b.data);
+              return (db?db.getTime():0)-(da?da.getTime():0);
+            }).map(v=>`<tr>
+              <td>${v.data}</td>
+              <td><b style="color:var(--tx);font-weight:600">${v.nome}</b></td>
+              <td class="muted">${v.prod||'—'}</td>
+              <td class="right" style="font-variant-numeric:tabular-nums">${fmt(v.vl)}</td>
+              <td class="right" style="color:var(--gold);font-weight:600;font-variant-numeric:tabular-nums">${fmt(v.comiss)}</td>
+            </tr>`).join('')
+            :`<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Nenhuma venda no período selecionado.</td></tr>`}
+          ${minhasVendasPer.length?`<tr style="background:var(--s1);font-weight:700">
+            <td colspan="4" style="color:var(--tx)">Comissão do período</td>
+            <td class="right" style="color:var(--gold);font-size:15px">${fmt(comPeriodo)}</td>
+          </tr>`:''}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 /* ═══════════════════════════════════════════════════════
