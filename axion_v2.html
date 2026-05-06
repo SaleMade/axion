@@ -374,30 +374,38 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 
 .kb-wrap{overflow-x:auto;padding-bottom:12px}
 .kb-board{display:flex;gap:12px;min-height:480px}
-.kb-col{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);
-  padding:0;min-width:266px;max-width:266px;display:flex;flex-direction:column;overflow:hidden}
-.kb-top{height:3px;width:100%}
-.kb-ch{padding:11px 13px 9px;border-bottom:1px solid var(--b1);
-  display:flex;align-items:center;justify-content:space-between}
-.kb-cn{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
-.kb-cc{font-size:11px;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:8px;font-weight:600}
+/* Coluna tingida com a cor da etapa (8% opacity inline) — header com mais opacidade */
+.kb-col{border:1px solid var(--b1);border-radius:var(--rl);
+  padding:0;min-width:266px;max-width:266px;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--s2)}
+.kb-top{display:none} /* removida — coluna inteira agora tem a cor */
+.kb-ch{padding:13px 14px 11px;display:flex;align-items:center;justify-content:space-between;
+  /* header herda cor mais opaca via inline style; fallback discreto aqui */
+  border-bottom:1px solid rgba(0,0,0,.15)}
+.kb-cn{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.kb-cc{font-size:11px;color:var(--t2);background:rgba(0,0,0,.25);padding:2px 9px;border-radius:9px;font-weight:600}
 .kb-ccards{padding:10px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;max-height:560px}
-.kb-card{background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);
-  padding:11px 12px;cursor:grab;transition:all .15s;position:relative;
-  display:flex;flex-direction:column;gap:5px}
-.kb-card:hover{border-color:var(--b3);box-shadow:var(--sh1)}
+/* Cards neutros — fundo cinza dark uniforme, sem linhas coloridas, contrasta com a coluna tingida */
+.kb-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);
+  padding:12px 13px;cursor:grab;transition:all .15s;position:relative;
+  display:flex;flex-direction:column;gap:7px}
+.kb-card:hover{border-color:var(--b3);box-shadow:var(--sh1);background:var(--s3)}
 .kb-card.dragging{opacity:.5;cursor:grabbing}
-/* Marcador sutil (sem piscar) — Cobrador gerencia tudo na Follows */
-.kb-card.fu-blink{border-left:2.5px solid var(--am)}
-.kb-card.fu-blink-rd{border-left:2.5px solid var(--rd)}
-.kb-accent{position:absolute;top:0;left:0;right:0;height:2px;border-radius:6px 6px 0 0}
-.kb-name{font-size:13px;font-weight:600;color:var(--tx);padding-right:24px}
-.kb-meta{font-size:11px;color:var(--t3);display:flex;flex-wrap:wrap;gap:8px}
+.kb-accent{display:none} /* removida — não tinge mais o topo do card */
+.kb-name{font-size:13.5px;font-weight:600;color:var(--tx);padding-right:24px;line-height:1.3}
+.kb-meta{font-size:11.5px;color:var(--t3);display:flex;flex-wrap:wrap;gap:9px}
 .kb-meta span{display:inline-flex;align-items:center;gap:4px}
-.kb-foot{display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap}
-.kb-pgto{font-size:10px;font-weight:700;padding:3px 7px;border-radius:5px;letter-spacing:.04em;text-transform:uppercase}
-.kb-mod{font-size:10px;font-weight:600;color:var(--t3);padding:3px 7px;
-  background:var(--s2);border-radius:5px;border:1px solid var(--b1)}
+.kb-foot{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
+/* Tag de método de pagamento — cor única padrão (não mais cor diferente por método) */
+.kb-pgto{font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;letter-spacing:.04em;text-transform:uppercase;
+  background:rgba(148,163,184,.16);color:var(--t2)}
+.kb-mod{font-size:10px;font-weight:600;color:var(--t3);padding:3px 8px;
+  background:transparent;border-radius:5px;border:1px solid var(--b2)}
+/* Badge do vendedor com ícone de pessoa + nome */
+.kb-vendor{font-size:11px;font-weight:500;color:var(--t2);display:inline-flex;align-items:center;gap:5px;
+  background:var(--s3);padding:3px 9px;border-radius:5px;border:1px solid var(--b1);
+  max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-vendor::before{content:'👤';font-size:11px;opacity:.6;flex:none}
 .kb-tag{font-size:10px;font-weight:600;padding:3px 7px;border-radius:5px}
 .kb-fu{position:absolute;top:8px;right:30px;font-size:12px;opacity:.7}
 .kb-dots{position:absolute;top:7px;right:7px;width:22px;height:22px;border-radius:5px;
@@ -432,6 +440,18 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .popover-sep{height:1px;background:var(--b1);margin:4px 6px}
 .popover-sub{padding:7px 12px 4px;font-size:10px;color:var(--t4);
   text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+/* Accordion "Mover para" no menu de 3-pontinhos */
+.popover details{margin:0}
+.popover details summary{list-style:none;padding:9px 12px;font-size:13px;color:var(--t2);
+  cursor:pointer;display:flex;align-items:center;gap:8px;transition:all .15s;user-select:none}
+.popover details summary::-webkit-details-marker{display:none}
+.popover details summary:hover{background:var(--s3);color:var(--tx)}
+.popover details summary .pop-acc-chev{margin-left:auto;font-size:11px;color:var(--t4);transition:transform .2s}
+.popover details[open] summary .pop-acc-chev{transform:rotate(180deg);color:var(--bl2)}
+.popover details .popover-item{padding-left:24px;font-size:12.5px}
+.popover details .popover-item-disabled{padding:8px 12px 8px 24px;font-size:12px;color:var(--t4);
+  cursor:not-allowed;background:repeating-linear-gradient(135deg,
+    rgba(148,163,184,.08) 0,rgba(148,163,184,.08) 5px,transparent 5px,transparent 10px)}
 
 /* ─── CONTINGÊNCIA (chips) ────────────────────────────── */
 .cont-bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;
@@ -600,14 +620,26 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .hist-by{color:var(--t3);font-size:11px}
 .hist-time{color:var(--t4);font-size:11px;margin-left:auto}
 
-.com-item{padding:10px 12px;background:var(--s3);border-radius:var(--r);
+.com-item{padding:11px 13px;background:var(--s3);border-radius:var(--r);
   border:1px solid var(--b1);margin-bottom:7px}
-.com-h{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-.com-by{font-size:12px;font-weight:700;color:var(--tx)}
+.com-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.com-by{font-size:12px;font-weight:600;color:var(--tx)}
 .com-time{font-size:11px;color:var(--t4);margin-left:auto}
-.com-tx{font-size:13px;color:var(--t2);line-height:1.5}
+.com-tx{font-size:13px;color:var(--t2);line-height:1.55}
 .com-add{display:flex;gap:8px;margin-top:10px}
 .com-add textarea{flex:1;min-height:64px;resize:vertical}
+/* Anexos no comentário */
+.com-attach{margin-top:8px}
+.com-attach img{max-width:100%;max-height:280px;border-radius:8px;
+  border:1px solid var(--b1);cursor:zoom-in;display:block;background:var(--s2)}
+.com-attach audio{width:100%;margin-top:2px}
+.com-attach .com-file-meta{font-size:11px;color:var(--t4);margin-top:4px;display:flex;align-items:center;gap:6px}
+.com-attach-tag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;
+  background:var(--s4);color:var(--t2);padding:3px 8px;border-radius:5px;letter-spacing:.03em}
+/* Badge de comprovante pendente em pedidos Entrega */
+.mld-warn-banner{background:rgba(245,158,11,.08);border:1px solid var(--am);
+  border-radius:var(--r);padding:11px 14px;margin-bottom:14px;
+  display:flex;align-items:center;gap:11px;font-size:13px;color:var(--am);font-weight:500}
 
 /* ─── Notificações (sino + drawer) ────────────────── */
 .tb-bell{position:relative;background:transparent;border:1px solid var(--b1);
@@ -655,14 +687,14 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .modal.xl{max-width:1180px}
 .mld-status-pill{font-size:11px;font-weight:700;padding:4px 11px;border-radius:6px;
   letter-spacing:.04em;text-transform:uppercase;background:var(--grd);color:var(--gr)}
-.lead-grid-3{display:grid;grid-template-columns:1.05fr 1fr .9fr;gap:24px;margin-top:16px}
-@media(max-width:1000px){.lead-grid-3{grid-template-columns:1fr}}
-.lead-col{display:flex;flex-direction:column;gap:18px}
+.lead-grid-3{display:grid;grid-template-columns:1.05fr 1fr .9fr;gap:32px;margin-top:20px}
+@media(max-width:1000px){.lead-grid-3{grid-template-columns:1fr;gap:24px}}
+.lead-col{display:flex;flex-direction:column;gap:24px}
 .info-section{}
 .info-title{font-size:11px;font-weight:700;color:var(--t3);
-  text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;
-  padding-bottom:8px;border-bottom:1px solid var(--b1)}
-.info-row{display:flex;align-items:flex-start;gap:11px;padding:7px 0}
+  text-transform:uppercase;letter-spacing:.09em;margin-bottom:14px;
+  padding-bottom:10px;border-bottom:1px solid var(--b1)}
+.info-row{display:flex;align-items:flex-start;gap:12px;padding:9px 0}
 .info-ic{width:18px;color:var(--t4);font-size:14px;margin-top:2px;flex-shrink:0;text-align:center;line-height:1}
 .info-c{flex:1;min-width:0}
 .info-lbl{font-size:10.5px;color:var(--t4);font-weight:500;margin-bottom:1px;letter-spacing:.02em}
@@ -1261,11 +1293,17 @@ h1 em{font-weight:700}
     <div class="m-h">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span class="mt">Detalhes do <em style="font-style:normal;color:var(--bl2)" id="mld-title">Pedido</em></span>
+        <button id="mld-wa-btn" onclick="openLeadWA()" title="Abrir WhatsApp do cliente"
+          style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.35);
+            padding:6px 11px;border-radius:7px;cursor:pointer;font-weight:600;font-size:12.5px;
+            display:inline-flex;align-items:center;gap:5px;transition:all .15s">
+          💬 WhatsApp
+        </button>
         <span class="mld-status-pill" id="mld-status">—</span>
       </div>
       <div class="m-actions">
-        <button class="btn btn-re btn-sm" id="mld-del" onclick="deleteLead()">Excluir</button>
         <button class="btn btn-bl btn-sm" onclick="saveLead()">Salvar</button>
+        <button class="btn btn-re btn-sm" id="mld-del" onclick="deleteLead()" style="margin-left:14px">Excluir</button>
         <button class="m-x" onclick="closeM('m-lead-detail')">×</button>
       </div>
     </div>
@@ -1437,10 +1475,25 @@ h1 em{font-weight:700}
           </div>
 
           <div class="info-section">
-            <div class="info-title">Comentários <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
+            <div class="info-title">Comentários & Comprovantes <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
+            <!-- Aviso quando pedido Entrega não tem comprovante anexado -->
+            <div id="mld-proof-warn" class="mld-warn-banner" style="display:none">
+              <span style="font-size:18px">⚠</span>
+              <div style="flex:1">
+                <div style="font-weight:600;color:var(--am)">Comprovante obrigatório</div>
+                <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Pedido na Entrega exige imagem do print do WhatsApp ou áudio de aceite do cliente antes de avançar.</div>
+              </div>
+            </div>
             <div id="mld-coms" class="com-list"></div>
             <div class="com-pretty">
-              <span class="com-icon" title="Anexar (em breve)">📎</span>
+              <label class="com-icon" title="Anexar imagem (print do WhatsApp)">
+                <input type="file" accept="image/*" style="display:none" onchange="uploadCommentFile(this,'image')">
+                📷
+              </label>
+              <label class="com-icon" title="Anexar áudio (aceite do cliente)">
+                <input type="file" accept="audio/*" style="display:none" onchange="uploadCommentFile(this,'audio')">
+                🎤
+              </label>
               <input id="mld-com-new" placeholder="Escreva um comentário..." onkeydown="if(event.key==='Enter')addComment()">
               <button class="com-send" onclick="addComment()" title="Enviar">➤</button>
             </div>
@@ -2580,6 +2633,18 @@ function applySystemTags(lead){
 }
 function applySystemTagsAll(){
   (DB.leads||[]).forEach(applySystemTags);
+}
+// Pedidos na modalidade "Entrega" exigem comprovante de aceite (imagem ou áudio)
+// nos comentários antes de avançar pra qualquer etapa pós-validação.
+function hasComprovante(lead){
+  return (lead?.comments||[]).some(c=>c.kind==='image'||c.kind==='audio');
+}
+// Etapas que NÃO exigem comprovante (antes da validação ou cancelamento)
+const COMPROVANTE_FREE_COLS=['A Enviar','Cancelado','Atenção'];
+function requiresComprovante(lead, targetCol){
+  if(!lead||lead.mod!=='entrega')return false;
+  if(COMPROVANTE_FREE_COLS.includes(targetCol))return false;
+  return !hasComprovante(lead);
 }
 // Sincroniza imediatamente após declaração — garante que tags de sistema
 // já estão aplicadas em todos os leads antes da primeira renderização.
@@ -4021,29 +4086,31 @@ function renderKanban(){
     const canMove=colCanMove(col);
     const dz=document.createElement('div');
     dz.className='kb-col'+(canMove?'':' no-move');
-    dz.innerHTML=`<div class="kb-top" style="background:${col.c}"></div>
-      <div class="kb-ch"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
+    // Coluna inteira ganha cor da etapa em ~8% de opacidade; header em ~22%
+    dz.style.background=col.c+'14'; // 8%
+    dz.innerHTML=`
+      <div class="kb-ch" style="background:${col.c}38"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
       <div class="kb-ccards"></div>
       ${leads.length===0?'<div class="kb-dz">'+(canMove?'Solte aqui':'Sem leads')+'</div>':''}`;
     const cards=dz.querySelector('.kb-ccards');
 
     leads.forEach(lead=>{
-      const ps=PGTO_S[lead.pgto]||PGTO_S[lead.spg]||{bg:'rgba(148,163,184,.18)',tx:'#94a3b8'};
       const at=getTeam(lead.at);
       const card=document.createElement('div');
       card.className='kb-card';
       card.draggable=canMove;
       card.dataset.lid=lead.id;
-      // Status de follow-up (atrasado / vencido / cidade-destino) agora aparecem
-      // como TAGS DE SISTEMA (auto-aplicadas via fu) — sem ícone separado nem borda.
-      // O Diretor edita cor/nome dessas tags em ⚙ Gerenciar Tags.
       const tagsHTML=(lead.tags||[]).map(t=>{
         const c=tagColor(t);
         return `<span class="kb-tag" style="background:${c}22;color:${c}">${tagName(t)}</span>`;
       }).join('');
+      // Indicador de comprovante pendente em pedidos Entrega
+      const needsProof=lead.mod==='entrega'&&!hasComprovante(lead)&&lead.col!=='A Enviar'&&lead.col!=='Cancelado';
+      const proofBadge=needsProof
+        ?`<span title="Pedido na Entrega sem comprovante de aceite" style="font-size:10px;font-weight:600;background:rgba(245,158,11,.16);color:var(--am);padding:3px 7px;border-radius:5px;display:inline-flex;align-items:center;gap:3px">⚠ sem comprovante</span>`
+        :'';
 
       card.innerHTML=`
-        <div class="kb-accent" style="background:${col.c}"></div>
         <div class="kb-dots" onclick="event.stopPropagation();openLeadMenu(event,${lead.id})">⋮</div>
         <div class="kb-name">${lead.nome}</div>
         <div class="kb-meta">
@@ -4053,9 +4120,10 @@ function renderKanban(){
         </div>
         ${lead.track?`<div class="kb-meta"><span>📦 ${lead.track}</span></div>`:''}
         <div class="kb-foot">
-          <span class="kb-pgto" style="background:${ps.bg};color:${ps.tx}">${lead.pgto||lead.spg||'—'}</span>
+          <span class="kb-pgto">${lead.pgto||lead.spg||'—'}</span>
           <span class="kb-mod">${lead.mod==='entrega'?'Entrega':'Antec.'}</span>
-          ${isDir()&&at?`<span class="kb-mod">${at.abbr}</span>`:''}
+          ${proofBadge}
+          ${at&&at.id!==CUR?.id?`<span class="kb-vendor" title="${at.role}">${at.name}</span>`:''}
           ${tagsHTML}
         </div>`;
 
@@ -4079,6 +4147,11 @@ function renderKanban(){
         // Verifica permissão de mover para esta etapa
         if(!colCanMove(col)){
           toast(`Você não pode mover leads para "${col.id}"`,'err');
+          dragLeadId=null;return;
+        }
+        // Pedidos Entrega exigem comprovante de aceite antes de avançar
+        if(requiresComprovante(lead,col.id)){
+          toast(`Pedido na Entrega exige comprovante (imagem/áudio) nos comentários antes de mover`,'err');
           dragLeadId=null;return;
         }
         const prev=lead.col;
@@ -4105,17 +4178,27 @@ function openLeadMenu(e,lid){
   const lead=DB.leads.find(l=>l.id===lid);
   if(!lead)return;
   const p=$('popover');
-  const moveOpts=KB_COLS.filter(c=>c.id!==lead.col).map(c=>
-    `<div class="popover-item" onclick="quickMove(${lid},'${c.id}')">→ ${c.id}</div>`
-  ).join('');
+  // Opções de mover para — cada etapa aparece dentro do accordion;
+  // se exigir comprovante e não tiver, fica visivelmente bloqueada.
+  const moveOpts=KB_COLS.filter(c=>c.id!==lead.col).map(c=>{
+    const blocked=!colCanMove(c)||requiresComprovante(lead,c.id);
+    if(blocked){
+      const reason=!colCanMove(c)?'Sem permissão de mover':'Comprovante obrigatório';
+      return `<div class="popover-item-disabled" title="${reason}">→ ${c.id} <span style="float:right;font-size:10px">🔒</span></div>`;
+    }
+    return `<div class="popover-item" onclick="quickMove(${lid},'${c.id}')">→ ${c.id}</div>`;
+  }).join('');
+  const waNum=lead.wa.replace(/\D/g,'');
   p.innerHTML=`
     <div class="popover-item" onclick="openLeadDetail(${lid})">📝 Ver detalhes</div>
-    <div class="popover-item" onclick="window.open('https://wa.me/55${lead.wa.replace(/\\D/g,'')}','_blank')">💬 WhatsApp</div>
-    <div class="popover-item" onclick="window.open('tel:${lead.wa.replace(/\\D/g,'')}','_blank')">📞 Ligar</div>
+    <div class="popover-item" onclick="window.open('https://wa.me/55${waNum}','_blank')">💬 WhatsApp</div>
+    <div class="popover-item" onclick="window.open('tel:${waNum}','_blank')">📞 Ligar</div>
     ${lead.link?`<div class="popover-item" onclick="navigator.clipboard.writeText('${lead.link}');toast('Checkout copiado','ok');closePopover()">🔗 Copiar checkout</div>`:''}
     <div class="popover-sep"></div>
-    <div class="popover-sub">Mover para</div>
-    ${moveOpts}
+    <details>
+      <summary>📋 Mover para... <span class="pop-acc-chev">▾</span></summary>
+      ${moveOpts}
+    </details>
     ${isDir()?`<div class="popover-sep"></div><div class="popover-item danger" onclick="quickDelete(${lid})">🗑 Excluir</div>`:''}`;
   const r=e.target.getBoundingClientRect();
   p.style.left=Math.min(window.innerWidth-220,r.left)+'px';
@@ -4129,6 +4212,7 @@ function quickMove(lid,col){
   const lead=DB.leads.find(l=>l.id===lid);if(!lead)return;
   const colObj=KB_COLS.find(c=>c.id===col);
   if(!colCanMove(colObj)){toast(`Você não pode mover leads para "${col}"`,'err');return}
+  if(requiresComprovante(lead,col)){toast(`Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar`,'err');return}
   const prev=lead.col;lead.col=col;
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
@@ -4147,6 +4231,7 @@ function quickMoveModal(col){
   const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
   const colObj=KB_COLS.find(c=>c.id===col);
   if(!colCanMove(colObj)){toast(`Você não pode mover leads para "${col}"`,'err');return}
+  if(requiresComprovante(lead,col)){toast(`Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar`,'err');return}
   const prev=lead.col;lead.col=col;
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
@@ -4318,10 +4403,33 @@ function autoFillCheckoutLink(){
 
 function renderComments(lead){
   $('mld-com-c').textContent=lead.comments?.length?`(${lead.comments.length})`:'';
+  // Aviso de comprovante: aparece só se for Entrega e não tiver imagem/áudio anexado
+  const warn=$('mld-proof-warn');
+  if(warn){
+    const needs=lead.mod==='entrega'&&!hasComprovante(lead);
+    warn.style.display=needs?'flex':'none';
+  }
+  const sizeStr=b=>b<1024?(b+' B'):b<1024*1024?((b/1024).toFixed(1)+' KB'):((b/1048576).toFixed(2)+' MB');
   $('mld-coms').innerHTML=lead.comments?.length
-    ?lead.comments.map(c=>`<div class="com-item">
-      <div class="com-h"><span class="com-by">${getTeam(c.who)?.name||c.who}</span><span class="com-time">${c.time}</span></div>
-      <div class="com-tx">${c.tx}</div></div>`).join('')
+    ?lead.comments.map((c,i)=>{
+      let attach='';
+      if(c.kind==='image'&&c.file_data){
+        attach=`<div class="com-attach">
+          <img src="${c.file_data}" alt="${c.file_name||'comprovante'}" onclick="window.open('${c.file_data}','_blank')">
+          <div class="com-file-meta"><span class="com-attach-tag">📷 IMAGEM</span><span>${c.file_name||'comprovante'}</span><span style="margin-left:auto">${sizeStr(c.file_size||0)}</span></div>
+        </div>`;
+      } else if(c.kind==='audio'&&c.file_data){
+        attach=`<div class="com-attach">
+          <audio controls preload="metadata" src="${c.file_data}"></audio>
+          <div class="com-file-meta"><span class="com-attach-tag">🎤 ÁUDIO</span><span>${c.file_name||'áudio'}</span><span style="margin-left:auto">${sizeStr(c.file_size||0)}</span></div>
+        </div>`;
+      }
+      return `<div class="com-item">
+        <div class="com-h"><span class="com-by">${getTeam(c.who)?.name||c.who}</span><span class="com-time">${c.time}</span></div>
+        <div class="com-tx">${c.tx}</div>
+        ${attach}
+      </div>`;
+    }).join('')
     :'<div class="muted" style="padding:8px 0">Sem comentários ainda.</div>';
 }
 
@@ -4332,6 +4440,44 @@ function addComment(){
   lead.comments.unshift({who:CUR.id,tx,time:`${today()} ${nowTime()}`});
   $('mld-com-new').value='';
   renderComments(lead);persist();toast('Comentário adicionado','ok');
+}
+
+// Abre WhatsApp do lead atual (formato wa.me com DDI 55 + número limpo)
+function openLeadWA(){
+  const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead){toast('Lead não encontrado','err');return}
+  const num=(lead.wa||'').replace(/\D/g,'');
+  if(!num){toast('Lead sem WhatsApp cadastrado','err');return}
+  const ddi=num.startsWith('55')?'':'55';
+  window.open(`https://wa.me/${ddi}${num}`,'_blank');
+}
+
+// Upload de comprovante (imagem ou áudio) nos comentários do lead.
+// Salva como base64 no comentário — aparece como anexo clicável.
+async function uploadCommentFile(input,kind){
+  const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
+  const file=input.files[0];if(!file)return;
+  // Limite 5 MB pra não estourar localStorage
+  if(file.size>5*1024*1024){toast('Arquivo muito grande (máx 5MB)','err');input.value='';return}
+  const reader=new FileReader();
+  reader.onload=e=>{
+    lead.comments=lead.comments||[];
+    lead.comments.unshift({
+      who:CUR.id,
+      time:`${today()} ${nowTime()}`,
+      kind,
+      file_name:file.name,
+      file_size:file.size,
+      file_type:file.type,
+      file_data:e.target.result, // data URL base64
+      tx:kind==='image'?'📷 Comprovante (imagem)':'🎤 Comprovante (áudio)',
+    });
+    persist();renderComments(lead);
+    if(document.querySelector('.page#crm-pg.active'))renderKanban();
+    toast(kind==='image'?'Imagem anexada':'Áudio anexado','ok');
+  };
+  reader.onerror=()=>toast('Erro ao ler arquivo','err');
+  reader.readAsDataURL(file);
+  input.value=''; // permite re-upload do mesmo arquivo
 }
 
 // Constrói URL de checkout com dados do lead injetados (PAYT/Hotmart/etc aceitam querystring)
@@ -4404,6 +4550,10 @@ function saveLead(){
   const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
   const newCol=$('mld-col').value;
   if(newCol!==lead.col){
+    if(requiresComprovante(lead,newCol)){
+      toast('Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar de etapa','err');
+      return;
+    }
     lead.hist.push({from:lead.col,to:newCol,who:CUR.id,time:`${today()} ${nowTime()}`});
     if(newCol==='Pago')registerVendaFromLead(lead);
   }
