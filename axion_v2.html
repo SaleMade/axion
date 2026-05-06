@@ -1196,8 +1196,9 @@ h1 em{font-weight:700}
         <input type="password" id="lq-pwd" autocomplete="current-password" onkeydown="if(event.key==='Enter')quickLogin()">
       </div>
       <button class="btn btn-bl btn-lg" onclick="quickLogin()" style="width:100%;margin-top:10px">Entrar</button>
-      <div style="text-align:center;margin-top:12px">
+      <div style="text-align:center;margin-top:12px;display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
         <a class="lg-link" onclick="showFullLogin()">Outro usuário</a>
+        <a class="lg-link" onclick="forgotPassword()">Esqueci minha senha</a>
       </div>
     </div>
 
@@ -3082,7 +3083,20 @@ async function quickLogin(){
 }
 
 function forgotPassword(){
-  axConfirm(`Para resetar sua senha, peça ao <b>Diretor</b> da operação para acessar <b>Equipe</b> → editar seu perfil → "Resetar senha".<br><br>Se você é o Diretor e perdeu a senha, abra <b>Configurações → Dados → Resetar para mock</b> (perde dados) ou contacte suporte técnico.`,{type:'info',okLabel:'Entendi',cancelLabel:''});
+  axConfirm(
+    `<div style="line-height:1.6">
+      <b style="color:var(--bl2)">Membro do time?</b><br>
+      Peça ao <b>Diretor</b> (ou Sócio/Produtor) pra resetar sua senha:<br>
+      <span style="color:var(--t3);font-size:13px">→ Configurações → Gerenciar Equipe → ✎ Editar (seu nome) → Resetar senha</span>
+      <br><br>
+      <b style="color:var(--am)">É o Diretor e perdeu a senha?</b><br>
+      <span style="color:var(--t2);font-size:13px">
+        ${apiEnabled()
+          ?'• Acesse o servidor (Cloudflare D1) e atualize o pwd_hash via comando:<br><code style="background:var(--s3);padding:3px 7px;border-radius:4px;font-size:11.5px;color:var(--cy);font-family:ui-monospace,monospace">npx wrangler d1 execute axion --remote --command "UPDATE users SET pwd_hash=\\"NOVO_HASH\\" WHERE id=\\"dir\\""</code><br>(gera o hash da nova senha com SHA-256, hex lowercase)'
+          :'• Abra <b>Configurações → Dados → Resetar para mock</b> (apaga dados locais e volta o usuário Diretor padrão)<br>• Ou peça pra outro Sócio/Produtor cadastrado resetar sua senha em Gerenciar Equipe'}
+      </span>
+    </div>`,
+    {type:'info',okLabel:'Entendi',cancelLabel:''});
 }
 
 // Entra na app (após auth válida)
@@ -7997,7 +8011,10 @@ function cfgConta(){
         <div class="field"><label>Senha atual</label><input id="cf-pwd-cur" type="password" placeholder="senha atual"></div>
         <div class="field"><label>Nova senha (mín. 6)</label><input id="cf-pwd-new" type="password" placeholder="nova senha"></div>
       </div>
-      <button class="btn btn-bl btn-sm" onclick="changeMyPassword()">Atualizar senha</button>
+      <div style="display:flex;align-items:center;gap:14px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn btn-bl btn-sm" onclick="changeMyPassword()">Atualizar senha</button>
+        <a onclick="forgotPassword()" style="color:var(--bl);cursor:pointer;font-size:12.5px;font-weight:600">🔑 Esqueci a senha atual</a>
+      </div>
     </div>
 
     <!-- Trocar perfil — só Diretor (impersonate, sem precisar de senha) -->
