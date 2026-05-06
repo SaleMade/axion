@@ -3641,27 +3641,29 @@ function renderHome(){
   const conv     = myL.length?Math.round(pago/myL.length*100):0;
 
   // ─── Hierarquia financeira ───
-  // Para Afiliado: Receita Bruta Afiliado (= comissões) e Líquida (- taxas) primeiro
-  const rec_bruta_afi = com;
-  const rec_liq_afi   = com*0.97; // 3% taxa gateway estimada
+  // Faturamento Bruto = total que o cliente pagou (recBruta)
+  // Receita do Afiliado = comissão que você efetivamente recebe (com)
+  // Taxas/impostos ficam no DRE — aqui só mostramos os valores brutos
+  const faturamentoBruto = recBruta;
+  const receitaAfiliado  = com;
 
   let metrics='';
   if(afi||at){
     metrics=`
     <div class="mg">
+      <div class="mc mc-go mc-feat">
+        <div class="mc-gl"></div>
+        <div class="mc-ic">◈</div>
+        <div class="mc-lbl">Faturamento Bruto</div>
+        <div class="mc-val">${fmt(faturamentoBruto)}</div>
+        <div class="mc-sub">total dos pedidos · ${myV.length} venda${myV.length!==1?'s':''}</div>
+      </div>
       <div class="mc mc-bl mc-feat">
         <div class="mc-gl"></div>
         <div class="mc-ic">💎</div>
-        <div class="mc-lbl">Receita Bruta · Afiliado</div>
-        <div class="mc-val">${fmt(rec_bruta_afi)}</div>
-        <div class="mc-sub">Comissões (${myV.length} venda${myV.length!==1?'s':''})</div>
-      </div>
-      <div class="mc mc-cy mc-feat">
-        <div class="mc-gl"></div>
-        <div class="mc-ic">✦</div>
-        <div class="mc-lbl">Receita Líquida · Afiliado</div>
-        <div class="mc-val">${fmt(rec_liq_afi)}</div>
-        <div class="mc-sub">após taxa gateway 3%</div>
+        <div class="mc-lbl">Receita do Afiliado</div>
+        <div class="mc-val">${fmt(receitaAfiliado)}</div>
+        <div class="mc-sub">o que você recebe (comissão)</div>
       </div>
       <div class="mc mc-gr">
         <div class="mc-gl"></div>
@@ -3670,9 +3672,9 @@ function renderHome(){
         <div class="mc-val">${pago}</div>
         <div class="mc-sub">${conv}% de conversão</div>
       </div>
-      <div class="mc mc-go">
+      <div class="mc mc-cy">
         <div class="mc-gl"></div>
-        <div class="mc-ic">◈</div>
+        <div class="mc-ic">$</div>
         <div class="mc-lbl">Ticket médio</div>
         <div class="mc-val">${fmt(ticket)}</div>
         <div class="mc-sub">por venda</div>
@@ -3685,29 +3687,23 @@ function renderHome(){
     dirMetrics=`
     <div class="section-title">Visão Afiliado (prioritário)</div>
     <div class="mg">
+      <div class="mc mc-go mc-feat">
+        <div class="mc-gl"></div><div class="mc-ic">◈</div>
+        <div class="mc-lbl">Faturamento Bruto</div>
+        <div class="mc-val">${fmt(faturamentoBruto)}</div>
+        <div class="mc-sub">total dos pedidos pagos</div>
+      </div>
       <div class="mc mc-bl mc-feat">
         <div class="mc-gl"></div><div class="mc-ic">💎</div>
-        <div class="mc-lbl">Receita Bruta · Afiliado</div>
-        <div class="mc-val">${fmt(rec_bruta_afi)}</div>
-        <div class="mc-sub">Comissões geradas</div>
-      </div>
-      <div class="mc mc-cy mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">✦</div>
-        <div class="mc-lbl">Receita Líquida · Afiliado</div>
-        <div class="mc-val">${fmt(rec_liq_afi)}</div>
-        <div class="mc-sub">após taxas</div>
+        <div class="mc-lbl">Receita do Afiliado</div>
+        <div class="mc-val">${fmt(receitaAfiliado)}</div>
+        <div class="mc-sub">comissão recebida</div>
       </div>
     </div>
 
-    <div class="section-title">Visão Produtor</div>
+    <div class="section-title">Visão Produtor (operação)</div>
     <div class="mg">
-      <div class="mc mc-go">
-        <div class="mc-gl"></div><div class="mc-ic">◈</div>
-        <div class="mc-lbl">Receita Bruta</div>
-        <div class="mc-val">${fmt(recBruta)}</div>
-        <div class="mc-sub">${myV.length} venda${myV.length!==1?'s':''}</div>
-      </div>
-      <div class="mc mc-gr">
+      <div class="mc mc-gr mc-feat">
         <div class="mc-gl"></div><div class="mc-ic">▲</div>
         <div class="mc-lbl">Lucro Líquido</div>
         <div class="mc-val">${fmt(lucro)}</div>
