@@ -5883,9 +5883,17 @@ function pageInvest(){return `<div class="page" id="invest-pg"></div>`}
 function renderInvest(){
   const c=$('invest-pg');if(!c)return;
   const invests=DB.invest;
-  const inv=invests.reduce((s,i)=>s+i.vl,0);
-  const invByCat={};
-  invests.forEach(i=>{invByCat[i.cat]=(invByCat[i.cat]||0)+i.vl});
+  // Total real consumido (sem budgets)
+  const inv=invests.filter(i=>!i.is_budget).reduce((s,i)=>s+i.vl,0);
+  // Por categoria: separa budget de gasto pra mostrar saldo restante em cada card
+  const invByCatBudget={};
+  const invByCatGasto={};
+  invests.forEach(i=>{
+    if(i.is_budget) invByCatBudget[i.cat]=(invByCatBudget[i.cat]||0)+Number(i.vl||0);
+    else            invByCatGasto[i.cat] =(invByCatGasto[i.cat] ||0)+Number(i.vl||0);
+  });
+  // Conjunto de todas as categorias com qualquer movimento
+  const allCats=new Set([...Object.keys(invByCatBudget),...Object.keys(invByCatGasto)]);
   const catFor=id=>DB.invCats.find(x=>x.id===id)||{nome:id,icon:'📦',cor:'#64748b'};
 
   // Aportes de sócios (no período do topo da Dash)
@@ -5919,13 +5927,8 @@ function renderInvest(){
   // Lucro distribuível do período (vem do DRE, respeitando modo Afiliado/Produtor)
   const lucroDistribuivel=Math.max(0,fin.lucro);
 
-  // ─── Budget de Investimentos (acumulado, sem filtro de data) ───
-  // Soma todos invest com is_budget=true vs invest com is_budget=false (gastos reais)
-  const allInvests=DB.invest||[];
-  const invBudgetTotal=allInvests.filter(i=>i.is_budget).reduce((s,i)=>s+Number(i.vl||0),0);
-  const invSpentTotal =allInvests.filter(i=>!i.is_budget).reduce((s,i)=>s+Number(i.vl||0),0);
-  const invBudgetSaldo=invBudgetTotal-invSpentTotal;
-  const invBudgetPct  =invBudgetTotal>0?Math.round(invSpentTotal/invBudgetTotal*100):0;
+  // (Resumo geral de Budget vs Gasto removido — agora cada card de categoria
+  //  mostra seu próprio saldo de budget no canto superior direito)
 
   c.innerHTML=`
   <div class="ph">
@@ -5943,44 +5946,29 @@ function renderInvest(){
       <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
     </div>
 
-    <!-- Resumo de Budget vs Gasto (acumulado) -->
-    ${invBudgetTotal>0||invSpentTotal>0?`
-    <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 14px;margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <div style="font-size:18px">📊</div>
-        <div style="flex:1;min-width:140px">
-          <div style="font-size:12.5px;font-weight:600;color:var(--tx)">Budget vs Gasto</div>
-          <div class="muted" style="font-size:11px">acumulado · Budgets reservam o valor sem afetar o DRE</div>
-        </div>
-        <div style="text-align:right">
-          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Budget</div>
-          <div style="font-size:14px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(invBudgetTotal)}</div>
-        </div>
-        <div style="text-align:right">
-          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Gasto</div>
-          <div style="font-size:14px;font-weight:700;color:var(--rd);font-variant-numeric:tabular-nums">${fmt(invSpentTotal)}</div>
-        </div>
-        <div style="text-align:right;padding-left:12px;border-left:1px solid var(--b1)">
-          <div class="muted" style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${invBudgetSaldo>=0?'var(--gr)':'var(--rd)'}">Saldo</div>
-          <div style="font-size:16px;font-weight:700;color:${invBudgetSaldo>=0?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums">${fmt(invBudgetSaldo)}</div>
-        </div>
-      </div>
-      ${invBudgetTotal>0?`
-      <div style="height:5px;background:var(--s4);border-radius:3px;overflow:hidden;margin-top:9px">
-        <div style="height:100%;width:${Math.min(100,invBudgetPct)}%;background:linear-gradient(90deg,var(--gr),${invBudgetPct>=90?'var(--rd)':'var(--am)'});border-radius:3px;transition:width .3s"></div>
-      </div>
-      <div style="font-size:10.5px;color:var(--t4);margin-top:3px">${invBudgetPct}% consumido${invBudgetSaldo<0?' · ⚠ excedeu':''}</div>
-      `:''}
-    </div>
-    `:''}
-
-    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
-      ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
-        <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
-          <div class="mc-ic" style="background:${c.cor}22;color:${c.cor}">${c.icon}</div>
-          <div class="mc-lbl">${c.nome}</div>
-          <div class="mc-val" style="color:${c.cor};letter-spacing:.01em">${fmt(v)}</div>
-        </div>`}).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
+    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:14px">
+      ${[...allCats].map(k=>{
+        const cat=catFor(k);
+        const budget=invByCatBudget[k]||0;
+        const gasto =invByCatGasto[k]||0;
+        const saldo =budget-gasto;
+        const hasBudget=budget>0;
+        // Cor do badge de saldo: verde se positivo, vermelho se negativo (ultrapassou)
+        const saldoColor=saldo>=0?'var(--gr)':'var(--rd)';
+        return `<div class="mc" style="position:relative">
+          <div class="mc-gl" style="background:${cat.cor}"></div>
+          <div class="mc-ic" style="background:${cat.cor}22;color:${cat.cor}">${cat.icon}</div>
+          ${hasBudget?`
+          <div title="Saldo de budget restante (Budget ${fmt(budget)} − Gasto ${fmt(gasto)})"
+            style="position:absolute;top:10px;right:12px;text-align:right">
+            <div style="font-size:9.5px;color:var(--t4);font-weight:700;text-transform:uppercase;letter-spacing:.05em">saldo</div>
+            <div style="font-size:13px;font-weight:700;color:${saldoColor};font-variant-numeric:tabular-nums;line-height:1.1">${fmt(saldo)}</div>
+          </div>`:''}
+          <div class="mc-lbl">${cat.nome}</div>
+          <div class="mc-val" style="color:${cat.cor};letter-spacing:.01em">${fmt(gasto)}</div>
+          ${hasBudget?`<div class="mc-sub" style="font-size:10.5px">de <b style="color:var(--gold)">${fmt(budget)}</b> reservado</div>`:''}
+        </div>`;
+      }).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
     </div>
 
     <div class="tbl-wrap">
