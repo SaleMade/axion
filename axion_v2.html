@@ -401,10 +401,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   background:rgba(148,163,184,.16);color:var(--t2)}
 .kb-mod{font-size:10px;font-weight:600;color:var(--t3);padding:3px 8px;
   background:transparent;border-radius:5px;border:1px solid var(--b2)}
-/* Badge do vendedor com ícone de pessoa + nome */
+/* Linha exclusiva do vendedor (sempre abaixo das tags pra organização visual) */
+.kb-vendor-row{margin-top:4px;padding-top:7px;border-top:1px dashed var(--b1);
+  display:flex;align-items:center}
 .kb-vendor{font-size:11px;font-weight:500;color:var(--t2);display:inline-flex;align-items:center;gap:5px;
-  background:var(--s3);padding:3px 9px;border-radius:5px;border:1px solid var(--b1);
-  max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  background:transparent;padding:0;border-radius:0;border:none;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kb-vendor::before{content:'👤';font-size:11px;opacity:.6;flex:none}
 .kb-tag{font-size:10px;font-weight:600;padding:3px 7px;border-radius:5px}
 .kb-fu{position:absolute;top:8px;right:30px;font-size:12px;opacity:.7}
@@ -574,6 +576,8 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .overlay{position:fixed;inset:0;background:rgba(5,8,16,.78);z-index:300;
   display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)}
 .overlay.open{display:flex}
+/* Confirm modal sempre acima dos outros modais (evita ficar atrás de produto/lead em edição) */
+.overlay#m-confirm{z-index:550;background:rgba(5,8,16,.65)}
 .modal{background:linear-gradient(180deg,var(--s2),var(--s1));
   border:1px solid var(--b2);border-radius:var(--rxl);
   width:100%;max-width:700px;max-height:90vh;overflow-y:auto;
@@ -2044,9 +2048,12 @@ h1 em{font-weight:700}
       <div id="mp-vars" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
       <button class="btn btn-gh btn-sm" onclick="addVariacao()" style="width:100%;border-style:dashed">+ Adicionar variação</button>
 
-      <div class="section-title" style="margin-top:18px">Links de Checkout por Afiliado</div>
-      <p class="muted" style="font-size:12px;margin-bottom:11px">Configure 1 link por modalidade (Antecipado / Entrega) por afiliado. Quando o afiliado cadastrar lead, o link correto é puxado automaticamente.</p>
-      <div id="mp-afi-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      <!-- Links por Afiliado — só faz sentido no modo Produtor (gerencia parceiros) -->
+      <div id="mp-afi-block">
+        <div class="section-title" style="margin-top:18px">Links de Checkout por Afiliado</div>
+        <p class="muted" style="font-size:12px;margin-bottom:11px">Configure 1 link por modalidade (Antecipado / Entrega) por afiliado parceiro. Sobrescreve o link global da variação quando o afiliado cadastra um lead.</p>
+        <div id="mp-afi-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -3700,26 +3707,8 @@ function pageCRM(){
         <option value="entrega">Na entrega</option>
       </select>
       <input class="kb-search" id="kb-tags" placeholder="Tag (ex: vip)" style="max-width:140px;flex:initial" oninput="updateCrmFilters()">
-      ${(()=>{
-        // Botões dinâmicos — refletem nome/cor das tags de sistema E só aparecem se ativadas.
-        // Diretor controla via ⚙ Gerenciar Tags (toggle on/off).
-        const tAtr=getTag('sys-atrasado'),tVen=getTag('sys-vencido');
-        const out=[];
-        if(tAtr&&tAtr.enabled!==false){
-          out.push(`<button class="kb-toggle alert" id="kb-atr" onclick="toggleCrmFilter('atrasados')">${tAtr.name}</button>`);
-        }
-        out.push(`<button class="kb-toggle" id="kb-hoje" onclick="toggleCrmFilter('agendHoje')">📅 Hoje</button>`);
-        if(tVen&&tVen.enabled!==false){
-          out.push(`<button class="kb-toggle alert" id="kb-venc" onclick="toggleCrmFilter('vencidos')">${tVen.name}</button>`);
-        }
-        return out.join('');
-      })()}
+      <button class="kb-toggle" id="kb-hoje" onclick="toggleCrmFilter('agendHoje')">📅 Hoje</button>
       <button class="kb-clear" onclick="clearCrmFilters()">× Limpar filtros</button>
-      <div class="kb-stats">
-        <span class="badge b-bl" id="kb-ttl">–</span>
-        <span class="badge b-gr" id="kb-pg">–</span>
-        <span class="badge b-go" id="kb-cv">–</span>
-      </div>
     </div>
     <div class="kb-wrap"><div class="kb-board" id="kb-board"></div></div>
   </div>`;
@@ -3735,13 +3724,14 @@ function updateCrmFilters(){
 }
 function toggleCrmFilter(k){
   crmFilters[k]=!crmFilters[k];
-  $(k==='atrasados'?'kb-atr':k==='agendHoje'?'kb-hoje':'kb-venc').classList.toggle('on',crmFilters[k]);
+  // Só agendHoje continua tendo botão visível; outros são gerenciados internamente
+  if(k==='agendHoje'){const el=$('kb-hoje');if(el)el.classList.toggle('on',crmFilters[k])}
   persistCrmFilters();renderKanban();
 }
 function clearCrmFilters(){
   crmFilters={q:'',vendedor:'',status:'',mod:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
   $('kb-q').value='';$('kb-vend').value='';$('kb-st').value='';$('kb-mod').value='';$('kb-tags').value='';
-  ['kb-atr','kb-hoje','kb-venc'].forEach(id=>{const el=$(id);if(el)el.classList.remove('on')});
+  ['kb-hoje'].forEach(id=>{const el=$(id);if(el)el.classList.remove('on')});
   persistCrmFilters();renderKanban();
 }
 // Aplica filtros persistidos aos elementos do DOM (chamar após render do CRM)
@@ -3751,9 +3741,7 @@ function applyPersistedFilters(){
   if($('kb-st'))$('kb-st').value=crmFilters.status||'';
   if($('kb-mod'))$('kb-mod').value=crmFilters.mod||'';
   if($('kb-tags'))$('kb-tags').value=crmFilters.tags||'';
-  if($('kb-atr'))$('kb-atr').classList.toggle('on',crmFilters.atrasados);
   if($('kb-hoje'))$('kb-hoje').classList.toggle('on',crmFilters.agendHoje);
-  if($('kb-venc'))$('kb-venc').classList.toggle('on',crmFilters.vencidos);
 }
 
 // ─── Configuração de Etapas (CRUD) ─────────────────────
@@ -4061,10 +4049,7 @@ function renderKanban(){
     return true;
   });
 
-  const pago=filt.filter(l=>l.col==='Pago').length;
-  $('kb-ttl').textContent=filt.length+' leads';
-  $('kb-pg').textContent=pago+' pagos';
-  $('kb-cv').textContent=(filt.length?Math.round(pago/filt.length*100):0)+'% conv.';
+  // (badges de leads/pagos/conversão removidos do header — foco operacional no Kanban)
 
   // Filtra colunas pelas permissões definidas em DB.kb_cols
   KB_COLS.filter(c=>colCanView(c)).forEach(col=>{
@@ -4104,9 +4089,9 @@ function renderKanban(){
         <div class="kb-foot">
           <span class="kb-pgto">${lead.pgto||lead.spg||'—'}</span>
           <span class="kb-mod">${lead.mod==='entrega'?'Entrega':'Antec.'}</span>
-          ${at&&at.id!==CUR?.id?`<span class="kb-vendor" title="${at.role}">${at.name}</span>`:''}
           ${tagsHTML}
-        </div>`;
+        </div>
+        ${at&&at.id!==CUR?.id?`<div class="kb-vendor-row"><span class="kb-vendor" title="${at.role}">${at.name}</span></div>`:''}`;
 
       // Click direto no card abre detalhes
       card.addEventListener('click',e=>{
@@ -4736,13 +4721,18 @@ function saveNovoPedido(){
   toast('Pedido cadastrado','ok');
 }
 
-// Resolve link de checkout: variação.links_afi[afi_id][modalidade] || link genérico
+// Resolve link de checkout — ordem de prioridade:
+//   1. v.links[afiId][modalidade]            (link customizado por afiliado, se existir)
+//   2. v.link_antecipado / v.link_entrega    (link global da variação por modalidade)
+//   3. v.link_default                        (legado)
 function resolveCheckoutLink(prodSel,afiId,modalidade){
   for(const p of DB.produtos||[]){
     for(const v of p.variacoes||[]){
       if(`${p.nome} — ${v.nome}`===prodSel){
         const byAfi=v.links?.[afiId]?.[modalidade];
-        return byAfi||v.link_default||'';
+        if(byAfi)return byAfi;
+        const global=modalidade==='entrega'?v.link_entrega:v.link_antecipado;
+        return global||v.link_default||'';
       }
     }
   }
@@ -6828,10 +6818,16 @@ function renderProdutos(){
         </div>
         <div class="prod-com">Comissão: <b>${p.com_pct||8}%</b> · Cor: <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${cor};vertical-align:middle"></span></div>
         <div class="prod-vars">
-          ${(p.variacoes||[]).map(v=>`<div class="prod-var">
-            <span class="prod-var-nm">${v.nome}</span>
-            <div><span class="prod-var-pr">${fmt(v.preco)}</span><span class="prod-var-cu">custo ${fmt(v.custo)}</span></div>
-          </div>`).join('')||'<div class="muted" style="font-size:12px;text-align:center;padding:8px">Sem variações</div>'}
+          ${(p.variacoes||[]).map(v=>{
+            const isAfi=(p.mode||'afiliado')==='afiliado';
+            return `<div class="prod-var">
+              <span class="prod-var-nm">${v.nome}</span>
+              <div>
+                <span class="prod-var-pr">${fmt(v.preco)}</span>
+                ${isAfi?'':`<span class="prod-var-cu">custo ${fmt(v.custo)}</span>`}
+              </div>
+            </div>`;
+          }).join('')||'<div class="muted" style="font-size:12px;text-align:center;padding:8px">Sem variações</div>'}
         </div>
         <div class="prod-foot">
           <span>${(p.variacoes||[]).length} variação${(p.variacoes||[]).length!==1?'ões':''}</span>
@@ -6848,6 +6844,10 @@ function setProdMode(m){
   prodModeBuf=m;
   $('mp-mode-afi').classList.toggle('on',m==='afiliado');
   $('mp-mode-prod').classList.toggle('on',m==='produtor');
+  // Seção "Links por Afiliado" só aparece no modo Produtor (gerencia parceiros).
+  // No modo Afiliado, os links globais por variação são suficientes.
+  const block=$('mp-afi-block');
+  if(block)block.style.display=(m==='produtor')?'':'none';
   renderProdVars();
 }
 
@@ -6930,20 +6930,31 @@ function renderProdVars(){
   const isAfi=prodModeBuf==='afiliado';
   $('mp-vars').innerHTML=prodVarsBuf.map((v,i)=>{
     const ct=v.com_type||'pct';
-    return `<div class="var-row" style="flex-wrap:wrap">
-      <div class="field" style="flex:2;min-width:130px"><label>Nome da variação</label><input value="${v.nome||''}" onchange="prodVarsBuf[${i}].nome=this.value" placeholder="Ex: Kit 6 Meses"></div>
-      <div class="field"><label>${isAfi?'Preço de venda (R$)':'Preço (R$)'}</label><input type="number" step="0.01" value="${v.preco||''}" onchange="prodVarsBuf[${i}].preco=Number(this.value)"></div>
-      ${isAfi?'':`<div class="field"><label>Custo (R$)</label><input type="number" step="0.01" value="${v.custo||''}" onchange="prodVarsBuf[${i}].custo=Number(this.value)"></div>`}
-      <div class="field" style="min-width:150px"><label>${isAfi?'Comissão recebida':'Comissão afiliado'}</label>
-        <div style="display:flex;gap:4px;align-items:center">
-          <select onchange="prodVarsBuf[${i}].com_type=this.value;renderProdVars()" style="width:62px">
-            <option value="pct" ${ct==='pct'?'selected':''}>%</option>
-            <option value="fix" ${ct==='fix'?'selected':''}>R$</option>
-          </select>
-          <input type="number" step="${ct==='pct'?'0.5':'1'}" value="${v.com_value??''}" placeholder="${ct==='pct'?'8':'50'}" onchange="prodVarsBuf[${i}].com_value=Number(this.value)" style="flex:1">
+    return `<div class="var-row" style="flex-wrap:wrap;flex-direction:column;align-items:stretch;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field" style="flex:2;min-width:130px"><label>Nome da variação</label><input value="${v.nome||''}" onchange="prodVarsBuf[${i}].nome=this.value" placeholder="Ex: Kit 6 Meses"></div>
+        <div class="field"><label>${isAfi?'Preço de venda (R$)':'Preço (R$)'}</label><input type="number" step="0.01" value="${v.preco||''}" onchange="prodVarsBuf[${i}].preco=Number(this.value)"></div>
+        ${isAfi?'':`<div class="field"><label>Custo (R$)</label><input type="number" step="0.01" value="${v.custo||''}" onchange="prodVarsBuf[${i}].custo=Number(this.value)"></div>`}
+        <div class="field" style="min-width:150px"><label>${isAfi?'Comissão recebida':'Comissão afiliado'}</label>
+          <div style="display:flex;gap:4px;align-items:center">
+            <select onchange="prodVarsBuf[${i}].com_type=this.value;renderProdVars()" style="width:62px">
+              <option value="pct" ${ct==='pct'?'selected':''}>%</option>
+              <option value="fix" ${ct==='fix'?'selected':''}>R$</option>
+            </select>
+            <input type="number" step="${ct==='pct'?'0.5':'1'}" value="${v.com_value??''}" placeholder="${ct==='pct'?'8':'50'}" onchange="prodVarsBuf[${i}].com_value=Number(this.value)" style="flex:1">
+          </div>
+        </div>
+        <button class="var-del" title="Remover" onclick="removeVariacao(${i})">×</button>
+      </div>
+      <!-- Links de checkout por variação (globais ao produto) -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;background:rgba(59,130,246,.04);border:1px dashed var(--bld);border-radius:6px;padding:8px 10px">
+        <div class="field" style="flex:1;min-width:200px"><label style="color:var(--bl2);font-size:10px">🔗 LINK ANTECIPADO</label>
+          <input value="${(v.link_antecipado||'').replace(/"/g,'&quot;')}" placeholder="https://seguro.payt.com.br/..." onchange="prodVarsBuf[${i}].link_antecipado=this.value">
+        </div>
+        <div class="field" style="flex:1;min-width:200px"><label style="color:var(--gr);font-size:10px">🔗 LINK ENTREGA (COD)</label>
+          <input value="${(v.link_entrega||'').replace(/"/g,'&quot;')}" placeholder="https://seguro.payt.com.br/..." onchange="prodVarsBuf[${i}].link_entrega=this.value">
         </div>
       </div>
-      <button class="var-del" title="Remover" onclick="removeVariacao(${i})">×</button>
     </div>`;
   }).join('');
 }
@@ -6960,6 +6971,11 @@ function saveProduto(){
     preco:Number(v.preco)||0,custo:Number(v.custo)||0,
     com_type:v.com_type||'pct',
     com_value:Number(v.com_value)||0,
+    // Links globais por variação (default — usados se não houver link específico de afiliado)
+    link_antecipado:(v.link_antecipado||'').trim(),
+    link_entrega:(v.link_entrega||'').trim(),
+    // Preserva map de links por afiliado (configurado pela seção "Links por Afiliado")
+    links:v.links||undefined,
   }));
   if(editingProdId){
     const p=DB.produtos.find(x=>x.id===editingProdId);
