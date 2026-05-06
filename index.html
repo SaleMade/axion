@@ -27,8 +27,9 @@
   --pu:#a855f7;--pud:rgba(168,85,247,.07);
   --am:#f59e0b;--amd:rgba(245,158,11,.07);
   --or:#fb923c;--ord:rgba(251,146,60,.07);
-  /* tipografia — alto contraste */
-  --tx:#f8fafc;--t2:#cbd5e1;--t3:#94a3b8;--t4:#64748b;
+  /* tipografia — branco suave (#e2e8f0) ao invés de #f8fafc puro,
+     evita efeito "carbonado/grudado" quando combinado com bold */
+  --tx:#e2e8f0;--t2:#cbd5e1;--t3:#94a3b8;--t4:#64748b;
   /* layout */
   --r:8px;--rl:12px;--rxl:16px;--sw:248px;
   /* sombras */
@@ -715,7 +716,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .info-ic{width:18px;color:var(--t4);font-size:14px;margin-top:2px;flex-shrink:0;text-align:center;line-height:1}
 .info-c{flex:1;min-width:0}
 .info-lbl{font-size:10.5px;color:var(--t4);font-weight:500;margin-bottom:1px;letter-spacing:.02em}
-.info-val{font-size:15px;color:var(--tx);font-weight:600;
+.info-val{font-size:15px;color:var(--tx);font-weight:500;
   background:transparent;border:none;border-bottom:1px solid transparent;
   padding:3px 0;width:100%;font-family:inherit;outline:none;border-radius:0;
   transition:border-color .15s,background-color .15s}
