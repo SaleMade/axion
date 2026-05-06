@@ -244,6 +244,8 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .btn-re:hover{background:rgba(239,68,68,.22)}
 .btn-gr{background:var(--gr);color:#fff}
 .btn-gr:hover{background:#0ea271}
+.btn-gold{background:var(--gold);color:#1a1a1a;font-weight:700}
+.btn-gold:hover{background:#f59e0b;box-shadow:0 0 14px rgba(251,191,36,.4)}
 .btn-sm{padding:7px 13px;font-size:13px}
 .btn-xs{padding:5px 10px;font-size:12px}
 .btn-lg{padding:12px 24px;font-size:15px;font-weight:700;letter-spacing:.01em;
@@ -2395,11 +2397,17 @@ const DEFAULT_DB={
     {id:'outros',    nome:'Outros',             icon:'📦', cor:'#64748b'},
   ],
   proConfig:{type:'pct', value:20},
-  // Configuração do Demonstrativo: quais métricas pré-setadas mostrar
+  // Configuração do Demonstrativo: modo (afiliado|produtor), taxas e quais métricas mostrar
   demConfig:{
+    mode:'afiliado', // 'afiliado' = comissão recebida; 'produtor' = receita bruta
+    gatewayPct:3,    // % editável (taxa de gateway sobre receita bruta)
+    impostosPct:6,   // % editável (impostos sobre venda)
     show:{custo_fornec:false,comissoes:true,taxas:true,trafego:true,investimentos:true,
           impostos:false,reembolsos:false,frete:false,chargeback:false,custo_fixo:false},
   },
+  // Aportes dos sócios — registro de capital injetado no negócio
+  aportes:[],
+  nextAporte:1,
   produtos:[
     {id:1,nome:'Produto X',cor:'#3b82f6',com_pct:12,ativo:true,
       variacoes:[
@@ -2437,6 +2445,12 @@ if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
 KB_COLS=DB.kb_cols;
 if(!DB.payt_mapping){DB.payt_mapping=JSON.parse(JSON.stringify(DEFAULT_DB.payt_mapping))}
 if(!DB.demConfig){DB.demConfig=JSON.parse(JSON.stringify(DEFAULT_DB.demConfig))}
+// Migração: campos novos do demConfig
+if(!DB.demConfig.mode)DB.demConfig.mode='afiliado';
+if(typeof DB.demConfig.gatewayPct!=='number')DB.demConfig.gatewayPct=3;
+if(typeof DB.demConfig.impostosPct!=='number')DB.demConfig.impostosPct=6;
+// Aportes
+if(!DB.aportes){DB.aportes=[];DB.nextAporte=1}
 // Tags do CRM — migra TAG_COLORS antigo para estrutura editável + auto-cria tags órfãs vindas de leads existentes
 if(!DB.tags){DB.tags=JSON.parse(JSON.stringify(DEFAULT_TAGS))}
 (function migrateOrphanTags(){
@@ -5119,63 +5133,120 @@ function calcFin(){
   const vendas=DB.vendas.filter(v=>inRange(v.data));
   const gastos=DB.gastos.filter(g=>inRange(g.data));
   const invests=DB.invest.filter(i=>inRange(ddmmFromIso(i.dt)));
+  const aportes=(DB.aportes||[]).filter(a=>inRange(ddmmFromIso(a.dt)));
   const recBruta=vendas.reduce((s,v)=>s+v.vl,0);
   const forn=vendas.reduce((s,v)=>s+v.custo,0);
   const com=vendas.reduce((s,v)=>s+v.comiss,0);
-  const taxa=recBruta*0.03;
+  const dc=DB.demConfig||{};
+  const gatewayPct=Number(dc.gatewayPct)||0;
+  const impostosPct=Number(dc.impostosPct)||0;
+  const mode=dc.mode||'afiliado';
+  const taxa=recBruta*gatewayPct/100;
+  const impostos=recBruta*impostosPct/100;
   const traf=gastos.reduce((s,g)=>s+g.valor,0);
   const inv=invests.reduce((s,i)=>s+i.vl,0);
-  const lucro=recBruta-forn-com-taxa-traf-inv;
-  const roas=traf?recBruta/traf:0;
+  const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
+  // Lucro depende do modo:
+  //   Afiliado: receita = comissões recebidas (já vem líquida da plataforma)
+  //             custos = tráfego + investimentos
+  //   Produtor: receita = bruta; custos = forn + comissões equipe + taxa + tráfego + invest
+  const lucro=mode==='afiliado'
+    ? com - traf - inv
+    : recBruta - forn - com - taxa - traf - inv;
+  // ROAS: pra afiliado usa comissão; pra produtor usa receita bruta
+  const baseRoas=mode==='afiliado'?com:recBruta;
+  const roas=traf?baseRoas/traf:0;
   const pc=DB.proConfig||{type:'pct',value:20};
-  const pro = pc.type==='fix' ? Number(pc.value)||0 : lucro*(Number(pc.value)||0)/100;
+  const pro=pc.type==='fix'?Number(pc.value)||0:lucro*(Number(pc.value)||0)/100;
   const payouts=(DB.payouts||[]).filter(p=>inRange(p.data));
   const totPayouts=payouts.reduce((s,p)=>s+p.valor,0);
   const caixa=lucro-pro-totPayouts;
-  return {vendas,gastos,invests,recBruta,forn,com,taxa,traf,inv,lucro,roas,pc,pro,payouts,totPayouts,caixa};
+  return {vendas,gastos,invests,aportes,recBruta,forn,com,taxa,impostos,
+    gatewayPct,impostosPct,mode,traf,inv,totAportes,lucro,roas,baseRoas,
+    pc,pro,payouts,totPayouts,caixa};
 }
 function ddmmFromIso(iso){
   if(!iso)return today();
   const d=new Date(iso+'T12:00:00');
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
 }
+// Toggle do modo Afiliado/Produtor no Financeiro
+function setFinMode(m){
+  if(!['afiliado','produtor'].includes(m))return;
+  DB.demConfig=DB.demConfig||{show:{}};
+  DB.demConfig.mode=m;
+  persist();refreshUI();
+  toast(m==='afiliado'?'Modo: Afiliado (recebe comissão)':'Modo: Produtor (recebe receita bruta)','ok');
+}
 
 function pageDRE(){return `<div class="page" id="dre-pg"></div>`}
 function renderDRE(){
   const c=$('dre-pg');if(!c)return;
   const f=calcFin();
-  const {recBruta,forn,com,taxa,traf,inv,lucro,roas,totPayouts,vendas}=f;
+  const {recBruta,forn,com,taxa,impostos,gatewayPct,impostosPct,traf,inv,
+         lucro,roas,baseRoas,totPayouts,vendas,mode}=f;
   const cfg=DB.demConfig||{show:{}};
   const sh=cfg.show||{};
+  const isAfi=mode==='afiliado';
 
-  // Métricas pré-setadas pelo sistema (sem custom). Usuário só pode escolher quais aparecem.
-  const allRows=[
-    {key:'receita',     label:'Receita Bruta',           val:recBruta,sinal:'+',always:true},
-    {key:'custo_fornec',label:'(–) Custo Fornecedor',     val:forn,    sinal:'-',visible:sh.custo_fornec},
-    {key:'comissoes',   label:'(–) Comissões Afiliados',  val:com,     sinal:'-',visible:sh.comissoes!==false},
-    {key:'taxas',       label:'(–) Taxas Gateway (3%)',   val:taxa,    sinal:'-',visible:sh.taxas!==false},
-    {key:'trafego',     label:'(–) Tráfego Pago',         val:traf,    sinal:'-',visible:sh.trafego!==false},
-    {key:'investimentos',label:'(–) Investimentos',       val:inv,     sinal:'-',visible:sh.investimentos!==false},
-    {key:'impostos',    label:'(–) Impostos sobre venda', val:recBruta*0.06,sinal:'-',visible:sh.impostos},
-    {key:'reembolsos',  label:'(–) Reembolsos / Estornos',val:reembolsosTotal(),sinal:'-',visible:sh.reembolsos},
-    {key:'frete',       label:'(–) Frete / Logística',    val:freteTotal(),sinal:'-',visible:sh.frete},
-    {key:'chargeback',  label:'(–) Chargebacks',          val:0,sinal:'-',visible:sh.chargeback},
-    {key:'custo_fixo',  label:'(–) Custos Fixos (aluguel, serviços)',val:0,sinal:'-',visible:sh.custo_fixo},
-  ];
+  // Linhas do demonstrativo — diferentes por modo.
+  // Afiliado: receita líquida = comissões; sem custo fornec; sem taxa gateway (já líquido)
+  // Produtor: receita bruta; custo fornec, taxa gateway, comissões equipe
+  let allRows;
+  if(isAfi){
+    allRows=[
+      {key:'comissoes_recebidas',label:'Receita Líquida (comissões)', val:com, sinal:'+',always:true},
+      {key:'trafego',     label:'(–) Tráfego Pago',         val:traf,    sinal:'-',visible:sh.trafego!==false},
+      {key:'investimentos',label:'(–) Investimentos',       val:inv,     sinal:'-',visible:sh.investimentos!==false},
+      {key:'impostos',    label:`(–) Impostos sobre comissão (${impostosPct}%)`,val:com*impostosPct/100,sinal:'-',visible:sh.impostos},
+      {key:'custo_fixo',  label:'(–) Custos Fixos (aluguel, serviços)',val:0,sinal:'-',visible:sh.custo_fixo},
+    ];
+  } else {
+    allRows=[
+      {key:'receita',     label:'Receita Bruta',           val:recBruta,sinal:'+',always:true},
+      {key:'custo_fornec',label:'(–) Custo Fornecedor',     val:forn,    sinal:'-',visible:sh.custo_fornec!==false},
+      {key:'comissoes',   label:'(–) Comissões da Equipe',  val:com,     sinal:'-',visible:sh.comissoes!==false},
+      {key:'taxas',       label:`(–) Taxas Gateway (${gatewayPct}%)`,val:taxa,sinal:'-',visible:sh.taxas!==false},
+      {key:'trafego',     label:'(–) Tráfego Pago',         val:traf,    sinal:'-',visible:sh.trafego!==false},
+      {key:'investimentos',label:'(–) Investimentos',       val:inv,     sinal:'-',visible:sh.investimentos!==false},
+      {key:'impostos',    label:`(–) Impostos sobre venda (${impostosPct}%)`,val:impostos,sinal:'-',visible:sh.impostos},
+      {key:'reembolsos',  label:'(–) Reembolsos / Estornos',val:reembolsosTotal(),sinal:'-',visible:sh.reembolsos},
+      {key:'frete',       label:'(–) Frete / Logística',    val:freteTotal(),sinal:'-',visible:sh.frete},
+      {key:'chargeback',  label:'(–) Chargebacks',          val:0,sinal:'-',visible:sh.chargeback},
+      {key:'custo_fixo',  label:'(–) Custos Fixos (aluguel, serviços)',val:0,sinal:'-',visible:sh.custo_fixo},
+    ];
+  }
   const rows=allRows.filter(r=>r.visible||r.always);
   const lucroCalc=rows.reduce((s,r)=>s+(r.sinal==='+'?r.val:-r.val),0);
   const caixaCalc=lucroCalc-totPayouts;
   const totCustos=rows.filter(r=>r.sinal==='-').reduce((s,r)=>s+r.val,0);
+  const headerReceita=isAfi?com:recBruta;
+  const headerSubtitle=isAfi?'comissão recebida':'faturamento bruto';
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Visão Geral</em></h1><p>Demonstrativo completo de receitas e custos · ${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Visão Geral</em></h1><p>Demonstrativo de receitas e custos · ${rangeLabel()}</p></div>
+    <div class="ph-r">
+      <!-- Toggle de modo: Afiliado vs Produtor -->
+      <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
+        <button onclick="setFinMode('afiliado')" class="${isAfi?'on':''}"
+          style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:none;
+            background:${isAfi?'var(--bld)':'transparent'};color:${isAfi?'var(--bl2)':'var(--t3)'};transition:all .15s">
+          🤝 Afiliado
+        </button>
+        <button onclick="setFinMode('produtor')" class="${!isAfi?'on':''}"
+          style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:none;
+            background:${!isAfi?'var(--grd)':'transparent'};color:${!isAfi?'var(--gr)':'var(--t3)'};transition:all .15s">
+          🏭 Produtor
+        </button>
+      </div>
+    </div>
   </div>
 
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
     <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">$</div>
-      <div class="mc-lbl">Receita</div><div class="mc-val">${fmt(recBruta)}</div>
-      <div class="mc-sub">${vendas.length} vendas</div></div>
+      <div class="mc-lbl">${isAfi?'Comissão Recebida':'Receita Bruta'}</div><div class="mc-val">${fmt(headerReceita)}</div>
+      <div class="mc-sub">${vendas.length} vendas · ${headerSubtitle}</div></div>
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">⊖</div>
       <div class="mc-lbl">Custos totais</div><div class="mc-val">${fmt(totCustos)}</div>
       <div class="mc-sub">conforme métricas selecionadas</div></div>
@@ -5194,23 +5265,48 @@ function renderDRE(){
         <button class="dem-dots" onclick="event.stopPropagation();toggleDemMenu()" title="Configurar métricas">⋮</button>
       </div>
       <div class="dem-menu" id="dem-menu">
-        <div class="dem-menu-h">Métricas disponíveis</div>
-        ${[
-          {k:'custo_fornec',l:'Custo Fornecedor'},
-          {k:'comissoes',   l:'Comissões Afiliados'},
-          {k:'taxas',       l:'Taxas Gateway (3%)'},
-          {k:'trafego',     l:'Tráfego Pago'},
-          {k:'investimentos',l:'Investimentos'},
-          {k:'impostos',    l:'Impostos sobre venda'},
-          {k:'reembolsos',  l:'Reembolsos / Estornos'},
-          {k:'frete',       l:'Frete / Logística'},
-          {k:'chargeback',  l:'Chargebacks'},
-          {k:'custo_fixo',  l:'Custos Fixos'},
-        ].map(o=>`<label class="dem-menu-item">
-          <input type="checkbox" ${(o.k==='comissoes'||o.k==='taxas'||o.k==='trafego'||o.k==='investimentos')&&sh[o.k]===undefined?'checked':sh[o.k]?'checked':''}
+        <div class="dem-menu-h">Taxas (% sobre receita)</div>
+        <div style="display:flex;gap:6px;padding:6px 12px 4px">
+          <label style="flex:1;font-size:11px;color:var(--t3)">Gateway %
+            <input type="number" step="0.5" min="0" max="100" value="${gatewayPct}"
+              onchange="DB.demConfig.gatewayPct=Number(this.value)||0;persist();refreshUI()"
+              style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:5px 8px;border-radius:5px;font-size:13px;margin-top:3px">
+          </label>
+          <label style="flex:1;font-size:11px;color:var(--t3)">Impostos %
+            <input type="number" step="0.5" min="0" max="100" value="${impostosPct}"
+              onchange="DB.demConfig.impostosPct=Number(this.value)||0;persist();refreshUI()"
+              style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:5px 8px;border-radius:5px;font-size:13px;margin-top:3px">
+          </label>
+        </div>
+        <div class="dem-menu-h" style="margin-top:6px">Métricas no demonstrativo</div>
+        ${(isAfi
+          ? [
+              {k:'trafego',     l:'Tráfego Pago'},
+              {k:'investimentos',l:'Investimentos'},
+              {k:'impostos',    l:'Impostos sobre comissão'},
+              {k:'custo_fixo',  l:'Custos Fixos'},
+            ]
+          : [
+              {k:'custo_fornec',l:'Custo Fornecedor'},
+              {k:'comissoes',   l:'Comissões da Equipe'},
+              {k:'taxas',       l:'Taxas Gateway'},
+              {k:'trafego',     l:'Tráfego Pago'},
+              {k:'investimentos',l:'Investimentos'},
+              {k:'impostos',    l:'Impostos sobre venda'},
+              {k:'reembolsos',  l:'Reembolsos / Estornos'},
+              {k:'frete',       l:'Frete / Logística'},
+              {k:'chargeback',  l:'Chargebacks'},
+              {k:'custo_fixo',  l:'Custos Fixos'},
+            ]
+        ).map(o=>{
+          const defaultOn=['comissoes','taxas','trafego','investimentos','custo_fornec'].includes(o.k);
+          const checked=sh[o.k]===undefined?defaultOn:sh[o.k];
+          return `<label class="dem-menu-item">
+          <input type="checkbox" ${checked?'checked':''}
             onchange="DB.demConfig.show['${o.k}']=this.checked;persist();refreshUI()">
           <span>${o.l}</span>
-        </label>`).join('')}
+        </label>`;
+        }).join('')}
       </div>
       ${rows.map(r=>{
         const cls=r.sinal==='+'?'pos':'neg';
@@ -5707,49 +5803,228 @@ function renderInvest(){
   invests.forEach(i=>{invByCat[i.cat]=(invByCat[i.cat]||0)+i.vl});
   const catFor=id=>DB.invCats.find(x=>x.id===id)||{nome:id,icon:'📦',cor:'#64748b'};
 
+  // Aportes de sócios (no período do topo da Dash)
+  const aportes=(DB.aportes||[]).filter(a=>inRange(ddmmFromIso(a.dt)));
+  const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
+  const aportesBySocio={};
+  aportes.forEach(a=>{
+    aportesBySocio[a.socio_id]=(aportesBySocio[a.socio_id]||0)+Number(a.valor||0);
+  });
+  // Acumulado total (sem filtro de data) — pra mostrar saldo de aporte por sócio
+  const allAportes=DB.aportes||[];
+  const accBySocio={};
+  allAportes.forEach(a=>{
+    accBySocio[a.socio_id]=(accBySocio[a.socio_id]||0)+Number(a.valor||0);
+  });
+  // Sócios disponíveis (Diretor, Sócio, Produtor)
+  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview);
+
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Investimentos</em></h1><p>Compras de ativos da empresa (hardware, ferramentas, cursos)</p></div>
+    <div><h1>Financeiro · <em>Investimentos</em></h1><p>Investimentos da operação (mídia, ferramentas, cursos) e aportes de sócios · ${rangeLabel()}</p></div>
     <div class="ph-r">
       <button class="btn btn-gh btn-sm" onclick="openInvCats()">⚙ Categorias</button>
       <button class="btn btn-bl btn-sm" onclick="openInvest()">+ Novo Investimento</button>
     </div>
   </div>
 
-  <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
-    ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
-      <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
-        <div class="mc-ic" style="background:${c.cor}22;color:${c.cor}">${c.icon}</div>
-        <div class="mc-lbl">${c.nome}</div>
-        <div class="mc-val" style="color:${c.cor};letter-spacing:.01em">${fmt(v)}</div>
-      </div>`}).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
+  <!-- ═══ QUICK INPUT — Tráfego/Marketing (entrada rápida diária) ═══ -->
+  <div class="cfg-card" style="background:linear-gradient(135deg,rgba(59,130,246,.08),rgba(168,85,247,.06));border:1.5px solid var(--bl);margin-bottom:18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="font-size:32px">⚡</div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:14px;font-weight:600;color:var(--tx);margin-bottom:2px">Entrada rápida — Tráfego/Marketing</div>
+        <div class="muted" style="font-size:12px">Lance o gasto do dia em segundos. Atualiza ROAS instantaneamente.</div>
+      </div>
+      <input type="number" id="qi-tr-val" step="0.01" placeholder="Valor (R$)" style="width:140px;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:7px;font-size:14px;font-weight:600" onkeypress="if(event.key==='Enter')quickInputTrafego()">
+      <select id="qi-tr-plat" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:7px;font-size:13px">
+        <option value="Meta">Meta</option>
+        <option value="TikTok">TikTok</option>
+        <option value="Google">Google Ads</option>
+        <option value="YouTube">YouTube Ads</option>
+        <option value="Outro">Outro</option>
+      </select>
+      <button class="btn btn-bl btn-sm" onclick="quickInputTrafego()">⚡ Lançar</button>
+    </div>
   </div>
 
-  <div class="tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th style="text-align:left">Data</th>
-        <th style="text-align:left">Descrição</th>
-        <th style="text-align:left">Categoria</th>
-        <th class="right">Valor</th>
-        <th class="right" style="width:80px">Ações</th>
-      </tr></thead>
-      <tbody>
-        ${invests.length?invests.map(i=>{const ct=catFor(i.cat);return `<tr>
-          <td>${i.dt}</td>
-          <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
-          <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
-          <td class="right" style="color:var(--rd);font-weight:700;letter-spacing:.01em">${fmt(i.vl)}</td>
-          <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
-        </tr>`}).join(''):'<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
-        <tr style="background:var(--s1);font-weight:700">
-          <td colspan="3" style="color:var(--tx)">Total investido</td>
-          <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
-          <td></td>
-        </tr>
-      </tbody>
-    </table>
+  <!-- ═══ APORTES DE SÓCIOS ═══ -->
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h">
+      <h3>💼 Aportes de Sócios</h3>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="muted" style="font-size:12px">${aportes.length} aporte${aportes.length!==1?'s':''} no período</span>
+        <span style="font-size:18px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
+      </div>
+    </div>
+    ${socios.length?`
+    <p class="muted" style="font-size:12.5px;margin-bottom:11px">Registre o capital injetado por cada sócio. Categorias separam o destino do aporte (marketing, infraestrutura, ferramentas, salários).</p>
+
+    <!-- Form de novo aporte -->
+    <div style="background:var(--s2);border:1px dashed var(--b2);border-radius:var(--rl);padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field" style="flex:1;min-width:120px"><label>Data</label><input type="date" id="ap-dt" value="${new Date().toISOString().split('T')[0]}"></div>
+        <div class="field" style="flex:1;min-width:140px"><label>Sócio</label>
+          <select id="ap-socio">${socios.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="flex:1;min-width:140px"><label>Categoria</label>
+          <select id="ap-cat">
+            <option value="marketing">📢 Marketing</option>
+            <option value="infraestrutura">🏗 Infraestrutura</option>
+            <option value="ferramentas">🔧 Ferramentas</option>
+            <option value="salarios">💰 Salários</option>
+            <option value="outros">📦 Outros</option>
+          </select>
+        </div>
+        <div class="field" style="flex:1;min-width:120px"><label>Valor (R$)</label><input type="number" step="0.01" id="ap-valor" placeholder="0,00"></div>
+        <div class="field" style="flex:2;min-width:160px"><label>Observação (opcional)</label><input id="ap-obs" placeholder="Ex: aporte mensal Marketing"></div>
+        <button class="btn btn-gold btn-sm" onclick="addAporte()">+ Registrar aporte</button>
+      </div>
+    </div>
+
+    <!-- % de participação por sócio -->
+    ${totAportes>0?`
+    <div class="section-title" style="margin-top:6px">Participação no período</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:14px">
+      ${socios.map(s=>{
+        const periodo=aportesBySocio[s.id]||0;
+        const acumulado=accBySocio[s.id]||0;
+        const pct=totAportes?Math.round(periodo/totAportes*1000)/10:0;
+        return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
+            ${avatar(s,{size:28,fontSize:11})}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
+              <div style="font-size:10.5px;color:var(--t4);text-transform:capitalize">${s.role}</div>
+            </div>
+            <div style="font-size:14px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${pct}%</div>
+          </div>
+          <div style="height:5px;background:var(--s4);border-radius:3px;overflow:hidden;margin-bottom:7px">
+            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--gold),#f59e0b);border-radius:3px"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11.5px">
+            <span style="color:var(--t3)">Período: <b style="color:var(--tx)">${fmt(periodo)}</b></span>
+            <span style="color:var(--t3)">Acumulado: <b style="color:var(--bl2)">${fmt(acumulado)}</b></span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    `:''}
+
+    <!-- Lista de aportes -->
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Sócio</th>
+          <th style="text-align:left">Categoria</th>
+          <th style="text-align:left">Observação</th>
+          <th class="right">Valor</th>
+          <th class="right" style="width:60px"></th>
+        </tr></thead>
+        <tbody>
+          ${aportes.length?aportes.slice().sort((a,b)=>(b.dt||'').localeCompare(a.dt||'')).map(a=>{
+            const s=getTeam(a.socio_id);
+            const catLbl={marketing:'📢 Marketing',infraestrutura:'🏗 Infraestrutura',ferramentas:'🔧 Ferramentas',salarios:'💰 Salários',outros:'📦 Outros'}[a.cat||'outros'];
+            return `<tr>
+              <td class="muted">${ddmmFromIso(a.dt)}</td>
+              <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
+              <td><span class="tbl-st" style="background:rgba(251,191,36,.16);color:var(--gold)">${catLbl||a.cat}</span></td>
+              <td class="muted">${a.obs||'—'}</td>
+              <td class="right" style="color:var(--gold);font-weight:600;letter-spacing:.01em">${fmt(a.valor)}</td>
+              <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delAporte(${a.id})" title="Excluir">×</button></td>
+            </tr>`;
+          }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Nenhum aporte no período.</td></tr>'}
+          ${aportes.length?`<tr style="background:var(--s1);font-weight:600">
+            <td colspan="4" style="color:var(--tx)">Total no período</td>
+            <td class="right" style="color:var(--gold);font-size:15px">${fmt(totAportes)}</td>
+            <td></td>
+          </tr>`:''}
+        </tbody>
+      </table>
+    </div>
+    `:`<div class="muted" style="text-align:center;padding:20px;font-size:13px">Cadastre membros com função <b>Sócio</b>, <b>Diretor</b> ou <b>Produtor</b> em Configurações → Gerenciar Equipe pra registrar aportes.</div>`}
+  </div>
+
+  <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
+  <div class="panel">
+    <div class="panel-h"><h3>📦 Investimentos da Operação</h3>
+      <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
+    </div>
+
+    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
+      ${Object.entries(invByCat).map(([k,v])=>{const c=catFor(k);return `
+        <div class="mc"><div class="mc-gl" style="background:${c.cor}"></div>
+          <div class="mc-ic" style="background:${c.cor}22;color:${c.cor}">${c.icon}</div>
+          <div class="mc-lbl">${c.nome}</div>
+          <div class="mc-val" style="color:${c.cor};letter-spacing:.01em">${fmt(v)}</div>
+        </div>`}).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
+    </div>
+
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Descrição</th>
+          <th style="text-align:left">Categoria</th>
+          <th class="right">Valor</th>
+          <th class="right" style="width:80px">Ações</th>
+        </tr></thead>
+        <tbody>
+          ${invests.length?invests.map(i=>{const ct=catFor(i.cat);return `<tr>
+            <td>${i.dt}</td>
+            <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
+            <td><span class="tbl-st" style="background:${ct.cor}22;color:${ct.cor}">${ct.icon} ${ct.nome}</span></td>
+            <td class="right" style="color:var(--rd);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
+            <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
+          </tr>`}).join(''):'<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
+          <tr style="background:var(--s1);font-weight:700">
+            <td colspan="3" style="color:var(--tx)">Total investido</td>
+            <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>`;
+}
+
+// ─── Quick Input — gasto de tráfego com 1 click ───────
+function quickInputTrafego(){
+  const v=Number($('qi-tr-val').value);
+  const plat=$('qi-tr-plat').value;
+  if(!v||v<=0){toast('Digite um valor válido','err');return}
+  DB.gastos=DB.gastos||[];
+  DB.gastos.unshift({data:today(),plat,valor:v,leads:0,note:'Quick input'});
+  $('qi-tr-val').value='';
+  persist();refreshUI();
+  toast(`+${fmt(v)} em ${plat} registrado`,'ok');
+}
+
+// ─── Aportes de sócios ─────────────────────────────────
+function addAporte(){
+  const dt=$('ap-dt').value;
+  const socio_id=$('ap-socio').value;
+  const cat=$('ap-cat').value;
+  const valor=Number($('ap-valor').value);
+  const obs=$('ap-obs').value.trim();
+  if(!dt){toast('Data obrigatória','err');return}
+  if(!socio_id){toast('Selecione um sócio','err');return}
+  if(!valor||valor<=0){toast('Valor inválido','err');return}
+  DB.aportes=DB.aportes||[];
+  DB.nextAporte=DB.nextAporte||1;
+  DB.aportes.unshift({id:DB.nextAporte++,dt,socio_id,cat,valor,obs});
+  $('ap-valor').value='';$('ap-obs').value='';
+  persist();refreshUI();
+  toast(`Aporte de ${fmt(valor)} registrado`,'ok');
+}
+async function delAporte(id){
+  const a=(DB.aportes||[]).find(x=>x.id===id);if(!a)return;
+  const s=getTeam(a.socio_id);
+  if(!await axConfirm(`Excluir aporte de <b>${fmt(a.valor)}</b>${s?` de <b>${s.name}</b>`:''}?`,{okLabel:'Excluir'}))return;
+  DB.aportes=DB.aportes.filter(x=>x.id!==id);
+  persist();refreshUI();
+  toast('Aporte excluído','ok');
 }
 
 /* ═══════════════════════════════════════════════════════
