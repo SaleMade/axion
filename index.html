@@ -2183,16 +2183,14 @@ h1 em{font-weight:700}
         </div>
 
         <div class="section-title" style="margin-top:6px">1. Configuração no PAYT</div>
-        <p class="muted" style="font-size:13px;margin-bottom:8px">Cole esta URL e o token no painel <b style="color:var(--tx)">PAYT &gt; Configurações &gt; Webhooks</b>:</p>
-        <div style="background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:11px 13px;font-family:monospace;font-size:12px;color:var(--bl2);margin-bottom:8px;display:flex;align-items:center;gap:10px">
-          <span style="flex:1">https://api.axion.app/webhook/payt/<b id="wh-token-payt">axn_pyt_abc123def456</b></span>
-          <button class="btn-act btn-act-gh btn-act-icon" onclick="navigator.clipboard.writeText('https://api.axion.app/webhook/payt/axn_pyt_abc123def456');toast('URL copiada','ok')" title="Copiar">📋</button>
+        <p class="muted" style="font-size:13px;margin-bottom:8px">Cole esta URL no painel <b style="color:var(--tx)">PAYT &gt; Postbacks</b>. Marque <b>todos os 13 eventos</b> pra aproveitar 100% das automações.</p>
+        <div style="background:var(--s3);border:1px solid var(--gr);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--gr);margin-bottom:10px;display:flex;align-items:center;gap:10px">
+          <span style="flex:1;word-break:break-all" id="wh-url-payt">${(apiUrl()||'https://axion-api.axion-dash.workers.dev')}/webhook/payt/b562d560380649cbc6c8ade3550eb7f8</span>
+          <button class="btn-act btn-act-gh btn-act-icon" onclick="navigator.clipboard.writeText($('wh-url-payt').textContent);toast('URL copiada','ok')" title="Copiar URL completa">📋</button>
         </div>
-        <div class="fg fg2" style="margin-bottom:6px">
-          <div class="field"><label>Token secreto (HMAC)</label>
-            <div style="display:flex;gap:6px"><input id="wh-payt-secret" value="sk_payt_••••••••f3a2" readonly style="flex:1;font-family:monospace;font-size:12px"><button class="btn-act btn-act-gh btn-act-icon" onclick="$('wh-payt-secret').type=$('wh-payt-secret').type==='password'?'text':'password'" title="Mostrar">👁</button></div>
-          </div>
-          <div class="field"><label>Loja PAYT</label><input id="wh-payt-store" placeholder="ex: minha-loja"></div>
+        <div class="muted" style="font-size:11.5px;margin-bottom:14px;line-height:1.6">
+          <b style="color:var(--gr)">✓ Backend pronto</b> — recebe postbacks da PAYT, identifica leads por CPF/WhatsApp/Email e aplica as automações abaixo.<br>
+          <b>Chave única:</b> <code style="background:var(--s4);padding:2px 6px;border-radius:3px;color:var(--cy);font-size:11px">b562d560380649cbc6c8ade3550eb7f8</code>
         </div>
 
         <div class="section-title">2. Mapeamento de eventos PAYT → Etapa do CRM</div>
