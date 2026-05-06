@@ -6619,17 +6619,16 @@ function renderInvest(){
   <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
   <div class="panel" style="margin-bottom:18px">
     <div class="panel-h">
-      <h3>💼 Aportes — Sócios &amp; Diretor</h3>
-      <div style="display:flex;align-items:center;gap:10px">
-        <span class="muted" style="font-size:12px">${aportes.length} aporte${aportes.length!==1?'s':''} no período</span>
-        <span style="font-size:18px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
+      <h3>💼 Aportes</h3>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="muted" style="font-size:12px">${aportes.length} no período · <b style="color:var(--tx);font-weight:600">${fmt(totAportes)}</b></span>
+        ${socios.length?`<button class="btn btn-bl btn-sm" onclick="toggleAporteForm()" id="ap-form-toggle">+ Novo aporte</button>`:''}
       </div>
     </div>
     ${socios.length?`
-    <p class="muted" style="font-size:12.5px;margin-bottom:11px">Registre o capital injetado por cada investidor (Diretor, Sócios, Produtor). Categorias separam o destino do aporte (marketing, infraestrutura, ferramentas, salários).</p>
 
-    <!-- Form de novo aporte -->
-    <div style="background:var(--s2);border:1px dashed var(--b2);border-radius:var(--rl);padding:12px 14px;margin-bottom:14px">
+    <!-- Form de novo aporte (colapsado por padrão) -->
+    <div id="ap-form" style="background:var(--s2);border:1px dashed var(--b2);border-radius:var(--rl);padding:12px 14px;margin-bottom:14px;display:none">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field" style="flex:1;min-width:120px"><label>Data</label><input type="date" id="ap-dt" value="${new Date().toISOString().split('T')[0]}"></div>
         <div class="field" style="flex:1;min-width:140px"><label>Investidor</label>
@@ -6651,18 +6650,16 @@ function renderInvest(){
         </div>
         <div class="field" style="flex:1;min-width:120px"><label>Valor (R$)</label><input type="number" step="0.01" id="ap-valor" placeholder="0,00"></div>
         <div class="field" style="flex:2;min-width:160px"><label>Observação (opcional)</label><input id="ap-obs" placeholder="Ex: aporte mensal Marketing"></div>
-        <button class="btn btn-gold btn-sm" onclick="addAporte()">+ Registrar aporte</button>
+        <button class="btn btn-gold btn-sm" onclick="addAporte()">Registrar</button>
       </div>
     </div>
 
     <!-- % de participação por sócio + direito sobre o lucro -->
     ${totAportes>0?`
     <div class="section-title" style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span>Participação no período · direito sobre lucro</span>
+      <span>Participação no período</span>
       <span title="A % de cada sócio é calculada com base APENAS nos aportes do período selecionado no topo da Dash. Se o sócio aportou só em meses passados, ele perde participação ao filtrar este mês. Use 'Acumulado' (à direita) pra ver o saldo histórico inalterado."
-        style="font-size:11px;font-weight:500;color:var(--am);background:rgba(245,158,11,.1);padding:2px 9px;border-radius:5px;cursor:help;letter-spacing:0;text-transform:none">
-        ⚠ % é do período selecionado · hover pra detalhes
-      </span>
+        style="font-size:11px;color:var(--t4);cursor:help">ⓘ</span>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:14px">
       ${socios.map(s=>{
@@ -6719,9 +6716,9 @@ function renderInvest(){
             return `<tr>
               <td class="muted">${ddmmFromIso(a.dt)}</td>
               <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
-              <td><span class="tbl-st" style="background:rgba(251,191,36,.16);color:var(--gold)">${catLbl||a.cat}</span></td>
+              <td><span class="tbl-st" style="background:rgba(251,191,36,.07);color:var(--t2)">${catLbl||a.cat}</span></td>
               <td class="muted">${a.obs||'—'}</td>
-              <td class="right" style="color:var(--gold);font-weight:600;letter-spacing:.01em">${fmt(a.valor)}</td>
+              <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(a.valor)}</td>
               <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delAporte(${a.id})" title="Excluir">×</button></td>
             </tr>`;
           }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Nenhum aporte no período.</td></tr>'}
@@ -6732,7 +6729,7 @@ function renderInvest(){
     <!-- Footer fixo com o total — não rola junto com a lista -->
     <div class="apo-total-bar">
       <span style="color:var(--t2);font-size:12.5px;font-weight:600">Total no período · ${aportes.length} aporte${aportes.length!==1?'s':''}</span>
-      <span style="color:var(--gold);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
+      <span style="color:var(--tx);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
     </div>`:''}
     `:`<div class="muted" style="text-align:center;padding:20px;font-size:13px">Cadastre membros com função <b>Sócio</b>, <b>Diretor</b> ou <b>Produtor</b> em Configurações → Gerenciar Equipe pra registrar aportes.</div>`}
   </div>
@@ -6775,6 +6772,15 @@ function renderInvest(){
 }
 
 // ─── Aportes de sócios ─────────────────────────────────
+// Toggle do form de novo aporte (colapsado por padrão pra não poluir a página)
+function toggleAporteForm(){
+  const f=$('ap-form');const btn=$('ap-form-toggle');
+  if(!f)return;
+  const open=f.style.display!=='none';
+  f.style.display=open?'none':'block';
+  if(btn)btn.textContent=open?'+ Novo aporte':'× Cancelar';
+  if(!open){const v=$('ap-valor');if(v)setTimeout(()=>v.focus(),50);}
+}
 function addAporte(){
   const dt=$('ap-dt').value;
   const socio_id=$('ap-socio').value;
@@ -6790,6 +6796,9 @@ function addAporte(){
   $('ap-valor').value='';$('ap-obs').value='';
   persist();refreshUI();
   toast(`Aporte de ${fmt(valor)} registrado`,'ok');
+  // Fecha o form depois de salvar
+  const f=$('ap-form');if(f)f.style.display='none';
+  const btn=$('ap-form-toggle');if(btn)btn.textContent='+ Novo aporte';
 }
 async function delAporte(id){
   const a=(DB.aportes||[]).find(x=>x.id===id);if(!a)return;
