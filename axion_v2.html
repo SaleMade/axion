@@ -1363,7 +1363,7 @@ h1 em{font-weight:700}
             </div></div>
             <div class="info-row"><span class="info-ic">🪪</span><div class="info-c">
               <div class="info-lbl">CPF</div>
-              <input class="info-val" id="mld-cpf" placeholder="000.000.000-00">
+              <input class="info-val" id="mld-cpf" placeholder="000.000.000-00" oninput="maskCPF(this)" maxlength="14" inputmode="numeric">
             </div></div>
             <div class="info-row"><span class="info-ic">📞</span><div class="info-c">
               <div class="info-lbl">WhatsApp</div>
@@ -1383,7 +1383,7 @@ h1 em{font-weight:700}
             <div class="info-title">Endereço</div>
             <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
               <div class="info-lbl">CEP <span class="muted" style="font-size:10px;font-weight:500">(autopreenche)</span></div>
-              <input class="info-val" id="mld-cep" placeholder="00000-000" onblur="lookupCEP()" oninput="if(this.value.replace(/\\D/g,'').length===8)lookupCEP()">
+              <input class="info-val" id="mld-cep" placeholder="00000-000" maxlength="9" inputmode="numeric" oninput="maskCEP(this);if(this.value.replace(/\\D/g,'').length===8)lookupCEP()" onblur="lookupCEP()">
             </div></div>
             <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
               <div class="info-lbl">Rua / Número</div>
@@ -1546,7 +1546,7 @@ h1 em{font-weight:700}
       <div class="fg fg2">
         <div class="field"><label>Nome</label><input id="nl-nome"></div>
         <div class="field"><label>WhatsApp</label><input id="nl-wa" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
-        <div class="field"><label>CPF</label><input id="nl-cpf"></div>
+        <div class="field"><label>CPF</label><input id="nl-cpf" placeholder="000.000.000-00" oninput="maskCPF(this)" maxlength="14" inputmode="numeric"></div>
         <div class="field"><label>Origem</label><select id="nl-orig"></select></div>
         <div class="field"><label>Produto / Variação</label><select id="nl-prod" onchange="onNlProdChange()"></select></div>
         <div class="field"><label>Valor (R$)</label><input id="nl-vl" type="number" step="0.01"></div>
@@ -1987,14 +1987,14 @@ h1 em{font-weight:700}
 
         <div class="np-section">
           <div class="info-title">Dados do Cliente</div>
-          <div class="field"><label>CPF *</label><input id="np-cpf" placeholder="000.000.000-00"><div class="np-err" id="np-cpf-err">CPF é obrigatório</div></div>
+          <div class="field"><label>CPF *</label><input id="np-cpf" placeholder="000.000.000-00" oninput="maskCPF(this)" maxlength="14" inputmode="numeric"><div class="np-err" id="np-cpf-err">CPF é obrigatório</div></div>
           <div class="field"><label>Nome *</label><input id="np-nome" placeholder="Nome do Cliente"><div class="np-err" id="np-nome-err">Nome é obrigatório</div></div>
           <div class="field"><label>WhatsApp *</label><input id="np-wa" placeholder="(00) 90000-0000" oninput="maskWA(this)" maxlength="15"><div class="np-err" id="np-wa-err">WhatsApp é obrigatório</div></div>
         </div>
 
         <div class="np-section">
           <div class="info-title">Endereço</div>
-          <div class="field"><label>CEP *</label><input id="np-cep" placeholder="00000-000" onblur="lookupCEPNew()"><div class="np-err" id="np-cep-err">CEP é obrigatório</div></div>
+          <div class="field"><label>CEP *</label><input id="np-cep" placeholder="00000-000" oninput="maskCEP(this)" maxlength="9" inputmode="numeric" onblur="lookupCEPNew()"><div class="np-err" id="np-cep-err">CEP é obrigatório</div></div>
           <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px">
             <div class="field"><label>Rua</label><input id="np-end" placeholder="Rua"></div>
             <div class="field"><label>Bairro</label><input id="np-bairro" placeholder="Bairro"></div>
@@ -2875,6 +2875,20 @@ function maskWA(inp){
   if(v.length<=2)inp.value=v;
   else if(v.length<=7)inp.value=`(${v.slice(0,2)}) ${v.slice(2)}`;
   else inp.value=`(${v.slice(0,2)}) ${v.slice(2,7)}-${v.slice(7)}`;
+}
+// CPF: 000.000.000-00 (11 dígitos)
+function maskCPF(inp){
+  const v=inp.value.replace(/\D/g,'').slice(0,11);
+  if(v.length<=3)inp.value=v;
+  else if(v.length<=6)inp.value=`${v.slice(0,3)}.${v.slice(3)}`;
+  else if(v.length<=9)inp.value=`${v.slice(0,3)}.${v.slice(3,6)}.${v.slice(6)}`;
+  else inp.value=`${v.slice(0,3)}.${v.slice(3,6)}.${v.slice(6,9)}-${v.slice(9)}`;
+}
+// CEP: 00000-000 (8 dígitos)
+function maskCEP(inp){
+  const v=inp.value.replace(/\D/g,'').slice(0,8);
+  if(v.length<=5)inp.value=v;
+  else inp.value=`${v.slice(0,5)}-${v.slice(5)}`;
 }
 function selOpts(el,opts,val){if(!el)return;el.innerHTML=opts.map(o=>`<option value="${o.v}" ${o.v===val?'selected':''}>${o.l}</option>`).join('')}
 function teamOpts(){return TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor'&&!t._preview).map(t=>({v:t.id,l:t.name}))}
