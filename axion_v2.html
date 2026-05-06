@@ -50,8 +50,9 @@ body{
 /* Quando Modo Visualização ativo, empurra UI 26px pra baixo pra dar espaço pro banner */
 body.view-mode-on{padding-top:26px;height:calc(100vh - 26px)}
 /* Negrito mais leve em todo o app — 700 (default do browser) renderiza
-   muito grosso em texto branco sobre fundo escuro, fazendo letras "grudarem". */
-b, strong { font-weight: 600 }
+   muito grosso em texto branco sobre fundo escuro, fazendo letras "grudarem".
+   500 é peso "medium" — destaca sem virar carbonado. */
+b, strong { font-weight: 500 }
 /* Global: força tema dark em TODOS os selects/inputs nativos
    (corrige dropdowns brancos no Windows) */
 select,input,textarea,button{color-scheme:dark;font-family:inherit}
@@ -117,7 +118,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .l-prof:hover{border-color:var(--bl);background:var(--bld);transform:translateX(2px)}
 .l-av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
   justify-content:center;font-size:14px;font-weight:700;flex-shrink:0}
-.l-pname{font-size:14px;font-weight:600;color:var(--tx)}
+.l-pname{font-size:14px;font-weight:500;color:var(--tx)}
 .l-prole{font-size:12px;color:var(--t3);text-transform:capitalize}
 
 /* ─── SIDEBAR ─────────────────────────────────────────── */
@@ -135,7 +136,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;align-items:center;gap:10px;background:var(--bld)}
 .sb-uav{width:32px;height:32px;border-radius:50%;display:flex;
   align-items:center;justify-content:center;font-size:12px;font-weight:700}
-.sb-uname{font-size:13px;font-weight:600;color:var(--tx)}
+.sb-uname{font-size:13px;font-weight:500;color:var(--tx)}
 .sb-urole{font-size:11px;color:var(--t3);text-transform:capitalize}
 .sb-nav{padding:8px 10px;flex:1}
 
@@ -188,7 +189,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .tb-live::before{content:'';width:6px;height:6px;border-radius:50%;
   background:var(--bl);animation:pu 2s infinite;box-shadow:0 0 8px var(--bl)}
 .tb-path{font-size:13px;color:var(--t3);font-weight:500}
-.tb-path b{color:var(--tx);font-weight:600}
+.tb-path b{color:var(--tx);font-weight:500}
 
 /* date filter — Date Range Picker */
 .drp-wrap{position:relative;margin-left:auto}
@@ -334,7 +335,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .feed-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:6px;
   box-shadow:0 0 8px currentColor}
 .feed-tx{flex:1;font-size:13px;color:var(--t2);line-height:1.5}
-.feed-tx b{color:var(--tx);font-weight:600}
+.feed-tx b{color:var(--tx);font-weight:500}
 .feed-time{font-size:11px;color:var(--t4);font-weight:500;flex-shrink:0}
 
 /* sales list */
@@ -345,7 +346,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .sav{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;
   justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
 .sinfo{flex:1;min-width:0}
-.sname{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sname{font-size:13px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sprod{font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sval{font-size:14px;font-weight:700;color:var(--gr);text-align:right}
 .sval-com{font-size:11px;color:var(--t3);text-align:right}
@@ -406,7 +407,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-card:hover{border-color:var(--b3);box-shadow:var(--sh1);background:var(--s3)}
 .kb-card.dragging{opacity:.5;cursor:grabbing}
 .kb-accent{display:none} /* removida — não tinge mais o topo do card */
-.kb-name{font-size:13.5px;font-weight:600;color:var(--tx);padding-right:24px;line-height:1.3}
+.kb-name{font-size:13.5px;font-weight:500;color:var(--tx);padding-right:24px;line-height:1.3}
 .kb-meta{font-size:11.5px;color:var(--t3);display:flex;flex-wrap:wrap;gap:9px}
 .kb-meta span{display:inline-flex;align-items:center;gap:4px}
 .kb-foot{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
@@ -488,7 +489,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .chip-st.reserva{background:var(--pud);color:var(--pu)}
 .chip-st.recarga_pendente{background:var(--amd);color:var(--am)}
 .chip-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t3);margin-bottom:5px}
-.chip-row b{color:var(--tx);font-weight:600}
+.chip-row b{color:var(--tx);font-weight:500}
 .chip-tags{display:flex;gap:4px;flex-wrap:wrap;margin:8px 0}
 .chip-tag{font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;
   background:var(--s4);color:var(--t2);border:1px solid var(--b2)}
@@ -526,7 +527,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .dre-row.tot{font-weight:700;border-top:2px solid var(--bl);
   margin-top:6px;padding-top:14px;font-size:16px}
 .dre-row .lbl{color:var(--t2)}
-.dre-row .val{font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.dre-row .val{font-weight:500;color:var(--tx);font-variant-numeric:tabular-nums}
 .dre-row.neg .val{color:var(--rd)}
 .dre-row.pos .val{color:var(--gr)}
 .dre-row.lucro .val{color:var(--bl2);font-size:18px;font-weight:800}
@@ -537,7 +538,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .inv-cat{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;
   justify-content:center;font-size:13px;flex-shrink:0;background:var(--bld);color:var(--bl2)}
 .inv-info{flex:1;min-width:0}
-.inv-desc{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inv-desc{font-size:13px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inv-meta{font-size:11px;color:var(--t3)}
 .inv-val{font-size:14px;font-weight:700;color:var(--rd);white-space:nowrap}
 .inv-del{background:transparent;border:none;color:var(--t4);cursor:pointer;
@@ -634,14 +635,14 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border:1px solid var(--b1);font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .hist-from{color:var(--t3);text-decoration:line-through}
 .hist-arrow{color:var(--bl2);font-weight:700}
-.hist-to{color:var(--tx);font-weight:600}
+.hist-to{color:var(--tx);font-weight:500}
 .hist-by{color:var(--t3);font-size:11px}
 .hist-time{color:var(--t4);font-size:11px;margin-left:auto}
 
 .com-item{padding:11px 13px;background:var(--s3);border-radius:var(--r);
   border:1px solid var(--b1);margin-bottom:7px}
 .com-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.com-by{font-size:12px;font-weight:600;color:var(--tx)}
+.com-by{font-size:12px;font-weight:500;color:var(--tx)}
 .com-time{font-size:11px;color:var(--t4);margin-left:auto}
 .com-tx{font-size:13px;color:var(--t2);line-height:1.55}
 .com-add{display:flex;gap:8px;margin-top:10px}
@@ -697,7 +698,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .notif-ic.warn{background:var(--amd);color:var(--am)}
 .notif-ic.info{background:var(--bld);color:var(--bl2)}
 .notif-c{flex:1;min-width:0}
-.notif-t{font-size:13px;font-weight:600;color:var(--tx);margin-bottom:3px}
+.notif-t{font-size:13px;font-weight:500;color:var(--tx);margin-bottom:3px}
 .notif-d{font-size:11.5px;color:var(--t3);line-height:1.45}
 .notif-d b{color:var(--t2);font-weight:600}
 
@@ -1056,7 +1057,7 @@ h1 em{font-weight:700}
 .prod-vars{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
 .prod-var{display:flex;align-items:center;justify-content:space-between;gap:10px;
   padding:8px 11px;background:var(--s3);border:1px solid var(--b1);border-radius:7px}
-.prod-var-nm{font-size:13px;font-weight:600;color:var(--tx)}
+.prod-var-nm{font-size:13px;font-weight:500;color:var(--tx)}
 .prod-var-pr{font-size:13px;font-weight:700;color:var(--gr);font-variant-numeric:tabular-nums}
 .prod-var-cu{font-size:11px;color:var(--t3);margin-left:8px}
 .prod-foot{margin-top:10px;padding-top:10px;border-top:1px solid var(--b1);
@@ -1856,7 +1857,7 @@ h1 em{font-weight:700}
           <!-- preview dinâmico injetado em renderMbAvatar() -->
         </div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:5px">Foto de perfil</div>
+          <div style="font-size:13px;font-weight:500;color:var(--tx);margin-bottom:5px">Foto de perfil</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             <label class="btn btn-gh btn-sm" style="cursor:pointer">
               <input type="file" accept="image/*" id="mb-photo-input" style="display:none" onchange="onMbPhotoUpload(event)">
@@ -3542,7 +3543,7 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIcons={Dashboard:'⬚',Operacional:'◫',Financeiro:'$',Pessoal:'💵',Equipe:'👥','Integrações':'⚡'};
+  const navIcons={Dashboard:'📊',Operacional:'🎯',Financeiro:'💰',Pessoal:'👤',Equipe:'👥','Integrações':'⚡'};
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
     // Default: só o PRIMEIRO acordeão aberto. Outros começam fechados.
@@ -4250,7 +4251,7 @@ function renderColsList(){
         <button class="col-arrow" onclick="moveCol(${i},-1)" ${i===0?'disabled':''} title="Subir">↑</button>
         <button class="col-arrow" onclick="moveCol(${i},1)" ${i===KB_COLS.length-1?'disabled':''} title="Descer">↓</button>
         <input type="color" value="${col.c}" onchange="updColField(${i},'c',this.value)" style="width:40px;height:36px;border:1px solid var(--b2);border-radius:6px;cursor:pointer;background:transparent;padding:2px">
-        <input type="text" value="${col.id}" onchange="renameCol(${i},this.value)" style="flex:1;background:var(--s3);border:1px solid var(--b2);color:var(--tx);font-weight:600;font-size:14px;padding:8px 11px;border-radius:6px;font-family:inherit">
+        <input type="text" value="${col.id}" onchange="renameCol(${i},this.value)" style="flex:1;background:var(--s3);border:1px solid var(--b2);color:var(--tx);font-weight:500;font-size:14px;padding:8px 11px;border-radius:6px;font-family:inherit">
         <button class="btn-act btn-act-gh btn-act-icon" onclick="delCol(${i})" title="Excluir etapa" style="color:var(--rd)">×</button>
       </div>
       <div class="col-row2">
@@ -5355,7 +5356,7 @@ function renderPedidos(){
           <td class="muted">${l.data}</td>
           <td>
             <div style="display:flex;flex-direction:column;gap:1px">
-              <b style="color:var(--tx);font-weight:600">${l.nome}</b>
+              <b style="color:var(--tx);font-weight:500">${l.nome}</b>
               ${l.cpf?`<span class="muted" style="font-size:11px;font-family:monospace">${l.cpf}</span>`:''}
             </div>
           </td>
@@ -5947,22 +5948,22 @@ function renderRetrospectiva(){
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div class="retro-stat">
       <div class="retro-stat-lbl">Receita total acumulada</div>
-      <div class="retro-stat-val" style="color:var(--gr)">${fmt(totRec)}</div>
+      <div class="retro-stat-val">${fmt(totRec)}</div>
       <div class="retro-stat-sub">consolidada</div>
     </div>
     <div class="retro-stat">
       <div class="retro-stat-lbl">Lucro acumulado</div>
-      <div class="retro-stat-val" style="color:var(--bl2)">${fmt(totLuc)}</div>
+      <div class="retro-stat-val">${fmt(totLuc)}</div>
       <div class="retro-stat-sub">${totRec>0?(totLuc/totRec*100).toFixed(1):0}% margem</div>
     </div>
     <div class="retro-stat">
       <div class="retro-stat-lbl">Tráfego investido</div>
-      <div class="retro-stat-val" style="color:var(--rd)">${fmt(totTraf)}</div>
+      <div class="retro-stat-val">${fmt(totTraf)}</div>
       <div class="retro-stat-sub">${totTraf>0?(totRec/totTraf).toFixed(2):'0'}x ROAS médio</div>
     </div>
     <div class="retro-stat">
       <div class="retro-stat-lbl">Melhor ${retroMode==='mensal'?'mês':'ano'}</div>
-      <div class="retro-stat-val" style="color:var(--gold);font-size:18px">${top?top.long:'—'}</div>
+      <div class="retro-stat-val" style="font-size:18px">${top?top.long:'—'}</div>
       <div class="retro-stat-sub">${top?fmt(top.recBruta):'—'} de receita</div>
     </div>
   </div>
@@ -5988,24 +5989,24 @@ function renderRetrospectiva(){
           const margem=b.recBruta>0?(b.lucro/b.recBruta*100).toFixed(1):'0';
           const roas=b.traf>0?(b.recBruta/b.traf).toFixed(2):'—';
           return `<tr style="cursor:pointer" onclick="retroJumpTo(${b.year},${b.month===null?-1:b.month})">
-            <td><b style="color:var(--tx);font-weight:600">${b.long}</b></td>
-            <td class="right" style="color:var(--gr);font-weight:600">${fmt(b.recBruta)}</td>
-            <td class="right" style="color:var(--rd);font-weight:500">${fmt(custos)}</td>
-            <td class="right" style="color:var(--rd);font-weight:500">${fmt(b.traf)}</td>
-            <td class="right" style="color:var(--bl2);font-weight:600">${fmt(b.lucro)}</td>
-            <td class="right" style="color:var(--am);font-weight:500">${fmt(b.payouts)}</td>
-            <td class="right" style="color:${b.caixa>=0?'var(--gr)':'var(--rd)'};font-weight:700">${fmt(b.caixa)}</td>
-            <td class="right" style="color:var(--gold);font-weight:600">${roas}${roas!=='—'?'x':''}</td>
+            <td><b style="color:var(--tx);font-weight:500">${b.long}</b></td>
+            <td class="right" style="color:var(--tx);font-weight:500">${fmt(b.recBruta)}</td>
+            <td class="right" style="color:var(--t2);font-weight:500">${fmt(custos)}</td>
+            <td class="right" style="color:var(--t2);font-weight:500">${fmt(b.traf)}</td>
+            <td class="right" style="color:var(--tx);font-weight:500">${fmt(b.lucro)}</td>
+            <td class="right" style="color:var(--t2);font-weight:500">${fmt(b.payouts)}</td>
+            <td class="right" style="color:${b.caixa>=0?'var(--gr)':'var(--rd)'};font-weight:600">${fmt(b.caixa)}</td>
+            <td class="right" style="color:var(--t2);font-weight:500">${roas}${roas!=='—'?'x':''}</td>
             <td class="right" style="color:var(--t2)">${margem}%</td>
           </tr>`;
         }).join('')}
-        <tr style="background:var(--s1);font-weight:700;border-top:2px solid var(--bl)">
+        <tr style="background:var(--s1);font-weight:600;border-top:2px solid var(--b2)">
           <td style="color:var(--tx)">Total</td>
-          <td class="right" style="color:var(--gr)">${fmt(totRec)}</td>
-          <td class="right" style="color:var(--rd)">${fmt(buckets.reduce((s,b)=>s+b.com+b.taxa+b.inv,0))}</td>
-          <td class="right" style="color:var(--rd)">${fmt(buckets.reduce((s,b)=>s+b.traf,0))}</td>
-          <td class="right" style="color:var(--bl2)">${fmt(totLuc)}</td>
-          <td class="right" style="color:var(--am)">${fmt(buckets.reduce((s,b)=>s+b.payouts,0))}</td>
+          <td class="right" style="color:var(--tx)">${fmt(totRec)}</td>
+          <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.com+b.taxa+b.inv,0))}</td>
+          <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.traf,0))}</td>
+          <td class="right" style="color:var(--tx)">${fmt(totLuc)}</td>
+          <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.payouts,0))}</td>
           <td class="right" style="color:${totCaixa>=0?'var(--gr)':'var(--rd)'}">${fmt(totCaixa)}</td>
           <td></td>
           <td class="right" style="color:var(--t2)">${totRec>0?(totLuc/totRec*100).toFixed(1):0}%</td>
@@ -6167,7 +6168,7 @@ function renderPagEquip(){
           return `<tr style="cursor:pointer" onclick="openMemberAnalysis('${i.user_id}')">
             <td><div style="display:flex;align-items:center;gap:10px">
               <div class="sav" style="background:${i.bg};color:${i.color}">${i.abbr}</div>
-              <span style="color:var(--tx);font-weight:600">${i.name}</span>
+              <span style="color:var(--tx);font-weight:500">${i.name}</span>
             </div></td>
             <td style="text-transform:capitalize;color:var(--t2)">${i.role}</td>
             <td class="right" style="font-weight:600;color:var(--t2)">${i.vendas}</td>
@@ -6200,10 +6201,10 @@ function renderPagEquip(){
             <td>${p.data}</td>
             <td><div style="display:flex;align-items:center;gap:9px">
               <div class="sav" style="background:${u.bg};color:${u.color};width:30px;height:30px;font-size:11px">${u.abbr}</div>
-              <span style="color:var(--tx);font-weight:600">${u.name}</span>
+              <span style="color:var(--tx);font-weight:500">${u.name}</span>
             </div></td>
             <td class="muted">${p.obs||'—'}</td>
-            <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(p.valor)}</td>
+            <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(p.valor)}</td>
             <td class="right">${p.comp?'<span style="color:var(--t2)">📎 ver</span>':'—'}</td>
             <td class="right">
               <button class="btn-act btn-act-gh btn-act-icon" onclick="openPayoutEdit(${p.id})" title="Editar">✎</button>
@@ -6234,7 +6235,7 @@ function renderPagEquip(){
         <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;margin-bottom:5px">${pc.type==='pct'?'% do lucro líquido':'Valor fixo mensal'}</div>
         <div style="display:flex;align-items:center;gap:8px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px">
           <input type="number" id="pro-val" value="${pc.value}" min="0" step="${pc.type==='pct'?'0.5':'10'}" oninput="updProInPagEquip()"
-            style="flex:1;background:transparent;border:none;color:var(--tx);font-weight:600;font-size:16px;outline:none;font-family:inherit">
+            style="flex:1;background:transparent;border:none;color:var(--tx);font-weight:500;font-size:16px;outline:none;font-family:inherit">
           <span style="color:var(--t3);font-weight:600;font-size:14px">${pc.type==='pct'?'%':'R$'}</span>
         </div>
       </div>
@@ -6276,11 +6277,11 @@ function renderPagEquip(){
             periodoStr=f.quinzena===1?'01–15':'16–fim';
           }
           return `<tr>
-            <td><b style="color:var(--tx);font-weight:600">${lbl}</b></td>
+            <td><b style="color:var(--tx);font-weight:500">${lbl}</b></td>
             <td class="muted">${periodoStr}</td>
-            <td class="right" style="color:var(--gr);font-weight:600">${fmt(f.totFat)}</td>
-            <td class="right" style="color:var(--gold);font-weight:700">${fmt(f.totCom)}</td>
-            <td class="right">${(f.items||[]).length}</td>
+            <td class="right" style="color:var(--t2);font-weight:500">${fmt(f.totFat)}</td>
+            <td class="right" style="color:var(--tx);font-weight:600">${fmt(f.totCom)}</td>
+            <td class="right" style="color:var(--t2)">${(f.items||[]).length}</td>
             <td class="muted">${f.fechado_em}</td>
           </tr>`;
         }).join('')}
@@ -6405,7 +6406,7 @@ function renderMeusPag(){
               const da=ddmmToDate(a.data),db=ddmmToDate(b.data);
               return (db?db.getTime():0)-(da?da.getTime():0);
             }).map(p=>`<tr>
-              <td><b style="color:var(--tx);font-weight:600">${p.data}</b></td>
+              <td><b style="color:var(--tx);font-weight:500">${p.data}</b></td>
               <td class="muted">${p.obs||'—'}</td>
               <td>${p.comp
                 ?`<a onclick="window.open('${p.comp}','_blank')" style="color:var(--bl2);cursor:pointer;font-size:12px;font-weight:600">📎 ${p.comp_name||'comprovante'}</a>`
@@ -6443,7 +6444,7 @@ function renderMeusPag(){
             const meu=(f.items||[]).find(i=>i.user_id===uid);
             if(!meu)return '';
             return `<tr>
-              <td><b style="color:var(--tx);font-weight:600">${f.label||'Fechamento'}</b></td>
+              <td><b style="color:var(--tx);font-weight:500">${f.label||'Fechamento'}</b></td>
               <td class="right">${meu.vendas||0}</td>
               <td class="right" style="color:var(--gr);font-variant-numeric:tabular-nums">${fmt(meu.faturamento||0)}</td>
               <td class="right" style="color:var(--gold);font-weight:700;font-variant-numeric:tabular-nums">${fmt(meu.comissao||0)}</td>
@@ -6478,7 +6479,7 @@ function renderMeusPag(){
               return (db?db.getTime():0)-(da?da.getTime():0);
             }).map(v=>`<tr>
               <td>${v.data}</td>
-              <td><b style="color:var(--tx);font-weight:600">${v.nome}</b></td>
+              <td><b style="color:var(--tx);font-weight:500">${v.nome}</b></td>
               <td class="muted">${v.prod||'—'}</td>
               <td class="right" style="font-variant-numeric:tabular-nums">${fmt(v.vl)}</td>
               <td class="right" style="color:var(--gold);font-weight:600;font-variant-numeric:tabular-nums">${fmt(v.comiss)}</td>
@@ -6608,10 +6609,10 @@ function renderInvest(){
               :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">💸 Gasto</span>`;
             return `<tr>
               <td style="color:var(--t2)">${i.dt}</td>
-              <td><b style="color:var(--tx);font-weight:600">${i.desc}</b></td>
+              <td><b style="color:var(--tx);font-weight:500">${i.desc}</b></td>
               <td><span class="tbl-st" style="background:${ct.cor}14;color:var(--t2)">${ct.icon} ${ct.nome}</span></td>
               <td>${tipoBadge}</td>
-              <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(i.vl)}</td>
+              <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(i.vl)}</td>
               <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
             </tr>`;
           }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
@@ -6630,7 +6631,7 @@ function renderInvest(){
     <div class="panel-h">
       <h3>💼 Aportes</h3>
       <div style="display:flex;align-items:center;gap:12px">
-        <span class="muted" style="font-size:12px">${aportes.length} no período · <b style="color:var(--tx);font-weight:600">${fmt(totAportes)}</b></span>
+        <span class="muted" style="font-size:12px">${aportes.length} no período · <b style="color:var(--tx);font-weight:500">${fmt(totAportes)}</b></span>
         ${socios.length?`<button class="btn btn-bl btn-sm" onclick="toggleAporteForm()" id="ap-form-toggle">+ Novo aporte</button>`:''}
       </div>
     </div>
@@ -6681,7 +6682,7 @@ function renderInvest(){
           <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
             ${avatar(s,{size:28,fontSize:11})}
             <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
+              <div style="font-size:13px;font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
               <div style="font-size:10.5px;color:var(--t4);text-transform:capitalize">${s.role}</div>
             </div>
             <div style="font-size:14px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${pct}%</div>
@@ -6727,7 +6728,7 @@ function renderInvest(){
               <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
               <td><span class="tbl-st" style="background:rgba(251,191,36,.07);color:var(--t2)">${catLbl||a.cat}</span></td>
               <td class="muted">${a.obs||'—'}</td>
-              <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(a.valor)}</td>
+              <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(a.valor)}</td>
               <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delAporte(${a.id})" title="Excluir">×</button></td>
             </tr>`;
           }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Nenhum aporte no período.</td></tr>'}
@@ -6956,7 +6957,7 @@ function renderCobranca(){
           else if(l.col==='Pago'){tipo='✓ Pago';tipoColor='var(--gr)'}
 
           return `<tr>
-            <td onclick="openLeadDetail(${l.id})" style="cursor:pointer"><b style="color:var(--tx);font-weight:600">${l.nome}</b>
+            <td onclick="openLeadDetail(${l.id})" style="cursor:pointer"><b style="color:var(--tx);font-weight:500">${l.nome}</b>
               ${l.cidade?`<div class="muted" style="font-size:11px">${l.cidade}/${l.uf||''}</div>`:''}
             </td>
             <td>${l.wa}</td>
@@ -7468,7 +7469,7 @@ function openMemberAnalysis(uid){
           </tr></thead>
           <tbody>
             ${myV.length?myV.map(v=>`<tr>
-              <td><b style="color:var(--tx);font-weight:600">${v.nome}</b></td>
+              <td><b style="color:var(--tx);font-weight:500">${v.nome}</b></td>
               <td class="muted">${v.prod}</td>
               <td class="right" style="color:var(--gr);font-weight:600;letter-spacing:.01em">${fmt(v.vl)}</td>
               <td class="right" style="color:var(--bl2);font-weight:600;letter-spacing:.01em">${fmt(v.comiss)}</td>
@@ -7697,7 +7698,7 @@ function renderTrafego(){
       <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
         <span style="font-size:18px">🎯</span>
         <div>
-          <div style="font-size:12.5px;font-weight:600;color:var(--tx)">Budget de Tráfego</div>
+          <div style="font-size:12.5px;font-weight:500;color:var(--tx)">Budget de Tráfego</div>
           <div class="muted" style="font-size:11px">Designado pelos sócios via aportes · acumulado</div>
         </div>
       </div>
@@ -7781,7 +7782,7 @@ function renderTrafego(){
           <td style="color:var(--t2)">${g.data}</td>
           <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
           <td>${chipCell}</td>
-          <td class="right" style="color:var(--tx);font-weight:600">${fmt(g.valor)}</td>
+          <td class="right" style="color:var(--tx);font-weight:500">${fmt(g.valor)}</td>
           <td class="right" style="color:var(--t2)">${g.leads}</td>
           <td class="right" style="color:var(--t2)">${fmt(g.valor/g.leads)}</td>
           ${canEdit?`<td class="right">
@@ -8186,7 +8187,7 @@ function renderAfiList(){
     return `<div style="display:flex;align-items:center;gap:11px;background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px">
       <div class="sav" style="background:${a.bg};color:${a.color};width:32px;height:32px;font-size:12px">${a.abbr}</div>
       <div style="flex:1">
-        <div style="font-size:13px;font-weight:600;color:var(--tx)">${a.name}</div>
+        <div style="font-size:13px;font-weight:500;color:var(--tx)">${a.name}</div>
         <div style="font-size:11px;color:var(--t3)">${linksConfig}/${totalVars} link${totalVars!==1?'s':''} configurado${linksConfig!==1?'s':''}</div>
       </div>
       <button class="btn btn-gh btn-xs" onclick="openAfiLinks('${a.id}')">⚙ Configurar</button>
@@ -8409,7 +8410,7 @@ function cfgConta(){
         ${realMembers.map(t=>`<div class="cfg-profile-row ${IMPERSONATING&&IMPERSONATING.viewing_as===t.id?'on':''}" onclick="impersonate('${t.id}')">
           ${avatar(t,{size:36,fontSize:13})}
           <div style="flex:1">
-            <div style="font-size:14px;font-weight:600;color:var(--tx)">${t.name}</div>
+            <div style="font-size:14px;font-weight:500;color:var(--tx)">${t.name}</div>
             <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${t.role} · ${t.login||'sem login'}${t.pwd_hash?'':' · ⚠ sem senha'}</div>
           </div>
           ${IMPERSONATING&&IMPERSONATING.viewing_as===t.id?'<span style="color:var(--am);font-size:12px;font-weight:600">👁 Visualizando agora</span>':'<span style="color:var(--bl2);font-size:12px">→ Visualizar</span>'}
@@ -8432,7 +8433,7 @@ function cfgConta(){
           return `<div class="cfg-profile-row ${isActive?'on':''}" onclick="impersonatePreview('${role}')" style="padding:10px 12px">
             <div class="sav" style="background:${info.bg};color:${info.color};width:32px;height:32px;font-size:12px">${info.abbr}</div>
             <div style="flex:1">
-              <div style="font-size:13px;font-weight:600;color:var(--tx)">${info.label}</div>
+              <div style="font-size:13px;font-weight:500;color:var(--tx)">${info.label}</div>
               <div style="font-size:11px;color:var(--t4)">${hasReal?'também há membro real':'só preview'}</div>
             </div>
             ${isActive?'<span style="color:var(--am);font-size:11px;font-weight:600">👁 Ativo</span>':'<span style="color:var(--bl2);font-size:11px">→ Ver</span>'}
@@ -8448,7 +8449,7 @@ function cfgConta(){
     <div class="cfg-h" style="margin-top:24px"><h2>Sessão</h2></div>
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
       <div style="flex:1">
-        <div style="font-size:14px;font-weight:600;color:var(--tx)">Sair da conta</div>
+        <div style="font-size:14px;font-weight:500;color:var(--tx)">Sair da conta</div>
         <div class="muted" style="font-size:12px;margin-top:2px">Você precisará digitar a senha novamente para entrar</div>
       </div>
       <button class="btn btn-re btn-sm" onclick="logout()">↩ Sair</button>
@@ -8528,7 +8529,7 @@ function cfgEquipe(){
                 <div style="display:flex;align-items:center;gap:9px">
                   ${avatar(m,{size:28,fontSize:11})}
                   <div>
-                    <b style="color:var(--tx);font-weight:600">${m.name}</b>
+                    <b style="color:var(--tx);font-weight:500">${m.name}</b>
                     ${isMe?'<span class="muted" style="font-size:11px"> (você)</span>':''}
                   </div>
                 </div>
@@ -8739,7 +8740,7 @@ function cfgNotif(){
     <div class="cfg-card" style="padding:0">
       ${items.map(i=>`<div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">${i.l}</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">${i.l}</div>
           <div class="muted" style="font-size:12px;margin-top:2px">${i.d}</div>
         </div>
         <label class="acl-tog">
@@ -8753,21 +8754,21 @@ function cfgNotif(){
     <div class="cfg-card" style="padding:0">
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">🔔 Sino do topo (sempre ativo)</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔔 Sino do topo (sempre ativo)</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Drawer com lista de notificações pendentes</div>
         </div>
         <label class="acl-tog"><input type="checkbox" checked disabled><span></span></label>
       </div>
       <div class="cfg-toggle-row" style="opacity:.6">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">📧 Email diário com resumo</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">📧 Email diário com resumo</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Em breve — exige integração SMTP</div>
         </div>
         <label class="acl-tog"><input type="checkbox" disabled><span></span></label>
       </div>
       <div class="cfg-toggle-row" style="opacity:.6">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">📱 Push no navegador</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">📱 Push no navegador</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Em breve — permitir notificações Web Push</div>
         </div>
         <label class="acl-tog"><input type="checkbox" disabled><span></span></label>
@@ -8786,14 +8787,14 @@ function cfgAparencia(){
     <div class="cfg-card" style="padding:0">
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">🌙 Tema escuro</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">🌙 Tema escuro</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Padrão da Dash. Tema claro disponível futuramente.</div>
         </div>
         <span class="cfg-status on">Ativo</span>
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">🎬 Animações sutis</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">🎬 Animações sutis</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Transições e micro-interações ao navegar</div>
         </div>
         <label class="acl-tog">
@@ -8803,7 +8804,7 @@ function cfgAparencia(){
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">📊 Modo compacto nas tabelas</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">📊 Modo compacto nas tabelas</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Reduz padding interno das células</div>
         </div>
         <label class="acl-tog">
@@ -8813,7 +8814,7 @@ function cfgAparencia(){
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">🔊 Sons de notificação</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔊 Sons de notificação</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Bip ao receber webhook ou novo lead</div>
         </div>
         <label class="acl-tog">
@@ -8827,7 +8828,7 @@ function cfgAparencia(){
     <div class="cfg-card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:14px">
         <div>
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">Restaurar acordeões abertos</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">Restaurar acordeões abertos</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Reabre todas as seções da sidebar</div>
         </div>
         <button class="btn btn-gh btn-sm" onclick="localStorage.removeItem('axion_sidebar_open_v2');buildSidebar();toast('Sidebar resetada','ok')">Restaurar</button>
@@ -8852,7 +8853,7 @@ function cfgDados(){
     <div class="cfg-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div>
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">Armazenamento atual</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">Armazenamento atual</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Tudo persiste em localStorage no seu navegador</div>
         </div>
         <div style="font-size:22px;font-weight:700;color:var(--bl2)">${sz} KB</div>
@@ -8870,7 +8871,7 @@ function cfgDados(){
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">🔒 Modo Visualização</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔒 Modo Visualização</div>
           <div class="muted" style="font-size:12.5px;margin-top:4px;line-height:1.5">
             Bloqueia <b>criar</b>, <b>editar</b>, <b>arrastar</b> e <b>deletar</b> pra todos (exceto Diretor).
             Os webhooks (PAYT + Fornecedor) <b>continuam funcionando normalmente</b> — só uso humano fica trancado.
@@ -8893,14 +8894,14 @@ function cfgDados(){
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:center;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">⬇ Exportar tudo (JSON)</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">⬇ Exportar tudo (JSON)</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Baixa um arquivo com TUDO da sua operação para guardar offline</div>
         </div>
         <button class="btn btn-bl btn-sm" onclick="exportBackup()">Exportar</button>
       </div>
       <div style="border-top:1px solid var(--b1);padding-top:12px;display:flex;align-items:center;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">⬆ Importar backup (JSON)</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">⬆ Importar backup (JSON)</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Sobrescreve os dados atuais com um backup</div>
         </div>
         <label class="btn btn-gh btn-sm" style="cursor:pointer">Selecionar...<input type="file" accept=".json" style="display:none" onchange="importBackup(event)"></label>
@@ -8911,14 +8912,14 @@ function cfgDados(){
     <div class="cfg-card" style="border-color:var(--rd)">
       <div style="display:flex;align-items:center;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">Resetar para mock</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">Resetar para mock</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Volta tudo para os dados de exemplo. Perde edições.</div>
         </div>
         <button class="btn btn-re btn-sm" onclick="resetDB()">Resetar</button>
       </div>
       <div style="border-top:1px solid var(--b1);padding-top:12px;margin-top:12px;display:flex;align-items:center;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--tx)">Limpar TUDO</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">Limpar TUDO</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Apaga todos os leads, vendas, produtos, etc. Sistema fica vazio.</div>
         </div>
         <button class="btn btn-re btn-sm" onclick="clearAll()">Limpar tudo</button>
@@ -8948,14 +8949,14 @@ function cfgSobre(){
     <div class="cfg-h" style="margin-top:24px"><h2>Recursos disponíveis</h2></div>
     <div class="cfg-card">
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
-        <div><span style="color:var(--tx);font-weight:600">CRM Kanban</span><div class="muted" style="font-size:12px;margin-top:2px">Etapas customizáveis · drag & drop · filtros avançados</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Pedidos COD / Antecipado</span><div class="muted" style="font-size:12px;margin-top:2px">com comprovantes obrigatórios</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Webhook PAYT</span><div class="muted" style="font-size:12px;margin-top:2px">13 eventos + automações configuráveis</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Pagamentos por período</span><div class="muted" style="font-size:12px;margin-top:2px">fechamentos quinzenais / mensais</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Análise por vendedor</span><div class="muted" style="font-size:12px;margin-top:2px">ROAS individual + taxa de fechamento</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Multi-papel + ACL</span><div class="muted" style="font-size:12px;margin-top:2px">7 papéis + permissões granulares</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Tags configuráveis</span><div class="muted" style="font-size:12px;margin-top:2px">customizáveis + auto-aplicadas (sistema)</div></div>
-        <div><span style="color:var(--tx);font-weight:600">Backend multi-usuário</span><div class="muted" style="font-size:12px;margin-top:2px">Cloudflare D1 + sync em tempo real</div></div>
+        <div><span style="color:var(--tx);font-weight:500">CRM Kanban</span><div class="muted" style="font-size:12px;margin-top:2px">Etapas customizáveis · drag & drop · filtros avançados</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Pedidos COD / Antecipado</span><div class="muted" style="font-size:12px;margin-top:2px">com comprovantes obrigatórios</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Webhook PAYT</span><div class="muted" style="font-size:12px;margin-top:2px">13 eventos + automações configuráveis</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Pagamentos por período</span><div class="muted" style="font-size:12px;margin-top:2px">fechamentos quinzenais / mensais</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Análise por vendedor</span><div class="muted" style="font-size:12px;margin-top:2px">ROAS individual + taxa de fechamento</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Multi-papel + ACL</span><div class="muted" style="font-size:12px;margin-top:2px">7 papéis + permissões granulares</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Tags configuráveis</span><div class="muted" style="font-size:12px;margin-top:2px">customizáveis + auto-aplicadas (sistema)</div></div>
+        <div><span style="color:var(--tx);font-weight:500">Backend multi-usuário</span><div class="muted" style="font-size:12px;margin-top:2px">Cloudflare D1 + sync em tempo real</div></div>
       </div>
     </div>
 
@@ -9178,7 +9179,7 @@ function renderPaytMapping(){
       const isRastreio=e.k==='entrega_atualizada';
       return `<div class="payt-map-row" title="${e.d}">
         <div>
-          <div style="font-weight:600;color:var(--tx);font-size:13px">${e.l}</div>
+          <div style="font-weight:500;color:var(--tx);font-size:13px">${e.l}</div>
           <div style="font-family:monospace;font-size:11px;color:var(--t4)">${e.k}</div>
         </div>
         <div>
@@ -9231,7 +9232,7 @@ function renderFornMapping(){
       const isRastreio=e.k==='entrega_atualizada';
       return `<div class="payt-map-row" title="${e.d}">
         <div>
-          <div style="font-weight:600;color:var(--tx);font-size:13px">${e.l}</div>
+          <div style="font-weight:500;color:var(--tx);font-size:13px">${e.l}</div>
           <div style="font-family:monospace;font-size:11px;color:var(--t4)">${e.k}</div>
         </div>
         <div>
