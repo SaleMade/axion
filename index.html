@@ -5838,6 +5838,20 @@ function renderInvest(){
   // Sócios disponíveis (Diretor, Sócio, Produtor)
   const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview);
 
+  // ─── Cálculo do Saldo de Capital ───
+  // Conceito: aporte = entrada de capital; gasto/invest = saída.
+  // Saldo = Aportes - (Tráfego + Investimentos) → quanto resta de caixa de aportes.
+  const fin=calcFin();
+  const consumido=fin.traf+fin.inv; // gastos + investimentos do período
+  const saldoCapital=totAportes-consumido;
+  // Acumulado: total já aportado ever - total já consumido ever
+  const allConsumido=(DB.gastos||[]).reduce((s,g)=>s+(Number(g.valor)||0),0)
+                   +(DB.invest||[]).reduce((s,i)=>s+(Number(i.vl)||0),0);
+  const totAportesAll=(DB.aportes||[]).reduce((s,a)=>s+(Number(a.valor||0)),0);
+  const saldoTotal=totAportesAll-allConsumido;
+  // Lucro distribuível do período (vem do DRE, respeitando modo Afiliado/Produtor)
+  const lucroDistribuivel=Math.max(0,fin.lucro);
+
   c.innerHTML=`
   <div class="ph">
     <div><h1>Financeiro · <em>Investimentos</em></h1><p>Investimentos da operação (mídia, ferramentas, cursos) e aportes de sócios · ${rangeLabel()}</p></div>
@@ -5866,6 +5880,42 @@ function renderInvest(){
       <button class="btn btn-bl btn-sm" onclick="quickInputTrafego()">⚡ Lançar</button>
     </div>
   </div>
+
+  <!-- ═══ SALDO DE CAPITAL — relação aporte vs consumo ═══ -->
+  ${totAportesAll>0||consumido>0?`
+  <div class="panel" style="margin-bottom:18px;background:linear-gradient(180deg,rgba(251,191,36,.04),transparent)">
+    <div class="panel-h">
+      <h3>💰 Saldo de Capital</h3>
+      <span class="muted" style="font-size:11.5px">aportes vs gastos · acumulado e período</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
+      <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Aportado (acumulado)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--gold);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(totAportesAll)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(totAportes)}</b></div>
+      </div>
+      <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.25);border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Consumido (acumulado)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(allConsumido)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(consumido)}</b> · tráfego + invest.</div>
+      </div>
+      <div style="background:${saldoTotal>=0?'rgba(16,185,129,.08)':'rgba(239,68,68,.10)'};border:1.5px solid ${saldoTotal>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
+        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'}">Saldo de caixa de aportes</div>
+        <div style="font-size:22px;font-weight:700;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};margin-top:3px;font-variant-numeric:tabular-nums">${fmt(saldoTotal)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">${saldoTotal>=0?'pode investir':'⚠ excedeu o aportado'}</div>
+      </div>
+    </div>
+    ${totAportesAll>0?`
+    <div style="height:8px;background:var(--s4);border-radius:4px;overflow:hidden;margin-top:8px">
+      <div style="height:100%;width:${Math.min(100,Math.round(allConsumido/totAportesAll*100))}%;background:linear-gradient(90deg,var(--gold),var(--rd));border-radius:4px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:5px">
+      <span>${Math.round(allConsumido/totAportesAll*100)}% do capital aportado consumido</span>
+      <span>${totAportesAll?fmt(allConsumido)+' de '+fmt(totAportesAll):'—'}</span>
+    </div>
+    `:''}
+  </div>
+  `:''}
 
   <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
   <div class="panel" style="margin-bottom:18px">
@@ -5905,14 +5955,16 @@ function renderInvest(){
       </div>
     </div>
 
-    <!-- % de participação por sócio -->
+    <!-- % de participação por sócio + direito sobre o lucro -->
     ${totAportes>0?`
-    <div class="section-title" style="margin-top:6px">Participação no período</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:14px">
+    <div class="section-title" style="margin-top:6px">Participação no período · direito sobre lucro</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:14px">
       ${socios.map(s=>{
         const periodo=aportesBySocio[s.id]||0;
         const acumulado=accBySocio[s.id]||0;
         const pct=totAportes?Math.round(periodo/totAportes*1000)/10:0;
+        // Direito sobre lucro = % participação × lucro distribuível do período
+        const direitoLucro=lucroDistribuivel*pct/100;
         return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px">
           <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
             ${avatar(s,{size:28,fontSize:11})}
@@ -5929,9 +5981,18 @@ function renderInvest(){
             <span style="color:var(--t3)">Período: <b style="color:var(--tx)">${fmt(periodo)}</b></span>
             <span style="color:var(--t3)">Acumulado: <b style="color:var(--bl2)">${fmt(acumulado)}</b></span>
           </div>
+          ${lucroDistribuivel>0?`
+          <div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--b1);display:flex;justify-content:space-between;align-items:center">
+            <span style="color:var(--t3);font-size:11px">📈 Direito sobre lucro</span>
+            <span style="color:var(--gr);font-weight:700;font-size:13px;font-variant-numeric:tabular-nums">${fmt(direitoLucro)}</span>
+          </div>`:''}
         </div>`;
       }).join('')}
     </div>
+    ${lucroDistribuivel>0?`
+    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border-left:2px solid var(--gr);border-radius:0 6px 6px 0;line-height:1.5">
+      💡 <b style="color:var(--gr)">Lucro distribuível</b> do período: <b style="color:var(--tx)">${fmt(lucroDistribuivel)}</b> (do DRE). Cada % de aporte recebe proporcionalmente.
+    </div>`:''}
     `:''}
 
     <!-- Lista de aportes — rolável depois de ~6 itens, header sticky -->
