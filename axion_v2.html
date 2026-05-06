@@ -2721,6 +2721,10 @@ async function syncFromServer(){
       DB.team=team;     // users são gerenciados via /api/users
       DB.feed=feed;     // log visual local — não sincroniza
       DB.wh_log=wh_log; // log de webhooks — local
+      // CRÍTICO: re-vincula globais (KB_COLS, TEAM) ao novo DB. Sem isso o
+      // modal de detalhes do lead quebrava silenciosamente em outros PCs
+      // por usar referência stale ao kb_cols antigo
+      rebindGlobals();
       serverVersion=r.version;
       try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
     }
@@ -2973,9 +2977,29 @@ function clearDBCacheIfDifferentUser(newUid){
     // Reseta DB em memória pros defaults — syncFromServer logo vai mesclar com o servidor
     DB=JSON.parse(JSON.stringify(DEFAULT_DB));
     if(!DB.team)DB.team=JSON.parse(JSON.stringify(DEFAULT_TEAM));
-    TEAM=DB.team;
+    rebindGlobals();
   }
   localStorage.removeItem('axion_last_user_logout');
+}
+
+// Re-vincula variáveis globais que apontam pra arrays/refs do DB.
+// Chamada toda vez que DB é substituído (clearDBCache, syncFromServer)
+// pra evitar que TEAM/KB_COLS fiquem apontando pra refs antigas — o que
+// causava modais quebrarem silenciosamente após login em outro dispositivo.
+function rebindGlobals(){
+  if(!DB.kb_cols||!Array.isArray(DB.kb_cols)||!DB.kb_cols.length){
+    DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS));
+  }
+  KB_COLS=DB.kb_cols;
+  if(!DB.team)DB.team=[];
+  TEAM=DB.team;
+  // Garante que estruturas auxiliares também existam após sync
+  if(!DB.team_photos)DB.team_photos={};
+  if(!DB.tags)DB.tags=JSON.parse(JSON.stringify(DEFAULT_TAGS));
+  if(!DB.aportes)DB.aportes=[];
+  if(!DB.demConfig)DB.demConfig=JSON.parse(JSON.stringify(DEFAULT_DB.demConfig));
+  if(!DB.acl)DB.acl=JSON.parse(JSON.stringify(DEFAULT_DB.acl));
+  if(!DB.invCats||!DB.invCats.length)DB.invCats=JSON.parse(JSON.stringify(DEFAULT_DB.invCats));
 }
 
 // Mostra erro no login screen
@@ -4665,9 +4689,36 @@ function autoFillCheckoutLink(){
 }
 
 function renderComments(lead){
-  $('mld-com-c').textContent=lead.comments?.length?`(${lead.comments.length})`:'';
+  // Conta comentários + comprovante (se houver) pra badge
+  const hasOrderProof=!!lead.comprovante_img;
+  const totalCount=(lead.comments?.length||0)+(hasOrderProof?1:0);
+  $('mld-com-c').textContent=totalCount?`(${totalCount})`:'';
   const sizeStr=b=>b<1024?(b+' B'):b<1024*1024?((b/1024).toFixed(1)+' KB'):((b/1048576).toFixed(2)+' MB');
-  $('mld-coms').innerHTML=lead.comments?.length
+
+  // ─── Comprovante de criação do pedido (se houver) — fica fixo no topo ───
+  let orderProofHTML='';
+  if(hasOrderProof){
+    const audName=lead.comprovante_aud_name;
+    orderProofHTML=`<div class="com-item" style="border-color:var(--gold);background:rgba(251,191,36,.05)">
+      <div class="com-h">
+        <span class="com-by" style="color:var(--gold)">📦 Comprovante de criação do pedido</span>
+        <span class="com-time">${lead.data||''}</span>
+      </div>
+      <div class="com-tx" style="font-size:12px;color:var(--t3)">Anexado no momento do cadastro do pedido</div>
+      <div class="com-attach">
+        <img src="${lead.comprovante_img}" alt="${lead.comprovante_img_name||'comprovante'}"
+          onclick="window.open('${lead.comprovante_img}','_blank')">
+        <div class="com-file-meta">
+          <span class="com-attach-tag" style="background:rgba(251,191,36,.18);color:var(--gold)">📷 PRINT WHATSAPP</span>
+          <span>${lead.comprovante_img_name||'comprovante.jpg'}</span>
+          ${audName?`<span style="margin-left:auto;font-size:10.5px;color:var(--t4)">+ áudio: ${audName}</span>`:''}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ─── Lista de comentários do user ───
+  const commentsHTML=lead.comments?.length
     ?lead.comments.map((c,i)=>{
       let attach='';
       if(c.kind==='image'&&c.file_data){
@@ -4687,7 +4738,11 @@ function renderComments(lead){
         ${attach}
       </div>`;
     }).join('')
-    :'<div class="muted" style="padding:8px 0">Sem comentários ainda.</div>';
+    :'';
+
+  // Combina: comprovante no topo + comentários abaixo
+  $('mld-coms').innerHTML=orderProofHTML+commentsHTML
+    ||'<div class="muted" style="padding:8px 0">Sem comentários nem comprovantes ainda.</div>';
 }
 
 function addComment(){
@@ -7047,6 +7102,9 @@ async function saveMember(){
       else delete DB.team_photos[targetId];
       const t=DB.team.find(x=>x.id===targetId);
       if(t)t.photo=photo;
+      // CRÍTICO: sincroniza CUR se o user editou o próprio perfil
+      // Sem isso, era preciso clicar 2× pra UI refletir as mudanças
+      if(editingMemberId===CUR?.id&&t)CUR=t;
       TEAM=DB.team;persist();closeM('m-member');refreshUI();
       toast(r.action==='created'?'Membro adicionado':'Membro atualizado','ok');
       return;
