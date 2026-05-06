@@ -8649,13 +8649,27 @@ function cfgIntegracoes(){
       </div>
     </details>
 
+    ${(()=>{
+      // Status real: depende do backend estar conectado E haver eventos recebidos recentemente
+      const log=DB.wh_log_server||[];
+      const hasPayt=log.some(e=>e.org==='PAYT');
+      const hasForn=log.some(e=>e.org==='Fornecedor');
+      const paytSt=connected?(hasPayt?'on':''):'';
+      const paytTxt=connected?(hasPayt?'Recebendo':'Aguardando 1º evento'):'Backend off';
+      const fornSt=connected?(hasForn?'on':''):'';
+      const fornTxt=connected?(hasForn?'Recebendo':'Aguardando 1º evento'):'Backend off';
+      // Conta automações ativas (toggles do DB.autom_rules) — fallback 0
+      const automs=DB.autom_rules||[];
+      const ativas=automs.filter(r=>r.ativo).length;
+      const autoLbl=automs.length?(`${ativas} ${ativas===1?'ativa':'ativas'}`):'sem regras';
+      return `
     <div class="cfg-card" style="display:flex;align-items:center;gap:14px">
       <div style="font-size:28px">💸</div>
       <div style="flex:1">
         <div style="font-size:14px;font-weight:700;color:var(--gr);margin-bottom:2px">PAYT — Plataforma de vendas</div>
         <div class="muted" style="font-size:12.5px">Receba eventos de compra, pix, boleto e checkout abandonado em tempo real</div>
       </div>
-      <span class="cfg-status on">Conectado</span>
+      <span class="cfg-status ${paytSt}">${paytTxt}</span>
       <button class="btn btn-bl btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('payt')">Configurar →</button>
     </div>
 
@@ -8665,7 +8679,7 @@ function cfgIntegracoes(){
         <div style="font-size:14px;font-weight:700;color:var(--am);margin-bottom:2px">Fornecedor</div>
         <div class="muted" style="font-size:12.5px">Recebe leads + status de entrega (Five) automaticamente</div>
       </div>
-      <span class="cfg-status on">Conectado</span>
+      <span class="cfg-status ${fornSt}">${fornTxt}</span>
       <button class="btn btn-bl btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('fornecedor')">Configurar →</button>
     </div>
 
@@ -8683,11 +8697,12 @@ function cfgIntegracoes(){
       <div style="font-size:28px">🔁</div>
       <div style="flex:1">
         <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:2px">Automações de funil</div>
-        <div class="muted" style="font-size:12.5px">Regras automáticas disparadas pelos webhooks (5 ativas)</div>
+        <div class="muted" style="font-size:12.5px">Regras automáticas disparadas pelos webhooks${automs.length?` (${autoLbl})`:''}</div>
       </div>
-      <span class="cfg-status on">5 ativas</span>
+      <span class="cfg-status ${ativas>0?'on':''}">${autoLbl}</span>
       <button class="btn btn-gh btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('autom')">Ver regras →</button>
     </div>
+    `;})()}
 
     <div class="cfg-h" style="margin-top:24px"><h2>WhatsApp Business API</h2><p>Em breve — envio de mensagens automáticas</p></div>
     <div class="cfg-card" style="opacity:.6;display:flex;align-items:center;gap:14px">
@@ -9025,7 +9040,12 @@ async function resetDB(){
 async function clearAll(){
   if(!await axConfirm('<b>APAGAR TUDO?</b><br>Leads, vendas, produtos, chips, pagamentos, investimentos — tudo zerado. Esta ação <b>não pode ser desfeita</b>.',{okLabel:'Sim, apagar tudo'}))return;
   if(!await axConfirm('Tem <b>certeza absoluta</b>? Última confirmação.',{okLabel:'Confirmar exclusão total'}))return;
-  ['leads','vendas','gastos','chips','produtos','invest','payouts','fechamentos','webhooks','feed'].forEach(k=>DB[k]=[]);
+  ['leads','vendas','gastos','chips','produtos','invest','payouts','fechamentos','webhooks','feed','aportes','wh_log_server'].forEach(k=>DB[k]=[]);
+  // Mapeamentos de webhook voltam pro padrão (não array — objeto)
+  DB.payt_mapping=JSON.parse(JSON.stringify(DEFAULT_DB.payt_mapping||{}));
+  delete DB.forn_mapping; // será recriado a partir de payt_mapping no próximo render
+  // Counters
+  DB.nextLead=1;DB.nextVenda=1;DB.nextProduto=1;DB.nextAporte=1;
   persist();toast('Tudo limpo. Sistema vazio.','ok');
   setTimeout(()=>window.location.reload(),1200);
 }

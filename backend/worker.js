@@ -22,7 +22,8 @@
 //   wrangler d1 execute axion --remote --command "SELECT * FROM users"
 // ══════════════════════════════════════════════════════════════
 
-const SESSION_TTL_HOURS = 24 * 30;  // 30 dias
+const SESSION_TTL_HOURS = 24 * 7;   // 7 dias — balance entre conveniência e segurança
+                                     // (era 30 dias — sessão zumbi viva por 1 mês se token vazasse)
 const ROLE_DIRETOR = ['diretor','socio','produtor'];
 
 // Chave única configurada no postback da PAYT — acesso ao webhook
@@ -416,15 +417,23 @@ async function handlePaytWebhook(req, env, urlToken) {
       note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
     });
     // Se ação for 'pagar' e ainda não houver venda correspondente, registra
+    // Idempotência DUPLA: por leadId E por external_order_id (evita duplicar
+    // quando PAYT envia o mesmo postback 2x ou quando o mesmo cliente/CPF
+    // fez 2 pedidos diferentes que caem no mesmo lead)
     if (mapping?.action === 'pagar') {
       state.vendas = state.vendas || [];
-      const alreadyHas = state.vendas.some(v => v.leadId === lead.id);
+      const orderKey = data.order_id || '';
+      const alreadyHas = state.vendas.some(v =>
+        v.leadId === lead.id ||
+        (orderKey && v.external_order_id === orderKey)
+      );
       if (!alreadyHas && lead.vl) {
         const com_pct = Number(lead.com_pct) || 12;
         const comiss = lead.vl * com_pct / 100;
         state.vendas.unshift({
           id: Date.now(),
           leadId: lead.id,
+          external_order_id: orderKey, // pra idempotência em chamadas futuras
           nome: lead.nome,
           prod: lead.prod,
           vl: lead.vl,
@@ -644,16 +653,21 @@ async function handleFornecedorWebhook(req, env, urlToken) {
       note: `Fornecedor: ${eventRaw || event} (${status || '-'})`,
     });
 
-    // Se ação for 'pagar', registra venda
+    // Se ação for 'pagar', registra venda (com idempotência dupla)
     if (mapping?.action === 'pagar') {
       state.vendas = state.vendas || [];
-      const alreadyHas = state.vendas.some(v => v.leadId === lead.id);
+      const orderKey = lead_data.external_id || '';
+      const alreadyHas = state.vendas.some(v =>
+        v.leadId === lead.id ||
+        (orderKey && v.external_order_id === orderKey)
+      );
       if (!alreadyHas && lead.vl) {
         const com_pct = Number(lead.com_pct) || 12;
         const comiss = lead.vl * com_pct / 100;
         state.vendas.unshift({
           id: Date.now(),
           leadId: lead.id,
+          external_order_id: orderKey,
           nome: lead.nome,
           prod: lead.prod,
           vl: lead.vl,
