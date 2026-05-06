@@ -1218,15 +1218,14 @@ h1 em{font-weight:700}
     <!-- Erro -->
     <div id="lg-error" class="lg-error hidden"></div>
 
-    <!-- Configurar backend (1ª vez num dispositivo novo) -->
-    <div id="lg-backend-info" style="margin-top:18px;padding:11px 13px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;text-align:center">
-      <div style="font-size:11px;color:var(--t4);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
-        <span id="lg-backend-status">🔌 Conexão</span>
-      </div>
-      <div style="font-size:11.5px;color:var(--t3);line-height:1.5" id="lg-backend-desc">
-        Verificando configuração...
-      </div>
-      <a class="lg-link" style="font-size:11.5px;display:inline-block;margin-top:6px" onclick="configureBackendFromLogin()">⚙ Conectar a outro servidor</a>
+    <!-- Status de conexão: indicador discreto ⓘ, sem expor a URL.
+         Quem precisa configurar pode clicar pra abrir o prompt. -->
+    <div style="text-align:center;margin-top:14px">
+      <a id="lg-backend-status" onclick="configureBackendFromLogin()" title="Configurar conexão"
+        style="font-size:11px;color:var(--t4);cursor:pointer;text-decoration:none;opacity:.5;transition:opacity .15s"
+        onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.5">
+        · · ·
+      </a>
     </div>
   </div>
 </div>
@@ -2480,6 +2479,8 @@ const DEFAULT_DB={
   // Aportes dos sócios — registro de capital injetado no negócio
   aportes:[],
   nextAporte:1,
+  // Map de fotos de perfil { userId: base64DataUrl } — sincronizado via blob
+  team_photos:{},
   produtos:[
     {id:1,nome:'Produto X',cor:'#3b82f6',com_pct:12,ativo:true,
       variacoes:[
@@ -2784,15 +2785,19 @@ const isGT =()=>CUR?.role==='gestor';
 const today=()=>new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
 const nowTime=()=>new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 const getTeam=id=>TEAM.find(t=>t.id===id);
-// Helper que retorna o HTML do avatar — usa member.photo se houver, senão iniciais coloridas.
+// Helper que retorna o HTML do avatar — usa foto se houver, senão iniciais coloridas.
+// Foto pode vir de member.photo (cache local) OU DB.team_photos[id] (sincronizado).
+// Fallback duplo torna o avatar resiliente mesmo se um cache estiver desatualizado.
 // opts: {size, fontSize, style, className}
 function avatar(member,opts={}){
   const size=opts.size||32;
   const fs=opts.fontSize||(size<=24?10:size<=32?12:size<=48?16:22);
   const extra=opts.style||'';
   const cls=opts.className||'sav';
-  if(member?.photo){
-    return `<span class="${cls}" style="width:${size}px;height:${size}px;padding:0;overflow:hidden;border-radius:50%;display:inline-flex;flex:none;${extra}"><img src="${member.photo}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></span>`;
+  // Resolve a foto checando AMBOS os caminhos (fonte sincronizada + cache local)
+  const photo=member?.photo||DB?.team_photos?.[member?.id]||'';
+  if(photo){
+    return `<span class="${cls}" style="width:${size}px;height:${size}px;padding:0;overflow:hidden;border-radius:50%;display:inline-flex;flex:none;${extra}"><img src="${photo}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></span>`;
   }
   const bg=member?.bg||'var(--s4)';
   const color=member?.color||'var(--t2)';
@@ -3111,21 +3116,13 @@ async function quickLogin(){
   enterApp(member);
 }
 
-// Atualiza o card de status do backend na tela de login
+// Atualiza apenas o tooltip do indicador discreto (· · ·) sem expor URL na tela
 function updateBackendStatus(){
+  const el=$('lg-backend-status');if(!el)return;
   const url=apiUrl();
-  const statusEl=$('lg-backend-status');
-  const descEl=$('lg-backend-desc');
-  if(!statusEl||!descEl)return;
-  if(url){
-    statusEl.innerHTML='✓ Conectado ao servidor';
-    statusEl.style.color='var(--gr)';
-    descEl.innerHTML=`Logando via: <code style="background:var(--s3);padding:1px 5px;border-radius:3px;color:var(--cy);font-size:11px">${url.replace(/^https?:\/\//,'')}</code>`;
-  } else {
-    statusEl.innerHTML='⚠ Modo local (sem servidor)';
-    statusEl.style.color='var(--am)';
-    descEl.innerHTML='Sem backend configurado. Login funciona apenas neste navegador. <b>Conecte-se ao servidor</b> pra usar de qualquer dispositivo.';
-  }
+  // Só o tooltip diz o que tá rolando — útil pra debug sem ser visível na UI
+  el.title=url?'Conectado · clique se precisar mudar':'Sem servidor · clique pra configurar';
+  el.style.color=url?'var(--t4)':'var(--am)';
 }
 
 // Permite o usuário configurar a URL do Worker direto na tela de login.
