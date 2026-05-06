@@ -1475,15 +1475,7 @@ h1 em{font-weight:700}
           </div>
 
           <div class="info-section">
-            <div class="info-title">Comentários & Comprovantes <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
-            <!-- Aviso quando pedido Entrega não tem comprovante anexado -->
-            <div id="mld-proof-warn" class="mld-warn-banner" style="display:none">
-              <span style="font-size:18px">⚠</span>
-              <div style="flex:1">
-                <div style="font-weight:600;color:var(--am)">Comprovante obrigatório</div>
-                <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Pedido na Entrega exige imagem do print do WhatsApp ou áudio de aceite do cliente antes de avançar.</div>
-              </div>
-            </div>
+            <div class="info-title">Comentários & Anexos <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
             <div id="mld-coms" class="com-list"></div>
             <div class="com-pretty">
               <label class="com-icon" title="Anexar imagem (print do WhatsApp)">
@@ -1948,14 +1940,14 @@ h1 em{font-weight:700}
           </div>
 
           <div id="np-comprovantes" class="hidden">
-            <div class="field" style="margin-bottom:10px"><label>Comprovante - Imagem *</label>
+            <div class="field" style="margin-bottom:10px"><label>Comprovante - Imagem <span style="color:var(--rd)">*</span></label>
               <label class="np-upload" id="np-img-lbl">
                 <input type="file" accept="image/*" id="np-img" onchange="onNpImg(event)">
                 <div style="font-size:18px;margin-bottom:4px">⬆</div>
-                <span>Clique para adicionar imagem</span>
+                <span>Clique para adicionar imagem (obrigatório)</span>
               </label>
             </div>
-            <div class="field" style="margin-bottom:10px"><label>Comprovante - Áudio ou Vídeo *</label>
+            <div class="field" style="margin-bottom:10px"><label>Comprovante - Áudio ou Vídeo <span class="muted" style="font-size:11px;font-weight:500">(opcional)</span></label>
               <label class="np-upload" id="np-aud-lbl">
                 <input type="file" accept="audio/*,video/*" id="np-aud" onchange="onNpAud(event)">
                 <div style="font-size:18px;margin-bottom:4px">⬆</div>
@@ -2634,17 +2626,11 @@ function applySystemTags(lead){
 function applySystemTagsAll(){
   (DB.leads||[]).forEach(applySystemTags);
 }
-// Pedidos na modalidade "Entrega" exigem comprovante de aceite (imagem ou áudio)
-// nos comentários antes de avançar pra qualquer etapa pós-validação.
+// Helper apenas pra exibição (NÃO bloqueia movimentação) —
+// o comprovante é OBRIGATÓRIO somente na criação do pedido (modalidade Entrega),
+// não na mudança de etapa do CRM.
 function hasComprovante(lead){
   return (lead?.comments||[]).some(c=>c.kind==='image'||c.kind==='audio');
-}
-// Etapas que NÃO exigem comprovante (antes da validação ou cancelamento)
-const COMPROVANTE_FREE_COLS=['A Enviar','Cancelado','Atenção'];
-function requiresComprovante(lead, targetCol){
-  if(!lead||lead.mod!=='entrega')return false;
-  if(COMPROVANTE_FREE_COLS.includes(targetCol))return false;
-  return !hasComprovante(lead);
 }
 // Sincroniza imediatamente após declaração — garante que tags de sistema
 // já estão aplicadas em todos os leads antes da primeira renderização.
@@ -4104,11 +4090,7 @@ function renderKanban(){
         const c=tagColor(t);
         return `<span class="kb-tag" style="background:${c}22;color:${c}">${tagName(t)}</span>`;
       }).join('');
-      // Indicador de comprovante pendente em pedidos Entrega
-      const needsProof=lead.mod==='entrega'&&!hasComprovante(lead)&&lead.col!=='A Enviar'&&lead.col!=='Cancelado';
-      const proofBadge=needsProof
-        ?`<span title="Pedido na Entrega sem comprovante de aceite" style="font-size:10px;font-weight:600;background:rgba(245,158,11,.16);color:var(--am);padding:3px 7px;border-radius:5px;display:inline-flex;align-items:center;gap:3px">⚠ sem comprovante</span>`
-        :'';
+      // (badge de comprovante removido — obrigação só existe na criação do pedido)
 
       card.innerHTML=`
         <div class="kb-dots" onclick="event.stopPropagation();openLeadMenu(event,${lead.id})">⋮</div>
@@ -4122,7 +4104,6 @@ function renderKanban(){
         <div class="kb-foot">
           <span class="kb-pgto">${lead.pgto||lead.spg||'—'}</span>
           <span class="kb-mod">${lead.mod==='entrega'?'Entrega':'Antec.'}</span>
-          ${proofBadge}
           ${at&&at.id!==CUR?.id?`<span class="kb-vendor" title="${at.role}">${at.name}</span>`:''}
           ${tagsHTML}
         </div>`;
@@ -4147,11 +4128,6 @@ function renderKanban(){
         // Verifica permissão de mover para esta etapa
         if(!colCanMove(col)){
           toast(`Você não pode mover leads para "${col.id}"`,'err');
-          dragLeadId=null;return;
-        }
-        // Pedidos Entrega exigem comprovante de aceite antes de avançar
-        if(requiresComprovante(lead,col.id)){
-          toast(`Pedido na Entrega exige comprovante (imagem/áudio) nos comentários antes de mover`,'err');
           dragLeadId=null;return;
         }
         const prev=lead.col;
@@ -4181,10 +4157,8 @@ function openLeadMenu(e,lid){
   // Opções de mover para — cada etapa aparece dentro do accordion;
   // se exigir comprovante e não tiver, fica visivelmente bloqueada.
   const moveOpts=KB_COLS.filter(c=>c.id!==lead.col).map(c=>{
-    const blocked=!colCanMove(c)||requiresComprovante(lead,c.id);
-    if(blocked){
-      const reason=!colCanMove(c)?'Sem permissão de mover':'Comprovante obrigatório';
-      return `<div class="popover-item-disabled" title="${reason}">→ ${c.id} <span style="float:right;font-size:10px">🔒</span></div>`;
+    if(!colCanMove(c)){
+      return `<div class="popover-item-disabled" title="Sem permissão de mover">→ ${c.id} <span style="float:right;font-size:10px">🔒</span></div>`;
     }
     return `<div class="popover-item" onclick="quickMove(${lid},'${c.id}')">→ ${c.id}</div>`;
   }).join('');
@@ -4212,7 +4186,6 @@ function quickMove(lid,col){
   const lead=DB.leads.find(l=>l.id===lid);if(!lead)return;
   const colObj=KB_COLS.find(c=>c.id===col);
   if(!colCanMove(colObj)){toast(`Você não pode mover leads para "${col}"`,'err');return}
-  if(requiresComprovante(lead,col)){toast(`Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar`,'err');return}
   const prev=lead.col;lead.col=col;
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
@@ -4231,7 +4204,6 @@ function quickMoveModal(col){
   const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
   const colObj=KB_COLS.find(c=>c.id===col);
   if(!colCanMove(colObj)){toast(`Você não pode mover leads para "${col}"`,'err');return}
-  if(requiresComprovante(lead,col)){toast(`Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar`,'err');return}
   const prev=lead.col;lead.col=col;
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
@@ -4403,12 +4375,6 @@ function autoFillCheckoutLink(){
 
 function renderComments(lead){
   $('mld-com-c').textContent=lead.comments?.length?`(${lead.comments.length})`:'';
-  // Aviso de comprovante: aparece só se for Entrega e não tiver imagem/áudio anexado
-  const warn=$('mld-proof-warn');
-  if(warn){
-    const needs=lead.mod==='entrega'&&!hasComprovante(lead);
-    warn.style.display=needs?'flex':'none';
-  }
   const sizeStr=b=>b<1024?(b+' B'):b<1024*1024?((b/1024).toFixed(1)+' KB'):((b/1048576).toFixed(2)+' MB');
   $('mld-coms').innerHTML=lead.comments?.length
     ?lead.comments.map((c,i)=>{
@@ -4550,10 +4516,6 @@ function saveLead(){
   const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
   const newCol=$('mld-col').value;
   if(newCol!==lead.col){
-    if(requiresComprovante(lead,newCol)){
-      toast('Pedido na Entrega exige comprovante (imagem/áudio) antes de avançar de etapa','err');
-      return;
-    }
     lead.hist.push({from:lead.col,to:newCol,who:CUR.id,time:`${today()} ${nowTime()}`});
     if(newCol==='Pago')registerVendaFromLead(lead);
   }
@@ -4733,10 +4695,9 @@ function saveNovoPedido(){
     const err=$(id+'-err');
     if(!v){err.classList.add('show');ok=false}else{err.classList.remove('show')}
   });
-  if(npType==='entrega' && (!npImg||!npAud)){
-    if(!npImg)$('np-img-lbl').style.borderColor='var(--rd)';
-    if(!npAud)$('np-aud-lbl').style.borderColor='var(--rd)';
-    toast('Comprovantes (imagem + áudio/vídeo) são obrigatórios em pedidos de Entrega','err');return;
+  if(npType==='entrega' && !npImg){
+    $('np-img-lbl').style.borderColor='var(--rd)';
+    toast('Comprovante (imagem do print do WhatsApp) é obrigatório em pedidos de Entrega','err');return;
   }
   if(!ok){toast('Preencha os campos obrigatórios','err');return}
 
