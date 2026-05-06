@@ -48,6 +48,8 @@ body{
     radial-gradient(circle at 12% 8%,rgba(59,130,246,.08),transparent 40%),
     radial-gradient(circle at 88% 92%,rgba(6,182,212,.05),transparent 50%);
 }
+/* Quando Modo Visualização ativo, empurra UI 26px pra baixo pra dar espaço pro banner */
+body.view-mode-on{padding-top:26px;height:calc(100vh - 26px)}
 /* Negrito mais leve em todo o app — 700 (default do browser) renderiza
    muito grosso em texto branco sobre fundo escuro, fazendo letras "grudarem". */
 b, strong { font-weight: 600 }
@@ -2233,30 +2235,69 @@ h1 em{font-weight:700}
           <button class="btn-act btn-act-gh btn-act-icon" onclick="navigator.clipboard.writeText($('wh-url-fornecedor').textContent);toast('URL copiada','ok')" title="Copiar URL">📋</button>
         </div>
 
+        <div class="section-title" style="margin-top:14px">Eventos suportados (criação + status)</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">O fornecedor pode enviar tanto criação de pedido quanto atualizações de status. Cada evento move o lead automaticamente conforme o mapeamento abaixo.</p>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">new_order</span><span>Pedido criado → cria lead em <b>A Enviar</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--amd);color:var(--am)">status: pending</span><span>Aguardando pagamento → spg <b>Pendente</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">status: confirmed</span><span>Pago / confirmado → spg <b>Pago</b> ou <b>Aguardando confirmação</b> (se COD)</span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">tracking_created</span><span>Rastreio gerado → atualiza campo <b>Cód. rastreio</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">shipped</span><span>Enviado → coluna <b>Enviado</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--pud);color:var(--pu)">out_for_delivery</span><span>Saiu pra entrega → tag <b>entrega-hoje</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">delivered</span><span>Entregue → coluna <b>Retirada</b> / <b>Pago</b></span></div>
+          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--rdd);color:var(--rd)">canceled / refunded / chargeback</span><span>Devoluções → coluna <b>Cancelado</b></span></div>
+        </div>
+
         <div class="section-title" style="margin-top:14px">Como o fornecedor envia (POST JSON)</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px"><b>Aceita 2 formatos:</b> achatado (raiz) ou aninhado (estilo PAYT, com <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">order</code> e <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">address</code>). Use o que for mais conveniente pro fornecedor.</p>
         <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--t2);line-height:1.6;overflow-x:auto">
-<pre style="margin:0">{
-  "nome": "João Silva",        <span style="color:var(--rd)">// obrigatório</span>
-  "cpf": "12345678901",        <span style="color:var(--t4)">// opcional, com ou sem máscara</span>
-  "telefone": "11999998888",   <span style="color:var(--t4)">// opcional (aceita: phone, whatsapp, celular)</span>
-  "email": "joao@email.com",   <span style="color:var(--t4)">// opcional</span>
-  "cep": "01310100",           <span style="color:var(--t4)">// opcional</span>
-  "endereco": "Av. Paulista",  <span style="color:var(--t4)">// opcional (aceita: address, rua)</span>
-  "cidade": "São Paulo",       <span style="color:var(--t4)">// opcional</span>
-  "uf": "SP",                  <span style="color:var(--t4)">// opcional</span>
-  "produto": "Produto X",      <span style="color:var(--t4)">// opcional</span>
-  "valor": 397.00,             <span style="color:var(--t4)">// opcional (preço da venda)</span>
-  "modalidade": "antecipado",  <span style="color:var(--t4)">// "antecipado" ou "entrega"</span>
-  "origem": "Meta - Campanha X",<span style="color:var(--t4)">// fonte do lead</span>
-  "obs": "Veio de campanha XYZ",<span style="color:var(--t4)">// observação livre</span>
-  "external_id": "ABC-123"     <span style="color:var(--t4)">// id do fornecedor (evita duplicar)</span>
+<pre style="margin:0"><span style="color:var(--am)">// Formato aninhado (PAYT-like) — recomendado:</span>
+{
+  "event": "new_order",                 <span style="color:var(--t4)">// ou status_update, shipped, delivered, etc</span>
+  "order": {
+    "id": "ABC-123",                    <span style="color:var(--t4)">// external_id (evita duplicar)</span>
+    "status": "confirmed",              <span style="color:var(--t4)">// pending|confirmed|paid|shipped|delivered|canceled</span>
+    "client_name": "João Silva",        <span style="color:var(--rd)">// obrigatório p/ criar</span>
+    "client_whatsapp": "11999998888",
+    "cpf": "12345678901",
+    "client_email": "joao@email.com",
+    "total_amount": 397.00,
+    "payment_modality": "on_delivery",  <span style="color:var(--t4)">// "on_delivery"=COD, "prepaid"=antecipado</span>
+    "payment_method": "pix",
+    "tracking_code": "BR123456789",
+    "brand": "Produto X",
+    "address": {
+      "cep": "01310100", "street": "Av. Paulista", "number": "1000",
+      "complement": "ap 5", "neighborhood": "Bela Vista",
+      "city": "São Paulo", "state": "SP"
+    }
+  }
+}
+
+<span style="color:var(--am)">// Formato achatado (alternativa):</span>
+{
+  "event": "new_order", "external_id": "ABC-123",
+  "nome": "João Silva", "cpf": "12345678901",
+  "telefone": "11999998888", "valor": 397.00,
+  "modalidade": "antecipado", "produto": "Produto X"
 }</pre>
         </div>
 
         <div class="section-title" style="margin-top:14px">Resposta da API</div>
         <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--gr);line-height:1.5">
-          <pre style="margin:0">{ "ok": true, "action": "created", "lead_id": 42, "nome": "João Silva" }</pre>
+          <pre style="margin:0">{
+  "ok": true,
+  "event_raw": "new_order",
+  "event_mapped": "aguardando_confirmacao",
+  "status": "confirmed",
+  "action": "created",  <span style="color:var(--t4)">// ou "updated" / "skipped"</span>
+  "lead_id": 42
+}</pre>
         </div>
+
+        <div class="section-title" style="margin-top:14px">Mapeamento dos eventos (Fornecedor)</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Configure o que cada evento faz no CRM. Por padrão usa o mesmo mapeamento da PAYT — você pode customizar separado aqui.</p>
+        <div id="forn-mapping-grid" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:9px;max-height:340px;overflow-y:auto"></div>
 
         <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:10px 13px;margin-top:14px;font-size:12.5px;color:var(--t2);line-height:1.55">
           <b style="color:var(--bl2)">💡 Dica de segurança:</b> a chave da URL é como uma senha — só compartilhe com o fornecedor de confiança.
@@ -2844,6 +2885,21 @@ const isAfi=()=>CUR?.role==='afiliado';
 const isAt =()=>CUR?.role==='atendente';
 const isRec=()=>CUR?.role==='cobrador'; // antigo "recuperador" foi migrado em hydrate
 const isGT =()=>CUR?.role==='gestor';
+// Modo Visualização: bloqueia ações pra todos exceto Diretor (real, não impersonando)
+// Webhooks continuam funcionando normalmente (server-side, ignora essa flag)
+const isReadOnly=()=>{
+  if(!DB.view_mode)return false;
+  // Diretor real (não impersonado) sempre pode mexer
+  const real=IMPERSONATING?TEAM.find(t=>t.id===IMPERSONATING.original_uid):CUR;
+  return real?.role!=='diretor';
+};
+function toggleViewMode(on){
+  DB.view_mode=!!on;
+  persist();
+  toast(on?'🔒 Modo Visualização ATIVO':'🔓 Modo Visualização desativado',on?'ok':'ok');
+  refreshUI();
+  if(typeof renderConfigContent==='function')renderConfigContent();
+}
 const today=()=>new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
 const nowTime=()=>new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 const getTeam=id=>TEAM.find(t=>t.id===id);
@@ -3289,6 +3345,7 @@ function enterApp(member){
   scanFollowUps();
   updateNotifBadge();
   updateImpersonateBanner();
+  renderViewModeBanner();
 }
 
 // Diretor "trocar perfil" — entra como outro usuário SEM senha (impersonate)
@@ -3777,12 +3834,29 @@ function refreshActive(){
   if(map[id])map[id]();
 }
 
+// Banner global do Modo Visualização — fica fixo no topo quando ativo
+function renderViewModeBanner(){
+  let b=document.getElementById('view-mode-banner');
+  if(!DB.view_mode){if(b)b.remove();document.body.classList.remove('view-mode-on');return;}
+  document.body.classList.add('view-mode-on');
+  if(!b){
+    b=document.createElement('div');
+    b.id='view-mode-banner';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,rgba(245,158,11,.16),rgba(245,158,11,.08));border-bottom:1px solid var(--am);color:var(--am);padding:6px 14px;font-size:12px;font-weight:600;text-align:center;letter-spacing:.02em;backdrop-filter:blur(8px)';
+    document.body.appendChild(b);
+  }
+  const real=IMPERSONATING?TEAM.find(t=>t.id===IMPERSONATING.original_uid):CUR;
+  const canEdit=real?.role==='diretor';
+  b.innerHTML=`🔒 Modo Visualização ATIVO — automação do fornecedor está controlando o CRM ${canEdit?'<span style="opacity:.7;font-weight:500"> · você (Diretor) ainda pode editar</span>':'<span style="opacity:.7;font-weight:500"> · edição bloqueada</span>'}`;
+}
+
 // ─── refreshUI: re-renderiza página ativa + sidebar + badges ─────
 // Chamado depois de QUALQUER mutação no DB pra UI ficar sempre sincronizada.
 function refreshUI(){
   refreshActive();
   if(typeof buildSidebar==='function')buildSidebar();
   if(typeof updateNotifBadge==='function')updateNotifBadge();
+  if(typeof renderViewModeBanner==='function')renderViewModeBanner();
   // Re-marca a página ativa no sidebar (buildSidebar reseta classes)
   const a=document.querySelector('.page.active');
   if(a){
@@ -4408,6 +4482,8 @@ function colCanView(col){
 }
 function colCanMove(col){
   if(!CUR)return true;
+  // Modo Visualização: ninguém move (exceto Diretor real)
+  if(isReadOnly())return false;
   if(['diretor','socio','produtor'].includes(CUR.role))return true;
   return (col.mover||['*']).includes('*')||(col.mover||[]).includes(CUR.role);
 }
@@ -4961,6 +5037,7 @@ function openTrack(){
 }
 
 function saveLead(){
+  if(isReadOnly()){toast('🔒 Modo Visualização — edição bloqueada','err');return;}
   const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead)return;
   const newCol=$('mld-col').value;
   if(newCol!==lead.col){
@@ -5060,7 +5137,10 @@ function pagePedidos(){return `<div class="page" id="pedidos-pg"></div>`}
 let npType='antecipado';
 let npImg=null,npAud=null;
 
-function openPedidoTypeChooser(){openM('m-pedido-type')}
+function openPedidoTypeChooser(){
+  if(isReadOnly()){toast('🔒 Modo Visualização ativo — apenas Diretor pode criar pedidos','err');return;}
+  openM('m-pedido-type');
+}
 
 function openNovoPedido(type){
   npType=type;npImg=null;npAud=null;
@@ -5214,7 +5294,7 @@ function renderPedidos(){
   <div class="ph">
     <div><h1>Pedidos / <em>Logística</em></h1><p>Status de cada pedido · ${rangeLabel()}</p></div>
     <div class="ph-r">
-      <button class="btn btn-gr btn-lg" onclick="openPedidoTypeChooser()">+ Novo Pedido</button>
+      ${isReadOnly()?`<span class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;background:rgba(245,158,11,.08);border:1px solid var(--am);color:var(--am);padding:7px 12px;border-radius:var(--r)">🔒 Modo Visualização ativo</span>`:`<button class="btn btn-gr btn-lg" onclick="openPedidoTypeChooser()">+ Novo Pedido</button>`}
     </div>
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
@@ -8149,6 +8229,7 @@ function addVariacao(){prodVarsBuf.push({nome:'',preco:'',custo:'',com_type:'pct
 function removeVariacao(i){prodVarsBuf.splice(i,1);renderProdVars()}
 
 function saveProduto(){
+  if(isReadOnly()){toast('🔒 Modo Visualização — edição bloqueada','err');return;}
   const nome=$('mp-nome').value.trim();
   if(!nome){toast('Nome obrigatório','err');return}
   const com=Number($('mp-com').value)||8;
@@ -8752,6 +8833,30 @@ function cfgDados(){
       </div>
     </div>
 
+    ${isDir()?`
+    <div class="cfg-h" style="margin-top:24px"><h2>Modo de Operação</h2><p>Quando a automação do fornecedor faz todo o trabalho, deixe o CRM em modo somente-leitura</p></div>
+    <div class="cfg-card" style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:flex-start;gap:14px">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600;color:var(--tx)">🔒 Modo Visualização</div>
+          <div class="muted" style="font-size:12.5px;margin-top:4px;line-height:1.5">
+            Bloqueia <b>criar</b>, <b>editar</b>, <b>arrastar</b> e <b>deletar</b> pra todos (exceto Diretor).
+            Os webhooks (PAYT + Fornecedor) <b>continuam funcionando normalmente</b> — só uso humano fica trancado.
+            Útil quando seu fornecedor controla o fluxo via automação.
+          </div>
+        </div>
+        <label class="acl-tog" style="margin-top:2px">
+          <input type="checkbox" ${DB.view_mode?'checked':''} onchange="toggleViewMode(this.checked)">
+          <span></span>
+        </label>
+      </div>
+      ${DB.view_mode?`<div style="background:rgba(245,158,11,.08);border:1px solid var(--am);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--am);display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">⚠</span>
+        <span>Modo Visualização <b>ATIVO</b> — botões de criação/edição estão escondidos pra outros perfis</span>
+      </div>`:''}
+    </div>
+    `:''}
+
     <div class="cfg-h" style="margin-top:24px"><h2>Backup</h2></div>
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:center;gap:14px">
@@ -8966,8 +9071,10 @@ function renderWebhookSim(){
   // Popula select de evento com TODOS os 13 eventos reais da PAYT
   $('wh-evt').innerHTML=PAYT_EVENTS.map(e=>`<option value="${e.k}">${e.l}</option>`).join('');
   renderPaytMapping();
+  renderFornMapping();
   renderWebhookLog('payt');
   renderWebhookLog('forn');
+  renderWebhookSimLog();
 }
 
 // Renderiza log de eventos recebidos pelo servidor (DB.wh_log_server)
@@ -9067,8 +9174,69 @@ function renderPaytMapping(){
     }).join('')}
   </div>`;
 }
-function renderWebhookLog(){
-  $('wh-log').innerHTML=DB.webhooks.length
+// Mapeamento dos eventos do Fornecedor (fallback pra payt_mapping se vazio)
+function renderFornMapping(){
+  const wrap=$('forn-mapping-grid');if(!wrap)return;
+  if(!DB.forn_mapping)DB.forn_mapping=JSON.parse(JSON.stringify(DB.payt_mapping||{}));
+  const using=DB.forn_mapping&&Object.keys(DB.forn_mapping).length?'forn_mapping':'payt_mapping (fallback)';
+  wrap.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 6px 10px;border-bottom:1px solid var(--b1);margin-bottom:8px">
+    <div style="font-size:11.5px;color:var(--t3)">Usando: <code style="background:var(--s4);padding:2px 6px;border-radius:3px;color:var(--cy)">${using}</code></div>
+    <button class="btn btn-gh btn-sm" onclick="resetFornMapping()" style="font-size:11px">↺ Copiar do PAYT</button>
+  </div>
+  <div class="payt-map-tbl">
+    <div class="payt-map-row payt-map-head">
+      <div>Evento</div>
+      <div>Etapa CRM destino</div>
+      <div>Status pagto</div>
+      <div>Ação extra</div>
+    </div>
+    ${PAYT_EVENTS.map(e=>{
+      const m=DB.forn_mapping[e.k]||{};
+      const isRastreio=e.k==='entrega_atualizada';
+      return `<div class="payt-map-row" title="${e.d}">
+        <div>
+          <div style="font-weight:600;color:var(--tx);font-size:13px">${e.l}</div>
+          <div style="font-family:monospace;font-size:11px;color:var(--t4)">${e.k}</div>
+        </div>
+        <div>
+          ${isRastreio?'<span class="muted" style="font-size:12px">só atualiza rastreio</span>':
+            `<select onchange="if(!DB.forn_mapping['${e.k}'])DB.forn_mapping['${e.k}']={};DB.forn_mapping['${e.k}'].etapa=this.value;persist()">
+              <option value="">— não mover —</option>
+              ${KB_COLS.map(c=>`<option value="${c.id}" ${m.etapa===c.id?'selected':''}>${c.id}</option>`).join('')}
+            </select>`}
+        </div>
+        <div>
+          ${isRastreio?'—':`<select onchange="if(!DB.forn_mapping['${e.k}'])DB.forn_mapping['${e.k}']={};DB.forn_mapping['${e.k}'].spg=this.value;persist()">
+            <option value="">—</option>
+            <option value="Pago" ${m.spg==='Pago'?'selected':''}>Pago</option>
+            <option value="Pendente" ${m.spg==='Pendente'?'selected':''}>Pendente</option>
+            <option value="Recusado" ${m.spg==='Recusado'?'selected':''}>Recusado</option>
+          </select>`}
+        </div>
+        <div>
+          <select onchange="if(!DB.forn_mapping['${e.k}'])DB.forn_mapping['${e.k}']={};DB.forn_mapping['${e.k}'].action=this.value;persist()">
+            <option value="mover" ${m.action==='mover'?'selected':''}>Mover etapa</option>
+            <option value="pagar" ${m.action==='pagar'?'selected':''}>Mover + criar venda</option>
+            <option value="tag" ${m.action==='tag'?'selected':''}>Mover + tag</option>
+            <option value="rastreio" ${m.action==='rastreio'?'selected':''}>Atualizar rastreio</option>
+            <option value="criar_lead" ${m.action==='criar_lead'?'selected':''}>Criar lead novo</option>
+          </select>
+          ${m.action==='tag'?`<input type="text" value="${m.tag||''}" placeholder="tag" onchange="if(!DB.forn_mapping['${e.k}'])DB.forn_mapping['${e.k}']={};DB.forn_mapping['${e.k}'].tag=this.value;persist()" style="margin-top:4px;background:var(--s4);border:1px solid var(--b2);color:var(--tx);font-size:11px;padding:4px 7px;border-radius:4px;font-family:inherit;width:100%">`:''}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+function resetFornMapping(){
+  if(!confirm('Copiar mapeamento atual do PAYT pro Fornecedor? (sobrescreve config atual)'))return;
+  DB.forn_mapping=JSON.parse(JSON.stringify(DB.payt_mapping||{}));
+  persist();renderFornMapping();toast('✓ Mapeamento copiado','ok');
+}
+
+// Log local de simulação manual (≠ renderWebhookLog que é o log do servidor)
+function renderWebhookSimLog(){
+  const el=$('wh-log');if(!el)return;
+  el.innerHTML=DB.webhooks.length
     ?DB.webhooks.slice(0,20).map(w=>`<div style="color:${w.ok?'var(--gr)':'var(--rd)'};margin-bottom:4px">
       [${w.ts}] <span style="color:var(--bl2)">${w.org}</span> → ${w.evt} ${w.lid?`(lead #${w.lid})`:''} ${w.ok?'✓':'✗'}
     </div>`).join('')
@@ -9141,7 +9309,7 @@ function simulateWebhook(){
   const result=processPaytEvent(lead,evt);
   DB.webhooks.unshift({ts:`${today()} ${nowTime()}`,org:'PAYT',evt,lid,ok:true});
   pushFeed(`⚡ PAYT: ${result.msg}`,result.color);
-  persist();renderWebhookLog();refreshUI();toast(result.msg,'ok');
+  persist();renderWebhookSimLog();refreshUI();toast(result.msg,'ok');
 }
 
 /* ═══════════════════════════════════════════════════════

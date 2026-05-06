@@ -522,9 +522,9 @@ async function handlePaytWebhook(req, env, urlToken) {
 }
 
 // ─── FORNECEDOR WEBHOOK ──────────────────────────────────────
-// Recebe leads enviados por fornecedor / plataforma de captação.
+// Recebe eventos de fornecedor / plataforma de captação (criação E status).
 // URL: /webhook/fornecedor/<chave>
-// Aceita payload flexível com várias variações de nome de campo.
+// Aceita payload flexível: formato PAYT-like (event + order.*) ou raiz achatada.
 async function handleFornecedorWebhook(req, env, urlToken) {
   const expected = (env && env.FORN_TOKEN) || FORN_TOKEN_DEFAULT;
   if (urlToken !== expected) {
@@ -535,7 +535,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   try { body = await req.json(); }
   catch (e) { return json({ error: 'payload JSON inválido' }, 400); }
 
-  // Aceita raiz E formato aninhado (body.order.*, body.address.*, body.customer.*)
+  // ── Extração flexível: raiz E aninhado (body.order.*, body.address.*, body.customer.*) ──
   const o = body.order || body.pedido || {};
   const a = (body.address || body.endereco || o.address || o.endereco || {});
   const c = (body.customer || body.cliente || o.customer || o.cliente || {});
@@ -547,14 +547,13 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     return '';
   };
 
-  // Extração flexível — tenta vários nomes (PT-BR + EN, raiz + aninhado)
   const lead_data = {
     nome:      String(pick(body.nome, body.name, body.client_name, body.cliente, body.customer_name,
                            o.client_name, o.customer_name, o.name, o.nome, c.name, c.nome) || ''),
     cpf:       String(pick(body.cpf, body.document, body.documento, o.cpf, o.document, c.cpf, c.document) || ''),
     telefone:  String(pick(body.telefone, body.phone, body.whatsapp, body.celular, body.wa, body.client_whatsapp,
                            o.client_whatsapp, o.whatsapp, o.phone, o.telefone, c.phone, c.whatsapp) || ''),
-    email:     String(pick(body.email, body.e_mail, o.email, c.email) || ''),
+    email:     String(pick(body.email, body.e_mail, body.client_email, o.client_email, o.email, c.email) || ''),
     cep:       String(pick(body.cep, body.zipcode, body.zip, a.cep, a.zipcode, a.zip, a.postal_code) || ''),
     endereco:  String(pick(body.endereco, body.address, body.end, body.rua, body.street,
                            a.street, a.rua, a.endereco, a.address) || ''),
@@ -564,11 +563,11 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     cidade:    String(pick(body.cidade, body.city, a.city, a.cidade) || ''),
     uf:        String(pick(body.uf, body.state, body.estado, a.state, a.uf, a.estado) || ''),
     produto:   String(pick(body.produto, body.product, body.item, body.brand,
-                           o.product, o.produto, o.brand, o.item) || ''),
+                           o.product, o.produto, o.brand, o.item, body?.treatment?.name, o?.treatment?.name) || ''),
     valor:     Number(pick(body.valor, body.amount, body.preco, body.price, body.total,
                            o.total_amount, o.amount, o.valor, o.total, o.price) || 0),
     modalidade:String(pick(body.modalidade, body.mod, body.tipo, body.payment_modality,
-                           o.payment_modality, o.modalidade, o.modality) || 'antecipado'),
+                           o.payment_modality, o.modalidade, o.modality) || ''),
     origem:    String(pick(body.origem, body.fonte, body.source, body.platform,
                            o.source, o.platform, o.origem) || 'Fornecedor'),
     obs:       String(pick(body.obs, body.notes, body.observacao, body.comment,
@@ -577,20 +576,23 @@ async function handleFornecedorWebhook(req, env, urlToken) {
                              o.id, o.order_id, o.external_id) || ''),
     track:     String(pick(body.track, body.tracking, body.tracking_code,
                            o.tracking_code, o.tracking) || ''),
+    payment_method: String(pick(body.payment_method, body.metodo_pagamento,
+                                o.payment_method, o.metodo_pagamento) || ''),
   };
 
-  if (!lead_data.nome) {
-    return json({
-      error: 'campo "nome" (ou "name" / "client_name") obrigatório',
-      hint: 'aceito: nome, name, client_name, cliente, customer_name — na raiz ou em order.*'
-    }, 400);
-  }
+  // ── Detecta evento (mesma lógica do PAYT) ──
+  const eventRaw = String(pick(body.event, body.evento, body.tipo, body.type) || '').toLowerCase();
+  const status = String(pick(body.status, o.status) || '').toLowerCase();
+  const event = mapPaytEvent(eventRaw, status, lead_data.modalidade);
+  const isCOD = lead_data.modalidade && (
+    lead_data.modalidade.toLowerCase().includes('on_delivery') ||
+    lead_data.modalidade.toLowerCase().includes('cod') ||
+    lead_data.modalidade.toLowerCase().includes('apos_receber') ||
+    lead_data.modalidade.toLowerCase().includes('entrega')
+  );
+  const mod = isCOD ? 'entrega' : 'antecipado';
 
-  // Normaliza modalidade
-  const modNorm = String(lead_data.modalidade).toLowerCase();
-  const mod = (modNorm === 'entrega' || modNorm === 'cod' || modNorm === 'pague_apos_receber') ? 'entrega' : 'antecipado';
-
-  // Carrega state
+  // ── Carrega state ──
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   let state = {};
   let curVer = 0;
@@ -602,68 +604,146 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   state.wh_log_server = state.wh_log_server || [];
   state.nextLead = state.nextLead || 1;
 
-  // Idempotência: se external_id já existe, não duplica
+  // Mapping: usa forn_mapping; se vazio, fallback pro payt_mapping
+  const forn_map = state.forn_mapping || state.payt_mapping || {};
+  const mapping = forn_map[event];
+
+  // ── Busca lead existente (external_id > CPF > WA > email) ──
+  let lead = null;
   if (lead_data.external_id) {
-    const dup = state.leads.find(l => l.external_id === lead_data.external_id);
-    if (dup) {
-      return json({ ok: true, action: 'skipped_duplicate', lead_id: dup.id });
-    }
+    lead = state.leads.find(l => l.external_id === lead_data.external_id) || null;
+  }
+  if (!lead) {
+    lead = findLead(state.leads, { cpf: lead_data.cpf, phone: lead_data.telefone, email: lead_data.email });
   }
 
-  // Cria o lead
-  const newLead = {
-    id: state.nextLead++,
-    external_id: lead_data.external_id || '',
-    nome: lead_data.nome,
-    cpf: lead_data.cpf,
-    wa: lead_data.telefone,
-    email: lead_data.email,
-    cep: lead_data.cep,
-    end: lead_data.endereco,
-    num: lead_data.numero,
-    comp: lead_data.complemento,
-    bairro: lead_data.bairro,
-    cidade: lead_data.cidade,
-    uf: lead_data.uf,
-    data: todayBR(),
-    orig: lead_data.origem,
-    prod: lead_data.produto,
-    trat: '',
-    vl: lead_data.valor,
-    com_pct: 12,
-    track: lead_data.track,
-    pgto: '',
-    spg: 'Pendente',
-    mod: mod,
-    at: null,
-    col: 'A Enviar',
-    obs: lead_data.obs,
-    link: '',
-    tags: ['fornecedor'],
-    fu: null,
-    hist: [{
-      from: '—',
-      to: 'A Enviar',
+  let action_taken = '';
+  let lead_id_result = null;
+
+  if (lead) {
+    // ── Atualiza lead existente: aplica mapping + dados novos ──
+    const prev = lead.col;
+    if (mapping?.etapa) lead.col = mapping.etapa;
+    if (mapping?.spg) lead.spg = mapping.spg;
+    if (mapping?.action === 'tag' && mapping.tag) {
+      lead.tags = Array.isArray(lead.tags) ? lead.tags : [];
+      if (!lead.tags.includes(mapping.tag)) lead.tags.push(mapping.tag);
+    }
+    if (lead_data.track && !lead.track) lead.track = lead_data.track;
+    if (lead_data.payment_method && !lead.pgto) lead.pgto = lead_data.payment_method;
+    if (lead_data.valor && !lead.vl) lead.vl = lead_data.valor;
+    // Garante external_id pra próximas chamadas
+    if (lead_data.external_id && !lead.external_id) lead.external_id = lead_data.external_id;
+
+    lead.hist = Array.isArray(lead.hist) ? lead.hist : [];
+    lead.hist.push({
+      from: prev,
+      to: lead.col,
       who: 'fornecedor',
       time: `${todayBR()} ${nowTimeBR()}`,
-      note: `Lead recebido de ${lead_data.origem}`,
-    }],
-    comments: [],
-  };
-  state.leads.unshift(newLead);
+      note: `Fornecedor: ${eventRaw || event} (${status || '-'})`,
+    });
 
-  // Log
+    // Se ação for 'pagar', registra venda
+    if (mapping?.action === 'pagar') {
+      state.vendas = state.vendas || [];
+      const alreadyHas = state.vendas.some(v => v.leadId === lead.id);
+      if (!alreadyHas && lead.vl) {
+        const com_pct = Number(lead.com_pct) || 12;
+        const comiss = lead.vl * com_pct / 100;
+        state.vendas.unshift({
+          id: Date.now(),
+          leadId: lead.id,
+          nome: lead.nome,
+          prod: lead.prod,
+          vl: lead.vl,
+          custo: lead.vl * 0.45,
+          com_pct,
+          comiss,
+          lucro: lead.vl - lead.vl * 0.45 - comiss,
+          at: lead.at,
+          data: todayBR(),
+          logStatus: 'Comprado',
+        });
+      }
+    }
+    action_taken = 'updated';
+    lead_id_result = lead.id;
+  } else if (
+    !event ||
+    event === 'unknown' ||
+    mapping ||
+    ['aguardando_pagamento','aguardando_confirmacao','finalizada'].includes(event) ||
+    eventRaw === 'new_order' || eventRaw === 'novo_pedido' || eventRaw === 'novo_lead'
+  ) {
+    // ── Cria lead novo se for evento de pedido novo ou sem evento (compat antigo) ──
+    if (!lead_data.nome) {
+      return json({
+        error: 'lead novo precisa de "nome" (ou "name" / "client_name")',
+        hint: 'aceito: nome, name, client_name, cliente, customer_name — na raiz ou em order.*'
+      }, 400);
+    }
+    const newLead = {
+      id: state.nextLead++,
+      external_id: lead_data.external_id || '',
+      nome: lead_data.nome,
+      cpf: lead_data.cpf,
+      wa: lead_data.telefone,
+      email: lead_data.email,
+      cep: lead_data.cep,
+      end: lead_data.endereco,
+      num: lead_data.numero,
+      comp: lead_data.complemento,
+      bairro: lead_data.bairro,
+      cidade: lead_data.cidade,
+      uf: lead_data.uf,
+      data: todayBR(),
+      orig: lead_data.origem,
+      prod: lead_data.produto,
+      trat: lead_data.produto,
+      vl: lead_data.valor,
+      com_pct: 12,
+      track: lead_data.track,
+      pgto: lead_data.payment_method,
+      spg: mapping?.spg || (isCOD ? 'Pendente' : 'Pendente'),
+      mod: mod,
+      at: null,
+      col: mapping?.etapa || 'A Enviar',
+      obs: lead_data.obs || (lead_data.external_id ? `Pedido fornecedor ${lead_data.external_id}` : ''),
+      link: '',
+      tags: mapping?.action === 'tag' && mapping.tag ? [mapping.tag, 'fornecedor'] : ['fornecedor'],
+      fu: null,
+      hist: [{
+        from: '—',
+        to: mapping?.etapa || 'A Enviar',
+        who: 'fornecedor',
+        time: `${todayBR()} ${nowTimeBR()}`,
+        note: `Lead criado via fornecedor: ${eventRaw || 'novo_lead'} (${status || '-'})`,
+      }],
+      comments: [],
+    };
+    state.leads.unshift(newLead);
+    action_taken = 'created';
+    lead_id_result = newLead.id;
+  } else {
+    action_taken = 'skipped';
+  }
+
+  // ── Log ──
   state.wh_log_server.unshift({
     ts: Math.floor(Date.now() / 1000),
     org: 'Fornecedor',
-    evt: 'novo_lead',
-    lid: newLead.id,
-    action: 'created',
+    evt: event || eventRaw || 'novo_lead',
+    evt_raw: eventRaw,
+    status: status,
+    lid: lead_id_result,
+    action: action_taken,
+    order_id: lead_data.external_id || '',
     origem: lead_data.origem,
   });
   state.wh_log_server = state.wh_log_server.slice(0, 100);
 
-  // Persiste
+  // ── Persiste ──
   const newVer = curVer + 1;
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
@@ -674,9 +754,11 @@ async function handleFornecedorWebhook(req, env, urlToken) {
 
   return json({
     ok: true,
-    action: 'created',
-    lead_id: newLead.id,
-    nome: newLead.nome,
+    event_raw: eventRaw,
+    event_mapped: event,
+    status: status,
+    action: action_taken,
+    lead_id: lead_id_result,
   });
 }
 
