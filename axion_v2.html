@@ -2198,13 +2198,21 @@ h1 em{font-weight:700}
         <p class="muted" style="font-size:12.5px;margin-bottom:11px">Configure para qual etapa do CRM cada evento da PAYT deve mover o lead. Salvo automaticamente.</p>
         <div id="payt-mapping-list"></div>
 
-        <div class="section-title">3. Simular evento PAYT</div>
+        <div class="section-title">3. Simular evento PAYT (teste local)</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Roda só na sua Dash, sem mandar pro servidor. Útil pra testar o mapeamento de etapas.</p>
         <div class="fg fg2">
           <div class="field"><label>Lead</label><select id="wh-lead"></select></div>
           <div class="field"><label>Evento PAYT</label><select id="wh-evt"></select></div>
         </div>
         <div class="row" style="justify-content:flex-end">
           <button class="btn btn-bl" onclick="simulateWebhook()">⚡ Disparar evento</button>
+        </div>
+
+        <div class="section-title" style="margin-top:18px">4. Últimos eventos recebidos do servidor</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Quando a PAYT (ou qualquer integração) bate na URL acima, registramos aqui. Útil pra confirmar que o teste chegou.</p>
+        <div id="wh-server-log" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);max-height:240px;overflow-y:auto"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog()">🔄 Atualizar do servidor</button>
         </div>
       </div>
 
@@ -8951,6 +8959,49 @@ function renderWebhookSim(){
   // Popula select de evento com TODOS os 13 eventos reais da PAYT
   $('wh-evt').innerHTML=PAYT_EVENTS.map(e=>`<option value="${e.k}">${e.l}</option>`).join('');
   renderPaytMapping();
+  renderWebhookLog();
+}
+
+// Renderiza log de eventos recebidos pelo servidor (DB.wh_log_server)
+function renderWebhookLog(){
+  const wrap=$('wh-server-log');if(!wrap)return;
+  const log=DB.wh_log_server||[];
+  if(!log.length){
+    wrap.innerHTML=`<div class="muted" style="text-align:center;padding:24px;font-size:12.5px">
+      Nenhum evento recebido ainda.<br>
+      <span style="font-size:11px;opacity:.7">Mande um teste pela PAYT ou via curl pra ver chegando aqui.</span>
+    </div>`;
+    return;
+  }
+  wrap.innerHTML=log.slice(0,30).map(e=>{
+    const dt=new Date((e.ts||0)*1000);
+    const time=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+    const orgColor=e.org==='PAYT'?'var(--gr)':e.org==='Fornecedor'?'var(--am)':'var(--bl2)';
+    const actColor=e.action==='created'?'var(--gr)':e.action==='updated'?'var(--bl2)':e.action==='skipped_duplicate'?'var(--am)':'var(--t3)';
+    const lead=e.lid?DB.leads.find(l=>l.id===e.lid):null;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--b1);font-size:12px">
+      <span style="color:var(--t4);font-family:ui-monospace,monospace;font-size:10.5px;flex:none">${time}</span>
+      <span style="color:${orgColor};font-weight:600;font-size:11px;background:${e.org==='PAYT'?'rgba(16,185,129,.12)':e.org==='Fornecedor'?'rgba(245,158,11,.12)':'rgba(59,130,246,.12)'};padding:2px 7px;border-radius:4px">${e.org||'?'}</span>
+      <span style="color:var(--tx);font-family:ui-monospace,monospace;font-size:11px">${e.evt||'?'}</span>
+      <span style="color:${actColor};font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">${e.action||''}</span>
+      ${lead?`<a onclick="closeM('m-wh');openLeadDetail(${lead.id})" style="margin-left:auto;color:var(--bl);cursor:pointer;font-size:11.5px">${lead.nome} →</a>`:''}
+    </div>`;
+  }).join('');
+}
+
+// Força um pull do estado do servidor pra atualizar o log local
+async function refreshWebhookLog(){
+  const btn=$('wh-server-log');
+  if(btn)btn.style.opacity='.5';
+  try{
+    if(apiEnabled()&&apiToken()){
+      await syncFromServer();
+      toast('✓ Atualizado','ok');
+    } else {
+      toast('Backend não configurado','err');
+    }
+  }catch(e){toast('Erro: '+e.message,'err')}
+  if(btn)btn.style.opacity='';
   renderWebhookLog();
 }
 
