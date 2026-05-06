@@ -3539,9 +3539,12 @@ function goPage(id){
       tg.title='Criar e gerenciar tags';tg.onclick=()=>openTagsManager();
       tr.appendChild(tg);
     }
+    // CRM agora usa o mesmo botão verde "Novo Pedido" da página Pedidos —
+    // a maior parte dos cadastros do CRM já é pedido (COD ou antecipado),
+    // então faz mais sentido entrar pelo fluxo completo.
     const b=document.createElement('button');
-    b.className='btn btn-bl btn-sm';b.textContent='+ Novo Lead';
-    b.onclick=()=>openM('m-lead-new');tr.appendChild(b);
+    b.className='btn btn-gr btn-sm';b.textContent='+ Novo Pedido';
+    b.onclick=()=>openPedidoTypeChooser();tr.appendChild(b);
   }
   if(id==='contingencia'){
     const b=document.createElement('button');
