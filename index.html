@@ -1497,16 +1497,12 @@ h1 em{font-weight:700}
           </div>
         </div>
 
-        <!-- ─── Coluna 3: Agendamento + Comentários ─── -->
+        <!-- ─── Coluna 3: Comentários ─── -->
         <div class="lead-col">
 
-          <div class="info-section">
-            <div class="info-title">Agendamento</div>
-            <div class="info-row"><span class="info-ic">📅</span><div class="info-c">
-              <div class="info-lbl">Data / hora</div>
-              <input class="info-val" id="mld-agend" type="datetime-local">
-            </div></div>
-          </div>
+          <!-- Agendamento mantido como input hidden (tags de sistema dependem
+               do campo agend pra detectar 'agendamento_vencido') -->
+          <input type="hidden" id="mld-agend">
 
           <div class="info-section">
             <div class="info-title">Comentários & Anexos <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
