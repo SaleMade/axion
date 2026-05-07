@@ -1013,6 +1013,9 @@ h1 em{font-weight:700}
   font-size:12px;padding:6px 8px;border-radius:5px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
 @media(max-width:900px){.payt-map-row{grid-template-columns:1fr}}
 
+/* details > summary do modal de webhooks (esconde marker default + rotaciona seta) */
+#m-wh details > summary::-webkit-details-marker{display:none}
+#m-wh details[open] > summary > span:first-child{transform:rotate(90deg)}
 /* ─── Webhooks Modal — acordeão + regras ──────────── */
 .wh-tab.on{background:var(--bld);color:var(--bl2);border-color:var(--bl)}
 /* Quando aberto isolado (via switchWhTab), o item se comporta como página dedicada:
@@ -2248,22 +2251,42 @@ h1 em{font-weight:700}
           <button class="btn-act btn-act-gh btn-act-icon" onclick="navigator.clipboard.writeText($('wh-url-fornecedor').textContent);toast('URL copiada','ok')" title="Copiar URL">📋</button>
         </div>
 
-        <div class="section-title" style="margin-top:14px">Eventos suportados (criação + status)</div>
-        <p class="muted" style="font-size:12px;margin-bottom:8px">O fornecedor pode enviar tanto criação de pedido quanto atualizações de status. Cada evento move o lead automaticamente conforme o mapeamento abaixo.</p>
-        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">new_order</span><span>Pedido criado → cria lead em <b>A Enviar</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--amd);color:var(--am)">status: pending</span><span>Aguardando pagamento → spg <b>Pendente</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">status: confirmed</span><span>Pago / confirmado → spg <b>Pago</b> ou <b>Aguardando confirmação</b> (se COD)</span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">tracking_created</span><span>Rastreio gerado → atualiza campo <b>Cód. rastreio</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">shipped</span><span>Enviado → coluna <b>Enviado</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--pud);color:var(--pu)">out_for_delivery</span><span>Saiu pra entrega → tag <b>entrega-hoje</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">delivered</span><span>Entregue → coluna <b>Retirada</b> / <b>Pago</b></span></div>
-          <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--rdd);color:var(--rd)">canceled / refunded / chargeback</span><span>Devoluções → coluna <b>Cancelado</b></span></div>
+        <!-- ⬇ Operacional no topo: log de eventos + mapeamento (mexe no dia-a-dia) -->
+        <div class="section-title" style="margin-top:14px">Últimos leads recebidos do fornecedor</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Cada chamada na URL acima registra aqui pra auditoria.</p>
+        <div id="wh-server-log-forn" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);max-height:240px;overflow-y:auto"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('forn')">🔄 Atualizar do servidor</button>
         </div>
 
-        <div class="section-title" style="margin-top:14px">Como o fornecedor envia (POST JSON)</div>
-        <p class="muted" style="font-size:12px;margin-bottom:8px"><b>Aceita 2 formatos:</b> achatado (raiz) ou aninhado (estilo PAYT, com <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">order</code> e <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">address</code>). Use o que for mais conveniente pro fornecedor.</p>
-        <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--t2);line-height:1.6;overflow-x:auto">
+        <div class="section-title" style="margin-top:18px">Mapeamento dos eventos (Fornecedor)</div>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Configure o que cada evento faz no CRM. Por padrão usa o mesmo mapeamento da PAYT — você pode customizar separado aqui.</p>
+        <div id="forn-mapping-grid" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:9px;max-height:340px;overflow-y:auto"></div>
+
+        <!-- ⬇ Documentação técnica embaixo: serve pra consulta, não pro dia-a-dia -->
+        <details style="margin-top:18px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl)">
+          <summary style="cursor:pointer;padding:11px 14px;font-size:13px;font-weight:600;color:var(--t2);user-select:none;display:flex;align-items:center;gap:8px;list-style:none">
+            <span style="color:var(--t4);font-size:11px;transition:transform .2s">▶</span>
+            📖 Documentação técnica · eventos, payload, resposta da API
+          </summary>
+          <div style="padding:0 14px 14px 14px;border-top:1px solid var(--b1)">
+
+            <div class="section-title" style="margin-top:14px">Eventos suportados (criação + status)</div>
+            <p class="muted" style="font-size:12px;margin-bottom:8px">O fornecedor pode enviar tanto criação de pedido quanto atualizações de status. Cada evento move o lead automaticamente conforme o mapeamento acima.</p>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">new_order</span><span>Pedido criado → cria lead em <b>A Enviar</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--amd);color:var(--am)">status: pending</span><span>Aguardando pagamento → spg <b>Pendente</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">status: confirmed</span><span>Pago / confirmado → spg <b>Pago</b> ou <b>Aguardando confirmação</b> (se COD)</span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">tracking_created</span><span>Rastreio gerado → atualiza campo <b>Cód. rastreio</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--bld);color:var(--bl2)">shipped</span><span>Enviado → coluna <b>Enviado</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--pud);color:var(--pu)">out_for_delivery</span><span>Saiu pra entrega → tag <b>entrega-hoje</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--grd);color:var(--gr)">delivered</span><span>Entregue → coluna <b>Retirada</b> / <b>Pago</b></span></div>
+              <div class="wh-evt-row"><span class="wh-evt-tag" style="background:var(--rdd);color:var(--rd)">canceled / refunded / chargeback</span><span>Devoluções → coluna <b>Cancelado</b></span></div>
+            </div>
+
+            <div class="section-title" style="margin-top:14px">Como o fornecedor envia (POST JSON)</div>
+            <p class="muted" style="font-size:12px;margin-bottom:8px"><b>Aceita 2 formatos:</b> achatado (raiz) ou aninhado (estilo PAYT, com <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">order</code> e <code style="background:var(--s3);padding:1px 4px;border-radius:3px;color:var(--cy);font-size:10.5px">address</code>).</p>
+            <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--t2);line-height:1.6;overflow-x:auto">
 <pre style="margin:0"><span style="color:var(--am)">// Formato aninhado (PAYT-like) — recomendado:</span>
 {
   "event": "new_order",                 <span style="color:var(--t4)">// ou status_update, shipped, delivered, etc</span>
@@ -2294,11 +2317,11 @@ h1 em{font-weight:700}
   "telefone": "11999998888", "valor": 397.00,
   "modalidade": "antecipado", "produto": "Produto X"
 }</pre>
-        </div>
+            </div>
 
-        <div class="section-title" style="margin-top:14px">Resposta da API</div>
-        <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--gr);line-height:1.5">
-          <pre style="margin:0">{
+            <div class="section-title" style="margin-top:14px">Resposta da API</div>
+            <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;font-family:ui-monospace,monospace;font-size:11px;color:var(--gr);line-height:1.5">
+              <pre style="margin:0">{
   "ok": true,
   "event_raw": "new_order",
   "event_mapped": "aguardando_confirmacao",
@@ -2306,23 +2329,15 @@ h1 em{font-weight:700}
   "action": "created",  <span style="color:var(--t4)">// ou "updated" / "skipped"</span>
   "lead_id": 42
 }</pre>
-        </div>
+            </div>
 
-        <div class="section-title" style="margin-top:14px">Mapeamento dos eventos (Fornecedor)</div>
-        <p class="muted" style="font-size:12px;margin-bottom:8px">Configure o que cada evento faz no CRM. Por padrão usa o mesmo mapeamento da PAYT — você pode customizar separado aqui.</p>
-        <div id="forn-mapping-grid" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:9px;max-height:340px;overflow-y:auto"></div>
+            <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:10px 13px;margin-top:14px;font-size:12.5px;color:var(--t2);line-height:1.55">
+              <b style="color:var(--bl2)">💡 Dica de segurança:</b> a chave da URL é como uma senha — só compartilhe com o fornecedor de confiança.
+              Se vazar, você pode trocar editando <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy);font-size:11px">FORN_TOKEN_DEFAULT</code> em <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy);font-size:11px">backend/worker.js</code> e fazendo deploy de novo.
+            </div>
 
-        <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:10px 13px;margin-top:14px;font-size:12.5px;color:var(--t2);line-height:1.55">
-          <b style="color:var(--bl2)">💡 Dica de segurança:</b> a chave da URL é como uma senha — só compartilhe com o fornecedor de confiança.
-          Se vazar, você pode trocar editando <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy);font-size:11px">FORN_TOKEN_DEFAULT</code> em <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy);font-size:11px">backend/worker.js</code> e fazendo deploy de novo.
-        </div>
-
-        <div class="section-title" style="margin-top:18px">Últimos leads recebidos do fornecedor</div>
-        <p class="muted" style="font-size:12px;margin-bottom:8px">Cada chamada na URL acima registra aqui pra auditoria.</p>
-        <div id="wh-server-log-forn" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);max-height:240px;overflow-y:auto"></div>
-        <div style="display:flex;justify-content:flex-end;margin-top:6px">
-          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('forn')">🔄 Atualizar do servidor</button>
-        </div>
+          </div>
+        </details>
       </div>
       </div>
 
