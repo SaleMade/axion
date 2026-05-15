@@ -1050,6 +1050,24 @@ h1 em{font-weight:700}
 .prod-card{background:linear-gradient(180deg,var(--s2),var(--s1));border:1px solid var(--b1);
   border-radius:var(--rl);padding:18px 20px;position:relative;cursor:pointer;
   transition:all .18s;overflow:hidden}
+/* Uploader de imagem do produto (modal de cadastro) */
+.prod-img-uploader{width:96px;height:96px;border-radius:var(--rl);
+  background:var(--s3);border:1.5px dashed var(--b2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  overflow:hidden;transition:all .15s;position:relative}
+.prod-img-uploader:hover{border-color:var(--bl);background:var(--s4)}
+.prod-img-uploader img{width:100%;height:100%;object-fit:cover;display:block}
+.prod-img-placeholder{font-size:22px;text-align:center;color:var(--t4);line-height:1.3}
+/* Thumb da imagem do produto no card da lista */
+.prod-thumb{width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0;
+  background:var(--s3);border:1px solid var(--b1)}
+/* Uploader pequeno na variação */
+.prod-var-img{width:38px;height:38px;border-radius:6px;background:var(--s3);
+  border:1px dashed var(--b2);cursor:pointer;display:flex;align-items:center;
+  justify-content:center;flex-shrink:0;overflow:hidden;transition:all .15s;
+  font-size:14px;color:var(--t4)}
+.prod-var-img:hover{border-color:var(--bl);color:var(--bl2)}
+.prod-var-img img{width:100%;height:100%;object-fit:cover;display:block}
 .prod-card:hover{border-color:var(--b3);transform:translateY(-2px);box-shadow:var(--sh1)}
 .prod-bar{position:absolute;top:0;left:0;right:0;height:3px}
 .prod-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
@@ -2128,6 +2146,20 @@ h1 em{font-weight:700}
       </div>
     </div>
     <div class="m-b">
+      <!-- Imagem do produto -->
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px">
+        <div id="mp-img-preview" class="prod-img-uploader" onclick="$('mp-img-input').click()" title="Clique pra adicionar/trocar a imagem do produto">
+          <div class="prod-img-placeholder">📷<br><span style="font-size:10.5px">Adicionar imagem</span></div>
+        </div>
+        <input type="file" id="mp-img-input" accept="image/*" style="display:none" onchange="onProdImageSelected(event)">
+        <div style="flex:1;font-size:11.5px;color:var(--t3);line-height:1.5">
+          <b style="color:var(--t2)">Imagem do produto</b><br>
+          PNG ou JPG. Aparece nos cards e seletores.<br>
+          <span style="color:var(--t4)">Recomendado: quadrada · 400×400px ou maior</span>
+          <button id="mp-img-remove" onclick="event.stopPropagation();clearProdImage()"
+            style="display:none;margin-top:6px;background:transparent;border:1px solid var(--rd);color:var(--rd);font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:inherit">× Remover imagem</button>
+        </div>
+      </div>
       <div class="fg fg2">
         <div class="field"><label>Nome do produto</label><input id="mp-nome" placeholder="Ex: Suplemento XYZ"></div>
         <div class="field"><label>Comissão padrão (%)</label><input id="mp-com" type="number" step="0.5" value="8"></div>
@@ -8339,8 +8371,13 @@ function renderProdutos(){
       const cor=p.cor||'#3b82f6';
       return `<div class="prod-card" onclick="openProdEdit(${p.id})">
         <div class="prod-bar" style="background:${cor}"></div>
-        <div class="prod-h">
-          <div class="prod-nm">${p.nome}</div>
+        <div class="prod-h" style="gap:11px">
+          ${p.img
+            ?`<img src="${p.img}" alt="" class="prod-thumb">`
+            :`<div class="prod-thumb" style="display:flex;align-items:center;justify-content:center;color:var(--t4);font-size:14px">📦</div>`}
+          <div style="flex:1;min-width:0">
+            <div class="prod-nm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.nome}</div>
+          </div>
           <span class="prod-st ${p.ativo!==false?'on':'off'}">${p.ativo!==false?'Ativo':'Inativo'}</span>
         </div>
         <div class="prod-com">Comissão: <b>${p.com_pct||8}%</b> · Cor: <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${cor};vertical-align:middle"></span></div>
@@ -8348,7 +8385,8 @@ function renderProdutos(){
           ${(p.variacoes||[]).map(v=>{
             const isAfi=(p.mode||'afiliado')==='afiliado';
             return `<div class="prod-var">
-              <span class="prod-var-nm">${v.nome}</span>
+              ${v.img?`<img src="${v.img}" alt="" style="width:28px;height:28px;border-radius:5px;object-fit:cover;flex-shrink:0">`:''}
+              <span class="prod-var-nm" style="flex:1">${v.nome}</span>
               <div>
                 <span class="prod-var-pr">${fmt(v.preco)}</span>
                 ${isAfi?'':`<span class="prod-var-cu">custo ${fmt(v.custo)}</span>`}
@@ -8378,12 +8416,17 @@ function setProdMode(m){
   renderProdVars();
 }
 
+// Buffer pra imagem do produto sendo editado (base64 dataURL)
+let prodImgBuf='';
+
 function openProdNew(){
   editingProdId=null;
   $('mp-title').textContent='+ Novo Produto';
   $('mp-nome').value='';$('mp-com').value=8;
   $('mp-del').style.display='none';
-  prodVarsBuf=[{nome:'1 Mês',preco:'',custo:''}];
+  prodVarsBuf=[{nome:'1 Mês',preco:'',custo:'',img:''}];
+  prodImgBuf='';
+  renderProdImgPreview();
   setProdMode('afiliado');
   renderAfiList();
   openM('m-prod');
@@ -8397,9 +8440,88 @@ function openProdEdit(id){
   $('mp-com').value=p.com_pct||8;
   $('mp-del').style.display=isDir()?'':'none';
   prodVarsBuf=JSON.parse(JSON.stringify(p.variacoes||[]));
+  // Garante que cada variação tenha campo img (compat com produtos antigos)
+  prodVarsBuf.forEach(v=>{if(v.img===undefined)v.img=''});
+  prodImgBuf=p.img||'';
+  renderProdImgPreview();
   setProdMode(p.mode||'afiliado');
   renderAfiList();
   openM('m-prod');
+}
+
+// Renderiza o preview da imagem do produto no uploader
+function renderProdImgPreview(){
+  const wrap=$('mp-img-preview');const rm=$('mp-img-remove');
+  if(!wrap)return;
+  if(prodImgBuf){
+    wrap.innerHTML=`<img src="${prodImgBuf}" alt="">`;
+    if(rm)rm.style.display='';
+  } else {
+    wrap.innerHTML=`<div class="prod-img-placeholder">📷<br><span style="font-size:10.5px">Adicionar imagem</span></div>`;
+    if(rm)rm.style.display='none';
+  }
+}
+
+// Handler do <input type="file"> da imagem do produto
+function onProdImageSelected(ev){
+  const file=ev.target.files&&ev.target.files[0];if(!file)return;
+  if(!file.type.startsWith('image/')){toast('Selecione um arquivo de imagem','err');return;}
+  if(file.size>2*1024*1024){toast('Imagem muito grande (máx 2MB)','err');return;}
+  // Redimensiona pra max 600px (poupar localStorage/banco)
+  resizeImageToDataURL(file,600).then(dataUrl=>{
+    prodImgBuf=dataUrl;
+    renderProdImgPreview();
+  }).catch(e=>toast('Erro: '+e.message,'err'));
+  ev.target.value=''; // permite re-selecionar mesmo arquivo
+}
+
+function clearProdImage(){
+  prodImgBuf='';
+  renderProdImgPreview();
+}
+
+// Redimensiona uma File pra max W/H mantendo proporção, retorna base64 JPEG
+function resizeImageToDataURL(file,maxSize){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        let w=img.width,h=img.height;
+        if(w>maxSize||h>maxSize){
+          if(w>h){h=Math.round(h*maxSize/w);w=maxSize;}
+          else{w=Math.round(w*maxSize/h);h=maxSize;}
+        }
+        const cv=document.createElement('canvas');
+        cv.width=w;cv.height=h;
+        const ctx=cv.getContext('2d');
+        ctx.drawImage(img,0,0,w,h);
+        resolve(cv.toDataURL('image/jpeg',0.82));
+      };
+      img.onerror=()=>reject(new Error('imagem inválida'));
+      img.src=ev.target.result;
+    };
+    reader.onerror=()=>reject(new Error('falha ao ler arquivo'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Handler do <input type="file"> da imagem da variação
+function onVarImageSelected(idx,ev){
+  const file=ev.target.files&&ev.target.files[0];if(!file)return;
+  if(!file.type.startsWith('image/')){toast('Selecione um arquivo de imagem','err');return;}
+  if(file.size>2*1024*1024){toast('Imagem muito grande (máx 2MB)','err');return;}
+  resizeImageToDataURL(file,400).then(dataUrl=>{
+    if(prodVarsBuf[idx]){
+      prodVarsBuf[idx].img=dataUrl;
+      renderProdVars();
+    }
+  }).catch(e=>toast('Erro: '+e.message,'err'));
+  ev.target.value='';
+}
+
+function clearVarImage(idx){
+  if(prodVarsBuf[idx]){prodVarsBuf[idx].img='';renderProdVars();}
 }
 
 function renderAfiList(){
@@ -8457,8 +8579,14 @@ function renderProdVars(){
   const isAfi=prodModeBuf==='afiliado';
   $('mp-vars').innerHTML=prodVarsBuf.map((v,i)=>{
     const ct=v.com_type||'pct';
+    // Thumb da variação — clica pra trocar, x pra remover
+    const varImgHTML=v.img
+      ? `<label class="prod-var-img" title="Trocar imagem"><img src="${v.img}" alt=""><input type="file" accept="image/*" style="display:none" onchange="onVarImageSelected(${i},event)"></label>
+         <button type="button" onclick="event.stopPropagation();clearVarImage(${i})" style="background:transparent;border:none;color:var(--rd);cursor:pointer;font-size:13px;padding:0 4px" title="Remover imagem">×</button>`
+      : `<label class="prod-var-img" title="Adicionar imagem da variação">+<input type="file" accept="image/*" style="display:none" onchange="onVarImageSelected(${i},event)"></label>`;
     return `<div class="var-row" style="flex-wrap:wrap;flex-direction:column;align-items:stretch;gap:8px">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div style="display:flex;align-items:flex-end;gap:4px;padding-bottom:1px">${varImgHTML}</div>
         <div class="field" style="flex:2;min-width:130px"><label>Nome da variação</label><input value="${v.nome||''}" onchange="prodVarsBuf[${i}].nome=this.value" placeholder="Ex: Kit 6 Meses"></div>
         <div class="field"><label>${isAfi?'Preço de venda (R$)':'Preço (R$)'}</label><input type="number" step="0.01" value="${v.preco||''}" onchange="prodVarsBuf[${i}].preco=Number(this.value)"></div>
         ${isAfi?'':`<div class="field"><label>Custo (R$)</label><input type="number" step="0.01" value="${v.custo||''}" onchange="prodVarsBuf[${i}].custo=Number(this.value)"></div>`}
@@ -8499,6 +8627,7 @@ function saveProduto(){
     preco:Number(v.preco)||0,custo:Number(v.custo)||0,
     com_type:v.com_type||'pct',
     com_value:Number(v.com_value)||0,
+    img:v.img||'',
     // Links globais por variação (default — usados se não houver link específico de afiliado)
     link_antecipado:(v.link_antecipado||'').trim(),
     link_entrega:(v.link_entrega||'').trim(),
@@ -8507,10 +8636,11 @@ function saveProduto(){
   }));
   if(editingProdId){
     const p=DB.produtos.find(x=>x.id===editingProdId);
-    Object.assign(p,{nome,com_pct:com,mode:prodModeBuf,variacoes:vars});
+    Object.assign(p,{nome,com_pct:com,mode:prodModeBuf,variacoes:vars,img:prodImgBuf});
   }else{
     DB.produtos.push({id:DB.nextProd++,nome,com_pct:com,mode:prodModeBuf,ativo:true,
       cor:['#3b82f6','#a855f7','#10b981','#f59e0b','#ef4444','#06b6d4'][DB.produtos.length%6],
+      img:prodImgBuf,
       variacoes:vars});
   }
   persist();closeM('m-prod');refreshUI();
