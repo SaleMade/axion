@@ -2926,6 +2926,24 @@ async function syncFromServer(){
   }
 }
 
+// Throttle: navegação rápida entre páginas não dispara múltiplos requests
+// (evita 5 pulls se o usuário navegar 5x em 1 segundo). Mínimo 2s entre pulls.
+let _lastNavPull=0;
+async function pullOnNavigate(){
+  if(!apiEnabled()||!apiToken())return;
+  if(hasPendingSync())return;            // protege edição local pendente
+  const now=Date.now();
+  if(now-_lastNavPull<2000)return;       // throttle: máx 1 pull a cada 2s
+  _lastNavPull=now;
+  try{
+    const r=await api.getState();
+    if(r.version>serverVersion){
+      await syncFromServer();
+      refreshUI();                        // re-renderiza a página atual com dados novos
+    }
+  }catch(_){/* silencioso */}
+}
+
 // Polling: a cada 10s checa se outro usuário mudou o estado.
 // Era 30s mas usuário relatou "criei invest no PC1 e demorou pra aparecer no PC2".
 // 10s é o sweet spot: rápido o suficiente pra colaboração, leve no servidor.
@@ -3779,6 +3797,11 @@ function goPage(id){
   if(id==='recuperacao')id='cobranca';
   // Salva a página atual pra restaurar em F5 (sessionStorage = só a aba atual)
   try{sessionStorage.setItem('axion_last_page',id)}catch(_){}
+  // Pull imediato do servidor antes de renderizar — garante que cada navegação
+  // mostra dados frescos sem esperar o polling de 10s.
+  // Roda async (não bloqueia render), e o refreshUI no final atualiza a tela
+  // se o servidor trouxe novidade.
+  pullOnNavigate();
   $$('.page').forEach(p=>p.classList.remove('active'));
   $$('.si').forEach(s=>s.classList.remove('active'));
   const pg=$(id+'-pg');if(pg)pg.classList.add('active');
