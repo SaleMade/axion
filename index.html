@@ -1351,6 +1351,7 @@ h1 em{font-weight:700}
       </div>
       <div class="m-actions">
         <button class="btn btn-bl btn-sm" onclick="saveLead()">Salvar</button>
+        <button class="btn btn-gh btn-sm" onclick="copyLeadDetails()" title="Copiar dados do cliente formatados pro WhatsApp">📋 Copiar dados</button>
         <button class="btn btn-re btn-sm" id="mld-del" onclick="deleteLead()" style="margin-left:14px">Excluir</button>
         <button class="m-x" onclick="closeM('m-lead-detail')">×</button>
       </div>
@@ -2794,6 +2795,9 @@ function debouncedServerSync(){
   clearTimeout(_syncTimer);
   _syncTimer=setTimeout(serverSyncNow,2000);
 }
+// True quando há mudanças locais aguardando push — bloqueia pull de outros PCs
+// pra não sobrescrever edição em andamento (race condition de invest, aportes, etc).
+function hasPendingSync(){ return !!_syncTimer || _409retry; }
 
 // Flush SÍNCRONO via sendBeacon — garante que o último state vai pro servidor
 // quando o usuário fecha a aba/navega (debounce de 2s não dispara nesses casos).
@@ -2821,6 +2825,19 @@ function flushSyncBeacon(){
 window.addEventListener('beforeunload',flushSyncBeacon);
 // pagehide é mais confiável em mobile/Safari
 window.addEventListener('pagehide',flushSyncBeacon);
+// Quando aba volta ao foco depois de minimizada, força pull imediato.
+// Senão usuário pode ficar até 10s desatualizado após alternar de aba.
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState==='visible'&&apiEnabled()&&apiToken()&&!hasPendingSync()){
+    try{
+      const r=await api.getState();
+      if(r.version>serverVersion){
+        await syncFromServer();
+        refreshUI();
+      }
+    }catch(e){/* silencioso */}
+  }
+});
 
 async function serverSyncNow(){
   if(!apiEnabled()||!apiToken())return;
@@ -2897,12 +2914,17 @@ async function syncFromServer(){
   }
 }
 
-// Polling: a cada 30s, checa se outro usuário mudou o estado
+// Polling: a cada 10s checa se outro usuário mudou o estado.
+// Era 30s mas usuário relatou "criei invest no PC1 e demorou pra aparecer no PC2".
+// 10s é o sweet spot: rápido o suficiente pra colaboração, leve no servidor.
 let _pollTimer=null;
 function startStateSync(){
   stopStateSync();
   if(!apiEnabled()||!apiToken())return;
   _pollTimer=setInterval(async()=>{
+    // CRÍTICO: se tem push pendente (debounce 2s ou retry de conflito),
+    // NÃO faz pull — senão pode sobrescrever edição local com versão velha do server
+    if(hasPendingSync())return;
     try{
       const r=await api.getState();
       if(r.version>serverVersion){
@@ -2910,7 +2932,7 @@ function startStateSync(){
         refreshUI();
       }
     }catch(e){/* silencioso */}
-  },30000);
+  },10000);
 }
 function stopStateSync(){
   if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null}
@@ -3384,7 +3406,14 @@ function enterApp(member){
   $$('.lg-field input').forEach(i=>i.value='');  // limpa senhas
   buildSidebar();buildApp();
   hydrateCrmFilters();
-  goPage(defaultPage());
+  // Restaura página onde estava antes do F5 (se válida pro role atual)
+  // Sessão atual da aba → não persiste entre abas/dispositivos
+  let startPage=defaultPage();
+  try{
+    const saved=sessionStorage.getItem('axion_last_page');
+    if(saved&&document.getElementById(saved+'-pg'))startPage=saved;
+  }catch(_){}
+  goPage(startPage);
   initDateFilter();
   scanFollowUps();
   updateNotifBadge();
@@ -3562,6 +3591,12 @@ function buildSidebar(){
       ...(can('ver_equipe')?[{g:'Equipe',items:[
         {id:'equipe',lbl:'Equipe'},
         ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
+        // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
+        ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',icon:'⚙',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
+      ]}]:[]),
+      // Acordeão de Criativos (placeholder pra evoluir) — só Diretor por enquanto
+      ...(dir?[{g:'Criativos',items:[
+        {id:'copies',lbl:'Copies',icon:'✍️',actionFn:"goPage('copies')"},
       ]}]:[]),
       ...(dir?[{g:'Integrações',items:[
         {id:'wh-payt',     lbl:'PAYT',       icon:'●',  iconColor:'#10b981', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('payt')"},
@@ -3577,7 +3612,7 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIcons={Dashboard:'📊',Operacional:'🎯',Financeiro:'💰',Pessoal:'👤',Equipe:'👥','Integrações':'⚡'};
+  const navIcons={Dashboard:'📊',Operacional:'🎯',Financeiro:'💰',Pessoal:'👤',Equipe:'👥',Criativos:'🎨','Integrações':'⚡'};
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
     // Default: só o PRIMEIRO acordeão aberto. Outros começam fechados.
@@ -3660,6 +3695,8 @@ const PNAMES={
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
   equipe:'Equipe / <b>Visão geral</b>',
+  gerequipe:'Equipe / <b>Gerenciar Equipe</b>',
+  copies:'Criativos / <b>Copies</b>',
   recuperacao:'Dashboard / <b>Painel do Cobrador</b>',
   config:'Sistema / <b>Configurações</b>',
 };
@@ -3685,7 +3722,7 @@ function buildApp(){
   p.innerHTML=[
     pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
-    pageTrafego(),pageEquipe(),pageRecuperacao(),pageConfig()
+    pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
 
   // tab handlers
@@ -3706,6 +3743,8 @@ function buildApp(){
 function goPage(id){
   // Redireciona id antigo 'recuperacao' (deprecated) → 'cobranca' (Follows)
   if(id==='recuperacao')id='cobranca';
+  // Salva a página atual pra restaurar em F5 (sessionStorage = só a aba atual)
+  try{sessionStorage.setItem('axion_last_page',id)}catch(_){}
   $$('.page').forEach(p=>p.classList.remove('active'));
   $$('.si').forEach(s=>s.classList.remove('active'));
   const pg=$(id+'-pg');if(pg)pg.classList.add('active');
@@ -3794,6 +3833,7 @@ function goPage(id){
   if(id==='produtos')    renderProdutos();
   if(id==='trafego')     renderTrafego();
   if(id==='equipe')      renderEquipe();
+  if(id==='copies')      renderCopies();
   if(id==='config')      renderConfig();
 }
 
@@ -5093,6 +5133,64 @@ function openTrack(){
   const v=$('mld-track').value;
   if(!v){toast('Sem rastreio','err');return}
   window.open('https://www.linkcorreios.com.br/?id='+encodeURIComponent(v),'_blank');
+}
+
+// Copia os detalhes do lead formatados pro WhatsApp — pra confirmar dados com o cliente.
+// Lê dos inputs do modal (não do DB) pra incluir edições não salvas ainda.
+function copyLeadDetails(){
+  const lead=DB.leads.find(l=>l.id===editingLeadId);
+  if(!lead){toast('Nenhum lead aberto','err');return;}
+  // Helpers pra puxar valores atualizados dos inputs (ou cair pro DB)
+  const v=id=>{const el=$(id);return el?(el.value||'').trim():'';};
+  const nome=v('mld-nome')||lead.nome||'';
+  const cpf=v('mld-cpf')||lead.cpf||'';
+  const wa=v('mld-wa')||lead.wa||'';
+  const email=v('mld-email')||lead.email||'';
+  const cep=v('mld-cep')||lead.cep||'';
+  const end=v('mld-end')||lead.end||'';
+  const num=v('mld-num')||lead.num||'';
+  const comp=v('mld-comp')||lead.comp||'';
+  const bairro=v('mld-bairro')||lead.bairro||'';
+  const cidade=v('mld-cidade')||lead.cidade||'';
+  const uf=v('mld-uf')||lead.uf||'';
+  const prod=v('mld-prod-sel')||lead.prod||'';
+  const vl=v('mld-vl')||lead.vl||'';
+
+  // Monta endereço numa linha só (ignorando campos vazios)
+  const endLinha=[end,num].filter(Boolean).join(', ')+(comp?` - ${comp}`:'');
+  const bairroLinha=[bairro,cidade&&uf?`${cidade}/${uf}`:cidade||uf].filter(Boolean).join(' - ');
+
+  // Formato amigável pra colar no WhatsApp (asteriscos = negrito no WA)
+  const linhas=[
+    `*📋 Confirmação de dados do pedido*`,
+    ``,
+    `*👤 Nome:* ${nome||'—'}`,
+    cpf?`*🪪 CPF:* ${cpf}`:'',
+    wa?`*📱 WhatsApp:* ${wa}`:'',
+    email?`*✉️ E-mail:* ${email}`:'',
+    ``,
+    `*📍 Endereço de entrega:*`,
+    cep?`CEP: ${cep}`:'',
+    endLinha||'',
+    bairroLinha||'',
+    ``,
+    prod?`*📦 Produto:* ${prod}`:'',
+    vl?`*💰 Valor:* R$ ${Number(vl).toFixed(2).replace('.',',')}`:'',
+    ``,
+    `Pode confirmar se está tudo certo? 😊`,
+  ].filter(l=>l!==null&&l!==undefined);
+  const texto=linhas.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+
+  navigator.clipboard.writeText(texto).then(()=>{
+    toast('✓ Dados copiados pra área de transferência','ok');
+  }).catch(()=>{
+    // Fallback antigo se clipboard API falhar
+    const ta=document.createElement('textarea');ta.value=texto;
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');toast('✓ Dados copiados','ok');}
+    catch(_){toast('Erro ao copiar','err');}
+    document.body.removeChild(ta);
+  });
 }
 
 function saveLead(){
@@ -8333,6 +8431,41 @@ async function deleteProduto(){
   persist();closeM('m-prod');refreshUI();toast('Excluído','ok');
 }
 
+// ─── PAGE: Criativos / Copies (placeholder em construção) ───
+function pageCopies(){return `<div class="page" id="copies-pg"></div>`}
+function renderCopies(){
+  const c=$('copies-pg');if(!c)return;
+  c.innerHTML=`
+  <div class="ph">
+    <div><h1>Criativos · <em>Copies</em></h1><p>Criação assistida de textos pra anúncios e criativos</p></div>
+  </div>
+  <div class="panel" style="margin-top:18px;text-align:center;padding:48px 24px">
+    <div style="font-size:48px;margin-bottom:14px">✍️</div>
+    <h2 style="font-size:20px;font-weight:600;color:var(--tx);margin-bottom:8px">Área em construção</h2>
+    <p class="muted" style="font-size:14px;max-width:520px;margin:0 auto 22px;line-height:1.6">
+      Aqui você vai poder gerar copies para novos criativos: hook, dor, prova social, oferta e CTA — tudo prontinho pra colar no Meta/TikTok Ads.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;max-width:760px;margin:0 auto;text-align:left">
+      <div class="cfg-card" style="padding:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">🎯 Hook + Dor</div>
+        <div class="muted" style="font-size:12px;line-height:1.5">Abertura que prende atenção no scroll, seguida da dor central do público.</div>
+      </div>
+      <div class="cfg-card" style="padding:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">💎 Oferta + Prova</div>
+        <div class="muted" style="font-size:12px;line-height:1.5">Apresentação do produto, benefícios e provas sociais que validam.</div>
+      </div>
+      <div class="cfg-card" style="padding:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">📣 CTA + Urgência</div>
+        <div class="muted" style="font-size:12px;line-height:1.5">Chamada de ação final com gatilho de escassez ou urgência.</div>
+      </div>
+      <div class="cfg-card" style="padding:16px">
+        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">🎬 Roteiro completo</div>
+        <div class="muted" style="font-size:12px;line-height:1.5">Versão consolidada pronta pra gravar/postar — narração + texto na tela.</div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:28px">Em breve. Por enquanto este é só o placeholder do módulo.</p>
+  </div>`;
+}
 function pageConfig(){return `<div class="page" id="config-pg"></div>`}
 
 let configTab='conta';
@@ -8631,39 +8764,6 @@ function cfgIntegracoes(){
   <div class="cfg-section">
     <div class="cfg-h"><h2>Integrações & Webhooks</h2><p>Configure plataformas de venda, rastreio e automações</p></div>
 
-    <!-- ─── Backend AXION (multi-usuário) — colapsável ─── -->
-    <details class="cfg-card" style="border:1.5px solid ${connected?'var(--gr)':'var(--am)'};background:${connected?'rgba(16,185,129,.06)':'rgba(245,158,11,.05)'};padding:0;overflow:hidden" ${connected?'':'open'}>
-      <summary style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer;user-select:none;list-style:none">
-        <div style="font-size:22px">${connected?'🔗':'⚠'}</div>
-        <div style="flex:1">
-          <div style="font-size:13.5px;font-weight:700;color:var(--tx);display:flex;align-items:center;gap:8px">
-            Backend AXION (banco D1)
-            <span class="cfg-status ${connected?'on':''}" style="font-size:10px">${connected?'Conectado':'Não conectado'}</span>
-          </div>
-          <div class="muted" style="font-size:11.5px;margin-top:2px">
-            ${connected?'Sincronização ativa · clique para configurar':'Configure pra ativar multi-usuário'}
-          </div>
-        </div>
-        <div style="font-size:14px;color:var(--t3);transition:transform .2s" class="details-chev">▾</div>
-      </summary>
-      <div style="padding:0 18px 16px 18px;border-top:1px solid ${connected?'rgba(16,185,129,.2)':'rgba(245,158,11,.2)'}">
-        <div class="muted" style="font-size:12px;line-height:1.55;margin:12px 0">
-          ${connected
-            ?'A Dashboard está sincronizando dados em tempo real com o banco da Cloudflare. Múltiplos usuários podem trabalhar ao mesmo tempo.'
-            :'Sem o backend, cada navegador tem dados isolados. Crie o Worker D1 seguindo <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">backend/setup.md</code> e cole a URL aqui.'}
-        </div>
-        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-          <div style="flex:1;min-width:280px">
-            <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
-            <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
-              style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
-          </div>
-          <button class="btn btn-bl btn-sm" onclick="saveApiUrl()">Salvar</button>
-          ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
-        </div>
-      </div>
-    </details>
-
     ${(()=>{
       // Status real: depende do backend estar conectado E haver eventos recebidos recentemente
       const log=DB.wh_log_server||[];
@@ -8737,6 +8837,36 @@ function cfgIntegracoes(){
       </div>
       <span class="cfg-status">Em breve</span>
     </div>
+
+    <!-- ─── Backend AXION (multi-usuário) — guardado no fim, sem destaque visual ─── -->
+    <details class="cfg-card" style="margin-top:24px;padding:0;overflow:hidden;border:1px solid var(--b1);background:var(--s2)">
+      <summary style="display:flex;align-items:center;gap:14px;padding:12px 16px;cursor:pointer;user-select:none;list-style:none">
+        <div style="font-size:18px;opacity:.65">🔧</div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:500;color:var(--t2);display:flex;align-items:center;gap:8px">
+            Backend AXION (banco D1)
+            <span class="muted" style="font-size:10.5px">${connected?'· conectado':'· não configurado'}</span>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--t4);transition:transform .2s">▾</div>
+      </summary>
+      <div style="padding:0 16px 14px 16px;border-top:1px solid var(--b1)">
+        <div class="muted" style="font-size:11.5px;line-height:1.55;margin:10px 0">
+          ${connected
+            ?'Sincronização ativa com Cloudflare. Não mexer salvo se for trocar de servidor.'
+            :'Configure pra ativar multi-usuário. Cole a URL do Worker:'}
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:280px">
+            <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
+            <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
+              style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
+          </div>
+          <button class="btn btn-gh btn-sm" onclick="saveApiUrl()">Salvar</button>
+          ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
+        </div>
+      </div>
+    </details>
   </div>`;
 }
 
