@@ -2776,6 +2776,7 @@ const api={
   listUsers:()=>api._fetch('/api/users'),
   saveUser:(payload)=>api._fetch('/api/users',{method:'POST',body:JSON.stringify(payload)}),
   deleteUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id),{method:'DELETE'}),
+  restoreUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id)+'/restore',{method:'POST'}),
 };
 
 // ─── Sync state com servidor ───
@@ -3075,7 +3076,22 @@ function maskCEP(inp){
   else inp.value=`${v.slice(0,5)}-${v.slice(5)}`;
 }
 function selOpts(el,opts,val){if(!el)return;el.innerHTML=opts.map(o=>`<option value="${o.v}" ${o.v===val?'selected':''}>${o.l}</option>`).join('')}
-function teamOpts(){return TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor'&&!t._preview).map(t=>({v:t.id,l:t.name}))}
+// Filtra dropdowns: tira arquivados (não atribui novos leads pra quem saiu),
+// previews (impersonate) e roles que não recebem leads operacionais
+function teamOpts(){return TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor'&&!t._preview&&!t.archived).map(t=>({v:t.id,l:t.name}))}
+// Versão com opção "Sem atendente" no topo — usada no detalhe do lead
+// pra casos em que ninguém ficou responsável por aquela venda
+function teamOptsWithEmpty(){return [{v:'',l:'— Sem atendente —'},...teamOpts()]}
+// Para uso no modal de detalhes: se o lead atual tem atendente arquivado,
+// inclui ele na lista (com indicador 🗄) pra não perder a referência
+function teamOptsForLead(curAt){
+  const opts=teamOptsWithEmpty();
+  if(curAt&&!opts.some(o=>o.v===curAt)){
+    const m=TEAM.find(t=>t.id===curAt);
+    if(m)opts.push({v:m.id,l:`🗄 ${m.name} (arquivado)`});
+  }
+  return opts;
+}
 function colOpts(){return KB_COLS.map(c=>({v:c.id,l:c.id}))}
 function origOpts(){return ORIGENS.map(o=>({v:o,l:o}))}
 function payOpts(){return [{v:'',l:'—'}].concat(PAYS.map(p=>({v:p,l:p})))}
@@ -3708,7 +3724,7 @@ function buildApp(){
   selOpts($('nl-orig'),origOpts(),'Meta');
   selOpts($('nl-pg'),payOpts());
   selOpts($('nl-prod'),buildProdutoOpts());
-  selOpts($('mld-at'),teamOpts());
+  selOpts($('mld-at'),teamOptsWithEmpty());
   selOpts($('mld-orig'),origOpts());
   selOpts($('mld-pg'),payOpts());
   selOpts($('v-at'),teamOpts());
@@ -4821,7 +4837,10 @@ function _openLeadDetailUnsafe(lead){
   $('mld-wa').value=lead.wa||'';
   $('mld-email').value=lead.email||'';
   selOpts($('mld-orig'),origOpts(),lead.orig||'Meta');
-  selOpts($('mld-at'),teamOpts(),lead.at);
+  // Inclui opção "Sem atendente" + atendente arquivado (se o lead já tava
+  // atribuído pra alguém que foi arquivado, mantém ele visível na lista pra
+  // não perder a info — pode trocar ou deixar)
+  selOpts($('mld-at'),teamOptsForLead(lead.at),lead.at||'');
   $('mld-cep').value=lead.cep||'';$('mld-end').value=lead.end||'';
   $('mld-num').value=lead.num||'';$('mld-comp').value=lead.comp||'';
   $('mld-bairro').value=lead.bairro||'';$('mld-cidade').value=lead.cidade||'';
@@ -5830,6 +5849,12 @@ function ddmmFromIso(iso){
   const d=new Date(iso+'T12:00:00');
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
 }
+// dd/mm/aaaa (incluindo ano) — usado em listas que mostram histórico longo
+function ddmmyyyyFromIso(iso){
+  if(!iso)return today();
+  const d=new Date(iso+'T12:00:00');
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+}
 // Toggle do modo Afiliado/Produtor no Financeiro
 function setFinMode(m){
   if(!['afiliado','produtor'].includes(m))return;
@@ -6743,7 +6768,7 @@ function renderInvest(){
               ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold)">🎯 Budget</span>`
               :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">💸 Gasto</span>`;
             return `<tr>
-              <td style="color:var(--t2)">${i.dt}</td>
+              <td style="color:var(--t2)">${ddmmyyyyFromIso(i.dt)}</td>
               <td><b style="color:var(--tx);font-weight:500">${i.desc}</b></td>
               <td><span class="tbl-st" style="background:${ct.cor}14;color:var(--t2)">${ct.icon} ${ct.nome}</span></td>
               <td>${tipoBadge}</td>
@@ -7513,14 +7538,30 @@ async function resetMemberPassword(){
 async function confirmDeleteMember(){
   if(!editingMemberId)return;
   const m=DB.team.find(t=>t.id===editingMemberId);
-  if(!await axConfirm(`Excluir <b>${m.name}</b>?<br><span class="muted" style="font-size:13px">Os leads/vendas atribuídos permanecem, mas perdem o nome do responsável.</span>`,{okLabel:'Excluir membro'}))return;
-  // Backend: deleta no server primeiro
+  if(!await axConfirm(`Arquivar <b>${m.name}</b>?<br><span class="muted" style="font-size:13px">O nome dele/dela continua aparecendo no histórico de pagamentos, comissões e vendas — só sai dos dropdowns de novos pedidos. Pode restaurar depois se precisar.</span>`,{okLabel:'Arquivar'}))return;
+  // Backend: arquiva (soft-delete) — preserva histórico
   if(apiEnabled()&&apiToken()){
-    try{await api.deleteUser(editingMemberId)}catch(e){toast(e.message||'Erro ao excluir','err');return}
+    try{await api.deleteUser(editingMemberId)}catch(e){toast(e.message||'Erro ao arquivar','err');return}
   }
-  DB.team=DB.team.filter(t=>t.id!==editingMemberId);
+  // No frontend: marca como arquivado E mantém na lista TEAM
+  // (sem isso, getTeam(id) retornaria null e o histórico ficaria sem nome)
+  const idx=DB.team.findIndex(t=>t.id===editingMemberId);
+  if(idx>=0){DB.team[idx].archived=1;DB.team[idx].archived_at=Math.floor(Date.now()/1000);}
   TEAM=DB.team;persist();closeM('m-member');refreshUI();
-  toast('Membro excluído','ok');
+  toast('✓ Membro arquivado · histórico preservado','ok');
+}
+
+// Restaura um membro arquivado (volta a aparecer nos dropdowns)
+async function restoreMember(id){
+  const m=DB.team.find(t=>t.id===id);if(!m)return;
+  if(!await axConfirm(`Restaurar <b>${m.name}</b>?<br><span class="muted" style="font-size:13px">Volta a aparecer nos dropdowns de atribuição de leads e pode logar novamente.</span>`,{okLabel:'Restaurar'}))return;
+  if(apiEnabled()&&apiToken()){
+    try{await api.restoreUser(id)}catch(e){toast(e.message||'Erro ao restaurar','err');return}
+  }
+  const idx=DB.team.findIndex(t=>t.id===id);
+  if(idx>=0){DB.team[idx].archived=0;delete DB.team[idx].archived_at;}
+  TEAM=DB.team;persist();refreshUI();
+  toast('✓ Membro restaurado','ok');
 }
 function deleteMember(id){editingMemberId=id;confirmDeleteMember()}
 
@@ -8669,14 +8710,48 @@ async function changeMyPassword(){
 // ─── Seção Gerenciar Equipe ────────────────────────────
 function cfgEquipe(){
   const team=DB.team||[];
+  const ativos=team.filter(m=>!m.archived);
+  const arquivados=team.filter(m=>m.archived);
   const ROLE_LBL={diretor:'Diretor',socio:'Sócio',produtor:'Produtor',
     afiliado:'Afiliado',atendente:'Atendente',cobrador:'Cobrador',gestor:'Gestor de Tráfego'};
+  const renderRow=(m)=>{
+    const isMe=m.id===CUR.id;
+    const hasPwd=!!m.pwd_hash;
+    const arch=!!m.archived;
+    return `<tr style="${arch?'opacity:.55':''}">
+      <td>
+        <div style="display:flex;align-items:center;gap:9px">
+          ${avatar(m,{size:28,fontSize:11})}
+          <div>
+            <b style="color:var(--tx);font-weight:500">${m.name}</b>
+            ${isMe?'<span class="muted" style="font-size:11px"> (você)</span>':''}
+            ${arch?'<span style="font-size:10px;background:var(--s4);color:var(--t3);padding:1px 6px;border-radius:4px;margin-left:6px">🗄 arquivado</span>':''}
+          </div>
+        </div>
+      </td>
+      <td><code style="font-size:11.5px;background:var(--s3);padding:2px 6px;border-radius:4px;color:var(--cy)">${(m.login||'—').replace(/_arch_\d+$/,'')}</code></td>
+      <td><span class="muted" style="font-size:12px">${ROLE_LBL[m.role]||m.role}</span></td>
+      <td class="right" style="font-variant-numeric:tabular-nums;color:var(--t2);font-weight:600">${m.com_pct||0}%</td>
+      <td class="right">
+        ${arch
+          ?'<span style="font-size:11px;color:var(--t4)">—</span>'
+          :hasPwd
+            ?'<span style="font-size:11px;background:var(--grd);color:var(--gr);padding:2px 7px;border-radius:5px;font-weight:600">✓ Definida</span>'
+            :'<span style="font-size:11px;background:var(--rdd);color:var(--rd);padding:2px 7px;border-radius:5px;font-weight:600">⚠ Sem senha</span>'}
+      </td>
+      <td class="right">
+        ${arch
+          ?`<button class="btn-act btn-act-gh btn-act-icon" onclick="restoreMember('${m.id}')" title="Restaurar membro">↩</button>`
+          :`<button class="btn-act btn-act-gh btn-act-icon" onclick="openMemberEdit('${m.id}')" title="Editar">✎</button>`}
+      </td>
+    </tr>`;
+  };
   return `
   <div class="cfg-section">
     <div class="cfg-h" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap">
       <div>
         <h2>Gerenciar Equipe</h2>
-        <p>Adicione, edite e remova membros do seu time. Senhas são salvas com hash SHA-256.</p>
+        <p>Adicione, edite e arquive membros. Arquivar preserva o histórico — pode restaurar depois.</p>
       </div>
       <button class="btn btn-bl btn-sm" onclick="openMemberNew()">+ Adicionar membro</button>
     </div>
@@ -8691,35 +8766,34 @@ function cfgEquipe(){
           <th class="right" style="width:90px">Ações</th>
         </tr></thead>
         <tbody>
-          ${team.map(m=>{
-            const isMe=m.id===CUR.id;
-            const hasPwd=!!m.pwd_hash;
-            return `<tr>
-              <td>
-                <div style="display:flex;align-items:center;gap:9px">
-                  ${avatar(m,{size:28,fontSize:11})}
-                  <div>
-                    <b style="color:var(--tx);font-weight:500">${m.name}</b>
-                    ${isMe?'<span class="muted" style="font-size:11px"> (você)</span>':''}
-                  </div>
-                </div>
-              </td>
-              <td><code style="font-size:11.5px;background:var(--s3);padding:2px 6px;border-radius:4px;color:var(--cy)">${m.login||'—'}</code></td>
-              <td><span class="muted" style="font-size:12px">${ROLE_LBL[m.role]||m.role}</span></td>
-              <td class="right" style="font-variant-numeric:tabular-nums;color:var(--gr);font-weight:600">${m.com_pct||0}%</td>
-              <td class="right">
-                ${hasPwd
-                  ?'<span style="font-size:11px;background:var(--grd);color:var(--gr);padding:2px 7px;border-radius:5px;font-weight:600">✓ Definida</span>'
-                  :'<span style="font-size:11px;background:var(--rdd);color:var(--rd);padding:2px 7px;border-radius:5px;font-weight:600">⚠ Sem senha</span>'}
-              </td>
-              <td class="right">
-                <button class="btn-act btn-act-gh btn-act-icon" onclick="openMemberEdit('${m.id}')" title="Editar">✎</button>
-              </td>
-            </tr>`;
-          }).join('')}
+          ${ativos.map(renderRow).join('')}
         </tbody>
       </table>
     </div>
+
+    ${arquivados.length?`
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--t3);padding:8px 0;user-select:none">
+        🗄 ${arquivados.length} membro${arquivados.length>1?'s':''} arquivado${arquivados.length>1?'s':''} — clique pra mostrar
+      </summary>
+      <div class="cfg-card" style="padding:0;overflow:hidden;margin-top:8px">
+        <table class="tbl" style="margin:0">
+          <thead><tr>
+            <th style="text-align:left">Nome</th>
+            <th style="text-align:left">Login</th>
+            <th style="text-align:left">Função</th>
+            <th class="right">Comissão</th>
+            <th class="right">Senha</th>
+            <th class="right" style="width:90px">Ações</th>
+          </tr></thead>
+          <tbody>${arquivados.map(renderRow).join('')}</tbody>
+        </table>
+      </div>
+      <p class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5">
+        Os arquivados continuam aparecendo no histórico de pagamentos, vendas e comissões, mas não recebem novos leads e não podem logar. Clique em ↩ pra restaurar.
+      </p>
+    </details>
+    `:''}
     <div class="cfg-card" style="background:var(--bld);border-color:var(--bl)">
       <div style="display:flex;gap:11px;align-items:flex-start">
         <div style="font-size:22px">💡</div>

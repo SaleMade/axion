@@ -173,10 +173,32 @@ async function handlePostState(req, env) {
 async function handleListUsers(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const rows = await env.DB.prepare(
-    'SELECT id, login, name, abbr, role, color, bg, com_pct, created_at, ' +
-    'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password FROM users ORDER BY name'
-  ).all();
+  // Inclui arquivados — frontend filtra conforme contexto.
+  // O campo `archived` (0/1) chega serializado pro frontend decidir o que mostrar.
+  // Tenta query com archived; se a coluna não existe (banco antigo), tenta fallback.
+  let rows;
+  try {
+    rows = await env.DB.prepare(
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, created_at, ' +
+      'COALESCE(archived, 0) AS archived, archived_at, ' +
+      'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
+      'FROM users ORDER BY archived ASC, name'
+    ).all();
+  } catch (e) {
+    // Coluna archived ainda não existe — tenta criar e refaz a query
+    try {
+      await env.DB.prepare('ALTER TABLE users ADD COLUMN archived INTEGER DEFAULT 0').run();
+    } catch (_) {}
+    try {
+      await env.DB.prepare('ALTER TABLE users ADD COLUMN archived_at INTEGER').run();
+    } catch (_) {}
+    rows = await env.DB.prepare(
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, created_at, ' +
+      'COALESCE(archived, 0) AS archived, archived_at, ' +
+      'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
+      'FROM users ORDER BY archived ASC, name'
+    ).all();
+  }
   return json({ users: rows.results });
 }
 
@@ -222,15 +244,53 @@ async function handleCreateOrUpdateUser(req, env) {
   }
 }
 
+// DELETE /api/users/:id agora ARQUIVA por padrão (soft-delete) pra preservar
+// histórico de pagamentos, vendas atribuídas, etc. Se quiser hard-delete
+// (apaga definitivo), passar ?hard=1 — caso de exceção, não dia-a-dia.
 async function handleDeleteUser(req, env, userId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Apenas Diretor pode remover usuários', 403);
   if (userId === u.user_id) return err('Você não pode se auto-excluir', 400);
 
-  const r = await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+  const url = new URL(req.url);
+  const hard = url.searchParams.get('hard') === '1';
+
+  if (hard) {
+    const r = await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+    if (!r.meta.changes) return err('Usuário não encontrado', 404);
+    return json({ ok: true, action: 'deleted' });
+  }
+
+  // Soft-delete: marca como archived + zera login pra liberar pra reuso (login UNIQUE)
+  // O nome/role/dados ficam intactos pra histórico continuar mostrando.
+  // Tenta com archived; se coluna não existe, cria.
+  try {
+    const r = await env.DB.prepare(
+      "UPDATE users SET archived = 1, archived_at = strftime('%s','now'), login = login || '_arch_' || strftime('%s','now') WHERE id = ?"
+    ).bind(userId).run();
+    if (!r.meta.changes) return err('Usuário não encontrado', 404);
+  } catch (_) {
+    try {await env.DB.prepare('ALTER TABLE users ADD COLUMN archived INTEGER DEFAULT 0').run();} catch (_) {}
+    try {await env.DB.prepare('ALTER TABLE users ADD COLUMN archived_at INTEGER').run();} catch (_) {}
+    const r = await env.DB.prepare(
+      "UPDATE users SET archived = 1, archived_at = strftime('%s','now'), login = login || '_arch_' || strftime('%s','now') WHERE id = ?"
+    ).bind(userId).run();
+    if (!r.meta.changes) return err('Usuário não encontrado', 404);
+  }
+  return json({ ok: true, action: 'archived' });
+}
+
+// POST /api/users/:id/restore → desarquiva (admin pode reativar)
+async function handleRestoreUser(req, env, userId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode restaurar usuários', 403);
+  const r = await env.DB.prepare(
+    "UPDATE users SET archived = 0, archived_at = NULL WHERE id = ?"
+  ).bind(userId).run();
   if (!r.meta.changes) return err('Usuário não encontrado', 404);
-  return json({ ok: true });
+  return json({ ok: true, action: 'restored' });
 }
 
 // ─── PAYT WEBHOOK ─────────────────────────────────────────────
@@ -811,6 +871,8 @@ export default {
       // users CRUD
       if (req.method === 'GET'    && path === '/api/users')         return handleListUsers(req, env);
       if (req.method === 'POST'   && path === '/api/users')         return handleCreateOrUpdateUser(req, env);
+      const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
+      if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 

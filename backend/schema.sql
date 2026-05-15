@@ -14,9 +14,14 @@ CREATE TABLE IF NOT EXISTS users (
   color       TEXT,                       -- hex de avatar
   bg          TEXT,                       -- bg rgba do avatar
   com_pct     REAL DEFAULT 0,             -- comissão padrão %
+  archived    INTEGER DEFAULT 0,          -- soft-delete: 1=arquivado (preserva histórico)
+  archived_at INTEGER,                    -- timestamp da arquivação
   created_at  INTEGER DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_users_login ON users(login);
+-- Migração idempotente: se a tabela já existe sem essas colunas, adiciona.
+-- (SQLite não suporta IF NOT EXISTS em ADD COLUMN, mas falha silenciosamente
+-- se a coluna já existir quando rodado via wrangler com erros ignorados.)
 
 -- Sessões ativas (token → user_id)
 CREATE TABLE IF NOT EXISTS sessions (
