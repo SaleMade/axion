@@ -1013,6 +1013,9 @@ h1 em{font-weight:700}
   font-size:12px;padding:6px 8px;border-radius:5px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
 @media(max-width:900px){.payt-map-row{grid-template-columns:1fr}}
 
+/* Indicador "ao vivo" do auto-refresh do log de webhooks */
+.wh-auto-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gr);box-shadow:0 0 0 0 rgba(16,185,129,.6);animation:whPulse 1.8s infinite}
+@keyframes whPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.6)}70%{box-shadow:0 0 0 6px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}
 /* details > summary do modal de webhooks (esconde marker default + rotaciona seta) */
 #m-wh details > summary::-webkit-details-marker{display:none}
 #m-wh details[open] > summary > span:first-child{transform:rotate(90deg)}
@@ -2220,11 +2223,15 @@ h1 em{font-weight:700}
           <button class="btn btn-bl" onclick="simulateWebhook()">⚡ Disparar evento</button>
         </div>
 
-        <div class="section-title" style="margin-top:18px">4. Últimos eventos recebidos do servidor</div>
+        <div class="section-title" style="margin-top:18px;display:flex;align-items:center;gap:10px">
+          <span>4. Últimos eventos recebidos do servidor</span>
+          <span class="wh-auto-dot" title="Atualiza automaticamente a cada 5s enquanto este modal estiver aberto"></span>
+          <span style="font-size:10.5px;color:var(--t4);font-weight:500;text-transform:none;letter-spacing:0">atualiza a cada 5s</span>
+        </div>
         <p class="muted" style="font-size:12px;margin-bottom:8px">Quando a PAYT (ou qualquer integração) bate na URL acima, registramos aqui. Útil pra confirmar que o teste chegou.</p>
         <div id="wh-server-log" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);max-height:240px;overflow-y:auto"></div>
         <div style="display:flex;justify-content:flex-end;margin-top:6px">
-          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog()">🔄 Atualizar do servidor</button>
+          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('payt')">🔄 Forçar atualização</button>
         </div>
       </div>
       </div>
@@ -2253,11 +2260,15 @@ h1 em{font-weight:700}
         </div>
 
         <!-- ⬇ Operacional no topo: log de eventos + mapeamento (mexe no dia-a-dia) -->
-        <div class="section-title" style="margin-top:14px">Últimos leads recebidos do fornecedor</div>
+        <div class="section-title" style="margin-top:14px;display:flex;align-items:center;gap:10px">
+          <span>Últimos leads recebidos do fornecedor</span>
+          <span class="wh-auto-dot" title="Atualiza automaticamente a cada 5s enquanto este modal estiver aberto"></span>
+          <span style="font-size:10.5px;color:var(--t4);font-weight:500;text-transform:none;letter-spacing:0">atualiza a cada 5s</span>
+        </div>
         <p class="muted" style="font-size:12px;margin-bottom:8px">Cada chamada na URL acima registra aqui pra auditoria.</p>
         <div id="wh-server-log-forn" style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);max-height:240px;overflow-y:auto"></div>
         <div style="display:flex;justify-content:flex-end;margin-top:6px">
-          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('forn')">🔄 Atualizar do servidor</button>
+          <button class="btn btn-gh btn-sm" onclick="refreshWebhookLog('forn')">🔄 Forçar atualização</button>
         </div>
 
         <div class="section-title" style="margin-top:18px">Mapeamento dos eventos (Fornecedor)</div>
@@ -3052,8 +3063,15 @@ function axConfirmResolve(v){
   closeM('m-confirm');
   if(_axConfirmPromise){_axConfirmPromise(v);_axConfirmPromise=null}
 }
-function openM(id){$(id).classList.add('open')}
-function closeM(id){$(id).classList.remove('open')}
+function openM(id){
+  $(id).classList.add('open');
+  // Hook: modal de webhooks ativa auto-refresh do log enquanto aberto
+  if(id==='m-wh')startWhAutoRefresh();
+}
+function closeM(id){
+  $(id).classList.remove('open');
+  if(id==='m-wh')stopWhAutoRefresh();
+}
 
 function maskWA(inp){
   const v=inp.value.replace(/\D/g,'').slice(0,11);
@@ -9423,6 +9441,32 @@ async function refreshWebhookLog(scope){
   // Re-renderiza ambos (mais simples) ou só o scope solicitado
   if(scope)renderWebhookLog(scope);
   else {renderWebhookLog('payt');renderWebhookLog('forn')}
+}
+
+// ─── Auto-refresh do log de webhooks ─────────────────────────────────
+// Enquanto o modal m-wh está aberto, faz pull silencioso do servidor a cada 5s
+// pra log de eventos PAYT/Fornecedor aparecer sem precisar clicar em "Atualizar".
+// O polling global da Dash é a cada 10s; aqui apertamos pra 5s no contexto de
+// webhook porque o usuário fica esperando o evento chegar.
+let _whAutoTimer=null;
+function startWhAutoRefresh(){
+  stopWhAutoRefresh();
+  if(!apiEnabled()||!apiToken())return;
+  _whAutoTimer=setInterval(async()=>{
+    if(hasPendingSync())return; // não sobrescreve edição local pendente
+    try{
+      const r=await api.getState();
+      if(r.version>serverVersion){
+        await syncFromServer();
+        // Re-renderiza ambos sem toast (silencioso)
+        renderWebhookLog('payt');
+        renderWebhookLog('forn');
+      }
+    }catch(_){/* silencioso */}
+  },5000);
+}
+function stopWhAutoRefresh(){
+  if(_whAutoTimer){clearInterval(_whAutoTimer);_whAutoTimer=null;}
 }
 
 function renderPaytMapping(){
