@@ -2165,6 +2165,12 @@ h1 em{font-weight:700}
         <div class="field"><label>Comissão padrão (%)</label><input id="mp-com" type="number" step="0.5" value="8"></div>
       </div>
 
+      <!-- Cor do produto (barra superior do card + dot identificador) -->
+      <div class="field" style="margin-top:10px">
+        <label>Cor do produto</label>
+        <div id="mp-cor-palette" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"></div>
+      </div>
+
       <!-- Toggle Afiliado vs Produtor -->
       <div class="section-title" style="margin-top:8px">Modo de operação</div>
       <div class="prod-mode">
@@ -8418,6 +8424,32 @@ function setProdMode(m){
 
 // Buffer pra imagem do produto sendo editado (base64 dataURL)
 let prodImgBuf='';
+// Buffer pra cor selecionada no editor
+let prodCorBuf='#3b82f6';
+// Paleta padrão de cores pros produtos
+const PROD_COLORS=['#3b82f6','#a855f7','#10b981','#f59e0b','#ef4444','#06b6d4','#ec4899','#fbbf24','#8b5cf6','#14b8a6','#f97316','#64748b'];
+
+// Renderiza a paleta de cores + color picker custom
+function renderProdCorPalette(){
+  const wrap=$('mp-cor-palette');if(!wrap)return;
+  // Se a cor atual não está na paleta padrão, mostra ela como "custom"
+  const isCustom=!PROD_COLORS.includes(prodCorBuf);
+  wrap.innerHTML=PROD_COLORS.map(c=>`
+    <button type="button" onclick="setProdCor('${c}')" title="${c}"
+      style="width:30px;height:30px;border-radius:8px;background:${c};border:2px solid ${c===prodCorBuf?'var(--tx)':'transparent'};box-shadow:${c===prodCorBuf?'0 0 0 2px var(--bg), 0 0 0 4px '+c:'none'};cursor:pointer;padding:0;transition:transform .12s"
+      onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'"></button>
+  `).join('')+`
+    <label style="position:relative;width:30px;height:30px;border-radius:8px;background:${isCustom?prodCorBuf:'linear-gradient(135deg,#ef4444 0% 16.6%,#f59e0b 16.6% 33.3%,#fbbf24 33.3% 50%,#10b981 50% 66.6%,#3b82f6 66.6% 83.3%,#a855f7 83.3%)'};border:2px solid ${isCustom?'var(--tx)':'transparent'};box-shadow:${isCustom?'0 0 0 2px var(--bg), 0 0 0 4px '+prodCorBuf:'none'};cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;text-shadow:0 0 4px rgba(0,0,0,.6)" title="Cor personalizada">
+      +
+      <input type="color" value="${prodCorBuf}" onchange="setProdCor(this.value)" style="position:absolute;inset:0;opacity:0;cursor:pointer">
+    </label>
+    <span style="font-size:11px;color:var(--t4);margin-left:6px;font-family:ui-monospace,monospace">${prodCorBuf}</span>
+  `;
+}
+function setProdCor(c){
+  prodCorBuf=c;
+  renderProdCorPalette();
+}
 
 function openProdNew(){
   editingProdId=null;
@@ -8426,7 +8458,10 @@ function openProdNew(){
   $('mp-del').style.display='none';
   prodVarsBuf=[{nome:'1 Mês',preco:'',custo:'',img:''}];
   prodImgBuf='';
+  // Cor inicial rotativa (pra não cair sempre no mesmo azul em novos produtos)
+  prodCorBuf=PROD_COLORS[DB.produtos.length%PROD_COLORS.length];
   renderProdImgPreview();
+  renderProdCorPalette();
   setProdMode('afiliado');
   renderAfiList();
   openM('m-prod');
@@ -8443,7 +8478,9 @@ function openProdEdit(id){
   // Garante que cada variação tenha campo img (compat com produtos antigos)
   prodVarsBuf.forEach(v=>{if(v.img===undefined)v.img=''});
   prodImgBuf=p.img||'';
+  prodCorBuf=p.cor||'#3b82f6';
   renderProdImgPreview();
+  renderProdCorPalette();
   setProdMode(p.mode||'afiliado');
   renderAfiList();
   openM('m-prod');
@@ -8636,10 +8673,10 @@ function saveProduto(){
   }));
   if(editingProdId){
     const p=DB.produtos.find(x=>x.id===editingProdId);
-    Object.assign(p,{nome,com_pct:com,mode:prodModeBuf,variacoes:vars,img:prodImgBuf});
+    Object.assign(p,{nome,com_pct:com,mode:prodModeBuf,variacoes:vars,img:prodImgBuf,cor:prodCorBuf});
   }else{
     DB.produtos.push({id:DB.nextProd++,nome,com_pct:com,mode:prodModeBuf,ativo:true,
-      cor:['#3b82f6','#a855f7','#10b981','#f59e0b','#ef4444','#06b6d4'][DB.produtos.length%6],
+      cor:prodCorBuf||'#3b82f6',
       img:prodImgBuf,
       variacoes:vars});
   }
