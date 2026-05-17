@@ -406,7 +406,7 @@ async function handleAIConfigTest(req, env) {
   // Chamada mínima — uma única palavra de resposta
   try {
     if (provider === 'gemini') {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -416,6 +416,16 @@ async function handleAIConfigTest(req, env) {
       });
       if (!r.ok) {
         const t = await r.text().catch(() => '');
+        // Mensagens amigáveis pros erros comuns
+        if (r.status === 429) {
+          return err(`Quota excedida (429). Causas possíveis: (1) key recém-criada precisa de alguns minutos pra propagar · (2) bateu rate limit (10 req/min) — espere 1 min · (3) projeto sem billing — vá em console.cloud.google.com → Billing pra ativar (continua grátis dentro do free tier).`, 429);
+        }
+        if (r.status === 403) {
+          return err(`Sem permissão (403). Confira se a Generative Language API está habilitada no projeto Google da sua key.`, 403);
+        }
+        if (r.status === 400 && t.includes('API_KEY_INVALID')) {
+          return err(`API key inválida. Gere uma nova em aistudio.google.com/apikey`, 400);
+        }
         return err(`Teste falhou (${r.status}): ${t.slice(0, 200)}`, 502);
       }
       const data = await r.json();
@@ -525,7 +535,7 @@ function _aiParseJSON(txt) {
 // ─── Provider: Gemini (Google AI Studio) ───
 async function _callGemini(env, prompts) {
   // Modelo gratuito mais recente — Gemini 2.0 Flash (rápido + free tier generoso)
-  const model = 'gemini-2.0-flash';
+  const model = 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
   const body = {
     // System instruction separada do user (Gemini suporta)
