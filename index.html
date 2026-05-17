@@ -1013,6 +1013,60 @@ h1 em{font-weight:700}
   font-size:12px;padding:6px 8px;border-radius:5px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
 @media(max-width:900px){.payt-map-row{grid-template-columns:1fr}}
 
+/* ═══ MÓDULO DESIGN & COPY (Criativos) ═══ */
+.cp-pillar{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px;margin-bottom:18px}
+.cp-pillar-h{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--b1)}
+.cp-pillar-num{width:30px;height:30px;border-radius:50%;background:var(--bld);color:var(--bl2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0}
+.cp-pillar-tit{font-size:15px;font-weight:600;color:var(--tx)}
+.cp-pillar-sub{font-size:12px;color:var(--t3);margin-top:1px}
+
+/* Pilar 1: Gerador de Script */
+.cp-gen-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-bottom:14px;align-items:flex-end}
+@media(max-width:780px){.cp-gen-controls{grid-template-columns:1fr}}
+.cp-script-blocks{display:flex;flex-direction:column;gap:10px}
+.cp-block{background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;border-left:3px solid var(--bl)}
+.cp-block.b-hook{border-left-color:#ef4444}
+.cp-block.b-ret{border-left-color:#f59e0b}
+.cp-block.b-of{border-left-color:#10b981}
+.cp-block.b-cta{border-left-color:#3b82f6}
+.cp-block-h{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.cp-block-time{background:var(--s4);padding:2px 8px;border-radius:4px;font-family:ui-monospace,monospace;font-size:10.5px;color:var(--t2)}
+.cp-block-lbl{color:var(--t3)}
+.cp-block textarea{width:100%;background:transparent;border:none;color:var(--tx);font-family:inherit;font-size:13px;line-height:1.55;resize:vertical;min-height:44px;outline:none;padding:2px 0}
+.cp-block textarea:focus{background:var(--s4);padding:6px 8px;border-radius:5px}
+
+/* Pilar 2: Kanban de Criativos */
+.cp-kb{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin:0 -4px;padding-left:4px;padding-right:4px}
+.cp-col{flex:1;min-width:240px;max-width:280px;background:var(--s3);border:1px solid var(--b1);border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden}
+.cp-col-h{padding:11px 13px 9px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--b1)}
+.cp-col-name{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.cp-col-cnt{background:var(--s4);font-size:11px;font-weight:600;color:var(--t2);padding:2px 8px;border-radius:9px;font-variant-numeric:tabular-nums}
+.cp-col-cards{padding:9px;display:flex;flex-direction:column;gap:8px;min-height:80px;flex:1;max-height:480px;overflow-y:auto}
+.cp-col[data-col="ideias"]{border-left:3px solid #64748b}
+.cp-col[data-col="scripts"]{border-left:3px solid #f59e0b}
+.cp-col[data-col="designer"]{border-left:3px solid #a855f7}
+.cp-col[data-col="teste"]{border-left:3px solid #10b981}
+.cp-col[data-col="ideias"] .cp-col-name{color:#94a3b8}
+.cp-col[data-col="scripts"] .cp-col-name{color:#f59e0b}
+.cp-col[data-col="designer"] .cp-col-name{color:#c084fc}
+.cp-col[data-col="teste"] .cp-col-name{color:#10b981}
+.cp-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:10px 12px;cursor:grab;transition:all .15s;position:relative}
+.cp-card:hover{border-color:var(--b3);box-shadow:var(--sh1);background:var(--s2)}
+.cp-card.dragging{opacity:.4;cursor:grabbing}
+.cp-card-tit{font-size:13px;font-weight:500;color:var(--tx);line-height:1.35;margin-bottom:6px;padding-right:18px}
+.cp-card-tags{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.cp-card-tag{font-size:9.5px;font-weight:600;padding:2px 6px;border-radius:4px;letter-spacing:.03em;background:var(--s4);color:var(--t2)}
+.cp-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--t4)}
+.cp-card-perf{font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;flex-shrink:0}
+.cp-card-perf.p-win{background:rgba(251,191,36,.15);color:#fbbf24}
+.cp-card-perf.p-test{background:rgba(96,165,250,.15);color:var(--bl2)}
+.cp-card-perf.p-paused{background:rgba(239,68,68,.10);color:var(--rd)}
+.cp-card-x{position:absolute;top:8px;right:8px;background:transparent;border:none;color:var(--t4);cursor:pointer;font-size:14px;padding:0;line-height:1;opacity:0;transition:opacity .15s}
+.cp-card:hover .cp-card-x{opacity:1}
+.cp-card-x:hover{color:var(--rd)}
+.cp-add-btn{background:transparent;border:1px dashed var(--b2);color:var(--t3);border-radius:6px;padding:7px;font-size:11.5px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit}
+.cp-add-btn:hover{border-color:var(--bl);color:var(--bl2)}
+
 /* Indicador "ao vivo" do auto-refresh do log de webhooks */
 .wh-auto-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gr);box-shadow:0 0 0 0 rgba(16,185,129,.6);animation:whPulse 1.8s infinite}
 @keyframes whPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.6)}70%{box-shadow:0 0 0 6px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}
@@ -2212,6 +2266,83 @@ h1 em{font-weight:700}
   </div>
 </div>
 
+<!-- ═══ MODAL: CRIATIVO (Design & Copy) ═══ -->
+<div class="overlay" id="m-criativo">
+  <div class="modal lg">
+    <div class="m-h">
+      <span class="mt">🎬 Editar Criativo</span>
+      <div class="m-actions">
+        <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiro()">📋 Copiar roteiro</button>
+        <button class="btn btn-bl btn-sm" onclick="cpSaveEdit()">Salvar</button>
+        <button class="m-x" onclick="closeM('m-criativo')">×</button>
+      </div>
+    </div>
+    <div class="m-b">
+      <div class="fg fg2">
+        <div class="field"><label>Título / nome do criativo</label><input id="cpe-titulo" placeholder="Ex: Mãe diabetes - história v3"></div>
+        <div class="field"><label>Etapa</label>
+          <select id="cpe-col">
+            <option value="ideias">Novas Ideias</option>
+            <option value="scripts">Scripts Prontos</option>
+            <option value="designer">Com o Designer</option>
+            <option value="teste">Pronto p/ Teste</option>
+          </select>
+        </div>
+      </div>
+      <div class="fg fg2" style="margin-top:8px">
+        <div class="field"><label>Ângulo da Campanha</label>
+          <select id="cpe-angulo"></select>
+        </div>
+        <div class="field"><label>Nível de Dor</label>
+          <select id="cpe-dor"></select>
+        </div>
+      </div>
+      <div class="fg fg2" style="margin-top:8px">
+        <div class="field"><label>Designer responsável</label>
+          <select id="cpe-designer"></select>
+        </div>
+        <div class="field"><label>Performance (Gestor de Tráfego)</label>
+          <select id="cpe-perf">
+            <option value="">— Não testado ainda —</option>
+            <option value="win">🏆 Vencedor — Escalar</option>
+            <option value="test">🔄 Testando</option>
+            <option value="paused">🚫 Pausado / Baixo CTR</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-top:14px">Roteiro</div>
+      <div class="cp-script-blocks">
+        <div class="cp-block b-hook">
+          <div class="cp-block-h"><span class="cp-block-time">0–3s</span><span class="cp-block-lbl">🎯 Hook</span></div>
+          <textarea id="cpe-hook"></textarea>
+        </div>
+        <div class="cp-block b-ret">
+          <div class="cp-block-h"><span class="cp-block-time">3–15s</span><span class="cp-block-lbl">💔 Retenção / Dor</span></div>
+          <textarea id="cpe-retencao"></textarea>
+        </div>
+        <div class="cp-block b-of">
+          <div class="cp-block-h"><span class="cp-block-time">15–45s</span><span class="cp-block-lbl">💎 Oferta</span></div>
+          <textarea id="cpe-oferta"></textarea>
+        </div>
+        <div class="cp-block b-cta">
+          <div class="cp-block-h"><span class="cp-block-time">45–60s</span><span class="cp-block-lbl">📣 CTA (COD)</span></div>
+          <textarea id="cpe-cta"></textarea>
+        </div>
+      </div>
+
+      <div class="fg fg2" style="margin-top:14px">
+        <div class="field"><label>🔗 Link do arquivo final (Drive / WeTransfer / etc)</label>
+          <input id="cpe-link" placeholder="https://...">
+        </div>
+        <div class="field"><label>Observações</label>
+          <input id="cpe-obs" placeholder="Ex: usar voz feminina, fundo amarelo, etc">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: WEBHOOK SIM ═══ -->
 <div class="overlay" id="m-wh">
   <div class="modal lg">
@@ -2718,6 +2849,9 @@ TEAM=DB.team;
 if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
 KB_COLS=DB.kb_cols;
 if(!DB.payt_mapping){DB.payt_mapping=JSON.parse(JSON.stringify(DEFAULT_DB.payt_mapping))}
+// Bootstrap do módulo Design & Copy (Criativos)
+if(!DB.criativos){DB.criativos=[]}
+if(!DB.nextCriativo){DB.nextCriativo=1}
 if(!DB.demConfig){DB.demConfig=JSON.parse(JSON.stringify(DEFAULT_DB.demConfig))}
 // Migração: campos novos do demConfig
 if(!DB.demConfig.mode)DB.demConfig.mode='afiliado';
@@ -8691,42 +8825,377 @@ async function deleteProduto(){
   persist();closeM('m-prod');refreshUI();toast('Excluído','ok');
 }
 
-// ─── PAGE: Criativos / Copies (placeholder em construção) ───
+// ─── PAGE: Criativos / Design & Copy ───
+// Módulo de criação de roteiros pra TikTok Ads. 3 pilares:
+//  1. Gerador de Script (AI templated) — combina ângulo × dor em 4 blocos cronometrados
+//  2. Esteira de Produção (Kanban: Ideias → Scripts → Designer → Teste)
+//  3. Classificação de Performance (feedback do Gestor de Tráfego)
 function pageCopies(){return `<div class="page" id="copies-pg"></div>`}
+
+// ─── Banco de hooks/retenção/ofertas/CTAs (templates persuasivos pro nicho diabetes/energia)
+const COPY_ANGULOS={
+  historia_pessoal:{
+    label:'🤝 História Pessoal',
+    hooks:[
+      "Eu não sou de gravar vídeo, mas o que aconteceu comigo me obrigou a aparecer aqui...",
+      "Tenho 47 anos e há 6 meses minha vida mudou completamente. Vou te contar o que aconteceu.",
+      "Minha mãe tem 58 anos e tava prestes a entrar pra insulina — até descobrir isso por acaso.",
+      "Há 8 meses eu não tinha mais energia pra nada. Hoje gravando esse vídeo com 100% de disposição.",
+    ],
+  },
+  alerta_saude:{
+    label:'🚨 Alerta de Saúde',
+    hooks:[
+      "ATENÇÃO: se você tem mais de 40 anos e sente as pernas pesadas, precisa ver isso antes que seja tarde.",
+      "O que ninguém te conta sobre a glicose acima de 120 — e o que realmente acontece com seu corpo.",
+      "3 sinais que seu corpo dá ANTES da glicose subir de vez. E que os médicos quase nunca falam.",
+      "Se você toma metformina, glibenclamida ou outro remédio pra diabetes, NÃO PASSA esse vídeo.",
+    ],
+  },
+  abordagem_familiar:{
+    label:'👨‍👩‍👧 Abordagem Familiar',
+    hooks:[
+      "Mostra esse vídeo pro seu pai, sua mãe ou seu avô — antes que seja tarde demais.",
+      "Filho, se você ama seus pais, presta atenção nos próximos 30 segundos.",
+      "Meu marido tinha medo de não acordar mais por causa da glicose. Hoje ele tá assim 👇",
+      "Minha filha me ligou chorando porque achou que eu não ia mais aguentar. Aí descobri isso.",
+    ],
+  },
+};
+const COPY_DORES={
+  energia:{
+    label:'💪 Energia / Disfunção',
+    retencao:[
+      "Aquela sensação de acordar mais cansado do que dormiu, pernas pesadas, sem disposição pra nada — isso NÃO é só idade.",
+      "Você sente que sua energia some no meio da tarde? Que não dá conta nem das coisas simples? Tem nome pra isso, e tem solução.",
+      "Disfunção, cansaço crônico, sensação de envelhecimento acelerado — tudo isso pode ter UMA causa só.",
+      "Aquela frustração de não conseguir mais brincar com os netos, subir uma escada sem ofegar, ter intimidade com a esposa... é HORA de virar esse jogo.",
+    ],
+  },
+  glicose:{
+    label:'🩸 Controle de Glicose',
+    retencao:[
+      "Glicemia acima de 120, picos depois das refeições, aquele medo de descobrir algo pior nos próximos exames...",
+      "Diabetes não acontece da noite pro dia — seu corpo te avisa MESES antes, com sinais que a maioria ignora.",
+      "Boca seca constante, sede absurda, formigamento nas mãos e nos pés — não é envelhecimento, é sua glicose pedindo socorro.",
+      "Se você já mediu sua glicemia e ela tá entre 100 e 140, presta atenção: você tá no caminho do diabetes — mas dá pra reverter.",
+    ],
+  },
+};
+const COPY_OFERTAS=[
+  "Esse tratamento natural foi formulado por especialistas e já mudou a vida de mais de 18 mil pessoas no Brasil. Você toma 2 cápsulas por dia e em 7 a 15 dias já começa a sentir a diferença real.",
+  "É um composto 100% natural, sem efeito colateral, registrado e aprovado. Tá ajudando milhares de pessoas a recuperar a energia e o controle da glicose sem depender de remédio.",
+  "Não é remédio, não tem química pesada — é uma fórmula natural que age direto na causa raiz. Funciona pra 9 em cada 10 pessoas que começam o tratamento corretamente.",
+  "Um composto de ingredientes naturais que age em 3 frentes: normaliza a glicose, devolve a energia e protege os vasos sanguíneos. Resultado em poucas semanas.",
+];
+const COPY_CTAS=[
+  "E o melhor: você NÃO PAGA NADA AGORA. Você só paga quando o produto chegar na sua porta. Sem risco, sem cartão, sem assinatura. Clica no link aqui embaixo e pede o seu.",
+  "Pra pegar o seu, clica no link aqui em baixo. Você só paga quando receber em casa — então não tem risco nenhum. Garantia total.",
+  "Aperta o botão pra pedir o seu agora. Sem boleto, sem PIX, sem cartão. Você só paga na hora que o entregador deixar a caixinha na sua mão.",
+  "Faz o seguinte: clica no link, preenche seu endereço, e a gente manda o produto pra você testar. Você paga só na entrega. Se não funcionar, sem problema — não paga nada.",
+];
+
+const COPY_PERFS={
+  win:    {ic:'🏆',l:'Vencedor — Escalar',cls:'p-win'},
+  test:   {ic:'🔄',l:'Testando',cls:'p-test'},
+  paused: {ic:'🚫',l:'Pausado / Baixo CTR',cls:'p-paused'},
+};
+const COPY_COLS=[
+  {id:'ideias',  l:'Novas Ideias'},
+  {id:'scripts', l:'Scripts Prontos'},
+  {id:'designer',l:'Com o Designer'},
+  {id:'teste',   l:'Pronto p/ Teste'},
+];
+
+// ─── State da geração atual (não persiste — é só o draft em tela)
+let _cpDraft={angulo:'historia_pessoal',dor:'energia',hook:'',retencao:'',oferta:'',cta:''};
+
+function pick(arr){return arr[Math.floor(Math.random()*arr.length)]}
+function cpGerar(){
+  const ang=$('cp-angulo').value, dor=$('cp-dor').value;
+  _cpDraft.angulo=ang;_cpDraft.dor=dor;
+  _cpDraft.hook    = pick(COPY_ANGULOS[ang]?.hooks||['']);
+  _cpDraft.retencao= pick(COPY_DORES[dor]?.retencao||['']);
+  _cpDraft.oferta  = pick(COPY_OFERTAS);
+  _cpDraft.cta     = pick(COPY_CTAS);
+  // Reescreve textareas
+  $('cp-hook').value=_cpDraft.hook;
+  $('cp-retencao').value=_cpDraft.retencao;
+  $('cp-oferta').value=_cpDraft.oferta;
+  $('cp-cta').value=_cpDraft.cta;
+  toast('✨ Roteiro gerado — ajuste o texto e salve como ideia','ok');
+}
+function cpSalvarIdeia(){
+  if(isReadOnly()&&!isDes()){toast('🔒 Modo Visualização ativo','err');return;}
+  const hook=$('cp-hook').value.trim();
+  if(!hook){toast('Gere um roteiro primeiro (ou digite o hook)','err');return;}
+  const angulo=$('cp-angulo').value, dor=$('cp-dor').value;
+  const titulo=hook.slice(0,60)+(hook.length>60?'...':'');
+  DB.criativos.unshift({
+    id:DB.nextCriativo++,
+    titulo,
+    angulo,dor,
+    blocos:{
+      hook,
+      retencao:$('cp-retencao').value.trim(),
+      oferta:$('cp-oferta').value.trim(),
+      cta:$('cp-cta').value.trim(),
+    },
+    col:'ideias',
+    link_arquivo:'',
+    designer_id:'',
+    perf:null,
+    obs:'',
+    created_at:Date.now(),
+  });
+  persist();renderCopies();
+  toast('✓ Ideia salva no Kanban','ok');
+}
+function cpLimparDraft(){
+  ['cp-hook','cp-retencao','cp-oferta','cp-cta'].forEach(id=>{const e=$(id);if(e)e.value=''});
+  _cpDraft.hook=_cpDraft.retencao=_cpDraft.oferta=_cpDraft.cta='';
+}
+
+// ─── Kanban CRUD
+let _cpDragId=null;
+function cpDragStart(id){_cpDragId=id}
+function cpDropOn(col){
+  if(!_cpDragId)return;
+  const c=DB.criativos.find(x=>x.id===_cpDragId);
+  if(c&&c.col!==col){c.col=col;persist();renderCopies();}
+  _cpDragId=null;
+}
+function cpAddBlank(col){
+  if(isReadOnly()&&!isDes())return;
+  const titulo=prompt('Título da ideia / criativo:');
+  if(!titulo||!titulo.trim())return;
+  DB.criativos.unshift({
+    id:DB.nextCriativo++,
+    titulo:titulo.trim(),
+    angulo:'historia_pessoal',dor:'energia',
+    blocos:{hook:'',retencao:'',oferta:'',cta:''},
+    col,link_arquivo:'',designer_id:'',perf:null,obs:'',created_at:Date.now(),
+  });
+  persist();renderCopies();
+}
+function cpDelete(id){
+  if(!confirm('Excluir este criativo?'))return;
+  DB.criativos=DB.criativos.filter(c=>c.id!==id);
+  persist();renderCopies();
+}
+
+// ─── Modal de edição do card
+let _cpEditId=null;
+function cpOpenEdit(id){
+  const c=DB.criativos.find(x=>x.id===id);if(!c)return;
+  _cpEditId=id;
+  openM('m-criativo');
+  setTimeout(()=>{
+    // Popula selects de ângulo/dor (carregados aqui pra serem traduzíveis no futuro)
+    $('cpe-angulo').innerHTML=Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-dor').innerHTML=Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-titulo').value=c.titulo||'';
+    $('cpe-angulo').value=c.angulo||'historia_pessoal';
+    $('cpe-dor').value=c.dor||'energia';
+    $('cpe-hook').value=c.blocos?.hook||'';
+    $('cpe-retencao').value=c.blocos?.retencao||'';
+    $('cpe-oferta').value=c.blocos?.oferta||'';
+    $('cpe-cta').value=c.blocos?.cta||'';
+    $('cpe-link').value=c.link_arquivo||'';
+    $('cpe-obs').value=c.obs||'';
+    $('cpe-col').value=c.col||'ideias';
+    $('cpe-perf').value=c.perf||'';
+    // Popula designer (apenas usuários role='designer')
+    const designers=TEAM.filter(t=>t.role==='designer'&&!t.archived&&!t._preview);
+    $('cpe-designer').innerHTML='<option value="">— Sem designer atribuído —</option>'+
+      designers.map(d=>`<option value="${d.id}" ${c.designer_id===d.id?'selected':''}>${d.name}</option>`).join('');
+  },20);
+}
+function cpSaveEdit(){
+  const c=DB.criativos.find(x=>x.id===_cpEditId);if(!c)return;
+  c.titulo=$('cpe-titulo').value.trim()||'(sem título)';
+  c.angulo=$('cpe-angulo').value;
+  c.dor=$('cpe-dor').value;
+  c.blocos={
+    hook:$('cpe-hook').value.trim(),
+    retencao:$('cpe-retencao').value.trim(),
+    oferta:$('cpe-oferta').value.trim(),
+    cta:$('cpe-cta').value.trim(),
+  };
+  c.link_arquivo=$('cpe-link').value.trim();
+  c.designer_id=$('cpe-designer').value;
+  c.obs=$('cpe-obs').value.trim();
+  c.col=$('cpe-col').value;
+  c.perf=$('cpe-perf').value||null;
+  c.updated_at=Date.now();
+  persist();closeM('m-criativo');renderCopies();
+  toast('✓ Criativo atualizado','ok');
+}
+function cpCopiarRoteiro(id){
+  const c=(id===undefined)?{blocos:{hook:$('cpe-hook').value,retencao:$('cpe-retencao').value,oferta:$('cpe-oferta').value,cta:$('cpe-cta').value}}:DB.criativos.find(x=>x.id===id);
+  if(!c)return;
+  const b=c.blocos||{};
+  const txt=`*ROTEIRO TIKTOK ADS*\n\n*[0-3s] HOOK*\n${b.hook||'—'}\n\n*[3-15s] RETENÇÃO / DOR*\n${b.retencao||'—'}\n\n*[15-45s] OFERTA*\n${b.oferta||'—'}\n\n*[45-60s] CTA (COD)*\n${b.cta||'—'}`;
+  navigator.clipboard.writeText(txt).then(()=>toast('✓ Roteiro copiado','ok')).catch(()=>toast('Erro ao copiar','err'));
+}
+
 function renderCopies(){
   const c=$('copies-pg');if(!c)return;
+  const criativos=DB.criativos||[];
+
   c.innerHTML=`
   <div class="ph">
     <div>
-      <h1>Criativos · <em>Copies</em></h1>
-      <p>${isDes()?`Olá, ${CUR?.name||'designer'}! `:''}Criação assistida de textos pra anúncios e criativos</p>
+      <h1>Design & <em>Copy</em></h1>
+      <p>${isDes()?`Olá, ${CUR?.name||'designer'}! `:''}Criação de roteiros pra TikTok Ads · ${criativos.length} criativo${criativos.length!==1?'s':''} cadastrado${criativos.length!==1?'s':''}</p>
     </div>
   </div>
-  <div class="panel" style="margin-top:18px;text-align:center;padding:48px 24px">
-    <div style="font-size:48px;margin-bottom:14px">✍️</div>
-    <h2 style="font-size:20px;font-weight:600;color:var(--tx);margin-bottom:8px">Área em construção</h2>
-    <p class="muted" style="font-size:14px;max-width:520px;margin:0 auto 22px;line-height:1.6">
-      Aqui você vai poder gerar copies para novos criativos: hook, dor, prova social, oferta e CTA — tudo prontinho pra colar no Meta/TikTok Ads.
-    </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;max-width:760px;margin:0 auto;text-align:left">
-      <div class="cfg-card" style="padding:16px">
-        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">🎯 Hook + Dor</div>
-        <div class="muted" style="font-size:12px;line-height:1.5">Abertura que prende atenção no scroll, seguida da dor central do público.</div>
-      </div>
-      <div class="cfg-card" style="padding:16px">
-        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">💎 Oferta + Prova</div>
-        <div class="muted" style="font-size:12px;line-height:1.5">Apresentação do produto, benefícios e provas sociais que validam.</div>
-      </div>
-      <div class="cfg-card" style="padding:16px">
-        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">📣 CTA + Urgência</div>
-        <div class="muted" style="font-size:12px;line-height:1.5">Chamada de ação final com gatilho de escassez ou urgência.</div>
-      </div>
-      <div class="cfg-card" style="padding:16px">
-        <div style="font-size:13px;font-weight:600;color:var(--tx);margin-bottom:4px">🎬 Roteiro completo</div>
-        <div class="muted" style="font-size:12px;line-height:1.5">Versão consolidada pronta pra gravar/postar — narração + texto na tela.</div>
+
+  <!-- PILAR 1: Gerador de Script -->
+  <div class="cp-pillar">
+    <div class="cp-pillar-h">
+      <div class="cp-pillar-num">1</div>
+      <div>
+        <div class="cp-pillar-tit">Framework de Criação</div>
+        <div class="cp-pillar-sub">Escolha o ângulo e a dor; geramos um roteiro persuasivo em 4 blocos</div>
       </div>
     </div>
-    <p class="muted" style="font-size:12px;margin-top:28px">Em breve. Por enquanto este é só o placeholder do módulo.</p>
+
+    <div class="cp-gen-controls">
+      <div class="field"><label>Ângulo da Campanha</label>
+        <select id="cp-angulo">
+          ${Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Nível de Dor</label>
+        <select id="cp-dor">
+          ${Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.dor?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-bl" onclick="cpGerar()" style="height:38px">✨ Gerar Roteiro</button>
+    </div>
+
+    <div class="cp-script-blocks">
+      <div class="cp-block b-hook">
+        <div class="cp-block-h">
+          <span class="cp-block-time">0–3s</span>
+          <span class="cp-block-lbl">🎯 Hook · curiosidade / quebra de padrão</span>
+        </div>
+        <textarea id="cp-hook" placeholder="Abertura informal, humanizada — prende a atenção nos primeiros 3 segundos.">${_cpDraft.hook||''}</textarea>
+      </div>
+      <div class="cp-block b-ret">
+        <div class="cp-block-h">
+          <span class="cp-block-time">3–15s</span>
+          <span class="cp-block-lbl">💔 Retenção · dor real do público</span>
+        </div>
+        <textarea id="cp-retencao" placeholder="Conexão imediata com sintomas reais — pernas pesadas, esgotamento, medo do futuro.">${_cpDraft.retencao||''}</textarea>
+      </div>
+      <div class="cp-block b-of">
+        <div class="cp-block-h">
+          <span class="cp-block-time">15–45s</span>
+          <span class="cp-block-lbl">💎 Oferta · solução natural e direta</span>
+        </div>
+        <textarea id="cp-oferta" placeholder="Apresentação do tratamento de forma simples — quem é, como funciona, prova social.">${_cpDraft.oferta||''}</textarea>
+      </div>
+      <div class="cp-block b-cta">
+        <div class="cp-block-h">
+          <span class="cp-block-time">45–60s</span>
+          <span class="cp-block-lbl">📣 CTA · quebra de objeção (COD)</span>
+        </div>
+        <textarea id="cp-cta" placeholder="Foco em: 'só paga quando chegar na sua porta'. Sem cartão, sem risco.">${_cpDraft.cta||''}</textarea>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-gr btn-sm" onclick="cpSalvarIdeia()">💾 Salvar como ideia (vai pro Kanban)</button>
+      <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiro()">📋 Copiar roteiro</button>
+      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" style="margin-left:auto">🗑 Limpar</button>
+    </div>
+  </div>
+
+  <!-- PILAR 2: Kanban -->
+  <div class="cp-pillar">
+    <div class="cp-pillar-h">
+      <div class="cp-pillar-num">2</div>
+      <div>
+        <div class="cp-pillar-tit">Esteira de Produção</div>
+        <div class="cp-pillar-sub">Arraste os cards entre as etapas conforme o vídeo evolui</div>
+      </div>
+    </div>
+
+    <div class="cp-kb">
+      ${COPY_COLS.map(col=>{
+        const cards=criativos.filter(c=>(c.col||'ideias')===col.id);
+        return `<div class="cp-col" data-col="${col.id}"
+            ondragover="event.preventDefault();this.style.background='var(--s4)'"
+            ondragleave="this.style.background=''"
+            ondrop="this.style.background='';cpDropOn('${col.id}')">
+          <div class="cp-col-h">
+            <span class="cp-col-name">${col.l}</span>
+            <span class="cp-col-cnt">${cards.length}</span>
+          </div>
+          <div class="cp-col-cards">
+            ${cards.map(card=>{
+              const ang=COPY_ANGULOS[card.angulo]?.label||'';
+              const dor=COPY_DORES[card.dor]?.label||'';
+              const perf=card.perf?COPY_PERFS[card.perf]:null;
+              const designer=card.designer_id?getTeam(card.designer_id):null;
+              return `<div class="cp-card" draggable="true"
+                ondragstart="cpDragStart(${card.id});this.classList.add('dragging')"
+                ondragend="this.classList.remove('dragging')"
+                onclick="cpOpenEdit(${card.id})">
+                <button class="cp-card-x" onclick="event.stopPropagation();cpDelete(${card.id})" title="Excluir">×</button>
+                <div class="cp-card-tit">${card.titulo||'(sem título)'}</div>
+                <div class="cp-card-tags">
+                  ${ang?`<span class="cp-card-tag">${ang}</span>`:''}
+                  ${dor?`<span class="cp-card-tag">${dor}</span>`:''}
+                </div>
+                <div class="cp-card-foot">
+                  <span>${designer?'🎨 '+designer.name:card.link_arquivo?'🔗 arquivo':'—'}</span>
+                  ${perf?`<span class="cp-card-perf ${perf.cls}">${perf.ic} ${perf.l.split(' ')[0]}</span>`:''}
+                </div>
+              </div>`;
+            }).join('')}
+            <button class="cp-add-btn" onclick="cpAddBlank('${col.id}')">+ Adicionar</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <!-- PILAR 3: Classificação de Performance -->
+  <div class="cp-pillar">
+    <div class="cp-pillar-h">
+      <div class="cp-pillar-num">3</div>
+      <div>
+        <div class="cp-pillar-tit">Classificação de Performance</div>
+        <div class="cp-pillar-sub">${isGT()?'Marque o status de tração de cada criativo testado':'O Gestor de Tráfego classifica cada criativo após rodar'}</div>
+      </div>
+    </div>
+
+    ${(()=>{
+      const emTeste=criativos.filter(c=>c.col==='teste');
+      if(!emTeste.length){
+        return `<div class="muted" style="text-align:center;padding:28px;font-size:13px">Nenhum criativo em teste ainda.<br><span style="font-size:11.5px;opacity:.7">Mova um card pra coluna "Pronto p/ Teste" no Kanban acima.</span></div>`;
+      }
+      return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
+        ${emTeste.map(card=>{
+          const perf=card.perf?COPY_PERFS[card.perf]:null;
+          return `<div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:13px;font-weight:500;color:var(--tx);line-height:1.35;cursor:pointer" onclick="cpOpenEdit(${card.id})">${card.titulo}</div>
+            <div style="display:flex;gap:5px;flex-wrap:wrap">
+              ${Object.entries(COPY_PERFS).map(([k,p])=>{
+                const active=card.perf===k;
+                return `<button onclick="DB.criativos.find(c=>c.id===${card.id}).perf='${k}';persist();renderCopies()"
+                  style="flex:1;min-width:78px;font-size:10.5px;font-weight:600;padding:5px 7px;border-radius:5px;cursor:pointer;border:1px solid ${active?'currentColor':'var(--b1)'};background:${active?'rgba(255,255,255,.04)':'transparent'};color:${active?(k==='win'?'#fbbf24':k==='test'?'var(--bl2)':'var(--rd)'):'var(--t3)'};font-family:inherit;transition:all .12s">
+                  ${p.ic} ${p.l.split(' ')[0]}
+                </button>`;
+              }).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    })()}
   </div>`;
 }
 function pageConfig(){return `<div class="page" id="config-pg"></div>`}
