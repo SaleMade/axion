@@ -2298,6 +2298,14 @@ h1 em{font-weight:700}
         </div>
       </div>
       <div class="fg fg2" style="margin-top:8px">
+        <div class="field"><label>Tipo de Gancho</label>
+          <select id="cpe-gancho"></select>
+        </div>
+        <div class="field"><label>Duração</label>
+          <select id="cpe-duracao" onchange="cpeRenderBlocks()"></select>
+        </div>
+      </div>
+      <div class="fg fg2" style="margin-top:8px">
         <div class="field"><label>Designer responsável</label>
           <select id="cpe-designer"></select>
         </div>
@@ -2312,24 +2320,7 @@ h1 em{font-weight:700}
       </div>
 
       <div class="section-title" style="margin-top:14px">Roteiro</div>
-      <div class="cp-script-blocks">
-        <div class="cp-block b-hook">
-          <div class="cp-block-h"><span class="cp-block-time">0–3s</span><span class="cp-block-lbl">🎯 Hook</span></div>
-          <textarea id="cpe-hook"></textarea>
-        </div>
-        <div class="cp-block b-ret">
-          <div class="cp-block-h"><span class="cp-block-time">3–15s</span><span class="cp-block-lbl">💔 Retenção / Dor</span></div>
-          <textarea id="cpe-retencao"></textarea>
-        </div>
-        <div class="cp-block b-of">
-          <div class="cp-block-h"><span class="cp-block-time">15–45s</span><span class="cp-block-lbl">💎 Oferta</span></div>
-          <textarea id="cpe-oferta"></textarea>
-        </div>
-        <div class="cp-block b-cta">
-          <div class="cp-block-h"><span class="cp-block-time">45–60s</span><span class="cp-block-lbl">📣 CTA (COD)</span></div>
-          <textarea id="cpe-cta"></textarea>
-        </div>
-      </div>
+      <div class="cp-script-blocks" id="cpe-blocks-wrap"></div>
 
       <div class="fg fg2" style="margin-top:14px">
         <div class="field"><label>🔗 Link do arquivo final (Drive / WeTransfer / etc)</label>
@@ -8895,6 +8886,187 @@ const COPY_CTAS=[
   "Faz o seguinte: clica no link, preenche seu endereço, e a gente manda o produto pra você testar. Você paga só na entrega. Se não funcionar, sem problema — não paga nada.",
 ];
 
+// ─── GANCHOS (Headlines) — os 11 tipos do manual de copy
+// Cada tipo gera uma abertura diferente, contextualizada pro nicho diabetes/energia
+const COPY_GANCHOS={
+  curiosidade:{
+    label:'❓ Curiosidade',
+    desc:'Cria um vazio mental que só assistindo o vídeo se preenche',
+    hooks:[
+      "Você sabia que existe UM motivo absurdamente simples por que sua glicose nunca baixa? Os médicos não falam.",
+      "Tem uma coisa que acontece com seu corpo depois dos 40 que ninguém te conta — e que muda TUDO sobre energia.",
+      "Por que será que 9 em cada 10 diabéticos pioram mesmo tomando remédio? A resposta vai te chocar.",
+    ],
+  },
+  controversia:{
+    label:'⚡ Controvérsia',
+    desc:'Confronta o senso comum — gera comentário e engajamento',
+    hooks:[
+      "Vou te falar uma verdade que vai te incomodar: a metformina não tá te curando, tá te mantendo doente.",
+      "Tudo que seu médico te disse sobre diabetes pode estar errado. E eu vou provar isso em 60 segundos.",
+      "Pode parecer absurdo, mas eu MELHOREI minha glicose parando de seguir a dieta que o endócrino me deu.",
+    ],
+  },
+  autoridade:{
+    label:'🎓 Autoridade',
+    desc:'Especialista, médico, anos de experiência — credibilidade',
+    hooks:[
+      "Especialista em endocrinologia revela os 3 erros que diabéticos cometem todo dia sem perceber.",
+      "Pesquisador formado há 27 anos finalmente quebra o silêncio sobre o que realmente controla a glicose.",
+      "Médico cardiologista alerta: se você sente formigamento nas mãos, isso aqui é URGENTE.",
+    ],
+  },
+  pergunta:{
+    label:'🤔 Pergunta',
+    desc:'Pergunta direta que o público responde "sim" mentalmente',
+    hooks:[
+      "Você acorda mais cansado do que quando dormiu? Sente formigamento nas pernas? Sua glicose tá entre 110 e 140?",
+      "Você já parou pra pensar por que mesmo seguindo a dieta direitinho sua glicose continua descontrolada?",
+      "Você sabia que existe uma explicação científica do por que seu corpo trava depois dos 40?",
+    ],
+  },
+  exclusividade:{
+    label:'🔐 Exclusividade',
+    desc:'Conteúdo restrito, segredo profissional, "só você vai ver isso"',
+    hooks:[
+      "Os 3 ingredientes que farmacêuticos não querem que você descubra pra controlar a glicose em casa.",
+      "Esse método foi guardado a 7 chaves por 12 anos. Hoje vou compartilhar com você gratuitamente.",
+      "O único composto natural que a indústria farmacêutica não consegue patentear — e por isso esconde.",
+    ],
+  },
+  como_fazer:{
+    label:'🛠 Como Fazer',
+    desc:'Promessa de método prático e replicável',
+    hooks:[
+      "Como controlar a glicose em 7 dias sem cortar o pão, o arroz e o doce que você ama.",
+      "Como recuperar a energia que você tinha aos 30 anos — mesmo com 55+ e sentindo cansaço crônico.",
+      "Como diminuir a glicemia em até 35 pontos sem aumentar a dose do remédio.",
+    ],
+  },
+  prova_social:{
+    label:'⭐ Prova Social',
+    desc:'Depoimento real, números, casos de sucesso',
+    hooks:[
+      "Mais de 18.000 brasileiros já normalizaram a glicose com esse método. Olha o depoimento da Dona Inês:",
+      "Quando vi 3 vizinhas falando do mesmo produto, achei que era coincidência. Hoje uso e indico pra todo mundo.",
+      "Minha mãe foi a 4ª pessoa do prédio a começar esse tratamento. Hoje ela tá assim 👇",
+    ],
+  },
+  segredo:{
+    label:'🤫 Segredo',
+    desc:'Revelação de informação privilegiada',
+    hooks:[
+      "Os 3 segredos que nenhum endocrinologista vai te contar — porque se contar, perde paciente.",
+      "Esse aqui é o SEGREDO que minha sogra de 78 anos guardou por 20 anos pra manter a glicose normal.",
+      "Vou te revelar o segredo que MUDOU a vida do meu pai diabético — e que custou exatamente R$0.",
+    ],
+  },
+  historia:{
+    label:'📖 História',
+    desc:'Narrativa pessoal — gera identificação e conexão',
+    hooks:[
+      "Tenho 47 anos. Há 6 meses eu não conseguia subir 1 lance de escada sem ofegar. Hoje gravei esse vídeo de pé.",
+      "Meu pai morreu de complicação de diabetes em 2019. Eu jurei que não ia seguir o mesmo caminho. Vou te contar o que mudei.",
+      "Eu chorei no consultório quando o médico falou que precisava entrar pra insulina. E foi aí que descobri isso.",
+    ],
+  },
+  promessa:{
+    label:'🎯 Promessa',
+    desc:'Resultado específico em tempo determinado',
+    hooks:[
+      "Normalize sua glicose em até 21 dias com esse protocolo natural — mesmo se você tem diabetes há mais de 10 anos.",
+      "Recupere sua energia em 7 dias sem precisar mudar nada na alimentação ou tomar mais remédio.",
+      "Em 15 dias você vai sentir as pernas leves de novo, dormir a noite inteira e acordar disposto.",
+    ],
+  },
+  inimigo:{
+    label:'😡 Inimigo Comum',
+    desc:'Vilão claro (indústria, sistema, falsa narrativa)',
+    hooks:[
+      "A indústria farmacêutica não quer que você veja esse vídeo. Eles ganham R$ 8 bilhões por ano com diabéticos.",
+      "Existe um lobby gigante pra esconder esse método. Por isso você nunca ouviu falar disso no consultório.",
+      "Por que o SUS não distribui esse composto? Simples: ninguém ganharia dinheiro se você se curasse.",
+    ],
+  },
+};
+
+// ─── PICTURE (Pilar 2 do conteúdo — só usado em vídeos médios/longos)
+// Intensifica o problema com emoção
+const COPY_PICTURES=[
+  "Imagina acordar daqui a 5 anos e não conseguir mais sentir as pernas. Imagina não poder mais brincar com seus netos. Imagina ter que injetar insulina 3x por dia.",
+  "Sabe aquela sensação de chegar em casa às 18h e já tá exausto? Isso vai virar regra, não exceção. E vai piorar.",
+  "Cada vez que sua glicose passa de 180, é um pedacinho do seu nervo, do seu olho, do seu rim que se vai. Pra sempre.",
+];
+
+// ─── MECANISMO (Pilar 3 — explica POR QUE o produto funciona)
+const COPY_MECANISMOS=[
+  "Acontece que existe uma proteína chamada GLP-1 que regula a glicose no seu corpo. Depois dos 40, sua produção cai 60%. Esse composto reativa a produção natural dela.",
+  "Tem 3 plantas amazônicas que agem como insulina natural — só que sem efeito colateral. A ciência descobriu isso em 2019 e desde então virou febre nos EUA.",
+  "O segredo não é a glicose, é a SENSIBILIDADE à insulina. Esse composto restaura essa sensibilidade em poucas semanas — voltando seu corpo a funcionar como aos 30 anos.",
+];
+
+// ─── BULLETS (Pilar 4 — promessa do que vai aprender / consequências evitáveis)
+const COPY_BULLETS=[
+  "Você vai descobrir: ✓ os 3 alimentos que parecem saudáveis mas DISPARAM sua glicose · ✓ o horário exato pra tomar e potencializar o efeito · ✓ por que misturar com X comum no Brasil acelera 3x o resultado.",
+  "Aqui você não precisa: ❌ fazer dieta restritiva · ❌ ficar furando o dedo o tempo todo · ❌ comprar suplemento importado caro · ❌ marcar consulta com endócrino toda semana.",
+  "Em poucos dias você vai sentir: ✓ glicose estável o dia inteiro · ✓ disposição de manhã · ✓ sono profundo de novo · ✓ pernas leves · ✓ apetite controlado.",
+];
+
+// ─── GARANTIA (usado em VSLs longas)
+const COPY_GARANTIAS=[
+  "Você vai testar por 30 dias na sua casa. Se não funcionar, devolvemos 100% do valor — sem perguntas, sem burocracia. Você não tem NADA a perder.",
+  "Garantia incondicional de 90 dias. Use, abuse, teste. Se em 3 meses você não estiver satisfeito, devolvemos cada centavo. O risco é todo nosso.",
+  "Aqui o compromisso é claro: ou você melhora ou recebe seu dinheiro de volta. Inclusive das cápsulas já usadas. É um teste 100% sem risco.",
+];
+
+// ─── DURAÇÕES — definem a ESTRUTURA do roteiro
+const COPY_DURACOES={
+  '30s':{
+    label:'⚡ Reels Rápido (30s)',
+    desc:'Hook forte + CTA direto. Pra TikTok/Reels engagement.',
+    blocos:[
+      {k:'hook',     t:'0–5s',  l:'🎯 Hook impactante',      cls:'b-hook'},
+      {k:'cta',      t:'5–30s', l:'📣 Solução + CTA rápido', cls:'b-cta'},
+    ],
+  },
+  '1min':{
+    label:'🎬 Anúncio Padrão (1min)',
+    desc:'Estrutura clássica de conversão. Indicado pra COD.',
+    blocos:[
+      {k:'hook',     t:'0–3s',   l:'🎯 Hook',                cls:'b-hook'},
+      {k:'retencao', t:'3–15s',  l:'💔 Retenção / Dor',      cls:'b-ret'},
+      {k:'oferta',   t:'15–45s', l:'💎 Oferta',              cls:'b-of'},
+      {k:'cta',      t:'45–60s', l:'📣 CTA (COD)',           cls:'b-cta'},
+    ],
+  },
+  '3min':{
+    label:'🎥 Anúncio Longo (3min)',
+    desc:'Mais espaço pra construir argumento. PICTURE + Mecanismo.',
+    blocos:[
+      {k:'hook',     t:'0–5s',     l:'🎯 Hook',                          cls:'b-hook'},
+      {k:'picture',  t:'5–30s',    l:'🖼 Picture (intensifica a dor)',   cls:'b-ret'},
+      {k:'mecanismo',t:'30s–1m20', l:'⚙️ Mecanismo (por que funciona)',  cls:'b-ret'},
+      {k:'bullets',  t:'1m20–2m',  l:'✅ Bullets / Promessas',           cls:'b-of'},
+      {k:'oferta',   t:'2m–2m40',  l:'💎 Oferta detalhada',              cls:'b-of'},
+      {k:'cta',      t:'2m40–3m',  l:'📣 CTA + Garantia',                cls:'b-cta'},
+    ],
+  },
+  'vsl':{
+    label:'📺 VSL (4–6min)',
+    desc:'Vídeo de venda completo. Storytelling + autoridade + prova social.',
+    blocos:[
+      {k:'hook',     t:'0–10s',    l:'🎯 Hook + Promessa Grande',         cls:'b-hook'},
+      {k:'picture',  t:'10s–45s',  l:'🖼 Picture (dor amplificada)',      cls:'b-ret'},
+      {k:'historia', t:'45s–1m45', l:'📖 História pessoal / Autoridade',  cls:'b-ret'},
+      {k:'mecanismo',t:'1m45–2m45',l:'⚙️ Mecanismo (a descoberta)',       cls:'b-ret'},
+      {k:'bullets',  t:'2m45–3m30',l:'✅ Bullets (o que vai aprender)',   cls:'b-of'},
+      {k:'oferta',   t:'3m30–4m30',l:'💎 Oferta + Preço',                 cls:'b-of'},
+      {k:'garantia', t:'4m30–5m',  l:'🛡 Garantia incondicional',         cls:'b-cta'},
+      {k:'cta',      t:'5m–6m',    l:'📣 CTA final + Urgência',           cls:'b-cta'},
+    ],
+  },
+};
+
 const COPY_PERFS={
   win:    {ic:'🏆',l:'Vencedor — Escalar',cls:'p-win'},
   test:   {ic:'🔄',l:'Testando',cls:'p-test'},
@@ -8908,39 +9080,114 @@ const COPY_COLS=[
 ];
 
 // ─── State da geração atual (não persiste — é só o draft em tela)
-let _cpDraft={angulo:'historia_pessoal',dor:'energia',hook:'',retencao:'',oferta:'',cta:''};
+let _cpDraft={
+  angulo:'historia_pessoal',
+  dor:'energia',
+  gancho:'historia',
+  duracao:'1min',
+  blocos:{}, // { hook:'', retencao:'', oferta:'', cta:'', picture:'', mecanismo:'', bullets:'', historia:'', garantia:'' }
+};
 
 function pick(arr){return arr[Math.floor(Math.random()*arr.length)]}
-function cpGerar(){
-  const ang=$('cp-angulo').value, dor=$('cp-dor').value;
-  _cpDraft.angulo=ang;_cpDraft.dor=dor;
-  _cpDraft.hook    = pick(COPY_ANGULOS[ang]?.hooks||['']);
-  _cpDraft.retencao= pick(COPY_DORES[dor]?.retencao||['']);
-  _cpDraft.oferta  = pick(COPY_OFERTAS);
-  _cpDraft.cta     = pick(COPY_CTAS);
-  // Reescreve textareas
-  $('cp-hook').value=_cpDraft.hook;
-  $('cp-retencao').value=_cpDraft.retencao;
-  $('cp-oferta').value=_cpDraft.oferta;
-  $('cp-cta').value=_cpDraft.cta;
-  toast('✨ Roteiro gerado — ajuste o texto e salve como ideia','ok');
+
+// ─── DNA: pega criativos com perf='win' e extrai textos dos blocos pra "alimentar" o gerador
+// Quanto mais vencedores você tem, mais o gerador vai usar texto desses casos em vez dos templates genéricos
+function cpGetDNA(blocoKey){
+  const winners=(DB.criativos||[]).filter(c=>c.perf==='win'&&c.blocos&&c.blocos[blocoKey]);
+  return winners.map(c=>c.blocos[blocoKey]).filter(t=>t&&t.trim().length>10);
 }
+// Combina templates padrão + DNA dos vencedores. Vencedores entram com peso 2x.
+function cpSampleWithDNA(templates,blocoKey){
+  const dna=cpGetDNA(blocoKey);
+  if(!dna.length)return pick(templates);
+  // Mistura: cada item de DNA aparece 2x no pool pra ter mais peso
+  const pool=[...templates,...dna,...dna];
+  return pick(pool);
+}
+
+// Gera o roteiro completo baseado em ângulo + dor + gancho + duração
+function cpGerar(){
+  const ang=$('cp-angulo').value;
+  const dor=$('cp-dor').value;
+  const gancho=$('cp-gancho').value;
+  const dur=$('cp-duracao').value;
+  _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;
+
+  // Mapa de qual fonte usar pra cada bloco
+  const fonteHook = COPY_GANCHOS[gancho]?.hooks?.length
+    ? COPY_GANCHOS[gancho].hooks
+    : COPY_ANGULOS[ang]?.hooks||[''];
+
+  const blocos={};
+  COPY_DURACOES[dur].blocos.forEach(b=>{
+    switch(b.k){
+      case 'hook':      blocos.hook      = cpSampleWithDNA(fonteHook,'hook'); break;
+      case 'retencao':  blocos.retencao  = cpSampleWithDNA(COPY_DORES[dor]?.retencao||[''],'retencao'); break;
+      case 'picture':   blocos.picture   = cpSampleWithDNA(COPY_PICTURES,'picture'); break;
+      case 'historia':  blocos.historia  = cpSampleWithDNA(COPY_ANGULOS.historia_pessoal.hooks,'historia'); break;
+      case 'mecanismo': blocos.mecanismo = cpSampleWithDNA(COPY_MECANISMOS,'mecanismo'); break;
+      case 'bullets':   blocos.bullets   = cpSampleWithDNA(COPY_BULLETS,'bullets'); break;
+      case 'oferta':    blocos.oferta    = cpSampleWithDNA(COPY_OFERTAS,'oferta'); break;
+      case 'garantia':  blocos.garantia  = cpSampleWithDNA(COPY_GARANTIAS,'garantia'); break;
+      case 'cta':       blocos.cta       = cpSampleWithDNA(COPY_CTAS,'cta'); break;
+    }
+  });
+  _cpDraft.blocos=blocos;
+
+  // Re-renderiza só a área de blocos
+  cpRenderDraftBlocks();
+
+  const dnaCount=(DB.criativos||[]).filter(c=>c.perf==='win').length;
+  toast(dnaCount>0
+    ? `✨ Roteiro gerado · alimentado por ${dnaCount} criativo${dnaCount>1?'s':''} vencedor${dnaCount>1?'es':''} 🏆`
+    : '✨ Roteiro gerado — ajuste o texto e salve','ok');
+}
+
+// Renderiza os textareas dinâmicos baseado na duração escolhida
+function cpRenderDraftBlocks(){
+  const wrap=$('cp-blocks-wrap');if(!wrap)return;
+  const dur=_cpDraft.duracao;
+  const blocos=COPY_DURACOES[dur]?.blocos||[];
+  wrap.innerHTML=blocos.map(b=>{
+    const val=(_cpDraft.blocos&&_cpDraft.blocos[b.k])||'';
+    return `<div class="cp-block ${b.cls}">
+      <div class="cp-block-h">
+        <span class="cp-block-time">${b.t}</span>
+        <span class="cp-block-lbl">${b.l}</span>
+      </div>
+      <textarea id="cp-blk-${b.k}" placeholder="..." oninput="_cpDraft.blocos['${b.k}']=this.value">${val}</textarea>
+    </div>`;
+  }).join('');
+}
+
+// Recarrega a interface quando muda a duração (estrutura nova)
+function cpOnDuracaoChange(){
+  _cpDraft.duracao=$('cp-duracao').value;
+  // Limpa blocos que não fazem mais sentido na nova estrutura
+  const validKeys=new Set(COPY_DURACOES[_cpDraft.duracao].blocos.map(b=>b.k));
+  Object.keys(_cpDraft.blocos||{}).forEach(k=>{if(!validKeys.has(k))delete _cpDraft.blocos[k]});
+  cpRenderDraftBlocks();
+}
+
 function cpSalvarIdeia(){
   if(isReadOnly()&&!isDes()){toast('🔒 Modo Visualização ativo','err');return;}
-  const hook=$('cp-hook').value.trim();
-  if(!hook){toast('Gere um roteiro primeiro (ou digite o hook)','err');return;}
-  const angulo=$('cp-angulo').value, dor=$('cp-dor').value;
-  const titulo=hook.slice(0,60)+(hook.length>60?'...':'');
+  // Coleta os valores atuais dos textareas (caso usuário tenha editado depois de gerar)
+  const dur=$('cp-duracao').value;
+  const blocos={};
+  COPY_DURACOES[dur].blocos.forEach(b=>{
+    const el=$('cp-blk-'+b.k);
+    if(el)blocos[b.k]=el.value.trim();
+  });
+  if(!blocos.hook&&!blocos.cta){toast('Gere um roteiro primeiro ou preencha pelo menos o Hook','err');return;}
+  const titulo=(blocos.hook||blocos.cta||'').slice(0,60)+((blocos.hook||blocos.cta||'').length>60?'...':'');
   DB.criativos.unshift({
     id:DB.nextCriativo++,
-    titulo,
-    angulo,dor,
-    blocos:{
-      hook,
-      retencao:$('cp-retencao').value.trim(),
-      oferta:$('cp-oferta').value.trim(),
-      cta:$('cp-cta').value.trim(),
-    },
+    titulo:titulo||'(sem título)',
+    angulo:$('cp-angulo').value,
+    dor:$('cp-dor').value,
+    gancho:$('cp-gancho').value,
+    duracao:dur,
+    blocos,
     col:'ideias',
     link_arquivo:'',
     designer_id:'',
@@ -8952,8 +9199,8 @@ function cpSalvarIdeia(){
   toast('✓ Ideia salva no Kanban','ok');
 }
 function cpLimparDraft(){
-  ['cp-hook','cp-retencao','cp-oferta','cp-cta'].forEach(id=>{const e=$(id);if(e)e.value=''});
-  _cpDraft.hook=_cpDraft.retencao=_cpDraft.oferta=_cpDraft.cta='';
+  _cpDraft.blocos={};
+  cpRenderDraftBlocks();
 }
 
 // ─── Kanban CRUD
@@ -8986,21 +9233,46 @@ function cpDelete(id){
 
 // ─── Modal de edição do card
 let _cpEditId=null;
+// Re-renderiza os textareas do modal de edição conforme a duração selecionada
+function cpeRenderBlocks(){
+  const wrap=$('cpe-blocks-wrap');if(!wrap)return;
+  const dur=$('cpe-duracao').value||'1min';
+  const c=DB.criativos.find(x=>x.id===_cpEditId);
+  const curBlocos=(c&&c.blocos)||{};
+  // Coleta valores atuais dos textareas antes de re-renderizar (pra não perder edição)
+  const collected={};
+  wrap.querySelectorAll('textarea').forEach(t=>{
+    const k=t.id.replace('cpe-','');
+    if(t.value)collected[k]=t.value;
+  });
+  const merged={...curBlocos,...collected};
+  wrap.innerHTML=(COPY_DURACOES[dur]?.blocos||[]).map(b=>{
+    const val=merged[b.k]||'';
+    return `<div class="cp-block ${b.cls}">
+      <div class="cp-block-h">
+        <span class="cp-block-time">${b.t}</span>
+        <span class="cp-block-lbl">${b.l}</span>
+      </div>
+      <textarea id="cpe-${b.k}">${val.replace(/</g,'&lt;')}</textarea>
+    </div>`;
+  }).join('');
+}
+
 function cpOpenEdit(id){
   const c=DB.criativos.find(x=>x.id===id);if(!c)return;
   _cpEditId=id;
   openM('m-criativo');
   setTimeout(()=>{
-    // Popula selects de ângulo/dor (carregados aqui pra serem traduzíveis no futuro)
+    // Popula selects de ângulo/dor/gancho/duração
     $('cpe-angulo').innerHTML=Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
     $('cpe-dor').innerHTML=Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-gancho').innerHTML=Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-duracao').innerHTML=Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
     $('cpe-titulo').value=c.titulo||'';
     $('cpe-angulo').value=c.angulo||'historia_pessoal';
     $('cpe-dor').value=c.dor||'energia';
-    $('cpe-hook').value=c.blocos?.hook||'';
-    $('cpe-retencao').value=c.blocos?.retencao||'';
-    $('cpe-oferta').value=c.blocos?.oferta||'';
-    $('cpe-cta').value=c.blocos?.cta||'';
+    $('cpe-gancho').value=c.gancho||'historia';
+    $('cpe-duracao').value=c.duracao||'1min';
     $('cpe-link').value=c.link_arquivo||'';
     $('cpe-obs').value=c.obs||'';
     $('cpe-col').value=c.col||'ideias';
@@ -9009,6 +9281,8 @@ function cpOpenEdit(id){
     const designers=TEAM.filter(t=>t.role==='designer'&&!t.archived&&!t._preview);
     $('cpe-designer').innerHTML='<option value="">— Sem designer atribuído —</option>'+
       designers.map(d=>`<option value="${d.id}" ${c.designer_id===d.id?'selected':''}>${d.name}</option>`).join('');
+    // Renderiza blocos dinâmicos baseado na duração
+    cpeRenderBlocks();
   },20);
 }
 function cpSaveEdit(){
@@ -9016,12 +9290,15 @@ function cpSaveEdit(){
   c.titulo=$('cpe-titulo').value.trim()||'(sem título)';
   c.angulo=$('cpe-angulo').value;
   c.dor=$('cpe-dor').value;
-  c.blocos={
-    hook:$('cpe-hook').value.trim(),
-    retencao:$('cpe-retencao').value.trim(),
-    oferta:$('cpe-oferta').value.trim(),
-    cta:$('cpe-cta').value.trim(),
-  };
+  c.gancho=$('cpe-gancho').value;
+  c.duracao=$('cpe-duracao').value;
+  // Coleta todos os blocos da duração escolhida
+  const blocos={};
+  (COPY_DURACOES[c.duracao]?.blocos||[]).forEach(b=>{
+    const el=$('cpe-'+b.k);
+    if(el)blocos[b.k]=el.value.trim();
+  });
+  c.blocos=blocos;
   c.link_arquivo=$('cpe-link').value.trim();
   c.designer_id=$('cpe-designer').value;
   c.obs=$('cpe-obs').value.trim();
@@ -9031,12 +9308,51 @@ function cpSaveEdit(){
   persist();closeM('m-criativo');renderCopies();
   toast('✓ Criativo atualizado','ok');
 }
-function cpCopiarRoteiro(id){
-  const c=(id===undefined)?{blocos:{hook:$('cpe-hook').value,retencao:$('cpe-retencao').value,oferta:$('cpe-oferta').value,cta:$('cpe-cta').value}}:DB.criativos.find(x=>x.id===id);
-  if(!c)return;
+// Formata um criativo (ou draft) pra texto WhatsApp-friendly, respeitando a estrutura da duração
+function cpFormatRoteiro(c){
+  const dur=c.duracao||'1min';
+  const struct=COPY_DURACOES[dur]||COPY_DURACOES['1min'];
   const b=c.blocos||{};
-  const txt=`*ROTEIRO TIKTOK ADS*\n\n*[0-3s] HOOK*\n${b.hook||'—'}\n\n*[3-15s] RETENÇÃO / DOR*\n${b.retencao||'—'}\n\n*[15-45s] OFERTA*\n${b.oferta||'—'}\n\n*[45-60s] CTA (COD)*\n${b.cta||'—'}`;
-  navigator.clipboard.writeText(txt).then(()=>toast('✓ Roteiro copiado','ok')).catch(()=>toast('Erro ao copiar','err'));
+  const linhas=[`*ROTEIRO · ${struct.label.toUpperCase()}*`,''];
+  struct.blocos.forEach(blk=>{
+    linhas.push(`*[${blk.t}] ${blk.l.replace(/^[^A-Za-zÀ-ú]+/,'').toUpperCase()}*`);
+    linhas.push(b[blk.k]||'—');
+    linhas.push('');
+  });
+  return linhas.join('\n').trim();
+}
+
+function cpCopiarRoteiro(id){
+  let c;
+  if(id===undefined){
+    // Lê do modal de edição
+    const curr=DB.criativos.find(x=>x.id===_cpEditId);
+    const dur=curr?.duracao||'1min';
+    const blocos={};
+    (COPY_DURACOES[dur]?.blocos||[]).forEach(b=>{
+      const el=$('cpe-'+b.k);if(el)blocos[b.k]=el.value;
+    });
+    c={blocos,duracao:dur};
+  } else {
+    c=DB.criativos.find(x=>x.id===id);
+  }
+  if(!c)return;
+  navigator.clipboard.writeText(cpFormatRoteiro(c))
+    .then(()=>toast('✓ Roteiro copiado','ok'))
+    .catch(()=>toast('Erro ao copiar','err'));
+}
+
+// Copia o draft do Pilar 1 (textareas dinâmicos do gerador)
+function cpCopiarRoteiroDraft(){
+  const dur=$('cp-duracao').value;
+  const blocos={};
+  COPY_DURACOES[dur].blocos.forEach(b=>{
+    const el=$('cp-blk-'+b.k);
+    if(el)blocos[b.k]=el.value;
+  });
+  navigator.clipboard.writeText(cpFormatRoteiro({blocos,duracao:dur}))
+    .then(()=>toast('✓ Roteiro copiado','ok'))
+    .catch(()=>toast('Erro ao copiar','err'));
 }
 
 function renderCopies(){
@@ -9051,17 +9367,28 @@ function renderCopies(){
     </div>
   </div>
 
-  <!-- PILAR 1: Gerador de Script -->
-  <div class="cp-pillar">
+  <!-- PILAR 1: Gerador de Script (Framework Avançado) -->
+  ${(()=>{
+    const winners=(criativos||[]).filter(c=>c.perf==='win').length;
+    return `<div class="cp-pillar">
     <div class="cp-pillar-h">
       <div class="cp-pillar-num">1</div>
-      <div>
+      <div style="flex:1">
         <div class="cp-pillar-tit">Framework de Criação</div>
-        <div class="cp-pillar-sub">Escolha o ângulo e a dor; geramos um roteiro persuasivo em 4 blocos</div>
+        <div class="cp-pillar-sub">Escolha ângulo, dor, gancho e duração — geramos um roteiro persuasivo customizado</div>
       </div>
+      ${winners>0
+        ? `<span title="O gerador usa textos dos criativos marcados como Vencedor pra refinar as novas gerações"
+            style="font-size:11px;font-weight:600;color:#fbbf24;background:rgba(251,191,36,.10);padding:5px 10px;border-radius:6px;display:flex;align-items:center;gap:5px;cursor:help">
+            🧬 DNA ativo · ${winners} vencedor${winners>1?'es':''}
+          </span>`
+        : `<span title="Marque criativos como 🏆 Vencedor na coluna 'Pronto p/ Teste' pra que eles 'alimentem' o gerador"
+            style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:6px;cursor:help">
+            🧬 DNA inativo
+          </span>`}
     </div>
 
-    <div class="cp-gen-controls">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
       <div class="field"><label>Ângulo da Campanha</label>
         <select id="cp-angulo">
           ${Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`).join('')}
@@ -9072,46 +9399,31 @@ function renderCopies(){
           ${Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.dor?'selected':''}>${v.label}</option>`).join('')}
         </select>
       </div>
-      <button class="btn btn-bl" onclick="cpGerar()" style="height:38px">✨ Gerar Roteiro</button>
+      <div class="field"><label>Tipo de Gancho</label>
+        <select id="cp-gancho" title="11 tipos do manual de copy">
+          ${Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.gancho?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Duração do Vídeo</label>
+        <select id="cp-duracao" onchange="cpOnDuracaoChange()">
+          ${Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.duracao?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
     </div>
 
-    <div class="cp-script-blocks">
-      <div class="cp-block b-hook">
-        <div class="cp-block-h">
-          <span class="cp-block-time">0–3s</span>
-          <span class="cp-block-lbl">🎯 Hook · curiosidade / quebra de padrão</span>
-        </div>
-        <textarea id="cp-hook" placeholder="Abertura informal, humanizada — prende a atenção nos primeiros 3 segundos.">${_cpDraft.hook||''}</textarea>
-      </div>
-      <div class="cp-block b-ret">
-        <div class="cp-block-h">
-          <span class="cp-block-time">3–15s</span>
-          <span class="cp-block-lbl">💔 Retenção · dor real do público</span>
-        </div>
-        <textarea id="cp-retencao" placeholder="Conexão imediata com sintomas reais — pernas pesadas, esgotamento, medo do futuro.">${_cpDraft.retencao||''}</textarea>
-      </div>
-      <div class="cp-block b-of">
-        <div class="cp-block-h">
-          <span class="cp-block-time">15–45s</span>
-          <span class="cp-block-lbl">💎 Oferta · solução natural e direta</span>
-        </div>
-        <textarea id="cp-oferta" placeholder="Apresentação do tratamento de forma simples — quem é, como funciona, prova social.">${_cpDraft.oferta||''}</textarea>
-      </div>
-      <div class="cp-block b-cta">
-        <div class="cp-block-h">
-          <span class="cp-block-time">45–60s</span>
-          <span class="cp-block-lbl">📣 CTA · quebra de objeção (COD)</span>
-        </div>
-        <textarea id="cp-cta" placeholder="Foco em: 'só paga quando chegar na sua porta'. Sem cartão, sem risco.">${_cpDraft.cta||''}</textarea>
-      </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn btn-bl btn-sm" onclick="cpGerar()">✨ Gerar Roteiro</button>
     </div>
+
+    <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
 
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-gr btn-sm" onclick="cpSalvarIdeia()">💾 Salvar como ideia (vai pro Kanban)</button>
-      <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiro()">📋 Copiar roteiro</button>
+      <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiroDraft()">📋 Copiar roteiro</button>
       <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" style="margin-left:auto">🗑 Limpar</button>
     </div>
-  </div>
+  </div>`;
+  })()}
 
   <!-- PILAR 2: Kanban -->
   <div class="cp-pillar">
@@ -9136,8 +9448,9 @@ function renderCopies(){
           </div>
           <div class="cp-col-cards">
             ${cards.map(card=>{
-              const ang=COPY_ANGULOS[card.angulo]?.label||'';
+              const gancho=COPY_GANCHOS[card.gancho]?.label||'';
               const dor=COPY_DORES[card.dor]?.label||'';
+              const dur=COPY_DURACOES[card.duracao]?.label?.replace(/^[^A-Za-zÀ-ú]+/,'').split(' ')[0]||'1min';
               const perf=card.perf?COPY_PERFS[card.perf]:null;
               const designer=card.designer_id?getTeam(card.designer_id):null;
               return `<div class="cp-card" draggable="true"
@@ -9147,7 +9460,8 @@ function renderCopies(){
                 <button class="cp-card-x" onclick="event.stopPropagation();cpDelete(${card.id})" title="Excluir">×</button>
                 <div class="cp-card-tit">${card.titulo||'(sem título)'}</div>
                 <div class="cp-card-tags">
-                  ${ang?`<span class="cp-card-tag">${ang}</span>`:''}
+                  ${dur?`<span class="cp-card-tag" style="background:rgba(59,130,246,.10);color:var(--bl2)">⏱ ${dur}</span>`:''}
+                  ${gancho?`<span class="cp-card-tag">${gancho}</span>`:''}
                   ${dor?`<span class="cp-card-tag">${dor}</span>`:''}
                 </div>
                 <div class="cp-card-foot">
@@ -9197,6 +9511,8 @@ function renderCopies(){
       </div>`;
     })()}
   </div>`;
+  // Renderiza os textareas dinâmicos do Pilar 1 conforme a duração escolhida
+  cpRenderDraftBlocks();
 }
 function pageConfig(){return `<div class="page" id="config-pg"></div>`}
 
