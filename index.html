@@ -10102,6 +10102,12 @@ function renderCopies(){
             style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:6px;cursor:help">
             🧬 DNA inativo
           </span>`}
+      <button onclick="cpGerarIdeia()"
+        title="Claude AI escreve um roteiro original baseado nos parâmetros + DNA dos vencedores. ~R$0,02 · 2-5s."
+        style="font-size:11px;font-weight:500;color:var(--bl2);background:var(--bld);padding:5px 10px;border-radius:6px;cursor:pointer;border:none;font-family:inherit;display:flex;align-items:center;gap:5px;transition:all .15s"
+        onmouseover="this.style.background='rgba(59,130,246,.18)'" onmouseout="this.style.background='var(--bld)'">
+        🤖 Ideia de Copy (IA)
+      </button>
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:8px">
@@ -10163,10 +10169,9 @@ function renderCopies(){
     </div>
 
 
-    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="font-size:11px;color:var(--t4);margin-right:auto">⚡ Rápido (templates) ou 🧠 IA (Claude · 2-5s)</span>
-      <button class="btn btn-gh btn-sm" onclick="cpGerar()" title="Templates pré-escritos — instantâneo, sem custo, consistente">✨ Gerar Roteiro</button>
-      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="Claude AI (Haiku) escreve roteiro original baseado nos parâmetros selecionados + DNA dos vencedores. ~R$0,02 por geração.">🤖 Ideia de Copy (IA)</button>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-bl btn-sm" onclick="cpGerar()" title="Gera o roteiro a partir dos templates do manual de copy">✨ Gerar Roteiro</button>
+      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa todos os blocos do roteiro atual">🗑 Limpar</button>
     </div>
 
     <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
@@ -10174,7 +10179,6 @@ function renderCopies(){
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-gr btn-sm" onclick="cpSalvarIdeia()">💾 Salvar como ideia (vai pro Kanban)</button>
       <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiroDraft()">📋 Copiar roteiro</button>
-      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" style="margin-left:auto">🗑 Limpar</button>
     </div>
   </div>`;
   })()}
