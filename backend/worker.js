@@ -293,6 +293,125 @@ async function handleRestoreUser(req, env, userId) {
   return json({ ok: true, action: 'restored' });
 }
 
+// ─── AI: Gerador de copy via Anthropic API ────────────────────
+// Endpoint: POST /api/ai/generate-copy
+// Body: { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto }
+// Retorno: { blocos: { hook, cena_vida, ... }, usage }
+//
+// Requer secret ANTHROPIC_API_KEY configurada via:
+//   wrangler secret put ANTHROPIC_API_KEY
+//
+// Modelo: claude-haiku-4-5 (rápido + barato, ~R$0,02 por geração)
+async function handleAIGenerateCopy(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+
+  if (!env.ANTHROPIC_API_KEY) {
+    return err('IA não configurada. Diretor: rode `wrangler secret put ANTHROPIC_API_KEY` no backend/', 503);
+  }
+
+  const body = await req.json().catch(() => null);
+  if (!body) return err('Body inválido');
+  const { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto } = body;
+
+  // Validações básicas
+  if (!estrutura || !Array.isArray(estrutura) || !estrutura.length) {
+    return err('Campo "estrutura" obrigatório (array de blocos)');
+  }
+
+  // Monta o prompt rico — contexto + estrutura + DNA dos vencedores
+  const blocosNomes = estrutura.map(b => `[${b.t}] ${b.l} (chave: ${b.k})`).join('\n');
+  const dnaTexto = (dna_vencedores && dna_vencedores.length)
+    ? `\n\nDNA — CRIATIVOS VENCEDORES JÁ TESTADOS (use como referência de tom, não copie literalmente):\n${dna_vencedores.slice(0, 3).map((d, i) => `--- VENCEDOR ${i+1} ---\n${d}`).join('\n\n')}`
+    : '';
+
+  const systemPrompt = `Você é um especialista em copywriting para anúncios em vídeo de TikTok Ads, focado em nicho de SAÚDE e BEM-ESTAR (controle de açúcar no sangue, energia, vitalidade pra pessoas acima de 40 anos) no mercado brasileiro.
+
+REGRAS ABSOLUTAS:
+1. Tom 100% coloquial brasileiro — use "tava", "tô", "pra", "viu?", "olha", "rapaz", "meu filho", "minha velha", "batata!", "feliz da vida"
+2. JORNADA DO HERÓI: 80% da copy é o personagem contando a história dele (dor, vida cotidiana, medos) — só nos 20% finais aparece a indicação do produto/CTA
+3. CONEXÃO antes de venda. NUNCA soe como vendedor profissional. O personagem fala como se tivesse confiando uma história
+4. PALAVRAS PROIBIDAS (compliance TikTok) — NUNCA use, mesmo entre aspas:
+   - "diabetes", "diabético" → use "açúcar alto", "açúcar no sangue", "pessoa com glicose descontrolada"
+   - "metformina", "glibenclamida", "insulina" → use "remédio que o médico passa", "comprimido", "injeção"
+   - "cura", "curado" → use "melhora", "transformação"
+   - "disfunção erétil", "impotência", "ereção" → use "ferramenta meio fraca", "fraqueza lá embaixo", "firmeza"
+   - "milagre" → use "transformação"
+5. Quebra de objeção do COD (Cash on Delivery): "você só paga quando o produto chegar na sua porta", "sem cartão, sem PIX antes", "se não funcionar, não pagou nada"
+6. CTA é empático ("faz isso por você", "se algum pedacinho da minha história te tocou"), nunca agressivo
+7. Persona define o tom: caminhoneiro fala diferente de vovó, dona de casa diferente de pedreiro
+
+RETORNE APENAS JSON VÁLIDO, sem markdown, sem comentários antes ou depois. O JSON deve ter uma chave por bloco da estrutura solicitada.`;
+
+  const userPrompt = `Gere um roteiro de vídeo TikTok com os seguintes parâmetros:
+
+PERSONA: ${persona || 'genérica'}
+NÍVEL DE DOR: ${dor || 'geral'}
+TIPO DE GANCHO: ${gancho || 'historia'}
+ÂNGULO DA CAMPANHA: ${angulo || 'historia_pessoal'}
+DURAÇÃO: ${duracao || '1min'}
+
+ESTRUTURA OBRIGATÓRIA (use exatamente essas chaves no JSON):
+${blocosNomes}
+
+${contexto ? `\nCONTEXTO ADICIONAL DO PRODUTO:\n${contexto}\n` : ''}
+${dnaTexto}
+
+EXEMPLO DE QUALIDADE QUE QUEREMOS (apenas referência de TOM, não copie):
+
+"Sabe, outro dia eu tava aqui sentado, olhando meu neto correr pelo quintal, e me deu um aperto no peito. Eu queria levantar, brincar de bola com ele... mas o meu corpo não deixava. Parecia que eu tava carregando chumbo nas pernas."
+
+GERE AGORA o JSON com cada bloco preenchido. Cada bloco deve ter pelo menos 2-3 frases, exceto blocos curtos (Hook: 1-2 frases; CTA: 3-4 frases). Tom natural, conversacional, em primeira pessoa. SEM markdown, SEM código, SÓ o JSON puro.`;
+
+  // Chama a Anthropic Messages API
+  let aiRes;
+  try {
+    aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+  } catch (e) {
+    return err('Falha ao chamar IA: ' + e.message, 502);
+  }
+
+  if (!aiRes.ok) {
+    const errText = await aiRes.text().catch(() => '');
+    return err(`IA respondeu erro ${aiRes.status}: ${errText.slice(0, 300)}`, 502);
+  }
+
+  const aiData = await aiRes.json();
+  const txt = (aiData.content && aiData.content[0] && aiData.content[0].text) || '';
+
+  // Extrai o JSON da resposta (Claude às vezes envolve com markdown ```json ... ```)
+  let jsonStr = txt.trim();
+  const fenced = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) jsonStr = fenced[1].trim();
+
+  let blocos;
+  try {
+    blocos = JSON.parse(jsonStr);
+  } catch (e) {
+    return err('IA retornou JSON inválido: ' + txt.slice(0, 200), 502);
+  }
+
+  return json({
+    ok: true,
+    blocos,
+    usage: aiData.usage || null,
+    model: aiData.model || 'claude-haiku-4-5',
+  });
+}
+
 // ─── PAYT WEBHOOK ─────────────────────────────────────────────
 // PAYT envia POST com {event, order:{customer:{...}, ...}}
 // URL: /webhook/payt/<chave>
@@ -873,6 +992,9 @@ export default {
       if (req.method === 'POST'   && path === '/api/users')         return handleCreateOrUpdateUser(req, env);
       const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
       if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
+
+      // IA — gera copy via Anthropic API
+      if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 

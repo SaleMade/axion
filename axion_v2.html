@@ -2965,6 +2965,8 @@ const api={
   saveUser:(payload)=>api._fetch('/api/users',{method:'POST',body:JSON.stringify(payload)}),
   deleteUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id),{method:'DELETE'}),
   restoreUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id)+'/restore',{method:'POST'}),
+  // IA: gera copy via Anthropic API no Worker. Body com todos os parâmetros do gerador.
+  aiGenerateCopy:(payload)=>api._fetch('/api/ai/generate-copy',{method:'POST',body:JSON.stringify(payload)}),
 };
 
 // ─── Sync state com servidor ───
@@ -9689,8 +9691,13 @@ function cpRemixBloco(templates,blocoKey){
   return resultado.trim();
 }
 
-// Gera roteiro completo via remix (em vez de sample)
-function cpGerarIdeia(){
+// ─── IA REAL via Anthropic API (Claude Haiku) ─────────────────
+// Chama o endpoint do Worker que monta prompt rico e invoca a API.
+// Custo aprox: R$0,02-0,05 por geração. Tempo: 2-5 segundos.
+async function cpGerarIdeia(){
+  if(!apiEnabled()||!apiToken()){
+    toast('Backend não configurado — IA precisa da conexão D1','err');return;
+  }
   const ang=$('cp-angulo').value;
   const dor=$('cp-dor').value;
   const gancho=$('cp-gancho').value;
@@ -9698,42 +9705,52 @@ function cpGerarIdeia(){
   const persona=$('cp-persona').value;
   _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;_cpDraft.persona=persona;
 
-  const fonteHook = COPY_GANCHOS[gancho]?.hooks||COPY_ANGULOS[ang]?.hooks||[''];
-  const cenasPersona = COPY_CENAS_VIDA[persona]?.[dor]||COPY_CENAS_VIDA.generico?.[dor]||COPY_DORES[dor]?.retencao||[''];
-  const transfPersona = COPY_TRANSFORMACOES[persona]||COPY_TRANSFORMACOES.generico||[''];
+  // Monta payload com tudo que a IA precisa pra gerar bem
+  const estrutura=(COPY_DURACOES[dur]?.blocos||[]).map(b=>({k:b.k,t:b.t,l:b.l}));
+  const personaLabel=COPY_PERSONAS[persona]?.label+' — '+(COPY_PERSONAS[persona]?.desc||'');
+  const dorLabel=COPY_DORES[dor]?.label||dor;
+  const ganchoLabel=COPY_GANCHOS[gancho]?.label+' — '+(COPY_GANCHOS[gancho]?.desc||'');
+  const anguloLabel=COPY_ANGULOS[ang]?.label+' — '+(COPY_ANGULOS[ang]?.desc||'');
+  const duracaoLabel=COPY_DURACOES[dur]?.label+' — '+(COPY_DURACOES[dur]?.desc||'');
+  const dna_vencedores=(DB.criativos||[])
+    .filter(c=>c.perf==='win'&&c.blocos)
+    .slice(0,3)
+    .map(c=>cpFormatRoteiro(c));
 
-  const blocos={};
-  COPY_DURACOES[dur].blocos.forEach(b=>{
-    switch(b.k){
-      case 'hook':           blocos.hook           = cpRemixBloco(fonteHook,'hook'); break;
-      case 'cena_vida':      blocos.cena_vida      = cpRemixBloco(cenasPersona,'cena_vida'); break;
-      case 'pico_emocional': blocos.pico_emocional = cpRemixBloco(COPY_PICO_EMOCIONAL,'pico_emocional'); break;
-      case 'tentativas':     blocos.tentativas     = cpRemixBloco(COPY_TENTATIVAS,'tentativas'); break;
-      case 'indicacao':      blocos.indicacao      = cpRemixBloco(COPY_INDICACOES,'indicacao'); break;
-      case 'experiencia':    blocos.experiencia    = cpRemixBloco(COPY_EXPERIENCIAS,'experiencia'); break;
-      case 'transformacao':  blocos.transformacao  = cpRemixBloco(transfPersona,'transformacao'); break;
-      case 'cta':            blocos.cta            = cpRemixBloco(COPY_CTAS_EMPATICOS,'cta'); break;
-      // Compat com estruturas antigas
-      case 'retencao':       blocos.retencao       = cpRemixBloco(cenasPersona,'retencao'); break;
-      case 'picture':        blocos.picture        = cpRemixBloco(COPY_PICO_EMOCIONAL,'picture'); break;
-      case 'historia':       blocos.historia       = cpRemixBloco(cenasPersona,'historia'); break;
-      case 'mecanismo':      blocos.mecanismo      = cpRemixBloco(COPY_MECANISMOS,'mecanismo'); break;
-      case 'bullets':        blocos.bullets        = cpRemixBloco(COPY_BULLETS,'bullets'); break;
-      case 'oferta':         blocos.oferta         = cpRemixBloco(COPY_OFERTAS,'oferta'); break;
-      case 'garantia':       blocos.garantia       = cpRemixBloco(COPY_GARANTIAS,'garantia'); break;
+  // Feedback visual — IA leva alguns segundos
+  const btn=event?.target;
+  const oldHTML=btn?.innerHTML;
+  if(btn){btn.disabled=true;btn.innerHTML='🧠 Pensando...';}
+  toast('🧠 IA escrevendo o roteiro...','ok');
+
+  try{
+    const r=await api.aiGenerateCopy({
+      persona:personaLabel, dor:dorLabel, gancho:ganchoLabel,
+      angulo:anguloLabel, duracao:duracaoLabel,
+      estrutura, dna_vencedores,
+      contexto:'Produto natural pra controle de açúcar no sangue e energia em pessoas 40+',
+    });
+    // Aplica filtro client-side como segunda camada de segurança
+    const blocos={};
+    Object.keys(r.blocos||{}).forEach(k=>{blocos[k]=cpAplicarFiltro(r.blocos[k]||'')});
+    _cpDraft.blocos=blocos;
+    cpRenderDraftBlocks();
+
+    const dnaCount=dna_vencedores.length;
+    const tokens=r.usage?.output_tokens||0;
+    toast(dnaCount>0
+      ? `🤖 IA gerou · com base em ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆 · ${tokens} tokens`
+      : `🤖 IA gerou roteiro · ${tokens} tokens`,'ok');
+  }catch(e){
+    const msg=e.message||'erro desconhecido';
+    if(msg.includes('não configurada')||msg.includes('ANTHROPIC_API_KEY')){
+      toast('⚠ IA não configurada no servidor. Diretor: rode `wrangler secret put ANTHROPIC_API_KEY` em backend/','err');
+    } else {
+      toast('Erro IA: '+msg,'err');
     }
-  });
-
-  // Aplica filtro de palavras proibidas em cada bloco
-  Object.keys(blocos).forEach(k=>{blocos[k]=cpAplicarFiltro(blocos[k])});
-
-  _cpDraft.blocos=blocos;
-  cpRenderDraftBlocks();
-
-  const dnaCount=(DB.criativos||[]).filter(c=>c.perf==='win').length;
-  toast(dnaCount>0
-    ? `🤖 Ideia original gerada · remix com ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆`
-    : '🤖 Ideia original gerada via remix inteligente','ok');
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML=oldHTML;}
+  }
 }
 
 // Gera o roteiro completo baseado em ângulo + dor + gancho + duração + persona
@@ -10146,9 +10163,10 @@ function renderCopies(){
     </div>
 
 
-    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-gh btn-sm" onclick="cpGerar()" title="Pega 1 template completo de cada bloco — rápido e consistente">✨ Gerar Roteiro</button>
-      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="IA remixa frases de fontes diferentes + DNA dos vencedores · resultado mais criativo e variado">🤖 Ideia de Copy (IA)</button>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:11px;color:var(--t4);margin-right:auto">⚡ Rápido (templates) ou 🧠 IA (Claude · 2-5s)</span>
+      <button class="btn btn-gh btn-sm" onclick="cpGerar()" title="Templates pré-escritos — instantâneo, sem custo, consistente">✨ Gerar Roteiro</button>
+      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="Claude AI (Haiku) escreve roteiro original baseado nos parâmetros selecionados + DNA dos vencedores. ~R$0,02 por geração.">🤖 Ideia de Copy (IA)</button>
     </div>
 
     <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
