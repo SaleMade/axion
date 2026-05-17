@@ -1038,6 +1038,17 @@ h1 em{font-weight:700}
 .cp-block-lbl{color:var(--t3)}
 .cp-block textarea{width:100%;background:transparent;border:none;color:var(--tx);font-family:inherit;font-size:13px;line-height:1.55;resize:vertical;min-height:44px;outline:none;padding:2px 0}
 .cp-block textarea:focus{background:var(--s4);padding:6px 8px;border-radius:5px}
+/* ─── Timeline + textarea unificada (roteiro corrido) ─── */
+.cp-timeline{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;margin-bottom:4px;scrollbar-width:thin}
+.cp-tl-pill{flex:0 0 auto;background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
+  border-radius:5px;padding:5px 9px;font-size:11px}
+.cp-tl-time{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--t2);font-weight:600;margin-bottom:1px}
+.cp-tl-lbl{color:var(--t3);font-size:11px;white-space:nowrap}
+.cp-script-area{width:100%;min-height:340px;background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);
+  padding:14px 16px;color:var(--tx);font-family:inherit;font-size:14px;line-height:1.65;resize:vertical;outline:none;
+  white-space:pre-wrap}
+.cp-script-area:focus{border-color:var(--bl);background:var(--s2)}
+.cp-script-area::placeholder{color:var(--t4);font-style:italic}
 
 /* Pilar 2: Kanban de Criativos */
 .cp-kb{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin:0 -4px;padding-left:4px;padding-right:4px}
@@ -9815,21 +9826,59 @@ function cpGerar(){
     : `✨ Roteiro gerado (${personaLabel}) — palavras sensíveis filtradas`,'ok');
 }
 
-// Renderiza os textareas dinâmicos baseado na duração escolhida
+// Junta os blocos em texto único separado por parágrafos
+function _cpJoinBlocks(blocos,dur){
+  const struct=COPY_DURACOES[dur]?.blocos||[];
+  return struct.map(b=>(blocos&&blocos[b.k])||'').filter(t=>t&&t.trim()).join('\n\n');
+}
+// Divide texto único em blocos (pela ordem dos parágrafos)
+function _cpSplitBlocks(texto,dur){
+  const struct=COPY_DURACOES[dur]?.blocos||[];
+  // Quebra por linha em branco (1 ou mais)
+  const paras=(texto||'').split(/\n{2,}/).map(p=>p.trim()).filter(Boolean);
+  const out={};
+  struct.forEach((b,i)=>{ out[b.k]=paras[i]||''; });
+  // Se sobrou texto além das seções, joga tudo no último bloco
+  if(paras.length>struct.length){
+    const lastK=struct[struct.length-1]?.k;
+    if(lastK)out[lastK]=paras.slice(struct.length-1).join('\n\n');
+  }
+  return out;
+}
+// Sincroniza a textarea unificada → _cpDraft.blocos (oninput)
+function _cpSyncFromTextarea(){
+  const ta=$('cp-script-text');if(!ta)return;
+  _cpDraft.blocos=_cpSplitBlocks(ta.value,_cpDraft.duracao);
+}
+
+// Renderiza o roteiro UNIFICADO: timeline horizontal com labels +
+// textarea única com o texto corrido (sem quebras visuais entre blocos).
+// O usuário vê a copy como ela vai soar pro espectador, mas com indicação
+// cronológica do que é cada parte na timeline acima.
 function cpRenderDraftBlocks(){
   const wrap=$('cp-blocks-wrap');if(!wrap)return;
   const dur=_cpDraft.duracao;
   const blocos=COPY_DURACOES[dur]?.blocos||[];
-  wrap.innerHTML=blocos.map(b=>{
-    const val=(_cpDraft.blocos&&_cpDraft.blocos[b.k])||'';
-    return `<div class="cp-block ${b.cls}">
-      <div class="cp-block-h">
-        <span class="cp-block-time">${b.t}</span>
-        <span class="cp-block-lbl">${b.l}</span>
-      </div>
-      <textarea id="cp-blk-${b.k}" placeholder="..." oninput="_cpDraft.blocos['${b.k}']=this.value">${val}</textarea>
+
+  // Timeline horizontal de pills (uma por bloco) com cores das classes b-hook/b-ret/etc
+  const corCls={ 'b-hook':'#ef4444', 'b-ret':'#f59e0b', 'b-of':'#10b981', 'b-cta':'#3b82f6' };
+  const timeline=blocos.map(b=>{
+    const cor=corCls[b.cls]||'#64748b';
+    return `<div class="cp-tl-pill" style="border-left-color:${cor}">
+      <div class="cp-tl-time">${b.t}</div>
+      <div class="cp-tl-lbl">${b.l}</div>
     </div>`;
   }).join('');
+
+  // Texto unificado da copy (parágrafos separados por linha em branco)
+  const textoUnificado=_cpJoinBlocks(_cpDraft.blocos,dur);
+
+  wrap.innerHTML=`
+    <div class="cp-timeline">${timeline}</div>
+    <textarea id="cp-script-text" class="cp-script-area"
+      placeholder="Clique em ✨ Gerar Roteiro ou 🤖 IA pra criar a copy — ela vai aparecer aqui em texto corrido, separada em parágrafos conforme a timeline acima."
+      oninput="_cpSyncFromTextarea()">${textoUnificado}</textarea>
+  `;
 }
 
 // Atualiza as descrições abaixo de cada select com o texto da opção selecionada.
@@ -9852,8 +9901,11 @@ function cpUpdateDescs(){
 
 // Recarrega a interface quando muda a duração (estrutura nova)
 function cpOnDuracaoChange(){
+  // Antes de trocar, captura o texto atual da textarea (se existir) e remapeia
+  const ta=$('cp-script-text');
+  if(ta){_cpDraft.blocos=_cpSplitBlocks(ta.value,_cpDraft.duracao);}
   _cpDraft.duracao=$('cp-duracao').value;
-  // Limpa blocos que não fazem mais sentido na nova estrutura
+  // Limpa blocos que não existem na nova estrutura
   const validKeys=new Set(COPY_DURACOES[_cpDraft.duracao].blocos.map(b=>b.k));
   Object.keys(_cpDraft.blocos||{}).forEach(k=>{if(!validKeys.has(k))delete _cpDraft.blocos[k]});
   cpRenderDraftBlocks();
@@ -9861,15 +9913,13 @@ function cpOnDuracaoChange(){
 
 function cpSalvarIdeia(){
   if(isReadOnly()&&!isDes()){toast('🔒 Modo Visualização ativo','err');return;}
-  // Coleta os valores atuais dos textareas (caso usuário tenha editado depois de gerar)
+  // Lê da textarea unificada e divide em blocos pela ordem dos parágrafos
   const dur=$('cp-duracao').value;
-  const blocos={};
-  COPY_DURACOES[dur].blocos.forEach(b=>{
-    const el=$('cp-blk-'+b.k);
-    if(el)blocos[b.k]=el.value.trim();
-  });
-  if(!blocos.hook&&!blocos.cta){toast('Gere um roteiro primeiro ou preencha pelo menos o Hook','err');return;}
-  const titulo=(blocos.hook||blocos.cta||'').slice(0,60)+((blocos.hook||blocos.cta||'').length>60?'...':'');
+  const ta=$('cp-script-text');
+  const blocos = ta ? _cpSplitBlocks(ta.value, dur) : (_cpDraft.blocos||{});
+  if(!blocos.hook&&!blocos.cta){toast('Gere um roteiro primeiro ou escreva pelo menos o início','err');return;}
+  const primeiroTexto=(blocos.hook||blocos.cta||'').trim();
+  const titulo=primeiroTexto.slice(0,60)+(primeiroTexto.length>60?'...':'');
   DB.criativos.unshift({
     id:DB.nextCriativo++,
     titulo:titulo||'(sem título)',
@@ -9892,6 +9942,7 @@ function cpSalvarIdeia(){
 function cpLimparDraft(){
   _cpDraft.blocos={};
   cpRenderDraftBlocks();
+  const ta=$('cp-script-text');if(ta)ta.value='';
 }
 
 // ─── Kanban CRUD
@@ -10058,16 +10109,13 @@ function cpCopiarRoteiro(id){
     .catch(()=>toast('Erro ao copiar','err'));
 }
 
-// Copia o draft do Pilar 1 (textareas dinâmicos do gerador)
+// Copia o draft do Pilar 1 — textarea unificada → texto corrido (sem labels)
 function cpCopiarRoteiroDraft(){
-  const dur=$('cp-duracao').value;
-  const blocos={};
-  COPY_DURACOES[dur].blocos.forEach(b=>{
-    const el=$('cp-blk-'+b.k);
-    if(el)blocos[b.k]=el.value;
-  });
-  navigator.clipboard.writeText(cpFormatRoteiro({blocos,duracao:dur}))
-    .then(()=>toast('✓ Roteiro copiado','ok'))
+  const ta=$('cp-script-text');
+  const texto=ta?ta.value.trim():'';
+  if(!texto){toast('Roteiro vazio — gere primeiro','err');return;}
+  navigator.clipboard.writeText(texto)
+    .then(()=>toast('✓ Copy copiada (texto corrido)','ok'))
     .catch(()=>toast('Erro ao copiar','err'));
 }
 
