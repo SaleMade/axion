@@ -5957,21 +5957,13 @@ function _renderAtendenteBlock(at, chips){
   const nome=at?at.name:'⚠ Sem atendente atribuído';
   const role=at?at.role:'';
   const avatarHTML=at?avatar(at,{size:32,fontSize:12}):`<div class="sav" style="width:32px;height:32px;background:var(--s4);color:var(--t4);font-size:14px">?</div>`;
-  const list=getWaStatusList();
-  // Contadores dinâmicos baseados nos status configurados
-  const counts={};
-  list.forEach(s=>{counts[s.id]=0});
-  chips.forEach(c=>{const ws=getWaStatus(c);if(counts[ws]!==undefined)counts[ws]++});
 
   return `<div class="cont-at-block">
     <div class="cont-at-h">
       ${avatarHTML}
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600;color:var(--tx)">${nome}</div>
-        <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${role||'—'}</div>
-      </div>
-      <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);flex-wrap:wrap">
-        ${list.map(s=>`<span title="${s.label}" style="display:inline-flex;align-items:center;gap:3px">${s.ic||''} <b style="color:${s.color};font-weight:600">${counts[s.id]||0}</b></span>`).join('')}
+        <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${role||'—'} · ${chips.length} número${chips.length!==1?'s':''}</div>
       </div>
       ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipForAt('${at.id}')" title="Adicionar número pra este atendente">+ Número</button>`:''}
     </div>
