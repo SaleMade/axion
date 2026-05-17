@@ -3840,12 +3840,7 @@ function buildSidebar(){
       ...((dir||isDes())?[{g:'Criativos',items:[
         {id:'copies',lbl:'Copies',icon:'✍️',actionFn:"goPage('copies')"},
       ]}]:[]),
-      ...(dir?[{g:'Integrações',items:[
-        {id:'wh-payt',     lbl:'PAYT',       icon:'●',  iconColor:'#10b981', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('payt')"},
-        {id:'wh-fornec',   lbl:'Fornecedor', icon:'📦', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('fornecedor')"},
-        {id:'wh-generico', lbl:'Genérico',   icon:'⚙', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('custom')"},
-        {id:'wh-autom',    lbl:'Automações', icon:'🔁', actionFn:"openM('m-wh');renderWebhookSim();switchWhTab('autom')"},
-      ]}]:[]),
+      // Integrações removidas da sidebar — acessar via Configurações → Integrações
     ];
   }
 
