@@ -9738,13 +9738,14 @@ async function cpGerarIdeia(){
 
     const dnaCount=dna_vencedores.length;
     const tokens=r.usage?.output_tokens||0;
+    const provider=r.provider==='gemini'?'Gemini':r.provider==='anthropic'?'Claude':'IA';
     toast(dnaCount>0
-      ? `🤖 IA gerou · com base em ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆 · ${tokens} tokens`
-      : `🤖 IA gerou roteiro · ${tokens} tokens`,'ok');
+      ? `🤖 ${provider} gerou · com base em ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆 · ${tokens} tokens`
+      : `🤖 ${provider} gerou roteiro · ${tokens} tokens`,'ok');
   }catch(e){
     const msg=e.message||'erro desconhecido';
-    if(msg.includes('não configurada')||msg.includes('ANTHROPIC_API_KEY')){
-      toast('⚠ IA não configurada no servidor. Diretor: rode `wrangler secret put ANTHROPIC_API_KEY` em backend/','err');
+    if(msg.includes('não configurada')||msg.includes('GEMINI_API_KEY')){
+      toast('⚠ IA não configurada. Pegue uma key grátis em aistudio.google.com/apikey e rode `wrangler secret put GEMINI_API_KEY`','err');
     } else {
       toast('Erro IA: '+msg,'err');
     }

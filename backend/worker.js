@@ -293,44 +293,34 @@ async function handleRestoreUser(req, env, userId) {
   return json({ ok: true, action: 'restored' });
 }
 
-// ─── AI: Gerador de copy via Anthropic API ────────────────────
+// ─── AI: Gerador de copy ───────────────────────────────────────
 // Endpoint: POST /api/ai/generate-copy
 // Body: { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto }
-// Retorno: { blocos: { hook, cena_vida, ... }, usage }
+// Retorno: { blocos: { hook, cena_vida, ... }, usage, model, provider }
 //
-// Requer secret ANTHROPIC_API_KEY configurada via:
-//   wrangler secret put ANTHROPIC_API_KEY
+// PROVIDERS (escolhe automático na ordem):
+//   1. GEMINI_API_KEY  — Google AI Studio, free tier 1500 req/dia (RECOMENDADO)
+//   2. ANTHROPIC_API_KEY — Anthropic, paga por uso (fallback)
 //
-// Modelo: claude-haiku-4-5 (rápido + barato, ~R$0,02 por geração)
-async function handleAIGenerateCopy(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
+// Setup do Gemini (gratuito, sem cartão):
+//   1. https://aistudio.google.com/apikey → login Google → Create API Key
+//   2. cd backend && npx wrangler secret put GEMINI_API_KEY
+//   3. npx wrangler deploy
 
-  if (!env.ANTHROPIC_API_KEY) {
-    return err('IA não configurada. Diretor: rode `wrangler secret put ANTHROPIC_API_KEY` no backend/', 503);
-  }
-
-  const body = await req.json().catch(() => null);
-  if (!body) return err('Body inválido');
-  const { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto } = body;
-
-  // Validações básicas
-  if (!estrutura || !Array.isArray(estrutura) || !estrutura.length) {
-    return err('Campo "estrutura" obrigatório (array de blocos)');
-  }
-
-  // Monta o prompt rico — contexto + estrutura + DNA dos vencedores
+// Constrói os prompts compartilhados entre os providers
+function _aiBuildPrompts(payload) {
+  const { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto } = payload;
   const blocosNomes = estrutura.map(b => `[${b.t}] ${b.l} (chave: ${b.k})`).join('\n');
   const dnaTexto = (dna_vencedores && dna_vencedores.length)
-    ? `\n\nDNA — CRIATIVOS VENCEDORES JÁ TESTADOS (use como referência de tom, não copie literalmente):\n${dna_vencedores.slice(0, 3).map((d, i) => `--- VENCEDOR ${i+1} ---\n${d}`).join('\n\n')}`
+    ? `\n\nDNA — CRIATIVOS VENCEDORES JÁ TESTADOS (use como referência de tom, NÃO copie literalmente):\n${dna_vencedores.slice(0, 3).map((d, i) => `--- VENCEDOR ${i+1} ---\n${d}`).join('\n\n')}`
     : '';
 
-  const systemPrompt = `Você é um especialista em copywriting para anúncios em vídeo de TikTok Ads, focado em nicho de SAÚDE e BEM-ESTAR (controle de açúcar no sangue, energia, vitalidade pra pessoas acima de 40 anos) no mercado brasileiro.
+  const system = `Você é um especialista em copywriting para anúncios em vídeo de TikTok Ads, focado em nicho de SAÚDE e BEM-ESTAR (controle de açúcar no sangue, energia, vitalidade pra pessoas acima de 40 anos) no mercado brasileiro.
 
 REGRAS ABSOLUTAS:
 1. Tom 100% coloquial brasileiro — use "tava", "tô", "pra", "viu?", "olha", "rapaz", "meu filho", "minha velha", "batata!", "feliz da vida"
 2. JORNADA DO HERÓI: 80% da copy é o personagem contando a história dele (dor, vida cotidiana, medos) — só nos 20% finais aparece a indicação do produto/CTA
-3. CONEXÃO antes de venda. NUNCA soe como vendedor profissional. O personagem fala como se tivesse confiando uma história
+3. CONEXÃO antes de venda. NUNCA soe como vendedor profissional. O personagem fala como se tivesse confiando uma história pessoal
 4. PALAVRAS PROIBIDAS (compliance TikTok) — NUNCA use, mesmo entre aspas:
    - "diabetes", "diabético" → use "açúcar alto", "açúcar no sangue", "pessoa com glicose descontrolada"
    - "metformina", "glibenclamida", "insulina" → use "remédio que o médico passa", "comprimido", "injeção"
@@ -343,7 +333,7 @@ REGRAS ABSOLUTAS:
 
 RETORNE APENAS JSON VÁLIDO, sem markdown, sem comentários antes ou depois. O JSON deve ter uma chave por bloco da estrutura solicitada.`;
 
-  const userPrompt = `Gere um roteiro de vídeo TikTok com os seguintes parâmetros:
+  const user = `Gere um roteiro de vídeo TikTok com os seguintes parâmetros:
 
 PERSONA: ${persona || 'genérica'}
 NÍVEL DE DOR: ${dor || 'geral'}
@@ -363,53 +353,129 @@ EXEMPLO DE QUALIDADE QUE QUEREMOS (apenas referência de TOM, não copie):
 
 GERE AGORA o JSON com cada bloco preenchido. Cada bloco deve ter pelo menos 2-3 frases, exceto blocos curtos (Hook: 1-2 frases; CTA: 3-4 frases). Tom natural, conversacional, em primeira pessoa. SEM markdown, SEM código, SÓ o JSON puro.`;
 
-  // Chama a Anthropic Messages API
-  let aiRes;
-  try {
-    aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 2048,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
-  } catch (e) {
-    return err('Falha ao chamar IA: ' + e.message, 502);
+  return { system, user };
+}
+
+// Extrai JSON da resposta de IA (tolerante a fence markdown ```json ... ```)
+function _aiParseJSON(txt) {
+  let s = String(txt || '').trim();
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) s = fenced[1].trim();
+  // Se ainda tem texto antes/depois do primeiro {, tenta isolar
+  const firstBrace = s.indexOf('{');
+  const lastBrace = s.lastIndexOf('}');
+  if (firstBrace > -1 && lastBrace > firstBrace) {
+    s = s.slice(firstBrace, lastBrace + 1);
   }
+  return JSON.parse(s);
+}
 
-  if (!aiRes.ok) {
-    const errText = await aiRes.text().catch(() => '');
-    return err(`IA respondeu erro ${aiRes.status}: ${errText.slice(0, 300)}`, 502);
-  }
-
-  const aiData = await aiRes.json();
-  const txt = (aiData.content && aiData.content[0] && aiData.content[0].text) || '';
-
-  // Extrai o JSON da resposta (Claude às vezes envolve com markdown ```json ... ```)
-  let jsonStr = txt.trim();
-  const fenced = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) jsonStr = fenced[1].trim();
-
-  let blocos;
-  try {
-    blocos = JSON.parse(jsonStr);
-  } catch (e) {
-    return err('IA retornou JSON inválido: ' + txt.slice(0, 200), 502);
-  }
-
-  return json({
-    ok: true,
-    blocos,
-    usage: aiData.usage || null,
-    model: aiData.model || 'claude-haiku-4-5',
+// ─── Provider: Gemini (Google AI Studio) ───
+async function _callGemini(env, prompts) {
+  // Modelo gratuito mais recente — Gemini 2.0 Flash (rápido + free tier generoso)
+  const model = 'gemini-2.0-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
+  const body = {
+    // System instruction separada do user (Gemini suporta)
+    system_instruction: { parts: [{ text: prompts.system }] },
+    contents: [{ role: 'user', parts: [{ text: prompts.user }] }],
+    generationConfig: {
+      temperature: 0.95,        // criatividade alta — varia mais entre gerações
+      maxOutputTokens: 2048,
+      responseMimeType: 'application/json',  // força saída JSON pura
+    },
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
   });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Gemini ${r.status}: ${t.slice(0, 300)}`);
+  }
+  const data = await r.json();
+  const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return {
+    blocos: _aiParseJSON(txt),
+    usage: {
+      input_tokens: data.usageMetadata?.promptTokenCount || 0,
+      output_tokens: data.usageMetadata?.candidatesTokenCount || 0,
+    },
+    model,
+    provider: 'gemini',
+  };
+}
+
+// ─── Provider: Anthropic (Claude) ───
+async function _callAnthropic(env, prompts) {
+  const model = 'claude-haiku-4-5';
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2048,
+      system: prompts.system,
+      messages: [{ role: 'user', content: prompts.user }],
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Anthropic ${r.status}: ${t.slice(0, 300)}`);
+  }
+  const data = await r.json();
+  const txt = data.content?.[0]?.text || '';
+  return {
+    blocos: _aiParseJSON(txt),
+    usage: data.usage || null,
+    model: data.model || model,
+    provider: 'anthropic',
+  };
+}
+
+async function handleAIGenerateCopy(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+
+  if (!env.GEMINI_API_KEY && !env.ANTHROPIC_API_KEY) {
+    return err('IA não configurada. Diretor: configure GEMINI_API_KEY (grátis em aistudio.google.com/apikey) via `wrangler secret put GEMINI_API_KEY`.', 503);
+  }
+
+  const body = await req.json().catch(() => null);
+  if (!body) return err('Body inválido');
+  if (!body.estrutura || !Array.isArray(body.estrutura) || !body.estrutura.length) {
+    return err('Campo "estrutura" obrigatório (array de blocos)');
+  }
+
+  const prompts = _aiBuildPrompts(body);
+
+  // Prefere Gemini (gratuito); cai pra Anthropic se Gemini falhar
+  try {
+    if (env.GEMINI_API_KEY) {
+      const result = await _callGemini(env, prompts);
+      return json({ ok: true, ...result });
+    }
+    if (env.ANTHROPIC_API_KEY) {
+      const result = await _callAnthropic(env, prompts);
+      return json({ ok: true, ...result });
+    }
+  } catch (e) {
+    // Se Gemini falhou mas Anthropic existe, tenta o fallback
+    if (env.GEMINI_API_KEY && env.ANTHROPIC_API_KEY) {
+      try {
+        const result = await _callAnthropic(env, prompts);
+        return json({ ok: true, ...result, fallback: true });
+      } catch (e2) {
+        return err(`Ambos providers falharam. Gemini: ${e.message} · Anthropic: ${e2.message}`, 502);
+      }
+    }
+    return err(`IA falhou: ${e.message}`, 502);
+  }
 }
 
 // ─── PAYT WEBHOOK ─────────────────────────────────────────────
