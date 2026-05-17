@@ -1713,7 +1713,8 @@ h1 em{font-weight:700}
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
-        <div class="field"><label>Status</label><select id="mc-st"><option value="aquecimento">Aquecimento</option><option value="ativo">Ativo</option><option value="reserva">Reserva</option><option value="banido">Banido</option><option value="recarga_pendente">Recarga pendente</option></select></div>
+        <div class="field"><label>Status (operacional)</label><select id="mc-st"><option value="aquecimento">Aquecimento</option><option value="ativo">Ativo</option><option value="reserva">Reserva</option><option value="banido">Banido</option><option value="recarga_pendente">Recarga pendente</option></select></div>
+        <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
         <div class="field"><label>Dia aquecimento (1–7)</label><input id="mc-dia" type="number" min="1" max="7"></div>
         <div class="field"><label>Última recarga</label><input id="mc-rec" type="date"></div>
         <div class="field"><label>Valor recarga (R$)</label><input id="mc-recv" type="number" step="0.01"></div>
@@ -1762,6 +1763,28 @@ h1 em{font-weight:700}
       <div class="row" style="justify-content:flex-end;margin-top:6px">
         <button class="btn btn-gh" onclick="closeM('m-chip-new')">Cancelar</button>
         <button class="btn btn-bl" onclick="addChip()">Cadastrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: GERENCIAR STATUS DO WHATSAPP ═══ -->
+<div class="overlay" id="m-wa-status">
+  <div class="modal">
+    <div class="m-h">
+      <span class="mt">⚙ Gerenciar Status do WhatsApp</span>
+      <button class="m-x" onclick="closeM('m-wa-status')">×</button>
+    </div>
+    <div class="m-b">
+      <p class="muted" style="font-size:12.5px;margin-bottom:14px;line-height:1.55">
+        Edite os status disponíveis. Cada status tem nome, cor e ícone (emoji opcional).
+        Use pra refletir como o WhatsApp tá hoje (Ativo, Restrito, Banido, Aquecendo, etc).
+      </p>
+      <div id="wa-status-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+      <button class="btn btn-gh btn-sm" onclick="addWaStatus()" style="width:100%;border-style:dashed">+ Adicionar status</button>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--b1)">
+        <button class="btn btn-gh btn-sm" onclick="resetWaStatusDefaults()">↺ Restaurar padrão</button>
+        <button class="btn btn-bl btn-sm" onclick="saveWaStatusAll()">Salvar tudo</button>
       </div>
     </div>
   </div>
@@ -5794,26 +5817,38 @@ function pageContingencia(){
     <!-- ─── Designação por atendente (visão simplificada) ─── -->
     <div class="section-title" style="margin-top:32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span>📋 Designação de Números por Atendente</span>
-      <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">controle simples de quem usa o quê + status do WhatsApp</span>
+      <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none;flex:1">controle simples de quem usa o quê + status do WhatsApp</span>
+      <button class="btn btn-gh btn-sm" onclick="openWaStatusManager()" title="Adicionar, editar ou remover os status disponíveis">⚙ Editar status</button>
     </div>
     <div id="cont-by-at"></div>
   </div>`;
 }
 
-// ─── Status do WhatsApp (independente do status operacional do chip) ───
-// Cada chip tem `wa_st` opcional. Se vazio, é derivado do `st` operacional.
-const WA_STATUSES={
-  ativo:    {label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢'},
-  restrito: {label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡'},
-  banido:   {label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴'},
-};
+// ─── Status do WhatsApp (configuráveis pelo usuário, salvos no DB) ───
+// Padrão de fábrica — usado se DB.wa_statuses não estiver populado
+const WA_STATUSES_DEFAULT=[
+  {id:'ativo',    label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢'},
+  {id:'restrito', label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡'},
+  {id:'banido',   label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴'},
+];
+// Helper: retorna o array configurado ou o default
+function getWaStatusList(){
+  return (DB.wa_statuses&&DB.wa_statuses.length)?DB.wa_statuses:WA_STATUSES_DEFAULT;
+}
+// Helper: encontra um status pelo id
+function getWaStatusInfo(id){
+  return getWaStatusList().find(s=>s.id===id) || null;
+}
 // Retorna o wa_st do chip ou deriva do `st` operacional como fallback
 function getWaStatus(chip){
-  if(chip.wa_st && WA_STATUSES[chip.wa_st]) return chip.wa_st;
-  // Derivado: ativo→ativo · banido→banido · aquecimento/reserva/recarga_pendente→restrito
-  if(chip.st==='ativo')  return 'ativo';
-  if(chip.st==='banido') return 'banido';
-  return 'restrito';
+  const list=getWaStatusList();
+  if(chip.wa_st && list.some(s=>s.id===chip.wa_st)) return chip.wa_st;
+  // Fallback: tenta achar status com id casando algum padrão do `st`
+  if(chip.st==='ativo'  && list.some(s=>s.id==='ativo'))   return 'ativo';
+  if(chip.st==='banido' && list.some(s=>s.id==='banido'))  return 'banido';
+  // Default: primeiro status que NÃO seja ativo/banido (geralmente "restrito"), senão o primeiro
+  const meio=list.find(s=>s.id!=='ativo'&&s.id!=='banido');
+  return (meio||list[0])?.id||'ativo';
 }
 // Salva o wa_st e persiste/sincroniza
 function setWaStatus(chipId, novoSt){
@@ -5822,7 +5857,67 @@ function setWaStatus(chipId, novoSt){
   c.wa_st=novoSt;
   persist();
   renderChipsByAtendente();
-  toast(`WhatsApp marcado como ${WA_STATUSES[novoSt]?.label||novoSt}`,'ok');
+  toast(`WhatsApp marcado como ${getWaStatusInfo(novoSt)?.label||novoSt}`,'ok');
+}
+
+// ─── Gerenciamento de tags de status do WhatsApp ───
+// Buffer enquanto o modal está aberto — só persiste ao clicar em "Salvar tudo"
+let _waStatusBuf=[];
+function openWaStatusManager(){
+  _waStatusBuf=JSON.parse(JSON.stringify(getWaStatusList()));
+  renderWaStatusList();
+  openM('m-wa-status');
+}
+function renderWaStatusList(){
+  const wrap=$('wa-status-list');if(!wrap)return;
+  wrap.innerHTML=_waStatusBuf.map((s,i)=>`
+    <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-left:3px solid ${s.color||'#64748b'};border-radius:6px;padding:9px 11px">
+      <input type="text" value="${(s.ic||'').replace(/"/g,'&quot;')}" maxlength="3" onchange="_waStatusBuf[${i}].ic=this.value"
+        placeholder="🟢" title="Emoji/ícone"
+        style="width:42px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);text-align:center;border-radius:5px;padding:6px;font-size:14px;font-family:inherit">
+      <input type="text" value="${(s.label||'').replace(/"/g,'&quot;')}" onchange="_waStatusBuf[${i}].label=this.value"
+        placeholder="Nome da tag"
+        style="flex:1;min-width:100px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);border-radius:5px;padding:6px 9px;font-family:inherit;font-size:12.5px">
+      <input type="color" value="${s.color||'#64748b'}" onchange="_waStatusBuf[${i}].color=this.value;_waStatusBuf[${i}].bg=this.value+'26';renderWaStatusList()"
+        title="Cor"
+        style="width:36px;height:30px;border:1px solid var(--b1);border-radius:5px;background:transparent;cursor:pointer;padding:1px">
+      <button onclick="delWaStatus(${i})" title="Remover" style="background:transparent;border:1px solid var(--b1);color:var(--rd);border-radius:5px;padding:5px 9px;cursor:pointer;font-family:inherit;font-size:13px">×</button>
+    </div>
+  `).join('')||'<div class="muted" style="text-align:center;padding:14px">Nenhum status cadastrado. Clique em "+ Adicionar status" abaixo.</div>';
+}
+function addWaStatus(){
+  const id='st_'+Date.now().toString(36);
+  const cores=['#10b981','#f59e0b','#ef4444','#3b82f6','#a855f7','#06b6d4','#ec4899','#fbbf24'];
+  const cor=cores[_waStatusBuf.length%cores.length];
+  _waStatusBuf.push({id,label:'Novo status',color:cor,bg:cor+'26',ic:'🏷'});
+  renderWaStatusList();
+}
+function delWaStatus(idx){
+  if(_waStatusBuf.length<=1){toast('Pelo menos 1 status deve existir','err');return;}
+  if(!confirm('Remover este status? Chips que estavam com ele caem no fallback (Ativo/Restrito/Banido).'))return;
+  _waStatusBuf.splice(idx,1);
+  renderWaStatusList();
+}
+function resetWaStatusDefaults(){
+  if(!confirm('Voltar pros 3 status padrão (Ativo · Restrito · Banido)? Mudanças não salvas serão perdidas.'))return;
+  _waStatusBuf=JSON.parse(JSON.stringify(WA_STATUSES_DEFAULT));
+  renderWaStatusList();
+}
+function saveWaStatusAll(){
+  // Validação: cada status precisa ter id, label e color
+  const inv=_waStatusBuf.find(s=>!s.label||!s.label.trim());
+  if(inv){toast('Todo status precisa ter nome','err');return;}
+  // Garante ids únicos — se faltarem, gera
+  _waStatusBuf.forEach((s,i)=>{
+    if(!s.id||_waStatusBuf.filter(x=>x.id===s.id).length>1){
+      s.id='st_'+Date.now().toString(36)+'_'+i;
+    }
+  });
+  DB.wa_statuses=JSON.parse(JSON.stringify(_waStatusBuf));
+  persist();
+  closeM('m-wa-status');
+  renderChipsByAtendente();
+  toast(`✓ ${_waStatusBuf.length} status salvos`,'ok');
 }
 
 // Agrupa chips por atendente e renderiza visão simplificada
@@ -5832,10 +5927,10 @@ function renderChipsByAtendente(){
   // Diretor vê todos; outros só seus próprios chips
   const chips=DB.chips.filter(c=>isDir()||c.at===CUR.id);
 
-  // Atendentes que aparecerão na lista — só os que recebem chip operacional
-  // (atendente / cobrador / afiliado). Diretor pode atribuir a outros também.
+  // Apenas atendentes — gestor de tráfego, designer, diretor, etc. não
+  // atendem clientes diretamente, então não precisam aparecer aqui
   const atendentes=TEAM
-    .filter(t=>!t._preview&&!t.archived&&['atendente','cobrador','afiliado','gestor'].includes(t.role))
+    .filter(t=>!t._preview&&!t.archived&&t.role==='atendente')
     .filter(t=>isDir()||t.id===CUR.id);
 
   // Map atendente → seus chips
@@ -5862,8 +5957,10 @@ function _renderAtendenteBlock(at, chips){
   const nome=at?at.name:'⚠ Sem atendente atribuído';
   const role=at?at.role:'';
   const avatarHTML=at?avatar(at,{size:32,fontSize:12}):`<div class="sav" style="width:32px;height:32px;background:var(--s4);color:var(--t4);font-size:14px">?</div>`;
-  // Contadores por status WhatsApp
-  const counts={ativo:0,restrito:0,banido:0};
+  const list=getWaStatusList();
+  // Contadores dinâmicos baseados nos status configurados
+  const counts={};
+  list.forEach(s=>{counts[s.id]=0});
   chips.forEach(c=>{const ws=getWaStatus(c);if(counts[ws]!==undefined)counts[ws]++});
 
   return `<div class="cont-at-block">
@@ -5873,10 +5970,8 @@ function _renderAtendenteBlock(at, chips){
         <div style="font-size:14px;font-weight:600;color:var(--tx)">${nome}</div>
         <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${role||'—'}</div>
       </div>
-      <div style="display:flex;gap:6px;font-size:11px;color:var(--t3)">
-        <span style="display:inline-flex;align-items:center;gap:3px">🟢 <b style="color:var(--gr);font-weight:600">${counts.ativo}</b></span>
-        <span style="display:inline-flex;align-items:center;gap:3px">🟡 <b style="color:var(--am);font-weight:600">${counts.restrito}</b></span>
-        <span style="display:inline-flex;align-items:center;gap:3px">🔴 <b style="color:var(--rd);font-weight:600">${counts.banido}</b></span>
+      <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);flex-wrap:wrap">
+        ${list.map(s=>`<span title="${s.label}" style="display:inline-flex;align-items:center;gap:3px">${s.ic||''} <b style="color:${s.color};font-weight:600">${counts[s.id]||0}</b></span>`).join('')}
       </div>
       ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipForAt('${at.id}')" title="Adicionar número pra este atendente">+ Número</button>`:''}
     </div>
@@ -5890,17 +5985,18 @@ function _renderAtendenteBlock(at, chips){
 
 function _renderMiniChip(c){
   const wa=getWaStatus(c);
-  const info=WA_STATUSES[wa]||WA_STATUSES.restrito;
-  return `<div class="cont-mini-chip" style="border-left-color:${info.color}">
+  const list=getWaStatusList();
+  const info=getWaStatusInfo(wa)||list[0];
+  return `<div class="cont-mini-chip" style="border-left-color:${info?.color||'#64748b'}">
     <div style="flex:1;min-width:0">
       <div style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em">${c.num}</div>
-      <div style="display:flex;gap:6px;margin-top:4px">
-        ${Object.entries(WA_STATUSES).map(([k,v])=>{
-          const active=k===wa;
-          return `<button onclick="event.stopPropagation();setWaStatus(${c.id},'${k}')"
+      <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+        ${list.map(v=>{
+          const active=v.id===wa;
+          return `<button onclick="event.stopPropagation();setWaStatus(${c.id},'${v.id}')"
             title="${v.label}"
             style="font-size:10px;font-weight:600;padding:3px 7px;border-radius:4px;border:1px solid ${active?v.color:'var(--b1)'};background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t3)'};cursor:pointer;font-family:inherit;transition:all .12s">
-            ${v.ic} ${v.label}
+            ${v.ic||''} ${v.label}
           </button>`;
         }).join('')}
       </div>
@@ -5989,6 +6085,10 @@ function openChipDetail(id){
   $('mc-mod').value=c.mod||'';
   $('mc-op').value=c.op||'Vivo';
   $('mc-st').value=c.st;
+  // Popula select de Status WhatsApp com a lista configurável
+  const waList=getWaStatusList();
+  $('mc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
+  $('mc-wa-st').value=getWaStatus(c);
   $('mc-dia').value=c.dia||0;
   $('mc-rec').value=c.rec||'';
   $('mc-recv').value=c.recv||'';
@@ -6058,6 +6158,7 @@ function saveChip(){
   Object.assign(c,{
     num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
     op:$('mc-op').value,st:$('mc-st').value,
+    wa_st:$('mc-wa-st').value,
     dia:Number($('mc-dia').value)||0,rec:$('mc-rec').value,
     recv:Number($('mc-recv').value)||0,
     tags:$('mc-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
