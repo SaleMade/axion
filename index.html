@@ -2298,12 +2298,18 @@ h1 em{font-weight:700}
         </div>
       </div>
       <div class="fg fg2" style="margin-top:8px">
+        <div class="field"><label>Persona / Profissão</label>
+          <select id="cpe-persona"></select>
+        </div>
         <div class="field"><label>Tipo de Gancho</label>
           <select id="cpe-gancho"></select>
         </div>
+      </div>
+      <div class="fg fg2" style="margin-top:8px">
         <div class="field"><label>Duração</label>
           <select id="cpe-duracao" onchange="cpeRenderBlocks()"></select>
         </div>
+        <div class="field"><!-- espaço pra equilibrar grid (Designer está embaixo) --></div>
       </div>
       <div class="fg fg2" style="margin-top:8px">
         <div class="field"><label>Designer responsável</label>
@@ -8886,6 +8892,209 @@ const COPY_CTAS=[
   "Faz o seguinte: clica no link, preenche seu endereço, e a gente manda o produto pra você testar. Você paga só na entrega. Se não funcionar, sem problema — não paga nada.",
 ];
 
+// ─── FILTRO DE PALAVRAS (compliance TikTok Ads + tom mais natural)
+// Substitui termos que dão bloqueio ou ficam clínicos demais por versões "white"
+// Aplicado automaticamente em todo roteiro gerado — você ainda pode editar à mão
+const COPY_FILTRO_PALAVRAS=[
+  // Medicamentos → genérico (TikTok não gosta de nome de remédio em ad)
+  {de:/\bmetformina\b/gi,         pra:'remédio pra glicose'},
+  {de:/\bglibenclamida\b/gi,      pra:'remédio que o médico passa'},
+  {de:/\binsulina\b/gi,           pra:'injeção'},
+  // Diagnósticos diretos → coloquial
+  {de:/\bdiabético(s?)\b/gi,      pra:'pessoa com açúcar alto$1'},
+  {de:/\bdiabetes\b/gi,           pra:'açúcar no sangue'},
+  {de:/\bhipertensão\b/gi,        pra:'pressão alta'},
+  // Termos sexuais/médicos sensíveis → eufemismos masculinos clássicos do nicho
+  {de:/\bdisfunção erétil\b/gi,   pra:'ferramenta meio fraca'},
+  {de:/\bdisfunção\b/gi,          pra:'ferramenta meio fraca'},
+  {de:/\bimpotência\b/gi,         pra:'fraqueza lá em baixo'},
+  {de:/\bereção\b/gi,             pra:'firmeza'},
+  {de:/\blibido\b/gi,             pra:'vontade'},
+  // Promessas absolutas (TikTok bloqueia) → suavizado
+  {de:/\bcura(r|do)?\b/gi,        pra:'melhora'},
+  {de:/\b100% garantido\b/gi,     pra:'com garantia'},
+  // Nichos sensíveis fora do TikTok
+  {de:/\bmilagre\b/gi,            pra:'transformação'},
+];
+function cpAplicarFiltro(texto){
+  if(!texto)return '';
+  let t=texto;
+  COPY_FILTRO_PALAVRAS.forEach(f=>{t=t.replace(f.de,f.pra)});
+  return t;
+}
+
+// ─── PERSONAS / PROFISSÕES — perfis que criam identificação imediata com o público.
+// Cada persona tem cenas de vida e linguajar próprios (caminhoneiro fala diferente
+// de uma dona de casa). Templates abaixo já vêm escritos no tom da persona.
+const COPY_PERSONAS={
+  generico:{
+    label:'👤 Genérico (sem persona)',
+    desc:'Sem profissão definida — vale pra qualquer público',
+  },
+  vovo:{
+    label:'👴 Aposentado / Vovô',
+    desc:'Tom afetivo, família, netos, "vovô de enfeite"',
+  },
+  caminhoneiro:{
+    label:'🚛 Caminhoneiro',
+    desc:'Estrada, horas dirigindo, sono, parada na lanchonete',
+  },
+  pedreiro:{
+    label:'🧱 Pedreiro / Trabalhador braçal',
+    desc:'Obra, corpo cansado, força nas pernas, suor',
+  },
+  dona_casa:{
+    label:'🏠 Dona de casa',
+    desc:'Cozinha, filhos, rotina, "casa em pé"',
+  },
+  pai_familia:{
+    label:'👨‍👧 Pai de família',
+    desc:'Trabalho, "trazer pão pra casa", peso da responsabilidade',
+  },
+  autonomo:{
+    label:'💼 Trabalhador autônomo',
+    desc:'Próprio chefe, sem férias, "se eu parar não entra"',
+  },
+};
+
+// ─── CENAS DE VIDA — abertura tipo "O Presente do Vovô" (sem mencionar produto)
+// É a parte que mais conecta. 80% da copy deve ser isso.
+const COPY_CENAS_VIDA={
+  vovo:{
+    energia:[
+      "Sabe, outro dia eu tava aqui sentado, olhando meu neto correr pelo quintal, e me deu um aperto no peito. Eu queria levantar, brincar de bola com ele... mas o meu corpo não deixava. Parecia que eu tava carregando chumbo nas pernas.",
+      "Tinha vez que eu tava no almoço de domingo, todo mundo rindo, conversando, e eu só queria deitar. Aquela canseira que vinha do nada, sabe? Minha mulher olhava pra mim e eu via aquela preocupação no olhar dela.",
+      "Era duro, viu? Acordar todo dia sentindo que tinha 100 anos quando tem 65. Subir uma escada e parar no meio. Os netos chamando pra brincar e eu inventando desculpa porque não dava conta.",
+    ],
+    glicose:[
+      "Sabe quando você vai medir o açúcar e dá aquele frio na barriga? Eu tava nesse jogo todo dia. Furava o dedo de manhã, vinha 160, 170, e o medo de descobrir algo pior nos exames não me deixava em paz.",
+      "Eu lembro de chegar do médico chorando, viu. Ele falando que eu ia precisar começar a tomar injeção. Eu olhava pros meus netos e pensava: 'eu vou virar um peso pra família'. Esse pensamento me corroía.",
+      "Os comprimidos tavam aumentando, o açúcar não baixava, e eu já tava com a vista embaçando. Minha esposa me ouviu dizer baixinho que eu tinha medo de não acordar mais — e ela chorou junto comigo.",
+    ],
+  },
+  caminhoneiro:{
+    energia:[
+      "Cara, dirigindo pra Bahia outro dia, eu peguei tanta canseira que tive que parar duas vezes só pra cochilar. E olha que eu tô na estrada há 22 anos, nunca senti isso. Parecia que tinha levado bordoada.",
+      "Sabe quando você tá puxando carga e chega na lanchonete na BR e quase não consegue descer da boleia? Era assim que eu tava. As pernas pesadas, sem firmeza, e aquela vontade só de deitar.",
+      "Eu sou caminhoneiro há quase 30 anos. Mas há uns meses tava ficando feio. Dormindo no volante, chegando em casa morto, sem disposição nem pra conversar com a mulher. Eu sabia que o jogo tava virando.",
+    ],
+    glicose:[
+      "Na vida do caminhoneiro a alimentação é o que é, né? Pastel na BR, refrigerante pra acordar, salgado de posto. Aí o açúcar foi subindo, subindo, e eu fingindo que não era comigo até o médico bater o martelo.",
+      "Eu vi caminhoneiro colega meu ir embora por causa de açúcar alto. Vi outro perder o pé. Eu tava no mesmo caminho — e tinha 4 filhos pra criar. Aquilo me tirava o sono.",
+    ],
+  },
+  pedreiro:{
+    energia:[
+      "Trabalhei a vida inteira na obra. Levantando bloco, subindo andaime, batendo massa. E agora, com 52 anos, tava sentindo as pernas falharem. Tinha dia que eu não conseguia nem subir num andaime sem ofegar.",
+      "Outro dia o patrão me chamou pra puxar uma carga de tijolo. Coisa que eu sempre fiz na maciota. Aquele dia eu não dei conta. Cheguei em casa, deitei no chão da sala e chorei. Pensei: 'tô virando um inútil'.",
+    ],
+    glicose:[
+      "Na obra a gente come o que aparece. Marmita de quinta, refrigerante na hora do almoço. Foi assim a vida toda. Aí o açúcar bateu 240 numa medição rotineira, e o médico falou que se não tomar jeito ia ser pior.",
+    ],
+  },
+  dona_casa:{
+    energia:[
+      "Eu acordava antes de todo mundo pra fazer o café, arrumar a casa, levar menino na escola, almoço, lavagem... e quando dava 3 da tarde eu já tava arrastando o corpo. Sentia que era idade — mas era tão cedo, eu só tinha 48.",
+      "Tinha vez que eu olhava a louça empilhada e dava vontade de chorar. Não porque era muita, mas porque eu não tinha energia nem pra começar. Minhas filhas viviam falando: 'mãe, você tá apagada'. Eu não conseguia explicar.",
+    ],
+    glicose:[
+      "Eu sempre fui de cozinhar pra família — bolo, brigadeiro, comida de domingo. Aí veio o açúcar alto, o médico cortando tudo, e eu sentindo que tava perdendo um pedaço de mim. A cozinha que era minha alegria virou um campo minado.",
+    ],
+  },
+  pai_familia:{
+    energia:[
+      "Trabalho com vendas, fico o dia na rua. Aí chegava em casa e meus dois filhos vinham correndo: 'pai, vamos jogar bola!'. E eu, com 41 anos, sentia o corpo pesar igual saco de cimento. Só queria desabar no sofá.",
+      "A pior coisa não era o cansaço. Era o olhar do meu menino de 8 anos quando eu falava 'agora não, filho, o pai tá cansado'. Aquilo me destruía por dentro. Eu queria ser o pai presente, não o pai exausto.",
+    ],
+    glicose:[
+      "Quando o médico falou 'olha, sua glicose tá em 178, isso aqui é diabetes', a primeira coisa que eu pensei foi nas minhas duas filhas. Quem ia ensinar elas a andar de bicicleta se eu ficasse doente?",
+    ],
+  },
+  autonomo:{
+    energia:[
+      "Sou eletricista autônomo, trabalho por conta. Se eu não trabalho, não entra dinheiro. Aí quando o corpo começou a fraquejar, foi desespero. Recusei serviço duas vezes em uma semana porque não tinha disposição.",
+    ],
+    glicose:[
+      "Trabalho com motorista de aplicativo. Como mal, durmo pouco, vivo no carro. Quando descobri que tava com açúcar alto, fiquei pensando: 'e agora? Se eu parar pra cuidar disso, quem paga minhas contas?'",
+    ],
+  },
+  generico:{
+    energia:[
+      "Eu sou uma pessoa simples. Trabalhei a vida toda, criei meus filhos, sempre fui forte. Mas chegou um ponto que o corpo travou. Acordava cansado, dormia cansado, e aquilo tava me roubando a alegria de viver.",
+      "Sabe aquela sensação de ver a vida passando do lado de fora da janela? Era eu. Sem energia pra nada. Os outros vivendo e eu só sobrevivendo. Foi quando bateu o desespero de verdade.",
+    ],
+    glicose:[
+      "Tava no consultório quando o médico mostrou o exame: 'olha, sua glicemia tá descontrolada'. Eu já desconfiava — boca seca direto, sede absurda, formigamento. Mas ouvir um médico falar foi diferente. Aquela hora eu chorei.",
+    ],
+  },
+};
+
+// ─── INDICAÇÕES — como o personagem ficou sabendo do produto + quebra de objeção
+// Aparece bem no final do roteiro, ANTES do CTA. Sem hard sell.
+const COPY_INDICACOES=[
+  "Foi quando uma amiga minha me indicou. Eu confesso que fiquei meio assim, né? A gente vê tanta coisa na internet... mas ela me falou uma coisa que me deu segurança: 'você não paga nada agora, só paga quando chegar na sua porta'. Aí eu pensei: então não tem perigo.",
+  "Um conhecido meu falou desse tratamento. Eu desconfiei de primeira, achei que era mais uma enganação dessas. Mas ele insistiu, disse: 'rapaz, você só paga depois que o produto chegar — não tem como dar errado'. Aí eu resolvi tentar.",
+  "Foi uma vizinha, conhecida nossa de anos, que me chamou na porta e disse: 'experimenta, gente da minha família tá usando, e o melhor: você paga só na entrega'. Aquela frase do 'paga só quando chegar' foi o que me convenceu a deixar meu contato.",
+  "Eu vi um vídeo igual esse aqui que você tá vendo. No começo pensei: 'mais uma'. Mas tinha uma coisa que pesava: pagar só quando chegasse. Achei justo. Se não funcionasse, eu não tava perdendo nada.",
+];
+
+// ─── TRANSFORMAÇÃO — "hoje eu sou..." (contraste com a cena de vida do início)
+const COPY_TRANSFORMACOES={
+  vovo:[
+    "Hoje? Ah, meu filho... hoje eu sou o primeiro a levantar pra brincar. Meu açúcar tá no lugar, eu sinto uma energia que eu não tinha há vinte anos. Não sou mais o vovô do sofá — sou o vovô que tá no meio da bagunça com os netos.",
+    "Hoje eu acordo cedo, faço minha caminhada, brinco com os netos, jantos com minha velha rindo. Aquele 'vovô de enfeite' ficou pra trás. Voltei a viver, viu? Voltei a ser eu.",
+  ],
+  caminhoneiro:[
+    "Hoje eu pego estrada de 800 km sem precisar parar pra cochilar. Chego em casa com disposição pra brincar com os filhos, jantar com a mulher. As taxas tão no lugar. Voltei a ser o caminhoneiro de antes.",
+  ],
+  pedreiro:[
+    "Hoje eu subo num andaime de 3 andares sem ofegar. Bato a minha massa, levanto bloco, e ainda chego em casa com energia pra brincar com os meninos. Aquele homem largado no chão da sala não existe mais.",
+  ],
+  dona_casa:[
+    "Hoje minha casa tá impecável, tô cozinhando de novo as comidas que eu amo (com moderação, claro), e às 5 da tarde ainda tenho gás pra sair com as amigas. Minhas filhas até comentam: 'mãe, você tá radiante'.",
+  ],
+  pai_familia:[
+    "Hoje o meu filho me chama pra jogar bola e eu sou o primeiro a calçar o tênis. Volto a ser o pai presente que eu sempre quis ser. E não tem dinheiro que pague isso.",
+  ],
+  autonomo:[
+    "Hoje eu pego serviço dobrado, trabalho até de noite se precisar, e ainda tenho disposição pra cuidar das minhas coisas pessoais. Voltei a ser o homem firme, dono do meu negócio.",
+  ],
+  generico:[
+    "Hoje eu acordo disposto, faço o que tenho que fazer, durmo bem à noite. Aquela vida que eu tava só sobrevivendo ficou pra trás. Voltei a viver de verdade.",
+    "Hoje eu olho pra trás e nem acredito em quem eu era 6 meses atrás. As taxas no lugar, energia de sobra, e aquela alegria de viver que eu pensei que tinha perdido pra sempre.",
+  ],
+};
+
+// ─── PICO EMOCIONAL — o momento de maior dor / medo / vergonha
+const COPY_PICO_EMOCIONAL=[
+  "Eu tava cansado, viu? Cansado de tomar aquele monte de comprimido que me deixava tonto e com o estômago ruim. Sentia que tava gastando o dinheiro que podia tá usando pra viajar com a minha velha em farmácia, e a saúde mesmo não voltava.",
+  "A vista embaçava, o medo de acontecer algo pior e eu virar um peso pra família não me deixava dormir. Eu chorava escondido pra ninguém ver. Olhava no espelho e não me reconhecia mais.",
+  "Sabe aquele aperto no peito quando você imagina daqui a 5 anos sem conseguir andar direito? Sem brincar com seus netos? Era o que eu sentia toda noite, deitado, sem dormir.",
+  "Eu tinha medo. Medo de virar peso pros meus filhos, medo de perder o pé igual meu vizinho perdeu, medo de não ver minha família crescer. E o pior: medo de não ter mais esperança.",
+];
+
+// ─── TENTATIVAS FRUSTRADAS — o que ele já tentou antes (cria identificação)
+const COPY_TENTATIVAS=[
+  "Eu já tinha tentado de tudo, viu? Dieta restritiva que durava uma semana, caminhada que eu não conseguia manter, suplemento caro que vinha de fora e não fazia nada. O dinheiro ia, mas o resultado mesmo, nada.",
+  "Aumentei a dose dos remédios duas vezes. Cortei o sal, o açúcar, o que tinha sabor. Ia em endócrino, ia em nutricionista. Cada um falava uma coisa diferente. Eu já tava perdido naquele mar de informação.",
+  "Tentei dieta low-carb, jejum intermitente, chá de berinjela, tudo que indicavam. Algumas coisas até davam um efeitinho no começo, mas no fim sempre voltava ao mesmo lugar. Era frustrante demais.",
+];
+
+// ─── EXPERIÊNCIA — o personagem conta como foi receber o produto (frete + segurança)
+const COPY_EXPERIENCIAS=[
+  "Eu deixei meu contato lá e, olha, o pessoal me ligou logo depois. Foi uma conversa muito boa, tiraram todas as minhas dúvidas e eu senti que ali tinha gente de verdade, não era robô não. Fiz o pedido e, batata! Chegou aqui em casa em poucos dias. Eu vi que o frasco tava certinho, tudo lacrado, e só aí eu paguei pro rapaz da entrega.",
+  "Cliquei no botão, deixei meu nome e número. Em uns minutos veio uma moça atender, super atenciosa. Ela explicou direitinho como funcionava, sem pressão. Combinou comigo o endereço pra entrega. O produto chegou em 4 dias, eu conferi tudo, e aí sim paguei o entregador. Só dinheiro vivo, na mão.",
+  "Foi tudo no esquema 'paga só quando chegar'. Eu fiz o pedido por telefone com um atendente, eles enviaram pelos Correios mesmo, e quando o carteiro tocou aqui, eu vi a caixinha lacradinha, conferi o produto e pronto, paguei na hora. Sem cartão, sem PIX antes — confiança total.",
+];
+
+// ─── CTAs EMPÁTICOS — sem hard sell, foco em "faz isso por você"
+const COPY_CTAS_EMPATICOS=[
+  "Se você também quer parar de só 'assistir' a sua vida e quer voltar a viver de verdade, clica nesse botão aqui embaixo. Deixa seu contato que o pessoal vai te ligar pra explicar tudo. Faz isso por você e por quem você ama. O risco é zero — você só paga quando receber em casa.",
+  "Olha, eu não vou ficar te empurrando nada. Mas se algum pedacinho dessa minha história te tocou, clica no botão e deixa seu nome. Eles te ligam, conversam contigo direitinho. Você só paga quando o produto chegar — então não tem como dar errado.",
+  "Se você se viu nessa história, faz uma coisa por você: clica no botão aqui debaixo e deixa teu contato. Vão te ligar e explicar tudo, sem pressão nenhuma. E o melhor de tudo, você só paga na entrega, na sua casa. Toma essa atitude por você mesmo. Um abraço.",
+  "Tô te falando isso porque eu sei como é difícil. Se você quer mudar essa história, é simples: clica no botão, deixa teu contato e espera a ligação. Não custa nada, e você só paga quando o produto chegar na tua mão. Faz isso por você, viu?",
+];
+
 // ─── GANCHOS (Headlines) — os 11 tipos do manual de copy
 // Cada tipo gera uma abertura diferente, contextualizada pro nicho diabetes/energia
 const COPY_GANCHOS={
@@ -9019,50 +9228,55 @@ const COPY_GARANTIAS=[
   "Aqui o compromisso é claro: ou você melhora ou recebe seu dinheiro de volta. Inclusive das cápsulas já usadas. É um teste 100% sem risco.",
 ];
 
-// ─── DURAÇÕES — definem a ESTRUTURA do roteiro
+// ─── DURAÇÕES — Estrutura "Jornada do Herói": 80% conexão, 20% CTA
+// Foco em STORYTELLING, não em "anúncio". A copy é o personagem falando.
+// Produto aparece SUTILMENTE no final, e o CTA é empático (não hard sell).
 const COPY_DURACOES={
   '30s':{
     label:'⚡ Reels Rápido (30s)',
-    desc:'Hook forte + CTA direto. Pra TikTok/Reels engagement.',
+    desc:'Hook emocional + CTA leve. Pra engagement de TikTok/Reels.',
     blocos:[
-      {k:'hook',     t:'0–5s',  l:'🎯 Hook impactante',      cls:'b-hook'},
-      {k:'cta',      t:'5–30s', l:'📣 Solução + CTA rápido', cls:'b-cta'},
+      {k:'hook',          t:'0–5s',   l:'🎯 Hook emocional',                cls:'b-hook'},
+      {k:'cena_vida',     t:'5–20s',  l:'🎬 Cena de vida (dor real)',       cls:'b-ret'},
+      {k:'cta',           t:'20–30s', l:'📣 CTA empático',                  cls:'b-cta'},
     ],
   },
   '1min':{
-    label:'🎬 Anúncio Padrão (1min)',
-    desc:'Estrutura clássica de conversão. Indicado pra COD.',
+    label:'🎬 Anúncio Padrão (1min) · Storytelling',
+    desc:'Jornada do herói condensada. 80% conexão · CTA leve no final.',
     blocos:[
-      {k:'hook',     t:'0–3s',   l:'🎯 Hook',                cls:'b-hook'},
-      {k:'retencao', t:'3–15s',  l:'💔 Retenção / Dor',      cls:'b-ret'},
-      {k:'oferta',   t:'15–45s', l:'💎 Oferta',              cls:'b-of'},
-      {k:'cta',      t:'45–60s', l:'📣 CTA (COD)',           cls:'b-cta'},
+      {k:'hook',          t:'0–3s',   l:'🎯 Hook (cena cotidiana)',         cls:'b-hook'},
+      {k:'cena_vida',     t:'3–25s',  l:'🎬 Cena de vida · personagem fala da dor', cls:'b-ret'},
+      {k:'indicacao',     t:'25–45s', l:'🤝 Indicação + quebra de objeção', cls:'b-ret'},
+      {k:'transformacao', t:'45–55s', l:'✨ Transformação ("hoje eu...")',  cls:'b-of'},
+      {k:'cta',           t:'55–60s', l:'📣 CTA empático (sem hard sell)',  cls:'b-cta'},
     ],
   },
   '3min':{
-    label:'🎥 Anúncio Longo (3min)',
-    desc:'Mais espaço pra construir argumento. PICTURE + Mecanismo.',
+    label:'🎥 Storytelling Longo (3min)',
+    desc:'História completa: dor → pico emocional → indicação → transformação → CTA leve.',
     blocos:[
-      {k:'hook',     t:'0–5s',     l:'🎯 Hook',                          cls:'b-hook'},
-      {k:'picture',  t:'5–30s',    l:'🖼 Picture (intensifica a dor)',   cls:'b-ret'},
-      {k:'mecanismo',t:'30s–1m20', l:'⚙️ Mecanismo (por que funciona)',  cls:'b-ret'},
-      {k:'bullets',  t:'1m20–2m',  l:'✅ Bullets / Promessas',           cls:'b-of'},
-      {k:'oferta',   t:'2m–2m40',  l:'💎 Oferta detalhada',              cls:'b-of'},
-      {k:'cta',      t:'2m40–3m',  l:'📣 CTA + Garantia',                cls:'b-cta'},
+      {k:'hook',          t:'0–5s',     l:'🎯 Hook (sentado/parado refletindo)',    cls:'b-hook'},
+      {k:'cena_vida',     t:'5–40s',    l:'🎬 Cena de vida · sintomas no cotidiano', cls:'b-ret'},
+      {k:'pico_emocional',t:'40s–1m20', l:'💔 Pico emocional · medo do futuro',     cls:'b-ret'},
+      {k:'indicacao',     t:'1m20–2m',  l:'🤝 Indicação + quebra de objeção (COD)', cls:'b-ret'},
+      {k:'experiencia',   t:'2m–2m30',  l:'📦 Experiência da entrega · pagou só ao receber', cls:'b-of'},
+      {k:'transformacao', t:'2m30–2m50',l:'✨ Transformação · "hoje eu sou..."',    cls:'b-of'},
+      {k:'cta',           t:'2m50–3m',  l:'📣 CTA empático (faz isso por você)',    cls:'b-cta'},
     ],
   },
   'vsl':{
-    label:'📺 VSL (4–6min)',
-    desc:'Vídeo de venda completo. Storytelling + autoridade + prova social.',
+    label:'📺 VSL Storytelling (4–6min)',
+    desc:'Narrativa completa do herói. Conexão profunda + transformação detalhada.',
     blocos:[
-      {k:'hook',     t:'0–10s',    l:'🎯 Hook + Promessa Grande',         cls:'b-hook'},
-      {k:'picture',  t:'10s–45s',  l:'🖼 Picture (dor amplificada)',      cls:'b-ret'},
-      {k:'historia', t:'45s–1m45', l:'📖 História pessoal / Autoridade',  cls:'b-ret'},
-      {k:'mecanismo',t:'1m45–2m45',l:'⚙️ Mecanismo (a descoberta)',       cls:'b-ret'},
-      {k:'bullets',  t:'2m45–3m30',l:'✅ Bullets (o que vai aprender)',   cls:'b-of'},
-      {k:'oferta',   t:'3m30–4m30',l:'💎 Oferta + Preço',                 cls:'b-of'},
-      {k:'garantia', t:'4m30–5m',  l:'🛡 Garantia incondicional',         cls:'b-cta'},
-      {k:'cta',      t:'5m–6m',    l:'📣 CTA final + Urgência',           cls:'b-cta'},
+      {k:'hook',          t:'0–10s',     l:'🎯 Hook (cena íntima/reflexiva)',          cls:'b-hook'},
+      {k:'cena_vida',     t:'10s–1m',    l:'🎬 Cena de vida · sintomas e impacto',     cls:'b-ret'},
+      {k:'pico_emocional',t:'1m–1m45',   l:'💔 Pico emocional · medo, vergonha, perda',cls:'b-ret'},
+      {k:'tentativas',    t:'1m45–2m30', l:'🚫 Tentativas frustradas (remédios, dietas)', cls:'b-ret'},
+      {k:'indicacao',     t:'2m30–3m15', l:'🤝 Indicação (amigo/vizinho/vídeo)',       cls:'b-ret'},
+      {k:'experiencia',   t:'3m15–4m',   l:'📦 Experiência · pagamento na entrega',    cls:'b-of'},
+      {k:'transformacao', t:'4m–5m',     l:'✨ Transformação completa · contraste claro',cls:'b-of'},
+      {k:'cta',           t:'5m–6m',     l:'📣 CTA empático · "faz isso por você"',    cls:'b-cta'},
     ],
   },
 };
@@ -9085,7 +9299,8 @@ let _cpDraft={
   dor:'energia',
   gancho:'historia',
   duracao:'1min',
-  blocos:{}, // { hook:'', retencao:'', oferta:'', cta:'', picture:'', mecanismo:'', bullets:'', historia:'', garantia:'' }
+  persona:'generico',
+  blocos:{},
 };
 
 function pick(arr){return arr[Math.floor(Math.random()*arr.length)]}
@@ -9105,42 +9320,66 @@ function cpSampleWithDNA(templates,blocoKey){
   return pick(pool);
 }
 
-// Gera o roteiro completo baseado em ângulo + dor + gancho + duração
+// Gera o roteiro completo baseado em ângulo + dor + gancho + duração + persona
+// Aplica filtro automático de palavras proibidas (metformina, etc) ao final.
 function cpGerar(){
   const ang=$('cp-angulo').value;
   const dor=$('cp-dor').value;
   const gancho=$('cp-gancho').value;
   const dur=$('cp-duracao').value;
-  _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;
+  const persona=$('cp-persona').value;
+  _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;_cpDraft.persona=persona;
 
-  // Mapa de qual fonte usar pra cada bloco
+  // Fontes contextualizadas
   const fonteHook = COPY_GANCHOS[gancho]?.hooks?.length
     ? COPY_GANCHOS[gancho].hooks
     : COPY_ANGULOS[ang]?.hooks||[''];
 
+  // Cenas de vida da persona (com fallback pra genérico se persona não tiver template pra essa dor)
+  const cenasPersona = COPY_CENAS_VIDA[persona]?.[dor]
+    || COPY_CENAS_VIDA.generico?.[dor]
+    || COPY_DORES[dor]?.retencao
+    || [''];
+
+  // Transformação da persona (com fallback)
+  const transfPersona = COPY_TRANSFORMACOES[persona]
+    || COPY_TRANSFORMACOES.generico
+    || [''];
+
   const blocos={};
   COPY_DURACOES[dur].blocos.forEach(b=>{
     switch(b.k){
-      case 'hook':      blocos.hook      = cpSampleWithDNA(fonteHook,'hook'); break;
-      case 'retencao':  blocos.retencao  = cpSampleWithDNA(COPY_DORES[dor]?.retencao||[''],'retencao'); break;
-      case 'picture':   blocos.picture   = cpSampleWithDNA(COPY_PICTURES,'picture'); break;
-      case 'historia':  blocos.historia  = cpSampleWithDNA(COPY_ANGULOS.historia_pessoal.hooks,'historia'); break;
-      case 'mecanismo': blocos.mecanismo = cpSampleWithDNA(COPY_MECANISMOS,'mecanismo'); break;
-      case 'bullets':   blocos.bullets   = cpSampleWithDNA(COPY_BULLETS,'bullets'); break;
-      case 'oferta':    blocos.oferta    = cpSampleWithDNA(COPY_OFERTAS,'oferta'); break;
-      case 'garantia':  blocos.garantia  = cpSampleWithDNA(COPY_GARANTIAS,'garantia'); break;
-      case 'cta':       blocos.cta       = cpSampleWithDNA(COPY_CTAS,'cta'); break;
+      // Novos blocos de storytelling
+      case 'hook':           blocos.hook           = cpSampleWithDNA(fonteHook,'hook'); break;
+      case 'cena_vida':      blocos.cena_vida      = cpSampleWithDNA(cenasPersona,'cena_vida'); break;
+      case 'pico_emocional': blocos.pico_emocional = cpSampleWithDNA(COPY_PICO_EMOCIONAL,'pico_emocional'); break;
+      case 'tentativas':     blocos.tentativas     = cpSampleWithDNA(COPY_TENTATIVAS,'tentativas'); break;
+      case 'indicacao':      blocos.indicacao      = cpSampleWithDNA(COPY_INDICACOES,'indicacao'); break;
+      case 'experiencia':    blocos.experiencia    = cpSampleWithDNA(COPY_EXPERIENCIAS,'experiencia'); break;
+      case 'transformacao':  blocos.transformacao  = cpSampleWithDNA(transfPersona,'transformacao'); break;
+      case 'cta':            blocos.cta            = cpSampleWithDNA(COPY_CTAS_EMPATICOS,'cta'); break;
+      // Compat com estruturas antigas (caso ainda em uso)
+      case 'retencao':       blocos.retencao       = cpSampleWithDNA(cenasPersona,'retencao'); break;
+      case 'picture':        blocos.picture        = cpSampleWithDNA(COPY_PICO_EMOCIONAL,'picture'); break;
+      case 'historia':       blocos.historia       = cpSampleWithDNA(cenasPersona,'historia'); break;
+      case 'mecanismo':      blocos.mecanismo      = cpSampleWithDNA(COPY_MECANISMOS,'mecanismo'); break;
+      case 'bullets':        blocos.bullets        = cpSampleWithDNA(COPY_BULLETS,'bullets'); break;
+      case 'oferta':         blocos.oferta         = cpSampleWithDNA(COPY_OFERTAS,'oferta'); break;
+      case 'garantia':       blocos.garantia       = cpSampleWithDNA(COPY_GARANTIAS,'garantia'); break;
     }
   });
-  _cpDraft.blocos=blocos;
 
-  // Re-renderiza só a área de blocos
+  // CRÍTICO: aplica filtro de palavras proibidas em cada bloco
+  Object.keys(blocos).forEach(k=>{blocos[k]=cpAplicarFiltro(blocos[k])});
+
+  _cpDraft.blocos=blocos;
   cpRenderDraftBlocks();
 
   const dnaCount=(DB.criativos||[]).filter(c=>c.perf==='win').length;
+  const personaLabel=COPY_PERSONAS[persona]?.label||'';
   toast(dnaCount>0
-    ? `✨ Roteiro gerado · alimentado por ${dnaCount} criativo${dnaCount>1?'s':''} vencedor${dnaCount>1?'es':''} 🏆`
-    : '✨ Roteiro gerado — ajuste o texto e salve','ok');
+    ? `✨ Roteiro gerado (${personaLabel}) · DNA de ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆`
+    : `✨ Roteiro gerado (${personaLabel}) — palavras sensíveis filtradas`,'ok');
 }
 
 // Renderiza os textareas dinâmicos baseado na duração escolhida
@@ -9187,6 +9426,7 @@ function cpSalvarIdeia(){
     dor:$('cp-dor').value,
     gancho:$('cp-gancho').value,
     duracao:dur,
+    persona:$('cp-persona').value,
     blocos,
     col:'ideias',
     link_arquivo:'',
@@ -9268,11 +9508,13 @@ function cpOpenEdit(id){
     $('cpe-dor').innerHTML=Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
     $('cpe-gancho').innerHTML=Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
     $('cpe-duracao').innerHTML=Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-persona').innerHTML=Object.entries(COPY_PERSONAS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
     $('cpe-titulo').value=c.titulo||'';
     $('cpe-angulo').value=c.angulo||'historia_pessoal';
     $('cpe-dor').value=c.dor||'energia';
     $('cpe-gancho').value=c.gancho||'historia';
     $('cpe-duracao').value=c.duracao||'1min';
+    $('cpe-persona').value=c.persona||'generico';
     $('cpe-link').value=c.link_arquivo||'';
     $('cpe-obs').value=c.obs||'';
     $('cpe-col').value=c.col||'ideias';
@@ -9292,6 +9534,7 @@ function cpSaveEdit(){
   c.dor=$('cpe-dor').value;
   c.gancho=$('cpe-gancho').value;
   c.duracao=$('cpe-duracao').value;
+  c.persona=$('cpe-persona').value;
   // Coleta todos os blocos da duração escolhida
   const blocos={};
   (COPY_DURACOES[c.duracao]?.blocos||[]).forEach(b=>{
@@ -9389,9 +9632,9 @@ function renderCopies(){
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
-      <div class="field"><label>Ângulo da Campanha</label>
-        <select id="cp-angulo">
-          ${Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`).join('')}
+      <div class="field"><label>Persona / Profissão</label>
+        <select id="cp-persona" title="Define o tom + linguajar do personagem">
+          ${Object.entries(COPY_PERSONAS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.persona?'selected':''}>${v.label}</option>`).join('')}
         </select>
       </div>
       <div class="field"><label>Nível de Dor</label>
@@ -9404,11 +9647,21 @@ function renderCopies(){
           ${Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.gancho?'selected':''}>${v.label}</option>`).join('')}
         </select>
       </div>
+      <div class="field"><label>Ângulo da Campanha</label>
+        <select id="cp-angulo">
+          ${Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
       <div class="field"><label>Duração do Vídeo</label>
         <select id="cp-duracao" onchange="cpOnDuracaoChange()">
           ${Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.duracao?'selected':''}>${v.label}</option>`).join('')}
         </select>
       </div>
+    </div>
+
+    <!-- Aviso compliance/tom -->
+    <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--t2);line-height:1.5">
+      💡 <b style="color:var(--bl2)">Foco em conexão:</b> 80% da copy é o personagem contando a história dele · oferta/CTA só no final · palavras sensíveis (metformina, disfunção, cura) são automaticamente filtradas pra tom mais natural.
     </div>
 
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
