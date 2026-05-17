@@ -9625,6 +9625,117 @@ function cpSampleWithDNA(templates,blocoKey){
   return pick(pool);
 }
 
+// ─── REMIX INTELIGENTE — combina pedaços de fontes diferentes em texto "novo".
+// Diferente do cpSampleWithDNA (que escolhe 1 texto inteiro), o remix:
+// 1. Pega 2-3 frases curtas de fontes diferentes
+// 2. Costura com conectivos brasileiros naturais
+// 3. Injeta uma frase do DNA quando há vencedores (aprende com seus sucessos)
+// 4. Aplica filtro de palavras automaticamente
+// Resultado: parece copy "nova" toda vez (combinatoricamente diferente).
+
+// Conectivos brasileiros pra costurar frases sem soar artificial
+const REMIX_CONECTIVOS=[
+  ' Sabe? ', ' E olha, ', ' Tem mais: ', ' Aí, ',
+  ' E sabe o pior? ', ' Mas pera, ', ' E não para por aí, ',
+  ' Tinha mais uma coisa: ', ' Aí veio o pior. ',
+  ' E olha que isso era só o começo. ', ' Eu lembro até hoje. ',
+];
+
+// Divide um texto em frases (corta por . ! ?). Filtra fragmentos curtos demais.
+function _splitFrases(texto){
+  if(!texto)return [];
+  return texto.split(/(?<=[.!?])\s+/).map(f=>f.trim()).filter(f=>f.length>15);
+}
+
+// Remix de um bloco: junta 2-3 frases de fontes diferentes + 1 do DNA se houver
+function cpRemixBloco(templates,blocoKey){
+  // Coleta TODAS as frases de todos os templates + DNA
+  const todas=[];
+  templates.forEach(t=>todas.push(..._splitFrases(t)));
+  const dna=cpGetDNA(blocoKey);
+  dna.forEach(t=>todas.push(..._splitFrases(t)));
+
+  if(todas.length<2)return pick(templates)||'';
+
+  // Embaralha e pega 2-3 frases únicas
+  const shuf=[...todas].sort(()=>Math.random()-0.5);
+  const qtd=2+Math.floor(Math.random()*2); // 2 ou 3
+  const escolhidas=[];
+  const seen=new Set();
+  for(const f of shuf){
+    const k=f.slice(0,30).toLowerCase();
+    if(seen.has(k))continue;
+    seen.add(k);
+    escolhidas.push(f);
+    if(escolhidas.length>=qtd)break;
+  }
+
+  // Se há DNA, garante que pelo menos 1 frase vem dele (substitui última escolhida)
+  if(dna.length){
+    const dnaFrases=[];
+    dna.forEach(t=>dnaFrases.push(..._splitFrases(t)));
+    if(dnaFrases.length){
+      escolhidas[escolhidas.length-1]=pick(dnaFrases);
+    }
+  }
+
+  // Costura: primeira frase fica solta, demais ganham conectivo aleatório
+  let resultado=escolhidas[0];
+  for(let i=1;i<escolhidas.length;i++){
+    // 60% das vezes usa conectivo, 40% usa espaço simples (mais natural)
+    const usaCon=Math.random()<0.6;
+    resultado+=(usaCon?pick(REMIX_CONECTIVOS):' ')+escolhidas[i];
+  }
+  return resultado.trim();
+}
+
+// Gera roteiro completo via remix (em vez de sample)
+function cpGerarIdeia(){
+  const ang=$('cp-angulo').value;
+  const dor=$('cp-dor').value;
+  const gancho=$('cp-gancho').value;
+  const dur=$('cp-duracao').value;
+  const persona=$('cp-persona').value;
+  _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;_cpDraft.persona=persona;
+
+  const fonteHook = COPY_GANCHOS[gancho]?.hooks||COPY_ANGULOS[ang]?.hooks||[''];
+  const cenasPersona = COPY_CENAS_VIDA[persona]?.[dor]||COPY_CENAS_VIDA.generico?.[dor]||COPY_DORES[dor]?.retencao||[''];
+  const transfPersona = COPY_TRANSFORMACOES[persona]||COPY_TRANSFORMACOES.generico||[''];
+
+  const blocos={};
+  COPY_DURACOES[dur].blocos.forEach(b=>{
+    switch(b.k){
+      case 'hook':           blocos.hook           = cpRemixBloco(fonteHook,'hook'); break;
+      case 'cena_vida':      blocos.cena_vida      = cpRemixBloco(cenasPersona,'cena_vida'); break;
+      case 'pico_emocional': blocos.pico_emocional = cpRemixBloco(COPY_PICO_EMOCIONAL,'pico_emocional'); break;
+      case 'tentativas':     blocos.tentativas     = cpRemixBloco(COPY_TENTATIVAS,'tentativas'); break;
+      case 'indicacao':      blocos.indicacao      = cpRemixBloco(COPY_INDICACOES,'indicacao'); break;
+      case 'experiencia':    blocos.experiencia    = cpRemixBloco(COPY_EXPERIENCIAS,'experiencia'); break;
+      case 'transformacao':  blocos.transformacao  = cpRemixBloco(transfPersona,'transformacao'); break;
+      case 'cta':            blocos.cta            = cpRemixBloco(COPY_CTAS_EMPATICOS,'cta'); break;
+      // Compat com estruturas antigas
+      case 'retencao':       blocos.retencao       = cpRemixBloco(cenasPersona,'retencao'); break;
+      case 'picture':        blocos.picture        = cpRemixBloco(COPY_PICO_EMOCIONAL,'picture'); break;
+      case 'historia':       blocos.historia       = cpRemixBloco(cenasPersona,'historia'); break;
+      case 'mecanismo':      blocos.mecanismo      = cpRemixBloco(COPY_MECANISMOS,'mecanismo'); break;
+      case 'bullets':        blocos.bullets        = cpRemixBloco(COPY_BULLETS,'bullets'); break;
+      case 'oferta':         blocos.oferta         = cpRemixBloco(COPY_OFERTAS,'oferta'); break;
+      case 'garantia':       blocos.garantia       = cpRemixBloco(COPY_GARANTIAS,'garantia'); break;
+    }
+  });
+
+  // Aplica filtro de palavras proibidas em cada bloco
+  Object.keys(blocos).forEach(k=>{blocos[k]=cpAplicarFiltro(blocos[k])});
+
+  _cpDraft.blocos=blocos;
+  cpRenderDraftBlocks();
+
+  const dnaCount=(DB.criativos||[]).filter(c=>c.perf==='win').length;
+  toast(dnaCount>0
+    ? `🤖 Ideia original gerada · remix com ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆`
+    : '🤖 Ideia original gerada via remix inteligente','ok');
+}
+
 // Gera o roteiro completo baseado em ângulo + dor + gancho + duração + persona
 // Aplica filtro automático de palavras proibidas (metformina, etc) ao final.
 function cpGerar(){
@@ -10035,8 +10146,9 @@ function renderCopies(){
     </div>
 
 
-    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-      <button class="btn btn-bl btn-sm" onclick="cpGerar()">✨ Gerar Roteiro</button>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-gh btn-sm" onclick="cpGerar()" title="Pega 1 template completo de cada bloco — rápido e consistente">✨ Gerar Roteiro</button>
+      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="IA remixa frases de fontes diferentes + DNA dos vencedores · resultado mais criativo e variado">🤖 Ideia de Copy (IA)</button>
     </div>
 
     <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
