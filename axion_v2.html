@@ -9876,7 +9876,7 @@ function cpRenderDraftBlocks(){
   wrap.innerHTML=`
     <div class="cp-timeline">${timeline}</div>
     <textarea id="cp-script-text" class="cp-script-area"
-      placeholder="Clique em ✨ Gerar Roteiro ou 🤖 IA pra criar a copy — ela vai aparecer aqui em texto corrido, separada em parágrafos conforme a timeline acima."
+      placeholder="Clique em ✨ Gerar Copy com IA acima pra criar o roteiro — a copy vai aparecer aqui em texto corrido, separada em parágrafos conforme a timeline acima."
       oninput="_cpSyncFromTextarea()">${textoUnificado}</textarea>
   `;
 }
@@ -10150,12 +10150,6 @@ function renderCopies(){
             style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:6px;cursor:help">
             🧬 DNA inativo
           </span>`}
-      <button onclick="cpGerarIdeia()"
-        title="Claude AI escreve um roteiro original baseado nos parâmetros + DNA dos vencedores. ~R$0,02 · 2-5s."
-        style="font-size:11px;font-weight:500;color:var(--bl2);background:var(--bld);padding:5px 10px;border-radius:6px;cursor:pointer;border:none;font-family:inherit;display:flex;align-items:center;gap:5px;transition:all .15s"
-        onmouseover="this.style.background='rgba(59,130,246,.18)'" onmouseout="this.style.background='var(--bld)'">
-        🤖 Ideia de Copy (IA)
-      </button>
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:8px">
@@ -10218,8 +10212,8 @@ function renderCopies(){
 
 
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-bl btn-sm" onclick="cpGerar()" title="Gera o roteiro a partir dos templates do manual de copy">✨ Gerar Roteiro</button>
-      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa todos os blocos do roteiro atual">🗑 Limpar</button>
+      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="A IA (Gemini) escreve um roteiro original baseado nos parâmetros selecionados + DNA dos vencedores · 2-5 segundos">✨ Gerar Copy com IA</button>
+      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa o roteiro atual">🗑 Limpar</button>
     </div>
 
     <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
