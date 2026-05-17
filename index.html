@@ -2965,8 +2965,12 @@ const api={
   saveUser:(payload)=>api._fetch('/api/users',{method:'POST',body:JSON.stringify(payload)}),
   deleteUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id),{method:'DELETE'}),
   restoreUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id)+'/restore',{method:'POST'}),
-  // IA: gera copy via Anthropic API no Worker. Body com todos os parâmetros do gerador.
+  // IA: gera copy (Gemini/Anthropic) via Worker
   aiGenerateCopy:(payload)=>api._fetch('/api/ai/generate-copy',{method:'POST',body:JSON.stringify(payload)}),
+  // IA: gerencia API keys via UI (sem precisar mexer no terminal)
+  aiKeysGet:()=>api._fetch('/api/config/ai-keys'),
+  aiKeysSet:(payload)=>api._fetch('/api/config/ai-keys',{method:'POST',body:JSON.stringify(payload)}),
+  aiKeysTest:(provider)=>api._fetch('/api/config/ai-keys/test',{method:'POST',body:JSON.stringify({provider})}),
 };
 
 // ─── Sync state com servidor ───
@@ -10332,6 +10336,129 @@ function renderConfigContent(){
   else if(configTab==='sobre')       w.innerHTML=cfgSobre();
   // depois do innerHTML, hooks adicionais (ACL grid, etc.)
   if(configTab==='permissoes')renderACLInline();
+  if(configTab==='integracoes')loadAIConfig();
+}
+
+// ─── Config IA (gerenciada via UI, salva no D1) ──────────────
+let _aiCfgState=null;
+async function loadAIConfig(){
+  const statusEl=document.getElementById('cfg-ai-status');
+  const wrap=document.getElementById('cfg-ai-content');
+  if(!wrap)return;
+  if(!apiEnabled()||!apiToken()){
+    if(statusEl){statusEl.textContent='Sem backend';statusEl.classList.remove('on');}
+    wrap.innerHTML=`<div class="muted" style="font-size:12.5px;padding:8px 0">⚠ Backend não conectado — configure a URL do Worker primeiro.</div>`;
+    return;
+  }
+  try{
+    _aiCfgState=await api.aiKeysGet();
+    if(statusEl){
+      const anyOn=_aiCfgState.gemini.configured||_aiCfgState.anthropic.configured;
+      statusEl.textContent=anyOn?'Conectado':'Não configurado';
+      statusEl.classList.toggle('on',anyOn);
+    }
+    renderAIConfig();
+  }catch(e){
+    if(statusEl)statusEl.textContent='Erro';
+    wrap.innerHTML=`<div style="color:var(--rd);font-size:12.5px;padding:8px 0">Erro: ${e.message}</div>`;
+  }
+}
+function renderAIConfig(){
+  const wrap=document.getElementById('cfg-ai-content');
+  if(!wrap||!_aiCfgState)return;
+  const g=_aiCfgState.gemini, a=_aiCfgState.anthropic;
+  const sourceLbl=(src)=>src==='dashboard'?'<span style="color:var(--gr);font-size:10.5px;font-weight:600">● configurado pela Dashboard</span>'
+    :src==='secret'?'<span style="color:var(--bl2);font-size:10.5px;font-weight:600">● configurado via wrangler secret</span>'
+    :'<span style="color:var(--t4);font-size:10.5px">○ não configurado</span>';
+
+  wrap.innerHTML=`
+    <p class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:14px">
+      A Dashboard usa IA pra gerar roteiros de criativo (botão 🤖 em Criativos → Copies).
+      O <b style="color:var(--tx)">Gemini</b> é gratuito (1.500 gerações/dia) e basta na maioria dos casos.
+      O <b style="color:var(--tx)">Claude</b> é pago e fica como fallback opcional.
+    </p>
+
+    <!-- Gemini -->
+    <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="font-size:22px">✨</div>
+        <div style="flex:1">
+          <div style="font-size:13.5px;font-weight:600;color:var(--tx)">Google Gemini <span style="font-size:11px;color:var(--gr);font-weight:600;margin-left:4px">GRÁTIS</span></div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">
+            ${sourceLbl(g.source)}
+            ${g.preview?`<span style="color:var(--t4);margin-left:8px;font-family:ui-monospace,monospace">${g.preview}</span>`:''}
+          </div>
+        </div>
+        ${g.configured?`<button class="btn btn-gh btn-sm" onclick="aiKeyTest('gemini')">⚡ Testar</button>`:''}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="ai-gemini-input" type="password" placeholder="AIzaSy... (cole a key aqui)"
+          style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
+        <button class="btn btn-bl btn-sm" onclick="aiKeySave('gemini')">${g.configured?'Atualizar':'Salvar'}</button>
+        ${g.source==='dashboard'?`<button class="btn btn-gh btn-sm" onclick="aiKeyClear('gemini')" title="Remove a key do banco">🗑</button>`:''}
+      </div>
+      <div class="muted" style="font-size:11.5px;line-height:1.5;margin-top:8px">
+        💡 Pegue a key grátis em
+        <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--bl2);font-weight:600">aistudio.google.com/apikey</a>
+        — login Google, "Create API key", copia e cola aqui.
+      </div>
+    </div>
+
+    <!-- Anthropic (opcional / fallback) -->
+    <details style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:0;overflow:hidden">
+      <summary style="cursor:pointer;padding:11px 14px;font-size:12.5px;font-weight:600;color:var(--t2);display:flex;align-items:center;gap:8px;list-style:none">
+        <span style="font-size:14px;color:var(--t4)">▶</span>
+        🟣 Claude (Anthropic) — opcional · ${sourceLbl(a.source)}
+      </summary>
+      <div style="padding:0 14px 14px 14px;border-top:1px solid var(--b1)">
+        <div class="muted" style="font-size:11.5px;line-height:1.5;margin:10px 0">
+          Fallback opcional. <b style="color:var(--am)">Pago por uso</b> (~R$0,02 por geração).
+          Useful se atingir o limite diário do Gemini.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="ai-anthropic-input" type="password" placeholder="sk-ant-api03-..."
+            style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
+          <button class="btn btn-gh btn-sm" onclick="aiKeySave('anthropic')">${a.configured?'Atualizar':'Salvar'}</button>
+          ${a.source==='dashboard'?`<button class="btn btn-gh btn-sm" onclick="aiKeyClear('anthropic')">🗑</button>`:''}
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">
+          Crie key em <a href="https://console.anthropic.com" target="_blank" style="color:var(--bl2);font-weight:600">console.anthropic.com</a>
+        </div>
+      </div>
+    </details>
+  `;
+}
+async function aiKeySave(provider){
+  const inp=document.getElementById('ai-'+provider+'-input');
+  const v=(inp?.value||'').trim();
+  if(!v){toast('Cole a key antes de salvar','err');return;}
+  try{
+    const payload={};
+    payload[provider+'_key']=v;
+    await api.aiKeysSet(payload);
+    inp.value='';
+    toast('✓ Key salva — testando...','ok');
+    // Auto-testa após salvar
+    await aiKeyTest(provider,true);
+    await loadAIConfig();
+  }catch(e){toast('Erro: '+e.message,'err')}
+}
+async function aiKeyClear(provider){
+  if(!confirm(`Remover a API key do ${provider==='gemini'?'Gemini':'Claude'} do banco?`))return;
+  try{
+    const payload={};
+    payload[provider+'_key']='';
+    await api.aiKeysSet(payload);
+    toast('Key removida','ok');
+    await loadAIConfig();
+  }catch(e){toast('Erro: '+e.message,'err')}
+}
+async function aiKeyTest(provider,silent){
+  if(!silent)toast('⚡ Testando '+(provider==='gemini'?'Gemini':'Claude')+'...','ok');
+  try{
+    const r=await api.aiKeysTest(provider);
+    toast(`✓ ${provider==='gemini'?'Gemini':'Claude'} respondeu: "${(r.response||'').slice(0,40)}"`,'ok');
+  }catch(e){toast('Teste falhou: '+e.message,'err')}
 }
 
 // ─── Seção Conta & Perfil ──────────────────────────────
@@ -10660,6 +10787,24 @@ function cfgIntegracoes(){
       <button class="btn btn-gh btn-sm" onclick="openM('m-wh');renderWebhookSim();switchWhTab('autom')">Ver regras →</button>
     </div>
     `;})()}
+
+    <!-- ─── IA: Gerador de Copy (Gemini / Claude) ─── -->
+    <details class="cfg-card" id="cfg-ai-details" style="padding:0;overflow:hidden">
+      <summary style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer;user-select:none;list-style:none">
+        <div style="font-size:28px">🤖</div>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:2px">IA — Gerador de Copy</div>
+          <div class="muted" style="font-size:12.5px">Configure Gemini (grátis) ou Claude pra gerar roteiros automaticamente</div>
+        </div>
+        <span class="cfg-status" id="cfg-ai-status">Carregando...</span>
+        <div style="font-size:14px;color:var(--t3);transition:transform .2s">▾</div>
+      </summary>
+      <div style="padding:0 18px 16px 18px;border-top:1px solid var(--b1)">
+        <div id="cfg-ai-content" style="margin-top:14px">
+          <div class="muted" style="text-align:center;padding:18px;font-size:12.5px">Carregando configuração...</div>
+        </div>
+      </div>
+    </details>
 
     <div class="cfg-h" style="margin-top:24px"><h2>WhatsApp Business API</h2><p>Em breve — envio de mensagens automáticas</p></div>
     <div class="cfg-card" style="opacity:.6;display:flex;align-items:center;gap:14px">

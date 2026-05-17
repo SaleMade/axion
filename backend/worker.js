@@ -293,6 +293,158 @@ async function handleRestoreUser(req, env, userId) {
   return json({ ok: true, action: 'restored' });
 }
 
+// ─── Config armazenada no D1 (API keys configuráveis via UI) ──
+// Tabela criada sob demanda (idempotente) — não precisa migrar manualmente.
+// Apenas Diretor pode ler/escrever.
+async function _ensureConfigTable(env) {
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)'
+    ).run();
+  } catch (_) {}
+}
+
+// Lê uma config do D1. Retorna null se não setada.
+async function _readConfig(env, key) {
+  await _ensureConfigTable(env);
+  try {
+    const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(key).first();
+    return row?.value || null;
+  } catch (_) { return null; }
+}
+
+// Salva uma config no D1. Se value vazio, deleta.
+async function _writeConfig(env, key, value) {
+  await _ensureConfigTable(env);
+  if (!value) {
+    await env.DB.prepare('DELETE FROM app_config WHERE key = ?').bind(key).run();
+    return;
+  }
+  await env.DB.prepare(
+    `INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, strftime('%s','now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).bind(key, value).run();
+}
+
+// Resolve qual API key usar pra um provider. Preferência:
+//   1. Config no D1 (configurado via UI da Dashboard)
+//   2. Secret do Worker (configurado via `wrangler secret put`)
+async function getAIKey(env, provider) {
+  const dbKey = await _readConfig(env, `ai_${provider}_key`);
+  if (dbKey) return dbKey;
+  if (provider === 'gemini' && env.GEMINI_API_KEY) return env.GEMINI_API_KEY;
+  if (provider === 'anthropic' && env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY;
+  return null;
+}
+
+// GET /api/config/ai-keys → status das keys (sem expor o valor)
+async function handleAIConfigGet(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode ver config de IA', 403);
+
+  const geminiDb = await _readConfig(env, 'ai_gemini_key');
+  const anthropicDb = await _readConfig(env, 'ai_anthropic_key');
+
+  // Mascara a key (só mostra primeiros 8 chars + últimos 4)
+  const mask = k => k ? `${k.slice(0, 8)}...${k.slice(-4)}` : null;
+
+  return json({
+    gemini: {
+      configured: !!(geminiDb || env.GEMINI_API_KEY),
+      source: geminiDb ? 'dashboard' : (env.GEMINI_API_KEY ? 'secret' : null),
+      preview: mask(geminiDb || env.GEMINI_API_KEY),
+    },
+    anthropic: {
+      configured: !!(anthropicDb || env.ANTHROPIC_API_KEY),
+      source: anthropicDb ? 'dashboard' : (env.ANTHROPIC_API_KEY ? 'secret' : null),
+      preview: mask(anthropicDb || env.ANTHROPIC_API_KEY),
+    },
+  });
+}
+
+// POST /api/config/ai-keys → salva uma ou mais keys
+async function handleAIConfigSet(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode mudar config de IA', 403);
+
+  const body = await req.json().catch(() => null);
+  if (!body) return err('Body inválido');
+
+  // Aceita { gemini_key, anthropic_key } — qualquer um pode vir
+  if (body.gemini_key !== undefined) {
+    const k = String(body.gemini_key || '').trim();
+    // Validação básica formato Gemini (AIza...)
+    if (k && !k.startsWith('AIza') && k.length < 30) {
+      return err('Key do Gemini parece inválida (deve começar com "AIza")');
+    }
+    await _writeConfig(env, 'ai_gemini_key', k);
+  }
+  if (body.anthropic_key !== undefined) {
+    const k = String(body.anthropic_key || '').trim();
+    if (k && !k.startsWith('sk-ant-')) {
+      return err('Key do Anthropic parece inválida (deve começar com "sk-ant-")');
+    }
+    await _writeConfig(env, 'ai_anthropic_key', k);
+  }
+
+  return json({ ok: true });
+}
+
+// POST /api/config/ai-keys/test → faz uma chamada teste pra validar a key
+async function handleAIConfigTest(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode testar IA', 403);
+
+  const body = await req.json().catch(() => ({}));
+  const provider = body.provider || 'gemini';
+  const key = await getAIKey(env, provider);
+  if (!key) return err(`${provider} não configurado`, 400);
+
+  // Chamada mínima — uma única palavra de resposta
+  try {
+    if (provider === 'gemini') {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'Responda apenas "ok" sem nada mais.' }] }],
+          generationConfig: { maxOutputTokens: 8 },
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        return err(`Teste falhou (${r.status}): ${t.slice(0, 200)}`, 502);
+      }
+      const data = await r.json();
+      const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      return json({ ok: true, provider, response: txt.trim() });
+    }
+    if (provider === 'anthropic') {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5',
+          max_tokens: 8,
+          messages: [{ role: 'user', content: 'Responda apenas "ok".' }],
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        return err(`Teste falhou (${r.status}): ${t.slice(0, 200)}`, 502);
+      }
+      const data = await r.json();
+      return json({ ok: true, provider, response: (data.content?.[0]?.text || '').trim() });
+    }
+    return err('Provider desconhecido');
+  } catch (e) {
+    return err('Teste falhou: ' + e.message, 502);
+  }
+}
+
 // ─── AI: Gerador de copy ───────────────────────────────────────
 // Endpoint: POST /api/ai/generate-copy
 // Body: { persona, dor, gancho, angulo, duracao, estrutura, dna_vencedores, contexto }
@@ -442,8 +594,12 @@ async function handleAIGenerateCopy(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
 
-  if (!env.GEMINI_API_KEY && !env.ANTHROPIC_API_KEY) {
-    return err('IA não configurada. Diretor: configure GEMINI_API_KEY (grátis em aistudio.google.com/apikey) via `wrangler secret put GEMINI_API_KEY`.', 503);
+  // Busca keys preferindo D1 (configurado via UI) → env (wrangler secret)
+  const geminiKey = await getAIKey(env, 'gemini');
+  const anthropicKey = await getAIKey(env, 'anthropic');
+
+  if (!geminiKey && !anthropicKey) {
+    return err('IA não configurada. Diretor: acesse Configurações → Integrações → IA e cole sua API key do Gemini (grátis em aistudio.google.com/apikey).', 503);
   }
 
   const body = await req.json().catch(() => null);
@@ -453,22 +609,22 @@ async function handleAIGenerateCopy(req, env) {
   }
 
   const prompts = _aiBuildPrompts(body);
+  // Patch env temporário pra _callGemini/_callAnthropic continuarem funcionando
+  const envWithKeys = { ...env, GEMINI_API_KEY: geminiKey, ANTHROPIC_API_KEY: anthropicKey };
 
-  // Prefere Gemini (gratuito); cai pra Anthropic se Gemini falhar
   try {
-    if (env.GEMINI_API_KEY) {
-      const result = await _callGemini(env, prompts);
+    if (geminiKey) {
+      const result = await _callGemini(envWithKeys, prompts);
       return json({ ok: true, ...result });
     }
-    if (env.ANTHROPIC_API_KEY) {
-      const result = await _callAnthropic(env, prompts);
+    if (anthropicKey) {
+      const result = await _callAnthropic(envWithKeys, prompts);
       return json({ ok: true, ...result });
     }
   } catch (e) {
-    // Se Gemini falhou mas Anthropic existe, tenta o fallback
-    if (env.GEMINI_API_KEY && env.ANTHROPIC_API_KEY) {
+    if (geminiKey && anthropicKey) {
       try {
-        const result = await _callAnthropic(env, prompts);
+        const result = await _callAnthropic(envWithKeys, prompts);
         return json({ ok: true, ...result, fallback: true });
       } catch (e2) {
         return err(`Ambos providers falharam. Gemini: ${e.message} · Anthropic: ${e2.message}`, 502);
@@ -1059,8 +1215,13 @@ export default {
       const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
       if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
 
-      // IA — gera copy via Anthropic API
+      // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
+
+      // IA — config de API keys (gerenciável via UI da Dashboard)
+      if (req.method === 'GET'    && path === '/api/config/ai-keys')      return handleAIConfigGet(req, env);
+      if (req.method === 'POST'   && path === '/api/config/ai-keys')      return handleAIConfigSet(req, env);
+      if (req.method === 'POST'   && path === '/api/config/ai-keys/test') return handleAIConfigTest(req, env);
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 
