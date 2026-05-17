@@ -1023,6 +1023,10 @@ h1 em{font-weight:700}
 /* Pilar 1: Gerador de Script */
 .cp-gen-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-bottom:14px;align-items:flex-end}
 @media(max-width:780px){.cp-gen-controls{grid-template-columns:1fr}}
+/* Descrição abaixo do select — mostra o que a opção atual faz, ajuda escolha */
+.cp-desc{font-size:11px;color:var(--t3);line-height:1.4;margin-top:5px;min-height:30px;
+  padding:5px 8px;background:rgba(59,130,246,.04);border-left:2px solid var(--bld);border-radius:0 4px 4px 0}
+.cp-desc:empty{display:none}
 .cp-script-blocks{display:flex;flex-direction:column;gap:10px}
 .cp-block{background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;border-left:3px solid var(--bl)}
 .cp-block.b-hook{border-left-color:#ef4444}
@@ -8831,33 +8835,153 @@ function pageCopies(){return `<div class="page" id="copies-pg"></div>`}
 
 // ─── Banco de hooks/retenção/ofertas/CTAs (templates persuasivos pro nicho diabetes/energia)
 const COPY_ANGULOS={
+  // ─── Pessoal & Relacional ───
   historia_pessoal:{
     label:'🤝 História Pessoal',
+    desc:'Quem fala é o próprio personagem contando o que viveu. Tom íntimo, primeira pessoa, vulnerabilidade.',
+    grupo:'pessoal',
     hooks:[
       "Eu não sou de gravar vídeo, mas o que aconteceu comigo me obrigou a aparecer aqui...",
       "Tenho 47 anos e há 6 meses minha vida mudou completamente. Vou te contar o que aconteceu.",
-      "Minha mãe tem 58 anos e tava prestes a entrar pra insulina — até descobrir isso por acaso.",
+      "Minha mãe tem 58 anos e tava prestes a entrar pra injeção — até descobrir isso por acaso.",
       "Há 8 meses eu não tinha mais energia pra nada. Hoje gravando esse vídeo com 100% de disposição.",
-    ],
-  },
-  alerta_saude:{
-    label:'🚨 Alerta de Saúde',
-    hooks:[
-      "ATENÇÃO: se você tem mais de 40 anos e sente as pernas pesadas, precisa ver isso antes que seja tarde.",
-      "O que ninguém te conta sobre a glicose acima de 120 — e o que realmente acontece com seu corpo.",
-      "3 sinais que seu corpo dá ANTES da glicose subir de vez. E que os médicos quase nunca falam.",
-      "Se você toma metformina, glibenclamida ou outro remédio pra diabetes, NÃO PASSA esse vídeo.",
     ],
   },
   abordagem_familiar:{
     label:'👨‍👩‍👧 Abordagem Familiar',
+    desc:'Apela pra família — "mostra esse vídeo pro seu pai/mãe". O espectador é o filho/neto que se preocupa.',
+    grupo:'pessoal',
     hooks:[
       "Mostra esse vídeo pro seu pai, sua mãe ou seu avô — antes que seja tarde demais.",
       "Filho, se você ama seus pais, presta atenção nos próximos 30 segundos.",
-      "Meu marido tinha medo de não acordar mais por causa da glicose. Hoje ele tá assim 👇",
+      "Meu marido tinha medo de não acordar mais por causa do açúcar. Hoje ele tá assim 👇",
       "Minha filha me ligou chorando porque achou que eu não ia mais aguentar. Aí descobri isso.",
     ],
   },
+  testemunho:{
+    label:'🗣 Testemunho de Terceiro',
+    desc:'Alguém conta a história de outro (vizinho, parente). Cria distância e prova social ao mesmo tempo.',
+    grupo:'pessoal',
+    hooks:[
+      "Meu vizinho de 62 anos não levantava mais do sofá. Hoje ele caminha 30 minutos por dia. Olha o que aconteceu:",
+      "Conheci a Dona Inês na padaria. Ela me contou uma coisa que mudou a vida do marido dela. Vou repassar:",
+      "Minha sogra ficou 12 anos tomando 4 comprimidos por dia. Hoje? Toma só vitamina natural. Vou explicar como.",
+    ],
+  },
+  // ─── Saúde & Educacional ───
+  alerta_saude:{
+    label:'🚨 Alerta de Saúde',
+    desc:'Tom urgente, "ATENÇÃO". Avisa sobre risco que o espectador não percebeu. Cria preocupação imediata.',
+    grupo:'saude',
+    hooks:[
+      "ATENÇÃO: se você tem mais de 40 anos e sente as pernas pesadas, precisa ver isso antes que seja tarde.",
+      "O que ninguém te conta sobre o açúcar acima de 120 — e o que realmente acontece com seu corpo.",
+      "3 sinais que seu corpo dá ANTES do açúcar subir de vez. E que os médicos quase nunca falam.",
+      "Se você toma remédio pra glicose todo dia, NÃO PASSA esse vídeo sem assistir até o fim.",
+    ],
+  },
+  educacional:{
+    label:'📚 Educacional / Informativo',
+    desc:'Ensina algo útil sem parecer anúncio. Postura de professor/especialista compartilhando conhecimento.',
+    grupo:'saude',
+    hooks:[
+      "Hoje vou te explicar de forma simples por que o seu açúcar sobe mesmo você comendo direitinho.",
+      "Existe uma diferença ENORME entre baixar o açúcar e regular o açúcar. Vou te mostrar qual.",
+      "5 hábitos simples que diminuem em até 30% sua glicose — e o último vai te surpreender.",
+    ],
+  },
+  curiosidade_cientifica:{
+    label:'🔬 Curiosidade Científica',
+    desc:'Apresenta uma descoberta ou estudo. Usa números, percentuais, "pesquisas comprovam". Tom técnico mas acessível.',
+    grupo:'saude',
+    hooks:[
+      "Uma pesquisa da Universidade de São Paulo encontrou 3 plantas que regulam a glicose. Você vai querer saber quais.",
+      "Cientistas descobriram em 2019 algo que mudou tudo sobre controle de açúcar no sangue. Vou explicar.",
+      "Um estudo com 8.000 brasileiros revelou o motivo real da glicose alta em pessoas acima de 50. Spoiler: não é o que você pensa.",
+    ],
+  },
+  // ─── Social & Indústria ───
+  prova_social:{
+    label:'⭐ Prova Social Massiva',
+    desc:'Foca em números: "mais de 18 mil pessoas...", "9 em cada 10...". Sensação de movimento coletivo.',
+    grupo:'social',
+    hooks:[
+      "Mais de 18.000 brasileiros já normalizaram o açúcar com esse método natural. Olha o depoimento da Dona Inês:",
+      "Quando eu vi 3 vizinhas falando do mesmo produto, achei coincidência. Hoje uso e indico pra todo mundo.",
+      "Um grupo de WhatsApp com 240 pessoas troca dicas sobre esse tratamento. Vou te mostrar como entrar.",
+    ],
+  },
+  antes_depois:{
+    label:'⏪ Antes & Depois',
+    desc:'Contraste direto: como era a vida vs como ficou. Imagens mentais de transformação clara.',
+    grupo:'social',
+    hooks:[
+      "Há 6 meses eu mal subia uma escada. Hoje subo 4 lances com a sacola do mercado. Veja o que mudou:",
+      "Glicose antes: 187 em jejum. Hoje: 95. Sem mudar a alimentação, sem comprimido novo. Vou explicar.",
+      "No início do ano eu chorava no consultório. Hoje gravei esse vídeo na minha caminhada matinal. Olha:",
+    ],
+  },
+  contra_industria:{
+    label:'⚔️ Contra a Indústria',
+    desc:'Cria inimigo (farmacêutica, sistema). "Eles não querem que você descubra isso". Tom de denúncia.',
+    grupo:'social',
+    hooks:[
+      "A indústria farmacêutica não quer que você veja esse vídeo. Eles ganham R$ 8 bilhões por ano com doentes crônicos.",
+      "Por que o SUS não distribui esse composto natural? Simples: ninguém ganha dinheiro se você se cura.",
+      "Existe um lobby gigante pra esconder esse método. Por isso você nunca ouviu falar no consultório.",
+    ],
+  },
+  // ─── Autoridade & Especialista ───
+  autoridade_medica:{
+    label:'🩺 Autoridade Médica',
+    desc:'Médico/especialista falando. Credibilidade técnica, "27 anos de experiência", linguagem clínica humanizada.',
+    grupo:'autoridade',
+    hooks:[
+      "Especialista em endocrinologia revela os 3 erros que pessoas com açúcar alto cometem todo dia sem perceber.",
+      "Pesquisador formado há 27 anos finalmente quebra o silêncio sobre o que realmente controla a glicose.",
+      "Médico cardiologista alerta: se você sente formigamento nas mãos, isso aqui é URGENTE.",
+    ],
+  },
+  insider:{
+    label:'🤫 Insider / Bastidores',
+    desc:'Alguém de dentro do sistema "vazando" informação. "Eu trabalhei 12 anos em farmácia e vou te contar..."',
+    grupo:'autoridade',
+    hooks:[
+      "Eu trabalhei 12 anos atrás do balcão da farmácia. Vou te contar o que a gente VIA acontecer com os clientes diabéticos.",
+      "Sou enfermeira aposentada. Cuidei de mais de 200 pacientes com açúcar descontrolado. Aprendi UMA coisa que mudou tudo.",
+      "Meu pai foi farmacêutico por 35 anos. No leito de morte, ele me contou um segredo que eu compartilho hoje.",
+    ],
+  },
+  // ─── Urgência & Pressão ───
+  urgencia_estatistica:{
+    label:'📊 Urgência Estatística',
+    desc:'Usa estatísticas alarmantes pra criar urgência. "1 em cada 4 brasileiros...". Faz o espectador se sentir parte.',
+    grupo:'urgencia',
+    hooks:[
+      "1 em cada 4 brasileiros acima de 50 vai ter problema sério de glicose esse ano. Você pode ser um deles.",
+      "Estudo de 2024: 62% das pessoas com açúcar alto não sabem que estão. Confira os 5 sinais antes que seja tarde.",
+      "A cada 8 segundos uma pessoa morre no mundo por complicação de glicose alta. Não seja estatística.",
+    ],
+  },
+  identificacao_dor:{
+    label:'😣 Identificação por Sintoma',
+    desc:'Começa listando sintomas específicos. "Se você sente X, Y ou Z..." — o espectador se reconhece.',
+    grupo:'urgencia',
+    hooks:[
+      "Se você acorda mais cansado do que dormiu, sente formigamento nas pernas e tem boca seca, isso aqui é pra você.",
+      "Sede excessiva, vontade de urinar à noite, visão embaçando — esses 3 sinais juntos significam UMA coisa.",
+      "Tonteira ao levantar, mãos tremendo de fome, suor frio depois de comer — seu corpo tá pedindo socorro.",
+    ],
+  },
+};
+
+// Grupos dos ângulos pros optgroups
+const ANGULO_GRUPOS={
+  pessoal:    '🤝 Pessoal & Relacional',
+  saude:      '🩺 Saúde & Educacional',
+  social:     '⭐ Social & Provas',
+  autoridade: '🎓 Autoridade & Especialista',
+  urgencia:   '⏰ Urgência & Pressão',
 };
 const COPY_DORES={
   energia:{
@@ -8924,37 +9048,218 @@ function cpAplicarFiltro(texto){
 }
 
 // ─── PERSONAS / PROFISSÕES — perfis que criam identificação imediata com o público.
-// Cada persona tem cenas de vida e linguajar próprios (caminhoneiro fala diferente
-// de uma dona de casa). Templates abaixo já vêm escritos no tom da persona.
+// Cada persona tem `grupo` pra organização no select e `desc` pra tooltip/preview.
+// Templates de cenas_vida/transformações ficam em COPY_CENAS_VIDA (genérico cobre fallback).
 const COPY_PERSONAS={
   generico:{
-    label:'👤 Genérico (sem persona)',
-    desc:'Sem profissão definida — vale pra qualquer público',
+    label:'👤 Genérico (sem persona específica)',
+    desc:'Sem profissão definida — funciona pra qualquer público. Use quando não souber o perfil do espectador.',
+    grupo:'geral',
   },
+  // ─── Idosos & Aposentados ───
   vovo:{
-    label:'👴 Aposentado / Vovô',
-    desc:'Tom afetivo, família, netos, "vovô de enfeite"',
+    label:'👴 Vovô / Aposentado afetivo',
+    desc:'Tom emotivo, netos, "vovô de enfeite", quintal, família reunida. Exemplo: "O Presente do Vovô".',
+    grupo:'idosos',
   },
+  vovó:{
+    label:'👵 Vovó / Aposentada afetiva',
+    desc:'Cuidado com netos, cozinha em casa, missa de domingo, vizinhança próxima. Linguajar maternal.',
+    grupo:'idosos',
+  },
+  aposentado_inss:{
+    label:'🪪 Aposentado INSS (homem)',
+    desc:'Aposentadoria modesta, esperando filhos visitarem, fila do INSS, banco no dia 5. Tom resignado.',
+    grupo:'idosos',
+  },
+  aposentada_inss:{
+    label:'🪪 Aposentada INSS (mulher)',
+    desc:'Cuida dos netos pra filha trabalhar, aposentadoria mínima, missa, novela. Tom de quem "passou da hora".',
+    grupo:'idosos',
+  },
+  idoso_solitario:{
+    label:'😔 Idoso solitário',
+    desc:'Filhos longe, mora sozinho ou com cônjuge doente, pouca rotina social. Tom melancólico, vontade de viver mais.',
+    grupo:'idosos',
+  },
+  militar_aposentado:{
+    label:'🎖 Militar aposentado',
+    desc:'Disciplina, "fui forte a vida toda", luta pra aceitar fraqueza física. Linguajar firme.',
+    grupo:'idosos',
+  },
+  servidor_aposentado:{
+    label:'🏛 Servidor público aposentado',
+    desc:'Carreira no INSS/Correios/banco, vida estável, tempo livre, querendo viajar com a esposa.',
+    grupo:'idosos',
+  },
+  // ─── Trabalhadores Braçais ───
   caminhoneiro:{
     label:'🚛 Caminhoneiro',
-    desc:'Estrada, horas dirigindo, sono, parada na lanchonete',
+    desc:'Estrada, horas dirigindo, sono no volante, parada na BR, marmita de posto. Tom de "rapaz da estrada".',
+    grupo:'bracais',
   },
   pedreiro:{
-    label:'🧱 Pedreiro / Trabalhador braçal',
-    desc:'Obra, corpo cansado, força nas pernas, suor',
+    label:'🧱 Pedreiro',
+    desc:'Obra, levantar bloco, subir andaime, corpo cansado, marmita de quinta. Linguajar simples e direto.',
+    grupo:'bracais',
   },
+  mecanico:{
+    label:'🔧 Mecânico',
+    desc:'Oficina, mão suja de graxa, "engatinhando" debaixo do carro, dores nas costas.',
+    grupo:'bracais',
+  },
+  agricultor:{
+    label:'🌾 Agricultor / Lavrador',
+    desc:'Roça, enxada, sol forte, sítio pequeno, alimentação simples. Tom rural autêntico.',
+    grupo:'bracais',
+  },
+  pescador:{
+    label:'🎣 Pescador',
+    desc:'Vida no mar/rio, frio, redes pesadas, dependência do clima, casa simples na beira.',
+    grupo:'bracais',
+  },
+  marceneiro:{
+    label:'🪚 Marceneiro / Carpinteiro',
+    desc:'Oficina caseira, serra, madeira, "fiz tudo com essas mãos", orgulho do ofício.',
+    grupo:'bracais',
+  },
+  vigilante:{
+    label:'🛡 Vigilante / Porteiro noturno',
+    desc:'Plantão à noite, sono trocado, sedentário, alimentação ruim, café atrás de café.',
+    grupo:'bracais',
+  },
+  // ─── Donas de Casa & Mães ───
   dona_casa:{
-    label:'🏠 Dona de casa',
-    desc:'Cozinha, filhos, rotina, "casa em pé"',
+    label:'🏠 Dona de casa clássica',
+    desc:'Cuida da casa, cozinha, filhos, marido. Sem trabalho fora. Foco em família.',
+    grupo:'mulheres',
   },
+  mae_trabalhadora:{
+    label:'👩‍💼 Mãe que trabalha fora',
+    desc:'Dupla jornada, exausta, culpa de não dar conta de tudo, sem tempo pra si.',
+    grupo:'mulheres',
+  },
+  mae_solteira:{
+    label:'👩‍👧 Mãe solteira',
+    desc:'Sozinha cuidando dos filhos, financeiro apertado, exausta, sem tempo pra namorar.',
+    grupo:'mulheres',
+  },
+  avo_cuidadora:{
+    label:'👵 Avó que cria neto',
+    desc:'Filha pediu pra cuidar, criou a vida toda e agora cria de novo. Cansaço enorme.',
+    grupo:'mulheres',
+  },
+  divorciada_madura:{
+    label:'💔 Mulher 50+ divorciada',
+    desc:'Filhos crescidos, ex-marido foi embora, descobriu que não cuidou de si por décadas.',
+    grupo:'mulheres',
+  },
+  viuva:{
+    label:'🕊 Viúva',
+    desc:'Perdeu o marido, mora sozinha ou com filhos, tristeza, "ficar bem por ele".',
+    grupo:'mulheres',
+  },
+  // ─── Homens Maduros ───
   pai_familia:{
-    label:'👨‍👧 Pai de família',
-    desc:'Trabalho, "trazer pão pra casa", peso da responsabilidade',
+    label:'👨‍👧 Pai de família 40+',
+    desc:'Trabalha o dia inteiro, filhos pequenos/adolescentes, peso da responsabilidade.',
+    grupo:'homens',
   },
+  divorciado_maduro:{
+    label:'💔 Homem 50+ divorciado',
+    desc:'Filhos crescidos, descuidou de si, tentando recomeçar a vida.',
+    grupo:'homens',
+  },
+  viuvo:{
+    label:'🕊 Viúvo',
+    desc:'Perdeu a esposa, mora sozinho, sente falta de cuidado, comida ruim, isolamento.',
+    grupo:'homens',
+  },
+  solteirão:{
+    label:'🍻 Solteirão 50+',
+    desc:'Não casou, vida boêmia ficou pra trás, sente que "passou do ponto".',
+    grupo:'homens',
+  },
+  homem_obeso:{
+    label:'⚖️ Homem 40+ acima do peso',
+    desc:'Vergonha do corpo, alimentação ruim, sedentário, tentou várias dietas sem sucesso.',
+    grupo:'homens',
+  },
+  // ─── Autônomos & Profissionais Liberais ───
   autonomo:{
-    label:'💼 Trabalhador autônomo',
-    desc:'Próprio chefe, sem férias, "se eu parar não entra"',
+    label:'💼 Autônomo (geral)',
+    desc:'Próprio chefe, sem férias, "se eu parar não entra dinheiro". Pressão constante.',
+    grupo:'autonomos',
   },
+  motorista_app:{
+    label:'🚗 Motorista de aplicativo',
+    desc:'Uber/99, 12h por dia no carro, refeição rápida, sono ruim, dor lombar.',
+    grupo:'autonomos',
+  },
+  eletricista:{
+    label:'⚡ Eletricista',
+    desc:'Sobe escada, fica de cócoras o dia todo, atende em domicílio, sem registro.',
+    grupo:'autonomos',
+  },
+  encanador:{
+    label:'🔧 Encanador',
+    desc:'Mão na água fria, joelho no chão úmido, atende emergências, vida instável.',
+    grupo:'autonomos',
+  },
+  cabeleireira:{
+    label:'💇‍♀️ Cabeleireira',
+    desc:'Em pé o dia todo, varizes, dor nas costas, salão em casa, agenda lotada.',
+    grupo:'autonomos',
+  },
+  costureira:{
+    label:'🧵 Costureira / Manicure',
+    desc:'Sentada o dia todo, atende em casa, tensão na coluna, vista cansada.',
+    grupo:'autonomos',
+  },
+  comerciante:{
+    label:'🏪 Comerciante / Dono de mercadinho',
+    desc:'Mercadinho de bairro, 7h às 22h em pé, conhece todo mundo, sem férias.',
+    grupo:'autonomos',
+  },
+  // ─── Profissionais & Empresários ───
+  vendedor:{
+    label:'📞 Vendedor / Representante',
+    desc:'Bate meta, fica na rua o dia todo, almoço corrido, pressão de fechamento.',
+    grupo:'profissionais',
+  },
+  empresario_pequeno:{
+    label:'👔 Pequeno empresário',
+    desc:'Tem 2-5 funcionários, sem tempo pra família, responsável por todos, pressão.',
+    grupo:'profissionais',
+  },
+  professor:{
+    label:'👨‍🏫 Professor',
+    desc:'Escola pública, salário apertado, voz cansada, leva trabalho pra casa, frustração.',
+    grupo:'profissionais',
+  },
+  // ─── Religiosos / Comunitários ───
+  evangelico:{
+    label:'⛪ Evangélico devoto',
+    desc:'Frequenta igreja, valores tradicionais, indica produtos por confiança da comunidade.',
+    grupo:'religiosos',
+  },
+  catolico_praticante:{
+    label:'⛪ Católico praticante',
+    desc:'Missa, terço, comunidade da paróquia, valores conservadores. Linguajar respeitoso.',
+    grupo:'religiosos',
+  },
+};
+
+// Labels dos grupos de personas (usados nos <optgroup>)
+const PERSONA_GRUPOS={
+  geral:        '👤 Geral',
+  idosos:       '👴 Idosos & Aposentados',
+  bracais:      '💪 Trabalhadores Braçais',
+  mulheres:     '👩 Mulheres Maduras',
+  homens:       '👨 Homens Maduros',
+  autonomos:    '💼 Autônomos & Liberais',
+  profissionais:'👔 Profissionais & Empresários',
+  religiosos:   '⛪ Religiosos / Comunitários',
 };
 
 // ─── CENAS DE VIDA — abertura tipo "O Presente do Vovô" (sem mencionar produto)
@@ -9399,6 +9704,24 @@ function cpRenderDraftBlocks(){
   }).join('');
 }
 
+// Atualiza as descrições abaixo de cada select com o texto da opção selecionada.
+// Roda ao mudar qualquer um dos 5 selects + na primeira renderização.
+function cpUpdateDescs(){
+  const map={
+    persona: [COPY_PERSONAS,'desc'],
+    dor:     [COPY_DORES,'label'],   // dor não tem desc separada; mostra o próprio label
+    gancho:  [COPY_GANCHOS,'desc'],
+    angulo:  [COPY_ANGULOS,'desc'],
+    duracao: [COPY_DURACOES,'desc'],
+  };
+  Object.entries(map).forEach(([k,[dict,field]])=>{
+    const sel=$('cp-'+k);if(!sel)return;
+    const item=dict[sel.value];
+    const el=$('cp-'+k+'-desc');if(!el)return;
+    el.textContent = item ? (item[field]||'') : '';
+  });
+}
+
 // Recarrega a interface quando muda a duração (estrutura nova)
 function cpOnDuracaoChange(){
   _cpDraft.duracao=$('cp-duracao').value;
@@ -9503,12 +9826,34 @@ function cpOpenEdit(id){
   _cpEditId=id;
   openM('m-criativo');
   setTimeout(()=>{
-    // Popula selects de ângulo/dor/gancho/duração
-    $('cpe-angulo').innerHTML=Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    // Popula selects — angulo e persona com optgroups, demais lineares
+    const angOpts=(()=>{
+      const grupos={};
+      Object.entries(COPY_ANGULOS).forEach(([k,v])=>{
+        (grupos[v.grupo||'pessoal']=grupos[v.grupo||'pessoal']||[]).push([k,v]);
+      });
+      return Object.entries(ANGULO_GRUPOS).map(([gk,gl])=>{
+        const items=grupos[gk]||[];
+        if(!items.length)return '';
+        return `<optgroup label="${gl}">${items.map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('')}</optgroup>`;
+      }).join('');
+    })();
+    const persOpts=(()=>{
+      const grupos={};
+      Object.entries(COPY_PERSONAS).forEach(([k,v])=>{
+        (grupos[v.grupo||'geral']=grupos[v.grupo||'geral']||[]).push([k,v]);
+      });
+      return Object.entries(PERSONA_GRUPOS).map(([gk,gl])=>{
+        const items=grupos[gk]||[];
+        if(!items.length)return '';
+        return `<optgroup label="${gl}">${items.map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('')}</optgroup>`;
+      }).join('');
+    })();
+    $('cpe-angulo').innerHTML=angOpts;
+    $('cpe-persona').innerHTML=persOpts;
     $('cpe-dor').innerHTML=Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
-    $('cpe-gancho').innerHTML=Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
-    $('cpe-duracao').innerHTML=Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
-    $('cpe-persona').innerHTML=Object.entries(COPY_PERSONAS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+    $('cpe-gancho').innerHTML=Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('');
+    $('cpe-duracao').innerHTML=Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('');
     $('cpe-titulo').value=c.titulo||'';
     $('cpe-angulo').value=c.angulo||'historia_pessoal';
     $('cpe-dor').value=c.dor||'energia';
@@ -9631,38 +9976,64 @@ function renderCopies(){
           </span>`}
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:8px">
       <div class="field"><label>Persona / Profissão</label>
-        <select id="cp-persona" title="Define o tom + linguajar do personagem">
-          ${Object.entries(COPY_PERSONAS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.persona?'selected':''}>${v.label}</option>`).join('')}
+        <select id="cp-persona" onchange="cpUpdateDescs()">
+          ${(()=>{
+            // Agrupa personas pelo campo `grupo` e renderiza com optgroup
+            const grupos={};
+            Object.entries(COPY_PERSONAS).forEach(([k,v])=>{
+              (grupos[v.grupo||'geral']=grupos[v.grupo||'geral']||[]).push([k,v]);
+            });
+            return Object.entries(PERSONA_GRUPOS).map(([gk,gl])=>{
+              const items=grupos[gk]||[];
+              if(!items.length)return '';
+              return `<optgroup label="${gl}">${items.map(([k,v])=>
+                `<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.persona?'selected':''}>${v.label}</option>`
+              ).join('')}</optgroup>`;
+            }).join('');
+          })()}
         </select>
+        <div class="cp-desc" id="cp-persona-desc"></div>
       </div>
       <div class="field"><label>Nível de Dor</label>
-        <select id="cp-dor">
-          ${Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.dor?'selected':''}>${v.label}</option>`).join('')}
+        <select id="cp-dor" onchange="cpUpdateDescs()">
+          ${Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}" title="${(v.label||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.dor?'selected':''}>${v.label}</option>`).join('')}
         </select>
+        <div class="cp-desc" id="cp-dor-desc"></div>
       </div>
       <div class="field"><label>Tipo de Gancho</label>
-        <select id="cp-gancho" title="11 tipos do manual de copy">
-          ${Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.gancho?'selected':''}>${v.label}</option>`).join('')}
+        <select id="cp-gancho" onchange="cpUpdateDescs()">
+          ${Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.gancho?'selected':''}>${v.label}</option>`).join('')}
         </select>
+        <div class="cp-desc" id="cp-gancho-desc"></div>
       </div>
       <div class="field"><label>Ângulo da Campanha</label>
-        <select id="cp-angulo">
-          ${Object.entries(COPY_ANGULOS).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`).join('')}
+        <select id="cp-angulo" onchange="cpUpdateDescs()">
+          ${(()=>{
+            const grupos={};
+            Object.entries(COPY_ANGULOS).forEach(([k,v])=>{
+              (grupos[v.grupo||'pessoal']=grupos[v.grupo||'pessoal']||[]).push([k,v]);
+            });
+            return Object.entries(ANGULO_GRUPOS).map(([gk,gl])=>{
+              const items=grupos[gk]||[];
+              if(!items.length)return '';
+              return `<optgroup label="${gl}">${items.map(([k,v])=>
+                `<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.angulo?'selected':''}>${v.label}</option>`
+              ).join('')}</optgroup>`;
+            }).join('');
+          })()}
         </select>
+        <div class="cp-desc" id="cp-angulo-desc"></div>
       </div>
       <div class="field"><label>Duração do Vídeo</label>
-        <select id="cp-duracao" onchange="cpOnDuracaoChange()">
-          ${Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" ${k===_cpDraft.duracao?'selected':''}>${v.label}</option>`).join('')}
+        <select id="cp-duracao" onchange="cpOnDuracaoChange();cpUpdateDescs()">
+          ${Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.duracao?'selected':''}>${v.label}</option>`).join('')}
         </select>
+        <div class="cp-desc" id="cp-duracao-desc"></div>
       </div>
     </div>
 
-    <!-- Aviso compliance/tom -->
-    <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--t2);line-height:1.5">
-      💡 <b style="color:var(--bl2)">Foco em conexão:</b> 80% da copy é o personagem contando a história dele · oferta/CTA só no final · palavras sensíveis (metformina, disfunção, cura) são automaticamente filtradas pra tom mais natural.
-    </div>
 
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
       <button class="btn btn-bl btn-sm" onclick="cpGerar()">✨ Gerar Roteiro</button>
@@ -9766,6 +10137,8 @@ function renderCopies(){
   </div>`;
   // Renderiza os textareas dinâmicos do Pilar 1 conforme a duração escolhida
   cpRenderDraftBlocks();
+  // Mostra as descrições embaixo de cada select (Persona, Dor, Gancho, Ângulo, Duração)
+  cpUpdateDescs();
 }
 function pageConfig(){return `<div class="page" id="config-pg"></div>`}
 
