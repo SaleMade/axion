@@ -474,6 +474,16 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .cont-bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;
   background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:12px 14px}
 .cont-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(296px,1fr));gap:13px}
+/* ─── Designação por atendente (visão simplificada) ─── */
+.cont-at-block{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);
+  margin-bottom:12px;overflow:hidden}
+.cont-at-h{display:flex;align-items:center;gap:12px;padding:12px 16px;
+  background:var(--s3);border-bottom:1px solid var(--b1)}
+.cont-at-numbers{padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
+.cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
+  background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
+  border-radius:6px;transition:all .12s}
+.cont-mini-chip:hover{border-color:var(--b2);background:var(--s2)}
 .chip{background:linear-gradient(180deg,var(--s2),var(--s1));
   border:1px solid var(--b1);border-radius:var(--rl);padding:16px;
   position:relative;transition:all .15s;cursor:pointer}
@@ -4073,7 +4083,7 @@ function goPage(id){
 
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
-  if(id==='contingencia')renderChips();
+  if(id==='contingencia'){renderChips();renderChipsByAtendente();}
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
   if(id==='pagequip')    renderPagEquip();
@@ -5780,7 +5790,133 @@ function pageContingencia(){
       <button class="kb-toggle alert" id="cont-recarga" onclick="this.classList.toggle('on');renderChips()">⚡ Só recarga próxima</button>
     </div>
     <div class="cont-grid" id="cont-grid"></div>
+
+    <!-- ─── Designação por atendente (visão simplificada) ─── -->
+    <div class="section-title" style="margin-top:32px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>📋 Designação de Números por Atendente</span>
+      <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">controle simples de quem usa o quê + status do WhatsApp</span>
+    </div>
+    <div id="cont-by-at"></div>
   </div>`;
+}
+
+// ─── Status do WhatsApp (independente do status operacional do chip) ───
+// Cada chip tem `wa_st` opcional. Se vazio, é derivado do `st` operacional.
+const WA_STATUSES={
+  ativo:    {label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢'},
+  restrito: {label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡'},
+  banido:   {label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴'},
+};
+// Retorna o wa_st do chip ou deriva do `st` operacional como fallback
+function getWaStatus(chip){
+  if(chip.wa_st && WA_STATUSES[chip.wa_st]) return chip.wa_st;
+  // Derivado: ativo→ativo · banido→banido · aquecimento/reserva/recarga_pendente→restrito
+  if(chip.st==='ativo')  return 'ativo';
+  if(chip.st==='banido') return 'banido';
+  return 'restrito';
+}
+// Salva o wa_st e persiste/sincroniza
+function setWaStatus(chipId, novoSt){
+  const c=DB.chips.find(x=>x.id===chipId);
+  if(!c)return;
+  c.wa_st=novoSt;
+  persist();
+  renderChipsByAtendente();
+  toast(`WhatsApp marcado como ${WA_STATUSES[novoSt]?.label||novoSt}`,'ok');
+}
+
+// Agrupa chips por atendente e renderiza visão simplificada
+function renderChipsByAtendente(){
+  const wrap=$('cont-by-at');if(!wrap)return;
+
+  // Diretor vê todos; outros só seus próprios chips
+  const chips=DB.chips.filter(c=>isDir()||c.at===CUR.id);
+
+  // Atendentes que aparecerão na lista — só os que recebem chip operacional
+  // (atendente / cobrador / afiliado). Diretor pode atribuir a outros também.
+  const atendentes=TEAM
+    .filter(t=>!t._preview&&!t.archived&&['atendente','cobrador','afiliado','gestor'].includes(t.role))
+    .filter(t=>isDir()||t.id===CUR.id);
+
+  // Map atendente → seus chips
+  const byAt={};
+  atendentes.forEach(a=>{byAt[a.id]=[]});
+  // "sem atendente" pra chips órfãos
+  byAt['__sem__']=[];
+  chips.forEach(c=>{
+    if(c.at && byAt[c.at]!==undefined) byAt[c.at].push(c);
+    else if(!c.at) byAt['__sem__'].push(c);
+  });
+
+  // Render: cada atendente é uma seção com divisor
+  const semAt=byAt['__sem__'];
+  const html=atendentes.map(a=>{
+    const meus=byAt[a.id]||[];
+    return _renderAtendenteBlock(a,meus);
+  }).join('') + (semAt.length?_renderAtendenteBlock(null,semAt):'');
+
+  wrap.innerHTML=html||'<div class="muted" style="text-align:center;padding:24px;font-size:13px">Sem atendentes cadastrados pra atribuir números.</div>';
+}
+
+function _renderAtendenteBlock(at, chips){
+  const nome=at?at.name:'⚠ Sem atendente atribuído';
+  const role=at?at.role:'';
+  const avatarHTML=at?avatar(at,{size:32,fontSize:12}):`<div class="sav" style="width:32px;height:32px;background:var(--s4);color:var(--t4);font-size:14px">?</div>`;
+  // Contadores por status WhatsApp
+  const counts={ativo:0,restrito:0,banido:0};
+  chips.forEach(c=>{const ws=getWaStatus(c);if(counts[ws]!==undefined)counts[ws]++});
+
+  return `<div class="cont-at-block">
+    <div class="cont-at-h">
+      ${avatarHTML}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:600;color:var(--tx)">${nome}</div>
+        <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${role||'—'}</div>
+      </div>
+      <div style="display:flex;gap:6px;font-size:11px;color:var(--t3)">
+        <span style="display:inline-flex;align-items:center;gap:3px">🟢 <b style="color:var(--gr);font-weight:600">${counts.ativo}</b></span>
+        <span style="display:inline-flex;align-items:center;gap:3px">🟡 <b style="color:var(--am);font-weight:600">${counts.restrito}</b></span>
+        <span style="display:inline-flex;align-items:center;gap:3px">🔴 <b style="color:var(--rd);font-weight:600">${counts.banido}</b></span>
+      </div>
+      ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipForAt('${at.id}')" title="Adicionar número pra este atendente">+ Número</button>`:''}
+    </div>
+    <div class="cont-at-numbers">
+      ${chips.length
+        ? chips.map(c=>_renderMiniChip(c)).join('')
+        : '<div class="muted" style="font-size:12px;padding:12px;grid-column:1/-1;text-align:center">Sem números designados</div>'}
+    </div>
+  </div>`;
+}
+
+function _renderMiniChip(c){
+  const wa=getWaStatus(c);
+  const info=WA_STATUSES[wa]||WA_STATUSES.restrito;
+  return `<div class="cont-mini-chip" style="border-left-color:${info.color}">
+    <div style="flex:1;min-width:0">
+      <div style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em">${c.num}</div>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        ${Object.entries(WA_STATUSES).map(([k,v])=>{
+          const active=k===wa;
+          return `<button onclick="event.stopPropagation();setWaStatus(${c.id},'${k}')"
+            title="${v.label}"
+            style="font-size:10px;font-weight:600;padding:3px 7px;border-radius:4px;border:1px solid ${active?v.color:'var(--b1)'};background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t3)'};cursor:pointer;font-family:inherit;transition:all .12s">
+            ${v.ic} ${v.label}
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+    <button class="btn-act btn-act-gh btn-act-icon" onclick="event.stopPropagation();openChipDetail(${c.id})" title="Editar detalhes completos">✎</button>
+  </div>`;
+}
+
+// Atalho: abrir modal de novo chip já com o atendente pré-selecionado
+function openChipForAt(atId){
+  openM('m-chip-new');
+  // Pré-seleciona o atendente no select do modal de novo chip
+  setTimeout(()=>{
+    const sel=$('nc-at');
+    if(sel)sel.value=atId;
+  },30);
 }
 
 function rechargeStatus(rec){
@@ -5914,7 +6050,7 @@ function advanceWarmDay(){
   if(c.dia>=7){c.st='ativo';toast('Aquecimento concluído — chip ATIVO','ok');}
   else {c.dia++;$('mc-dia').value=c.dia;toast(`Avançou para o dia ${c.dia}/7`,'ok');}
   renderWarmChecklist(c);persist();
-  if(document.querySelector('.page#contingencia-pg.active'))renderChips();
+  if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
 }
 
 function saveChip(){
@@ -5956,7 +6092,7 @@ function confirmRecharge(){
   if(c.st==='recarga_pendente')c.st='ativo';
   persist();$('mc-rec').value=c.rec;$('mc-recharge-alert').classList.add('hidden');
   toast('Recarga confirmada — próxima em 90 dias','ok');
-  if(document.querySelector('.page#contingencia-pg.active'))renderChips();
+  if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
 }
 function confirmRechargeId(id){
   const c=DB.chips.find(x=>x.id===id);if(!c)return;
