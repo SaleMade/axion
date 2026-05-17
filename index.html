@@ -9749,9 +9749,11 @@ async function cpGerarIdeia(){
     const dnaCount=dna_vencedores.length;
     const tokens=r.usage?.output_tokens||0;
     const provider=r.provider==='gemini'?'Gemini':r.provider==='anthropic'?'Claude':'IA';
+    // Se o modelo foi diferente do padrão (fallback ativou), mostra qual rodou
+    const modelTag=r.model&&r.model!=='gemini-2.5-flash'?` (${r.model})`:'';
     toast(dnaCount>0
-      ? `🤖 ${provider} gerou · com base em ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆 · ${tokens} tokens`
-      : `🤖 ${provider} gerou roteiro · ${tokens} tokens`,'ok');
+      ? `🤖 ${provider}${modelTag} gerou · com base em ${dnaCount} vencedor${dnaCount>1?'es':''} 🏆 · ${tokens} tokens`
+      : `🤖 ${provider}${modelTag} gerou roteiro · ${tokens} tokens`,'ok');
   }catch(e){
     const msg=e.message||'erro desconhecido';
     if(msg.includes('não configurada')||msg.includes('GEMINI_API_KEY')){

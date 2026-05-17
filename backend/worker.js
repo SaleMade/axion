@@ -406,31 +406,35 @@ async function handleAIConfigTest(req, env) {
   // Chamada mínima — uma única palavra de resposta
   try {
     if (provider === 'gemini') {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: 'Responda apenas "ok" sem nada mais.' }] }],
-          generationConfig: { maxOutputTokens: 8 },
-        }),
-      });
-      if (!r.ok) {
+      // Tenta cada modelo até um responder OK. Se TODOS derem 429, dá mensagem clara.
+      const triedErrors = [];
+      for (const model of GEMINI_MODELS) {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'Responda apenas "ok" sem nada mais.' }] }],
+            generationConfig: { maxOutputTokens: 8 },
+          }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          return json({ ok: true, provider, model, response: txt.trim() });
+        }
         const t = await r.text().catch(() => '');
-        // Mensagens amigáveis pros erros comuns
-        if (r.status === 429) {
-          return err(`Quota excedida (429). Causas possíveis: (1) key recém-criada precisa de alguns minutos pra propagar · (2) bateu rate limit (10 req/min) — espere 1 min · (3) projeto sem billing — vá em console.cloud.google.com → Billing pra ativar (continua grátis dentro do free tier).`, 429);
-        }
-        if (r.status === 403) {
-          return err(`Sem permissão (403). Confira se a Generative Language API está habilitada no projeto Google da sua key.`, 403);
-        }
+        triedErrors.push({ model, status: r.status });
+        // 429/403/404 = tenta o próximo. Outros = erro fatal.
         if (r.status === 400 && t.includes('API_KEY_INVALID')) {
           return err(`API key inválida. Gere uma nova em aistudio.google.com/apikey`, 400);
         }
-        return err(`Teste falhou (${r.status}): ${t.slice(0, 200)}`, 502);
+        if (![429, 403, 404].includes(r.status)) {
+          return err(`Teste falhou (${r.status}): ${t.slice(0, 200)}`, 502);
+        }
       }
-      const data = await r.json();
-      const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      return json({ ok: true, provider, response: txt.trim() });
+      // Todos os modelos retornaram quota/permission
+      const tries = triedErrors.map(e => `${e.model} (${e.status})`).join(' · ');
+      return err(`Todos os modelos Gemini esgotaram quota ou bloquearam. Tentei: ${tries}. Soluções: (1) aguarde 1-2 min e teste de novo (rate limit) · (2) habilite billing em console.cloud.google.com → Billing (gratuito dentro do free tier) · (3) gere nova API key em aistudio.google.com/apikey.`, 429);
     }
     if (provider === 'anthropic') {
       const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -533,18 +537,25 @@ function _aiParseJSON(txt) {
 }
 
 // ─── Provider: Gemini (Google AI Studio) ───
-async function _callGemini(env, prompts) {
-  // Modelo gratuito mais recente — Gemini 2.0 Flash (rápido + free tier generoso)
-  const model = 'gemini-2.5-flash';
+// Tenta modelos em cascata. Se um der 429 (quota), tenta o próximo.
+// Ordem: do mais novo/melhor pro mais estável/generoso no free tier.
+const GEMINI_MODELS = [
+  'gemini-2.5-flash',         // 10 RPM, 250 RPD free tier
+  'gemini-2.0-flash-exp',     // Experimental, free tier separado
+  'gemini-2.0-flash',         // GA, pode pedir billing
+  'gemini-1.5-flash',         // 15 RPM, 1500 RPD — mais generoso, estável
+  'gemini-1.5-flash-8b',      // ainda mais barato, free tier maior
+];
+
+async function _callGeminiModel(env, prompts, model) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
   const body = {
-    // System instruction separada do user (Gemini suporta)
     system_instruction: { parts: [{ text: prompts.system }] },
     contents: [{ role: 'user', parts: [{ text: prompts.user }] }],
     generationConfig: {
-      temperature: 0.95,        // criatividade alta — varia mais entre gerações
+      temperature: 0.95,
       maxOutputTokens: 2048,
-      responseMimeType: 'application/json',  // força saída JSON pura
+      responseMimeType: 'application/json',
     },
   };
   const r = await fetch(url, {
@@ -554,7 +565,10 @@ async function _callGemini(env, prompts) {
   });
   if (!r.ok) {
     const t = await r.text().catch(() => '');
-    throw new Error(`Gemini ${r.status}: ${t.slice(0, 300)}`);
+    const err = new Error(`Gemini ${model} ${r.status}: ${t.slice(0, 300)}`);
+    err.status = r.status;
+    err.modelTried = model;
+    throw err;
   }
   const data = await r.json();
   const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -568,6 +582,30 @@ async function _callGemini(env, prompts) {
     provider: 'gemini',
   };
 }
+
+async function _callGemini(env, prompts) {
+  // Tenta cada modelo em sequência. 429 / 403 / 404 = pula pro próximo.
+  // Outros erros (500, JSON inválido) = retorna o erro.
+  const triedErrors = [];
+  for (const model of GEMINI_MODELS) {
+    try {
+      return await _callGeminiModel(env, prompts, model);
+    } catch (e) {
+      const isQuota = e.status === 429;
+      const isPerm = e.status === 403;
+      const isNotFound = e.status === 404;
+      const isBadModel = e.message.includes('not found') || e.message.includes('does not exist');
+      triedErrors.push({ model, status: e.status, msg: e.message.slice(0, 150) });
+      // Esses erros = modelo indisponível → tenta o próximo
+      if (isQuota || isPerm || isNotFound || isBadModel) continue;
+      // Outros = erro real, retorna
+      throw e;
+    }
+  }
+  // Todos falharam por quota/permissão — agrega
+  throw new Error(`Todos os modelos Gemini falharam. Tentei ${triedErrors.length}: ${triedErrors.map(t=>`${t.model} (${t.status})`).join(' · ')}. Verifique a key, billing e quotas.`);
+}
+
 
 // ─── Provider: Anthropic (Claude) ───
 async function _callAnthropic(env, prompts) {
