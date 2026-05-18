@@ -8542,20 +8542,16 @@ function renderTrafego(){
     const totalDB=(DB.gastos||[]).length;
     const foraFiltro=totalDB-gastos.length;
     const somaFora=(DB.gastos||[]).reduce((s,g)=>s+Number(g.valor||0),0) - tot;
-    if(foraFiltro<=0)return '';
-    return `<div style="background:rgba(245,158,11,.06);border:1px solid var(--am);border-radius:var(--r);padding:10px 13px;margin-top:10px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--t2);flex-wrap:wrap">
-      <span style="font-size:16px">ℹ</span>
-      <span style="flex:1">
-        <b style="color:var(--am)">${foraFiltro} gasto${foraFiltro>1?'s':''}</b> totalizando <b style="color:var(--tx)">${fmt(somaFora)}</b> ${foraFiltro>1?'estão':'está'} fora do período selecionado.
-      </span>
-      <button class="btn btn-gh btn-sm" onclick="openAllGastosModal()">Ver todos</button>
+    const avisoFora=foraFiltro>0
+      ? `<span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">· <a onclick="openAllGastosModal()" style="color:var(--t3);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="${foraFiltro} gasto${foraFiltro>1?'s':''} fora do filtro · clique pra ver tudo">${fmt(somaFora)} fora do filtro</a></span>`
+      : '';
+    return `<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px">
+      <span>Histórico de registros</span>
+      <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">${gastos.length} no período · ${totalDB} no total</span>
+      ${avisoFora}
+      <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor (caso outro dispositivo tenha cadastrado gastos)">🔄 Sincronizar agora</button>
     </div>`;
   })()}
-  <div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px">
-    <span>Histórico de registros</span>
-    <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">${gastos.length} no período · ${(DB.gastos||[]).length} no total</span>
-    <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor (caso outro dispositivo tenha cadastrado gastos)">🔄 Sincronizar agora</button>
-  </div>
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
