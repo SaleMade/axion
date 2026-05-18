@@ -2964,7 +2964,20 @@ if(!DB.tags){DB.tags=JSON.parse(JSON.stringify(DEFAULT_TAGS))}
 let CUR=null;
 let editingLeadId=null,editingChipId=null;
 let dragLeadId=null;
-let dateFilter={range:'7',from:null,to:null};
+// dateFilter persiste em localStorage — F5 mantém o período escolhido
+let dateFilter=(()=>{
+  try{
+    const saved=localStorage.getItem('axion_date_filter');
+    if(saved){
+      const obj=JSON.parse(saved);
+      if(obj&&obj.range)return obj;
+    }
+  }catch(_){}
+  return {range:'7',from:null,to:null};
+})();
+function saveDateFilter(){
+  try{localStorage.setItem('axion_date_filter',JSON.stringify(dateFilter))}catch(_){}
+}
 let crmFilters={q:'',vendedor:'',status:'',mod:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
 let mapBuilt=false;
 // chartPeriod agora deriva do dateFilter global (unificação)
@@ -4276,6 +4289,7 @@ function initDateFilter(){
 
 function setDateRange(r){
   dateFilter={range:r,from:null,to:null,year:null,month:null};
+  saveDateFilter();
   $$('.drp-opt').forEach(x=>x.classList.toggle('active',x.dataset.r===r));
   $$('.drp-month').forEach(x=>x.classList.remove('active'));
   refreshDRPLabel();refreshActive();
@@ -4283,6 +4297,7 @@ function setDateRange(r){
 
 function selectMonth(year,month){
   dateFilter={range:'month-pick',year,month,from:null,to:null};
+  saveDateFilter();
   $$('.drp-opt').forEach(x=>x.classList.remove('active'));
   renderDRPMonths();
   refreshDRPLabel();refreshActive();
@@ -4294,6 +4309,7 @@ function applyCustomRange(){
   if(!f||!t){toast('Preencha de e até','err');return}
   if(new Date(f)>new Date(t)){toast('Data início após o fim','err');return}
   dateFilter={range:'custom',from:f,to:t,year:null,month:null};
+  saveDateFilter();
   $$('.drp-opt').forEach(x=>x.classList.remove('active'));
   $$('.drp-month').forEach(x=>x.classList.remove('active'));
   refreshDRPLabel();refreshActive();
@@ -6783,6 +6799,7 @@ function retroJumpTo(year,month){
   } else {
     dateFilter={range:'month-pick',year,month,from:null,to:null};
   }
+  saveDateFilter();
   refreshDRPLabel();renderDRE();
   toast(`Filtro aplicado: ${rangeLabel()}`,'ok');
 }
@@ -12279,7 +12296,7 @@ function runExport(){
   let rows=def.rows();
   if(period!=='all'){
     const savedFilter=JSON.parse(JSON.stringify(dateFilter));
-    if(period!=='filter'){dateFilter={range:period,from:null,to:null,year:null,month:null}}
+    if(period!=='filter'){dateFilter={range:period,from:null,to:null,year:null,month:null};saveDateFilter();}
     if(exContext!=='equipe'){rows=rows.filter(r=>inRange(r.data||today()))}
     dateFilter=savedFilter;
   }
