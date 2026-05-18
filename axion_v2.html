@@ -1725,25 +1725,23 @@ h1 em{font-weight:700}
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
         <div class="field"><label>Status (operacional)</label><select id="mc-st"><option value="aquecimento">Aquecimento</option><option value="ativo">Ativo</option><option value="reserva">Reserva</option><option value="banido">Banido</option><option value="recarga_pendente">Recarga pendente</option></select></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
-        <div class="field"><label>Dia aquecimento (1–7)</label><input id="mc-dia" type="number" min="1" max="7"></div>
+        <div class="field"><label>Dia aquecimento (auto)</label><input id="mc-dia" type="number" readonly title="Avança automaticamente conforme os dias passam (desde o início do aquecimento)" style="opacity:.75;cursor:not-allowed"></div>
         <div class="field"><label>Última recarga</label><input id="mc-rec" type="date"></div>
         <div class="field"><label>Valor recarga (R$)</label><input id="mc-recv" type="number" step="0.01"></div>
         <div class="field" style="grid-column:span 2"><label>Tags (vírgula)</label><input id="mc-tags" placeholder="convertendo, prioridade"></div>
         <div class="field" style="grid-column:span 2"><label>Anotações</label><textarea id="mc-note" rows="3"></textarea></div>
       </div>
       <div id="mc-warm" class="hidden" style="background:var(--bld);border:1px solid var(--bl);border-radius:var(--rl);padding:14px 16px;margin-bottom:12px">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-          <div style="font-size:18px">🔥</div>
-          <div>
-            <div style="font-size:14px;font-weight:700;color:var(--bl2)">Aquecimento — Dia <span id="mc-warm-day">1</span>/7: <span id="mc-warm-lbl">Grupos</span></div>
-            <div style="font-size:11px;color:var(--t3)">Marque conforme avança no checklist do dia</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:22px">🔥</div>
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:700;color:var(--bl2)">Aquecimento — Dia <span id="mc-warm-day">1</span>/7</div>
+            <div style="font-size:11.5px;color:var(--t3)" id="mc-warm-info">Os dias passam automaticamente desde o início.</div>
           </div>
-          <div style="margin-left:auto;display:flex;gap:4px" id="mc-warm-pills"></div>
+          <div style="display:flex;gap:4px" id="mc-warm-pills"></div>
         </div>
-        <div id="mc-warm-tasks" style="display:flex;flex-direction:column;gap:6px"></div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:11px;padding-top:10px;border-top:1px solid var(--bl)">
-          <div style="font-size:12px;color:var(--t2)">Progresso: <b id="mc-warm-prog">0/3</b></div>
-          <button class="btn btn-bl btn-xs" onclick="advanceWarmDay()">Avançar para o próximo dia →</button>
+        <div style="margin-top:11px;height:6px;background:var(--s4);border-radius:3px;overflow:hidden">
+          <div id="mc-warm-bar" style="height:100%;background:linear-gradient(90deg,var(--bl),var(--gr));border-radius:3px;transition:width .3s"></div>
         </div>
       </div>
 
@@ -4263,7 +4261,7 @@ function goPage(id){
 
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
-  if(id==='contingencia'){renderChips();renderChipsByAtendente();}
+  if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
   if(id==='pagequip')    renderPagEquip();
@@ -6187,6 +6185,43 @@ function openChipForAt(atId){
   },30);
 }
 
+// ─── Aquecimento automático: dia derivado do tempo desde warm_start ───
+// Antes era manual (botão "Avançar"). Agora os dias passam sozinhos com
+// base na diferença entre HOJE e a data de início do aquecimento.
+// Retorno: dia atual (1-7), ou 8+ se já completou
+function computeWarmDay(c){
+  if(!c)return 0;
+  if(c.st!=='aquecimento')return c.dia||0;
+  // Se não tem warm_start (chip antigo), usa o dia gravado direto
+  if(!c.warm_start){
+    return Number(c.dia)||1;
+  }
+  const start=new Date(c.warm_start+'T00:00:00');
+  const hoje=new Date();
+  hoje.setHours(0,0,0,0);
+  const dias=Math.floor((hoje-start)/86400000)+1; // dia 1 no início
+  return Math.max(1,dias);
+}
+// Auto-promove chip pra "ativo" se aquecimento já completou 7+ dias.
+// Chamado em qualquer renderização da página de Contingência.
+function autoPromoteWarmedChips(){
+  const chips=(DB.chips||[]).filter(c=>c.st==='aquecimento'&&c.warm_start);
+  let promovidos=0;
+  chips.forEach(c=>{
+    if(computeWarmDay(c)>=7){
+      c.st='ativo';
+      c.dia=7;
+      promovidos++;
+    }
+  });
+  if(promovidos>0){
+    persist();
+    if(promovidos===1)toast('🎉 1 chip completou aquecimento — agora ATIVO','ok');
+    else toast(`🎉 ${promovidos} chips completaram aquecimento — agora ATIVOS`,'ok');
+  }
+  return promovidos;
+}
+
 function rechargeStatus(rec){
   if(!rec)return {days:0,kind:'crit',msg:'Sem registro de recarga'};
   const d=new Date(rec);d.setDate(d.getDate()+90);
@@ -6235,7 +6270,7 @@ function renderChips(){
         <span class="chip-st ${c.st}">${c.st.replace('_',' ')}</span>
       </div>
       <div class="chip-row">📱 <b>${c.mod||'—'}</b></div>
-      <div class="chip-row">📡 ${c.op||'—'} · Dia ${c.dia||0}/7 aquecimento</div>
+      <div class="chip-row">📡 ${c.op||'—'}${c.st==='aquecimento'?` · Dia ${computeWarmDay(c)}/7 aquecimento`:''}</div>
       ${tagsHTML?`<div class="chip-tags">${tagsHTML}</div>`:''}
       ${c.note?`<div class="chip-note">"${c.note}"</div>`:''}
       <div class="chip-rec">
@@ -6261,7 +6296,8 @@ function openChipDetail(id){
   const waList=getWaStatusList();
   $('mc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
   $('mc-wa-st').value=getWaStatus(c);
-  $('mc-dia').value=c.dia||0;
+  // Dia agora é COMPUTADO a partir de warm_start (passa automaticamente)
+  $('mc-dia').value=computeWarmDay(c)||0;
   $('mc-rec').value=c.rec||'';
   $('mc-recv').value=c.recv||'';
   $('mc-tags').value=(c.tags||[]).join(', ');
@@ -6282,31 +6318,34 @@ function renderWarmChecklist(c){
   const wrap=$('mc-warm');
   if(c.st!=='aquecimento'||!c.dia||c.dia<1||c.dia>7){wrap.classList.add('hidden');return}
   wrap.classList.remove('hidden');
-  const dia=EST_DIAS[c.dia-1];
-  $('mc-warm-day').textContent=c.dia;
-  $('mc-warm-lbl').textContent=dia.lbl;
-  c.checks=c.checks||{};
-  const cur=c.checks[c.dia]||{};
-
-  $('mc-warm-tasks').innerHTML=dia.tasks.map((t,i)=>`
-    <label class="task ${cur[i]?'done':''}" style="cursor:pointer;padding:6px 9px;background:var(--s3);border:1px solid var(--b1);border-radius:var(--r)">
-      <input type="checkbox" ${cur[i]?'checked':''} onchange="toggleWarmTask(${i})">
-      ${t}
-    </label>`).join('');
-
-  // pills 1-7
-  $('mc-warm-pills').innerHTML=EST_DIAS.map(d=>{
-    const checks=c.checks[d.n]||{};
-    const total=d.tasks.length;
-    const done=Object.values(checks).filter(Boolean).length;
-    const klass=d.n===c.dia?'active':done===total?'':d.n<c.dia?'':'';
-    const bg=d.n===c.dia?'var(--bl)':done===total?'var(--gr)':'var(--s4)';
-    const tx=d.n===c.dia||done===total?'#fff':'var(--t3)';
-    return `<span style="width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:${bg};color:${tx}" title="Dia ${d.n}: ${d.lbl}">${d.n}</span>`;
+  const diaAtual=computeWarmDay(c);
+  const isComplete=diaAtual>=7;
+  $('mc-warm-day').textContent=Math.min(diaAtual,7);
+  const info=$('mc-warm-info');
+  if(info){
+    if(!c.warm_start){
+      info.textContent='Início não registrado. Salve pra começar a contagem automática.';
+    } else if(isComplete){
+      info.innerHTML='✅ <b style="color:var(--gr)">Aquecimento completo!</b> Pode mudar o status pra "Ativo".';
+    } else {
+      const start=new Date(c.warm_start+'T00:00:00');
+      const diaDaSemana=['dom','seg','ter','qua','qui','sex','sáb'][start.getDay()];
+      info.textContent=`Iniciado em ${start.getDate().toString().padStart(2,'0')}/${(start.getMonth()+1).toString().padStart(2,'0')} (${diaDaSemana}) · faltam ${7-diaAtual} dia${7-diaAtual!==1?'s':''}`;
+    }
+  }
+  // Pills 1-7 (visual de progresso)
+  $('mc-warm-pills').innerHTML=Array.from({length:7},(_,i)=>{
+    const n=i+1;
+    const passou=n<diaAtual;
+    const atual=n===diaAtual&&!isComplete;
+    const completo=n<=diaAtual&&isComplete;
+    const bg=completo?'var(--gr)':atual?'var(--bl)':passou?'var(--gr)':'var(--s4)';
+    const tx=(atual||passou||completo)?'#fff':'var(--t3)';
+    return `<span style="width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:${bg};color:${tx}" title="Dia ${n}">${n}</span>`;
   }).join('');
-
-  const done=Object.values(cur).filter(Boolean).length;
-  $('mc-warm-prog').textContent=`${done}/${dia.tasks.length}`;
+  // Barra de progresso
+  const bar=$('mc-warm-bar');
+  if(bar)bar.style.width=Math.min(100,Math.round((diaAtual/7)*100))+'%';
 }
 
 function toggleWarmTask(idx){
@@ -6327,9 +6366,15 @@ function advanceWarmDay(){
 
 function saveChip(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
+  const stAntes=c.st;
+  const stNovo=$('mc-st').value;
+  // Se virou aquecimento agora e não tem warm_start, marca hoje como início
+  if(stNovo==='aquecimento'&&stAntes!=='aquecimento'&&!c.warm_start){
+    c.warm_start=new Date().toISOString().split('T')[0];
+  }
   Object.assign(c,{
     num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
-    op:$('mc-op').value,st:$('mc-st').value,
+    op:$('mc-op').value,st:stNovo,
     wa_st:$('mc-wa-st').value,
     dia:Number($('mc-dia').value)||0,rec:$('mc-rec').value,
     recv:Number($('mc-recv').value)||0,
@@ -6349,14 +6394,16 @@ async function deleteChip(){
 function addChip(){
   const num=$('nc-num').value.trim();
   if(!num){toast('Número obrigatório','err');return}
+  const hoje=new Date().toISOString().split('T')[0];
   DB.chips.unshift({
     id:DB.nextChip++,num,at:$('nc-at').value,
     mod:$('nc-mod').value,op:$('nc-op').value,
-    st:'aquecimento',dia:Number($('nc-dia').value)||1,
+    st:'aquecimento',dia:1,
+    warm_start:hoje,  // marca início do aquecimento → dia avança automaticamente
     rec:$('nc-rec').value,recv:0,tags:[],note:''
   });
   ['nc-num','nc-mod'].forEach(i=>$(i).value='');
-  persist();closeM('m-chip-new');refreshUI();toast('Chip cadastrado','ok');
+  persist();closeM('m-chip-new');refreshUI();toast('Chip cadastrado · dia 1/7','ok');
 }
 
 function confirmRecharge(){
