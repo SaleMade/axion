@@ -3851,7 +3851,6 @@ function buildSidebar(){
         ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
         {id:'crm',lbl:'CRM / Pipeline'},
         ...(dir||afi?[{id:'produtos',lbl:'Produtos'}]:[]),
-        {id:'contingencia',lbl:"WhatsApp's"},
         ...(dir?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
         ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
       ]},
@@ -3865,12 +3864,16 @@ function buildSidebar(){
       ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
         {id:'meuspag',lbl:'Meus Pagamentos'},
       ]}]:[]),
-      ...(can('ver_equipe')?[{g:'Equipe',items:[
-        {id:'equipe',lbl:'Equipe'},
+      // Acordeão Equipe — aparece pra todo mundo (até atendente vê WhatsApp's).
+      // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
+      // Atendente/cobrador/afiliado: vê só os que tem acesso (WhatsApp's é universal).
+      {g:'Equipe',items:[
+        ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
+        {id:'contingencia',lbl:"WhatsApp's"},
         ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
         // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
         ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',icon:'⚙',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
-      ]}]:[]),
+      ]},
       // Acordeão de Criativos — admins + Designer
       ...((dir||isDes())?[{g:'Criativos',items:[
         {id:'copies',lbl:'Copies',icon:'✍️',actionFn:"goPage('copies')"},
