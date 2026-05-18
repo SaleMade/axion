@@ -3876,10 +3876,13 @@ function buildSidebar(){
         ...(dir?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
         ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
       ]},
-      ...(can('ver_dre')?[{g:'Financeiro',items:[
-        {id:'dre',     lbl:'Visão Geral'},
-        {id:'pagequip',lbl:'Pagamentos de Equipe'},
-        {id:'invest',  lbl:'Investimentos'},
+      // Financeiro: aparece se a pessoa pode ver DRE OU Tráfego Pago
+      // (afiliado tipicamente tem ver_trafego sem ver_dre — continua acessando)
+      ...((can('ver_dre')||can('ver_trafego'))?[{g:'Financeiro',items:[
+        ...(can('ver_dre')?[{id:'dre',     lbl:'Visão Geral'}]:[]),
+        ...(can('ver_dre')?[{id:'pagequip',lbl:'Pagamentos de Equipe'}]:[]),
+        ...(can('ver_dre')?[{id:'invest',  lbl:'Investimentos'}]:[]),
+        ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
       ]}]:[]),
       // "Meus Pagamentos" — visível pra membros que recebem comissão/salário
       // (atendente/afiliado/cobrador/gestor). Diretor já tem visão geral em Pagamentos de Equipe.
@@ -3892,7 +3895,6 @@ function buildSidebar(){
       {g:'Equipe',items:[
         ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
         {id:'contingencia',lbl:"WhatsApp's"},
-        ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
         // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
         ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',icon:'⚙',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
       ]},
