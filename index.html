@@ -484,6 +484,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
   border-radius:6px;transition:all .12s}
 .cont-mini-chip:hover{border-color:var(--b2);background:var(--s2)}
+/* Multi-pick de WhatsApps/atendentes no modal de gasto */
+.mg-chip-pick label{display:flex;align-items:center;gap:8px;padding:6px 8px;
+  border-radius:5px;cursor:pointer;transition:background .1s;font-size:12.5px;color:var(--t2)}
+.mg-chip-pick label:hover{background:var(--s4)}
+.mg-chip-pick input[type=checkbox]{accent-color:var(--bl);width:14px;height:14px;cursor:pointer;margin:0}
+.mg-chip-pick .mg-chip-empty{font-style:italic;color:var(--t4);font-weight:500}
+.mg-chip-pick .mg-chip-empty input{margin-right:6px}
 .chip{background:linear-gradient(180deg,var(--s2),var(--s1));
   border:1px solid var(--b1);border-radius:var(--rl);padding:16px;
   position:relative;transition:all .15s;cursor:pointer}
@@ -2212,15 +2219,14 @@ h1 em{font-weight:700}
           </select>
         </div>
         <div class="field" style="grid-column:span 2"><label>Campanha (opcional)</label><input id="mg-camp" placeholder="Nome da campanha / conjunto"></div>
-        <div class="field" style="grid-column:span 2"><label>WhatsApp / Atendente vinculado <span class="muted" style="font-size:11px;font-weight:500">(opcional)</span></label>
-          <select id="mg-chip">
-            <option value="">— sem vínculo (campanha geral) —</option>
-          </select>
+        <div class="field" style="grid-column:span 2">
+          <label>WhatsApp / Atendentes vinculados <span class="muted" style="font-size:11px;font-weight:500">(opcional · pode marcar vários se o gasto foi pra mais de uma pessoa)</span></label>
+          <div id="mg-chip-multi" class="mg-chip-pick" style="background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:8px 10px;max-height:160px;overflow-y:auto"></div>
         </div>
         <div class="field"><label>Investido (R$)</label><input id="mg-vl" type="number" step="0.01"></div>
-        <div class="field"><label>Leads gerados</label><input id="mg-leads" type="number"></div>
+        <div class="field"><label>Pedidos Feitos <span class="muted" style="font-size:11px;font-weight:500">(aprovados no dia)</span></label><input id="mg-leads" type="number" placeholder="ex: 12"></div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin-top:6px">💡 Dica: vincular o WhatsApp permite calcular CPL e ROAS por número/atendente. Importe via CSV — formato: <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">data,plataforma,investido,leads,campanha</code></p>
+      <p class="muted" style="font-size:11.5px;margin-top:6px">💡 <b style="color:var(--bl2)">Pedidos Feitos</b> = quantos clientes confirmaram a compra naquele dia (vão receber o produto). Vincular atendentes permite calcular CPL/ROAS por pessoa. Importe via CSV — formato: <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">data,plataforma,investido,pedidos,campanha</code></p>
     </div>
   </div>
 </div>
@@ -4374,9 +4380,9 @@ function renderHome(){
       </div>
       <div class="mc mc-re">
         <div class="mc-gl"></div><div class="mc-ic">●</div>
-        <div class="mc-lbl">CPL</div>
+        <div class="mc-lbl">Custo / Pedido</div>
         <div class="mc-val">${fmt(cpl)}</div>
-        <div class="mc-sub">${tLeads} leads no período</div>
+        <div class="mc-sub">${tLeads} pedidos no período</div>
       </div>
     </div>`;
   }
@@ -8384,9 +8390,9 @@ function renderTrafego(){
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">●</div>
       <div class="mc-lbl">Investido</div><div class="mc-val">${fmt(tot)}</div><div class="mc-sub">${gastos.length} registros</div></div>
     <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">◈</div>
-      <div class="mc-lbl">Leads gerados</div><div class="mc-val">${totLeads}</div><div class="mc-sub">total</div></div>
+      <div class="mc-lbl">Pedidos feitos</div><div class="mc-val">${totLeads}</div><div class="mc-sub">aprovados</div></div>
     <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">▲</div>
-      <div class="mc-lbl">CPL médio</div><div class="mc-val">${fmt(cpl)}</div><div class="mc-sub">por lead</div></div>
+      <div class="mc-lbl">Custo por pedido</div><div class="mc-val">${fmt(cpl)}</div><div class="mc-sub">médio</div></div>
     ${gtOnly?'':`<div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">⚡</div>
       <div class="mc-lbl">ROAS</div><div class="mc-val">${roas.toFixed(2)}x</div><div class="mc-sub">${fmt(recBruta)} de receita</div></div>`}
   </div>
@@ -8415,27 +8421,46 @@ function renderTrafego(){
         <th style="text-align:left">Plataforma</th>
         <th style="text-align:left">WhatsApp / Atendente</th>
         <th class="right">Investido</th>
-        <th class="right">Leads</th>
-        <th class="right">CPL</th>
+        <th class="right">Pedidos</th>
+        <th class="right">Custo/Pedido</th>
         ${canEdit?'<th></th>':''}
       </tr></thead>
       <tbody>
         ${gastos.length?gastos.map((g,i)=>{
-          const chip=g.chip_id?(DB.chips||[]).find(c=>c.id===g.chip_id):null;
-          const at=g.at?getTeam(g.at):(chip?getTeam(chip.at):null);
-          const chipCell=chip||at
-            ?`<div style="display:flex;align-items:center;gap:6px">
-                ${chip?`<span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--t2)">${chip.num}</span>`:''}
-                ${at?`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span>`:''}
-              </div>`
-            :'<span class="muted" style="font-size:11.5px">— geral —</span>';
+          // Suporta formato novo (chip_ids array) e antigo (chip_id único)
+          const chipIds=Array.isArray(g.chip_ids)?g.chip_ids:(g.chip_id?[g.chip_id]:[]);
+          const chipsList=chipIds.map(id=>(DB.chips||[]).find(c=>c.id===id)).filter(Boolean);
+          const atIds=Array.isArray(g.at_ids)?g.at_ids:(g.at?[g.at]:[]);
+          const ats=atIds.map(id=>getTeam(id)).filter(Boolean);
+
+          // Render: se 1 só, mostra inline. Se vários, compacta com contador.
+          let chipCell='<span class="muted" style="font-size:11.5px">— geral —</span>';
+          if(chipsList.length===1){
+            const ch=chipsList[0];const at=ats[0]||getTeam(ch.at);
+            chipCell=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--t2)">${ch.num}</span>
+              ${at?`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span>`:''}
+            </div>`;
+          } else if(chipsList.length>1){
+            // Mostra 2 primeiros + contador
+            const primeiros=chipsList.slice(0,2).map(ch=>{
+              const at=getTeam(ch.at);
+              return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;background:var(--s3);padding:2px 7px;border-radius:4px;color:var(--t2)" title="${ch.num}${at?' · '+at.name:''}">${at?avatar(at,{size:14,fontSize:8}):'📱'} ${at?at.name:ch.num}</span>`;
+            }).join('');
+            const sobra=chipsList.length-2;
+            chipCell=`<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap" title="${chipsList.length} vinculados">
+              ${primeiros}
+              ${sobra>0?`<span style="font-size:11px;color:var(--t3);font-weight:600">+${sobra}</span>`:''}
+            </div>`;
+          }
+          const cpp = g.leads>0 ? fmt(g.valor/g.leads) : '—';
           return `<tr>
           <td style="color:var(--t2)">${g.data}</td>
           <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
           <td>${chipCell}</td>
           <td class="right" style="color:var(--tx);font-weight:500">${fmt(g.valor)}</td>
           <td class="right" style="color:var(--t2)">${g.leads}</td>
-          <td class="right" style="color:var(--t2)">${fmt(g.valor/g.leads)}</td>
+          <td class="right" style="color:var(--t2)">${cpp}</td>
           ${canEdit?`<td class="right">
             <button class="btn-act btn-act-gh btn-act-icon" onclick="editGasto(${DB.gastos.indexOf(g)})" title="Editar">✎</button>
             <button class="btn-act btn-act-gh btn-act-icon" onclick="delGasto(${DB.gastos.indexOf(g)})" title="Excluir">×</button>
@@ -8451,15 +8476,58 @@ function renderTrafego(){
 let editingGastoIdx=null;
 // Popula o select de chips com WhatsApp + atendente associado.
 // Chamado em openGastoNew/editGasto pra refletir mudanças em DB.chips.
-function populateGastoChipSelect(selectedId){
-  const sel=$('mg-chip');if(!sel)return;
+// Renderiza checkboxes multi-select de chips/atendentes pro modal de gasto.
+// Aceita selectedIds = array de chip ids ou um único id (retrocompat).
+function populateGastoChipSelect(selectedIds){
+  const wrap=$('mg-chip-multi');if(!wrap)return;
+  // Normaliza pra array
+  const selected=new Set(Array.isArray(selectedIds)?selectedIds:(selectedIds?[selectedIds]:[]));
   const chips=DB.chips||[];
-  sel.innerHTML='<option value="">— sem vínculo (campanha geral) —</option>'+
-    chips.map(c=>{
+
+  // Opção "sem vínculo" no topo — exclusiva (desmarca outros se marcado)
+  const semVinculo=selected.size===0;
+  let html=`<label class="mg-chip-empty">
+    <input type="checkbox" ${semVinculo?'checked':''} onchange="if(this.checked){_mgClearChipPick()}else{this.checked=true}">
+    — sem vínculo (campanha geral)
+  </label>`;
+
+  if(!chips.length){
+    html+=`<div class="muted" style="font-size:11.5px;padding:6px 8px">Nenhum chip cadastrado ainda.</div>`;
+  } else {
+    html+=chips.map(c=>{
       const at=getTeam(c.at);
-      const label=`${c.num}${at?' · '+at.name:''}${c.st?' · '+c.st:''}`;
-      return `<option value="${c.id}" ${c.id===selectedId?'selected':''}>${label}</option>`;
+      const label=`${c.num}${at?' · <b style="font-weight:600;color:var(--tx)">'+at.name+'</b>':''}${c.st?' · <span class="muted" style="font-size:11px">'+c.st+'</span>':''}`;
+      const checked=selected.has(c.id);
+      return `<label>
+        <input type="checkbox" value="${c.id}" ${checked?'checked':''} onchange="_mgChipPickChanged()">
+        <span>${label}</span>
+      </label>`;
     }).join('');
+  }
+  wrap.innerHTML=html;
+}
+// Quando algum chip é (des)marcado, garante que "sem vínculo" desmarca
+function _mgChipPickChanged(){
+  const wrap=$('mg-chip-multi');if(!wrap)return;
+  const anyChipChecked=Array.from(wrap.querySelectorAll('input[type=checkbox]:not(.mg-chip-empty input)'))
+    .filter(i=>!i.closest('.mg-chip-empty'))
+    .some(i=>i.checked);
+  const emptyCb=wrap.querySelector('.mg-chip-empty input[type=checkbox]');
+  if(emptyCb)emptyCb.checked=!anyChipChecked;
+}
+// Limpa todos os chips marcados (chamado quando "sem vínculo" é ativado)
+function _mgClearChipPick(){
+  const wrap=$('mg-chip-multi');if(!wrap)return;
+  wrap.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    if(!cb.closest('.mg-chip-empty'))cb.checked=false;
+  });
+}
+// Lê os chips selecionados do multi-pick
+function _mgReadChipPick(){
+  const wrap=$('mg-chip-multi');if(!wrap)return [];
+  return Array.from(wrap.querySelectorAll('input[type=checkbox]:checked'))
+    .filter(cb=>!cb.closest('.mg-chip-empty'))
+    .map(cb=>Number(cb.value)).filter(n=>!isNaN(n));
 }
 
 function openGastoNew(){
@@ -8475,12 +8543,13 @@ function openGastoNew(){
 function editGasto(idx){
   const g=DB.gastos[idx];if(!g)return;
   editingGastoIdx=idx;
-  // converte DD/MM para ISO
   const dt=ddmmToDate(g.data);
   $('mg-data').value=dt?dt.toISOString().split('T')[0]:'';
   $('mg-plat').value=g.plat;$('mg-camp').value=g.campanha||'';
   $('mg-vl').value=g.valor;$('mg-leads').value=g.leads;
-  populateGastoChipSelect(g.chip_id||null);
+  // Suporta tanto chip_ids (array) quanto chip_id (string única, formato antigo)
+  const selectedIds=Array.isArray(g.chip_ids)?g.chip_ids:(g.chip_id?[g.chip_id]:[]);
+  populateGastoChipSelect(selectedIds);
   $('mg-title').textContent='Editar gasto';
   $('mg-del').style.display='';
   openM('m-gasto');
@@ -8489,13 +8558,26 @@ function saveGasto(){
   const dtIso=$('mg-data').value;
   const dt=dtIso?new Date(dtIso+'T12:00:00'):new Date();
   const data=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
-  const chipIdVal=$('mg-chip').value;
-  const chipId=chipIdVal?Number(chipIdVal):null;
-  // Quando chip vinculado, também guarda o atendente correspondente pra facilitar relatórios
-  const chip=chipId?(DB.chips||[]).find(c=>c.id===chipId):null;
-  const obj={data,plat:$('mg-plat').value,campanha:$('mg-camp').value,
-    valor:Number($('mg-vl').value)||0,leads:Number($('mg-leads').value)||0,
-    chip_id:chipId, chip_num:chip?chip.num:'', at:chip?chip.at:null};
+  // Multi-pick: array de chip ids (pode estar vazio)
+  const chipIds=_mgReadChipPick();
+  const chips=(DB.chips||[]).filter(c=>chipIds.includes(c.id));
+  // Atendentes únicos (sem repetir) dos chips selecionados
+  const atendentes=[...new Set(chips.map(c=>c.at).filter(Boolean))];
+  // Números dos WhatsApps pra exibição rápida
+  const numsTxt=chips.map(c=>c.num).join(', ');
+  const obj={
+    data, plat:$('mg-plat').value, campanha:$('mg-camp').value,
+    valor:Number($('mg-vl').value)||0,
+    leads:Number($('mg-leads').value)||0,  // Mantém nome `leads` no DB pra compat,
+                                              // mas agora representa "Pedidos Feitos" no UI
+    // Campos novos (multi)
+    chip_ids:chipIds, chip_nums:numsTxt,
+    at_ids:atendentes,
+    // Compat retrô: primeiro chip/atendente nos campos antigos (caso código legado leia)
+    chip_id:chipIds[0]||null,
+    chip_num:chips[0]?.num||'',
+    at:atendentes[0]||null,
+  };
   if(editingGastoIdx===null){DB.gastos.unshift(obj)}
   else {DB.gastos[editingGastoIdx]=obj}
   persist();closeM('m-gasto');refreshUI();toast('Gasto salvo','ok');
