@@ -3035,6 +3035,16 @@ function debouncedServerSync(){
 // pra não sobrescrever edição em andamento (race condition de invest, aportes, etc).
 function hasPendingSync(){ return !!_syncTimer || _409retry; }
 
+// Push IMEDIATO pro servidor (sem debounce de 2s). Use após ações financeiras
+// críticas (gastos, investimentos, aportes) pra que outros dispositivos vejam
+// na hora — não esperando 2-12s do ciclo normal.
+async function persistAndPushNow(){
+  try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(_){}
+  if(!apiEnabled()||!apiToken())return;
+  clearTimeout(_syncTimer);_syncTimer=null;
+  await serverSyncNow();
+}
+
 // Flush SÍNCRONO via sendBeacon — garante que o último state vai pro servidor
 // quando o usuário fecha a aba/navega (debounce de 2s não dispara nesses casos).
 function flushSyncBeacon(){
@@ -7445,19 +7455,23 @@ function addAporte(){
   DB.nextAporte=DB.nextAporte||1;
   DB.aportes.unshift({id:DB.nextAporte++,dt,socio_id,cat,valor,obs});
   $('ap-valor').value='';$('ap-obs').value='';
-  persist();refreshUI();
-  toast(`Aporte de ${fmt(valor)} registrado`,'ok');
+  refreshUI();
+  toast(`Aporte de ${fmt(valor)} registrado · sincronizando...`,'ok');
   // Fecha o form depois de salvar
   const f=$('ap-form');if(f)f.style.display='none';
   const btn=$('ap-form-toggle');if(btn)btn.textContent='+ Novo aporte';
+  // Push imediato — aporte é dado financeiro crítico
+  persistAndPushNow().then(()=>toast('✓ Sincronizado com servidor','ok'))
+    .catch(e=>console.warn('Sync falhou:',e));
 }
 async function delAporte(id){
   const a=(DB.aportes||[]).find(x=>x.id===id);if(!a)return;
   const s=getTeam(a.socio_id);
   if(!await axConfirm(`Excluir aporte de <b>${fmt(a.valor)}</b>${s?` de <b>${s.name}</b>`:''}?`,{okLabel:'Excluir'}))return;
   DB.aportes=DB.aportes.filter(x=>x.id!==id);
-  persist();refreshUI();
-  toast('Aporte excluído','ok');
+  refreshUI();
+  toast('Aporte excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -8284,14 +8298,19 @@ function addInvest(){
   DB.invest.unshift({id:DB.nextInv++,cat:$('inv-cat').value,desc,
     vl:Number($('inv-vl').value)||0,dt:$('inv-dt').value,
     is_budget:isBudget});
-  persist();closeM('m-inv');refreshUI();
-  toast(isBudget?'Budget reservado':'Gasto registrado','ok');
+  closeM('m-inv');refreshUI();
+  toast((isBudget?'Budget reservado':'Gasto registrado')+' · sincronizando...','ok');
+  // Push imediato — investimentos são dados financeiros críticos
+  persistAndPushNow().then(()=>toast('✓ Sincronizado com servidor','ok'))
+    .catch(e=>console.warn('Sync falhou:',e));
 }
 async function delInvest(id){
   const i=DB.invest.find(x=>x.id===id);if(!i)return;
   if(!await axConfirm(`Excluir o investimento <b>${i.desc}</b> de <b>${fmt(i.vl)}</b>?`,{okLabel:'Excluir'}))return;
   DB.invest=DB.invest.filter(i=>i.id!==id);
-  persist();refreshUI();toast('Excluído','ok');
+  refreshUI();
+  toast('Excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -8580,18 +8599,26 @@ function saveGasto(){
   };
   if(editingGastoIdx===null){DB.gastos.unshift(obj)}
   else {DB.gastos[editingGastoIdx]=obj}
-  persist();closeM('m-gasto');refreshUI();toast('Gasto salvo','ok');
+  // Push IMEDIATO — gasto é dado crítico que outros PCs precisam ver na hora
+  closeM('m-gasto');refreshUI();
+  toast('Gasto salvo · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado com servidor','ok'))
+    .catch(e=>console.warn('Sync falhou:',e));
 }
 async function delGasto(idx){
   const g=DB.gastos[idx];if(!g)return;
   if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?`,{okLabel:'Excluir gasto'}))return;
-  DB.gastos.splice(idx,1);persist();refreshUI();toast('Excluído','ok');
+  DB.gastos.splice(idx,1);refreshUI();
+  toast('Excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 async function delGastoFromModal(){
   if(editingGastoIdx===null)return;
   const g=DB.gastos[editingGastoIdx];if(!g)return;
   if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?`,{okLabel:'Excluir gasto'}))return;
-  DB.gastos.splice(editingGastoIdx,1);persist();closeM('m-gasto');refreshUI();toast('Excluído','ok');
+  DB.gastos.splice(editingGastoIdx,1);closeM('m-gasto');refreshUI();
+  toast('Excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 // ─── Importar CSV (data,plataforma,investido,leads[,campanha]) ─
