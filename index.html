@@ -3169,6 +3169,19 @@ async function syncFromServer(){
 // Throttle: navegação rápida entre páginas não dispara múltiplos requests
 // (evita 5 pulls se o usuário navegar 5x em 1 segundo). Mínimo 2s entre pulls.
 let _lastNavPull=0;
+// Pull manual forçado — usado pelo botão "🔄 Sincronizar agora" na página Tráfego
+async function trafegoForceSync(){
+  if(!apiEnabled()||!apiToken()){toast('Backend não configurado','err');return;}
+  toast('🔄 Sincronizando com servidor...','ok');
+  try{
+    await syncFromServer();
+    refreshUI();
+    toast(`✓ Atualizado · ${(DB.gastos||[]).length} gastos no banco`,'ok');
+  }catch(e){
+    toast('Erro: '+(e.message||'falhou'),'err');
+  }
+}
+
 async function pullOnNavigate(){
   if(!apiEnabled()||!apiToken())return;
   if(hasPendingSync())return;            // protege edição local pendente
@@ -8385,9 +8398,10 @@ function renderTrafego(){
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Designado</div>
           <div style="font-size:15px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums">${fmt(budgetTrafego)}</div>
         </div>
-        <div style="text-align:right">
-          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Investido</div>
+        <div style="text-align:right" title="Soma de TODOS os gastos registrados — incluindo períodos fora do filtro atual da Dash">
+          <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Investido (total)</div>
           <div style="font-size:15px;font-weight:700;color:var(--t2);font-variant-numeric:tabular-nums">${fmt(gastoTrafegoTotal)}</div>
+          <div class="muted" style="font-size:10px">acumulado, sem filtro</div>
         </div>
         <div style="text-align:right;padding-left:14px;border-left:1px solid var(--b1)">
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Saldo disponível</div>
@@ -8434,7 +8448,11 @@ function renderTrafego(){
     }).join('')||'<div class="muted">Sem dados de plataforma no período.</div>'}
   </div>
 
-  <div class="section-title">Histórico de registros</div>
+  <div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>Histórico de registros</span>
+    <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">${gastos.length} no período · ${(DB.gastos||[]).length} no total</span>
+    <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor (caso outro dispositivo tenha cadastrado gastos)">🔄 Sincronizar agora</button>
+  </div>
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
