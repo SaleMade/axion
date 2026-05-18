@@ -1773,7 +1773,7 @@ h1 em{font-weight:700}
   <div class="modal">
     <div class="m-h">
       <span class="mt">⚙ Gerenciar Status do WhatsApp</span>
-      <button class="m-x" onclick="closeM('m-wa-status')">×</button>
+      <button class="m-x" onclick="closeWaStatusManager()">×</button>
     </div>
     <div class="m-b">
       <p class="muted" style="font-size:12.5px;margin-bottom:14px;line-height:1.55">
@@ -3045,7 +3045,13 @@ function flushSyncBeacon(){
       // Beacon não permite Authorization header — usar fetch com keepalive
       fetch(url,{method:'POST',body,
         headers:{'content-type':'application/json','authorization':'Bearer '+apiToken()},
-        keepalive:true}).catch(()=>{});
+        keepalive:true}).then(r=>{
+          // Se 401 (sessão expirou), salva backup local pra usuário recuperar no próximo login
+          if(r.status===401){
+            try{localStorage.setItem('axion_db_v2_lastflush_'+Date.now(),JSON.stringify(DB))}catch(_){}
+            console.warn('[flushSyncBeacon] 401 — sessão expirada. Backup local salvo.');
+          }
+        }).catch(()=>{});
     }
     return true;
   }catch(e){return false}
@@ -5861,6 +5867,15 @@ function openWaStatusManager(){
   _waStatusBuf=JSON.parse(JSON.stringify(getWaStatusList()));
   renderWaStatusList();
   openM('m-wa-status');
+}
+// Fecha o modal — avisa se há mudanças não salvas no buffer
+function closeWaStatusManager(){
+  const atual=JSON.stringify(getWaStatusList());
+  const buf=JSON.stringify(_waStatusBuf||[]);
+  if(atual!==buf){
+    if(!confirm('Você tem mudanças não salvas nos status do WhatsApp.\n\nFechar mesmo assim? As alterações serão perdidas.'))return;
+  }
+  closeM('m-wa-status');
 }
 function renderWaStatusList(){
   const wrap=$('wa-status-list');if(!wrap)return;
@@ -9848,8 +9863,20 @@ function pick(arr){return arr[Math.floor(Math.random()*arr.length)]}
 // ─── DNA: pega criativos com perf='win' e extrai textos dos blocos pra "alimentar" o gerador
 // Quanto mais vencedores você tem, mais o gerador vai usar texto desses casos em vez dos templates genéricos
 function cpGetDNA(blocoKey){
-  const winners=(DB.criativos||[]).filter(c=>c.perf==='win'&&c.blocos&&c.blocos[blocoKey]);
-  return winners.map(c=>c.blocos[blocoKey]).filter(t=>t&&t.trim().length>10);
+  const winners=(DB.criativos||[]).filter(c=>c.perf==='win');
+  return winners.map(c=>{
+    // Prioriza blocos explícitos
+    if(c.blocos&&c.blocos[blocoKey]&&c.blocos[blocoKey].trim().length>10){
+      return c.blocos[blocoKey];
+    }
+    // Fallback: extrai do copy_completa via split (caso criativo só tenha texto corrido)
+    if(c.copy_completa){
+      const derivados=_cpSplitBlocks(c.copy_completa, c.duracao||'1min');
+      const txt=derivados[blocoKey];
+      if(txt&&txt.trim().length>10)return txt;
+    }
+    return null;
+  }).filter(t=>t&&t.trim().length>10);
 }
 // Combina templates padrão + DNA dos vencedores. Vencedores entram com peso 2x.
 function cpSampleWithDNA(templates,blocoKey){
@@ -10290,10 +10317,12 @@ function cpDeleteFromEdit(){
   const c=DB.criativos.find(x=>x.id===_cpEditId);
   const nome=c?.titulo||'este criativo';
   if(!confirm(`Excluir "${nome}"?\n\nEssa ação não pode ser desfeita.`))return;
-  DB.criativos=DB.criativos.filter(c=>c.id!==_cpEditId);
-  persist();
-  _cpEditId=null;
+  const id=_cpEditId;
+  // Fecha modal ANTES de mexer no estado pra evitar race com renderizadores
   closeM('m-criativo');
+  _cpEditId=null;
+  DB.criativos=DB.criativos.filter(c=>c.id!==id);
+  persist();
   renderCopies();
   toast('🗑 Criativo excluído','ok');
 }
@@ -10366,9 +10395,9 @@ function renderCopies(){
             style="font-size:11px;font-weight:600;color:#fbbf24;background:rgba(251,191,36,.10);padding:5px 10px;border-radius:6px;display:flex;align-items:center;gap:5px;cursor:help">
             🧬 DNA ativo · ${winners} vencedor${winners>1?'es':''}
           </span>`
-        : `<span title="Marque criativos como 🏆 Vencedor na coluna 'Pronto p/ Teste' pra que eles 'alimentem' o gerador"
+        : `<span title="DNA ativa quando você marca um criativo como 🏆 Vencedor. Pra ativar: 1) abre um criativo na coluna 'Pronto p/ Teste' 2) seleciona Performance = 🏆 Vencedor 3) Salva. Daí a IA usa os textos dos vencedores como referência ao gerar novos."
             style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:6px;cursor:help">
-            🧬 DNA inativo
+            🧬 DNA inativo · ⓘ
           </span>`}
     </div>
 
@@ -11063,23 +11092,12 @@ function cfgIntegracoes(){
       </div>
     </details>
 
-    <div class="cfg-h" style="margin-top:24px"><h2>WhatsApp Business API</h2><p>Em breve — envio de mensagens automáticas</p></div>
-    <div class="cfg-card" style="opacity:.6;display:flex;align-items:center;gap:14px">
-      <div style="font-size:28px">💬</div>
-      <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:2px">WhatsApp Business</div>
-        <div class="muted" style="font-size:12.5px">Templates, envio de cobrança automática e atualização de rastreio</div>
-      </div>
-      <span class="cfg-status">Em breve</span>
-    </div>
-
-    <div class="cfg-card" style="opacity:.6;display:flex;align-items:center;gap:14px">
-      <div style="font-size:28px">📧</div>
-      <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:2px">SMTP / E-mail</div>
-        <div class="muted" style="font-size:12.5px">Notificações por e-mail e relatórios diários</div>
-      </div>
-      <span class="cfg-status">Em breve</span>
+    <!-- Próximas integrações — versão compacta pra não ocupar espaço com promessas -->
+    <div style="margin-top:18px;padding:10px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);font-size:11.5px;color:var(--t4);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-weight:600">🔜 Em breve:</span>
+      <span>💬 WhatsApp Business</span>
+      <span>·</span>
+      <span>📧 SMTP / E-mail</span>
     </div>
 
     <!-- ─── Backend AXION (multi-usuário) — guardado no fim, sem destaque visual ─── -->
@@ -11429,12 +11447,16 @@ async function resetDB(){
 async function clearAll(){
   if(!await axConfirm('<b>APAGAR TUDO?</b><br>Leads, vendas, produtos, chips, pagamentos, investimentos — tudo zerado. Esta ação <b>não pode ser desfeita</b>.',{okLabel:'Sim, apagar tudo'}))return;
   if(!await axConfirm('Tem <b>certeza absoluta</b>? Última confirmação.',{okLabel:'Confirmar exclusão total'}))return;
-  ['leads','vendas','gastos','chips','produtos','invest','payouts','fechamentos','webhooks','feed','aportes','wh_log_server'].forEach(k=>DB[k]=[]);
+  ['leads','vendas','gastos','chips','produtos','invest','payouts','fechamentos','webhooks','feed','aportes','wh_log_server','criativos'].forEach(k=>DB[k]=[]);
   // Mapeamentos de webhook voltam pro padrão (não array — objeto)
   DB.payt_mapping=JSON.parse(JSON.stringify(DEFAULT_DB.payt_mapping||{}));
   delete DB.forn_mapping; // será recriado a partir de payt_mapping no próximo render
+  // Status WhatsApp volta pros 3 padrão
+  DB.wa_statuses=JSON.parse(JSON.stringify(WA_STATUSES_DEFAULT));
+  // Reset flag de Modo Visualização (senão pode travar a interface de outros usuários)
+  DB.view_mode=false;
   // Counters
-  DB.nextLead=1;DB.nextVenda=1;DB.nextProduto=1;DB.nextAporte=1;
+  DB.nextLead=1;DB.nextVenda=1;DB.nextProduto=1;DB.nextAporte=1;DB.nextCriativo=1;
   persist();toast('Tudo limpo. Sistema vazio.','ok');
   setTimeout(()=>window.location.reload(),1200);
 }

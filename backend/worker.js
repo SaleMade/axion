@@ -346,8 +346,13 @@ async function handleAIConfigGet(req, env) {
   const geminiDb = await _readConfig(env, 'ai_gemini_key');
   const anthropicDb = await _readConfig(env, 'ai_anthropic_key');
 
-  // Mascara a key (só mostra primeiros 8 chars + últimos 4)
-  const mask = k => k ? `${k.slice(0, 8)}...${k.slice(-4)}` : null;
+  // Mascara a key (mostra primeiros 8 + últimos 4, se for grande o bastante)
+  // Pra keys curtas, mostra só prefixo pra evitar exposição/sobreposição
+  const mask = k => {
+    if (!k) return null;
+    if (k.length < 16) return k.slice(0, 3) + '…' + '*'.repeat(Math.max(0, k.length - 3));
+    return `${k.slice(0, 8)}…${k.slice(-4)}`;
+  };
 
   return json({
     gemini: {
