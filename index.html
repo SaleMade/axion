@@ -8588,7 +8588,6 @@ function renderTrafego(){
         <th style="text-align:left">WhatsApp / Atendente</th>
         <th class="right">Investido</th>
         <th class="right">Pedidos</th>
-        <th class="right">Custo/Pedido</th>
         ${canEdit?'<th></th>':''}
       </tr></thead>
       <tbody>
@@ -8619,20 +8618,18 @@ function renderTrafego(){
               ${sobra>0?`<span style="font-size:11px;color:var(--t3);font-weight:600">+${sobra}</span>`:''}
             </div>`;
           }
-          const cpp = g.leads>0 ? fmt(g.valor/g.leads) : '—';
           return `<tr>
           <td style="color:var(--t2)">${g.data}</td>
           <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
           <td>${chipCell}</td>
           <td class="right" style="color:var(--tx);font-weight:500">${fmt(g.valor)}</td>
           <td class="right" style="color:var(--t2)">${g.leads}</td>
-          <td class="right" style="color:var(--t2)">${cpp}</td>
           ${canEdit?`<td class="right">
             <button class="btn-act btn-act-gh btn-act-icon" onclick="editGasto(${DB.gastos.indexOf(g)})" title="Editar">✎</button>
             <button class="btn-act btn-act-gh btn-act-icon" onclick="delGasto(${DB.gastos.indexOf(g)})" title="Excluir">×</button>
           </td>`:''}
         </tr>`;
-        }).join(''):`<tr><td colspan="${canEdit?7:6}" class="muted" style="text-align:center;padding:24px">Sem registros no período.</td></tr>`}
+        }).join(''):`<tr><td colspan="${canEdit?6:5}" class="muted" style="text-align:center;padding:24px">Sem registros no período.</td></tr>`}
       </tbody>
     </table>
   </div>`;
