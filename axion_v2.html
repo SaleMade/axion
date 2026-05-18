@@ -491,6 +491,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .mg-chip-pick input[type=checkbox]{accent-color:var(--bl);width:14px;height:14px;cursor:pointer;margin:0}
 .mg-chip-pick .mg-chip-empty{font-style:italic;color:var(--t4);font-weight:500}
 .mg-chip-pick .mg-chip-empty input{margin-right:6px}
+/* Rotação da seta do <details> no acordeão de chips */
+#m-gasto details > summary::-webkit-details-marker{display:none}
+#m-gasto details[open] > summary > span:first-child{transform:rotate(90deg)}
 .chip{background:linear-gradient(180deg,var(--s2),var(--s1));
   border:1px solid var(--b1);border-radius:var(--rl);padding:16px;
   position:relative;transition:all .15s;cursor:pointer}
@@ -2220,13 +2223,18 @@ h1 em{font-weight:700}
         </div>
         <div class="field" style="grid-column:span 2"><label>Campanha (opcional)</label><input id="mg-camp" placeholder="Nome da campanha / conjunto"></div>
         <div class="field" style="grid-column:span 2">
-          <label>WhatsApp / Atendentes vinculados <span class="muted" style="font-size:11px;font-weight:500">(opcional · pode marcar vários se o gasto foi pra mais de uma pessoa)</span></label>
-          <div id="mg-chip-multi" class="mg-chip-pick" style="background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:8px 10px;max-height:160px;overflow-y:auto"></div>
+          <details style="background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);overflow:hidden">
+            <summary style="cursor:pointer;padding:9px 12px;font-size:12.5px;color:var(--t2);user-select:none;display:flex;align-items:center;gap:8px;list-style:none">
+              <span style="color:var(--t4);font-size:11px;transition:transform .2s">▶</span>
+              <span>WhatsApp / Atendentes vinculados</span>
+              <span class="muted" style="font-size:11px;font-weight:500;margin-left:auto" id="mg-chip-count"></span>
+            </summary>
+            <div id="mg-chip-multi" class="mg-chip-pick" style="padding:8px 10px;max-height:200px;overflow-y:auto;border-top:1px solid var(--b1)"></div>
+          </details>
         </div>
         <div class="field"><label>Investido (R$)</label><input id="mg-vl" type="number" step="0.01"></div>
-        <div class="field"><label>Pedidos Feitos <span class="muted" style="font-size:11px;font-weight:500">(aprovados no dia)</span></label><input id="mg-leads" type="number" placeholder="ex: 12"></div>
+        <div class="field"><label>Pedidos Feitos</label><input id="mg-leads" type="number" placeholder="ex: 12"></div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin-top:6px">💡 <b style="color:var(--bl2)">Pedidos Feitos</b> = quantos clientes confirmaram a compra naquele dia (vão receber o produto). Vincular atendentes permite calcular CPL/ROAS por pessoa. Importe via CSV — formato: <code style="background:var(--s3);padding:2px 5px;border-radius:3px;color:var(--cy)">data,plataforma,investido,pedidos,campanha</code></p>
     </div>
   </div>
 </div>
@@ -8544,6 +8552,14 @@ function populateGastoChipSelect(selectedIds){
     }).join('');
   }
   wrap.innerHTML=html;
+  _mgUpdateChipCount();
+}
+// Atualiza o contador no header do acordeão
+function _mgUpdateChipCount(){
+  const cnt=$('mg-chip-count');if(!cnt)return;
+  const selected=_mgReadChipPick();
+  if(selected.length===0)cnt.textContent='— geral —';
+  else cnt.textContent=`${selected.length} selecionado${selected.length>1?'s':''}`;
 }
 // Quando algum chip é (des)marcado, garante que "sem vínculo" desmarca
 function _mgChipPickChanged(){
@@ -8553,6 +8569,7 @@ function _mgChipPickChanged(){
     .some(i=>i.checked);
   const emptyCb=wrap.querySelector('.mg-chip-empty input[type=checkbox]');
   if(emptyCb)emptyCb.checked=!anyChipChecked;
+  _mgUpdateChipCount();
 }
 // Limpa todos os chips marcados (chamado quando "sem vínculo" é ativado)
 function _mgClearChipPick(){
@@ -8560,6 +8577,7 @@ function _mgClearChipPick(){
   wrap.querySelectorAll('input[type=checkbox]').forEach(cb=>{
     if(!cb.closest('.mg-chip-empty'))cb.checked=false;
   });
+  _mgUpdateChipCount();
 }
 // Lê os chips selecionados do multi-pick
 function _mgReadChipPick(){
