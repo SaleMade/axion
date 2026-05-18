@@ -2965,18 +2965,29 @@ let CUR=null;
 let editingLeadId=null,editingChipId=null;
 let dragLeadId=null;
 // dateFilter persiste em localStorage — F5 mantém o período escolhido
+// Validações: range deve ser string conhecida; valores temporários (year/month/from/to) opcionais
+const DF_RANGES=new Set(['hoje','ontem','semana','mes','mes-ant','ano','7','14','30','60','90','180','month-pick','custom']);
 let dateFilter=(()=>{
   try{
     const saved=localStorage.getItem('axion_date_filter');
     if(saved){
       const obj=JSON.parse(saved);
-      if(obj&&obj.range)return obj;
+      if(obj && typeof obj==='object' && DF_RANGES.has(obj.range)){
+        console.log('[dateFilter] restaurado de localStorage:', obj.range);
+        return obj;
+      } else {
+        console.warn('[dateFilter] localStorage tinha valor inválido, usando default. valor=', saved);
+      }
+    } else {
+      console.log('[dateFilter] sem persistência prévia — usando default "7"');
     }
-  }catch(_){}
+  }catch(e){console.warn('[dateFilter] erro lendo localStorage:',e);}
   return {range:'7',from:null,to:null};
 })();
 function saveDateFilter(){
-  try{localStorage.setItem('axion_date_filter',JSON.stringify(dateFilter))}catch(_){}
+  try{
+    localStorage.setItem('axion_date_filter',JSON.stringify(dateFilter));
+  }catch(e){console.warn('[dateFilter] erro salvando:',e);}
 }
 let crmFilters={q:'',vendedor:'',status:'',mod:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
 let mapBuilt=false;
@@ -12296,9 +12307,11 @@ function runExport(){
   let rows=def.rows();
   if(period!=='all'){
     const savedFilter=JSON.parse(JSON.stringify(dateFilter));
-    if(period!=='filter'){dateFilter={range:period,from:null,to:null,year:null,month:null};saveDateFilter();}
+    // Troca temporariamente pra filtrar — NÃO salva no localStorage (preserva escolha do usuário)
+    if(period!=='filter'){dateFilter={range:period,from:null,to:null,year:null,month:null};}
     if(exContext!=='equipe'){rows=rows.filter(r=>inRange(r.data||today()))}
     dateFilter=savedFilter;
+    saveDateFilter(); // garante que localStorage volte ao filtro original
   }
   const labelMap={};def.cols.forEach(c=>labelMap[c.k]=c.l);
   const data=rows.map(r=>{const o=def.fetch(r);const out={};cols.forEach(k=>out[labelMap[k]]=o[k]);return out});
