@@ -2322,6 +2322,7 @@ h1 em{font-weight:700}
       <div class="m-actions">
         <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiro()">📋 Copiar roteiro</button>
         <button class="btn btn-bl btn-sm" onclick="cpSaveEdit()">Salvar</button>
+        <button class="btn btn-re btn-sm" onclick="cpDeleteFromEdit()" style="margin-left:14px">Excluir</button>
         <button class="m-x" onclick="closeM('m-criativo')">×</button>
       </div>
     </div>
@@ -2337,29 +2338,16 @@ h1 em{font-weight:700}
           </select>
         </div>
       </div>
-      <div class="fg fg2" style="margin-top:8px">
-        <div class="field"><label>Ângulo da Campanha</label>
-          <select id="cpe-angulo"></select>
+
+      <!-- Bloco de configurações TRAVADAS (read-only) — preservam como o criativo foi gerado -->
+      <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 14px;margin-top:12px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--t3)">
+          🔒 Configuração de geração <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--t4);font-size:11px">— travada pra preservar como foi criado</span>
         </div>
-        <div class="field"><label>Nível de Dor</label>
-          <select id="cpe-dor"></select>
-        </div>
+        <div id="cpe-config-display" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px"></div>
       </div>
-      <div class="fg fg2" style="margin-top:8px">
-        <div class="field"><label>Persona / Profissão</label>
-          <select id="cpe-persona"></select>
-        </div>
-        <div class="field"><label>Tipo de Gancho</label>
-          <select id="cpe-gancho"></select>
-        </div>
-      </div>
-      <div class="fg fg2" style="margin-top:8px">
-        <div class="field"><label>Duração</label>
-          <select id="cpe-duracao" onchange="cpeRenderBlocks()"></select>
-        </div>
-        <div class="field"><!-- espaço pra equilibrar grid (Designer está embaixo) --></div>
-      </div>
-      <div class="fg fg2" style="margin-top:8px">
+
+      <div class="fg fg2" style="margin-top:12px">
         <div class="field"><label>Designer responsável</label>
           <select id="cpe-designer"></select>
         </div>
@@ -2373,8 +2361,11 @@ h1 em{font-weight:700}
         </div>
       </div>
 
-      <div class="section-title" style="margin-top:14px">Roteiro</div>
-      <div class="cp-script-blocks" id="cpe-blocks-wrap"></div>
+      <!-- Timeline visual de referência (não editável) -->
+      <div class="section-title" style="margin-top:14px">Roteiro (copy completa)</div>
+      <div id="cpe-timeline-ref" class="cp-timeline" style="margin-bottom:4px"></div>
+      <textarea id="cpe-copy-text" class="cp-script-area"
+        placeholder="Cole ou edite a copy aqui..."></textarea>
 
       <div class="fg fg2" style="margin-top:14px">
         <div class="field"><label>🔗 Link do arquivo final (Drive / WeTransfer / etc)</label>
@@ -10144,13 +10135,14 @@ function cpOnDuracaoChange(){
 
 function cpSalvarIdeia(){
   if(isReadOnly()&&!isDes()){toast('🔒 Modo Visualização ativo','err');return;}
-  // Lê da textarea unificada e divide em blocos pela ordem dos parágrafos
   const dur=$('cp-duracao').value;
   const ta=$('cp-script-text');
-  const blocos = ta ? _cpSplitBlocks(ta.value, dur) : (_cpDraft.blocos||{});
-  if(!blocos.hook&&!blocos.cta){toast('Gere um roteiro primeiro ou escreva pelo menos o início','err');return;}
-  const primeiroTexto=(blocos.hook||blocos.cta||'').trim();
-  const titulo=primeiroTexto.slice(0,60)+(primeiroTexto.length>60?'...':'');
+  // SOURCE OF TRUTH: o texto corrido que está na textarea, sem perda
+  const copyCompleta=(ta?ta.value:'').trim();
+  if(!copyCompleta){toast('Gere ou escreva uma copy antes de salvar','err');return;}
+  // Blocos são derivados (pra DNA e referência), mas copy_completa manda
+  const blocos=_cpSplitBlocks(copyCompleta, dur);
+  const titulo=copyCompleta.slice(0,60).replace(/\s+/g,' ').trim()+(copyCompleta.length>60?'...':'');
   DB.criativos.unshift({
     id:DB.nextCriativo++,
     titulo:titulo||'(sem título)',
@@ -10159,7 +10151,8 @@ function cpSalvarIdeia(){
     gancho:$('cp-gancho').value,
     duracao:dur,
     persona:$('cp-persona').value,
-    blocos,
+    copy_completa:copyCompleta,     // ← texto corrido salvo intacto
+    blocos,                          // ← derivado pra retrocompat/DNA
     col:'ideias',
     link_arquivo:'',
     designer_id:'',
@@ -10206,27 +10199,37 @@ function cpDelete(id){
 
 // ─── Modal de edição do card
 let _cpEditId=null;
-// Re-renderiza os textareas do modal de edição conforme a duração selecionada
-function cpeRenderBlocks(){
-  const wrap=$('cpe-blocks-wrap');if(!wrap)return;
-  const dur=$('cpe-duracao').value||'1min';
-  const c=DB.criativos.find(x=>x.id===_cpEditId);
-  const curBlocos=(c&&c.blocos)||{};
-  // Coleta valores atuais dos textareas antes de re-renderizar (pra não perder edição)
-  const collected={};
-  wrap.querySelectorAll('textarea').forEach(t=>{
-    const k=t.id.replace('cpe-','');
-    if(t.value)collected[k]=t.value;
-  });
-  const merged={...curBlocos,...collected};
-  wrap.innerHTML=(COPY_DURACOES[dur]?.blocos||[]).map(b=>{
-    const val=merged[b.k]||'';
-    return `<div class="cp-block ${b.cls}">
-      <div class="cp-block-h">
-        <span class="cp-block-time">${b.t}</span>
-        <span class="cp-block-lbl">${b.l}</span>
-      </div>
-      <textarea id="cpe-${b.k}">${val.replace(/</g,'&lt;')}</textarea>
+// Renderiza painel READ-ONLY com a configuração travada do criativo
+function _cpRenderConfigDisplay(c){
+  const wrap=$('cpe-config-display');if(!wrap)return;
+  const personaLbl=COPY_PERSONAS[c.persona]?.label||c.persona||'—';
+  const dorLbl=COPY_DORES[c.dor]?.label||c.dor||'—';
+  const ganchoLbl=COPY_GANCHOS[c.gancho]?.label||c.gancho||'—';
+  const anguloLbl=COPY_ANGULOS[c.angulo]?.label||c.angulo||'—';
+  const duracaoLbl=COPY_DURACOES[c.duracao]?.label||c.duracao||'—';
+  const item=(lbl,val)=>`<div>
+    <div style="font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:2px">${lbl}</div>
+    <div style="font-size:12.5px;color:var(--t2);font-weight:500">${val}</div>
+  </div>`;
+  wrap.innerHTML=[
+    item('Persona', personaLbl),
+    item('Nível de Dor', dorLbl),
+    item('Tipo de Gancho', ganchoLbl),
+    item('Ângulo da Campanha', anguloLbl),
+    item('Duração', duracaoLbl),
+  ].join('');
+}
+
+// Renderiza a timeline horizontal (apenas referência visual, não editável)
+function _cpRenderTimelineRef(dur){
+  const wrap=$('cpe-timeline-ref');if(!wrap)return;
+  const blocos=COPY_DURACOES[dur]?.blocos||[];
+  const corCls={'b-hook':'#ef4444','b-ret':'#f59e0b','b-of':'#10b981','b-cta':'#3b82f6'};
+  wrap.innerHTML=blocos.map(b=>{
+    const cor=corCls[b.cls]||'#64748b';
+    return `<div class="cp-tl-pill" style="border-left-color:${cor}">
+      <div class="cp-tl-time">${b.t}</div>
+      <div class="cp-tl-lbl">${b.l}</div>
     </div>`;
   }).join('');
 }
@@ -10236,75 +10239,60 @@ function cpOpenEdit(id){
   _cpEditId=id;
   openM('m-criativo');
   setTimeout(()=>{
-    // Popula selects — angulo e persona com optgroups, demais lineares
-    const angOpts=(()=>{
-      const grupos={};
-      Object.entries(COPY_ANGULOS).forEach(([k,v])=>{
-        (grupos[v.grupo||'pessoal']=grupos[v.grupo||'pessoal']||[]).push([k,v]);
-      });
-      return Object.entries(ANGULO_GRUPOS).map(([gk,gl])=>{
-        const items=grupos[gk]||[];
-        if(!items.length)return '';
-        return `<optgroup label="${gl}">${items.map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('')}</optgroup>`;
-      }).join('');
-    })();
-    const persOpts=(()=>{
-      const grupos={};
-      Object.entries(COPY_PERSONAS).forEach(([k,v])=>{
-        (grupos[v.grupo||'geral']=grupos[v.grupo||'geral']||[]).push([k,v]);
-      });
-      return Object.entries(PERSONA_GRUPOS).map(([gk,gl])=>{
-        const items=grupos[gk]||[];
-        if(!items.length)return '';
-        return `<optgroup label="${gl}">${items.map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('')}</optgroup>`;
-      }).join('');
-    })();
-    $('cpe-angulo').innerHTML=angOpts;
-    $('cpe-persona').innerHTML=persOpts;
-    $('cpe-dor').innerHTML=Object.entries(COPY_DORES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
-    $('cpe-gancho').innerHTML=Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('');
-    $('cpe-duracao').innerHTML=Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}">${v.label}</option>`).join('');
+    // Campos editáveis
     $('cpe-titulo').value=c.titulo||'';
-    $('cpe-angulo').value=c.angulo||'historia_pessoal';
-    $('cpe-dor').value=c.dor||'energia';
-    $('cpe-gancho').value=c.gancho||'historia';
-    $('cpe-duracao').value=c.duracao||'1min';
-    $('cpe-persona').value=c.persona||'generico';
-    $('cpe-link').value=c.link_arquivo||'';
-    $('cpe-obs').value=c.obs||'';
     $('cpe-col').value=c.col||'ideias';
     $('cpe-perf').value=c.perf||'';
-    // Popula designer (apenas usuários role='designer')
+    $('cpe-link').value=c.link_arquivo||'';
+    $('cpe-obs').value=c.obs||'';
+
+    // Designer (só usuários role='designer')
     const designers=TEAM.filter(t=>t.role==='designer'&&!t.archived&&!t._preview);
     $('cpe-designer').innerHTML='<option value="">— Sem designer atribuído —</option>'+
       designers.map(d=>`<option value="${d.id}" ${c.designer_id===d.id?'selected':''}>${d.name}</option>`).join('');
-    // Renderiza blocos dinâmicos baseado na duração
-    cpeRenderBlocks();
+
+    // Configuração READ-ONLY (preserva como foi gerado)
+    _cpRenderConfigDisplay(c);
+    _cpRenderTimelineRef(c.duracao);
+
+    // Texto da copy — prioriza copy_completa (texto corrido salvo intacto).
+    // Se não existir (criativos antigos), reconstrói dos blocos.
+    const textoCorrente = c.copy_completa
+      || _cpJoinBlocks(c.blocos||{}, c.duracao||'1min');
+    $('cpe-copy-text').value = textoCorrente;
   },20);
 }
+
 function cpSaveEdit(){
   const c=DB.criativos.find(x=>x.id===_cpEditId);if(!c)return;
   c.titulo=$('cpe-titulo').value.trim()||'(sem título)';
-  c.angulo=$('cpe-angulo').value;
-  c.dor=$('cpe-dor').value;
-  c.gancho=$('cpe-gancho').value;
-  c.duracao=$('cpe-duracao').value;
-  c.persona=$('cpe-persona').value;
-  // Coleta todos os blocos da duração escolhida
-  const blocos={};
-  (COPY_DURACOES[c.duracao]?.blocos||[]).forEach(b=>{
-    const el=$('cpe-'+b.k);
-    if(el)blocos[b.k]=el.value.trim();
-  });
-  c.blocos=blocos;
-  c.link_arquivo=$('cpe-link').value.trim();
-  c.designer_id=$('cpe-designer').value;
-  c.obs=$('cpe-obs').value.trim();
   c.col=$('cpe-col').value;
   c.perf=$('cpe-perf').value||null;
+  c.designer_id=$('cpe-designer').value;
+  c.link_arquivo=$('cpe-link').value.trim();
+  c.obs=$('cpe-obs').value.trim();
+  // Persona/dor/gancho/angulo/duracao NÃO são alteráveis aqui (travados)
+  // Texto da copy — source of truth + blocos derivados pra DNA
+  const copyCompleta=$('cpe-copy-text').value.trim();
+  c.copy_completa=copyCompleta;
+  c.blocos=_cpSplitBlocks(copyCompleta, c.duracao);
   c.updated_at=Date.now();
   persist();closeM('m-criativo');renderCopies();
   toast('✓ Criativo atualizado','ok');
+}
+
+// Excluir o criativo aberto direto do modal de edição
+function cpDeleteFromEdit(){
+  if(!_cpEditId)return;
+  const c=DB.criativos.find(x=>x.id===_cpEditId);
+  const nome=c?.titulo||'este criativo';
+  if(!confirm(`Excluir "${nome}"?\n\nEssa ação não pode ser desfeita.`))return;
+  DB.criativos=DB.criativos.filter(c=>c.id!==_cpEditId);
+  persist();
+  _cpEditId=null;
+  closeM('m-criativo');
+  renderCopies();
+  toast('🗑 Criativo excluído','ok');
 }
 // Formata um criativo (ou draft) pra texto WhatsApp-friendly, respeitando a estrutura da duração
 function cpFormatRoteiro(c){
@@ -10321,22 +10309,20 @@ function cpFormatRoteiro(c){
 }
 
 function cpCopiarRoteiro(id){
-  let c;
+  let texto;
   if(id===undefined){
-    // Lê do modal de edição
-    const curr=DB.criativos.find(x=>x.id===_cpEditId);
-    const dur=curr?.duracao||'1min';
-    const blocos={};
-    (COPY_DURACOES[dur]?.blocos||[]).forEach(b=>{
-      const el=$('cpe-'+b.k);if(el)blocos[b.k]=el.value;
-    });
-    c={blocos,duracao:dur};
+    // Lê do modal de edição — textarea unificada
+    const ta=$('cpe-copy-text');
+    texto=ta?ta.value.trim():'';
   } else {
-    c=DB.criativos.find(x=>x.id===id);
+    const c=DB.criativos.find(x=>x.id===id);
+    if(!c)return;
+    // Prioriza copy_completa; fallback pra reconstrução via blocos
+    texto=c.copy_completa||_cpJoinBlocks(c.blocos||{}, c.duracao||'1min');
   }
-  if(!c)return;
-  navigator.clipboard.writeText(cpFormatRoteiro(c))
-    .then(()=>toast('✓ Roteiro copiado','ok'))
+  if(!texto){toast('Sem copy pra copiar','err');return;}
+  navigator.clipboard.writeText(texto)
+    .then(()=>toast('✓ Copy copiada (texto corrido)','ok'))
     .catch(()=>toast('Erro ao copiar','err'));
 }
 
