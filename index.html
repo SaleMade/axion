@@ -6013,9 +6013,10 @@ function setWaStatus(chipId, novoSt){
   const c=DB.chips.find(x=>x.id===chipId);
   if(!c)return;
   c.wa_st=novoSt;
-  persist();
   renderChipsByAtendente();
   toast(`WhatsApp marcado como ${getWaStatusInfo(novoSt)?.label||novoSt}`,'ok');
+  // Push imediato pra outros dispositivos verem na hora
+  persistAndPushNow().catch(_=>{});
 }
 
 // ─── Gerenciamento de tags de status do WhatsApp ───
@@ -6081,10 +6082,10 @@ function saveWaStatusAll(){
     }
   });
   DB.wa_statuses=JSON.parse(JSON.stringify(_waStatusBuf));
-  persist();
   closeM('m-wa-status');
   renderChipsByAtendente();
-  toast(`✓ ${_waStatusBuf.length} status salvos`,'ok');
+  toast(`✓ ${_waStatusBuf.length} status salvos · sincronizando...`,'ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 // Agrupa chips por atendente e renderiza visão simplificada
@@ -6215,9 +6216,9 @@ function autoPromoteWarmedChips(){
     }
   });
   if(promovidos>0){
-    persist();
     if(promovidos===1)toast('🎉 1 chip completou aquecimento — agora ATIVO','ok');
     else toast(`🎉 ${promovidos} chips completaram aquecimento — agora ATIVOS`,'ok');
+    persistAndPushNow().catch(_=>{});
   }
   return promovidos;
 }
@@ -6381,14 +6382,18 @@ function saveChip(){
     tags:$('mc-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
     note:$('mc-note').value,
   });
-  persist();closeM('m-chip');refreshUI();toast('Chip atualizado','ok');
+  closeM('m-chip');refreshUI();
+  toast('Chip atualizado · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 async function deleteChip(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
   if(!await axConfirm(`Excluir o chip <b>${c.num}</b>? O histórico de aquecimento será perdido.`,{okLabel:'Excluir chip'}))return;
   DB.chips=DB.chips.filter(c=>c.id!==editingChipId);
-  persist();closeM('m-chip');refreshUI();toast('Excluído','ok');
+  closeM('m-chip');refreshUI();
+  toast('Excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 function addChip(){
@@ -6403,22 +6408,26 @@ function addChip(){
     rec:$('nc-rec').value,recv:0,tags:[],note:''
   });
   ['nc-num','nc-mod'].forEach(i=>$(i).value='');
-  persist();closeM('m-chip-new');refreshUI();toast('Chip cadastrado · dia 1/7','ok');
+  closeM('m-chip-new');refreshUI();
+  toast('Chip cadastrado · dia 1/7 · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 function confirmRecharge(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
   c.rec=new Date().toISOString().split('T')[0];
   if(c.st==='recarga_pendente')c.st='ativo';
-  persist();$('mc-rec').value=c.rec;$('mc-recharge-alert').classList.add('hidden');
+  $('mc-rec').value=c.rec;$('mc-recharge-alert').classList.add('hidden');
   toast('Recarga confirmada — próxima em 90 dias','ok');
   if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
+  persistAndPushNow().catch(_=>{});
 }
 function confirmRechargeId(id){
   const c=DB.chips.find(x=>x.id===id);if(!c)return;
   c.rec=new Date().toISOString().split('T')[0];
   if(c.st==='recarga_pendente')c.st='ativo';
-  persist();refreshUI();toast('Recarga confirmada','ok');
+  refreshUI();toast('Recarga confirmada','ok');
+  persistAndPushNow().catch(_=>{});
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -9434,15 +9443,18 @@ function saveProduto(){
       img:prodImgBuf,
       variacoes:vars});
   }
-  persist();closeM('m-prod');refreshUI();
-  toast(editingProdId?'Produto atualizado':'Produto cadastrado','ok');
+  closeM('m-prod');refreshUI();
+  toast((editingProdId?'Produto atualizado':'Produto cadastrado')+' · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 async function deleteProduto(){
   const p=DB.produtos.find(x=>x.id===editingProdId);if(!p)return;
   if(!await axConfirm(`Excluir o produto <b>${p.nome}</b>?<br><span class="muted" style="font-size:13px">Vai remover ${(p.variacoes||[]).length} variação${(p.variacoes||[]).length!==1?'ões':''} e os links de checkout configurados.</span>`,{okLabel:'Excluir produto'}))return;
   DB.produtos=DB.produtos.filter(p=>p.id!==editingProdId);
-  persist();closeM('m-prod');refreshUI();toast('Excluído','ok');
+  closeM('m-prod');refreshUI();
+  toast('Excluído · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 // ─── PAGE: Criativos / Design & Copy ───
