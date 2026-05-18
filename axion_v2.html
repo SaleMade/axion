@@ -2202,6 +2202,20 @@ h1 em{font-weight:700}
 </div>
 
 <!-- ═══ MODAL: GASTO DE TRÁFEGO ═══ -->
+<!-- ═══ MODAL: TODOS OS GASTOS (debug/auditoria — sem filtro de data) ═══ -->
+<div class="overlay" id="m-all-gastos">
+  <div class="modal lg">
+    <div class="m-h">
+      <span class="mt">🗂 Todos os gastos de tráfego (sem filtro)</span>
+      <button class="m-x" onclick="closeM('m-all-gastos')">×</button>
+    </div>
+    <div class="m-b">
+      <p class="muted" style="font-size:12.5px;margin-bottom:12px">Lista completa de todos os gastos registrados no banco — útil pra auditar diferenças entre o card de Investido (total) e o histórico filtrado.</p>
+      <div id="all-gastos-content"></div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="m-gasto">
   <div class="modal sm">
     <div class="m-h">
@@ -3177,6 +3191,75 @@ async function syncFromServer(){
 // Throttle: navegação rápida entre páginas não dispara múltiplos requests
 // (evita 5 pulls se o usuário navegar 5x em 1 segundo). Mínimo 2s entre pulls.
 let _lastNavPull=0;
+// Modal de auditoria: lista TODOS os gastos do banco, agrupados por mês.
+// Permite identificar de onde vem qualquer divergência no card "Investido (total)".
+function openAllGastosModal(){
+  const wrap=$('all-gastos-content');if(!wrap)return;
+  const gastos=(DB.gastos||[]).slice();
+  if(!gastos.length){
+    wrap.innerHTML='<div class="muted" style="text-align:center;padding:24px">Nenhum gasto registrado no banco.</div>';
+    openM('m-all-gastos');return;
+  }
+  // Ordena por data (mais recente primeiro)
+  gastos.sort((a,b)=>{
+    const da=ddmmToDate(a.data),db=ddmmToDate(b.data);
+    return (db?db.getTime():0)-(da?da.getTime():0);
+  });
+  // Agrupa por ano-mês
+  const grupos={};
+  gastos.forEach(g=>{
+    const dt=ddmmToDate(g.data);
+    const k=dt?`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`:'sem-data';
+    (grupos[k]=grupos[k]||[]).push(g);
+  });
+  const meses=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const totalGeral=gastos.reduce((s,g)=>s+Number(g.valor||0),0);
+
+  wrap.innerHTML=`
+    <div style="background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div><b style="color:var(--tx)">${gastos.length}</b> <span class="muted" style="font-size:12.5px">gastos no total</span></div>
+      <div style="font-size:16px;font-weight:700;color:var(--tx)">${fmt(totalGeral)}</div>
+    </div>
+    ${Object.entries(grupos).sort((a,b)=>b[0].localeCompare(a[0])).map(([k,items])=>{
+      const [y,m]=k.split('-');
+      const label=k==='sem-data'?'Sem data':`${meses[Number(m)-1]||m}/${y}`;
+      const subtot=items.reduce((s,g)=>s+Number(g.valor||0),0);
+      return `<div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s2);border-radius:var(--r) var(--r) 0 0;border:1px solid var(--b1);border-bottom:none">
+          <b style="color:var(--tx);font-size:13px">${label}</b>
+          <span style="font-size:13px;font-weight:700;color:var(--tx)">${fmt(subtot)} · ${items.length} reg</span>
+        </div>
+        <table class="tbl" style="margin:0;border-top-left-radius:0;border-top-right-radius:0">
+          <thead><tr>
+            <th style="text-align:left">Data</th>
+            <th style="text-align:left">Plataforma</th>
+            <th style="text-align:left">Campanha</th>
+            <th class="right">Investido</th>
+            <th class="right">Pedidos</th>
+            <th class="right" style="width:50px"></th>
+          </tr></thead>
+          <tbody>
+            ${items.map(g=>{
+              const idx=DB.gastos.indexOf(g);
+              return `<tr>
+                <td style="color:var(--t2)">${g.data}</td>
+                <td>${g.plat||'—'}</td>
+                <td class="muted" style="font-size:12px">${g.campanha||'—'}</td>
+                <td class="right" style="color:var(--tx);font-weight:600">${fmt(g.valor)}</td>
+                <td class="right" style="color:var(--t2)">${g.leads||0}</td>
+                <td class="right">
+                  <button class="btn-act btn-act-gh btn-act-icon" onclick="closeM('m-all-gastos');editGasto(${idx})" title="Editar">✎</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }).join('')}
+  `;
+  openM('m-all-gastos');
+}
+
 // Pull manual forçado — usado pelo botão "🔄 Sincronizar agora" na página Tráfego
 async function trafegoForceSync(){
   if(!apiEnabled()||!apiToken()){toast('Backend não configurado','err');return;}
@@ -8409,7 +8492,6 @@ function renderTrafego(){
         <div style="text-align:right" title="Soma de TODOS os gastos registrados — incluindo períodos fora do filtro atual da Dash">
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Investido (total)</div>
           <div style="font-size:15px;font-weight:700;color:var(--t2);font-variant-numeric:tabular-nums">${fmt(gastoTrafegoTotal)}</div>
-          <div class="muted" style="font-size:10px">acumulado, sem filtro</div>
         </div>
         <div style="text-align:right;padding-left:14px;border-left:1px solid var(--b1)">
           <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700">Saldo disponível</div>
@@ -8456,7 +8538,20 @@ function renderTrafego(){
     }).join('')||'<div class="muted">Sem dados de plataforma no período.</div>'}
   </div>
 
-  <div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  ${(()=>{
+    const totalDB=(DB.gastos||[]).length;
+    const foraFiltro=totalDB-gastos.length;
+    const somaFora=(DB.gastos||[]).reduce((s,g)=>s+Number(g.valor||0),0) - tot;
+    if(foraFiltro<=0)return '';
+    return `<div style="background:rgba(245,158,11,.06);border:1px solid var(--am);border-radius:var(--r);padding:10px 13px;margin-top:10px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--t2);flex-wrap:wrap">
+      <span style="font-size:16px">ℹ</span>
+      <span style="flex:1">
+        <b style="color:var(--am)">${foraFiltro} gasto${foraFiltro>1?'s':''}</b> totalizando <b style="color:var(--tx)">${fmt(somaFora)}</b> ${foraFiltro>1?'estão':'está'} fora do período selecionado.
+      </span>
+      <button class="btn btn-gh btn-sm" onclick="openAllGastosModal()">Ver todos</button>
+    </div>`;
+  })()}
+  <div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px">
     <span>Histórico de registros</span>
     <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">${gastos.length} no período · ${(DB.gastos||[]).length} no total</span>
     <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor (caso outro dispositivo tenha cadastrado gastos)">🔄 Sincronizar agora</button>
