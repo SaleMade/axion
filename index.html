@@ -1803,7 +1803,7 @@ h1 em{font-weight:700}
 <!-- ═══ MODAL: INVESTIMENTO ═══ -->
 <div class="overlay" id="m-inv">
   <div class="modal sm">
-    <div class="m-h"><span class="mt">+ Investimento</span><button class="m-x" onclick="closeM('m-inv')">×</button></div>
+    <div class="m-h"><span class="mt" id="m-inv-title">+ Investimento</span><button class="m-x" onclick="closeM('m-inv')">×</button></div>
     <div class="m-b">
       <!-- Aviso: investimentos ≠ tráfego pago (Meta/Google/TikTok) -->
       <div style="background:rgba(59,130,246,.06);border:1px solid var(--bld);border-radius:var(--r);padding:10px 13px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start;font-size:12.5px">
@@ -1843,7 +1843,7 @@ h1 em{font-weight:700}
       </div>
       <div class="row" style="justify-content:flex-end">
         <button class="btn btn-gh" onclick="closeM('m-inv')">Cancelar</button>
-        <button class="btn btn-bl" onclick="addInvest()">Adicionar</button>
+        <button class="btn btn-bl" id="m-inv-save" onclick="saveInvest()">Adicionar</button>
       </div>
     </div>
   </div>
@@ -7398,7 +7398,10 @@ function renderInvest(){
               <td><span class="tbl-st" style="background:${ct.cor}14;color:var(--t2)">${ct.icon} ${ct.nome}</span></td>
               <td>${tipoBadge}</td>
               <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(i.vl)}</td>
-              <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button></td>
+              <td class="right" style="white-space:nowrap">
+                <button class="btn-act btn-act-gh btn-act-icon" onclick="editInvest(${i.id})" title="Editar">✎</button>
+                <button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button>
+              </td>
             </tr>`;
           }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
           <tr style="background:var(--s1);font-weight:700">
@@ -8379,11 +8382,31 @@ function updPro(){
 }
 
 // ─── Categorias custom ───
+// Estado: null = criando · número = editando esse id
+let _editingInvestId=null;
+
 function openInvest(){
+  _editingInvestId=null;
   selOpts($('inv-cat'),DB.invCats.map(c=>({v:c.id,l:c.icon+' '+c.nome})));
   $('inv-desc').value='';$('inv-vl').value='';
   setInvType('gasto'); // default: gasto desembolsado
   if($('inv-dt'))$('inv-dt').value=new Date().toISOString().split('T')[0];
+  $('m-inv-title').textContent='+ Investimento';
+  $('m-inv-save').textContent='Adicionar';
+  openM('m-inv');
+}
+
+// Abre o modal preenchido pra editar um investimento existente
+function editInvest(id){
+  const i=DB.invest.find(x=>x.id===id);if(!i)return;
+  _editingInvestId=id;
+  selOpts($('inv-cat'),DB.invCats.map(c=>({v:c.id,l:c.icon+' '+c.nome})),i.cat);
+  $('inv-desc').value=i.desc||'';
+  $('inv-vl').value=i.vl||'';
+  $('inv-dt').value=i.dt||new Date().toISOString().split('T')[0];
+  setInvType(i.is_budget?'budget':'gasto');
+  $('m-inv-title').textContent='Editar investimento';
+  $('m-inv-save').textContent='Salvar';
   openM('m-inv');
 }
 
@@ -8425,19 +8448,33 @@ function delInvCat(id){
   if(DB.invest.some(i=>i.cat===id)){toast('Categoria em uso, mova os investimentos primeiro','err');return}
   DB.invCats=DB.invCats.filter(c=>c.id!==id);persist();renderInvCats();
 }
-function addInvest(){
+// Cria OU atualiza investimento dependendo de _editingInvestId
+function saveInvest(){
   const desc=$('inv-desc').value.trim();
   if(!desc){toast('Descrição obrigatória','err');return}
   const isBudget=$('inv-is-budget').value==='1';
-  DB.invest.unshift({id:DB.nextInv++,cat:$('inv-cat').value,desc,
+  const payload={cat:$('inv-cat').value,desc,
     vl:Number($('inv-vl').value)||0,dt:$('inv-dt').value,
-    is_budget:isBudget});
+    is_budget:isBudget};
+  let msgVerbo;
+  if(_editingInvestId!==null){
+    const idx=DB.invest.findIndex(x=>x.id===_editingInvestId);
+    if(idx>=0){
+      DB.invest[idx]={...DB.invest[idx],...payload};
+      msgVerbo='atualizado';
+    }
+  } else {
+    DB.invest.unshift({id:DB.nextInv++,...payload});
+    msgVerbo=isBudget?'Budget reservado':'Gasto registrado';
+  }
+  _editingInvestId=null;
   closeM('m-inv');refreshUI();
-  toast((isBudget?'Budget reservado':'Gasto registrado')+' · sincronizando...','ok');
-  // Push imediato — investimentos são dados financeiros críticos
+  toast(msgVerbo+' · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado com servidor','ok'))
     .catch(e=>console.warn('Sync falhou:',e));
 }
+// Compat: alguns lugares ainda chamam addInvest
+const addInvest=saveInvest;
 async function delInvest(id){
   const i=DB.invest.find(x=>x.id===id);if(!i)return;
   if(!await axConfirm(`Excluir o investimento <b>${i.desc}</b> de <b>${fmt(i.vl)}</b>?`,{okLabel:'Excluir'}))return;
