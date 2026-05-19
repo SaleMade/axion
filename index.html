@@ -482,8 +482,22 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .cont-at-numbers{padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
 .cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
   background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
-  border-radius:6px;transition:all .12s}
+  border-radius:6px;transition:all .12s;cursor:grab}
 .cont-mini-chip:hover{border-color:var(--b2);background:var(--s2)}
+.cont-mini-chip:active{cursor:grabbing}
+.cont-mini-chip.dragging{opacity:.4;transform:scale(.95)}
+.cont-mini-chip-drag{color:var(--t4);font-size:14px;line-height:1;letter-spacing:-2px;cursor:grab;user-select:none;flex-shrink:0}
+.cont-mini-chip:hover .cont-mini-chip-drag{color:var(--t2)}
+/* Highlight no bloco do atendente quando arrastando chip por cima */
+.cont-at-block.drop-target{background:var(--s3);outline:2px dashed var(--bl);outline-offset:-2px}
+.cont-at-block.drop-target .cont-at-h{background:rgba(59,130,246,.08)}
+/* Itens do picker de chips */
+.mcp-item{display:flex;align-items:center;gap:12px;padding:10px 12px;
+  background:var(--s3);border:1px solid var(--b1);border-radius:6px;
+  cursor:pointer;transition:all .12s}
+.mcp-item:hover{border-color:var(--bl);background:var(--s2)}
+.mcp-item-already{opacity:.55;cursor:default}
+.mcp-item-already:hover{border-color:var(--b1);background:var(--s3)}
 /* Multi-pick de WhatsApps/atendentes no modal de gasto */
 .mg-chip-pick label{display:flex;align-items:center;gap:8px;padding:6px 8px;
   border-radius:5px;cursor:pointer;transition:background .1s;font-size:12.5px;color:var(--t2)}
@@ -1772,6 +1786,23 @@ h1 em{font-weight:700}
         <button class="btn btn-gh" onclick="closeM('m-chip-new')">Cancelar</button>
         <button class="btn btn-bl" onclick="addChip()">Cadastrar</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: PICKER DE CHIP (atribuir existente a atendente) ═══ -->
+<div class="overlay" id="m-chip-picker">
+  <div class="modal">
+    <div class="m-h">
+      <span class="mt" id="mcp-title">Atribuir número</span>
+      <button class="m-x" onclick="closeM('m-chip-picker')">×</button>
+    </div>
+    <div class="m-b">
+      <input id="mcp-q" placeholder="🔍 Buscar número, atendente atual ou modelo..."
+        oninput="renderChipPickerList()"
+        style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-family:inherit;font-size:13px;outline:none">
+      <p class="muted" style="font-size:11.5px;margin-bottom:8px">Clique no número que quer atribuir. Pra criar um chip novo, use "+ Novo Chip" no topo da página.</p>
+      <div id="mcp-list" style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto"></div>
     </div>
   </div>
 </div>
@@ -6136,20 +6167,24 @@ function _renderAtendenteBlock(at, chips){
   const nome=at?at.name:'⚠ Sem atendente atribuído';
   const role=at?at.role:'';
   const avatarHTML=at?avatar(at,{size:32,fontSize:12}):`<div class="sav" style="width:32px;height:32px;background:var(--s4);color:var(--t4);font-size:14px">?</div>`;
+  const dropTargetId=at?at.id:'__sem__';
 
-  return `<div class="cont-at-block">
+  return `<div class="cont-at-block"
+      ondragover="_chipDragOver(event)"
+      ondragleave="_chipDragLeave(event)"
+      ondrop="_chipDrop(event,'${dropTargetId}')">
     <div class="cont-at-h">
       ${avatarHTML}
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600;color:var(--tx)">${nome}</div>
         <div style="font-size:11.5px;color:var(--t3);text-transform:capitalize">${role||'—'} · ${chips.length} número${chips.length!==1?'s':''}</div>
       </div>
-      ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipForAt('${at.id}')" title="Adicionar número pra este atendente">+ Número</button>`:''}
+      ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipPickerFor('${at.id}')" title="Atribuir número existente pra ${at.name}">+ Número</button>`:''}
     </div>
     <div class="cont-at-numbers">
       ${chips.length
         ? chips.map(c=>_renderMiniChip(c)).join('')
-        : '<div class="muted" style="font-size:12px;padding:12px;grid-column:1/-1;text-align:center">Sem números designados</div>'}
+        : '<div class="muted" style="font-size:12px;padding:12px;grid-column:1/-1;text-align:center">Arraste números aqui ou clique em "+ Número"</div>'}
     </div>
   </div>`;
 }
@@ -6158,7 +6193,11 @@ function _renderMiniChip(c){
   const wa=getWaStatus(c);
   const list=getWaStatusList();
   const info=getWaStatusInfo(wa)||list[0];
-  return `<div class="cont-mini-chip" style="border-left-color:${info?.color||'#64748b'}">
+  return `<div class="cont-mini-chip" draggable="true"
+      ondragstart="_chipDragStart(event,${c.id})"
+      ondragend="_chipDragEnd(event)"
+      style="border-left-color:${info?.color||'#64748b'}">
+    <span class="cont-mini-chip-drag" title="Arraste pra outro atendente">⋮⋮</span>
     <div style="flex:1;min-width:0">
       <div style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em">${c.num}</div>
       <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
@@ -6176,14 +6215,111 @@ function _renderMiniChip(c){
   </div>`;
 }
 
-// Atalho: abrir modal de novo chip já com o atendente pré-selecionado
+// ─── Drag & drop de chips entre atendentes ───
+let _draggingChipId=null;
+function _chipDragStart(ev,chipId){
+  _draggingChipId=chipId;
+  ev.dataTransfer.effectAllowed='move';
+  ev.dataTransfer.setData('text/plain',String(chipId));
+  ev.currentTarget.classList.add('dragging');
+}
+function _chipDragEnd(ev){
+  ev.currentTarget.classList.remove('dragging');
+  _draggingChipId=null;
+  // Remove highlights de qualquer drop target
+  document.querySelectorAll('.cont-at-block.drop-target').forEach(el=>el.classList.remove('drop-target'));
+}
+function _chipDragOver(ev){
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect='move';
+  ev.currentTarget.classList.add('drop-target');
+}
+function _chipDragLeave(ev){
+  // Só remove se realmente saiu (não pra filhos)
+  if(!ev.currentTarget.contains(ev.relatedTarget))ev.currentTarget.classList.remove('drop-target');
+}
+function _chipDrop(ev,targetAtId){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drop-target');
+  const chipId=_draggingChipId || Number(ev.dataTransfer.getData('text/plain'));
+  if(!chipId)return;
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  // Se já tá com esse atendente, nada
+  if(c.at===targetAtId)return;
+  const novoAt=targetAtId==='__sem__'?null:targetAtId;
+  const novoNome=novoAt?(getTeam(novoAt)?.name||novoAt):'sem atendente';
+  c.at=novoAt;
+  renderChipsByAtendente();
+  toast(`📱 ${c.num} agora é de ${novoNome} · sincronizando...`,'ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+}
+
+// Atalho legado — mantido pra compat, redirecionado pro picker
 function openChipForAt(atId){
-  openM('m-chip-new');
-  // Pré-seleciona o atendente no select do modal de novo chip
-  setTimeout(()=>{
-    const sel=$('nc-at');
-    if(sel)sel.value=atId;
-  },30);
+  openChipPickerFor(atId);
+}
+
+// Abre modal pra ESCOLHER um chip já cadastrado e atribuir ao atendente
+// (em vez de criar um novo do zero — pra criar usa "+ Novo Chip" no topo)
+let _chipPickerTargetAtId=null;
+function openChipPickerFor(atId){
+  _chipPickerTargetAtId=atId;
+  const at=getTeam(atId);
+  const titulo=at?`Atribuir número pra ${at.name}`:'Atribuir número';
+  $('mcp-title').textContent=titulo;
+  renderChipPickerList();
+  openM('m-chip-picker');
+}
+// Renderiza lista de chips com filtro de busca
+function renderChipPickerList(){
+  const wrap=$('mcp-list');if(!wrap)return;
+  const q=($('mcp-q')?.value||'').toLowerCase().trim();
+  const targetAt=_chipPickerTargetAtId;
+  // Lista: todos os chips. Marca quem já tá com outro atendente.
+  let chips=DB.chips||[];
+  if(q){
+    chips=chips.filter(c=>{
+      const at=getTeam(c.at);
+      return (c.num||'').includes(q) || (at?.name||'').toLowerCase().includes(q) || (c.mod||'').toLowerCase().includes(q);
+    });
+  }
+  // Ordena: sem atendente primeiro, depois alfabético do número
+  chips=chips.slice().sort((a,b)=>{
+    const aFree=!a.at?0:1, bFree=!b.at?0:1;
+    if(aFree!==bFree)return aFree-bFree;
+    return (a.num||'').localeCompare(b.num||'');
+  });
+  if(!chips.length){
+    wrap.innerHTML=`<div class="muted" style="text-align:center;padding:24px;font-size:13px">Nenhum chip ${q?'encontrado':'cadastrado'}. ${q?'':'Use "+ Novo Chip" no topo da página pra criar.'}</div>`;
+    return;
+  }
+  wrap.innerHTML=chips.map(c=>{
+    const at=getTeam(c.at);
+    const jaTem=c.at===targetAt;
+    const wa=getWaStatus(c);
+    const info=getWaStatusInfo(wa);
+    return `<div class="mcp-item ${jaTem?'mcp-item-already':''}" onclick="${jaTem?'':`assignChipToTarget(${c.id})`}">
+      <div style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx)">${c.num}</div>
+      <div style="flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${info?`<span style="font-size:10.5px;color:${info.color}">${info.ic||''} ${info.label}</span>`:''}
+        ${at
+          ? `<span style="font-size:11.5px;color:var(--t3)">→ ${at.name}${jaTem?' <b style="color:var(--gr)">(atual)</b>':''}</span>`
+          : `<span style="font-size:11.5px;color:var(--am)">sem atendente</span>`}
+      </div>
+      ${jaTem?'<span style="font-size:11px;color:var(--gr)">✓</span>':'<span style="font-size:13px;color:var(--bl2)">→</span>'}
+    </div>`;
+  }).join('');
+}
+function assignChipToTarget(chipId){
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  if(c.at===_chipPickerTargetAtId){closeM('m-chip-picker');return;}
+  const novoAt=_chipPickerTargetAtId;
+  const novoNome=getTeam(novoAt)?.name||'atendente';
+  c.at=novoAt;
+  closeM('m-chip-picker');
+  renderChipsByAtendente();
+  toast(`📱 ${c.num} atribuído pra ${novoNome} · sincronizando...`,'ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 // ─── Aquecimento automático: dia derivado do tempo desde warm_start ───
