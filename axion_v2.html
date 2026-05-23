@@ -837,12 +837,25 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .lead-grid-3{display:grid;grid-template-columns:1.05fr 1fr .9fr;gap:32px;margin-top:20px}
 @media(max-width:1000px){.lead-grid-3{grid-template-columns:1fr;gap:24px}}
 .lead-col{display:flex;flex-direction:column;gap:24px}
-.info-section{}
-.info-title{font-size:11px;font-weight:700;color:var(--t3);
-  text-transform:uppercase;letter-spacing:.09em;margin-bottom:14px;
+/* Card pra cada seção do modal de detalhes (Cliente / Endereço / Pagamento /
+   Tags / Comentários) — fundo do .s2, esmaecer interno bem sutil, separação
+   clara entre blocos. Antes era flat, dava sensação de tudo amontoado. */
+.info-section{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);
+  padding:16px 18px;margin-bottom:14px;position:relative;overflow:hidden}
+.info-section::before{content:'';position:absolute;top:-40px;right:-40px;
+  width:160px;height:160px;border-radius:50%;
+  background:var(--bl);filter:blur(60px);opacity:.07;pointer-events:none}
+.info-section>*{position:relative;z-index:1}
+.info-title{display:flex;align-items:center;gap:8px;
+  font-size:11px;font-weight:700;color:var(--t3);
+  text-transform:uppercase;letter-spacing:.09em;margin-bottom:12px;
   padding-bottom:10px;border-bottom:1px solid var(--b1)}
-.info-row{display:flex;align-items:flex-start;gap:12px;padding:9px 0}
-.info-ic{width:18px;color:var(--t4);font-size:14px;margin-top:2px;flex-shrink:0;text-align:center;line-height:1}
+.info-title svg{color:var(--bl2);opacity:.9}
+.info-row{display:flex;align-items:flex-start;gap:12px;padding:8px 0}
+/* Ícones por linha REMOVIDOS — o ícone do título da seção basta.
+   Antes tinha um emoji em cada campo (📍📍📍📍📍 no endereço, etc) que
+   poluía visualmente sem agregar informação. */
+.info-ic{display:none}
 .info-c{flex:1;min-width:0}
 .info-lbl{font-size:10.5px;color:var(--t4);font-weight:500;margin-bottom:1px;letter-spacing:.02em}
 .info-val{font-size:15px;color:var(--tx);font-weight:500;
@@ -1565,30 +1578,25 @@ h1 em{font-weight:700}
 <div class="overlay" id="m-lead-detail">
   <div class="modal xl">
     <div class="m-h">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="mt">Detalhes do <em style="font-style:normal;color:var(--bl2)" id="mld-title">Pedido</em></span>
-        <button id="mld-wa-btn" onclick="openLeadWA()" title="Abrir WhatsApp do cliente"
-          style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.35);
-            padding:6px 11px;border-radius:7px;cursor:pointer;font-weight:600;font-size:12.5px;
-            display:inline-flex;align-items:center;gap:5px;transition:all .15s">
-          💬 WhatsApp
-        </button>
         <span class="mld-status-pill" id="mld-status">—</span>
       </div>
       <div class="m-actions">
-        <button class="btn btn-gh btn-sm" onclick="copyLeadDetails()" title="Copiar dados do cliente formatados pro WhatsApp">📋 Copiar dados</button>
-        <button class="btn btn-bl btn-sm" onclick="saveLead()">Salvar</button>
+        <button class="btn btn-gh btn-sm" onclick="copyLeadDetails()" title="Copiar dados do cliente formatados pro WhatsApp"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Copiar dados</button>
+        <button class="btn btn-gr btn-sm" onclick="saveLead()">Salvar</button>
         <button class="btn btn-re btn-sm" id="mld-del" onclick="deleteLead()" style="margin-left:14px">Excluir</button>
         <button class="m-x" onclick="closeM('m-lead-detail')">×</button>
       </div>
     </div>
     <div class="m-b">
 
-      <!-- Etapa atual + quick-move pills -->
-      <div class="mld-stage-bar">
-        <span class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em">Etapa atual</span>
+      <!-- Etapa atual + quick-move pills — removidos da UI por pedido
+           do usuário (poluía visualmente). Elementos preservados como
+           hidden pra não quebrar o JS que ainda referencia esses IDs
+           pra atualizar o status interno do lead. -->
+      <div style="display:none">
         <span class="mld-stage-cur" id="mld-stage-cur">—</span>
-        <span style="color:var(--t4);font-size:12px;margin:0 4px">→ mover para:</span>
         <div class="mld-stage-pills" id="mld-stage-pills"></div>
       </div>
 
@@ -1597,51 +1605,59 @@ h1 em{font-weight:700}
         <div class="lead-col">
 
           <div class="info-section">
-            <div class="info-title">Cliente</div>
-            <div class="info-row"><span class="info-ic">👤</span><div class="info-c">
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Cliente</div>
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Nome</div>
               <input class="info-val" id="mld-nome">
             </div></div>
-            <div class="info-row"><span class="info-ic">🪪</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">CPF</div>
               <input class="info-val" id="mld-cpf" placeholder="000.000.000-00" oninput="maskCPF(this)" maxlength="14" inputmode="numeric">
             </div></div>
-            <div class="info-row"><span class="info-ic">📞</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">WhatsApp</div>
-              <input class="info-val" id="mld-wa" maxlength="15" oninput="maskWA(this)" inputmode="numeric">
+              <div style="display:flex;align-items:center;gap:8px">
+                <input class="info-val" id="mld-wa" maxlength="15" oninput="maskWA(this);updateLeadWaBtn()" inputmode="numeric" style="flex:1">
+                <button id="mld-wa-inline-btn" onclick="openLeadWA()" title="Abrir conversa no WhatsApp"
+                  style="background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.35);
+                    width:30px;height:30px;border-radius:7px;cursor:pointer;flex-shrink:0;
+                    display:inline-flex;align-items:center;justify-content:center;transition:all .15s">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>
+                </button>
+              </div>
             </div></div>
-            <div class="info-row"><span class="info-ic">📧</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">E-mail</div>
               <input class="info-val" id="mld-email" type="email" placeholder="—">
             </div></div>
-            <div class="info-row"><span class="info-ic">📡</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Origem</div>
               <select class="info-val" id="mld-orig"></select>
             </div></div>
           </div>
 
           <div class="info-section">
-            <div class="info-title">Endereço</div>
-            <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 7-8 12-8 12s-8-5-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></svg>Endereço</div>
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">CEP <span class="muted" style="font-size:10px;font-weight:500">(autopreenche)</span></div>
               <input class="info-val" id="mld-cep" placeholder="00000-000" maxlength="9" inputmode="numeric" oninput="maskCEP(this);if(this.value.replace(/\\D/g,'').length===8)lookupCEP()" onblur="lookupCEP()">
             </div></div>
-            <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Rua / Número</div>
               <div style="display:flex;gap:8px">
                 <input class="info-val" id="mld-end" style="flex:1" placeholder="Rua">
                 <input class="info-val" id="mld-num" style="width:70px" placeholder="Nº">
               </div>
             </div></div>
-            <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Complemento</div>
               <input class="info-val" id="mld-comp" placeholder="—">
             </div></div>
-            <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Bairro</div>
               <input class="info-val" id="mld-bairro">
             </div></div>
-            <div class="info-row"><span class="info-ic">📍</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Cidade / UF</div>
               <div style="display:flex;gap:8px">
                 <input class="info-val" id="mld-cidade" style="flex:1" placeholder="Cidade">
@@ -1651,28 +1667,28 @@ h1 em{font-weight:700}
           </div>
 
           <div class="info-section">
-            <div class="info-title">Pedido</div>
-            <div class="info-row"><span class="info-ic">📦</span><div class="info-c">
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Pedido</div>
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Produto / Variação</div>
               <select class="info-val" id="mld-prod-sel" onchange="onProdSelectChange()"></select>
             </div></div>
-            <div class="info-row"><span class="info-ic">💊</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Tratamento</div>
               <input class="info-val" id="mld-trat" placeholder="Ex: 3 meses">
             </div></div>
-            <div class="info-row"><span class="info-ic">👤</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Atendente</div>
               <select class="info-val" id="mld-at"></select>
             </div></div>
-            <div class="info-row"><span class="info-ic">💰</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Valor total</div>
               <input class="info-val info-green" id="mld-vl" type="number" step="0.01">
             </div></div>
-            <div class="info-row"><span class="info-ic">%</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Comissão (%)</div>
               <input class="info-val" id="mld-com-pct" type="number" step="0.5">
             </div></div>
-            <div class="info-row"><span class="info-ic">📅</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Modalidade</div>
               <select class="info-val" id="mld-mod" onchange="autoFillCheckoutLink()">
                 <option value="antecipado">Antecipado</option>
@@ -1686,7 +1702,7 @@ h1 em{font-weight:700}
         <div class="lead-col">
 
           <div class="info-section">
-            <div class="info-title">Pagamento</div>
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>Pagamento</div>
             <div class="info-row" style="margin-bottom:10px"><div class="info-c">
               <div class="info-lbl" style="margin-bottom:6px">Link de checkout</div>
               <div style="display:flex;gap:6px;align-items:center">
@@ -1698,7 +1714,7 @@ h1 em{font-weight:700}
               </div>
             </div></div>
 
-            <div class="info-row"><span class="info-ic">📦</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Código de rastreio</div>
               <div style="display:flex;align-items:center;gap:8px">
                 <input class="info-val info-green-mono" id="mld-track" placeholder="AN000000000BR" style="flex:1">
@@ -1707,12 +1723,12 @@ h1 em{font-weight:700}
               </div>
             </div></div>
 
-            <div class="info-row"><span class="info-ic">💳</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Método de pagamento</div>
               <select class="info-val" id="mld-pg"></select>
             </div></div>
 
-            <div class="info-row"><span class="info-ic">✓</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Status do pagamento</div>
               <select class="info-val" id="mld-spg">
                 <option>Pago</option><option>Pendente</option><option>Recusado</option>
@@ -1721,16 +1737,16 @@ h1 em{font-weight:700}
           </div>
 
           <div class="info-section">
-            <div class="info-title">Tags & observações</div>
-            <div class="info-row"><span class="info-ic">🏷</span><div class="info-c">
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>Tags & observações</div>
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl" style="display:flex;align-items:center;justify-content:space-between">
                 <span>Tags</span>
-                <a onclick="openTagsManager()" style="font-size:11px;color:var(--bl);cursor:pointer;font-weight:600">⚙ Gerenciar tags</a>
+                <a onclick="openTagsManager()" style="font-size:11px;color:var(--bl2);cursor:pointer;font-weight:600">Gerenciar tags</a>
               </div>
               <div id="mld-tags-picker" class="tags-picker"></div>
               <input id="mld-tags" type="hidden">
             </div></div>
-            <div class="info-row"><span class="info-ic">📝</span><div class="info-c">
+            <div class="info-row"><div class="info-c">
               <div class="info-lbl">Observações</div>
               <textarea class="info-val" id="mld-obs" rows="3" placeholder="—"></textarea>
             </div></div>
@@ -1746,7 +1762,7 @@ h1 em{font-weight:700}
           <input type="hidden" id="mld-agend">
 
           <div class="info-section">
-            <div class="info-title">Comentários & Anexos <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>Comentários & Anexos <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
             <div id="mld-coms" class="com-list"></div>
             <div class="com-pretty">
               <label class="com-icon" title="Anexar imagem (print do WhatsApp)">
@@ -1767,7 +1783,7 @@ h1 em{font-weight:700}
 
       <!-- ─── Histórico de Status (full width) ─── -->
       <div class="info-section" style="margin-top:18px">
-        <div class="info-title">Histórico de status</div>
+        <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Histórico de status</div>
         <div class="hist-list" id="mld-hist"></div>
       </div>
 
@@ -3164,8 +3180,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.9.0';
-const APP_LAST_CHANGE = 'Redesign passada 4 — branco mais suave (off-white), botão verde com texto escuro pra legibilidade, subtítulos do Design & Copy limpos, resumos dos selects escondidos (tooltip no hover continua), neon das colunas do Kanban Criativos removido';
+const APP_VERSION = '2.10.0';
+const APP_LAST_CHANGE = 'Redesign modal Detalhes do Lead — seções em cards separados com esmaecer, ícones SVG nos títulos (1 por seção), ícones por linha removidos, botão WhatsApp movido pra perto do número, barra Etapa Atual removida, Salvar verde legível, aviso "sem comprovante" neutro';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5461,6 +5477,7 @@ function _openLeadDetailUnsafe(lead){
   $('mld-nome').value=lead.nome||'';
   $('mld-cpf').value=lead.cpf||'';
   $('mld-wa').value=lead.wa||'';
+  updateLeadWaBtn();  // mostra/esconde o botãozinho de WA com base no valor
   $('mld-email').value=lead.email||'';
   selOpts($('mld-orig'),origOpts(),lead.orig||'Meta');
   // Inclui opção "Sem atendente" + atendente arquivado (se o lead já tava
@@ -5630,12 +5647,14 @@ function renderComments(lead){
   } else if(lead.mod==='entrega'){
     // Aviso: pedido Entrega que não tem comprovante (pode ter sido criado antes
     // da feature, ou criado em modo Antecipado e movido pra entrega)
-    orderProofHTML=`<div class="com-item" style="border-color:var(--am);background:rgba(245,158,11,.05);border-style:dashed">
+    // Aviso neutro — antes era laranja chamativo. Não é erro nem warning
+    // crítico, é só uma nota informativa, então fica mais sóbrio.
+    orderProofHTML=`<div class="com-item" style="border-color:var(--b2);background:var(--s3);border-style:dashed">
       <div class="com-h">
-        <span class="com-by" style="color:var(--am)">⚠ Sem comprovante de criação</span>
+        <span class="com-by" style="color:var(--t3)">Sem comprovante de criação</span>
         <span class="com-time">Entrega</span>
       </div>
-      <div class="com-tx" style="font-size:12px;color:var(--t3)">Pedido Entrega sem print do WhatsApp anexado. Pode adicionar manualmente abaixo via 📷</div>
+      <div class="com-tx" style="font-size:12px;color:var(--t4)">Pedido Entrega sem print do WhatsApp anexado. Pode adicionar manualmente abaixo.</div>
     </div>`;
   }
 
@@ -5676,13 +5695,27 @@ function addComment(){
   renderComments(lead);persist();toast('Comentário adicionado','ok');
 }
 
-// Abre WhatsApp do lead atual (formato wa.me com DDI 55 + número limpo)
+// Abre WhatsApp do lead atual (formato wa.me com DDI 55 + número limpo).
+// Usa o valor ATUAL do input (mld-wa) — assim funciona mesmo se o user
+// acabou de digitar o número e ainda não salvou.
 function openLeadWA(){
-  const lead=DB.leads.find(l=>l.id===editingLeadId);if(!lead){toast('Lead não encontrado','err');return}
-  const num=(lead.wa||'').replace(/\D/g,'');
-  if(!num){toast('Lead sem WhatsApp cadastrado','err');return}
+  const inputVal=document.getElementById('mld-wa')?.value||'';
+  const lead=DB.leads.find(l=>l.id===editingLeadId);
+  const raw=inputVal||(lead?.wa||'');
+  const num=raw.replace(/\D/g,'');
+  if(!num){toast('Sem WhatsApp cadastrado','err');return}
   const ddi=num.startsWith('55')?'':'55';
   window.open(`https://wa.me/${ddi}${num}`,'_blank');
+}
+
+// Mostra/esconde o botãozinho de WhatsApp ao lado do input com base
+// no estado: aparece só se tiver número digitado.
+function updateLeadWaBtn(){
+  const input=document.getElementById('mld-wa');
+  const btn=document.getElementById('mld-wa-inline-btn');
+  if(!input||!btn)return;
+  const hasNum=(input.value||'').replace(/\D/g,'').length>=10;
+  btn.style.display=hasNum?'inline-flex':'none';
 }
 
 // Upload de comprovante (imagem ou áudio) nos comentários do lead.
