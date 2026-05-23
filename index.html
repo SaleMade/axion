@@ -6520,10 +6520,28 @@ function computeWarmDay(c){
 // Auto-promove chip pra "ativo" se aquecimento já completou 7+ dias.
 // Chamado em qualquer renderização da página de Contingência.
 function autoPromoteWarmedChips(){
-  const chips=(DB.chips||[]).filter(c=>c.st==='aquecimento'&&c.warm_start);
+  const chips=(DB.chips||[]).filter(c=>c.st==='aquecimento');
   let promovidos=0;
   chips.forEach(c=>{
-    if(computeWarmDay(c)>=7){
+    // Caso 1: tem warm_start → calcula dias decorridos
+    if(c.warm_start){
+      if(computeWarmDay(c)>=7){c.st='ativo';c.dia=7;promovidos++;}
+      return;
+    }
+    // Caso 2: chip antigo sem warm_start — tenta inferir idade por outras pistas
+    // Se tem `rec` (data de recarga) e essa data foi há 7+ dias, promove (assume aquecido)
+    // Se não tem nada, assume que tá há muito tempo no banco e promove direto
+    let antigoDeMais=true;
+    if(c.rec){
+      try{
+        const recDt=new Date(c.rec+'T00:00:00');
+        const hoje=new Date();hoje.setHours(0,0,0,0);
+        const dias=Math.floor((hoje-recDt)/86400000);
+        antigoDeMais=dias>=7;
+      }catch(_){}
+    }
+    // Sem warm_start E sem rec recente = chip está há tempo no sistema, promove
+    if(antigoDeMais){
       c.st='ativo';
       c.dia=7;
       promovidos++;
