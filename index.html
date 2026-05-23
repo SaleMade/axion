@@ -491,27 +491,34 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 #contingencia-pg details[open] > summary > .cont-det-arrow{transform:rotate(90deg)}
 /* ─── Kanban WhatsApp (CRM-style com colunas pra pools + atendentes) ─── */
 .wk-board{display:flex;gap:10px;overflow-x:auto;padding:4px 4px 12px;align-items:flex-start}
-.wk-col{flex:0 0 260px;min-width:260px;max-width:260px;background:var(--s2);border:1px solid var(--b1);
-  border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:600px}
-.wk-col.wk-col-pool{flex:0 0 280px;min-width:280px;max-width:280px}
+.wk-col{flex:0 0 290px;min-width:290px;max-width:290px;background:var(--s2);border:1px solid var(--b1);
+  border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:640px}
+.wk-col.wk-col-pool{flex:0 0 310px;min-width:310px;max-width:310px}
 .wk-col.drop-target{outline:2px dashed var(--bl);outline-offset:-2px;background:var(--s3)}
 .wk-col-h{padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
   background:var(--s3);border-bottom:1px solid var(--b1)}
 .wk-col-name{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx)}
 .wk-col-cnt{background:var(--s4);font-size:11px;font-weight:600;color:var(--t2);padding:2px 7px;border-radius:9px;font-variant-numeric:tabular-nums}
 .wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px}
-.wk-chip{background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
-  border-radius:6px;padding:9px 11px;cursor:grab;transition:all .12s;position:relative;display:flex;flex-direction:column;gap:6px}
-.wk-chip:hover{border-color:var(--b3);background:var(--s2)}
+/* Cards no estilo CRM Pipeline — sem borda lateral, fundo neutro, hover sutil */
+.wk-chip{background:var(--s2);border:1px solid var(--b1);
+  border-radius:var(--r);padding:12px 13px;cursor:grab;transition:all .15s;
+  position:relative;display:flex;flex-direction:column;gap:9px}
+.wk-chip:hover{border-color:var(--b3);box-shadow:var(--sh1);background:var(--s3)}
 .wk-chip:active{cursor:grabbing}
-.wk-chip.dragging{opacity:.4;transform:scale(.96)}
-.wk-chip-top{display:flex;align-items:center;gap:8px}
-.wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em}
-.wk-chip-at{padding-top:4px;border-top:1px dashed var(--b1)}
-.wk-chip-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:2px}
+.wk-chip.dragging{opacity:.5;transform:scale(.97)}
+.wk-chip-top{display:flex;align-items:center;gap:9px}
+.wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:14.5px;font-weight:600;
+  color:var(--tx);letter-spacing:.02em}
+.wk-chip-at{padding-top:7px;border-top:1px dashed var(--b1)}
+/* Status pill clicável estilo pipeline */
+.wk-status-pill{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:5px;
+  cursor:pointer;font-family:inherit;transition:all .12s;display:inline-flex;align-items:center;gap:5px}
+.wk-status-pill:hover{filter:brightness(1.15)}
 /* Bolinha de status operacional no canto superior direito do chip */
-.cont-mini-chip-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;
-  box-shadow:0 0 0 2px var(--s3);z-index:1}
+.cont-mini-chip-dot{position:absolute;top:9px;right:10px;width:9px;height:9px;border-radius:50%;
+  box-shadow:0 0 0 2px var(--s2);z-index:1}
+.wk-chip:hover .cont-mini-chip-dot{box-shadow:0 0 0 2px var(--s3)}
 .cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
   background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
   border-radius:6px;transition:all .12s;cursor:grab}
@@ -6230,10 +6237,18 @@ function renderChipsByAtendente(){
   const poolAquecimento=chips.filter(c=>!c.at && c.st==='aquecimento');
   const poolAquecidos=chips.filter(c=>!c.at && c.st!=='aquecimento');
 
-  // Chips por atendente
+  // Chips por atendente — ordena ativos primeiro, aquecimento por último
   const byAt={};
   membros.forEach(m=>{byAt[m.id]=[]});
   chips.forEach(c=>{ if(c.at && byAt[c.at]!==undefined) byAt[c.at].push(c); });
+  Object.keys(byAt).forEach(id=>{
+    byAt[id].sort((a,b)=>{
+      const aq=a.st==='aquecimento'?1:0;
+      const bq=b.st==='aquecimento'?1:0;
+      if(aq!==bq)return aq-bq; // ativos primeiro
+      return (a.num||'').localeCompare(b.num||'');
+    });
+  });
 
   // HTML do Kanban — colunas pool primeiro, depois cada atendente
   const colunaPool=(items,id,titulo,cor,bg)=>`
@@ -6283,53 +6298,87 @@ function renderChipsByAtendente(){
   wrap.innerHTML=html;
 }
 
-// Card de chip pra usar no Kanban (similar ao mini-chip mas em layout vertical/card)
+// Card de chip estilo CRM Pipeline (sem borda lateral, click no card abre edição,
+// status atual com dropdown ao clicar, sempre mostra atendente designado)
 function _renderChipCard(c, showAtendente){
   const wa=getWaStatus(c);
-  const list=getWaStatusListVisible(wa);
   const info=getWaStatusInfo(wa);
   // Bolinha de status operacional no canto superior direito
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
-  const at=showAtendente?getTeam(c.at):null;
+  const at=getTeam(c.at);  // sempre mostra atendente designado se houver
+
+  // Status pill clicável que abre dropdown
+  const statusPill=info
+    ? `<button class="wk-status-pill" onclick="event.stopPropagation();_waStatusOpenPicker(${c.id},this)"
+        style="background:${info.bg};color:${info.color};border:1px solid ${info.color}55"
+        title="Clique pra trocar status">
+        ${info.ic||''} ${info.label} <span style="opacity:.6;margin-left:2px;font-size:9px">▾</span>
+      </button>`
+    : '';
+
   return `<div class="wk-chip" draggable="true"
       ondragstart="_chipDragStart(event,${c.id})"
       ondragend="_chipDragEnd(event)"
-      style="border-left-color:${info?.color||'#64748b'}">
+      onclick="openChipDetail(${c.id})">
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     <div class="wk-chip-top">
-      <span class="cont-mini-chip-drag" title="Arraste pra outra coluna">⋮⋮</span>
+      <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       <span class="wk-chip-num">${c.num}</span>
-      <button class="btn-act btn-act-gh btn-act-icon" onclick="event.stopPropagation();openChipDetail(${c.id})" title="Editar detalhes">✎</button>
     </div>
-    ${at?`<div class="wk-chip-at"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--t3)">${avatar(at,{size:16,fontSize:8})} ${at.name}</span></div>`:''}
-    ${list.length?`<div class="wk-chip-tags">
-      ${list.map(v=>{
-        const active=v.id===wa;
-        return `<button onclick="event.stopPropagation();setWaStatus(${c.id},'${v.id}')"
-          title="${v.label}"
-          style="font-size:10px;font-weight:600;padding:3px 7px;border-radius:4px;border:1px solid ${active?v.color:'var(--b1)'};background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t3)'};cursor:pointer;font-family:inherit;transition:all .12s">
-          ${v.ic||''} ${v.label}
-        </button>`;
-      }).join('')}
-    </div>`:''}
+    ${statusPill?`<div>${statusPill}</div>`:''}
+    ${at?`<div class="wk-chip-at"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span></div>`:''}
   </div>`;
 }
 
-// Handler de drop: aceita id especial '__aquecimento__' e '__aquecidos__' pras colunas pool
+// Abre um menu flutuante pra trocar o status WhatsApp (em vez de mostrar todos os pills)
+function _waStatusOpenPicker(chipId, anchorEl){
+  // Remove qualquer picker anterior
+  document.querySelectorAll('.wa-status-picker').forEach(el=>el.remove());
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  const wa=getWaStatus(c);
+  const list=getWaStatusListVisible(wa);
+  if(!list.length)return;
+  const rect=anchorEl.getBoundingClientRect();
+  const menu=document.createElement('div');
+  menu.className='wa-status-picker';
+  menu.style.cssText=`position:fixed;top:${rect.bottom+6}px;left:${rect.left}px;z-index:9999;background:var(--s2);border:1px solid var(--b2);border-radius:7px;box-shadow:var(--sh2);padding:5px;min-width:${Math.max(160,rect.width)}px;display:flex;flex-direction:column;gap:2px`;
+  menu.innerHTML=list.map(v=>{
+    const active=v.id===wa;
+    return `<button onclick="setWaStatus(${chipId},'${v.id}');this.parentElement.remove()"
+      style="text-align:left;background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t2)'};border:none;border-radius:5px;padding:7px 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:${active?600:500};display:flex;align-items:center;gap:6px"
+      onmouseover="if(!${active})this.style.background='var(--s3)'"
+      onmouseout="if(!${active})this.style.background='transparent'">
+      ${v.ic||''} ${v.label}${active?' <span style="margin-left:auto;font-size:10px">✓</span>':''}
+    </button>`;
+  }).join('');
+  document.body.appendChild(menu);
+  // Fecha clicando fora
+  setTimeout(()=>{
+    const closeOnOutside=(ev)=>{
+      if(!menu.contains(ev.target)){menu.remove();document.removeEventListener('click',closeOnOutside);}
+    };
+    document.addEventListener('click',closeOnOutside);
+  },10);
+}
+
+// Handler de drop: pools só mudam o STATUS, mantém o atendente designado.
+// Coluna de atendente atribui o atendente (mantém status).
 function _chipDropExtended(targetId){
   const chipId=_draggingChipId;
   if(!chipId)return;
   const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
   if(targetId==='__aquecimento__'){
+    if(c.st==='aquecimento')return false;
     c.st='aquecimento';
-    c.at=null;
+    // Atendente é PRESERVADO — só muda o status operacional
     if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
     toast(`📱 ${c.num} → Em Aquecimento`,'ok');
   } else if(targetId==='__aquecidos__'){
+    if(c.st==='ativo')return false;
     c.st='ativo';
-    c.at=null;
-    toast(`📱 ${c.num} → Aquecidos (sem atendente)`,'ok');
+    // Atendente também é PRESERVADO
+    toast(`📱 ${c.num} → Aquecidos`,'ok');
   } else {
     // Atribui a atendente
     if(c.at===targetId)return false;
