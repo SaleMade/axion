@@ -480,6 +480,15 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .cont-at-h{display:flex;align-items:center;gap:12px;padding:12px 16px;
   background:var(--s3);border-bottom:1px solid var(--b1)}
 .cont-at-numbers{padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
+/* Duas colunas (Em Aquecimento · Aquecidos) dentro de cada bloco de atendente */
+.cont-at-cols{padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:780px){.cont-at-cols{grid-template-columns:1fr}}
+.cont-col{border-radius:var(--r);padding:9px;display:flex;flex-direction:column;gap:7px;min-height:120px}
+.cont-col-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 4px;margin-bottom:2px}
+.cont-col-list{display:flex;flex-direction:column;gap:6px;flex:1}
+/* Bolinha de status operacional no canto superior direito do chip */
+.cont-mini-chip-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;
+  box-shadow:0 0 0 2px var(--s3);z-index:1}
 .cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
   background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
   border-radius:6px;transition:all .12s;cursor:grab}
@@ -6016,13 +6025,19 @@ function pageContingencia(){
 // ─── Status do WhatsApp (configuráveis pelo usuário, salvos no DB) ───
 // Padrão de fábrica — usado se DB.wa_statuses não estiver populado
 const WA_STATUSES_DEFAULT=[
-  {id:'ativo',    label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢'},
-  {id:'restrito', label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡'},
-  {id:'banido',   label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴'},
+  {id:'ativo',    label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢',visible:true},
+  {id:'restrito', label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡',visible:true},
+  {id:'banido',   label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴',visible:true},
 ];
 // Helper: retorna o array configurado ou o default
 function getWaStatusList(){
   return (DB.wa_statuses&&DB.wa_statuses.length)?DB.wa_statuses:WA_STATUSES_DEFAULT;
+}
+// Helper: retorna só os status VISÍVEIS (que devem aparecer como botão no chip).
+// Sempre inclui o status ATUAL do chip mesmo se invisível (pra não esconder info).
+function getWaStatusListVisible(currentId){
+  const all=getWaStatusList();
+  return all.filter(s=>s.visible!==false||s.id===currentId);
 }
 // Helper: encontra um status pelo id
 function getWaStatusInfo(id){
@@ -6069,8 +6084,17 @@ function closeWaStatusManager(){
 }
 function renderWaStatusList(){
   const wrap=$('wa-status-list');if(!wrap)return;
-  wrap.innerHTML=_waStatusBuf.map((s,i)=>`
-    <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-left:3px solid ${s.color||'#64748b'};border-radius:6px;padding:9px 11px">
+  wrap.innerHTML=`
+    <div style="font-size:11px;color:var(--t3);padding:0 4px 4px;display:flex;gap:4px;align-items:center">
+      👁 <span>marque/desmarque pra escolher quais tags aparecem como botão no chip</span>
+    </div>
+  `+_waStatusBuf.map((s,i)=>{
+    const visible=s.visible!==false;
+    return `
+    <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-left:3px solid ${s.color||'#64748b'};border-radius:6px;padding:9px 11px;${visible?'':'opacity:.55'}">
+      <input type="checkbox" ${visible?'checked':''} onchange="_waStatusBuf[${i}].visible=this.checked;renderWaStatusList()"
+        title="${visible?'Visível no chip — desmarque pra ocultar':'Oculto — marque pra mostrar como botão clicável'}"
+        style="accent-color:var(--bl);width:16px;height:16px;cursor:pointer">
       <input type="text" value="${(s.ic||'').replace(/"/g,'&quot;')}" maxlength="3" onchange="_waStatusBuf[${i}].ic=this.value"
         placeholder="🟢" title="Emoji/ícone"
         style="width:42px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);text-align:center;border-radius:5px;padding:6px;font-size:14px;font-family:inherit">
@@ -6081,14 +6105,14 @@ function renderWaStatusList(){
         title="Cor"
         style="width:36px;height:30px;border:1px solid var(--b1);border-radius:5px;background:transparent;cursor:pointer;padding:1px">
       <button onclick="delWaStatus(${i})" title="Remover" style="background:transparent;border:1px solid var(--b1);color:var(--rd);border-radius:5px;padding:5px 9px;cursor:pointer;font-family:inherit;font-size:13px">×</button>
-    </div>
-  `).join('')||'<div class="muted" style="text-align:center;padding:14px">Nenhum status cadastrado. Clique em "+ Adicionar status" abaixo.</div>';
+    </div>`;
+  }).join('')||'<div class="muted" style="text-align:center;padding:14px">Nenhum status cadastrado. Clique em "+ Adicionar status" abaixo.</div>';
 }
 function addWaStatus(){
   const id='st_'+Date.now().toString(36);
   const cores=['#10b981','#f59e0b','#ef4444','#3b82f6','#a855f7','#06b6d4','#ec4899','#fbbf24'];
   const cor=cores[_waStatusBuf.length%cores.length];
-  _waStatusBuf.push({id,label:'Novo status',color:cor,bg:cor+'26',ic:'🏷'});
+  _waStatusBuf.push({id,label:'Novo status',color:cor,bg:cor+'26',ic:'🏷',visible:true});
   renderWaStatusList();
 }
 function delWaStatus(idx){
@@ -6169,6 +6193,22 @@ function _renderAtendenteBlock(at, chips){
   const avatarHTML=at?avatar(at,{size:32,fontSize:12}):`<div class="sav" style="width:32px;height:32px;background:var(--s4);color:var(--t4);font-size:14px">?</div>`;
   const dropTargetId=at?at.id:'__sem__';
 
+  // Separa chips em 2 grupos por status operacional
+  const aquecendo=chips.filter(c=>c.st==='aquecimento');
+  const aquecidos=chips.filter(c=>c.st!=='aquecimento'); // ativo, reserva, banido, etc — todos "não-aquecimento"
+
+  const renderColuna=(items,titulo,cor,bg)=>`
+    <div class="cont-col" style="background:${bg};border:1px solid ${cor}33">
+      <div class="cont-col-h" style="color:${cor}">
+        ${titulo} <span style="font-weight:500;opacity:.8">· ${items.length}</span>
+      </div>
+      <div class="cont-col-list">
+        ${items.length
+          ? items.map(c=>_renderMiniChip(c)).join('')
+          : `<div class="muted" style="font-size:11.5px;padding:10px;text-align:center">— vazio —</div>`}
+      </div>
+    </div>`;
+
   return `<div class="cont-at-block"
       ondragover="_chipDragOver(event)"
       ondragleave="_chipDragLeave(event)"
@@ -6181,22 +6221,26 @@ function _renderAtendenteBlock(at, chips){
       </div>
       ${at&&isDir()?`<button class="btn btn-gh btn-sm" onclick="openChipPickerFor('${at.id}')" title="Atribuir número existente pra ${at.name}">+ Número</button>`:''}
     </div>
-    <div class="cont-at-numbers">
-      ${chips.length
-        ? chips.map(c=>_renderMiniChip(c)).join('')
-        : '<div class="muted" style="font-size:12px;padding:12px;grid-column:1/-1;text-align:center">Arraste números aqui ou clique em "+ Número"</div>'}
+    <div class="cont-at-cols">
+      ${renderColuna(aquecendo,'🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
+      ${renderColuna(aquecidos,'🟢 Aquecidos','#10b981','rgba(16,185,129,.04)')}
     </div>
   </div>`;
 }
 
 function _renderMiniChip(c){
   const wa=getWaStatus(c);
-  const list=getWaStatusList();
+  const list=getWaStatusListVisible(wa);
   const info=getWaStatusInfo(wa)||list[0];
+  // Bolinha de status operacional no canto superior direito (st do chip)
+  // ativo=verde, aquecimento=laranja, banido=vermelho, outros=cinza
+  const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
+  const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
   return `<div class="cont-mini-chip" draggable="true"
       ondragstart="_chipDragStart(event,${c.id})"
       ondragend="_chipDragEnd(event)"
-      style="border-left-color:${info?.color||'#64748b'}">
+      style="border-left-color:${info?.color||'#64748b'};position:relative">
+    <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     <span class="cont-mini-chip-drag" title="Arraste pra outro atendente">⋮⋮</span>
     <div style="flex:1;min-width:0">
       <div style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em">${c.num}</div>
