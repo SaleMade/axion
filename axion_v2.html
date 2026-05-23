@@ -196,16 +196,15 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   background:linear-gradient(135deg,var(--s3) 0%,var(--s2) 100%);
   box-shadow:0 0 0 3px rgba(59,130,246,.07),0 2px 8px rgba(0,0,0,.3)}
 .sb-sw-ic{
-  font-size:13px;
   color:var(--bl2);
   display:inline-flex;align-items:center;justify-content:center;
   width:24px;height:24px;
-  background:rgba(59,130,246,.12);
+  background:var(--bld);
   border-radius:6px;
   transition:transform .5s ease,background .18s ease}
 .sb-sw:hover .sb-sw-ic{
   transform:rotate(75deg);
-  background:rgba(59,130,246,.22)}
+  background:var(--blg)}
 .sb-sw-arrow{
   margin-left:auto;font-size:11px;color:var(--t4);
   transition:transform .18s ease,color .18s ease}
@@ -341,6 +340,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .mc-am .mc-gl{background:var(--am)}
 .mc-ic{width:30px;height:30px;border-radius:7px;display:flex;
   align-items:center;justify-content:center;font-size:14px;margin-bottom:10px}
+.mc-ic svg{display:block}
 .mc-lbl{font-size:11px;color:var(--t3);font-weight:700;
   text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
 /* Número agora é neutro (branco) — cor só fica no ícone como "categoria" */
@@ -1473,7 +1473,7 @@ h1 em{font-weight:700}
   <nav class="sb-nav" id="sb-nav"></nav>
   <div class="sb-foot">
     <div class="sb-sw" onclick="goPage('config')" title="Configurações da conta, equipe e integrações">
-      <span class="sb-sw-ic">⚙</span>
+      <span class="sb-sw-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span>
       <span>Configurações</span>
       <span class="sb-sw-arrow">›</span>
     </div>
@@ -3158,8 +3158,66 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.7.0';
-const APP_LAST_CHANGE = 'Redesign passada 2 — tom mais dark, esmaecer interno nos cards, restantes dos neonzinhos laterais removidos, mais subtítulos limpos';
+const APP_VERSION = '2.8.0';
+const APP_LAST_CHANGE = 'Redesign passada 3 — ícones SVG monocromáticos (Lucide-style) substituindo emojis coloridos na sidebar e cards de métrica';
+
+// ─── Biblioteca de ícones SVG (Lucide-style) ───────────
+// Monocromáticos, herdam cor via currentColor — o CSS controla a cor
+// (cada card de métrica já tem cor via .mc-bl/.mc-gr/etc).
+// Helper ico(name, opts) retorna o SVG inline pronto pra usar em template.
+const ICONS = {
+  // Navigation / structure
+  'layout-grid':    '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+  'target':         '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  'wallet':         '<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>',
+  'user':           '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  'users':          '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  'palette':        '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10c1.1 0 2-.9 2-2 0-.51-.2-.97-.51-1.32-.32-.36-.51-.82-.51-1.32 0-1.1.9-2 2-2h1.78c2.61 0 4.74-2.13 4.74-4.74C21.5 6.81 17.21 2 12 2zM6.5 12a1.5 1.5 0 0 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 0 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 0 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 0 1 0-3 1.5 1.5 0 0 1 0 3z" fill="currentColor" stroke="none"/>',
+  'zap':            '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  // Charts / metrics
+  'bar-chart':      '<path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M12 17V5"/><path d="M16 17v-3"/>',
+  'trending-up':    '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  'arrow-up-right': '<line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/>',
+  'arrow-up':       '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+  'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
+  'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
+  // Status / shapes
+  'check':          '<polyline points="20 6 9 17 4 12"/>',
+  'check-circle':   '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+  'x':              '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  'circle':         '<circle cx="12" cy="12" r="10"/>',
+  'circle-dot':     '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
+  'minus-circle':   '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>',
+  'alert-triangle': '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  'hourglass':      '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+  'flame':          '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+  'star':           '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  'diamond':        '<path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41L13.7 2.71a2.41 2.41 0 0 0-3.41 0Z"/>',
+  // Commerce / business
+  'shopping-cart':  '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>',
+  'package':        '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  'credit-card':    '<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
+  'banknote':       '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+  // Tools
+  'settings':       '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  'bell':           '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  'calendar':       '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  'clipboard-list': '<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  'pen-line':       '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  'message-circle': '<path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/>',
+  'smartphone':     '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  'map-pin':        '<path d="M20 10c0 7-8 12-8 12s-8-5-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
+  'plus':           '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+};
+
+function ico(name, opts={}){
+  const path = ICONS[name];
+  if(!path) return '';
+  const size = opts.size || 16;
+  const stroke = opts.stroke || 2;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;flex-shrink:0">${path}</svg>`;
+}
 
 const api={
   async _fetch(path,opts={}){
@@ -4181,7 +4239,8 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIcons={Dashboard:'📊',Operacional:'🎯',Financeiro:'💰',Pessoal:'👤',Equipe:'👥',Criativos:'🎨','Integrações':'⚡'};
+  const navIconNames={Dashboard:'layout-grid',Operacional:'target',Financeiro:'wallet',Pessoal:'user',Equipe:'users',Criativos:'palette','Integrações':'zap'};
+  const navIcon=g=>ico(navIconNames[g]||'circle',{size:15});
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
     // Default: só o PRIMEIRO acordeão aberto. Outros começam fechados.
@@ -4190,7 +4249,7 @@ function buildSidebar(){
     const totalBadges=g.items.reduce((s,i)=>s+(i.badge||0),0);
     return `
     <div class="sg-acc ${isOpen?'on':''}" onclick="toggleSidebarSection('${g.g}')">
-      <span class="sg-icon">${navIcons[g.g]||'•'}</span>
+      <span class="sg-icon">${navIcon(g.g)}</span>
       <span class="sg-name">${g.g}</span>
       ${totalBadges>0?`<span class="sg-badge">${totalBadges}</span>`:''}
       <span class="sg-chev">▾</span>
@@ -4595,28 +4654,28 @@ function renderHome(){
     <div class="mg">
       <div class="mc mc-go mc-feat">
         <div class="mc-gl"></div>
-        <div class="mc-ic">◈</div>
+        <div class="mc-ic">${ico('banknote',{size:14})}</div>
         <div class="mc-lbl">Faturamento Bruto</div>
         <div class="mc-val">${fmt(faturamentoBruto)}</div>
         <div class="mc-sub">total dos pedidos · ${myV.length} venda${myV.length!==1?'s':''}</div>
       </div>
       <div class="mc mc-bl mc-feat">
         <div class="mc-gl"></div>
-        <div class="mc-ic">💎</div>
+        <div class="mc-ic">${ico('diamond',{size:14})}</div>
         <div class="mc-lbl">Receita do Afiliado</div>
         <div class="mc-val">${fmt(receitaAfiliado)}</div>
         <div class="mc-sub">o que você recebe (comissão)</div>
       </div>
       <div class="mc mc-gr">
         <div class="mc-gl"></div>
-        <div class="mc-ic">↗</div>
+        <div class="mc-ic">${ico('trending-up',{size:14})}</div>
         <div class="mc-lbl">Vendas pagas</div>
         <div class="mc-val">${pago}</div>
         <div class="mc-sub">${conv}% de conversão</div>
       </div>
       <div class="mc mc-cy">
         <div class="mc-gl"></div>
-        <div class="mc-ic">$</div>
+        <div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
         <div class="mc-lbl">Ticket médio</div>
         <div class="mc-val">${fmt(ticket)}</div>
         <div class="mc-sub">por venda</div>
@@ -4630,13 +4689,13 @@ function renderHome(){
     <div class="section-title">Visão Afiliado (prioritário)</div>
     <div class="mg">
       <div class="mc mc-go mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">◈</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div>
         <div class="mc-lbl">Faturamento Bruto</div>
         <div class="mc-val">${fmt(faturamentoBruto)}</div>
         <div class="mc-sub">total dos pedidos pagos</div>
       </div>
       <div class="mc mc-bl mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">💎</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('diamond',{size:14})}</div>
         <div class="mc-lbl">Receita do Afiliado</div>
         <div class="mc-val">${fmt(receitaAfiliado)}</div>
         <div class="mc-sub">comissão recebida</div>
@@ -4646,25 +4705,25 @@ function renderHome(){
     <div class="section-title">Visão Produtor (operação)</div>
     <div class="mg">
       <div class="mc mc-gr mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">▲</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
         <div class="mc-lbl">Lucro Líquido</div>
         <div class="mc-val">${fmt(lucro)}</div>
         <div class="mc-sub">após custos e tráfego</div>
       </div>
       <div class="mc mc-pu">
-        <div class="mc-gl"></div><div class="mc-ic">⚡</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
         <div class="mc-lbl">ROAS</div>
         <div class="mc-val">${roas.toFixed(2)}x</div>
         <div class="mc-sub">${fmt(traf)} em mídia</div>
       </div>
       <div class="mc mc-am">
-        <div class="mc-gl"></div><div class="mc-ic">↗</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('trending-up',{size:14})}</div>
         <div class="mc-lbl">Conversão</div>
         <div class="mc-val">${conv}%</div>
         <div class="mc-sub">${pago}/${myL.length} leads pagos</div>
       </div>
       <div class="mc mc-re">
-        <div class="mc-gl"></div><div class="mc-ic">●</div>
+        <div class="mc-gl"></div><div class="mc-ic">${ico('circle-dot',{size:14})}</div>
         <div class="mc-lbl">Custo / Pedido</div>
         <div class="mc-val">${fmt(cpl)}</div>
         <div class="mc-sub">${tLeads} pedidos no período</div>
@@ -4774,16 +4833,16 @@ function renderEvolucao(){
   c.innerHTML=`
   <div class="ph"><div><h1>Evolução <em>Diária</em></h1></div></div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">◻</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('clipboard-list',{size:14})}</div>
       <div class="mc-lbl">Vendas</div><div class="mc-val">${vendas.length}</div>
       <div class="mc-sub">no período</div></div>
-    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">$</div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">Receita</div><div class="mc-val">${fmt(rec)}</div>
       <div class="mc-sub">bruta</div></div>
-    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">⊖</div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('minus-circle',{size:14})}</div>
       <div class="mc-lbl">Investido</div><div class="mc-val">${fmt(gas)}</div>
       <div class="mc-sub">tráfego pago</div></div>
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">↗</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('trending-up',{size:14})}</div>
       <div class="mc-lbl">Lucro período</div><div class="mc-val">${fmt(luc)}</div>
       <div class="mc-sub">após custos</div></div>
   </div>
@@ -6035,16 +6094,16 @@ function renderPedidos(){
     </div>
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">◧</div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('layout-grid',{size:14})}</div>
       <div class="mc-lbl">Total</div><div class="mc-val">${leads.length}</div>
       <div class="mc-sub">pedidos</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">⏳</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('hourglass',{size:14})}</div>
       <div class="mc-lbl">Aguardando</div><div class="mc-val">${aguard}</div>
       <div class="mc-sub">a enviar</div></div>
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">📦</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('package',{size:14})}</div>
       <div class="mc-lbl">Em envio</div><div class="mc-val">${env}</div>
       <div class="mc-sub">a caminho</div></div>
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">✓</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('check',{size:14})}</div>
       <div class="mc-lbl">Entregues</div><div class="mc-val">${ent}</div>
       <div class="mc-sub">concluídos</div></div>
   </div>
@@ -7152,16 +7211,16 @@ function renderDRE(){
   </div>
 
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">$</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">${isAfi?'Comissão Recebida':'Receita Bruta'}</div><div class="mc-val">${fmt(headerReceita)}</div>
       <div class="mc-sub">${vendas.length} vendas · ${headerSubtitle}</div></div>
-    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">⊖</div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('minus-circle',{size:14})}</div>
       <div class="mc-lbl">Custos totais</div><div class="mc-val">${fmt(totCustos)}</div>
       <div class="mc-sub">conforme métricas selecionadas</div></div>
-    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">◎</div>
+    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('target',{size:14})}</div>
       <div class="mc-lbl">Lucro líquido</div><div class="mc-val">${fmt(lucroCalc)}</div>
       <div class="mc-sub">antes pagamentos de equipe</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">★</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('star',{size:14})}</div>
       <div class="mc-lbl">Caixa restante</div><div class="mc-val">${fmt(caixaCalc)}</div>
       <div class="mc-sub">após pagamentos</div></div>
   </div>
@@ -7747,22 +7806,22 @@ function renderMeusPag(){
 
   <!-- KPIs principais -->
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">$</div>
+    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">A Receber</div>
       <div class="mc-val">${fmt(aReceber)}</div>
       <div class="mc-sub">comissões geradas - já recebido</div>
     </div>
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">✓</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('check',{size:14})}</div>
       <div class="mc-lbl">Recebido (período)</div>
       <div class="mc-val">${fmt(recebidoPeriodo)}</div>
       <div class="mc-sub">${meusPayoutsPer.length} pagamento${meusPayoutsPer.length!==1?'s':''}</div>
     </div>
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">∑</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('sigma',{size:14})}</div>
       <div class="mc-lbl">Recebido (total)</div>
       <div class="mc-val">${fmt(recebidoAcumulado)}</div>
       <div class="mc-sub">acumulado</div>
     </div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">⚙</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('settings',{size:14})}</div>
       <div class="mc-lbl">Comissão (período)</div>
       <div class="mc-val">${fmt(comPeriodo)}</div>
       <div class="mc-sub">${minhasVendasPer.length} venda${minhasVendasPer.length!==1?'s':''}</div>
@@ -8292,16 +8351,16 @@ function renderCobranca(){
 
   <!-- 4 KPIs -->
   <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">$</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">Vendas</div><div class="mc-val">${fmt(vendasR$)}</div>
       <div class="mc-sub">total realizado no período (100% de fechamento)</div></div>
-    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">📦</div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('package',{size:14})}</div>
       <div class="mc-lbl">Pedidos</div><div class="mc-val">${pedidosQty}</div>
       <div class="mc-sub">qtde de pedidos enviados no período</div></div>
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">✓</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('check',{size:14})}</div>
       <div class="mc-lbl">Vendas Pagas</div><div class="mc-val">${fmt(vendasPagasR$)}</div>
       <div class="mc-sub">${pagasQty} pedido${pagasQty!==1?'s':''} · ${pedidosQty?Math.round(pagasQty/pedidosQty*100):0}% de fechamento</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">⏳</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('hourglass',{size:14})}</div>
       <div class="mc-lbl">Vendas em Aberto</div><div class="mc-val">${fmt(abertoR$)}</div>
       <div class="mc-sub">${ativos.length} pendentes — backlog total (sem filtro de data)</div></div>
   </div>
@@ -8834,27 +8893,27 @@ function openMemberAnalysis(uid){
 
   $('ma-body').innerHTML=`
   <div class="mg" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
-    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">◧</div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('layout-grid',{size:14})}</div>
       <div class="mc-lbl">Total de Vendas</div>
       <div class="mc-val" style="letter-spacing:.01em">${totalVendas}</div>
       <div class="mc-sub">${fmt(totalReceita)} em receita bruta</div></div>
-    <div class="mc mc-go mc-feat"><div class="mc-gl"></div><div class="mc-ic">💎</div>
+    <div class="mc mc-go mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('diamond',{size:14})}</div>
       <div class="mc-lbl">Comissões Geradas (Afiliado)</div>
       <div class="mc-val" style="letter-spacing:.01em">${fmt(comissoes)}</div>
       <div class="mc-sub">base afiliado · ${u.com_pct||0}%</div></div>
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">✓</div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('check',{size:14})}</div>
       <div class="mc-lbl">Vendas Recebidas (Pagas)</div>
       <div class="mc-val" style="letter-spacing:.01em">${recebidasPagas}</div>
       <div class="mc-sub">${fmt(valorRecebido)} confirmados</div></div>
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">⊙</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('circle-dot',{size:14})}</div>
       <div class="mc-lbl">Ticket Médio</div>
       <div class="mc-val" style="letter-spacing:.01em">${fmt(ticket)}</div>
       <div class="mc-sub">por venda</div></div>
-    <div class="mc mc-pu"><div class="mc-gl"></div><div class="mc-ic">⚡</div>
+    <div class="mc mc-pu"><div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
       <div class="mc-lbl">ROAS Individual</div>
       <div class="mc-val" style="letter-spacing:.01em">${roasInd.toFixed(2)}x</div>
       <div class="mc-sub">receita / fração tráfego</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">%</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('percent',{size:14})}</div>
       <div class="mc-lbl">Taxa de Recebimento</div>
       <div class="mc-val" style="letter-spacing:.01em;color:${txReceb>=70?'var(--gr)':txReceb>=40?'var(--am)':'var(--rd)'}">${txReceb.toFixed(0)}%</div>
       <div class="mc-sub">${recebidasPagas} pagos / ${leadsConv} convertidos</div></div>
@@ -9173,13 +9232,13 @@ function renderTrafego(){
   `:''}
 
   <div class="mg" style="${gtOnly?'grid-template-columns:repeat(3,1fr)':''}">
-    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">●</div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('circle-dot',{size:14})}</div>
       <div class="mc-lbl">Investido</div><div class="mc-val">${fmt(tot)}</div><div class="mc-sub">${gastos.length} registros</div></div>
-    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">◈</div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div>
       <div class="mc-lbl">Pedidos feitos</div><div class="mc-val">${totLeads}</div><div class="mc-sub">aprovados</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">▲</div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
       <div class="mc-lbl">Custo por pedido</div><div class="mc-val">${fmt(cpl)}</div><div class="mc-sub">médio</div></div>
-    ${gtOnly?'':`<div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">⚡</div>
+    ${gtOnly?'':`<div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
       <div class="mc-lbl">ROAS</div><div class="mc-val">${roas.toFixed(2)}x</div><div class="mc-sub">${fmt(recBruta)} de receita</div></div>`}
   </div>
 
@@ -9504,22 +9563,22 @@ function renderEquipe(){
   <!-- Cards globais -->
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
     <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">👥</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('users',{size:14})}</div>
       <div class="mc-lbl">Vendedores</div>
       <div class="mc-val">${totMembros}</div>
     </div>
     <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">🛒</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
       <div class="mc-lbl">Total Pedidos</div>
       <div class="mc-val">${totPedidos}</div>
     </div>
     <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">$</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">Total Vendas</div>
       <div class="mc-val">${fmt(totVendasR$)}</div>
     </div>
     <div class="mc mc-re">
-      <div class="mc-gl"></div><div class="mc-ic">▦</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
       <div class="mc-lbl">Total Comissões</div>
       <div class="mc-val">${fmt(totComissoes)}</div>
     </div>
@@ -9532,22 +9591,22 @@ function renderEquipe(){
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">🛒</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
       <div class="mc-lbl">Pedidos</div>
       <div class="mc-val">${ant.length}</div>
     </div>
     <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">$</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">Valor</div>
       <div class="mc-val">${fmt(sumVL(ant))}</div>
     </div>
     <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">▦</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
       <div class="mc-lbl">Pedidos Pagos</div>
       <div class="mc-val">${antPagos.length}</div>
     </div>
     <div class="mc mc-go">
-      <div class="mc-gl"></div><div class="mc-ic">▦</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
       <div class="mc-lbl">Valor Pago</div>
       <div class="mc-val">${fmt(sumVL(antPagos))}</div>
     </div>
@@ -9560,22 +9619,22 @@ function renderEquipe(){
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">🛒</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
       <div class="mc-lbl">Pedidos</div>
       <div class="mc-val">${ent.length}</div>
     </div>
     <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">$</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
       <div class="mc-lbl">Valor</div>
       <div class="mc-val">${fmt(sumVL(ent))}</div>
     </div>
     <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">▦</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
       <div class="mc-lbl">Pedidos Pagos</div>
       <div class="mc-val">${entPagos.length}</div>
     </div>
     <div class="mc mc-go">
-      <div class="mc-gl"></div><div class="mc-ic">▦</div>
+      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
       <div class="mc-lbl">Valor Pago</div>
       <div class="mc-val">${fmt(sumVL(entPagos))}</div>
     </div>
