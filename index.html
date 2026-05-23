@@ -12,10 +12,12 @@
    Inspirado em Midas Company, identidade AXION.
 ═══════════════════════════════════════════════════════════════ */
 :root{
-  /* fundo */
-  --bg:#050810;--s1:#0a1020;--s2:#111a2e;--s3:#1a2440;--s4:#243152;
-  /* bordas */
-  --b1:#1f2a44;--b2:#2c3a5c;--b3:#3d4d72;
+  /* fundo — tom mais dark (passada 2 do redesign). Backgrounds quase
+     pretos pra dar contraste com os cards e fazer os acentos coloridos
+     pularem menos. */
+  --bg:#020509;--s1:#070b14;--s2:#0c1220;--s3:#141b2e;--s4:#1c2438;
+  /* bordas — mais sóbrias que os fundos antigos */
+  --b1:#1a2238;--b2:#262f4a;--b3:#363f5e;
   /* primária — teal sóbrio (passada 1 do redesign visual). Antes era azul
      #3b82f6 que ficava muito vibrante contra o dark; agora é verde-azulado
      escuro estilo Stripe/Linear, combina com o --gr de positivo sem
@@ -324,8 +326,19 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px;
   position:relative;overflow:hidden;transition:all .2s}
 .mc:hover{border-color:var(--b2);transform:translateY(-2px);box-shadow:var(--sh1)}
-/* Halo colorido removido — era fonte de saturação visual */
-.mc-gl{display:none}
+/* Glow interno sutil no canto superior direito do card (esmaecer na cor
+   da categoria). Cor é setada por classe específica (.mc-bl .mc-gl, etc).
+   Pointer-events none pra não atrapalhar clique no card. */
+.mc-gl{display:block;position:absolute;top:-40px;right:-40px;width:170px;height:170px;
+  border-radius:50%;filter:blur(60px);opacity:.18;pointer-events:none;z-index:0}
+.mc>*:not(.mc-gl){position:relative;z-index:1}
+.mc-bl .mc-gl{background:var(--bl)}
+.mc-cy .mc-gl{background:var(--cy)}
+.mc-gr .mc-gl{background:var(--gr)}
+.mc-re .mc-gl{background:var(--rd)}
+.mc-pu .mc-gl{background:var(--pu)}
+.mc-go .mc-gl{background:var(--gold)}
+.mc-am .mc-gl{background:var(--am)}
 .mc-ic{width:30px;height:30px;border-radius:7px;display:flex;
   align-items:center;justify-content:center;font-size:14px;margin-bottom:10px}
 .mc-lbl{font-size:11px;color:var(--t3);font-weight:700;
@@ -552,7 +565,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   box-shadow:0 0 0 2px var(--s2);z-index:1}
 .wk-chip:hover .cont-mini-chip-dot{box-shadow:0 0 0 2px var(--s3)}
 .cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
-  background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
+  background:var(--s3);border:1px solid var(--b1);
   border-radius:6px;transition:all .12s;cursor:grab}
 .cont-mini-chip:hover{border-color:var(--b2);background:var(--s2)}
 .cont-mini-chip:active{cursor:grabbing}
@@ -584,7 +597,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   position:relative;transition:all .15s;cursor:pointer}
 .chip:hover{border-color:var(--b3);transform:translateY(-2px);box-shadow:var(--sh1)}
 .chip.alert{border-color:var(--am);box-shadow:0 0 0 1px var(--amd)}
-.chip.crit{border-color:var(--rd);box-shadow:0 0 0 1px var(--rdd);border-left:3px solid var(--rd)}
+.chip.crit{border-color:var(--rd);box-shadow:0 0 0 1px var(--rdd)}
 .chip-h{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
 .chip-num{font-size:16px;font-weight:700;color:var(--tx);letter-spacing:.01em}
 .chip-st{font-size:10px;font-weight:700;padding:3px 8px;border-radius:5px;text-transform:uppercase;letter-spacing:.05em}
@@ -680,9 +693,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .rec-hero-sub{font-size:14px;opacity:.85}
 .rec-aging{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:22px}
 .aging-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);
-  padding:18px;border-left:4px solid var(--gr)}
-.aging-card.warn{border-left-color:var(--am)}
-.aging-card.crit{border-left-color:var(--rd)}
+  padding:18px;position:relative;overflow:hidden}
+/* Glow esmaecer interno na cor do status (ok/warn/crit) */
+.aging-card::before{content:'';position:absolute;top:-40px;right:-40px;width:170px;height:170px;
+  border-radius:50%;filter:blur(60px);opacity:.18;pointer-events:none;background:var(--gr)}
+.aging-card.warn::before{background:var(--am)}
+.aging-card.crit::before{background:var(--rd)}
+.aging-card>*{position:relative;z-index:1}
 .aging-lbl{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
 .aging-val{font-size:22px;font-weight:800;color:var(--tx);margin:5px 0}
 .aging-sub{font-size:12px;color:var(--t3)}
@@ -794,9 +811,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border-radius:var(--r);margin-bottom:8px;cursor:pointer;transition:all .15s;
   display:flex;gap:11px;align-items:flex-start}
 .notif-item:hover{border-color:var(--b3);background:var(--s3)}
-.notif-item.crit{border-left:3px solid var(--rd)}
-.notif-item.warn{border-left:3px solid var(--am)}
-.notif-item.info{border-left:3px solid var(--bl)}
+/* Status do item sinalizado pela cor de fundo sutil em vez de barra lateral */
+.notif-item.crit{background:rgba(239,68,68,.05);border-color:rgba(239,68,68,.25)}
+.notif-item.warn{background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.25)}
+.notif-item.info{background:rgba(13,148,136,.05);border-color:rgba(13,148,136,.25)}
 .notif-ic{width:30px;height:30px;border-radius:7px;display:flex;
   align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
 .notif-ic.crit{background:var(--rdd);color:var(--rd)}
@@ -1056,10 +1074,13 @@ body.compact .mc-val{font-size:20px}
 
 /* ─── Follows — Hero do cobrador ───────────────────── */
 .follows-hero{background:linear-gradient(135deg,var(--s2),var(--s3));
-  border:1px solid var(--b2);border-left:3px solid var(--rd);
+  border:1px solid var(--b2);
   border-radius:var(--rxl);padding:22px 26px;margin-bottom:18px;
   display:flex;align-items:center;gap:24px;color:var(--tx);
-  box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  box-shadow:0 4px 16px rgba(0,0,0,.25);position:relative;overflow:hidden}
+.follows-hero::before{content:'';position:absolute;top:-60px;right:-60px;width:220px;height:220px;
+  border-radius:50%;background:var(--rd);filter:blur(80px);opacity:.18;pointer-events:none}
+.follows-hero>*{position:relative;z-index:1}
 
 /* ─── Follows — Tabs filtros por tipo de tarefa ──────── */
 .follows-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;
@@ -1075,10 +1096,13 @@ body.compact .mc-val{font-size:20px}
 
 /* ─── Banner do fechamento (sóbrio) ─────────────────── */
 .quinz-banner{background:linear-gradient(135deg,var(--s2),var(--s3));
-  border:1px solid var(--b2);border-left:3px solid var(--bl);
+  border:1px solid var(--b2);
   border-radius:var(--rxl);padding:22px 26px;margin-bottom:22px;
   display:flex;align-items:center;gap:24px;color:var(--tx);
-  box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  box-shadow:0 4px 16px rgba(0,0,0,.25);position:relative;overflow:hidden}
+.quinz-banner::before{content:'';position:absolute;top:-60px;right:-60px;width:220px;height:220px;
+  border-radius:50%;background:var(--bl);filter:blur(80px);opacity:.18;pointer-events:none}
+.quinz-banner>*{position:relative;z-index:1}
 .payouts-scroll-page{max-height:auto}
 
 /* Reduzir peso do bold em white/red — leitura mais clara */
@@ -1133,7 +1157,7 @@ h1 em{font-weight:700}
   padding:5px 8px;background:rgba(59,130,246,.04);border-left:2px solid var(--bld);border-radius:0 4px 4px 0}
 .cp-desc:empty{display:none}
 .cp-script-blocks{display:flex;flex-direction:column;gap:10px}
-.cp-block{background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px;border-left:3px solid var(--bl)}
+.cp-block{background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px}
 .cp-block.b-hook{border-left-color:#ef4444}
 .cp-block.b-ret{border-left-color:#f59e0b}
 .cp-block.b-of{border-left-color:#10b981}
@@ -1145,7 +1169,7 @@ h1 em{font-weight:700}
 .cp-block textarea:focus{background:var(--s4);padding:6px 8px;border-radius:5px}
 /* ─── Timeline + textarea unificada (roteiro corrido) ─── */
 .cp-timeline{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;margin-bottom:4px;scrollbar-width:thin}
-.cp-tl-pill{flex:0 0 auto;background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
+.cp-tl-pill{flex:0 0 auto;background:var(--s3);border:1px solid var(--b1);
   border-radius:5px;padding:5px 9px;font-size:11px}
 .cp-tl-time{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--t2);font-weight:600;margin-bottom:1px}
 .cp-tl-lbl{color:var(--t3);font-size:11px;white-space:nowrap}
@@ -3134,8 +3158,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.6.0';
-const APP_LAST_CHANGE = 'Redesign visual passada 1 — paleta teal sóbria, neonzinhos laterais removidos, subtítulos descritivos limpos';
+const APP_VERSION = '2.7.0';
+const APP_LAST_CHANGE = 'Redesign passada 2 — tom mais dark, esmaecer interno nos cards, restantes dos neonzinhos laterais removidos, mais subtítulos limpos';
 
 const api={
   async _fetch(path,opts={}){
@@ -4748,7 +4772,7 @@ function renderEvolucao(){
   const gasByDay=days.map(d=>DB.gastos.filter(g=>g.data===d).reduce((s,g)=>s+g.valor,0));
 
   c.innerHTML=`
-  <div class="ph"><div><h1>Evolução <em>Diária</em></h1><p>${rangeLabel()}</p></div></div>
+  <div class="ph"><div><h1>Evolução <em>Diária</em></h1></div></div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
     <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">◻</div>
       <div class="mc-lbl">Vendas</div><div class="mc-val">${vendas.length}</div>
@@ -6005,7 +6029,7 @@ function renderPedidos(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Pedidos / <em>Logística</em></h1><p>${rangeLabel()}</p></div>
+    <div><h1>Pedidos / <em>Logística</em></h1></div>
     <div class="ph-r">
       ${isReadOnly()?`<span class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;background:rgba(245,158,11,.08);border:1px solid var(--am);color:var(--am);padding:7px 12px;border-radius:var(--r)">🔒 Modo Visualização ativo</span>`:`<button class="btn btn-gr btn-lg" onclick="openPedidoTypeChooser()">+ Novo Pedido</button>`}
     </div>
@@ -6069,10 +6093,7 @@ function pageContingencia(){
     <div class="ph"><div><h1>Contingência <em>WhatsApp</em></h1></div></div>
 
     <!-- ─── KANBAN (operacional do dia-a-dia — visão principal) ─── -->
-    <div class="section-title" style="margin-top:0">
-      📋 Designação de Números por Atendente
-    </div>
-    <div id="cont-by-at"></div>
+    <div id="cont-by-at" style="margin-top:6px"></div>
 
     <!-- ─── Contingência de Números (lista detalhada — aberta por padrão) ─── -->
     <details open style="margin-top:28px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden">
@@ -6949,7 +6970,7 @@ function pageRegioes(){
   const ufToName={};Object.entries(ST_ABBR).forEach(([n,u])=>ufToName[u]=n);
 
   return `<div class="page" id="regioes-pg">
-    <div class="ph"><div><h1>Compras por <em>Região</em></h1><p>${Object.values(SALES_STATE).reduce((s,v)=>s+v,0)} vendas mapeadas</p></div></div>
+    <div class="ph"><div><h1>Compras por <em>Região</em></h1></div></div>
     <div class="reg-grid">
       <div>
         <div class="panel" style="margin-bottom:14px">
@@ -7112,7 +7133,7 @@ function renderDRE(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Visão Geral</em></h1><p>${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Visão Geral</em></h1></div>
     <div class="ph-r">
       <!-- Toggle de modo: Afiliado vs Produtor -->
       <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
@@ -7721,8 +7742,7 @@ function renderMeusPag(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Meus <em>Pagamentos</em></h1>
-    <p>${rangeLabel()}</p></div>
+    <div><h1>Meus <em>Pagamentos</em></h1></div>
   </div>
 
   <!-- KPIs principais -->
@@ -7914,7 +7934,7 @@ function renderInvest(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Investimentos</em></h1><p>${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Investimentos</em></h1></div>
     <div class="ph-r">
       <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">📊 Tráfego Pago →</button>
       <button class="btn btn-gh btn-sm" onclick="openInvCats()">⚙ Categorias</button>
@@ -8069,7 +8089,7 @@ function renderInvest(){
       }).join('')}
     </div>
     ${lucroDistribuivel>0?`
-    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border-left:2px solid var(--gr);border-radius:0 6px 6px 0;line-height:1.5">
+    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.18);border-radius:6px;line-height:1.5">
       💡 <b style="color:var(--gr)">Lucro distribuível</b> do período: <b style="color:var(--tx)">${fmt(lucroDistribuivel)}</b> (do DRE). Cada % de aporte recebe proporcionalmente.
     </div>`:''}
     `:''}
@@ -8245,8 +8265,7 @@ function renderCobranca(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1><em>Follows</em> · Centro de Cobrança</h1>
-    <p>Lista pendente = backlog completo (sem filtro de data) · KPIs analíticos do período · ${rangeLabel()}</p></div>
+    <div><h1><em>Follows</em> · Centro de Cobrança</h1></div>
     <div class="ph-r">
       ${cobrador&&CUR?.role==='diretor'?`<button class="btn btn-bl btn-sm" onclick="atribuirTudoCobrador()">→ Atribuir tudo a ${cobrador.name}</button>`:''}
     </div>
@@ -9108,7 +9127,6 @@ function renderTrafego(){
   <div class="ph">
     <div>
       <h1>${gtOnly?'<em>Registro de Tráfego</em>':'Tráfego <em>Pago</em>'}</h1>
-      <p>${rangeLabel()}</p>
     </div>
     ${canEdit?`<div class="ph-r">
       <label class="btn btn-gh btn-sm" style="cursor:pointer">⬆ Importar CSV<input type="file" accept=".csv" style="display:none" onchange="importTrafegoCSV(this)"></label>
@@ -9477,7 +9495,7 @@ function renderEquipe(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Meus <em>Vendedores</em></h1><p>${rangeLabel()}</p></div>
+    <div><h1>Meus <em>Vendedores</em></h1></div>
     <div class="ph-r">
       ${isDir()?`<button class="btn btn-gh btn-sm" onclick="configTab='equipe';goPage('config')">⚙ Gerenciar equipe</button>`:''}
     </div>
@@ -11257,7 +11275,7 @@ function renderCopies(){
   <div class="ph">
     <div>
       <h1>Design & <em>Copy</em></h1>
-      <p>${isDes()?`Olá, ${CUR?.name||'designer'}! `:''}${criativos.length} criativo${criativos.length!==1?'s':''} cadastrado${criativos.length!==1?'s':''}</p>
+      ${isDes()?`<p>Olá, ${CUR?.name||'designer'}!</p>`:''}
     </div>
   </div>
 
