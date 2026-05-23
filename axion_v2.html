@@ -16,9 +16,12 @@
   --bg:#050810;--s1:#0a1020;--s2:#111a2e;--s3:#1a2440;--s4:#243152;
   /* bordas */
   --b1:#1f2a44;--b2:#2c3a5c;--b3:#3d4d72;
-  /* primária — azul premium */
-  --bl:#3b82f6;--bl2:#60a5fa;--bl3:#2563eb;--bl4:#1d4ed8;
-  --blg:rgba(59,130,246,.10);--bld:rgba(59,130,246,.06);
+  /* primária — teal sóbrio (passada 1 do redesign visual). Antes era azul
+     #3b82f6 que ficava muito vibrante contra o dark; agora é verde-azulado
+     escuro estilo Stripe/Linear, combina com o --gr de positivo sem
+     virar a UI inteira numa cor só. */
+  --bl:#0d9488;--bl2:#14b8a6;--bl3:#0f766e;--bl4:#115e59;
+  --blg:rgba(13,148,136,.10);--bld:rgba(13,148,136,.07);
   /* acentos — fundos mais sóbrios (alpha reduzido pra não saturar UI) */
   --cy:#06b6d4;--cyd:rgba(6,182,212,.07);
   --gold:#fbbf24;--goldd:rgba(251,191,36,.07);
@@ -332,14 +335,15 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .mc-sub{font-size:12px;color:var(--t3);font-weight:500}
 .mc-sub .delta{font-weight:700}
 .delta.up{color:var(--gr)}.delta.down{color:var(--rd)}
-/* Cards monocromáticos: ícone com fundo levemente colorido + barra lateral fina */
-.mc-bl{border-left:2px solid var(--bl)}   .mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
-.mc-cy{border-left:2px solid var(--cy)}   .mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
-.mc-gr{border-left:2px solid var(--gr)}   .mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
-.mc-re{border-left:2px solid var(--rd)}   .mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
-.mc-pu{border-left:2px solid var(--pu)}   .mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
-.mc-go{border-left:2px solid var(--gold)} .mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
-.mc-am{border-left:2px solid var(--am)}   .mc-am .mc-ic{background:var(--amd);color:var(--am)}
+/* Cards monocromáticos: ícone com fundo levemente colorido (sem barra lateral
+   neon — era poluição visual; o ícone colorido já diferencia a categoria). */
+.mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
+.mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
+.mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
+.mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
+.mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
+.mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
+.mc-am .mc-ic{background:var(--amd);color:var(--am)}
 
 /* destaque "afiliado" */
 /* mc-feat: card de destaque — sutil, sem contorno azul brilhante */
@@ -4738,7 +4742,7 @@ function renderEvolucao(){
   const gasByDay=days.map(d=>DB.gastos.filter(g=>g.data===d).reduce((s,g)=>s+g.valor,0));
 
   c.innerHTML=`
-  <div class="ph"><div><h1>Evolução <em>Diária</em></h1><p>Receita, lucro e gasto dia a dia · ${rangeLabel()}</p></div></div>
+  <div class="ph"><div><h1>Evolução <em>Diária</em></h1><p>${rangeLabel()}</p></div></div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
     <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">◻</div>
       <div class="mc-lbl">Vendas</div><div class="mc-val">${vendas.length}</div>
@@ -4797,7 +4801,7 @@ function renderEvolucao(){
 function pageCRM(){
   return `<div class="page" id="crm-pg">
     <div class="ph">
-      <div><h1>CRM / <em>Pipeline</em></h1><p>Arraste para mover · ⋮ no card para ações</p></div>
+      <div><h1>CRM / <em>Pipeline</em></h1></div>
     </div>
     <div class="kb-bar">
       <input class="kb-search" id="kb-q" placeholder="🔍 Buscar por nome ou WhatsApp..." oninput="updateCrmFilters()">
@@ -5995,7 +5999,7 @@ function renderPedidos(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Pedidos / <em>Logística</em></h1><p>Status de cada pedido · ${rangeLabel()}</p></div>
+    <div><h1>Pedidos / <em>Logística</em></h1><p>${rangeLabel()}</p></div>
     <div class="ph-r">
       ${isReadOnly()?`<span class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;background:rgba(245,158,11,.08);border:1px solid var(--am);color:var(--am);padding:7px 12px;border-radius:var(--r)">🔒 Modo Visualização ativo</span>`:`<button class="btn btn-gr btn-lg" onclick="openPedidoTypeChooser()">+ Novo Pedido</button>`}
     </div>
@@ -6939,7 +6943,7 @@ function pageRegioes(){
   const ufToName={};Object.entries(ST_ABBR).forEach(([n,u])=>ufToName[u]=n);
 
   return `<div class="page" id="regioes-pg">
-    <div class="ph"><div><h1>Compras por <em>Região</em></h1><p>Distribuição geográfica · ${Object.values(SALES_STATE).reduce((s,v)=>s+v,0)} vendas mapeadas</p></div></div>
+    <div class="ph"><div><h1>Compras por <em>Região</em></h1><p>${Object.values(SALES_STATE).reduce((s,v)=>s+v,0)} vendas mapeadas</p></div></div>
     <div class="reg-grid">
       <div>
         <div class="panel" style="margin-bottom:14px">
@@ -7102,7 +7106,7 @@ function renderDRE(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Visão Geral</em></h1><p>Demonstrativo de receitas e custos · ${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Visão Geral</em></h1><p>${rangeLabel()}</p></div>
     <div class="ph-r">
       <!-- Toggle de modo: Afiliado vs Produtor -->
       <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
@@ -7475,7 +7479,7 @@ function renderPagEquip(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Pagamentos de <em>Equipe</em></h1><p>Fechamento por período · controle de comissões e transferências</p></div>
+    <div><h1>Pagamentos de <em>Equipe</em></h1></div>
     <div class="ph-r">
       <button class="btn btn-bl btn-sm" onclick="openPayoutNew()">+ Registrar transferência</button>
       <button class="btn btn-gr btn-sm" onclick="openClosePeriod()">✓ Fechar período</button>
@@ -7712,7 +7716,7 @@ function renderMeusPag(){
   c.innerHTML=`
   <div class="ph">
     <div><h1>Meus <em>Pagamentos</em></h1>
-    <p>Histórico de comissões geradas e recebidas · ${rangeLabel()}</p></div>
+    <p>${rangeLabel()}</p></div>
   </div>
 
   <!-- KPIs principais -->
@@ -7904,7 +7908,7 @@ function renderInvest(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Financeiro · <em>Investimentos</em></h1><p>Ativos da operação (ferramentas, cursos, infra) + aportes de sócios · ${rangeLabel()}</p></div>
+    <div><h1>Financeiro · <em>Investimentos</em></h1><p>${rangeLabel()}</p></div>
     <div class="ph-r">
       <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">📊 Tráfego Pago →</button>
       <button class="btn btn-gh btn-sm" onclick="openInvCats()">⚙ Categorias</button>
@@ -9098,7 +9102,7 @@ function renderTrafego(){
   <div class="ph">
     <div>
       <h1>${gtOnly?'<em>Registro de Tráfego</em>':'Tráfego <em>Pago</em>'}</h1>
-      <p>${gtOnly?'Adicione os dados diários de cada plataforma':'Investimento, leads, CPL e ROAS'} · ${rangeLabel()}</p>
+      <p>${rangeLabel()}</p>
     </div>
     ${canEdit?`<div class="ph-r">
       <label class="btn btn-gh btn-sm" style="cursor:pointer">⬆ Importar CSV<input type="file" accept=".csv" style="display:none" onchange="importTrafegoCSV(this)"></label>
@@ -9467,7 +9471,7 @@ function renderEquipe(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1>Meus <em>Vendedores</em></h1><p>Desempenho dos seus vendedores · ${rangeLabel()}</p></div>
+    <div><h1>Meus <em>Vendedores</em></h1><p>${rangeLabel()}</p></div>
     <div class="ph-r">
       ${isDir()?`<button class="btn btn-gh btn-sm" onclick="configTab='equipe';goPage('config')">⚙ Gerenciar equipe</button>`:''}
     </div>
@@ -11247,7 +11251,7 @@ function renderCopies(){
   <div class="ph">
     <div>
       <h1>Design & <em>Copy</em></h1>
-      <p>${isDes()?`Olá, ${CUR?.name||'designer'}! `:''}Criação de roteiros pra TikTok Ads · ${criativos.length} criativo${criativos.length!==1?'s':''} cadastrado${criativos.length!==1?'s':''}</p>
+      <p>${isDes()?`Olá, ${CUR?.name||'designer'}! `:''}${criativos.length} criativo${criativos.length!==1?'s':''} cadastrado${criativos.length!==1?'s':''}</p>
     </div>
   </div>
 
@@ -11461,7 +11465,7 @@ function renderConfig(){
 
   c.innerHTML=`
   <div class="ph">
-    <div><h1><em>Configurações</em></h1><p>Gerencie sua conta${isDir()?', integrações, permissões e mais':' e preferências'}</p></div>
+    <div><h1><em>Configurações</em></h1></div>
   </div>
   <div class="config-grid">
     <div class="config-nav">
