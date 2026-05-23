@@ -32,9 +32,11 @@
   --pu:#a855f7;--pud:rgba(168,85,247,.07);
   --am:#f59e0b;--amd:rgba(245,158,11,.07);
   --or:#fb923c;--ord:rgba(251,146,60,.07);
-  /* tipografia — branco suave (#e2e8f0) ao invés de #f8fafc puro,
-     evita efeito "carbonado/grudado" quando combinado com bold */
-  --tx:#e2e8f0;--t2:#cbd5e1;--t3:#94a3b8;--t4:#64748b;
+  /* tipografia — branco MAIS suave ainda (passada 3 do redesign).
+     #e2e8f0 estava muito brilhante contra o fundo dark, "queimando"
+     na vista. Agora #c8d1de — off-white quase azulado, fica neutro
+     e mais confortável. */
+  --tx:#c8d1de;--t2:#a8b2c2;--t3:#7f8a9c;--t4:#525c6e;
   /* layout */
   --r:8px;--rl:12px;--rxl:16px;--sw:248px;
   /* sombras */
@@ -276,8 +278,11 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .btn-gh:hover{background:var(--s3);color:var(--tx);border-color:var(--b3)}
 .btn-re{background:var(--rdd);color:var(--rd);border:1px solid rgba(239,68,68,.3)}
 .btn-re:hover{background:rgba(239,68,68,.22)}
-.btn-gr{background:var(--gr);color:#fff}
-.btn-gr:hover{background:#0ea271}
+/* Botão verde — fundo vivo + texto DARK pra contraste WCAG OK.
+   Texto branco em verde médio (#10b981) fica de baixo contraste, "queima
+   no claro" e dificulta a leitura. Texto escuro #031814 pula a vista. */
+.btn-gr{background:var(--gr);color:#031814;font-weight:600}
+.btn-gr:hover{background:#0ea271;color:#031814}
 .btn-gold{background:var(--gold);color:#1a1a1a;font-weight:700}
 .btn-gold:hover{background:#f59e0b;box-shadow:0 0 14px rgba(251,191,36,.4)}
 /* Lista de aportes rolável (header sticky) + footer fixo com total */
@@ -1153,7 +1158,11 @@ h1 em{font-weight:700}
 .cp-gen-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-bottom:14px;align-items:flex-end}
 @media(max-width:780px){.cp-gen-controls{grid-template-columns:1fr}}
 /* Descrição abaixo do select — mostra o que a opção atual faz, ajuda escolha */
-.cp-desc{font-size:11px;color:var(--t3);line-height:1.4;margin-top:5px;min-height:30px;
+/* Resumos descritivos abaixo dos selects do gerador de copy.
+   Removidos da UI pra reduzir poluição visual — quem quiser saber
+   o que cada opção significa pode hover no <option> (title já tá lá). */
+.cp-desc{display:none}
+.cp-desc-hidden{font-size:11px;color:var(--t3);line-height:1.4;margin-top:5px;min-height:30px;
   padding:5px 8px;background:rgba(59,130,246,.04);border-left:2px solid var(--bld);border-radius:0 4px 4px 0}
 .cp-desc:empty{display:none}
 .cp-script-blocks{display:flex;flex-direction:column;gap:10px}
@@ -1186,11 +1195,8 @@ h1 em{font-weight:700}
 .cp-col-name{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
 .cp-col-cnt{background:var(--s4);font-size:11px;font-weight:600;color:var(--t2);padding:2px 8px;border-radius:9px;font-variant-numeric:tabular-nums}
 .cp-col-cards{padding:9px;display:flex;flex-direction:column;gap:8px;min-height:80px;flex:1;max-height:480px;overflow-y:auto}
-.cp-col[data-col="ideias"]{border-left:3px solid #64748b}
-.cp-col[data-col="scripts"]{border-left:3px solid #f59e0b}
-.cp-col[data-col="designer"]{border-left:3px solid #a855f7}
-.cp-col[data-col="teste"]{border-left:3px solid #10b981}
-.cp-col[data-col="ideias"] .cp-col-name{color:#94a3b8}
+/* Sem barra neon — a cor no nome da coluna basta pra identificar etapa */
+.cp-col[data-col="ideias"] .cp-col-name{color:var(--t3)}
 .cp-col[data-col="scripts"] .cp-col-name{color:#f59e0b}
 .cp-col[data-col="designer"] .cp-col-name{color:#c084fc}
 .cp-col[data-col="teste"] .cp-col-name{color:#10b981}
@@ -3158,8 +3164,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.8.0';
-const APP_LAST_CHANGE = 'Redesign passada 3 — ícones SVG monocromáticos (Lucide-style) substituindo emojis coloridos na sidebar e cards de métrica';
+const APP_VERSION = '2.9.0';
+const APP_LAST_CHANGE = 'Redesign passada 4 — branco mais suave (off-white), botão verde com texto escuro pra legibilidade, subtítulos do Design & Copy limpos, resumos dos selects escondidos (tooltip no hover continua), neon das colunas do Kanban Criativos removido';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -11346,7 +11352,6 @@ function renderCopies(){
       <div class="cp-pillar-num">1</div>
       <div style="flex:1">
         <div class="cp-pillar-tit">Framework de Criação</div>
-        <div class="cp-pillar-sub">Escolha ângulo, dor, gancho e duração — geramos um roteiro persuasivo customizado</div>
       </div>
       ${winners>0
         ? `<span title="O gerador usa textos dos criativos marcados como Vencedor pra refinar as novas gerações"
@@ -11438,7 +11443,6 @@ function renderCopies(){
       <div class="cp-pillar-num">2</div>
       <div>
         <div class="cp-pillar-tit">Esteira de Produção</div>
-        <div class="cp-pillar-sub">Arraste os cards entre as etapas conforme o vídeo evolui</div>
       </div>
     </div>
 
