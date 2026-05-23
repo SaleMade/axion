@@ -474,18 +474,38 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .cont-bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;
   background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:12px 14px}
 .cont-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(296px,1fr));gap:13px}
-/* ─── Designação por atendente (visão simplificada) ─── */
+/* ─── Designação por atendente (legado, mantido pra compat caso queira voltar) ─── */
 .cont-at-block{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);
   margin-bottom:12px;overflow:hidden}
 .cont-at-h{display:flex;align-items:center;gap:12px;padding:12px 16px;
   background:var(--s3);border-bottom:1px solid var(--b1)}
 .cont-at-numbers{padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
-/* Duas colunas (Em Aquecimento · Aquecidos) dentro de cada bloco de atendente */
 .cont-at-cols{padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:780px){.cont-at-cols{grid-template-columns:1fr}}
 .cont-col{border-radius:var(--r);padding:9px;display:flex;flex-direction:column;gap:7px;min-height:120px}
 .cont-col-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 4px;margin-bottom:2px}
 .cont-col-list{display:flex;flex-direction:column;gap:6px;flex:1}
+
+/* ─── Kanban WhatsApp (CRM-style com colunas pra pools + atendentes) ─── */
+.wk-board{display:flex;gap:10px;overflow-x:auto;padding:4px 4px 12px;align-items:flex-start}
+.wk-col{flex:0 0 260px;min-width:260px;max-width:260px;background:var(--s2);border:1px solid var(--b1);
+  border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:600px}
+.wk-col.wk-col-pool{flex:0 0 280px;min-width:280px;max-width:280px}
+.wk-col.drop-target{outline:2px dashed var(--bl);outline-offset:-2px;background:var(--s3)}
+.wk-col-h{padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:var(--s3);border-bottom:1px solid var(--b1)}
+.wk-col-name{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx)}
+.wk-col-cnt{background:var(--s4);font-size:11px;font-weight:600;color:var(--t2);padding:2px 7px;border-radius:9px;font-variant-numeric:tabular-nums}
+.wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px}
+.wk-chip{background:var(--s3);border:1px solid var(--b1);border-left:3px solid var(--bl);
+  border-radius:6px;padding:9px 11px;cursor:grab;transition:all .12s;position:relative;display:flex;flex-direction:column;gap:6px}
+.wk-chip:hover{border-color:var(--b3);background:var(--s2)}
+.wk-chip:active{cursor:grabbing}
+.wk-chip.dragging{opacity:.4;transform:scale(.96)}
+.wk-chip-top{display:flex;align-items:center;gap:8px}
+.wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em}
+.wk-chip-at{padding-top:4px;border-top:1px dashed var(--b1)}
+.wk-chip-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:2px}
 /* Bolinha de status operacional no canto superior direito do chip */
 .cont-mini-chip-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;
   box-shadow:0 0 0 2px var(--s3);z-index:1}
@@ -6144,17 +6164,23 @@ function saveWaStatusAll(){
 }
 
 // Agrupa chips por atendente e renderiza visão simplificada
+// KANBAN: colunas verticais lado a lado. Cada coluna = um destino pro drag-drop.
+// Estrutura: [Em Aquecimento] [Aquecidos] [Atendente 1] [Atendente 2] ...
+// - "Em Aquecimento" = pool de chips em aquecimento SEM atendente (drop aqui:
+//   marca o chip como aquecimento e remove atendente)
+// - "Aquecidos" = pool de chips ativos SEM atendente, prontos pra distribuir
+//   (drop aqui: marca como ativo e remove atendente)
+// - Coluna de atendente = chips atribuídos pra ele (qualquer status). Drop aqui:
+//   só atribui o atendente, mantém o status.
 function renderChipsByAtendente(){
   const wrap=$('cont-by-at');if(!wrap)return;
 
   // Diretor vê todos; outros só seus próprios chips
   const chips=DB.chips.filter(c=>isDir()||c.at===CUR.id);
 
-  // Quem tem pelo menos 1 chip atribuído (qualquer role)
+  // Atendentes que recebem chip operacional (atendente é principal; outros
+  // papéis aparecem só se têm chip atribuído)
   const idsComChip=new Set(chips.map(c=>c.at).filter(Boolean));
-
-  // Filtra TEAM: pega todos os que têm chip OU são atendentes (mesmo sem chip,
-  // pra Diretor poder atribuir). Exclui GT/Designer (não atendem).
   const membros=TEAM
     .filter(t=>!t._preview&&!t.archived)
     .filter(t=>t.role!=='gestor'&&t.role!=='designer')
@@ -6169,22 +6195,120 @@ function renderChipsByAtendente(){
     return (a.name||'').localeCompare(b.name||'');
   });
 
-  // Map id → chips dele
+  // Pools (sem atendente)
+  const poolAquecimento=chips.filter(c=>!c.at && c.st==='aquecimento');
+  const poolAquecidos=chips.filter(c=>!c.at && c.st!=='aquecimento');
+
+  // Chips por atendente
   const byAt={};
   membros.forEach(m=>{byAt[m.id]=[]});
-  byAt['__sem__']=[];
-  chips.forEach(c=>{
-    if(c.at && byAt[c.at]!==undefined) byAt[c.at].push(c);
-    else if(!c.at) byAt['__sem__'].push(c);
-  });
+  chips.forEach(c=>{ if(c.at && byAt[c.at]!==undefined) byAt[c.at].push(c); });
 
-  // Render: bloco por membro + órfãos no final (se houver)
-  const htmlMembros=membros.map(m=>_renderAtendenteBlock(m,byAt[m.id]||[])).join('');
-  const semAt=byAt['__sem__'];
-  const htmlSemAt=semAt.length?_renderAtendenteBlock(null,semAt):'';
+  // HTML do Kanban — colunas pool primeiro, depois cada atendente
+  const colunaPool=(items,id,titulo,cor,bg)=>`
+    <div class="wk-col wk-col-pool"
+        ondragover="_chipDragOver(event)"
+        ondragleave="_chipDragLeave(event)"
+        ondrop="_chipDrop(event,'${id}')"
+        style="background:${bg};border:1px solid ${cor}44">
+      <div class="wk-col-h" style="background:${cor}1a;border-bottom:1px solid ${cor}33">
+        <span class="wk-col-name" style="color:${cor}">${titulo}</span>
+        <span class="wk-col-cnt">${items.length}</span>
+      </div>
+      <div class="wk-col-list">
+        ${items.length
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false)).join('')
+          : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— vazio —</div>`}
+      </div>
+    </div>`;
 
-  const html=htmlMembros+htmlSemAt;
-  wrap.innerHTML=html||'<div class="muted" style="text-align:center;padding:24px;font-size:13px">Sem membros cadastrados pra atribuir números.</div>';
+  const colunaAtendente=(at,items)=>`
+    <div class="wk-col"
+        ondragover="_chipDragOver(event)"
+        ondragleave="_chipDragLeave(event)"
+        ondrop="_chipDrop(event,'${at.id}')">
+      <div class="wk-col-h">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+          ${avatar(at,{size:24,fontSize:10})}
+          <div style="flex:1;min-width:0">
+            <div class="wk-col-name" style="text-transform:none;letter-spacing:0;font-size:12.5px">${at.name}</div>
+            <div style="font-size:10px;color:var(--t4);text-transform:capitalize">${at.role}</div>
+          </div>
+        </div>
+        <span class="wk-col-cnt">${items.length}</span>
+      </div>
+      <div class="wk-col-list">
+        ${items.length
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false)).join('')
+          : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— arraste números aqui —</div>`}
+      </div>
+    </div>`;
+
+  const html=`<div class="wk-board">
+    ${colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
+    ${colunaPool(poolAquecidos,'__aquecidos__','🟢 Aquecidos','#10b981','rgba(16,185,129,.04)')}
+    ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
+  </div>`;
+  wrap.innerHTML=html;
+}
+
+// Card de chip pra usar no Kanban (similar ao mini-chip mas em layout vertical/card)
+function _renderChipCard(c, showAtendente){
+  const wa=getWaStatus(c);
+  const list=getWaStatusListVisible(wa);
+  const info=getWaStatusInfo(wa);
+  // Bolinha de status operacional no canto superior direito
+  const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
+  const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
+  const at=showAtendente?getTeam(c.at):null;
+  return `<div class="wk-chip" draggable="true"
+      ondragstart="_chipDragStart(event,${c.id})"
+      ondragend="_chipDragEnd(event)"
+      style="border-left-color:${info?.color||'#64748b'}">
+    <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
+    <div class="wk-chip-top">
+      <span class="cont-mini-chip-drag" title="Arraste pra outra coluna">⋮⋮</span>
+      <span class="wk-chip-num">${c.num}</span>
+      <button class="btn-act btn-act-gh btn-act-icon" onclick="event.stopPropagation();openChipDetail(${c.id})" title="Editar detalhes">✎</button>
+    </div>
+    ${at?`<div class="wk-chip-at"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--t3)">${avatar(at,{size:16,fontSize:8})} ${at.name}</span></div>`:''}
+    ${list.length?`<div class="wk-chip-tags">
+      ${list.map(v=>{
+        const active=v.id===wa;
+        return `<button onclick="event.stopPropagation();setWaStatus(${c.id},'${v.id}')"
+          title="${v.label}"
+          style="font-size:10px;font-weight:600;padding:3px 7px;border-radius:4px;border:1px solid ${active?v.color:'var(--b1)'};background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t3)'};cursor:pointer;font-family:inherit;transition:all .12s">
+          ${v.ic||''} ${v.label}
+        </button>`;
+      }).join('')}
+    </div>`:''}
+  </div>`;
+}
+
+// Handler de drop: aceita id especial '__aquecimento__' e '__aquecidos__' pras colunas pool
+function _chipDropExtended(targetId){
+  const chipId=_draggingChipId;
+  if(!chipId)return;
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  if(targetId==='__aquecimento__'){
+    c.st='aquecimento';
+    c.at=null;
+    if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
+    toast(`📱 ${c.num} → Em Aquecimento`,'ok');
+  } else if(targetId==='__aquecidos__'){
+    c.st='ativo';
+    c.at=null;
+    toast(`📱 ${c.num} → Aquecidos (sem atendente)`,'ok');
+  } else {
+    // Atribui a atendente
+    if(c.at===targetId)return false;
+    c.at=targetId;
+    const novoNome=getTeam(targetId)?.name||'atendente';
+    toast(`📱 ${c.num} → ${novoNome}`,'ok');
+  }
+  renderChipsByAtendente();
+  persistAndPushNow().catch(_=>{});
+  return true;
 }
 
 function _renderAtendenteBlock(at, chips){
@@ -6282,20 +6406,15 @@ function _chipDragLeave(ev){
   // Só remove se realmente saiu (não pra filhos)
   if(!ev.currentTarget.contains(ev.relatedTarget))ev.currentTarget.classList.remove('drop-target');
 }
-function _chipDrop(ev,targetAtId){
+function _chipDrop(ev,targetId){
   ev.preventDefault();
   ev.currentTarget.classList.remove('drop-target');
-  const chipId=_draggingChipId || Number(ev.dataTransfer.getData('text/plain'));
-  if(!chipId)return;
-  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
-  // Se já tá com esse atendente, nada
-  if(c.at===targetAtId)return;
-  const novoAt=targetAtId==='__sem__'?null:targetAtId;
-  const novoNome=novoAt?(getTeam(novoAt)?.name||novoAt):'sem atendente';
-  c.at=novoAt;
-  renderChipsByAtendente();
-  toast(`📱 ${c.num} agora é de ${novoNome} · sincronizando...`,'ok');
-  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+  // Garante que _draggingChipId está setado (em alguns browsers o dataTransfer vai vazio)
+  if(!_draggingChipId){
+    const t=Number(ev.dataTransfer.getData('text/plain'));
+    if(t)_draggingChipId=t;
+  }
+  _chipDropExtended(targetId);
 }
 
 // Atalho legado — mantido pra compat, redirecionado pro picker
