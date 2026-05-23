@@ -449,7 +449,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border-bottom:1px solid rgba(0,0,0,.15)}
 .kb-cn{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
 .kb-cc{font-size:11px;color:var(--t2);background:rgba(0,0,0,.25);padding:2px 9px;border-radius:9px;font-weight:600}
-.kb-ccards{padding:10px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;max-height:560px}
+.kb-ccards{padding:10px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;max-height:560px;
+  /* Scrollbar visual escondida — scroll via mouse wheel/touchpad/drag
+     continua funcionando perfeitamente. Antes a barra ocupava espaço
+     lateral e visualmente "cortava" o card final. */
+  scrollbar-width:none;-ms-overflow-style:none}
+.kb-ccards::-webkit-scrollbar{display:none}
 /* Cards neutros — fundo cinza dark uniforme, sem linhas coloridas, contrasta com a coluna tingida */
 .kb-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);
   padding:12px 13px;cursor:grab;transition:all .15s;position:relative;
@@ -3180,8 +3185,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.10.0';
-const APP_LAST_CHANGE = 'Redesign modal Detalhes do Lead — seções em cards separados com esmaecer, ícones SVG nos títulos (1 por seção), ícones por linha removidos, botão WhatsApp movido pra perto do número, barra Etapa Atual removida, Salvar verde legível, aviso "sem comprovante" neutro';
+const APP_VERSION = '2.10.1';
+const APP_LAST_CHANGE = 'CRM Pipeline — barrinha de scroll lateral das colunas escondida (scroll via mouse/touchpad continua funcionando)';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
