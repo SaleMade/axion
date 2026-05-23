@@ -6029,12 +6029,12 @@ function pageContingencia(){
     </div>
     <div id="cont-by-at"></div>
 
-    <!-- ─── Lista detalhada (operacional avançado — colapsada por padrão) ─── -->
-    <details style="margin-top:28px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden">
+    <!-- ─── Contingência de Números (lista detalhada — aberta por padrão) ─── -->
+    <details open style="margin-top:28px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden">
       <summary style="padding:13px 18px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:10px;list-style:none;font-size:13.5px;font-weight:600;color:var(--tx)">
         <span class="cont-det-arrow" style="color:var(--t4);font-size:11px;transition:transform .2s">▶</span>
-        <span>🔧 Lista detalhada de chips</span>
-        <span class="muted" style="font-size:11.5px;font-weight:500;flex:1">modelo · operadora · recarga · histórico</span>
+        <span>📡 Contingência de Números</span>
+        <span class="muted" style="font-size:11px;flex:1"></span>
         <span class="muted" style="font-size:11px">${(DB.chips||[]).length} chips</span>
       </summary>
       <div style="padding:14px 18px;border-top:1px solid var(--b1)">
