@@ -175,10 +175,38 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .si .badge-n{margin-left:auto;background:var(--rd);color:#fff;
   font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px}
 @keyframes pu{0%,100%{opacity:1}50%{opacity:.35}}
-.sb-foot{padding:14px 18px;border-top:1px solid var(--b1)}
-.sb-sw{font-size:12px;color:var(--bl2);cursor:pointer;
-  display:flex;align-items:center;gap:6px;font-weight:500}
-.sb-sw:hover{text-decoration:underline}
+.sb-foot{padding:14px 14px 16px;border-top:1px solid var(--b1)}
+.sb-sw{font-size:12.5px;color:var(--t2);cursor:pointer;font-weight:600;
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;
+  border:1px solid var(--b1);
+  background:linear-gradient(135deg,var(--s2) 0%,var(--s1) 100%);
+  border-radius:var(--r);
+  transition:all .18s ease;
+  letter-spacing:.15px;
+  user-select:none}
+.sb-sw:hover{
+  color:var(--tx);
+  border-color:rgba(59,130,246,.5);
+  background:linear-gradient(135deg,var(--s3) 0%,var(--s2) 100%);
+  box-shadow:0 0 0 3px rgba(59,130,246,.07),0 2px 8px rgba(0,0,0,.3)}
+.sb-sw-ic{
+  font-size:13px;
+  color:var(--bl2);
+  display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;
+  background:rgba(59,130,246,.12);
+  border-radius:6px;
+  transition:transform .5s ease,background .18s ease}
+.sb-sw:hover .sb-sw-ic{
+  transform:rotate(75deg);
+  background:rgba(59,130,246,.22)}
+.sb-sw-arrow{
+  margin-left:auto;font-size:11px;color:var(--t4);
+  transition:transform .18s ease,color .18s ease}
+.sb-sw:hover .sb-sw-arrow{
+  transform:translateX(2px);
+  color:var(--bl2)}
 
 /* ─── MAIN ────────────────────────────────────────────── */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -1416,9 +1444,10 @@ h1 em{font-weight:700}
   <div class="sb-user" id="sb-user"></div>
   <nav class="sb-nav" id="sb-nav"></nav>
   <div class="sb-foot">
-    <div class="sb-sw" onclick="goPage('config')" style="display:flex;align-items:center;gap:8px">
-      <span style="font-size:14px">⚙</span>
+    <div class="sb-sw" onclick="goPage('config')" title="Configurações da conta, equipe e integrações">
+      <span class="sb-sw-ic">⚙</span>
       <span>Configurações</span>
+      <span class="sb-sw-arrow">›</span>
     </div>
   </div>
 </aside>
@@ -6612,13 +6641,16 @@ function renderChipPickerList(){
 }
 function assignChipToTarget(chipId){
   const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
-  if(c.at===_chipPickerTargetAtId){closeM('m-chip-picker');return;}
+  if(c.at===_chipPickerTargetAtId && c.em_uso && c.st==='ativo'){closeM('m-chip-picker');return;}
   const novoAt=_chipPickerTargetAtId;
   const novoNome=getTeam(novoAt)?.name||'atendente';
+  // Picker = "atribuir pra usar" → ativa o uso (igual ao drag pra coluna do atendente)
   c.at=novoAt;
+  c.em_uso=true;
+  c.st='ativo';
   closeM('m-chip-picker');
   renderChipsByAtendente();
-  toast(`📱 ${c.num} atribuído pra ${novoNome} · sincronizando...`,'ok');
+  toast(`📱 ${c.num} → ${novoNome} (em uso) · sincronizando...`,'ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
@@ -6647,7 +6679,7 @@ function autoPromoteWarmedChips(){
   chips.forEach(c=>{
     // Caso 1: tem warm_start → calcula dias decorridos
     if(c.warm_start){
-      if(computeWarmDay(c)>=7){c.st='ativo';c.dia=7;promovidos++;}
+      if(computeWarmDay(c)>=7){c.st='ativo';c.dia=7;c.em_uso=false;promovidos++;}
       return;
     }
     // Caso 2: chip antigo sem warm_start — tenta inferir idade por outras pistas
@@ -6666,6 +6698,7 @@ function autoPromoteWarmedChips(){
     if(antigoDeMais){
       c.st='ativo';
       c.dia=7;
+      c.em_uso=false;  // promove pra pool "Aquecidos" pro user puxar manualmente
       promovidos++;
     }
   });
@@ -6836,6 +6869,9 @@ function saveChip(){
     tags:$('mc-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
     note:$('mc-note').value,
   });
+  // Consistência da flag em_uso vs status: chip em aquecimento ou banido NÃO
+  // está em uso ativo. Pra ativos, preserva o valor que já tinha.
+  if(stNovo!=='ativo') c.em_uso=false;
   closeM('m-chip');refreshUI();
   toast('Chip atualizado · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
