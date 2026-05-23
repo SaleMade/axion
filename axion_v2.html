@@ -417,7 +417,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;
   background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:12px 14px}
 .kb-search{flex:1;min-width:200px;background:var(--s3);border:1px solid var(--b2);
-  color:var(--tx);font-size:13px;padding:9px 12px;border-radius:var(--r);outline:none;font-family:inherit}
+  color:var(--tx);font-size:13px;padding:9px 12px 9px 34px;border-radius:var(--r);outline:none;font-family:inherit;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237f8a9c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+  background-repeat:no-repeat;
+  background-position:11px center}
 .kb-search:focus{border-color:var(--bl)}
 .kb-sel{background:var(--s3);border:1px solid var(--b2);color:var(--tx);
   font-size:12px;padding:8px 11px;border-radius:var(--r);outline:none;
@@ -1512,7 +1515,7 @@ h1 em{font-weight:700}
     <!-- Date Range Picker — completo (atalhos + meses + customizado) -->
     <div class="drp-wrap" id="drp-wrap">
       <button class="drp-trigger" id="drp-trigger" onclick="toggleDRP()">
-        <span style="font-size:14px">📅</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         <span id="drp-label">Últimos 7 dias</span>
         <span style="margin-left:6px;color:var(--t3)">▾</span>
       </button>
@@ -1921,9 +1924,9 @@ h1 em{font-weight:700}
       <button class="m-x" onclick="closeM('m-chip-picker')">×</button>
     </div>
     <div class="m-b">
-      <input id="mcp-q" placeholder="🔍 Buscar número, atendente atual ou modelo..."
+      <input id="mcp-q" placeholder="Buscar número, atendente atual ou modelo..."
         oninput="renderChipPickerList()"
-        style="width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-family:inherit;font-size:13px;outline:none">
+        style="width:100%;background:var(--s3) url(&quot;data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237f8a9c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>&quot;) no-repeat 11px center;border:1px solid var(--b2);color:var(--tx);padding:9px 12px 9px 34px;border-radius:var(--r);margin-bottom:12px;font-family:inherit;font-size:13px;outline:none">
       <p class="muted" style="font-size:11.5px;margin-bottom:8px">Clique no número que quer atribuir. Pra criar um chip novo, use "+ Novo Chip" no topo da página.</p>
       <div id="mcp-list" style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto"></div>
     </div>
@@ -3185,8 +3188,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.10.1';
-const APP_LAST_CHANGE = 'CRM Pipeline — barrinha de scroll lateral das colunas escondida (scroll via mouse/touchpad continua funcionando)';
+const APP_VERSION = '2.11.0';
+const APP_LAST_CHANGE = 'Padronização de ícones — sidebar com setinhas, filtro de período, busca, cards do CRM, popover do CRM, tabs das Configurações e botões do Design & Copy (Salvar/Limpar) agora usam SVG Lucide. Mantidos: ✨ Gerar Copy, 🧬 DNA, ícones coloridos das opções do framework de criação';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3236,6 +3239,16 @@ const ICONS = {
   'smartphone':     '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
   'map-pin':        '<path d="M20 10c0 7-8 12-8 12s-8-5-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
   'plus':           '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  'search':         '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  'save':           '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+  'trash':          '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+  'eraser':         '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  'shield':         '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  'info':           '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  'phone':          '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  'mail':           '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+  'tag':            '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+  'link':           '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
 };
 
 function ico(name, opts={}){
@@ -4212,7 +4225,7 @@ function buildSidebar(){
     nav=[{g:'Operação',items:[{id:'trafego',lbl:'Registro de Tráfego',live:true}]}];
   } else if(des){
     // Designer: visão única — Criativos
-    nav=[{g:'Criativos',items:[{id:'copies',lbl:'Copies',icon:'✍️',live:true,actionFn:"goPage('copies')"}]}];
+    nav=[{g:'Criativos',items:[{id:'copies',lbl:'Copies',live:true,actionFn:"goPage('copies')"}]}];
   } else {
     // Helper: respeita ACL pra qualquer permissão. Diretor sempre vê.
     const can=p=>canRole(p);
@@ -4251,7 +4264,7 @@ function buildSidebar(){
         ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
         {id:'contingencia',lbl:"WhatsApp's"},
         // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
-        ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',icon:'⚙',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
+        ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
       ]},
       // Acordeão de Criativos — admins + Designer
       ...((dir||isDes())?[{g:'Criativos',items:[
@@ -4920,7 +4933,7 @@ function pageCRM(){
       <div><h1>CRM / <em>Pipeline</em></h1></div>
     </div>
     <div class="kb-bar">
-      <input class="kb-search" id="kb-q" placeholder="🔍 Buscar por nome ou WhatsApp..." oninput="updateCrmFilters()">
+      <input class="kb-search" id="kb-q" placeholder="Buscar por nome ou WhatsApp..." oninput="updateCrmFilters()">
       <select class="kb-sel" id="kb-vend" onchange="updateCrmFilters()">
         <option value="">Vendedor: Todos</option>
         ${TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor').map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
@@ -5311,11 +5324,11 @@ function renderKanban(){
         <div class="kb-dots" onclick="event.stopPropagation();openLeadMenu(event,${lead.id})">⋮</div>
         <div class="kb-name">${lead.nome}</div>
         <div class="kb-meta">
-          <span>☎ ${lead.wa}</span>
-          <span>📅 ${lead.data}</span>
-          ${lead.cidade?`<span>📍 ${lead.cidade}/${lead.uf||''}</span>`:''}
+          <span>${ico('phone',{size:11})} ${lead.wa}</span>
+          <span>${ico('calendar',{size:11})} ${lead.data}</span>
+          ${lead.cidade?`<span>${ico('map-pin',{size:11})} ${lead.cidade}/${lead.uf||''}</span>`:''}
         </div>
-        ${lead.track?`<div class="kb-meta"><span>📦 ${lead.track}</span></div>`:''}
+        ${lead.track?`<div class="kb-meta"><span>${ico('package',{size:11})} ${lead.track}</span></div>`:''}
         <div class="kb-foot">
           <span class="kb-pgto">${lead.pgto||lead.spg||'—'}</span>
           <span class="kb-mod">${lead.mod==='entrega'?'Entrega':'Antec.'}</span>
@@ -5379,16 +5392,16 @@ function openLeadMenu(e,lid){
   }).join('');
   const waNum=lead.wa.replace(/\D/g,'');
   p.innerHTML=`
-    <div class="popover-item" onclick="openLeadDetail(${lid})">📝 Ver detalhes</div>
-    <div class="popover-item" onclick="window.open('https://wa.me/55${waNum}','_blank')">💬 WhatsApp</div>
-    <div class="popover-item" onclick="window.open('tel:${waNum}','_blank')">📞 Ligar</div>
-    ${lead.link?`<div class="popover-item" onclick="navigator.clipboard.writeText('${lead.link}');toast('Checkout copiado','ok');closePopover()">🔗 Copiar checkout</div>`:''}
+    <div class="popover-item" onclick="openLeadDetail(${lid})">${ico('pen-line',{size:12})} Ver detalhes</div>
+    <div class="popover-item" onclick="window.open('https://wa.me/55${waNum}','_blank')">${ico('message-circle',{size:12})} WhatsApp</div>
+    <div class="popover-item" onclick="window.open('tel:${waNum}','_blank')">${ico('phone',{size:12})} Ligar</div>
+    ${lead.link?`<div class="popover-item" onclick="navigator.clipboard.writeText('${lead.link}');toast('Checkout copiado','ok');closePopover()">${ico('link',{size:12})} Copiar checkout</div>`:''}
     <div class="popover-sep"></div>
     <details>
       <summary>📋 Mover para... <span class="pop-acc-chev">▾</span></summary>
       ${moveOpts}
     </details>
-    ${isDir()?`<div class="popover-sep"></div><div class="popover-item danger" onclick="quickDelete(${lid})">🗑 Excluir</div>`:''}`;
+    ${isDir()?`<div class="popover-sep"></div><div class="popover-item danger" onclick="quickDelete(${lid})">${ico('trash',{size:12})} Excluir</div>`:''}`;
   const r=e.target.getBoundingClientRect();
   p.style.left=Math.min(window.innerWidth-220,r.left)+'px';
   p.style.top =(r.bottom+4)+'px';
@@ -6208,7 +6221,7 @@ function pageContingencia(){
       </summary>
       <div style="padding:14px 18px;border-top:1px solid var(--b1)">
         <div class="cont-bar">
-          <input class="kb-search" id="cont-q" placeholder="🔍 Buscar número, atendente ou modelo..." oninput="renderChips()">
+          <input class="kb-search" id="cont-q" placeholder="Buscar número, atendente ou modelo..." oninput="renderChips()">
           <select class="kb-sel" id="cont-st" onchange="renderChips()">
             <option value="">Status: Todos</option>
             <option value="ativo">Ativo</option>
@@ -11463,14 +11476,14 @@ function renderCopies(){
 
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
       <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="A IA (Gemini) escreve um roteiro original baseado nos parâmetros selecionados + DNA dos vencedores · 2-5 segundos">✨ Gerar Copy com IA</button>
-      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa o roteiro atual">🗑 Limpar</button>
+      <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa o roteiro atual">${ico('eraser',{size:13})} Limpar</button>
     </div>
 
     <div class="cp-script-blocks" id="cp-blocks-wrap"></div>
 
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-      <button class="btn btn-gr btn-sm" onclick="cpSalvarIdeia()">💾 Salvar como ideia (vai pro Kanban)</button>
-      <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiroDraft()">📋 Copiar roteiro</button>
+      <button class="btn btn-gr btn-sm" onclick="cpSalvarIdeia()">${ico('save',{size:13})} Salvar como ideia (vai pro Kanban)</button>
+      <button class="btn btn-gh btn-sm" onclick="cpCopiarRoteiroDraft()">${ico('clipboard-list',{size:13})} Copiar roteiro</button>
     </div>
   </div>`;
   })()}
@@ -11570,15 +11583,17 @@ function pageConfig(){return `<div class="page" id="config-pg"></div>`}
 let configTab='conta';
 function setConfigTab(t){configTab=t;renderConfig()}
 
+// Cada aba referencia um nome de ícone da nossa biblioteca ICONS (Lucide-style).
+// Renderizado via ico(t.ic, {size:14}) no botão da nav.
 const CONFIG_TABS=[
-  {k:'conta',      l:'Conta & Perfil',  ic:'👤', all:true},                  // todos
-  {k:'equipe',     l:'Gerenciar Equipe', ic:'👥', dirOnly:true},             // diretor/sócio
-  {k:'integracoes',l:'Integrações',     ic:'⚡', dirOnly:true},              // diretor/sócio
-  {k:'permissoes', l:'Permissões',      ic:'🔒', dirOnly:true},              // diretor/sócio
-  {k:'notif',      l:'Notificações',    ic:'🔔', all:true},                  // todos (próprias)
-  {k:'aparencia',  l:'Aparência',       ic:'🎨', all:true},                  // todos
-  {k:'dados',      l:'Dados & Backup',  ic:'💾', dirOnly:true},              // diretor/sócio
-  {k:'sobre',      l:'Sobre',           ic:'ℹ', all:true},                  // todos
+  {k:'conta',      l:'Conta & Perfil',   ic:'user',           all:true},
+  {k:'equipe',     l:'Gerenciar Equipe', ic:'users',          dirOnly:true},
+  {k:'integracoes',l:'Integrações',      ic:'zap',            dirOnly:true},
+  {k:'permissoes', l:'Permissões',       ic:'shield',         dirOnly:true},
+  {k:'notif',      l:'Notificações',     ic:'bell',           all:true},
+  {k:'aparencia',  l:'Aparência',        ic:'palette',        all:true},
+  {k:'dados',      l:'Dados & Backup',   ic:'save',           dirOnly:true},
+  {k:'sobre',      l:'Sobre',            ic:'info',           all:true},
 ];
 
 function renderConfig(){
@@ -11595,7 +11610,7 @@ function renderConfig(){
   <div class="config-grid">
     <div class="config-nav">
       ${visibleTabs.map(t=>`<button class="cfg-nav-item ${configTab===t.k?'on':''}" onclick="setConfigTab('${t.k}')">
-        <span style="font-size:15px;width:22px;text-align:center">${t.ic}</span>
+        <span style="width:22px;display:inline-flex;align-items:center;justify-content:center;color:var(--bl2)">${ico(t.ic,{size:14})}</span>
         <span>${t.l}</span>
       </button>`).join('')}
       <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--b1)">
