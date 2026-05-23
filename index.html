@@ -3131,6 +3131,12 @@ const apiToken=()=>{try{return localStorage.getItem('axion_api_token')||''}catch
 const apiEnabled=()=>!!apiUrl();
 let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency)
 
+// ─── Versão do App ─────────────────────────────────────
+// Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
+// APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
+const APP_VERSION = '2.6.0';
+const APP_LAST_CHANGE = 'Redesign visual passada 1 — paleta teal sóbria, neonzinhos laterais removidos, subtítulos descritivos limpos';
+
 const api={
   async _fetch(path,opts={}){
     const base=apiUrl();
@@ -12253,15 +12259,16 @@ function cfgSobre(){
   <div class="cfg-section">
     <div class="cfg-h"><h2>Sobre AXION</h2><p>Informações do sistema</p></div>
 
-    <div class="cfg-card" style="display:flex;align-items:center;gap:18px">
+    <div class="cfg-card" style="display:flex;align-items:flex-start;gap:18px">
       <div class="l-logo" style="width:64px;height:64px;margin:0"><img src="Logo.png" alt="AXION"></div>
       <div style="flex:1">
         <div style="font-size:22px;font-weight:800;color:var(--tx);letter-spacing:.04em">AX<em style="background:linear-gradient(90deg,var(--bl2),var(--cy));-webkit-background-clip:text;background-clip:text;color:transparent;font-style:normal">ION</em></div>
         <div class="muted" style="font-size:13px">Plataforma operacional · Marketing Direto</div>
       </div>
-      <div style="text-align:right">
+      <div style="text-align:right;min-width:140px">
         <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700">Versão</div>
-        <div style="font-size:18px;font-weight:700;color:var(--bl2)">2.5.0</div>
+        <div style="font-size:18px;font-weight:700;color:var(--bl2)">${APP_VERSION}</div>
+        <div class="muted" style="font-size:11px;margin-top:8px;line-height:1.45;text-align:right;max-width:220px;margin-left:auto">${APP_LAST_CHANGE}</div>
       </div>
     </div>
 
@@ -12291,7 +12298,7 @@ function cfgSobre(){
 
 // ─── Funções de Backup ─────────────────────────────────
 function exportBackup(){
-  const data={...DB,_meta:{version:'2.5.0',exported_at:new Date().toISOString(),user:CUR?.id}};
+  const data={...DB,_meta:{version:APP_VERSION,exported_at:new Date().toISOString(),user:CUR?.id}};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;
