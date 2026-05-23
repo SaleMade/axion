@@ -6032,6 +6032,7 @@ function pageContingencia(){
     <!-- ─── KANBAN (operacional do dia-a-dia — visão principal) ─── -->
     <div class="section-title" style="margin-top:0">
       📋 Designação de Números por Atendente
+      <span style="margin-left:10px;font-size:10px;font-weight:500;color:var(--t4);letter-spacing:.5px;text-transform:none">build 2025.05.23-3</span>
     </div>
     <div id="cont-by-at"></div>
 
@@ -6250,9 +6251,10 @@ function renderChipsByAtendente(){
     });
   });
 
-  // HTML do Kanban — colunas pool primeiro, depois cada atendente
+  // HTML do Kanban — colunas pool primeiro, depois cada atendente.
+  // data-col-id em cada wk-col permite restaurar scroll por coluna após re-render.
   const colunaPool=(items,id,titulo,cor,bg)=>`
-    <div class="wk-col wk-col-pool"
+    <div class="wk-col wk-col-pool" data-col-id="${id}"
         ondragover="_chipDragOver(event)"
         ondragleave="_chipDragLeave(event)"
         ondrop="_chipDrop(event,'${id}')"
@@ -6263,21 +6265,25 @@ function renderChipsByAtendente(){
       </div>
       <div class="wk-col-list">
         ${items.length
-          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false)).join('')
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/true)).join('')
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— vazio —</div>`}
       </div>
     </div>`;
 
-  const colunaAtendente=(at,items)=>`
-    <div class="wk-col"
+  // Cor de fundo suave do atendente (alpha bem baixo pra não ficar berrante)
+  const colunaAtendente=(at,items)=>{
+    const cor=at.color||'#64748b';
+    return `
+    <div class="wk-col" data-col-id="${at.id}"
         ondragover="_chipDragOver(event)"
         ondragleave="_chipDragLeave(event)"
-        ondrop="_chipDrop(event,'${at.id}')">
-      <div class="wk-col-h">
+        ondrop="_chipDrop(event,'${at.id}')"
+        style="background:${cor}0d;border:1px solid ${cor}33">
+      <div class="wk-col-h" style="background:${cor}1a;border-bottom:1px solid ${cor}33">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
           ${avatar(at,{size:24,fontSize:10})}
           <div style="flex:1;min-width:0">
-            <div class="wk-col-name" style="text-transform:none;letter-spacing:0;font-size:12.5px">${at.name}</div>
+            <div class="wk-col-name" style="text-transform:none;letter-spacing:0;font-size:12.5px;color:${cor}">${at.name}</div>
             <div style="font-size:10px;color:var(--t4);text-transform:capitalize">${at.role}</div>
           </div>
         </div>
@@ -6289,24 +6295,53 @@ function renderChipsByAtendente(){
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— arraste números aqui —</div>`}
       </div>
     </div>`;
+  };
 
   const html=`<div class="wk-board">
     ${colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
     ${colunaPool(poolAquecidos,'__aquecidos__','🟢 Aquecidos','#10b981','rgba(16,185,129,.04)')}
     ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
   </div>`;
+
+  // Preserva scroll antes do re-render: horizontal do board + vertical de cada coluna.
+  // Sem isso, qualquer mudança (drag-drop, troca de status) faria o Kanban voltar pra
+  // esquerda e o usuário "perderia" onde estava — UX horrível em time grande.
+  const oldBoard=wrap.querySelector('.wk-board');
+  const scrollLeft=oldBoard?oldBoard.scrollLeft:0;
+  const colScrolls={};
+  if(oldBoard){
+    oldBoard.querySelectorAll('.wk-col').forEach(col=>{
+      const id=col.getAttribute('data-col-id');
+      const list=col.querySelector('.wk-col-list');
+      if(id && list) colScrolls[id]=list.scrollTop;
+    });
+  }
+
   wrap.innerHTML=html;
+
+  // Restaura scroll — no mesmo frame pra ninguém ver o pulo
+  const newBoard=wrap.querySelector('.wk-board');
+  if(newBoard){
+    newBoard.scrollLeft=scrollLeft;
+    newBoard.querySelectorAll('.wk-col').forEach(col=>{
+      const id=col.getAttribute('data-col-id');
+      const list=col.querySelector('.wk-col-list');
+      if(id && list && colScrolls[id]!=null) list.scrollTop=colScrolls[id];
+    });
+  }
 }
 
 // Card de chip estilo CRM Pipeline (sem borda lateral, click no card abre edição,
-// status atual com dropdown ao clicar, sempre mostra atendente designado)
+// status atual com dropdown ao clicar). O atendente só aparece quando o card está
+// numa coluna pool (Em Aquecimento / Aquecidos) — dentro da coluna do próprio
+// atendente é redundante.
 function _renderChipCard(c, showAtendente){
   const wa=getWaStatus(c);
   const info=getWaStatusInfo(wa);
   // Bolinha de status operacional no canto superior direito
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
-  const at=getTeam(c.at);  // sempre mostra atendente designado se houver
+  const at=showAtendente?getTeam(c.at):null;  // só mostra atendente nas pools
 
   // Status pill clicável que abre dropdown
   const statusPill=info
@@ -6362,25 +6397,27 @@ function _waStatusOpenPicker(chipId, anchorEl){
   },10);
 }
 
-// Handler de drop: pools só mudam o STATUS, mantém o atendente designado.
-// Coluna de atendente atribui o atendente (mantém status).
+// Handler de drop CRM-style: cada chip vive em EXATAMENTE uma coluna.
+// Pool = fila sem atendente. Coluna de atendente = atribuído.
 function _chipDropExtended(targetId){
   const chipId=_draggingChipId;
   if(!chipId)return;
   const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
   if(targetId==='__aquecimento__'){
-    if(c.st==='aquecimento')return false;
+    // Devolve pra fila de aquecimento (sem atendente)
+    if(c.st==='aquecimento' && !c.at)return false; // já está lá
     c.st='aquecimento';
-    // Atendente é PRESERVADO — só muda o status operacional
+    c.at=null;
     if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
     toast(`📱 ${c.num} → Em Aquecimento`,'ok');
   } else if(targetId==='__aquecidos__'){
-    if(c.st==='ativo')return false;
+    // Devolve pra fila de aquecidos (sem atendente)
+    if(c.st==='ativo' && !c.at)return false; // já está lá
     c.st='ativo';
-    // Atendente também é PRESERVADO
+    c.at=null;
     toast(`📱 ${c.num} → Aquecidos`,'ok');
   } else {
-    // Atribui a atendente
+    // Atribui a atendente (mantém status operacional)
     if(c.at===targetId)return false;
     c.at=targetId;
     const novoNome=getTeam(targetId)?.name||'atendente';
