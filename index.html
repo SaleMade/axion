@@ -6032,7 +6032,7 @@ function pageContingencia(){
     <!-- ─── KANBAN (operacional do dia-a-dia — visão principal) ─── -->
     <div class="section-title" style="margin-top:0">
       📋 Designação de Números por Atendente
-      <span style="margin-left:10px;font-size:10px;font-weight:500;color:var(--t4);letter-spacing:.5px;text-transform:none">build 2025.05.23-3</span>
+      <span style="margin-left:10px;font-size:10px;font-weight:500;color:var(--t4);letter-spacing:.5px;text-transform:none">build 2025.05.23-4</span>
     </div>
     <div id="cont-by-at"></div>
 
@@ -6214,6 +6214,19 @@ function saveWaStatusAll(){
 function renderChipsByAtendente(){
   const wrap=$('cont-by-at');if(!wrap)return;
 
+  // Migração one-shot: chips antigos sem `em_uso` definido. A flag separa
+  // "ativo aguardando uso" (na pool Aquecidos) de "ativo em uso" (na coluna
+  // do atendente). Pra não bagunçar o estado atual do usuário, assumimos
+  // que chips ativos com atendente já estão em uso (era onde apareciam).
+  let migrou=false;
+  (DB.chips||[]).forEach(c=>{
+    if(c.em_uso===undefined){
+      c.em_uso = (c.st==='ativo' && !!c.at);
+      migrou=true;
+    }
+  });
+  if(migrou) persist();
+
   // Diretor vê todos; outros só seus próprios chips
   const chips=DB.chips.filter(c=>isDir()||c.at===CUR.id);
 
@@ -6234,21 +6247,26 @@ function renderChipsByAtendente(){
     return (a.name||'').localeCompare(b.name||'');
   });
 
-  // Pools (sem atendente)
-  const poolAquecimento=chips.filter(c=>!c.at && c.st==='aquecimento');
-  const poolAquecidos=chips.filter(c=>!c.at && c.st!=='aquecimento');
+  // Pipeline em 3 estágios — o atendente designado é PRESERVADO em todos:
+  //   Pool "Em Aquecimento" → chip aquecendo (qualquer estado de em_uso)
+  //   Pool "Aquecidos"      → chip ativo mas ainda não em uso ativo
+  //   Coluna do atendente   → chip ativo E em uso por aquele atendente
+  // Quando completa 7 dias de aquecimento → autoPromoteWarmedChips faz
+  // st=ativo (em_uso fica false), então o chip cai naturalmente em "Aquecidos".
+  // Aí o usuário arrasta pra coluna do atendente pra ativar o uso.
+  const poolAquecimento=chips.filter(c=>c.st==='aquecimento');
+  const poolAquecidos  =chips.filter(c=>c.st==='ativo' && !c.em_uso);
 
-  // Chips por atendente — ordena ativos primeiro, aquecimento por último
+  // Chips por atendente — só os "em uso" (ativos atribuídos)
   const byAt={};
   membros.forEach(m=>{byAt[m.id]=[]});
-  chips.forEach(c=>{ if(c.at && byAt[c.at]!==undefined) byAt[c.at].push(c); });
+  chips.forEach(c=>{
+    if(c.at && c.st==='ativo' && c.em_uso && byAt[c.at]!==undefined){
+      byAt[c.at].push(c);
+    }
+  });
   Object.keys(byAt).forEach(id=>{
-    byAt[id].sort((a,b)=>{
-      const aq=a.st==='aquecimento'?1:0;
-      const bq=b.st==='aquecimento'?1:0;
-      if(aq!==bq)return aq-bq; // ativos primeiro
-      return (a.num||'').localeCompare(b.num||'');
-    });
+    byAt[id].sort((a,b)=>(a.num||'').localeCompare(b.num||''));
   });
 
   // HTML do Kanban — colunas pool primeiro, depois cada atendente.
@@ -6397,31 +6415,34 @@ function _waStatusOpenPicker(chipId, anchorEl){
   },10);
 }
 
-// Handler de drop CRM-style: cada chip vive em EXATAMENTE uma coluna.
-// Pool = fila sem atendente. Coluna de atendente = atribuído.
+// Handler de drop em 3 estágios. O atendente designado (c.at) é PRESERVADO
+// em todos os drops — só a flag em_uso e o status (st) mudam.
+//   __aquecimento__: chip volta pra aquecer (st=aquecimento, em_uso=false)
+//   __aquecidos__  : chip pronto aguardando uso (st=ativo, em_uso=false)
+//   coluna atendente: chip em uso ativo (at=alvoId, em_uso=true, st=ativo)
 function _chipDropExtended(targetId){
   const chipId=_draggingChipId;
   if(!chipId)return;
   const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
   if(targetId==='__aquecimento__'){
-    // Devolve pra fila de aquecimento (sem atendente)
-    if(c.st==='aquecimento' && !c.at)return false; // já está lá
+    if(c.st==='aquecimento' && !c.em_uso)return false; // já está lá
     c.st='aquecimento';
-    c.at=null;
+    c.em_uso=false;
     if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
     toast(`📱 ${c.num} → Em Aquecimento`,'ok');
   } else if(targetId==='__aquecidos__'){
-    // Devolve pra fila de aquecidos (sem atendente)
-    if(c.st==='ativo' && !c.at)return false; // já está lá
+    if(c.st==='ativo' && !c.em_uso)return false; // já está lá
     c.st='ativo';
-    c.at=null;
+    c.em_uso=false;
     toast(`📱 ${c.num} → Aquecidos`,'ok');
   } else {
-    // Atribui a atendente (mantém status operacional)
-    if(c.at===targetId)return false;
+    // Atribui ao atendente E ativa pra uso (vai pra coluna dele)
+    if(c.at===targetId && c.em_uso && c.st==='ativo')return false;
     c.at=targetId;
+    c.em_uso=true;
+    c.st='ativo';
     const novoNome=getTeam(targetId)?.name||'atendente';
-    toast(`📱 ${c.num} → ${novoNome}`,'ok');
+    toast(`📱 ${c.num} → ${novoNome} (em uso)`,'ok');
   }
   renderChipsByAtendente();
   persistAndPushNow().catch(_=>{});
