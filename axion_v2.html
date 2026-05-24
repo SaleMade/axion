@@ -2300,6 +2300,13 @@ h1 em{font-weight:700}
         <div class="field"><label>Descrição</label><input id="inv-desc"></div>
         <div class="field"><label>Valor (R$)</label><input id="inv-vl" type="number" step="0.01"></div>
         <div class="field"><label>Data</label><input id="inv-dt" type="date"></div>
+        <!-- ─── Quem pagou: empresa (caixa) ou sócio (do bolso) ─── -->
+        <!-- Se for um sócio, geramos aporte automático no nome dele (reembolso virtual) -->
+        <div class="field">
+          <label>Quem pagou? <span style="color:var(--rd)">*</span></label>
+          <select id="inv-pago-por"></select>
+          <div class="muted" id="inv-pago-hint" style="font-size:11.5px;margin-top:6px;line-height:1.45;display:none;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:8px 11px;border-radius:7px"></div>
+        </div>
       </div>
       <div class="row" style="justify-content:flex-end">
         <button class="btn btn-gh" onclick="closeM('m-inv')">Cancelar</button>
@@ -2708,6 +2715,12 @@ h1 em{font-weight:700}
         </div>
         <div class="field"><label>Investido (R$)</label><input id="mg-vl" type="number" step="0.01"></div>
         <div class="field"><label>Pedidos Feitos</label><input id="mg-leads" type="number" placeholder="ex: 12"></div>
+        <!-- ─── Quem pagou: empresa (caixa) ou sócio (do bolso) ─── -->
+        <div class="field" style="grid-column:span 2">
+          <label>Quem pagou? <span style="color:var(--rd)">*</span></label>
+          <select id="mg-pago-por"></select>
+          <div class="muted" id="mg-pago-hint" style="font-size:11.5px;margin-top:6px;line-height:1.45;display:none;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:8px 11px;border-radius:7px"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -3493,8 +3506,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.19.1';
-const APP_LAST_CHANGE = 'Modal Detalhes do Lead reorganizado: "Pedido" saiu da coluna 1 e foi pra coluna 3 (em cima de "Comentários & Anexos"). Aproveita melhor o espaço lateral direito que estava vazio. Grid balanceada 1fr 1fr 1fr.';
+const APP_VERSION = '2.20.0';
+const APP_LAST_CHANGE = 'NOVO: campo "Quem pagou?" em Investimentos e Tráfego Pago. Permite registrar que um sócio/diretor pagou do bolso — gera aporte automático no nome dele (reembolso virtual). A empresa fica "devendo" pro sócio e o saldo de aporte dele aumenta proporcionalmente. Delete cascata: apagar gasto também apaga o aporte vinculado.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8480,6 +8493,7 @@ function renderInvest(){
           <th style="text-align:left">Descrição</th>
           <th style="text-align:left">Categoria</th>
           <th style="text-align:left">Tipo</th>
+          <th style="text-align:left">Pago por</th>
           <th class="right">Valor</th>
           <th class="right" style="width:80px">Ações</th>
         </tr></thead>
@@ -8490,20 +8504,30 @@ function renderInvest(){
             const tipoBadge=isBudget
               ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold)">🎯 Budget</span>`
               :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">💸 Gasto</span>`;
+            // Quem pagou: empresa (default) ou sócio específico
+            const pp=i.pago_por||'empresa';
+            const pagoBadge=pp==='empresa'
+              ?`<span class="tbl-st" style="background:var(--bld);color:var(--bl2)">🏢 Empresa</span>`
+              :(()=>{
+                const u=getTeam(pp);
+                if(!u)return `<span class="tbl-st" style="background:rgba(100,116,139,.12);color:var(--t3)">— ?</span>`;
+                return `<span class="tbl-st" style="background:rgba(251,191,36,.12);color:var(--gold)" title="Pago do bolso · aporte automático gerado">💼 ${u.name}</span>`;
+              })();
             return `<tr>
               <td style="color:var(--t2)">${ddmmyyyyFromIso(i.dt)}</td>
               <td><b style="color:var(--tx);font-weight:500">${i.desc}</b></td>
               <td><span class="tbl-st" style="background:${ct.cor}14;color:var(--t2)">${ct.icon} ${ct.nome}</span></td>
               <td>${tipoBadge}</td>
+              <td>${pagoBadge}</td>
               <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(i.vl)}</td>
               <td class="right" style="white-space:nowrap">
                 <button class="btn-act btn-act-gh btn-act-icon" onclick="editInvest(${i.id})" title="Editar">✎</button>
                 <button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button>
               </td>
             </tr>`;
-          }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
+          }).join(''):'<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
           <tr style="background:var(--s1);font-weight:700">
-            <td colspan="4" style="color:var(--tx)">Total gasto (sem budgets)</td>
+            <td colspan="5" style="color:var(--tx)">Total gasto (sem budgets)</td>
             <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
             <td></td>
           </tr>
@@ -9482,12 +9506,44 @@ function updPro(){
 // Estado: null = criando · número = editando esse id
 let _editingInvestId=null;
 
+// Popula o select "Quem pagou?" com Empresa + lista de Sócios/Diretores/Produtores.
+// Seta o valor selecionado e atualiza o hint embaixo.
+function populateInvPagoPor(selected){
+  const sel=$('inv-pago-por');if(!sel)return;
+  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview&&!t.archived);
+  const meId=CUR?.id;
+  const opts=[
+    `<option value="empresa">🏢 Empresa (caixa de aportes)</option>`,
+    ...socios.map(s=>{
+      const roleLbl={diretor:'Diretor',socio:'Sócio',produtor:'Produtor'}[s.role]||s.role;
+      const isMe=s.id===meId;
+      return `<option value="${s.id}">💼 ${s.name} · ${roleLbl}${isMe?' (você)':''} — pago do bolso</option>`;
+    })
+  ];
+  sel.innerHTML=opts.join('');
+  sel.value=selected||'empresa';
+  updateInvPagoHint();
+  sel.onchange=updateInvPagoHint;
+}
+function updateInvPagoHint(){
+  const sel=$('inv-pago-por');const hint=$('inv-pago-hint');if(!sel||!hint)return;
+  const v=sel.value;
+  if(v==='empresa'){
+    hint.style.display='none';
+  } else {
+    const nome=getTeam(v)?.name||'sócio';
+    hint.style.display='block';
+    hint.innerHTML=`💡 <b style="color:var(--gold)">${nome}</b> pagou do bolso. Vou gerar um <b>aporte automático</b> no nome dele com esse mesmo valor — a empresa fica devendo. Some junto se você apagar este lançamento.`;
+  }
+}
+
 function openInvest(){
   _editingInvestId=null;
   selOpts($('inv-cat'),DB.invCats.map(c=>({v:c.id,l:c.icon+' '+c.nome})));
   $('inv-desc').value='';$('inv-vl').value='';
   setInvType('gasto'); // default: gasto desembolsado
   if($('inv-dt'))$('inv-dt').value=new Date().toISOString().split('T')[0];
+  populateInvPagoPor('empresa');
   $('m-inv-title').textContent='+ Investimento';
   $('m-inv-save').textContent='Adicionar';
   openM('m-inv');
@@ -9502,6 +9558,7 @@ function editInvest(id){
   $('inv-vl').value=i.vl||'';
   $('inv-dt').value=i.dt||new Date().toISOString().split('T')[0];
   setInvType(i.is_budget?'budget':'gasto');
+  populateInvPagoPor(i.pago_por||'empresa');
   $('m-inv-title').textContent='Editar investimento';
   $('m-inv-save').textContent='Salvar';
   openM('m-inv');
@@ -9545,25 +9602,34 @@ function delInvCat(id){
   if(DB.invest.some(i=>i.cat===id)){toast('Categoria em uso, mova os investimentos primeiro','err');return}
   DB.invCats=DB.invCats.filter(c=>c.id!==id);persist();renderInvCats();
 }
-// Cria OU atualiza investimento dependendo de _editingInvestId
+// Cria OU atualiza investimento dependendo de _editingInvestId.
+// Se pago_por é um sócio (não 'empresa'), cria/atualiza aporte automático
+// no nome dele com o mesmo valor — a empresa fica "devendo" pro sócio.
 function saveInvest(){
   const desc=$('inv-desc').value.trim();
   if(!desc){toast('Descrição obrigatória','err');return}
   const isBudget=$('inv-is-budget').value==='1';
+  const pagoPor=$('inv-pago-por')?.value||'empresa';
   const payload={cat:$('inv-cat').value,desc,
     vl:Number($('inv-vl').value)||0,dt:$('inv-dt').value,
-    is_budget:isBudget};
+    is_budget:isBudget,
+    pago_por:pagoPor};
   let msgVerbo;
+  let investId;
   if(_editingInvestId!==null){
     const idx=DB.invest.findIndex(x=>x.id===_editingInvestId);
     if(idx>=0){
       DB.invest[idx]={...DB.invest[idx],...payload};
+      investId=_editingInvestId;
       msgVerbo='atualizado';
     }
   } else {
-    DB.invest.unshift({id:DB.nextInv++,...payload});
+    investId=DB.nextInv++;
+    DB.invest.unshift({id:investId,...payload});
     msgVerbo=isBudget?'Budget reservado':'Gasto registrado';
   }
+  // Reconciliação do aporte automático (reembolso virtual ao sócio)
+  syncAutoAporteForInvest(investId,payload,'invest');
   _editingInvestId=null;
   closeM('m-inv');refreshUI();
   toast(msgVerbo+' · sincronizando...','ok');
@@ -9572,10 +9638,50 @@ function saveInvest(){
 }
 // Compat: alguns lugares ainda chamam addInvest
 const addInvest=saveInvest;
+
+// ─── Sincroniza aporte automático quando alguém paga do bolso ─────────
+// Conceito: se um sócio pagou um investimento/gasto do bolso, é como se
+// ele tivesse aportado o mesmo valor + a empresa ter pago. Resultado
+// contábil idêntico, mas fica registrado que a empresa "deve" pro sócio.
+// O aporte fica linkado ao gasto via auto_source = {kind, id} pra:
+//   1) ser atualizado quando o usuário edita o gasto
+//   2) ser deletado em cascata se o gasto for excluído
+function syncAutoAporteForInvest(refId,payload,kind){
+  if(!DB.aportes) DB.aportes=[];
+  // Procura aporte já vinculado a esse gasto/invest
+  const existingIdx=DB.aportes.findIndex(a=>a.auto_source && a.auto_source.kind===kind && a.auto_source.id===refId);
+  const pagoPor=payload.pago_por||'empresa';
+  if(pagoPor==='empresa'){
+    // Pagou da empresa: se existia aporte automático, remove
+    if(existingIdx>=0)DB.aportes.splice(existingIdx,1);
+    return;
+  }
+  // Pagou um sócio do bolso: cria/atualiza aporte vinculado
+  const desc=payload.desc||(kind==='gasto'?'Gasto de tráfego':'Investimento');
+  const aporteData={
+    socio_id:pagoPor,
+    dt:payload.dt||new Date().toISOString().split('T')[0],
+    valor:Number(payload.vl||payload.valor||0),
+    cat:payload.cat||(kind==='gasto'?'trafego':'outros'),
+    obs:`🔄 Reembolso automático: ${desc}`,
+    auto_source:{kind,id:refId},
+  };
+  if(existingIdx>=0){
+    DB.aportes[existingIdx]={...DB.aportes[existingIdx],...aporteData};
+  } else {
+    DB.aportes.unshift({id:DB.nextAporte++,...aporteData});
+  }
+}
+
 async function delInvest(id){
   const i=DB.invest.find(x=>x.id===id);if(!i)return;
-  if(!await axConfirm(`Excluir o investimento <b>${i.desc}</b> de <b>${fmt(i.vl)}</b>?`,{okLabel:'Excluir'}))return;
+  // Conta se tem aporte automático associado pra mostrar no diálogo
+  const linkedAporte=(DB.aportes||[]).find(a=>a.auto_source && a.auto_source.kind==='invest' && a.auto_source.id===id);
+  const extra=linkedAporte?'<br><span style="font-size:12px;color:var(--gold)">⚠ O aporte automático vinculado também será removido</span>':'';
+  if(!await axConfirm(`Excluir o investimento <b>${i.desc}</b> de <b>${fmt(i.vl)}</b>?${extra}`,{okLabel:'Excluir'}))return;
   DB.invest=DB.invest.filter(i=>i.id!==id);
+  // Remove aporte vinculado (cascade)
+  if(DB.aportes)DB.aportes=DB.aportes.filter(a=>!(a.auto_source && a.auto_source.kind==='invest' && a.auto_source.id===id));
   refreshUI();
   toast('Excluído · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
@@ -9836,12 +9942,43 @@ function _mgReadChipPick(){
     .map(cb=>Number(cb.value)).filter(n=>!isNaN(n));
 }
 
+// Mesmo helper do invest mas pro modal de gasto — popula select e atualiza hint.
+function populateGastoPagoPor(selected){
+  const sel=$('mg-pago-por');if(!sel)return;
+  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview&&!t.archived);
+  const meId=CUR?.id;
+  const opts=[
+    `<option value="empresa">🏢 Empresa (caixa de aportes / budget tráfego)</option>`,
+    ...socios.map(s=>{
+      const roleLbl={diretor:'Diretor',socio:'Sócio',produtor:'Produtor'}[s.role]||s.role;
+      const isMe=s.id===meId;
+      return `<option value="${s.id}">💼 ${s.name} · ${roleLbl}${isMe?' (você)':''} — pago do bolso</option>`;
+    })
+  ];
+  sel.innerHTML=opts.join('');
+  sel.value=selected||'empresa';
+  updateGastoPagoHint();
+  sel.onchange=updateGastoPagoHint;
+}
+function updateGastoPagoHint(){
+  const sel=$('mg-pago-por');const hint=$('mg-pago-hint');if(!sel||!hint)return;
+  const v=sel.value;
+  if(v==='empresa'){
+    hint.style.display='none';
+  } else {
+    const nome=getTeam(v)?.name||'sócio';
+    hint.style.display='block';
+    hint.innerHTML=`💡 <b style="color:var(--gold)">${nome}</b> pagou esse tráfego do bolso. Vou gerar um <b>aporte automático</b> no nome dele com esse mesmo valor — a empresa fica devendo.`;
+  }
+}
+
 function openGastoNew(){
   editingGastoIdx=null;
   $('mg-data').value=new Date().toISOString().split('T')[0];
   $('mg-plat').value='TikTok';$('mg-camp').value='';
   $('mg-vl').value='';$('mg-leads').value='';
   populateGastoChipSelect(null);
+  populateGastoPagoPor('empresa');
   $('mg-title').textContent='+ Novo gasto de tráfego';
   $('mg-del').style.display='none';
   openM('m-gasto');
@@ -9856,6 +9993,7 @@ function editGasto(idx){
   // Suporta tanto chip_ids (array) quanto chip_id (string única, formato antigo)
   const selectedIds=Array.isArray(g.chip_ids)?g.chip_ids:(g.chip_id?[g.chip_id]:[]);
   populateGastoChipSelect(selectedIds);
+  populateGastoPagoPor(g.pago_por||'empresa');
   $('mg-title').textContent='Editar gasto';
   $('mg-del').style.display='';
   openM('m-gasto');
@@ -9871,11 +10009,24 @@ function saveGasto(){
   const atendentes=[...new Set(chips.map(c=>c.at).filter(Boolean))];
   // Números dos WhatsApps pra exibição rápida
   const numsTxt=chips.map(c=>c.num).join(', ');
+  const pagoPor=$('mg-pago-por')?.value||'empresa';
+  const valor=Number($('mg-vl').value)||0;
+  // Garante id estável no gasto (pra linkar o auto-aporte). Gastos antigos
+  // sem id ganham um agora; novos pegam o próximo do contador.
+  let gastoId;
+  if(editingGastoIdx!==null && DB.gastos[editingGastoIdx]?.id!=null){
+    gastoId=DB.gastos[editingGastoIdx].id;
+  } else {
+    if(!DB.nextGasto)DB.nextGasto=1;
+    gastoId=DB.nextGasto++;
+  }
   const obj={
+    id:gastoId,
     data, plat:$('mg-plat').value, campanha:$('mg-camp').value,
-    valor:Number($('mg-vl').value)||0,
+    valor,
     leads:Number($('mg-leads').value)||0,  // Mantém nome `leads` no DB pra compat,
                                               // mas agora representa "Pedidos Feitos" no UI
+    pago_por:pagoPor,
     // Campos novos (multi)
     chip_ids:chipIds, chip_nums:numsTxt,
     at_ids:atendentes,
@@ -9886,15 +10037,26 @@ function saveGasto(){
   };
   if(editingGastoIdx===null){DB.gastos.unshift(obj)}
   else {DB.gastos[editingGastoIdx]=obj}
+  // Sincroniza aporte automático se quem pagou foi um sócio do bolso
+  // (a categoria é 'trafego' pra somar no budget de Tráfego Pago)
+  syncAutoAporteForInvest(gastoId,{...obj,cat:'trafego',desc:`Tráfego ${obj.plat}${obj.campanha?' · '+obj.campanha:''}`,vl:valor},'gasto');
   // Push IMEDIATO — gasto é dado crítico que outros PCs precisam ver na hora
   closeM('m-gasto');refreshUI();
   toast('Gasto salvo · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado com servidor','ok'))
     .catch(e=>console.warn('Sync falhou:',e));
 }
+// Helper: remove aporte automático vinculado a um gasto (se houver)
+function _removeAutoAporteForGasto(g){
+  if(!g||g.id==null||!DB.aportes)return;
+  DB.aportes=DB.aportes.filter(a=>!(a.auto_source && a.auto_source.kind==='gasto' && a.auto_source.id===g.id));
+}
 async function delGasto(idx){
   const g=DB.gastos[idx];if(!g)return;
-  if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?`,{okLabel:'Excluir gasto'}))return;
+  const hasAporte=g.id!=null && (DB.aportes||[]).some(a=>a.auto_source && a.auto_source.kind==='gasto' && a.auto_source.id===g.id);
+  const extra=hasAporte?'<br><span style="font-size:12px;color:var(--gold)">⚠ O aporte automático vinculado também será removido</span>':'';
+  if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?${extra}`,{okLabel:'Excluir gasto'}))return;
+  _removeAutoAporteForGasto(g);
   DB.gastos.splice(idx,1);refreshUI();
   toast('Excluído · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
@@ -9902,7 +10064,10 @@ async function delGasto(idx){
 async function delGastoFromModal(){
   if(editingGastoIdx===null)return;
   const g=DB.gastos[editingGastoIdx];if(!g)return;
-  if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?`,{okLabel:'Excluir gasto'}))return;
+  const hasAporte=g.id!=null && (DB.aportes||[]).some(a=>a.auto_source && a.auto_source.kind==='gasto' && a.auto_source.id===g.id);
+  const extra=hasAporte?'<br><span style="font-size:12px;color:var(--gold)">⚠ O aporte automático vinculado também será removido</span>':'';
+  if(!await axConfirm(`Excluir o gasto de <b>${fmt(g.valor)}</b> em <b>${g.plat}</b> (${g.data})?${extra}`,{okLabel:'Excluir gasto'}))return;
+  _removeAutoAporteForGasto(g);
   DB.gastos.splice(editingGastoIdx,1);closeM('m-gasto');refreshUI();
   toast('Excluído · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
