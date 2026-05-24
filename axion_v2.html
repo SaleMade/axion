@@ -3506,8 +3506,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.20.0';
-const APP_LAST_CHANGE = 'NOVO: campo "Quem pagou?" em Investimentos e Tráfego Pago. Permite registrar que um sócio/diretor pagou do bolso — gera aporte automático no nome dele (reembolso virtual). A empresa fica "devendo" pro sócio e o saldo de aporte dele aumenta proporcionalmente. Delete cascata: apagar gasto também apaga o aporte vinculado.';
+const APP_VERSION = '2.21.0';
+const APP_LAST_CHANGE = 'Limpeza de emojis em vários locais (Sobre/Documentação, Dados/Modo de Operação, Aparência, Notificações/Canais, Aportes, Saldo de Capital, Investimentos da Operação, Tráfego Pago, Meus Vendedores, PG Antecipado/Entrega, toggle Afiliado/Produtor, filtro Hoje do CRM) substituídos por SVGs do padrão. Mapa do Brasil agora responde aos temas (sai do azul fixo).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3567,6 +3567,24 @@ const ICONS = {
   'mail':           '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
   'tag':            '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
   'link':           '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  'book':           '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  'database':       '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+  'lock':           '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  'lock-open':      '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
+  'eye':            '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  'sun':            '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
+  'moon':           '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  'volume':         '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  'send':           '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  'archive':        '<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>',
+  'piggy-bank':     '<path d="M19 5c-1.5 0-2.8 1.4-3 2-3.5-1.5-11-.3-11 5 0 1.8 0 3 2 4.5V20h4v-2h3v2h4v-4c1-.5 1.7-1 2-2h2v-4h-2c0-1-.5-1.5-1-2h0V5z"/><path d="M2 9v1c0 1.1.9 2 2 2h1"/><path d="M16 11h0"/>',
+  'megaphone':      '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  'briefcase':      '<rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  'trending-down':  '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
+  'gift':           '<polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>',
+  'wallet-cards':   '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/>',
+  'tool':           '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  'filter':         '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
 };
 
 function ico(name, opts={}){
@@ -3610,6 +3628,12 @@ function applyTheme(id){
   else if(id==='light-orange'){document.body.classList.add('theme-light-orange','is-light');}
   else if(id==='light-green'){document.body.classList.add('theme-light-green','is-light');}
   // default: nenhuma classe
+  // Mapa do Brasil tem cores aplicadas via setAttribute (não responde a CSS
+  // automaticamente). Força re-render se a página de Regiões está ativa.
+  if(typeof mapBuilt!=='undefined' && mapBuilt && document.querySelector('.page#regioes-pg.active')){
+    mapBuilt=false; // força rebuild completo (não só recolor)
+    if(typeof buildMap==='function') setTimeout(buildMap,30);
+  }
 }
 // Aplica o tema o mais cedo possível — antes de qualquer render
 document.addEventListener('DOMContentLoaded',()=>applyTheme(getTheme()));
@@ -5343,7 +5367,7 @@ function pageCRM(){
         <option value="entrega">Na entrega</option>
       </select>
       <input class="kb-search" id="kb-tags" placeholder="Tag (ex: vip)" style="max-width:140px;flex:initial" oninput="updateCrmFilters()">
-      <button class="kb-toggle" id="kb-hoje" onclick="toggleCrmFilter('agendHoje')">📅 Hoje</button>
+      <button class="kb-toggle" id="kb-hoje" onclick="toggleCrmFilter('agendHoje')" style="display:inline-flex;align-items:center;gap:6px">${ico('calendar',{size:13})} Hoje</button>
       <button class="kb-clear" onclick="clearCrmFilters()">× Limpar filtros</button>
     </div>
     <div class="kb-wrap"><div class="kb-board" id="kb-board"></div></div>
@@ -7652,13 +7676,13 @@ function renderDRE(){
       <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
         <button onclick="setFinMode('afiliado')" class="${isAfi?'on':''}"
           style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:none;
-            background:${isAfi?'var(--bld)':'transparent'};color:${isAfi?'var(--bl2)':'var(--t3)'};transition:all .15s">
-          🤝 Afiliado
+            background:${isAfi?'var(--bld)':'transparent'};color:${isAfi?'var(--bl2)':'var(--t3)'};transition:all .15s;display:inline-flex;align-items:center;gap:6px">
+          ${ico('users',{size:13})} Afiliado
         </button>
         <button onclick="setFinMode('produtor')" class="${!isAfi?'on':''}"
           style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:none;
-            background:${!isAfi?'var(--grd)':'transparent'};color:${!isAfi?'var(--gr)':'var(--t3)'};transition:all .15s">
-          🏭 Produtor
+            background:${!isAfi?'var(--grd)':'transparent'};color:${!isAfi?'var(--gr)':'var(--t3)'};transition:all .15s;display:inline-flex;align-items:center;gap:6px">
+          ${ico('package',{size:13})} Produtor
         </button>
       </div>
     </div>
@@ -7688,7 +7712,7 @@ function renderDRE(){
       <div class="dem-menu" id="dem-menu">
         <!-- Indicador do modo atual — métricas exibidas dependem dele -->
         <div class="dem-menu-mode" style="background:${isAfi?'rgba(59,130,246,.08)':'rgba(16,185,129,.08)'};color:${isAfi?'var(--bl2)':'var(--gr)'}">
-          ${isAfi?'🤝 Modo Afiliado':'🏭 Modo Produtor'}
+          <span style="display:inline-flex;align-items:center;gap:6px">${isAfi?ico('users',{size:13}):ico('package',{size:13})} ${isAfi?'Modo Afiliado':'Modo Produtor'}</span>
           <span class="muted" style="font-size:11px;font-weight:500;margin-left:auto">${isAfi?'recebe líquido':'receita bruta'}</span>
         </div>
         <div class="dem-menu-h">Métricas no demonstrativo</div>
@@ -8449,15 +8473,15 @@ function renderInvest(){
   <div class="ph">
     <div><h1>Financeiro · <em>Investimentos</em></h1></div>
     <div class="ph-r">
-      <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">📊 Tráfego Pago →</button>
-      <button class="btn btn-gh btn-sm" onclick="openInvCats()">⚙ Categorias</button>
+      <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">${ico('target',{size:13})} Tráfego Pago →</button>
+      <button class="btn btn-gh btn-sm" onclick="openInvCats()">${ico('settings',{size:13})} Categorias</button>
       <button class="btn btn-bl btn-sm" onclick="openInvest()">+ Novo Investimento</button>
     </div>
   </div>
 
   <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
   <div class="panel" style="margin-bottom:18px">
-    <div class="panel-h"><h3>📦 Investimentos da Operação</h3>
+    <div class="panel-h"><h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('package',{size:15})}</span> Investimentos da Operação</h3>
       <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
     </div>
 
@@ -8502,8 +8526,8 @@ function renderInvest(){
             const ct=catFor(i.cat);
             const isBudget=!!i.is_budget;
             const tipoBadge=isBudget
-              ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold)">🎯 Budget</span>`
-              :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">💸 Gasto</span>`;
+              ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold);display:inline-flex;align-items:center;gap:4px">${ico('target',{size:11})} Budget</span>`
+              :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd);display:inline-flex;align-items:center;gap:4px">${ico('trending-down',{size:11})} Gasto</span>`;
             // Quem pagou: empresa (default) ou sócio específico
             const pp=i.pago_por||'empresa';
             const pagoBadge=pp==='empresa'
@@ -8539,7 +8563,7 @@ function renderInvest(){
   <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
   <div class="panel" style="margin-bottom:18px">
     <div class="panel-h">
-      <h3>💼 Aportes</h3>
+      <h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('briefcase',{size:15})}</span> Aportes</h3>
       <div style="display:flex;align-items:center;gap:12px">
         <span class="muted" style="font-size:12px">${aportes.length} no período · <b style="color:var(--tx);font-weight:500">${fmt(totAportes)}</b></span>
         ${socios.length?`<button class="btn btn-bl btn-sm" onclick="toggleAporteForm()" id="ap-form-toggle">+ Novo aporte</button>`:''}
@@ -8658,7 +8682,7 @@ function renderInvest(){
   ${totAportesAll>0||consumido>0?`
   <div class="panel" style="background:linear-gradient(180deg,rgba(251,191,36,.04),transparent)">
     <div class="panel-h">
-      <h3>💰 Saldo de Capital</h3>
+      <h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('wallet',{size:15})}</span> Saldo de Capital</h3>
       <span class="muted" style="font-size:11.5px">aportes vs gastos · acumulado e período</span>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
@@ -9735,7 +9759,7 @@ function renderTrafego(){
       <h1>${gtOnly?'<em>Registro de Tráfego</em>':'Tráfego <em>Pago</em>'}</h1>
     </div>
     ${canEdit?`<div class="ph-r">
-      <label class="btn btn-gh btn-sm" style="cursor:pointer">⬆ Importar CSV<input type="file" accept=".csv" style="display:none" onchange="importTrafegoCSV(this)"></label>
+      <label class="btn btn-gh btn-sm" style="cursor:pointer">${ico('arrow-up',{size:13})} Importar CSV<input type="file" accept=".csv" style="display:none" onchange="importTrafegoCSV(this)"></label>
       <button class="btn btn-bl ${gtOnly?'btn-lg':'btn-sm'}" onclick="openGastoNew()">+ Registrar gasto do dia</button>
     </div>`:''}
   </div>
@@ -10162,7 +10186,7 @@ function renderEquipe(){
   <div class="ph">
     <div><h1>Meus <em>Vendedores</em></h1></div>
     <div class="ph-r">
-      ${isDir()?`<button class="btn btn-gh btn-sm" onclick="configTab='equipe';goPage('config')">⚙ Gerenciar equipe</button>`:''}
+      ${isDir()?`<button class="btn btn-gh btn-sm" onclick="configTab='equipe';goPage('config')">${ico('settings',{size:13})} Gerenciar equipe</button>`:''}
     </div>
   </div>
 
@@ -10192,7 +10216,7 @@ function renderEquipe(){
 
   <!-- PG Antecipado -->
   <div class="mod-tag-bar">
-    <span class="mod-tag mod-ant-tag">📦 PG Antecipado</span>
+    <span class="mod-tag mod-ant-tag" style="display:inline-flex;align-items:center;gap:6px">${ico('credit-card',{size:12})} PG Antecipado</span>
     <span class="muted" style="font-size:13px">Vendas com pagamento adiantado</span>
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
@@ -10220,7 +10244,7 @@ function renderEquipe(){
 
   <!-- PG na Entrega -->
   <div class="mod-tag-bar">
-    <span class="mod-tag mod-ent-tag">🚚 PG na Entrega</span>
+    <span class="mod-tag mod-ent-tag" style="display:inline-flex;align-items:center;gap:6px">${ico('package',{size:12})} PG na Entrega</span>
     <span class="muted" style="font-size:13px">Vendas com pagamento na entrega</span>
   </div>
   <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
@@ -12762,21 +12786,21 @@ function cfgNotif(){
     <div class="cfg-card" style="padding:0">
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔔 Sino do topo (sempre ativo)</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('bell',{size:14})}</span> Sino do topo (sempre ativo)</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Drawer com lista de notificações pendentes</div>
         </div>
         <label class="acl-tog"><input type="checkbox" checked disabled><span></span></label>
       </div>
       <div class="cfg-toggle-row" style="opacity:.6">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">📧 Email diário com resumo</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('mail',{size:14})}</span> Email diário com resumo</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Em breve — exige integração SMTP</div>
         </div>
         <label class="acl-tog"><input type="checkbox" disabled><span></span></label>
       </div>
       <div class="cfg-toggle-row" style="opacity:.6">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">📱 Push no navegador</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('smartphone',{size:14})}</span> Push no navegador</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Em breve — permitir notificações Web Push</div>
         </div>
         <label class="acl-tog"><input type="checkbox" disabled><span></span></label>
@@ -12835,7 +12859,7 @@ function cfgAparencia(){
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">🎬 Animações sutis</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('zap',{size:14})}</span> Animações sutis</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Transições e micro-interações ao navegar</div>
         </div>
         <label class="acl-tog">
@@ -12845,7 +12869,7 @@ function cfgAparencia(){
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">📊 Modo compacto nas tabelas</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('bar-chart',{size:14})}</span> Modo compacto nas tabelas</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Reduz padding interno das células</div>
         </div>
         <label class="acl-tog">
@@ -12855,7 +12879,7 @@ function cfgAparencia(){
       </div>
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔊 Sons de notificação</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('volume',{size:14})}</span> Sons de notificação</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Bip ao receber webhook ou novo lead</div>
         </div>
         <label class="acl-tog">
@@ -12912,7 +12936,7 @@ function cfgDados(){
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">🔒 Modo Visualização</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('lock',{size:15})}</span> Modo Visualização</div>
           <div class="muted" style="font-size:12.5px;margin-top:4px;line-height:1.5">
             Bloqueia <b>criar</b>, <b>editar</b>, <b>arrastar</b> e <b>deletar</b> pra todos (exceto Diretor).
             Os webhooks (PAYT + Fornecedor) <b>continuam funcionando normalmente</b> — só uso humano fica trancado.
@@ -12925,7 +12949,7 @@ function cfgDados(){
         </label>
       </div>
       ${DB.view_mode?`<div style="background:rgba(245,158,11,.08);border:1px solid var(--am);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--am);display:flex;align-items:center;gap:8px">
-        <span style="font-size:14px">⚠</span>
+        ${ico('alert-triangle',{size:14})}
         <span>Modo Visualização <b>ATIVO</b> — botões de criação/edição estão escondidos pra outros perfis</span>
       </div>`:''}
     </div>
@@ -13004,10 +13028,10 @@ function cfgSobre(){
 
     <div class="cfg-h" style="margin-top:24px"><h2>Documentação</h2></div>
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:10px">
-      <div style="display:flex;align-items:center;gap:11px">📚 <span style="color:var(--t2)">Setup do backend: <span style="color:var(--bl2);font-weight:600">backend/setup.md</span></span></div>
-      <div style="display:flex;align-items:center;gap:11px">⚡ <span style="color:var(--t2)">Worker da API: <span style="color:var(--bl2);font-weight:600">backend/worker.js</span></span></div>
-      <div style="display:flex;align-items:center;gap:11px">🗄 <span style="color:var(--t2)">Schema D1 (SQLite): <span style="color:var(--bl2);font-weight:600">backend/schema.sql</span></span></div>
-      <div style="display:flex;align-items:center;gap:11px">⚙ <span style="color:var(--t2)">Config Wrangler: <span style="color:var(--bl2);font-weight:600">backend/wrangler.toml</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px;color:var(--bl2)">${ico('book',{size:15})}<span style="color:var(--t2)">Setup do backend: <span style="color:var(--bl2);font-weight:600">backend/setup.md</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px;color:var(--bl2)">${ico('zap',{size:15})}<span style="color:var(--t2)">Worker da API: <span style="color:var(--bl2);font-weight:600">backend/worker.js</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px;color:var(--bl2)">${ico('database',{size:15})}<span style="color:var(--t2)">Schema D1 (SQLite): <span style="color:var(--bl2);font-weight:600">backend/schema.sql</span></span></div>
+      <div style="display:flex;align-items:center;gap:11px;color:var(--bl2)">${ico('settings',{size:15})}<span style="color:var(--t2)">Config Wrangler: <span style="color:var(--bl2);font-weight:600">backend/wrangler.toml</span></span></div>
     </div>
   </div>`;
 }
@@ -13754,12 +13778,25 @@ function renderChart(){
 /* ═══════════════════════════════════════════════════════
    MAPA BR (mantido com paleta nova)
 ═══════════════════════════════════════════════════════ */
+// Converte hex (#0d9488 ou #abc) em rgb "r,g,b" (string pra usar com rgba())
+function _hexToRgb(hex){
+  hex=(hex||'').trim().replace('#','');
+  if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+  const n=parseInt(hex,16);
+  return `${(n>>16)&255},${(n>>8)&255},${n&255}`;
+}
+// Heat colors do mapa do Brasil. Lê var(--bl) DINAMICAMENTE pra responder
+// ao tema atual (teal/orange/green/light/etc) em vez de azul fixo.
 function getHeat(v){
-  if(v===0)return '#1a2440';
-  if(v<=2)return 'rgba(59,130,246,.35)';
-  if(v<=5)return 'rgba(59,130,246,.55)';
-  if(v<=10)return 'rgba(59,130,246,.8)';
-  return '#3b82f6';
+  const cs=getComputedStyle(document.body);
+  const accent=cs.getPropertyValue('--bl').trim()||'#0d9488';
+  const empty=cs.getPropertyValue('--s3').trim()||'#1a2440';
+  const rgb=_hexToRgb(accent);
+  if(v===0)return empty;
+  if(v<=2)return `rgba(${rgb},.35)`;
+  if(v<=5)return `rgba(${rgb},.6)`;
+  if(v<=10)return `rgba(${rgb},.85)`;
+  return accent;
 }
 async function buildMap(){
   const wrap=$('brazil-map');if(!wrap)return;
@@ -13788,8 +13825,17 @@ async function buildMap(){
     const ox=(W-(lngMax-lngMin)*sc)/2,oy=(H-(latMax-latMin)*sc)/2;
     const proj=([ln,lt])=>[ox+(ln-lngMin)*sc,oy+(latMax-lt)*sc];
     const rToD=ring=>ring.map((c,i)=>{const[x,y]=proj(c);return(i?'L':'M')+x.toFixed(1)+','+y.toFixed(1)}).join('')+'Z';
+    // Lê cores do tema atual pra tooltip e bordas — assim responde ao tema
+    const cs=getComputedStyle(document.body);
+    const accent=cs.getPropertyValue('--bl').trim()||'#0d9488';
+    const accentLight=cs.getPropertyValue('--bl2').trim()||'#14b8a6';
+    const bgTooltip=cs.getPropertyValue('--s2').trim()||'#15151b';
+    const txTooltip=cs.getPropertyValue('--tx').trim()||'#c8d1de';
+    const txMuted=cs.getPropertyValue('--t3').trim()||'#7f8a9c';
+    const borderState=cs.getPropertyValue('--b2').trim()||'#262f4a';
+    const hoverEmpty=cs.getPropertyValue('--s4').trim()||'#24242c';
     const tip=document.createElement('div');
-    tip.style.cssText='position:fixed;background:#0a1020;border:1px solid #3b82f6;color:#f8fafc;padding:7px 13px;border-radius:8px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .15s;z-index:9999;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+    tip.style.cssText=`position:fixed;background:${bgTooltip};border:1px solid ${accent};color:${txTooltip};padding:7px 13px;border-radius:8px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .15s;z-index:9999;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4)`;
     document.body.appendChild(tip);
     geo.features.forEach(f=>{
       const nm=f.properties.name||'';
@@ -13803,14 +13849,14 @@ async function buildMap(){
         let d='';poly.forEach(ring=>{d+=rToD(ring)+' '});
         const path=document.createElementNS('http://www.w3.org/2000/svg','path');
         path.setAttribute('d',d.trim());path.setAttribute('fill',fill);
-        path.setAttribute('stroke','#1f2a44');path.setAttribute('stroke-width','0.6');
+        path.setAttribute('stroke',borderState);path.setAttribute('stroke-width','0.6');
         path.setAttribute('data-state',nm);  // pra rebuild incremental ao atualizar dados
         path.dataset.sales=sales;
         path.style.cursor='pointer';path.style.transition='fill .18s';
         path.addEventListener('mouseenter',e=>{
-          path.setAttribute('fill',sales>0?'#60a5fa':'#243152');
+          path.setAttribute('fill',sales>0?accentLight:hoverEmpty);
           tip.style.opacity='1';
-          tip.innerHTML=`<b>${nm}</b>${abbr?' ('+abbr+')':''}<br>${sales>0?`<span style="color:#3b82f6">${sales} venda${sales>1?'s':''}</span>`:'<span style="color:#64748b">Sem vendas</span>'}`;
+          tip.innerHTML=`<b>${nm}</b>${abbr?' ('+abbr+')':''}<br>${sales>0?`<span style="color:${accent}">${sales} venda${sales>1?'s':''}</span>`:`<span style="color:${txMuted}">Sem vendas</span>`}`;
         });
         path.addEventListener('mousemove',e=>{tip.style.left=e.clientX+14+'px';tip.style.top=e.clientY-38+'px'});
         path.addEventListener('mouseleave',()=>{path.setAttribute('fill',fill);tip.style.opacity='0'});
@@ -13823,7 +13869,8 @@ async function buildMap(){
         t.setAttribute('x',cx.toFixed(1));t.setAttribute('y',cy.toFixed(1));
         t.setAttribute('text-anchor','middle');t.setAttribute('dominant-baseline','middle');
         t.setAttribute('font-size','7.5');t.setAttribute('font-weight','700');
-        t.setAttribute('fill',sales>=5?'#fff':sales>=1?'#cbd5e1':'#475569');
+        // Texto do estado: contraste alto pros pintados, sutil pros vazios
+        t.setAttribute('fill',sales>=5?txTooltip:sales>=1?cs.getPropertyValue('--t2').trim()||'#a8b2c2':cs.getPropertyValue('--t4').trim()||'#525c6e');
         t.setAttribute('pointer-events','none');t.textContent=abbr;
         g.appendChild(t);
       }
