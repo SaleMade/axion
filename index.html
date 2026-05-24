@@ -45,12 +45,16 @@
    Default (sem classe) = teal sóbrio (definido acima).
    Trocados em runtime via setTheme() — persiste em localStorage. */
 
-/* Tema Dark Orange — mesmo fundo neutro do default, accent laranja.
-   O laranja aparece só em botões, ícones e destaques — nunca no fundo. */
+/* Tema Dark Orange — vibe Tron Legacy / Tron Ares.
+   Laranja-âmbar quase neon, mais saturado e quente que o orange anterior.
+   Acrescenta glow mais forte pra dar essa pegada cyber retro-futurista. */
 body.theme-orange{
-  --bl:#f97316;--bl2:#fb923c;--bl3:#ea580c;--bl4:#c2410c;
-  --blg:rgba(249,115,22,.10);--bld:rgba(249,115,22,.07);
+  --bl:#ff8c1a;--bl2:#ffb347;--bl3:#cc5500;--bl4:#883300;
+  --blg:rgba(255,140,26,.18);--bld:rgba(255,140,26,.09);
 }
+/* Glow ligeiramente mais forte nos botões primários quando o tema Tron tá ativo */
+body.theme-orange .btn-bl{box-shadow:0 0 18px rgba(255,140,26,.25)}
+body.theme-orange .btn-bl:hover{box-shadow:0 0 24px rgba(255,140,26,.4)}
 
 /* Tema Dark Green — mesmo fundo neutro do default, accent verde.
    Estilo dash do fornecedor (Midas Company): preto + verde clean. */
@@ -58,10 +62,10 @@ body.theme-green{
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
-  /* Border-radius — bumped só pros cards grandes (--rl/--rxl) pra
-     curvas visíveis. --r continua 8 (botões/inputs/badges) pra
-     casar com o hardcoded existente (5-9px) e não ficar "bubble". */
-  --r:8px;--rl:16px;--rxl:20px;--sw:248px;
+  /* Border-radius — radius grande nos cards (--rl/--rxl) pra curvas
+     bem visíveis. --r continua 8 (botões/inputs/badges) pra casar
+     com hardcoded existente. */
+  --r:8px;--rl:18px;--rxl:22px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -3221,8 +3225,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.14.5';
-const APP_LAST_CHANGE = 'Border-radius dos CARDS grandes aumentado (--rl: 12→16px, --rxl: 16→20px) pra dar curva visível em painéis, cards de Configurações, colunas Kanban. --r continua 8px nos botões/inputs/badges pra casar com os hardcoded existentes';
+const APP_VERSION = '2.15.0';
+const APP_LAST_CHANGE = 'Tema laranja repaginado pra Tron Orange (laranja-âmbar cyber estilo Tron Legacy, com glow mais forte nos botões primários quando ativo) + radius dos cards aumentado mais um degrau (--rl: 16→18px, --rxl: 20→22px)';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3299,7 +3303,7 @@ function ico(name, opts={}){
 // muda o accent. Mais clean, sem "tingir" toda a UI com a cor escolhida.
 const THEMES=[
   {id:'default',name:'Teal Sóbrio', desc:'Padrão · accent teal sobre fundo neutro',  accent:'#0d9488',bg:'#050507'},
-  {id:'orange', name:'Dark Orange', desc:'Accent laranja vibrante sobre fundo neutro',accent:'#f97316',bg:'#050507'},
+  {id:'orange', name:'Tron Orange', desc:'Laranja-âmbar cyber estilo Tron Legacy',  accent:'#ff8c1a',bg:'#050507'},
   {id:'green',  name:'Dark Green',  desc:'Accent verde clean sobre fundo neutro',    accent:'#10b981',bg:'#050507'},
 ];
 const THEME_KEY='axion_theme';
