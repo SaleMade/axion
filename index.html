@@ -3449,6 +3449,16 @@ let dateFilter=(()=>{
     if(saved){
       const obj=JSON.parse(saved);
       if(obj && typeof obj==='object' && DF_RANGES.has(obj.range)){
+        // Pra range custom, valida que from/to são datas parseáveis — se
+        // o user salvou com data inválida (bug antigo), descarta e usa default
+        if(obj.range==='custom'){
+          const df=new Date((obj.from||'')+'T00:00:00');
+          const dt=new Date((obj.to||'')+'T00:00:00');
+          if(!obj.from||!obj.to||isNaN(df.getTime())||isNaN(dt.getTime())){
+            console.warn('[dateFilter] custom range com data inválida no localStorage — descartando. obj=',obj);
+            return {range:'7',from:null,to:null};
+          }
+        }
         console.log('[dateFilter] restaurado de localStorage:', obj.range);
         return obj;
       } else {
@@ -3509,8 +3519,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.21.2';
-const APP_LAST_CHANGE = 'Recarga de chip: timer mudou de 90 → 60 dias. Número leva banimento por inatividade ~75 dias, então 60 dá margem segura. Função rechargeStatus, toast de confirmação e descrição da notificação atualizados.';
+const APP_VERSION = '2.22.0';
+const APP_LAST_CHANGE = '2 bugs no filtro de período: (1) NaN/NaN/NaN no trigger quando data inválida passava silenciosa — agora valida com isNaN e mostra "—" como fallback; (2) aportes/investimentos com data FUTURA sumiam mesmo com filtro válido — inRange perdia o ano via ddmmFromIso, criado inRangeIso() que recebe ISO direto preservando o ano.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4145,8 +4155,15 @@ function dateRange(){
     tEnd=new Date(dateFilter.year,dateFilter.month+1,0);
   }
   else if((r==='custom'||dateFilter.from)&&dateFilter.from&&dateFilter.to){
-    s=new Date(dateFilter.from+'T00:00:00');
-    tEnd=new Date(dateFilter.to+'T23:59:59');
+    const ds=new Date(dateFilter.from+'T00:00:00');
+    const de=new Date(dateFilter.to+'T23:59:59');
+    // Se alguma data está inválida, cai pro default (últimos 7 dias) em vez
+    // de propagar NaN — assim o filtro continua mostrando algo útil.
+    if(isNaN(ds.getTime())||isNaN(de.getTime())){
+      s.setDate(s.getDate()-6);
+    } else {
+      s=ds; tEnd=de;
+    }
   }
   return {from:s,to:tEnd}
 }
@@ -4167,6 +4184,19 @@ function inRange(ddmm){
   // Data inválida/vazia NÃO entra em nenhum período (evita contagem dupla
   // em aportes/investimentos com dt ausente — bug encontrado na auditoria)
   if(!dt)return false;
+  const {from,to}=dateRange();
+  const f=new Date(from.getFullYear(),from.getMonth(),from.getDate());
+  const t=new Date(to.getFullYear(),to.getMonth(),to.getDate(),23,59,59);
+  return dt>=f && dt<=t;
+}
+// Versão pra dados que têm data ISO completa (YYYY-MM-DD) — aportes,
+// investimentos, etc. NÃO usar inRange(ddmmFromIso(x)) porque o ddmmToDate
+// assume que datas >30d no futuro são do ano PASSADO, quebrando aportes
+// agendados pra meses futuros. inRangeIso preserva o ano corretamente.
+function inRangeIso(iso){
+  if(!iso)return false;
+  const dt=new Date(iso+'T12:00:00');
+  if(isNaN(dt.getTime()))return false;
   const {from,to}=dateRange();
   const f=new Date(from.getFullYear(),from.getMonth(),from.getDate());
   const t=new Date(to.getFullYear(),to.getMonth(),to.getDate(),23,59,59);
@@ -4981,7 +5011,14 @@ function selectMonth(year,month){
 function applyCustomRange(){
   const f=$('drp-from').value, t=$('drp-to').value;
   if(!f||!t){toast('Preencha de e até','err');return}
-  if(new Date(f)>new Date(t)){toast('Data início após o fim','err');return}
+  // Valida que ambas as strings parseiam pra Date válida — antes só checava
+  // se string estava vazia, mas date partial ou formato BR podiam passar
+  // e gerar Invalid Date silenciosamente → trigger virava "NaN/NaN/NaN".
+  const df=new Date(f+'T00:00:00'), dt=new Date(t+'T00:00:00');
+  if(isNaN(df.getTime())||isNaN(dt.getTime())){
+    toast('Data inválida — use o formato dd/mm/aaaa','err');return;
+  }
+  if(df>dt){toast('Data início após o fim','err');return}
   dateFilter={range:'custom',from:f,to:t,year:null,month:null};
   saveDateFilter();
   $$('.drp-opt').forEach(x=>x.classList.remove('active'));
@@ -5263,7 +5300,13 @@ function rangeLabel(){
     return `${m[dateFilter.month]} de ${dateFilter.year}`;
   }
   if(r==='custom'&&dateFilter.from&&dateFilter.to){
-    const f=v=>{const d=new Date(v+'T00:00:00');return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`};
+    // Defensive: se algum lado tiver data invalida (Invalid Date),
+    // mostra fallback amigável em vez de "NaN/NaN/NaN" no trigger.
+    const f=v=>{
+      const d=new Date(v+'T00:00:00');
+      if(isNaN(d.getTime())) return '—';
+      return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+    };
     return `${f(dateFilter.from)} → ${f(dateFilter.to)}`;
   }
   return today();
@@ -7574,8 +7617,8 @@ function pageRegioes(){
 function calcFin(){
   const vendas=DB.vendas.filter(v=>inRange(v.data));
   const gastos=DB.gastos.filter(g=>inRange(g.data));
-  const invests=DB.invest.filter(i=>inRange(ddmmFromIso(i.dt)));
-  const aportes=(DB.aportes||[]).filter(a=>inRange(ddmmFromIso(a.dt)));
+  const invests=DB.invest.filter(i=>inRangeIso(i.dt));
+  const aportes=(DB.aportes||[]).filter(a=>inRangeIso(a.dt));
   const recBruta=vendas.reduce((s,v)=>s+v.vl,0);
   const forn=vendas.reduce((s,v)=>s+v.custo,0);
   const com=vendas.reduce((s,v)=>s+v.comiss,0);
@@ -8441,7 +8484,7 @@ function renderInvest(){
   const catFor=id=>DB.invCats.find(x=>x.id===id)||{nome:id,icon:'📦',cor:'#64748b'};
 
   // Aportes de sócios (no período do topo da Dash)
-  const aportes=(DB.aportes||[]).filter(a=>inRange(ddmmFromIso(a.dt)));
+  const aportes=(DB.aportes||[]).filter(a=>inRangeIso(a.dt));
   const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
   const aportesBySocio={};
   aportes.forEach(a=>{
