@@ -128,11 +128,81 @@ body.theme-orange .sb-sw:hover{
 body.theme-orange .tb-live::before,
 body.theme-orange .ldot{box-shadow:0 0 8px rgba(255,106,0,.6)}
 
-/* Tema Dark Green — mesmo fundo neutro do default, accent verde.
-   Estilo dash do fornecedor (Midas Company): preto + verde clean. */
+/* ═══════════════════════════════════════════════════════
+   Tema Slim Green — pegada MINIMALISTA / flat design
+   Sem glows, cards com fundo neutro, tipografia leve,
+   section-title sem barrinha. Bem diferente do default que
+   tem cards mais "pesados" e do Tron que é cheio de glow.
+   ═══════════════════════════════════════════════════════ */
 body.theme-green{
-  --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
-  --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
+  /* Fundos cinza-preto neutro puro (sem tinta verde) */
+  --bg:#0a0a0a;--s1:#111111;--s2:#161616;--s3:#1c1c1c;--s4:#252525;
+  /* Bordas bem sutis */
+  --b1:#1f1f1f;--b2:#2a2a2a;--b3:#363636;
+  /* Verde-lime vivo — distintivo do teal do default */
+  --bl:#22c55e;--bl2:#4ade80;--bl3:#16a34a;--bl4:#15803d;
+  --blg:rgba(34,197,94,.08);--bld:rgba(34,197,94,.05);
+}
+
+/* TODOS os glows internos sumam — flat design puro */
+body.theme-green .mc-gl{display:none}
+body.theme-green .info-section::before{display:none}
+body.theme-green .aging-card::before{display:none}
+body.theme-green .follows-hero::before,
+body.theme-green .quinz-banner::before{display:none}
+
+/* Cards mais flat — fundo neutro ao invés de "elevated" */
+body.theme-green .mc{
+  background:var(--s1);box-shadow:none;
+  transition:border-color .15s ease}
+body.theme-green .mc:hover{
+  background:var(--s2);border-color:var(--b3);
+  transform:none;box-shadow:none}
+
+/* Painéis e info-sections flat também */
+body.theme-green .panel,
+body.theme-green .cfg-card,
+body.theme-green .info-section,
+body.theme-green .aging-card{
+  background:var(--s1);box-shadow:none}
+
+/* Heros mais sóbrios */
+body.theme-green .follows-hero,
+body.theme-green .quinz-banner{
+  background:var(--s1);box-shadow:none}
+
+/* Cards de Kanban com bg do s1 em vez do s2 (mais clean) */
+body.theme-green .kb-card,
+body.theme-green .wk-chip,
+body.theme-green .cp-card{
+  background:var(--s1)}
+body.theme-green .kb-card:hover,
+body.theme-green .wk-chip:hover,
+body.theme-green .cp-card:hover{
+  background:var(--s2);box-shadow:none}
+
+/* Barrinha do section-title some — título limpo */
+body.theme-green .section-title::before{display:none}
+body.theme-green .section-title{gap:0}
+
+/* Tipografia mais leve nos números grandes */
+body.theme-green .mc-val{font-weight:600;letter-spacing:-.01em}
+
+/* Acordeões da sidebar mais flat */
+body.theme-green .sg-acc{background:transparent}
+body.theme-green .sg-acc:hover{background:var(--s2)}
+body.theme-green .sg-acc.on{background:var(--s2)}
+
+/* Sem glow no logo nem no botão de Configurações */
+body.theme-green .sb-logo img{box-shadow:none}
+body.theme-green .sb-sw{background:var(--s1);box-shadow:none}
+body.theme-green .sb-sw:hover{background:var(--s2);box-shadow:none}
+
+/* Botões primários sem glow forte */
+body.theme-green .btn-bl{
+  background:var(--bl);color:#062614;box-shadow:none;font-weight:600}
+body.theme-green .btn-bl:hover{
+  background:var(--bl2);box-shadow:none}
   /* layout */
   /* Border-radius — valores que ficaram bons pro usuário na v2.14.5.
      Cards grandes (--rl/--rxl) com curva clara, botões mantêm 8px. */
@@ -3296,8 +3366,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.16.1';
-const APP_LAST_CHANGE = 'Brand no topo da sidebar e na tela de login mudou de "AXION" pra "Sale Made" (nome da empresa). A página "Sobre" das Configurações continua AXION porque é sobre o produto';
+const APP_VERSION = '2.17.0';
+const APP_LAST_CHANGE = 'Tema verde repaginado pra "Slim Green" minimalista — accent #22c55e (lime vivo, distintivo do teal default), todos os glows internos removidos (cards, banners, heros), cards flat sem sombra/transform no hover, section-title sem barrinha lateral, tipografia mais leve';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3375,7 +3445,7 @@ function ico(name, opts={}){
 const THEMES=[
   {id:'default',name:'Teal Sóbrio', desc:'Padrão · accent teal sobre fundo neutro',  accent:'#0d9488',bg:'#050507'},
   {id:'orange', name:'Tron Legacy', desc:'Preto puro + laranja neon · glow nos botões, bordas, scrollbar',accent:'#ff6a00',bg:'#000000'},
-  {id:'green',  name:'Dark Green',  desc:'Accent verde clean sobre fundo neutro',    accent:'#10b981',bg:'#050507'},
+  {id:'green',  name:'Slim Green',  desc:'Minimalista · flat sem glow · verde-lime',  accent:'#22c55e',bg:'#0a0a0a'},
 ];
 const THEME_KEY='axion_theme';
 function getTheme(){try{return localStorage.getItem(THEME_KEY)||'default'}catch(e){return 'default'}}
