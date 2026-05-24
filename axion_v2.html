@@ -243,7 +243,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.06em}
 .tb-live::before{content:'';width:6px;height:6px;border-radius:50%;
   background:var(--bl);animation:pu 2s infinite;box-shadow:0 0 8px var(--bl)}
-.tb-path{font-size:13px;color:var(--t3);font-weight:500}
+/* Breadcrumb "Operacional / CRM" — escondido por pedido do user
+   (o título grande da página já indica onde está). */
+.tb-path{display:none}
 .tb-path b{color:var(--tx);font-weight:500}
 
 /* date filter — Date Range Picker */
@@ -3209,8 +3211,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.12.0';
-const APP_LAST_CHANGE = 'Sistema de temas — 3 paletas selecionáveis em Configurações → Aparência: Teal Sóbrio (padrão), Dark Orange (laranja vibrante em fundo quase preto), Dark Green (verde clean estilo CRM minimalista). Persistido em localStorage.';
+const APP_VERSION = '2.13.0';
+const APP_LAST_CHANGE = 'Limpeza visual: breadcrumb "Operacional / CRM" escondido (título já indica), header do CRM enxuto (Etapas/Tags/Exportar agora em menu de overflow ⋮), WhatsApp Kanban com colunas dos atendentes primeiro e pools (Em Aquecimento / Aquecidos) por último';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4489,23 +4491,65 @@ function goPage(id){
   if(pg)pg.scrollTop=0;
 
   const tr=$('tb-r');tr.innerHTML='';
+
+  // Helper: adiciona menu de overflow "⋮" agrupando ações secundárias.
+  // Reduz a poluição visual do header em telas com muitos botões.
+  const addOverflowMenu=(items)=>{
+    if(!items.length)return;
+    const wrap=document.createElement('div');
+    wrap.style.cssText='position:relative;display:inline-block';
+    const btn=document.createElement('button');
+    btn.className='btn btn-gh btn-sm';
+    btn.title='Mais ações';
+    btn.innerHTML=ico('settings',{size:13});
+    btn.style.padding='6px 10px';
+    const menu=document.createElement('div');
+    menu.style.cssText=`position:absolute;top:calc(100% + 6px);right:0;z-index:9999;
+      background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);
+      box-shadow:var(--sh2);padding:5px;min-width:180px;display:none;flex-direction:column;gap:2px`;
+    items.forEach(it=>{
+      const opt=document.createElement('button');
+      opt.style.cssText=`text-align:left;background:transparent;border:none;color:var(--t2);
+        padding:8px 11px;border-radius:5px;cursor:pointer;font-family:inherit;
+        font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:8px;transition:background .12s`;
+      opt.innerHTML=`${ico(it.icon,{size:13})} <span>${it.label}</span>`;
+      opt.onmouseover=()=>opt.style.background='var(--s3)';
+      opt.onmouseout=()=>opt.style.background='transparent';
+      opt.onclick=()=>{menu.style.display='none';it.action()};
+      menu.appendChild(opt);
+    });
+    btn.onclick=(e)=>{
+      e.stopPropagation();
+      const isOpen=menu.style.display==='flex';
+      menu.style.display=isOpen?'none':'flex';
+      if(!isOpen){
+        const closeOnOutside=(ev)=>{
+          if(!menu.contains(ev.target) && ev.target!==btn){
+            menu.style.display='none';
+            document.removeEventListener('click',closeOnOutside);
+          }
+        };
+        setTimeout(()=>document.addEventListener('click',closeOnOutside),10);
+      }
+    };
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    tr.appendChild(wrap);
+  };
+
   if(id==='crm'){
-    if(isDir()){
-      const cfg=document.createElement('button');
-      cfg.className='btn btn-gh btn-sm';cfg.textContent='⚙ Etapas';
-      cfg.title='Configurar etapas do CRM';cfg.onclick=()=>openColsConfig();
-      tr.appendChild(cfg);
-      const tg=document.createElement('button');
-      tg.className='btn btn-gh btn-sm';tg.textContent='🏷 Tags';
-      tg.title='Criar e gerenciar tags';tg.onclick=()=>openTagsManager();
-      tr.appendChild(tg);
-    }
-    // CRM agora usa o mesmo botão verde "Novo Pedido" da página Pedidos —
-    // a maior parte dos cadastros do CRM já é pedido (COD ou antecipado),
-    // então faz mais sentido entrar pelo fluxo completo.
+    // Ação primária — visível e em destaque
     const b=document.createElement('button');
     b.className='btn btn-gr btn-sm';b.textContent='+ Novo Pedido';
     b.onclick=()=>openPedidoTypeChooser();tr.appendChild(b);
+    // Ações secundárias — agrupadas em menu de overflow
+    const moreItems=[];
+    if(isDir()){
+      moreItems.push({icon:'layout-grid',label:'Configurar Etapas',action:()=>openColsConfig()});
+      moreItems.push({icon:'tag',label:'Gerenciar Tags',action:()=>openTagsManager()});
+      moreItems.push({icon:'save',label:'Exportar CSV',action:()=>openExportModal('leads')});
+    }
+    addOverflowMenu(moreItems);
   }
   if(id==='contingencia'){
     const b=document.createElement('button');
@@ -4522,20 +4566,18 @@ function goPage(id){
     b.className='btn btn-bl btn-sm';b.textContent='+ Novo Produto';
     b.onclick=()=>openProdNew();tr.appendChild(b);
   }
-  // "+ Novo Pedido" agora é renderizado dentro da página (header maior, high emphasis)
+  // Equipe: Permissões + Exportar CSV → menu de overflow
   if(id==='equipe' && isDir()){
-    const b=document.createElement('button');
-    b.className='btn btn-gh btn-sm';b.textContent='⚙ Permissões';
-    b.onclick=()=>openACL();tr.appendChild(b);
+    addOverflowMenu([
+      {icon:'shield',label:'Permissões',action:()=>openACL()},
+      {icon:'save',label:'Exportar CSV',action:()=>openExportModal('equipe')},
+    ]);
   }
-  // Export CSV — apenas Diretor / Sócio / Produtor podem exportar
-  const exMap={crm:'leads',pedidos:'pedidos',equipe:'equipe'};
-  if(exMap[id] && isDir()){
-    const b=document.createElement('button');
-    b.className='btn btn-gh btn-sm';b.textContent='⬇ Exportar CSV';
-    b.title='Exportar CSV (escolha colunas e período)';
-    b.onclick=()=>openExportModal(exMap[id]);
-    tr.appendChild(b);
+  // Pedidos: Exportar CSV → menu de overflow
+  if(id==='pedidos' && isDir()){
+    addOverflowMenu([
+      {icon:'save',label:'Exportar CSV',action:()=>openExportModal('pedidos')},
+    ]);
   }
 
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
@@ -6537,10 +6579,12 @@ function renderChipsByAtendente(){
     </div>`;
   };
 
+  // Atendentes primeiro (uso diário), pools de status no fim (fila de espera).
+  // O fluxo natural é "olhar quem tá com o quê" antes de ver "o que tá aquecendo".
   const html=`<div class="wk-board">
+    ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
     ${colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
     ${colunaPool(poolAquecidos,'__aquecidos__','🟢 Aquecidos','#10b981','rgba(16,185,129,.04)')}
-    ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
   </div>`;
 
   // Preserva scroll antes do re-render: horizontal do board + vertical de cada coluna.
