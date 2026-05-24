@@ -58,7 +58,10 @@ body.theme-green{
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
-  --r:8px;--rl:12px;--rxl:16px;--sw:248px;
+  /* Border-radius mais generoso (passada 6 do redesign) — com o fundo
+     neutralizado, cantos retos pareciam "duros". Curvas maiores dão
+     sensação mais soft/premium sem ficar exagerado. */
+  --r:10px;--rl:14px;--rxl:18px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -3210,8 +3213,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.14.0';
-const APP_LAST_CHANGE = 'Temas neutralizados — backgrounds idênticos (preto/cinza puro) nos 3 temas. A cor (teal/laranja/verde) aparece SÓ nos accents (botões/ícones/links), nunca no fundo. Mais clean, estilo Stripe/Linear/dash do fornecedor';
+const APP_VERSION = '2.14.1';
+const APP_LAST_CHANGE = 'Border-radius aumentado em toda a dash (10/14/18 vs 8/12/16) — cards, botões e seções com cantos mais arredondados pra compensar a perda visual depois da neutralização do fundo';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
