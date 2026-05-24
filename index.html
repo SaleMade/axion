@@ -204,10 +204,9 @@ body.theme-green .btn-bl{
 body.theme-green .btn-bl:hover{
   background:var(--bl2);box-shadow:none}
   /* layout */
-  /* Border-radius escala mais generosa pra dar curva visível em todo
-     componente. Os hardcoded ao longo do CSS (5-9px) tbm foram bumped
-     em +2-3px pra ficar consistente com a nova escala. */
-  --r:10px;--rl:18px;--rxl:22px;--sw:248px;
+  /* Border-radius escala mais generosa. --r controla botões/inputs/selects/
+     pills. --rl controla cards grandes. --rxl pra heros e modais XL. */
+  --r:12px;--rl:18px;--rxl:22px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -371,7 +370,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:inline-flex;align-items:center;justify-content:center;
   width:24px;height:24px;
   background:var(--bld);
-  border-radius:6px;
+  border-radius:8px;
   transition:transform .5s ease,background .18s ease}
 .sb-sw:hover .sb-sw-ic{
   transform:rotate(75deg);
@@ -580,7 +579,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   overflow:hidden;position:relative;border:1px solid var(--b1)}
 .fv-fill{height:100%;display:flex;align-items:center;justify-content:flex-end;
   padding-right:14px;color:#fff;font-weight:700;font-size:13px;
-  transition:width .5s ease;border-radius:6px}
+  transition:width .5s ease;border-radius:8px}
 .fv-pct{width:78px;font-size:12px;color:var(--t3);font-weight:600;flex-shrink:0}
 .fv-pct b{color:var(--tx);font-size:14px;font-weight:700}
 
@@ -607,7 +606,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-clear:hover{color:var(--rd)}
 .kb-stats{display:flex;gap:8px;margin-left:auto}
 .badge{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
-  border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.04em}
+  border-radius:8px;font-size:11px;font-weight:700;letter-spacing:.04em}
 .b-bl{background:var(--bld);color:var(--bl2)} .b-gr{background:var(--grd);color:var(--gr)}
 .b-go{background:var(--goldd);color:var(--gold)} .b-rd{background:var(--rdd);color:var(--rd)}
 
@@ -645,10 +644,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-meta span{display:inline-flex;align-items:center;gap:4px}
 .kb-foot{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
 /* Tag de método de pagamento — cor única padrão (não mais cor diferente por método) */
-.kb-pgto{font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;letter-spacing:.04em;text-transform:uppercase;
+.kb-pgto{font-size:10px;font-weight:600;padding:3px 8px;border-radius:7px;letter-spacing:.04em;text-transform:uppercase;
   background:rgba(148,163,184,.16);color:var(--t2)}
 .kb-mod{font-size:10px;font-weight:600;color:var(--t3);padding:3px 8px;
-  background:transparent;border-radius:5px;border:1px solid var(--b2)}
+  background:transparent;border-radius:7px;border:1px solid var(--b2)}
 /* Linha exclusiva do vendedor (sempre abaixo das tags pra organização visual) */
 .kb-vendor-row{margin-top:4px;padding-top:7px;border-top:1px dashed var(--b1);
   display:flex;align-items:center}
@@ -656,9 +655,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   background:transparent;padding:0;border-radius:0;border:none;
   max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kb-vendor::before{content:'👤';font-size:11px;opacity:.6;flex:none}
-.kb-tag{font-size:10px;font-weight:600;padding:3px 7px;border-radius:5px}
+.kb-tag{font-size:10px;font-weight:600;padding:3px 7px;border-radius:7px}
 .kb-fu{position:absolute;top:8px;right:30px;font-size:12px;opacity:.7}
-.kb-dots{position:absolute;top:7px;right:7px;width:22px;height:22px;border-radius:5px;
+.kb-dots{position:absolute;top:7px;right:7px;width:22px;height:22px;border-radius:7px;
   display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--t3);
   cursor:pointer;transition:all .15s;letter-spacing:1px}
 .kb-dots:hover{background:var(--s4);color:var(--tx)}
@@ -684,7 +683,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   padding:5px;min-width:194px;display:none}
 .popover.open{display:block}
 .popover-item{padding:9px 12px;font-size:13px;color:var(--t2);cursor:pointer;
-  border-radius:5px;display:flex;align-items:center;gap:9px;transition:all .12s}
+  border-radius:7px;display:flex;align-items:center;gap:9px;transition:all .12s}
 .popover-item:hover{background:var(--s3);color:var(--tx)}
 .popover-item.danger:hover{background:var(--rdd);color:var(--rd)}
 .popover-sep{height:1px;background:var(--b1);margin:4px 6px}
@@ -747,7 +746,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   color:var(--tx);letter-spacing:.02em}
 .wk-chip-at{padding-top:7px;border-top:1px dashed var(--b1)}
 /* Status pill clicável estilo pipeline */
-.wk-status-pill{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:5px;
+.wk-status-pill{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:7px;
   cursor:pointer;font-family:inherit;transition:all .12s;display:inline-flex;align-items:center;gap:5px}
 .wk-status-pill:hover{filter:brightness(1.15)}
 /* Bolinha de status operacional no canto superior direito do chip */
@@ -756,7 +755,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-chip:hover .cont-mini-chip-dot{box-shadow:0 0 0 2px var(--s3)}
 .cont-mini-chip{display:flex;align-items:center;gap:10px;padding:9px 12px;
   background:var(--s3);border:1px solid var(--b1);
-  border-radius:6px;transition:all .12s;cursor:grab}
+  border-radius:8px;transition:all .12s;cursor:grab}
 .cont-mini-chip:hover{border-color:var(--b2);background:var(--s2)}
 .cont-mini-chip:active{cursor:grabbing}
 .cont-mini-chip.dragging{opacity:.4;transform:scale(.95)}
@@ -767,14 +766,14 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .cont-at-block.drop-target .cont-at-h{background:rgba(59,130,246,.08)}
 /* Itens do picker de chips */
 .mcp-item{display:flex;align-items:center;gap:12px;padding:10px 12px;
-  background:var(--s3);border:1px solid var(--b1);border-radius:6px;
+  background:var(--s3);border:1px solid var(--b1);border-radius:8px;
   cursor:pointer;transition:all .12s}
 .mcp-item:hover{border-color:var(--bl);background:var(--s2)}
 .mcp-item-already{opacity:.55;cursor:default}
 .mcp-item-already:hover{border-color:var(--b1);background:var(--s3)}
 /* Multi-pick de WhatsApps/atendentes no modal de gasto */
 .mg-chip-pick label{display:flex;align-items:center;gap:8px;padding:6px 8px;
-  border-radius:5px;cursor:pointer;transition:background .1s;font-size:12.5px;color:var(--t2)}
+  border-radius:7px;cursor:pointer;transition:background .1s;font-size:12.5px;color:var(--t2)}
 .mg-chip-pick label:hover{background:var(--s4)}
 .mg-chip-pick input[type=checkbox]{accent-color:var(--bl);width:14px;height:14px;cursor:pointer;margin:0}
 .mg-chip-pick .mg-chip-empty{font-style:italic;color:var(--t4);font-weight:500}
@@ -790,7 +789,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .chip.crit{border-color:var(--rd);box-shadow:0 0 0 1px var(--rdd)}
 .chip-h{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
 .chip-num{font-size:16px;font-weight:700;color:var(--tx);letter-spacing:.01em}
-.chip-st{font-size:10px;font-weight:700;padding:3px 8px;border-radius:5px;text-transform:uppercase;letter-spacing:.05em}
+.chip-st{font-size:10px;font-weight:700;padding:3px 8px;border-radius:7px;text-transform:uppercase;letter-spacing:.05em}
 .chip-st.ativo{background:var(--grd);color:var(--gr)}
 .chip-st.aquecimento{background:var(--bld);color:var(--bl2)}
 .chip-st.banido{background:var(--rdd);color:var(--rd)}
@@ -799,10 +798,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .chip-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t3);margin-bottom:5px}
 .chip-row b{color:var(--tx);font-weight:500}
 .chip-tags{display:flex;gap:4px;flex-wrap:wrap;margin:8px 0}
-.chip-tag{font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;
+.chip-tag{font-size:10px;font-weight:600;padding:3px 8px;border-radius:7px;
   background:var(--s4);color:var(--t2);border:1px solid var(--b2)}
 .chip-note{font-size:11px;color:var(--t3);font-style:italic;margin-top:6px;
-  padding:7px 9px;background:var(--s3);border-radius:5px;border-left:2px solid var(--b2)}
+  padding:7px 9px;background:var(--s3);border-radius:7px;border-left:2px solid var(--b2)}
 .chip-rec{margin-top:10px;padding-top:10px;border-top:1px solid var(--b1);
   display:flex;align-items:center;justify-content:space-between;gap:8px}
 .chip-rec-lbl{font-size:11px;color:var(--t3);font-weight:600}
@@ -823,7 +822,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .tbl tbody td{padding:14px 16px;border-bottom:1px solid var(--b1);color:var(--t2)}
 .tbl tbody tr:hover{background:var(--s3)}
 .tbl tbody tr:last-child td{border-bottom:none}
-.tbl-st{display:inline-block;padding:3px 9px;border-radius:5px;
+.tbl-st{display:inline-block;padding:3px 9px;border-radius:7px;
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 
 /* ─── DRE (split com investimentos) ───────────────────── */
@@ -863,7 +862,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .reg-row{display:flex;align-items:center;gap:11px;padding:9px 12px;
   background:var(--s3);border-radius:var(--r);border:1px solid var(--b1)}
 .reg-uf{width:32px;font-size:11px;font-weight:700;color:var(--bl2);text-align:center;
-  background:var(--bld);padding:4px;border-radius:5px}
+  background:var(--bld);padding:4px;border-radius:7px}
 .reg-nm{flex:1;font-size:13px;color:var(--tx)}
 .reg-bar{flex:1;height:7px;background:var(--s2);border-radius:4px;overflow:hidden}
 .reg-bar-fill{height:100%;background:linear-gradient(90deg,var(--bl),var(--cy));border-radius:4px}
@@ -918,7 +917,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .m-b{padding:22px 24px}
 .m-actions{display:flex;gap:8px;align-items:center}
 .m-x{background:transparent;border:none;color:var(--t3);
-  font-size:22px;cursor:pointer;padding:4px 10px;border-radius:5px;transition:all .15s}
+  font-size:22px;cursor:pointer;padding:4px 10px;border-radius:7px;transition:all .15s}
 .m-x:hover{color:var(--tx);background:var(--s3)}
 .fg{display:grid;gap:13px;margin-bottom:16px}
 .fg2{grid-template-columns:1fr 1fr}
@@ -966,7 +965,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .com-attach audio{width:100%;margin-top:2px}
 .com-attach .com-file-meta{font-size:11px;color:var(--t4);margin-top:4px;display:flex;align-items:center;gap:6px}
 .com-attach-tag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;
-  background:var(--s4);color:var(--t2);padding:3px 8px;border-radius:5px;letter-spacing:.03em}
+  background:var(--s4);color:var(--t2);padding:3px 8px;border-radius:7px;letter-spacing:.03em}
 /* Badge de comprovante pendente em pedidos Entrega */
 .mld-warn-banner{background:rgba(245,158,11,.08);border:1px solid var(--am);
   border-radius:var(--r);padding:11px 14px;margin-bottom:14px;
@@ -992,7 +991,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .notif-h h3{font-size:17px;font-weight:800;color:var(--tx)}
 .notif-tabs{display:flex;gap:4px;padding:10px 14px;border-bottom:1px solid var(--b1);overflow-x:auto}
 .notif-tab{background:transparent;border:none;color:var(--t3);font-size:12px;
-  font-weight:600;padding:7px 11px;border-radius:6px;cursor:pointer;
+  font-weight:600;padding:7px 11px;border-radius:8px;cursor:pointer;
   white-space:nowrap;transition:all .15s;font-family:inherit}
 .notif-tab:hover{color:var(--tx)}
 .notif-tab.on{background:var(--bld);color:var(--bl2)}
@@ -1017,7 +1016,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 
 /* ─── LEAD MODAL — layout ficha 3-col ─────────────── */
 .modal.xl{max-width:1180px}
-.mld-status-pill{font-size:11px;font-weight:700;padding:4px 11px;border-radius:6px;
+.mld-status-pill{font-size:11px;font-weight:700;padding:4px 11px;border-radius:8px;
   letter-spacing:.04em;text-transform:uppercase;background:var(--grd);color:var(--gr)}
 .lead-grid-3{display:grid;grid-template-columns:1.05fr 1fr .9fr;gap:32px;margin-top:20px}
 @media(max-width:1000px){.lead-grid-3{grid-template-columns:1fr;gap:24px}}
@@ -1062,7 +1061,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 /* Botões de ação compactos no modal */
 .btn-act{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;
-  border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;
+  border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;
   border:1px solid var(--b2);background:var(--s3);color:var(--t2);
   transition:all .15s;font-family:inherit}
 .btn-act:hover{color:var(--tx)}
@@ -1080,7 +1079,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
   font-size:13px;outline:none;padding:8px 0;font-family:inherit}
 .com-pretty input::placeholder{color:var(--t4)}
 .com-pretty .com-icon{color:var(--t4);cursor:pointer;font-size:15px;
-  display:inline-flex;align-items:center;padding:7px;border-radius:6px;transition:all .15s;line-height:1}
+  display:inline-flex;align-items:center;padding:7px;border-radius:8px;transition:all .15s;line-height:1}
 .com-pretty .com-icon:hover{background:var(--s4);color:var(--t2)}
 .com-pretty .com-send{background:var(--gr);color:#fff;width:34px;height:34px;
   border-radius:8px;display:flex;align-items:center;justify-content:center;
@@ -1097,7 +1096,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
   display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;
   background:var(--bld);color:var(--bl2)}
 .hist-item .hist-pill{font-size:11px;font-weight:700;padding:4px 10px;
-  border-radius:5px;letter-spacing:.04em}
+  border-radius:7px;letter-spacing:.04em}
 .hist-item .hist-arrow{color:var(--t3);font-weight:700}
 .hist-item .hist-meta{margin-left:auto;font-size:11px;color:var(--t4)}
 .hist-item .hist-meta b{color:var(--t2);font-weight:600}
@@ -1133,7 +1132,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .pt-tit{font-size:15px;font-weight:700;color:var(--tx)}
 .pt-sub{font-size:11.5px;color:var(--t3)}
 
-.badge-pedido-type{font-size:11px;font-weight:700;padding:6px 13px;border-radius:6px;
+.badge-pedido-type{font-size:11px;font-weight:700;padding:6px 13px;border-radius:8px;
   letter-spacing:.06em;text-transform:uppercase;background:var(--s4);color:var(--t2);
   border:1px solid var(--b2)}
 
@@ -1154,7 +1153,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .np-upload input{display:none}
 .np-upload span{font-size:12px;font-weight:600}
 .np-upload.has-file{border-style:solid;border-color:var(--gr);background:var(--grd);color:var(--gr)}
-.np-upload img{max-width:100%;max-height:120px;border-radius:6px;margin-bottom:4px}
+.np-upload img{max-width:100%;max-height:120px;border-radius:8px;margin-bottom:4px}
 
 /* ─── Export CSV — checkboxes ─────────────────────── */
 .ex-col{display:flex;align-items:center;gap:8px;padding:8px 11px;
@@ -1166,7 +1165,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 /* ─── Retrospectiva (mensal/anual) ────────────────────── */
 .retro-tabs{display:flex;gap:4px;background:var(--s3);border:1px solid var(--b1);border-radius:7px;padding:3px}
 .retro-tab{background:transparent;border:none;color:var(--t3);font-size:12px;font-weight:600;
-  padding:6px 14px;border-radius:5px;cursor:pointer;transition:all .15s;font-family:inherit}
+  padding:6px 14px;border-radius:7px;cursor:pointer;transition:all .15s;font-family:inherit}
 .retro-tab:hover{color:var(--tx)}
 .retro-tab.on{background:var(--bl);color:#fff}
 
@@ -1178,13 +1177,13 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 /* ─── Equipe — tag de modalidade ─────────────────────── */
 .mod-tag-bar{display:flex;align-items:center;gap:11px;margin:24px 0 12px}
 .mod-tag{display:inline-flex;align-items:center;gap:6px;padding:5px 13px;
-  border-radius:6px;font-size:12px;font-weight:600;letter-spacing:.02em}
+  border-radius:8px;font-size:12px;font-weight:600;letter-spacing:.02em}
 .mod-ant-tag{background:var(--bld);color:var(--bl2);border:1px solid var(--bl)}
 .mod-ent-tag{background:var(--grd);color:var(--gr);border:1px solid var(--gr)}
 
 /* ─── Demonstrativo: menu 3-pontinhos ────────────────── */
 .dem-dots{background:transparent;border:none;color:var(--t3);font-size:18px;cursor:pointer;
-  width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+  width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;
   transition:all .15s;letter-spacing:1px}
 .dem-dots:hover{background:var(--s3);color:var(--tx)}
 .dem-menu{position:absolute;top:48px;right:14px;z-index:50;
@@ -1196,12 +1195,12 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .dem-menu-h{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;
   letter-spacing:.06em;padding:9px 12px 6px}
 .dem-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;
-  border-radius:6px;font-size:13px;color:var(--t2);transition:all .12s;justify-content:space-between}
+  border-radius:8px;font-size:13px;color:var(--t2);transition:all .12s;justify-content:space-between}
 .dem-menu-item:hover{background:var(--s3);color:var(--tx)}
 .dem-menu-item input[type=checkbox]{accent-color:var(--bl);cursor:pointer;flex:none}
 .dem-menu-item .dem-label{flex:1;display:flex;align-items:center;gap:9px;min-width:0}
 .dem-menu-item .dem-pct{flex:none;display:flex;align-items:center;gap:3px;
-  background:var(--s3);border:1px solid var(--b1);border-radius:5px;padding:2px 4px 2px 6px}
+  background:var(--s3);border:1px solid var(--b1);border-radius:7px;padding:2px 4px 2px 6px}
 .dem-menu-item .dem-pct input{width:36px;background:transparent;border:none;color:var(--bl2);
   font-size:12px;font-weight:600;text-align:right;outline:none;padding:0;font-family:inherit}
 .dem-menu-item .dem-pct span{color:var(--t4);font-size:11px;font-weight:600}
@@ -1211,7 +1210,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
   padding:13px 14px;display:flex;flex-direction:column;gap:10px}
 .col-row1{display:flex;align-items:center;gap:8px}
 .col-arrow{background:var(--s4);border:1px solid var(--b2);color:var(--t2);
-  width:30px;height:30px;border-radius:6px;cursor:pointer;font-size:14px;
+  width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px;
   display:flex;align-items:center;justify-content:center;transition:all .15s}
 .col-arrow:hover:not(:disabled){background:var(--bld);color:var(--bl2);border-color:var(--bl)}
 .col-arrow:disabled{opacity:.3;cursor:not-allowed}
@@ -1220,7 +1219,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .col-perm-label b{color:var(--t2)}
 .col-perm-chips{display:flex;gap:5px;flex-wrap:wrap;flex:1}
 .col-chip{background:transparent;border:1px solid var(--b2);color:var(--t3);
-  font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:5px;cursor:pointer;
+  font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer;
   transition:all .15s;font-family:inherit}
 .col-chip:hover{color:var(--tx);border-color:var(--b3)}
 .col-chip.on{background:var(--bld);color:var(--bl2);border-color:var(--bl)}
@@ -1249,7 +1248,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
 .cfg-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
-  padding:4px 10px;border-radius:5px;background:var(--s4);color:var(--t3)}
+  padding:4px 10px;border-radius:7px;background:var(--s4);color:var(--t3)}
 /* details/summary do backend collapsable */
 details.cfg-card summary::-webkit-details-marker{display:none}
 details.cfg-card[open] .details-chev{transform:rotate(180deg)}
@@ -1294,7 +1293,7 @@ body.compact .mc-val{font-size:20px}
 .follows-tab:hover{background:var(--s3);color:var(--tx)}
 .follows-tab.on{background:var(--bld);color:var(--bl2);border-color:var(--bl)}
 .ft-count{background:var(--s4);color:var(--t2);font-size:11px;font-weight:700;
-  padding:2px 7px;border-radius:5px;min-width:20px;text-align:center}
+  padding:2px 7px;border-radius:7px;min-width:20px;text-align:center}
 .follows-tab.on .ft-count{background:var(--bl);color:#fff}
 
 /* ─── Banner do fechamento (sóbrio) ─────────────────── */
@@ -1329,7 +1328,7 @@ h1 em{font-weight:700}
 
 /* ─── Pró-labore toggle ───────────────────────────── */
 .pro-tog{background:transparent;border:1px solid var(--b2);color:var(--t3);
-  font-size:13px;font-weight:700;padding:6px 11px;border-radius:6px;cursor:pointer;
+  font-size:13px;font-weight:700;padding:6px 11px;border-radius:8px;cursor:pointer;
   transition:all .15s;font-family:inherit;min-width:36px}
 .pro-tog:hover{color:var(--tx)}
 .pro-tog.on{background:var(--am);color:#1a1308;border-color:var(--am)}
@@ -1342,7 +1341,7 @@ h1 em{font-weight:700}
 .payt-map-row.payt-map-head{background:var(--s1);font-size:11px;font-weight:700;
   color:var(--t3);text-transform:uppercase;letter-spacing:.06em;padding:11px 14px}
 .payt-map-row select{background:var(--s4);border:1px solid var(--b2);color:var(--tx);
-  font-size:12px;padding:6px 8px;border-radius:5px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
+  font-size:12px;padding:6px 8px;border-radius:7px;outline:none;font-family:inherit;width:100%;color-scheme:dark}
 @media(max-width:900px){.payt-map-row{grid-template-columns:1fr}}
 
 /* ═══ MÓDULO DESIGN & COPY (Criativos) ═══ */
@@ -1373,11 +1372,11 @@ h1 em{font-weight:700}
 .cp-block-time{background:var(--s4);padding:2px 8px;border-radius:4px;font-family:ui-monospace,monospace;font-size:10.5px;color:var(--t2)}
 .cp-block-lbl{color:var(--t3)}
 .cp-block textarea{width:100%;background:transparent;border:none;color:var(--tx);font-family:inherit;font-size:13px;line-height:1.55;resize:vertical;min-height:44px;outline:none;padding:2px 0}
-.cp-block textarea:focus{background:var(--s4);padding:6px 8px;border-radius:5px}
+.cp-block textarea:focus{background:var(--s4);padding:6px 8px;border-radius:7px}
 /* ─── Timeline + textarea unificada (roteiro corrido) ─── */
 .cp-timeline{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;margin-bottom:4px;scrollbar-width:thin}
 .cp-tl-pill{flex:0 0 auto;background:var(--s3);border:1px solid var(--b1);
-  border-radius:5px;padding:5px 9px;font-size:11px}
+  border-radius:7px;padding:5px 9px;font-size:11px}
 .cp-tl-time{font-family:ui-monospace,monospace;font-size:10.5px;color:var(--t2);font-weight:600;margin-bottom:1px}
 .cp-tl-lbl{color:var(--t3);font-size:11px;white-space:nowrap}
 .cp-script-area{width:100%;min-height:340px;background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);
@@ -1414,7 +1413,7 @@ h1 em{font-weight:700}
 .cp-card-x{position:absolute;top:8px;right:8px;background:transparent;border:none;color:var(--t4);cursor:pointer;font-size:14px;padding:0;line-height:1;opacity:0;transition:opacity .15s}
 .cp-card:hover .cp-card-x{opacity:1}
 .cp-card-x:hover{color:var(--rd)}
-.cp-add-btn{background:transparent;border:1px dashed var(--b2);color:var(--t3);border-radius:6px;padding:7px;font-size:11.5px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit}
+.cp-add-btn{background:transparent;border:1px dashed var(--b2);color:var(--t3);border-radius:8px;padding:7px;font-size:11.5px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit}
 .cp-add-btn:hover{border-color:var(--bl);color:var(--bl2)}
 
 /* Indicador "ao vivo" do auto-refresh do log de webhooks */
@@ -1436,7 +1435,7 @@ h1 em{font-weight:700}
   background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);
   font-size:12.5px;color:var(--t2)}
 .wh-evt-tag{font-family:monospace;font-size:11px;font-weight:700;
-  padding:3px 9px;border-radius:5px;letter-spacing:.02em;flex-shrink:0}
+  padding:3px 9px;border-radius:7px;letter-spacing:.02em;flex-shrink:0}
 .autom-rule{background:var(--s3);border:1px solid var(--b1);border-radius:var(--rl);
   padding:13px 15px;display:grid;grid-template-columns:1fr auto;
   grid-template-rows:auto auto auto;gap:6px 14px;align-items:center}
@@ -1466,7 +1465,7 @@ h1 em{font-weight:700}
 .prod-thumb{width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0;
   background:var(--s3);border:1px solid var(--b1)}
 /* Uploader pequeno na variação */
-.prod-var-img{width:38px;height:38px;border-radius:6px;background:var(--s3);
+.prod-var-img{width:38px;height:38px;border-radius:8px;background:var(--s3);
   border:1px dashed var(--b2);cursor:pointer;display:flex;align-items:center;
   justify-content:center;flex-shrink:0;overflow:hidden;transition:all .15s;
   font-size:14px;color:var(--t4)}
@@ -1477,7 +1476,7 @@ h1 em{font-weight:700}
 .prod-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .prod-nm{font-size:17px;font-weight:800;color:var(--tx);letter-spacing:-.01em}
 .prod-st{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-  padding:3px 8px;border-radius:5px}
+  padding:3px 8px;border-radius:7px}
 .prod-st.on{background:var(--grd);color:var(--gr)}
 .prod-st.off{background:var(--rdd);color:var(--rd)}
 .prod-com{font-size:12px;color:var(--t3);margin-bottom:13px}
@@ -1516,36 +1515,36 @@ h1 em{font-weight:700}
 .mld-quick{display:flex;gap:6px;flex-wrap:wrap}
 .mld-quick a{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;
   background:var(--s3);border:1px solid var(--b2);color:var(--t2);
-  border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;transition:all .15s}
+  border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;transition:all .15s}
 .mld-quick a:hover{background:var(--bld);color:var(--bl2);border-color:var(--bl)}
 
 /* ─── Lead modal — barra de etapas ────────────────── */
 .mld-stage-bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
   background:var(--s3);border:1px solid var(--b1);border-radius:var(--rl);
   padding:11px 14px;margin-bottom:18px}
-.mld-stage-cur{font-size:13px;font-weight:700;padding:5px 12px;border-radius:6px;letter-spacing:.02em}
+.mld-stage-cur{font-size:13px;font-weight:700;padding:5px 12px;border-radius:8px;letter-spacing:.02em}
 .mld-stage-pills{display:flex;gap:5px;flex-wrap:wrap;margin-left:auto}
 /* Tag picker no modal de detalhes do lead */
 .tags-picker{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
-.tags-picker .tp-pill{font-size:11px;font-weight:600;padding:5px 10px;border-radius:6px;
+.tags-picker .tp-pill{font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;
   background:var(--s2);border:1.5px solid var(--b1);cursor:pointer;transition:all .15s;
   letter-spacing:.02em;display:inline-flex;align-items:center;gap:5px;user-select:none}
 .tags-picker .tp-pill:hover{transform:translateY(-1px)}
 .tags-picker .tp-pill.on{box-shadow:0 0 0 1px currentColor inset}
 .tags-picker .tp-empty{font-size:11.5px;color:var(--t4);padding:5px 0}
-.tags-picker .tp-add{font-size:11px;font-weight:600;padding:5px 10px;border-radius:6px;
+.tags-picker .tp-add{font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;
   background:transparent;border:1.5px dashed var(--b2);color:var(--t3);cursor:pointer;
   transition:all .15s}
 .tags-picker .tp-add:hover{border-color:var(--bl);color:var(--bl)}
 /* Lista no modal de gerenciar tags */
 .tag-row{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--s2);
   border:1px solid var(--b1);border-radius:var(--r);margin-bottom:8px}
-.tag-row .tag-swatch{width:22px;height:22px;border-radius:5px;flex:none;cursor:pointer;border:1px solid var(--b2)}
-.tag-row input.tag-name{flex:1;background:var(--s3);border:1px solid var(--b1);border-radius:5px;
+.tag-row .tag-swatch{width:22px;height:22px;border-radius:7px;flex:none;cursor:pointer;border:1px solid var(--b2)}
+.tag-row input.tag-name{flex:1;background:var(--s3);border:1px solid var(--b1);border-radius:7px;
   padding:6px 9px;color:var(--tx);font-size:13px;font-weight:600}
 .tag-row .tag-uses{font-size:11px;color:var(--t4);min-width:62px;text-align:right}
 .tag-row .tag-del{background:none;border:none;color:var(--t4);font-size:14px;cursor:pointer;
-  width:26px;height:26px;border-radius:5px;transition:all .15s}
+  width:26px;height:26px;border-radius:7px;transition:all .15s}
 .tag-row .tag-del:hover{background:var(--rdd);color:var(--rd)}
 /* Toggle switch para ativar/desativar tags de sistema */
 .tag-toggle{position:relative;display:inline-block;width:36px;height:20px;flex:none;cursor:pointer}
@@ -1559,7 +1558,7 @@ h1 em{font-weight:700}
 /* Visual de tag desativada */
 .tag-row.tag-off{opacity:.55}
 .tag-row.tag-off input.tag-name,.tag-row.tag-off .tag-swatch{filter:grayscale(.6)}
-.mld-stage-pill{font-size:11px;font-weight:600;padding:5px 11px;border-radius:6px;
+.mld-stage-pill{font-size:11px;font-weight:600;padding:5px 11px;border-radius:8px;
   background:var(--s2);border:1px solid var(--b1);color:var(--t3);cursor:pointer;transition:all .15s;letter-spacing:.02em}
 .mld-stage-pill:hover{background:var(--s4);color:var(--tx)}
 /* Pill sem permissão de mover — listras diagonais sutis + cursor "not-allowed" */
@@ -1722,7 +1721,7 @@ h1 em{font-weight:700}
           </div>
           <!-- Coluna 3: Mês específico -->
           <div class="drp-col">
-            <div class="drp-head">Mês específico — <select id="drp-year" onchange="renderDRPMonths()" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:3px 7px;border-radius:5px;font-size:12px;font-family:inherit"></select></div>
+            <div class="drp-head">Mês específico — <select id="drp-year" onchange="renderDRPMonths()" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:3px 7px;border-radius:7px;font-size:12px;font-family:inherit"></select></div>
             <div class="drp-months" id="drp-months"></div>
           </div>
           <!-- Coluna 4: Período customizado -->
@@ -2153,11 +2152,11 @@ h1 em{font-weight:700}
         <label>Tipo de lançamento</label>
         <div style="display:flex;gap:6px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:3px">
           <button type="button" id="inv-type-gasto" onclick="setInvType('gasto')"
-            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;transition:all .15s">
+            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:8px;border:none;cursor:pointer;transition:all .15s">
             💸 Gasto<br><span style="font-size:10.5px;font-weight:500;opacity:.85">já desembolsado · entra no DRE</span>
           </button>
           <button type="button" id="inv-type-budget" onclick="setInvType('budget')"
-            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;transition:all .15s">
+            style="flex:1;padding:8px 12px;font-size:12.5px;font-weight:600;border-radius:8px;border:none;cursor:pointer;transition:all .15s">
             🎯 Budget<br><span style="font-size:10.5px;font-weight:500;opacity:.85">reservado · não entra no DRE ainda</span>
           </button>
         </div>
@@ -2244,9 +2243,9 @@ h1 em{font-weight:700}
       <p class="muted" style="font-size:13px;margin-bottom:14px">Crie tags com nome e cor personalizados. Aplique nos leads pela tela de detalhes.</p>
       <div id="tags-list" style="margin-bottom:14px"></div>
       <div style="display:flex;gap:8px;align-items:center;background:var(--s2);border:1.5px dashed var(--b2);border-radius:var(--r);padding:11px">
-        <input type="color" id="new-tag-color" value="#3b82f6" style="width:38px;height:34px;border:none;background:none;cursor:pointer;padding:0;border-radius:5px">
+        <input type="color" id="new-tag-color" value="#3b82f6" style="width:38px;height:34px;border:none;background:none;cursor:pointer;padding:0;border-radius:7px">
         <input type="text" id="new-tag-name" placeholder="Nome da nova tag (ex: Cliente fiel)" maxlength="32"
-          style="flex:1;background:var(--s3);border:1px solid var(--b1);border-radius:5px;padding:7px 10px;color:var(--tx);font-size:13px"
+          style="flex:1;background:var(--s3);border:1px solid var(--b1);border-radius:7px;padding:7px 10px;color:var(--tx);font-size:13px"
           onkeypress="if(event.key==='Enter')addNewTag()">
         <button class="btn btn-bl btn-sm" onclick="addNewTag()">+ Criar</button>
       </div>
@@ -2621,7 +2620,7 @@ h1 em{font-weight:700}
           PNG ou JPG. Aparece nos cards e seletores.<br>
           <span style="color:var(--t4)">Recomendado: quadrada · 400×400px ou maior</span>
           <button id="mp-img-remove" onclick="event.stopPropagation();clearProdImage()"
-            style="display:none;margin-top:6px;background:transparent;border:1px solid var(--rd);color:var(--rd);font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:inherit">× Remover imagem</button>
+            style="display:none;margin-top:6px;background:transparent;border:1px solid var(--rd);color:var(--rd);font-size:11px;padding:3px 8px;border-radius:7px;cursor:pointer;font-family:inherit">× Remover imagem</button>
         </div>
       </div>
       <div class="fg fg2">
@@ -3367,8 +3366,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.17.1';
-const APP_LAST_CHANGE = 'Bump border-radius — vars (--r 8→10, --rl 16→18, --rxl 20→22) + hardcoded em componentes visíveis (filtro de período, atalhos rápidos, meses, datas, acordeões da sidebar, itens do menu). Curva perceptível em tudo';
+const APP_VERSION = '2.17.2';
+const APP_LAST_CHANGE = 'Sweep agressivo de border-radius: --r 10→12, todos os hardcoded de 5px viraram 7px, todos de 6px viraram 8px. Cobre pills, tags, badges, mini-buttons, status pills, etc';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4668,7 +4667,7 @@ function goPage(id){
     items.forEach(it=>{
       const opt=document.createElement('button');
       opt.style.cssText=`text-align:left;background:transparent;border:none;color:var(--t2);
-        padding:8px 11px;border-radius:5px;cursor:pointer;font-family:inherit;
+        padding:8px 11px;border-radius:7px;cursor:pointer;font-family:inherit;
         font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:8px;transition:background .12s`;
       opt.innerHTML=`${ico(it.icon,{size:13})} <span>${it.label}</span>`;
       opt.onmouseover=()=>opt.style.background='var(--s3)';
@@ -5247,8 +5246,8 @@ function renderColsList(){
       <div class="col-row1">
         <button class="col-arrow" onclick="moveCol(${i},-1)" ${i===0?'disabled':''} title="Subir">↑</button>
         <button class="col-arrow" onclick="moveCol(${i},1)" ${i===KB_COLS.length-1?'disabled':''} title="Descer">↓</button>
-        <input type="color" value="${col.c}" onchange="updColField(${i},'c',this.value)" style="width:40px;height:36px;border:1px solid var(--b2);border-radius:6px;cursor:pointer;background:transparent;padding:2px">
-        <input type="text" value="${col.id}" onchange="renameCol(${i},this.value)" style="flex:1;background:var(--s3);border:1px solid var(--b2);color:var(--tx);font-weight:500;font-size:14px;padding:8px 11px;border-radius:6px;font-family:inherit">
+        <input type="color" value="${col.c}" onchange="updColField(${i},'c',this.value)" style="width:40px;height:36px;border:1px solid var(--b2);border-radius:8px;cursor:pointer;background:transparent;padding:2px">
+        <input type="text" value="${col.id}" onchange="renameCol(${i},this.value)" style="flex:1;background:var(--s3);border:1px solid var(--b2);color:var(--tx);font-weight:500;font-size:14px;padding:8px 11px;border-radius:8px;font-family:inherit">
         <button class="btn-act btn-act-gh btn-act-icon" onclick="delCol(${i})" title="Excluir etapa" style="color:var(--rd)">×</button>
       </div>
       <div class="col-row2">
@@ -6558,14 +6557,14 @@ function renderWaStatusList(){
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap">
         <span style="font-size:11.5px;color:var(--t3)"><b style="color:var(--bl2)">${visCount}</b> de ${total} aparecem no chip</span>
-        <button onclick="_waBulkVisibility(false)" style="margin-left:auto;background:transparent;border:1px solid var(--b2);color:var(--t2);border-radius:5px;padding:4px 9px;cursor:pointer;font-family:inherit;font-size:11px">👁‍🗨 Ocultar todas</button>
-        <button onclick="_waBulkVisibility(true)" style="background:transparent;border:1px solid var(--b2);color:var(--t2);border-radius:5px;padding:4px 9px;cursor:pointer;font-family:inherit;font-size:11px">👁 Mostrar todas</button>
+        <button onclick="_waBulkVisibility(false)" style="margin-left:auto;background:transparent;border:1px solid var(--b2);color:var(--t2);border-radius:7px;padding:4px 9px;cursor:pointer;font-family:inherit;font-size:11px">👁‍🗨 Ocultar todas</button>
+        <button onclick="_waBulkVisibility(true)" style="background:transparent;border:1px solid var(--b2);color:var(--t2);border-radius:7px;padding:4px 9px;cursor:pointer;font-family:inherit;font-size:11px">👁 Mostrar todas</button>
       </div>
     </div>
   `+_waStatusBuf.map((s,i)=>{
     const visible=s.visible!==false;
     return `
-    <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-left:3px solid ${s.color||'#64748b'};border-radius:6px;padding:9px 11px;${visible?'':'opacity:.55'}">
+    <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-left:3px solid ${s.color||'#64748b'};border-radius:8px;padding:9px 11px;${visible?'':'opacity:.55'}">
       <label title="${visible?'Aparece como botão no chip':'Está oculta'}" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
         <input type="checkbox" ${visible?'checked':''} onchange="_waStatusBuf[${i}].visible=this.checked;renderWaStatusList()"
           style="accent-color:var(--bl);width:16px;height:16px;cursor:pointer">
@@ -6573,14 +6572,14 @@ function renderWaStatusList(){
       </label>
       <input type="text" value="${(s.ic||'').replace(/"/g,'&quot;')}" maxlength="3" onchange="_waStatusBuf[${i}].ic=this.value"
         placeholder="🟢" title="Emoji/ícone"
-        style="width:42px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);text-align:center;border-radius:5px;padding:6px;font-size:14px;font-family:inherit">
+        style="width:42px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);text-align:center;border-radius:7px;padding:6px;font-size:14px;font-family:inherit">
       <input type="text" value="${(s.label||'').replace(/"/g,'&quot;')}" onchange="_waStatusBuf[${i}].label=this.value"
         placeholder="Nome da tag"
-        style="flex:1;min-width:100px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);border-radius:5px;padding:6px 9px;font-family:inherit;font-size:12.5px">
+        style="flex:1;min-width:100px;background:var(--s4);border:1px solid var(--b1);color:var(--tx);border-radius:7px;padding:6px 9px;font-family:inherit;font-size:12.5px">
       <input type="color" value="${s.color||'#64748b'}" onchange="_waStatusBuf[${i}].color=this.value;_waStatusBuf[${i}].bg=this.value+'26';renderWaStatusList()"
         title="Cor"
-        style="width:36px;height:30px;border:1px solid var(--b1);border-radius:5px;background:transparent;cursor:pointer;padding:1px">
-      <button onclick="delWaStatus(${i})" title="Remover" style="background:transparent;border:1px solid var(--b1);color:var(--rd);border-radius:5px;padding:5px 9px;cursor:pointer;font-family:inherit;font-size:13px">×</button>
+        style="width:36px;height:30px;border:1px solid var(--b1);border-radius:7px;background:transparent;cursor:pointer;padding:1px">
+      <button onclick="delWaStatus(${i})" title="Remover" style="background:transparent;border:1px solid var(--b1);color:var(--rd);border-radius:7px;padding:5px 9px;cursor:pointer;font-family:inherit;font-size:13px">×</button>
     </div>`;
   }).join('')||'<div class="muted" style="text-align:center;padding:14px">Nenhum status cadastrado. Clique em "+ Adicionar status" abaixo.</div>';
 }
@@ -6823,7 +6822,7 @@ function _waStatusOpenPicker(chipId, anchorEl){
   menu.innerHTML=list.map(v=>{
     const active=v.id===wa;
     return `<button onclick="setWaStatus(${chipId},'${v.id}');this.parentElement.remove()"
-      style="text-align:left;background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t2)'};border:none;border-radius:5px;padding:7px 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:${active?600:500};display:flex;align-items:center;gap:6px"
+      style="text-align:left;background:${active?v.bg:'transparent'};color:${active?v.color:'var(--t2)'};border:none;border-radius:7px;padding:7px 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:${active?600:500};display:flex;align-items:center;gap:6px"
       onmouseover="if(!${active})this.style.background='var(--s3)'"
       onmouseout="if(!${active})this.style.background='transparent'">
       ${v.ic||''} ${v.label}${active?' <span style="margin-left:auto;font-size:10px">✓</span>':''}
@@ -7628,7 +7627,7 @@ function renderDRE(){
     <div class="panel-h">
       <h3>Fechamentos</h3>
       <div style="display:flex;align-items:center;gap:10px">
-        ${retroMode==='mensal'?`<select id="retro-year" onchange="retroYear=Number(this.value);renderRetrospectiva()" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:6px 10px;border-radius:6px;font-size:12px;font-family:inherit">${(()=>{const y=new Date().getFullYear();let o='';for(let i=0;i<5;i++){const yy=y-i;o+=`<option value="${yy}" ${yy===retroYear?'selected':''}>${yy}</option>`}return o})()}</select>`:''}
+        ${retroMode==='mensal'?`<select id="retro-year" onchange="retroYear=Number(this.value);renderRetrospectiva()" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:6px 10px;border-radius:8px;font-size:12px;font-family:inherit">${(()=>{const y=new Date().getFullYear();let o='';for(let i=0;i<5;i++){const yy=y-i;o+=`<option value="${yy}" ${yy===retroYear?'selected':''}>${yy}</option>`}return o})()}</select>`:''}
         <div class="retro-tabs">
           <button class="retro-tab ${retroMode==='mensal'?'on':''}" onclick="setRetroMode('mensal')">Mensal</button>
           <button class="retro-tab ${retroMode==='anual'?'on':''}" onclick="setRetroMode('anual')">Anual</button>
@@ -8454,7 +8453,7 @@ function renderInvest(){
       }).join('')}
     </div>
     ${lucroDistribuivel>0?`
-    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.18);border-radius:6px;line-height:1.5">
+    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.18);border-radius:8px;line-height:1.5">
       💡 <b style="color:var(--gr)">Lucro distribuível</b> do período: <b style="color:var(--tx)">${fmt(lucroDistribuivel)}</b> (do DRE). Cada % de aporte recebe proporcionalmente.
     </div>`:''}
     `:''}
@@ -8854,7 +8853,7 @@ function openPayoutEdit(id){
   $('po-data').value=dt?dt.toISOString().split('T')[0]:'';
   if(p.comp){
     $('po-img-lbl').classList.add('has-file');
-    $('po-img-lbl').innerHTML=`<img src="${p.comp}" alt="" style="max-width:100%;max-height:120px;border-radius:6px;margin-bottom:4px"><span>${p.comp_name||'comprovante'}</span>`;
+    $('po-img-lbl').innerHTML=`<img src="${p.comp}" alt="" style="max-width:100%;max-height:120px;border-radius:8px;margin-bottom:4px"><span>${p.comp_name||'comprovante'}</span>`;
   }else{
     $('po-img-lbl').classList.remove('has-file');
     $('po-img-lbl').innerHTML=`<input type="file" accept="image/*" id="po-img" onchange="onPoImg(event)">
@@ -9395,9 +9394,9 @@ function renderInvCats(){
   $('ic-list').innerHTML=DB.invCats.map((c,i)=>`
     <div style="display:flex;gap:8px;align-items:center;background:var(--s3);border:1px solid var(--b1);border-radius:var(--r);padding:8px 11px">
       <span style="font-size:18px">${c.icon}</span>
-      <input value="${c.icon}" maxlength="2" style="width:42px;background:var(--s2);border:1px solid var(--b2);color:var(--tx);padding:6px;border-radius:5px;font-family:inherit;font-size:13px;text-align:center" onchange="DB.invCats[${i}].icon=this.value;persist()">
-      <input value="${c.nome}" style="flex:1;background:var(--s2);border:1px solid var(--b2);color:var(--tx);padding:6px 9px;border-radius:5px;font-family:inherit;font-size:13px" onchange="DB.invCats[${i}].nome=this.value;persist()">
-      <input type="color" value="${c.cor}" style="width:30px;height:30px;border:1px solid var(--b2);border-radius:5px;cursor:pointer;background:transparent" onchange="DB.invCats[${i}].cor=this.value;persist()">
+      <input value="${c.icon}" maxlength="2" style="width:42px;background:var(--s2);border:1px solid var(--b2);color:var(--tx);padding:6px;border-radius:7px;font-family:inherit;font-size:13px;text-align:center" onchange="DB.invCats[${i}].icon=this.value;persist()">
+      <input value="${c.nome}" style="flex:1;background:var(--s2);border:1px solid var(--b2);color:var(--tx);padding:6px 9px;border-radius:7px;font-family:inherit;font-size:13px" onchange="DB.invCats[${i}].nome=this.value;persist()">
+      <input type="color" value="${c.cor}" style="width:30px;height:30px;border:1px solid var(--b2);border-radius:7px;cursor:pointer;background:transparent" onchange="DB.invCats[${i}].cor=this.value;persist()">
       <button class="inv-del" onclick="delInvCat('${c.id}')" title="Excluir">×</button>
     </div>`).join('')||'<div class="muted" style="text-align:center;padding:14px">Nenhuma categoria.</div>';
 }
@@ -10037,7 +10036,7 @@ function renderProdutos(){
           ${(p.variacoes||[]).map(v=>{
             const isAfi=(p.mode||'afiliado')==='afiliado';
             return `<div class="prod-var">
-              ${v.img?`<img src="${v.img}" alt="" style="width:28px;height:28px;border-radius:5px;object-fit:cover;flex-shrink:0">`:''}
+              ${v.img?`<img src="${v.img}" alt="" style="width:28px;height:28px;border-radius:7px;object-fit:cover;flex-shrink:0">`:''}
               <span class="prod-var-nm" style="flex:1">${v.nome}</span>
               <div>
                 <span class="prod-var-pr">${fmt(v.preco)}</span>
@@ -10285,7 +10284,7 @@ function renderProdVars(){
         <button class="var-del" title="Remover" onclick="removeVariacao(${i})">×</button>
       </div>
       <!-- Links de checkout por variação (globais ao produto) -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;background:rgba(59,130,246,.04);border:1px dashed var(--bld);border-radius:6px;padding:8px 10px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;background:rgba(59,130,246,.04);border:1px dashed var(--bld);border-radius:8px;padding:8px 10px">
         <div class="field" style="flex:1;min-width:200px"><label style="color:var(--bl2);font-size:10px">🔗 LINK ANTECIPADO</label>
           <input value="${(v.link_antecipado||'').replace(/"/g,'&quot;')}" placeholder="https://seguro.payt.com.br/..." onchange="prodVarsBuf[${i}].link_antecipado=this.value">
         </div>
@@ -11655,11 +11654,11 @@ function renderCopies(){
       </div>
       ${winners>0
         ? `<span title="O gerador usa textos dos criativos marcados como Vencedor pra refinar as novas gerações"
-            style="font-size:11px;font-weight:600;color:#fbbf24;background:rgba(251,191,36,.10);padding:5px 10px;border-radius:6px;display:flex;align-items:center;gap:5px;cursor:help">
+            style="font-size:11px;font-weight:600;color:#fbbf24;background:rgba(251,191,36,.10);padding:5px 10px;border-radius:8px;display:flex;align-items:center;gap:5px;cursor:help">
             🧬 DNA ativo · ${winners} vencedor${winners>1?'es':''}
           </span>`
         : `<span title="DNA ativa quando você marca um criativo como 🏆 Vencedor. Pra ativar: 1) abre um criativo na coluna 'Pronto p/ Teste' 2) seleciona Performance = 🏆 Vencedor 3) Salva. Daí a IA usa os textos dos vencedores como referência ao gerar novos."
-            style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:6px;cursor:help">
+            style="font-size:11px;font-weight:500;color:var(--t4);background:var(--s3);padding:5px 10px;border-radius:8px;cursor:help">
             🧬 DNA inativo · ⓘ
           </span>`}
     </div>
@@ -11812,7 +11811,7 @@ function renderCopies(){
               ${Object.entries(COPY_PERFS).map(([k,p])=>{
                 const active=card.perf===k;
                 return `<button onclick="DB.criativos.find(c=>c.id===${card.id}).perf='${k}';persist();renderCopies()"
-                  style="flex:1;min-width:78px;font-size:10.5px;font-weight:600;padding:5px 7px;border-radius:5px;cursor:pointer;border:1px solid ${active?'currentColor':'var(--b1)'};background:${active?'rgba(255,255,255,.04)':'transparent'};color:${active?(k==='win'?'#fbbf24':k==='test'?'var(--bl2)':'var(--rd)'):'var(--t3)'};font-family:inherit;transition:all .12s">
+                  style="flex:1;min-width:78px;font-size:10.5px;font-weight:600;padding:5px 7px;border-radius:7px;cursor:pointer;border:1px solid ${active?'currentColor':'var(--b1)'};background:${active?'rgba(255,255,255,.04)':'transparent'};color:${active?(k==='win'?'#fbbf24':k==='test'?'var(--bl2)':'var(--rd)'):'var(--t3)'};font-family:inherit;transition:all .12s">
                   ${p.ic} ${p.l.split(' ')[0]}
                 </button>`;
               }).join('')}
@@ -11943,7 +11942,7 @@ function renderAIConfig(){
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input id="ai-gemini-input" type="password" placeholder="AIzaSy... (cole a key aqui)"
-          style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
+          style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:8px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
         <button class="btn btn-bl btn-sm" onclick="aiKeySave('gemini')">${g.configured?'Atualizar':'Salvar'}</button>
         ${g.source==='dashboard'?`<button class="btn btn-gh btn-sm" onclick="aiKeyClear('gemini')" title="Remove a key do banco">🗑</button>`:''}
       </div>
@@ -11967,7 +11966,7 @@ function renderAIConfig(){
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input id="ai-anthropic-input" type="password" placeholder="sk-ant-api03-..."
-            style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
+            style="flex:1;min-width:200px;background:var(--s4);border:1px solid var(--b1);border-radius:8px;padding:8px 11px;color:var(--tx);font-size:12.5px;font-family:ui-monospace,monospace">
           <button class="btn btn-gh btn-sm" onclick="aiKeySave('anthropic')">${a.configured?'Atualizar':'Salvar'}</button>
           ${a.source==='dashboard'?`<button class="btn btn-gh btn-sm" onclick="aiKeyClear('anthropic')">🗑</button>`:''}
         </div>
@@ -12181,8 +12180,8 @@ function cfgEquipe(){
         ${arch
           ?'<span style="font-size:11px;color:var(--t4)">—</span>'
           :hasPwd
-            ?'<span style="font-size:11px;background:var(--grd);color:var(--gr);padding:2px 7px;border-radius:5px;font-weight:600">✓ Definida</span>'
-            :'<span style="font-size:11px;background:var(--rdd);color:var(--rd);padding:2px 7px;border-radius:5px;font-weight:600">⚠ Sem senha</span>'}
+            ?'<span style="font-size:11px;background:var(--grd);color:var(--gr);padding:2px 7px;border-radius:7px;font-weight:600">✓ Definida</span>'
+            :'<span style="font-size:11px;background:var(--rdd);color:var(--rd);padding:2px 7px;border-radius:7px;font-weight:600">⚠ Sem senha</span>'}
       </td>
       <td class="right">
         ${arch
@@ -12386,7 +12385,7 @@ function cfgIntegracoes(){
           <div style="flex:1;min-width:280px">
             <label class="info-lbl" style="display:block;margin-bottom:4px">URL do Worker (sem barra final)</label>
             <input id="cfg-api-url" value="${curUrl.replace(/"/g,'&quot;')}" placeholder="https://axion-api.SEU-USER.workers.dev"
-              style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:6px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
+              style="width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace">
           </div>
           <button class="btn btn-gh btn-sm" onclick="saveApiUrl()">Salvar</button>
           ${connected?`<button class="btn btn-gh btn-sm" onclick="testApi()">Testar</button>`:''}
@@ -12511,7 +12510,7 @@ function cfgAparencia(){
             <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
               <span style="width:14px;height:14px;border-radius:50%;background:${t.accent};box-shadow:0 0 8px ${t.accent}55"></span>
               <span style="font-size:13.5px;font-weight:600;color:#e2e8f0">${t.name}</span>
-              ${isOn?`<span style="margin-left:auto;font-size:10px;font-weight:700;color:${t.accent};background:${t.accent}1a;padding:2px 7px;border-radius:5px">ATIVO</span>`:''}
+              ${isOn?`<span style="margin-left:auto;font-size:10px;font-weight:700;color:${t.accent};background:${t.accent}1a;padding:2px 7px;border-radius:7px">ATIVO</span>`:''}
             </div>
             <div style="font-size:11.5px;color:#94a3b8;line-height:1.4">${t.desc}</div>
             <!-- Preview de mini-paleta -->
