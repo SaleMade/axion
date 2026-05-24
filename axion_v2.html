@@ -12,12 +12,13 @@
    Inspirado em Midas Company, identidade AXION.
 ═══════════════════════════════════════════════════════════════ */
 :root{
-  /* fundo — tom mais dark (passada 2 do redesign). Backgrounds quase
-     pretos pra dar contraste com os cards e fazer os acentos coloridos
-     pularem menos. */
-  --bg:#020509;--s1:#070b14;--s2:#0c1220;--s3:#141b2e;--s4:#1c2438;
-  /* bordas — mais sóbrias que os fundos antigos */
-  --b1:#1a2238;--b2:#262f4a;--b3:#363f5e;
+  /* fundo NEUTRO (passada 5 do redesign). Antes era azul-esverdeado
+     que "tingia" toda a UI. Agora cinza-preto puro — o tom da cor
+     fica APENAS nos accents (botões, links, ícones), não no fundo.
+     Igual ao padrão Stripe/Linear/dash do fornecedor. */
+  --bg:#050507;--s1:#0d0d11;--s2:#15151b;--s3:#1c1c24;--s4:#24242c;
+  /* bordas neutras — sem tinta da cor primária */
+  --b1:#22232a;--b2:#2d2e37;--b3:#3a3b46;
   /* primária — teal sóbrio (passada 1 do redesign visual). Antes era azul
      #3b82f6 que ficava muito vibrante contra o dark; agora é verde-azulado
      escuro estilo Stripe/Linear, combina com o --gr de positivo sem
@@ -44,18 +45,16 @@
    Default (sem classe) = teal sóbrio (definido acima).
    Trocados em runtime via setTheme() — persiste em localStorage. */
 
-/* Tema Dark Orange — bem dark + acentos laranja vibrante */
+/* Tema Dark Orange — mesmo fundo neutro do default, accent laranja.
+   O laranja aparece só em botões, ícones e destaques — nunca no fundo. */
 body.theme-orange{
-  --bg:#050505;--s1:#0d0a07;--s2:#16110c;--s3:#211912;--s4:#2a2018;
-  --b1:#2a221a;--b2:#3a2f23;--b3:#4a3e2e;
   --bl:#f97316;--bl2:#fb923c;--bl3:#ea580c;--bl4:#c2410c;
   --blg:rgba(249,115,22,.10);--bld:rgba(249,115,22,.07);
 }
 
-/* Tema Dark Green — estilo dash do fornecedor (verde clean) */
+/* Tema Dark Green — mesmo fundo neutro do default, accent verde.
+   Estilo dash do fornecedor (Midas Company): preto + verde clean. */
 body.theme-green{
-  --bg:#040908;--s1:#07110d;--s2:#0c1813;--s3:#13241c;--s4:#1c3326;
-  --b1:#1a2e22;--b2:#2a4534;--b3:#3a5c44;
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
@@ -3211,8 +3210,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.13.1';
-const APP_LAST_CHANGE = 'Fix: ícone ✍️ do item "Copies" na sidebar (modo diretor) finalmente removido — agora segue o padrão de setinha ▸ dos outros itens';
+const APP_VERSION = '2.14.0';
+const APP_LAST_CHANGE = 'Temas neutralizados — backgrounds idênticos (preto/cinza puro) nos 3 temas. A cor (teal/laranja/verde) aparece SÓ nos accents (botões/ícones/links), nunca no fundo. Mais clean, estilo Stripe/Linear/dash do fornecedor';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3285,10 +3284,12 @@ function ico(name, opts={}){
 // ─── Sistema de Temas ──────────────────────────────────
 // 3 temas: 'default' (teal sóbrio), 'orange' (dark + laranja), 'green' (dark + verde).
 // Aplicado via classe no <body>. Persistido em localStorage.
+// Todos compartilham a MESMA base de fundo (preto/cinza neutro) — só
+// muda o accent. Mais clean, sem "tingir" toda a UI com a cor escolhida.
 const THEMES=[
-  {id:'default',name:'Teal Sóbrio', desc:'Padrão da Dash · azul-esverdeado discreto',accent:'#0d9488',bg:'#020509'},
-  {id:'orange', name:'Dark Orange', desc:'Bem escuro com acentos laranja vibrante',  accent:'#f97316',bg:'#050505'},
-  {id:'green',  name:'Dark Green',  desc:'Verde clean estilo CRM minimalista',       accent:'#10b981',bg:'#040908'},
+  {id:'default',name:'Teal Sóbrio', desc:'Padrão · accent teal sobre fundo neutro',  accent:'#0d9488',bg:'#050507'},
+  {id:'orange', name:'Dark Orange', desc:'Accent laranja vibrante sobre fundo neutro',accent:'#f97316',bg:'#050507'},
+  {id:'green',  name:'Dark Green',  desc:'Accent verde clean sobre fundo neutro',    accent:'#10b981',bg:'#050507'},
 ];
 const THEME_KEY='axion_theme';
 function getTheme(){try{return localStorage.getItem(THEME_KEY)||'default'}catch(e){return 'default'}}
