@@ -211,6 +211,133 @@ body.theme-green .btn-bl{
   background:var(--bl);color:#062614;box-shadow:none;font-weight:600}
 body.theme-green .btn-bl:hover{
   background:var(--bl2);box-shadow:none}
+
+/* ═══════════════════════════════════════════════════════
+   TEMAS CLAROS (Light) — 3 variações espelhando os dark
+   Base comum (.is-light) define os fundos/bordas/tipografia
+   claros. Cada tema (light, light-orange, light-green) só
+   sobrescreve as vars de cor accent.
+   ═══════════════════════════════════════════════════════ */
+body.is-light{
+  /* Fundos claros — branco off + cinzas levíssimos */
+  --bg:#f7f8fa;--s1:#ffffff;--s2:#f4f5f8;--s3:#ebedf0;--s4:#e1e4e8;
+  /* Bordas em cinza claro pra delimitar bem em fundo branco */
+  --b1:#e5e7eb;--b2:#d1d5db;--b3:#9ca3af;
+  /* Tipografia invertida — texto escuro em fundo claro */
+  --tx:#1a202c;--t2:#475569;--t3:#64748b;--t4:#94a3b8;
+}
+
+/* ─── Light Teal (espelha o default) ─── */
+body.theme-light{
+  --bl:#0d9488;--bl2:#0f766e;--bl3:#14b8a6;--bl4:#115e59;
+  --blg:rgba(13,148,136,.08);--bld:rgba(13,148,136,.06);
+}
+
+/* ─── Light Tron (espelha o orange — mas adaptado pro claro) ─── */
+body.theme-light-orange{
+  --bl:#ea580c;--bl2:#c2410c;--bl3:#f97316;--bl4:#9a3412;
+  --blg:rgba(234,88,12,.10);--bld:rgba(234,88,12,.07);
+}
+/* Light Tron: glow mais sutil nos botões — em fundo claro,
+   excesso de glow fica chamativo demais */
+body.theme-light-orange .btn-bl{
+  box-shadow:0 2px 12px rgba(234,88,12,.18)}
+body.theme-light-orange .btn-bl:hover{
+  box-shadow:0 4px 20px rgba(234,88,12,.28)}
+body.theme-light-orange .section-title::before{
+  box-shadow:0 0 8px rgba(234,88,12,.35)}
+
+/* ─── Light Slim (espelha o green — minimalista) ─── */
+body.theme-light-green{
+  --bl:#16a34a;--bl2:#15803d;--bl3:#22c55e;--bl4:#166534;
+  --blg:rgba(22,163,74,.07);--bld:rgba(22,163,74,.05);
+}
+/* Mantém o flat design do Slim no light também */
+body.theme-light-green .mc-gl{display:none}
+body.theme-light-green .info-section::before{display:none}
+body.theme-light-green .aging-card::before{display:none}
+body.theme-light-green .follows-hero::before,
+body.theme-light-green .quinz-banner::before{display:none}
+body.theme-light-green .section-title::before{display:none}
+body.theme-light-green .section-title{gap:0}
+body.theme-light-green .mc-val{font-weight:600;letter-spacing:-.01em}
+
+/* ═══ Overrides COMUNS pros 3 temas claros ═══ */
+
+/* Sombras nos cards — em dark eram invisíveis, em light dão profundidade */
+body.is-light .mc,
+body.is-light .panel,
+body.is-light .cfg-card,
+body.is-light .info-section{
+  box-shadow:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.04);
+}
+body.is-light .mc:hover{
+  box-shadow:0 4px 12px rgba(15,23,42,.08),0 2px 4px rgba(15,23,42,.05);
+}
+
+/* Cards de Kanban com fundo branco (não cinza) */
+body.is-light .kb-card,
+body.is-light .wk-chip,
+body.is-light .cp-card{
+  background:#ffffff;
+  box-shadow:0 1px 2px rgba(15,23,42,.05);
+}
+body.is-light .kb-card:hover,
+body.is-light .wk-chip:hover,
+body.is-light .cp-card:hover{
+  background:#fafbfc;
+  box-shadow:0 3px 8px rgba(15,23,42,.08);
+}
+
+/* Logo sem glow azulado (fica feio no claro) */
+body.is-light .sb-logo img,
+body.is-light .l-logo img{box-shadow:none}
+
+/* Scrollbar adaptada pro claro */
+body.is-light ::-webkit-scrollbar-thumb{background:#cbd5e1}
+body.is-light ::-webkit-scrollbar-thumb:hover{background:#94a3b8}
+body.is-light ::-webkit-scrollbar-track{background:#f1f5f9}
+
+/* Glow interno dos cards de métrica fica MUITO sutil no claro
+   (alpha menor — senão polui visualmente) */
+body.is-light .mc-gl{opacity:.07}
+
+/* Botões primários no light: texto branco em accent vivo */
+body.is-light .btn-bl{color:#ffffff;font-weight:600}
+body.is-light .btn-bl:hover{color:#ffffff}
+
+/* Topbar com fundo claro e borda inferior sutil */
+body.is-light .topbar{
+  background:rgba(255,255,255,.85);
+  backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--b1);
+}
+
+/* Sidebar foot do botão Configurações: fundo claro */
+body.is-light .sb-sw{background:#ffffff}
+body.is-light .sb-sw:hover{background:#f4f5f8}
+
+/* AO VIVO pill — mantém verde mas com texto mais contrastado */
+body.is-light .tb-live{background:rgba(16,185,129,.12);color:#047857}
+
+/* Modal overlay no light: véu claro em vez de escuro */
+body.is-light .overlay{background:rgba(15,23,42,.4)}
+
+/* Modal interno fundo branco */
+body.is-light .modal{background:#ffffff}
+
+/* Inputs background claro */
+body.is-light select,
+body.is-light input[type="text"],
+body.is-light input[type="number"],
+body.is-light input[type="date"],
+body.is-light input[type="email"],
+body.is-light input[type="password"],
+body.is-light textarea{
+  background:#ffffff;
+  border-color:var(--b2);
+}
+
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{
@@ -3365,8 +3492,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.18.1';
-const APP_LAST_CHANGE = 'FIX CRÍTICO: vars --r/--rl/--rxl/--sw/--sh1/--sh2/--shg tinham sido movidas pra dentro de um seletor de tema errado (body.theme-green .btn-bl:hover) em algum refactor anterior. Resultado: TODOS os cards/painéis/info-sections que usavam var(--rl) renderizavam com border-radius 0px! Voltei pro :root global — agora os cantos arredondam de verdade';
+const APP_VERSION = '2.19.0';
+const APP_LAST_CHANGE = '3 temas claros novos espelhando os dark: Light Teal, Light Tron e Light Slim. Total agora são 6 temas selecionáveis. Light usa fundo branco/cinza-claro com texto escuro + accent vivo, sombras sutis pra dar profundidade nos cards (em dark eram invisíveis), scrollbar/inputs/modal/topbar adaptados';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3439,12 +3566,16 @@ function ico(name, opts={}){
 // ─── Sistema de Temas ──────────────────────────────────
 // 3 temas: 'default' (teal sóbrio), 'orange' (dark + laranja), 'green' (dark + verde).
 // Aplicado via classe no <body>. Persistido em localStorage.
-// Todos compartilham a MESMA base de fundo (preto/cinza neutro) — só
-// muda o accent. Mais clean, sem "tingir" toda a UI com a cor escolhida.
+// 6 temas no total: 3 dark (default/orange/green) + 3 light. Todos os
+// dark compartilham fundo neutro escuro; todos os light compartilham
+// fundo branco via classe body.is-light. Só o accent muda em cada par.
 const THEMES=[
-  {id:'default',name:'Teal Sóbrio', desc:'Padrão · accent teal sobre fundo neutro',  accent:'#0d9488',bg:'#050507'},
-  {id:'orange', name:'Tron Legacy', desc:'Preto puro + laranja neon · glow nos botões, bordas, scrollbar',accent:'#ff6a00',bg:'#000000'},
-  {id:'green',  name:'Slim Green',  desc:'Minimalista · flat sem glow · verde-lime',  accent:'#22c55e',bg:'#0a0a0a'},
+  {id:'default',     name:'Teal Sóbrio',  desc:'Dark · accent teal sobre fundo neutro',           accent:'#0d9488',bg:'#050507'},
+  {id:'orange',      name:'Tron Legacy',  desc:'Dark · preto puro + laranja neon · glow forte',   accent:'#ff6a00',bg:'#000000'},
+  {id:'green',       name:'Slim Green',   desc:'Dark · minimalista flat · verde-lime',            accent:'#22c55e',bg:'#0a0a0a'},
+  {id:'light',       name:'Light Teal',   desc:'Claro · accent teal · sombras sutis',             accent:'#0d9488',bg:'#f7f8fa'},
+  {id:'light-orange',name:'Light Tron',   desc:'Claro · accent laranja vibrante',                 accent:'#ea580c',bg:'#f7f8fa'},
+  {id:'light-green', name:'Light Slim',   desc:'Claro · minimalista flat · verde clean',          accent:'#16a34a',bg:'#f7f8fa'},
 ];
 const THEME_KEY='axion_theme';
 function getTheme(){try{return localStorage.getItem(THEME_KEY)||'default'}catch(e){return 'default'}}
@@ -3457,9 +3588,14 @@ function setTheme(id){
   }
 }
 function applyTheme(id){
-  document.body.classList.remove('theme-orange','theme-green');
+  // Limpa todas as classes de tema antes de aplicar a nova
+  document.body.classList.remove('theme-orange','theme-green','theme-light','theme-light-orange','theme-light-green','is-light');
   if(id==='orange')document.body.classList.add('theme-orange');
   else if(id==='green')document.body.classList.add('theme-green');
+  else if(id==='light'){document.body.classList.add('theme-light','is-light');}
+  else if(id==='light-orange'){document.body.classList.add('theme-light-orange','is-light');}
+  else if(id==='light-green'){document.body.classList.add('theme-light-green','is-light');}
+  // default: nenhuma classe
 }
 // Aplica o tema o mais cedo possível — antes de qualquer render
 document.addEventListener('DOMContentLoaded',()=>applyTheme(getTheme()));
