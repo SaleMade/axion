@@ -45,16 +45,88 @@
    Default (sem classe) = teal sóbrio (definido acima).
    Trocados em runtime via setTheme() — persiste em localStorage. */
 
-/* Tema Dark Orange — vibe Tron Legacy / Tron Ares.
-   Laranja-âmbar quase neon, mais saturado e quente que o orange anterior.
-   Acrescenta glow mais forte pra dar essa pegada cyber retro-futurista. */
+/* ═══════════════════════════════════════════════════════
+   Tema Tron Orange — versão MALUCA
+   Vibe Tron Legacy / Tron Ares: preto puro, laranja neon,
+   glow em vários elementos, linhas brilhantes, scrollbar tingida.
+   ═══════════════════════════════════════════════════════ */
 body.theme-orange{
-  --bl:#ff8c1a;--bl2:#ffb347;--bl3:#cc5500;--bl4:#883300;
-  --blg:rgba(255,140,26,.18);--bld:rgba(255,140,26,.09);
+  /* Fundos preto puro/quase-preto */
+  --bg:#000000;--s1:#080604;--s2:#0e0c08;--s3:#16120c;--s4:#1f1a12;
+  /* Bordas com leve tinta âmbar pra reforçar a paleta Tron */
+  --b1:#1f1810;--b2:#2e231a;--b3:#3e3024;
+  /* Accent laranja Tron — mais saturado e quente */
+  --bl:#ff6a00;--bl2:#ff9a3c;--bl3:#cc4d00;--bl4:#7a2e00;
+  --blg:rgba(255,106,0,.22);--bld:rgba(255,106,0,.10);
+  /* Glow ambiente no fundo — radials sutis nos cantos */
+  background:
+    radial-gradient(circle at 0% 0%, rgba(255,106,0,.07), transparent 45%),
+    radial-gradient(circle at 100% 100%, rgba(255,106,0,.05), transparent 50%),
+    var(--bg) !important;
 }
-/* Glow ligeiramente mais forte nos botões primários quando o tema Tron tá ativo */
-body.theme-orange .btn-bl{box-shadow:0 0 18px rgba(255,140,26,.25)}
-body.theme-orange .btn-bl:hover{box-shadow:0 0 24px rgba(255,140,26,.4)}
+
+/* Botões primários com glow neon */
+body.theme-orange .btn-bl{
+  background:var(--bl);color:#1a0c00;
+  box-shadow:0 0 18px rgba(255,106,0,.4),inset 0 0 0 1px rgba(255,180,80,.3);
+  text-shadow:0 0 8px rgba(255,180,80,.4)}
+body.theme-orange .btn-bl:hover{
+  background:var(--bl2);
+  box-shadow:0 0 32px rgba(255,106,0,.65),inset 0 0 0 1px rgba(255,200,120,.5)}
+
+/* Cards de métrica — borda mais perceptível e glow no hover */
+body.theme-orange .mc{border-color:rgba(255,106,0,.10)}
+body.theme-orange .mc:hover{
+  border-color:rgba(255,106,0,.45);
+  box-shadow:0 0 0 1px rgba(255,106,0,.18),0 6px 24px rgba(255,106,0,.12)}
+
+/* Painéis e info-sections com bordas sutilmente laranja */
+body.theme-orange .panel,
+body.theme-orange .cfg-card,
+body.theme-orange .info-section{
+  border-color:rgba(255,106,0,.12)}
+
+/* Barrinha do section-title com glow */
+body.theme-orange .section-title::before{
+  background:var(--bl);box-shadow:0 0 10px rgba(255,106,0,.7)}
+
+/* Acordeão da sidebar com glow quando tem página ativa */
+body.theme-orange .sg-acc.has-active{
+  border-color:rgba(255,106,0,.5);
+  box-shadow:0 0 0 1px rgba(255,106,0,.25),0 0 18px rgba(255,106,0,.18)}
+
+/* Item ativo do menu (página atual) */
+body.theme-orange .si.active{
+  background:rgba(255,106,0,.12);
+  box-shadow:inset 0 0 0 1px rgba(255,106,0,.3)}
+
+/* Scrollbar com tinta laranja */
+body.theme-orange ::-webkit-scrollbar-thumb{background:rgba(255,106,0,.35)}
+body.theme-orange ::-webkit-scrollbar-thumb:hover{background:rgba(255,106,0,.55)}
+
+/* Inputs e selects no focus brilham laranja */
+body.theme-orange input:focus,
+body.theme-orange select:focus,
+body.theme-orange textarea:focus{
+  box-shadow:0 0 0 2px rgba(255,106,0,.25),0 0 14px rgba(255,106,0,.25)}
+
+/* Drp-trigger e filtros com hover laranja */
+body.theme-orange .drp-trigger:hover{
+  border-color:rgba(255,106,0,.4);
+  box-shadow:0 0 14px rgba(255,106,0,.2)}
+
+/* Tabs ativas das configurações com glow */
+body.theme-orange .cfg-nav-item.on{
+  box-shadow:inset 0 0 0 1px rgba(255,106,0,.3),0 0 16px rgba(255,106,0,.12)}
+
+/* Botão Configurações da sidebar com glow no hover */
+body.theme-orange .sb-sw:hover{
+  border-color:rgba(255,106,0,.5);
+  box-shadow:0 0 0 3px rgba(255,106,0,.1),0 2px 16px rgba(255,106,0,.25)}
+
+/* Live dot da sidebar puxa pra laranja também */
+body.theme-orange .tb-live::before,
+body.theme-orange .ldot{box-shadow:0 0 8px rgba(255,106,0,.6)}
 
 /* Tema Dark Green — mesmo fundo neutro do default, accent verde.
    Estilo dash do fornecedor (Midas Company): preto + verde clean. */
@@ -3224,8 +3296,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.15.1';
-const APP_LAST_CHANGE = 'Volta radius pra 16/20 que funcionou na v2.14.5 (Tron Orange mantido)';
+const APP_VERSION = '2.16.0';
+const APP_LAST_CHANGE = 'Tema laranja vira TRON LEGACY de verdade — fundo preto puro, laranja neon #ff6a00, glow em vários elementos (botões com inset shadow, cards no hover, scrollbar tingida, focus de inputs, acordeões ativos), gradient radial sutil no fundo do body, dot live com glow';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3302,7 +3374,7 @@ function ico(name, opts={}){
 // muda o accent. Mais clean, sem "tingir" toda a UI com a cor escolhida.
 const THEMES=[
   {id:'default',name:'Teal Sóbrio', desc:'Padrão · accent teal sobre fundo neutro',  accent:'#0d9488',bg:'#050507'},
-  {id:'orange', name:'Tron Orange', desc:'Laranja-âmbar cyber estilo Tron Legacy',  accent:'#ff8c1a',bg:'#050507'},
+  {id:'orange', name:'Tron Legacy', desc:'Preto puro + laranja neon · glow nos botões, bordas, scrollbar',accent:'#ff6a00',bg:'#000000'},
   {id:'green',  name:'Dark Green',  desc:'Accent verde clean sobre fundo neutro',    accent:'#10b981',bg:'#050507'},
 ];
 const THEME_KEY='axion_theme';
