@@ -3509,8 +3509,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.21.1';
-const APP_LAST_CHANGE = 'Fix: popup do filtro de data (Últimos N dias) agora aparece POR CIMA dos cards de métrica e tabelas (z-index do .drp-wrap e .drp-panel bumped de 200 → 9999). Antes os cards "vazavam" por cima do popup, impedindo o user de clicar nos atalhos.';
+const APP_VERSION = '2.21.2';
+const APP_LAST_CHANGE = 'Recarga de chip: timer mudou de 90 → 60 dias. Número leva banimento por inatividade ~75 dias, então 60 dá margem segura. Função rechargeStatus, toast de confirmação e descrição da notificação atualizados.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7281,9 +7281,11 @@ function autoPromoteWarmedChips(){
   return promovidos;
 }
 
+// Numero leva banimento por inatividade ~75 dias. Recarga a cada 60 dias
+// dá margem segura. Antes era 90 (perto do banimento).
 function rechargeStatus(rec){
   if(!rec)return {days:0,kind:'crit',msg:'Sem registro de recarga'};
-  const d=new Date(rec);d.setDate(d.getDate()+90);
+  const d=new Date(rec);d.setDate(d.getDate()+60);
   const diff=Math.ceil((d-new Date())/86400000);
   if(diff<0) return {days:diff,kind:'crit',msg:`Atrasada há ${-diff} dia${-diff!==1?'s':''}`};
   if(diff<=7)return {days:diff,kind:'warn',msg:`Em ${diff} dia${diff!==1?'s':''}`};
@@ -7479,7 +7481,7 @@ function confirmRecharge(){
   c.rec=new Date().toISOString().split('T')[0];
   if(c.st==='recarga_pendente')c.st='ativo';
   $('mc-rec').value=c.rec;$('mc-recharge-alert').classList.add('hidden');
-  toast('Recarga confirmada — próxima em 90 dias','ok');
+  toast('Recarga confirmada — próxima em 60 dias','ok');
   if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
   persistAndPushNow().catch(_=>{});
 }
@@ -12764,7 +12766,7 @@ function cfgNotif(){
     {k:'sem_update',   l:'Sem atualização Correios há 72h',d:'Pedidos enviados que ficam parados no rastreio'},
     {k:'cidade',       l:'Pedido chegou na cidade-destino',d:'Hora de cobrar o cliente para liberar a entrega'},
     {k:'agend_vencido',l:'Agendamento vencido',           d:'Lead com agendamento de contato no passado'},
-    {k:'recarga',      l:'Recarga de chip atrasada',      d:'Aviso 7 dias antes e quando passa de 90 dias'},
+    {k:'recarga',      l:'Recarga de chip atrasada',      d:'Aviso 7 dias antes e quando passa de 60 dias (banimento ~75d)'},
     {k:'cobranca_nova',l:'Lead em Cobrança há +24h',      d:'Cobrança que ainda não recebeu primeiro contato'},
     {k:'roas_baixo',   l:'ROAS abaixo de 1.5x',           d:'Aviso quando o ROAS do dia cai do mínimo'},
     {k:'caixa_neg',    l:'Caixa restante negativo',       d:'Quando despesas superam receita no período'},
