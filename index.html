@@ -58,10 +58,10 @@ body.theme-green{
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
-  /* Border-radius generoso (passada 6.1 do redesign) — curvas bem
-     perceptíveis em cards, painéis, sidebar, modais. Mantém os botões
-     com curva menor pra não ficar "bubble". */
-  --r:12px;--rl:16px;--rxl:20px;--sw:248px;
+  /* Border-radius — valores originais (leve arredondamento, sem
+     exagerar). Os hardcoded ao longo do CSS (6/7/8/9px em vários
+     componentes) condizem com essa escala. */
+  --r:8px;--rl:12px;--rxl:16px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -474,10 +474,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-top{display:none} /* removida — coluna inteira agora tem a cor */
 .kb-ch{padding:13px 14px 11px;display:flex;align-items:center;justify-content:space-between;
   /* header herda cor mais opaca via inline style; fallback discreto aqui */
-  border-bottom:1px solid rgba(0,0,0,.15);
-  /* Força arredondamento nos cantos superiores — garante curva mesmo
-     que o overflow:hidden do parent falhe em algum browser. */
-  border-radius:var(--rl) var(--rl) 0 0}
+  border-bottom:1px solid rgba(0,0,0,.15)}
 .kb-cn{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
 .kb-cc{font-size:11px;color:var(--t2);background:rgba(0,0,0,.25);padding:2px 9px;border-radius:9px;font-weight:600}
 .kb-ccards{padding:10px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;max-height:560px;
@@ -3216,8 +3213,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.14.2';
-const APP_LAST_CHANGE = 'Border-radius mais agressivo (12/16/20) + arredondamento forçado no header das colunas do CRM Kanban (cabeçalhos coloridos das etapas A ENVIAR / COBRANÇA / PAGO etc) que estavam ficando quadrados';
+const APP_VERSION = '2.14.3';
+const APP_LAST_CHANGE = 'Revertido border-radius pros valores originais (8/12/16) — as tentativas de aumentar criavam inconsistência com componentes hardcoded (que usam 5-9px direto). Voltou ao leve arredondamento que estava funcionando';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
