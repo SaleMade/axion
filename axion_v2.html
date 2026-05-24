@@ -522,7 +522,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .tb-path b{color:var(--tx);font-weight:500}
 
 /* date filter — Date Range Picker */
-.drp-wrap{position:relative;margin-left:auto}
+/* z-index alto pra que o painel do filtro fique POR CIMA de cards
+   de métrica e outros elementos da dash que criam stacking context.
+   Sem isso, alguns cards "vazavam" por cima do popup. */
+.drp-wrap{position:relative;margin-left:auto;z-index:9999}
 .drp-trigger{background:var(--s2);border:1px solid var(--b2);color:var(--tx);
   font-size:13px;font-weight:600;padding:9px 14px;border-radius:10px;
   display:inline-flex;align-items:center;gap:8px;cursor:pointer;
@@ -530,7 +533,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .drp-trigger:hover{border-color:var(--bl);background:var(--bld)}
 .drp-trigger.open{border-color:var(--bl);background:var(--bld)}
 
-.drp-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:200;
+.drp-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:9999;
   background:linear-gradient(180deg,var(--s2),var(--s1));
   border:1px solid var(--b2);border-radius:var(--rl);
   box-shadow:0 16px 40px rgba(0,0,0,.5),0 0 0 1px var(--bld);
@@ -3506,8 +3509,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.21.0';
-const APP_LAST_CHANGE = 'Limpeza de emojis em vários locais (Sobre/Documentação, Dados/Modo de Operação, Aparência, Notificações/Canais, Aportes, Saldo de Capital, Investimentos da Operação, Tráfego Pago, Meus Vendedores, PG Antecipado/Entrega, toggle Afiliado/Produtor, filtro Hoje do CRM) substituídos por SVGs do padrão. Mapa do Brasil agora responde aos temas (sai do azul fixo).';
+const APP_VERSION = '2.21.1';
+const APP_LAST_CHANGE = 'Fix: popup do filtro de data (Últimos N dias) agora aparece POR CIMA dos cards de métrica e tabelas (z-index do .drp-wrap e .drp-panel bumped de 200 → 9999). Antes os cards "vazavam" por cima do popup, impedindo o user de clicar nos atalhos.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
