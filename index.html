@@ -62,10 +62,9 @@ body.theme-green{
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
-  /* Border-radius — radius grande nos cards (--rl/--rxl) pra curvas
-     bem visíveis. --r continua 8 (botões/inputs/badges) pra casar
-     com hardcoded existente. */
-  --r:8px;--rl:18px;--rxl:22px;--sw:248px;
+  /* Border-radius — valores que ficaram bons pro usuário na v2.14.5.
+     Cards grandes (--rl/--rxl) com curva clara, botões mantêm 8px. */
+  --r:8px;--rl:16px;--rxl:20px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -3225,8 +3224,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.15.0';
-const APP_LAST_CHANGE = 'Tema laranja repaginado pra Tron Orange (laranja-âmbar cyber estilo Tron Legacy, com glow mais forte nos botões primários quando ativo) + radius dos cards aumentado mais um degrau (--rl: 16→18px, --rxl: 20→22px)';
+const APP_VERSION = '2.15.1';
+const APP_LAST_CHANGE = 'Volta radius pra 16/20 que funcionou na v2.14.5 (Tron Orange mantido)';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
