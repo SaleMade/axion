@@ -3211,8 +3211,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.13.0';
-const APP_LAST_CHANGE = 'Limpeza visual: breadcrumb "Operacional / CRM" escondido (título já indica), header do CRM enxuto (Etapas/Tags/Exportar agora em menu de overflow ⋮), WhatsApp Kanban com colunas dos atendentes primeiro e pools (Em Aquecimento / Aquecidos) por último';
+const APP_VERSION = '2.13.1';
+const APP_LAST_CHANGE = 'Fix: ícone ✍️ do item "Copies" na sidebar (modo diretor) finalmente removido — agora segue o padrão de setinha ▸ dos outros itens';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4317,7 +4317,7 @@ function buildSidebar(){
       ]},
       // Acordeão de Criativos — admins + Designer
       ...((dir||isDes())?[{g:'Criativos',items:[
-        {id:'copies',lbl:'Copies',icon:'✍️',actionFn:"goPage('copies')"},
+        {id:'copies',lbl:'Copies',actionFn:"goPage('copies')"},
       ]}]:[]),
       // Integrações removidas da sidebar — acessar via Configurações → Integrações
     ];
