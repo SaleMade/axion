@@ -37,6 +37,27 @@
      na vista. Agora #c8d1de — off-white quase azulado, fica neutro
      e mais confortável. */
   --tx:#c8d1de;--t2:#a8b2c2;--t3:#7f8a9c;--t4:#525c6e;
+}
+
+/* ─── TEMAS ALTERNATIVOS ──────────────────────────────────
+   Aplicados via classe no <body>. Sobrescrevem só as vars que mudam.
+   Default (sem classe) = teal sóbrio (definido acima).
+   Trocados em runtime via setTheme() — persiste em localStorage. */
+
+/* Tema Dark Orange — bem dark + acentos laranja vibrante */
+body.theme-orange{
+  --bg:#050505;--s1:#0d0a07;--s2:#16110c;--s3:#211912;--s4:#2a2018;
+  --b1:#2a221a;--b2:#3a2f23;--b3:#4a3e2e;
+  --bl:#f97316;--bl2:#fb923c;--bl3:#ea580c;--bl4:#c2410c;
+  --blg:rgba(249,115,22,.10);--bld:rgba(249,115,22,.07);
+}
+
+/* Tema Dark Green — estilo dash do fornecedor (verde clean) */
+body.theme-green{
+  --bg:#040908;--s1:#07110d;--s2:#0c1813;--s3:#13241c;--s4:#1c3326;
+  --b1:#1a2e22;--b2:#2a4534;--b3:#3a5c44;
+  --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
+  --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
   --r:8px;--rl:12px;--rxl:16px;--sw:248px;
   /* sombras */
@@ -3188,8 +3209,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.11.0';
-const APP_LAST_CHANGE = 'Padronização de ícones — sidebar com setinhas, filtro de período, busca, cards do CRM, popover do CRM, tabs das Configurações e botões do Design & Copy (Salvar/Limpar) agora usam SVG Lucide. Mantidos: ✨ Gerar Copy, 🧬 DNA, ícones coloridos das opções do framework de criação';
+const APP_VERSION = '2.12.0';
+const APP_LAST_CHANGE = 'Sistema de temas — 3 paletas selecionáveis em Configurações → Aparência: Teal Sóbrio (padrão), Dark Orange (laranja vibrante em fundo quase preto), Dark Green (verde clean estilo CRM minimalista). Persistido em localStorage.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3258,6 +3279,32 @@ function ico(name, opts={}){
   const stroke = opts.stroke || 2;
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;flex-shrink:0">${path}</svg>`;
 }
+
+// ─── Sistema de Temas ──────────────────────────────────
+// 3 temas: 'default' (teal sóbrio), 'orange' (dark + laranja), 'green' (dark + verde).
+// Aplicado via classe no <body>. Persistido em localStorage.
+const THEMES=[
+  {id:'default',name:'Teal Sóbrio', desc:'Padrão da Dash · azul-esverdeado discreto',accent:'#0d9488',bg:'#020509'},
+  {id:'orange', name:'Dark Orange', desc:'Bem escuro com acentos laranja vibrante',  accent:'#f97316',bg:'#050505'},
+  {id:'green',  name:'Dark Green',  desc:'Verde clean estilo CRM minimalista',       accent:'#10b981',bg:'#040908'},
+];
+const THEME_KEY='axion_theme';
+function getTheme(){try{return localStorage.getItem(THEME_KEY)||'default'}catch(e){return 'default'}}
+function setTheme(id){
+  try{localStorage.setItem(THEME_KEY,id)}catch(e){}
+  applyTheme(id);
+  // Re-render da página atual pra atualizar quaisquer cores hardcoded
+  if(typeof renderConfig==='function' && document.querySelector('.page#config-pg.active')){
+    renderConfig();
+  }
+}
+function applyTheme(id){
+  document.body.classList.remove('theme-orange','theme-green');
+  if(id==='orange')document.body.classList.add('theme-orange');
+  else if(id==='green')document.body.classList.add('theme-green');
+}
+// Aplica o tema o mais cedo possível — antes de qualquer render
+document.addEventListener('DOMContentLoaded',()=>applyTheme(getTheme()));
 
 const api={
   async _fetch(path,opts={}){
@@ -12239,14 +12286,47 @@ function cfgNotif(){
 // ─── Seção Aparência ───────────────────────────────────
 function cfgAparencia(){
   const a=DB.appConfig||{};
+  const curTheme=getTheme();
   return `
   <div class="cfg-section">
     <div class="cfg-h"><h2>Aparência</h2><p>Ajuste a interface ao seu gosto</p></div>
 
+    <!-- ─── Seletor de Tema ─── -->
+    <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Tema de cor</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:24px">
+      ${THEMES.map(t=>{
+        const isOn=curTheme===t.id;
+        return `<button onclick="setTheme('${t.id}')"
+          style="text-align:left;cursor:pointer;font-family:inherit;
+            background:${t.bg};
+            border:2px solid ${isOn?t.accent:'var(--b1)'};
+            border-radius:var(--rl);padding:14px 16px;
+            position:relative;overflow:hidden;
+            transition:all .18s ease;
+            ${isOn?`box-shadow:0 0 0 3px ${t.accent}22, 0 4px 14px rgba(0,0,0,.4)`:''}">
+          <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;border-radius:50%;background:${t.accent};filter:blur(40px);opacity:.22;pointer-events:none"></div>
+          <div style="position:relative;z-index:1">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
+              <span style="width:14px;height:14px;border-radius:50%;background:${t.accent};box-shadow:0 0 8px ${t.accent}55"></span>
+              <span style="font-size:13.5px;font-weight:600;color:#e2e8f0">${t.name}</span>
+              ${isOn?`<span style="margin-left:auto;font-size:10px;font-weight:700;color:${t.accent};background:${t.accent}1a;padding:2px 7px;border-radius:5px">ATIVO</span>`:''}
+            </div>
+            <div style="font-size:11.5px;color:#94a3b8;line-height:1.4">${t.desc}</div>
+            <!-- Preview de mini-paleta -->
+            <div style="display:flex;gap:4px;margin-top:10px">
+              <span style="flex:1;height:18px;border-radius:3px;background:${t.bg};border:1px solid #2c3a5c66" title="Background"></span>
+              <span style="flex:1;height:18px;border-radius:3px;background:${t.accent}" title="Primária"></span>
+              <span style="flex:1;height:18px;border-radius:3px;background:${t.accent}33" title="Primária suave"></span>
+            </div>
+          </div>
+        </button>`;
+      }).join('')}
+    </div>
+
     <div class="cfg-card" style="padding:0">
       <div class="cfg-toggle-row">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:500;color:var(--tx)">🌙 Tema escuro</div>
+          <div style="font-size:14px;font-weight:500;color:var(--tx)">Tema escuro</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Padrão da Dash. Tema claro disponível futuramente.</div>
         </div>
         <span class="cfg-status on">Ativo</span>
