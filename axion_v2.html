@@ -58,10 +58,10 @@ body.theme-green{
   --bl:#10b981;--bl2:#34d399;--bl3:#059669;--bl4:#047857;
   --blg:rgba(16,185,129,.10);--bld:rgba(16,185,129,.07);
   /* layout */
-  /* Border-radius — valores originais (leve arredondamento, sem
-     exagerar). Os hardcoded ao longo do CSS (6/7/8/9px em vários
-     componentes) condizem com essa escala. */
-  --r:8px;--rl:12px;--rxl:16px;--sw:248px;
+  /* Border-radius — bumped só pros cards grandes (--rl/--rxl) pra
+     curvas visíveis. --r continua 8 (botões/inputs/badges) pra
+     casar com o hardcoded existente (5-9px) e não ficar "bubble". */
+  --r:8px;--rl:16px;--rxl:20px;--sw:248px;
   /* sombras */
   --sh1:0 4px 12px rgba(0,0,0,.35);
   --sh2:0 8px 24px rgba(0,0,0,.45);
@@ -3221,8 +3221,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.14.4';
-const APP_LAST_CHANGE = 'Fix: headers das colunas (CRM Kanban .kb-ch, WhatsApp Kanban .wk-col-h, Criativos Kanban .cp-col-h) agora arredondam os cantos superiores pra acompanhar a curva da coluna. Antes pareciam visualmente quadrados mesmo com o parent tendo border-radius';
+const APP_VERSION = '2.14.5';
+const APP_LAST_CHANGE = 'Border-radius dos CARDS grandes aumentado (--rl: 12→16px, --rxl: 16→20px) pra dar curva visível em painéis, cards de Configurações, colunas Kanban. --r continua 8px nos botões/inputs/badges pra casar com os hardcoded existentes';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
