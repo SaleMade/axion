@@ -1144,7 +1144,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .modal.xl{max-width:1180px}
 .mld-status-pill{font-size:11px;font-weight:700;padding:4px 11px;border-radius:8px;
   letter-spacing:.04em;text-transform:uppercase;background:var(--grd);color:var(--gr)}
-.lead-grid-3{display:grid;grid-template-columns:1.05fr 1fr .9fr;gap:32px;margin-top:20px}
+.lead-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-top:20px}
 @media(max-width:1000px){.lead-grid-3{grid-template-columns:1fr;gap:24px}}
 .lead-col{display:flex;flex-direction:column;gap:24px}
 /* Card pra cada seção do modal de detalhes (Cliente / Endereço / Pagamento /
@@ -1913,7 +1913,7 @@ h1 em{font-weight:700}
       </div>
 
       <div class="lead-grid-3">
-        <!-- ─── Coluna 1: Cliente + Endereço + Pedido ─── -->
+        <!-- ─── Coluna 1: Cliente + Endereço ─── -->
         <div class="lead-col">
 
           <div class="info-section">
@@ -1978,39 +1978,9 @@ h1 em{font-weight:700}
             </div></div>
           </div>
 
-          <div class="info-section">
-            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Pedido</div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Produto / Variação</div>
-              <select class="info-val" id="mld-prod-sel" onchange="onProdSelectChange()"></select>
-            </div></div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Tratamento</div>
-              <input class="info-val" id="mld-trat" placeholder="Ex: 3 meses">
-            </div></div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Atendente</div>
-              <select class="info-val" id="mld-at"></select>
-            </div></div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Valor total</div>
-              <input class="info-val info-green" id="mld-vl" type="number" step="0.01">
-            </div></div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Comissão (%)</div>
-              <input class="info-val" id="mld-com-pct" type="number" step="0.5">
-            </div></div>
-            <div class="info-row"><div class="info-c">
-              <div class="info-lbl">Modalidade</div>
-              <select class="info-val" id="mld-mod" onchange="autoFillCheckoutLink()">
-                <option value="antecipado">Antecipado</option>
-                <option value="entrega">Entrega</option>
-              </select>
-            </div></div>
-          </div>
         </div>
 
-        <!-- ─── Coluna 2: Pagamento + Rastreio ─── -->
+        <!-- ─── Coluna 2: Pagamento + Tags & observações ─── -->
         <div class="lead-col">
 
           <div class="info-section">
@@ -2066,12 +2036,43 @@ h1 em{font-weight:700}
           </div>
         </div>
 
-        <!-- ─── Coluna 3: Comentários ─── -->
+        <!-- ─── Coluna 3: Pedido + Comentários ─── -->
         <div class="lead-col">
 
           <!-- Agendamento mantido como input hidden (tags de sistema dependem
                do campo agend pra detectar 'agendamento_vencido') -->
           <input type="hidden" id="mld-agend">
+
+          <div class="info-section">
+            <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Pedido</div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Produto / Variação</div>
+              <select class="info-val" id="mld-prod-sel" onchange="onProdSelectChange()"></select>
+            </div></div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Tratamento</div>
+              <input class="info-val" id="mld-trat" placeholder="Ex: 3 meses">
+            </div></div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Atendente</div>
+              <select class="info-val" id="mld-at"></select>
+            </div></div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Valor total</div>
+              <input class="info-val info-green" id="mld-vl" type="number" step="0.01">
+            </div></div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Comissão (%)</div>
+              <input class="info-val" id="mld-com-pct" type="number" step="0.5">
+            </div></div>
+            <div class="info-row"><div class="info-c">
+              <div class="info-lbl">Modalidade</div>
+              <select class="info-val" id="mld-mod" onchange="autoFillCheckoutLink()">
+                <option value="antecipado">Antecipado</option>
+                <option value="entrega">Entrega</option>
+              </select>
+            </div></div>
+          </div>
 
           <div class="info-section">
             <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>Comentários & Anexos <span id="mld-com-c" class="muted" style="font-weight:500;text-transform:none;letter-spacing:0;margin-left:6px"></span></div>
@@ -3492,8 +3493,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.19.0';
-const APP_LAST_CHANGE = '3 temas claros novos espelhando os dark: Light Teal, Light Tron e Light Slim. Total agora são 6 temas selecionáveis. Light usa fundo branco/cinza-claro com texto escuro + accent vivo, sombras sutis pra dar profundidade nos cards (em dark eram invisíveis), scrollbar/inputs/modal/topbar adaptados';
+const APP_VERSION = '2.19.1';
+const APP_LAST_CHANGE = 'Modal Detalhes do Lead reorganizado: "Pedido" saiu da coluna 1 e foi pra coluna 3 (em cima de "Comentários & Anexos"). Aproveita melhor o espaço lateral direito que estava vazio. Grid balanceada 1fr 1fr 1fr.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
