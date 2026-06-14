@@ -856,6 +856,11 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:640px}
 .wk-col.wk-col-pool{flex:0 0 310px;min-width:310px;max-width:310px}
 .wk-col.drop-target{outline:2px dashed var(--bl);outline-offset:-2px;background:var(--s3)}
+/* Reordenar colunas: grip de arraste no header + estados de drag de coluna */
+.wk-col-grip{color:var(--t4);font-size:13px;line-height:1;letter-spacing:-2px;cursor:grab;user-select:none;flex-shrink:0}
+.wk-col-h:hover .wk-col-grip{color:var(--t2)}
+.wk-col.col-dragging{opacity:.45}
+.wk-col.col-drop-target{outline:2px solid var(--bl);outline-offset:-2px}
 .wk-col-h{padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;
   background:var(--s3);border-bottom:1px solid var(--b1);
   /* Cantos superiores arredondados pra acompanhar a curva da .wk-col */
@@ -1620,6 +1625,8 @@ h1 em{font-weight:700}
   display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--t3)}
 
 /* ─── Toggle modo Afiliado/Produtor ───────────────── */
+/* Modo Produtor em standby: esconde os elementos estáticos quando body.no-producer */
+body.no-producer #mp-mode-block{display:none}
 .prod-mode{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .prod-mode-btn{background:var(--s3);border:1.5px solid var(--b2);border-radius:var(--rl);
   padding:13px 14px;cursor:pointer;transition:all .15s;text-align:left;
@@ -2806,17 +2813,19 @@ h1 em{font-weight:700}
         <div id="mp-cor-palette" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"></div>
       </div>
 
-      <!-- Toggle Afiliado vs Produtor -->
-      <div class="section-title" style="margin-top:8px">Modo de operação</div>
-      <div class="prod-mode">
-        <button class="prod-mode-btn" id="mp-mode-afi" onclick="setProdMode('afiliado')">
-          <div class="pm-ic">🤝</div>
-          <div><div class="pm-tit">Sou Afiliado</div><div class="pm-sub">Recebo comissão sobre vendas</div></div>
-        </button>
-        <button class="prod-mode-btn" id="mp-mode-prod" onclick="setProdMode('produtor')">
-          <div class="pm-ic">🏭</div>
-          <div><div class="pm-tit">Sou Produtor</div><div class="pm-sub">Tenho custo de produção e preço de venda</div></div>
-        </button>
+      <!-- Toggle Afiliado vs Produtor — escondido quando o modo Produtor está em standby -->
+      <div id="mp-mode-block">
+        <div class="section-title" style="margin-top:8px">Modo de operação</div>
+        <div class="prod-mode">
+          <button class="prod-mode-btn" id="mp-mode-afi" onclick="setProdMode('afiliado')">
+            <div class="pm-ic">🤝</div>
+            <div><div class="pm-tit">Sou Afiliado</div><div class="pm-sub">Recebo comissão sobre vendas</div></div>
+          </button>
+          <button class="prod-mode-btn" id="mp-mode-prod" onclick="setProdMode('produtor')">
+            <div class="pm-ic">🏭</div>
+            <div><div class="pm-tit">Sou Produtor</div><div class="pm-sub">Tenho custo de produção e preço de venda</div></div>
+          </button>
+        </div>
       </div>
       <div class="section-title" style="margin-top:8px">Variações / Kits</div>
       <p class="muted" style="font-size:12px;margin-bottom:11px">Adicione cada combinação que você vende (ex: 1M, 3M, 6M). Aparecem no CRM ao cadastrar lead.</p>
@@ -3550,8 +3559,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.26.0';
-const APP_LAST_CHANGE = 'Caixa real e modelo manual: (1) cards da Visao Geral agora mostram Caixa da empresa (quanto da pra investir, acumulado) na frente e Caixa da plataforma (Payt, o que esta preso, clicavel pra ajustar); saiu Comissao recebida. (2) Fim do reembolso/aporte automatico: quem pagou virou so anotacao, tudo manual. Reembolsos automaticos antigos sao removidos no carregamento.';
+const APP_VERSION = '2.27.0';
+const APP_LAST_CHANGE = 'Foco Afiliado e sidebar sob medida: (1) modo Produtor entrou em standby, oculto por padrao (toggle Afiliado/Produtor no Financeiro, bloco de modo no cadastro de produto e rotulos "Visao Produtor" sumiram) e reativavel em Configuracoes > Aparencia > Mostrar modo Produtor; nada apagado. (2) Novo controle em Aparencia > Itens da sidebar pra ligar/desligar individualmente o que aparece dentro de cada acordeao (Dashboard, Operacional, Financeiro, WhatsApp, Equipe...). Acordeoes sem item visivel somem sozinhos.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4005,6 +4014,19 @@ const isAt =()=>CUR?.role==='atendente';
 const isRec=()=>CUR?.role==='cobrador'; // antigo "recuperador" foi migrado em hydrate
 const isGT =()=>CUR?.role==='gestor';
 const isDes=()=>CUR?.role==='designer'; // Designer — acesso só à área de Criativos
+// ─── Modo Produtor em standby ──────────────────────────
+// A operação roda só como Afiliado. O "modo Produtor" (toggle no Financeiro,
+// bloco no modal de produto, rótulos "Visão Produtor") fica oculto por padrão.
+// Reversível em Configurações → Aparência → "Mostrar modo Produtor".
+const producerEnabled=()=>(DB.appConfig||{}).showProducer===true;
+// Modo financeiro efetivo: 'afiliado' forçado quando o modo Produtor está oculto.
+const finMode=()=>producerEnabled()?((DB.demConfig||{}).mode||'afiliado'):'afiliado';
+// Itens da sidebar que o usuário escolheu ocultar (mapa {itemId:true}).
+const navHidden=()=>(DB.appConfig||{}).navHidden||{};
+// Aplica/remove a classe que esconde elementos estáticos do modo Produtor.
+function applyProducerVisibility(){
+  document.body.classList.toggle('no-producer',!producerEnabled());
+}
 // Modo Visualização: bloqueia ações pra todos exceto Diretor (real, não impersonando)
 // Webhooks continuam funcionando normalmente (server-side, ignora essa flag)
 const isReadOnly=()=>{
@@ -4651,11 +4673,9 @@ function defaultPage(){
 /* ═══════════════════════════════════════════════════════
    SIDEBAR / NAV
 ═══════════════════════════════════════════════════════ */
-function buildSidebar(){
-  const u=CUR;
-  $('sb-user').innerHTML=`${avatar(u,{size:32,className:'sb-uav'})}
-    <div><div class="sb-uname">${u.name}</div><div class="sb-urole">${u.role}</div></div>`;
-
+// Monta a estrutura de navegação por papel (sem aplicar ocultações do usuário).
+// Usada por buildSidebar (renderização) e por cfgAparencia (lista de toggles de visibilidade).
+function computeNav(){
   const dir=isDir(),afi=isAfi(),at=isAt(),rec=isRec(),gt=isGT(),des=isDes();
 
   // Acesso por papel:
@@ -4722,9 +4742,22 @@ function buildSidebar(){
       // Integrações removidas da sidebar — acessar via Configurações → Integrações
     ];
   }
-
   // Remove seções vazias (ex: Dashboard fica vazio pro Cobrador)
-  nav=nav.filter(g=>g.items.length>0);
+  return nav.filter(g=>g.items.length>0);
+}
+
+function buildSidebar(){
+  const u=CUR;
+  $('sb-user').innerHTML=`${avatar(u,{size:32,className:'sb-uav'})}
+    <div><div class="sb-uname">${u.name}</div><div class="sb-urole">${u.role}</div></div>`;
+  applyProducerVisibility();
+
+  // Aplica as ocultações de itens escolhidas em Configurações → Aparência,
+  // depois remove acordeões que ficaram sem nenhum item visível.
+  const hid=navHidden();
+  let nav=computeNav()
+    .map(g=>({...g,items:g.items.filter(i=>!hid[i.id])}))
+    .filter(g=>g.items.length>0);
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
@@ -5222,7 +5255,7 @@ function renderHome(){
   let dirMetrics='';
   if(dir){
     dirMetrics=`
-    <div class="section-title">Visão Afiliado (prioritário)</div>
+    <div class="section-title">${producerEnabled()?'Visão Afiliado (prioritário)':'Receita'}</div>
     <div class="mg">
       <div class="mc mc-go mc-feat">
         <div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div>
@@ -5238,7 +5271,7 @@ function renderHome(){
       </div>
     </div>
 
-    <div class="section-title">Visão Produtor (operação)</div>
+    <div class="section-title">${producerEnabled()?'Visão Produtor (operação)':'Operação'}</div>
     <div class="mg">
       <div class="mc mc-gr mc-feat">
         <div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
@@ -7011,14 +7044,18 @@ function renderChipsByAtendente(){
 
   // HTML do Kanban — colunas pool primeiro, depois cada atendente.
   // data-col-id em cada wk-col permite restaurar scroll por coluna após re-render.
+  // Só o diretor pode arrastar/reordenar as colunas (controle exclusivo).
+  const podeReordenar=isDir();
   const colunaPool=(items,id,titulo,cor,bg)=>`
     <div class="wk-col wk-col-pool" data-col-id="${id}"
         ondragover="_chipDragOver(event)"
         ondragleave="_chipDragLeave(event)"
         ondrop="_chipDrop(event,'${id}')"
         style="background:${bg};border:1px solid ${cor}44">
-      <div class="wk-col-h" style="background:${cor}1a;border-bottom:1px solid ${cor}33">
-        <span class="wk-col-name" style="color:${cor}">${titulo}</span>
+      <div class="wk-col-h" ${podeReordenar?`draggable="true" title="Arraste pra reordenar a coluna" ondragstart="_colDragStart(event,'${id}')" ondragend="_colDragEnd(event)"`:''}
+          style="${podeReordenar?'cursor:grab;':''}background:${cor}1a;border-bottom:1px solid ${cor}33">
+        ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
+        <span class="wk-col-name" style="flex:1;color:${cor}">${titulo}</span>
         <span class="wk-col-cnt">${items.length}</span>
       </div>
       <div class="wk-col-list">
@@ -7037,7 +7074,9 @@ function renderChipsByAtendente(){
         ondragleave="_chipDragLeave(event)"
         ondrop="_chipDrop(event,'${at.id}')"
         style="background:${cor}0d;border:1px solid ${cor}33">
-      <div class="wk-col-h" style="background:${cor}1a;border-bottom:1px solid ${cor}33">
+      <div class="wk-col-h" ${podeReordenar?`draggable="true" title="Arraste pra reordenar a coluna" ondragstart="_colDragStart(event,'${at.id}')" ondragend="_colDragEnd(event)"`:''}
+          style="${podeReordenar?'cursor:grab;':''}background:${cor}1a;border-bottom:1px solid ${cor}33">
+        ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
           ${avatar(at,{size:24,fontSize:10})}
           <div style="flex:1;min-width:0">
@@ -7055,12 +7094,23 @@ function renderChipsByAtendente(){
     </div>`;
   };
 
-  // Atendentes primeiro (uso diário), pools de status no fim (fila de espera).
-  // O fluxo natural é "olhar quem tá com o quê" antes de ver "o que tá aquecendo".
+  // Ordem das colunas: padrão = atendentes (por papel/nome) + pools no fim.
+  // O usuário pode arrastar pra reordenar; a ordem fica salva em DB.cont_col_order.
+  const colDefs=[
+    ...membros.map(m=>({id:String(m.id),render:()=>colunaAtendente(m,byAt[m.id]||[])})),
+    {id:'__aquecimento__',render:()=>colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')},
+    {id:'__aquecidos__',render:()=>colunaPool(poolDisponiveis,'__aquecidos__','🟢 Disponíveis','#10b981','rgba(16,185,129,.04)')},
+  ];
+  const byColId={}; colDefs.forEach(c=>byColId[c.id]=c);
+  const savedOrder=Array.isArray(DB.cont_col_order)?DB.cont_col_order:[];
+  const ordCols=[];
+  // Primeiro as colunas na ordem salva (ignorando ids que não existem mais)
+  savedOrder.forEach(id=>{ const c=byColId[String(id)]; if(c){ordCols.push(c);delete byColId[String(id)];} });
+  // Depois as colunas novas/ainda-não-ordenadas, na ordem padrão
+  colDefs.forEach(c=>{ if(byColId[c.id])ordCols.push(c); });
+
   const html=`<div class="wk-board">
-    ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
-    ${colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
-    ${colunaPool(poolDisponiveis,'__aquecidos__','🟢 Disponíveis','#10b981','rgba(16,185,129,.04)')}
+    ${ordCols.map(c=>c.render()).join('')}
   </div>`;
 
   // Preserva scroll antes do re-render: horizontal do board + vertical de cada coluna.
@@ -7271,8 +7321,10 @@ function _renderMiniChip(c){
 
 // ─── Drag & drop de chips entre atendentes ───
 let _draggingChipId=null;
+let _draggingColId=null; // id da coluna sendo arrastada (reordenação), ou null
 function _chipDragStart(ev,chipId){
   _draggingChipId=chipId;
+  _draggingColId=null;
   ev.dataTransfer.effectAllowed='move';
   ev.dataTransfer.setData('text/plain',String(chipId));
   ev.currentTarget.classList.add('dragging');
@@ -7283,18 +7335,58 @@ function _chipDragEnd(ev){
   // Remove highlights de qualquer drop target
   document.querySelectorAll('.cont-at-block.drop-target').forEach(el=>el.classList.remove('drop-target'));
 }
+// ─── Reordenação de colunas (arrasta o header) ───
+function _colDragStart(ev,colId){
+  _draggingColId=String(colId);
+  _draggingChipId=null;
+  ev.dataTransfer.effectAllowed='move';
+  ev.dataTransfer.setData('text/plain','col:'+colId);
+  const col=ev.currentTarget.closest('.wk-col');
+  if(col)col.classList.add('col-dragging');
+  ev.stopPropagation();
+}
+function _colDragEnd(ev){
+  _draggingColId=null;
+  document.querySelectorAll('.wk-col.col-dragging').forEach(el=>el.classList.remove('col-dragging'));
+  document.querySelectorAll('.wk-col.col-drop-target').forEach(el=>el.classList.remove('col-drop-target'));
+}
+function _reorderCols(fromId,toId){
+  fromId=String(fromId); toId=String(toId);
+  if(!fromId||fromId===toId)return;
+  // Fonte de verdade visual: a ordem atual das colunas no DOM
+  const board=document.querySelector('#cont-by-at .wk-board');
+  if(!board)return;
+  let ids=[...board.querySelectorAll('.wk-col')].map(c=>c.getAttribute('data-col-id')).filter(Boolean);
+  const from=ids.indexOf(fromId); if(from<0)return;
+  ids.splice(from,1);
+  const to=ids.indexOf(toId);
+  // Solta em cima da coluna alvo → assume a posição dela (entra antes)
+  ids.splice(to<0?ids.length:to,0,fromId);
+  DB.cont_col_order=ids;
+  renderChipsByAtendente();
+  toast('Ordem das colunas salva · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+}
 function _chipDragOver(ev){
   ev.preventDefault();
   ev.dataTransfer.dropEffect='move';
+  // Arrastando uma COLUNA → destaca a coluna alvo (sem o highlight de chip)
+  if(_draggingColId){ ev.currentTarget.classList.add('col-drop-target'); return; }
   ev.currentTarget.classList.add('drop-target');
 }
 function _chipDragLeave(ev){
   // Só remove se realmente saiu (não pra filhos)
-  if(!ev.currentTarget.contains(ev.relatedTarget))ev.currentTarget.classList.remove('drop-target');
+  if(!ev.currentTarget.contains(ev.relatedTarget)){
+    ev.currentTarget.classList.remove('drop-target');
+    ev.currentTarget.classList.remove('col-drop-target');
+  }
 }
 function _chipDrop(ev,targetId){
   ev.preventDefault();
   ev.currentTarget.classList.remove('drop-target');
+  ev.currentTarget.classList.remove('col-drop-target');
+  // Reordenação de coluna tem prioridade sobre mover chip
+  if(_draggingColId){ _reorderCols(_draggingColId,targetId); _draggingColId=null; return; }
   // Garante que _draggingChipId está setado (em alguns browsers o dataTransfer vai vazio)
   if(!_draggingChipId){
     const t=Number(ev.dataTransfer.getData('text/plain'));
@@ -7724,7 +7816,7 @@ function calcFin(){
   const dc=DB.demConfig||{};
   const gatewayPct=Number(dc.gatewayPct)||0;
   const impostosPct=Number(dc.impostosPct)||0;
-  const mode=dc.mode||'afiliado';
+  const mode=finMode();
   const taxa=recBruta*gatewayPct/100;
   const impostos=recBruta*impostosPct/100;
   const traf=gastos.reduce((s,g)=>s+g.valor,0);
@@ -7765,6 +7857,7 @@ function ddmmyyyyFromIso(iso){
 // Toggle do modo Afiliado/Produtor no Financeiro
 function setFinMode(m){
   if(!['afiliado','produtor'].includes(m))return;
+  if(m==='produtor'&&!producerEnabled())return; // modo Produtor em standby
   DB.demConfig=DB.demConfig||{show:{}};
   DB.demConfig.mode=m;
   persist();refreshUI();
@@ -7787,7 +7880,7 @@ function buildExtrato(){
   const {from,to}=dateRange();
   const inDD=ddmm=>{const dt=ddmmToDate(ddmm);return dt&&dt>=from&&dt<=to};
   const inISO=iso=>{const dt=iso?new Date(iso+'T12:00:00'):null;return dt&&dt>=from&&dt<=to};
-  const mode=(DB.demConfig||{}).mode||'afiliado';
+  const mode=finMode();
   const ev=[];
   // ENTRADAS — receita de vendas (comissão se afiliado, bruto se produtor)
   DB.vendas.filter(v=>inDD(v.data)).forEach(v=>{
@@ -8165,7 +8258,8 @@ function renderDRE(){
     <div><h1>Financeiro · <em>Visão Geral</em></h1></div>
     <div class="ph-r">
       <button class="btn btn-bl btn-sm" onclick="openMov()">${ico('plus',{size:14})} Registrar movimentação</button>
-      <!-- Toggle de modo: Afiliado vs Produtor -->
+      <!-- Toggle de modo: Afiliado vs Produtor — oculto quando o modo Produtor está em standby -->
+      ${producerEnabled()?`
       <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
         <button onclick="setFinMode('afiliado')" class="${isAfi?'on':''}"
           style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;border:none;
@@ -8177,7 +8271,7 @@ function renderDRE(){
             background:${!isAfi?'var(--grd)':'transparent'};color:${!isAfi?'var(--gr)':'var(--t3)'};transition:all .15s;display:inline-flex;align-items:center;gap:6px">
           ${ico('package',{size:13})} Produtor
         </button>
-      </div>
+      </div>`:''}
     </div>
   </div>
 
@@ -8215,11 +8309,11 @@ function renderDRE(){
         <button class="dem-dots" onclick="event.stopPropagation();toggleDemMenu()" title="Configurar métricas">⋮</button>
       </div>
       <div class="dem-menu" id="dem-menu">
-        <!-- Indicador do modo atual — métricas exibidas dependem dele -->
-        <div class="dem-menu-mode" style="background:${isAfi?'rgba(59,130,246,.08)':'rgba(16,185,129,.08)'};color:${isAfi?'var(--bl2)':'var(--gr)'}">
+        <!-- Indicador do modo atual — só aparece quando o modo Produtor está disponível -->
+        ${producerEnabled()?`<div class="dem-menu-mode" style="background:${isAfi?'rgba(59,130,246,.08)':'rgba(16,185,129,.08)'};color:${isAfi?'var(--bl2)':'var(--gr)'}">
           <span style="display:inline-flex;align-items:center;gap:6px">${isAfi?ico('users',{size:13}):ico('package',{size:13})} ${isAfi?'Modo Afiliado':'Modo Produtor'}</span>
           <span class="muted" style="font-size:11px;font-weight:500;margin-left:auto">${isAfi?'recebe líquido':'receita bruta'}</span>
-        </div>
+        </div>`:''}
         <div class="dem-menu-h">Métricas no demonstrativo</div>
         ${(isAfi
           ? [
@@ -13058,6 +13152,28 @@ function cfgNotif(){
   </div>`;
 }
 
+// Liga/desliga o modo Produtor (toggle "standby"). Off = só Afiliado.
+function toggleProducer(on){
+  DB.appConfig=DB.appConfig||{};
+  DB.appConfig.showProducer=!!on;
+  if(!on)DB.demConfig&&(DB.demConfig.mode='afiliado'); // garante modo afiliado ao esconder
+  persist();
+  applyProducerVisibility();
+  buildSidebar();
+  refreshUI();
+  renderConfig();
+  toast(on?'Modo Produtor reativado':'Modo Produtor em standby (oculto)','ok');
+}
+// Mostra/oculta um item da sidebar (acordeões). visible=true → aparece.
+function toggleNavItem(id,visible){
+  DB.appConfig=DB.appConfig||{};
+  DB.appConfig.navHidden=DB.appConfig.navHidden||{};
+  if(visible)delete DB.appConfig.navHidden[id];
+  else DB.appConfig.navHidden[id]=true;
+  persist();
+  buildSidebar();
+}
+
 // ─── Seção Aparência ───────────────────────────────────
 function cfgAparencia(){
   const a=DB.appConfig||{};
@@ -13135,6 +13251,46 @@ function cfgAparencia(){
           <input type="checkbox" ${a.sounds?'checked':''} onchange="DB.appConfig=DB.appConfig||{};DB.appConfig.sounds=this.checked;persist()">
           <span></span>
         </label>
+      </div>
+    </div>
+
+    <!-- ─── Modo Produtor (standby) ─── -->
+    <div class="cfg-h" style="margin-top:24px"><h2>Modo de operação</h2><p>A Dash pode operar como Afiliado ou Produtor</p></div>
+    <div class="cfg-card">
+      <div class="cfg-toggle-row" style="border:none;padding:0">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:500;color:var(--tx);display:flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('package',{size:14})}</span> Mostrar modo Produtor</div>
+          <div class="muted" style="font-size:12px;margin-top:4px;line-height:1.5">
+            Desligado: a Dash roda só como <b>Afiliado</b>. Esconde o seletor Afiliado/Produtor no Financeiro,
+            o bloco de modo no cadastro de produto e os rótulos "Visão Produtor". Nada é apagado, só fica oculto.
+          </div>
+        </div>
+        <label class="acl-tog" style="margin-top:2px">
+          <input type="checkbox" ${producerEnabled()?'checked':''} onchange="toggleProducer(this.checked)">
+          <span></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- ─── Itens da sidebar ─── -->
+    <div class="cfg-h" style="margin-top:24px"><h2>Itens da sidebar</h2><p>Escolha o que aparece dentro de cada acordeão da lateral</p></div>
+    <div class="cfg-card" style="display:flex;flex-direction:column;gap:16px">
+      ${(()=>{const hid=navHidden();return computeNav().map(g=>`
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">${g.g}</div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            ${g.items.map(i=>`
+            <div class="cfg-toggle-row" style="padding:8px 0">
+              <div style="flex:1;font-size:13.5px;color:var(--tx)">${i.lbl}</div>
+              <label class="acl-tog">
+                <input type="checkbox" ${hid[i.id]?'':'checked'} onchange="toggleNavItem('${i.id}',this.checked)">
+                <span></span>
+              </label>
+            </div>`).join('')}
+          </div>
+        </div>`).join('')})()}
+      <div class="muted" style="font-size:11.5px;line-height:1.5;border-top:1px solid var(--b1);padding-top:12px">
+        ${ico('eye',{size:12})} Desmarcar esconde o item da lateral. Acordeões sem nenhum item visível somem automaticamente. As páginas continuam acessíveis e nada é apagado.
       </div>
     </div>
 
