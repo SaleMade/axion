@@ -2167,7 +2167,8 @@ h1 em{font-weight:700}
     </div>
     <div class="m-b">
       <div class="fg fg2">
-        <div class="field"><label>Número</label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
+        <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
+        <div class="field"><label>Número (WhatsApp)</label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
@@ -3519,8 +3520,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.22.0';
-const APP_LAST_CHANGE = '2 bugs no filtro de período: (1) NaN/NaN/NaN no trigger quando data inválida passava silenciosa — agora valida com isNaN e mostra "—" como fallback; (2) aportes/investimentos com data FUTURA sumiam mesmo com filtro válido — inRange perdia o ano via ddmmFromIso, criado inRangeIso() que recebe ISO direto preservando o ano.';
+const APP_VERSION = '2.23.0';
+const APP_LAST_CHANGE = 'Área de WhatsApp reorganizada: (1) acordeão próprio "WhatsApp" na sidebar (saiu de Equipe); (2) numeração dos chips (#1, #2, #3...) com busca por #nº; (3) tag "Em uso" virou a fonte de verdade do número ativo do dia — fixa no topo da coluna do atendente (selo "Ativo do dia"), só 1 ativo por atendente; coluna mostra reservas embaixo; pool "Aquecidos" virou "Disponíveis" (números sem atendente). Status padrão: Em uso · Ativo · Restrito · Restabelecido.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4669,12 +4670,15 @@ function buildSidebar(){
       ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
         {id:'meuspag',lbl:'Meus Pagamentos'},
       ]}]:[]),
-      // Acordeão Equipe — aparece pra todo mundo (até atendente vê WhatsApp's).
+      // Acordeão WhatsApp — área dedicada (contingência de números). Universal:
+      // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
+      {g:'WhatsApp',items:[
+        {id:'contingencia',lbl:'Contingência'},
+      ]},
+      // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
-      // Atendente/cobrador/afiliado: vê só os que tem acesso (WhatsApp's é universal).
       {g:'Equipe',items:[
         ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
-        {id:'contingencia',lbl:"WhatsApp's"},
         // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
         ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
       ]},
@@ -4691,7 +4695,7 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIconNames={Dashboard:'layout-grid',Operacional:'target',Financeiro:'wallet',Pessoal:'user',Equipe:'users',Criativos:'palette','Integrações':'zap'};
+  const navIconNames={Dashboard:'layout-grid',Operacional:'target',Financeiro:'wallet',Pessoal:'user',WhatsApp:'message-circle',Equipe:'users',Criativos:'palette','Integrações':'zap'};
   const navIcon=g=>ico(navIconNames[g]||'circle',{size:15});
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
@@ -4770,7 +4774,7 @@ const PNAMES={
   pagequip:'Financeiro / <b>Pagamentos de Equipe</b>',
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
-  contingencia:"Operacional / <b>WhatsApp's</b>",
+  contingencia:"WhatsApp / <b>Contingência</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
@@ -6686,7 +6690,7 @@ function pageContingencia(){
       </summary>
       <div style="padding:14px 18px;border-top:1px solid var(--b1)">
         <div class="cont-bar">
-          <input class="kb-search" id="cont-q" placeholder="Buscar número, atendente ou modelo..." oninput="renderChips()">
+          <input class="kb-search" id="cont-q" placeholder="Buscar #nº, número, atendente ou modelo..." oninput="renderChips()">
           <select class="kb-sel" id="cont-st" onchange="renderChips()">
             <option value="">Status: Todos</option>
             <option value="ativo">Ativo</option>
@@ -6706,9 +6710,10 @@ function pageContingencia(){
 // ─── Status do WhatsApp (configuráveis pelo usuário, salvos no DB) ───
 // Padrão de fábrica — usado se DB.wa_statuses não estiver populado
 const WA_STATUSES_DEFAULT=[
-  {id:'ativo',    label:'Ativo',    color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢',visible:true},
-  {id:'restrito', label:'Restrito', color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡',visible:true},
-  {id:'banido',   label:'Banido',   color:'#ef4444',bg:'rgba(239,68,68,.15)',ic:'🔴',visible:true},
+  {id:'em_uso',        label:'Em uso',        color:'#10b981',bg:'rgba(16,185,129,.15)',ic:'🟢',visible:true},
+  {id:'ativo',         label:'Ativo',         color:'#3b82f6',bg:'rgba(59,130,246,.15)',ic:'🔵',visible:true},
+  {id:'restrito',      label:'Restrito',      color:'#f59e0b',bg:'rgba(245,158,11,.15)',ic:'🟡',visible:true},
+  {id:'restabelecido', label:'Restabelecido', color:'#a855f7',bg:'rgba(168,85,247,.15)',ic:'🟣',visible:true},
 ];
 // Helper: retorna o array configurado ou o default
 function getWaStatusList(){
@@ -6731,15 +6736,64 @@ function getWaStatus(chip){
   // Fallback: tenta achar status com id casando algum padrão do `st`
   if(chip.st==='ativo'  && list.some(s=>s.id==='ativo'))   return 'ativo';
   if(chip.st==='banido' && list.some(s=>s.id==='banido'))  return 'banido';
-  // Default: primeiro status que NÃO seja ativo/banido (geralmente "restrito"), senão o primeiro
-  const meio=list.find(s=>s.id!=='ativo'&&s.id!=='banido');
-  return (meio||list[0])?.id||'ativo';
+  // Default: um status neutro (nunca "em uso", pra não fixar chip sem querer)
+  const def=list.find(s=>!isEmUsoStatus(s.id)&&s.id!=='banido') || list.find(s=>!isEmUsoStatus(s.id)) || list[0];
+  return def?.id||'ativo';
 }
-// Salva o wa_st e persiste/sincroniza
+
+// ─── "Em uso" = número ativo do dia ───
+// A tag wa_st "Em uso" é a FONTE DE VERDADE do número ativo do atendente.
+// A flag em_uso anda junto (compatibilidade com o drag-drop do kanban).
+function _norm(s){return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+function isEmUsoStatus(id){
+  if(!id)return false;
+  const s=getWaStatusInfo(id);
+  const n=_norm(s?(s.label||s.id):id);
+  return n==='em uso'||n==='em_uso'||id==='em_uso';
+}
+function getEmUsoStatusId(){
+  const s=getWaStatusList().find(x=>isEmUsoStatus(x.id));
+  return s?s.id:null;
+}
+// Status pra onde o chip cai quando deixa de ser "em uso" (Ativo/disponível)
+function getDisponivelStatusId(){
+  const list=getWaStatusList();
+  const s=list.find(x=>_norm(x.label||x.id)==='ativo') || list.find(x=>!isEmUsoStatus(x.id)&&x.id!=='banido') || list.find(x=>!isEmUsoStatus(x.id));
+  return s?s.id:null;
+}
+// Chip "fixado" (ativo do dia): via tag "Em uso" ou pela flag em_uso legada
+function isChipPinned(c){ return c.em_uso===true || isEmUsoStatus(getWaStatus(c)); }
+// Chip utilizável na operação (não-aquecimento, não-banido) → entra na coluna/pool
+function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
+// Marca/desmarca um chip como "em uso". Só pode haver UM em uso por atendente:
+// ao ligar um, desliga os irmãos do mesmo atendente (caem pra "Ativo").
+function _setChipEmUso(c, on){
+  if(on){
+    c.em_uso=true;
+    const emUsoId=getEmUsoStatusId(); if(emUsoId) c.wa_st=emUsoId;
+    if(c.at){
+      const dispId=getDisponivelStatusId();
+      (DB.chips||[]).forEach(o=>{
+        if(o!==c && o.at===c.at && isChipPinned(o)){
+          o.em_uso=false;
+          if(dispId) o.wa_st=dispId;
+        }
+      });
+    }
+  } else {
+    c.em_uso=false;
+    const dispId=getDisponivelStatusId();
+    if(dispId && isEmUsoStatus(getWaStatus(c))) c.wa_st=dispId;
+  }
+}
+
+// Salva o wa_st e persiste/sincroniza. Unifica a tag "Em uso" com a fixação.
 function setWaStatus(chipId, novoSt){
   const c=DB.chips.find(x=>x.id===chipId);
   if(!c)return;
   c.wa_st=novoSt;
+  if(isEmUsoStatus(novoSt)) _setChipEmUso(c,true);  // fixa no topo + tira o em uso dos colegas
+  else c.em_uso=false;
   renderChipsByAtendente();
   toast(`WhatsApp marcado como ${getWaStatusInfo(novoSt)?.label||novoSt}`,'ok');
   // Push imediato pra outros dispositivos verem na hora
@@ -6865,6 +6919,12 @@ function renderChipsByAtendente(){
       migrou=true;
     }
   });
+  // Migração: chips sem `idx` recebem numeração sequencial (#1, #2, #3...) por
+  // ordem de criação (id crescente), continuando a partir do maior idx existente.
+  let maxIdx=(DB.chips||[]).reduce((m,c)=>Math.max(m,Number(c.idx)||0),0);
+  (DB.chips||[]).slice().sort((a,b)=>(a.id||0)-(b.id||0)).forEach(c=>{
+    if(c.idx===undefined||c.idx===null||c.idx===''){ c.idx=++maxIdx; migrou=true; }
+  });
   if(migrou) persist();
 
   // Diretor vê todos; outros só seus próprios chips
@@ -6887,26 +6947,33 @@ function renderChipsByAtendente(){
     return (a.name||'').localeCompare(b.name||'');
   });
 
-  // Pipeline em 3 estágios — o atendente designado é PRESERVADO em todos:
-  //   Pool "Em Aquecimento" → chip aquecendo (qualquer estado de em_uso)
-  //   Pool "Aquecidos"      → chip ativo mas ainda não em uso ativo
-  //   Coluna do atendente   → chip ativo E em uso por aquele atendente
-  // Quando completa 7 dias de aquecimento → autoPromoteWarmedChips faz
-  // st=ativo (em_uso fica false), então o chip cai naturalmente em "Aquecidos".
-  // Aí o usuário arrasta pra coluna do atendente pra ativar o uso.
+  // Modelo "1 ativo + reservas" (Opção A):
+  //   Pool "Em Aquecimento" → chip aquecendo
+  //   Pool "Disponíveis"    → número utilizável SEM atendente (livre)
+  //   Coluna do atendente   → TODOS os números utilizáveis dele; o "em uso"
+  //                           (tag "Em uso" / flag em_uso) fixa no topo, o resto
+  //                           fica embaixo como reserva.
+  // Quando completa 7 dias de aquecimento → autoPromoteWarmedChips faz st=ativo;
+  // se o chip não tiver atendente, cai em "Disponíveis".
   const poolAquecimento=chips.filter(c=>c.st==='aquecimento');
-  const poolAquecidos  =chips.filter(c=>c.st==='ativo' && !c.em_uso);
+  // Pool "Disponíveis": números utilizáveis SEM atendente (livres pra distribuir)
+  const poolDisponiveis=chips.filter(c=>_chipUsavel(c) && !c.at);
 
-  // Chips por atendente — só os "em uso" (ativos atribuídos)
+  // Chips por atendente — TODOS os utilizáveis atribuídos a ele (em uso + reservas)
   const byAt={};
   membros.forEach(m=>{byAt[m.id]=[]});
   chips.forEach(c=>{
-    if(c.at && c.st==='ativo' && c.em_uso && byAt[c.at]!==undefined){
+    if(c.at && _chipUsavel(c) && byAt[c.at]!==undefined){
       byAt[c.at].push(c);
     }
   });
+  // Ordena: "em uso" (ativo do dia) fixado no topo, depois reservas por #identificador
   Object.keys(byAt).forEach(id=>{
-    byAt[id].sort((a,b)=>(a.num||'').localeCompare(b.num||''));
+    byAt[id].sort((a,b)=>{
+      const pa=isChipPinned(a)?0:1, pb=isChipPinned(b)?0:1;
+      if(pa!==pb)return pa-pb;
+      return (Number(a.idx)||9999)-(Number(b.idx)||9999);
+    });
   });
 
   // HTML do Kanban — colunas pool primeiro, depois cada atendente.
@@ -6960,7 +7027,7 @@ function renderChipsByAtendente(){
   const html=`<div class="wk-board">
     ${membros.map(m=>colunaAtendente(m,byAt[m.id]||[])).join('')}
     ${colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')}
-    ${colunaPool(poolAquecidos,'__aquecidos__','🟢 Aquecidos','#10b981','rgba(16,185,129,.04)')}
+    ${colunaPool(poolDisponiveis,'__aquecidos__','🟢 Disponíveis','#10b981','rgba(16,185,129,.04)')}
   </div>`;
 
   // Preserva scroll antes do re-render: horizontal do board + vertical de cada coluna.
@@ -6998,6 +7065,7 @@ function renderChipsByAtendente(){
 function _renderChipCard(c, showAtendente){
   const wa=getWaStatus(c);
   const info=getWaStatusInfo(wa);
+  const pinned=isChipPinned(c);  // ativo do dia → fixado no topo + destacado
   // Bolinha de status operacional no canto superior direito
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
@@ -7012,13 +7080,16 @@ function _renderChipCard(c, showAtendente){
       </button>`
     : '';
 
-  return `<div class="wk-chip" draggable="true"
+  return `<div class="wk-chip${pinned?' wk-chip-pinned':''}" draggable="true"
       ondragstart="_chipDragStart(event,${c.id})"
       ondragend="_chipDragEnd(event)"
-      onclick="openChipDetail(${c.id})">
+      onclick="openChipDetail(${c.id})"
+      style="${pinned?'box-shadow:0 0 0 2px var(--bl);background:var(--bld)':''}">
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
+    ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:3px">★ Ativo do dia</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
+      ${c.idx?`<span class="wk-chip-idx" title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:10.5px;font-weight:700;line-height:1">#${c.idx}</span>`:''}
       <span class="wk-chip-num">${c.num}</span>
     </div>
     ${statusPill?`<div>${statusPill}</div>`:''}
@@ -7067,22 +7138,24 @@ function _chipDropExtended(targetId){
   if(!chipId)return;
   const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
   if(targetId==='__aquecimento__'){
-    if(c.st==='aquecimento' && !c.em_uso)return false; // já está lá
+    if(c.st==='aquecimento')return false; // já está lá
     c.st='aquecimento';
-    c.em_uso=false;
+    _setChipEmUso(c,false);
     if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
     toast(`📱 ${c.num} → Em Aquecimento`,'ok');
   } else if(targetId==='__aquecidos__'){
-    if(c.st==='ativo' && !c.em_uso)return false; // já está lá
-    c.st='ativo';
-    c.em_uso=false;
-    toast(`📱 ${c.num} → Aquecidos`,'ok');
+    // Pool "Disponíveis": libera o número (sem atendente, sem em uso)
+    if(_chipUsavel(c) && !c.at)return false; // já está lá
+    if(c.st==='aquecimento'||c.st==='banido')c.st='ativo';
+    c.at=null;
+    _setChipEmUso(c,false);
+    toast(`📱 ${c.num} → Disponíveis`,'ok');
   } else {
-    // Atribui ao atendente E ativa pra uso (vai pra coluna dele)
-    if(c.at===targetId && c.em_uso && c.st==='ativo')return false;
+    // Atribui ao atendente E marca como "em uso" (ativo do dia)
+    if(c.at===targetId && isChipPinned(c) && _chipUsavel(c))return false;
     c.at=targetId;
-    c.em_uso=true;
-    c.st='ativo';
+    if(c.st==='aquecimento'||c.st==='banido')c.st='ativo';
+    _setChipEmUso(c,true);
     const novoNome=getTeam(targetId)?.name||'atendente';
     toast(`📱 ${c.num} → ${novoNome} (em uso)`,'ok');
   }
@@ -7341,9 +7414,14 @@ function renderChips(){
   const st=$('cont-st')?.value||'';
   const onlyRec=$('cont-recarga')?.classList.contains('on');
 
+  // "#2" → busca exata pelo identificador; "2" → busca ampla (inclui o idx)
+  const qIdx=q.startsWith('#')?q.slice(1).trim():null;
   const list=DB.chips.filter(c=>{
     if(!isDir()&&c.at!==CUR.id)return false;
-    if(q && !c.num.includes(q) && !(c.mod||'').toLowerCase().includes(q) && !(getTeam(c.at)?.name||'').toLowerCase().includes(q))return false;
+    if(q){
+      if(qIdx!==null){ if(String(c.idx||'')!==qIdx)return false; }
+      else if(!c.num.includes(q) && !(c.mod||'').toLowerCase().includes(q) && !(getTeam(c.at)?.name||'').toLowerCase().includes(q) && !String(c.idx||'').includes(q))return false;
+    }
     if(st && c.st!==st)return false;
     if(onlyRec){const rs=rechargeStatus(c.rec);if(rs.kind==='ok')return false}
     return true;
@@ -7368,7 +7446,7 @@ function renderChips(){
     return `<div class="chip ${klass}" onclick="openChipDetail(${c.id})">
       <div class="chip-h">
         <div>
-          <div class="chip-num">${c.num}</div>
+          <div class="chip-num">${c.idx?`<span title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:11px;font-weight:700;line-height:1;margin-right:6px;vertical-align:middle">#${c.idx}</span>`:''}${c.num}</div>
           <div class="chip-row" style="margin-top:4px;font-size:11px">${at?`<span style="color:${at.color};font-weight:600">${at.abbr}</span> ${at.name}`:'—'}</div>
         </div>
         <span class="chip-st ${c.st}">${c.st.replace('_',' ')}</span>
@@ -7390,7 +7468,8 @@ function renderChips(){
 function openChipDetail(id){
   const c=DB.chips.find(x=>x.id===id);if(!c)return;
   editingChipId=id;
-  $('mc-title').textContent=c.num;
+  $('mc-title').textContent=(c.idx?`#${c.idx} · `:'')+c.num;
+  $('mc-idx').value=c.idx||'';
   $('mc-num').value=c.num;
   selOpts($('mc-at'),teamOptsChip(),c.at);
   $('mc-mod').value=c.mod||'';
@@ -7477,6 +7556,7 @@ function saveChip(){
     c.warm_start=new Date().toISOString().split('T')[0];
   }
   Object.assign(c,{
+    idx:Number($('mc-idx').value)||c.idx||null,
     num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
     op:$('mc-op').value,st:stNovo,
     wa_st:$('mc-wa-st').value,
@@ -7485,9 +7565,12 @@ function saveChip(){
     tags:$('mc-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
     note:$('mc-note').value,
   });
-  // Consistência da flag em_uso vs status: chip em aquecimento ou banido NÃO
-  // está em uso ativo. Pra ativos, preserva o valor que já tinha.
-  if(stNovo!=='ativo') c.em_uso=false;
+  // Consistência: aquecimento/banido nunca está "em uso".
+  if(!_chipUsavel(c)) c.em_uso=false;
+  // Unifica a tag "Em uso" com a fixação (mesma regra do setWaStatus):
+  // marcar a tag "Em uso" fixa o número no topo e tira o em uso dos colegas.
+  if(isEmUsoStatus(c.wa_st) && _chipUsavel(c)) _setChipEmUso(c,true);
+  else if(!isEmUsoStatus(c.wa_st)) c.em_uso=false;
   closeM('m-chip');refreshUI();
   toast('Chip atualizado · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
@@ -7506,8 +7589,10 @@ function addChip(){
   const num=$('nc-num').value.trim();
   if(!num){toast('Número obrigatório','err');return}
   const hoje=new Date().toISOString().split('T')[0];
+  // Próximo identificador sequencial (#1, #2, #3...) — auto, editável depois no detalhe
+  const proxIdx=(DB.chips||[]).reduce((m,c)=>Math.max(m,Number(c.idx)||0),0)+1;
   DB.chips.unshift({
-    id:DB.nextChip++,num,at:$('nc-at').value,
+    id:DB.nextChip++,idx:proxIdx,num,at:$('nc-at').value,
     mod:$('nc-mod').value,op:$('nc-op').value,
     st:'aquecimento',dia:1,
     warm_start:hoje,  // marca início do aquecimento → dia avança automaticamente
