@@ -2172,26 +2172,8 @@ h1 em{font-weight:700}
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
-        <div class="field"><label>Status (operacional)</label><select id="mc-st"><option value="aquecimento">Aquecimento</option><option value="ativo">Ativo</option><option value="reserva">Reserva</option><option value="banido">Banido</option><option value="recarga_pendente">Recarga pendente</option></select></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
-        <div class="field"><label>Dia aquecimento (auto)</label><input id="mc-dia" type="number" readonly title="Avança automaticamente conforme os dias passam (desde o início do aquecimento)" style="opacity:.75;cursor:not-allowed"></div>
         <div class="field"><label>Última recarga</label><input id="mc-rec" type="date"></div>
-        <div class="field"><label>Valor recarga (R$)</label><input id="mc-recv" type="number" step="0.01"></div>
-        <div class="field" style="grid-column:span 2"><label>Tags (vírgula)</label><input id="mc-tags" placeholder="convertendo, prioridade"></div>
-        <div class="field" style="grid-column:span 2"><label>Anotações</label><textarea id="mc-note" rows="3"></textarea></div>
-      </div>
-      <div id="mc-warm" class="hidden" style="background:var(--bld);border:1px solid var(--bl);border-radius:var(--rl);padding:14px 16px;margin-bottom:12px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="font-size:22px">🔥</div>
-          <div style="flex:1">
-            <div style="font-size:14px;font-weight:700;color:var(--bl2)">Aquecimento — Dia <span id="mc-warm-day">1</span>/7</div>
-            <div style="font-size:11.5px;color:var(--t3)" id="mc-warm-info">Os dias passam automaticamente desde o início.</div>
-          </div>
-          <div style="display:flex;gap:4px" id="mc-warm-pills"></div>
-        </div>
-        <div style="margin-top:11px;height:6px;background:var(--s4);border-radius:3px;overflow:hidden">
-          <div id="mc-warm-bar" style="height:100%;background:linear-gradient(90deg,var(--bl),var(--gr));border-radius:3px;transition:width .3s"></div>
-        </div>
       </div>
 
       <div id="mc-recharge-alert" class="hidden" style="background:var(--amd);border:1px solid var(--am);border-radius:var(--r);padding:12px 14px;margin-bottom:12px">
@@ -2214,7 +2196,6 @@ h1 em{font-weight:700}
         <div class="field"><label>Atendente</label><select id="nc-at"></select></div>
         <div class="field"><label>Modelo celular</label><input id="nc-mod" placeholder="iPhone 13 / Samsung A54"></div>
         <div class="field"><label>Operadora</label><select id="nc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
-        <div class="field"><label>Dia inicial</label><input id="nc-dia" type="number" value="1" min="1" max="7"></div>
         <div class="field"><label>Última recarga</label><input id="nc-rec" type="date"></div>
       </div>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
@@ -3552,8 +3533,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.24.0';
-const APP_LAST_CHANGE = 'Financeiro repaginado estilo banco: (1) Extrato único na Visão Geral com entradas/saídas por dia, gráfico e resultado do período; (2) UM botão "Registrar movimentação" pra tudo (pagar equipe, tráfego, investimento, aporte) com escolha de origem do dinheiro (caixa da empresa ou do bolso, gerando aporte automático); (3) Pagamentos de Equipe virou "quanto devo pra cada um" com botão Pagar na linha — sem fechar período, sem pró-labore, sem histórico separado; (4) Investimentos com Caixa de Capital e Sociedade no topo (participação clara por aporte) e aportes/investimentos abaixo; (5) Tráfego só com performance — registro e edição passam pelo Extrato.';
+const APP_VERSION = '2.25.0';
+const APP_LAST_CHANGE = 'Extrato mais enxuto: cada dia virou um acordeao (abre/fecha pra economizar tela), filtros por tipo (Receita, Aporte, Equipe, Investimento, Trafego) pra mostrar ou ocultar, e limite de dias com Ver mais pra expandir o periodo aos poucos. Resumo (entrou/saiu/resultado) e grafico seguem no topo.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7472,19 +7453,17 @@ function renderChips(){
     const at=getTeam(c.at);
     const rs=rechargeStatus(c.rec);
     const klass=rs.kind==='crit'?'crit':rs.kind==='warn'?'alert':'';
-    const tagsHTML=(c.tags||[]).map(t=>`<span class="chip-tag">${t}</span>`).join('');
+    const wa=getWaStatus(c);const waInfo=getWaStatusInfo(wa);
     return `<div class="chip ${klass}" onclick="openChipDetail(${c.id})">
       <div class="chip-h">
         <div>
           <div class="chip-num">${c.idx?`<span title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:11px;font-weight:700;line-height:1;margin-right:6px;vertical-align:middle">#${c.idx}</span>`:''}${c.num}</div>
           <div class="chip-row" style="margin-top:4px;font-size:11px">${at?`<span style="color:${at.color};font-weight:600">${at.abbr}</span> ${at.name}`:'—'}</div>
         </div>
-        <span class="chip-st ${c.st}">${c.st.replace('_',' ')}</span>
+        ${waInfo?`<span class="chip-st" style="background:${waInfo.bg};color:${waInfo.color}">${waInfo.ic||''} ${waInfo.label}</span>`:''}
       </div>
       <div class="chip-row">📱 <b>${c.mod||'—'}</b></div>
-      <div class="chip-row">📡 ${c.op||'—'}${c.st==='aquecimento'?` · Dia ${computeWarmDay(c)}/7 aquecimento`:''}</div>
-      ${tagsHTML?`<div class="chip-tags">${tagsHTML}</div>`:''}
-      ${c.note?`<div class="chip-note">"${c.note}"</div>`:''}
+      <div class="chip-row">📡 ${c.op||'—'}${c.st==='aquecimento'?' · aquecendo':''}</div>
       <div class="chip-rec">
         <div class="chip-rec-lbl ${rs.kind==='crit'?'crit':rs.kind==='warn'?'warn':''}">
           ⏰ Recarga: <b>${rs.msg}</b>
@@ -7504,24 +7483,16 @@ function openChipDetail(id){
   selOpts($('mc-at'),teamOptsChip(),c.at);
   $('mc-mod').value=c.mod||'';
   $('mc-op').value=c.op||'Vivo';
-  $('mc-st').value=c.st;
-  // Popula select de Status WhatsApp com a lista configurável
+  // Status WhatsApp = status único do chip (lista configurável no ⚙)
   const waList=getWaStatusList();
   $('mc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
   $('mc-wa-st').value=getWaStatus(c);
-  // Dia agora é COMPUTADO a partir de warm_start (passa automaticamente)
-  $('mc-dia').value=computeWarmDay(c)||0;
   $('mc-rec').value=c.rec||'';
-  $('mc-recv').value=c.recv||'';
-  $('mc-tags').value=(c.tags||[]).join(', ');
-  $('mc-note').value=c.note||'';
 
   const rs=rechargeStatus(c.rec);
   const al=$('mc-recharge-alert');
   if(rs.kind!=='ok'){al.classList.remove('hidden');$('mc-recharge-msg').textContent=rs.msg+' — confirme após recarregar.'}
   else al.classList.add('hidden');
-
-  renderWarmChecklist(c);
 
   $('mc-del').style.display=isDir()?'':'none';
   openM('m-chip');
@@ -7529,6 +7500,7 @@ function openChipDetail(id){
 
 function renderWarmChecklist(c){
   const wrap=$('mc-warm');
+  if(!wrap)return; // banner de aquecimento removido — aquecimento é automático
   if(c.st!=='aquecimento'||!c.dia||c.dia<1||c.dia>7){wrap.classList.add('hidden');return}
   wrap.classList.remove('hidden');
   const diaAtual=computeWarmDay(c);
@@ -7572,28 +7544,21 @@ function toggleWarmTask(idx){
 function advanceWarmDay(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
   if(c.dia>=7){c.st='ativo';toast('Aquecimento concluído — chip ATIVO','ok');}
-  else {c.dia++;$('mc-dia').value=c.dia;toast(`Avançou para o dia ${c.dia}/7`,'ok');}
+  else {c.dia++;const d=$('mc-dia');if(d)d.value=c.dia;toast(`Avançou para o dia ${c.dia}/7`,'ok');}
   renderWarmChecklist(c);persist();
   if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
 }
 
 function saveChip(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
-  const stAntes=c.st;
-  const stNovo=$('mc-st').value;
-  // Se virou aquecimento agora e não tem warm_start, marca hoje como início
-  if(stNovo==='aquecimento'&&stAntes!=='aquecimento'&&!c.warm_start){
-    c.warm_start=new Date().toISOString().split('T')[0];
-  }
+  // Status operacional (st) agora é automático: aquecimento por 7 dias → ativo.
+  // O único status manual é o wa_st (Status WhatsApp).
   Object.assign(c,{
     idx:Number($('mc-idx').value)||c.idx||null,
     num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
-    op:$('mc-op').value,st:stNovo,
+    op:$('mc-op').value,
     wa_st:$('mc-wa-st').value,
-    dia:Number($('mc-dia').value)||0,rec:$('mc-rec').value,
-    recv:Number($('mc-recv').value)||0,
-    tags:$('mc-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
-    note:$('mc-note').value,
+    rec:$('mc-rec').value,
   });
   // Consistência: aquecimento/banido nunca está "em uso".
   if(!_chipUsavel(c)) c.em_uso=false;
@@ -7853,60 +7818,100 @@ function editMov(kind,id){
   if(kind==='aporte')return delAporte(id);
 }
 // Renderiza o extrato dentro do container #extrato-body
+// Estado da UI do extrato (filtros por tipo, dias visíveis, dias abertos)
+let _extTypes={Receita:1,Aporte:1,Equipe:1,Investimento:1,'Tráfego':1};
+let _extDaysShown=7;
+let _extOpenDays=new Set();
+let _extOpenInit=false;
+const _EXT_TYPE_META={
+  Receita:{icon:'dollar-sign'}, Aporte:{icon:'briefcase'}, Equipe:{icon:'users'},
+  Investimento:{icon:'package'}, 'Tráfego':{icon:'target'},
+};
+function toggleExtType(t){_extTypes[t]=_extTypes[t]?0:1;renderExtratoBody()}
+function toggleExtDay(key){if(_extOpenDays.has(key))_extOpenDays.delete(key);else _extOpenDays.add(key);renderExtratoBody()}
+function extMoreDays(){_extDaysShown+=14;renderExtratoBody()}
+function extLessDays(){_extDaysShown=7;renderExtratoBody()}
+function extSetAllDays(open,keys){if(open){keys.forEach(k=>_extOpenDays.add(k))}else{_extOpenDays.clear()}renderExtratoBody()}
+
 function renderExtratoBody(){
   const wrap=$('extrato-body');if(!wrap)return;
   const ev=buildExtrato();
+  // Resumo (cards do topo) = período inteiro, sem filtro
   const totIn=ev.filter(e=>e.dir==='in').reduce((s,e)=>s+e.valor,0);
   const totOut=ev.filter(e=>e.dir==='out').reduce((s,e)=>s+e.valor,0);
   const result=totIn-totOut;
   const nIn=ev.filter(e=>e.dir==='in').length, nOut=ev.filter(e=>e.dir==='out').length;
-  // Agrupa por dia
+  // Lista/gráfico respeitam os filtros de tipo
+  const evF=ev.filter(e=>_extTypes[e.tipo]!==0);
+  const TYPES=['Receita','Aporte','Equipe','Investimento','Tráfego'];
+
+  // Agrupa filtrado por dia
   const days={};
-  ev.forEach(e=>{
+  evF.forEach(e=>{
     const k=e.dt?`${String(e.dt.getDate()).padStart(2,'0')}/${String(e.dt.getMonth()+1).padStart(2,'0')}/${e.dt.getFullYear()}`:'sem data';
     if(!days[k])days[k]={in:0,out:0,items:[],dt:e.dt};
     days[k].items.push(e);
     if(e.dir==='in')days[k].in+=e.valor;else days[k].out+=e.valor;
   });
   const dayKeys=Object.keys(days).sort((a,b)=>(days[b].dt?days[b].dt.getTime():0)-(days[a].dt?days[a].dt.getTime():0));
-  // Gráfico — barras de entrada/saída por dia (cronológico, últimos 31)
+  // Abre o dia mais recente na primeira renderização
+  if(!_extOpenInit&&dayKeys[0]){_extOpenDays.add(dayKeys[0]);_extOpenInit=true}
+  const visKeys=dayKeys.slice(0,_extDaysShown);
+  const restante=dayKeys.length-visKeys.length;
+  // Gráfico — barras por dia (cronológico, últimos 31, filtrado)
   const chartDays=[...dayKeys].reverse().slice(-31);
   const maxDay=Math.max(1,...chartDays.map(k=>Math.max(days[k].in,days[k].out)));
 
   wrap.innerHTML=`
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.25);border-radius:var(--r);padding:13px 15px">
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px">
+    <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.25);border-radius:var(--r);padding:12px 14px">
       <div style="display:flex;align-items:center;gap:7px;color:var(--gr);font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-up',{size:13})} Entrou</div>
-      <div style="font-size:23px;font-weight:700;color:var(--gr);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totIn)}</div>
+      <div style="font-size:22px;font-weight:700;color:var(--gr);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totIn)}</div>
       <div class="muted" style="font-size:11px">${nIn} entrada${nIn!==1?'s':''}</div>
     </div>
-    <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.22);border-radius:var(--r);padding:13px 15px">
+    <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.22);border-radius:var(--r);padding:12px 14px">
       <div style="display:flex;align-items:center;gap:7px;color:var(--rd);font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-down',{size:13})} Saiu</div>
-      <div style="font-size:23px;font-weight:700;color:var(--rd);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totOut)}</div>
+      <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totOut)}</div>
       <div class="muted" style="font-size:11px">${nOut} saída${nOut!==1?'s':''}</div>
     </div>
-    <div style="background:${result>=0?'rgba(16,185,129,.07)':'rgba(239,68,68,.06)'};border:1.5px solid ${result>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
+    <div style="background:${result>=0?'rgba(16,185,129,.07)':'rgba(239,68,68,.06)'};border:1.5px solid ${result>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:12px 14px">
       <div style="display:flex;align-items:center;gap:7px;color:${result>=0?'var(--gr)':'var(--rd)'};font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('wallet',{size:13})} Resultado</div>
-      <div style="font-size:23px;font-weight:700;color:${result>=0?'var(--gr)':'var(--rd)'};margin-top:4px;font-variant-numeric:tabular-nums">${fmt(result)}</div>
+      <div style="font-size:22px;font-weight:700;color:${result>=0?'var(--gr)':'var(--rd)'};margin-top:4px;font-variant-numeric:tabular-nums">${fmt(result)}</div>
       <div class="muted" style="font-size:11px">entrou − saiu no período</div>
     </div>
   </div>
 
+  <!-- Filtros por tipo -->
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center">
+    ${TYPES.map(t=>{
+      const on=_extTypes[t]!==0;
+      return `<button type="button" onclick="toggleExtType('${t}')"
+        style="display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:600;transition:all .12s;
+          border:1px solid ${on?'var(--bl)':'var(--b1)'};background:${on?'var(--bld)':'var(--s2)'};color:${on?'var(--bl2)':'var(--t4)'};${on?'':'opacity:.7'}">
+        ${ico(_EXT_TYPE_META[t].icon,{size:12})} ${t}${on?'':' (oculto)'}
+      </button>`;
+    }).join('')}
+    ${dayKeys.length>1?`<span style="margin-left:auto;display:inline-flex;gap:6px">
+      <button class="btn btn-gh btn-xs" onclick="extSetAllDays(true,${JSON.stringify(visKeys).replace(/"/g,'&quot;')})">Abrir dias</button>
+      <button class="btn btn-gh btn-xs" onclick="extSetAllDays(false)">Recolher</button>
+    </span>`:''}
+  </div>
+
   ${chartDays.length?`
-  <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px;margin-bottom:16px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+  <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:12px 14px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <span style="font-size:12px;font-weight:600;color:var(--t2)">Movimento por dia</span>
       <span style="display:inline-flex;gap:12px;font-size:10.5px;color:var(--t3)">
         <span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:var(--gr)"></span>entrou</span>
         <span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:var(--rd)"></span>saiu</span>
       </span>
     </div>
-    <div style="display:flex;align-items:flex-end;gap:3px;height:90px;overflow-x:auto;padding-bottom:2px">
+    <div style="display:flex;align-items:flex-end;gap:3px;height:78px;overflow-x:auto;padding-bottom:2px">
       ${chartDays.map(k=>{
         const d=days[k];
-        const inH=Math.round(d.in/maxDay*78);
-        const outH=Math.round(d.out/maxDay*78);
-        return `<div style="flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;gap:2px" title="${k.slice(0,5)} · entrou ${fmt(d.in)} · saiu ${fmt(d.out)}">
+        const inH=Math.round(d.in/maxDay*66);
+        const outH=Math.round(d.out/maxDay*66);
+        return `<div style="flex:1;min-width:13px;display:flex;flex-direction:column;align-items:center;gap:2px" title="${k.slice(0,5)} · entrou ${fmt(d.in)} · saiu ${fmt(d.out)}">
           <div style="flex:1;display:flex;align-items:flex-end;gap:2px;width:100%;justify-content:center">
             <div style="width:45%;height:${inH}px;background:var(--gr);border-radius:2px 2px 0 0;min-height:${d.in>0?'2px':'0'}"></div>
             <div style="width:45%;height:${outH}px;background:var(--rd);border-radius:2px 2px 0 0;min-height:${d.out>0?'2px':'0'}"></div>
@@ -7917,33 +7922,41 @@ function renderExtratoBody(){
     </div>
   </div>`:''}
 
-  ${dayKeys.length?dayKeys.map(k=>{
+  <!-- Lista em acordeão por dia -->
+  ${visKeys.length?visKeys.map(k=>{
     const d=days[k];
-    return `<div style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 2px;border-bottom:1px solid var(--b1);margin-bottom:6px">
-        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--t2)">${ico('calendar',{size:12})} ${k}</span>
-        <span style="font-size:11.5px;font-variant-numeric:tabular-nums">
-          ${d.in>0?`<span style="color:var(--gr);font-weight:600">+${fmt(d.in)}</span>`:''}
+    const open=_extOpenDays.has(k);
+    return `<div style="border:1px solid var(--b1);border-radius:11px;margin-bottom:8px;overflow:hidden;background:var(--s2)">
+      <div onclick="toggleExtDay('${k}')" style="display:flex;align-items:center;gap:10px;padding:10px 13px;cursor:pointer;user-select:none">
+        <span style="color:var(--t4);transition:transform .15s;transform:rotate(${open?'90':'0'}deg);display:inline-flex">${ico('arrow-up-right',{size:13})}</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--t2)">${ico('calendar',{size:12})} ${k}</span>
+        <span class="muted" style="font-size:11px">${d.items.length} lançamento${d.items.length!==1?'s':''}</span>
+        <span style="margin-left:auto;font-size:12px;font-variant-numeric:tabular-nums">
+          ${d.in>0?`<span style="color:var(--gr);font-weight:700">+${fmt(d.in)}</span>`:''}
           ${d.in>0&&d.out>0?'<span style="color:var(--t4);margin:0 6px">·</span>':''}
-          ${d.out>0?`<span style="color:var(--rd);font-weight:600">−${fmt(d.out)}</span>`:''}
+          ${d.out>0?`<span style="color:var(--rd);font-weight:700">−${fmt(d.out)}</span>`:''}
         </span>
       </div>
-      ${d.items.map(e=>{
-        const isIn=e.dir==='in';
-        const clk=e.ref?`onclick="editMov('${e.ref.kind}',${e.ref.id})"`:'';
-        return `<div ${clk} class="ext-row"
-          style="display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:10px;${e.ref?'cursor:pointer;':''}transition:background .12s"
-          onmouseover="this.style.background='var(--s2)'" onmouseout="this.style.background='transparent'">
-          <div style="width:32px;height:32px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${isIn?'rgba(16,185,129,.1)':'rgba(239,68,68,.08)'};color:${isIn?'var(--gr)':'var(--rd)'}">${ico(e.icon,{size:15})}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.label}</div>
-            <div style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.tipo} · ${e.sub}</div>
-          </div>
-          <div style="font-size:14px;font-weight:700;color:${isIn?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums;flex-shrink:0">${isIn?'+':'−'}${fmt(e.valor)}</div>
-        </div>`;
-      }).join('')}
+      ${open?`<div style="padding:2px 8px 8px;border-top:1px solid var(--b1)">
+        ${d.items.map(e=>{
+          const isIn=e.dir==='in';
+          const clk=e.ref?`onclick="editMov('${e.ref.kind}',${e.ref.id})"`:'';
+          return `<div ${clk} style="display:flex;align-items:center;gap:11px;padding:8px 6px;border-radius:9px;${e.ref?'cursor:pointer;':''}transition:background .12s"
+            onmouseover="this.style.background='var(--s3)'" onmouseout="this.style.background='transparent'">
+            <div style="width:30px;height:30px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${isIn?'rgba(16,185,129,.1)':'rgba(239,68,68,.08)'};color:${isIn?'var(--gr)':'var(--rd)'}">${ico(e.icon,{size:14})}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.label}</div>
+              <div style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.tipo} · ${e.sub}</div>
+            </div>
+            <div style="font-size:14px;font-weight:700;color:${isIn?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums;flex-shrink:0">${isIn?'+':'−'}${fmt(e.valor)}</div>
+          </div>`;
+        }).join('')}
+      </div>`:''}
     </div>`;
-  }).join(''):'<div class="muted" style="text-align:center;padding:40px 0">Nenhuma movimentação no período. Use <b>Registrar movimentação</b> pra começar.</div>'}`;
+  }).join(''):'<div class="muted" style="text-align:center;padding:36px 0">Nenhuma movimentação com os filtros atuais. Use <b>Registrar movimentação</b> ou ajuste os filtros acima.</div>'}
+
+  ${restante>0?`<button class="btn btn-gh btn-sm" style="width:100%;margin-top:4px" onclick="extMoreDays()">Ver mais ${restante} dia${restante!==1?'s':''} →</button>`
+   :(_extDaysShown>7&&dayKeys.length>7?`<button class="btn btn-gh btn-sm" style="width:100%;margin-top:4px" onclick="extLessDays()">Mostrar menos</button>`:'')}`;
 }
 
 /* ─── Modal de movimentação única ─────────────────────── */
