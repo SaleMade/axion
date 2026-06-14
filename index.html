@@ -2549,7 +2549,7 @@ h1 em{font-weight:700}
         </div>
         <div id="mv-fields"></div>
         <div class="field" id="mv-origem-wrap">
-          <label>De onde saiu o dinheiro? <span style="color:var(--rd)">*</span></label>
+          <label>Quem pagou? <span class="muted" style="font-weight:500">(só registro)</span></label>
           <select id="mv-origem"></select>
           <div class="muted" id="mv-origem-hint" style="font-size:11.5px;margin-top:6px;line-height:1.45;display:none;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:8px 11px;border-radius:7px"></div>
         </div>
@@ -2557,6 +2557,21 @@ h1 em{font-weight:700}
       <div class="row" style="justify-content:flex-end">
         <button class="btn btn-gh" onclick="closeM('m-mov')">Cancelar</button>
         <button class="btn btn-bl" onclick="saveMov()">Registrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: CAIXA DA PLATAFORMA (Payt) ═══ -->
+<div class="overlay" id="m-caixaplat">
+  <div class="modal sm">
+    <div class="m-h"><span class="mt">Caixa da plataforma</span><button class="m-x" onclick="closeM('m-caixaplat')">×</button></div>
+    <div class="m-b">
+      <p class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:14px">Quanto está parado na plataforma de pagamento (Payt) agora, esperando saque. Esse valor já faz parte do <b>caixa da empresa</b> — aqui é só pra você saber quanto ainda está preso.</p>
+      <div class="field"><label>Valor na plataforma (R$)</label><input type="number" step="0.01" id="cxp-vl" placeholder="0,00"></div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn btn-gh" onclick="closeM('m-caixaplat')">Cancelar</button>
+        <button class="btn btn-bl" onclick="saveCaixaPlat()">Salvar</button>
       </div>
     </div>
   </div>
@@ -3413,6 +3428,8 @@ if(typeof DB.demConfig.gatewayPct!=='number')DB.demConfig.gatewayPct=3;
 if(typeof DB.demConfig.impostosPct!=='number')DB.demConfig.impostosPct=6;
 // Aportes
 if(!DB.aportes){DB.aportes=[];DB.nextAporte=1}
+// Migração: remove aportes automáticos (reembolso a sócio) — agora é tudo manual
+dropAutoAportes();
 // Map de fotos de perfil { userId: base64DataUrl } — sincronizado com o blob
 // pra que a foto siga o usuário entre dispositivos. Foto fica também em
 // member.photo (cache rápido), mas o team_photos é a fonte de verdade no sync.
@@ -3533,8 +3550,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.25.0';
-const APP_LAST_CHANGE = 'Extrato mais enxuto: cada dia virou um acordeao (abre/fecha pra economizar tela), filtros por tipo (Receita, Aporte, Equipe, Investimento, Trafego) pra mostrar ou ocultar, e limite de dias com Ver mais pra expandir o periodo aos poucos. Resumo (entrou/saiu/resultado) e grafico seguem no topo.';
+const APP_VERSION = '2.26.0';
+const APP_LAST_CHANGE = 'Caixa real e modelo manual: (1) cards da Visao Geral agora mostram Caixa da empresa (quanto da pra investir, acumulado) na frente e Caixa da plataforma (Payt, o que esta preso, clicavel pra ajustar); saiu Comissao recebida. (2) Fim do reembolso/aporte automatico: quem pagou virou so anotacao, tudo manual. Reembolsos automaticos antigos sao removidos no carregamento.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3819,6 +3836,8 @@ async function syncFromServer(){
       DB.team=team;     // users são gerenciados via /api/users
       DB.feed=feed;     // log visual local — não sincroniza
       DB.wh_log=wh_log; // log de webhooks — local
+      // Limpa reembolsos automáticos que ainda venham do servidor (modelo agora é manual)
+      if(dropAutoAportes()){persistAndPushNow().catch(_=>{})}
       // CRÍTICO: re-vincula globais (KB_COLS, TEAM) ao novo DB. Sem isso o
       // modal de detalhes do lead quebrava silenciosamente em outros PCs
       // por usar referência stale ao kb_cols antigo
@@ -8026,7 +8045,7 @@ function movOrigemHint(){
   const sel=$('mv-origem'),h=$('mv-origem-hint');if(!sel||!h)return;
   if(sel.value==='empresa'){h.style.display='none'}
   else{const n=getTeam(sel.value)?.name||'sócio';h.style.display='block';
-    h.innerHTML=`${n} pagou do bolso. Vou registrar um <b>aporte automático</b> nesse valor no nome dele — a empresa fica devendo.`}
+    h.innerHTML=`Fica só registrado que <b>${n}</b> pagou. Nada é lançado automático. Se quiser registrar que ${n} colocou dinheiro na empresa, faça um <b>Colocar dinheiro</b> à parte.`}
 }
 function _finishMov(msg){
   closeM('m-mov');refreshUI();
@@ -8069,6 +8088,20 @@ function saveMov(){
     syncAutoAporteForInvest(id,{pago_por:origem,dt:dtIso,vl,cat:$('mv-cat').value,desc},'invest');
     _finishMov('Investimento registrado');return;
   }
+}
+
+// Caixa da plataforma (Payt) — valor mantido manualmente pelo usuário
+function openCaixaPlat(){
+  const v=Number(DB.caixaPlat||0)||0;
+  if($('cxp-vl'))$('cxp-vl').value=v||'';
+  openM('m-caixaplat');
+}
+function saveCaixaPlat(){
+  DB.caixaPlat=Number($('cxp-vl').value)||0;
+  DB.caixaPlatUpd=today();
+  closeM('m-caixaplat');refreshUI();
+  toast('Caixa da plataforma atualizado · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
 function pageDRE(){return `<div class="page" id="dre-pg"></div>`}
@@ -8115,6 +8148,18 @@ function renderDRE(){
   const headerReceita=isAfi?com:recBruta;
   const headerSubtitle=isAfi?'comissão recebida':'faturamento bruto';
 
+  // ─── Caixa real da empresa (acumulado, TODAS as datas) ───
+  // Dinheiro que de fato entrou (comissão recebida no afiliado; líquido no produtor)
+  // + aportes − tudo que saiu (equipe + tráfego + investimentos). É quanto dá pra investir.
+  const _recAll=DB.vendas.reduce((s,v)=>s+(isAfi?(Number(v.comiss)||0)
+    :((Number(v.vl)||0)-(Number(v.custo)||0)-(Number(v.vl)||0)*gatewayPct/100)),0);
+  const _aportesAll=(DB.aportes||[]).reduce((s,a)=>s+(Number(a.valor)||0),0);
+  const _saidasAll=(DB.payouts||[]).reduce((s,p)=>s+(Number(p.valor)||0),0)
+    +(DB.gastos||[]).reduce((s,g)=>s+(Number(g.valor)||0),0)
+    +(DB.invest||[]).filter(i=>!i.is_budget).reduce((s,i)=>s+(Number(i.vl)||0),0);
+  const caixaEmpresa=_recAll+_aportesAll-_saidasAll;
+  const caixaPlat=Number(DB.caixaPlat||0)||0;
+
   c.innerHTML=`
   <div class="ph">
     <div><h1>Financeiro · <em>Visão Geral</em></h1></div>
@@ -8137,18 +8182,21 @@ function renderDRE(){
   </div>
 
   <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-      <div class="mc-lbl">${isAfi?'Comissão Recebida':'Receita Bruta'}</div><div class="mc-val">${fmt(headerReceita)}</div>
-      <div class="mc-sub">${vendas.length} vendas · ${headerSubtitle}</div></div>
+    <div class="mc mc-gr mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('wallet',{size:14})}</div>
+      <div class="mc-lbl">Caixa da empresa</div>
+      <div class="mc-val" style="color:${caixaEmpresa>=0?'var(--gr)':'var(--rd)'}">${fmt(caixaEmpresa)}</div>
+      <div class="mc-sub">total que dá pra investir · inclui plataforma</div></div>
+    <div class="mc mc-cy" onclick="openCaixaPlat()" style="cursor:pointer" title="Clique pra ajustar quanto está na plataforma">
+      <div class="mc-gl"></div><div class="mc-ic">${ico('credit-card',{size:14})}</div>
+      <div class="mc-lbl">Caixa da plataforma</div><div class="mc-val">${fmt(caixaPlat)}</div>
+      <div class="mc-sub">preso na Payt · clique pra ajustar</div></div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('target',{size:14})}</div>
+      <div class="mc-lbl">Lucro líquido</div>
+      <div class="mc-val" style="color:${lucroCalc>=0?'var(--tx)':'var(--rd)'}">${fmt(lucroCalc)}</div>
+      <div class="mc-sub">resultado do período</div></div>
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('minus-circle',{size:14})}</div>
       <div class="mc-lbl">Custos totais</div><div class="mc-val">${fmt(totCustos)}</div>
-      <div class="mc-sub">conforme métricas selecionadas</div></div>
-    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('target',{size:14})}</div>
-      <div class="mc-lbl">Lucro líquido</div><div class="mc-val">${fmt(lucroCalc)}</div>
-      <div class="mc-sub">antes pagamentos de equipe</div></div>
-    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('star',{size:14})}</div>
-      <div class="mc-lbl">Caixa restante</div><div class="mc-val">${fmt(caixaCalc)}</div>
-      <div class="mc-sub">após pagamentos</div></div>
+      <div class="mc-sub">do período</div></div>
   </div>
 
   <!-- ═══ EXTRATO — entradas e saídas do período (estilo banco) ═══ -->
@@ -8962,7 +9010,7 @@ function renderInvest(){
             const pp=i.pago_por||'empresa';
             const pagoBadge=pp==='empresa'
               ?`<span class="tbl-st" style="background:var(--bld);color:var(--bl2)">Empresa</span>`
-              :(()=>{const u=getTeam(pp);return u?`<span class="tbl-st" style="background:rgba(251,191,36,.12);color:var(--gold)" title="Pago do bolso · aporte automático gerado">${u.name}</span>`:`<span class="tbl-st" style="background:rgba(100,116,139,.12);color:var(--t3)">— ?</span>`})();
+              :(()=>{const u=getTeam(pp);return u?`<span class="tbl-st" style="background:rgba(251,191,36,.12);color:var(--gold)" title="Pago do bolso (só registro)">${u.name}</span>`:`<span class="tbl-st" style="background:rgba(100,116,139,.12);color:var(--t3)">— ?</span>`})();
             return `<tr>
               <td style="color:var(--t2)">${ddmmyyyyFromIso(i.dt)}</td>
               <td><b style="color:var(--tx);font-weight:500">${i.desc}</b></td>
@@ -9833,7 +9881,7 @@ function updateInvPagoHint(){
   } else {
     const nome=getTeam(v)?.name||'sócio';
     hint.style.display='block';
-    hint.innerHTML=`💡 <b style="color:var(--gold)">${nome}</b> pagou do bolso. Vou gerar um <b>aporte automático</b> no nome dele com esse mesmo valor — a empresa fica devendo. Some junto se você apagar este lançamento.`;
+    hint.innerHTML=`Fica só registrado que <b style="color:var(--gold)">${nome}</b> pagou. Nada é lançado automático. Se ${nome} colocou dinheiro na empresa, registre um aporte à parte (Colocar dinheiro).`;
   }
 }
 
@@ -9939,38 +9987,22 @@ function saveInvest(){
 // Compat: alguns lugares ainda chamam addInvest
 const addInvest=saveInvest;
 
-// ─── Sincroniza aporte automático quando alguém paga do bolso ─────────
-// Conceito: se um sócio pagou um investimento/gasto do bolso, é como se
-// ele tivesse aportado o mesmo valor + a empresa ter pago. Resultado
-// contábil idêntico, mas fica registrado que a empresa "deve" pro sócio.
-// O aporte fica linkado ao gasto via auto_source = {kind, id} pra:
-//   1) ser atualizado quando o usuário edita o gasto
-//   2) ser deletado em cascata se o gasto for excluído
+// ─── Aporte automático DESATIVADO ────────────────────────────────────
+// A pedido do usuário, nada de reembolso/aporte automático. Tudo é manual:
+// "quem pagou" é só uma anotação no lançamento; se um sócio colocou dinheiro,
+// o usuário registra o aporte na mão (Registrar movimentação → Colocar dinheiro).
+// Esta função só LIMPA qualquer aporte automático que tenha sobrado de antes.
 function syncAutoAporteForInvest(refId,payload,kind){
-  if(!DB.aportes) DB.aportes=[];
-  // Procura aporte já vinculado a esse gasto/invest
-  const existingIdx=DB.aportes.findIndex(a=>a.auto_source && a.auto_source.kind===kind && a.auto_source.id===refId);
-  const pagoPor=payload.pago_por||'empresa';
-  if(pagoPor==='empresa'){
-    // Pagou da empresa: se existia aporte automático, remove
-    if(existingIdx>=0)DB.aportes.splice(existingIdx,1);
-    return;
-  }
-  // Pagou um sócio do bolso: cria/atualiza aporte vinculado
-  const desc=payload.desc||(kind==='gasto'?'Gasto de tráfego':'Investimento');
-  const aporteData={
-    socio_id:pagoPor,
-    dt:payload.dt||new Date().toISOString().split('T')[0],
-    valor:Number(payload.vl||payload.valor||0),
-    cat:payload.cat||(kind==='gasto'?'trafego':'outros'),
-    obs:`🔄 Reembolso automático: ${desc}`,
-    auto_source:{kind,id:refId},
-  };
-  if(existingIdx>=0){
-    DB.aportes[existingIdx]={...DB.aportes[existingIdx],...aporteData};
-  } else {
-    DB.aportes.unshift({id:DB.nextAporte++,...aporteData});
-  }
+  if(!DB.aportes) return;
+  DB.aportes=DB.aportes.filter(a=>!(a.auto_source && a.auto_source.kind===kind && a.auto_source.id===refId));
+}
+// Remove todos os aportes automáticos (reembolsos a sócio) do DB.
+// Retorna true se removeu algo. Chamado no boot e após o sync do servidor.
+function dropAutoAportes(){
+  if(!Array.isArray(DB.aportes))return false;
+  const before=DB.aportes.length;
+  DB.aportes=DB.aportes.filter(a=>!a.auto_source);
+  return DB.aportes.length!==before;
 }
 
 async function delInvest(id){
@@ -10209,7 +10241,7 @@ function updateGastoPagoHint(){
   } else {
     const nome=getTeam(v)?.name||'sócio';
     hint.style.display='block';
-    hint.innerHTML=`💡 <b style="color:var(--gold)">${nome}</b> pagou esse tráfego do bolso. Vou gerar um <b>aporte automático</b> no nome dele com esse mesmo valor — a empresa fica devendo.`;
+    hint.innerHTML=`Fica só registrado que <b style="color:var(--gold)">${nome}</b> pagou esse tráfego. Nada é lançado automático. Se ${nome} colocou dinheiro na empresa, registre um aporte à parte.`;
   }
 }
 
