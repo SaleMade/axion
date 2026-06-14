@@ -2549,6 +2549,38 @@ h1 em{font-weight:700}
   </div>
 </div>
 
+<!-- ═══ MODAL: MOVIMENTAÇÃO ÚNICA (pagar / investir / aportar) ═══ -->
+<div class="overlay" id="m-mov">
+  <div class="modal sm">
+    <div class="m-h">
+      <span class="mt" id="mv-title">Registrar movimentação</span>
+      <button class="m-x" onclick="closeM('m-mov')">×</button>
+    </div>
+    <div class="m-b">
+      <div class="field" style="margin-bottom:14px">
+        <label>O que você quer registrar?</label>
+        <div id="mv-type-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px"></div>
+      </div>
+      <div class="fg">
+        <div class="fg fg2">
+          <div class="field"><label>Data</label><input type="date" id="mv-dt"></div>
+          <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="mv-vl" placeholder="0,00"></div>
+        </div>
+        <div id="mv-fields"></div>
+        <div class="field" id="mv-origem-wrap">
+          <label>De onde saiu o dinheiro? <span style="color:var(--rd)">*</span></label>
+          <select id="mv-origem"></select>
+          <div class="muted" id="mv-origem-hint" style="font-size:11.5px;margin-top:6px;line-height:1.45;display:none;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:8px 11px;border-radius:7px"></div>
+        </div>
+      </div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn btn-gh" onclick="closeM('m-mov')">Cancelar</button>
+        <button class="btn btn-bl" onclick="saveMov()">Registrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: ACL — Permissões por papel ═══ -->
 <div class="overlay" id="m-acl">
   <div class="modal lg">
@@ -3520,8 +3552,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.23.0';
-const APP_LAST_CHANGE = 'Área de WhatsApp reorganizada: (1) acordeão próprio "WhatsApp" na sidebar (saiu de Equipe); (2) numeração dos chips (#1, #2, #3...) com busca por #nº; (3) tag "Em uso" virou a fonte de verdade do número ativo do dia — fixa no topo da coluna do atendente (selo "Ativo do dia"), só 1 ativo por atendente; coluna mostra reservas embaixo; pool "Aquecidos" virou "Disponíveis" (números sem atendente). Status padrão: Em uso · Ativo · Restrito · Restabelecido.';
+const APP_VERSION = '2.24.0';
+const APP_LAST_CHANGE = 'Financeiro repaginado estilo banco: (1) Extrato único na Visão Geral com entradas/saídas por dia, gráfico e resultado do período; (2) UM botão "Registrar movimentação" pra tudo (pagar equipe, tráfego, investimento, aporte) com escolha de origem do dinheiro (caixa da empresa ou do bolso, gerando aporte automático); (3) Pagamentos de Equipe virou "quanto devo pra cada um" com botão Pagar na linha — sem fechar período, sem pró-labore, sem histórico separado; (4) Investimentos com Caixa de Capital e Sociedade no topo (participação clara por aporte) e aportes/investimentos abaixo; (5) Tráfego só com performance — registro e edição passam pelo Extrato.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3599,6 +3631,7 @@ const ICONS = {
   'wallet-cards':   '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/>',
   'tool':           '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   'filter':         '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  'repeat':         '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
 };
 
 function ico(name, opts={}){
@@ -7754,6 +7787,277 @@ function setFinMode(m){
   toast(m==='afiliado'?'Modo: Afiliado (recebe comissão)':'Modo: Produtor (recebe receita bruta)','ok');
 }
 
+/* ═══════════════════════════════════════════════════════
+   EXTRATO BANCÁRIO + MOVIMENTAÇÃO ÚNICA
+   Unifica payouts, gastos, investimentos, aportes e receita
+   num só fluxo de entradas/saídas — estilo app de banco.
+═══════════════════════════════════════════════════════ */
+// Sufixo "pago por" pros subtítulos do extrato
+function _movPagoSub(pp){
+  if(!pp||pp==='empresa')return '';
+  const u=getTeam(pp);
+  return u?' · pago por '+u.name:'';
+}
+// Lista normalizada de entradas/saídas do período (filtro global do topo)
+function buildExtrato(){
+  const {from,to}=dateRange();
+  const inDD=ddmm=>{const dt=ddmmToDate(ddmm);return dt&&dt>=from&&dt<=to};
+  const inISO=iso=>{const dt=iso?new Date(iso+'T12:00:00'):null;return dt&&dt>=from&&dt<=to};
+  const mode=(DB.demConfig||{}).mode||'afiliado';
+  const ev=[];
+  // ENTRADAS — receita de vendas (comissão se afiliado, bruto se produtor)
+  DB.vendas.filter(v=>inDD(v.data)).forEach(v=>{
+    const val=mode==='afiliado'?(Number(v.comiss)||0):(Number(v.vl)||0);
+    if(val<=0)return;
+    const at=getTeam(v.at);
+    ev.push({dt:ddmmToDate(v.data),dir:'in',tipo:'Receita',valor:val,
+      label:v.nome||'Venda',sub:(mode==='afiliado'?'comissão recebida':'venda')+(at?' · '+at.name:''),
+      icon:'dollar-sign',ref:null});
+  });
+  // ENTRADAS — aportes (quem colocou dinheiro)
+  (DB.aportes||[]).filter(a=>inISO(a.dt)).forEach(a=>{
+    const s=getTeam(a.socio_id);
+    ev.push({dt:new Date(a.dt+'T12:00:00'),dir:'in',tipo:'Aporte',valor:Number(a.valor||0),
+      label:(a.auto_source?'Reembolso a sócio':'Aporte')+(s?' · '+s.name:''),
+      sub:a.obs||'capital colocado na empresa',icon:'briefcase',
+      ref:a.auto_source?null:{kind:'aporte',id:a.id}});
+  });
+  // SAÍDAS — pagamentos de equipe
+  (DB.payouts||[]).filter(p=>inDD(p.data)).forEach(p=>{
+    const u=getTeam(p.user_id);
+    ev.push({dt:ddmmToDate(p.data),dir:'out',tipo:'Equipe',valor:Number(p.valor||0),
+      label:'Pagamento · '+(u?u.name:'equipe'),sub:(p.obs||'pagamento de equipe')+_movPagoSub(p.pago_por),
+      icon:'users',ref:{kind:'payout',id:p.id}});
+  });
+  // SAÍDAS — investimentos (sem budgets, que são só reserva)
+  DB.invest.filter(i=>!i.is_budget&&inISO(i.dt)).forEach(i=>{
+    const ct=DB.invCats.find(x=>x.id===i.cat);
+    ev.push({dt:new Date(i.dt+'T12:00:00'),dir:'out',tipo:'Investimento',valor:Number(i.vl||0),
+      label:i.desc||'Investimento',sub:(ct?ct.nome:i.cat)+_movPagoSub(i.pago_por),
+      icon:'package',ref:{kind:'invest',id:i.id}});
+  });
+  // SAÍDAS — tráfego pago
+  DB.gastos.filter(g=>inDD(g.data)).forEach(g=>{
+    ev.push({dt:ddmmToDate(g.data),dir:'out',tipo:'Tráfego',valor:Number(g.valor||0),
+      label:'Tráfego · '+g.plat+(g.campanha?' · '+g.campanha:''),sub:'mídia paga'+_movPagoSub(g.pago_por),
+      icon:'target',ref:{kind:'gasto',id:g.id}});
+  });
+  ev.sort((a,b)=>(b.dt?b.dt.getTime():0)-(a.dt?a.dt.getTime():0));
+  return ev;
+}
+// Abre o item do extrato pra edição/exclusão na origem certa
+function editMov(kind,id){
+  if(kind==='payout')return openPayoutEdit(id);
+  if(kind==='invest')return editInvest(id);
+  if(kind==='gasto'){const idx=DB.gastos.findIndex(g=>g.id===id);if(idx>=0)editGasto(idx);return;}
+  if(kind==='aporte')return delAporte(id);
+}
+// Renderiza o extrato dentro do container #extrato-body
+function renderExtratoBody(){
+  const wrap=$('extrato-body');if(!wrap)return;
+  const ev=buildExtrato();
+  const totIn=ev.filter(e=>e.dir==='in').reduce((s,e)=>s+e.valor,0);
+  const totOut=ev.filter(e=>e.dir==='out').reduce((s,e)=>s+e.valor,0);
+  const result=totIn-totOut;
+  const nIn=ev.filter(e=>e.dir==='in').length, nOut=ev.filter(e=>e.dir==='out').length;
+  // Agrupa por dia
+  const days={};
+  ev.forEach(e=>{
+    const k=e.dt?`${String(e.dt.getDate()).padStart(2,'0')}/${String(e.dt.getMonth()+1).padStart(2,'0')}/${e.dt.getFullYear()}`:'sem data';
+    if(!days[k])days[k]={in:0,out:0,items:[],dt:e.dt};
+    days[k].items.push(e);
+    if(e.dir==='in')days[k].in+=e.valor;else days[k].out+=e.valor;
+  });
+  const dayKeys=Object.keys(days).sort((a,b)=>(days[b].dt?days[b].dt.getTime():0)-(days[a].dt?days[a].dt.getTime():0));
+  // Gráfico — barras de entrada/saída por dia (cronológico, últimos 31)
+  const chartDays=[...dayKeys].reverse().slice(-31);
+  const maxDay=Math.max(1,...chartDays.map(k=>Math.max(days[k].in,days[k].out)));
+
+  wrap.innerHTML=`
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.25);border-radius:var(--r);padding:13px 15px">
+      <div style="display:flex;align-items:center;gap:7px;color:var(--gr);font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-up',{size:13})} Entrou</div>
+      <div style="font-size:23px;font-weight:700;color:var(--gr);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totIn)}</div>
+      <div class="muted" style="font-size:11px">${nIn} entrada${nIn!==1?'s':''}</div>
+    </div>
+    <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.22);border-radius:var(--r);padding:13px 15px">
+      <div style="display:flex;align-items:center;gap:7px;color:var(--rd);font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-down',{size:13})} Saiu</div>
+      <div style="font-size:23px;font-weight:700;color:var(--rd);margin-top:4px;font-variant-numeric:tabular-nums">${fmt(totOut)}</div>
+      <div class="muted" style="font-size:11px">${nOut} saída${nOut!==1?'s':''}</div>
+    </div>
+    <div style="background:${result>=0?'rgba(16,185,129,.07)':'rgba(239,68,68,.06)'};border:1.5px solid ${result>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
+      <div style="display:flex;align-items:center;gap:7px;color:${result>=0?'var(--gr)':'var(--rd)'};font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('wallet',{size:13})} Resultado</div>
+      <div style="font-size:23px;font-weight:700;color:${result>=0?'var(--gr)':'var(--rd)'};margin-top:4px;font-variant-numeric:tabular-nums">${fmt(result)}</div>
+      <div class="muted" style="font-size:11px">entrou − saiu no período</div>
+    </div>
+  </div>
+
+  ${chartDays.length?`
+  <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <span style="font-size:12px;font-weight:600;color:var(--t2)">Movimento por dia</span>
+      <span style="display:inline-flex;gap:12px;font-size:10.5px;color:var(--t3)">
+        <span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:var(--gr)"></span>entrou</span>
+        <span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:var(--rd)"></span>saiu</span>
+      </span>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:3px;height:90px;overflow-x:auto;padding-bottom:2px">
+      ${chartDays.map(k=>{
+        const d=days[k];
+        const inH=Math.round(d.in/maxDay*78);
+        const outH=Math.round(d.out/maxDay*78);
+        return `<div style="flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;gap:2px" title="${k.slice(0,5)} · entrou ${fmt(d.in)} · saiu ${fmt(d.out)}">
+          <div style="flex:1;display:flex;align-items:flex-end;gap:2px;width:100%;justify-content:center">
+            <div style="width:45%;height:${inH}px;background:var(--gr);border-radius:2px 2px 0 0;min-height:${d.in>0?'2px':'0'}"></div>
+            <div style="width:45%;height:${outH}px;background:var(--rd);border-radius:2px 2px 0 0;min-height:${d.out>0?'2px':'0'}"></div>
+          </div>
+          <span style="font-size:8.5px;color:var(--t4);white-space:nowrap">${k.slice(0,2)}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`:''}
+
+  ${dayKeys.length?dayKeys.map(k=>{
+    const d=days[k];
+    return `<div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 2px;border-bottom:1px solid var(--b1);margin-bottom:6px">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--t2)">${ico('calendar',{size:12})} ${k}</span>
+        <span style="font-size:11.5px;font-variant-numeric:tabular-nums">
+          ${d.in>0?`<span style="color:var(--gr);font-weight:600">+${fmt(d.in)}</span>`:''}
+          ${d.in>0&&d.out>0?'<span style="color:var(--t4);margin:0 6px">·</span>':''}
+          ${d.out>0?`<span style="color:var(--rd);font-weight:600">−${fmt(d.out)}</span>`:''}
+        </span>
+      </div>
+      ${d.items.map(e=>{
+        const isIn=e.dir==='in';
+        const clk=e.ref?`onclick="editMov('${e.ref.kind}',${e.ref.id})"`:'';
+        return `<div ${clk} class="ext-row"
+          style="display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:10px;${e.ref?'cursor:pointer;':''}transition:background .12s"
+          onmouseover="this.style.background='var(--s2)'" onmouseout="this.style.background='transparent'">
+          <div style="width:32px;height:32px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${isIn?'rgba(16,185,129,.1)':'rgba(239,68,68,.08)'};color:${isIn?'var(--gr)':'var(--rd)'}">${ico(e.icon,{size:15})}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.label}</div>
+            <div style="font-size:11px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.tipo} · ${e.sub}</div>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:${isIn?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums;flex-shrink:0">${isIn?'+':'−'}${fmt(e.valor)}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join(''):'<div class="muted" style="text-align:center;padding:40px 0">Nenhuma movimentação no período. Use <b>Registrar movimentação</b> pra começar.</div>'}`;
+}
+
+/* ─── Modal de movimentação única ─────────────────────── */
+let _movType='equipe';
+const MOV_TYPES=[
+  {k:'equipe',      l:'Pagar equipe',     d:'comissão / salário',      icon:'users'},
+  {k:'trafego',     l:'Tráfego pago',     d:'Meta, TikTok, Google...', icon:'target'},
+  {k:'investimento',l:'Investimento',     d:'ferramentas, ativos',     icon:'package'},
+  {k:'aporte',      l:'Colocar dinheiro', d:'aporte de capital',       icon:'briefcase'},
+];
+function openMov(preset){
+  _movType=preset||'equipe';
+  if($('mv-dt'))$('mv-dt').value=new Date().toISOString().split('T')[0];
+  if($('mv-vl'))$('mv-vl').value='';
+  renderMovType();
+  openM('m-mov');
+}
+function setMovType(k){_movType=k;renderMovType()}
+function renderMovType(){
+  const grid=$('mv-type-grid');if(!grid)return;
+  grid.innerHTML=MOV_TYPES.map(t=>{
+    const on=t.k===_movType;
+    return `<button type="button" onclick="setMovType('${t.k}')"
+      style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:11px 12px;border-radius:11px;cursor:pointer;text-align:left;transition:all .12s;
+        border:1.5px solid ${on?'var(--bl)':'var(--b1)'};background:${on?'var(--bld)':'var(--s2)'};color:${on?'var(--bl2)':'var(--t2)'}">
+      <span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600">${ico(t.icon,{size:15})} ${t.l}</span>
+      <span style="font-size:10.5px;color:${on?'var(--bl2)':'var(--t4)'};font-weight:500">${t.d}</span>
+    </button>`;
+  }).join('');
+  buildMovFields();
+}
+function buildMovFields(){
+  const wrap=$('mv-fields');const ow=$('mv-origem-wrap');if(!wrap||!ow)return;
+  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview&&!t.archived);
+  if(_movType==='equipe'){
+    wrap.innerHTML=`<div class="field"><label>Colaborador</label><select id="mv-user"></select></div>
+      <div class="field"><label>Observação (opcional)</label><input id="mv-obs" placeholder="Comissão, salário..."></div>`;
+    selOpts($('mv-user'),TEAM.filter(t=>!t._preview&&!t.archived).map(t=>({v:t.id,l:t.name+' · '+t.role})));
+  } else if(_movType==='trafego'){
+    wrap.innerHTML=`<div class="fg fg2">
+        <div class="field"><label>Plataforma</label><select id="mv-plat"><option>TikTok</option><option>Meta</option><option>Google</option><option>YouTube</option><option>Kwai</option><option>Outro</option></select></div>
+        <div class="field"><label>Pedidos feitos</label><input id="mv-leads" type="number" placeholder="ex: 12"></div>
+      </div>
+      <div class="field"><label>Campanha (opcional)</label><input id="mv-camp" placeholder="Nome da campanha"></div>`;
+  } else if(_movType==='investimento'){
+    wrap.innerHTML=`<div class="field"><label>Categoria</label><select id="mv-cat"></select></div>
+      <div class="field"><label>Descrição</label><input id="mv-desc" placeholder="Ex: Notebook, curso, ferramenta..."></div>`;
+    selOpts($('mv-cat'),DB.invCats.map(c=>({v:c.id,l:c.icon+' '+c.nome})));
+  } else if(_movType==='aporte'){
+    wrap.innerHTML=`<div class="field"><label>Quem está colocando o dinheiro?</label>
+        <select id="mv-investidor">${socios.map(s=>{const isMe=s.id===CUR?.id;const rl={diretor:'Diretor',socio:'Sócio',produtor:'Produtor'}[s.role]||s.role;return `<option value="${s.id}" ${isMe?'selected':''}>${s.name} · ${rl}${isMe?' (você)':''}</option>`}).join('')||'<option value="">Cadastre um sócio em Equipe</option>'}</select></div>
+      <div class="field"><label>Finalidade</label>
+        <select id="mv-apcat"><option value="trafego">Budget de Tráfego</option><option value="marketing">Marketing</option><option value="infraestrutura">Infraestrutura</option><option value="ferramentas">Ferramentas</option><option value="salarios">Salários</option><option value="outros">Outros</option></select></div>
+      <div class="field"><label>Observação (opcional)</label><input id="mv-obs2" placeholder="Ex: aporte mensal"></div>`;
+  }
+  // Origem (de onde saiu) — só pra saídas. Aporte é a própria entrada.
+  if(_movType==='aporte'){ow.style.display='none'}
+  else{
+    ow.style.display='';
+    const opts=[`<option value="empresa">Caixa da empresa</option>`,
+      ...socios.map(s=>{const isMe=s.id===CUR?.id;const rl={diretor:'Diretor',socio:'Sócio',produtor:'Produtor'}[s.role]||s.role;return `<option value="${s.id}">${s.name} · ${rl}${isMe?' (você)':''} — do bolso</option>`})];
+    $('mv-origem').innerHTML=opts.join('');
+    $('mv-origem').onchange=movOrigemHint;movOrigemHint();
+  }
+}
+function movOrigemHint(){
+  const sel=$('mv-origem'),h=$('mv-origem-hint');if(!sel||!h)return;
+  if(sel.value==='empresa'){h.style.display='none'}
+  else{const n=getTeam(sel.value)?.name||'sócio';h.style.display='block';
+    h.innerHTML=`${n} pagou do bolso. Vou registrar um <b>aporte automático</b> nesse valor no nome dele — a empresa fica devendo.`}
+}
+function _finishMov(msg){
+  closeM('m-mov');refreshUI();
+  toast(msg+' · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(e=>console.warn('Sync falhou:',e));
+}
+function saveMov(){
+  const dtIso=$('mv-dt').value||new Date().toISOString().split('T')[0];
+  const dt=new Date(dtIso+'T12:00:00');
+  const ddmm=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+  const vl=Number($('mv-vl').value)||0;
+  if(vl<=0){toast('Informe um valor','err');return}
+  if(_movType==='aporte'){
+    const socio_id=$('mv-investidor')?.value;
+    if(!socio_id){toast('Selecione quem está aportando','err');return}
+    DB.aportes=DB.aportes||[];DB.nextAporte=DB.nextAporte||1;
+    DB.aportes.unshift({id:DB.nextAporte++,dt:dtIso,socio_id,cat:$('mv-apcat').value,valor:vl,obs:($('mv-obs2').value||'').trim()});
+    _finishMov('Aporte de '+fmt(vl)+' registrado');return;
+  }
+  const origem=$('mv-origem')?.value||'empresa';
+  if(_movType==='equipe'){
+    const user_id=$('mv-user')?.value;if(!user_id){toast('Selecione o colaborador','err');return}
+    const id=DB.nextPayout++;
+    DB.payouts.unshift({id,user_id,valor:vl,data:ddmm,obs:($('mv-obs').value||'').trim(),pago_por:origem,comp:null,comp_name:''});
+    syncAutoAporteForInvest(id,{pago_por:origem,dt:dtIso,vl,cat:'salarios',desc:'Pagamento '+(getTeam(user_id)?.name||'equipe')},'payout');
+    pushFeed(`Pagamento <b>${fmt(vl)}</b> a ${getTeam(user_id)?.name||'equipe'}`,'#f59e0b');
+    _finishMov('Pagamento registrado');return;
+  }
+  if(_movType==='trafego'){
+    if(!DB.nextGasto)DB.nextGasto=1;const id=DB.nextGasto++;
+    const plat=$('mv-plat').value;const camp=($('mv-camp').value||'').trim();
+    DB.gastos.unshift({id,data:ddmm,plat,campanha:camp,valor:vl,leads:Number($('mv-leads').value)||0,pago_por:origem,chip_ids:[],at_ids:[],chip_id:null,at:null});
+    syncAutoAporteForInvest(id,{pago_por:origem,dt:dtIso,vl,cat:'trafego',desc:'Tráfego '+plat+(camp?' · '+camp:'')},'gasto');
+    _finishMov('Gasto de tráfego registrado');return;
+  }
+  if(_movType==='investimento'){
+    const desc=($('mv-desc').value||'').trim();if(!desc){toast('Informe a descrição','err');return}
+    const id=DB.nextInv++;
+    DB.invest.unshift({id,cat:$('mv-cat').value,desc,vl,dt:dtIso,is_budget:false,pago_por:origem});
+    syncAutoAporteForInvest(id,{pago_por:origem,dt:dtIso,vl,cat:$('mv-cat').value,desc},'invest');
+    _finishMov('Investimento registrado');return;
+  }
+}
+
 function pageDRE(){return `<div class="page" id="dre-pg"></div>`}
 function renderDRE(){
   const c=$('dre-pg');if(!c)return;
@@ -7802,6 +8106,7 @@ function renderDRE(){
   <div class="ph">
     <div><h1>Financeiro · <em>Visão Geral</em></h1></div>
     <div class="ph-r">
+      <button class="btn btn-bl btn-sm" onclick="openMov()">${ico('plus',{size:14})} Registrar movimentação</button>
       <!-- Toggle de modo: Afiliado vs Produtor -->
       <div style="display:inline-flex;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:3px;gap:2px">
         <button onclick="setFinMode('afiliado')" class="${isAfi?'on':''}"
@@ -7831,6 +8136,15 @@ function renderDRE(){
     <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('star',{size:14})}</div>
       <div class="mc-lbl">Caixa restante</div><div class="mc-val">${fmt(caixaCalc)}</div>
       <div class="mc-sub">após pagamentos</div></div>
+  </div>
+
+  <!-- ═══ EXTRATO — entradas e saídas do período (estilo banco) ═══ -->
+  <div class="panel" style="margin-bottom:22px">
+    <div class="panel-h">
+      <h3 style="display:inline-flex;align-items:center;gap:8px">${ico('wallet-cards',{size:15})} Extrato · ${rangeLabel()}</h3>
+      <button class="btn btn-bl btn-sm" onclick="openMov()">${ico('plus',{size:13})} Registrar movimentação</button>
+    </div>
+    <div id="extrato-body"></div>
   </div>
 
   <div class="dre-grid">
@@ -7918,17 +8232,18 @@ function renderDRE(){
       <div class="panel" style="margin-top:14px">
         <div class="panel-h"><h3>Atalhos</h3></div>
         <div style="display:flex;flex-direction:column;gap:8px">
-          <button class="btn btn-gh" onclick="goPage('pagequip')" style="text-align:left;justify-content:flex-start;width:100%">💰 Gerenciar Pagamentos de Equipe →</button>
-          <button class="btn btn-gh" onclick="goPage('invest')" style="text-align:left;justify-content:flex-start;width:100%">📦 Gerenciar Investimentos →</button>
+          <button class="btn btn-gh" onclick="goPage('pagequip')" style="text-align:left;justify-content:flex-start;width:100%">${ico('users',{size:14})} Pagamentos de Equipe →</button>
+          <button class="btn btn-gh" onclick="goPage('invest')" style="text-align:left;justify-content:flex-start;width:100%">${ico('package',{size:14})} Investimentos →</button>
+          <button class="btn btn-gh" onclick="goPage('trafego')" style="text-align:left;justify-content:flex-start;width:100%">${ico('target',{size:14})} Tráfego Pago →</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Fechamentos (Mensal / Anual) -->
+  <!-- Resumo consolidado (Mensal / Anual) -->
   <div class="panel" id="retro-panel" style="margin-top:22px">
     <div class="panel-h">
-      <h3>Fechamentos</h3>
+      <h3>Resumo mensal / anual</h3>
       <div style="display:flex;align-items:center;gap:10px">
         ${retroMode==='mensal'?`<select id="retro-year" onchange="retroYear=Number(this.value);renderRetrospectiva()" style="background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:6px 10px;border-radius:8px;font-size:12px;font-family:inherit">${(()=>{const y=new Date().getFullYear();let o='';for(let i=0;i<5;i++){const yy=y-i;o+=`<option value="${yy}" ${yy===retroYear?'selected':''}>${yy}</option>`}return o})()}</select>`:''}
         <div class="retro-tabs">
@@ -7940,6 +8255,7 @@ function renderDRE(){
     <div id="retro-content"></div>
   </div>`;
 
+  renderExtratoBody();
   renderRetrospectiva();
 }
 
@@ -8164,181 +8480,89 @@ function quinzenaRange(ano,mes,q){
 function renderPagEquip(){
   const c=$('pagequip-pg');if(!c)return;
 
-  // Período = filtro global (flexível: pode ser quinzena, mês, semana, custom)
-  const {from:f1,to:t1}=dateRange();
-  const items=calcQuinzena(f1,t1);
-  const totFat=items.reduce((s,i)=>s+i.faturamento,0);
-  const totCom=items.reduce((s,i)=>s+i.comissao,0);
-  const fechamentos=DB.fechamentos||[];
+  // "Quanto devo pra cada um" — acumulado de TODA a operação:
+  //   comissão gerada (todas as vendas do membro) − tudo que já foi pago a ele.
+  // Sem fechamento de período, sem pró-labore. Simples: vejo o que devo e pago.
+  const membros=TEAM.filter(t=>['atendente','cobrador','afiliado','gestor','socio','produtor'].includes(t.role)&&!t._preview&&!t.archived).map(t=>{
+    const com=DB.vendas.filter(v=>v.at===t.id).reduce((s,v)=>s+(Number(v.comiss)||0),0);
+    const pago=(DB.payouts||[]).filter(p=>p.user_id===t.id).reduce((s,p)=>s+(Number(p.valor)||0),0);
+    return {...t, com, pago, falta:com-pago};
+  }).filter(m=>m.com>0||m.pago>0);
+  // Ordena: quem tem mais a pagar primeiro
+  membros.sort((a,b)=>b.falta-a.falta);
+  const totFalta=membros.reduce((s,m)=>s+Math.max(0,m.falta),0);
+  const totCom=membros.reduce((s,m)=>s+m.com,0);
+  const totPago=membros.reduce((s,m)=>s+m.pago,0);
 
   c.innerHTML=`
   <div class="ph">
     <div><h1>Pagamentos de <em>Equipe</em></h1></div>
     <div class="ph-r">
-      <button class="btn btn-bl btn-sm" onclick="openPayoutNew()">+ Registrar transferência</button>
-      <button class="btn btn-gr btn-sm" onclick="openClosePeriod()">✓ Fechar período</button>
+      <button class="btn btn-bl btn-sm" onclick="openMov('equipe')">${ico('plus',{size:14})} Registrar movimentação</button>
     </div>
   </div>
 
-  <!-- Fechamento atual — usa filtro global -->
+  <!-- Total a pagar agora (acumulado) -->
   <div class="quinz-banner">
     <div style="flex:1">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--bl2)">Fechamento em andamento</div>
-      <div style="font-size:22px;font-weight:700;color:var(--tx);letter-spacing:.01em;margin:4px 0">${rangeLabel()}</div>
-      <div style="font-size:13px;color:var(--t3);font-weight:500">
-        ${String(f1.getDate()).padStart(2,'0')}/${String(f1.getMonth()+1).padStart(2,'0')}/${f1.getFullYear()}
-        → ${String(t1.getDate()).padStart(2,'0')}/${String(t1.getMonth()+1).padStart(2,'0')}/${t1.getFullYear()}
-        <span style="margin-left:8px;color:var(--t4)">use o filtro do topo para mudar o período</span>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--bl2)">Total a pagar agora</div>
+      <div style="font-size:13px;color:var(--t3);font-weight:500;margin-top:6px">
+        Comissão gerada na operação inteira menos tudo que você já transferiu. Pague pela linha de cada membro.
       </div>
     </div>
     <div style="text-align:right">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.06em">Comissões a pagar</div>
-      <div style="font-size:28px;font-weight:700;color:var(--gr);letter-spacing:.01em">${fmt(totCom)}</div>
-      <div class="muted" style="font-size:12px">de ${fmt(totFat)} faturados</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.06em">Falta pagar</div>
+      <div style="font-size:30px;font-weight:700;color:var(--gr);letter-spacing:.01em">${fmt(totFalta)}</div>
+      <div class="muted" style="font-size:12px">de ${fmt(totCom)} em comissão · ${fmt(totPago)} já pago</div>
     </div>
   </div>
 
-  <div class="section-title">Comissões por membro · ${rangeLabel()}</div>
+  <div class="section-title">Quanto devo pra cada um</div>
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
         <th style="text-align:left">Membro</th>
         <th style="text-align:left">Função</th>
-        <th class="right">Vendas</th>
-        <th class="right">Faturamento bruto</th>
-        <th class="right">Comissão devida</th>
-        <th class="right">Conv.</th>
-        <th class="right">Status</th>
+        <th class="right">Comissão gerada</th>
+        <th class="right">Já pago</th>
+        <th class="right">Falta pagar</th>
+        <th class="right" style="width:120px">Ação</th>
       </tr></thead>
       <tbody>
-        ${items.map(i=>{
-          const pagoNaQ=(DB.payouts||[]).filter(p=>p.user_id===i.user_id&&{from:f1,to:t1}&&(()=>{const dt=ddmmToDate(p.data);return dt&&dt>=f1&&dt<=t1})()).reduce((s,p)=>s+p.valor,0);
-          const status=pagoNaQ>=i.comissao&&i.comissao>0?'pago':pagoNaQ>0?'parcial':'pendente';
-          const stColors={pago:'var(--gr)',parcial:'var(--am)',pendente:'var(--rd)'};
-          const stBg=   {pago:'var(--grd)',parcial:'var(--amd)',pendente:'var(--rdd)'};
-          return `<tr style="cursor:pointer" onclick="openMemberAnalysis('${i.user_id}')">
-            <td><div style="display:flex;align-items:center;gap:10px">
-              <div class="sav" style="background:${i.bg};color:${i.color}">${i.abbr}</div>
-              <span style="color:var(--tx);font-weight:500">${i.name}</span>
-            </div></td>
-            <td style="text-transform:capitalize;color:var(--t2)">${i.role}</td>
-            <td class="right" style="font-weight:600;color:var(--t2)">${i.vendas}</td>
-            <td class="right" style="color:var(--t2);font-weight:500;letter-spacing:.01em">${fmt(i.faturamento)}</td>
-            <td class="right" style="color:var(--tx);font-weight:700;letter-spacing:.01em">${fmt(i.comissao)}</td>
-            <td class="right" style="color:var(--t2)">${i.conv}%</td>
-            <td class="right"><span class="tbl-st" style="background:${stBg[status]};color:${stColors[status]}">${status}</span></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Histórico de Pagamentos no período do filtro -->
-  <div class="section-title" style="margin-top:24px">Histórico de transferências · ${rangeLabel()}</div>
-  <div class="payouts-scroll-page tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th style="text-align:left">Data</th>
-        <th style="text-align:left">Colaborador</th>
-        <th style="text-align:left">Observações</th>
-        <th class="right">Valor</th>
-        <th class="right">Comprovante</th>
-        <th class="right" style="width:80px">Ações</th>
-      </tr></thead>
-      <tbody>
-        ${(DB.payouts||[]).filter(p=>inRange(p.data)).map(p=>{
-          const u=getTeam(p.user_id)||{name:p.user_id,bg:'var(--s4)',color:'var(--t3)',abbr:'?'};
+        ${membros.length?membros.map(m=>{
+          const falta=m.falta;
+          const stColor=falta>0.5?'var(--gr)':falta<-0.5?'var(--am)':'var(--t3)';
+          const faltaTxt=falta>0.5?fmt(falta):falta<-0.5?'adiantado '+fmt(-falta):'em dia';
           return `<tr>
-            <td>${p.data}</td>
-            <td><div style="display:flex;align-items:center;gap:9px">
-              <div class="sav" style="background:${u.bg};color:${u.color};width:30px;height:30px;font-size:11px">${u.abbr}</div>
-              <span style="color:var(--tx);font-weight:500">${u.name}</span>
+            <td><div style="display:flex;align-items:center;gap:10px">
+              <div class="sav" style="background:${m.bg};color:${m.color}">${m.abbr}</div>
+              <span style="color:var(--tx);font-weight:500;cursor:pointer" onclick="openMemberAnalysis('${m.id}')">${m.name}</span>
             </div></td>
-            <td class="muted">${p.obs||'—'}</td>
-            <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(p.valor)}</td>
-            <td class="right">${p.comp?'<span style="color:var(--t2)">📎 ver</span>':'—'}</td>
+            <td style="text-transform:capitalize;color:var(--t2)">${m.role}</td>
+            <td class="right" style="color:var(--t2);font-weight:500;letter-spacing:.01em">${fmt(m.com)}</td>
+            <td class="right" style="color:var(--t2);font-weight:500;letter-spacing:.01em">${fmt(m.pago)}</td>
+            <td class="right" style="color:${stColor};font-weight:700;letter-spacing:.01em">${faltaTxt}</td>
             <td class="right">
-              <button class="btn-act btn-act-gh btn-act-icon" onclick="openPayoutEdit(${p.id})" title="Editar">✎</button>
+              <button class="btn btn-gr btn-xs" onclick="payMember('${m.id}')" ${falta<=0.5?'style="opacity:.55"':''}>${ico('check',{size:12})} Pagar</button>
             </td>
           </tr>`;
-        }).join('')||'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Sem transferências no período.</td></tr>'}
+        }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">Sem comissões geradas ainda.</td></tr>'}
       </tbody>
     </table>
   </div>
+  <p class="muted" style="font-size:12px;margin-top:12px">Cada pagamento aparece no <a onclick="goPage('dre')" style="color:var(--bl2);cursor:pointer;font-weight:600">Extrato</a> da Visão Geral, junto com todas as entradas e saídas.</p>`;
+}
 
-  <!-- Pró-labore (painel padrão, sem destaque, no final) -->
-  ${(()=>{const pc=DB.proConfig||{type:'pct',value:20};
-    const fp=calcFinForPeriod(f1,t1);
-    const proCalc=pc.type==='fix'?Number(pc.value)||0:fp.lucro*(Number(pc.value)||0)/100;
-    return `
-  <div class="section-title" style="margin-top:24px">Pró-labore</div>
-  <div class="panel">
-    <div class="panel-h">
-      <h3>Cálculo de Pró-labore (Diretor / Produtor)</h3>
-      <div style="display:flex;gap:4px">
-        <button class="pro-tog ${pc.type==='pct'?'on':''}" onclick="setProType('pct')">%</button>
-        <button class="pro-tog ${pc.type==='fix'?'on':''}" onclick="setProType('fix')">R$</button>
-      </div>
-    </div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:13px">Define como você se paga. O valor calculado aparece como comissão devida na tabela acima e pode ser pago normalmente.</p>
-    <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:14px;align-items:center">
-      <div>
-        <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;margin-bottom:5px">${pc.type==='pct'?'% do lucro líquido':'Valor fixo mensal'}</div>
-        <div style="display:flex;align-items:center;gap:8px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px">
-          <input type="number" id="pro-val" value="${pc.value}" min="0" step="${pc.type==='pct'?'0.5':'10'}" oninput="updProInPagEquip()"
-            style="flex:1;background:transparent;border:none;color:var(--tx);font-weight:500;font-size:16px;outline:none;font-family:inherit">
-          <span style="color:var(--t3);font-weight:600;font-size:14px">${pc.type==='pct'?'%':'R$'}</span>
-        </div>
-      </div>
-      <div>
-        <div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;margin-bottom:5px">Calculado</div>
-        <div style="font-size:20px;font-weight:600;color:var(--gold);letter-spacing:.01em">${fmt(proCalc)}</div>
-        <div class="muted" style="font-size:11px">sobre lucro de ${fmt(fp.lucro)}</div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:flex-end">
-        <button class="btn btn-bl btn-sm" onclick="payProLabore()">💰 Registrar pagamento</button>
-      </div>
-    </div>
-  </div>`})()}
-
-  <!-- Histórico de fechamentos -->
-  ${fechamentos.length?`
-  <div class="section-title" style="margin-top:24px">Períodos fechados (histórico)</div>
-  <div class="tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th style="text-align:left">Fechamento</th>
-        <th>Período</th>
-        <th class="right">Total faturado</th>
-        <th class="right">Comissões pagas</th>
-        <th class="right">Membros</th>
-        <th>Fechado em</th>
-      </tr></thead>
-      <tbody>
-        ${[...fechamentos].reverse().map(f=>{
-          const months2=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-          // Compat com fechamentos antigos que usavam quinzena
-          const lbl=f.label||(f.quinzena?`Q${f.quinzena} · ${months2[f.mes]} ${f.ano}`:'Fechamento');
-          let periodoStr='—';
-          if(f.from&&f.to){
-            const d1=new Date(f.from+'T00:00:00'),d2=new Date(f.to+'T00:00:00');
-            const fmtD=d=>`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-            periodoStr=`${fmtD(d1)} → ${fmtD(d2)}`;
-          } else if(f.quinzena){
-            periodoStr=f.quinzena===1?'01–15':'16–fim';
-          }
-          return `<tr>
-            <td><b style="color:var(--tx);font-weight:500">${lbl}</b></td>
-            <td class="muted">${periodoStr}</td>
-            <td class="right" style="color:var(--t2);font-weight:500">${fmt(f.totFat)}</td>
-            <td class="right" style="color:var(--tx);font-weight:600">${fmt(f.totCom)}</td>
-            <td class="right" style="color:var(--t2)">${(f.items||[]).length}</td>
-            <td class="muted">${f.fechado_em}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>`:''}`;
+// Abre a movimentação já preenchida pra pagar um membro o que falta
+function payMember(uid){
+  openMov('equipe');
+  setTimeout(()=>{
+    const com=DB.vendas.filter(v=>v.at===uid).reduce((s,v)=>s+(Number(v.comiss)||0),0);
+    const pago=(DB.payouts||[]).filter(p=>p.user_id===uid).reduce((s,p)=>s+(Number(p.valor)||0),0);
+    const falta=com-pago;
+    if($('mv-user'))$('mv-user').value=uid;
+    if($('mv-vl')&&falta>0.5)$('mv-vl').value=falta.toFixed(2);
+  },40);
 }
 
 // Abre modal pra confirmar fechamento de período (qualquer dia)
@@ -8552,94 +8776,158 @@ function pageInvest(){return `<div class="page" id="invest-pg"></div>`}
 function renderInvest(){
   const c=$('invest-pg');if(!c)return;
   const invests=DB.invest;
-  // Total real consumido (sem budgets)
   const inv=invests.filter(i=>!i.is_budget).reduce((s,i)=>s+i.vl,0);
-  // Por categoria: separa budget de gasto pra mostrar saldo restante em cada card
-  const invByCatBudget={};
-  const invByCatGasto={};
-  invests.forEach(i=>{
-    if(i.is_budget) invByCatBudget[i.cat]=(invByCatBudget[i.cat]||0)+Number(i.vl||0);
-    else            invByCatGasto[i.cat] =(invByCatGasto[i.cat] ||0)+Number(i.vl||0);
-  });
-  // Conjunto de todas as categorias com qualquer movimento
-  const allCats=new Set([...Object.keys(invByCatBudget),...Object.keys(invByCatGasto)]);
   const catFor=id=>DB.invCats.find(x=>x.id===id)||{nome:id,icon:'📦',cor:'#64748b'};
 
-  // Aportes de sócios (no período do topo da Dash)
-  const aportes=(DB.aportes||[]).filter(a=>inRangeIso(a.dt));
-  const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
-  const aportesBySocio={};
-  aportes.forEach(a=>{
-    aportesBySocio[a.socio_id]=(aportesBySocio[a.socio_id]||0)+Number(a.valor||0);
-  });
-  // Acumulado total (sem filtro de data) — pra mostrar saldo de aporte por sócio
+  // Aportes acumulados por sócio (sem filtro de data — é o capital de verdade)
   const allAportes=DB.aportes||[];
   const accBySocio={};
-  allAportes.forEach(a=>{
-    accBySocio[a.socio_id]=(accBySocio[a.socio_id]||0)+Number(a.valor||0);
-  });
-  // Sócios disponíveis (Diretor, Sócio, Produtor)
-  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview);
+  allAportes.forEach(a=>{accBySocio[a.socio_id]=(accBySocio[a.socio_id]||0)+Number(a.valor||0)});
+  const socios=TEAM.filter(t=>['diretor','socio','produtor'].includes(t.role)&&!t._preview&&!t.archived);
 
-  // ─── Cálculo do Saldo de Capital ───
-  // Conceito: aporte = entrada de capital; gasto/invest = saída.
-  // Saldo = Aportes - (Tráfego + Investimentos) → quanto resta de caixa de aportes.
+  // Saldo de capital — aporte (entrada) vs gasto/invest (saída), acumulado
   const fin=calcFin();
-  const consumido=fin.traf+fin.inv; // gastos + investimentos do período
-  const saldoCapital=totAportes-consumido;
-  // Acumulado: total já aportado ever - total já consumido ever
-  // (Budgets de invest NÃO contam como consumido — são reservas)
   const allConsumido=(DB.gastos||[]).reduce((s,g)=>s+(Number(g.valor)||0),0)
                    +(DB.invest||[]).filter(i=>!i.is_budget).reduce((s,i)=>s+(Number(i.vl)||0),0);
-  const totAportesAll=(DB.aportes||[]).reduce((s,a)=>s+(Number(a.valor||0)),0);
+  const totAportesAll=allAportes.reduce((s,a)=>s+(Number(a.valor||0)),0);
   const saldoTotal=totAportesAll-allConsumido;
-  // Lucro distribuível do período (vem do DRE, respeitando modo Afiliado/Produtor)
   const lucroDistribuivel=Math.max(0,fin.lucro);
+  const pctConsumido=totAportesAll>0?Math.round(allConsumido/totAportesAll*100):0;
 
-  // (Resumo geral de Budget vs Gasto removido — agora cada card de categoria
-  //  mostra seu próprio saldo de budget no canto superior direito)
+  // Aportes do período (pra lista)
+  const aportes=allAportes.filter(a=>inRangeIso(a.dt));
+  const totAportes=aportes.reduce((s,a)=>s+Number(a.valor||0),0);
 
   c.innerHTML=`
   <div class="ph">
     <div><h1>Financeiro · <em>Investimentos</em></h1></div>
     <div class="ph-r">
-      <button class="btn btn-gh btn-sm" onclick="goPage('trafego')" title="Meta / Google / TikTok / YouTube ficam em Tráfego Pago (entram no ROAS)">${ico('target',{size:13})} Tráfego Pago →</button>
       <button class="btn btn-gh btn-sm" onclick="openInvCats()">${ico('settings',{size:13})} Categorias</button>
-      <button class="btn btn-bl btn-sm" onclick="openInvest()">+ Novo Investimento</button>
+      <button class="btn btn-bl btn-sm" onclick="openMov('aporte')">${ico('plus',{size:14})} Registrar movimentação</button>
     </div>
   </div>
 
-  <!-- ═══ INVESTIMENTOS DA OPERAÇÃO ═══ -->
+  <!-- ═══ SALDO DE CAPITAL (topo, visão de banco) ═══ -->
   <div class="panel" style="margin-bottom:18px">
-    <div class="panel-h"><h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('package',{size:15})}</span> Investimentos da Operação</h3>
-      <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''}</span>
+    <div class="panel-h">
+      <h3 style="display:inline-flex;align-items:center;gap:8px">${ico('wallet',{size:15})} Caixa de Capital</h3>
+      <span class="muted" style="font-size:11.5px">quanto entrou de aporte vs quanto já foi gasto</span>
     </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
+      <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.25);border-radius:var(--r);padding:13px 15px">
+        <div style="display:flex;align-items:center;gap:7px;color:var(--gr);font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-up',{size:12})} Aportado (total)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--gr);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(totAportesAll)}</div>
+        <div class="muted" style="font-size:11px">capital colocado por sócios</div>
+      </div>
+      <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.22);border-radius:var(--r);padding:13px 15px">
+        <div style="display:flex;align-items:center;gap:7px;color:var(--rd);font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('trending-down',{size:12})} Consumido (total)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(allConsumido)}</div>
+        <div class="muted" style="font-size:11px">tráfego + investimentos</div>
+      </div>
+      <div style="background:${saldoTotal>=0?'rgba(16,185,129,.07)':'rgba(239,68,68,.06)'};border:1.5px solid ${saldoTotal>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
+        <div style="display:flex;align-items:center;gap:7px;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.05em">${ico('wallet',{size:12})} Saldo disponível</div>
+        <div style="font-size:22px;font-weight:700;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};margin-top:3px;font-variant-numeric:tabular-nums">${fmt(saldoTotal)}</div>
+        <div class="muted" style="font-size:11px">${saldoTotal>=0?'pode investir':'excedeu o aportado'}</div>
+      </div>
+    </div>
+    ${totAportesAll>0?`
+    <div style="height:8px;background:var(--s4);border-radius:4px;overflow:hidden;margin-top:8px">
+      <div style="height:100%;width:${Math.min(100,pctConsumido)}%;background:linear-gradient(90deg,var(--gr),${pctConsumido>=90?'var(--rd)':'var(--am)'});border-radius:4px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:5px">
+      <span>${pctConsumido}% do capital aportado já consumido</span>
+      <span>${fmt(allConsumido)} de ${fmt(totAportesAll)}</span>
+    </div>`:''}
+  </div>
 
-    <div class="mg" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:14px">
-      ${[...allCats].map(k=>{
-        const cat=catFor(k);
-        const budget=invByCatBudget[k]||0;
-        const gasto =invByCatGasto[k]||0;
-        const saldo =budget-gasto;
-        const hasBudget=budget>0;
-        // Cor do badge de saldo: verde se positivo, vermelho se negativo (ultrapassou)
-        const saldoColor=saldo>=0?'var(--gr)':'var(--rd)';
-        return `<div class="mc" style="position:relative">
-          <div class="mc-gl" style="background:${cat.cor}"></div>
-          <div class="mc-ic" style="background:${cat.cor}22;color:${cat.cor}">${cat.icon}</div>
-          ${hasBudget?`
-          <div title="Saldo de budget restante (Budget ${fmt(budget)} − Gasto ${fmt(gasto)})"
-            style="position:absolute;top:10px;right:12px;text-align:right">
-            <div style="font-size:9.5px;color:var(--t4);font-weight:700;text-transform:uppercase;letter-spacing:.05em">saldo</div>
-            <div style="font-size:13px;font-weight:700;color:${saldoColor};font-variant-numeric:tabular-nums;line-height:1.1">${fmt(saldo)}</div>
+  <!-- ═══ SOCIEDADE — quem aportou quanto e quanto recebe ═══ -->
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h">
+      <h3 style="display:inline-flex;align-items:center;gap:8px">${ico('users',{size:15})} Sociedade</h3>
+      <span class="muted" style="font-size:11.5px">participação por capital aportado</span>
+    </div>
+    ${socios.length&&totAportesAll>0?`
+    <p class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:14px">
+      A participação de cada sócio é simplesmente <b style="color:var(--tx)">o quanto ele aportou dividido pelo total aportado</b>.
+      Se você colocar mais dinheiro, sua fatia sobe; se o sócio colocar mais, a dele sobe. Numa retirada de lucro, cada um recebe na mesma proporção.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">
+      ${socios.filter(s=>(accBySocio[s.id]||0)>0).map(s=>{
+        const acc=accBySocio[s.id]||0;
+        const pct=totAportesAll?Math.round(acc/totAportesAll*1000)/10:0;
+        const direito=lucroDistribuivel*pct/100;
+        return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:13px 15px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            ${avatar(s,{size:32,fontSize:12})}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13.5px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
+              <div style="font-size:11px;color:var(--t4);text-transform:capitalize">${s.role}</div>
+            </div>
+            <div style="font-size:20px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${pct}%</div>
+          </div>
+          <div style="height:6px;background:var(--s4);border-radius:3px;overflow:hidden;margin-bottom:9px">
+            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--gold),#f59e0b);border-radius:3px"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px">
+            <span style="color:var(--t3)">Aportou</span>
+            <span style="color:var(--tx);font-weight:600;font-variant-numeric:tabular-nums">${fmt(acc)}</span>
+          </div>
+          ${lucroDistribuivel>0?`
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:6px;padding-top:8px;border-top:1px dashed var(--b1)">
+            <span style="color:var(--t3)">Recebe do lucro</span>
+            <span style="color:var(--gr);font-weight:700;font-variant-numeric:tabular-nums">${fmt(direito)}</span>
           </div>`:''}
-          <div class="mc-lbl">${cat.nome}</div>
-          <div class="mc-val" style="letter-spacing:.01em">${fmt(gasto)}</div>
-          ${hasBudget?`<div class="mc-sub" style="font-size:10.5px">de <b style="color:var(--t2);font-weight:600">${fmt(budget)}</b> reservado</div>`:''}
         </div>`;
-      }).join('')||'<div class="muted">Sem categorias com gastos ainda.</div>'}
+      }).join('')}
     </div>
+    ${lucroDistribuivel>0?`<div class="muted" style="font-size:11.5px;margin-top:12px;padding:9px 12px;background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.18);border-radius:8px;line-height:1.5">
+      Lucro distribuível do período: <b style="color:var(--gr)">${fmt(lucroDistribuivel)}</b>. É o que sobra pra dividir entre os sócios na proporção acima, caso você faça uma retirada.
+    </div>`:''}
+    `:`<div class="muted" style="text-align:center;padding:22px;font-size:13px">Ainda não há aportes. Use <b>Registrar movimentação → Colocar dinheiro</b> pra registrar o capital de cada sócio. Cadastre sócios em Configurações → Equipe.</div>`}
+  </div>
 
+  <!-- ═══ HISTÓRICO DE APORTES ═══ -->
+  ${allAportes.length?`
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-h">
+      <h3 style="display:inline-flex;align-items:center;gap:8px">${ico('briefcase',{size:15})} Aportes do período</h3>
+      <span class="muted" style="font-size:12px">${aportes.length} aporte${aportes.length!==1?'s':''} · <b style="color:var(--tx)">${fmt(totAportes)}</b></span>
+    </div>
+    <div class="apo-list-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="text-align:left">Data</th>
+          <th style="text-align:left">Investidor</th>
+          <th style="text-align:left">Finalidade</th>
+          <th style="text-align:left">Observação</th>
+          <th class="right">Valor</th>
+          <th class="right" style="width:50px"></th>
+        </tr></thead>
+        <tbody>
+          ${aportes.length?aportes.slice().sort((a,b)=>(b.dt||'').localeCompare(a.dt||'')).map(a=>{
+            const s=getTeam(a.socio_id);
+            const catLbl={trafego:'Tráfego Pago',marketing:'Marketing',infraestrutura:'Infraestrutura',ferramentas:'Ferramentas',salarios:'Salários',outros:'Outros'}[a.cat||'outros']||a.cat;
+            const auto=!!a.auto_source;
+            return `<tr>
+              <td class="muted">${ddmmFromIso(a.dt)}</td>
+              <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
+              <td><span class="tbl-st" style="background:rgba(251,191,36,.07);color:var(--t2)">${catLbl}</span></td>
+              <td class="muted">${auto?'<span style="color:var(--gold)">'+ico('repeat',{size:11})+' automático</span> · ':''}${a.obs||'—'}</td>
+              <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(a.valor)}</td>
+              <td class="right">${auto?'<span class="muted" title="Aporte gerado automaticamente quando um sócio pagou do bolso. Edite/exclua o gasto de origem.">—</span>':`<button class="btn-act btn-act-gh btn-act-icon" onclick="delAporte(${a.id})" title="Excluir">×</button>`}</td>
+            </tr>`;
+          }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Nenhum aporte no período selecionado.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`:''}
+
+  <!-- ═══ INVESTIMENTOS DA OPERAÇÃO (lista) ═══ -->
+  <div class="panel">
+    <div class="panel-h">
+      <h3 style="display:inline-flex;align-items:center;gap:8px">${ico('package',{size:15})} Investimentos da Operação</h3>
+      <span class="muted" style="font-size:12px">${invests.length} item${invests.length!==1?'s':''} · total gasto <b style="color:var(--tx)">${fmt(inv)}</b></span>
+    </div>
     <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr>
@@ -8656,17 +8944,12 @@ function renderInvest(){
             const ct=catFor(i.cat);
             const isBudget=!!i.is_budget;
             const tipoBadge=isBudget
-              ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold);display:inline-flex;align-items:center;gap:4px">${ico('target',{size:11})} Budget</span>`
-              :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd);display:inline-flex;align-items:center;gap:4px">${ico('trending-down',{size:11})} Gasto</span>`;
-            // Quem pagou: empresa (default) ou sócio específico
+              ?`<span class="tbl-st" style="background:rgba(251,191,36,.08);color:var(--gold)">Budget</span>`
+              :`<span class="tbl-st" style="background:rgba(239,68,68,.08);color:var(--rd)">Gasto</span>`;
             const pp=i.pago_por||'empresa';
             const pagoBadge=pp==='empresa'
-              ?`<span class="tbl-st" style="background:var(--bld);color:var(--bl2)">🏢 Empresa</span>`
-              :(()=>{
-                const u=getTeam(pp);
-                if(!u)return `<span class="tbl-st" style="background:rgba(100,116,139,.12);color:var(--t3)">— ?</span>`;
-                return `<span class="tbl-st" style="background:rgba(251,191,36,.12);color:var(--gold)" title="Pago do bolso · aporte automático gerado">💼 ${u.name}</span>`;
-              })();
+              ?`<span class="tbl-st" style="background:var(--bld);color:var(--bl2)">Empresa</span>`
+              :(()=>{const u=getTeam(pp);return u?`<span class="tbl-st" style="background:rgba(251,191,36,.12);color:var(--gold)" title="Pago do bolso · aporte automático gerado">${u.name}</span>`:`<span class="tbl-st" style="background:rgba(100,116,139,.12);color:var(--t3)">— ?</span>`})();
             return `<tr>
               <td style="color:var(--t2)">${ddmmyyyyFromIso(i.dt)}</td>
               <td><b style="color:var(--tx);font-weight:500">${i.desc}</b></td>
@@ -8679,170 +8962,11 @@ function renderInvest(){
                 <button class="btn-act btn-act-gh btn-act-icon" onclick="delInvest(${i.id})" title="Excluir">×</button>
               </td>
             </tr>`;
-          }).join(''):'<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">Sem investimentos cadastrados.</td></tr>'}
-          <tr style="background:var(--s1);font-weight:700">
-            <td colspan="5" style="color:var(--tx)">Total gasto (sem budgets)</td>
-            <td class="right" style="color:var(--am);font-size:16px">${fmt(inv)}</td>
-            <td></td>
-          </tr>
+          }).join(''):'<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">Sem investimentos. Use Registrar movimentação → Investimento.</td></tr>'}
         </tbody>
       </table>
     </div>
-  </div>
-
-  <!-- ═══ APORTES DE SÓCIOS E DIRETOR ═══ -->
-  <div class="panel" style="margin-bottom:18px">
-    <div class="panel-h">
-      <h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('briefcase',{size:15})}</span> Aportes</h3>
-      <div style="display:flex;align-items:center;gap:12px">
-        <span class="muted" style="font-size:12px">${aportes.length} no período · <b style="color:var(--tx);font-weight:500">${fmt(totAportes)}</b></span>
-        ${socios.length?`<button class="btn btn-bl btn-sm" onclick="toggleAporteForm()" id="ap-form-toggle">+ Novo aporte</button>`:''}
-      </div>
-    </div>
-    ${socios.length?`
-
-    <!-- Form de novo aporte (colapsado por padrão) -->
-    <div id="ap-form" style="background:var(--s2);border:1px dashed var(--b2);border-radius:var(--rl);padding:12px 14px;margin-bottom:14px;display:none">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-        <div class="field" style="flex:1;min-width:120px"><label>Data</label><input type="date" id="ap-dt" value="${new Date().toISOString().split('T')[0]}"></div>
-        <div class="field" style="flex:1;min-width:140px"><label>Investidor</label>
-          <select id="ap-socio">${socios.map(s=>{
-            const isMe=s.id===CUR?.id;
-            const roleLbl={diretor:'Diretor',socio:'Sócio',produtor:'Produtor'}[s.role]||s.role;
-            return `<option value="${s.id}" ${isMe?'selected':''}>${s.name} · ${roleLbl}${isMe?' (você)':''}</option>`;
-          }).join('')}</select>
-        </div>
-        <div class="field" style="flex:1;min-width:140px"><label>Categoria</label>
-          <select id="ap-cat">
-            <option value="trafego">📊 Tráfego Pago (budget)</option>
-            <option value="marketing">📢 Marketing (geral)</option>
-            <option value="infraestrutura">🏗 Infraestrutura</option>
-            <option value="ferramentas">🔧 Ferramentas</option>
-            <option value="salarios">💰 Salários</option>
-            <option value="outros">📦 Outros</option>
-          </select>
-        </div>
-        <div class="field" style="flex:1;min-width:120px"><label>Valor (R$)</label><input type="number" step="0.01" id="ap-valor" placeholder="0,00"></div>
-        <div class="field" style="flex:2;min-width:160px"><label>Observação (opcional)</label><input id="ap-obs" placeholder="Ex: aporte mensal Marketing"></div>
-        <button class="btn btn-gold btn-sm" onclick="addAporte()">Registrar</button>
-      </div>
-    </div>
-
-    <!-- % de participação por sócio + direito sobre o lucro -->
-    ${totAportes>0?`
-    <div class="section-title" style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span>Participação no período</span>
-      <span title="A % de cada sócio é calculada com base APENAS nos aportes do período selecionado no topo da Dash. Se o sócio aportou só em meses passados, ele perde participação ao filtrar este mês. Use 'Acumulado' (à direita) pra ver o saldo histórico inalterado."
-        style="font-size:11px;color:var(--t4);cursor:help">ⓘ</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:14px">
-      ${socios.map(s=>{
-        const periodo=aportesBySocio[s.id]||0;
-        const acumulado=accBySocio[s.id]||0;
-        const pct=totAportes?Math.round(periodo/totAportes*1000)/10:0;
-        // Direito sobre lucro = % participação × lucro distribuível do período
-        const direitoLucro=lucroDistribuivel*pct/100;
-        return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:11px 13px">
-          <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
-            ${avatar(s,{size:28,fontSize:11})}
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
-              <div style="font-size:10.5px;color:var(--t4);text-transform:capitalize">${s.role}</div>
-            </div>
-            <div style="font-size:14px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${pct}%</div>
-          </div>
-          <div style="height:5px;background:var(--s4);border-radius:3px;overflow:hidden;margin-bottom:7px">
-            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--gold),#f59e0b);border-radius:3px"></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:11.5px">
-            <span style="color:var(--t3)">Período: <b style="color:var(--tx)">${fmt(periodo)}</b></span>
-            <span style="color:var(--t3)">Acumulado: <b style="color:var(--bl2)">${fmt(acumulado)}</b></span>
-          </div>
-          ${lucroDistribuivel>0?`
-          <div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--b1);display:flex;justify-content:space-between;align-items:center">
-            <span style="color:var(--t3);font-size:11px">📈 Direito sobre lucro</span>
-            <span style="color:var(--gr);font-weight:700;font-size:13px;font-variant-numeric:tabular-nums">${fmt(direitoLucro)}</span>
-          </div>`:''}
-        </div>`;
-      }).join('')}
-    </div>
-    ${lucroDistribuivel>0?`
-    <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:14px;padding:8px 12px;background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.18);border-radius:8px;line-height:1.5">
-      💡 <b style="color:var(--gr)">Lucro distribuível</b> do período: <b style="color:var(--tx)">${fmt(lucroDistribuivel)}</b> (do DRE). Cada % de aporte recebe proporcionalmente.
-    </div>`:''}
-    `:''}
-
-    <!-- Lista de aportes — rolável depois de ~6 itens, header sticky -->
-    <div class="apo-list-wrap">
-      <table class="tbl">
-        <thead><tr>
-          <th style="text-align:left">Data</th>
-          <th style="text-align:left">Investidor</th>
-          <th style="text-align:left">Categoria</th>
-          <th style="text-align:left">Observação</th>
-          <th class="right">Valor</th>
-          <th class="right" style="width:60px"></th>
-        </tr></thead>
-        <tbody>
-          ${aportes.length?aportes.slice().sort((a,b)=>(b.dt||'').localeCompare(a.dt||'')).map(a=>{
-            const s=getTeam(a.socio_id);
-            const catLbl={trafego:'📊 Tráfego Pago',marketing:'📢 Marketing',infraestrutura:'🏗 Infraestrutura',ferramentas:'🔧 Ferramentas',salarios:'💰 Salários',outros:'📦 Outros'}[a.cat||'outros'];
-            return `<tr>
-              <td class="muted">${ddmmFromIso(a.dt)}</td>
-              <td>${s?`<span style="display:inline-flex;align-items:center;gap:6px">${avatar(s,{size:22,fontSize:10})}${s.name}</span>`:'<span class="muted">—</span>'}</td>
-              <td><span class="tbl-st" style="background:rgba(251,191,36,.07);color:var(--t2)">${catLbl||a.cat}</span></td>
-              <td class="muted">${a.obs||'—'}</td>
-              <td class="right" style="color:var(--tx);font-weight:500;letter-spacing:.01em">${fmt(a.valor)}</td>
-              <td class="right"><button class="btn-act btn-act-gh btn-act-icon" onclick="delAporte(${a.id})" title="Excluir">×</button></td>
-            </tr>`;
-          }).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:18px">Nenhum aporte no período.</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-    ${aportes.length?`
-    <!-- Footer fixo com o total — não rola junto com a lista -->
-    <div class="apo-total-bar">
-      <span style="color:var(--t2);font-size:12.5px;font-weight:600">Total no período · ${aportes.length} aporte${aportes.length!==1?'s':''}</span>
-      <span style="color:var(--tx);font-size:16px;font-weight:700;font-variant-numeric:tabular-nums">${fmt(totAportes)}</span>
-    </div>`:''}
-    `:`<div class="muted" style="text-align:center;padding:20px;font-size:13px">Cadastre membros com função <b>Sócio</b>, <b>Diretor</b> ou <b>Produtor</b> em Configurações → Gerenciar Equipe pra registrar aportes.</div>`}
-  </div>
-
-  <!-- ═══ SALDO DE CAPITAL — relação aporte vs consumo (rodapé) ═══ -->
-  ${totAportesAll>0||consumido>0?`
-  <div class="panel" style="background:linear-gradient(180deg,rgba(251,191,36,.04),transparent)">
-    <div class="panel-h">
-      <h3 style="display:inline-flex;align-items:center;gap:8px"><span style="color:var(--bl2)">${ico('wallet',{size:15})}</span> Saldo de Capital</h3>
-      <span class="muted" style="font-size:11.5px">aportes vs gastos · acumulado e período</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px">
-      <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--gold)">Aportado (acumulado)</div>
-        <div style="font-size:22px;font-weight:700;color:var(--gold);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(totAportesAll)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(totAportes)}</b></div>
-      </div>
-      <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.25);border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:var(--rd)">Consumido (acumulado)</div>
-        <div style="font-size:22px;font-weight:700;color:var(--rd);margin-top:3px;font-variant-numeric:tabular-nums">${fmt(allConsumido)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">Período: <b>${fmt(consumido)}</b> · tráfego + invest.</div>
-      </div>
-      <div style="background:${saldoTotal>=0?'rgba(16,185,129,.08)':'rgba(239,68,68,.10)'};border:1.5px solid ${saldoTotal>=0?'var(--gr)':'var(--rd)'};border-radius:var(--r);padding:13px 15px">
-        <div class="muted" style="font-size:10.5px;text-transform:uppercase;font-weight:700;letter-spacing:.06em;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'}">Saldo de caixa de aportes</div>
-        <div style="font-size:22px;font-weight:700;color:${saldoTotal>=0?'var(--gr)':'var(--rd)'};margin-top:3px;font-variant-numeric:tabular-nums">${fmt(saldoTotal)}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">${saldoTotal>=0?'pode investir':'⚠ excedeu o aportado'}</div>
-      </div>
-    </div>
-    ${totAportesAll>0?`
-    <div style="height:8px;background:var(--s4);border-radius:4px;overflow:hidden;margin-top:8px">
-      <div style="height:100%;width:${Math.min(100,Math.round(allConsumido/totAportesAll*100))}%;background:linear-gradient(90deg,var(--gold),var(--rd));border-radius:4px;transition:width .3s"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:5px">
-      <span>${Math.round(allConsumido/totAportesAll*100)}% do capital aportado consumido</span>
-      <span>${totAportesAll?fmt(allConsumido)+' de '+fmt(totAportesAll):'—'}</span>
-    </div>
-    `:''}
-  </div>
-  `:''}`;
+  </div>`;
 }
 
 // ─── Aportes de sócios ─────────────────────────────────
@@ -9193,9 +9317,13 @@ function savePayout(){
   const dtIso=$('po-data').value;
   const dt=dtIso?new Date(dtIso+'T12:00:00'):new Date();
   const data=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+  const pid=editingPayoutId||DB.nextPayout++;
+  // Preserva a origem (pago_por) caso o payout tenha sido criado pela movimentação única
+  const prev=editingPayoutId?DB.payouts.find(p=>p.id===editingPayoutId):null;
+  const pago_por=prev?.pago_por||'empresa';
   const obj={
-    id:editingPayoutId||DB.nextPayout++,
-    user_id,valor:vl,data,obs:$('po-obs').value,
+    id:pid,
+    user_id,valor:vl,data,obs:$('po-obs').value,pago_por,
     comp:poImgBuf?(poImgBuf.data||poImgBuf):null,
     comp_name:poImgBuf?(poImgBuf.name||''):'',
   };
@@ -9203,6 +9331,8 @@ function savePayout(){
     const idx=DB.payouts.findIndex(p=>p.id===editingPayoutId);
     if(idx>=0)DB.payouts[idx]=obj;
   }else DB.payouts.unshift(obj);
+  // Reconcilia aporte automático se o pagamento saiu do bolso de um sócio
+  syncAutoAporteForInvest(pid,{pago_por,dt:dtIso,vl,cat:'salarios',desc:'Pagamento '+(getTeam(user_id)?.name||'equipe')},'payout');
   pushFeed(`Pagamento <b>${fmt(vl)}</b> a ${getTeam(user_id)?.name}`,'#f59e0b');
   persist();closeM('m-payout');refreshUI();toast('Pagamento registrado','ok');
 }
@@ -9210,7 +9340,10 @@ async function deletePayout(){
   if(!editingPayoutId)return;
   const p=DB.payouts.find(x=>x.id===editingPayoutId);
   if(!await axConfirm(`Excluir o pagamento de <b>${fmt(p?.valor||0)}</b>${p?.user_id?` para <b>${getTeam(p.user_id)?.name||''}</b>`:''}?`,{okLabel:'Excluir pagamento'}))return;
-  DB.payouts=DB.payouts.filter(p=>p.id!==editingPayoutId);
+  const delId=editingPayoutId;
+  DB.payouts=DB.payouts.filter(p=>p.id!==delId);
+  // Cascade: remove aporte automático vinculado a esse pagamento
+  if(DB.aportes)DB.aportes=DB.aportes.filter(a=>!(a.auto_source&&a.auto_source.kind==='payout'&&a.auto_source.id===delId));
   persist();closeM('m-payout');refreshUI();toast('Excluído','ok');
 }
 
@@ -9890,7 +10023,7 @@ function renderTrafego(){
     </div>
     ${canEdit?`<div class="ph-r">
       <label class="btn btn-gh btn-sm" style="cursor:pointer">${ico('arrow-up',{size:13})} Importar CSV<input type="file" accept=".csv" style="display:none" onchange="importTrafegoCSV(this)"></label>
-      <button class="btn btn-bl ${gtOnly?'btn-lg':'btn-sm'}" onclick="openGastoNew()">+ Registrar gasto do dia</button>
+      <button class="btn btn-bl ${gtOnly?'btn-lg':'btn-sm'}" onclick="openMov('trafego')">${ico('plus',{size:14})} Registrar movimentação</button>
     </div>`:''}
   </div>
 
@@ -9959,72 +10092,13 @@ function renderTrafego(){
     }).join('')||'<div class="muted">Sem dados de plataforma no período.</div>'}
   </div>
 
-  ${(()=>{
-    const totalDB=(DB.gastos||[]).length;
-    const foraFiltro=totalDB-gastos.length;
-    const somaFora=(DB.gastos||[]).reduce((s,g)=>s+Number(g.valor||0),0) - tot;
-    const avisoFora=foraFiltro>0
-      ? `<span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">· <a onclick="openAllGastosModal()" style="color:var(--t3);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="${foraFiltro} gasto${foraFiltro>1?'s':''} fora do filtro · clique pra ver tudo">${fmt(somaFora)} fora do filtro</a></span>`
-      : '';
-    return `<div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px">
-      <span>Histórico de registros</span>
-      <span class="muted" style="font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none">${gastos.length} no período · ${totalDB} no total</span>
-      ${avisoFora}
-      <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor (caso outro dispositivo tenha cadastrado gastos)">🔄 Sincronizar agora</button>
-    </div>`;
-  })()}
-  <div class="tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th style="text-align:left">Data</th>
-        <th style="text-align:left">Plataforma</th>
-        <th style="text-align:left">WhatsApp / Atendente</th>
-        <th class="right">Investido</th>
-        <th class="right">Pedidos</th>
-        ${canEdit?'<th></th>':''}
-      </tr></thead>
-      <tbody>
-        ${gastos.length?gastos.map((g,i)=>{
-          // Suporta formato novo (chip_ids array) e antigo (chip_id único)
-          const chipIds=Array.isArray(g.chip_ids)?g.chip_ids:(g.chip_id?[g.chip_id]:[]);
-          const chipsList=chipIds.map(id=>(DB.chips||[]).find(c=>c.id===id)).filter(Boolean);
-          const atIds=Array.isArray(g.at_ids)?g.at_ids:(g.at?[g.at]:[]);
-          const ats=atIds.map(id=>getTeam(id)).filter(Boolean);
-
-          // Render: se 1 só, mostra inline. Se vários, compacta com contador.
-          let chipCell='<span class="muted" style="font-size:11.5px">— geral —</span>';
-          if(chipsList.length===1){
-            const ch=chipsList[0];const at=ats[0]||getTeam(ch.at);
-            chipCell=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <span style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--t2)">${ch.num}</span>
-              ${at?`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span>`:''}
-            </div>`;
-          } else if(chipsList.length>1){
-            // Mostra 2 primeiros + contador
-            const primeiros=chipsList.slice(0,2).map(ch=>{
-              const at=getTeam(ch.at);
-              return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;background:var(--s3);padding:2px 7px;border-radius:4px;color:var(--t2)" title="${ch.num}${at?' · '+at.name:''}">${at?avatar(at,{size:14,fontSize:8}):'📱'} ${at?at.name:ch.num}</span>`;
-            }).join('');
-            const sobra=chipsList.length-2;
-            chipCell=`<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap" title="${chipsList.length} vinculados">
-              ${primeiros}
-              ${sobra>0?`<span style="font-size:11px;color:var(--t3);font-weight:600">+${sobra}</span>`:''}
-            </div>`;
-          }
-          return `<tr>
-          <td style="color:var(--t2)">${g.data}</td>
-          <td><b style="color:var(--tx)">${g.plat}</b>${g.campanha?`<br><span class="muted" style="font-size:11px">${g.campanha}</span>`:''}</td>
-          <td>${chipCell}</td>
-          <td class="right" style="color:var(--tx);font-weight:500">${fmt(g.valor)}</td>
-          <td class="right" style="color:var(--t2)">${g.leads}</td>
-          ${canEdit?`<td class="right">
-            <button class="btn-act btn-act-gh btn-act-icon" onclick="editGasto(${DB.gastos.indexOf(g)})" title="Editar">✎</button>
-            <button class="btn-act btn-act-gh btn-act-icon" onclick="delGasto(${DB.gastos.indexOf(g)})" title="Excluir">×</button>
-          </td>`:''}
-        </tr>`;
-        }).join(''):`<tr><td colspan="${canEdit?6:5}" class="muted" style="text-align:center;padding:24px">Sem registros no período.</td></tr>`}
-      </tbody>
-    </table>
+  <div class="section-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px">
+    <span>Histórico de tráfego</span>
+    <button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="trafegoForceSync()" title="Puxa últimas atualizações do servidor">${ico('repeat',{size:13})} Sincronizar agora</button>
+  </div>
+  <div class="panel" style="text-align:center;padding:26px 18px">
+    <div style="color:var(--t2);font-size:13px;line-height:1.6">Todo gasto de tráfego agora aparece no <a onclick="goPage('dre')" style="color:var(--bl2);cursor:pointer;font-weight:600">Extrato</a> da Visão Geral, junto com as demais entradas e saídas. Clique num lançamento lá pra editar ou excluir.</div>
+    <button class="btn btn-bl btn-sm" style="margin-top:14px" onclick="goPage('dre')">${ico('wallet-cards',{size:14})} Abrir Extrato</button>
   </div>`;
 }
 

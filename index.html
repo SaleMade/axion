@@ -3552,8 +3552,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.23.0';
-const APP_LAST_CHANGE = 'Área de WhatsApp reorganizada: (1) acordeão próprio "WhatsApp" na sidebar (saiu de Equipe); (2) numeração dos chips (#1, #2, #3...) com busca por #nº; (3) tag "Em uso" virou a fonte de verdade do número ativo do dia — fixa no topo da coluna do atendente (selo "Ativo do dia"), só 1 ativo por atendente; coluna mostra reservas embaixo; pool "Aquecidos" virou "Disponíveis" (números sem atendente). Status padrão: Em uso · Ativo · Restrito · Restabelecido.';
+const APP_VERSION = '2.24.0';
+const APP_LAST_CHANGE = 'Financeiro repaginado estilo banco: (1) Extrato único na Visão Geral com entradas/saídas por dia, gráfico e resultado do período; (2) UM botão "Registrar movimentação" pra tudo (pagar equipe, tráfego, investimento, aporte) com escolha de origem do dinheiro (caixa da empresa ou do bolso, gerando aporte automático); (3) Pagamentos de Equipe virou "quanto devo pra cada um" com botão Pagar na linha — sem fechar período, sem pró-labore, sem histórico separado; (4) Investimentos com Caixa de Capital e Sociedade no topo (participação clara por aporte) e aportes/investimentos abaixo; (5) Tráfego só com performance — registro e edição passam pelo Extrato.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3631,6 +3631,7 @@ const ICONS = {
   'wallet-cards':   '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/>',
   'tool':           '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   'filter':         '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  'repeat':         '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
 };
 
 function ico(name, opts={}){
@@ -9316,9 +9317,13 @@ function savePayout(){
   const dtIso=$('po-data').value;
   const dt=dtIso?new Date(dtIso+'T12:00:00'):new Date();
   const data=`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+  const pid=editingPayoutId||DB.nextPayout++;
+  // Preserva a origem (pago_por) caso o payout tenha sido criado pela movimentação única
+  const prev=editingPayoutId?DB.payouts.find(p=>p.id===editingPayoutId):null;
+  const pago_por=prev?.pago_por||'empresa';
   const obj={
-    id:editingPayoutId||DB.nextPayout++,
-    user_id,valor:vl,data,obs:$('po-obs').value,
+    id:pid,
+    user_id,valor:vl,data,obs:$('po-obs').value,pago_por,
     comp:poImgBuf?(poImgBuf.data||poImgBuf):null,
     comp_name:poImgBuf?(poImgBuf.name||''):'',
   };
@@ -9326,6 +9331,8 @@ function savePayout(){
     const idx=DB.payouts.findIndex(p=>p.id===editingPayoutId);
     if(idx>=0)DB.payouts[idx]=obj;
   }else DB.payouts.unshift(obj);
+  // Reconcilia aporte automático se o pagamento saiu do bolso de um sócio
+  syncAutoAporteForInvest(pid,{pago_por,dt:dtIso,vl,cat:'salarios',desc:'Pagamento '+(getTeam(user_id)?.name||'equipe')},'payout');
   pushFeed(`Pagamento <b>${fmt(vl)}</b> a ${getTeam(user_id)?.name}`,'#f59e0b');
   persist();closeM('m-payout');refreshUI();toast('Pagamento registrado','ok');
 }
@@ -9333,7 +9340,10 @@ async function deletePayout(){
   if(!editingPayoutId)return;
   const p=DB.payouts.find(x=>x.id===editingPayoutId);
   if(!await axConfirm(`Excluir o pagamento de <b>${fmt(p?.valor||0)}</b>${p?.user_id?` para <b>${getTeam(p.user_id)?.name||''}</b>`:''}?`,{okLabel:'Excluir pagamento'}))return;
-  DB.payouts=DB.payouts.filter(p=>p.id!==editingPayoutId);
+  const delId=editingPayoutId;
+  DB.payouts=DB.payouts.filter(p=>p.id!==delId);
+  // Cascade: remove aporte automático vinculado a esse pagamento
+  if(DB.aportes)DB.aportes=DB.aportes.filter(a=>!(a.auto_source&&a.auto_source.kind==='payout'&&a.auto_source.id===delId));
   persist();closeM('m-payout');refreshUI();toast('Excluído','ok');
 }
 
