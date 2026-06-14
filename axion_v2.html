@@ -7427,14 +7427,11 @@ function renderChips(){
     return true;
   });
 
-  // Ordenação inteligente: status (Ativo > Aquecimento > Reserva > Recarga pendente > Banido)
-  // dentro de cada grupo, agrupa por atendente
-  const stOrder={ativo:1,aquecimento:2,reserva:3,recarga_pendente:4,banido:5};
+  // Ordenação pelo nº identificador do chip: #1 no topo, #2 em seguida, etc.
+  // Chips sem idx vão pro fim, desempate pelo número.
   list.sort((a,b)=>{
-    const sa=stOrder[a.st]||9, sb=stOrder[b.st]||9;
-    if(sa!==sb)return sa-sb;
-    const an=(getTeam(a.at)?.name||a.at||''),bn=(getTeam(b.at)?.name||b.at||'');
-    if(an!==bn)return an.localeCompare(bn);
+    const ia=Number(a.idx)||9999, ib=Number(b.idx)||9999;
+    if(ia!==ib)return ia-ib;
     return a.num.localeCompare(b.num);
   });
 
