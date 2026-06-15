@@ -876,10 +876,14 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-chip:active{cursor:grabbing}
 .wk-chip.dragging{opacity:.5;transform:scale(.97)}
 .wk-chip-top{display:flex;align-items:center;gap:9px}
-.wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:14.5px;font-weight:600;
+.wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:17px;font-weight:700;
   color:var(--tx);letter-spacing:.02em}
+/* Rodapé do card: infos (id, status, dia) menos destacadas que o número.
+   foot-l agrupa à esquerda; o selo do dia fica empurrado pra direita. */
+.wk-chip-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.wk-chip-foot-l{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
 /* Selo do dia de uso (rotação semanal) — neutro; destaca em verde quando é hoje */
-.wk-chip-day{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 6px;
+.wk-chip-day{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 7px;
   border-radius:6px;background:var(--s4);color:var(--t2);font-size:10px;font-weight:800;
   letter-spacing:.04em;line-height:1;flex-shrink:0}
 .wk-chip-day.is-today{background:var(--grd);color:var(--gr)}
@@ -5136,7 +5140,7 @@ function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
-    pedidos:renderPedidos,produtos:renderProdutos,contingencia:renderChips,
+    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
@@ -7215,14 +7219,18 @@ function _renderChipCard(c, showAtendente){
       onclick="openChipDetail(${c.id})"
       style="${pinned?'box-shadow:0 0 0 2px var(--bl);background:var(--bld)':''}">
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
-    ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:3px">★ Ativo do dia${wd!==null&&hojeWd?` · ${weekdayLabel(wd)}`:''}</div>`:''}
+    ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:1px">★ Ativo do dia</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
-      ${c.idx?`<span class="wk-chip-idx" title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:10.5px;font-weight:700;line-height:1">#${c.idx}</span>`:''}
-      ${dayBadge}
       <span class="wk-chip-num">${c.num}</span>
     </div>
-    ${statusPill?`<div>${statusPill}</div>`:''}
+    <div class="wk-chip-foot">
+      <div class="wk-chip-foot-l">
+        ${c.idx?`<span class="wk-chip-idx" title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:10.5px;font-weight:700;line-height:1">#${c.idx}</span>`:''}
+        ${statusPill}
+      </div>
+      ${dayBadge}
+    </div>
     ${at?`<div class="wk-chip-at"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t2)">${avatar(at,{size:18,fontSize:9})} ${at.name}</span></div>`:''}
   </div>`;
 }
