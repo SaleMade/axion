@@ -6858,19 +6858,19 @@ function weekdayLabel(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.
 // Distância em dias do dia atribuído até hoje (0=hoje, 1=amanhã, ...), ou null
 function chipDayOffset(c){ const v=chipWeekday(c); return v===null?null:((v-todayWeekday())+7)%7; }
 function isChipActiveToday(c){ return chipDayOffset(c)===0; }
-// Posição na coluna do atendente: dia de hoje no topo (0), próximos dias em
-// seguida; sem dia atribuído cai pro fim (exceto se "em uso" manual = topo).
+// Posição na coluna do atendente: "Em uso" manual sempre no topo (-1);
+// senão, dia de hoje (0), próximos dias em seguida; sem dia cai pro fim.
 function chipDayRank(c){
+  if(c.em_uso===true||isEmUsoStatus(getWaStatus(c)))return -1;
   const off=chipDayOffset(c);
   if(off!==null)return off;
-  if(c.em_uso===true||isEmUsoStatus(getWaStatus(c)))return 0;
   return 50;
 }
-// Chip "fixado" (ativo do dia): se tem dia atribuído → só quando é HOJE;
-// se não tem dia → mantém a regra antiga (tag "Em uso" / flag em_uso legada).
+// Chip "fixado" (ativo do dia → contorno + ★): a tag "Em uso" manual SEMPRE
+// fixa, independente do dia. Sem "Em uso", fixa automático quando é o dia de hoje.
 function isChipPinned(c){
-  if(chipWeekday(c)!==null) return isChipActiveToday(c);
-  return c.em_uso===true || isEmUsoStatus(getWaStatus(c));
+  if(c.em_uso===true || isEmUsoStatus(getWaStatus(c))) return true;
+  return isChipActiveToday(c);
 }
 // Chip utilizável na operação (não-aquecimento, não-banido) → entra na coluna/pool
 function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
