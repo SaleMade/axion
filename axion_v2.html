@@ -878,6 +878,11 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-chip-top{display:flex;align-items:center;gap:9px}
 .wk-chip-num{flex:1;font-family:ui-monospace,monospace;font-size:14.5px;font-weight:600;
   color:var(--tx);letter-spacing:.02em}
+/* Selo do dia de uso (rotação semanal) — neutro; destaca em verde quando é hoje */
+.wk-chip-day{display:inline-flex;align-items:center;justify-content:center;height:19px;padding:0 6px;
+  border-radius:6px;background:var(--s4);color:var(--t2);font-size:10px;font-weight:800;
+  letter-spacing:.04em;line-height:1;flex-shrink:0}
+.wk-chip-day.is-today{background:var(--grd);color:var(--gr)}
 .wk-chip-at{padding-top:7px;border-top:1px dashed var(--b1)}
 /* Status pill clicável estilo pipeline */
 .wk-status-pill{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:7px;
@@ -2179,8 +2184,9 @@ body.no-producer #mp-mode-block{display:none}
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
-        <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
         <div class="field"><label>Última recarga</label><input id="mc-rec" type="date"></div>
+        <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
+        <div class="field"><label>Dia de uso (rotação)</label><select id="mc-dia-uso" title="Dia da semana que esse número fica como ativo do dia"><option value="">— sem dia —</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option></select></div>
       </div>
 
       <div id="mc-recharge-alert" class="hidden" style="background:var(--amd);border:1px solid var(--am);border-radius:var(--r);padding:12px 14px;margin-bottom:12px">
@@ -6827,8 +6833,41 @@ function getDisponivelStatusId(){
   const s=list.find(x=>_norm(x.label||x.id)==='ativo') || list.find(x=>!isEmUsoStatus(x.id)&&x.id!=='banido') || list.find(x=>!isEmUsoStatus(x.id));
   return s?s.id:null;
 }
-// Chip "fixado" (ativo do dia): via tag "Em uso" ou pela flag em_uso legada
-function isChipPinned(c){ return c.em_uso===true || isEmUsoStatus(getWaStatus(c)); }
+// ─── Rotação por dia da semana ───
+// Cada chip pode ter um "dia de uso" (c.dia_uso, 0=dom..6=sáb, getDay()).
+// O chip do dia de HOJE vira o "ativo do dia" automaticamente; os outros se
+// ordenam pelos próximos dias (amanhã, depois...), rotacionando sozinhos.
+const WEEKDAYS=[
+  {v:1,label:'Segunda',short:'SEG'},
+  {v:2,label:'Terça',short:'TER'},
+  {v:3,label:'Quarta',short:'QUA'},
+  {v:4,label:'Quinta',short:'QUI'},
+  {v:5,label:'Sexta',short:'SEX'},
+  {v:6,label:'Sábado',short:'SÁB'},
+  {v:0,label:'Domingo',short:'DOM'},
+];
+function todayWeekday(){ return new Date().getDay(); }
+// Retorna o dia (0-6) atribuído ao chip, ou null se nenhum
+function chipWeekday(c){ const v=c&&c.dia_uso; return (v===0||(v&&v!==''))?Number(v):null; }
+function weekdayShort(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.short:''; }
+function weekdayLabel(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.label:''; }
+// Distância em dias do dia atribuído até hoje (0=hoje, 1=amanhã, ...), ou null
+function chipDayOffset(c){ const v=chipWeekday(c); return v===null?null:((v-todayWeekday())+7)%7; }
+function isChipActiveToday(c){ return chipDayOffset(c)===0; }
+// Posição na coluna do atendente: dia de hoje no topo (0), próximos dias em
+// seguida; sem dia atribuído cai pro fim (exceto se "em uso" manual = topo).
+function chipDayRank(c){
+  const off=chipDayOffset(c);
+  if(off!==null)return off;
+  if(c.em_uso===true||isEmUsoStatus(getWaStatus(c)))return 0;
+  return 50;
+}
+// Chip "fixado" (ativo do dia): se tem dia atribuído → só quando é HOJE;
+// se não tem dia → mantém a regra antiga (tag "Em uso" / flag em_uso legada).
+function isChipPinned(c){
+  if(chipWeekday(c)!==null) return isChipActiveToday(c);
+  return c.em_uso===true || isEmUsoStatus(getWaStatus(c));
+}
 // Chip utilizável na operação (não-aquecimento, não-banido) → entra na coluna/pool
 function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
 // Marca/desmarca um chip como "em uso". Só pode haver UM em uso por atendente:
@@ -7033,11 +7072,12 @@ function renderChipsByAtendente(){
       byAt[c.at].push(c);
     }
   });
-  // Ordena: "em uso" (ativo do dia) fixado no topo, depois reservas por #identificador
+  // Ordena por dia da semana: hoje no topo (ativo do dia), depois amanhã, etc.;
+  // números sem dia atribuído ficam no fim como reserva. Empate → #identificador.
   Object.keys(byAt).forEach(id=>{
     byAt[id].sort((a,b)=>{
-      const pa=isChipPinned(a)?0:1, pb=isChipPinned(b)?0:1;
-      if(pa!==pb)return pa-pb;
+      const ra=chipDayRank(a), rb=chipDayRank(b);
+      if(ra!==rb)return ra-rb;
       return (Number(a.idx)||9999)-(Number(b.idx)||9999);
     });
   });
@@ -7153,6 +7193,12 @@ function _renderChipCard(c, showAtendente){
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
   const at=showAtendente?getTeam(c.at):null;  // só mostra atendente nas pools
+  // Selo do dia de uso (rotação semanal). Destaca quando é o dia de hoje.
+  const wd=chipWeekday(c);
+  const hojeWd=isChipActiveToday(c);
+  const dayBadge=wd!==null
+    ? `<span class="wk-chip-day${hojeWd?' is-today':''}" title="Dia de uso: ${weekdayLabel(wd)}${hojeWd?' (hoje)':''}">${weekdayShort(wd)}</span>`
+    : '';
 
   // Status pill clicável que abre dropdown
   const statusPill=info
@@ -7169,10 +7215,11 @@ function _renderChipCard(c, showAtendente){
       onclick="openChipDetail(${c.id})"
       style="${pinned?'box-shadow:0 0 0 2px var(--bl);background:var(--bld)':''}">
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
-    ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:3px">★ Ativo do dia</div>`:''}
+    ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:3px">★ Ativo do dia${wd!==null&&hojeWd?` · ${weekdayLabel(wd)}`:''}</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       ${c.idx?`<span class="wk-chip-idx" title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:10.5px;font-weight:700;line-height:1">#${c.idx}</span>`:''}
+      ${dayBadge}
       <span class="wk-chip-num">${c.num}</span>
     </div>
     ${statusPill?`<div>${statusPill}</div>`:''}
@@ -7598,6 +7645,8 @@ function openChipDetail(id){
   const waList=getWaStatusList();
   $('mc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
   $('mc-wa-st').value=getWaStatus(c);
+  // Dia de uso (rotação semanal) — '' = sem dia, 0=domingo .. 6=sábado
+  $('mc-dia-uso').value=(chipWeekday(c)!==null)?String(chipWeekday(c)):'';
   $('mc-rec').value=c.rec||'';
 
   const rs=rechargeStatus(c.rec);
@@ -7669,6 +7718,7 @@ function saveChip(){
     num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
     op:$('mc-op').value,
     wa_st:$('mc-wa-st').value,
+    dia_uso:$('mc-dia-uso').value===''?null:Number($('mc-dia-uso').value),
     rec:$('mc-rec').value,
   });
   // Consistência: aquecimento/banido nunca está "em uso".
