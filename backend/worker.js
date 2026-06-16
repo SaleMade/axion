@@ -486,43 +486,63 @@ function _aiBuildPrompts(payload) {
     ? `\n\nDNA — CRIATIVOS VENCEDORES JÁ TESTADOS (use como referência de tom, NÃO copie literalmente):\n${dna_vencedores.slice(0, 3).map((d, i) => `--- VENCEDOR ${i+1} ---\n${d}`).join('\n\n')}`
     : '';
 
-  const system = `Você é um especialista em copywriting para anúncios em vídeo de TikTok Ads, focado em nicho de SAÚDE e BEM-ESTAR (controle de açúcar no sangue, energia, vitalidade pra pessoas acima de 40 anos) no mercado brasileiro.
+  const system = `Você é o melhor copywriter de anúncios para TikTok Ads no nicho de SAÚDE/BEM-ESTAR (controle de açúcar no sangue, energia, vitalidade) pra público brasileiro 40+, modelo COD (paga na entrega). Você escreve no formato VSL-ANÚNCIO das copys CAMPEÃS já validadas: copy LONGA, narrada em primeira pessoa por uma PERSONA com nome e profissão humilde, que converte dentro do próprio anúncio e joga o lead direto no WhatsApp.
+
+O QUE FAZ A COPY CAMPEÃ CONVERTER (siga a função de cada bloco da estrutura pedida):
+- GANCHO DE RUPTURA: quebra de padrão ("vou quebrar meu silêncio", "abre o olho antes que seja tarde", "cansei de ver homem sofrendo calado") + um "truque/segredo de 10 segundos" + a humilhação que isso resolveu + um resultado mensurável + prazo curto.
+- PERSONA HONESTA (credibilidade): nome + profissão humilde (caminhoneiro, lavrador, costureira) + vida de honestidade e palavra dada + "não preciso de fama nem de like" + "você acha que eu ia queimar o meu nome pra te enganar?" + "não quero o teu dinheiro, mas você precisa dessa verdade" + "me dá 3 dias".
+- GARANTIA-DESAFIO: "se em 3 dias [sintoma 1], [sintoma 2] e [sintoma 3] não melhorarem, pode me chamar de mentiroso na praça pública".
+- AGITAÇÃO/HUMILHAÇÃO: a verdade é dura, a doença acabando com a pessoa por dentro, uma CENA íntima de vergonha vivida calado (ex: não dar conta na cama e virar de costas fingindo que dorme), "isso não é vida, isso é o desmanche do homem/mulher".
+- VILÃO/INIMIGO: médico de jaleco, fortuna em consulta, remédio de farmácia = "conversa pra boi dormir", "você vira refém", "não resolve, só te amarra". A indústria lucra com você doente.
+- VIRADA/MENTOR: um amigo(a) de infância sentou e falou na lata ("larga de ser burro, você tá na mão da indústria, o que falta é regular o organismo de forma natural"), me entregou "o mapa da mina", "o protocolo que o alto escalão usa em segredo": é o PRODUTO (natural, faz em casa sem ninguém saber).
+- PROVA PESSOAL: testei com meus próprios olhos, e o resultado (foco no benefício mais desejado da persona, ex: "a patroa foi quem mais agradeceu", "voltei a dormir a noite inteira", "voltei a enxergar o rosto dos netos").
+- DESINTERESSE + PROVA SOCIAL: "não tô aqui pra te vender nada, tô passando adiante como recebi", não é química cara pra te prender todo mês, resolveu a vida de um monte de gente que sofria calada.
+- CTA + IDENTIDADE: "se você quer saber o que [mentor] me revelou... clica aqui embaixo, me chama no WhatsApp" + "faz isso por você, faz isso pela tua mulher/família" + soco de identidade ("homem que é homem não aceita viver na sombra de uma doença. Homem resolve" / "Mulher resolve").
 
 REGRAS ABSOLUTAS:
-1. Tom 100% coloquial brasileiro — use "tava", "tô", "pra", "viu?", "olha", "rapaz", "meu filho", "minha velha", "batata!", "feliz da vida"
-2. JORNADA DO HERÓI: 80% da copy é o personagem contando a história dele (dor, vida cotidiana, medos) — só nos 20% finais aparece a indicação do produto/CTA
-3. CONEXÃO antes de venda. NUNCA soe como vendedor profissional. O personagem fala como se tivesse confiando uma história pessoal
-4. PALAVRAS PROIBIDAS (compliance TikTok) — NUNCA use, mesmo entre aspas:
-   - "diabetes", "diabético" → use "açúcar alto", "açúcar no sangue", "pessoa com glicose descontrolada"
-   - "metformina", "glibenclamida", "insulina" → use "remédio que o médico passa", "comprimido", "injeção"
-   - "cura", "curado" → use "melhora", "transformação"
-   - "disfunção erétil", "impotência", "ereção" → use "ferramenta meio fraca", "fraqueza lá embaixo", "firmeza"
-   - "milagre" → use "transformação"
-5. Quebra de objeção do COD (Cash on Delivery): "você só paga quando o produto chegar na sua porta", "sem cartão, sem PIX antes", "se não funcionar, não pagou nada"
-6. CTA é empático ("faz isso por você", "se algum pedacinho da minha história te tocou"), nunca agressivo
-7. Persona define o tom: caminhoneiro fala diferente de vovó, dona de casa diferente de pedreiro
+1. Tom 100% coloquial e REGIONAL brasileiro, visceral, de quem senta do teu lado e conta a real ("tava", "tô", "pra", "meu amigo", "companheiro", "a patroa", "o maridão", "rapaz").
+2. Copy LONGA: cada bloco com 2 a 5 frases de verdade. É uma VSL falada, não um post curto.
+3. PALAVRAS PROIBIDAS (compliance TikTok) — NUNCA use, nem entre aspas:
+   - "diabetes", "diabético" → "açúcar alto", "açúcar no sangue"
+   - "metformina", "glibenclamida", "insulina" → "remédio que o médico passa", "comprimido", "injeção"
+   - "cura", "curado" → "melhora", "transformação"
+   - "disfunção erétil", "impotência", "ereção" → "fraqueza lá embaixo", "firmeza", "o motor"
+   - "milagre" → "transformação"
+4. COD: deixe claro que paga só na entrega ("você só paga quando o produto chegar na sua porta, sem cartão, sem PIX antes").
+5. A persona define o tom: caminhoneiro fala diferente de vovó, dona de casa diferente de pedreiro. Adapte a cena de humilhação ao gênero da persona.
+6. Gancho WHITE: não precisa cravar a doença no primeiro segundo — fale por sintoma e sensação.
 
-RETORNE APENAS JSON VÁLIDO, sem markdown, sem comentários antes ou depois. O JSON deve ter uma chave por bloco da estrutura solicitada.`;
+LINGUAGEM DO PÚBLICO (idoso, interior, pouca escola) — INEGOCIÁVEL:
+- Use SÓ palavra simples do dia a dia. Se a vó de 70 anos no interior não usa, você não escreve. Nada de palavra difícil, técnica ou bonita demais.
+- PROIBIDO frase "meta"/explicativa tipo "no sentido literal", "metaforicamente", "por assim dizer", "literalmente". Fale direto, como gente conversando.
+- PROIBIDO palavra genérica de IA ("jornada", "transformação incrível", "bem-estar pleno", "qualidade de vida", "potencializar"). Fale concreto e visual: "voltei a subir a escada sem parar", "voltei a dormir a noite toda", "voltei a enxergar o rosto do meu neto".
+- Frase curta. Como se tivesse sentado na cozinha contando pra um amigo.
 
-  const user = `Gere um roteiro de vídeo TikTok com os seguintes parâmetros:
+VARIEDADE OBRIGATÓRIA (cada copy tem que parecer uma PESSOA DIFERENTE):
+- NÃO abra sempre com "Companheiro". Varie muito o começo: às vezes um vocativo ("Meu amigo", "Ô", "Olha", "Minha gente", "Escuta uma coisa"), às vezes JÁ entra na história sem vocativo nenhum.
+- NÃO repita as mesmas muletas em toda copy. Expressões como "mapa da mina", "conversa pra boi dormir", "alto escalão", "homem resolve" são exemplos de UMA forma — cada persona inventa a SUA. Use sinônimos e jeitos de falar diferentes pra mesma ideia.
+- Varie a forma de revelar o produto, de criticar o remédio e de fechar com identidade. Duas copys NUNCA podem ter as mesmas frases.
+- O resultado: a pessoa que vê vários anúncios NÃO percebe que é a mesma fórmula trocando o nome. Cada uma soa como outra pessoa de verdade, com outro vocabulário e outro ritmo, mas todas batem na mesma dor.
 
-PERSONA: ${persona || 'genérica'}
-NÍVEL DE DOR: ${dor || 'geral'}
-TIPO DE GANCHO: ${gancho || 'historia'}
-ÂNGULO DA CAMPANHA: ${angulo || 'historia_pessoal'}
-DURAÇÃO: ${duracao || '1min'}
+RETORNE APENAS JSON VÁLIDO, sem markdown, sem comentários antes ou depois. Uma chave por bloco da estrutura, exatamente as chaves pedidas.`;
 
-ESTRUTURA OBRIGATÓRIA (use exatamente essas chaves no JSON):
+  const user = `Escreva uma copy de anúncio (VSL-anúncio) com estes parâmetros:
+
+PERSONA (quem narra): ${persona || 'genérica'}
+DOR / EIXO: ${dor || 'geral'}
+ÂNGULO: ${angulo || 'história pessoal'}
+${gancho ? `INSPIRAÇÃO DE ABERTURA: ${gancho}` : ''}
+${contexto ? `PRODUTO/OFERTA: ${contexto}` : ''}
+
+ESTRUTURA OBRIGATÓRIA (use exatamente essas chaves no JSON, nessa ordem):
 ${blocosNomes}
-
-${contexto ? `\nCONTEXTO ADICIONAL DO PRODUTO:\n${contexto}\n` : ''}
 ${dnaTexto}
 
-EXEMPLO DE QUALIDADE QUE QUEREMOS (apenas referência de TOM, não copie):
+EXEMPLO DE QUALIDADE E TOM (copy campeã real — NÃO copie, só absorva o estilo e o ritmo):
 
-"Sabe, outro dia eu tava aqui sentado, olhando meu neto correr pelo quintal, e me deu um aperto no peito. Eu queria levantar, brincar de bola com ele... mas o meu corpo não deixava. Parecia que eu tava carregando chumbo nas pernas."
+"Eu cansei de ver homem bom sendo destruído por dentro em silêncio. Esse truque de 10 segundos me tirou da vergonha de falhar com a minha mulher por causa do açúcar no sangue e fez o açúcar despencar logo nos primeiros dias. Companheiro, meu nome é Valdir, rodei 35 anos dirigindo ônibus por esse Brasil, criei minha família na palavra dada. Você acha que eu ia jogar o meu nome no lixo pra te empurrar mentira? Não quero o teu dinheiro, mas você precisa dessa verdade. Me dá 3 dias. Se em 3 dias o teu açúcar não despencar, se você não parar de correr pro banheiro toda noite, pode me chamar de mentiroso na praça pública. A verdade é dura: o açúcar alto vai castrando o homem por dentro, e eu passei por essa humilhação. Os médicos de jaleco, fortuna em consulta, comprimido todo dia... conversa pra boi dormir, você só vira refém. Até que o João sentou comigo e falou na lata: larga de ser burro, você tá na mão da indústria. Me entregou o mapa da mina, o protocolo que o alto escalão usa em segredo: o [PRODUTO]. Testei, e a patroa foi quem mais agradeceu. Não tô aqui pra te vender nada, tô passando adiante. Se você quer saber o que o João me revelou, clica aqui embaixo, me chama no WhatsApp. Faz isso pela tua mulher. Homem que é homem não aceita viver na sombra de uma doença. Homem resolve."
 
-GERE AGORA o JSON com cada bloco preenchido. Cada bloco deve ter pelo menos 2-3 frases, exceto blocos curtos (Hook: 1-2 frases; CTA: 3-4 frases). Tom natural, conversacional, em primeira pessoa. SEM markdown, SEM código, SÓ o JSON puro.`;
+Agora ESCREVA o JSON, cada bloco no tom acima — longo, visceral, em primeira pessoa, na voz da persona. SÓ o JSON puro.`;
 
   return { system, user };
 }
@@ -558,8 +578,8 @@ async function _callGeminiModel(env, prompts, model) {
     system_instruction: { parts: [{ text: prompts.system }] },
     contents: [{ role: 'user', parts: [{ text: prompts.user }] }],
     generationConfig: {
-      temperature: 0.95,
-      maxOutputTokens: 2048,
+      temperature: 1.05,
+      maxOutputTokens: 4096,
       responseMimeType: 'application/json',
     },
   };
@@ -624,7 +644,8 @@ async function _callAnthropic(env, prompts) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 2048,
+      max_tokens: 4096,
+      temperature: 1,
       system: prompts.system,
       messages: [{ role: 'user', content: prompts.user }],
     }),

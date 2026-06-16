@@ -3569,8 +3569,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.27.0';
-const APP_LAST_CHANGE = 'Foco Afiliado e sidebar sob medida: (1) modo Produtor entrou em standby, oculto por padrao (toggle Afiliado/Produtor no Financeiro, bloco de modo no cadastro de produto e rotulos "Visao Produtor" sumiram) e reativavel em Configuracoes > Aparencia > Mostrar modo Produtor; nada apagado. (2) Novo controle em Aparencia > Itens da sidebar pra ligar/desligar individualmente o que aparece dentro de cada acordeao (Dashboard, Operacional, Financeiro, WhatsApp, Equipe...). Acordeoes sem item visivel somem sozinhos.';
+const APP_VERSION = '2.28.0';
+const APP_LAST_CHANGE = 'Design & Copy turbinado: a area agora gera copy no formato VSL Campea (esqueleto de 9 blocos das copys validadas - gancho, persona honesta, garantia de 3 dias, humilhacao, vilao, mentor, prova, "nao to vendendo" e CTA no WhatsApp). Tela enxuta (so Persona, Dor e Angulo; gancho e duracao saem de cena). A IA escreve copy longa, varia persona e abertura a cada clique pra nunca sair repetida, e usa linguagem simples do publico 40+ (sem palavra dificil nem frase fora de contexto).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -11776,6 +11776,23 @@ const COPY_GARANTIAS=[
 // Foco em STORYTELLING, não em "anúncio". A copy é o personagem falando.
 // Produto aparece SUTILMENTE no final, e o CTA é empático (não hard sell).
 const COPY_DURACOES={
+  // ─── Formato VSL CAMPEÃ — o esqueleto das copys que já converteram (DNA de 9 blocos).
+  // É o formato padrão da área. Copy longa, narrada, que fecha no próprio anúncio e vai pro WhatsApp.
+  campea:{
+    label:'🏆 VSL Campeã (formato validado)',
+    desc:'O esqueleto das copys que mais converteram: gancho, persona honesta, garantia de 3 dias, humilhação, vilão, mentor, prova, "não tô vendendo" e CTA no WhatsApp.',
+    blocos:[
+      {k:'hook',          t:'Gancho',  l:'🎯 Gancho de ruptura',                        cls:'b-hook'},
+      {k:'credibilidade', t:'Persona', l:'🤝 Persona honesta (não quero teu dinheiro)', cls:'b-ret'},
+      {k:'garantia',      t:'Desafio', l:'⏱ Garantia-desafio (me dá 3 dias)',           cls:'b-ret'},
+      {k:'pico_emocional',t:'Dor',     l:'💔 Agitação · a humilhação vivida calado',    cls:'b-ret'},
+      {k:'tentativas',    t:'Vilão',   l:'😡 Vilão (remédio / indústria não resolve)',  cls:'b-ret'},
+      {k:'indicacao',     t:'Virada',  l:'💡 Mentor revela o produto (natural)',        cls:'b-ret'},
+      {k:'experiencia',   t:'Prova',   l:'✨ Prova pessoal · a transformação',          cls:'b-of'},
+      {k:'desinteresse',  t:'Fecho',   l:'🫱 Não tô vendendo + prova social',           cls:'b-of'},
+      {k:'cta',           t:'CTA',     l:'📣 CTA no WhatsApp + soco de identidade',      cls:'b-cta'},
+    ],
+  },
   '30s':{
     label:'⚡ Reels Rápido (30s)',
     desc:'Hook emocional + CTA leve. Pra engagement de TikTok/Reels.',
@@ -11842,7 +11859,7 @@ let _cpDraft={
   angulo:'historia_pessoal',
   dor:'energia',
   gancho:'historia',
-  duracao:'1min',
+  duracao:'campea',
   persona:'generico',
   blocos:{},
 };
@@ -11947,11 +11964,14 @@ async function cpGerarIdeia(){
   if(!apiEnabled()||!apiToken()){
     toast('Backend não configurado — IA precisa da conexão D1','err');return;
   }
-  const ang=$('cp-angulo').value;
-  const dor=$('cp-dor').value;
-  const gancho=$('cp-gancho').value;
-  const dur=$('cp-duracao').value;
-  const persona=$('cp-persona').value;
+  const ang=$('cp-angulo')?.value||_cpDraft.angulo;
+  const dor=$('cp-dor')?.value||_cpDraft.dor;
+  const dur=$('cp-duracao')?.value||_cpDraft.duracao||'campea';
+  const persona=$('cp-persona')?.value||_cpDraft.persona;
+  // No formato campeão a abertura é sorteada a cada clique pra garantir variedade
+  // (duas copys seguidas nunca abrem do mesmo jeito). Fora dele, respeita o select.
+  const ganchoSel=$('cp-gancho')?.value;
+  const gancho=(dur==='campea')?pick(Object.keys(COPY_GANCHOS)):(ganchoSel||_cpDraft.gancho||'historia');
   _cpDraft.angulo=ang;_cpDraft.dor=dor;_cpDraft.gancho=gancho;_cpDraft.duracao=dur;_cpDraft.persona=persona;
 
   // Monta payload com tudo que a IA precisa pra gerar bem
@@ -11977,7 +11997,7 @@ async function cpGerarIdeia(){
       persona:personaLabel, dor:dorLabel, gancho:ganchoLabel,
       angulo:anguloLabel, duracao:duracaoLabel,
       estrutura, dna_vencedores,
-      contexto:'Produto natural pra controle de açúcar no sangue e energia em pessoas 40+',
+      contexto:'GlicoVax — composto natural pra controle de açúcar no sangue e mais energia/disposição em pessoas 40+. Posicionado contra remédio de farmácia (que só amarra). Modelo COD: o cliente paga só quando recebe em casa, sem cartão, sem PIX antes.',
     });
     // Aplica filtro client-side como segunda camada de segurança
     const blocos={};
@@ -12415,7 +12435,7 @@ function renderCopies(){
         </select>
         <div class="cp-desc" id="cp-dor-desc"></div>
       </div>
-      <div class="field"><label>Tipo de Gancho</label>
+      <div class="field" style="display:none"><label>Tipo de Gancho</label>
         <select id="cp-gancho" onchange="cpUpdateDescs()">
           ${Object.entries(COPY_GANCHOS).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.gancho?'selected':''}>${v.label}</option>`).join('')}
         </select>
@@ -12439,7 +12459,7 @@ function renderCopies(){
         </select>
         <div class="cp-desc" id="cp-angulo-desc"></div>
       </div>
-      <div class="field"><label>Duração do Vídeo</label>
+      <div class="field" style="display:none"><label>Duração do Vídeo</label>
         <select id="cp-duracao" onchange="cpOnDuracaoChange();cpUpdateDescs()">
           ${Object.entries(COPY_DURACOES).map(([k,v])=>`<option value="${k}" title="${(v.desc||'').replace(/"/g,'&quot;')}" ${k===_cpDraft.duracao?'selected':''}>${v.label}</option>`).join('')}
         </select>
@@ -12449,7 +12469,7 @@ function renderCopies(){
 
 
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="A IA (Gemini) escreve um roteiro original baseado nos parâmetros selecionados + DNA dos vencedores · 2-5 segundos">✨ Gerar Copy com IA</button>
+      <button class="btn btn-bl btn-sm" onclick="cpGerarIdeia()" title="A IA escreve uma copy nova no formato VSL campeã (9 blocos), variando persona e abertura a cada clique pra nunca sair repetida · 2-5 segundos">✨ Gerar copy campeã com IA</button>
       <button class="btn btn-gh btn-sm" onclick="cpLimparDraft()" title="Limpa o roteiro atual">${ico('eraser',{size:13})} Limpar</button>
     </div>
 
