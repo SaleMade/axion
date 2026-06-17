@@ -6858,19 +6858,17 @@ function weekdayLabel(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.
 // Distância em dias do dia atribuído até hoje (0=hoje, 1=amanhã, ...), ou null
 function chipDayOffset(c){ const v=chipWeekday(c); return v===null?null:((v-todayWeekday())+7)%7; }
 function isChipActiveToday(c){ return chipDayOffset(c)===0; }
-// Posição na coluna do atendente: "Em uso" manual sempre no topo (-1);
-// senão, dia de hoje (0), próximos dias em seguida; sem dia cai pro fim.
-function chipDayRank(c){
-  if(c.em_uso===true||isEmUsoStatus(getWaStatus(c)))return -1;
-  const off=chipDayOffset(c);
-  if(off!==null)return off;
-  return 50;
-}
-// Chip "fixado" (ativo do dia → contorno + ★): a tag "Em uso" manual SEMPRE
-// fixa, independente do dia. Sem "Em uso", fixa automático quando é o dia de hoje.
-function isChipPinned(c){
-  if(c.em_uso===true || isEmUsoStatus(getWaStatus(c))) return true;
-  return isChipActiveToday(c);
+// "Em uso" manual (tag verde) do chip
+function _isChipEmUso(c){ return c.em_uso===true || isEmUsoStatus(getWaStatus(c)); }
+// Qual chip é o "ATIVO DO DIA" (contorno verde + ★) numa coluna de atendente:
+// UM só. Prioridade: o número cujo dia atribuído == HOJE; se nenhum casar com
+// hoje (ex: fim de semana), cai no que está marcado "Em uso" manual.
+function activeChipId(list){
+  if(!list||!list.length)return null;
+  const hoje=list.find(c=>isChipActiveToday(c));
+  if(hoje)return hoje.id;
+  const emUso=list.find(_isChipEmUso);
+  return emUso?emUso.id:null;
 }
 // Chip utilizável na operação (não-aquecimento, não-banido) → entra na coluna/pool
 function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
@@ -6883,7 +6881,7 @@ function _setChipEmUso(c, on){
     if(c.at){
       const dispId=getDisponivelStatusId();
       (DB.chips||[]).forEach(o=>{
-        if(o!==c && o.at===c.at && isChipPinned(o)){
+        if(o!==c && o.at===c.at && _isChipEmUso(o)){
           o.em_uso=false;
           if(dispId) o.wa_st=dispId;
         }
@@ -7076,11 +7074,15 @@ function renderChipsByAtendente(){
       byAt[c.at].push(c);
     }
   });
-  // Ordena por dia da semana: hoje no topo (ativo do dia), depois amanhã, etc.;
-  // números sem dia atribuído ficam no fim como reserva. Empate → #identificador.
+  // Ordena: o "ativo do dia" da coluna no topo; depois os demais por dia da
+  // semana (hoje, amanhã...); números sem dia caem no fim. Empate → #id.
   Object.keys(byAt).forEach(id=>{
+    const aId=activeChipId(byAt[id]);
     byAt[id].sort((a,b)=>{
-      const ra=chipDayRank(a), rb=chipDayRank(b);
+      const aT=(a.id===aId)?0:1, bT=(b.id===aId)?0:1;
+      if(aT!==bT)return aT-bT;
+      const oa=chipDayOffset(a), ob=chipDayOffset(b);
+      const ra=oa===null?50:oa, rb=ob===null?50:ob;
       if(ra!==rb)return ra-rb;
       return (Number(a.idx)||9999)-(Number(b.idx)||9999);
     });
@@ -7104,7 +7106,7 @@ function renderChipsByAtendente(){
       </div>
       <div class="wk-col-list">
         ${items.length
-          ? items.map(c=>_renderChipCard(c,/*showAtendente*/true)).join('')
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/true,/*activeId*/null)).join('')
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— vazio —</div>`}
       </div>
     </div>`;
@@ -7112,6 +7114,7 @@ function renderChipsByAtendente(){
   // Cor de fundo suave do atendente (alpha bem baixo pra não ficar berrante)
   const colunaAtendente=(at,items)=>{
     const cor=at.color||'#64748b';
+    const aId=activeChipId(items);  // único destaque (ativo do dia) da coluna
     return `
     <div class="wk-col" data-col-id="${at.id}"
         ondragover="_chipDragOver(event)"
@@ -7132,7 +7135,7 @@ function renderChipsByAtendente(){
       </div>
       <div class="wk-col-list">
         ${items.length
-          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false)).join('')
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false,aId)).join('')
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— arraste números aqui —</div>`}
       </div>
     </div>`;
@@ -7189,10 +7192,10 @@ function renderChipsByAtendente(){
 // status atual com dropdown ao clicar). O atendente só aparece quando o card está
 // numa coluna pool (Em Aquecimento / Aquecidos) — dentro da coluna do próprio
 // atendente é redundante.
-function _renderChipCard(c, showAtendente){
+function _renderChipCard(c, showAtendente, activeId){
   const wa=getWaStatus(c);
   const info=getWaStatusInfo(wa);
-  const pinned=isChipPinned(c);  // ativo do dia → fixado no topo + destacado
+  const pinned=(activeId!=null && c.id===activeId);  // único ativo do dia da coluna
   // Bolinha de status operacional no canto superior direito
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
@@ -7290,7 +7293,7 @@ function _chipDropExtended(targetId){
     toast(`📱 ${c.num} → Disponíveis`,'ok');
   } else {
     // Atribui ao atendente E marca como "em uso" (ativo do dia)
-    if(c.at===targetId && isChipPinned(c) && _chipUsavel(c))return false;
+    if(c.at===targetId && _isChipEmUso(c) && _chipUsavel(c))return false;
     c.at=targetId;
     if(c.st==='aquecimento'||c.st==='banido')c.st='ativo';
     _setChipEmUso(c,true);
