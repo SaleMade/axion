@@ -22,7 +22,8 @@
 //   wrangler d1 execute axion --remote --command "SELECT * FROM users"
 // ══════════════════════════════════════════════════════════════
 
-const SESSION_TTL_HOURS = 24 * 7;   // 7 dias — balance entre conveniência e segurança
+const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizante (sliding),
+                                    // sessão ATIVA nunca expira — só a inativa por 30 dias.
                                      // (era 30 dias — sessão zumbi viva por 1 mês se token vazasse)
 const ROLE_DIRETOR = ['diretor','socio','produtor'];
 
@@ -67,11 +68,22 @@ async function authUser(req, env) {
   const token = m[1];
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB.prepare(
-    `SELECT s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct
+    `SELECT s.expires_at, s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct
      FROM sessions s JOIN users u ON s.user_id = u.id
      WHERE s.token = ? AND s.expires_at > ?`
   ).bind(token, now).first();
-  return row || null;
+  if (!row) return null;
+  // Sliding expiry: enquanto o usuário usa, renova o prazo. Pra não gravar a cada
+  // request (polling de 10s), só renova quando falta menos de (TTL - 1 dia) →
+  // no máximo ~1 write/dia por sessão. Assim sessão ativa nunca expira.
+  const fullTtl = SESSION_TTL_HOURS * 3600;
+  if (row.expires_at - now < fullTtl - 86400) {
+    try {
+      await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?')
+        .bind(now + fullTtl, token).run();
+    } catch (_) { /* renovação é best-effort */ }
+  }
+  return row;
 }
 
 function isDirector(user) {
