@@ -2184,7 +2184,7 @@ body.no-producer #mp-mode-block{display:none}
     <div class="m-b">
       <div class="fg fg2">
         <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
-        <div class="field"><label>Número (WhatsApp)</label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
+        <div class="field"><label style="display:flex;align-items:center;gap:6px">Número (WhatsApp) <button type="button" onclick="testChipWhats()" title="Abre o WhatsApp desse número numa nova aba pra você conferir se ele existe/está ativo" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit">testar ↗</button></label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
@@ -7794,6 +7794,22 @@ function advanceWarmDay(){
   if(document.querySelector('.page#contingencia-pg.active')){renderChips();renderChipsByAtendente();}
 }
 
+// Monta o link wa.me de um número BR. Tira tudo que não é dígito; se tiver só
+// DDD+número (até 11 dígitos) prefixa o código do país 55; se já vier com país
+// (12-13 dígitos) usa direto. Assim DDD 55 não quebra.
+function waLinkFromNum(num){
+  let d=(num||'').replace(/\D/g,'');
+  if(!d)return null;
+  if(d.length<=11) d='55'+d;
+  return 'https://wa.me/'+d;
+}
+// Botão "testar ↗" do modal: abre o WhatsApp do número (aba nova) pra conferir
+// se o chip tem WhatsApp ativo antes de iniciar contato.
+function testChipWhats(){
+  const url=waLinkFromNum($('mc-num')?.value||'');
+  if(!url){toast('Número inválido pra testar','err');return;}
+  window.open(url,'_blank','noopener');
+}
 function saveChip(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
   // Status operacional (st) agora é automático: aquecimento por 7 dias → ativo.
