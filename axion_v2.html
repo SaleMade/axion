@@ -3569,8 +3569,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.29.0';
-const APP_LAST_CHANGE = 'Multi-usuario mais seguro: corrigido o bug de "mudei tag/numero num PC e sumiu no outro". Antes, quando dois PCs salvavam quase juntos, o ultimo reenviava o estado inteiro e apagava a mudanca do outro. Agora, em conflito, a dash faz MERGE 3-way por item (servidor + suas mudancas), entao tag mexida num PC e numero mexido em outro coexistem; adicoes/edicoes/delecoes de cada um sao preservadas.';
+const APP_VERSION = '2.30.0';
+const APP_LAST_CHANGE = 'Contingencia/sync mais confiavel: (1) arrastar um numero pra "Em Aquecimento" agora REINICIA o ciclo (warm_start = hoje) - antes, numeros com aquecimento antigo voltavam sozinhos pra ativo no refresh (parecia que o arraste "nao salvava"); (2) os pushes pro servidor foram serializados, entao arrastar varios numeros rapido nao gera mais corrida que perde mudanca; (3) somado ao merge 3-way, mudancas de PCs diferentes coexistem e persistem.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3795,7 +3795,7 @@ function debouncedServerSync(){
 }
 // True quando há mudanças locais aguardando push — bloqueia pull de outros PCs
 // pra não sobrescrever edição em andamento (race condition de invest, aportes, etc).
-function hasPendingSync(){ return !!_syncTimer || _409retry; }
+function hasPendingSync(){ return !!_syncTimer || _409retry || _syncing; }
 
 // Push IMEDIATO pro servidor (sem debounce de 2s). Use após ações financeiras
 // críticas (gastos, investimentos, aportes) pra que outros dispositivos vejam
@@ -3853,7 +3853,18 @@ document.addEventListener('visibilitychange',async()=>{
   }
 });
 
+let _syncing=false,_syncDirty=false;
+// Serializa os pushes pro servidor: se já há um rodando, marca "dirty" e o push
+// atual repete com o estado mais novo ao terminar. Evita corrida quando o usuário
+// arrasta vários números rápido em sequência (cada drop dispara um push).
 async function serverSyncNow(){
+  if(!apiEnabled()||!apiToken())return;
+  if(_syncing){_syncDirty=true;return;}
+  _syncing=true;
+  try{ do{ _syncDirty=false; await _doServerSync(); }while(_syncDirty); }
+  finally{ _syncing=false; }
+}
+async function _doServerSync(){
   if(!apiEnabled()||!apiToken())return;
   try{
     const r=await api.postState(_buildSyncBlob(),serverVersion);
@@ -7339,8 +7350,12 @@ function _chipDropExtended(targetId){
     if(c.st==='aquecimento')return false; // já está lá
     c.st='aquecimento';
     _setChipEmUso(c,false);
-    if(!c.warm_start)c.warm_start=new Date().toISOString().split('T')[0];
-    toast(`📱 ${c.num} → Em Aquecimento`,'ok');
+    // Reinicia o ciclo de aquecimento SEMPRE (não só quando vazio). Senão um
+    // warm_start antigo faz o autoPromoteWarmedChips promover o chip de volta
+    // pra "ativo" no próximo refresh — era o motivo do arraste "voltar sozinho".
+    c.warm_start=new Date().toISOString().split('T')[0];
+    c.dia=1;
+    toast(`📱 ${c.num} → Em Aquecimento (reiniciado)`,'ok');
   } else if(targetId==='__aquecidos__'){
     // Pool "Disponíveis": libera o número (sem atendente, sem em uso)
     if(_chipUsavel(c) && !c.at)return false; // já está lá
