@@ -6945,16 +6945,17 @@ function weekdayShort(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.
 function weekdayLabel(v){ const w=WEEKDAYS.find(x=>x.v===Number(v)); return w?w.label:''; }
 // Distância em dias do dia atribuído até hoje (0=hoje, 1=amanhã, ...), ou null
 function chipDayOffset(c){ const v=chipWeekday(c); return v===null?null:((v-todayWeekday())+7)%7; }
+// Selo do dia fica VERDE só quando o dia atribuído == hoje (lembrete visual)
 function isChipActiveToday(c){ return chipDayOffset(c)===0; }
+// Ordem fixa na coluna: Segunda(0) → ... → Domingo(6); sem dia cai pro fim.
+function chipWeekRank(c){ const v=chipWeekday(c); return v===null?50:((v+6)%7); }
 // "Em uso" manual (tag verde) do chip
 function _isChipEmUso(c){ return c.em_uso===true || isEmUsoStatus(getWaStatus(c)); }
-// Qual chip é o "ATIVO DO DIA" (contorno verde + ★) numa coluna de atendente:
-// UM só. Prioridade: o número cujo dia atribuído == HOJE; se nenhum casar com
-// hoje (ex: fim de semana), cai no que está marcado "Em uso" manual.
+// O "ATIVO DO DIA" (contorno verde + ★) segue a tag "Em uso" MANUAL — NÃO o dia
+// de hoje. Assim, se o número em uso não for o do dia, o destaque fica nele e o
+// usuário percebe que precisa trocar. UM só por coluna.
 function activeChipId(list){
   if(!list||!list.length)return null;
-  const hoje=list.find(c=>isChipActiveToday(c));
-  if(hoje)return hoje.id;
   const emUso=list.find(_isChipEmUso);
   return emUso?emUso.id:null;
 }
@@ -7162,15 +7163,11 @@ function renderChipsByAtendente(){
       byAt[c.at].push(c);
     }
   });
-  // Ordena: o "ativo do dia" da coluna no topo; depois os demais por dia da
-  // semana (hoje, amanhã...); números sem dia caem no fim. Empate → #id.
+  // Ordena por dia da semana em ordem FIXA: Segunda no topo, descendo até
+  // Domingo; números sem dia caem no fim. Empate → #identificador.
   Object.keys(byAt).forEach(id=>{
-    const aId=activeChipId(byAt[id]);
     byAt[id].sort((a,b)=>{
-      const aT=(a.id===aId)?0:1, bT=(b.id===aId)?0:1;
-      if(aT!==bT)return aT-bT;
-      const oa=chipDayOffset(a), ob=chipDayOffset(b);
-      const ra=oa===null?50:oa, rb=ob===null?50:ob;
+      const ra=chipWeekRank(a), rb=chipWeekRank(b);
       if(ra!==rb)return ra-rb;
       return (Number(a.idx)||9999)-(Number(b.idx)||9999);
     });
