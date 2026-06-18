@@ -6849,7 +6849,7 @@ function pageContingencia(){
         <span class="cont-det-arrow" style="color:var(--t4);font-size:11px;transition:transform .2s">▶</span>
         <span>📡 Contingência de Números</span>
         <span class="muted" style="font-size:11px;flex:1"></span>
-        <button type="button" onclick="event.stopPropagation();openTestAllNumbers()" title="Abre a lista de todos os números pra testar no WhatsApp / copiar" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit;font-weight:600">testar todos ↗</button>
+        <button type="button" onclick="event.stopPropagation();openTestAllNumbers()" title="Abre a lista de todos os números pra testar no WhatsApp / copiar" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit;font-weight:600">ver todos ↗</button>
         <span class="muted" style="font-size:11px">${(DB.chips||[]).length} chips</span>
       </summary>
       <div style="padding:14px 18px;border-top:1px solid var(--b1)">
@@ -7851,10 +7851,15 @@ function openTestAllNumbers(){
   }).join(''):'<div class="muted" style="text-align:center;padding:20px;font-size:13px">Nenhum número cadastrado.</div>';
   openM('m-test-nums');
 }
-// Copia todos os números (um por linha) pra área de transferência
+// Copia todos os números (um por linha) com o identificador na frente:
+// "03 - (15) 98116-3820"
 function copyAllNumbers(){
-  const txt=_chipsParaTestar().map(c=>c.num).join('\n');
-  if(!txt){toast('Nenhum número pra copiar','err');return;}
+  const list=_chipsParaTestar();
+  if(!list.length){toast('Nenhum número pra copiar','err');return;}
+  const txt=list.map(c=>{
+    const id=(c.idx!=null&&c.idx!=='')?String(c.idx).padStart(2,'0'):'--';
+    return `${id} - ${c.num}`;
+  }).join('\n');
   navigator.clipboard.writeText(txt)
     .then(()=>toast('Números copiados','ok'))
     .catch(()=>toast('Não consegui copiar','err'));
