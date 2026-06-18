@@ -867,7 +867,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   border-radius:var(--rl) var(--rl) 0 0}
 .wk-col-name{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--tx)}
 .wk-col-cnt{background:var(--s4);font-size:11px;font-weight:600;color:var(--t2);padding:2px 7px;border-radius:9px;font-variant-numeric:tabular-nums}
-.wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px}
+.wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px;
+  scrollbar-width:none;-ms-overflow-style:none}
+.wk-col-list::-webkit-scrollbar{width:0;height:0;display:none}
 /* Cards no estilo CRM Pipeline — sem borda lateral, fundo neutro, hover sutil */
 .wk-chip{background:var(--s2);border:1px solid var(--b1);
   border-radius:var(--r);padding:12px 13px;cursor:grab;transition:all .15s;
