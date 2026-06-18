@@ -7373,7 +7373,22 @@ function _chipDropExtended(targetId){
     toast(`📱 ${c.num} → ${novoNome} (em uso)`,'ok');
   }
   renderChipsByAtendente();
-  persistAndPushNow().catch(_=>{});
+  // [DIAG TEMP — só diretor] confirma no servidor o que foi gravado após o move,
+  // pra isolar se o problema é no salvar ou no recarregar. Remover depois.
+  const _dId=chipId, _aq=(targetId==='__aquecimento__'), _disp=(targetId==='__aquecidos__');
+  persistAndPushNow().then(async()=>{
+    if(!isDir())return;
+    try{
+      const srv=await api.getState();
+      const sc=((srv.data&&srv.data.chips)||[]).find(x=>x.id===_dId);
+      if(!sc){toast('[diag] chip não veio do servidor','err');return;}
+      const want=_aq?'st=aquecimento':_disp?'sem atendente':('at='+targetId);
+      const got=_aq?('st='+sc.st):('at='+(sc.at||'—')+' / st='+sc.st);
+      const ok=_aq?(sc.st==='aquecimento'):_disp?(!sc.at):(String(sc.at||'')===String(targetId));
+      toast(`[diag] servidor v${srv.version} · #${sc.idx||_dId}: ${got} (queria ${want})`, ok?'ok':'err');
+      console.log('[DIAG move]',{chip:_dId,quer:want,servidorChip:sc,version:srv.version});
+    }catch(e){toast('[diag] erro getState: '+(e.message||e),'err');}
+  }).catch(_=>{});
   return true;
 }
 
