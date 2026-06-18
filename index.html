@@ -7373,22 +7373,23 @@ function _chipDropExtended(targetId){
     toast(`📱 ${c.num} → ${novoNome} (em uso)`,'ok');
   }
   renderChipsByAtendente();
-  // [DIAG TEMP — só diretor] confirma no servidor o que foi gravado após o move,
-  // pra isolar se o problema é no salvar ou no recarregar. Remover depois.
-  const _dId=chipId, _aq=(targetId==='__aquecimento__'), _disp=(targetId==='__aquecidos__');
-  persistAndPushNow().then(async()=>{
-    if(!isDir())return;
+  // [DIAG TEMP — só diretor] reporta o resultado do PUSH do move direto (status +
+  // estado do token), SEM apagar o login no meio, pra isolar a causa. Remover depois.
+  if(!isDir()){ persistAndPushNow().catch(_=>{}); return true; }
+  (async()=>{
+    const tok=apiToken();
+    const tokInfo=tok?(`${tok.length}ch …${tok.slice(-4)}`):'AUSENTE';
     try{
-      const srv=await api.getState();
-      const sc=((srv.data&&srv.data.chips)||[]).find(x=>x.id===_dId);
-      if(!sc){toast('[diag] chip não veio do servidor','err');return;}
-      const want=_aq?'st=aquecimento':_disp?'sem atendente':('at='+targetId);
-      const got=_aq?('st='+sc.st):('at='+(sc.at||'—')+' / st='+sc.st);
-      const ok=_aq?(sc.st==='aquecimento'):_disp?(!sc.at):(String(sc.at||'')===String(targetId));
-      toast(`[diag] servidor v${srv.version} · #${sc.idx||_dId}: ${got} (queria ${want})`, ok?'ok':'err');
-      console.log('[DIAG move]',{chip:_dId,quer:want,servidorChip:sc,version:srv.version});
-    }catch(e){toast('[diag] erro getState: '+(e.message||e),'err');}
-  }).catch(_=>{});
+      try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(_){}
+      const r=await api.postState(_buildSyncBlob(), serverVersion);
+      serverVersion=r.version; _snapshotBase();
+      toast(`[diag] PUSH OK · v${r.version} · token ${tokInfo}`,'ok');
+      console.log('[DIAG push]',{ok:true,version:r.version});
+    }catch(e){
+      toast(`[diag] PUSH FALHOU · status ${e.status||'?'} · ${e.message||e} · token ${tokInfo}`,'err');
+      console.log('[DIAG push]',{status:e.status,msg:e.message,data:e.data});
+    }
+  })();
   return true;
 }
 
