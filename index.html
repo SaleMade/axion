@@ -2188,7 +2188,7 @@ body.no-producer #mp-mode-block{display:none}
         <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Número (WhatsApp) <button type="button" onclick="testChipWhats()" title="Abre o WhatsApp desse número numa nova aba pra você conferir se ele existe/está ativo" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit">testar ↗</button></label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
-        <div class="field"><label>Modelo do celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
+        <div class="field"><label>WhatsApp no celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
         <div class="field"><label>Última recarga</label><input id="mc-rec" type="date"></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
@@ -2238,6 +2238,23 @@ body.no-producer #mp-mode-block{display:none}
         style="width:100%;background:var(--s3) url(&quot;data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237f8a9c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>&quot;) no-repeat 11px center;border:1px solid var(--b2);color:var(--tx);padding:9px 12px 9px 34px;border-radius:var(--r);margin-bottom:12px;font-family:inherit;font-size:13px;outline:none">
       <p class="muted" style="font-size:11.5px;margin-bottom:8px">Clique no número que quer atribuir. Pra criar um chip novo, use "+ Novo Chip" no topo da página.</p>
       <div id="mcp-list" style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: TESTAR TODOS OS NÚMEROS (WhatsApp) ═══ -->
+<div class="overlay" id="m-test-nums">
+  <div class="modal">
+    <div class="m-h">
+      <span class="mt">Testar números no WhatsApp</span>
+      <div class="m-actions">
+        <button class="btn btn-gh btn-sm" onclick="copyAllNumbers()">Copiar todos</button>
+        <button class="m-x" onclick="closeM('m-test-nums')">×</button>
+      </div>
+    </div>
+    <div class="m-b">
+      <p class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">Clique em qualquer número pra abrir o WhatsApp dele numa aba nova e conferir se está ativo. Ou use "Copiar todos" pra levar a lista.</p>
+      <div id="test-nums-list" style="display:flex;flex-direction:column;gap:6px;max-height:440px;overflow-y:auto"></div>
     </div>
   </div>
 </div>
@@ -6832,6 +6849,7 @@ function pageContingencia(){
         <span class="cont-det-arrow" style="color:var(--t4);font-size:11px;transition:transform .2s">▶</span>
         <span>📡 Contingência de Números</span>
         <span class="muted" style="font-size:11px;flex:1"></span>
+        <button type="button" onclick="event.stopPropagation();openTestAllNumbers()" title="Abre a lista de todos os números pra testar no WhatsApp / copiar" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit;font-weight:600">testar todos ↗</button>
         <span class="muted" style="font-size:11px">${(DB.chips||[]).length} chips</span>
       </summary>
       <div style="padding:14px 18px;border-top:1px solid var(--b1)">
@@ -7811,6 +7829,35 @@ function testChipWhats(){
   const url=waLinkFromNum($('mc-num')?.value||'');
   if(!url){toast('Número inválido pra testar','err');return;}
   window.open(url,'_blank','noopener');
+}
+// Lista (respeitando permissão) de todos os chips, ordenada por #identificador
+function _chipsParaTestar(){
+  return (DB.chips||[]).filter(c=>isDir()||c.at===CUR.id)
+    .slice().sort((a,b)=>(Number(a.idx)||9999)-(Number(b.idx)||9999));
+}
+// Abre o modal com todos os números pra testar no WhatsApp / copiar
+function openTestAllNumbers(){
+  const list=_chipsParaTestar();
+  const wrap=$('test-nums-list');if(!wrap)return;
+  wrap.innerHTML=list.length?list.map(c=>{
+    const url=waLinkFromNum(c.num);
+    const at=getTeam(c.at);
+    return `<a href="${url}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--b1);border-radius:var(--r);text-decoration:none;color:var(--tx);background:var(--s2)">
+      <span style="font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;color:var(--bl2);min-width:32px">#${c.idx||'?'}</span>
+      <span style="flex:1;font-family:ui-monospace,monospace;font-size:13.5px;font-weight:600">${c.num}</span>
+      <span style="font-size:11px;color:var(--t3);white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis">${at?at.name:'—'}</span>
+      <span style="font-size:11px;color:var(--bl2);white-space:nowrap">testar ↗</span>
+    </a>`;
+  }).join(''):'<div class="muted" style="text-align:center;padding:20px;font-size:13px">Nenhum número cadastrado.</div>';
+  openM('m-test-nums');
+}
+// Copia todos os números (um por linha) pra área de transferência
+function copyAllNumbers(){
+  const txt=_chipsParaTestar().map(c=>c.num).join('\n');
+  if(!txt){toast('Nenhum número pra copiar','err');return;}
+  navigator.clipboard.writeText(txt)
+    .then(()=>toast('Números copiados','ok'))
+    .catch(()=>toast('Não consegui copiar','err'));
 }
 function saveChip(){
   const c=DB.chips.find(x=>x.id===editingChipId);if(!c)return;
