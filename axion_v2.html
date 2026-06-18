@@ -3569,8 +3569,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.28.0';
-const APP_LAST_CHANGE = 'Design & Copy turbinado: a area agora gera copy no formato VSL Campea (esqueleto de 9 blocos das copys validadas - gancho, persona honesta, garantia de 3 dias, humilhacao, vilao, mentor, prova, "nao to vendendo" e CTA no WhatsApp). Tela enxuta (so Persona, Dor e Angulo; gancho e duracao saem de cena). A IA escreve copy longa, varia persona e abertura a cada clique pra nunca sair repetida, e usa linguagem simples do publico 40+ (sem palavra dificil nem frase fora de contexto).';
+const APP_VERSION = '2.29.0';
+const APP_LAST_CHANGE = 'Multi-usuario mais seguro: corrigido o bug de "mudei tag/numero num PC e sumiu no outro". Antes, quando dois PCs salvavam quase juntos, o ultimo reenviava o estado inteiro e apagava a mudanca do outro. Agora, em conflito, a dash faz MERGE 3-way por item (servidor + suas mudancas), entao tag mexida num PC e numero mexido em outro coexistem; adicoes/edicoes/delecoes de cada um sao preservadas.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3735,6 +3735,7 @@ const api={
 // ─── Sync state com servidor ───
 let _syncTimer=null;
 let _409retry=false; // flag pra evitar loop infinito em retry de conflito
+let _baseBlob=null;  // ancestral comum (último estado em sync) p/ merge 3-way em conflito
 
 // Monta o blob enviado pro servidor — sem campos locais (team, feed, wh_log)
 function _buildSyncBlob(){
@@ -3743,6 +3744,49 @@ function _buildSyncBlob(){
   delete blob.feed;     // log visual local
   delete blob.wh_log;   // log de webhooks local
   return blob;
+}
+
+// Tira um "snapshot" do estado atual como ancestral comum pro próximo merge.
+// Chamado sempre que confirmamos sincronia com o servidor (push ok ou pull).
+function _snapshotBase(){ try{_baseBlob=JSON.parse(JSON.stringify(_buildSyncBlob()))}catch(_){_baseBlob=null} }
+
+// ─── Merge 3-way (resolve conflito multi-usuário sem clobber) ───
+// base = ancestral comum · mine = meu estado local · theirs = estado novo do servidor.
+// Resultado = parte do servidor + minhas mudanças aplicadas por item (id). Assim,
+// se o PC A mexeu numa tag e o PC B mexeu num número, os dois sobrevivem.
+function _byIdMap(arr){const m={};(arr||[]).forEach(x=>{if(x&&x.id!=null)m[x.id]=x});return m;}
+function _isIdArr(v){return Array.isArray(v)&&v.length>0&&v.every(x=>x&&typeof x==='object'&&x.id!=null);}
+function _merge3Array(base,mine,theirs){
+  const b=_byIdMap(base),m=_byIdMap(mine),t=_byIdMap(theirs);
+  const out={...t};                          // começa do servidor (preserva mudanças dos outros)
+  Object.keys(m).forEach(id=>{               // aplica minhas adições/edições
+    if(!b[id]){out[id]=m[id];return;}                                  // novo meu → entra
+    if(JSON.stringify(b[id])!==JSON.stringify(m[id]))out[id]=m[id];     // editei → minha versão vence
+  });
+  Object.keys(b).forEach(id=>{               // minhas deleções (só se o outro não mexeu no item)
+    if(!m[id]){
+      const theyChanged=t[id]&&JSON.stringify(t[id])!==JSON.stringify(b[id]);
+      if(!theyChanged)delete out[id];
+    }
+  });
+  const order=[];                            // mantém ordem: servidor primeiro, depois meus novos
+  (theirs||[]).forEach(x=>{if(x&&out[x.id]!=null){order.push(x.id);}});
+  (mine||[]).forEach(x=>{if(x&&out[x.id]!=null&&order.indexOf(x.id)<0)order.push(x.id);});
+  return order.map(id=>out[id]);
+}
+function mergeBlobs(base,mine,theirs){
+  if(!base||typeof base!=='object'||!theirs)return mine; // sem ancestral → não dá pra mesclar
+  const out={...theirs};
+  Object.keys(mine).forEach(k=>{
+    const mv=mine[k],tv=theirs[k],bv=base[k];
+    if(_isIdArr(mv)&&Array.isArray(tv)){
+      out[k]=_merge3Array(Array.isArray(bv)?bv:[],mv,tv);
+    }else{
+      const iChanged=JSON.stringify(bv)!==JSON.stringify(mv);
+      out[k]=iChanged?mv:(k in theirs?tv:mv);   // mexi vs base → meu; senão, do servidor
+    }
+  });
+  return out;
 }
 
 function debouncedServerSync(){
@@ -3815,23 +3859,35 @@ async function serverSyncNow(){
     const r=await api.postState(_buildSyncBlob(),serverVersion);
     serverVersion=r.version;
     _409retry=false; // sucesso resetar flag
+    _snapshotBase(); // estado confirmado no servidor = novo ancestral comum
   }catch(e){
     if(e.status===409){
-      // CONFLITO: outro usuário escreveu antes.
-      // Estratégia: tenta UMA vez com versão atualizada (mantém edições locais).
-      // Se falhar de novo, pull do server e avisa pra evitar loop infinito.
+      // CONFLITO: outro PC escreveu antes. NÃO reenviar nosso blob inteiro (apagaria
+      // a mudança do outro). Fazemos MERGE 3-way: servidor + nossas mudanças por item.
+      // Assim tag mexida no PC A e número mexido no PC B coexistem.
       const newVer=e.data?.current_version;
       if(typeof newVer==='number')serverVersion=newVer;
-      if(!_409retry){
-        _409retry=true;
-        setTimeout(()=>{_409retry=false;serverSyncNow()},300);
-        return;
+      try{
+        const srv=await api.getState();
+        const merged=mergeBlobs(_baseBlob,_buildSyncBlob(),srv.data||{});
+        const team=DB.team,feed=DB.feed,wh_log=DB.wh_log;
+        DB=Object.assign({},DB,merged);
+        DB.team=team;DB.feed=feed;DB.wh_log=wh_log;
+        rebindGlobals();
+        serverVersion=srv.version;
+        refreshUI();
+        const r2=await api.postState(_buildSyncBlob(),serverVersion); // re-envia o merge
+        serverVersion=r2.version;
+        _snapshotBase();
+        _409retry=false;
+      }catch(err2){
+        // Merge/re-push falhou (ex: 3º write no meio) — backup local + pull do servidor
+        try{localStorage.setItem('axion_db_v2_conflict_'+Date.now(),JSON.stringify(DB))}catch(_){}
+        await syncFromServer();
+        refreshUI();
+        toast('⚠ Conflito de edição — recarreguei do servidor. Backup local salvo.','err');
+        _409retry=false;
       }
-      // Retry também falhou — backup do estado local antes de sobrescrever
-      try{localStorage.setItem('axion_db_v2_conflict_'+Date.now(),JSON.stringify(DB))}catch(_){}
-      await syncFromServer();
-      refreshUI();
-      toast('⚠ Outro usuário editou ao mesmo tempo. Suas mudanças foram salvas em backup local. Reaplique se necessário.','err');
     } else if(e.status===401){
       // Sessão expirou — força logout
       try{localStorage.removeItem('axion_api_token')}catch(_){}
@@ -3862,6 +3918,7 @@ async function syncFromServer(){
       // por usar referência stale ao kb_cols antigo
       rebindGlobals();
       serverVersion=r.version;
+      _snapshotBase(); // acabou de sincronizar com o servidor = novo ancestral comum
       try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
     }
     // Sincroniza users do servidor
