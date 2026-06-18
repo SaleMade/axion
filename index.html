@@ -3569,8 +3569,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.30.0';
-const APP_LAST_CHANGE = 'Contingencia/sync mais confiavel: (1) arrastar um numero pra "Em Aquecimento" agora REINICIA o ciclo (warm_start = hoje) - antes, numeros com aquecimento antigo voltavam sozinhos pra ativo no refresh (parecia que o arraste "nao salvava"); (2) os pushes pro servidor foram serializados, entao arrastar varios numeros rapido nao gera mais corrida que perde mudanca; (3) somado ao merge 3-way, mudancas de PCs diferentes coexistem e persistem.';
+const APP_VERSION = '2.31.0';
+const APP_LAST_CHANGE = 'Login que nao cai mais + arraste preserva a tag: (1) a sessao agora RENOVA sozinha enquanto voce usa (sliding) e dura 30 dias - some o bug de "salvei e nao foi"/some no refresh por sessao expirada (era preciso relogar); (2) arrastar um numero pra coluna de um atendente NAO marca mais "em uso" automatico nem troca a tag - o numero vai pro atendente mantendo a tag que voce escolheu (Restrito, etc); o "ativo do dia" so muda marcando a tag "Em uso" ou pelo dia da semana.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7364,32 +7364,18 @@ function _chipDropExtended(targetId){
     _setChipEmUso(c,false);
     toast(`📱 ${c.num} → Disponíveis`,'ok');
   } else {
-    // Atribui ao atendente E marca como "em uso" (ativo do dia)
-    if(c.at===targetId && _isChipEmUso(c) && _chipUsavel(c))return false;
+    // Atribui o número ao atendente PRESERVANDO a tag/status que ele já tem.
+    // NÃO marca "em uso" automático — senão sobrescreveria a tag escolhida pelo
+    // usuário (ex: Restrito). O "ativo do dia" é definido marcando a tag "Em uso"
+    // ou pelo dia da semana (dia_uso).
+    if(c.at===targetId && _chipUsavel(c))return false;
     c.at=targetId;
     if(c.st==='aquecimento'||c.st==='banido')c.st='ativo';
-    _setChipEmUso(c,true);
     const novoNome=getTeam(targetId)?.name||'atendente';
-    toast(`📱 ${c.num} → ${novoNome} (em uso)`,'ok');
+    toast(`📱 ${c.num} → ${novoNome}`,'ok');
   }
   renderChipsByAtendente();
-  // [DIAG TEMP — só diretor] reporta o resultado do PUSH do move direto (status +
-  // estado do token), SEM apagar o login no meio, pra isolar a causa. Remover depois.
-  if(!isDir()){ persistAndPushNow().catch(_=>{}); return true; }
-  (async()=>{
-    const tok=apiToken();
-    const tokInfo=tok?(`${tok.length}ch …${tok.slice(-4)}`):'AUSENTE';
-    try{
-      try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(_){}
-      const r=await api.postState(_buildSyncBlob(), serverVersion);
-      serverVersion=r.version; _snapshotBase();
-      toast(`[diag] PUSH OK · v${r.version} · token ${tokInfo}`,'ok');
-      console.log('[DIAG push]',{ok:true,version:r.version});
-    }catch(e){
-      toast(`[diag] PUSH FALHOU · status ${e.status||'?'} · ${e.message||e} · token ${tokInfo}`,'err');
-      console.log('[DIAG push]',{status:e.status,msg:e.message,data:e.data});
-    }
-  })();
+  persistAndPushNow().catch(_=>{});
   return true;
 }
 
