@@ -8010,11 +8010,11 @@ function renderPressels(){
     <div class="ph"><div><h1>Pressels <em>& Roleta</em></h1></div></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 16px">
       <button class="btn btn-gh btn-sm" onclick="addPresselInline()">+ Nova Pressel</button>
-      <span class="muted" style="font-size:12px;flex:1;min-width:240px">A roleta distribui os leads usando o número <b>em uso</b> de cada atendente (da Contingência) e pula automaticamente os banidos/restritos.</span>
+      <span class="muted" style="font-size:12px;flex:1;min-width:200px">A roleta distribui os leads usando o número <b>em uso</b> de cada atendente (da Contingência) e pula automaticamente os banidos/restritos. Conecte o WhatsApp de cada número direto no interruptor.</span>
+      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()" title="Configurar a conexão com a Evolution API (uma vez só)">${evoCfg().url?'WhatsApp ✓':'Configurar WhatsApp'}</button>
     </div>
     ${list.length? list.map(presselPanel).join('') :
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
-    ${connectionPanel()}
   `;
   list.forEach(p=>renderPresselVendList(p.id));
 }
@@ -8083,11 +8083,16 @@ function renderPresselVendList(pid){
     const dot=!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)';
     const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
+    // Conexão WhatsApp inline: aparece quando o número está na roleta
+    const connectLink = (isOn&&chip)
+      ? `<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:3px 0 0;font-family:inherit">conectar WhatsApp ↗</button>`
+      : '';
     return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${isOn?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${isOn?'var(--bld)':'var(--s2)'}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--t3)">${at.name}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
+        ${connectLink}
       </div>
       <div class="ax-sw ${isOn?'on':''}" title="${isOn?'Na roleta':'Fora'}" onclick="togglePresselVendInline(${pid},'${at.id}')"></div>
     </div>`;
@@ -8218,37 +8223,15 @@ function presselCTA(id){
 }
 
 /* ─── Conexão WhatsApp (Evolution API) ───
-   A roleta já roda só com a Contingência. Esta área é pra, no futuro,
-   conectar cada WhatsApp via QR num servidor Evolution API e detectar
-   ban automaticamente. O servidor Evolution roda FORA do Cloudflare
-   (VPS/Docker); aqui guardamos a URL/chave e chamamos a API dele. */
-function connectionPanel(){
-  const ev=DB.evolution||{};
-  const ats=_roletaAtendentes();
-  const linhas = !ev.url
-    ? `<p class="muted" style="font-size:12px">Configure a URL da sua Evolution API pra liberar a conexão por QR. O servidor Evolution roda num VPS/Docker (fora da dash).</p>`
-    : ats.map(at=>{
-        const chip=_atendenteActiveChip(at.id);
-        return `<div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid var(--b1);border-radius:var(--r);margin-bottom:6px">
-          <span style="width:8px;height:8px;border-radius:50%;background:var(--t4);flex-shrink:0"></span>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:12.5px;font-weight:600;color:var(--tx)">${at.name}</div>
-            <div style="font-size:12px;color:var(--t3);font-family:ui-monospace,monospace">${chip?chip.num:'sem número em uso'}</div>
-          </div>
-          <button class="btn btn-gh btn-sm" onclick="evoConnect('${at.id}')">Conectar (QR)</button>
-        </div>`;
-      }).join('');
-  return `<div class="panel" style="margin-top:8px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-      <h3 style="font-size:14px;margin:0;color:var(--tx)">Conexão WhatsApp (Evolution API)</h3>
-      <span class="muted" style="font-size:11px;flex:1;min-width:200px">Conecta os WhatsApps via QR pra detectar ban e tirar da roleta. Requer um servidor Evolution API rodando.</span>
-      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()">Configurar</button>
-    </div>
-    ${linhas}
-  </div>`;
-}
+   A conexão por QR acontece INLINE na roleta (link "conectar WhatsApp" em
+   cada número ligado). A config da Evolution fica baked aqui em EVOLUTION_API
+   (vale pra todos, sem precisar configurar na UI). Enquanto vazia, usa
+   DB.evolution (configurável uma vez no botão "Configurar WhatsApp").
+   O servidor Evolution roda FORA do Cloudflare (VPS/Docker). */
+const EVOLUTION_API={url:'',key:''};
+function evoCfg(){ return EVOLUTION_API.url?EVOLUTION_API:(DB.evolution||{}); }
 function openEvolutionConfig(){
-  const ev=DB.evolution||{};
+  const ev=evoCfg();
   const body=$('evo-body'); if(!body) return;
   $('evo-title').textContent='Configurar Evolution API';
   body.innerHTML=`
@@ -8267,7 +8250,7 @@ function saveEvolutionConfig(){
   persistAndPushNow().catch(_=>{});
 }
 async function evoConnect(atId){
-  const ev=DB.evolution||{};
+  const ev=evoCfg();
   if(!ev.url){toast('Configure a Evolution API primeiro','err');openEvolutionConfig();return;}
   const at=getTeam(atId);
   const inst='ax_'+atId;
