@@ -2259,6 +2259,43 @@ body.no-producer #mp-mode-block{display:none}
   </div>
 </div>
 
+<!-- ═══ MODAL: PRESSEL (criar/editar) ═══ -->
+<div class="overlay" id="m-pressel">
+  <div class="modal">
+    <div class="m-h">
+      <span class="mt" id="mp-title">Pressel</span>
+      <div class="m-actions">
+        <button class="btn btn-re btn-sm" id="mp-del" onclick="deletePressel()">Excluir</button>
+        <button class="btn btn-bl btn-sm" onclick="savePressel()">Salvar</button>
+        <button class="m-x" onclick="closeM('m-pressel')">×</button>
+      </div>
+    </div>
+    <div class="m-b">
+      <div class="fg fg2">
+        <div class="field"><label>Nome</label><input id="mp-nome" placeholder="Ex: Glico - Operação"></div>
+        <div class="field"><label>Status</label><select id="mp-status"><option value="ativa">Ativa</option><option value="pausada">Pausada</option></select></div>
+        <div class="field" style="grid-column:span 2"><label>Imagem do criativo (URL)</label><input id="mp-img" placeholder="https://..."></div>
+        <div class="field"><label>Texto do botão (CTA)</label><input id="mp-cta" placeholder="FALAR NO WHATSAPP"></div>
+        <div class="field"><label>Pixel TikTok (ID)</label><input id="mp-tt" placeholder="ex: C9XXXXXXXXXXXX"></div>
+        <div class="field" style="grid-column:span 2"><label>Mensagem inicial do WhatsApp</label><textarea id="mp-msg" rows="2" placeholder="Oi! Vim pelo anúncio e tenho interesse..."></textarea></div>
+      </div>
+      <div style="margin-top:16px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--t2);margin-bottom:8px">Vendedores na roleta</div>
+        <p class="muted" style="font-size:11.5px;margin-bottom:10px">Clique pra ligar/desligar cada atendente. A roleta usa o número <b>em uso</b> dele (da Contingência). Bolinha verde = ok, vermelha = banido/restrito (fica fora da roleta), cinza = sem número.</p>
+        <div id="mp-vend"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: PRESSEL — pré-visualização ═══ -->
+<div class="overlay" id="m-pressel-view">
+  <div class="modal">
+    <div class="m-h"><span class="mt">Pré-visualização da Pressel</span><button class="m-x" onclick="closeM('m-pressel-view')">×</button></div>
+    <div class="m-b"><div id="mpv-body"></div></div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: GERENCIAR STATUS DO WHATSAPP ═══ -->
 <div class="overlay" id="m-wa-status">
   <div class="modal">
@@ -3338,6 +3375,7 @@ const DEFAULT_DB={
     {id:3,num:'(85) 99543-1122',at:'at1',mod:'iPhone 12',op:'Claro',st:'ativo',         dia:7,rec:'2026-01-10',recv:50, tags:['prioridade'],note:'Recarga atrasada — verificar'},
     {id:4,num:'(31) 98321-7788',at:'at2',mod:'Motorola G73',op:'Vivo',st:'reserva',     dia:0,rec:'2026-04-01',recv:30, tags:[],note:'Backup'},
   ],
+  pressels:[],
   invest:[
     {id:1,cat:'hardware', desc:'iPhone 13 (chip operacional)',vl:3200,dt:'2026-03-15'},
     {id:2,cat:'software', desc:'Assinatura ChatGPT Pro x3',  vl:600, dt:'2026-04-01'},
@@ -4824,6 +4862,7 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         {id:'contingencia',lbl:'Contingência'},
+        ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
       // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
@@ -4938,6 +4977,7 @@ const PNAMES={
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
   contingencia:"WhatsApp / <b>Contingência</b>",
+  pressels:"WhatsApp / <b>Pressels</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
@@ -4967,7 +5007,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),pagePressels(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5113,6 +5153,7 @@ function goPage(id){
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
+  if(id==='pressels')    renderPressels();
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
   if(id==='pagequip')    renderPagEquip();
@@ -5227,7 +5268,7 @@ function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
-    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},
+    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
@@ -7926,6 +7967,210 @@ function confirmRechargeId(id){
   c.rec=new Date().toISOString().split('T')[0];
   if(c.st==='recarga_pendente')c.st='ativo';
   refreshUI();toast('Recarga confirmada','ok');
+  persistAndPushNow().catch(_=>{});
+}
+
+/* ═══════════════════════════════════════════════════════
+   PRESSELS — roleta de WhatsApp + presell (Fase 1)
+   Integra com a Contingência: a roleta usa o número "em uso" de
+   cada atendente e pula automaticamente os banidos/restritos.
+═══════════════════════════════════════════════════════ */
+function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
+
+function _ensurePressels(){ if(!Array.isArray(DB.pressels)) DB.pressels=[]; return DB.pressels; }
+// Atendentes elegíveis pra roleta (com chip ou papel operacional)
+function _roletaAtendentes(){
+  return (TEAM||[]).filter(t=>t&&!t._preview&&!t.archived&&t.role!=='gestor'&&t.role!=='designer');
+}
+// Chip "em uso" (ativo do dia) de um atendente, ou o primeiro utilizável
+function _atendenteActiveChip(atId){
+  const chips=(DB.chips||[]).filter(c=>c.at===atId && _chipUsavel(c));
+  if(!chips.length) return null;
+  const aId=activeChipId(chips);
+  return (aId&&chips.find(c=>c.id===aId)) || chips[0];
+}
+// Número pode rodar na roleta? (não banido/restrito/aquecendo)
+function _chipOkRoleta(c){
+  if(!c) return false;
+  if(c.st==='banido'||c.st==='aquecimento') return false;
+  const lbl=_norm(getWaStatusInfo(getWaStatus(c))?.label||'');
+  return lbl!=='banido' && lbl!=='restrito';
+}
+// Vendedores da pressel com estado resolvido (número atual + ok/banido)
+function pressellVendores(p){
+  return (p.vendedores||[]).map(v=>{
+    const at=getTeam(v.at);
+    const chip=_atendenteActiveChip(v.at);
+    return {at_id:v.at, ativo:v.ativo!==false, at, chip, ok: !!(at&&chip&&_chipOkRoleta(chip))};
+  });
+}
+// Próximo da roleta (round-robin entre ativos e ok)
+function pressellNext(p){
+  const elig=pressellVendores(p).filter(v=>v.ativo&&v.ok);
+  if(!elig.length) return null;
+  const i=(p._rr||0)%elig.length;
+  const pick=elig[i];
+  p._rr=(i+1)%elig.length;
+  return pick;
+}
+
+function renderPressels(){
+  const wrap=$('pressels-pg'); if(!wrap) return;
+  _ensurePressels();
+  const list=DB.pressels.slice().sort((a,b)=>(b.id||0)-(a.id||0));
+  wrap.innerHTML=`
+    <div class="ph"><div><h1>Pressels <em>& Roleta</em></h1></div></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 18px">
+      <button class="btn btn-gr btn-sm" onclick="openPresselNew()">+ Nova Pressel</button>
+      <span class="muted" style="font-size:12px;flex:1;min-width:240px">A roleta distribui os leads entre os atendentes usando o número <b>em uso</b> de cada um (da Contingência) e pula automaticamente os banidos/restritos.</span>
+    </div>
+    ${list.length? list.map(presselCard).join('') :
+      `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
+  `;
+}
+function presselCard(p){
+  const vend=pressellVendores(p);
+  const ativos=vend.filter(v=>v.ativo);
+  const okCount=ativos.filter(v=>v.ok).length;
+  const problema=ativos.length-okCount;
+  const m=p.metrics||{cliques:0,contatos:0,vendas:0};
+  const isAtiva=(p.status||'ativa')==='ativa';
+  const stColor=isAtiva?'var(--gr)':'var(--t3)', stBg=isAtiva?'var(--grd)':'var(--s4)';
+  return `<div class="panel" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:4px 9px;border-radius:7px;background:${stBg};color:${stColor}">${isAtiva?'Ativa':'Pausada'}</span>
+      <div style="flex:1;min-width:160px">
+        <div style="font-size:15px;font-weight:700;color:var(--tx)">${p.nome||'(sem nome)'}</div>
+        <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${okCount} número(s) na roleta${problema>0?` · <span style="color:var(--am)">${problema} fora (banido/restrito/sem número)</span>`:''}</div>
+      </div>
+      <div style="display:flex;gap:18px;text-align:center">
+        <div><div style="font-size:10.5px;color:var(--t3)">Cliques</div><div style="font-size:16px;font-weight:700">${m.cliques||0}</div></div>
+        <div><div style="font-size:10.5px;color:var(--t3)">Contatos</div><div style="font-size:16px;font-weight:700">${m.contatos||0}</div></div>
+        <div><div style="font-size:10.5px;color:var(--t3)">Vendas</div><div style="font-size:16px;font-weight:700">${m.vendas||0}</div></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-gh btn-sm" onclick="testPresselRoleta(${p.id})">Testar roleta</button>
+        <button class="btn btn-gh btn-sm" onclick="openPresselView(${p.id})">Pré-visualizar</button>
+        <button class="btn btn-gh btn-sm" onclick="duplicatePressel(${p.id})">Duplicar</button>
+        <button class="btn btn-bl btn-sm" onclick="openPresselEdit(${p.id})">Editar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+let editingPresselId=null;
+let _mpVend=[];
+function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
+function openPresselNew(){
+  editingPresselId=null;
+  $('mp-title').textContent='Nova Pressel';
+  $('mp-del').style.display='none';
+  $('mp-nome').value=''; $('mp-status').value='ativa'; $('mp-img').value='';
+  $('mp-cta').value='FALAR NO WHATSAPP'; $('mp-msg').value=''; $('mp-tt').value='';
+  _mpVend=_roletaAtendentes().map(t=>({at:t.id,ativo:false}));
+  renderPresselVend(); openM('m-pressel');
+}
+function openPresselEdit(id){
+  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
+  editingPresselId=id;
+  $('mp-title').textContent='Editar Pressel';
+  $('mp-del').style.display=isDir()?'':'none';
+  $('mp-nome').value=p.nome||''; $('mp-status').value=p.status||'ativa'; $('mp-img').value=p.img||'';
+  $('mp-cta').value=p.cta||'FALAR NO WHATSAPP'; $('mp-msg').value=p.msg||''; $('mp-tt').value=p.pixel_tt||'';
+  const on=new Set((p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>v.at));
+  _mpVend=_roletaAtendentes().map(t=>({at:t.id,ativo:on.has(t.id)}));
+  renderPresselVend(); openM('m-pressel');
+}
+function _togglePresselVend(i){ if(_mpVend[i]){_mpVend[i].ativo=!_mpVend[i].ativo; renderPresselVend();} }
+function renderPresselVend(){
+  const wrap=$('mp-vend'); if(!wrap) return;
+  if(!_mpVend.length){ wrap.innerHTML='<div class="muted" style="font-size:12px">Nenhum atendente cadastrado.</div>'; return; }
+  wrap.innerHTML=_mpVend.map((v,i)=>{
+    const at=getTeam(v.at); if(!at) return '';
+    const chip=_atendenteActiveChip(v.at);
+    const ok=chip&&_chipOkRoleta(chip);
+    const dot=!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)';
+    const info=!chip?'sem número em uso':(ok?chip.num:`${chip.num} · fora (banido/restrito)`);
+    return `<div onclick="_togglePresselVend(${i})" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid ${v.ativo?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:6px;cursor:pointer;background:${v.ativo?'var(--bld)':'var(--s2)'}">
+      <span style="width:9px;height:9px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12.5px;font-weight:600;color:var(--tx)">${at.name}</div>
+        <div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${info}</div>
+      </div>
+      <span style="font-size:11px;font-weight:600;color:${v.ativo?'var(--bl2)':'var(--t4)'}">${v.ativo?'na roleta':'fora'}</span>
+    </div>`;
+  }).join('');
+}
+function savePressel(){
+  _ensurePressels();
+  const nome=$('mp-nome').value.trim();
+  if(!nome){toast('Dê um nome pra pressel','err');return;}
+  const payload={
+    nome, status:$('mp-status').value,
+    img:$('mp-img').value.trim(), cta:$('mp-cta').value.trim()||'FALAR NO WHATSAPP',
+    msg:$('mp-msg').value, pixel_tt:$('mp-tt').value.trim(),
+    vendedores:_mpVend.filter(v=>v.ativo).map(v=>({at:v.at,ativo:true})),
+  };
+  if(editingPresselId){
+    const p=DB.pressels.find(x=>x.id===editingPresselId); if(p) Object.assign(p,payload);
+  } else {
+    DB.pressels.push({id:_nextPresselId(),...payload,metrics:{cliques:0,contatos:0,vendas:0},_rr:0});
+  }
+  closeM('m-pressel'); renderPressels();
+  toast('Pressel salva · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+}
+async function deletePressel(){
+  if(!editingPresselId)return;
+  const p=DB.pressels.find(x=>x.id===editingPresselId);
+  if(!await axConfirm(`Excluir a pressel <b>${p?.nome||''}</b>?`,{okLabel:'Excluir'}))return;
+  DB.pressels=DB.pressels.filter(x=>x.id!==editingPresselId);
+  closeM('m-pressel'); renderPressels();
+  toast('Pressel excluída','ok');
+  persistAndPushNow().catch(_=>{});
+}
+function duplicatePressel(id){
+  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
+  const copy=JSON.parse(JSON.stringify(p));
+  copy.id=_nextPresselId(); copy.nome=(p.nome||'Pressel')+' (cópia)';
+  copy.metrics={cliques:0,contatos:0,vendas:0}; copy._rr=0;
+  DB.pressels.push(copy); renderPressels();
+  toast('Pressel duplicada','ok');
+  persistAndPushNow().catch(_=>{});
+}
+function testPresselRoleta(id){
+  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
+  const pick=pressellNext(p);
+  if(!pick){toast('Nenhum número disponível na roleta — confira os atendentes/números','err');return;}
+  const url=waLinkFromNum(pick.chip.num);
+  toast(`Próximo da roleta: ${pick.at.name} · ${pick.chip.num}`,'ok');
+  if(url) window.open(url,'_blank','noopener');
+  persistAndPushNow().catch(_=>{});
+}
+function openPresselView(id){
+  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
+  const body=$('mpv-body'); if(!body) return;
+  const img=p.img?`<img src="${p.img}" style="width:100%;display:block" alt="">`:`<div style="height:260px;display:flex;align-items:center;justify-content:center;background:#e8e8e8;color:#777;font-size:13px">Sem imagem cadastrada</div>`;
+  body.innerHTML=`
+    <div style="max-width:360px;margin:0 auto;border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden">
+      ${img}
+      <div style="padding:16px;background:#fff">
+        <button onclick="presselCTA(${p.id})" style="width:100%;background:#22c55e;color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit">${p.cta||'FALAR NO WHATSAPP'}</button>
+      </div>
+    </div>
+    <p class="muted" style="text-align:center;font-size:11.5px;margin-top:12px">Clicar no botão roda a roleta de verdade (abre o WhatsApp do próximo atendente) e conta o clique/contato.</p>`;
+  openM('m-pressel-view');
+}
+function presselCTA(id){
+  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
+  p.metrics=p.metrics||{cliques:0,contatos:0,vendas:0};
+  p.metrics.cliques=(p.metrics.cliques||0)+1;
+  const pick=pressellNext(p);
+  if(!pick){toast('Sem número disponível na roleta agora','err');persistAndPushNow().catch(_=>{});return;}
+  p.metrics.contatos=(p.metrics.contatos||0)+1;
+  const url=waLinkFromNum(pick.chip.num);
+  if(url) window.open(url,'_blank','noopener');
+  toast(`Lead → ${pick.at.name}`,'ok');
   persistAndPushNow().catch(_=>{});
 }
 
