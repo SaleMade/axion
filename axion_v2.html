@@ -870,6 +870,14 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px;
   scrollbar-width:none;-ms-overflow-style:none}
 .wk-col-list::-webkit-scrollbar{width:0;height:0;display:none}
+/* ─── Pressels: interruptor (toggle) + inputs do editor inline ─── */
+.ax-sw{width:38px;height:22px;border-radius:11px;background:var(--s4);border:1px solid var(--b2);position:relative;cursor:pointer;transition:background .15s,border-color .15s;flex-shrink:0}
+.ax-sw.on{background:var(--gr);border-color:var(--gr)}
+.ax-sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.ax-sw.on::after{left:18px}
+.pp-lbl{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--t3);margin-bottom:5px}
+.pp-inp{width:100%;background:var(--s3);border:1px solid var(--b2);color:var(--tx);padding:9px 11px;border-radius:var(--r);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box}
+.pp-inp:focus{border-color:var(--b3)}
 /* Cards no estilo CRM Pipeline — sem borda lateral, fundo neutro, hover sutil */
 .wk-chip{background:var(--s2);border:1px solid var(--b1);
   border-radius:var(--r);padding:12px 13px;cursor:grab;transition:all .15s;
@@ -2259,32 +2267,11 @@ body.no-producer #mp-mode-block{display:none}
   </div>
 </div>
 
-<!-- ═══ MODAL: PRESSEL (criar/editar) ═══ -->
-<div class="overlay" id="m-pressel">
+<!-- ═══ MODAL: EVOLUTION API (config + QR) ═══ -->
+<div class="overlay" id="m-evo">
   <div class="modal">
-    <div class="m-h">
-      <span class="mt" id="mp-title">Pressel</span>
-      <div class="m-actions">
-        <button class="btn btn-re btn-sm" id="mp-del" onclick="deletePressel()">Excluir</button>
-        <button class="btn btn-bl btn-sm" onclick="savePressel()">Salvar</button>
-        <button class="m-x" onclick="closeM('m-pressel')">×</button>
-      </div>
-    </div>
-    <div class="m-b">
-      <div class="fg fg2">
-        <div class="field"><label>Nome</label><input id="mp-nome" placeholder="Ex: Glico - Operação"></div>
-        <div class="field"><label>Status</label><select id="mp-status"><option value="ativa">Ativa</option><option value="pausada">Pausada</option></select></div>
-        <div class="field" style="grid-column:span 2"><label>Imagem do criativo (URL)</label><input id="mp-img" placeholder="https://..."></div>
-        <div class="field"><label>Texto do botão (CTA)</label><input id="mp-cta" placeholder="FALAR NO WHATSAPP"></div>
-        <div class="field"><label>Pixel TikTok (ID)</label><input id="mp-tt" placeholder="ex: C9XXXXXXXXXXXX"></div>
-        <div class="field" style="grid-column:span 2"><label>Mensagem inicial do WhatsApp</label><textarea id="mp-msg" rows="2" placeholder="Oi! Vim pelo anúncio e tenho interesse..."></textarea></div>
-      </div>
-      <div style="margin-top:16px">
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--t2);margin-bottom:8px">Vendedores na roleta</div>
-        <p class="muted" style="font-size:11.5px;margin-bottom:10px">Clique pra ligar/desligar cada atendente. A roleta usa o número <b>em uso</b> dele (da Contingência). Bolinha verde = ok, vermelha = banido/restrito (fica fora da roleta), cinza = sem número.</p>
-        <div id="mp-vend"></div>
-      </div>
-    </div>
+    <div class="m-h"><span class="mt" id="evo-title">Conexão WhatsApp</span><button class="m-x" onclick="closeM('m-evo')">×</button></div>
+    <div class="m-b"><div id="evo-body"></div></div>
   </div>
 </div>
 
@@ -3376,6 +3363,7 @@ const DEFAULT_DB={
     {id:4,num:'(31) 98321-7788',at:'at2',mod:'Motorola G73',op:'Vivo',st:'reserva',     dia:0,rec:'2026-04-01',recv:30, tags:[],note:'Backup'},
   ],
   pressels:[],
+  evolution:{url:'',key:''},
   invest:[
     {id:1,cat:'hardware', desc:'iPhone 13 (chip operacional)',vl:3200,dt:'2026-03-15'},
     {id:2,cat:'software', desc:'Assinatura ChatGPT Pro x3',  vl:600, dt:'2026-04-01'},
@@ -8017,117 +8005,172 @@ function pressellNext(p){
 function renderPressels(){
   const wrap=$('pressels-pg'); if(!wrap) return;
   _ensurePressels();
-  const list=DB.pressels.slice().sort((a,b)=>(b.id||0)-(a.id||0));
+  const list=DB.pressels.slice().sort((a,b)=>(a.id||0)-(b.id||0));
   wrap.innerHTML=`
     <div class="ph"><div><h1>Pressels <em>& Roleta</em></h1></div></div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 18px">
-      <button class="btn btn-gr btn-sm" onclick="openPresselNew()">+ Nova Pressel</button>
-      <span class="muted" style="font-size:12px;flex:1;min-width:240px">A roleta distribui os leads entre os atendentes usando o número <b>em uso</b> de cada um (da Contingência) e pula automaticamente os banidos/restritos.</span>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 16px">
+      <button class="btn btn-gh btn-sm" onclick="addPresselInline()">+ Nova Pressel</button>
+      <span class="muted" style="font-size:12px;flex:1;min-width:240px">A roleta distribui os leads usando o número <b>em uso</b> de cada atendente (da Contingência) e pula automaticamente os banidos/restritos.</span>
     </div>
-    ${list.length? list.map(presselCard).join('') :
+    ${list.length? list.map(presselPanel).join('') :
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
+    ${connectionPanel()}
   `;
+  list.forEach(p=>renderPresselVendList(p.id));
 }
-function presselCard(p){
-  const vend=pressellVendores(p);
-  const ativos=vend.filter(v=>v.ativo);
-  const okCount=ativos.filter(v=>v.ok).length;
-  const problema=ativos.length-okCount;
+// Painel inline (editor + roleta já abertos) de uma pressel
+function presselPanel(p){
   const m=p.metrics||{cliques:0,contatos:0,vendas:0};
   const isAtiva=(p.status||'ativa')==='ativa';
-  const stColor=isAtiva?'var(--gr)':'var(--t3)', stBg=isAtiva?'var(--grd)':'var(--s4)';
-  return `<div class="panel" style="margin-bottom:12px">
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:4px 9px;border-radius:7px;background:${stBg};color:${stColor}">${isAtiva?'Ativa':'Pausada'}</span>
-      <div style="flex:1;min-width:160px">
-        <div style="font-size:15px;font-weight:700;color:var(--tx)">${p.nome||'(sem nome)'}</div>
-        <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${okCount} número(s) na roleta${problema>0?` · <span style="color:var(--am)">${problema} fora (banido/restrito/sem número)</span>`:''}</div>
-      </div>
-      <div style="display:flex;gap:18px;text-align:center">
-        <div><div style="font-size:10.5px;color:var(--t3)">Cliques</div><div style="font-size:16px;font-weight:700">${m.cliques||0}</div></div>
-        <div><div style="font-size:10.5px;color:var(--t3)">Contatos</div><div style="font-size:16px;font-weight:700">${m.contatos||0}</div></div>
-        <div><div style="font-size:10.5px;color:var(--t3)">Vendas</div><div style="font-size:16px;font-weight:700">${m.vendas||0}</div></div>
+  const img=p.img||'';
+  const isUrl=img&&!img.startsWith('data:');
+  const esc=s=>String(s||'').replace(/"/g,'&quot;');
+  return `<div class="panel" style="margin-bottom:16px" data-pid="${p.id}">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <div class="ax-sw ${isAtiva?'on':''}" title="${isAtiva?'Ativa — clique pra pausar':'Pausada — clique pra ativar'}" onclick="togglePresselStatus(${p.id})"></div>
+      <input id="pp-nome-${p.id}" value="${esc(p.nome)}" placeholder="Nome da pressel" style="flex:1;min-width:160px;font-size:16px;font-weight:700;background:transparent;border:none;border-bottom:1px solid var(--b1);color:var(--tx);padding:4px 2px;font-family:inherit;outline:none">
+      <div style="display:flex;gap:16px;text-align:center">
+        <div><div style="font-size:10px;color:var(--t3)">Cliques</div><div style="font-size:15px;font-weight:700">${m.cliques||0}</div></div>
+        <div><div style="font-size:10px;color:var(--t3)">Contatos</div><div style="font-size:15px;font-weight:700">${m.contatos||0}</div></div>
+        <div><div style="font-size:10px;color:var(--t3)">Vendas</div><div style="font-size:15px;font-weight:700">${m.vendas||0}</div></div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-gh btn-sm" onclick="testPresselRoleta(${p.id})">Testar roleta</button>
+        <button class="btn btn-gh btn-sm" onclick="testPresselRoleta(${p.id})">Testar</button>
         <button class="btn btn-gh btn-sm" onclick="openPresselView(${p.id})">Pré-visualizar</button>
         <button class="btn btn-gh btn-sm" onclick="duplicatePressel(${p.id})">Duplicar</button>
-        <button class="btn btn-bl btn-sm" onclick="openPresselEdit(${p.id})">Editar</button>
+        <button class="btn btn-gh btn-sm" style="color:var(--rd)" onclick="deletePresselById(${p.id})">Excluir</button>
+        <button class="btn btn-bl btn-sm" onclick="savePresselInline(${p.id})">Salvar</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px">
+      <div>
+        <label class="pp-lbl">Criativo</label>
+        <div style="border:1px dashed var(--b2);border-radius:var(--r);padding:12px;text-align:center;margin-bottom:8px;background:var(--s2)">
+          <img id="pp-prev-${p.id}" src="${esc(img)}" style="max-width:100%;max-height:220px;border-radius:8px;${img?'':'display:none'}">
+          <div id="pp-prevph-${p.id}" style="${img?'display:none;':''}color:var(--t3);font-size:12px;padding:28px 0">Nenhuma imagem ainda</div>
+          <div style="margin-top:10px">
+            <input type="file" accept="image/*" id="pp-file-${p.id}" style="display:none" onchange="presselUploadImg(${p.id},this)">
+            <button class="btn btn-gh btn-sm" onclick="document.getElementById('pp-file-${p.id}').click()">Upar imagem</button>
+          </div>
+        </div>
+        <input id="pp-img-${p.id}" value="${isUrl?esc(img):''}" placeholder="ou cole uma URL da imagem" oninput="presselImgUrl(${p.id},this.value)" class="pp-inp" style="margin-bottom:12px">
+        <label class="pp-lbl">Texto do botão (CTA)</label>
+        <input id="pp-cta-${p.id}" value="${esc(p.cta||'FALAR NO WHATSAPP')}" class="pp-inp" style="margin-bottom:12px">
+        <label class="pp-lbl">Mensagem inicial do WhatsApp</label>
+        <textarea id="pp-msg-${p.id}" rows="2" class="pp-inp" style="margin-bottom:12px;resize:vertical">${String(p.msg||'').replace(/</g,'&lt;')}</textarea>
+        <label class="pp-lbl">Pixel TikTok (ID)</label>
+        <input id="pp-tt-${p.id}" value="${esc(p.pixel_tt)}" placeholder="ex: C9XXXXXXXXXXXX" class="pp-inp">
+      </div>
+      <div>
+        <label class="pp-lbl">Vendedores na roleta</label>
+        <p class="muted" style="font-size:11px;margin:0 0 10px">Ligue/desligue cada atendente no interruptor. A roleta usa o número <b>em uso</b> dele.</p>
+        <div id="pp-vend-${p.id}"></div>
       </div>
     </div>
   </div>`;
 }
-
-let editingPresselId=null;
-let _mpVend=[];
-function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
-function openPresselNew(){
-  editingPresselId=null;
-  $('mp-title').textContent='Nova Pressel';
-  $('mp-del').style.display='none';
-  $('mp-nome').value=''; $('mp-status').value='ativa'; $('mp-img').value='';
-  $('mp-cta').value='FALAR NO WHATSAPP'; $('mp-msg').value=''; $('mp-tt').value='';
-  _mpVend=_roletaAtendentes().map(t=>({at:t.id,ativo:false}));
-  renderPresselVend(); openM('m-pressel');
-}
-function openPresselEdit(id){
-  const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
-  editingPresselId=id;
-  $('mp-title').textContent='Editar Pressel';
-  $('mp-del').style.display=isDir()?'':'none';
-  $('mp-nome').value=p.nome||''; $('mp-status').value=p.status||'ativa'; $('mp-img').value=p.img||'';
-  $('mp-cta').value=p.cta||'FALAR NO WHATSAPP'; $('mp-msg').value=p.msg||''; $('mp-tt').value=p.pixel_tt||'';
-  const on=new Set((p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>v.at));
-  _mpVend=_roletaAtendentes().map(t=>({at:t.id,ativo:on.has(t.id)}));
-  renderPresselVend(); openM('m-pressel');
-}
-function _togglePresselVend(i){ if(_mpVend[i]){_mpVend[i].ativo=!_mpVend[i].ativo; renderPresselVend();} }
-function renderPresselVend(){
-  const wrap=$('mp-vend'); if(!wrap) return;
-  if(!_mpVend.length){ wrap.innerHTML='<div class="muted" style="font-size:12px">Nenhum atendente cadastrado.</div>'; return; }
-  wrap.innerHTML=_mpVend.map((v,i)=>{
-    const at=getTeam(v.at); if(!at) return '';
-    const chip=_atendenteActiveChip(v.at);
+// Lista de vendedores (toggle + número em destaque) de uma pressel
+function renderPresselVendList(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const wrap=$('pp-vend-'+pid); if(!wrap) return;
+  const on=new Set((p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>String(v.at)));
+  const ats=_roletaAtendentes();
+  if(!ats.length){ wrap.innerHTML='<div class="muted" style="font-size:12px">Nenhum atendente cadastrado.</div>'; return; }
+  wrap.innerHTML=ats.map(at=>{
+    const chip=_atendenteActiveChip(at.id);
     const ok=chip&&_chipOkRoleta(chip);
+    const isOn=on.has(String(at.id));
     const dot=!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)';
-    const info=!chip?'sem número em uso':(ok?chip.num:`${chip.num} · fora (banido/restrito)`);
-    return `<div onclick="_togglePresselVend(${i})" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid ${v.ativo?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:6px;cursor:pointer;background:${v.ativo?'var(--bld)':'var(--s2)'}">
-      <span style="width:9px;height:9px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+    const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
+    const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
+    return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${isOn?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${isOn?'var(--bld)':'var(--s2)'}">
+      <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
-        <div style="font-size:12.5px;font-weight:600;color:var(--tx)">${at.name}</div>
-        <div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${info}</div>
+        <div style="font-size:12px;color:var(--t3)">${at.name}</div>
+        <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
       </div>
-      <span style="font-size:11px;font-weight:600;color:${v.ativo?'var(--bl2)':'var(--t4)'}">${v.ativo?'na roleta':'fora'}</span>
+      <div class="ax-sw ${isOn?'on':''}" title="${isOn?'Na roleta':'Fora'}" onclick="togglePresselVendInline(${pid},'${at.id}')"></div>
     </div>`;
   }).join('');
 }
-function savePressel(){
+
+function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
+function addPresselInline(){
   _ensurePressels();
-  const nome=$('mp-nome').value.trim();
-  if(!nome){toast('Dê um nome pra pressel','err');return;}
-  const payload={
-    nome, status:$('mp-status').value,
-    img:$('mp-img').value.trim(), cta:$('mp-cta').value.trim()||'FALAR NO WHATSAPP',
-    msg:$('mp-msg').value, pixel_tt:$('mp-tt').value.trim(),
-    vendedores:_mpVend.filter(v=>v.ativo).map(v=>({at:v.at,ativo:true})),
-  };
-  if(editingPresselId){
-    const p=DB.pressels.find(x=>x.id===editingPresselId); if(p) Object.assign(p,payload);
-  } else {
-    DB.pressels.push({id:_nextPresselId(),...payload,metrics:{cliques:0,contatos:0,vendas:0},_rr:0});
-  }
-  closeM('m-pressel'); renderPressels();
-  toast('Pressel salva · sincronizando...','ok');
-  persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+  DB.pressels.push({id:_nextPresselId(),nome:'Nova Pressel',status:'ativa',img:'',cta:'FALAR NO WHATSAPP',msg:'',pixel_tt:'',vendedores:[],metrics:{cliques:0,contatos:0,vendas:0},_rr:0});
+  renderPressels();
+  persistAndPushNow().catch(_=>{});
 }
-async function deletePressel(){
-  if(!editingPresselId)return;
-  const p=DB.pressels.find(x=>x.id===editingPresselId);
-  if(!await axConfirm(`Excluir a pressel <b>${p?.nome||''}</b>?`,{okLabel:'Excluir'}))return;
-  DB.pressels=DB.pressels.filter(x=>x.id!==editingPresselId);
-  closeM('m-pressel'); renderPressels();
+function togglePresselStatus(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.status=(p.status||'ativa')==='ativa'?'pausada':'ativa';
+  renderPressels();
+  persistAndPushNow().catch(_=>{});
+}
+function togglePresselVendInline(pid, atId){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.vendedores=p.vendedores||[];
+  const i=p.vendedores.findIndex(v=>String(v.at)===String(atId));
+  if(i>=0) p.vendedores.splice(i,1); else p.vendedores.push({at:atId,ativo:true});
+  renderPresselVendList(pid);
+  persistAndPushNow().catch(_=>{});
+}
+function savePresselInline(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.nome=$('pp-nome-'+pid).value.trim()||p.nome;
+  p.cta=$('pp-cta-'+pid).value.trim()||'FALAR NO WHATSAPP';
+  p.msg=$('pp-msg-'+pid).value;
+  p.pixel_tt=$('pp-tt-'+pid).value.trim();
+  // p.img já é gravado nos handlers de upload/URL
+  toast('Pressel salva · sincronizando...','ok');
+  persistAndPushNow().then(()=>{toast('✓ Sincronizado','ok');renderPressels();}).catch(_=>{});
+}
+async function deletePresselById(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  if(!await axConfirm(`Excluir a pressel <b>${p.nome||''}</b>?`,{okLabel:'Excluir'}))return;
+  DB.pressels=DB.pressels.filter(x=>x.id!==pid);
+  renderPressels();
   toast('Pressel excluída','ok');
   persistAndPushNow().catch(_=>{});
+}
+// Imagem: upload (com downscale pra não pesar no sync) OU URL
+function _downscaleImage(file, maxW, cb){
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const im=new Image();
+    im.onload=()=>{
+      let w=im.width,h=im.height;
+      if(w>maxW){ h=Math.round(h*maxW/w); w=maxW; }
+      try{ const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+        cv.getContext('2d').drawImage(im,0,0,w,h); cb(cv.toDataURL('image/jpeg',0.82)); }
+      catch(_){ cb(e.target.result); }
+    };
+    im.onerror=()=>cb(null);
+    im.src=e.target.result;
+  };
+  reader.onerror=()=>cb(null);
+  reader.readAsDataURL(file);
+}
+function presselUploadImg(pid, input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  _downscaleImage(f,720,(dataUrl)=>{
+    if(!dataUrl){toast('Falha ao ler a imagem','err');return;}
+    const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+    p.img=dataUrl;
+    const prev=$('pp-prev-'+pid), ph=$('pp-prevph-'+pid), urlInp=$('pp-img-'+pid);
+    if(prev){prev.src=dataUrl;prev.style.display='';}
+    if(ph)ph.style.display='none';
+    if(urlInp)urlInp.value='';
+    toast('Imagem carregada · sincronizando...','ok');
+    persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
+  });
+}
+function presselImgUrl(pid, url){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.img=(url||'').trim();
+  const prev=$('pp-prev-'+pid), ph=$('pp-prevph-'+pid);
+  if(p.img){ if(prev){prev.src=p.img;prev.style.display='';} if(ph)ph.style.display='none'; }
+  else { if(prev)prev.style.display='none'; if(ph)ph.style.display=''; }
 }
 function duplicatePressel(id){
   const p=_ensurePressels().find(x=>x.id===id); if(!p) return;
@@ -8172,6 +8215,79 @@ function presselCTA(id){
   if(url) window.open(url,'_blank','noopener');
   toast(`Lead → ${pick.at.name}`,'ok');
   persistAndPushNow().catch(_=>{});
+}
+
+/* ─── Conexão WhatsApp (Evolution API) ───
+   A roleta já roda só com a Contingência. Esta área é pra, no futuro,
+   conectar cada WhatsApp via QR num servidor Evolution API e detectar
+   ban automaticamente. O servidor Evolution roda FORA do Cloudflare
+   (VPS/Docker); aqui guardamos a URL/chave e chamamos a API dele. */
+function connectionPanel(){
+  const ev=DB.evolution||{};
+  const ats=_roletaAtendentes();
+  const linhas = !ev.url
+    ? `<p class="muted" style="font-size:12px">Configure a URL da sua Evolution API pra liberar a conexão por QR. O servidor Evolution roda num VPS/Docker (fora da dash).</p>`
+    : ats.map(at=>{
+        const chip=_atendenteActiveChip(at.id);
+        return `<div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid var(--b1);border-radius:var(--r);margin-bottom:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--t4);flex-shrink:0"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600;color:var(--tx)">${at.name}</div>
+            <div style="font-size:12px;color:var(--t3);font-family:ui-monospace,monospace">${chip?chip.num:'sem número em uso'}</div>
+          </div>
+          <button class="btn btn-gh btn-sm" onclick="evoConnect('${at.id}')">Conectar (QR)</button>
+        </div>`;
+      }).join('');
+  return `<div class="panel" style="margin-top:8px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <h3 style="font-size:14px;margin:0;color:var(--tx)">Conexão WhatsApp (Evolution API)</h3>
+      <span class="muted" style="font-size:11px;flex:1;min-width:200px">Conecta os WhatsApps via QR pra detectar ban e tirar da roleta. Requer um servidor Evolution API rodando.</span>
+      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()">Configurar</button>
+    </div>
+    ${linhas}
+  </div>`;
+}
+function openEvolutionConfig(){
+  const ev=DB.evolution||{};
+  const body=$('evo-body'); if(!body) return;
+  $('evo-title').textContent='Configurar Evolution API';
+  body.innerHTML=`
+    <p class="muted" style="font-size:12px;margin-bottom:12px;line-height:1.5">Cole a URL e a API key da sua instância Evolution API (rodando num VPS/Docker). Sem isso, a conexão por QR fica indisponível.</p>
+    <label class="pp-lbl">URL da Evolution API</label>
+    <input id="evo-url" class="pp-inp" placeholder="https://sua-evolution.com" value="${(ev.url||'').replace(/"/g,'&quot;')}" style="margin-bottom:12px">
+    <label class="pp-lbl">API Key</label>
+    <input id="evo-key" class="pp-inp" placeholder="sua-api-key" value="${(ev.key||'').replace(/"/g,'&quot;')}" style="margin-bottom:16px">
+    <button class="btn btn-bl btn-sm" onclick="saveEvolutionConfig()">Salvar</button>`;
+  openM('m-evo');
+}
+function saveEvolutionConfig(){
+  DB.evolution={url:$('evo-url').value.trim(),key:$('evo-key').value.trim()};
+  closeM('m-evo'); renderPressels();
+  toast('Evolution API configurada','ok');
+  persistAndPushNow().catch(_=>{});
+}
+async function evoConnect(atId){
+  const ev=DB.evolution||{};
+  if(!ev.url){toast('Configure a Evolution API primeiro','err');openEvolutionConfig();return;}
+  const at=getTeam(atId);
+  const inst='ax_'+atId;
+  const base=ev.url.replace(/\/$/,'');
+  const body=$('evo-body'); if(body){$('evo-title').textContent=`Conectar — ${at?at.name:''}`;body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Falando com a Evolution API...</p>';}
+  openM('m-evo');
+  try{
+    await fetch(base+'/instance/create',{method:'POST',headers:{'Content-Type':'application/json','apikey':ev.key||''},body:JSON.stringify({instanceName:inst,qrcode:true,integration:'WHATSAPP-BAILEYS'})}).catch(()=>{});
+    const r=await fetch(base+'/instance/connect/'+inst,{headers:{'apikey':ev.key||''}});
+    const j=await r.json();
+    const qr=j&&(j.base64||(j.qrcode&&j.qrcode.base64)||j.qr||(j.qrcode&&j.qrcode.code));
+    if(qr){
+      const src=String(qr).startsWith('data:')?qr:('data:image/png;base64,'+qr);
+      body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p></div>`;
+    } else {
+      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Conectado ou QR indisponível. Resposta da API:<br><code style="font-size:11px">${JSON.stringify(j).slice(0,200)}</code></p>`;
+    }
+  }catch(e){
+    body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui falar com a Evolution API.<br><br>Confira: (1) a URL/API key estão certas; (2) o servidor Evolution está no ar; (3) ele permite CORS da dash. O servidor Evolution roda fora do Cloudflare (VPS/Docker) — quando estiver no ar, isso aqui conecta sozinho.</p>`;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════
