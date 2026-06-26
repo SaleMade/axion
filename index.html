@@ -3860,7 +3860,7 @@ async function persistAndPushNow(){
 // quando o usuário fecha a aba/navega (debounce de 2s não dispara nesses casos).
 function flushSyncBeacon(){
   if(!apiEnabled()||!apiToken())return false;
-  if(!_syncTimer&&!_409retry)return false; // nada pendente
+  if(!_syncTimer&&!_409retry&&!_syncing)return false; // nada pendente nem em voo
   clearTimeout(_syncTimer);_syncTimer=null;
   try{
     const url=apiUrl().replace(/\/+$/,'')+'/api/state';
@@ -3955,6 +3955,11 @@ async function _doServerSync(){
       setTimeout(()=>logout(),1500);
     } else {
       console.warn('sync falhou:',e);
+      // Falha de rede/transitória: NÃO perde a mudança. Reagenda o push — mantém
+      // _syncTimer setado (hasPendingSync bloqueia o pull de sobrescrever o estado
+      // local até confirmar, e o beforeunload tenta o flush). Era o motivo de o
+      // arraste pro aquecimento "voltar sozinho" no reload quando o push falhava.
+      debouncedServerSync();
     }
   }
 }
@@ -8250,27 +8255,35 @@ function renderPresselVendList(pid){
   const on=new Set((p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>String(v.at)));
   const ats=_roletaAtendentes();
   if(!ats.length){ wrap.innerHTML='<div class="muted" style="font-size:12px">Nenhum atendente cadastrado.</div>'; return; }
-  wrap.innerHTML=ats.map(at=>{
+  // Separa quem TEM número em uso (pode atender, fica em cima) de quem não tem
+  // (diretor/sem número, fica embaixo da divisória e não entra na roleta).
+  const rows=ats.map(at=>{
     const chip=_atendenteActiveChip(at.id);
-    const ok=chip&&_chipOkRoleta(chip);
-    const isOn=on.has(String(at.id));
+    return {at, chip, ok:!!(chip&&_chipOkRoleta(chip)), isOn:on.has(String(at.id))};
+  });
+  const ativos=rows.filter(r=>r.ok), fora=rows.filter(r=>!r.ok);
+  const row=(r)=>{
+    const {at,chip,ok,isOn}=r, onVis=isOn&&ok;
     const dot=!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)';
     const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
-    // Conexão WhatsApp inline: aparece quando o número está na roleta
-    const connectLink = (isOn&&chip)
-      ? `<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:3px 0 0;font-family:inherit">conectar WhatsApp ↗</button>`
-      : '';
-    return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${isOn?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${isOn?'var(--bld)':'var(--s2)'}">
+    const connectLink=onVis?`<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:3px 0 0;font-family:inherit">conectar WhatsApp ↗</button>`:'';
+    return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--t3)">${at.name}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         ${connectLink}
       </div>
-      <div class="ax-sw ${isOn?'on':''}" title="${isOn?'Na roleta':'Fora'}" onclick="togglePresselVendInline(${pid},'${at.id}')"></div>
+      <div class="ax-sw ${onVis?'on':''}" title="${ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
-  }).join('');
+  };
+  let html = ativos.length ? ativos.map(row).join('')
+    : '<div class="muted" style="font-size:12px;padding:8px 0">Nenhum atendente com número em uso. Marque um número como "Em uso" na Contingência pra ele entrar na roleta.</div>';
+  if(fora.length){
+    html += `<div style="display:flex;align-items:center;gap:8px;margin:14px 0 9px"><div style="flex:1;height:1px;background:var(--b1)"></div><span style="font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">sem número em uso · não atendem</span><div style="flex:1;height:1px;background:var(--b1)"></div></div>` + fora.map(row).join('');
+  }
+  wrap.innerHTML=html;
 }
 
 function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
@@ -8290,7 +8303,13 @@ function togglePresselVendInline(pid, atId){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
   p.vendedores=p.vendedores||[];
   const i=p.vendedores.findIndex(v=>String(v.at)===String(atId));
-  if(i>=0) p.vendedores.splice(i,1); else p.vendedores.push({at:atId,ativo:true});
+  if(i>=0){ p.vendedores.splice(i,1); }
+  else {
+    // Só entra na roleta quem tem número EM USO ok (não banido/restrito).
+    const chip=_atendenteActiveChip(atId);
+    if(!(chip&&_chipOkRoleta(chip))){ toast('Esse atendente não tem número em uso pra entrar na roleta','err'); return; }
+    p.vendedores.push({at:atId,ativo:true});
+  }
   renderPresselVendList(pid);
   persistAndPushNow().catch(_=>{});
 }
