@@ -1263,6 +1263,69 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   });
 }
 
+// ─── Pressel pública (roleta de WhatsApp) ───
+// Lead da campanha cai em /p/<id>, a roleta escolhe um número (o "em uso" de
+// cada atendente ativo, pulando banido/restrito) e manda pro WhatsApp.
+function _escHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function _waLink(num, msg){
+  let d = String(num||'').replace(/\D/g,'');
+  if(!d) return null;
+  if(d.length<=11) d='55'+d;
+  let u='https://wa.me/'+d;
+  if(msg) u+='?text='+encodeURIComponent(msg);
+  return u;
+}
+// Resolve os números da roleta a partir do estado salvo (chips + vendedores)
+function _resolvePresselNumbers(p, chips){
+  const out=[];
+  for(const v of (p.vendedores||[])){
+    if(v.ativo===false) continue;
+    const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+    if(!mine.length) continue;
+    const active=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];
+    if(!active) continue;
+    const wa=String(active.wa_st||'').toLowerCase();
+    if(wa==='restrito' || wa==='banido') continue;
+    if(active.num) out.push(active.num);
+  }
+  return out;
+}
+function _ttPixel(p){
+  if(!p.pixel_tt) return '';
+  const id=JSON.stringify(String(p.pixel_tt));
+  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});ttq.page();}(window,document,'ttq');</script>`;
+}
+function _presselHtml(html){
+  return new Response(html, { status:200, headers:{ 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' } });
+}
+function _presselOffline(){
+  return _presselHtml(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#cbd5e1;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px"><div><h2 style="margin:0 0 8px">Indisponível no momento</h2><p style="opacity:.7">Tente novamente em instantes.</p></div></body>`);
+}
+async function handlePresselPublic(req, env, id){
+  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
+  const pressels=Array.isArray(data.pressels)?data.pressels:[];
+  const chips=Array.isArray(data.chips)?data.chips:[];
+  const p=pressels.find(x=>String(x.id)===String(id));
+  if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
+  const nums=_resolvePresselNumbers(p, chips);
+  if(!nums.length) return _presselOffline();
+  const pick=nums[Math.floor(Math.random()*nums.length)];
+  const wa=_waLink(pick, p.msg);
+  if(!wa) return _presselOffline();
+  const bg=_escHtml(p.bg||'#ffffff');
+  const img=p.img?`<img src="${_escHtml(p.img)}" alt="">`:'';
+  const cta=_escHtml(p.cta||'FALAR NO WHATSAPP');
+  const secs=Math.max(0, Number(p.redirect)||0);
+  const waJson=JSON.stringify(wa);
+  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}.cta{display:block;width:calc(100% - 32px);margin:16px auto;background:#22c55e;color:#fff;border:none;border-radius:14px;padding:17px;font-size:18px;font-weight:800;cursor:pointer;text-align:center;text-decoration:none}</style></head>`;
+  const script=`<script>function track(){try{ttq&&ttq.track('ClickButton')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  if(p.fullclick){
+    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${img}</div>${script}</body></html>`);
+  }
+  return _presselHtml(`${head}<body><div class="wrap">${img}<a class="cta" href="${_escHtml(wa)}" onclick="track()">${cta}</a></div>${script}</body></html>`);
+}
+
 // ─── Router ───
 
 export default {
@@ -1334,6 +1397,10 @@ export default {
         }
         return handleFornecedorWebhook(req, env, fornMatch[1]);
       }
+
+      // Pressel pública — lead da campanha cai aqui e a roleta manda pro WhatsApp
+      const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
+      if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
 
       return err('Rota não encontrada', 404);
     } catch (e) {
