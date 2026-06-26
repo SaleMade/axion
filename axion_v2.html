@@ -880,6 +880,8 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .pp-inp:focus{border-color:var(--b3)}
 .pp-tabbtn{flex:1;background:transparent;border:none;color:var(--t3);font-family:inherit;font-size:12.5px;font-weight:600;padding:8px;border-radius:8px;cursor:pointer;transition:background .12s,color .12s}
 .pp-tabbtn.on{background:var(--s1);color:var(--tx)}
+.pp-addel{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:18px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);color:var(--t2);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .12s}
+.pp-addel:hover{border-color:var(--b3);background:var(--s3);color:var(--tx)}
 /* Cards no estilo CRM Pipeline — sem borda lateral, fundo neutro, hover sutil */
 .wk-chip{background:var(--s2);border:1px solid var(--b1);
   border-radius:var(--r);padding:12px 13px;cursor:grab;transition:all .15s;
@@ -8022,7 +8024,7 @@ function renderPressels(){
     ${list.length? list.map(presselPanel).join('') :
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
   `;
-  list.forEach(p=>renderPresselVendList(p.id));
+  list.forEach(p=>{ renderPresselVendList(p.id); renderPresselElems(p.id); renderPresselPreview(p.id); });
 }
 // Painel inline (editor + roleta já abertos) de uma pressel
 function presselPanel(p){
@@ -8044,7 +8046,6 @@ function presselPanel(p){
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-gh btn-sm" onclick="testPresselRoleta(${p.id})">Testar</button>
-        <button class="btn btn-gh btn-sm" onclick="openPresselView(${p.id})">Prévia</button>
         <button class="btn btn-gh btn-sm" onclick="openPresselPublic(${p.id})">Ver online</button>
         <button class="btn btn-gh btn-sm" onclick="duplicatePressel(${p.id})">Duplicar</button>
         <button class="btn btn-gh btn-sm" style="color:var(--rd)" onclick="deletePresselById(${p.id})">Excluir</button>
@@ -8056,56 +8057,172 @@ function presselPanel(p){
       <span style="flex:1;min-width:0;font-size:12px;font-family:ui-monospace,monospace;color:var(--bl2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(link)}</span>
       <button class="btn btn-gh btn-sm" onclick="copyPresselLink(${p.id})">Copiar link</button>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:20px">
-      <div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:300px">
         <div style="display:flex;gap:4px;background:var(--s3);border-radius:var(--r);padding:4px;margin-bottom:14px">
-          <button id="pp-tabbtn-config-${p.id}" class="pp-tabbtn on" onclick="presselTab(${p.id},'config')">Configurações</button>
-          <button id="pp-tabbtn-elem-${p.id}" class="pp-tabbtn" onclick="presselTab(${p.id},'elem')">Elementos</button>
+          <button id="pp-tabbtn-elem-${p.id}" class="pp-tabbtn on" onclick="presselTab(${p.id},'elem')">Elementos</button>
+          <button id="pp-tabbtn-config-${p.id}" class="pp-tabbtn" onclick="presselTab(${p.id},'config')">Configurações</button>
         </div>
-        <div id="pp-tab-config-${p.id}">
+        <div id="pp-tab-elem-${p.id}">
+          <div style="font-size:12px;color:var(--t3);margin-bottom:8px">Adicionar elemento:</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+            <button class="pp-addel" onclick="addPresselEl(${p.id},'imagem')">${ico('image',{size:18})}<span>Imagem</span></button>
+            <button class="pp-addel" onclick="addPresselEl(${p.id},'texto')">${ico('type',{size:18})}<span>Texto</span></button>
+            <button class="pp-addel" onclick="addPresselEl(${p.id},'botao')">${ico('zap',{size:18})}<span>Botão</span></button>
+            <button class="pp-addel" onclick="addPresselEl(${p.id},'html')">${ico('code',{size:18})}<span>HTML / Pixel</span></button>
+          </div>
+          <div style="font-size:12px;font-weight:700;color:var(--tx);margin-bottom:8px">Elementos (<span id="pp-elcount-${p.id}">0</span>)</div>
+          <div id="pp-els-${p.id}"></div>
+        </div>
+        <div id="pp-tab-config-${p.id}" style="display:none">
+          <label class="pp-lbl">URL pública</label>
+          <input value="${esc(link)}" readonly class="pp-inp" style="margin-bottom:4px;color:var(--bl2)">
+          <p class="muted" style="font-size:11px;margin:0 0 12px">Domínio próprio: em breve. Por enquanto o link é o do servidor.</p>
           <label class="pp-lbl">Cor de fundo</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <input type="color" id="pp-bg-${p.id}" value="${esc(p.bg||'#ffffff')}" oninput="document.getElementById('pp-bgx-${p.id}').value=this.value" style="width:42px;height:38px;border:1px solid var(--b2);border-radius:8px;background:none;cursor:pointer;padding:2px">
-            <input id="pp-bgx-${p.id}" value="${esc(p.bg||'#ffffff')}" class="pp-inp" oninput="document.getElementById('pp-bg-${p.id}').value=this.value" style="flex:1">
+            <input type="color" id="pp-bg-${p.id}" value="${esc(p.bg||'#ffffff')}" oninput="document.getElementById('pp-bgx-${p.id}').value=this.value;renderPresselPreview(${p.id})" style="width:42px;height:38px;border:1px solid var(--b2);border-radius:8px;background:none;cursor:pointer;padding:2px">
+            <input id="pp-bgx-${p.id}" value="${esc(p.bg||'#ffffff')}" class="pp-inp" oninput="document.getElementById('pp-bg-${p.id}').value=this.value;renderPresselPreview(${p.id})" style="flex:1">
           </div>
           <label class="pp-lbl">Mensagem padrão do WhatsApp</label>
           <textarea id="pp-msg-${p.id}" rows="2" class="pp-inp" style="margin-bottom:12px;resize:vertical">${String(p.msg||'').replace(/</g,'&lt;')}</textarea>
           <label class="pp-lbl">TikTok Pixel ID</label>
           <input id="pp-tt-${p.id}" value="${esc(p.pixel_tt)}" placeholder="ex: C9XXXXXXXXXXXX" class="pp-inp" style="margin-bottom:12px">
-          <label class="pp-lbl">TikTok Access Token (opcional)</label>
-          <input id="pp-ttk-${p.id}" value="${esc(p.pixel_tt_token)}" placeholder="token da Events API (avançado)" class="pp-inp" style="margin-bottom:12px">
-          <label class="pp-lbl">Meta Pixel ID (opcional)</label>
-          <input id="pp-mp-${p.id}" value="${esc(p.pixel_meta)}" placeholder="ID do pixel do Facebook/Instagram" class="pp-inp" style="margin-bottom:8px">
+          <label class="pp-lbl">TikTok Access Token</label>
+          <input id="pp-ttk-${p.id}" value="${esc(p.pixel_tt_token)}" placeholder="token da Events API (opcional)" class="pp-inp" style="margin-bottom:12px">
+          <label class="pp-lbl">Meta Pixel ID</label>
+          <input id="pp-mp-${p.id}" value="${esc(p.pixel_meta)}" placeholder="ID do pixel Meta (Facebook/Instagram)" class="pp-inp" style="margin-bottom:12px">
+          <label class="pp-lbl">Meta Access Token</label>
+          <input id="pp-mpk-${p.id}" value="${esc(p.pixel_meta_token)}" placeholder="token da Conversions API (opcional)" class="pp-inp" style="margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--b1);margin-top:8px">
             <div style="flex:1"><div style="font-size:12.5px;font-weight:600;color:var(--tx)">Página inteira clicável</div><div style="font-size:11px;color:var(--t3)">Qualquer clique leva ao WhatsApp</div></div>
             <div id="pp-fc-${p.id}" class="ax-sw ${p.fullclick?'on':''}" onclick="togglePresselFullclick(${p.id})"></div>
           </div>
           <label class="pp-lbl" style="margin-top:6px">Redirecionamento automático (segundos)</label>
           <input id="pp-redir-${p.id}" type="number" min="0" value="${redirSecs}" class="pp-inp">
-          <p class="muted" style="font-size:11px;margin-top:5px">Abre a pressel e, se o lead não clicar nesse tempo, vai automático pro WhatsApp. <b>0 = desativado</b> (precisa clicar).</p>
-        </div>
-        <div id="pp-tab-elem-${p.id}" style="display:none">
-          <label class="pp-lbl">Imagem do criativo</label>
-          <div style="border:1px dashed var(--b2);border-radius:var(--r);padding:12px;text-align:center;margin-bottom:8px;background:var(--s2)">
-            <img id="pp-prev-${p.id}" src="${esc(img)}" style="max-width:100%;max-height:220px;border-radius:8px;${img?'':'display:none'}">
-            <div id="pp-prevph-${p.id}" style="${img?'display:none;':''}color:var(--t3);font-size:12px;padding:28px 0">Nenhuma imagem ainda</div>
-            <div style="margin-top:10px">
-              <input type="file" accept="image/*" id="pp-file-${p.id}" style="display:none" onchange="presselUploadImg(${p.id},this)">
-              <button class="btn btn-gh btn-sm" onclick="document.getElementById('pp-file-${p.id}').click()">Upar imagem</button>
-            </div>
-          </div>
-          <input id="pp-img-${p.id}" value="${isUrl?esc(img):''}" placeholder="ou cole uma URL da imagem" oninput="presselImgUrl(${p.id},this.value)" class="pp-inp" style="margin-bottom:12px">
-          <label class="pp-lbl">Texto do botão (CTA)</label>
-          <input id="pp-cta-${p.id}" value="${esc(p.cta||'FALAR NO WHATSAPP')}" class="pp-inp">
+          <p class="muted" style="font-size:11px;margin-top:5px">Abre a pressel e, se o lead não clicar nesse tempo, vai automático pro WhatsApp. <b>0 = desativado</b>.</p>
         </div>
       </div>
-      <div>
+      <div style="flex:0 0 375px;max-width:100%">
+        <div style="font-size:11px;color:var(--t3);text-align:center;margin-bottom:8px;display:flex;align-items:center;gap:6px;justify-content:center">${ico('smartphone',{size:13})} Preview Mobile (375px)</div>
+        <div id="pp-prev-${p.id}" style="width:375px;max-width:100%;margin:0 auto;border:1px solid var(--b2);border-radius:16px;overflow:hidden;background:#fff;min-height:420px"></div>
+      </div>
+      <div style="flex:1;min-width:280px">
         <label class="pp-lbl">Vendedores na roleta</label>
         <p class="muted" style="font-size:11px;margin:0 0 10px">Ligue/desligue cada atendente no interruptor. A roleta usa o número <b>em uso</b> dele.</p>
         <div id="pp-vend-${p.id}"></div>
       </div>
     </div>
   </div>`;
+}
+// ── Construtor de elementos da pressel (Imagem/Texto/Botão/HTML) ──
+function _presselEls(p){
+  if(!Array.isArray(p.elementos)){
+    const els=[]; let n=1;
+    if(p.img) els.push({id:n++,type:'imagem',src:p.img});
+    els.push({id:n++,type:'botao',label:p.cta||'FALAR NO WHATSAPP',bg:'#22c55e',color:'#ffffff'});
+    p.elementos=els;
+  }
+  return p.elementos;
+}
+function _nextElId(p){ return (_presselEls(p).reduce((m,e)=>Math.max(m,e.id||0),0))+1; }
+function addPresselEl(pid,type){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const e={id:_nextElId(p),type};
+  if(type==='imagem') e.src='';
+  else if(type==='texto'){ e.text='Seu texto aqui'; e.size=16; e.align='center'; e.color='#111111'; }
+  else if(type==='botao'){ e.label='FALAR NO WHATSAPP'; e.bg='#22c55e'; e.color='#ffffff'; }
+  else if(type==='html') e.html='<!-- cole aqui um código/pixel -->';
+  _presselEls(p).push(e);
+  renderPresselElems(pid); renderPresselPreview(pid);
+  persistAndPushNow().catch(_=>{});
+}
+function removePresselEl(pid,elId){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.elementos=_presselEls(p).filter(e=>e.id!==elId);
+  renderPresselElems(pid); renderPresselPreview(pid);
+  persistAndPushNow().catch(_=>{});
+}
+function movePresselEl(pid,elId,dir){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const els=_presselEls(p); const i=els.findIndex(e=>e.id===elId); if(i<0) return;
+  const j=i+dir; if(j<0||j>=els.length) return;
+  [els[i],els[j]]=[els[j],els[i]];
+  renderPresselElems(pid); renderPresselPreview(pid);
+  persistAndPushNow().catch(_=>{});
+}
+function updatePresselEl(pid,elId,key,val){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const e=_presselEls(p).find(x=>x.id===elId); if(!e) return;
+  e[key]=val;
+  renderPresselPreview(pid);
+}
+function presselElUpload(pid,elId,input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  _downscaleImage(f,720,(dataUrl)=>{
+    if(!dataUrl){toast('Falha ao ler a imagem','err');return;}
+    updatePresselEl(pid,elId,'src',dataUrl);
+    renderPresselElems(pid);
+    persistAndPushNow().then(()=>toast('✓ Imagem salva','ok')).catch(_=>{});
+  });
+}
+function _elIcon(t){ return t==='imagem'?'image':t==='texto'?'type':t==='botao'?'zap':'code'; }
+function _elName(t){ return t==='imagem'?'Imagem':t==='texto'?'Texto':t==='botao'?'Botão':'HTML / Pixel'; }
+function renderPresselElems(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const wrap=$('pp-els-'+pid); if(!wrap) return;
+  const els=_presselEls(p);
+  const cnt=$('pp-elcount-'+pid); if(cnt)cnt.textContent=els.length;
+  if(!els.length){ wrap.innerHTML='<div class="muted" style="font-size:12px;padding:12px;text-align:center">Adicione um elemento acima.</div>'; return; }
+  const q=s=>String(s==null?'':s).replace(/"/g,'&quot;');
+  wrap.innerHTML=els.map((e,i)=>{
+    let body='';
+    if(e.type==='imagem'){
+      body=`${e.src?`<img src="${q(e.src)}" style="max-width:100%;max-height:120px;border-radius:6px;margin-bottom:6px">`:''}
+        <input type="file" accept="image/*" id="pp-elf-${pid}-${e.id}" style="display:none" onchange="presselElUpload(${pid},${e.id},this)">
+        <div style="display:flex;gap:6px"><button class="btn btn-gh btn-xs" onclick="document.getElementById('pp-elf-${pid}-${e.id}').click()">Upar</button>
+        <input value="${e.src&&!String(e.src).startsWith('data:')?q(e.src):''}" placeholder="ou URL da imagem" oninput="updatePresselEl(${pid},${e.id},'src',this.value)" class="pp-inp" style="flex:1"></div>`;
+    } else if(e.type==='texto'){
+      body=`<textarea class="pp-inp" rows="2" style="margin-bottom:6px;resize:vertical" oninput="updatePresselEl(${pid},${e.id},'text',this.value)">${String(e.text||'').replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" min="10" max="48" value="${Number(e.size)||16}" title="Tamanho" oninput="updatePresselEl(${pid},${e.id},'size',Number(this.value)||16)" class="pp-inp" style="width:64px">
+          <select onchange="updatePresselEl(${pid},${e.id},'align',this.value)" class="pp-inp" style="flex:1"><option value="left" ${e.align==='left'?'selected':''}>Esquerda</option><option value="center" ${(e.align||'center')==='center'?'selected':''}>Centro</option><option value="right" ${e.align==='right'?'selected':''}>Direita</option></select>
+          <input type="color" value="${q(e.color||'#111111')}" title="Cor" oninput="updatePresselEl(${pid},${e.id},'color',this.value)" style="width:38px;height:34px;border:1px solid var(--b2);border-radius:6px;background:none;cursor:pointer">
+        </div>`;
+    } else if(e.type==='botao'){
+      body=`<input value="${q(e.label||'FALAR NO WHATSAPP')}" placeholder="Texto do botão" oninput="updatePresselEl(${pid},${e.id},'label',this.value)" class="pp-inp" style="margin-bottom:6px">
+        <div style="display:flex;gap:6px;align-items:center"><span style="font-size:11px;color:var(--t3)">Fundo</span>
+          <input type="color" value="${q(e.bg||'#22c55e')}" oninput="updatePresselEl(${pid},${e.id},'bg',this.value)" style="width:36px;height:32px;border:1px solid var(--b2);border-radius:6px;background:none;cursor:pointer">
+          <span style="font-size:11px;color:var(--t3)">Texto</span>
+          <input type="color" value="${q(e.color||'#ffffff')}" oninput="updatePresselEl(${pid},${e.id},'color',this.value)" style="width:36px;height:32px;border:1px solid var(--b2);border-radius:6px;background:none;cursor:pointer">
+          <span style="font-size:11px;color:var(--t4);flex:1;text-align:right">leva ao WhatsApp</span></div>`;
+    } else if(e.type==='html'){
+      body=`<textarea class="pp-inp" rows="3" style="font-family:ui-monospace,monospace;font-size:12px;resize:vertical" oninput="updatePresselEl(${pid},${e.id},'html',this.value)">${String(e.html||'').replace(/</g,'&lt;')}</textarea>`;
+    }
+    return `<div style="border:1px solid var(--b1);border-radius:var(--r);padding:10px 11px;margin-bottom:7px;background:var(--s2)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="color:var(--t2);display:inline-flex">${ico(_elIcon(e.type),{size:14})}</span>
+        <span style="flex:1;font-size:12.5px;font-weight:600;color:var(--tx)">${_elName(e.type)}</span>
+        <button class="btn btn-gh btn-xs" title="Subir" onclick="movePresselEl(${pid},${e.id},-1)">${ico('arrow-up',{size:13})}</button>
+        <button class="btn btn-gh btn-xs" title="Descer" onclick="movePresselEl(${pid},${e.id},1)"><span style="display:inline-block;transform:rotate(180deg)">${ico('arrow-up',{size:13})}</span></button>
+        <button class="btn btn-gh btn-xs" title="Excluir" style="color:var(--rd)" onclick="removePresselEl(${pid},${e.id})">${ico('trash',{size:13})}</button>
+      </div>${body}
+    </div>`;
+  }).join('');
+}
+function _elPreviewHtml(e){
+  const q=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  if(e.type==='imagem') return e.src?`<img src="${q(e.src)}" style="width:100%;display:block">`:`<div style="background:#e9e9e9;color:#999;text-align:center;padding:50px 10px;font-size:12px">imagem</div>`;
+  if(e.type==='texto') return `<div style="padding:14px;font-size:${Number(e.size)||16}px;text-align:${q(e.align||'center')};color:${q(e.color||'#111')};line-height:1.4">${q(e.text||'')}</div>`;
+  if(e.type==='botao') return `<div style="padding:14px"><div style="background:${q(e.bg||'#22c55e')};color:${q(e.color||'#fff')};border-radius:12px;padding:15px;text-align:center;font-weight:800;font-size:16px">${q(e.label||'FALAR NO WHATSAPP')}</div></div>`;
+  if(e.type==='html') return e.html||'';
+  return '';
+}
+function renderPresselPreview(pid){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const wrap=$('pp-prev-'+pid); if(!wrap) return;
+  wrap.style.background=p.bg||'#ffffff';
+  const els=_presselEls(p);
+  wrap.innerHTML=els.length?els.map(_elPreviewHtml).join(''):'<div style="padding:50px 16px;text-align:center;color:#999;font-size:12px">Adicione elementos pra ver o preview</div>';
 }
 // Alterna a aba (Configurações/Elementos) sem re-renderizar (preserva o que foi digitado)
 function presselTab(pid, tab){
@@ -8159,7 +8276,7 @@ function renderPresselVendList(pid){
 function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
 function addPresselInline(){
   _ensurePressels();
-  DB.pressels.push({id:_nextPresselId(),nome:'Nova Pressel',status:'ativa',img:'',cta:'FALAR NO WHATSAPP',msg:'',pixel_tt:'',pixel_tt_token:'',pixel_meta:'',bg:'#ffffff',redirect:0,fullclick:false,vendedores:[],metrics:{cliques:0,contatos:0,vendas:0},_rr:0});
+  DB.pressels.push({id:_nextPresselId(),nome:'Nova Pressel',status:'ativa',msg:'',pixel_tt:'',pixel_tt_token:'',pixel_meta:'',pixel_meta_token:'',bg:'#ffffff',redirect:0,fullclick:false,elementos:[{id:1,type:'imagem',src:''},{id:2,type:'botao',label:'FALAR NO WHATSAPP',bg:'#22c55e',color:'#ffffff'}],vendedores:[],metrics:{cliques:0,contatos:0,vendas:0},_rr:0});
   renderPressels();
   persistAndPushNow().catch(_=>{});
 }
@@ -8181,14 +8298,14 @@ function savePresselInline(pid){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
   const g=k=>$(k+'-'+pid);
   p.nome=g('pp-nome').value.trim()||p.nome;
-  p.cta=(g('pp-cta')?.value||'').trim()||'FALAR NO WHATSAPP';
   p.msg=g('pp-msg')?.value||'';
   p.pixel_tt=(g('pp-tt')?.value||'').trim();
   p.pixel_tt_token=(g('pp-ttk')?.value||'').trim();
   p.pixel_meta=(g('pp-mp')?.value||'').trim();
+  p.pixel_meta_token=(g('pp-mpk')?.value||'').trim();
   p.bg=(g('pp-bgx')?.value||g('pp-bg')?.value||'#ffffff').trim();
   p.redirect=Math.max(0,Number(g('pp-redir')?.value)||0);
-  // p.img já é gravado nos handlers de upload/URL; p.fullclick no toggle
+  // elementos já mutados direto no construtor; p.fullclick no toggle
   toast('Pressel salva · sincronizando...','ok');
   persistAndPushNow().then(()=>{toast('✓ Sincronizado','ok');renderPressels();}).catch(_=>{});
 }

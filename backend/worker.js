@@ -1301,6 +1301,21 @@ function _presselHtml(html){
 function _presselOffline(){
   return _presselHtml(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#cbd5e1;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px"><div><h2 style="margin:0 0 8px">Indisponível no momento</h2><p style="opacity:.7">Tente novamente em instantes.</p></div></body>`);
 }
+// Elementos da pressel (compat: monta de img+cta se ainda não tiver elementos)
+function _presselElsServer(p){
+  if(Array.isArray(p.elementos) && p.elementos.length) return p.elementos;
+  const els=[]; let n=1;
+  if(p.img) els.push({id:n++,type:'imagem',src:p.img});
+  els.push({id:n++,type:'botao',label:p.cta||'FALAR NO WHATSAPP',bg:'#22c55e',color:'#ffffff'});
+  return els;
+}
+function _elPublicHtml(e, wa){
+  if(e.type==='imagem') return e.src?`<img src="${_escHtml(e.src)}" alt="">`:'';
+  if(e.type==='texto') return `<div style="padding:14px;font-size:${Number(e.size)||16}px;text-align:${_escHtml(e.align||'center')};color:${_escHtml(e.color||'#111')};line-height:1.4">${_escHtml(e.text||'')}</div>`;
+  if(e.type==='botao') return `<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="track()" style="display:block;background:${_escHtml(e.bg||'#22c55e')};color:${_escHtml(e.color||'#fff')};border-radius:12px;padding:15px;text-align:center;font-weight:800;font-size:16px;text-decoration:none">${_escHtml(e.label||'FALAR NO WHATSAPP')}</a></div>`;
+  if(e.type==='html') return e.html||'';
+  return '';
+}
 // Round-robin de verdade (distribuição IGUAL): contador por pressel numa
 // tabela própria, sem mexer no dashboard_state (evita conflito de sync).
 async function _presselNextIndex(env, id, len){
@@ -1327,16 +1342,20 @@ async function handlePresselPublic(req, env, id){
   const wa=_waLink(pick, p.msg);
   if(!wa) return _presselOffline();
   const bg=_escHtml(p.bg||'#ffffff');
-  const img=p.img?`<img src="${_escHtml(p.img)}" alt="">`:'';
-  const cta=_escHtml(p.cta||'FALAR NO WHATSAPP');
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
-  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}.cta{display:block;width:calc(100% - 32px);margin:16px auto;background:#22c55e;color:#fff;border:none;border-radius:14px;padding:17px;font-size:18px;font-weight:800;cursor:pointer;text-align:center;text-decoration:none}</style></head>`;
+  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   const script=`<script>function track(){try{ttq&&ttq.track('ClickButton')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const els=_presselElsServer(p);
+  let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
-    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${img}</div>${script}</body></html>`);
+    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
   }
-  return _presselHtml(`${head}<body><div class="wrap">${img}<a class="cta" href="${_escHtml(wa)}" onclick="track()">${cta}</a></div>${script}</body></html>`);
+  // Garante um botão de WhatsApp se o usuário não adicionou nenhum
+  if(!els.some(e=>e.type==='botao')){
+    body+=`<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="track()" style="display:block;background:#22c55e;color:#fff;border-radius:12px;padding:15px;text-align:center;font-weight:800;font-size:16px;text-decoration:none">FALAR NO WHATSAPP</a></div>`;
+  }
+  return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
 }
 
 // ─── Router ───
