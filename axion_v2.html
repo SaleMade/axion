@@ -4147,7 +4147,11 @@ const producerEnabled=()=>(DB.appConfig||{}).showProducer===true;
 // Modo financeiro efetivo: 'afiliado' forçado quando o modo Produtor está oculto.
 const finMode=()=>producerEnabled()?((DB.demConfig||{}).mode||'afiliado'):'afiliado';
 // Itens da sidebar que o usuário escolheu ocultar (mapa {itemId:true}).
-const navHidden=()=>(DB.appConfig||{}).navHidden||{};
+// Por usuário: cada um personaliza a própria lateral, sem afetar os outros.
+const navHidden=()=>{
+  const by=(DB.appConfig||{}).navHiddenByUser||{};
+  return (CUR&&by[CUR.id])||{};
+};
 // Aplica/remove a classe que esconde elementos estáticos do modo Produtor.
 function applyProducerVisibility(){
   document.body.classList.toggle('no-producer',!producerEnabled());
@@ -13791,9 +13795,10 @@ function toggleProducer(on){
 // Mostra/oculta um item da sidebar (acordeões). visible=true → aparece.
 function toggleNavItem(id,visible){
   DB.appConfig=DB.appConfig||{};
-  DB.appConfig.navHidden=DB.appConfig.navHidden||{};
-  if(visible)delete DB.appConfig.navHidden[id];
-  else DB.appConfig.navHidden[id]=true;
+  DB.appConfig.navHiddenByUser=DB.appConfig.navHiddenByUser||{};
+  const map=DB.appConfig.navHiddenByUser[CUR.id]=DB.appConfig.navHiddenByUser[CUR.id]||{};
+  if(visible)delete map[id];
+  else map[id]=true;
   persist();
   buildSidebar();
 }
@@ -13897,7 +13902,7 @@ function cfgAparencia(){
     </div>
 
     <!-- ─── Itens da sidebar ─── -->
-    <div class="cfg-h" style="margin-top:24px"><h2>Itens da sidebar</h2><p>Escolha o que aparece dentro de cada acordeão da lateral</p></div>
+    <div class="cfg-h" style="margin-top:24px"><h2>Itens da sidebar</h2><p>Escolha o que aparece dentro de cada acordeão da lateral — só pra você, não afeta os outros membros</p></div>
     <div class="cfg-card" style="display:flex;flex-direction:column;gap:16px">
       ${(()=>{const hid=navHidden();return computeNav().map(g=>`
         <div>
