@@ -8057,11 +8057,6 @@ function presselPanel(p){
         <button class="btn btn-bl btn-sm" onclick="savePresselInline(${p.id})">Salvar</button>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:8px 11px;margin-bottom:14px">
-      <span style="font-size:11px;color:var(--t3);flex-shrink:0">Link público</span>
-      <span style="flex:1;min-width:0;font-size:12px;font-family:ui-monospace,monospace;color:var(--bl2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(link)}</span>
-      <button class="btn btn-gh btn-sm" onclick="copyPresselLink(${p.id})">Copiar link</button>
-    </div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:300px">
         <div style="display:flex;gap:4px;background:var(--s3);border-radius:var(--r);padding:4px;margin-bottom:14px">
@@ -8081,7 +8076,10 @@ function presselPanel(p){
         </div>
         <div id="pp-tab-config-${p.id}" style="display:none">
           <label class="pp-lbl">URL pública</label>
-          <input value="${esc(link)}" readonly class="pp-inp" style="margin-bottom:4px;color:var(--bl2)">
+          <div style="display:flex;gap:6px;margin-bottom:4px">
+            <input value="${esc(link)}" readonly class="pp-inp" style="flex:1;color:var(--bl2)">
+            <button class="btn btn-gh btn-sm" onclick="copyPresselLink(${p.id})">Copiar</button>
+          </div>
           <p class="muted" style="font-size:11px;margin:0 0 12px">Domínio próprio: em breve. Por enquanto o link é o do servidor.</p>
           <label class="pp-lbl">Cor de fundo</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
@@ -8112,8 +8110,7 @@ function presselPanel(p){
         <div id="pp-prev-${p.id}" style="width:375px;max-width:100%;margin:0 auto;border:1px solid var(--b2);border-radius:16px;overflow:hidden;background:#fff;min-height:420px"></div>
       </div>
       <div style="flex:1;min-width:280px">
-        <label class="pp-lbl">Vendedores na roleta</label>
-        <p class="muted" style="font-size:11px;margin:0 0 10px">Ligue/desligue cada atendente no interruptor. A roleta usa o número <b>em uso</b> dele.</p>
+        <label class="pp-lbl" style="margin-bottom:10px">Vendedores na roleta</label>
         <div id="pp-vend-${p.id}"></div>
       </div>
     </div>
@@ -8281,7 +8278,7 @@ function renderPresselVendList(pid){
   let html = ativos.length ? ativos.map(row).join('')
     : '<div class="muted" style="font-size:12px;padding:8px 0">Nenhum atendente com número em uso. Marque um número como "Em uso" na Contingência pra ele entrar na roleta.</div>';
   if(fora.length){
-    html += `<div style="display:flex;align-items:center;gap:8px;margin:14px 0 9px"><div style="flex:1;height:1px;background:var(--b1)"></div><span style="font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">sem número em uso · não atendem</span><div style="flex:1;height:1px;background:var(--b1)"></div></div>` + fora.map(row).join('');
+    html += `<div style="height:1px;background:var(--b1);margin:14px 0 9px"></div>` + fora.map(row).join('');
   }
   wrap.innerHTML=html;
 }
