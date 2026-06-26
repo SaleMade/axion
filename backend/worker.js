@@ -1301,6 +1301,19 @@ function _presselHtml(html){
 function _presselOffline(){
   return _presselHtml(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#cbd5e1;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px"><div><h2 style="margin:0 0 8px">Indisponível no momento</h2><p style="opacity:.7">Tente novamente em instantes.</p></div></body>`);
 }
+// Round-robin de verdade (distribuição IGUAL): contador por pressel numa
+// tabela própria, sem mexer no dashboard_state (evita conflito de sync).
+async function _presselNextIndex(env, id, len){
+  if(len<=1) return 0;
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_rr (pid TEXT PRIMARY KEY, n INTEGER)').run();
+    const row=await env.DB.prepare('SELECT n FROM pressel_rr WHERE pid=?').bind(String(id)).first();
+    const n=row?(Number(row.n)||0):0;
+    await env.DB.prepare('INSERT INTO pressel_rr (pid,n) VALUES (?,?) ON CONFLICT(pid) DO UPDATE SET n=?')
+      .bind(String(id), n+1, n+1).run();
+    return n%len;
+  }catch(_){ return Math.floor(Math.random()*len); }
+}
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -1310,7 +1323,7 @@ async function handlePresselPublic(req, env, id){
   if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
   const nums=_resolvePresselNumbers(p, chips);
   if(!nums.length) return _presselOffline();
-  const pick=nums[Math.floor(Math.random()*nums.length)];
+  const pick=nums[await _presselNextIndex(env, id, nums.length)];
   const wa=_waLink(pick, p.msg);
   if(!wa) return _presselOffline();
   const bg=_escHtml(p.bg||'#ffffff');

@@ -8037,10 +8037,10 @@ function presselPanel(p){
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
       <div class="ax-sw ${isAtiva?'on':''}" title="${isAtiva?'Publicada — clique pra pausar':'Pausada — clique pra publicar'}" onclick="togglePresselStatus(${p.id})"></div>
       <input id="pp-nome-${p.id}" value="${esc(p.nome)}" placeholder="Nome da pressel" style="flex:1;min-width:160px;font-size:16px;font-weight:700;background:transparent;border:none;border-bottom:1px solid var(--b1);color:var(--tx);padding:4px 2px;font-family:inherit;outline:none">
-      <div style="display:flex;gap:16px;text-align:center">
-        <div><div style="font-size:10px;color:var(--t3)">Cliques</div><div style="font-size:15px;font-weight:700">${m.cliques||0}</div></div>
-        <div><div style="font-size:10px;color:var(--t3)">Contatos</div><div style="font-size:15px;font-weight:700">${m.contatos||0}</div></div>
-        <div><div style="font-size:10px;color:var(--t3)">Vendas</div><div style="font-size:15px;font-weight:700">${m.vendas||0}</div></div>
+      <div style="display:flex;gap:22px;text-align:center">
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('zap',{size:13})} Cliques</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.cliques||0}</div></div>
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('message-circle',{size:13})} Contatos</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.contatos||0}</div></div>
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('shopping-cart',{size:13})} Vendas</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.vendas||0}</div></div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-gh btn-sm" onclick="testPresselRoleta(${p.id})">Testar</button>
