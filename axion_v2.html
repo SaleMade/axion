@@ -4890,8 +4890,12 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         {id:'contingencia',lbl:'Contingência'},
-        ...(dir?[{id:'pressels',lbl:'Pressels'},{id:'automacoes',lbl:'Automações'}]:[]),
+        ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
+      // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
+      ...(dir?[{g:'Automações',items:[
+        {id:'automacoes',lbl:'WhatsApp'},
+      ]}]:[]),
       // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
       {g:'Equipe',items:[
@@ -4925,7 +4929,7 @@ function buildSidebar(){
 
   // Estado dos acordeões (persistido)
   const open=getSidebarOpen();
-  const navIconNames={Dashboard:'layout-grid',Operacional:'target',Financeiro:'wallet',Pessoal:'user',WhatsApp:'message-circle',Equipe:'users',Criativos:'palette','Integrações':'zap'};
+  const navIconNames={Dashboard:'layout-grid',Operacional:'target',Financeiro:'wallet',Pessoal:'user',WhatsApp:'message-circle','Automações':'zap',Equipe:'users',Criativos:'palette','Integrações':'zap'};
   const navIcon=g=>ico(navIconNames[g]||'circle',{size:15});
 
   $('sb-nav').innerHTML=nav.map((g,gi)=>{
@@ -5006,7 +5010,7 @@ const PNAMES={
   invest:'Financeiro / <b>Investimentos</b>',
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
-  automacoes:"WhatsApp / <b>Automações</b>",
+  automacoes:"Automações / <b>WhatsApp</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
