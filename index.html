@@ -3797,6 +3797,15 @@ const api={
   aiKeysGet:()=>api._fetch('/api/config/ai-keys'),
   aiKeysSet:(payload)=>api._fetch('/api/config/ai-keys',{method:'POST',body:JSON.stringify(payload)}),
   aiKeysTest:(provider)=>api._fetch('/api/config/ai-keys/test',{method:'POST',body:JSON.stringify({provider})}),
+  // WhatsApp (Evolution API) — via ponte segura no Worker (Dash→Worker→Evolution)
+  waCfgGet:()=>api._fetch('/api/config/wa'),
+  waCfgSet:(payload)=>api._fetch('/api/config/wa',{method:'POST',body:JSON.stringify(payload)}),
+  waSend:(number,text,instance)=>api._fetch('/api/wa/send',{method:'POST',body:JSON.stringify({number,text,instance})}),
+  waInstances:()=>api._fetch('/api/wa/instances'),
+  waCreate:(instanceName)=>api._fetch('/api/wa/instance/create',{method:'POST',body:JSON.stringify({instanceName})}),
+  waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
+  waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
+  waLogout:(instance)=>api._fetch('/api/wa/instance/logout',{method:'POST',body:JSON.stringify({instance})}),
 };
 
 // ─── Sync state com servidor ───
@@ -8042,7 +8051,7 @@ function renderPressels(){
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 16px">
       <button class="btn btn-gh btn-sm" onclick="addPresselInline()">+ Nova Pressel</button>
       <span class="muted" style="font-size:12px;flex:1;min-width:200px">A roleta distribui os leads usando o número <b>em uso</b> de cada atendente (da Contingência) e pula automaticamente os banidos/restritos. Conecte o WhatsApp de cada número direto no interruptor.</span>
-      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()" title="Configurar a conexão com a Evolution API (uma vez só)">${evoCfg().url?'WhatsApp ✓':'Configurar WhatsApp'}</button>
+      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()" title="Configurar e ver o status da conexão com a Evolution API">Config WhatsApp</button>
     </div>
     ${list.length? list.map(presselPanel).join('') :
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
@@ -8471,47 +8480,77 @@ function presselCTA(id){
    O servidor Evolution roda FORA do Cloudflare (VPS/Docker). */
 const EVOLUTION_API={url:'',key:''};
 function evoCfg(){ return EVOLUTION_API.url?EVOLUTION_API:(DB.evolution||{}); }
-function openEvolutionConfig(){
-  const ev=evoCfg();
+async function openEvolutionConfig(){
   const body=$('evo-body'); if(!body) return;
-  $('evo-title').textContent='Configurar Evolution API';
-  body.innerHTML=`
-    <p class="muted" style="font-size:12px;margin-bottom:12px;line-height:1.5">Cole a URL e a API key da sua instância Evolution API (rodando num VPS/Docker). Sem isso, a conexão por QR fica indisponível.</p>
-    <label class="pp-lbl">URL da Evolution API</label>
-    <input id="evo-url" class="pp-inp" placeholder="https://sua-evolution.com" value="${(ev.url||'').replace(/"/g,'&quot;')}" style="margin-bottom:12px">
-    <label class="pp-lbl">API Key</label>
-    <input id="evo-key" class="pp-inp" placeholder="sua-api-key" value="${(ev.key||'').replace(/"/g,'&quot;')}" style="margin-bottom:16px">
-    <button class="btn btn-bl btn-sm" onclick="saveEvolutionConfig()">Salvar</button>`;
+  $('evo-title').textContent='Configurar WhatsApp (Evolution API)';
+  body.innerHTML='<p class="muted" style="font-size:12px;padding:18px;text-align:center">Carregando configuração…</p>';
   openM('m-evo');
+  let cfg={};
+  try{ cfg=await api.waCfgGet(); }catch(e){ /* segue com vazio se não autorizado/offline */ }
+  const stTxt=cfg.configured?'<span style="color:var(--gr)">● configurado</span>':'<span style="color:var(--am)">● não configurado</span>';
+  body.innerHTML=`
+    <p class="muted" style="font-size:12px;margin-bottom:10px;line-height:1.5">A dash fala com a Evolution por uma <b>ponte segura no servidor</b> — a API key fica guardada no backend, nunca no navegador. Status: ${stTxt}</p>
+    <label class="pp-lbl">URL da Evolution API</label>
+    <input id="evo-url" class="pp-inp" placeholder="https://seu-dominio" value="${(cfg.url||'').replace(/"/g,'&quot;')}" style="margin-bottom:12px">
+    <label class="pp-lbl">API Key ${cfg.key_preview?`<span class="muted" style="font-size:11px">(atual: ${cfg.key_preview} — em branco mantém)</span>`:''}</label>
+    <input id="evo-key" class="pp-inp" placeholder="${cfg.key_preview?'•••• (manter atual)':'sua-api-key'}" value="" style="margin-bottom:12px">
+    <label class="pp-lbl">Instância padrão</label>
+    <input id="evo-inst" class="pp-inp" placeholder="salemade" value="${(cfg.instance||'').replace(/"/g,'&quot;')}" style="margin-bottom:16px">
+    <button class="btn btn-bl btn-sm" onclick="saveEvolutionConfig()">Salvar</button>`;
 }
-function saveEvolutionConfig(){
-  DB.evolution={url:$('evo-url').value.trim(),key:$('evo-key').value.trim()};
-  closeM('m-evo'); renderPressels();
-  toast('Evolution API configurada','ok');
-  persistAndPushNow().catch(_=>{});
+async function saveEvolutionConfig(){
+  const payload={url:$('evo-url').value.trim(),instance:$('evo-inst').value.trim()};
+  const k=$('evo-key').value.trim();
+  if(k)payload.key=k; // só envia a key se foi digitada (senão mantém a do servidor)
+  try{
+    await api.waCfgSet(payload);
+    toast('WhatsApp configurado','ok');
+    closeM('m-evo'); if(typeof renderPressels==='function')renderPressels();
+  }catch(e){ toast('Erro ao salvar: '+((e&&e.message)||e),'err'); }
 }
 async function evoConnect(atId){
-  const ev=evoCfg();
-  if(!ev.url){toast('Configure a Evolution API primeiro','err');openEvolutionConfig();return;}
   const at=getTeam(atId);
   const inst='ax_'+atId;
-  const base=ev.url.replace(/\/$/,'');
-  const body=$('evo-body'); if(body){$('evo-title').textContent=`Conectar — ${at?at.name:''}`;body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Falando com a Evolution API...</p>';}
+  const body=$('evo-body');
+  $('evo-title').textContent=`Conectar — ${at?at.name:''}`;
+  if(body)body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Falando com a Evolution API...</p>';
   openM('m-evo');
   try{
-    await fetch(base+'/instance/create',{method:'POST',headers:{'Content-Type':'application/json','apikey':ev.key||''},body:JSON.stringify({instanceName:inst,qrcode:true,integration:'WHATSAPP-BAILEYS'})}).catch(()=>{});
-    const r=await fetch(base+'/instance/connect/'+inst,{headers:{'apikey':ev.key||''}});
-    const j=await r.json();
-    const qr=j&&(j.base64||(j.qrcode&&j.qrcode.base64)||j.qr||(j.qrcode&&j.qrcode.code));
+    // Cria (idempotente) e já recebe o QR — tudo pela ponte segura no Worker
+    const j=await api.waCreate(inst);
+    const qr=j&&j.qr;
     if(qr){
       const src=String(qr).startsWith('data:')?qr:('data:image/png;base64,'+qr);
-      body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p></div>`;
+      body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p><p id="evo-poll" class="muted" style="font-size:11.5px;margin-top:8px;opacity:.7">Aguardando leitura do QR…</p></div>`;
+      _evoPollStatus(inst);
     } else {
-      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Conectado ou QR indisponível. Resposta da API:<br><code style="font-size:11px">${JSON.stringify(j).slice(0,200)}</code></p>`;
+      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Conexão já ativa ou QR indisponível.<br><span style="font-size:11px;opacity:.7">Se o número não está conectado, feche e tente de novo.</span></p>`;
     }
   }catch(e){
-    body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui falar com a Evolution API.<br><br>Confira: (1) a URL/API key estão certas; (2) o servidor Evolution está no ar; (3) ele permite CORS da dash. O servidor Evolution roda fora do Cloudflare (VPS/Docker) — quando estiver no ar, isso aqui conecta sozinho.</p>`;
+    body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui conectar: ${(e&&e.message)||e}<br><br>Confira em Configurações se o WhatsApp (Evolution) está configurado e se o servidor da VPS está no ar.</p>`;
   }
+}
+// Polling: checa o status a cada 3s até conectar (open) ou o modal fechar (~2min)
+let _evoPollTimer=null;
+function _evoPollStatus(inst){
+  clearTimeout(_evoPollTimer);
+  let tries=0;
+  const tick=async()=>{
+    if(!$('m-evo')||!$('m-evo').classList.contains('open'))return; // modal fechado → para
+    tries++;
+    try{
+      const s=await api.waInstStatus(inst);
+      if(s&&s.state==='open'){
+        const body=$('evo-body');
+        if(body)body.innerHTML='<div style="text-align:center;padding:26px"><div style="font-size:42px;line-height:1;color:var(--gr)">✓</div><p style="font-size:14.5px;font-weight:700;margin-top:10px;color:var(--gr)">WhatsApp conectado!</p></div>';
+        toast('WhatsApp conectado','ok');
+        setTimeout(()=>closeM('m-evo'),1700);
+        return;
+      }
+    }catch(_){}
+    if(tries<40)_evoPollTimer=setTimeout(tick,3000);
+  };
+  _evoPollTimer=setTimeout(tick,3000);
 }
 
 /* ═══════════════════════════════════════════════════════

@@ -1263,6 +1263,191 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   });
 }
 
+// ─── WhatsApp (Evolution API) ─────────────────────────────────
+// A Dash chama o Worker (HTTPS) e o Worker repassa pra Evolution API na VPS.
+// Vantagem dupla: esconde a API key da Evolution (fica só no D1, nunca no
+// frontend) e evita mixed-content — navegador bloqueia https→http direto.
+// Config guardada no D1 (app_config): wa_url, wa_key, wa_instance.
+
+async function getWAConfig(env) {
+  const url = await _readConfig(env, 'wa_url');
+  const key = await _readConfig(env, 'wa_key');
+  const instance = await _readConfig(env, 'wa_instance');
+  return {
+    url: String(url || '').replace(/\/+$/, ''),
+    key: key || '',
+    instance: instance || '',
+  };
+}
+
+// Normaliza número pro formato da Evolution (DDI+DDD+numero, só dígitos)
+function waNumber(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length <= 11) d = '55' + d;  // sem DDI → assume Brasil
+  return d;
+}
+
+// GET /api/config/wa → status da config (sem expor a key inteira)
+async function handleWAConfigGet(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode ver config do WhatsApp', 403);
+  const cfg = await getWAConfig(env);
+  const mask = k => k ? (k.length < 12 ? k.slice(0, 3) + '…' : `${k.slice(0, 6)}…${k.slice(-4)}`) : null;
+  return json({
+    configured: !!(cfg.url && cfg.key && cfg.instance),
+    url: cfg.url,
+    instance: cfg.instance,
+    key_preview: mask(cfg.key),
+  });
+}
+
+// POST /api/config/wa → salva { url, key, instance } (qualquer um pode vir)
+async function handleWAConfigSet(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode mudar config do WhatsApp', 403);
+  const body = await req.json().catch(() => null);
+  if (!body) return err('Body inválido');
+  if (body.url !== undefined)      await _writeConfig(env, 'wa_url', String(body.url || '').trim().replace(/\/+$/, ''));
+  if (body.key !== undefined)      await _writeConfig(env, 'wa_key', String(body.key || '').trim());
+  if (body.instance !== undefined) await _writeConfig(env, 'wa_instance', String(body.instance || '').trim());
+  return json({ ok: true });
+}
+
+// GET /api/wa/status → estado da conexão da instância (open = conectado)
+async function handleWAStatus(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key || !cfg.instance) return err('WhatsApp não configurado', 503);
+  try {
+    const r = await fetch(`${cfg.url}/instance/connectionState/${cfg.instance}`, {
+      headers: { apikey: cfg.key },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return err(`Evolution respondeu ${r.status}`, 502);
+    return json({ ok: true, state: data?.instance?.state || 'unknown', instance: cfg.instance });
+  } catch (e) {
+    return err('Falha ao falar com a Evolution: ' + e.message, 502);
+  }
+}
+
+// POST /api/wa/send → { number, text, instance? } envia texto.
+// Se instance não vier, usa a instância padrão configurada (wa_instance).
+async function handleWASend(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
+  const body = await req.json().catch(() => null);
+  if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
+  const instance = String(body.instance || cfg.instance || '').trim();
+  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
+  const number = waNumber(body.number);
+  if (!number) return err('Número inválido');
+  try {
+    const r = await fetch(`${cfg.url}/message/sendText/${instance}`, {
+      method: 'POST',
+      headers: { apikey: cfg.key, 'content-type': 'application/json' },
+      body: JSON.stringify({ number, text: String(body.text) }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return err(`Evolution respondeu ${r.status}: ${JSON.stringify(data).slice(0, 200)}`, 502);
+    return json({ ok: true, id: data?.key?.id || null, status: data?.status || null, to: number, instance });
+  } catch (e) {
+    return err('Falha ao enviar: ' + e.message, 502);
+  }
+}
+
+// ── Gestão multi-instância (1 número/instância por atendente) ──
+// Helper: chama a Evolution com a config global (url+key do D1). Nunca expõe a key.
+async function evoFetch(env, path, opts = {}) {
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key) return { _noconfig: true };
+  const r = await fetch(`${cfg.url}${path}`, {
+    method: opts.method || 'GET',
+    headers: { apikey: cfg.key, ...(opts.body ? { 'content-type': 'application/json' } : {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await r.text();
+  let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
+  return { ok: r.ok, status: r.status, data };
+}
+
+// GET /api/wa/instances → lista todas as instâncias e seus estados
+async function handleWAInstances(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const res = await evoFetch(env, '/instance/fetchInstances');
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
+  // Normaliza pra { name, state } (a Evolution varia o formato entre versões)
+  const arr = Array.isArray(res.data) ? res.data : (res.data?.instances || []);
+  const list = arr.map(x => {
+    const i = x.instance || x;
+    return { name: i.instanceName || i.name, state: i.connectionStatus || i.state || i.status || 'unknown' };
+  }).filter(x => x.name);
+  return json({ ok: true, instances: list });
+}
+
+// POST /api/wa/instance/create → { instanceName } cria (idempotente) e já devolve QR
+async function handleWAInstanceCreate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => null);
+  const name = String(body?.instanceName || '').trim();
+  if (!name) return err('instanceName obrigatório');
+  // Cria (se já existir, a Evolution retorna erro 403/409 — tratamos como ok e seguimos pro connect)
+  await evoFetch(env, '/instance/create', {
+    method: 'POST',
+    body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
+  });
+  const res = await evoFetch(env, `/instance/connect/${name}`);
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
+  return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
+}
+
+// GET /api/wa/instance/connect?instance=NAME → QR atualizado pra reconectar
+async function handleWAInstanceConnect(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const name = new URL(req.url).searchParams.get('instance');
+  if (!name) return err('parâmetro "instance" obrigatório');
+  const res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
+  const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
+  return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
+}
+
+// GET /api/wa/instance/status?instance=NAME → estado de uma instância
+async function handleWAInstanceStatus(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const name = new URL(req.url).searchParams.get('instance');
+  if (!name) return err('parâmetro "instance" obrigatório');
+  const res = await evoFetch(env, `/instance/connectionState/${encodeURIComponent(name)}`);
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
+  return json({ ok: true, instance: name, state: res.data?.instance?.state || 'unknown' });
+}
+
+// POST /api/wa/instance/logout → { instance } desconecta e remove a instância
+async function handleWAInstanceLogout(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode remover conexões', 403);
+  const body = await req.json().catch(() => null);
+  const name = String(body?.instance || '').trim();
+  if (!name) return err('instance obrigatório');
+  await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  return json({ ok: true, instance: name, removed: true });
+}
+
 // ─── Pressel pública (roleta de WhatsApp) ───
 // Lead da campanha cai em /p/<id>, a roleta escolhe um número (o "em uso" de
 // cada atendente ativo, pulando banido/restrito) e manda pro WhatsApp.
@@ -1403,6 +1588,18 @@ export default {
       if (req.method === 'GET'    && path === '/api/config/ai-keys')      return handleAIConfigGet(req, env);
       if (req.method === 'POST'   && path === '/api/config/ai-keys')      return handleAIConfigSet(req, env);
       if (req.method === 'POST'   && path === '/api/config/ai-keys/test') return handleAIConfigTest(req, env);
+
+      // WhatsApp (Evolution API) — ponte segura Dash → Worker → Evolution
+      if (req.method === 'GET'    && path === '/api/config/wa') return handleWAConfigGet(req, env);
+      if (req.method === 'POST'   && path === '/api/config/wa') return handleWAConfigSet(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/status') return handleWAStatus(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/send')   return handleWASend(req, env);
+      // WhatsApp multi-instância (1 conexão por atendente)
+      if (req.method === 'GET'    && path === '/api/wa/instances')        return handleWAInstances(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/instance/create')  return handleWAInstanceCreate(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/instance/connect') return handleWAInstanceConnect(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 
