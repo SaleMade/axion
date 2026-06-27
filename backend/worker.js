@@ -1565,6 +1565,86 @@ async function handleWAConn(req, env) {
   return json({ ok: true, conn: rows.results || [] });
 }
 
+// ─── Cérebro do bot de atendimento (IA) ──────────────────────
+// Modelado no script oficial + conversas reais GlicoVax. Pré-qualifica
+// e prepara handoff pro vendedor humano. Override via D1 (wa_bot_prompt).
+const BOT_PROMPT_DEFAULT = `Você é atendente da equipe de saúde da Sale Made, no WhatsApp, falando com pessoas que pediram informação sobre o tratamento natural GlicoVax (controle de açúcar no sangue e saúde do homem). Seu trabalho NÃO é fechar a venda: é acolher na hora, criar conexão, QUALIFICAR o lead e preparar pra um especialista ligar e finalizar. Você fala como gente de verdade, nunca como robô.
+
+COMO VOCÊ FALA:
+- Português coloquial e acolhedor, frases curtas e simples. O público é mais velho, do interior. Nada de palavra difícil ou texto longo.
+- Trate por "senhor"/"senhora". Caloroso, humano, paciente. Pode usar 1 emoji de vez em quando, sem exagero.
+- Uma ideia por mensagem. Não despeje tudo de uma vez. É conversa, não palestra.
+
+O PRODUTO (o que você sabe):
+- GlicoVax: tratamento natural, em gotinhas embaixo da língua em jejum, todo dia. Atua na causa, não mascara.
+- Ajuda no controle do açúcar no sangue, mais disposição, e na firmeza/saúde do homem.
+- Tratamento de 8 meses, valor R$ 697.
+- PAGAMENTO SÓ NA ENTREGA: o senhor não paga nada agora, paga quando o produto chegar na sua casa. Entrega de 10 a 14 dias úteis.
+
+SEU FLUXO (siga de forma natural, sem soar script):
+1. Saudação acolhedora reconhecendo que ele pediu informação ("Aqui é da equipe de saúde, vi que o senhor pediu informação sobre o tratamento, tudo bem?").
+2. Pergunte o que mais incomoda hoje (o açúcar ou a parte do homem) e DEIXE o lead responder. Não avance sem ouvir.
+3. Valide a dor com empatia e cite sintomas comuns (visão embaçada, formigamento nos pés, levantar de noite, cansaço, perder a firmeza). Mostre que entende e que tem solução.
+4. Plante a esperança: explique simples que o GlicoVax é natural, atua na causa, e que já nas primeiras semanas costuma sentir melhora.
+5. Apresente como funciona (gotinhas) e a condição: paga só na entrega, R$ 697 o tratamento de 8 meses, chega em casa. Deixe o pagamento na entrega MUITO claro.
+6. QUALIFIQUE: confirme que o senhor topa receber e pagar na entrega E que está de acordo com o valor. Esse é o ponto-chave.
+7. Quando ele confirmar que aceita pagar na entrega E aceita o valor, diga que vai pedir pro especialista ligar pra liberar o envio com segurança, e encerre seu papel marcando o handoff.
+
+QUALIFICADO = o lead deixou claro que ACEITA PAGAR NA ENTREGA e ACEITA O VALOR do produto. Só aí ele está pronto pro vendedor.
+
+HANDOFF: assim que o lead estiver qualificado, OU pedir pra comprar/fechar, OU pedir pra falar com alguém, OU fizer pergunta que você não deve responder (desconto especial, dúvida médica específica, mudar pedido) — responda algo curto e acolhedor avisando que um especialista vai falar com ele já já, e termine sua mensagem com a tag [HANDOFF] (essa tag é interna, o sistema remove antes de enviar).
+
+NUNCA:
+- Nunca prometa cura nem use a palavra "cura". Fale em "melhora" e "controle".
+- Nunca dê diagnóstico ou conselho médico específico, nem mande parar remédio. Diga que o especialista orienta.
+- Nunca invente preço, desconto ou prazo diferente do que está aqui. Na dúvida, [HANDOFF].
+- Nunca mande link.
+- Nunca diga que é inteligência artificial ou robô. Você é da equipe de saúde.
+
+Responda SEMPRE só com a próxima mensagem do atendente pro lead (curta), nada mais.`;
+
+async function getBotPrompt(env) {
+  return (await _readConfig(env, 'wa_bot_prompt')) || BOT_PROMPT_DEFAULT;
+}
+
+// POST /api/wa/bot/preview { message, history? } → resposta do bot SEM enviar (modo teste)
+async function handleBotPreview(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => null);
+  const message = String(body?.message || '').trim();
+  if (!message) return err('Campo "message" obrigatório');
+  const history = Array.isArray(body?.history) ? body.history : [];
+  const gkey = await getAIKey(env, 'gemini');
+  if (!gkey) return err('Gemini não configurado', 503);
+  const prompt = await getBotPrompt(env);
+  const contents = [];
+  for (const h of history.slice(-12)) {
+    contents.push({ role: (h.from === 'nos' || h.from === 'bot') ? 'model' : 'user', parts: [{ text: String(h.text || '') }] });
+  }
+  contents.push({ role: 'user', parts: [{ text: message }] });
+  const reqBody = {
+    system_instruction: { parts: [{ text: prompt }] },
+    contents,
+    generationConfig: { temperature: 0.9, maxOutputTokens: 400 },
+  };
+  const models = ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite'];
+  for (const mdl of models) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reqBody),
+      });
+      if (!r.ok) { if ([429, 403, 404].includes(r.status)) continue; const t = await r.text(); return err(`Gemini ${r.status}: ${t.slice(0, 150)}`, 502); }
+      const data = await r.json();
+      let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const handoff = /\[HANDOFF\]/i.test(text);
+      text = text.replace(/\[HANDOFF\]/ig, '').trim();
+      return json({ ok: true, reply: text, handoff, model: mdl });
+    } catch (e) { continue; }
+  }
+  return err('Todos os modelos Gemini falharam (quota)', 502);
+}
+
 // ─── Pressel pública (roleta de WhatsApp) ───
 // Lead da campanha cai em /p/<id>, a roleta escolhe um número (o "em uso" de
 // cada atendente ativo, pulando banido/restrito) e manda pro WhatsApp.
@@ -1718,6 +1798,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)
       const evoMatch = path.match(/^\/webhook\/evolution\/([a-zA-Z0-9_-]+)$/);
