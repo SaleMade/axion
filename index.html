@@ -8050,8 +8050,6 @@ function renderPressels(){
     <div class="ph"><div><h1>Pressels <em>& Roleta</em></h1></div></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 16px">
       <button class="btn btn-gh btn-sm" onclick="addPresselInline()">+ Nova Pressel</button>
-      <span class="muted" style="font-size:12px;flex:1;min-width:200px">A roleta distribui os leads usando o número <b>em uso</b> de cada atendente (da Contingência) e pula automaticamente os banidos/restritos. Conecte o WhatsApp de cada número direto no interruptor.</span>
-      <button class="btn btn-gh btn-sm" onclick="openEvolutionConfig()" title="Configurar e ver o status da conexão com a Evolution API">Config WhatsApp</button>
     </div>
     ${list.length? list.map(presselPanel).join('') :
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
@@ -8473,40 +8471,86 @@ function presselCTA(id){
 }
 
 /* ─── Conexão WhatsApp (Evolution API) ───
-   A conexão por QR acontece INLINE na roleta (link "conectar WhatsApp" em
-   cada número ligado). A config da Evolution fica baked aqui em EVOLUTION_API
-   (vale pra todos, sem precisar configurar na UI). Enquanto vazia, usa
-   DB.evolution (configurável uma vez no botão "Configurar WhatsApp").
-   O servidor Evolution roda FORA do Cloudflare (VPS/Docker). */
-const EVOLUTION_API={url:'',key:''};
-function evoCfg(){ return EVOLUTION_API.url?EVOLUTION_API:(DB.evolution||{}); }
-async function openEvolutionConfig(){
-  const body=$('evo-body'); if(!body) return;
-  $('evo-title').textContent='Configurar WhatsApp (Evolution API)';
-  body.innerHTML='<p class="muted" style="font-size:12px;padding:18px;text-align:center">Carregando configuração…</p>';
-  openM('m-evo');
-  let cfg={};
-  try{ cfg=await api.waCfgGet(); }catch(e){ /* segue com vazio se não autorizado/offline */ }
-  const stTxt=cfg.configured?'<span style="color:var(--gr)">● configurado</span>':'<span style="color:var(--am)">● não configurado</span>';
-  body.innerHTML=`
-    <p class="muted" style="font-size:12px;margin-bottom:10px;line-height:1.5">A dash fala com a Evolution por uma <b>ponte segura no servidor</b> — a API key fica guardada no backend, nunca no navegador. Status: ${stTxt}</p>
-    <label class="pp-lbl">URL da Evolution API</label>
-    <input id="evo-url" class="pp-inp" placeholder="https://seu-dominio" value="${(cfg.url||'').replace(/"/g,'&quot;')}" style="margin-bottom:12px">
-    <label class="pp-lbl">API Key ${cfg.key_preview?`<span class="muted" style="font-size:11px">(atual: ${cfg.key_preview} — em branco mantém)</span>`:''}</label>
-    <input id="evo-key" class="pp-inp" placeholder="${cfg.key_preview?'•••• (manter atual)':'sua-api-key'}" value="" style="margin-bottom:12px">
-    <label class="pp-lbl">Instância padrão</label>
-    <input id="evo-inst" class="pp-inp" placeholder="salemade" value="${(cfg.instance||'').replace(/"/g,'&quot;')}" style="margin-bottom:16px">
-    <button class="btn btn-bl btn-sm" onclick="saveEvolutionConfig()">Salvar</button>`;
+   Config (URL/key/instância) fica na aba Configurações → Integrações e é
+   guardada no backend (D1), nunca no navegador. A conexão por QR de cada
+   número acontece INLINE na roleta (link "conectar WhatsApp" em cada
+   atendente). Tudo passa pela ponte segura no Worker (api.wa*).
+   O servidor Evolution roda FORA do Cloudflare (VPS/Docker via Caddy HTTPS). */
+// ─── Config WhatsApp (Evolution) — inline na aba Integrações ──────
+let _waCfgState=null;
+async function loadWAConfig(){
+  const statusEl=document.getElementById('cfg-wa-status');
+  const wrap=document.getElementById('cfg-wa-content');
+  if(!wrap)return;
+  if(!apiEnabled()||!apiToken()){
+    if(statusEl){statusEl.textContent='Sem backend';statusEl.classList.remove('on');}
+    wrap.innerHTML=`<div class="muted" style="font-size:12.5px;padding:8px 0">⚠ Backend não conectado — configure a URL do Worker primeiro.</div>`;
+    return;
+  }
+  try{
+    _waCfgState=await api.waCfgGet();
+    if(statusEl){
+      statusEl.textContent=_waCfgState.configured?'Configurado':'Não configurado';
+      statusEl.classList.toggle('on',!!_waCfgState.configured);
+    }
+    renderWAConfig();
+    loadWAInstances();
+  }catch(e){
+    if(statusEl)statusEl.textContent='Erro';
+    wrap.innerHTML=`<div style="color:var(--rd);font-size:12.5px;padding:8px 0">Erro: ${e.message}</div>`;
+  }
 }
-async function saveEvolutionConfig(){
-  const payload={url:$('evo-url').value.trim(),instance:$('evo-inst').value.trim()};
-  const k=$('evo-key').value.trim();
+function renderWAConfig(){
+  const wrap=document.getElementById('cfg-wa-content');
+  if(!wrap||!_waCfgState)return;
+  const c=_waCfgState;
+  const inpCss='width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:8px 11px;color:var(--tx);font-size:13px;font-family:ui-monospace,monospace';
+  wrap.innerHTML=`
+    <p class="muted" style="font-size:12px;margin-bottom:12px;line-height:1.5">A API key fica guardada no backend (D1), nunca no navegador. A dash fala com a Evolution por uma ponte segura no Worker. A conexão de cada número (por QR) é feita na página <b>Pressels & Roleta</b>, no interruptor de cada atendente.</p>
+    <label class="info-lbl" style="display:block;margin-bottom:4px">URL da Evolution API</label>
+    <input id="cfg-wa-url" value="${(c.url||'').replace(/"/g,'&quot;')}" placeholder="https://seu-dominio" style="${inpCss};margin-bottom:10px">
+    <label class="info-lbl" style="display:block;margin-bottom:4px">API Key ${c.key_preview?`<span class="muted" style="font-size:11px">(atual: ${c.key_preview} — em branco mantém)</span>`:''}</label>
+    <input id="cfg-wa-key" type="password" value="" placeholder="${c.key_preview?'•••• (manter atual)':'sua-api-key'}" style="${inpCss};margin-bottom:10px">
+    <label class="info-lbl" style="display:block;margin-bottom:4px">Instância padrão</label>
+    <input id="cfg-wa-inst" value="${(c.instance||'').replace(/"/g,'&quot;')}" placeholder="salemade" style="${inpCss};margin-bottom:14px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-bl btn-sm" onclick="saveWAConfigInline()">Salvar</button>
+      <button class="btn btn-gh btn-sm" onclick="loadWAInstances()">Atualizar conexões</button>
+    </div>
+    <div style="margin-top:16px">
+      <div class="info-lbl" style="margin-bottom:8px">Conexões (números)</div>
+      <div id="cfg-wa-instances"><div class="muted" style="font-size:12px">Carregando…</div></div>
+    </div>`;
+}
+async function saveWAConfigInline(){
+  const g=id=>(document.getElementById(id)||{}).value||'';
+  const payload={url:g('cfg-wa-url').trim(),instance:g('cfg-wa-inst').trim()};
+  const k=g('cfg-wa-key').trim();
   if(k)payload.key=k; // só envia a key se foi digitada (senão mantém a do servidor)
   try{
     await api.waCfgSet(payload);
     toast('WhatsApp configurado','ok');
-    closeM('m-evo'); if(typeof renderPressels==='function')renderPressels();
+    loadWAConfig();
   }catch(e){ toast('Erro ao salvar: '+((e&&e.message)||e),'err'); }
+}
+async function loadWAInstances(){
+  const el=document.getElementById('cfg-wa-instances');
+  if(!el)return;
+  try{
+    const r=await api.waInstances();
+    const list=(r&&r.instances)||[];
+    if(!list.length){ el.innerHTML='<div class="muted" style="font-size:12px">Nenhuma conexão ainda. Conecte os números na página Pressels & Roleta.</div>'; return; }
+    el.innerHTML=list.map(i=>{
+      const on=i.state==='open';
+      const dot=on?'var(--gr)':'var(--rd)';
+      const stTxt=on?'conectado':(i.state||'desconectado');
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--b1);border-radius:var(--r);margin-bottom:6px;background:var(--s2)">
+        <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+        <span style="flex:1;font-family:ui-monospace,monospace;font-size:12.5px;color:var(--tx)">${i.name}</span>
+        <span class="muted" style="font-size:11.5px">${stTxt}</span>
+      </div>`;
+    }).join('');
+  }catch(e){ el.innerHTML=`<div style="color:var(--rd);font-size:12px">Erro ao listar: ${e.message}</div>`; }
 }
 async function evoConnect(atId){
   const at=getTeam(atId);
@@ -13399,7 +13443,7 @@ function renderConfigContent(){
   else if(configTab==='sobre')       w.innerHTML=cfgSobre();
   // depois do innerHTML, hooks adicionais (ACL grid, etc.)
   if(configTab==='permissoes')renderACLInline();
-  if(configTab==='integracoes')loadAIConfig();
+  if(configTab==='integracoes'){loadAIConfig();loadWAConfig();}
 }
 
 // ─── Config IA (gerenciada via UI, salva no D1) ──────────────
@@ -13869,11 +13913,27 @@ function cfgIntegracoes(){
       </div>
     </details>
 
+    <!-- ─── WhatsApp (Evolution API) — config movida pra cá ─── -->
+    <details class="cfg-card" id="cfg-wa-details" style="padding:0;overflow:hidden">
+      <summary style="display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer;user-select:none;list-style:none">
+        <div style="font-size:28px">💬</div>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:2px">WhatsApp (Evolution API)</div>
+          <div class="muted" style="font-size:12.5px">Conexão dos números por QR, envio e status, tudo pela ponte segura no servidor</div>
+        </div>
+        <span class="cfg-status" id="cfg-wa-status">Carregando...</span>
+        <div style="font-size:14px;color:var(--t3);transition:transform .2s">▾</div>
+      </summary>
+      <div style="padding:0 18px 16px 18px;border-top:1px solid var(--b1)">
+        <div id="cfg-wa-content" style="margin-top:14px">
+          <div class="muted" style="text-align:center;padding:18px;font-size:12.5px">Carregando configuração...</div>
+        </div>
+      </div>
+    </details>
+
     <!-- Próximas integrações — versão compacta pra não ocupar espaço com promessas -->
     <div style="margin-top:18px;padding:10px 14px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);font-size:11.5px;color:var(--t4);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-weight:600">🔜 Em breve:</span>
-      <span>💬 WhatsApp Business</span>
-      <span>·</span>
       <span>📧 SMTP / E-mail</span>
     </div>
 
