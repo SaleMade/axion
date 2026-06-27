@@ -8628,6 +8628,8 @@ function _ensureAutom(){
        msg:'Oi {primeiro_nome}! Vi seu interesse no {produto}. Posso te explicar como funciona e tirar suas dúvidas?'},
       {id:2,nome:'Cobrança (pagamento na entrega)',gatilho:'col:Cobrança',alvo:'role:cobrador',inst:'',ativo:false,
        msg:'Olá {primeiro_nome}, tudo bem? É sobre seu pedido de {produto} ({valor}). Como podemos finalizar o pagamento?'},
+      {id:3,nome:'Primeiro contato (resposta instantânea)',gatilho:'primeiro_contato',alvo:'role:atendente',inst:'lead',ativo:false,
+       msg:'Oi {primeiro_nome}! Recebi sua mensagem aqui. 😊 Já te explico tudo certinho sobre o tratamento, me dá um instante.'},
     ];
   }
   if(typeof DB.wa_autom_on!=='boolean') DB.wa_autom_on=false;
@@ -8635,9 +8637,14 @@ function _ensureAutom(){
 }
 function _automGatilhos(){
   const cols=(typeof KB_COLS!=='undefined'&&KB_COLS.length?KB_COLS:[]).map(c=>({v:'col:'+c.id,l:'Entrou em "'+c.id+'"'}));
-  return [{v:'novo_lead',l:'Lead novo criado'},...cols];
+  return [
+    {v:'primeiro_contato',l:'Primeiro contato (o lead te manda mensagem)'},
+    {v:'novo_lead',l:'Lead novo criado'},
+    ...cols,
+  ];
 }
 function _automGatLabel(g){
+  if(g==='primeiro_contato')return 'Primeiro contato';
   if(g==='novo_lead')return 'Lead novo';
   if(g&&g.indexOf('col:')===0)return 'Entrou em '+g.slice(4);
   return g||'?';

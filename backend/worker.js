@@ -1406,6 +1406,8 @@ async function handleWAInstanceCreate(req, env) {
   });
   const res = await evoFetch(env, `/instance/connect/${name}`);
   if (res._noconfig) return err('WhatsApp não configurado', 503);
+  // Registra o webhook de volta apontando pro nosso Worker (best-effort)
+  try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
   const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
   return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
 }
@@ -1446,6 +1448,121 @@ async function handleWAInstanceLogout(req, env) {
   await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' });
   await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' });
   return json({ ok: true, instance: name, removed: true });
+}
+
+// ─── Webhook de volta (Evolution → Worker) ───────────────────
+// Recebe eventos da Evolution: mensagens recebidas (auto-resposta de primeiro
+// contato + atribuição de vendedor) e mudança de conexão (detectar número
+// caído). Tudo gated pela chave-mestra wa_autom_on. Conexão/atribuição/dedupe
+// ficam em tabelas D1 próprias, pra NÃO conflitar com o blob de estado da dash.
+const WA_WEBHOOK_TOKEN_DEFAULT = 'evo_hook_8f3c1a9d27b64e05';
+async function _waEnsureTables(env) {
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_replied (phone TEXT PRIMARY KEY, updated_at INTEGER)').run();
+  } catch (_) {}
+}
+async function _waWebhookToken(env) {
+  return (await _readConfig(env, 'wa_webhook_token')) || WA_WEBHOOK_TOKEN_DEFAULT;
+}
+// Registra o webhook na Evolution pra uma instância apontando pro nosso Worker
+async function _waSetWebhook(env, instance, origin) {
+  const token = await _waWebhookToken(env);
+  const url = `${origin}/webhook/evolution/${token}`;
+  await evoFetch(env, `/webhook/set/${encodeURIComponent(instance)}`, {
+    method: 'POST',
+    body: { webhook: { enabled: true, url, webhookByEvents: false, webhookBase64: false, events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'] } },
+  });
+}
+// Preenche template no servidor (lead pode ser parcial; usa pushName de fallback)
+function _waFillTpl(tpl, lead, pushName) {
+  const nome = (lead && lead.nome) || pushName || '';
+  const f = String(nome).split(' ')[0];
+  return String(tpl || '')
+    .replace(/\{primeiro_nome\}/g, f)
+    .replace(/\{nome\}/g, nome)
+    .replace(/\{produto\}/g, (lead && (lead.prod || lead.trat)) || '')
+    .replace(/\{valor\}/g, lead && lead.vl ? ('R$ ' + Number(lead.vl).toFixed(2).replace('.', ',')) : '')
+    .replace(/\{cidade\}/g, (lead && lead.cidade) || '')
+    .replace(/\{rastreio\}/g, (lead && lead.track) || '');
+}
+// Escolhe a regra de primeiro contato que casa com a instância (vendedor)
+function _waPickInboundRule(state, instance) {
+  const rules = (state.wa_automacoes || []).filter(r => r.ativo && r.gatilho === 'primeiro_contato');
+  if (!rules.length) return null;
+  const atId = instance.indexOf('ax_') === 0 ? instance.slice(3) : null;
+  // O Worker não tem o time (fora do blob), então casa por 'todos', 'user:<atId>'
+  // ou qualquer 'role:' (inbound é sempre contexto de atendente).
+  for (const r of rules) {
+    const a = r.alvo || 'todos';
+    if (a === 'todos') return r;
+    if (atId && a === 'user:' + atId) return r;
+    if (a.indexOf('role:') === 0) return r;
+  }
+  return null;
+}
+async function _waOnConnection(env, instance, data) {
+  if (!instance) return;
+  await _waEnsureTables(env);
+  const st = data?.state || data?.connection || 'unknown';
+  await env.DB.prepare(
+    `INSERT INTO wa_conn (instance, state, updated_at) VALUES (?, ?, strftime('%s','now'))
+     ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
+  ).bind(instance, String(st)).run();
+}
+async function _waOnInbound(env, instance, data) {
+  const key = data?.key || {};
+  if (key.fromMe) return;                          // ignora o que NÓS mandamos
+  const jid = String(key.remoteJid || '');
+  if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo
+  const phone = jid.split('@')[0].replace(/\D/g, '');
+  if (!phone) return;
+  await _waEnsureTables(env);
+  // Atribuição: qual número (vendedor) falou com esse lead
+  await env.DB.prepare(
+    `INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now'))
+     ON CONFLICT(phone) DO UPDATE SET instance = excluded.instance, updated_at = excluded.updated_at`
+  ).bind(phone, instance).run();
+  // Auto-resposta de primeiro contato — só com a chave-mestra ligada
+  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
+  if (!state.wa_autom_on) return;
+  const rep = await env.DB.prepare('SELECT updated_at FROM wa_replied WHERE phone = ?').bind(phone).first();
+  const now = Math.floor(Date.now() / 1000);
+  if (rep && (now - (rep.updated_at || 0)) < 12 * 3600) return;  // dedupe 12h
+  const rule = _waPickInboundRule(state, instance);
+  if (!rule) return;
+  const lead = (state.leads || []).find(l => norm(l.wa) === phone);
+  const msg = _waFillTpl(rule.msg, lead, data?.pushName);
+  if (!msg) return;
+  // Responde pelo MESMO número que o lead contatou (é resposta, baixo risco de ban)
+  await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
+  await env.DB.prepare(
+    `INSERT INTO wa_replied (phone, updated_at) VALUES (?, ?)
+     ON CONFLICT(phone) DO UPDATE SET updated_at = excluded.updated_at`
+  ).bind(phone, now).run();
+}
+async function handleEvolutionWebhook(req, env, token) {
+  const expected = await _waWebhookToken(env);
+  if (token !== expected) return json({ error: 'token inválido' }, 401);
+  let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
+  const event = String(body?.event || '').toLowerCase().replace(/_/g, '.');
+  const instance = body?.instance || body?.instanceName || '';
+  const data = body?.data || {};
+  try {
+    if (event === 'connection.update') await _waOnConnection(env, instance, data);
+    else if (event === 'messages.upsert') await _waOnInbound(env, instance, data);
+  } catch (_) { /* nunca quebra o webhook */ }
+  return json({ ok: true });
+}
+// GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
+async function handleWAConn(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const rows = await env.DB.prepare('SELECT instance, state, updated_at FROM wa_conn').all();
+  return json({ ok: true, conn: rows.results || [] });
 }
 
 // ─── Pressel pública (roleta de WhatsApp) ───
@@ -1600,6 +1717,14 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/instance/connect') return handleWAInstanceConnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
+
+      // Webhook de volta da Evolution (mensagens recebidas + conexão)
+      const evoMatch = path.match(/^\/webhook\/evolution\/([a-zA-Z0-9_-]+)$/);
+      if (evoMatch && (req.method === 'POST' || req.method === 'GET')) {
+        if (req.method === 'GET') return json({ name: 'axion-evolution-webhook', ok: true, ready: true });
+        return handleEvolutionWebhook(req, env, evoMatch[1]);
+      }
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 
