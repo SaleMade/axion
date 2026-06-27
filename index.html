@@ -8624,9 +8624,9 @@ function _automEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&a
 function _ensureAutom(){
   if(!Array.isArray(DB.wa_automacoes)){
     DB.wa_automacoes=[
-      {id:1,nome:'Boas-vindas (lead novo)',gatilho:'novo_lead',inst:'lead',ativo:false,
+      {id:1,nome:'Boas-vindas (lead novo)',gatilho:'novo_lead',alvo:'role:atendente',inst:'lead',ativo:false,
        msg:'Oi {primeiro_nome}! Vi seu interesse no {produto}. Posso te explicar como funciona e tirar suas dúvidas?'},
-      {id:2,nome:'Cobrança (pagamento na entrega)',gatilho:'col:Cobrança',inst:'lead',ativo:false,
+      {id:2,nome:'Cobrança (pagamento na entrega)',gatilho:'col:Cobrança',alvo:'role:cobrador',inst:'',ativo:false,
        msg:'Olá {primeiro_nome}, tudo bem? É sobre seu pedido de {produto} ({valor}). Como podemos finalizar o pagamento?'},
     ];
   }
@@ -8641,6 +8641,39 @@ function _automGatLabel(g){
   if(g==='novo_lead')return 'Lead novo';
   if(g&&g.indexOf('col:')===0)return 'Entrou em '+g.slice(4);
   return g||'?';
+}
+// Papéis que podem ser alvo de automação + colunas da fila de cobrança
+const _AUTOM_ROLES=[{v:'atendente',l:'Atendentes'},{v:'cobrador',l:'Cobradores'},{v:'afiliado',l:'Afiliados'}];
+const _AUTOM_COLLECTION=['Cobrança','Retirada'];
+function _automAlvoLabel(a){
+  a=a||'todos';
+  if(a==='todos')return 'Todos';
+  if(a.indexOf('role:')===0){const f=_AUTOM_ROLES.find(x=>x.v===a.slice(5));return f?f.l:a.slice(5);}
+  if(a.indexOf('user:')===0){const u=getTeam(a.slice(5));return u?u.name:'pessoa';}
+  return a;
+}
+// A regra vale pra este lead? Cobrador = fila compartilhada (por coluna, não por dono).
+function _automMatchAlvo(r,lead){
+  const a=r.alvo||'todos';
+  if(a==='todos')return true;
+  if(a.indexOf('role:')===0){
+    const role=a.slice(5);
+    if(role==='cobrador')return _AUTOM_COLLECTION.includes(lead.col);
+    const owner=getTeam(lead.at);
+    return !!(owner&&owner.role===role);
+  }
+  if(a.indexOf('user:')===0){
+    const uid=a.slice(5), u=getTeam(uid);
+    if(u&&u.role==='cobrador')return _AUTOM_COLLECTION.includes(lead.col); // cobrador específico = fila
+    return String(lead.at)===String(uid);
+  }
+  return true;
+}
+// De qual número (instância) a regra envia
+function _automInst(r,lead){
+  if(r.inst==='lead'&&lead&&lead.at)return 'ax_'+lead.at;
+  if(r.inst==='alvo'&&r.alvo&&r.alvo.indexOf('user:')===0)return 'ax_'+r.alvo.slice(5);
+  return undefined; // instância padrão
 }
 function pageAutomacoes(){ return `<div class="page" id="automacoes-pg"></div>`; }
 function renderAutomacoes(){
@@ -8677,7 +8710,7 @@ function automCard(r){
       <span style="width:9px;height:9px;border-radius:50%;background:${on?'var(--gr)':'var(--t4)'};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:700;color:var(--tx)">${_automEsc(r.nome||'(sem nome)')}</div>
-        <div style="font-size:11.5px;color:var(--bl2);font-weight:600;margin-top:1px">Gatilho: ${_automGatLabel(r.gatilho)}${r.inst==='lead'?' · número do atendente':' · instância padrão'}</div>
+        <div style="font-size:11.5px;color:var(--bl2);font-weight:600;margin-top:1px">Gatilho: ${_automGatLabel(r.gatilho)} · Para: ${_automEsc(_automAlvoLabel(r.alvo))}</div>
       </div>
       <div class="ax-sw ${on?'on':''}" onclick="automToggle(${r.id})" title="Ativar/desativar esta regra"></div>
     </div>
@@ -8697,10 +8730,16 @@ function automEditor(){
   const gOpts=_automGatilhos().map(g=>`<option value="${g.v}" ${r.gatilho===g.v?'selected':''}>${g.l}</option>`).join('');
   const varsChips=AUTOM_VARS.map(v=>`<button type="button" class="btn btn-gh btn-sm" style="font-size:11px;padding:3px 8px;font-family:ui-monospace,monospace" onclick="automInsertVar('${v.k}')" title="${v.d}">${v.k}</button>`).join('');
   const inpCss='width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:9px 11px;color:var(--tx);font-size:13px';
+  const team=(typeof TEAM!=='undefined'?TEAM:[]).filter(t=>!t.archived);
+  const alvoOpts=`<option value="todos" ${(!r.alvo||r.alvo==='todos')?'selected':''}>Todos os leads</option>`
+    +`<optgroup label="Por função">`+_AUTOM_ROLES.map(x=>`<option value="role:${x.v}" ${r.alvo==='role:'+x.v?'selected':''}>${x.l}</option>`).join('')+`</optgroup>`
+    +`<optgroup label="Pessoa específica">`+team.map(t=>`<option value="user:${t.id}" ${r.alvo==='user:'+t.id?'selected':''}>${_automEsc(t.name)}</option>`).join('')+`</optgroup>`;
   return `<div class="panel" style="margin-bottom:14px;padding:16px;border:1px solid var(--bl)">
     <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:14px">${isNew?'Nova regra':'Editar regra'}</div>
     <label class="info-lbl" style="display:block;margin-bottom:4px">Nome</label>
     <input id="autom-nome" value="${_automEsc(r.nome).replace(/"/g,'&quot;')}" placeholder="Ex: Boas-vindas" style="${inpCss};margin-bottom:12px">
+    <label class="info-lbl" style="display:block;margin-bottom:4px">Para quem (alvo)</label>
+    <select id="autom-alvo" style="${inpCss};margin-bottom:12px">${alvoOpts}</select>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div style="flex:1;min-width:200px">
         <label class="info-lbl" style="display:block;margin-bottom:4px">Gatilho (quando dispara)</label>
@@ -8710,7 +8749,8 @@ function automEditor(){
         <label class="info-lbl" style="display:block;margin-bottom:4px">Enviar pelo número</label>
         <select id="autom-inst" style="${inpCss}">
           <option value="lead" ${r.inst==='lead'?'selected':''}>Número do atendente do lead</option>
-          <option value="" ${r.inst!=='lead'?'selected':''}>Instância padrão</option>
+          <option value="alvo" ${r.inst==='alvo'?'selected':''}>Número da pessoa da regra</option>
+          <option value="" ${(r.inst!=='lead'&&r.inst!=='alvo')?'selected':''}>Instância padrão</option>
         </select>
       </div>
     </div>
@@ -8754,16 +8794,17 @@ function automSave(){
   const rules=_ensureAutom();
   const nome=($('autom-nome').value||'').trim();
   const gatilho=$('autom-gat').value;
+  const alvo=$('autom-alvo').value;
   const inst=$('autom-inst').value;
   const msg=($('autom-msg').value||'').trim();
   if(!nome){toast('Dê um nome pra regra','err');return;}
   if(!msg){toast('Escreva a mensagem','err');return;}
   if(_automEdit==='new'){
     const id=Math.max(0,...rules.map(r=>r.id||0))+1;
-    rules.push({id,nome,gatilho,inst,msg,ativo:true});
+    rules.push({id,nome,gatilho,alvo,inst,msg,ativo:true});
   } else {
     const r=rules.find(x=>x.id===_automEdit);
-    if(r)Object.assign(r,{nome,gatilho,inst,msg});
+    if(r)Object.assign(r,{nome,gatilho,alvo,inst,msg});
   }
   _automEdit=null;
   persistAndPushNow().catch(_=>{});
@@ -8778,7 +8819,7 @@ async function automTest(id){
   const msg=_automFill(r.msg,fakeLead);
   try{
     toast('Enviando teste...','');
-    await api.waSend(num,msg, r.inst==='lead'?undefined:(r.inst||undefined));
+    await api.waSend(num,msg,_automInst(r,fakeLead));
     toast('Teste enviado! Confira o WhatsApp.','ok');
   }catch(e){ toast('Falha: '+((e&&e.message)||e),'err'); }
 }
@@ -8797,13 +8838,13 @@ async function fireWaAutom(gatilho,lead){
   try{
     if(!DB.wa_autom_on)return;
     if(!lead||!lead.wa)return;
-    const rules=(DB.wa_automacoes||[]).filter(r=>r.ativo&&r.gatilho===gatilho);
+    const rules=(DB.wa_automacoes||[]).filter(r=>r.ativo&&r.gatilho===gatilho&&_automMatchAlvo(r,lead));
     if(!rules.length)return;
     lead._automSent=Array.isArray(lead._automSent)?lead._automSent:[];
     for(const r of rules){
       const key=r.id+'@'+gatilho;
       if(lead._automSent.includes(key))continue; // 1x por lead por gatilho+regra
-      const inst=(r.inst==='lead'&&lead.at)?('ax_'+lead.at):(r.inst&&r.inst!=='lead'?r.inst:undefined);
+      const inst=_automInst(r,lead);
       try{
         await api.waSend(lead.wa,_automFill(r.msg,lead),inst);
         lead._automSent.push(key);
