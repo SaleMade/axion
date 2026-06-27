@@ -4890,7 +4890,7 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         {id:'contingencia',lbl:'Contingência'},
-        ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
+        ...(dir?[{id:'pressels',lbl:'Pressels'},{id:'automacoes',lbl:'Automações'}]:[]),
       ]},
       // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
@@ -5006,6 +5006,7 @@ const PNAMES={
   invest:'Financeiro / <b>Investimentos</b>',
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
+  automacoes:"WhatsApp / <b>Automações</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
@@ -5035,7 +5036,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),pagePressels(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),pagePressels(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5182,6 +5183,7 @@ function goPage(id){
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
   if(id==='pressels')    renderPressels();
+  if(id==='automacoes')  renderAutomacoes();
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
   if(id==='pagequip')    renderPagEquip();
@@ -6064,6 +6066,7 @@ function renderKanban(){
         lead.hist.push({from:prev,to:col.id,who:CUR.id,time:`${today()} ${nowTime()}`});
         if(col.id==='Pago')registerVendaFromLead(lead);
         pushFeed(`<b>${lead.nome}</b> → <b>${col.id}</b>`,col.c);
+        fireWaAutom('col:'+col.id,lead);
         toast(`${lead.nome} → ${col.id}`,'ok');
         persist();
       }
@@ -6119,6 +6122,7 @@ function quickMove(lid,col){
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
   pushFeed(`<b>${lead.nome}</b> → <b>${col}</b>`,colObj.c);
+  fireWaAutom('col:'+col,lead);
   closePopover();persist();refreshUI();toast(`Movido para ${col}`,'ok');
 }
 async function quickDelete(lid){
@@ -6137,6 +6141,7 @@ function quickMoveModal(col){
   lead.hist.push({from:prev,to:col,who:CUR.id,time:`${today()} ${nowTime()}`});
   if(col==='Pago')registerVendaFromLead(lead);
   pushFeed(`<b>${lead.nome}</b> → <b>${col}</b>`,colObj.c);
+  fireWaAutom('col:'+col,lead);
   persist();
   openLeadDetail(editingLeadId);
   if(document.querySelector('.page#crm-pg.active'))renderKanban();
@@ -6661,6 +6666,7 @@ function addLead(){
   };
   DB.leads.unshift(lead);
   pushFeed(`Lead <b>${nome}</b> cadastrado — ${lead.orig}`,'#06b6d4');
+  fireWaAutom('novo_lead',lead);
   ['nl-nome','nl-wa','nl-cpf','nl-vl'].forEach(i=>$(i).value='');
   $('nl-prod').selectedIndex=0;
   persist();closeM('m-lead-new');refreshUI();
@@ -6814,6 +6820,7 @@ function saveNovoPedido(){
 
   DB.leads.unshift(lead);
   pushFeed(`Pedido <b>${lead.nome}</b> cadastrado — ${npType==='entrega'?'Entrega':'Antecipado'}`,'#10b981');
+  fireWaAutom('novo_lead',lead);
   persist();closeM('m-pedido-new');refreshUI();
   toast('Pedido cadastrado','ok');
 }
@@ -8595,6 +8602,216 @@ function _evoPollStatus(inst){
     if(tries<40)_evoPollTimer=setTimeout(tick,3000);
   };
   _evoPollTimer=setTimeout(tick,3000);
+}
+
+/* ═══════════════════════════════════════════════════════
+   PAGE — AUTOMAÇÕES DE WHATSAPP
+   Regras: gatilho (lead novo / entrou numa coluna) -> mensagem
+   automática via a ponte da Evolution. Chave-mestra desligada por
+   padrão pra nada disparar sem querer durante testes. Dedupe por
+   lead+regra pra não mandar a mesma coisa duas vezes.
+═══════════════════════════════════════════════════════ */
+const AUTOM_VARS=[
+  {k:'{primeiro_nome}',d:'Primeiro nome do lead'},
+  {k:'{nome}',d:'Nome completo'},
+  {k:'{produto}',d:'Produto/tratamento'},
+  {k:'{valor}',d:'Valor do pedido'},
+  {k:'{cidade}',d:'Cidade'},
+  {k:'{rastreio}',d:'Código de rastreio'},
+];
+let _automEdit=null; // id em edição, 'new', ou null
+function _automEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function _ensureAutom(){
+  if(!Array.isArray(DB.wa_automacoes)){
+    DB.wa_automacoes=[
+      {id:1,nome:'Boas-vindas (lead novo)',gatilho:'novo_lead',inst:'lead',ativo:false,
+       msg:'Oi {primeiro_nome}! Vi seu interesse no {produto}. Posso te explicar como funciona e tirar suas dúvidas?'},
+      {id:2,nome:'Cobrança (pagamento na entrega)',gatilho:'col:Cobrança',inst:'lead',ativo:false,
+       msg:'Olá {primeiro_nome}, tudo bem? É sobre seu pedido de {produto} ({valor}). Como podemos finalizar o pagamento?'},
+    ];
+  }
+  if(typeof DB.wa_autom_on!=='boolean') DB.wa_autom_on=false;
+  return DB.wa_automacoes;
+}
+function _automGatilhos(){
+  const cols=(typeof KB_COLS!=='undefined'&&KB_COLS.length?KB_COLS:[]).map(c=>({v:'col:'+c.id,l:'Entrou em "'+c.id+'"'}));
+  return [{v:'novo_lead',l:'Lead novo criado'},...cols];
+}
+function _automGatLabel(g){
+  if(g==='novo_lead')return 'Lead novo';
+  if(g&&g.indexOf('col:')===0)return 'Entrou em '+g.slice(4);
+  return g||'?';
+}
+function pageAutomacoes(){ return `<div class="page" id="automacoes-pg"></div>`; }
+function renderAutomacoes(){
+  const wrap=$('automacoes-pg'); if(!wrap) return;
+  const rules=_ensureAutom();
+  const on=DB.wa_autom_on;
+  wrap.innerHTML=`
+    <div class="ph"><div><h1>Automações <em>de WhatsApp</em></h1><p>Dispare mensagens automáticas por gatilho, pela conexão da Evolution</p></div></div>
+
+    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px">
+      <div style="flex:1">
+        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Automações ${on?'<span style="color:var(--gr)">ativas</span>':'<span style="color:var(--am)">pausadas</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Chave-mestra geral. Enquanto pausada, nenhuma regra dispara sozinha (você ainda pode testar manualmente).</div>
+      </div>
+      <div class="ax-sw ${on?'on':''}" onclick="toggleAutomMaster()" title="Ligar/desligar todas as automações"></div>
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px">
+      <button class="btn btn-bl btn-sm" onclick="automNew()">+ Nova regra</button>
+      <span class="muted" style="font-size:12px;flex:1;min-width:200px">A conexão dos números é feita na Contingência/Pressels. Aqui você define o que mandar e quando.</span>
+    </div>
+
+    ${_automEdit!==null?automEditor():''}
+
+    <div id="autom-list">
+      ${rules.length?rules.map(automCard).join(''):`<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma regra ainda. Clique em <b>+ Nova regra</b>.</div>`}
+    </div>`;
+}
+function automCard(r){
+  const on=r.ativo;
+  const preview=(r.msg||'').slice(0,140)+((r.msg||'').length>140?'…':'');
+  return `<div class="panel" style="margin-bottom:10px;padding:14px 16px">
+    <div style="display:flex;align-items:center;gap:11px">
+      <span style="width:9px;height:9px;border-radius:50%;background:${on?'var(--gr)':'var(--t4)'};flex-shrink:0"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;color:var(--tx)">${_automEsc(r.nome||'(sem nome)')}</div>
+        <div style="font-size:11.5px;color:var(--bl2);font-weight:600;margin-top:1px">Gatilho: ${_automGatLabel(r.gatilho)}${r.inst==='lead'?' · número do atendente':' · instância padrão'}</div>
+      </div>
+      <div class="ax-sw ${on?'on':''}" onclick="automToggle(${r.id})" title="Ativar/desativar esta regra"></div>
+    </div>
+    <div class="muted" style="font-size:12.5px;margin:10px 0 0;line-height:1.5;white-space:pre-wrap">${_automEsc(preview)||'<i>sem mensagem</i>'}</div>
+    <div style="display:flex;gap:7px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-gh btn-sm" onclick="automEditOpen(${r.id})">Editar</button>
+      <button class="btn btn-gh btn-sm" onclick="automTest(${r.id})">Testar envio</button>
+      <button class="btn btn-gh btn-sm" onclick="automDel(${r.id})" style="color:var(--rd)">Excluir</button>
+    </div>
+  </div>`;
+}
+function automEditor(){
+  const rules=_ensureAutom();
+  const isNew=_automEdit==='new';
+  const r=isNew?{id:null,nome:'',gatilho:'novo_lead',inst:'lead',ativo:true,msg:''}:rules.find(x=>x.id===_automEdit);
+  if(!r)return '';
+  const gOpts=_automGatilhos().map(g=>`<option value="${g.v}" ${r.gatilho===g.v?'selected':''}>${g.l}</option>`).join('');
+  const varsChips=AUTOM_VARS.map(v=>`<button type="button" class="btn btn-gh btn-sm" style="font-size:11px;padding:3px 8px;font-family:ui-monospace,monospace" onclick="automInsertVar('${v.k}')" title="${v.d}">${v.k}</button>`).join('');
+  const inpCss='width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:9px 11px;color:var(--tx);font-size:13px';
+  return `<div class="panel" style="margin-bottom:14px;padding:16px;border:1px solid var(--bl)">
+    <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:14px">${isNew?'Nova regra':'Editar regra'}</div>
+    <label class="info-lbl" style="display:block;margin-bottom:4px">Nome</label>
+    <input id="autom-nome" value="${_automEsc(r.nome).replace(/"/g,'&quot;')}" placeholder="Ex: Boas-vindas" style="${inpCss};margin-bottom:12px">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="flex:1;min-width:200px">
+        <label class="info-lbl" style="display:block;margin-bottom:4px">Gatilho (quando dispara)</label>
+        <select id="autom-gat" style="${inpCss}">${gOpts}</select>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <label class="info-lbl" style="display:block;margin-bottom:4px">Enviar pelo número</label>
+        <select id="autom-inst" style="${inpCss}">
+          <option value="lead" ${r.inst==='lead'?'selected':''}>Número do atendente do lead</option>
+          <option value="" ${r.inst!=='lead'?'selected':''}>Instância padrão</option>
+        </select>
+      </div>
+    </div>
+    <label class="info-lbl" style="display:block;margin-bottom:4px">Mensagem</label>
+    <textarea id="autom-msg" rows="4" placeholder="Escreva a mensagem..." style="${inpCss};resize:vertical;font-family:inherit;margin-bottom:8px">${_automEsc(r.msg)}</textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+      <span class="muted" style="font-size:11px">Inserir variável:</span>${varsChips}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-bl btn-sm" onclick="automSave()">Salvar regra</button>
+      <button class="btn btn-gh btn-sm" onclick="automCancel()">Cancelar</button>
+    </div>
+  </div>`;
+}
+function automNew(){ _automEdit='new'; renderAutomacoes(); }
+function automEditOpen(id){ _automEdit=id; renderAutomacoes(); }
+function automCancel(){ _automEdit=null; renderAutomacoes(); }
+function automToggle(id){
+  const r=_ensureAutom().find(x=>x.id===id); if(!r)return;
+  r.ativo=!r.ativo; persistAndPushNow().catch(_=>{}); renderAutomacoes();
+}
+function toggleAutomMaster(){
+  _ensureAutom(); DB.wa_autom_on=!DB.wa_autom_on;
+  toast(DB.wa_autom_on?'Automações ativadas':'Automações pausadas', DB.wa_autom_on?'ok':'');
+  persistAndPushNow().catch(_=>{}); renderAutomacoes();
+}
+function automDel(id){
+  const r=_ensureAutom().find(x=>x.id===id); if(!r)return;
+  if(!confirm('Excluir a regra "'+(r.nome||'')+'"?'))return;
+  DB.wa_automacoes=DB.wa_automacoes.filter(x=>x.id!==id);
+  if(_automEdit===id)_automEdit=null;
+  persistAndPushNow().catch(_=>{}); renderAutomacoes(); toast('Regra excluída','ok');
+}
+function automInsertVar(v){
+  const ta=$('autom-msg'); if(!ta)return;
+  const s=ta.selectionStart==null?ta.value.length:ta.selectionStart, e=ta.selectionEnd==null?ta.value.length:ta.selectionEnd;
+  ta.value=ta.value.slice(0,s)+v+ta.value.slice(e);
+  ta.focus(); ta.selectionStart=ta.selectionEnd=s+v.length;
+}
+function automSave(){
+  const rules=_ensureAutom();
+  const nome=($('autom-nome').value||'').trim();
+  const gatilho=$('autom-gat').value;
+  const inst=$('autom-inst').value;
+  const msg=($('autom-msg').value||'').trim();
+  if(!nome){toast('Dê um nome pra regra','err');return;}
+  if(!msg){toast('Escreva a mensagem','err');return;}
+  if(_automEdit==='new'){
+    const id=Math.max(0,...rules.map(r=>r.id||0))+1;
+    rules.push({id,nome,gatilho,inst,msg,ativo:true});
+  } else {
+    const r=rules.find(x=>x.id===_automEdit);
+    if(r)Object.assign(r,{nome,gatilho,inst,msg});
+  }
+  _automEdit=null;
+  persistAndPushNow().catch(_=>{});
+  renderAutomacoes();
+  toast('Regra salva','ok');
+}
+async function automTest(id){
+  const r=_ensureAutom().find(x=>x.id===id); if(!r)return;
+  const num=prompt('Número pra testar (com DDD, ex: 11999998888):','');
+  if(!num)return;
+  const fakeLead={nome:'Cliente Teste',prod:'Produto X',vl:197,cidade:'São Paulo',track:'BR123456789BR'};
+  const msg=_automFill(r.msg,fakeLead);
+  try{
+    toast('Enviando teste...','');
+    await api.waSend(num,msg, r.inst==='lead'?undefined:(r.inst||undefined));
+    toast('Teste enviado! Confira o WhatsApp.','ok');
+  }catch(e){ toast('Falha: '+((e&&e.message)||e),'err'); }
+}
+// ── Motor: renderiza o template e dispara as regras de um gatilho ──
+function _automFill(tpl,lead){
+  const f=(lead.nome||'').split(' ')[0];
+  return String(tpl||'')
+    .replace(/\{primeiro_nome\}/g,f)
+    .replace(/\{nome\}/g,lead.nome||'')
+    .replace(/\{produto\}/g,lead.prod||lead.trat||'')
+    .replace(/\{valor\}/g,lead.vl?fmt(lead.vl):'')
+    .replace(/\{cidade\}/g,lead.cidade||'')
+    .replace(/\{rastreio\}/g,lead.track||'');
+}
+async function fireWaAutom(gatilho,lead){
+  try{
+    if(!DB.wa_autom_on)return;
+    if(!lead||!lead.wa)return;
+    const rules=(DB.wa_automacoes||[]).filter(r=>r.ativo&&r.gatilho===gatilho);
+    if(!rules.length)return;
+    lead._automSent=Array.isArray(lead._automSent)?lead._automSent:[];
+    for(const r of rules){
+      const key=r.id+'@'+gatilho;
+      if(lead._automSent.includes(key))continue; // 1x por lead por gatilho+regra
+      const inst=(r.inst==='lead'&&lead.at)?('ax_'+lead.at):(r.inst&&r.inst!=='lead'?r.inst:undefined);
+      try{
+        await api.waSend(lead.wa,_automFill(r.msg,lead),inst);
+        lead._automSent.push(key);
+        if(typeof pushFeed==='function')pushFeed(`Automação "<b>${_automEsc(r.nome)}</b>" enviada pra ${_automEsc(lead.nome)}`,'var(--bl)');
+      }catch(e){ /* não trava o fluxo do usuário */ }
+    }
+    persist();
+  }catch(_){}
 }
 
 /* ═══════════════════════════════════════════════════════
