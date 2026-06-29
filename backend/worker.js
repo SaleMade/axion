@@ -1536,7 +1536,8 @@ async function _waRecText(env, instance, rec, transcribe) {
   return '';
 }
 // Bot de IA em TESTE: responde só o chat whitelistado (wa_bot_test_*). Agrupa
-// mensagens picadas (debounce), transcreve áudio, responde como humano (várias
+// mensagens picadas usando um BUFFER próprio no D1 (confiável, sem depender do
+// findMessages que atrasa), transcreve áudio, responde como humano (várias
 // mensagens curtas com "digitando..."). Retorna true se tratou.
 async function _waBotTestReply(env, instance, key, data) {
   const testInst = await _readConfig(env, 'wa_bot_test_instance');
@@ -1545,54 +1546,74 @@ async function _waBotTestReply(env, instance, key, data) {
   if (instance !== testInst) return false;
   const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (realPhone !== String(testPhone).replace(/\D/g, '')) return false;
-  const jid = key.remoteJid, myMsgId = key.id;
-  // DEBOUNCE: espera; se chegou mensagem mais nova, deixa a invocação dela responder
+  const jid = key.remoteJid, myMsgId = key.id || ('m' + Date.now());
+  const mm = data?.message || {};
+  let kind = 'text', payload = '';
+  if (mm.conversation) payload = mm.conversation;
+  else if (mm.extendedTextMessage?.text) payload = mm.extendedTextMessage.text;
+  else if (mm.audioMessage) kind = 'audio';
+  else if (mm.imageMessage) payload = mm.imageMessage.caption || '[imagem]';
+  else return true; // tipo não suportado, mas não cai no template
+  console.log('BOTTEST in:', realPhone, 'kind', kind, 'id', myMsgId);
+  // 1) Grava no buffer NA HORA (fonte confiável pro agrupamento)
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_buf (id TEXT PRIMARY KEY, phone TEXT, jid TEXT, ts INTEGER, kind TEXT, payload TEXT, done INTEGER DEFAULT 0)').run();
+    await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,0)')
+      .bind(myMsgId, realPhone, jid, Date.now(), kind, payload).run();
+  } catch (e) { console.log('BOTTEST buf err', e.message); }
+  // 2) Debounce: espera juntar as mensagens picadas
   await new Promise(res => setTimeout(res, 7000));
-  let recs = [];
+  // 3) Reivindica atomicamente TODAS as pendentes desse telefone (1 invocação só pega)
+  let claimed = [];
   try {
-    const r = await evoFetch(env, `/chat/findMessages/${encodeURIComponent(instance)}`, { method: 'POST', body: { where: { key: { remoteJid: jid } } } });
-    recs = (r?.data?.messages?.records) || [];
-  } catch (_) { return true; }
-  recs.sort((a, b) => (Number(a.messageTimestamp) || 0) - (Number(b.messageTimestamp) || 0));
-  const lastInbound = [...recs].reverse().find(x => !x.key?.fromMe);
-  if (!lastInbound || lastInbound.key?.id !== myMsgId) return true; // veio msg mais nova → para
-  // idempotência: 1 resposta por mensagem (evita retry do webhook duplicar)
-  try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_bot_done (id TEXT PRIMARY KEY, at INTEGER)').run();
-    const claim = await env.DB.prepare("INSERT OR IGNORE INTO wa_bot_done (id, at) VALUES (?, strftime('%s','now'))").bind(myMsgId).run();
-    if (!claim.meta.changes) return true;
-  } catch (_) {}
-  let lastBotIdx = -1;
-  recs.forEach((rec, i) => { if (rec.key?.fromMe) lastBotIdx = i; });
-  // Histórico (texto, sem transcrever pra economizar) até a última resposta nossa
-  const contents = [];
-  for (let i = Math.max(0, lastBotIdx - 12); i <= lastBotIdx; i++) {
-    const t = await _waRecText(env, instance, recs[i], false);
-    if (!t) continue;
-    contents.push({ role: recs[i].key?.fromMe ? 'model' : 'user', parts: [{ text: t }] });
-  }
-  // Mensagens novas do lead (após nossa última resposta) juntas — transcreve áudio
-  const pend = recs.slice(lastBotIdx + 1).filter(x => !x.key?.fromMe);
+    const r = await env.DB.prepare('UPDATE wa_buf SET done=1 WHERE phone=? AND done=0 RETURNING id, jid, ts, kind, payload').bind(realPhone).all();
+    claimed = (r?.results) || [];
+  } catch (e) { console.log('BOTTEST claim err', e.message); return true; }
+  console.log('BOTTEST claimed', claimed.length, 'mine?', claimed.some(c => c.id === myMsgId));
+  if (!claimed.length || !claimed.some(c => c.id === myMsgId)) return true; // outra invocação respondeu o lote
+  claimed.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const claimedIds = new Set(claimed.map(c => c.id));
+  // 4) Monta a fala do lead (transcreve áudios do lote)
   const pendTexts = [];
-  for (const rec of pend) { const t = await _waRecText(env, instance, rec, true); if (t) pendTexts.push(t); }
+  for (const c of claimed) {
+    if (c.kind === 'audio') {
+      const t = await _waTranscribeAudio(env, instance, { id: c.id, remoteJid: c.jid, fromMe: false });
+      if (t) { pendTexts.push(t); try { await env.DB.prepare('UPDATE wa_buf SET payload=? WHERE id=?').bind(t, c.id).run(); } catch (_) {} }
+    } else if (c.payload) pendTexts.push(c.payload);
+  }
   const userTurn = pendTexts.join('\n').trim();
+  console.log('BOTTEST userTurn:', JSON.stringify(userTurn).slice(0, 160));
   if (!userTurn) return true;
+  // 5) Histórico do NOSSO buffer (confiável, inclui as respostas do bot = kind 'out'),
+  //    excluindo o turno atual. Resolve o re-cumprimento (o bot enxerga o que já falou).
+  const contents = [];
+  try {
+    const hr = await env.DB.prepare('SELECT id, ts, kind, payload FROM wa_buf WHERE phone=? ORDER BY ts ASC').bind(realPhone).all();
+    const rows = (hr?.results || []).filter(x => !claimedIds.has(x.id) && x.payload);
+    for (const row of rows.slice(-16)) {
+      contents.push({ role: row.kind === 'out' ? 'model' : 'user', parts: [{ text: row.payload }] });
+    }
+  } catch (_) {}
   contents.push({ role: 'user', parts: [{ text: userTurn }] });
+  // 6) Gemini → resposta → envio humano
   const gkey = await getAIKey(env, 'gemini'); if (!gkey) return true;
   const prompt = await getBotPrompt(env);
   const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents: contents.slice(-16), generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
   for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite']) {
     try {
       const g = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reqBody) });
-      if (!g.ok) { if ([429, 403, 404].includes(g.status)) continue; return true; }
+      if (!g.ok) { if ([429, 403, 404].includes(g.status)) continue; console.log('BOTTEST gemini fail', g.status); return true; }
       const d = await g.json();
       let reply = (d.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/\[HANDOFF\]/ig, '').trim();
+      console.log('BOTTEST reply len', reply.length);
       if (reply) {
-        // quebra por "---" OU por parágrafo (linha em branco) → várias mensagens curtas
         const parts = reply.split(/\n*-{3,}\n*|\n\s*\n/).map(s => s.trim()).filter(Boolean);
+        let oi = 0;
         for (const part of parts) {
-          const delayMs = Math.min(5000, Math.max(1500, part.length * 55)); // "digitando..." proporcional
+          const delayMs = Math.min(5000, Math.max(1500, part.length * 55));
           await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
+          // guarda a resposta no buffer (vira histórico do bot na próxima vez)
+          try { await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,1)').bind('out_' + myMsgId + '_' + (oi++), realPhone, jid, Date.now(), 'out', part).run(); } catch (_) {}
         }
       }
       return true;
@@ -1670,6 +1691,8 @@ COMO VOCÊ FALA (É O QUE TE FAZ PARECER HUMANO, leve a sério):
 - Se ele já perguntou o preço, responda direto e simples, sem enrolar.
 - Nada de linguagem de folheto ("vigor", "qualidade de vida", "age na causa" repetido). Fale simples, como um atendente de verdade.
 - Uma ideia por mensagem. Responda só a próxima fala, curta.
+- SEMPRE termine com uma PERGUNTA que leva a conversa adiante (aprofundar a dor, confirmar interesse, etc). Nunca deixe a conversa parada.
+- Valide a dor com empatia antes de oferecer ("entendo, senhor, muita gente passa por isso..."), aí faça a próxima pergunta. Ex (áudio do lead dizendo que tá pra baixo e sem disposição): "Poxa, entendo, senhor. Essa falta de disposição e o desânimo são bem comuns em quem tá com o açúcar alterado. / Me diz: além disso, o senhor tem sentido formigamento, vontade de urinar de noite ou perda de firmeza?"
 
 O PRODUTO (o que você sabe):
 - GlicoVax: tratamento natural, composto por mais de 30 ervas medicinais. Vem em gotinhas: 15 gotas embaixo da língua, em jejum, todo dia. Atua na causa, não mascara.
