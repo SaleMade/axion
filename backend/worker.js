@@ -1545,7 +1545,8 @@ async function _waBotTestReply(env, instance, key, data) {
   if (!testInst || !testPhone) return false;
   if (instance !== testInst) return false;
   const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
-  if (realPhone !== String(testPhone).replace(/\D/g, '')) return false;
+  const testPhones = String(testPhone).split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
+  if (!testPhones.includes(realPhone)) return false; // whitelist: aceita vários números de teste
   const jid = key.remoteJid, myMsgId = key.id || ('m' + Date.now());
   const mm = data?.message || {};
   let kind = 'text', payload = '';
