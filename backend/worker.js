@@ -1610,7 +1610,8 @@ async function _waBotTestReply(env, instance, key, data) {
         const parts = reply.split(/\n*-{3,}\n*|\n\s*\n/).map(s => s.trim()).filter(Boolean);
         let oi = 0;
         for (const part of parts) {
-          const delayMs = Math.min(5000, Math.max(1500, part.length * 55));
+          // digitação proporcional ao tamanho: curtas ~1.8s, longas até ~9s
+          const delayMs = Math.min(9000, Math.max(1800, Math.round(part.length * 75)));
           await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
           // guarda a resposta no buffer (vira histórico do bot na próxima vez)
           try { await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,1)').bind('out_' + myMsgId + '_' + (oi++), realPhone, jid, Date.now(), 'out', part).run(); } catch (_) {}
