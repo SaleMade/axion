@@ -1511,6 +1511,45 @@ async function _waOnConnection(env, instance, data) {
      ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
   ).bind(instance, String(st)).run();
 }
+// Bot de IA em TESTE: responde só o chat whitelistado (wa_bot_test_*), com
+// histórico (context-aware). Independe da chave-mestra. Retorna true se tratou.
+async function _waBotTestReply(env, instance, key, data) {
+  const testInst = await _readConfig(env, 'wa_bot_test_instance');
+  const testPhone = await _readConfig(env, 'wa_bot_test_phone');
+  if (!testInst || !testPhone) return false;
+  if (instance !== testInst) return false;
+  const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
+  if (realPhone !== String(testPhone).replace(/\D/g, '')) return false;
+  const m = data?.message || {};
+  const text = m.conversation || m.extendedTextMessage?.text || '';
+  if (!text) return true; // ignora mídia no teste, mas não cai no template
+  const contents = [];
+  try {
+    const r = await evoFetch(env, `/chat/findMessages/${encodeURIComponent(instance)}`, { method: 'POST', body: { where: { key: { remoteJid: key.remoteJid } } } });
+    const recs = (r?.data?.messages?.records) || [];
+    recs.sort((a, b) => (Number(a.messageTimestamp) || 0) - (Number(b.messageTimestamp) || 0));
+    for (const rec of recs.slice(-13, -1)) {
+      const t = rec.message?.conversation || rec.message?.extendedTextMessage?.text || '';
+      if (!t) continue;
+      contents.push({ role: rec.key?.fromMe ? 'model' : 'user', parts: [{ text: t }] });
+    }
+  } catch (_) {}
+  contents.push({ role: 'user', parts: [{ text }] });
+  const gkey = await getAIKey(env, 'gemini'); if (!gkey) return true;
+  const prompt = await getBotPrompt(env);
+  const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents, generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
+  for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite']) {
+    try {
+      const g = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reqBody) });
+      if (!g.ok) { if ([429, 403, 404].includes(g.status)) continue; return true; }
+      const d = await g.json();
+      let reply = (d.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/\[HANDOFF\]/ig, '').trim();
+      if (reply) await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: reply } });
+      return true;
+    } catch (_) { continue; }
+  }
+  return true;
+}
 async function _waOnInbound(env, instance, data) {
   const key = data?.key || {};
   if (key.fromMe) return;                          // ignora o que NÓS mandamos
@@ -1518,6 +1557,8 @@ async function _waOnInbound(env, instance, data) {
   if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo
   const phone = jid.split('@')[0].replace(/\D/g, '');
   if (!phone) return;
+  // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
+  if (await _waBotTestReply(env, instance, key, data)) return;
   await _waEnsureTables(env);
   // Atribuição: qual número (vendedor) falou com esse lead
   await env.DB.prepare(
@@ -1570,10 +1611,15 @@ async function handleWAConn(req, env) {
 // e prepara handoff pro vendedor humano. Override via D1 (wa_bot_prompt).
 const BOT_PROMPT_DEFAULT = `Você é atendente da equipe de saúde da Sale Made, no WhatsApp, falando com pessoas que pediram informação sobre o tratamento natural GlicoVax (controle de açúcar no sangue e saúde do homem). Seu trabalho NÃO é fechar a venda: é acolher na hora, criar conexão, QUALIFICAR o lead e preparar pra um especialista ligar e finalizar. Você fala como gente de verdade, nunca como robô.
 
-COMO VOCÊ FALA:
-- Português coloquial e acolhedor, frases curtas e simples. O público é mais velho, do interior. Nada de palavra difícil ou texto longo.
-- Trate por "senhor"/"senhora". Caloroso, humano, paciente. Pode usar 1 emoji de vez em quando, sem exagero.
-- Uma ideia por mensagem. Não despeje tudo de uma vez. É conversa, não palestra.
+COMO VOCÊ FALA (É O QUE TE FAZ PARECER HUMANO, leve a sério):
+- Mensagens CURTAS: no máximo 1 ou 2 frases curtas. Como gente conversa no zap, não um texto de venda. Texto longo entrega na hora que é robô.
+- Tom informal e de pessoa real. Não fale "senhor" toda hora, nem use emoji toda mensagem (no máximo 1 de vez em quando).
+- NUNCA cumprimente ou se apresente duas vezes. A saudação é só na PRIMEIRA mensagem da conversa.
+- NUNCA repita uma pergunta que o lead já respondeu. Se ele já disse a dor (ex: ereção), siga em frente, não pergunte de novo.
+- Se o lead mandar várias mensagens picadas ou curtas, entenda o conjunto e responda UMA vez só.
+- Se ele já perguntou o preço, responda direto e simples, sem enrolar.
+- Nada de linguagem de folheto ("vigor", "qualidade de vida", "age na causa" repetido). Fale simples, como um atendente de verdade.
+- Uma ideia por mensagem. Responda só a próxima fala, curta.
 
 O PRODUTO (o que você sabe):
 - GlicoVax: tratamento natural, em gotinhas embaixo da língua em jejum, todo dia. Atua na causa, não mascara.
