@@ -1511,8 +1511,33 @@ async function _waOnConnection(env, instance, data) {
      ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
   ).bind(instance, String(st)).run();
 }
-// Bot de IA em TESTE: responde só o chat whitelistado (wa_bot_test_*), com
-// histórico (context-aware). Independe da chave-mestra. Retorna true se tratou.
+// Transcreve um áudio recebido (Gemini). Retorna texto ou ''.
+async function _waTranscribeAudio(env, instance, msgKey) {
+  try {
+    const gkey = await getAIKey(env, 'gemini'); if (!gkey) return '';
+    const media = await evoFetch(env, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, { method: 'POST', body: { message: { key: { id: msgKey.id, remoteJid: msgKey.remoteJid, fromMe: !!msgKey.fromMe } } } });
+    const b64 = media?.data?.base64; if (!b64) return '';
+    const body = { contents: [{ parts: [{ text: 'Transcreva este áudio em português do Brasil. Responda só a transcrição.' }, { inline_data: { mime_type: 'audio/ogg', data: b64 } }] }] };
+    for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp']) {
+      const g = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (g.ok) { const d = await g.json(); return (d.candidates?.[0]?.content?.parts?.[0]?.text || '').trim(); }
+      if (![429, 403, 404].includes(g.status)) break;
+    }
+  } catch (_) {}
+  return '';
+}
+// Texto de um registro: conversation/extendedText, ou transcreve áudio se pedido.
+async function _waRecText(env, instance, rec, transcribe) {
+  const mm = rec.message || {};
+  if (mm.conversation) return mm.conversation;
+  if (mm.extendedTextMessage?.text) return mm.extendedTextMessage.text;
+  if (mm.audioMessage) return transcribe ? await _waTranscribeAudio(env, instance, rec.key) : '[áudio]';
+  if (mm.imageMessage) return mm.imageMessage.caption || '[imagem]';
+  return '';
+}
+// Bot de IA em TESTE: responde só o chat whitelistado (wa_bot_test_*). Agrupa
+// mensagens picadas (debounce), transcreve áudio, responde como humano (várias
+// mensagens curtas com "digitando..."). Retorna true se tratou.
 async function _waBotTestReply(env, instance, key, data) {
   const testInst = await _readConfig(env, 'wa_bot_test_instance');
   const testPhone = await _readConfig(env, 'wa_bot_test_phone');
@@ -1520,24 +1545,42 @@ async function _waBotTestReply(env, instance, key, data) {
   if (instance !== testInst) return false;
   const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (realPhone !== String(testPhone).replace(/\D/g, '')) return false;
-  const m = data?.message || {};
-  const text = m.conversation || m.extendedTextMessage?.text || '';
-  if (!text) return true; // ignora mídia no teste, mas não cai no template
-  const contents = [];
+  const jid = key.remoteJid, myMsgId = key.id;
+  // DEBOUNCE: espera; se chegou mensagem mais nova, deixa a invocação dela responder
+  await new Promise(res => setTimeout(res, 7000));
+  let recs = [];
   try {
-    const r = await evoFetch(env, `/chat/findMessages/${encodeURIComponent(instance)}`, { method: 'POST', body: { where: { key: { remoteJid: key.remoteJid } } } });
-    const recs = (r?.data?.messages?.records) || [];
-    recs.sort((a, b) => (Number(a.messageTimestamp) || 0) - (Number(b.messageTimestamp) || 0));
-    for (const rec of recs.slice(-13, -1)) {
-      const t = rec.message?.conversation || rec.message?.extendedTextMessage?.text || '';
-      if (!t) continue;
-      contents.push({ role: rec.key?.fromMe ? 'model' : 'user', parts: [{ text: t }] });
-    }
+    const r = await evoFetch(env, `/chat/findMessages/${encodeURIComponent(instance)}`, { method: 'POST', body: { where: { key: { remoteJid: jid } } } });
+    recs = (r?.data?.messages?.records) || [];
+  } catch (_) { return true; }
+  recs.sort((a, b) => (Number(a.messageTimestamp) || 0) - (Number(b.messageTimestamp) || 0));
+  const lastInbound = [...recs].reverse().find(x => !x.key?.fromMe);
+  if (!lastInbound || lastInbound.key?.id !== myMsgId) return true; // veio msg mais nova → para
+  // idempotência: 1 resposta por mensagem (evita retry do webhook duplicar)
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_bot_done (id TEXT PRIMARY KEY, at INTEGER)').run();
+    const claim = await env.DB.prepare("INSERT OR IGNORE INTO wa_bot_done (id, at) VALUES (?, strftime('%s','now'))").bind(myMsgId).run();
+    if (!claim.meta.changes) return true;
   } catch (_) {}
-  contents.push({ role: 'user', parts: [{ text }] });
+  let lastBotIdx = -1;
+  recs.forEach((rec, i) => { if (rec.key?.fromMe) lastBotIdx = i; });
+  // Histórico (texto, sem transcrever pra economizar) até a última resposta nossa
+  const contents = [];
+  for (let i = Math.max(0, lastBotIdx - 12); i <= lastBotIdx; i++) {
+    const t = await _waRecText(env, instance, recs[i], false);
+    if (!t) continue;
+    contents.push({ role: recs[i].key?.fromMe ? 'model' : 'user', parts: [{ text: t }] });
+  }
+  // Mensagens novas do lead (após nossa última resposta) juntas — transcreve áudio
+  const pend = recs.slice(lastBotIdx + 1).filter(x => !x.key?.fromMe);
+  const pendTexts = [];
+  for (const rec of pend) { const t = await _waRecText(env, instance, rec, true); if (t) pendTexts.push(t); }
+  const userTurn = pendTexts.join('\n').trim();
+  if (!userTurn) return true;
+  contents.push({ role: 'user', parts: [{ text: userTurn }] });
   const gkey = await getAIKey(env, 'gemini'); if (!gkey) return true;
   const prompt = await getBotPrompt(env);
-  const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents, generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
+  const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents: contents.slice(-16), generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
   for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite']) {
     try {
       const g = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reqBody) });
@@ -1545,10 +1588,10 @@ async function _waBotTestReply(env, instance, key, data) {
       const d = await g.json();
       let reply = (d.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/\[HANDOFF\]/ig, '').trim();
       if (reply) {
-        // quebra em mensagens curtas e manda uma a uma com "digitando..." (delay) — parece humano
-        const parts = reply.split(/\n*-{3,}\n*/).map(s => s.trim()).filter(Boolean);
+        // quebra por "---" OU por parágrafo (linha em branco) → várias mensagens curtas
+        const parts = reply.split(/\n*-{3,}\n*|\n\s*\n/).map(s => s.trim()).filter(Boolean);
         for (const part of parts) {
-          const delayMs = Math.min(5000, Math.max(1500, part.length * 55)); // simula digitação proporcional ao tamanho
+          const delayMs = Math.min(5000, Math.max(1500, part.length * 55)); // "digitando..." proporcional
           await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
         }
       }
@@ -1616,7 +1659,7 @@ async function handleWAConn(req, env) {
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
 // Modelado no script oficial + conversas reais GlicoVax. Pré-qualifica
 // e prepara handoff pro vendedor humano. Override via D1 (wa_bot_prompt).
-const BOT_PROMPT_DEFAULT = `Você é atendente da equipe de saúde da Sale Made, no WhatsApp, falando com pessoas que pediram informação sobre o tratamento natural GlicoVax (controle de açúcar no sangue e saúde do homem). Seu trabalho NÃO é fechar a venda: é acolher na hora, criar conexão, QUALIFICAR o lead e preparar pra um especialista ligar e finalizar. Você fala como gente de verdade, nunca como robô.
+const BOT_PROMPT_DEFAULT = `Você é atendente da equipe de saúde da GlicoVax, no WhatsApp, falando com pessoas que pediram informação sobre o tratamento natural GlicoVax (controle de açúcar no sangue e saúde do homem). Seu trabalho NÃO é fechar a venda: é acolher na hora, criar conexão, QUALIFICAR o lead e preparar pra um especialista ligar e finalizar. Você fala como gente de verdade, nunca como robô.
 
 COMO VOCÊ FALA (É O QUE TE FAZ PARECER HUMANO, leve a sério):
 - Mensagens CURTAS: no máximo 1 ou 2 frases curtas. Como gente conversa no zap, não um texto de venda. Texto longo entrega na hora que é robô.
@@ -1637,8 +1680,8 @@ O PRODUTO (o que você sabe):
 - Garantia: se fizer o protocolo de 8 meses e não resolver, o dinheiro volta.
 
 SEU FLUXO (siga de forma natural, sem soar script):
-1. Saudação acolhedora reconhecendo que ele pediu informação ("Aqui é da equipe de saúde, vi que o senhor pediu informação sobre o tratamento, tudo bem?").
-2. Pergunte o que mais incomoda hoje (o açúcar ou a parte do homem) e DEIXE o lead responder. Não avance sem ouvir.
+1. Saudação acolhedora SÓ na primeira mensagem da conversa: "Olá! Aqui é da equipe de saúde da GlicoVax, vi que o senhor pediu informação sobre o tratamento." Logo em seguida já pergunte a dor: "Pra eu te ajudar melhor, o que mais tem te incomodado hoje? É mais a questão do açúcar no sangue ou a saúde e desempenho do homem?"
+2. DEIXE o lead responder a dor. Não avance sem ouvir. Nunca repita essa pergunta se ele já respondeu.
 3. Valide a dor com empatia e cite sintomas comuns (visão embaçada, formigamento nos pés, levantar de noite, cansaço, perder a firmeza). Mostre que entende e que tem solução.
 4. Plante a esperança: explique simples que o GlicoVax é natural, atua na causa, e que já nas primeiras semanas costuma sentir melhora.
 5. Apresente como funciona (gotinhas) e a condição: paga só na entrega, R$ 697 o tratamento de 8 meses, chega em casa. Deixe o pagamento na entrega MUITO claro.
