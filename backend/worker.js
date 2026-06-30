@@ -1848,7 +1848,7 @@ function _resolvePresselNumbers(p, chips){
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
   const id=JSON.stringify(String(p.pixel_tt));
-  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});ttq.page();}(window,document,'ttq');</script>`;
+  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});}(window,document,'ttq');</script>`;
 }
 function _presselHtml(html){
   return new Response(html, { status:200, headers:{ 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' } });
@@ -1941,12 +1941,13 @@ async function handlePresselPublic(req, env, id){
   const pick=nums[await _presselNextIndex(env, id, nums.length)];
   const wa=_waLink(pick, p.msg);
   if(!wa) return _presselOffline();
-  try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // lead chegou na pressel
+  const isTT = !!(new URL(req.url).searchParams.get('ttclid'));   // veio de anúncio do TikTok?
+  if(isTT){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok (ignora clique seu/interno)
   const bg=_escHtml(p.bg||'#ffffff');
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>function track(){try{ttq&&ttq.track('ClickButton');ttq&&ttq.track('Contact')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}function track(){if(!IS_TT)return;try{ttq&&ttq.track('ClickButton');ttq&&ttq.track('Contact')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
