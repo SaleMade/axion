@@ -1668,7 +1668,7 @@ async function handleEvolutionWebhook(req, env, token) {
   const data = body?.data || {};
   try {
     if (event === 'connection.update') await _waOnConnection(env, instance, data);
-    else if (event === 'messages.upsert') await _waOnInbound(env, instance, data);
+    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
@@ -1679,6 +1679,36 @@ async function handleWAConn(req, env) {
   await _waEnsureTables(env);
   const rows = await env.DB.prepare('SELECT instance, state, updated_at FROM wa_conn').all();
   return json({ ok: true, conn: rows.results || [] });
+}
+// Detecta VENDA pela mensagem de confirmação ("Pedido Concluído", enviada após o
+// cliente aceitar o termo). Registra em wa_sales (dedupe por telefone/24h).
+async function _waDetectSale(env, instance, data) {
+  const m = data?.message || {};
+  const text = m.conversation || m.extendedTextMessage?.text || '';
+  if (!text || text.indexOf('Pedido Conclu') < 0) return; // assinatura da venda
+  const key = data?.key || {};
+  const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
+  if (!phone) return;
+  const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
+  const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
+  const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
+    const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
+    if (recent) return; // já registrada nas últimas 24h
+    await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, instance, name, value).run();
+    // TODO: com o Access Token do TikTok, disparar aqui o evento de venda (Events API) pro pixel.
+  } catch (_) {}
+}
+// GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
+async function handleWASales(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
+    const rows = await env.DB.prepare('SELECT phone, instance, name, value, ts FROM wa_sales ORDER BY ts DESC LIMIT 200').all();
+    return json({ ok: true, sales: rows.results || [] });
+  } catch (e) { return json({ ok: true, sales: [] }); }
 }
 
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
@@ -1987,6 +2017,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)
