@@ -1179,6 +1179,26 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 
 /* ─── LEAD MODAL — layout ficha 3-col ─────────────── */
 .modal.xl{max-width:1180px}
+/* ─── Lead detail com chat WhatsApp embutido (2 painéis) ─── */
+.modal.mld-has-chat{max-width:1480px}
+.mld-split{display:flex;gap:20px;align-items:stretch}
+.mld-left{flex:1;min-width:0}
+.mld-right{width:404px;flex:none;display:flex;flex-direction:column;border:1px solid var(--b2);border-radius:var(--rl);background:var(--s1);overflow:hidden;align-self:stretch;min-height:440px;max-height:74vh}
+#mld-chat-pane .mld-chat-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--b2);color:var(--tx);font-size:13.5px;font-weight:600}
+#mld-chat-pane .mld-chat-num{margin-left:auto;font-size:11px;color:var(--t3);font-weight:500}
+#mld-chat-pane .mld-chat-msgs{flex:1;overflow-y:auto;padding:14px 13px;display:flex;flex-direction:column;gap:7px;background:var(--bg)}
+#mld-chat-pane .atd-b{max-width:82%;padding:8px 12px;border-radius:13px;font-size:13px;line-height:1.45;word-wrap:break-word;white-space:pre-wrap}
+#mld-chat-pane .atd-b.in{align-self:flex-start;background:var(--s3);color:var(--tx);border-bottom-left-radius:4px}
+#mld-chat-pane .atd-b.out{align-self:flex-end;background:var(--bl);color:#fff;border-bottom-right-radius:4px}
+#mld-chat-pane .atd-bt{font-size:9.5px;opacity:.6;margin-top:3px;text-align:right}
+#mld-chat-pane .atd-day{align-self:center;font-size:10.5px;color:var(--t4);background:var(--s2);padding:3px 10px;border-radius:10px;margin:6px 0}
+#mld-chat-pane .mld-chat-compose{padding:10px 12px;border-top:1px solid var(--b2);display:flex;gap:8px;align-items:flex-end;background:var(--s1)}
+#mld-chat-pane .mld-chat-compose textarea{flex:1;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-size:13px;padding:9px 11px;font-family:inherit;outline:none;resize:none;max-height:120px;min-height:40px;line-height:1.4}
+#mld-chat-pane .atd-from{background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--t2);font-size:11px;padding:0 6px;font-family:inherit;outline:none;height:40px;max-width:112px}
+#mld-chat-pane .atd-sendbtn{background:var(--bl);border:none;border-radius:var(--r);color:#fff;width:42px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+#mld-chat-pane .atd-sendbtn:disabled{opacity:.5;cursor:default}
+#mld-chat-pane .mld-chat-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--t4);font-size:12.5px;text-align:center;padding:20px;line-height:1.5}
+@media(max-width:1100px){.mld-split{flex-direction:column}.mld-right{width:auto;max-height:60vh}}
 .mld-status-pill{font-size:11px;font-weight:700;padding:4px 11px;border-radius:8px;
   letter-spacing:.04em;text-transform:uppercase;background:var(--grd);color:var(--gr)}
 .lead-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-top:20px}
@@ -1927,7 +1947,7 @@ body.no-producer #mp-mode-block{display:none}
 
 <!-- ═══ MODAL: LEAD DETALHE (layout 3-col estilo ficha) ═══ -->
 <div class="overlay" id="m-lead-detail">
-  <div class="modal xl">
+  <div class="modal xl mld-has-chat">
     <div class="m-h">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="mt">Detalhes do <em style="font-style:normal;color:var(--bl2)" id="mld-title">Pedido</em></span>
@@ -1951,6 +1971,8 @@ body.no-producer #mp-mode-block{display:none}
         <div class="mld-stage-pills" id="mld-stage-pills"></div>
       </div>
 
+      <div class="mld-split">
+       <div class="mld-left">
       <div class="lead-grid-3">
         <!-- ─── Coluna 1: Cliente + Endereço ─── -->
         <div class="lead-col">
@@ -2138,6 +2160,11 @@ body.no-producer #mp-mode-block{display:none}
         <div class="info-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Histórico de status</div>
         <div class="hist-list" id="mld-hist"></div>
       </div>
+       </div><!-- /mld-left -->
+       <aside class="mld-right" id="mld-chat-pane">
+         <div class="mld-chat-empty">Carregando conversa...</div>
+       </aside>
+      </div><!-- /mld-split -->
 
     </div>
   </div>
@@ -6282,6 +6309,7 @@ function _openLeadDetailUnsafe(lead){
   renderComments(lead);
   openM('m-lead-detail');
   setTimeout(()=>{document.querySelector('#m-lead-detail .modal').scrollTop=0},20);
+  _mldChatOpen(lead);
 }
 
 // Constrói opções do select Produto/Variação do CRM (chave: "produto · variação")
@@ -7163,6 +7191,79 @@ function _atdDay(ts){
   const y=new Date(now);y.setDate(now.getDate()-1);
   if(d.toDateString()===y.toDateString())return 'Ontem';
   return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();
+}
+
+/* ───────────────────────────────────────────────────────
+   CHAT WHATSAPP EMBUTIDO NO LEAD (modal m-lead-detail)
+   Mesma conversa do inbox, agora dentro do card do lead.
+   Chamado por _openLeadDetailUnsafe(lead). Reusa helpers _atd*.
+─────────────────────────────────────────────────────── */
+var _mldChat={phone:'',instance:'',msgs:[],timer:null,sending:false,leadId:null};
+async function _mldChatOpen(lead){
+  const pane=document.getElementById('mld-chat-pane');if(!pane)return;
+  const raw=(lead&&lead.wa)||'';
+  const d=String(raw).replace(/\D/g,'');
+  const norm=d?(d.length<=11?'55'+d:d):'';
+  if(_mldChat.timer){clearInterval(_mldChat.timer);_mldChat.timer=null;}
+  _mldChat={phone:norm,instance:'',msgs:[],timer:null,sending:false,leadId:lead&&lead.id};
+  if(!norm){pane.innerHTML=`<div class="mld-chat-empty">${ico('message-circle',{size:26})}<div>Lead sem WhatsApp cadastrado.<br>Preencha o número pra ver a conversa.</div></div>`;return;}
+  pane.innerHTML=`<div class="mld-chat-empty">${ico('message-circle',{size:24})}<div>Carregando conversa...</div></div>`;
+  if(!_atd.instances||!_atd.instances.length){try{const r=await api.waInstances();_atd.instances=r.instances||[];}catch(_){}}
+  await _mldChatLoad();
+  _mldChat.timer=setInterval(_mldChatPoll,5000);
+}
+function _mldChatPoll(){
+  const m=document.getElementById('m-lead-detail');
+  if(!m||!m.classList.contains('open')){if(_mldChat.timer){clearInterval(_mldChat.timer);_mldChat.timer=null;}return;}
+  _mldChatLoad(true);
+}
+async function _mldChatLoad(silent){
+  if(!_mldChat.phone)return;
+  try{const r=await api.waMessages(_mldChat.phone);_mldChat.msgs=r.messages||[];if(r.chat&&r.chat.instance)_mldChat.instance=r.chat.instance;}
+  catch(e){if(!silent){const p=document.getElementById('mld-chat-pane');if(p)p.innerHTML=`<div class="mld-chat-empty">${ico('message-circle',{size:24})}<div>Não consegui carregar a conversa agora.</div></div>`;}return;}
+  const existing=document.getElementById('mld-msgs');
+  if(silent&&existing)_mldChatSync();else _mldChatRender();
+}
+function _mldMsgsHTML(){
+  if(!_mldChat.msgs.length)return `<div class="mld-chat-empty" style="height:100%">${ico('message-circle',{size:24})}<div>Nenhuma mensagem ainda.<br>O histórico aparece quando o lead conversar no WhatsApp.</div></div>`;
+  let html='',lastDay='';
+  _mldChat.msgs.forEach(m=>{
+    const day=_atdDay(m.ts);
+    if(day!==lastDay){html+=`<div class="atd-day">${day}</div>`;lastDay=day;}
+    const body=(m.body&&m.body.length)?_atdEsc(m.body):('['+(m.type||'msg')+']');
+    html+=`<div class="atd-b ${m.direction==='out'?'out':'in'}">${body}<div class="atd-bt">${_atdHM(m.ts)}</div></div>`;
+  });
+  return html;
+}
+function _mldChatSync(){
+  const el=document.getElementById('mld-msgs');if(!el)return;
+  const nb=el.scrollHeight-el.scrollTop-el.clientHeight<60;
+  el.innerHTML=_mldMsgsHTML();
+  if(nb)el.scrollTop=el.scrollHeight;
+}
+function _mldChatRender(){
+  const pane=document.getElementById('mld-chat-pane');if(!pane)return;
+  const multi=_atd.instances&&_atd.instances.length>1;
+  pane.innerHTML=`
+    <div class="mld-chat-head">${ico('message-circle',{size:15})}<span>Conversa WhatsApp</span><span class="mld-chat-num">+${_atdEsc(_mldChat.phone)}</span></div>
+    <div class="mld-chat-msgs" id="mld-msgs">${_mldMsgsHTML()}</div>
+    <div class="mld-chat-compose">
+      ${multi?`<select class="atd-from" id="mld-from" title="Enviar por qual número">${_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}" ${i.name===_mldChat.instance?'selected':''}>${_atdEsc(_atdInstLabel(i.name))}</option>`).join('')}</select>`:''}
+      <textarea id="mld-chat-input" placeholder="Responder no WhatsApp..." rows="1" onkeydown="_mldChatKey(event)" oninput="_atdGrow(this)"></textarea>
+      <button class="atd-sendbtn" id="mld-chat-send" onclick="_mldChatSend()">${ico('send',{size:16})}</button>
+    </div>`;
+  const el=document.getElementById('mld-msgs');if(el)el.scrollTop=el.scrollHeight;
+}
+function _mldChatKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();_mldChatSend();}}
+async function _mldChatSend(){
+  const inp=document.getElementById('mld-chat-input');if(!inp)return;
+  const text=inp.value.trim();if(!text||!_mldChat.phone||_mldChat.sending)return;
+  const fromSel=document.getElementById('mld-from');
+  const inst=(fromSel&&fromSel.value)||_mldChat.instance||'';
+  _mldChat.sending=true;const b=document.getElementById('mld-chat-send');if(b)b.disabled=true;
+  try{await api.waSend(_mldChat.phone,text,inst||undefined);inp.value='';_atdGrow(inp);await _mldChatLoad();}
+  catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
+  finally{_mldChat.sending=false;if(b)b.disabled=false;const i2=document.getElementById('mld-chat-input');if(i2)i2.focus();}
 }
 
 /* ═══════════════════════════════════════════════════════
