@@ -1844,6 +1844,24 @@ async function _presselNextIndex(env, id, len){
     return n%len;
   }catch(_){ return Math.floor(Math.random()*len); }
 }
+// Contador de métricas da pressel (views = chegou; clicks = foi pro WhatsApp)
+async function _bumpPressel(env, id, field){
+  const col = field === 'clicks' ? 'clicks' : 'views';
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    await env.DB.prepare(`INSERT INTO pressel_stats (pid, ${col}) VALUES (?, 1) ON CONFLICT(pid) DO UPDATE SET ${col} = ${col} + 1`).bind(String(id)).run();
+  }catch(_){}
+}
+// GET /api/pressel/stats → views/clicks por pressel (a dash mostra na métrica)
+async function handlePresselStats(req, env){
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    const rows = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_stats').all();
+    return json({ ok:true, stats: rows.results || [] });
+  }catch(e){ return json({ ok:true, stats: [] }); }
+}
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -1856,11 +1874,12 @@ async function handlePresselPublic(req, env, id){
   const pick=nums[await _presselNextIndex(env, id, nums.length)];
   const wa=_waLink(pick, p.msg);
   if(!wa) return _presselOffline();
+  try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // lead chegou na pressel
   const bg=_escHtml(p.bg||'#ffffff');
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>function track(){try{ttq&&ttq.track('ClickButton')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const script=`<script>function track(){try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
@@ -1967,6 +1986,11 @@ export default {
       }
 
       // Pressel pública — lead da campanha cai aqui e a roleta manda pro WhatsApp
+      // Métricas da pressel (dash lê) + beacon de clique (público)
+      if (req.method === 'GET' && path === '/api/pressel/stats') return handlePresselStats(req, env);
+      const pcMatch = path.match(/^\/pc\/([a-zA-Z0-9_-]+)$/);
+      if (pcMatch) { try { await _bumpPressel(env, pcMatch[1], 'clicks'); } catch (_) {} return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } }); }
+
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
 

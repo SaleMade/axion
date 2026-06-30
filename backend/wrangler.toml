@@ -4,6 +4,7 @@
 name = "axion-api"
 main = "worker.js"
 compatibility_date = "2026-01-01"
+workers_dev = true   # mantem a URL axion-api.axion-dash.workers.dev viva (a dash usa ela)
 
 # ─── Domínios custom pras pressels (TikTok com domínios diferentes) ──
 # Cada domínio serve o Worker; a pressel fica em https://dominio/p/<id>.
