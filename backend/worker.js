@@ -1598,7 +1598,9 @@ async function _waBotTestReply(env, instance, key, data) {
   contents.push({ role: 'user', parts: [{ text: userTurn }] });
   // 6) Gemini → resposta → envio humano
   const gkey = await getAIKey(env, 'gemini'); if (!gkey) return true;
-  const prompt = await getBotPrompt(env);
+  let prompt = await getBotPrompt(env);
+  const leadName = String(data?.pushName || '').trim();
+  if (leadName) prompt += `\n\nNOME DO LEAD (do WhatsApp dele): "${leadName}". Trate ele pelo PRIMEIRO nome, de forma natural e calorosa (ex: "Oi, seu João!", "Beleza, dona Maria?"). Só caia pra "senhor"/"senhora" sem nome se esse valor parecer um nome comercial, número, ou algo que claramente não é nome de pessoa.`;
   const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents: contents.slice(-16), generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
   for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite']) {
     try {
@@ -1686,7 +1688,7 @@ const BOT_PROMPT_DEFAULT = `Você é atendente da equipe de saúde da GlicoVax, 
 
 COMO VOCÊ FALA (É O QUE TE FAZ PARECER HUMANO, leve a sério):
 - Mensagens CURTAS: no máximo 1 ou 2 frases curtas. Como gente conversa no zap, não um texto de venda. Texto longo entrega na hora que é robô.
-- Tom informal e de pessoa real. Não fale "senhor" toda hora, nem use emoji toda mensagem (no máximo 1 de vez em quando).
+- Tom informal e de pessoa real. Se souber o primeiro nome do lead, chame ele pelo nome ("seu João", "dona Maria") em vez de só "senhor". Emoji no máximo 1 de vez em quando.
 - NUNCA cumprimente ou se apresente duas vezes. A saudação é só na PRIMEIRA mensagem da conversa.
 - NUNCA repita uma pergunta que o lead já respondeu. Se ele já disse a dor (ex: ereção), siga em frente, não pergunte de novo.
 - Se o lead mandar várias mensagens picadas ou curtas, entenda o conjunto e responda UMA vez só.
