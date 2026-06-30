@@ -5,6 +5,15 @@ name = "axion-api"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
+# ─── Domínios custom pras pressels (TikTok com domínios diferentes) ──
+# Cada domínio serve o Worker; a pressel fica em https://dominio/p/<id>.
+# (Já anexados via API; aqui ficam declarados pra não sumirem em deploy.)
+routes = [
+  { pattern = "area-acesso.com", custom_domain = true },
+  { pattern = "area-glico.fun", custom_domain = true },
+  { pattern = "painel-glico.fun", custom_domain = true }
+]
+
 # ─── D1 (SQLite gerenciado) ────────────────────────────────────
 # Após `wrangler d1 create axion`, copie o `database_id` exibido
 # e cole abaixo (substitui REPLACE-ME).

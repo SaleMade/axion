@@ -58,5 +58,8 @@ Bot roda AO VIVO só no número de teste (whitelist salemade + 554774009891). N�
 6. **Reconectar atendimento1** (QR/código) quando for pra produção.
 7. **Melhorias da UI de Automações** (o que o Bruno quer evoluir): integrar config do bot (editor do prompt, ligar/desligar bot por número, whitelist de teste), inbox/visão das conversas, status de conexão dos números (`/api/wa/conn`), gestão dos áudios de objeção, e a regra da rede de segurança visível/configurável.
 
+## Domínios das pressels (30/06)
+3 domínios da Hostinger, na Cloudflare (conta brunomc1416), anexados ao Worker como custom domain (em `wrangler.toml`): `area-acesso.com`, `area-glico.fun`, `painel-glico.fun`. A MESMA pressel funciona em `https://<dominio>/p/<id>` nos três — ideia é usar um domínio por conta do TikTok (não ligar as contas). Pegadinha que rolou: cada domínio tinha um registro A na raiz (parking Hostinger) que dava erro 100117; tem que apagar o A antes de anexar. O token OAuth do wrangler NÃO edita DNS (só Workers), então a exclusão do A é manual no painel Cloudflare. Possível melhoria: seletor de domínio no editor de pressel (hoje `presselPublicUrl` usa a URL do Worker; o usuário monta a URL do domínio na mão).
+
 ## Coordenação (IMPORTANTE)
 Duas conversas em paralelo mexendo nos MESMOS arquivos. Combinado: a mecânica do inbound/Automações é tocada por uma; o cérebro+análise por outra. **Trabalhar uma de cada vez** pra não dar conflito. Sempre reler o arquivo antes de editar. Detalhes em [[robo-ia-atendimento]].
