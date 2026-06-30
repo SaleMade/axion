@@ -27,11 +27,13 @@ if ! command -v docker >/dev/null 2>&1; then
   systemctl enable docker
 fi
 
-# 3) Firewall do OS (libera 80/443; persistente). Docker publica 8080 so no localhost.
-echo ">> abrindo 80/443 no iptables"
-iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT 4 -p tcp --dport 80 -j ACCEPT
-iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT 4 -p tcp --dport 443 -j ACCEPT
-(netfilter-persistent save 2>/dev/null || (mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4)) || true
+# 3) Firewall do OS (best-effort). Em EC2/cloud com Security Group o INPUT costuma
+#    estar vazio (ACCEPT) e isso nem e necessario; em imagens tipo Oracle ha REJECT
+#    no fim. Inserir no TOPO (-I INPUT, sem indice) funciona nos dois casos. Nao aborta.
+echo ">> abrindo 80/443 no iptables (best-effort)"
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+(netfilter-persistent save 2>/dev/null || (mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4 2>/dev/null)) || true
 
 # 4) Caddy (HTTPS automatico via Let's Encrypt no dominio sslip.io)
 if ! command -v caddy >/dev/null 2>&1; then
