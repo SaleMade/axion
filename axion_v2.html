@@ -8289,6 +8289,11 @@ function copyPresselLink(id){
   navigator.clipboard.writeText(presselPublicUrl(id)).then(()=>toast('Link copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
 function openPresselPublic(id){ window.open(presselPublicUrl(id),'_blank','noopener'); }
+// Link público da página de métricas (pra compartilhar com gestores de tráfego)
+function presselMetricsUrl(id){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/m/'+id; }
+function copyPresselMetricsLink(id){
+  navigator.clipboard.writeText(presselMetricsUrl(id)).then(()=>toast('Link de métricas copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
+}
 // Modal de métricas da pressel (totais + por vendedor)
 function openPresselMetrics(pid){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
@@ -8306,14 +8311,15 @@ function openPresselMetrics(pid){
     return `<tr style="border-top:1px solid var(--b1)"><td style="padding:11px 8px"><div style="font-weight:600;color:var(--tx);font-size:13px">${v.at.name}</div><div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${v.chip.num}</div></td><td style="text-align:center;font-weight:600">${sC}</td><td style="text-align:center;font-weight:600;color:var(--gr)">${sK}</td><td style="text-align:center">${sV||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
   }).join(''):`<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor ativo na roleta.</td></tr>`;
   $('ppm-body').innerHTML=`
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button class="btn btn-gh btn-sm" onclick="copyPresselMetricsLink(${pid})" title="Copia um link público pra compartilhar essas métricas com os gestores de tráfego">Compartilhar link de métricas</button></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      ${card('Chegaram na pressel','<span id="ppm-views">…</span>','var(--bl2)')}${card('Foram pro WhatsApp','<span id="ppm-clicks">…</span>','var(--gr)')}${card('Contatos',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}
+      ${card('Chegaram na pressel','<span id="ppm-views">…</span>','var(--bl2)')}${card('Foram pro WhatsApp','<span id="ppm-clicks">…</span>','var(--gr)')}${card('Iniciaram contato',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-      <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Cliques</th><th style="font-weight:600">Contatos</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
+      <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Foram pro Whats</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.5"><b>Chegaram</b> e <b>Foram pro WhatsApp</b> são reais (rastreados no link público). <b>Contatos</b> (quem mandou mensagem) e <b>Vendas</b> por pressel entram quando o WhatsApp/pedidos estiverem ligados na atribuição.</p>`;
+    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.5"><b>Chegaram</b> e <b>Foram pro WhatsApp</b> são reais (rastreados no link público). <b>Iniciaram contato</b> (quem mandou mensagem) e <b>Vendas</b> (quem aceitou/fechou a compra) entram via Evolution quando estiver ligada.</p>`;
   openM('m-pressel-metrics');
   api.presselStats().then(r=>{
     const s=(r.stats||[]).find(x=>String(x.pid)===String(pid))||{views:0,clicks:0};

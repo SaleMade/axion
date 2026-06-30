@@ -1864,6 +1864,33 @@ async function handlePresselStats(req, env){
     return json({ ok:true, stats: rows.results || [] });
   }catch(e){ return json({ ok:true, stats: [] }); }
 }
+// GET /m/<id> — página PÚBLICA de métricas (pra compartilhar com gestores de tráfego)
+async function handlePresselMetricsPage(req, env, id){
+  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
+  const p=(Array.isArray(data.pressels)?data.pressels:[]).find(x=>String(x.id)===String(id));
+  if(!p) return _presselHtml(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b1220;color:#cbd5e1;text-align:center;padding:60px">Pressel não encontrada.</body>`);
+  const chips=Array.isArray(data.chips)?data.chips:[];
+  let views=0, clicks=0;
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    const s=await env.DB.prepare('SELECT views, clicks FROM pressel_stats WHERE pid=?').bind(String(id)).first();
+    if(s){ views=Number(s.views)||0; clicks=Number(s.clicks)||0; }
+  }catch(_){}
+  const m=p.metrics||{}; const contatos=Number(m.contatos)||0, vendas=Number(m.vendas)||0;
+  let nameMap={};
+  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
+    const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+    const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
+    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', ok:!!active};
+  }).filter(v=>v.ok);
+  const n=vend.length||1;
+  const sC=Math.floor(clicks/n), sK=Math.floor(contatos/n), sV=Math.floor(vendas/n);
+  const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
+  const rows=vend.length?vend.map(v=>`<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center">${sC}</td><td style="text-align:center;color:#34d399">${sK}</td><td style="text-align:center">${sV||'—'}</td></tr>`).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor ativo.</td></tr>`;
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>Métricas — ${_escHtml(p.nome||'')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:880px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:18px}th{color:#8b9bb4;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px}</style></head><body><div class="wrap"><h1>Métricas — ${_escHtml(p.nome||'')}</h1><p style="color:#8b9bb4;font-size:13px;margin-bottom:18px">Atualiza sozinho a cada 30s</p><div style="display:flex;gap:12px;flex-wrap:wrap">${card('Chegaram na pressel',views,'#7aa2ff')}${card('Foram pro WhatsApp',clicks,'#34d399')}${card('Iniciaram contato',contatos,'#34d399')}${card('Vendas',vendas,'#34d399')}</div><table><thead><tr><th style="text-align:left">Vendedor</th><th>Foram pro Whats</th><th>Iniciaram</th><th>Vendas</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Chegaram e Foram pro WhatsApp são reais. Iniciaram contato e Vendas entram via Evolution. Números por vendedor são estimados pela distribuição igual da roleta.</p></div></body></html>`);
+}
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -1995,6 +2022,10 @@ export default {
 
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
+
+      // Página pública de métricas (compartilhar com gestores de tráfego)
+      const mMatch = path.match(/^\/m\/([a-zA-Z0-9_-]+)$/);
+      if (req.method === 'GET' && mMatch) return handlePresselMetricsPage(req, env, mMatch[1]);
 
       return err('Rota não encontrada', 404);
     } catch (e) {
