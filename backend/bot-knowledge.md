@@ -11,6 +11,13 @@ cérebro do bot (BOT_PROMPT_DEFAULT) e como semente do RAG futuro.
 - COD: paga só na entrega. Recebe primeiro, paga depois. Entrega 10-12 dias úteis.
 - Garantia: fez o protocolo de 8 meses e não resolveu, dinheiro de volta.
 
+## FAQ / dúvidas técnicas (do Bruno, 30/06)
+- **Efeito colateral:** não tem nenhum. Não é remédio, é tratamento natural pra ajudar o organismo no geral.
+- **Tomar com outros remédios:** pode, sem risco, porque é natural. Não precisa parar o remédio que já toma (quem orienta é o especialista).
+- **Composição:** +30 ervas naturais. Costumam mandar um print da composição (não precisa frisar muito no texto).
+- **Modo de uso:** 15 gotinhas embaixo da língua, todo dia de manhã ao acordar. Cada frasco = 1 mês. (Esse modo de uso é enviado DEPOIS que o lead finaliza o pagamento.)
+- **Como paga (real):** na entrega. A equipe de COBRANÇA liga depois que o produto chega, confere se chegou certinho (a quantidade de frascos conforme os meses comprados), e combina a forma de pagamento. O bot NÃO precisa entrar em forma de pagamento na frente, só deixar claro que paga quando chega.
+
 ## Script oficial da ligação (NUTRA)
 1. Abertura: "Bom dia, seu João. O que mais está incomodando o senhor hoje, é mais a diabetes ou a parte da ereção?" (deixa falar). "Então o que mais incomoda é isso, correto?"
 2. Identificação: "Isso é muito comum. A maioria dos pacientes, entre 60 e 80 anos, chega relatando visão embaçada, formigamento nos pés, levantar 3 a 5 vezes de noite pra urinar, fraqueza no corpo, e na parte masculina perder a firmeza. É isso que acontece com o senhor?" (deixa confirmar).
