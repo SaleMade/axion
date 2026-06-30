@@ -8112,12 +8112,14 @@ function presselPanel(p){
           <div id="pp-els-${p.id}"></div>
         </div>
         <div id="pp-tab-config-${p.id}" style="display:none">
-          <label class="pp-lbl">URL pública</label>
-          <div style="display:flex;gap:6px;margin-bottom:4px">
-            <input value="${esc(link)}" readonly class="pp-inp" style="flex:1;color:var(--bl2)">
-            <button class="btn btn-gh btn-sm" onclick="copyPresselLink(${p.id})">Copiar</button>
+          <label class="pp-lbl">URL pública (escolha um domínio por conta de TikTok)</label>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
+            ${PRESSEL_DOMAINS.map(d=>{const u='https://'+d+'/p/'+p.id;return `<div style="display:flex;gap:6px;align-items:center">
+              <input value="${esc(u)}" readonly class="pp-inp" style="flex:1;color:var(--bl2)">
+              <button class="btn btn-gh btn-sm" onclick="copyUrl('${u}')">Copiar</button>
+            </div>`;}).join('')}
           </div>
-          <p class="muted" style="font-size:11px;margin:0 0 12px">Domínio próprio: em breve. Por enquanto o link é o do servidor.</p>
+          <p class="muted" style="font-size:11px;margin:0 0 12px">Use um domínio diferente em cada conta do TikTok pra não ligar as contas. (Servidor: ${esc(link)})</p>
           <label class="pp-lbl">Cor de fundo</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
             <input type="color" id="pp-bg-${p.id}" value="${esc(p.bg||'#ffffff')}" oninput="document.getElementById('pp-bgx-${p.id}').value=this.value;renderPresselPreview(${p.id})" style="width:42px;height:38px;border:1px solid var(--b2);border-radius:8px;background:none;cursor:pointer;padding:2px">
@@ -8278,6 +8280,9 @@ function togglePresselFullclick(pid){
 }
 // Link público da pressel (servido pelo worker em /p/<id>)
 function presselPublicUrl(id){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/p/'+id; }
+// Domínios próprios ligados ao Worker (1 por conta de TikTok pra não ligar as contas)
+const PRESSEL_DOMAINS=['area-acesso.com','area-glico.fun','painel-glico.fun'];
+function copyUrl(t){ navigator.clipboard.writeText(t).then(()=>toast('Link copiado','ok')).catch(()=>toast('Não consegui copiar','err')); }
 function copyPresselLink(id){
   navigator.clipboard.writeText(presselPublicUrl(id)).then(()=>toast('Link copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
