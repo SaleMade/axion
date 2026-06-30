@@ -3805,6 +3805,11 @@ const api={
   waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
   waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
   waLogout:(instance)=>api._fetch('/api/wa/instance/logout',{method:'POST',body:JSON.stringify({instance})}),
+  // Inbox / Atendimento — conversas guardadas no Worker
+  waChats:(qs='')=>api._fetch('/api/wa/chats'+(qs?('?'+qs):'')),
+  waMessages:(phone,limit=300)=>api._fetch('/api/wa/messages?phone='+encodeURIComponent(phone)+'&limit='+limit),
+  waChatRead:(phone)=>api._fetch('/api/wa/chat/read',{method:'POST',body:JSON.stringify({phone})}),
+  waChatAssign:(phone,user_id)=>api._fetch('/api/wa/chat/assign',{method:'POST',body:JSON.stringify({phone,user_id})}),
   // Métricas reais da pressel (views = chegou, clicks = foi pro WhatsApp)
   presselStats:()=>api._fetch('/api/pressel/stats'),
 };
@@ -4890,6 +4895,7 @@ function computeNav(){
       // Acordeão WhatsApp — área dedicada (contingência de números). Universal:
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
+        {id:'atendimento',lbl:'Atendimento',live:true},
         {id:'contingencia',lbl:'Contingência'},
         ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
@@ -5009,6 +5015,7 @@ const PNAMES={
   pagequip:'Financeiro / <b>Pagamentos de Equipe</b>',
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
+  atendimento:"WhatsApp / <b>Atendimento</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
   automacoes:"Automações / <b>WhatsApp</b>",
@@ -5041,7 +5048,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageContingencia(),pagePressels(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageAtendimento(),pageContingencia(),pagePressels(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5184,6 +5191,7 @@ function goPage(id){
     ]);
   }
 
+  if(id==='atendimento') renderAtendimento();
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
@@ -6912,6 +6920,249 @@ function renderPedidos(){
       }).join('')||'<tr><td colspan="9" class="muted" style="text-align:center;padding:24px">Sem pedidos no período.</td></tr>'}
     </tbody>
   </table></div>`;
+}
+
+/* ═══════════════════════════════════════════════════════
+   PAGE — ATENDIMENTO (inbox multi número + chat embutido)
+   Lê as conversas guardadas no Worker (wa_chats/wa_messages).
+   O vendedor acompanha tudo aqui e responde pelo número certo.
+═══════════════════════════════════════════════════════ */
+var _atd={phone:null,instance:'',chats:[],msgs:[],curChat:null,instances:[],fInst:'',fAssign:'',q:'',timer:null,sending:false,_qt:null};
+
+function pageAtendimento(){
+  return `<div class="page" id="atendimento-pg">
+    <style>
+      #atendimento-pg .atd-wrap{display:flex;height:calc(100vh - 132px);border:1px solid var(--b2);border-radius:var(--rl);overflow:hidden;background:var(--s2)}
+      #atendimento-pg .atd-list{width:340px;min-width:300px;border-right:1px solid var(--b2);display:flex;flex-direction:column;background:var(--s1)}
+      #atendimento-pg .atd-lhead{padding:11px 12px;border-bottom:1px solid var(--b2);display:flex;flex-direction:column;gap:9px}
+      #atendimento-pg .atd-search{display:flex;align-items:center;gap:7px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:7px 10px;color:var(--t3)}
+      #atendimento-pg .atd-search input{flex:1;background:transparent;border:none;outline:none;color:var(--tx);font-size:13px;font-family:inherit}
+      #atendimento-pg .atd-filters{display:flex;gap:7px}
+      #atendimento-pg .atd-filters select{flex:1;min-width:0;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--t2);font-size:12px;padding:6px 8px;font-family:inherit;outline:none}
+      #atendimento-pg .atd-chats{flex:1;overflow-y:auto}
+      #atendimento-pg .atd-ci{display:flex;gap:10px;padding:11px 12px;cursor:pointer;border-bottom:1px solid var(--b1);align-items:center;transition:background .12s}
+      #atendimento-pg .atd-ci:hover{background:var(--s3)}
+      #atendimento-pg .atd-ci.on{background:var(--bld)}
+      #atendimento-pg .atd-av{width:40px;height:40px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff}
+      #atendimento-pg .atd-cibody{flex:1;min-width:0}
+      #atendimento-pg .atd-ciname{font-size:13.5px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #atendimento-pg .atd-cilast{font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+      #atendimento-pg .atd-inst{font-size:9.5px;color:var(--t4);display:flex;align-items:center;gap:3px;margin-top:3px}
+      #atendimento-pg .atd-cimeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+      #atendimento-pg .atd-citime{font-size:10.5px;color:var(--t4)}
+      #atendimento-pg .atd-unread{background:var(--bl);color:#fff;font-size:10.5px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 5px}
+      #atendimento-pg .atd-thread{flex:1;display:flex;flex-direction:column;min-width:0}
+      #atendimento-pg .atd-thead{padding:10px 14px;border-bottom:1px solid var(--b2);display:flex;align-items:center;gap:11px}
+      #atendimento-pg .atd-thname{font-size:14px;font-weight:600;color:var(--tx)}
+      #atendimento-pg .atd-thsub{font-size:11.5px;color:var(--t3);margin-top:1px;display:flex;align-items:center;gap:4px}
+      #atendimento-pg .atd-assign{margin-left:auto;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--t2);font-size:12px;padding:6px 9px;font-family:inherit;outline:none}
+      #atendimento-pg .atd-msgs{flex:1;overflow-y:auto;padding:18px 16px;display:flex;flex-direction:column;gap:7px;background:var(--bg)}
+      #atendimento-pg .atd-b{max-width:72%;padding:8px 12px;border-radius:13px;font-size:13px;line-height:1.45;word-wrap:break-word;white-space:pre-wrap}
+      #atendimento-pg .atd-b.in{align-self:flex-start;background:var(--s2);color:var(--tx);border-bottom-left-radius:4px}
+      #atendimento-pg .atd-b.out{align-self:flex-end;background:var(--bl);color:#fff;border-bottom-right-radius:4px}
+      #atendimento-pg .atd-bt{font-size:9.5px;opacity:.6;margin-top:3px;text-align:right}
+      #atendimento-pg .atd-day{align-self:center;font-size:10.5px;color:var(--t4);background:var(--s2);padding:3px 10px;border-radius:10px;margin:6px 0}
+      #atendimento-pg .atd-compose{padding:11px 13px;border-top:1px solid var(--b2);display:flex;gap:9px;align-items:flex-end;background:var(--s1)}
+      #atendimento-pg .atd-compose textarea{flex:1;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-size:13px;padding:9px 11px;font-family:inherit;outline:none;resize:none;max-height:120px;min-height:40px;line-height:1.4}
+      #atendimento-pg .atd-from{background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--t2);font-size:11.5px;padding:0 7px;font-family:inherit;outline:none;height:40px;max-width:130px}
+      #atendimento-pg .atd-sendbtn{background:var(--bl);border:none;border-radius:var(--r);color:#fff;width:42px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+      #atendimento-pg .atd-sendbtn:disabled{opacity:.5;cursor:default}
+      #atendimento-pg .atd-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--t4);font-size:13px;text-align:center}
+    </style>
+    <div class="ph"><div><h1>Atendimento <em>WhatsApp</em></h1></div></div>
+    <div class="atd-wrap">
+      <div class="atd-list">
+        <div class="atd-lhead">
+          <div class="atd-search">${ico('search',{size:14})}<input id="atd-q" placeholder="Buscar nome ou número" oninput="_atdSearch(this.value)"></div>
+          <div class="atd-filters">
+            <select id="atd-finst" onchange="_atd.fInst=this.value;_atdLoadChats()"><option value="">Todos os números</option></select>
+            <select id="atd-fassign" onchange="_atd.fAssign=this.value;_atdLoadChats()"><option value="">Todos vendedores</option></select>
+          </div>
+        </div>
+        <div class="atd-chats" id="atd-chats"></div>
+      </div>
+      <div class="atd-thread" id="atd-thread">
+        <div class="atd-empty">${ico('message-circle',{size:34})}<div>Selecione uma conversa pra começar</div></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function renderAtendimento(){
+  _atdFillAssignFilter();
+  await _atdLoadInstances();
+  await _atdLoadChats();
+  if(_atd.phone)await _atdLoadThread();
+  if(_atd.timer)clearInterval(_atd.timer);
+  _atd.timer=setInterval(_atdPoll,5000);
+}
+function _atdPoll(){
+  const pg=document.getElementById('atendimento-pg');
+  if(!pg||!pg.classList.contains('active')){ if(_atd.timer){clearInterval(_atd.timer);_atd.timer=null;} return; }
+  _atdLoadChats(true);
+  if(_atd.phone)_atdLoadThread(true);
+}
+async function _atdLoadInstances(){
+  try{const r=await api.waInstances();_atd.instances=r.instances||[];}catch(_){_atd.instances=[];}
+  const sel=document.getElementById('atd-finst');
+  if(sel){const cur=_atd.fInst;sel.innerHTML='<option value="">Todos os números</option>'+_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}">${_atdEsc(_atdInstLabel(i.name))}</option>`).join('');sel.value=cur;}
+}
+function _atdFillAssignFilter(){
+  const sel=document.getElementById('atd-fassign');if(!sel)return;
+  const cur=_atd.fAssign;
+  const members=(DB.team||[]).filter(t=>!t.archived);
+  sel.innerHTML='<option value="">Todos vendedores</option>'+members.map(m=>`<option value="${_atdEsc(m.id)}">${_atdEsc(m.name)}</option>`).join('');
+  sel.value=cur;
+}
+async function _atdLoadChats(silent){
+  const qs=[];
+  if(_atd.fInst)qs.push('instance='+encodeURIComponent(_atd.fInst));
+  if(_atd.fAssign)qs.push('assigned='+encodeURIComponent(_atd.fAssign));
+  if(_atd.q)qs.push('q='+encodeURIComponent(_atd.q));
+  try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent)console.warn('atd chats',e);return;}
+  _atdRenderList();
+}
+function _atdRenderList(){
+  const box=document.getElementById('atd-chats');if(!box)return;
+  if(!_atd.chats.length){box.innerHTML=`<div style="padding:30px 16px;text-align:center;color:var(--t4);font-size:12.5px;line-height:1.6">Nenhuma conversa ainda.<br>Quando um lead mandar mensagem, ela aparece aqui.</div>`;return;}
+  box.innerHTML=_atd.chats.map(c=>{
+    const lead=_atdLeadByPhone(c.phone);
+    const disp=(lead&&lead.nome)||c.name||('+'+c.phone);
+    const av=_atdAvatar(disp);
+    const last=(c.last_dir==='out'?'Você: ':'')+(c.last_text||'');
+    return `<div class="atd-ci ${_atd.phone===c.phone?'on':''}" onclick="_atdOpenChat('${c.phone}')">
+      <div class="atd-av" style="background:${av.bg}">${av.ini}</div>
+      <div class="atd-cibody">
+        <div class="atd-ciname">${_atdEsc(disp)}</div>
+        <div class="atd-cilast">${_atdEsc(last.slice(0,64))}</div>
+        <div class="atd-inst">${ico('smartphone',{size:10})} ${_atdEsc(_atdInstLabel(c.instance))}</div>
+      </div>
+      <div class="atd-cimeta">
+        <div class="atd-citime">${_atdTime(c.last_ts)}</div>
+        ${c.unread>0?`<div class="atd-unread">${c.unread>99?'99+':c.unread}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+async function _atdOpenChat(phone){
+  _atd.phone=phone;
+  _atdRenderList();
+  await _atdLoadThread();
+  try{await api.waChatRead(phone);}catch(_){}
+  const c=_atd.chats.find(x=>x.phone===phone);if(c)c.unread=0;
+  _atdRenderList();
+}
+async function _atdLoadThread(silent){
+  if(!_atd.phone)return;
+  try{const r=await api.waMessages(_atd.phone);_atd.msgs=r.messages||[];_atd.curChat=r.chat||null;}catch(e){if(!silent)console.warn('atd thread',e);return;}
+  const built=document.getElementById('atd-msgs');
+  if(silent&&built){_atdSyncMsgs();}else{_atdRenderThread();}
+}
+function _atdMsgsHTML(){
+  if(!_atd.msgs.length)return `<div class="atd-empty" style="height:100%">${ico('message-circle',{size:30})}<div>Sem mensagens nessa conversa</div></div>`;
+  let html='',lastDay='';
+  _atd.msgs.forEach(m=>{
+    const day=_atdDay(m.ts);
+    if(day!==lastDay){html+=`<div class="atd-day">${day}</div>`;lastDay=day;}
+    const body=(m.body&&m.body.length)?_atdEsc(m.body):('['+(m.type||'msg')+']');
+    html+=`<div class="atd-b ${m.direction==='out'?'out':'in'}">${body}<div class="atd-bt">${_atdHM(m.ts)}</div></div>`;
+  });
+  return html;
+}
+function _atdSyncMsgs(){
+  const el=document.getElementById('atd-msgs');if(!el)return;
+  const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<60;
+  el.innerHTML=_atdMsgsHTML();
+  if(nearBottom)el.scrollTop=el.scrollHeight;
+}
+function _atdRenderThread(){
+  const box=document.getElementById('atd-thread');if(!box)return;
+  const c=_atd.curChat||{};
+  const lead=_atdLeadByPhone(_atd.phone);
+  const disp=(lead&&lead.nome)||c.name||('+'+_atd.phone);
+  const av=_atdAvatar(disp);
+  const members=(DB.team||[]).filter(t=>!t.archived);
+  const fromInst=c.instance||_atd.fInst||'';
+  box.innerHTML=`
+    <div class="atd-thead">
+      <div class="atd-av" style="background:${av.bg};width:38px;height:38px">${av.ini}</div>
+      <div>
+        <div class="atd-thname">${_atdEsc(disp)}</div>
+        <div class="atd-thsub">+${_atdEsc(_atd.phone)} · ${ico('smartphone',{size:10})} ${_atdEsc(_atdInstLabel(c.instance))}</div>
+      </div>
+      <select class="atd-assign" onchange="_atdAssign(this.value)" title="Vendedor responsável">
+        <option value="">Sem responsável</option>
+        ${members.map(m=>`<option value="${_atdEsc(m.id)}" ${c.assigned_to===m.id?'selected':''}>${_atdEsc(m.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="atd-msgs" id="atd-msgs">${_atdMsgsHTML()}</div>
+    <div class="atd-compose">
+      ${_atd.instances.length>1?`<select class="atd-from" id="atd-from" title="Enviar por qual número">${_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}" ${i.name===fromInst?'selected':''}>${_atdEsc(_atdInstLabel(i.name))}</option>`).join('')}</select>`:''}
+      <textarea id="atd-input" placeholder="Escreva uma mensagem..." rows="1" onkeydown="_atdKey(event)" oninput="_atdGrow(this)"></textarea>
+      <button class="atd-sendbtn" id="atd-send" onclick="_atdSend()">${ico('send',{size:17})}</button>
+    </div>`;
+  const el=document.getElementById('atd-msgs');if(el)el.scrollTop=el.scrollHeight;
+  const inp=document.getElementById('atd-input');if(inp)inp.focus();
+}
+async function _atdSend(){
+  const inp=document.getElementById('atd-input');if(!inp)return;
+  const text=inp.value.trim();if(!text||!_atd.phone||_atd.sending)return;
+  const fromSel=document.getElementById('atd-from');
+  const inst=(fromSel&&fromSel.value)||(_atd.curChat&&_atd.curChat.instance)||_atd.fInst||'';
+  _atd.sending=true;const btn=document.getElementById('atd-send');if(btn)btn.disabled=true;
+  try{
+    await api.waSend(_atd.phone,text,inst||undefined);
+    inp.value='';_atdGrow(inp);
+    await _atdLoadThread();
+    _atdLoadChats(true);
+  }catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
+  finally{_atd.sending=false;if(btn)btn.disabled=false;const i2=document.getElementById('atd-input');if(i2)i2.focus();}
+}
+async function _atdAssign(uid){
+  if(!_atd.phone)return;
+  try{await api.waChatAssign(_atd.phone,uid||null);
+    const c=_atd.chats.find(x=>x.phone===_atd.phone);if(c)c.assigned_to=uid||null;
+    if(_atd.curChat)_atd.curChat.assigned_to=uid||null;
+    toast('Conversa atribuída','ok');
+  }catch(e){toast('Falha ao atribuir','err');}
+}
+function _atdSearch(v){_atd.q=String(v||'').trim();clearTimeout(_atd._qt);_atd._qt=setTimeout(()=>_atdLoadChats(),250);}
+function _atdKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();_atdSend();}}
+function _atdGrow(t){t.style.height='auto';t.style.height=Math.min(120,t.scrollHeight)+'px';}
+function _atdEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function _atdInstLabel(inst){
+  if(!inst)return 'número';
+  const ch=(DB.chips||[]).find(c=>c.instance===inst||c.inst===inst||c.id===inst);
+  if(ch&&(ch.label||ch.nome||ch.num))return ch.label||ch.nome||ch.num;
+  return String(inst).replace(/^ax_/,'').replace(/^ev_/,'');
+}
+function _atdLeadByPhone(phone){
+  const p=String(phone||'').replace(/\D/g,'');if(!p)return null;
+  const tail=p.slice(-8);if(tail.length<8)return null;
+  return (DB.leads||[]).find(l=>String(l.wa||'').replace(/\D/g,'').endsWith(tail))||null;
+}
+function _atdAvatar(name){
+  const n=String(name||'?').trim();
+  const ini=(n.replace(/[^A-Za-zÀ-ÿ0-9 ]/g,'').split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0]).join('')||'?').toUpperCase();
+  const colors=['#3b82f6','#a855f7','#fb923c','#ef4444','#10b981','#06b6d4','#f59e0b','#ec4899'];
+  let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i))>>>0;
+  return {ini,bg:colors[h%colors.length]};
+}
+function _atdTime(ts){
+  if(!ts)return '';
+  const d=new Date(ts*1000),now=new Date();
+  if(d.toDateString()===now.toDateString())return _atdHM(ts);
+  const y=new Date(now);y.setDate(now.getDate()-1);
+  if(d.toDateString()===y.toDateString())return 'ontem';
+  return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2);
+}
+function _atdHM(ts){const d=new Date(ts*1000);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function _atdDay(ts){
+  const d=new Date(ts*1000),now=new Date();
+  if(d.toDateString()===now.toDateString())return 'Hoje';
+  const y=new Date(now);y.setDate(now.getDate()-1);
+  if(d.toDateString()===y.toDateString())return 'Ontem';
+  return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();
 }
 
 /* ═══════════════════════════════════════════════════════

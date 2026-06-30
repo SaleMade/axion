@@ -2161,6 +2161,10 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
