@@ -2296,9 +2296,8 @@ body.no-producer #mp-mode-block{display:none}
 <!-- ═══ MODAL: PRESSEL — métricas ═══ -->
 <div class="overlay" id="m-pressel-metrics">
   <div class="modal">
-    <div class="m-h"><span class="mt" id="ppm-title">Métricas</span><button class="m-x" onclick="closeM('m-pressel-metrics')">×</button></div>
+    <div class="m-h"><span class="mt" id="ppm-title">Métricas</span><div class="m-actions"><button class="pp-iconbtn" title="Compartilhar link de métricas" onclick="copyPresselMetricsLink(_ppmPid)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button><button class="m-x" onclick="closeM('m-pressel-metrics')">×</button></div></div>
     <div class="m-b">
-      <p class="muted" style="font-size:12px;margin-bottom:14px">Cliques, contatos e vendas por vendedor</p>
       <div id="ppm-body"></div>
     </div>
   </div>
@@ -8295,7 +8294,9 @@ function copyPresselMetricsLink(id){
   navigator.clipboard.writeText(presselMetricsUrl(id)).then(()=>toast('Link de métricas copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
 // Modal de métricas da pressel (totais + por vendedor)
+let _ppmPid=null;
 function openPresselMetrics(pid){
+  _ppmPid=pid;
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
   const m=p.metrics||{cliques:0,contatos:0,vendas:0};
   $('ppm-title').textContent='Métricas — '+(p.nome||'');
@@ -8311,15 +8312,13 @@ function openPresselMetrics(pid){
     return `<tr style="border-top:1px solid var(--b1)"><td style="padding:11px 8px"><div style="font-weight:600;color:var(--tx);font-size:13px">${v.at.name}</div><div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${v.chip.num}</div></td><td style="text-align:center;font-weight:600">${sC}</td><td style="text-align:center;font-weight:600;color:var(--gr)">${sK}</td><td style="text-align:center">${sV||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
   }).join(''):`<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor ativo na roleta.</td></tr>`;
   $('ppm-body').innerHTML=`
-    <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button class="btn btn-gh btn-sm" onclick="copyPresselMetricsLink(${pid})" title="Copia um link público pra compartilhar essas métricas com os gestores de tráfego">Compartilhar link de métricas</button></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
       ${card('Chegaram na pressel','<span id="ppm-views">…</span>','var(--bl2)')}${card('Foram pro WhatsApp','<span id="ppm-clicks">…</span>','var(--gr)')}${card('Iniciaram contato',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Foram pro Whats</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
-    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.5"><b>Chegaram</b> e <b>Foram pro WhatsApp</b> são reais (rastreados no link público). <b>Iniciaram contato</b> (quem mandou mensagem) e <b>Vendas</b> (quem aceitou/fechou a compra) entram via Evolution quando estiver ligada.</p>`;
+    </table>`;
   openM('m-pressel-metrics');
   api.presselStats().then(r=>{
     const s=(r.stats||[]).find(x=>String(x.pid)===String(pid))||{views:0,clicks:0};
