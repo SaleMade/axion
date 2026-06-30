@@ -1355,6 +1355,7 @@ async function handleWASend(req, env) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) return err(`Evolution respondeu ${r.status}: ${JSON.stringify(data).slice(0, 200)}`, 502);
+    await _waLogMsg(env, { phone: number, instance, direction: 'out', type: 'text', body: String(body.text), msgId: data?.key?.id });
     return json({ ok: true, id: data?.key?.id || null, status: data?.status || null, to: number, instance });
   } catch (e) {
     return err('Falha ao enviar: ' + e.message, 502);
@@ -1461,6 +1462,54 @@ async function _waEnsureTables(env) {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_replied (phone TEXT PRIMARY KEY, updated_at INTEGER)').run();
+    // Conversas (inbox/CRM): cada mensagem in/out + resumo por contato pro inbox
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_messages (msg_id TEXT PRIMARY KEY, phone TEXT NOT NULL, instance TEXT, direction TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON wa_messages(phone, ts)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_chats (phone TEXT PRIMARY KEY, instance TEXT, name TEXT, last_text TEXT, last_ts INTEGER, last_dir TEXT, unread INTEGER DEFAULT 0, assigned_to TEXT, updated_at INTEGER)').run();
+  } catch (_) {}
+}
+// Extrai tipo + texto de uma mensagem recebida da Evolution (pro histórico do inbox)
+function _waExtractMsg(data) {
+  const mm = data?.message || {};
+  if (mm.conversation) return { type: 'text', body: mm.conversation };
+  if (mm.extendedTextMessage?.text) return { type: 'text', body: mm.extendedTextMessage.text };
+  if (mm.imageMessage) return { type: 'image', body: mm.imageMessage.caption || '' };
+  if (mm.audioMessage) return { type: 'audio', body: '' };
+  if (mm.videoMessage) return { type: 'video', body: mm.videoMessage.caption || '' };
+  if (mm.documentMessage) return { type: 'document', body: mm.documentMessage.fileName || '' };
+  if (mm.stickerMessage) return { type: 'sticker', body: '' };
+  if (mm.locationMessage) return { type: 'location', body: '' };
+  return { type: 'other', body: '' };
+}
+// Grava uma mensagem (in/out) no histórico e atualiza o resumo do inbox.
+// Dedup natural por msg_id (PK). Nunca quebra o fluxo de quem chama.
+async function _waLogMsg(env, m) {
+  try {
+    await _waEnsureTables(env);
+    const phone = String(m.phone || '').replace(/\D/g, '');
+    if (!phone) return;
+    const ts = Number(m.ts) || Math.floor(Date.now() / 1000);
+    const dir = m.direction === 'out' ? 'out' : 'in';
+    const id = m.msgId || (dir + '_' + ts + '_' + Math.random().toString(36).slice(2, 8));
+    const type = m.type || 'text';
+    const body = String(m.body == null ? '' : m.body).slice(0, 4000);
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts) VALUES (?,?,?,?,?,?,?,?)'
+    ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts).run();
+    const incUnread = dir === 'in' ? 1 : 0;
+    const preview = type === 'text' ? body : ('[' + type + ']');
+    await env.DB.prepare(
+      `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
+       VALUES (?,?,?,?,?,?,?,strftime('%s','now'))
+       ON CONFLICT(phone) DO UPDATE SET
+         instance = excluded.instance,
+         name = COALESCE(NULLIF(excluded.name,''), wa_chats.name),
+         last_text = excluded.last_text,
+         last_ts = excluded.last_ts,
+         last_dir = excluded.last_dir,
+         unread = CASE WHEN ? = 1 THEN wa_chats.unread + 1 ELSE wa_chats.unread END,
+         updated_at = excluded.updated_at`
+    ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, incUnread, incUnread).run();
   } catch (_) {}
 }
 async function _waWebhookToken(env) {
@@ -1579,7 +1628,7 @@ async function _waBotTestReply(env, instance, key, data) {
   for (const c of claimed) {
     if (c.kind === 'audio') {
       const t = await _waTranscribeAudio(env, instance, { id: c.id, remoteJid: c.jid, fromMe: false });
-      if (t) { pendTexts.push(t); try { await env.DB.prepare('UPDATE wa_buf SET payload=? WHERE id=?').bind(t, c.id).run(); } catch (_) {} }
+      if (t) { pendTexts.push(t); try { await env.DB.prepare('UPDATE wa_buf SET payload=? WHERE id=?').bind(t, c.id).run(); } catch (_) {} try { await env.DB.prepare("UPDATE wa_messages SET body=? WHERE msg_id=?").bind('🎤 ' + t, c.id).run(); } catch (_) {} }
     } else if (c.payload) pendTexts.push(c.payload);
   }
   const userTurn = pendTexts.join('\n').trim();
@@ -1616,6 +1665,7 @@ async function _waBotTestReply(env, instance, key, data) {
           // digitação proporcional ao tamanho: curtas ~1.8s, longas até ~9s
           const delayMs = Math.min(9000, Math.max(1800, Math.round(part.length * 75)));
           await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
+          await _waLogMsg(env, { phone: realPhone, instance, direction: 'out', type: 'text', body: part });
           // guarda a resposta no buffer (vira histórico do bot na próxima vez)
           try { await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,1)').bind('out_' + myMsgId + '_' + (oi++), realPhone, jid, Date.now(), 'out', part).run(); } catch (_) {}
         }
@@ -1632,6 +1682,9 @@ async function _waOnInbound(env, instance, data) {
   if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo
   const phone = jid.split('@')[0].replace(/\D/g, '');
   if (!phone) return;
+  // Guarda a mensagem recebida no histórico do inbox (independente de automação)
+  const _ex = _waExtractMsg(data);
+  await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
   await _waEnsureTables(env);
@@ -1654,6 +1707,7 @@ async function _waOnInbound(env, instance, data) {
   if (!msg) return;
   // Responde pelo MESMO número que o lead contatou (é resposta, baixo risco de ban)
   await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
+  await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg });
   await env.DB.prepare(
     `INSERT INTO wa_replied (phone, updated_at) VALUES (?, ?)
      ON CONFLICT(phone) DO UPDATE SET updated_at = excluded.updated_at`
@@ -1680,6 +1734,65 @@ async function handleWAConn(req, env) {
   const rows = await env.DB.prepare('SELECT instance, state, updated_at FROM wa_conn').all();
   return json({ ok: true, conn: rows.results || [] });
 }
+
+// ─── Inbox / Conversas (CRM) ─────────────────────────────────
+// GET /api/wa/chats?instance=&assigned=&q= → lista de conversas pro inbox
+async function handleWAChats(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const url = new URL(req.url);
+  const inst = (url.searchParams.get('instance') || '').trim();
+  const assigned = (url.searchParams.get('assigned') || '').trim();
+  const q = (url.searchParams.get('q') || '').trim();
+  let sql = 'SELECT phone, instance, name, last_text, last_ts, last_dir, unread, assigned_to FROM wa_chats';
+  const where = [], binds = [];
+  if (inst) { where.push('instance = ?'); binds.push(inst); }
+  if (assigned) { where.push('assigned_to = ?'); binds.push(assigned); }
+  if (q) { where.push('(name LIKE ? OR phone LIKE ?)'); binds.push('%' + q + '%', '%' + q.replace(/\D/g, '') + '%'); }
+  if (where.length) sql += ' WHERE ' + where.join(' AND ');
+  sql += ' ORDER BY last_ts DESC LIMIT 300';
+  const rows = await env.DB.prepare(sql).bind(...binds).all();
+  return json({ ok: true, chats: rows.results || [] });
+}
+// GET /api/wa/messages?phone=&limit= → thread de uma conversa
+async function handleWAMessages(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const url = new URL(req.url);
+  const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
+  if (!phone) return err('phone obrigatório');
+  const limit = Math.min(500, Number(url.searchParams.get('limit')) || 200);
+  const rows = await env.DB.prepare(
+    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
+  ).bind(phone, limit).all();
+  const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to FROM wa_chats WHERE phone = ?').bind(phone).first();
+  return json({ ok: true, phone, chat: chat || null, messages: rows.results || [] });
+}
+// POST /api/wa/chat/read { phone } → zera o não-lido
+async function handleWAChatRead(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const body = await req.json().catch(() => null);
+  const phone = String(body?.phone || '').replace(/\D/g, '');
+  if (!phone) return err('phone obrigatório');
+  await env.DB.prepare('UPDATE wa_chats SET unread = 0 WHERE phone = ?').bind(phone).run();
+  return json({ ok: true });
+}
+// POST /api/wa/chat/assign { phone, user_id|null } → distribui a conversa pro vendedor
+async function handleWAChatAssign(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const body = await req.json().catch(() => null);
+  const phone = String(body?.phone || '').replace(/\D/g, '');
+  if (!phone) return err('phone obrigatório');
+  const assigned = body?.user_id == null || body.user_id === '' ? null : String(body.user_id);
+  await env.DB.prepare("UPDATE wa_chats SET assigned_to = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(assigned, phone).run();
+  return json({ ok: true });
+}
 // Detecta VENDA pela mensagem de confirmação ("Pedido Concluído", enviada após o
 // cliente aceitar o termo). Registra em wa_sales (dedupe por telefone/24h).
 async function _waDetectSale(env, instance, data) {
@@ -1697,7 +1810,37 @@ async function _waDetectSale(env, instance, data) {
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
     if (recent) return; // já registrada nas últimas 24h
     await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, instance, name, value).run();
-    // TODO: com o Access Token do TikTok, disparar aqui o evento de venda (Events API) pro pixel.
+    await _ttFireSale(env, phone, value, (data && data.key && data.key.id) || '');   // manda a VENDA pro pixel do TikTok
+  } catch (_) {}
+}
+
+// Dispara o evento de VENDA pro pixel do TikTok (Events API server-side). Pixel + token
+// ficam na config (D1), um pixel só distribui pros 3 BMs. Telefone vai hasheado (SHA-256).
+async function _ttFireSale(env, phone, value, eventId) {
+  try {
+    const pixel = await _readConfig(env, 'tt_pixel_id');
+    const token = await _readConfig(env, 'tt_access_token');
+    if (!pixel || !token) return;   // pixel/token não configurados → não faz nada
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (!digits) return;
+    const phoneHash = await sha256Hex('+' + digits);   // E.164 hasheado p/ advanced matching
+    const body = {
+      event_source: 'web',
+      event_source_id: pixel,
+      data: [{
+        event: 'CompletePayment',
+        event_time: Math.floor(Date.now() / 1000),
+        event_id: String(eventId || ('sale_' + digits)),   // dedupe no TikTok
+        user: { phone: phoneHash },
+        properties: { currency: 'BRL', value: Number(value) || 0, content_type: 'product' },
+      }],
+    };
+    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', {
+      method: 'POST',
+      headers: { 'Access-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    try { console.log('TTSALE', r.status, (await r.text()).slice(0, 200)); } catch (_) {}
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
