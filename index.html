@@ -3806,6 +3806,8 @@ const api={
   waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
   waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
   waLogout:(instance)=>api._fetch('/api/wa/instance/logout',{method:'POST',body:JSON.stringify({instance})}),
+  // Métricas reais da pressel (views = chegou, clicks = foi pro WhatsApp)
+  presselStats:()=>api._fetch('/api/pressel/stats'),
 };
 
 // ─── Sync state com servidor ───
@@ -8305,14 +8307,19 @@ function openPresselMetrics(pid){
   }).join(''):`<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor ativo na roleta.</td></tr>`;
   $('ppm-body').innerHTML=`
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      ${card('Cliques',m.cliques||0)}${card('Contatos',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}${card('Valor total','R$ 0,00')}
+      ${card('Chegaram na pressel','<span id="ppm-views">…</span>','var(--bl2)')}${card('Foram pro WhatsApp','<span id="ppm-clicks">…</span>','var(--gr)')}${card('Contatos',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Cliques</th><th style="font-weight:600">Contatos</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.5">Os números por vendedor são uma estimativa pela distribuição igual da roleta. O rastreio detalhado por vendedor (cliques/contatos reais do link público) entra numa próxima etapa.</p>`;
+    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.5"><b>Chegaram</b> e <b>Foram pro WhatsApp</b> são reais (rastreados no link público). <b>Contatos</b> (quem mandou mensagem) e <b>Vendas</b> por pressel entram quando o WhatsApp/pedidos estiverem ligados na atribuição.</p>`;
   openM('m-pressel-metrics');
+  api.presselStats().then(r=>{
+    const s=(r.stats||[]).find(x=>String(x.pid)===String(pid))||{views:0,clicks:0};
+    const ve=document.getElementById('ppm-views'); if(ve)ve.textContent=s.views||0;
+    const ce=document.getElementById('ppm-clicks'); if(ce)ce.textContent=s.clicks||0;
+  }).catch(()=>{ const ve=document.getElementById('ppm-views'); if(ve)ve.textContent='0'; const ce=document.getElementById('ppm-clicks'); if(ce)ce.textContent='0'; });
 }
 // Lista de vendedores (toggle + número em destaque) de uma pressel
 function renderPresselVendList(pid){
