@@ -1690,6 +1690,7 @@ async function _waOnInbound(env, instance, data) {
   // Guarda a mensagem recebida no histórico do inbox (independente de automação)
   const _ex = _waExtractMsg(data);
   await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
+  await _waLeadCapture(env, instance, phone);   // 1ª msg = LEAD: casa com o clique do anúncio e dispara evento pro pixel
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
   await _waEnsureTables(env);
@@ -1819,44 +1820,63 @@ async function _waDetectSale(env, instance, data) {
   } catch (_) {}
 }
 
-// Dispara o evento de VENDA pro pixel do TikTok (Events API server-side). Usa o pixel+token
-// DA PRESSEL do vendedor (cada pressel/BM tem o seu); se a pressel não tiver, cai pro global
-// da config (D1). Telefone vai hasheado (SHA-256) p/ advanced matching.
+// Envia um evento pro TikTok Events API (server-side). Telefone hasheado (advanced matching);
+// inclui ttclid quando temos (atribuição precisa ao anúncio).
+async function _ttSend(pixel, token, event, phoneDigits, opts) {
+  opts = opts || {};
+  if (!pixel || !token || !phoneDigits) return;
+  try {
+    const user = { phone: await sha256Hex('+' + phoneDigits) };
+    if (opts.ttclid) user.ttclid = String(opts.ttclid);
+    const ev = { event, event_time: Math.floor(Date.now() / 1000), event_id: String(opts.eventId || (event + '_' + phoneDigits)), user };
+    if (opts.value != null) ev.properties = { currency: 'BRL', value: Number(opts.value) || 0, content_type: 'product' };
+    const body = { event_source: 'web', event_source_id: pixel, data: [ev] };
+    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    try { console.log('TTEV', event, r.status, (await r.text()).slice(0, 120)); } catch (_) {}
+  } catch (_) {}
+}
+// Resolve pixel+token: 1) da pressel (pid) se tiver os dois; 2) da pressel do vendedor (ax_<at>); 3) global.
+async function _ttPixelToken(env, pid, instance) {
+  let pixel = '', token = '';
+  try {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    const data = JSON.parse(row?.data || '{}');
+    const pressels = Array.isArray(data.pressels) ? data.pressels : [];
+    let p = pid ? pressels.find(x => String(x.id) === String(pid) && x.pixel_tt && x.pixel_tt_token) : null;
+    if (!p && instance) { const at = String(instance).replace(/^ax_/, ''); p = pressels.find(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false)); }
+    if (p) { pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); }
+  } catch (_) {}
+  if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
+  return { pixel, token };
+}
+// LEAD: na 1ª mensagem do número, casa com o clique do anúncio (ttclid, FIFO por número) e
+// dispara o evento de Lead pro pixel da pressel. Só 1x por número (tabela wa_lead).
+async function _waLeadCapture(env, instance, phone) {
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
+    const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
+    if (exists) return; // já contabilizado como lead
+    let ttclid = '', pid = '';
+    try {
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+      const cutoff = Math.floor(Date.now() / 1000) - 3 * 3600;   // clique nas últimas 3h nesse número
+      const cl = await env.DB.prepare('SELECT id, ttclid, pid FROM tt_pending WHERE inst=? AND claimed=0 AND ts>? ORDER BY ts ASC LIMIT 1').bind(instance, cutoff).first();
+      if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; await env.DB.prepare('UPDATE tt_pending SET claimed=1 WHERE id=?').bind(cl.id).run(); }
+    } catch (_) {}
+    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, ts) VALUES (?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid).run();
+    const { pixel, token } = await _ttPixelToken(env, pid, instance);
+    await _ttSend(pixel, token, 'Contact', phone, { ttclid, eventId: 'lead_' + phone });   // evento de LEAD
+  } catch (_) {}
+}
+// VENDA: usa a pressel/ttclid capturados do lead (wa_lead) e dispara pro pixel certo, com ttclid.
 async function _ttFireSale(env, phone, value, eventId, instance) {
   try {
-    let pixel = '', token = '';
-    try {   // pixel/token DA PRESSEL desse vendedor (instance ax_<at>)
-      const at = String(instance || '').replace(/^ax_/, '');
-      if (at) {
-        const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-        const data = JSON.parse(row?.data || '{}');
-        const pressels = Array.isArray(data.pressels) ? data.pressels : [];
-        const match = pressels.find(p => p.pixel_tt && p.pixel_tt_token && (p.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
-        if (match) { pixel = String(match.pixel_tt); token = String(match.pixel_tt_token); }
-      }
-    } catch (_) {}
-    if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }   // reserva: global
-    if (!pixel || !token) return;   // sem pixel/token em lugar nenhum → não faz nada
     const digits = String(phone || '').replace(/\D/g, '');
     if (!digits) return;
-    const phoneHash = await sha256Hex('+' + digits);   // E.164 hasheado p/ advanced matching
-    const body = {
-      event_source: 'web',
-      event_source_id: pixel,
-      data: [{
-        event: 'CompletePayment',
-        event_time: Math.floor(Date.now() / 1000),
-        event_id: String(eventId || ('sale_' + digits)),   // dedupe no TikTok
-        user: { phone: phoneHash },
-        properties: { currency: 'BRL', value: Number(value) || 0, content_type: 'product' },
-      }],
-    };
-    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', {
-      method: 'POST',
-      headers: { 'Access-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    try { console.log('TTSALE', r.status, (await r.text()).slice(0, 200)); } catch (_) {}
+    let ttclid = '', pid = '';
+    try { const l = await env.DB.prepare('SELECT pid, ttclid FROM wa_lead WHERE phone=?').bind(digits).first(); if (l) { ttclid = l.ttclid || ''; pid = l.pid || ''; } } catch (_) {}
+    const { pixel, token } = await _ttPixelToken(env, pid, instance);
+    await _ttSend(pixel, token, 'CompletePayment', digits, { value, ttclid, eventId });
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
@@ -2193,8 +2213,14 @@ async function handlePresselPublic(req, env, id){
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();
   }catch(_){}
-  const isTT = !!(new URL(req.url).searchParams.get('ttclid'));   // veio de anúncio do TikTok?
-  if(isTT){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok (ignora clique seu/interno)
+  const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
+  if(ttclid){
+    try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok
+    try{  // guarda o clique pra casar com a 1ª mensagem no WhatsApp desse número (atribuição server-side)
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed) VALUES (?,?,?,strftime('%s','now'),0)").bind(pick.inst, ttclid, String(id)).run();
+    }catch(_){}
+  }
   const bg=_escHtml(p.bg||'#ffffff');
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
