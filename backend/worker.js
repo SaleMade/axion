@@ -1889,25 +1889,6 @@ async function handleWASales(req, env) {
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
 }
-// POST /api/wa/sale → registra venda MANUAL (quando o webhook perdeu a msg) + dispara pro pixel
-async function handleWASaleManual(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  let b = {}; try { b = await req.json(); } catch (_) {}
-  const phone = String(b.phone || '').replace(/\D/g, '');
-  const instance = String(b.instance || '');
-  const name = String(b.name || '').slice(0, 120) || 'Venda manual';
-  const value = Number(b.value) || 0;
-  if (!phone) return err('Telefone obrigatório', 400);
-  try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
-    const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
-    if (recent) return json({ ok: true, dup: true });   // já tem venda desse número nas últimas 24h
-    await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, instance, name, value).run();
-    await _ttFireSale(env, phone, value, 'manual_' + phone + '_' + Math.floor(Date.now() / 1000), instance);   // dispara pro pixel (per-pressel + ttclid se houver)
-  } catch (_) {}
-  return json({ ok: true });
-}
 
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
 // Modelado no script oficial + conversas reais GlicoVax. Pré-qualifica
@@ -2244,7 +2225,7 @@ async function handlePresselPublic(req, env, id){
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}function track(){if(!IS_TT)return;try{ttq&&ttq.track('ClickButton');ttq&&ttq.track('Contact')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}function track(){if(!IS_TT)return;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
@@ -2320,7 +2301,6 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/sale')             return handleWASaleManual(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)

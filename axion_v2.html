@@ -3829,7 +3829,6 @@ const api={
   waSend:(number,text,instance)=>api._fetch('/api/wa/send',{method:'POST',body:JSON.stringify({number,text,instance})}),
   waInstances:()=>api._fetch('/api/wa/instances'),
   waConn:()=>api._fetch('/api/wa/conn'),
-  waSale:(b)=>api._fetch('/api/wa/sale',{method:'POST',body:JSON.stringify(b)}),
   waCreate:(instanceName)=>api._fetch('/api/wa/instance/create',{method:'POST',body:JSON.stringify({instanceName})}),
   waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
   waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
@@ -8728,35 +8727,14 @@ function _renderPresselMetrics(){
     const de=document.getElementById('ppm-date'); if(de)de.textContent='Hoje · '+_ppmFmtBR(day);
     $('ppm-body').innerHTML=`
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-        ${card('Chegaram na pressel',views,'var(--bl2)')}${card('Foram pro WhatsApp',clicks,'var(--gr)')}${card('Iniciaram contato',totC,'var(--gr)')}${card('Vendas',totV,'var(--gr)',totVal>0?('R$ '+totVal):'')}
+        ${card('Chegaram na pressel',views,'var(--bl2)','evento: PageView')}${card('Foram pro WhatsApp',clicks,'var(--gr)','evento: ClickButton')}${card('Iniciaram contato',totC,'var(--gr)','evento: Contact')}${card('Vendas',totV,'var(--gr)','evento: CompletePayment'+(totVal>0?' · R$ '+totVal:''))}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:12.5px">
         <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.55"><b>Chegaram</b> e <b>Foram pro WhatsApp</b>: só tráfego real do TikTok (ttclid). <b>Iniciaram contato</b>: leads que mandaram mensagem pros números dessa pressel no dia. <b>Vendas</b>: "Pedido Concluído" no WhatsApp, ou registrada manualmente aqui.</p>
-      <div style="margin-top:14px;border-top:1px solid var(--b1);padding-top:12px">
-        <button class="btn btn-gh btn-sm" onclick="togglePpmSaleForm()">+ Registrar venda manual</button>
-        <div id="ppm-saleform" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
-          <select id="ppm-sale-vend" class="pp-inp" style="width:auto">${vend.map(v=>`<option value="${v.inst}">${v.at.name}</option>`).join('')}</select>
-          <input id="ppm-sale-phone" placeholder="Telefone do lead" class="pp-inp" style="width:160px">
-          <input id="ppm-sale-value" value="697" placeholder="Valor" class="pp-inp" style="width:90px">
-          <button class="btn btn-bl btn-sm" onclick="submitPpmSale()">Salvar</button>
-        </div>
-        <div class="muted" style="font-size:10.5px;margin-top:6px">Use quando o número do vendedor perdeu a mensagem de "Pedido Concluído". Registra a venda e manda pro pixel.</div>
-      </div>`;
+      <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.5">Embaixo de cada número está o evento que dispara pro pixel do TikTok naquele momento (com o ttclid do anúncio quando disponível). Tudo automático.</p>`;
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
-}
-function togglePpmSaleForm(){ const f=document.getElementById('ppm-saleform'); if(f) f.style.display=(f.style.display==='none'||!f.style.display)?'flex':'none'; }
-function submitPpmSale(){
-  const inst=(document.getElementById('ppm-sale-vend')||{}).value||'';
-  const phone=((document.getElementById('ppm-sale-phone')||{}).value||'').replace(/\D/g,'');
-  const value=Number((((document.getElementById('ppm-sale-value')||{}).value||'').replace(',','.')))||0;
-  if(!phone){ toast('Informe o telefone do lead','err'); return; }
-  api.waSale({phone,instance:inst,value,name:'Venda manual'}).then(r=>{
-    toast(r&&r.dup?'Esse número já tinha venda hoje':'Venda registrada e enviada ao pixel','ok');
-    _renderPresselMetrics();
-  }).catch(()=>toast('Erro ao registrar venda','err'));
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
 var _waConnMap={}, _waConnLoaded=false;
