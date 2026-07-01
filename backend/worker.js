@@ -1815,17 +1815,28 @@ async function _waDetectSale(env, instance, data) {
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
     if (recent) return; // já registrada nas últimas 24h
     await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, instance, name, value).run();
-    await _ttFireSale(env, phone, value, (data && data.key && data.key.id) || '');   // manda a VENDA pro pixel do TikTok
+    await _ttFireSale(env, phone, value, (data && data.key && data.key.id) || '', instance);   // manda a VENDA pro pixel da pressel desse vendedor
   } catch (_) {}
 }
 
-// Dispara o evento de VENDA pro pixel do TikTok (Events API server-side). Pixel + token
-// ficam na config (D1), um pixel só distribui pros 3 BMs. Telefone vai hasheado (SHA-256).
-async function _ttFireSale(env, phone, value, eventId) {
+// Dispara o evento de VENDA pro pixel do TikTok (Events API server-side). Usa o pixel+token
+// DA PRESSEL do vendedor (cada pressel/BM tem o seu); se a pressel não tiver, cai pro global
+// da config (D1). Telefone vai hasheado (SHA-256) p/ advanced matching.
+async function _ttFireSale(env, phone, value, eventId, instance) {
   try {
-    const pixel = await _readConfig(env, 'tt_pixel_id');
-    const token = await _readConfig(env, 'tt_access_token');
-    if (!pixel || !token) return;   // pixel/token não configurados → não faz nada
+    let pixel = '', token = '';
+    try {   // pixel/token DA PRESSEL desse vendedor (instance ax_<at>)
+      const at = String(instance || '').replace(/^ax_/, '');
+      if (at) {
+        const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+        const data = JSON.parse(row?.data || '{}');
+        const pressels = Array.isArray(data.pressels) ? data.pressels : [];
+        const match = pressels.find(p => p.pixel_tt && p.pixel_tt_token && (p.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
+        if (match) { pixel = String(match.pixel_tt); token = String(match.pixel_tt_token); }
+      }
+    } catch (_) {}
+    if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }   // reserva: global
+    if (!pixel || !token) return;   // sem pixel/token em lugar nenhum → não faz nada
     const digits = String(phone || '').replace(/\D/g, '');
     if (!digits) return;
     const phoneHash = await sha256Hex('+' + digits);   // E.164 hasheado p/ advanced matching
@@ -1995,6 +2006,39 @@ function _resolvePresselNumbers(p, chips, liveSet){
   }
   return out;
 }
+// Igual ao _resolvePresselNumbers mas devolve o vendedor completo {num, at, inst} pra balancear.
+function _resolvePresselSellers(p, chips, liveSet){
+  const out=[];
+  for(const v of (p.vendedores||[])){
+    if(v.ativo===false) continue;
+    if(liveSet && !liveSet.has('ax_'+String(v.at))) continue;
+    const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+    if(!mine.length) continue;
+    const active=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];
+    if(!active) continue;
+    const wa=String(active.wa_st||'').toLowerCase();
+    if(wa==='restrito' || wa==='banido') continue;
+    if(active.num) out.push({num:active.num, at:String(v.at), inst:'ax_'+String(v.at)});
+  }
+  return out;
+}
+// BALANCEAMENTO: manda o próximo lead pro vendedor com MENOS contatos hoje (conta tudo que
+// chegou no WhatsApp dele, inclusive de outras pressels). Empate → rotaciona entre os empatados.
+async function _presselBalancedPick(env, id, sellers){
+  if(sellers.length===1) return sellers[0];
+  const counts={};
+  try{
+    const day=_brDay();
+    const start=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end=start+86400;
+    const r=await env.DB.prepare(`SELECT instance, COUNT(*) c FROM (SELECT phone, instance, MIN(ts) mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
+    (r.results||[]).forEach(x=>{counts[x.instance]=Number(x.c)||0;});
+  }catch(_){}
+  let min=Infinity; sellers.forEach(s=>{const c=counts[s.inst]||0; if(c<min)min=c;});
+  const tied=sellers.filter(s=>(counts[s.inst]||0)===min);
+  if(tied.length===1) return tied[0];
+  const idx=await _presselNextIndex(env, id, tied.length);   // desempate rotativo
+  return tied[idx];
+}
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
   const id=JSON.stringify(String(p.pixel_tt));
@@ -2140,10 +2184,10 @@ async function handlePresselPublic(req, env, id){
   // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
   let liveSet=null;
   try{ const cs=await env.DB.prepare("SELECT instance FROM wa_conn WHERE state='open'").all(); liveSet=new Set((cs.results||[]).map(r=>r.instance)); }catch(_){}
-  const nums=_resolvePresselNumbers(p, chips, liveSet);
-  if(!nums.length) return _presselOffline();
-  const pick=nums[await _presselNextIndex(env, id, nums.length)];
-  const wa=_waLink(pick, p.msg);
+  const sellers=_resolvePresselSellers(p, chips, liveSet);
+  if(!sellers.length) return _presselOffline();
+  const pick=await _presselBalancedPick(env, id, sellers);   // manda pro vendedor mais "atrás" hoje
+  const wa=_waLink(pick.num, p.msg);
   if(!wa) return _presselOffline();
   try{  // conta TODO acesso à pressel (com e sem ttclid) — diagnóstico: tráfego real vs rastreado
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
