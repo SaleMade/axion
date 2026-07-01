@@ -1979,10 +1979,12 @@ function _waLink(num, msg){
   return u;
 }
 // Resolve os números da roleta a partir do estado salvo (chips + vendedores)
-function _resolvePresselNumbers(p, chips){
+function _resolvePresselNumbers(p, chips, liveSet){
   const out=[];
   for(const v of (p.vendedores||[])){
     if(v.ativo===false) continue;
+    // se veio a lista de instâncias conectadas, pula vendedor cujo WhatsApp está CAÍDO (não 'open')
+    if(liveSet && !liveSet.has('ax_'+String(v.at))) continue;
     const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
     const active=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];
@@ -2135,7 +2137,10 @@ async function handlePresselPublic(req, env, id){
   const chips=Array.isArray(data.chips)?data.chips:[];
   const p=pressels.find(x=>String(x.id)===String(id));
   if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
-  const nums=_resolvePresselNumbers(p, chips);
+  // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
+  let liveSet=null;
+  try{ const cs=await env.DB.prepare("SELECT instance FROM wa_conn WHERE state='open'").all(); liveSet=new Set((cs.results||[]).map(r=>r.instance)); }catch(_){}
+  const nums=_resolvePresselNumbers(p, chips, liveSet);
   if(!nums.length) return _presselOffline();
   const pick=nums[await _presselNextIndex(env, id, nums.length)];
   const wa=_waLink(pick, p.msg);
