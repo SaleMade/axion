@@ -1947,7 +1947,7 @@ body.no-producer #mp-mode-block{display:none}
 
 <!-- ═══ MODAL: LEAD DETALHE (layout 3-col estilo ficha) ═══ -->
 <div class="overlay" id="m-lead-detail">
-  <div class="modal xl mld-has-chat">
+  <div class="modal xl">
     <div class="m-h">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="mt">Detalhes do <em style="font-style:normal;color:var(--bl2)" id="mld-title">Pedido</em></span>
@@ -4870,6 +4870,13 @@ function defaultPage(){
 /* ═══════════════════════════════════════════════════════
    SIDEBAR / NAV
 ═══════════════════════════════════════════════════════ */
+// ─── Chave-mestra do módulo de Atendimento/Chat WhatsApp ───
+// Desligado por pedido do usuário (foco da operação está em outra frente
+// e pra parar de bater na Evolution/API a cada 5s). TODO o código do inbox
+// (página "Atendimento") e do chat embutido no card do lead continua no
+// arquivo, dormente. Pra RELIGAR tudo, basta trocar pra true aqui.
+const WA_CHAT_ENABLED = false;
+
 // Monta a estrutura de navegação por papel (sem aplicar ocultações do usuário).
 // Usada por buildSidebar (renderização) e por cfgAparencia (lista de toggles de visibilidade).
 function computeNav(){
@@ -4923,7 +4930,7 @@ function computeNav(){
       // Acordeão WhatsApp — área dedicada (contingência de números). Universal:
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
-        {id:'atendimento',lbl:'Atendimento',live:true},
+        ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
         {id:'contingencia',lbl:'Contingência'},
         ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
@@ -5099,6 +5106,8 @@ function buildApp(){
 function goPage(id){
   // Redireciona id antigo 'recuperacao' (deprecated) → 'cobranca' (Follows)
   if(id==='recuperacao')id='cobranca';
+  // Módulo de Atendimento desligado (WA_CHAT_ENABLED=false) → cai no CRM
+  if(id==='atendimento'&&!WA_CHAT_ENABLED)id='crm';
   // Salva a página atual pra restaurar em F5 (sessionStorage = só a aba atual)
   try{sessionStorage.setItem('axion_last_page',id)}catch(_){}
   // Pull imediato do servidor antes de renderizar — garante que cada navegação
@@ -7018,6 +7027,7 @@ function pageAtendimento(){
 }
 
 async function renderAtendimento(){
+  if(!WA_CHAT_ENABLED)return; // módulo desligado — não inicia polling
   _atdFillAssignFilter();
   await _atdLoadInstances();
   await _atdLoadChats();
@@ -7202,6 +7212,16 @@ function _atdDay(ts){
 var _mldChat={phone:'',instance:'',msgs:[],timer:null,sending:false,leadId:null};
 async function _mldChatOpen(lead){
   const pane=document.getElementById('mld-chat-pane');if(!pane)return;
+  const modal=pane.closest('.modal');
+  if(!WA_CHAT_ENABLED){
+    // Módulo desligado: esconde o painel de chat e mantém o modal na largura normal.
+    pane.style.display='none';
+    if(modal)modal.classList.remove('mld-has-chat');
+    if(_mldChat.timer){clearInterval(_mldChat.timer);_mldChat.timer=null;}
+    return;
+  }
+  pane.style.display='';
+  if(modal)modal.classList.add('mld-has-chat');
   const raw=(lead&&lead.wa)||'';
   const d=String(raw).replace(/\D/g,'');
   const norm=d?(d.length<=11?'55'+d:d):'';
