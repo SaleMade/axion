@@ -8727,13 +8727,13 @@ function _renderPresselMetrics(){
     const de=document.getElementById('ppm-date'); if(de)de.textContent='Hoje · '+_ppmFmtBR(day);
     $('ppm-body').innerHTML=`
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-        ${card('Chegaram na pressel',views,'var(--bl2)','evento: PageView')}${card('Foram pro WhatsApp',clicks,'var(--gr)','evento: ClickButton')}${card('Iniciaram contato',totC,'var(--gr)','evento: Contact')}${card('Vendas',totV,'var(--gr)','evento: CompletePayment'+(totVal>0?' · R$ '+totVal:''))}
+        ${card('Chegaram na pressel',views,'var(--bl2)')}${card('Foram pro WhatsApp',clicks,'var(--gr)')}${card('Iniciaram contato',totC,'var(--gr)')}${card('Vendas',totV,'var(--gr)',totVal>0?('R$ '+totVal):'')}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:12.5px">
         <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.5">Embaixo de cada número está o evento que dispara pro pixel do TikTok naquele momento (com o ttclid do anúncio quando disponível). Tudo automático.</p>`;
+      <div class="muted" style="font-size:11px;margin-top:14px;line-height:1.7;border-top:1px solid var(--b1);padding-top:12px">Eventos disparados no pixel do TikTok (automático, com ttclid):<br>Chegou na pressel → <b style="color:var(--bl2)">PageView</b> · Foi pro WhatsApp → <b style="color:var(--gr)">ClickButton</b> · Virou lead → <b style="color:var(--gr)">Contact</b> · Vendeu → <b style="color:var(--gr)">CompletePayment</b></div>`;
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
