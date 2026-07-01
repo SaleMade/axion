@@ -8420,6 +8420,22 @@ function renderPressels(){
       `<div class="panel" style="text-align:center;color:var(--t3);padding:40px">Nenhuma pressel ainda. Clique em <b>+ Nova Pressel</b> pra criar a primeira.</div>`}
   `;
   list.forEach(p=>{ renderPresselVendList(p.id); renderPresselElems(p.id); renderPresselPreview(p.id); });
+  _fillPresselCardStats(list);
+}
+// Preenche os numeros REAIS de hoje nos cards das pressels (clicks/contatos/vendas)
+function _fillPresselCardStats(list){
+  api.presselMetrics().then(r=>{
+    const byPid={}; (r.pressels||[]).forEach(x=>{byPid[String(x.pid)]=x;});
+    const bi={}; (r.byInstance||[]).forEach(x=>{bi[x.instance]=x;});
+    const set=(id,val)=>{const e=document.getElementById(id); if(e)e.textContent=val;};
+    (list||[]).forEach(p=>{
+      const pr=byPid[String(p.id)]||{};
+      let c=0,v=0; (p.vendedores||[]).filter(x=>x.ativo!==false).forEach(x=>{const d=bi['ax_'+x.at]||{}; c+=Number(d.contatos)||0; v+=Number(d.vendas)||0;});
+      set('ppc-clicks-'+p.id, Number(pr.clicks)||0);
+      set('ppc-contatos-'+p.id, c);
+      set('ppc-vendas-'+p.id, v);
+    });
+  }).catch(()=>{ (list||[]).forEach(p=>{ ['ppc-clicks-','ppc-contatos-','ppc-vendas-'].forEach(pre=>{const e=document.getElementById(pre+p.id); if(e)e.textContent='0';}); }); });
 }
 // Painel inline (editor + roleta já abertos) de uma pressel
 function presselPanel(p){
@@ -8435,9 +8451,9 @@ function presselPanel(p){
       <div class="ax-sw ${isAtiva?'on':''}" title="${isAtiva?'Publicada — clique pra pausar':'Pausada — clique pra publicar'}" onclick="togglePresselStatus(${p.id})"></div>
       <input id="pp-nome-${p.id}" value="${esc(p.nome)}" placeholder="Nome da pressel" style="flex:1;min-width:160px;font-size:16px;font-weight:700;background:transparent;border:none;border-bottom:1px solid var(--b1);color:var(--tx);padding:4px 2px;font-family:inherit;outline:none">
       <div style="display:flex;gap:22px;text-align:center">
-        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('zap',{size:13})} Cliques</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.cliques||0}</div></div>
-        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('message-circle',{size:13})} Contatos</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.contatos||0}</div></div>
-        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('shopping-cart',{size:13})} Vendas</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1">${m.vendas||0}</div></div>
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('zap',{size:13})} Foram pro Whats</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1"><span id="ppc-clicks-${p.id}">…</span></div></div>
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('message-circle',{size:13})} Contatos</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1"><span id="ppc-contatos-${p.id}">…</span></div></div>
+        <div><div style="display:flex;align-items:center;gap:5px;justify-content:center;font-size:10.5px;color:var(--t3)">${ico('shopping-cart',{size:13})} Vendas</div><div style="font-size:23px;font-weight:800;color:var(--tx);line-height:1.1"><span id="ppc-vendas-${p.id}">…</span></div></div>
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap">
         <button class="pp-iconbtn" title="Métricas" onclick="openPresselMetrics(${p.id})">${ico('bar-chart',{size:15})}</button>
