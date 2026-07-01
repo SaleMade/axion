@@ -3839,6 +3839,7 @@ const api={
   waChatAssign:(phone,user_id)=>api._fetch('/api/wa/chat/assign',{method:'POST',body:JSON.stringify({phone,user_id})}),
   // Métricas reais da pressel (views = chegou, clicks = foi pro WhatsApp)
   presselStats:()=>api._fetch('/api/pressel/stats'),
+  presselMetrics:(day)=>api._fetch('/api/pressel/metrics'+(day?('?day='+encodeURIComponent(day)):'')),
 };
 
 // ─── Sync state com servidor ───
@@ -8646,37 +8647,52 @@ function copyPresselMetricsLink(id){
   navigator.clipboard.writeText(presselMetricsUrl(id)).then(()=>toast('Link de métricas copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
 // Modal de métricas da pressel (totais + por vendedor)
-let _ppmPid=null;
+let _ppmPid=null, _ppmDay='';
+function _ppmYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+function _ppmFmtBR(day){ const p=(day||'').split('-'); return p.length===3?(p[2]+'/'+p[1]+'/'+p[0]):day; }
 function openPresselMetrics(pid){
-  _ppmPid=pid;
+  _ppmPid=pid; _ppmDay='';
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
-  const m=p.metrics||{cliques:0,contatos:0,vendas:0};
   $('ppm-title').textContent='Métricas — '+(p.nome||'');
-  const vend=(p.vendedores||[]).map(v=>{
-    const at=getTeam(v.at), chip=_atendenteActiveChip(v.at);
-    return {at, chip, ok:!!(at&&chip&&_chipOkRoleta(chip))};
-  }).filter(v=>v.ok);
-  const n=vend.length||1;
-  const sC=Math.floor((m.cliques||0)/n), sK=Math.floor((m.contatos||0)/n), sV=Math.floor((m.vendas||0)/n);
-  const card=(lbl,val,color)=>`<div style="flex:1;min-width:120px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:11px;color:var(--t3)">${lbl}</div><div style="font-size:24px;font-weight:800;color:${color||'var(--tx)'};margin-top:3px">${val}</div></div>`;
-  const rows=vend.length?vend.map(v=>{
-    const conv=sK>0?Math.round((sV/sK)*100)+'%':'—';
-    return `<tr style="border-top:1px solid var(--b1)"><td style="padding:11px 8px"><div style="font-weight:600;color:var(--tx);font-size:13px">${v.at.name}</div><div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${v.chip.num}</div></td><td style="text-align:center;font-weight:600">${sC}</td><td style="text-align:center;font-weight:600;color:var(--gr)">${sK}</td><td style="text-align:center">${sV||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
-  }).join(''):`<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor ativo na roleta.</td></tr>`;
-  $('ppm-body').innerHTML=`
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      ${card('Chegaram na pressel','<span id="ppm-views">…</span>','var(--bl2)')}${card('Foram pro WhatsApp','<span id="ppm-clicks">…</span>','var(--gr)')}${card('Iniciaram contato',m.contatos||0,'var(--gr)')}${card('Vendas',m.vendas||0,'var(--gr)')}
-    </div>
-    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-      <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Foram pro Whats</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  $('ppm-body').innerHTML='<div style="text-align:center;color:var(--t3);padding:28px">Carregando…</div>';
   openM('m-pressel-metrics');
-  api.presselStats().then(r=>{
-    const s=(r.stats||[]).find(x=>String(x.pid)===String(pid))||{views:0,clicks:0};
-    const ve=document.getElementById('ppm-views'); if(ve)ve.textContent=s.views||0;
-    const ce=document.getElementById('ppm-clicks'); if(ce)ce.textContent=s.clicks||0;
-  }).catch(()=>{ const ve=document.getElementById('ppm-views'); if(ve)ve.textContent='0'; const ce=document.getElementById('ppm-clicks'); if(ce)ce.textContent='0'; });
+  _renderPresselMetrics();
+}
+function _ppmSetDay(d){ _ppmDay=d||''; _renderPresselMetrics(); }
+function _renderPresselMetrics(){
+  const pid=_ppmPid, p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
+    const at=getTeam(v.at), chip=_atendenteActiveChip(v.at);
+    return {at, chip, inst:'ax_'+v.at, contatos:0, vendas:0, valor:0};
+  }).filter(v=>v.at);
+  api.presselMetrics(_ppmDay).then(r=>{
+    const today=_ppmYmd(new Date()), day=r.day||today, isToday=(day===today);
+    const pr=(r.pressels||[]).find(x=>String(x.pid)===String(pid))||{views:0,clicks:0};
+    const bi={}; (r.byInstance||[]).forEach(x=>{bi[x.instance]=x;});
+    let totC=0, totV=0, totVal=0;
+    vend.forEach(v=>{ const d=bi[v.inst]||{}; v.contatos=Number(d.contatos)||0; v.vendas=Number(d.vendas)||0; v.valor=Number(d.valor)||0; totC+=v.contatos; totV+=v.vendas; totVal+=v.valor; });
+    const views=Number(pr.views)||0, clicks=Number(pr.clicks)||0;
+    const card=(lbl,val,color,sub)=>`<div style="flex:1;min-width:118px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:11px;color:var(--t3)">${lbl}</div><div style="font-size:24px;font-weight:800;color:${color||'var(--tx)'};margin-top:3px">${val}</div>${sub?`<div style="font-size:10.5px;color:var(--t3);margin-top:2px">${sub}</div>`:''}</div>`;
+    const rows=vend.length?vend.map(v=>{
+      const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';
+      return `<tr style="border-top:1px solid var(--b1)"><td style="padding:11px 8px"><div style="font-weight:600;color:var(--tx);font-size:13px">${v.at.name}</div><div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${v.chip?v.chip.num:'sem número em uso'}</div></td><td style="text-align:center;font-weight:700;color:var(--gr)">${v.contatos}</td><td style="text-align:center;font-weight:600">${v.vendas||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
+    }).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor nessa pressel.</td></tr>`;
+    $('ppm-body').innerHTML=`
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <span style="font-size:12px;color:var(--t3)">📅 Dia:</span>
+        <input type="date" value="${day}" max="${today}" onchange="_ppmSetDay(this.value)" style="background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:6px 9px;color:var(--tx);font-size:12.5px;font-family:inherit">
+        <span style="font-size:12.5px;font-weight:700;color:${isToday?'var(--gr)':'var(--bl2)'}">${isToday?'Hoje':_ppmFmtBR(day)}</span>
+        ${isToday?'':`<button class="btn btn-gh btn-sm" onclick="_ppmSetDay('')">Voltar pra hoje</button>`}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        ${card('Chegaram na pressel',views,'var(--bl2)')}${card('Foram pro WhatsApp',clicks,'var(--gr)')}${card('Iniciaram contato',totC,'var(--gr)')}${card('Vendas',totV,'var(--gr)',totVal>0?('R$ '+totVal):'')}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.55"><b>Chegaram</b> e <b>Foram pro WhatsApp</b>: só tráfego real do TikTok (ttclid). <b>Iniciaram contato</b>: leads que mandaram mensagem pros números dessa pressel no dia. <b>Vendas</b>: "Pedido Concluído" detectado no WhatsApp.</p>`;
+  }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Lista de vendedores (toggle + número em destaque) de uma pressel
 function renderPresselVendList(pid){
