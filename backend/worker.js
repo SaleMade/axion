@@ -1596,6 +1596,11 @@ async function _waBotTestReply(env, instance, key, data) {
   const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   const testPhones = String(testPhone).split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
   if (!testPhones.includes(realPhone)) return false; // whitelist: aceita vários números de teste
+  // Interruptor mestre do robô (aba Automações → DB.wa_bot_on). Desligado por padrão.
+  try {
+    const st = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    if (!JSON.parse(st?.data || '{}').wa_bot_on) return false; // bot desligado → não responde
+  } catch (_) { return false; }
   const jid = key.remoteJid, myMsgId = key.id || ('m' + Date.now());
   const mm = data?.message || {};
   let kind = 'text', payload = '';

@@ -9006,6 +9006,7 @@ function _ensureAutom(){
     ];
   }
   if(typeof DB.wa_autom_on!=='boolean') DB.wa_autom_on=false;
+  if(typeof DB.wa_bot_on!=='boolean') DB.wa_bot_on=false;
   return DB.wa_automacoes;
 }
 function _automGatilhos(){
@@ -9060,8 +9061,17 @@ function renderAutomacoes(){
   const wrap=$('automacoes-pg'); if(!wrap) return;
   const rules=_ensureAutom();
   const on=DB.wa_autom_on;
+  const bot=DB.wa_bot_on;
   wrap.innerHTML=`
     <div class="ph"><div><h1>Automações <em>de WhatsApp</em></h1><p>Dispare mensagens automáticas por gatilho, pela conexão da Evolution</p></div></div>
+
+    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px;border:1px solid ${bot?'var(--gr)':'var(--b1)'}">
+      <div style="flex:1">
+        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">🤖 Robô de IA (pré-qualificação) ${bot?'<span style="color:var(--gr)">ligado</span>':'<span style="color:var(--am)">desligado</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Atende e pré-qualifica os leads sozinho no WhatsApp. Em fase de teste: mesmo ligado, só responde os números liberados pra teste.</div>
+      </div>
+      <div class="ax-sw ${bot?'on':''}" onclick="toggleBotMaster()" title="Ligar/desligar o robô de IA"></div>
+    </div>
 
     <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px">
       <div style="flex:1">
@@ -9155,6 +9165,11 @@ function automToggle(id){
 function toggleAutomMaster(){
   _ensureAutom(); DB.wa_autom_on=!DB.wa_autom_on;
   toast(DB.wa_autom_on?'Automações ativadas':'Automações pausadas', DB.wa_autom_on?'ok':'');
+  persistAndPushNow().catch(_=>{}); renderAutomacoes();
+}
+function toggleBotMaster(){
+  _ensureAutom(); DB.wa_bot_on=!DB.wa_bot_on;
+  toast(DB.wa_bot_on?'Robô de IA ligado':'Robô de IA desligado', DB.wa_bot_on?'ok':'');
   persistAndPushNow().catch(_=>{}); renderAutomacoes();
 }
 function automDel(id){
