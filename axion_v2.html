@@ -3828,6 +3828,8 @@ const api={
   waCfgSet:(payload)=>api._fetch('/api/config/wa',{method:'POST',body:JSON.stringify(payload)}),
   waSend:(number,text,instance)=>api._fetch('/api/wa/send',{method:'POST',body:JSON.stringify({number,text,instance})}),
   waInstances:()=>api._fetch('/api/wa/instances'),
+  waConn:()=>api._fetch('/api/wa/conn'),
+  waSale:(b)=>api._fetch('/api/wa/sale',{method:'POST',body:JSON.stringify(b)}),
   waCreate:(instanceName)=>api._fetch('/api/wa/instance/create',{method:'POST',body:JSON.stringify({instanceName})}),
   waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
   waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
@@ -8441,6 +8443,7 @@ function renderPressels(){
   `;
   list.forEach(p=>{ renderPresselVendList(p.id); renderPresselElems(p.id); renderPresselPreview(p.id); });
   _fillPresselCardStats(list);
+  _loadWaConn();
 }
 // Preenche os numeros REAIS de hoje nos cards das pressels (clicks/contatos/vendas)
 function _fillPresselCardStats(list){
@@ -8731,9 +8734,40 @@ function _renderPresselMetrics(){
         <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.55"><b>Chegaram</b> e <b>Foram pro WhatsApp</b>: só tráfego real do TikTok (ttclid). <b>Iniciaram contato</b>: leads que mandaram mensagem pros números dessa pressel no dia. <b>Vendas</b>: "Pedido Concluído" detectado no WhatsApp.</p>`;
+      <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.55"><b>Chegaram</b> e <b>Foram pro WhatsApp</b>: só tráfego real do TikTok (ttclid). <b>Iniciaram contato</b>: leads que mandaram mensagem pros números dessa pressel no dia. <b>Vendas</b>: "Pedido Concluído" no WhatsApp, ou registrada manualmente aqui.</p>
+      <div style="margin-top:14px;border-top:1px solid var(--b1);padding-top:12px">
+        <button class="btn btn-gh btn-sm" onclick="togglePpmSaleForm()">+ Registrar venda manual</button>
+        <div id="ppm-saleform" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="ppm-sale-vend" class="pp-inp" style="width:auto">${vend.map(v=>`<option value="${v.inst}">${v.at.name}</option>`).join('')}</select>
+          <input id="ppm-sale-phone" placeholder="Telefone do lead" class="pp-inp" style="width:160px">
+          <input id="ppm-sale-value" value="697" placeholder="Valor" class="pp-inp" style="width:90px">
+          <button class="btn btn-bl btn-sm" onclick="submitPpmSale()">Salvar</button>
+        </div>
+        <div class="muted" style="font-size:10.5px;margin-top:6px">Use quando o número do vendedor perdeu a mensagem de "Pedido Concluído". Registra a venda e manda pro pixel.</div>
+      </div>`;
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
+function togglePpmSaleForm(){ const f=document.getElementById('ppm-saleform'); if(f) f.style.display=(f.style.display==='none'||!f.style.display)?'flex':'none'; }
+function submitPpmSale(){
+  const inst=(document.getElementById('ppm-sale-vend')||{}).value||'';
+  const phone=((document.getElementById('ppm-sale-phone')||{}).value||'').replace(/\D/g,'');
+  const value=Number((((document.getElementById('ppm-sale-value')||{}).value||'').replace(',','.')))||0;
+  if(!phone){ toast('Informe o telefone do lead','err'); return; }
+  api.waSale({phone,instance:inst,value,name:'Venda manual'}).then(r=>{
+    toast(r&&r.dup?'Esse número já tinha venda hoje':'Venda registrada e enviada ao pixel','ok');
+    _renderPresselMetrics();
+  }).catch(()=>toast('Erro ao registrar venda','err'));
+}
+// Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
+var _waConnMap={}, _waConnLoaded=false;
+function _loadWaConn(){
+  api.waConn().then(r=>{
+    const m={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state;});
+    _waConnMap=m; _waConnLoaded=true;
+    (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id));
+  }).catch(()=>{});
+}
+try{ setInterval(()=>{ if(document.querySelector('[id^="pp-vend-"]')) _loadWaConn(); }, 30000); }catch(_){}
 // Lista de vendedores (toggle + número em destaque) de uma pressel
 function renderPresselVendList(pid){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
@@ -8750,16 +8784,18 @@ function renderPresselVendList(pid){
   const ativos=rows.filter(r=>r.ok), fora=rows.filter(r=>!r.ok);
   const row=(r)=>{
     const {at,chip,ok,isOn}=r, onVis=isOn&&ok;
-    const dot=!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)';
+    const connected=_waConnMap['ax_'+at.id]==='open';
+    const dot=(onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)');
     const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
-    const connectLink=onVis?`<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:3px 0 0;font-family:inherit">conectar WhatsApp ↗</button>`:'';
+    const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'Conectado':'Não conectado'}</span>`):'';
+    const connectLink=onVis?`<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`:'';
     return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--t3)">${at.name}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
-        ${connectLink}
+        <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
       </div>
       <div class="ax-sw ${onVis?'on':''}" title="${ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
