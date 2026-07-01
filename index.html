@@ -8464,7 +8464,7 @@ function presselPanel(p){
   const img=p.img||'';
   const isUrl=img&&!img.startsWith('data:');
   const esc=s=>String(s||'').replace(/"/g,'&quot;');
-  const link=presselPublicUrl(p.id);
+  const link=(apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/p/'+p.id;
   const redirSecs=Number(p.redirect)||0;
   return `<div class="panel" style="margin-bottom:16px" data-pid="${p.id}">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
@@ -8502,14 +8502,15 @@ function presselPanel(p){
           <div id="pp-els-${p.id}"></div>
         </div>
         <div id="pp-tab-config-${p.id}" style="display:none">
-          <label class="pp-lbl">URL pública (escolha um domínio por conta de TikTok)</label>
-          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
-            ${PRESSEL_DOMAINS.map(d=>{const u='https://'+d+'/p/'+p.id;return `<div style="display:flex;gap:6px;align-items:center">
-              <input value="${esc(u)}" readonly class="pp-inp" style="flex:1;color:var(--bl2)">
-              <button class="btn btn-gh btn-sm" onclick="copyUrl('${u}')">Copiar</button>
-            </div>`;}).join('')}
+          <label class="pp-lbl">URL pública (um domínio por conta de TikTok)</label>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+            <select id="pp-dom-${p.id}" onchange="setPresselDomain(${p.id},this.value)" class="pp-inp" style="width:auto;flex:0 0 auto">
+              ${PRESSEL_DOMAINS.map(d=>`<option value="${d}" ${_presselDomain(p)===d?'selected':''}>${d}</option>`).join('')}
+            </select>
+            <input id="pp-url-${p.id}" value="https://${esc(_presselDomain(p))}/p/${p.id}" readonly class="pp-inp" style="flex:1;min-width:180px;color:var(--bl2)">
+            <button class="btn btn-gh btn-sm" onclick="copyPresselLink(${p.id})">Copiar</button>
           </div>
-          <p class="muted" style="font-size:11px;margin:0 0 12px">Use um domínio diferente em cada conta do TikTok pra não ligar as contas. (Servidor: ${esc(link)})</p>
+          <p class="muted" style="font-size:11px;margin:0 0 12px">Escolha um domínio diferente pra cada pressel/conta do TikTok, pra não ligar as contas. (Servidor: ${esc(link)})</p>
           <label class="pp-lbl">Cor de fundo</label>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
             <input type="color" id="pp-bg-${p.id}" value="${esc(p.bg||'#ffffff')}" oninput="document.getElementById('pp-bgx-${p.id}').value=this.value;renderPresselPreview(${p.id})" style="width:42px;height:38px;border:1px solid var(--b2);border-radius:8px;background:none;cursor:pointer;padding:2px">
@@ -8669,16 +8670,23 @@ function togglePresselFullclick(pid){
   persistAndPushNow().catch(_=>{});
 }
 // Link público da pressel (servido pelo worker em /p/<id>)
-function presselPublicUrl(id){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/p/'+id; }
+function presselPublicUrl(id){ const p=(DB.pressels||[]).find(x=>x.id===id); return 'https://'+_presselDomain(p)+'/p/'+id; }
 // Domínios próprios ligados ao Worker (1 por conta de TikTok pra não ligar as contas)
 const PRESSEL_DOMAINS=['area-acesso.com','area-glico.fun','painel-glico.fun'];
+function _presselDomain(p){ return (p&&p.dominio&&PRESSEL_DOMAINS.includes(p.dominio))?p.dominio:'painel-glico.fun'; }
+function setPresselDomain(id,dom){
+  const p=(DB.pressels||[]).find(x=>x.id===id); if(!p||!PRESSEL_DOMAINS.includes(dom)) return;
+  p.dominio=dom;
+  const inp=document.getElementById('pp-url-'+id); if(inp) inp.value='https://'+dom+'/p/'+id;
+  toast('Domínio: '+dom,'ok'); persistAndPushNow().catch(_=>{});
+}
 function copyUrl(t){ navigator.clipboard.writeText(t).then(()=>toast('Link copiado','ok')).catch(()=>toast('Não consegui copiar','err')); }
 function copyPresselLink(id){
   navigator.clipboard.writeText(presselPublicUrl(id)).then(()=>toast('Link copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
 function openPresselPublic(id){ window.open(presselPublicUrl(id),'_blank','noopener'); }
 // Link público da página de métricas (pra compartilhar com gestores de tráfego)
-function presselMetricsUrl(id){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/m/'+id; }
+function presselMetricsUrl(id){ const p=(DB.pressels||[]).find(x=>x.id===id); return 'https://'+_presselDomain(p)+'/m/'+id; }
 function copyPresselMetricsLink(id){
   navigator.clipboard.writeText(presselMetricsUrl(id)).then(()=>toast('Link de métricas copiado','ok')).catch(()=>toast('Não consegui copiar','err'));
 }
