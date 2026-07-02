@@ -1854,6 +1854,7 @@ async function _ttPixelToken(env, pid, instance) {
 async function _waLeadCapture(env, instance, phone) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
+    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}   // instância do vendedor que recebeu
     const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
     if (exists) return; // já contabilizado como lead
     let ttclid = '', pid = '';
@@ -1863,7 +1864,7 @@ async function _waLeadCapture(env, instance, phone) {
       const cl = await env.DB.prepare('SELECT id, ttclid, pid FROM tt_pending WHERE inst=? AND claimed=0 AND ts>? ORDER BY ts ASC LIMIT 1').bind(instance, cutoff).first();
       if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; await env.DB.prepare('UPDATE tt_pending SET claimed=1 WHERE id=?').bind(cl.id).run(); }
     } catch (_) {}
-    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, ts) VALUES (?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid).run();
+    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance).run();
     const { pixel, token } = await _ttPixelToken(env, pid, instance);
     await _ttSend(pixel, token, 'Contact', phone, { ttclid, eventId: 'lead_' + phone });   // evento de LEAD
   } catch (_) {}
@@ -2123,37 +2124,47 @@ async function handlePresselStats(req, env){
 }
 // GET /api/pressel/metrics?day=YYYY-MM-DD (default: hoje BRT). Métricas REAIS do dia:
 // views/clicks por pressel (pressel_day) + contatos/vendas reais por instância (wa_messages/wa_sales).
+// Métricas do dia por pressel, atribuídas pela PRESSEL de origem do lead (wa_lead.pid),
+// NÃO pelo vendedor (que é compartilhado entre pressels — senão o mesmo contato conta em todas).
+async function _presselDayMetrics(env, day){
+  const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
+  const m = { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{} };
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
+    const pr = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
+    (pr.results||[]).forEach(r=>{ m.vc[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
+  }catch(_){}
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
+    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
+    const c = await env.DB.prepare("SELECT pid, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' GROUP BY pid").bind(start,end).all();
+    (c.results||[]).forEach(r=>{ m.contatos[String(r.pid)]=Number(r.c)||0; });
+  }catch(_){}
+  try{  // por vendedor dentro da pressel (precisa da coluna inst — best-effort)
+    const c2 = await env.DB.prepare("SELECT pid, inst, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' AND inst IS NOT NULL GROUP BY pid, inst").bind(start,end).all();
+    (c2.results||[]).forEach(r=>{ const pid=String(r.pid); (m.contatosVI[pid]=m.contatosVI[pid]||{})[r.inst]=Number(r.c)||0; });
+  }catch(_){}
+  try{  // vendas do dia, atribuídas pela pressel de origem do lead
+    const s = await env.DB.prepare("SELECT l.pid pid, s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND l.pid IS NOT NULL AND l.pid<>'' GROUP BY l.pid, s.instance").bind(start,end).all();
+    (s.results||[]).forEach(r=>{ const pid=String(r.pid); m.vendas[pid]=(m.vendas[pid]||0)+(Number(r.v)||0); m.valor[pid]=(m.valor[pid]||0)+(Number(r.val)||0); (m.vendasVI[pid]=m.vendasVI[pid]||{})[r.inst||'']=Number(r.v)||0; });
+  }catch(_){}
+  return m;
+}
 async function handlePresselMetricsLive(req, env){
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   let day = new URL(req.url).searchParams.get('day') || '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) day = _brDay();
-  const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000);
-  const end = start + 86400;
-  const out = { ok:true, day, pressels:[], byInstance:[] };
-  try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
-    const pr = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
-    out.pressels = pr.results || [];
-  }catch(_){}
-  const map = {};
-  try{
-    // contato real = telefone cujo PRIMEIRO inbound naquela instância caiu nesse dia
-    const c = await env.DB.prepare(
-      `SELECT instance, COUNT(*) AS contatos FROM
-         (SELECT phone, instance, MIN(ts) AS mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance)
-       WHERE mt >= ? AND mt < ? GROUP BY instance`
-    ).bind(start, end).all();
-    (c.results||[]).forEach(r=>{ map[r.instance]={instance:r.instance, contatos:Number(r.contatos)||0, vendas:0, valor:0}; });
-  }catch(_){}
-  try{
-    const s = await env.DB.prepare(
-      `SELECT instance, COUNT(*) AS vendas, COALESCE(SUM(value),0) AS valor FROM wa_sales WHERE ts >= ? AND ts < ? GROUP BY instance`
-    ).bind(start, end).all();
-    (s.results||[]).forEach(r=>{ const k=r.instance||''; if(!map[k]) map[k]={instance:k, contatos:0, vendas:0, valor:0}; map[k].vendas=Number(r.vendas)||0; map[k].valor=Number(r.valor)||0; });
-  }catch(_){}
-  out.byInstance = Object.values(map);
-  return json(out);
+  const M = await _presselDayMetrics(env, day);
+  const pressels = {};
+  new Set([...Object.keys(M.vc), ...Object.keys(M.contatos), ...Object.keys(M.vendas)]).forEach(pid=>{
+    const vc = M.vc[pid]||{};
+    const p = { views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, valor:M.valor[pid]||0, vend:{} };
+    const cvi = M.contatosVI[pid]||{}, vvi = M.vendasVI[pid]||{};
+    new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ p.vend[inst] = { contatos:cvi[inst]||0, vendas:vvi[inst]||0 }; });
+    pressels[pid] = p;
+  });
+  return json({ ok:true, day, pressels });
 }
 // GET /m/<id> — página PÚBLICA de métricas (pra compartilhar com gestores de tráfego)
 async function handlePresselMetricsPage(req, env, id){
@@ -2163,32 +2174,18 @@ async function handlePresselMetricsPage(req, env, id){
   if(!p) return _presselHtml(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b1220;color:#cbd5e1;text-align:center;padding:60px">Pressel não encontrada.</body>`);
   const chips=Array.isArray(data.chips)?data.chips:[];
   const day=_brDay();
-  const start=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end=start+86400;
-  let views=0, clicks=0;
-  try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
-    const s=await env.DB.prepare('SELECT views, clicks FROM pressel_day WHERE pid=? AND day=?').bind(String(id), day).first();
-    if(s){ views=Number(s.views)||0; clicks=Number(s.clicks)||0; }
-  }catch(_){}
-  // contatos/vendas REAIS de hoje, por instância (ax_<at>)
-  const bi={};
-  try{
-    const c=await env.DB.prepare(`SELECT instance, COUNT(*) AS contatos FROM (SELECT phone, instance, MIN(ts) AS mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
-    (c.results||[]).forEach(r=>{ bi[r.instance]={contatos:Number(r.contatos)||0, vendas:0}; });
-  }catch(_){}
-  try{
-    const s2=await env.DB.prepare(`SELECT instance, COUNT(*) AS vendas FROM wa_sales WHERE ts>=? AND ts<? GROUP BY instance`).bind(start,end).all();
-    (s2.results||[]).forEach(r=>{ const k=r.instance||''; if(!bi[k])bi[k]={contatos:0,vendas:0}; bi[k].vendas=Number(r.vendas)||0; });
-  }catch(_){}
+  const M=await _presselDayMetrics(env, day);
+  const vc=M.vc[String(id)]||{}, views=Number(vc.views)||0, clicks=Number(vc.clicks)||0;
+  const contatos=M.contatos[String(id)]||0, vendas=M.vendas[String(id)]||0;
+  const cvi=M.contatosVI[String(id)]||{}, vvi=M.vendasVI[String(id)]||{};
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
   const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
     const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
-    const d=bi['ax_'+v.at]||{};
-    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(d.contatos)||0, vendas:Number(d.vendas)||0};
+    const inst='ax_'+v.at;
+    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(cvi[inst])||0, vendas:Number(vvi[inst])||0};
   });
-  const contatos=vend.reduce((a,v)=>a+v.contatos,0), vendas=vend.reduce((a,v)=>a+v.vendas,0);
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
   const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor nessa pressel.</td></tr>`;
@@ -2202,34 +2199,18 @@ async function handlePresselsTotalPage(req, env){
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
   const chips=Array.isArray(data.chips)?data.chips:[];
   const day=_brDay();
-  const start=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end=start+86400;
-  const pdMap={};
-  try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
-    const pr=await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
-    (pr.results||[]).forEach(r=>{ pdMap[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
-  }catch(_){}
-  const bi={};
-  try{
-    const c=await env.DB.prepare(`SELECT instance, COUNT(*) AS contatos FROM (SELECT phone, instance, MIN(ts) AS mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
-    (c.results||[]).forEach(r=>{ bi[r.instance]={contatos:Number(r.contatos)||0, vendas:0}; });
-  }catch(_){}
-  try{
-    const s2=await env.DB.prepare(`SELECT instance, COUNT(*) AS vendas FROM wa_sales WHERE ts>=? AND ts<? GROUP BY instance`).bind(start,end).all();
-    (s2.results||[]).forEach(r=>{ const k=r.instance||''; if(!bi[k])bi[k]={contatos:0,vendas:0}; bi[k].vendas=Number(r.vendas)||0; });
-  }catch(_){}
+  const M=await _presselDayMetrics(env, day);
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
   const secs=pressels.map(p=>{
-    const pd=pdMap[String(p.id)]||{views:0,clicks:0};
+    const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
     const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
       const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
       const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
-      const d=bi['ax_'+v.at]||{};
-      return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(d.contatos)||0, vendas:Number(d.vendas)||0};
+      const inst='ax_'+v.at;
+      return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(cvi[inst])||0, vendas:Number(vvi[inst])||0};
     });
-    const contatos=vend.reduce((a,v)=>a+v.contatos,0), vendas=vend.reduce((a,v)=>a+v.vendas,0);
-    return {nome:p.nome||('Pressel '+p.id), views:Number(pd.views)||0, clicks:Number(pd.clicks)||0, contatos, vendas, vend};
+    return {nome:p.nome||('Pressel '+p.id), views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
   });
   const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
