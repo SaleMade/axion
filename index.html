@@ -8711,7 +8711,7 @@ function _renderPresselMetrics(){
     return {at, chip, inst:'ax_'+v.at, contatos:0, vendas:0, valor:0};
   }).filter(v=>v.at);
   api.presselMetrics(_ppmDay).then(r=>{
-    const today=_ppmYmd(new Date()), day=r.day||today, isToday=(day===today);
+    const today=r.today||_ppmYmd(new Date()), day=r.day||today, isToday=(day===today);   // "hoje" vem do servidor (BRT), não do fuso do navegador
     const P=(r.pressels||{})[String(pid)]||{views:0,clicks:0,contatos:0,vendas:0,valor:0,vend:{}};
     vend.forEach(v=>{ const d=(P.vend||{})[v.inst]||{}; v.contatos=Number(d.contatos)||0; v.vendas=Number(d.vendas)||0; });
     const totC=Number(P.contatos)||0, totV=Number(P.vendas)||0, totVal=Number(P.valor)||0;

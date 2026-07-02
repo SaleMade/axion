@@ -1448,6 +1448,7 @@ async function handleWAInstanceLogout(req, env) {
   if (!name) return err('instance obrigatório');
   await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' });
   await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}   // tira do liveSet pra roleta não mandar lead pra número removido
   return json({ ok: true, instance: name, removed: true });
 }
 
@@ -1685,7 +1686,8 @@ async function _waOnInbound(env, instance, data) {
   if (key.fromMe) return;                          // ignora o que NÓS mandamos
   const jid = String(key.remoteJid || '');
   if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo
-  const phone = jid.split('@')[0].replace(/\D/g, '');
+  // telefone REAL: em chat @lid o remoteJid é um id interno, o número certo vem em remoteJidAlt (mesma regra da venda)
+  const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (!phone) return;
   // Guarda a mensagem recebida no histórico do inbox (independente de automação)
   const _ex = _waExtractMsg(data);
@@ -1806,17 +1808,24 @@ async function _waDetectSale(env, instance, data) {
   const text = m.conversation || m.extendedTextMessage?.text || '';
   if (!text || text.indexOf('Pedido Conclu') < 0) return; // assinatura da venda
   const key = data?.key || {};
+  const jid = String(key.remoteJid || '');
+  if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
   const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (!phone) return;
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
+  const msgId = (key && key.id) || null;
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
+    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
-    if (recent) return; // já registrada nas últimas 24h
-    await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, instance, name, value).run();
-    await _ttFireSale(env, phone, value, (data && data.key && data.key.id) || '', instance);   // manda a VENDA pro pixel da pressel desse vendedor
+    if (recent) return; // já registrada nas últimas 24h (mesmo telefone)
+    // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
+    const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id) VALUES (?,?,?,?,strftime('%s','now'),?)").bind(phone, instance, name, value, msgId).run();
+    if (ins.meta && ins.meta.changes === 0) return; // msg_id repetido → já processado
+    await _ttFireSale(env, phone, (value > 0 ? value : null), msgId || '', instance);   // venda pro pixel (sem value 0 se o parse falhar)
   } catch (_) {}
 }
 
@@ -1843,7 +1852,12 @@ async function _ttPixelToken(env, pid, instance) {
     const data = JSON.parse(row?.data || '{}');
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
     let p = pid ? pressels.find(x => String(x.id) === String(pid) && x.pixel_tt && x.pixel_tt_token) : null;
-    if (!p && instance) { const at = String(instance).replace(/^ax_/, ''); p = pressels.find(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false)); }
+    if (!p && instance) {
+      // fallback pelo vendedor: SÓ se ele estiver em UMA pressel com pixel (senão mandaria pro pixel/BM errado)
+      const at = String(instance).replace(/^ax_/, '');
+      const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
+      if (cand.length === 1) p = cand[0];
+    }
     if (p) { pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); }
   } catch (_) {}
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
@@ -1867,12 +1881,16 @@ async function _waLeadCapture(env, instance, phone) {
     try {
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
       const cutoff = Math.floor(Date.now() / 1000) - 3 * 3600;   // clique nas últimas 3h nesse número
-      const cl = await env.DB.prepare('SELECT id, ttclid, pid FROM tt_pending WHERE inst=? AND claimed=0 AND ts>? ORDER BY ts ASC LIMIT 1').bind(instance, cutoff).first();
-      if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; await env.DB.prepare('UPDATE tt_pending SET claimed=1 WHERE id=?').bind(cl.id).run(); }
+      // claim ATÔMICO (sem race entre dois leads simultâneos): marca e pega numa instrução só
+      const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND claimed=0 AND ts>? ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance, cutoff).first();
+      if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; }
     } catch (_) {}
     await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance).run();
-    const { pixel, token } = await _ttPixelToken(env, pid, instance);
-    await _ttSend(pixel, token, 'Contact', phone, { ttclid, eventId: 'lead_' + phone });   // evento de LEAD
+    // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
+    if (ttclid || pid) {
+      const { pixel, token } = await _ttPixelToken(env, pid, instance);
+      await _ttSend(pixel, token, 'Contact', phone, { ttclid, eventId: 'lead_' + phone });
+    }
   } catch (_) {}
 }
 // VENDA: usa a pressel/ttclid capturados do lead (wa_lead) e dispara pro pixel certo, com ttclid.
@@ -2068,7 +2086,7 @@ async function _presselBalancedPick(env, id, sellers){
 }
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
-  const id=JSON.stringify(String(p.pixel_tt));
+  const id=JSON.stringify(String(p.pixel_tt)).replace(/</g,'\\u003c');   // neutraliza </script>
   return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});}(window,document,'ttq');</script>`;
 }
 function _presselHtml(html){
@@ -2170,7 +2188,7 @@ async function handlePresselMetricsLive(req, env){
     new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ p.vend[inst] = { contatos:cvi[inst]||0, vendas:vvi[inst]||0 }; });
     pressels[pid] = p;
   });
-  return json({ ok:true, day, pressels });
+  return json({ ok:true, day, today: _brDay(), pressels });
 }
 // GET /m/<id> — página PÚBLICA de métricas (pra compartilhar com gestores de tráfego)
 async function handlePresselMetricsPage(req, env, id){
@@ -2251,17 +2269,20 @@ async function handlePresselPublic(req, env, id){
   }catch(_){}
   const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
   if(ttclid){
-    try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok
-    try{  // guarda o clique pra casar com a 1ª mensagem no WhatsApp desse número (atribuição server-side)
+    try{  // dedup por ttclid: reload/prefetch do MESMO clique não conta view de novo nem duplica a pendência
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed) VALUES (?,?,?,strftime('%s','now'),0)").bind(pick.inst, ttclid, String(id)).run();
+      const seen = await env.DB.prepare('SELECT 1 FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
+      if(!seen){
+        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed) VALUES (?,?,?,strftime('%s','now'),0)").bind(pick.inst, ttclid, String(id)).run();
+        try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok, 1x por clique
+      }
     }catch(_){}
   }
-  const bg=_escHtml(p.bg||'#ffffff');
+  const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}function track(){if(!IS_TT)return;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();location.href=${waJson}}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
@@ -2377,7 +2398,7 @@ export default {
       if (req.method === 'GET' && path === '/api/pressel/stats') return handlePresselStats(req, env);
       if (req.method === 'GET' && path === '/api/pressel/metrics') return handlePresselMetricsLive(req, env);
       const pcMatch = path.match(/^\/pc\/([a-zA-Z0-9_-]+)$/);
-      if (pcMatch) { try { await _bumpPressel(env, pcMatch[1], 'clicks'); } catch (_) {} return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } }); }
+      if (pcMatch) { if (req.method === 'POST') { try { await _bumpPressel(env, pcMatch[1], 'clicks'); } catch (_) {} } return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } }); }
 
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
