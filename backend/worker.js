@@ -2194,6 +2194,55 @@ async function handlePresselMetricsPage(req, env, id){
   const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor nessa pressel.</td></tr>`;
   return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>Métricas — ${_escHtml(p.nome||'')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:880px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:18px}th{color:#8b9bb4;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px}</style></head><body><div class="wrap"><h1>Métricas — ${_escHtml(p.nome||'')}</h1><p style="color:#8b9bb4;font-size:13px;margin-bottom:18px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Hoje (${dLabel}) · atualiza sozinho a cada 30s</p><div style="display:flex;gap:12px;flex-wrap:wrap">${card('Chegaram na pressel',views,'#7aa2ff')}${card('Foram pro WhatsApp',clicks,'#34d399')}${card('Iniciaram contato',contatos,'#34d399')}${card('Vendas',vendas,'#34d399')}</div><table><thead><tr><th style="text-align:left">Vendedor</th><th>Iniciaram</th><th>Vendas</th><th>Conversão</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Todos os números são reais e do dia de hoje. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp (Evolution).</p></div></body></html>`);
 }
+// GET /pressels-total — página PÚBLICA consolidada: TOTAL somando todas + cada pressel numa seção.
+// Pega TODAS as pressels do estado automaticamente (pressel nova entra sozinha).
+async function handlePresselsTotalPage(req, env){
+  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
+  const pressels=Array.isArray(data.pressels)?data.pressels:[];
+  const chips=Array.isArray(data.chips)?data.chips:[];
+  const day=_brDay();
+  const start=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end=start+86400;
+  const pdMap={};
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
+    const pr=await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
+    (pr.results||[]).forEach(r=>{ pdMap[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
+  }catch(_){}
+  const bi={};
+  try{
+    const c=await env.DB.prepare(`SELECT instance, COUNT(*) AS contatos FROM (SELECT phone, instance, MIN(ts) AS mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
+    (c.results||[]).forEach(r=>{ bi[r.instance]={contatos:Number(r.contatos)||0, vendas:0}; });
+  }catch(_){}
+  try{
+    const s2=await env.DB.prepare(`SELECT instance, COUNT(*) AS vendas FROM wa_sales WHERE ts>=? AND ts<? GROUP BY instance`).bind(start,end).all();
+    (s2.results||[]).forEach(r=>{ const k=r.instance||''; if(!bi[k])bi[k]={contatos:0,vendas:0}; bi[k].vendas=Number(r.vendas)||0; });
+  }catch(_){}
+  let nameMap={};
+  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  const secs=pressels.map(p=>{
+    const pd=pdMap[String(p.id)]||{views:0,clicks:0};
+    const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
+      const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+      const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
+      const d=bi['ax_'+v.at]||{};
+      return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(d.contatos)||0, vendas:Number(d.vendas)||0};
+    });
+    const contatos=vend.reduce((a,v)=>a+v.contatos,0), vendas=vend.reduce((a,v)=>a+v.vendas,0);
+    return {nome:p.nome||('Pressel '+p.id), views:Number(pd.views)||0, clicks:Number(pd.clicks)||0, contatos, vendas, vend};
+  });
+  const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
+  const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
+  const card=(lbl,val,color)=>`<div style="flex:1;min-width:130px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="font-size:11px;color:#8b9bb4">${lbl}</div><div style="font-size:26px;font-weight:800;color:${color};margin-top:3px">${val}</div></div>`;
+  const cardsHtml=(m)=>`<div style="display:flex;gap:10px;flex-wrap:wrap">${card('Chegaram na pressel',m.views,'#7aa2ff')}${card('Foram pro WhatsApp',m.clicks,'#34d399')}${card('Iniciaram contato',m.contatos,'#34d399')}${card('Vendas',m.vendas,'#34d399')}</div>`;
+  const vendTable=(vend)=>{
+    const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:10px 8px"><div style="font-weight:600;font-size:13px">${_escHtml(v.name)}</div><div style="font-size:11.5px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:12px;text-align:center;color:#8b9bb4;font-size:12px">Sem vendedores.</td></tr>`;
+    return `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:12px"><thead><tr><th style="text-align:left;color:#8b9bb4;font-size:11px;padding:5px 8px">Vendedor</th><th style="color:#8b9bb4;font-size:11px">Iniciaram</th><th style="color:#8b9bb4;font-size:11px">Vendas</th><th style="color:#8b9bb4;font-size:11px">Conversão</th></tr></thead><tbody>${rows}</tbody></table>`;
+  };
+  const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}</div>`;
+  const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700;margin-bottom:12px">${_escHtml(s.nome)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600;text-transform:uppercase;letter-spacing:.04em}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><p style="color:#8b9bb4;font-size:13px;margin-bottom:20px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Hoje (${dLabel}) · atualiza sozinho a cada 30s</p>${totalSec}${presselSecs}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Números reais do dia de hoje. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.</p></div></body></html>`);
+}
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -2349,6 +2398,9 @@ export default {
       // Página pública de métricas (compartilhar com gestores de tráfego)
       const mMatch = path.match(/^\/m\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && mMatch) return handlePresselMetricsPage(req, env, mMatch[1]);
+
+      // Página pública CONSOLIDADA: total de todas + cada pressel numa seção
+      if (req.method === 'GET' && path === '/pressels-total') return handlePresselsTotalPage(req, env);
 
       return err('Rota não encontrada', 404);
     } catch (e) {
