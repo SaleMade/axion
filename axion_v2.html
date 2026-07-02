@@ -8724,8 +8724,13 @@ function _renderPresselMetrics(){
       const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';
       return `<tr style="border-top:1px solid var(--b1)"><td style="padding:11px 8px"><div style="font-weight:600;color:var(--tx);font-size:13px">${v.at.name}</div><div style="font-size:11px;color:var(--t3);font-family:ui-monospace,monospace">${v.chip?v.chip.num:'sem número em uso'}</div></td><td style="text-align:center;font-weight:700;color:var(--gr)">${v.contatos}</td><td style="text-align:center;font-weight:600">${v.vendas||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
     }).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--t3);font-size:12px">Nenhum vendedor nessa pressel.</td></tr>`;
-    const de=document.getElementById('ppm-date'); if(de)de.textContent='Hoje · '+_ppmFmtBR(day);
+    const de=document.getElementById('ppm-date'); if(de)de.textContent=(isToday?'Hoje · ':'')+_ppmFmtBR(day);
     $('ppm-body').innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-bottom:12px">
+        <span style="color:var(--t3);display:inline-flex;align-items:center">${ico('calendar',{size:13})}</span>
+        <input type="date" value="${day}" max="${today}" onchange="_ppmSetDay(this.value)" style="background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:5px 8px;color:var(--tx);font-size:12px;font-family:inherit">
+        ${isToday?'':`<button class="btn btn-gh btn-sm" onclick="_ppmSetDay('')" style="padding:4px 9px">hoje</button>`}
+      </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
         ${card('Chegaram na pressel',views,'var(--bl2)')}${card('Foram pro WhatsApp',clicks,'var(--gr)')}${card('Iniciaram contato',totC,'var(--gr)')}${card('Vendas',totV,'var(--gr)',totVal>0?('R$ '+totVal):'')}
       </div>
