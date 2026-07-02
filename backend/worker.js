@@ -1857,6 +1857,12 @@ async function _waLeadCapture(env, instance, phone) {
     try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}   // instância do vendedor que recebeu
     const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
     if (exists) return; // já contabilizado como lead
+    // só conta lead NOVO: se o número já mandou mensagem ANTES de hoje, é lead antigo re-contatando → ignora
+    try {
+      const ds = Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
+      const prev = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts < ? LIMIT 1").bind(phone, ds).first();
+      if (prev) return;
+    } catch (_) {}
     let ttclid = '', pid = '';
     try {
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
