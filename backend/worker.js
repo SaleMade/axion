@@ -1703,7 +1703,7 @@ async function _waOnInbound(env, instance, data) {
   // Guarda a mensagem recebida no histórico do inbox (independente de automação)
   const _ex = _waExtractMsg(data);
   await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
-  await _waLeadCapture(env, instance, phone);   // 1ª msg = LEAD: casa com o clique do anúncio e dispara evento pro pixel
+  await _waLeadCapture(env, instance, phone, _ex.body);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
   await _waEnsureTables(env);
@@ -1874,28 +1874,26 @@ async function _ttPixelToken(env, pid, instance) {
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
   return { pixel, token };
 }
-// LEAD: na 1ª mensagem do número, casa com o clique do anúncio (ttclid, FIFO por número) e
-// dispara o evento de Lead pro pixel da pressel. Só 1x por número (tabela wa_lead).
-async function _waLeadCapture(env, instance, phone) {
+// LEAD: na 1ª mensagem do número, casa com o clique pelo CÓDIGO no texto (atribuição EXATA).
+// Quem manda sem código (lead antigo, indicação, orgânico) não veio de pressel → não conta. 1x por número.
+async function _waLeadCapture(env, instance, phone, body) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
-    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}   // instância do vendedor que recebeu
+    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
     const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
     if (exists) return; // já contabilizado como lead
-    // só conta lead NOVO: se o número já mandou mensagem ANTES de hoje, é lead antigo re-contatando → ignora
-    try {
-      const ds = Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
-      const prev = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts < ? LIMIT 1").bind(phone, ds).first();
-      if (prev) return;
-    } catch (_) {}
+    // casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!). Sem código = não veio de pressel.
     let ttclid = '', pid = '';
-    try {
-      await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-      const cutoff = Math.floor(Date.now() / 1000) - 3 * 3600;   // clique nas últimas 3h nesse número
-      // claim ATÔMICO (sem race entre dois leads simultâneos): marca e pega numa instrução só
-      const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND claimed=0 AND ts>? ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance, cutoff).first();
-      if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; }
-    } catch (_) {}
+    const codeM = String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
+    const code = codeM ? codeM[1] : '';
+    if (code) {
+      try {
+        await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+        try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+        const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
+        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; }
+      } catch (_) {}
+    }
     await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance).run();
     // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
     if (ttclid || pid) {
@@ -2045,6 +2043,8 @@ function _waLink(num, msg){
   if(msg) u+='?text='+encodeURIComponent(msg);
   return u;
 }
+// Código curto (sem caracteres ambíguos) que vai no texto do WhatsApp pra casar o lead com o clique
+function _genCode(n){ n=n||6; const cs='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a=new Uint8Array(n); crypto.getRandomValues(a); let s=''; for(let i=0;i<n;i++) s+=cs[a[i]%cs.length]; return s; }
 // Resolve os números da roleta a partir do estado salvo (chips + vendedores)
 function _resolvePresselNumbers(p, chips, liveSet){
   const out=[];
@@ -2280,28 +2280,35 @@ async function handlePresselPublic(req, env, id){
   const sellers=_resolvePresselSellers(p, chips, liveSet);
   if(!sellers.length) return _presselOffline();
   const pick=await _presselBalancedPick(env, id, sellers);   // manda pro vendedor mais "atrás" hoje
-  const wa=_waLink(pick.num, p.msg);
-  if(!wa) return _presselOffline();
-  try{  // conta TODO acesso à pressel (com e sem ttclid) — diagnóstico: tráfego real vs rastreado
+  try{  // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();
   }catch(_){}
   const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
+  let leadCode = '';
   if(ttclid){
-    try{  // dedup por ttclid: reload/prefetch do MESMO clique não conta view de novo nem duplica a pendência
+    try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-      const seen = await env.DB.prepare('SELECT 1 FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
-      if(!seen){
-        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed) VALUES (?,?,?,strftime('%s','now'),0)").bind(pick.inst, ttclid, String(id)).run();
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+      const ex = await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
+      if(ex){ leadCode = ex.code || ''; }
+      else {
+        leadCode = _genCode(6);
+        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code) VALUES (?,?,?,strftime('%s','now'),0,?)").bind(pick.inst, ttclid, String(id), leadCode).run();
         try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok, 1x por clique
       }
     }catch(_){}
   }
+  // mensagem do WhatsApp com o código do clique (só quando veio de anúncio) — pra atribuição exata pelo código
+  let waMsg = String(p.msg||'');
+  if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
+  const wa=_waLink(pick.num, waMsg);
+  if(!wa) return _presselOffline();
   const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
   const waJson=JSON.stringify(wa);
   let _wd=String(pick.num||'').replace(/\D/g,''); if(_wd.length<=11) _wd='55'+_wd;
-  const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(p.msg?('&text='+encodeURIComponent(p.msg)):''));   // deep link: abre o app DIRETO na conversa (pula a página "Abrir app")
+  const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));   // deep link: abre o app DIRETO na conversa (com o código no texto)
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
