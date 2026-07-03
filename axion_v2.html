@@ -8818,21 +8818,25 @@ function _presselVendReserva(pid, at, v){
     return `<div style="border-top:1px dashed var(--b1);background:var(--s1);padding:10px 12px;display:flex;flex-direction:column;gap:10px">${capField}<div style="display:flex;align-items:center;gap:8px">${picker}</div></div>`;
   }
   const binst='ax_'+at.id+'_b', bconn=_waConnMap[binst]==='open';
-  const rdot=on?(_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)'):'var(--t4)';
-  const badge=on?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`):`<span style="font-size:11px;color:var(--t4)">desligada</span>`;
-  const link=on?((bconn&&_waConnLoaded)
+  const rdot=_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)';   // cor = conexão (independe de ligada/desligada)
+  const badge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`;
+  const link=(bconn&&_waConnLoaded)
     ? `<button onclick="event.stopPropagation();evoDisconnect('${at.id}','b')" title="Desconectar a reserva" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar</button>`
-    : `<button onclick="event.stopPropagation();evoConnect('${at.id}','b')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`):'';
-  const toggle=`<div class="ax-sw ${on?'on':''}" title="${on?'Reserva ligada — recebe quando o principal bate a cota':'Reserva desligada'}" onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"></div>`;
+    : `<button onclick="event.stopPropagation();evoConnect('${at.id}','b')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`;
+  const stateHint=on
+    ? `<span style="font-size:10.5px;color:var(--t4)">na roleta · recebe quando o principal bate a cota</span>`
+    : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">fora da roleta · não recebe lead, só marca venda</span>`;
+  const toggle=`<div class="ax-sw ${on?'on':''}" title="${on?'Na roleta: recebe no overflow. Desligue se a reserva for só pra marcar venda.':'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.'}" onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"></div>`;
   return `<div style="border-top:1px dashed var(--b1);background:var(--s1)">
-    <div style="padding:9px 12px 3px">${capField}</div>
-    <div style="display:flex;align-items:center;gap:11px;padding:6px 12px 11px">
+    ${on?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
+    <div style="display:flex;align-items:center;gap:11px;padding:${on?'6px':'10px'} 12px 11px">
       <span style="width:8px;height:8px;border-radius:50%;background:${rdot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px">Número de reserva
           <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Trocar/remover a reserva" style="background:transparent;border:none;color:var(--t4);font-size:10.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline">trocar</button></div>
-        <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${on?'var(--tx)':'var(--t4)'};letter-spacing:.02em">${_automEsc(bchip.num)}</div>
+        <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:var(--tx);letter-spacing:.02em">${_automEsc(bchip.num)}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${badge}${link}</div>
+        <div style="margin-top:3px">${stateHint}</div>
       </div>
       ${toggle}
     </div>
