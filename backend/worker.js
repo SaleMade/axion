@@ -2078,7 +2078,7 @@ function _resolvePresselSellers(p, chips, liveSet){
     const pChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // principal = número em uso
     const bChip=mine.find(c=>c.bkp===true);                                         // backup = chip marcado como backup
     const primary=(pChip && okWa(pChip) && pChip.num && (!liveSet||liveSet.has(instP))) ? {num:pChip.num, inst:instP} : null;
-    const backup =(bChip && okWa(bChip) && bChip.num && (!liveSet||liveSet.has(instB))) ? {num:bChip.num, inst:instB} : null;
+    const backup =(v.reserva_on!==false && bChip && okWa(bChip) && bChip.num && (!liveSet||liveSet.has(instB))) ? {num:bChip.num, inst:instB} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;
     out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), primary, backup});
   }
