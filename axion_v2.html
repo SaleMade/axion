@@ -8740,6 +8740,14 @@ function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state;});
     _waConnMap=m; _waConnLoaded=true;
+    // AUTO: número que CAIU (desconectado) sai da roleta sozinho — o interruptor desliga
+    let changed=false;
+    (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
+      if(!Array.isArray(p.vendedores)) return;
+      const keep=p.vendedores.filter(v=>{ const st=m['ax_'+v.at]; if(st && st!=='open'){ changed=true; return false; } return true; });
+      if(keep.length!==p.vendedores.length) p.vendedores=keep;
+    });
+    if(changed){ persistAndPushNow().catch(_=>{}); try{ toast('Número caiu: desliguei da roleta automaticamente','ok'); }catch(_){} }
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id));
   }).catch(()=>{});
 }
