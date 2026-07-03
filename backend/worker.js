@@ -1889,7 +1889,7 @@ async function _waLeadCapture(env, instance, phone) {
     // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
     if (ttclid || pid) {
       const { pixel, token } = await _ttPixelToken(env, pid, instance);
-      await _ttSend(pixel, token, 'Contact', phone, { ttclid, eventId: 'lead_' + phone });
+      await _ttSend(pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone });   // LEAD = InitiateCheckout (evento que o GT otimiza)
     }
   } catch (_) {}
 }

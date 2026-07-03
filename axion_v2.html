@@ -8730,7 +8730,7 @@ function _renderPresselMetrics(){
         <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:6px 8px;font-weight:600">Vendedor</th><th style="font-weight:600">Iniciaram</th><th style="font-weight:600">Vendas</th><th style="font-weight:600">Conversão</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <div class="muted" style="font-size:11px;margin-top:14px;line-height:1.7;border-top:1px solid var(--b1);padding-top:12px">Eventos disparados no pixel do TikTok (automático, com ttclid):<br>Chegou na pressel → <b style="color:var(--bl2)">PageView</b> · Foi pro WhatsApp → <b style="color:var(--gr)">ClickButton</b> · Virou lead → <b style="color:var(--gr)">Contact</b> · Vendeu → <b style="color:var(--gr)">CompletePayment</b></div>`;
+      <div class="muted" style="font-size:11px;margin-top:14px;line-height:1.7;border-top:1px solid var(--b1);padding-top:12px">Eventos disparados no pixel do TikTok (automático, com ttclid):<br>Chegou na pressel → <b style="color:var(--bl2)">PageView</b> · Foi pro WhatsApp → <b style="color:var(--gr)">ClickButton</b> · Virou lead → <b style="color:var(--gr)">InitiateCheckout</b> · Vendeu → <b style="color:var(--gr)">CompletePayment</b></div>`;
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
