@@ -3833,6 +3833,7 @@ const api={
   waConnect:(instance)=>api._fetch('/api/wa/instance/connect?instance='+encodeURIComponent(instance)),
   waInstStatus:(instance)=>api._fetch('/api/wa/instance/status?instance='+encodeURIComponent(instance)),
   waLogout:(instance)=>api._fetch('/api/wa/instance/logout',{method:'POST',body:JSON.stringify({instance})}),
+  waDisconnect:(instance)=>api._fetch('/api/wa/instance/disconnect',{method:'POST',body:JSON.stringify({instance})}),
   // Inbox / Atendimento — conversas guardadas no Worker
   waChats:(qs='')=>api._fetch('/api/wa/chats'+(qs?('?'+qs):'')),
   waMessages:(phone,limit=300)=>api._fetch('/api/wa/messages?phone='+encodeURIComponent(phone)+'&limit='+limit),
@@ -8764,7 +8765,9 @@ function renderPresselVendList(pid){
     const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
     const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'Conectado':'Não conectado'}</span>`):'';
-    const connectLink=onVis?`<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`:'';
+    const connectLink=onVis?((connected&&_waConnLoaded)
+      ? `<button onclick="evoDisconnect('${at.id}')" title="Desconectar esse WhatsApp da API" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar WhatsApp</button>`
+      : `<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`):'';
     return `<div style="display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
@@ -8998,6 +9001,11 @@ async function loadWAInstances(){
       </div>`;
     }).join('');
   }catch(e){ el.innerHTML=`<div style="color:var(--rd);font-size:12px">Erro ao listar: ${e.message}</div>`; }
+}
+async function evoDisconnect(atId){
+  const at=getTeam(atId);
+  if(!confirm('Desconectar o WhatsApp de '+(at?at.name:'esse número')+'? Ele sai da roleta até você reconectar.')) return;
+  try{ await api.waDisconnect('ax_'+atId); toast('WhatsApp desconectado','ok'); if(typeof _waConnMap!=='undefined'){_waConnMap['ax_'+atId]='close';} _loadWaConn(); }catch(_){ toast('Não consegui desconectar','err'); }
 }
 async function evoConnect(atId){
   const at=getTeam(atId);

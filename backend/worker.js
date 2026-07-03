@@ -1451,6 +1451,17 @@ async function handleWAInstanceLogout(req, env) {
   try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}   // tira do liveSet pra roleta não mandar lead pra número removido
   return json({ ok: true, instance: name, removed: true });
 }
+// POST /api/wa/instance/disconnect → { instance } só DESCONECTA (logout), mantém a instância + configs (webhook/groupsIgnore)
+async function handleWAInstanceDisconnect(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  let body = {}; try { body = await req.json(); } catch (_) {}
+  const name = String(body?.instance || '').trim();
+  if (!name) return err('instance obrigatório');
+  try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+  try { await env.DB.prepare("UPDATE wa_conn SET state='close', updated_at=strftime('%s','now') WHERE instance=?").bind(name).run(); } catch (_) {}
+  return json({ ok: true, instance: name, disconnected: true });
+}
 
 // ─── Webhook de volta (Evolution → Worker) ───────────────────
 // Recebe eventos da Evolution: mensagens recebidas (auto-resposta de primeiro
@@ -2356,6 +2367,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/instance/connect') return handleWAInstanceConnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
