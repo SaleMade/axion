@@ -852,6 +852,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 #contingencia-pg details[open] > summary > .cont-det-arrow{transform:rotate(90deg)}
 /* ─── Kanban WhatsApp (CRM-style com colunas pra pools + atendentes) ─── */
 .wk-board{display:flex;gap:10px;overflow-x:auto;padding:4px 4px 12px;align-items:flex-start}
+/* Botão neutro pra criar coluna customizada na contingência (bem discreto) */
+.wk-addcol{flex:0 0 auto;align-self:flex-start;background:transparent;border:1px dashed var(--b2);border-radius:var(--rl);color:var(--t4);font-family:inherit;font-size:12px;font-weight:600;padding:11px 15px;cursor:pointer;margin-top:2px;transition:all .12s;white-space:nowrap}
+.wk-addcol:hover{border-color:var(--b3);color:var(--t2)}
 .wk-col{flex:0 0 334px;min-width:334px;max-width:334px;background:var(--s2);border:1px solid var(--b1);
   border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:640px}
 .wk-col.wk-col-pool{flex:0 0 310px;min-width:310px;max-width:310px}
@@ -7627,6 +7630,8 @@ function renderChipsByAtendente(){
   // Chips por atendente — TODOS os utilizáveis atribuídos a ele (em uso + reservas)
   const byAt={};
   membros.forEach(m=>{byAt[m.id]=[]});
+  // Colunas customizadas (criadas pelo diretor) recebem chips arrastados pra elas
+  (isDir()?(DB.contCols||[]):[]).forEach(col=>{byAt[String(col.id)]=[];});
   chips.forEach(c=>{
     if(c.at && _chipUsavel(c) && byAt[c.at]!==undefined){
       byAt[c.at].push(c);
@@ -7695,10 +7700,37 @@ function renderChipsByAtendente(){
     </div>`;
   };
 
-  // Ordem das colunas: padrão = atendentes (por papel/nome) + pools no fim.
+  // Coluna customizada (criada pelo diretor). Neutra, nome editável, botão de excluir.
+  const colunaCustom=(col,items)=>{
+    const cor='#64748b';
+    const nm=String(col.nome||'Coluna').replace(/"/g,'&quot;');
+    return `
+    <div class="wk-col" data-col-id="${col.id}"
+        ondragover="_chipDragOver(event)"
+        ondragleave="_chipDragLeave(event)"
+        ondrop="_chipDrop(event,'${col.id}')"
+        style="background:${cor}0d;border:1px solid ${cor}33">
+      <div class="wk-col-h" ${podeReordenar?`draggable="true" title="Arraste pra reordenar a coluna" ondragstart="_colDragStart(event,'${col.id}')" ondragend="_colDragEnd(event)"`:''}
+          style="${podeReordenar?'cursor:grab;':''}background:${cor}1a;border-bottom:1px solid ${cor}33">
+        ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
+        <input value="${nm}" onchange="renameContCol('${col.id}',this.value)" onmousedown="event.stopPropagation()"
+          style="flex:1;min-width:0;background:transparent;border:none;color:var(--t2);font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-family:inherit;outline:none;padding:0">
+        <span class="wk-col-cnt">${items.length}</span>
+        <button onclick="event.stopPropagation();deleteContCol('${col.id}')" title="Excluir coluna" style="background:transparent;border:none;color:var(--t4);cursor:pointer;font-size:15px;line-height:1;padding:0 3px">×</button>
+      </div>
+      <div class="wk-col-list">
+        ${items.length
+          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false,activeChipId(items))).join('')
+          : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— arraste números aqui —</div>`}
+      </div>
+    </div>`;
+  };
+
+  // Ordem das colunas: padrão = atendentes (por papel/nome) + custom + pools no fim.
   // O usuário pode arrastar pra reordenar; a ordem fica salva em DB.cont_col_order.
   const colDefs=[
     ...membros.map(m=>({id:String(m.id),render:()=>colunaAtendente(m,byAt[m.id]||[])})),
+    ...(isDir()?(DB.contCols||[]):[]).map(col=>({id:String(col.id),render:()=>colunaCustom(col,byAt[String(col.id)]||[])})),
     {id:'__aquecimento__',render:()=>colunaPool(poolAquecimento,'__aquecimento__','🔥 Em Aquecimento','#f59e0b','rgba(245,158,11,.04)')},
     {id:'__aquecidos__',render:()=>colunaPool(poolDisponiveis,'__aquecidos__','🟢 Disponíveis','#10b981','rgba(16,185,129,.04)')},
   ];
@@ -7712,6 +7744,7 @@ function renderChipsByAtendente(){
 
   const html=`<div class="wk-board">
     ${ordCols.map(c=>c.render()).join('')}
+    ${isDir()?`<button class="wk-addcol" onclick="addContCol()" title="Criar uma coluna nova pra organizar números">+ coluna</button>`:''}
   </div>`;
 
   // Preserva scroll antes do re-render: horizontal do board + vertical de cada coluna.
@@ -7740,6 +7773,31 @@ function renderChipsByAtendente(){
       if(id && list && colScrolls[id]!=null) list.scrollTop=colScrolls[id];
     });
   }
+}
+
+// ─── Colunas customizadas da contingência (só diretor) ───
+function addContCol(){
+  DB.contCols=DB.contCols||[];
+  const n=DB.contCols.reduce((m,c)=>Math.max(m,parseInt(String(c.id).replace(/\D/g,''),10)||0),0)+1;
+  DB.contCols.push({id:'ccol_'+n,nome:'Nova coluna'});
+  renderChipsByAtendente();
+  persistAndPushNow().catch(_=>{});
+}
+function renameContCol(id,nome){
+  const col=(DB.contCols||[]).find(c=>String(c.id)===String(id)); if(!col) return;
+  col.nome=(nome||'').trim()||'Coluna';
+  persistAndPushNow().catch(_=>{});
+}
+async function deleteContCol(id){
+  const col=(DB.contCols||[]).find(c=>String(c.id)===String(id)); if(!col) return;
+  const dentro=(DB.chips||[]).filter(c=>String(c.at)===String(id)).length;
+  if(!await axConfirm(`Excluir a coluna <b>${col.nome||''}</b>?${dentro?` Os ${dentro} número(s) dela voltam pra "Disponíveis".`:''}`,{okLabel:'Excluir coluna'}))return;
+  (DB.chips||[]).forEach(c=>{ if(String(c.at)===String(id)){ c.at=null; c.em_uso=false; } });
+  DB.contCols=(DB.contCols||[]).filter(c=>String(c.id)!==String(id));
+  if(Array.isArray(DB.cont_col_order)) DB.cont_col_order=DB.cont_col_order.filter(x=>String(x)!==String(id));
+  renderChipsByAtendente();
+  toast('Coluna excluída','ok');
+  persistAndPushNow().catch(_=>{});
 }
 
 // Card de chip estilo CRM Pipeline (sem borda lateral, click no card abre edição,
@@ -8107,6 +8165,9 @@ function autoPromoteWarmedChips(){
   const chips=(DB.chips||[]).filter(c=>c.st==='aquecimento');
   let promovidos=0;
   chips.forEach(c=>{
+    // Números marcados como restrito/sem WhatsApp/banido ficam PARADOS no
+    // aquecimento (gerenciados na mão); só os "limpos" viram Disponíveis.
+    if(_chipProblemStatus(c)) return;
     // Caso 1: tem warm_start → calcula dias decorridos
     if(c.warm_start){
       if(computeWarmDay(c)>=7){c.st='ativo';c.dia=7;c.em_uso=false;promovidos++;}
@@ -8423,6 +8484,13 @@ function _chipOkRoleta(c){
   if(c.st==='banido'||c.st==='aquecimento') return false;
   const lbl=_norm(getWaStatusInfo(getWaStatus(c))?.label||'');
   return lbl!=='banido' && lbl!=='restrito';
+}
+// Status "problema" que o usuário usa pra PARAR números no aquecimento
+// (restrito, banido, sem WhatsApp, bloqueado). Esses NÃO viram "Disponíveis"
+// sozinhos ao terminar os 7 dias — o usuário controla manualmente.
+function _chipProblemStatus(c){
+  const lbl=_norm(getWaStatusInfo(getWaStatus(c))?.label||'');
+  return lbl==='restrito'||lbl==='banido'||lbl.indexOf('sem what')>=0||lbl.indexOf('bloque')>=0;
 }
 // Vendedores da pressel com estado resolvido (número atual + ok/banido)
 function pressellVendores(p){
