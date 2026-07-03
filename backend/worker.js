@@ -1865,7 +1865,7 @@ async function _ttPixelToken(env, pid, instance) {
     let p = pid ? pressels.find(x => String(x.id) === String(pid) && x.pixel_tt && x.pixel_tt_token) : null;
     if (!p && instance) {
       // fallback pelo vendedor: SÓ se ele estiver em UMA pressel com pixel (senão mandaria pro pixel/BM errado)
-      const at = String(instance).replace(/^ax_/, '');
+      const at = String(instance).replace(/^ax_/, '').replace(/_b$/, '');   // número backup (ax_<at>_b) cai no mesmo vendedor
       const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
       if (cand.length === 1) p = cand[0];
     }
@@ -2063,25 +2063,32 @@ function _resolvePresselNumbers(p, chips, liveSet){
   return out;
 }
 // Igual ao _resolvePresselNumbers mas devolve o vendedor completo {num, at, inst} pra balancear.
+// instância base do vendedor (tira o sufixo _b do número backup) — pra métrica/pixel somarem no mesmo vendedor
+function _instBase(inst){ return String(inst||'').replace(/_b$/,''); }
+// Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
+// Os dois entram só se estiverem conectados AGORA (liveSet) e não banidos/restritos. cap = cota do dia no principal.
 function _resolvePresselSellers(p, chips, liveSet){
   const out=[];
+  const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
   for(const v of (p.vendedores||[])){
     if(v.ativo===false) continue;
-    if(liveSet && !liveSet.has('ax_'+String(v.at))) continue;
     const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
-    const active=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];
-    if(!active) continue;
-    const wa=String(active.wa_st||'').toLowerCase();
-    if(wa==='restrito' || wa==='banido') continue;
-    if(active.num) out.push({num:active.num, at:String(v.at), inst:'ax_'+String(v.at)});
+    const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
+    const pChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // principal = número em uso
+    const bChip=mine.find(c=>c.bkp===true);                                         // backup = chip marcado como backup
+    const primary=(pChip && okWa(pChip) && pChip.num && (!liveSet||liveSet.has(instP))) ? {num:pChip.num, inst:instP} : null;
+    const backup =(bChip && okWa(bChip) && bChip.num && (!liveSet||liveSet.has(instB))) ? {num:bChip.num, inst:instB} : null;
+    if(!primary && !backup) continue;
+    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), primary, backup});
   }
   return out;
 }
-// BALANCEAMENTO: manda o próximo lead pro vendedor com MENOS contatos hoje (conta tudo que
-// chegou no WhatsApp dele, inclusive de outras pressels). Empate → rotaciona entre os empatados.
+// ROLETA com OVERFLOW POR COTA + balanceamento:
+// 1) por vendedor, resolve o número EFETIVO: principal até bater a cota do dia (cap), depois vira pro backup;
+//    se o principal caiu, usa o backup direto; se não tem backup, segue no principal.
+// 2) entre vendedores, manda pro que tem MENOS leads hoje (principal+backup somados). Empate → rotaciona.
 async function _presselBalancedPick(env, id, sellers){
-  if(sellers.length===1) return sellers[0];
   const counts={};
   try{
     const day=_brDay();
@@ -2089,8 +2096,21 @@ async function _presselBalancedPick(env, id, sellers){
     const r=await env.DB.prepare(`SELECT instance, COUNT(*) c FROM (SELECT phone, instance, MIN(ts) mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
     (r.results||[]).forEach(x=>{counts[x.instance]=Number(x.c)||0;});
   }catch(_){}
-  let min=Infinity; sellers.forEach(s=>{const c=counts[s.inst]||0; if(c<min)min=c;});
-  const tied=sellers.filter(s=>(counts[s.inst]||0)===min);
+  const avail=[];
+  for(const s of sellers){
+    const cP=s.primary?(counts[s.primary.inst]||0):0;
+    const cB=s.backup?(counts[s.backup.inst]||0):0;
+    let eff=null;
+    if(s.primary && (s.cap<=0 || cP<s.cap)) eff=s.primary;   // principal ainda dentro da cota do dia
+    else if(s.backup) eff=s.backup;                           // estourou a cota (ou principal caiu) → backup
+    else if(s.primary) eff=s.primary;                         // sem backup: segue no principal
+    if(!eff) continue;
+    avail.push({num:eff.num, at:s.at, inst:eff.inst, total:cP+cB});
+  }
+  if(!avail.length) return null;
+  if(avail.length===1) return avail[0];
+  let min=Infinity; avail.forEach(a=>{ if(a.total<min)min=a.total; });
+  const tied=avail.filter(a=>a.total===min);
   if(tied.length===1) return tied[0];
   const idx=await _presselNextIndex(env, id, tied.length);   // desempate rotativo
   return tied[idx];
@@ -2196,7 +2216,7 @@ async function handlePresselMetricsLive(req, env){
     const vc = M.vc[pid]||{};
     const p = { views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, valor:M.valor[pid]||0, vend:{} };
     const cvi = M.contatosVI[pid]||{}, vvi = M.vendasVI[pid]||{};
-    new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ p.vend[inst] = { contatos:cvi[inst]||0, vendas:vvi[inst]||0 }; });
+    new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ const b=_instBase(inst); const e=(p.vend[b]=p.vend[b]||{contatos:0,vendas:0}); e.contatos+=cvi[inst]||0; e.vendas+=vvi[inst]||0; });   // backup (_b) soma no mesmo vendedor
     pressels[pid] = p;
   });
   return json({ ok:true, day, today: _brDay(), pressels });
@@ -2218,8 +2238,8 @@ async function handlePresselMetricsPage(req, env, id){
   const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
     const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
-    const inst='ax_'+v.at;
-    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(cvi[inst])||0, vendas:Number(vvi[inst])||0};
+    const inst='ax_'+v.at, instB=inst+'_b';   // soma principal + backup no mesmo vendedor
+    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:(Number(cvi[inst])||0)+(Number(cvi[instB])||0), vendas:(Number(vvi[inst])||0)+(Number(vvi[instB])||0)};
   });
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
@@ -2260,8 +2280,8 @@ async function handlePresselsTotalPage(req, env){
   // vendedores ativos (únicos), somando contatos/vendas de TODAS as pressels
   const _vt={};
   pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>{ const at=String(v.at); if(!_vt[at]){ const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; _vt[at]={name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; } }));
-  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,''); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));
-  Object.keys(M.vendasVI||{}).forEach(pid=>Object.keys(M.vendasVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,''); if(_vt[at]) _vt[at].vendas+=Number(M.vendasVI[pid][inst])||0; }));
+  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // backup (_b) soma no vendedor
+  Object.keys(M.vendasVI||{}).forEach(pid=>Object.keys(M.vendasVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].vendas+=Number(M.vendasVI[pid][inst])||0; }));
   const totVend=Object.values(_vt);
   const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}${vendTable(totVend)}</div>`;
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
@@ -2279,7 +2299,8 @@ async function handlePresselPublic(req, env, id){
   try{ const cs=await env.DB.prepare("SELECT instance FROM wa_conn WHERE state='open'").all(); liveSet=new Set((cs.results||[]).map(r=>r.instance)); }catch(_){}
   const sellers=_resolvePresselSellers(p, chips, liveSet);
   if(!sellers.length) return _presselOffline();
-  const pick=await _presselBalancedPick(env, id, sellers);   // manda pro vendedor mais "atrás" hoje
+  const pick=await _presselBalancedPick(env, id, sellers);   // número efetivo (overflow por cota) do vendedor mais "atrás" hoje
+  if(!pick) return _presselOffline();
   try{  // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();

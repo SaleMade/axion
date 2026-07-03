@@ -852,7 +852,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 #contingencia-pg details[open] > summary > .cont-det-arrow{transform:rotate(90deg)}
 /* ─── Kanban WhatsApp (CRM-style com colunas pra pools + atendentes) ─── */
 .wk-board{display:flex;gap:10px;overflow-x:auto;padding:4px 4px 12px;align-items:flex-start}
-.wk-col{flex:0 0 290px;min-width:290px;max-width:290px;background:var(--s2);border:1px solid var(--b1);
+.wk-col{flex:0 0 334px;min-width:334px;max-width:334px;background:var(--s2);border:1px solid var(--b1);
   border-radius:var(--rl);display:flex;flex-direction:column;overflow:hidden;max-height:640px}
 .wk-col.wk-col-pool{flex:0 0 310px;min-width:310px;max-width:310px}
 .wk-col.drop-target{outline:2px dashed var(--bl);outline-offset:-2px;background:var(--s3)}
@@ -870,6 +870,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-col-list{padding:9px;display:flex;flex-direction:column;gap:7px;flex:1;overflow-y:auto;min-height:80px;
   scrollbar-width:none;-ms-overflow-style:none}
 .wk-col-list::-webkit-scrollbar{width:0;height:0;display:none}
+/* Linha por dia da semana: 1 número = largura cheia; 2+ no mesmo dia = lado a lado, menores */
+.wk-day-row{display:flex;flex-flow:row wrap;gap:7px}
+.wk-day-row>.wk-chip{flex:1 1 100%;min-width:0}
+.wk-day-row.is-multi>.wk-chip{flex:1 1 calc(50% - 4px);padding:10px}
+.wk-day-row.is-multi .wk-chip-num{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk-day-row.is-multi .wk-chip-day{padding:0 5px}
 /* ─── Pressels: interruptor (toggle) + inputs do editor inline ─── */
 .ax-sw{width:38px;height:22px;border-radius:11px;background:var(--s4);border:1px solid var(--b2);position:relative;cursor:pointer;transition:background .15s,border-color .15s;flex-shrink:0}
 .ax-sw.on{background:var(--gr);border-color:var(--gr)}
@@ -7405,6 +7411,13 @@ function chipDayOffset(c){ const v=chipWeekday(c); return v===null?null:((v-toda
 function isChipActiveToday(c){ return chipDayOffset(c)===0; }
 // Ordem fixa na coluna: Segunda(0) → ... → Domingo(6); sem dia cai pro fim.
 function chipWeekRank(c){ const v=chipWeekday(c); return v===null?50:((v+6)%7); }
+// Agrupa os números da coluna por dia da semana (já vêm ordenados por dia). Cada grupo = uma linha;
+// dias com 2+ números aparecem lado a lado. Sem dia (null) cada um na sua linha.
+function _chipDayGroups(items){
+  const order=[], gmap={};
+  (items||[]).forEach(c=>{ const wd=chipWeekday(c); const k=(wd===null?('none_'+(c.id||Math.random())):('d'+wd)); if(!gmap[k]){gmap[k]=[];order.push(k);} gmap[k].push(c); });
+  return order.map(k=>gmap[k]);
+}
 // "Em uso" manual (tag verde) do chip
 function _isChipEmUso(c){ return c.em_uso===true || isEmUsoStatus(getWaStatus(c)); }
 // O "ATIVO DO DIA" (contorno verde + ★) segue a tag "Em uso" MANUAL — NÃO o dia
@@ -7676,7 +7689,7 @@ function renderChipsByAtendente(){
       </div>
       <div class="wk-col-list">
         ${items.length
-          ? items.map(c=>_renderChipCard(c,/*showAtendente*/false,aId)).join('')
+          ? _chipDayGroups(items).map(g=>`<div class="wk-day-row${g.length>1?' is-multi':''}">${g.map(c=>_renderChipCard(c,/*showAtendente*/false,aId)).join('')}</div>`).join('')
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— arraste números aqui —</div>`}
       </div>
     </div>`;
@@ -8744,7 +8757,7 @@ function _loadWaConn(){
     let changed=false;
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
       if(!Array.isArray(p.vendedores)) return;
-      const keep=p.vendedores.filter(v=>{ const st=m['ax_'+v.at]; if(st && st!=='open'){ changed=true; return false; } return true; });
+      const keep=p.vendedores.filter(v=>{ const sP=m['ax_'+v.at], sB=m['ax_'+v.at+'_b']; const pDown=sP&&sP!=='open', bUp=sB==='open'; if(pDown && !bUp){ changed=true; return false; } return true; });   // só sai da roleta se o principal caiu E o backup não cobre
       if(keep.length!==p.vendedores.length) p.vendedores=keep;
     });
     if(changed){ persistAndPushNow().catch(_=>{}); try{ toast('Número caiu: desliguei da roleta automaticamente','ok'); }catch(_){} }
@@ -8752,6 +8765,62 @@ function _loadWaConn(){
   }).catch(()=>{});
 }
 try{ setInterval(()=>{ if(document.querySelector('[id^="pp-vend-"]')) _loadWaConn(); }, 30000); }catch(_){}
+// Número BACKUP do vendedor = chip marcado como bkp (instância ax_<at>_b)
+function _atendenteBackupChip(atId){
+  return (DB.chips||[]).find(c=>c.at===atId && c.bkp===true && _chipUsavel(c)) || null;
+}
+// Define/limpa o número backup do vendedor (é global do vendedor, vale em todas as pressels)
+function setPresselVendBackup(pid, atId, chipId){
+  (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp = (String(c.id)===String(chipId)); });
+  renderPresselVendList(pid);
+  persistAndPushNow().catch(_=>{});
+  toast('Backup definido. Clique em "conectar backup" e leia o QR com esse número.','ok');
+}
+function removePresselVendBackup(pid, atId){
+  (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp=false; });
+  renderPresselVendList(pid);
+  persistAndPushNow().catch(_=>{});
+  toast('Backup removido','ok');
+}
+// Cota diária do número principal antes de virar pro backup (0 = ilimitada, só principal)
+function setPresselVendCap(pid, atId, val){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const v=(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(!v) return;
+  v.cap=Math.max(0, Number(val)||0);
+  persistAndPushNow().catch(_=>{});
+  toast('Cota salva','ok');
+}
+// Bloco extra (cota + número backup) mostrado embaixo do vendedor quando ele está na roleta
+function _presselVendExtra(pid, at, v){
+  const cap=Math.max(0, Number(v&&v.cap)||0);
+  const capField=`<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t3);flex-wrap:wrap">Cota/dia do principal
+    <input type="number" min="0" value="${cap||''}" placeholder="ilimitada" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" onclick="event.stopPropagation()" style="width:70px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
+    <span style="color:var(--t4)">leads, depois vira pro backup</span></label>`;
+  const bchip=_atendenteBackupChip(at.id);
+  let backupHtml;
+  if(bchip){
+    const binst='ax_'+at.id+'_b', bconn=_waConnMap[binst]==='open';
+    const bbadge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`;
+    const blink=(bconn&&_waConnLoaded)
+      ? `<button onclick="event.stopPropagation();evoDisconnect('${at.id}','b')" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar</button>`
+      : `<button onclick="event.stopPropagation();evoConnect('${at.id}','b')" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar backup ↗</button>`;
+    backupHtml=`<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+      <span style="width:7px;height:7px;border-radius:50%;background:${(_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)')};flex-shrink:0"></span>
+      <span style="font-size:11px;color:var(--t3)">Backup</span>
+      <span style="font-size:13px;font-weight:700;font-family:ui-monospace,monospace;color:var(--tx)">${_automEsc(bchip.num)}</span>
+      ${bbadge}${blink}
+      <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Remover backup" style="background:transparent;border:none;color:var(--t3);font-size:11px;cursor:pointer;padding:0;font-family:inherit">remover</button>
+    </div>`;
+  } else {
+    const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso'));
+    backupHtml=others.length
+      ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:11px;color:var(--t3)">Backup:</span>
+         <select onchange="if(this.value)setPresselVendBackup(${pid},'${at.id}',this.value)" onclick="event.stopPropagation()" style="padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
+         <option value="">escolher número…</option>${others.map(c=>`<option value="${c.id}">${_automEsc(c.num)}</option>`).join('')}</select></div>`
+      : `<div style="font-size:11.5px;color:var(--t3)">Sem número backup. Cadastre um 2º número pra ${_automEsc(at.name)} na Contingência.</div>`;
+  }
+  return `<div style="margin-top:9px;padding-top:9px;border-top:1px dashed var(--b1);display:flex;flex-direction:column;gap:7px">${capField}${backupHtml}</div>`;
+}
 // Lista de vendedores (toggle + número em destaque) de uma pressel
 function renderPresselVendList(pid){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
@@ -8782,6 +8851,7 @@ function renderPresselVendList(pid){
         <div style="font-size:12px;color:var(--t3)">${at.name}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
+        ${onVis?_presselVendExtra(pid, at, (p.vendedores||[]).find(v=>String(v.at)===String(at.id))||{}):''}
       </div>
       <div class="ax-sw ${onVis?'on':''}" title="${ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
@@ -9010,16 +9080,17 @@ async function loadWAInstances(){
     }).join('');
   }catch(e){ el.innerHTML=`<div style="color:var(--rd);font-size:12px">Erro ao listar: ${e.message}</div>`; }
 }
-async function evoDisconnect(atId){
-  const at=getTeam(atId);
-  if(!confirm('Desconectar o WhatsApp de '+(at?at.name:'esse número')+'? Ele sai da roleta até você reconectar.')) return;
-  try{ await api.waDisconnect('ax_'+atId); toast('WhatsApp desconectado','ok'); if(typeof _waConnMap!=='undefined'){_waConnMap['ax_'+atId]='close';} _loadWaConn(); }catch(_){ toast('Não consegui desconectar','err'); }
+async function evoDisconnect(atId, slot){
+  const at=getTeam(atId); const sfx=(slot==='b')?'_b':''; const inst='ax_'+atId+sfx;
+  const lbl=(at?at.name:'esse número')+(slot==='b'?' (backup)':'');
+  if(!confirm('Desconectar o WhatsApp de '+lbl+'? Ele sai da roleta até você reconectar.')) return;
+  try{ await api.waDisconnect(inst); toast('WhatsApp desconectado','ok'); if(typeof _waConnMap!=='undefined'){_waConnMap[inst]='close';} _loadWaConn(); }catch(_){ toast('Não consegui desconectar','err'); }
 }
-async function evoConnect(atId){
+async function evoConnect(atId, slot){
   const at=getTeam(atId);
-  const inst='ax_'+atId;
+  const sfx=(slot==='b')?'_b':''; const inst='ax_'+atId+sfx;
   const body=$('evo-body');
-  $('evo-title').textContent=`Conectar — ${at?at.name:''}`;
+  $('evo-title').textContent=`Conectar — ${at?at.name:''}${slot==='b'?' (backup)':''}`;
   if(body)body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Falando com a Evolution API...</p>';
   openM('m-evo');
   try{
