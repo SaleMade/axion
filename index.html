@@ -7654,11 +7654,9 @@ function renderChipsByAtendente(){
   // data-col-id em cada wk-col permite restaurar scroll por coluna após re-render.
   // Só o diretor pode arrastar/reordenar as colunas (controle exclusivo).
   const podeReordenar=isDir();
-  // Swatch de cor da coluna (só diretor) — troca a cor daquela coluna
+  // Swatch de cor — SÓ nas colunas customizadas (atendentes/pools mantêm a cor).
   const _colSwatch=(id,cor)=>podeReordenar?`<input type="color" value="${cor}" onchange="setContColColor('${id}',this.value)" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" title="Cor da coluna" style="width:16px;height:16px;border:none;background:none;cursor:pointer;padding:0;flex-shrink:0;border-radius:3px">`:'';
-  const colunaPool=(items,id,titulo,dcor,bg)=>{
-    const cor=_colColor(id,dcor);
-    return `
+  const colunaPool=(items,id,titulo,cor,bg)=>`
     <div class="wk-col wk-col-pool" data-col-id="${id}"
         ondragover="_chipDragOver(event)"
         ondragleave="_chipDragLeave(event)"
@@ -7668,7 +7666,6 @@ function renderChipsByAtendente(){
           style="${podeReordenar?'cursor:grab;':''}background:${cor}1a;border-bottom:1px solid ${cor}33">
         ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
         <span class="wk-col-name" style="flex:1;color:${cor}">${titulo}</span>
-        ${_colSwatch(id,cor)}
         <span class="wk-col-cnt">${items.length}</span>
       </div>
       <div class="wk-col-list">
@@ -7677,7 +7674,6 @@ function renderChipsByAtendente(){
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— vazio —</div>`}
       </div>
     </div>`;
-  };
 
   // Cor de fundo suave do atendente (alpha bem baixo pra não ficar berrante)
   const colunaAtendente=(at,items)=>{
@@ -7711,7 +7707,7 @@ function renderChipsByAtendente(){
 
   // Coluna customizada (criada pelo diretor). Neutra, nome editável, botão de excluir.
   const colunaCustom=(col,items)=>{
-    const cor='#64748b';
+    const cor=_colColor(col.id,'#64748b');
     const nm=String(col.nome||'Coluna').replace(/"/g,'&quot;');
     return `
     <div class="wk-col" data-col-id="${col.id}"
@@ -7724,6 +7720,7 @@ function renderChipsByAtendente(){
         ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
         <input value="${nm}" onchange="renameContCol('${col.id}',this.value)" onmousedown="event.stopPropagation()"
           style="flex:1;min-width:0;background:transparent;border:none;color:var(--t2);font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-family:inherit;outline:none;padding:0">
+        ${_colSwatch(col.id,cor)}
         <span class="wk-col-cnt">${items.length}</span>
         <button onclick="event.stopPropagation();deleteContCol('${col.id}')" title="Excluir coluna" style="background:transparent;border:none;color:var(--t4);cursor:pointer;font-size:15px;line-height:1;padding:0 3px">×</button>
       </div>
