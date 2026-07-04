@@ -2075,10 +2075,13 @@ function _resolvePresselSellers(p, chips, liveSet){
     const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
-    const pChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // principal = número em uso
-    const bChip=mine.find(c=>c.bkp===true);                                         // backup = chip marcado como backup
-    const primary=(pChip && okWa(pChip) && pChip.num && (!liveSet||liveSet.has(instP))) ? {num:pChip.num, inst:instP} : null;
-    const backup =(v.reserva_on!==false && bChip && okWa(bChip) && bChip.num && (!liveSet||liveSet.has(instB))) ? {num:bChip.num, inst:instB} : null;   // reserva só entra com o interruptor ligado
+    const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // conectado em instP
+    const bkChip=mine.find(c=>c.bkp===true);                                        // conectado em instB
+    const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
+    const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
+    const rChip=swap?emChip:bkChip, rInst=swap?instP:instB;                         // reserva = overflow
+    const primary=(pChip && okWa(pChip) && pChip.num && (!liveSet||liveSet.has(pInst))) ? {num:pChip.num, inst:pInst} : null;
+    const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && (!liveSet||liveSet.has(rInst))) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;
     out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), primary, backup});
   }

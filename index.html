@@ -4376,12 +4376,15 @@ function teamOptsWithEmpty(){return [{v:'',l:'— Sem atendente —'},...teamOpt
 // porque eles também podem ter um número operacional pra atender.
 // Exclui só Gestor de Tráfego (que não atende cliente) e arquivados/previews.
 function teamOptsChip(){
-  return TEAM
+  const base=TEAM
     .filter(t=>t.role!=='gestor'&&t.role!=='designer'&&!t._preview&&!t.archived)
     .map(t=>{
       const tag=t.role==='diretor'?' (Diretor)':t.role==='socio'?' (Sócio)':t.role==='produtor'?' (Produtor)':'';
       return {v:t.id,l:t.name+tag};
     });
+  // Opção "sem atendente" — sem ela o select caía no 1º membro e ao salvar
+  // jogava números de "Disponíveis"/coluna custom pra coluna desse membro.
+  return [{v:'',l:'— Disponível (sem atendente) —'},...base];
 }
 // Para uso no modal de detalhes: se o lead atual tem atendente arquivado,
 // inclui ele na lista (com indicador 🗄) pra não perder a referência
@@ -7651,7 +7654,11 @@ function renderChipsByAtendente(){
   // data-col-id em cada wk-col permite restaurar scroll por coluna após re-render.
   // Só o diretor pode arrastar/reordenar as colunas (controle exclusivo).
   const podeReordenar=isDir();
-  const colunaPool=(items,id,titulo,cor,bg)=>`
+  // Swatch de cor da coluna (só diretor) — troca a cor daquela coluna
+  const _colSwatch=(id,cor)=>podeReordenar?`<input type="color" value="${cor}" onchange="setContColColor('${id}',this.value)" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" title="Cor da coluna" style="width:16px;height:16px;border:none;background:none;cursor:pointer;padding:0;flex-shrink:0;border-radius:3px">`:'';
+  const colunaPool=(items,id,titulo,dcor,bg)=>{
+    const cor=_colColor(id,dcor);
+    return `
     <div class="wk-col wk-col-pool" data-col-id="${id}"
         ondragover="_chipDragOver(event)"
         ondragleave="_chipDragLeave(event)"
@@ -7661,6 +7668,7 @@ function renderChipsByAtendente(){
           style="${podeReordenar?'cursor:grab;':''}background:${cor}1a;border-bottom:1px solid ${cor}33">
         ${podeReordenar?`<span class="wk-col-grip">⋮⋮</span>`:''}
         <span class="wk-col-name" style="flex:1;color:${cor}">${titulo}</span>
+        ${_colSwatch(id,cor)}
         <span class="wk-col-cnt">${items.length}</span>
       </div>
       <div class="wk-col-list">
@@ -7669,6 +7677,7 @@ function renderChipsByAtendente(){
           : `<div class="muted" style="font-size:11.5px;padding:16px;text-align:center;font-style:italic">— vazio —</div>`}
       </div>
     </div>`;
+  };
 
   // Cor de fundo suave do atendente (alpha bem baixo pra não ficar berrante)
   const colunaAtendente=(at,items)=>{
@@ -7795,8 +7804,17 @@ async function deleteContCol(id){
   (DB.chips||[]).forEach(c=>{ if(String(c.at)===String(id)){ c.at=null; c.em_uso=false; } });
   DB.contCols=(DB.contCols||[]).filter(c=>String(c.id)!==String(id));
   if(Array.isArray(DB.cont_col_order)) DB.cont_col_order=DB.cont_col_order.filter(x=>String(x)!==String(id));
+  if(DB.contColColors) delete DB.contColColors[String(id)];
   renderChipsByAtendente();
   toast('Coluna excluída','ok');
+  persistAndPushNow().catch(_=>{});
+}
+// Cor customizada por coluna (override, guardado em DB.contColColors por id)
+function _colColor(id,fb){ return (DB.contColColors||{})[String(id)] || fb; }
+function setContColColor(id,cor){
+  DB.contColColors=DB.contColColors||{};
+  if(cor) DB.contColColors[String(id)]=cor; else delete DB.contColColors[String(id)];
+  renderChipsByAtendente();
   persistAndPushNow().catch(_=>{});
 }
 
@@ -8270,7 +8288,14 @@ function openChipDetail(id){
   $('mc-title').textContent=(c.idx?`#${c.idx} · `:'')+c.num;
   $('mc-idx').value=c.idx||'';
   $('mc-num').value=c.num;
-  selOpts($('mc-at'),teamOptsChip(),c.at);
+  // Se o número está numa coluna customizada, inclui ela como opção (senão o
+  // select cairia no 1º membro e o salvar reatribuiria o número sem querer).
+  let _mcatOpts=teamOptsChip();
+  if(c.at && !_mcatOpts.some(o=>String(o.v)===String(c.at))){
+    const _cc=(DB.contCols||[]).find(x=>String(x.id)===String(c.at));
+    _mcatOpts=[..._mcatOpts,{v:c.at,l:_cc?('Coluna: '+_cc.nome):('('+c.at+')')}];
+  }
+  selOpts($('mc-at'),_mcatOpts,c.at);
   $('mc-mod').value=c.mod||'';
   $('mc-op').value=c.op||'Vivo';
   // Status WhatsApp = status único do chip (lista configurável no ⚙)
@@ -8397,7 +8422,7 @@ function saveChip(){
   // O único status manual é o wa_st (Status WhatsApp).
   Object.assign(c,{
     idx:Number($('mc-idx').value)||c.idx||null,
-    num:$('mc-num').value,at:$('mc-at').value,mod:$('mc-mod').value,
+    num:$('mc-num').value,at:$('mc-at').value||null,mod:$('mc-mod').value,
     op:$('mc-op').value,
     wa_st:$('mc-wa-st').value,
     dia_uso:$('mc-dia-uso').value===''?null:Number($('mc-dia-uso').value),
@@ -8825,7 +8850,7 @@ function _loadWaConn(){
     let changed=false;
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
       if(!Array.isArray(p.vendedores)) return;
-      const keep=p.vendedores.filter(v=>{ const sP=m['ax_'+v.at], sB=m['ax_'+v.at+'_b']; const pDown=sP&&sP!=='open', bUp=(sB==='open' && v.reserva_on!==false); if(pDown && !bUp){ changed=true; return false; } return true; });   // só sai da roleta se o principal caiu E a reserva não cobre
+      const keep=p.vendedores.filter(v=>{ const pInst=v.swap?('ax_'+v.at+'_b'):('ax_'+v.at), rInst=v.swap?('ax_'+v.at):('ax_'+v.at+'_b'); const sP=m[pInst], sR=m[rInst]; const pDown=sP&&sP!=='open', rUp=(sR==='open' && v.reserva_on!==false); if(pDown && !rUp){ changed=true; return false; } return true; });   // só sai da roleta se o PRINCIPAL (conforme a troca) caiu E a reserva não cobre
       if(keep.length!==p.vendedores.length) p.vendedores=keep;
     });
     if(changed){ persistAndPushNow().catch(_=>{}); try{ toast('Número caiu: desliguei da roleta automaticamente','ok'); }catch(_){} }
@@ -8837,6 +8862,26 @@ try{ setInterval(()=>{ if(document.querySelector('[id^="pp-vend-"]')) _loadWaCon
 function _atendenteBackupChip(atId){
   return (DB.chips||[]).find(c=>c.at===atId && c.bkp===true && _chipUsavel(c)) || null;
 }
+// Papéis do vendedor. Padrão: principal = número em uso (ax_<at>), reserva = número bkp (ax_<at>_b).
+// v.swap troca só o PAPEL de quem recebe primeiro — cada número continua na SUA conexão (não perde QR).
+function _vendRoles(at, v){
+  const em=_atendenteActiveChip(at.id);              // em_uso  → ax_<at>
+  const bk=_atendenteBackupChip(at.id);              // bkp     → ax_<at>_b
+  const A={chip:em, inst:'ax_'+at.id, slot:''};
+  const B={chip:bk, inst:'ax_'+at.id+'_b', slot:'b'};
+  const swap=!!(v && v.swap && em && bk);
+  return { principal: swap?B:A, reserva: swap?A:B, swap };
+}
+// Troca principal <-> reserva (só o papel; as conexões ficam onde estão)
+function swapPresselVend(pid, atId){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const v=(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(!v) return;
+  if(!_atendenteBackupChip(atId)){ toast('Defina um número de reserva antes de trocar','err'); return; }
+  v.swap=!v.swap;
+  renderPresselVendList(pid);
+  persistAndPushNow().catch(_=>{});
+  toast('Principal e reserva trocados','ok');
+}
 // Define/limpa o número de RESERVA do vendedor (é global do vendedor, vale em todas as pressels)
 function setPresselVendBackup(pid, atId, chipId){
   (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp = (String(c.id)===String(chipId)); });
@@ -8847,6 +8892,7 @@ function setPresselVendBackup(pid, atId, chipId){
 }
 function removePresselVendBackup(pid, atId){
   (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp=false; });
+  const p=_ensurePressels().find(x=>x.id===pid); const v=p&&(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(v) delete v.swap;   // sem reserva, não faz sentido manter troca
   renderPresselVendList(pid);
   persistAndPushNow().catch(_=>{});
   toast('Reserva removida','ok');
@@ -8869,15 +8915,16 @@ function setPresselVendCap(pid, atId, val){
 }
 // Bloco da RESERVA (2º número): cota + número de reserva em destaque com interruptor próprio.
 // Aparece embaixo do vendedor quando ele está na roleta.
-function _presselVendReserva(pid, at, v){
+function _presselVendReserva(pid, at, v, roles){
+  const R=roles||_vendRoles(at,v);
+  const rchip=R.reserva.chip, rInst=R.reserva.inst, rSlot=R.reserva.slot;
   const cap=Math.max(0, Number(v&&v.cap)||0);
   const on=!(v && v.reserva_on===false);   // default ligada
   const capField=`<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t3);flex-wrap:wrap">
     <span>Depois de</span>
     <input type="number" min="0" value="${cap||''}" placeholder="ilimitados" onclick="event.stopPropagation()" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" style="width:64px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
     <span>leads no principal, vira pra reserva</span></div>`;
-  const bchip=_atendenteBackupChip(at.id);
-  if(!bchip){
+  if(!rchip){
     const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso'));
     const picker=others.length
       ? `<select onchange="if(this.value)setPresselVendBackup(${pid},'${at.id}',this.value)" onclick="event.stopPropagation()" style="flex:1;min-width:0;padding:8px 10px;border:1px solid var(--b2);border-radius:9px;background:var(--s1);color:var(--tx);font-size:12.5px;font-weight:600;cursor:pointer">
@@ -8885,24 +8932,25 @@ function _presselVendReserva(pid, at, v){
       : `<span style="font-size:11.5px;color:var(--t3)">Cadastre um 2º número pra ${_automEsc(at.name)} na Contingência pra usar como reserva.</span>`;
     return `<div style="border-top:1px dashed var(--b1);background:var(--s1);padding:10px 12px;display:flex;flex-direction:column;gap:10px">${capField}<div style="display:flex;align-items:center;gap:8px">${picker}</div></div>`;
   }
-  const binst='ax_'+at.id+'_b', bconn=_waConnMap[binst]==='open';
+  const bconn=_waConnMap[rInst]==='open';
   const rdot=_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)';   // cor = conexão (independe de ligada/desligada)
   const badge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`;
   const link=(bconn&&_waConnLoaded)
-    ? `<button onclick="event.stopPropagation();evoDisconnect('${at.id}','b')" title="Desconectar a reserva" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar</button>`
-    : `<button onclick="event.stopPropagation();evoConnect('${at.id}','b')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`;
+    ? `<button onclick="event.stopPropagation();evoDisconnect('${at.id}','${rSlot}')" title="Desconectar a reserva" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar</button>`
+    : `<button onclick="event.stopPropagation();evoConnect('${at.id}','${rSlot}')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`;
   const stateHint=on
     ? `<span style="font-size:10.5px;color:var(--t4)">na roleta · recebe quando o principal bate a cota</span>`
     : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">fora da roleta · não recebe lead, só marca venda</span>`;
   const toggle=`<div class="ax-sw ${on?'on':''}" title="${on?'Na roleta: recebe no overflow. Desligue se a reserva for só pra marcar venda.':'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.'}" onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"></div>`;
+  const swapBtn=`<button onclick="event.stopPropagation();swapPresselVend(${pid},'${at.id}')" title="Trocar principal e reserva de lugar (sem perder as conexões)" style="background:transparent;border:none;color:var(--t3);cursor:pointer;padding:0;display:inline-flex;align-items:center;line-height:0" onmouseover="this.style.color='var(--bl2)'" onmouseout="this.style.color='var(--t3)'"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>`;
   return `<div style="border-top:1px dashed var(--b1);background:var(--s1)">
     ${on?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
     <div style="display:flex;align-items:center;gap:11px;padding:${on?'6px':'10px'} 12px 11px">
       <span style="width:8px;height:8px;border-radius:50%;background:${rdot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
-        <div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px">Número de reserva
-          <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Trocar/remover a reserva" style="background:transparent;border:none;color:var(--t4);font-size:10.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline">trocar</button></div>
-        <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:var(--tx);letter-spacing:.02em">${_automEsc(bchip.num)}</div>
+        <div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px">Número de reserva ${swapBtn}
+          <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Remover a reserva" style="background:transparent;border:none;color:var(--t4);font-size:10.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline">remover</button></div>
+        <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:var(--tx);letter-spacing:.02em">${_automEsc(rchip.num)}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${badge}${link}</div>
         <div style="margin-top:3px">${stateHint}</div>
       </div>
@@ -8926,14 +8974,19 @@ function renderPresselVendList(pid){
   const ativos=rows.filter(r=>r.ok), fora=rows.filter(r=>!r.ok);
   const row=(r)=>{
     const {at,chip,ok,isOn}=r, onVis=isOn&&ok;
-    const connected=_waConnMap['ax_'+at.id]==='open';
+    const v=(p.vendedores||[]).find(x=>String(x.at)===String(at.id))||{};
+    const roles=onVis?_vendRoles(at,v):null;
+    const pChip=roles?roles.principal.chip:chip;
+    const pInst=roles?roles.principal.inst:('ax_'+at.id);
+    const pSlot=roles?roles.principal.slot:'';
+    const connected=_waConnMap[pInst]==='open';
     const dot=(onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)');
-    const numTxt=!chip?'sem número em uso':chip.num+(ok?'':' · fora (banido/restrito)');
-    const numColor=!chip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
+    const numTxt=!pChip?'sem número em uso':pChip.num+(ok?'':' · fora (banido/restrito)');
+    const numColor=!pChip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
     const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'Conectado':'Não conectado'}</span>`):'';
     const connectLink=onVis?((connected&&_waConnLoaded)
-      ? `<button onclick="evoDisconnect('${at.id}')" title="Desconectar esse WhatsApp da API" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar WhatsApp</button>`
-      : `<button onclick="evoConnect('${at.id}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`):'';
+      ? `<button onclick="evoDisconnect('${at.id}','${pSlot}')" title="Desconectar esse WhatsApp da API" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar WhatsApp</button>`
+      : `<button onclick="evoConnect('${at.id}','${pSlot}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`):'';
     const primaryInner=`<div style="display:flex;align-items:center;gap:11px;padding:10px 12px">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
@@ -8943,7 +8996,7 @@ function renderPresselVendList(pid){
       </div>
       <div class="ax-sw ${onVis?'on':''}" title="${ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
-    const reservaBlock=onVis?_presselVendReserva(pid, at, (p.vendedores||[]).find(v=>String(v.at)===String(at.id))||{}):'';
+    const reservaBlock=onVis?_presselVendReserva(pid, at, v, roles):'';
     return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
   };
   let html = ativos.length ? ativos.map(row).join('')
