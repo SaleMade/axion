@@ -1830,11 +1830,12 @@ async function _waDetectSale(env, instance, data) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // texto completo do "Pedido Concluído" (pra revisar na dash)
     try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
     if (recent) return; // já registrada nas últimas 24h (mesmo telefone)
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
-    const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id) VALUES (?,?,?,?,strftime('%s','now'),?)").bind(phone, instance, name, value, msgId).run();
+    const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)").bind(phone, instance, name, value, msgId, String(text||'').slice(0,2000)).run();
     if (ins.meta && ins.meta.changes === 0) return; // msg_id repetido → já processado
     await _ttFireSale(env, phone, (value > 0 ? value : null), msgId || '', instance);   // venda pro pixel (sem value 0 se o parse falhar)
   } catch (_) {}
@@ -1919,9 +1920,28 @@ async function handleWASales(req, env) {
   if (!u) return err('Não autenticado', 401);
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
-    const rows = await env.DB.prepare('SELECT phone, instance, name, value, ts FROM wa_sales ORDER BY ts DESC LIMIT 200').all();
+    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // garante a coluna pro SELECT
+    let day = new URL(req.url).searchParams.get('day') || '';
+    let where = '', binds = [];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {   // filtro por dia (BRT)
+      const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
+      where = 'WHERE ts>=? AND ts<?'; binds = [start, end];
+    }
+    const stmt = env.DB.prepare(`SELECT rowid AS id, phone, instance, name, value, ts, raw FROM wa_sales ${where} ORDER BY ts DESC LIMIT 300`);
+    const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
+}
+// POST /api/wa/sale/delete → { id } remove um pedido detectado (tira da contagem de vendas). Só diretor.
+async function handleWASaleDelete(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode remover pedidos', 403);
+  let body = {}; try { body = await req.json(); } catch (_) {}
+  const id = Number(body?.id);
+  if (!id) return err('id obrigatório');
+  try { await env.DB.prepare('DELETE FROM wa_sales WHERE rowid=?').bind(id).run(); } catch (_) {}
+  return json({ ok: true, id, removed: true });
 }
 
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
@@ -2231,7 +2251,10 @@ async function handlePresselMetricsPage(req, env, id){
   const p=(Array.isArray(data.pressels)?data.pressels:[]).find(x=>String(x.id)===String(id));
   if(!p) return _presselHtml(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b1220;color:#cbd5e1;text-align:center;padding:60px">Pressel não encontrada.</body>`);
   const chips=Array.isArray(data.chips)?data.chips:[];
-  const day=_brDay();
+  let day=new URL(req.url).searchParams.get('day')||'';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
+  const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa o futuro)
+  const isToday=(day===today);
   const M=await _presselDayMetrics(env, day);
   const vc=M.vc[String(id)]||{}, views=Number(vc.views)||0, clicks=Number(vc.clicks)||0;
   const contatos=M.contatos[String(id)]||0, vendas=M.vendas[String(id)]||0;
@@ -2247,7 +2270,7 @@ async function handlePresselMetricsPage(req, env, id){
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
   const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor nessa pressel.</td></tr>`;
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>Métricas — ${_escHtml(p.nome||'')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:880px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:18px}th{color:#8b9bb4;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px}</style></head><body><div class="wrap"><h1>Métricas — ${_escHtml(p.nome||'')}</h1><p style="color:#8b9bb4;font-size:13px;margin-bottom:18px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Hoje (${dLabel}) · atualiza sozinho a cada 30s</p><div style="display:flex;gap:12px;flex-wrap:wrap">${card('Chegaram na pressel',views,'#7aa2ff')}${card('Foram pro WhatsApp',clicks,'#34d399')}${card('Iniciaram contato',contatos,'#34d399')}${card('Vendas',vendas,'#34d399')}</div><table><thead><tr><th style="text-align:left">Vendedor</th><th>Iniciaram</th><th>Vendas</th><th>Conversão</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Todos os números são reais e do dia de hoje. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp (Evolution).</p></div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — ${_escHtml(p.nome||'')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:880px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:18px}th{color:#8b9bb4;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px}</style></head><body><div class="wrap"><h1>Métricas — ${_escHtml(p.nome||'')}</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':'<a href="?" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>'}</div><div style="display:flex;gap:12px;flex-wrap:wrap">${card('Chegaram na pressel',views,'#7aa2ff')}${card('Foram pro WhatsApp',clicks,'#34d399')}${card('Iniciaram contato',contatos,'#34d399')}${card('Vendas',vendas,'#34d399')}</div><table><thead><tr><th style="text-align:left">Vendedor</th><th>Iniciaram</th><th>Vendas</th><th>Conversão</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Todos os números são reais e do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp (Evolution).</p></div></body></html>`);
 }
 const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
@@ -2258,7 +2281,10 @@ async function handlePresselsTotalPage(req, env){
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
   const chips=Array.isArray(data.chips)?data.chips:[];
-  const day=_brDay();
+  let day=new URL(req.url).searchParams.get('day')||'';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
+  const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa escolher o futuro)
+  const isToday=(day===today);
   const M=await _presselDayMetrics(env, day);
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
@@ -2288,7 +2314,7 @@ async function handlePresselsTotalPage(req, env){
   const totVend=Object.values(_vt);
   const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}${vendTable(totVend)}</div>`;
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600;text-transform:uppercase;letter-spacing:.04em}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><p style="color:#8b9bb4;font-size:13px;margin-bottom:20px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Hoje (${dLabel}) · atualiza sozinho a cada 30s</p>${totalSec}${presselSecs}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Números reais do dia de hoje. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.</p></div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600;text-transform:uppercase;letter-spacing:.04em}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':'<a href="?" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>'}</div>${totalSec}${presselSecs}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.</p></div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
@@ -2314,6 +2340,7 @@ async function handlePresselPublic(req, env, id){
     try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}   // pra deduplicar "Foram pro WhatsApp" por ttclid
       const ex = await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
       if(ex){ leadCode = ex.code || ''; }
       else {
@@ -2334,7 +2361,7 @@ async function handlePresselPublic(req, env, id){
   let _wd=String(pick.num||'').replace(/\D/g,''); if(_wd.length<=11) _wd='55'+_wd;
   const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));   // deep link: abre o app DIRETO na conversa (com o código no texto)
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>var IS_TT=!!new URLSearchParams(location.search).get('ttclid');if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}')}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
@@ -2411,6 +2438,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/sale/delete')      return handleWASaleDelete(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)
@@ -2451,7 +2479,18 @@ export default {
       if (req.method === 'GET' && path === '/api/pressel/stats') return handlePresselStats(req, env);
       if (req.method === 'GET' && path === '/api/pressel/metrics') return handlePresselMetricsLive(req, env);
       const pcMatch = path.match(/^\/pc\/([a-zA-Z0-9_-]+)$/);
-      if (pcMatch) { if (req.method === 'POST') { try { await _bumpPressel(env, pcMatch[1], 'clicks'); } catch (_) {} } return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } }); }
+      if (pcMatch) {
+        if (req.method === 'POST') {
+          try {
+            const _ttc = url.searchParams.get('ttclid') || '';
+            if (_ttc) {   // dedup por ttclid: 1 "Foram pro WhatsApp" por visitante (nunca passa de "Chegaram")
+              const u = await env.DB.prepare('UPDATE tt_pending SET clicked=1 WHERE ttclid=? AND (clicked IS NULL OR clicked=0)').bind(_ttc).run();
+              if (u.meta && u.meta.changes > 0) await _bumpPressel(env, pcMatch[1], 'clicks');
+            }
+          } catch (_) {}
+        }
+        return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
+      }
 
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);

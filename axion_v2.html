@@ -3851,6 +3851,9 @@ const api={
   // Métricas reais da pressel (views = chegou, clicks = foi pro WhatsApp)
   presselStats:()=>api._fetch('/api/pressel/stats'),
   presselMetrics:(day)=>api._fetch('/api/pressel/metrics'+(day?('?day='+encodeURIComponent(day)):'')),
+  // Pedidos confirmados (vendas detectadas no WhatsApp "Pedido Concluído") — listar por dia + remover
+  waSalesList:(day)=>api._fetch('/api/wa/sales'+(day?('?day='+encodeURIComponent(day)):'')),
+  waSaleDelete:(id)=>api._fetch('/api/wa/sale/delete',{method:'POST',body:JSON.stringify({id})}),
 };
 
 // ─── Sync state com servidor ───
@@ -4923,6 +4926,7 @@ function computeNav(){
         // Cobrador: Follows fica como destaque (live dot) + primeiro
         ...(rec?[{id:'cobranca',lbl:'Follows',live:true,badge:codPendCount()}]:[]),
         ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
+        ...(dir?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
         {id:'crm',lbl:'CRM / Pipeline'},
         ...(dir||afi?[{id:'produtos',lbl:'Produtos'}]:[]),
         ...(dir?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
@@ -5059,6 +5063,7 @@ const PNAMES={
   evolucao:'Dashboard / <b>Evolução Diária</b>',
   crm:'Operacional / <b>CRM</b>',
   pedidos:'Operacional / <b>Pedidos</b>',
+  pedidosconf:'Operacional / <b>Pedidos Confirmados</b>',
   produtos:'Operacional / <b>Produtos</b>',
   cobranca:'Operacional / <b>Follows</b>',
   pagequip:'Financeiro / <b>Pagamentos de Equipe</b>',
@@ -5097,7 +5102,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pageProdutos(),pageAtendimento(),pageContingencia(),pagePressels(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageContingencia(),pagePressels(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5257,6 +5262,7 @@ function goPage(id){
   if(id==='recuperacao') renderRecup();
   if(id==='home')        renderHome();
   if(id==='pedidos')     renderPedidos();
+  if(id==='pedidosconf') renderPedidosConf();
   if(id==='produtos')    renderProdutos();
   if(id==='trafego')     renderTrafego();
   if(id==='equipe')      renderEquipe();
@@ -6756,6 +6762,57 @@ function registerVendaFromLead(lead){
    PAGE — PEDIDOS
 ═══════════════════════════════════════════════════════ */
 function pagePedidos(){return `<div class="page" id="pedidos-pg"></div>`}
+function pagePedidosConf(){return `<div class="page" id="pedidosconf-pg"></div>`}
+// ── PEDIDOS CONFIRMADOS: vendas detectadas no WhatsApp ("Pedido Concluído"). Diretor revê por dia e remove os errados. ──
+let _pcfDay='';
+function _pcfYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+function renderPedidosConf(){
+  const c=$('pedidosconf-pg'); if(!c) return;
+  const today=_pcfYmd(new Date());
+  const day=_pcfDay||today;
+  c.innerHTML=`<div class="ph"><div><h1>Pedidos <em>Confirmados</em></h1></div></div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 16px">
+      <input type="date" id="pcf-date" value="${day}" max="${today}" onchange="_pcfSetDay(this.value)" class="pp-inp" style="width:auto;padding:8px 11px;color-scheme:dark;cursor:pointer">
+      ${day!==today?`<button class="btn btn-gh btn-sm" onclick="_pcfSetDay('${today}')">← hoje</button>`:''}
+      <span class="muted" style="font-size:12px;flex:1;min-width:200px">Vendas detectadas no WhatsApp (mensagem "Pedido Concluído"). Remover um pedido tira ele da contagem de vendas.</span>
+    </div>
+    <div id="pcf-list"><div class="muted" style="padding:24px;text-align:center">Carregando…</div></div>`;
+  _loadPedidosConf(day);
+}
+function _pcfSetDay(d){ _pcfDay=d||''; renderPedidosConf(); }
+function _loadPedidosConf(day){
+  api.waSalesList(day).then(r=>{
+    const list=$('pcf-list'); if(!list) return;
+    const sales=r&&r.sales?r.sales:[];
+    if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse dia.</div>'; return; }
+    const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
+    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''}</div>`;
+    html+=sales.map(s=>{
+      const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
+      const seller=(getTeam(at)||{}).name||s.instance||'—';
+      const t=new Date((Number(s.ts)||0)*1000);
+      const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const val=Number(s.value)||0;
+      const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
+      return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
+        <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14.5px;font-weight:700;color:var(--tx)">${_automEsc(s.name||'Cliente')}${val>0?` · <span style="color:var(--gr)">R$ ${val}</span>`:''}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:3px">Vendedor: <b style="color:var(--t2)">${_automEsc(seller)}</b> · ${_automEsc(s.phone||'')} · ${hora}</div>
+            ${raw}
+          </div>
+          <button class="btn btn-gh btn-sm" style="color:var(--rd);border-color:var(--rd);flex-shrink:0" onclick="_removerPedidoConf(${s.id},'${_automEsc(String(s.name||'').replace(/'/g,''))}')">${ico('trash',{size:13})} Remover</button>
+        </div>
+      </div>`;
+    }).join('');
+    list.innerHTML=html;
+  }).catch(()=>{ const list=$('pcf-list'); if(list) list.innerHTML='<div class="muted" style="padding:24px;text-align:center;color:var(--rd)">Erro ao carregar. Tenta de novo.</div>'; });
+}
+function _removerPedidoConf(id, name){
+  if(!id){ toast('Pedido sem id (antigo). Não dá pra remover por aqui.','err'); return; }
+  if(!confirm('Remover o pedido de '+(name||'esse cliente')+'?\n\nEle sai da contagem de vendas da dash. (O evento que já foi pro pixel do TikTok não dá pra desfazer, mas a dash para de contar.)')) return;
+  api.waSaleDelete(id).then(()=>{ toast('Pedido removido','ok'); _loadPedidosConf(_pcfDay||_pcfYmd(new Date())); }).catch(()=>toast('Não consegui remover (só diretor pode)','err'));
+}
 // ═══════════════════════════════════════════════════════
 // NOVO PEDIDO — modal 2 etapas
 // ═══════════════════════════════════════════════════════
