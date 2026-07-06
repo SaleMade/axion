@@ -6786,19 +6786,25 @@ function _loadPedidosConf(day){
     const sales=r&&r.sales?r.sales:[];
     if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse dia.</div>'; return; }
     const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
-    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''}</div>`;
+    const _atr=s=>!!(s.pid && String(s.pid).trim()!=='');   // veio de pressel (tem código/rastreio)?
+    const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
+    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
+    ${nSem>0?`<div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">As "sem rastreio" são vendas reais, mas vieram de fora do anúncio (orgânico/indicação) ou sem o código, então não entram na conta de Vendas das pressels (que o gestor otimiza).</div>`:''}`;
     html+=sales.map(s=>{
       const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
       const seller=(getTeam(at)||{}).name||s.instance||'—';
       const t=new Date((Number(s.ts)||0)*1000);
       const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
+      const tag=_atr(s)
+        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">da pressel</span>`
+        : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
       const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
       return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
         <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:0">
             <div style="font-size:14.5px;font-weight:700;color:var(--tx)">${_automEsc(s.name||'Cliente')}${val>0?` · <span style="color:var(--gr)">R$ ${val}</span>`:''}</div>
-            <div style="font-size:12px;color:var(--t3);margin-top:3px">Vendedor: <b style="color:var(--t2)">${_automEsc(seller)}</b> · ${_automEsc(s.phone||'')} · ${hora}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Vendedor: <b style="color:var(--t2)">${_automEsc(seller)}</b> · ${_automEsc(s.phone||'')} · ${hora}</span>${tag}</div>
             ${raw}
           </div>
           <button class="btn btn-gh btn-sm" style="color:var(--rd);border-color:var(--rd);flex-shrink:0" onclick="_removerPedidoConf(${s.id},'${_automEsc(String(s.name||'').replace(/'/g,''))}')">${ico('trash',{size:13})} Remover</button>
