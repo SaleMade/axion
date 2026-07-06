@@ -2207,7 +2207,7 @@ async function handlePresselStats(req, env){
 // NÃO pelo vendedor (que é compartilhado entre pressels — senão o mesmo contato conta em todas).
 async function _presselDayMetrics(env, day){
   const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
-  const m = { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{} };
+  const m = { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   try{
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     const pr = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
@@ -2226,6 +2226,10 @@ async function _presselDayMetrics(env, day){
   try{  // vendas do dia, atribuídas pela pressel de origem do lead
     const s = await env.DB.prepare("SELECT l.pid pid, s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND l.pid IS NOT NULL AND l.pid<>'' GROUP BY l.pid, s.instance").bind(start,end).all();
     (s.results||[]).forEach(r=>{ const pid=String(r.pid); m.vendas[pid]=(m.vendas[pid]||0)+(Number(r.v)||0); m.valor[pid]=(m.valor[pid]||0)+(Number(r.val)||0); (m.vendasVI[pid]=m.vendasVI[pid]||{})[r.inst||'']=Number(r.v)||0; });
+  }catch(_){}
+  try{  // TODAS as vendas por vendedor (com OU sem código): toda venda fechada conta na métrica do vendedor
+    const sa = await env.DB.prepare("SELECT s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s WHERE s.ts>=? AND s.ts<? GROUP BY s.instance").bind(start,end).all();
+    (sa.results||[]).forEach(r=>{ m.vendasInst[String(r.inst||'')]={ v:Number(r.v)||0, val:Number(r.val)||0 }; });
   }catch(_){}
   return m;
 }
@@ -2286,6 +2290,7 @@ async function handlePresselsTotalPage(req, env){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
   const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa escolher o futuro)
   const isToday=(day===today);
+  const view=(new URL(req.url).searchParams.get('view')||'')==='vendas'?'vendas':'metricas';   // alterna Métricas <-> Pedidos
   const M=await _presselDayMetrics(env, day);
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
@@ -2300,6 +2305,7 @@ async function handlePresselsTotalPage(req, env){
     return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
   });
   const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
+  tot.vendas=Object.values(M.vendasInst||{}).reduce((a,x)=>a+(Number(x.v)||0),0);   // TOTAL conta TODAS as vendas fechadas (com ou sem código)
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:130px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="font-size:11px;color:#8b9bb4">${lbl}</div><div style="font-size:26px;font-weight:800;color:${color};margin-top:3px">${val}</div></div>`;
   const cardsHtml=(m)=>`<div style="display:flex;gap:10px;flex-wrap:wrap">${card('Chegaram na pressel',m.views,'#7aa2ff')}${card('Foram pro WhatsApp',m.clicks,'#34d399')}${card('Iniciaram contato',m.contatos,'#34d399')}${card('Vendas',m.vendas,'#34d399')}</div>`;
@@ -2311,11 +2317,37 @@ async function handlePresselsTotalPage(req, env){
   const _vt={};
   pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>{ const at=String(v.at); if(!_vt[at]){ const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; _vt[at]={name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; } }));
   Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // backup (_b) soma no vendedor
-  Object.keys(M.vendasVI||{}).forEach(pid=>Object.keys(M.vendasVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].vendas+=Number(M.vendasVI[pid][inst])||0; }));
+  Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });   // TODAS as vendas do vendedor (com ou sem código)
   const totVend=Object.values(_vt);
   const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}${vendTable(totVend)}</div>`;
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':'<a href="?" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>'}</div>${totalSec}${presselSecs}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.</p></div></body></html>`);
+  const dayQ=isToday?'':('day='+day);
+  const btnStyle="margin-left:auto;background:#1a2942;border:1px solid #2b6cb0;color:#7aa2ff;border-radius:9px;padding:7px 14px;font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap";
+  const toggleBtn=view==='vendas'?`<a href="?${dayQ}" style="${btnStyle}">← Ver métricas</a>`:`<a href="?view=vendas${dayQ?('&'+dayQ):''}" style="${btnStyle}">Ver pedidos →</a>`;
+  let ordersHtml='';
+  if(view==='vendas'){
+    let orders=[];
+    try{
+      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
+      const r=await env.DB.prepare("SELECT s.name, s.instance, s.value, s.ts, l.pid pid FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
+      orders=r.results||[];
+    }catch(_){}
+    const pad=n=>String(n).padStart(2,'0');
+    const totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
+    const nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length, nS=orders.length-nP;
+    const oCards=orders.length?orders.map(o=>{
+      const at=String(o.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
+      const seller=nameMap[at]||o.instance||'—';
+      const bt=new Date((Number(o.ts||0)-10800)*1000);
+      const hora=isNaN(bt)?'':`${pad(bt.getUTCDate())}/${pad(bt.getUTCMonth()+1)} ${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
+      const attr=!!(o.pid&&String(o.pid).trim()!=='');
+      const tag=attr?`<span style="font-size:10px;font-weight:700;color:#34d399;background:rgba(52,211,153,.14);padding:2px 8px;border-radius:20px">da pressel</span>`:`<span style="font-size:10px;font-weight:700;color:#8b9bb4;background:#1a2436;padding:2px 8px;border-radius:20px">sem rastreio</span>`;
+      const val=Number(o.value)||0;
+      return `<div style="border:1px solid #233047;border-radius:14px;background:#141c2b;padding:14px 16px;margin-bottom:9px"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><div style="font-size:14.5px;font-weight:700">${_escHtml(o.name||'Cliente')}${val>0?` · <span style="color:#34d399">R$ ${val}</span>`:''}</div><div style="font-size:12px;color:#8b9bb4;margin-top:3px">Vendedor: ${_escHtml(seller)} · ${hora}</div></div>${tag}</div></div>`;
+    }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum pedido confirmado nesse dia.</div>`;
+    ordersHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${orders.length}</b> pedido(s)${totV>0?` · total <b style="color:#34d399">R$ ${totV}</b>`:''}${nS>0?` · <b style="color:#34d399">${nP}</b> das pressels · <b style="color:#e6edf6">${nS}</b> sem rastreio`:''}</div>${oCards}`;
+  }
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view==='vendas'?'&view=vendas':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${view==='vendas'?'view=vendas':''}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(totalSec+presselSecs)}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. "da pressel" = veio do anúncio rastreado · "sem rastreio" = orgânico/direto ou sem o código.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
