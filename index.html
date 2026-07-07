@@ -8901,11 +8901,15 @@ function _renderPresselMetrics(){
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
-var _waConnMap={}, _waConnLoaded=false;
+var _waConnMap={}, _waConnNum={}, _waConnLoaded=false;
+// número conectado bate com o chip selecionado? (últimos 8 dígitos, ignora DDI/9º dígito/formatação)
+function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
+// CONECTADO de verdade = instância 'open' E o número conectado é o número selecionado (fail-open se número desconhecido)
+function _waConnOk(inst, chipNum){ if(_waConnMap[inst]!=='open') return false; const cn=_waConnNum[inst]; if(!cn) return true; return _numMatchWa(cn, chipNum); }
 function _loadWaConn(){
   api.waConn().then(r=>{
-    const m={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state;});
-    _waConnMap=m; _waConnLoaded=true;
+    const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
+    _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
     // AUTO: número que CAIU (desconectado) sai da roleta sozinho — o interruptor desliga
     let changed=false;
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
@@ -8992,7 +8996,7 @@ function _presselVendReserva(pid, at, v, roles){
       : `<span style="font-size:11.5px;color:var(--t3)">Cadastre um 2º número pra ${_automEsc(at.name)} na Contingência pra usar como reserva.</span>`;
     return `<div style="border-top:1px dashed var(--b1);background:var(--s1);padding:10px 12px;display:flex;flex-direction:column;gap:10px">${capField}<div style="display:flex;align-items:center;gap:8px">${picker}</div></div>`;
   }
-  const bconn=_waConnMap[rInst]==='open';
+  const bconn=_waConnOk(rInst, rchip&&rchip.num);   // open E número conectado bate com a reserva
   const rdot=_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)';   // cor = conexão (independe de ligada/desligada)
   const badge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`;
   const link=(bconn&&_waConnLoaded)
@@ -9039,7 +9043,7 @@ function renderPresselVendList(pid){
     const pChip=roles?roles.principal.chip:chip;
     const pInst=roles?roles.principal.inst:('ax_'+at.id);
     const pSlot=roles?roles.principal.slot:'';
-    const connected=_waConnMap[pInst]==='open';
+    const connected=_waConnOk(pInst, pChip&&pChip.num);   // open E número conectado bate com o chip
     const dot=(onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)');
     const numTxt=!pChip?'sem número em uso':pChip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!pChip?'var(--t4)':ok?'var(--tx)':'var(--rd)';

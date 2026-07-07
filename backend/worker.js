@@ -866,6 +866,28 @@ async function handlePaytWebhook(req, env, urlToken) {
   }
   state.leads = state.leads || [];
   state.wh_log_server = state.wh_log_server || [];
+
+  // ─── DEBUG TEMPORÁRIO: captura o payload cru pra mapear o formato real da Payt ───
+  // Guarda os últimos 20 payloads completos em state.payt_debug. Não altera leads/vendas.
+  state.payt_debug = state.payt_debug || [];
+  state.payt_debug.unshift({
+    ts: Math.floor(Date.now() / 1000),
+    event: data.event, event_raw: data.event_raw, status: data.status,
+    test: !!(body && body.test), order_id: data.order_id || '',
+    body,
+  });
+  state.payt_debug = state.payt_debug.slice(0, 20);
+  // Payload de teste (botão "Testar URL" da Payt): só captura, não cria lead/venda.
+  if (body && body.test === true) {
+    const tVer = curVer + 1, tNow = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
+         updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+    ).bind(JSON.stringify(state), tVer, tNow, 'payt-webhook-test').run();
+    return json({ ok: true, test: true, captured: true, event_mapped: data.event });
+  }
+
   const mapping = (state.payt_mapping || {})[data.event];
 
   // Encontra lead existente
@@ -1472,6 +1494,7 @@ const WA_WEBHOOK_TOKEN_DEFAULT = 'evo_hook_8f3c1a9d27b64e05';
 async function _waEnsureTables(env) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
+    try{ await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); }catch(_){}   // número REALMENTE conectado (ownerJid da Evolution)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_replied (phone TEXT PRIMARY KEY, updated_at INTEGER)').run();
     // Conversas (inbox/CRM): cada mensagem in/out + resumo por contato pro inbox
@@ -1746,11 +1769,41 @@ async function handleEvolutionWebhook(req, env, token) {
   return json({ ok: true });
 }
 // GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
+// Lista as instâncias direto da Evolution: estado REAL + número conectado (ownerJid).
+// Não confia só no webhook (que pode ficar defasado e mostrar "conectado" falso).
+async function _evoInstances(env) {
+  const res = await evoFetch(env, '/instance/fetchInstances');
+  if (res._noconfig || !res.ok) return null;
+  const arr = Array.isArray(res.data) ? res.data : (res.data?.instances || []);
+  return arr.map(x => {
+    const i = x.instance || x;
+    const name = i.instanceName || i.name;
+    const state = i.connectionStatus || i.state || i.status || 'unknown';
+    const number = String(i.ownerJid || i.owner || i.number || '').replace(/@.*/, '').replace(/\D/g, '');
+    return { name, state, number };
+  }).filter(x => x.name);
+}
 async function handleWAConn(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   await _waEnsureTables(env);
-  const rows = await env.DB.prepare('SELECT instance, state, updated_at FROM wa_conn').all();
+  // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também)
+  try {
+    const live = await _evoInstances(env);
+    if (live && live.length) {
+      for (const it of live) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
+             ON CONFLICT(instance) DO UPDATE SET state=excluded.state, number=excluded.number, updated_at=excluded.updated_at`
+          ).bind(it.name, String(it.state), it.number || '').run();
+        } catch (_) {}
+      }
+      return json({ ok: true, conn: live.map(it => ({ instance: it.name, state: it.state, number: it.number })) });
+    }
+  } catch (_) {}
+  // fallback: Evolution não respondeu → usa o DB
+  const rows = await env.DB.prepare('SELECT instance, state, number FROM wa_conn').all();
   return json({ ok: true, conn: rows.results || [] });
 }
 
@@ -2086,8 +2139,19 @@ function _resolvePresselNumbers(p, chips, liveSet){
 // Igual ao _resolvePresselNumbers mas devolve o vendedor completo {num, at, inst} pra balancear.
 // instância base do vendedor (tira o sufixo _b do número backup) — pra métrica/pixel somarem no mesmo vendedor
 function _instBase(inst){ return String(inst||'').replace(/_b$/,''); }
+// Compara dois números por os últimos 8 dígitos (ignora DDI 55, 9º dígito, formatação)
+function _lastDigitsEq(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
+// Instância OK pra rotear lead? Aberta E (número conectado desconhecido OU bate com o chip selecionado). FAIL-OPEN:
+// se não sabe o número conectado, NÃO bloqueia (nunca deixa a pressel offline por falta de info).
+function _servConnOk(liveSet, inst, chipNum){
+  if(!liveSet) return true;
+  if(!liveSet.has(inst)) return false;                 // instância não está 'open'
+  const cn = liveSet.get ? liveSet.get(inst) : '';     // número conectado (liveSet é Map)
+  if(!cn) return true;                                  // número conectado desconhecido → fail-open
+  return _lastDigitsEq(cn, chipNum);                    // aberta E número conectado bate com o chip
+}
 // Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
-// Os dois entram só se estiverem conectados AGORA (liveSet) e não banidos/restritos. cap = cota do dia no principal.
+// Os dois entram só se estiverem conectados AGORA (liveSet) COM O NÚMERO CERTO e não banidos/restritos.
 function _resolvePresselSellers(p, chips, liveSet){
   const out=[];
   const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
@@ -2101,8 +2165,8 @@ function _resolvePresselSellers(p, chips, liveSet){
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
     const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
     const rChip=swap?emChip:bkChip, rInst=swap?instP:instB;                         // reserva = overflow
-    const primary=(pChip && okWa(pChip) && pChip.num && (!liveSet||liveSet.has(pInst))) ? {num:pChip.num, inst:pInst} : null;
-    const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && (!liveSet||liveSet.has(rInst))) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
+    const primary=(pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;
+    const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;
     out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), primary, backup});
   }
@@ -2358,7 +2422,7 @@ async function handlePresselPublic(req, env, id){
   if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
   // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
   let liveSet=null;
-  try{ const cs=await env.DB.prepare("SELECT instance FROM wa_conn WHERE state='open'").all(); liveSet=new Set((cs.results||[]).map(r=>r.instance)); }catch(_){}
+  try{ const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE state='open'").all(); liveSet=new Map((cs.results||[]).map(r=>[r.instance, r.number||''])); }catch(_){}   // Map: instância → número conectado (pra roteador conferir o número certo)
   const sellers=_resolvePresselSellers(p, chips, liveSet);
   if(!sellers.length) return _presselOffline();
   const pick=await _presselBalancedPick(env, id, sellers);   // número efetivo (overflow por cota) do vendedor mais "atrás" hoje
