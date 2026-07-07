@@ -767,7 +767,11 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-card:hover{border-color:var(--b3);box-shadow:var(--sh1);background:var(--s3)}
 .kb-card.dragging{opacity:.5;cursor:grabbing}
 .kb-accent{display:none} /* removida — não tinge mais o topo do card */
-.kb-name{font-size:13.5px;font-weight:500;color:var(--tx);padding-right:24px;line-height:1.3}
+/* Topo do card: handle de arraste + nome */
+.kb-head{display:flex;align-items:flex-start;gap:6px;padding-right:22px}
+.kb-grip{color:var(--t4);cursor:grab;flex:none;margin-top:1px;line-height:0;opacity:.55;transition:opacity .15s}
+.kb-card:hover .kb-grip{opacity:1;color:var(--t3)}
+.kb-name{font-size:13.5px;font-weight:500;color:var(--tx);line-height:1.3;flex:1;min-width:0}
 .kb-meta{font-size:11.5px;color:var(--t3);display:flex;flex-wrap:wrap;gap:9px}
 .kb-meta span{display:inline-flex;align-items:center;gap:4px}
 .kb-foot{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
@@ -782,7 +786,18 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .kb-vendor{font-size:11px;font-weight:500;color:var(--t2);display:inline-flex;align-items:center;gap:5px;
   background:transparent;padding:0;border-radius:0;border:none;
   max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-vendor::before{content:'👤';font-size:11px;opacity:.6;flex:none}
+.kb-vendor svg{opacity:.6;flex:none}
+/* Linha de status contextual do card (estilo referência) — cor da etapa ou alerta */
+.kb-status{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;
+  font-size:11px;font-weight:600;padding:5px 9px;border-radius:8px;line-height:1;letter-spacing:.01em}
+.kb-status svg{flex:none}
+/* Linha de badges: modalidade (PG ENTREGA/ANTEC) + pagamento + tags */
+.kb-badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.kb-pgmod{font-size:10px;font-weight:700;padding:4px 9px;border-radius:7px;
+  letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.kb-pay{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;
+  padding:4px 9px;border-radius:7px;letter-spacing:.02em;white-space:nowrap}
+.kb-pay .dot{width:6px;height:6px;border-radius:50%;flex:none}
 .kb-tag{font-size:10px;font-weight:600;padding:3px 7px;border-radius:7px}
 .kb-fu{position:absolute;top:8px;right:30px;font-size:12px;opacity:.7}
 .kb-dots{position:absolute;top:7px;right:7px;width:22px;height:22px;border-radius:7px;
@@ -3625,7 +3640,7 @@ function saveDateFilter(){
     localStorage.setItem('axion_date_filter',JSON.stringify(dateFilter));
   }catch(e){console.warn('[dateFilter] erro salvando:',e);}
 }
-let crmFilters={q:'',vendedor:'',status:'',mod:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
+let crmFilters={q:'',vendedor:'',status:'',mod:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
 let mapBuilt=false;
 // chartPeriod agora deriva do dateFilter global (unificação)
 function chartPeriodDays(){
@@ -3669,8 +3684,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.32.0';
-const APP_LAST_CHANGE = 'CRM Pipeline: colunas com fundo colorido forte (gradiente da cor da etapa) + barra de cor no topo, estilo referencia.';
+const APP_VERSION = '2.33.0';
+const APP_LAST_CHANGE = 'CRM Pipeline estilo referencia: regua de KPIs no topo (recebimento/pedidos/atrasados/pago hoje/ticket), cards mais completos (status contextual, PG ENTREGA/ANTEC, pagamento, vendedor, handle) e filtros de Recebimento + Agendamentos.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3750,6 +3765,8 @@ const ICONS = {
   'tool':           '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   'filter':         '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
   'repeat':         '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  'grip-vertical':  '<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>',
+  'truck':          '<path d="M5 18H3c-.6 0-1-.4-1-1V7c0-.6.4-1 1-1h10c.6 0 1 .4 1 1v11"/><path d="M14 9h4l4 4v4c0 .6-.4 1-1 1h-2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
 };
 
 function ico(name, opts={}){
@@ -5702,8 +5719,9 @@ function renderEvolucao(){
 function pageCRM(){
   return `<div class="page" id="crm-pg">
     <div class="ph">
-      <div><h1>CRM / <em>Pipeline</em></h1></div>
+      <div><h1>CRM / <em>Pipeline</em></h1><p>Acompanhe o status dos pedidos em tempo real</p></div>
     </div>
+    <div class="mg" id="crm-kpis"></div>
     <div class="kb-bar">
       <input class="kb-search" id="kb-q" placeholder="Buscar por nome ou WhatsApp..." oninput="updateCrmFilters()">
       <select class="kb-sel" id="kb-vend" onchange="updateCrmFilters()">
@@ -5719,8 +5737,18 @@ function pageCRM(){
         <option value="antecipado">Antecipado</option>
         <option value="entrega">Na entrega</option>
       </select>
+      <select class="kb-sel" id="kb-receb" onchange="updateCrmFilters()">
+        <option value="">Recebimento: Todos</option>
+        <option value="pago">Pagos</option>
+        <option value="pendente">Pendentes</option>
+        <option value="atrasado">Atrasados</option>
+      </select>
+      <select class="kb-sel" id="kb-agend" onchange="updateCrmFilters()">
+        <option value="">Agendamentos: Todos</option>
+        <option value="hoje">Hoje</option>
+        <option value="vencido">Vencidos</option>
+      </select>
       <input class="kb-search" id="kb-tags" placeholder="Tag (ex: vip)" style="max-width:140px;flex:initial" oninput="updateCrmFilters()">
-      <button class="kb-toggle" id="kb-hoje" onclick="toggleCrmFilter('agendHoje')" style="display:inline-flex;align-items:center;gap:6px">${ico('calendar',{size:13})} Hoje</button>
       <button class="kb-clear" onclick="clearCrmFilters()">× Limpar filtros</button>
     </div>
     <div class="kb-wrap"><div class="kb-board" id="kb-board"></div></div>
@@ -5732,6 +5760,8 @@ function updateCrmFilters(){
   crmFilters.vendedor=$('kb-vend').value;
   crmFilters.status=$('kb-st').value;
   crmFilters.mod=$('kb-mod').value;
+  crmFilters.recebimento=$('kb-receb')?$('kb-receb').value:'';
+  crmFilters.agendamento=$('kb-agend')?$('kb-agend').value:'';
   crmFilters.tags=$('kb-tags').value.toLowerCase();
   persistCrmFilters();renderKanban();
 }
@@ -5742,9 +5772,9 @@ function toggleCrmFilter(k){
   persistCrmFilters();renderKanban();
 }
 function clearCrmFilters(){
-  crmFilters={q:'',vendedor:'',status:'',mod:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
+  crmFilters={q:'',vendedor:'',status:'',mod:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
   $('kb-q').value='';$('kb-vend').value='';$('kb-st').value='';$('kb-mod').value='';$('kb-tags').value='';
-  ['kb-hoje'].forEach(id=>{const el=$(id);if(el)el.classList.remove('on')});
+  if($('kb-receb'))$('kb-receb').value='';if($('kb-agend'))$('kb-agend').value='';
   persistCrmFilters();renderKanban();
 }
 // Aplica filtros persistidos aos elementos do DOM (chamar após render do CRM)
@@ -5753,6 +5783,8 @@ function applyPersistedFilters(){
   if($('kb-vend'))$('kb-vend').value=crmFilters.vendedor||'';
   if($('kb-st'))$('kb-st').value=crmFilters.status||'';
   if($('kb-mod'))$('kb-mod').value=crmFilters.mod||'';
+  if($('kb-receb'))$('kb-receb').value=crmFilters.recebimento||'';
+  if($('kb-agend'))$('kb-agend').value=crmFilters.agendamento||'';
   if($('kb-tags'))$('kb-tags').value=crmFilters.tags||'';
   if($('kb-hoje'))$('kb-hoje').classList.toggle('on',crmFilters.agendHoje);
 }
@@ -6035,6 +6067,59 @@ function colCanMove(col){
   return (col.mover||['*']).includes('*')||(col.mover||[]).includes(CUR.role);
 }
 
+// ─── Helpers do card rico do CRM (estilo referência) ───────
+// Dias desde "DD/MM" ou "DD/MM HH:MM" (assume ano atual; trata virada de ano).
+function crmDaysAgo(str){
+  if(!str)return null;
+  const m=String(str).match(/(\d{1,2})\/(\d{1,2})/);
+  if(!m)return null;
+  const now=new Date();
+  let d=new Date(now.getFullYear(),+m[2]-1,+m[1]);
+  if(d>now)d=new Date(now.getFullYear()-1,+m[2]-1,+m[1]);
+  const diff=Math.floor((now-d)/86400000);
+  return (diff>=0&&diff<=365)?diff:null;
+}
+// Status contextual do card: prioriza alerta de follow-up, senão a etapa do funil.
+function crmCardStatus(lead,col){
+  const days=crmDaysAgo((lead.hist&&lead.hist.length?lead.hist[lead.hist.length-1].time:null)||lead.data);
+  const d=days!=null?` · ${days}d`:'';
+  if(lead.fu==='sem_atualizacao_72h')return{ic:'alert-triangle',t:'Sem update Correios 72h',c:'#ef4444'};
+  if(lead.fu==='agendamento_vencido')return{ic:'alert-triangle',t:'Agendamento vencido',c:'#f59e0b'};
+  if(lead.fu==='cidade_destino')return{ic:'map-pin',t:'Chegou na cidade destino',c:'#10b981'};
+  const map={
+    'A Enviar':{ic:'package',t:'Aguardando envio'+d},
+    'Enviado':{ic:'truck',t:'Em transporte'+d},
+    'Cobrança':{ic:'alert-triangle',t:'Em cobrança'+d},
+    'Retirada':{ic:'package',t:'Aguardando retirada'+d},
+    'Pago':{ic:'check-circle',t:'Pago'+d},
+    'Frustrado':{ic:'x',t:'Frustrado'+d},
+    'Devolvido':{ic:'repeat',t:'Devolvido'+d},
+    'Cancelado':{ic:'x',t:'Cancelado'+d},
+    'Atenção':{ic:'alert-triangle',t:'Atenção'+d},
+  };
+  const s=map[col.id]||{ic:'circle-dot',t:col.id+d};
+  return{ic:s.ic,t:s.t,c:col.c};
+}
+// Régua de KPIs do topo do CRM — recebimento, pedidos, atrasados, pago hoje, ticket.
+function renderCrmKPIs(baseLeads){
+  const el=$('crm-kpis');if(!el)return;
+  const total=baseLeads.length;
+  const pagos=baseLeads.filter(l=>l.col==='Pago');
+  const receb=pagos.reduce((s,l)=>s+(+l.vl||0),0);
+  const taxa=total?Math.round(pagos.length/total*100):0;
+  const atrasados=baseLeads.filter(l=>l.fu==='sem_atualizacao_72h'||l.fu==='agendamento_vencido').length;
+  const t=today();
+  const pagoHojeL=pagos.filter(l=>{const h=l.hist&&l.hist.length?l.hist[l.hist.length-1]:null;return h&&h.to==='Pago'&&String(h.time||'').startsWith(t)});
+  const pagoHoje=pagoHojeL.reduce((s,l)=>s+(+l.vl||0),0);
+  const ticket=pagos.length?receb/pagos.length:0;
+  el.innerHTML=`
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div><div class="mc-lbl">Recebimento</div><div class="mc-val">${fmt(receb)}</div><div class="mc-sub">${taxa}% dos pedidos pagos</div></div>
+    <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('clipboard-list',{size:14})}</div><div class="mc-lbl">Pedidos</div><div class="mc-val">${total}</div><div class="mc-sub">total no funil</div></div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('alert-triangle',{size:14})}</div><div class="mc-lbl">Atrasados</div><div class="mc-val">${atrasados}</div><div class="mc-sub">pedidos em atraso</div></div>
+    <div class="mc mc-go"><div class="mc-gl"></div><div class="mc-ic">${ico('check-circle',{size:14})}</div><div class="mc-lbl">Pago hoje</div><div class="mc-val">${fmt(pagoHoje)}</div><div class="mc-sub">${pagoHojeL.length} pedido${pagoHojeL.length!==1?'s':''}</div></div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div><div class="mc-lbl">Ticket médio</div><div class="mc-val">${ticket?fmt(ticket):'—'}</div><div class="mc-sub">por pedido pago</div></div>`;
+}
+
 function renderKanban(){
   const board=$('kb-board');if(!board)return;
   board.innerHTML='';
@@ -6044,11 +6129,22 @@ function renderKanban(){
   const baseLeads=(isDir()||isRec())?DB.leads
     :DB.leads.filter(l=>l.at===CUR.id);
 
+  renderCrmKPIs(baseLeads);
+
   const filt=baseLeads.filter(l=>{
     if(crmFilters.q && !l.nome.toLowerCase().includes(crmFilters.q) && !l.wa.includes(crmFilters.q))return false;
     if(crmFilters.vendedor && l.at!==crmFilters.vendedor)return false;
     if(crmFilters.status && l.col!==crmFilters.status)return false;
     if(crmFilters.mod && l.mod!==crmFilters.mod)return false;
+    if(crmFilters.recebimento==='pago' && l.spg!=='Pago')return false;
+    if(crmFilters.recebimento==='pendente' && l.spg==='Pago')return false;
+    if(crmFilters.recebimento==='atrasado' && !(l.fu==='sem_atualizacao_72h'||l.fu==='agendamento_vencido'))return false;
+    if(crmFilters.agendamento==='hoje'){
+      if(!l.agend)return false;
+      const td=new Date().toISOString().split('T')[0];
+      if(!String(l.agend).startsWith(td))return false;
+    }
+    if(crmFilters.agendamento==='vencido' && l.fu!=='agendamento_vencido')return false;
     if(crmFilters.tags && !(l.tags||[]).some(t=>{
       const nm=tagName(t).toLowerCase();
       return t.toLowerCase().includes(crmFilters.tags)||nm.includes(crmFilters.tags);
@@ -6087,27 +6183,39 @@ function renderKanban(){
       card.className='kb-card';
       card.draggable=canMove;
       card.dataset.lid=lead.id;
-      const tagsHTML=(lead.tags||[]).map(t=>{
+      const tagsHTML=(lead.tags||[]).filter(t=>!String(t).startsWith('sys-')).map(t=>{
         const c=tagColor(t);
         return `<span class="kb-tag" style="background:${c}22;color:${c}">${tagName(t)}</span>`;
       }).join('');
-      // (badge de comprovante removido — obrigação só existe na criação do pedido)
+
+      const st=crmCardStatus(lead,col);
+      const paid=lead.spg==='Pago';
+      const payC=paid?'#10b981':'#f59e0b';
+      const payBg=paid?'rgba(16,185,129,.14)':'rgba(245,158,11,.14)';
+      const payTxt=lead.pgto?`${lead.pgto}${lead.spg?' · '+lead.spg:''}`:(lead.spg||'A definir');
+      const modEntrega=lead.mod==='entrega';
+      const modC=modEntrega?'#fbbf24':'#10b981';
+      const modLbl=modEntrega?'PG ENTREGA':'PG ANTEC.';
 
       card.innerHTML=`
         <div class="kb-dots" onclick="event.stopPropagation();openLeadMenu(event,${lead.id})">⋮</div>
-        <div class="kb-name">${lead.nome}</div>
+        <div class="kb-head">
+          <span class="kb-grip">${ico('grip-vertical',{size:13})}</span>
+          <span class="kb-name">${lead.nome}</span>
+        </div>
         <div class="kb-meta">
           <span>${ico('phone',{size:11})} ${lead.wa}</span>
           <span>${ico('calendar',{size:11})} ${lead.data}</span>
           ${lead.cidade?`<span>${ico('map-pin',{size:11})} ${lead.cidade}/${lead.uf||''}</span>`:''}
         </div>
         ${lead.track?`<div class="kb-meta"><span>${ico('package',{size:11})} ${lead.track}</span></div>`:''}
-        <div class="kb-foot">
-          <span class="kb-pgto">${lead.pgto||lead.spg||'—'}</span>
-          <span class="kb-mod">${lead.mod==='entrega'?'Entrega':'Antec.'}</span>
+        <div class="kb-status" style="background:${st.c}1f;color:${st.c}">${ico(st.ic,{size:12})} ${st.t}</div>
+        <div class="kb-badges">
+          <span class="kb-pgmod" style="background:${modC}24;color:${modC}">${modLbl}</span>
+          <span class="kb-pay" style="background:${payBg};color:${payC}"><span class="dot" style="background:${payC}"></span>${payTxt}</span>
           ${tagsHTML}
         </div>
-        ${at&&at.id!==CUR?.id?`<div class="kb-vendor-row"><span class="kb-vendor" title="${at.role}">${at.name}</span></div>`:''}`;
+        ${at?`<div class="kb-vendor-row"><span class="kb-vendor" title="${at.role}">${ico('user',{size:11})} Vendedor: ${at.name}</span></div>`:''}`;
 
       // Click direto no card abre detalhes
       card.addEventListener('click',e=>{
