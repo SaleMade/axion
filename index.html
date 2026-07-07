@@ -665,6 +665,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 /* destaque "afiliado" */
 /* mc-feat: card de destaque — sutil, sem contorno azul brilhante */
 .mc-feat .mc-val{font-size:28px}
+/* KPI com donut (Recebimento) — anel da taxa à esquerda, texto à direita */
+.mc-donut{display:flex;align-items:center;gap:15px}
+.mc-ring{flex:none;position:relative;width:54px;height:54px}
+.mc-ring svg{display:block;width:54px;height:54px}
+.mc-ring-pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:12.5px;font-weight:800;color:var(--tx)}
+.mc-donut-body{min-width:0}
 
 /* ─── TWO-COLUMN GRID (Atividade × Vendas) ───────────── */
 .grid-2{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:8px}
@@ -713,8 +720,15 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .fv-pct b{color:var(--tx);font-size:14px;font-weight:700}
 
 /* ─── KANBAN ──────────────────────────────────────────── */
-.kb-bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;
-  background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:12px 14px}
+.kb-bar{display:flex;align-items:flex-end;gap:10px;margin-bottom:18px;flex-wrap:wrap;
+  background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px}
+/* Campo de filtro com rótulo em cima (estilo referência) */
+.kb-field{display:flex;flex-direction:column;gap:5px}
+.kb-field-grow{flex:1;min-width:170px}
+.kb-flabel{font-size:10px;font-weight:700;color:var(--t4);text-transform:uppercase;
+  letter-spacing:.07em;padding-left:2px}
+.kb-field .kb-search{flex:initial;min-width:0;width:100%}
+.kb-clear{padding-bottom:9px}
 .kb-search{flex:1;min-width:200px;background:var(--s3);border:1px solid var(--b2);
   color:var(--tx);font-size:13px;padding:9px 12px 9px 34px;border-radius:var(--r);outline:none;font-family:inherit;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237f8a9c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
@@ -3640,7 +3654,7 @@ function saveDateFilter(){
     localStorage.setItem('axion_date_filter',JSON.stringify(dateFilter));
   }catch(e){console.warn('[dateFilter] erro salvando:',e);}
 }
-let crmFilters={q:'',vendedor:'',status:'',mod:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
+let crmFilters={q:'',vendedor:'',status:'',mod:'',periodo:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
 let mapBuilt=false;
 // chartPeriod agora deriva do dateFilter global (unificação)
 function chartPeriodDays(){
@@ -3684,8 +3698,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.33.0';
-const APP_LAST_CHANGE = 'CRM Pipeline estilo referencia: regua de KPIs no topo (recebimento/pedidos/atrasados/pago hoje/ticket), cards mais completos (status contextual, PG ENTREGA/ANTEC, pagamento, vendedor, handle) e filtros de Recebimento + Agendamentos.';
+const APP_VERSION = '2.34.0';
+const APP_LAST_CHANGE = 'CRM: barra de filtros com rotulos + campo Periodo (KPIs respeitam o periodo), KPIs abaixo dos filtros e donut da taxa no card de Recebimento - alinhando com a referencia.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5721,36 +5735,67 @@ function pageCRM(){
     <div class="ph">
       <div><h1>CRM / <em>Pipeline</em></h1><p>Acompanhe o status dos pedidos em tempo real</p></div>
     </div>
-    <div class="mg" id="crm-kpis"></div>
     <div class="kb-bar">
-      <input class="kb-search" id="kb-q" placeholder="Buscar por nome ou WhatsApp..." oninput="updateCrmFilters()">
-      <select class="kb-sel" id="kb-vend" onchange="updateCrmFilters()">
-        <option value="">Vendedor: Todos</option>
-        ${TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor').map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
-      </select>
-      <select class="kb-sel" id="kb-st" onchange="updateCrmFilters()">
-        <option value="">Status: Todos</option>
-        ${KB_COLS.map(c=>`<option value="${c.id}">${c.id}</option>`).join('')}
-      </select>
-      <select class="kb-sel" id="kb-mod" onchange="updateCrmFilters()">
-        <option value="">Modalidade: Todas</option>
-        <option value="antecipado">Antecipado</option>
-        <option value="entrega">Na entrega</option>
-      </select>
-      <select class="kb-sel" id="kb-receb" onchange="updateCrmFilters()">
-        <option value="">Recebimento: Todos</option>
-        <option value="pago">Pagos</option>
-        <option value="pendente">Pendentes</option>
-        <option value="atrasado">Atrasados</option>
-      </select>
-      <select class="kb-sel" id="kb-agend" onchange="updateCrmFilters()">
-        <option value="">Agendamentos: Todos</option>
-        <option value="hoje">Hoje</option>
-        <option value="vencido">Vencidos</option>
-      </select>
-      <input class="kb-search" id="kb-tags" placeholder="Tag (ex: vip)" style="max-width:140px;flex:initial" oninput="updateCrmFilters()">
+      <div class="kb-field">
+        <label class="kb-flabel">Período</label>
+        <select class="kb-sel" id="kb-per" onchange="updateCrmFilters()">
+          <option value="">Todo período</option>
+          <option value="hoje">Hoje</option>
+          <option value="7">Últimos 7 dias</option>
+          <option value="30">Últimos 30 dias</option>
+          <option value="90">Últimos 90 dias</option>
+        </select>
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Vendedor</label>
+        <select class="kb-sel" id="kb-vend" onchange="updateCrmFilters()">
+          <option value="">Todos</option>
+          ${TEAM.filter(t=>t.role!=='diretor'&&t.role!=='gestor').map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Status</label>
+        <select class="kb-sel" id="kb-st" onchange="updateCrmFilters()">
+          <option value="">Todos</option>
+          ${KB_COLS.map(c=>`<option value="${c.id}">${c.id}</option>`).join('')}
+        </select>
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Modalidade</label>
+        <select class="kb-sel" id="kb-mod" onchange="updateCrmFilters()">
+          <option value="">Todas</option>
+          <option value="antecipado">Antecipado</option>
+          <option value="entrega">Na entrega</option>
+        </select>
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Recebimento</label>
+        <select class="kb-sel" id="kb-receb" onchange="updateCrmFilters()">
+          <option value="">Todos</option>
+          <option value="pago">Pagos</option>
+          <option value="pendente">Pendentes</option>
+          <option value="atrasado">Atrasados</option>
+        </select>
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Agendamentos</label>
+        <select class="kb-sel" id="kb-agend" onchange="updateCrmFilters()">
+          <option value="">Todos</option>
+          <option value="hoje">Hoje</option>
+          <option value="vencido">Vencidos</option>
+        </select>
+      </div>
+      <div class="kb-field kb-field-grow">
+        <label class="kb-flabel">Buscar</label>
+        <input class="kb-search" id="kb-q" placeholder="Nome ou WhatsApp..." oninput="updateCrmFilters()">
+      </div>
+      <div class="kb-field">
+        <label class="kb-flabel">Tag</label>
+        <input class="kb-search" id="kb-tags" placeholder="ex: vip" style="max-width:130px" oninput="updateCrmFilters()">
+      </div>
       <button class="kb-clear" onclick="clearCrmFilters()">× Limpar filtros</button>
     </div>
+    <div class="mg" id="crm-kpis"></div>
     <div class="kb-wrap"><div class="kb-board" id="kb-board"></div></div>
   </div>`;
 }
@@ -5760,6 +5805,7 @@ function updateCrmFilters(){
   crmFilters.vendedor=$('kb-vend').value;
   crmFilters.status=$('kb-st').value;
   crmFilters.mod=$('kb-mod').value;
+  crmFilters.periodo=$('kb-per')?$('kb-per').value:'';
   crmFilters.recebimento=$('kb-receb')?$('kb-receb').value:'';
   crmFilters.agendamento=$('kb-agend')?$('kb-agend').value:'';
   crmFilters.tags=$('kb-tags').value.toLowerCase();
@@ -5772,9 +5818,9 @@ function toggleCrmFilter(k){
   persistCrmFilters();renderKanban();
 }
 function clearCrmFilters(){
-  crmFilters={q:'',vendedor:'',status:'',mod:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
+  crmFilters={q:'',vendedor:'',status:'',mod:'',periodo:'',recebimento:'',agendamento:'',atrasados:false,agendHoje:false,vencidos:false,tags:''};
   $('kb-q').value='';$('kb-vend').value='';$('kb-st').value='';$('kb-mod').value='';$('kb-tags').value='';
-  if($('kb-receb'))$('kb-receb').value='';if($('kb-agend'))$('kb-agend').value='';
+  if($('kb-per'))$('kb-per').value='';if($('kb-receb'))$('kb-receb').value='';if($('kb-agend'))$('kb-agend').value='';
   persistCrmFilters();renderKanban();
 }
 // Aplica filtros persistidos aos elementos do DOM (chamar após render do CRM)
@@ -5783,6 +5829,7 @@ function applyPersistedFilters(){
   if($('kb-vend'))$('kb-vend').value=crmFilters.vendedor||'';
   if($('kb-st'))$('kb-st').value=crmFilters.status||'';
   if($('kb-mod'))$('kb-mod').value=crmFilters.mod||'';
+  if($('kb-per'))$('kb-per').value=crmFilters.periodo||'';
   if($('kb-receb'))$('kb-receb').value=crmFilters.recebimento||'';
   if($('kb-agend'))$('kb-agend').value=crmFilters.agendamento||'';
   if($('kb-tags'))$('kb-tags').value=crmFilters.tags||'';
@@ -6113,7 +6160,10 @@ function renderCrmKPIs(baseLeads){
   const pagoHoje=pagoHojeL.reduce((s,l)=>s+(+l.vl||0),0);
   const ticket=pagos.length?receb/pagos.length:0;
   el.innerHTML=`
-    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div><div class="mc-lbl">Recebimento</div><div class="mc-val">${fmt(receb)}</div><div class="mc-sub">${taxa}% dos pedidos pagos</div></div>
+    <div class="mc mc-gr mc-donut"><div class="mc-gl"></div>
+      <div class="mc-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--s4)" stroke-width="3.4"/><circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--gr)" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="${taxa} ${100-taxa}" transform="rotate(-90 18 18)"/></svg><span class="mc-ring-pct">${taxa}%</span></div>
+      <div class="mc-donut-body"><div class="mc-lbl">Recebimento</div><div class="mc-val">${fmt(receb)}</div><div class="mc-sub">${taxa}% dos pedidos pagos</div></div>
+    </div>
     <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('clipboard-list',{size:14})}</div><div class="mc-lbl">Pedidos</div><div class="mc-val">${total}</div><div class="mc-sub">total no funil</div></div>
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('alert-triangle',{size:14})}</div><div class="mc-lbl">Atrasados</div><div class="mc-val">${atrasados}</div><div class="mc-sub">pedidos em atraso</div></div>
     <div class="mc mc-go"><div class="mc-gl"></div><div class="mc-ic">${ico('check-circle',{size:14})}</div><div class="mc-lbl">Pago hoje</div><div class="mc-val">${fmt(pagoHoje)}</div><div class="mc-sub">${pagoHojeL.length} pedido${pagoHojeL.length!==1?'s':''}</div></div>
@@ -6129,9 +6179,17 @@ function renderKanban(){
   const baseLeads=(isDir()||isRec())?DB.leads
     :DB.leads.filter(l=>l.at===CUR.id);
 
-  renderCrmKPIs(baseLeads);
+  const inPeriodo=l=>{
+    if(!crmFilters.periodo)return true;
+    const dgo=crmDaysAgo(l.data);
+    if(crmFilters.periodo==='hoje')return dgo===0;
+    const n=+crmFilters.periodo;
+    return dgo!=null&&dgo<=n;
+  };
+  renderCrmKPIs(baseLeads.filter(inPeriodo));
 
   const filt=baseLeads.filter(l=>{
+    if(!inPeriodo(l))return false;
     if(crmFilters.q && !l.nome.toLowerCase().includes(crmFilters.q) && !l.wa.includes(crmFilters.q))return false;
     if(crmFilters.vendedor && l.at!==crmFilters.vendedor)return false;
     if(crmFilters.status && l.col!==crmFilters.status)return false;
