@@ -746,13 +746,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   padding:0;min-width:266px;max-width:266px;display:flex;flex-direction:column;overflow:hidden;
   background:var(--s2)}
 .kb-top{display:none} /* removida — coluna inteira agora tem a cor */
+/* Barra de cor forte no topo da coluna (estilo referência) — acento da etapa.
+   Fica no topo com overflow:hidden do .kb-col clipando nos cantos arredondados. */
+.kb-topbar{height:4px;flex-shrink:0}
 .kb-ch{padding:13px 14px 11px;display:flex;align-items:center;justify-content:space-between;
   /* header herda cor mais opaca via inline style; fallback discreto aqui */
-  border-bottom:1px solid rgba(0,0,0,.15);
-  /* Cantos superiores arredondados pra acompanhar a curva do parent
-     (.kb-col). Sem isso, o background colorido do header visualmente
-     parecia reto em alguns browsers. */
-  border-radius:var(--rl) var(--rl) 0 0}
+  border-bottom:1px solid rgba(0,0,0,.15)}
 .kb-cn{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
 .kb-cc{font-size:11px;color:var(--t2);background:rgba(0,0,0,.25);padding:2px 9px;border-radius:9px;font-weight:600}
 .kb-ccards{padding:10px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;max-height:560px;
@@ -3670,8 +3669,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.31.0';
-const APP_LAST_CHANGE = 'Card Caixa da plataforma virou so leitura (removido o clique pra ajustar) - o valor e mantido nos syncs.';
+const APP_VERSION = '2.32.0';
+const APP_LAST_CHANGE = 'CRM Pipeline: colunas com fundo colorido forte (gradiente da cor da etapa) + barra de cor no topo, estilo referencia.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -6073,10 +6072,11 @@ function renderKanban(){
     const canMove=colCanMove(col);
     const dz=document.createElement('div');
     dz.className='kb-col'+(canMove?'':' no-move');
-    // Coluna inteira ganha cor da etapa em ~8% de opacidade; header em ~22%
-    dz.style.background=col.c+'0a'; // 4% — coluna mais sóbria
+    // Coluna tingida com a cor da etapa: gradiente ~15%→8% + barra de cor no topo + header ~17% (estilo referência)
+    dz.style.background=`linear-gradient(180deg, ${col.c}26 0%, ${col.c}14 100%)`;
     dz.innerHTML=`
-      <div class="kb-ch" style="background:${col.c}1f"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
+      <div class="kb-topbar" style="background:${col.c}"></div>
+      <div class="kb-ch" style="background:${col.c}2b"><span class="kb-cn" style="color:${col.c}" title="${canMove?'':'Você não pode mover leads desta etapa'}">${col.id}</span><span class="kb-cc">${leads.length}</span></div>
       <div class="kb-ccards"></div>
       ${leads.length===0?'<div class="kb-dz">'+(canMove?'Solte aqui':'Sem leads')+'</div>':''}`;
     const cards=dz.querySelector('.kb-ccards');
