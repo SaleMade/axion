@@ -1373,6 +1373,173 @@ async function evoFetch(env, path, opts = {}) {
   return { ok: r.ok, status: r.status, data };
 }
 
+// ─── VOZ + MÍDIA (o "ZapVoice" nosso, server-side e conectado à Dash) ──
+// Base64 helpers (Workers têm btoa/atob nativos)
+function _bytesToB64(bytes) {
+  let bin = ''; const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+function _b64ToBytes(b64) {
+  const bin = atob(b64); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+// Embrulha PCM 16-bit mono (do Gemini TTS) num container WAV → base64
+function _pcmB64ToWavB64(pcmB64, sampleRate) {
+  const pcm = _b64ToBytes(pcmB64);
+  const numCh = 1, bps = 16, byteRate = sampleRate * numCh * bps / 8, blockAlign = numCh * bps / 8;
+  const header = new Uint8Array(44), dv = new DataView(header.buffer);
+  const wr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  wr(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length, true); wr(8, 'WAVE');
+  wr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, numCh, true);
+  dv.setUint32(24, sampleRate, true); dv.setUint32(28, byteRate, true); dv.setUint16(32, blockAlign, true);
+  dv.setUint16(34, bps, true); wr(36, 'data'); dv.setUint32(40, pcm.length, true);
+  const out = new Uint8Array(44 + pcm.length); out.set(header, 0); out.set(pcm, 44);
+  return _bytesToB64(out);
+}
+// Gera áudio TTS a partir de texto. Providers: elevenlabs, openai, gemini (usa a chave que existir).
+// Retorna { b64, mime } (base64 puro) ou null.
+async function _ttsGenerate(env, text, opts = {}) {
+  const t = String(text || '').trim(); if (!t) return null;
+  let provider = (opts.provider || '').trim() || (await _readConfig(env, 'tts_provider')) || '';
+  if (!provider) {
+    if (await getAIKey(env, 'elevenlabs')) provider = 'elevenlabs';
+    else if (await getAIKey(env, 'openai')) provider = 'openai';
+    else provider = 'gemini';
+  }
+  try {
+    if (provider === 'elevenlabs') {
+      const key = await getAIKey(env, 'elevenlabs'); if (!key) return null;
+      const voice = opts.voice || (await _readConfig(env, 'tts_voice')) || '21m00Tcm4TlvDq8ikWAM';
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`, {
+        method: 'POST', headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
+        body: JSON.stringify({ text: t, model_id: 'eleven_multilingual_v2', voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
+      });
+      if (!r.ok) return null;
+      return { b64: _bytesToB64(new Uint8Array(await r.arrayBuffer())), mime: 'audio/mpeg' };
+    }
+    if (provider === 'openai') {
+      const key = await getAIKey(env, 'openai'); if (!key) return null;
+      const voice = opts.voice || (await _readConfig(env, 'tts_voice')) || 'onyx';
+      const r = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice, input: t, response_format: 'mp3' }),
+      });
+      if (!r.ok) return null;
+      return { b64: _bytesToB64(new Uint8Array(await r.arrayBuffer())), mime: 'audio/mpeg' };
+    }
+    // Gemini TTS — usa a chave que já temos. Retorna PCM 16-bit → embrulha em WAV.
+    const gkey = await getAIKey(env, 'gemini'); if (!gkey) return null;
+    const voice = opts.voice || (await _readConfig(env, 'tts_voice')) || 'Charon';
+    const body = { contents: [{ parts: [{ text: t }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
+    for (const mdl of ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts']) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) continue;
+      const d = await r.json();
+      const part = (d?.candidates?.[0]?.content?.parts || []).find(p => p.inlineData || p.inline_data);
+      const inline = part?.inlineData || part?.inline_data;
+      const pcmB64 = inline?.data; if (!pcmB64) continue;
+      const mime = inline.mimeType || inline.mime_type || '';
+      const rate = Number((mime.match(/rate=(\d+)/) || [])[1]) || 24000;
+      return { b64: _pcmB64ToWavB64(pcmB64, rate), mime: 'audio/wav' };
+    }
+    return null;
+  } catch (_) { return null; }
+}
+// Envia áudio (nota de voz/PTT) via Evolution. audioB64 = base64 puro.
+async function _waSendAudio(env, instance, number, audioB64, delay) {
+  return evoFetch(env, `/message/sendWhatsAppAudio/${encodeURIComponent(instance)}`, {
+    method: 'POST', body: { number, audio: audioB64, encoding: true, ...(delay ? { delay } : {}) },
+  });
+}
+// Envia mídia (imagem/vídeo/documento) via Evolution. media = URL ou base64 puro.
+async function _waSendMedia(env, instance, number, m) {
+  return evoFetch(env, `/message/sendMedia/${encodeURIComponent(instance)}`, {
+    method: 'POST', body: {
+      number, mediatype: m.mediatype || 'image',
+      ...(m.mimetype ? { mimetype: m.mimetype } : {}),
+      media: m.media,
+      ...(m.fileName ? { fileName: m.fileName } : {}),
+      ...(m.caption ? { caption: m.caption } : {}),
+    },
+  });
+}
+// POST /api/wa/send-audio { number, instance?, audio_base64?, text?, voice?, provider?, delay? }
+async function handleWASendAudio(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
+  const body = await req.json().catch(() => null);
+  if (!body || !body.number) return err('Campo obrigatório: number');
+  const instance = String(body.instance || cfg.instance || '').trim();
+  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
+  const number = waNumber(body.number); if (!number) return err('Número inválido');
+  let audioB64 = body.audio_base64 ? String(body.audio_base64).replace(/^data:[^;]+;base64,/, '') : '';
+  if (!audioB64 && body.text) {
+    const tts = await _ttsGenerate(env, body.text, { voice: body.voice, provider: body.provider });
+    if (!tts) return err('Falha ao gerar áudio (TTS). Configure a chave/provider de voz.', 502);
+    audioB64 = tts.b64;
+  }
+  if (!audioB64) return err('Informe audio_base64 ou text', 400);
+  const res = await _waSendAudio(env, instance, number, audioB64, body.delay);
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  if (!res.ok) return err(`Evolution respondeu ${res.status}: ${JSON.stringify(res.data).slice(0, 200)}`, 502);
+  await _waLogMsg(env, { phone: number, instance, direction: 'out', type: 'audio', body: body.text ? ('🎤 ' + body.text) : '[áudio]', msgId: res.data?.key?.id });
+  return json({ ok: true, id: res.data?.key?.id || null, to: number, instance });
+}
+// POST /api/wa/send-media { number, instance?, media(url|base64), mediatype, mimetype?, fileName?, caption? }
+async function handleWASendMedia(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
+  const body = await req.json().catch(() => null);
+  if (!body || !body.number || !body.media) return err('Campos obrigatórios: number, media');
+  const instance = String(body.instance || cfg.instance || '').trim();
+  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
+  const number = waNumber(body.number); if (!number) return err('Número inválido');
+  const media = String(body.media).replace(/^data:[^;]+;base64,/, '');
+  const mediatype = ['image', 'video', 'document'].includes(body.mediatype) ? body.mediatype : 'image';
+  const res = await _waSendMedia(env, instance, number, { mediatype, mimetype: body.mimetype, media, fileName: body.fileName, caption: body.caption });
+  if (res._noconfig) return err('WhatsApp não configurado', 503);
+  if (!res.ok) return err(`Evolution respondeu ${res.status}: ${JSON.stringify(res.data).slice(0, 200)}`, 502);
+  await _waLogMsg(env, { phone: number, instance, direction: 'out', type: mediatype, body: body.caption || ('[' + mediatype + ']'), msgId: res.data?.key?.id });
+  return json({ ok: true, id: res.data?.key?.id || null, to: number, instance });
+}
+// GET/POST /api/config/tts — provider/voz + status das chaves (sem expor valor)
+async function handleTTSConfig(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode mexer na config de voz', 403);
+  if (req.method === 'POST') {
+    const b = await req.json().catch(() => null);
+    if (b?.provider !== undefined) await _writeConfig(env, 'tts_provider', String(b.provider || '').trim());
+    if (b?.voice !== undefined) await _writeConfig(env, 'tts_voice', String(b.voice || '').trim());
+    if (b?.openai_key !== undefined) await _writeConfig(env, 'ai_openai_key', String(b.openai_key || '').trim());
+    if (b?.elevenlabs_key !== undefined) await _writeConfig(env, 'ai_elevenlabs_key', String(b.elevenlabs_key || '').trim());
+    return json({ ok: true });
+  }
+  return json({
+    ok: true,
+    provider: (await _readConfig(env, 'tts_provider')) || '',
+    voice: (await _readConfig(env, 'tts_voice')) || '',
+    has_openai: !!(await getAIKey(env, 'openai')),
+    has_elevenlabs: !!(await getAIKey(env, 'elevenlabs')),
+    has_gemini: !!(await getAIKey(env, 'gemini')),
+  });
+}
+// POST /api/wa/tts-test { text?, voice?, provider? } — gera o áudio e devolve tamanho, SEM enviar
+async function handleTTSTest(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor', 403);
+  const b = await req.json().catch(() => ({}));
+  const text = (b?.text || 'Olá! Aqui é da equipe de saúde. Tudo bem com o senhor?').slice(0, 500);
+  const tts = await _ttsGenerate(env, text, { voice: b?.voice, provider: b?.provider });
+  if (!tts) return err('Falha ao gerar áudio. Verifique a chave/config de voz.', 502);
+  return json({ ok: true, mime: tts.mime, bytes: Math.round(tts.b64.length * 3 / 4), provider: (b?.provider || (await _readConfig(env, 'tts_provider')) || 'auto') });
+}
+
 // GET /api/wa/instances → lista todas as instâncias e seus estados
 async function handleWAInstances(req, env) {
   const u = await authUser(req, env);
@@ -2495,7 +2662,11 @@ export default {
       if (req.method === 'GET'    && path === '/api/config/wa') return handleWAConfigGet(req, env);
       if (req.method === 'POST'   && path === '/api/config/wa') return handleWAConfigSet(req, env);
       if (req.method === 'GET'    && path === '/api/wa/status') return handleWAStatus(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/send')   return handleWASend(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/send')       return handleWASend(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/send-audio') return handleWASendAudio(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/send-media') return handleWASendMedia(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/tts-test')   return handleTTSTest(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/config/tts') return handleTTSConfig(req, env);
       // WhatsApp multi-instância (1 conexão por atendente)
       if (req.method === 'GET'    && path === '/api/wa/instances')        return handleWAInstances(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/create')  return handleWAInstanceCreate(req, env);
