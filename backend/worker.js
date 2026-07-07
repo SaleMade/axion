@@ -925,37 +925,11 @@ async function handlePaytWebhook(req, env, urlToken) {
       time: `${todayBR()} ${nowTimeBR()}`,
       note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
     });
-    // Se ação for 'pagar' e ainda não houver venda correspondente, registra
-    // Idempotência DUPLA: por leadId E por external_order_id (evita duplicar
-    // quando PAYT envia o mesmo postback 2x ou quando o mesmo cliente/CPF
-    // fez 2 pedidos diferentes que caem no mesmo lead)
-    if (mapping?.action === 'pagar') {
-      state.vendas = state.vendas || [];
-      const orderKey = data.order_id || '';
-      const alreadyHas = state.vendas.some(v =>
-        v.leadId === lead.id ||
-        (orderKey && v.external_order_id === orderKey)
-      );
-      if (!alreadyHas && lead.vl) {
-        const com_pct = Number(lead.com_pct) || 12;
-        const comiss = lead.vl * com_pct / 100;
-        state.vendas.unshift({
-          id: Date.now(),
-          leadId: lead.id,
-          external_order_id: orderKey, // pra idempotência em chamadas futuras
-          nome: lead.nome,
-          prod: lead.prod,
-          vl: lead.vl,
-          custo: lead.vl * 0.45,
-          com_pct,
-          comiss,
-          lucro: lead.vl - lead.vl * 0.45 - comiss,
-          at: lead.at,
-          data: todayBR(),
-          logStatus: 'Comprado',
-        });
-      }
-    }
+    // VENDA ESTIMADA DESATIVADA (v2.27): não criamos mais venda com bruto × 12%
+    // chutado. A receita real vem da Payt (comissão líquida do afiliado), importada
+    // do CSV e — quando o parser Payt V1 ao vivo estiver pronto (usando o payt_debug
+    // capturado) — direto do postback. O lead continua mudando de etapa/spg acima.
+    // (bloco de criação de venda removido de propósito.)
     action_taken = 'updated';
     lead_id_result = lead.id;
   } else if (mapping || ['aguardando_pagamento','aguardando_confirmacao','finalizada'].includes(data.event)) {
