@@ -1,37 +1,56 @@
-# ZapVoice Nosso (extensão Chrome) — v0.2 (motor WA-JS)
+# ZapVoice Nosso — v0.3
 
-Soundboard do funil pro **WhatsApp Web**. Já vem com os 6 áudios do funil campeão (Rafael) por fase. O atendente abre a conversa do lead e dispara o áudio com 1 clique, simulando "gravando...", **pela própria sessão dele** (igual o ZapVoice/WaSeller).
+Soundboard do funil campeao pra disparar audios (voz real) com 1 clique, DENTRO do WhatsApp. Vem com os 6 audios do Rafael por fase. Motor: **WA-JS (WPPConnect)**, a mesma base que ZapVoice/WaSeller usam.
 
-## Por que essa versão é diferente da anterior
-Ela roda em cima do **WA-JS (WPPConnect)**, a mesma base que o ZapVoice e o WaSeller usam. Isso muda tudo:
-- **Detecta a conversa aberta de verdade** (`WPP.chat.getActiveChat`), não fica adivinhando o HTML.
-- **Envia pela sessão do atendente** como nota de voz real (PTT), não por um número separado.
-- **Simula "gravando..."** antes do áudio (o truque que faz parecer gravado na hora).
-- Não precisa de login nem configurar número. Instalou, funciona.
+Tem **dois modos**. O importante pro teu time e o **modo APP**.
 
-## Instalar (uma vez, por atendente)
-1. Chrome → `chrome://extensions` → liga **Modo do desenvolvedor**
-2. **Carregar sem compactação** → escolhe a pasta `zapvoice-ext`
-3. Abre/atualiza `web.whatsapp.com` (logado no número do atendimento)
+---
 
-## Usar
-1. Abra a conversa do lead. O painel **ZapVoice Nosso** aparece no canto e mostra pra quem vai enviar (bolinha verde = pronto).
-2. Clique no áudio da fase certa (F1 Abertura, F4 Dor, F9 Oferta...). Ele grava e envia na conversa aberta.
-3. Em "config" você adiciona os **seus** áudios (a sua voz) e vídeos de prova social.
+## MODO APP (recomendado) — dentro do WhatsApp da Windows Store
 
-## Estrutura
-- `vendor/wppconnect-wa.js` — motor WA-JS (injeta a API `WPP`)
-- `bridge.js` — roda no mundo da página, fala com o `WPP` (chat aberto, gravando, enviar)
-- `content.js` + `panel.css` — o painel
-- `audios/` + `library.json` — os 6 áudios do funil campeão por fase
-- `options.html/js` — cadastro dos áudios do atendente
+O app da Store hoje e um WebView2 (Chromium por dentro rodando web.whatsapp.com). A gente liga a porta de debug dele e **injeta o painel por dentro do proprio app**, na mesma janela onde o atendente liga e conversa. Nao e extensao, nao troca o jeito de trabalhar deles.
 
-## Já surpassa ZapVoice/WaSeller em
-- Vem com o **funil campeão pronto** (eles vêm vazios)
-- Organizado **por fase do funil** (eles são lista solta)
+### Instalar / rodar
+1. Precisa do **Node.js** instalado na maquina do atendente (https://nodejs.org, versao LTS).
+2. Da dois cliques em **`start.bat`**.
+   - Na primeira vez ele liga a porta de debug e reinicia o WhatsApp sozinho.
+   - Depois injeta o painel e fica vigiando (se o WhatsApp reiniciar, reinjeta).
+3. Deixa a janela preta aberta. Abre o WhatsApp, entra numa conversa: o painel **ZapVoice Nosso** aparece no canto.
 
-## Ainda vem (pra abrir distância)
-- [ ] Biblioteca **compartilhada do time** (hoje os áudios extras são por atendente)
-- [ ] **Sequência**: disparar o funil inteiro em ordem com pausas humanas
-- [ ] Amarrar no **lead do CRM** da AXION + medir **qual áudio converte**
-- [ ] Simular "digitando..." nos textos e envio de vídeo por 1 clique
+### Usar
+- Abre a conversa do lead. O painel mostra pra quem vai enviar (bolinha verde).
+- Clica no audio da fase (F1 Abertura, F4 Dor, F9 Oferta...). Ele simula "gravando..." e manda como **nota de voz** pela sessao do proprio atendente.
+
+---
+
+## MODO WEB — extensao no WhatsApp Web (Chrome)
+
+Se o atendente usa o WhatsApp Web no Chrome em vez do app:
+1. `chrome://extensions` -> Modo do desenvolvedor -> Carregar sem compactacao -> esta pasta.
+2. Abre web.whatsapp.com. Mesmo painel, mesmos audios.
+
+---
+
+## Arquivos
+- `start.bat` / `start.ps1` — lancador do MODO APP (liga a porta + injeta)
+- `inject.js` — conecta no WebView2 (CDP) e injeta o WA-JS + painel dentro do app
+- `panel-inject.js` — o painel que roda dentro do app (chama o WPP direto)
+- `manifest.json` + `content.js` + `bridge.js` — o MODO WEB (extensao)
+- `panel.css` — visual do painel (usado pelos dois modos)
+- `vendor/wppconnect-wa.js` — motor WA-JS
+- `audios/` + `library.json` — os 6 audios do funil campeao por fase
+- `diag.js` — ferramenta de diagnostico (dev)
+
+## Como ja passa ZapVoice/WaSeller
+- Vem com o **funil campeao pronto**, por fase (eles vem vazios)
+- Roda **dentro do app de desktop** (o ZapVoice so roda no navegador)
+- Deteccao de conversa nativa (WA-JS), envio como PTT de verdade, "gravando..." embutido
+
+## Proximo (pra abrir distancia)
+- [ ] Biblioteca compartilhada do time + audios proprios do atendente no modo app
+- [ ] Sequencia: disparar o funil inteiro em ordem com pausas humanas
+- [ ] Amarrar no lead do CRM AXION + medir qual audio converte
+
+## Notas tecnicas
+- A porta de debug (9222) fica so no localhost. E o mecanismo padrao do WebView2 (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`). Pra remover: apagar a variavel de ambiente do usuario e reiniciar o WhatsApp.
+- Precisa de Node 21+ (WebSocket nativo). Testado no Node 24.
