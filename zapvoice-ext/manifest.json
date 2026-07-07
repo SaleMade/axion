@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ZapVoice Nosso — Sale Made",
+  "version": "0.1.0",
+  "description": "Soundboard do funil: dispara os audios/videos gravados pelo atendente no chat aberto do WhatsApp Web com 1 clique, via Evolution/AXION.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "https://axion-api.axion-dash.workers.dev/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "ZapVoice Nosso — abrir configuracoes" }
+}

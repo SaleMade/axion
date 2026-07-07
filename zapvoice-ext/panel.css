@@ -1,0 +1,52 @@
+/* ZapVoice Nosso — painel flutuante no WhatsApp Web */
+#zv-panel{
+  position:fixed; right:18px; bottom:18px; z-index:2147483647;
+  width:280px; background:#111b21; color:#e9edef;
+  border:1px solid #2a3942; border-radius:12px;
+  box-shadow:0 12px 40px rgba(0,0,0,.45);
+  font-family:'Segoe UI',system-ui,sans-serif; font-size:13px; overflow:hidden;
+}
+#zv-head{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 12px; background:#202c33; cursor:default; user-select:none;
+}
+#zv-title{ font-weight:700; color:#00a884; letter-spacing:.02em; font-size:13px; }
+#zv-min{ cursor:pointer; color:#8696a0; font-weight:700; padding:0 6px; }
+#zv-min:hover{ color:#e9edef; }
+#zv-body{ padding:10px 12px 12px; }
+#zv-panel.zv-collapsed #zv-body{ display:none; }
+
+#zv-numrow{ display:flex; gap:6px; margin-bottom:9px; }
+#zv-num{
+  flex:1; min-width:0; background:#2a3942; border:1px solid #2a3942; color:#e9edef;
+  border-radius:7px; padding:7px 9px; font-size:12.5px; outline:none;
+}
+#zv-num:focus{ border-color:#00a884; }
+#zv-refresh{
+  background:#2a3942; border:none; color:#8696a0; border-radius:7px;
+  padding:0 9px; font-size:11px; cursor:pointer;
+}
+#zv-refresh:hover{ color:#e9edef; }
+
+#zv-list{ display:flex; flex-direction:column; gap:6px; max-height:320px; overflow-y:auto; }
+.zv-item{
+  display:flex; align-items:center; gap:8px; text-align:left;
+  background:#202c33; border:1px solid #2a3942; color:#e9edef;
+  border-radius:8px; padding:8px 10px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  transition:background .12s;
+}
+.zv-item:hover{ background:#2a3942; }
+.zv-stage{
+  flex:none; font-size:9.5px; font-weight:700; color:#00a884; text-transform:uppercase;
+  background:rgba(0,168,132,.12); padding:2px 6px; border-radius:6px; letter-spacing:.03em;
+}
+.zv-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.zv-empty{ color:#8696a0; font-size:12px; line-height:1.5; text-align:center; padding:14px 4px; }
+
+#zv-status{ min-height:16px; margin-top:9px; font-size:11.5px; }
+#zv-status.zv-ok{ color:#00a884; }
+#zv-status.zv-err{ color:#f15c6d; }
+
+#zv-foot{ margin-top:10px; text-align:center; }
+#zv-opts{ color:#8696a0; font-size:11.5px; cursor:pointer; text-decoration:underline; }
+#zv-opts:hover{ color:#e9edef; }
