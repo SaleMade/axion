@@ -1,35 +1,37 @@
-# ZapVoice Nosso (extensão Chrome) — v0
+# ZapVoice Nosso (extensão Chrome) — v0.2 (motor WA-JS)
 
-Soundboard do funil pro **WhatsApp Web**. O atendente abre uma conversa e dispara os áudios/vídeos que ele mesmo gravou, com 1 clique. O envio sai pela nossa Evolution (via Worker AXION) e aparece no chat, tudo logado no histórico.
+Soundboard do funil pro **WhatsApp Web**. Já vem com os 6 áudios do funil campeão (Rafael) por fase. O atendente abre a conversa do lead e dispara o áudio com 1 clique, simulando "gravando...", **pela própria sessão dele** (igual o ZapVoice/WaSeller).
 
-> Importante: só funciona no **WhatsApp Web** (web.whatsapp.com no Chrome). O app da Windows Store é fechado e não aceita extensão. O número do atendente precisa estar conectado na nossa Evolution (é a instância que ele configura aqui).
+## Por que essa versão é diferente da anterior
+Ela roda em cima do **WA-JS (WPPConnect)**, a mesma base que o ZapVoice e o WaSeller usam. Isso muda tudo:
+- **Detecta a conversa aberta de verdade** (`WPP.chat.getActiveChat`), não fica adivinhando o HTML.
+- **Envia pela sessão do atendente** como nota de voz real (PTT), não por um número separado.
+- **Simula "gravando..."** antes do áudio (o truque que faz parecer gravado na hora).
+- Não precisa de login nem configurar número. Instalou, funciona.
 
-## Como instalar (fazer uma vez)
-1. Abra o Chrome em `chrome://extensions`
-2. Ligue o **Modo do desenvolvedor** (canto superior direito)
-3. Clique em **Carregar sem compactação** e escolha esta pasta (`zapvoice-ext`)
-4. A extensão aparece na lista. Fixa ela na barra se quiser.
+## Instalar (uma vez, por atendente)
+1. Chrome → `chrome://extensions` → liga **Modo do desenvolvedor**
+2. **Carregar sem compactação** → escolhe a pasta `zapvoice-ext`
+3. Abre/atualiza `web.whatsapp.com` (logado no número do atendimento)
 
-## Como configurar (cada atendente)
-1. Clique com o botão direito no ícone da extensão → **Opções** (ou clique no ícone)
-2. Em **Conexão**: confirme o servidor, coloque seu **login e senha da AXION** e o **nome da sua instância** (número na Evolution). Clique em **Entrar e salvar**.
-3. Em **Meus áudios e vídeos**: escolha a fase do funil, dê um nome e suba o áudio **gravado com a sua voz**. Repita pra cada áudio. Vídeos de prova social: adicione por URL (são grandes).
+## Usar
+1. Abra a conversa do lead. O painel **ZapVoice Nosso** aparece no canto e mostra pra quem vai enviar (bolinha verde = pronto).
+2. Clique no áudio da fase certa (F1 Abertura, F4 Dor, F9 Oferta...). Ele grava e envia na conversa aberta.
+3. Em "config" você adiciona os **seus** áudios (a sua voz) e vídeos de prova social.
 
-## Como usar (dia a dia)
-1. Abra `web.whatsapp.com` no Chrome, logado no número do atendimento
-2. Abra a conversa do lead. Aparece o painel **ZapVoice Nosso** no canto
-3. O número do chat é detectado sozinho (dá pra corrigir na mão)
-4. Clique no áudio/vídeo da fase certa → ele é enviado na hora
+## Estrutura
+- `vendor/wppconnect-wa.js` — motor WA-JS (injeta a API `WPP`)
+- `bridge.js` — roda no mundo da página, fala com o `WPP` (chat aberto, gravando, enviar)
+- `content.js` + `panel.css` — o painel
+- `audios/` + `library.json` — os 6 áudios do funil campeão por fase
+- `options.html/js` — cadastro dos áudios do atendente
 
-## O que essa v0 faz e o que ainda vem
-- [x] Painel no WhatsApp Web, detecta o número do chat aberto
-- [x] Biblioteca por fase do funil (áudio/imagem por upload, vídeo por URL)
-- [x] Envio 1 clique via Evolution, logado no histórico da AXION
-- [ ] Biblioteca compartilhada do time (hoje é local por atendente)
-- [ ] Simular "gravando..." antes do áudio
-- [ ] Métrica de qual áudio mais converte
-- [ ] Amarrar no lead do CRM (nome, etapa)
+## Já surpassa ZapVoice/WaSeller em
+- Vem com o **funil campeão pronto** (eles vêm vazios)
+- Organizado **por fase do funil** (eles são lista solta)
 
-## Depende de
-- Endpoints do Worker: `POST /api/wa/send-audio`, `POST /api/wa/send-media` (já no ar)
-- Número do atendente conectado na Evolution como instância
+## Ainda vem (pra abrir distância)
+- [ ] Biblioteca **compartilhada do time** (hoje os áudios extras são por atendente)
+- [ ] **Sequência**: disparar o funil inteiro em ordem com pausas humanas
+- [ ] Amarrar no **lead do CRM** da AXION + medir **qual áudio converte**
+- [ ] Simular "digitando..." nos textos e envio de vídeo por 1 clique

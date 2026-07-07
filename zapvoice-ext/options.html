@@ -2,72 +2,52 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>ZapVoice Nosso — Configuração</title>
+<title>ZapVoice Nosso — Meus áudios</title>
 <style>
   body{ background:#0b141a; color:#e9edef; font-family:'Segoe UI',system-ui,sans-serif; margin:0; padding:28px; }
-  .wrap{ max-width:640px; margin:0 auto; }
+  .wrap{ max-width:600px; margin:0 auto; }
   h1{ font-size:20px; color:#00a884; margin:0 0 4px; }
-  .sub{ color:#8696a0; font-size:13px; margin:0 0 22px; }
+  .sub{ color:#8696a0; font-size:13px; margin:0 0 22px; line-height:1.5; }
   .card{ background:#111b21; border:1px solid #2a3942; border-radius:12px; padding:18px; margin-bottom:18px; }
-  .card h2{ font-size:14px; margin:0 0 14px; color:#e9edef; }
+  .card h2{ font-size:14px; margin:0 0 14px; }
   label{ display:block; font-size:12px; color:#8696a0; margin:10px 0 4px; }
   input,select{ width:100%; box-sizing:border-box; background:#2a3942; border:1px solid #2a3942; color:#e9edef; border-radius:8px; padding:9px 11px; font-size:13px; font-family:inherit; outline:none; }
   input:focus,select:focus{ border-color:#00a884; }
-  .row{ display:flex; gap:10px; }
-  .row > div{ flex:1; }
+  .row{ display:flex; gap:10px; } .row>div{ flex:1; }
   button{ background:#00a884; border:none; color:#04231b; font-weight:700; border-radius:8px; padding:10px 16px; font-size:13px; cursor:pointer; font-family:inherit; margin-top:14px; }
   button:hover{ background:#06cf9c; }
-  button.sec{ background:#2a3942; color:#e9edef; font-weight:600; }
-  .status{ min-height:16px; font-size:12px; margin-top:10px; }
-  .ok{ color:#00a884; } .err{ color:#f15c6d; }
+  .status{ min-height:16px; font-size:12px; margin-top:10px; } .ok{ color:#00d95f; } .err{ color:#f15c6d; }
   .muted{ color:#8696a0; font-size:12.5px; }
   .item{ display:flex; align-items:center; gap:8px; background:#202c33; border:1px solid #2a3942; border-radius:8px; padding:8px 10px; margin-top:8px; font-size:12.5px; }
   .item .tag{ font-size:9.5px; font-weight:700; color:#00a884; background:rgba(0,168,132,.12); padding:2px 6px; border-radius:6px; text-transform:uppercase; }
   .item .lbl{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .item .knd{ color:#8696a0; font-size:10.5px; }
   .item button{ margin:0; padding:5px 9px; font-size:11px; background:#3b2a2f; color:#f15c6d; font-weight:600; }
-  .hint{ font-size:11px; color:#667781; margin-top:4px; }
+  .hint{ font-size:11px; color:#667781; margin-top:4px; line-height:1.5; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>ZapVoice Nosso</h1>
-  <p class="sub">Soundboard do funil pro WhatsApp Web. Configure a conexão e cadastre os seus áudios/vídeos.</p>
+  <p class="sub">Já vem com os áudios do funil campeão prontos. Aqui você adiciona os <b>seus</b> áudios (a sua voz). Nada de login: os áudios saem pela sua própria sessão do WhatsApp Web.</p>
 
   <div class="card">
-    <h2>1. Conexão com a AXION</h2>
-    <label>Servidor (Worker)</label>
-    <input id="workerUrl" placeholder="https://axion-api.axion-dash.workers.dev">
-    <div class="row">
-      <div><label>Seu login AXION</label><input id="login" placeholder="login"></div>
-      <div><label>Senha</label><input id="password" type="password" placeholder="senha"></div>
-    </div>
-    <label>Seu número (instância na Evolution)</label>
-    <input id="instance" placeholder="ex: salemade">
-    <div class="hint">É o nome da instância do teu número conectado na Evolution. Na dúvida, pergunta pro diretor.</div>
-    <button id="connect">Entrar e salvar</button>
-    <div class="status" id="connStatus"></div>
-  </div>
-
-  <div class="card">
-    <h2>2. Meus áudios e vídeos</h2>
+    <h2>Adicionar meus áudios / vídeos</h2>
     <div class="row">
       <div><label>Fase do funil</label><select id="itStage"></select></div>
-      <div><label>Nome do item</label><input id="itLabel" placeholder="ex: Abertura, Oferta..."></div>
+      <div><label>Nome</label><input id="itLabel" placeholder="ex: Abertura, Oferta..."></div>
     </div>
     <label>Arquivo (áudio gravado por você, ou imagem)</label>
     <input id="itFile" type="file" accept="audio/*,image/*">
-    <div class="hint">Grave o áudio com a sua voz (WhatsApp, gravador do celular) e suba aqui. Fica salvo no seu navegador.</div>
-    <button id="addAudio">Adicionar áudio/imagem</button>
+    <div class="hint">Grave no WhatsApp/gravador do celular e suba aqui. Fica salvo no seu navegador.</div>
+    <button id="addAudio">Adicionar</button>
 
-    <label style="margin-top:18px">Vídeo de prova social por URL (vídeos são grandes, melhor por link)</label>
+    <label style="margin-top:18px">Vídeo por URL (vídeo é grande, melhor por link)</label>
     <div class="row">
       <div><input id="vidUrl" placeholder="https://.../video.mp4"></div>
       <div><input id="vidLabel" placeholder="nome do vídeo"></div>
     </div>
-    <button id="addVideoUrl" class="sec">Adicionar vídeo por URL</button>
+    <button id="addVideoUrl" style="background:#2a3942;color:#e9edef;font-weight:600">Adicionar vídeo por URL</button>
     <div class="status" id="itStatus"></div>
-
     <div id="items" style="margin-top:16px"></div>
   </div>
 </div>

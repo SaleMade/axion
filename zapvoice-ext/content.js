@@ -1,112 +1,131 @@
-// ZapVoice Nosso — content script (roda dentro do web.whatsapp.com)
-// Injeta um painel flutuante com os audios/videos do atendente. Detecta o
-// numero do chat aberto (pelo data-id das mensagens) e dispara pela Evolution
-// via Worker AXION (/api/wa/send-audio | /api/wa/send-media).
+// ZapVoice Nosso — painel (mundo isolado). UI + storage. Fala com o bridge
+// (mundo principal) por window.postMessage. Envia pela sessao do proprio
+// atendente via WA-JS, com a conversa aberta detectada de forma confiavel.
 (function () {
-  let cfg = {};
-  let items = [];
-  let numInput, listEl, statusEl, panel;
+  'use strict';
+  var funnel = [], userItems = [], settings = { simulate: true };
+  var busy = false, els = {}, seq = 0, pending = {};
 
-  chrome.storage.local.get(['zv_cfg', 'zv_items'], (r) => {
-    cfg = r.zv_cfg || {};
-    items = r.zv_items || [];
-    boot();
+  function call(cmd, payload) {
+    return new Promise(function (resolve) {
+      var id = ++seq; pending[id] = resolve;
+      window.postMessage({ __zv: 'req', id: id, cmd: cmd, payload: payload }, '*');
+      setTimeout(function () { if (pending[id]) { pending[id]({ ok: false, error: 'timeout' }); delete pending[id]; } }, 25000);
+    });
+  }
+  window.addEventListener('message', function (e) {
+    var d = e.data; if (!d) return;
+    if (d.__zv === 'res' && pending[d.id]) { pending[d.id](d); delete pending[d.id]; }
   });
-  chrome.storage.onChanged.addListener((ch) => {
-    if (ch.zv_cfg) cfg = ch.zv_cfg.newValue || {};
-    if (ch.zv_items) { items = ch.zv_items.newValue || []; renderList(); }
-  });
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
   function boot() {
-    // WhatsApp Web demora pra montar; espera o body estar pronto
-    const t = setInterval(() => {
-      if (document.body && !document.getElementById('zv-panel')) { clearInterval(t); injectPanel(); }
-    }, 800);
-  }
-
-  // Lê o número do chat aberto a partir do data-id das mensagens (false_5599...@c.us_ID)
-  function detectNumber() {
-    let num = '';
-    document.querySelectorAll('[data-id]').forEach((el) => {
-      const m = (el.getAttribute('data-id') || '').match(/_(\d{8,15})@c\.us/);
-      if (m) num = m[1];
+    Promise.all([
+      fetch(chrome.runtime.getURL('library.json')).then(function (r) { return r.json(); }).catch(function () { return { funnel: [] }; }),
+      new Promise(function (res) { chrome.storage.local.get(['zv_items', 'zv_settings'], res); })
+    ]).then(function (a) {
+      funnel = (a[0] && a[0].funnel) || [];
+      userItems = (a[1] && a[1].zv_items) || [];
+      settings = Object.assign({ simulate: true }, (a[1] && a[1].zv_settings) || {});
+      waitBody();
     });
-    return num;
-  }
-
-  function injectPanel() {
-    panel = document.createElement('div');
-    panel.id = 'zv-panel';
-    panel.innerHTML = [
-      '<div id="zv-head"><span id="zv-title">ZapVoice Nosso</span><span id="zv-min" title="Recolher">–</span></div>',
-      '<div id="zv-body">',
-      '  <div id="zv-numrow"><input id="zv-num" placeholder="numero do chat"><button id="zv-refresh" title="Detectar do chat aberto">detectar</button></div>',
-      '  <div id="zv-list"></div>',
-      '  <div id="zv-status"></div>',
-      '  <div id="zv-foot"><a id="zv-opts">Configurar / meus audios</a></div>',
-      '</div>'
-    ].join('');
-    document.body.appendChild(panel);
-
-    numInput = panel.querySelector('#zv-num');
-    listEl = panel.querySelector('#zv-list');
-    statusEl = panel.querySelector('#zv-status');
-    panel.querySelector('#zv-refresh').onclick = () => { numInput.value = detectNumber() || numInput.value; };
-    panel.querySelector('#zv-min').onclick = () => panel.classList.toggle('zv-collapsed');
-    panel.querySelector('#zv-head').ondblclick = () => panel.classList.toggle('zv-collapsed');
-    panel.querySelector('#zv-opts').onclick = () => chrome.runtime.openOptionsPage();
-
-    numInput.value = detectNumber();
-    // acompanha a troca de chat sem atropelar o que o user digitou
-    setInterval(() => {
-      if (document.activeElement !== numInput) { const n = detectNumber(); if (n) numInput.value = n; }
-    }, 2500);
-    renderList();
-  }
-
-  function renderList() {
-    if (!listEl) return;
-    if (!items.length) {
-      listEl.innerHTML = '<div class="zv-empty">Nenhum audio ainda. Clique em "Configurar / meus audios" e adicione os seus.</div>';
-      return;
-    }
-    listEl.innerHTML = '';
-    items.forEach((it, i) => {
-      const b = document.createElement('button');
-      b.className = 'zv-item';
-      const tag = it.kind === 'video' ? 'VIDEO' : 'AUDIO';
-      b.innerHTML = '<span class="zv-stage">' + esc(it.stage || tag) + '</span><span class="zv-label">' + esc(it.label || ('Item ' + (i + 1))) + '</span>';
-      b.onclick = () => sendItem(it);
-      listEl.appendChild(b);
+    chrome.storage.onChanged.addListener(function (ch) {
+      if (ch.zv_items) { userItems = ch.zv_items.newValue || []; render(); }
+      if (ch.zv_settings) { settings = Object.assign({ simulate: true }, ch.zv_settings.newValue || {}); if (els.simcb) els.simcb.checked = !!settings.simulate; }
     });
   }
+  function waitBody() {
+    var t = setInterval(function () { if (document.body && !document.getElementById('zv-panel')) { clearInterval(t); inject(); } }, 700);
+  }
 
-  async function sendItem(it) {
-    const number = (numInput.value || '').replace(/\D/g, '');
-    if (!number) { setStatus('Sem numero. Abra um chat ou digite o numero.', true); return; }
-    if (!cfg.workerUrl || !cfg.token || !cfg.instance) { setStatus('Config incompleta. Clique em Configurar.', true); return; }
-    setStatus('Enviando ' + (it.label || 'item') + '...');
-    try {
-      const base = cfg.workerUrl.replace(/\/+$/, '');
-      let url, payload;
-      if (it.kind === 'video' || it.kind === 'image') {
-        url = base + '/api/wa/send-media';
-        payload = { number, instance: cfg.instance, media: it.b64, mediatype: it.kind, mimetype: it.mime, fileName: (it.label || 'midia'), caption: it.caption || '' };
-      } else {
-        url = base + '/api/wa/send-audio';
-        payload = { number, instance: cfg.instance, audio_base64: it.b64 };
-      }
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + cfg.token },
-        body: JSON.stringify(payload)
+  function inject() {
+    var p = document.createElement('div');
+    p.id = 'zv-panel';
+    p.innerHTML =
+      '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">ZapVoice Nosso</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
+      '<div id="zv-body">' +
+      '  <div class="zv-h">Funil do campeao</div><div id="zv-funnel" class="zv-list"></div>' +
+      '  <div class="zv-h">Meus audios</div><div id="zv-mine" class="zv-list"></div>' +
+      '  <div id="zv-status"></div>' +
+      '  <div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb"> simular gravando</label><a id="zv-opts">config</a></div>' +
+      '</div>';
+    document.body.appendChild(p);
+    els.who = p.querySelector('#zv-who');
+    els.dot = p.querySelector('#zv-dot');
+    els.funnel = p.querySelector('#zv-funnel');
+    els.mine = p.querySelector('#zv-mine');
+    els.status = p.querySelector('#zv-status');
+    els.simcb = p.querySelector('#zv-sim-cb');
+    p.querySelector('#zv-min').onclick = function () { p.classList.toggle('zv-collapsed'); };
+    p.querySelector('#zv-head').ondblclick = function () { p.classList.toggle('zv-collapsed'); };
+    p.querySelector('#zv-opts').onclick = function () { chrome.runtime.openOptionsPage(); };
+    els.simcb.checked = !!settings.simulate;
+    els.simcb.onchange = function () { settings.simulate = els.simcb.checked; chrome.storage.local.set({ zv_settings: settings }); };
+    render();
+    pollActive();
+  }
+
+  function mkBtn(item, kindDefault) {
+    var b = document.createElement('button');
+    b.className = 'zv-item';
+    b.title = item.desc || '';
+    b.innerHTML = '<span class="zv-stage">' + esc(item.stage || (item.kind || kindDefault || 'AUD').toUpperCase()) + '</span>' +
+      '<span class="zv-label">' + esc(item.label || 'Item') + '</span><span class="zv-play">&#9655;</span>';
+    b.onclick = function () { send(item, kindDefault, b); };
+    return b;
+  }
+  function render() {
+    if (!els.funnel) return;
+    els.funnel.innerHTML = '';
+    funnel.forEach(function (it) { els.funnel.appendChild(mkBtn({ stage: it.stage, label: it.label, url: chrome.runtime.getURL(it.file), kind: 'audio', sizeKB: it.sizeKB, desc: it.desc }, 'audio')); });
+    els.mine.innerHTML = '';
+    if (!userItems.length) els.mine.innerHTML = '<div class="zv-empty">Nada ainda. Clique em "config" pra subir os seus audios (a tua voz).</div>';
+    userItems.forEach(function (it) { els.mine.appendChild(mkBtn(it, it.kind || 'audio')); });
+  }
+
+  function fetchDataUri(url) {
+    return fetch(url).then(function (r) { return r.blob(); }).then(function (blob) {
+      return new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result)); }; fr.onerror = rej; fr.readAsDataURL(blob); });
+    });
+  }
+  function estDur(item, dataUri) {
+    var kb = item.sizeKB || (dataUri ? Math.round(dataUri.length * 3 / 4 / 1024) : 300);
+    return Math.min(7000, Math.max(1800, kb * 6));
+  }
+
+  function send(item, kindDefault, b) {
+    if (busy) return;
+    busy = true; if (b) b.classList.add('zv-busy'); status('Preparando...', '');
+    var kind = item.kind || kindDefault || 'audio';
+    var prep;
+    if (item.url) prep = fetchDataUri(item.url);
+    else if (item.b64 && /^https?:/.test(item.b64)) prep = fetchDataUri(item.b64);
+    else prep = Promise.resolve('data:' + (item.mime || 'audio/ogg') + ';base64,' + item.b64);
+    prep.then(function (dataUri) {
+      status(settings.simulate && kind === 'audio' ? 'Gravando...' : 'Enviando...', '');
+      return call('send', { dataUri: dataUri, kind: kind, caption: item.caption || '', durMs: estDur(item, dataUri), simulate: settings.simulate });
+    }).then(function (r) {
+      if (r && r.ok) status('Enviado' + (r.data && r.data.number ? ' para ' + r.data.number : ''), 'ok');
+      else status('Erro: ' + ((r && r.error) || 'falhou'), 'err');
+    }).catch(function (e) { status('Falha: ' + (e && e.message || e), 'err'); })
+      .then(function () { busy = false; if (b) b.classList.remove('zv-busy'); });
+  }
+  function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
+
+  function pollActive() {
+    setInterval(function () {
+      call('active').then(function (r) {
+        if (!els.who) return;
+        if (r && r.ok) {
+          els.dot.className = 'zv-on';
+          els.who.textContent = (r.data && r.data.name) ? ('→ ' + r.data.name) : '→ abra uma conversa';
+        } else {
+          els.dot.className = 'zv-off';
+          els.who.textContent = (r && /carregando/.test(r.error || '')) ? 'carregando WhatsApp...' : 'abra uma conversa';
+        }
       });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setStatus('Erro: ' + (d.error || ('HTTP ' + r.status)), true); return; }
-      setStatus('Enviado para ' + number);
-    } catch (e) { setStatus('Falha: ' + e.message, true); }
+    }, 2500);
   }
 
-  function setStatus(msg, isErr) { if (statusEl) { statusEl.textContent = msg; statusEl.className = isErr ? 'zv-err' : 'zv-ok'; } }
-  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+  boot();
 })();

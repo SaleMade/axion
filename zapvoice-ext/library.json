@@ -1,0 +1,10 @@
+{
+  "funnel": [
+    { "id": "f1", "stage": "F1", "label": "Abertura", "file": "audios/f1_abertura.ogg", "sizeKB": 314, "desc": "Rafael se apresenta como especialista e pede a dor" },
+    { "id": "f2", "stage": "F2", "label": "Garantia COD", "file": "audios/f2_garantia.ogg", "sizeKB": 91, "desc": "Resultado garantido, so paga quando chegar em casa" },
+    { "id": "f4", "stage": "F4", "label": "Espelha a dor", "file": "audios/f4_dor.ogg", "sizeKB": 534, "desc": "Circulacao, diabetes, isso nao e normal" },
+    { "id": "f5", "stage": "F5", "label": "Apresenta produto", "file": "audios/f5_produto.ogg", "sizeKB": 535, "desc": "GlicoVax trata a raiz; veja os depoimentos" },
+    { "id": "f7", "stage": "F7", "label": "Checa entendimento", "file": "audios/f7_checagem.ogg", "sizeKB": 148, "desc": "Ficou duvida? posso falar o valor e fazer o pedido" },
+    { "id": "f9", "stage": "F9", "label": "Oferta + fechamento", "file": "audios/f9_oferta.ogg", "sizeKB": 1178, "desc": "R$497, paga na entrega, frete gratis, pede os dados" }
+  ]
+}

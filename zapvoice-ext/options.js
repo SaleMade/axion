@@ -1,32 +1,10 @@
-// ZapVoice Nosso — página de configuração
+// ZapVoice Nosso — opções (só gerenciar os áudios do atendente; sem login)
 const $ = (id) => document.getElementById(id);
-const DEF_WORKER = 'https://axion-api.axion-dash.workers.dev';
 const STAGES = ['F1 Abertura', 'F2 Garantia COD', 'F4 Dor', 'F5 Produto', 'F6 Prova social', 'F7 Checagem', 'F9 Oferta', 'F11 Fechamento', 'Outro'];
 
 function load() {
   STAGES.forEach((s) => { const o = document.createElement('option'); o.value = s; o.textContent = s; $('itStage').appendChild(o); });
-  chrome.storage.local.get(['zv_cfg', 'zv_items'], (r) => {
-    const c = r.zv_cfg || {};
-    $('workerUrl').value = c.workerUrl || DEF_WORKER;
-    $('instance').value = c.instance || '';
-    $('login').value = c.login || '';
-    if (c.token) setConn('Conectado como ' + (c.name || c.login || '?'), 'ok');
-    renderItems(r.zv_items || []);
-  });
-}
-
-async function connect() {
-  const workerUrl = ($('workerUrl').value || DEF_WORKER).replace(/\/+$/, '');
-  const login = $('login').value.trim(), password = $('password').value, instance = $('instance').value.trim();
-  if (!login || !password) { setConn('Preencha login e senha', 'err'); return; }
-  setConn('Entrando...', '');
-  try {
-    const r = await fetch(workerUrl + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ login, password }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.token) { setConn('Erro: ' + (d.error || ('HTTP ' + r.status)), 'err'); return; }
-    const cfg = { workerUrl, token: d.token, instance, login, name: (d.user && d.user.name) || login };
-    chrome.storage.local.set({ zv_cfg: cfg }, () => setConn('Conectado como ' + cfg.name + '. Pode fechar e usar no WhatsApp Web.', 'ok'));
-  } catch (e) { setConn('Falha: ' + e.message, 'err'); }
+  chrome.storage.local.get(['zv_items'], (r) => renderItems(r.zv_items || []));
 }
 
 function fileToB64(file) {
@@ -45,7 +23,7 @@ async function addAudio() {
   try {
     const b64 = await fileToB64(f);
     const kind = f.type.startsWith('video') ? 'video' : (f.type.startsWith('image') ? 'image' : 'audio');
-    addItem({ kind, label: $('itLabel').value.trim() || f.name, stage: $('itStage').value, mime: f.type || 'audio/ogg', b64 });
+    addItem({ kind, label: $('itLabel').value.trim() || f.name, stage: $('itStage').value, mime: f.type || 'audio/ogg', sizeKB: Math.round(f.size / 1024), b64 });
     $('itFile').value = ''; $('itLabel').value = '';
   } catch (e) { setIt('Falha ao ler arquivo: ' + e.message, 'err'); }
 }
@@ -61,38 +39,33 @@ function addItem(it) {
   chrome.storage.local.get(['zv_items'], (r) => {
     const arr = r.zv_items || []; arr.push(it);
     chrome.storage.local.set({ zv_items: arr }, () => {
-      if (chrome.runtime.lastError) { setIt('Erro ao salvar (arquivo grande demais?): ' + chrome.runtime.lastError.message, 'err'); return; }
+      if (chrome.runtime.lastError) { setIt('Erro ao salvar (arquivo grande?): ' + chrome.runtime.lastError.message, 'err'); return; }
       renderItems(arr); setIt('Adicionado', 'ok');
     });
   });
 }
-
 function delItem(i) {
   chrome.storage.local.get(['zv_items'], (r) => {
     const arr = r.zv_items || []; arr.splice(i, 1);
     chrome.storage.local.set({ zv_items: arr }, () => renderItems(arr));
   });
 }
-
 function renderItems(arr) {
   const box = $('items');
   if (!arr.length) { box.innerHTML = '<div class="muted">Nenhum item ainda.</div>'; return; }
   box.innerHTML = '';
   arr.forEach((it, i) => {
     const row = document.createElement('div'); row.className = 'item';
-    row.innerHTML = '<span class="tag">' + esc(it.stage || it.kind) + '</span><span class="lbl">' + esc(it.label) + '</span><span class="knd">' + esc(it.kind) + '</span>';
+    row.innerHTML = '<span class="tag">' + esc(it.stage || it.kind) + '</span><span class="lbl">' + esc(it.label) + '</span>';
     const b = document.createElement('button'); b.textContent = 'remover'; b.onclick = () => delItem(i); row.appendChild(b);
     box.appendChild(row);
   });
 }
-
-function setConn(m, k) { const el = $('connStatus'); el.textContent = m; el.className = 'status ' + (k || ''); }
 function setIt(m, k) { const el = $('itStatus'); el.textContent = m; el.className = 'status ' + (k || ''); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 document.addEventListener('DOMContentLoaded', () => {
   load();
-  $('connect').onclick = connect;
   $('addAudio').onclick = addAudio;
   $('addVideoUrl').onclick = addVideoUrl;
 });

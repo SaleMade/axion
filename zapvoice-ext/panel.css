@@ -1,52 +1,51 @@
 /* ZapVoice Nosso — painel flutuante no WhatsApp Web */
 #zv-panel{
   position:fixed; right:18px; bottom:18px; z-index:2147483647;
-  width:280px; background:#111b21; color:#e9edef;
-  border:1px solid #2a3942; border-radius:12px;
-  box-shadow:0 12px 40px rgba(0,0,0,.45);
+  width:300px; background:#0b141a; color:#e9edef;
+  border:1px solid #2a3942; border-radius:14px;
+  box-shadow:0 16px 48px rgba(0,0,0,.5);
   font-family:'Segoe UI',system-ui,sans-serif; font-size:13px; overflow:hidden;
 }
 #zv-head{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:9px 12px; background:#202c33; cursor:default; user-select:none;
+  display:flex; align-items:center; gap:8px;
+  padding:10px 12px; background:linear-gradient(180deg,#202c33,#182229);
+  user-select:none; cursor:default;
 }
-#zv-title{ font-weight:700; color:#00a884; letter-spacing:.02em; font-size:13px; }
-#zv-min{ cursor:pointer; color:#8696a0; font-weight:700; padding:0 6px; }
+#zv-dot{ width:8px; height:8px; border-radius:50%; flex:none; }
+#zv-dot.zv-on{ background:#00d95f; box-shadow:0 0 6px #00d95f; }
+#zv-dot.zv-off{ background:#f15c6d; }
+#zv-title{ font-weight:800; color:#00a884; font-size:13px; letter-spacing:.02em; flex:none; }
+#zv-who{ flex:1; min-width:0; color:#8696a0; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#zv-min{ cursor:pointer; color:#8696a0; font-weight:700; padding:0 4px; }
 #zv-min:hover{ color:#e9edef; }
-#zv-body{ padding:10px 12px 12px; }
 #zv-panel.zv-collapsed #zv-body{ display:none; }
 
-#zv-numrow{ display:flex; gap:6px; margin-bottom:9px; }
-#zv-num{
-  flex:1; min-width:0; background:#2a3942; border:1px solid #2a3942; color:#e9edef;
-  border-radius:7px; padding:7px 9px; font-size:12.5px; outline:none;
-}
-#zv-num:focus{ border-color:#00a884; }
-#zv-refresh{
-  background:#2a3942; border:none; color:#8696a0; border-radius:7px;
-  padding:0 9px; font-size:11px; cursor:pointer;
-}
-#zv-refresh:hover{ color:#e9edef; }
+#zv-body{ padding:10px 12px 12px; }
+.zv-h{ font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:#667781; font-weight:700; margin:6px 2px 7px; }
+.zv-list{ display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
 
-#zv-list{ display:flex; flex-direction:column; gap:6px; max-height:320px; overflow-y:auto; }
 .zv-item{
-  display:flex; align-items:center; gap:8px; text-align:left;
-  background:#202c33; border:1px solid #2a3942; color:#e9edef;
-  border-radius:8px; padding:8px 10px; cursor:pointer; font-size:12.5px; font-family:inherit;
-  transition:background .12s;
+  display:flex; align-items:center; gap:9px; text-align:left; width:100%;
+  background:#111b21; border:1px solid #2a3942; color:#e9edef;
+  border-radius:9px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  transition:background .12s, border-color .12s;
 }
-.zv-item:hover{ background:#2a3942; }
+.zv-item:hover{ background:#202c33; border-color:#00a884; }
+.zv-item.zv-busy{ opacity:.6; pointer-events:none; }
 .zv-stage{
-  flex:none; font-size:9.5px; font-weight:700; color:#00a884; text-transform:uppercase;
-  background:rgba(0,168,132,.12); padding:2px 6px; border-radius:6px; letter-spacing:.03em;
+  flex:none; font-size:9.5px; font-weight:800; color:#00a884; text-transform:uppercase;
+  background:rgba(0,168,132,.14); padding:3px 7px; border-radius:6px; letter-spacing:.03em; min-width:26px; text-align:center;
 }
 .zv-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.zv-empty{ color:#8696a0; font-size:12px; line-height:1.5; text-align:center; padding:14px 4px; }
+.zv-play{ flex:none; color:#00a884; font-size:13px; }
+.zv-empty{ color:#8696a0; font-size:12px; line-height:1.5; text-align:center; padding:10px 4px; }
 
-#zv-status{ min-height:16px; margin-top:9px; font-size:11.5px; }
-#zv-status.zv-ok{ color:#00a884; }
-#zv-status.zv-err{ color:#f15c6d; }
+#zv-status{ min-height:16px; margin:8px 2px 0; font-size:11.5px; }
+#zv-status.ok{ color:#00d95f; }
+#zv-status.err{ color:#f15c6d; }
 
-#zv-foot{ margin-top:10px; text-align:center; }
+#zv-foot{ display:flex; align-items:center; justify-content:space-between; margin-top:10px; padding-top:9px; border-top:1px solid #202c33; }
+#zv-sim{ color:#8696a0; font-size:11px; display:flex; align-items:center; gap:5px; cursor:pointer; }
+#zv-sim input{ accent-color:#00a884; }
 #zv-opts{ color:#8696a0; font-size:11.5px; cursor:pointer; text-decoration:underline; }
 #zv-opts:hover{ color:#e9edef; }
