@@ -3671,7 +3671,7 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
 const APP_VERSION = '2.31.0';
-const APP_LAST_CHANGE = 'Receita REAL da Payt: as vendas agora vem da comissao liquida de afiliado paga (import do CSV da Payt e postback ao vivo), nao mais do bruto x 12 por cento chutado. Parou de criar venda estimada no CRM e no backend pra nao contar em dobro. Correcao grande: receita real e muito maior que a estimada.';
+const APP_LAST_CHANGE = 'Card Caixa da plataforma virou so leitura (removido o clique pra ajustar) - o valor e mantido nos syncs.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -10158,10 +10158,10 @@ function renderDRE(){
       <div class="mc-lbl">Caixa da empresa</div>
       <div class="mc-val" style="color:${caixaEmpresa>=0?'var(--gr)':'var(--rd)'}">${fmt(caixaEmpresa)}</div>
       <div class="mc-sub">total que dá pra investir · inclui plataforma</div></div>
-    <div class="mc mc-cy" onclick="openCaixaPlat()" style="cursor:pointer" title="Clique pra ajustar quanto está na plataforma">
+    <div class="mc mc-cy">
       <div class="mc-gl"></div><div class="mc-ic">${ico('credit-card',{size:14})}</div>
       <div class="mc-lbl">Caixa da plataforma</div><div class="mc-val">${fmt(caixaPlat)}</div>
-      <div class="mc-sub">preso na Payt · clique pra ajustar</div></div>
+      <div class="mc-sub">preso na Payt · saldo a sacar</div></div>
     <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('target',{size:14})}</div>
       <div class="mc-lbl">Lucro líquido</div>
       <div class="mc-val" style="color:${lucroCalc>=0?'var(--tx)':'var(--rd)'}">${fmt(lucroCalc)}</div>
