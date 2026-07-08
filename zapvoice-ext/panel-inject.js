@@ -108,7 +108,7 @@
   function showSuggestion(item, kw) {
     var s = document.getElementById('zv-suggest'); if (!s) return;
     s.innerHTML = '<div class="zv-sg-txt">Cliente falou "<b>' + esc(kw) + '</b>" — sugestao:</div>' +
-      '<div class="zv-sg-row"><button class="zv-sg-send"><span class="zv-play">&#9655;</span> ' + esc(item.label) + '</button><span class="zv-sg-x" title="Fechar">&times;</span></div>';
+      '<div class="zv-sg-row"><button class="zv-sg-send"><span class="zv-play">' + SVG.play + '</span><span>' + esc(item.label) + '</span></button><span class="zv-sg-x" title="Fechar">&times;</span></div>';
     s.style.display = 'block';
     s.querySelector('.zv-sg-send').onclick = function () { s.style.display = 'none'; send(item); };
     s.querySelector('.zv-sg-x').onclick = function () { s.style.display = 'none'; };
@@ -116,16 +116,35 @@
     window.__zvSgT = setTimeout(function () { s.style.display = 'none'; }, 30000);
   }
 
-  function badgeFor(it) { return it.stage || ({ audio: 'AUD', video: 'VID', image: 'IMG', document: 'DOC', text: 'MSG' }[it.kind] || '•'); }
+  var SVG = {
+    msg:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    mic:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
+    video: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
+    image: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
+    doc:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    funnel:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>',
+    seq:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    play:  '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3.5v17a1 1 0 0 0 1.53.85l13.4-8.5a1 1 0 0 0 0-1.7L7.53 2.65A1 1 0 0 0 6 3.5Z"/></svg>'
+  };
+  var ZKIND = {
+    text:     { c: '#2563eb', ic: SVG.msg },
+    audio:    { c: '#13c273', ic: SVG.mic },
+    video:    { c: '#8e17f0', ic: SVG.video },
+    image:    { c: '#00bcf2', ic: SVG.image },
+    document: { c: '#f0810f', ic: SVG.doc }
+  };
   function itemsHtml(list) {
     return (list || []).map(function (it) {
-      var icon = it.kind === 'video' ? '&#9654;' : '&#9655;';
+      var k = ZKIND[it.kind] || ZKIND.text;
       return '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
-        '<span class="zv-stage">' + esc(badgeFor(it)) + '</span><span class="zv-label">' + esc(it.label) + '</span><span class="zv-play">' + icon + '</span></button>';
+        '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
+        '<span class="zv-label">' + esc(it.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
     }).join('');
   }
   function mediaByKind(kind) { return (DATA.media || []).filter(function (m) { return m.kind === kind; }); }
-  function sectionHtml(title, list) { return list.length ? ('<div class="zv-h">' + title + '</div><div class="zv-list">' + itemsHtml(list) + '</div>') : ''; }
+  function sectionHtml(title, list, ic, color) {
+    return list.length ? ('<div class="zv-h"><span class="zv-hi" style="color:' + color + '">' + ic + '</span>' + title + '</div><div class="zv-list">' + itemsHtml(list) + '</div>') : '';
+  }
 
   function buildIndex() {
     itemById = {};
@@ -135,13 +154,13 @@
   function render() {
     buildIndex();
     var p = document.createElement('div'); p.id = 'zv-panel';
-    var msgs = sectionHtml('Mensagens', DATA.messages || []);
-    var auds = sectionHtml('Audios do funil', mediaByKind('audio'));
-    var vids = sectionHtml('Videos', mediaByKind('video'));
-    var imgs = sectionHtml('Imagens', mediaByKind('image'));
-    var docs = sectionHtml('Documentos', mediaByKind('document'));
-    var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h">Sequencias</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
-      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-stage">SEQ</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">&#9193;</span></button>';
+    var msgs = sectionHtml('Mensagens', DATA.messages || [], SVG.msg, '#2563eb');
+    var auds = sectionHtml('Audios do funil', mediaByKind('audio'), SVG.mic, '#13c273');
+    var vids = sectionHtml('Videos', mediaByKind('video'), SVG.video, '#8e17f0');
+    var imgs = sectionHtml('Imagens', mediaByKind('image'), SVG.image, '#00bcf2');
+    var docs = sectionHtml('Documentos', mediaByKind('document'), SVG.doc, '#f0810f');
+    var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
+      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
     }).join('') + '</div>') : '';
     var empty = (!msgs && !auds && !vids && !imgs && !docs && !seqs) ? '<div class="zv-empty">Nada configurado ainda. Abra a dash (Sale Chat) e adicione mensagens, audios e videos.</div>' : '';
     p.innerHTML =

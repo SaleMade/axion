@@ -1,81 +1,84 @@
-/* Sale Chat — painel flutuante no WhatsApp Web */
+/* Sale Chat — painel no WhatsApp Web. Visual claro/arredondado inspirado no ZapVoice. */
 #zv-panel{
-  position:fixed; right:16px; top:96px; z-index:2147483647;
-  width:290px; background:#0b141a; color:#e9edef;
-  border:1px solid #2a3942; border-radius:14px;
-  box-shadow:0 16px 48px rgba(0,0,0,.5);
-  font-family:'Segoe UI',system-ui,sans-serif; font-size:13px; overflow:hidden;
+  position:fixed; right:18px; top:92px; z-index:2147483647;
+  width:308px; background:#fff; color:#2a2a46;
+  border:1px solid #e7ebf0; border-radius:16px;
+  box-shadow:0 16px 46px rgba(20,30,50,.22);
+  font-family:'Nunito','Segoe UI',system-ui,-apple-system,sans-serif; font-size:13px; overflow:hidden;
 }
 #zv-head{
-  display:flex; align-items:center; gap:8px;
-  padding:10px 12px; background:linear-gradient(180deg,#202c33,#182229);
-  user-select:none; cursor:move;
+  display:flex; align-items:center; gap:9px;
+  padding:12px 14px; background:linear-gradient(135deg,#13c273,#0eb267);
+  user-select:none; cursor:move; color:#fff;
 }
-#zv-dot{ width:8px; height:8px; border-radius:50%; flex:none; }
-#zv-dot.zv-on{ background:#00d95f; box-shadow:0 0 6px #00d95f; }
-#zv-dot.zv-off{ background:#f15c6d; }
-#zv-title{ font-weight:800; color:#00a884; font-size:13px; letter-spacing:.02em; flex:none; }
-#zv-who{ flex:1; min-width:0; color:#8696a0; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-#zv-min{ cursor:pointer; color:#8696a0; font-weight:700; padding:0 4px; }
-#zv-min:hover{ color:#e9edef; }
+#zv-dot{ width:9px; height:9px; border-radius:50%; flex:none; box-shadow:0 0 0 3px rgba(255,255,255,.25); }
+#zv-dot.zv-on{ background:#eaffef; }
+#zv-dot.zv-off{ background:#ffd7dc; box-shadow:0 0 0 3px rgba(255,255,255,.18); }
+#zv-title{ font-weight:800; color:#fff; font-size:14.5px; letter-spacing:.01em; flex:none; }
+#zv-who{ flex:1; min-width:0; color:rgba(255,255,255,.9); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#zv-min{ cursor:pointer; color:rgba(255,255,255,.92); font-weight:800; padding:0 4px; font-size:16px; line-height:1; }
+#zv-min:hover{ color:#fff; }
 #zv-panel.zv-collapsed #zv-body{ display:none; }
 
-#zv-body{ padding:10px 12px 12px; }
-.zv-h{ font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:#667781; font-weight:700; margin:6px 2px 7px; }
-.zv-list{ display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+#zv-body{ padding:12px 12px 12px; background:#f6f8fb; max-height:72vh; overflow-y:auto; }
+#zv-body::-webkit-scrollbar{ width:7px; }
+#zv-body::-webkit-scrollbar-thumb{ background:#d5dce4; border-radius:6px; }
+
+.zv-h{ display:flex; align-items:center; gap:7px; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:#6b7280; font-weight:800; margin:13px 3px 8px; }
+.zv-h:first-child{ margin-top:2px; }
+.zv-hi{ display:inline-flex; }
+.zv-list{ display:flex; flex-direction:column; gap:7px; }
 
 .zv-item{
-  display:flex; align-items:center; gap:9px; text-align:left; width:100%;
-  background:#111b21; border:1px solid #2a3942; color:#e9edef;
-  border-radius:9px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
-  transition:background .12s, border-color .12s;
+  display:flex; align-items:center; gap:10px; text-align:left; width:100%;
+  background:#fff; border:1px solid #e9edf2; color:#2a2a46;
+  border-radius:12px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  transition:border-color .12s, box-shadow .12s, transform .04s;
 }
-.zv-item:hover{ background:#202c33; border-color:#00a884; }
+.zv-item:hover{ border-color:#13c273; box-shadow:0 3px 12px rgba(19,194,115,.14); }
+.zv-item:active{ transform:translateY(1px); }
 .zv-item.zv-busy{ opacity:.6; pointer-events:none; }
+.zv-ic{ width:30px; height:30px; border-radius:9px; flex:none; display:flex; align-items:center; justify-content:center; }
+.zv-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+.zv-play{ flex:none; color:#13c273; display:inline-flex; }
+
 .zv-seq{
-  display:flex; align-items:center; gap:9px; text-align:left; width:100%;
-  background:#0f1a20; border:1px dashed #33414b; color:#e9edef;
-  border-radius:9px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
-  transition:background .12s, border-color .12s;
+  display:flex; align-items:center; gap:10px; text-align:left; width:100%;
+  background:linear-gradient(180deg,#fff,#fbfaff); border:1px solid #e6dbf8; color:#2a2a46;
+  border-radius:12px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  transition:border-color .12s, box-shadow .12s;
 }
-.zv-seq:hover{ background:#202c33; border-color:#ffb454; }
-.zv-seq.zv-busy{ border-color:#ffb454; }
-.zv-seq .zv-stage{ color:#ffb454; background:rgba(255,180,84,.14); }
-.zv-seq .zv-play{ color:#ffb454; }
-.zv-stage{
-  flex:none; font-size:9.5px; font-weight:800; color:#00a884; text-transform:uppercase;
-  background:rgba(0,168,132,.14); padding:3px 7px; border-radius:6px; letter-spacing:.03em; min-width:26px; text-align:center;
-}
-.zv-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.zv-play{ flex:none; color:#00a884; font-size:13px; }
-.zv-empty{ color:#8696a0; font-size:12px; line-height:1.5; text-align:center; padding:10px 4px; }
+.zv-seq:hover{ border-color:#8e17f0; box-shadow:0 3px 12px rgba(142,23,240,.14); }
+.zv-seq.zv-busy{ border-color:#8e17f0; }
+.zv-seq .zv-ic{ background:rgba(142,23,240,.1); color:#8e17f0; }
+.zv-seq .zv-play{ color:#8e17f0; }
 
-#zv-status{ min-height:16px; margin:8px 2px 0; font-size:11.5px; }
-#zv-status.ok{ color:#00d95f; }
-#zv-status.err{ color:#f15c6d; }
+.zv-empty{ color:#8b95a3; font-size:12px; line-height:1.55; text-align:center; padding:16px 8px; }
 
-#zv-foot{ display:flex; align-items:center; justify-content:space-between; margin-top:10px; padding-top:9px; border-top:1px solid #202c33; }
-#zv-sim{ color:#8696a0; font-size:11px; display:flex; align-items:center; gap:5px; cursor:pointer; }
-#zv-sim input{ accent-color:#00a884; }
-#zv-opts{ color:#8696a0; font-size:11.5px; cursor:pointer; text-decoration:underline; }
-#zv-opts:hover{ color:#e9edef; }
+#zv-status{ min-height:16px; margin:10px 3px 0; font-size:11.5px; font-weight:700; }
+#zv-status.ok{ color:#0ea968; }
+#zv-status.err{ color:#e0405a; }
 
-#zv-suggest{ margin-bottom:10px; background:rgba(255,180,84,.12); border:1px solid #ffb454; border-radius:9px; padding:9px 11px; }
-#zv-suggest .zv-sg-txt{ font-size:11.5px; color:#ffd9a0; margin-bottom:7px; }
+#zv-foot{ display:flex; align-items:center; justify-content:space-between; margin-top:11px; padding-top:10px; border-top:1px solid #e7ebf0; }
+#zv-sim{ color:#6b7280; font-size:11px; display:flex; align-items:center; gap:5px; cursor:pointer; }
+#zv-sim input{ accent-color:#13c273; }
+#zv-sched-toggle{ color:#6b7280; font-size:11.5px; cursor:pointer; text-decoration:underline; }
+#zv-sched-toggle:hover{ color:#2a2a46; }
+
+#zv-suggest{ margin-bottom:11px; background:#fff7ed; border:1px solid #f6c88a; border-radius:12px; padding:10px 11px; }
+#zv-suggest .zv-sg-txt{ font-size:11.5px; color:#9a5b12; margin-bottom:8px; }
 #zv-suggest .zv-sg-row{ display:flex; align-items:center; gap:8px; }
-#zv-suggest .zv-sg-send{ flex:1; min-width:0; display:flex; align-items:center; gap:6px; background:#ffb454; border:none; color:#2a1a00; font-weight:700; border-radius:7px; padding:8px 10px; cursor:pointer; font-family:inherit; font-size:12.5px; text-align:left; }
-#zv-suggest .zv-sg-send .zv-play{ color:#2a1a00; flex:none; }
+#zv-suggest .zv-sg-send{ flex:1; min-width:0; display:flex; align-items:center; gap:7px; background:linear-gradient(135deg,#f59a1a,#f0810f); border:none; color:#fff; font-weight:800; border-radius:10px; padding:9px 11px; cursor:pointer; font-family:inherit; font-size:12.5px; text-align:left; }
+#zv-suggest .zv-sg-send .zv-play{ color:#fff; flex:none; }
 #zv-suggest .zv-sg-send span:last-child{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-#zv-suggest .zv-sg-x{ color:#8696a0; cursor:pointer; font-size:18px; line-height:1; padding:0 4px; flex:none; }
+#zv-suggest .zv-sg-x{ color:#9a5b12; cursor:pointer; font-size:18px; line-height:1; padding:0 4px; flex:none; }
 
-#zv-sched-toggle{ color:#8696a0; font-size:11.5px; cursor:pointer; text-decoration:underline; }
-#zv-sched-toggle:hover{ color:#e9edef; }
-#zv-sched{ background:#111b21; border:1px solid #2a3942; border-radius:9px; padding:9px; margin-top:8px; }
-#zv-sched .zv-sched-form{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
-#zv-sched select, #zv-sched input{ background:#2a3942; border:1px solid #2a3942; color:#e9edef; border-radius:6px; padding:5px 7px; font-size:11.5px; font-family:inherit; outline:none; }
-#zv-sched select{ flex:1; min-width:110px; }
-#zv-sched input{ width:50px; }
-#zv-sched .zv-sched-form span{ color:#8696a0; font-size:11px; }
-#zv-sched button{ background:#00a884; border:none; color:#04231b; font-weight:700; border-radius:6px; padding:6px 9px; font-size:11px; cursor:pointer; font-family:inherit; }
-#zv-sched .zv-sched-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:11px; color:#c9d3dc; padding:5px 2px; border-top:1px solid #202c33; }
-#zv-sched .zv-sched-x{ color:#f15c6d; cursor:pointer; font-size:15px; line-height:1; padding:0 4px; flex:none; }
+#zv-sched{ background:#fff; border:1px solid #e7ebf0; border-radius:12px; padding:10px; margin-top:9px; }
+#zv-sched .zv-sched-form{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:7px; }
+#zv-sched select, #zv-sched input{ background:#f6f8fb; border:1px solid #e2e8f0; color:#2a2a46; border-radius:8px; padding:6px 8px; font-size:11.5px; font-family:inherit; outline:none; }
+#zv-sched select{ flex:1; min-width:120px; }
+#zv-sched input{ width:52px; }
+#zv-sched .zv-sched-form span{ color:#6b7280; font-size:11px; }
+#zv-sched button{ background:#13c273; border:none; color:#fff; font-weight:800; border-radius:8px; padding:7px 10px; font-size:11px; cursor:pointer; font-family:inherit; }
+#zv-sched .zv-sched-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:11px; color:#4b5563; padding:6px 2px; border-top:1px solid #eef1f5; }
+#zv-sched .zv-sched-x{ color:#e0405a; cursor:pointer; font-size:15px; line-height:1; padding:0 4px; flex:none; }
