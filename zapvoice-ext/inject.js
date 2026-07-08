@@ -197,6 +197,33 @@ async function run() {
   }
   pumpVideo();
 
+  // Bomba de PREVIA de video: o painel pede (window.__zvPrevReq) pra ver o video antes
+  // de enviar; o injetor baixa da nuvem e devolve o base64 (window.__zvPrevRes). Nao envia.
+  let lastPrevId = null;
+  async function pumpPreview() {
+    try {
+      const raw = valOf(await evaluate('window.__zvPrevReq ? JSON.stringify(window.__zvPrevReq) : ""', true));
+      if (raw) {
+        let req = null; try { req = JSON.parse(raw); } catch (_) {}
+        if (req && req.id !== lastPrevId) {
+          lastPrevId = req.id;
+          await evaluate('window.__zvPrevReq = null;');
+          try {
+            if (!req.url) throw new Error('sem url');
+            const buf = await fetchBytes(req.url);
+            if (!buf) throw new Error('nao consegui baixar');
+            const dataUri = 'data:' + (req.mime || 'video/mp4') + ';base64,' + buf.toString('base64');
+            await evaluate('window.__zvPrevRes = {id:' + JSON.stringify(req.id) + ',ok:true,dataUri:' + JSON.stringify(dataUri) + '}');
+          } catch (e) {
+            await evaluate('window.__zvPrevRes = {id:' + JSON.stringify(req.id) + ',ok:false,err:' + JSON.stringify(String(e.message || e)) + '}');
+          }
+        }
+      }
+    } catch (_) {}
+    setTimeout(pumpPreview, 700);
+  }
+  pumpPreview();
+
   cdp.onEvent = (m) => { if (m.method === 'Page.loadEventFired') setTimeout(injectNow, 1500); };
   ws.addEventListener('close', () => { console.log('[zv] Conexao caiu. Rode de novo (o app reiniciou?).'); process.exit(0); });
   console.log('[zv] Rodando. Deixe esta janela aberta. O painel esta dentro do WhatsApp.');

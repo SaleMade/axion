@@ -183,12 +183,47 @@
     return (list || []).map(function (it) {
       var k = ZKIND[it.kind] || ZKIND.text;
       var fav = !!FAVS[it.id];
-      return '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
-        '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
-        '<span class="zv-label">' + esc(it.label) + '</span>' +
-        '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
-        '<span class="zv-play">' + SVG.play + '</span></button>';
+      return '<div class="zv-itemwrap">' +
+        '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
+          '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
+          '<span class="zv-label">' + esc(it.label) + '</span>' +
+          '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
+          '<span class="zv-exp" data-exp="' + esc(it.id) + '" title="Prever antes de enviar">' + SVG.chevDown + '</span>' +
+          '<span class="zv-play">' + SVG.play + '</span></button>' +
+        '<div class="zv-prev" style="display:none"></div></div>';
     }).join('');
+  }
+  // Prévia expansível: mostra o conteúdo antes de disparar. Imagem/audio/doc vêm
+  // embutidos (dataUri). Vídeo é pesado: o injetor busca sob demanda (__zvPrevReq).
+  function togglePreview(id, wrap, exp) {
+    var prev = wrap.querySelector('.zv-prev'); if (!prev) return;
+    if (prev.style.display !== 'none') { prev.style.display = 'none'; prev.innerHTML = ''; if (exp) exp.classList.remove('open'); return; }
+    prev.style.display = 'block'; if (exp) exp.classList.add('open');
+    var it = itemById[id]; if (!it) { prev.innerHTML = '<div class="zv-prev-note">Sem previa.</div>'; return; }
+    var cap = it.caption ? '<div class="zv-prev-cap">' + esc(it.caption) + '</div>' : '';
+    if (it.kind === 'text') { prev.innerHTML = '<div class="zv-prev-txt">' + esc(it.text || '(sem texto)') + '</div>'; return; }
+    if (it.kind === 'image') { prev.innerHTML = cap + '<img class="zv-prev-img" src="' + it.dataUri + '">'; return; }
+    if (it.kind === 'audio') { prev.innerHTML = '<audio class="zv-prev-audio" controls preload="metadata" src="' + it.dataUri + '"></audio>'; return; }
+    if (it.kind === 'document') { prev.innerHTML = cap + '<a class="zv-prev-doc" href="' + it.dataUri + '" download="' + esc(it.label || 'documento') + '" target="_blank">' + SVG.doc + ' Abrir documento</a>'; return; }
+    if (it.kind === 'video') {
+      if (it.dataUri) { prev.innerHTML = cap + '<video class="zv-prev-video" controls preload="metadata" src="' + it.dataUri + '"></video>'; return; }
+      prev.innerHTML = cap + '<div class="zv-prev-note">carregando previa...</div>';
+      var rid = 'pv' + Date.now() + Math.random().toString(36).slice(2, 5);
+      try { window.__zvPrevRes = null; } catch (_) {}
+      window.__zvPrevReq = { id: rid, url: it.mediaUrl, mime: it.mime || 'video/mp4' };
+      var waited = 0;
+      var iv = setInterval(function () {
+        waited += 500; var res = window.__zvPrevRes;
+        if (res && res.id === rid) {
+          clearInterval(iv);
+          if (prev.style.display === 'none') return;
+          if (res.ok && res.dataUri) { it.dataUri = res.dataUri; prev.innerHTML = cap + '<video class="zv-prev-video" controls preload="metadata" src="' + res.dataUri + '"></video>'; }
+          else { var n = prev.querySelector('.zv-prev-note'); if (n) n.textContent = 'Nao consegui carregar a previa (start.bat rodando?).'; }
+        } else if (waited > 60000) { clearInterval(iv); var n2 = prev.querySelector('.zv-prev-note'); if (n2) n2.textContent = 'Tempo esgotado.'; }
+      }, 500);
+      return;
+    }
+    prev.innerHTML = '<div class="zv-prev-note">Sem previa.</div>';
   }
   function mediaByKind(kind) { return (DATA.media || []).filter(function (m) { return m.kind === kind; }); }
   // Seção recolhível com título, contador e chevron. inner = HTML da lista (itens ou funis).
@@ -306,6 +341,9 @@
     Array.prototype.forEach.call(host.querySelectorAll('.zv-star'), function (s) {
       s.onclick = function (e) { e.stopPropagation(); var id = s.getAttribute('data-fav'); if (FAVS[id]) delete FAVS[id]; else FAVS[id] = 1; lsSet('zv_favs', FAVS); renderSections(); };
     });
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-exp'), function (x) {
+      x.onclick = function (e) { e.stopPropagation(); var wrap = x.closest ? x.closest('.zv-itemwrap') : x.parentNode.parentNode; if (wrap) togglePreview(x.getAttribute('data-exp'), wrap, x); };
+    });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-h[data-toggle]'), function (h) {
       h.onclick = function () { var key = h.getAttribute('data-toggle'); COLLAPSED[key] = !COLLAPSED[key]; lsSet('zv_collapsed', COLLAPSED); renderSections(); };
     });
@@ -317,7 +355,7 @@
     var q = (FILTER || '').trim().toLowerCase();
     Array.prototype.forEach.call(host.querySelectorAll('.zv-sec'), function (sec) {
       var key = sec.getAttribute('data-sec');
-      var items = sec.querySelectorAll('.zv-item, .zv-seq');
+      var items = sec.querySelectorAll('.zv-itemwrap, .zv-seq');
       var visible = 0;
       Array.prototype.forEach.call(items, function (it) {
         var lblEl = it.querySelector('.zv-label'); var lbl = lblEl ? lblEl.textContent : '';
