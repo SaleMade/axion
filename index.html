@@ -4979,12 +4979,12 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
-        ...(dir?[{id:'salechat',lbl:'Sale Chat',live:true}]:[]),
         {id:'contingencia',lbl:'Contingência'},
         ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
       // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
       ...(dir?[{g:'Automações',items:[
+        {id:'salechat',lbl:'Sale Chat',live:true},
         {id:'automacoes',lbl:'WhatsApp'},
       ]}]:[]),
       // Acordeão Equipe — aparece pra todo mundo.
@@ -5101,7 +5101,7 @@ const PNAMES={
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
   atendimento:"WhatsApp / <b>Atendimento</b>",
-  salechat:"WhatsApp / <b>Sale Chat</b>",
+  salechat:"Automações / <b>Sale Chat</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
   automacoes:"Automações / <b>WhatsApp</b>",
