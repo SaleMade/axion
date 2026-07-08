@@ -6950,6 +6950,7 @@ function _loadPedidosConf(day){
     if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse dia.</div>'; return; }
     const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
     const _atr=s=>!!(s.pid && String(s.pid).trim()!=='');   // veio de pressel (tem código/rastreio)?
+    const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
     const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
     let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
     ${nSem>0?`<div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">As "sem rastreio" são vendas reais, mas vieram de fora do anúncio (orgânico/indicação) ou sem o código, então não entram na conta de Vendas das pressels (que o gestor otimiza).</div>`:''}`;
@@ -6960,7 +6961,7 @@ function _loadPedidosConf(day){
       const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
       const tag=_atr(s)
-        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">da pressel</span>`
+        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
         : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
       const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
       return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
@@ -7549,7 +7550,7 @@ const SC_BUILTIN=[
 ];
 function scAllItems(){
   return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
-    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:(m.kind==='video'?'Video · ':m.kind==='image'?'Imagem · ':'Audio · ')+(m.label||m.id),kind:m.kind})))
+    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:(m.kind==='video'?'Video · ':m.kind==='image'?'Imagem · ':m.kind==='document'?'Doc · ':'Audio · ')+(m.label||m.id),kind:m.kind})))
     .concat(SC_BUILTIN);
 }
 function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
@@ -7573,6 +7574,7 @@ function renderSaleChat(){
   if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
   if(!Array.isArray(DB.salechat.sequences)) DB.salechat.sequences=[];
   if(!Array.isArray(DB.salechat.media)) DB.salechat.media=[];
+  if(!Array.isArray(DB.salechat.triggers)) DB.salechat.triggers=[];
   scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
   pg.innerHTML=`
@@ -7594,6 +7596,7 @@ function renderSaleChat(){
           <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Audio<input type="file" accept="audio/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
           <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Video<input type="file" accept="video/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
           <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Imagem<input type="file" accept="image/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+          <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Documento<input type="file" accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
         </div>
       </div>
       <p class="muted" style="font-size:11.5px;margin:0 0 12px;line-height:1.5">Sobe teus proprios audios (a tua voz), videos de prova social e imagens. Ficam na nuvem e o painel de todos os atendentes puxa. Video ate 60MB.</p>
@@ -7607,10 +7610,19 @@ function renderSaleChat(){
       </div>
       <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Sequencia de itens (mensagem, audio, video) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada. Monta a ordem que quiser.</p>
       <div id="sc-funis"></div>
+    </div>
+    <div class="cfg-card" style="max-width:760px;margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div>
+        <button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button>
+      </div>
+      <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo pra mandar (ele confirma com 1 clique, nao envia sozinho).</p>
+      <div id="sc-triggers"></div>
     </div>`;
   scRenderMsgs();
   scRenderMedia();
   scRenderFunis();
+  scRenderTriggers();
 }
 function scRenderMsgs(){
   const box=$('sc-msgs'); if(!box) return;
@@ -7662,7 +7674,7 @@ async function scUploadMedia(file, el){
   if(!file) return;
   const base=apiUrl(), tok=apiToken();
   if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); return; }
-  const kind=file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':'image';
+  const kind=file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':file.type.indexOf('image')===0?'image':'document';
   if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); return; }
   setScMediaStatus('Subindo '+file.name+'... ('+Math.round(file.size/1024)+' KB)');
   try{
@@ -7674,7 +7686,7 @@ async function scUploadMedia(file, el){
   }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
   if(el) el.value='';
 }
-function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':'volume'; }
+function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':kind==='document'?'clipboard-list':'volume'; }
 function scRenderMedia(){
   const box=$('sc-media'); if(!box) return;
   const md=DB.salechat.media;
@@ -7694,6 +7706,27 @@ function scDelMedia(i){
   if(base&&tok&&m.key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+m.key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); }
   DB.salechat.media.splice(i,1); scTouch(); scRenderMedia();
 }
+// ─── Gatilhos (palavra-chave → sugestão no painel do atendente) ───
+function scRenderTriggers(){
+  const box=$('sc-triggers'); if(!box) return;
+  const trs=DB.salechat.triggers;
+  if(!trs.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhum gatilho ainda. Ex: cliente digita "preço" → sugere o áudio da oferta.</div>'; return; }
+  const opts=scAllItems();
+  box.innerHTML=trs.map((t,i)=>`
+    <div style="display:flex;gap:9px;align-items:center;border:1px solid var(--b2);border-radius:var(--r);padding:9px 11px;margin-bottom:8px;background:var(--s1);flex-wrap:wrap">
+      <span class="muted" style="font-size:11px">Se o cliente disser</span>
+      <input class="info-val" style="flex:1;min-width:120px" value="${scEscA(t.keyword)}" placeholder="preço, valor, quanto..." oninput="scEditTrigger(${i},'keyword',this.value)">
+      <span class="muted" style="font-size:11px">sugere</span>
+      <select class="info-val" style="flex:1;min-width:160px;font-size:12px" onchange="scEditTrigger(${i},'itemId',this.value)">
+        <option value="">— escolha o item —</option>
+        ${opts.map(o=>`<option value="${scEscA(o.id)}" ${t.itemId===o.id?'selected':''}>${scEscT(o.label)}</option>`).join('')}
+      </select>
+      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:12})}</button>
+    </div>`).join('');
+}
+function scAddTrigger(){ DB.salechat.triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); }
+function scDelTrigger(i){ DB.salechat.triggers.splice(i,1); scTouch(); scRenderTriggers(); }
+function scEditTrigger(i,f,v){ if(DB.salechat.triggers[i]){ DB.salechat.triggers[i][f]=v; scTouch(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)

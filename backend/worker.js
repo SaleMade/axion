@@ -1962,6 +1962,7 @@ async function handleSaleChatGet(req, env) {
     messages: Array.isArray(sc.messages) ? sc.messages : [],
     sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
     media: Array.isArray(sc.media) ? sc.media : [],
+    triggers: Array.isArray(sc.triggers) ? sc.triggers : [],
     updated_at: sc.updated_at || 0,
   });
 }
@@ -2129,21 +2130,30 @@ async function _waLeadCapture(env, instance, phone, body) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // origem da atribuição: 'code' (exato) | 'fifo' (clique recente no mesmo número)
     const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
     if (exists) return; // já contabilizado como lead
-    // casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!). Sem código = não veio de pressel.
-    let ttclid = '', pid = '';
+    // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
+    let ttclid = '', pid = '', src = '';
     const codeM = String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
     const code = codeM ? codeM[1] : '';
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
     if (code) {
       try {
-        await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-        try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
         const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
-        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; }
+        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; }
       } catch (_) {}
     }
-    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, ts) VALUES (?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance).run();
+    // 2) FALLBACK (sem código): casa com o clique recente NÃO reivindicado no MESMO número (janela 60min, o mais antigo).
+    // Recupera o lead que apagou o código. Vale porque esses números só recebem tráfego de pressel.
+    if (!pid) {
+      try {
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance).first();
+        if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
+      } catch (_) {}
+    }
+    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, ts) VALUES (?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src).run();
     // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
     if (ttclid || pid) {
       const { pixel, token } = await _ttPixelToken(env, pid, instance);
@@ -2176,7 +2186,7 @@ async function handleWASales(req, env) {
       where = 'WHERE s.ts>=? AND s.ts<?'; binds = [start, end];
     }
     // LEFT JOIN wa_lead pra saber se a venda veio de pressel (pid) — mostra "da pressel" vs "sem rastreio" na tela
-    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw, l.pid AS pid FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone ${where} ORDER BY s.ts DESC LIMIT 300`);
+    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw, l.pid AS pid, l.src AS src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone ${where} ORDER BY s.ts DESC LIMIT 300`);
     const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
@@ -2588,9 +2598,10 @@ async function handlePresselsTotalPage(req, env){
     let orders=[];
     try{
       const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
-      const r=await env.DB.prepare("SELECT s.name, s.instance, s.value, s.ts, l.pid pid FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
+      const r=await env.DB.prepare("SELECT s.name, s.instance, s.value, s.ts, l.pid pid, l.src src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
       orders=r.results||[];
     }catch(_){}
+    const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });   // pid -> nome da pressel
     const pad=n=>String(n).padStart(2,'0');
     const totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
     const nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length, nS=orders.length-nP;
@@ -2600,13 +2611,15 @@ async function handlePresselsTotalPage(req, env){
       const bt=new Date((Number(o.ts||0)-10800)*1000);
       const hora=isNaN(bt)?'':`${pad(bt.getUTCDate())}/${pad(bt.getUTCMonth()+1)} ${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
       const attr=!!(o.pid&&String(o.pid).trim()!=='');
-      const tag=attr?`<span style="font-size:10px;font-weight:700;color:#34d399;background:rgba(52,211,153,.14);padding:2px 8px;border-radius:20px">da pressel</span>`:`<span style="font-size:10px;font-weight:700;color:#8b9bb4;background:#1a2436;padding:2px 8px;border-radius:20px">sem rastreio</span>`;
+      const pnome=attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'';
+      const aprox=o.src==='fifo'?' <span style="opacity:.7;font-weight:500">(aprox)</span>':'';
+      const tag=attr?`<span style="font-size:10px;font-weight:700;color:#34d399;background:rgba(52,211,153,.14);padding:2px 8px;border-radius:20px">${_escHtml(pnome)}${aprox}</span>`:`<span style="font-size:10px;font-weight:700;color:#8b9bb4;background:#1a2436;padding:2px 8px;border-radius:20px">sem rastreio</span>`;
       const val=Number(o.value)||0;
       return `<div style="border:1px solid #233047;border-radius:14px;background:#141c2b;padding:14px 16px;margin-bottom:9px"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><div style="font-size:14.5px;font-weight:700">${_escHtml(o.name||'Cliente')}${val>0?` · <span style="color:#34d399">R$ ${val}</span>`:''}</div><div style="font-size:12px;color:#8b9bb4;margin-top:3px">Vendedor: ${_escHtml(seller)} · ${hora}</div></div>${tag}</div></div>`;
     }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum pedido confirmado nesse dia.</div>`;
     ordersHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${orders.length}</b> pedido(s)${totV>0?` · total <b style="color:#34d399">R$ ${totV}</b>`:''}${nS>0?` · <b style="color:#34d399">${nP}</b> das pressels · <b style="color:#e6edf6">${nS}</b> sem rastreio`:''}</div>${oCards}`;
   }
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view==='vendas'?'&view=vendas':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${view==='vendas'?'view=vendas':''}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(totalSec+presselSecs)}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. "da pressel" = veio do anúncio rastreado · "sem rastreio" = orgânico/direto ou sem o código.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view==='vendas'?'&view=vendas':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${view==='vendas'?'view=vendas':''}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(totalSec+presselSecs)}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
