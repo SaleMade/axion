@@ -16,7 +16,7 @@
   window.__zvInstalled = true;
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
-  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false, sendCancel = false;
+  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false, sendCancel = false, seqStopOnReply = false, seqChatId = '';
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -69,6 +69,11 @@
 
   function onIncoming(msg) {
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
+    // Interrompe o funil se o lead responder no meio (quando o funil pede isso).
+    if (seqRunning && seqStopOnReply) {
+      var mFromS = (msg.from && (msg.from._serialized || (msg.from.toString && msg.from.toString()))) || '';
+      if (!seqChatId || !mFromS || mFromS === seqChatId) { seqStop = true; status('Funil parado: o lead respondeu', 'err'); }
+    }
     var trs = DATA.triggers || [];
     if (!trs.length) return;
     var body = String(msg.body || msg.caption || '').toLowerCase();
@@ -383,16 +388,49 @@
     });
   }
 
-  // ── Aba FUNIS ──
+  // ── Aba FUNIS ── (toque no funil = previa; botao roxo = disparar)
   function renderFunisTab(c) {
     var seqList = DATA.sequences || [];
     var inner = seqList.length ? seqList.map(function (s, i) {
-      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
+      return '<div class="zv-itemwrap">' +
+        '<div class="zv-item zv-seqrow" data-fexp="' + i + '">' +
+          '<span class="zv-ic zv-seq-ic">' + SVG.seq + '</span>' +
+          '<span class="zv-label">' + esc(s.label) + '</span>' +
+          '<button class="zv-send zv-seqsend" data-si="' + i + '" title="Disparar funil">' + SVG.play + '</button>' +
+          '<span class="zv-exp" title="Prever funil">' + SVG.chevDown + '</span>' +
+        '</div><div class="zv-prev" style="display:none"></div></div>';
     }).join('') : '<div class="zv-empty">Nenhum funil ainda. Crie na dash (Sale Chat).</div>';
-    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Dispara varios itens em ordem, com a espera de cada passo.</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
-    Array.prototype.forEach.call(c.querySelectorAll('.zv-seq'), function (b) {
-      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Toque no funil pra prever os passos e os tempos. O botao roxo dispara (clique de novo pra parar).</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
+    Array.prototype.forEach.call(c.querySelectorAll('.zv-seqrow'), function (row) {
+      row.onclick = function () {
+        var i = +row.getAttribute('data-fexp'); var wrap = row.parentNode;
+        var prev = wrap.querySelector('.zv-prev'), exp = wrap.querySelector('.zv-exp');
+        if (prev.style.display !== 'none') { prev.style.display = 'none'; prev.innerHTML = ''; exp.classList.remove('open'); }
+        else { prev.style.display = 'block'; exp.classList.add('open'); prev.innerHTML = funnelPreviewHtml(DATA.sequences[i]); }
+      };
     });
+    Array.prototype.forEach.call(c.querySelectorAll('.zv-seqsend'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+    });
+  }
+  // Previa do funil: passos em ordem com item, espera e simulacao, + tempo total estimado.
+  function funnelPreviewHtml(seq) {
+    var steps = (seq.items || []).map(normStep);
+    if (!steps.length) return '<div class="zv-prev-note">Funil sem passos. Adicione na dash.</div>';
+    var total = 0;
+    var rows = steps.map(function (st, j) {
+      var it = itemById[st.id];
+      var label = it ? it.label : '(item removido)';
+      var kindTxt = it ? ({ text: 'msg', audio: 'audio', video: 'video', image: 'imagem', document: 'doc' }[it.kind] || '') : '';
+      var simMs = st.sim ? st.sim * 1000 : (it && it.kind === 'audio' ? (it.durMs || 3000) : (it && it.kind === 'text' ? 1200 : 800));
+      total += Math.max(0, st.delay || 0) * 1000 + simMs;
+      var timing = 'espera ' + (st.delay || 0) + 's' + (st.sim ? ' + simula ' + st.sim + 's' : '');
+      return '<div class="zv-fp-step"><span class="zv-fp-n">' + (j + 1) + '</span><span class="zv-fp-lb">' + esc(label) + (kindTxt ? ' <i>(' + kindTxt + ')</i>' : '') + '</span><span class="zv-fp-t">' + timing + '</span></div>';
+    }).join('');
+    var secs = Math.round(total / 1000);
+    var totalTxt = secs >= 60 ? (Math.floor(secs / 60) + 'min ' + (secs % 60) + 's') : (secs + 's');
+    var stopTxt = seq.stopOnReply ? 'Para se o lead responder no meio.' : 'Continua mesmo se o lead responder.';
+    return '<div class="zv-fp">' + rows + '<div class="zv-fp-foot">~' + totalTxt + ' no total · ' + stopTxt + '</div></div>';
   }
 
   // ── Aba AGENDA ──
@@ -455,7 +493,8 @@
 
   // Envia UM item e resolve {ok,err} quando terminar. Nao mexe em busy/status.
   // forceChatId: manda pra um chat especifico (usado no agendamento), senao o aberto.
-  function sendItemAsync(item, forceChatId) {
+  function sendItemAsync(item, forceChatId, opts) {
+    opts = opts || {};
     return new Promise(function (resolve) {
       var chatId;
       if (forceChatId) { chatId = forceChatId; }
@@ -492,15 +531,16 @@
         return;
       }
       if (item.kind === 'text') {
+        var stMs = opts.simMs > 0 ? opts.simMs : 1200;
         var preT = Promise.resolve();
-        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, 1500)); } catch (_) {} }
-        preT.then(function () { return sleep(1200); })
+        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, stMs + 300)); } catch (_) {} }
+        preT.then(function () { return sleep(stMs); })
           .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
           .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
           .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
       }
-      var dur = item.durMs || 3000;
+      var dur = opts.simMs > 0 ? opts.simMs : (item.durMs || 3000);
       var pre = Promise.resolve();
       if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
       pre.then(function () { return sleep(dur); })
@@ -524,27 +564,30 @@
     });
   }
 
-  // Passo de funil: id do item + delay (segundos) de espera ANTES de disparar.
-  // Aceita formato antigo (so o id string) e novo ({id, delay}).
-  function normStep(raw) { return (typeof raw === 'string') ? { id: raw, delay: 0 } : { id: (raw && raw.id) || '', delay: (raw && +raw.delay) || 0 }; }
-  // Dispara os passos da sequencia em ordem, respeitando o delay de cada um. Clicar de novo para.
+  // Passo de funil: id do item + delay (espera antes, s) + sim (duracao gravando/digitando, s; 0=auto).
+  function normStep(raw) { return (typeof raw === 'string') ? { id: raw, delay: 0, sim: 0 } : { id: (raw && raw.id) || '', delay: (raw && +raw.delay) || 0, sim: (raw && +raw.sim) || 0 }; }
+  // Dispara os passos em ordem: espera de cada passo + simulacao configuravel. Para se o lead
+  // responder (quando o funil pede) ou se clicar no funil de novo.
   function sendSequence(seq, b) {
     if (busy || !seq) return;
     var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
-    busy = true; seqRunning = true; seqStop = false; sendCancel = false; if (b) b.classList.add('zv-busy');
-    function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); }
+    busy = true; seqRunning = true; seqStop = false; sendCancel = false;
+    seqStopOnReply = !!seq.stopOnReply;
+    seqChatId = (c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || '';
+    if (b) b.classList.add('zv-busy');
+    function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; seqStopOnReply = false; if (b) b.classList.remove('zv-busy'); }
     var i = 0;
     (function next() {
-      if (seqStop || i >= steps.length) { done(seqStop ? 'Sequencia parada' : 'Sequencia enviada (' + steps.length + ')', seqStop ? 'err' : 'ok'); return; }
+      if (seqStop || i >= steps.length) { done(seqStop ? 'Funil parado' : 'Funil enviado (' + steps.length + ')', seqStop ? 'err' : 'ok'); return; }
       var wait = Math.max(0, steps[i].delay || 0) * 1000;
       if (wait > 0) status('Aguardando ' + steps[i].delay + 's (' + (i + 1) + '/' + steps.length + ')...', '');
       setTimeout(function () {
-        if (seqStop) { done('Sequencia parada', 'err'); return; }
+        if (seqStop) { done('Funil parado', 'err'); return; }
         status('Enviando ' + (i + 1) + '/' + steps.length + '...', '');
-        sendItemAsync(itemById[steps[i].id]).then(function (r) {
+        sendItemAsync(itemById[steps[i].id], null, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0 }).then(function (r) {
           i++;
           if (!r.ok) { done('Falha no item ' + i + ': ' + (r.err || ''), 'err'); return; }
           setTimeout(next, 400);

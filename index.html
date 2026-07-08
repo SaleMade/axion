@@ -3718,8 +3718,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.36.0';
-const APP_LAST_CHANGE = 'Sale Chat: icone de video/imagem no ICONS (secoes com icone certo). Funis viram flow com delay por passo estilo ZapVoice: cada passo espera N segundos antes de disparar, com reordenar e excluir passo. O painel do atendente respeita o delay de cada passo na sequencia.';
+const APP_VERSION = '2.37.0';
+const APP_LAST_CHANGE = 'Sale Chat: funil totalmente configuravel. Por passo: espera (intervalo) e duracao da simulacao de gravando/digitando (0 = automatico). Por funil: parar se o lead responder no meio. O painel tem previa do funil (passos, tempos e total estimado), botao de enviar separado que vira pausa, e sincroniza ao vivo com a dash.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7684,7 +7684,7 @@ function scSecFunis(main){
     <div id="sc-list"></div>`;
   scRenderFunis();
 }
-function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0}; }
+function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0}; }
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
   const seqs=DB.salechat.sequences;
@@ -7693,11 +7693,14 @@ function scRenderFunis(){
   box.innerHTML=seqs.map((s,i)=>{
     const steps=(s.items||[]);
     const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw); return `
-      <div style="display:flex;align-items:center;gap:8px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:6px 8px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:6px 8px">
         <div class="sc-ord"><button title="Subir" ${j===0?'disabled':''} onclick="scMoveFunilItem(${i},${j},-1)">${ico('chevron-up',{size:11})}</button><button title="Descer" ${j>=steps.length-1?'disabled':''} onclick="scMoveFunilItem(${i},${j},1)">${ico('chevron-down',{size:11})}</button></div>
-        <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j+1)+'. '+scEscT(scItemLabel(st.id))}</span>
-        <span class="muted" style="font-size:10.5px">espera</span>
-        <input class="info-val" type="number" min="0" max="86400" value="${st.delay}" style="width:62px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemDelay(${i},${j},this.value)" title="Segundos de espera antes de disparar este passo">
+        <span style="flex:1;min-width:110px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j+1)+'. '+scEscT(scItemLabel(st.id))}</span>
+        <span class="muted" style="font-size:10.5px" title="Tempo de espera antes de disparar este passo (intervalo)">espera</span>
+        <input class="info-val" type="number" min="0" max="86400" value="${st.delay}" style="width:58px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemDelay(${i},${j},this.value)" title="Segundos de espera antes de disparar este passo (intervalo entre um e outro)">
+        <span class="muted" style="font-size:10.5px">s</span>
+        <span class="muted" style="font-size:10.5px" title="Tempo mostrando gravando/digitando antes de enviar (0 = automatico)">simula</span>
+        <input class="info-val" type="number" min="0" max="120" value="${st.sim}" style="width:52px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemSim(${i},${j},this.value)" title="Segundos mostrando gravando/digitando antes de enviar (0 = automatico pela duracao do audio)">
         <span class="muted" style="font-size:10.5px">s</span>
         <button onclick="scRemoveFunilItem(${i},${j})" class="btn btn-gh btn-xs sc-del" title="Remover passo" style="padding:3px 5px">${ico('x',{size:12})}</button>
       </div>`; }).join('') : '<span class="muted" style="font-size:11.5px">Sem passos ainda, adiciona abaixo</span>';
@@ -7713,6 +7716,11 @@ function scRenderFunis(){
         <option value="">+ adicionar passo na sequência...</option>
         ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
       </select>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer" title="Se o lead mandar mensagem no meio do funil, o disparo para na hora">
+        <input type="checkbox" ${s.stopOnReply?'checked':''} onchange="scFunilStopReply(${i},this.checked)" style="width:15px;height:15px;accent-color:var(--gr)">
+        <span class="muted">Parar o funil se o lead responder no meio</span>
+      </label>
+      <p class="muted" style="font-size:11px;line-height:1.5;margin:0">Espera = intervalo antes de cada passo. Simula = tempo de gravando/digitando (0 = automatico). O painel tem uma previa do funil.</p>
     </div>`;
   }).join('');
 }
@@ -7722,6 +7730,8 @@ function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[
 function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push({id:id,delay:3}); scTouch(); scRenderFunis(); } }
 function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
 function scFunilItemDelay(i,j,v){ const s=DB.salechat.sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].delay=Math.max(0,parseInt(v,10)||0); scTouch(); } }
+function scFunilItemSim(i,j,v){ const s=DB.salechat.sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].sim=Math.max(0,parseInt(v,10)||0); scTouch(); } }
+function scFunilStopReply(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].stopOnReply=!!v; scTouch(); } }
 function scMoveFunilItem(i,j,d){ const s=DB.salechat.sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
 function scMoveFunil(i,d){ if(scArrMove(DB.salechat.sequences,i,d)){ scTouch(); scRenderFunis(); } }
 // ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
