@@ -7535,23 +7535,63 @@ async function _mldChatSend(){
 function pageSaleChat(){ return `<div class="page" id="salechat-pg"></div>`; }
 function scEscA(s){return String(s==null?'':s).replace(/"/g,'&quot;');}
 function scEscT(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+// Itens de midia que ja vem prontos no painel (funil do Rafael, em library.json).
+// A dash usa como referencia pra montar funis; a midia em si fica local no injetor.
+const SC_BUILTIN=[
+  {id:'f1',label:'Audio F1 · Abertura',kind:'audio'},
+  {id:'f2',label:'Audio F2 · Garantia COD',kind:'audio'},
+  {id:'f4',label:'Audio F4 · Espelha a dor',kind:'audio'},
+  {id:'f5',label:'Audio F5 · Apresenta produto',kind:'audio'},
+  {id:'f7',label:'Audio F7 · Checa entendimento',kind:'audio'},
+  {id:'f9',label:'Audio F9 · Oferta + fechamento',kind:'audio'},
+  {id:'s1',label:'Video · Prova Carlos (Alagoas)',kind:'video'},
+  {id:'s2',label:'Video · Prova Sr Jose',kind:'video'},
+];
+function scAllItems(){ return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'})).concat(SC_BUILTIN); }
+function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
+function scSeedIfNew(){
+  if(DB.salechat.updated_at) return;
+  DB.salechat.messages=[
+    {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
+    {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
+    {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
+    {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
+  ];
+  DB.salechat.sequences=[
+    {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
+    {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
+  ];
+  DB.salechat.updated_at=Math.floor(Date.now()/1000);
+  persist();
+}
 function renderSaleChat(){
   if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={messages:[],sequences:[]};
   if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
+  if(!Array.isArray(DB.salechat.sequences)) DB.salechat.sequences=[];
+  scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <p class="muted" style="max-width:720px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
-      As mensagens de texto do painel do Sale Chat que os atendentes disparam com 1 clique dentro do WhatsApp. Edita aqui, salva sozinho, e o painel de todos puxa automatico (eles rodam o start.bat pra pegar a versao nova).
+    <p class="muted" style="max-width:760px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
+      O que aparece no painel do Sale Chat dentro do WhatsApp dos atendentes, pra disparar com 1 clique. Edita aqui, salva sozinho, e o painel de todos puxa (eles rodam o start.bat pra pegar a versao nova). Os audios e videos do funil ja vem prontos; aqui voce controla as mensagens de texto e monta os funis.
     </p>
-    <div class="cfg-card" style="max-width:720px">
+    <div class="cfg-card" style="max-width:760px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div class="info-title">${ico('message-circle',{size:15})} Mensagens rapidas</div>
+        <div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div>
         <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
       </div>
       <div id="sc-msgs"></div>
+    </div>
+    <div class="cfg-card" style="max-width:760px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="info-title">${ico('zap',{size:15})} Funis (sequencias)</div>
+        <button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button>
+      </div>
+      <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Sequencia de itens (mensagem, audio, video) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada. Monta a ordem que quiser.</p>
+      <div id="sc-funis"></div>
     </div>`;
   scRenderMsgs();
+  scRenderFunis();
 }
 function scRenderMsgs(){
   const box=$('sc-msgs'); if(!box) return;
@@ -7570,6 +7610,33 @@ function scRenderMsgs(){
 function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); persist(); scRenderMsgs(); }
 function scDelMsg(i){ DB.salechat.messages.splice(i,1); persist(); scRenderMsgs(); }
 function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); } }
+function scTouch(){ DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); }
+function scRenderFunis(){
+  const box=$('sc-funis'); if(!box) return;
+  const seqs=DB.salechat.sequences;
+  if(!seqs.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhum funil ainda. Clica em "+ Novo funil".</div>'; return; }
+  const opts=scAllItems();
+  box.innerHTML=seqs.map((s,i)=>`
+    <div style="border:1px solid var(--b2);border-radius:var(--r);padding:12px;margin-bottom:12px;background:var(--s1)">
+      <div style="display:flex;gap:9px;align-items:center;margin-bottom:10px">
+        <span class="muted" style="font-size:11px;min-width:16px;text-align:center">${i+1}</span>
+        <input class="info-val" style="flex:1" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
+        <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:12})}</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+        ${(s.items||[]).map((id,j)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:var(--s3);border:1px solid var(--b2);border-radius:20px;padding:4px 6px 4px 11px;font-size:11.5px">${(j+1)+'. '+scEscT(scItemLabel(id))}<button onclick="scRemoveFunilItem(${i},${j})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:14px;line-height:1;padding:0 2px" title="Remover">×</button></span>`).join('')||'<span class="muted" style="font-size:11.5px">Sem itens ainda, adiciona abaixo</span>'}
+      </div>
+      <select class="info-val" style="max-width:340px;font-size:12px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
+        <option value="">+ adicionar item na sequencia...</option>
+        ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
+      </select>
+    </div>`).join('');
+}
+function scAddFunil(){ DB.salechat.sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); }
+function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFunis(); }
+function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].label=v; scTouch(); } }
+function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push(id); scTouch(); scRenderFunis(); } }
+function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)

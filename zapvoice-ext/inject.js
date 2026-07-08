@@ -64,7 +64,8 @@ function buildLibrary(remote) {
 
 async function buildBundle() {
   const remote = await fetchRemoteConfig();
-  if (remote && (remote.messages || remote.sequences)) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
+  if (remote && ((remote.messages && remote.messages.length) || (remote.sequences && remote.sequences.length))) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
+  else console.log('[zv] Sem config na AXION ainda; usando o funil local (library.json).');
   const wajs = fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');
   const css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8');
   let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
