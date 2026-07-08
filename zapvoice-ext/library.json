@@ -6,5 +6,9 @@
     { "id": "f5", "stage": "F5", "label": "Apresenta produto", "file": "audios/f5_produto.ogg", "sizeKB": 535, "desc": "GlicoVax trata a raiz; veja os depoimentos" },
     { "id": "f7", "stage": "F7", "label": "Checa entendimento", "file": "audios/f7_checagem.ogg", "sizeKB": 148, "desc": "Ficou duvida? posso falar o valor e fazer o pedido" },
     { "id": "f9", "stage": "F9", "label": "Oferta + fechamento", "file": "audios/f9_oferta.ogg", "sizeKB": 1178, "desc": "R$497, paga na entrega, frete gratis, pede os dados" }
+  ],
+  "social": [
+    { "id": "s1", "stage": "PS", "kind": "video", "label": "Prova: Carlos (Alagoas)", "file": "media/social1.mp4", "caption": "Esse e o Carlos, morador de Alagoas" },
+    { "id": "s2", "stage": "PS", "kind": "video", "label": "Prova: Sr Jose", "file": "media/social2.mp4", "caption": "Sr Jose, recebeu o tratamento tem 1 semana" }
   ]
 }

@@ -42,7 +42,7 @@
     var p = document.createElement('div');
     p.id = 'zv-panel';
     p.innerHTML =
-      '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">ZapVoice Nosso</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
+      '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
       '<div id="zv-body">' +
       '  <div class="zv-h">Funil do campeao</div><div id="zv-funnel" class="zv-list"></div>' +
       '  <div class="zv-h">Meus audios</div><div id="zv-mine" class="zv-list"></div>' +

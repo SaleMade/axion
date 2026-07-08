@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.ZV_PORT ? Number(process.env.ZV_PORT) : 9222;
+const MEDIA_PORT = process.env.ZV_MEDIA_PORT ? Number(process.env.ZV_MEDIA_PORT) : 9223;
 const DIR = __dirname;
 
 function getJson(pathname) {
@@ -21,16 +22,35 @@ function getJson(pathname) {
   });
 }
 
+// Audios vao embutidos (base64, leves). Videos sao pesados, entao ficam num
+// servidor local (CORS liberado) e o painel busca por URL na hora de enviar.
 function buildLibrary() {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
-  return (lib.funnel || []).map((it) => {
-    const buf = fs.readFileSync(path.join(DIR, it.file));
-    return {
-      stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio',
-      dataUri: 'data:audio/ogg;base64,' + buf.toString('base64'),
-      durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)),
-    };
+  const funnel = (lib.funnel || []).map((it) => ({
+    stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio',
+    dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'),
+    durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)),
+  }));
+  const social = (lib.social || []).map((it) => ({
+    stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '',
+    url: 'http://127.0.0.1:' + MEDIA_PORT + '/' + String(it.file).replace(/\\/g, '/'),
+  }));
+  return { funnel, social };
+}
+
+function startMediaServer() {
+  const server = http.createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    let f = decodeURIComponent((req.url || '').split('?')[0]).replace(/^\/+/, '');
+    const full = path.join(DIR, f);
+    if (!full.startsWith(DIR) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) { res.statusCode = 404; return res.end('nf'); }
+    const ext = path.extname(full).toLowerCase();
+    res.setHeader('Content-Type', ext === '.mp4' ? 'video/mp4' : ext === '.ogg' ? 'audio/ogg' : 'application/octet-stream');
+    fs.createReadStream(full).pipe(res);
   });
+  server.on('error', (e) => { if (e.code !== 'EADDRINUSE') console.log('[zv] media server erro:', e.message); });
+  server.listen(MEDIA_PORT, '127.0.0.1', () => console.log('[zv] servidor de midia em http://127.0.0.1:' + MEDIA_PORT));
+  return server;
 }
 
 function buildBundle() {
@@ -63,6 +83,7 @@ async function findPage() {
 }
 
 async function run() {
+  startMediaServer();
   const page = await findPage();
   if (!page) { console.log('[zv] Nao achei a pagina do WhatsApp na porta ' + PORT + '. O app esta aberto com a porta de debug?'); process.exit(2); }
   console.log('[zv] Pagina encontrada:', page.title);

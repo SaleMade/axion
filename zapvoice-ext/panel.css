@@ -1,7 +1,7 @@
-/* ZapVoice Nosso — painel flutuante no WhatsApp Web */
+/* Sale Chat — painel flutuante no WhatsApp Web */
 #zv-panel{
-  position:fixed; right:18px; bottom:18px; z-index:2147483647;
-  width:300px; background:#0b141a; color:#e9edef;
+  position:fixed; right:16px; top:96px; z-index:2147483647;
+  width:290px; background:#0b141a; color:#e9edef;
   border:1px solid #2a3942; border-radius:14px;
   box-shadow:0 16px 48px rgba(0,0,0,.5);
   font-family:'Segoe UI',system-ui,sans-serif; font-size:13px; overflow:hidden;
@@ -9,7 +9,7 @@
 #zv-head{
   display:flex; align-items:center; gap:8px;
   padding:10px 12px; background:linear-gradient(180deg,#202c33,#182229);
-  user-select:none; cursor:default;
+  user-select:none; cursor:move;
 }
 #zv-dot{ width:8px; height:8px; border-radius:50%; flex:none; }
 #zv-dot.zv-on{ background:#00d95f; box-shadow:0 0 6px #00d95f; }

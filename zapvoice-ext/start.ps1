@@ -39,7 +39,7 @@ if ($cur -notmatch [regex]::Escape($want)) {
   Write-Host "Porta de debug ativada no WhatsApp (config unica)."
 }
 
-Write-Host "ZapVoice Nosso - modo APP. Deixe esta janela aberta."
+Write-Host "Sale Chat - modo APP. Deixe esta janela aberta."
 # 2 + 3) loop resiliente: garante a porta e injeta; se cair, reergue
 while ($true) {
   if (Ensure-Port) {

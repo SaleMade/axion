@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "ZapVoice Nosso — Sale Made",
+  "name": "Sale Chat — Sale Made",
   "version": "0.2.0",
   "description": "Soundboard do funil no WhatsApp Web: dispara os audios (voz real) e videos com 1 clique na conversa aberta, simulando 'gravando...', pela sessao do proprio atendente (motor WA-JS).",
   "permissions": ["storage", "unlimitedStorage"],
@@ -23,5 +23,5 @@
     { "resources": ["audios/*", "library.json"], "matches": ["https://web.whatsapp.com/*"] }
   ],
   "options_page": "options.html",
-  "action": { "default_title": "ZapVoice Nosso — configurar" }
+  "action": { "default_title": "Sale Chat — configurar" }
 }
