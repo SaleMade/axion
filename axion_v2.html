@@ -1467,6 +1467,26 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .cfg-h p{font-size:13px;color:var(--t3);margin:0}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
+/* ─── Sale Chat: dashboard com seções laterais ─── */
+.sc-wrap{ display:flex; gap:16px; align-items:flex-start; }
+.sc-nav{ flex:none; width:196px; display:flex; flex-direction:column; gap:4px; position:sticky; top:12px; }
+.sc-navitem{ display:flex; align-items:center; gap:9px; background:var(--s2); border:1px solid var(--b1); color:var(--t2); border-radius:var(--r); padding:10px 12px; cursor:pointer; font-family:inherit; font-size:13px; text-align:left; transition:background .12s,color .12s,border-color .12s; }
+.sc-navitem:hover{ background:var(--s3); color:var(--tx); }
+.sc-navitem.on{ background:var(--bld); color:var(--bl2); border-color:var(--bl); font-weight:600; }
+.sc-navitem .sc-nlbl{ flex:1; }
+.sc-navn{ font-size:11px; background:var(--s3); color:var(--t3); border-radius:10px; padding:1px 7px; min-width:20px; text-align:center; }
+.sc-navitem.on .sc-navn{ background:var(--bl); color:#fff; }
+.sc-main{ flex:1; min-width:0; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rl); padding:18px 20px; }
+.sc-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
+.sc-item{ display:flex; gap:10px; align-items:flex-start; border:1px solid var(--b2); border-radius:var(--r); padding:11px 12px; margin-bottom:10px; background:var(--s1); }
+.sc-ord{ display:flex; flex-direction:column; gap:2px; flex:none; padding-top:2px; }
+.sc-ord button{ background:var(--s3); border:none; color:var(--t3); border-radius:5px; width:22px; height:18px; cursor:pointer; font-size:10px; line-height:1; }
+.sc-ord button:hover:not(:disabled){ color:var(--tx); background:var(--s4); }
+.sc-ord button:disabled{ opacity:.25; cursor:default; }
+.sc-del{ color:var(--rd); flex:none; }
+.sc-empty{ color:var(--t3); text-align:center; padding:26px 8px; font-size:12.5px; line-height:1.5; }
+.sc-hint{ color:var(--t3); font-size:11.5px; line-height:1.5; margin:0 0 14px; }
+@media(max-width:860px){ .sc-wrap{ flex-direction:column; } .sc-nav{ width:100%; flex-direction:row; flex-wrap:wrap; position:static; } .sc-navitem{ flex:1; min-width:130px; } }
 .cfg-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
   padding:4px 10px;border-radius:7px;background:var(--s4);color:var(--t3)}
 /* details/summary do backend collapsable */
@@ -3698,8 +3718,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.34.0';
-const APP_LAST_CHANGE = 'CRM: barra de filtros com rotulos + campo Periodo (KPIs respeitam o periodo), KPIs abaixo dos filtros e donut da taxa no card de Recebimento - alinhando com a referencia.';
+const APP_VERSION = '2.35.0';
+const APP_LAST_CHANGE = 'Sale Chat redesenhado estilo ZapVoice: dashboard com secoes laterais (Mensagens, Audios, Videos, Imagens, Documentos, Funis, Gatilhos). Funil campeao agora editavel na dash (audios/videos do Rafael no R2), com preview escutavel, legenda, reordenar e excluir. Painel do atendente agrupa a midia por tipo.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3719,6 +3739,8 @@ const ICONS = {
   'trending-up':    '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
   'arrow-up-right': '<line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/>',
   'arrow-up':       '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+  'chevron-up':     '<polyline points="18 15 12 9 6 15"/>',
+  'chevron-down':   '<polyline points="6 9 12 15 18 9"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -7536,194 +7558,246 @@ async function _mldChatSend(){
 function pageSaleChat(){ return `<div class="page" id="salechat-pg"></div>`; }
 function scEscA(s){return String(s==null?'':s).replace(/"/g,'&quot;');}
 function scEscT(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
-// Itens de midia que ja vem prontos no painel (funil do Rafael, em library.json).
-// A dash usa como referencia pra montar funis; a midia em si fica local no injetor.
-const SC_BUILTIN=[
-  {id:'f1',label:'Audio F1 · Abertura',kind:'audio'},
-  {id:'f2',label:'Audio F2 · Garantia COD',kind:'audio'},
-  {id:'f4',label:'Audio F4 · Espelha a dor',kind:'audio'},
-  {id:'f5',label:'Audio F5 · Apresenta produto',kind:'audio'},
-  {id:'f7',label:'Audio F7 · Checa entendimento',kind:'audio'},
-  {id:'f9',label:'Audio F9 · Oferta + fechamento',kind:'audio'},
-  {id:'s1',label:'Video · Prova Carlos (Alagoas)',kind:'video'},
-  {id:'s2',label:'Video · Prova Sr Jose',kind:'video'},
+// ─── Funil campeao (audios/videos do Rafael): agora no R2 = editaveis na dash. ───
+// Semeados em DB.salechat.media com ids estaveis (f1..f9, s1/s2) pros funis apontarem.
+const SC_CHAMP=[
+  {id:'f1',kind:'audio',label:'F1 Abertura',key:'m/mrckutmlmks6pj.ogg',mime:'audio/ogg'},
+  {id:'f2',kind:'audio',label:'F2 Garantia COD',key:'m/mrckuubd35yqe1.ogg',mime:'audio/ogg'},
+  {id:'f4',kind:'audio',label:'F4 Espelha a dor',key:'m/mrckuvg7mepyoq.ogg',mime:'audio/ogg'},
+  {id:'f5',kind:'audio',label:'F5 Apresenta produto',key:'m/mrckuwbuifx650.ogg',mime:'audio/ogg'},
+  {id:'f7',kind:'audio',label:'F7 Checa entendimento',key:'m/mrckuwzqjbxnz7.ogg',mime:'audio/ogg'},
+  {id:'f9',kind:'audio',label:'F9 Oferta + fechamento',key:'m/mrckuy5rtpwezf.ogg',mime:'audio/ogg'},
+  {id:'s1',kind:'video',label:'Prova: Carlos (Alagoas)',key:'m/mrckv9b8qq6pky.mp4',mime:'video/mp4',caption:'Esse e o Carlos, morador de Alagoas'},
+  {id:'s2',kind:'video',label:'Prova: Sr Jose',key:'m/mrckvvz5kbpjsb.mp4',mime:'video/mp4',caption:'Sr Jose, recebeu o tratamento tem 1 semana'},
 ];
+const SC_SECTIONS=[
+  {key:'messages',label:'Mensagens',icon:'message-circle'},
+  {key:'audio',label:'Áudios',icon:'volume'},
+  {key:'video',label:'Vídeos',icon:'video'},
+  {key:'image',label:'Imagens',icon:'eye'},
+  {key:'document',label:'Documentos',icon:'clipboard-list'},
+  {key:'funis',label:'Funis',icon:'repeat'},
+  {key:'triggers',label:'Gatilhos',icon:'zap'},
+];
+var scSection='messages';
+function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salechat/media/'+String(key||'').split('/').map(encodeURIComponent).join('/'); }
 function scAllItems(){
   return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
-    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:(m.kind==='video'?'Video · ':m.kind==='image'?'Imagem · ':m.kind==='document'?'Doc · ':'Audio · ')+(m.label||m.id),kind:m.kind})))
-    .concat(SC_BUILTIN);
+    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
 }
 function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
+function scCount(key){
+  if(key==='messages') return (DB.salechat.messages||[]).length;
+  if(key==='funis') return (DB.salechat.sequences||[]).length;
+  if(key==='triggers') return (DB.salechat.triggers||[]).length;
+  return (DB.salechat.media||[]).filter(m=>m.kind===key).length;
+}
+function scEmpty(t){ return '<div class="sc-empty">'+scEscT(t)+'</div>'; }
+function scArrMove(a,i,d){ const j=i+d; if(j<0||j>=a.length) return false; const t=a[i]; a[i]=a[j]; a[j]=t; return true; }
+function scOrderBtns(cb,i,len){
+  return '<div class="sc-ord">'+
+    '<button title="Subir" '+(i===0?'disabled':'')+' onclick="'+cb+'('+i+',-1)">'+ico('chevron-up',{size:12})+'</button>'+
+    '<button title="Descer" '+(i>=len-1?'disabled':'')+' onclick="'+cb+'('+i+',1)">'+ico('chevron-down',{size:12})+'</button></div>';
+}
 function scSeedIfNew(){
-  if(DB.salechat.updated_at) return;
-  DB.salechat.messages=[
-    {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
-    {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
-    {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
-    {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
-  ];
-  DB.salechat.sequences=[
-    {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
-    {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
-  ];
-  DB.salechat.updated_at=Math.floor(Date.now()/1000);
-  persist();
+  var changed=false;
+  if(!DB.salechat.updated_at){
+    DB.salechat.messages=[
+      {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
+      {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
+      {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
+      {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
+    ];
+    DB.salechat.sequences=[
+      {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
+      {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
+    ];
+    changed=true;
+  }
+  if(!DB.salechat.champSeeded){
+    var have={}; (DB.salechat.media||[]).forEach(function(m){ have[m.id]=1; });
+    SC_CHAMP.forEach(function(c){ if(!have[c.id]) DB.salechat.media.push({id:c.id,kind:c.kind,label:c.label,key:c.key,mime:c.mime,caption:c.caption||'',champ:true}); });
+    DB.salechat.champSeeded=true;
+    changed=true;
+  }
+  if(changed){ DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); }
 }
 function renderSaleChat(){
-  if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={messages:[],sequences:[]};
-  if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
-  if(!Array.isArray(DB.salechat.sequences)) DB.salechat.sequences=[];
-  if(!Array.isArray(DB.salechat.media)) DB.salechat.media=[];
-  if(!Array.isArray(DB.salechat.triggers)) DB.salechat.triggers=[];
+  if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={};
+  ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(DB.salechat[k])) DB.salechat[k]=[]; });
   scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
-  const builtinRef=(kind,label,icon)=>`<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--t3);font-weight:700;margin:10px 0 6px">${label}</div>`+
-    SC_BUILTIN.filter(x=>x.kind===kind).map(x=>`<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--b1);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;background:var(--s1);font-size:12.5px"><span style="color:var(--bl2);flex:none">${ico(icon,{size:13})}</span>${x.label.replace(/^(Audio|Video) · /,'')}</div>`).join('');
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <p class="muted" style="max-width:960px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
-      O que aparece no painel do Sale Chat dentro do WhatsApp dos atendentes, pra disparar com 1 clique. Edita aqui, salva sozinho, e o painel de todos puxa (eles rodam o start.bat pra pegar a versao nova). Os audios e videos do funil ja vem prontos; aqui voce controla as mensagens, a tua midia, os funis e os gatilhos.
-    </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:16px;align-items:start">
-      <div class="cfg-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div>
-          <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
-        </div>
-        <div id="sc-msgs"></div>
-      </div>
-      <div class="cfg-card">
-        <div class="info-title">${ico('star',{size:15})} Prontos do funil campeao</div>
-        <p class="muted" style="font-size:11.5px;margin:6px 0 4px;line-height:1.5">Ja vem embutidos no painel (os audios e videos do melhor vendedor, o Rafael). Aparecem pros atendentes automatico. Pra usar a TUA voz e teus videos, sobe em "Midia" ao lado.</p>
-        ${builtinRef('audio','Audios do funil','volume')}
-        ${builtinRef('video','Videos de prova social','video')}
-      </div>
-      <div class="cfg-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-          <div class="info-title">${ico('volume',{size:15})} Minha midia</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Audio<input type="file" accept="audio/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-            <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Video<input type="file" accept="video/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-            <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Imagem<input type="file" accept="image/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-            <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Documento<input type="file" accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-          </div>
-        </div>
-        <p class="muted" style="font-size:11.5px;margin:0 0 12px;line-height:1.5">Sobe teus proprios audios (a tua voz), videos, imagens e documentos. Ficam na nuvem e o painel de todos puxa. Ate 60MB.</p>
-        <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
-        <div id="sc-media"></div>
-      </div>
-      <div class="cfg-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div class="info-title">${ico('zap',{size:15})} Funis (sequencias)</div>
-          <button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button>
-        </div>
-        <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Sequencia de itens (mensagem, audio, video) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada.</p>
-        <div id="sc-funis"></div>
-      </div>
-      <div class="cfg-card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div>
-          <button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button>
-        </div>
-        <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo (ele confirma com 1 clique).</p>
-        <div id="sc-triggers"></div>
-      </div>
+    <p class="sc-hint" style="max-width:920px;margin:-4px 0 16px;font-size:12.5px">Tudo que os atendentes disparam no WhatsApp com 1 clique. Escolhe uma seção à esquerda pra gerenciar. Salva sozinho e o painel de todos puxa (rodam o start.bat pra pegar a versão nova).</p>
+    <div class="sc-wrap">
+      <div class="sc-nav" id="sc-nav"></div>
+      <div class="sc-main" id="sc-main"></div>
     </div>`;
+  scRenderNav();
+  scRenderSection();
+}
+function scRenderNav(){
+  const nav=$('sc-nav'); if(!nav) return;
+  nav.innerHTML=SC_SECTIONS.map(function(s){ return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:15})}<span class="sc-nlbl">${s.label}</span><span class="sc-navn">${scCount(s.key)}</span></button>`; }).join('');
+}
+function scGoSection(k){ scSection=k; scRenderNav(); scRenderSection(); }
+function scRenderSection(){
+  const main=$('sc-main'); if(!main) return;
+  if(scSection==='messages') return scSecMessages(main);
+  if(scSection==='funis') return scSecFunis(main);
+  if(scSection==='triggers') return scSecTriggers(main);
+  return scSecMedia(main,scSection);
+}
+// ─── Seção: Mensagens ───
+function scSecMessages(main){
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div><button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button></div>
+    <p class="sc-hint">Textos prontos que o atendente manda com 1 clique: pedir dados, confirmar pedido, tirar dúvida.</p>
+    <div id="sc-list"></div>`;
   scRenderMsgs();
-  scRenderMedia();
-  scRenderFunis();
-  scRenderTriggers();
 }
 function scRenderMsgs(){
-  const box=$('sc-msgs'); if(!box) return;
+  const box=$('sc-list'); if(!box) return;
   const msgs=DB.salechat.messages;
-  if(!msgs.length){ box.innerHTML='<div class="muted" style="padding:16px;text-align:center">Nenhuma mensagem ainda. Clica em "+ Nova mensagem".</div>'; return; }
+  if(!msgs.length){ box.innerHTML=scEmpty('Nenhuma mensagem. Clica em "+ Nova mensagem".'); return; }
   box.innerHTML=msgs.map((m,i)=>`
-    <div style="border:1px solid var(--b2);border-radius:var(--r);padding:11px 12px;margin-bottom:10px;background:var(--s1)">
-      <div style="display:flex;gap:9px;align-items:center;margin-bottom:8px">
-        <span class="muted" style="font-size:11px;min-width:16px;text-align:center">${i+1}</span>
-        <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome curto (ex: Fechar pedido)" oninput="scEdit(${i},'label',this.value)">
-        <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
+    <div class="sc-item">
+      ${scOrderBtns('scMoveMsg',i,msgs.length)}
+      <div style="flex:1;min-width:0">
+        <input class="info-val" value="${scEscA(m.label)}" placeholder="Nome curto (ex: Fechar pedido)" oninput="scEdit(${i},'label',this.value)">
+        <textarea class="info-val" rows="2" placeholder="Texto enviado no WhatsApp" style="margin-top:7px;resize:vertical;line-height:1.4" oninput="scEdit(${i},'text',this.value)">${scEscT(m.text)}</textarea>
       </div>
-      <textarea class="info-val" rows="2" placeholder="Texto que vai ser enviado no WhatsApp" oninput="scEdit(${i},'text',this.value)" style="resize:vertical;line-height:1.4">${scEscT(m.text)}</textarea>
+      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
     </div>`).join('');
 }
-function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); persist(); scRenderMsgs(); }
-function scDelMsg(i){ DB.salechat.messages.splice(i,1); persist(); scRenderMsgs(); }
-function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); } }
+function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); scTouch(); scRenderMsgs(); scRenderNav(); }
+function scDelMsg(i){ DB.salechat.messages.splice(i,1); scTouch(); scRenderMsgs(); scRenderNav(); }
+function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; scTouch(); } }
+function scMoveMsg(i,d){ if(scArrMove(DB.salechat.messages,i,d)){ scTouch(); scRenderMsgs(); } }
 function scTouch(){ DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); }
+// ─── Seção: Funis ───
+function scSecFunis(main){
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('repeat',{size:15})} Funis (sequências)</div><button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button></div>
+    <p class="sc-hint">Sequência de itens (mensagem, áudio, vídeo) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada.</p>
+    <div id="sc-list"></div>`;
+  scRenderFunis();
+}
 function scRenderFunis(){
-  const box=$('sc-funis'); if(!box) return;
+  const box=$('sc-list'); if(!box) return;
   const seqs=DB.salechat.sequences;
-  if(!seqs.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhum funil ainda. Clica em "+ Novo funil".</div>'; return; }
+  if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
   const opts=scAllItems();
   box.innerHTML=seqs.map((s,i)=>`
-    <div style="border:1px solid var(--b2);border-radius:var(--r);padding:12px;margin-bottom:12px;background:var(--s1)">
-      <div style="display:flex;gap:9px;align-items:center;margin-bottom:10px">
-        <span class="muted" style="font-size:11px;min-width:16px;text-align:center">${i+1}</span>
+    <div class="sc-item" style="flex-direction:column;align-items:stretch;gap:10px">
+      <div style="display:flex;gap:9px;align-items:center">
+        ${scOrderBtns('scMoveFunil',i,seqs.length)}
         <input class="info-val" style="flex:1" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
-        <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:12})}</button>
+        <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:12})}</button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
         ${(s.items||[]).map((id,j)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:var(--s3);border:1px solid var(--b2);border-radius:20px;padding:4px 6px 4px 11px;font-size:11.5px">${(j+1)+'. '+scEscT(scItemLabel(id))}<button onclick="scRemoveFunilItem(${i},${j})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:14px;line-height:1;padding:0 2px" title="Remover">×</button></span>`).join('')||'<span class="muted" style="font-size:11.5px">Sem itens ainda, adiciona abaixo</span>'}
       </div>
-      <select class="info-val" style="max-width:340px;font-size:12px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
-        <option value="">+ adicionar item na sequencia...</option>
+      <select class="info-val" style="max-width:360px;font-size:12px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
+        <option value="">+ adicionar item na sequência...</option>
         ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
       </select>
     </div>`).join('');
 }
-function scAddFunil(){ DB.salechat.sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); }
-function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFunis(); }
+function scAddFunil(){ DB.salechat.sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
+function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
 function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].label=v; scTouch(); } }
 function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push(id); scTouch(); scRenderFunis(); } }
 function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
-// ─── Mídia (upload pro R2 via Worker) ───
+function scMoveFunil(i,d){ if(scArrMove(DB.salechat.sequences,i,d)){ scTouch(); scRenderFunis(); } }
+// ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
+function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':kind==='document'?'clipboard-list':'volume'; }
+function scSecMedia(main,kind){
+  const acc={audio:'audio/*',video:'video/*',image:'image/*',document:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf'}[kind];
+  const title={audio:'Áudios',video:'Vídeos',image:'Imagens',document:'Documentos'}[kind];
+  const hint={audio:'A tua voz e os áudios do funil. Escuta cada um aqui antes de liberar pros atendentes.',video:'Vídeos de prova social e demonstração. A legenda vai junto no envio.',image:'Imagens de produto, provas, prints. Legenda opcional.',document:'PDFs e arquivos que o atendente envia no chat.'}[kind];
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico(scMediaIcon(kind),{size:15})} ${title}</div><label class="btn btn-gr btn-sm" style="cursor:pointer">+ Adicionar<input type="file" accept="${acc}" style="display:none" onchange="scUploadMedia(this.files[0],this,'${kind}')"></label></div>
+    <p class="sc-hint">${hint} Ficam na nuvem, até 60MB. O painel de todos puxa.</p>
+    <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
+    <div id="sc-list"></div>`;
+  scRenderMediaKind(kind);
+}
+function scRenderMediaKind(kind){
+  const box=$('sc-list'); if(!box) return;
+  const all=DB.salechat.media;
+  const rows=all.map((m,i)=>({m:m,i:i})).filter(x=>x.m.kind===kind);
+  if(!rows.length){ box.innerHTML=scEmpty('Nada aqui ainda. Sobe pelo "+ Adicionar".'); return; }
+  box.innerHTML=rows.map((x,pos)=>{
+    const m=x.m, i=x.i, url=scMediaUrl(m.key);
+    const prev = m.kind==='audio'?`<audio controls preload="none" src="${url}" style="height:34px;max-width:260px;width:100%"></audio>`
+      : m.kind==='image'?`<img src="${url}" loading="lazy" style="height:56px;border-radius:6px;border:1px solid var(--b2)">`
+      : m.kind==='video'?`<video src="${url}" controls preload="none" style="height:110px;border-radius:6px;border:1px solid var(--b2);background:#000"></video>`
+      : `<a href="${url}" target="_blank" class="muted" style="font-size:11.5px;text-decoration:underline">abrir arquivo</a>`;
+    const capField = (m.kind==='video'||m.kind==='image')?`<input class="info-val" style="margin-top:6px;font-size:12px" value="${scEscA(m.caption||'')}" placeholder="Legenda (opcional, vai junto)" oninput="scEditMediaIdx(${i},'caption',this.value)">`:'';
+    return `<div class="sc-item">
+      ${scOrderBtns('scMoveMedia_'+kind,pos,rows.length)}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:7px">
+          <span style="color:var(--bl2);flex:none">${ico(scMediaIcon(m.kind),{size:14})}</span>
+          <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome" oninput="scEditMediaIdx(${i},'label',this.value)">
+          ${m.champ?'<span style="font-size:9.5px;background:var(--bld);color:var(--bl2);border-radius:5px;padding:2px 6px;flex:none">campeão</span>':''}
+        </div>
+        ${capField}
+        <div style="margin-top:8px">${prev}</div>
+      </div>
+      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelMediaIdx(${i})">${ico('trash',{size:12})}</button>
+    </div>`;
+  }).join('');
+}
 function setScMediaStatus(m,err){ const el=$('sc-media-status'); if(el){ el.textContent=m||''; el.style.color=err?'var(--rd)':'var(--gr)'; } }
-async function scUploadMedia(file, el){
+async function scUploadMedia(file, el, kindHint){
   if(!file) return;
   const base=apiUrl(), tok=apiToken();
-  if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); return; }
-  const kind=file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':file.type.indexOf('image')===0?'image':'document';
-  if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); return; }
+  if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); if(el)el.value=''; return; }
+  const kind=kindHint||(file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':file.type.indexOf('image')===0?'image':'document');
+  if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); if(el)el.value=''; return; }
   setScMediaStatus('Subindo '+file.name+'... ('+Math.round(file.size/1024)+' KB)');
   try{
     const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
     const d=await r.json().catch(()=>({}));
-    if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); return; }
-    DB.salechat.media.push({id:'md'+Date.now().toString(36),kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime});
-    scTouch(); scRenderMedia(); setScMediaStatus(file.name+' adicionado.');
+    if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); if(el)el.value=''; return; }
+    DB.salechat.media.push({id:'md'+Date.now().toString(36),kind:kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime,caption:''});
+    scTouch(); scRenderMediaKind(kind); scRenderNav(); setScMediaStatus(file.name+' adicionado.');
   }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
   if(el) el.value='';
 }
-function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':kind==='document'?'clipboard-list':'volume'; }
-function scRenderMedia(){
-  const box=$('sc-media'); if(!box) return;
-  const md=DB.salechat.media;
-  if(!md.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhuma mídia sua ainda. Sobe áudio, vídeo ou imagem acima.</div>'; return; }
-  box.innerHTML=md.map((m,i)=>`
-    <div style="display:flex;gap:9px;align-items:center;border:1px solid var(--b2);border-radius:var(--r);padding:9px 11px;margin-bottom:8px;background:var(--s1)">
-      <span style="color:var(--bl2);flex:none">${ico(scMediaIcon(m.kind),{size:15})}</span>
-      <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome" oninput="scEditMedia(${i},this.value)">
-      <span class="muted" style="font-size:10px;flex:none">${m.kind}</span>
-      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelMedia(${i})">${ico('trash',{size:12})}</button>
-    </div>`).join('');
-}
-function scEditMedia(i,v){ if(DB.salechat.media[i]){ DB.salechat.media[i].label=v; scTouch(); } }
-function scDelMedia(i){
+function scEditMediaIdx(i,f,v){ if(DB.salechat.media[i]){ DB.salechat.media[i][f]=v; scTouch(); } }
+function scDelMediaIdx(i){
   const m=DB.salechat.media[i]; if(!m) return;
+  if(m.champ && !confirm('Excluir "'+(m.label||'item')+'" do funil campeão? Ele some do painel de todos os atendentes.')) return;
   const base=apiUrl(), tok=apiToken();
   if(base&&tok&&m.key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+m.key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); }
-  DB.salechat.media.splice(i,1); scTouch(); scRenderMedia();
+  DB.salechat.media.splice(i,1); scTouch(); scRenderMediaKind(m.kind); scRenderNav();
 }
-// ─── Gatilhos (palavra-chave → sugestão no painel do atendente) ───
+function scMoveMedia(kind,pos,d){
+  const all=DB.salechat.media, idxs=[];
+  all.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
+  const b=pos+d; if(b<0||b>=idxs.length) return;
+  const ia=idxs[pos], ib=idxs[b], t=all[ia]; all[ia]=all[ib]; all[ib]=t;
+  scTouch(); scRenderMediaKind(kind);
+}
+function scMoveMedia_audio(p,d){ scMoveMedia('audio',p,d); }
+function scMoveMedia_video(p,d){ scMoveMedia('video',p,d); }
+function scMoveMedia_image(p,d){ scMoveMedia('image',p,d); }
+function scMoveMedia_document(p,d){ scMoveMedia('document',p,d); }
+// ─── Seção: Gatilhos (palavra-chave → sugestão no painel do atendente) ───
+function scSecTriggers(main){
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div><button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button></div>
+    <p class="sc-hint">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo (ele confirma com 1 clique).</p>
+    <div id="sc-list"></div>`;
+  scRenderTriggers();
+}
 function scRenderTriggers(){
-  const box=$('sc-triggers'); if(!box) return;
+  const box=$('sc-list'); if(!box) return;
   const trs=DB.salechat.triggers;
-  if(!trs.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhum gatilho ainda. Ex: cliente digita "preço" → sugere o áudio da oferta.</div>'; return; }
+  if(!trs.length){ box.innerHTML=scEmpty('Nenhum gatilho. Ex: cliente digita "preço" → sugere o áudio da oferta.'); return; }
   const opts=scAllItems();
   box.innerHTML=trs.map((t,i)=>`
-    <div style="display:flex;gap:9px;align-items:center;border:1px solid var(--b2);border-radius:var(--r);padding:9px 11px;margin-bottom:8px;background:var(--s1);flex-wrap:wrap">
+    <div class="sc-item" style="align-items:center;flex-wrap:wrap">
       <span class="muted" style="font-size:11px">Se o cliente disser</span>
       <input class="info-val" style="flex:1;min-width:120px" value="${scEscA(t.keyword)}" placeholder="preço, valor, quanto..." oninput="scEditTrigger(${i},'keyword',this.value)">
       <span class="muted" style="font-size:11px">sugere</span>
@@ -7731,11 +7805,11 @@ function scRenderTriggers(){
         <option value="">— escolha o item —</option>
         ${opts.map(o=>`<option value="${scEscA(o.id)}" ${t.itemId===o.id?'selected':''}>${scEscT(o.label)}</option>`).join('')}
       </select>
-      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:12})}</button>
+      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:12})}</button>
     </div>`).join('');
 }
-function scAddTrigger(){ DB.salechat.triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); }
-function scDelTrigger(i){ DB.salechat.triggers.splice(i,1); scTouch(); scRenderTriggers(); }
+function scAddTrigger(){ DB.salechat.triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
+function scDelTrigger(i){ DB.salechat.triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
 function scEditTrigger(i,f,v){ if(DB.salechat.triggers[i]){ DB.salechat.triggers[i][f]=v; scTouch(); } }
 
 /* ═══════════════════════════════════════════════════════

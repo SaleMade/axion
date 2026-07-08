@@ -116,13 +116,16 @@
     window.__zvSgT = setTimeout(function () { s.style.display = 'none'; }, 30000);
   }
 
-  function itemsHtml(list, prefix) {
-    return (list || []).map(function (it, i) {
+  function badgeFor(it) { return it.stage || ({ audio: 'AUD', video: 'VID', image: 'IMG', document: 'DOC', text: 'MSG' }[it.kind] || '•'); }
+  function itemsHtml(list) {
+    return (list || []).map(function (it) {
       var icon = it.kind === 'video' ? '&#9654;' : '&#9655;';
-      return '<button class="zv-item" data-k="' + prefix + '" data-i="' + i + '" title="' + esc(it.desc || it.caption || '') + '">' +
-        '<span class="zv-stage">' + esc(it.stage) + '</span><span class="zv-label">' + esc(it.label) + '</span><span class="zv-play">' + icon + '</span></button>';
+      return '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
+        '<span class="zv-stage">' + esc(badgeFor(it)) + '</span><span class="zv-label">' + esc(it.label) + '</span><span class="zv-play">' + icon + '</span></button>';
     }).join('');
   }
+  function mediaByKind(kind) { return (DATA.media || []).filter(function (m) { return m.kind === kind; }); }
+  function sectionHtml(title, list) { return list.length ? ('<div class="zv-h">' + title + '</div><div class="zv-list">' + itemsHtml(list) + '</div>') : ''; }
 
   function buildIndex() {
     itemById = {};
@@ -132,16 +135,18 @@
   function render() {
     buildIndex();
     var p = document.createElement('div'); p.id = 'zv-panel';
-    var msgs = (DATA.messages && DATA.messages.length) ? ('<div class="zv-h">Mensagens</div><div class="zv-list">' + itemsHtml(DATA.messages, 'messages') + '</div>') : '';
-    var social = (DATA.social && DATA.social.length) ? ('<div class="zv-h">Prova social</div><div class="zv-list">' + itemsHtml(DATA.social, 'social') + '</div>') : '';
-    var mine = (DATA.media && DATA.media.length) ? ('<div class="zv-h">Minha midia</div><div class="zv-list">' + itemsHtml(DATA.media, 'media') + '</div>') : '';
+    var msgs = sectionHtml('Mensagens', DATA.messages || []);
+    var auds = sectionHtml('Audios do funil', mediaByKind('audio'));
+    var vids = sectionHtml('Videos', mediaByKind('video'));
+    var imgs = sectionHtml('Imagens', mediaByKind('image'));
+    var docs = sectionHtml('Documentos', mediaByKind('document'));
     var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h">Sequencias</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
       return '<button class="zv-seq" data-si="' + i + '"><span class="zv-stage">SEQ</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">&#9193;</span></button>';
     }).join('') + '</div>') : '';
+    var empty = (!msgs && !auds && !vids && !imgs && !docs && !seqs) ? '<div class="zv-empty">Nada configurado ainda. Abra a dash (Sale Chat) e adicione mensagens, audios e videos.</div>' : '';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
-      '<div id="zv-body"><div id="zv-suggest" style="display:none"></div>' + msgs + '<div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
-      social + mine + seqs +
+      '<div id="zv-body"><div id="zv-suggest" style="display:none"></div>' + msgs + auds + vids + imgs + docs + seqs + empty +
       '<div id="zv-status"></div>' +
       '<div id="zv-sched" style="display:none"></div>' +
       '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label><a id="zv-sched-toggle">Agendar</a></div></div>';
@@ -154,11 +159,7 @@
     if (stgl) stgl.onclick = function () { var b = p.querySelector('#zv-sched'); if (b) { var show = b.style.display === 'none'; b.style.display = show ? 'block' : 'none'; if (show) schedRender(); } };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
     Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
-      b.onclick = function () {
-        var k = b.getAttribute('data-k');
-        var list = k === 'social' ? DATA.social : (k === 'messages' ? DATA.messages : (k === 'media' ? DATA.media : DATA.funnel));
-        send(list[+b.getAttribute('data-i')], b);
-      };
+      b.onclick = function () { var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
     });
     Array.prototype.forEach.call(p.querySelectorAll('.zv-seq'), function (b) {
       b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };

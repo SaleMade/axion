@@ -61,36 +61,41 @@ function getJson(pathname) {
 // base64 via CDP na hora do clique, chamando window.__zvDoSend na pagina (WPP envia).
 async function buildLibrary(remote) {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
-  const funnel = (lib.funnel || []).map((it) => ({
-    id: it.id, stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio',
-    dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'),
-    durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)),
-  }));
-  const social = (lib.social || []).map((it) => ({
-    id: it.id, stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '',
-    file: String(it.file).replace(/\\/g, '/'),
-  }));
   // Mensagens e funis: se a AXION mandou config, ela manda (o Diretor edita na dash);
   // senao, cai no library.json local.
   const rMsgs = remote && Array.isArray(remote.messages) && remote.messages.length ? remote.messages : (lib.messages || []);
   const messages = rMsgs.map((it) => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '' }));
   const sequences = remote && Array.isArray(remote.sequences) && remote.sequences.length ? remote.sequences : (lib.sequences || []);
-  // Midia que o Diretor subiu na dash (R2): audio/imagem embutidos em base64;
-  // video por URL (baixado so na hora do clique, via __zvReq).
-  const media = [];
-  for (const m of (remote && Array.isArray(remote.media) ? remote.media : [])) {
-    if (!m || !m.key) continue;
-    const url = MEDIA_BASE + '/' + m.key;
-    if (m.kind === 'video') { media.push({ id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url }); continue; }
-    const buf = await fetchBytes(url);
-    if (!buf) continue;
-    const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
-    if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri });
-    else if (m.kind === 'document') media.push({ id: m.id, kind: 'document', label: m.label || 'Documento', mime: m.mime || 'application/pdf', dataUri });
-    else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
-  }
   const triggers = remote && Array.isArray(remote.triggers) ? remote.triggers : [];
-  return { messages, funnel, social, sequences, media, triggers };
+  // Midia unificada (audio/video/imagem/documento). O painel agrupa por tipo.
+  // Online: tudo vem da dash (R2) — funil campeao + midia do Diretor, editaveis.
+  // Offline: cai no funil local (library.json) pra nao ficar sem soundboard.
+  const media = [];
+  const remoteMedia = remote && Array.isArray(remote.media) ? remote.media : [];
+  if (remoteMedia.length) {
+    for (const m of remoteMedia) {
+      if (!m || !m.key) continue;
+      const url = MEDIA_BASE + '/' + m.key;
+      // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
+      if (m.kind === 'video') { media.push({ id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url }); continue; }
+      const buf = await fetchBytes(url);
+      if (!buf) continue;
+      const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
+      if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri });
+      else if (m.kind === 'document') media.push({ id: m.id, kind: 'document', label: m.label || 'Documento', mime: m.mime || 'application/pdf', dataUri });
+      else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
+    }
+  } else {
+    (lib.funnel || []).forEach((it) => {
+      media.push({ id: it.id, stage: it.stage, kind: 'audio', label: it.label, desc: it.desc || '',
+        dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'),
+        durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) });
+    });
+    (lib.social || []).forEach((it) => {
+      media.push({ id: it.id, stage: it.stage, kind: it.kind || 'video', label: it.label, caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') });
+    });
+  }
+  return { messages, sequences, media, triggers, funnel: [], social: [] };
 }
 
 async function buildBundle() {
