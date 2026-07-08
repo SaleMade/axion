@@ -7,12 +7,29 @@
 // (o start.ps1 cuida disso). Uso: node inject.js
 'use strict';
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.ZV_PORT ? Number(process.env.ZV_PORT) : 9222;
 const MEDIA_PORT = process.env.ZV_MEDIA_PORT ? Number(process.env.ZV_MEDIA_PORT) : 9223;
+const CONFIG_URL = process.env.ZV_CONFIG_URL || 'https://axion-api.axion-dash.workers.dev/api/salechat';
 const DIR = __dirname;
+
+// Busca a config do Sale Chat na AXION (mensagens + funis que o Diretor edita
+// na dash). Node nao tem CSP, entao busca aqui e injeta no painel. Falha -> null.
+function fetchRemoteConfig() {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const r = https.get(CONFIG_URL, (res) => {
+        let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { fin(JSON.parse(d)); } catch (_) { fin(null); } });
+      });
+      r.on('error', () => fin(null));
+      r.setTimeout(6000, () => { try { r.destroy(); } catch (_) {} fin(null); });
+    } catch (_) { fin(null); }
+  });
+}
 
 function getJson(pathname) {
   return new Promise((res, rej) => {
@@ -26,7 +43,7 @@ function getJson(pathname) {
 // servimos por HTTP (o WhatsApp bloqueia fetch a 127.0.0.1 por CSP/mixed-content).
 // Em vez disso, o painel pede o video (window.__zvReq) e o injetor entrega o
 // base64 via CDP na hora do clique, chamando window.__zvDoSend na pagina (WPP envia).
-function buildLibrary() {
+function buildLibrary(remote) {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
   const funnel = (lib.funnel || []).map((it) => ({
     id: it.id, stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio',
@@ -37,19 +54,22 @@ function buildLibrary() {
     id: it.id, stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '',
     file: String(it.file).replace(/\\/g, '/'),
   }));
-  const messages = (lib.messages || []).map((it) => ({
-    id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '',
-  }));
-  const sequences = lib.sequences || [];
+  // Mensagens e funis: se a AXION mandou config, ela manda (o Diretor edita na dash);
+  // senao, cai no library.json local.
+  const rMsgs = remote && Array.isArray(remote.messages) && remote.messages.length ? remote.messages : (lib.messages || []);
+  const messages = rMsgs.map((it) => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '' }));
+  const sequences = remote && Array.isArray(remote.sequences) && remote.sequences.length ? remote.sequences : (lib.sequences || []);
   return { messages, funnel, social, sequences };
 }
 
-function buildBundle() {
+async function buildBundle() {
+  const remote = await fetchRemoteConfig();
+  if (remote && (remote.messages || remote.sequences)) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
   const wajs = fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');
   const css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8');
   let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
   // replace por FUNCAO (imune a sequencias $ nos dados, ex: "R$497")
-  panel = panel.replace('"__LIBRARY__"', () => JSON.stringify(buildLibrary()))
+  panel = panel.replace('"__LIBRARY__"', () => JSON.stringify(buildLibrary(remote)))
                .replace('"__CSS__"', () => JSON.stringify(css));
   return { wajs, panel };
 }
@@ -77,7 +97,7 @@ async function run() {
   const page = await findPage();
   if (!page) { console.log('[zv] Nao achei a pagina do WhatsApp na porta ' + PORT + '. O app esta aberto com a porta de debug?'); process.exit(2); }
   console.log('[zv] Pagina encontrada:', page.title);
-  const { wajs, panel } = buildBundle();
+  const { wajs, panel } = await buildBundle();
 
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.addEventListener('open', res, { once: true }); ws.addEventListener('error', rej, { once: true }); });

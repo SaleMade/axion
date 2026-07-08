@@ -1948,6 +1948,23 @@ async function handleWAConn(req, env) {
   return json({ ok: true, conn: rows.results || [] });
 }
 
+// ─── Sale Chat (soundboard) ──────────────────────────────────
+// GET /api/salechat → config do Sale Chat (mensagens de texto + funis/sequencias)
+// que o Diretor edita na dash (fica em DB.salechat, salvo pelo sync normal).
+// Publico de proposito: sao roteiros de venda, nao dado sensivel; o injetor
+// (Node) e a extensao puxam isso pra montar o painel dentro do WhatsApp.
+async function handleSaleChatGet(req, env) {
+  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
+  const sc = state.salechat || {};
+  return json({
+    ok: true,
+    messages: Array.isArray(sc.messages) ? sc.messages : [],
+    sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
+    updated_at: sc.updated_at || 0,
+  });
+}
+
 // ─── Inbox / Conversas (CRM) ─────────────────────────────────
 // GET /api/wa/chats?instance=&assigned=&q= → lista de conversas pro inbox
 async function handleWAChats(req, env) {
@@ -2675,6 +2692,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
+      if (req.method === 'GET'    && path === '/api/salechat')            return handleSaleChatGet(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);

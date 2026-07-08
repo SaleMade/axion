@@ -4979,6 +4979,7 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
+        ...(dir?[{id:'salechat',lbl:'Sale Chat',live:true}]:[]),
         {id:'contingencia',lbl:'Contingência'},
         ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
@@ -5100,6 +5101,7 @@ const PNAMES={
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
   atendimento:"WhatsApp / <b>Atendimento</b>",
+  salechat:"WhatsApp / <b>Sale Chat</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
   automacoes:"Automações / <b>WhatsApp</b>",
@@ -5132,7 +5134,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageContingencia(),pagePressels(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5278,6 +5280,7 @@ function goPage(id){
   }
 
   if(id==='atendimento') renderAtendimento();
+  if(id==='salechat') renderSaleChat();
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
@@ -7523,6 +7526,50 @@ async function _mldChatSend(){
   catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
   finally{_mldChat.sending=false;if(b)b.disabled=false;const i2=document.getElementById('mld-chat-input');if(i2)i2.focus();}
 }
+
+/* ═══════════════════════════════════════════════════════
+   PAGE — SALE CHAT (config do soundboard: mensagens + funis)
+   Diretor edita aqui; salva em DB.salechat e sincroniza. O painel
+   (injetor/extensao) puxa via GET /api/salechat. Fase 2 do roadmap ZapVoice.
+═══════════════════════════════════════════════════════ */
+function pageSaleChat(){ return `<div class="page" id="salechat-pg"></div>`; }
+function scEscA(s){return String(s==null?'':s).replace(/"/g,'&quot;');}
+function scEscT(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function renderSaleChat(){
+  if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={messages:[],sequences:[]};
+  if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
+  const pg=$('salechat-pg'); if(!pg) return;
+  pg.innerHTML=`
+    <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
+    <p class="muted" style="max-width:720px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
+      As mensagens de texto do painel do Sale Chat que os atendentes disparam com 1 clique dentro do WhatsApp. Edita aqui, salva sozinho, e o painel de todos puxa automatico (eles rodam o start.bat pra pegar a versao nova).
+    </p>
+    <div class="cfg-card" style="max-width:720px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div class="info-title">${ico('message-circle',{size:15})} Mensagens rapidas</div>
+        <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
+      </div>
+      <div id="sc-msgs"></div>
+    </div>`;
+  scRenderMsgs();
+}
+function scRenderMsgs(){
+  const box=$('sc-msgs'); if(!box) return;
+  const msgs=DB.salechat.messages;
+  if(!msgs.length){ box.innerHTML='<div class="muted" style="padding:16px;text-align:center">Nenhuma mensagem ainda. Clica em "+ Nova mensagem".</div>'; return; }
+  box.innerHTML=msgs.map((m,i)=>`
+    <div style="border:1px solid var(--b2);border-radius:var(--r);padding:11px 12px;margin-bottom:10px;background:var(--s1)">
+      <div style="display:flex;gap:9px;align-items:center;margin-bottom:8px">
+        <span class="muted" style="font-size:11px;min-width:16px;text-align:center">${i+1}</span>
+        <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome curto (ex: Fechar pedido)" oninput="scEdit(${i},'label',this.value)">
+        <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
+      </div>
+      <textarea class="info-val" rows="2" placeholder="Texto que vai ser enviado no WhatsApp" oninput="scEdit(${i},'text',this.value)" style="resize:vertical;line-height:1.4">${scEscT(m.text)}</textarea>
+    </div>`).join('');
+}
+function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); persist(); scRenderMsgs(); }
+function scDelMsg(i){ DB.salechat.messages.splice(i,1); persist(); scRenderMsgs(); }
+function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)
