@@ -1,0 +1,21 @@
+# So o index.html (a dash) e imagens devem virar assets publicos.
+# Tudo abaixo NAO e servido pela Worker "axion" (evita expor backend, extensao, etc).
+.git
+.wrangler
+.claude
+.vscode
+node_modules
+backend
+zapvoice-ext
+evolution-vps
+dist
+*.md
+*.ps1
+*.sh
+*.log
+wrangler.jsonc
+.assetsignore
+.gitignore
+axion_v2.html
+axion_crm.html
+index.backup-*.html
