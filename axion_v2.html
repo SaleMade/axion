@@ -1487,6 +1487,51 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-empty{ color:var(--t3); text-align:center; padding:26px 8px; font-size:12.5px; line-height:1.5; }
 .sc-hint{ color:var(--t3); font-size:11.5px; line-height:1.5; margin:0 0 14px; }
 @media(max-width:860px){ .sc-wrap{ flex-direction:column; } .sc-nav{ width:100%; flex-direction:row; flex-wrap:wrap; position:static; } .sc-navitem{ flex:1; min-width:130px; } }
+/* ─── Sale Chat: mestre-detalhe (lista de cards + painel de detalhe) ─── */
+.sc-md{ display:flex; gap:16px; align-items:flex-start; margin-top:12px; }
+.sc-md-list{ flex:none; width:300px; display:flex; flex-direction:column; gap:10px; }
+.sc-search input{ width:100%; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 12px; color:var(--tx); font-family:inherit; font-size:12.5px; outline:none; }
+.sc-search input:focus{ border-color:var(--bl); }
+.sc-cards{ display:flex; flex-direction:column; gap:8px; max-height:56vh; overflow-y:auto; padding-right:2px; }
+.sc-card{ display:flex; align-items:center; gap:9px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:10px 11px; cursor:pointer; transition:border-color .12s, background .12s; }
+.sc-card:hover{ border-color:var(--b3); background:var(--s3); }
+.sc-card.on{ border-color:var(--bl); background:var(--bld); }
+.sc-card-ic{ color:var(--bl2); flex:none; display:inline-flex; }
+.sc-card-name{ flex:1; min-width:0; font-size:12.5px; font-weight:600; color:var(--tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sc-badge{ font-size:9px; background:var(--bld); color:var(--bl2); border-radius:5px; padding:2px 6px; flex:none; text-transform:uppercase; letter-spacing:.02em; }
+.sc-cbtn{ flex:none; background:none; border:none; color:var(--t3); cursor:pointer; padding:4px; border-radius:6px; display:inline-flex; }
+.sc-cbtn:hover{ color:var(--tx); background:var(--s4); }
+.sc-cbtn.fav{ color:#f5b60a; }
+.sc-md-detail{ flex:1; min-width:0; background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:18px 20px; min-height:340px; }
+.sc-detail-empty{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--t3); min-height:300px; text-align:center; }
+.sc-detail-empty p{ font-size:13px; max-width:240px; line-height:1.5; margin:0; }
+.sc-detail-top{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+.sc-detail-name{ font-size:16px; font-weight:700; color:var(--tx); min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.sc-detail-acts{ display:flex; gap:6px; flex:none; }
+.sc-detail-acts .sc-on{ color:#f5b60a; }
+.sc-detail-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--t3); font-weight:700; margin:14px 0 8px; }
+.sc-detail-label:first-child{ margin-top:0; }
+.sc-doc-link{ display:inline-flex; align-items:center; gap:7px; color:var(--gr); font-weight:700; text-decoration:none; font-size:13px; }
+.sc-doc-link:hover{ text-decoration:underline; }
+.sc-wa{ background:var(--s2); border:1px solid var(--b1); border-radius:12px; padding:16px; background-image:radial-gradient(rgba(150,150,150,.10) 1px, transparent 1px); background-size:16px 16px; }
+.sc-wa-bubble{ max-width:82%; margin-left:auto; background:#0b6b5b; color:#eef6f4; border-radius:12px 12px 4px 12px; padding:8px 10px; box-shadow:0 1px 2px rgba(0,0,0,.25); }
+.sc-wa-media{ margin-bottom:6px; } .sc-wa-media img,.sc-wa-media video{ max-width:100%; border-radius:6px; display:block; } .sc-wa-media audio{ width:100%; height:38px; }
+.sc-wa-text{ font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+.sc-wa-time{ display:block; text-align:right; font-size:9.5px; color:rgba(255,255,255,.6); margin-top:3px; }
+.sc-modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; }
+.sc-modal-box{ width:470px; max-width:100%; max-height:90vh; overflow-y:auto; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rxl); padding:22px 24px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
+.sc-modal-head{ font-size:18px; font-weight:800; color:var(--tx); margin-bottom:16px; }
+.sc-modal-body{ display:flex; flex-direction:column; }
+.sc-f-label{ font-size:12px; font-weight:700; color:var(--t2); margin:12px 0 6px; }
+.sc-f-label:first-child{ margin-top:0; }
+.sc-modal-body .info-val{ width:100%; }
+.sc-drop{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; border:1.5px dashed var(--bl); border-radius:var(--r); padding:22px 14px; text-align:center; color:var(--t2); font-size:12.5px; cursor:pointer; background:var(--s1); transition:background .12s, color .12s; }
+.sc-drop:hover{ background:var(--bld); color:var(--tx); }
+.sc-drop.on{ border-color:var(--gr); color:var(--gr); }
+.sc-modal-status{ min-height:16px; font-size:12px; margin-top:10px; color:var(--rd); }
+.sc-modal-status.ok{ color:var(--gr); }
+.sc-modal-foot{ display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+@media(max-width:820px){ .sc-md{ flex-direction:column; } .sc-md-list{ width:100%; } .sc-cards{ max-height:none; } }
 .cfg-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
   padding:4px 10px;border-radius:7px;background:var(--s4);color:var(--t3)}
 /* details/summary do backend collapsable */
@@ -3718,8 +3763,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.37.0';
-const APP_LAST_CHANGE = 'Sale Chat: funil totalmente configuravel. Por passo: espera (intervalo) e duracao da simulacao de gravando/digitando (0 = automatico). Por funil: parar se o lead responder no meio. O painel tem previa do funil (passos, tempos e total estimado), botao de enviar separado que vira pausa, e sincroniza ao vivo com a dash.';
+const APP_VERSION = '2.38.0';
+const APP_LAST_CHANGE = 'Sale Chat dash redesenhada estilo ZapVoice (nossas cores): mestre-detalhe (lista de cards + painel de detalhe), adicionar/editar por modal, previa estilo WhatsApp (bolha de envio), favoritar/reordenar/excluir no detalhe. Upload de midia pelo modal com dropzone e legenda.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7652,11 +7697,155 @@ function scRenderSection(){
   return scSecMedia(main,scSection);
 }
 // ─── Seção: Mensagens ───
-function scSecMessages(main){
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div><button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button></div>
-    <p class="sc-hint">Textos prontos que o atendente manda com 1 clique: pedir dados, confirmar pedido, tirar dúvida.</p>
-    <div id="sc-list"></div>`;
-  scRenderMsgs();
+function scSecMessages(main){ scRenderSectionMD('messages'); }
+// ─── Sale Chat dash: layout mestre-detalhe (lista de cards + painel de detalhe/previa) ───
+var scSel={}, scModalFile=null;
+var SC_KINDS={
+  messages:{label:'Mensagens de texto',icon:'message-circle',add:'+ Nova mensagem',hint:'Textos prontos que o atendente manda com 1 clique: pedir dados, confirmar pedido, tirar duvida.'},
+  audio:{label:'Áudios',icon:'volume',add:'+ Adicionar áudio',accept:'audio/*',hint:'A tua voz e os audios do funil. Escuta cada um antes de liberar pros atendentes.'},
+  video:{label:'Vídeos',icon:'video',add:'+ Adicionar vídeo',accept:'video/*',hint:'Videos de prova social e demonstracao. A legenda vai junto no envio.'},
+  image:{label:'Imagens',icon:'image',add:'+ Adicionar imagem',accept:'image/*',hint:'Imagens de produto, provas, prints. Legenda opcional.'},
+  document:{label:'Documentos',icon:'clipboard-list',add:'+ Adicionar documento',accept:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf',hint:'PDFs e arquivos que o atendente envia no chat.'}
+};
+function scKindIcon(kind){ return kind==='messages'?'message-circle':scMediaIcon(kind); }
+function scItemsFor(kind){ return kind==='messages'?(DB.salechat.messages||[]):(DB.salechat.media||[]).filter(m=>m.kind===kind); }
+function scFindMsg(id){ var a=DB.salechat.messages||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
+function scFindMedia(id){ var a=DB.salechat.media||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
+function scRenderSectionMD(kind){
+  const main=$('sc-main'); if(!main) return;
+  const cfg=SC_KINDS[kind];
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico(scKindIcon(kind),{size:15})} ${cfg.label}</div><button class="btn btn-gr btn-sm" onclick="scOpenAdd('${kind}')">${cfg.add}</button></div>
+    <p class="sc-hint">${cfg.hint}</p>
+    <div class="sc-md">
+      <div class="sc-md-list"><div class="sc-search"><input id="sc-q" placeholder="Buscar..." autocomplete="off" oninput="scRenderCards('${kind}')"></div><div class="sc-cards" id="sc-cards"></div></div>
+      <div class="sc-md-detail" id="sc-detail"></div>
+    </div>`;
+  scRenderCards(kind);
+  scRenderDetail(kind);
+}
+function scRenderCards(kind){
+  const box=$('sc-cards'); if(!box) return;
+  const q=(($('sc-q')||{}).value||'').toLowerCase();
+  const items=scItemsFor(kind).filter(it=>!q||String(it.label||'').toLowerCase().indexOf(q)!==-1);
+  if(!items.length){ box.innerHTML='<div class="sc-empty" style="padding:22px 8px">'+(q?'Nada encontrado.':'Nada aqui ainda. Clica em "'+SC_KINDS[kind].add+'".')+'</div>'; return; }
+  box.innerHTML=items.map(it=>`
+    <div class="sc-card ${scSel[kind]===it.id?'on':''}" onclick="scSelect('${kind}','${it.id}')">
+      <span class="sc-card-ic">${ico(scKindIcon(kind),{size:14})}</span>
+      <span class="sc-card-name">${scEscT(it.label||'(sem nome)')}</span>
+      ${it.champ?'<span class="sc-badge">campeão</span>':''}
+      <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:13})}</button>
+      <button class="sc-cbtn" title="Editar" onclick="event.stopPropagation();scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:13})}</button>
+    </div>`).join('');
+}
+function scSelect(kind,id){ scSel[kind]=id; scRenderCards(kind); scRenderDetail(kind); }
+function scRenderDetail(kind){
+  const box=$('sc-detail'); if(!box) return;
+  const id=scSel[kind]; const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
+  if(!it){ box.innerHTML=`<div class="sc-detail-empty">${ico(scKindIcon(kind),{size:28})}<p>Selecione um item à esquerda pra ver a prévia e editar.</p></div>`; return; }
+  box.innerHTML=`<div class="sc-detail-top"><div class="sc-detail-name">${scEscT(it.label||'(sem nome)')}${it.champ?' <span class="sc-badge">campeão</span>':''}</div>
+    <div class="sc-detail-acts">
+      <button class="btn btn-gh btn-xs ${it.fav?'sc-on':''}" title="Favoritar" onclick="scToggleFav('${kind}','${it.id}')">${ico('star',{size:13})}</button>
+      <button class="btn btn-gh btn-xs" title="Subir" onclick="scMoveItem('${kind}','${it.id}',-1)">${ico('chevron-up',{size:13})}</button>
+      <button class="btn btn-gh btn-xs" title="Descer" onclick="scMoveItem('${kind}','${it.id}',1)">${ico('chevron-down',{size:13})}</button>
+      <button class="btn btn-gh btn-xs" title="Editar" onclick="scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:13})}</button>
+      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDeleteItem('${kind}','${it.id}')">${ico('trash',{size:13})}</button>
+    </div></div>
+    ${scDetailPreview(kind,it)}`;
+}
+function scDetailPreview(kind,it){
+  const url=it.key?scMediaUrl(it.key):'';
+  let media='';
+  if(kind==='audio') media='<audio controls preload="none" src="'+url+'"></audio>';
+  else if(kind==='image') media='<img src="'+url+'" loading="lazy">';
+  else if(kind==='video') media='<video controls preload="none" src="'+url+'"></video>';
+  else if(kind==='document') media='<a class="sc-doc-link" href="'+url+'" target="_blank">'+ico('clipboard-list',{size:14})+' Abrir documento</a>';
+  const cap=(kind==='image'||kind==='video')?(it.caption||''):'';
+  const text=kind==='messages'?(it.text||''):cap;
+  const label=kind==='messages'?'Texto (como chega no WhatsApp)':'Prévia do envio';
+  if(kind==='document') return `<div class="sc-detail-label">${label}</div><div class="sc-wa"><div class="sc-wa-bubble"><div class="sc-wa-media">${media}</div><span class="sc-wa-time">agora</span></div></div>`;
+  return `<div class="sc-detail-label">${label}</div>
+    <div class="sc-wa"><div class="sc-wa-bubble">${media?('<div class="sc-wa-media">'+media+'</div>'):''}${text?('<div class="sc-wa-text">'+scEscT(text)+'</div>'):''}<span class="sc-wa-time">agora</span></div></div>`;
+}
+function scToggleFav(kind,id){ const it=scItemsFor(kind).filter(o=>o.id===id)[0]; if(it){ it.fav=!it.fav; scTouch(); scRenderCards(kind); if(scSel[kind]===id) scRenderDetail(kind); } }
+function scMoveItem(kind,id,dir){
+  if(kind==='messages'){ const f=scFindMsg(id); if(f&&scArrMove(DB.salechat.messages,f.idx,dir)){ scTouch(); scRenderCards(kind); } return; }
+  const arr=DB.salechat.media, idxs=[]; arr.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
+  let pos=-1; for(let k=0;k<idxs.length;k++) if(arr[idxs[k]].id===id) pos=k;
+  const b=pos+dir; if(pos<0||b<0||b>=idxs.length) return;
+  const ia=idxs[pos], ib=idxs[b], t=arr[ia]; arr[ia]=arr[ib]; arr[ib]=t; scTouch(); scRenderCards(kind);
+}
+function scDeleteItem(kind,id){
+  if(kind==='messages'){ const f=scFindMsg(id); if(!f) return; if(!confirm('Excluir a mensagem "'+(f.item.label||'')+'"?')) return; DB.salechat.messages.splice(f.idx,1); }
+  else { const fm=scFindMedia(id); if(!fm) return; if(!confirm('Excluir "'+(fm.item.label||'')+'"?'+(fm.item.champ?' (item do funil campeão, some do painel de todos)':''))) return; scDeleteKey(fm.item.key); DB.salechat.media.splice(fm.idx,1); }
+  if(scSel[kind]===id) scSel[kind]=null;
+  scTouch(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
+}
+// ── Modal de adicionar/editar ──
+function scModalStatus(m,ok){ const el=$('sc-modal-status'); if(el){ el.textContent=m||''; el.className='sc-modal-status'+(ok?' ok':''); } }
+function scCloseModal(){ const m=$('sc-modal'); if(m&&m.parentNode) m.parentNode.removeChild(m); scModalFile=null; }
+function scOpenAdd(kind){ scOpenModal(kind,null); }
+function scOpenEdit(kind,id){ scSel[kind]=id; scOpenModal(kind,id); }
+function scOpenModal(kind,id){
+  scModalFile=null;
+  const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
+  const isMsg=kind==='messages', cfg=SC_KINDS[kind];
+  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">`;
+  if(isMsg){
+    body+=`<label class="sc-f-label">Texto</label><textarea id="sc-m-text" class="info-val" rows="5" placeholder="Texto que vai ser enviado no WhatsApp" style="resize:vertical;line-height:1.45">${scEscT(it?it.text:'')}</textarea>`;
+  } else {
+    body+=`<label class="sc-f-label">Arquivo${it?' (opcional, pra trocar)':''}</label><label class="sc-drop" id="sc-drop"><input type="file" accept="${cfg.accept}" style="display:none" id="sc-m-file" onchange="scModalFilePicked(this)"><div id="sc-drop-txt">Clique aqui ou arraste o arquivo${it?' pra substituir':''}</div><div class="muted" style="font-size:11px">até 60MB</div></label>`;
+    if(kind==='image'||kind==='video'){ body+=`<label class="sc-f-label">Legenda (opcional)</label><textarea id="sc-m-cap" class="info-val" rows="2" placeholder="Legenda que vai junto" style="resize:vertical">${scEscT(it?(it.caption||''):'')}</textarea>`; }
+    if(it&&it.key){ body+=`<div class="sc-f-label">Atual</div>${scDetailPreview(kind,it)}`; }
+  }
+  const m=document.createElement('div'); m.id='sc-modal'; m.className='sc-modal';
+  m.onclick=(e)=>{ if(e.target===m) scCloseModal(); };
+  m.innerHTML=`<div class="sc-modal-box"><div class="sc-modal-head">${it?'Editar':'Adicionar'} ${isMsg?'mensagem':cfg.label.toLowerCase().replace(/s$/,'')}</div>
+    <div class="sc-modal-body">${body}</div>
+    <div id="sc-modal-status" class="sc-modal-status"></div>
+    <div class="sc-modal-foot"><button class="btn btn-gh" onclick="scCloseModal()">Cancelar</button><button class="btn btn-gr" id="sc-modal-save" onclick="scModalSave('${kind}',${id?("'"+id+"'"):'null'})">Salvar</button></div>
+  </div>`;
+  document.body.appendChild(m);
+  const nm=$('sc-m-name'); if(nm) setTimeout(()=>nm.focus(),30);
+}
+function scModalFilePicked(input){ scModalFile=input.files[0]||null; const t=$('sc-drop-txt'), d=$('sc-drop'); if(t&&scModalFile){ t.textContent=scModalFile.name+' ('+Math.round(scModalFile.size/1024)+' KB)'; if(d) d.classList.add('on'); } }
+async function scDoUpload(file){
+  const base=apiUrl(), tok=apiToken();
+  if(!base||!tok) return {ok:false,err:'Backend não configurado (faça login).'};
+  if(file.size>60*1024*1024) return {ok:false,err:'Arquivo grande demais (máx 60MB).'};
+  try{
+    const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) return {ok:false,err:(d.error||('HTTP '+r.status))};
+    return {ok:true,key:d.key,mime:d.mime};
+  }catch(e){ return {ok:false,err:'Falha: '+e.message}; }
+}
+function scDeleteKey(key){ const base=apiUrl(),tok=apiToken(); if(base&&tok&&key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); } }
+async function scModalSave(kind,id){
+  const name=(($('sc-m-name')||{}).value||'').trim();
+  if(kind==='messages'){
+    if(!name){ scModalStatus('Dá um nome pra mensagem.'); return; }
+    const text=($('sc-m-text')||{}).value||'';
+    if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; } }
+    else { const nid='m'+Date.now().toString(36); DB.salechat.messages.push({id:nid,label:name,text:text}); scSel.messages=nid; }
+    scTouch(); scCloseModal(); scRenderCards('messages'); scRenderDetail('messages'); scRenderNav(); return;
+  }
+  const cap=($('sc-m-cap')||{}).value||'';
+  const save=$('sc-modal-save');
+  if(id){
+    const fm=scFindMedia(id); if(!fm){ scCloseModal(); return; }
+    if(scModalFile){ if(save) save.disabled=true; scModalStatus('Subindo arquivo...'); const up=await scDoUpload(scModalFile); if(save) save.disabled=false; if(!up.ok){ scModalStatus(up.err); return; } scDeleteKey(fm.item.key); fm.item.key=up.key; fm.item.mime=up.mime; }
+    fm.item.label=name||fm.item.label;
+    if(kind==='image'||kind==='video') fm.item.caption=cap;
+    scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); return;
+  }
+  if(!scModalFile){ scModalStatus('Escolhe um arquivo pra subir.'); return; }
+  if(save) save.disabled=true; scModalStatus('Subindo '+scModalFile.name+'...');
+  const up=await scDoUpload(scModalFile); if(save) save.disabled=false;
+  if(!up.ok){ scModalStatus(up.err); return; }
+  const nid='md'+Date.now().toString(36);
+  DB.salechat.media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
+  scSel[kind]=nid;
+  scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
 }
 function scRenderMsgs(){
   const box=$('sc-list'); if(!box) return;
@@ -7736,16 +7925,7 @@ function scMoveFunilItem(i,j,d){ const s=DB.salechat.sequences[i]; if(s&&s.items
 function scMoveFunil(i,d){ if(scArrMove(DB.salechat.sequences,i,d)){ scTouch(); scRenderFunis(); } }
 // ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
 function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':'volume'; }
-function scSecMedia(main,kind){
-  const acc={audio:'audio/*',video:'video/*',image:'image/*',document:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf'}[kind];
-  const title={audio:'Áudios',video:'Vídeos',image:'Imagens',document:'Documentos'}[kind];
-  const hint={audio:'A tua voz e os áudios do funil. Escuta cada um aqui antes de liberar pros atendentes.',video:'Vídeos de prova social e demonstração. A legenda vai junto no envio.',image:'Imagens de produto, provas, prints. Legenda opcional.',document:'PDFs e arquivos que o atendente envia no chat.'}[kind];
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico(scMediaIcon(kind),{size:15})} ${title}</div><label class="btn btn-gr btn-sm" style="cursor:pointer">+ Adicionar<input type="file" accept="${acc}" style="display:none" onchange="scUploadMedia(this.files[0],this,'${kind}')"></label></div>
-    <p class="sc-hint">${hint} Ficam na nuvem, até 60MB. O painel de todos puxa.</p>
-    <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
-    <div id="sc-list"></div>`;
-  scRenderMediaKind(kind);
-}
+function scSecMedia(main,kind){ scRenderSectionMD(kind); }
 function scRenderMediaKind(kind){
   const box=$('sc-list'); if(!box) return;
   const all=DB.salechat.media;
