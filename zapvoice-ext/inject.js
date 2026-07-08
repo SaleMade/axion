@@ -84,11 +84,13 @@ async function buildLibrary(remote) {
     if (m.kind === 'video') { media.push({ id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url }); continue; }
     const buf = await fetchBytes(url);
     if (!buf) continue;
-    const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
+    const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
     if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri });
+    else if (m.kind === 'document') media.push({ id: m.id, kind: 'document', label: m.label || 'Documento', mime: m.mime || 'application/pdf', dataUri });
     else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
   }
-  return { messages, funnel, social, sequences, media };
+  const triggers = remote && Array.isArray(remote.triggers) ? remote.triggers : [];
+  return { messages, funnel, social, sequences, media, triggers };
 }
 
 async function buildBundle() {

@@ -40,9 +40,80 @@
           .catch(function (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; });
       } catch (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; }
     };
+    // Gatilhos: escuta mensagens recebidas e sugere o item configurado
+    try { if (window.WPP && window.WPP.on) window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} }); } catch (_) {}
     var t = setInterval(function () {
       if (document.body && !document.getElementById('zv-panel')) { clearInterval(t); render(); poll(); }
     }, 700);
+  }
+
+  function onIncoming(msg) {
+    if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
+    var trs = DATA.triggers || [];
+    if (!trs.length) return;
+    var body = String(msg.body || msg.caption || '').toLowerCase();
+    if (!body) return;
+    // so sugere se for a conversa aberta (o atendente ta olhando)
+    var c = activeChat();
+    var mFrom = (msg.from && (msg.from._serialized || (msg.from.toString && msg.from.toString()))) || '';
+    var cId = (c && c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || '';
+    if (mFrom && cId && mFrom !== cId) return;
+    for (var i = 0; i < trs.length; i++) {
+      var kws = String(trs[i].keyword || '').toLowerCase().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      for (var j = 0; j < kws.length; j++) {
+        if (kws[j] && body.indexOf(kws[j]) >= 0) {
+          var item = itemById[trs[i].itemId];
+          if (item) { showSuggestion(item, kws[j]); return; }
+        }
+      }
+    }
+  }
+
+  // ─── Agendamento (client-side, guardado no localStorage do WhatsApp Web) ───
+  function schedGet() { try { return JSON.parse(localStorage.getItem('zv_sched') || '[]'); } catch (_) { return []; } }
+  function schedSet(a) { try { localStorage.setItem('zv_sched', JSON.stringify(a)); } catch (_) {} }
+  function allItemsList() { return (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []); }
+  function schedRender() {
+    var box = document.getElementById('zv-sched'); if (!box) return;
+    var items = allItemsList(), now = Date.now();
+    var list = schedGet().sort(function (a, b) { return a.at - b.at; });
+    box.innerHTML =
+      '<div class="zv-sched-form"><select id="zv-sched-item">' + items.map(function (it) { return '<option value="' + esc(it.id) + '">' + esc(it.label) + '</option>'; }).join('') + '</select>' +
+      '<input id="zv-sched-min" type="number" min="1" value="10"><span>min</span>' +
+      '<button id="zv-sched-add">Agendar p/ este chat</button></div>' +
+      (list.length ? list.map(function (s) { var it = itemById[s.itemId]; var mins = Math.max(0, Math.round((s.at - now) / 60000)); return '<div class="zv-sched-row"><span>' + esc((it && it.label) || s.itemId) + ' &rarr; ' + esc(s.chatName || s.chatId) + ' (~' + mins + 'min)</span><span class="zv-sched-x" data-id="' + esc(s.id) + '">&times;</span></div>'; }).join('') : '<div class="zv-empty" style="padding:8px 2px">Nada agendado.</div>');
+    box.querySelector('#zv-sched-add').onclick = schedAdd;
+    Array.prototype.forEach.call(box.querySelectorAll('.zv-sched-x'), function (x) { x.onclick = function () { schedCancel(x.getAttribute('data-id')); }; });
+  }
+  function schedAdd() {
+    var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar', 'err'); return; }
+    var itemId = (document.getElementById('zv-sched-item') || {}).value;
+    var min = parseInt((document.getElementById('zv-sched-min') || {}).value, 10) || 10;
+    if (!itemId) return;
+    var name = (c.contact && (c.contact.name || c.contact.pushname)) || c.formattedTitle || (c.id && c.id.user) || '';
+    var chatId = (c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || '';
+    var a = schedGet(); a.push({ id: 's' + Date.now().toString(36), chatId: chatId, chatName: name, itemId: itemId, at: Date.now() + min * 60000 }); schedSet(a);
+    status('Agendado pra ' + name + ' em ' + min + 'min', 'ok'); schedRender();
+  }
+  function schedCancel(id) { schedSet(schedGet().filter(function (s) { return s.id !== id; })); schedRender(); }
+  function schedCheck() {
+    var a = schedGet(); if (!a.length) return;
+    var now = Date.now(), due = a.filter(function (s) { return s.at <= now; });
+    if (!due.length) return;
+    schedSet(a.filter(function (s) { return s.at > now; }));
+    due.forEach(function (s) { var it = itemById[s.itemId]; if (it) sendItemAsync(it, s.chatId); });
+    var b = document.getElementById('zv-sched'); if (b && b.style.display !== 'none') schedRender();
+  }
+
+  function showSuggestion(item, kw) {
+    var s = document.getElementById('zv-suggest'); if (!s) return;
+    s.innerHTML = '<div class="zv-sg-txt">Cliente falou "<b>' + esc(kw) + '</b>" — sugestao:</div>' +
+      '<div class="zv-sg-row"><button class="zv-sg-send"><span class="zv-play">&#9655;</span> ' + esc(item.label) + '</button><span class="zv-sg-x" title="Fechar">&times;</span></div>';
+    s.style.display = 'block';
+    s.querySelector('.zv-sg-send').onclick = function () { s.style.display = 'none'; send(item); };
+    s.querySelector('.zv-sg-x').onclick = function () { s.style.display = 'none'; };
+    if (window.__zvSgT) clearTimeout(window.__zvSgT);
+    window.__zvSgT = setTimeout(function () { s.style.display = 'none'; }, 30000);
   }
 
   function itemsHtml(list, prefix) {
@@ -69,15 +140,19 @@
     }).join('') + '</div>') : '';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
-      '<div id="zv-body">' + msgs + '<div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
+      '<div id="zv-body"><div id="zv-suggest" style="display:none"></div>' + msgs + '<div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
       social + mine + seqs +
       '<div id="zv-status"></div>' +
-      '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label></div></div>';
+      '<div id="zv-sched" style="display:none"></div>' +
+      '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label><a id="zv-sched-toggle">Agendar</a></div></div>';
     document.body.appendChild(p);
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); };
     var cb = p.querySelector('#zv-sim-cb'); simulate = cb.checked; cb.onchange = function () { simulate = cb.checked; };
+    var stgl = p.querySelector('#zv-sched-toggle');
+    if (stgl) stgl.onclick = function () { var b = p.querySelector('#zv-sched'); if (b) { var show = b.style.display === 'none'; b.style.display = show ? 'block' : 'none'; if (show) schedRender(); } };
+    if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
     Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
       b.onclick = function () {
         var k = b.getAttribute('data-k');
@@ -121,13 +196,19 @@
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
 
   // Envia UM item e resolve {ok,err} quando terminar. Nao mexe em busy/status.
-  function sendItemAsync(item) {
+  // forceChatId: manda pra um chat especifico (usado no agendamento), senao o aberto.
+  function sendItemAsync(item, forceChatId) {
     return new Promise(function (resolve) {
-      var c = activeChat();
-      if (!c) { resolve({ ok: false, err: 'sem conversa aberta' }); return; }
-      if (c.isGroup) { resolve({ ok: false, err: 'e um grupo' }); return; }
-      var chatId = c.id;
+      var chatId;
+      if (forceChatId) { chatId = forceChatId; }
+      else {
+        var c = activeChat();
+        if (!c) { resolve({ ok: false, err: 'sem conversa aberta' }); return; }
+        if (c.isGroup) { resolve({ ok: false, err: 'e um grupo' }); return; }
+        chatId = c.id;
+      }
       if (item.kind === 'video') {
+        if (forceChatId) { resolve({ ok: false, err: 'video agendado nao suportado (abra o chat)' }); return; }
         // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
         var rid = 'v' + Date.now() + Math.random().toString(36).slice(2, 6);
         try { window.__zvRes = null; } catch (_) {}
@@ -142,6 +223,12 @@
       }
       if (item.kind === 'image') {
         window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'image', caption: item.caption || '' })
+          .then(function () { resolve({ ok: true }); })
+          .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+        return;
+      }
+      if (item.kind === 'document') {
+        window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'documento' })
           .then(function () { resolve({ ok: true }); })
           .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
@@ -168,7 +255,7 @@
   function send(item, b) {
     if (busy || !item) return;
     busy = true; if (b) b.classList.add('zv-busy');
-    var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
+    var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : item.kind === 'document' ? 'Enviando documento...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
     status(st, '');
     sendItemAsync(item).then(function (r) {
       status(r.ok ? 'Enviado' : ('Falha: ' + (r.err || '')), r.ok ? 'ok' : 'err');
