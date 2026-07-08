@@ -6,7 +6,7 @@
   if (window.__zvInstalled) return; window.__zvInstalled = true;
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
-  var busy = false, simulate = true, els = {};
+  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false;
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -53,13 +53,22 @@
     }).join('');
   }
 
+  function buildIndex() {
+    itemById = {};
+    (DATA.funnel || []).concat(DATA.social || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
+  }
+
   function render() {
+    buildIndex();
     var p = document.createElement('div'); p.id = 'zv-panel';
     var social = (DATA.social && DATA.social.length) ? ('<div class="zv-h">Prova social</div><div class="zv-list">' + itemsHtml(DATA.social, 'social') + '</div>') : '';
+    var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h">Sequencias</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
+      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-stage">SEQ</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">&#9193;</span></button>';
+    }).join('') + '</div>') : '';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
       '<div id="zv-body"><div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
-      social +
+      social + seqs +
       '<div id="zv-status"></div>' +
       '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label></div></div>';
     document.body.appendChild(p);
@@ -69,6 +78,9 @@
     var cb = p.querySelector('#zv-sim-cb'); simulate = cb.checked; cb.onchange = function () { simulate = cb.checked; };
     Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
       b.onclick = function () { var list = b.getAttribute('data-k') === 'social' ? DATA.social : DATA.funnel; send(list[+b.getAttribute('data-i')], b); };
+    });
+    Array.prototype.forEach.call(p.querySelectorAll('.zv-seq'), function (b) {
+      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
     });
     restorePos(p);
     makeDraggable(p, head);
@@ -102,42 +114,67 @@
 
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
 
+  // Envia UM item e resolve {ok,err} quando terminar. Nao mexe em busy/status.
+  function sendItemAsync(item) {
+    return new Promise(function (resolve) {
+      var c = activeChat();
+      if (!c) { resolve({ ok: false, err: 'sem conversa aberta' }); return; }
+      if (c.isGroup) { resolve({ ok: false, err: 'e um grupo' }); return; }
+      var chatId = c.id;
+      if (item.kind === 'video') {
+        // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
+        var rid = 'v' + Date.now() + Math.random().toString(36).slice(2, 6);
+        try { window.__zvRes = null; } catch (_) {}
+        window.__zvReq = { id: rid, file: item.file, caption: item.caption || '' };
+        var waited = 0;
+        var iv = setInterval(function () {
+          waited += 500; var res = window.__zvRes;
+          if (res && res.id === rid) { clearInterval(iv); resolve({ ok: !!res.ok, err: res.err }); }
+          else if (waited > 90000) { clearInterval(iv); resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); }
+        }, 500);
+        return;
+      }
+      var dur = item.durMs || 3000;
+      var pre = Promise.resolve();
+      if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
+      pre.then(function () { return sleep(dur); })
+        .then(function () { return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
+        .then(function () { resolve({ ok: true }); })
+        .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+    });
+  }
+
   function send(item, b) {
     if (busy || !item) return;
+    busy = true; if (b) b.classList.add('zv-busy');
+    status(item.kind === 'video' ? 'Enviando video...' : (simulate ? 'Gravando...' : 'Enviando...'), '');
+    sendItemAsync(item).then(function (r) {
+      status(r.ok ? 'Enviado' : ('Falha: ' + (r.err || '')), r.ok ? 'ok' : 'err');
+      busy = false; if (b) b.classList.remove('zv-busy');
+    });
+  }
+
+  // Dispara os itens da sequencia em ordem, com pausa entre eles. Clicar de novo para.
+  function sendSequence(seq, b) {
+    if (busy || !seq) return;
+    var items = (seq.items || []).map(function (id) { return itemById[id]; }).filter(Boolean);
+    if (!items.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
-    if (!c) { status('Abra uma conversa primeiro', 'err'); return; }
-    if (c.isGroup) { status('E um grupo. Abra a conversa de um lead.', 'err'); return; }
-    busy = true; b.classList.add('zv-busy');
-    var chatId = c.id;
-    if (item.kind === 'video') {
-      // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
-      status('Enviando video...', '');
-      var rid = 'v' + Date.now();
-      try { window.__zvRes = null; } catch (_) {}
-      window.__zvReq = { id: rid, file: item.file, caption: item.caption || '' };
-      var waited = 0;
-      var iv = setInterval(function () {
-        waited += 600;
-        var res = window.__zvRes;
-        if (res && res.id === rid) {
-          clearInterval(iv);
-          if (res.ok) status('Video enviado', 'ok'); else status('Falha video: ' + (res.err || ''), 'err');
-          busy = false; b.classList.remove('zv-busy');
-        } else if (waited > 90000) {
-          clearInterval(iv); status('Video demorou. O start.bat esta rodando?', 'err'); busy = false; b.classList.remove('zv-busy');
-        }
-      }, 600);
-      return;
-    }
-    var dur = item.durMs || 3000;
-    status(simulate ? 'Gravando...' : 'Enviando...', '');
-    var pre = Promise.resolve();
-    if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
-    pre.then(function () { return sleep(dur); })
-      .then(function () { return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
-      .then(function () { status('Enviado para ' + ((c.id && c.id.user) || ''), 'ok'); })
-      .catch(function (e) { status('Falha: ' + ((e && e.message) || e), 'err'); })
-      .then(function () { busy = false; b.classList.remove('zv-busy'); });
+    if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
+    busy = true; seqRunning = true; seqStop = false; if (b) b.classList.add('zv-busy');
+    var i = 0;
+    (function next() {
+      if (seqStop || i >= items.length) {
+        status(seqStop ? 'Sequencia parada' : 'Sequencia enviada (' + items.length + ')', seqStop ? 'err' : 'ok');
+        busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); return;
+      }
+      status('Sequencia ' + (i + 1) + '/' + items.length + '...', '');
+      sendItemAsync(items[i]).then(function (r) {
+        i++;
+        if (!r.ok) { status('Falha no item ' + i + ': ' + (r.err || ''), 'err'); busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); return; }
+        setTimeout(next, 1600);
+      });
+    })();
   }
 
   function poll() {

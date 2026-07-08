@@ -3,9 +3,9 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const DIR = __dirname, MEDIA_PORT = 9223;
 function buildLibrary() {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
-  const funnel = (lib.funnel || []).map(it => ({ stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio', dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'), durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) }));
-  const social = (lib.social || []).map(it => ({ stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') }));
-  return { funnel, social };
+  const funnel = (lib.funnel || []).map(it => ({ id: it.id, stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio', dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'), durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) }));
+  const social = (lib.social || []).map(it => ({ id: it.id, stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') }));
+  return { funnel, social, sequences: lib.sequences || [] };
 }
 let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
 panel = panel.replace('"__LIBRARY__"', () => JSON.stringify(buildLibrary())).replace('"__CSS__"', () => JSON.stringify(fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8')));
@@ -26,5 +26,7 @@ function j(p) { return new Promise((r, x) => http.get({ host: '127.0.0.1', port:
   console.log('cursor header =', await val('(getComputedStyle(document.getElementById("zv-head"))||{}).cursor'));
   console.log('labels =', await val('Array.from(document.querySelectorAll(".zv-label")).map(x=>x.textContent).join(", ")'));
   console.log('__zvDoSend =', await val('typeof window.__zvDoSend'));
+  console.log('sequencias (.zv-seq) =', await val('document.querySelectorAll(".zv-seq").length'));
+  console.log('secoes =', await val('Array.from(document.querySelectorAll(".zv-h")).map(x=>x.textContent).join(" | ")'));
   process.exit(0);
 })().catch(e => { console.log('err', e.message); process.exit(1); });

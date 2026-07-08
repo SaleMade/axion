@@ -10,5 +10,9 @@
   "social": [
     { "id": "s1", "stage": "PS", "kind": "video", "label": "Prova: Carlos (Alagoas)", "file": "media/social1.mp4", "caption": "Esse e o Carlos, morador de Alagoas" },
     { "id": "s2", "stage": "PS", "kind": "video", "label": "Prova: Sr Jose", "file": "media/social2.mp4", "caption": "Sr Jose, recebeu o tratamento tem 1 semana" }
+  ],
+  "sequences": [
+    { "id": "seq_abertura", "label": "Abertura (F1 + F2)", "items": ["f1", "f2"] },
+    { "id": "seq_prova", "label": "Provas sociais (2 videos)", "items": ["s1", "s2"] }
   ]
 }

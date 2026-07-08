@@ -32,6 +32,16 @@
 }
 .zv-item:hover{ background:#202c33; border-color:#00a884; }
 .zv-item.zv-busy{ opacity:.6; pointer-events:none; }
+.zv-seq{
+  display:flex; align-items:center; gap:9px; text-align:left; width:100%;
+  background:#0f1a20; border:1px dashed #33414b; color:#e9edef;
+  border-radius:9px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  transition:background .12s, border-color .12s;
+}
+.zv-seq:hover{ background:#202c33; border-color:#ffb454; }
+.zv-seq.zv-busy{ border-color:#ffb454; }
+.zv-seq .zv-stage{ color:#ffb454; background:rgba(255,180,84,.14); }
+.zv-seq .zv-play{ color:#ffb454; }
 .zv-stage{
   flex:none; font-size:9.5px; font-weight:800; color:#00a884; text-transform:uppercase;
   background:rgba(0,168,132,.14); padding:3px 7px; border-radius:6px; letter-spacing:.03em; min-width:26px; text-align:center;
