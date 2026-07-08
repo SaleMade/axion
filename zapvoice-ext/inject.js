@@ -37,8 +37,11 @@ function buildLibrary() {
     id: it.id, stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '',
     file: String(it.file).replace(/\\/g, '/'),
   }));
+  const messages = (lib.messages || []).map((it) => ({
+    id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '',
+  }));
   const sequences = lib.sequences || [];
-  return { funnel, social, sequences };
+  return { messages, funnel, social, sequences };
 }
 
 function buildBundle() {

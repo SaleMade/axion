@@ -55,19 +55,20 @@
 
   function buildIndex() {
     itemById = {};
-    (DATA.funnel || []).concat(DATA.social || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
+    (DATA.messages || []).concat(DATA.funnel || [], DATA.social || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
   }
 
   function render() {
     buildIndex();
     var p = document.createElement('div'); p.id = 'zv-panel';
+    var msgs = (DATA.messages && DATA.messages.length) ? ('<div class="zv-h">Mensagens</div><div class="zv-list">' + itemsHtml(DATA.messages, 'messages') + '</div>') : '';
     var social = (DATA.social && DATA.social.length) ? ('<div class="zv-h">Prova social</div><div class="zv-list">' + itemsHtml(DATA.social, 'social') + '</div>') : '';
     var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h">Sequencias</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
       return '<button class="zv-seq" data-si="' + i + '"><span class="zv-stage">SEQ</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">&#9193;</span></button>';
     }).join('') + '</div>') : '';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
-      '<div id="zv-body"><div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
+      '<div id="zv-body">' + msgs + '<div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
       social + seqs +
       '<div id="zv-status"></div>' +
       '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label></div></div>';
@@ -77,7 +78,11 @@
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); };
     var cb = p.querySelector('#zv-sim-cb'); simulate = cb.checked; cb.onchange = function () { simulate = cb.checked; };
     Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
-      b.onclick = function () { var list = b.getAttribute('data-k') === 'social' ? DATA.social : DATA.funnel; send(list[+b.getAttribute('data-i')], b); };
+      b.onclick = function () {
+        var k = b.getAttribute('data-k');
+        var list = k === 'social' ? DATA.social : (k === 'messages' ? DATA.messages : DATA.funnel);
+        send(list[+b.getAttribute('data-i')], b);
+      };
     });
     Array.prototype.forEach.call(p.querySelectorAll('.zv-seq'), function (b) {
       b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
@@ -134,6 +139,15 @@
         }, 500);
         return;
       }
+      if (item.kind === 'text') {
+        var preT = Promise.resolve();
+        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, 1500)); } catch (_) {} }
+        preT.then(function () { return sleep(1200); })
+          .then(function () { return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
+          .then(function () { resolve({ ok: true }); })
+          .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+        return;
+      }
       var dur = item.durMs || 3000;
       var pre = Promise.resolve();
       if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
@@ -147,7 +161,8 @@
   function send(item, b) {
     if (busy || !item) return;
     busy = true; if (b) b.classList.add('zv-busy');
-    status(item.kind === 'video' ? 'Enviando video...' : (simulate ? 'Gravando...' : 'Enviando...'), '');
+    var st = item.kind === 'video' ? 'Enviando video...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
+    status(st, '');
     sendItemAsync(item).then(function (r) {
       status(r.ok ? 'Enviado' : ('Falha: ' + (r.err || '')), r.ok ? 'ok' : 'err');
       busy = false; if (b) b.classList.remove('zv-busy');

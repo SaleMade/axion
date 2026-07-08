@@ -1,4 +1,10 @@
 {
+  "messages": [
+    { "id": "m1", "stage": "MSG", "label": "Tudo ficou claro?", "text": "Tudo ficou bem claro pra voce? Ficou alguma duvida?" },
+    { "id": "m2", "stage": "MSG", "label": "Fechar pedido", "text": "Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?" },
+    { "id": "m3", "stage": "MSG", "label": "Pedir dados", "text": "Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP." },
+    { "id": "m4", "stage": "MSG", "label": "Confirma entrega", "text": "Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui." }
+  ],
   "funnel": [
     { "id": "f1", "stage": "F1", "label": "Abertura", "file": "audios/f1_abertura.ogg", "sizeKB": 314, "desc": "Rafael se apresenta como especialista e pede a dor" },
     { "id": "f2", "stage": "F2", "label": "Garantia COD", "file": "audios/f2_garantia.ogg", "sizeKB": 91, "desc": "Resultado garantido, so paga quando chegar em casa" },

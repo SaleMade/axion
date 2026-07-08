@@ -5,7 +5,8 @@ function buildLibrary() {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
   const funnel = (lib.funnel || []).map(it => ({ id: it.id, stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio', dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'), durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) }));
   const social = (lib.social || []).map(it => ({ id: it.id, stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') }));
-  return { funnel, social, sequences: lib.sequences || [] };
+  const messages = (lib.messages || []).map(it => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '' }));
+  return { messages, funnel, social, sequences: lib.sequences || [] };
 }
 let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
 panel = panel.replace('"__LIBRARY__"', () => JSON.stringify(buildLibrary())).replace('"__CSS__"', () => JSON.stringify(fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8')));
