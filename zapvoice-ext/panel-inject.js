@@ -3,7 +3,17 @@
 // Roda no mesmo contexto do WA-JS: chama window.WPP direto.
 (function () {
   'use strict';
-  if (window.__zvInstalled) return; window.__zvInstalled = true;
+  // Re-injecao: limpa a versao anterior (painel + estilo + timers) pra SEMPRE subir a
+  // versao nova, mesmo sem recarregar o WhatsApp. Antes um marcador antigo travava a
+  // atualizacao e o painel velho continuava na tela ao reabrir o start.bat.
+  try {
+    var _op = document.getElementById('zv-panel'); if (_op && _op.parentNode) _op.parentNode.removeChild(_op);
+    var _os = document.getElementById('zv-style'); if (_os && _os.parentNode) _os.parentNode.removeChild(_os);
+    if (window.__zvSchedIv) { clearInterval(window.__zvSchedIv); window.__zvSchedIv = null; }
+    if (window.__zvPollIv) { clearInterval(window.__zvPollIv); window.__zvPollIv = null; }
+    if (window.__zvSgT) { clearTimeout(window.__zvSgT); window.__zvSgT = null; }
+  } catch (_) {}
+  window.__zvInstalled = true;
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
   var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false;
@@ -19,7 +29,7 @@
       setTimeout(loop, 500);
     })();
   }
-  function injectCss() { if (document.getElementById('zv-style')) return; var s = document.createElement('style'); s.id = 'zv-style'; s.textContent = CSS; (document.head || document.documentElement).appendChild(s); }
+  function injectCss() { var ex = document.getElementById('zv-style'); if (ex && ex.parentNode) ex.parentNode.removeChild(ex); var s = document.createElement('style'); s.id = 'zv-style'; s.textContent = CSS; (document.head || document.documentElement).appendChild(s); }
 
   function activeChat() { try { return window.WPP.chat.getActiveChat(); } catch (e) { return null; } }
   function activeInfo() {
@@ -313,7 +323,7 @@
   }
 
   function poll() {
-    setInterval(function () {
+    window.__zvPollIv = setInterval(function () {
       if (!els.who) return;
       var a = activeInfo();
       if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('→ ' + a.name) : '→ abra uma conversa'); }

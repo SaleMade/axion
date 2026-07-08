@@ -39,6 +39,16 @@ if ($cur -notmatch [regex]::Escape($want)) {
   Write-Host "Porta de debug ativada no WhatsApp (config unica)."
 }
 
+# 0) auto-atualizacao: puxa a versao mais nova do repo (best-effort; ignora se nao der)
+try {
+  $repo = Split-Path -Parent $here
+  if (Test-Path (Join-Path $repo '.git')) {
+    Write-Host "Buscando a versao mais nova do Sale Chat..."
+    & git -C $repo pull --ff-only 2>&1 | Out-Null
+    Write-Host "Atualizado."
+  }
+} catch { Write-Host "(sem atualizacao; segui com a versao local)" }
+
 Write-Host "Sale Chat - modo APP. Deixe esta janela aberta."
 # 2 + 3) loop resiliente: garante a porta e injeta; se cair, reergue
 while ($true) {
