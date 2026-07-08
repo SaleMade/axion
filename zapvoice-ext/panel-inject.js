@@ -134,8 +134,22 @@
     doc:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
     funnel:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>',
     seq:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
-    play:  '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3.5v17a1 1 0 0 0 1.53.85l13.4-8.5a1 1 0 0 0 0-1.7L7.53 2.65A1 1 0 0 0 6 3.5Z"/></svg>'
+    play:  '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3.5v17a1 1 0 0 0 1.53.85l13.4-8.5a1 1 0 0 0 0-1.7L7.53 2.65A1 1 0 0 0 6 3.5Z"/></svg>',
+    star:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    starFull:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    chevUp:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>',
+    chevDown:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    moon:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+    sun:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>',
+    search:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    minus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>'
   };
+  function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (_) { return d; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
+  var COLLAPSED = lsGet('zv_collapsed', {});
+  var FAVS = lsGet('zv_favs', {});
+  var DARK = false; try { DARK = localStorage.getItem('zv_dark') === '1'; } catch (_) {}
+  var FILTER = '';
   var ZKIND = {
     text:     { c: '#2563eb', ic: SVG.msg },
     audio:    { c: '#13c273', ic: SVG.mic },
@@ -146,14 +160,24 @@
   function itemsHtml(list) {
     return (list || []).map(function (it) {
       var k = ZKIND[it.kind] || ZKIND.text;
+      var fav = !!FAVS[it.id];
       return '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
         '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
-        '<span class="zv-label">' + esc(it.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
+        '<span class="zv-label">' + esc(it.label) + '</span>' +
+        '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
+        '<span class="zv-play">' + SVG.play + '</span></button>';
     }).join('');
   }
   function mediaByKind(kind) { return (DATA.media || []).filter(function (m) { return m.kind === kind; }); }
-  function sectionHtml(title, list, ic, color) {
-    return list.length ? ('<div class="zv-h"><span class="zv-hi" style="color:' + color + '">' + ic + '</span>' + title + '</div><div class="zv-list">' + itemsHtml(list) + '</div>') : '';
+  // Seção recolhível com título, contador e chevron. inner = HTML da lista (itens ou funis).
+  function section(key, title, ic, color, count, inner) {
+    if (!count) return '';
+    var col = !!COLLAPSED[key];
+    return '<div class="zv-sec" data-sec="' + key + '">' +
+      '<div class="zv-h" data-toggle="' + key + '"><span class="zv-hi" style="color:' + color + '">' + ic + '</span>' +
+        '<span class="zv-htxt">' + title + '</span><span class="zv-count">' + count + '</span>' +
+        '<span class="zv-chev">' + (col ? SVG.chevDown : SVG.chevUp) + '</span></div>' +
+      '<div class="zv-list"' + (col ? ' style="display:none"' : '') + '>' + inner + '</div></div>';
   }
 
   function buildIndex() {
@@ -163,38 +187,94 @@
 
   function render() {
     buildIndex();
-    var p = document.createElement('div'); p.id = 'zv-panel';
-    var msgs = sectionHtml('Mensagens', DATA.messages || [], SVG.msg, '#2563eb');
-    var auds = sectionHtml('Audios do funil', mediaByKind('audio'), SVG.mic, '#13c273');
-    var vids = sectionHtml('Videos', mediaByKind('video'), SVG.video, '#8e17f0');
-    var imgs = sectionHtml('Imagens', mediaByKind('image'), SVG.image, '#00bcf2');
-    var docs = sectionHtml('Documentos', mediaByKind('document'), SVG.doc, '#f0810f');
-    var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
-      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
-    }).join('') + '</div>') : '';
-    var empty = (!msgs && !auds && !vids && !imgs && !docs && !seqs) ? '<div class="zv-empty">Nada configurado ainda. Abra a dash (Sale Chat) e adicione mensagens, audios e videos.</div>' : '';
+    var p = document.createElement('div'); p.id = 'zv-panel'; if (DARK) p.className = 'zv-dark';
     p.innerHTML =
-      '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
-      '<div id="zv-body"><div id="zv-suggest" style="display:none"></div>' + msgs + auds + vids + imgs + docs + seqs + empty +
-      '<div id="zv-status"></div>' +
-      '<div id="zv-sched" style="display:none"></div>' +
-      '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label><a id="zv-sched-toggle">Agendar</a></div></div>';
+      '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span>' +
+        '<span id="zv-theme" title="Tema claro/escuro">' + (DARK ? SVG.sun : SVG.moon) + '</span>' +
+        '<span id="zv-min" title="Recolher">' + SVG.minus + '</span></div>' +
+      '<div id="zv-body">' +
+        '<div id="zv-suggest" style="display:none"></div>' +
+        '<div id="zv-search"><span class="zv-q-ic">' + SVG.search + '</span><input id="zv-q" placeholder="Buscar item..." autocomplete="off"><span id="zv-q-x" title="Limpar">&times;</span></div>' +
+        '<div id="zv-sections"></div>' +
+        '<div id="zv-status"></div>' +
+        '<div id="zv-sched" style="display:none"></div>' +
+        '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label><a id="zv-sched-toggle">Agendar</a></div>' +
+      '</div>';
     document.body.appendChild(p);
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); };
+    var themeBtn = p.querySelector('#zv-theme');
+    if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); DARK = !DARK; p.classList.toggle('zv-dark', DARK); try { localStorage.setItem('zv_dark', DARK ? '1' : '0'); } catch (_) {} themeBtn.innerHTML = DARK ? SVG.sun : SVG.moon; };
     var cb = p.querySelector('#zv-sim-cb'); simulate = cb.checked; cb.onchange = function () { simulate = cb.checked; };
     var stgl = p.querySelector('#zv-sched-toggle');
     if (stgl) stgl.onclick = function () { var b = p.querySelector('#zv-sched'); if (b) { var show = b.style.display === 'none'; b.style.display = show ? 'block' : 'none'; if (show) schedRender(); } };
+    var q = p.querySelector('#zv-q');
+    if (q) q.oninput = function () { FILTER = q.value; applyFilter(); };
+    var qx = p.querySelector('#zv-q-x');
+    if (qx) qx.onclick = function () { FILTER = ''; if (q) { q.value = ''; q.focus(); } applyFilter(); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
-    Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
-      b.onclick = function () { var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
-    });
-    Array.prototype.forEach.call(p.querySelectorAll('.zv-seq'), function (b) {
-      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
-    });
+    renderSections();
     restorePos(p);
     makeDraggable(p, head);
+  }
+
+  // (Re)desenha só a área de seções, a partir do estado (favoritos, colapso).
+  function renderSections() {
+    var host = document.getElementById('zv-sections'); if (!host) return;
+    var allItems = (DATA.messages || []).concat(DATA.media || []);
+    var favList = allItems.filter(function (it) { return FAVS[it.id]; });
+    var seqList = DATA.sequences || [];
+    var seqInner = seqList.map(function (s, i) {
+      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
+    }).join('');
+    var html =
+      section('favoritos', 'Favoritos', SVG.starFull, '#f5b60a', favList.length, itemsHtml(favList)) +
+      section('mensagens', 'Mensagens', SVG.msg, '#2563eb', (DATA.messages || []).length, itemsHtml(DATA.messages || [])) +
+      section('audios', 'Audios do funil', SVG.mic, '#13c273', mediaByKind('audio').length, itemsHtml(mediaByKind('audio'))) +
+      section('videos', 'Videos', SVG.video, '#8e17f0', mediaByKind('video').length, itemsHtml(mediaByKind('video'))) +
+      section('imagens', 'Imagens', SVG.image, '#00bcf2', mediaByKind('image').length, itemsHtml(mediaByKind('image'))) +
+      section('documentos', 'Documentos', SVG.doc, '#f0810f', mediaByKind('document').length, itemsHtml(mediaByKind('document'))) +
+      section('funis', 'Funis', SVG.funnel, '#8e17f0', seqList.length, seqInner);
+    host.innerHTML = html || '<div class="zv-empty">Nada configurado ainda. Abra a dash (Sale Chat) e adicione mensagens, audios e videos.</div>';
+    bindSections(host);
+    applyFilter();
+  }
+
+  function bindSections(host) {
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-item'), function (b) {
+      b.onclick = function () { var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-seq'), function (b) {
+      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-star'), function (s) {
+      s.onclick = function (e) { e.stopPropagation(); var id = s.getAttribute('data-fav'); if (FAVS[id]) delete FAVS[id]; else FAVS[id] = 1; lsSet('zv_favs', FAVS); renderSections(); };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-h[data-toggle]'), function (h) {
+      h.onclick = function () { var key = h.getAttribute('data-toggle'); COLLAPSED[key] = !COLLAPSED[key]; lsSet('zv_collapsed', COLLAPSED); renderSections(); };
+    });
+  }
+
+  // Filtro de busca: mostra/esconde itens pelo texto do label, esconde seções vazias.
+  function applyFilter() {
+    var host = document.getElementById('zv-sections'); if (!host) return;
+    var qx = document.getElementById('zv-q-x'); if (qx) qx.style.display = FILTER ? 'flex' : 'none';
+    var q = (FILTER || '').trim().toLowerCase();
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-sec'), function (sec) {
+      var key = sec.getAttribute('data-sec');
+      var items = sec.querySelectorAll('.zv-item, .zv-seq');
+      var visible = 0;
+      Array.prototype.forEach.call(items, function (it) {
+        var lblEl = it.querySelector('.zv-label'); var lbl = lblEl ? lblEl.textContent : '';
+        var show = !q || lbl.toLowerCase().indexOf(q) !== -1;
+        it.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      var list = sec.querySelector('.zv-list');
+      if (q) { sec.style.display = visible ? '' : 'none'; if (list) list.style.display = visible ? '' : 'none'; }
+      else { sec.style.display = ''; if (list) list.style.display = COLLAPSED[key] ? 'none' : ''; }
+    });
   }
 
   function restorePos(p) {
