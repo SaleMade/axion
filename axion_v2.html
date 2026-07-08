@@ -9956,13 +9956,19 @@ async function evoConnect(atId, slot){
   try{
     // Cria (idempotente) e já recebe o QR — tudo pela ponte segura no Worker
     const j=await api.waCreate(inst);
-    const qr=j&&j.qr;
+    let qr=j&&j.qr;
+    if(!qr){
+      // Sem QR = sessão "open" fantasma travada (número deslogou do celular mas a Evolution não soltou).
+      // Como esse botão só aparece pra número NÃO conectado, dá pra resetar a sessão e pegar um QR limpo.
+      if(body)body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Resetando a sessão anterior e gerando um QR novo…</p>';
+      try{ await api.waDisconnect(inst); await new Promise(r=>setTimeout(r,1800)); const j2=await api.waConnect(inst); qr=j2&&j2.qr; }catch(_){}
+    }
     if(qr){
       const src=String(qr).startsWith('data:')?qr:('data:image/png;base64,'+qr);
       body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p><p id="evo-poll" class="muted" style="font-size:11.5px;margin-top:8px;opacity:.7">Aguardando leitura do QR…</p></div>`;
       _evoPollStatus(inst);
     } else {
-      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Conexão já ativa ou QR indisponível.<br><span style="font-size:11px;opacity:.7">Se o número não está conectado, feche e tente de novo.</span></p>`;
+      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Não consegui gerar o QR agora. Fecha e tenta de novo em alguns segundos.<br><span style="font-size:11px;opacity:.7">Se persistir, o servidor da Evolution pode estar reiniciando.</span></p>`;
     }
   }catch(e){
     body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui conectar: ${(e&&e.message)||e}<br><br>Confira em Configurações se o WhatsApp (Evolution) está configurado e se o servidor da VPS está no ar.</p>`;
