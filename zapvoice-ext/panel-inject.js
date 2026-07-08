@@ -30,6 +30,16 @@
 
   function build() {
     injectCss();
+    // Enviado pelo injetor (window.__zvReq -> injetor le o arquivo -> chama isso com o base64)
+    window.__zvDoSend = function (dataUri, caption, id) {
+      try {
+        var c = activeChat();
+        if (!c) { window.__zvRes = { id: id, ok: false, err: 'sem chat aberto' }; return; }
+        window.WPP.chat.sendFileMessage(c.id, dataUri, { type: 'video', caption: caption || '' })
+          .then(function () { window.__zvRes = { id: id, ok: true }; })
+          .catch(function (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; });
+      } catch (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; }
+    };
     var t = setInterval(function () {
       if (document.body && !document.getElementById('zv-panel')) { clearInterval(t); render(); poll(); }
     }, 700);
@@ -100,12 +110,23 @@
     busy = true; b.classList.add('zv-busy');
     var chatId = c.id;
     if (item.kind === 'video') {
+      // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
       status('Enviando video...', '');
-      fetch(item.url).then(function (r) { return r.blob(); })
-        .then(function (blob) { return window.WPP.chat.sendFileMessage(chatId, blob, { type: 'video', caption: item.caption || '' }); })
-        .then(function () { status('Video enviado', 'ok'); })
-        .catch(function (e) { status('Falha: ' + ((e && e.message) || e), 'err'); })
-        .then(function () { busy = false; b.classList.remove('zv-busy'); });
+      var rid = 'v' + Date.now();
+      try { window.__zvRes = null; } catch (_) {}
+      window.__zvReq = { id: rid, file: item.file, caption: item.caption || '' };
+      var waited = 0;
+      var iv = setInterval(function () {
+        waited += 600;
+        var res = window.__zvRes;
+        if (res && res.id === rid) {
+          clearInterval(iv);
+          if (res.ok) status('Video enviado', 'ok'); else status('Falha video: ' + (res.err || ''), 'err');
+          busy = false; b.classList.remove('zv-busy');
+        } else if (waited > 90000) {
+          clearInterval(iv); status('Video demorou. O start.bat esta rodando?', 'err'); busy = false; b.classList.remove('zv-busy');
+        }
+      }, 600);
       return;
     }
     var dur = item.durMs || 3000;

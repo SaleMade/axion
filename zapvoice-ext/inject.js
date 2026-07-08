@@ -22,8 +22,10 @@ function getJson(pathname) {
   });
 }
 
-// Audios vao embutidos (base64, leves). Videos sao pesados, entao ficam num
-// servidor local (CORS liberado) e o painel busca por URL na hora de enviar.
+// Audios vao embutidos (base64, leves). Videos sao pesados: NAO embutimos nem
+// servimos por HTTP (o WhatsApp bloqueia fetch a 127.0.0.1 por CSP/mixed-content).
+// Em vez disso, o painel pede o video (window.__zvReq) e o injetor entrega o
+// base64 via CDP na hora do clique, chamando window.__zvDoSend na pagina (WPP envia).
 function buildLibrary() {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
   const funnel = (lib.funnel || []).map((it) => ({
@@ -33,24 +35,9 @@ function buildLibrary() {
   }));
   const social = (lib.social || []).map((it) => ({
     stage: it.stage, label: it.label, kind: it.kind || 'video', caption: it.caption || '',
-    url: 'http://127.0.0.1:' + MEDIA_PORT + '/' + String(it.file).replace(/\\/g, '/'),
+    file: String(it.file).replace(/\\/g, '/'),
   }));
   return { funnel, social };
-}
-
-function startMediaServer() {
-  const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    let f = decodeURIComponent((req.url || '').split('?')[0]).replace(/^\/+/, '');
-    const full = path.join(DIR, f);
-    if (!full.startsWith(DIR) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) { res.statusCode = 404; return res.end('nf'); }
-    const ext = path.extname(full).toLowerCase();
-    res.setHeader('Content-Type', ext === '.mp4' ? 'video/mp4' : ext === '.ogg' ? 'audio/ogg' : 'application/octet-stream');
-    fs.createReadStream(full).pipe(res);
-  });
-  server.on('error', (e) => { if (e.code !== 'EADDRINUSE') console.log('[zv] media server erro:', e.message); });
-  server.listen(MEDIA_PORT, '127.0.0.1', () => console.log('[zv] servidor de midia em http://127.0.0.1:' + MEDIA_PORT));
-  return server;
 }
 
 function buildBundle() {
@@ -83,7 +70,6 @@ async function findPage() {
 }
 
 async function run() {
-  startMediaServer();
   const page = await findPage();
   if (!page) { console.log('[zv] Nao achei a pagina do WhatsApp na porta ' + PORT + '. O app esta aberto com a porta de debug?'); process.exit(2); }
   console.log('[zv] Pagina encontrada:', page.title);
@@ -114,6 +100,33 @@ async function run() {
     console.log('[zv] Painel injetado:', ok === true);
   }
   await injectNow();
+
+  // Bomba de video: o painel pede (window.__zvReq), o injetor le o arquivo e
+  // entrega o base64 na pagina chamando window.__zvDoSend (WPP envia). Evita
+  // fetch bloqueado por CSP e nao embute video pesado na injecao inicial.
+  let lastReqId = null;
+  async function pumpVideo() {
+    try {
+      const raw = valOf(await evaluate('window.__zvReq ? JSON.stringify(window.__zvReq) : ""', true));
+      if (raw) {
+        let req = null; try { req = JSON.parse(raw); } catch (_) {}
+        if (req && req.id !== lastReqId) {
+          lastReqId = req.id;
+          await evaluate('window.__zvReq = null;');
+          try {
+            const full = path.join(DIR, req.file || '');
+            if (!full.startsWith(DIR) || !fs.existsSync(full)) throw new Error('arquivo nao encontrado: ' + req.file);
+            const dataUri = 'data:video/mp4;base64,' + fs.readFileSync(full).toString('base64');
+            await evaluate('window.__zvDoSend(' + JSON.stringify(dataUri) + ',' + JSON.stringify(req.caption || '') + ',' + JSON.stringify(req.id) + ')');
+          } catch (e) {
+            await evaluate('window.__zvRes = {id:' + JSON.stringify(req.id) + ',ok:false,err:' + JSON.stringify(String(e.message || e)) + '}');
+          }
+        }
+      }
+    } catch (_) {}
+    setTimeout(pumpVideo, 700);
+  }
+  pumpVideo();
 
   cdp.onEvent = (m) => { if (m.method === 'Page.loadEventFired') setTimeout(injectNow, 1500); };
   ws.addEventListener('close', () => { console.log('[zv] Conexao caiu. Rode de novo (o app reiniciou?).'); process.exit(0); });
