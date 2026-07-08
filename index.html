@@ -7577,47 +7577,57 @@ function renderSaleChat(){
   if(!Array.isArray(DB.salechat.triggers)) DB.salechat.triggers=[];
   scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
+  const builtinRef=(kind,label,icon)=>`<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--t3);font-weight:700;margin:10px 0 6px">${label}</div>`+
+    SC_BUILTIN.filter(x=>x.kind===kind).map(x=>`<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--b1);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;background:var(--s1);font-size:12.5px"><span style="color:var(--bl2);flex:none">${ico(icon,{size:13})}</span>${x.label.replace(/^(Audio|Video) · /,'')}</div>`).join('');
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <p class="muted" style="max-width:760px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
-      O que aparece no painel do Sale Chat dentro do WhatsApp dos atendentes, pra disparar com 1 clique. Edita aqui, salva sozinho, e o painel de todos puxa (eles rodam o start.bat pra pegar a versao nova). Os audios e videos do funil ja vem prontos; aqui voce controla as mensagens de texto e monta os funis.
+    <p class="muted" style="max-width:960px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
+      O que aparece no painel do Sale Chat dentro do WhatsApp dos atendentes, pra disparar com 1 clique. Edita aqui, salva sozinho, e o painel de todos puxa (eles rodam o start.bat pra pegar a versao nova). Os audios e videos do funil ja vem prontos; aqui voce controla as mensagens, a tua midia, os funis e os gatilhos.
     </p>
-    <div class="cfg-card" style="max-width:760px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div>
-        <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
-      </div>
-      <div id="sc-msgs"></div>
-    </div>
-    <div class="cfg-card" style="max-width:760px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-        <div class="info-title">${ico('volume',{size:15})} Midia (audios, videos, imagens)</div>
-        <div style="display:flex;gap:8px">
-          <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Audio<input type="file" accept="audio/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-          <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Video<input type="file" accept="video/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-          <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Imagem<input type="file" accept="image/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
-          <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Documento<input type="file" accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:16px;align-items:start">
+      <div class="cfg-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="info-title">${ico('message-circle',{size:15})} Mensagens de texto</div>
+          <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
         </div>
+        <div id="sc-msgs"></div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin:0 0 12px;line-height:1.5">Sobe teus proprios audios (a tua voz), videos de prova social e imagens. Ficam na nuvem e o painel de todos os atendentes puxa. Video ate 60MB.</p>
-      <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
-      <div id="sc-media"></div>
-    </div>
-    <div class="cfg-card" style="max-width:760px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div class="info-title">${ico('zap',{size:15})} Funis (sequencias)</div>
-        <button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button>
+      <div class="cfg-card">
+        <div class="info-title">${ico('star',{size:15})} Prontos do funil campeao</div>
+        <p class="muted" style="font-size:11.5px;margin:6px 0 4px;line-height:1.5">Ja vem embutidos no painel (os audios e videos do melhor vendedor, o Rafael). Aparecem pros atendentes automatico. Pra usar a TUA voz e teus videos, sobe em "Midia" ao lado.</p>
+        ${builtinRef('audio','Audios do funil','volume')}
+        ${builtinRef('video','Videos de prova social','video')}
       </div>
-      <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Sequencia de itens (mensagem, audio, video) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada. Monta a ordem que quiser.</p>
-      <div id="sc-funis"></div>
-    </div>
-    <div class="cfg-card" style="max-width:760px;margin-top:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div>
-        <button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button>
+      <div class="cfg-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+          <div class="info-title">${ico('volume',{size:15})} Minha midia</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Audio<input type="file" accept="audio/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+            <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Video<input type="file" accept="video/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+            <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Imagem<input type="file" accept="image/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+            <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Documento<input type="file" accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+          </div>
+        </div>
+        <p class="muted" style="font-size:11.5px;margin:0 0 12px;line-height:1.5">Sobe teus proprios audios (a tua voz), videos, imagens e documentos. Ficam na nuvem e o painel de todos puxa. Ate 60MB.</p>
+        <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
+        <div id="sc-media"></div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo pra mandar (ele confirma com 1 clique, nao envia sozinho).</p>
-      <div id="sc-triggers"></div>
+      <div class="cfg-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div class="info-title">${ico('zap',{size:15})} Funis (sequencias)</div>
+          <button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button>
+        </div>
+        <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Sequencia de itens (mensagem, audio, video) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada.</p>
+        <div id="sc-funis"></div>
+      </div>
+      <div class="cfg-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div>
+          <button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button>
+        </div>
+        <p class="muted" style="font-size:11.5px;margin:0 0 14px;line-height:1.5">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo (ele confirma com 1 clique).</p>
+        <div id="sc-triggers"></div>
+      </div>
     </div>`;
   scRenderMsgs();
   scRenderMedia();
