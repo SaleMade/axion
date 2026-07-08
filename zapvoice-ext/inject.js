@@ -14,7 +14,23 @@ const path = require('path');
 const PORT = process.env.ZV_PORT ? Number(process.env.ZV_PORT) : 9222;
 const MEDIA_PORT = process.env.ZV_MEDIA_PORT ? Number(process.env.ZV_MEDIA_PORT) : 9223;
 const CONFIG_URL = process.env.ZV_CONFIG_URL || 'https://axion-api.axion-dash.workers.dev/api/salechat';
+const MEDIA_BASE = CONFIG_URL.replace(/\/+$/, '') + '/media';
 const DIR = __dirname;
+
+// Baixa bytes de uma URL (mídia do R2 servida pelo Worker). Node não tem CSP.
+function fetchBytes(url) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const r = https.get(url, (res) => {
+        if (res.statusCode !== 200) { res.resume(); return fin(null); }
+        const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => fin(Buffer.concat(chunks)));
+      });
+      r.on('error', () => fin(null));
+      r.setTimeout(30000, () => { try { r.destroy(); } catch (_) {} fin(null); });
+    } catch (_) { fin(null); }
+  });
+}
 
 // Busca a config do Sale Chat na AXION (mensagens + funis que o Diretor edita
 // na dash). Node nao tem CSP, entao busca aqui e injeta no painel. Falha -> null.
@@ -43,7 +59,7 @@ function getJson(pathname) {
 // servimos por HTTP (o WhatsApp bloqueia fetch a 127.0.0.1 por CSP/mixed-content).
 // Em vez disso, o painel pede o video (window.__zvReq) e o injetor entrega o
 // base64 via CDP na hora do clique, chamando window.__zvDoSend na pagina (WPP envia).
-function buildLibrary(remote) {
+async function buildLibrary(remote) {
   const lib = JSON.parse(fs.readFileSync(path.join(DIR, 'library.json'), 'utf8'));
   const funnel = (lib.funnel || []).map((it) => ({
     id: it.id, stage: it.stage, label: it.label, desc: it.desc || '', kind: 'audio',
@@ -59,7 +75,20 @@ function buildLibrary(remote) {
   const rMsgs = remote && Array.isArray(remote.messages) && remote.messages.length ? remote.messages : (lib.messages || []);
   const messages = rMsgs.map((it) => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '' }));
   const sequences = remote && Array.isArray(remote.sequences) && remote.sequences.length ? remote.sequences : (lib.sequences || []);
-  return { messages, funnel, social, sequences };
+  // Midia que o Diretor subiu na dash (R2): audio/imagem embutidos em base64;
+  // video por URL (baixado so na hora do clique, via __zvReq).
+  const media = [];
+  for (const m of (remote && Array.isArray(remote.media) ? remote.media : [])) {
+    if (!m || !m.key) continue;
+    const url = MEDIA_BASE + '/' + m.key;
+    if (m.kind === 'video') { media.push({ id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url }); continue; }
+    const buf = await fetchBytes(url);
+    if (!buf) continue;
+    const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
+    if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri });
+    else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
+  }
+  return { messages, funnel, social, sequences, media };
 }
 
 async function buildBundle() {
@@ -70,7 +99,8 @@ async function buildBundle() {
   const css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8');
   let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
   // replace por FUNCAO (imune a sequencias $ nos dados, ex: "R$497")
-  panel = panel.replace('"__LIBRARY__"', () => JSON.stringify(buildLibrary(remote)))
+  const libJson = JSON.stringify(await buildLibrary(remote));
+  panel = panel.replace('"__LIBRARY__"', () => libJson)
                .replace('"__CSS__"', () => JSON.stringify(css));
   return { wajs, panel };
 }
@@ -139,9 +169,16 @@ async function run() {
           lastReqId = req.id;
           await evaluate('window.__zvReq = null;');
           try {
-            const full = path.join(DIR, req.file || '');
-            if (!full.startsWith(DIR) || !fs.existsSync(full)) throw new Error('arquivo nao encontrado: ' + req.file);
-            const dataUri = 'data:video/mp4;base64,' + fs.readFileSync(full).toString('base64');
+            let dataUri;
+            if (req.url) {
+              const buf = await fetchBytes(req.url);
+              if (!buf) throw new Error('nao consegui baixar o video da nuvem');
+              dataUri = 'data:video/mp4;base64,' + buf.toString('base64');
+            } else {
+              const full = path.join(DIR, req.file || '');
+              if (!full.startsWith(DIR) || !fs.existsSync(full)) throw new Error('arquivo nao encontrado: ' + req.file);
+              dataUri = 'data:video/mp4;base64,' + fs.readFileSync(full).toString('base64');
+            }
             await evaluate('window.__zvDoSend(' + JSON.stringify(dataUri) + ',' + JSON.stringify(req.caption || '') + ',' + JSON.stringify(req.id) + ')');
           } catch (e) {
             await evaluate('window.__zvRes = {id:' + JSON.stringify(req.id) + ',ok:false,err:' + JSON.stringify(String(e.message || e)) + '}');

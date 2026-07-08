@@ -7547,7 +7547,11 @@ const SC_BUILTIN=[
   {id:'s1',label:'Video · Prova Carlos (Alagoas)',kind:'video'},
   {id:'s2',label:'Video · Prova Sr Jose',kind:'video'},
 ];
-function scAllItems(){ return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'})).concat(SC_BUILTIN); }
+function scAllItems(){
+  return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
+    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:(m.kind==='video'?'Video · ':m.kind==='image'?'Imagem · ':'Audio · ')+(m.label||m.id),kind:m.kind})))
+    .concat(SC_BUILTIN);
+}
 function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
 function scSeedIfNew(){
   if(DB.salechat.updated_at) return;
@@ -7568,6 +7572,7 @@ function renderSaleChat(){
   if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={messages:[],sequences:[]};
   if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
   if(!Array.isArray(DB.salechat.sequences)) DB.salechat.sequences=[];
+  if(!Array.isArray(DB.salechat.media)) DB.salechat.media=[];
   scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
   pg.innerHTML=`
@@ -7582,6 +7587,19 @@ function renderSaleChat(){
       </div>
       <div id="sc-msgs"></div>
     </div>
+    <div class="cfg-card" style="max-width:760px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div class="info-title">${ico('volume',{size:15})} Midia (audios, videos, imagens)</div>
+        <div style="display:flex;gap:8px">
+          <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Audio<input type="file" accept="audio/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+          <label class="btn btn-gr btn-sm" style="cursor:pointer">+ Video<input type="file" accept="video/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+          <label class="btn btn-gh btn-sm" style="cursor:pointer">+ Imagem<input type="file" accept="image/*" style="display:none" onchange="scUploadMedia(this.files[0],this)"></label>
+        </div>
+      </div>
+      <p class="muted" style="font-size:11.5px;margin:0 0 12px;line-height:1.5">Sobe teus proprios audios (a tua voz), videos de prova social e imagens. Ficam na nuvem e o painel de todos os atendentes puxa. Video ate 60MB.</p>
+      <div id="sc-media-status" style="min-height:14px;font-size:11.5px;margin-bottom:8px"></div>
+      <div id="sc-media"></div>
+    </div>
     <div class="cfg-card" style="max-width:760px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div class="info-title">${ico('zap',{size:15})} Funis (sequencias)</div>
@@ -7591,6 +7609,7 @@ function renderSaleChat(){
       <div id="sc-funis"></div>
     </div>`;
   scRenderMsgs();
+  scRenderMedia();
   scRenderFunis();
 }
 function scRenderMsgs(){
@@ -7637,6 +7656,44 @@ function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFu
 function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].label=v; scTouch(); } }
 function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push(id); scTouch(); scRenderFunis(); } }
 function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
+// ─── Mídia (upload pro R2 via Worker) ───
+function setScMediaStatus(m,err){ const el=$('sc-media-status'); if(el){ el.textContent=m||''; el.style.color=err?'var(--rd)':'var(--gr)'; } }
+async function scUploadMedia(file, el){
+  if(!file) return;
+  const base=apiUrl(), tok=apiToken();
+  if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); return; }
+  const kind=file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':'image';
+  if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); return; }
+  setScMediaStatus('Subindo '+file.name+'... ('+Math.round(file.size/1024)+' KB)');
+  try{
+    const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); return; }
+    DB.salechat.media.push({id:'md'+Date.now().toString(36),kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime});
+    scTouch(); scRenderMedia(); setScMediaStatus(file.name+' adicionado.');
+  }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
+  if(el) el.value='';
+}
+function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':'volume'; }
+function scRenderMedia(){
+  const box=$('sc-media'); if(!box) return;
+  const md=DB.salechat.media;
+  if(!md.length){ box.innerHTML='<div class="muted" style="padding:14px;text-align:center">Nenhuma mídia sua ainda. Sobe áudio, vídeo ou imagem acima.</div>'; return; }
+  box.innerHTML=md.map((m,i)=>`
+    <div style="display:flex;gap:9px;align-items:center;border:1px solid var(--b2);border-radius:var(--r);padding:9px 11px;margin-bottom:8px;background:var(--s1)">
+      <span style="color:var(--bl2);flex:none">${ico(scMediaIcon(m.kind),{size:15})}</span>
+      <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome" oninput="scEditMedia(${i},this.value)">
+      <span class="muted" style="font-size:10px;flex:none">${m.kind}</span>
+      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelMedia(${i})">${ico('trash',{size:12})}</button>
+    </div>`).join('');
+}
+function scEditMedia(i,v){ if(DB.salechat.media[i]){ DB.salechat.media[i].label=v; scTouch(); } }
+function scDelMedia(i){
+  const m=DB.salechat.media[i]; if(!m) return;
+  const base=apiUrl(), tok=apiToken();
+  if(base&&tok&&m.key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+m.key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); }
+  DB.salechat.media.splice(i,1); scTouch(); scRenderMedia();
+}
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)

@@ -23,6 +23,11 @@ binding       = "DB"
 database_name = "axion"
 database_id   = "a21e7bc2-98fe-4811-b6b0-b016e10a5137"
 
+# ─── R2 (mídia do Sale Chat: áudios/vídeos/imagens que o Diretor sobe) ──
+[[r2_buckets]]
+binding     = "MEDIA"
+bucket_name = "salechat-media"
+
 # ─── Observabilidade ───────────────────────────────────────────
 [observability]
 enabled = true

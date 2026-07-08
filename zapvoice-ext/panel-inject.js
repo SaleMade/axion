@@ -55,7 +55,7 @@
 
   function buildIndex() {
     itemById = {};
-    (DATA.messages || []).concat(DATA.funnel || [], DATA.social || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
+    (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
   }
 
   function render() {
@@ -63,13 +63,14 @@
     var p = document.createElement('div'); p.id = 'zv-panel';
     var msgs = (DATA.messages && DATA.messages.length) ? ('<div class="zv-h">Mensagens</div><div class="zv-list">' + itemsHtml(DATA.messages, 'messages') + '</div>') : '';
     var social = (DATA.social && DATA.social.length) ? ('<div class="zv-h">Prova social</div><div class="zv-list">' + itemsHtml(DATA.social, 'social') + '</div>') : '';
+    var mine = (DATA.media && DATA.media.length) ? ('<div class="zv-h">Minha midia</div><div class="zv-list">' + itemsHtml(DATA.media, 'media') + '</div>') : '';
     var seqs = (DATA.sequences && DATA.sequences.length) ? ('<div class="zv-h">Sequencias</div><div class="zv-list">' + DATA.sequences.map(function (s, i) {
       return '<button class="zv-seq" data-si="' + i + '"><span class="zv-stage">SEQ</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">&#9193;</span></button>';
     }).join('') + '</div>') : '';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span><span id="zv-min" title="Recolher">–</span></div>' +
       '<div id="zv-body">' + msgs + '<div class="zv-h">Funil do campeao</div><div class="zv-list">' + itemsHtml(DATA.funnel, 'funnel') + '</div>' +
-      social + seqs +
+      social + mine + seqs +
       '<div id="zv-status"></div>' +
       '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label></div></div>';
     document.body.appendChild(p);
@@ -80,7 +81,7 @@
     Array.prototype.forEach.call(p.querySelectorAll('.zv-item'), function (b) {
       b.onclick = function () {
         var k = b.getAttribute('data-k');
-        var list = k === 'social' ? DATA.social : (k === 'messages' ? DATA.messages : DATA.funnel);
+        var list = k === 'social' ? DATA.social : (k === 'messages' ? DATA.messages : (k === 'media' ? DATA.media : DATA.funnel));
         send(list[+b.getAttribute('data-i')], b);
       };
     });
@@ -130,13 +131,19 @@
         // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
         var rid = 'v' + Date.now() + Math.random().toString(36).slice(2, 6);
         try { window.__zvRes = null; } catch (_) {}
-        window.__zvReq = { id: rid, file: item.file, caption: item.caption || '' };
+        window.__zvReq = { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '' };
         var waited = 0;
         var iv = setInterval(function () {
           waited += 500; var res = window.__zvRes;
           if (res && res.id === rid) { clearInterval(iv); resolve({ ok: !!res.ok, err: res.err }); }
           else if (waited > 90000) { clearInterval(iv); resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); }
         }, 500);
+        return;
+      }
+      if (item.kind === 'image') {
+        window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'image', caption: item.caption || '' })
+          .then(function () { resolve({ ok: true }); })
+          .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
       }
       if (item.kind === 'text') {
@@ -161,7 +168,7 @@
   function send(item, b) {
     if (busy || !item) return;
     busy = true; if (b) b.classList.add('zv-busy');
-    var st = item.kind === 'video' ? 'Enviando video...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
+    var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
     status(st, '');
     sendItemAsync(item).then(function (r) {
       status(r.ok ? 'Enviado' : ('Falha: ' + (r.err || '')), r.ok ? 'ok' : 'err');

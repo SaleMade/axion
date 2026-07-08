@@ -1961,8 +1961,45 @@ async function handleSaleChatGet(req, env) {
     ok: true,
     messages: Array.isArray(sc.messages) ? sc.messages : [],
     sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
+    media: Array.isArray(sc.media) ? sc.media : [],
     updated_at: sc.updated_at || 0,
   });
+}
+// POST /api/salechat/media (Diretor) → sobe um arquivo pro R2. Body = bytes crus,
+// Content-Type = mime do arquivo. Devolve a key; a dash guarda a metadata em DB.salechat.
+async function handleSaleChatMediaUpload(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode subir mídia', 403);
+  if (!env.MEDIA) return err('Armazenamento (R2) não configurado', 503);
+  const mime = req.headers.get('content-type') || 'application/octet-stream';
+  const buf = await req.arrayBuffer();
+  if (!buf || buf.byteLength === 0) return err('Arquivo vazio', 400);
+  if (buf.byteLength > 60 * 1024 * 1024) return err('Arquivo grande demais (máx 60MB)', 413);
+  const ext = mime.indexOf('audio') >= 0 ? 'ogg' : mime.indexOf('video') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+  const key = 'm/' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
+  try { await env.MEDIA.put(key, buf, { httpMetadata: { contentType: mime } }); }
+  catch (e) { return err('Falha ao salvar no R2: ' + (e.message || ''), 502); }
+  return json({ ok: true, key, mime, size: buf.byteLength });
+}
+// GET /api/salechat/media/<key> → serve a mídia do R2 (público; o injetor puxa por aqui)
+async function handleSaleChatMediaGet(req, env, key) {
+  if (!env.MEDIA) return err('R2 não configurado', 503);
+  try {
+    const obj = await env.MEDIA.get(key);
+    if (!obj) return err('Mídia não encontrada', 404);
+    return new Response(obj.body, { headers: {
+      'access-control-allow-origin': '*',
+      'cache-control': 'public, max-age=86400',
+      'content-type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream',
+    } });
+  } catch (e) { return err('Erro ao ler mídia: ' + (e.message || ''), 502); }
+}
+// DELETE /api/salechat/media/<key> (Diretor)
+async function handleSaleChatMediaDelete(req, env, key) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor', 403);
+  if (env.MEDIA) { try { await env.MEDIA.delete(key); } catch (_) {} }
+  return json({ ok: true });
 }
 
 // ─── Inbox / Conversas (CRM) ─────────────────────────────────
@@ -2693,6 +2730,10 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
       if (req.method === 'GET'    && path === '/api/salechat')            return handleSaleChatGet(req, env);
+      if (req.method === 'POST'   && path === '/api/salechat/media')      return handleSaleChatMediaUpload(req, env);
+      const scMediaMatch = path.match(/^\/api\/salechat\/media\/(.+)$/);
+      if (scMediaMatch && req.method === 'GET')    return handleSaleChatMediaGet(req, env, decodeURIComponent(scMediaMatch[1]));
+      if (scMediaMatch && req.method === 'DELETE') return handleSaleChatMediaDelete(req, env, decodeURIComponent(scMediaMatch[1]));
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
