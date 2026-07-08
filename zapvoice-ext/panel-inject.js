@@ -142,7 +142,11 @@
     moon:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
     sun:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>',
     search:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
-    minus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>'
+    minus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    grid:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+    calendar:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+    sliders:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    help:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
   };
   function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (_) { return d; } }
   function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
@@ -150,6 +154,24 @@
   var FAVS = lsGet('zv_favs', {});
   var DARK = false; try { DARK = localStorage.getItem('zv_dark') === '1'; } catch (_) {}
   var FILTER = '';
+  var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
+  var TYPEFILTER = 'all';
+  var FAVONLY = false;
+  var TABS = [
+    { key: 'itens', label: 'Itens', icon: 'grid' },
+    { key: 'funis', label: 'Funis', icon: 'funnel' },
+    { key: 'agenda', label: 'Agenda', icon: 'calendar' },
+    { key: 'ajustes', label: 'Ajustes', icon: 'sliders' },
+    { key: 'ajuda', label: 'Ajuda', icon: 'help' }
+  ];
+  var TYPES = [
+    { key: 'all', label: 'Todos', icon: 'grid', color: '#54656f' },
+    { key: 'text', label: 'Mensagens', icon: 'msg', color: '#2563eb' },
+    { key: 'audio', label: 'Audios', icon: 'mic', color: '#13c273' },
+    { key: 'video', label: 'Videos', icon: 'video', color: '#8e17f0' },
+    { key: 'image', label: 'Imagens', icon: 'image', color: '#00bcf2' },
+    { key: 'document', label: 'Documentos', icon: 'doc', color: '#f0810f' }
+  ];
   var ZKIND = {
     text:     { c: '#2563eb', ic: SVG.msg },
     audio:    { c: '#13c273', ic: SVG.mic },
@@ -192,51 +214,84 @@
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span>' +
         '<span id="zv-theme" title="Tema claro/escuro">' + (DARK ? SVG.sun : SVG.moon) + '</span>' +
         '<span id="zv-min" title="Recolher">' + SVG.minus + '</span></div>' +
-      '<div id="zv-body">' +
-        '<div id="zv-suggest" style="display:none"></div>' +
-        '<div id="zv-search"><span class="zv-q-ic">' + SVG.search + '</span><input id="zv-q" placeholder="Buscar item..." autocomplete="off"><span id="zv-q-x" title="Limpar">&times;</span></div>' +
-        '<div id="zv-sections"></div>' +
-        '<div id="zv-status"></div>' +
-        '<div id="zv-sched" style="display:none"></div>' +
-        '<div id="zv-foot"><label id="zv-sim"><input type="checkbox" id="zv-sim-cb" checked> simular gravando</label><a id="zv-sched-toggle">Agendar</a></div>' +
-      '</div>';
+      '<div id="zv-suggest" style="display:none"></div>' +
+      '<div id="zv-main"><div id="zv-content"></div><div id="zv-rail"></div></div>' +
+      '<div id="zv-status"></div>';
     document.body.appendChild(p);
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); };
     var themeBtn = p.querySelector('#zv-theme');
-    if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); DARK = !DARK; p.classList.toggle('zv-dark', DARK); try { localStorage.setItem('zv_dark', DARK ? '1' : '0'); } catch (_) {} themeBtn.innerHTML = DARK ? SVG.sun : SVG.moon; };
-    var cb = p.querySelector('#zv-sim-cb'); simulate = cb.checked; cb.onchange = function () { simulate = cb.checked; };
-    var stgl = p.querySelector('#zv-sched-toggle');
-    if (stgl) stgl.onclick = function () { var b = p.querySelector('#zv-sched'); if (b) { var show = b.style.display === 'none'; b.style.display = show ? 'block' : 'none'; if (show) schedRender(); } };
-    var q = p.querySelector('#zv-q');
-    if (q) q.oninput = function () { FILTER = q.value; applyFilter(); };
-    var qx = p.querySelector('#zv-q-x');
-    if (qx) qx.onclick = function () { FILTER = ''; if (q) { q.value = ''; q.focus(); } applyFilter(); };
+    if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); setDark(!DARK); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
-    renderSections();
+    renderRail(); renderContent();
     restorePos(p);
     makeDraggable(p, head);
   }
 
-  // (Re)desenha só a área de seções, a partir do estado (favoritos, colapso).
+  function setDark(v) {
+    DARK = v; var p = document.getElementById('zv-panel'); if (p) p.classList.toggle('zv-dark', DARK);
+    try { localStorage.setItem('zv_dark', DARK ? '1' : '0'); } catch (_) {}
+    var tb = document.getElementById('zv-theme'); if (tb) tb.innerHTML = DARK ? SVG.sun : SVG.moon;
+  }
+
+  // Barra vertical de abas (à direita), estilo ZapVoice: Itens, Funis, Agenda, Ajustes, Ajuda.
+  function renderRail() {
+    var rail = document.getElementById('zv-rail'); if (!rail) return;
+    rail.innerHTML = TABS.map(function (t) {
+      return '<button class="zv-tab' + (TAB === t.key ? ' on' : '') + '" data-tab="' + t.key + '"><span class="zv-tab-ic">' + SVG[t.icon] + '</span><span class="zv-tab-lb">' + t.label + '</span></button>';
+    }).join('');
+    Array.prototype.forEach.call(rail.querySelectorAll('.zv-tab'), function (b) {
+      b.onclick = function () { TAB = b.getAttribute('data-tab'); try { localStorage.setItem('zv_tab', TAB); } catch (_) {} renderRail(); renderContent(); };
+    });
+  }
+
+  function renderContent() {
+    var c = document.getElementById('zv-content'); if (!c) return;
+    if (TAB === 'funis') return renderFunisTab(c);
+    if (TAB === 'agenda') return renderAgendaTab(c);
+    if (TAB === 'ajustes') return renderAjustesTab(c);
+    if (TAB === 'ajuda') return renderAjudaTab(c);
+    return renderItensTab(c);
+  }
+
+  // ── Aba ITENS: busca + "apenas favoritos" + filtro por tipo + esconder tudo + seções ──
+  function renderItensTab(c) {
+    var typeChips = TYPES.map(function (t) {
+      return '<button class="zv-type' + (TYPEFILTER === t.key ? ' on' : '') + '" data-type="' + t.key + '" title="' + t.label + '" style="--tc:' + t.color + '"><span style="color:' + t.color + '">' + SVG[t.icon] + '</span></button>';
+    }).join('');
+    var allKeys = ['mensagens', 'audios', 'videos', 'imagens', 'documentos'];
+    var anyOpen = allKeys.some(function (k) { return !COLLAPSED[k]; });
+    c.innerHTML =
+      '<div class="zv-ctop">' +
+        '<div id="zv-search"><span class="zv-q-ic">' + SVG.search + '</span><input id="zv-q" placeholder="Buscar item..." autocomplete="off"><span id="zv-q-x" title="Limpar">&times;</span></div>' +
+        '<div class="zv-toolrow"><div class="zv-types">' + typeChips + '</div>' +
+          '<button id="zv-favonly" class="zv-mini' + (FAVONLY ? ' on' : '') + '" title="Apenas favoritos">' + (FAVONLY ? SVG.starFull : SVG.star) + '</button></div>' +
+        '<button id="zv-hideall" class="zv-hideall">' + (anyOpen ? 'Esconder todos' : 'Mostrar todos') + '</button>' +
+      '</div>' +
+      '<div class="zv-cbody"><div id="zv-sections"></div></div>';
+    var q = c.querySelector('#zv-q'); if (q) { q.value = FILTER; q.oninput = function () { FILTER = q.value; applyFilter(); }; }
+    var qx = c.querySelector('#zv-q-x'); if (qx) qx.onclick = function () { FILTER = ''; if (q) { q.value = ''; q.focus(); } applyFilter(); };
+    Array.prototype.forEach.call(c.querySelectorAll('.zv-type'), function (b) {
+      b.onclick = function () { TYPEFILTER = b.getAttribute('data-type'); renderItensTab(c); };
+    });
+    var fo = c.querySelector('#zv-favonly'); if (fo) fo.onclick = function () { FAVONLY = !FAVONLY; renderItensTab(c); };
+    var ha = c.querySelector('#zv-hideall'); if (ha) ha.onclick = function () { allKeys.forEach(function (k) { COLLAPSED[k] = anyOpen; }); lsSet('zv_collapsed', COLLAPSED); renderItensTab(c); };
+    renderSections();
+  }
+
+  // (Re)desenha só a área de seções da aba Itens, respeitando tipo e "apenas favoritos".
   function renderSections() {
     var host = document.getElementById('zv-sections'); if (!host) return;
-    var allItems = (DATA.messages || []).concat(DATA.media || []);
-    var favList = allItems.filter(function (it) { return FAVS[it.id]; });
-    var seqList = DATA.sequences || [];
-    var seqInner = seqList.map(function (s, i) {
-      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
-    }).join('');
-    var html =
-      section('favoritos', 'Favoritos', SVG.starFull, '#f5b60a', favList.length, itemsHtml(favList)) +
-      section('mensagens', 'Mensagens', SVG.msg, '#2563eb', (DATA.messages || []).length, itemsHtml(DATA.messages || [])) +
-      section('audios', 'Audios do funil', SVG.mic, '#13c273', mediaByKind('audio').length, itemsHtml(mediaByKind('audio'))) +
-      section('videos', 'Videos', SVG.video, '#8e17f0', mediaByKind('video').length, itemsHtml(mediaByKind('video'))) +
-      section('imagens', 'Imagens', SVG.image, '#00bcf2', mediaByKind('image').length, itemsHtml(mediaByKind('image'))) +
-      section('documentos', 'Documentos', SVG.doc, '#f0810f', mediaByKind('document').length, itemsHtml(mediaByKind('document'))) +
-      section('funis', 'Funis', SVG.funnel, '#8e17f0', seqList.length, seqInner);
-    host.innerHTML = html || '<div class="zv-empty">Nada configurado ainda. Abra a dash (Sale Chat) e adicione mensagens, audios e videos.</div>';
+    function flt(list) { return FAVONLY ? list.filter(function (it) { return FAVS[it.id]; }) : list; }
+    function show(kindKey) { return TYPEFILTER === 'all' || TYPEFILTER === kindKey; }
+    var html = '';
+    if (show('text')) html += section('mensagens', 'Mensagens', SVG.msg, '#2563eb', flt(DATA.messages || []).length, itemsHtml(flt(DATA.messages || [])));
+    if (show('audio')) html += section('audios', 'Audios do funil', SVG.mic, '#13c273', flt(mediaByKind('audio')).length, itemsHtml(flt(mediaByKind('audio'))));
+    if (show('video')) html += section('videos', 'Videos', SVG.video, '#8e17f0', flt(mediaByKind('video')).length, itemsHtml(flt(mediaByKind('video'))));
+    if (show('image')) html += section('imagens', 'Imagens', SVG.image, '#00bcf2', flt(mediaByKind('image')).length, itemsHtml(flt(mediaByKind('image'))));
+    if (show('document')) html += section('documentos', 'Documentos', SVG.doc, '#f0810f', flt(mediaByKind('document')).length, itemsHtml(flt(mediaByKind('document'))));
+    host.innerHTML = html || '<div class="zv-empty">' + (FAVONLY ? 'Nenhum favorito ainda. Toque na estrela de um item.' : 'Nada aqui. Abra a dash (Sale Chat) e adicione itens.') + '</div>';
     bindSections(host);
     applyFilter();
   }
@@ -256,7 +311,6 @@
     });
   }
 
-  // Filtro de busca: mostra/esconde itens pelo texto do label, esconde seções vazias.
   function applyFilter() {
     var host = document.getElementById('zv-sections'); if (!host) return;
     var qx = document.getElementById('zv-q-x'); if (qx) qx.style.display = FILTER ? 'flex' : 'none';
@@ -267,9 +321,9 @@
       var visible = 0;
       Array.prototype.forEach.call(items, function (it) {
         var lblEl = it.querySelector('.zv-label'); var lbl = lblEl ? lblEl.textContent : '';
-        var show = !q || lbl.toLowerCase().indexOf(q) !== -1;
-        it.style.display = show ? '' : 'none';
-        if (show) visible++;
+        var ok = !q || lbl.toLowerCase().indexOf(q) !== -1;
+        it.style.display = ok ? '' : 'none';
+        if (ok) visible++;
       });
       var list = sec.querySelector('.zv-list');
       if (q) { sec.style.display = visible ? '' : 'none'; if (list) list.style.display = visible ? '' : 'none'; }
@@ -277,9 +331,51 @@
     });
   }
 
+  // ── Aba FUNIS ──
+  function renderFunisTab(c) {
+    var seqList = DATA.sequences || [];
+    var inner = seqList.length ? seqList.map(function (s, i) {
+      return '<button class="zv-seq" data-si="' + i + '"><span class="zv-ic">' + SVG.seq + '</span><span class="zv-label">' + esc(s.label) + '</span><span class="zv-play">' + SVG.play + '</span></button>';
+    }).join('') : '<div class="zv-empty">Nenhum funil ainda. Crie na dash (Sale Chat).</div>';
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Dispara varios itens em ordem, com a espera de cada passo.</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
+    Array.prototype.forEach.call(c.querySelectorAll('.zv-seq'), function (b) {
+      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+    });
+  }
+
+  // ── Aba AGENDA ──
+  function renderAgendaTab(c) {
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.calendar + '</span>Agenda</div><p class="zv-tabhint">Programa um item pra sair depois de X minutos no chat aberto.</p></div><div class="zv-cbody"><div id="zv-sched"></div></div>';
+    schedRender();
+  }
+
+  // ── Aba AJUSTES ──
+  function renderAjustesTab(c) {
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#54656f">' + SVG.sliders + '</span>Ajustes</div></div>' +
+      '<div class="zv-cbody"><div class="zv-set">' +
+        '<label class="zv-setrow"><span>Simular gravando / digitando</span><input type="checkbox" id="zv-sim-cb"' + (simulate ? ' checked' : '') + '></label>' +
+        '<div class="zv-setrow"><span>Tema do painel</span><button id="zv-theme2" class="zv-mini2">' + (DARK ? 'Escuro' : 'Claro') + '</button></div>' +
+        '<p class="zv-tabhint">Simular deixa mais humano: mostra "gravando..." / "digitando..." antes de enviar.</p>' +
+      '</div></div>';
+    var cb = c.querySelector('#zv-sim-cb'); if (cb) cb.onchange = function () { simulate = cb.checked; };
+    var t2 = c.querySelector('#zv-theme2'); if (t2) t2.onclick = function () { setDark(!DARK); t2.textContent = DARK ? 'Escuro' : 'Claro'; };
+  }
+
+  // ── Aba AJUDA ──
+  function renderAjudaTab(c) {
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#13c273">' + SVG.help + '</span>Ajuda</div></div>' +
+      '<div class="zv-cbody"><div class="zv-help">' +
+        '<p><b>Itens:</b> clique num item pra enviar no chat aberto. A estrela favorita.</p>' +
+        '<p><b>Funis:</b> dispara varios itens em sequencia, com a espera de cada passo.</p>' +
+        '<p><b>Agenda:</b> programa um item pra sair depois de X minutos.</p>' +
+        '<p><b>Ajustes:</b> liga o "simular gravando" e troca o tema.</p>' +
+        '<p class="zv-tabhint">Os itens sao configurados na dash (Sale Chat). O painel puxa sozinho.</p>' +
+      '</div></div>';
+  }
+
   function restorePos(p) {
     try {
-      var s = localStorage.getItem('zv_pos');
+      var s = localStorage.getItem('zv_pos2');
       if (s) { var a = s.split('|'); p.style.right = 'auto'; p.style.bottom = 'auto'; p.style.left = a[0]; p.style.top = a[1]; }
     } catch (_) {}
   }
@@ -287,7 +383,7 @@
     var drag = false, sx, sy, ox, oy;
     handle.style.cursor = 'move';
     handle.addEventListener('mousedown', function (e) {
-      if (e.target && (e.target.id === 'zv-min')) return;
+      if (e.target && e.target.closest && e.target.closest('#zv-min,#zv-theme')) return;
       drag = true; sx = e.clientX; sy = e.clientY;
       var r = p.getBoundingClientRect(); ox = r.left; oy = r.top;
       p.style.right = 'auto'; p.style.bottom = 'auto'; p.style.left = ox + 'px'; p.style.top = oy + 'px';
@@ -300,7 +396,7 @@
       ny = Math.max(0, Math.min(window.innerHeight - 40, ny));
       p.style.left = nx + 'px'; p.style.top = ny + 'px';
     });
-    document.addEventListener('mouseup', function () { if (drag) { drag = false; try { localStorage.setItem('zv_pos', p.style.left + '|' + p.style.top); } catch (_) {} } });
+    document.addEventListener('mouseup', function () { if (drag) { drag = false; try { localStorage.setItem('zv_pos2', p.style.left + '|' + p.style.top); } catch (_) {} } });
   }
 
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
