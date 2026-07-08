@@ -76,8 +76,12 @@
 .zv-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
 .zv-star{ flex:none; display:inline-flex; color:#cfd6de; padding:2px; border-radius:6px; transition:color .12s, transform .06s; }
 .zv-star:hover{ color:#f5b60a; transform:scale(1.15); } .zv-star.on{ color:#f5b60a; }
-.zv-exp{ flex:none; display:inline-flex; color:#b6bfca; padding:2px; border-radius:6px; transition:transform .18s, color .12s; }
-.zv-exp:hover{ color:#54656f; } .zv-exp.open{ transform:rotate(180deg); color:#13c273; }
+.zv-exp{ flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; color:#b6bfca; border-radius:8px; cursor:pointer; transition:transform .18s, color .12s, background .12s; }
+.zv-exp:hover{ color:#54656f; background:#eef1f5; } .zv-exp.open{ transform:rotate(180deg); color:#13c273; }
+.zv-send{ flex:none; width:33px; height:33px; border-radius:10px; border:none; background:#13c2731a; color:#13c273; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; transition:background .12s, color .12s, transform .05s; }
+.zv-send:hover{ background:#13c27333; } .zv-send:active{ transform:scale(.93); }
+.zv-send.zv-sending{ background:#ffe0e0; color:#e0405a; }
+.zv-send svg{ width:15px; height:15px; }
 .zv-play{ flex:none; color:#13c273; display:inline-flex; }
 
 /* Prévia expansível do item */
@@ -148,7 +152,9 @@
 #zv-panel.zv-dark .zv-item:hover{ border-color:#13c273; box-shadow:0 3px 12px rgba(19,194,115,.2); }
 #zv-panel.zv-dark .zv-seq{ background:#181528; border-color:#2e2447; color:#e7edf3; }
 #zv-panel.zv-dark .zv-star{ color:#3f4c59; }
-#zv-panel.zv-dark .zv-exp{ color:#5f6f7e; } #zv-panel.zv-dark .zv-exp:hover{ color:#aebccb; }
+#zv-panel.zv-dark .zv-exp{ color:#5f6f7e; } #zv-panel.zv-dark .zv-exp:hover{ color:#aebccb; background:#16202b; }
+#zv-panel.zv-dark .zv-send{ background:#13c2731f; color:#13c273; } #zv-panel.zv-dark .zv-send:hover{ background:#13c27333; }
+#zv-panel.zv-dark .zv-send.zv-sending{ background:#3a1c22; color:#ff6b81; }
 #zv-panel.zv-dark .zv-prev{ background:#0e1621; border-color:#243444; }
 #zv-panel.zv-dark .zv-prev-txt{ color:#c7d2dc; } #zv-panel.zv-dark .zv-prev-cap,#zv-panel.zv-dark .zv-prev-note{ color:#7c8896; }
 #zv-panel.zv-dark .zv-prev-doc{ color:#25d366; }

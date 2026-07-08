@@ -98,8 +98,10 @@ async function buildLibrary(remote) {
   return { messages, sequences, media, triggers, funnel: [], social: [] };
 }
 
+let currentCfgStamp = 0; // updated_at da config ja aplicada no painel (pra detectar mudancas)
 async function buildBundle() {
   const remote = await fetchRemoteConfig();
+  if (remote && remote.updated_at) currentCfgStamp = remote.updated_at;
   if (remote && ((remote.messages && remote.messages.length) || (remote.sequences && remote.sequences.length))) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
   else console.log('[zv] Sem config na AXION ainda; usando o funil local (library.json).');
   const wajs = fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');
@@ -223,6 +225,23 @@ async function run() {
     setTimeout(pumpPreview, 700);
   }
   pumpPreview();
+
+  // Atualizacao ao vivo: checa a config da dash a cada 20s. Se o Diretor editou
+  // (updated_at mudou), reconstroi a biblioteca e empurra pro painel (window.__zvUpdate),
+  // sem precisar reabrir o WhatsApp nem rodar o start.bat de novo.
+  async function pollConfig() {
+    try {
+      const remote = await fetchRemoteConfig();
+      if (remote && remote.updated_at && remote.updated_at !== currentCfgStamp) {
+        currentCfgStamp = remote.updated_at;
+        const libJson = JSON.stringify(await buildLibrary(remote));
+        await evaluate('window.__zvUpdate && window.__zvUpdate(' + libJson + ')');
+        console.log('[zv] Config atualizada na dash; painel recarregado ao vivo.');
+      }
+    } catch (_) {}
+    setTimeout(pollConfig, 20000);
+  }
+  setTimeout(pollConfig, 20000);
 
   cdp.onEvent = (m) => { if (m.method === 'Page.loadEventFired') setTimeout(injectNow, 1500); };
   ws.addEventListener('close', () => { console.log('[zv] Conexao caiu. Rode de novo (o app reiniciou?).'); process.exit(0); });

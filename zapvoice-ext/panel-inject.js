@@ -16,7 +16,7 @@
   window.__zvInstalled = true;
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
-  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false;
+  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false, sendCancel = false;
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -49,6 +49,16 @@
           .then(function () { window.__zvRes = { id: id, ok: true }; })
           .catch(function (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; });
       } catch (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; }
+    };
+    // Atualizacao ao vivo: o injetor busca a config da dash de tempos em tempos e,
+    // se mudou, chama isso com os novos dados. O painel se redesenha sozinho, sem
+    // precisar reabrir o WhatsApp nem rodar o start.bat de novo.
+    window.__zvUpdate = function (newData) {
+      try {
+        if (!newData) return;
+        DATA = newData; buildIndex();
+        if (document.getElementById('zv-panel')) { renderRail(); renderContent(); }
+      } catch (_) {}
     };
     // Gatilhos: escuta mensagens recebidas e sugere o item configurado
     try { if (window.WPP && window.WPP.on) window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} }); } catch (_) {}
@@ -111,6 +121,7 @@
     var now = Date.now(), due = a.filter(function (s) { return s.at <= now; });
     if (!due.length) return;
     schedSet(a.filter(function (s) { return s.at > now; }));
+    sendCancel = false;
     due.forEach(function (s) { var it = itemById[s.itemId]; if (it) sendItemAsync(it, s.chatId); });
     var b = document.getElementById('zv-sched'); if (b && b.style.display !== 'none') schedRender();
   }
@@ -146,7 +157,8 @@
     grid:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
     calendar:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
     sliders:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
-    help:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+    help:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    pause: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
   };
   function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (_) { return d; } }
   function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
@@ -184,12 +196,13 @@
       var k = ZKIND[it.kind] || ZKIND.text;
       var fav = !!FAVS[it.id];
       return '<div class="zv-itemwrap">' +
-        '<button class="zv-item" data-id="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
+        '<div class="zv-item" data-exp="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
           '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
           '<span class="zv-label">' + esc(it.label) + '</span>' +
           '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
+          '<button class="zv-send" data-id="' + esc(it.id) + '" title="Enviar">' + SVG.play + '</button>' +
           '<span class="zv-exp" data-exp="' + esc(it.id) + '" title="Prever antes de enviar">' + SVG.chevDown + '</span>' +
-          '<span class="zv-play">' + SVG.play + '</span></button>' +
+        '</div>' +
         '<div class="zv-prev" style="display:none"></div></div>';
     }).join('');
   }
@@ -332,17 +345,18 @@
   }
 
   function bindSections(host) {
-    Array.prototype.forEach.call(host.querySelectorAll('.zv-item'), function (b) {
-      b.onclick = function () { var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
+    // Corpo do item (icone + label + seta) = abre a previa. Enviar so pelo botao verde.
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-item[data-exp]'), function (row) {
+      row.onclick = function () { var wrap = row.parentNode; if (wrap) togglePreview(row.getAttribute('data-exp'), wrap, wrap.querySelector('.zv-exp')); };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.zv-send'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
     });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-seq'), function (b) {
       b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
     });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-star'), function (s) {
       s.onclick = function (e) { e.stopPropagation(); var id = s.getAttribute('data-fav'); if (FAVS[id]) delete FAVS[id]; else FAVS[id] = 1; lsSet('zv_favs', FAVS); renderSections(); };
-    });
-    Array.prototype.forEach.call(host.querySelectorAll('.zv-exp'), function (x) {
-      x.onclick = function (e) { e.stopPropagation(); var wrap = x.closest ? x.closest('.zv-itemwrap') : x.parentNode.parentNode; if (wrap) togglePreview(x.getAttribute('data-exp'), wrap, x); };
     });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-h[data-toggle]'), function (h) {
       h.onclick = function () { var key = h.getAttribute('data-toggle'); COLLAPSED[key] = !COLLAPSED[key]; lsSet('zv_collapsed', COLLAPSED); renderSections(); };
@@ -481,8 +495,8 @@
         var preT = Promise.resolve();
         if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, 1500)); } catch (_) {} }
         preT.then(function () { return sleep(1200); })
-          .then(function () { return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
-          .then(function () { resolve({ ok: true }); })
+          .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
+          .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
           .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
       }
@@ -490,20 +504,23 @@
       var pre = Promise.resolve();
       if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
       pre.then(function () { return sleep(dur); })
-        .then(function () { return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
-        .then(function () { resolve({ ok: true }); })
+        .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
+        .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
         .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
     });
   }
 
   function send(item, b) {
+    // Se ja esta enviando este item, o botao virou "pausa": cancela.
+    if (b && b.classList.contains('zv-sending')) { sendCancel = true; status('Cancelando...', 'err'); return; }
     if (busy || !item) return;
-    busy = true; if (b) b.classList.add('zv-busy');
+    busy = true; sendCancel = false;
+    if (b) { b.classList.add('zv-sending', 'zv-busy'); b.innerHTML = SVG.pause; b.title = 'Cancelar'; }
     var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : item.kind === 'document' ? 'Enviando documento...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
     status(st, '');
     sendItemAsync(item).then(function (r) {
-      status(r.ok ? 'Enviado' : ('Falha: ' + (r.err || '')), r.ok ? 'ok' : 'err');
-      busy = false; if (b) b.classList.remove('zv-busy');
+      status(r.cancelled ? 'Cancelado (nao enviou)' : (r.ok ? 'Enviado' : ('Falha: ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
+      busy = false; if (b) { b.classList.remove('zv-sending', 'zv-busy'); b.innerHTML = SVG.play; b.title = 'Enviar'; }
     });
   }
 
@@ -517,7 +534,7 @@
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
-    busy = true; seqRunning = true; seqStop = false; if (b) b.classList.add('zv-busy');
+    busy = true; seqRunning = true; seqStop = false; sendCancel = false; if (b) b.classList.add('zv-busy');
     function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); }
     var i = 0;
     (function next() {
