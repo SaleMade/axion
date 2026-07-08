@@ -264,26 +264,32 @@
     });
   }
 
-  // Dispara os itens da sequencia em ordem, com pausa entre eles. Clicar de novo para.
+  // Passo de funil: id do item + delay (segundos) de espera ANTES de disparar.
+  // Aceita formato antigo (so o id string) e novo ({id, delay}).
+  function normStep(raw) { return (typeof raw === 'string') ? { id: raw, delay: 0 } : { id: (raw && raw.id) || '', delay: (raw && +raw.delay) || 0 }; }
+  // Dispara os passos da sequencia em ordem, respeitando o delay de cada um. Clicar de novo para.
   function sendSequence(seq, b) {
     if (busy || !seq) return;
-    var items = (seq.items || []).map(function (id) { return itemById[id]; }).filter(Boolean);
-    if (!items.length) { status('Sequencia vazia', 'err'); return; }
+    var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
+    if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
     busy = true; seqRunning = true; seqStop = false; if (b) b.classList.add('zv-busy');
+    function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); }
     var i = 0;
     (function next() {
-      if (seqStop || i >= items.length) {
-        status(seqStop ? 'Sequencia parada' : 'Sequencia enviada (' + items.length + ')', seqStop ? 'err' : 'ok');
-        busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); return;
-      }
-      status('Sequencia ' + (i + 1) + '/' + items.length + '...', '');
-      sendItemAsync(items[i]).then(function (r) {
-        i++;
-        if (!r.ok) { status('Falha no item ' + i + ': ' + (r.err || ''), 'err'); busy = false; seqRunning = false; if (b) b.classList.remove('zv-busy'); return; }
-        setTimeout(next, 1600);
-      });
+      if (seqStop || i >= steps.length) { done(seqStop ? 'Sequencia parada' : 'Sequencia enviada (' + steps.length + ')', seqStop ? 'err' : 'ok'); return; }
+      var wait = Math.max(0, steps[i].delay || 0) * 1000;
+      if (wait > 0) status('Aguardando ' + steps[i].delay + 's (' + (i + 1) + '/' + steps.length + ')...', '');
+      setTimeout(function () {
+        if (seqStop) { done('Sequencia parada', 'err'); return; }
+        status('Enviando ' + (i + 1) + '/' + steps.length + '...', '');
+        sendItemAsync(itemById[steps[i].id]).then(function (r) {
+          i++;
+          if (!r.ok) { done('Falha no item ' + i + ': ' + (r.err || ''), 'err'); return; }
+          setTimeout(next, 400);
+        });
+      }, wait);
     })();
   }
 

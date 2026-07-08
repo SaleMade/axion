@@ -3718,8 +3718,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.35.0';
-const APP_LAST_CHANGE = 'Sale Chat redesenhado estilo ZapVoice: dashboard com secoes laterais (Mensagens, Audios, Videos, Imagens, Documentos, Funis, Gatilhos). Funil campeao agora editavel na dash (audios/videos do Rafael no R2), com preview escutavel, legenda, reordenar e excluir. Painel do atendente agrupa a midia por tipo.';
+const APP_VERSION = '2.36.0';
+const APP_LAST_CHANGE = 'Sale Chat: icone de video/imagem no ICONS (secoes com icone certo). Funis viram flow com delay por passo estilo ZapVoice: cada passo espera N segundos antes de disparar, com reordenar e excluir passo. O painel do atendente respeita o delay de cada passo na sequencia.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3741,6 +3741,8 @@ const ICONS = {
   'arrow-up':       '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
   'chevron-up':     '<polyline points="18 15 12 9 6 15"/>',
   'chevron-down':   '<polyline points="6 9 12 15 18 9"/>',
+  'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
+  'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -7574,7 +7576,7 @@ const SC_SECTIONS=[
   {key:'messages',label:'Mensagens',icon:'message-circle'},
   {key:'audio',label:'Áudios',icon:'volume'},
   {key:'video',label:'Vídeos',icon:'video'},
-  {key:'image',label:'Imagens',icon:'eye'},
+  {key:'image',label:'Imagens',icon:'image'},
   {key:'document',label:'Documentos',icon:'clipboard-list'},
   {key:'funis',label:'Funis',icon:'repeat'},
   {key:'triggers',label:'Gatilhos',icon:'zap'},
@@ -7682,35 +7684,48 @@ function scSecFunis(main){
     <div id="sc-list"></div>`;
   scRenderFunis();
 }
+function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0}; }
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
   const seqs=DB.salechat.sequences;
   if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
   const opts=scAllItems();
-  box.innerHTML=seqs.map((s,i)=>`
+  box.innerHTML=seqs.map((s,i)=>{
+    const steps=(s.items||[]);
+    const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw); return `
+      <div style="display:flex;align-items:center;gap:8px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:6px 8px">
+        <div class="sc-ord"><button title="Subir" ${j===0?'disabled':''} onclick="scMoveFunilItem(${i},${j},-1)">${ico('chevron-up',{size:11})}</button><button title="Descer" ${j>=steps.length-1?'disabled':''} onclick="scMoveFunilItem(${i},${j},1)">${ico('chevron-down',{size:11})}</button></div>
+        <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j+1)+'. '+scEscT(scItemLabel(st.id))}</span>
+        <span class="muted" style="font-size:10.5px">espera</span>
+        <input class="info-val" type="number" min="0" max="86400" value="${st.delay}" style="width:62px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemDelay(${i},${j},this.value)" title="Segundos de espera antes de disparar este passo">
+        <span class="muted" style="font-size:10.5px">s</span>
+        <button onclick="scRemoveFunilItem(${i},${j})" class="btn btn-gh btn-xs sc-del" title="Remover passo" style="padding:3px 5px">${ico('x',{size:12})}</button>
+      </div>`; }).join('') : '<span class="muted" style="font-size:11.5px">Sem passos ainda, adiciona abaixo</span>';
+    return `
     <div class="sc-item" style="flex-direction:column;align-items:stretch;gap:10px">
       <div style="display:flex;gap:9px;align-items:center">
         ${scOrderBtns('scMoveFunil',i,seqs.length)}
         <input class="info-val" style="flex:1" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
         <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:12})}</button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">
-        ${(s.items||[]).map((id,j)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:var(--s3);border:1px solid var(--b2);border-radius:20px;padding:4px 6px 4px 11px;font-size:11.5px">${(j+1)+'. '+scEscT(scItemLabel(id))}<button onclick="scRemoveFunilItem(${i},${j})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:14px;line-height:1;padding:0 2px" title="Remover">×</button></span>`).join('')||'<span class="muted" style="font-size:11.5px">Sem itens ainda, adiciona abaixo</span>'}
-      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">${stepsHtml}</div>
       <select class="info-val" style="max-width:360px;font-size:12px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
-        <option value="">+ adicionar item na sequência...</option>
+        <option value="">+ adicionar passo na sequência...</option>
         ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
       </select>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function scAddFunil(){ DB.salechat.sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
 function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
 function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].label=v; scTouch(); } }
-function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push(id); scTouch(); scRenderFunis(); } }
+function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push({id:id,delay:3}); scTouch(); scRenderFunis(); } }
 function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
+function scFunilItemDelay(i,j,v){ const s=DB.salechat.sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].delay=Math.max(0,parseInt(v,10)||0); scTouch(); } }
+function scMoveFunilItem(i,j,d){ const s=DB.salechat.sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
 function scMoveFunil(i,d){ if(scArrMove(DB.salechat.sequences,i,d)){ scTouch(); scRenderFunis(); } }
 // ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
-function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'eye':kind==='document'?'clipboard-list':'volume'; }
+function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':'volume'; }
 function scSecMedia(main,kind){
   const acc={audio:'audio/*',video:'video/*',image:'image/*',document:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf'}[kind];
   const title={audio:'Áudios',video:'Vídeos',image:'Imagens',document:'Documentos'}[kind];
