@@ -260,7 +260,7 @@
     (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
   }
 
-  var PANEL_W = 440, RAIL_W = 80; // casam com o panel.css
+  var PANEL_W = 440, RAIL_W = 74; // casam com o panel.css
   function undockLayout() {
     try { var app = document.getElementById('app'); if (app) { app.style.removeProperty('width'); app.style.removeProperty('min-width'); } } catch (_) {}
   }
