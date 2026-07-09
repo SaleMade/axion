@@ -745,9 +745,12 @@ function mapPaytEvent(eventRaw, status, modality) {
     'pagamento_expirado','aguardando_confirmacao','pedido_confirmado','pedido_frustrado'];
   if (known.includes(e)) return e;
 
-  // Mapeamento por status (mais específico)
-  if (s === 'pending' || s === 'awaiting_payment') return 'aguardando_pagamento';
+  // Mapeamento por status (mais específico) — inclui os status reais do Payt V1
+  if (s === 'pending' || s === 'awaiting_payment' || s === 'waiting_payment') return 'aguardando_pagamento';
   if (s === 'paid')        return 'finalizada';
+  if (s === 'billed')      return 'faturada';
+  if (s === 'lost_cart')   return 'abandono_checkout';
+  if (s === 'separation' || s === 'shipped') return 'entrega_atualizada';
   if (s === 'confirmed')   return isCOD ? 'aguardando_confirmacao' : 'finalizada';
   if (s === 'canceled' || s === 'cancelled') return 'cancelada';
   if (s === 'refunded')    return 'cancelada_reembolsada';
@@ -779,36 +782,55 @@ function extractPaytData(body) {
   // Legacy: customer/cliente como objeto
   const customer = order.customer || order.cliente || body?.customer || body?.cliente || {};
 
+  // ─── Payt V1 real: objeto transaction (valores em CENTAVOS) + commission[] ───
+  const tx = body?.transaction || {};
+  const commArr = Array.isArray(body?.commission) ? body.commission : [];
+  const aff = commArr.find(c => ['affiliation','affiliate','afiliado'].includes(String(c?.type || '').toLowerCase()));
+  // Endereço V1 vem em customer.billing_address ou shipping.address
+  const v1addr = (body?.shipping && body.shipping.address) || customer.billing_address || {};
+
   const eventRaw = String(body?.event || body?.evento || body?.tipo || '').toLowerCase();
-  const status = order.status || body?.status || '';
-  const modality = order.payment_modality || order.modalidade_pagamento || '';
+  // status real: transaction.payment_status ou status na raiz
+  const status = tx.payment_status || order.status || body?.status || '';
+  const modality = order.payment_modality || order.modalidade_pagamento || (body?.type === 'cash_on_delivery' ? 'on_delivery' : '') || '';
   const event = mapPaytEvent(eventRaw, status, modality);
+
+  // Valor bruto: Payt V1 manda transaction.total_price em CENTAVOS
+  const amount = tx.total_price != null
+    ? Number(tx.total_price) / 100
+    : Number(order.total_amount || order.amount || order.valor || order.total || body?.amount || body?.valor || 0);
+  // Comissão REAL do afiliado (centavos → reais). null se não veio.
+  const comiss_real = aff ? Number(aff.amount) / 100 : null;
 
   return {
     event,           // chave canônica usada no payt_mapping
     event_raw: eventRaw,
     status,
     modality,
-    order_id: order.id || order.order_id || body?.id || body?.pedido_id || '',
-    name: order.client_name || customer.name || customer.nome || '',
-    email: order.client_email || customer.email || '',
-    phone: order.client_whatsapp || order.client_phone || customer.phone || customer.telefone || customer.whatsapp || customer.celular || '',
-    cpf: order.cpf || order.client_cpf || customer.cpf || customer.document || customer.documento || '',
-    amount: Number(order.total_amount || order.amount || order.valor || order.total || body?.amount || body?.valor || 0),
-    product: body?.treatment?.name || order.treatment?.name || order.product || order.produto || (Array.isArray(order.products) ? order.products[0]?.name : '') || '',
-    payment_method: order.payment_method || order.metodo_pagamento || '',
+    // dedup: transaction_id é o id único do pedido no Payt V1
+    order_id: body?.transaction_id || order.id || order.order_id || body?.id || body?.pedido_id || '',
+    name: customer.name || order.client_name || customer.nome || '',
+    email: customer.email || order.client_email || '',
+    phone: customer.phone || order.client_whatsapp || order.client_phone || customer.telefone || customer.whatsapp || customer.celular || '',
+    cpf: customer.doc || order.cpf || order.client_cpf || customer.cpf || customer.document || customer.documento || '',
+    amount,
+    comiss_real,
+    paid_at: tx.paid_at || '',
+    product: body?.product?.name || body?.link?.title || body?.treatment?.name || order.treatment?.name || order.product || order.produto || (Array.isArray(order.products) ? order.products[0]?.name : '') || '',
+    sku: body?.product?.sku || '',
+    payment_method: tx.payment_method || order.payment_method || order.metodo_pagamento || '',
     tracking_code: order.tracking_code || '',
     brand: order.brand || '',
-    seller_id: body?.seller?.id || '',
+    seller_id: body?.seller_id || body?.seller?.id || '',
     seller_name: body?.seller?.name || '',
-    // Endereço estruturado da PAYT
-    cep: address.cep || address.zipcode || customer.zipcode || customer.cep || '',
-    street: address.street || address.endereco || customer.endereco || '',
-    number: address.number || address.numero || '',
-    complement: address.complement || address.complemento || '',
-    neighborhood: address.neighborhood || address.bairro || '',
-    city: address.city || customer.city || '',
-    state: address.state || customer.state || customer.uf || '',
+    // Endereço estruturado
+    cep: v1addr.zipcode || address.cep || address.zipcode || customer.zipcode || customer.cep || '',
+    street: v1addr.street || address.street || address.endereco || customer.endereco || '',
+    number: v1addr.street_number || address.number || address.numero || '',
+    complement: v1addr.complement || address.complement || address.complemento || '',
+    neighborhood: v1addr.district || address.neighborhood || address.bairro || '',
+    city: v1addr.city || address.city || customer.city || '',
+    state: v1addr.state || address.state || customer.state || customer.uf || '',
     raw: body,
   };
 }
@@ -918,6 +940,7 @@ async function handlePaytWebhook(req, env, urlToken) {
   let lead = findLead(state.leads, data);
   let action_taken = '';
   let lead_id_result = null;
+  let resolvedLead = null;
 
   // Detecta modalidade COD baseado no payload
   const isCOD = data.modality && (
@@ -949,13 +972,9 @@ async function handlePaytWebhook(req, env, urlToken) {
       time: `${todayBR()} ${nowTimeBR()}`,
       note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
     });
-    // VENDA ESTIMADA DESATIVADA (v2.27): não criamos mais venda com bruto × 12%
-    // chutado. A receita real vem da Payt (comissão líquida do afiliado), importada
-    // do CSV e — quando o parser Payt V1 ao vivo estiver pronto (usando o payt_debug
-    // capturado) — direto do postback. O lead continua mudando de etapa/spg acima.
-    // (bloco de criação de venda removido de propósito.)
     action_taken = 'updated';
     lead_id_result = lead.id;
+    resolvedLead = lead;
   } else if (mapping || ['aguardando_pagamento','aguardando_confirmacao','finalizada'].includes(data.event)) {
     // Cria lead novo se evento for de início de pedido
     state.nextLead = state.nextLead || 1;
@@ -1001,8 +1020,46 @@ async function handlePaytWebhook(req, env, urlToken) {
     state.leads.unshift(newLead);
     action_taken = 'created';
     lead_id_result = newLead.id;
+    resolvedLead = newLead;
   } else {
     action_taken = 'skipped';
+  }
+
+  // ─── VENDA REAL (Payt V1) — comissão líquida do afiliado, dedup por transaction_id ───
+  // Só grava receita de venda PAGA e SÓ com a comissão real do postback (nunca estimativa).
+  // Estorno/chargeback/reembolso/expiração tira a venda da receita (status 'estornado').
+  state.vendas = state.vendas || [];
+  const _paytId = data.order_id || '';
+  const _paidEvt = (mapping && mapping.action === 'pagar') ||
+    ['finalizada','faturada','pedido_confirmado'].includes(data.event);
+  const _revEvt = ['cancelada','cancelada_reembolsada','cancelada_chargeback',
+    'pagamento_expirado','pedido_frustrado'].includes(data.event);
+  if (_paytId) {
+    const _vi = state.vendas.findIndex(v => v.payt_id === _paytId);
+    if (_paidEvt && data.comiss_real != null) {
+      const _p = (data.paid_at || '').slice(0, 10);
+      const _ddmm = (_p && _p[4] === '-') ? (_p.slice(8, 10) + '/' + _p.slice(5, 7)) : todayBR().slice(0, 5);
+      const _venda = {
+        id: _vi >= 0 ? state.vendas[_vi].id : Date.now(),
+        payt_id: _paytId,
+        leadId: resolvedLead ? resolvedLead.id : null,
+        nome: data.name || (resolvedLead && resolvedLead.nome) || '',
+        cpf: data.cpf || '',
+        prod: data.product || '',
+        sku: data.sku || '',
+        vl: data.amount || 0,
+        custo: 0, com_pct: 0,
+        comiss: data.comiss_real,
+        lucro: data.comiss_real,
+        status: 'confirmado',
+        at: (resolvedLead && resolvedLead.at) || '',
+        data: _ddmm,
+        orig: 'PAYT',
+      };
+      if (_vi >= 0) state.vendas[_vi] = _venda; else state.vendas.unshift(_venda);
+    } else if (_revEvt && _vi >= 0) {
+      state.vendas[_vi].status = 'estornado';
+    }
   }
 
   // Log do webhook (até 100 entradas pra não inflar)
@@ -1158,34 +1215,10 @@ async function handleFornecedorWebhook(req, env, urlToken) {
       note: `Fornecedor: ${eventRaw || event} (${status || '-'})`,
     });
 
-    // Se ação for 'pagar', registra venda (com idempotência dupla)
-    if (mapping?.action === 'pagar') {
-      state.vendas = state.vendas || [];
-      const orderKey = lead_data.external_id || '';
-      const alreadyHas = state.vendas.some(v =>
-        v.leadId === lead.id ||
-        (orderKey && v.external_order_id === orderKey)
-      );
-      if (!alreadyHas && lead.vl) {
-        const com_pct = Number(lead.com_pct) || 12;
-        const comiss = lead.vl * com_pct / 100;
-        state.vendas.unshift({
-          id: Date.now(),
-          leadId: lead.id,
-          external_order_id: orderKey,
-          nome: lead.nome,
-          prod: lead.prod,
-          vl: lead.vl,
-          custo: lead.vl * 0.45,
-          com_pct,
-          comiss,
-          lucro: lead.vl - lead.vl * 0.45 - comiss,
-          at: lead.at,
-          data: todayBR(),
-          logStatus: 'Comprado',
-        });
-      }
-    }
+    // VENDA ESTIMADA DO PRODUTOR DESATIVADA (v2.30): a receita real vem da Payt
+    // (comissão líquida do afiliado, via postback/CSV). Não criamos mais venda com
+    // bruto × 12% chutado aqui pra não poluir/duplicar o número real. O produtor só
+    // move etapa/status do lead acima.
     action_taken = 'updated';
     lead_id_result = lead.id;
   } else if (
@@ -2577,6 +2610,7 @@ async function handlePresselMetricsPage(req, env, id){
   const chips=Array.isArray(data.chips)?data.chips:[];
   let day=new URL(req.url).searchParams.get('day')||'';
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
+  else { const _dp=day.split('-'); if(+_dp[1]<1||+_dp[1]>12||+_dp[2]<1||+_dp[2]>31) day=_brDay(); }   // rejeita mês/dia impossível (ex: 2026-00-01)
   const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa o futuro)
   const isToday=(day===today);
   const M=await _presselDayMetrics(env, day);
@@ -2611,6 +2645,7 @@ async function handlePresselsTotalPage(req, env){
   const chips=Array.isArray(data.chips)?data.chips:[];
   let day=new URL(req.url).searchParams.get('day')||'';
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
+  else { const _dp=day.split('-'); if(+_dp[1]<1||+_dp[1]>12||+_dp[2]<1||+_dp[2]>31) day=_brDay(); }   // rejeita mês/dia impossível (ex: 2026-00-01)
   const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa escolher o futuro)
   const isToday=(day===today);
   const _vq=new URL(req.url).searchParams.get('view')||''; const view=(_vq==='vendas'||_vq==='leads')?_vq:'metricas';   // alterna Métricas / Pedidos / Leads
@@ -2721,35 +2756,43 @@ async function handlePresselsTotalPage(req, env){
         mSales=sr.results||[];
       }catch(_){}
       const lByAt={}; mLeads.forEach(l=>{ const at=baseAt(l.inst); (lByAt[at]=lByAt[at]||[]).push(l); });
-      const sByAt={}; mSales.forEach(s=>{ const at=baseAt(s.instance); (sByAt[at]=sByAt[at]||[]).push(s); });
-      const allAts=Array.from(new Set(Object.keys(lByAt).concat(Object.keys(sByAt)))).filter(a=>a&&a!=='?').sort(byName);
-      if(lByAt['?']||sByAt['?']) allAts.push('?');   // sem instância vai pro fim
-      const totLeads=mLeads.length, totComp=mSales.length, totRev=mSales.reduce((a,s)=>a+(Number(s.value)||0),0);
+      // buyerInfo: telefone -> compra agregada do mês (soma valor, última data/nome). O crédito de conversão segue o DONO do lead, não quem fechou.
+      const buyerInfo={}; mSales.forEach(s=>{ const p=String(s.phone||'').replace(/\D/g,''); if(!p) return; const v=Number(s.value)||0, t=Number(s.ts||0); if(!buyerInfo[p]){ buyerInfo[p]={value:v,ts:t,name:s.name||''}; } else { buyerInfo[p].value+=v; if(t>=buyerInfo[p].ts){ buyerInfo[p].ts=t; if(s.name) buyerInfo[p].name=s.name; } } });
+      const allAts=Object.keys(lByAt).filter(a=>a&&a!=='?').sort(byName);
+      if(lByAt['?']) allAts.push('?');   // leads sem instância vão pro fim
+      // Totais: leads do mês e quantos DESSES leads compraram (distintos; wa_lead.phone é PK)
+      let totComp=0, totRev=0;
+      mLeads.forEach(l=>{ const p=String(l.phone||'').replace(/\D/g,''); if(!p) return; const b=buyerInfo[p]; if(b){ totComp++; totRev+=Number(b.value)||0; } });
+      const totLeads=mLeads.length;
       const cardM=(lbl,val,color)=>`<div style="flex:1;min-width:120px;background:#141c2b;border:1px solid #233047;border-radius:12px;padding:12px 14px"><div style="font-size:10.5px;color:#8b9bb4">${lbl}</div><div style="font-size:22px;font-weight:800;color:${color};margin-top:2px">${val}</div></div>`;
       const kpi=(l,v,c)=>`<div style="flex:1"><div style="font-size:10px;color:#8b9bb4">${l}</div><div style="font-size:15px;font-weight:800;color:${c}">${v}</div></div>`;
-      const summary=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:12px">Mês de <b style="color:#e6edf6;text-transform:capitalize">${monthLabel}</b>${full?' · <span style="color:#34d399">verde = comprador</span> · toque no número pra abrir a conversa':''}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${cardM('Leads no mês',totLeads,'#7aa2ff')}${cardM('Compradores',totComp,'#34d399')}${cardM('Faturou','R$ '+totRev,'#34d399')}</div>`;
+      const summary=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:12px">Mês de <b style="color:#e6edf6;text-transform:capitalize">${monthLabel}</b>${full?' · <span style="color:#34d399">verde = comprou</span> · toque no número pra abrir a conversa':''}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${cardM('Leads no mês',totLeads,'#7aa2ff')}${cardM('Converteram',totComp,'#34d399')}${cardM('Faturou','R$ '+totRev,'#34d399')}</div>`;
       const cols=allAts.length?allAts.map(at=>{
         const name=nameMap[at]||(at==='?'?'Sem vendedor':'Vendedor');
-        const lc=(lByAt[at]||[]).length;
-        const sarr=(sByAt[at]||[]).slice().sort((a,b)=>(Number(a.ts||0)-Number(b.ts||0)));
-        const comp=sarr.length;
-        const rev=sarr.reduce((a,s)=>a+(Number(s.value)||0),0);
+        const arrL=lByAt[at]||[];
+        const lc=arrL.length;   // wa_lead.phone é PK -> leads já distintos
+        // leads DESTE vendedor que compraram (subconjunto dos leads -> conversão nunca passa de 100%)
+        const buyers=[]; const bseen=new Set();
+        arrL.forEach(l=>{ const p=String(l.phone||'').replace(/\D/g,''); if(!p||bseen.has(p)) return; bseen.add(p); const b=buyerInfo[p]; if(b) buyers.push({phone:p,value:b.value,ts:b.ts,name:b.name}); });
+        buyers.sort((a,b)=>(Number(b.ts||0)-Number(a.ts||0)));   // compra mais recente primeiro
+        const comp=buyers.length;
+        const rev=buyers.reduce((a,b)=>a+(Number(b.value)||0),0);
         const pct=lc>0?Math.round(comp/lc*100)+'%':'—';
         const cpLines=[name+' — compradores de '+monthLabel];
-        const buyerRows=sarr.length?sarr.map(s=>{
-          const bt=new Date((Number(s.ts||0)-10800)*1000);
+        const buyerRows=buyers.length?buyers.map(b=>{
+          const bt=new Date((Number(b.ts||0)-10800)*1000);
           const dh=isNaN(bt)?'':(pad(bt.getUTCDate())+'/'+pad(bt.getUTCMonth()+1)+' '+pad(bt.getUTCHours())+':'+pad(bt.getUTCMinutes()));
-          const ph=String(s.phone||'').replace(/\D/g,'');
-          const val=Number(s.value)||0;
-          if(full && ph){ cpLines.push(fmtNum(ph)+'  '+dh+(val>0?('  R$ '+val):'')+(s.name?('  '+s.name):'')+'  '+waHref(ph)); }
+          const ph=b.phone;
+          const val=Number(b.value)||0;
+          if(full && ph){ cpLines.push(fmtNum(ph)+'  '+dh+(val>0?('  R$ '+val):'')+(b.name?('  '+b.name):'')+'  '+waHref(ph)); }
           const numCell=(full&&ph)
             ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="color:#34d399;font-weight:700;font-family:ui-monospace,monospace;text-decoration:none;cursor:pointer">${_escHtml(fmtNum(ph))}</a>`
             : `<span style="color:#34d399;font-weight:700;font-family:ui-monospace,monospace">${ph?('…'+ph.slice(-4)):''}</span>`;
-          return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums;white-space:nowrap">${dh}</span><span style="flex:1;min-width:0">${numCell}${s.name?` <span style="color:#6b7a93">· ${_escHtml(String(s.name))}</span>`:''}</span>${val>0?`<span style="color:#34d399;font-weight:700;white-space:nowrap">R$ ${val}</span>`:''}</div>`;
-        }).join(''):`<div style="font-size:11.5px;color:#6b7a93;padding:8px 0">Nenhum comprador no mês.</div>`;
+          return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums;white-space:nowrap">${dh}</span><span style="flex:1;min-width:0">${numCell}${b.name?` <span style="color:#6b7a93">· ${_escHtml(String(b.name))}</span>`:''}</span>${val>0?`<span style="color:#34d399;font-weight:700;white-space:nowrap">R$ ${val}</span>`:''}</div>`;
+        }).join(''):`<div style="font-size:11.5px;color:#6b7a93;padding:8px 0">Nenhum lead comprou ainda.</div>`;
         let cpBtn='';
-        if(full && sarr.length){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar compradores</button>`; }
-        return `<div style="flex:1;min-width:250px;max-width:360px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="display:flex;gap:8px;margin:10px 0 6px">${kpi('Leads',lc,'#7aa2ff')}${kpi('Compradores',comp,'#34d399')}${kpi('Conversão',pct,'#e6edf6')}${kpi('Faturou','R$ '+rev,'#34d399')}</div><div style="font-size:11px;color:#8b9bb4;font-weight:700;margin-top:6px;border-top:1px solid #233047;padding-top:8px">Compradores</div>${buyerRows}</div>`;
+        if(full && buyers.length){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar compradores</button>`; }
+        return `<div style="flex:1;min-width:250px;max-width:360px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="display:flex;gap:8px;margin:10px 0 6px">${kpi('Leads',lc,'#7aa2ff')}${kpi('Converteram',comp,'#34d399')}${kpi('Conversão',pct,'#e6edf6')}${kpi('Faturou','R$ '+rev,'#34d399')}</div><div style="font-size:11px;color:#8b9bb4;font-weight:700;margin-top:6px;border-top:1px solid #233047;padding-top:8px">Compradores</div>${buyerRows}</div>`;
       }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead nesse mês.</div>`;
       bodyHtml=`${summary}<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>`;
     } else {
