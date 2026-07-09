@@ -1562,6 +1562,9 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .scp-ctop{ padding:12px 14px 7px; border-bottom:1px solid #1c2733; flex:none; }
 .scp-hdr{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:800; color:#e7edf3; }
 .scp-search{ display:flex; align-items:center; gap:9px; background:#141f2b; border:1px solid #243444; border-radius:12px; padding:11px 13px; color:#5f6f7e; font-size:13px; font-weight:600; }
+.scp-q-in{ flex:1; min-width:0; border:none; outline:none; background:transparent; color:#e7edf3; font-family:inherit; font-size:13px; font-weight:600; }
+.scp-q-in::placeholder{ color:#5f6f7e; font-weight:500; }
+.scp-chip,.scp-star2,.scp-hideall,.scp-toggle{ cursor:default; }
 .scp-chips{ display:flex; align-items:center; gap:5px; margin-top:8px; }
 .scp-chip{ width:34px; height:34px; border-radius:10px; border:1px solid #243444; background:#141f2b; display:flex; align-items:center; justify-content:center; }
 .scp-star2{ margin-left:auto; width:34px; height:34px; border-radius:10px; border:1px solid #243444; background:#141f2b; display:flex; align-items:center; justify-content:center; color:#3f4c59; }
@@ -3848,8 +3851,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.45.0';
-const APP_LAST_CHANGE = 'Sale Chat: o simulador saiu do menu e virou uma secao FIXA embaixo, sempre visivel enquanto voce edita os itens. Atualiza sozinho quando muda os itens. Continua funcional (clica nos itens/funis e testa no chat sem enviar).';
+const APP_VERSION = '2.46.0';
+const APP_LAST_CHANGE = 'Sale Chat simulador: correcoes da revisao automatica. Funil usa token de execucao (fim das corridas/loops sobrepostos ao trocar de secao ou clicar rapido); o chat rola certo quando a imagem/video carrega; e a busca do simulador virou funcional (filtra os itens) em vez de decorativa.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7795,7 +7798,7 @@ function scRenderSection(){
   return scSecMedia(main,scSection);
 }
 // ─── Prévia/Simulador do painel do WhatsApp (usa os itens reais; funcional pra testar) ───
-var scpTab='itens', scpRunning=false, scpStop=false, scpFast=false;
+var scpTab='itens', scpRunning=false, scpRunId=0, scpFast=false, scpQuery='';
 var SCP_SECTIONS=[
   {label:'Mensagens',icon:'message-circle',color:'#2563eb',get:()=>DB.salechat.messages||[]},
   {label:'Áudios do funil',icon:'volume',color:'#13c273',get:()=>scItemsFor('audio')},
@@ -7810,7 +7813,7 @@ function scpFindItem(id){
 }
 function scpRenderSim(){
   const w=$('sc-simwrap'); if(!w) return;
-  scpStop=true; scpRunning=false;
+  scpRunId++; scpRunning=false;
   w.innerHTML=`<div class="sc-simhead"><div class="info-title">${ico('smartphone',{size:16})} Simulador · teste sem enviar</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <label class="scp-speed"><input type="checkbox" ${scpFast?'checked':''} onchange="scpFast=this.checked"> modo rápido</label>
@@ -7826,7 +7829,19 @@ function scpRenderSim(){
       <div class="scp-stage2">${scpPanelHtml()}</div>
     </div>`;
 }
-function scpRefresh(){ const st=document.querySelector('.scp-stage2'); if(st) st.innerHTML=scpPanelHtml(); }
+function scpRefresh(){ const st=document.querySelector('.scp-stage2'); if(st){ st.innerHTML=scpPanelHtml(); scpFilterSim(); } }
+function scpFilterSim(){
+  const cont=document.querySelector('.scp-content'); if(!cont) return;
+  const q=(scpQuery||'').trim().toLowerCase();
+  cont.querySelectorAll('.scp-sec').forEach(function(sec){
+    let vis=0;
+    sec.querySelectorAll('.scp-item').forEach(function(it){
+      const lb=it.querySelector('.scp-lb'), t=lb?lb.textContent.toLowerCase():'';
+      const ok=!q||t.indexOf(q)!==-1; it.style.display=ok?'':'none'; if(ok)vis++;
+    });
+    sec.style.display=vis?'':'none';
+  });
+}
 function scpGo(t){ scpTab=t; scpRefresh(); }
 function scpSendBtn(c){ return `<span class="scp-sendbtn" style="background:${c}1a;color:${c}">${ico('play',{size:14})}</span>`; }
 function scpPanelHtml(){
@@ -7852,13 +7867,21 @@ function scpContentHtml(){
     const its=items.map(it=>`<div class="scp-item" onclick="scpSend('${it.id}')"><span class="scp-ic" style="background:${s.color}1a;color:${s.color}">${ico(s.icon,{size:15})}</span><span class="scp-lb">${scEscT(it.label||'(sem nome)')}</span><span class="scp-star">${ico('star',{size:14})}</span>${scpSendBtn(s.color)}</div>`).join('');
     return `<div class="scp-sec"><div class="scp-sech"><span style="color:${s.color}">${ico(s.icon,{size:14})}</span><span class="scp-sect">${s.label}</span><span class="scp-cnt">${items.length}</span></div><div class="scp-list">${its}</div></div>`;
   }).join('')||'<div class="scp-empty">Nada configurado ainda. Adicione itens nas seções ao lado.</div>';
-  return `<div class="scp-ctop"><div class="scp-search">${ico('search',{size:14})}<span>Buscar item...</span></div><div class="scp-chips">${chips}<span class="scp-star2">${ico('star',{size:14})}</span></div><button class="scp-hideall">Esconder todos</button></div><div class="scp-body">${secs}</div>`;
+  return `<div class="scp-ctop"><div class="scp-search">${ico('search',{size:14})}<input class="scp-q-in" placeholder="Buscar item..." value="${scEscA(scpQuery)}" oninput="scpQuery=this.value;scpFilterSim()"></div><div class="scp-chips" title="Filtro por tipo (no painel real)">${chips}<span class="scp-star2">${ico('star',{size:14})}</span></div><button class="scp-hideall" type="button" title="No painel real" tabindex="-1">Esconder todos</button></div><div class="scp-body">${secs}</div>`;
 }
 // ── Chat de teste (simulação; não envia nada) ──
 function scpChatBody(){ return $('scp-chat-body'); }
 function scpSleep(ms){ return new Promise(r=>setTimeout(r,Math.max(0,ms||0))); }
 function scpSetStatus(t){ const s=$('scp-status'); if(s) s.textContent=t||'online'; }
-function scpAppend(html){ const b=scpChatBody(); if(!b) return null; const d=document.createElement('div'); d.innerHTML=html; const el=d.firstElementChild; if(el){ b.appendChild(el); b.scrollTop=b.scrollHeight; } return el; }
+function scpAppend(html){
+  const b=scpChatBody(); if(!b) return null;
+  const d=document.createElement('div'); d.innerHTML=html; const el=d.firstElementChild;
+  if(el){ b.appendChild(el); const sc=()=>{ b.scrollTop=b.scrollHeight; }; sc();
+    el.querySelectorAll('img').forEach(m=>{ if(!m.complete) m.addEventListener('load',sc,{once:true}); });
+    el.querySelectorAll('video').forEach(v=>v.addEventListener('loadedmetadata',sc,{once:true}));
+  }
+  return el;
+}
 function scpBubble(kind,item){
   const url=item.key?scMediaUrl(item.key):'';
   let inner='';
@@ -7873,28 +7896,29 @@ function scpBubble(kind,item){
 function scpSend(id){ const f=scpFindItem(id); if(!f) return; scpAppend(scpBubble(f.kind,f.item)); }
 function scpIndicator(kind){ scpSetStatus(kind==='audio'?'gravando áudio...':(kind==='text'?'digitando...':'enviando...')); return scpAppend('<div class="scpb scpb-out scp-ind"><span></span><span></span><span></span></div>'); }
 async function scpRunFunil(i){
-  if(scpRunning){ scpStop=true; return; }
+  if(scpRunning){ scpRunId++; scpRunning=false; scpSetStatus('online'); return; } // clicar de novo = parar
   const seq=(DB.salechat.sequences||[])[i]; if(!seq) return;
   const steps=(seq.items||[]).map(scStep).filter(s=>scpFindItem(s.id));
   if(!steps.length){ return; }
-  scpRunning=true; scpStop=false;
-  for(let k=0;k<steps.length && !scpStop;k++){
+  const myRun=++scpRunId; scpRunning=true;
+  for(let k=0;k<steps.length;k++){
     const st=steps[k], f=scpFindItem(st.id);
     let wait=(scpFast?Math.min(st.delay||0,1):(st.delay||0))*1000;
-    await scpSleep(wait); if(scpStop) break;
+    await scpSleep(wait); if(scpRunId!==myRun) return;
     let simMs=st.sim?st.sim*1000:(f.kind==='audio'?2200:f.kind==='text'?1200:900);
     if(scpFast) simMs=Math.min(simMs,600);
     const ind=scpIndicator(f.kind);
     await scpSleep(simMs);
     if(ind&&ind.parentNode) ind.parentNode.removeChild(ind);
+    if(scpRunId!==myRun) return;
     scpSetStatus('online');
-    if(scpStop) break;
     scpSend(st.id);
   }
-  scpRunning=false; scpStop=false; scpSetStatus('online');
+  if(scpRunId===myRun) scpRunning=false;
+  scpSetStatus('online');
 }
-function scpClearChat(){ scpStop=true; const b=scpChatBody(); if(b) b.innerHTML=''; scpSetStatus('online'); }
-function scpSimReply(){ if(scpRunning) scpStop=true; scpAppend('<div class="scpb scpb-in"><div class="scpb-txt">Oi, tudo bem? Ainda tem esse produto?</div><span class="scpb-t">agora</span></div>'); }
+function scpClearChat(){ scpRunId++; scpRunning=false; const b=scpChatBody(); if(b) b.innerHTML=''; scpSetStatus('online'); }
+function scpSimReply(){ if(scpRunning){ scpRunId++; scpRunning=false; scpSetStatus('online'); } scpAppend('<div class="scpb scpb-in"><div class="scpb-txt">Oi, tudo bem? Ainda tem esse produto?</div><span class="scpb-t">agora</span></div>'); }
 // ─── Seção: Mensagens ───
 function scSecMessages(main){ scRenderSectionMD('messages'); }
 // ─── Sale Chat dash: layout mestre-detalhe (lista de cards + painel de detalhe/previa) ───
