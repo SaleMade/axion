@@ -169,7 +169,7 @@
   function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
   var COLLAPSED = lsGet('zv_collapsed', {});
   var FAVS = lsGet('zv_favs', {});
-  var DARK = false; try { DARK = localStorage.getItem('zv_dark') === '1'; } catch (_) {}
+  var DARK = true; try { var _d = localStorage.getItem('zv_dark'); if (_d !== null) DARK = _d === '1'; } catch (_) {}
   var FILTER = '';
   var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
   var TYPEFILTER = 'all';
@@ -281,7 +281,6 @@
     var p = document.createElement('div'); p.id = 'zv-panel'; if (DARK) p.className = 'zv-dark';
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span>' +
-        '<span id="zv-theme" title="Tema claro/escuro">' + (DARK ? SVG.sun : SVG.moon) + '</span>' +
         '<span id="zv-min" title="Recolher">' + SVG.minus + '</span></div>' +
       '<div id="zv-suggest" style="display:none"></div>' +
       '<div id="zv-main"><div id="zv-content"></div><div id="zv-rail"></div></div>' +
@@ -290,8 +289,6 @@
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); dockLayout(); };
-    var themeBtn = p.querySelector('#zv-theme');
-    if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); setDark(!DARK); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
     renderRail(); renderContent();
     dockLayout();
