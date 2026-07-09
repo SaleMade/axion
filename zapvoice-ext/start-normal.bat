@@ -1,7 +1,6 @@
 @echo off
 title Sale Chat - WhatsApp NORMAL
-rem Atalho padrao (WhatsApp normal). Para o WhatsApp Beta use start-beta.bat.
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0start.ps1" -Mode normal
 echo.
-echo A janela do Sale Chat foi encerrada.
+echo A janela do Sale Chat (WhatsApp normal) foi encerrada.
 pause
