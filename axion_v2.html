@@ -3902,7 +3902,7 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
 const APP_VERSION = '2.49.0';
-const APP_LAST_CHANGE = 'Sale Chat agora tem 2 perfis independentes: Vendedores e Cobradores. Cada um com suas mensagens, audios, videos, imagens, funis e gatilhos, e instalador proprio. Alterna no topo da pagina Sale Chat.';
+const APP_LAST_CHANGE = 'Nova pagina Base de Clientes (Operacional): todos os clientes unificados por CPF a partir da Payt - quem converteu, pagou ou desistiu, com historico, total pago, comissao, LTV e recompradores. Busca e filtros. Base pra cruzar dados e resolver a atribuicao por CPF.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5168,6 +5168,7 @@ function computeNav(){
         ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
         ...(dir?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
         {id:'crm',lbl:'CRM / Pipeline'},
+        ...(dir?[{id:'clientes',lbl:'Base de Clientes'}]:[]),
         ...(dir||afi?[{id:'produtos',lbl:'Produtos'}]:[]),
         ...(dir?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
         ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
@@ -5317,6 +5318,7 @@ const PNAMES={
   presselleads:"WhatsApp / <b>Leads</b>",
   automacoes:"Automações / <b>Robô de WhatsApp</b>",
   regioes:'Operacional / <b>Regiões</b>',
+  clientes:'Operacional / <b>Base de Clientes</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
   equipe:'Equipe / <b>Visão geral</b>',
@@ -5347,7 +5349,7 @@ function buildApp(){
   p.innerHTML=[
     pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
-    pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
+    pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig(),pageClientes()
   ].join('');
 
   // tab handlers
@@ -5617,6 +5619,7 @@ function refreshActive(){
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
+    clientes:renderClientes,
     recuperacao:renderRecup,config:renderConfig};
   if(map[id])map[id]();
 }
@@ -13408,6 +13411,104 @@ function importTrafegoCSV(input){
 /* ═══════════════════════════════════════════════════════
    PAGE — EQUIPE
 ═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   PAGE — BASE DE CLIENTES (por CPF, fonte de verdade Payt)
+═══════════════════════════════════════════════════════ */
+function pageClientes(){return `<div class="page" id="clientes-pg"></div>`}
+let _cliQ='',_cliFilter='todos';
+function setCliFilter(f){_cliFilter=f;renderClientes()}
+function cliSearch(v){_cliQ=(v||'').toLowerCase().trim();renderClientes()}
+function _fmtCPF(c){c=(c||'').replace(/\D/g,'');return c.length===11?`${c.slice(0,3)}.${c.slice(3,6)}.${c.slice(6,9)}-${c.slice(9)}`:c}
+function _fmtTel(t){t=(t||'').replace(/\D/g,'');if(t.startsWith('55'))t=t.slice(2);return t.length>=10?`(${t.slice(0,2)}) ${t.slice(2,-4)}-${t.slice(-4)}`:t}
+function renderClientes(){
+  const c=$('clientes-pg');if(!c)return;
+  const all=DB.clientes||[];
+  const pag=all.filter(x=>x.status==='pagante');
+  const agu=all.filter(x=>x.status==='aguardando');
+  const des=all.filter(x=>x.status==='desistiu');
+  const rec=pag.filter(x=>x.pagos>1);
+  const totPago=pag.reduce((s,x)=>s+(x.total_pago||0),0);
+  const totCom=pag.reduce((s,x)=>s+(x.comissao||0),0);
+  const ltv=pag.length?totPago/pag.length:0;
+  const ST={pagante:{l:'Pagante',c:'var(--gr)',b:'var(--grd)'},aguardando:{l:'Aguardando',c:'var(--am)',b:'var(--amd)'},desistiu:{l:'Desistiu',c:'var(--rd)',b:'var(--rdd)'},lead:{l:'Lead',c:'var(--t3)',b:'var(--s3)'}};
+  let list=all.slice();
+  if(_cliFilter!=='todos')list=list.filter(x=>x.status===_cliFilter);
+  if(_cliQ)list=list.filter(x=>((x.nome||'')+' '+(x.cpf||'')+' '+((x.tels||[]).join(' '))+' '+(x.cidade||'')).toLowerCase().includes(_cliQ));
+
+  const fbtn=(id,lbl,n)=>`<button class="btn ${_cliFilter===id?'btn-bl':'btn-gh'} btn-sm" onclick="setCliFilter('${id}')">${lbl} ${n!=null?`<span style="opacity:.7">${n}</span>`:''}</button>`;
+
+  c.innerHTML=`
+  <div class="ph">
+    <div><h1>Base de <em>Clientes</em></h1></div>
+  </div>
+  <p class="muted" style="font-size:12.5px;margin:-6px 0 16px">Todos os clientes unificados por <b>CPF</b> (fonte: Payt). Mostra quem converteu, pagou ou desistiu, com histórico e valor. Base pra cruzar dados.</p>
+
+  <div class="mg" style="grid-template-columns:repeat(4,1fr)">
+    <div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('users',{size:14})}</div>
+      <div class="mc-lbl">Clientes</div><div class="mc-val">${all.length}</div>
+      <div class="mc-sub">${pag.length} pagantes · ${des.length} desistiram</div></div>
+    <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
+      <div class="mc-lbl">Comissão dos pagantes</div><div class="mc-val">${fmt(totCom)}</div>
+      <div class="mc-sub">de ${fmt(totPago)} faturado</div></div>
+    <div class="mc mc-cy"><div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
+      <div class="mc-lbl">LTV médio</div><div class="mc-val">${fmt(ltv)}</div>
+      <div class="mc-sub">valor pago por cliente</div></div>
+    <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('repeat',{size:14})}</div>
+      <div class="mc-lbl">Recompradores</div><div class="mc-val">${rec.length}</div>
+      <div class="mc-sub">compraram 2+ vezes</div></div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 12px">
+    ${fbtn('todos','Todos',all.length)}
+    ${fbtn('pagante','Pagantes',pag.length)}
+    ${fbtn('aguardando','Aguardando',agu.length)}
+    ${fbtn('desistiu','Desistiram',des.length)}
+    <div style="flex:1;min-width:180px;display:flex;justify-content:flex-end">
+      <input placeholder="Buscar por nome, CPF, telefone, cidade..." oninput="cliSearch(this.value)" value="${_cliQ.replace(/"/g,'&quot;')}"
+        style="width:min(340px,100%);background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:9px 13px;color:var(--tx);font-size:13px;font-family:inherit;outline:none">
+    </div>
+  </div>
+
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr>
+        <th style="text-align:left">Cliente</th>
+        <th style="text-align:left">CPF</th>
+        <th style="text-align:left">Telefone</th>
+        <th style="text-align:left">Cidade</th>
+        <th style="text-align:left">Status</th>
+        <th class="right">Pedidos</th>
+        <th class="right">Pagos</th>
+        <th class="right">Total pago</th>
+        <th class="right">Comissão</th>
+        <th style="text-align:left">Produtos</th>
+        <th class="right">Último</th>
+      </tr></thead>
+      <tbody>
+        ${list.length?list.slice(0,400).map(x=>{
+          const st=ST[x.status]||ST.lead;
+          const prods=[...new Set((x.produtos||[]).map(p=>p.prod))].slice(0,3).join(', ');
+          const nprod=new Set((x.produtos||[]).map(p=>p.prod)).size;
+          return `<tr>
+            <td><b style="color:var(--tx);font-weight:500">${x.nome||'—'}</b></td>
+            <td style="color:var(--t2);font-variant-numeric:tabular-nums">${_fmtCPF(x.cpf)}</td>
+            <td style="color:var(--t2)">${_fmtTel((x.tels||[])[0]||'')}</td>
+            <td class="muted">${x.cidade||'—'}${x.uf?'/'+x.uf:''}</td>
+            <td><span class="tbl-st" style="background:${st.b};color:${st.c}">${st.l}</span></td>
+            <td class="right" style="color:var(--t2)">${x.pedidos||0}</td>
+            <td class="right" style="color:${x.pagos?'var(--gr)':'var(--t3)'};font-weight:600">${x.pagos||0}</td>
+            <td class="right" style="color:var(--t2);letter-spacing:.01em">${fmt(x.total_pago||0)}</td>
+            <td class="right" style="color:var(--tx);font-weight:600;letter-spacing:.01em">${fmt(x.comissao||0)}</td>
+            <td class="muted" style="font-size:11.5px" title="${nprod} produto(s)">${prods||'—'}</td>
+            <td class="right muted">${x.ultimo||'—'}</td>
+          </tr>`;
+        }).join(''):'<tr><td colspan="11" class="muted" style="text-align:center;padding:26px">Nenhum cliente com esse filtro. A base é montada do CSV da Payt (rode a sincronização).</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+  ${list.length>400?`<p class="muted" style="font-size:12px;margin-top:10px;text-align:center">Mostrando 400 de ${list.length}. Refine a busca.</p>`:''}`;
+}
+
 function pageEquipe(){return `<div class="page" id="equipe-pg"></div>`}
 function renderEquipe(){
   const c=$('equipe-pg');if(!c)return;
