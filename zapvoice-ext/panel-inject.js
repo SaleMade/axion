@@ -260,14 +260,20 @@
     (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
   }
 
-  var PANEL_W = 440; // casa com a largura do painel no panel.css
-  // Ancora o painel na lateral: empurra o WhatsApp pra esquerda pra ele ficar AO LADO
-  // (nao por cima). Best-effort no container raiz (#app); se nao pegar, so fica na lateral.
-  function dockLayout() {
-    try { var app = document.getElementById('app'); if (app) { app.style.setProperty('width', 'calc(100vw - ' + PANEL_W + 'px)', 'important'); app.style.setProperty('min-width', '0', 'important'); } } catch (_) {}
-  }
+  var PANEL_W = 440, RAIL_W = 80; // casam com o panel.css
   function undockLayout() {
     try { var app = document.getElementById('app'); if (app) { app.style.removeProperty('width'); app.style.removeProperty('min-width'); } } catch (_) {}
+  }
+  // Ancora o painel na lateral: empurra o WhatsApp pra esquerda pra ele ficar AO LADO
+  // (nao por cima). A largura reservada muda conforme o estado (cheio / so-barra / minimizado).
+  function dockLayout() {
+    try {
+      var p = document.getElementById('zv-panel');
+      if (p && p.classList.contains('zv-collapsed')) { undockLayout(); return; }
+      var w = (p && p.classList.contains('zv-railonly')) ? RAIL_W : PANEL_W;
+      var app = document.getElementById('app');
+      if (app) { app.style.setProperty('width', 'calc(100vw - ' + w + 'px)', 'important'); app.style.setProperty('min-width', '0', 'important'); }
+    } catch (_) {}
   }
   function render() {
     buildIndex();
@@ -282,7 +288,7 @@
     document.body.appendChild(p);
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
-    p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); var col = p.classList.toggle('zv-collapsed'); if (col) undockLayout(); else dockLayout(); };
+    p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); dockLayout(); };
     var themeBtn = p.querySelector('#zv-theme');
     if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); setDark(!DARK); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
@@ -303,7 +309,16 @@
       return '<button class="zv-tab' + (TAB === t.key ? ' on' : '') + '" data-tab="' + t.key + '"><span class="zv-tab-ic">' + SVG[t.icon] + '</span><span class="zv-tab-lb">' + t.label + '</span></button>';
     }).join('');
     Array.prototype.forEach.call(rail.querySelectorAll('.zv-tab'), function (b) {
-      b.onclick = function () { TAB = b.getAttribute('data-tab'); try { localStorage.setItem('zv_tab', TAB); } catch (_) {} renderRail(); renderContent(); };
+      b.onclick = function () {
+        var p = document.getElementById('zv-panel');
+        var key = b.getAttribute('data-tab');
+        var railOnly = p && p.classList.contains('zv-railonly');
+        // clicar na aba ativa (com a esquerda aberta) minimiza pra so-barra; clicar de novo abre
+        if (!railOnly && key === TAB) { if (p) p.classList.add('zv-railonly'); renderRail(); dockLayout(); return; }
+        if (railOnly && p) p.classList.remove('zv-railonly');
+        TAB = key; try { localStorage.setItem('zv_tab', TAB); } catch (_) {}
+        renderRail(); renderContent(); dockLayout();
+      };
     });
   }
 

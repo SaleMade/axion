@@ -1,15 +1,19 @@
 /* Sale Chat — painel no WhatsApp Web. Layout com barra de abas à direita, tema claro
    por padrão (com toggle de escuro). Codigo/estilo proprios. */
 #zv-panel{
-  position:fixed; right:0; top:0; z-index:2147483647;
-  width:440px; height:100vh;
+  position:fixed; right:0; top:38px; z-index:2147483647;
+  width:440px; height:calc(100vh - 38px);
   background:#fff; color:#2a2a46; border:none; border-left:1px solid #d6dce4; border-radius:0;
   box-shadow:-12px 0 36px rgba(20,30,50,.16);
   font-family:'Nunito','Segoe UI',system-ui,-apple-system,sans-serif; font-size:14px;
   display:flex; flex-direction:column; overflow:hidden;
 }
-#zv-panel.zv-collapsed{ height:auto; top:12px; right:12px; width:auto; border:1px solid #d6dce4; border-radius:13px; box-shadow:0 10px 28px rgba(0,0,0,.2); }
+#zv-panel.zv-collapsed{ height:auto; top:44px; right:12px; width:auto; border:1px solid #d6dce4; border-radius:13px; box-shadow:0 10px 28px rgba(0,0,0,.2); }
 #zv-panel.zv-collapsed #zv-who{ display:none; }
+/* Só-barra: clicar na aba ativa minimiza a esquerda, sobra so a barrinha de icones */
+#zv-panel.zv-railonly{ width:80px; }
+#zv-panel.zv-railonly #zv-head, #zv-panel.zv-railonly #zv-content, #zv-panel.zv-railonly #zv-suggest, #zv-panel.zv-railonly #zv-status{ display:none; }
+#zv-panel.zv-railonly #zv-rail{ border-left:none; }
 #zv-head{ display:flex; align-items:center; gap:10px; padding:14px 16px; background:linear-gradient(135deg,#13c273,#0eb267); user-select:none; color:#fff; flex:none; }
 #zv-dot{ width:9px; height:9px; border-radius:50%; flex:none; box-shadow:0 0 0 3px rgba(255,255,255,.25); }
 #zv-dot.zv-on{ background:#eaffef; } #zv-dot.zv-off{ background:#ffd7dc; box-shadow:0 0 0 3px rgba(255,255,255,.18); }
@@ -72,7 +76,7 @@
 .zv-list{ display:flex; flex-direction:column; gap:8px; }
 
 .zv-item{ display:flex; align-items:center; gap:11px; text-align:left; width:100%; min-width:0; background:#fff; border:1px solid #e9edf2; color:#2a2a46; border-radius:13px; padding:12px 13px; cursor:pointer; font-size:13.5px; font-family:inherit; transition:border-color .12s, box-shadow .12s, transform .04s; }
-.zv-item:hover{ border-color:#13c273; box-shadow:0 3px 12px rgba(19,194,115,.14); }
+.zv-item:hover{ border-color:#13c273; box-shadow:0 0 0 1.5px rgba(19,194,115,.55) inset; }
 .zv-item:active{ transform:translateY(1px); }
 .zv-item.zv-busy{ opacity:.6; pointer-events:none; }
 .zv-ic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; }
@@ -104,7 +108,7 @@
 
 /* Funis: linha roxa + previa do funil */
 .zv-ic.zv-seq-ic{ background:rgba(142,23,240,.1); color:#8e17f0; }
-.zv-item.zv-seqrow:hover{ border-color:#8e17f0; box-shadow:0 3px 12px rgba(142,23,240,.14); }
+.zv-item.zv-seqrow:hover{ border-color:#8e17f0; box-shadow:0 0 0 1.5px rgba(142,23,240,.5) inset; }
 .zv-send.zv-seqsend{ background:#8e17f01a; color:#8e17f0; }
 .zv-send.zv-seqsend:hover{ background:#8e17f033; }
 .zv-send.zv-seqsend.zv-sending{ background:#ffe0e0; color:#e0405a; }
@@ -116,7 +120,7 @@
 .zv-fp-foot{ margin-top:6px; padding-top:7px; border-top:1px solid #eef1f5; font-size:11px; color:#54656f; font-weight:700; }
 
 .zv-seq{ display:flex; align-items:center; gap:10px; text-align:left; width:100%; background:linear-gradient(180deg,#fff,#fbfaff); border:1px solid #e6dbf8; color:#2a2a46; border-radius:12px; padding:9px 11px; cursor:pointer; font-size:12.5px; font-family:inherit; }
-.zv-seq:hover{ border-color:#8e17f0; box-shadow:0 3px 12px rgba(142,23,240,.14); }
+.zv-seq:hover{ border-color:#8e17f0; box-shadow:0 0 0 1.5px rgba(142,23,240,.5) inset; }
 .zv-seq.zv-busy{ border-color:#8e17f0; }
 .zv-seq .zv-ic{ background:rgba(142,23,240,.1); color:#8e17f0; } .zv-seq .zv-play{ color:#8e17f0; }
 
@@ -168,7 +172,7 @@
 #zv-panel.zv-dark .zv-h{ color:#8ea0b0; } #zv-panel.zv-dark .zv-h:hover{ color:#e7edf3; }
 #zv-panel.zv-dark .zv-count{ background:#20303d; color:#8ea0b0; } #zv-panel.zv-dark .zv-chev{ color:#5f6f7e; }
 #zv-panel.zv-dark .zv-item{ background:#141f2b; border-color:#233443; color:#e7edf3; }
-#zv-panel.zv-dark .zv-item:hover{ border-color:#13c273; box-shadow:0 3px 12px rgba(19,194,115,.2); }
+#zv-panel.zv-dark .zv-item:hover{ border-color:#13c273; box-shadow:0 0 0 1.5px rgba(19,194,115,.55) inset; }
 #zv-panel.zv-dark .zv-seq{ background:#181528; border-color:#2e2447; color:#e7edf3; }
 #zv-panel.zv-dark .zv-star{ color:#3f4c59; }
 #zv-panel.zv-dark .zv-exp{ color:#5f6f7e; } #zv-panel.zv-dark .zv-exp:hover{ color:#aebccb; background:#16202b; }
