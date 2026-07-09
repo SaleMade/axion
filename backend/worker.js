@@ -271,6 +271,7 @@ async function handleDeleteUser(req, env, userId) {
   if (hard) {
     const r = await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
     if (!r.meta.changes) return err('Usuário não encontrado', 404);
+    try { await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run(); } catch (_) {}   // revoga sessões (corta acesso na hora)
     return json({ ok: true, action: 'deleted' });
   }
 
@@ -290,6 +291,7 @@ async function handleDeleteUser(req, env, userId) {
     ).bind(userId).run();
     if (!r.meta.changes) return err('Usuário não encontrado', 404);
   }
+  try { await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run(); } catch (_) {}   // revoga sessões do arquivado (senão o token vive até expirar)
   return json({ ok: true, action: 'archived' });
 }
 
@@ -2604,7 +2606,9 @@ async function handlePresselsTotalPage(req, env){
   // Sem token → página pública mostra só o final do número (protege os leads, que são o ativo da empresa).
   const kParam=new URL(req.url).searchParams.get('k')||'';
   let full=false;
-  if(/^[a-f0-9]{64}$/i.test(kParam)){ try{ const _now=Math.floor(Date.now()/1000); const _s=await env.DB.prepare('SELECT user_id FROM sessions WHERE token=? AND expires_at>?').bind(kParam,_now).first(); if(_s) full=true; }catch(_){} }
+  // Só libera modo completo pra DIRETOR/SÓCIO ativo (não arquivado). Leads é só-diretor; vendedor não pode
+  // puxar a carteira dos outros. JOIN em users barra até sessão antiga de usuário já arquivado/demitido.
+  if(/^[a-f0-9]{64}$/i.test(kParam)){ try{ const _now=Math.floor(Date.now()/1000); const _s=await env.DB.prepare('SELECT u.role role, COALESCE(u.archived,0) arch FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?').bind(kParam,_now).first(); if(_s && Number(_s.arch)!==1 && ROLE_DIRETOR.includes(_s.role)) full=true; }catch(_){} }
   const kq=full?('k='+encodeURIComponent(kParam)):'';   // preserva o token na navegação interna (data/abas)
   const M=await _presselDayMetrics(env, day);
   let nameMap={};
