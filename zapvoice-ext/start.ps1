@@ -91,12 +91,16 @@ try {
 $nodeExe = Ensure-Node
 
 Write-Host "Sale Chat - $Label (porta $Port) rodando. Pode MINIMIZAR esta janela (nao feche)."
+# O injetor (inject.js) e paciente: espera ate ~1min o WhatsApp carregar e recupera a tela
+# de erro (cacto) sozinho. Aqui a gente so re-executa se ele encerrar (app fechou/recarregou).
+# Nao matamos o app em falha do injetor de proposito: o atendente pode estar no meio de uma
+# conversa, e derrubar o WhatsApp dele seria pior que a falha.
 while ($true) {
   if (Ensure-Port) {
-    Write-Host "Conectado ao $Label. Injetando o painel..."
+    Write-Host "Porta $Port pronta. Injetando o painel do Sale Chat..."
     $env:ZV_PORT = "$Port"
     & $nodeExe (Join-Path $here 'inject.js')
-    Write-Host "Injetor encerrou ($Label fechou/recarregou). Retomando em 3s..."
+    Write-Host "Injetor encerrou. Retomando em 3s..."
   } else {
     Write-Host "Nao consegui abrir a porta do $Label. Abra o app e aguarde..."
   }

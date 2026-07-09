@@ -55,9 +55,21 @@ function fetchRemoteConfig() {
 
 function getJson(pathname) {
   return new Promise((res, rej) => {
-    http.get({ host: '127.0.0.1', port: PORT, path: pathname }, (r) => {
-      let d = ''; r.on('data', (c) => (d += c)); r.on('end', () => { try { res(JSON.parse(d)); } catch (e) { rej(e); } });
-    }).on('error', rej);
+    const r = http.get({ host: '127.0.0.1', port: PORT, path: pathname }, (rr) => {
+      let d = ''; rr.on('data', (c) => (d += c)); rr.on('end', () => { try { res(JSON.parse(d)); } catch (e) { rej(e); } });
+    });
+    r.on('error', rej);
+    // Sem timeout, uma conexao meia-aberta (browser em estado ruim) penduraria o watchdog
+    // pra sempre e o deadline de 60s do acquirePage nunca seria reavaliado.
+    r.setTimeout(5000, () => { try { r.destroy(); } catch (_) {} rej(new Error('timeout')); });
+  });
+}
+
+// Corre uma promise contra um timeout; se estourar, rejeita (nao trava o loop de recuperacao).
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
 }
 
@@ -142,14 +154,80 @@ class CDP {
   }
 }
 
-async function findPage() {
-  const targets = await getJson('/json');
-  return targets.find((t) => t.type === 'page' && /web\.whatsapp\.com/.test(t.url || ''));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function listTargets() {
+  try { const t = await getJson('/json'); return Array.isArray(t) ? t : []; }
+  catch (_) { return []; }
+}
+function isWhatsAppPage(t) { return t && t.type === 'page' && /web\.whatsapp\.com/i.test(t.url || ''); }
+// Pagina do PROPRIO WhatsApp travada na tela de erro/cacto. So consideramos "cacto do
+// WhatsApp" quando o TITULO menciona whatsapp — uma URL chrome-error:// sozinha NAO prova
+// identidade nenhuma (poderia ser a pagina de erro de outro app WebView2 na mesma porta,
+// e a gente acabaria sequestrando o app errado ao navegar pra web.whatsapp.com).
+function isCrashedWhatsApp(t) {
+  if (!t || t.type !== 'page') return false;
+  const u = (t.url || '').toLowerCase(), ti = (t.title || '').toLowerCase();
+  if (u.indexOf('web.whatsapp.com') >= 0) return false; // ja carregou; nunca recarregar por engano
+  return ti.indexOf('whatsapp') >= 0;
+}
+
+// Recupera o WhatsApp quando ele abre na tela de erro (cacto): navega o proprio alvo de
+// volta pra web.whatsapp.com via CDP, sem o usuario clicar em nada. Tudo com timeout: um
+// renderer travado pode aceitar o WebSocket e nunca responder, o que penduraria o loop.
+async function reloadCrashed(t) {
+  let ws2 = null;
+  try {
+    await withTimeout((async () => {
+      ws2 = new WebSocket(t.webSocketDebuggerUrl);
+      await new Promise((res, rej) => { ws2.addEventListener('open', res, { once: true }); ws2.addEventListener('error', rej, { once: true }); });
+      const c2 = new CDP(ws2);
+      await c2.send('Page.enable');
+      await c2.send('Page.navigate', { url: 'https://web.whatsapp.com/' });
+    })(), 5000);
+    return true;
+  } catch (_) { return false; }
+  finally { try { if (ws2) ws2.close(); } catch (_) {} }
+}
+
+// Procura a pagina do WhatsApp com paciencia (ate ~60s). O app da Store demora pra
+// carregar web.whatsapp.com; e se ele abrir na tela de erro (cacto), a gente manda
+// recarregar sozinho. So desiste depois de tentar de verdade — nada de loop de 3s.
+async function acquirePage() {
+  const deadline = Date.now() + 60000;
+  let saidBooting = false, saidBusy = false, tries = 0;
+  while (Date.now() < deadline) {
+    const targets = await listTargets();
+    const wa = targets.find(isWhatsAppPage);
+    if (wa && wa.webSocketDebuggerUrl) return wa;
+    // Achou o WhatsApp, mas sem porta de debug livre: outra sessao (outra janela preta do
+    // Sale Chat, ou DevTools) ja esta conectada. Nao mexe; avisa uma vez e espera liberar.
+    if (wa && !wa.webSocketDebuggerUrl) {
+      if (!saidBusy) { saidBusy = true; console.log('[zv] O WhatsApp ja tem uma sessao do Sale Chat conectada. Feche as OUTRAS janelas pretas e deixe so uma aberta.'); }
+      await sleep(3000); tries++; continue;
+    }
+    const crashed = targets.find(isCrashedWhatsApp);
+    if (crashed && crashed.webSocketDebuggerUrl && (tries % 6) === 0) {
+      console.log('[zv] WhatsApp esta numa tela de erro; mandando recarregar sozinho...');
+      await reloadCrashed(crashed);
+    } else if (!saidBooting) {
+      saidBooting = true;
+      const seen = targets.filter((t) => t.type === 'page').map((t) => t.url || '(sem url)');
+      console.log('[zv] Porta ' + PORT + ' respondeu; esperando o WhatsApp carregar...' + (seen.length ? ' (paginas: ' + seen.join(' | ') + ')' : ' (nenhuma pagina ainda)'));
+    }
+    tries++;
+    await sleep(1500);
+  }
+  return null;
 }
 
 async function run() {
-  const page = await findPage();
-  if (!page) { console.log('[zv] Nao achei a pagina do WhatsApp na porta ' + PORT + '. O app esta aberto com a porta de debug?'); process.exit(2); }
+  const page = await acquirePage();
+  if (!page) {
+    console.log('[zv] Nao achei o WhatsApp na porta ' + PORT + ' depois de 1 min.');
+    console.log('[zv] Feche o WhatsApp POR COMPLETO (inclusive o icone perto do relogio) e rode o start de novo.');
+    process.exit(2);
+  }
   console.log('[zv] Pagina encontrada:', page.title);
   const { wajs, panel } = await buildBundle();
 
