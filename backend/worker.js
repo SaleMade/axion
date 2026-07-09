@@ -1731,10 +1731,23 @@ async function _waOnConnection(env, instance, data) {
   if (!instance) return;
   await _waEnsureTables(env);
   const st = data?.state || data?.connection || 'unknown';
-  await env.DB.prepare(
-    `INSERT INTO wa_conn (instance, state, updated_at) VALUES (?, ?, strftime('%s','now'))
-     ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
-  ).bind(instance, String(st)).run();
+  // No 'open', já captura o número que conectou (ownerJid) e grava junto — evita janela em que o
+  // wa_conn.number fica com o número antigo e o roteador pula o número recém-conectado.
+  let num = '';
+  if (String(st) === 'open') {
+    try { const live = await _evoInstances(env); const it = (live || []).find(x => x.name === instance); if (it) num = it.number || ''; } catch (_) {}
+  }
+  if (num) {
+    await env.DB.prepare(
+      `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
+       ON CONFLICT(instance) DO UPDATE SET state = excluded.state, number = excluded.number, updated_at = excluded.updated_at`
+    ).bind(instance, String(st), num).run();
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO wa_conn (instance, state, updated_at) VALUES (?, ?, strftime('%s','now'))
+       ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
+    ).bind(instance, String(st)).run();
+  }
 }
 // Transcreve um áudio recebido (Gemini). Retorna texto ou ''.
 async function _waTranscribeAudio(env, instance, msgKey) {
