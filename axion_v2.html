@@ -1512,6 +1512,40 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-cbtn{ flex:none; background:none; border:none; color:var(--t3); cursor:pointer; padding:4px; border-radius:6px; display:inline-flex; }
 .sc-cbtn:hover{ color:var(--tx); background:var(--s4); }
 .sc-cbtn.fav{ color:#f5b60a; }
+/* Funis: cards bonitos */
+.sc-fcard{ background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:14px 16px; margin-bottom:14px; }
+.sc-fcard-head{ display:flex; align-items:center; gap:11px; margin-bottom:12px; }
+.sc-fic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(142,23,240,.14); color:#8e17f0; }
+.sc-fname{ flex:1; min-width:0; background:transparent; border:none; outline:none; color:var(--tx); font-family:inherit; font-size:15px; font-weight:700; padding:4px 2px; border-bottom:1px solid transparent; }
+.sc-fname:focus{ border-bottom-color:var(--bl); }
+.sc-fhead-acts{ display:flex; align-items:center; gap:6px; flex:none; }
+.sc-steps{ display:flex; flex-direction:column; gap:8px; }
+.sc-step{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--s2); border:1px solid var(--b2); border-radius:11px; padding:9px 11px; transition:border-color .12s; }
+.sc-step:hover{ border-color:var(--b3); }
+.sc-step-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; }
+.sc-step-lb{ flex:1; min-width:120px; font-size:13px; font-weight:600; color:var(--tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sc-step-times{ display:flex; align-items:center; gap:8px; }
+.sc-time{ display:flex; align-items:center; gap:5px; background:var(--s1); border:1px solid var(--b2); border-radius:8px; padding:3px 9px; font-size:10px; color:var(--t3); font-weight:700; text-transform:uppercase; letter-spacing:.03em; cursor:text; }
+.sc-time:focus-within{ border-color:var(--bl); }
+.sc-time input{ width:40px; background:transparent; border:none; outline:none; color:var(--tx); font-family:inherit; font-size:12.5px; font-weight:700; text-align:right; padding:2px 0; }
+.sc-step-del{ flex:none; background:none; border:none; color:var(--rd); cursor:pointer; padding:5px; border-radius:7px; display:inline-flex; }
+.sc-step-del:hover{ background:var(--s3); }
+.sc-addstep{ margin-top:10px; }
+.sc-switch-row{ display:flex; align-items:center; gap:10px; margin-top:12px; cursor:pointer; font-size:12.5px; color:var(--t2); }
+.sc-switch{ position:relative; width:38px; height:21px; flex:none; }
+.sc-switch input{ opacity:0; width:0; height:0; position:absolute; margin:0; }
+.sc-switch-sl{ position:absolute; inset:0; background:var(--b3); border-radius:12px; transition:background .15s; cursor:pointer; }
+.sc-switch-sl::before{ content:''; position:absolute; width:15px; height:15px; border-radius:50%; background:#fff; top:3px; left:3px; transition:transform .15s; }
+.sc-switch input:checked + .sc-switch-sl{ background:var(--gr); }
+.sc-switch input:checked + .sc-switch-sl::before{ transform:translateX(17px); }
+.sc-fhint{ font-size:11px; color:var(--t3); line-height:1.5; margin:10px 0 0; }
+/* Gatilhos: cards */
+.sc-gcard{ display:flex; align-items:center; gap:12px; background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:12px 14px; margin-bottom:10px; }
+.sc-gic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(245,166,35,.14); color:#f5a623; }
+.sc-gbody{ flex:1; min-width:0; display:flex; gap:10px 14px; flex-wrap:wrap; align-items:center; }
+.sc-grow{ display:flex; align-items:center; gap:8px; flex:1; min-width:210px; }
+.sc-grow .muted{ font-size:11.5px; flex:none; }
+.sc-grow input,.sc-grow select{ flex:1; min-width:0; }
 .sc-md-detail{ flex:1; min-width:0; background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:18px 20px; min-height:340px; }
 .sc-detail-empty{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--t3); min-height:300px; text-align:center; }
 .sc-detail-empty p{ font-size:13px; max-width:240px; line-height:1.5; margin:0; }
@@ -3851,8 +3885,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.46.0';
-const APP_LAST_CHANGE = 'Sale Chat simulador: correcoes da revisao automatica. Funil usa token de execucao (fim das corridas/loops sobrepostos ao trocar de secao ou clicar rapido); o chat rola certo quando a imagem/video carrega; e a busca do simulador virou funcional (filtra os itens) em vez de decorativa.';
+const APP_VERSION = '2.47.0';
+const APP_LAST_CHANGE = 'Sale Chat: Funis e Gatilhos redesenhados no estilo dos cards do painel. Funil vira cartao com icone roxo, nome grande, passos com icone colorido por tipo, espera/simula em pill e um switch bonito. Gatilho vira cartao com icone ambar. Bem mais parecido com o visual do WhatsApp.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8134,6 +8168,12 @@ function scSecFunis(main){
   scRenderFunis();
 }
 function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0}; }
+function scItemMeta(id){
+  const m=(DB.salechat.messages||[]).find(x=>x.id===id); if(m) return {label:m.label||m.id,color:'#2563eb',icon:'message-circle'};
+  const d=(DB.salechat.media||[]).find(x=>x.id===id);
+  if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
+  return {label:id,color:'#8696a0',icon:'circle'};
+}
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
   const seqs=DB.salechat.sequences;
@@ -8141,35 +8181,37 @@ function scRenderFunis(){
   const opts=scAllItems();
   box.innerHTML=seqs.map((s,i)=>{
     const steps=(s.items||[]);
-    const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw); return `
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);padding:6px 8px">
+    const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw), me=scItemMeta(st.id); return `
+      <div class="sc-step">
         <div class="sc-ord"><button title="Subir" ${j===0?'disabled':''} onclick="scMoveFunilItem(${i},${j},-1)">${ico('chevron-up',{size:11})}</button><button title="Descer" ${j>=steps.length-1?'disabled':''} onclick="scMoveFunilItem(${i},${j},1)">${ico('chevron-down',{size:11})}</button></div>
-        <span style="flex:1;min-width:110px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(j+1)+'. '+scEscT(scItemLabel(st.id))}</span>
-        <span class="muted" style="font-size:10.5px" title="Tempo de espera antes de disparar este passo (intervalo)">espera</span>
-        <input class="info-val" type="number" min="0" max="86400" value="${st.delay}" style="width:58px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemDelay(${i},${j},this.value)" title="Segundos de espera antes de disparar este passo (intervalo entre um e outro)">
-        <span class="muted" style="font-size:10.5px">s</span>
-        <span class="muted" style="font-size:10.5px" title="Tempo mostrando gravando/digitando antes de enviar (0 = automatico)">simula</span>
-        <input class="info-val" type="number" min="0" max="120" value="${st.sim}" style="width:52px;font-size:11.5px;padding:4px 6px;text-align:right" oninput="scFunilItemSim(${i},${j},this.value)" title="Segundos mostrando gravando/digitando antes de enviar (0 = automatico pela duracao do audio)">
-        <span class="muted" style="font-size:10.5px">s</span>
-        <button onclick="scRemoveFunilItem(${i},${j})" class="btn btn-gh btn-xs sc-del" title="Remover passo" style="padding:3px 5px">${ico('x',{size:12})}</button>
-      </div>`; }).join('') : '<span class="muted" style="font-size:11.5px">Sem passos ainda, adiciona abaixo</span>';
+        <span class="sc-step-ic" style="background:${me.color}1f;color:${me.color}">${ico(me.icon,{size:14})}</span>
+        <span class="sc-step-lb">${(j+1)}. ${scEscT(me.label)}</span>
+        <div class="sc-step-times">
+          <label class="sc-time" title="Espera antes de disparar este passo (intervalo)">espera<input type="number" min="0" max="86400" value="${st.delay}" oninput="scFunilItemDelay(${i},${j},this.value)">s</label>
+          <label class="sc-time" title="Tempo de gravando/digitando antes de enviar (0 = automático)">simula<input type="number" min="0" max="120" value="${st.sim}" oninput="scFunilItemSim(${i},${j},this.value)">s</label>
+        </div>
+        <button class="sc-step-del" title="Remover passo" onclick="scRemoveFunilItem(${i},${j})">${ico('x',{size:14})}</button>
+      </div>`; }).join('') : '<div class="muted" style="font-size:11.5px;padding:3px 2px">Sem passos ainda, adiciona abaixo.</div>';
     return `
-    <div class="sc-item" style="flex-direction:column;align-items:stretch;gap:10px">
-      <div style="display:flex;gap:9px;align-items:center">
-        ${scOrderBtns('scMoveFunil',i,seqs.length)}
-        <input class="info-val" style="flex:1" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
-        <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:12})}</button>
+    <div class="sc-fcard">
+      <div class="sc-fcard-head">
+        <span class="sc-fic">${ico('repeat',{size:17})}</span>
+        <input class="sc-fname" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
+        <div class="sc-fhead-acts">
+          ${scOrderBtns('scMoveFunil',i,seqs.length)}
+          <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:13})}</button>
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px">${stepsHtml}</div>
-      <select class="info-val" style="max-width:360px;font-size:12px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
+      <div class="sc-steps">${stepsHtml}</div>
+      <select class="info-val sc-addstep" style="max-width:360px;font-size:12.5px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
         <option value="">+ adicionar passo na sequência...</option>
         ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
       </select>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer" title="Se o lead mandar mensagem no meio do funil, o disparo para na hora">
-        <input type="checkbox" ${s.stopOnReply?'checked':''} onchange="scFunilStopReply(${i},this.checked)" style="width:15px;height:15px;accent-color:var(--gr)">
-        <span class="muted">Parar o funil se o lead responder no meio</span>
+      <label class="sc-switch-row" title="Se o lead mandar mensagem no meio do funil, o disparo para na hora">
+        <span class="sc-switch"><input type="checkbox" ${s.stopOnReply?'checked':''} onchange="scFunilStopReply(${i},this.checked)"><span class="sc-switch-sl"></span></span>
+        Parar o funil se o lead responder no meio
       </label>
-      <p class="muted" style="font-size:11px;line-height:1.5;margin:0">Espera = intervalo antes de cada passo. Simula = tempo de gravando/digitando (0 = automatico). O painel tem uma previa do funil.</p>
+      <p class="sc-fhint">Espera = intervalo antes de cada passo. Simula = tempo de gravando/digitando (0 = automático). O simulador abaixo mostra o funil rodando.</p>
     </div>`;
   }).join('');
 }
@@ -8262,15 +8304,13 @@ function scRenderTriggers(){
   if(!trs.length){ box.innerHTML=scEmpty('Nenhum gatilho. Ex: cliente digita "preço" → sugere o áudio da oferta.'); return; }
   const opts=scAllItems();
   box.innerHTML=trs.map((t,i)=>`
-    <div class="sc-item" style="align-items:center;flex-wrap:wrap">
-      <span class="muted" style="font-size:11px">Se o cliente disser</span>
-      <input class="info-val" style="flex:1;min-width:120px" value="${scEscA(t.keyword)}" placeholder="preço, valor, quanto..." oninput="scEditTrigger(${i},'keyword',this.value)">
-      <span class="muted" style="font-size:11px">sugere</span>
-      <select class="info-val" style="flex:1;min-width:160px;font-size:12px" onchange="scEditTrigger(${i},'itemId',this.value)">
-        <option value="">— escolha o item —</option>
-        ${opts.map(o=>`<option value="${scEscA(o.id)}" ${t.itemId===o.id?'selected':''}>${scEscT(o.label)}</option>`).join('')}
-      </select>
-      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:12})}</button>
+    <div class="sc-gcard">
+      <span class="sc-gic">${ico('zap',{size:17})}</span>
+      <div class="sc-gbody">
+        <div class="sc-grow"><span class="muted">Se o cliente disser</span><input class="info-val" value="${scEscA(t.keyword)}" placeholder="preço, valor, quanto..." oninput="scEditTrigger(${i},'keyword',this.value)"></div>
+        <div class="sc-grow"><span class="muted">sugere</span><select class="info-val" style="font-size:12.5px" onchange="scEditTrigger(${i},'itemId',this.value)"><option value="">— escolha o item —</option>${opts.map(o=>`<option value="${scEscA(o.id)}" ${t.itemId===o.id?'selected':''}>${scEscT(o.label)}</option>`).join('')}</select></div>
+      </div>
+      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:13})}</button>
     </div>`).join('');
 }
 function scAddTrigger(){ DB.salechat.triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
