@@ -260,6 +260,15 @@
     (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []).forEach(function (it) { if (it && it.id) itemById[it.id] = it; });
   }
 
+  var PANEL_W = 440; // casa com a largura do painel no panel.css
+  // Ancora o painel na lateral: empurra o WhatsApp pra esquerda pra ele ficar AO LADO
+  // (nao por cima). Best-effort no container raiz (#app); se nao pegar, so fica na lateral.
+  function dockLayout() {
+    try { var app = document.getElementById('app'); if (app) { app.style.setProperty('width', 'calc(100vw - ' + PANEL_W + 'px)', 'important'); app.style.setProperty('min-width', '0', 'important'); } } catch (_) {}
+  }
+  function undockLayout() {
+    try { var app = document.getElementById('app'); if (app) { app.style.removeProperty('width'); app.style.removeProperty('min-width'); } } catch (_) {}
+  }
   function render() {
     buildIndex();
     var p = document.createElement('div'); p.id = 'zv-panel'; if (DARK) p.className = 'zv-dark';
@@ -273,13 +282,12 @@
     document.body.appendChild(p);
     els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
     var head = p.querySelector('#zv-head');
-    p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); };
+    p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); var col = p.classList.toggle('zv-collapsed'); if (col) undockLayout(); else dockLayout(); };
     var themeBtn = p.querySelector('#zv-theme');
     if (themeBtn) themeBtn.onclick = function (e) { e.stopPropagation(); setDark(!DARK); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
     renderRail(); renderContent();
-    restorePos(p);
-    makeDraggable(p, head);
+    dockLayout();
   }
 
   function setDark(v) {
@@ -598,6 +606,8 @@
 
   function poll() {
     window.__zvPollIv = setInterval(function () {
+      var pnl = document.getElementById('zv-panel');
+      if (pnl && !pnl.classList.contains('zv-collapsed')) dockLayout();
       if (!els.who) return;
       var a = activeInfo();
       if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('→ ' + a.name) : '→ abra uma conversa'); }
