@@ -2404,7 +2404,8 @@ function _resolvePresselSellers(p, chips, liveSet){
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
     const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // conectado em instP
-    const bkChip=mine.find(c=>c.bkp===true);                                        // conectado em instB
+    let bkChip=mine.find(c=>c.bkp===true);                                          // conectado em instB
+    if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
     const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
     const rChip=swap?emChip:bkChip, rInst=swap?instP:instB;                         // reserva = overflow

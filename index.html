@@ -8208,13 +8208,15 @@ function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
 function _setChipEmUso(c, on){
   if(on){
     c.em_uso=true;
+    c.bkp=false;   // não pode ser PRINCIPAL (em uso) E RESERVA ao mesmo tempo (o mesmo WhatsApp em 2 instâncias derruba uma)
     const emUsoId=getEmUsoStatusId(); if(emUsoId) c.wa_st=emUsoId;
     if(c.at){
       const dispId=getDisponivelStatusId();
+      const myN=String(c.num||'').replace(/\D/g,'').slice(-8);
       (DB.chips||[]).forEach(o=>{
-        if(o!==c && o.at===c.at && _isChipEmUso(o)){
-          o.em_uso=false;
-          if(dispId) o.wa_st=dispId;
+        if(o!==c && o.at===c.at){
+          if(_isChipEmUso(o)){ o.em_uso=false; if(dispId) o.wa_st=dispId; }
+          if(o.bkp && myN && String(o.num||'').replace(/\D/g,'').slice(-8)===myN){ o.bkp=false; }   // reserva com MESMO número do principal → limpa (evita conflito)
         }
       });
     }
@@ -9629,7 +9631,9 @@ function _atendenteBackupChip(atId){
 // v.swap troca só o PAPEL de quem recebe primeiro — cada número continua na SUA conexão (não perde QR).
 function _vendRoles(at, v){
   const em=_atendenteActiveChip(at.id);              // em_uso  → ax_<at>
-  const bk=_atendenteBackupChip(at.id);              // bkp     → ax_<at>_b
+  let bk=_atendenteBackupChip(at.id);                // bkp     → ax_<at>_b
+  // guarda: reserva NÃO pode ser o mesmo chip/número do principal (senão o mesmo WhatsApp em 2 instâncias briga e cai)
+  if(bk && em && (String(bk.id)===String(em.id) || _numMatchWa(bk.num, em.num))) bk=null;
   const A={chip:em, inst:'ax_'+at.id, slot:''};
   const B={chip:bk, inst:'ax_'+at.id+'_b', slot:'b'};
   const swap=!!(v && v.swap && em && bk);
@@ -9647,6 +9651,8 @@ function swapPresselVend(pid, atId){
 }
 // Define/limpa o número de RESERVA do vendedor (é global do vendedor, vale em todas as pressels)
 function setPresselVendBackup(pid, atId, chipId){
+  const em=_atendenteActiveChip(atId), chosen=(DB.chips||[]).find(c=>String(c.id)===String(chipId));
+  if(em && chosen && (String(chosen.id)===String(em.id) || _numMatchWa(chosen.num, em.num))){ toast('A reserva não pode ser o mesmo número do principal','err'); return; }
   (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp = (String(c.id)===String(chipId)); });
   const p=_ensurePressels().find(x=>x.id===pid); const v=p&&(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(v) delete v.reserva_on;   // ao escolher, reserva já nasce ligada
   renderPresselVendList(pid);
@@ -9688,7 +9694,8 @@ function _presselVendReserva(pid, at, v, roles){
     <input type="number" min="0" value="${cap||''}" placeholder="ilimitados" onclick="event.stopPropagation()" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" style="width:64px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
     <span>leads no principal, vira pra reserva</span></div>`;
   if(!rchip){
-    const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso'));
+    const _emN=(()=>{ const e=_atendenteActiveChip(at.id); return e?String(e.num||'').replace(/\D/g,'').slice(-8):''; })();
+    const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso') && !(_emN && String(c.num||'').replace(/\D/g,'').slice(-8)===_emN));   // exclui o número do principal (não pode ser reserva)
     const picker=others.length
       ? `<select onchange="if(this.value)setPresselVendBackup(${pid},'${at.id}',this.value)" onclick="event.stopPropagation()" style="flex:1;min-width:0;padding:8px 10px;border:1px solid var(--b2);border-radius:9px;background:var(--s1);color:var(--tx);font-size:12.5px;font-weight:600;cursor:pointer">
          <option value="">+ Escolher número de reserva…</option>${others.map(c=>`<option value="${c.id}">${_automEsc(c.num)}</option>`).join('')}</select>`
