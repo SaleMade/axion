@@ -1477,6 +1477,8 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-install a.btn{ flex:none; }
 @media(max-width:640px){ .sc-install{ flex-wrap:wrap; } .sc-install a.btn{ width:100%; justify-content:center; } }
 .sc-wrap{ display:flex; gap:16px; align-items:flex-start; }
+.sc-simwrap{ margin-top:24px; padding-top:22px; border-top:1px solid var(--b1); }
+.sc-simhead{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:2px; }
 .sc-nav{ flex:none; width:216px; display:flex; flex-direction:column; gap:5px; position:sticky; top:12px; }
 .sc-navitem{ display:flex; align-items:center; gap:12px; background:var(--s2); border:1px solid var(--b1); color:var(--t2); border-radius:12px; padding:14px 15px; cursor:pointer; font-family:inherit; font-size:14.5px; font-weight:600; text-align:left; transition:background .12s,color .12s,border-color .12s; }
 .sc-navitem:hover{ background:var(--s3); color:var(--tx); }
@@ -3846,8 +3848,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.44.0';
-const APP_LAST_CHANGE = 'Sale Chat: "Previa no zap" virou SIMULADOR funcional. Um chat de teste ao lado do painel: clica nos itens/funis e eles chegam no chat com a espera e o gravando/digitando de cada passo. Da pra rodar funil, simular resposta do lead, modo rapido e limpar. So simulacao, nao envia no WhatsApp.';
+const APP_VERSION = '2.45.0';
+const APP_LAST_CHANGE = 'Sale Chat: o simulador saiu do menu e virou uma secao FIXA embaixo, sempre visivel enquanto voce edita os itens. Atualiza sozinho quando muda os itens. Continua funcional (clica nos itens/funis e testa no chat sem enviar).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7706,7 +7708,6 @@ const SC_CHAMP=[
   {id:'s2',kind:'video',label:'Prova: Sr Jose',key:'m/mrckvvz5kbpjsb.mp4',mime:'video/mp4',caption:'Sr Jose, recebeu o tratamento tem 1 semana'},
 ];
 const SC_SECTIONS=[
-  {key:'preview',label:'Prévia no zap',icon:'smartphone'},
   {key:'messages',label:'Mensagens',icon:'message-circle'},
   {key:'audio',label:'Áudios',icon:'volume'},
   {key:'video',label:'Vídeos',icon:'video'},
@@ -7774,18 +7775,20 @@ function renderSaleChat(){
     <div class="sc-wrap">
       <div class="sc-nav" id="sc-nav"></div>
       <div class="sc-main" id="sc-main"></div>
-    </div>`;
+    </div>
+    <div class="sc-simwrap" id="sc-simwrap"></div>`;
   scRenderNav();
   scRenderSection();
+  scpRenderSim();
 }
 function scRenderNav(){
   const nav=$('sc-nav'); if(!nav) return;
-  nav.innerHTML=SC_SECTIONS.map(function(s){ const n=s.key==='preview'?'':`<span class="sc-navn">${scCount(s.key)}</span>`; return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:17})}<span class="sc-nlbl">${s.label}</span>${n}</button>`; }).join('');
+  nav.innerHTML=SC_SECTIONS.map(function(s){ return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:17})}<span class="sc-nlbl">${s.label}</span><span class="sc-navn">${scCount(s.key)}</span></button>`; }).join('');
+  if(typeof scpRefresh==='function') scpRefresh();
 }
 function scGoSection(k){ scSection=k; scRenderNav(); scRenderSection(); }
 function scRenderSection(){
   const main=$('sc-main'); if(!main) return;
-  if(scSection==='preview') return scSecPreview(main);
   if(scSection==='messages') return scSecMessages(main);
   if(scSection==='funis') return scSecFunis(main);
   if(scSection==='triggers') return scSecTriggers(main);
@@ -7805,15 +7808,16 @@ function scpFindItem(id){
   var d=(DB.salechat.media||[]).filter(o=>o.id===id)[0]; if(d) return {item:d,kind:d.kind};
   return null;
 }
-function scSecPreview(main){
+function scpRenderSim(){
+  const w=$('sc-simwrap'); if(!w) return;
   scpStop=true; scpRunning=false;
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('smartphone',{size:15})} Prévia / Simulador</div>
+  w.innerHTML=`<div class="sc-simhead"><div class="info-title">${ico('smartphone',{size:16})} Simulador · teste sem enviar</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <label class="scp-speed"><input type="checkbox" ${scpFast?'checked':''} onchange="scpFast=this.checked"> modo rápido</label>
       <button class="btn btn-gh btn-sm" onclick="scpSimReply()">Simular resposta</button>
       <button class="btn btn-gh btn-sm" onclick="scpClearChat()">Limpar conversa</button>
     </div></div>
-    <p class="sc-hint">Testa o funil aqui como uma conversa real: clica nos itens (e nos funis) e eles "chegam" no chat de teste, com a espera e o gravando/digitando de cada passo. Não envia nada no WhatsApp. Serve pra ensaiar antes.</p>
+    <p class="sc-hint" style="margin:2px 0 14px">Clica nos itens (e nos funis) do painel: eles chegam no chat de teste com a espera e o gravando/digitando de cada passo. É só ensaio, não envia nada no WhatsApp.</p>
     <div class="scp-sim">
       <div class="scp-chat">
         <div class="scp-chat-head"><span class="scp-ava">${ico('user',{size:16})}</span><div class="scp-chat-who"><b>Maria (lead)</b><span id="scp-status">online</span></div></div>
@@ -7822,7 +7826,8 @@ function scSecPreview(main){
       <div class="scp-stage2">${scpPanelHtml()}</div>
     </div>`;
 }
-function scpGo(t){ scpTab=t; const st=document.querySelector('.scp-stage2'); if(st) st.innerHTML=scpPanelHtml(); }
+function scpRefresh(){ const st=document.querySelector('.scp-stage2'); if(st) st.innerHTML=scpPanelHtml(); }
+function scpGo(t){ scpTab=t; scpRefresh(); }
 function scpSendBtn(c){ return `<span class="scp-sendbtn" style="background:${c}1a;color:${c}">${ico('play',{size:14})}</span>`; }
 function scpPanelHtml(){
   const tabs=[['itens','Itens','layout-grid'],['funis','Funis','repeat'],['agenda','Agenda','calendar'],['ajustes','Ajustes','settings'],['ajuda','Ajuda','info']];
@@ -7923,6 +7928,7 @@ function scRenderSectionMD(kind){
 }
 function scRenderCards(kind){
   const box=$('sc-cards'); if(!box) return;
+  if(typeof scpRefresh==='function') scpRefresh();
   const q=(($('sc-q')||{}).value||'').toLowerCase();
   const items=scItemsFor(kind).filter(it=>!q||String(it.label||'').toLowerCase().indexOf(q)!==-1);
   if(!items.length){ box.innerHTML='<div class="sc-empty" style="padding:22px 8px">'+(q?'Nada encontrado.':'Nada aqui ainda. Clica em "'+SC_KINDS[kind].add+'".')+'</div>'; return; }
