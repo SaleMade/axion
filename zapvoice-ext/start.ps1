@@ -22,16 +22,21 @@ if (-not $app) {
   Write-Host "Apps WhatsApp encontrados:"; $all | ForEach-Object { Write-Host " - $($_.Name)" }
   pause; exit 1
 }
-# Package family name (parte antes do '!') aparece na linha de comando do WebView2 desse app
+# Identificadores do app: pfn = familia (Name_Hash); pkgName = so o Name (distingue
+# normal x beta e aparece no caminho de TODOS os processos do app: host + WebView).
 $pfn = ($app.AppID -split '!')[0]
+$pkgName = ($pfn -split '_')[0]
 
 function Test-Port { try { Invoke-RestMethod ("http://127.0.0.1:$Port/json/version") -TimeoutSec 2 | Out-Null; return $true } catch { return $false } }
 function Set-DebugPort { [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', "--remote-debugging-port=$Port", 'User') }
+# Fecha o app POR COMPLETO (host + WebViews), pra o restart nao ficar na tela de erro (cacto).
 function Close-App {
   try {
-    Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
-      Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($pfn)) } |
-      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        ($_.CommandLine -and $_.CommandLine -match [regex]::Escape($pkgName)) -or
+        ($_.ExecutablePath -and $_.ExecutablePath -match [regex]::Escape($pkgName))
+      } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   } catch {}
 }
 function Open-App { Start-Process ("shell:AppsFolder\" + $app.AppID) }
@@ -39,8 +44,8 @@ function Ensure-Port {
   if (Test-Port) { return $true }
   Write-Host "Abrindo/reiniciando o $Label na porta $Port..."
   Set-DebugPort
-  Close-App; Start-Sleep -Milliseconds 1500; Open-App
-  for ($i = 0; $i -lt 40; $i++) { if (Test-Port) { return $true }; Start-Sleep -Milliseconds 1000 }
+  Close-App; Start-Sleep -Milliseconds 2500; Open-App
+  for ($i = 0; $i -lt 45; $i++) { if (Test-Port) { return $true }; Start-Sleep -Milliseconds 1000 }
   return (Test-Port)
 }
 
