@@ -1572,7 +1572,7 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-doc-link:hover{ text-decoration:underline; }
 .sc-wa{ background:var(--s2); border:1px solid var(--b1); border-radius:12px; padding:16px; background-image:radial-gradient(rgba(150,150,150,.10) 1px, transparent 1px); background-size:16px 16px; }
 .sc-wa-bubble{ max-width:82%; margin-left:auto; background:#0b6b5b; color:#eef6f4; border-radius:12px 12px 4px 12px; padding:8px 10px; box-shadow:0 1px 2px rgba(0,0,0,.25); }
-.sc-wa-media{ margin-bottom:6px; } .sc-wa-media img,.sc-wa-media video{ max-width:100%; border-radius:6px; display:block; } .sc-wa-media audio{ width:100%; height:38px; }
+.sc-wa-media{ margin-bottom:6px; } .sc-wa-media img,.sc-wa-media video{ max-width:320px; max-height:380px; width:auto; height:auto; border-radius:6px; display:block; background:#000; } .sc-wa-media audio{ width:260px; max-width:100%; height:38px; }
 .sc-wa-text{ font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
 .sc-wa-time{ display:block; text-align:right; font-size:9.5px; color:rgba(255,255,255,.6); margin-top:3px; }
 .sc-modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; }
@@ -3896,8 +3896,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.48.0';
-const APP_LAST_CHANGE = 'Sale Chat: o "+ adicionar passo na sequencia" do funil virou um menu com icone colorido por tipo em cada item (o select nativo do HTML nao aceita icone), entao da pra ver na hora se e audio/video/imagem/msg/doc sem ler o texto.';
+const APP_VERSION = '2.48.1';
+const APP_LAST_CHANGE = 'Sale Chat: previa de video/imagem no detalhe com tamanho limitado (max 320x380, estilo WhatsApp), pra nao ficar gigante na tela.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
