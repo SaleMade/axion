@@ -3902,7 +3902,7 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
 const APP_VERSION = '2.49.0';
-const APP_LAST_CHANGE = 'Nova pagina Base de Clientes (Operacional): todos os clientes unificados por CPF a partir da Payt - quem converteu, pagou ou desistiu, com historico, total pago, comissao, LTV e recompradores. Busca e filtros. Base pra cruzar dados e resolver a atribuicao por CPF.';
+const APP_LAST_CHANGE = 'Payt ao vivo (Fase 2): o backend le a comissao REAL do afiliado direto do postback (Payt V1) e grava a venda com dedup por transaction_id, tratando estorno/chargeback. Desligada a estimativa de 12 por cento do webhook do produtor. Receita real automatica a cada venda.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5677,7 +5677,7 @@ function renderHome(){
   const c=$('home-pg');if(!c)return;
   const dir=isDir(),afi=isAfi(),at=isAt(),gt=isGT();
 
-  const vendas=DB.vendas.filter(v=>inRange(v.data));
+  const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
   const gastos=DB.gastos.filter(g=>inRange(g.data));
   const myV=at?vendas.filter(v=>v.at===CUR.id)
             :afi?vendas.filter(v=>v.at===CUR.id||v.at!=='dir')
@@ -5874,7 +5874,7 @@ function rangeLabel(){
 function pageEvolucao(){return `<div class="page" id="evolucao-pg"></div>`}
 function renderEvolucao(){
   const c=$('evolucao-pg');if(!c)return;
-  const vendas=DB.vendas.filter(v=>inRange(v.data));
+  const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
   const gastos=DB.gastos.filter(g=>inRange(g.data));
   const rec=vendas.reduce((s,v)=>s+v.vl,0);
   const luc=vendas.reduce((s,v)=>s+v.lucro,0);
@@ -10734,7 +10734,7 @@ function pageRegioes(){
 ═══════════════════════════════════════════════════════ */
 // Cálculo financeiro central — usado pelas 3 páginas Financeiras
 function calcFin(){
-  const vendas=DB.vendas.filter(v=>inRange(v.data));
+  const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
   const gastos=DB.gastos.filter(g=>inRange(g.data));
   const invests=DB.invest.filter(i=>inRangeIso(i.dt));
   const aportes=(DB.aportes||[]).filter(a=>inRangeIso(a.dt));
@@ -13516,7 +13516,7 @@ function renderEquipe(){
 
   // Filtragem dos leads / vendas pelo período (filtro global)
   const leads=DB.leads.filter(l=>inRange(l.data));
-  const vendas=DB.vendas.filter(v=>inRange(v.data));
+  const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
 
   // Métricas globais
   const totMembros=TEAM.filter(t=>['atendente','cobrador','afiliado'].includes(t.role)).length;
