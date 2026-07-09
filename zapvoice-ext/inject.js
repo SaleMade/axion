@@ -13,8 +13,14 @@ const path = require('path');
 
 const PORT = process.env.ZV_PORT ? Number(process.env.ZV_PORT) : 9222;
 const MEDIA_PORT = process.env.ZV_MEDIA_PORT ? Number(process.env.ZV_MEDIA_PORT) : 9223;
-const CONFIG_URL = process.env.ZV_CONFIG_URL || 'https://axion-api.axion-dash.workers.dev/api/salechat';
-const MEDIA_BASE = CONFIG_URL.replace(/\/+$/, '') + '/media';
+const BASE_URL = process.env.ZV_CONFIG_URL || 'https://axion-api.axion-dash.workers.dev/api/salechat';
+// Perfil: vendedores (padrao) ou cobradores. Vem de perfil.txt na pasta (o instalador
+// de cobradores traz esse arquivo) ou da env ZV_PERFIL. Cada perfil tem config propria.
+let PERFIL = (process.env.ZV_PERFIL || '').trim().toLowerCase();
+if (!PERFIL) { try { PERFIL = require('fs').readFileSync(require('path').join(__dirname, 'perfil.txt'), 'utf8').trim().toLowerCase(); } catch (_) {} }
+if (PERFIL !== 'cobradores') PERFIL = 'vendedores';
+const CONFIG_URL = PERFIL === 'cobradores' ? (BASE_URL + '?perfil=cobradores') : BASE_URL;
+const MEDIA_BASE = BASE_URL.replace(/\/+$/, '') + '/media';
 const DIR = __dirname;
 
 // Baixa bytes de uma URL (mídia do R2 servida pelo Worker). Node não tem CSP.

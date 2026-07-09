@@ -1992,9 +1992,12 @@ async function handleWAConn(req, env) {
 async function handleSaleChatGet(req, env) {
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
-  const sc = state.salechat || {};
+  // Perfis independentes: vendedores (state.salechat) e cobradores (state.salechatCob).
+  const perfil = ((new URL(req.url)).searchParams.get('perfil') || 'vendedores');
+  const sc = ((perfil === 'cobradores' ? state.salechatCob : state.salechat) || {});
   return json({
     ok: true,
+    perfil: perfil === 'cobradores' ? 'cobradores' : 'vendedores',
     messages: Array.isArray(sc.messages) ? sc.messages : [],
     sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
     media: Array.isArray(sc.media) ? sc.media : [],

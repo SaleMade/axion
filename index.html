@@ -1468,6 +1468,11 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
 /* ─── Sale Chat: dashboard com seções laterais ─── */
+.sc-prof{ display:inline-flex; gap:4px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:4px; margin:2px 0 8px; }
+.sc-proftab{ display:inline-flex; align-items:center; gap:7px; padding:7px 15px; border:0; background:transparent; color:var(--t3); font-size:12.5px; font-weight:600; border-radius:9px; cursor:pointer; transition:.15s; }
+.sc-proftab:hover{ color:var(--t2); }
+.sc-proftab.on{ background:var(--bl); color:#fff; box-shadow:0 1px 3px rgba(0,0,0,.18); }
+.sc-proftab.on svg{ color:#fff; }
 .sc-install{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 13px; margin-bottom:16px; opacity:.9; }
 .sc-install:hover{ opacity:1; }
 .sc-install-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(19,194,115,.10); color:#13c273; }
@@ -3896,8 +3901,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.48.1';
-const APP_LAST_CHANGE = 'Sale Chat: previa de video/imagem no detalhe com tamanho limitado (max 320x380, estilo WhatsApp), pra nao ficar gigante na tela.';
+const APP_VERSION = '2.49.0';
+const APP_LAST_CHANGE = 'Sale Chat agora tem 2 perfis independentes: Vendedores e Cobradores. Cada um com suas mensagens, audios, videos, imagens, funis e gatilhos, e instalador proprio. Alterna no topo da pagina Sale Chat.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7744,7 +7749,7 @@ function pageSaleChat(){ return `<div class="page" id="salechat-pg"></div>`; }
 function scEscA(s){return String(s==null?'':s).replace(/"/g,'&quot;');}
 function scEscT(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 // ─── Funil campeao (audios/videos do Rafael): agora no R2 = editaveis na dash. ───
-// Semeados em DB.salechat.media com ids estaveis (f1..f9, s1/s2) pros funis apontarem.
+// Semeados em SC().media com ids estaveis (f1..f9, s1/s2) pros funis apontarem.
 const SC_CHAMP=[
   {id:'f1',kind:'audio',label:'F1 Abertura',key:'m/mrckutmlmks6pj.ogg',mime:'audio/ogg'},
   {id:'f2',kind:'audio',label:'F2 Garantia COD',key:'m/mrckuubd35yqe1.ogg',mime:'audio/ogg'},
@@ -7765,17 +7770,21 @@ const SC_SECTIONS=[
   {key:'triggers',label:'Gatilhos',icon:'zap'},
 ];
 var scSection='messages';
+// Perfis independentes: 'vend' (vendedores, DB.salechat) e 'cob' (cobradores, DB.salechatCob).
+var scProfile='vend'; try{ scProfile=(localStorage.getItem('sc_profile')==='cob')?'cob':'vend'; }catch(_){}
+function SC(){ var k=scProfile==='cob'?'salechatCob':'salechat'; if(!DB[k]||typeof DB[k]!=='object') DB[k]={}; return DB[k]; }
+function scSetProfile(p){ scProfile=(p==='cob')?'cob':'vend'; try{ localStorage.setItem('sc_profile',scProfile); }catch(_){}; scSection='messages'; scpTab='itens'; renderSaleChat(); }
 function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salechat/media/'+String(key||'').split('/').map(encodeURIComponent).join('/'); }
 function scAllItems(){
-  return (DB.salechat.messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
-    .concat((DB.salechat.media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
+  return (SC().messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
+    .concat((SC().media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
 }
 function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
 function scCount(key){
-  if(key==='messages') return (DB.salechat.messages||[]).length;
-  if(key==='funis') return (DB.salechat.sequences||[]).length;
-  if(key==='triggers') return (DB.salechat.triggers||[]).length;
-  return (DB.salechat.media||[]).filter(m=>m.kind===key).length;
+  if(key==='messages') return (SC().messages||[]).length;
+  if(key==='funis') return (SC().sequences||[]).length;
+  if(key==='triggers') return (SC().triggers||[]).length;
+  return (SC().media||[]).filter(m=>m.kind===key).length;
 }
 function scEmpty(t){ return '<div class="sc-empty">'+scEscT(t)+'</div>'; }
 function scArrMove(a,i,d){ const j=i+d; if(j<0||j>=a.length) return false; const t=a[i]; a[i]=a[j]; a[j]=t; return true; }
@@ -7785,40 +7794,48 @@ function scOrderBtns(cb,i,len){
     '<button title="Descer" '+(i>=len-1?'disabled':'')+' onclick="'+cb+'('+i+',1)">'+ico('chevron-down',{size:12})+'</button></div>';
 }
 function scSeedIfNew(){
-  var changed=false;
-  if(!DB.salechat.updated_at){
-    DB.salechat.messages=[
-      {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
-      {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
-      {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
-      {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
-    ];
-    DB.salechat.sequences=[
-      {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
-      {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
-    ];
+  var sc=SC(); var changed=false;
+  if(!sc.updated_at){
+    if(scProfile==='vend'){
+      sc.messages=[
+        {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
+        {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
+        {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
+        {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
+      ];
+      sc.sequences=[
+        {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
+        {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
+      ];
+    }
+    changed=true; // cobradores comeca vazio (o Diretor monta o roteiro deles)
+  }
+  if(scProfile==='vend' && !sc.champSeeded){
+    var have={}; (sc.media||[]).forEach(function(m){ have[m.id]=1; });
+    SC_CHAMP.forEach(function(c){ if(!have[c.id]) sc.media.push({id:c.id,kind:c.kind,label:c.label,key:c.key,mime:c.mime,caption:c.caption||'',champ:true}); });
+    sc.champSeeded=true;
     changed=true;
   }
-  if(!DB.salechat.champSeeded){
-    var have={}; (DB.salechat.media||[]).forEach(function(m){ have[m.id]=1; });
-    SC_CHAMP.forEach(function(c){ if(!have[c.id]) DB.salechat.media.push({id:c.id,kind:c.kind,label:c.label,key:c.key,mime:c.mime,caption:c.caption||'',champ:true}); });
-    DB.salechat.champSeeded=true;
-    changed=true;
-  }
-  if(changed){ DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); }
+  if(changed){ sc.updated_at=Math.floor(Date.now()/1000); persist(); }
 }
 function renderSaleChat(){
-  if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={};
-  ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(DB.salechat[k])) DB.salechat[k]=[]; });
+  const _sc=SC(); ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
   scSeedIfNew();
   const pg=$('salechat-pg'); if(!pg) return;
+  const isCob=scProfile==='cob';
+  const instZip=isCob?'/sale-chat-instalador-cobradores.zip':'/sale-chat-instalador.zip';
+  const who=isCob?'cobrador':'vendedor';
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <p class="sc-hint" style="max-width:920px;margin:-4px 0 14px;font-size:12.5px">Tudo que os atendentes disparam no WhatsApp com 1 clique. Escolhe uma seção à esquerda pra gerenciar. Salva sozinho e o painel de todos puxa.</p>
+    <div class="sc-prof">
+      <button class="sc-proftab ${!isCob?'on':''}" onclick="scSetProfile('vend')">${ico('users',{size:15})} Vendedores</button>
+      <button class="sc-proftab ${isCob?'on':''}" onclick="scSetProfile('cob')">${ico('banknote',{size:15})} Cobradores</button>
+    </div>
+    <p class="sc-hint" style="max-width:920px;margin:2px 0 14px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Salva sozinho e o painel deles puxa.</p>
     <div class="sc-install">
       <span class="sc-install-ic">${ico('download',{size:15})}</span>
-      <div class="sc-install-txt"><b>Instalador do vendedor</b><span>Baixa o .zip e manda pro vendedor rodar na máquina dele.</span></div>
-      <a class="btn btn-gh btn-sm" href="/sale-chat-instalador.zip" download="sale-chat-instalador.zip">${ico('download',{size:13})} Baixar .zip</a>
+      <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
+      <a class="btn btn-gh btn-sm" href="${instZip}" download>${ico('download',{size:13})} Baixar .zip</a>
     </div>
     <div class="sc-wrap">
       <div class="sc-nav" id="sc-nav"></div>
@@ -7845,15 +7862,15 @@ function scRenderSection(){
 // ─── Prévia/Simulador do painel do WhatsApp (usa os itens reais; funcional pra testar) ───
 var scpTab='itens', scpRunning=false, scpRunId=0, scpFast=false, scpQuery='';
 var SCP_SECTIONS=[
-  {label:'Mensagens',icon:'message-circle',color:'#2563eb',get:()=>DB.salechat.messages||[]},
+  {label:'Mensagens',icon:'message-circle',color:'#2563eb',get:()=>SC().messages||[]},
   {label:'Áudios do funil',icon:'volume',color:'#13c273',get:()=>scItemsFor('audio')},
   {label:'Vídeos',icon:'video',color:'#8e17f0',get:()=>scItemsFor('video')},
   {label:'Imagens',icon:'image',color:'#00bcf2',get:()=>scItemsFor('image')},
   {label:'Documentos',icon:'clipboard-list',color:'#f0810f',get:()=>scItemsFor('document')},
 ];
 function scpFindItem(id){
-  var m=(DB.salechat.messages||[]).filter(o=>o.id===id)[0]; if(m) return {item:m,kind:'text'};
-  var d=(DB.salechat.media||[]).filter(o=>o.id===id)[0]; if(d) return {item:d,kind:d.kind};
+  var m=(SC().messages||[]).filter(o=>o.id===id)[0]; if(m) return {item:m,kind:'text'};
+  var d=(SC().media||[]).filter(o=>o.id===id)[0]; if(d) return {item:d,kind:d.kind};
   return null;
 }
 function scpRenderSim(){
@@ -7899,7 +7916,7 @@ function scpPanelHtml(){
 }
 function scpContentHtml(){
   if(scpTab==='funis'){
-    const seqs=DB.salechat.sequences||[];
+    const seqs=SC().sequences||[];
     const inner=seqs.length?seqs.map((s,i)=>`<div class="scp-seq" onclick="scpRunFunil(${i})" title="Rodar (clica de novo pra parar)"><span class="scp-ic" style="background:#8e17f01a;color:#8e17f0">${ico('repeat',{size:15})}</span><span class="scp-lb">${scEscT(s.label||'')}</span>${scpSendBtn('#8e17f0')}</div>`).join(''):'<div class="scp-empty">Nenhum funil criado ainda.</div>';
     return `<div class="scp-ctop"><div class="scp-hdr">${ico('repeat',{size:15})} Funis</div></div><div class="scp-body"><div class="scp-list">${inner}</div></div>`;
   }
@@ -7942,7 +7959,7 @@ function scpSend(id){ const f=scpFindItem(id); if(!f) return; scpAppend(scpBubbl
 function scpIndicator(kind){ scpSetStatus(kind==='audio'?'gravando áudio...':(kind==='text'?'digitando...':'enviando...')); return scpAppend('<div class="scpb scpb-out scp-ind"><span></span><span></span><span></span></div>'); }
 async function scpRunFunil(i){
   if(scpRunning){ scpRunId++; scpRunning=false; scpSetStatus('online'); return; } // clicar de novo = parar
-  const seq=(DB.salechat.sequences||[])[i]; if(!seq) return;
+  const seq=(SC().sequences||[])[i]; if(!seq) return;
   const steps=(seq.items||[]).map(scStep).filter(s=>scpFindItem(s.id));
   if(!steps.length){ return; }
   const myRun=++scpRunId; scpRunning=true;
@@ -7979,9 +7996,9 @@ function scKindIcon(kind){ return kind==='messages'?'message-circle':scMediaIcon
 // Mesma paleta do painel: cada tipo tem sua cor (mensagem azul, audio verde, video roxo, imagem ciano, doc laranja)
 var SC_COLORS={messages:'#2563eb',audio:'#13c273',video:'#8e17f0',image:'#00bcf2',document:'#f0810f'};
 function scKindColor(kind){ return SC_COLORS[kind]||'#13c273'; }
-function scItemsFor(kind){ return kind==='messages'?(DB.salechat.messages||[]):(DB.salechat.media||[]).filter(m=>m.kind===kind); }
-function scFindMsg(id){ var a=DB.salechat.messages||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
-function scFindMedia(id){ var a=DB.salechat.media||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
+function scItemsFor(kind){ return kind==='messages'?(SC().messages||[]):(SC().media||[]).filter(m=>m.kind===kind); }
+function scFindMsg(id){ var a=SC().messages||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
+function scFindMedia(id){ var a=SC().media||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
 function scRenderSectionMD(kind){
   const main=$('sc-main'); if(!main) return;
   const cfg=SC_KINDS[kind];
@@ -8043,15 +8060,15 @@ function scDetailPreview(kind,it){
 }
 function scToggleFav(kind,id){ const it=scItemsFor(kind).filter(o=>o.id===id)[0]; if(it){ it.fav=!it.fav; scTouch(); scRenderCards(kind); if(scSel[kind]===id) scRenderDetail(kind); } }
 function scMoveItem(kind,id,dir){
-  if(kind==='messages'){ const f=scFindMsg(id); if(f&&scArrMove(DB.salechat.messages,f.idx,dir)){ scTouch(); scRenderCards(kind); } return; }
-  const arr=DB.salechat.media, idxs=[]; arr.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
+  if(kind==='messages'){ const f=scFindMsg(id); if(f&&scArrMove(SC().messages,f.idx,dir)){ scTouch(); scRenderCards(kind); } return; }
+  const arr=SC().media, idxs=[]; arr.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
   let pos=-1; for(let k=0;k<idxs.length;k++) if(arr[idxs[k]].id===id) pos=k;
   const b=pos+dir; if(pos<0||b<0||b>=idxs.length) return;
   const ia=idxs[pos], ib=idxs[b], t=arr[ia]; arr[ia]=arr[ib]; arr[ib]=t; scTouch(); scRenderCards(kind);
 }
 function scDeleteItem(kind,id){
-  if(kind==='messages'){ const f=scFindMsg(id); if(!f) return; if(!confirm('Excluir a mensagem "'+(f.item.label||'')+'"?')) return; DB.salechat.messages.splice(f.idx,1); }
-  else { const fm=scFindMedia(id); if(!fm) return; if(!confirm('Excluir "'+(fm.item.label||'')+'"?'+(fm.item.champ?' (item do funil campeão, some do painel de todos)':''))) return; scDeleteKey(fm.item.key); DB.salechat.media.splice(fm.idx,1); }
+  if(kind==='messages'){ const f=scFindMsg(id); if(!f) return; if(!confirm('Excluir a mensagem "'+(f.item.label||'')+'"?')) return; SC().messages.splice(f.idx,1); }
+  else { const fm=scFindMedia(id); if(!fm) return; if(!confirm('Excluir "'+(fm.item.label||'')+'"?'+(fm.item.champ?' (item do funil campeão, some do painel de todos)':''))) return; scDeleteKey(fm.item.key); SC().media.splice(fm.idx,1); }
   if(scSel[kind]===id) scSel[kind]=null;
   scTouch(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
 }
@@ -8118,7 +8135,7 @@ async function scGenPoster(item){
   }catch(e){}
 }
 async function scGenPostersForVideos(){
-  const vids=(DB.salechat.media||[]).filter(m=>m.kind==='video'&&!m.posterKey);
+  const vids=(SC().media||[]).filter(m=>m.kind==='video'&&!m.posterKey);
   for(const v of vids){ await scGenPoster(v); }
 }
 async function scModalSave(kind,id){
@@ -8127,7 +8144,7 @@ async function scModalSave(kind,id){
     if(!name){ scModalStatus('Dá um nome pra mensagem.'); return; }
     const text=($('sc-m-text')||{}).value||'';
     if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; } }
-    else { const nid='m'+Date.now().toString(36); DB.salechat.messages.push({id:nid,label:name,text:text}); scSel.messages=nid; }
+    else { const nid='m'+Date.now().toString(36); SC().messages.push({id:nid,label:name,text:text}); scSel.messages=nid; }
     scTouch(); scCloseModal(); scRenderCards('messages'); scRenderDetail('messages'); scRenderNav(); return;
   }
   const cap=($('sc-m-cap')||{}).value||'';
@@ -8147,14 +8164,14 @@ async function scModalSave(kind,id){
   const up=await scDoUpload(scModalFile); if(save) save.disabled=false;
   if(!up.ok){ scModalStatus(up.err); return; }
   const nid='md'+Date.now().toString(36);
-  DB.salechat.media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
+  SC().media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
   scSel[kind]=nid;
   scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
   if(kind==='video'){ const nm=scFindMedia(nid); if(nm) scGenPoster(nm.item); }
 }
 function scRenderMsgs(){
   const box=$('sc-list'); if(!box) return;
-  const msgs=DB.salechat.messages;
+  const msgs=SC().messages;
   if(!msgs.length){ box.innerHTML=scEmpty('Nenhuma mensagem. Clica em "+ Nova mensagem".'); return; }
   box.innerHTML=msgs.map((m,i)=>`
     <div class="sc-item">
@@ -8166,11 +8183,11 @@ function scRenderMsgs(){
       <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
     </div>`).join('');
 }
-function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); scTouch(); scRenderMsgs(); scRenderNav(); }
-function scDelMsg(i){ DB.salechat.messages.splice(i,1); scTouch(); scRenderMsgs(); scRenderNav(); }
-function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; scTouch(); } }
-function scMoveMsg(i,d){ if(scArrMove(DB.salechat.messages,i,d)){ scTouch(); scRenderMsgs(); } }
-function scTouch(){ DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); }
+function scAddMsg(){ SC().messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); scTouch(); scRenderMsgs(); scRenderNav(); }
+function scDelMsg(i){ SC().messages.splice(i,1); scTouch(); scRenderMsgs(); scRenderNav(); }
+function scEdit(i,f,v){ if(SC().messages[i]){ SC().messages[i][f]=v; scTouch(); } }
+function scMoveMsg(i,d){ if(scArrMove(SC().messages,i,d)){ scTouch(); scRenderMsgs(); } }
+function scTouch(){ SC().updated_at=Math.floor(Date.now()/1000); persist(); }
 // ─── Seção: Funis ───
 function scSecFunis(main){
   main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('repeat',{size:15})} Funis (sequências)</div><button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button></div>
@@ -8180,8 +8197,8 @@ function scSecFunis(main){
 }
 function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0}; }
 function scItemMeta(id){
-  const m=(DB.salechat.messages||[]).find(x=>x.id===id); if(m) return {label:m.label||m.id,color:'#2563eb',icon:'message-circle'};
-  const d=(DB.salechat.media||[]).find(x=>x.id===id);
+  const m=(SC().messages||[]).find(x=>x.id===id); if(m) return {label:m.label||m.id,color:'#2563eb',icon:'message-circle'};
+  const d=(SC().media||[]).find(x=>x.id===id);
   if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
   return {label:id,color:'#8696a0',icon:'circle'};
 }
@@ -8193,7 +8210,7 @@ function scAddDdRows(i,opts){
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
   scDdBind();
-  const seqs=DB.salechat.sequences;
+  const seqs=SC().sequences;
   if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
   const opts=scAllItems();
   box.innerHTML=seqs.map((s,i)=>{
@@ -8232,22 +8249,22 @@ function scRenderFunis(){
     </div>`;
   }).join('');
 }
-function scAddFunil(){ DB.salechat.sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
-function scDelFunil(i){ DB.salechat.sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
-function scFunilLabel(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].label=v; scTouch(); } }
-function scAddFunilItem(i,id){ const s=DB.salechat.sequences[i]; if(s){ s.items=s.items||[]; s.items.push({id:id,delay:3}); scTouch(); scRenderFunis(); } }
-function scRemoveFunilItem(i,j){ const s=DB.salechat.sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
-function scFunilItemDelay(i,j,v){ const s=DB.salechat.sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].delay=Math.max(0,parseInt(v,10)||0); scTouch(); } }
-function scFunilItemSim(i,j,v){ const s=DB.salechat.sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].sim=Math.max(0,parseInt(v,10)||0); scTouch(); } }
-function scFunilStopReply(i,v){ if(DB.salechat.sequences[i]){ DB.salechat.sequences[i].stopOnReply=!!v; scTouch(); } }
-function scMoveFunilItem(i,j,d){ const s=DB.salechat.sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
-function scMoveFunil(i,d){ if(scArrMove(DB.salechat.sequences,i,d)){ scTouch(); scRenderFunis(); } }
+function scAddFunil(){ SC().sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
+function scDelFunil(i){ SC().sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
+function scFunilLabel(i,v){ if(SC().sequences[i]){ SC().sequences[i].label=v; scTouch(); } }
+function scAddFunilItem(i,id){ const s=SC().sequences[i]; if(s){ s.items=s.items||[]; s.items.push({id:id,delay:3}); scTouch(); scRenderFunis(); } }
+function scRemoveFunilItem(i,j){ const s=SC().sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
+function scFunilItemDelay(i,j,v){ const s=SC().sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].delay=Math.max(0,parseInt(v,10)||0); scTouch(); } }
+function scFunilItemSim(i,j,v){ const s=SC().sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].sim=Math.max(0,parseInt(v,10)||0); scTouch(); } }
+function scFunilStopReply(i,v){ if(SC().sequences[i]){ SC().sequences[i].stopOnReply=!!v; scTouch(); } }
+function scMoveFunilItem(i,j,d){ const s=SC().sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
+function scMoveFunil(i,d){ if(scArrMove(SC().sequences,i,d)){ scTouch(); scRenderFunis(); } }
 // ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
 function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':'volume'; }
 function scSecMedia(main,kind){ scRenderSectionMD(kind); }
 function scRenderMediaKind(kind){
   const box=$('sc-list'); if(!box) return;
-  const all=DB.salechat.media;
+  const all=SC().media;
   const rows=all.map((m,i)=>({m:m,i:i})).filter(x=>x.m.kind===kind);
   if(!rows.length){ box.innerHTML=scEmpty('Nada aqui ainda. Sobe pelo "+ Adicionar".'); return; }
   box.innerHTML=rows.map((x,pos)=>{
@@ -8284,21 +8301,21 @@ async function scUploadMedia(file, el, kindHint){
     const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
     const d=await r.json().catch(()=>({}));
     if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); if(el)el.value=''; return; }
-    DB.salechat.media.push({id:'md'+Date.now().toString(36),kind:kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime,caption:''});
+    SC().media.push({id:'md'+Date.now().toString(36),kind:kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime,caption:''});
     scTouch(); scRenderMediaKind(kind); scRenderNav(); setScMediaStatus(file.name+' adicionado.');
   }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
   if(el) el.value='';
 }
-function scEditMediaIdx(i,f,v){ if(DB.salechat.media[i]){ DB.salechat.media[i][f]=v; scTouch(); } }
+function scEditMediaIdx(i,f,v){ if(SC().media[i]){ SC().media[i][f]=v; scTouch(); } }
 function scDelMediaIdx(i){
-  const m=DB.salechat.media[i]; if(!m) return;
+  const m=SC().media[i]; if(!m) return;
   if(m.champ && !confirm('Excluir "'+(m.label||'item')+'" do funil campeão? Ele some do painel de todos os atendentes.')) return;
   const base=apiUrl(), tok=apiToken();
   if(base&&tok&&m.key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+m.key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); }
-  DB.salechat.media.splice(i,1); scTouch(); scRenderMediaKind(m.kind); scRenderNav();
+  SC().media.splice(i,1); scTouch(); scRenderMediaKind(m.kind); scRenderNav();
 }
 function scMoveMedia(kind,pos,d){
-  const all=DB.salechat.media, idxs=[];
+  const all=SC().media, idxs=[];
   all.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
   const b=pos+d; if(b<0||b>=idxs.length) return;
   const ia=idxs[pos], ib=idxs[b], t=all[ia]; all[ia]=all[ib]; all[ib]=t;
@@ -8317,7 +8334,7 @@ function scSecTriggers(main){
 }
 function scRenderTriggers(){
   const box=$('sc-list'); if(!box) return;
-  const trs=DB.salechat.triggers;
+  const trs=SC().triggers;
   if(!trs.length){ box.innerHTML=scEmpty('Nenhum gatilho. Ex: cliente digita "preço" → sugere o áudio da oferta.'); return; }
   const opts=scAllItems();
   box.innerHTML=trs.map((t,i)=>`
@@ -8330,9 +8347,9 @@ function scRenderTriggers(){
       <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:13})}</button>
     </div>`).join('');
 }
-function scAddTrigger(){ DB.salechat.triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
-function scDelTrigger(i){ DB.salechat.triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
-function scEditTrigger(i,f,v){ if(DB.salechat.triggers[i]){ DB.salechat.triggers[i][f]=v; scTouch(); } }
+function scAddTrigger(){ SC().triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
+function scDelTrigger(i){ SC().triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
+function scEditTrigger(i,f,v){ if(SC().triggers[i]){ SC().triggers[i][f]=v; scTouch(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)
