@@ -19,14 +19,16 @@ Nao precisa instalar mais nada. O motor necessario e baixado sozinho na primeira
    - `start-beta.bat` -> pro **WhatsApp Beta**
 3. Na primeira vez, ele baixa o motor sozinho (uns 30MB, so uma vez) e abre o WhatsApp.
    Se aparecer aviso do Windows, clique em **Mais informacoes -> Executar assim mesmo**.
+   - Dica: se o WhatsApp ja estiver aberto, feche ele antes de rodar (evita erro).
+   - Se aparecer uma tela de erro no WhatsApp (um cacto, "unexpected error"), clique no
+     botao verde **Restart** que ele recarrega e o painel aparece. E normal na 1a vez.
 4. Em poucos segundos o painel do Sale Chat aparece na **lateral direita** do WhatsApp.
 5. Pronto: clique nos itens pra enviar no chat aberto. A setinha mostra a previa; o botao
    verde envia (e vira pausa pra cancelar).
 
 ## A janela que abre (importante)
 
-Ao rodar, abre uma janelinha (ela se **minimiza sozinha**). **Nao feche** ela: deixe
-minimizada. Enquanto ela roda:
+Ao rodar, abre uma janelinha. Voce pode **minimizar** ela, mas **nao feche**. Enquanto ela roda:
 - os **videos** conseguem ser enviados e pre-visualizados;
 - se o WhatsApp reiniciar, o painel **volta sozinho**;
 - as mudancas do funil entram **ao vivo**.

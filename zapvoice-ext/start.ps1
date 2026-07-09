@@ -70,16 +70,8 @@ function Ensure-Node {
   return 'node'
 }
 
-function Minimize-Self {
-  try {
-    Add-Type -Name W -Namespace SC -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c);' -ErrorAction SilentlyContinue
-    [SC.W]::ShowWindow([SC.W]::GetConsoleWindow(), 6) | Out-Null
-  } catch {}
-}
-
-# 1) porta de debug SO pra este app: seta a env var e reinicia este app pra pegar a porta
+# 1) porta de debug SO pra este app (o Ensure-Port reinicia o app se precisar)
 Set-DebugPort
-if (-not (Test-Port)) { Close-App; Start-Sleep -Milliseconds 1200 }
 
 # 0) auto-atualizacao (best-effort)
 try {
@@ -94,7 +86,6 @@ try {
 $nodeExe = Ensure-Node
 
 Write-Host "Sale Chat - $Label (porta $Port) rodando. Pode MINIMIZAR esta janela (nao feche)."
-Minimize-Self
 while ($true) {
   if (Ensure-Port) {
     Write-Host "Conectado ao $Label. Injetando o painel..."
