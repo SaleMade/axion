@@ -3839,6 +3839,7 @@ const ICONS = {
   'mail':           '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
   'tag':            '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
   'link':           '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  'refresh-cw':     '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   'book':           '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   'database':       '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
   'lock':           '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -5059,7 +5060,7 @@ function computeNav(){
       {g:'WhatsApp',items:[
         ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
         {id:'contingencia',lbl:'Contingência'},
-        ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
+        ...(dir?[{id:'pressels',lbl:'Pressels'},{id:'presselleads',lbl:'Leads'}]:[]),
       ]},
       // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
       ...(dir?[{g:'Automações',items:[
@@ -5183,6 +5184,7 @@ const PNAMES={
   salechat:"Automações / <b>Sale Chat</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
+  presselleads:"WhatsApp / <b>Leads</b>",
   automacoes:"Automações / <b>WhatsApp</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
@@ -5213,7 +5215,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5364,6 +5366,7 @@ function goPage(id){
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
   if(id==='pressels')    renderPressels();
+  if(id==='presselleads') renderPresselLeads();
   if(id==='automacoes')  renderAutomacoes();
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
@@ -5480,7 +5483,7 @@ function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
-    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,
+    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,presselleads:renderPresselLeads,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
@@ -9256,6 +9259,25 @@ function confirmRechargeId(id){
    cada atendente e pula automaticamente os banidos/restritos.
 ═══════════════════════════════════════════════════════ */
 function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
+// Painel de Leads (embute a pagina publica /pressels-total?view=leads do worker num iframe).
+// So diretor ve. Acompanhamento diario dos leads que caem nas roletas das pressels.
+function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
+function _presselLeadsSrc(){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'; }
+function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
+function renderPresselLeads(){
+  const wrap=$('presselleads-pg'); if(!wrap) return;
+  const src=_presselLeadsSrc();
+  if(wrap.getAttribute('data-src')===src && wrap.querySelector('iframe')) return;
+  wrap.setAttribute('data-src',src);
+  wrap.innerHTML=`
+    <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 14px">
+      <button class="btn btn-gh btn-sm" onclick="reloadPresselLeads()">${ico('refresh-cw',{size:14})} Atualizar</button>
+      <a class="btn btn-gh btn-sm" href="${src}" target="_blank" rel="noopener" style="text-decoration:none">${ico('arrow-up-right',{size:14})} Abrir em nova aba</a>
+    </div>
+    <iframe id="presselleads-frame" src="${src}" title="Leads das pressels" loading="lazy"
+      style="width:100%;height:calc(100vh - 160px);min-height:520px;border:1px solid var(--b2);border-radius:var(--rl);background:#fff;display:block"></iframe>`;
+}
 
 function _ensurePressels(){ if(!Array.isArray(DB.pressels)) DB.pressels=[]; return DB.pressels; }
 // Atendentes elegíveis pra roleta (com chip ou papel operacional)
