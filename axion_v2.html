@@ -1531,6 +1531,17 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-step-del{ flex:none; background:none; border:none; color:var(--rd); cursor:pointer; padding:5px; border-radius:7px; display:inline-flex; }
 .sc-step-del:hover{ background:var(--s3); }
 .sc-addstep{ margin-top:10px; }
+.sc-adddd{ margin-top:10px; position:relative; max-width:360px; }
+.sc-adddd-btn{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; background:var(--s2); border:1px solid var(--b2); border-radius:var(--r); padding:10px 12px; font-size:12.5px; color:var(--t2); font-weight:600; user-select:none; }
+.sc-adddd-btn::-webkit-details-marker{ display:none; }
+.sc-adddd-btn::marker{ content:''; }
+.sc-adddd-btn:hover{ border-color:var(--b3); color:var(--tx); }
+.sc-adddd[open] .sc-adddd-btn{ border-color:var(--bl); color:var(--tx); }
+.sc-adddd-menu{ position:absolute; z-index:60; left:0; right:0; top:calc(100% + 5px); max-height:300px; overflow-y:auto; background:var(--s2); border:1px solid var(--b1); border-radius:var(--r); box-shadow:0 14px 38px rgba(0,0,0,.45); padding:6px; display:flex; flex-direction:column; gap:2px; }
+.sc-dd-row{ display:flex; align-items:center; gap:10px; background:none; border:none; cursor:pointer; padding:8px 9px; border-radius:9px; text-align:left; font-family:inherit; color:var(--tx); width:100%; }
+.sc-dd-row:hover{ background:var(--s3); }
+.sc-dd-ic{ width:28px; height:28px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; }
+.sc-dd-lb{ flex:1; min-width:0; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .sc-switch-row{ display:flex; align-items:center; gap:10px; margin-top:12px; cursor:pointer; font-size:12.5px; color:var(--t2); }
 .sc-switch{ position:relative; width:38px; height:21px; flex:none; }
 .sc-switch input{ opacity:0; width:0; height:0; position:absolute; margin:0; }
@@ -3885,8 +3896,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.47.0';
-const APP_LAST_CHANGE = 'Sale Chat: Funis e Gatilhos redesenhados no estilo dos cards do painel. Funil vira cartao com icone roxo, nome grande, passos com icone colorido por tipo, espera/simula em pill e um switch bonito. Gatilho vira cartao com icone ambar. Bem mais parecido com o visual do WhatsApp.';
+const APP_VERSION = '2.48.0';
+const APP_LAST_CHANGE = 'Sale Chat: o "+ adicionar passo na sequencia" do funil virou um menu com icone colorido por tipo em cada item (o select nativo do HTML nao aceita icone), entao da pra ver na hora se e audio/video/imagem/msg/doc sem ler o texto.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5179,7 +5190,7 @@ function computeNav(){
       // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
       ...(dir?[{g:'Automações',items:[
         {id:'salechat',lbl:'Sale Chat',live:true},
-        {id:'automacoes',lbl:'WhatsApp'},
+        {id:'automacoes',lbl:'Robô de WhatsApp'},
       ]}]:[]),
       // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
@@ -5299,7 +5310,7 @@ const PNAMES={
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
   presselleads:"WhatsApp / <b>Leads</b>",
-  automacoes:"Automações / <b>WhatsApp</b>",
+  automacoes:"Automações / <b>Robô de WhatsApp</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
@@ -8174,8 +8185,14 @@ function scItemMeta(id){
   if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
   return {label:id,color:'#8696a0',icon:'circle'};
 }
+function scDdBind(){ if(window.__scDdBound) return; window.__scDdBound=true; document.addEventListener('click', function(e){ document.querySelectorAll('details.sc-adddd[open]').forEach(function(d){ if(!d.contains(e.target)) d.removeAttribute('open'); }); }); }
+function scAddDdRows(i,opts){
+  if(!opts.length) return '<div class="muted" style="padding:8px 10px;font-size:11.5px">Nenhum item ainda. Crie mensagens/áudios primeiro.</div>';
+  return opts.map(o=>{ const me=scItemMeta(o.id); return `<button type="button" class="sc-dd-row" onclick="scAddFunilItem(${i},'${o.id}')"><span class="sc-dd-ic" style="background:${me.color}1f;color:${me.color}">${ico(me.icon,{size:14})}</span><span class="sc-dd-lb">${scEscT(me.label)}</span></button>`; }).join('');
+}
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
+  scDdBind();
   const seqs=DB.salechat.sequences;
   if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
   const opts=scAllItems();
@@ -8203,10 +8220,10 @@ function scRenderFunis(){
         </div>
       </div>
       <div class="sc-steps">${stepsHtml}</div>
-      <select class="info-val sc-addstep" style="max-width:360px;font-size:12.5px" onchange="if(this.value){scAddFunilItem(${i},this.value);this.value='';}">
-        <option value="">+ adicionar passo na sequência...</option>
-        ${opts.map(o=>`<option value="${scEscA(o.id)}">${scEscT(o.label)}</option>`).join('')}
-      </select>
+      <details class="sc-adddd">
+        <summary class="sc-adddd-btn">${ico('plus',{size:14})} adicionar passo na sequência</summary>
+        <div class="sc-adddd-menu">${scAddDdRows(i,opts)}</div>
+      </details>
       <label class="sc-switch-row" title="Se o lead mandar mensagem no meio do funil, o disparo para na hora">
         <span class="sc-switch"><input type="checkbox" ${s.stopOnReply?'checked':''} onchange="scFunilStopReply(${i},this.checked)"><span class="sc-switch-sl"></span></span>
         Parar o funil se o lead responder no meio
@@ -10405,22 +10422,40 @@ function renderAutomacoes(){
   const on=DB.wa_autom_on;
   const bot=DB.wa_bot_on;
   wrap.innerHTML=`
-    <div class="ph"><div><h1>Automações <em>de WhatsApp</em></h1><p>Dispare mensagens automáticas por gatilho, pela conexão da Evolution</p></div></div>
+    <div class="ph"><div><h1>Robô <em>de WhatsApp</em></h1><p>Atendimento automático no WhatsApp: acolhe o lead na hora, tira dúvidas, pré-qualifica e passa pro humano fechar</p></div></div>
 
-    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px;border:1px solid ${bot?'var(--gr)':'var(--b1)'}">
+    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:12px;padding:16px;border:1px solid ${bot?'var(--gr)':'var(--b1)'}">
       <div style="flex:1">
-        <div style="font-size:13.5px;font-weight:700;color:var(--tx);display:inline-flex;align-items:center;gap:6px">${ico('message-circle',{size:15})} Robô de IA (pré-qualificação) ${bot?'<span style="color:var(--gr)">ligado</span>':'<span style="color:var(--am)">desligado</span>'}</div>
-        <div class="muted" style="font-size:12px;margin-top:2px">Atende e pré-qualifica os leads sozinho no WhatsApp. Em fase de teste: mesmo ligado, só responde os números liberados pra teste.</div>
+        <div style="font-size:14px;font-weight:700;color:var(--tx);display:inline-flex;align-items:center;gap:7px">${ico('message-circle',{size:16})} Robô de atendimento ${bot?'<span style="color:var(--gr)">ligado</span>':'<span style="color:var(--am)">desligado</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:3px">Atende e pré-qualifica os leads sozinho no WhatsApp. Em fase de teste: mesmo ligado, só responde os números liberados pra teste.</div>
       </div>
-      <div class="ax-sw ${bot?'on':''}" onclick="toggleBotMaster()" title="Ligar/desligar o robô de IA"></div>
+      <div class="ax-sw ${bot?'on':''}" onclick="toggleBotMaster()" title="Ligar/desligar o robô"></div>
     </div>
+
+    <div class="panel" style="margin-bottom:18px;padding:14px 16px">
+      <div style="font-size:12px;font-weight:700;color:var(--tx);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">O que o robô vai fazer <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">· base montada, o projeto completo entra depois</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">
+        ${[
+          {i:'shield',t:'Acolhe na hora',d:'Rede de segurança dos leads que chamam e ninguém responde na hora.'},
+          {i:'message-circle',t:'Tira dúvidas',d:'Explica o produto e contorna as objeções com a voz da operação.'},
+          {i:'check-circle',t:'Pré-qualifica',d:'Confirma interesse, pagamento na entrega e o valor antes de passar.'},
+          {i:'phone',t:'Passa pro humano',d:'Faz o handoff pro vendedor fechar na ligação. Não substitui o time.'},
+        ].map(p=>`<div style="background:var(--s3);border:1px solid var(--b1);border-radius:10px;padding:12px">
+          <div style="color:var(--bl2);margin-bottom:6px">${ico(p.i,{size:18})}</div>
+          <div style="font-size:12.5px;font-weight:700;color:var(--tx);margin-bottom:3px">${p.t}</div>
+          <div class="muted" style="font-size:11.5px;line-height:1.45">${p.d}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-top:0">Mensagens automáticas por gatilho</div>
 
     <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px">
       <div style="flex:1">
-        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Automações ${on?'<span style="color:var(--gr)">ativas</span>':'<span style="color:var(--am)">pausadas</span>'}</div>
-        <div class="muted" style="font-size:12px;margin-top:2px">Chave-mestra geral. Enquanto pausada, nenhuma regra dispara sozinha (você ainda pode testar manualmente).</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Disparos automáticos ${on?'<span style="color:var(--gr)">ativos</span>':'<span style="color:var(--am)">pausados</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Chave-mestra dos disparos por gatilho. Enquanto pausada, nenhuma regra dispara sozinha (você ainda pode testar manualmente).</div>
       </div>
-      <div class="ax-sw ${on?'on':''}" onclick="toggleAutomMaster()" title="Ligar/desligar todas as automações"></div>
+      <div class="ax-sw ${on?'on':''}" onclick="toggleAutomMaster()" title="Ligar/desligar todos os disparos"></div>
     </div>
 
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px">
