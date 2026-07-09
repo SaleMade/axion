@@ -3902,7 +3902,7 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
 const APP_VERSION = '2.49.0';
-const APP_LAST_CHANGE = 'Payt ao vivo (Fase 2): o backend le a comissao REAL do afiliado direto do postback (Payt V1) e grava a venda com dedup por transaction_id, tratando estorno/chargeback. Desligada a estimativa de 12 por cento do webhook do produtor. Receita real automatica a cada venda.';
+const APP_LAST_CHANGE = 'Atribuicao por vendedor ligada: ponte CPF->atendente no backend (a Evolution grava CPF do cliente + quem atendeu na venda concluida do WhatsApp; a Payt atribui a venda sozinha pelo CPF). Pagina Equipe corrigida: Comissao R$ agora e a fatia real do vendedor (percentual dele x comissao Payt), nao a comissao cheia. Vale daqui pra frente conforme a captura vira rotina.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -13547,7 +13547,9 @@ function renderEquipe(){
       pagoAnt,pagoEnt,
       totalPago:pagoAnt+pagoEnt,
       com_pct:t.com_pct||0,
-      comissaoR$:myV.reduce((s,v)=>s+v.comiss,0),
+      // Comissão a PAGAR pro vendedor = % dele × comissão real (Payt) das vendas dele.
+      // v.comiss já é a comissão líquida do afiliado; o vendedor recebe uma fatia (12%/14%).
+      comissaoR$:myV.reduce((s,v)=>s+v.comiss,0)*(Number(t.com_pct)||0)/100,
     };
   }).sort((a,b)=>b.totalPago-a.totalPago);
 
@@ -13578,8 +13580,8 @@ function renderEquipe(){
     </div>
     <div class="mc mc-re">
       <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">Total Comissões</div>
-      <div class="mc-val">${fmt(totComissoes)}</div>
+      <div class="mc-lbl">A pagar pra equipe</div>
+      <div class="mc-val">${fmt(stats.reduce((s,x)=>s+x.comissaoR$,0))}</div>
     </div>
   </div>
 

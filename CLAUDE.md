@@ -71,9 +71,11 @@ Reformulado estilo banco. Pontos-chave:
 
 ## 🚀 Deploy
 
-- Git push pra `main` → Cloudflare Pages publica em ~1 min
+- **Dash (frontend):** Git push pra `main` → Cloudflare Pages publica em ~1 min
 - 2 arquivos sempre sincronizados: `axion_v2.html` (canônico) e `index.html` (copy servido pelo Cloudflare)
 - `APP_VERSION` e `APP_LAST_CHANGE` no JS pra confirmação visual no Sobre
+- **Backend (worker):** deploy SEPARADO via `npx wrangler deploy` a partir de `backend/` (não é o git push). O worker é `axion-api` (endpoint dos postbacks Payt/fornecedor + custom domains area-glico.fun etc).
+  - ⚠️ **Pegadinha:** existe um `wrangler.jsonc` na RAIZ (worker "axion" SPA, acidental) que sequestra o deploy pro worker errado. Se voltar, renomeie pra `wrangler.jsonc.disabled` antes de deployar. SEMPRE confira que o output do deploy diz **"axion-api"** com os custom domains.
 
 ## 🧪 Preview local
 

@@ -855,6 +855,53 @@ function findLead(leads, data) {
   return null;
 }
 
+// ─── Ponte CPF → atendente ────────────────────────────────────────────────
+// A Evolution já sabe QUEM atendeu (a instância ax_<at>) no momento em que a
+// venda é marcada como concluída no WhatsApp; e a mensagem "Pedido Concluído"
+// traz o CPF do cliente. Gravamos CPF → atendente ali. Quando a venda cai na
+// Payt (que só tem o CPF), ela atribui sozinha ao vendedor certo.
+
+// instância Evolution (ax_<at> / ax_<at>_b) → id do atendente no time
+function _instToAt(instance) {
+  return String(instance || '').replace(/^ax_/, '').replace(/_b$/, '');
+}
+
+// Extrai um CPF (11 dígitos) de texto livre: tenta o rótulo "CPF:" primeiro,
+// depois o formato pontuado, e por fim qualquer sequência isolada de 11 dígitos.
+function extractCpf(text) {
+  const t = String(text || '');
+  let m = t.match(/CPF[^0-9]{0,8}(\d{3}\D?\d{3}\D?\d{3}\D?\d{2})/i);
+  if (!m) m = t.match(/\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b/);
+  if (!m) m = t.match(/(?:^|[^\d])(\d{11})(?:[^\d]|$)/);
+  const digits = m ? m[1].replace(/\D/g, '') : '';
+  return digits.length === 11 ? digits : '';
+}
+
+// Grava/atualiza a ligação CPF → atendente (chave: CPF só dígitos). Upsert idempotente.
+async function saveCpfAttrib(env, cpf, instance, name, phone) {
+  const c = norm(cpf);
+  if (c.length !== 11) return;
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS cpf_attrib (cpf TEXT PRIMARY KEY, at_id TEXT, instance TEXT, name TEXT, phone TEXT, updated_at INTEGER)').run();
+    await env.DB.prepare(
+      `INSERT INTO cpf_attrib (cpf, at_id, instance, name, phone, updated_at) VALUES (?,?,?,?,?,strftime('%s','now'))
+       ON CONFLICT(cpf) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance,
+         name=COALESCE(NULLIF(excluded.name,''), cpf_attrib.name), phone=excluded.phone, updated_at=excluded.updated_at`
+    ).bind(c, _instToAt(instance), String(instance || ''), String(name || ''), String(phone || '')).run();
+  } catch (_) {}
+}
+
+// Resolve o atendente responsável por um CPF. Retorna o id do time ou null.
+async function resolveAtByCpf(env, cpf) {
+  const c = norm(cpf);
+  if (c.length !== 11) return null;
+  try {
+    const row = await env.DB.prepare('SELECT at_id FROM cpf_attrib WHERE cpf = ?').bind(c).first();
+    const at = row && row.at_id ? String(row.at_id).trim() : '';
+    return at || null;
+  } catch (_) { return null; }
+}
+
 function todayBR() {
   const d = new Date();
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
@@ -941,6 +988,9 @@ async function handlePaytWebhook(req, env, urlToken) {
   let action_taken = '';
   let lead_id_result = null;
   let resolvedLead = null;
+  // Atribuição automática: quem atendeu esse CPF (capturado na venda concluída do WhatsApp).
+  // A Payt não sabe o atendente; a ponte CPF → atendente preenche isso.
+  const attribAt = data.cpf ? await resolveAtByCpf(env, data.cpf) : null;
 
   // Detecta modalidade COD baseado no payload
   const isCOD = data.modality && (
@@ -953,6 +1003,9 @@ async function handlePaytWebhook(req, env, urlToken) {
   if (lead) {
     // Aplica mapeamento sobre lead existente
     const prev = lead.col;
+    // Backfill do atendente: se o lead ainda não tem dono e a ponte CPF conhece quem
+    // atendeu, atribui agora (não sobrescreve atribuição manual já existente).
+    if (!lead.at && attribAt) lead.at = attribAt;
     if (mapping?.etapa) lead.col = mapping.etapa;
     if (mapping?.spg) lead.spg = mapping.spg;
     if (mapping?.action === 'tag' && mapping.tag) {
@@ -1002,7 +1055,7 @@ async function handlePaytWebhook(req, env, urlToken) {
       pgto: data.payment_method || '',
       spg: mapping?.spg || 'Pendente',
       mod: isCOD ? 'entrega' : 'antecipado',
-      at: null,
+      at: attribAt,
       col: mapping?.etapa || (isCOD ? 'A Enviar' : 'A Enviar'),
       obs: `Pedido PAYT ${data.order_id}${data.brand?` · brand: ${data.brand}`:''}${data.seller_name?` · seller: ${data.seller_name}`:''}`,
       link: '',
@@ -1052,7 +1105,7 @@ async function handlePaytWebhook(req, env, urlToken) {
         comiss: data.comiss_real,
         lucro: data.comiss_real,
         status: 'confirmado',
-        at: (resolvedLead && resolvedLead.at) || '',
+        at: (resolvedLead && resolvedLead.at) || attribAt || '',
         data: _ddmm,
         orig: 'PAYT',
       };
@@ -2161,6 +2214,10 @@ async function _waDetectSale(env, instance, data) {
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
   const msgId = (key && key.id) || null;
+  // Ponte de atribuição: grava CPF → atendente (a instância = quem atendeu).
+  // Feito ANTES do dedupe abaixo pra que reprocessos ainda mantenham o vínculo atualizado.
+  const cpfDetect = extractCpf(text);
+  if (cpfDetect) await saveCpfAttrib(env, cpfDetect, instance, name, phone);
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}
