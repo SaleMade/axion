@@ -9262,7 +9262,7 @@ function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
 // Painel de Leads (embute a página pública /pressels-total?view=leads do worker num iframe).
 // Só diretor vê. Acompanhamento diário dos leads que caem nas roletas das pressels.
 function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
-function _presselLeadsSrc(){ return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'; }
+function _presselLeadsSrc(){ const t=(typeof apiToken==='function'?apiToken():''); return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'+(t?('&k='+encodeURIComponent(t)):''); }
 function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
 function renderPresselLeads(){
   const wrap=$('presselleads-pg'); if(!wrap) return;
