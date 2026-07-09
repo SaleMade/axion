@@ -10303,7 +10303,12 @@ async function evoDisconnect(atId, slot){
   const at=getTeam(atId); const sfx=(slot==='b')?'_b':''; const inst='ax_'+atId+sfx;
   const lbl=(at?at.name:'esse número')+(slot==='b'?' (backup)':'');
   if(!confirm('Desconectar o WhatsApp de '+lbl+'? Ele sai da roleta até você reconectar.')) return;
-  try{ await api.waDisconnect(inst); toast('WhatsApp desconectado','ok'); if(typeof _waConnMap!=='undefined'){_waConnMap[inst]='close';} _loadWaConn(); }catch(_){ toast('Não consegui desconectar','err'); }
+  try{
+    const r=await api.waDisconnect(inst);
+    if(r && r.disconnected===false){ toast('A Evolution ainda mostra esse número conectado — espera uns segundos e tenta de novo','err'); if(typeof _waConnMap!=='undefined'){_waConnMap[inst]='open';} }
+    else { toast('WhatsApp desconectado','ok'); if(typeof _waConnMap!=='undefined'){_waConnMap[inst]='close';} }
+    _loadWaConn();
+  }catch(_){ toast('Não consegui desconectar','err'); }
 }
 async function evoConnect(atId, slot){
   const at=getTeam(atId);
