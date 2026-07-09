@@ -1,8 +1,8 @@
 # Sale Chat - lancador do modo APP (WhatsApp da Windows Store / WebView2)
-# Suporta os dois apps: WhatsApp normal e WhatsApp Beta, cada um numa porta propria,
-# pra nao se cruzarem. Use start-normal.bat ou start-beta.bat (ou este com -Mode).
-#   1) liga a porta de debug do WebView2 SO pro app escolhido
-#   2) garante o app aberto com a porta
+# Suporta os dois apps: WhatsApp normal e WhatsApp Beta (cada um e um pacote separado).
+#   1) liga a porta de debug do WebView2 em modo PORTA-LIVRE (cada app WebView2 pega a SUA
+#      porta; ninguem briga com Lenovo Vantage / Widgets / novo Outlook / etc.)
+#   2) DESCOBRE em qual porta o WhatsApp abriu o debug (pelo processo dele) e usa essa
 #   3) injeta o painel dentro do app e fica vigiando (reinjeta se reiniciar)
 param(
   [ValidateSet('normal','beta')][string]$Mode = 'normal',
@@ -10,7 +10,6 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-if ($Port -eq 0) { $Port = if ($Mode -eq 'beta') { 9223 } else { 9222 } }
 $Label = if ($Mode -eq 'beta') { 'WhatsApp Beta' } else { 'WhatsApp' }
 
 # Acha o app certo no Menu Iniciar (normal = sem "Beta"; beta = com "Beta")
@@ -27,8 +26,10 @@ if (-not $app) {
 $pfn = ($app.AppID -split '!')[0]
 $pkgName = ($pfn -split '_')[0]
 
-function Test-Port { try { Invoke-RestMethod ("http://127.0.0.1:$Port/json/version") -TimeoutSec 2 | Out-Null; return $true } catch { return $false } }
-function Set-DebugPort { [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', "--remote-debugging-port=$Port", 'User') }
+# Porta de debug do WebView2. Usamos "0" = porta livre automatica: assim CADA app WebView2
+# (WhatsApp, Lenovo Vantage, Widgets, novo Outlook...) pega uma porta PROPRIA e ninguem briga
+# pela mesma porta. Depois a gente DESCOBRE qual foi a porta do WhatsApp (pelo processo dele).
+function Set-DebugPort { [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=0', 'User') }
 # Fecha o app POR COMPLETO (host + WebViews), pra o restart nao ficar na tela de erro (cacto).
 function Close-App {
   try {
@@ -40,13 +41,52 @@ function Close-App {
   } catch {}
 }
 function Open-App { Start-Process ("shell:AppsFolder\" + $app.AppID) }
-function Ensure-Port {
-  if (Test-Port) { return $true }
-  Write-Host "Abrindo/reiniciando o $Label na porta $Port..."
-  Set-DebugPort
-  Close-App; Start-Sleep -Milliseconds 2500; Open-App
-  for ($i = 0; $i -lt 45; $i++) { if (Test-Port) { return $true }; Start-Sleep -Milliseconds 1000 }
-  return (Test-Port)
+
+# ── Descobrir a porta de debug DO WHATSAPP (seja ela qual for) ─────────────────
+# Em vez de forcar uma porta fixa e brigar com outros apps, a gente acha a porta que o
+# proprio WhatsApp abriu: olha os processos msedgewebview2 do PACOTE do WhatsApp e ve qual
+# porta TCP eles estao escutando. Assim, se o Lenovo Vantage (ou outro app WebView2) estiver
+# usando outra porta, tanto faz — cada um fica no seu canto.
+# Um endpoint CDP responde em /json/version com um campo "Browser".
+function Test-CdpPort([int]$p) {
+  try { $v = Invoke-RestMethod ("http://127.0.0.1:$p/json/version") -TimeoutSec 2; return [bool]$v.Browser } catch { return $false }
+}
+# Essa porta ja mostra uma pagina web.whatsapp.com?
+function Port-HasWhatsApp([int]$p) {
+  try { $t = Invoke-RestMethod ("http://127.0.0.1:$p/json") -TimeoutSec 2; return [bool]($t | Where-Object { $_.type -eq 'page' -and $_.url -match 'web\.whatsapp\.com' }) } catch { return $false }
+}
+# Acha a porta LISTEN aberta pelos processos msedgewebview2 do PACOTE do WhatsApp (0 = nao achou).
+function Find-WhatsAppPort {
+  $ports = @()
+  try {
+    $procs = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+             Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($pkgName)) }
+    foreach ($pr in $procs) {
+      $conns = Get-NetTCPConnection -State Listen -OwningProcess $pr.ProcessId -ErrorAction SilentlyContinue
+      foreach ($c in $conns) { if ($c.LocalAddress -match '^(127\.0\.0\.1|::1)$') { $ports += [int]$c.LocalPort } }
+    }
+  } catch {}
+  $ports = @($ports | Select-Object -Unique)
+  foreach ($p in $ports) { if (Port-HasWhatsApp $p) { return $p } }   # prioriza a que ja tem WhatsApp
+  foreach ($p in $ports) { if (Test-CdpPort $p)     { return $p } }   # senao, a que responde CDP
+  return 0
+}
+# Descobre a porta com um "grace period" (varias tentativas) pra NAO reagir a um blip
+# transitorio (ex: reload momentaneo) e acabar reiniciando um WhatsApp que estava OK.
+function Discover-Port {
+  for ($g = 0; $g -lt 4; $g++) { $p = Find-WhatsAppPort; if ($p -gt 0) { return $p }; Start-Sleep -Milliseconds 700 }
+  return 0
+}
+# O WhatsApp esta rodando (tem processo), mesmo que ainda SEM porta de debug?
+function Test-AppRunning {
+  try {
+    $any = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+           Where-Object {
+             ($_.CommandLine -and $_.CommandLine -match [regex]::Escape($pkgName)) -or
+             ($_.ExecutablePath -and $_.ExecutablePath -match [regex]::Escape($pkgName))
+           } | Select-Object -First 1
+    return [bool]$any
+  } catch { return $false }
 }
 
 # Motor (Node): usa o que vier na pasta 'node', senao o do sistema, senao baixa sozinho (1a vez).
@@ -75,7 +115,9 @@ function Ensure-Node {
   return 'node'
 }
 
-# 1) porta de debug SO pra este app (o Ensure-Port reinicia o app se precisar)
+# 1) liga a porta de debug em modo porta-livre (cada app WebView2 pega a sua). Obs: apps da
+#    Store so herdam esse ajuste depois de um LOGIN novo (reinicio do PC) — por isso, na 1a
+#    vez ou em maquina Lenovo (Vantage), pode precisar reiniciar o PC uma vez.
 Set-DebugPort
 
 # 0) auto-atualizacao (best-effort)
@@ -90,19 +132,37 @@ try {
 
 $nodeExe = Ensure-Node
 
-Write-Host "Sale Chat - $Label (porta $Port) rodando. Pode MINIMIZAR esta janela (nao feche)."
-# O injetor (inject.js) e paciente: espera ate ~1min o WhatsApp carregar e recupera a tela
-# de erro (cacto) sozinho. Aqui a gente so re-executa se ele encerrar (app fechou/recarregou).
-# Nao matamos o app em falha do injetor de proposito: o atendente pode estar no meio de uma
-# conversa, e derrubar o WhatsApp dele seria pior que a falha.
+Write-Host "Sale Chat - $Label rodando. Pode MINIMIZAR esta janela (nao feche)."
+# Estrategia SEGURA: a gente DESCOBRE a porta que o WhatsApp abriu (sem brigar por porta nem
+# matar outros apps). So mexemos no PROPRIO WhatsApp, e no maximo: abrir 1x se estiver fechado,
+# ou reiniciar 1x se estiver aberto SEM porta de debug. Nunca num loop de kill — o atendente
+# pode estar no meio de uma conversa. Depois de um inject bem-sucedido, a permissao de
+# reinicio volta (pra cobrir uma queda real la na frente).
+$openedOnce = $false
+$restartedOnce = $false
 while ($true) {
-  if (Ensure-Port) {
-    Write-Host "Porta $Port pronta. Injetando o painel do Sale Chat..."
-    $env:ZV_PORT = "$Port"
+  $waPort = Discover-Port
+  if ($waPort -le 0) {
+    if (-not (Test-AppRunning)) {
+      if (-not $openedOnce) { Write-Host "Abrindo o $Label..."; Open-App; $openedOnce = $true; Start-Sleep -Seconds 5 }
+      $waPort = Discover-Port
+    } elseif (-not $restartedOnce) {
+      # Rodando, mas sem porta de debug. Tenta UMA vez reabrir pra aplicar a porta de debug.
+      Write-Host "Preparando o $Label com a porta de debug (uma vez)..."
+      Set-DebugPort; Close-App; Start-Sleep -Milliseconds 2500; Open-App; $restartedOnce = $true
+      for ($i = 0; $i -lt 45; $i++) { $waPort = Find-WhatsAppPort; if ($waPort -gt 0) { break }; Start-Sleep -Milliseconds 1000 }
+    }
+  }
+  if ($waPort -gt 0) {
+    $openedOnce = $true; $restartedOnce = $false
+    Write-Host "WhatsApp achado na porta de debug $waPort. Injetando o painel do Sale Chat..."
+    $env:ZV_PORT = "$waPort"
     & $nodeExe (Join-Path $here 'inject.js')
     Write-Host "Injetor encerrou. Retomando em 3s..."
   } else {
-    Write-Host "Nao consegui abrir a porta do $Label. Abra o app e aguarde..."
+    Write-Host "Ainda sem a porta de debug do $Label. Deixe esta janela ABERTA que ela entra sozinha assim que der."
+    Write-Host "  Se acabou de instalar OU a maquina e Lenovo: REINICIE o PC uma vez (ativa o modo porta-livre)."
+    Write-Host "  Alternativa sem reiniciar: feche o app que conflita (ex: 'Lenovo Vantage') e o WhatsApp, e reabra o WhatsApp."
   }
   Start-Sleep -Seconds 3
 }
