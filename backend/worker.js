@@ -1639,9 +1639,22 @@ async function handleWAInstanceDisconnect(req, env) {
   let body = {}; try { body = await req.json(); } catch (_) {}
   const name = String(body?.instance || '').trim();
   if (!name) return err('instance obrigatório');
-  try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-  try { await env.DB.prepare("UPDATE wa_conn SET state='close', updated_at=strftime('%s','now') WHERE instance=?").bind(name).run(); } catch (_) {}
-  return json({ ok: true, instance: name, disconnected: true });
+  // desconecta DE VERDADE: logout → confere o estado REAL na Evolution → se ainda 'open', tenta de novo
+  // (o logout às vezes não pega de primeira quando o socket travou). Não grava 'close' otimista:
+  // se o número seguir conectado, a dash mostra a verdade em vez de mentir "desconectado".
+  const _state = async () => {
+    try { const live = await _evoInstances(env); if (!live) return null; const f = live.find(i => String(i.name) === name); return f ? { state: f.state, number: f.number || '' } : { state: 'close', number: '' }; }
+    catch (_) { return null; }
+  };
+  let st = null;
+  for (let i = 0; i < 2; i++) {
+    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+    st = await _state();
+    if (!st || st.state !== 'open') break;   // st null = Evolution fora do ar; não fica em loop
+  }
+  const open = !!(st && st.state === 'open');
+  try { await env.DB.prepare("UPDATE wa_conn SET state=?, number=?, updated_at=strftime('%s','now') WHERE instance=?").bind(open ? 'open' : 'close', open ? (st.number || '') : '', name).run(); } catch (_) {}
+  return json({ ok: !open, instance: name, disconnected: !open, state: open ? 'open' : 'close' });
 }
 
 // ─── Webhook de volta (Evolution → Worker) ───────────────────
@@ -2680,61 +2693,119 @@ async function handlePresselsTotalPage(req, env){
   }
   let leadsHtml='';
   if(view==='leads'){
-    let leads=[];
-    let saleSet=new Set();
-    try{
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
-      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
-      const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(dstart,dend).all();
-      leads=r.results||[];
-      // telefones que VIRARAM venda (do dia em diante) → pra pintar o número de verde
-      try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=?").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
-    }catch(_){}
     const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
     const pad=n=>String(n).padStart(2,'0');
     const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return 'número não registrado'; return n.startsWith('55')?n.slice(2):n; };
-    const isSale=ph=>!!(ph&&saleSet.has(ph));
     const waHref=ph=>{ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.length<=11) d='55'+d; return 'https://wa.me/'+d; };   // link direto pra conversa
-    const byAt={};
-    leads.forEach(l=>{ const at=String(l.inst||'').replace(/^ax_/,'').replace(/_b$/,'')||'?'; (byAt[at]=byAt[at]||[]).push(l); });
-    const ats=Object.keys(byAt).sort((a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b)));
+    const baseAt=inst=>String(inst||'').replace(/^ax_/,'').replace(/_b$/,'')||'?';   // instância -> id do vendedor (backup _b soma no mesmo)
+    const byName=(a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b));
     const cpBlocks=[];   // texto de cópia por vendedor (só no modo autenticado)
-    const cols=ats.length?ats.map(at=>{
-      const arr=byAt[at], name=nameMap[at]||'Vendedor';
-      const daP=arr.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
-      const byNum={}, numOrder=[];
-      arr.forEach(l=>{ const k=String(l.num||''); if(!(k in byNum)){ byNum[k]=[]; numOrder.push(k); } byNum[k].push(l); });
-      const cpLines=[name+' — leads de '+dLabel];   // conteúdo do botão "Copiar leads"
-      const numSecs=numOrder.map(k=>{
-        const ls=byNum[k];
-        const rows=ls.map(l=>{
-          const bt=new Date((Number(l.ts||0)-10800)*1000);
-          const hora=isNaN(bt)?'':`${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
-          const attr=!!(l.pid&&String(l.pid).trim()!=='');
-          const pnome=attr?(_pnm[String(l.pid)]||'pressel'):'sem rastreio';
-          const tag=attr?`<span style="font-size:9.5px;font-weight:700;color:#34d399">${_escHtml(_pnm[String(l.pid)]||'pressel')}${l.src==='fifo'?' ~':''}</span>`:`<span style="font-size:9.5px;color:#6b7a93">sem rastreio</span>`;
-          const ph=String(l.phone||'').replace(/\D/g,'');
-          const sale=isSale(ph);
-          if(full && ph){ cpLines.push(fmtNum(ph)+'  '+hora+'  '+pnome+(sale?'  VENDA':'')+'  '+waHref(ph)); }
-          const numCol=sale?'#34d399':(full?'#e2e8f0':'#cbd5e1');   // verde = virou venda
+    // Seletor Dia / Mês (fica dentro do painel de Leads)
+    const _perSeg=(lbl,pv)=>{ const act=per===pv; const qs=['view=leads',pv==='mes'?'per=mes':'',dayQ,kq].filter(Boolean).join('&'); return `<a href="?${qs}" style="padding:6px 15px;font-size:12px;font-weight:700;text-decoration:none;border-radius:7px;${act?'background:#2b6cb0;color:#fff':'color:#7aa2ff'}">${lbl}</a>`; };
+    const perToggle=`<div style="display:inline-flex;gap:2px;background:#141c2b;border:1px solid #2b6cb0;border-radius:9px;padding:3px;margin-bottom:14px">${_perSeg('Dia','dia')}${_perSeg('Mês','mes')}</div>`;
+    let bodyHtml='';
+    if(per==='mes'){
+      // ── VISÃO MENSAL: por vendedor, quantos leads chegaram, quantos compraram, quanto faturou + lista de compradores ──
+      const dP=day.split('-'); const mY=+dP[0], mM=+dP[1];
+      const monthStart=Math.floor(new Date(dP[0]+'-'+dP[1]+'-01T00:00:00-03:00').getTime()/1000);
+      const nY=mM===12?mY+1:mY, nM=mM===12?1:mM+1;
+      const monthEnd=Math.floor(new Date(nY+'-'+pad(nM)+'-01T00:00:00-03:00').getTime()/1000);
+      const mNames=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+      const monthLabel=mNames[mM-1]+'/'+mY;
+      let mLeads=[], mSales=[];
+      try{
+        try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
+        const lr=await env.DB.prepare("SELECT phone, inst, ts FROM wa_lead WHERE ts>=? AND ts<?").bind(monthStart,monthEnd).all();
+        mLeads=lr.results||[];
+        const sr=await env.DB.prepare("SELECT phone, instance, name, value, ts FROM wa_sales WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(monthStart,monthEnd).all();
+        mSales=sr.results||[];
+      }catch(_){}
+      const lByAt={}; mLeads.forEach(l=>{ const at=baseAt(l.inst); (lByAt[at]=lByAt[at]||[]).push(l); });
+      const sByAt={}; mSales.forEach(s=>{ const at=baseAt(s.instance); (sByAt[at]=sByAt[at]||[]).push(s); });
+      const allAts=Array.from(new Set(Object.keys(lByAt).concat(Object.keys(sByAt)))).filter(a=>a&&a!=='?').sort(byName);
+      if(lByAt['?']||sByAt['?']) allAts.push('?');   // sem instância vai pro fim
+      const totLeads=mLeads.length, totComp=mSales.length, totRev=mSales.reduce((a,s)=>a+(Number(s.value)||0),0);
+      const cardM=(lbl,val,color)=>`<div style="flex:1;min-width:120px;background:#141c2b;border:1px solid #233047;border-radius:12px;padding:12px 14px"><div style="font-size:10.5px;color:#8b9bb4">${lbl}</div><div style="font-size:22px;font-weight:800;color:${color};margin-top:2px">${val}</div></div>`;
+      const kpi=(l,v,c)=>`<div style="flex:1"><div style="font-size:10px;color:#8b9bb4">${l}</div><div style="font-size:15px;font-weight:800;color:${c}">${v}</div></div>`;
+      const summary=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:12px">Mês de <b style="color:#e6edf6;text-transform:capitalize">${monthLabel}</b>${full?' · <span style="color:#34d399">verde = comprador</span> · toque no número pra abrir a conversa':''}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${cardM('Leads no mês',totLeads,'#7aa2ff')}${cardM('Compradores',totComp,'#34d399')}${cardM('Faturou','R$ '+totRev,'#34d399')}</div>`;
+      const cols=allAts.length?allAts.map(at=>{
+        const name=nameMap[at]||(at==='?'?'Sem vendedor':'Vendedor');
+        const lc=(lByAt[at]||[]).length;
+        const sarr=(sByAt[at]||[]).slice().sort((a,b)=>(Number(a.ts||0)-Number(b.ts||0)));
+        const comp=sarr.length;
+        const rev=sarr.reduce((a,s)=>a+(Number(s.value)||0),0);
+        const pct=lc>0?Math.round(comp/lc*100)+'%':'—';
+        const cpLines=[name+' — compradores de '+monthLabel];
+        const buyerRows=sarr.length?sarr.map(s=>{
+          const bt=new Date((Number(s.ts||0)-10800)*1000);
+          const dh=isNaN(bt)?'':(pad(bt.getUTCDate())+'/'+pad(bt.getUTCMonth()+1)+' '+pad(bt.getUTCHours())+':'+pad(bt.getUTCMinutes()));
+          const ph=String(s.phone||'').replace(/\D/g,'');
+          const val=Number(s.value)||0;
+          if(full && ph){ cpLines.push(fmtNum(ph)+'  '+dh+(val>0?('  R$ '+val):'')+(s.name?('  '+s.name):'')+'  '+waHref(ph)); }
           const numCell=(full&&ph)
-            ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="flex:1;color:${numCol};font-weight:${sale?'700':'600'};font-family:ui-monospace,monospace;text-decoration:none;cursor:pointer">${_escHtml(fmtNum(ph))}</a>`
-            : `<span style="flex:1;color:${numCol};font-weight:${sale?'700':'400'};font-family:ui-monospace,monospace">${ph?('…'+ph.slice(-4)):''}</span>`;
-          return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums">${hora}</span>${numCell}${tag}</div>`;
+            ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="color:#34d399;font-weight:700;font-family:ui-monospace,monospace;text-decoration:none;cursor:pointer">${_escHtml(fmtNum(ph))}</a>`
+            : `<span style="color:#34d399;font-weight:700;font-family:ui-monospace,monospace">${ph?('…'+ph.slice(-4)):''}</span>`;
+          return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums;white-space:nowrap">${dh}</span><span style="flex:1;min-width:0">${numCell}${s.name?` <span style="color:#6b7a93">· ${_escHtml(String(s.name))}</span>`:''}</span>${val>0?`<span style="color:#34d399;font-weight:700;white-space:nowrap">R$ ${val}</span>`:''}</div>`;
+        }).join(''):`<div style="font-size:11.5px;color:#6b7a93;padding:8px 0">Nenhum comprador no mês.</div>`;
+        let cpBtn='';
+        if(full && sarr.length){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar compradores</button>`; }
+        return `<div style="flex:1;min-width:250px;max-width:360px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="display:flex;gap:8px;margin:10px 0 6px">${kpi('Leads',lc,'#7aa2ff')}${kpi('Compradores',comp,'#34d399')}${kpi('Conversão',pct,'#e6edf6')}${kpi('Faturou','R$ '+rev,'#34d399')}</div><div style="font-size:11px;color:#8b9bb4;font-weight:700;margin-top:6px;border-top:1px solid #233047;padding-top:8px">Compradores</div>${buyerRows}</div>`;
+      }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead nesse mês.</div>`;
+      bodyHtml=`${summary}<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>`;
+    } else {
+      // ── VISÃO DIÁRIA (padrão) ──
+      let leads=[];
+      let saleSet=new Set();
+      try{
+        try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
+        try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
+        const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
+        const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(dstart,dend).all();
+        leads=r.results||[];
+        // telefones que VIRARAM venda (do dia em diante) → pra pintar o número de verde
+        try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=?").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
+      }catch(_){}
+      const isSale=ph=>!!(ph&&saleSet.has(ph));
+      const byAt={};
+      leads.forEach(l=>{ const at=baseAt(l.inst); (byAt[at]=byAt[at]||[]).push(l); });
+      const ats=Object.keys(byAt).sort(byName);
+      const cols=ats.length?ats.map(at=>{
+        const arr=byAt[at], name=nameMap[at]||'Vendedor';
+        const daP=arr.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
+        const byNum={}, numOrder=[];
+        arr.forEach(l=>{ const k=String(l.num||''); if(!(k in byNum)){ byNum[k]=[]; numOrder.push(k); } byNum[k].push(l); });
+        const cpLines=[name+' — leads de '+dLabel];   // conteúdo do botão "Copiar leads"
+        const numSecs=numOrder.map(k=>{
+          const ls=byNum[k];
+          const rows=ls.map(l=>{
+            const bt=new Date((Number(l.ts||0)-10800)*1000);
+            const hora=isNaN(bt)?'':`${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
+            const attr=!!(l.pid&&String(l.pid).trim()!=='');
+            const pnome=attr?(_pnm[String(l.pid)]||'pressel'):'sem rastreio';
+            const tag=attr?`<span style="font-size:9.5px;font-weight:700;color:#34d399">${_escHtml(_pnm[String(l.pid)]||'pressel')}${l.src==='fifo'?' ~':''}</span>`:`<span style="font-size:9.5px;color:#6b7a93">sem rastreio</span>`;
+            const ph=String(l.phone||'').replace(/\D/g,'');
+            const sale=isSale(ph);
+            if(full && ph){ cpLines.push(fmtNum(ph)+'  '+hora+'  '+pnome+(sale?'  VENDA':'')+'  '+waHref(ph)); }
+            const numCol=sale?'#34d399':(full?'#e2e8f0':'#cbd5e1');   // verde = virou venda
+            const numCell=(full&&ph)
+              ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="flex:1;color:${numCol};font-weight:${sale?'700':'600'};font-family:ui-monospace,monospace;text-decoration:none;cursor:pointer">${_escHtml(fmtNum(ph))}</a>`
+              : `<span style="flex:1;color:${numCol};font-weight:${sale?'700':'400'};font-family:ui-monospace,monospace">${ph?('…'+ph.slice(-4)):''}</span>`;
+            return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums">${hora}</span>${numCell}${tag}</div>`;
+          }).join('');
+          return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#7aa2ff;font-weight:700"><span style="font-family:ui-monospace,monospace">${_escHtml(fmtNum(k))}</span><span style="background:#1a2942;padding:1px 8px;border-radius:9px">${ls.length}</span></div>${rows}</div>`;
         }).join('');
-        return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#7aa2ff;font-weight:700"><span style="font-family:ui-monospace,monospace">${_escHtml(fmtNum(k))}</span><span style="background:#1a2942;padding:1px 8px;border-radius:9px">${ls.length}</span></div>${rows}</div>`;
-      }).join('');
-      let cpBtn='';
-      if(full){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar leads</button>`; }
-      return `<div style="flex:1;min-width:230px;max-width:340px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="font-size:11.5px;color:#8b9bb4;margin-top:2px"><b style="color:#e6edf6">${arr.length}</b> leads · <b style="color:#34d399">${daP}</b> da pressel</div>${numSecs}</div>`;
-    }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead nesse dia.</div>`;
-    const totL=leads.length, totP=leads.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
+        let cpBtn='';
+        if(full){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar leads</button>`; }
+        return `<div style="flex:1;min-width:230px;max-width:340px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="font-size:11.5px;color:#8b9bb4;margin-top:2px"><b style="color:#e6edf6">${arr.length}</b> leads · <b style="color:#34d399">${daP}</b> da pressel</div>${numSecs}</div>`;
+      }).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead nesse dia.</div>`;
+      const totL=leads.length, totP=leads.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
+      const hint=full?' · <span style="color:#34d399">verde = virou venda</span> · toque no número pra abrir a conversa':'';
+      bodyHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${totL}</b> leads novos${totP<totL?` · <b style="color:#34d399">${totP}</b> da pressel · ${totL-totP} sem rastreio`:''}${hint}</div><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>`;
+    }
     const cpData=full?`<script>var _CP=${JSON.stringify(cpBlocks).replace(/</g,'\\u003c')};function cpSeller(i,b){try{navigator.clipboard.writeText(_CP[i]||'');var o=b.textContent;b.textContent='Copiado!';setTimeout(function(){b.textContent=o},1400);}catch(e){}}</script>`:'';
-    const hint=full?' · <span style="color:#34d399">verde = virou venda</span> · toque no número pra abrir a conversa':'';
-    leadsHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${totL}</b> leads novos${totP<totL?` · <b style="color:#34d399">${totP}</b> da pressel · ${totL-totP} sem rastreio`:''}${hint}</div><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>${cpData}`;
+    leadsHtml=`${perToggle}${bodyHtml}${cpData}`;
   }
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
