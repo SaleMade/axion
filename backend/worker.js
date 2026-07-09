@@ -2572,12 +2572,16 @@ async function handlePresselMetricsPage(req, env, id){
   const cvi=M.contatosVI[String(id)]||{}, vvi=M.vendasVI[String(id)]||{};
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
-  const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
-    const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
-    const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
-    const inst='ax_'+v.at, instB=inst+'_b';   // soma principal + backup no mesmo vendedor
-    return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:(Number(cvi[inst])||0)+(Number(cvi[instB])||0), vendas:(Number(vvi[inst])||0)+(Number(vvi[instB])||0)};
-  });
+  // vendedores da roleta AGORA + qualquer um com atividade hoje nesta pressel (mesmo já tirado da roleta) — o dado não some
+  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');
+  const vm={};
+  const ens=(at)=>{ at=String(at); if(at && !vm[at]){ const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; vm[at]={name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; } };
+  (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>ens(v.at));
+  Object.keys(cvi).forEach(inst=>ens(_vAt(inst)));
+  Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
+  Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
+  Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
+  const vend=Object.values(vm);
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
   const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor nessa pressel.</td></tr>`;
@@ -2605,18 +2609,23 @@ async function handlePresselsTotalPage(req, env){
   // puxar a carteira dos outros. JOIN em users barra até sessão antiga de usuário já arquivado/demitido.
   if(/^[a-f0-9]{64}$/i.test(kParam)){ try{ const _now=Math.floor(Date.now()/1000); const _s=await env.DB.prepare('SELECT u.role role, COALESCE(u.archived,0) arch FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?').bind(kParam,_now).first(); if(_s && Number(_s.arch)!==1 && ROLE_DIRETOR.includes(_s.role)) full=true; }catch(_){} }
   const kq=full?('k='+encodeURIComponent(kParam)):'';   // preserva o token na navegação interna (data/abas)
+  const _pq=new URL(req.url).searchParams.get('per')||''; const per=(_pq==='mes')?'mes':'dia';   // Leads: visão diária (default) ou mensal
   // Pula a agregação pesada de métricas quando a aba é Pedidos/Leads (elas não usam) — deixa a troca de aba MUITO mais rápida.
   const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');   // instância -> id do vendedor (backup _b soma no mesmo)
+  const _vendCell=(at)=>{ at=String(at); const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; return {name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; };
   const secs=pressels.map(p=>{
     const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
-    const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
-      const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
-      const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0];
-      const inst='ax_'+v.at;
-      return {name:nameMap[String(v.at)]||'Vendedor', num:active?active.num:'—', contatos:Number(cvi[inst])||0, vendas:Number(vvi[inst])||0};
-    });
+    // mostra os vendedores da roleta AGORA + qualquer um que teve contato/venda hoje (mesmo já tirado da roleta) — o dado não some
+    const vm={}; const ens=(at)=>{ at=String(at); if(at && !vm[at]) vm[at]=_vendCell(at); };
+    (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>ens(v.at));
+    Object.keys(cvi).forEach(inst=>ens(_vAt(inst)));
+    Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
+    Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
+    Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
+    const vend=Object.values(vm);
     return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
   });
   const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
@@ -2628,16 +2637,19 @@ async function handlePresselsTotalPage(req, env){
     const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:10px 8px"><div style="font-weight:600;font-size:13px">${_escHtml(v.name)}</div><div style="font-size:11.5px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;padding:10px 12px;color:#34d399">${v.contatos}</td><td style="text-align:center;padding:10px 12px">${v.vendas||'—'}</td><td style="text-align:center;padding:10px 12px;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:12px;text-align:center;color:#8b9bb4;font-size:12px">Sem vendedores.</td></tr>`;
     return `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:12px"><thead><tr><th style="text-align:left;color:#8b9bb4;font-size:11px;padding:5px 8px">Vendedor</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Iniciaram</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Vendas</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Conversão</th></tr></thead><tbody>${rows}</tbody></table>`;
   };
-  // vendedores ativos (únicos), somando contatos/vendas de TODAS as pressels
+  // vendedores (únicos) somando contatos/vendas de TODAS as pressels — inclui quem já saiu da roleta mas teve atividade hoje, o dado NÃO some
   const _vt={};
-  pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>{ const at=String(v.at); if(!_vt[at]){ const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; _vt[at]={name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; } }));
-  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // backup (_b) soma no vendedor
-  Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=String(inst).replace(/^ax_/,'').replace(/_b$/,''); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });   // TODAS as vendas do vendedor (com ou sem código)
+  const _vtEns=(at)=>{ at=String(at); if(at && !_vt[at]) _vt[at]=_vendCell(at); };
+  pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>_vtEns(v.at)));   // vendedores na roleta agora
+  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>_vtEns(_vAt(inst))));   // + quem teve contato hoje
+  Object.keys(M.vendasInst||{}).forEach(inst=>_vtEns(_vAt(inst)));   // + quem vendeu hoje (mesmo fora da roleta)
+  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // backup (_b) soma no vendedor
+  Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });   // TODAS as vendas do vendedor (com ou sem código)
   const totVend=Object.values(_vt);
   const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}${vendTable(totVend)}</div>`;
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
   const dayQ=isToday?'':('day='+day);
-  const _seg=(lbl,v)=>{ const active=view===v; const qs=[v!=='metricas'?('view='+v):'',dayQ,kq].filter(Boolean).join('&'); return `<a href="?${qs}" style="padding:7px 12px;font-size:12.5px;font-weight:700;text-decoration:none;border-radius:8px;${active?'background:#2b6cb0;color:#fff':'color:#7aa2ff'}">${lbl}</a>`; };
+  const _seg=(lbl,v)=>{ const active=view===v; const qs=[v!=='metricas'?('view='+v):'',dayQ,kq,(v==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&'); return `<a href="?${qs}" style="padding:7px 12px;font-size:12.5px;font-weight:700;text-decoration:none;border-radius:8px;${active?'background:#2b6cb0;color:#fff':'color:#7aa2ff'}">${lbl}</a>`; };
   const toggleBtn=`<div style="margin-left:auto;display:inline-flex;gap:2px;background:#141c2b;border:1px solid #2b6cb0;border-radius:10px;padding:3px">${_seg('Métricas','metricas')}${_seg('Pedidos','vendas')}${_seg('Leads','leads')}</div>`;
   let ordersHtml='';
   if(view==='vendas'){

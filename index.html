@@ -9882,14 +9882,17 @@ function openPresselMetrics(pid){
 function _ppmSetDay(d){ _ppmDay=d||''; _renderPresselMetrics(); }
 function _renderPresselMetrics(){
   const pid=_ppmPid, p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
-  const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
-    const at=getTeam(v.at), chip=_atendenteActiveChip(v.at);
-    return {at, chip, inst:'ax_'+v.at, contatos:0, vendas:0, valor:0};
-  }).filter(v=>v.at);
   api.presselMetrics(_ppmDay).then(r=>{
     const today=r.today||_ppmYmd(new Date()), day=r.day||today, isToday=(day===today);   // "hoje" vem do servidor (BRT), não do fuso do navegador
     const P=(r.pressels||{})[String(pid)]||{views:0,clicks:0,contatos:0,vendas:0,valor:0,vend:{}};
-    vend.forEach(v=>{ const d=(P.vend||{})[v.inst]||{}; v.contatos=Number(d.contatos)||0; v.vendas=Number(d.vendas)||0; });
+    // vendedores da roleta AGORA + qualquer um com atividade hoje (P.vend vem por instância, mesmo já tirado da roleta) — o dado não some
+    const ats=[], seen={}, addAt=(a)=>{ a=String(a||''); if(a && !seen[a]){ seen[a]=1; ats.push(a); } };
+    (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>addAt(v.at));
+    Object.keys(P.vend||{}).forEach(inst=>addAt(String(inst).replace(/^ax_/,'')));
+    const vend=ats.map(atId=>{
+      const at=getTeam(atId)||{name:'Vendedor'}, chip=_atendenteActiveChip(atId), d=(P.vend||{})['ax_'+atId]||{};
+      return {at, chip, contatos:Number(d.contatos)||0, vendas:Number(d.vendas)||0};
+    });
     const totC=Number(P.contatos)||0, totV=Number(P.vendas)||0, totVal=Number(P.valor)||0;
     const views=Number(P.views)||0, clicks=Number(P.clicks)||0;
     const card=(lbl,val,color,sub)=>`<div style="flex:1;min-width:118px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:11px;color:var(--t3)">${lbl}</div><div style="font-size:24px;font-weight:800;color:${color||'var(--tx)'};margin-top:3px">${val}</div>${sub?`<div style="font-size:10.5px;color:var(--t3);margin-top:2px">${sub}</div>`:''}</div>`;

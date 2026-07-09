@@ -1467,209 +1467,6 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .cfg-h p{font-size:13px;color:var(--t3);margin:0}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
-/* ─── Sale Chat: dashboard com seções laterais ─── */
-.sc-prof{ display:inline-flex; gap:4px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:4px; margin:2px 0 8px; }
-.sc-proftab{ display:inline-flex; align-items:center; gap:7px; padding:7px 15px; border:0; background:transparent; color:var(--t3); font-size:12.5px; font-weight:600; border-radius:9px; cursor:pointer; transition:.15s; }
-.sc-proftab:hover{ color:var(--t2); }
-.sc-proftab.on{ background:var(--bl); color:#fff; box-shadow:0 1px 3px rgba(0,0,0,.18); }
-.sc-proftab.on svg{ color:#fff; }
-.sc-install{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 13px; margin-bottom:16px; opacity:.9; }
-.sc-install:hover{ opacity:1; }
-.sc-install-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(19,194,115,.10); color:#13c273; }
-.sc-install-txt{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
-.sc-install-txt b{ font-size:12.5px; color:var(--t2); font-weight:700; }
-.sc-install-txt span{ font-size:11px; color:var(--t3); line-height:1.45; }
-.sc-install a.btn{ flex:none; }
-@media(max-width:640px){ .sc-install{ flex-wrap:wrap; } .sc-install a.btn{ width:100%; justify-content:center; } }
-.sc-wrap{ display:flex; gap:16px; align-items:flex-start; }
-.sc-simwrap{ margin-top:24px; padding-top:22px; border-top:1px solid var(--b1); }
-.sc-simhead{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:2px; }
-.sc-nav{ flex:none; width:216px; display:flex; flex-direction:column; gap:5px; position:sticky; top:12px; }
-.sc-navitem{ display:flex; align-items:center; gap:12px; background:var(--s2); border:1px solid var(--b1); color:var(--t2); border-radius:12px; padding:14px 15px; cursor:pointer; font-family:inherit; font-size:14.5px; font-weight:600; text-align:left; transition:background .12s,color .12s,border-color .12s; }
-.sc-navitem:hover{ background:var(--s3); color:var(--tx); }
-.sc-navitem.on{ background:var(--bld); color:var(--bl2); border-color:var(--bl); font-weight:700; }
-.sc-navitem .sc-nlbl{ flex:1; }
-.sc-navn{ font-size:11.5px; background:var(--s3); color:var(--t3); border-radius:10px; padding:2px 9px; min-width:24px; text-align:center; font-weight:700; }
-.sc-navitem.on .sc-navn{ background:var(--bl); color:#fff; }
-.sc-main{ flex:1; min-width:0; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rl); padding:18px 20px; }
-.sc-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
-.sc-item{ display:flex; gap:10px; align-items:flex-start; border:1px solid var(--b2); border-radius:var(--r); padding:11px 12px; margin-bottom:10px; background:var(--s1); }
-.sc-ord{ display:flex; flex-direction:column; gap:2px; flex:none; padding-top:2px; }
-.sc-ord button{ background:var(--s3); border:none; color:var(--t3); border-radius:5px; width:22px; height:18px; cursor:pointer; font-size:10px; line-height:1; }
-.sc-ord button:hover:not(:disabled){ color:var(--tx); background:var(--s4); }
-.sc-ord button:disabled{ opacity:.25; cursor:default; }
-.sc-del{ color:var(--rd); flex:none; }
-.sc-empty{ color:var(--t3); text-align:center; padding:26px 8px; font-size:12.5px; line-height:1.5; }
-.sc-hint{ color:var(--t3); font-size:11.5px; line-height:1.5; margin:0 0 14px; }
-@media(max-width:860px){ .sc-wrap{ flex-direction:column; } .sc-nav{ width:100%; flex-direction:row; flex-wrap:wrap; position:static; } .sc-navitem{ flex:1; min-width:130px; } }
-/* ─── Sale Chat: mestre-detalhe (lista de cards + painel de detalhe) ─── */
-.sc-md{ display:flex; gap:16px; align-items:flex-start; margin-top:12px; }
-.sc-md-list{ flex:none; width:300px; display:flex; flex-direction:column; gap:10px; }
-.sc-search input{ width:100%; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 12px; color:var(--tx); font-family:inherit; font-size:12.5px; outline:none; }
-.sc-search input:focus{ border-color:var(--bl); }
-.sc-cards{ display:flex; flex-direction:column; gap:8px; max-height:56vh; overflow-y:auto; padding-right:2px; }
-.sc-card{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:11px 12px; cursor:pointer; transition:border-color .12s, box-shadow .12s, background .12s; }
-.sc-card:hover{ border-color:#13c273; box-shadow:0 0 0 1.5px rgba(19,194,115,.4) inset; }
-.sc-card.on{ border-color:#13c273; box-shadow:0 0 0 1.5px #13c273 inset; background:rgba(19,194,115,.08); }
-.sc-card-ic{ width:34px; height:34px; border-radius:9px; flex:none; display:flex; align-items:center; justify-content:center; }
-.sc-card-name{ flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.sc-badge{ font-size:9px; background:var(--bld); color:var(--bl2); border-radius:5px; padding:2px 6px; flex:none; text-transform:uppercase; letter-spacing:.02em; }
-.sc-cbtn{ flex:none; background:none; border:none; color:var(--t3); cursor:pointer; padding:4px; border-radius:6px; display:inline-flex; }
-.sc-cbtn:hover{ color:var(--tx); background:var(--s4); }
-.sc-cbtn.fav{ color:#f5b60a; }
-/* Funis: cards bonitos */
-.sc-fcard{ background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:14px 16px; margin-bottom:14px; }
-.sc-fcard-head{ display:flex; align-items:center; gap:11px; margin-bottom:12px; }
-.sc-fic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(142,23,240,.14); color:#8e17f0; }
-.sc-fname{ flex:1; min-width:0; background:transparent; border:none; outline:none; color:var(--tx); font-family:inherit; font-size:15px; font-weight:700; padding:4px 2px; border-bottom:1px solid transparent; }
-.sc-fname:focus{ border-bottom-color:var(--bl); }
-.sc-fhead-acts{ display:flex; align-items:center; gap:6px; flex:none; }
-.sc-steps{ display:flex; flex-direction:column; gap:8px; }
-.sc-step{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--s2); border:1px solid var(--b2); border-radius:11px; padding:9px 11px; transition:border-color .12s; }
-.sc-step:hover{ border-color:var(--b3); }
-.sc-step-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; }
-.sc-step-lb{ flex:1; min-width:120px; font-size:13px; font-weight:600; color:var(--tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.sc-step-times{ display:flex; align-items:center; gap:8px; }
-.sc-time{ display:flex; align-items:center; gap:5px; background:var(--s1); border:1px solid var(--b2); border-radius:8px; padding:3px 9px; font-size:10px; color:var(--t3); font-weight:700; text-transform:uppercase; letter-spacing:.03em; cursor:text; }
-.sc-time:focus-within{ border-color:var(--bl); }
-.sc-time input{ width:40px; background:transparent; border:none; outline:none; color:var(--tx); font-family:inherit; font-size:12.5px; font-weight:700; text-align:right; padding:2px 0; }
-.sc-step-del{ flex:none; background:none; border:none; color:var(--rd); cursor:pointer; padding:5px; border-radius:7px; display:inline-flex; }
-.sc-step-del:hover{ background:var(--s3); }
-.sc-addstep{ margin-top:10px; }
-.sc-adddd{ margin-top:10px; position:relative; max-width:360px; }
-.sc-adddd-btn{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; background:var(--s2); border:1px solid var(--b2); border-radius:var(--r); padding:10px 12px; font-size:12.5px; color:var(--t2); font-weight:600; user-select:none; }
-.sc-adddd-btn::-webkit-details-marker{ display:none; }
-.sc-adddd-btn::marker{ content:''; }
-.sc-adddd-btn:hover{ border-color:var(--b3); color:var(--tx); }
-.sc-adddd[open] .sc-adddd-btn{ border-color:var(--bl); color:var(--tx); }
-.sc-adddd-menu{ position:absolute; z-index:60; left:0; right:0; top:calc(100% + 5px); max-height:300px; overflow-y:auto; background:var(--s2); border:1px solid var(--b1); border-radius:var(--r); box-shadow:0 14px 38px rgba(0,0,0,.45); padding:6px; display:flex; flex-direction:column; gap:2px; }
-.sc-dd-row{ display:flex; align-items:center; gap:10px; background:none; border:none; cursor:pointer; padding:8px 9px; border-radius:9px; text-align:left; font-family:inherit; color:var(--tx); width:100%; }
-.sc-dd-row:hover{ background:var(--s3); }
-.sc-dd-ic{ width:28px; height:28px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; }
-.sc-dd-lb{ flex:1; min-width:0; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.sc-switch-row{ display:flex; align-items:center; gap:10px; margin-top:12px; cursor:pointer; font-size:12.5px; color:var(--t2); }
-.sc-switch{ position:relative; width:38px; height:21px; flex:none; }
-.sc-switch input{ opacity:0; width:0; height:0; position:absolute; margin:0; }
-.sc-switch-sl{ position:absolute; inset:0; background:var(--b3); border-radius:12px; transition:background .15s; cursor:pointer; }
-.sc-switch-sl::before{ content:''; position:absolute; width:15px; height:15px; border-radius:50%; background:#fff; top:3px; left:3px; transition:transform .15s; }
-.sc-switch input:checked + .sc-switch-sl{ background:var(--gr); }
-.sc-switch input:checked + .sc-switch-sl::before{ transform:translateX(17px); }
-.sc-fhint{ font-size:11px; color:var(--t3); line-height:1.5; margin:10px 0 0; }
-/* Gatilhos: cards */
-.sc-gcard{ display:flex; align-items:center; gap:12px; background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:12px 14px; margin-bottom:10px; }
-.sc-gic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(245,166,35,.14); color:#f5a623; }
-.sc-gbody{ flex:1; min-width:0; display:flex; gap:10px 14px; flex-wrap:wrap; align-items:center; }
-.sc-grow{ display:flex; align-items:center; gap:8px; flex:1; min-width:210px; }
-.sc-grow .muted{ font-size:11.5px; flex:none; }
-.sc-grow input,.sc-grow select{ flex:1; min-width:0; }
-.sc-md-detail{ flex:1; min-width:0; background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:18px 20px; min-height:340px; }
-.sc-detail-empty{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--t3); min-height:300px; text-align:center; }
-.sc-detail-empty p{ font-size:13px; max-width:240px; line-height:1.5; margin:0; }
-.sc-detail-top{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
-.sc-detail-name{ display:flex; align-items:center; gap:11px; font-size:16px; font-weight:700; color:var(--tx); min-width:0; }
-.sc-detail-name .sc-card-ic{ width:38px; height:38px; border-radius:11px; }
-.sc-detail-nametxt{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sc-detail-acts{ display:flex; gap:6px; flex:none; }
-.sc-detail-acts .sc-on{ color:#f5b60a; }
-.sc-detail-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--t3); font-weight:700; margin:14px 0 8px; }
-.sc-detail-label:first-child{ margin-top:0; }
-.sc-doc-link{ display:inline-flex; align-items:center; gap:7px; color:var(--gr); font-weight:700; text-decoration:none; font-size:13px; }
-.sc-doc-link:hover{ text-decoration:underline; }
-.sc-wa{ background:var(--s2); border:1px solid var(--b1); border-radius:12px; padding:16px; background-image:radial-gradient(rgba(150,150,150,.10) 1px, transparent 1px); background-size:16px 16px; }
-.sc-wa-bubble{ max-width:82%; margin-left:auto; background:#0b6b5b; color:#eef6f4; border-radius:12px 12px 4px 12px; padding:8px 10px; box-shadow:0 1px 2px rgba(0,0,0,.25); }
-.sc-wa-media{ margin-bottom:6px; } .sc-wa-media img,.sc-wa-media video{ max-width:320px; max-height:380px; width:auto; height:auto; border-radius:6px; display:block; background:#000; } .sc-wa-media audio{ width:260px; max-width:100%; height:38px; }
-.sc-wa-text{ font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
-.sc-wa-time{ display:block; text-align:right; font-size:9.5px; color:rgba(255,255,255,.6); margin-top:3px; }
-.sc-modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; }
-.sc-modal-box{ width:470px; max-width:100%; max-height:90vh; overflow-y:auto; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rxl); padding:22px 24px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
-.sc-modal-head{ font-size:18px; font-weight:800; color:var(--tx); margin-bottom:16px; }
-.sc-modal-body{ display:flex; flex-direction:column; }
-.sc-f-label{ font-size:12px; font-weight:700; color:var(--t2); margin:12px 0 6px; }
-.sc-f-label:first-child{ margin-top:0; }
-.sc-modal-body .info-val{ width:100%; }
-.sc-drop{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; border:1.5px dashed var(--bl); border-radius:var(--r); padding:22px 14px; text-align:center; color:var(--t2); font-size:12.5px; cursor:pointer; background:var(--s1); transition:background .12s, color .12s; }
-.sc-drop:hover{ background:var(--bld); color:var(--tx); }
-.sc-drop.on{ border-color:var(--gr); color:var(--gr); }
-.sc-modal-status{ min-height:16px; font-size:12px; margin-top:10px; color:var(--rd); }
-.sc-modal-status.ok{ color:var(--gr); }
-.sc-modal-foot{ display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
-@media(max-width:820px){ .sc-md{ flex-direction:column; } .sc-md-list{ width:100%; } .sc-cards{ max-height:none; } }
-/* ─── Prévia do painel do WhatsApp (sempre escuro, fiel ao painel real) ─── */
-.scp-stage{ display:flex; justify-content:center; padding:22px; border:1px solid var(--b2); border-radius:var(--rl); background:radial-gradient(rgba(150,150,150,.06) 1px,transparent 1px) 0 0/16px 16px, var(--s1); }
-.scp-panel{ width:384px; max-width:100%; height:620px; background:#0e1621; border:1px solid #22303d; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 46px rgba(0,0,0,.45); font-family:'Nunito','Segoe UI',system-ui,sans-serif; }
-.scp-panel *{ box-sizing:border-box; }
-.scp-head{ display:flex; align-items:center; gap:9px; padding:13px 15px; background:linear-gradient(135deg,#13c273,#0eb267); color:#fff; flex:none; }
-.scp-dot{ width:9px; height:9px; border-radius:50%; background:#eaffef; box-shadow:0 0 0 3px rgba(255,255,255,.25); flex:none; }
-.scp-title{ font-weight:800; font-size:14.5px; flex:none; }
-.scp-who{ flex:1; min-width:0; font-size:11.5px; color:rgba(255,255,255,.9); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.scp-min{ font-weight:800; font-size:16px; }
-.scp-main{ flex:1; display:flex; min-height:0; }
-.scp-content{ flex:1; min-width:0; display:flex; flex-direction:column; background:#0b131c; }
-.scp-rail{ width:74px; flex:none; background:#0e1621; border-left:1px solid #1c2733; display:flex; flex-direction:column; padding:10px 0; gap:3px; }
-.scp-tab{ display:flex; flex-direction:column; align-items:center; gap:5px; padding:11px 4px; margin:0 8px; border:none; background:none; color:#8ea0b0; font-size:10.5px; font-weight:800; border-radius:12px; cursor:pointer; font-family:inherit; }
-.scp-tab:hover{ color:#e7edf3; background:#16202b; }
-.scp-tab.on{ color:#13c273; background:#13c2731f; }
-.scp-ctop{ padding:12px 14px 7px; border-bottom:1px solid #1c2733; flex:none; }
-.scp-hdr{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:800; color:#e7edf3; }
-.scp-search{ display:flex; align-items:center; gap:9px; background:#141f2b; border:1px solid #243444; border-radius:12px; padding:11px 13px; color:#5f6f7e; font-size:13px; font-weight:600; }
-.scp-q-in{ flex:1; min-width:0; border:none; outline:none; background:transparent; color:#e7edf3; font-family:inherit; font-size:13px; font-weight:600; }
-.scp-q-in::placeholder{ color:#5f6f7e; font-weight:500; }
-.scp-chip,.scp-star2,.scp-hideall,.scp-toggle{ cursor:default; }
-.scp-chips{ display:flex; align-items:center; gap:5px; margin-top:8px; }
-.scp-chip{ width:34px; height:34px; border-radius:10px; border:1px solid #243444; background:#141f2b; display:flex; align-items:center; justify-content:center; }
-.scp-star2{ margin-left:auto; width:34px; height:34px; border-radius:10px; border:1px solid #243444; background:#141f2b; display:flex; align-items:center; justify-content:center; color:#3f4c59; }
-.scp-hideall{ width:100%; margin-top:8px; background:#141f2b; border:1px solid #243444; color:#aebccb; border-radius:9px; padding:7px; font-size:11px; font-weight:700; font-family:inherit; }
-.scp-body{ flex:1; overflow-y:auto; padding:10px 14px 14px; }
-.scp-body::-webkit-scrollbar{ width:7px; } .scp-body::-webkit-scrollbar-thumb{ background:#2a3a48; border-radius:6px; }
-.scp-sec{ margin-bottom:2px; }
-.scp-sech{ display:flex; align-items:center; gap:8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#8ea0b0; font-weight:800; margin:13px 3px 9px; }
-.scp-sect{ flex:1; }
-.scp-cnt{ font-size:10px; background:#20303d; color:#8ea0b0; border-radius:9px; padding:2px 8px; font-weight:800; }
-.scp-list{ display:flex; flex-direction:column; gap:8px; }
-.scp-item,.scp-seq{ display:flex; align-items:center; gap:11px; background:#141f2b; border:1px solid #233443; border-radius:13px; padding:12px 13px; }
-.scp-seq{ background:#181528; border-color:#2e2447; }
-.scp-ic{ width:36px; height:36px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; }
-.scp-lb{ flex:1; min-width:0; font-size:13.5px; font-weight:700; color:#e7edf3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.scp-star{ color:#3f4c59; display:flex; flex:none; }
-.scp-sendbtn{ width:38px; height:38px; border-radius:11px; flex:none; display:flex; align-items:center; justify-content:center; }
-.scp-chev{ color:#5f6f7e; display:flex; flex:none; }
-.scp-empty{ color:#7c8896; font-size:12.5px; text-align:center; padding:26px 12px; line-height:1.5; }
-.scp-set{ display:flex; flex-direction:column; }
-.scp-setrow{ display:flex; align-items:center; justify-content:space-between; padding:12px 2px; border-bottom:1px solid #1c2733; color:#e7edf3; font-size:13px; font-weight:600; }
-.scp-toggle{ width:34px; height:19px; border-radius:12px; background:#243444; position:relative; flex:none; }
-.scp-toggle.on{ background:#13c273; }
-.scp-toggle::after{ content:''; position:absolute; width:15px; height:15px; border-radius:50%; background:#fff; top:2px; left:2px; }
-.scp-toggle.on::after{ left:auto; right:2px; }
-.scp-pill{ background:#141f2b; border:1px solid #243444; color:#e7edf3; border-radius:8px; padding:5px 12px; font-size:11.5px; font-weight:700; }
-.scp-help{ color:#aebccb; font-size:12.5px; line-height:1.6; }
-@media(max-width:520px){ .scp-panel{ height:540px; width:100%; } }
-/* Simulador: chat de teste ao lado do painel */
-.scp-sim{ display:flex; gap:16px; align-items:stretch; }
-.scp-stage2{ flex:none; }
-.scp-chat{ flex:1; min-width:300px; height:620px; background:#0b141a; border:1px solid #1f2c33; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 46px rgba(0,0,0,.35); }
-.scp-chat *{ box-sizing:border-box; }
-.scp-chat-head{ background:#202c33; padding:11px 14px; display:flex; align-items:center; gap:11px; flex:none; }
-.scp-ava{ width:36px; height:36px; border-radius:50%; background:#0b6b5b; color:#cfeee7; display:flex; align-items:center; justify-content:center; flex:none; }
-.scp-chat-who b{ font-size:14px; display:block; color:#e9edef; } .scp-chat-who span{ font-size:11px; color:#8696a0; }
-.scp-chat-body{ flex:1; overflow-y:auto; padding:16px; background:#0b141a; background-image:radial-gradient(rgba(255,255,255,.02) 1px,transparent 1px); background-size:18px 18px; display:flex; flex-direction:column; gap:7px; }
-.scp-chat-body::-webkit-scrollbar{ width:7px; } .scp-chat-body::-webkit-scrollbar-thumb{ background:#2a3a48; border-radius:6px; }
-.scpb{ max-width:80%; border-radius:10px; padding:7px 9px 5px; font-size:13px; line-height:1.4; box-shadow:0 1px 1px rgba(0,0,0,.2); }
-.scpb-out{ align-self:flex-end; background:#005c4b; color:#e9edef; border-bottom-right-radius:3px; }
-.scpb-in{ align-self:flex-start; background:#202c33; color:#e9edef; border-bottom-left-radius:3px; }
-.scpb-txt{ white-space:pre-wrap; word-break:break-word; }
-.scpb img,.scpb video{ max-width:230px; border-radius:6px; display:block; }
-.scpb audio{ width:240px; height:38px; }
-.scpb-cap{ margin-top:4px; font-size:12.5px; }
-.scpb-doc{ display:inline-flex; align-items:center; gap:7px; color:#cfeee7; text-decoration:none; font-weight:600; }
-.scpb-t{ display:flex; align-items:center; gap:3px; justify-content:flex-end; font-size:9.5px; color:rgba(233,237,239,.5); margin-top:2px; }
-.scp-ind{ display:inline-flex; gap:4px; align-items:center; padding:11px 12px; }
-.scp-ind span{ width:7px; height:7px; border-radius:50%; background:rgba(233,237,239,.7); animation:scpblink 1s infinite; }
-.scp-ind span:nth-child(2){ animation-delay:.2s; } .scp-ind span:nth-child(3){ animation-delay:.4s; }
-@keyframes scpblink{ 0%,60%,100%{ opacity:.3; } 30%{ opacity:1; } }
-.scp-speed{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--t2); cursor:pointer; }
-.scp-item{ cursor:pointer; } .scp-seq{ cursor:pointer; }
-.scp-item:active,.scp-seq:active{ transform:translateY(1px); }
-@media(max-width:820px){ .scp-sim{ flex-direction:column; } .scp-chat{ height:380px; min-width:0; } .scp-stage2 .scp-panel{ width:100%; } }
 .cfg-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
   padding:4px 10px;border-radius:7px;background:var(--s4);color:var(--t3)}
 /* details/summary do backend collapsable */
@@ -3901,8 +3698,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.49.0';
-const APP_LAST_CHANGE = 'Sale Chat agora tem 2 perfis independentes: Vendedores e Cobradores. Cada um com suas mensagens, audios, videos, imagens, funis e gatilhos, e instalador proprio. Alterna no topo da pagina Sale Chat.';
+const APP_VERSION = '2.34.0';
+const APP_LAST_CHANGE = 'CRM: barra de filtros com rotulos + campo Periodo (KPIs respeitam o periodo), KPIs abaixo dos filtros e donut da taxa no card de Recebimento - alinhando com a referencia.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -3922,12 +3719,6 @@ const ICONS = {
   'trending-up':    '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
   'arrow-up-right': '<line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/>',
   'arrow-up':       '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
-  'chevron-up':     '<polyline points="18 15 12 9 6 15"/>',
-  'chevron-down':   '<polyline points="6 9 12 15 18 9"/>',
-  'download':       '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-  'play':           '<polygon points="6 3 20 12 6 21 6 3"/>',
-  'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
-  'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -3969,7 +3760,6 @@ const ICONS = {
   'mail':           '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
   'tag':            '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
   'link':           '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-  'refresh-cw':     '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   'book':           '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   'database':       '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
   'lock':           '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -5189,13 +4979,13 @@ function computeNav(){
       // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
       {g:'WhatsApp',items:[
         ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
+        ...(dir?[{id:'salechat',lbl:'Sale Chat',live:true}]:[]),
         {id:'contingencia',lbl:'Contingência'},
-        ...(dir?[{id:'pressels',lbl:'Pressels'},{id:'presselleads',lbl:'Leads'}]:[]),
+        ...(dir?[{id:'pressels',lbl:'Pressels'}]:[]),
       ]},
       // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
       ...(dir?[{g:'Automações',items:[
-        {id:'salechat',lbl:'Sale Chat',live:true},
-        {id:'automacoes',lbl:'Robô de WhatsApp'},
+        {id:'automacoes',lbl:'WhatsApp'},
       ]}]:[]),
       // Acordeão Equipe — aparece pra todo mundo.
       // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
@@ -5311,11 +5101,10 @@ const PNAMES={
   meuspag:'Pessoal / <b>Meus Pagamentos</b>',
   invest:'Financeiro / <b>Investimentos</b>',
   atendimento:"WhatsApp / <b>Atendimento</b>",
-  salechat:"Automações / <b>Sale Chat</b>",
+  salechat:"WhatsApp / <b>Sale Chat</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
-  presselleads:"WhatsApp / <b>Leads</b>",
-  automacoes:"Automações / <b>Robô de WhatsApp</b>",
+  automacoes:"Automações / <b>WhatsApp</b>",
   regioes:'Operacional / <b>Regiões</b>',
   dre:'Financeiro / <b>Visão Geral</b>',
   trafego:'Financeiro / <b>Tráfego</b>',
@@ -5345,7 +5134,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig()
   ].join('');
@@ -5496,7 +5285,6 @@ function goPage(id){
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
   if(id==='pressels')    renderPressels();
-  if(id==='presselleads') renderPresselLeads();
   if(id==='automacoes')  renderAutomacoes();
   if(id==='regioes')     buildMap();
   if(id==='dre')         renderDRE();
@@ -5613,7 +5401,7 @@ function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
-    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,presselleads:renderPresselLeads,
+    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
@@ -7162,7 +6950,6 @@ function _loadPedidosConf(day){
     if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse dia.</div>'; return; }
     const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
     const _atr=s=>!!(s.pid && String(s.pid).trim()!=='');   // veio de pressel (tem código/rastreio)?
-    const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
     const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
     let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
     ${nSem>0?`<div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">As "sem rastreio" são vendas reais, mas vieram de fora do anúncio (orgânico/indicação) ou sem o código, então não entram na conta de Vendas das pressels (que o gestor otimiza).</div>`:''}`;
@@ -7173,7 +6960,7 @@ function _loadPedidosConf(day){
       const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
       const tag=_atr(s)
-        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
+        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">da pressel</span>`
         : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
       const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
       return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
@@ -7748,608 +7535,41 @@ async function _mldChatSend(){
 function pageSaleChat(){ return `<div class="page" id="salechat-pg"></div>`; }
 function scEscA(s){return String(s==null?'':s).replace(/"/g,'&quot;');}
 function scEscT(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
-// ─── Funil campeao (audios/videos do Rafael): agora no R2 = editaveis na dash. ───
-// Semeados em SC().media com ids estaveis (f1..f9, s1/s2) pros funis apontarem.
-const SC_CHAMP=[
-  {id:'f1',kind:'audio',label:'F1 Abertura',key:'m/mrckutmlmks6pj.ogg',mime:'audio/ogg'},
-  {id:'f2',kind:'audio',label:'F2 Garantia COD',key:'m/mrckuubd35yqe1.ogg',mime:'audio/ogg'},
-  {id:'f4',kind:'audio',label:'F4 Espelha a dor',key:'m/mrckuvg7mepyoq.ogg',mime:'audio/ogg'},
-  {id:'f5',kind:'audio',label:'F5 Apresenta produto',key:'m/mrckuwbuifx650.ogg',mime:'audio/ogg'},
-  {id:'f7',kind:'audio',label:'F7 Checa entendimento',key:'m/mrckuwzqjbxnz7.ogg',mime:'audio/ogg'},
-  {id:'f9',kind:'audio',label:'F9 Oferta + fechamento',key:'m/mrckuy5rtpwezf.ogg',mime:'audio/ogg'},
-  {id:'s1',kind:'video',label:'Prova: Carlos (Alagoas)',key:'m/mrckv9b8qq6pky.mp4',mime:'video/mp4',caption:'Esse e o Carlos, morador de Alagoas'},
-  {id:'s2',kind:'video',label:'Prova: Sr Jose',key:'m/mrckvvz5kbpjsb.mp4',mime:'video/mp4',caption:'Sr Jose, recebeu o tratamento tem 1 semana'},
-];
-const SC_SECTIONS=[
-  {key:'messages',label:'Mensagens',icon:'message-circle'},
-  {key:'audio',label:'Áudios',icon:'volume'},
-  {key:'video',label:'Vídeos',icon:'video'},
-  {key:'image',label:'Imagens',icon:'image'},
-  {key:'document',label:'Documentos',icon:'clipboard-list'},
-  {key:'funis',label:'Funis',icon:'repeat'},
-  {key:'triggers',label:'Gatilhos',icon:'zap'},
-];
-var scSection='messages';
-// Perfis independentes: 'vend' (vendedores, DB.salechat) e 'cob' (cobradores, DB.salechatCob).
-var scProfile='vend'; try{ scProfile=(localStorage.getItem('sc_profile')==='cob')?'cob':'vend'; }catch(_){}
-function SC(){ var k=scProfile==='cob'?'salechatCob':'salechat'; if(!DB[k]||typeof DB[k]!=='object') DB[k]={}; return DB[k]; }
-function scSetProfile(p){ scProfile=(p==='cob')?'cob':'vend'; try{ localStorage.setItem('sc_profile',scProfile); }catch(_){}; scSection='messages'; scpTab='itens'; renderSaleChat(); }
-function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salechat/media/'+String(key||'').split('/').map(encodeURIComponent).join('/'); }
-function scAllItems(){
-  return (SC().messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
-    .concat((SC().media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
-}
-function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
-function scCount(key){
-  if(key==='messages') return (SC().messages||[]).length;
-  if(key==='funis') return (SC().sequences||[]).length;
-  if(key==='triggers') return (SC().triggers||[]).length;
-  return (SC().media||[]).filter(m=>m.kind===key).length;
-}
-function scEmpty(t){ return '<div class="sc-empty">'+scEscT(t)+'</div>'; }
-function scArrMove(a,i,d){ const j=i+d; if(j<0||j>=a.length) return false; const t=a[i]; a[i]=a[j]; a[j]=t; return true; }
-function scOrderBtns(cb,i,len){
-  return '<div class="sc-ord">'+
-    '<button title="Subir" '+(i===0?'disabled':'')+' onclick="'+cb+'('+i+',-1)">'+ico('chevron-up',{size:12})+'</button>'+
-    '<button title="Descer" '+(i>=len-1?'disabled':'')+' onclick="'+cb+'('+i+',1)">'+ico('chevron-down',{size:12})+'</button></div>';
-}
-function scSeedIfNew(){
-  var sc=SC(); var changed=false;
-  if(!sc.updated_at){
-    if(scProfile==='vend'){
-      sc.messages=[
-        {id:'m1',label:'Tudo ficou claro?',text:'Tudo ficou bem claro pra voce? Ficou alguma duvida?'},
-        {id:'m2',label:'Fechar pedido',text:'Otimo! Tem mais alguma duvida? Posso fazer o seu pedido?'},
-        {id:'m3',label:'Pedir dados',text:'Pra eu registrar o seu pedido e liberar o envio, me manda por gentileza: seu nome completo, CPF e o endereco certinho com CEP.'},
-        {id:'m4',label:'Confirma entrega',text:'Show! Seu pedido ta confirmado. Voce so paga quando chegar na sua casa, tudo certo? Qualquer coisa e so me chamar aqui.'},
-      ];
-      sc.sequences=[
-        {id:'seq_abertura',label:'Abertura (F1 + F2)',items:['f1','f2']},
-        {id:'seq_prova',label:'Provas sociais (2 videos)',items:['s1','s2']},
-      ];
-    }
-    changed=true; // cobradores comeca vazio (o Diretor monta o roteiro deles)
-  }
-  if(scProfile==='vend' && !sc.champSeeded){
-    var have={}; (sc.media||[]).forEach(function(m){ have[m.id]=1; });
-    SC_CHAMP.forEach(function(c){ if(!have[c.id]) sc.media.push({id:c.id,kind:c.kind,label:c.label,key:c.key,mime:c.mime,caption:c.caption||'',champ:true}); });
-    sc.champSeeded=true;
-    changed=true;
-  }
-  if(changed){ sc.updated_at=Math.floor(Date.now()/1000); persist(); }
-}
 function renderSaleChat(){
-  const _sc=SC(); ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
-  scSeedIfNew();
+  if(!DB.salechat||typeof DB.salechat!=='object') DB.salechat={messages:[],sequences:[]};
+  if(!Array.isArray(DB.salechat.messages)) DB.salechat.messages=[];
   const pg=$('salechat-pg'); if(!pg) return;
-  const isCob=scProfile==='cob';
-  const instZip=isCob?'/sale-chat-instalador-cobradores.zip':'/sale-chat-instalador.zip';
-  const who=isCob?'cobrador':'vendedor';
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <div class="sc-prof">
-      <button class="sc-proftab ${!isCob?'on':''}" onclick="scSetProfile('vend')">${ico('users',{size:15})} Vendedores</button>
-      <button class="sc-proftab ${isCob?'on':''}" onclick="scSetProfile('cob')">${ico('banknote',{size:15})} Cobradores</button>
-    </div>
-    <p class="sc-hint" style="max-width:920px;margin:2px 0 14px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Salva sozinho e o painel deles puxa.</p>
-    <div class="sc-install">
-      <span class="sc-install-ic">${ico('download',{size:15})}</span>
-      <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
-      <a class="btn btn-gh btn-sm" href="${instZip}" download>${ico('download',{size:13})} Baixar .zip</a>
-    </div>
-    <div class="sc-wrap">
-      <div class="sc-nav" id="sc-nav"></div>
-      <div class="sc-main" id="sc-main"></div>
-    </div>
-    <div class="sc-simwrap" id="sc-simwrap"></div>`;
-  scRenderNav();
-  scRenderSection();
-  scpRenderSim();
-}
-function scRenderNav(){
-  const nav=$('sc-nav'); if(!nav) return;
-  nav.innerHTML=SC_SECTIONS.map(function(s){ return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:17})}<span class="sc-nlbl">${s.label}</span><span class="sc-navn">${scCount(s.key)}</span></button>`; }).join('');
-  if(typeof scpRefresh==='function') scpRefresh();
-}
-function scGoSection(k){ scSection=k; scRenderNav(); scRenderSection(); }
-function scRenderSection(){
-  const main=$('sc-main'); if(!main) return;
-  if(scSection==='messages') return scSecMessages(main);
-  if(scSection==='funis') return scSecFunis(main);
-  if(scSection==='triggers') return scSecTriggers(main);
-  return scSecMedia(main,scSection);
-}
-// ─── Prévia/Simulador do painel do WhatsApp (usa os itens reais; funcional pra testar) ───
-var scpTab='itens', scpRunning=false, scpRunId=0, scpFast=false, scpQuery='';
-var SCP_SECTIONS=[
-  {label:'Mensagens',icon:'message-circle',color:'#2563eb',get:()=>SC().messages||[]},
-  {label:'Áudios do funil',icon:'volume',color:'#13c273',get:()=>scItemsFor('audio')},
-  {label:'Vídeos',icon:'video',color:'#8e17f0',get:()=>scItemsFor('video')},
-  {label:'Imagens',icon:'image',color:'#00bcf2',get:()=>scItemsFor('image')},
-  {label:'Documentos',icon:'clipboard-list',color:'#f0810f',get:()=>scItemsFor('document')},
-];
-function scpFindItem(id){
-  var m=(SC().messages||[]).filter(o=>o.id===id)[0]; if(m) return {item:m,kind:'text'};
-  var d=(SC().media||[]).filter(o=>o.id===id)[0]; if(d) return {item:d,kind:d.kind};
-  return null;
-}
-function scpRenderSim(){
-  const w=$('sc-simwrap'); if(!w) return;
-  scpRunId++; scpRunning=false;
-  w.innerHTML=`<div class="sc-simhead"><div class="info-title">${ico('smartphone',{size:16})} Simulador · teste sem enviar</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label class="scp-speed"><input type="checkbox" ${scpFast?'checked':''} onchange="scpFast=this.checked"> modo rápido</label>
-      <button class="btn btn-gh btn-sm" onclick="scpSimReply()">Simular resposta</button>
-      <button class="btn btn-gh btn-sm" onclick="scpClearChat()">Limpar conversa</button>
-    </div></div>
-    <p class="sc-hint" style="margin:2px 0 14px">Clica nos itens (e nos funis) do painel: eles chegam no chat de teste com a espera e o gravando/digitando de cada passo. É só ensaio, não envia nada no WhatsApp.</p>
-    <div class="scp-sim">
-      <div class="scp-chat">
-        <div class="scp-chat-head"><span class="scp-ava">${ico('user',{size:16})}</span><div class="scp-chat-who"><b>Maria (lead)</b><span id="scp-status">online</span></div></div>
-        <div class="scp-chat-body" id="scp-chat-body"></div>
+    <p class="muted" style="max-width:720px;margin:-6px 0 18px;line-height:1.55;font-size:13px">
+      As mensagens de texto do painel do Sale Chat que os atendentes disparam com 1 clique dentro do WhatsApp. Edita aqui, salva sozinho, e o painel de todos puxa automatico (eles rodam o start.bat pra pegar a versao nova).
+    </p>
+    <div class="cfg-card" style="max-width:720px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div class="info-title">${ico('message-circle',{size:15})} Mensagens rapidas</div>
+        <button class="btn btn-gr btn-sm" onclick="scAddMsg()">+ Nova mensagem</button>
       </div>
-      <div class="scp-stage2">${scpPanelHtml()}</div>
+      <div id="sc-msgs"></div>
     </div>`;
-}
-function scpRefresh(){ const st=document.querySelector('.scp-stage2'); if(st){ st.innerHTML=scpPanelHtml(); scpFilterSim(); } }
-function scpFilterSim(){
-  const cont=document.querySelector('.scp-content'); if(!cont) return;
-  const q=(scpQuery||'').trim().toLowerCase();
-  cont.querySelectorAll('.scp-sec').forEach(function(sec){
-    let vis=0;
-    sec.querySelectorAll('.scp-item').forEach(function(it){
-      const lb=it.querySelector('.scp-lb'), t=lb?lb.textContent.toLowerCase():'';
-      const ok=!q||t.indexOf(q)!==-1; it.style.display=ok?'':'none'; if(ok)vis++;
-    });
-    sec.style.display=vis?'':'none';
-  });
-}
-function scpGo(t){ scpTab=t; scpRefresh(); }
-function scpSendBtn(c){ return `<span class="scp-sendbtn" style="background:${c}1a;color:${c}">${ico('play',{size:14})}</span>`; }
-function scpPanelHtml(){
-  const tabs=[['itens','Itens','layout-grid'],['funis','Funis','repeat'],['agenda','Agenda','calendar'],['ajustes','Ajustes','settings'],['ajuda','Ajuda','info']];
-  const rail=tabs.map(t=>`<button class="scp-tab ${scpTab===t[0]?'on':''}" onclick="scpGo('${t[0]}')">${ico(t[2],{size:18})}<span>${t[1]}</span></button>`).join('');
-  return `<div class="scp-panel">
-    <div class="scp-head"><span class="scp-dot"></span><span class="scp-title">Sale Chat</span><span class="scp-who">→ Maria (lead)</span><span class="scp-min">–</span></div>
-    <div class="scp-main"><div class="scp-content">${scpContentHtml()}</div><div class="scp-rail">${rail}</div></div>
-  </div>`;
-}
-function scpContentHtml(){
-  if(scpTab==='funis'){
-    const seqs=SC().sequences||[];
-    const inner=seqs.length?seqs.map((s,i)=>`<div class="scp-seq" onclick="scpRunFunil(${i})" title="Rodar (clica de novo pra parar)"><span class="scp-ic" style="background:#8e17f01a;color:#8e17f0">${ico('repeat',{size:15})}</span><span class="scp-lb">${scEscT(s.label||'')}</span>${scpSendBtn('#8e17f0')}</div>`).join(''):'<div class="scp-empty">Nenhum funil criado ainda.</div>';
-    return `<div class="scp-ctop"><div class="scp-hdr">${ico('repeat',{size:15})} Funis</div></div><div class="scp-body"><div class="scp-list">${inner}</div></div>`;
-  }
-  if(scpTab==='agenda') return `<div class="scp-ctop"><div class="scp-hdr">${ico('calendar',{size:15})} Agenda</div></div><div class="scp-body"><div class="scp-empty">Programa um item pra sair depois de X minutos no chat aberto.</div></div>`;
-  if(scpTab==='ajustes') return `<div class="scp-ctop"><div class="scp-hdr">${ico('settings',{size:15})} Ajustes</div></div><div class="scp-body"><div class="scp-set"><div class="scp-setrow"><span>Simular gravando</span><span class="scp-toggle on"></span></div><div class="scp-setrow"><span>Tema do painel</span><span class="scp-pill">Escuro</span></div></div></div>`;
-  if(scpTab==='ajuda') return `<div class="scp-ctop"><div class="scp-hdr">${ico('info',{size:15})} Ajuda</div></div><div class="scp-body"><div class="scp-help">Clica num item pra "enviar" no chat de teste. Nos funis, clica pra rodar a sequência com os tempos. É só simulação.</div></div>`;
-  const chips=SCP_SECTIONS.map(s=>`<span class="scp-chip" style="color:${s.color}">${ico(s.icon,{size:15})}</span>`).join('');
-  const secs=SCP_SECTIONS.map(function(s){
-    const items=s.get(); if(!items.length) return '';
-    const its=items.map(it=>`<div class="scp-item" onclick="scpSend('${it.id}')"><span class="scp-ic" style="background:${s.color}1a;color:${s.color}">${ico(s.icon,{size:15})}</span><span class="scp-lb">${scEscT(it.label||'(sem nome)')}</span><span class="scp-star">${ico('star',{size:14})}</span>${scpSendBtn(s.color)}</div>`).join('');
-    return `<div class="scp-sec"><div class="scp-sech"><span style="color:${s.color}">${ico(s.icon,{size:14})}</span><span class="scp-sect">${s.label}</span><span class="scp-cnt">${items.length}</span></div><div class="scp-list">${its}</div></div>`;
-  }).join('')||'<div class="scp-empty">Nada configurado ainda. Adicione itens nas seções ao lado.</div>';
-  return `<div class="scp-ctop"><div class="scp-search">${ico('search',{size:14})}<input class="scp-q-in" placeholder="Buscar item..." value="${scEscA(scpQuery)}" oninput="scpQuery=this.value;scpFilterSim()"></div><div class="scp-chips" title="Filtro por tipo (no painel real)">${chips}<span class="scp-star2">${ico('star',{size:14})}</span></div><button class="scp-hideall" type="button" title="No painel real" tabindex="-1">Esconder todos</button></div><div class="scp-body">${secs}</div>`;
-}
-// ── Chat de teste (simulação; não envia nada) ──
-function scpChatBody(){ return $('scp-chat-body'); }
-function scpSleep(ms){ return new Promise(r=>setTimeout(r,Math.max(0,ms||0))); }
-function scpSetStatus(t){ const s=$('scp-status'); if(s) s.textContent=t||'online'; }
-function scpAppend(html){
-  const b=scpChatBody(); if(!b) return null;
-  const d=document.createElement('div'); d.innerHTML=html; const el=d.firstElementChild;
-  if(el){ b.appendChild(el); const sc=()=>{ b.scrollTop=b.scrollHeight; }; sc();
-    el.querySelectorAll('img').forEach(m=>{ if(!m.complete) m.addEventListener('load',sc,{once:true}); });
-    el.querySelectorAll('video').forEach(v=>v.addEventListener('loadedmetadata',sc,{once:true}));
-  }
-  return el;
-}
-function scpBubble(kind,item){
-  const url=item.key?scMediaUrl(item.key):'';
-  let inner='';
-  if(kind==='text') inner=`<div class="scpb-txt">${scEscT(item.text||'')}</div>`;
-  else if(kind==='audio') inner=`<audio controls preload="none" src="${url}"></audio>`;
-  else if(kind==='image') inner=`<img src="${url}" loading="lazy">${item.caption?`<div class="scpb-cap">${scEscT(item.caption)}</div>`:''}`;
-  else if(kind==='video') inner=`<video controls preload="metadata" src="${url}"></video>${item.caption?`<div class="scpb-cap">${scEscT(item.caption)}</div>`:''}`;
-  else if(kind==='document') inner=`<a class="scpb-doc" href="${url}" target="_blank">${ico('clipboard-list',{size:14})} ${scEscT(item.label||'documento')}</a>`;
-  else inner=`<div class="scpb-txt">${scEscT(item.label||'')}</div>`;
-  return `<div class="scpb scpb-out">${inner}<span class="scpb-t">agora ${ico('check',{size:11})}</span></div>`;
-}
-function scpSend(id){ const f=scpFindItem(id); if(!f) return; scpAppend(scpBubble(f.kind,f.item)); }
-function scpIndicator(kind){ scpSetStatus(kind==='audio'?'gravando áudio...':(kind==='text'?'digitando...':'enviando...')); return scpAppend('<div class="scpb scpb-out scp-ind"><span></span><span></span><span></span></div>'); }
-async function scpRunFunil(i){
-  if(scpRunning){ scpRunId++; scpRunning=false; scpSetStatus('online'); return; } // clicar de novo = parar
-  const seq=(SC().sequences||[])[i]; if(!seq) return;
-  const steps=(seq.items||[]).map(scStep).filter(s=>scpFindItem(s.id));
-  if(!steps.length){ return; }
-  const myRun=++scpRunId; scpRunning=true;
-  for(let k=0;k<steps.length;k++){
-    const st=steps[k], f=scpFindItem(st.id);
-    let wait=(scpFast?Math.min(st.delay||0,1):(st.delay||0))*1000;
-    await scpSleep(wait); if(scpRunId!==myRun) return;
-    let simMs=st.sim?st.sim*1000:(f.kind==='audio'?2200:f.kind==='text'?1200:900);
-    if(scpFast) simMs=Math.min(simMs,600);
-    const ind=scpIndicator(f.kind);
-    await scpSleep(simMs);
-    if(ind&&ind.parentNode) ind.parentNode.removeChild(ind);
-    if(scpRunId!==myRun) return;
-    scpSetStatus('online');
-    scpSend(st.id);
-  }
-  if(scpRunId===myRun) scpRunning=false;
-  scpSetStatus('online');
-}
-function scpClearChat(){ scpRunId++; scpRunning=false; const b=scpChatBody(); if(b) b.innerHTML=''; scpSetStatus('online'); }
-function scpSimReply(){ if(scpRunning){ scpRunId++; scpRunning=false; scpSetStatus('online'); } scpAppend('<div class="scpb scpb-in"><div class="scpb-txt">Oi, tudo bem? Ainda tem esse produto?</div><span class="scpb-t">agora</span></div>'); }
-// ─── Seção: Mensagens ───
-function scSecMessages(main){ scRenderSectionMD('messages'); }
-// ─── Sale Chat dash: layout mestre-detalhe (lista de cards + painel de detalhe/previa) ───
-var scSel={}, scModalFile=null;
-var SC_KINDS={
-  messages:{label:'Mensagens de texto',icon:'message-circle',add:'+ Nova mensagem',hint:'Textos prontos que o atendente manda com 1 clique: pedir dados, confirmar pedido, tirar duvida.'},
-  audio:{label:'Áudios',icon:'volume',add:'+ Adicionar áudio',accept:'audio/*',hint:'A tua voz e os audios do funil. Escuta cada um antes de liberar pros atendentes.'},
-  video:{label:'Vídeos',icon:'video',add:'+ Adicionar vídeo',accept:'video/*',hint:'Videos de prova social e demonstracao. A legenda vai junto no envio.'},
-  image:{label:'Imagens',icon:'image',add:'+ Adicionar imagem',accept:'image/*',hint:'Imagens de produto, provas, prints. Legenda opcional.'},
-  document:{label:'Documentos',icon:'clipboard-list',add:'+ Adicionar documento',accept:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf',hint:'PDFs e arquivos que o atendente envia no chat.'}
-};
-function scKindIcon(kind){ return kind==='messages'?'message-circle':scMediaIcon(kind); }
-// Mesma paleta do painel: cada tipo tem sua cor (mensagem azul, audio verde, video roxo, imagem ciano, doc laranja)
-var SC_COLORS={messages:'#2563eb',audio:'#13c273',video:'#8e17f0',image:'#00bcf2',document:'#f0810f'};
-function scKindColor(kind){ return SC_COLORS[kind]||'#13c273'; }
-function scItemsFor(kind){ return kind==='messages'?(SC().messages||[]):(SC().media||[]).filter(m=>m.kind===kind); }
-function scFindMsg(id){ var a=SC().messages||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
-function scFindMedia(id){ var a=SC().media||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
-function scRenderSectionMD(kind){
-  const main=$('sc-main'); if(!main) return;
-  const cfg=SC_KINDS[kind];
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico(scKindIcon(kind),{size:15})} ${cfg.label}</div><button class="btn btn-gr btn-sm" onclick="scOpenAdd('${kind}')">${cfg.add}</button></div>
-    <p class="sc-hint">${cfg.hint}</p>
-    <div class="sc-md">
-      <div class="sc-md-list"><div class="sc-search"><input id="sc-q" placeholder="Buscar..." autocomplete="off" oninput="scRenderCards('${kind}')"></div><div class="sc-cards" id="sc-cards"></div></div>
-      <div class="sc-md-detail" id="sc-detail"></div>
-    </div>`;
-  scRenderCards(kind);
-  scRenderDetail(kind);
-  if(kind==='video') scGenPostersForVideos();
-}
-function scRenderCards(kind){
-  const box=$('sc-cards'); if(!box) return;
-  if(typeof scpRefresh==='function') scpRefresh();
-  const q=(($('sc-q')||{}).value||'').toLowerCase();
-  const items=scItemsFor(kind).filter(it=>!q||String(it.label||'').toLowerCase().indexOf(q)!==-1);
-  if(!items.length){ box.innerHTML='<div class="sc-empty" style="padding:22px 8px">'+(q?'Nada encontrado.':'Nada aqui ainda. Clica em "'+SC_KINDS[kind].add+'".')+'</div>'; return; }
-  const c=scKindColor(kind);
-  box.innerHTML=items.map(it=>`
-    <div class="sc-card ${scSel[kind]===it.id?'on':''}" onclick="scSelect('${kind}','${it.id}')">
-      <span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:15})}</span>
-      <span class="sc-card-name">${scEscT(it.label||'(sem nome)')}</span>
-      ${it.champ?'<span class="sc-badge">campeão</span>':''}
-      <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:14})}</button>
-      <button class="sc-cbtn" title="Editar" onclick="event.stopPropagation();scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:14})}</button>
-    </div>`).join('');
-}
-function scSelect(kind,id){ scSel[kind]=id; scRenderCards(kind); scRenderDetail(kind); }
-function scRenderDetail(kind){
-  const box=$('sc-detail'); if(!box) return;
-  const id=scSel[kind]; const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
-  const c=scKindColor(kind);
-  if(!it){ box.innerHTML=`<div class="sc-detail-empty"><span class="sc-card-ic" style="width:52px;height:52px;border-radius:14px;background:${c}18;color:${c}">${ico(scKindIcon(kind),{size:24})}</span><p>Selecione um item à esquerda pra ver a prévia e editar.</p></div>`; return; }
-  box.innerHTML=`<div class="sc-detail-top"><div class="sc-detail-name"><span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:16})}</span><span class="sc-detail-nametxt">${scEscT(it.label||'(sem nome)')}</span>${it.champ?'<span class="sc-badge">campeão</span>':''}</div>
-    <div class="sc-detail-acts">
-      <button class="btn btn-gh btn-xs ${it.fav?'sc-on':''}" title="Favoritar" onclick="scToggleFav('${kind}','${it.id}')">${ico('star',{size:13})}</button>
-      <button class="btn btn-gh btn-xs" title="Subir" onclick="scMoveItem('${kind}','${it.id}',-1)">${ico('chevron-up',{size:13})}</button>
-      <button class="btn btn-gh btn-xs" title="Descer" onclick="scMoveItem('${kind}','${it.id}',1)">${ico('chevron-down',{size:13})}</button>
-      <button class="btn btn-gh btn-xs" title="Editar" onclick="scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:13})}</button>
-      <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDeleteItem('${kind}','${it.id}')">${ico('trash',{size:13})}</button>
-    </div></div>
-    ${scDetailPreview(kind,it)}`;
-}
-function scDetailPreview(kind,it){
-  const url=it.key?scMediaUrl(it.key):'';
-  let media='';
-  if(kind==='audio') media='<audio controls preload="none" src="'+url+'"></audio>';
-  else if(kind==='image') media='<img src="'+url+'" loading="lazy">';
-  else if(kind==='video') media='<video controls preload="none" src="'+url+'"></video>';
-  else if(kind==='document') media='<a class="sc-doc-link" href="'+url+'" target="_blank">'+ico('clipboard-list',{size:14})+' Abrir documento</a>';
-  const cap=(kind==='image'||kind==='video')?(it.caption||''):'';
-  const text=kind==='messages'?(it.text||''):cap;
-  const label=kind==='messages'?'Texto (como chega no WhatsApp)':'Prévia do envio';
-  if(kind==='document') return `<div class="sc-detail-label">${label}</div><div class="sc-wa"><div class="sc-wa-bubble"><div class="sc-wa-media">${media}</div><span class="sc-wa-time">agora</span></div></div>`;
-  return `<div class="sc-detail-label">${label}</div>
-    <div class="sc-wa"><div class="sc-wa-bubble">${media?('<div class="sc-wa-media">'+media+'</div>'):''}${text?('<div class="sc-wa-text">'+scEscT(text)+'</div>'):''}<span class="sc-wa-time">agora</span></div></div>`;
-}
-function scToggleFav(kind,id){ const it=scItemsFor(kind).filter(o=>o.id===id)[0]; if(it){ it.fav=!it.fav; scTouch(); scRenderCards(kind); if(scSel[kind]===id) scRenderDetail(kind); } }
-function scMoveItem(kind,id,dir){
-  if(kind==='messages'){ const f=scFindMsg(id); if(f&&scArrMove(SC().messages,f.idx,dir)){ scTouch(); scRenderCards(kind); } return; }
-  const arr=SC().media, idxs=[]; arr.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
-  let pos=-1; for(let k=0;k<idxs.length;k++) if(arr[idxs[k]].id===id) pos=k;
-  const b=pos+dir; if(pos<0||b<0||b>=idxs.length) return;
-  const ia=idxs[pos], ib=idxs[b], t=arr[ia]; arr[ia]=arr[ib]; arr[ib]=t; scTouch(); scRenderCards(kind);
-}
-function scDeleteItem(kind,id){
-  if(kind==='messages'){ const f=scFindMsg(id); if(!f) return; if(!confirm('Excluir a mensagem "'+(f.item.label||'')+'"?')) return; SC().messages.splice(f.idx,1); }
-  else { const fm=scFindMedia(id); if(!fm) return; if(!confirm('Excluir "'+(fm.item.label||'')+'"?'+(fm.item.champ?' (item do funil campeão, some do painel de todos)':''))) return; scDeleteKey(fm.item.key); SC().media.splice(fm.idx,1); }
-  if(scSel[kind]===id) scSel[kind]=null;
-  scTouch(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
-}
-// ── Modal de adicionar/editar ──
-function scModalStatus(m,ok){ const el=$('sc-modal-status'); if(el){ el.textContent=m||''; el.className='sc-modal-status'+(ok?' ok':''); } }
-function scCloseModal(){ const m=$('sc-modal'); if(m&&m.parentNode) m.parentNode.removeChild(m); scModalFile=null; }
-function scOpenAdd(kind){ scOpenModal(kind,null); }
-function scOpenEdit(kind,id){ scSel[kind]=id; scOpenModal(kind,id); }
-function scOpenModal(kind,id){
-  scModalFile=null;
-  const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
-  const isMsg=kind==='messages', cfg=SC_KINDS[kind];
-  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">`;
-  if(isMsg){
-    body+=`<label class="sc-f-label">Texto</label><textarea id="sc-m-text" class="info-val" rows="5" placeholder="Texto que vai ser enviado no WhatsApp" style="resize:vertical;line-height:1.45">${scEscT(it?it.text:'')}</textarea>`;
-  } else {
-    body+=`<label class="sc-f-label">Arquivo${it?' (opcional, pra trocar)':''}</label><label class="sc-drop" id="sc-drop"><input type="file" accept="${cfg.accept}" style="display:none" id="sc-m-file" onchange="scModalFilePicked(this)"><div id="sc-drop-txt">Clique aqui ou arraste o arquivo${it?' pra substituir':''}</div><div class="muted" style="font-size:11px">até 60MB</div></label>`;
-    if(kind==='image'||kind==='video'){ body+=`<label class="sc-f-label">Legenda (opcional)</label><textarea id="sc-m-cap" class="info-val" rows="2" placeholder="Legenda que vai junto" style="resize:vertical">${scEscT(it?(it.caption||''):'')}</textarea>`; }
-    if(it&&it.key){ body+=`<div class="sc-f-label">Atual</div>${scDetailPreview(kind,it)}`; }
-  }
-  const m=document.createElement('div'); m.id='sc-modal'; m.className='sc-modal';
-  m.onclick=(e)=>{ if(e.target===m) scCloseModal(); };
-  m.innerHTML=`<div class="sc-modal-box"><div class="sc-modal-head">${it?'Editar':'Adicionar'} ${isMsg?'mensagem':cfg.label.toLowerCase().replace(/s$/,'')}</div>
-    <div class="sc-modal-body">${body}</div>
-    <div id="sc-modal-status" class="sc-modal-status"></div>
-    <div class="sc-modal-foot"><button class="btn btn-gh" onclick="scCloseModal()">Cancelar</button><button class="btn btn-gr" id="sc-modal-save" onclick="scModalSave('${kind}',${id?("'"+id+"'"):'null'})">Salvar</button></div>
-  </div>`;
-  document.body.appendChild(m);
-  const nm=$('sc-m-name'); if(nm) setTimeout(()=>nm.focus(),30);
-}
-function scModalFilePicked(input){ scModalFile=input.files[0]||null; const t=$('sc-drop-txt'), d=$('sc-drop'); if(t&&scModalFile){ t.textContent=scModalFile.name+' ('+Math.round(scModalFile.size/1024)+' KB)'; if(d) d.classList.add('on'); } }
-async function scDoUpload(file){
-  const base=apiUrl(), tok=apiToken();
-  if(!base||!tok) return {ok:false,err:'Backend não configurado (faça login).'};
-  if(file.size>60*1024*1024) return {ok:false,err:'Arquivo grande demais (máx 60MB).'};
-  try{
-    const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok) return {ok:false,err:(d.error||('HTTP '+r.status))};
-    return {ok:true,key:d.key,mime:d.mime};
-  }catch(e){ return {ok:false,err:'Falha: '+e.message}; }
-}
-function scDeleteKey(key){ const base=apiUrl(),tok=apiToken(); if(base&&tok&&key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); } }
-// Gera um poster (1o frame) do video: a dash carrega o video do R2 (sem CSP), captura
-// o frame num canvas e sobe como imagem leve. O painel usa esse poster como previa.
-var scPosterTried={};
-async function scGenPoster(item){
-  if(!item||item.kind!=='video'||item.posterKey||scPosterTried[item.id]) return;
-  const base=apiUrl(), tok=apiToken(); if(!base||!tok||!item.key) return;
-  scPosterTried[item.id]=1;
-  try{
-    const url=scMediaUrl(item.key);
-    const v=document.createElement('video'); v.crossOrigin='anonymous'; v.muted=true; v.preload='auto'; v.playsInline=true; v.src=url;
-    await new Promise((res,rej)=>{ let d=false; const ok=()=>{ if(!d){d=true;res();} }; const no=()=>{ if(!d){d=true;rej(new Error('load'));} }; v.onloadeddata=ok; v.onerror=no; setTimeout(no,20000); });
-    try{ v.currentTime=Math.min(0.2,(v.duration||2)/3); }catch(_){}
-    await new Promise((res)=>{ let d=false; const done=()=>{ if(!d){d=true;res();} }; v.onseeked=done; setTimeout(done,2500); });
-    const w=v.videoWidth||320, h=v.videoHeight||240, scale=Math.min(1,480/w);
-    const c=document.createElement('canvas'); c.width=Math.round(w*scale); c.height=Math.round(h*scale);
-    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-    const blob=await new Promise(r=>{ try{ c.toBlob(r,'image/jpeg',0.72); }catch(_){ r(null); } });
-    if(!blob) throw new Error('frame');
-    const up=await scDoUpload(new File([blob],'poster.jpg',{type:'image/jpeg'}));
-    if(up.ok){ const fm=scFindMedia(item.id); if(fm){ fm.item.posterKey=up.key; scTouch(); if(scSel.video===item.id) scRenderDetail('video'); } }
-  }catch(e){}
-}
-async function scGenPostersForVideos(){
-  const vids=(SC().media||[]).filter(m=>m.kind==='video'&&!m.posterKey);
-  for(const v of vids){ await scGenPoster(v); }
-}
-async function scModalSave(kind,id){
-  const name=(($('sc-m-name')||{}).value||'').trim();
-  if(kind==='messages'){
-    if(!name){ scModalStatus('Dá um nome pra mensagem.'); return; }
-    const text=($('sc-m-text')||{}).value||'';
-    if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; } }
-    else { const nid='m'+Date.now().toString(36); SC().messages.push({id:nid,label:name,text:text}); scSel.messages=nid; }
-    scTouch(); scCloseModal(); scRenderCards('messages'); scRenderDetail('messages'); scRenderNav(); return;
-  }
-  const cap=($('sc-m-cap')||{}).value||'';
-  const save=$('sc-modal-save');
-  if(id){
-    const fm=scFindMedia(id); if(!fm){ scCloseModal(); return; }
-    let replaced=false;
-    if(scModalFile){ if(save) save.disabled=true; scModalStatus('Subindo arquivo...'); const up=await scDoUpload(scModalFile); if(save) save.disabled=false; if(!up.ok){ scModalStatus(up.err); return; } scDeleteKey(fm.item.key); fm.item.key=up.key; fm.item.mime=up.mime; replaced=true; if(fm.item.kind==='video'){ scDeleteKey(fm.item.posterKey); fm.item.posterKey=null; delete scPosterTried[fm.item.id]; } }
-    fm.item.label=name||fm.item.label;
-    if(kind==='image'||kind==='video') fm.item.caption=cap;
-    scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind);
-    if(kind==='video'&&replaced) scGenPoster(fm.item);
-    return;
-  }
-  if(!scModalFile){ scModalStatus('Escolhe um arquivo pra subir.'); return; }
-  if(save) save.disabled=true; scModalStatus('Subindo '+scModalFile.name+'...');
-  const up=await scDoUpload(scModalFile); if(save) save.disabled=false;
-  if(!up.ok){ scModalStatus(up.err); return; }
-  const nid='md'+Date.now().toString(36);
-  SC().media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
-  scSel[kind]=nid;
-  scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
-  if(kind==='video'){ const nm=scFindMedia(nid); if(nm) scGenPoster(nm.item); }
+  scRenderMsgs();
 }
 function scRenderMsgs(){
-  const box=$('sc-list'); if(!box) return;
-  const msgs=SC().messages;
-  if(!msgs.length){ box.innerHTML=scEmpty('Nenhuma mensagem. Clica em "+ Nova mensagem".'); return; }
+  const box=$('sc-msgs'); if(!box) return;
+  const msgs=DB.salechat.messages;
+  if(!msgs.length){ box.innerHTML='<div class="muted" style="padding:16px;text-align:center">Nenhuma mensagem ainda. Clica em "+ Nova mensagem".</div>'; return; }
   box.innerHTML=msgs.map((m,i)=>`
-    <div class="sc-item">
-      ${scOrderBtns('scMoveMsg',i,msgs.length)}
-      <div style="flex:1;min-width:0">
-        <input class="info-val" value="${scEscA(m.label)}" placeholder="Nome curto (ex: Fechar pedido)" oninput="scEdit(${i},'label',this.value)">
-        <textarea class="info-val" rows="2" placeholder="Texto enviado no WhatsApp" style="margin-top:7px;resize:vertical;line-height:1.4" oninput="scEdit(${i},'text',this.value)">${scEscT(m.text)}</textarea>
+    <div style="border:1px solid var(--b2);border-radius:var(--r);padding:11px 12px;margin-bottom:10px;background:var(--s1)">
+      <div style="display:flex;gap:9px;align-items:center;margin-bottom:8px">
+        <span class="muted" style="font-size:11px;min-width:16px;text-align:center">${i+1}</span>
+        <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome curto (ex: Fechar pedido)" oninput="scEdit(${i},'label',this.value)">
+        <button class="btn btn-gh btn-xs" style="color:var(--rd)" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
       </div>
-      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelMsg(${i})">${ico('trash',{size:12})}</button>
+      <textarea class="info-val" rows="2" placeholder="Texto que vai ser enviado no WhatsApp" oninput="scEdit(${i},'text',this.value)" style="resize:vertical;line-height:1.4">${scEscT(m.text)}</textarea>
     </div>`).join('');
 }
-function scAddMsg(){ SC().messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); scTouch(); scRenderMsgs(); scRenderNav(); }
-function scDelMsg(i){ SC().messages.splice(i,1); scTouch(); scRenderMsgs(); scRenderNav(); }
-function scEdit(i,f,v){ if(SC().messages[i]){ SC().messages[i][f]=v; scTouch(); } }
-function scMoveMsg(i,d){ if(scArrMove(SC().messages,i,d)){ scTouch(); scRenderMsgs(); } }
-function scTouch(){ SC().updated_at=Math.floor(Date.now()/1000); persist(); }
-// ─── Seção: Funis ───
-function scSecFunis(main){
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('repeat',{size:15})} Funis (sequências)</div><button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button></div>
-    <p class="sc-hint">Sequência de itens (mensagem, áudio, vídeo) que o atendente dispara em ordem com 1 clique, com pausa humana entre cada.</p>
-    <div id="sc-list"></div>`;
-  scRenderFunis();
-}
-function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0}; }
-function scItemMeta(id){
-  const m=(SC().messages||[]).find(x=>x.id===id); if(m) return {label:m.label||m.id,color:'#2563eb',icon:'message-circle'};
-  const d=(SC().media||[]).find(x=>x.id===id);
-  if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
-  return {label:id,color:'#8696a0',icon:'circle'};
-}
-function scDdBind(){ if(window.__scDdBound) return; window.__scDdBound=true; document.addEventListener('click', function(e){ document.querySelectorAll('details.sc-adddd[open]').forEach(function(d){ if(!d.contains(e.target)) d.removeAttribute('open'); }); }); }
-function scAddDdRows(i,opts){
-  if(!opts.length) return '<div class="muted" style="padding:8px 10px;font-size:11.5px">Nenhum item ainda. Crie mensagens/áudios primeiro.</div>';
-  return opts.map(o=>{ const me=scItemMeta(o.id); return `<button type="button" class="sc-dd-row" onclick="scAddFunilItem(${i},'${o.id}')"><span class="sc-dd-ic" style="background:${me.color}1f;color:${me.color}">${ico(me.icon,{size:14})}</span><span class="sc-dd-lb">${scEscT(me.label)}</span></button>`; }).join('');
-}
-function scRenderFunis(){
-  const box=$('sc-list'); if(!box) return;
-  scDdBind();
-  const seqs=SC().sequences;
-  if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
-  const opts=scAllItems();
-  box.innerHTML=seqs.map((s,i)=>{
-    const steps=(s.items||[]);
-    const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw), me=scItemMeta(st.id); return `
-      <div class="sc-step">
-        <div class="sc-ord"><button title="Subir" ${j===0?'disabled':''} onclick="scMoveFunilItem(${i},${j},-1)">${ico('chevron-up',{size:11})}</button><button title="Descer" ${j>=steps.length-1?'disabled':''} onclick="scMoveFunilItem(${i},${j},1)">${ico('chevron-down',{size:11})}</button></div>
-        <span class="sc-step-ic" style="background:${me.color}1f;color:${me.color}">${ico(me.icon,{size:14})}</span>
-        <span class="sc-step-lb">${(j+1)}. ${scEscT(me.label)}</span>
-        <div class="sc-step-times">
-          <label class="sc-time" title="Espera antes de disparar este passo (intervalo)">espera<input type="number" min="0" max="86400" value="${st.delay}" oninput="scFunilItemDelay(${i},${j},this.value)">s</label>
-          <label class="sc-time" title="Tempo de gravando/digitando antes de enviar (0 = automático)">simula<input type="number" min="0" max="120" value="${st.sim}" oninput="scFunilItemSim(${i},${j},this.value)">s</label>
-        </div>
-        <button class="sc-step-del" title="Remover passo" onclick="scRemoveFunilItem(${i},${j})">${ico('x',{size:14})}</button>
-      </div>`; }).join('') : '<div class="muted" style="font-size:11.5px;padding:3px 2px">Sem passos ainda, adiciona abaixo.</div>';
-    return `
-    <div class="sc-fcard">
-      <div class="sc-fcard-head">
-        <span class="sc-fic">${ico('repeat',{size:17})}</span>
-        <input class="sc-fname" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
-        <div class="sc-fhead-acts">
-          ${scOrderBtns('scMoveFunil',i,seqs.length)}
-          <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:13})}</button>
-        </div>
-      </div>
-      <div class="sc-steps">${stepsHtml}</div>
-      <details class="sc-adddd">
-        <summary class="sc-adddd-btn">${ico('plus',{size:14})} adicionar passo na sequência</summary>
-        <div class="sc-adddd-menu">${scAddDdRows(i,opts)}</div>
-      </details>
-      <label class="sc-switch-row" title="Se o lead mandar mensagem no meio do funil, o disparo para na hora">
-        <span class="sc-switch"><input type="checkbox" ${s.stopOnReply?'checked':''} onchange="scFunilStopReply(${i},this.checked)"><span class="sc-switch-sl"></span></span>
-        Parar o funil se o lead responder no meio
-      </label>
-      <p class="sc-fhint">Espera = intervalo antes de cada passo. Simula = tempo de gravando/digitando (0 = automático). O simulador abaixo mostra o funil rodando.</p>
-    </div>`;
-  }).join('');
-}
-function scAddFunil(){ SC().sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
-function scDelFunil(i){ SC().sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
-function scFunilLabel(i,v){ if(SC().sequences[i]){ SC().sequences[i].label=v; scTouch(); } }
-function scAddFunilItem(i,id){ const s=SC().sequences[i]; if(s){ s.items=s.items||[]; s.items.push({id:id,delay:3}); scTouch(); scRenderFunis(); } }
-function scRemoveFunilItem(i,j){ const s=SC().sequences[i]; if(s&&s.items){ s.items.splice(j,1); scTouch(); scRenderFunis(); } }
-function scFunilItemDelay(i,j,v){ const s=SC().sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].delay=Math.max(0,parseInt(v,10)||0); scTouch(); } }
-function scFunilItemSim(i,j,v){ const s=SC().sequences[i]; if(s&&s.items&&s.items[j]!=null){ s.items[j]=scStep(s.items[j]); s.items[j].sim=Math.max(0,parseInt(v,10)||0); scTouch(); } }
-function scFunilStopReply(i,v){ if(SC().sequences[i]){ SC().sequences[i].stopOnReply=!!v; scTouch(); } }
-function scMoveFunilItem(i,j,d){ const s=SC().sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
-function scMoveFunil(i,d){ if(scArrMove(SC().sequences,i,d)){ scTouch(); scRenderFunis(); } }
-// ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
-function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':'volume'; }
-function scSecMedia(main,kind){ scRenderSectionMD(kind); }
-function scRenderMediaKind(kind){
-  const box=$('sc-list'); if(!box) return;
-  const all=SC().media;
-  const rows=all.map((m,i)=>({m:m,i:i})).filter(x=>x.m.kind===kind);
-  if(!rows.length){ box.innerHTML=scEmpty('Nada aqui ainda. Sobe pelo "+ Adicionar".'); return; }
-  box.innerHTML=rows.map((x,pos)=>{
-    const m=x.m, i=x.i, url=scMediaUrl(m.key);
-    const prev = m.kind==='audio'?`<audio controls preload="none" src="${url}" style="height:34px;max-width:260px;width:100%"></audio>`
-      : m.kind==='image'?`<img src="${url}" loading="lazy" style="height:56px;border-radius:6px;border:1px solid var(--b2)">`
-      : m.kind==='video'?`<video src="${url}" controls preload="none" style="height:110px;border-radius:6px;border:1px solid var(--b2);background:#000"></video>`
-      : `<a href="${url}" target="_blank" class="muted" style="font-size:11.5px;text-decoration:underline">abrir arquivo</a>`;
-    const capField = (m.kind==='video'||m.kind==='image')?`<input class="info-val" style="margin-top:6px;font-size:12px" value="${scEscA(m.caption||'')}" placeholder="Legenda (opcional, vai junto)" oninput="scEditMediaIdx(${i},'caption',this.value)">`:'';
-    return `<div class="sc-item">
-      ${scOrderBtns('scMoveMedia_'+kind,pos,rows.length)}
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:7px">
-          <span style="color:var(--bl2);flex:none">${ico(scMediaIcon(m.kind),{size:14})}</span>
-          <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome" oninput="scEditMediaIdx(${i},'label',this.value)">
-          ${m.champ?'<span style="font-size:9.5px;background:var(--bld);color:var(--bl2);border-radius:5px;padding:2px 6px;flex:none">campeão</span>':''}
-        </div>
-        ${capField}
-        <div style="margin-top:8px">${prev}</div>
-      </div>
-      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelMediaIdx(${i})">${ico('trash',{size:12})}</button>
-    </div>`;
-  }).join('');
-}
-function setScMediaStatus(m,err){ const el=$('sc-media-status'); if(el){ el.textContent=m||''; el.style.color=err?'var(--rd)':'var(--gr)'; } }
-async function scUploadMedia(file, el, kindHint){
-  if(!file) return;
-  const base=apiUrl(), tok=apiToken();
-  if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); if(el)el.value=''; return; }
-  const kind=kindHint||(file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':file.type.indexOf('image')===0?'image':'document');
-  if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); if(el)el.value=''; return; }
-  setScMediaStatus('Subindo '+file.name+'... ('+Math.round(file.size/1024)+' KB)');
-  try{
-    const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); if(el)el.value=''; return; }
-    SC().media.push({id:'md'+Date.now().toString(36),kind:kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime,caption:''});
-    scTouch(); scRenderMediaKind(kind); scRenderNav(); setScMediaStatus(file.name+' adicionado.');
-  }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
-  if(el) el.value='';
-}
-function scEditMediaIdx(i,f,v){ if(SC().media[i]){ SC().media[i][f]=v; scTouch(); } }
-function scDelMediaIdx(i){
-  const m=SC().media[i]; if(!m) return;
-  if(m.champ && !confirm('Excluir "'+(m.label||'item')+'" do funil campeão? Ele some do painel de todos os atendentes.')) return;
-  const base=apiUrl(), tok=apiToken();
-  if(base&&tok&&m.key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+m.key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); }
-  SC().media.splice(i,1); scTouch(); scRenderMediaKind(m.kind); scRenderNav();
-}
-function scMoveMedia(kind,pos,d){
-  const all=SC().media, idxs=[];
-  all.forEach((m,i)=>{ if(m.kind===kind) idxs.push(i); });
-  const b=pos+d; if(b<0||b>=idxs.length) return;
-  const ia=idxs[pos], ib=idxs[b], t=all[ia]; all[ia]=all[ib]; all[ib]=t;
-  scTouch(); scRenderMediaKind(kind);
-}
-function scMoveMedia_audio(p,d){ scMoveMedia('audio',p,d); }
-function scMoveMedia_video(p,d){ scMoveMedia('video',p,d); }
-function scMoveMedia_image(p,d){ scMoveMedia('image',p,d); }
-function scMoveMedia_document(p,d){ scMoveMedia('document',p,d); }
-// ─── Seção: Gatilhos (palavra-chave → sugestão no painel do atendente) ───
-function scSecTriggers(main){
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('zap',{size:15})} Gatilhos (palavra-chave)</div><button class="btn btn-gr btn-sm" onclick="scAddTrigger()">+ Novo gatilho</button></div>
-    <p class="sc-hint">Quando o cliente digitar a palavra, o painel do atendente sugere na hora o item certo (ele confirma com 1 clique).</p>
-    <div id="sc-list"></div>`;
-  scRenderTriggers();
-}
-function scRenderTriggers(){
-  const box=$('sc-list'); if(!box) return;
-  const trs=SC().triggers;
-  if(!trs.length){ box.innerHTML=scEmpty('Nenhum gatilho. Ex: cliente digita "preço" → sugere o áudio da oferta.'); return; }
-  const opts=scAllItems();
-  box.innerHTML=trs.map((t,i)=>`
-    <div class="sc-gcard">
-      <span class="sc-gic">${ico('zap',{size:17})}</span>
-      <div class="sc-gbody">
-        <div class="sc-grow"><span class="muted">Se o cliente disser</span><input class="info-val" value="${scEscA(t.keyword)}" placeholder="preço, valor, quanto..." oninput="scEditTrigger(${i},'keyword',this.value)"></div>
-        <div class="sc-grow"><span class="muted">sugere</span><select class="info-val" style="font-size:12.5px" onchange="scEditTrigger(${i},'itemId',this.value)"><option value="">— escolha o item —</option>${opts.map(o=>`<option value="${scEscA(o.id)}" ${t.itemId===o.id?'selected':''}>${scEscT(o.label)}</option>`).join('')}</select></div>
-      </div>
-      <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelTrigger(${i})">${ico('trash',{size:13})}</button>
-    </div>`).join('');
-}
-function scAddTrigger(){ SC().triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
-function scDelTrigger(i){ SC().triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
-function scEditTrigger(i,f,v){ if(SC().triggers[i]){ SC().triggers[i][f]=v; scTouch(); } }
+function scAddMsg(){ DB.salechat.messages.push({id:'m'+Date.now().toString(36),label:'Nova mensagem',text:''}); persist(); scRenderMsgs(); }
+function scDelMsg(i){ DB.salechat.messages.splice(i,1); persist(); scRenderMsgs(); }
+function scEdit(i,f,v){ if(DB.salechat.messages[i]){ DB.salechat.messages[i][f]=v; DB.salechat.updated_at=Math.floor(Date.now()/1000); persist(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)
@@ -8491,15 +7711,13 @@ function _chipUsavel(c){ return c.st!=='aquecimento' && c.st!=='banido'; }
 function _setChipEmUso(c, on){
   if(on){
     c.em_uso=true;
-    c.bkp=false;   // não pode ser PRINCIPAL (em uso) E RESERVA ao mesmo tempo (o mesmo WhatsApp em 2 instâncias derruba uma)
     const emUsoId=getEmUsoStatusId(); if(emUsoId) c.wa_st=emUsoId;
     if(c.at){
       const dispId=getDisponivelStatusId();
-      const myN=String(c.num||'').replace(/\D/g,'').slice(-8);
       (DB.chips||[]).forEach(o=>{
-        if(o!==c && o.at===c.at){
-          if(_isChipEmUso(o)){ o.em_uso=false; if(dispId) o.wa_st=dispId; }
-          if(o.bkp && myN && String(o.num||'').replace(/\D/g,'').slice(-8)===myN){ o.bkp=false; }   // reserva com MESMO número do principal → limpa (evita conflito)
+        if(o!==c && o.at===c.at && _isChipEmUso(o)){
+          o.em_uso=false;
+          if(dispId) o.wa_st=dispId;
         }
       });
     }
@@ -9539,26 +8757,6 @@ function confirmRechargeId(id){
    cada atendente e pula automaticamente os banidos/restritos.
 ═══════════════════════════════════════════════════════ */
 function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
-// Painel de Leads (embute a página pública /pressels-total?view=leads do worker num iframe).
-// Só diretor vê. Acompanhamento diário dos leads que caem nas roletas das pressels.
-function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
-function _presselLeadsSrc(){ const t=(typeof apiToken==='function'?apiToken():''); return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'+(t?('&k='+encodeURIComponent(t)):''); }
-function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
-function renderPresselLeads(){
-  const wrap=$('presselleads-pg'); if(!wrap) return;
-  const src=_presselLeadsSrc();
-  // Monta uma vez só; nas próximas visitas mantém o iframe (não recarrega à toa).
-  if(wrap.getAttribute('data-src')===src && wrap.querySelector('iframe')) return;
-  wrap.setAttribute('data-src',src);
-  wrap.innerHTML=`
-    <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 14px">
-      <button class="btn btn-gh btn-sm" onclick="reloadPresselLeads()">${ico('refresh-cw',{size:14})} Atualizar</button>
-      <a class="btn btn-gh btn-sm" href="${src}" target="_blank" rel="noopener" style="text-decoration:none">${ico('arrow-up-right',{size:14})} Abrir em nova aba</a>
-    </div>
-    <iframe id="presselleads-frame" src="${src}" title="Leads das pressels" loading="lazy"
-      style="width:100%;height:calc(100vh - 160px);min-height:520px;border:1px solid var(--b2);border-radius:var(--rl);background:#fff;display:block"></iframe>`;
-}
 
 function _ensurePressels(){ if(!Array.isArray(DB.pressels)) DB.pressels=[]; return DB.pressels; }
 // Atendentes elegíveis pra roleta (com chip ou papel operacional)
@@ -9882,17 +9080,14 @@ function openPresselMetrics(pid){
 function _ppmSetDay(d){ _ppmDay=d||''; _renderPresselMetrics(); }
 function _renderPresselMetrics(){
   const pid=_ppmPid, p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const vend=(p.vendedores||[]).filter(v=>v.ativo!==false).map(v=>{
+    const at=getTeam(v.at), chip=_atendenteActiveChip(v.at);
+    return {at, chip, inst:'ax_'+v.at, contatos:0, vendas:0, valor:0};
+  }).filter(v=>v.at);
   api.presselMetrics(_ppmDay).then(r=>{
     const today=r.today||_ppmYmd(new Date()), day=r.day||today, isToday=(day===today);   // "hoje" vem do servidor (BRT), não do fuso do navegador
     const P=(r.pressels||{})[String(pid)]||{views:0,clicks:0,contatos:0,vendas:0,valor:0,vend:{}};
-    // vendedores da roleta AGORA + qualquer um com atividade hoje (P.vend vem por instância, mesmo já tirado da roleta) — o dado não some
-    const ats=[], seen={}, addAt=(a)=>{ a=String(a||''); if(a && !seen[a]){ seen[a]=1; ats.push(a); } };
-    (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>addAt(v.at));
-    Object.keys(P.vend||{}).forEach(inst=>addAt(String(inst).replace(/^ax_/,'')));
-    const vend=ats.map(atId=>{
-      const at=getTeam(atId)||{name:'Vendedor'}, chip=_atendenteActiveChip(atId), d=(P.vend||{})['ax_'+atId]||{};
-      return {at, chip, contatos:Number(d.contatos)||0, vendas:Number(d.vendas)||0};
-    });
+    vend.forEach(v=>{ const d=(P.vend||{})[v.inst]||{}; v.contatos=Number(d.contatos)||0; v.vendas=Number(d.vendas)||0; });
     const totC=Number(P.contatos)||0, totV=Number(P.vendas)||0, totVal=Number(P.valor)||0;
     const views=Number(P.views)||0, clicks=Number(P.clicks)||0;
     const card=(lbl,val,color,sub)=>`<div style="flex:1;min-width:118px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:11px;color:var(--t3)">${lbl}</div><div style="font-size:24px;font-weight:800;color:${color||'var(--tx)'};margin-top:3px">${val}</div>${sub?`<div style="font-size:10.5px;color:var(--t3);margin-top:2px">${sub}</div>`:''}</div>`;
@@ -9922,9 +9117,14 @@ function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
-    // NÃO removemos o vendedor da roleta aqui: o serve-time já pula número caído/errado sozinho (temporário
-    // e auto-recupera ao reconectar), e o card mostra "não conectado". Remover apagava a config do vendedor
-    // (cota/reserva/troca) num simples blip de conexão — bug encontrado na revisão.
+    // AUTO: número que CAIU (desconectado) sai da roleta sozinho — o interruptor desliga
+    let changed=false;
+    (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
+      if(!Array.isArray(p.vendedores)) return;
+      const keep=p.vendedores.filter(v=>{ const pInst=v.swap?('ax_'+v.at+'_b'):('ax_'+v.at), rInst=v.swap?('ax_'+v.at):('ax_'+v.at+'_b'); const sP=m[pInst], sR=m[rInst]; const pDown=sP&&sP!=='open', rUp=(sR==='open' && v.reserva_on!==false); if(pDown && !rUp){ changed=true; return false; } return true; });   // só sai da roleta se o PRINCIPAL (conforme a troca) caiu E a reserva não cobre
+      if(keep.length!==p.vendedores.length) p.vendedores=keep;
+    });
+    if(changed){ persistAndPushNow().catch(_=>{}); try{ toast('Número caiu: desliguei da roleta automaticamente','ok'); }catch(_){} }
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id));
   }).catch(()=>{});
 }
@@ -9937,9 +9137,7 @@ function _atendenteBackupChip(atId){
 // v.swap troca só o PAPEL de quem recebe primeiro — cada número continua na SUA conexão (não perde QR).
 function _vendRoles(at, v){
   const em=_atendenteActiveChip(at.id);              // em_uso  → ax_<at>
-  let bk=_atendenteBackupChip(at.id);                // bkp     → ax_<at>_b
-  // guarda: reserva NÃO pode ser o mesmo chip/número do principal (senão o mesmo WhatsApp em 2 instâncias briga e cai)
-  if(bk && em && (String(bk.id)===String(em.id) || _numMatchWa(bk.num, em.num))) bk=null;
+  const bk=_atendenteBackupChip(at.id);              // bkp     → ax_<at>_b
   const A={chip:em, inst:'ax_'+at.id, slot:''};
   const B={chip:bk, inst:'ax_'+at.id+'_b', slot:'b'};
   const swap=!!(v && v.swap && em && bk);
@@ -9957,8 +9155,6 @@ function swapPresselVend(pid, atId){
 }
 // Define/limpa o número de RESERVA do vendedor (é global do vendedor, vale em todas as pressels)
 function setPresselVendBackup(pid, atId, chipId){
-  const em=_atendenteActiveChip(atId), chosen=(DB.chips||[]).find(c=>String(c.id)===String(chipId));
-  if(em && chosen && (String(chosen.id)===String(em.id) || _numMatchWa(chosen.num, em.num))){ toast('A reserva não pode ser o mesmo número do principal','err'); return; }
   (DB.chips||[]).forEach(c=>{ if(c.at===atId) c.bkp = (String(c.id)===String(chipId)); });
   const p=_ensurePressels().find(x=>x.id===pid); const v=p&&(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(v) delete v.reserva_on;   // ao escolher, reserva já nasce ligada
   renderPresselVendList(pid);
@@ -10000,8 +9196,7 @@ function _presselVendReserva(pid, at, v, roles){
     <input type="number" min="0" value="${cap||''}" placeholder="ilimitados" onclick="event.stopPropagation()" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" style="width:64px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
     <span>leads no principal, vira pra reserva</span></div>`;
   if(!rchip){
-    const _emN=(()=>{ const e=_atendenteActiveChip(at.id); return e?String(e.num||'').replace(/\D/g,'').slice(-8):''; })();
-    const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso') && !(_emN && String(c.num||'').replace(/\D/g,'').slice(-8)===_emN));   // exclui o número do principal (não pode ser reserva)
+    const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso'));
     const picker=others.length
       ? `<select onchange="if(this.value)setPresselVendBackup(${pid},'${at.id}',this.value)" onclick="event.stopPropagation()" style="flex:1;min-width:0;padding:8px 10px;border:1px solid var(--b2);border-radius:9px;background:var(--s1);color:var(--tx);font-size:12.5px;font-weight:600;cursor:pointer">
          <option value="">+ Escolher número de reserva…</option>${others.map(c=>`<option value="${c.id}">${_automEsc(c.num)}</option>`).join('')}</select>`
@@ -10315,19 +9510,13 @@ async function evoConnect(atId, slot){
   try{
     // Cria (idempotente) e já recebe o QR — tudo pela ponte segura no Worker
     const j=await api.waCreate(inst);
-    let qr=j&&j.qr;
-    if(!qr){
-      // Sem QR = sessão "open" fantasma travada (número deslogou do celular mas a Evolution não soltou).
-      // Como esse botão só aparece pra número NÃO conectado, dá pra resetar a sessão e pegar um QR limpo.
-      if(body)body.innerHTML='<p class="muted" style="font-size:12px;padding:20px;text-align:center">Resetando a sessão anterior e gerando um QR novo…</p>';
-      try{ await api.waDisconnect(inst); await new Promise(r=>setTimeout(r,1800)); const j2=await api.waConnect(inst); qr=j2&&j2.qr; }catch(_){}
-    }
+    const qr=j&&j.qr;
     if(qr){
       const src=String(qr).startsWith('data:')?qr:('data:image/png;base64,'+qr);
       body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p><p id="evo-poll" class="muted" style="font-size:11.5px;margin-top:8px;opacity:.7">Aguardando leitura do QR…</p></div>`;
       _evoPollStatus(inst);
     } else {
-      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Não consegui gerar o QR agora. Fecha e tenta de novo em alguns segundos.<br><span style="font-size:11px;opacity:.7">Se persistir, o servidor da Evolution pode estar reiniciando.</span></p>`;
+      body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Conexão já ativa ou QR indisponível.<br><span style="font-size:11px;opacity:.7">Se o número não está conectado, feche e tente de novo.</span></p>`;
     }
   }catch(e){
     body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui conectar: ${(e&&e.message)||e}<br><br>Confira em Configurações se o WhatsApp (Evolution) está configurado e se o servidor da VPS está no ar.</p>`;
@@ -10442,40 +9631,22 @@ function renderAutomacoes(){
   const on=DB.wa_autom_on;
   const bot=DB.wa_bot_on;
   wrap.innerHTML=`
-    <div class="ph"><div><h1>Robô <em>de WhatsApp</em></h1><p>Atendimento automático no WhatsApp: acolhe o lead na hora, tira dúvidas, pré-qualifica e passa pro humano fechar</p></div></div>
+    <div class="ph"><div><h1>Automações <em>de WhatsApp</em></h1><p>Dispare mensagens automáticas por gatilho, pela conexão da Evolution</p></div></div>
 
-    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:12px;padding:16px;border:1px solid ${bot?'var(--gr)':'var(--b1)'}">
+    <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px;border:1px solid ${bot?'var(--gr)':'var(--b1)'}">
       <div style="flex:1">
-        <div style="font-size:14px;font-weight:700;color:var(--tx);display:inline-flex;align-items:center;gap:7px">${ico('message-circle',{size:16})} Robô de atendimento ${bot?'<span style="color:var(--gr)">ligado</span>':'<span style="color:var(--am)">desligado</span>'}</div>
-        <div class="muted" style="font-size:12px;margin-top:3px">Atende e pré-qualifica os leads sozinho no WhatsApp. Em fase de teste: mesmo ligado, só responde os números liberados pra teste.</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--tx);display:inline-flex;align-items:center;gap:6px">${ico('message-circle',{size:15})} Robô de IA (pré-qualificação) ${bot?'<span style="color:var(--gr)">ligado</span>':'<span style="color:var(--am)">desligado</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Atende e pré-qualifica os leads sozinho no WhatsApp. Em fase de teste: mesmo ligado, só responde os números liberados pra teste.</div>
       </div>
-      <div class="ax-sw ${bot?'on':''}" onclick="toggleBotMaster()" title="Ligar/desligar o robô"></div>
+      <div class="ax-sw ${bot?'on':''}" onclick="toggleBotMaster()" title="Ligar/desligar o robô de IA"></div>
     </div>
-
-    <div class="panel" style="margin-bottom:18px;padding:14px 16px">
-      <div style="font-size:12px;font-weight:700;color:var(--tx);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">O que o robô vai fazer <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">· base montada, o projeto completo entra depois</span></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">
-        ${[
-          {i:'shield',t:'Acolhe na hora',d:'Rede de segurança dos leads que chamam e ninguém responde na hora.'},
-          {i:'message-circle',t:'Tira dúvidas',d:'Explica o produto e contorna as objeções com a voz da operação.'},
-          {i:'check-circle',t:'Pré-qualifica',d:'Confirma interesse, pagamento na entrega e o valor antes de passar.'},
-          {i:'phone',t:'Passa pro humano',d:'Faz o handoff pro vendedor fechar na ligação. Não substitui o time.'},
-        ].map(p=>`<div style="background:var(--s3);border:1px solid var(--b1);border-radius:10px;padding:12px">
-          <div style="color:var(--bl2);margin-bottom:6px">${ico(p.i,{size:18})}</div>
-          <div style="font-size:12.5px;font-weight:700;color:var(--tx);margin-bottom:3px">${p.t}</div>
-          <div class="muted" style="font-size:11.5px;line-height:1.45">${p.d}</div>
-        </div>`).join('')}
-      </div>
-    </div>
-
-    <div class="section-title" style="margin-top:0">Mensagens automáticas por gatilho</div>
 
     <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:14px;padding:14px 16px">
       <div style="flex:1">
-        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Disparos automáticos ${on?'<span style="color:var(--gr)">ativos</span>':'<span style="color:var(--am)">pausados</span>'}</div>
-        <div class="muted" style="font-size:12px;margin-top:2px">Chave-mestra dos disparos por gatilho. Enquanto pausada, nenhuma regra dispara sozinha (você ainda pode testar manualmente).</div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Automações ${on?'<span style="color:var(--gr)">ativas</span>':'<span style="color:var(--am)">pausadas</span>'}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Chave-mestra geral. Enquanto pausada, nenhuma regra dispara sozinha (você ainda pode testar manualmente).</div>
       </div>
-      <div class="ax-sw ${on?'on':''}" onclick="toggleAutomMaster()" title="Ligar/desligar todos os disparos"></div>
+      <div class="ax-sw ${on?'on':''}" onclick="toggleAutomMaster()" title="Ligar/desligar todas as automações"></div>
     </div>
 
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px">

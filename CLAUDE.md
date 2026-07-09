@@ -59,13 +59,15 @@ Implementação: classe `body.theme-*` (+ `body.is-light` pros 3 light). Todas a
 
 **Não mexer** sem motivo claro — bugs anteriores aconteceram quando essas vars foram movidas pra fora do `:root` ou hardcoded.
 
-## 💰 Sistema de Aporte / Pago Por
+## 💰 Financeiro — modelo MANUAL (v2.26+)
 
-Investimentos (`DB.invest`) e Gastos de tráfego (`DB.gastos`) têm campo `pago_por`:
-- `'empresa'`: pago do caixa de aportes acumulado
-- `<userId>`: pago do bolso por um sócio/diretor/produtor → gera **aporte automático** vinculado via `auto_source = {kind, id}`
-
-Função `syncAutoAporteForInvest(refId, payload, kind)` gerencia a sincronização. Delete em cascata: apagar invest/gasto apaga aporte vinculado.
+Reformulado estilo banco. Pontos-chave:
+- **Extrato único** na Visão Geral (`buildExtrato`/`renderExtratoBody`): entradas/saídas por dia, acordeão, filtros por tipo. Alimentado por vendas, aportes, payouts, invest e gastos.
+- **Um botão** "Registrar movimentação" (`openMov`/`saveMov`, modal `m-mov`): pagar equipe, tráfego, investimento ou aporte. Escolhe origem (`pago_por`), mas é **só anotação**.
+- **Cards**: Caixa da empresa (acumulado real), Caixa da plataforma (`DB.caixaPlat`, manual via `m-caixaplat`), Lucro, Custos.
+- **NADA de aporte automático**. `pago_por` (`'empresa'` ou `<userId>`) não gera nada. `syncAutoAporteForInvest` só LIMPA aportes automáticos legados; `dropAutoAportes()` remove os antigos no boot e após sync. Capital de sócio só entra como **aporte manual** (`DB.aportes`, sem `auto_source`).
+- **Skill `financeiro-axion`** (`~/.claude/skills/`): CFO virtual que puxa o estado via API (`/api/state`), audita e grava com backup. Também importa gastos do **ContaSimples** (conector MCP `conta-simples`) como investimentos da empresa, deduplicados por `cs_id`.
+- Removidos da UI: fechar período, pró-labore, históricos separados (dados legados preservados).
 
 ## 🚀 Deploy
 

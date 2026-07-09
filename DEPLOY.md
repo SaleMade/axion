@@ -31,7 +31,7 @@ Resultado: URL pública tipo `https://axion-seu.pages.dev` rodando exatamente co
 Resultado: dados num banco central · webhook PAYT funcionando · multi-usuário.
 
 ### Pré-requisitos:
-- Conta Cloudflare (grátis)
+- Conta Cloudflare (grátis)jj
 - Node.js instalado: https://nodejs.org
 - Terminal (PowerShell no Windows)
 
