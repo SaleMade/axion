@@ -1468,20 +1468,21 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
 /* ─── Sale Chat: dashboard com seções laterais ─── */
-.sc-install{ display:flex; align-items:center; gap:14px; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rl); padding:13px 16px; margin-bottom:18px; }
-.sc-install-ic{ width:42px; height:42px; border-radius:12px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(19,194,115,.14); color:#13c273; }
-.sc-install-txt{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
-.sc-install-txt b{ font-size:13.5px; color:var(--tx); font-weight:700; }
-.sc-install-txt span{ font-size:12px; color:var(--t3); line-height:1.5; }
+.sc-install{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 13px; margin-bottom:16px; opacity:.9; }
+.sc-install:hover{ opacity:1; }
+.sc-install-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(19,194,115,.10); color:#13c273; }
+.sc-install-txt{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+.sc-install-txt b{ font-size:12.5px; color:var(--t2); font-weight:700; }
+.sc-install-txt span{ font-size:11px; color:var(--t3); line-height:1.45; }
 .sc-install a.btn{ flex:none; }
 @media(max-width:640px){ .sc-install{ flex-wrap:wrap; } .sc-install a.btn{ width:100%; justify-content:center; } }
 .sc-wrap{ display:flex; gap:16px; align-items:flex-start; }
-.sc-nav{ flex:none; width:196px; display:flex; flex-direction:column; gap:4px; position:sticky; top:12px; }
-.sc-navitem{ display:flex; align-items:center; gap:9px; background:var(--s2); border:1px solid var(--b1); color:var(--t2); border-radius:var(--r); padding:10px 12px; cursor:pointer; font-family:inherit; font-size:13px; text-align:left; transition:background .12s,color .12s,border-color .12s; }
+.sc-nav{ flex:none; width:216px; display:flex; flex-direction:column; gap:5px; position:sticky; top:12px; }
+.sc-navitem{ display:flex; align-items:center; gap:12px; background:var(--s2); border:1px solid var(--b1); color:var(--t2); border-radius:12px; padding:14px 15px; cursor:pointer; font-family:inherit; font-size:14.5px; font-weight:600; text-align:left; transition:background .12s,color .12s,border-color .12s; }
 .sc-navitem:hover{ background:var(--s3); color:var(--tx); }
-.sc-navitem.on{ background:var(--bld); color:var(--bl2); border-color:var(--bl); font-weight:600; }
+.sc-navitem.on{ background:var(--bld); color:var(--bl2); border-color:var(--bl); font-weight:700; }
 .sc-navitem .sc-nlbl{ flex:1; }
-.sc-navn{ font-size:11px; background:var(--s3); color:var(--t3); border-radius:10px; padding:1px 7px; min-width:20px; text-align:center; }
+.sc-navn{ font-size:11.5px; background:var(--s3); color:var(--t3); border-radius:10px; padding:2px 9px; min-width:24px; text-align:center; font-weight:700; }
 .sc-navitem.on .sc-navn{ background:var(--bl); color:#fff; }
 .sc-main{ flex:1; min-width:0; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rl); padding:18px 20px; }
 .sc-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
@@ -3772,8 +3773,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.41.0';
-const APP_LAST_CHANGE = 'Sale Chat: botao "Baixar instalador (.zip)" na dash pra mandar pro vendedor (descompacta e clica no start.bat). Dois modos: WhatsApp normal (start-normal.bat) e beta (start-beta.bat), em portas separadas pra nao cruzar.';
+const APP_VERSION = '2.42.0';
+const APP_LAST_CHANGE = 'Sale Chat: navegacao da esquerda (Mensagens, Audios, etc.) maior, como as abas do painel do WhatsApp. Banner do instalador do vendedor mais discreto.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7691,9 +7692,9 @@ function renderSaleChat(){
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
     <p class="sc-hint" style="max-width:920px;margin:-4px 0 14px;font-size:12.5px">Tudo que os atendentes disparam no WhatsApp com 1 clique. Escolhe uma seção à esquerda pra gerenciar. Salva sozinho e o painel de todos puxa.</p>
     <div class="sc-install">
-      <span class="sc-install-ic">${ico('download',{size:20})}</span>
-      <div class="sc-install-txt"><b>Instalador do vendedor</b><span>Baixa o .zip e manda pro vendedor. Ele descompacta numa pasta e dá dois cliques no <b>start.bat</b>. O painel aparece dentro do WhatsApp dele.</span></div>
-      <a class="btn btn-gr" href="/sale-chat-instalador.zip" download="sale-chat-instalador.zip">${ico('download',{size:14})} Baixar instalador (.zip)</a>
+      <span class="sc-install-ic">${ico('download',{size:15})}</span>
+      <div class="sc-install-txt"><b>Instalador do vendedor</b><span>Baixa o .zip e manda pro vendedor rodar na máquina dele.</span></div>
+      <a class="btn btn-gh btn-sm" href="/sale-chat-instalador.zip" download="sale-chat-instalador.zip">${ico('download',{size:13})} Baixar .zip</a>
     </div>
     <div class="sc-wrap">
       <div class="sc-nav" id="sc-nav"></div>
@@ -7704,7 +7705,7 @@ function renderSaleChat(){
 }
 function scRenderNav(){
   const nav=$('sc-nav'); if(!nav) return;
-  nav.innerHTML=SC_SECTIONS.map(function(s){ return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:15})}<span class="sc-nlbl">${s.label}</span><span class="sc-navn">${scCount(s.key)}</span></button>`; }).join('');
+  nav.innerHTML=SC_SECTIONS.map(function(s){ return `<button class="sc-navitem ${scSection===s.key?'on':''}" onclick="scGoSection('${s.key}')">${ico(s.icon,{size:17})}<span class="sc-nlbl">${s.label}</span><span class="sc-navn">${scCount(s.key)}</span></button>`; }).join('');
 }
 function scGoSection(k){ scSection=k; scRenderNav(); scRenderSection(); }
 function scRenderSection(){
@@ -9259,14 +9260,15 @@ function confirmRechargeId(id){
    cada atendente e pula automaticamente os banidos/restritos.
 ═══════════════════════════════════════════════════════ */
 function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
-// Painel de Leads (embute a pagina publica /pressels-total?view=leads do worker num iframe).
-// So diretor ve. Acompanhamento diario dos leads que caem nas roletas das pressels.
+// Painel de Leads (embute a página pública /pressels-total?view=leads do worker num iframe).
+// Só diretor vê. Acompanhamento diário dos leads que caem nas roletas das pressels.
 function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
 function _presselLeadsSrc(){ const t=(typeof apiToken==='function'?apiToken():''); return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'+(t?('&k='+encodeURIComponent(t)):''); }
 function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
 function renderPresselLeads(){
   const wrap=$('presselleads-pg'); if(!wrap) return;
   const src=_presselLeadsSrc();
+  // Monta uma vez só; nas próximas visitas mantém o iframe (não recarrega à toa).
   if(wrap.getAttribute('data-src')===src && wrap.querySelector('iframe')) return;
   wrap.setAttribute('data-src',src);
   wrap.innerHTML=`
