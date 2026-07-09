@@ -3901,8 +3901,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.49.0';
-const APP_LAST_CHANGE = 'Atribuicao por vendedor ligada: ponte CPF->atendente no backend (a Evolution grava CPF do cliente + quem atendeu na venda concluida do WhatsApp; a Payt atribui a venda sozinha pelo CPF). Pagina Equipe corrigida: Comissao R$ agora e a fatia real do vendedor (percentual dele x comissao Payt), nao a comissao cheia. Vale daqui pra frente conforme a captura vira rotina.';
+const APP_VERSION = '2.50.0';
+const APP_LAST_CHANGE = 'Fase 0 do banco unico: numeros financeiros agora tem UMA fonte so. Visao Geral, Evolucao Diaria, Retrospectiva e Trafego passaram a usar a mesma formula do DRE (modelo afiliado): Lucro = comissao recebida - trafego - investimentos, e ROAS = comissao / trafego (nao mais receita bruta). Retrospectiva reenquadrada (coluna Receita virou Comissao, Custos virou Investimentos). Os numeros exibidos MUDAM: e correcao, nao bug - as telas antigas somavam a receita bruta que o afiliado nunca recebe. Para esta operacao (comissao ~52% do bruto, ROAS real ~6,5x) os valores ficam saudaveis e batem com o DRE.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5688,10 +5688,13 @@ function renderHome(){
   const forn     = myV.reduce((s,v)=>s+v.custo,0);
   const com      = myV.reduce((s,v)=>s+v.comiss,0);
   const traf     = gastos.reduce((s,g)=>s+g.valor,0);
-  const lucro    = recBruta-forn-com-traf;
+  // Fonte canônica única (Fase 0): lucro = comissão − tráfego − investimentos; ROAS = comissão/tráfego.
+  // Mesma base do DRE/calcFin (modo afiliado). Cards Lucro/ROAS aqui só aparecem pro diretor (operação inteira).
+  const _fin     = calcFin();
+  const lucro    = _fin.lucro;
   const tLeads   = gastos.reduce((s,g)=>s+g.leads,0);
   const cpl      = tLeads?traf/tLeads:0;
-  const roas     = traf?(recBruta/traf):0;
+  const roas     = _fin.roas;
   const ticket   = myV.length?recBruta/myV.length:0;
   const pago     = myL.filter(l=>l.col==='Pago').length;
   const conv     = myL.length?Math.round(pago/myL.length*100):0;
@@ -5763,7 +5766,7 @@ function renderHome(){
         <div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
         <div class="mc-lbl">Lucro Líquido</div>
         <div class="mc-val">${fmt(lucro)}</div>
-        <div class="mc-sub">após custos e tráfego</div>
+        <div class="mc-sub">comissão − tráfego − investimentos</div>
       </div>
       <div class="mc mc-pu">
         <div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
@@ -5876,8 +5879,9 @@ function renderEvolucao(){
   const c=$('evolucao-pg');if(!c)return;
   const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
   const gastos=DB.gastos.filter(g=>inRange(g.data));
-  const rec=vendas.reduce((s,v)=>s+v.vl,0);
-  const luc=vendas.reduce((s,v)=>s+v.lucro,0);
+  // Modelo afiliado (Fase 0): "receita" = comissão recebida; lucro canônico = comissão − tráfego − invest.
+  const rec=vendas.reduce((s,v)=>s+v.comiss,0);
+  const luc=calcFin().lucro;
   const gas=gastos.reduce((s,g)=>s+g.valor,0);
 
   // dados do gráfico — derivam do filtro global (unificado)
@@ -5887,9 +5891,10 @@ function renderEvolucao(){
     const d=new Date(today);d.setDate(d.getDate()-i);
     days.push(`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`);
   }
-  const recByDay=days.map(d=>DB.vendas.filter(v=>v.data===d).reduce((s,v)=>s+v.vl,0));
-  const lucByDay=days.map(d=>DB.vendas.filter(v=>v.data===d).reduce((s,v)=>s+v.lucro,0));
+  const recByDay=days.map(d=>DB.vendas.filter(v=>v.data===d&&v.status!=='estornado').reduce((s,v)=>s+v.comiss,0));
   const gasByDay=days.map(d=>DB.gastos.filter(g=>g.data===d).reduce((s,g)=>s+g.valor,0));
+  // Lucro do dia = comissão − gasto (antes de investimento; não há rateio de invest por dia).
+  const lucByDay=recByDay.map((r,i)=>r-gasByDay[i]);
 
   c.innerHTML=`
   <div class="ph"><div><h1>Evolução <em>Diária</em></h1></div></div>
@@ -5898,14 +5903,14 @@ function renderEvolucao(){
       <div class="mc-lbl">Vendas</div><div class="mc-val">${vendas.length}</div>
       <div class="mc-sub">no período</div></div>
     <div class="mc mc-bl"><div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-      <div class="mc-lbl">Receita</div><div class="mc-val">${fmt(rec)}</div>
-      <div class="mc-sub">bruta</div></div>
+      <div class="mc-lbl">Comissão</div><div class="mc-val">${fmt(rec)}</div>
+      <div class="mc-sub">recebida no período</div></div>
     <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('minus-circle',{size:14})}</div>
       <div class="mc-lbl">Investido</div><div class="mc-val">${fmt(gas)}</div>
       <div class="mc-sub">tráfego pago</div></div>
     <div class="mc mc-gr"><div class="mc-gl"></div><div class="mc-ic">${ico('trending-up',{size:14})}</div>
       <div class="mc-lbl">Lucro período</div><div class="mc-val">${fmt(luc)}</div>
-      <div class="mc-sub">após custos</div></div>
+      <div class="mc-sub">comissão − tráfego − invest</div></div>
   </div>
 
   <div class="chart-wrap">
@@ -5913,7 +5918,7 @@ function renderEvolucao(){
       <h3 style="font-size:15px;font-weight:700;color:var(--tx)">Performance financeira</h3>
       <div class="chart-leg">
         <span class="muted" style="margin-right:8px;font-size:11.5px">Período: <b style="color:var(--bl2)">${rangeLabel()}</b> · use o filtro do topo</span>
-        <span><i style="background:#3b82f6"></i>Receita</span>
+        <span><i style="background:#3b82f6"></i>Comissão</span>
         <span><i style="background:#10b981"></i>Lucro</span>
         <span><i style="background:#ef4444"></i>Gasto</span>
       </div>
@@ -5924,7 +5929,7 @@ function renderEvolucao(){
   <div class="section-title">Detalhamento por dia</div>
   <div class="tbl-wrap">
     <table class="tbl">
-      <thead><tr><th>Data</th><th class="right">Vendas</th><th class="right">Receita</th><th class="right">Gasto</th><th class="right">Lucro</th><th class="right">ROAS</th></tr></thead>
+      <thead><tr><th>Data</th><th class="right">Vendas</th><th class="right">Comissão</th><th class="right">Gasto</th><th class="right">Lucro</th><th class="right">ROAS</th></tr></thead>
       <tbody>
         ${days.map((d,i)=>{
           const nVen=DB.vendas.filter(v=>v.data===d).length;
@@ -11384,21 +11389,21 @@ function renderRetrospectiva(){
     }
   }
 
-  const totRec=buckets.reduce((s,b)=>s+b.recBruta,0);
+  const totRec=buckets.reduce((s,b)=>s+b.com,0);   // comissão recebida (afiliado) = a "receita" real
   const totLuc=buckets.reduce((s,b)=>s+b.lucro,0);
   const totTraf=buckets.reduce((s,b)=>s+b.traf,0);
   const totCaixa=buckets.reduce((s,b)=>s+b.caixa,0);
 
-  // Mês/ano com maior receita
-  const top=buckets.reduce((a,b)=>b.recBruta>a.recBruta?b:a,buckets[0]);
+  // Mês/ano com maior comissão
+  const top=buckets.reduce((a,b)=>b.com>a.com?b:a,buckets[0]);
 
   wrap.innerHTML=`
   <!-- 4 stats no topo -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div class="retro-stat">
-      <div class="retro-stat-lbl">Receita total acumulada</div>
+      <div class="retro-stat-lbl">Comissão acumulada</div>
       <div class="retro-stat-val">${fmt(totRec)}</div>
-      <div class="retro-stat-sub">consolidada</div>
+      <div class="retro-stat-sub">recebida (afiliado)</div>
     </div>
     <div class="retro-stat">
       <div class="retro-stat-lbl">Lucro acumulado</div>
@@ -11413,7 +11418,7 @@ function renderRetrospectiva(){
     <div class="retro-stat">
       <div class="retro-stat-lbl">Melhor ${retroMode==='mensal'?'mês':'ano'}</div>
       <div class="retro-stat-val" style="font-size:18px">${top?top.long:'—'}</div>
-      <div class="retro-stat-sub">${top?fmt(top.recBruta):'—'} de receita</div>
+      <div class="retro-stat-sub">${top?fmt(top.com):'—'} de comissão</div>
     </div>
   </div>
 
@@ -11423,8 +11428,8 @@ function renderRetrospectiva(){
     <table class="tbl">
       <thead><tr>
         <th style="text-align:left">${retroMode==='mensal'?'Mês':'Ano'}</th>
-        <th class="right">Receita</th>
-        <th class="right">Custos</th>
+        <th class="right">Comissão</th>
+        <th class="right">Investimentos</th>
         <th class="right">Tráfego</th>
         <th class="right">Lucro</th>
         <th class="right">Pagamentos</th>
@@ -11434,12 +11439,12 @@ function renderRetrospectiva(){
       </tr></thead>
       <tbody>
         ${[...buckets].reverse().map(b=>{
-          const custos=b.com+b.taxa+b.inv;
-          const margem=b.recBruta>0?(b.lucro/b.recBruta*100).toFixed(1):'0';
-          const roas=b.traf>0?(b.recBruta/b.traf).toFixed(2):'—';
+          const custos=b.inv;
+          const margem=b.com>0?(b.lucro/b.com*100).toFixed(1):'0';
+          const roas=b.traf>0?(b.com/b.traf).toFixed(2):'—';
           return `<tr style="cursor:pointer" onclick="retroJumpTo(${b.year},${b.month===null?-1:b.month})">
             <td><b style="color:var(--tx);font-weight:500">${b.long}</b></td>
-            <td class="right" style="color:var(--tx);font-weight:500">${fmt(b.recBruta)}</td>
+            <td class="right" style="color:var(--tx);font-weight:500">${fmt(b.com)}</td>
             <td class="right" style="color:var(--t2);font-weight:500">${fmt(custos)}</td>
             <td class="right" style="color:var(--t2);font-weight:500">${fmt(b.traf)}</td>
             <td class="right" style="color:var(--tx);font-weight:500">${fmt(b.lucro)}</td>
@@ -11452,7 +11457,7 @@ function renderRetrospectiva(){
         <tr style="background:var(--s1);font-weight:600;border-top:2px solid var(--b2)">
           <td style="color:var(--tx)">Total</td>
           <td class="right" style="color:var(--tx)">${fmt(totRec)}</td>
-          <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.com+b.taxa+b.inv,0))}</td>
+          <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.inv,0))}</td>
           <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.traf,0))}</td>
           <td class="right" style="color:var(--tx)">${fmt(totLuc)}</td>
           <td class="right" style="color:var(--t2)">${fmt(buckets.reduce((s,b)=>s+b.payouts,0))}</td>
@@ -11536,16 +11541,16 @@ function calcQuinzena(from,to){
 // Calcula financeiro pra um período arbitrário (sem dependência do filtro global)
 function calcFinForPeriod(from,to){
   const inP=ddmm=>{const dt=ddmmToDate(ddmm);return dt&&dt>=from&&dt<=to};
-  const v=DB.vendas.filter(x=>inP(x.data));
+  const v=DB.vendas.filter(x=>inP(x.data)&&x.status!=='estornado');
   const g=DB.gastos.filter(x=>inP(x.data));
   const i=DB.invest.filter(x=>{const dt=ddmmToDate(ddmmFromIso(x.dt));return dt&&dt>=from&&dt<=to});
   const recBruta=v.reduce((s,x)=>s+x.vl,0);
   const com=v.reduce((s,x)=>s+x.comiss,0);
-  const taxa=recBruta*0.03;
   const traf=g.reduce((s,x)=>s+x.valor,0);
   const inv=i.reduce((s,x)=>s+x.vl,0);
-  const lucro=recBruta-com-taxa-traf-inv;
-  return {recBruta,com,taxa,traf,inv,lucro};
+  // Canônico afiliado (Fase 0): lucro = comissão − tráfego − investimentos (mesma base do calcFin/DRE).
+  const lucro=com-traf-inv;
+  return {recBruta,com,taxa:0,traf,inv,lucro};
 }
 
 // Detecta a quinzena atual
@@ -13052,8 +13057,9 @@ function renderTrafego(){
   const totLeads=gastos.reduce((s,g)=>s+g.leads,0);
   const cpl=totLeads?tot/totLeads:0;
 
-  const recBruta=DB.vendas.filter(v=>inRange(v.data)).reduce((s,v)=>s+v.vl,0);
-  const roas=tot?recBruta/tot:0;
+  // ROAS canônico (Fase 0): comissão recebida / tráfego (não receita bruta). Exclui estornadas.
+  const com=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado').reduce((s,v)=>s+v.comiss,0);
+  const roas=tot?com/tot:0;
 
   // ─── Budget de Tráfego ───
   // Soma TODOS os aportes com categoria "trafego" (sem filtro de data — é orçamento acumulado)
@@ -13140,7 +13146,7 @@ function renderTrafego(){
     <div class="mc mc-am"><div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
       <div class="mc-lbl">Custo por pedido</div><div class="mc-val">${fmt(cpl)}</div><div class="mc-sub">médio</div></div>
     ${gtOnly?'':`<div class="mc mc-bl mc-feat"><div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
-      <div class="mc-lbl">ROAS</div><div class="mc-val">${roas.toFixed(2)}x</div><div class="mc-sub">${fmt(recBruta)} de receita</div></div>`}
+      <div class="mc-lbl">ROAS</div><div class="mc-val">${roas.toFixed(2)}x</div><div class="mc-sub">${fmt(com)} em comissão</div></div>`}
   </div>
 
   <div class="section-title">Performance por plataforma</div>
@@ -17183,9 +17189,10 @@ function renderChart(){
     const d=new Date(today);d.setDate(d.getDate()-i);
     days.push(`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`);
   }
-  const rec=days.map(d=>DB.vendas.filter(v=>v.data===d).reduce((s,v)=>s+v.vl,0));
-  const luc=days.map(d=>DB.vendas.filter(v=>v.data===d).reduce((s,v)=>s+v.lucro,0));
+  // Modelo afiliado (Fase 0): linha azul = comissão recebida; verde = lucro do dia (comissão − gasto).
+  const rec=days.map(d=>DB.vendas.filter(v=>v.data===d&&v.status!=='estornado').reduce((s,v)=>s+v.comiss,0));
   const gas=days.map(d=>DB.gastos.filter(g=>g.data===d).reduce((s,g)=>s+g.valor,0));
+  const luc=rec.map((r,i)=>r-gas[i]);
 
   const pad={l:62,r:24,t:18,b:38};
   const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
