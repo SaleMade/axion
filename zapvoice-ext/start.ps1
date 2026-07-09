@@ -44,6 +44,39 @@ function Ensure-Port {
   return (Test-Port)
 }
 
+# Motor (Node): usa o que vier na pasta 'node', senao o do sistema, senao baixa sozinho (1a vez).
+function Ensure-Node {
+  $local = Join-Path $here 'node\node.exe'
+  if (Test-Path $local) { return $local }
+  $sys = Get-Command node -ErrorAction SilentlyContinue
+  if ($sys) { return 'node' }
+  Write-Host "Primeira vez: instalando o motor (uns 30MB, so uma vez)..."
+  try {
+    $ProgressPreference = 'SilentlyContinue'
+    $ver = 'v22.11.0'
+    $url = "https://nodejs.org/dist/$ver/node-$ver-win-x64.zip"
+    $tmp = Join-Path $env:TEMP 'sc-node.zip'
+    $ex  = Join-Path $env:TEMP 'sc-node'
+    Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+    if (Test-Path $ex) { Remove-Item $ex -Recurse -Force }
+    Expand-Archive -Path $tmp -DestinationPath $ex -Force
+    $found = Get-ChildItem -Recurse -Path $ex -Filter node.exe | Select-Object -First 1
+    New-Item -ItemType Directory -Force -Path (Join-Path $here 'node') | Out-Null
+    Copy-Item $found.FullName $local -Force
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    Remove-Item $ex -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $local) { Write-Host "Motor instalado."; return $local }
+  } catch { Write-Host "Nao consegui instalar o motor automaticamente. Instale o Node em nodejs.org e rode de novo." }
+  return 'node'
+}
+
+function Minimize-Self {
+  try {
+    Add-Type -Name W -Namespace SC -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c);' -ErrorAction SilentlyContinue
+    [SC.W]::ShowWindow([SC.W]::GetConsoleWindow(), 6) | Out-Null
+  } catch {}
+}
+
 # 1) porta de debug SO pra este app: seta a env var e reinicia este app pra pegar a porta
 Set-DebugPort
 if (-not (Test-Port)) { Close-App; Start-Sleep -Milliseconds 1200 }
@@ -58,12 +91,15 @@ try {
   }
 } catch { Write-Host "(sem atualizacao; segui com a versao local)" }
 
-Write-Host "Sale Chat - $Label (porta $Port). Deixe esta janela aberta."
+$nodeExe = Ensure-Node
+
+Write-Host "Sale Chat - $Label (porta $Port) rodando. Pode MINIMIZAR esta janela (nao feche)."
+Minimize-Self
 while ($true) {
   if (Ensure-Port) {
     Write-Host "Conectado ao $Label. Injetando o painel..."
     $env:ZV_PORT = "$Port"
-    node (Join-Path $here 'inject.js')
+    & $nodeExe (Join-Path $here 'inject.js')
     Write-Host "Injetor encerrou ($Label fechou/recarregou). Retomando em 3s..."
   } else {
     Write-Host "Nao consegui abrir a porta do $Label. Abra o app e aguarde..."
