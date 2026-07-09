@@ -224,6 +224,7 @@
     if (it.kind === 'audio') { prev.innerHTML = '<audio class="zv-prev-audio" controls preload="metadata" src="' + it.dataUri + '"></audio>'; return; }
     if (it.kind === 'document') { prev.innerHTML = cap + '<a class="zv-prev-doc" href="' + it.dataUri + '" download="' + esc(it.label || 'documento') + '" target="_blank">' + SVG.doc + ' Abrir documento</a>'; return; }
     if (it.kind === 'video') {
+      if (it.posterUri) { prev.innerHTML = cap + '<div class="zv-prev-vwrap"><img class="zv-prev-video" src="' + it.posterUri + '"><span class="zv-prev-badge">' + SVG.play + ' primeiro frame</span></div>'; return; }
       if (it.dataUri) { prev.innerHTML = cap + '<video class="zv-prev-video" controls preload="metadata" src="' + it.dataUri + '"></video>'; return; }
       prev.innerHTML = cap + '<div class="zv-prev-note">carregando previa...</div>';
       var rid = 'pv' + Date.now() + Math.random().toString(36).slice(2, 5);

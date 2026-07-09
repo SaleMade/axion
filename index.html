@@ -3763,8 +3763,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.38.0';
-const APP_LAST_CHANGE = 'Sale Chat dash redesenhada estilo ZapVoice (nossas cores): mestre-detalhe (lista de cards + painel de detalhe), adicionar/editar por modal, previa estilo WhatsApp (bolha de envio), favoritar/reordenar/excluir no detalhe. Upload de midia pelo modal com dropzone e legenda.';
+const APP_VERSION = '2.39.0';
+const APP_LAST_CHANGE = 'Sale Chat: previa do 1o frame do video no painel (dash gera um poster do video e sobe como imagem leve; o painel mostra a miniatura sem baixar o video inteiro). Painel ancorado na lateral com mais folga dos itens em relacao a barra direita.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7722,6 +7722,7 @@ function scRenderSectionMD(kind){
     </div>`;
   scRenderCards(kind);
   scRenderDetail(kind);
+  if(kind==='video') scGenPostersForVideos();
 }
 function scRenderCards(kind){
   const box=$('sc-cards'); if(!box) return;
@@ -7820,6 +7821,32 @@ async function scDoUpload(file){
   }catch(e){ return {ok:false,err:'Falha: '+e.message}; }
 }
 function scDeleteKey(key){ const base=apiUrl(),tok=apiToken(); if(base&&tok&&key){ fetch(base.replace(/\/+$/,'')+'/api/salechat/media/'+key,{method:'DELETE',headers:{authorization:'Bearer '+tok}}).catch(()=>{}); } }
+// Gera um poster (1o frame) do video: a dash carrega o video do R2 (sem CSP), captura
+// o frame num canvas e sobe como imagem leve. O painel usa esse poster como previa.
+var scPosterTried={};
+async function scGenPoster(item){
+  if(!item||item.kind!=='video'||item.posterKey||scPosterTried[item.id]) return;
+  const base=apiUrl(), tok=apiToken(); if(!base||!tok||!item.key) return;
+  scPosterTried[item.id]=1;
+  try{
+    const url=scMediaUrl(item.key);
+    const v=document.createElement('video'); v.crossOrigin='anonymous'; v.muted=true; v.preload='auto'; v.playsInline=true; v.src=url;
+    await new Promise((res,rej)=>{ let d=false; const ok=()=>{ if(!d){d=true;res();} }; const no=()=>{ if(!d){d=true;rej(new Error('load'));} }; v.onloadeddata=ok; v.onerror=no; setTimeout(no,20000); });
+    try{ v.currentTime=Math.min(0.2,(v.duration||2)/3); }catch(_){}
+    await new Promise((res)=>{ let d=false; const done=()=>{ if(!d){d=true;res();} }; v.onseeked=done; setTimeout(done,2500); });
+    const w=v.videoWidth||320, h=v.videoHeight||240, scale=Math.min(1,480/w);
+    const c=document.createElement('canvas'); c.width=Math.round(w*scale); c.height=Math.round(h*scale);
+    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+    const blob=await new Promise(r=>{ try{ c.toBlob(r,'image/jpeg',0.72); }catch(_){ r(null); } });
+    if(!blob) throw new Error('frame');
+    const up=await scDoUpload(new File([blob],'poster.jpg',{type:'image/jpeg'}));
+    if(up.ok){ const fm=scFindMedia(item.id); if(fm){ fm.item.posterKey=up.key; scTouch(); if(scSel.video===item.id) scRenderDetail('video'); } }
+  }catch(e){}
+}
+async function scGenPostersForVideos(){
+  const vids=(DB.salechat.media||[]).filter(m=>m.kind==='video'&&!m.posterKey);
+  for(const v of vids){ await scGenPoster(v); }
+}
 async function scModalSave(kind,id){
   const name=(($('sc-m-name')||{}).value||'').trim();
   if(kind==='messages'){
@@ -7833,10 +7860,13 @@ async function scModalSave(kind,id){
   const save=$('sc-modal-save');
   if(id){
     const fm=scFindMedia(id); if(!fm){ scCloseModal(); return; }
-    if(scModalFile){ if(save) save.disabled=true; scModalStatus('Subindo arquivo...'); const up=await scDoUpload(scModalFile); if(save) save.disabled=false; if(!up.ok){ scModalStatus(up.err); return; } scDeleteKey(fm.item.key); fm.item.key=up.key; fm.item.mime=up.mime; }
+    let replaced=false;
+    if(scModalFile){ if(save) save.disabled=true; scModalStatus('Subindo arquivo...'); const up=await scDoUpload(scModalFile); if(save) save.disabled=false; if(!up.ok){ scModalStatus(up.err); return; } scDeleteKey(fm.item.key); fm.item.key=up.key; fm.item.mime=up.mime; replaced=true; if(fm.item.kind==='video'){ scDeleteKey(fm.item.posterKey); fm.item.posterKey=null; delete scPosterTried[fm.item.id]; } }
     fm.item.label=name||fm.item.label;
     if(kind==='image'||kind==='video') fm.item.caption=cap;
-    scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); return;
+    scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind);
+    if(kind==='video'&&replaced) scGenPoster(fm.item);
+    return;
   }
   if(!scModalFile){ scModalStatus('Escolhe um arquivo pra subir.'); return; }
   if(save) save.disabled=true; scModalStatus('Subindo '+scModalFile.name+'...');
@@ -7846,6 +7876,7 @@ async function scModalSave(kind,id){
   DB.salechat.media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
   scSel[kind]=nid;
   scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
+  if(kind==='video'){ const nm=scFindMedia(nid); if(nm) scGenPoster(nm.item); }
 }
 function scRenderMsgs(){
   const box=$('sc-list'); if(!box) return;

@@ -77,7 +77,11 @@ async function buildLibrary(remote) {
       if (!m || !m.key) continue;
       const url = MEDIA_BASE + '/' + m.key;
       // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
-      if (m.kind === 'video') { media.push({ id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url }); continue; }
+      if (m.kind === 'video') {
+        var vit = { id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url };
+        if (m.posterKey) { const pbuf = await fetchBytes(MEDIA_BASE + '/' + m.posterKey); if (pbuf) vit.posterUri = 'data:image/jpeg;base64,' + pbuf.toString('base64'); }
+        media.push(vit); continue;
+      }
       const buf = await fetchBytes(url);
       if (!buf) continue;
       const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
