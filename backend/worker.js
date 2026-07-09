@@ -2519,29 +2519,21 @@ async function handlePresselStats(req, env){
 async function _presselDayMetrics(env, day){
   const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
   const m = { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
-  try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
-    const pr = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_day WHERE day=?').bind(day).all();
-    (pr.results||[]).forEach(r=>{ m.vc[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
-  }catch(_){}
-  try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
-    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
-    const c = await env.DB.prepare("SELECT pid, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' GROUP BY pid").bind(start,end).all();
-    (c.results||[]).forEach(r=>{ m.contatos[String(r.pid)]=Number(r.c)||0; });
-  }catch(_){}
-  try{  // por vendedor dentro da pressel (precisa da coluna inst — best-effort)
-    const c2 = await env.DB.prepare("SELECT pid, inst, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' AND inst IS NOT NULL GROUP BY pid, inst").bind(start,end).all();
-    (c2.results||[]).forEach(r=>{ const pid=String(r.pid); (m.contatosVI[pid]=m.contatosVI[pid]||{})[r.inst]=Number(r.c)||0; });
-  }catch(_){}
-  try{  // vendas do dia, atribuídas pela pressel de origem do lead
-    const s = await env.DB.prepare("SELECT l.pid pid, s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND l.pid IS NOT NULL AND l.pid<>'' GROUP BY l.pid, s.instance").bind(start,end).all();
-    (s.results||[]).forEach(r=>{ const pid=String(r.pid); m.vendas[pid]=(m.vendas[pid]||0)+(Number(r.v)||0); m.valor[pid]=(m.valor[pid]||0)+(Number(r.val)||0); (m.vendasVI[pid]=m.vendasVI[pid]||{})[r.inst||'']=Number(r.v)||0; });
-  }catch(_){}
-  try{  // TODAS as vendas por vendedor (com OU sem código): toda venda fechada conta na métrica do vendedor
-    const sa = await env.DB.prepare("SELECT s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s WHERE s.ts>=? AND s.ts<? GROUP BY s.instance").bind(start,end).all();
-    (sa.results||[]).forEach(r=>{ m.vendasInst[String(r.inst||'')]={ v:Number(r.v)||0, val:Number(r.val)||0 }; });
-  }catch(_){}
+  // As 5 consultas são INDEPENDENTES — roda em PARALELO (1 ida ao banco no lugar de 5). Tabelas já existem
+  // em produção; se faltar (DB novo) o .catch devolve vazio (zeros) sem quebrar.
+  const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r=>r.results||[]).catch(()=>[]);
+  const [pr, c, c2, s, sa] = await Promise.all([
+    q('SELECT pid, views, clicks FROM pressel_day WHERE day=?', day),
+    q("SELECT pid, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' GROUP BY pid", start, end),
+    q("SELECT pid, inst, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' AND inst IS NOT NULL GROUP BY pid, inst", start, end),
+    q("SELECT l.pid pid, s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND l.pid IS NOT NULL AND l.pid<>'' GROUP BY l.pid, s.instance", start, end),
+    q("SELECT s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s WHERE s.ts>=? AND s.ts<? GROUP BY s.instance", start, end),
+  ]);
+  pr.forEach(r=>{ m.vc[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
+  c.forEach(r=>{ m.contatos[String(r.pid)]=Number(r.c)||0; });
+  c2.forEach(r=>{ const pid=String(r.pid); (m.contatosVI[pid]=m.contatosVI[pid]||{})[r.inst]=Number(r.c)||0; });
+  s.forEach(r=>{ const pid=String(r.pid); m.vendas[pid]=(m.vendas[pid]||0)+(Number(r.v)||0); m.valor[pid]=(m.valor[pid]||0)+(Number(r.val)||0); (m.vendasVI[pid]=m.vendasVI[pid]||{})[r.inst||'']=Number(r.v)||0; });
+  sa.forEach(r=>{ m.vendasInst[String(r.inst||'')]={ v:Number(r.v)||0, val:Number(r.val)||0 }; });
   return m;
 }
 async function handlePresselMetricsLive(req, env){
@@ -2610,7 +2602,8 @@ async function handlePresselsTotalPage(req, env){
   // puxar a carteira dos outros. JOIN em users barra até sessão antiga de usuário já arquivado/demitido.
   if(/^[a-f0-9]{64}$/i.test(kParam)){ try{ const _now=Math.floor(Date.now()/1000); const _s=await env.DB.prepare('SELECT u.role role, COALESCE(u.archived,0) arch FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?').bind(kParam,_now).first(); if(_s && Number(_s.arch)!==1 && ROLE_DIRETOR.includes(_s.role)) full=true; }catch(_){} }
   const kq=full?('k='+encodeURIComponent(kParam)):'';   // preserva o token na navegação interna (data/abas)
-  const M=await _presselDayMetrics(env, day);
+  // Pula a agregação pesada de métricas quando a aba é Pedidos/Leads (elas não usam) — deixa a troca de aba MUITO mais rápida.
+  const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
   const secs=pressels.map(p=>{
