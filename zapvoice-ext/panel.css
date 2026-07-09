@@ -1,5 +1,7 @@
 /* Sale Chat — painel no WhatsApp Web. Layout com barra de abas à direita, tema claro
    por padrão (com toggle de escuro). Codigo/estilo proprios. */
+/* box-sizing proprio: sem isso, width:100% + padding estoura o item pra baixo da barra */
+#zv-panel, #zv-panel *, #zv-panel *::before, #zv-panel *::after{ box-sizing:border-box; }
 #zv-panel{
   position:fixed; right:0; top:38px; z-index:2147483647;
   width:440px; height:calc(100vh - 38px);
@@ -27,8 +29,8 @@
 
 /* Conteúdo da aba (esquerda) */
 #zv-content{ flex:1; min-width:0; display:flex; flex-direction:column; background:#f6f8fb; overflow-x:hidden; }
-.zv-ctop{ padding:12px 20px 7px 13px; flex:none; border-bottom:1px solid #eef1f5; }
-.zv-cbody{ flex:1; overflow-y:auto; overflow-x:hidden; padding:10px 20px 14px 13px; }
+.zv-ctop{ padding:12px 14px 7px; flex:none; border-bottom:1px solid #eef1f5; }
+.zv-cbody{ flex:1; overflow-y:auto; overflow-x:hidden; padding:10px 14px 14px; }
 .zv-cbody::-webkit-scrollbar{ width:7px; } .zv-cbody::-webkit-scrollbar-thumb{ background:#d5dce4; border-radius:6px; }
 .zv-tabhdr{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:800; color:#2a2a46; }
 .zv-tabhdr .zv-hi{ display:inline-flex; }
