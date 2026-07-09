@@ -840,6 +840,24 @@ function nowTimeBR() {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
+// Grava dashboard_state com concorrência otimista (compare-and-swap por version).
+// Retorna true se gravou; false se a versão mudou no meio (o chamador deve reler e
+// reprocessar). Usado pelos webhooks, que faziam read-modify-write no blob e antes
+// se sobrescreviam entre si (lost update: lead criado/pago sumia do banco).
+async function _casState(env, curVer, state, who) {
+  const now = Math.floor(Date.now() / 1000);
+  if (!curVer) {
+    const r = await env.DB.prepare(
+      `INSERT OR IGNORE INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, 1, ?, ?)`
+    ).bind(JSON.stringify(state), now, who).run();
+    return !!(r.meta && r.meta.changes);
+  }
+  const r = await env.DB.prepare(
+    `UPDATE dashboard_state SET data = ?, version = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ?`
+  ).bind(JSON.stringify(state), curVer + 1, now, who, curVer).run();
+  return !!(r.meta && r.meta.changes);
+}
+
 async function handlePaytWebhook(req, env, urlToken) {
   // Validação da chave única
   const expected = (env && env.PAYT_TOKEN) || PAYT_TOKEN_DEFAULT;
@@ -856,6 +874,10 @@ async function handlePaytWebhook(req, env, urlToken) {
     return json({ error: 'campo "event" ausente' }, 400);
   }
 
+  // Reprocessa com concorrência otimista: se outro write (webhook/dash) gravar no
+  // meio, relê o state fresco e reaplica. Antes o write era incondicional e dois
+  // webhooks concorrentes se sobrescreviam (lost update / lead sumia).
+  for (let _attempt = 0; _attempt < 6; _attempt++) {
   // Carrega state atual
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   let state = {};
@@ -992,14 +1014,9 @@ async function handlePaytWebhook(req, env, urlToken) {
   });
   state.wh_log_server = state.wh_log_server.slice(0, 100);
 
-  // Persiste
-  const newVer = curVer + 1;
-  const now = Math.floor(Date.now() / 1000);
-  await env.DB.prepare(
-    `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
-       updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).bind(JSON.stringify(state), newVer, now, 'payt-webhook').run();
+  // Persiste com CAS; se a versão mudou no meio, reprocessa (continue).
+  const _ok = await _casState(env, curVer, state, 'payt-webhook');
+  if (!_ok) { if (_attempt < 5) continue; return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409); }
 
   return json({
     ok: true,
@@ -1011,6 +1028,7 @@ async function handlePaytWebhook(req, env, urlToken) {
     lead_id: lead_id_result,
     mapping_found: !!mapping,
   });
+  }
 }
 
 // ─── FORNECEDOR WEBHOOK ──────────────────────────────────────
@@ -1084,6 +1102,8 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   );
   const mod = isCOD ? 'entrega' : 'antecipado';
 
+  // Reprocessa com concorrência otimista (mesmo motivo do webhook Payt).
+  for (let _attempt = 0; _attempt < 6; _attempt++) {
   // ── Carrega state ──
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   let state = {};
@@ -1240,14 +1260,9 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   });
   state.wh_log_server = state.wh_log_server.slice(0, 100);
 
-  // ── Persiste ──
-  const newVer = curVer + 1;
-  const now = Math.floor(Date.now() / 1000);
-  await env.DB.prepare(
-    `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
-       updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).bind(JSON.stringify(state), newVer, now, 'fornecedor-webhook').run();
+  // ── Persiste com CAS; reprocessa se a versão mudou no meio ──
+  const _ok = await _casState(env, curVer, state, 'fornecedor-webhook');
+  if (!_ok) { if (_attempt < 5) continue; return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409); }
 
   return json({
     ok: true,
@@ -1257,6 +1272,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     action: action_taken,
     lead_id: lead_id_result,
   });
+  }
 }
 
 // ─── WhatsApp (Evolution API) ─────────────────────────────────
@@ -1631,7 +1647,6 @@ async function handleWAInstanceDisconnect(req, env) {
 // contato + atribuição de vendedor) e mudança de conexão (detectar número
 // caído). Tudo gated pela chave-mestra wa_autom_on. Conexão/atribuição/dedupe
 // ficam em tabelas D1 próprias, pra NÃO conflitar com o blob de estado da dash.
-const WA_WEBHOOK_TOKEN_DEFAULT = 'evo_hook_8f3c1a9d27b64e05';
 async function _waEnsureTables(env) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
@@ -1689,7 +1704,10 @@ async function _waLogMsg(env, m) {
   } catch (_) {}
 }
 async function _waWebhookToken(env) {
-  return (await _readConfig(env, 'wa_webhook_token')) || WA_WEBHOOK_TOKEN_DEFAULT;
+  // Fail-closed: o token só vem do D1 (config) ou de um secret do Worker. Sem
+  // fallback fixo no código — antes o token estava hardcoded no fonte, então
+  // quem visse o repo podia forjar eventos (venda fantasma no pixel, envio forçado).
+  return (await _readConfig(env, 'wa_webhook_token')) || (env && env.WA_WEBHOOK_TOKEN) || '';
 }
 // Registra o webhook na Evolution pra uma instância apontando pro nosso Worker
 async function _waSetWebhook(env, instance, origin) {
@@ -1892,25 +1910,29 @@ async function _waOnInbound(env, instance, data) {
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
   if (!state.wa_autom_on) return;
-  const rep = await env.DB.prepare('SELECT updated_at FROM wa_replied WHERE phone = ?').bind(phone).first();
-  const now = Math.floor(Date.now() / 1000);
-  if (rep && (now - (rep.updated_at || 0)) < 12 * 3600) return;  // dedupe 12h
   const rule = _waPickInboundRule(state, instance);
   if (!rule) return;
   const lead = (state.leads || []).find(l => norm(l.wa) === phone);
   const msg = _waFillTpl(rule.msg, lead, data?.pushName);
   if (!msg) return;
+  const now = Math.floor(Date.now() / 1000);
+  // Claim ATÔMICO antes de enviar: só a 1ª invocação dentro de 12h passa. Evita
+  // auto-resposta DUPLICADA quando o lead manda várias mensagens em rajada (dois
+  // webhooks concorrentes liam o dedupe vazio e ambos enviavam). Um só statement
+  // com WHERE no conflito → a 2ª invocação vê changes=0 e não envia.
+  const claim = await env.DB.prepare(
+    `INSERT INTO wa_replied (phone, updated_at) VALUES (?, ?)
+     ON CONFLICT(phone) DO UPDATE SET updated_at = excluded.updated_at
+     WHERE wa_replied.updated_at < ?`
+  ).bind(phone, now, now - 12 * 3600).run();
+  if (!claim.meta || claim.meta.changes === 0) return;  // já respondido nas últimas 12h
   // Responde pelo MESMO número que o lead contatou (é resposta, baixo risco de ban)
   await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
   await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg });
-  await env.DB.prepare(
-    `INSERT INTO wa_replied (phone, updated_at) VALUES (?, ?)
-     ON CONFLICT(phone) DO UPDATE SET updated_at = excluded.updated_at`
-  ).bind(phone, now).run();
 }
 async function handleEvolutionWebhook(req, env, token) {
   const expected = await _waWebhookToken(env);
-  if (token !== expected) return json({ error: 'token inválido' }, 401);
+  if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
   let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
   const event = String(body?.event || '').toLowerCase().replace(/_/g, '.');
   const instance = body?.instance || body?.instanceName || '';
@@ -2456,10 +2478,11 @@ async function _presselNextIndex(env, id, len){
   if(len<=1) return 0;
   try{
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_rr (pid TEXT PRIMARY KEY, n INTEGER)').run();
-    const row=await env.DB.prepare('SELECT n FROM pressel_rr WHERE pid=?').bind(String(id)).first();
-    const n=row?(Number(row.n)||0):0;
-    await env.DB.prepare('INSERT INTO pressel_rr (pid,n) VALUES (?,?) ON CONFLICT(pid) DO UPDATE SET n=?')
-      .bind(String(id), n+1, n+1).run();
+    // Incremento ATÔMICO num só statement (D1 serializa writes): duas roletas
+    // concorrentes recebem n distintos, mantendo a distribuição igual. Antes era
+    // SELECT + UPDATE separados, e uma rajada podia dar o mesmo índice pros dois.
+    const row=await env.DB.prepare('INSERT INTO pressel_rr (pid,n) VALUES (?,1) ON CONFLICT(pid) DO UPDATE SET n=n+1 RETURNING n').bind(String(id)).first();
+    const n=(Number(row&&row.n)||1)-1;   // n vem 1-based após o incremento; volta pra 0-based
     return n%len;
   }catch(_){ return Math.floor(Math.random()*len); }
 }
