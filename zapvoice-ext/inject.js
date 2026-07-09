@@ -90,13 +90,17 @@ async function buildLibrary(remote) {
       else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
     }
   } else {
+    // Fallback offline (sem config na nuvem). O instalador do vendedor nao traz esses
+    // arquivos pesados; se faltarem, ignora (online ele pega o funil real do R2).
     (lib.funnel || []).forEach((it) => {
-      media.push({ id: it.id, stage: it.stage, kind: 'audio', label: it.label, desc: it.desc || '',
-        dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'),
-        durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) });
+      try {
+        media.push({ id: it.id, stage: it.stage, kind: 'audio', label: it.label, desc: it.desc || '',
+          dataUri: 'data:audio/ogg;base64,' + fs.readFileSync(path.join(DIR, it.file)).toString('base64'),
+          durMs: Math.min(7000, Math.max(1800, (it.sizeKB || 300) * 6)) });
+      } catch (_) {}
     });
     (lib.social || []).forEach((it) => {
-      media.push({ id: it.id, stage: it.stage, kind: it.kind || 'video', label: it.label, caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') });
+      try { if (fs.existsSync(path.join(DIR, it.file))) media.push({ id: it.id, stage: it.stage, kind: it.kind || 'video', label: it.label, caption: it.caption || '', file: String(it.file).replace(/\\/g, '/') }); } catch (_) {}
     });
   }
   return { messages, sequences, media, triggers, funnel: [], social: [] };
