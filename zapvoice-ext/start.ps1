@@ -11,6 +11,10 @@ param(
 $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Label = if ($Mode -eq 'beta') { 'WhatsApp Beta' } else { 'WhatsApp' }
+$ScVersion = 'v3 (porta-livre)'   # aparece no console pra confirmar que e a versao nova
+Write-Host "==================================================="
+Write-Host "  Sale Chat  -  $ScVersion  -  $Label"
+Write-Host "==================================================="
 
 # Acha o app certo no Menu Iniciar (normal = sem "Beta"; beta = com "Beta")
 $all = Get-StartApps | Where-Object { $_.Name -match 'WhatsApp' }
