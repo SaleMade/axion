@@ -15,6 +15,11 @@ routes = [
   { pattern = "painel-glico.fun", custom_domain = true }
 ]
 
+# ─── Cron: sincroniza o estado de conexão (wa_conn) com a Evolution a cada 2min ──
+# (mantém "conectado/número" certo mesmo com a dash fechada — serve-time confia no wa_conn)
+[triggers]
+crons = ["*/2 * * * *"]
+
 # ─── D1 (SQLite gerenciado) ────────────────────────────────────
 # Após `wrangler d1 create axion`, copie o `database_id` exibido
 # e cole abaixo (substitui REPLACE-ME).

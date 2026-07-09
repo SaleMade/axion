@@ -9563,14 +9563,9 @@ function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
-    // AUTO: número que CAIU (desconectado) sai da roleta sozinho — o interruptor desliga
-    let changed=false;
-    (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>{
-      if(!Array.isArray(p.vendedores)) return;
-      const keep=p.vendedores.filter(v=>{ const pInst=v.swap?('ax_'+v.at+'_b'):('ax_'+v.at), rInst=v.swap?('ax_'+v.at):('ax_'+v.at+'_b'); const sP=m[pInst], sR=m[rInst]; const pDown=sP&&sP!=='open', rUp=(sR==='open' && v.reserva_on!==false); if(pDown && !rUp){ changed=true; return false; } return true; });   // só sai da roleta se o PRINCIPAL (conforme a troca) caiu E a reserva não cobre
-      if(keep.length!==p.vendedores.length) p.vendedores=keep;
-    });
-    if(changed){ persistAndPushNow().catch(_=>{}); try{ toast('Número caiu: desliguei da roleta automaticamente','ok'); }catch(_){} }
+    // NÃO removemos o vendedor da roleta aqui: o serve-time já pula número caído/errado sozinho (temporário
+    // e auto-recupera ao reconectar), e o card mostra "não conectado". Remover apagava a config do vendedor
+    // (cota/reserva/troca) num simples blip de conexão — bug encontrado na revisão.
     (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id));
   }).catch(()=>{});
 }
