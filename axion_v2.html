@@ -949,6 +949,9 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .wk-status-pill{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:7px;
   cursor:pointer;font-family:inherit;transition:all .12s;display:inline-flex;align-items:center;gap:5px}
 .wk-status-pill:hover{filter:brightness(1.15)}
+.wk-chip.wk-chip-reserva{outline:1.5px dashed var(--bl3);outline-offset:-3px}   /* número de reserva: contorno sutil, bem menos que o "ativo do dia" */
+.wk-chip-add2{opacity:.32;transition:opacity .12s}
+.wk-chip:hover .wk-chip-add2,.wk-chip-add2:hover{opacity:1}
 /* Bolinha de status operacional no canto superior direito do chip */
 .cont-mini-chip-dot{position:absolute;top:9px;right:10px;width:9px;height:9px;border-radius:50%;
   box-shadow:0 0 0 2px var(--s2);z-index:1}
@@ -9006,6 +9009,8 @@ function _renderChipCard(c, showAtendente, activeId){
   const wa=getWaStatus(c);
   const info=getWaStatusInfo(wa);
   const pinned=(activeId!=null && c.id===activeId);  // único ativo do dia da coluna
+  const isReserva=(c.bkp===true && !pinned);         // número de reserva (backup) do vendedor → contorno sutil
+  const wa2=c.wa_st2||''; const info2=wa2?getWaStatusInfo(wa2):null;   // 2ª marcação (só visual, não afeta nada)
   // Bolinha de status operacional no canto superior direito
   const opColor=c.st==='ativo'?'#10b981':c.st==='aquecimento'?'#f59e0b':c.st==='banido'?'#ef4444':'#64748b';
   const opTitle=c.st==='aquecimento'?`Em aquecimento (dia ${computeWarmDay(c)}/7)`:c.st==='ativo'?'Ativo':c.st;
@@ -9026,13 +9031,25 @@ function _renderChipCard(c, showAtendente, activeId){
       </button>`
     : '';
 
-  return `<div class="wk-chip${pinned?' wk-chip-pinned':''}" draggable="true"
+  // Segunda marcação: SÓ VISUAL. Não altera em_uso/fixação/roleta. Estilo outline (tracejado) pra diferenciar da principal.
+  const status2Pill=info2
+    ? `<button class="wk-status-pill" onclick="event.stopPropagation();_waStatus2OpenPicker(${c.id},this)"
+        style="background:transparent;color:${info2.color};border:1px dashed ${info2.color}77;font-weight:600"
+        title="Marcação extra (só visual, não muda nada)">
+        ${info2.ic||''} ${info2.label} <span style="opacity:.55;margin-left:1px;font-size:9px">▾</span>
+      </button>`
+    : `<button class="wk-status-pill wk-chip-add2" onclick="event.stopPropagation();_waStatus2OpenPicker(${c.id},this)"
+        style="background:transparent;color:var(--t4);border:1px dashed var(--b3);padding:4px 7px"
+        title="Adicionar marcação extra (só visual)">${ico('plus',{size:11})}</button>`;
+
+  return `<div class="wk-chip${pinned?' wk-chip-pinned':''}${isReserva?' wk-chip-reserva':''}" draggable="true"
       ondragstart="_chipDragStart(event,${c.id})"
       ondragend="_chipDragEnd(event)"
       onclick="openChipDetail(${c.id})"
       style="${pinned?'box-shadow:0 0 0 2px var(--bl);background:var(--bld)':''}">
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:1px">★ Ativo do dia</div>`:''}
+    ${isReserva?`<div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--bl3);text-transform:uppercase;margin-bottom:1px">reserva</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       <span class="wk-chip-num">${c.num}</span>
@@ -9041,6 +9058,7 @@ function _renderChipCard(c, showAtendente, activeId){
       <div class="wk-chip-foot-l">
         ${c.idx?`<span class="wk-chip-idx" title="Identificador do chip" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--bld);color:var(--bl2);font-size:10.5px;font-weight:700;line-height:1">#${c.idx}</span>`:''}
         ${statusPill}
+        ${status2Pill}
       </div>
       ${dayBadge}
     </div>
@@ -9077,6 +9095,41 @@ function _waStatusOpenPicker(chipId, anchorEl){
     };
     document.addEventListener('click',closeOnOutside);
   },10);
+}
+
+// Segunda marcação do chip (SÓ VISUAL). Usa as mesmas opções da principal + "nenhuma".
+// NÃO mexe em em_uso/fixação/roleta — só guarda c.wa_st2 pra dar uma info extra (ex: "em uso mas restrito").
+function _waStatus2OpenPicker(chipId, anchorEl){
+  document.querySelectorAll('.wa-status-picker').forEach(el=>el.remove());
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  const cur=c.wa_st2||'';
+  const rect=anchorEl.getBoundingClientRect();
+  const menu=document.createElement('div');
+  menu.className='wa-status-picker';
+  menu.style.cssText=`position:fixed;top:${rect.bottom+6}px;left:${rect.left}px;z-index:9999;background:var(--s2);border:1px solid var(--b2);border-radius:7px;box-shadow:var(--sh2);padding:5px;min-width:${Math.max(170,rect.width)}px;display:flex;flex-direction:column;gap:2px`;
+  const opts=[{id:'',label:'— nenhuma —',color:'var(--t3)',bg:'transparent',ic:''}].concat(getWaStatusList());
+  menu.innerHTML=opts.map(v=>{
+    const active=v.id===cur;
+    return `<button onclick="setWaStatus2(${chipId},'${v.id}');this.parentElement.remove()"
+      style="text-align:left;background:${active&&v.id?v.bg:'transparent'};color:${active?(v.color||'var(--t2)'):'var(--t2)'};border:none;border-radius:7px;padding:7px 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:${active?600:500};display:flex;align-items:center;gap:6px"
+      onmouseover="if(!${active})this.style.background='var(--s3)'"
+      onmouseout="if(!${active})this.style.background='transparent'">
+      ${v.ic||''} ${v.label}${active?' <span style="margin-left:auto;font-size:10px">✓</span>':''}
+    </button>`;
+  }).join('');
+  document.body.appendChild(menu);
+  setTimeout(()=>{
+    const closeOnOutside=(ev)=>{
+      if(!menu.contains(ev.target)){menu.remove();document.removeEventListener('click',closeOnOutside);}
+    };
+    document.addEventListener('click',closeOnOutside);
+  },10);
+}
+function setWaStatus2(chipId, id){
+  const c=DB.chips.find(x=>x.id===chipId);if(!c)return;
+  if(id) c.wa_st2=id; else delete c.wa_st2;   // puramente visual: não toca em em_uso/st/roleta
+  renderChipsByAtendente();
+  persistAndPushNow().catch(_=>{});
 }
 
 // Handler de drop em 3 estágios. O atendente designado (c.at) é PRESERVADO
