@@ -16,10 +16,26 @@
   window.__zvInstalled = true;
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
-  var busy = false, simulate = true, els = {}, itemById = {}, seqStop = false, seqRunning = false, sendCancel = false, seqStopOnReply = false, seqChatId = '';
+  var simulate = true, els = {}, itemById = {};
+  // Envios concorrentes: cada envio (item OU funil) vira um JOB independente, com seu proprio
+  // alvo (lead), progresso e stop. Assim da pra mandar pra varios leads ao mesmo tempo e o
+  // banner mostra todos empilhados, cada um com seu Pausar.
+  var jobs = [];
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // Espera ms, mas checando stopFn a cada ~400ms. Resolve true se foi parado (pausar rapido).
+  function sleepStop(ms, stopFn) {
+    return new Promise(function (resolve) {
+      var waited = 0;
+      (function loop() {
+        if (stopFn && stopFn()) { resolve(true); return; }
+        if (waited >= ms) { resolve(false); return; }
+        var step = Math.min(400, ms - waited);
+        setTimeout(function () { waited += step; loop(); }, step);
+      })();
+    });
+  }
   function onReady(cb) {
     var tries = 0;
     (function loop() {
@@ -64,16 +80,16 @@
   function pumpVideoQueue() {
     if (videoBusy || !videoQueue.length) return;
     var job = videoQueue.shift();
-    // sendCancel e resetado no inicio de cada envio (send/sequence/schedCheck), entao aqui
-    // ele so e true se o atendente clicou em pausar ESTE envio antes do video comecar.
-    if (sendCancel) { delete videoTargets[job.rid]; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); return; }
+    // Se o job (funil/item) desse video foi pausado antes de comecar, nao envia.
+    if (job.stopFn && job.stopFn()) { delete videoTargets[job.rid]; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); return; }
     videoBusy = true;
     try { window.__zvRes = null; } catch (_) {}
     window.__zvReq = job.req;
     var waited = 0;
     var iv = setInterval(function () {
       waited += 500; var res = window.__zvRes;
-      if (res && res.id === job.rid) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: !!res.ok, err: res.err }); pumpVideoQueue(); }
+      if (job.stopFn && job.stopFn()) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); }
+      else if (res && res.id === job.rid) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: !!res.ok, err: res.err }); pumpVideoQueue(); }
       else if (waited > 180000) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); pumpVideoQueue(); }
     }, 500);
   }
@@ -127,10 +143,14 @@
 
   function onIncoming(msg) {
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
-    // Interrompe o funil se o lead responder no meio (quando o funil pede isso).
-    if (seqRunning && seqStopOnReply) {
+    // Interrompe os funis que pedem "parar se o lead responder", pro lead que respondeu.
+    if (jobs.length) {
       var mFromS = (msg.from && (msg.from._serialized || (msg.from.toString && msg.from.toString()))) || '';
-      if (!seqChatId || !mFromS || mFromS === seqChatId) { seqStop = true; status('Funil parado: o lead respondeu', 'err'); }
+      var any = false;
+      // So para o funil do lead que REALMENTE respondeu (match exato). Sem remetente
+      // identificavel, nao para nada — pra um evento ambiguo nao derrubar funis de outros leads.
+      jobs.forEach(function (j) { if (j.stopOnReply && !j.stop && mFromS && mFromS === j.chatId) { j.stop = true; any = true; } });
+      if (any) { renderSending(); status('Funil parado: o lead respondeu', 'err'); }
     }
     var trs = DATA.triggers || [];
     if (!trs.length) return;
@@ -184,7 +204,6 @@
     var now = Date.now(), due = a.filter(function (s) { return s.at <= now; });
     if (!due.length) return;
     schedSet(a.filter(function (s) { return s.at > now; }));
-    sendCancel = false;
     due.forEach(function (s) { var it = itemById[s.itemId]; if (it) sendItemAsync(it, s.chatId); });
     var b = document.getElementById('zv-sched'); if (b && b.style.display !== 'none') schedRender();
   }
@@ -438,7 +457,7 @@
       b.onclick = function (e) { e.stopPropagation(); var it = itemById[b.getAttribute('data-id')]; if (it) send(it, b); };
     });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-seq'), function (b) {
-      b.onclick = function () { if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+      b.onclick = function () { sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
     });
     Array.prototype.forEach.call(host.querySelectorAll('.zv-star'), function (s) {
       s.onclick = function (e) { e.stopPropagation(); var id = s.getAttribute('data-fav'); if (FAVS[id]) delete FAVS[id]; else FAVS[id] = 1; lsSet('zv_favs', FAVS); renderSections(); };
@@ -480,7 +499,7 @@
           '<span class="zv-exp" title="Prever funil">' + SVG.chevDown + '</span>' +
         '</div><div class="zv-prev" style="display:none"></div></div>';
     }).join('') : '<div class="zv-empty">Nenhum funil ainda. Crie na dash (Sale Chat).</div>';
-    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Toque no funil pra prever os passos e os tempos. O botao roxo dispara (clique de novo pra parar).</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Toque no funil pra prever os passos e os tempos. O botao roxo dispara pro lead aberto. Da pra mandar pra varios leads ao mesmo tempo; pra parar, use o Pausar no banner de Envios (topo).</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
     Array.prototype.forEach.call(c.querySelectorAll('.zv-seqrow'), function (row) {
       row.onclick = function () {
         var i = +row.getAttribute('data-fexp'); var wrap = row.parentNode;
@@ -490,7 +509,7 @@
       };
     });
     Array.prototype.forEach.call(c.querySelectorAll('.zv-seqsend'), function (b) {
-      b.onclick = function (e) { e.stopPropagation(); if (busy && seqRunning) { seqStop = true; return; } sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
+      b.onclick = function (e) { e.stopPropagation(); sendSequence(DATA.sequences[+b.getAttribute('data-si')], b); };
     });
   }
   // Previa do funil: passos em ordem com item, espera e simulacao, + tempo total estimado.
@@ -570,23 +589,35 @@
   }
 
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
-  // Banner "Envios": mostra o que esta sendo enviado AGORA (item/funil + passo) e um botao
-  // Pausar bem visivel. Aparece so durante um envio; some quando termina.
-  function showSending(title, sub, onPause) {
+  // Banner "Envios": pilha do que esta sendo enviado AGORA. Cada linha = um job (item/funil ->
+  // lead) com seu progresso e um Pausar proprio. Ao pausar, a linha mostra "Parando..." na hora
+  // (feedback claro) e some quando o envio para de fato. Some tudo quando nao ha job ativo.
+  function renderSending() {
     var el = els.sending; if (!el) return;
-    el.innerHTML = '<div class="zv-snd-row"><span class="zv-snd-spin"></span><div class="zv-snd-txt"><b>' + esc(title) + '</b>' + (sub ? '<span>' + esc(sub) + '</span>' : '') + '</div>' +
-      (onPause ? '<button class="zv-snd-stop" id="zv-snd-stop">' + SVG.pause + ' Pausar</button>' : '') + '</div>';
+    if (!jobs.length) { el.style.display = 'none'; el.innerHTML = ''; try { dockLayout(); } catch (_) {} return; }
+    el.innerHTML = jobs.map(function (j) {
+      var stopping = !!j.stop;
+      return '<div class="zv-snd-row' + (stopping ? ' zv-snd-stopping' : '') + '">' +
+        '<span class="zv-snd-spin"></span>' +
+        '<div class="zv-snd-txt"><b>' + esc(j.name) + (j.chatName ? ' <em class="zv-snd-to">&rarr; ' + esc(j.chatName) + '</em>' : '') + '</b>' +
+          '<span>' + esc(stopping ? 'Parando…' : (j.sub || '')) + '</span></div>' +
+        (stopping ? '<span class="zv-snd-stoplbl">Parando…</span>' : '<button class="zv-snd-stop" data-job="' + j.id + '">' + SVG.pause + ' Pausar</button>') +
+        '</div>';
+    }).join('');
     el.style.display = 'block';
-    if (onPause) { var b = el.querySelector('#zv-snd-stop'); if (b) b.onclick = function (e) { e.stopPropagation(); onPause(); }; }
+    Array.prototype.forEach.call(el.querySelectorAll('.zv-snd-stop'), function (btn) {
+      btn.onclick = function (e) { e.stopPropagation(); var jid = btn.getAttribute('data-job'); for (var k = 0; k < jobs.length; k++) { if (jobs[k].id === jid) { jobs[k].stop = true; break; } } renderSending(); };
+    });
     try { dockLayout(); } catch (_) {}
   }
-  function hideSending() { var el = els.sending; if (el) { el.style.display = 'none'; el.innerHTML = ''; } try { dockLayout(); } catch (_) {} }
 
-  // Envia UM item e resolve {ok,err} quando terminar. Nao mexe em busy/status.
+  // Envia UM item e resolve {ok,err} quando terminar (SEMPRE resolve, nunca rejeita).
   // forceChatId: manda pra um chat especifico (usado no agendamento), senao o aberto.
   function sendItemAsync(item, forceChatId, opts) {
     opts = opts || {};
     return new Promise(function (resolve) {
+     try {
+      if (!item) { resolve({ ok: false, err: 'item nao encontrado' }); return; }
       var chatId;
       if (forceChatId) { chatId = forceChatId; }
       else {
@@ -602,7 +633,7 @@
         // certo. Enfileira (um por vez) pra dois videos nao brigarem pelo slot __zvReq.
         var rid = 'v' + Date.now() + Math.random().toString(36).slice(2, 6);
         videoTargets[rid] = chatId;
-        videoQueue.push({ rid: rid, resolve: resolve, req: { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '', chatId: chatId } });
+        videoQueue.push({ rid: rid, resolve: resolve, stopFn: opts.stopFn, req: { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '', chatId: chatId } });
         pumpVideoQueue();
         return;
       }
@@ -622,8 +653,8 @@
         var stMs = opts.simMs > 0 ? opts.simMs : 1200;
         var preT = Promise.resolve();
         if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, stMs + 300)).catch(function () {}); } catch (_) {} }
-        preT.then(function () { return sleep(stMs); })
-          .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
+        preT.then(function () { return sleepStop(stMs, opts.stopFn); })
+          .then(function (stopped) { if (stopped) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
           .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
           .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
@@ -631,71 +662,80 @@
       var dur = opts.simMs > 0 ? opts.simMs : (item.durMs || 3000);
       var pre = Promise.resolve();
       if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)).catch(function () {}); } catch (_) {} }
-      pre.then(function () { return sleep(dur); })
-        .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
+      pre.then(function () { return sleepStop(dur, opts.stopFn); })
+        .then(function (stopped) { if (stopped) return { __cancel: true }; return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
         .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
         .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+     } catch (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); }
     });
   }
 
+  // Nome do lead da conversa capturada (pro banner mostrar pra quem vai).
+  function chatName(c) { return (c && ((c.contact && (c.contact.name || c.contact.pushname)) || c.formattedTitle || (c.id && c.id.user))) || ''; }
+  // Envia UM item: cria um job e mostra na pilha. Alvo travado no clique.
   function send(item, b) {
-    // Se ja esta enviando este item, o botao virou "pausa": cancela.
-    if (b && b.classList.contains('zv-sending')) { sendCancel = true; status('Cancelando...', 'err'); return; }
-    if (busy || !item) return;
-    // Trava o alvo AGORA (no clique): mesmo que o atendente troque de conversa enquanto
-    // simula/envia, a mensagem vai pra ESTE lead, nao pro que estiver aberto na hora.
+    if (!item) return;
     var c = activeChat();
     if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : 'Abra a conversa de um lead', 'err'); return; }
     var chatId = chatIdOf(c);
     if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }
-    busy = true; sendCancel = false;
-    if (b) { b.classList.add('zv-sending', 'zv-busy'); b.innerHTML = SVG.pause; b.title = 'Cancelar'; }
+    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].itemId === item.id) { status('Esse item ja esta indo pra esse lead', 'err'); return; } }
     var kindLbl = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
-    var ai = activeInfo(); var who = ai && ai.name ? ai.name : '';
-    var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : item.kind === 'document' ? 'Enviando documento...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
-    status(st, '');
-    showSending('Enviando: ' + (item.label || kindLbl), kindLbl + (who ? ' · para ' + who : ''), function () { sendCancel = true; status('Cancelando...', 'err'); });
-    sendItemAsync(item, chatId).then(function (r) {
-      hideSending();
-      status(r.cancelled ? 'Cancelado (nao enviou)' : (r.ok ? 'Enviado' : ('Falha: ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
-      busy = false; if (b) { b.classList.remove('zv-sending', 'zv-busy'); b.innerHTML = SVG.play; b.title = 'Enviar'; }
+    var who = chatName(c);
+    var job = { id: 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'item', itemId: item.id, chatId: chatId, chatName: who, name: item.label || kindLbl, sub: (item.kind === 'text' ? (simulate ? 'Digitando…' : 'Enviando…') : item.kind === 'audio' ? (simulate ? 'Gravando…' : 'Enviando…') : ('Enviando ' + kindLbl.toLowerCase() + '…')), stop: false };
+    jobs.push(job); renderSending();
+    sendItemAsync(item, chatId, { stopFn: function () { return job.stop; } }).then(function (r) {
+      jobs = jobs.filter(function (x) { return x.id !== job.id; }); renderSending();
+      status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
     });
   }
 
   // Passo de funil: id do item + delay (espera antes, s) + sim (duracao gravando/digitando, s; 0=auto).
   function normStep(raw) { return (typeof raw === 'string') ? { id: raw, delay: 0, sim: 0 } : { id: (raw && raw.id) || '', delay: (raw && +raw.delay) || 0, sim: (raw && +raw.sim) || 0 }; }
-  // Dispara os passos em ordem: espera de cada passo + simulacao configuravel. Para se o lead
-  // responder (quando o funil pede) ou se clicar no funil de novo.
+  // Dispara os passos em ordem: cria um job (concorrente). Cada clique num funil manda pro lead
+  // aberto NAQUELE momento; da pra ter varios funis indo pra leads diferentes ao mesmo tempo.
   function sendSequence(seq, b) {
-    if (busy || !seq) return;
+    if (!seq) return;
     var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
-    seqChatId = chatIdOf(c);
-    if (!seqChatId) { status('Abra a conversa de um lead', 'err'); return; }  // sem alvo travado, nem comeca (nao re-le o chat aberto)
-    busy = true; seqRunning = true; seqStop = false; sendCancel = false;
-    seqStopOnReply = !!seq.stopOnReply;
-    if (b) b.classList.add('zv-busy');
-    var fname = seq.label || 'Funil';
-    var pauseFunil = function () { seqStop = true; status('Parando o funil...', 'err'); };
-    function done(msg, cls) { hideSending(); status(msg, cls); busy = false; seqRunning = false; seqStopOnReply = false; if (b) b.classList.remove('zv-busy'); }
+    var chatId = chatIdOf(c);
+    if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }  // sem alvo travado, nem comeca
+    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].seqId === seq.id) { status('Esse funil ja esta indo pra esse lead', 'err'); return; } }
+    var who = chatName(c);
+    var job = { id: 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'funil', seqId: seq.id, chatId: chatId, chatName: who, name: 'Funil: ' + (seq.label || 'Funil'), sub: '', stop: false, stopOnReply: !!seq.stopOnReply };
+    jobs.push(job); renderSending();
+    var stopFn = function () { return job.stop; };
+    function finish(how, err) {
+      jobs = jobs.filter(function (x) { return x.id !== job.id; }); renderSending();
+      status(how === 'ok' ? ('Funil enviado (' + steps.length + ') -> ' + who) : how === 'parado' ? ('Funil parado -> ' + who) : ('Falha no funil -> ' + who + (err ? ': ' + err : '')), how === 'ok' ? 'ok' : 'err');
+    }
     var i = 0;
     (function next() {
-      if (seqStop || i >= steps.length) { done(seqStop ? 'Funil parado' : 'Funil enviado (' + steps.length + ')', seqStop ? 'err' : 'ok'); return; }
+      if (job.stop) { finish('parado'); return; }
+      if (i >= steps.length) { finish('ok'); return; }
       var it = itemById[steps[i].id];
+      if (!it) { i++; setTimeout(next, 0); return; }   // item foi apagado/editado na dash no meio: pula
       var wait = Math.max(0, steps[i].delay || 0) * 1000;
-      if (wait > 0) { status('Aguardando ' + steps[i].delay + 's (' + (i + 1) + '/' + steps.length + ')...', ''); showSending('Funil: ' + fname, 'Aguardando ' + steps[i].delay + 's · próximo: passo ' + (i + 1) + '/' + steps.length + (it ? ' (' + it.label + ')' : ''), pauseFunil); }
-      setTimeout(function () {
-        if (seqStop) { done('Funil parado', 'err'); return; }
-        status('Enviando ' + (i + 1) + '/' + steps.length + '...', '');
-        showSending('Funil: ' + fname, 'Enviando passo ' + (i + 1) + ' de ' + steps.length + (it ? ' · ' + it.label : ''), pauseFunil);
-        sendItemAsync(itemById[steps[i].id], seqChatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0 }).then(function (r) {
-          i++;
-          if (!r.ok) { done('Falha no item ' + i + ': ' + (r.err || ''), 'err'); return; }
-          setTimeout(next, 400);
-        });
-      }, wait);
+      if (wait > 0) { job.sub = 'Aguardando ' + steps[i].delay + 's · próximo passo ' + (i + 1) + '/' + steps.length + (it ? ' (' + it.label + ')' : ''); renderSending(); }
+      // Espera checando o stop a cada 500ms, pra o Pausar responder rapido (nao ficar preso o delay).
+      var waited = 0;
+      (function waitLoop() {
+        if (job.stop) { finish('parado'); return; }
+        if (waited >= wait) {
+          job.sub = 'Enviando passo ' + (i + 1) + ' de ' + steps.length + (it ? ' · ' + it.label : ''); renderSending();
+          sendItemAsync(itemById[steps[i].id], chatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0, stopFn: stopFn }).then(function (r) {
+            i++;
+            if (job.stop) { finish('parado'); return; }
+            if (!r.ok && !r.cancelled) { finish('falha', r.err); return; }
+            setTimeout(next, 400);
+          });
+          return;
+        }
+        var step = Math.min(500, wait - waited);
+        setTimeout(function () { waited += step; waitLoop(); }, step);
+      })();
     })();
   }
 
