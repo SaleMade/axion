@@ -1468,7 +1468,15 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 .cfg-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px 18px}
 /* ─── Sale Chat: dashboard com seções laterais ─── */
-.sc-prof{ display:inline-flex; gap:4px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:4px; margin:2px 0 8px; }
+.sc-profrow{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:2px 0 8px; }
+.sc-prof{ display:inline-flex; gap:4px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:4px; }
+.sc-savebar{ margin-left:auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.sc-savewhen{ font-size:11px; color:var(--t3); font-style:normal; }
+.sc-savestat{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700; }
+.sc-savestat.ok{ color:var(--gr); }
+.sc-savestat.dirty{ color:var(--wn,#f0810f); }
+.sc-savebar .btn:disabled{ opacity:.5; cursor:default; }
+@media(max-width:640px){ .sc-savebar{ margin-left:0; width:100%; } }
 .sc-proftab{ display:inline-flex; align-items:center; gap:7px; padding:7px 15px; border:0; background:transparent; color:var(--t3); font-size:12.5px; font-weight:600; border-radius:9px; cursor:pointer; transition:.15s; }
 .sc-proftab:hover{ color:var(--t2); }
 .sc-proftab.on{ background:var(--bl); color:#fff; box-shadow:0 1px 3px rgba(0,0,0,.18); }
@@ -3901,8 +3909,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.50.0';
-const APP_LAST_CHANGE = 'Fase 0 do banco unico: numeros financeiros agora tem UMA fonte so. Visao Geral, Evolucao Diaria, Retrospectiva e Trafego passaram a usar a mesma formula do DRE (modelo afiliado): Lucro = comissao recebida - trafego - investimentos, e ROAS = comissao / trafego (nao mais receita bruta). Retrospectiva reenquadrada (coluna Receita virou Comissao, Custos virou Investimentos). Os numeros exibidos MUDAM: e correcao, nao bug - as telas antigas somavam a receita bruta que o afiliado nunca recebe. Para esta operacao (comissao ~52% do bruto, ROAS real ~6,5x) os valores ficam saudaveis e batem com o DRE.';
+const APP_VERSION = '2.51.0';
+const APP_LAST_CHANGE = 'Sale Chat agora tem botao "Salvar e publicar" (ao lado das abas Vendedores/Cobradores). As mudancas que voce faz viram RASCUNHO e so vao pros PCs dos atendentes quando voce publica de proposito - nada de auto-sync bagunçando quando varias pessoas mexem. Mostra "mudancas nao publicadas" e a ultima publicacao (quem e quando).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7783,6 +7791,50 @@ var scProfile='vend'; try{ scProfile=(localStorage.getItem('sc_profile')==='cob'
 function SC(){ var k=scProfile==='cob'?'salechatCob':'salechat'; if(!DB[k]||typeof DB[k]!=='object') DB[k]={}; return DB[k]; }
 function scSetProfile(p){ scProfile=(p==='cob')?'cob':'vend'; try{ localStorage.setItem('sc_profile',scProfile); }catch(_){}; scSection='messages'; scpTab='itens'; renderSaleChat(); }
 function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salechat/media/'+String(key||'').split('/').map(encodeURIComponent).join('/'); }
+// ─── Rascunho x Publicado ───────────────────────────────────────────────────
+// O Diretor edita o RASCUNHO (SC()). Os bots dos atendentes só recebem o que foi
+// PUBLICADO (botão "Salvar e publicar"). Assim, com varias pessoas mexendo, nada vai
+// pros PCs por engano; so vai quando alguem publica de proposito. Guarda quem/quando.
+function scPubKey(){ return scProfile==='cob' ? 'salechatCobPub' : 'salechatPub'; }
+function SCPub(){ var k=scPubKey(); if(!DB[k]||typeof DB[k]!=='object') DB[k]={messages:[],media:[],sequences:[],triggers:[]}; return DB[k]; }
+function scCoreJson(o){ return JSON.stringify({m:(o&&o.messages)||[],d:(o&&o.media)||[],s:(o&&o.sequences)||[],t:(o&&o.triggers)||[]}); }
+function scSnapshot(o){ return { messages:JSON.parse(JSON.stringify(o.messages||[])), media:JSON.parse(JSON.stringify(o.media||[])), sequences:JSON.parse(JSON.stringify(o.sequences||[])), triggers:JSON.parse(JSON.stringify(o.triggers||[])) }; }
+function scIsDirty(){ return scCoreJson(SC()) !== scCoreJson(SCPub()); }
+// 1a vez: adota o estado atual como baseline publicado, pra nao vazar rascunho pros bots.
+function scEnsurePubBaseline(){
+  var k=scPubKey();
+  if(!DB[k] || typeof DB[k]!=='object' || !DB[k].published_at){
+    var snap=scSnapshot(SC());
+    snap.updated_at=SC().updated_at||Math.floor(Date.now()/1000);
+    snap.published_at=snap.updated_at;
+    snap.published_by=(DB[k]&&DB[k].published_by)||'';
+    DB[k]=snap; persist();
+  }
+}
+function scWhenStr(ts){ if(!ts) return 'nunca'; try{ var d=new Date(ts*1000); var p=function(n){return (n<10?'0':'')+n;}; return p(d.getDate())+'/'+p(d.getMonth()+1)+' '+p(d.getHours())+':'+p(d.getMinutes()); }catch(_){ return '-'; } }
+async function scPublish(){
+  var k=scPubKey();
+  var snap=scSnapshot(SC());
+  snap.updated_at=Math.floor(Date.now()/1000);
+  snap.published_at=snap.updated_at;
+  snap.published_by=(CUR&&(CUR.name||CUR.id))||'';
+  DB[k]=snap;
+  scRenderSaveBar();
+  var alvo=(scProfile==='cob'?'cobradores':'vendedores');
+  try{ await persistAndPushNow(); toast('Publicado para todos os '+alvo+'. Os painéis abertos atualizam em até 20s.','ok'); }
+  catch(_){ persist(); toast('Salvo aqui; vai sincronizar com o servidor assim que der.',''); }
+  scRenderSaveBar();
+}
+function scRenderSaveBar(){
+  var el=$('sc-savebar'); if(!el) return;
+  var dirty=scIsDirty(); var pub=SCPub();
+  var stat = dirty
+    ? '<span class="sc-savestat dirty">'+ico('alert-triangle',{size:13})+' Mudanças não publicadas</span>'
+    : '<span class="sc-savestat ok">'+ico('check-circle',{size:13})+' Tudo publicado</span>';
+  var last = '<em class="sc-savewhen">Última: '+scWhenStr(pub.published_at)+(pub.published_by?(' · '+scEscT(pub.published_by)):'')+'</em>';
+  el.innerHTML = last + stat +
+    '<button class="btn '+(dirty?'btn-gr':'btn-gh')+' btn-sm" '+(dirty?'':'disabled')+' onclick="scPublish()">'+ico('save',{size:14})+' Salvar e publicar</button>';
+}
 function scAllItems(){
   return (SC().messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
     .concat((SC().media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
@@ -7829,17 +7881,21 @@ function scSeedIfNew(){
 function renderSaleChat(){
   const _sc=SC(); ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
   scSeedIfNew();
+  scEnsurePubBaseline();
   const pg=$('salechat-pg'); if(!pg) return;
   const isCob=scProfile==='cob';
   const instZip=isCob?'/sale-chat-instalador-cobradores.zip':'/sale-chat-instalador.zip';
   const who=isCob?'cobrador':'vendedor';
   pg.innerHTML=`
     <div class="ph"><div><h1>Sale <em>Chat</em></h1></div></div>
-    <div class="sc-prof">
-      <button class="sc-proftab ${!isCob?'on':''}" onclick="scSetProfile('vend')">${ico('users',{size:15})} Vendedores</button>
-      <button class="sc-proftab ${isCob?'on':''}" onclick="scSetProfile('cob')">${ico('banknote',{size:15})} Cobradores</button>
+    <div class="sc-profrow">
+      <div class="sc-prof">
+        <button class="sc-proftab ${!isCob?'on':''}" onclick="scSetProfile('vend')">${ico('users',{size:15})} Vendedores</button>
+        <button class="sc-proftab ${isCob?'on':''}" onclick="scSetProfile('cob')">${ico('banknote',{size:15})} Cobradores</button>
+      </div>
+      <div class="sc-savebar" id="sc-savebar"></div>
     </div>
-    <p class="sc-hint" style="max-width:920px;margin:2px 0 14px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Salva sozinho e o painel deles puxa.</p>
+    <p class="sc-hint" style="max-width:920px;margin:2px 0 14px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Edite à vontade e clique em <b>Salvar e publicar</b> pra mandar pros PCs dos ${isCob?'cobradores':'vendedores'}.</p>
     <div class="sc-install">
       <span class="sc-install-ic">${ico('download',{size:15})}</span>
       <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
@@ -7853,6 +7909,7 @@ function renderSaleChat(){
   scRenderNav();
   scRenderSection();
   scpRenderSim();
+  scRenderSaveBar();
 }
 function scRenderNav(){
   const nav=$('sc-nav'); if(!nav) return;
@@ -8195,7 +8252,7 @@ function scAddMsg(){ SC().messages.push({id:'m'+Date.now().toString(36),label:'N
 function scDelMsg(i){ SC().messages.splice(i,1); scTouch(); scRenderMsgs(); scRenderNav(); }
 function scEdit(i,f,v){ if(SC().messages[i]){ SC().messages[i][f]=v; scTouch(); } }
 function scMoveMsg(i,d){ if(scArrMove(SC().messages,i,d)){ scTouch(); scRenderMsgs(); } }
-function scTouch(){ SC().updated_at=Math.floor(Date.now()/1000); persist(); }
+function scTouch(){ SC().updated_at=Math.floor(Date.now()/1000); persist(); if(typeof scRenderSaveBar==='function') scRenderSaveBar(); }
 // ─── Seção: Funis ───
 function scSecFunis(main){
   main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('repeat',{size:15})} Funis (sequências)</div><button class="btn btn-gr btn-sm" onclick="scAddFunil()">+ Novo funil</button></div>

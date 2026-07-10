@@ -2093,7 +2093,12 @@ async function handleSaleChatGet(req, env) {
   let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
   // Perfis independentes: vendedores (state.salechat) e cobradores (state.salechatCob).
   const perfil = ((new URL(req.url)).searchParams.get('perfil') || 'vendedores');
-  const sc = ((perfil === 'cobradores' ? state.salechatCob : state.salechat) || {});
+  const cob = perfil === 'cobradores';
+  // Os bots recebem o que foi PUBLICADO (botão "Salvar e publicar" na dash), NAO o rascunho.
+  // Fallback pro rascunho so na transicao (antes da 1a publicacao existir).
+  const pub = cob ? state.salechatCobPub : state.salechatPub;
+  const draft = cob ? state.salechatCob : state.salechat;
+  const sc = (pub || draft || {});
   return json({
     ok: true,
     perfil: perfil === 'cobradores' ? 'cobradores' : 'vendedores',
