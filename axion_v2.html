@@ -3913,8 +3913,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.52.0';
-const APP_LAST_CHANGE = 'Sale Chat: audio subido em QUALQUER formato (mp3, m4a, wav...) e convertido automaticamente pra OGG/Opus (nota de voz do WhatsApp) na hora do upload, em segundo plano e sem nenhuma UI. Acaba o erro "arquivo de audio" em maquina com WhatsApp de outra versao. Se a conversao falhar/nao for suportada, sobe o original (nunca fica pior). Empacotador OGG validado com ffmpeg.';
+const APP_VERSION = '2.53.0';
+const APP_LAST_CHANGE = 'Sale Chat: removida a tag "campeao" (badge verde) dos audios/videos/mensagens do funil. Some da lista, do detalhe e do editor de midia. Mudanca so visual: a logica de item campeao (compartilhado com todos os atendentes) continua igual.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8094,8 +8094,7 @@ function scRenderCards(kind){
     <div class="sc-card ${scSel[kind]===it.id?'on':''}" onclick="scSelect('${kind}','${it.id}')">
       <span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:15})}</span>
       <span class="sc-card-name">${scEscT(it.label||'(sem nome)')}</span>
-      ${it.champ?'<span class="sc-badge">campeão</span>':''}
-      <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:14})}</button>
+            <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:14})}</button>
       <button class="sc-cbtn" title="Editar" onclick="event.stopPropagation();scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:14})}</button>
     </div>`).join('');
 }
@@ -8105,7 +8104,7 @@ function scRenderDetail(kind){
   const id=scSel[kind]; const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
   const c=scKindColor(kind);
   if(!it){ box.innerHTML=`<div class="sc-detail-empty"><span class="sc-card-ic" style="width:52px;height:52px;border-radius:14px;background:${c}18;color:${c}">${ico(scKindIcon(kind),{size:24})}</span><p>Selecione um item à esquerda pra ver a prévia e editar.</p></div>`; return; }
-  box.innerHTML=`<div class="sc-detail-top"><div class="sc-detail-name"><span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:16})}</span><span class="sc-detail-nametxt">${scEscT(it.label||'(sem nome)')}</span>${it.champ?'<span class="sc-badge">campeão</span>':''}</div>
+  box.innerHTML=`<div class="sc-detail-top"><div class="sc-detail-name"><span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:16})}</span><span class="sc-detail-nametxt">${scEscT(it.label||'(sem nome)')}</span></div>
     <div class="sc-detail-acts">
       <button class="btn btn-gh btn-xs ${it.fav?'sc-on':''}" title="Favoritar" onclick="scToggleFav('${kind}','${it.id}')">${ico('star',{size:13})}</button>
       <button class="btn btn-gh btn-xs" title="Subir" onclick="scMoveItem('${kind}','${it.id}',-1)">${ico('chevron-up',{size:13})}</button>
@@ -8411,7 +8410,6 @@ function scRenderMediaKind(kind){
         <div style="display:flex;align-items:center;gap:7px">
           <span style="color:var(--bl2);flex:none">${ico(scMediaIcon(m.kind),{size:14})}</span>
           <input class="info-val" style="flex:1" value="${scEscA(m.label)}" placeholder="Nome" oninput="scEditMediaIdx(${i},'label',this.value)">
-          ${m.champ?'<span style="font-size:9.5px;background:var(--bld);color:var(--bl2);border-radius:5px;padding:2px 6px;flex:none">campeão</span>':''}
         </div>
         ${capField}
         <div style="margin-top:8px">${prev}</div>
