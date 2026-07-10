@@ -902,6 +902,22 @@ async function resolveAtByCpf(env, cpf) {
   } catch (_) { return null; }
 }
 
+// Fallback: resolve o atendente pelo TELEFONE do cliente. O rastreio de atendimento
+// (wa_attrib = inbound WhatsApp, wa_lead = clique da pressel) guarda telefone → instância
+// ax_<at>. Cobre ~90% dos pedidos recentes que passaram pelo WhatsApp. Casa pelos
+// últimos 8 dígitos pra ser robusto ao 55/DDD/9º dígito; pega o registro mais recente.
+async function resolveAtByPhone(env, phone) {
+  const d = norm(phone);
+  if (d.length < 8) return null;
+  const like = '%' + d.slice(-8);
+  try {
+    let row = await env.DB.prepare("SELECT instance FROM wa_attrib WHERE phone LIKE ? ORDER BY rowid DESC LIMIT 1").bind(like).first();
+    if (!row) row = await env.DB.prepare("SELECT inst AS instance FROM wa_lead WHERE phone LIKE ? ORDER BY ts DESC LIMIT 1").bind(like).first();
+    const at = _instToAt(row && row.instance ? String(row.instance) : '');
+    return at || null;
+  } catch (_) { return null; }
+}
+
 function todayBR() {
   const d = new Date();
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
@@ -988,9 +1004,11 @@ async function handlePaytWebhook(req, env, urlToken) {
   let action_taken = '';
   let lead_id_result = null;
   let resolvedLead = null;
-  // Atribuição automática: quem atendeu esse CPF (capturado na venda concluída do WhatsApp).
-  // A Payt não sabe o atendente; a ponte CPF → atendente preenche isso.
-  const attribAt = data.cpf ? await resolveAtByCpf(env, data.cpf) : null;
+  // Atribuição automática: quem atendeu esse cliente. Tenta pelo CPF (mais preciso,
+  // capturado na venda concluída do WhatsApp) e, se não achar, pelo TELEFONE
+  // (rastreio de atendimento wa_attrib/wa_lead) — que cobre a maioria dos pedidos.
+  const attribAt = (data.cpf ? await resolveAtByCpf(env, data.cpf) : null)
+    || (data.phone ? await resolveAtByPhone(env, data.phone) : null);
 
   // Detecta modalidade COD baseado no payload
   const isCOD = data.modality && (
