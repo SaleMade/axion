@@ -52,6 +52,31 @@
     try { if (window.Store && window.Store.Chat && window.Store.Chat.getActiveChat) { var c2 = window.Store.Chat.getActiveChat(); if (c2) return c2; } } catch (_) {}
     return _activeFromStore();
   }
+  // id serializado da conversa (pra travar o alvo do envio no lead que estava aberto no clique).
+  function chatIdOf(c) { try { return (c && c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || (c && c.id) || null; } catch (_) { return null; } }
+  // Alvo capturado de cada video pendente: id-do-pedido -> chatId. Assim o video vai pro lead
+  // certo mesmo se o atendente trocar de conversa enquanto o injetor baixa o base64.
+  var videoTargets = {};
+  // Fila de videos: window.__zvReq e um slot UNICO (o injetor le um por vez). Se dois videos
+  // setam o slot no mesmo instante, um se sobrescreve e se perde. Por isso serializamos: so
+  // um video ocupa o slot por vez; os demais esperam a vez.
+  var videoQueue = [], videoBusy = false;
+  function pumpVideoQueue() {
+    if (videoBusy || !videoQueue.length) return;
+    var job = videoQueue.shift();
+    // sendCancel e resetado no inicio de cada envio (send/sequence/schedCheck), entao aqui
+    // ele so e true se o atendente clicou em pausar ESTE envio antes do video comecar.
+    if (sendCancel) { delete videoTargets[job.rid]; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); return; }
+    videoBusy = true;
+    try { window.__zvRes = null; } catch (_) {}
+    window.__zvReq = job.req;
+    var waited = 0;
+    var iv = setInterval(function () {
+      waited += 500; var res = window.__zvRes;
+      if (res && res.id === job.rid) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: !!res.ok, err: res.err }); pumpVideoQueue(); }
+      else if (waited > 180000) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); pumpVideoQueue(); }
+    }, 500);
+  }
   function activeInfo() {
     var c = activeChat(); if (!c) return null;
     var ct = c.contact || {};
@@ -74,9 +99,11 @@
     // Enviado pelo injetor (window.__zvReq -> injetor le o arquivo -> chama isso com o base64)
     window.__zvDoSend = function (dataUri, caption, id) {
       try {
-        var c = activeChat();
-        if (!c) { window.__zvRes = { id: id, ok: false, err: 'sem chat aberto' }; return; }
-        window.WPP.chat.sendFileMessage(c.id, dataUri, { type: 'video', caption: caption || '' })
+        // Alvo travado no clique. Se sumiu (timeout/cancelou), NAO envia pro chat aberto agora
+        // — isso mandaria o video pro lead errado. Aborta de proposito.
+        var toId = videoTargets[id]; delete videoTargets[id];
+        if (!toId) { window.__zvRes = { id: id, ok: false, err: 'alvo expirado (nao enviei pra nao errar o lead)' }; return; }
+        window.WPP.chat.sendFileMessage(toId, dataUri, { type: 'video', caption: caption || '' })
           .then(function () { window.__zvRes = { id: id, ok: true }; })
           .catch(function (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; });
       } catch (e) { window.__zvRes = { id: id, ok: false, err: (e && e.message) || ('' + e) }; }
@@ -554,20 +581,17 @@
         var c = activeChat();
         if (!c) { resolve({ ok: false, err: 'sem conversa aberta' }); return; }
         if (c.isGroup) { resolve({ ok: false, err: 'e um grupo' }); return; }
-        chatId = c.id;
+        chatId = chatIdOf(c);
       }
+      if (!chatId) { resolve({ ok: false, err: 'sem conversa aberta' }); return; }
       if (item.kind === 'video') {
-        if (forceChatId) { resolve({ ok: false, err: 'video agendado nao suportado (abra o chat)' }); return; }
         // Video vem do injetor (base64 via CDP), pra fugir do bloqueio de fetch do WhatsApp.
+        // O alvo (chatId capturado) fica em videoTargets[rid] pro __zvDoSend mandar pro lead
+        // certo. Enfileira (um por vez) pra dois videos nao brigarem pelo slot __zvReq.
         var rid = 'v' + Date.now() + Math.random().toString(36).slice(2, 6);
-        try { window.__zvRes = null; } catch (_) {}
-        window.__zvReq = { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '' };
-        var waited = 0;
-        var iv = setInterval(function () {
-          waited += 500; var res = window.__zvRes;
-          if (res && res.id === rid) { clearInterval(iv); resolve({ ok: !!res.ok, err: res.err }); }
-          else if (waited > 90000) { clearInterval(iv); resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); }
-        }, 500);
+        videoTargets[rid] = chatId;
+        videoQueue.push({ rid: rid, resolve: resolve, req: { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '', chatId: chatId } });
+        pumpVideoQueue();
         return;
       }
       if (item.kind === 'image') {
@@ -585,7 +609,7 @@
       if (item.kind === 'text') {
         var stMs = opts.simMs > 0 ? opts.simMs : 1200;
         var preT = Promise.resolve();
-        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, stMs + 300)); } catch (_) {} }
+        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, stMs + 300)).catch(function () {}); } catch (_) {} }
         preT.then(function () { return sleep(stMs); })
           .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
           .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
@@ -594,7 +618,7 @@
       }
       var dur = opts.simMs > 0 ? opts.simMs : (item.durMs || 3000);
       var pre = Promise.resolve();
-      if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)); } catch (_) {} }
+      if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)).catch(function () {}); } catch (_) {} }
       pre.then(function () { return sleep(dur); })
         .then(function () { if (sendCancel) return { __cancel: true }; return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
         .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
@@ -606,11 +630,17 @@
     // Se ja esta enviando este item, o botao virou "pausa": cancela.
     if (b && b.classList.contains('zv-sending')) { sendCancel = true; status('Cancelando...', 'err'); return; }
     if (busy || !item) return;
+    // Trava o alvo AGORA (no clique): mesmo que o atendente troque de conversa enquanto
+    // simula/envia, a mensagem vai pra ESTE lead, nao pro que estiver aberto na hora.
+    var c = activeChat();
+    if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : 'Abra a conversa de um lead', 'err'); return; }
+    var chatId = chatIdOf(c);
+    if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }
     busy = true; sendCancel = false;
     if (b) { b.classList.add('zv-sending', 'zv-busy'); b.innerHTML = SVG.pause; b.title = 'Cancelar'; }
     var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : item.kind === 'document' ? 'Enviando documento...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
     status(st, '');
-    sendItemAsync(item).then(function (r) {
+    sendItemAsync(item, chatId).then(function (r) {
       status(r.cancelled ? 'Cancelado (nao enviou)' : (r.ok ? 'Enviado' : ('Falha: ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
       busy = false; if (b) { b.classList.remove('zv-sending', 'zv-busy'); b.innerHTML = SVG.play; b.title = 'Enviar'; }
     });
@@ -626,9 +656,10 @@
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
+    seqChatId = chatIdOf(c);
+    if (!seqChatId) { status('Abra a conversa de um lead', 'err'); return; }  // sem alvo travado, nem comeca (nao re-le o chat aberto)
     busy = true; seqRunning = true; seqStop = false; sendCancel = false;
     seqStopOnReply = !!seq.stopOnReply;
-    seqChatId = (c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || '';
     if (b) b.classList.add('zv-busy');
     function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; seqStopOnReply = false; if (b) b.classList.remove('zv-busy'); }
     var i = 0;
@@ -639,7 +670,7 @@
       setTimeout(function () {
         if (seqStop) { done('Funil parado', 'err'); return; }
         status('Enviando ' + (i + 1) + '/' + steps.length + '...', '');
-        sendItemAsync(itemById[steps[i].id], null, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0 }).then(function (r) {
+        sendItemAsync(itemById[steps[i].id], seqChatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0 }).then(function (r) {
           i++;
           if (!r.ok) { done('Falha no item ' + i + ': ' + (r.err || ''), 'err'); return; }
           setTimeout(next, 400);
