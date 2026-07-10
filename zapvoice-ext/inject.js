@@ -53,6 +53,36 @@ function fetchRemoteConfig() {
   });
 }
 
+// ─── Auto-update do painel: puxa o codigo do painel/css do servidor (com fallback pro disco) ──
+// Assim, quando o Diretor publica uma melhoria no painel, ela entra sozinha na maquina do
+// atendente (sem rebaixar). A dash serve os arquivos em /sc-panel.js e /sc-panel.css.
+const DASH_URL = (process.env.ZV_DASH_URL || 'https://axion.axion-dash.workers.dev').replace(/\/+$/, '');
+const PANEL_JS_URL = DASH_URL + '/sc-panel.js';
+const PANEL_CSS_URL = DASH_URL + '/sc-panel.css';
+function fetchText(url) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const r = https.get(url, (res) => {
+        if (res.statusCode !== 200) { res.resume(); return fin(null); }
+        let d = ''; res.setEncoding('utf8'); res.on('data', (c) => (d += c)); res.on('end', () => fin(d));
+      });
+      r.on('error', () => fin(null));
+      r.setTimeout(8000, () => { try { r.destroy(); } catch (_) {} fin(null); });
+    } catch (_) { fin(null); }
+  });
+}
+// Puxa painel+css do servidor. Valida que veio CODIGO do painel (nao o HTML da dash, que
+// o worker devolve como fallback de rota nao encontrada). Falha/HTML -> null (usa o disco).
+async function fetchPanelAssets() {
+  const [pj, pcss] = await Promise.all([fetchText(PANEL_JS_URL), fetchText(PANEL_CSS_URL)]);
+  if (!pj || pj.indexOf('__zvInstalled') < 0 || pj.indexOf('"__LIBRARY__"') < 0 || pj.indexOf('"__CSS__"') < 0) return null;
+  if (!pcss || pcss.indexOf('#zv-') < 0) return null;
+  return { panelRaw: pj, css: pcss };
+}
+function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h >>> 0); }
+let currentPanelHash = '';
+
 function getJson(pathname) {
   return new Promise((res, rej) => {
     const r = http.get({ host: '127.0.0.1', port: PORT, path: pathname }, (rr) => {
@@ -131,11 +161,16 @@ async function buildBundle() {
   if (remote && ((remote.messages && remote.messages.length) || (remote.sequences && remote.sequences.length))) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
   else console.log('[zv] Sem config na AXION ainda; usando o funil local (library.json).');
   const wajs = fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');
-  const css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8');
-  let panel = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8');
+  // Painel + css: tenta do servidor (auto-update, sem rebaixar). Se nao vier, usa o do disco.
+  let css, panelRaw, src = 'disco';
+  const rp = await fetchPanelAssets();
+  if (rp) { panelRaw = rp.panelRaw; css = rp.css; src = 'servidor'; }
+  else { panelRaw = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8'); css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8'); }
+  currentPanelHash = hashStr(panelRaw + '|' + css);
+  console.log('[zv] Painel carregado do ' + src + '.');
   // replace por FUNCAO (imune a sequencias $ nos dados, ex: "R$497")
   const libJson = JSON.stringify(await buildLibrary(remote));
-  panel = panel.replace('"__LIBRARY__"', () => libJson)
+  const panel = panelRaw.replace('"__LIBRARY__"', () => libJson)
                .replace('"__CSS__"', () => JSON.stringify(css));
   return { wajs, panel };
 }
@@ -229,7 +264,10 @@ async function run() {
     process.exit(2);
   }
   console.log('[zv] Pagina encontrada:', page.title);
-  const { wajs, panel } = await buildBundle();
+  const _bundle = await buildBundle();
+  const wajs = _bundle.wajs;
+  let panel = _bundle.panel;
+  let panelScriptId = null;
 
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.addEventListener('open', res, { once: true }); ws.addEventListener('error', rej, { once: true }); });
@@ -246,7 +284,7 @@ async function run() {
 
   // Re-injeta automaticamente em cada carregamento/reload da pagina (roda no document-start)
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: wajs });
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel });
+  { const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel }); panelScriptId = r && r.result && r.result.identifier; }
 
   async function injectNow() {
     const hasWpp = valOf(await evaluate('!!window.WPP', true));
@@ -334,6 +372,31 @@ async function run() {
     setTimeout(pollConfig, 20000);
   }
   setTimeout(pollConfig, 20000);
+
+  // Auto-update do PAINEL: a cada 60s checa se o codigo do painel mudou no servidor. Se mudou,
+  // reconstroi o bundle e re-injeta ao vivo (o painel se limpa e sobe a versao nova). O
+  // atendente ganha as melhorias sem rebaixar nada. Falha/offline -> mantem o painel atual.
+  async function pollPanel() {
+    try {
+      const rp = await fetchPanelAssets();
+      if (rp) {
+        const h = hashStr(rp.panelRaw + '|' + rp.css);
+        if (currentPanelHash && h !== currentPanelHash) {
+          const rebuilt = await buildBundle();   // usa a versao nova do servidor; atualiza currentPanelHash
+          const okNew = rebuilt && rebuilt.panel && rebuilt.panel.indexOf('__zvInstalled') >= 0;
+          if (okNew) {
+            panel = rebuilt.panel;
+            try { if (panelScriptId) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: panelScriptId }); } catch (_) {}
+            { const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel }); panelScriptId = r && r.result && r.result.identifier; }
+            await evaluate(panel);
+            console.log('[zv] Painel atualizado sozinho (nova versao do servidor).');
+          }
+        }
+      }
+    } catch (_) {}
+    setTimeout(pollPanel, 60000);
+  }
+  setTimeout(pollPanel, 60000);
 
   cdp.onEvent = (m) => { if (m.method === 'Page.loadEventFired') setTimeout(injectNow, 1500); };
   ws.addEventListener('close', () => { console.log('[zv] Conexao caiu. Rode de novo (o app reiniciou?).'); process.exit(0); });
