@@ -340,11 +340,12 @@
     p.innerHTML =
       '<div id="zv-head"><span id="zv-dot" class="zv-off"></span><span id="zv-title">Sale Chat</span><span id="zv-who">carregando...</span>' +
         '<span id="zv-min" title="Recolher">' + SVG.minus + '</span></div>' +
+      '<div id="zv-sending" style="display:none"></div>' +
       '<div id="zv-suggest" style="display:none"></div>' +
       '<div id="zv-main"><div id="zv-content"></div><div id="zv-rail"></div></div>' +
       '<div id="zv-status"></div>';
     document.body.appendChild(p);
-    els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status');
+    els.who = p.querySelector('#zv-who'); els.dot = p.querySelector('#zv-dot'); els.status = p.querySelector('#zv-status'); els.sending = p.querySelector('#zv-sending');
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); dockLayout(); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
@@ -569,6 +570,17 @@
   }
 
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
+  // Banner "Envios": mostra o que esta sendo enviado AGORA (item/funil + passo) e um botao
+  // Pausar bem visivel. Aparece so durante um envio; some quando termina.
+  function showSending(title, sub, onPause) {
+    var el = els.sending; if (!el) return;
+    el.innerHTML = '<div class="zv-snd-row"><span class="zv-snd-spin"></span><div class="zv-snd-txt"><b>' + esc(title) + '</b>' + (sub ? '<span>' + esc(sub) + '</span>' : '') + '</div>' +
+      (onPause ? '<button class="zv-snd-stop" id="zv-snd-stop">' + SVG.pause + ' Pausar</button>' : '') + '</div>';
+    el.style.display = 'block';
+    if (onPause) { var b = el.querySelector('#zv-snd-stop'); if (b) b.onclick = function (e) { e.stopPropagation(); onPause(); }; }
+    try { dockLayout(); } catch (_) {}
+  }
+  function hideSending() { var el = els.sending; if (el) { el.style.display = 'none'; el.innerHTML = ''; } try { dockLayout(); } catch (_) {} }
 
   // Envia UM item e resolve {ok,err} quando terminar. Nao mexe em busy/status.
   // forceChatId: manda pra um chat especifico (usado no agendamento), senao o aberto.
@@ -638,9 +650,13 @@
     if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }
     busy = true; sendCancel = false;
     if (b) { b.classList.add('zv-sending', 'zv-busy'); b.innerHTML = SVG.pause; b.title = 'Cancelar'; }
+    var kindLbl = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
+    var ai = activeInfo(); var who = ai && ai.name ? ai.name : '';
     var st = item.kind === 'video' ? 'Enviando video...' : item.kind === 'image' ? 'Enviando imagem...' : item.kind === 'document' ? 'Enviando documento...' : (item.kind === 'text' ? (simulate ? 'Digitando...' : 'Enviando...') : (simulate ? 'Gravando...' : 'Enviando...'));
     status(st, '');
+    showSending('Enviando: ' + (item.label || kindLbl), kindLbl + (who ? ' · para ' + who : ''), function () { sendCancel = true; status('Cancelando...', 'err'); });
     sendItemAsync(item, chatId).then(function (r) {
+      hideSending();
       status(r.cancelled ? 'Cancelado (nao enviou)' : (r.ok ? 'Enviado' : ('Falha: ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
       busy = false; if (b) { b.classList.remove('zv-sending', 'zv-busy'); b.innerHTML = SVG.play; b.title = 'Enviar'; }
     });
@@ -661,15 +677,19 @@
     busy = true; seqRunning = true; seqStop = false; sendCancel = false;
     seqStopOnReply = !!seq.stopOnReply;
     if (b) b.classList.add('zv-busy');
-    function done(msg, cls) { status(msg, cls); busy = false; seqRunning = false; seqStopOnReply = false; if (b) b.classList.remove('zv-busy'); }
+    var fname = seq.label || 'Funil';
+    var pauseFunil = function () { seqStop = true; status('Parando o funil...', 'err'); };
+    function done(msg, cls) { hideSending(); status(msg, cls); busy = false; seqRunning = false; seqStopOnReply = false; if (b) b.classList.remove('zv-busy'); }
     var i = 0;
     (function next() {
       if (seqStop || i >= steps.length) { done(seqStop ? 'Funil parado' : 'Funil enviado (' + steps.length + ')', seqStop ? 'err' : 'ok'); return; }
+      var it = itemById[steps[i].id];
       var wait = Math.max(0, steps[i].delay || 0) * 1000;
-      if (wait > 0) status('Aguardando ' + steps[i].delay + 's (' + (i + 1) + '/' + steps.length + ')...', '');
+      if (wait > 0) { status('Aguardando ' + steps[i].delay + 's (' + (i + 1) + '/' + steps.length + ')...', ''); showSending('Funil: ' + fname, 'Aguardando ' + steps[i].delay + 's · próximo: passo ' + (i + 1) + '/' + steps.length + (it ? ' (' + it.label + ')' : ''), pauseFunil); }
       setTimeout(function () {
         if (seqStop) { done('Funil parado', 'err'); return; }
         status('Enviando ' + (i + 1) + '/' + steps.length + '...', '');
+        showSending('Funil: ' + fname, 'Enviando passo ' + (i + 1) + ' de ' + steps.length + (it ? ' · ' + it.label : ''), pauseFunil);
         sendItemAsync(itemById[steps[i].id], seqChatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0 }).then(function (r) {
           i++;
           if (!r.ok) { done('Falha no item ' + i + ': ' + (r.err || ''), 'err'); return; }
