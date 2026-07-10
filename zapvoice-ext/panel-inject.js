@@ -499,7 +499,7 @@
           '<span class="zv-exp" title="Prever funil">' + SVG.chevDown + '</span>' +
         '</div><div class="zv-prev" style="display:none"></div></div>';
     }).join('') : '<div class="zv-empty">Nenhum funil ainda. Crie na dash (Sale Chat).</div>';
-    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div><p class="zv-tabhint">Toque no funil pra prever os passos e os tempos. O botao roxo dispara pro lead aberto. Da pra mandar pra varios leads ao mesmo tempo; pra parar, use o Pausar no banner de Envios (topo).</p></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
     Array.prototype.forEach.call(c.querySelectorAll('.zv-seqrow'), function (row) {
       row.onclick = function () {
         var i = +row.getAttribute('data-fexp'); var wrap = row.parentNode;
