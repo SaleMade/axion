@@ -1481,7 +1481,8 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-proftab:hover{ color:var(--t2); }
 .sc-proftab.on{ background:var(--bl); color:#fff; box-shadow:0 1px 3px rgba(0,0,0,.18); }
 .sc-proftab.on svg{ color:#fff; }
-.sc-install{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 13px; margin-bottom:16px; opacity:.9; }
+.sc-footer{ margin-top:30px; padding-top:20px; border-top:1px solid var(--b1); }
+.sc-install{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 13px; margin-bottom:4px; opacity:.85; }
 .sc-install:hover{ opacity:1; }
 .sc-install-ic{ width:30px; height:30px; border-radius:8px; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(19,194,115,.10); color:#13c273; }
 .sc-install-txt{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
@@ -3909,8 +3910,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.51.0';
-const APP_LAST_CHANGE = 'Sale Chat agora tem botao "Salvar e publicar" (ao lado das abas Vendedores/Cobradores). As mudancas que voce faz viram RASCUNHO e so vao pros PCs dos atendentes quando voce publica de proposito - nada de auto-sync bagunçando quando varias pessoas mexem. Mostra "mudancas nao publicadas" e a ultima publicacao (quem e quando).';
+const APP_VERSION = '2.51.1';
+const APP_LAST_CHANGE = 'Sale Chat: o textinho de ajuda e o "Instalador do vendedor" sairam do topo e foram pro rodape da pagina (embaixo do simulador), pra nao ficarem aparecendo o tempo todo. Painel do atendente ganhou deteccao robusta da conversa aberta (fim do "abra a conversa de um lead" com a conversa aberta em maquina com WhatsApp de outra versao).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7895,17 +7896,19 @@ function renderSaleChat(){
       </div>
       <div class="sc-savebar" id="sc-savebar"></div>
     </div>
-    <p class="sc-hint" style="max-width:920px;margin:2px 0 14px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Edite à vontade e clique em <b>Salvar e publicar</b> pra mandar pros PCs dos ${isCob?'cobradores':'vendedores'}.</p>
-    <div class="sc-install">
-      <span class="sc-install-ic">${ico('download',{size:15})}</span>
-      <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
-      <a class="btn btn-gh btn-sm" href="${instZip}" download>${ico('download',{size:13})} Baixar .zip</a>
-    </div>
     <div class="sc-wrap">
       <div class="sc-nav" id="sc-nav"></div>
       <div class="sc-main" id="sc-main"></div>
     </div>
-    <div class="sc-simwrap" id="sc-simwrap"></div>`;
+    <div class="sc-simwrap" id="sc-simwrap"></div>
+    <div class="sc-footer">
+      <p class="sc-hint" style="max-width:920px;margin:0 0 12px;font-size:12.5px">Tudo que os ${isCob?'cobradores':'vendedores'} disparam no WhatsApp com 1 clique. Perfil independente do outro. Edite à vontade e clique em <b>Salvar e publicar</b> pra mandar pros PCs dos ${isCob?'cobradores':'vendedores'}.</p>
+      <div class="sc-install">
+        <span class="sc-install-ic">${ico('download',{size:15})}</span>
+        <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
+        <a class="btn btn-gh btn-sm" href="${instZip}" download>${ico('download',{size:13})} Baixar .zip</a>
+      </div>
+    </div>`;
   scRenderNav();
   scRenderSection();
   scpRenderSim();
