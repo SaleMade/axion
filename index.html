@@ -1608,6 +1608,9 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 @media(max-width:820px){ .sc-md{ flex-direction:column; } .sc-md-list{ width:100%; } .sc-cards{ max-height:none; } }
 /* ─── Prévia do painel do WhatsApp (sempre escuro, fiel ao painel real) ─── */
 .scp-stage{ display:flex; justify-content:center; padding:22px; border:1px solid var(--b2); border-radius:var(--rl); background:radial-gradient(rgba(150,150,150,.06) 1px,transparent 1px) 0 0/16px 16px, var(--s1); }
+.scp-frame-wrap{ border:1px solid var(--b1); border-radius:16px; overflow:hidden; background:#0b141a; box-shadow:0 14px 40px rgba(0,0,0,.35); }
+.scp-frame{ display:block; width:100%; height:640px; border:0; background:#0b141a; }
+@media(max-width:520px){ .scp-frame{ height:560px; } }
 .scp-panel{ width:384px; max-width:100%; height:620px; background:#0e1621; border:1px solid #22303d; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 46px rgba(0,0,0,.45); font-family:'Nunito','Segoe UI',system-ui,sans-serif; }
 .scp-panel *{ box-sizing:border-box; }
 .scp-head{ display:flex; align-items:center; gap:9px; padding:13px 15px; background:linear-gradient(135deg,#13c273,#0eb267); color:#fff; flex:none; }
@@ -3913,8 +3916,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.53.0';
-const APP_LAST_CHANGE = 'Sale Chat: removida a tag "campeao" (badge verde) dos audios/videos/mensagens do funil. Some da lista, do detalhe e do editor de midia. Mudanca so visual: a logica de item campeao (compartilhado com todos os atendentes) continua igual.';
+const APP_VERSION = '2.54.0';
+const APP_LAST_CHANGE = 'Simulador do Sale Chat agora e o PROPRIO painel de producao (sc-panel.js) rodando num WhatsApp de teste (iframe + WPP mock). Preview, envio, digitando/gravando, banner de Envios e funis funcionam identicos ao dia a dia, e nunca mais diverge (auto-atualiza junto). Se algo falhar, cai no simulador antigo.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7944,7 +7947,110 @@ function scpFindItem(id){
   var d=(SC().media||[]).filter(o=>o.id===id)[0]; if(d) return {item:d,kind:d.kind};
   return null;
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// SIMULADOR = o PROPRIO painel de producao (sc-panel.js) rodando num iframe, com um
+// WhatsApp "de mentira" (WPP mock) que renderiza os envios num chat de teste. Assim o
+// simulador fica IDENTICO ao painel real e nunca mais diverge (auto-atualiza junto).
+// Se algo falhar (sem net/erro), cai no simulador antigo (scpRenderSimFallback).
+// ─────────────────────────────────────────────────────────────────────────────
+function scpSimLibrary(fast){
+  var sc=SC();
+  var messages=(sc.messages||[]).map(function(m){ return {id:m.id,stage:'MSG',label:m.label||m.id,kind:'text',text:m.text||''}; });
+  var sequences=(sc.sequences||[]).map(function(s){
+    var items=(s.items||[]).map(function(raw){
+      var stp=(typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0};
+      if(fast) return {id:stp.id,delay:Math.min(stp.delay,1),sim:Math.min(stp.sim||0,1)};
+      return stp;
+    });
+    return {id:s.id,label:s.label,items:items,stopOnReply:!!s.stopOnReply};
+  });
+  var media=(sc.media||[]).map(function(m){
+    var url=m.key?scMediaUrl(m.key):'';
+    if(m.kind==='video') return {id:m.id,kind:'video',label:m.label||'Video',caption:m.caption||'',mediaUrl:url,dataUri:url};
+    if(m.kind==='image') return {id:m.id,kind:'image',label:m.label||'Imagem',caption:m.caption||'',dataUri:url};
+    if(m.kind==='document') return {id:m.id,kind:'document',label:m.label||'Documento',mime:m.mime||'application/pdf',dataUri:url};
+    return {id:m.id,kind:'audio',label:m.label||'Audio',dataUri:url,durMs:fast?900:2500};
+  });
+  return {messages:messages,sequences:sequences,media:media,triggers:Array.isArray(sc.triggers)?sc.triggers:[],funnel:[],social:[]};
+}
+function scpMockSrcdoc(){
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:#0b141a;font-family:"Segoe UI",system-ui,sans-serif;overflow:hidden}
+#app{height:100vh;display:flex;flex-direction:column;background:#0b141a}
+#sim-head{flex:none;display:flex;align-items:center;gap:10px;padding:11px 16px;background:#202c33;color:#e9edef}
+#sim-head .av{width:34px;height:34px;border-radius:50%;background:#3b4a54;display:flex;align-items:center;justify-content:center}
+#sim-head b{font-size:14px}#sim-head small{display:block;color:#8696a0;font-size:11px}
+#sim-msgs{flex:1;overflow-y:auto;padding:16px 7%;display:flex;flex-direction:column;gap:8px}
+.sm{max-width:78%;padding:7px 10px 5px;border-radius:9px;font-size:13.5px;color:#e9edef;word-break:break-word}
+.sm.out{align-self:flex-end;background:#005c4b}.sm.in{align-self:flex-start;background:#202c33}
+.sm-t{display:block;text-align:right;font-size:10px;color:#8696a0;margin-top:2px}
+.sm audio,.sm video{max-width:250px;display:block}.sm img{max-width:230px;border-radius:6px;display:block}
+.sm-cap{font-size:12.5px;margin-top:4px}.sm-doc{color:#53bdeb;text-decoration:none}
+</style></head><body><div id="app"><div id="sim-head"><span class="av">🧑</span><div><b>Maria (lead)</b><small id="sim-status">online</small></div></div><div id="sim-msgs"></div></div>
+<script>
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+var CHAT={id:{_serialized:"sim@c.us",user:"sim",toString:function(){return "sim@c.us";}},isGroup:false,contact:{name:"Maria (lead)",pushname:"Maria (lead)"},formattedTitle:"Maria (lead)"};
+function msgs(){return document.getElementById("sim-msgs");}
+function st(t){var s=document.getElementById("sim-status");if(s)s.textContent=t||"online";}
+function bub(html,cls){var d=document.createElement("div");d.className="sm "+(cls||"out");d.innerHTML=html+'<span class="sm-t">agora</span>';msgs().appendChild(d);msgs().scrollTop=1e9;return d;}
+window.WPP={isReady:true,chat:{getActiveChat:function(){return CHAT;},
+sendTextMessage:function(id,t){bub("<div>"+esc(t)+"</div>");st();return Promise.resolve({});},
+sendFileMessage:function(id,d,o){o=o||{};var t=o.type,cap=o.caption?('<div class="sm-cap">'+esc(o.caption)+"</div>"):"";
+if(t==="audio")bub('<audio controls preload="none" src="'+d+'"></audio>');
+else if(t==="image")bub('<img src="'+d+'">'+cap);
+else if(t==="video")bub('<video controls preload="metadata" src="'+d+'"></video>'+cap);
+else if(t==="document")bub('<a class="sm-doc" href="'+d+'" target="_blank">📄 '+esc(o.filename||"documento")+"</a>");
+else bub("<div>"+esc(o.filename||"arquivo")+"</div>");st();return Promise.resolve({});},
+markIsComposing:function(id,ms){st("digitando…");setTimeout(function(){st();},ms||1200);return Promise.resolve();},
+markIsRecording:function(id,ms){st("gravando áudio…");setTimeout(function(){st();},ms||1500);return Promise.resolve();}},
+whatsapp:{ChatStore:{getModelsArray:function(){var c={};for(var k in CHAT)c[k]=CHAT[k];c.active=true;return [c];},models:[]}},
+on:function(e,cb){if(e==="chat.new_message")window.__onmsg=cb;}};
+window.Store={Chat:{getActiveChat:function(){return CHAT;}}};
+var lr=null,lp=null;setInterval(function(){
+if(window.__zvReq&&window.__zvReq.id!==lr){lr=window.__zvReq.id;var r=window.__zvReq;window.__zvReq=null;try{window.__zvDoSend(r.url||r.file||"",r.caption||"",r.id);}catch(e){window.__zvRes={id:r.id,ok:false,err:""+e};}}
+if(window.__zvPrevReq&&window.__zvPrevReq.id!==lp){lp=window.__zvPrevReq.id;var p=window.__zvPrevReq;window.__zvPrevReq=null;window.__zvPrevRes={id:p.id,ok:true,dataUri:p.url};}
+},200);
+window.addEventListener("message",function(e){var m=e.data||{};if(m.zv==="reply"){var d=document.createElement("div");d.className="sm in";d.innerHTML="<div>"+esc(m.text)+'</div><span class="sm-t">agora</span>';msgs().appendChild(d);msgs().scrollTop=1e9;try{if(window.__onmsg)window.__onmsg({from:CHAT.id,body:m.text,id:{fromMe:false}});}catch(_){}}else if(m.zv==="clear"){msgs().innerHTML="";st();}});
+<\/script></body></html>`;
+}
+var scpFrameReady=false;
 function scpRenderSim(){
+  const w=$('sc-simwrap'); if(!w) return;
+  scpRunId++; scpRunning=false; scpFrameReady=false;
+  w.innerHTML=`<div class="sc-simhead"><div class="info-title">${ico('smartphone',{size:16})} Simulador · teste sem enviar</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label class="scp-speed"><input type="checkbox" ${scpFast?'checked':''} onchange="scpFrameFast(this.checked)"> modo rápido</label>
+      <button class="btn btn-gh btn-sm" onclick="scpFrameMsg('reply')">Simular resposta</button>
+      <button class="btn btn-gh btn-sm" onclick="scpFrameMsg('clear')">Limpar conversa</button>
+    </div></div>
+    <p class="sc-hint" style="margin:2px 0 14px">É o MESMO painel que os atendentes usam, rodando aqui num WhatsApp de teste. Clica nos itens e nos funis: preview, envio, "digitando/gravando" e o banner de Envios funcionam igual. Não manda nada de verdade.</p>
+    <div class="scp-frame-wrap"><iframe id="scp-frame" class="scp-frame" title="Simulador Sale Chat"></iframe></div>`;
+  scpBootFrame();
+}
+async function scpBootFrame(){
+  const fr=$('scp-frame'); if(!fr) return;
+  try{
+    const dash=(location.origin||'').replace(/\/+$/,'');
+    const [pjRes,pcRes]=await Promise.all([fetch(dash+'/sc-panel.js?_='+Date.now()),fetch(dash+'/sc-panel.css?_='+Date.now())]);
+    let pj=await pjRes.text(), pc=await pcRes.text();
+    if(!pj||pj.indexOf('__zvInstalled')<0||pj.indexOf('"__LIBRARY__"')<0){ throw new Error('painel invalido'); }
+    const panelCode=pj.replace('"__LIBRARY__"',()=>JSON.stringify(scpSimLibrary(scpFast))).replace('"__CSS__"',()=>JSON.stringify(pc||''));
+    fr.onload=function(){
+      try{
+        const doc=fr.contentDocument; if(!doc){ scpRenderSimFallback(); return; }
+        const s=doc.createElement('script'); s.textContent=panelCode; doc.body.appendChild(s);
+        // No iframe nao ha barra de titulo do WhatsApp: cola o painel no topo (no real fica top:38px).
+        const ov=doc.createElement('style'); ov.textContent='#zv-panel{top:0!important;height:100vh!important}'; doc.head.appendChild(ov);
+        setTimeout(function(){ try{ scpFrameReady=!!(fr.contentDocument&&fr.contentDocument.getElementById('zv-panel')); }catch(_){ scpFrameReady=false; } if(!scpFrameReady) scpRenderSimFallback(); }, 2800);
+      }catch(e){ scpRenderSimFallback(); }
+    };
+    fr.srcdoc=scpMockSrcdoc();
+  }catch(e){ scpRenderSimFallback(); }
+}
+function scpFrameMsg(kind){ try{ const fr=$('scp-frame'); if(fr&&fr.contentWindow) fr.contentWindow.postMessage({zv:kind, text:'Oi, tudo bem? Ainda tem esse produto?'}, '*'); }catch(_){}}
+function scpFrameFast(v){ scpFast=!!v; scpSyncFrame(); }
+function scpSyncFrame(){ try{ const fr=$('scp-frame'); if(fr&&fr.contentWindow&&fr.contentWindow.__zvUpdate) fr.contentWindow.__zvUpdate(scpSimLibrary(scpFast)); }catch(_){}}
+function scpRenderSimFallback(){
   const w=$('sc-simwrap'); if(!w) return;
   scpRunId++; scpRunning=false;
   w.innerHTML=`<div class="sc-simhead"><div class="info-title">${ico('smartphone',{size:16})} Simulador · teste sem enviar</div>
@@ -7962,7 +8068,7 @@ function scpRenderSim(){
       <div class="scp-stage2">${scpPanelHtml()}</div>
     </div>`;
 }
-function scpRefresh(){ const st=document.querySelector('.scp-stage2'); if(st){ st.innerHTML=scpPanelHtml(); scpFilterSim(); } }
+function scpRefresh(){ scpSyncFrame(); const st=document.querySelector('.scp-stage2'); if(st){ st.innerHTML=scpPanelHtml(); scpFilterSim(); } }
 function scpFilterSim(){
   const cont=document.querySelector('.scp-content'); if(!cont) return;
   const q=(scpQuery||'').trim().toLowerCase();
