@@ -31,12 +31,43 @@
   }
   function injectCss() { var ex = document.getElementById('zv-style'); if (ex && ex.parentNode) ex.parentNode.removeChild(ex); var s = document.createElement('style'); s.id = 'zv-style'; s.textContent = CSS; (document.head || document.documentElement).appendChild(s); }
 
-  function activeChat() { try { return window.WPP.chat.getActiveChat(); } catch (e) { return null; } }
+  // Fallback: acha a conversa aberta direto no ChatStore (o modelo com active=true).
+  // Serve quando o WhatsApp atualiza e o getActiveChat oficial passa a devolver null,
+  // mesmo com a conversa aberta (foi o que aconteceu na maquina de um atendente).
+  function _activeFromStore() {
+    var stores = [];
+    try { var w = window.WPP && window.WPP.whatsapp; if (w && w.ChatStore) stores.push(w.ChatStore); } catch (_) {}
+    try { if (window.Store && window.Store.Chat) stores.push(window.Store.Chat); } catch (_) {}
+    for (var s = 0; s < stores.length; s++) {
+      try {
+        var st = stores[s];
+        var arr = (st.getModelsArray && st.getModelsArray()) || (st.getModels && st.getModels()) || st.models || st._models || [];
+        for (var i = 0; i < arr.length; i++) { if (arr[i] && arr[i].active) return arr[i]; }
+      } catch (_) {}
+    }
+    return null;
+  }
+  function activeChat() {
+    try { var c = window.WPP.chat.getActiveChat(); if (c) return c; } catch (_) {}
+    try { if (window.Store && window.Store.Chat && window.Store.Chat.getActiveChat) { var c2 = window.Store.Chat.getActiveChat(); if (c2) return c2; } } catch (_) {}
+    return _activeFromStore();
+  }
   function activeInfo() {
     var c = activeChat(); if (!c) return null;
     var ct = c.contact || {};
     return { name: ct.name || ct.pushname || ct.formattedName || c.formattedTitle || (c.id && c.id.user) || '', number: (c.id && c.id.user) || '', isGroup: !!c.isGroup };
   }
+  // Diagnostico: se o painel disser "abra a conversa" mesmo com a conversa aberta, o
+  // atendente abre o console (F12) e digita __zvDiag() — manda o resultado pro suporte.
+  window.__zvDiag = function () {
+    var d = { wppReady: false, getActiveChat: null, storeCount: 0, activeAchou: false };
+    try { d.wppReady = !!(window.WPP && (window.WPP.isReady || (window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()))); } catch (_) {}
+    try { d.getActiveChat = !!(window.WPP.chat.getActiveChat()); } catch (e) { d.getActiveChat = 'erro:' + ((e && e.message) || e); }
+    try { var w = window.WPP.whatsapp; var st = w && w.ChatStore; var arr = st && ((st.getModelsArray && st.getModelsArray()) || st.models || []); d.storeCount = (arr && arr.length) || 0; } catch (_) {}
+    try { d.activeAchou = !!activeChat(); } catch (_) {}
+    console.log('[Sale Chat diag] ' + JSON.stringify(d));
+    return d;
+  };
 
   function build() {
     injectCss();
