@@ -3910,8 +3910,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.51.1';
-const APP_LAST_CHANGE = 'Sale Chat: o textinho de ajuda e o "Instalador do vendedor" sairam do topo e foram pro rodape da pagina (embaixo do simulador), pra nao ficarem aparecendo o tempo todo. Painel do atendente ganhou deteccao robusta da conversa aberta (fim do "abra a conversa de um lead" com a conversa aberta em maquina com WhatsApp de outra versao).';
+const APP_VERSION = '2.52.0';
+const APP_LAST_CHANGE = 'Sale Chat: audio subido em QUALQUER formato (mp3, m4a, wav...) e convertido automaticamente pra OGG/Opus (nota de voz do WhatsApp) na hora do upload, em segundo plano e sem nenhuma UI. Acaba o erro "arquivo de audio" em maquina com WhatsApp de outra versao. Se a conversao falhar/nao for suportada, sobe o original (nunca fica pior). Empacotador OGG validado com ffmpeg.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8168,9 +8168,69 @@ function scOpenModal(kind,id){
   const nm=$('sc-m-name'); if(nm) setTimeout(()=>nm.focus(),30);
 }
 function scModalFilePicked(input){ scModalFile=input.files[0]||null; const t=$('sc-drop-txt'), d=$('sc-drop'); if(t&&scModalFile){ t.textContent=scModalFile.name+' ('+Math.round(scModalFile.size/1024)+' KB)'; if(d) d.classList.add('on'); } }
+// ─── Conversao automatica de audio -> OGG/Opus (formato de nota de voz do WhatsApp) ───
+// Roda no navegador, em segundo plano, sem UI. Assim mp3/m4a/wav subidos na dash saem sempre
+// no formato certo e nunca dao o erro "arquivo de audio" em maquina de WhatsApp diferente.
+// Empacotador OGG/Opus (validado com ffmpeg: gera OGG/Opus mono legivel).
+function scMuxOggOpus(packets, opts){
+  var channels=opts.channels||1, preSkip=(opts.preSkip!=null?opts.preSkip:312), serial=0x1a2b3c4d;
+  var T=scMuxOggOpus._t||(scMuxOggOpus._t=(function(){ var t=new Uint32Array(256); for(var i=0;i<256;i++){ var r=i<<24; for(var j=0;j<8;j++) r=(r&0x80000000)?((r<<1)^0x04c11db7):(r<<1); t[i]=r>>>0; } return t; })());
+  function crc(b){ var c=0; for(var i=0;i<b.length;i++) c=((c<<8)^T[((c>>>24)^b[i])&0xff])>>>0; return c>>>0; }
+  function lace(len){ var s=[]; while(len>=255){ s.push(255); len-=255; } s.push(len); return s; }
+  function samples(pkt){ if(!pkt.length) return 0; var toc=pkt[0],config=toc>>3,c=toc&3,fs; if(config<12){ var a=[480,960,1920,2880,480,960,1920,2880,480,960,1920,2880]; fs=a[config]; } else if(config<16){ var b=[480,960,480,960]; fs=b[config-12]; } else { var d=[120,240,480,960]; fs=d[(config-16)&3]; } var fr; if(c===0)fr=1; else if(c===1||c===2)fr=2; else fr=pkt.length>1?(pkt[1]&0x3f):1; return fs*fr; }
+  var seq=0, pages=[];
+  function page(headerType, granule, data){
+    var sizes=lace(data.length), nseg=sizes.length;
+    var pg=new Uint8Array(27+nseg+data.length), dv=new DataView(pg.buffer);
+    pg[0]=79;pg[1]=103;pg[2]=103;pg[3]=83; pg[4]=0; pg[5]=headerType;
+    dv.setBigInt64(6, BigInt(granule), true); dv.setUint32(14, serial>>>0, true); dv.setUint32(18, seq>>>0, true); dv.setUint32(22, 0, true);
+    pg[26]=nseg; for(var i=0;i<nseg;i++) pg[27+i]=sizes[i]; pg.set(data, 27+nseg);
+    dv.setUint32(22, crc(pg)>>>0, true); seq++; return pg;
+  }
+  var head=new Uint8Array(19), hv=new DataView(head.buffer);
+  head.set([79,112,117,115,72,101,97,100],0); head[8]=1; head[9]=channels; hv.setUint16(10,preSkip,true); hv.setUint32(12,48000,true); hv.setInt16(16,0,true); head[18]=0;
+  pages.push(page(2,0,head));
+  var vend=new TextEncoder().encode('SaleChat');
+  var tags=new Uint8Array(8+4+vend.length+4), tv=new DataView(tags.buffer);
+  tags.set([79,112,117,115,84,97,103,115],0); tv.setUint32(8,vend.length,true); tags.set(vend,12); tv.setUint32(12+vend.length,0,true);
+  pages.push(page(0,0,tags));
+  var granule=0;
+  for(var i=0;i<packets.length;i++){ granule+=samples(packets[i]); pages.push(page(i===packets.length-1?4:0, granule+preSkip, packets[i])); }
+  var total=0; for(var k=0;k<pages.length;k++) total+=pages[k].length; var out=new Uint8Array(total), o=0; for(var m=0;m<pages.length;m++){ out.set(pages[m],o); o+=pages[m].length; }
+  return out;
+}
+async function scAudioToOpusOgg(file){
+  try{
+    if(typeof AudioEncoder==='undefined'||typeof AudioData==='undefined') return null;   // sem WebCodecs
+    var AC=window.AudioContext||window.webkitAudioContext; if(!AC||!window.OfflineAudioContext) return null;
+    var buf=await file.arrayBuffer();
+    try{ var h=new Uint8Array(buf.slice(0,64)), s=String.fromCharCode.apply(null,h); if(s.indexOf('OggS')===0 && s.indexOf('OpusHead')>=0) return null; }catch(_){}  // ja e OGG/Opus
+    var dctx=new AC(); var decoded=await dctx.decodeAudioData(buf.slice(0)); try{ dctx.close(); }catch(_){}
+    var dur=decoded.duration; if(!dur||dur<=0) return null;
+    var off=new OfflineAudioContext(1, Math.max(1,Math.ceil(dur*48000)), 48000);
+    var src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+    var rendered=await off.startRendering(); var pcm=rendered.getChannelData(0);
+    var cfg={codec:'opus', sampleRate:48000, numberOfChannels:1, bitrate:32000};
+    try{ var sup=await AudioEncoder.isConfigSupported(cfg); if(!sup||!sup.supported) return null; }catch(_){ return null; }
+    var packets=[];
+    var enc=new AudioEncoder({ output:function(chunk){ var u=new Uint8Array(chunk.byteLength); chunk.copyTo(u); packets.push(u); }, error:function(){} });
+    enc.configure(cfg);
+    var frame=960, ts=0;
+    for(var i=0;i<pcm.length;i+=frame){ var n=Math.min(frame,pcm.length-i); var dat=new Float32Array(n); dat.set(pcm.subarray(i,i+n)); var ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:n,numberOfChannels:1,timestamp:ts,data:dat}); enc.encode(ad); ad.close(); ts+=Math.round(n/48000*1e6); }
+    await enc.flush(); try{ enc.close(); }catch(_){}
+    if(!packets.length) return null;
+    var ogg=scMuxOggOpus(packets, {channels:1, preSkip:312});
+    var blob=new Blob([ogg], {type:'audio/ogg'});
+    // auto-checagem: o navegador consegue decodificar o que geramos? senao, descarta (usa original).
+    try{ var vc=new AC(); await vc.decodeAudioData(await blob.arrayBuffer()); try{ vc.close(); }catch(_){} }catch(_){ return null; }
+    return blob;
+  }catch(_){ return null; }
+}
 async function scDoUpload(file){
   const base=apiUrl(), tok=apiToken();
   if(!base||!tok) return {ok:false,err:'Backend não configurado (faça login).'};
+  // Audio em qualquer formato -> converte pra OGG/Opus automatico (invisivel). Falhou? usa o original.
+  try{ if(file && file.type && file.type.indexOf('audio/')===0){ const conv=await scAudioToOpusOgg(file); if(conv){ try{ file=new File([conv],(file.name||'audio').replace(/\.[^.]+$/,'')+'.ogg',{type:'audio/ogg'}); }catch(_){ file=conv; } } } }catch(_){}
   if(file.size>60*1024*1024) return {ok:false,err:'Arquivo grande demais (máx 60MB).'};
   try{
     const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
@@ -8363,14 +8423,17 @@ async function scUploadMedia(file, el, kindHint){
   const base=apiUrl(), tok=apiToken();
   if(!base||!tok){ setScMediaStatus('Backend não configurado (faça login).',true); if(el)el.value=''; return; }
   const kind=kindHint||(file.type.indexOf('video')===0?'video':file.type.indexOf('audio')===0?'audio':file.type.indexOf('image')===0?'image':'document');
+  const label=(file.name||'midia').replace(/\.[^.]+$/,'');
+  setScMediaStatus('Subindo '+(file.name||'audio')+'... ('+Math.round(file.size/1024)+' KB)');
+  // Audio em qualquer formato -> OGG/Opus automatico (invisivel). Falhou? usa o original.
+  try{ if(kind==='audio' && file.type && file.type.indexOf('audio/')===0){ const conv=await scAudioToOpusOgg(file); if(conv) file=conv; } }catch(_){}
   if(file.size>60*1024*1024){ setScMediaStatus('Arquivo grande demais (máx 60MB).',true); if(el)el.value=''; return; }
-  setScMediaStatus('Subindo '+file.name+'... ('+Math.round(file.size/1024)+' KB)');
   try{
     const r=await fetch(base.replace(/\/+$/,'')+'/api/salechat/media',{method:'POST',headers:{'content-type':file.type||'application/octet-stream',authorization:'Bearer '+tok},body:file});
     const d=await r.json().catch(()=>({}));
     if(!r.ok){ setScMediaStatus('Erro: '+(d.error||('HTTP '+r.status)),true); if(el)el.value=''; return; }
-    SC().media.push({id:'md'+Date.now().toString(36),kind:kind,label:file.name.replace(/\.[^.]+$/,''),key:d.key,mime:d.mime,caption:''});
-    scTouch(); scRenderMediaKind(kind); scRenderNav(); setScMediaStatus(file.name+' adicionado.');
+    SC().media.push({id:'md'+Date.now().toString(36),kind:kind,label:label,key:d.key,mime:d.mime,caption:''});
+    scTouch(); scRenderMediaKind(kind); scRenderNav(); setScMediaStatus(label+' adicionado.');
   }catch(e){ setScMediaStatus('Falha: '+e.message,true); }
   if(el) el.value='';
 }
