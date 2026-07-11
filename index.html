@@ -2511,11 +2511,14 @@ body.no-producer #mp-mode-block{display:none}
     <div class="m-h"><span class="mt">+ Novo Chip</span><button class="m-x" onclick="closeM('m-chip-new')">×</button></div>
     <div class="m-b">
       <div class="fg fg2">
-        <div class="field"><label>Número</label><input id="nc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
-        <div class="field"><label>Atendente</label><select id="nc-at"></select></div>
-        <div class="field"><label>Modelo celular</label><input id="nc-mod" placeholder="iPhone 13 / Samsung A54"></div>
+        <div class="field"><label>Nº (identificador)</label><input id="nc-idx" type="number" min="1" inputmode="numeric" placeholder="auto" title="Deixe vazio pra numerar automático (#1, #2, #3...)"></div>
+        <div class="field"><label>Número (WhatsApp)</label><input id="nc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
+        <div class="field"><label>Atendente designado</label><select id="nc-at"></select></div>
+        <div class="field"><label>WhatsApp no celular</label><input id="nc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="nc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
         <div class="field"><label>Última recarga</label><input id="nc-rec" type="date"></div>
+        <div class="field"><label>Status WhatsApp</label><select id="nc-wa-st"></select></div>
+        <div class="field"><label>Dia de uso (rotação)</label><select id="nc-dia-uso" title="Dia da semana que esse número fica como ativo do dia"><option value="">— sem dia —</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option></select></div>
       </div>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
         <button class="btn btn-gh" onclick="closeM('m-chip-new')">Cancelar</button>
@@ -5481,7 +5484,7 @@ function goPage(id){
   if(id==='contingencia'){
     const b=document.createElement('button');
     b.className='btn btn-bl btn-sm';b.textContent='+ Novo Chip';
-    b.onclick=()=>openM('m-chip-new');tr.appendChild(b);
+    b.onclick=openNewChip;tr.appendChild(b);
   }
   if(id==='dre'){
     const b=document.createElement('button');
@@ -9785,20 +9788,39 @@ async function deleteChip(){
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
 }
 
+// Próximo identificador sequencial disponível (#1, #2, #3...)
+function _nextChipIdx(){ return (DB.chips||[]).reduce((m,c)=>Math.max(m,Number(c.idx)||0),0)+1; }
+// Abre o modal de Novo Chip populando os selects (atendente/status) e zerando os campos.
+// Mesmos campos do detalhe pra ficar consistente (idx, status, dia de uso).
+function openNewChip(){
+  selOpts($('nc-at'),teamOptsChip());
+  const waList=getWaStatusList();
+  $('nc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
+  // default de status: neutro (nunca "Em uso", pra não fixar sem querer)
+  const def=waList.find(s=>!isEmUsoStatus(s.id)&&s.id!=='banido')||waList.find(s=>!isEmUsoStatus(s.id))||waList[0];
+  $('nc-wa-st').value=def?def.id:'';
+  $('nc-dia-uso').value='';
+  ['nc-num','nc-mod','nc-idx'].forEach(i=>{const e=$(i);if(e)e.value='';});
+  $('nc-idx').placeholder='auto (#'+_nextChipIdx()+')';
+  $('nc-rec').value=new Date().toISOString().split('T')[0];
+  openM('m-chip-new');
+}
 function addChip(){
   const num=$('nc-num').value.trim();
   if(!num){toast('Número obrigatório','err');return}
   const hoje=new Date().toISOString().split('T')[0];
-  // Próximo identificador sequencial (#1, #2, #3...) — auto, editável depois no detalhe
-  const proxIdx=(DB.chips||[]).reduce((m,c)=>Math.max(m,Number(c.idx)||0),0)+1;
+  const idxVal=Number($('nc-idx').value)||_nextChipIdx();   // usa o que o user digitou, ou o próximo auto
+  const diaU=$('nc-dia-uso').value===''?null:Number($('nc-dia-uso').value);
   DB.chips.unshift({
-    id:DB.nextChip++,idx:proxIdx,num,at:$('nc-at').value,
+    id:DB.nextChip++,idx:idxVal,num,at:$('nc-at').value||null,
     mod:$('nc-mod').value,op:$('nc-op').value,
     st:'aquecimento',dia:1,
     warm_start:hoje,  // marca início do aquecimento → dia avança automaticamente
+    wa_st:$('nc-wa-st').value||undefined,   // status manual (fica de tag; só "em uso" quando sair do aquecimento)
+    dia_uso:diaU,
     rec:$('nc-rec').value,recv:0,tags:[],note:''
   });
-  ['nc-num','nc-mod'].forEach(i=>$(i).value='');
+  ['nc-num','nc-mod','nc-idx'].forEach(i=>$(i).value='');
   closeM('m-chip-new');refreshUI();
   toast('Chip cadastrado · dia 1/7 · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
