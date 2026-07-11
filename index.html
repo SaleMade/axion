@@ -10244,15 +10244,23 @@ function _vendRoles(at, v){
   const swap=!!(v && v.swap && em && bk);
   return { principal: swap?B:A, reserva: swap?A:B, swap };
 }
-// Troca principal <-> reserva (só o papel; as conexões ficam onde estão)
+// Troca principal <-> reserva DE VERDADE: mexe no status global do chip, então a
+// Contingência acompanha (novo principal fica "Em Uso" com contorno verde; antigo
+// principal cai pra "Ativo"). O roteamento é por número, então a conexão não quebra.
 function swapPresselVend(pid, atId){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
   const v=(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(!v) return;
-  if(!_atendenteBackupChip(atId)){ toast('Defina um número de reserva antes de trocar','err'); return; }
-  v.swap=!v.swap;
+  const principalChip=_atendenteActiveChip(atId);   // em uso atual
+  const reservaChip=_atendenteBackupChip(atId);     // reserva atual
+  if(!principalChip || !reservaChip){ toast('Defina um número de reserva antes de trocar','err'); return; }
+  _setChipEmUso(reservaChip, true);                 // reserva vira o principal "Em Uso" (derruba o antigo pra Ativo)
+  principalChip.bkp=true;                            // antigo principal vira a nova reserva
+  // os papéis agora vêm do estado global dos chips → zera o swap por-pressel (evita inverter de novo)
+  (DB.pressels||[]).forEach(pp=>(pp.vendedores||[]).forEach(vv=>{ if(String(vv.at)===String(atId)) delete vv.swap; }));
   renderPresselVendList(pid);
+  if(typeof renderChipsByAtendente==='function') renderChipsByAtendente();
   persistAndPushNow().catch(_=>{});
-  toast('Principal e reserva trocados','ok');
+  toast('Trocado: reserva virou o principal (Em Uso)','ok');
 }
 // Define/limpa o número de RESERVA do vendedor (é global do vendedor, vale em todas as pressels)
 function setPresselVendBackup(pid, atId, chipId){
