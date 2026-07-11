@@ -10204,8 +10204,19 @@ function _renderPresselMetrics(){
 var _waConnMap={}, _waConnNum={}, _waConnLoaded=false;
 // número conectado bate com o chip selecionado? (últimos 8 dígitos, ignora DDI/9º dígito/formatação)
 function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
-// CONECTADO de verdade = instância 'open' E o número conectado é o número selecionado (fail-open se número desconhecido)
-function _waConnOk(inst, chipNum){ if(_waConnMap[inst]!=='open') return false; const cn=_waConnNum[inst]; if(!cn) return true; return _numMatchWa(cn, chipNum); }
+// CONECTADO de verdade = o número é o ownerJid de ALGUMA instância 'open' (checa por NÚMERO, não pelo slot):
+// trocar o número de principal↔reserva não gera mais falso "não conectado". Fail-open se nenhum número é conhecido.
+function _waConnOk(inst, chipNum){
+  if(!chipNum) return false;
+  let anyKnown=false;
+  for(const k in _waConnMap){
+    if(_waConnMap[k]!=='open') continue;
+    const cn=_waConnNum[k];
+    if(cn){ anyKnown=true; if(_numMatchWa(cn, chipNum)) return true; }
+  }
+  if(anyKnown) return false;
+  return _waConnMap[inst]==='open';
+}
 function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});

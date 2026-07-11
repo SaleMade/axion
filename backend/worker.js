@@ -2515,14 +2515,19 @@ function _resolvePresselNumbers(p, chips, liveSet){
 function _instBase(inst){ return String(inst||'').replace(/_b$/,''); }
 // Compara dois números por os últimos 8 dígitos (ignora DDI 55, 9º dígito, formatação)
 function _lastDigitsEq(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
-// Instância OK pra rotear lead? Aberta E (número conectado desconhecido OU bate com o chip selecionado). FAIL-OPEN:
-// se não sabe o número conectado, NÃO bloqueia (nunca deixa a pressel offline por falta de info).
+// Número OK pra rotear lead? Conectado = é o ownerJid de ALGUMA instância 'open'.
+// Checa por NÚMERO (não pelo slot da instância): assim, trocar o número de
+// principal↔reserva (ou reconectar noutro slot) NÃO gera falso "não conectado".
+// FAIL-OPEN: sem info nenhuma (Evolution fora / números desconhecidos) não bloqueia.
 function _servConnOk(liveSet, inst, chipNum){
-  if(!liveSet) return true;
-  if(!liveSet.has(inst)) return false;                 // instância não está 'open'
-  const cn = liveSet.get ? liveSet.get(inst) : '';     // número conectado (liveSet é Map)
-  if(!cn) return true;                                  // número conectado desconhecido → fail-open
-  return _lastDigitsEq(cn, chipNum);                    // aberta E número conectado bate com o chip
+  if(!liveSet) return true;                             // sem info → fail-open
+  if(!chipNum) return false;
+  let anyKnown=false;
+  for(const cn of liveSet.values()){                   // liveSet: instância(open) → número conectado
+    if(cn){ anyKnown=true; if(_lastDigitsEq(cn, chipNum)) return true; }   // número aberto em ALGUMA instância
+  }
+  if(anyKnown) return false;                            // sabemos os números abertos e este não está entre eles
+  return liveSet.has(inst);                             // nenhum número conhecido → fail-open pelo slot
 }
 // Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
 // Os dois entram só se estiverem conectados AGORA (liveSet) COM O NÚMERO CERTO e não banidos/restritos.
