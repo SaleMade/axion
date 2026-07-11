@@ -10324,7 +10324,8 @@ function _presselVendReserva(pid, at, v, roles){
   const stateHint=on
     ? `<span style="font-size:10.5px;color:var(--t4)">na roleta · recebe quando o principal bate a cota</span>`
     : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">fora da roleta · não recebe lead, só marca venda</span>`;
-  const toggle=`<div class="ax-sw ${on?'on':''}" title="${on?'Na roleta: recebe no overflow. Desligue se a reserva for só pra marcar venda.':'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.'}" onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"></div>`;
+  const _rDown=(on&&_waConnLoaded&&!bconn);   // reserva ligada mas caída → interruptor desliga sozinho e trava
+  const toggle=`<div class="ax-sw ${(on && (!_waConnLoaded||bconn))?'on':''}" title="${_rDown?'Reserva caiu — sai da roleta até reconectar (volta sozinho)':(on?'Na roleta: recebe no overflow. Desligue se a reserva for só pra marcar venda.':'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.')}" ${_rDown?'style="opacity:.4;cursor:not-allowed"':`onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"`}></div>`;
   const swapBtn=`<button onclick="event.stopPropagation();swapPresselVend(${pid},'${at.id}')" title="Trocar principal e reserva de lugar (sem perder as conexões)" style="background:transparent;border:none;color:var(--t3);cursor:pointer;padding:0;display:inline-flex;align-items:center;line-height:0" onmouseover="this.style.color='var(--bl2)'" onmouseout="this.style.color='var(--t3)'"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>`;
   return `<div style="border-top:1px dashed var(--b1);background:var(--s1)">
     ${on?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
@@ -10377,7 +10378,7 @@ function renderPresselVendList(pid){
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
       </div>
-      <div class="ax-sw ${onVis?'on':''}" title="${ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
+      <div class="ax-sw ${(onVis && (!_waConnLoaded||connected))?'on':''}" title="${(isOn&&_waConnLoaded&&!connected)?'Número caiu — saiu da roleta até reconectar (volta sozinho, sem perder a config)':(ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta')}" ${(ok && !(isOn&&_waConnLoaded&&!connected))?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
     const reservaBlock=onVis?_presselVendReserva(pid, at, v, roles):'';
     return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
