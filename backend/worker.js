@@ -2548,7 +2548,7 @@ function _resolvePresselSellers(p, chips, liveSet){
     const primary=(pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;
     const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;
-    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), primary, backup});
+    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup});
   }
   return out;
 }
@@ -2568,8 +2568,17 @@ async function _presselBalancedPick(env, id, sellers){
   for(const s of sellers){
     const cP=s.primary?(counts[s.primary.inst]||0):0;
     const cB=s.backup?(counts[s.backup.inst]||0):0;
+    if(s.mode==='split' && s.primary && s.backup){
+      // COMPLEMENTAR: os dois números do vendedor recebem AO MESMO TEMPO. Cada um é
+      // um alvo independente, balanceado pela SUA contagem → divide os leads entre
+      // eles (e entre todos os números vivos da roleta), pra ninguém receber demais.
+      avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst, total:cP});
+      avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst,  total:cB});
+      continue;
+    }
+    // OVERFLOW POR COTA (padrão): principal até bater a cota do dia, depois o backup.
     let eff=null;
-    if(s.primary && (s.cap<=0 || cP<s.cap)) eff=s.primary;   // principal ainda dentro da cota do dia
+    if(s.primary && (s.cap<=0 || cP<s.cap)) eff=s.primary;   // principal ainda dentro da cota
     else if(s.backup) eff=s.backup;                           // estourou a cota (ou principal caiu) → backup
     else if(s.primary) eff=s.primary;                         // sem backup: segue no principal
     if(!eff) continue;

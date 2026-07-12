@@ -10309,6 +10309,16 @@ function toggleReservaOn(pid, atId){
   renderPresselVendList(pid);
   persistAndPushNow().catch(_=>{});
 }
+// Alterna o 2º número entre RESERVA (overflow por cota) e COMPLEMENTAR (recebe JUNTO
+// com o principal, dividindo os leads entre os dois — pra cada número receber menos).
+function toggleReservaMode(pid, atId){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  const v=(p.vendedores||[]).find(x=>String(x.at)===String(atId)); if(!v) return;
+  v.reserva_mode = (v.reserva_mode==='split') ? 'overflow' : 'split';
+  renderPresselVendList(pid);
+  persistAndPushNow().catch(_=>{});
+  toast(v.reserva_mode==='split'?'Modo complementar: os 2 números recebem junto':'Modo reserva: overflow por cota','ok');
+}
 // Cota diária do número principal antes de virar pra reserva (0 = ilimitada, só principal)
 function setPresselVendCap(pid, atId, val){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
@@ -10324,6 +10334,7 @@ function _presselVendReserva(pid, at, v, roles){
   const rchip=R.reserva.chip, rInst=R.reserva.inst, rSlot=R.reserva.slot;
   const cap=Math.max(0, Number(v&&v.cap)||0);
   const on=!(v && v.reserva_on===false);   // default ligada
+  const mode=(v && v.reserva_mode==='split')?'split':'overflow';   // overflow = reserva por cota; split = complementar (recebe junto)
   const capField=`<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t3);flex-wrap:wrap">
     <span>Depois de</span>
     <input type="number" min="0" value="${cap||''}" placeholder="ilimitados" onclick="event.stopPropagation()" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" style="width:64px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
@@ -10345,20 +10356,23 @@ function _presselVendReserva(pid, at, v, roles){
     : `<button onclick="event.stopPropagation();evoConnect('${at.id}','${rSlot}')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`;
   const _sellerOff=(v && v.ativo===false);
   const stateHint=_sellerOff
-    ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal desligado · reserva não recebe até religar o principal</span>`
+    ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal desligado · não recebe até religar o principal</span>`
     : on
-    ? `<span style="font-size:10.5px;color:var(--t4)">na roleta · recebe quando o principal bate a cota</span>`
+    ? (mode==='split'
+      ? `<span style="font-size:10.5px;color:var(--gr);font-weight:600">recebe JUNTO com o principal · divide os leads entre os dois</span>`
+      : `<span style="font-size:10.5px;color:var(--t4)">na roleta · recebe quando o principal bate a cota</span>`)
     : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">fora da roleta · não recebe lead, só marca venda</span>`;
   const _rDown=(on&&_waConnLoaded&&!bconn);   // reserva ligada mas caída → interruptor desliga sozinho e trava
-  const toggle=`<div class="ax-sw ${(on && (!_waConnLoaded||bconn))?'on':''}" title="${_rDown?'Reserva caiu — sai da roleta até reconectar (volta sozinho)':(on?'Na roleta: recebe no overflow. Desligue se a reserva for só pra marcar venda.':'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.')}" ${_rDown?'style="opacity:.4;cursor:not-allowed"':`onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"`}></div>`;
+  const toggle=`<div class="ax-sw ${(on && (!_waConnLoaded||bconn))?'on':''}" title="${_rDown?'Número caiu — sai da roleta até reconectar (volta sozinho)':(on?(mode==='split'?'Na roleta: recebe JUNTO com o principal (complementar).':'Na roleta: recebe no overflow por cota. Desligue se for só pra marcar venda.'):'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.')}" ${_rDown?'style="opacity:.4;cursor:not-allowed"':`onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"`}></div>`;
   const swapBtn=`<button onclick="event.stopPropagation();swapPresselVend(${pid},'${at.id}')" title="Trocar principal e reserva de lugar (sem perder as conexões)" style="background:transparent;border:none;color:var(--t3);cursor:pointer;padding:0;display:inline-flex;align-items:center;line-height:0" onmouseover="this.style.color='var(--bl2)'" onmouseout="this.style.color='var(--t3)'"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>`;
   return `<div style="border-top:1px dashed var(--b1);background:var(--s1)">
-    ${on?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
+    ${(on && mode!=='split')?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
     <div style="display:flex;align-items:center;gap:11px;padding:${on?'6px':'10px'} 12px 11px">
       <span style="width:8px;height:8px;border-radius:50%;background:${rdot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
-        <div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px">Número de reserva ${swapBtn}
-          <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Remover a reserva" style="background:transparent;border:none;color:var(--t4);font-size:10.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline">remover</button></div>
+        <div style="font-size:11px;color:var(--t3);display:flex;align-items:center;gap:7px">${mode==='split'?'Número complementar':'Número de reserva'} ${swapBtn}
+          <button onclick="event.stopPropagation();removePresselVendBackup(${pid},'${at.id}')" title="Remover a reserva" style="background:transparent;border:none;color:var(--t4);font-size:10.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline">remover</button>
+          <button onclick="event.stopPropagation();toggleReservaMode(${pid},'${at.id}')" title="Reserva = recebe quando o principal bate a cota. Complementar = recebe JUNTO com o principal, dividindo os leads entre os dois números (cada um recebe menos)." style="margin-left:auto;background:${mode==='split'?'rgba(16,185,129,.15)':'transparent'};border:1px solid ${mode==='split'?'var(--gr)':'var(--b1)'};color:${mode==='split'?'var(--gr)':'var(--t3)'};font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:999px;cursor:pointer;font-family:inherit">${mode==='split'?'complementar':'reserva'}</button></div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:var(--tx);letter-spacing:.02em">${_automEsc(rchip.num)}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${badge}${link}</div>
         <div style="margin-top:3px">${stateHint}</div>
