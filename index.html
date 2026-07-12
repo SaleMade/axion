@@ -10674,7 +10674,7 @@ async function evoConnect(atId, slot){
     }
     if(qr){
       const src=String(qr).startsWith('data:')?qr:('data:image/png;base64,'+qr);
-      body.innerHTML=`<div style="text-align:center"><img src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p><p id="evo-poll" class="muted" style="font-size:11.5px;margin-top:8px;opacity:.7">Aguardando leitura do QR…</p></div>`;
+      body.innerHTML=`<div style="text-align:center"><style>@keyframes evospin{to{transform:rotate(360deg)}}</style><img id="evo-qr" src="${src}" style="width:280px;max-width:100%;border-radius:8px;background:#fff;padding:8px"><p class="muted" style="font-size:12px;margin-top:12px">Abra o WhatsApp → Aparelhos conectados → Conectar aparelho e escaneie.</p><p id="evo-poll" class="muted" style="font-size:11.5px;margin-top:10px;opacity:.9;display:flex;align-items:center;gap:7px;justify-content:center"><span style="width:13px;height:13px;border:2px solid var(--b1);border-top-color:var(--bl2);border-radius:50%;display:inline-block;animation:evospin .8s linear infinite;flex-shrink:0"></span><span id="evo-poll-txt">Verificando conexão…</span></p><p class="muted" style="font-size:10.5px;margin-top:6px;opacity:.55">o QR se atualiza sozinho a cada ~20s</p></div>`;
       _evoPollStatus(inst);
     } else {
       body.innerHTML=`<p class="muted" style="font-size:12px;padding:16px;text-align:center">Não consegui gerar o QR agora. Fecha e tenta de novo em alguns segundos.<br><span style="font-size:11px;opacity:.7">Se persistir, o servidor da Evolution pode estar reiniciando.</span></p>`;
@@ -10683,17 +10683,22 @@ async function evoConnect(atId, slot){
     body.innerHTML=`<p class="muted" style="font-size:12.5px;padding:16px;line-height:1.5">Não consegui conectar: ${(e&&e.message)||e}<br><br>Confira em Configurações se o WhatsApp (Evolution) está configurado e se o servidor da VPS está no ar.</p>`;
   }
 }
-// Polling: checa o status a cada 3s até conectar (open) ou o modal fechar (~2min)
-let _evoPollTimer=null;
+// Polling: status a cada 3s (detecta conexão) + atualiza o QR a cada 20s. A Evolution
+// rotaciona o QR (~20-30s); sem atualizar, o usuário escaneia um QR velho e o celular
+// fica "conectando" pra sempre sem fechar. Aqui o QR se renova sozinho.
+let _evoPollTimer=null, _evoQrTimer=null;
+function _evoStopPoll(){ clearTimeout(_evoPollTimer); clearInterval(_evoQrTimer); _evoPollTimer=null; _evoQrTimer=null; }
 function _evoPollStatus(inst){
-  clearTimeout(_evoPollTimer);
+  _evoStopPoll();
+  const alive=()=>$('m-evo')&&$('m-evo').classList.contains('open');
   let tries=0;
   const tick=async()=>{
-    if(!$('m-evo')||!$('m-evo').classList.contains('open'))return; // modal fechado → para
+    if(!alive()){ _evoStopPoll(); return; }
     tries++;
     try{
       const s=await api.waInstStatus(inst);
       if(s&&s.state==='open'){
+        _evoStopPoll();
         const body=$('evo-body');
         if(body)body.innerHTML='<div style="text-align:center;padding:26px"><div style="font-size:42px;line-height:1;color:var(--gr)">✓</div><p style="font-size:14.5px;font-weight:700;margin-top:10px;color:var(--gr)">WhatsApp conectado!</p></div>';
         toast('WhatsApp conectado','ok');
@@ -10701,9 +10706,21 @@ function _evoPollStatus(inst){
         return;
       }
     }catch(_){}
-    if(tries<40)_evoPollTimer=setTimeout(tick,3000);
+    if(tries<60){ _evoPollTimer=setTimeout(tick,3000); }
+    else { _evoStopPoll(); const t=$('evo-poll-txt'); if(t)t.textContent='Demorou demais — feche e abra de novo pra um QR novo.'; }
   };
   _evoPollTimer=setTimeout(tick,3000);
+  // Renova o QR antes do velho expirar (pega um novo direto da Evolution)
+  _evoQrTimer=setInterval(async()=>{
+    if(!alive()){ _evoStopPoll(); return; }
+    const txt=$('evo-poll-txt'); if(txt)txt.textContent='Atualizando QR…';
+    try{
+      const j=await api.waConnect(inst);
+      const q=j&&j.qr, img=$('evo-qr');
+      if(q&&img) img.src=String(q).startsWith('data:')?q:('data:image/png;base64,'+q);
+    }catch(_){}
+    setTimeout(()=>{ const t2=$('evo-poll-txt'); if(t2&&t2.textContent==='Atualizando QR…')t2.textContent='Verificando conexão…'; },1200);
+  }, 20000);
 }
 
 /* ═══════════════════════════════════════════════════════
