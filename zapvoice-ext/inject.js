@@ -112,7 +112,7 @@ async function buildLibrary(remote) {
   // Mensagens e funis: se a AXION mandou config, ela manda (o Diretor edita na dash);
   // senao, cai no library.json local.
   const rMsgs = remote && Array.isArray(remote.messages) && remote.messages.length ? remote.messages : (lib.messages || []);
-  const messages = rMsgs.map((it) => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '' }));
+  const messages = rMsgs.map((it) => ({ id: it.id, stage: it.stage || 'MSG', label: it.label, kind: 'text', text: it.text || '', grp: it.grp || '' }));
   const sequences = remote && Array.isArray(remote.sequences) && remote.sequences.length ? remote.sequences : (lib.sequences || []);
   const triggers = remote && Array.isArray(remote.triggers) ? remote.triggers : [];
   // Midia unificada (audio/video/imagem/documento). O painel agrupa por tipo.
@@ -126,16 +126,16 @@ async function buildLibrary(remote) {
       const url = MEDIA_BASE + '/' + m.key;
       // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
       if (m.kind === 'video') {
-        var vit = { id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url };
+        var vit = { id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url, grp: m.grp || '' };
         if (m.posterKey) { const pbuf = await fetchBytes(MEDIA_BASE + '/' + m.posterKey); if (pbuf) vit.posterUri = 'data:image/jpeg;base64,' + pbuf.toString('base64'); }
         media.push(vit); continue;
       }
       const buf = await fetchBytes(url);
       if (!buf) continue;
       const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
-      if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri });
-      else if (m.kind === 'document') media.push({ id: m.id, kind: 'document', label: m.label || 'Documento', mime: m.mime || 'application/pdf', dataUri });
-      else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)) });
+      if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri, grp: m.grp || '' });
+      else if (m.kind === 'document') media.push({ id: m.id, kind: 'document', label: m.label || 'Documento', mime: m.mime || 'application/pdf', dataUri, grp: m.grp || '' });
+      else media.push({ id: m.id, kind: 'audio', label: m.label || 'Audio', dataUri, durMs: Math.min(7000, Math.max(1800, Math.round(buf.length / 1024) * 6)), grp: m.grp || '' });
     }
   } else {
     // Fallback offline (sem config na nuvem). O instalador do vendedor nao traz esses

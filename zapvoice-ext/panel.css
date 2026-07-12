@@ -76,6 +76,12 @@
 .zv-count{ font-size:10px; background:#eef1f5; color:#8b95a3; border-radius:9px; padding:2px 8px; font-weight:800; letter-spacing:0; }
 .zv-chev{ display:inline-flex; color:#b6bfca; }
 .zv-list{ display:flex; flex-direction:column; gap:8px; }
+.zv-subh{ display:flex; align-items:center; gap:7px; font-size:10px; font-weight:800; letter-spacing:.5px; text-transform:uppercase; color:#7d8ea0; padding:6px 3px 1px; }
+.zv-subh:not(:first-child){ margin-top:5px; border-top:1px solid #eceff3; padding-top:11px; }
+.zv-subn{ font-size:9.5px; font-weight:700; background:rgba(19,194,115,.13); color:#0ea968; border-radius:20px; padding:1px 6px; }
+#zv-panel.zv-dark .zv-subh{ color:#8ea0b0; }
+#zv-panel.zv-dark .zv-subh:not(:first-child){ border-top-color:#1c2733; }
+#zv-panel.zv-dark .zv-subn{ background:rgba(19,194,115,.16); color:#13c273; }
 
 .zv-item{ display:flex; align-items:center; gap:11px; text-align:left; width:100%; min-width:0; background:#fff; border:1px solid #e9edf2; color:#2a2a46; border-radius:13px; padding:12px 13px; cursor:pointer; font-size:13.5px; font-family:inherit; transition:border-color .12s, box-shadow .12s, transform .04s; }
 .zv-item:hover{ border-color:#13c273; box-shadow:0 0 0 1.5px rgba(19,194,115,.55) inset; }

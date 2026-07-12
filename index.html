@@ -1520,6 +1520,9 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-search input{ width:100%; background:var(--s1); border:1px solid var(--b2); border-radius:var(--r); padding:9px 12px; color:var(--tx); font-family:inherit; font-size:12.5px; outline:none; }
 .sc-search input:focus{ border-color:var(--bl); }
 .sc-cards{ display:flex; flex-direction:column; gap:8px; max-height:56vh; overflow-y:auto; padding-right:2px; }
+.sc-grp-head{ display:flex; align-items:center; gap:8px; font-size:10.5px; font-weight:800; letter-spacing:.4px; text-transform:uppercase; color:var(--t3); padding:8px 4px 3px; }
+.sc-grp-head:not(:first-child){ margin-top:6px; border-top:1px solid var(--b1); padding-top:12px; }
+.sc-grp-n{ font-size:10px; font-weight:700; color:var(--t3); background:var(--s2); border-radius:20px; padding:1px 7px; }
 .sc-card{ display:flex; align-items:center; gap:11px; background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:11px 12px; cursor:pointer; transition:border-color .12s, box-shadow .12s, background .12s; }
 .sc-card:hover{ border-color:#13c273; box-shadow:0 0 0 1.5px rgba(19,194,115,.4) inset; }
 .sc-card.on{ border-color:#13c273; box-shadow:0 0 0 1.5px #13c273 inset; background:rgba(19,194,115,.08); }
@@ -3919,8 +3922,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.54.0';
-const APP_LAST_CHANGE = 'Simulador do Sale Chat agora e o PROPRIO painel de producao (sc-panel.js) rodando num WhatsApp de teste (iframe + WPP mock). Preview, envio, digitando/gravando, banner de Envios e funis funcionam identicos ao dia a dia, e nunca mais diverge (auto-atualiza junto). Se algo falhar, cai no simulador antigo.';
+const APP_VERSION = '2.55.0';
+const APP_LAST_CHANGE = 'Sale Chat agora tem SUBCATEGORIAS dentro de cada categoria. Ao adicionar/editar um item (mensagem, audio, video...) da pra definir uma Subcategoria (ex: Follow, Objecoes). A lista agrupa por ela na dash e no painel do WhatsApp, com cabecalho por secao, e a busca acha por nome da subcategoria. Item sem subcategoria cai em Geral.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7958,7 +7961,7 @@ function scpFindItem(id){
 // ─────────────────────────────────────────────────────────────────────────────
 function scpSimLibrary(fast){
   var sc=SC();
-  var messages=(sc.messages||[]).map(function(m){ return {id:m.id,stage:'MSG',label:m.label||m.id,kind:'text',text:m.text||''}; });
+  var messages=(sc.messages||[]).map(function(m){ return {id:m.id,stage:'MSG',label:m.label||m.id,kind:'text',text:m.text||'',grp:m.grp||''}; });
   var sequences=(sc.sequences||[]).map(function(s){
     var items=(s.items||[]).map(function(raw){
       var stp=(typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:(raw&&raw.id)||'',delay:(raw&&+raw.delay)||0,sim:(raw&&+raw.sim)||0};
@@ -7969,10 +7972,10 @@ function scpSimLibrary(fast){
   });
   var media=(sc.media||[]).map(function(m){
     var url=m.key?scMediaUrl(m.key):'';
-    if(m.kind==='video') return {id:m.id,kind:'video',label:m.label||'Video',caption:m.caption||'',mediaUrl:url,dataUri:url};
-    if(m.kind==='image') return {id:m.id,kind:'image',label:m.label||'Imagem',caption:m.caption||'',dataUri:url};
-    if(m.kind==='document') return {id:m.id,kind:'document',label:m.label||'Documento',mime:m.mime||'application/pdf',dataUri:url};
-    return {id:m.id,kind:'audio',label:m.label||'Audio',dataUri:url,durMs:fast?900:2500};
+    if(m.kind==='video') return {id:m.id,kind:'video',label:m.label||'Video',caption:m.caption||'',mediaUrl:url,dataUri:url,grp:m.grp||''};
+    if(m.kind==='image') return {id:m.id,kind:'image',label:m.label||'Imagem',caption:m.caption||'',dataUri:url,grp:m.grp||''};
+    if(m.kind==='document') return {id:m.id,kind:'document',label:m.label||'Documento',mime:m.mime||'application/pdf',dataUri:url,grp:m.grp||''};
+    return {id:m.id,kind:'audio',label:m.label||'Audio',dataUri:url,durMs:fast?900:2500,grp:m.grp||''};
   });
   return {messages:messages,sequences:sequences,media:media,triggers:Array.isArray(sc.triggers)?sc.triggers:[],funnel:[],social:[]};
 }
@@ -8192,20 +8195,31 @@ function scRenderSectionMD(kind){
   scRenderDetail(kind);
   if(kind==='video') scGenPostersForVideos();
 }
+// Subcategorias (grp) existentes num tipo — pra sugerir no campo e agrupar a lista.
+function scGroupsFor(kind){ var seen={}, out=[]; scItemsFor(kind).forEach(function(it){ var g=String(it.grp||'').trim(); if(g&&!seen[g.toLowerCase()]){ seen[g.toLowerCase()]=1; out.push(g); } }); return out.sort(function(a,b){ return a.localeCompare(b); }); }
 function scRenderCards(kind){
   const box=$('sc-cards'); if(!box) return;
   if(typeof scpRefresh==='function') scpRefresh();
   const q=(($('sc-q')||{}).value||'').toLowerCase();
-  const items=scItemsFor(kind).filter(it=>!q||String(it.label||'').toLowerCase().indexOf(q)!==-1);
+  const items=scItemsFor(kind).filter(it=>!q||String(it.label||'').toLowerCase().indexOf(q)!==-1||String(it.grp||'').toLowerCase().indexOf(q)!==-1);
   if(!items.length){ box.innerHTML='<div class="sc-empty" style="padding:22px 8px">'+(q?'Nada encontrado.':'Nada aqui ainda. Clica em "'+SC_KINDS[kind].add+'".')+'</div>'; return; }
   const c=scKindColor(kind);
-  box.innerHTML=items.map(it=>`
+  const card=(it)=>`
     <div class="sc-card ${scSel[kind]===it.id?'on':''}" onclick="scSelect('${kind}','${it.id}')">
       <span class="sc-card-ic" style="background:${c}22;color:${c}">${ico(scKindIcon(kind),{size:15})}</span>
       <span class="sc-card-name">${scEscT(it.label||'(sem nome)')}</span>
             <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:14})}</button>
       <button class="sc-cbtn" title="Editar" onclick="event.stopPropagation();scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:14})}</button>
-    </div>`).join('');
+    </div>`;
+  // Agrupa por subcategoria (grp). Sem subcategoria -> "Geral" (que vai por ultimo).
+  const groups={}, order=[];
+  items.forEach(function(it){ const g=String(it.grp||'').trim()||'Geral'; if(!groups[g]){ groups[g]=[]; order.push(g); } groups[g].push(it); });
+  order.sort(function(a,b){ if(a==='Geral') return 1; if(b==='Geral') return -1; return a.localeCompare(b); });
+  const single=(order.length===1);   // sem subcategorias reais: nao mostra cabecalho
+  box.innerHTML=order.map(function(g){
+    const head=single?'':`<div class="sc-grp-head">${scEscT(g)}<span class="sc-grp-n">${groups[g].length}</span></div>`;
+    return head+groups[g].map(card).join('');
+  }).join('');
 }
 function scSelect(kind,id){ scSel[kind]=id; scRenderCards(kind); scRenderDetail(kind); }
 function scRenderDetail(kind){
@@ -8260,7 +8274,9 @@ function scOpenModal(kind,id){
   scModalFile=null;
   const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
   const isMsg=kind==='messages', cfg=SC_KINDS[kind];
-  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">`;
+  const grps=scGroupsFor(kind);
+  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">
+    <label class="sc-f-label">Subcategoria (opcional)</label><input id="sc-m-grp" class="info-val" list="sc-grp-list" value="${scEscA(it?(it.grp||''):'')}" placeholder="Ex: Follow, Objeções... (vazio = Geral)"><datalist id="sc-grp-list">${grps.map(g=>`<option value="${scEscA(g)}"></option>`).join('')}</datalist>`;
   if(isMsg){
     body+=`<label class="sc-f-label">Texto</label><textarea id="sc-m-text" class="info-val" rows="5" placeholder="Texto que vai ser enviado no WhatsApp" style="resize:vertical;line-height:1.45">${scEscT(it?it.text:'')}</textarea>`;
   } else {
@@ -8379,11 +8395,12 @@ async function scGenPostersForVideos(){
 }
 async function scModalSave(kind,id){
   const name=(($('sc-m-name')||{}).value||'').trim();
+  const grp=(($('sc-m-grp')||{}).value||'').trim();
   if(kind==='messages'){
     if(!name){ scModalStatus('Dá um nome pra mensagem.'); return; }
     const text=($('sc-m-text')||{}).value||'';
-    if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; } }
-    else { const nid='m'+Date.now().toString(36); SC().messages.push({id:nid,label:name,text:text}); scSel.messages=nid; }
+    if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; f.item.grp=grp; } }
+    else { const nid='m'+Date.now().toString(36); SC().messages.push({id:nid,label:name,text:text,grp:grp}); scSel.messages=nid; }
     scTouch(); scCloseModal(); scRenderCards('messages'); scRenderDetail('messages'); scRenderNav(); return;
   }
   const cap=($('sc-m-cap')||{}).value||'';
@@ -8392,7 +8409,7 @@ async function scModalSave(kind,id){
     const fm=scFindMedia(id); if(!fm){ scCloseModal(); return; }
     let replaced=false;
     if(scModalFile){ if(save) save.disabled=true; scModalStatus('Subindo arquivo...'); const up=await scDoUpload(scModalFile); if(save) save.disabled=false; if(!up.ok){ scModalStatus(up.err); return; } scDeleteKey(fm.item.key); fm.item.key=up.key; fm.item.mime=up.mime; replaced=true; if(fm.item.kind==='video'){ scDeleteKey(fm.item.posterKey); fm.item.posterKey=null; delete scPosterTried[fm.item.id]; } }
-    fm.item.label=name||fm.item.label;
+    fm.item.label=name||fm.item.label; fm.item.grp=grp;
     if(kind==='image'||kind==='video') fm.item.caption=cap;
     scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind);
     if(kind==='video'&&replaced) scGenPoster(fm.item);
@@ -8403,7 +8420,7 @@ async function scModalSave(kind,id){
   const up=await scDoUpload(scModalFile); if(save) save.disabled=false;
   if(!up.ok){ scModalStatus(up.err); return; }
   const nid='md'+Date.now().toString(36);
-  SC().media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap});
+  SC().media.push({id:nid,kind:kind,label:name||scModalFile.name.replace(/\.[^.]+$/,''),key:up.key,mime:up.mime,caption:cap,grp:grp});
   scSel[kind]=nid;
   scTouch(); scCloseModal(); scRenderCards(kind); scRenderDetail(kind); scRenderNav();
   if(kind==='video'){ const nm=scFindMedia(nid); if(nm) scGenPoster(nm.item); }

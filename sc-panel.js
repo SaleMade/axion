@@ -273,19 +273,29 @@
     image:    { c: '#00bcf2', ic: SVG.image },
     document: { c: '#f0810f', ic: SVG.doc }
   };
+  function itemRow(it) {
+    var k = ZKIND[it.kind] || ZKIND.text;
+    var fav = !!FAVS[it.id];
+    return '<div class="zv-itemwrap" data-grp="' + esc(String(it.grp || '').trim()) + '">' +
+      '<div class="zv-item" data-exp="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
+        '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
+        '<span class="zv-label">' + esc(it.label) + '</span>' +
+        '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
+        '<button class="zv-send" data-id="' + esc(it.id) + '" title="Enviar">' + SVG.play + '</button>' +
+        '<span class="zv-exp" data-exp="' + esc(it.id) + '" title="Prever antes de enviar">' + SVG.chevDown + '</span>' +
+      '</div>' +
+      '<div class="zv-prev" style="display:none"></div></div>';
+  }
+  // Agrupa por subcategoria (grp). Sem grp -> "Geral" (por ultimo). Um grupo so = sem cabecalho.
   function itemsHtml(list) {
-    return (list || []).map(function (it) {
-      var k = ZKIND[it.kind] || ZKIND.text;
-      var fav = !!FAVS[it.id];
-      return '<div class="zv-itemwrap">' +
-        '<div class="zv-item" data-exp="' + esc(it.id) + '" title="' + esc(it.desc || it.caption || '') + '">' +
-          '<span class="zv-ic" style="background:' + k.c + '1f;color:' + k.c + '">' + k.ic + '</span>' +
-          '<span class="zv-label">' + esc(it.label) + '</span>' +
-          '<span class="zv-star' + (fav ? ' on' : '') + '" data-fav="' + esc(it.id) + '" title="Favoritar">' + (fav ? SVG.starFull : SVG.star) + '</span>' +
-          '<button class="zv-send" data-id="' + esc(it.id) + '" title="Enviar">' + SVG.play + '</button>' +
-          '<span class="zv-exp" data-exp="' + esc(it.id) + '" title="Prever antes de enviar">' + SVG.chevDown + '</span>' +
-        '</div>' +
-        '<div class="zv-prev" style="display:none"></div></div>';
+    list = list || [];
+    var groups = {}, order = [];
+    list.forEach(function (it) { var g = String(it.grp || '').trim() || 'Geral'; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(it); });
+    order.sort(function (a, b) { if (a === 'Geral') return 1; if (b === 'Geral') return -1; return a.localeCompare(b); });
+    var single = order.length <= 1;
+    return order.map(function (g) {
+      var head = single ? '' : '<div class="zv-subh" data-grp="' + esc(g === 'Geral' ? '' : g) + '">' + esc(g) + '<span class="zv-subn">' + groups[g].length + '</span></div>';
+      return head + groups[g].map(itemRow).join('');
     }).join('');
   }
   // Prévia expansível: mostra o conteúdo antes de disparar. Imagem/audio/doc vêm
@@ -473,14 +483,18 @@
     var q = (FILTER || '').trim().toLowerCase();
     Array.prototype.forEach.call(host.querySelectorAll('.zv-sec'), function (sec) {
       var key = sec.getAttribute('data-sec');
-      var items = sec.querySelectorAll('.zv-itemwrap, .zv-seq');
-      var visible = 0;
-      Array.prototype.forEach.call(items, function (it) {
-        var lblEl = it.querySelector('.zv-label'); var lbl = lblEl ? lblEl.textContent : '';
-        var ok = !q || lbl.toLowerCase().indexOf(q) !== -1;
-        it.style.display = ok ? '' : 'none';
-        if (ok) visible++;
+      var nodes = sec.querySelectorAll('.zv-subh, .zv-itemwrap, .zv-seq');
+      var visible = 0, curHead = null, curHeadVis = 0;
+      var flushHead = function () { if (curHead) curHead.style.display = curHeadVis ? '' : 'none'; };
+      Array.prototype.forEach.call(nodes, function (n) {
+        if (n.className.indexOf('zv-subh') !== -1) { flushHead(); curHead = n; curHeadVis = 0; return; }
+        var lblEl = n.querySelector('.zv-label'); var lbl = lblEl ? lblEl.textContent : '';
+        var grp = n.getAttribute('data-grp') || '';
+        var ok = !q || lbl.toLowerCase().indexOf(q) !== -1 || grp.toLowerCase().indexOf(q) !== -1;
+        n.style.display = ok ? '' : 'none';
+        if (ok) { visible++; curHeadVis++; }
       });
+      flushHead();
       var list = sec.querySelector('.zv-list');
       if (q) { sec.style.display = visible ? '' : 'none'; if (list) list.style.display = visible ? '' : 'none'; }
       else { sec.style.display = ''; if (list) list.style.display = COLLAPSED[key] ? 'none' : ''; }
