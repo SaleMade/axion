@@ -71,9 +71,11 @@
     try { ifr = document.querySelectorAll('iframe').length; } catch (_) {}
     try { dom = _activeFromDom() ? 'ok' : '-'; } catch (_) {}
     try { loader = (window.WPP.webpack && window.WPP.webpack.loaderType) || '-'; } catch (_) {}
+    var miss = '-';
+    try { var mm = _missing(); miss = mm.length ? mm.join(',') : 'none'; } catch (_) {}
     return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' cs=' + cs + ' heal=' + heal +
-           ' store=' + store + ' act=' + act + ' cmd=' + cmd + ' main=' + main + ' ids=' + ids +
-           ' ifr=' + ifr + ' dom=' + dom + ' loader=' + loader;
+           ' miss=' + miss + ' store=' + store + ' act=' + act + ' cmd=' + cmd + ' main=' + main +
+           ' ids=' + ids + ' ifr=' + ifr + ' dom=' + dom + ' loader=' + loader;
   }
   function onReady(cb) {
     var tries = 0;
@@ -195,19 +197,42 @@
     try { var a = _fiberAnchor(); if (!a) return null; var c = _activeFromFiber(a); return (c && !c.__fromDom) ? c : null; } catch (_) { return null; }
   }
   function _storeOk(s) { try { return !!(s && (typeof s.get === 'function' || typeof s.find === 'function')); } catch (_) { return false; } }
+  // Peças que o envio encosta (tirado do proprio bundle). O finder do WA-JS procura cada uma por
+  // NOME (ex: ChatStore = modulo que exporta "ChatCollection"); se o build novo renomeou, vira
+  // undefined. Listar as que faltam diz de uma vez o tamanho do estrago.
+  var ZV_KEYS = ['ChatStore', 'MsgStore', 'ContactStore', 'GroupMetadataStore', 'WidFactory', 'MsgKey', 'UserPrefs', 'Cmd', 'Conn'];
+  function _missing() {
+    var out = [];
+    try {
+      var W = window.WPP && window.WPP.whatsapp;
+      if (!W) return ['whatsapp'];
+      for (var i = 0; i < ZV_KEYS.length; i++) {
+        var k = ZV_KEYS[i], v;
+        try { v = W[k]; } catch (_) { v = undefined; }
+        if (!v) out.push(k.replace('Store', ''));
+      }
+    } catch (_) {}
+    return out;
+  }
   // Devolve o ChatStore pro WPP. No caminho feliz (WhatsApp normal) sai na hora sem tocar em nada.
+  // Os exports do bundle costumam ser getters; assignment direto pode nao pegar.
+  function _bind(W, name, val) {
+    try { Object.defineProperty(W, name, { get: function () { return val; }, configurable: true }); }
+    catch (_) { try { W[name] = val; } catch (_) {} }
+    return _storeOk(W[name]);
+  }
   function _healStores() {
     try {
       var W = window.WPP && window.WPP.whatsapp;
       if (!W) return false;
-      if (_storeOk(W.ChatStore)) return true;              // ja esta bom: nao mexe
+      if (_storeOk(W.ChatStore)) return true;              // ja esta bom (WhatsApp normal): nao mexe
       var m = _realChatModel();
-      var coll = m && m.collection;
-      if (!_storeOk(coll)) return false;
-      // Os exports do bundle costumam ser getters; assignment direto pode nao pegar.
-      try { Object.defineProperty(W, 'ChatStore', { get: function () { return coll; }, configurable: true }); }
-      catch (_) { try { W.ChatStore = coll; } catch (_) {} }
-      var ok = _storeOk(W.ChatStore);
+      if (!m) return false;
+      var ok = false;
+      // ChatStore: todo model guarda a colecao dele em .collection.
+      if (_storeOk(m.collection)) ok = _bind(W, 'ChatStore', m.collection);
+      // ContactStore: sai de graca pelo contato do chat.
+      try { if (!_storeOk(W.ContactStore) && m.contact && _storeOk(m.contact.collection)) _bind(W, 'ContactStore', m.contact.collection); } catch (_) {}
       if (ok) console.warn('[Sale Chat] ChatStore recuperado pelo React (o WA-JS nao tinha achado).');
       return ok;
     } catch (_) { return false; }
