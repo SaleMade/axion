@@ -3800,6 +3800,12 @@ if(DB.acl&&DB.acl.recuperador&&!DB.acl.cobrador){DB.acl.cobrador=DB.acl.recupera
 // setPresselVendBackup/removePresselVendBackup só limpam o bkp de chips do MESMO
 // atendente — sobrava o tracejado "RESERVA" num número fora de uso.
 (DB.chips||[]).forEach(c=>{ if(!c.at){ if(c.bkp) c.bkp=false; if(c.em_uso) c.em_uso=false; } });
+// Reserva SEM principal não existe: se o atendente do chip não tem nenhum número
+// "Em uso", a flag de reserva é lixo — era ela que deixava o tracejado "RESERVA"
+// num número que não está sendo usado (e que o worker podia acabar roteando).
+(DB.chips||[]).forEach(c=>{
+  if(c.at && c.bkp && !(DB.chips||[]).some(o=>String(o.at)===String(c.at) && o.em_uso===true)) c.bkp=false;
+});
 TEAM=DB.team;
 if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
 KB_COLS=DB.kb_cols;

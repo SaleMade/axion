@@ -2542,7 +2542,11 @@ function _resolvePresselSellers(p, chips, liveSet){
     const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
-    const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // conectado em instP
+    // SEM fallback pra mine[0]: se o vendedor não tem chip marcado "Em uso", ele está
+    // FORA da roleta (é o que o frontend mostra: "sem número em uso"). O fallback antigo
+    // pegava QUALQUER chip dele e roteava lead pra um número que a tela dava como fora.
+    const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso');               // conectado em instP
+    if(!emChip) continue;                                                            // sem principal = não entra na roleta
     let bkChip=mine.find(c=>c.bkp===true);                                          // conectado em instB
     if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
