@@ -40,12 +40,26 @@
   // fim mesmo se TODOS os module finders quebrarem contra um build novo do WhatsApp (foi o
   // que aconteceu no WhatsApp Beta). O sinal honesto e o ChatStore ter resolvido — sem ele
   // nem getActiveChat nem sendTextMessage (que resolve o chat pelo ChatStore) funcionam.
-  var ZV_ENGINE_ERR = 'O motor do WhatsApp nao carregou nesta versao do app. Feche o WhatsApp e abra de novo pelo start. Se continuar, use o WhatsApp normal (nao o Beta).';
+  var ZV_ENGINE_ERR = 'O motor do WhatsApp nao carregou nesta versao do app. Feche o WhatsApp e abra de novo pelo start; se continuar, use o WhatsApp normal.';
+  // MINIMO pra enviar: o WPP resolve o chat a partir do jid string, entao basta o sendTextMessage
+  // existir. NAO exigimos o ChatStore aqui de proposito — senao a gente barraria um envio que
+  // funcionaria (o jid vem do fallback por DOM).
+  function wppCanSend() {
+    try { var W = window.WPP; return !!(W && W.chat && typeof W.chat.sendTextMessage === 'function'); } catch (_) { return false; }
+  }
+  // Motor 100% saudavel (os module finders engataram). Se isto for false mas wppCanSend for true,
+  // seguimos assim mesmo: o DOM acha a conversa e o envio tem chance de funcionar.
   function wppAlive() {
-    try {
-      var W = window.WPP;
-      return !!(W && W.chat && typeof W.chat.sendTextMessage === 'function' && W.whatsapp && W.whatsapp.ChatStore);
-    } catch (_) { return false; }
+    try { var W = window.WPP; return !!(wppCanSend() && W.whatsapp && W.whatsapp.ChatStore); } catch (_) { return false; }
+  }
+  // Resumo curto pro atendente mandar PRINT, sem precisar abrir o F12.
+  function engineDiag() {
+    var wpp = 0, store = 0, loader = '-', dom = '-';
+    try { wpp = window.WPP ? 1 : 0; } catch (_) {}
+    try { var st = window.WPP.whatsapp.ChatStore; var arr = (st.getModelsArray && st.getModelsArray()) || st.models || []; store = arr.length || 0; } catch (_) {}
+    try { loader = (window.WPP.webpack && window.WPP.webpack.loaderType) || '-'; } catch (_) {}
+    try { dom = _activeFromDom() ? 'ok' : '-'; } catch (_) {}
+    return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' store=' + store + ' loader=' + loader + ' dom=' + dom;
   }
   function onReady(cb) {
     var tries = 0;
@@ -297,7 +311,7 @@
     Array.prototype.forEach.call(box.querySelectorAll('.zv-sched-x'), function (x) { x.onclick = function () { schedCancel(x.getAttribute('data-id')); }; });
   }
   function schedAdd() {
-    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
+    if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
     var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar', 'err'); return; }
     var itemId = (document.getElementById('zv-sched-item') || {}).value;
     var min = parseInt((document.getElementById('zv-sched-min') || {}).value, 10) || 10;
@@ -799,7 +813,7 @@
   // Envia UM item: cria um job e mostra na pilha. Alvo travado no clique.
   function send(item, b) {
     if (!item) return;
-    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
+    if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : 'Abra a conversa de um lead', 'err'); return; }
     var chatId = chatIdOf(c);
@@ -823,7 +837,7 @@
     if (!seq) return;
     var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
-    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
+    if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
     var chatId = chatIdOf(c);
@@ -872,7 +886,7 @@
       if (!els.who) return;
       // Motor morto: fala a verdade em vez de mandar "abra uma conversa" (o atendente
       // ficava tentando abrir a conversa que JA estava aberta).
-      if (!wppAlive()) { els.dot.className = 'zv-off'; els.who.textContent = 'motor nao carregou (use o WhatsApp normal)'; return; }
+      if (!wppCanSend()) { els.dot.className = 'zv-off'; els.who.textContent = 'motor nao carregou (use o WhatsApp normal)'; return; }
       var a = activeInfo();
       if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('→ ' + a.name) : '→ abra uma conversa'); }
       else { els.dot.className = 'zv-off'; els.who.textContent = 'abra uma conversa'; }
