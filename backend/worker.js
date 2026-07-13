@@ -2536,7 +2536,10 @@ function _resolvePresselSellers(p, chips, liveSet){
   const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
   for(const v of (p.vendedores||[])){
     if(v.ativo===false) continue;
-    const mine=chips.filter(c=>String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+    if(!v.at) continue;                                    // vendedor sem atendente → ignora
+    // c.at obrigatório: sem isso, String(null)==='null' casaria vendedor órfão com
+    // os chips da coluna "Disponíveis" (número fora de uso recebendo lead sem aparecer na tela).
+    const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
     const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso') || mine[0];   // conectado em instP

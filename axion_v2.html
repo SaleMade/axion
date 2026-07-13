@@ -3795,6 +3795,11 @@ if(!DB.team){DB.team=JSON.parse(JSON.stringify(DEFAULT_TEAM))}
 // Migration: rename role 'recuperador' → 'cobrador' (versões antigas)
 DB.team.forEach(t=>{if(t.role==='recuperador')t.role='cobrador'});
 if(DB.acl&&DB.acl.recuperador&&!DB.acl.cobrador){DB.acl.cobrador=DB.acl.recuperador;delete DB.acl.recuperador}
+// Normalização: chip SEM atendente (coluna Disponíveis) não pode carregar flag de
+// principal/reserva. A flag ficava pendurada ao mover o chip pra Disponíveis, porque
+// setPresselVendBackup/removePresselVendBackup só limpam o bkp de chips do MESMO
+// atendente — sobrava o tracejado "RESERVA" num número fora de uso.
+(DB.chips||[]).forEach(c=>{ if(!c.at){ if(c.bkp) c.bkp=false; if(c.em_uso) c.em_uso=false; } });
 TEAM=DB.team;
 if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
 KB_COLS=DB.kb_cols;
