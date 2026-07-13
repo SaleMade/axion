@@ -2531,9 +2531,13 @@ function _servConnOk(liveSet, inst, chipNum){
 }
 // Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
 // Os dois entram só se estiverem conectados AGORA (liveSet) COM O NÚMERO CERTO e não banidos/restritos.
-function _resolvePresselSellers(p, chips, liveSet){
+function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   const out=[];
   const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
+  // "Em uso" igual o frontend enxerga: flag em_uso (true OU 1 — o JSON grava dos dois
+  // jeitos) ou um status cujo id/label é "Em uso" (a dash usa ids customizados tipo
+  // st_xxxx, então comparar com a string 'em_uso' não basta).
+  const isEmUso=(c)=> c.em_uso===true || c.em_uso===1 || (emUsoIds && emUsoIds.has(String(c.wa_st||''))) || String(c.wa_st||'')==='em_uso';
   for(const v of (p.vendedores||[])){
     if(v.ativo===false) continue;
     if(!v.at) continue;                                    // vendedor sem atendente → ignora
@@ -2545,7 +2549,7 @@ function _resolvePresselSellers(p, chips, liveSet){
     // SEM fallback pra mine[0]: se o vendedor não tem chip marcado "Em uso", ele está
     // FORA da roleta (é o que o frontend mostra: "sem número em uso"). O fallback antigo
     // pegava QUALQUER chip dele e roteava lead pra um número que a tela dava como fora.
-    const emChip=mine.find(c=>c.em_uso===true || c.wa_st==='em_uso');               // conectado em instP
+    const emChip=mine.find(isEmUso);                                                 // conectado em instP
     if(!emChip) continue;                                                            // sem principal = não entra na roleta
     let bkChip=mine.find(c=>c.bkp===true);                                          // conectado em instB
     if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
@@ -2584,12 +2588,15 @@ async function _presselBalancedPick(env, id, sellers){
       continue;
     }
     // OVERFLOW POR COTA (padrão): principal até bater a cota do dia, depois o backup.
-    let eff=null;
-    if(s.primary && (s.cap<=0 || cP<s.cap)) eff=s.primary;   // principal ainda dentro da cota
-    else if(s.backup) eff=s.backup;                           // estourou a cota (ou principal caiu) → backup
-    else if(s.primary) eff=s.primary;                         // sem backup: segue no principal
+    let eff=null, effCount=0;
+    if(s.primary && (s.cap<=0 || cP<s.cap)) { eff=s.primary; effCount=cP; }   // principal ainda dentro da cota
+    else if(s.backup) { eff=s.backup; effCount=cB; }                           // estourou a cota (ou principal caiu) → backup
+    else if(s.primary) { eff=s.primary; effCount=cP; }                         // sem backup: segue no principal
     if(!eff) continue;
-    avail.push({num:eff.num, at:s.at, inst:eff.inst, total:cP+cB});
+    // total = carga do NÚMERO efetivo, NÃO a soma dos dois. Somar inflava a carga do
+    // vendedor overflow e, comparado com os alvos do modo complementar (que contam por
+    // número), ele nunca ganhava o desempate e ficava sem receber lead nenhum.
+    avail.push({num:eff.num, at:s.at, inst:eff.inst, total:effCount});
   }
   if(!avail.length) return null;
   if(avail.length===1) return avail[0];
@@ -2970,7 +2977,15 @@ async function handlePresselPublic(req, env, id){
   // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
   let liveSet=null;
   try{ const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE state='open'").all(); liveSet=new Map((cs.results||[]).map(r=>[r.instance, r.number||''])); }catch(_){}   // Map: instância → número conectado (pra roteador conferir o número certo)
-  const sellers=_resolvePresselSellers(p, chips, liveSet);
+  // ids de status que significam "Em uso" (a dash grava ids customizados tipo st_xxxx
+  // com label "Em uso"; sem isso o worker não reconhecia o principal e tirava o
+  // vendedor da roleta enquanto a tela mostrava ele ligado).
+  const emUsoIds=new Set(['em_uso']);
+  try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{
+    const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim();
+    if(lbl==='em uso' && s && s.id) emUsoIds.add(String(s.id));
+  }); }catch(_){}
+  const sellers=_resolvePresselSellers(p, chips, liveSet, emUsoIds);
   if(!sellers.length) return _presselOffline();
   const pick=await _presselBalancedPick(env, id, sellers);   // número efetivo (overflow por cota) do vendedor mais "atrás" hoje
   if(!pick) return _presselOffline();
