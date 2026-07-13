@@ -36,14 +36,40 @@
       })();
     });
   }
+  // O motor (WA-JS) esta VIVO? Nao basta window.WPP existir: o bundle define self.WPP no
+  // fim mesmo se TODOS os module finders quebrarem contra um build novo do WhatsApp (foi o
+  // que aconteceu no WhatsApp Beta). O sinal honesto e o ChatStore ter resolvido — sem ele
+  // nem getActiveChat nem sendTextMessage (que resolve o chat pelo ChatStore) funcionam.
+  var ZV_ENGINE_ERR = 'O motor do WhatsApp nao carregou nesta versao do app. Feche o WhatsApp e abra de novo pelo start. Se continuar, use o WhatsApp normal (nao o Beta).';
+  function wppAlive() {
+    try {
+      var W = window.WPP;
+      return !!(W && W.chat && typeof W.chat.sendTextMessage === 'function' && W.whatsapp && W.whatsapp.ChatStore);
+    } catch (_) { return false; }
+  }
   function onReady(cb) {
     var tries = 0;
     (function loop() {
       tries++;
-      try { if (window.WPP && window.WPP.chat && typeof window.WPP.chat.getActiveChat === 'function') return cb(); } catch (_) {}
-      if (tries > 60) return cb();
+      if (wppAlive()) { window.__zvWppFail = false; return cb(); }
+      if (tries > 60) {   // 30s: sobe o painel mesmo assim, porem MARCADO como degradado
+        window.__zvWppFail = true;
+        console.warn('[Sale Chat] O motor do WhatsApp (WA-JS) nao carregou nesta versao do app. Painel em modo degradado — rode __zvDiag().');
+        cb(); watchLate(); return;
+      }
       setTimeout(loop, 500);
     })();
+  }
+  // Se o WPP chegar atrasado, religa os gatilhos (que senao morreriam pra sempre) e avisa.
+  function watchLate() {
+    var n = 0, iv = setInterval(function () {
+      n++;
+      if (wppAlive()) {
+        clearInterval(iv); window.__zvWppFail = false;
+        try { bindTriggers(); } catch (_) {}
+        try { status('Motor do WhatsApp conectado.', 'ok'); } catch (_) {}
+      } else if (n > 240) clearInterval(iv);   // desiste em 2min
+    }, 500);
   }
   function injectCss() { var ex = document.getElementById('zv-style'); if (ex && ex.parentNode) ex.parentNode.removeChild(ex); var s = document.createElement('style'); s.id = 'zv-style'; s.textContent = CSS; (document.head || document.documentElement).appendChild(s); }
 
@@ -63,10 +89,76 @@
     }
     return null;
   }
+  // ── Fallback por DOM: a UNICA fonte de verdade independente dos internals ──
+  // Atencao: WPP.chat.getActiveChat() e literalmente ChatStore.findFirst(c => c.active), que e
+  // o mesmo que _activeFromStore() faz na mao. Ou seja, os caminhos acima sao UM SO: se o build
+  // do WhatsApp parar de marcar .active (ou o motor morrer), todos caem juntos. O DOM nao.
+  var ZV_JID = /^\d[\d.:-]*@(?:c\.us|g\.us|lid|newsletter|broadcast|s\.whatsapp\.net)$/;
+  // Chat sintetico no MESMO formato que chatIdOf/chatName/activeInfo ja consomem.
+  function _mkChat(jid, title) {
+    var p = jid.split('@');
+    return { id: { _serialized: jid, user: p[0], server: p[1], toString: function () { return jid; } },
+             isGroup: p[1] === 'g.us', formattedTitle: title || p[0], __fromDom: true };
+  }
+  // O WhatsApp escreve o id de CADA mensagem no DOM: data-id = "<fromMe>_<chatJid>_<msgId>"
+  // (em grupo vem + "_<participante>"). O jid nunca tem "_", entao ler ate o 2o underscore basta.
+  // Voto por maioria pra uma bolha estranha (citacao/encaminhada) nao sequestrar o alvo.
+  function _domJidFromMessages(main) {
+    var nodes = main.querySelectorAll('[data-id]');
+    var votes = {}, best = null, bestN = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var m = /^(?:true|false)_([^_]+)_/.exec(nodes[i].getAttribute('data-id') || '');
+      if (!m || !ZV_JID.test(m[1])) continue;
+      votes[m[1]] = (votes[m[1]] || 0) + 1;
+      if (votes[m[1]] > bestN) { bestN = votes[m[1]]; best = m[1]; }
+    }
+    return best;
+  }
+  // Conversa SEM nenhuma mensagem (lead novo) nao tem data-id. Ai subimos o React Fiber a
+  // partir do #main: o componente que renderiza a conversa recebe o model do chat como prop.
+  function _looksLikeChat(o) {
+    if (!o || typeof o !== 'object') return false;
+    var id = o.id, jid = id && (typeof id === 'string' ? id : id._serialized);
+    if (!jid || !ZV_JID.test(jid)) return false;
+    return ('isGroup' in o) || !!o.msgs || !!o.contact || ('unreadCount' in o);
+  }
+  function _findChatIn(o, depth) {
+    if (!o || typeof o !== 'object' || depth > 2) return null;
+    try { if (_looksLikeChat(o)) return o; } catch (_) { return null; }
+    for (var k in o) {
+      if (k === 'children' || k === '_owner' || k === 'stateNode' || k === 'return') continue;
+      var v; try { v = o[k]; } catch (_) { continue; }
+      if (v && typeof v === 'object') { var r = _findChatIn(v, depth + 1); if (r) return r; }
+    }
+    return null;
+  }
+  function _activeFromFiber(main) {
+    var key = null;
+    for (var k in main) { if (k.lastIndexOf('__reactFiber$', 0) === 0 || k.lastIndexOf('__reactInternalInstance$', 0) === 0) { key = k; break; } }
+    if (!key) return null;
+    var f = main[key], hops = 0;
+    while (f && hops++ < 40) {
+      var c = _findChatIn(f.memoizedProps, 0) || _findChatIn(f.memoizedState, 0);
+      if (c) return c;
+      f = f.return;
+    }
+    return null;
+  }
+  function _activeFromDom() {
+    try {
+      var main = document.querySelector('#main');
+      if (!main) return null;   // sem #main = nao ha conversa aberta MESMO (erro honesto)
+      var t = main.querySelector('header span[title]');
+      var title = t ? (t.getAttribute('title') || t.textContent || '') : '';
+      var jid = _domJidFromMessages(main);
+      if (jid) return _mkChat(jid, title);
+      return _activeFromFiber(main);   // conversa vazia
+    } catch (_) { return null; }
+  }
   function activeChat() {
     try { var c = window.WPP.chat.getActiveChat(); if (c) return c; } catch (_) {}
-    try { if (window.Store && window.Store.Chat && window.Store.Chat.getActiveChat) { var c2 = window.Store.Chat.getActiveChat(); if (c2) return c2; } } catch (_) {}
-    return _activeFromStore();
+    var s = _activeFromStore(); if (s) return s;
+    return _activeFromDom();
   }
   // id serializado da conversa (pra travar o alvo do envio no lead que estava aberto no clique).
   function chatIdOf(c) { try { return (c && c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || (c && c.id) || null; } catch (_) { return null; } }
@@ -101,11 +193,16 @@
   // Diagnostico: se o painel disser "abra a conversa" mesmo com a conversa aberta, o
   // atendente abre o console (F12) e digita __zvDiag() — manda o resultado pro suporte.
   window.__zvDiag = function () {
-    var d = { wppReady: false, getActiveChat: null, storeCount: 0, activeAchou: false };
+    var d = { motorVivo: false, wppExiste: false, wppReady: false, loader: null, getActiveChat: null, storeCount: 0, jidPeloDom: null, activeAchou: false, waVersion: null };
+    try { d.motorVivo = wppAlive(); } catch (_) {}
+    try { d.wppExiste = !!window.WPP; } catch (_) {}
     try { d.wppReady = !!(window.WPP && (window.WPP.isReady || (window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()))); } catch (_) {}
+    try { d.loader = (window.WPP && window.WPP.webpack && window.WPP.webpack.loaderType) || null; } catch (_) {}
     try { d.getActiveChat = !!(window.WPP.chat.getActiveChat()); } catch (e) { d.getActiveChat = 'erro:' + ((e && e.message) || e); }
     try { var w = window.WPP.whatsapp; var st = w && w.ChatStore; var arr = st && ((st.getModelsArray && st.getModelsArray()) || st.models || []); d.storeCount = (arr && arr.length) || 0; } catch (_) {}
+    try { var dm = _activeFromDom(); d.jidPeloDom = dm ? chatIdOf(dm) : null; } catch (_) {}
     try { d.activeAchou = !!activeChat(); } catch (_) {}
+    try { d.waVersion = (window.Debug && window.Debug.VERSION) || null; } catch (_) {}
     console.log('[Sale Chat diag] ' + JSON.stringify(d));
     return d;
   };
@@ -134,13 +231,24 @@
         if (document.getElementById('zv-panel')) { renderRail(); renderContent(); }
       } catch (_) {}
     };
-    // Gatilhos: escuta mensagens recebidas e sugere o item configurado
-    try { if (window.WPP && window.WPP.on) window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} }); } catch (_) {}
+    bindTriggers();
     var t = setInterval(function () {
       if (document.body && !document.getElementById('zv-panel')) { clearInterval(t); render(); poll(); }
     }, 700);
   }
 
+  // Gatilhos: escuta mensagens recebidas e sugere o item configurado. Religavel: se o WPP
+  // subir atrasado, o watchLate() chama isso de novo (antes, o listener morria pra sempre).
+  var _triggersOn = false;
+  function bindTriggers() {
+    if (_triggersOn) return;
+    try {
+      if (window.WPP && window.WPP.on) {
+        window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} });
+        _triggersOn = true;
+      }
+    } catch (_) {}
+  }
   function onIncoming(msg) {
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
     // Interrompe os funis que pedem "parar se o lead responder", pro lead que respondeu.
@@ -189,6 +297,7 @@
     Array.prototype.forEach.call(box.querySelectorAll('.zv-sched-x'), function (x) { x.onclick = function () { schedCancel(x.getAttribute('data-id')); }; });
   }
   function schedAdd() {
+    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
     var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar', 'err'); return; }
     var itemId = (document.getElementById('zv-sched-item') || {}).value;
     var min = parseInt((document.getElementById('zv-sched-min') || {}).value, 10) || 10;
@@ -690,6 +799,7 @@
   // Envia UM item: cria um job e mostra na pilha. Alvo travado no clique.
   function send(item, b) {
     if (!item) return;
+    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : 'Abra a conversa de um lead', 'err'); return; }
     var chatId = chatIdOf(c);
@@ -713,6 +823,7 @@
     if (!seq) return;
     var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
+    if (!wppAlive()) { status(ZV_ENGINE_ERR, 'err'); return; }
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
     var chatId = chatIdOf(c);
@@ -759,6 +870,9 @@
       var pnl = document.getElementById('zv-panel');
       if (pnl && !pnl.classList.contains('zv-collapsed')) dockLayout();
       if (!els.who) return;
+      // Motor morto: fala a verdade em vez de mandar "abra uma conversa" (o atendente
+      // ficava tentando abrir a conversa que JA estava aberta).
+      if (!wppAlive()) { els.dot.className = 'zv-off'; els.who.textContent = 'motor nao carregou (use o WhatsApp normal)'; return; }
       var a = activeInfo();
       if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('→ ' + a.name) : '→ abra uma conversa'); }
       else { els.dot.className = 'zv-off'; els.who.textContent = 'abra uma conversa'; }

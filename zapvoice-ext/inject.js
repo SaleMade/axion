@@ -275,9 +275,16 @@ async function run() {
   await cdp.send('Runtime.enable');
   await cdp.send('Page.enable');
 
-  // Helper: Runtime.evaluate usa o campo "expression"; o resultado vem em result.result.value
-  async function evaluate(expression, byValue) {
+  // Helper: Runtime.evaluate usa o campo "expression"; o resultado vem em result.result.value.
+  // Se o script lancar (ex: o WA-JS quebrar contra um build novo do WhatsApp), o CDP devolve
+  // exceptionDetails — antes a gente jogava fora e a falha ficava 100% invisivel.
+  async function evaluate(expression, byValue, what) {
     const r = await cdp.send('Runtime.evaluate', { expression, returnByValue: !!byValue, awaitPromise: false });
+    const ex = r && r.exceptionDetails;
+    if (ex) {
+      const msg = (ex.exception && (ex.exception.description || ex.exception.value)) || ex.text || 'erro desconhecido';
+      console.log('[zv] ERRO ao injetar' + (what ? ' (' + what + ')' : '') + ':', String(msg).split('\n')[0]);
+    }
     return r.result || {};
   }
   const valOf = (x) => (x.result ? x.result.value : undefined);
@@ -286,12 +293,25 @@ async function run() {
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: wajs });
   { const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel }); panelScriptId = r && r.result && r.result.identifier; }
 
+  // O motor esta REALMENTE vivo? window.WPP existir nao basta: o bundle define self.WPP no fim
+  // mesmo se todos os module finders quebrarem. O sinal honesto e o ChatStore ter resolvido.
+  const WPP_ALIVE = '!!(window.WPP && window.WPP.chat && typeof window.WPP.chat.sendTextMessage==="function" && window.WPP.whatsapp && window.WPP.whatsapp.ChatStore)';
   async function injectNow() {
     const hasWpp = valOf(await evaluate('!!window.WPP', true));
-    if (!hasWpp) await evaluate(wajs);
-    await evaluate(panel);
+    if (!hasWpp) await evaluate(wajs, false, 'WA-JS');
+    await evaluate(panel, false, 'painel');
     const ok = valOf(await evaluate('!!window.__zvInstalled', true));
     console.log('[zv] Painel injetado:', ok === true);
+    // Da uns segundos pro WA-JS engatar nos modulos da pagina antes de julgar.
+    let alive = false;
+    for (let i = 0; i < 20; i++) {
+      alive = valOf(await evaluate(WPP_ALIVE, true)) === true;
+      if (alive) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (alive) console.log('[zv] Motor do WhatsApp (WA-JS) OK.');
+    else console.log('[zv] ATENCAO: o motor do WhatsApp (WA-JS) NAO carregou nesta versao do app.\n' +
+                     '     O painel abre, mas nao consegue enviar. Se voce esta no WhatsApp BETA, use o WhatsApp normal.');
   }
   await injectNow();
 
