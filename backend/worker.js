@@ -2776,48 +2776,39 @@ async function handlePresselsTotalPage(req, env){
   try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) _emUsoIds.add(String(s.id)); }); }catch(_){}
   const _isEmUso=(c)=> !!c && (c.em_uso===true || c.em_uso===1 || _emUsoIds.has(String(c.wa_st||'')));
   const _chipsDo=(at)=>chips.filter(c=>String(c.at)===String(at) && c.st!=='aquecimento' && c.st!=='banido');
-  // Vendedor rodando DOIS números (modo COMPLEMENTAR) ganha uma linha POR NÚMERO, pra
-  // dar pra ver qual número iniciou mais conversa e vendeu mais. Quem roda 1 número só
-  // (ou usa o 2º como reserva/overflow) continua numa linha só, somando.
+  // Vendedor rodando DOIS números (modo COMPLEMENTAR) mostra os DOIS números empilhados
+  // embaixo do nome, numa linha SÓ, com Iniciaram/Vendas/Conversão SOMADOS dos dois.
   const _splitAts=new Set();
   pressels.forEach(p=>(p.vendedores||[]).forEach(v=>{
     if(!v || !v.at || v.reserva_mode!=='split' || v.reserva_on===false) return;
     const mine=_chipsDo(v.at);
     if(mine.some(_isEmUso) && mine.some(c=>c.bkp===true)) _splitAts.add(String(v.at));   // só se tiver os 2 chips mesmo
   }));
-  const _rowKey=(inst)=>{ const at=_vAt(inst); return _splitAts.has(at) ? String(inst) : at; };   // linha = instância (2 números) ou vendedor (1 número)
-  const _vendCell=(key)=>{
-    key=String(key);
-    const isInst=key.indexOf('ax_')===0, isBk=isInst&&/_b$/.test(key);
-    const at=isInst?_vAt(key):key;
+  // Uma célula por vendedor. nums = número principal (+ o complementar embaixo, se rodar 2).
+  const _vendCell=(at)=>{
+    at=String(at);
     const mine=_chipsDo(at);
-    const c = isBk ? mine.find(x=>x.bkp===true) : (mine.find(_isEmUso)||mine[0]);
-    return {at, name:nameMap[at]||'Vendedor', num:c?c.num:'—', sub:isInst?(isBk?'complementar':'principal'):'', contatos:0, vendas:0};
+    const em=mine.find(_isEmUso)||mine[0];
+    const nums=[]; if(em&&em.num) nums.push(em.num);
+    if(_splitAts.has(at)){ const bk=mine.find(c=>c.bkp===true); if(bk&&bk.num&&bk.num!==(em&&em.num)) nums.push(bk.num); }   // 2º número (complementar) empilhado embaixo
+    if(!nums.length) nums.push('—');
+    return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0};
   };
-  // TOPS EM CIMA: ranqueia por vendas → conversão → contatos. Mantém os 2 números do
-  // mesmo vendedor JUNTOS (o vendedor é ranqueado pelo total dele; dentro dele, o
-  // número que mais vendeu vem primeiro).
+  // TOPS EM CIMA: uma linha por vendedor, ranqueada por vendas → conversão → contatos.
   const _rankVend=(vend)=>{
     const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0 ? (Number(x.vendas)||0)/c : 0; };
-    const g={};
-    (vend||[]).forEach(v=>{ const k=String(v.at||v.name||''); (g[k]=g[k]||[]).push(v); });
-    return Object.keys(g).map(k=>{
-      const rows=g[k].slice().sort((x,y)=> ((Number(y.vendas)||0)-(Number(x.vendas)||0)) || (cv(y)-cv(x)) || ((Number(y.contatos)||0)-(Number(x.contatos)||0)));
-      const tv=rows.reduce((s,x)=>s+(Number(x.vendas)||0),0);
-      const tc=rows.reduce((s,x)=>s+(Number(x.contatos)||0),0);
-      return {rows, tv, tc, tconv: tc>0?tv/tc:0};
-    }).sort((a,b)=> (b.tv-a.tv) || (b.tconv-a.tconv) || (b.tc-a.tc)).reduce((acc,x)=>acc.concat(x.rows), []);
+    return (vend||[]).slice().sort((a,b)=> ((Number(b.vendas)||0)-(Number(a.vendas)||0)) || (cv(b)-cv(a)) || ((Number(b.contatos)||0)-(Number(a.contatos)||0)));
   };
   const secs=pressels.map(p=>{
     const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
     // mostra os vendedores da roleta AGORA + qualquer um que teve contato/venda hoje (mesmo já tirado da roleta) — o dado não some
-    const vm={}; const ens=(k)=>{ k=String(k); if(k && !vm[k]) vm[k]=_vendCell(k); };
-    // quem roda 2 números vira DUAS linhas (principal + complementar), lado a lado
-    (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>{ const at=String(v.at||''); if(!at) return; if(_splitAts.has(at)){ ens('ax_'+at); ens('ax_'+at+'_b'); } else ens(at); });
-    Object.keys(cvi).forEach(inst=>ens(_rowKey(inst)));
-    Object.keys(vvi).forEach(inst=>ens(_rowKey(inst)));
-    Object.keys(cvi).forEach(inst=>{ const k=_rowKey(inst); if(vm[k]) vm[k].contatos+=Number(cvi[inst])||0; });
-    Object.keys(vvi).forEach(inst=>{ const k=_rowKey(inst); if(vm[k]) vm[k].vendas+=Number(vvi[inst])||0; });
+    const vm={}; const ens=(at)=>{ at=String(at); if(at && !vm[at]) vm[at]=_vendCell(at); };
+    (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>ens(v.at));
+    Object.keys(cvi).forEach(inst=>ens(_vAt(inst)));
+    Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
+    // soma os 2 números do vendedor (o _b cai no mesmo _vAt)
+    Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
+    Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
     const vend=Object.values(vm);
     return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
   });
@@ -2828,17 +2819,17 @@ async function handlePresselsTotalPage(req, env){
   const cardsHtml=(m)=>`<div style="display:flex;gap:10px;flex-wrap:wrap">${card('Chegaram na pressel',m.views,'#7aa2ff')}${card('Foram pro WhatsApp',m.clicks,'#34d399')}${card('Iniciaram contato',m.contatos,'#34d399')}${card('Vendas',m.vendas,'#34d399')}</div>`;
   const vendTable=(vendRaw)=>{
     const vend=_rankVend(vendRaw||[]);   // tops (mais vendas / melhor conversão) em cima
-    const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';const sub=v.sub?`<span style="font-weight:600;font-size:10.5px;color:#6b7a93"> · ${_escHtml(v.sub)}</span>`:'';return `<tr style="border-top:1px solid #233047"><td style="padding:10px 8px"><div style="font-weight:600;font-size:13px">${_escHtml(v.name)}${sub}</div><div style="font-size:11.5px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;padding:10px 12px;color:#34d399">${v.contatos}</td><td style="text-align:center;padding:10px 12px">${v.vendas||'—'}</td><td style="text-align:center;padding:10px 12px;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:12px;text-align:center;color:#8b9bb4;font-size:12px">Sem vendedores.</td></tr>`;
+    const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';const numsHtml=(v.nums&&v.nums.length?v.nums:['—']).map(n=>`<div style="font-size:11.5px;color:#8b9bb4;font-family:ui-monospace,monospace;line-height:1.55">${_escHtml(n)}</div>`).join('');return `<tr style="border-top:1px solid #233047"><td style="padding:10px 8px"><div style="font-weight:600;font-size:13px;margin-bottom:1px">${_escHtml(v.name)}</div>${numsHtml}</td><td style="text-align:center;padding:10px 12px;color:#34d399">${v.contatos}</td><td style="text-align:center;padding:10px 12px">${v.vendas||'—'}</td><td style="text-align:center;padding:10px 12px;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:12px;text-align:center;color:#8b9bb4;font-size:12px">Sem vendedores.</td></tr>`;
     return `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:12px"><thead><tr><th style="text-align:left;color:#8b9bb4;font-size:11px;padding:5px 8px">Vendedor</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Iniciaram</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Vendas</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Conversão</th></tr></thead><tbody>${rows}</tbody></table>`;
   };
   // vendedores (únicos) somando contatos/vendas de TODAS as pressels — inclui quem já saiu da roleta mas teve atividade hoje, o dado NÃO some
   const _vt={};
   const _vtEns=(k)=>{ k=String(k); if(k && !_vt[k]) _vt[k]=_vendCell(k); };
-  pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>{ const at=String(v.at||''); if(!at) return; if(_splitAts.has(at)){ _vtEns('ax_'+at); _vtEns('ax_'+at+'_b'); } else _vtEns(at); }));   // vendedores na roleta agora (2 linhas se roda 2 números)
-  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>_vtEns(_rowKey(inst))));   // + quem teve contato hoje
-  Object.keys(M.vendasInst||{}).forEach(inst=>_vtEns(_rowKey(inst)));   // + quem vendeu hoje (mesmo fora da roleta)
-  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const k=_rowKey(inst); if(_vt[k]) _vt[k].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // no modo complementar cada número soma no SEU número
-  Object.keys(M.vendasInst||{}).forEach(inst=>{ const k=_rowKey(inst); if(_vt[k]) _vt[k].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });   // TODAS as vendas (com ou sem código)
+  pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>_vtEns(v.at)));   // vendedores na roleta agora
+  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>_vtEns(_vAt(inst))));   // + quem teve contato hoje
+  Object.keys(M.vendasInst||{}).forEach(inst=>_vtEns(_vAt(inst)));   // + quem vendeu hoje (mesmo fora da roleta)
+  Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));   // os 2 números somam no vendedor (_b cai no mesmo)
+  Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });   // TODAS as vendas do vendedor (com ou sem código)
   const totVend=Object.values(_vt);
   const totalSec=`<div style="background:#101d2e;border:1px solid #2b6cb0;border-radius:16px;padding:20px;margin-bottom:24px"><div style="font-size:16px;font-weight:800;margin-bottom:12px;color:#7aa2ff">TOTAL · todas as pressels</div>${cardsHtml(tot)}${vendTable(totVend)}</div>`;
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
