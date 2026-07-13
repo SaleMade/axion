@@ -1597,7 +1597,16 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-wa-time{ display:block; text-align:right; font-size:9.5px; color:rgba(255,255,255,.6); margin-top:3px; }
 .sc-modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; }
 .sc-modal-box{ width:470px; max-width:100%; max-height:90vh; overflow-y:auto; background:var(--s2); border:1px solid var(--b1); border-radius:var(--rxl); padding:22px 24px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
-.sc-modal-head{ font-size:18px; font-weight:800; color:var(--tx); margin-bottom:16px; }
+.sc-modal-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.sc-modal-title{ font-size:18px; font-weight:800; color:var(--tx); }
+.sc-grp-btn{ display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; max-width:56%; padding:5px 11px; border-radius:20px; border:1px solid var(--b1); background:var(--s1); color:var(--t2); font-size:12px; font-weight:700; cursor:pointer; transition:border-color .12s, color .12s, background .12s; }
+.sc-grp-btn:hover{ border-color:var(--gr); color:var(--tx); }
+.sc-grp-btn.on{ background:var(--gr); border-color:var(--gr); color:#fff; }
+.sc-grp-btn svg{ flex:0 0 auto; }
+.sc-grp-btn-t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:170px; }
+.sc-grp-row{ margin:-2px 0 14px; }
+.sc-grp-row .info-val{ margin-bottom:6px; }
+.sc-grp-hint{ font-size:11px; color:var(--t3); line-height:1.4; }
 .sc-modal-body{ display:flex; flex-direction:column; }
 .sc-f-label{ font-size:12px; font-weight:700; color:var(--t2); margin:12px 0 6px; }
 .sc-f-label:first-child{ margin-top:0; }
@@ -3922,8 +3931,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.55.0';
-const APP_LAST_CHANGE = 'Sale Chat agora tem SUBCATEGORIAS dentro de cada categoria. Ao adicionar/editar um item (mensagem, audio, video...) da pra definir uma Subcategoria (ex: Follow, Objecoes). A lista agrupa por ela na dash e no painel do WhatsApp, com cabecalho por secao, e a busca acha por nome da subcategoria. Item sem subcategoria cai em Geral.';
+const APP_VERSION = '2.56.0';
+const APP_LAST_CHANGE = 'Subcategorias mais limpas: no modal de adicionar/editar item, a subcategoria virou um botaozinho no topo (ao lado do titulo) em vez de um campo no meio do Nome e do Texto. Clica pra escolher/digitar (com sugestoes). E a ordem agora prioriza o Geral: itens sem subcategoria aparecem PRIMEIRO, subcategorias abaixo, tanto na dash quanto no painel do WhatsApp.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8211,10 +8220,11 @@ function scRenderCards(kind){
             <button class="sc-cbtn ${it.fav?'fav':''}" title="Favoritar" onclick="event.stopPropagation();scToggleFav('${kind}','${it.id}')">${ico('star',{size:14})}</button>
       <button class="sc-cbtn" title="Editar" onclick="event.stopPropagation();scOpenEdit('${kind}','${it.id}')">${ico('pen-line',{size:14})}</button>
     </div>`;
-  // Agrupa por subcategoria (grp). Sem subcategoria -> "Geral" (que vai por ultimo).
+  // Agrupa por subcategoria (grp). Sem subcategoria -> "Geral", que tem prioridade (vem primeiro).
+  // As subcategorias seguem a ordem em que aparecem nos itens (controlável pelas setas subir/descer).
   const groups={}, order=[];
   items.forEach(function(it){ const g=String(it.grp||'').trim()||'Geral'; if(!groups[g]){ groups[g]=[]; order.push(g); } groups[g].push(it); });
-  order.sort(function(a,b){ if(a==='Geral') return 1; if(b==='Geral') return -1; return a.localeCompare(b); });
+  const gi=order.indexOf('Geral'); if(gi>0){ order.splice(gi,1); order.unshift('Geral'); }
   const single=(order.length===1);   // sem subcategorias reais: nao mostra cabecalho
   box.innerHTML=order.map(function(g){
     const head=single?'':`<div class="sc-grp-head">${scEscT(g)}<span class="sc-grp-n">${groups[g].length}</span></div>`;
@@ -8275,8 +8285,8 @@ function scOpenModal(kind,id){
   const it=id?scItemsFor(kind).filter(o=>o.id===id)[0]:null;
   const isMsg=kind==='messages', cfg=SC_KINDS[kind];
   const grps=scGroupsFor(kind);
-  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">
-    <label class="sc-f-label">Subcategoria (opcional)</label><input id="sc-m-grp" class="info-val" list="sc-grp-list" value="${scEscA(it?(it.grp||''):'')}" placeholder="Ex: Follow, Objeções... (vazio = Geral)"><datalist id="sc-grp-list">${grps.map(g=>`<option value="${scEscA(g)}"></option>`).join('')}</datalist>`;
+  const curGrp=it?(it.grp||''):'', hasGrp=!!curGrp.trim();
+  let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">`;
   if(isMsg){
     body+=`<label class="sc-f-label">Texto</label><textarea id="sc-m-text" class="info-val" rows="5" placeholder="Texto que vai ser enviado no WhatsApp" style="resize:vertical;line-height:1.45">${scEscT(it?it.text:'')}</textarea>`;
   } else {
@@ -8286,7 +8296,14 @@ function scOpenModal(kind,id){
   }
   const m=document.createElement('div'); m.id='sc-modal'; m.className='sc-modal';
   m.onclick=(e)=>{ if(e.target===m) scCloseModal(); };
-  m.innerHTML=`<div class="sc-modal-box"><div class="sc-modal-head">${it?'Editar':'Adicionar'} ${isMsg?'mensagem':cfg.label.toLowerCase().replace(/s$/,'')}</div>
+  const scTitle=`${it?'Editar':'Adicionar'} ${isMsg?'mensagem':cfg.label.toLowerCase().replace(/s$/,'')}`;
+  m.innerHTML=`<div class="sc-modal-box"><div class="sc-modal-head"><span class="sc-modal-title">${scTitle}</span>
+      <button type="button" class="sc-grp-btn${hasGrp?' on':''}" id="sc-grp-btn" onclick="scToggleGrp()" title="Agrupar este item numa subcategoria (opcional)">${ico('tag',{size:13})}<span class="sc-grp-btn-t">${hasGrp?scEscT(curGrp):'Subcategoria'}</span></button></div>
+    <div class="sc-grp-row" id="sc-grp-row"${hasGrp?'':' style="display:none"'}>
+      <input id="sc-m-grp" class="info-val" list="sc-grp-list" value="${scEscA(curGrp)}" placeholder="Ex: Follow, Objeções... (vazio = Geral)" oninput="scGrpSync()">
+      <datalist id="sc-grp-list">${grps.map(g=>`<option value="${scEscA(g)}"></option>`).join('')}</datalist>
+      <div class="sc-grp-hint">Vazio fica em "Geral" (que aparece primeiro). Com subcategoria, agrupa numa seção embaixo.</div>
+    </div>
     <div class="sc-modal-body">${body}</div>
     <div id="sc-modal-status" class="sc-modal-status"></div>
     <div class="sc-modal-foot"><button class="btn btn-gh" onclick="scCloseModal()">Cancelar</button><button class="btn btn-gr" id="sc-modal-save" onclick="scModalSave('${kind}',${id?("'"+id+"'"):'null'})">Salvar</button></div>
@@ -8294,6 +8311,10 @@ function scOpenModal(kind,id){
   document.body.appendChild(m);
   const nm=$('sc-m-name'); if(nm) setTimeout(()=>nm.focus(),30);
 }
+// Abre/fecha a linha de subcategoria (o campo continua no DOM pro save ler). Ao abrir, foca.
+function scToggleGrp(){ var r=$('sc-grp-row'); if(!r) return; var open=(r.style.display==='none'); r.style.display=open?'':'none'; if(open){ var i=$('sc-m-grp'); if(i) setTimeout(function(){ i.focus(); },20); } }
+// Reflete o valor digitado no botãozinho do topo (mostra a subcategoria escolhida ou "Subcategoria").
+function scGrpSync(){ var i=$('sc-m-grp'), b=$('sc-grp-btn'); if(!i||!b) return; var v=(i.value||'').trim(); b.classList.toggle('on',!!v); var t=b.querySelector('.sc-grp-btn-t'); if(t) t.textContent=v||'Subcategoria'; }
 function scModalFilePicked(input){ scModalFile=input.files[0]||null; const t=$('sc-drop-txt'), d=$('sc-drop'); if(t&&scModalFile){ t.textContent=scModalFile.name+' ('+Math.round(scModalFile.size/1024)+' KB)'; if(d) d.classList.add('on'); } }
 // ─── Conversao automatica de audio -> OGG/Opus (formato de nota de voz do WhatsApp) ───
 // Roda no navegador, em segundo plano, sem UI. Assim mp3/m4a/wav subidos na dash saem sempre

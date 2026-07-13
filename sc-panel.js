@@ -286,12 +286,13 @@
       '</div>' +
       '<div class="zv-prev" style="display:none"></div></div>';
   }
-  // Agrupa por subcategoria (grp). Sem grp -> "Geral" (por ultimo). Um grupo so = sem cabecalho.
+  // Agrupa por subcategoria (grp). Sem grp -> "Geral", que tem prioridade (vem primeiro).
+  // Subcategorias seguem a ordem em que aparecem nos itens (controlavel na dash). Um grupo so = sem cabecalho.
   function itemsHtml(list) {
     list = list || [];
     var groups = {}, order = [];
     list.forEach(function (it) { var g = String(it.grp || '').trim() || 'Geral'; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(it); });
-    order.sort(function (a, b) { if (a === 'Geral') return 1; if (b === 'Geral') return -1; return a.localeCompare(b); });
+    var gi = order.indexOf('Geral'); if (gi > 0) { order.splice(gi, 1); order.unshift('Geral'); }
     var single = order.length <= 1;
     return order.map(function (g) {
       var head = single ? '' : '<div class="zv-subh" data-grp="' + esc(g === 'Geral' ? '' : g) + '">' + esc(g) + '<span class="zv-subn">' + groups[g].length + '</span></div>';
