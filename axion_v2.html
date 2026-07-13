@@ -3931,8 +3931,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.58.0';
-const APP_LAST_CHANGE = 'Sale Chat: o painel agora acha a conversa aberta pelo DOM, sem depender da flag interna .active do WhatsApp (era ela que sumia no build novo e fazia o painel dizer Abra a conversa de um lead com a conversa aberta). O portao de envio so barra o que e realmente impossivel, e quando barra mostra um diagnostico curto pra print. Entra sozinho pelo auto-update.';
+const APP_VERSION = '2.59.0';
+const APP_LAST_CHANGE = 'Sale Chat: mais dois caminhos pra achar a conversa aberta sem depender da flag .active do WhatsApp (Cmd.activeConversation e varredura do DOM inteiro, sem depender do id #main, com cobertura de iframe). E o erro Abra a conversa de um lead agora vem com um diagnostico curto (WPP/send/store/act/cmd/main/ids/ifr/dom/loader) pro atendente mandar print e a gente ver onde quebrou, sem F12.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor

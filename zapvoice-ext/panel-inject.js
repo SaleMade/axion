@@ -52,14 +52,25 @@
   function wppAlive() {
     try { var W = window.WPP; return !!(wppCanSend() && W.whatsapp && W.whatsapp.ChatStore); } catch (_) { return false; }
   }
-  // Resumo curto pro atendente mandar PRINT, sem precisar abrir o F12.
+  // Resumo curto pro atendente mandar PRINT, sem precisar abrir o F12. Cada campo isola uma
+  // etapa: se store>0 mas act=0, a flag .active sumiu; se ids=0, o DOM nao tem mensagem; etc.
   function engineDiag() {
-    var wpp = 0, store = 0, loader = '-', dom = '-';
+    var wpp = 0, store = 0, act = 0, cmd = 0, main = 0, ids = 0, ifr = 0, dom = '-', loader = '-';
     try { wpp = window.WPP ? 1 : 0; } catch (_) {}
-    try { var st = window.WPP.whatsapp.ChatStore; var arr = (st.getModelsArray && st.getModelsArray()) || st.models || []; store = arr.length || 0; } catch (_) {}
-    try { loader = (window.WPP.webpack && window.WPP.webpack.loaderType) || '-'; } catch (_) {}
+    try {
+      var st = window.WPP.whatsapp.ChatStore;
+      var arr = (st.getModelsArray && st.getModelsArray()) || st.models || [];
+      store = arr.length || 0;
+      for (var i = 0; i < arr.length; i++) { if (arr[i] && arr[i].active) act++; }
+    } catch (_) {}
+    try { cmd = _activeFromCmd() ? 1 : 0; } catch (_) {}
+    try { main = _mainEl() ? 1 : 0; } catch (_) {}
+    try { ids = document.querySelectorAll('[data-id]').length; } catch (_) {}
+    try { ifr = document.querySelectorAll('iframe').length; } catch (_) {}
     try { dom = _activeFromDom() ? 'ok' : '-'; } catch (_) {}
-    return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' store=' + store + ' loader=' + loader + ' dom=' + dom;
+    try { loader = (window.WPP.webpack && window.WPP.webpack.loaderType) || '-'; } catch (_) {}
+    return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' store=' + store + ' act=' + act +
+           ' cmd=' + cmd + ' main=' + main + ' ids=' + ids + ' ifr=' + ifr + ' dom=' + dom + ' loader=' + loader;
   }
   function onReady(cb) {
     var tries = 0;
@@ -158,21 +169,57 @@
     }
     return null;
   }
+  // O painel de conversa: NAO depender so do id "#main" (build novo pode ter renomeado).
+  function _mainEl() {
+    return document.querySelector('#main')
+        || document.querySelector('[data-testid="conversation-panel-wrapper"]')
+        || document.querySelector('[data-testid="conversation-panel-messages"]')
+        || null;
+  }
+  function _domTitle(root) {
+    try { var t = (root || document).querySelector('header span[title]'); return t ? (t.getAttribute('title') || t.textContent || '') : ''; } catch (_) { return ''; }
+  }
+  // Caminho interno que NAO usa a flag .active: o Cmd guarda a conversa aberta.
+  function _activeFromCmd() {
+    try {
+      var C = window.WPP && window.WPP.whatsapp && window.WPP.whatsapp.Cmd;
+      if (!C) return null;
+      var c = C.activeConversation || C._activeConversation || null;
+      return (c && c.id) ? c : null;
+    } catch (_) { return null; }
+  }
+  // Se a conversa estiver dentro de um iframe, o document de cima nao tem o DOM dela.
+  function _allDocs() {
+    var docs = [document];
+    try {
+      var ifr = document.querySelectorAll('iframe');
+      for (var i = 0; i < ifr.length; i++) { try { var d = ifr[i].contentDocument; if (d) docs.push(d); } catch (_) {} }
+    } catch (_) {}
+    return docs;
+  }
   function _activeFromDom() {
     try {
-      var main = document.querySelector('#main');
-      if (!main) return null;   // sem #main = nao ha conversa aberta MESMO (erro honesto)
-      var t = main.querySelector('header span[title]');
-      var title = t ? (t.getAttribute('title') || t.textContent || '') : '';
-      var jid = _domJidFromMessages(main);
-      if (jid) return _mkChat(jid, title);
-      return _activeFromFiber(main);   // conversa vazia
+      var root = _mainEl();
+      // Varre o documento INTEIRO: a lista de conversas da esquerda tem data-id = jid puro, e o
+      // nosso regex exige o formato de MENSAGEM (true_/false_ + jid + _msgid), entao ela nao
+      // entra por engano. Assim funciona mesmo se o "#main" tiver mudado de nome.
+      var jid = _domJidFromMessages(root || document);
+      if (jid) return _mkChat(jid, _domTitle(root));
+      if (root) { var f = _activeFromFiber(root); if (f) return f; }   // conversa vazia
+      // Ultimo recurso: a conversa pode estar num iframe (document de cima nao ve o DOM dela).
+      var docs = _allDocs();
+      for (var i = 1; i < docs.length; i++) {
+        var j2 = _domJidFromMessages(docs[i]);
+        if (j2) return _mkChat(j2, _domTitle(docs[i]));
+      }
+      return null;
     } catch (_) { return null; }
   }
   function activeChat() {
     try { var c = window.WPP.chat.getActiveChat(); if (c) return c; } catch (_) {}
-    var s = _activeFromStore(); if (s) return s;
-    return _activeFromDom();
+    var s = _activeFromStore(); if (s) return s;   // .active (some no build novo)
+    var m = _activeFromCmd(); if (m) return m;     // Cmd: independente do .active
+    return _activeFromDom();                       // DOM: independente dos internals
   }
   // id serializado da conversa (pra travar o alvo do envio no lead que estava aberto no clique).
   function chatIdOf(c) { try { return (c && c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || (c && c.id) || null; } catch (_) { return null; } }
@@ -312,7 +359,7 @@
   }
   function schedAdd() {
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
-    var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar', 'err'); return; }
+    var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar [' + engineDiag() + ']', 'err'); return; }
     var itemId = (document.getElementById('zv-sched-item') || {}).value;
     var min = parseInt((document.getElementById('zv-sched-min') || {}).value, 10) || 10;
     if (!itemId) return;
@@ -815,9 +862,9 @@
     if (!item) return;
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
     var c = activeChat();
-    if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : 'Abra a conversa de um lead', 'err'); return; }
+    if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : ('Abra a conversa de um lead [' + engineDiag() + ']'), 'err'); return; }
     var chatId = chatIdOf(c);
-    if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }
+    if (!chatId) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
     for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].itemId === item.id) { status('Esse item ja esta indo pra esse lead', 'err'); return; } }
     var kindLbl = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
     var who = chatName(c);
@@ -839,9 +886,9 @@
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
     var c = activeChat();
-    if (!c || c.isGroup) { status('Abra a conversa de um lead', 'err'); return; }
+    if (!c || c.isGroup) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
     var chatId = chatIdOf(c);
-    if (!chatId) { status('Abra a conversa de um lead', 'err'); return; }  // sem alvo travado, nem comeca
+    if (!chatId) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }  // sem alvo travado, nem comeca
     for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].seqId === seq.id) { status('Esse funil ja esta indo pra esse lead', 'err'); return; } }
     var who = chatName(c);
     var job = { id: 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'funil', seqId: seq.id, chatId: chatId, chatName: who, name: 'Funil: ' + (seq.label || 'Funil'), sub: '', stop: false, stopOnReply: !!seq.stopOnReply };
