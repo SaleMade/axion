@@ -2792,7 +2792,21 @@ async function handlePresselsTotalPage(req, env){
     const at=isInst?_vAt(key):key;
     const mine=_chipsDo(at);
     const c = isBk ? mine.find(x=>x.bkp===true) : (mine.find(_isEmUso)||mine[0]);
-    return {name:nameMap[at]||'Vendedor', num:c?c.num:'—', sub:isInst?(isBk?'complementar':'principal'):'', contatos:0, vendas:0};
+    return {at, name:nameMap[at]||'Vendedor', num:c?c.num:'—', sub:isInst?(isBk?'complementar':'principal'):'', contatos:0, vendas:0};
+  };
+  // TOPS EM CIMA: ranqueia por vendas → conversão → contatos. Mantém os 2 números do
+  // mesmo vendedor JUNTOS (o vendedor é ranqueado pelo total dele; dentro dele, o
+  // número que mais vendeu vem primeiro).
+  const _rankVend=(vend)=>{
+    const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0 ? (Number(x.vendas)||0)/c : 0; };
+    const g={};
+    (vend||[]).forEach(v=>{ const k=String(v.at||v.name||''); (g[k]=g[k]||[]).push(v); });
+    return Object.keys(g).map(k=>{
+      const rows=g[k].slice().sort((x,y)=> ((Number(y.vendas)||0)-(Number(x.vendas)||0)) || (cv(y)-cv(x)) || ((Number(y.contatos)||0)-(Number(x.contatos)||0)));
+      const tv=rows.reduce((s,x)=>s+(Number(x.vendas)||0),0);
+      const tc=rows.reduce((s,x)=>s+(Number(x.contatos)||0),0);
+      return {rows, tv, tc, tconv: tc>0?tv/tc:0};
+    }).sort((a,b)=> (b.tv-a.tv) || (b.tconv-a.tconv) || (b.tc-a.tc)).reduce((acc,x)=>acc.concat(x.rows), []);
   };
   const secs=pressels.map(p=>{
     const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
@@ -2812,7 +2826,8 @@ async function handlePresselsTotalPage(req, env){
   const dBR=day.split('-'); const dLabel=dBR.length===3?(dBR[2]+'/'+dBR[1]):day;
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:130px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="font-size:11px;color:#8b9bb4">${lbl}</div><div style="font-size:26px;font-weight:800;color:${color};margin-top:3px">${val}</div></div>`;
   const cardsHtml=(m)=>`<div style="display:flex;gap:10px;flex-wrap:wrap">${card('Chegaram na pressel',m.views,'#7aa2ff')}${card('Foram pro WhatsApp',m.clicks,'#34d399')}${card('Iniciaram contato',m.contatos,'#34d399')}${card('Vendas',m.vendas,'#34d399')}</div>`;
-  const vendTable=(vend)=>{
+  const vendTable=(vendRaw)=>{
+    const vend=_rankVend(vendRaw||[]);   // tops (mais vendas / melhor conversão) em cima
     const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';const sub=v.sub?`<span style="font-weight:600;font-size:10.5px;color:#6b7a93"> · ${_escHtml(v.sub)}</span>`:'';return `<tr style="border-top:1px solid #233047"><td style="padding:10px 8px"><div style="font-weight:600;font-size:13px">${_escHtml(v.name)}${sub}</div><div style="font-size:11.5px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;padding:10px 12px;color:#34d399">${v.contatos}</td><td style="text-align:center;padding:10px 12px">${v.vendas||'—'}</td><td style="text-align:center;padding:10px 12px;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:12px;text-align:center;color:#8b9bb4;font-size:12px">Sem vendedores.</td></tr>`;
     return `<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:12px"><thead><tr><th style="text-align:left;color:#8b9bb4;font-size:11px;padding:5px 8px">Vendedor</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Iniciaram</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Vendas</th><th style="color:#8b9bb4;font-size:11px;padding:6px 12px;text-align:center">Conversão</th></tr></thead><tbody>${rows}</tbody></table>`;
   };
@@ -2898,7 +2913,14 @@ async function handlePresselsTotalPage(req, env){
       const lByAt={}; mLeads.forEach(l=>{ const at=baseAt(l.inst); (lByAt[at]=lByAt[at]||[]).push(l); });
       // buyerInfo: telefone -> compra agregada do mês (soma valor, última data/nome). O crédito de conversão segue o DONO do lead, não quem fechou.
       const buyerInfo={}; mSales.forEach(s=>{ const p=String(s.phone||'').replace(/\D/g,''); if(!p) return; const v=Number(s.value)||0, t=Number(s.ts||0); if(!buyerInfo[p]){ buyerInfo[p]={value:v,ts:t,name:s.name||''}; } else { buyerInfo[p].value+=v; if(t>=buyerInfo[p].ts){ buyerInfo[p].ts=t; if(s.name) buyerInfo[p].name=s.name; } } });
-      const allAts=Object.keys(lByAt).filter(a=>a&&a!=='?').sort(byName);
+      // TOPS EM CIMA: quem mais converteu → melhor % → mais faturou → mais leads
+      const _mc=(at)=>(lByAt[at]||[]).reduce((s,l)=>{ const p=String(l.phone||'').replace(/\D/g,''); return s+((p&&buyerInfo[p])?1:0); },0);
+      const _mr=(at)=>(lByAt[at]||[]).reduce((s,l)=>{ const p=String(l.phone||'').replace(/\D/g,''); const b=p?buyerInfo[p]:null; return s+(b?(Number(b.value)||0):0); },0);
+      const allAts=Object.keys(lByAt).filter(a=>a&&a!=='?').sort((a,b)=>{
+        const ca=_mc(a), cb=_mc(b), la=(lByAt[a]||[]).length, lb=(lByAt[b]||[]).length;
+        const pa=la>0?ca/la:0, pb=lb>0?cb/lb:0;
+        return (cb-ca) || (pb-pa) || (_mr(b)-_mr(a)) || (lb-la) || byName(a,b);
+      });
       if(lByAt['?']) allAts.push('?');   // leads sem instância vão pro fim
       // Totais: leads do mês e quantos DESSES leads compraram (distintos; wa_lead.phone é PK)
       let totComp=0, totRev=0;
@@ -2951,7 +2973,13 @@ async function handlePresselsTotalPage(req, env){
       const isSale=ph=>!!(ph&&saleSet.has(ph));
       const byAt={};
       leads.forEach(l=>{ const at=baseAt(l.inst); (byAt[at]=byAt[at]||[]).push(l); });
-      const ats=Object.keys(byAt).sort(byName);
+      // TOPS EM CIMA: quem mais vendeu → melhor conversão → mais leads (nome só desempata)
+      const _dv=(at)=>(byAt[at]||[]).reduce((s,l)=>s+(isSale(String(l.phone||'').replace(/\D/g,''))?1:0),0);
+      const ats=Object.keys(byAt).sort((a,b)=>{
+        const va=_dv(a), vb=_dv(b), la=(byAt[a]||[]).length, lb=(byAt[b]||[]).length;
+        const pa=la>0?va/la:0, pb=lb>0?vb/lb:0;
+        return (vb-va) || (pb-pa) || (lb-la) || byName(a,b);
+      });
       const cols=ats.length?ats.map(at=>{
         const arr=byAt[at], name=nameMap[at]||'Vendedor';
         const daP=arr.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
