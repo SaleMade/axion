@@ -338,7 +338,9 @@ async function run() {
               if (!full.startsWith(DIR) || !fs.existsSync(full)) throw new Error('arquivo nao encontrado: ' + req.file);
               dataUri = 'data:video/mp4;base64,' + fs.readFileSync(full).toString('base64');
             }
-            await evaluate('window.__zvDoSend(' + JSON.stringify(dataUri) + ',' + JSON.stringify(req.caption || '') + ',' + JSON.stringify(req.id) + ')');
+            // Devolve tambem o chatId que veio NO PEDIDO (alvo travado no clique). Se o painel se
+            // auto-atualizar durante o download, ele perde o alvo da memoria; este aqui o salva.
+            await evaluate('window.__zvDoSend(' + JSON.stringify(dataUri) + ',' + JSON.stringify(req.caption || '') + ',' + JSON.stringify(req.id) + ',' + JSON.stringify(req.chatId || '') + ')');
           } catch (e) {
             await evaluate('window.__zvRes = {id:' + JSON.stringify(req.id) + ',ok:false,err:' + JSON.stringify(String(e.message || e)) + '}');
           }

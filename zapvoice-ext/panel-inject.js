@@ -137,7 +137,11 @@
     var nodes = main.querySelectorAll('[data-id]');
     var votes = {}, best = null, bestN = 0;
     for (var i = 0; i < nodes.length; i++) {
-      var m = /^(?:true|false)_([^_]+)_/.exec(nodes[i].getAttribute('data-id') || '');
+      var n = nodes[i];
+      // So conta mensagem VISIVEL: o WhatsApp deixa no DOM a conversa anterior (escondida), e
+      // contar aquilo faria o voto apontar pro lead ERRADO.
+      try { if (!n.offsetParent && n.offsetWidth === 0 && n.offsetHeight === 0) continue; } catch (_) {}
+      var m = /^(?:true|false)_([^_]+)_/.exec(n.getAttribute('data-id') || '');
       if (!m || !ZV_JID.test(m[1])) continue;
       votes[m[1]] = (votes[m[1]] || 0) + 1;
       if (votes[m[1]] > bestN) { bestN = votes[m[1]]; best = m[1]; }
@@ -273,17 +277,31 @@
       return null;
     } catch (_) { return null; }
   }
+  // A conversa ABERTA NA TELA e a verdade. Os caminhos internos (getActiveChat/_activeFromStore)
+  // leem a flag .active, que nesse build do WhatsApp e furada: ja veio toda apagada (nao achava
+  // conversa nenhuma) e depois veio GRUDADA num chat velho (o painel apontava pro lead errado).
+  // Por isso: se o interno discordar do DOM, o DOM ganha. Errar o lead e o pior desfecho possivel.
   function activeChat() {
-    try { var c = window.WPP.chat.getActiveChat(); if (c) return c; } catch (_) {}
-    var s = _activeFromStore(); if (s) return s;   // .active (some no build novo)
-    var m = _activeFromCmd(); if (m) return m;     // Cmd: independente do .active
-    return _activeFromDom();                       // DOM: independente dos internals
+    var dom = _activeFromDom();
+    var internal = null;
+    try { internal = window.WPP.chat.getActiveChat() || null; } catch (_) {}
+    if (!internal) internal = _activeFromStore() || _activeFromCmd();
+    if (dom && internal) {
+      var a = chatIdOf(dom), b = chatIdOf(internal);
+      if (a && b && a !== b) return dom;   // discordaram: manda pro que esta ABERTO na tela
+      return internal;                     // concordam: usa o model real (tem contato/nome/foto)
+    }
+    return internal || dom;
   }
   // id serializado da conversa (pra travar o alvo do envio no lead que estava aberto no clique).
   function chatIdOf(c) { try { return (c && c.id && (c.id._serialized || (c.id.toString && c.id.toString()))) || (c && c.id) || null; } catch (_) { return null; } }
   // Alvo capturado de cada video pendente: id-do-pedido -> chatId. Assim o video vai pro lead
   // certo mesmo se o atendente trocar de conversa enquanto o injetor baixa o base64.
-  var videoTargets = {};
+  // Alvo de cada video pendente: rid -> chatId. Fica no WINDOW, nao no escopo do painel: o painel
+  // se AUTO-ATUALIZA e e reinjetado do zero. Se o alvo morasse aqui dentro, uma atualizacao no
+  // meio do download do video (que demora, vem da nuvem) apagaria o alvo e o envio abortaria com
+  // "alvo expirado" — foi o que aconteceu no funil de video. No window, ele sobrevive.
+  var videoTargets = window.__zvTargets || (window.__zvTargets = {});
   // Fila de videos: window.__zvReq e um slot UNICO (o injetor le um por vez). Se dois videos
   // setam o slot no mesmo instante, um se sobrescreve e se perde. Por isso serializamos: so
   // um video ocupa o slot por vez; os demais esperam a vez.
@@ -329,11 +347,12 @@
   function build() {
     injectCss();
     // Enviado pelo injetor (window.__zvReq -> injetor le o arquivo -> chama isso com o base64)
-    window.__zvDoSend = function (dataUri, caption, id) {
+    window.__zvDoSend = function (dataUri, caption, id, fromInjector) {
       try {
-        // Alvo travado no clique. Se sumiu (timeout/cancelou), NAO envia pro chat aberto agora
-        // — isso mandaria o video pro lead errado. Aborta de proposito.
-        var toId = videoTargets[id]; delete videoTargets[id];
+        // Alvo travado no clique. NUNCA cai pro chat aberto agora (mandaria pro lead errado).
+        // fromInjector = o mesmo chatId que o painel mandou no pedido e o injetor devolve de
+        // volta; e so redundancia do alvo travado, nao o chat atual.
+        var toId = videoTargets[id] || fromInjector || null; delete videoTargets[id];
         if (!toId) { window.__zvRes = { id: id, ok: false, err: 'alvo expirado (nao enviei pra nao errar o lead)' }; return; }
         window.WPP.chat.sendFileMessage(toId, dataUri, { type: 'video', caption: caption || '' })
           .then(function () { window.__zvRes = { id: id, ok: true }; })
