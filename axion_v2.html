@@ -3804,7 +3804,7 @@ if(DB.acl&&DB.acl.recuperador&&!DB.acl.cobrador){DB.acl.cobrador=DB.acl.recupera
 // "Em uso", a flag de reserva é lixo — era ela que deixava o tracejado "RESERVA"
 // num número que não está sendo usado (e que o worker podia acabar roteando).
 (DB.chips||[]).forEach(c=>{
-  if(c.at && c.bkp && !(DB.chips||[]).some(o=>String(o.at)===String(c.at) && o.em_uso===true)) c.bkp=false;
+  if(c.at && c.bkp && !(DB.chips||[]).some(o=>String(o.at)===String(c.at) && (o.em_uso===true||o.em_uso===1||String(o.wa_st||'')==='em_uso'))) c.bkp=false;
 });
 TEAM=DB.team;
 if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
@@ -9140,7 +9140,7 @@ async function deleteContCol(id){
   const col=(DB.contCols||[]).find(c=>String(c.id)===String(id)); if(!col) return;
   const dentro=(DB.chips||[]).filter(c=>String(c.at)===String(id)).length;
   if(!await axConfirm(`Excluir a coluna <b>${col.nome||''}</b>?${dentro?` Os ${dentro} número(s) dela voltam pra "Disponíveis".`:''}`,{okLabel:'Excluir coluna'}))return;
-  (DB.chips||[]).forEach(c=>{ if(String(c.at)===String(id)){ c.at=null; c.em_uso=false; } });
+  (DB.chips||[]).forEach(c=>{ if(String(c.at)===String(id)){ c.at=null; c.em_uso=false; c.bkp=false; } });
   DB.contCols=(DB.contCols||[]).filter(c=>String(c.id)!==String(id));
   if(Array.isArray(DB.cont_col_order)) DB.cont_col_order=DB.cont_col_order.filter(x=>String(x)!==String(id));
   if(DB.contColColors) delete DB.contColColors[String(id)];
@@ -9312,6 +9312,7 @@ function _chipDropExtended(targetId){
     if(_chipUsavel(c) && !c.at)return false; // já está lá
     if(c.st==='aquecimento'||c.st==='banido')c.st='ativo';
     c.at=null;
+    c.bkp=false;   // chip sem atendente não pode carregar flag de reserva (era o tracejado "RESERVA" fantasma nos Disponíveis)
     _setChipEmUso(c,false);
     toast(`📱 ${c.num} → Disponíveis`,'ok');
   } else {
