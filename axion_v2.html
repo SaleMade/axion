@@ -3931,8 +3931,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.59.0';
-const APP_LAST_CHANGE = 'Sale Chat: mais dois caminhos pra achar a conversa aberta sem depender da flag .active do WhatsApp (Cmd.activeConversation e varredura do DOM inteiro, sem depender do id #main, com cobertura de iframe). E o erro Abra a conversa de um lead agora vem com um diagnostico curto (WPP/send/store/act/cmd/main/ids/ifr/dom/loader) pro atendente mandar print e a gente ver onde quebrou, sem F12.';
+const APP_VERSION = '2.60.0';
+const APP_LAST_CHANGE = 'Sale Chat: resgate do ChatStore. Na maquina do atendente o WA-JS nao achava o modulo ChatStore, entao o envio estourava com Cannot read properties of undefined (reading get) mesmo depois do painel achar o lead. Agora o painel pega o chat real pelo React, recupera a colecao dele e devolve o ChatStore pro motor antes de enviar. No WhatsApp normal (onde ja funciona) ele nao encosta em nada.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor

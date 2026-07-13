@@ -55,7 +55,7 @@
   // Resumo curto pro atendente mandar PRINT, sem precisar abrir o F12. Cada campo isola uma
   // etapa: se store>0 mas act=0, a flag .active sumiu; se ids=0, o DOM nao tem mensagem; etc.
   function engineDiag() {
-    var wpp = 0, store = 0, act = 0, cmd = 0, main = 0, ids = 0, ifr = 0, dom = '-', loader = '-';
+    var wpp = 0, store = 0, act = 0, cs = 0, heal = 0, cmd = 0, main = 0, ids = 0, ifr = 0, dom = '-', loader = '-';
     try { wpp = window.WPP ? 1 : 0; } catch (_) {}
     try {
       var st = window.WPP.whatsapp.ChatStore;
@@ -63,14 +63,17 @@
       store = arr.length || 0;
       for (var i = 0; i < arr.length; i++) { if (arr[i] && arr[i].active) act++; }
     } catch (_) {}
+    try { cs = _storeOk(window.WPP.whatsapp.ChatStore) ? 1 : 0; } catch (_) {}
+    try { heal = _healStores() ? 1 : 0; } catch (_) {}
     try { cmd = _activeFromCmd() ? 1 : 0; } catch (_) {}
     try { main = _mainEl() ? 1 : 0; } catch (_) {}
     try { ids = document.querySelectorAll('[data-id]').length; } catch (_) {}
     try { ifr = document.querySelectorAll('iframe').length; } catch (_) {}
     try { dom = _activeFromDom() ? 'ok' : '-'; } catch (_) {}
     try { loader = (window.WPP.webpack && window.WPP.webpack.loaderType) || '-'; } catch (_) {}
-    return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' store=' + store + ' act=' + act +
-           ' cmd=' + cmd + ' main=' + main + ' ids=' + ids + ' ifr=' + ifr + ' dom=' + dom + ' loader=' + loader;
+    return 'WPP=' + wpp + ' send=' + (wppCanSend() ? 1 : 0) + ' cs=' + cs + ' heal=' + heal +
+           ' store=' + store + ' act=' + act + ' cmd=' + cmd + ' main=' + main + ' ids=' + ids +
+           ' ifr=' + ifr + ' dom=' + dom + ' loader=' + loader;
   }
   function onReady(cb) {
     var tries = 0;
@@ -178,6 +181,36 @@
   }
   function _domTitle(root) {
     try { var t = (root || document).querySelector('header span[title]'); return t ? (t.getAttribute('title') || t.textContent || '') : ''; } catch (_) { return ''; }
+  }
+  // ── Resgate do ChatStore ────────────────────────────────────────────────────────────────
+  // No build do atendente o WA-JS NAO encontrou o modulo ChatStore: WPP.whatsapp.ChatStore fica
+  // undefined e o envio estoura com "Cannot read properties of undefined (reading 'get')" (o
+  // sendTextMessage resolve o chat pelo ChatStore). Mas o ChatStore EXISTE na pagina — quem nao
+  // achou foi o WA-JS. Todo model do WhatsApp guarda a colecao dele em .collection, entao a gente
+  // pega o chat REAL pelo React e recupera o store por ali, devolvendo pro motor.
+  // De onde ancorar a busca no React (a conversa aberta).
+  function _fiberAnchor() { return _mainEl() || document.querySelector('[data-id]') || null; }
+  // O model REAL do chat (nao o sintetico do DOM) — e dele que sai a .collection.
+  function _realChatModel() {
+    try { var a = _fiberAnchor(); if (!a) return null; var c = _activeFromFiber(a); return (c && !c.__fromDom) ? c : null; } catch (_) { return null; }
+  }
+  function _storeOk(s) { try { return !!(s && (typeof s.get === 'function' || typeof s.find === 'function')); } catch (_) { return false; } }
+  // Devolve o ChatStore pro WPP. No caminho feliz (WhatsApp normal) sai na hora sem tocar em nada.
+  function _healStores() {
+    try {
+      var W = window.WPP && window.WPP.whatsapp;
+      if (!W) return false;
+      if (_storeOk(W.ChatStore)) return true;              // ja esta bom: nao mexe
+      var m = _realChatModel();
+      var coll = m && m.collection;
+      if (!_storeOk(coll)) return false;
+      // Os exports do bundle costumam ser getters; assignment direto pode nao pegar.
+      try { Object.defineProperty(W, 'ChatStore', { get: function () { return coll; }, configurable: true }); }
+      catch (_) { try { W.ChatStore = coll; } catch (_) {} }
+      var ok = _storeOk(W.ChatStore);
+      if (ok) console.warn('[Sale Chat] ChatStore recuperado pelo React (o WA-JS nao tinha achado).');
+      return ok;
+    } catch (_) { return false; }
   }
   // Caminho interno que NAO usa a flag .active: o Cmd guarda a conversa aberta.
   function _activeFromCmd() {
@@ -359,6 +392,7 @@
   }
   function schedAdd() {
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
+    try { _healStores(); } catch (_) {}   // ChatStore sumido? recupera antes de enviar
     var c = activeChat(); if (!c || c.isGroup) { status('Abra a conversa de um lead pra agendar [' + engineDiag() + ']', 'err'); return; }
     var itemId = (document.getElementById('zv-sched-item') || {}).value;
     var min = parseInt((document.getElementById('zv-sched-min') || {}).value, 10) || 10;
@@ -861,6 +895,7 @@
   function send(item, b) {
     if (!item) return;
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
+    try { _healStores(); } catch (_) {}   // ChatStore sumido? recupera antes de enviar
     var c = activeChat();
     if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : ('Abra a conversa de um lead [' + engineDiag() + ']'), 'err'); return; }
     var chatId = chatIdOf(c);
@@ -872,7 +907,7 @@
     jobs.push(job); renderSending();
     sendItemAsync(item, chatId, { stopFn: function () { return job.stop; } }).then(function (r) {
       jobs = jobs.filter(function (x) { return x.id !== job.id; }); renderSending();
-      status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || ''))), (r.ok && !r.cancelled) ? 'ok' : 'err');
+      status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || '') + ' [' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
     });
   }
 
@@ -885,6 +920,7 @@
     var steps = (seq.items || []).map(normStep).filter(function (s) { return itemById[s.id]; });
     if (!steps.length) { status('Sequencia vazia', 'err'); return; }
     if (!wppCanSend()) { status(ZV_ENGINE_ERR + ' [' + engineDiag() + ']', 'err'); return; }
+    try { _healStores(); } catch (_) {}   // ChatStore sumido? recupera antes de enviar
     var c = activeChat();
     if (!c || c.isGroup) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
     var chatId = chatIdOf(c);
