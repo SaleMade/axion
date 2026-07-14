@@ -1326,11 +1326,17 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 
 /* ─── ACL grid (permissões por papel) ─────────────── */
 .acl-tbl{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden}
-.acl-row{display:grid;grid-template-columns:1.6fr repeat(4,1fr);align-items:center;gap:0;
+/* 5 papéis (atendente, afiliado, cobrador, gestor, designer) — antes estava
+   repeat(4) e a coluna Designer quebrava pra linha de baixo, desalinhando tudo */
+.acl-row{display:grid;grid-template-columns:1.8fr repeat(5,1fr);align-items:center;gap:0;
   padding:11px 14px;border-bottom:1px solid var(--b1)}
 .acl-row:last-child{border-bottom:none}
 .acl-row.acl-head{background:var(--s1);font-size:11px;font-weight:700;
   color:var(--t3);text-transform:uppercase;letter-spacing:.06em}
+/* Cabeçalho de seção (Dashboard, Operacional, WhatsApp...) dentro da tabela */
+.acl-row.acl-grp{background:var(--s3);padding:8px 14px}
+.acl-row.acl-grp > div:first-child{font-size:10.5px;font-weight:800;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--bl2)}
 .acl-row > div:first-child{font-size:13px;color:var(--tx);font-weight:500}
 .acl-tog{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer}
 .acl-tog input{opacity:0;width:0;height:0}
@@ -3722,17 +3728,77 @@ const DEFAULT_DB={
   payouts:[
     {id:1, user_id:'at1', valor:850,  data:'25/04', comp:null, obs:'Salário fixo + comissões abril',  comp_name:''},
   ],
-  // ACL: o que cada papel pode ver/editar (diretor sempre tem tudo)
+  // ACL: o que cada papel pode ver/editar (diretor sempre tem tudo).
+  // Cobre TODAS as áreas da dash — a tabela de Configurações > Permissões é a
+  // única fonte de verdade: a sidebar inteira é montada a partir daqui.
   acl:{
-    atendente:   {ver_dre:false,ver_trafego:false,ver_equipe:false,ver_regioes:false,ver_pedidos:false,editar_valor:true, editar_comissao:false,excluir_lead:false},
-    afiliado:    {ver_dre:false,ver_trafego:true, ver_equipe:false,ver_regioes:false,ver_pedidos:true, editar_valor:true, editar_comissao:false,excluir_lead:false},
-    cobrador: {ver_dre:false,ver_trafego:false,ver_equipe:false,ver_regioes:false,ver_pedidos:true, editar_valor:false,editar_comissao:false,excluir_lead:false},
-    gestor:      {ver_dre:true, ver_trafego:true, ver_equipe:false,ver_regioes:false,ver_pedidos:false,editar_valor:false,editar_comissao:false,excluir_lead:false},
-    designer:    {ver_dre:false,ver_trafego:false,ver_equipe:false,ver_regioes:false,ver_pedidos:false,editar_valor:false,editar_comissao:false,excluir_lead:false},
+    atendente:{
+      ver_home:true, ver_evolucao:false,
+      ver_pedidos:false, ver_pedidos_conf:false, ver_crm:true, ver_clientes:false, ver_produtos:false, ver_follows:false, ver_regioes:false,
+      ver_dre:false, ver_pagequip:false, ver_invest:false, ver_trafego:false,
+      ver_atendimento:true, ver_contingencia:true, ver_pressels:false, ver_pressel_leads:false,
+      ver_salechat:false, ver_robo_wa:false,
+      ver_equipe:false, ver_copies:false,
+      editar_valor:true, editar_comissao:false, excluir_lead:false,
+    },
+    afiliado:{
+      ver_home:true, ver_evolucao:true,
+      ver_pedidos:true, ver_pedidos_conf:false, ver_crm:true, ver_clientes:false, ver_produtos:true, ver_follows:false, ver_regioes:false,
+      ver_dre:false, ver_pagequip:false, ver_invest:false, ver_trafego:true,
+      ver_atendimento:true, ver_contingencia:true, ver_pressels:false, ver_pressel_leads:false,
+      ver_salechat:false, ver_robo_wa:false,
+      ver_equipe:false, ver_copies:false,
+      editar_valor:true, editar_comissao:false, excluir_lead:false,
+    },
+    cobrador:{
+      ver_home:false, ver_evolucao:false,
+      ver_pedidos:true, ver_pedidos_conf:false, ver_crm:true, ver_clientes:false, ver_produtos:false, ver_follows:true, ver_regioes:false,
+      ver_dre:false, ver_pagequip:false, ver_invest:false, ver_trafego:false,
+      ver_atendimento:true, ver_contingencia:true, ver_pressels:false, ver_pressel_leads:false,
+      ver_salechat:false, ver_robo_wa:false,
+      ver_equipe:false, ver_copies:false,
+      editar_valor:false, editar_comissao:false, excluir_lead:false,
+    },
+    // Gestor de tráfego: visão enxuta (só Tráfego Pago), igual à que ele já tinha
+    gestor:{
+      ver_home:false, ver_evolucao:false,
+      ver_pedidos:false, ver_pedidos_conf:false, ver_crm:false, ver_clientes:false, ver_produtos:false, ver_follows:false, ver_regioes:false,
+      ver_dre:false, ver_pagequip:false, ver_invest:false, ver_trafego:true,
+      ver_atendimento:false, ver_contingencia:false, ver_pressels:false, ver_pressel_leads:false,
+      ver_salechat:false, ver_robo_wa:false,
+      ver_equipe:false, ver_copies:false,
+      editar_valor:false, editar_comissao:false, excluir_lead:false,
+    },
+    // Designer: visão enxuta (só Criativos), igual à que ele já tinha
+    designer:{
+      ver_home:false, ver_evolucao:false,
+      ver_pedidos:false, ver_pedidos_conf:false, ver_crm:false, ver_clientes:false, ver_produtos:false, ver_follows:false, ver_regioes:false,
+      ver_dre:false, ver_pagequip:false, ver_invest:false, ver_trafego:false,
+      ver_atendimento:false, ver_contingencia:false, ver_pressels:false, ver_pressel_leads:false,
+      ver_salechat:false, ver_robo_wa:false,
+      ver_equipe:false, ver_copies:true,
+      editar_valor:false, editar_comissao:false, excluir_lead:false,
+    },
     // Sócio e Produtor — acesso total por padrão (canRole curto-circuita para isDir, mas a UI de
     // Permissões precisa das entradas pra renderizar/salvar corretamente)
-    socio:       {ver_dre:true, ver_trafego:true, ver_equipe:true, ver_regioes:true, ver_pedidos:true, editar_valor:true, editar_comissao:true, excluir_lead:true},
-    produtor:    {ver_dre:true, ver_trafego:true, ver_equipe:true, ver_regioes:true, ver_pedidos:true, editar_valor:true, editar_comissao:true, excluir_lead:true},
+    socio:{
+      ver_home:true, ver_evolucao:true,
+      ver_pedidos:true, ver_pedidos_conf:true, ver_crm:true, ver_clientes:true, ver_produtos:true, ver_follows:true, ver_regioes:true,
+      ver_dre:true, ver_pagequip:true, ver_invest:true, ver_trafego:true,
+      ver_atendimento:true, ver_contingencia:true, ver_pressels:true, ver_pressel_leads:true,
+      ver_salechat:true, ver_robo_wa:true,
+      ver_equipe:true, ver_copies:true,
+      editar_valor:true, editar_comissao:true, excluir_lead:true,
+    },
+    produtor:{
+      ver_home:true, ver_evolucao:true,
+      ver_pedidos:true, ver_pedidos_conf:true, ver_crm:true, ver_clientes:true, ver_produtos:true, ver_follows:true, ver_regioes:true,
+      ver_dre:true, ver_pagequip:true, ver_invest:true, ver_trafego:true,
+      ver_atendimento:true, ver_contingencia:true, ver_pressels:true, ver_pressel_leads:true,
+      ver_salechat:true, ver_robo_wa:true,
+      ver_equipe:true, ver_copies:true,
+      editar_valor:true, editar_comissao:true, excluir_lead:true,
+    },
   },
   nextPayout:2,
   invCats:[
@@ -3942,8 +4008,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.67.0';
-const APP_LAST_CHANGE = 'Gravar chamada mais redondo: texto enxuto, botao Comecar a gravar, e o player da gravacao ja aparece na lista (sem precisar clicar Play) com visual que combina com o painel em vez do quadrado preto. Cada gravacao ja vem com uma descricao automatica (Gravacao da chamada + data/hora), editavel. E no Ajustes tem Gravar as ligacoes automaticamente: liga sozinho quando ha ligacao e para quando acaba, uma por chamada.';
+const APP_VERSION = '2.68.0';
+const APP_LAST_CHANGE = 'Permissoes da equipe reformuladas: a tabela agora cobre TODAS as areas da dash (Dashboard, Operacional, Financeiro, WhatsApp com Contingencia/Pressels/Leads, Automacoes com Sale Chat e Robo de WhatsApp, Equipe e Criativos), agrupadas por secao. A sidebar inteira passou a ser montada por essa tabela, entao da pra liberar qualquer area pra qualquer papel (antes varias areas eram travadas no codigo so pro diretor e nem apareciam ali). Tambem: acesso direto por link a uma area sem permissao agora e bloqueado, a coluna Designer parou de quebrar o layout da tabela, e o botao Excluir do card do lead passou a respeitar a permissao (antes so olhava se era diretor).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5029,6 +5095,7 @@ function enterApp(member){
   $('sidebar').style.display='flex';
   $('main-app').style.display='flex';
   $$('.lg-field input').forEach(i=>i.value='');  // limpa senhas
+  migrateACL();   // garante que todo papel tenha todas as chaves antes de montar a sidebar
   buildSidebar();buildApp();
   hydrateCrmFilters();
   // Restaura página onde estava antes do F5 (se válida pro role atual)
@@ -5178,83 +5245,76 @@ const WA_CHAT_ENABLED = false;
 
 // Monta a estrutura de navegação por papel (sem aplicar ocultações do usuário).
 // Usada por buildSidebar (renderização) e por cfgAparencia (lista de toggles de visibilidade).
-function computeNav(){
-  const dir=isDir(),afi=isAfi(),at=isAt(),rec=isRec(),gt=isGT(),des=isDes();
+// Mapa PÁGINA → PERMISSÃO. Fonte única usada pela sidebar e pelo guard do goPage.
+const PAGE_PERM={
+  home:'ver_home',            evolucao:'ver_evolucao',
+  crm:'ver_crm',              pedidos:'ver_pedidos',      pedidosconf:'ver_pedidos_conf',
+  cobranca:'ver_follows',     clientes:'ver_clientes',    produtos:'ver_produtos',
+  regioes:'ver_regioes',
+  dre:'ver_dre',              pagequip:'ver_pagequip',    invest:'ver_invest',
+  trafego:'ver_trafego',
+  atendimento:'ver_atendimento', contingencia:'ver_contingencia',
+  pressels:'ver_pressels',    presselleads:'ver_pressel_leads',
+  salechat:'ver_salechat',    automacoes:'ver_robo_wa',
+  equipe:'ver_equipe',        copies:'ver_copies',
+};
+// Página sem entrada no mapa (ex: config, meuspag) é livre.
+function canPage(id){ const p=PAGE_PERM[id]; return p?canRole(p):true; }
 
-  // Acesso por papel:
-  //  Diretor/Sócio: tudo
-  //  Atendente:   Visão Geral (sua), CRM (seus leads), WhatsApp's (seus chips)
-  //  Afiliado:    Visão Geral, Evolução, CRM (seus), Produtos (visualizar), Pedidos (seus), WhatsApp's
-  //  Cobrador: Painel do Cobrador (default), Follows, CRM (filtrado), WhatsApp's
-  //  Gestor:      APENAS Tráfego Pago (foco em registro diário)
-  //  Designer:    APENAS Criativos (foco em copies/peças)
-  let nav;
-  if(gt){
-    // Gestor de tráfego: visão única e enxuta
-    nav=[{g:'Operação',items:[{id:'trafego',lbl:'Registro de Tráfego',live:true}]}];
-  } else if(des){
-    // Designer: visão única — Criativos
-    nav=[{g:'Criativos',items:[{id:'copies',lbl:'Copies',live:true,actionFn:"goPage('copies')"}]}];
-  } else {
-    // Helper: respeita ACL pra qualquer permissão. Diretor sempre vê.
-    const can=p=>canRole(p);
-    nav=[
-      {g:'Dashboard',items:[
-        // Cobrador entra direto em Follows — não precisa de Dashboard
-        ...(!rec?[{id:'home',lbl:'Visão Geral',live:true}]:[]),
-        ...(dir||afi?[{id:'evolucao',lbl:'Evolução Diária'}]:[]),
-      ]},
-      {g:'Operacional',items:[
-        // Cobrador: Follows fica como destaque (live dot) + primeiro
-        ...(rec?[{id:'cobranca',lbl:'Follows',live:true,badge:codPendCount()}]:[]),
-        ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
-        ...(dir?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
-        {id:'crm',lbl:'CRM / Pipeline'},
-        ...(dir?[{id:'clientes',lbl:'Base de Clientes'}]:[]),
-        ...(dir||afi?[{id:'produtos',lbl:'Produtos'}]:[]),
-        ...(dir?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
-        ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
-      ]},
-      // Financeiro: aparece se a pessoa pode ver DRE OU Tráfego Pago
-      // (afiliado tipicamente tem ver_trafego sem ver_dre — continua acessando)
-      ...((can('ver_dre')||can('ver_trafego'))?[{g:'Financeiro',items:[
-        ...(can('ver_dre')?[{id:'dre',     lbl:'Visão Geral'}]:[]),
-        ...(can('ver_dre')?[{id:'pagequip',lbl:'Pagamentos de Equipe'}]:[]),
-        ...(can('ver_dre')?[{id:'invest',  lbl:'Investimentos'}]:[]),
-        ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
-      ]}]:[]),
-      // "Meus Pagamentos" — visível pra membros que recebem comissão/salário
-      // (atendente/afiliado/cobrador/gestor). Diretor já tem visão geral em Pagamentos de Equipe.
-      ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
-        {id:'meuspag',lbl:'Meus Pagamentos'},
-      ]}]:[]),
-      // Acordeão WhatsApp — área dedicada (contingência de números). Universal:
-      // até atendente vê os WhatsApp's. Antes ficava dentro de "Equipe".
-      {g:'WhatsApp',items:[
-        ...(WA_CHAT_ENABLED?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
-        {id:'contingencia',lbl:'Contingência'},
-        ...(dir?[{id:'pressels',lbl:'Pressels'},{id:'presselleads',lbl:'Leads'}]:[]),
-      ]},
-      // Acordeão Automações — área própria (separado de WhatsApp). Só diretor.
-      ...(dir?[{g:'Automações',items:[
-        {id:'salechat',lbl:'Sale Chat',live:true},
-        {id:'automacoes',lbl:'Robô de WhatsApp'},
-      ]}]:[]),
-      // Acordeão Equipe — aparece pra todo mundo.
-      // Diretor/sócio/produtor: vê item "Equipe" + os outros itens.
-      {g:'Equipe',items:[
-        ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
-        // Atalho pra gerenciar membros — abre direto a aba Equipe das Configurações
-        ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
-      ]},
-      // Acordeão de Criativos — admins + Designer
-      ...((dir||isDes())?[{g:'Criativos',items:[
-        {id:'copies',lbl:'Copies',actionFn:"goPage('copies')"},
-      ]}]:[]),
-      // Integrações removidas da sidebar — acessar via Configurações → Integrações
-    ];
-  }
-  // Remove seções vazias (ex: Dashboard fica vazio pro Cobrador)
+function computeNav(){
+  const dir=isDir(), rec=isRec();
+  const can=p=>canRole(p);
+
+  // A sidebar INTEIRA sai da ACL (Configurações > Permissões) — é a única fonte de
+  // verdade. Diretor/Sócio/Produtor passam direto (canRole curto-circuita).
+  // Gestor e Designer não têm mais navegação fixa: a visão enxuta deles vem dos
+  // defaults da ACL (gestor só Tráfego, designer só Criativos), e agora é ajustável.
+  const nav=[
+    {g:'Dashboard',items:[
+      ...(can('ver_home')?[{id:'home',lbl:'Visão Geral',live:true}]:[]),
+      ...(can('ver_evolucao')?[{id:'evolucao',lbl:'Evolução Diária'}]:[]),
+    ]},
+    {g:'Operacional',items:[
+      // Cobrador: Follows em destaque (live dot) e primeiro da lista
+      ...(rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',live:true,badge:codPendCount()}]:[]),
+      ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
+      ...(can('ver_pedidos_conf')?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
+      ...(can('ver_crm')?[{id:'crm',lbl:'CRM / Pipeline'}]:[]),
+      ...(can('ver_clientes')?[{id:'clientes',lbl:'Base de Clientes'}]:[]),
+      ...(can('ver_produtos')?[{id:'produtos',lbl:'Produtos'}]:[]),
+      ...(!rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
+      ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
+    ]},
+    {g:'Financeiro',items:[
+      ...(can('ver_dre')?[{id:'dre',lbl:'Visão Geral'}]:[]),
+      ...(can('ver_pagequip')?[{id:'pagequip',lbl:'Pagamentos de Equipe'}]:[]),
+      ...(can('ver_invest')?[{id:'invest',lbl:'Investimentos'}]:[]),
+      ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
+    ]},
+    // "Meus Pagamentos" — quem recebe comissão/salário. Diretor já vê em Pagamentos de Equipe.
+    ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
+      {id:'meuspag',lbl:'Meus Pagamentos'},
+    ]}]:[]),
+    {g:'WhatsApp',items:[
+      ...(WA_CHAT_ENABLED&&can('ver_atendimento')?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
+      ...(can('ver_contingencia')?[{id:'contingencia',lbl:'Contingência'}]:[]),
+      ...(can('ver_pressels')?[{id:'pressels',lbl:'Pressels'}]:[]),
+      ...(can('ver_pressel_leads')?[{id:'presselleads',lbl:'Leads'}]:[]),
+    ]},
+    {g:'Automações',items:[
+      ...(can('ver_salechat')?[{id:'salechat',lbl:'Sale Chat',live:true}]:[]),
+      ...(can('ver_robo_wa')?[{id:'automacoes',lbl:'Robô de WhatsApp'}]:[]),
+    ]},
+    {g:'Equipe',items:[
+      ...(can('ver_equipe')?[{id:'equipe',lbl:'Equipe'}]:[]),
+      // Gerenciar Equipe é administração de usuários — segue exclusivo do diretor
+      ...(dir?[{id:'gerequipe',lbl:'Gerenciar Equipe',actionFn:"goPage('config');setConfigTab('equipe')"}]:[]),
+    ]},
+    {g:'Criativos',items:[
+      ...(can('ver_copies')?[{id:'copies',lbl:'Copies',actionFn:"goPage('copies')"}]:[]),
+    ]},
+  ];
+  // Remove seções vazias
   return nav.filter(g=>g.items.length>0);
 }
 
@@ -5414,6 +5474,13 @@ function goPage(id){
   if(id==='recuperacao')id='cobranca';
   // Módulo de Atendimento desligado (WA_CHAT_ENABLED=false) → cai no CRM
   if(id==='atendimento'&&!WA_CHAT_ENABLED)id='crm';
+  // GUARD de permissão: bloqueia acesso direto (última página salva, link, console)
+  // a uma área que o papel não pode ver. Cai na página inicial do papel.
+  if(!canPage(id)){
+    const d=defaultPage();
+    id=canPage(d)?d:'config';   // 'config' é livre → nunca entra em loop
+    toast('Você não tem acesso a essa área','err');
+  }
   // Salva a página atual pra restaurar em F5 (sessionStorage = só a aba atual)
   try{sessionStorage.setItem('axion_last_page',id)}catch(_){}
   // Pull imediato do servidor antes de renderizar — garante que cada navegação
@@ -6606,7 +6673,7 @@ function openLeadMenu(e,lid){
       <summary>📋 Mover para... <span class="pop-acc-chev">▾</span></summary>
       ${moveOpts}
     </details>
-    ${isDir()?`<div class="popover-sep"></div><div class="popover-item danger" onclick="quickDelete(${lid})">${ico('trash',{size:12})} Excluir</div>`:''}`;
+    ${canRole('excluir_lead')?`<div class="popover-sep"></div><div class="popover-item danger" onclick="quickDelete(${lid})">${ico('trash',{size:12})} Excluir</div>`:''}`;
   const r=e.target.getBoundingClientRect();
   p.style.left=Math.min(window.innerWidth-220,r.left)+'px';
   p.style.top =(r.bottom+4)+'px';
@@ -13280,40 +13347,113 @@ function openPayoutForMember(uid){
 }
 
 // ─── ACL — permissões por papel ───────────────────────────
+// Lista das permissões da tabela. Entradas com {g:'...'} são cabeçalhos de seção
+// (não são permissão, só organizam visualmente a tabela).
 const ACL_PERMS=[
-  {k:'ver_dre',     l:'Ver DRE / Financeiro'},
-  {k:'ver_trafego', l:'Ver Tráfego Pago'},
-  {k:'ver_equipe',  l:'Ver Equipe'},
-  {k:'ver_regioes', l:'Ver Regiões'},
-  {k:'ver_pedidos', l:'Ver Pedidos'},
-  {k:'editar_valor',l:'Editar valor do lead'},
-  {k:'editar_comissao',l:'Editar % comissão'},
-  {k:'excluir_lead',l:'Excluir leads'},
+  {g:'Dashboard'},
+  {k:'ver_home',        l:'Visão Geral'},
+  {k:'ver_evolucao',    l:'Evolução Diária'},
+
+  {g:'Operacional'},
+  {k:'ver_crm',         l:'CRM / Pipeline'},
+  {k:'ver_pedidos',     l:'Pedidos'},
+  {k:'ver_pedidos_conf',l:'Pedidos Confirmados'},
+  {k:'ver_follows',     l:'Follows / Cobrança'},
+  {k:'ver_clientes',    l:'Base de Clientes'},
+  {k:'ver_produtos',    l:'Produtos'},
+  {k:'ver_regioes',     l:'Regiões'},
+
+  {g:'Financeiro'},
+  {k:'ver_dre',         l:'Financeiro / Visão Geral'},
+  {k:'ver_pagequip',    l:'Pagamentos de Equipe'},
+  {k:'ver_invest',      l:'Investimentos'},
+  {k:'ver_trafego',     l:'Tráfego Pago'},
+
+  {g:'WhatsApp'},
+  {k:'ver_atendimento', l:'Atendimento (inbox)'},
+  {k:'ver_contingencia',l:'Contingência (chips)'},
+  {k:'ver_pressels',    l:'Pressels'},
+  {k:'ver_pressel_leads',l:'Leads das Pressels'},
+
+  {g:'Automações'},
+  {k:'ver_salechat',    l:'Sale Chat'},
+  {k:'ver_robo_wa',     l:'Robô de WhatsApp'},
+
+  {g:'Equipe e Criativos'},
+  {k:'ver_equipe',      l:'Equipe'},
+  {k:'ver_copies',      l:'Criativos / Copies'},
+
+  {g:'Ações no lead'},
+  {k:'editar_valor',    l:'Editar valor do lead'},
+  {k:'editar_comissao', l:'Editar % comissão'},
+  {k:'excluir_lead',    l:'Excluir leads'},
 ];
-function openACL(){
-  const roles=['atendente','afiliado','cobrador','gestor','designer'];
-  const roleLbl={atendente:'Atendente',afiliado:'Afiliado',cobrador:'Cobrador',gestor:'Gestor Tráfego',designer:'Designer'};
-  $('acl-grid').innerHTML=`<div class="acl-tbl">
+// Só as permissões de verdade (sem os cabeçalhos de seção)
+const ACL_KEYS=ACL_PERMS.filter(p=>p.k).map(p=>p.k);
+// Papéis configuráveis na tabela (diretor não entra: tem tudo sempre)
+const ACL_ROLES=['atendente','afiliado','cobrador','gestor','designer'];
+const ACL_ROLE_LBL={atendente:'Atendente',afiliado:'Afiliado',cobrador:'Cobrador',gestor:'Gestor Tráfego',designer:'Designer'};
+
+// Migração: garante que TODO papel tenha TODAS as chaves. Sem isso, uma chave nova
+// ficaria ausente no DB salvo e o canRole cairia no fallback, abrindo a área sem querer.
+function migrateACL(){
+  if(!DB.acl)DB.acl={};
+  let mudou=false;
+  Object.keys(DEFAULT_DB.acl).forEach(r=>{
+    if(!DB.acl[r]){DB.acl[r]=JSON.parse(JSON.stringify(DEFAULT_DB.acl[r]));mudou=true;return;}
+    ACL_KEYS.forEach(k=>{
+      if(typeof DB.acl[r][k]!=='boolean'){
+        DB.acl[r][k]=DEFAULT_DB.acl[r]?.[k]===true;  // chave nova entra FECHADA salvo default
+        mudou=true;
+      }
+    });
+  });
+  if(mudou)persist();
+  return mudou;
+}
+// Escreve um toggle da tabela (usado pelos dois renders)
+function _aclSet(role,key,val){
+  if(!DB.acl[role])DB.acl[role]={};
+  DB.acl[role][key]=!!val;
+}
+// HTML da tabela de permissões, com cabeçalhos de seção
+function _aclTableHTML(){
+  return `<div class="acl-tbl">
     <div class="acl-row acl-head">
       <div>Permissão</div>
-      ${roles.map(r=>`<div>${roleLbl[r]}</div>`).join('')}
+      ${ACL_ROLES.map(r=>`<div>${ACL_ROLE_LBL[r]}</div>`).join('')}
     </div>
-    ${ACL_PERMS.map(p=>`<div class="acl-row">
-      <div>${p.l}</div>
-      ${roles.map(r=>`<div>
-        <label class="acl-tog">
-          <input type="checkbox" ${DB.acl[r]?.[p.k]?'checked':''} onchange="DB.acl['${r}']['${p.k}']=this.checked">
-          <span></span>
-        </label>
-      </div>`).join('')}
-    </div>`).join('')}
+    ${ACL_PERMS.map(p=>{
+      if(p.g)return `<div class="acl-row acl-grp"><div>${p.g}</div>${ACL_ROLES.map(()=>'<div></div>').join('')}</div>`;
+      return `<div class="acl-row">
+        <div>${p.l}</div>
+        ${ACL_ROLES.map(r=>`<div>
+          <label class="acl-tog">
+            <input type="checkbox" ${DB.acl?.[r]?.[p.k]?'checked':''} onchange="_aclSet('${r}','${p.k}',this.checked)">
+            <span></span>
+          </label>
+        </div>`).join('')}
+      </div>`;
+    }).join('')}
   </div>`;
+}
+function openACL(){
+  migrateACL();
+  $('acl-grid').innerHTML=_aclTableHTML();
   openM('m-acl');
 }
-function saveACL(){persist();refreshUI();toast('Permissões salvas','ok')}
+function saveACL(){
+  persist();refreshUI();
+  toast('Permissões salvas · sincronizando...','ok');
+  persistAndPushNow().then(()=>toast('Permissões sincronizadas','ok')).catch(_=>{});
+}
 function canRole(perm){
   if(isDir())return true;
-  const r=CUR?.role;return DB.acl?.[r]?.[perm]??true;
+  const r=CUR?.role;
+  const v=DB.acl?.[r]?.[perm];
+  if(typeof v==='boolean')return v;
+  // Fallback no DEFAULT (nunca "true" cego): chave desconhecida = fechada
+  return DEFAULT_DB.acl?.[r]?.[perm]===true;
 }
 
 function updPro(){
@@ -16596,7 +16736,11 @@ function cfgPermissoes(){
   <div class="cfg-section">
     <div class="cfg-h"><h2>Permissões da equipe</h2><p>Controle o que cada papel pode ver e editar na Dash</p></div>
     <div id="cfg-acl-wrap">
-      <p class="muted" style="font-size:13px;margin-bottom:14px">Diretor sempre tem acesso total. Para os demais papéis, ajuste o que cada um pode ver/editar:</p>
+      <p class="muted" style="font-size:13px;margin-bottom:14px">
+        A <b style="color:var(--tx)">sidebar inteira</b> é montada a partir desta tabela: se o papel não tem a permissão,
+        a área nem aparece pra ele (e o acesso direto pelo link também é bloqueado).
+        <b style="color:var(--tx)">Diretor, Sócio e Produtor</b> sempre têm acesso total. Ajuste os demais:
+      </p>
       <div id="cfg-acl-grid"></div>
       <button class="btn btn-bl btn-sm" onclick="saveACL()" style="margin-top:14px">Salvar permissões</button>
     </div>
@@ -16604,23 +16748,8 @@ function cfgPermissoes(){
 }
 function renderACLInline(){
   const wrap=$('cfg-acl-grid');if(!wrap)return;
-  const roles=['atendente','afiliado','cobrador','gestor','designer'];
-  const roleLbl={atendente:'Atendente',afiliado:'Afiliado',cobrador:'Cobrador',gestor:'Gestor Tráfego',designer:'Designer'};
-  wrap.innerHTML=`<div class="acl-tbl">
-    <div class="acl-row acl-head">
-      <div>Permissão</div>
-      ${roles.map(r=>`<div>${roleLbl[r]}</div>`).join('')}
-    </div>
-    ${ACL_PERMS.map(p=>`<div class="acl-row">
-      <div>${p.l}</div>
-      ${roles.map(r=>`<div>
-        <label class="acl-tog">
-          <input type="checkbox" ${DB.acl[r]?.[p.k]?'checked':''} onchange="DB.acl['${r}']['${p.k}']=this.checked">
-          <span></span>
-        </label>
-      </div>`).join('')}
-    </div>`).join('')}
-  </div>`;
+  migrateACL();          // garante que toda chave nova exista antes de desenhar
+  wrap.innerHTML=_aclTableHTML();
 }
 
 // ─── Seção Notificações ────────────────────────────────
