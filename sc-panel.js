@@ -14,6 +14,35 @@
     if (window.__zvSgT) { clearTimeout(window.__zvSgT); window.__zvSgT = null; }
   } catch (_) {}
   window.__zvInstalled = true;
+  // ── Gancho de captura de chamada (WebRTC) ───────────────────────────────────────────────
+  // A ligacao do WhatsApp roda por WebRTC nesta pagina. Pra gravar as DUAS vozes, envolvemos o
+  // RTCPeerConnection e guardamos as conexoes vivas em window.__zvPCs. Depois pegamos as faixas
+  // de audio: os "senders" (SUA voz/microfone) e os "receivers" (a voz do LEAD). Roda cedo (o
+  // painel e injetado no document-start) pra envolver antes do WhatsApp criar a chamada. Fica no
+  // window e so envolve UMA vez, entao sobrevive a auto-atualizacao do painel.
+  (function hookRTC() {
+    try {
+      if (window.__zvRtcHooked) return;
+      var Native = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+      if (!Native || !Native.prototype) return;
+      window.__zvPCs = window.__zvPCs || [];
+      var Wrapped = function (cfg, con) {
+        var pc = new Native(cfg, con);
+        try {
+          window.__zvPCs.push(pc);
+          pc.addEventListener && pc.addEventListener('connectionstatechange', function () {
+            try { if (pc.connectionState === 'closed' || pc.connectionState === 'failed') { var i = window.__zvPCs.indexOf(pc); if (i >= 0) window.__zvPCs.splice(i, 1); } } catch (_) {}
+          });
+        } catch (_) {}
+        return pc;
+      };
+      Wrapped.prototype = Native.prototype;
+      try { Object.setPrototypeOf(Wrapped, Native); } catch (_) {}   // herda estaticos (generateCertificate)
+      window.RTCPeerConnection = Wrapped;
+      try { window.webkitRTCPeerConnection = Wrapped; } catch (_) {}
+      window.__zvRtcHooked = true;
+    } catch (_) {}
+  })();
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
   var simulate = true, els = {}, itemById = {};
@@ -24,6 +53,8 @@
   // esta esperando a vez, com a posicao.
   var jobs = [];              // jobs[0] = o da vez; o resto aguarda
   var jobRunning = false;
+  // Estado da GRAVACAO de chamada (uma por vez). Declarado cedo pro __zvBusy enxergar.
+  var rec = { on: false, starting: false, mr: null, chunks: [], ac: null, dest: null, sources: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, tickIv: null, mime: 'audio/webm' };
   function jobId() { return 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
   function jobAdd(job) { jobs.push(job); renderSending(); pumpJobs(); return job; }
   function jobDrop(job) {
@@ -70,7 +101,9 @@
   // O injetor consulta isto pra NAO se auto-atualizar no meio de um envio: reinjetar o painel
   // zera a fila, e o envio continua entregando mas SOME do banner (era esse o bug do "disparei
   // e nao apareceu na pilha").
-  window.__zvBusy = function () { try { return jobs.length > 0; } catch (_) { return false; } };
+  // Ocupado = tem envio na fila OU uma gravacao rolando. O injetor consulta isto pra NAO
+  // auto-atualizar o painel no meio (reinjetar zeraria a fila / cortaria a gravacao).
+  window.__zvBusy = function () { try { return jobs.length > 0 || rec.on || rec.starting; } catch (_) { return false; } };
 
   // Promise do WPP com TETO. Se o WhatsApp entra em "Reconectando", a promise dele pode NUNCA
   // voltar. Como a fila e serial, um envio pendurado congelaria TODOS os leads. Isto garante que
@@ -580,7 +613,11 @@
     calendar:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
     sliders:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
     help:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-    pause: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
+    pause: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+    rec:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>',
+    stopsq:'<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+    dl:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    trash: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
   };
   function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (_) { return d; } }
   function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
@@ -596,7 +633,8 @@
     { key: 'funis', label: 'Funis', icon: 'funnel' },
     { key: 'agenda', label: 'Agenda', icon: 'calendar' },
     { key: 'ajustes', label: 'Ajustes', icon: 'sliders' },
-    { key: 'ajuda', label: 'Ajuda', icon: 'help' }
+    { key: 'ajuda', label: 'Ajuda', icon: 'help' },
+    { key: 'gravar', label: 'Gravar', icon: 'rec' }
   ];
   var TYPES = [
     { key: 'all', label: 'Todos', icon: 'grid', color: '#54656f' },
@@ -751,10 +789,12 @@
 
   function renderContent() {
     var c = document.getElementById('zv-content'); if (!c) return;
+    try { recRevokeUrls(); } catch (_) {}   // libera as URLs de audio ao redesenhar/trocar de aba (nao vaza)
     if (TAB === 'funis') return renderFunisTab(c);
     if (TAB === 'agenda') return renderAgendaTab(c);
     if (TAB === 'ajustes') return renderAjustesTab(c);
     if (TAB === 'ajuda') return renderAjudaTab(c);
+    if (TAB === 'gravar') return renderGravarTab(c);
     return renderItensTab(c);
   }
 
@@ -928,8 +968,200 @@
         '<p><b>Funis:</b> dispara varios itens em sequencia, com a espera de cada passo.</p>' +
         '<p><b>Agenda:</b> programa um item pra sair depois de X minutos.</p>' +
         '<p><b>Ajustes:</b> liga o "simular gravando" e troca o tema.</p>' +
+        '<p><b>Gravar:</b> grava a ligacao de voz (as duas vozes) pra guardar o registro do lead confirmando o termo.</p>' +
         '<p class="zv-tabhint">Os itens sao configurados na dash (Sale Chat). O painel puxa sozinho.</p>' +
       '</div></div>';
+  }
+
+  // ══════════════ GRAVACAO DE CHAMADA ══════════════
+  // Pega as faixas de audio das chamadas WebRTC vivas: receivers = voz do LEAD, senders = SUA voz.
+  function callParts() {
+    var remote = [], local = [], seen = [], alive = [];
+    (window.__zvPCs || []).forEach(function (pc) {
+      try {
+        // pc.close() nao dispara connectionstatechange (spec), entao o listener nao limpa a lista.
+        // Podamos aqui: descarta conexao morta (nao vaza) e nunca coleta faixa de chamada encerrada.
+        var st = pc.connectionState || pc.iceConnectionState;
+        if (pc.signalingState === 'closed' || st === 'closed' || st === 'failed') return;
+        alive.push(pc);
+        (pc.getReceivers ? pc.getReceivers() : []).forEach(function (r) { var t = r && r.track; if (t && t.kind === 'audio' && t.readyState === 'live' && seen.indexOf(t) < 0) { seen.push(t); remote.push(t); } });
+        (pc.getSenders ? pc.getSenders() : []).forEach(function (s) { var t = s && s.track; if (t && t.kind === 'audio' && t.readyState === 'live' && seen.indexOf(t) < 0) { seen.push(t); local.push(t); } });
+      } catch (_) {}
+    });
+    try { window.__zvPCs = alive; } catch (_) {}   // fica so com as conexoes vivas
+    return { remote: remote, local: local };
+  }
+  function recFmtDur(ms) { var s = Math.max(0, Math.round(ms / 1000)); var m = Math.floor(s / 60); s = s % 60; return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s; }
+  function recFmtWhen(at) { try { var d = new Date(at); var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (_) { return ''; } }
+  function recToast(m) { try { status(m, 'err'); } catch (_) {} }
+
+  async function recStart() {
+    // Guard SINCRONO, antes de qualquer await: recStart e async (espera resume + getUserMedia).
+    // Sem isto, 2 cliques rapidos criavam 2 gravacoes e deixavam um microfone preso aberto.
+    if (rec.on || rec.starting) return;
+    rec.starting = true;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC || typeof MediaRecorder === 'undefined') { rec.starting = false; recToast('Este WhatsApp nao suporta gravacao aqui.'); return; }
+      var c = activeChat();
+      rec.chatId = c ? chatIdOf(c) : ''; rec.chatName = c ? chatName(c) : '';
+      var ac = new AC();
+      try { if (ac.state === 'suspended') await ac.resume(); } catch (_) {}
+      var dest = ac.createMediaStreamDestination();
+      var parts = callParts();
+      var toMix = parts.remote.concat(parts.local);
+      rec.micOnly = false;
+      // Garante a SUA voz: se os "senders" nao expuseram o microfone, capta ele direto.
+      if (!parts.local.length) {
+        try { var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic; mic.getAudioTracks().forEach(function (t) { toMix.push(t); }); } catch (_) {}
+      }
+      if (!parts.remote.length && !parts.local.length) rec.micOnly = true;   // sem chamada: so o microfone
+      if (!toMix.length) { try { ac.close(); } catch (_) {} rec.starting = false; recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
+      toMix.forEach(function (t) { try { var s = ac.createMediaStreamSource(new MediaStream([t])); s.connect(dest); rec.sources.push(s); } catch (_) {} });
+      var mime = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus'
+               : (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
+      rec.mime = mime || 'audio/webm';
+      rec.chunks = [];
+      rec.mr = new MediaRecorder(dest.stream, mime ? { mimeType: mime } : undefined);
+      rec.mr.ondataavailable = function (e) { if (e.data && e.data.size) rec.chunks.push(e.data); };
+      rec.mr.onstop = function () { recFinalize(); };
+      rec.mr.onerror = function () { try { recStop(); } catch (_) {} };
+      rec.ac = ac; rec.dest = dest; rec.startAt = Date.now(); rec.on = true; rec.starting = false;
+      rec.mr.start(2000);   // fatia a cada 2s, pra gravacao longa nao ficar so na memoria
+      rec.tickIv = setInterval(recRenderLive, 1000);
+      if (TAB === 'gravar') renderContent();
+    } catch (e) { recCleanup(); recToast('Falha ao iniciar: ' + ((e && e.message) || e)); if (TAB === 'gravar') renderContent(); }
+  }
+  function recStop() { try { if (rec.mr && rec.mr.state !== 'inactive') { rec.mr.stop(); return; } } catch (_) {} recCleanup(); if (TAB === 'gravar') renderContent(); }
+  function recFinalize() {
+    try {
+      var dur = Date.now() - rec.startAt;
+      var blob = new Blob(rec.chunks.slice(), { type: rec.mime });
+      if (blob.size > 0) {
+        var meta = { id: 'rec' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: Date.now(), durMs: dur, desc: '', mime: rec.mime, micOnly: !!rec.micOnly, size: blob.size };
+        recPut(meta, blob).then(function () { if (TAB === 'gravar') renderContent(); }, function () { recToast('Nao consegui salvar a gravacao (armazenamento cheio?).'); });
+      }
+    } catch (_) {}
+    recCleanup();
+    if (TAB === 'gravar') renderContent();
+  }
+  function recCleanup() {
+    // NUNCA parar as faixas da CHAMADA (sao do WhatsApp). So o nosso proprio microfone.
+    try { rec.sources.forEach(function (s) { try { s.disconnect(); } catch (_) {} }); } catch (_) {}
+    try { if (rec.micStream) rec.micStream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} }); } catch (_) {}
+    try { if (rec.ac && rec.ac.state !== 'closed') rec.ac.close(); } catch (_) {}
+    if (rec.tickIv) { clearInterval(rec.tickIv); rec.tickIv = null; }
+    rec.on = false; rec.starting = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.ac = null; rec.dest = null; rec.micStream = null;
+  }
+  function recRenderLive() { if (TAB !== 'gravar') return; var t = document.getElementById('zv-rec-timer'); if (t && rec.on) t.textContent = recFmtDur(Date.now() - rec.startAt); }
+
+  // ── Armazenamento local (IndexedDB): metadados numa store, o audio em outra (lista leve) ──
+  var REC_DB = 'zvRecDB';
+  function recDB() {
+    return new Promise(function (res, rej) {
+      try {
+        var rq = indexedDB.open(REC_DB, 1);
+        rq.onupgradeneeded = function () { var db = rq.result; if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' }); if (!db.objectStoreNames.contains('blob')) db.createObjectStore('blob', { keyPath: 'id' }); };
+        rq.onsuccess = function () { res(rq.result); };
+        rq.onerror = function () { rej(rq.error); };
+      } catch (e) { rej(e); }
+    });
+  }
+  function recPut(meta, blob) {
+    return recDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(['meta', 'blob'], 'readwrite');
+        tx.objectStore('meta').put(meta); tx.objectStore('blob').put({ id: meta.id, blob: blob });
+        tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; tx.onabort = function () { rej(tx.error); };
+      });
+    });
+  }
+  function recAllMeta() {
+    return recDB().then(function (db) {
+      return new Promise(function (res) {
+        var out = [], tx = db.transaction('meta', 'readonly'), cur = tx.objectStore('meta').openCursor();
+        cur.onsuccess = function () { var c = cur.result; if (c) { out.push(c.value); c.continue(); } else { out.sort(function (a, b) { return b.at - a.at; }); res(out); } };
+        cur.onerror = function () { res(out); };
+      });
+    }).catch(function () { return []; });
+  }
+  function recBlob(id) { return recDB().then(function (db) { return new Promise(function (res) { var g = db.transaction('blob', 'readonly').objectStore('blob').get(id); g.onsuccess = function () { res(g.result ? g.result.blob : null); }; g.onerror = function () { res(null); }; }); }); }
+  function recDel(id) { return recDB().then(function (db) { return new Promise(function (res) { var tx = db.transaction(['meta', 'blob'], 'readwrite'); tx.objectStore('meta').delete(id); tx.objectStore('blob').delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { res(); }; }); }); }
+  function recSetDesc(id, desc) { return recDB().then(function (db) { return new Promise(function (res) { var tx = db.transaction('meta', 'readwrite'), st = tx.objectStore('meta'), g = st.get(id); g.onsuccess = function () { var v = g.result; if (v) { v.desc = desc; st.put(v); } }; tx.oncomplete = function () { res(); }; tx.onerror = function () { res(); }; }); }); }
+
+  var recUrls = {};
+  function recRevokeUrls() { try { Object.keys(recUrls).forEach(function (k) { try { URL.revokeObjectURL(recUrls[k]); } catch (_) {} }); } catch (_) {} recUrls = {}; }
+
+  function renderGravarTab(c) {
+    recRevokeUrls();
+    var parts = callParts(), callLive = parts.remote.length > 0 || parts.local.length > 0;
+    var head = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#e0405a">' + SVG.rec + '</span>Gravar chamada</div>' +
+      '<p class="zv-tabhint">Grava a ligacao de voz (as duas vozes) pra guardar o registro do lead confirmando o termo. Fica salvo aqui no seu computador.</p></div>';
+    var card;
+    if (rec.on) {
+      card = '<div class="zv-rec-card zv-rec-live">' +
+        '<div class="zv-rec-dotlive"></div>' +
+        '<div class="zv-rec-livetxt"><b id="zv-rec-timer">' + recFmtDur(Date.now() - rec.startAt) + '</b><span>Gravando' + (rec.chatName ? (' · ' + esc(rec.chatName)) : '') + (rec.micOnly ? ' · so seu microfone' : '') + '</span></div>' +
+        '<button class="zv-rec-btn zv-rec-stop" id="zv-rec-toggle">' + SVG.stopsq + ' Parar</button>' +
+        '</div>';
+    } else {
+      card = '<div class="zv-rec-card">' +
+        '<button class="zv-rec-btn zv-rec-go" id="zv-rec-toggle">' + SVG.rec + ' Gravar chamada</button>' +
+        '<div class="zv-rec-hint2">' + (callLive ? '<span class="zv-rec-ok">Chamada detectada</span>' : 'Inicie a ligacao no WhatsApp e clique aqui.') + '</div>' +
+        '</div>';
+    }
+    c.innerHTML = head + '<div class="zv-cbody">' + card + '<div id="zv-rec-list" class="zv-rec-list"><div class="zv-tabhint" style="padding:8px 2px">Carregando...</div></div></div>';
+    var tg = document.getElementById('zv-rec-toggle');
+    if (tg) tg.onclick = function () { if (rec.on) recStop(); else recStart(); };
+    recAllMeta().then(recFillList);
+  }
+  function recFillList(list) {
+    var box = document.getElementById('zv-rec-list'); if (!box) return;
+    if (!list.length) { box.innerHTML = '<div class="zv-tabhint" style="padding:8px 2px">Nenhuma gravacao ainda.</div>'; return; }
+    box.innerHTML = list.map(function (r) {
+      var meta = recFmtWhen(r.at) + ' · ' + recFmtDur(r.durMs || 0) + (r.micOnly ? ' · so microfone' : '');
+      return '<div class="zv-rec-row" data-id="' + esc(r.id) + '">' +
+        '<div class="zv-rec-main">' +
+          '<div class="zv-rec-rtop"><b>' + esc(r.chatName || '(sem lead)') + '</b><span class="zv-rec-meta">' + esc(meta) + '</span></div>' +
+          '<input class="zv-rec-desc" placeholder="Descricao (opcional)" value="' + esc(r.desc || '') + '">' +
+          '<div class="zv-rec-audio"></div>' +
+        '</div>' +
+        '<div class="zv-rec-acts">' +
+          '<button class="zv-rec-play" title="Ouvir">' + SVG.play + '</button>' +
+          '<button class="zv-rec-dl" title="Baixar">' + SVG.dl + '</button>' +
+          '<button class="zv-rec-del" title="Excluir">' + SVG.trash + '</button>' +
+        '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('.zv-rec-row'), function (row) {
+      var id = row.getAttribute('data-id');
+      var meta = list.filter(function (x) { return x.id === id; })[0] || {};
+      var di = row.querySelector('.zv-rec-desc');
+      // Salva ENQUANTO digita (debounced): se o painel se redesenhar (auto-update da config), o
+      // texto ja esta no banco e volta certinho, em vez de sumir.
+      if (di) { di.oninput = function () { clearTimeout(di._t); di._t = setTimeout(function () { recSetDesc(id, di.value); }, 400); }; di.onchange = function () { clearTimeout(di._t); recSetDesc(id, di.value); }; }
+      var pb = row.querySelector('.zv-rec-play');
+      if (pb) pb.onclick = function () {
+        var host = row.querySelector('.zv-rec-audio');
+        if (host.querySelector('audio')) { var a0 = host.querySelector('audio'); if (a0.paused) a0.play(); else a0.pause(); return; }
+        recBlob(id).then(function (b) {
+          if (!b) { recToast('Gravacao nao encontrada.'); return; }
+          var url = URL.createObjectURL(b); recUrls[id] = url;
+          host.innerHTML = '<audio controls autoplay src="' + url + '" style="width:100%;margin-top:7px"></audio>';
+        });
+      };
+      var db = row.querySelector('.zv-rec-dl');
+      if (db) db.onclick = function () {
+        recBlob(id).then(function (b) {
+          if (!b) { recToast('Gravacao nao encontrada.'); return; }
+          var url = URL.createObjectURL(b);
+          var nm = ('chamada-' + (meta.chatName || 'lead') + '-' + recFmtWhen(meta.at)).replace(/[^\w\-]+/g, '_') + '.webm';
+          var a = document.createElement('a'); a.href = url; a.download = nm; document.body.appendChild(a); a.click();
+          setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (_) {} }, 1000);
+        });
+      };
+      var xb = row.querySelector('.zv-rec-del');
+      if (xb) xb.onclick = function () { if (!confirm('Excluir esta gravacao?')) return; recDel(id).then(function () { if (TAB === 'gravar') renderContent(); }); };
+    });
   }
 
   function restorePos(p) {
