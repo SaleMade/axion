@@ -38,6 +38,117 @@ function fetchBytes(url) {
   });
 }
 
+// ── Cache de midia em DISCO ────────────────────────────────────────────────────────────
+// O video e pesado e, ate agora, era rebaixado da nuvem A CADA disparo — por isso demorava
+// tanto. Agora ele fica salvo na maquina do atendente (pasta "cache") e o envio le do disco.
+// O download acontece 1x, no start (prefetch), entao ate o primeiro envio ja sai rapido.
+const CACHE_DIR = path.join(DIR, 'cache');
+// Se nao der pra gravar (pasta protegida, antivirus, Controlled Folder Access, disco cheio), o
+// envio continua funcionando (baixa da nuvem) — mas AVISA, em vez de falhar calado e rebaixar
+// tudo pra sempre achando que esta cacheando.
+let cacheOk = true, cacheWarned = false;
+function cacheOff(e, ctx) {
+  cacheOk = false;
+  if (cacheWarned) return;
+  cacheWarned = true;
+  console.log('[zv] AVISO: nao consigo gravar o cache de video em ' + CACHE_DIR + ' (' + ctx + ': ' + ((e && e.code) || e) + ').');
+  console.log('[zv]        O video vai ser baixado da nuvem a CADA envio (lento). Cheque permissao da pasta, antivirus e espaco em disco.');
+}
+try {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const probe = path.join(CACHE_DIR, '.probe');
+  fs.writeFileSync(probe, 'ok'); fs.unlinkSync(probe);   // pega pasta somente-leitura ja no start
+} catch (e) { cacheOff(e, 'mkdir'); }
+function cacheName(url) {
+  // nome legivel + hash da url (a chave do R2 e unica por upload, entao trocar o video na
+  // dash gera uma chave nova e, com ela, um arquivo novo — nao tem cache velho grudado).
+  const base = String(url).split('/').pop().split('?')[0].replace(/[^a-zA-Z0-9._-]/g, '_').slice(-40);
+  return hashStr(String(url)) + '_' + (base || 'f');
+}
+function cachePath(url) { return path.join(CACHE_DIR, cacheName(url)); }
+const inflight = new Map();
+// Bytes da midia: DISCO primeiro; se nao tiver, baixa 1x e salva. A escrita e atomica (.tmp +
+// rename) pra um download interrompido (PC desligou no meio) nao deixar um video corrompido
+// no cache pra sempre. Dois pedidos da mesma url ao mesmo tempo compartilham o mesmo download.
+async function mediaBytes(url) {
+  if (!url) return null;
+  const p = cachePath(url);
+  try {
+    if (fs.existsSync(p)) {
+      const b = fs.readFileSync(p);
+      // Arquivo zerado no inicio = vitima de queda de energia (o NTFS grava o nome antes dos
+      // dados). Sem esta checagem, um video corrompido seria servido pra SEMPRE. Joga fora e rebaixa.
+      const bom = b && b.length > 1024 && !b.subarray(0, 64).every((x) => x === 0);
+      if (bom) return b;
+      if (b) { console.log('[zv] Cache corrompido, baixando de novo: ' + path.basename(p)); try { fs.unlinkSync(p); } catch (_) {} }
+    }
+  } catch (_) {}
+  if (inflight.has(p)) return inflight.get(p);
+  const job = (async () => {
+    const buf = await fetchBytes(url);
+    if (buf && buf.length && cacheOk) {
+      const tmp = p + '.' + process.pid + '.tmp';
+      try {
+        fs.writeFileSync(tmp, buf);
+        // fsync ANTES do rename: o NTFS journala o METADADO, nao o dado. Sem isto, uma queda de
+        // energia logo apos o rename deixa um arquivo do tamanho certo com o conteudo zerado.
+        const fd = fs.openSync(tmp, 'r+');
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(tmp, p);
+      } catch (e) { cacheOff(e, 'gravar'); try { fs.unlinkSync(tmp); } catch (_) {} }
+    }
+    return buf;   // mesmo se o cache falhar, o envio segue (so nao fica rapido)
+  })();
+  inflight.set(p, job);
+  try { return await job; } finally { inflight.delete(p); }
+}
+// Baixa os videos que ainda nao estao no PC, em segundo plano, sem travar nada.
+let prefetching = false, prefetchPending = null;
+async function prefetchMedia(list) {
+  if (!cacheOk) return;                       // sem cache, prefetch e so queimar banda
+  if (prefetching) { prefetchPending = list; return; }   // guarda a lista NOVA pra rodar depois
+  prefetching = true;
+  try {
+    const vids = (list || []).filter((m) => m && m.kind === 'video' && m.key && !fs.existsSync(cachePath(MEDIA_BASE + '/' + m.key)));
+    if (vids.length) console.log('[zv] Salvando ' + vids.length + ' video(s) no PC...');
+    for (const m of vids) {
+      if (!cacheOk) { console.log('[zv]   prefetch abortado: cache indisponivel.'); break; }
+      const url = MEDIA_BASE + '/' + m.key;
+      const buf = await mediaBytes(url);
+      // so diz "ok" se REALMENTE gravou (senao o log mentiria quando o cache esta morto)
+      if (buf && fs.existsSync(cachePath(url))) console.log('[zv]   ok: ' + (m.label || m.key) + ' (' + Math.round(buf.length / 104857.6) / 10 + ' MB)');
+      else console.log('[zv]   nao salvou (tenta de novo depois): ' + (m.label || m.key));
+    }
+  } catch (_) {} finally {
+    prefetching = false;
+    // A config mudou no meio do prefetch? Roda de novo com a lista nova, senao os videos
+    // novos nunca iriam pro disco (ficariam lentos pra sempre).
+    const next = prefetchPending; prefetchPending = null;
+    if (next) setTimeout(() => prefetchMedia(next), 0);
+  }
+}
+// Apaga do cache o que nao esta mais na biblioteca (video trocado na dash), pra nao encher o
+// disco. So roda se a config veio de verdade — senao apagaria tudo num erro de rede.
+function cleanCache(list) {
+  try {
+    if (!list || !list.length) return;
+    const keep = new Set(list.filter((m) => m && m.key).map((m) => cacheName(MEDIA_BASE + '/' + m.key)));
+    for (const m of list) { if (m && m.posterKey) keep.add(cacheName(MEDIA_BASE + '/' + m.posterKey)); }
+    const STALE = 10 * 60 * 1000;   // .tmp so e lixo se for VELHO
+    for (const f of fs.readdirSync(CACHE_DIR)) {
+      const fp = path.join(CACHE_DIR, f);
+      if (f.endsWith('.tmp')) {
+        // Nao apagar o .tmp de um download EM ANDAMENTO (o outro app — normal x beta — divide
+        // esta pasta). So limpa o orfao, de quando o PC desligou no meio.
+        try { if (Date.now() - fs.statSync(fp).mtimeMs < STALE) continue; } catch (_) {}
+        try { fs.unlinkSync(fp); } catch (_) {}
+        continue;
+      }
+      if (!keep.has(f)) { try { fs.unlinkSync(fp); } catch (_) {} }
+    }
+  } catch (_) {}
+}
+
 // Busca a config do Sale Chat na AXION (mensagens + funis que o Diretor edita
 // na dash). Node nao tem CSP, entao busca aqui e injeta no painel. Falha -> null.
 function fetchRemoteConfig() {
@@ -120,6 +231,9 @@ async function buildLibrary(remote) {
   // Offline: cai no funil local (library.json) pra nao ficar sem soundboard.
   const media = [];
   const remoteMedia = remote && Array.isArray(remote.media) ? remote.media : [];
+  // Deixa os videos prontos no PC (em segundo plano) e limpa o que saiu da biblioteca.
+  // Assim o clique em "enviar" le do disco, em vez de baixar da nuvem na hora.
+  if (remoteMedia.length) { cleanCache(remoteMedia); prefetchMedia(remoteMedia); }
   if (remoteMedia.length) {
     for (const m of remoteMedia) {
       if (!m || !m.key) continue;
@@ -127,10 +241,10 @@ async function buildLibrary(remote) {
       // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
       if (m.kind === 'video') {
         var vit = { id: m.id, kind: 'video', label: m.label || 'Video', caption: m.caption || '', mediaUrl: url, grp: m.grp || '' };
-        if (m.posterKey) { const pbuf = await fetchBytes(MEDIA_BASE + '/' + m.posterKey); if (pbuf) vit.posterUri = 'data:image/jpeg;base64,' + pbuf.toString('base64'); }
+        if (m.posterKey) { const pbuf = await mediaBytes(MEDIA_BASE + '/' + m.posterKey); if (pbuf) vit.posterUri = 'data:image/jpeg;base64,' + pbuf.toString('base64'); }
         media.push(vit); continue;
       }
-      const buf = await fetchBytes(url);
+      const buf = await mediaBytes(url);
       if (!buf) continue;
       const dataUri = 'data:' + (m.mime || (m.kind === 'image' ? 'image/jpeg' : m.kind === 'document' ? 'application/pdf' : 'audio/ogg')) + ';base64,' + buf.toString('base64');
       if (m.kind === 'image') media.push({ id: m.id, kind: 'image', label: m.label || 'Imagem', caption: m.caption || '', dataUri, grp: m.grp || '' });
@@ -172,7 +286,7 @@ async function buildBundle() {
   const libJson = JSON.stringify(await buildLibrary(remote));
   const panel = panelRaw.replace('"__LIBRARY__"', () => libJson)
                .replace('"__CSS__"', () => JSON.stringify(css));
-  return { wajs, panel };
+  return { wajs, panel, libJson };
 }
 
 class CDP {
@@ -330,7 +444,7 @@ async function run() {
           try {
             let dataUri;
             if (req.url) {
-              const buf = await fetchBytes(req.url);
+              const buf = await mediaBytes(req.url);   // disco primeiro (instantaneo)
               if (!buf) throw new Error('nao consegui baixar o video da nuvem');
               dataUri = 'data:video/mp4;base64,' + buf.toString('base64');
             } else {
@@ -364,7 +478,7 @@ async function run() {
           await evaluate('window.__zvPrevReq = null;');
           try {
             if (!req.url) throw new Error('sem url');
-            const buf = await fetchBytes(req.url);
+            const buf = await mediaBytes(req.url);   // disco primeiro (instantaneo)
             if (!buf) throw new Error('nao consegui baixar');
             const dataUri = 'data:' + (req.mime || 'video/mp4') + ';base64,' + buf.toString('base64');
             await evaluate('window.__zvPrevRes = {id:' + JSON.stringify(req.id) + ',ok:true,dataUri:' + JSON.stringify(dataUri) + '}');
@@ -385,10 +499,17 @@ async function run() {
     try {
       const remote = await fetchRemoteConfig();
       if (remote && remote.updated_at && remote.updated_at !== currentCfgStamp) {
-        currentCfgStamp = remote.updated_at;
-        const libJson = JSON.stringify(await buildLibrary(remote));
-        await evaluate('window.__zvUpdate && window.__zvUpdate(' + libJson + ')');
-        console.log('[zv] Config atualizada na dash; painel recarregado ao vivo.');
+        // Reconstroi o BUNDLE (nao so a lib) e RE-REGISTRA o script de novo documento.
+        // Sem isso, o painel injetado num reload da pagina volta com a biblioteca ANTIGA:
+        // se o Diretor trocou o video, o atendente dispararia o video VELHO pro lead.
+        const rebuilt = await buildBundle();   // ja atualiza currentCfgStamp
+        if (rebuilt && rebuilt.panel && rebuilt.panel.indexOf('__zvInstalled') >= 0) {
+          panel = rebuilt.panel;
+          try { if (panelScriptId) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: panelScriptId }); } catch (_) {}
+          { const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel }); panelScriptId = r && r.result && r.result.identifier; }
+          await evaluate('window.__zvUpdate && window.__zvUpdate(' + rebuilt.libJson + ')');
+          console.log('[zv] Config atualizada na dash; painel recarregado ao vivo.');
+        }
       }
     } catch (_) {}
     setTimeout(pollConfig, 20000);
