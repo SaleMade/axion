@@ -2371,6 +2371,39 @@ async function handleWASaleDelete(req, env) {
   try { await env.DB.prepare('DELETE FROM wa_sales WHERE rowid=?').bind(id).run(); } catch (_) {}
   return json({ ok: true, id, removed: true });
 }
+// POST /api/wa/sale/add → { raw, at } adiciona um pedido MANUAL (indicação/orgânico).
+// Faz o MESMO parse do "Pedido Concluído", grava em wa_sales no nome do vendedor
+// escolhido, mas NÃO dispara o pixel do TikTok (não é venda de anúncio). Entra como
+// "sem rastreio" e conta pro vendedor. Só diretor.
+async function handleWASaleAdd(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode adicionar pedido', 403);
+  const body = await req.json().catch(() => null);
+  if (!body || !body.raw || !String(body.raw).trim()) return err('Cole a mensagem do "Pedido Concluído"');
+  const text = String(body.raw);
+  const at = String(body.at || '').trim();
+  const instance = at ? ('ax_' + at) : 'manual';
+  const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
+  const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
+  const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
+  // telefone do cliente: a linha do 📲, senão o 1º celular com DDD que aparecer
+  let phone = '';
+  const phM = text.match(/📲[^\d]*([\d()\s.\-]{10,})/);
+  if (phM) phone = phM[1].replace(/\D/g, '');
+  if (!phone) { const any = text.match(/\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/); if (any) phone = any[0].replace(/\D/g, ''); }
+  const cpf = extractCpf(text);
+  if (cpf && at) { try { await saveCpfAttrib(env, cpf, instance, name, phone); } catch (_) {} }
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); } catch (_) {}
+    const msgId = 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);   // único: não colide com o dedupe por msg_id
+    await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)")
+      .bind(phone || '', instance, name || 'Cliente', value, msgId, text.slice(0, 2000)).run();
+    return json({ ok: true, name: name || 'Cliente', value, phone, at, pixel: false });
+  } catch (e) { return err('Falha ao salvar: ' + (e && e.message), 502); }
+}
 
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
 // Modelado no script oficial + conversas reais GlicoVax. Pré-qualifica
@@ -3168,6 +3201,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
       if (req.method === 'POST'   && path === '/api/wa/sale/delete')      return handleWASaleDelete(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/sale/add')         return handleWASaleAdd(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)

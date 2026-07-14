@@ -4135,6 +4135,7 @@ const api={
   // Pedidos confirmados (vendas detectadas no WhatsApp "Pedido Concluído") — listar por dia + remover
   waSalesList:(day)=>api._fetch('/api/wa/sales'+(day?('?day='+encodeURIComponent(day)):'')),
   waSaleDelete:(id)=>api._fetch('/api/wa/sale/delete',{method:'POST',body:JSON.stringify({id})}),
+  waSaleAdd:(raw,at)=>api._fetch('/api/wa/sale/add',{method:'POST',body:JSON.stringify({raw,at})}),   // pedido manual (indicação) — sem pixel
 };
 
 // ─── Sync state com servidor ───
@@ -7189,18 +7190,47 @@ function pagePedidos(){return `<div class="page" id="pedidos-pg"></div>`}
 function pagePedidosConf(){return `<div class="page" id="pedidosconf-pg"></div>`}
 // ── PEDIDOS CONFIRMADOS: vendas detectadas no WhatsApp ("Pedido Concluído"). Diretor revê por dia e remove os errados. ──
 let _pcfDay='';
+let _pcfAdding=false;
 function _pcfYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+// Mostra/esconde o formulário de adicionar pedido manual (indicação/orgânico)
+function _pcfToggleAdd(){ _pcfAdding=!_pcfAdding; const f=$('pcf-addform'); if(f) f.style.display=_pcfAdding?'block':'none'; if(_pcfAdding){ const r=$('pcf-add-raw'); if(r) setTimeout(()=>r.focus(),30); } }
+function _pcfAddPedido(){
+  const at=$('pcf-add-at')?$('pcf-add-at').value:'';
+  const raw=($('pcf-add-raw')?$('pcf-add-raw').value:'').trim();
+  if(!raw){ toast('Cole a mensagem do "Pedido Concluído"','err'); return; }
+  const btn=(typeof event!=='undefined'&&event)?event.target:null; if(btn){ btn.disabled=true; btn.textContent='Adicionando…'; }
+  api.waSaleAdd(raw, at).then(r=>{
+    toast('Pedido adicionado'+(r&&r.name?(' — '+r.name):'')+(r&&r.value?(' · R$ '+r.value):''),'ok');
+    _pcfAdding=false;
+    _pcfSetDay(_pcfYmd(new Date()));   // volta pra hoje e recarrega (o pedido é de agora)
+  }).catch(e=>{ toast('Erro: '+((e&&e.message)||e),'err'); if(btn){ btn.disabled=false; btn.textContent='Adicionar pedido'; } });
+}
 function renderPedidosConf(){
   const c=$('pedidosconf-pg'); if(!c) return;
   const today=_pcfYmd(new Date());
   const day=_pcfDay||today;
+  const teamOpts=(typeof TEAM!=='undefined'?TEAM:[]).filter(t=>!t.archived).map(t=>`<option value="${t.id}">${_automEsc(t.name)}</option>`).join('');
   c.innerHTML=`<div class="ph"><div><h1>Pedidos <em>Confirmados</em></h1></div></div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 16px">
       <input type="date" id="pcf-date" value="${day}" max="${today}" onchange="_pcfSetDay(this.value)" class="pp-inp" style="width:auto;padding:8px 11px;color-scheme:dark;cursor:pointer">
       ${day!==today?`<button class="btn btn-gh btn-sm" onclick="_pcfSetDay('${today}')">← hoje</button>`:''}
+      <button class="btn btn-bl btn-sm" onclick="_pcfToggleAdd()">+ Adicionar pedido</button>
       <span class="muted" style="font-size:12px;flex:1;min-width:200px">Vendas detectadas no WhatsApp (mensagem "Pedido Concluído"). Remover um pedido tira ele da contagem de vendas.</span>
     </div>
+    <div id="pcf-addform" style="display:none;border:1px solid var(--bl);border-radius:var(--rl);background:var(--s2);padding:16px;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px">Adicionar pedido manual</div>
+      <div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">Pra venda por indicação/orgânico que não passou pelo WhatsApp. Cole a mensagem de "Pedido Concluído" e escolha o vendedor. Não dispara o pixel do TikTok (não é venda de anúncio); entra como "sem rastreio" e conta pro vendedor.</div>
+      <label class="info-lbl" style="display:block;margin-bottom:4px">Vendedor</label>
+      <select id="pcf-add-at" class="pp-inp" style="margin-bottom:12px">${teamOpts}</select>
+      <label class="info-lbl" style="display:block;margin-bottom:4px">Mensagem do "Pedido Concluído"</label>
+      <textarea id="pcf-add-raw" class="pp-inp" rows="8" placeholder="⭐ Pedido Concluído! ⭐&#10;👤 Nome: ...&#10;📍CPF: ...&#10;📲 : (99) 9....&#10;Valor do Pedido: R$ 697,00" style="resize:vertical;font-family:inherit;line-height:1.5"></textarea>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-bl btn-sm" onclick="_pcfAddPedido()">Adicionar pedido</button>
+        <button class="btn btn-gh btn-sm" onclick="_pcfToggleAdd()">Cancelar</button>
+      </div>
+    </div>
     <div id="pcf-list"><div class="muted" style="padding:24px;text-align:center">Carregando…</div></div>`;
+  if(_pcfAdding){ const f=$('pcf-addform'); if(f) f.style.display='block'; }
   _loadPedidosConf(day);
 }
 function _pcfSetDay(d){ _pcfDay=d||''; renderPedidosConf(); }
