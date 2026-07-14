@@ -206,6 +206,14 @@
 .zv-rec-meta{ font-size:10.5px; color:#8b95a3; flex:none; }
 .zv-rec-desc{ width:100%; border:1px solid #e5e9ef; border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; color:#2a2a46; outline:none; }
 .zv-rec-desc:focus{ border-color:#13c273; }
+/* Player proprio (combina com o card, sem o quadrado preto do navegador) */
+.zv-rec-player{ display:flex; align-items:center; gap:9px; margin-top:2px; }
+.zv-rec-pp{ width:30px; height:30px; flex:none; border-radius:50%; border:none; background:#13c273; color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.zv-rec-pp:hover{ filter:brightness(1.07); } .zv-rec-pp svg{ width:13px; height:13px; }
+.zv-rec-bar{ flex:1; height:6px; border-radius:20px; background:#e5e9ef; cursor:pointer; overflow:hidden; }
+.zv-rec-fill{ height:100%; width:0; border-radius:20px; background:#13c273; }
+.zv-rec-time{ flex:none; font-size:10.5px; color:#8b95a3; font-variant-numeric:tabular-nums; min-width:66px; text-align:right; }
+#zv-panel.zv-dark .zv-rec-bar{ background:#243329; }
 .zv-rec-acts{ display:flex; flex-direction:column; gap:5px; flex:none; }
 .zv-rec-acts button{ width:32px; height:32px; border-radius:9px; border:1px solid #e5e9ef; background:#fff; color:#54656f; cursor:pointer; display:flex; align-items:center; justify-content:center; }
 .zv-rec-acts button:hover{ border-color:#cfd6de; color:#2a2a46; }

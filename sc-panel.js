@@ -10,6 +10,7 @@
     var _op = document.getElementById('zv-panel'); if (_op && _op.parentNode) _op.parentNode.removeChild(_op);
     var _os = document.getElementById('zv-style'); if (_os && _os.parentNode) _os.parentNode.removeChild(_os);
     if (window.__zvSchedIv) { clearInterval(window.__zvSchedIv); window.__zvSchedIv = null; }
+    if (window.__zvAutoRecIv) { clearInterval(window.__zvAutoRecIv); window.__zvAutoRecIv = null; }
     if (window.__zvPollIv) { clearInterval(window.__zvPollIv); window.__zvPollIv = null; }
     if (window.__zvSgT) { clearTimeout(window.__zvSgT); window.__zvSgT = null; }
   } catch (_) {}
@@ -54,7 +55,10 @@
   var jobs = [];              // jobs[0] = o da vez; o resto aguarda
   var jobRunning = false;
   // Estado da GRAVACAO de chamada (uma por vez). Declarado cedo pro __zvBusy enxergar.
-  var rec = { on: false, starting: false, mr: null, chunks: [], ac: null, dest: null, sources: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, tickIv: null, mime: 'audio/webm' };
+  var rec = { on: false, starting: false, auto: false, mr: null, chunks: [], ac: null, dest: null, sources: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, tickIv: null, mime: 'audio/webm' };
+  // Gravar automaticamente quando detectar ligacao (setting do Ajustes).
+  var autoRec = false; try { autoRec = localStorage.getItem('zv_autorec') === '1'; } catch (_) {}
+  var recAutoLast = 0, recAutoArmed = true;   // uma gravacao automatica por ligacao
   function jobId() { return 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
   function jobAdd(job) { jobs.push(job); renderSending(); pumpJobs(); return job; }
   function jobDrop(job) {
@@ -757,6 +761,7 @@
     var head = p.querySelector('#zv-head');
     p.querySelector('#zv-min').onclick = function (e) { e.stopPropagation(); p.classList.toggle('zv-collapsed'); dockLayout(); };
     if (!window.__zvSchedIv) window.__zvSchedIv = setInterval(schedCheck, 20000);
+    if (!window.__zvAutoRecIv) window.__zvAutoRecIv = setInterval(recAutoTick, 2500);   // detecta ligacao pra gravar sozinho
     renderRail(); renderContent();
     dockLayout();
   }
@@ -953,10 +958,13 @@
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#54656f">' + SVG.sliders + '</span>Ajustes</div></div>' +
       '<div class="zv-cbody"><div class="zv-set">' +
         '<label class="zv-setrow"><span>Simular gravando / digitando</span><input type="checkbox" id="zv-sim-cb"' + (simulate ? ' checked' : '') + '></label>' +
+        '<label class="zv-setrow"><span>Gravar as ligacoes automaticamente</span><input type="checkbox" id="zv-autorec-cb"' + (autoRec ? ' checked' : '') + '></label>' +
         '<div class="zv-setrow"><span>Tema do painel</span><button id="zv-theme2" class="zv-mini2">' + (DARK ? 'Escuro' : 'Claro') + '</button></div>' +
         '<p class="zv-tabhint">Simular deixa mais humano: mostra "gravando..." / "digitando..." antes de enviar.</p>' +
+        '<p class="zv-tabhint">Gravar automatico: comeca a gravar sozinho quando voce ligar (ou receber ligacao) e para quando a chamada acaba. A gravacao aparece na aba Gravar.</p>' +
       '</div></div>';
     var cb = c.querySelector('#zv-sim-cb'); if (cb) cb.onchange = function () { simulate = cb.checked; };
+    var ar = c.querySelector('#zv-autorec-cb'); if (ar) ar.onchange = function () { autoRec = ar.checked; try { localStorage.setItem('zv_autorec', autoRec ? '1' : '0'); } catch (_) {} };
     var t2 = c.querySelector('#zv-theme2'); if (t2) t2.onclick = function () { setDark(!DARK); t2.textContent = DARK ? 'Escuro' : 'Claro'; };
   }
 
@@ -1002,7 +1010,7 @@
     rec.starting = true;
     try {
       var AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC || typeof MediaRecorder === 'undefined') { rec.starting = false; recToast('Este WhatsApp nao suporta gravacao aqui.'); return; }
+      if (!AC || typeof MediaRecorder === 'undefined') { rec.starting = false; if (!rec.auto) recToast('Este WhatsApp nao suporta gravacao aqui.'); return; }
       var c = activeChat();
       rec.chatId = c ? chatIdOf(c) : ''; rec.chatName = c ? chatName(c) : '';
       var ac = new AC();
@@ -1016,7 +1024,7 @@
         try { var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic; mic.getAudioTracks().forEach(function (t) { toMix.push(t); }); } catch (_) {}
       }
       if (!parts.remote.length && !parts.local.length) rec.micOnly = true;   // sem chamada: so o microfone
-      if (!toMix.length) { try { ac.close(); } catch (_) {} rec.starting = false; recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
+      if (!toMix.length) { try { ac.close(); } catch (_) {} rec.starting = false; if (!rec.auto) recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
       toMix.forEach(function (t) { try { var s = ac.createMediaStreamSource(new MediaStream([t])); s.connect(dest); rec.sources.push(s); } catch (_) {} });
       var mime = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus'
                : (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
@@ -1030,7 +1038,7 @@
       rec.mr.start(2000);   // fatia a cada 2s, pra gravacao longa nao ficar so na memoria
       rec.tickIv = setInterval(recRenderLive, 1000);
       if (TAB === 'gravar') renderContent();
-    } catch (e) { recCleanup(); recToast('Falha ao iniciar: ' + ((e && e.message) || e)); if (TAB === 'gravar') renderContent(); }
+    } catch (e) { var wasAuto = rec.auto; recCleanup(); if (!wasAuto) recToast('Falha ao iniciar: ' + ((e && e.message) || e)); if (TAB === 'gravar') renderContent(); }
   }
   function recStop() { try { if (rec.mr && rec.mr.state !== 'inactive') { rec.mr.stop(); return; } } catch (_) {} recCleanup(); if (TAB === 'gravar') renderContent(); }
   function recFinalize() {
@@ -1038,7 +1046,9 @@
       var dur = Date.now() - rec.startAt;
       var blob = new Blob(rec.chunks.slice(), { type: rec.mime });
       if (blob.size > 0) {
-        var meta = { id: 'rec' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: Date.now(), durMs: dur, desc: '', mime: rec.mime, micOnly: !!rec.micOnly, size: blob.size };
+        var at = Date.now();
+        var defDesc = 'Gravacao da chamada · ' + recFmtWhen(at);   // descricao automatica (editavel)
+        var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, size: blob.size };
         recPut(meta, blob).then(function () { if (TAB === 'gravar') renderContent(); }, function () { recToast('Nao consegui salvar a gravacao (armazenamento cheio?).'); });
       }
     } catch (_) {}
@@ -1051,7 +1061,24 @@
     try { if (rec.micStream) rec.micStream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} }); } catch (_) {}
     try { if (rec.ac && rec.ac.state !== 'closed') rec.ac.close(); } catch (_) {}
     if (rec.tickIv) { clearInterval(rec.tickIv); rec.tickIv = null; }
-    rec.on = false; rec.starting = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.ac = null; rec.dest = null; rec.micStream = null;
+    rec.on = false; rec.starting = false; rec.auto = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.ac = null; rec.dest = null; rec.micStream = null;
+  }
+  // Grava sozinho quando ha ligacao (se ligado no Ajustes); para sozinho quando a ligacao acaba.
+  function recAutoTick() {
+    try {
+      if (!autoRec) return;
+      var p = callParts(), has = p.remote.length > 0 || p.local.length > 0;
+      if (!has) {
+        recAutoArmed = true;                       // ligacao acabou: pronto pra proxima
+        if (rec.on && rec.auto) recStop();          // para so a gravacao que o AUTO comecou
+        return;
+      }
+      // ha ligacao: comeca UMA vez (se o atendente parar na mao, nao reinicia nesta ligacao)
+      if (recAutoArmed && !rec.on && !rec.starting) {
+        if (Date.now() - recAutoLast < 8000) return;
+        recAutoLast = Date.now(); recAutoArmed = false; rec.auto = true; recStart();
+      }
+    } catch (_) {}
   }
   function recRenderLive() { if (TAB !== 'gravar') return; var t = document.getElementById('zv-rec-timer'); if (t && rec.on) t.textContent = recFmtDur(Date.now() - rec.startAt); }
 
@@ -1089,14 +1116,52 @@
   function recDel(id) { return recDB().then(function (db) { return new Promise(function (res) { var tx = db.transaction(['meta', 'blob'], 'readwrite'); tx.objectStore('meta').delete(id); tx.objectStore('blob').delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { res(); }; }); }); }
   function recSetDesc(id, desc) { return recDB().then(function (db) { return new Promise(function (res) { var tx = db.transaction('meta', 'readwrite'), st = tx.objectStore('meta'), g = st.get(id); g.onsuccess = function () { var v = g.result; if (v) { v.desc = desc; st.put(v); } }; tx.oncomplete = function () { res(); }; tx.onerror = function () { res(); }; }); }); }
 
-  var recUrls = {};
-  function recRevokeUrls() { try { Object.keys(recUrls).forEach(function (k) { try { URL.revokeObjectURL(recUrls[k]); } catch (_) {} }); } catch (_) {} recUrls = {}; }
+  var recUrls = {}, recAudios = {};
+  function recRevokeUrls() {
+    try { Object.keys(recAudios).forEach(function (k) { try { var a = recAudios[k]; if (a) { a.pause(); a.src = ''; } } catch (_) {} }); } catch (_) {}
+    recAudios = {};
+    try { Object.keys(recUrls).forEach(function (k) { try { URL.revokeObjectURL(recUrls[k]); } catch (_) {} }); } catch (_) {}
+    recUrls = {};
+  }
+  // Player proprio de uma gravacao: play/pause + barra clicavel + tempo. Ja aparece na lista; o
+  // audio (blob) so e carregado ao tocar pela 1a vez, entao a lista nao pesa a memoria.
+  function recWirePlayer(row, id, durMs) {
+    var pp = row.querySelector('.zv-rec-pp'), bar = row.querySelector('.zv-rec-bar'),
+        fill = row.querySelector('.zv-rec-fill'), timeEl = row.querySelector('.zv-rec-time');
+    if (!pp) return;
+    var audio = null, loading = false;
+    function fmt(s) { s = Math.max(0, Math.round(s || 0)); var m = Math.floor(s / 60); s = s % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
+    function total() { return (audio && isFinite(audio.duration) && audio.duration > 0) ? audio.duration : (durMs / 1000); }
+    function paint() {
+      var cur = audio ? audio.currentTime : 0, tot = total();
+      if (fill) fill.style.width = (tot > 0 ? Math.min(100, cur / tot * 100) : 0) + '%';
+      if (timeEl) timeEl.textContent = fmt(cur) + ' / ' + fmt(tot);
+      if (pp) pp.innerHTML = (audio && !audio.paused) ? SVG.pause : SVG.play;
+    }
+    function ensure(cb) {
+      if (audio) { cb(); return; }
+      if (loading) return; loading = true;
+      recBlob(id).then(function (b) {
+        loading = false;
+        if (!b) { recToast('Gravacao nao encontrada.'); return; }
+        var url = URL.createObjectURL(b); recUrls[id] = url;
+        audio = new Audio(url); recAudios[id] = audio;
+        audio.ontimeupdate = paint; audio.onended = paint; audio.onloadedmetadata = paint; audio.onplay = paint; audio.onpause = paint;
+        cb();
+      }, function () { loading = false; recToast('Nao consegui carregar a gravacao.'); });
+    }
+    pp.onclick = function () { ensure(function () { if (audio.paused) audio.play(); else audio.pause(); }); };
+    if (bar) bar.onclick = function (e) {
+      ensure(function () { var rct = bar.getBoundingClientRect(), f = (e.clientX - rct.left) / rct.width, tot = total(); if (tot > 0) { audio.currentTime = Math.max(0, Math.min(tot, f * tot)); if (audio.paused) audio.play(); paint(); } });
+    };
+    paint();
+  }
 
   function renderGravarTab(c) {
     recRevokeUrls();
     var parts = callParts(), callLive = parts.remote.length > 0 || parts.local.length > 0;
     var head = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#e0405a">' + SVG.rec + '</span>Gravar chamada</div>' +
-      '<p class="zv-tabhint">Grava a ligacao de voz (as duas vozes) pra guardar o registro do lead confirmando o termo. Fica salvo aqui no seu computador.</p></div>';
+      '<p class="zv-tabhint">Grava a ligacao de voz (as duas vozes) para guardar no seu computador.</p></div>';
     var card;
     if (rec.on) {
       card = '<div class="zv-rec-card zv-rec-live">' +
@@ -1106,13 +1171,13 @@
         '</div>';
     } else {
       card = '<div class="zv-rec-card">' +
-        '<button class="zv-rec-btn zv-rec-go" id="zv-rec-toggle">' + SVG.rec + ' Gravar chamada</button>' +
-        '<div class="zv-rec-hint2">' + (callLive ? '<span class="zv-rec-ok">Chamada detectada</span>' : 'Inicie a ligacao no WhatsApp e clique aqui.') + '</div>' +
+        '<button class="zv-rec-btn zv-rec-go" id="zv-rec-toggle">' + SVG.rec + ' Comecar a gravar</button>' +
+        '<div class="zv-rec-hint2">' + (callLive ? '<span class="zv-rec-ok">Chamada detectada</span>' : (autoRec ? 'Gravacao automatica ligada. Ou clique pra gravar agora.' : 'Comeca a gravar na hora. Se houver ligacao, grava as duas vozes.')) + '</div>' +
         '</div>';
     }
     c.innerHTML = head + '<div class="zv-cbody">' + card + '<div id="zv-rec-list" class="zv-rec-list"><div class="zv-tabhint" style="padding:8px 2px">Carregando...</div></div></div>';
     var tg = document.getElementById('zv-rec-toggle');
-    if (tg) tg.onclick = function () { if (rec.on) recStop(); else recStart(); };
+    if (tg) tg.onclick = function () { if (rec.on) recStop(); else { rec.auto = false; recStart(); } };
     recAllMeta().then(recFillList);
   }
   function recFillList(list) {
@@ -1123,11 +1188,15 @@
       return '<div class="zv-rec-row" data-id="' + esc(r.id) + '">' +
         '<div class="zv-rec-main">' +
           '<div class="zv-rec-rtop"><b>' + esc(r.chatName || '(sem lead)') + '</b><span class="zv-rec-meta">' + esc(meta) + '</span></div>' +
-          '<input class="zv-rec-desc" placeholder="Descricao (opcional)" value="' + esc(r.desc || '') + '">' +
-          '<div class="zv-rec-audio"></div>' +
+          '<input class="zv-rec-desc" placeholder="Descricao" value="' + esc(r.desc || '') + '">' +
+          // Player proprio (combina com o card). Ja aparece; o audio so carrega ao tocar (leve).
+          '<div class="zv-rec-player">' +
+            '<button class="zv-rec-pp" title="Ouvir">' + SVG.play + '</button>' +
+            '<div class="zv-rec-bar"><div class="zv-rec-fill"></div></div>' +
+            '<span class="zv-rec-time">0:00 / ' + recFmtDur(r.durMs || 0) + '</span>' +
+          '</div>' +
         '</div>' +
         '<div class="zv-rec-acts">' +
-          '<button class="zv-rec-play" title="Ouvir">' + SVG.play + '</button>' +
           '<button class="zv-rec-dl" title="Baixar">' + SVG.dl + '</button>' +
           '<button class="zv-rec-del" title="Excluir">' + SVG.trash + '</button>' +
         '</div></div>';
@@ -1139,16 +1208,7 @@
       // Salva ENQUANTO digita (debounced): se o painel se redesenhar (auto-update da config), o
       // texto ja esta no banco e volta certinho, em vez de sumir.
       if (di) { di.oninput = function () { clearTimeout(di._t); di._t = setTimeout(function () { recSetDesc(id, di.value); }, 400); }; di.onchange = function () { clearTimeout(di._t); recSetDesc(id, di.value); }; }
-      var pb = row.querySelector('.zv-rec-play');
-      if (pb) pb.onclick = function () {
-        var host = row.querySelector('.zv-rec-audio');
-        if (host.querySelector('audio')) { var a0 = host.querySelector('audio'); if (a0.paused) a0.play(); else a0.pause(); return; }
-        recBlob(id).then(function (b) {
-          if (!b) { recToast('Gravacao nao encontrada.'); return; }
-          var url = URL.createObjectURL(b); recUrls[id] = url;
-          host.innerHTML = '<audio controls autoplay src="' + url + '" style="width:100%;margin-top:7px"></audio>';
-        });
-      };
+      recWirePlayer(row, id, meta.durMs || 0);
       var db = row.querySelector('.zv-rec-dl');
       if (db) db.onclick = function () {
         recBlob(id).then(function (b) {
