@@ -753,14 +753,29 @@
   // ── Aba FUNIS ── (toque no funil = previa; botao roxo = disparar)
   function renderFunisTab(c) {
     var seqList = DATA.sequences || [];
-    var inner = seqList.length ? seqList.map(function (s, i) {
-      return '<div class="zv-itemwrap">' +
+    // Um funil (o indice ORIGINAL vai no data-fexp/data-si: disparar tem que acertar o funil certo
+    // mesmo com a lista reagrupada).
+    var seqRow = function (s, i) {
+      return '<div class="zv-itemwrap" data-grp="' + esc(String(s.grp || '').trim()) + '">' +
         '<div class="zv-item zv-seqrow" data-fexp="' + i + '">' +
           '<span class="zv-ic zv-seq-ic">' + SVG.seq + '</span>' +
           '<span class="zv-label">' + esc(s.label) + '</span>' +
           '<button class="zv-send zv-seqsend" data-si="' + i + '" title="Disparar funil">' + SVG.play + '</button>' +
           '<span class="zv-exp" title="Prever funil">' + SVG.chevDown + '</span>' +
         '</div><div class="zv-prev" style="display:none"></div></div>';
+    };
+    // Agrupa por subcategoria. Sem subcategoria -> "Geral", que vem primeiro. Um grupo so = sem cabecalho.
+    var groups = {}, order = [];
+    seqList.forEach(function (s, i) {
+      var g = String(s.grp || '').trim() || 'Geral';
+      if (!groups[g]) { groups[g] = []; order.push(g); }
+      groups[g].push({ s: s, i: i });
+    });
+    var gi = order.indexOf('Geral'); if (gi > 0) { order.splice(gi, 1); order.unshift('Geral'); }
+    var single = order.length <= 1;
+    var inner = seqList.length ? order.map(function (g) {
+      var head = single ? '' : '<div class="zv-subh" data-grp="' + esc(g === 'Geral' ? '' : g) + '">' + esc(g) + '<span class="zv-subn">' + groups[g].length + '</span></div>';
+      return head + groups[g].map(function (o) { return seqRow(o.s, o.i); }).join('');
     }).join('') : '<div class="zv-empty">Nenhum funil ainda. Crie na dash (Sale Chat).</div>';
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#8e17f0">' + SVG.funnel + '</span>Funis</div></div><div class="zv-cbody"><div class="zv-list">' + inner + '</div></div>';
     Array.prototype.forEach.call(c.querySelectorAll('.zv-seqrow'), function (row) {

@@ -3942,8 +3942,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.62.0';
-const APP_LAST_CHANGE = 'Sale Chat, dois consertos: (1) A conversa ABERTA NA TELA agora manda. A flag interna .active do WhatsApp e furada nesse build e chegou a apontar pra um lead ANTIGO, com risco de mandar mensagem pro lead errado; se o interno discordar do que esta aberto, vale o que esta aberto. (2) Funil com VIDEO dava alvo expirado: o alvo do video morava na memoria do painel, que se auto-atualiza, e sumia no meio do download. Agora ele sobrevive a atualizacao, e o injetor ainda devolve o alvo junto por seguranca.';
+const APP_VERSION = '2.63.0';
+const APP_LAST_CHANGE = 'Subcategorias agora tambem nos FUNIS, igual as mensagens. No card do funil tem o botaozinho Subcategoria (ex: Homem, Mulher, Follow), com sugestoes das que voce ja criou. A lista de funis agrupa por ela com cabecalho de secao, na dash e no painel do WhatsApp. Funil sem subcategoria fica em Geral, que aparece primeiro.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7988,7 +7988,7 @@ function scpSimLibrary(fast){
       if(fast) return {id:stp.id,delay:Math.min(stp.delay,1),sim:Math.min(stp.sim||0,1)};
       return stp;
     });
-    return {id:s.id,label:s.label,items:items,stopOnReply:!!s.stopOnReply};
+    return {id:s.id,label:s.label,items:items,stopOnReply:!!s.stopOnReply,grp:s.grp||''};
   });
   var media=(sc.media||[]).map(function(m){
     var url=m.key?scMediaUrl(m.key):'';
@@ -8495,13 +8495,19 @@ function scAddDdRows(i,opts){
   if(!opts.length) return '<div class="muted" style="padding:8px 10px;font-size:11.5px">Nenhum item ainda. Crie mensagens/áudios primeiro.</div>';
   return opts.map(o=>{ const me=scItemMeta(o.id); return `<button type="button" class="sc-dd-row" onclick="scAddFunilItem(${i},'${o.id}')"><span class="sc-dd-ic" style="background:${me.color}1f;color:${me.color}">${ico(me.icon,{size:14})}</span><span class="sc-dd-lb">${scEscT(me.label)}</span></button>`; }).join('');
 }
+// Subcategorias ja usadas nos funis (pra sugerir no campo e agrupar a lista).
+function scFunilGroups(){ var seen={}, out=[]; (SC().sequences||[]).forEach(function(s){ var g=String(s.grp||'').trim(); if(g&&!seen[g.toLowerCase()]){ seen[g.toLowerCase()]=1; out.push(g); } }); return out.sort(function(a,b){ return a.localeCompare(b); }); }
+function scFunilGrp(i,v){ const s=SC().sequences[i]; if(s){ s.grp=String(v||'').trim(); scTouch(); } }
+function scToggleFGrp(i){ var r=$('sc-fgrp-row-'+i); if(!r) return; var open=(r.style.display==='none'); r.style.display=open?'':'none'; if(open){ var inp=$('sc-fgrp-'+i); if(inp) setTimeout(function(){ inp.focus(); },20); } }
+function scFGrpSync(i){ var inp=$('sc-fgrp-'+i), b=$('sc-fgrp-btn-'+i); if(!inp||!b) return; var v=(inp.value||'').trim(); b.classList.toggle('on',!!v); var t=b.querySelector('.sc-grp-btn-t'); if(t) t.textContent=v||'Subcategoria'; }
 function scRenderFunis(){
   const box=$('sc-list'); if(!box) return;
   scDdBind();
   const seqs=SC().sequences;
   if(!seqs.length){ box.innerHTML=scEmpty('Nenhum funil. Clica em "+ Novo funil".'); return; }
   const opts=scAllItems();
-  box.innerHTML=seqs.map((s,i)=>{
+  const grps=scFunilGroups();
+  const card=(s,i)=>{
     const steps=(s.items||[]);
     const stepsHtml = steps.length ? steps.map((raw,j)=>{ const st=scStep(raw), me=scItemMeta(st.id); return `
       <div class="sc-step">
@@ -8514,15 +8520,21 @@ function scRenderFunis(){
         </div>
         <button class="sc-step-del" title="Remover passo" onclick="scRemoveFunilItem(${i},${j})">${ico('x',{size:14})}</button>
       </div>`; }).join('') : '<div class="muted" style="font-size:11.5px;padding:3px 2px">Sem passos ainda, adiciona abaixo.</div>';
+    const curGrp=String(s.grp||''), hasGrp=!!curGrp.trim();
     return `
     <div class="sc-fcard">
       <div class="sc-fcard-head">
         <span class="sc-fic">${ico('repeat',{size:17})}</span>
         <input class="sc-fname" value="${scEscA(s.label)}" placeholder="Nome do funil (ex: Abertura)" oninput="scFunilLabel(${i},this.value)">
         <div class="sc-fhead-acts">
+          <button type="button" class="sc-grp-btn${hasGrp?' on':''}" id="sc-fgrp-btn-${i}" title="Agrupar este funil numa subcategoria (opcional)" onclick="scToggleFGrp(${i})">${ico('tag',{size:13})}<span class="sc-grp-btn-t">${hasGrp?scEscT(curGrp):'Subcategoria'}</span></button>
           ${scOrderBtns('scMoveFunil',i,seqs.length)}
           <button class="btn btn-gh btn-xs sc-del" title="Excluir funil" onclick="scDelFunil(${i})">${ico('trash',{size:13})}</button>
         </div>
+      </div>
+      <div class="sc-grp-row" id="sc-fgrp-row-${i}"${hasGrp?'':' style="display:none"'}>
+        <input id="sc-fgrp-${i}" class="info-val" list="sc-fgrp-list" value="${scEscA(curGrp)}" placeholder="Ex: Homem, Mulher, Follow... (vazio = Geral)" oninput="scFGrpSync(${i})" onchange="scFunilGrp(${i},this.value);scRenderFunis()">
+        <div class="sc-grp-hint">Vazio fica em "Geral" (que aparece primeiro). Com subcategoria, agrupa numa seção embaixo.</div>
       </div>
       <div class="sc-steps">${stepsHtml}</div>
       <details class="sc-adddd">
@@ -8535,7 +8547,18 @@ function scRenderFunis(){
       </label>
       <p class="sc-fhint">Espera = intervalo antes de cada passo. Simula = tempo de gravando/digitando (0 = automático). O simulador abaixo mostra o funil rodando.</p>
     </div>`;
-  }).join('');
+  };
+  // Agrupa por subcategoria, preservando o indice ORIGINAL (os botoes do card usam ele).
+  // "Geral" (sem subcategoria) tem prioridade e vem primeiro.
+  const groups={}, order=[];
+  seqs.forEach(function(s,i){ const g=String(s.grp||'').trim()||'Geral'; if(!groups[g]){ groups[g]=[]; order.push(g); } groups[g].push({s:s,i:i}); });
+  const gi=order.indexOf('Geral'); if(gi>0){ order.splice(gi,1); order.unshift('Geral'); }
+  const single=(order.length===1);
+  box.innerHTML=`<datalist id="sc-fgrp-list">${grps.map(g=>`<option value="${scEscA(g)}"></option>`).join('')}</datalist>`+
+    order.map(function(g){
+      const head=single?'':`<div class="sc-grp-head">${scEscT(g)}<span class="sc-grp-n">${groups[g].length}</span></div>`;
+      return head+groups[g].map(function(o){ return card(o.s,o.i); }).join('');
+    }).join('');
 }
 function scAddFunil(){ SC().sequences.push({id:'seq'+Date.now().toString(36),label:'Novo funil',items:[]}); scTouch(); scRenderFunis(); scRenderNav(); }
 function scDelFunil(i){ SC().sequences.splice(i,1); scTouch(); scRenderFunis(); scRenderNav(); }
