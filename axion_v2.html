@@ -3942,8 +3942,8 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.64.0';
-const APP_LAST_CHANGE = 'Video do Sale Chat ficou RAPIDO: antes ele era rebaixado da nuvem a cada disparo. Agora fica salvo no PC do atendente e o envio le do disco. Os videos sao pre-baixados quando o Sale Chat abre, entao ate o primeiro envio ja sai rapido, e o que sai da biblioteca e apagado sozinho. Junto foi corrigido um bug antigo: quando a pagina do WhatsApp recarregava, o painel voltava com a biblioteca ANTIGA e podia disparar um video VELHO pro lead. IMPORTANTE: isso mexe no injetor, entao os atendentes precisam rebaixar o instalador.';
+const APP_VERSION = '2.65.0';
+const APP_LAST_CHANGE = 'A pilha de envios virou FILA de verdade: um envio por vez, na ordem do clique. O funil do lead A termina INTEIRO antes de comecar o do lead B, e nunca mais dois leads recebem ao mesmo tempo (item, funil e agendado entram na mesma fila). Corrigido o bug de disparar e nao aparecer na pilha: era o painel se auto-atualizando no meio do envio e zerando a lista; agora ele espera a fila esvaziar. E toda chamada ao WhatsApp ganhou teto de tempo + watchdog, pra um envio travado nunca congelar a fila dos outros.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor

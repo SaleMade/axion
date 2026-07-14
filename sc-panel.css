@@ -14,7 +14,7 @@
 #zv-panel.zv-collapsed #zv-who{ display:none; }
 /* Só-barra: clicar na aba ativa minimiza a esquerda, sobra so a barrinha de icones */
 #zv-panel.zv-railonly{ width:74px; }
-#zv-panel.zv-railonly #zv-head, #zv-panel.zv-railonly #zv-content, #zv-panel.zv-railonly #zv-suggest, #zv-panel.zv-railonly #zv-status{ display:none; }
+#zv-panel.zv-railonly #zv-head, #zv-panel.zv-railonly #zv-content, #zv-panel.zv-railonly #zv-suggest, #zv-panel.zv-railonly #zv-status, #zv-panel.zv-railonly #zv-sending{ display:none; }
 #zv-panel.zv-railonly #zv-rail{ border-left:none; }
 #zv-head{ display:flex; align-items:center; gap:10px; padding:14px 16px; background:linear-gradient(135deg,#13c273,#0eb267); user-select:none; color:#fff; flex:none; }
 #zv-dot{ width:9px; height:9px; border-radius:50%; flex:none; box-shadow:0 0 0 3px rgba(255,255,255,.25); }
@@ -173,6 +173,9 @@
 .zv-snd-stop svg{ width:12px; height:12px; }
 .zv-snd-stoplbl{ flex:none; font-size:11px; font-weight:800; color:#f0810f; }
 .zv-snd-stopping{ opacity:.65; }
+/* Esperando a vez na fila: sem giro (nao esta indo ainda) e mais apagado que o que esta enviando. */
+.zv-snd-wait{ opacity:.6; }
+.zv-snd-wait .zv-snd-spin{ animation:none; border-color:rgba(19,194,115,.28); border-top-color:rgba(19,194,115,.28); }
 .zv-snd-stopping .zv-snd-spin{ animation:none; border-top-color:#f0810f; border-color:rgba(240,129,15,.35); }
 #zv-panel.zv-dark #zv-sending{ background:#0f2019; border-bottom-color:#1c3a2c; }
 #zv-panel.zv-dark .zv-snd-row + .zv-snd-row{ border-top-color:rgba(201,242,223,.10); }

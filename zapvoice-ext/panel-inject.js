@@ -17,11 +17,76 @@
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
   var simulate = true, els = {}, itemById = {};
-  // Envios concorrentes: cada envio (item OU funil) vira um JOB independente, com seu proprio
-  // alvo (lead), progresso e stop. Assim da pra mandar pra varios leads ao mesmo tempo e o
-  // banner mostra todos empilhados, cada um com seu Pausar.
-  var jobs = [];
+  // ─── FILA de envios (a "pilha") ────────────────────────────────────────────────────────
+  // UM envio por vez, na ordem em que foi clicado. O funil/item da vez termina INTEIRO antes do
+  // proximo comecar — nunca dois leads recebendo ao mesmo tempo. Isso vale pra item, funil E
+  // agendamento (todos entram na MESMA fila). O banner mostra o que esta indo agora e quem
+  // esta esperando a vez, com a posicao.
+  var jobs = [];              // jobs[0] = o da vez; o resto aguarda
+  var jobRunning = false;
+  function jobId() { return 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+  function jobAdd(job) { jobs.push(job); renderSending(); pumpJobs(); return job; }
+  function jobDrop(job) {
+    // IDEMPOTENTE de proposito: um fin() atrasado (promise orfa que voltou depois) NAO pode
+    // liberar a fila duas vezes — isso subiria DOIS jobs em paralelo (dois leads ao mesmo tempo).
+    if (job.__dropped) return;
+    job.__dropped = true;
+    if (job.wdT) { clearTimeout(job.wdT); job.wdT = null; }
+    jobs = jobs.filter(function (x) { return x.id !== job.id; });
+    if (job.started) jobRunning = false;
+    renderSending(); pumpJobs();
+  }
+  function pumpJobs() {
+    if (jobRunning) return;
+    var job = jobs[0];
+    if (!job) return;
+    if (job.stop) { jobs.shift(); renderSending(); pumpJobs(); return; }   // cancelado antes da vez
+    jobRunning = true; job.started = true; renderSending();
+    var fin = function () { jobDrop(job); };
+    // WATCHDOG: como a fila e serial, um envio pendurado (WhatsApp em "Reconectando") congelaria
+    // TODOS os leads pra sempre. Estourou o teto: pede stop e, se em 15s nao sair, ABANDONA. A
+    // promise orfa ate pode entregar depois, mas a FILA ANDA. Nenhum envio segura os outros.
+    var budget = job.budgetMs || 300000;
+    job.wdT = setTimeout(function () {
+      job.stop = true; renderSending();
+      status('Envio travado -> ' + (job.chatName || '') + ' (liberei a fila)', 'err');
+      job.wdT = setTimeout(fin, 15000);
+    }, budget);
+    try { var p = job.run(job); if (p && p.then) p.then(fin, fin); else fin(); }
+    catch (_) { fin(); }
+  }
+  // Pausar/remover. Nao comecou -> sai da fila na hora. Ja esta indo -> pede pra parar; um
+  // segundo clique (ou o force) ABANDONA na marra, pra nunca existir job impossivel de tirar.
+  function jobStop(id, force) {
+    for (var k = 0; k < jobs.length; k++) {
+      if (jobs[k].id !== id) continue;
+      var j = jobs[k];
+      if (!j.started) { jobs.splice(k, 1); status('Tirado da fila (' + (j.chatName || '') + ')', 'err'); break; }
+      if (force || j.stop) { status('Envio abandonado -> ' + (j.chatName || '') + ' (liberei a fila)', 'err'); jobDrop(j); return; }
+      j.stop = true; break;
+    }
+    renderSending(); pumpJobs();
+  }
+  // O injetor consulta isto pra NAO se auto-atualizar no meio de um envio: reinjetar o painel
+  // zera a fila, e o envio continua entregando mas SOME do banner (era esse o bug do "disparei
+  // e nao apareceu na pilha").
+  window.__zvBusy = function () { try { return jobs.length > 0; } catch (_) { return false; } };
 
+  // Promise do WPP com TETO. Se o WhatsApp entra em "Reconectando", a promise dele pode NUNCA
+  // voltar. Como a fila e serial, um envio pendurado congelaria TODOS os leads. Isto garante que
+  // toda chamada assenta: ou responde, ou falha por tempo. Nunca fica em aberto.
+  function withTimeout(p, ms, tag) {
+    return new Promise(function (res) {
+      var done = false;
+      var t = setTimeout(function () { if (!done) { done = true; res({ ok: false, err: 'demorou demais (' + tag + ')' }); } }, ms);
+      try {
+        Promise.resolve(p).then(
+          function () { if (!done) { done = true; clearTimeout(t); res({ ok: true }); } },
+          function (e) { if (!done) { done = true; clearTimeout(t); res({ ok: false, err: (e && e.message) || ('' + e) }); } }
+        );
+      } catch (e) { if (!done) { done = true; clearTimeout(t); res({ ok: false, err: (e && e.message) || ('' + e) }); } }
+    });
+  }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   // Espera ms, mas checando stopFn a cada ~400ms. Resolve true se foi parado (pausar rapido).
@@ -302,6 +367,11 @@
   // meio do download do video (que demora, vem da nuvem) apagaria o alvo e o envio abortaria com
   // "alvo expirado" — foi o que aconteceu no funil de video. No window, ele sobrevive.
   var videoTargets = window.__zvTargets || (window.__zvTargets = {});
+  // Videos CANCELADOS (o atendente pausou / o funil parou). Precisa ser explicito: o injetor
+  // devolve o chatId do pedido junto com o video, entao apagar o alvo nao basta pra impedir o
+  // envio — sem esta marca, um video pausado seria entregue assim mesmo.
+  var videoCanc = window.__zvCanc || (window.__zvCanc = {});
+  function videoCancel(rid) { try { videoCanc[rid] = 1; delete videoTargets[rid]; } catch (_) {} }
   // Fila de videos: window.__zvReq e um slot UNICO (o injetor le um por vez). Se dois videos
   // setam o slot no mesmo instante, um se sobrescreve e se perde. Por isso serializamos: so
   // um video ocupa o slot por vez; os demais esperam a vez.
@@ -310,16 +380,16 @@
     if (videoBusy || !videoQueue.length) return;
     var job = videoQueue.shift();
     // Se o job (funil/item) desse video foi pausado antes de comecar, nao envia.
-    if (job.stopFn && job.stopFn()) { delete videoTargets[job.rid]; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); return; }
+    if (job.stopFn && job.stopFn()) { videoCancel(job.rid); job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); return; }
     videoBusy = true;
     try { window.__zvRes = null; } catch (_) {}
     window.__zvReq = job.req;
     var waited = 0;
     var iv = setInterval(function () {
       waited += 500; var res = window.__zvRes;
-      if (job.stopFn && job.stopFn()) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); }
+      if (job.stopFn && job.stopFn()) { clearInterval(iv); videoCancel(job.rid); videoBusy = false; job.resolve({ ok: false, cancelled: true }); pumpVideoQueue(); }
       else if (res && res.id === job.rid) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: !!res.ok, err: res.err }); pumpVideoQueue(); }
-      else if (waited > 180000) { clearInterval(iv); delete videoTargets[job.rid]; videoBusy = false; job.resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); pumpVideoQueue(); }
+      else if (waited > 180000) { clearInterval(iv); videoCancel(job.rid); videoBusy = false; job.resolve({ ok: false, err: 'timeout (start.bat rodando?)' }); pumpVideoQueue(); }
     }, 500);
   }
   function activeInfo() {
@@ -352,6 +422,7 @@
         // Alvo travado no clique. NUNCA cai pro chat aberto agora (mandaria pro lead errado).
         // fromInjector = o mesmo chatId que o painel mandou no pedido e o injetor devolve de
         // volta; e so redundancia do alvo travado, nao o chat atual.
+        if (videoCanc[id]) { delete videoCanc[id]; delete videoTargets[id]; window.__zvRes = { id: id, ok: false, cancelled: true, err: 'cancelado' }; return; }
         var toId = videoTargets[id] || fromInjector || null; delete videoTargets[id];
         if (!toId) { window.__zvRes = { id: id, ok: false, err: 'alvo expirado (nao enviei pra nao errar o lead)' }; return; }
         window.WPP.chat.sendFileMessage(toId, dataUri, { type: 'video', caption: caption || '' })
@@ -395,8 +466,14 @@
       var any = false;
       // So para o funil do lead que REALMENTE respondeu (match exato). Sem remetente
       // identificavel, nao para nada — pra um evento ambiguo nao derrubar funis de outros leads.
-      jobs.forEach(function (j) { if (j.stopOnReply && !j.stop && mFromS && mFromS === j.chatId) { j.stop = true; any = true; } });
-      if (any) { renderSending(); status('Funil parado: o lead respondeu', 'err'); }
+      jobs.slice().forEach(function (j) {
+        if (!j.stopOnReply || j.stop || !mFromS || mFromS !== j.chatId) return;
+        // Ja esta indo: pede pra parar. Ainda na fila: tira fora na hora (nem chega a comecar).
+        if (j.started) j.stop = true;
+        else jobs = jobs.filter(function (x) { return x.id !== j.id; });
+        any = true;
+      });
+      if (any) { renderSending(); pumpJobs(); status('Funil parado: o lead respondeu', 'err'); }
     }
     var trs = DATA.triggers || [];
     if (!trs.length) return;
@@ -452,7 +529,22 @@
     var now = Date.now(), due = a.filter(function (s) { return s.at <= now; });
     if (!due.length) return;
     schedSet(a.filter(function (s) { return s.at > now; }));
-    due.forEach(function (s) { var it = itemById[s.itemId]; if (it) sendItemAsync(it, s.chatId); });
+    // Agendado tambem ENTRA NA FILA (antes disparava direto e podia mandar pra outro lead no
+    // meio de um funil — dois leads recebendo ao mesmo tempo).
+    due.forEach(function (s) {
+      var it = itemById[s.itemId]; if (!it || !s.chatId) return;
+      jobAdd({
+        id: jobId(), kind: 'item', itemId: it.id, chatId: s.chatId, chatName: s.chatName || '',
+        name: 'Agendado: ' + (it.label || ''), sub: '', stop: false, started: false,
+        budgetMs: it.kind === 'video' ? 480000 : 300000,
+        run: function (j) {
+          j.sub = 'Enviando…'; renderSending();
+          return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
+            status(r.ok ? ('Agendado enviado -> ' + (j.chatName || '')) : ('Falha no agendado -> ' + (j.chatName || '') + ': ' + (r.err || '')), r.ok ? 'ok' : 'err');
+          });
+        },
+      });
+    });
     var b = document.getElementById('zv-sched'); if (b && b.style.display !== 'none') schedRender();
   }
 
@@ -871,20 +963,30 @@
   // lead) com seu progresso e um Pausar proprio. Ao pausar, a linha mostra "Parando..." na hora
   // (feedback claro) e some quando o envio para de fato. Some tudo quando nao ha job ativo.
   function renderSending() {
-    var el = els.sending; if (!el) return;
+    // rebusca o elemento se a referencia sumiu (senao o envio rodava sem aparecer no banner)
+    var el = els.sending || (els.sending = document.getElementById('zv-sending'));
+    if (!el) return;
     if (!jobs.length) { el.style.display = 'none'; el.innerHTML = ''; try { dockLayout(); } catch (_) {} return; }
-    el.innerHTML = jobs.map(function (j) {
-      var stopping = !!j.stop;
-      return '<div class="zv-snd-row' + (stopping ? ' zv-snd-stopping' : '') + '">' +
+    el.innerHTML = jobs.map(function (j, idx) {
+      var waiting = !j.started;
+      var stopping = j.started && j.stop;
+      var sub = stopping ? 'Parando…'
+              : waiting ? ('Na fila · ' + idx + (idx === 1 ? ' na frente' : ' na frente'))
+              : (j.sub || '');
+      var cls = 'zv-snd-row' + (stopping ? ' zv-snd-stopping' : '') + (waiting ? ' zv-snd-wait' : '');
+      // Mesmo "Parando…" mantem botao: se o envio empacar, o atendente forca a saida e a fila anda.
+      var btn = stopping
+        ? '<button class="zv-snd-stop" data-job="' + j.id + '" data-force="1">' + SVG.pause + ' Forçar saída</button>'
+        : '<button class="zv-snd-stop" data-job="' + j.id + '">' + SVG.pause + (waiting ? ' Tirar da fila' : ' Pausar') + '</button>';
+      return '<div class="' + cls + '">' +
         '<span class="zv-snd-spin"></span>' +
         '<div class="zv-snd-txt"><b>' + esc(j.name) + (j.chatName ? ' <em class="zv-snd-to">&rarr; ' + esc(j.chatName) + '</em>' : '') + '</b>' +
-          '<span>' + esc(stopping ? 'Parando…' : (j.sub || '')) + '</span></div>' +
-        (stopping ? '<span class="zv-snd-stoplbl">Parando…</span>' : '<button class="zv-snd-stop" data-job="' + j.id + '">' + SVG.pause + ' Pausar</button>') +
+          '<span>' + esc(sub) + '</span></div>' + btn +
         '</div>';
     }).join('');
     el.style.display = 'block';
     Array.prototype.forEach.call(el.querySelectorAll('.zv-snd-stop'), function (btn) {
-      btn.onclick = function (e) { e.stopPropagation(); var jid = btn.getAttribute('data-job'); for (var k = 0; k < jobs.length; k++) { if (jobs[k].id === jid) { jobs[k].stop = true; break; } } renderSending(); };
+      btn.onclick = function (e) { e.stopPropagation(); jobStop(btn.getAttribute('data-job'), btn.getAttribute('data-force') === '1'); };
     });
     try { dockLayout(); } catch (_) {}
   }
@@ -916,33 +1018,33 @@
         return;
       }
       if (item.kind === 'image') {
-        window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'image', caption: item.caption || '' })
-          .then(function () { resolve({ ok: true }); })
-          .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+        withTimeout(window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem').then(resolve);
         return;
       }
       if (item.kind === 'document') {
-        window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'documento' })
-          .then(function () { resolve({ ok: true }); })
-          .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
+        withTimeout(window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'documento' }), 120000, 'documento').then(resolve);
         return;
       }
       if (item.kind === 'text') {
         var stMs = opts.simMs > 0 ? opts.simMs : 1200;
         var preT = Promise.resolve();
-        if (simulate) { try { preT = Promise.resolve(window.WPP.chat.markIsComposing(chatId, stMs + 300)).catch(function () {}); } catch (_) {} }
+        if (simulate) { try { preT = withTimeout(window.WPP.chat.markIsComposing(chatId, stMs + 300), 8000, 'digitando'); } catch (_) {} }
         preT.then(function () { return sleepStop(stMs, opts.stopFn); })
-          .then(function (stopped) { if (stopped) return { __cancel: true }; return window.WPP.chat.sendTextMessage(chatId, item.text || ''); })
-          .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
+          .then(function (stopped) {
+            if (stopped) { resolve({ ok: false, cancelled: true }); return; }
+            return withTimeout(window.WPP.chat.sendTextMessage(chatId, item.text || ''), 60000, 'texto').then(resolve);
+          })
           .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
         return;
       }
       var dur = opts.simMs > 0 ? opts.simMs : (item.durMs || 3000);
       var pre = Promise.resolve();
-      if (simulate) { try { pre = Promise.resolve(window.WPP.chat.markIsRecording(chatId, dur)).catch(function () {}); } catch (_) {} }
+      if (simulate) { try { pre = withTimeout(window.WPP.chat.markIsRecording(chatId, dur), 8000, 'gravando'); } catch (_) {} }
       pre.then(function () { return sleepStop(dur, opts.stopFn); })
-        .then(function (stopped) { if (stopped) return { __cancel: true }; return window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }); })
-        .then(function (r) { resolve(r && r.__cancel ? { ok: false, cancelled: true } : { ok: true }); })
+        .then(function (stopped) {
+          if (stopped) { resolve({ ok: false, cancelled: true }); return; }
+          return withTimeout(window.WPP.chat.sendFileMessage(chatId, item.dataUri, { type: 'audio', isPtt: true }), 120000, 'audio').then(resolve);
+        })
         .catch(function (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); });
      } catch (e) { resolve({ ok: false, err: (e && e.message) || ('' + e) }); }
     });
@@ -959,14 +1061,22 @@
     if (!c || c.isGroup) { status(c && c.isGroup ? 'Isso e um grupo; abra um lead' : ('Abra a conversa de um lead [' + engineDiag() + ']'), 'err'); return; }
     var chatId = chatIdOf(c);
     if (!chatId) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
-    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].itemId === item.id) { status('Esse item ja esta indo pra esse lead', 'err'); return; } }
+    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].itemId === item.id) { status('Esse item ja esta na fila pra esse lead', 'err'); return; } }
     var kindLbl = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
     var who = chatName(c);
-    var job = { id: 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'item', itemId: item.id, chatId: chatId, chatName: who, name: item.label || kindLbl, sub: (item.kind === 'text' ? (simulate ? 'Digitando…' : 'Enviando…') : item.kind === 'audio' ? (simulate ? 'Gravando…' : 'Enviando…') : ('Enviando ' + kindLbl.toLowerCase() + '…')), stop: false };
-    jobs.push(job); renderSending();
-    sendItemAsync(item, chatId, { stopFn: function () { return job.stop; } }).then(function (r) {
-      jobs = jobs.filter(function (x) { return x.id !== job.id; }); renderSending();
-      status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || '') + ' [' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
+    jobAdd({
+      id: jobId(), kind: 'item', itemId: item.id, chatId: chatId, chatName: who,
+      name: item.label || kindLbl, sub: '', stop: false, started: false,
+      budgetMs: item.kind === 'video' ? 480000 : 300000,
+      run: function (j) {
+        // re-resolve o item AGORA: ele pode ter sido editado na dash enquanto esperava na fila
+        var it = itemById[item.id] || item;
+        j.sub = (it.kind === 'text' ? (simulate ? 'Digitando…' : 'Enviando…') : it.kind === 'audio' ? (simulate ? 'Gravando…' : 'Enviando…') : ('Enviando ' + kindLbl.toLowerCase() + '…'));
+        renderSending();
+        return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
+          status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || '') + ' [' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
+        });
+      },
     });
   }
 
@@ -984,41 +1094,49 @@
     if (!c || c.isGroup) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
     var chatId = chatIdOf(c);
     if (!chatId) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }  // sem alvo travado, nem comeca
-    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].seqId === seq.id) { status('Esse funil ja esta indo pra esse lead', 'err'); return; } }
+    for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].seqId === seq.id) { status('Esse funil ja esta na fila pra esse lead', 'err'); return; } }
     var who = chatName(c);
-    var job = { id: 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'funil', seqId: seq.id, chatId: chatId, chatName: who, name: 'Funil: ' + (seq.label || 'Funil'), sub: '', stop: false, stopOnReply: !!seq.stopOnReply };
-    jobs.push(job); renderSending();
-    var stopFn = function () { return job.stop; };
-    function finish(how, err) {
-      jobs = jobs.filter(function (x) { return x.id !== job.id; }); renderSending();
-      status(how === 'ok' ? ('Funil enviado (' + steps.length + ') -> ' + who) : how === 'parado' ? ('Funil parado -> ' + who) : ('Falha no funil -> ' + who + (err ? ': ' + err : '')), how === 'ok' ? 'ok' : 'err');
-    }
-    var i = 0;
-    (function next() {
-      if (job.stop) { finish('parado'); return; }
-      if (i >= steps.length) { finish('ok'); return; }
-      var it = itemById[steps[i].id];
-      if (!it) { i++; setTimeout(next, 0); return; }   // item foi apagado/editado na dash no meio: pula
-      var wait = Math.max(0, steps[i].delay || 0) * 1000;
-      if (wait > 0) { job.sub = 'Aguardando ' + steps[i].delay + 's · próximo passo ' + (i + 1) + '/' + steps.length + (it ? ' (' + it.label + ')' : ''); renderSending(); }
-      // Espera checando o stop a cada 500ms, pra o Pausar responder rapido (nao ficar preso o delay).
-      var waited = 0;
-      (function waitLoop() {
-        if (job.stop) { finish('parado'); return; }
-        if (waited >= wait) {
-          job.sub = 'Enviando passo ' + (i + 1) + ' de ' + steps.length + (it ? ' · ' + it.label : ''); renderSending();
-          sendItemAsync(itemById[steps[i].id], chatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0, stopFn: stopFn }).then(function (r) {
-            i++;
+    jobAdd({
+      id: jobId(), kind: 'funil', seqId: seq.id, chatId: chatId, chatName: who,
+      name: 'Funil: ' + (seq.label || 'Funil'), sub: '', stop: false, started: false,
+      stopOnReply: !!seq.stopOnReply,
+      budgetMs: steps.reduce(function (a, st) { return a + (st.delay || 0) * 1000 + (st.sim || 0) * 1000; }, 0) + steps.length * 180000 + 60000,
+      run: function (job) {
+        return new Promise(function (done) {
+          var stopFn = function () { return job.stop; };
+          function finish(how, err) {
+            status(how === 'ok' ? ('Funil enviado (' + steps.length + ') -> ' + who) : how === 'parado' ? ('Funil parado -> ' + who) : ('Falha no funil -> ' + who + (err ? ': ' + err : '')), how === 'ok' ? 'ok' : 'err');
+            done();
+          }
+          var i = 0;
+          (function next() {
             if (job.stop) { finish('parado'); return; }
-            if (!r.ok && !r.cancelled) { finish('falha', r.err); return; }
-            setTimeout(next, 400);
-          });
-          return;
-        }
-        var step = Math.min(500, wait - waited);
-        setTimeout(function () { waited += step; waitLoop(); }, step);
-      })();
-    })();
+            if (i >= steps.length) { finish('ok'); return; }
+            var it = itemById[steps[i].id];
+            if (!it) { i++; setTimeout(next, 0); return; }   // item apagado na dash no meio: pula
+            var wait = Math.max(0, steps[i].delay || 0) * 1000;
+            if (wait > 0) { job.sub = 'Aguardando ' + steps[i].delay + 's · próximo passo ' + (i + 1) + '/' + steps.length + ' (' + it.label + ')'; renderSending(); }
+            // Espera checando o stop a cada 500ms, pro Pausar responder rapido.
+            var waited = 0;
+            (function waitLoop() {
+              if (job.stop) { finish('parado'); return; }
+              if (waited >= wait) {
+                job.sub = 'Enviando passo ' + (i + 1) + ' de ' + steps.length + ' · ' + it.label; renderSending();
+                sendItemAsync(itemById[steps[i].id], job.chatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0, stopFn: stopFn }).then(function (r) {
+                  i++;
+                  if (job.stop) { finish('parado'); return; }
+                  if (!r.ok && !r.cancelled) { finish('falha', r.err); return; }
+                  setTimeout(next, 400);
+                });
+                return;
+              }
+              var step = Math.min(500, wait - waited);
+              setTimeout(function () { waited += step; waitLoop(); }, step);
+            })();
+          })();
+        });
+      },
+    });
   }
 
   function poll() {

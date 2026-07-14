@@ -192,7 +192,8 @@ async function fetchPanelAssets() {
   return { panelRaw: pj, css: pcss };
 }
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return String(h >>> 0); }
-let currentPanelHash = '';
+let currentPanelHash = '';   // hash do painel que esta RODANDO na pagina
+let builtPanelHash = '';     // hash do painel que o buildBundle acabou de baixar (ainda nao aplicado)
 
 function getJson(pathname) {
   return new Promise((res, rej) => {
@@ -280,7 +281,7 @@ async function buildBundle() {
   const rp = await fetchPanelAssets();
   if (rp) { panelRaw = rp.panelRaw; css = rp.css; src = 'servidor'; }
   else { panelRaw = fs.readFileSync(path.join(DIR, 'panel-inject.js'), 'utf8'); css = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8'); }
-  currentPanelHash = hashStr(panelRaw + '|' + css);
+  builtPanelHash = hashStr(panelRaw + '|' + css);   // baixado; so vira 'currentPanelHash' quando REALMENTE rodar
   console.log('[zv] Painel carregado do ' + src + '.');
   // replace por FUNCAO (imune a sequencias $ nos dados, ex: "R$497")
   const libJson = JSON.stringify(await buildLibrary(remote));
@@ -414,6 +415,7 @@ async function run() {
     const hasWpp = valOf(await evaluate('!!window.WPP', true));
     if (!hasWpp) await evaluate(wajs, false, 'WA-JS');
     await evaluate(panel, false, 'painel');
+    currentPanelHash = builtPanelHash;   // agora sim: o que esta rodando na pagina
     const ok = valOf(await evaluate('!!window.__zvInstalled', true));
     console.log('[zv] Painel injetado:', ok === true);
     // Da uns segundos pro WA-JS engatar nos modulos da pagina antes de julgar.
@@ -521,17 +523,27 @@ async function run() {
   // atendente ganha as melhorias sem rebaixar nada. Falha/offline -> mantem o painel atual.
   async function pollPanel() {
     try {
+      // NAO re-injetar no meio de um envio: reinjetar o painel zera a fila, e o envio continua
+      // entregando mas SOME do banner (era o bug do "disparei e nao apareceu na pilha").
+      // Se estiver ocupado, espera a proxima rodada.
+      const busy = valOf(await evaluate('!!(window.__zvBusy && window.__zvBusy())', true)) === true;
+      if (busy) { setTimeout(pollPanel, 60000); return; }
       const rp = await fetchPanelAssets();
       if (rp) {
         const h = hashStr(rp.panelRaw + '|' + rp.css);
         if (currentPanelHash && h !== currentPanelHash) {
-          const rebuilt = await buildBundle();   // usa a versao nova do servidor; atualiza currentPanelHash
+          const rebuilt = await buildBundle();   // baixa a versao nova (demora: rede + midia)
           const okNew = rebuilt && rebuilt.panel && rebuilt.panel.indexOf('__zvInstalled') >= 0;
           if (okNew) {
+            // RECHECA o "ocupado" agora: baixar o bundle leva tempo e o atendente pode ter
+            // disparado um envio nesse meio-tempo. Sem isto, a fila seria zerada mesmo assim.
+            const busy2 = valOf(await evaluate('!!(window.__zvBusy && window.__zvBusy())', true)) === true;
+            if (busy2) { setTimeout(pollPanel, 60000); return; }
             panel = rebuilt.panel;
             try { if (panelScriptId) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: panelScriptId }); } catch (_) {}
             { const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: panel }); panelScriptId = r && r.result && r.result.identifier; }
             await evaluate(panel);
+            currentPanelHash = builtPanelHash;   // so AGORA o painel novo esta rodando de fato
             console.log('[zv] Painel atualizado sozinho (nova versao do servidor).');
           }
         }
