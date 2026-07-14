@@ -55,7 +55,7 @@
   var jobs = [];              // jobs[0] = o da vez; o resto aguarda
   var jobRunning = false;
   // Estado da GRAVACAO de chamada (uma por vez). Declarado cedo pro __zvBusy enxergar.
-  var rec = { on: false, starting: false, auto: false, mr: null, chunks: [], ac: null, dest: null, sources: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, tickIv: null, mime: 'audio/webm' };
+  var rec = { on: false, starting: false, auto: false, mr: null, chunks: [], ac: null, dest: null, sources: [], sinks: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, hadRemote: false, tickIv: null, mime: 'audio/webm' };
   // Gravar automaticamente quando detectar ligacao (setting do Ajustes).
   var autoRec = false; try { autoRec = localStorage.getItem('zv_autorec') === '1'; } catch (_) {}
   var recAutoLast = 0, recAutoArmed = true;   // uma gravacao automatica por ligacao
@@ -999,6 +999,18 @@
     try { window.__zvPCs = alive; } catch (_) {}   // fica so com as conexoes vivas
     return { remote: remote, local: local };
   }
+  // Faixas de audio dos <audio>/<video> tocando na pagina (o WhatsApp toca a voz do lead por um).
+  function mediaElAudioTracks() {
+    var out = [], seen = [];
+    try {
+      var els = document.querySelectorAll('audio,video');
+      for (var i = 0; i < els.length; i++) {
+        var so = els[i].srcObject;
+        if (so && so.getAudioTracks) so.getAudioTracks().forEach(function (t) { if (t && t.readyState === 'live' && seen.indexOf(t) < 0) { seen.push(t); out.push(t); } });
+      }
+    } catch (_) {}
+    return out;
+  }
   function recFmtDur(ms) { var s = Math.max(0, Math.round(ms / 1000)); var m = Math.floor(s / 60); s = s % 60; return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s; }
   function recFmtWhen(at) { try { var d = new Date(at); var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (_) { return ''; } }
   function recToast(m) { try { status(m, 'err'); } catch (_) {} }
@@ -1017,15 +1029,34 @@
       try { if (ac.state === 'suspended') await ac.resume(); } catch (_) {}
       var dest = ac.createMediaStreamDestination();
       var parts = callParts();
-      var toMix = parts.remote.concat(parts.local);
+      var haveCall = parts.remote.length > 0 || parts.local.length > 0;
       rec.micOnly = false;
+      // Monta as faixas marcando REMOTA (voz do lead) x LOCAL (sua voz). So a remota precisa do
+      // "bombeamento"; bombear a local causaria eco/retorno.
+      var mix = [], has = function (t) { for (var i = 0; i < mix.length; i++) if (mix[i].track === t) return true; return false; };
+      parts.remote.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true }); });
+      parts.local.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: false }); });
+      // Fonte EXTRA da voz do lead: as faixas dos <audio>/<video> que o WhatsApp usa pra TOCAR a
+      // ligacao. Cobre o receiver nao aparecer direto. So com sinal de chamada, pra nao captar
+      // audio aleatorio (nota de voz, notificacao).
+      if (haveCall) { mediaElAudioTracks().forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true }); }); }
       // Garante a SUA voz: se os "senders" nao expuseram o microfone, capta ele direto.
       if (!parts.local.length) {
-        try { var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic; mic.getAudioTracks().forEach(function (t) { toMix.push(t); }); } catch (_) {}
+        try { var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic; mic.getAudioTracks().forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: false }); }); } catch (_) {}
       }
-      if (!parts.remote.length && !parts.local.length) rec.micOnly = true;   // sem chamada: so o microfone
-      if (!toMix.length) { try { ac.close(); } catch (_) {} rec.starting = false; if (!rec.auto) recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
-      toMix.forEach(function (t) { try { var s = ac.createMediaStreamSource(new MediaStream([t])); s.connect(dest); rec.sources.push(s); } catch (_) {} });
+      if (!haveCall) rec.micOnly = true;   // sem chamada: so o microfone
+      rec.hadRemote = false; for (var mi = 0; mi < mix.length; mi++) { if (mix[mi].remote) { rec.hadRemote = true; break; } }
+      if (!mix.length) { try { ac.close(); } catch (_) {} rec.starting = false; if (!rec.auto) recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
+      mix.forEach(function (m) {
+        try {
+          var ms = new MediaStream([m.track]);
+          var s = ac.createMediaStreamSource(ms); s.connect(dest); rec.sources.push(s);
+          // CORRECAO (voz do lead sumia): faixa REMOTA via WebAudio sai MUDA no Chromium se nada
+          // estiver "consumindo" ela. Um <audio> MUDO tocando a mesma faixa faz os samples fluirem.
+          // So na remota (a local ja funciona; bombear a local geraria retorno do proprio microfone).
+          if (m.remote) { var sink = new Audio(); sink.muted = true; sink.srcObject = ms; var pr = sink.play(); if (pr && pr.catch) pr.catch(function () {}); rec.sinks.push(sink); }
+        } catch (_) {}
+      });
       var mime = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus'
                : (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
       rec.mime = mime || 'audio/webm';
@@ -1048,7 +1079,7 @@
       if (blob.size > 0) {
         var at = Date.now();
         var defDesc = 'Gravacao da chamada · ' + recFmtWhen(at);   // descricao automatica (editavel)
-        var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, size: blob.size };
+        var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, remote: !!rec.hadRemote, size: blob.size };
         recPut(meta, blob).then(function () { if (TAB === 'gravar') renderContent(); }, function () { recToast('Nao consegui salvar a gravacao (armazenamento cheio?).'); });
       }
     } catch (_) {}
@@ -1058,10 +1089,12 @@
   function recCleanup() {
     // NUNCA parar as faixas da CHAMADA (sao do WhatsApp). So o nosso proprio microfone.
     try { rec.sources.forEach(function (s) { try { s.disconnect(); } catch (_) {} }); } catch (_) {}
+    // Solta os <audio> mudos que usamos so pra "bombear" as faixas (nao para as faixas da chamada).
+    try { rec.sinks.forEach(function (s) { try { s.pause(); s.srcObject = null; } catch (_) {} }); } catch (_) {}
     try { if (rec.micStream) rec.micStream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} }); } catch (_) {}
     try { if (rec.ac && rec.ac.state !== 'closed') rec.ac.close(); } catch (_) {}
     if (rec.tickIv) { clearInterval(rec.tickIv); rec.tickIv = null; }
-    rec.on = false; rec.starting = false; rec.auto = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.ac = null; rec.dest = null; rec.micStream = null;
+    rec.on = false; rec.starting = false; rec.auto = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.sinks = []; rec.ac = null; rec.dest = null; rec.micStream = null;
   }
   // Grava sozinho quando ha ligacao (se ligado no Ajustes); para sozinho quando a ligacao acaba.
   function recAutoTick() {
@@ -1184,7 +1217,7 @@
     var box = document.getElementById('zv-rec-list'); if (!box) return;
     if (!list.length) { box.innerHTML = '<div class="zv-tabhint" style="padding:8px 2px">Nenhuma gravacao ainda.</div>'; return; }
     box.innerHTML = list.map(function (r) {
-      var meta = recFmtWhen(r.at) + ' · ' + recFmtDur(r.durMs || 0) + (r.micOnly ? ' · so microfone' : '');
+      var meta = recFmtWhen(r.at) + ' · ' + recFmtDur(r.durMs || 0) + (r.micOnly ? ' · so microfone' : (r.remote === false ? ' · sem voz do lead' : ''));
       return '<div class="zv-rec-row" data-id="' + esc(r.id) + '">' +
         '<div class="zv-rec-main">' +
           '<div class="zv-rec-rtop"><b>' + esc(r.chatName || '(sem lead)') + '</b><span class="zv-rec-meta">' + esc(meta) + '</span></div>' +

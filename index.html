@@ -4009,7 +4009,7 @@ let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
 const APP_VERSION = '2.68.0';
-const APP_LAST_CHANGE = 'Permissoes da equipe reformuladas: a tabela agora cobre TODAS as areas da dash (Dashboard, Operacional, Financeiro, WhatsApp com Contingencia/Pressels/Leads, Automacoes com Sale Chat e Robo de WhatsApp, Equipe e Criativos), agrupadas por secao. A sidebar inteira passou a ser montada por essa tabela, entao da pra liberar qualquer area pra qualquer papel (antes varias areas eram travadas no codigo so pro diretor e nem apareciam ali). Tambem: acesso direto por link a uma area sem permissao agora e bloqueado, a coluna Designer parou de quebrar o layout da tabela, e o botao Excluir do card do lead passou a respeitar a permissao (antes so olhava se era diretor).';
+const APP_LAST_CHANGE = 'Correcao: na gravacao de chamada a voz do LEAD nao estava entrando. Causa: no Chromium a faixa de audio remota sai muda pelo WebAudio se nada estiver consumindo ela. Agora cada faixa remota tem um audio mudo bombeando ela, mais uma fonte extra pelas faixas de midia que o WhatsApp usa pra tocar a ligacao. E a lista avisa sem voz do lead quando nao capturar, pra dar pra saber na hora.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
