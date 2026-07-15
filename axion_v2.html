@@ -4003,7 +4003,7 @@ const apiUrl=()=>{
 };
 const apiToken=()=>{try{return localStorage.getItem('axion_api_token')||''}catch(e){return ''}};
 const apiEnabled=()=>!!apiUrl();
-let serverVersion=0; // versão atual do estado conhecida (otimistic concurrency)
+let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');return v>0?v:0}catch(_){return 0}})(); // versão do estado conhecida (concorrência otimista); restaurada no boot
 
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
@@ -4208,7 +4208,9 @@ const api={
 // ─── Sync state com servidor ───
 let _syncTimer=null;
 let _409retry=false; // flag pra evitar loop infinito em retry de conflito
-let _baseBlob=null;  // ancestral comum (último estado em sync) p/ merge 3-way em conflito
+// ancestral comum (último estado confirmado no servidor) p/ merge 3-way. Restaurado do
+// localStorage no boot pra que o reload consiga MESCLAR edições locais em vez de sobrescrever.
+let _baseBlob=(function(){try{const b=localStorage.getItem('axion_base_v2');return b?JSON.parse(b):null}catch(_){return null}})();
 
 // Monta o blob enviado pro servidor — sem campos locais (team, feed, wh_log)
 function _buildSyncBlob(){
@@ -4221,7 +4223,16 @@ function _buildSyncBlob(){
 
 // Tira um "snapshot" do estado atual como ancestral comum pro próximo merge.
 // Chamado sempre que confirmamos sincronia com o servidor (push ok ou pull).
-function _snapshotBase(){ try{_baseBlob=JSON.parse(JSON.stringify(_buildSyncBlob()))}catch(_){_baseBlob=null} }
+// Grava o ancestral comum (+ versão) do último estado confirmado no servidor. Persiste no
+// localStorage pra que o RELOAD também consiga fazer merge (e não sobrescrever edição local).
+function _setBaseFrom(obj){
+  try{
+    _baseBlob=JSON.parse(JSON.stringify(obj));
+    localStorage.setItem('axion_base_v2',JSON.stringify(_baseBlob));
+    localStorage.setItem('axion_srvver',String(serverVersion));
+  }catch(_){ _baseBlob=null; }
+}
+function _snapshotBase(){ _setBaseFrom(_buildSyncBlob()); }
 
 // ─── Merge 3-way (resolve conflito multi-usuário sem clobber) ───
 // base = ancestral comum · mine = meu estado local · theirs = estado novo do servidor.
@@ -4392,23 +4403,31 @@ async function syncFromServer(){
   try{
     const r=await api.getState();
     if(r.data&&typeof r.data==='object'){
-      // Mescla: campos do servidor sobrescrevem, mas team/feed/wh_log continuam locais
       const team=DB.team;
       const feed=DB.feed;
       const wh_log=DB.wh_log;
-      DB=Object.assign({},DB,r.data);
+      // MERGE 3-WAY no pull (NÃO overwrite): preserva edições locais ainda NÃO confirmadas
+      // no servidor (arrastar chip de coluna, trocar atendente, mudar status) em vez de
+      // clobberar o array inteiro com o do servidor. Mesma lógica do caminho de 409 do push.
+      // Era A CAUSA de os números "voltarem pras colunas de antes" ao navegar/recarregar.
+      const localBlob=_buildSyncBlob();
+      const dirty=!!_baseBlob && JSON.stringify(localBlob)!==JSON.stringify(_baseBlob);
+      const merged=_baseBlob?mergeBlobs(_baseBlob,localBlob,r.data):Object.assign({},localBlob,r.data);
+      DB=Object.assign({},DB,merged);
       DB.team=team;     // users são gerenciados via /api/users
       DB.feed=feed;     // log visual local — não sincroniza
       DB.wh_log=wh_log; // log de webhooks — local
       // Limpa reembolsos automáticos que ainda venham do servidor (modelo agora é manual)
       if(dropAutoAportes()){persistAndPushNow().catch(_=>{})}
       // CRÍTICO: re-vincula globais (KB_COLS, TEAM) ao novo DB. Sem isso o
-      // modal de detalhes do lead quebrava silenciosamente em outros PCs
-      // por usar referência stale ao kb_cols antigo
+      // modal de detalhes do lead quebrava silenciosamente em outros PCs.
       rebindGlobals();
       serverVersion=r.version;
-      _snapshotBase(); // acabou de sincronizar com o servidor = novo ancestral comum
+      // base = estado do SERVIDOR recém-lido (confirmado). As mudanças locais preservadas
+      // seguem como "diff vs base" até o push confirmar — por isso NÃO snapshotamos o DB mesclado.
+      _setBaseFrom(r.data);
       try{localStorage.setItem('axion_db_v2',JSON.stringify(DB))}catch(e){}
+      if(dirty) debouncedServerSync(); // reenvia as edições locais que o merge preservou (self-healing)
     }
     // Sincroniza users do servidor
     try{
@@ -4850,6 +4869,8 @@ function clearDBCacheIfDifferentUser(newUid){
   const lastLogout=localStorage.getItem('axion_last_user_logout')||'';
   if(lastLogout&&lastLogout!==newUid){
     try{localStorage.removeItem('axion_db_v2')}catch(_){}
+    try{localStorage.removeItem('axion_base_v2');localStorage.removeItem('axion_srvver')}catch(_){}
+    _baseBlob=null; serverVersion=0;   // não herda o ancestral/versão do usuário anterior (senão o merge misturaria dados)
     // Reseta DB em memória pros defaults — syncFromServer logo vai mesclar com o servidor
     DB=JSON.parse(JSON.stringify(DEFAULT_DB));
     if(!DB.team)DB.team=JSON.parse(JSON.stringify(DEFAULT_TEAM));
@@ -17132,6 +17153,7 @@ function importBackup(e){
 async function resetDB(){
   if(!await axConfirm('Resetar tudo para os dados de mock iniciais? <b>Suas edições serão perdidas.</b>',{okLabel:'Sim, resetar'}))return;
   localStorage.removeItem('axion_db_v2');
+  try{localStorage.removeItem('axion_base_v2');localStorage.removeItem('axion_srvver')}catch(_){}   // sem ancestral, o boot pega o estado do servidor (não empurra o mock por cima)
   toast('Resetado — recarregando...','ok');
   setTimeout(()=>window.location.reload(),800);
 }
