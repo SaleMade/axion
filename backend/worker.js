@@ -2404,6 +2404,24 @@ async function handleWASaleAdd(req, env) {
     return json({ ok: true, name: name || 'Cliente', value, phone, at, pixel: false });
   } catch (e) { return err('Falha ao salvar: ' + (e && e.message), 502); }
 }
+// POST /api/wa/sale/reassign → { id, at } troca o vendedor de um pedido (o número
+// passou de mão e a venda caiu pro atendente errado). Só reatribui o crédito na dash;
+// não mexe no pixel. Só diretor.
+async function handleWASaleReassign(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor pode trocar o vendedor', 403);
+  const body = await req.json().catch(() => null);
+  const id = Number(body && body.id);
+  const at = String((body && body.at) || '').trim();
+  if (!id) return err('id obrigatório');
+  if (!at) return err('vendedor (at) obrigatório');
+  try {
+    const r = await env.DB.prepare('UPDATE wa_sales SET instance=? WHERE rowid=?').bind('ax_' + at, id).run();
+    if (!r.meta || r.meta.changes === 0) return err('Pedido não encontrado', 404);
+  } catch (e) { return err('Falha ao trocar: ' + (e && e.message), 502); }
+  return json({ ok: true, id, at });
+}
 
 // ─── Cérebro do bot de atendimento (IA) ──────────────────────
 // Modelado no script oficial + conversas reais GlicoVax. Pré-qualifica
@@ -3202,6 +3220,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
       if (req.method === 'POST'   && path === '/api/wa/sale/delete')      return handleWASaleDelete(req, env);
       if (req.method === 'POST'   && path === '/api/wa/sale/add')         return handleWASaleAdd(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/sale/reassign')    return handleWASaleReassign(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
       // Webhook de volta da Evolution (mensagens recebidas + conexão)

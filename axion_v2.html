@@ -4202,6 +4202,7 @@ const api={
   waSalesList:(day)=>api._fetch('/api/wa/sales'+(day?('?day='+encodeURIComponent(day)):'')),
   waSaleDelete:(id)=>api._fetch('/api/wa/sale/delete',{method:'POST',body:JSON.stringify({id})}),
   waSaleAdd:(raw,at)=>api._fetch('/api/wa/sale/add',{method:'POST',body:JSON.stringify({raw,at})}),   // pedido manual (indicação) — sem pixel
+  waSaleReassign:(id,at)=>api._fetch('/api/wa/sale/reassign',{method:'POST',body:JSON.stringify({id,at})}),   // troca o vendedor de um pedido
 };
 
 // ─── Sync state com servidor ───
@@ -7322,11 +7323,12 @@ function _loadPedidosConf(day){
         ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
         : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
       const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
+      const sellerSel = s.id ? `<select onchange="_pcfReassign(${s.id}, this.value)" onclick="event.stopPropagation()" title="Trocar o vendedor deste pedido" style="background:var(--s3);border:1px solid var(--b1);border-radius:7px;color:var(--t2);font-size:12px;font-weight:700;padding:2px 6px;cursor:pointer;font-family:inherit;max-width:170px">${(typeof TEAM!=='undefined'?TEAM:[]).filter(t=>!t.archived).map(t=>`<option value="${t.id}" ${String(t.id)===at?'selected':''}>${_automEsc(t.name)}</option>`).join('')}</select>` : `<b style="color:var(--t2)">${_automEsc(seller)}</b>`;
       return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
         <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:0">
             <div style="font-size:14.5px;font-weight:700;color:var(--tx)">${_automEsc(s.name||'Cliente')}${val>0?` · <span style="color:var(--gr)">R$ ${val}</span>`:''}</div>
-            <div style="font-size:12px;color:var(--t3);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Vendedor: <b style="color:var(--t2)">${_automEsc(seller)}</b> · ${_automEsc(s.phone||'')} · ${hora}</span>${tag}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Vendedor: ${sellerSel} · ${_automEsc(s.phone||'')} · ${hora}</span>${tag}</div>
             ${raw}
           </div>
           <button class="btn btn-gh btn-sm" style="color:var(--rd);border-color:var(--rd);flex-shrink:0" onclick="_removerPedidoConf(${s.id},'${_automEsc(String(s.name||'').replace(/'/g,''))}')">${ico('trash',{size:13})} Remover</button>
@@ -7340,6 +7342,11 @@ function _removerPedidoConf(id, name){
   if(!id){ toast('Pedido sem id (antigo). Não dá pra remover por aqui.','err'); return; }
   if(!confirm('Remover o pedido de '+(name||'esse cliente')+'?\n\nEle sai da contagem de vendas da dash. (O evento que já foi pro pixel do TikTok não dá pra desfazer, mas a dash para de contar.)')) return;
   api.waSaleDelete(id).then(()=>{ toast('Pedido removido','ok'); _loadPedidosConf(_pcfDay||_pcfYmd(new Date())); }).catch(()=>toast('Não consegui remover (só diretor pode)','err'));
+}
+// Troca o vendedor de um pedido (número passou de mão e a venda caiu no atendente errado)
+function _pcfReassign(id, at){
+  if(!id){ toast('Pedido antigo sem id — não dá pra trocar por aqui.','err'); return; }
+  api.waSaleReassign(id, at).then(()=>{ toast('Vendedor do pedido trocado','ok'); _loadPedidosConf(_pcfDay||_pcfYmd(new Date())); }).catch(e=>toast('Erro: '+((e&&e.message)||e),'err'));
 }
 // ═══════════════════════════════════════════════════════
 // NOVO PEDIDO — modal 2 etapas
