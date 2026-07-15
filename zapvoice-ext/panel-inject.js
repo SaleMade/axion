@@ -55,7 +55,7 @@
   var jobs = [];              // jobs[0] = o da vez; o resto aguarda
   var jobRunning = false;
   // Estado da GRAVACAO de chamada (uma por vez). Declarado cedo pro __zvBusy enxergar.
-  var rec = { on: false, starting: false, auto: false, mr: null, chunks: [], ac: null, dest: null, sources: [], sinks: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, hadRemote: false, tickIv: null, mime: 'audio/webm' };
+  var rec = { on: false, starting: false, auto: false, mr: null, chunks: [], ac: null, dest: null, sources: [], sinks: [], capStreams: [], micStream: null, startAt: 0, chatId: '', chatName: '', micOnly: false, hadRemote: false, diag: '', tickIv: null, mime: 'audio/webm' };
   // Gravar automaticamente quando detectar ligacao (setting do Ajustes).
   var autoRec = false; try { autoRec = localStorage.getItem('zv_autorec') === '1'; } catch (_) {}
   var recAutoLast = 0, recAutoArmed = true;   // uma gravacao automatica por ligacao
@@ -1028,33 +1028,45 @@
       var ac = new AC();
       try { if (ac.state === 'suspended') await ac.resume(); } catch (_) {}
       var dest = ac.createMediaStreamDestination();
-      var parts = callParts();
-      var haveCall = parts.remote.length > 0 || parts.local.length > 0;
-      rec.micOnly = false;
-      // Monta as faixas marcando REMOTA (voz do lead) x LOCAL (sua voz). So a remota precisa do
-      // "bombeamento"; bombear a local causaria eco/retorno.
       var mix = [], has = function (t) { for (var i = 0; i < mix.length; i++) if (mix[i].track === t) return true; return false; };
-      parts.remote.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true }); });
-      parts.local.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: false }); });
-      // Fonte EXTRA da voz do lead: as faixas dos <audio>/<video> que o WhatsApp usa pra TOCAR a
-      // ligacao. Cobre o receiver nao aparecer direto. So com sinal de chamada, pra nao captar
-      // audio aleatorio (nota de voz, notificacao).
-      if (haveCall) { mediaElAudioTracks().forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true }); }); }
-      // Garante a SUA voz: se os "senders" nao expuseram o microfone, capta ele direto.
-      if (!parts.local.length) {
-        try { var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic; mic.getAudioTracks().forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: false }); }); } catch (_) {}
-      }
-      if (!haveCall) rec.micOnly = true;   // sem chamada: so o microfone
-      rec.hadRemote = false; for (var mi = 0; mi < mix.length; mi++) { if (mix[mi].remote) { rec.hadRemote = true; break; } }
+      rec.capStreams = [];
+      var diag = { pc: 0, cap: 0, recv: 0, src: 0, mic: 0 };
+      try { diag.pc = (window.__zvPCs || []).length; } catch (_) {}
+      // ── VOZ DO LEAD ── tentativas em ordem de confiabilidade ──
+      // 1) captureStream() dos <audio>/<video> tocando: pega a SAIDA decodificada do elemento (o
+      //    som do lead que voce ouve), sem o bug de faixa remota muda no WebAudio.
+      try {
+        var els = document.querySelectorAll('audio,video');
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (!(el.srcObject || (!el.paused && el.readyState >= 2))) continue;
+          var cs = null;
+          try { cs = el.captureStream ? el.captureStream() : (el.mozCaptureStream ? el.mozCaptureStream() : null); } catch (_) {}
+          if (cs && cs.getAudioTracks) { rec.capStreams.push(cs); cs.getAudioTracks().forEach(function (t) { if (t && t.readyState === 'live' && !has(t)) { mix.push({ track: t, remote: true }); diag.cap++; } }); }
+        }
+      } catch (_) {}
+      // 2) fallback: faixas dos receivers (voz do lead) COM bombeamento — so se o captureStream falhou
+      var parts = callParts();
+      diag.recv = parts.remote.length;
+      if (!diag.cap) parts.remote.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true, pump: true }); });
+      // 3) fallback: faixas de srcObject dos elementos COM bombeamento — ultimo recurso
+      if (!diag.cap && !parts.remote.length) mediaElAudioTracks().forEach(function (t) { if (!has(t)) { mix.push({ track: t, remote: true, pump: true }); diag.src++; } });
+      // ── SUA VOZ ── sempre pelo microfone (garantido; roda junto com o WhatsApp)
+      try {
+        var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic;
+        mic.getAudioTracks().forEach(function (t) { if (!has(t)) { mix.push({ track: t, remote: false }); diag.mic = 1; } });
+      } catch (_) { parts.local.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: false }); }); }
+      rec.hadRemote = (diag.cap + diag.recv + diag.src) > 0;
+      rec.micOnly = !rec.hadRemote;
+      rec.diag = 'pc' + diag.pc + ' cap' + diag.cap + ' recv' + diag.recv + ' src' + diag.src + ' mic' + diag.mic;
       if (!mix.length) { try { ac.close(); } catch (_) {} rec.starting = false; if (!rec.auto) recToast('Nao consegui captar audio. Comece a ligacao e tente de novo.'); return; }
       mix.forEach(function (m) {
         try {
           var ms = new MediaStream([m.track]);
           var s = ac.createMediaStreamSource(ms); s.connect(dest); rec.sources.push(s);
-          // CORRECAO (voz do lead sumia): faixa REMOTA via WebAudio sai MUDA no Chromium se nada
-          // estiver "consumindo" ela. Um <audio> MUDO tocando a mesma faixa faz os samples fluirem.
-          // So na remota (a local ja funciona; bombear a local geraria retorno do proprio microfone).
-          if (m.remote) { var sink = new Audio(); sink.muted = true; sink.srcObject = ms; var pr = sink.play(); if (pr && pr.catch) pr.catch(function () {}); rec.sinks.push(sink); }
+          // Faixa remota via WebAudio pode sair MUDA no Chromium; um <audio> mudo tocando ela faz
+          // os samples fluirem. So nas faixas marcadas pump (as do captureStream ja vem audiveis).
+          if (m.pump) { var sink = new Audio(); sink.muted = true; sink.srcObject = ms; var pr = sink.play(); if (pr && pr.catch) pr.catch(function () {}); rec.sinks.push(sink); }
         } catch (_) {}
       });
       var mime = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus'
@@ -1079,7 +1091,7 @@
       if (blob.size > 0) {
         var at = Date.now();
         var defDesc = 'Gravacao da chamada · ' + recFmtWhen(at);   // descricao automatica (editavel)
-        var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, remote: !!rec.hadRemote, size: blob.size };
+        var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, remote: !!rec.hadRemote, diag: rec.diag || '', size: blob.size };
         recPut(meta, blob).then(function () { if (TAB === 'gravar') renderContent(); }, function () { recToast('Nao consegui salvar a gravacao (armazenamento cheio?).'); });
       }
     } catch (_) {}
@@ -1091,10 +1103,12 @@
     try { rec.sources.forEach(function (s) { try { s.disconnect(); } catch (_) {} }); } catch (_) {}
     // Solta os <audio> mudos que usamos so pra "bombear" as faixas (nao para as faixas da chamada).
     try { rec.sinks.forEach(function (s) { try { s.pause(); s.srcObject = null; } catch (_) {} }); } catch (_) {}
+    // Para as capturas (captureStream) e o microfone PROPRIO. Nunca as faixas da chamada.
+    try { rec.capStreams.forEach(function (st) { try { st.getTracks().forEach(function (t) { t.stop(); }); } catch (_) {} }); } catch (_) {}
     try { if (rec.micStream) rec.micStream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} }); } catch (_) {}
     try { if (rec.ac && rec.ac.state !== 'closed') rec.ac.close(); } catch (_) {}
     if (rec.tickIv) { clearInterval(rec.tickIv); rec.tickIv = null; }
-    rec.on = false; rec.starting = false; rec.auto = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.sinks = []; rec.ac = null; rec.dest = null; rec.micStream = null;
+    rec.on = false; rec.starting = false; rec.auto = false; rec.mr = null; rec.chunks = []; rec.sources = []; rec.sinks = []; rec.capStreams = []; rec.ac = null; rec.dest = null; rec.micStream = null;
   }
   // Grava sozinho quando ha ligacao (se ligado no Ajustes); para sozinho quando a ligacao acaba.
   function recAutoTick() {
@@ -1221,6 +1235,7 @@
       return '<div class="zv-rec-row" data-id="' + esc(r.id) + '">' +
         '<div class="zv-rec-main">' +
           '<div class="zv-rec-rtop"><b>' + esc(r.chatName || '(sem lead)') + '</b><span class="zv-rec-meta">' + esc(meta) + '</span></div>' +
+          (r.diag ? '<div class="zv-rec-diag">debug: ' + esc(r.diag) + '</div>' : '') +
           '<input class="zv-rec-desc" placeholder="Descricao" value="' + esc(r.desc || '') + '">' +
           // Player proprio (combina com o card). Ja aparece; o audio so carrega ao tocar (leve).
           '<div class="zv-rec-player">' +

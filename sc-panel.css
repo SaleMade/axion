@@ -204,6 +204,7 @@
 .zv-rec-rtop{ display:flex; align-items:baseline; gap:8px; min-width:0; }
 .zv-rec-rtop b{ font-weight:700; color:#2a2a46; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .zv-rec-meta{ font-size:10.5px; color:#8b95a3; flex:none; }
+.zv-rec-diag{ font-size:9.5px; color:#b6bfca; font-family:monospace; letter-spacing:-.2px; }
 .zv-rec-desc{ width:100%; border:1px solid #e5e9ef; border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; color:#2a2a46; outline:none; }
 .zv-rec-desc:focus{ border-color:#13c273; }
 /* Player proprio (combina com o card, sem o quadrado preto do navegador) */
