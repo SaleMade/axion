@@ -10623,7 +10623,41 @@ function renderPresselVendList(pid){
   if(fora.length){
     html += `<div style="height:1px;background:var(--b1);margin:14px 0 9px"></div>` + fora.map(row).join('');
   }
-  wrap.innerHTML=html;
+  wrap.innerHTML=html+_presselConnListHtml();
+}
+
+// Lista as instâncias que estão DE FATO conectadas na Evolution, abaixo dos vendedores.
+// Serve pra bater o que a dash acha que é o número do vendedor vs o WhatsApp realmente no ar
+// (já aconteceu de o número estar num slot e a dash achar que estava no outro).
+function _presselConnListHtml(){
+  if(!_waConnLoaded) return '';
+  const insts=Object.keys(_waConnMap||{});
+  if(!insts.length) return '';
+  const fmtN=n=>{ const d=String(n||'').replace(/\D/g,''); if(!d) return '—'; const x=d.replace(/^55/,''); return x.length>=10?`(${x.slice(0,2)}) ${x.slice(2,-4)}-${x.slice(-4)}`:d; };
+  const esc=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const pri=st=>st==='open'?0:(st==='connecting'?1:2);   // no ar primeiro
+  const rows=insts.slice().sort((a,b)=>pri(_waConnMap[a])-pri(_waConnMap[b])||a.localeCompare(b)).map(inst=>{
+    const st=String(_waConnMap[inst]||'');
+    const on=st==='open', conn=st==='connecting';
+    const cor=on?'var(--gr)':(conn?'var(--am)':'var(--rd)');
+    const isAx=/^ax_/.test(inst);
+    const at=String(inst).replace(/^ax_/,'').replace(/_b$/,'');
+    const t=isAx?getTeam(at):null;
+    const papel=isAx?(/_b$/.test(inst)?' · reserva':' · principal'):'';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11.5px;border-top:1px solid var(--b1)">
+      <span style="width:7px;height:7px;border-radius:50%;background:${cor};flex-shrink:0"></span>
+      <span style="flex:1;min-width:0;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t?t.name:inst)}<span style="color:var(--t4)">${papel}</span></span>
+      <span style="font-family:ui-monospace,monospace;color:var(--t3);white-space:nowrap">${fmtN(_waConnNum[inst])}</span>
+      <span style="color:${cor};font-size:10px;font-weight:700;white-space:nowrap">${on?'conectado':(conn?'conectando':'caiu')}</span>
+    </div>`;
+  }).join('');
+  const nOn=insts.filter(i=>_waConnMap[i]==='open').length;
+  return `<div style="margin-top:14px;padding-top:11px;border-top:1px dashed var(--b2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--t3)">Instâncias conectadas</span>
+      <span style="font-size:10px;color:var(--t4)">${nOn}/${insts.length} no ar</span>
+    </div>${rows}
+  </div>`;
 }
 
 function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
