@@ -2387,11 +2387,18 @@ async function handleWASaleAdd(req, env) {
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
-  // telefone do cliente: a linha do 📲, senão o 1º celular com DDD que aparecer
+  // telefone do cliente: a linha do 📲, senão o 1º celular com DDD que aparecer.
+  // A classe NÃO pode conter \n (senão varre a próxima linha e gruda dígitos de outro campo).
   let phone = '';
-  const phM = text.match(/📲[^\d]*([\d()\s.\-]{10,})/);
+  const phM = text.match(/📲[^\d\n]*([\d()\-. ]{10,})/);
   if (phM) phone = phM[1].replace(/\D/g, '');
   if (!phone) { const any = text.match(/\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/); if (any) phone = any[0].replace(/\D/g, ''); }
+  // CRÍTICO: normaliza pro MESMO formato do JID do WhatsApp (55+DDD+num), igual o caminho
+  // automático (_waDetectSale usa os dígitos do remoteJid). Sem isso o telefone da venda
+  // manual (sem 55) NUNCA casa: (1) fura o dedup de 24h → a mesma venda entra 2x quando o
+  // webhook entrega atrasado; (2) não casa no JOIN com wa_lead → fica "sem rastreio" eterno
+  // mesmo com o lead existindo. Era o bug que duplicou uma venda real.
+  phone = waNumber(phone);
   const cpf = extractCpf(text);
   if (cpf && at) { try { await saveCpfAttrib(env, cpf, instance, name, phone); } catch (_) {} }
   try {
