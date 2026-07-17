@@ -4212,7 +4212,7 @@ const api={
   presselStats:()=>api._fetch('/api/pressel/stats'),
   presselMetrics:(day)=>api._fetch('/api/pressel/metrics'+(day?('?day='+encodeURIComponent(day)):'')),
   // Pedidos confirmados (vendas detectadas no WhatsApp "Pedido Concluído") — listar por dia + remover
-  waSalesList:(day)=>api._fetch('/api/wa/sales'+(day?('?day='+encodeURIComponent(day)):'')),
+  waSalesList:(o)=>{ const q=[]; if(o&&o.from&&o.to){q.push('from='+encodeURIComponent(o.from),'to='+encodeURIComponent(o.to));} else if(o&&o.day){q.push('day='+encodeURIComponent(o.day));} return api._fetch('/api/wa/sales'+(q.length?('?'+q.join('&')):'')); },
   waSaleDelete:(id)=>api._fetch('/api/wa/sale/delete',{method:'POST',body:JSON.stringify({id})}),
   waSaleAdd:(raw,at)=>api._fetch('/api/wa/sale/add',{method:'POST',body:JSON.stringify({raw,at})}),   // pedido manual (indicação) — sem pixel
   waSaleReassign:(id,at)=>api._fetch('/api/wa/sale/reassign',{method:'POST',body:JSON.stringify({id,at})}),   // troca o vendedor de um pedido
@@ -5760,7 +5760,7 @@ function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
   const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
-    pedidos:renderPedidos,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,presselleads:renderPresselLeads,
+    pedidos:renderPedidos,pedidosconf:renderPedidosConf,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,presselleads:renderPresselLeads,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
     invest:renderInvest,trafego:renderTrafego,equipe:renderEquipe,
@@ -7307,20 +7307,17 @@ function _pcfAddPedido(){
   api.waSaleAdd(raw, at).then(r=>{
     toast('Pedido adicionado'+(r&&r.name?(' — '+r.name):'')+(r&&r.value?(' · R$ '+r.value):''),'ok');
     _pcfAdding=false;
-    _pcfSetDay(_pcfYmd(new Date()));   // volta pra hoje e recarrega (o pedido é de agora)
+    renderPedidosConf();   // re-renderiza o período atual (o pedido é de agora; some se o período não incluir hoje)
   }).catch(e=>{ toast('Erro: '+((e&&e.message)||e),'err'); if(btn){ btn.disabled=false; btn.textContent='Adicionar pedido'; } });
 }
 function renderPedidosConf(){
   const c=$('pedidosconf-pg'); if(!c) return;
-  const today=_pcfYmd(new Date());
-  const day=_pcfDay||today;
+  const perLabel=(($('drp-label')&&$('drp-label').textContent)||'período').trim();
   const teamOpts=(typeof TEAM!=='undefined'?TEAM:[]).filter(t=>!t.archived).map(t=>`<option value="${t.id}">${_automEsc(t.name)}</option>`).join('');
   c.innerHTML=`<div class="ph"><div><h1>Pedidos <em>Confirmados</em></h1></div></div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 16px">
-      <input type="date" id="pcf-date" value="${day}" max="${today}" onchange="_pcfSetDay(this.value)" class="pp-inp" style="width:auto;padding:8px 11px;color-scheme:dark;cursor:pointer">
-      ${day!==today?`<button class="btn btn-gh btn-sm" onclick="_pcfSetDay('${today}')">← hoje</button>`:''}
       <button class="btn btn-bl btn-sm" onclick="_pcfToggleAdd()">+ Adicionar pedido</button>
-      <span class="muted" style="font-size:12px;flex:1;min-width:200px">Vendas detectadas no WhatsApp (mensagem "Pedido Concluído"). Remover um pedido tira ele da contagem de vendas.</span>
+      <span class="muted" style="font-size:12px;flex:1;min-width:200px">Mostrando <b style="color:var(--t2)">${_automEsc(perLabel)}</b> — use o seletor de período no topo pra mudar. Vendas detectadas no WhatsApp ("Pedido Concluído"); remover tira da contagem.</span>
     </div>
     <div id="pcf-addform" style="display:none;border:1px solid var(--bl);border-radius:var(--rl);background:var(--s2);padding:16px;margin-bottom:16px">
       <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px">Adicionar pedido manual</div>
@@ -7336,25 +7333,29 @@ function renderPedidosConf(){
     </div>
     <div id="pcf-list"><div class="muted" style="padding:24px;text-align:center">Carregando…</div></div>`;
   if(_pcfAdding){ const f=$('pcf-addform'); if(f) f.style.display='block'; }
-  _loadPedidosConf(day);
+  _loadPedidosConf();
 }
-function _pcfSetDay(d){ _pcfDay=d||''; renderPedidosConf(); }
-function _loadPedidosConf(day){
-  api.waSalesList(day).then(r=>{
+// Formata um Date pra YYYY-MM-DD pelo calendário LOCAL (= BRT no PC do time) — casa com o filtro do servidor
+function _pcfRangeYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+function _loadPedidosConf(){
+  const {from,to}=dateRange();   // período do seletor global do topo (Últimos 7/14/30 dias, etc)
+  api.waSalesList({from:_pcfRangeYmd(from),to:_pcfRangeYmd(to)}).then(r=>{
     const list=$('pcf-list'); if(!list) return;
     const sales=r&&r.sales?r.sales:[];
-    if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse dia.</div>'; return; }
+    if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse período.</div>'; return; }
     const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
     const _atr=s=>!!(s.pid && String(s.pid).trim()!=='');   // veio de pressel (tem código/rastreio)?
     const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
     const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
-    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s)${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
+    const _dayKey=ts=>{ const t=new Date((Number(ts)||0)*1000); return isNaN(t)?'—':t.toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'}); };
+    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s) no período${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
     ${nSem>0?`<div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">As "sem rastreio" são vendas reais, mas vieram de fora do anúncio (orgânico/indicação) ou sem o código, então não entram na conta de Vendas das pressels (que o gestor otimiza).</div>`:''}`;
-    html+=sales.map(s=>{
+    // Card de um pedido (reusado dentro dos grupos por dia)
+    const _card=s=>{
       const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
       const seller=(getTeam(at)||{}).name||s.instance||'—';
       const t=new Date((Number(s.ts)||0)*1000);
-      const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
       const tag=_atr(s)
         ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
@@ -7371,6 +7372,14 @@ function _loadPedidosConf(day){
           <button class="btn btn-gh btn-sm" style="color:var(--rd);border-color:var(--rd);flex-shrink:0" onclick="_removerPedidoConf(${s.id},'${_automEsc(String(s.name||'').replace(/'/g,''))}')">${ico('trash',{size:13})} Remover</button>
         </div>
       </div>`;
+    };
+    // Agrupa por DIA (BRT), mais recente primeiro — dá o "acompanhamento por data" que o período traz
+    const groups=[], idx={};
+    sales.forEach(s=>{ const k=_dayKey(s.ts); if(idx[k]==null){ idx[k]=groups.length; groups.push({k,items:[]}); } groups[idx[k]].items.push(s); });
+    html+=groups.map(g=>{
+      const sub=g.items.reduce((a,s)=>a+(Number(s.value)||0),0);
+      return `<div style="display:flex;align-items:center;gap:8px;margin:18px 0 9px"><span style="font-size:12px;font-weight:800;color:var(--t2)">${g.k}</span><span style="flex:1;height:1px;background:var(--b1)"></span><span style="font-size:11.5px;color:var(--t3)"><b style="color:var(--tx)">${g.items.length}</b> pedido(s)${sub>0?` · <b style="color:var(--gr)">R$ ${sub}</b>`:''}</span></div>`
+        + g.items.map(_card).join('');
     }).join('');
     list.innerHTML=html;
   }).catch(()=>{ const list=$('pcf-list'); if(list) list.innerHTML='<div class="muted" style="padding:24px;text-align:center;color:var(--rd)">Erro ao carregar. Tenta de novo.</div>'; });
@@ -7378,12 +7387,12 @@ function _loadPedidosConf(day){
 function _removerPedidoConf(id, name){
   if(!id){ toast('Pedido sem id (antigo). Não dá pra remover por aqui.','err'); return; }
   if(!confirm('Remover o pedido de '+(name||'esse cliente')+'?\n\nEle sai da contagem de vendas da dash. (O evento que já foi pro pixel do TikTok não dá pra desfazer, mas a dash para de contar.)')) return;
-  api.waSaleDelete(id).then(()=>{ toast('Pedido removido','ok'); _loadPedidosConf(_pcfDay||_pcfYmd(new Date())); }).catch(()=>toast('Não consegui remover (só diretor pode)','err'));
+  api.waSaleDelete(id).then(()=>{ toast('Pedido removido','ok'); _loadPedidosConf(); }).catch(()=>toast('Não consegui remover (só diretor pode)','err'));
 }
 // Troca o vendedor de um pedido (número passou de mão e a venda caiu no atendente errado)
 function _pcfReassign(id, at){
   if(!id){ toast('Pedido antigo sem id — não dá pra trocar por aqui.','err'); return; }
-  api.waSaleReassign(id, at).then(()=>{ toast('Vendedor do pedido trocado','ok'); _loadPedidosConf(_pcfDay||_pcfYmd(new Date())); }).catch(e=>toast('Erro: '+((e&&e.message)||e),'err'));
+  api.waSaleReassign(id, at).then(()=>{ toast('Vendedor do pedido trocado','ok'); _loadPedidosConf(); }).catch(e=>toast('Erro: '+((e&&e.message)||e),'err'));
 }
 // ═══════════════════════════════════════════════════════
 // NOVO PEDIDO — modal 2 etapas

@@ -2400,14 +2400,20 @@ async function handleWASales(req, env) {
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // garante a coluna pro SELECT
     try{ await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run(); }catch(_){}
     try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // garante l.src pro JOIN
-    let day = new URL(req.url).searchParams.get('day') || '';
+    const params = new URL(req.url).searchParams;
+    const day = params.get('day') || '', from = params.get('from') || '', to = params.get('to') || '';
+    const D = /^\d{4}-\d{2}-\d{2}$/;
     let where = '', binds = [];
-    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {   // filtro por dia (BRT)
+    if (D.test(from) && D.test(to)) {   // filtro por PERÍODO (BRT), inclusivo nas duas pontas
+      const start = Math.floor(new Date(from+'T00:00:00-03:00').getTime()/1000);
+      const end   = Math.floor(new Date(to  +'T00:00:00-03:00').getTime()/1000) + 86400;   // +1 dia p/ incluir o "to" inteiro
+      where = 'WHERE s.ts>=? AND s.ts<?'; binds = [start, end];
+    } else if (D.test(day)) {   // filtro por dia (BRT) — compat
       const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
       where = 'WHERE s.ts>=? AND s.ts<?'; binds = [start, end];
     }
     // LEFT JOIN wa_lead pra saber se a venda veio de pressel (pid) — mostra "da pressel" vs "sem rastreio" na tela
-    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw, l.pid AS pid, l.src AS src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone ${where} ORDER BY s.ts DESC LIMIT 300`);
+    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw, l.pid AS pid, l.src AS src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone ${where} ORDER BY s.ts DESC LIMIT 1000`);
     const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
