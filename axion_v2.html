@@ -7319,7 +7319,6 @@ function renderPedidosConf(){
       <button class="btn btn-bl btn-sm" onclick="_pcfToggleAdd()">+ Adicionar pedido</button>
       <input id="pcf-search" value="${_automEsc(_pcfSearch)}" oninput="_pcfSearch=this.value;_pcfRenderList()" placeholder="Buscar cliente, telefone ou vendedor..." class="pp-inp" style="flex:1;min-width:200px;max-width:320px;padding:8px 11px">
     </div>
-    <div style="font-size:12px;color:var(--t3);margin:-8px 0 14px">Mostrando <b style="color:var(--t2)">${_automEsc(perLabel)}</b> — use o seletor de período no topo pra mudar. Vendas detectadas no WhatsApp ("Pedido Concluído"); remover tira da contagem.</div>
     <div id="pcf-addform" style="display:none;border:1px solid var(--bl);border-radius:var(--rl);background:var(--s2);padding:16px;margin-bottom:16px">
       <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px">Adicionar pedido manual</div>
       <div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">Pra venda por indicação/orgânico que não passou pelo WhatsApp. Cole a mensagem de "Pedido Concluído" e escolha o vendedor. Não dispara o pixel do TikTok (não é venda de anúncio); entra como "sem rastreio" e conta pro vendedor.</div>
@@ -7364,8 +7363,7 @@ function _pcfRenderList(){
     const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
     const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
     const _dayKey=ts=>{ const t=new Date((Number(ts)||0)*1000); return isNaN(t)?'—':t.toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'}); };
-    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s) no período${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>
-    ${nSem>0?`<div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">As "sem rastreio" são vendas reais, mas vieram de fora do anúncio (orgânico/indicação) ou sem o código, então não entram na conta de Vendas das pressels (que o gestor otimiza).</div>`:''}`;
+    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s) no período${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>`;
     // Card de um pedido (reusado dentro dos grupos por dia)
     const _card=s=>{
       const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
