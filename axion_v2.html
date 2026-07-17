@@ -4008,8 +4008,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.69.0';
-const APP_LAST_CHANGE = 'Gravar chamada: nova tentativa de captar a voz do lead. Agora usa captureStream do audio que o WhatsApp toca (som ja decodificado), com fallback pros outros metodos. Cada gravacao mostra uma linha debug (pc/cap/recv/src/mic) pra revelar o que existe na maquina, ja que so um teste em ligacao real diz se pegou. Sua voz continua garantida pelo microfone.';
+const APP_VERSION = '2.70.0';
+const APP_LAST_CHANGE = 'Pedidos Confirmados: a hora e o dia agora sao sempre em horario de Brasilia, nao mais no fuso do computador. Antes, num PC em outro fuso, uma venda de ontem a noite aparecia com data de hoje. Agora bate com o filtro do servidor (que ja era BRT).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7281,7 +7281,9 @@ function pagePedidosConf(){return `<div class="page" id="pedidosconf-pg"></div>`
 // ── PEDIDOS CONFIRMADOS: vendas detectadas no WhatsApp ("Pedido Concluído"). Diretor revê por dia e remove os errados. ──
 let _pcfDay='';
 let _pcfAdding=false;
-function _pcfYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+// Dia em horário de Brasília (BRT), independente do fuso do computador — bate com o filtro do
+// servidor (que é sempre -03:00). Sem isso, PC em outro fuso mostrava venda de ontem como "hoje".
+function _pcfYmd(d){ const b=new Date(d.getTime()-3*3600000); const z=n=>String(n).padStart(2,'0'); return b.getUTCFullYear()+'-'+z(b.getUTCMonth()+1)+'-'+z(b.getUTCDate()); }
 // Mostra/esconde o formulário de adicionar pedido manual (indicação/orgânico)
 function _pcfToggleAdd(){ _pcfAdding=!_pcfAdding; const f=$('pcf-addform'); if(f) f.style.display=_pcfAdding?'block':'none'; if(_pcfAdding){ const r=$('pcf-add-raw'); if(r) setTimeout(()=>r.focus(),30); } }
 function _pcfAddPedido(){
@@ -7339,7 +7341,7 @@ function _loadPedidosConf(day){
       const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
       const seller=(getTeam(at)||{}).name||s.instance||'—';
       const t=new Date((Number(s.ts)||0)*1000);
-      const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
       const tag=_atr(s)
         ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
