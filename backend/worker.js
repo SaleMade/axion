@@ -2049,7 +2049,7 @@ async function _waOnInbound(env, instance, data) {
   await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
   await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg });
 }
-async function handleEvolutionWebhook(req, env, token) {
+async function handleEvolutionWebhook(req, env, token, ctx) {
   const expected = await _waWebhookToken(env);
   if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
   let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
@@ -2058,7 +2058,7 @@ async function handleEvolutionWebhook(req, env, token) {
   const data = body?.data || {};
   try {
     if (event === 'connection.update') await _waOnConnection(env, instance, data);
-    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data); }
+    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data, ctx); }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
@@ -2272,7 +2272,7 @@ async function _evoSendContact(env, instance, to, name, number) {
     body: { number: to, contact: [{ fullName: String(name || 'Contato'), wuid, phoneNumber: '+' + wuid }] },
   });
 }
-async function _waAutoReplies(env, instance, data) {
+async function _waAutoReplies(env, instance, data, ctx) {
   try {
     const key = data?.key || {};
     if (!key.fromMe) return;                              // só dispara na mensagem DO VENDEDOR (saída)
@@ -2293,17 +2293,26 @@ async function _waAutoReplies(env, instance, data) {
       if (!rp || rp.on === false) continue;
       const kws = String(rp.trigger || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
       if (!kws.length || !kws.some(k => text.indexOf(k) >= 0)) continue;
-      // dedup: no máx 1x por (resposta + cliente) a cada 6h (evita loop com o eco e não spamma).
+      // dedup GRAVADO JÁ (antes do delay): se o webhook reentregar nos próximos segundos, não agenda 2x.
       const dk = 'ar_' + (rp.id || '') + '_' + to;
       const recent = await env.DB.prepare("SELECT ts FROM wa_autoreply_log WHERE k=? AND ts > strftime('%s','now')-21600").bind(dk).first();
       if (recent) continue;
       await env.DB.prepare("INSERT INTO wa_autoreply_log (k, ts) VALUES (?, strftime('%s','now')) ON CONFLICT(k) DO UPDATE SET ts=strftime('%s','now')").bind(dk).run();
-      if (rp.text && String(rp.text).trim()) {
-        try { await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: to, text: String(rp.text) } }); } catch (_) {}
-      }
-      if (rp.contactNumber && String(rp.contactNumber).replace(/\D/g, '')) {
-        try { await _evoSendContact(env, instance, to, rp.contactName || 'Contato', rp.contactNumber); } catch (_) {}
-      }
+      // Espera antes de enviar (padrão 10s, mais humano). Roda em segundo plano (ctx.waitUntil):
+      // o webhook responde na hora e o envio dispara depois — sem segurar a conexão da Evolution.
+      const delayMs = Math.max(0, Math.min(90, (rp.delaySec == null ? 10 : Number(rp.delaySec) || 0))) * 1000;
+      const send = async () => {
+        try {
+          if (delayMs) await new Promise(r => setTimeout(r, delayMs));
+          if (rp.text && String(rp.text).trim()) {
+            try { await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: to, text: String(rp.text) } }); } catch (_) {}
+          }
+          if (rp.contactNumber && String(rp.contactNumber).replace(/\D/g, '')) {
+            try { await _evoSendContact(env, instance, to, rp.contactName || 'Contato', rp.contactNumber); } catch (_) {}
+          }
+        } catch (_) {}
+      };
+      if (ctx && ctx.waitUntil) ctx.waitUntil(send()); else await send();
     }
   } catch (_) {}
 }
@@ -3263,7 +3272,7 @@ export default {
       }
     } catch (_) {}
   },
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return new Response(null, {
       status: 204,
       headers: {
@@ -3342,7 +3351,7 @@ export default {
       const evoMatch = path.match(/^\/webhook\/evolution\/([a-zA-Z0-9_-]+)$/);
       if (evoMatch && (req.method === 'POST' || req.method === 'GET')) {
         if (req.method === 'GET') return json({ name: 'axion-evolution-webhook', ok: true, ready: true });
-        return handleEvolutionWebhook(req, env, evoMatch[1]);
+        return handleEvolutionWebhook(req, env, evoMatch[1], ctx);
       }
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);

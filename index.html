@@ -4021,8 +4021,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.73.0';
-const APP_LAST_CHANGE = 'Sale Chat: nova secao Respostas automaticas (abaixo de Gatilhos). Quando o vendedor envia uma mensagem com a palavra-gatilho (ex: Pedido Concluido), a API responde sozinha pro cliente pelo numero do proprio vendedor, com um texto e um cartao de contato opcional (ex: o rapaz da entrega). Nao precisa do painel aberto. Server-side, com dedup (nao spamma).';
+const APP_VERSION = '2.74.0';
+const APP_LAST_CHANGE = 'Respostas automaticas: agora esperam alguns segundos antes de enviar (padrao 10s, ajustavel por resposta). Fica mais humano. O envio roda em segundo plano (o webhook responde na hora), sem segurar a Evolution.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8853,6 +8853,8 @@ function scRenderAutoReplies(){
       <input class="info-val" value="${scEscA(r.trigger||'')}" placeholder="Ex: Pedido Concluído" oninput="scEditAutoReply(${i},'trigger',this.value)">
       <label class="sc-f-label">Mensagem que a API envia pro cliente</label>
       <textarea class="info-val" rows="3" placeholder="Ex: Agora clique abaixo pra falar com quem cuida da sua entrega:" style="resize:vertical;line-height:1.45" oninput="scEditAutoReply(${i},'text',this.value)">${scEscT(r.text||'')}</textarea>
+      <label class="sc-f-label">Esperar antes de enviar (segundos)</label>
+      <input class="info-val" type="number" min="0" max="90" style="width:120px" value="${r.delaySec==null?10:r.delaySec}" oninput="scEditAutoReply(${i},'delaySec',Math.max(0,Math.min(90,parseInt(this.value,10)||0)))">
       <label class="sc-f-label">Cartão de contato (opcional)</label>
       <div class="sc-arrow2">
         <input class="info-val" value="${scEscA(r.contactName||'')}" placeholder="Nome do contato (ex: Entregas)" oninput="scEditAutoReply(${i},'contactName',this.value)">
@@ -8861,7 +8863,7 @@ function scRenderAutoReplies(){
       <p class="sc-hint" style="margin-top:6px">Deixe o contato vazio pra mandar só o texto. Com o número, vai um cartão de contato (a foto aparece sozinha do perfil do número).</p>
     </div>`).join('');
 }
-function scAddAutoReply(){ SC().autoreplies.push({id:'ar'+Date.now().toString(36),on:true,label:'',trigger:'Pedido Concluído',text:'',contactName:'',contactNumber:''}); scTouch(); scRenderAutoReplies(); scRenderNav(); }
+function scAddAutoReply(){ SC().autoreplies.push({id:'ar'+Date.now().toString(36),on:true,label:'',trigger:'Pedido Concluído',text:'',delaySec:10,contactName:'',contactNumber:''}); scTouch(); scRenderAutoReplies(); scRenderNav(); }
 function scDelAutoReply(i){ if(!confirm('Excluir essa resposta automática?')) return; SC().autoreplies.splice(i,1); scTouch(); scRenderAutoReplies(); scRenderNav(); }
 function scEditAutoReply(i,f,v){ if(SC().autoreplies[i]){ SC().autoreplies[i][f]=v; scTouch(); } }
 
