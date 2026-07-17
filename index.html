@@ -1583,6 +1583,13 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-grow{ display:flex; align-items:center; gap:8px; flex:1; min-width:210px; }
 .sc-grow .muted{ font-size:11.5px; flex:none; }
 .sc-grow input,.sc-grow select{ flex:1; min-width:0; }
+/* Respostas automáticas: cards */
+.sc-arcard{ background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:14px 15px; margin-bottom:12px; display:flex; flex-direction:column; }
+.sc-arhead{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+.sc-arname{ flex:1; min-width:0; font-weight:700; }
+.sc-arcard .sc-f-label{ margin:11px 0 5px; }
+.sc-arrow2{ display:flex; gap:9px; flex-wrap:wrap; }
+.sc-arrow2 input{ flex:1; min-width:170px; }
 .sc-md-detail{ flex:1; min-width:0; background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:18px 20px; min-height:340px; }
 .sc-detail-empty{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--t3); min-height:300px; text-align:center; }
 .sc-detail-empty p{ font-size:13px; max-width:240px; line-height:1.5; margin:0; }
@@ -4014,8 +4021,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.72.0';
-const APP_LAST_CHANGE = 'Roleta inteligente anti-flood/anti-ban: em vez de encher o numero mais vazio do dia (que jogava a rajada num numero novo e podia banir), distribui pelo ritmo recente, com aquecimento pro numero novo (entra devagar e acelera) e um teto de rajada por numero (nunca 20-30 de uma vez). O excedente vai pros numeros estabelecidos, nunca floodando o chip fresco. Se todos saturarem, a janela de Instancias avisa pra adicionar mais um numero.';
+const APP_VERSION = '2.73.0';
+const APP_LAST_CHANGE = 'Sale Chat: nova secao Respostas automaticas (abaixo de Gatilhos). Quando o vendedor envia uma mensagem com a palavra-gatilho (ex: Pedido Concluido), a API responde sozinha pro cliente pelo numero do proprio vendedor, com um texto e um cartao de contato opcional (ex: o rapaz da entrega). Nao precisa do painel aberto. Server-side, com dedup (nao spamma).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7951,6 +7958,7 @@ const SC_SECTIONS=[
   {key:'document',label:'Documentos',icon:'clipboard-list'},
   {key:'funis',label:'Funis',icon:'repeat'},
   {key:'triggers',label:'Gatilhos',icon:'zap'},
+  {key:'autoreplies',label:'Respostas automáticas',icon:'send'},
 ];
 var scSection='messages';
 // Perfis independentes: 'vend' (vendedores, DB.salechat) e 'cob' (cobradores, DB.salechatCob).
@@ -7963,9 +7971,9 @@ function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salecha
 // PUBLICADO (botão "Salvar e publicar"). Assim, com varias pessoas mexendo, nada vai
 // pros PCs por engano; so vai quando alguem publica de proposito. Guarda quem/quando.
 function scPubKey(){ return scProfile==='cob' ? 'salechatCobPub' : 'salechatPub'; }
-function SCPub(){ var k=scPubKey(); if(!DB[k]||typeof DB[k]!=='object') DB[k]={messages:[],media:[],sequences:[],triggers:[]}; return DB[k]; }
-function scCoreJson(o){ return JSON.stringify({m:(o&&o.messages)||[],d:(o&&o.media)||[],s:(o&&o.sequences)||[],t:(o&&o.triggers)||[]}); }
-function scSnapshot(o){ return { messages:JSON.parse(JSON.stringify(o.messages||[])), media:JSON.parse(JSON.stringify(o.media||[])), sequences:JSON.parse(JSON.stringify(o.sequences||[])), triggers:JSON.parse(JSON.stringify(o.triggers||[])) }; }
+function SCPub(){ var k=scPubKey(); if(!DB[k]||typeof DB[k]!=='object') DB[k]={messages:[],media:[],sequences:[],triggers:[],autoreplies:[]}; return DB[k]; }
+function scCoreJson(o){ return JSON.stringify({m:(o&&o.messages)||[],d:(o&&o.media)||[],s:(o&&o.sequences)||[],t:(o&&o.triggers)||[],a:(o&&o.autoreplies)||[]}); }
+function scSnapshot(o){ return { messages:JSON.parse(JSON.stringify(o.messages||[])), media:JSON.parse(JSON.stringify(o.media||[])), sequences:JSON.parse(JSON.stringify(o.sequences||[])), triggers:JSON.parse(JSON.stringify(o.triggers||[])), autoreplies:JSON.parse(JSON.stringify(o.autoreplies||[])) }; }
 function scIsDirty(){ return scCoreJson(SC()) !== scCoreJson(SCPub()); }
 // 1a vez: adota o estado atual como baseline publicado, pra nao vazar rascunho pros bots.
 function scEnsurePubBaseline(){
@@ -8011,6 +8019,7 @@ function scCount(key){
   if(key==='messages') return (SC().messages||[]).length;
   if(key==='funis') return (SC().sequences||[]).length;
   if(key==='triggers') return (SC().triggers||[]).length;
+  if(key==='autoreplies') return (SC().autoreplies||[]).length;
   return (SC().media||[]).filter(m=>m.kind===key).length;
 }
 function scEmpty(t){ return '<div class="sc-empty">'+scEscT(t)+'</div>'; }
@@ -8046,7 +8055,7 @@ function scSeedIfNew(){
   if(changed){ sc.updated_at=Math.floor(Date.now()/1000); persist(); }
 }
 function renderSaleChat(){
-  const _sc=SC(); ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
+  const _sc=SC(); ['messages','sequences','media','triggers','autoreplies'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
   scSeedIfNew();
   scEnsurePubBaseline();
   const pg=$('salechat-pg'); if(!pg) return;
@@ -8091,6 +8100,7 @@ function scRenderSection(){
   if(scSection==='messages') return scSecMessages(main);
   if(scSection==='funis') return scSecFunis(main);
   if(scSection==='triggers') return scSecTriggers(main);
+  if(scSection==='autoreplies') return scSecAutoReplies(main);
   return scSecMedia(main,scSection);
 }
 // ─── Prévia/Simulador do painel do WhatsApp (usa os itens reais; funcional pra testar) ───
@@ -8797,6 +8807,40 @@ function scRenderTriggers(){
 function scAddTrigger(){ SC().triggers.push({id:'tg'+Date.now().toString(36),keyword:'',itemId:''}); scTouch(); scRenderTriggers(); scRenderNav(); }
 function scDelTrigger(i){ SC().triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
 function scEditTrigger(i,f,v){ if(SC().triggers[i]){ SC().triggers[i][f]=v; scTouch(); } }
+
+// ─── Seção: Respostas automáticas (a API responde sozinha pelo número do vendedor) ───
+function scSecAutoReplies(main){
+  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('send',{size:15})} Respostas automáticas</div><button class="btn btn-gr btn-sm" onclick="scAddAutoReply()">+ Nova resposta</button></div>
+    <p class="sc-hint">Quando o VENDEDOR enviar uma mensagem com a palavra-gatilho (ex: "Pedido Concluído"), a API responde sozinha pro cliente, pelo número do próprio vendedor. Dá pra mandar um texto e um cartão de contato (ex: o rapaz da entrega). Não precisa do painel aberto.</p>
+    <div id="sc-list"></div>`;
+  scRenderAutoReplies();
+}
+function scRenderAutoReplies(){
+  const box=$('sc-list'); if(!box) return;
+  const ar=SC().autoreplies;
+  if(!ar.length){ box.innerHTML=scEmpty('Nenhuma resposta automática. Ex: gatilho "Pedido Concluído" → manda o contato do rapaz da entrega.'); return; }
+  box.innerHTML=ar.map((r,i)=>`
+    <div class="sc-arcard">
+      <div class="sc-arhead">
+        <label class="sc-switch" title="Ligar/desligar essa resposta"><input type="checkbox" ${r.on!==false?'checked':''} onchange="scEditAutoReply(${i},'on',this.checked)"><span class="sc-switch-sl"></span></label>
+        <input class="info-val sc-arname" value="${scEscA(r.label||'')}" placeholder="Nome (ex: Contato da entrega)" oninput="scEditAutoReply(${i},'label',this.value)">
+        <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelAutoReply(${i})">${ico('trash',{size:13})}</button>
+      </div>
+      <label class="sc-f-label">Quando o vendedor enviar (palavra-gatilho)</label>
+      <input class="info-val" value="${scEscA(r.trigger||'')}" placeholder="Ex: Pedido Concluído" oninput="scEditAutoReply(${i},'trigger',this.value)">
+      <label class="sc-f-label">Mensagem que a API envia pro cliente</label>
+      <textarea class="info-val" rows="3" placeholder="Ex: Agora clique abaixo pra falar com quem cuida da sua entrega:" style="resize:vertical;line-height:1.45" oninput="scEditAutoReply(${i},'text',this.value)">${scEscT(r.text||'')}</textarea>
+      <label class="sc-f-label">Cartão de contato (opcional)</label>
+      <div class="sc-arrow2">
+        <input class="info-val" value="${scEscA(r.contactName||'')}" placeholder="Nome do contato (ex: Entregas)" oninput="scEditAutoReply(${i},'contactName',this.value)">
+        <input class="info-val" value="${scEscA(r.contactNumber||'')}" placeholder="Número (ex: (15) 99198-0514)" oninput="scEditAutoReply(${i},'contactNumber',this.value)">
+      </div>
+      <p class="sc-hint" style="margin-top:6px">Deixe o contato vazio pra mandar só o texto. Com o número, vai um cartão de contato (a foto aparece sozinha do perfil do número).</p>
+    </div>`).join('');
+}
+function scAddAutoReply(){ SC().autoreplies.push({id:'ar'+Date.now().toString(36),on:true,label:'',trigger:'Pedido Concluído',text:'',contactName:'',contactNumber:''}); scTouch(); scRenderAutoReplies(); scRenderNav(); }
+function scDelAutoReply(i){ if(!confirm('Excluir essa resposta automática?')) return; SC().autoreplies.splice(i,1); scTouch(); scRenderAutoReplies(); scRenderNav(); }
+function scEditAutoReply(i,f,v){ if(SC().autoreplies[i]){ SC().autoreplies[i][f]=v; scTouch(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)

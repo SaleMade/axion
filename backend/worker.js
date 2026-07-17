@@ -2058,7 +2058,7 @@ async function handleEvolutionWebhook(req, env, token) {
   const data = body?.data || {};
   try {
     if (event === 'connection.update') await _waOnConnection(env, instance, data);
-    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); }
+    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data); }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
@@ -2259,6 +2259,54 @@ async function _waDetectSale(env, instance, data) {
   } catch (_) {}
 }
 
+// ─── Respostas automáticas ───────────────────────────────────────────────────────────────
+// Configuradas na dash (Sale Chat > Respostas automáticas, perfil vendedores). Quando o VENDEDOR
+// envia uma mensagem com a palavra-gatilho (ex: "Pedido Concluído"), a API responde sozinha pro
+// cliente com um texto e, se configurado, um CARD DE CONTATO (ex: o rapaz da entrega/cobrança).
+async function _evoSendContact(env, instance, to, name, number) {
+  const digits = String(number || '').replace(/\D/g, '');
+  if (!digits) return;
+  const wuid = digits.length <= 11 ? ('55' + digits) : digits;   // garante DDI 55
+  await evoFetch(env, `/message/sendContact/${encodeURIComponent(instance)}`, {
+    method: 'POST',
+    body: { number: to, contact: [{ fullName: String(name || 'Contato'), wuid, phoneNumber: '+' + wuid }] },
+  });
+}
+async function _waAutoReplies(env, instance, data) {
+  try {
+    const key = data?.key || {};
+    if (!key.fromMe) return;                              // só dispara na mensagem DO VENDEDOR (saída)
+    const jid = String(key.remoteJid || '');
+    if (!jid || jid.indexOf('@g.us') >= 0) return;        // ignora grupo
+    const m = data?.message || {};
+    const text = (m.conversation || m.extendedTextMessage?.text || '').toLowerCase();
+    if (!text) return;
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    let st = {}; try { st = JSON.parse(row?.data || '{}'); } catch (_) {}
+    const sc = st.salechatPub || st.salechat || {};       // publicado (vendedores)
+    const replies = Array.isArray(sc.autoreplies) ? sc.autoreplies : [];
+    if (!replies.length) return;
+    const to = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
+    if (!to) return;
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_autoreply_log (k TEXT PRIMARY KEY, ts INTEGER)').run();
+    for (const rp of replies) {
+      if (!rp || rp.on === false) continue;
+      const kws = String(rp.trigger || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+      if (!kws.length || !kws.some(k => text.indexOf(k) >= 0)) continue;
+      // dedup: no máx 1x por (resposta + cliente) a cada 6h (evita loop com o eco e não spamma).
+      const dk = 'ar_' + (rp.id || '') + '_' + to;
+      const recent = await env.DB.prepare("SELECT ts FROM wa_autoreply_log WHERE k=? AND ts > strftime('%s','now')-21600").bind(dk).first();
+      if (recent) continue;
+      await env.DB.prepare("INSERT INTO wa_autoreply_log (k, ts) VALUES (?, strftime('%s','now')) ON CONFLICT(k) DO UPDATE SET ts=strftime('%s','now')").bind(dk).run();
+      if (rp.text && String(rp.text).trim()) {
+        try { await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: to, text: String(rp.text) } }); } catch (_) {}
+      }
+      if (rp.contactNumber && String(rp.contactNumber).replace(/\D/g, '')) {
+        try { await _evoSendContact(env, instance, to, rp.contactName || 'Contato', rp.contactNumber); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
 // Envia um evento pro TikTok Events API (server-side). Telefone hasheado (advanced matching);
 // inclui ttclid quando temos (atribuição precisa ao anúncio).
 async function _ttSend(pixel, token, event, phoneDigits, opts) {
