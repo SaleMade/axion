@@ -2597,6 +2597,12 @@ body.no-producer #mp-mode-block{display:none}
 </div>
 
 <!-- ═══ MODAL: PRESSEL — métricas ═══ -->
+<div class="overlay" id="m-wa-instances">
+  <div class="modal" style="max-width:520px">
+    <div class="m-h"><span class="mt">Instâncias conectadas</span><div class="m-actions"><button class="pp-iconbtn" title="Atualizar" onclick="_loadWaInstModal()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button><button class="m-x" onclick="closeM('m-wa-instances')">×</button></div></div>
+    <div class="m-b"><div id="wa-inst-body"><div class="muted" style="font-size:12px;padding:14px 4px">Carregando…</div></div></div>
+  </div>
+</div>
 <div class="overlay" id="m-pressel-metrics">
   <div class="modal">
     <div class="m-h"><span class="mt" id="ppm-title">Métricas</span><input type="date" id="ppm-date-input" onchange="_ppmSetDay(this.value)" title="Escolha o dia" style="margin-left:12px;background:var(--s3);border:1px solid var(--b1);border-radius:8px;padding:4px 8px;color:var(--tx);font-size:12.5px;font-weight:600;font-family:inherit;color-scheme:dark"><div class="m-actions"><button class="pp-iconbtn" title="Compartilhar link de métricas" onclick="copyPresselMetricsLink(_ppmPid)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button><button class="m-x" onclick="closeM('m-pressel-metrics')">×</button></div></div>
@@ -4008,8 +4014,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.70.0';
-const APP_LAST_CHANGE = 'Pedidos Confirmados: a hora e o dia agora sao sempre em horario de Brasilia, nao mais no fuso do computador. Antes, num PC em outro fuso, uma venda de ontem a noite aparecia com data de hoje. Agora bate com o filtro do servidor (que ja era BRT).';
+const APP_VERSION = '2.71.0';
+const APP_LAST_CHANGE = 'Instancias conectadas agora abrem numa janela: botao (ico link) ao lado de Metricas no topo de cada pressel. Saiu da lista inline embaixo dos vendedores. Tem botao de atualizar dentro do modal.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -10164,6 +10170,7 @@ function presselPanel(p){
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap">
         <button class="pp-iconbtn" title="Métricas" onclick="openPresselMetrics(${p.id})">${ico('bar-chart',{size:15})}</button>
+        <button class="pp-iconbtn" title="Instâncias conectadas" onclick="openWaInstances()">${ico('link',{size:15})}</button>
         <button class="pp-iconbtn" title="Duplicar" onclick="duplicatePressel(${p.id})">${ico('copy',{size:15})}</button>
         <button class="pp-iconbtn" title="Abrir página" onclick="openPresselPublic(${p.id})">${ico('arrow-up-right',{size:15})}</button>
         <button class="pp-iconbtn" title="Copiar link" onclick="copyPresselLink(${p.id})">${ico('link',{size:15})}</button>
@@ -10626,16 +10633,16 @@ function renderPresselVendList(pid){
   if(fora.length){
     html += `<div style="height:1px;background:var(--b1);margin:14px 0 9px"></div>` + fora.map(row).join('');
   }
-  wrap.innerHTML=html+_presselConnListHtml();
+  wrap.innerHTML=html;   // "Instâncias conectadas" saiu do inline pro modal (botão ao lado de Métricas)
 }
 
 // Lista as instâncias que estão DE FATO conectadas na Evolution, abaixo dos vendedores.
 // Serve pra bater o que a dash acha que é o número do vendedor vs o WhatsApp realmente no ar
 // (já aconteceu de o número estar num slot e a dash achar que estava no outro).
-function _presselConnListHtml(){
-  if(!_waConnLoaded) return '';
+function _presselConnListHtml(bare){
+  if(!_waConnLoaded) return bare?'<div class="muted" style="font-size:12px;padding:14px 4px">Carregando conexões…</div>':'';
   const insts=Object.keys(_waConnMap||{});
-  if(!insts.length) return '';
+  if(!insts.length) return bare?'<div class="muted" style="font-size:12px;padding:14px 4px">Nenhuma instância conectada ainda.</div>':'';
   const fmtN=n=>{ const d=String(n||'').replace(/\D/g,''); if(!d) return '—'; const x=d.replace(/^55/,''); return x.length>=10?`(${x.slice(0,2)}) ${x.slice(2,-4)}-${x.slice(-4)}`:d; };
   const esc=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
   const pri=st=>st==='open'?0:(st==='connecting'?1:2);   // no ar primeiro
@@ -10655,12 +10662,29 @@ function _presselConnListHtml(){
     </div>`;
   }).join('');
   const nOn=insts.filter(i=>_waConnMap[i]==='open').length;
+  if(bare){
+    return `<div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:6px">
+      <span style="font-size:11px;font-weight:700;color:var(--t3)">${nOn}/${insts.length} no ar</span>
+    </div>${rows}`;
+  }
   return `<div style="margin-top:14px;padding-top:11px;border-top:1px dashed var(--b2)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
       <span style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--t3)">Instâncias conectadas</span>
       <span style="font-size:10px;color:var(--t4)">${nOn}/${insts.length} no ar</span>
     </div>${rows}
   </div>`;
+}
+// Modal "Instâncias conectadas" (aberto pelo botão ao lado de Métricas em cada pressel).
+function openWaInstances(){ openM('m-wa-instances'); _loadWaInstModal(); }
+function _loadWaInstModal(){
+  const b=document.getElementById('wa-inst-body'); if(!b) return;
+  b.innerHTML='<div class="muted" style="font-size:12px;padding:14px 4px">Carregando…</div>';
+  api.waConn().then(r=>{
+    const m={},mn={}; ((r&&r.conn)||[]).forEach(c=>{ m[c.instance]=c.state; mn[c.instance]=c.number||''; });
+    _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
+    b.innerHTML=_presselConnListHtml(true);
+    try{ (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id)); }catch(_){}
+  }).catch(()=>{ b.innerHTML='<div class="muted" style="font-size:12px;padding:14px 4px;color:var(--rd)">Não consegui carregar as conexões.</div>'; });
 }
 
 function _nextPresselId(){ return (_ensurePressels().reduce((mx,p)=>Math.max(mx,p.id||0),0))+1; }
