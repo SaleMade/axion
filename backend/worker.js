@@ -2081,6 +2081,10 @@ async function handleWAConn(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   await _waEnsureTables(env);
+  // Saturação da roleta (todos os números bateram o teto de rajada recentemente) → a dash avisa
+  // pra adicionar mais números. Só considera "agora" se foi nos últimos 15min.
+  let satTs = 0; try { const v = await _readConfig(env, 'roleta_sat_ts'); satTs = Number(v) || 0; } catch (_) {}
+  const sat = satTs && (Math.floor(Date.now() / 1000) - satTs) < 900 ? satTs : 0;
   // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também)
   try {
     const live = await _evoInstances(env);
@@ -2093,12 +2097,12 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, conn: live.map(it => ({ instance: it.name, state: it.state, number: it.number })) });
+      return json({ ok: true, sat, conn: live.map(it => ({ instance: it.name, state: it.state, number: it.number })) });
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB
   const rows = await env.DB.prepare('SELECT instance, state, number FROM wa_conn').all();
-  return json({ ok: true, conn: rows.results || [] });
+  return json({ ok: true, sat, conn: rows.results || [] });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -2621,48 +2625,98 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   }
   return out;
 }
-// ROLETA com OVERFLOW POR COTA + balanceamento:
-// 1) por vendedor, resolve o número EFETIVO: principal até bater a cota do dia (cap), depois vira pro backup;
-//    se o principal caiu, usa o backup direto; se não tem backup, segue no principal.
-// 2) entre vendedores, manda pro que tem MENOS leads hoje (principal+backup somados). Empate → rotaciona.
+// ROLETA INTELIGENTE (anti-flood + anti-ban). Em vez de "encher o número mais vazio do dia"
+// (que jogava a rajada toda num número novo pra empatar o placar e podia banir), distribui pelo
+// RITMO RECENTE, com aquecimento pra número novo e um TETO de rajada por número:
+//  1) candidatos: por vendedor, resolve os números (split = os dois; overflow = principal até a
+//     cota do dia, depois o backup).
+//  2) TETO de rajada: nenhum número recebe mais que BURST_CAP leads a cada BURST_WIN. Número NOVO
+//     (aquecimento) começa com teto menor e sobe até o cheio em WARMUP_MIN (rápido).
+//  3) entre os que não bateram o teto, manda pro que recebeu MENOS nos últimos PACE_WIN (ritmo
+//     parelho pra todos, sem despejar atraso). Empate → menos hoje → quem recebeu há mais tempo → rotação.
+//  4) se TODOS bateram o teto (volume alto demais pros números no ar), não perde lead: manda pro
+//     menos carregado e marca "saturação" (a dash avisa pra adicionar mais números).
+const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
 async function _presselBalancedPick(env, id, sellers){
-  const counts={};
+  const now=Math.floor(Date.now()/1000);
+  const dayStart=Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
+  const m={};   // inst -> { pace, burst, today, lastmt }
   try{
-    const day=_brDay();
-    const start=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end=start+86400;
-    const r=await env.DB.prepare(`SELECT instance, COUNT(*) c FROM (SELECT phone, instance, MIN(ts) mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance) WHERE mt>=? AND mt<? GROUP BY instance`).bind(start,end).all();
-    (r.results||[]).forEach(x=>{counts[x.instance]=Number(x.c)||0;});
+    const r=await env.DB.prepare(
+      `SELECT instance,
+         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) pace,
+         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) burst,
+         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) today,
+         MAX(mt) lastmt
+       FROM (SELECT phone, instance, MIN(ts) mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance)
+       GROUP BY instance`
+    ).bind(now-PACE_WIN, now-BURST_WIN, dayStart).all();
+    (r.results||[]).forEach(x=>{ m[x.instance]={ pace:Number(x.pace)||0, burst:Number(x.burst)||0, today:Number(x.today)||0, lastmt:Number(x.lastmt)||0 }; });
   }catch(_){}
+  const g=inst=>m[inst]||{pace:0,burst:0,today:0,lastmt:0};
+  // Aquecimento ancorado no NÚMERO (não na instância): quando ESTE número recebeu o 1º lead. Assim,
+  // trocar o número num slot antigo (ex: reconectar a reserva) aquece o número NOVO, não o herda "velho".
+  const numFirst={};
+  try{
+    const rn=await env.DB.prepare("SELECT num, MIN(ts) fm FROM wa_lead WHERE num IS NOT NULL AND num<>'' GROUP BY num").all();
+    (rn.results||[]).forEach(x=>{ const k=String(x.num).replace(/\D/g,'').slice(-8); const v=Number(x.fm)||0; if(k&&v) numFirst[k]=numFirst[k]?Math.min(numFirst[k],v):v; });
+  }catch(_){}
+  const firstSeen=numTxt=>{ const k=String(numTxt||'').replace(/\D/g,'').slice(-8); return numFirst[k]||0; };
+  const warming=a=>{ const f=firstSeen(a.num); return !f || (now-f)/60 < WARMUP_MIN; };
+  // teto atual do número: número novo (aquecimento) sobe de WARM_MIN_CAP até BURST_CAP em WARMUP_MIN min.
+  const capOf=a=>{ const f=firstSeen(a.num); if(!f) return WARM_MIN_CAP; const ageMin=(now-f)/60; if(ageMin>=WARMUP_MIN) return BURST_CAP; return Math.max(WARM_MIN_CAP, Math.round(BURST_CAP*ageMin/WARMUP_MIN)); };
+  // Monta candidatos (mesma lógica split/overflow; a cota do overflow usa a contagem do DIA).
   const avail=[];
   for(const s of sellers){
-    const cP=s.primary?(counts[s.primary.inst]||0):0;
-    const cB=s.backup?(counts[s.backup.inst]||0):0;
+    const cP=s.primary?g(s.primary.inst).today:0;
+    const cB=s.backup?g(s.backup.inst).today:0;
     if(s.mode==='split' && s.primary && s.backup){
-      // COMPLEMENTAR: os dois números do vendedor recebem AO MESMO TEMPO. Cada um é
-      // um alvo independente, balanceado pela SUA contagem → divide os leads entre
-      // eles (e entre todos os números vivos da roleta), pra ninguém receber demais.
-      avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst, total:cP});
-      avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst,  total:cB});
+      avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst});
+      avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst});
       continue;
     }
-    // OVERFLOW POR COTA (padrão): principal até bater a cota do dia, depois o backup.
-    let eff=null, effCount=0;
-    if(s.primary && (s.cap<=0 || cP<s.cap)) { eff=s.primary; effCount=cP; }   // principal ainda dentro da cota
-    else if(s.backup) { eff=s.backup; effCount=cB; }                           // estourou a cota (ou principal caiu) → backup
-    else if(s.primary) { eff=s.primary; effCount=cP; }                         // sem backup: segue no principal
+    let eff=null;
+    if(s.primary && (s.cap<=0 || cP<s.cap)) eff=s.primary;   // principal dentro da cota
+    else if(s.backup) eff=s.backup;                           // estourou a cota (ou principal caiu) → backup
+    else if(s.primary) eff=s.primary;                         // sem backup: segue no principal
     if(!eff) continue;
-    // total = carga do NÚMERO efetivo, NÃO a soma dos dois. Somar inflava a carga do
-    // vendedor overflow e, comparado com os alvos do modo complementar (que contam por
-    // número), ele nunca ganhava o desempate e ficava sem receber lead nenhum.
-    avail.push({num:eff.num, at:s.at, inst:eff.inst, total:effCount});
+    avail.push({num:eff.num, at:s.at, inst:eff.inst});
   }
   if(!avail.length) return null;
   if(avail.length===1) return avail[0];
-  let min=Infinity; avail.forEach(a=>{ if(a.total<min)min=a.total; });
-  const tied=avail.filter(a=>a.total===min);
-  if(tied.length===1) return tied[0];
-  const idx=await _presselNextIndex(env, id, tied.length);   // desempate rotativo
+  // 1) preferir quem NÃO bateu o teto de rajada (com aquecimento do número novo)
+  let pool=avail.filter(a=>g(a.inst).burst < capOf(a));
+  const saturated = pool.length===0;
+  if(saturated){
+    try{ await _roletaMarkSaturated(env); }catch(_){}
+    // Todos no teto (volume alto demais). Não perde lead, MAS protege o número NOVO: o excedente
+    // vai pros ESTABELECIDOS (aguentam um pico melhor que um chip fresco, que bane). Um número em
+    // aquecimento nunca passa do teto dele — mesmo saturado. Só cai nele se não houver estabelecido.
+    const established=avail.filter(a=>!warming(a));
+    pool = established.length ? established : avail.slice();
+  }
+  // 2) ordena por ritmo recente (menos nos últimos PACE_WIN); empate → menos hoje → recebeu há mais tempo
+  const cmp=(a,b)=>{
+    const A=g(a.inst), B=g(b.inst);
+    if(saturated && A.burst!==B.burst) return A.burst-B.burst;   // saturado: pro menos carregado agora
+    if(A.pace!==B.pace) return A.pace-B.pace;
+    if(A.today!==B.today) return A.today-B.today;
+    return (A.lastmt||0)-(B.lastmt||0);
+  };
+  pool.sort(cmp);
+  const top=g(pool[0].inst);
+  const tied=pool.filter(a=>{ const X=g(a.inst); return X.pace===top.pace && X.today===top.today && (X.lastmt||0)===(top.lastmt||0) && (!saturated || X.burst===top.burst); });
+  if(tied.length<=1) return pool[0];
+  const idx=await _presselNextIndex(env, id, tied.length);   // empate total → rotação
   return tied[idx];
+}
+// Marca que a roleta saturou (todos os números no teto). Throttle in-memory: no máx 1 escrita/min.
+let _lastSatWrite=0;
+async function _roletaMarkSaturated(env){
+  const now=Math.floor(Date.now()/1000);
+  if(now-_lastSatWrite<60) return;
+  _lastSatWrite=now;
+  try{ await _ensureConfigTable(env); await env.DB.prepare("INSERT INTO app_config (key,value,updated_at) VALUES ('roleta_sat_ts',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").bind(String(now),now).run(); }catch(_){}
 }
 function _ttPixel(p){
   if(!p.pixel_tt) return '';

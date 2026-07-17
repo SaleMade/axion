@@ -4014,8 +4014,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.71.0';
-const APP_LAST_CHANGE = 'Instancias conectadas agora abrem numa janela: botao (ico link) ao lado de Metricas no topo de cada pressel. Saiu da lista inline embaixo dos vendedores. Tem botao de atualizar dentro do modal.';
+const APP_VERSION = '2.72.0';
+const APP_LAST_CHANGE = 'Roleta inteligente anti-flood/anti-ban: em vez de encher o numero mais vazio do dia (que jogava a rajada num numero novo e podia banir), distribui pelo ritmo recente, com aquecimento pro numero novo (entra devagar e acelera) e um teto de rajada por numero (nunca 20-30 de uma vez). O excedente vai pros numeros estabelecidos, nunca floodando o chip fresco. Se todos saturarem, a janela de Instancias avisa pra adicionar mais um numero.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -10682,7 +10682,8 @@ function _loadWaInstModal(){
   api.waConn().then(r=>{
     const m={},mn={}; ((r&&r.conn)||[]).forEach(c=>{ m[c.instance]=c.state; mn[c.instance]=c.number||''; });
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
-    b.innerHTML=_presselConnListHtml(true);
+    const satWarn=(r&&r.sat)?`<div style="display:flex;align-items:center;gap:8px;background:rgba(240,129,15,.12);border:1px solid var(--am);border-radius:10px;padding:9px 11px;margin-bottom:10px;font-size:12px;color:var(--am);font-weight:600">${ico('alert-triangle',{size:14})} Muito lead chegando pros números no ar. Adicione mais um número pra não sobrecarregar (e evitar ban).</div>`:'';
+    b.innerHTML=satWarn+_presselConnListHtml(true);
     try{ (Array.isArray(DB.pressels)?DB.pressels:[]).forEach(p=>renderPresselVendList(p.id)); }catch(_){}
   }).catch(()=>{ b.innerHTML='<div class="muted" style="font-size:12px;padding:14px 4px;color:var(--rd)">Não consegui carregar as conexões.</div>'; });
 }
