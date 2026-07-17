@@ -7317,8 +7317,9 @@ function renderPedidosConf(){
   c.innerHTML=`<div class="ph"><div><h1>Pedidos <em>Confirmados</em></h1></div></div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 16px">
       <button class="btn btn-bl btn-sm" onclick="_pcfToggleAdd()">+ Adicionar pedido</button>
-      <span class="muted" style="font-size:12px;flex:1;min-width:200px">Mostrando <b style="color:var(--t2)">${_automEsc(perLabel)}</b> — use o seletor de período no topo pra mudar. Vendas detectadas no WhatsApp ("Pedido Concluído"); remover tira da contagem.</span>
+      <input id="pcf-search" value="${_automEsc(_pcfSearch)}" oninput="_pcfSearch=this.value;_pcfRenderList()" placeholder="Buscar cliente, telefone ou vendedor..." class="pp-inp" style="flex:1;min-width:200px;max-width:320px;padding:8px 11px">
     </div>
+    <div style="font-size:12px;color:var(--t3);margin:-8px 0 14px">Mostrando <b style="color:var(--t2)">${_automEsc(perLabel)}</b> — use o seletor de período no topo pra mudar. Vendas detectadas no WhatsApp ("Pedido Concluído"); remover tira da contagem.</div>
     <div id="pcf-addform" style="display:none;border:1px solid var(--bl);border-radius:var(--rl);background:var(--s2);padding:16px;margin-bottom:16px">
       <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:4px">Adicionar pedido manual</div>
       <div class="muted" style="font-size:11.5px;margin-bottom:12px;line-height:1.5">Pra venda por indicação/orgânico que não passou pelo WhatsApp. Cole a mensagem de "Pedido Concluído" e escolha o vendedor. Não dispara o pixel do TikTok (não é venda de anúncio); entra como "sem rastreio" e conta pro vendedor.</div>
@@ -7337,12 +7338,27 @@ function renderPedidosConf(){
 }
 // Formata um Date pra YYYY-MM-DD pelo calendário LOCAL (= BRT no PC do time) — casa com o filtro do servidor
 function _pcfRangeYmd(d){ const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); }
+let _pcfSales=[], _pcfSearch='';
 function _loadPedidosConf(){
   const {from,to}=dateRange();   // período do seletor global do topo (Últimos 7/14/30 dias, etc)
   api.waSalesList({from:_pcfRangeYmd(from),to:_pcfRangeYmd(to)}).then(r=>{
-    const list=$('pcf-list'); if(!list) return;
-    const sales=r&&r.sales?r.sales:[];
-    if(!sales.length){ list.innerHTML='<div class="muted" style="padding:28px;text-align:center;font-size:13px">Nenhum pedido confirmado nesse período.</div>'; return; }
+    _pcfSales=(r&&r.sales)?r.sales:[];
+    _pcfRenderList();
+  }).catch(()=>{ const list=$('pcf-list'); if(list) list.innerHTML='<div class="muted" style="padding:24px;text-align:center;color:var(--rd)">Erro ao carregar. Tenta de novo.</div>'; });
+}
+// Renderiza a lista a partir do cache (_pcfSales), aplicando a busca. Chamada ao digitar — sem refetch.
+function _pcfRenderList(){
+  const list=$('pcf-list'); if(!list) return;
+  const _norm=x=>String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  const q=_norm(_pcfSearch).trim(), qd=q.replace(/\D/g,'');
+  const sales=(_pcfSales||[]).filter(s=>{
+    if(!q) return true;
+    const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
+    const seller=_norm((getTeam(at)||{}).name||'');
+    return _norm(s.name).includes(q) || seller.includes(q) || (qd && String(s.phone||'').replace(/\D/g,'').includes(qd));
+  });
+  if(!sales.length){ list.innerHTML=`<div class="muted" style="padding:28px;text-align:center;font-size:13px">${_pcfSearch?('Nenhum pedido pra <b>'+_automEsc(_pcfSearch)+'</b> no período.'):'Nenhum pedido confirmado nesse período.'}</div>`; return; }
+  {
     const totVal=sales.reduce((a,s)=>a+(Number(s.value)||0),0);
     const _atr=s=>!!(s.pid && String(s.pid).trim()!=='');   // veio de pressel (tem código/rastreio)?
     const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
@@ -7382,7 +7398,7 @@ function _loadPedidosConf(){
         + g.items.map(_card).join('');
     }).join('');
     list.innerHTML=html;
-  }).catch(()=>{ const list=$('pcf-list'); if(list) list.innerHTML='<div class="muted" style="padding:24px;text-align:center;color:var(--rd)">Erro ao carregar. Tenta de novo.</div>'; });
+  }
 }
 function _removerPedidoConf(id, name){
   if(!id){ toast('Pedido sem id (antigo). Não dá pra remover por aqui.','err'); return; }
