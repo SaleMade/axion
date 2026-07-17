@@ -4021,8 +4021,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.74.0';
-const APP_LAST_CHANGE = 'Respostas automaticas: agora esperam alguns segundos antes de enviar (padrao 10s, ajustavel por resposta). Fica mais humano. O envio roda em segundo plano (o webhook responde na hora), sem segurar a Evolution.';
+const APP_VERSION = '2.75.0';
+const APP_LAST_CHANGE = 'Correcao de sync que apagava config do Sale Chat: o merge tratava o salechat como bloco unico, entao editar um funil num lugar e outra coisa noutro fazia um sobrescrever o outro inteiro (foi o que apagou a subcategoria dos funis). Agora o Sale Chat mescla por item (id), igual os chips. As subcategorias dos funis (Homem/Mulher) foram restauradas.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4271,6 +4271,11 @@ function _merge3Array(base,mine,theirs){
   (mine||[]).forEach(x=>{if(x&&out[x.id]!=null&&order.indexOf(x.id)<0)order.push(x.id);});
   return order.map(id=>out[id]);
 }
+// Chaves do Sale Chat: são OBJETOS com listas dentro (messages/sequences/media/triggers/
+// autoreplies). Mesclar por ITEM (recursivo) e não como bloco atômico — senão editar um funil
+// num lugar e uma mensagem noutro faz um sobrescrever o Sale Chat inteiro do outro (foi o que
+// apagou a subcategoria dos funis).
+var _SC_MERGE_KEYS=['salechat','salechatCob','salechatPub','salechatCobPub'];
 function mergeBlobs(base,mine,theirs){
   if(!base||typeof base!=='object'||!theirs)return mine; // sem ancestral → não dá pra mesclar
   const out={...theirs};
@@ -4278,6 +4283,8 @@ function mergeBlobs(base,mine,theirs){
     const mv=mine[k],tv=theirs[k],bv=base[k];
     if(_isIdArr(mv)&&Array.isArray(tv)){
       out[k]=_merge3Array(Array.isArray(bv)?bv:[],mv,tv);
+    }else if(_SC_MERGE_KEYS.indexOf(k)>=0 && mv&&typeof mv==='object'&&!Array.isArray(mv) && tv&&typeof tv==='object'&&!Array.isArray(tv)){
+      out[k]=mergeBlobs(bv&&typeof bv==='object'?bv:{}, mv, tv);   // Sale Chat → merge por item
     }else{
       const iChanged=JSON.stringify(bv)!==JSON.stringify(mv);
       out[k]=iChanged?mv:(k in theirs?tv:mv);   // mexi vs base → meu; senão, do servidor
