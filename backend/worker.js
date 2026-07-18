@@ -2016,6 +2016,8 @@ async function _waOnInbound(env, instance, data) {
   // Guarda a mensagem recebida no histórico do inbox (independente de automação)
   const _ex = _waExtractMsg(data);
   await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
+  // Sale Chat Engine (sombra): espelha o inbound da Evolution na auditoria crua pra comparar cobertura (sc x evo). Fire-and-forget, nunca afeta o fluxo.
+  try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, String(instance || '').replace(/^ax_/, '')).run(); } catch (_) {}
   await _waLeadCapture(env, instance, phone, _ex.body);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
@@ -2085,7 +2087,29 @@ async function _scEnsureTables(env) {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_ingest_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, self_number TEXT, phone TEXT, from_me INTEGER, msg_id TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER, received_at INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_heartbeat (self_number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, wpp_seen INTEGER, last_seen INTEGER, meta TEXT)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_number_owner (number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, source TEXT, updated_at INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE sc_ingest_audit ADD COLUMN at_id TEXT').run(); } catch (_) {}   // idempotente: falha se a coluna já existe
   } catch (_) {}
+}
+// Semeia wa_number_owner a partir dos chips do estado da dash (número -> vendedor).
+// Server-side: é a fonte de verdade da atribuição, nunca o que o cliente diz ser.
+async function _scSeedOwners(env) {
+  try {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (_) {}
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    let n = 0;
+    for (const c of chips) {
+      const num = String((c && c.num) || '').replace(/\D/g, '');
+      const at = c && (c.at != null ? String(c.at) : '');
+      if (!num || !at) continue;
+      await env.DB.prepare(
+        `INSERT INTO wa_number_owner (number, at_id, instance, source, updated_at) VALUES (?, ?, ?, 'chips', strftime('%s','now'))
+         ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, updated_at=excluded.updated_at`
+      ).bind(num, at, 'ax_' + at).run();
+      n++;
+    }
+    return n;
+  } catch (_) { return 0; }
 }
 // Resolve o número do vendedor -> {at_id, instance}. SEMPRE server-side; nunca
 // confia no que o cliente diz ser o vendedor. FASE 0: só lê a tabela (pode estar
@@ -2109,15 +2133,21 @@ async function handleSalechatIngest(req, env, token) {
   await _scEnsureTables(env);
   const now = Math.floor(Date.now() / 1000);
   const ack = [];
+  const ownerCache = {};
   for (const e of events) {
     try {
       const msgId = String(e?.msgId || e?.id || '');
       const selfNumber = String(e?.selfNumber || '').replace(/\D/g, '');
       const phone = String(e?.phone || '').replace(/\D/g, '');
+      let atId = null;   // dono resolvido no SERVIDOR pelo número (null = quarentena)
+      if (selfNumber) {
+        if (!(selfNumber in ownerCache)) { const ow = await resolveOwner(env, selfNumber); ownerCache[selfNumber] = ow ? ow.at_id : null; }
+        atId = ownerCache[selfNumber];
+      }
       await env.DB.prepare(
-        'INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
+        'INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
       ).bind('sc', selfNumber, phone, e?.fromMe ? 1 : 0, msgId, String(e?.type || 'text'),
-             String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now).run();
+             String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now, atId).run();
       if (msgId) ack.push(msgId);
     } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
   }
@@ -2147,15 +2177,18 @@ async function handleSalechatHealth(req, env) {
   const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Apenas Diretor', 403);
   await _scEnsureTables(env);
+  const seeded = await _scSeedOwners(env);
   const token = await _scIngestToken(env);
-  let recent = [], beats = [], counts = {};
+  let recent = [], beats = [], counts = {}, coverage = [];
   try { recent = (await env.DB.prepare('SELECT * FROM sc_ingest_audit ORDER BY id DESC LIMIT 50').all()).results || []; } catch (_) {}
   try { beats = (await env.DB.prepare('SELECT * FROM sc_heartbeat ORDER BY last_seen DESC').all()).results || []; } catch (_) {}
   try {
     const c = await env.DB.prepare('SELECT COUNT(*) n, COALESCE(SUM(from_me),0) fm FROM sc_ingest_audit').first();
     counts = { total: c?.n || 0, fromMe: c?.fm || 0 };
   } catch (_) {}
-  return json({ ok: true, ingest_token: token, counts, heartbeats: beats, recent });
+  // Cobertura: quantos leads (telefones distintos) cada fonte capturou. Sale Chat (sc) deve >= Evolution (evo).
+  try { coverage = (await env.DB.prepare("SELECT source, COUNT(*) n, COUNT(DISTINCT phone) leads FROM sc_ingest_audit GROUP BY source").all()).results || []; } catch (_) {}
+  return json({ ok: true, ingest_token: token, owners_seeded: seeded, counts, coverage, heartbeats: beats, recent });
 }
 
 // GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)

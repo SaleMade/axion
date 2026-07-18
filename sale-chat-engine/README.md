@@ -33,10 +33,16 @@ Lembretes do projeto: `sc-panel.js` espelha `zapvoice-ext/panel-inject.js` SEMPR
 - [ ] `sweepRecent()` na subida/reconexão (pegar msg que chegou antes do listener) - PENDENTE
 - [ ] Fila durável em ARQUIVO no injetor (hoje sobrevive a reinjeção do painel, não ao fechar o app) - PENDENTE
 
-### Fase 1b - ligar a captura no fluxo real (ainda Evolution ligada)
-- [ ] Ingest passa a chamar `_waOnInbound`/`_waLeadCapture` de verdade (grava `wa_lead`/`wa_attrib`); casamento `tt_pending` por code; detector tt_pending x wa_lead
-- [ ] Semear `wa_number_owner` (número->at) a partir de `state.chips`/`wa_conn`
-- [ ] Critério: Sale Chat cobre >= Evolution em leads por número/vendedor por vários dias (medido na auditoria crua)
+### Fase 1b - medir cobertura em sombra (Evolution ligada) - FEITO (deploy 17/07)
+- [x] Espelhar o inbound da Evolution na auditoria crua (`source='evo'`) pra comparar com o Sale Chat (`source='sc'`) - em `_waOnInbound`, fire-and-forget
+- [x] Semear `wa_number_owner` (número->at) a partir de `data.chips` (`_scSeedOwners`, disparado ao abrir `/api/salechat/health`)
+- [x] Ingest resolve o dono no SERVIDOR e grava `at_id` na auditoria (coluna nova via ALTER)
+- [x] `/api/salechat/health` mostra a cobertura (leads distintos por fonte: sc x evo)
+- [ ] Semear owners por cron (hoje só ao abrir a saúde) - melhoria futura
+- [ ] Aba de saúde na dash que consome `/api/salechat/health` (hoje dá pra ver o JSON direto) - melhoria
+- [ ] Critério pra avançar pra Fase 2: Sale Chat cobre >= Evolution em leads por vários dias
+
+Nota: NÃO liguei o ingest no `_waLeadCapture`/pixel de propósito (dispararia pixel DUPLICADO com a Evolution ligada). Isso é a Fase 2 abaixo (virar o gatilho e desligar SÓ o pixel do lado Evolution).
 
 ### Fase 2 - venda + pixel pelo Sale Chat
 - [ ] Capturar "Pedido Concluído" `fromMe`; worker reusa `_waDetectSale`
