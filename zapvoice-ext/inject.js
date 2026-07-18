@@ -22,6 +22,10 @@ if (PERFIL !== 'cobradores') PERFIL = 'vendedores';
 const CONFIG_URL = PERFIL === 'cobradores' ? (BASE_URL + '?perfil=cobradores') : BASE_URL;
 const MEDIA_BASE = BASE_URL.replace(/\/+$/, '') + '/media';
 const DIR = __dirname;
+// Token do Sale Chat Engine (captura) — env ZV_INGEST_TOKEN ou arquivo ingest-token.txt na pasta
+// (o Diretor pega em GET /api/salechat/health e salva aqui). Sem token, a captura fica so no console.
+let INGEST_TOKEN = (process.env.ZV_INGEST_TOKEN || '').trim();
+if (!INGEST_TOKEN) { try { INGEST_TOKEN = fs.readFileSync(path.join(DIR, 'ingest-token.txt'), 'utf8').trim(); } catch (_) {} }
 
 // Baixa bytes de uma URL (mídia do R2 servida pelo Worker). Node não tem CSP.
 function fetchBytes(url) {
@@ -34,6 +38,29 @@ function fetchBytes(url) {
       });
       r.on('error', () => fin(null));
       r.setTimeout(30000, () => { try { r.destroy(); } catch (_) {} fin(null); });
+    } catch (_) { fin(null); }
+  });
+}
+
+// POST JSON simples (Node, sem CSP). Usado pela captura do Sale Chat Engine.
+function httpPostJson(url, obj) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const u = new URL(url);
+      const lib = u.protocol === 'http:' ? http : https;
+      const payload = Buffer.from(JSON.stringify(obj || {}), 'utf8');
+      const req = lib.request({
+        hostname: u.hostname, port: u.port || (u.protocol === 'http:' ? 80 : 443),
+        path: u.pathname + u.search, method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': payload.length }
+      }, (res) => {
+        const chunks = []; res.on('data', (c) => chunks.push(c));
+        res.on('end', () => { try { fin(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (_) { fin(null); } });
+      });
+      req.on('error', () => fin(null));
+      req.setTimeout(15000, () => { try { req.destroy(); } catch (_) {} fin(null); });
+      req.write(payload); req.end();
     } catch (_) { fin(null); }
   });
 }
@@ -493,6 +520,44 @@ async function run() {
     setTimeout(pumpPreview, 700);
   }
   pumpPreview();
+
+  // ─── Sale Chat Engine: bomba de CAPTURA (Fase 1) ──────────────────────────
+  // Drena window.__zvOutbox (o painel enfileira) e manda pro worker (auditoria crua).
+  // ack-based: so remove da fila o msg_id que o servidor confirmou. Sem token nao faz nada
+  // (a captura ainda funciona no console via __zvOutboxDump()).
+  const INGEST_BASE = BASE_URL.replace(/\/+$/, '');
+  async function pumpOutbox() {
+    try {
+      if (INGEST_TOKEN) {
+        const raw = valOf(await evaluate('window.__zvOutbox ? JSON.stringify(window.__zvOutbox.slice(0,50)) : "[]"', true));
+        let batch = []; try { batch = JSON.parse(raw || '[]'); } catch (_) {}
+        if (batch.length) {
+          const res = await httpPostJson(INGEST_BASE + '/ingest/' + encodeURIComponent(INGEST_TOKEN), { events: batch });
+          if (res && res.ok && Array.isArray(res.ack) && res.ack.length) {
+            // remove SO o que foi confirmado (nunca splice cego — corrida perderia evento novo)
+            await evaluate('(function(a){try{var s={};for(var i=0;i<a.length;i++)s[a[i]]=1;window.__zvOutbox=(window.__zvOutbox||[]).filter(function(e){return !s[e.msgId];});}catch(_){}})(' + JSON.stringify(res.ack) + ')');
+          }
+        }
+      }
+    } catch (_) {}
+    setTimeout(pumpOutbox, 1500);
+  }
+  pumpOutbox();
+
+  // heartbeat: avisa que o numero esta vivo/logado a cada 30s (a dash sabe quem esta on).
+  async function pumpHeartbeat() {
+    try {
+      if (INGEST_TOKEN) {
+        const self = valOf(await evaluate('(window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ""', true));
+        if (self) {
+          const wppSeen = valOf(await evaluate('(window.WPP && window.WPP.on) ? 1 : 0', true));
+          await httpPostJson(INGEST_BASE + '/heartbeat/' + encodeURIComponent(INGEST_TOKEN), { selfNumber: String(self), wppSeen: Number(wppSeen) || 0 });
+        }
+      }
+    } catch (_) {}
+    setTimeout(pumpHeartbeat, 30000);
+  }
+  setTimeout(pumpHeartbeat, 10000);
 
   // Atualizacao ao vivo: checa a config da dash a cada 20s. Se o Diretor editou
   // (updated_at mudou), reconstroi a biblioteca e empurra pro painel (window.__zvUpdate),

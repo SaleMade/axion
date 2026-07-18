@@ -495,7 +495,58 @@
       }
     } catch (_) {}
   }
+  // ─── Sale Chat Engine: CAPTURA (Fase 1) ────────────────────────────────────
+  // Captura toda mensagem do chat.new_message e enfileira em window.__zvOutbox.
+  // O injetor (Node, sem CSP) drena e manda pro worker. Aqui NAO fazemos rede
+  // (a CSP do WhatsApp bloqueia). A fila sobrevive a reinjecao do painel.
+  window.__zvOutbox = window.__zvOutbox || [];
+  function _scSer(x) { try { return (x && (x._serialized || (x.toString && x.toString()))) || ''; } catch (_) { return ''; } }
+  function _scDigits(s) { return String(s || '').split('@')[0].replace(/\D/g, ''); }
+  var _scSelfNum = '', _scSelfT = 0;
+  function _scSelfNumber() {
+    try {
+      var now = Date.now();
+      if (_scSelfNum && (now - _scSelfT) < 60000) return _scSelfNum;   // cacheia 60s (vendedor pode trocar de chip)
+      var w = window.WPP;
+      var me = w && w.conn && w.conn.getMyUserId && w.conn.getMyUserId();
+      var d = _scDigits(_scSer(me));
+      if (d) { _scSelfNum = d; _scSelfT = now; }
+      return _scSelfNum;
+    } catch (_) { return _scSelfNum; }
+  }
+  window.__zvGetSelfNumber = _scSelfNumber;
+  function _scCapture(msg) {
+    try {
+      if (!msg) return;
+      var fromMe = !!(msg.fromMe || (msg.id && msg.id.fromMe));
+      var fromS = _scSer(msg.from), toS = _scSer(msg.to);
+      // Contraparte (o lead): quando SOU eu que mandei, o lead e o DESTINO (msg.to).
+      // Errar isso joga a venda no numero errado (risco 1 do plano). Nunca usar msg.from em fromMe.
+      var counter = fromMe ? toS : fromS;
+      if (!counter || counter.indexOf('@g.us') >= 0) return;   // ignora grupo / sem contraparte
+      var phone = _scDigits(counter);
+      if (!phone) return;
+      var msgId = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || '';
+      if (!msgId) msgId = 'sc_' + (Number(msg.t || msg.timestamp || 0) || Date.now()) + '_' + Math.random().toString(36).slice(2, 8);
+      window.__zvOutbox.push({
+        msgId: msgId,
+        selfNumber: _scSelfNumber(),
+        phone: phone,
+        fromMe: fromMe,
+        type: String(msg.type || 'chat'),
+        body: String(msg.body || msg.caption || '').slice(0, 2000),
+        pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
+        ts: Number(msg.t || msg.timestamp || 0),
+        fromRaw: fromS, toRaw: toS
+      });
+      if (window.__zvOutbox.length > 800) window.__zvOutbox.splice(0, window.__zvOutbox.length - 800);   // trava anti-estouro
+    } catch (_) {}
+  }
+  // Console do vendedor (F12): __zvOutboxDump() mostra o que ja foi capturado (PoC sem servidor).
+  window.__zvOutboxDump = function () { try { return JSON.parse(JSON.stringify(window.__zvOutbox || [])); } catch (_) { return []; } };
+
   function onIncoming(msg) {
+    try { _scCapture(msg); } catch (_) {}   // Sale Chat Engine: captura ANTES de qualquer filtro (inclui fromMe)
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
     // Interrompe os funis que pedem "parar se o lead responder", pro lead que respondeu.
     if (jobs.length) {

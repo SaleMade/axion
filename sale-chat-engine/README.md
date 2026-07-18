@@ -18,18 +18,25 @@ Lembretes do projeto: `sc-panel.js` espelha `zapvoice-ext/panel-inject.js` SEMPR
 
 ## Checklist por fase
 
-### Fase 0 - fundação (aditivo, sem mudar comportamento ao vivo)
-- [ ] Tabela `wa_number_owner` (número do vendedor -> at) + `resolveOwner(selfNumber)` no worker (atribuição resolvida no SERVIDOR, nunca confiar no cliente)
-- [ ] Tabela de auditoria CRUA (sem dedup, flag `source` = evo|sc) pra validar captura
-- [ ] Endpoint `POST /api/salechat/ingest/<token>` (fail-closed, token em `app_config`), gravando só na auditoria crua primeiro
-- [ ] Normalizar dedup pro id puro em `wa_sales`/`wa_messages`
-- [ ] Painel de saúde na dash (heartbeat/lastSeen por número, tamanho do outbox, número sem dono)
+### Fase 0 - fundação (aditivo, sem mudar comportamento ao vivo) - NO AR (deploy 17/07, commit 3cb097e)
+- [x] Tabela `wa_number_owner` (número do vendedor -> at) + `resolveOwner(selfNumber)` no worker (atribuição resolvida no SERVIDOR, nunca confiar no cliente)
+- [x] Tabela de auditoria CRUA (`sc_ingest_audit`, sem dedup, flag `source` = evo|sc) pra validar captura
+- [x] Endpoint `POST /api/salechat/ingest/<token>` (fail-closed, token `sc_ingest_token` em `app_config`), gravando só na auditoria crua
+- [x] Endpoint `POST /api/salechat/heartbeat/<token>` (tabela `sc_heartbeat`) + `GET /api/salechat/health` (Diretor)
+- [ ] Normalizar dedup pro id puro em `wa_sales`/`wa_messages` (feito com cuidado antes da Fase 2)
+- [ ] Painel de saúde na dash (UI que consome `/api/salechat/health`: heartbeat/lastSeen por número, tamanho do outbox, número sem dono)
 
-### Fase 1 - captura em sombra (Evolution ligada)
-- [ ] Painel: `captureIncoming(msg)` no `onIncoming` antes do filtro `fromMe`; ler `selfNumber`; fila `window.__zvOutbox`; `sweepRecent()` na subida
-- [ ] Injetor: `pumpOutbox()` (molde do `pumpVideo`), drain ack-based, fila durável em arquivo, heartbeat
-- [ ] Worker: ingest chama `_waOnInbound`/`_waLeadCapture` de verdade; casamento `tt_pending` por code; detector tt_pending x wa_lead
-- [ ] Critério: Sale Chat cobre >= Evolution em leads por número/vendedor por vários dias
+### Fase 1a - captura em sombra pra AUDITORIA (Evolution ligada) - FEITO (commit desta etapa)
+- [x] Painel (`sc-panel.js`/`panel-inject.js`): `_scCapture(msg)` no `onIncoming` ANTES do filtro `fromMe`; lê `selfNumber` (`WPP.conn.getMyUserId`, cache 60s); fila `window.__zvOutbox` (sobrevive a reinjeção); contraparte = `msg.to` quando fromMe (risco 1); `__zvOutboxDump()` no console pra PoC sem servidor
+- [x] Injetor (`inject.js`): `pumpOutbox()` (molde do `pumpVideo`) drain ack-based; `pumpHeartbeat()`; token via env `ZV_INGEST_TOKEN` ou arquivo `ingest-token.txt`
+- [x] Worker: ingest grava só na auditoria crua (Fase 0), devolve ack
+- [ ] `sweepRecent()` na subida/reconexão (pegar msg que chegou antes do listener) - PENDENTE
+- [ ] Fila durável em ARQUIVO no injetor (hoje sobrevive a reinjeção do painel, não ao fechar o app) - PENDENTE
+
+### Fase 1b - ligar a captura no fluxo real (ainda Evolution ligada)
+- [ ] Ingest passa a chamar `_waOnInbound`/`_waLeadCapture` de verdade (grava `wa_lead`/`wa_attrib`); casamento `tt_pending` por code; detector tt_pending x wa_lead
+- [ ] Semear `wa_number_owner` (número->at) a partir de `state.chips`/`wa_conn`
+- [ ] Critério: Sale Chat cobre >= Evolution em leads por número/vendedor por vários dias (medido na auditoria crua)
 
 ### Fase 2 - venda + pixel pelo Sale Chat
 - [ ] Capturar "Pedido Concluído" `fromMe`; worker reusa `_waDetectSale`
