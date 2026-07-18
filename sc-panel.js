@@ -13,6 +13,7 @@
     if (window.__zvAutoRecIv) { clearInterval(window.__zvAutoRecIv); window.__zvAutoRecIv = null; }
     if (window.__zvPollIv) { clearInterval(window.__zvPollIv); window.__zvPollIv = null; }
     if (window.__zvSgT) { clearTimeout(window.__zvSgT); window.__zvSgT = null; }
+    if (window.__zvCapIv) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; }
   } catch (_) {}
   window.__zvInstalled = true;
   // ── Gancho de captura de chamada (WebRTC) ───────────────────────────────────────────────
@@ -649,6 +650,7 @@
 
   var SVG = {
     msg:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    radar: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1a9 9 0 1 1 14.2 0"/><path d="M7.8 13.4a5 5 0 1 1 8.4 0"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>',
     mic:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
     video: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
     image: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
@@ -680,6 +682,7 @@
   var FAVS = lsGet('zv_favs', {});
   var DARK = true; try { var _d = localStorage.getItem('zv_dark'); if (_d !== null) DARK = _d === '1'; } catch (_) {}
   var FILTER = '';
+  var SC_VERSION = '1.0.0';   // versao do Sale Chat (mostrada na aba Ajuda)
   var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
   var TYPEFILTER = 'all';
   var FAVONLY = false;
@@ -689,7 +692,8 @@
     { key: 'agenda', label: 'Agenda', icon: 'calendar' },
     { key: 'ajustes', label: 'Ajustes', icon: 'sliders' },
     { key: 'ajuda', label: 'Ajuda', icon: 'help' },
-    { key: 'gravar', label: 'Gravar', icon: 'rec' }
+    { key: 'gravar', label: 'Gravar', icon: 'rec' },
+    { key: 'captura', label: 'Captura', icon: 'radar' }
   ];
   var TYPES = [
     { key: 'all', label: 'Todos', icon: 'grid', color: '#54656f' },
@@ -851,6 +855,7 @@
     if (TAB === 'ajustes') return renderAjustesTab(c);
     if (TAB === 'ajuda') return renderAjudaTab(c);
     if (TAB === 'gravar') return renderGravarTab(c);
+    if (TAB === 'captura') return renderCapturaTab(c);
     return renderItensTab(c);
   }
 
@@ -1028,8 +1033,50 @@
         '<p><b>Agenda:</b> programa um item pra sair depois de X minutos.</p>' +
         '<p><b>Ajustes:</b> liga o "simular gravando" e troca o tema.</p>' +
         '<p><b>Gravar:</b> grava a ligacao de voz (as duas vozes) pra guardar o registro do lead confirmando o termo.</p>' +
+        '<p><b>Captura:</b> mostra os leads que o painel captura e manda pro sistema (substitui a conexao antiga).</p>' +
         '<p class="zv-tabhint">Os itens sao configurados na dash (Sale Chat). O painel puxa sozinho.</p>' +
+        '<p class="zv-tabhint" style="margin-top:10px;opacity:.65">Sale Chat v' + SC_VERSION + '</p>' +
       '</div></div>';
+  }
+
+  // ── Aba CAPTURA: mostra ao vivo os leads que o painel esta capturando ──
+  function _capEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (ch) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]; }); }
+  function _capTime(ts) {
+    try { if (!ts) return ''; var d = new Date(ts < 1e12 ? ts * 1000 : ts); var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); } catch (_) { return ''; }
+  }
+  function renderCapturaListInto(host) {
+    if (!host) return;
+    var box = []; try { box = (window.__zvOutbox || []).slice(); } catch (_) {}
+    var tot = document.getElementById('zv-cap-total'); if (tot) tot.textContent = box.length;
+    if (!box.length) { host.innerHTML = '<div style="padding:22px 8px;text-align:center;color:#8696a0;font-size:12.5px">Nada capturado ainda. Mande ou receba uma mensagem que aparece aqui.</div>'; return; }
+    host.innerHTML = box.slice(-40).reverse().map(function (e) {
+      var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid rgba(134,150,160,.15)">' +
+        '<span style="font-size:10px;font-weight:700;color:' + col + ';min-width:58px">' + tag + '</span>' +
+        '<span style="font-size:12.5px;font-weight:600;flex:none">' + _capEsc(e.phone || '?') + '</span>' +
+        '<span style="flex:1;min-width:0;font-size:12px;color:#8696a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _capEsc(String(e.body || '').slice(0, 60)) + '</span>' +
+        '<span style="font-size:10.5px;color:#8696a0;flex:none">' + _capTime(e.ts) + '</span>' +
+      '</div>';
+    }).join('');
+  }
+  function renderCapturaTab(c) {
+    var self = ''; try { self = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; } catch (_) {}
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura</div></div>' +
+      '<div class="zv-cbody">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 10px;font-size:12.5px">' +
+          '<span>Seu numero: <b>' + (self ? _capEsc(self) : 'lendo...') + '</b></span>' +
+          '<span><b id="zv-cap-total">0</b> na fila</span>' +
+        '</div>' +
+        '<p class="zv-tabhint" style="margin:0 0 8px">Toda mensagem que chega ou sai e capturada e mandada pro sistema. Substitui a conexao antiga. Deixe o Sale Chat aberto.</p>' +
+        '<div id="zv-cap-list" style="max-height:52vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
+      '</div>';
+    renderCapturaListInto(document.getElementById('zv-cap-list'));
+    if (window.__zvCapIv) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; }
+    window.__zvCapIv = setInterval(function () {
+      var host = document.getElementById('zv-cap-list');
+      if (TAB !== 'captura' || !host) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; return; }
+      renderCapturaListInto(host);
+    }, 2000);
   }
 
   // ══════════════ GRAVACAO DE CHAMADA ══════════════
