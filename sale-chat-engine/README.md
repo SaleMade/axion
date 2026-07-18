@@ -44,10 +44,12 @@ Lembretes do projeto: `sc-panel.js` espelha `zapvoice-ext/panel-inject.js` SEMPR
 
 Nota: NÃO liguei o ingest no `_waLeadCapture`/pixel de propósito (dispararia pixel DUPLICADO com a Evolution ligada). Isso é a Fase 2 abaixo (virar o gatilho e desligar SÓ o pixel do lado Evolution).
 
-### Fase 2 - venda + pixel pelo Sale Chat
-- [ ] Capturar "Pedido Concluído" `fromMe`; worker reusa `_waDetectSale`
-- [ ] Disparo de pixel pelo Sale Chat; desligar SÓ o pixel do lado Evolution
-- [ ] Critério: vendas/faturamento por vendedor idênticos; zero pixel duplicado
+### Fase 2 - o SERVIDOR computa lead/venda/pixel do que o Sale Chat manda - CÓDIGO FEITO E TESTADO (18/07)
+- [x] Chave de virada `wa_capture_source` ('evo' padrão | 'sc'). Em 'sc': o ingest computa; a Evolution para de computar (gate em `handleEvolutionWebhook`), zero pixel duplicado.
+- [x] Ingest (`src==='sc'`): msg do lead -> `_waLeadCapture` (grava `wa_lead`, atribui `wa_attrib`, pixel InitiateCheckout se tiver ttclid); msg do vendedor -> monta `data` e chama `_waDetectSale` (grava `wa_sales`, CPF, pixel CompletePayment).
+- [x] Heartbeat mantém `wa_conn` (número logado) pra Pressel/roleta e o `num` do lead funcionarem sem a Evolution.
+- [x] TESTADO ponta a ponta via o endpoint real: servidor gravou wa_lead + wa_attrib + wa_sales (nome + valor). Pixel no-op no teste (sem ttclid). Teste limpo, chave de volta em 'evo'.
+- [ ] FALTA pra valer: virar `wa_capture_source='sc'` (só quando o injetor novo estiver nas máquinas mandando de verdade). Em 'evo', produção não muda.
 
 ### Fase 3 - auto-resposta client-side (mover o que bane pra fora da Evolution)
 - [ ] Auto-resposta 1o contato + gatilho na fila serial, claim server-side, anti-ban (jitter, teto diário, sem link)

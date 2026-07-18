@@ -2060,7 +2060,11 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
   const data = body?.data || {};
   try {
     if (event === 'connection.update') await _waOnConnection(env, instance, data);
-    else if (event === 'messages.upsert') { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data, ctx); }
+    else if (event === 'messages.upsert') {
+      // Se a fonte virou o Sale Chat, a Evolution NÃO computa (senão duplica lead/venda/pixel).
+      if ((await _waCaptureSource(env)) === 'sc') { /* fonte = Sale Chat */ }
+      else { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data, ctx); }
+    }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
@@ -2081,6 +2085,11 @@ async function _scIngestToken(env) {
     await _writeConfig(env, 'sc_ingest_token', t);
   }
   return t;
+}
+// Chave de virada: 'evo' (padrão, Evolution computa) ou 'sc' (o Sale Chat vira a fonte:
+// o ingest computa lead/venda + pixel, e a Evolution para de computar pra não duplicar).
+async function _waCaptureSource(env) {
+  try { return (await _readConfig(env, 'wa_capture_source')) === 'sc' ? 'sc' : 'evo'; } catch (_) { return 'evo'; }
 }
 async function _scEnsureTables(env) {
   try {
@@ -2134,6 +2143,7 @@ async function handleSalechatIngest(req, env, token) {
   const now = Math.floor(Date.now() / 1000);
   const ack = [];
   const ownerCache = {};
+  const src = await _waCaptureSource(env);   // 'sc' = computar aqui (lead/venda/pixel); 'evo' = só auditar
   for (const e of events) {
     try {
       const msgId = String(e?.msgId || e?.id || '');
@@ -2148,6 +2158,21 @@ async function handleSalechatIngest(req, env, token) {
         'INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
       ).bind('sc', selfNumber, phone, e?.fromMe ? 1 : 0, msgId, String(e?.type || 'text'),
              String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now, atId).run();
+      // FASE 2: quando o Sale Chat é a fonte, o SERVIDOR computa aqui (reusa a mesma lógica da Evolution).
+      if (src === 'sc' && atId && phone) {
+        const inst = 'ax_' + atId;
+        try {
+          if (e?.fromMe) {
+            // mensagem do vendedor: se for "Pedido Concluído", vira venda + dispara pixel (CompletePayment)
+            await _waDetectSale(env, inst, { message: { conversation: String(e?.body || '') }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId || null, fromMe: true } });
+          } else {
+            // mensagem do lead: 1ª vira LEAD (casa ttclid pelo código, pixel InitiateCheckout) + atribuição
+            try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); } catch (_) {}
+            await _waLeadCapture(env, inst, phone, String(e?.body || ''));
+            await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
+          }
+        } catch (_) {}
+      }
       if (msgId) ack.push(msgId);
     } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
   }
@@ -2170,6 +2195,13 @@ async function handleSalechatHeartbeat(req, env, token) {
     ).bind(selfNumber, owner?.at_id || null, owner?.instance || null, Number(body?.wppSeen) || 0, now,
            JSON.stringify(body?.meta || {}).slice(0, 1000)).run();
   } catch (_) {}
+  // Mantém wa_conn vivo pela presença do Sale Chat (número logado), pra a página de Pressels/roleta
+  // e o "num" do lead funcionarem sem depender da Evolution.
+  if (owner && owner.instance) {
+    try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
+    try { await env.DB.prepare(`INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'sc', ?, strftime('%s','now')) ON CONFLICT(instance) DO UPDATE SET state='sc', number=excluded.number, updated_at=excluded.updated_at`).bind(owner.instance, selfNumber).run(); } catch (_) {}
+  }
   return json({ ok: true, owner: owner ? owner.at_id : null });
 }
 // GET /api/salechat/health (Diretor) — janela do que o Sale Chat está capturando (pra provar as PoCs).
