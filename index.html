@@ -9201,9 +9201,11 @@ function renderChipsByAtendente(){
   //                           fica embaixo como reserva.
   // Quando completa 7 dias de aquecimento → autoPromoteWarmedChips faz st=ativo;
   // se o chip não tiver atendente, cai em "Disponíveis".
-  const poolAquecimento=chips.filter(c=>c.st==='aquecimento');
+  // Empilha por #identificador crescente (menor no topo) — igual as colunas de atendente/custom
+  const _idxAsc=(a,b)=>(Number(a.idx)||9999)-(Number(b.idx)||9999);
+  const poolAquecimento=chips.filter(c=>c.st==='aquecimento').sort(_idxAsc);
   // Pool "Disponíveis": números utilizáveis SEM atendente (livres pra distribuir)
-  const poolDisponiveis=chips.filter(c=>_chipUsavel(c) && !c.at);
+  const poolDisponiveis=chips.filter(c=>_chipUsavel(c) && !c.at).sort(_idxAsc);
 
   // Chips por atendente — TODOS os utilizáveis atribuídos a ele (em uso + reservas)
   const byAt={};
