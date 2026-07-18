@@ -2062,6 +2062,102 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
+
+// ═══════════════════════════════════════════════════════════════
+// SALE CHAT ENGINE — motor que vai substituir a Evolution API.
+// FASE 0 (aditiva, NADA aqui altera o fluxo vivo da Evolution):
+// o Sale Chat captura no navegador e manda pra cá; por ora só gravamos
+// numa auditoria CRUA pra PROVAR a captura (as PoCs) antes de ligar o
+// fluxo real. Token fail-closed em app_config (sc_ingest_token).
+// Plano: AXION/PLANO-SALECHAT-SUBSTITUI-EVOLUTION.md
+// ═══════════════════════════════════════════════════════════════
+async function _scIngestToken(env) {
+  let t = await _readConfig(env, 'sc_ingest_token');
+  if (!t) {
+    t = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID()
+      : (String(Date.now()) + Math.random().toString(36).slice(2));
+    await _writeConfig(env, 'sc_ingest_token', t);
+  }
+  return t;
+}
+async function _scEnsureTables(env) {
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_ingest_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, self_number TEXT, phone TEXT, from_me INTEGER, msg_id TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER, received_at INTEGER)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_heartbeat (self_number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, wpp_seen INTEGER, last_seen INTEGER, meta TEXT)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_number_owner (number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, source TEXT, updated_at INTEGER)').run();
+  } catch (_) {}
+}
+// Resolve o número do vendedor -> {at_id, instance}. SEMPRE server-side; nunca
+// confia no que o cliente diz ser o vendedor. FASE 0: só lê a tabela (pode estar
+// vazia -> null = quarentena, o número captura mas não atribui a ninguém ainda).
+async function resolveOwner(env, selfNumber) {
+  const num = String(selfNumber || '').replace(/\D/g, '');
+  if (!num) return null;
+  try {
+    const row = await env.DB.prepare('SELECT at_id, instance FROM wa_number_owner WHERE number = ?').bind(num).first();
+    if (row && row.at_id) return { at_id: row.at_id, instance: row.instance || ('ax_' + row.at_id) };
+  } catch (_) {}
+  return null;
+}
+// POST /api/salechat/ingest/<token> — recebe um LOTE de eventos capturados pelo Sale Chat.
+// FASE 0: grava só na auditoria crua e devolve o ack (msg_id aceitos) pro injetor drenar a fila.
+async function handleSalechatIngest(req, env, token) {
+  const expected = await _scIngestToken(env);
+  if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
+  let body; try { body = await req.json(); } catch (_) { return json({ ok: true, ack: [] }); }
+  const events = Array.isArray(body?.events) ? body.events : (Array.isArray(body) ? body : []);
+  await _scEnsureTables(env);
+  const now = Math.floor(Date.now() / 1000);
+  const ack = [];
+  for (const e of events) {
+    try {
+      const msgId = String(e?.msgId || e?.id || '');
+      const selfNumber = String(e?.selfNumber || '').replace(/\D/g, '');
+      const phone = String(e?.phone || '').replace(/\D/g, '');
+      await env.DB.prepare(
+        'INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
+      ).bind('sc', selfNumber, phone, e?.fromMe ? 1 : 0, msgId, String(e?.type || 'text'),
+             String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now).run();
+      if (msgId) ack.push(msgId);
+    } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
+  }
+  return json({ ok: true, ack, count: ack.length });
+}
+// POST /api/salechat/heartbeat/<token> — o injetor avisa periodicamente que o número está vivo/logado.
+async function handleSalechatHeartbeat(req, env, token) {
+  const expected = await _scIngestToken(env);
+  if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
+  let body; try { body = await req.json(); } catch (_) { body = {}; }
+  await _scEnsureTables(env);
+  const selfNumber = String(body?.selfNumber || '').replace(/\D/g, '');
+  if (!selfNumber) return json({ ok: true });
+  const owner = await resolveOwner(env, selfNumber);
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sc_heartbeat (self_number, at_id, instance, wpp_seen, last_seen, meta) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(self_number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, wpp_seen=excluded.wpp_seen, last_seen=excluded.last_seen, meta=excluded.meta`
+    ).bind(selfNumber, owner?.at_id || null, owner?.instance || null, Number(body?.wppSeen) || 0, now,
+           JSON.stringify(body?.meta || {}).slice(0, 1000)).run();
+  } catch (_) {}
+  return json({ ok: true, owner: owner ? owner.at_id : null });
+}
+// GET /api/salechat/health (Diretor) — janela do que o Sale Chat está capturando (pra provar as PoCs).
+async function handleSalechatHealth(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor', 403);
+  await _scEnsureTables(env);
+  const token = await _scIngestToken(env);
+  let recent = [], beats = [], counts = {};
+  try { recent = (await env.DB.prepare('SELECT * FROM sc_ingest_audit ORDER BY id DESC LIMIT 50').all()).results || []; } catch (_) {}
+  try { beats = (await env.DB.prepare('SELECT * FROM sc_heartbeat ORDER BY last_seen DESC').all()).results || []; } catch (_) {}
+  try {
+    const c = await env.DB.prepare('SELECT COUNT(*) n, COALESCE(SUM(from_me),0) fm FROM sc_ingest_audit').first();
+    counts = { total: c?.n || 0, fromMe: c?.fm || 0 };
+  } catch (_) {}
+  return json({ ok: true, ingest_token: token, counts, heartbeats: beats, recent });
+}
+
 // GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
 // Lista as instâncias direto da Evolution: estado REAL + número conectado (ownerJid).
 // Não confia só no webhook (que pode ficar defasado e mostrar "conectado" falso).
@@ -3337,6 +3433,12 @@ export default {
       const scMediaMatch = path.match(/^\/api\/salechat\/media\/(.+)$/);
       if (scMediaMatch && req.method === 'GET')    return handleSaleChatMediaGet(req, env, decodeURIComponent(scMediaMatch[1]));
       if (scMediaMatch && req.method === 'DELETE') return handleSaleChatMediaDelete(req, env, decodeURIComponent(scMediaMatch[1]));
+      // Sale Chat Engine (Fase 0): captura em auditoria crua + heartbeat + saúde
+      if (req.method === 'GET'    && path === '/api/salechat/health')     return handleSalechatHealth(req, env);
+      const scIngestMatch = path.match(/^\/api\/salechat\/ingest\/([a-zA-Z0-9_-]+)$/);
+      if (scIngestMatch && req.method === 'POST')  return handleSalechatIngest(req, env, scIngestMatch[1]);
+      const scHbMatch = path.match(/^\/api\/salechat\/heartbeat\/([a-zA-Z0-9_-]+)$/);
+      if (scHbMatch && req.method === 'POST')      return handleSalechatHeartbeat(req, env, scHbMatch[1]);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
