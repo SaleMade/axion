@@ -5140,6 +5140,7 @@ function enterApp(member){
   migrateACL();   // garante que todo papel tenha todas as chaves antes de montar a sidebar
   buildSidebar();buildApp();
   hydrateCrmFilters();
+  try{ autoPromoteRestabChips(); }catch(_){}   // timer do "Reestabelecido" roda no boot (backend, sem UI) mesmo sem abrir a Contingência
   // Restaura página onde estava antes do F5 (se válida pro role atual)
   // Sessão atual da aba → não persiste entre abas/dispositivos
   let startPage=defaultPage();
@@ -5647,7 +5648,7 @@ function goPage(id){
   if(id==='salechat') renderSaleChat();
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
-  if(id==='contingencia'){autoPromoteWarmedChips();renderChips();renderChipsByAtendente();}
+  if(id==='contingencia'){autoPromoteWarmedChips();autoPromoteRestabChips();renderChips();renderChipsByAtendente();}
   if(id==='pressels')    renderPressels();
   if(id==='presselleads') renderPresselLeads();
   if(id==='automacoes')  renderAutomacoes();
@@ -8960,6 +8961,16 @@ function getEmUsoStatusId(){
   const s=getWaStatusList().find(x=>isEmUsoStatus(x.id));
   return s?s.id:null;
 }
+// "Reestabelecido" (aceita as duas grafias) e "Ativo" pelo LABEL — os ids são custom (st_xxxx).
+function isRestabStatus(id){ if(!id) return false; const n=_norm(getWaStatusInfo(id)?.label||id); return n==='reestabelecido'||n==='restabelecido'; }
+function getAtivoStatusId(){ const s=getWaStatusList().find(x=>_norm(x.label||'')==='ativo'); return s?s.id:null; }
+// Timer de 7 dias do "Reestabelecido" (nº que voltou do bloqueio precisa reaquecer). SÓ backend, nada visual:
+// grava quando entra na tag; some quando sai. O autoPromoteRestabChips vira pra "Ativo" após 7 dias.
+function _syncRestabTimer(c){
+  if(!c) return;
+  if(isRestabStatus(getWaStatus(c))){ if(!c.restab_start) c.restab_start=new Date().toISOString().split('T')[0]; }
+  else if(c.restab_start){ delete c.restab_start; }
+}
 // Status pra onde o chip cai quando deixa de ser "em uso" (Ativo/disponível)
 function getDisponivelStatusId(){
   const list=getWaStatusList();
@@ -9040,6 +9051,7 @@ function setWaStatus(chipId, novoSt){
   c.wa_st=novoSt;
   if(isEmUsoStatus(novoSt)) _setChipEmUso(c,true);  // fixa no topo + tira o em uso dos colegas
   else c.em_uso=false;
+  _syncRestabTimer(c);   // liga/desliga o timer de 7 dias do "Reestabelecido"
   renderChipsByAtendente();
   toast(`WhatsApp marcado como ${getWaStatusInfo(novoSt)?.label||novoSt}`,'ok');
   // Push imediato pra outros dispositivos verem na hora
@@ -9843,6 +9855,21 @@ function autoPromoteWarmedChips(){
   }
   return promovidos;
 }
+// Reestabelecido por 7+ dias → vira "Ativo" sozinho (nº que voltou do bloqueio terminou de reaquecer).
+// 100% backend: não mostra nada, só troca a tag. Roda ao abrir a Contingência e no boot.
+function autoPromoteRestabChips(){
+  const ativoId=getAtivoStatusId(); if(!ativoId) return 0;   // sem status "Ativo" configurado, não mexe
+  const hoje=new Date().toISOString().split('T')[0], hojeMs=Date.parse(hoje);   // data ISO (UTC) — mesma base do carimbo, sem off-by-one de fuso
+  let n=0;
+  (DB.chips||[]).forEach(c=>{
+    if(!isRestabStatus(getWaStatus(c))) return;
+    if(!c.restab_start){ c.restab_start=hoje; n++; return; }   // começa o relógio (inclui chips já "Reestabelecido" de antes)
+    const dias=Math.floor((hojeMs-Date.parse(c.restab_start))/86400000);
+    if(dias>=7){ c.wa_st=ativoId; delete c.restab_start; c.em_uso=false; n++; }   // 7 dias completos → Ativo
+  });
+  if(n>0) persistAndPushNow().catch(_=>{});
+  return n;
+}
 
 // Numero leva banimento por inatividade ~75 dias. Recarga a cada 60 dias
 // dá margem segura. Antes era 90 (perto do banimento).
@@ -10059,6 +10086,7 @@ function saveChip(){
   // marcar a tag "Em uso" fixa o número no topo e tira o em uso dos colegas.
   if(isEmUsoStatus(c.wa_st) && _chipUsavel(c)) _setChipEmUso(c,true);
   else if(!isEmUsoStatus(c.wa_st)) c.em_uso=false;
+  _syncRestabTimer(c);   // liga/desliga o timer de 7 dias do "Reestabelecido"
   closeM('m-chip');refreshUI();
   toast('Chip atualizado · sincronizando...','ok');
   persistAndPushNow().then(()=>toast('✓ Sincronizado','ok')).catch(_=>{});
