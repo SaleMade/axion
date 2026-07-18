@@ -9,6 +9,7 @@ backend
 zapvoice-ext
 evolution-vps
 dist
+sale-chat-engine
 *.md
 *.ps1
 *.sh
