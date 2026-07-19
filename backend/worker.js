@@ -2222,6 +2222,18 @@ async function handleSalechatHealth(req, env) {
   try { coverage = (await env.DB.prepare("SELECT source, COUNT(*) n, COUNT(DISTINCT phone) leads FROM sc_ingest_audit GROUP BY source").all()).results || []; } catch (_) {}
   return json({ ok: true, ingest_token: token, owners_seeded: seeded, counts, coverage, heartbeats: beats, recent });
 }
+// GET/POST /api/salechat/source (Diretor) — lê/vira a chave de captura (evo|sc). É o botão da Contingência.
+async function handleSalechatSource(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas Diretor', 403);
+  if (req.method === 'POST') {
+    let body = {}; try { body = await req.json(); } catch (_) {}
+    const s = body?.source === 'sc' ? 'sc' : 'evo';
+    await _writeConfig(env, 'wa_capture_source', s);
+    return json({ ok: true, source: s });
+  }
+  return json({ ok: true, source: await _waCaptureSource(env) });
+}
 
 // GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
 // Lista as instâncias direto da Evolution: estado REAL + número conectado (ownerJid).
@@ -3500,6 +3512,7 @@ export default {
       if (scMediaMatch && req.method === 'DELETE') return handleSaleChatMediaDelete(req, env, decodeURIComponent(scMediaMatch[1]));
       // Sale Chat Engine (Fase 0): captura em auditoria crua + heartbeat + saúde
       if (req.method === 'GET'    && path === '/api/salechat/health')     return handleSalechatHealth(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/salechat/source') return handleSalechatSource(req, env);
       const scIngestMatch = path.match(/^\/api\/salechat\/ingest\/([a-zA-Z0-9_-]+)$/);
       if (scIngestMatch && req.method === 'POST')  return handleSalechatIngest(req, env, scIngestMatch[1]);
       const scHbMatch = path.match(/^\/api\/salechat\/heartbeat\/([a-zA-Z0-9_-]+)$/);
