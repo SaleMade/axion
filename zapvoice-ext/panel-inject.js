@@ -741,7 +741,7 @@
   var FAVS = lsGet('zv_favs', {});
   var DARK = true; try { var _d = localStorage.getItem('zv_dark'); if (_d !== null) DARK = _d === '1'; } catch (_) {}
   var FILTER = '';
-  var SC_VERSION = '1.0.0';   // versao do Sale Chat (mostrada na aba Ajuda)
+  var SC_VERSION = '1.1.0';   // versao do Sale Chat (mostrada na aba Ajuda)
   var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
   var TYPEFILTER = 'all';
   var FAVONLY = false;
@@ -1085,15 +1085,21 @@
 
   // ── Aba AJUDA ──
   function renderAjudaTab(c) {
+    var h = {}; try { h = _capHealth(); } catch (_) {}
+    var probBox = (h && h.ok === false) ? ('<div style="padding:12px 14px;border-radius:10px;background:#e0405a1e;border:1px solid #e0405a66;margin-bottom:12px"><b style="color:#e0405a;font-size:13px">Problema agora: ' + _capEsc(h.problem || '') + '</b>' + (h.sol ? '<div style="font-size:12px;color:#d1d7db;margin-top:5px">Como resolver: ' + _capEsc(h.sol) + '</div>' : '') + '</div>') : '';
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#13c273">' + SVG.help + '</span>Ajuda</div></div>' +
       '<div class="zv-cbody"><div class="zv-help">' +
+        probBox +
         '<p><b>Itens:</b> clique num item pra enviar no chat aberto. A estrela favorita.</p>' +
         '<p><b>Funis:</b> dispara varios itens em sequencia, com a espera de cada passo.</p>' +
         '<p><b>Agenda:</b> programa um item pra sair depois de X minutos.</p>' +
         '<p><b>Ajustes:</b> liga o "simular gravando" e troca o tema.</p>' +
         '<p><b>Gravar:</b> grava a ligacao de voz (as duas vozes) pra guardar o registro do lead confirmando o termo.</p>' +
-        '<p><b>Captura:</b> mostra os leads que o painel captura e manda pro sistema (substitui a conexao antiga).</p>' +
-        '<p class="zv-tabhint">Os itens sao configurados na dash (Sale Chat). O painel puxa sozinho.</p>' +
+        '<p><b>Captura:</b> acompanha se as mensagens estao sendo capturadas e enviadas. Verde = tudo certo, vermelho = tem problema (a solucao aparece na aba e aqui).</p>' +
+        '<p style="margin-top:10px"><b>Se a Captura ficar vermelha:</b></p>' +
+        '<p class="zv-tabhint">- "WhatsApp nao carregou": feche e abra o WhatsApp.</p>' +
+        '<p class="zv-tabhint">- "captura nao ligou" / "envio nao esta rodando": feche e abra o Sale Chat pelo atalho e deixe a janela preta aberta.</p>' +
+        '<p class="zv-tabhint">- "nao consigo enviar": confira a internet.</p>' +
         '<p class="zv-tabhint" style="margin-top:10px;opacity:.65">Sale Chat v' + SC_VERSION + '</p>' +
       '</div></div>';
   }
@@ -1108,23 +1114,30 @@
     return '<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(134,150,160,.12)">' +
       '<span style="color:#8696a0">' + lbl + '</span><b style="color:' + c + ';text-align:right">' + _capEsc(String(val)) + '</b></div>';
   }
-  function _capStatusHtml() {
+  // Saude da captura pro vendedor: {ok:true|false|null, problem, sol}. null = iniciando.
+  function _capHealth() {
     var motor = false; try { motor = wppAlive(); } catch (_) {}
     var lis = !!window.__zvTriggersOn;
+    var srvOk = window.__zvIngestOk, ingestOn = !!window.__zvIngestOn;
+    if (!window.__zvCapStart) window.__zvCapStart = Date.now();
+    var boot = (Date.now() - window.__zvCapStart) < 25000;   // 25s de tolerancia no inicio
+    if (!motor) return { ok: false, problem: 'O WhatsApp nao carregou direito aqui.', sol: 'Feche o WhatsApp completamente e abra de novo.' };
+    if (!lis) return { ok: false, problem: 'A captura de mensagens nao ligou.', sol: 'Feche e abra o Sale Chat pelo atalho, e deixe a janela preta aberta.' };
+    if (srvOk === false) return { ok: false, problem: 'Nao estou conseguindo enviar pro sistema.', sol: 'Confira a internet. Se continuar, feche e abra o Sale Chat.' };
+    if (!ingestOn) { if (boot) return { ok: null, problem: 'Iniciando...', sol: '' }; return { ok: false, problem: 'O envio pro sistema nao esta rodando.', sol: 'Feche e abra o Sale Chat pelo atalho, e deixe a janela preta aberta.' }; }
+    return { ok: true, problem: '', sol: '' };
+  }
+  function _capStatusHtml() {
+    var h = _capHealth();
     var self = ''; try { self = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; } catch (_) {}
-    var seen = window.__zvSeenCount || 0;
-    var fila = 0; try { fila = (window.__zvOutbox || []).length; } catch (_) {}
-    var sent = window.__zvSentCount || 0;
-    var srvOk = window.__zvIngestOk;
-    var srvTxt = (srvOk === true) ? 'recebendo OK' : (srvOk === false ? 'ERRO no envio' : (window.__zvIngestOn ? 'aguardando' : 'injetor sem token'));
-    var lidDbg = window.__zvLidSample ? ('<div style="margin-top:6px;padding:6px 8px;background:rgba(134,150,160,.08);border-radius:6px;font-size:9.5px;color:#8696a0;word-break:break-all">debug numero: ' + _capEsc(String(window.__zvLidSample).slice(0, 220)) + '</div>') : '';
-    return _capRow('Motor do WhatsApp', motor ? 'ligado' : 'DEGRADADO', motor) +
-      _capRow('Escutador de mensagens', lis ? 'ligado' : 'DESLIGADO', lis) +
-      _capRow('Seu numero', self || 'lendo...', self ? true : null) +
-      _capRow('Mensagens vistas', seen, seen > 0 ? true : null) +
-      _capRow('Na fila (pra mandar)', fila, null) +
-      _capRow('Enviados pro servidor', sent, sent > 0 ? true : null) +
-      _capRow('Status do servidor', srvTxt, srvOk === true ? true : (srvOk === false ? false : null)) + lidDbg;
+    var color = h.ok === true ? '#13c273' : (h.ok === false ? '#e0405a' : '#f0a500');
+    var titulo = h.ok === true ? 'Tudo funcionando' : (h.ok === false ? 'Precisa de atencao' : 'Iniciando...');
+    return '<div style="padding:12px 14px;border-radius:10px;background:' + color + '1e;border:1px solid ' + color + '66;margin-bottom:10px">' +
+        '<div style="display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:50%;background:' + color + '"></span><b style="color:' + color + ';font-size:13px">' + titulo + '</b></div>' +
+        (h.ok !== true && h.problem ? '<div style="font-size:12px;color:#d1d7db;margin-top:6px">' + _capEsc(h.problem) + '</div>' : '') +
+        (h.sol ? '<div style="font-size:11.5px;color:#8696a0;margin-top:4px">Como resolver: ' + _capEsc(h.sol) + '</div>' : '') +
+      '</div>' +
+      '<div style="font-size:11.5px;color:#8696a0;margin-bottom:8px">Seu numero: <b style="color:#d1d7db">' + (self ? _capEsc(self) : 'lendo...') + '</b></div>';
   }
   function renderCapturaListInto(host) {
     if (!host) return;
@@ -1141,11 +1154,11 @@
     }).join('');
   }
   function renderCapturaTab(c) {
-    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura <span style="font-size:9.5px;color:#8696a0;font-weight:700;letter-spacing:.05em">MODO TESTE</span></div></div>' +
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura</div></div>' +
       '<div class="zv-cbody">' +
         '<div id="zv-cap-status" style="font-size:12px;margin-bottom:8px"></div>' +
-        '<p class="zv-tabhint" style="margin:0 0 6px">Manda esse print pro suporte. As mensagens capturadas aparecem embaixo.</p>' +
-        '<div id="zv-cap-list" style="max-height:36vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
+        '<p class="zv-tabhint" style="margin:0 0 6px">As ultimas mensagens capturadas aparecem embaixo. Deixe o Sale Chat aberto.</p>' +
+        '<div id="zv-cap-list" style="max-height:38vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
       '</div>';
     var upd = function () {
       var st = document.getElementById('zv-cap-status'); if (st) st.innerHTML = _capStatusHtml();

@@ -10604,14 +10604,15 @@ function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), n
 // trocar o número de principal↔reserva não gera mais falso "não conectado". Fail-open se nenhum número é conhecido.
 function _waConnOk(inst, chipNum){
   if(!chipNum) return false;
+  const _isOn=st=>st==='open'||st==='sc';   // open = Evolution; sc = Sale Chat rodando (heartbeat)
   let anyKnown=false;
   for(const k in _waConnMap){
-    if(_waConnMap[k]!=='open') continue;
+    if(!_isOn(_waConnMap[k])) continue;
     const cn=_waConnNum[k];
     if(cn){ anyKnown=true; if(_numMatchWa(cn, chipNum)) return true; }
   }
   if(anyKnown) return false;
-  return _waConnMap[inst]==='open';
+  return _isOn(_waConnMap[inst]);
 }
 function _loadWaConn(){
   api.waConn().then(r=>{
@@ -10724,10 +10725,10 @@ function _presselVendReserva(pid, at, v, roles){
   }
   const bconn=_waConnOk(rInst, rchip&&rchip.num);   // open E número conectado bate com a reserva
   const rdot=_waConnLoaded?(bconn?'var(--gr)':'var(--rd)'):'var(--t4)';   // cor = conexão (independe de ligada/desligada)
-  const badge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'Conectado':'Não conectado'}</span>`;
+  const badge=!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${bconn?'var(--gr)':'var(--rd)'}">${ico(bconn?'check-circle':'alert-triangle',{size:12})} ${bconn?'WhatsApp rodando':'WhatsApp parado'}</span>`;
   const link=(bconn&&_waConnLoaded)
-    ? `<button onclick="event.stopPropagation();evoDisconnect('${at.id}','${rSlot}')" title="Desconectar a reserva" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar</button>`
-    : `<button onclick="event.stopPropagation();evoConnect('${at.id}','${rSlot}')" title="Conectar a reserva via QR" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar reserva ↗</button>`;
+    ? ``
+    : `<span style="font-size:11px;color:var(--t3)" title="A conexão é o Sale Chat aberto na máquina do vendedor">abra o Sale Chat na máquina</span>`;
   const _sellerOff=(v && v.ativo===false);
   const stateHint=_sellerOff
     ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal desligado · não recebe até religar o principal</span>`
@@ -10778,10 +10779,10 @@ function renderPresselVendList(pid){
     const dot=(onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)');
     const numTxt=!pChip?'sem número em uso':pChip.num+(ok?'':' · fora (banido/restrito)');
     const numColor=!pChip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
-    const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'Conectado':'Não conectado'}</span>`):'';
+    const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'WhatsApp rodando':'WhatsApp parado'}</span>`):'';
     const connectLink=onVis?((connected&&_waConnLoaded)
-      ? `<button onclick="evoDisconnect('${at.id}','${pSlot}')" title="Desconectar esse WhatsApp da API" style="background:transparent;border:none;color:var(--rd);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">desconectar WhatsApp</button>`
-      : `<button onclick="evoConnect('${at.id}','${pSlot}')" title="Conectar o WhatsApp desse número via QR Code" style="background:transparent;border:none;color:var(--bl2);font-size:11px;font-weight:600;cursor:pointer;padding:0;font-family:inherit">conectar WhatsApp ↗</button>`):'';
+      ? ``
+      : `<span style="font-size:11px;color:var(--t3)" title="A conexão é o Sale Chat aberto na máquina do vendedor">abra o Sale Chat na máquina</span>`):'';
     const primaryInner=`<div style="display:flex;align-items:center;gap:11px;padding:10px 12px">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">

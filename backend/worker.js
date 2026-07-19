@@ -2258,6 +2258,18 @@ async function handleWAConn(req, env) {
   // pra adicionar mais números. Só considera "agora" se foi nos últimos 15min.
   let satTs = 0; try { const v = await _readConfig(env, 'roleta_sat_ts'); satTs = Number(v) || 0; } catch (_) {}
   const sat = satTs && (Math.floor(Date.now() / 1000) - satTs) < 900 ? satTs : 0;
+  // Conexões do SALE CHAT: número com heartbeat recente (< 3min) = rodando ('sc'). Fonte nova, tem prioridade.
+  let scConns = [];
+  try {
+    await _scEnsureTables(env);
+    const hb = await env.DB.prepare("SELECT self_number, instance FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180").all();
+    scConns = (hb.results || []).map(h => ({ instance: h.instance || ('sc_' + h.self_number), state: 'sc', number: h.self_number }));
+  } catch (_) {}
+  const mergeSc = (list) => {
+    const byInst = {}; (list || []).forEach(c => { byInst[c.instance] = c; });
+    scConns.forEach(c => { byInst[c.instance] = c; });   // Sale Chat rodando ganha da Evolution
+    return Object.values(byInst);
+  };
   // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também)
   try {
     const live = await _evoInstances(env);
@@ -2270,12 +2282,12 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, sat, conn: live.map(it => ({ instance: it.name, state: it.state, number: it.number })) });
+      return json({ ok: true, sat, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
     }
   } catch (_) {}
-  // fallback: Evolution não respondeu → usa o DB
+  // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
   const rows = await env.DB.prepare('SELECT instance, state, number FROM wa_conn').all();
-  return json({ ok: true, sat, conn: rows.results || [] });
+  return json({ ok: true, sat, conn: mergeSc(rows.results || []) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
