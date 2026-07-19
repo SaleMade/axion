@@ -5325,7 +5325,6 @@ function computeNav(){
       // Cobrador: Follows em destaque (live dot) e primeiro da lista
       ...(rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',live:true,badge:codPendCount()}]:[]),
       ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
-      ...(can('ver_pedidos_conf')?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
       ...(can('ver_crm')?[{id:'crm',lbl:'CRM / Pipeline'}]:[]),
       ...(can('ver_clientes')?[{id:'clientes',lbl:'Base de Clientes'}]:[]),
       ...(can('ver_produtos')?[{id:'produtos',lbl:'Produtos'}]:[]),
@@ -5347,6 +5346,7 @@ function computeNav(){
       ...(can('ver_contingencia')?[{id:'contingencia',lbl:'Contingência'}]:[]),
       ...(can('ver_pressels')?[{id:'pressels',lbl:'Pressels'}]:[]),
       ...(can('ver_pressel_leads')?[{id:'presselleads',lbl:'Leads'}]:[]),
+      ...(can('ver_pedidos_conf')?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
     ]},
     {g:'Automações',items:[
       ...(can('ver_salechat')?[{id:'salechat',lbl:'Sale Chat',live:true}]:[]),
@@ -5454,7 +5454,7 @@ const PNAMES={
   evolucao:'Dashboard / <b>Evolução Diária</b>',
   crm:'Operacional / <b>CRM</b>',
   pedidos:'Operacional / <b>Pedidos</b>',
-  pedidosconf:'Operacional / <b>Pedidos Confirmados</b>',
+  pedidosconf:'WhatsApp / <b>Pedidos Confirmados</b>',
   produtos:'Operacional / <b>Produtos</b>',
   cobranca:'Operacional / <b>Follows</b>',
   pagequip:'Financeiro / <b>Pagamentos de Equipe</b>',
