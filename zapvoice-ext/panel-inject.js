@@ -534,27 +534,33 @@
       var wid = fromMe ? msg.to : msg.from;
       var p = _scWidParts(wid);
       if (p.digits && !p.isLid) return { digits: p.digits, isLid: false };   // ja e telefone real
-      // Contraparte @lid: junta candidatos que podem ter o telefone real
+      // Contraparte @lid: junta candidatos que podem ter o telefone real (NUNCA o meu proprio numero).
+      var selfNum = _scSelfNumber();
       var cands = [];
       var push = function (x) { if (x != null) cands.push(x); };
-      try { var so = msg.senderObj || msg.sender; push(so && (so.id || (so.attributes && so.attributes.id))); push(so && so.phoneNumber); } catch (_) {}
-      try { push(msg.author); } catch (_) {}
+      // senderObj/author = o REMETENTE. So serve quando a mensagem e RECEBIDA (remetente = lead).
+      // Numa mensagem ENVIADA o remetente sou EU, entao NAO uso (senao marcava o meu numero).
+      if (!fromMe) {
+        try { var so = msg.senderObj || msg.sender; push(so && (so.id || (so.attributes && so.attributes.id))); push(so && so.phoneNumber); } catch (_) {}
+        try { push(msg.author); } catch (_) {}
+      }
+      // dos dois lados: o contato/chat da CONTRAPARTE (o wid do lead)
       try { var c = W && W.contact && W.contact.get ? W.contact.get(_scSer(wid)) : null; if (c) { push(c.id || (c.attributes && c.attributes.id)); push(c.phoneNumber || (c.attributes && c.attributes.phoneNumber)); } } catch (_) {}
       try { var ch = W && W.chat && W.chat.get ? W.chat.get(_scSer(wid)) : null; var cc = ch && ch.contact; if (cc) { push(cc.id || (cc.attributes && cc.attributes.id)); push(cc.phoneNumber || (cc.attributes && cc.attributes.phoneNumber)); } } catch (_) {}
       try { var LU = W && W.whatsapp && (W.whatsapp.LidUtils || W.whatsapp.functions); if (LU && LU.getPhoneNumberForLid) push(LU.getPhoneNumberForLid(wid)); } catch (_) {}
       for (var i = 0; i < cands.length; i++) {
         var cd = cands[i], cp = _scWidParts(cd);
-        if (cp.digits && !cp.isLid) return { digits: cp.digits, isLid: false };
-        if (typeof cd === 'string' && cd.indexOf('@lid') < 0) { var ds = cd.replace(/\D/g, ''); if (ds.length >= 12) return { digits: ds, isLid: false }; }
+        if (cp.digits && !cp.isLid && cp.digits !== selfNum) return { digits: cp.digits, isLid: false };
+        if (typeof cd === 'string' && cd.indexOf('@lid') < 0) { var ds = cd.replace(/\D/g, ''); if (ds.length >= 12 && ds !== selfNum) return { digits: ds, isLid: false }; }
       }
-      // Varredura + diagnostico: acha QUALQUER campo com <digits>@c.us no objeto da mensagem (o telefone real).
+      // Varredura + diagnostico: acha um campo com <digits>@c.us no objeto da mensagem que NAO seja o meu numero (= o lead).
       try {
         var found = '';
         Object.keys(msg).forEach(function (k) {
-          try { var v = msg[k]; var s = (v && (v._serialized || (v.id && v.id._serialized))) || (typeof v === 'string' ? v : ''); if (String(s).indexOf('@c.us') >= 0 && !found) found = k + '=' + s; } catch (_) {}
+          try { var v = msg[k]; var s = (v && (v._serialized || (v.id && v.id._serialized))) || (typeof v === 'string' ? v : ''); var dg = String(s).match(/(\d{10,15})@c\.us/); if (dg && dg[1] !== selfNum && !found) found = k + '=' + dg[1]; } catch (_) {}
         });
-        window.__zvLidSample = found || ('sem c.us | keys: ' + Object.keys(msg).slice(0, 22).join(','));
-        var m = found && found.match(/(\d{10,15})@c\.us/);
+        window.__zvLidSample = found || ('sem c.us (fora o meu) | keys: ' + Object.keys(msg).slice(0, 20).join(','));
+        var m = found && found.match(/(\d{10,15})/);
         if (m) return { digits: m[1], isLid: false };
       } catch (_) {}
       return { digits: p.digits, isLid: true };   // nao resolveu: lid marcado
