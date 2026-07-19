@@ -531,22 +531,31 @@
   function _scRealPhone(msg, fromMe) {
     try {
       var W = window.WPP;
-      var p = _scWidParts(fromMe ? msg.to : msg.from);
-      if (p.digits && !p.isLid) return { digits: p.digits, isLid: false };
+      var wid = fromMe ? msg.to : msg.from;
+      var p = _scWidParts(wid);
+      if (p.digits && !p.isLid) return { digits: p.digits, isLid: false };   // ja e telefone real
+      // Contraparte @lid: junta candidatos que podem ter o telefone real
+      var cands = [];
+      var push = function (x) { if (x != null) cands.push(x); };
+      try { var so = msg.senderObj || msg.sender; push(so && (so.id || (so.attributes && so.attributes.id))); push(so && so.phoneNumber); } catch (_) {}
+      try { push(msg.author); } catch (_) {}
+      try { var c = W && W.contact && W.contact.get ? W.contact.get(_scSer(wid)) : null; if (c) { push(c.id || (c.attributes && c.attributes.id)); push(c.phoneNumber || (c.attributes && c.attributes.phoneNumber)); } } catch (_) {}
+      try { var ch = W && W.chat && W.chat.get ? W.chat.get(_scSer(wid)) : null; var cc = ch && ch.contact; if (cc) { push(cc.id || (cc.attributes && cc.attributes.id)); push(cc.phoneNumber || (cc.attributes && cc.attributes.phoneNumber)); } } catch (_) {}
+      try { var LU = W && W.whatsapp && (W.whatsapp.LidUtils || W.whatsapp.functions); if (LU && LU.getPhoneNumberForLid) push(LU.getPhoneNumberForLid(wid)); } catch (_) {}
+      for (var i = 0; i < cands.length; i++) {
+        var cd = cands[i], cp = _scWidParts(cd);
+        if (cp.digits && !cp.isLid) return { digits: cp.digits, isLid: false };
+        if (typeof cd === 'string' && cd.indexOf('@lid') < 0) { var ds = cd.replace(/\D/g, ''); if (ds.length >= 12) return { digits: ds, isLid: false }; }
+      }
+      // Varredura + diagnostico: acha QUALQUER campo com <digits>@c.us no objeto da mensagem (o telefone real).
       try {
-        var so = msg.senderObj || msg.sender, soid = so && (so.id || (so.attributes && so.attributes.id));
-        var sp = _scWidParts(soid);
-        if (sp.digits && !sp.isLid) return { digits: sp.digits, isLid: false };
-      } catch (_) {}
-      try {
-        var cid = _scSer(fromMe ? msg.to : msg.from);
-        var c = W && W.contact && W.contact.get ? W.contact.get(cid) : null;
-        if (c) {
-          var idp = _scWidParts(c.id || (c.attributes && c.attributes.id));
-          if (idp.digits && !idp.isLid) return { digits: idp.digits, isLid: false };
-          var pn = c.phoneNumber || (c.attributes && c.attributes.phoneNumber);
-          if (pn) { var d = String(pn).replace(/\D/g, ''); if (d) return { digits: d, isLid: false }; }
-        }
+        var found = '';
+        Object.keys(msg).forEach(function (k) {
+          try { var v = msg[k]; var s = (v && (v._serialized || (v.id && v.id._serialized))) || (typeof v === 'string' ? v : ''); if (String(s).indexOf('@c.us') >= 0 && !found) found = k + '=' + s; } catch (_) {}
+        });
+        window.__zvLidSample = found || ('sem c.us | keys: ' + Object.keys(msg).slice(0, 22).join(','));
+        var m = found && found.match(/(\d{10,15})@c\.us/);
+        if (m) return { digits: m[1], isLid: false };
       } catch (_) {}
       return { digits: p.digits, isLid: true };   // nao resolveu: lid marcado
     } catch (_) { return { digits: '', isLid: false }; }
@@ -568,7 +577,7 @@
       window.__zvSeenIds = window.__zvSeenIds || {};
       if (window.__zvSeenIds[msgId]) return;   // dedup: nao repete a mesma mensagem (replay / listeners duplicados)
       window.__zvSeenIds[msgId] = 1;
-      window.__zvOutbox.push({
+      var ev = {
         msgId: msgId,
         selfNumber: _scSelfNumber(),
         phone: pr.digits,
@@ -579,7 +588,11 @@
         pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
         ts: ts,
         fromRaw: fromS, toRaw: toS
-      });
+      };
+      window.__zvOutbox.push(ev);   // fila de envio (o injetor drena)
+      window.__zvCaptured = window.__zvCaptured || [];
+      window.__zvCaptured.push(ev);   // historico de exibicao (NAO drena, pra a aba mostrar mesmo depois de enviado)
+      if (window.__zvCaptured.length > 100) window.__zvCaptured.splice(0, window.__zvCaptured.length - 100);
       if (window.__zvOutbox.length > 800) window.__zvOutbox.splice(0, window.__zvOutbox.length - 800);   // trava anti-estouro
     } catch (_) {}
   }
@@ -1098,17 +1111,18 @@
     var sent = window.__zvSentCount || 0;
     var srvOk = window.__zvIngestOk;
     var srvTxt = (srvOk === true) ? 'recebendo OK' : (srvOk === false ? 'ERRO no envio' : (window.__zvIngestOn ? 'aguardando' : 'injetor sem token'));
+    var lidDbg = window.__zvLidSample ? ('<div style="margin-top:6px;padding:6px 8px;background:rgba(134,150,160,.08);border-radius:6px;font-size:9.5px;color:#8696a0;word-break:break-all">debug numero: ' + _capEsc(String(window.__zvLidSample).slice(0, 220)) + '</div>') : '';
     return _capRow('Motor do WhatsApp', motor ? 'ligado' : 'DEGRADADO', motor) +
       _capRow('Escutador de mensagens', lis ? 'ligado' : 'DESLIGADO', lis) +
       _capRow('Seu numero', self || 'lendo...', self ? true : null) +
       _capRow('Mensagens vistas', seen, seen > 0 ? true : null) +
       _capRow('Na fila (pra mandar)', fila, null) +
       _capRow('Enviados pro servidor', sent, sent > 0 ? true : null) +
-      _capRow('Status do servidor', srvTxt, srvOk === true ? true : (srvOk === false ? false : null));
+      _capRow('Status do servidor', srvTxt, srvOk === true ? true : (srvOk === false ? false : null)) + lidDbg;
   }
   function renderCapturaListInto(host) {
     if (!host) return;
-    var box = []; try { box = (window.__zvOutbox || []).slice(); } catch (_) {}
+    var box = []; try { box = (window.__zvCaptured || []).slice(); } catch (_) {}   // historico (nao a fila que drena)
     if (!box.length) { host.innerHTML = '<div style="padding:18px 8px;text-align:center;color:#8696a0;font-size:12px">Nada capturado ainda. Mande ou receba uma mensagem.</div>'; return; }
     host.innerHTML = box.slice(-40).reverse().map(function (e) {
       var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
