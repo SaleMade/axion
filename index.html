@@ -4217,6 +4217,7 @@ const api={
   // Sale Chat Engine: lê/vira a chave de captura (evo|sc)
   captureSourceGet:()=>api._fetch('/api/salechat/source'),
   captureSourceSet:(source)=>api._fetch('/api/salechat/source',{method:'POST',body:JSON.stringify({source})}),
+  captureHealth:()=>api._fetch('/api/salechat/health'),
   waSaleAdd:(raw,at)=>api._fetch('/api/wa/sale/add',{method:'POST',body:JSON.stringify({raw,at})}),   // pedido manual (indicação) — sem pixel
   waSaleReassign:(id,at)=>api._fetch('/api/wa/sale/reassign',{method:'POST',body:JSON.stringify({id,at})}),   // troca o vendedor de um pedido
 };
@@ -5651,7 +5652,7 @@ function goPage(id){
   if(id==='salechat') renderSaleChat();
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
-  if(id==='contingencia'){autoPromoteWarmedChips();autoPromoteRestabChips();renderChips();renderChipsByAtendente();renderCaptureMode();}
+  if(id==='contingencia'){autoPromoteWarmedChips();autoPromoteRestabChips();renderChips();renderChipsByAtendente();}
   if(id==='pressels')    renderPressels();
   if(id==='presselleads') renderPresselLeads();
   if(id==='automacoes')  renderAutomacoes();
@@ -8117,11 +8118,13 @@ function renderSaleChat(){
         <div class="sc-install-txt"><b>Instalador do ${who}</b><span>Baixa o .zip e manda pro ${who} rodar na máquina dele. Já vem no perfil ${isCob?'cobradores':'vendedores'}.</span></div>
         <a class="btn btn-gh btn-sm" href="${instZip}" download>${ico('download',{size:13})} Baixar .zip</a>
       </div>
-    </div>`;
+    </div>
+    <div id="sc-test-panel"></div>`;
   scRenderNav();
   scRenderSection();
   scpRenderSim();
   scRenderSaveBar();
+  renderCaptureTestPanel();
 }
 function scRenderNav(){
   const nav=$('sc-nav'); if(!nav) return;
@@ -8905,18 +8908,39 @@ async function toggleCaptureMode(){
     toast(_capMode==='sc'?'Captura pelo Sale Chat ligada':'Captura pela API (Evolution)', _capMode==='sc'?'ok':'');
   }catch(e){ toast('Erro: '+((e&&e.message)||e),'err'); }
 }
+// Painel "Capturas e testes" na seção Sale Chat (Automações): toggle do modo + o que o servidor recebeu.
+function renderCaptureTestPanel(){
+  const host=$('sc-test-panel'); if(!host) return;
+  host.innerHTML=`<div class="panel" style="margin-top:22px;padding:16px;border:1px solid var(--b1)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><div style="font-size:14px;font-weight:700;color:var(--tx)">Capturas e testes</div><span class="muted" style="font-size:11px;font-weight:700;letter-spacing:.05em">MODO TESTE</span><button class="btn btn-gh btn-sm" style="margin-left:auto" onclick="loadCaptureHealth()">Atualizar</button></div>
+    <div class="muted" style="font-size:12px;margin-bottom:14px">O que o servidor está recebendo do Sale Chat. Compare com a aba Captura no WhatsApp do vendedor.</div>
+    <div id="cap-mode-card" style="display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--b1);border-radius:10px;margin-bottom:14px;background:var(--s3)">
+      <div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--tx)">Modo de captura: <span id="cap-mode-label">carregando...</span></div><div class="muted" style="font-size:12px;margin-top:2px" id="cap-mode-hint">...</div></div>
+      <div class="ax-sw" id="cap-mode-sw" onclick="toggleCaptureMode()" title="Virar entre API (Evolution) e Sale Chat"></div>
+    </div>
+    <div id="cap-test-body" class="muted" style="font-size:12px">Carregando o que o servidor recebeu...</div>
+  </div>`;
+  renderCaptureMode();
+  loadCaptureHealth();
+  if(window._capTestIv) clearInterval(window._capTestIv);
+  window._capTestIv=setInterval(()=>{ if(!$('cap-test-body')){clearInterval(window._capTestIv);return;} loadCaptureHealth(); },10000);
+}
+function _capAgo(ts){ try{ const s=Math.floor(Date.now()/1000)-Number(ts||0); if(s<0)return'0s'; if(s<60)return s+'s'; if(s<3600)return Math.floor(s/60)+'min'; return Math.floor(s/3600)+'h'; }catch(_){return '';} }
+async function loadCaptureHealth(){
+  const body=$('cap-test-body'); if(!body) return;
+  try{
+    const r=await api.captureHealth();
+    const cov=(r.coverage||[]).map(c=>`<b>${_automEsc(c.source)}</b>: ${c.leads} números · ${c.n} msgs`).join(' &nbsp;·&nbsp; ')||'nada ainda';
+    const beats=(r.heartbeats||[]).slice(0,20).map(h=>`<div style="display:flex;justify-content:space-between;padding:3px 0"><span>${_automEsc(h.self_number||'?')}</span><span class="muted">${h.at_id?('vendedor '+_automEsc(String(h.at_id))):'sem dono'} · há ${_capAgo(h.last_seen)}</span></div>`).join('')||'<div class="muted">nenhum número reportou presença ainda</div>';
+    const recent=(r.recent||[]).slice(0,25).map(e=>`<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--b1)"><span style="min-width:52px;color:${e.from_me?'var(--gr)':'var(--bl2)'};font-weight:600">${e.from_me?'enviado':'recebido'}</span><span style="min-width:120px;font-weight:600">${_automEsc(e.phone||'?')}</span><span style="flex:1;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_automEsc(String(e.body||''))}</span><span class="muted">${_automEsc(e.source||'')}</span></div>`).join('')||'<div class="muted">nada recebido ainda. Se o Sale Chat está capturando mas aqui está vazio, o injetor da máquina não está mandando (precisa do update do injetor).</div>';
+    body.innerHTML=`<div style="margin-bottom:12px"><b>Cobertura:</b> ${cov}</div>
+      <div style="font-weight:700;margin-bottom:4px">Números reportando presença</div><div style="margin-bottom:14px">${beats}</div>
+      <div style="font-weight:700;margin-bottom:4px">Últimas capturas recebidas no servidor</div><div>${recent}</div>`;
+  }catch(e){ body.innerHTML='<div class="muted">Erro ao carregar: '+_automEsc(String((e&&e.message)||e))+'</div>'; }
+}
 function pageContingencia(){
   return `<div class="page" id="contingencia-pg">
     <div class="ph"><div><h1>Contingência <em>WhatsApp</em></h1></div></div>
-
-    <!-- Chave de virada: modo de captura (API Evolution x Sale Chat) -->
-    <div class="panel" id="cap-mode-card" style="display:flex;align-items:center;gap:14px;margin:2px 0 0;padding:14px 16px;border:1px solid var(--b1)">
-      <div style="flex:1">
-        <div style="font-size:13.5px;font-weight:700;color:var(--tx)">Modo de captura: <span id="cap-mode-label">carregando...</span></div>
-        <div class="muted" style="font-size:12px;margin-top:2px" id="cap-mode-hint">Carregando o modo atual...</div>
-      </div>
-      <div class="ax-sw" id="cap-mode-sw" onclick="toggleCaptureMode()" title="Virar entre API (Evolution) e Sale Chat"></div>
-    </div>
 
     <!-- ─── KANBAN (operacional do dia-a-dia — visão principal) ─── -->
     <div id="cont-by-at" style="margin-top:6px"></div>

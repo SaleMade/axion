@@ -161,6 +161,13 @@ while ($true) {
     $openedOnce = $true; $restartedOnce = $false
     Write-Host "WhatsApp achado na porta de debug $waPort. Injetando o painel do Sale Chat..."
     $env:ZV_PORT = "$waPort"
+    # Auto-update do injetor: baixa a versao mais nova do servidor (fallback pro local se offline).
+    try {
+      $tmpInj = Join-Path $here 'inject.new.js'
+      Invoke-WebRequest -Uri 'https://axion.axion-dash.workers.dev/sc-inject.js' -OutFile $tmpInj -UseBasicParsing -TimeoutSec 15
+      if ((Get-Item $tmpInj).Length -gt 5000) { Move-Item -Force $tmpInj (Join-Path $here 'inject.js'); Write-Host "Injetor atualizado do servidor." }
+      else { Remove-Item -Force $tmpInj -ErrorAction SilentlyContinue }
+    } catch { Write-Host "Sem atualizar o injetor (offline?), usando o local." }
     & $nodeExe (Join-Path $here 'inject.js')
     Write-Host "Injetor encerrou. Retomando em 3s..."
   } else {

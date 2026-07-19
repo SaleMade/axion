@@ -492,7 +492,7 @@
     try {
       if (window.WPP && window.WPP.on) {
         window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} });
-        _triggersOn = true;
+        _triggersOn = true; window.__zvTriggersOn = true;
       }
     } catch (_) {}
   }
@@ -1084,41 +1084,59 @@
   function _capTime(ts) {
     try { if (!ts) return ''; var d = new Date(ts < 1e12 ? ts * 1000 : ts); var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); } catch (_) { return ''; }
   }
+  function _capRow(lbl, val, ok) {
+    var c = ok === true ? '#13c273' : (ok === false ? '#e0405a' : '#8696a0');
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(134,150,160,.12)">' +
+      '<span style="color:#8696a0">' + lbl + '</span><b style="color:' + c + ';text-align:right">' + _capEsc(String(val)) + '</b></div>';
+  }
+  function _capStatusHtml() {
+    var motor = false; try { motor = wppAlive(); } catch (_) {}
+    var lis = !!window.__zvTriggersOn;
+    var self = ''; try { self = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; } catch (_) {}
+    var seen = window.__zvSeenCount || 0;
+    var fila = 0; try { fila = (window.__zvOutbox || []).length; } catch (_) {}
+    var sent = window.__zvSentCount || 0;
+    var srvOk = window.__zvIngestOk;
+    var srvTxt = (srvOk === true) ? 'recebendo OK' : (srvOk === false ? 'ERRO no envio' : (window.__zvIngestOn ? 'aguardando' : 'injetor sem token'));
+    return _capRow('Motor do WhatsApp', motor ? 'ligado' : 'DEGRADADO', motor) +
+      _capRow('Escutador de mensagens', lis ? 'ligado' : 'DESLIGADO', lis) +
+      _capRow('Seu numero', self || 'lendo...', self ? true : null) +
+      _capRow('Mensagens vistas', seen, seen > 0 ? true : null) +
+      _capRow('Na fila (pra mandar)', fila, null) +
+      _capRow('Enviados pro servidor', sent, sent > 0 ? true : null) +
+      _capRow('Status do servidor', srvTxt, srvOk === true ? true : (srvOk === false ? false : null));
+  }
   function renderCapturaListInto(host) {
     if (!host) return;
     var box = []; try { box = (window.__zvOutbox || []).slice(); } catch (_) {}
-    var tot = document.getElementById('zv-cap-total'); if (tot) tot.textContent = box.length;
-    try { var slf = document.getElementById('zv-cap-self'); if (slf) { var s = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; slf.textContent = s || 'lendo...'; } } catch (_) {}
-    try { var sn = document.getElementById('zv-cap-seen'); if (sn) sn.textContent = (window.__zvSeenCount || 0); } catch (_) {}
-    if (!box.length) { host.innerHTML = '<div style="padding:22px 8px;text-align:center;color:#8696a0;font-size:12.5px">Nada capturado ainda. Mande ou receba uma mensagem que aparece aqui.</div>'; return; }
+    if (!box.length) { host.innerHTML = '<div style="padding:18px 8px;text-align:center;color:#8696a0;font-size:12px">Nada capturado ainda. Mande ou receba uma mensagem.</div>'; return; }
     host.innerHTML = box.slice(-40).reverse().map(function (e) {
       var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
-      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid rgba(134,150,160,.15)">' +
-        '<span style="font-size:10px;font-weight:700;color:' + col + ';min-width:58px">' + tag + '</span>' +
-        '<span style="font-size:12.5px;font-weight:600;flex:none' + (e.lid ? ';color:#8696a0' : '') + '"' + (e.lid ? ' title="ID protegido do WhatsApp, nao e o telefone real"' : '') + '>' + _capEsc(e.phone || '?') + (e.lid ? ' <span style="font-size:9px;opacity:.7">ID</span>' : '') + '</span>' +
-        '<span style="flex:1;min-width:0;font-size:12px;color:#8696a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _capEsc(String(e.body || '').slice(0, 60)) + '</span>' +
-        '<span style="font-size:10.5px;color:#8696a0;flex:none">' + _capTime(e.ts) + '</span>' +
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid rgba(134,150,160,.15)">' +
+        '<span style="font-size:10px;font-weight:700;color:' + col + ';min-width:56px">' + tag + '</span>' +
+        '<span style="font-size:12px;font-weight:600;flex:none' + (e.lid ? ';color:#8696a0' : '') + '"' + (e.lid ? ' title="ID protegido, nao e telefone"' : '') + '>' + _capEsc(e.phone || '?') + (e.lid ? ' <span style="font-size:9px;opacity:.7">ID</span>' : '') + '</span>' +
+        '<span style="flex:1;min-width:0;font-size:11.5px;color:#8696a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _capEsc(String(e.body || '').slice(0, 50)) + '</span>' +
+        '<span style="font-size:10px;color:#8696a0;flex:none">' + _capTime(e.ts) + '</span>' +
       '</div>';
     }).join('');
   }
   function renderCapturaTab(c) {
-    var self = ''; try { self = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; } catch (_) {}
-    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura</div></div>' +
+    c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura <span style="font-size:9.5px;color:#8696a0;font-weight:700;letter-spacing:.05em">MODO TESTE</span></div></div>' +
       '<div class="zv-cbody">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 10px;font-size:12.5px">' +
-          '<span>Seu numero: <b id="zv-cap-self">' + (self ? _capEsc(self) : 'lendo...') + '</b></span>' +
-          '<span><b id="zv-cap-seen">0</b> vistas · <b id="zv-cap-total">0</b> na fila</span>' +
-        '</div>' +
-        '<p class="zv-tabhint" style="margin:0 0 8px">Toda mensagem que chega ou sai e capturada e mandada pro sistema. Substitui a conexao antiga. Deixe o Sale Chat aberto.</p>' +
-        '<div id="zv-cap-list" style="max-height:52vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
+        '<div id="zv-cap-status" style="font-size:12px;margin-bottom:8px"></div>' +
+        '<p class="zv-tabhint" style="margin:0 0 6px">Manda esse print pro suporte. As mensagens capturadas aparecem embaixo.</p>' +
+        '<div id="zv-cap-list" style="max-height:36vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
       '</div>';
-    renderCapturaListInto(document.getElementById('zv-cap-list'));
+    var upd = function () {
+      var st = document.getElementById('zv-cap-status'); if (st) st.innerHTML = _capStatusHtml();
+      renderCapturaListInto(document.getElementById('zv-cap-list'));
+    };
+    upd();
     if (window.__zvCapIv) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; }
     window.__zvCapIv = setInterval(function () {
-      var host = document.getElementById('zv-cap-list');
-      if (TAB !== 'captura' || !host) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; return; }
-      renderCapturaListInto(host);
-    }, 2000);
+      if (TAB !== 'captura' || !document.getElementById('zv-cap-status')) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; return; }
+      upd();
+    }, 1500);
   }
 
   // ══════════════ GRAVACAO DE CHAMADA ══════════════

@@ -2302,6 +2302,7 @@ async function handleSaleChatGet(req, env) {
     media: Array.isArray(sc.media) ? sc.media : [],
     triggers: Array.isArray(sc.triggers) ? sc.triggers : [],
     updated_at: sc.updated_at || 0,
+    ingest_token: await _scIngestToken(env),   // MODO TESTE: o injetor pega o token de captura daqui (travar antes de producao real)
   });
 }
 // POST /api/salechat/media (Diretor) → sobe um arquivo pro R2. Body = bytes crus,
