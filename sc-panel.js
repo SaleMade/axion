@@ -559,12 +559,15 @@
       var counterRaw = fromMe ? toS : fromS;   // contraparte: fromMe -> destino (msg.to), senao origem (msg.from)
       if (!counterRaw || counterRaw.indexOf('@g.us') >= 0) return;   // ignora grupo / sem contraparte
       var ts = Number(msg.t || msg.timestamp || 0);
-      // ignora replay de sincronizacao (o WhatsApp reemite mensagens antigas ao carregar/reconectar)
-      if (ts && (Date.now() / 1000 - ts) > 600) return;
+      // ignora replay de sincronizacao MUITO antigo (chats de dias atras reemitidos ao carregar)
+      if (ts && (Date.now() / 1000 - ts) > 1800) return;
       var pr = _scRealPhone(msg, fromMe);   // {digits, isLid}
       if (!pr.digits) return;
       var msgId = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || '';
-      if (!msgId) msgId = 'sc_' + (ts || Date.now()) + '_' + Math.random().toString(36).slice(2, 8);
+      if (!msgId) msgId = 'sc_' + (ts || Date.now()) + '_' + pr.digits + '_' + fromMe;
+      window.__zvSeenIds = window.__zvSeenIds || {};
+      if (window.__zvSeenIds[msgId]) return;   // dedup: nao repete a mesma mensagem (replay / listeners duplicados)
+      window.__zvSeenIds[msgId] = 1;
       window.__zvOutbox.push({
         msgId: msgId,
         selfNumber: _scSelfNumber(),
@@ -584,7 +587,7 @@
   window.__zvOutboxDump = function () { try { return JSON.parse(JSON.stringify(window.__zvOutbox || [])); } catch (_) { return []; } };
 
   function onIncoming(msg) {
-    try { _scCapture(msg); } catch (_) {}   // Sale Chat Engine: captura ANTES de qualquer filtro (inclui fromMe)
+    try { window.__zvSeenCount = (window.__zvSeenCount || 0) + 1; _scCapture(msg); } catch (_) {}   // Sale Chat Engine: conta o que viu + captura ANTES de qualquer filtro
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
     // Interrompe os funis que pedem "parar se o lead responder", pro lead que respondeu.
     if (jobs.length) {
@@ -1086,6 +1089,7 @@
     var box = []; try { box = (window.__zvOutbox || []).slice(); } catch (_) {}
     var tot = document.getElementById('zv-cap-total'); if (tot) tot.textContent = box.length;
     try { var slf = document.getElementById('zv-cap-self'); if (slf) { var s = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; slf.textContent = s || 'lendo...'; } } catch (_) {}
+    try { var sn = document.getElementById('zv-cap-seen'); if (sn) sn.textContent = (window.__zvSeenCount || 0); } catch (_) {}
     if (!box.length) { host.innerHTML = '<div style="padding:22px 8px;text-align:center;color:#8696a0;font-size:12.5px">Nada capturado ainda. Mande ou receba uma mensagem que aparece aqui.</div>'; return; }
     host.innerHTML = box.slice(-40).reverse().map(function (e) {
       var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
@@ -1103,7 +1107,7 @@
       '<div class="zv-cbody">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 10px;font-size:12.5px">' +
           '<span>Seu numero: <b id="zv-cap-self">' + (self ? _capEsc(self) : 'lendo...') + '</b></span>' +
-          '<span><b id="zv-cap-total">0</b> na fila</span>' +
+          '<span><b id="zv-cap-seen">0</b> vistas · <b id="zv-cap-total">0</b> na fila</span>' +
         '</div>' +
         '<p class="zv-tabhint" style="margin:0 0 8px">Toda mensagem que chega ou sai e capturada e mandada pro sistema. Substitui a conexao antiga. Deixe o Sale Chat aberto.</p>' +
         '<div id="zv-cap-list" style="max-height:52vh;overflow-y:auto;border-top:1px solid rgba(134,150,160,.15)"></div>' +
