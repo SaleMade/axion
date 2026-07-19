@@ -2159,7 +2159,7 @@ async function handleSalechatIngest(req, env, token) {
       ).bind('sc', selfNumber, phone, e?.fromMe ? 1 : 0, msgId, String(e?.type || 'text'),
              String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now, atId).run();
       // FASE 2: quando o Sale Chat é a fonte, o SERVIDOR computa aqui (reusa a mesma lógica da Evolution).
-      if (src === 'sc' && atId && phone) {
+      if (src === 'sc' && atId && phone && !e?.lid) {   // pula @lid nao resolvido (nao vira lead fantasma)
         const inst = 'ax_' + atId;
         try {
           if (e?.fromMe) {

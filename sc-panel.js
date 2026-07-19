@@ -508,36 +508,73 @@
     try {
       var now = Date.now();
       if (_scSelfNum && (now - _scSelfT) < 60000) return _scSelfNum;   // cacheia 60s (vendedor pode trocar de chip)
-      var w = window.WPP;
-      var me = w && w.conn && w.conn.getMyUserId && w.conn.getMyUserId();
-      var d = _scDigits(_scSer(me));
+      var W = window.WPP, d = '';
+      try { if (W && W.conn && W.conn.getMyUserId) d = _scDigits(_scSer(W.conn.getMyUserId())); } catch (_) {}
+      if (!d) { try { if (W && W.whatsapp && W.whatsapp.UserPrefs && W.whatsapp.UserPrefs.getMaybeMeUser) d = _scDigits(_scSer(W.whatsapp.UserPrefs.getMaybeMeUser())); } catch (_) {} }
+      if (!d) { try { if (W && W.conn && W.conn.me) d = _scDigits(_scSer(W.conn.me)); } catch (_) {} }
+      if (!d) { try { if (W && W.conn && W.conn.wid) d = _scDigits(_scSer(W.conn.wid)); } catch (_) {} }
       if (d) { _scSelfNum = d; _scSelfT = now; }
       return _scSelfNum;
     } catch (_) { return _scSelfNum; }
   }
   window.__zvGetSelfNumber = _scSelfNumber;
+  // Extrai {digits, isLid} de um wid. @c.us = telefone real; @lid = ID de privacidade do WhatsApp (NAO e telefone).
+  function _scWidParts(wid) {
+    try {
+      if (!wid) return { digits: '', isLid: false };
+      var s = _scSer(wid), at = s.split('@');
+      return { digits: String(at[0] || '').replace(/\D/g, ''), isLid: (at[1] || wid.server || '') === 'lid' };
+    } catch (_) { return { digits: '', isLid: false }; }
+  }
+  // Telefone REAL da contraparte. Se o chat for @lid, tenta resolver o telefone de verdade
+  // (senderObj, contato); se nao der, devolve o lid marcado (isLid) pra nao virar um numero falso.
+  function _scRealPhone(msg, fromMe) {
+    try {
+      var W = window.WPP;
+      var p = _scWidParts(fromMe ? msg.to : msg.from);
+      if (p.digits && !p.isLid) return { digits: p.digits, isLid: false };
+      try {
+        var so = msg.senderObj || msg.sender, soid = so && (so.id || (so.attributes && so.attributes.id));
+        var sp = _scWidParts(soid);
+        if (sp.digits && !sp.isLid) return { digits: sp.digits, isLid: false };
+      } catch (_) {}
+      try {
+        var cid = _scSer(fromMe ? msg.to : msg.from);
+        var c = W && W.contact && W.contact.get ? W.contact.get(cid) : null;
+        if (c) {
+          var idp = _scWidParts(c.id || (c.attributes && c.attributes.id));
+          if (idp.digits && !idp.isLid) return { digits: idp.digits, isLid: false };
+          var pn = c.phoneNumber || (c.attributes && c.attributes.phoneNumber);
+          if (pn) { var d = String(pn).replace(/\D/g, ''); if (d) return { digits: d, isLid: false }; }
+        }
+      } catch (_) {}
+      return { digits: p.digits, isLid: true };   // nao resolveu: lid marcado
+    } catch (_) { return { digits: '', isLid: false }; }
+  }
   function _scCapture(msg) {
     try {
       if (!msg) return;
       var fromMe = !!(msg.fromMe || (msg.id && msg.id.fromMe));
       var fromS = _scSer(msg.from), toS = _scSer(msg.to);
-      // Contraparte (o lead): quando SOU eu que mandei, o lead e o DESTINO (msg.to).
-      // Errar isso joga a venda no numero errado (risco 1 do plano). Nunca usar msg.from em fromMe.
-      var counter = fromMe ? toS : fromS;
-      if (!counter || counter.indexOf('@g.us') >= 0) return;   // ignora grupo / sem contraparte
-      var phone = _scDigits(counter);
-      if (!phone) return;
+      var counterRaw = fromMe ? toS : fromS;   // contraparte: fromMe -> destino (msg.to), senao origem (msg.from)
+      if (!counterRaw || counterRaw.indexOf('@g.us') >= 0) return;   // ignora grupo / sem contraparte
+      var ts = Number(msg.t || msg.timestamp || 0);
+      // ignora replay de sincronizacao (o WhatsApp reemite mensagens antigas ao carregar/reconectar)
+      if (ts && (Date.now() / 1000 - ts) > 600) return;
+      var pr = _scRealPhone(msg, fromMe);   // {digits, isLid}
+      if (!pr.digits) return;
       var msgId = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || '';
-      if (!msgId) msgId = 'sc_' + (Number(msg.t || msg.timestamp || 0) || Date.now()) + '_' + Math.random().toString(36).slice(2, 8);
+      if (!msgId) msgId = 'sc_' + (ts || Date.now()) + '_' + Math.random().toString(36).slice(2, 8);
       window.__zvOutbox.push({
         msgId: msgId,
         selfNumber: _scSelfNumber(),
-        phone: phone,
+        phone: pr.digits,
+        lid: pr.isLid ? 1 : 0,
         fromMe: fromMe,
         type: String(msg.type || 'chat'),
         body: String(msg.body || msg.caption || '').slice(0, 2000),
         pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
-        ts: Number(msg.t || msg.timestamp || 0),
+        ts: ts,
         fromRaw: fromS, toRaw: toS
       });
       if (window.__zvOutbox.length > 800) window.__zvOutbox.splice(0, window.__zvOutbox.length - 800);   // trava anti-estouro
@@ -1048,12 +1085,13 @@
     if (!host) return;
     var box = []; try { box = (window.__zvOutbox || []).slice(); } catch (_) {}
     var tot = document.getElementById('zv-cap-total'); if (tot) tot.textContent = box.length;
+    try { var slf = document.getElementById('zv-cap-self'); if (slf) { var s = (window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ''; slf.textContent = s || 'lendo...'; } } catch (_) {}
     if (!box.length) { host.innerHTML = '<div style="padding:22px 8px;text-align:center;color:#8696a0;font-size:12.5px">Nada capturado ainda. Mande ou receba uma mensagem que aparece aqui.</div>'; return; }
     host.innerHTML = box.slice(-40).reverse().map(function (e) {
       var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
       return '<div style="display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid rgba(134,150,160,.15)">' +
         '<span style="font-size:10px;font-weight:700;color:' + col + ';min-width:58px">' + tag + '</span>' +
-        '<span style="font-size:12.5px;font-weight:600;flex:none">' + _capEsc(e.phone || '?') + '</span>' +
+        '<span style="font-size:12.5px;font-weight:600;flex:none' + (e.lid ? ';color:#8696a0' : '') + '"' + (e.lid ? ' title="ID protegido do WhatsApp, nao e o telefone real"' : '') + '>' + _capEsc(e.phone || '?') + (e.lid ? ' <span style="font-size:9px;opacity:.7">ID</span>' : '') + '</span>' +
         '<span style="flex:1;min-width:0;font-size:12px;color:#8696a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _capEsc(String(e.body || '').slice(0, 60)) + '</span>' +
         '<span style="font-size:10.5px;color:#8696a0;flex:none">' + _capTime(e.ts) + '</span>' +
       '</div>';
@@ -1064,7 +1102,7 @@
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.radar + '</span>Captura</div></div>' +
       '<div class="zv-cbody">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 10px;font-size:12.5px">' +
-          '<span>Seu numero: <b>' + (self ? _capEsc(self) : 'lendo...') + '</b></span>' +
+          '<span>Seu numero: <b id="zv-cap-self">' + (self ? _capEsc(self) : 'lendo...') + '</b></span>' +
           '<span><b id="zv-cap-total">0</b> na fila</span>' +
         '</div>' +
         '<p class="zv-tabhint" style="margin:0 0 8px">Toda mensagem que chega ou sai e capturada e mandada pro sistema. Substitui a conexao antiga. Deixe o Sale Chat aberto.</p>' +
