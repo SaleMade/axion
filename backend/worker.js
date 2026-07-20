@@ -2063,7 +2063,7 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
     else if (event === 'messages.upsert') {
       // Se a fonte virou o Sale Chat, a Evolution NÃO computa (senão duplica lead/venda/pixel).
       if ((await _waCaptureSource(env)) === 'sc') { /* fonte = Sale Chat */ }
-      else { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); await _waAutoReplies(env, instance, data, ctx); }
+      else { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); }
     }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
@@ -2097,7 +2097,21 @@ async function _scEnsureTables(env) {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_heartbeat (self_number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, wpp_seen INTEGER, last_seen INTEGER, meta TEXT)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_number_owner (number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, source TEXT, updated_at INTEGER)').run();
     try { await env.DB.prepare('ALTER TABLE sc_ingest_audit ADD COLUMN at_id TEXT').run(); } catch (_) {}   // idempotente: falha se a coluna já existe
+    try { await env.DB.prepare('ALTER TABLE wa_number_owner ADD COLUMN num_key TEXT').run(); } catch (_) {}   // chave canônica (DDD+8) pra casar com/sem DDI
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_owner_key ON wa_number_owner(num_key)').run(); } catch (_) {}
   } catch (_) {}
+}
+// Chave canônica de número BR — resolve o desencontro que deixava TODO lead/venda sem dono:
+// a dash grava o chip como "(15) 99237-3877" → 15992373877 (11 dígitos, SEM DDI), mas o Sale Chat
+// manda o número logado no WhatsApp → 5515992373877 (13 dígitos, COM DDI 55). Como resolveOwner
+// casava por igualdade exata, nunca batia: at_id ficava null e a captura não virava lead nem venda.
+function _waNumKey(n) {
+  let d = String(n || '').replace(/\D/g, '');
+  if (!d) return '';
+  // tira o DDI 55 só quando sobra um número nacional (10-11 dígitos) — assim não come o DDD 55 (RS)
+  if (d.length >= 12 && d.slice(0, 2) === '55') d = d.slice(2);
+  if (d.length < 10) return d;
+  return d.slice(0, 2) + d.slice(-8);   // DDD + 8 finais → imune também ao 9º dígito
 }
 // Semeia wa_number_owner a partir dos chips do estado da dash (número -> vendedor).
 // Server-side: é a fonte de verdade da atribuição, nunca o que o cliente diz ser.
@@ -2107,15 +2121,31 @@ async function _scSeedOwners(env) {
     let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (_) {}
     const chips = Array.isArray(data.chips) ? data.chips : [];
     let n = 0;
+    const vivos = [];
     for (const c of chips) {
       const num = String((c && c.num) || '').replace(/\D/g, '');
       const at = c && (c.at != null ? String(c.at) : '');
       if (!num || !at) continue;
+      vivos.push(num);
+      // instância por PAPEL: reserva vai pra ax_<at>_b (igual o frontend monta em _vendRoles).
+      // Se os 2 números do vendedor ficassem na MESMA instância, eles colidiriam depois no
+      // mergeSc do handleWAConn (byInst) e só um apareceria como "WhatsApp rodando".
+      const inst = 'ax_' + at + (c.bkp === true ? '_b' : '');
       await env.DB.prepare(
-        `INSERT INTO wa_number_owner (number, at_id, instance, source, updated_at) VALUES (?, ?, ?, 'chips', strftime('%s','now'))
-         ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, updated_at=excluded.updated_at`
-      ).bind(num, at, 'ax_' + at).run();
+        `INSERT INTO wa_number_owner (number, at_id, instance, source, num_key, updated_at) VALUES (?, ?, ?, 'chips', ?, strftime('%s','now'))
+         ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, num_key=excluded.num_key, updated_at=excluded.updated_at`
+      ).bind(num, at, inst, _waNumKey(num)).run();
       n++;
+    }
+    // Remove dono ÓRFÃO: chip que perdeu o atendente ou saiu da base. Sem isso a linha velha fica
+    // pra sempre e um número reaproveitado sequestraria a instância do vendedor antigo (o lead dele
+    // seria atribuído pro dono errado). Guarda: só limpa se realmente leu chips, pra um read vazio
+    // ou falho nunca zerar a tabela de atribuição inteira.
+    if (vivos.length) {
+      try {
+        const ph = vivos.map(() => '?').join(',');
+        await env.DB.prepare(`DELETE FROM wa_number_owner WHERE source='chips' AND number NOT IN (${ph})`).bind(...vivos).run();
+      } catch (_) {}
     }
     return n;
   } catch (_) { return 0; }
@@ -2127,7 +2157,11 @@ async function resolveOwner(env, selfNumber) {
   const num = String(selfNumber || '').replace(/\D/g, '');
   if (!num) return null;
   try {
-    const row = await env.DB.prepare('SELECT at_id, instance FROM wa_number_owner WHERE number = ?').bind(num).first();
+    let row = await env.DB.prepare('SELECT at_id, instance FROM wa_number_owner WHERE number = ?').bind(num).first();
+    if (!row) {   // não casou exato → tenta pela chave canônica (com/sem DDI, com/sem 9º dígito)
+      const key = _waNumKey(num);
+      if (key) row = await env.DB.prepare('SELECT at_id, instance FROM wa_number_owner WHERE num_key = ? LIMIT 1').bind(key).first();
+    }
     if (row && row.at_id) return { at_id: row.at_id, instance: row.instance || ('ax_' + row.at_id) };
   } catch (_) {}
   return null;
@@ -2144,15 +2178,18 @@ async function handleSalechatIngest(req, env, token) {
   const ack = [];
   const ownerCache = {};
   const src = await _waCaptureSource(env);   // 'sc' = computar aqui (lead/venda/pixel); 'evo' = só auditar
+  const salesOut = [];   // vendas registradas neste lote (pro Sale Chat confirmar pro vendedor)
   for (const e of events) {
     try {
       const msgId = String(e?.msgId || e?.id || '');
       const selfNumber = String(e?.selfNumber || '').replace(/\D/g, '');
       const phone = String(e?.phone || '').replace(/\D/g, '');
-      let atId = null;   // dono resolvido no SERVIDOR pelo número (null = quarentena)
+      let atId = null, ownInst = '';   // dono resolvido no SERVIDOR pelo número (null = quarentena)
       if (selfNumber) {
-        if (!(selfNumber in ownerCache)) { const ow = await resolveOwner(env, selfNumber); ownerCache[selfNumber] = ow ? ow.at_id : null; }
-        atId = ownerCache[selfNumber];
+        if (!(selfNumber in ownerCache)) { ownerCache[selfNumber] = await resolveOwner(env, selfNumber); }
+        const ow = ownerCache[selfNumber];
+        atId = ow ? ow.at_id : null;
+        ownInst = ow ? (ow.instance || '') : '';   // instância do PAPEL (complementar = ax_<at>_b)
       }
       await env.DB.prepare(
         'INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
@@ -2160,15 +2197,29 @@ async function handleSalechatIngest(req, env, token) {
              String(e?.body || '').slice(0, 2000), String(e?.pushName || ''), Number(e?.ts) || 0, now, atId).run();
       // FASE 2: quando o Sale Chat é a fonte, o SERVIDOR computa aqui (reusa a mesma lógica da Evolution).
       if (src === 'sc' && atId && phone && !e?.lid) {   // pula @lid nao resolvido (nao vira lead fantasma)
-        const inst = 'ax_' + atId;
+        // Instância do PAPEL do número (complementar = ax_<at>_b). Antes era 'ax_'+atId fixo, e por
+        // isso TODO lead do 2º número era carimbado com o número do principal nas métricas, e o
+        // casamento do ttclid (tt_pending por instância) falhava justamente pros leads do complementar.
+        const inst = ownInst || ('ax_' + atId);
+        // Espelha no histórico (wa_messages/wa_chats). É daqui que saem o RITMO da roleta e o TETO
+        // de rajada anti-ban; sem isso o balanceador ficava cego (nenhuma linha) e não conseguia
+        // respeitar o limite por número. Também alimenta a caixa de entrada do CRM.
+        try {
+          await _waLogMsg(env, {
+            phone, instance: inst, direction: e?.fromMe ? 'out' : 'in',
+            type: String(e?.type || 'text'), body: String(e?.body || ''),
+            pushName: String(e?.pushName || ''), ts: Number(e?.ts) || now, msgId: msgId || null
+          });
+        } catch (_) {}
         try {
           if (e?.fromMe) {
             // mensagem do vendedor: se for "Pedido Concluído", vira venda + dispara pixel (CompletePayment)
-            await _waDetectSale(env, inst, { message: { conversation: String(e?.body || '') }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId || null, fromMe: true } });
+            const sr = await _waDetectSale(env, inst, { message: { conversation: String(e?.body || '') }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId || null, fromMe: true } });
+            if (sr && sr.sale && msgId) salesOut.push({ msgId: msgId, value: sr.value || 0 });
           } else {
             // mensagem do lead: 1ª vira LEAD (casa ttclid pelo código, pixel InitiateCheckout) + atribuição
             try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); } catch (_) {}
-            await _waLeadCapture(env, inst, phone, String(e?.body || ''));
+            await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber);   // selfNumber = número REAL que atendeu
             await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
           }
         } catch (_) {}
@@ -2176,7 +2227,7 @@ async function handleSalechatIngest(req, env, token) {
       if (msgId) ack.push(msgId);
     } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
   }
-  return json({ ok: true, ack, count: ack.length });
+  return json({ ok: true, ack, count: ack.length, sales: salesOut });
 }
 // POST /api/salechat/heartbeat/<token> — o injetor avisa periodicamente que o número está vivo/logado.
 async function handleSalechatHeartbeat(req, env, token) {
@@ -2186,7 +2237,21 @@ async function handleSalechatHeartbeat(req, env, token) {
   await _scEnsureTables(env);
   const selfNumber = String(body?.selfNumber || '').replace(/\D/g, '');
   if (!selfNumber) return json({ ok: true });
-  const owner = await resolveOwner(env, selfNumber);
+  let owner = await resolveOwner(env, selfNumber);
+  // Número reportando presença mas SEM dono = chip que o Diretor acabou de cadastrar/trocar.
+  // Ressemeia na hora (no máx. 1x por minuto, pra não martelar o banco) em vez de esperar o cron:
+  // sem dono a captura desse número não vira lead, venda nem pixel. Auto-cura em ~30s.
+  if (!owner) {
+    try {
+      const last = Number(await _readConfig(env, 'sc_reseed_ts')) || 0;
+      const agora = Math.floor(Date.now() / 1000);
+      if (agora - last > 60) {
+        await _writeConfig(env, 'sc_reseed_ts', String(agora));
+        await _scSeedOwners(env);
+        owner = await resolveOwner(env, selfNumber);
+      }
+    } catch (_) {}
+  }
   const now = Math.floor(Date.now() / 1000);
   try {
     await env.DB.prepare(
@@ -2201,6 +2266,10 @@ async function handleSalechatHeartbeat(req, env, token) {
     try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run(); } catch (_) {}
     try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
     try { await env.DB.prepare(`INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'sc', ?, strftime('%s','now')) ON CONFLICT(instance) DO UPDATE SET state='sc', number=excluded.number, updated_at=excluded.updated_at`).bind(owner.instance, selfNumber).run(); } catch (_) {}
+    // Um número só pode estar num slot. Ao trocar o chip de vendedor, a linha antiga
+    // (ex: ax_ccol_5 com o número que virou do Murilo) ficava pendurada e aparecia como uma
+    // conexão fantasma, com o mesmo número em dois vendedores na lista de instâncias.
+    try { await env.DB.prepare("DELETE FROM wa_conn WHERE number=? AND instance<>?").bind(selfNumber, owner.instance).run(); } catch (_) {}
   }
   return json({ ok: true, owner: owner ? owner.at_id : null });
 }
@@ -2264,9 +2333,31 @@ async function handleWAConn(req, env) {
     await _scEnsureTables(env);
     const hb = await env.DB.prepare("SELECT self_number, instance FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180").all();
     scConns = (hb.results || []).map(h => ({ instance: h.instance || ('sc_' + h.self_number), state: 'sc', number: h.self_number }));
+    // Rede de segurança: número que ACABOU de entregar mensagem está vivo por definição, mesmo que
+    // o heartbeat falhe (ex.: painel antigo sem __zvGetSelfNumber). Nunca mostrar "parado" pra quem
+    // está entregando captura pro servidor agora.
+    try {
+      const vistos = {}; scConns.forEach(c => { vistos[String(c.number)] = 1; });
+      const ing = await env.DB.prepare("SELECT DISTINCT self_number FROM sc_ingest_audit WHERE source='sc' AND received_at > strftime('%s','now')-180").all();
+      (ing.results || []).forEach(r => {
+        const n = String(r.self_number || ''); if (!n || vistos[n]) return;
+        scConns.push({ instance: 'sc_' + n, state: 'sc', number: n });
+      });
+    } catch (_) {}
+    // instância ÚNICA por número: os 2 números do MESMO vendedor não podem colapsar numa chave só.
+    // O frontend monta _waConnMap por instance — se colidir, um dos números some da lista e o card
+    // mostra "WhatsApp parado" com o Sale Chat rodando normalmente.
+    const _seenInst = {};
+    scConns.forEach(c => { if (_seenInst[c.instance]) c.instance = 'sc_' + c.number; _seenInst[c.instance] = 1; });
   } catch (_) {}
   const mergeSc = (list) => {
-    const byInst = {}; (list || []).forEach(c => { byInst[c.instance] = c; });
+    const scKeys = {}; scConns.forEach(c => { const k = _waNumKey(c.number); if (k) scKeys[k] = 1; });
+    const byInst = {};
+    (list || []).forEach(c => {
+      const k = _waNumKey(c.number);
+      if (k && scKeys[k]) return;   // Sale Chat manda nesse número: não deixa linha velha da Evolution mascarar
+      byInst[c.instance] = c;
+    });
     scConns.forEach(c => { byInst[c.instance] = c; });   // Sale Chat rodando ganha da Evolution
     return Object.values(byInst);
   };
@@ -2286,8 +2377,14 @@ async function handleWAConn(req, env) {
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
-  const rows = await env.DB.prepare('SELECT instance, state, number FROM wa_conn').all();
-  return json({ ok: true, sat, conn: mergeSc(rows.results || []) });
+  const rows = await env.DB.prepare('SELECT instance, state, number, updated_at FROM wa_conn').all();
+  // 'sc' velho = Sale Chat que parou de reportar. A linha fica gravada, então sem checar a idade
+  // o número aparecia "WhatsApp rodando" depois de ter caído. Vencido vira 'close' (vermelho).
+  const nowS = Math.floor(Date.now() / 1000);
+  const limpos = (rows.results || []).map(r =>
+    (String(r.state) === 'sc' && (nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r
+  );
+  return json({ ok: true, sat, conn: mergeSc(limpos) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -2417,18 +2514,17 @@ async function handleWAChatAssign(req, env) {
 async function _waDetectSale(env, instance, data) {
   const m = data?.message || {};
   const text = m.conversation || m.extendedTextMessage?.text || '';
-  if (!text || text.indexOf('Pedido Conclu') < 0) return; // assinatura da venda
+  if (!text || text.indexOf('Pedido Conclu') < 0) return { sale: false }; // assinatura da venda
   const key = data?.key || {};
   const jid = String(key.remoteJid || '');
-  if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
+  if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
   const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
-  if (!phone) return;
+  if (!phone) return { sale: false };
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
   const msgId = (key && key.id) || null;
   // Ponte de atribuição: grava CPF → atendente (a instância = quem atendeu).
-  // Feito ANTES do dedupe abaixo pra que reprocessos ainda mantenham o vínculo atualizado.
   const cpfDetect = extractCpf(text);
   if (cpfDetect) await saveCpfAttrib(env, cpfDetect, instance, name, phone);
   try {
@@ -2437,12 +2533,13 @@ async function _waDetectSale(env, instance, data) {
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // texto completo do "Pedido Concluído" (pra revisar na dash)
     try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
-    if (recent) return; // já registrada nas últimas 24h (mesmo telefone)
+    if (recent) return { sale: true, value }; // já registrada nas últimas 24h (ainda é venda, confirma)
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)").bind(phone, instance, name, value, msgId, String(text||'').slice(0,2000)).run();
-    if (ins.meta && ins.meta.changes === 0) return; // msg_id repetido → já processado
+    if (ins.meta && ins.meta.changes === 0) return { sale: true, value }; // msg_id repetido → já registrada
     await _ttFireSale(env, phone, (value > 0 ? value : null), msgId || '', instance);   // venda pro pixel (sem value 0 se o parse falhar)
-  } catch (_) {}
+    return { sale: true, value };   // registrada agora
+  } catch (_) { return { sale: true, value, error: true }; }
 }
 
 // ─── Respostas automáticas ───────────────────────────────────────────────────────────────
@@ -2538,7 +2635,7 @@ async function _ttPixelToken(env, pid, instance) {
 }
 // LEAD: na 1ª mensagem do número, casa com o clique pelo CÓDIGO no texto (atribuição EXATA).
 // Quem manda sem código (lead antigo, indicação, orgânico) não veio de pressel → não conta. 1x por número.
-async function _waLeadCapture(env, instance, phone, body) {
+async function _waLeadCapture(env, instance, phone, body, selfNum) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
@@ -2552,6 +2649,7 @@ async function _waLeadCapture(env, instance, phone, body) {
     const code = codeM ? codeM[1] : '';
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
     try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}   // número que recebeu o clique (últimos 8 dígitos)
     if (code) {
       try {
         const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
@@ -2560,13 +2658,39 @@ async function _waLeadCapture(env, instance, phone, body) {
     }
     // 2) FALLBACK (sem código): casa com o clique recente NÃO reivindicado no MESMO número (janela 60min, o mais antigo).
     // Recupera o lead que apagou o código. Vale porque esses números só recebem tráfego de pressel.
+    // Casa primeiro pelo NÚMERO que atendeu, não pelo slot. Trocar um número de principal↔
+    // complementar muda a instância (ax_<at> ↔ ax_<at>_b) e os cliques ficavam órfãos no slot
+    // antigo: o lead chegava e entrava "sem rastreio", sem pixel e sem saber de qual pressel veio.
+    const nk = String(selfNum || '').replace(/\D/g, '').slice(-8);
+    if (!pid && nk) {
+      try {
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE num_key=? AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(nk).first();
+        if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
+      } catch (_) {}
+    }
+    // fallback: linhas antigas, gravadas antes do num_key existir
     if (!pid) {
       try {
         const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance).first();
         if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
       } catch (_) {}
     }
-    let num=''; try{ const cn=await env.DB.prepare('SELECT number FROM wa_conn WHERE instance=?').bind(instance).first(); num=(cn&&cn.number)||''; }catch(_){}   // número conectado que recebeu o lead
+    // último recurso: clique de QUALQUER número do MESMO vendedor (principal ou complementar).
+    // O número pode ter trocado de papel entre o clique e a mensagem, e aí o clique fica no slot
+    // antigo. Dentro do mesmo vendedor a origem do tráfego é a mesma, então casar ali é honesto
+    // e recupera o lead que entraria como "sem rastreio".
+    if (!pid && instance) {
+      const base = String(instance).replace(/_b$/, '');
+      try {
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE (inst=? OR inst=?) AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(base, base + '_b').first();
+        if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
+      } catch (_) {}
+    }
+    // Número que REALMENTE recebeu o lead. Prefere o que o Sale Chat informou (exato); só cai na
+    // busca por instância quando não veio (Evolution). Derivar da instância carimbava o lead do
+    // número complementar com o número do principal e escondia a divisão da roleta nas métricas.
+    let num=String(selfNum||'').replace(/\D/g,'');
+    if(!num){ try{ const cn=await env.DB.prepare('SELECT number FROM wa_conn WHERE instance=?').bind(instance).first(); num=(cn&&cn.number)||''; }catch(_){} }
     await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
     // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
     if (ttclid || pid) {
@@ -2860,8 +2984,12 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     // SEM fallback pra mine[0]: se o vendedor não tem chip marcado "Em uso", ele está
     // FORA da roleta (é o que o frontend mostra: "sem número em uso"). O fallback antigo
     // pegava QUALQUER chip dele e roteava lead pra um número que a tela dava como fora.
-    const emChip=mine.find(isEmUso);                                                 // conectado em instP
-    if(!emChip) continue;                                                            // sem principal = não entra na roleta
+    // Principal = chip "Em uso". Se o vendedor não marcou NENHUM (caso real: a equipe usa a tag
+    // "Ativo" e nunca "Em uso"), cai no 1º número utilizável que NÃO seja a reserva — que é
+    // exatamente o número que a tela mostra como principal (o frontend também cai em chips[0]).
+    // Sem esse fallback o worker descartava vendedores que a dash exibia ligados → pressel offline.
+    const emChip=mine.find(isEmUso) || mine.find(c=>c.bkp!==true) || null;            // conectado em instP
+    if(!emChip) continue;                                                            // sem nenhum número = não entra na roleta
     let bkChip=mine.find(c=>c.bkp===true);                                          // conectado em instB
     if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
@@ -2881,8 +3009,11 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
 //     cota do dia, depois o backup).
 //  2) TETO de rajada: nenhum número recebe mais que BURST_CAP leads a cada BURST_WIN. Número NOVO
 //     (aquecimento) começa com teto menor e sobe até o cheio em WARMUP_MIN (rápido).
-//  3) entre os que não bateram o teto, manda pro que recebeu MENOS nos últimos PACE_WIN (ritmo
-//     parelho pra todos, sem despejar atraso). Empate → menos hoje → quem recebeu há mais tempo → rotação.
+//  3) entre os que não bateram o teto, manda pro que teve MENOS gente INICIANDO CONTATO hoje
+//     (equaliza o dia, então número que entrou atrasado alcança os outros). Empate → menor ritmo
+//     recente (PACE_WIN) → quem recebeu há mais tempo → rotação.
+//     Obs: a conta é por PESSOA que mandou mensagem (telefone distinto), não por redirecionamento
+//     da pressel — quem clica e não fala não conta pra ninguém.
 //  4) se TODOS bateram o teto (volume alto demais pros números no ar), não perde lead: manda pro
 //     menos carregado e marca "saturação" (a dash avisa pra adicionar mais números).
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
@@ -2948,13 +3079,26 @@ async function _presselBalancedPick(env, id, sellers){
   const cmp=(a,b)=>{
     const A=g(a.inst), B=g(b.inst);
     if(saturated && A.burst!==B.burst) return A.burst-B.burst;   // saturado: pro menos carregado agora
-    if(A.pace!==B.pace) return A.pace-B.pace;
-    if(A.today!==B.today) return A.today-B.today;
-    return (A.lastmt||0)-(B.lastmt||0);
+    // EQUALIZAR O DIA: quem tem MENOS gente que iniciou contato hoje recebe primeiro (today vem
+    // antes de pace). Antes o ritmo dos últimos 15min mandava e o "hoje" só desempatava, então um
+    // número que entrou atrasado (ex: vendedor abriu o Sale Chat mais tarde) nunca alcançava o
+    // outro: ficava só andando no mesmo passo, mantendo a diferença do dia pra sempre.
+    // O atraso é recuperado SEM despejar rajada: o teto por número (pool acima) já limita quantos
+    // contatos cada um pode absorver por janela, e número em aquecimento tem teto menor ainda.
+    // ÚNICO critério: quem teve MENOS gente iniciando contato hoje. Empate → rodízio (abaixo).
+    // Nada de desempatar por ritmo/último contato/clique em trânsito: todos vêm de LEITURA do
+    // banco, que atrasa alguns segundos. Numa rajada eles não mudam a tempo, viram um vencedor
+    // único artificial e o rodízio nunca era chamado — a rajada inteira caía no mesmo número.
+    // O contador de rodízio é escrita atômica, então é o único imediato e confiável.
+    // Compara por FAIXA de 5 contatos, não pelo número exato. O contador só sobe quando o lead
+    // RESPONDE (30 a 120s depois do clique), então numa rajada ele não acompanha: com diferença de
+    // 1 contato o que está atrás levava 100% dos cliques seguidos e inundava um número só.
+    // Em faixas, quem está atrás ainda recupera, mas alternando pelo rodízio dentro da faixa.
+    return Math.floor(A.today/5)-Math.floor(B.today/5);
   };
   pool.sort(cmp);
   const top=g(pool[0].inst);
-  const tied=pool.filter(a=>{ const X=g(a.inst); return X.pace===top.pace && X.today===top.today && (X.lastmt||0)===(top.lastmt||0) && (!saturated || X.burst===top.burst); });
+  const tied=pool.filter(a=>{ const X=g(a.inst); return Math.floor(X.today/5)===Math.floor(top.today/5) && (!saturated || X.burst===top.burst); });
   if(tied.length<=1) return pool[0];
   const idx=await _presselNextIndex(env, id, tied.length);   // empate total → rotação
   return tied[idx];
@@ -3345,7 +3489,7 @@ async function handlePresselsTotalPage(req, env){
             const hora=isNaN(bt)?'':`${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
             const attr=!!(l.pid&&String(l.pid).trim()!=='');
             const pnome=attr?(_pnm[String(l.pid)]||'pressel'):'sem rastreio';
-            const tag=attr?`<span style="font-size:9.5px;font-weight:700;color:#34d399">${_escHtml(_pnm[String(l.pid)]||'pressel')}${l.src==='fifo'?' ~':''}</span>`:`<span style="font-size:9.5px;color:#6b7a93">sem rastreio</span>`;
+            const tag=attr?`<span style="font-size:9.5px;font-weight:700;color:#34d399">${_escHtml(_pnm[String(l.pid)]||'pressel')}</span>`:`<span style="font-size:9.5px;color:#6b7a93">sem rastreio</span>`;
             const ph=String(l.phone||'').replace(/\D/g,'');
             const sale=isSale(ph);
             if(full && ph){ cpLines.push(fmtNum(ph)+'  '+hora+'  '+pnome+(sale?'  VENDA':'')+'  '+waHref(ph)); }
@@ -3378,8 +3522,24 @@ async function handlePresselPublic(req, env, id){
   const p=pressels.find(x=>String(x.id)===String(id));
   if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
   // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
+  // Map: instância → número conectado (pra roteador conferir o número certo).
+  // 'sc' = Sale Chat rodando. A roleta NÃO pode depender só da Evolution (que está saindo de
+  // operação): sem contar o Sale Chat, wa_conn fica sem nenhuma linha 'open', o Map fica VAZIO
+  // (que é truthy!) e _servConnOk reprova TODO número → a pressel serve offline e não entra lead.
   let liveSet=null;
-  try{ const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE state='open'").all(); liveSet=new Map((cs.results||[]).map(r=>[r.instance, r.number||''])); }catch(_){}   // Map: instância → número conectado (pra roteador conferir o número certo)
+  try{
+    // A linha 'sc' do wa_conn NÃO expira sozinha: ela fica gravada com o último heartbeat. Sem checar
+    // a idade, um número que caiu continuava "vivo" pra sempre e seguia recebendo lead (aconteceu de
+    // verdade: o WhatsApp caiu e a roleta continuou mandando). Só vale 'sc' com sinal dos últimos 3min.
+    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE state='open' OR (state='sc' AND updated_at > strftime('%s','now')-180)").all();
+    const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
+    // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
+    try{
+      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180").all();
+      (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
+    }catch(_){}
+    liveSet = m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
+  }catch(_){}
   // ids de status que significam "Em uso" (a dash grava ids customizados tipo st_xxxx
   // com label "Em uso"; sem isso o worker não reconhecia o principal e tirava o
   // vendedor da roleta enquanto a tela mostrava ele ligado).
@@ -3403,11 +3563,15 @@ async function handlePresselPublic(req, env, id){
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}   // pra deduplicar "Foram pro WhatsApp" por ttclid
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
       const ex = await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
       if(ex){ leadCode = ex.code || ''; }
       else {
         leadCode = _genCode(6);
-        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code) VALUES (?,?,?,strftime('%s','now'),0,?)").bind(pick.inst, ttclid, String(id), leadCode).run();
+        // Grava também o NÚMERO pra onde a pessoa foi. A atribuição casa por número, então
+        // trocar o número de principal↔complementar não desliga mais o rastreio do lead.
+        const _nk = String(pick.num||'').replace(/\D/g,'').slice(-8);
+        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick.inst, ttclid, String(id), leadCode, _nk).run();
         try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok, 1x por clique
       }
     }catch(_){}
@@ -3442,6 +3606,11 @@ export default {
   // Cron: mantém wa_conn (estado + número conectado) fresco mesmo com a dash FECHADA, puxando da Evolution.
   // Assim o roteador nunca manda lead pra número caído por causa de estado defasado (webhook às vezes perde o logout).
   async scheduled(event, env, ctx) {
+    // Semeia número → vendedor ANTES de falar com a Evolution. A chamada externa pode demorar
+    // (VPS lenta/fora) e engolir a rodada inteira do cron, e foi isso que deixou a tabela de donos
+    // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
+    // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
+    try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
     try {
       const live = await _evoInstances(env);
       if (live && live.length) {

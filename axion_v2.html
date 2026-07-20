@@ -1583,13 +1583,13 @@ textarea.info-val:focus{border-color:var(--bl);padding:6px 9px}
 .sc-grow{ display:flex; align-items:center; gap:8px; flex:1; min-width:210px; }
 .sc-grow .muted{ font-size:11.5px; flex:none; }
 .sc-grow input,.sc-grow select{ flex:1; min-width:0; }
-/* Respostas automáticas: cards */
-.sc-arcard{ background:var(--s1); border:1px solid var(--b2); border-radius:13px; padding:14px 15px; margin-bottom:12px; display:flex; flex-direction:column; }
-.sc-arhead{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
-.sc-arname{ flex:1; min-width:0; font-weight:700; }
-.sc-arcard .sc-f-label{ margin:11px 0 5px; }
-.sc-arrow2{ display:flex; gap:9px; flex-wrap:wrap; }
-.sc-arrow2 input{ flex:1; min-width:170px; }
+/* Cartão de contato: prévia igual chega no WhatsApp */
+.sc-vc{ display:flex; align-items:center; gap:10px; padding:4px 2px 10px; }
+.sc-vc-av{ width:38px; height:38px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.18); color:#fff; }
+.sc-vc-i{ display:flex; flex-direction:column; min-width:0; }
+.sc-vc-i b{ font-size:13.5px; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sc-vc-i span{ font-size:11.5px; color:rgba(255,255,255,.75); }
+.sc-vc-acts{ border-top:1px solid rgba(255,255,255,.22); margin:0 -12px; padding:8px 0 2px; text-align:center; font-size:12.5px; font-weight:700; color:#fff; }
 .sc-md-detail{ flex:1; min-width:0; background:var(--s1); border:1px solid var(--b2); border-radius:var(--rl); padding:18px 20px; min-height:340px; }
 .sc-detail-empty{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--t3); min-height:300px; text-align:center; }
 .sc-detail-empty p{ font-size:13px; max-width:240px; line-height:1.5; margin:0; }
@@ -3879,11 +3879,18 @@ if(DB.acl&&DB.acl.recuperador&&!DB.acl.cobrador){DB.acl.cobrador=DB.acl.recupera
 // setPresselVendBackup/removePresselVendBackup só limpam o bkp de chips do MESMO
 // atendente — sobrava o tracejado "RESERVA" num número fora de uso.
 (DB.chips||[]).forEach(c=>{ if(!c.at){ if(c.bkp) c.bkp=false; if(c.em_uso) c.em_uso=false; } });
-// Reserva SEM principal não existe: se o atendente do chip não tem nenhum número
-// "Em uso", a flag de reserva é lixo — era ela que deixava o tracejado "RESERVA"
-// num número que não está sendo usado (e que o worker podia acabar roteando).
+// Reserva SEM principal não existe: se o atendente do chip não tem NENHUM outro número
+// utilizável pra ser o principal, a flag de reserva é lixo — era ela que deixava o
+// tracejado "RESERVA" num número que não está sendo usado.
+// ATENÇÃO (2 armadilhas já pagas caro aqui, não reintroduzir):
+//  1) NÃO testar wa_st==='em_uso': a dash usa ids customizados (st_xxxx) com label "Em uso",
+//     então essa comparação NUNCA casa e isso apagava a reserva escolhida em TODO refresh
+//     (o merge 3-way ainda empurrava o apagamento pro servidor, matando pra equipe toda).
+//  2) NÃO chamar _isChipEmUso/getWaStatusList aqui: WA_STATUSES_DEFAULT é const ~5 mil linhas
+//     abaixo → TDZ (ReferenceError) e a dash abre em branco em navegador novo/vendedor.
+// Por isso o teste usa só campos crus do chip (st), sem resolver status.
 (DB.chips||[]).forEach(c=>{
-  if(c.at && c.bkp && !(DB.chips||[]).some(o=>String(o.at)===String(c.at) && (o.em_uso===true||o.em_uso===1||String(o.wa_st||'')==='em_uso'))) c.bkp=false;
+  if(c.at && c.bkp && !(DB.chips||[]).some(o=>o!==c && String(o.at)===String(c.at) && o.st!=='aquecimento' && o.st!=='banido')) c.bkp=false;
 });
 TEAM=DB.team;
 if(!DB.kb_cols){DB.kb_cols=JSON.parse(JSON.stringify(DEFAULT_KB_COLS))}
@@ -4021,8 +4028,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.75.0';
-const APP_LAST_CHANGE = 'Correcao de sync que apagava config do Sale Chat: o merge tratava o salechat como bloco unico, entao editar um funil num lugar e outra coisa noutro fazia um sobrescrever o outro inteiro (foi o que apagou a subcategoria dos funis). Agora o Sale Chat mescla por item (id), igual os chips. As subcategorias dos funis (Homem/Mulher) foram restauradas.';
+const APP_VERSION = '2.76.0';
+const APP_LAST_CHANGE = 'Respostas automaticas removidas (a API nao responde mais sozinha). No lugar, novo tipo de item no Sale Chat: CONTATOS. Voce cadastra nome + numero (ex: o rapaz da entrega) e o atendente manda o cartao de contato com 1 clique, igual manda mensagem ou audio. O cliente toca e ja fala com ele. Entra em funil, tem subcategoria e busca como qualquer item.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7993,7 +8000,7 @@ const SC_SECTIONS=[
   {key:'document',label:'Documentos',icon:'clipboard-list'},
   {key:'funis',label:'Funis',icon:'repeat'},
   {key:'triggers',label:'Gatilhos',icon:'zap'},
-  {key:'autoreplies',label:'Respostas automáticas',icon:'send'},
+  {key:'contato',label:'Contatos',icon:'user'},
 ];
 var scSection='messages';
 // Perfis independentes: 'vend' (vendedores, DB.salechat) e 'cob' (cobradores, DB.salechatCob).
@@ -8006,9 +8013,9 @@ function scMediaUrl(key){ return (apiUrl()||'').replace(/\/+$/,'')+'/api/salecha
 // PUBLICADO (botão "Salvar e publicar"). Assim, com varias pessoas mexendo, nada vai
 // pros PCs por engano; so vai quando alguem publica de proposito. Guarda quem/quando.
 function scPubKey(){ return scProfile==='cob' ? 'salechatCobPub' : 'salechatPub'; }
-function SCPub(){ var k=scPubKey(); if(!DB[k]||typeof DB[k]!=='object') DB[k]={messages:[],media:[],sequences:[],triggers:[],autoreplies:[]}; return DB[k]; }
-function scCoreJson(o){ return JSON.stringify({m:(o&&o.messages)||[],d:(o&&o.media)||[],s:(o&&o.sequences)||[],t:(o&&o.triggers)||[],a:(o&&o.autoreplies)||[]}); }
-function scSnapshot(o){ return { messages:JSON.parse(JSON.stringify(o.messages||[])), media:JSON.parse(JSON.stringify(o.media||[])), sequences:JSON.parse(JSON.stringify(o.sequences||[])), triggers:JSON.parse(JSON.stringify(o.triggers||[])), autoreplies:JSON.parse(JSON.stringify(o.autoreplies||[])) }; }
+function SCPub(){ var k=scPubKey(); if(!DB[k]||typeof DB[k]!=='object') DB[k]={messages:[],media:[],sequences:[],triggers:[]}; return DB[k]; }
+function scCoreJson(o){ return JSON.stringify({m:(o&&o.messages)||[],d:(o&&o.media)||[],s:(o&&o.sequences)||[],t:(o&&o.triggers)||[]}); }
+function scSnapshot(o){ return { messages:JSON.parse(JSON.stringify(o.messages||[])), media:JSON.parse(JSON.stringify(o.media||[])), sequences:JSON.parse(JSON.stringify(o.sequences||[])), triggers:JSON.parse(JSON.stringify(o.triggers||[])) }; }
 function scIsDirty(){ return scCoreJson(SC()) !== scCoreJson(SCPub()); }
 // 1a vez: adota o estado atual como baseline publicado, pra nao vazar rascunho pros bots.
 function scEnsurePubBaseline(){
@@ -8047,14 +8054,13 @@ function scRenderSaveBar(){
 }
 function scAllItems(){
   return (SC().messages||[]).map(m=>({id:m.id,label:'Msg · '+(m.label||m.id),kind:'text'}))
-    .concat((SC().media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
+    .concat((SC().media||[]).map(m=>({id:m.id,label:({audio:'Audio · ',video:'Video · ',image:'Imagem · ',document:'Doc · ',contato:'Contato · '}[m.kind]||'')+(m.label||m.id),kind:m.kind})));
 }
 function scItemLabel(id){ const it=scAllItems().find(x=>x.id===id); return it?it.label:id; }
 function scCount(key){
   if(key==='messages') return (SC().messages||[]).length;
   if(key==='funis') return (SC().sequences||[]).length;
   if(key==='triggers') return (SC().triggers||[]).length;
-  if(key==='autoreplies') return (SC().autoreplies||[]).length;
   return (SC().media||[]).filter(m=>m.kind===key).length;
 }
 function scEmpty(t){ return '<div class="sc-empty">'+scEscT(t)+'</div>'; }
@@ -8090,7 +8096,7 @@ function scSeedIfNew(){
   if(changed){ sc.updated_at=Math.floor(Date.now()/1000); persist(); }
 }
 function renderSaleChat(){
-  const _sc=SC(); ['messages','sequences','media','triggers','autoreplies'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
+  const _sc=SC(); ['messages','sequences','media','triggers'].forEach(function(k){ if(!Array.isArray(_sc[k])) _sc[k]=[]; });
   scSeedIfNew();
   scEnsurePubBaseline();
   const pg=$('salechat-pg'); if(!pg) return;
@@ -8137,7 +8143,7 @@ function scRenderSection(){
   if(scSection==='messages') return scSecMessages(main);
   if(scSection==='funis') return scSecFunis(main);
   if(scSection==='triggers') return scSecTriggers(main);
-  if(scSection==='autoreplies') return scSecAutoReplies(main);
+  if(scSection==='contato') return scSecMedia(main,'contato');
   return scSecMedia(main,scSection);
 }
 // ─── Prévia/Simulador do painel do WhatsApp (usa os itens reais; funcional pra testar) ───
@@ -8175,6 +8181,7 @@ function scpSimLibrary(fast){
     var url=m.key?scMediaUrl(m.key):'';
     if(m.kind==='video') return {id:m.id,kind:'video',label:m.label||'Video',caption:m.caption||'',mediaUrl:url,dataUri:url,grp:m.grp||''};
     if(m.kind==='image') return {id:m.id,kind:'image',label:m.label||'Imagem',caption:m.caption||'',dataUri:url,grp:m.grp||''};
+    if(m.kind==='contato') return {id:m.id,kind:'contato',label:m.label||'Contato',name:m.name||m.label||'',number:m.number||'',grp:m.grp||''};
     if(m.kind==='document') return {id:m.id,kind:'document',label:m.label||'Documento',mime:m.mime||'application/pdf',dataUri:url,grp:m.grp||''};
     return {id:m.id,kind:'audio',label:m.label||'Audio',dataUri:url,durMs:fast?900:2500,grp:m.grp||''};
   });
@@ -8374,11 +8381,12 @@ var SC_KINDS={
   audio:{label:'Áudios',icon:'volume',add:'+ Adicionar áudio',accept:'audio/*',hint:'A tua voz e os audios do funil. Escuta cada um antes de liberar pros atendentes.'},
   video:{label:'Vídeos',icon:'video',add:'+ Adicionar vídeo',accept:'video/*',hint:'Videos de prova social e demonstracao. A legenda vai junto no envio.'},
   image:{label:'Imagens',icon:'image',add:'+ Adicionar imagem',accept:'image/*',hint:'Imagens de produto, provas, prints. Legenda opcional.'},
-  document:{label:'Documentos',icon:'clipboard-list',add:'+ Adicionar documento',accept:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf',hint:'PDFs e arquivos que o atendente envia no chat.'}
+  document:{label:'Documentos',icon:'clipboard-list',add:'+ Adicionar documento',accept:'.pdf,.doc,.docx,.txt,.xls,.xlsx,application/pdf',hint:'PDFs e arquivos que o atendente envia no chat.'},
+  contato:{label:'Contatos',icon:'user',add:'+ Novo contato',hint:'Cartao de contato que o atendente manda com 1 clique (ex: o rapaz da entrega/cobranca). O cliente toca e ja fala com ele.'}
 };
 function scKindIcon(kind){ return kind==='messages'?'message-circle':scMediaIcon(kind); }
 // Mesma paleta do painel: cada tipo tem sua cor (mensagem azul, audio verde, video roxo, imagem ciano, doc laranja)
-var SC_COLORS={messages:'#2563eb',audio:'#13c273',video:'#8e17f0',image:'#00bcf2',document:'#f0810f'};
+var SC_COLORS={messages:'#2563eb',audio:'#13c273',video:'#8e17f0',image:'#00bcf2',document:'#f0810f',contato:'#e0405a'};
 function scKindColor(kind){ return SC_COLORS[kind]||'#13c273'; }
 function scItemsFor(kind){ return kind==='messages'?(SC().messages||[]):(SC().media||[]).filter(m=>m.kind===kind); }
 function scFindMsg(id){ var a=SC().messages||[]; for(var i=0;i<a.length;i++) if(a[i].id===id) return {item:a[i],idx:i}; return null; }
@@ -8446,6 +8454,11 @@ function scDetailPreview(kind,it){
   else if(kind==='image') media='<img src="'+url+'" loading="lazy">';
   else if(kind==='video') media='<video controls preload="none" src="'+url+'"></video>';
   else if(kind==='document') media='<a class="sc-doc-link" href="'+url+'" target="_blank">'+ico('clipboard-list',{size:14})+' Abrir documento</a>';
+  if(kind==='contato'){
+    const nm=scEscT(it.name||it.label||'Contato'), nu=scEscT(it.number||'');
+    return '<div class="sc-detail-label">Prévia do envio (cartão de contato)</div>'+
+      '<div class="sc-wa"><div class="sc-wa-bubble"><div class="sc-vc"><span class="sc-vc-av">'+ico('user',{size:18})+'</span><div class="sc-vc-i"><b>'+nm+'</b><span>'+nu+'</span></div></div><div class="sc-vc-acts">Conversar</div><span class="sc-wa-time">agora</span></div></div>';
+  }
   const cap=(kind==='image'||kind==='video')?(it.caption||''):'';
   const text=kind==='messages'?(it.text||''):cap;
   const label=kind==='messages'?'Texto (como chega no WhatsApp)':'Prévia do envio';
@@ -8481,6 +8494,10 @@ function scOpenModal(kind,id){
   let body=`<label class="sc-f-label">Nome</label><input id="sc-m-name" class="info-val" value="${scEscA(it?it.label:'')}" placeholder="${isMsg?'Nome curto (ex: Fechar pedido)':'Nome do item'}">`;
   if(isMsg){
     body+=`<label class="sc-f-label">Texto</label><textarea id="sc-m-text" class="info-val" rows="5" placeholder="Texto que vai ser enviado no WhatsApp" style="resize:vertical;line-height:1.45">${scEscT(it?it.text:'')}</textarea>`;
+  } else if(kind==='contato'){
+    body+=`<label class="sc-f-label">Nome que aparece no cartão</label><input id="sc-m-cname" class="info-val" value="${scEscA(it?(it.name||''):'')}" placeholder="Ex: GlicoVax - Entrega">
+      <label class="sc-f-label">Número (com DDD)</label><input id="sc-m-cnum" class="info-val" value="${scEscA(it?(it.number||''):'')}" placeholder="Ex: (15) 99198-0514">
+      <p class="sc-hint" style="margin-top:8px">O cliente recebe um cartão de contato e toca pra falar direto. A foto aparece sozinha do perfil do número.</p>`;
   } else {
     body+=`<label class="sc-f-label">Arquivo${it?' (opcional, pra trocar)':''}</label><label class="sc-drop" id="sc-drop"><input type="file" accept="${cfg.accept}" style="display:none" id="sc-m-file" onchange="scModalFilePicked(this)"><div id="sc-drop-txt">Clique aqui ou arraste o arquivo${it?' pra substituir':''}</div><div class="muted" style="font-size:11px">até 60MB</div></label>`;
     if(kind==='image'||kind==='video'){ body+=`<label class="sc-f-label">Legenda (opcional)</label><textarea id="sc-m-cap" class="info-val" rows="2" placeholder="Legenda que vai junto" style="resize:vertical">${scEscT(it?(it.caption||''):'')}</textarea>`; }
@@ -8615,6 +8632,16 @@ async function scModalSave(kind,id){
     if(id){ const f=scFindMsg(id); if(f){ f.item.label=name; f.item.text=text; f.item.grp=grp; } }
     else { const nid='m'+Date.now().toString(36); SC().messages.push({id:nid,label:name,text:text,grp:grp}); scSel.messages=nid; }
     scTouch(); scCloseModal(); scRenderCards('messages'); scRenderDetail('messages'); scRenderNav(); return;
+  }
+  // CONTATO: nao tem arquivo, so nome + numero (vira cartao de contato no WhatsApp).
+  if(kind==='contato'){
+    const cnome=(($('sc-m-cname')||{}).value||'').trim();
+    const cnum=(($('sc-m-cnum')||{}).value||'').trim();
+    if(!name){ scModalStatus('Dá um nome pra esse contato (é o que aparece na lista).'); return; }
+    if(!String(cnum).replace(/\D/g,'')){ scModalStatus('Preenche o número do contato.'); return; }
+    if(id){ const fm=scFindMedia(id); if(fm){ fm.item.label=name; fm.item.name=cnome||name; fm.item.number=cnum; fm.item.grp=grp; } }
+    else { const nid='c'+Date.now().toString(36); SC().media.push({id:nid,kind:'contato',label:name,name:cnome||name,number:cnum,grp:grp}); scSel.contato=nid; }
+    scTouch(); scCloseModal(); scRenderCards('contato'); scRenderDetail('contato'); scRenderNav(); return;
   }
   const cap=($('sc-m-cap')||{}).value||'';
   const save=$('sc-modal-save');
@@ -8752,7 +8779,7 @@ function scFunilStopReply(i,v){ if(SC().sequences[i]){ SC().sequences[i].stopOnR
 function scMoveFunilItem(i,j,d){ const s=SC().sequences[i]; if(s&&s.items&&scArrMove(s.items,j,d)){ scTouch(); scRenderFunis(); } }
 function scMoveFunil(i,d){ if(scArrMove(SC().sequences,i,d)){ scTouch(); scRenderFunis(); } }
 // ─── Seção: Mídia (audio/video/image/document, upload pro R2) ───
-function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':'volume'; }
+function scMediaIcon(kind){ return kind==='video'?'video':kind==='image'?'image':kind==='document'?'clipboard-list':kind==='contato'?'user':'volume'; }
 function scSecMedia(main,kind){ scRenderSectionMD(kind); }
 function scRenderMediaKind(kind){
   const box=$('sc-list'); if(!box) return;
@@ -8845,41 +8872,6 @@ function scAddTrigger(){ SC().triggers.push({id:'tg'+Date.now().toString(36),key
 function scDelTrigger(i){ SC().triggers.splice(i,1); scTouch(); scRenderTriggers(); scRenderNav(); }
 function scEditTrigger(i,f,v){ if(SC().triggers[i]){ SC().triggers[i][f]=v; scTouch(); } }
 
-// ─── Seção: Respostas automáticas (a API responde sozinha pelo número do vendedor) ───
-function scSecAutoReplies(main){
-  main.innerHTML=`<div class="sc-head"><div class="info-title">${ico('send',{size:15})} Respostas automáticas</div><button class="btn btn-gr btn-sm" onclick="scAddAutoReply()">+ Nova resposta</button></div>
-    <p class="sc-hint">Quando o VENDEDOR enviar uma mensagem com a palavra-gatilho (ex: "Pedido Concluído"), a API responde sozinha pro cliente, pelo número do próprio vendedor. Dá pra mandar um texto e um cartão de contato (ex: o rapaz da entrega). Não precisa do painel aberto.</p>
-    <div id="sc-list"></div>`;
-  scRenderAutoReplies();
-}
-function scRenderAutoReplies(){
-  const box=$('sc-list'); if(!box) return;
-  const ar=SC().autoreplies;
-  if(!ar.length){ box.innerHTML=scEmpty('Nenhuma resposta automática. Ex: gatilho "Pedido Concluído" → manda o contato do rapaz da entrega.'); return; }
-  box.innerHTML=ar.map((r,i)=>`
-    <div class="sc-arcard">
-      <div class="sc-arhead">
-        <label class="sc-switch" title="Ligar/desligar essa resposta"><input type="checkbox" ${r.on!==false?'checked':''} onchange="scEditAutoReply(${i},'on',this.checked)"><span class="sc-switch-sl"></span></label>
-        <input class="info-val sc-arname" value="${scEscA(r.label||'')}" placeholder="Nome (ex: Contato da entrega)" oninput="scEditAutoReply(${i},'label',this.value)">
-        <button class="btn btn-gh btn-xs sc-del" title="Excluir" onclick="scDelAutoReply(${i})">${ico('trash',{size:13})}</button>
-      </div>
-      <label class="sc-f-label">Quando o vendedor enviar (palavra-gatilho)</label>
-      <input class="info-val" value="${scEscA(r.trigger||'')}" placeholder="Ex: Pedido Concluído" oninput="scEditAutoReply(${i},'trigger',this.value)">
-      <label class="sc-f-label">Mensagem que a API envia pro cliente</label>
-      <textarea class="info-val" rows="3" placeholder="Ex: Agora clique abaixo pra falar com quem cuida da sua entrega:" style="resize:vertical;line-height:1.45" oninput="scEditAutoReply(${i},'text',this.value)">${scEscT(r.text||'')}</textarea>
-      <label class="sc-f-label">Esperar antes de enviar (segundos)</label>
-      <input class="info-val" type="number" min="0" max="90" style="width:120px" value="${r.delaySec==null?10:r.delaySec}" oninput="scEditAutoReply(${i},'delaySec',Math.max(0,Math.min(90,parseInt(this.value,10)||0)))">
-      <label class="sc-f-label">Cartão de contato (opcional)</label>
-      <div class="sc-arrow2">
-        <input class="info-val" value="${scEscA(r.contactName||'')}" placeholder="Nome do contato (ex: Entregas)" oninput="scEditAutoReply(${i},'contactName',this.value)">
-        <input class="info-val" value="${scEscA(r.contactNumber||'')}" placeholder="Número (ex: (15) 99198-0514)" oninput="scEditAutoReply(${i},'contactNumber',this.value)">
-      </div>
-      <p class="sc-hint" style="margin-top:6px">Deixe o contato vazio pra mandar só o texto. Com o número, vai um cartão de contato (a foto aparece sozinha do perfil do número).</p>
-    </div>`).join('');
-}
-function scAddAutoReply(){ SC().autoreplies.push({id:'ar'+Date.now().toString(36),on:true,label:'',trigger:'Pedido Concluído',text:'',delaySec:10,contactName:'',contactNumber:''}); scTouch(); scRenderAutoReplies(); scRenderNav(); }
-function scDelAutoReply(i){ if(!confirm('Excluir essa resposta automática?')) return; SC().autoreplies.splice(i,1); scTouch(); scRenderAutoReplies(); scRenderNav(); }
-function scEditAutoReply(i,f,v){ if(SC().autoreplies[i]){ SC().autoreplies[i][f]=v; scTouch(); } }
 
 /* ═══════════════════════════════════════════════════════
    PAGE — CONTINGÊNCIA (chips)
@@ -10732,11 +10724,17 @@ function _presselVendReserva(pid, at, v, roles){
   const _sellerOff=(v && v.ativo===false);
   const stateHint=_sellerOff
     ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal desligado · não recebe até religar o principal</span>`
+    : (on && _waConnLoaded && !bconn)
+    ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">ligado · entra na roleta assim que o Sale Chat abrir nesse número</span>`
     : on
     ? ''
     : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">fora da roleta · não recebe lead, só marca venda</span>`;
-  const _rDown=(on&&_waConnLoaded&&!bconn);   // reserva ligada mas caída → interruptor desliga sozinho e trava
-  const toggle=`<div class="ax-sw ${(on && (!_waConnLoaded||bconn))?'on':''}" title="${_rDown?'Número caiu — sai da roleta até reconectar (volta sozinho)':(on?(mode==='split'?'Na roleta: recebe JUNTO com o principal (complementar).':'Na roleta: recebe no overflow por cota. Desligue se for só pra marcar venda.'):'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.')}" ${_rDown?'style="opacity:.4;cursor:not-allowed"':`onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"`}></div>`;
+  // O interruptor mostra a SUA configuração, nunca o estado da conexão, e nunca trava.
+  // Antes ele se desenhava desligado (e bloqueava o clique) quando o WhatsApp estava parado,
+  // então parecia que a reserva estava desativada e não dava pra ligar pro dia seguinte.
+  // Mandar lead pra número caído continua impossível: quem barra isso é o servidor
+  // (_servConnOk), que solta o lead sozinho assim que o heartbeat volta.
+  const toggle=`<div class="ax-sw ${on?'on':''}" title="${on?(mode==='split'?'Na roleta: recebe JUNTO com o principal (complementar). Com o WhatsApp parado o servidor segura o lead e volta sozinho ao conectar.':'Na roleta: recebe no overflow por cota. Desligue se for só pra marcar venda.'):'Fora da roleta: não recebe lead nenhum, mas as vendas dela ainda contam.'}" onclick="event.stopPropagation();toggleReservaOn(${pid},'${at.id}')"></div>`;
   const swapBtn=`<button onclick="event.stopPropagation();swapPresselVend(${pid},'${at.id}')" title="Trocar principal e reserva de lugar (sem perder as conexões)" style="background:transparent;border:none;color:var(--t3);cursor:pointer;padding:0;display:inline-flex;align-items:center;line-height:0" onmouseover="this.style.color='var(--bl2)'" onmouseout="this.style.color='var(--t3)'"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>`;
   return `<div style="border-top:1px dashed var(--b1);background:var(--s1)">
     ${(on && mode!=='split')?`<div style="padding:9px 12px 3px">${capField}</div>`:''}
@@ -10790,7 +10788,7 @@ function renderPresselVendList(pid){
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
       </div>
-      <div class="ax-sw ${(onVis && (!_waConnLoaded||connected))?'on':''}" title="${(isOn&&_waConnLoaded&&!connected)?'Número caiu — saiu da roleta até reconectar (volta sozinho, sem perder a config)':(ok?(isOn?'Na roleta':'Fora'):'Sem número em uso — não entra na roleta')}" ${(ok && !(isOn&&_waConnLoaded&&!connected))?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
+      <div class="ax-sw ${(isOn&&ok)?'on':''}" title="${ok?(isOn?('Na roleta'+((_waConnLoaded&&!connected)?' · WhatsApp parado agora: o servidor segura o lead e volta sozinho quando conectar':'')):'Fora da roleta: não recebe lead'):'Sem número utilizável (banido/aquecimento) — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
     const reservaBlock=(ok && (onVis || (roles&&roles.reserva&&roles.reserva.chip)))?_presselVendReserva(pid, at, v, roles):'';
     return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
@@ -10812,10 +10810,10 @@ function _presselConnListHtml(bare){
   if(!insts.length) return bare?'<div class="muted" style="font-size:12px;padding:14px 4px">Nenhuma instância conectada ainda.</div>':'';
   const fmtN=n=>{ const d=String(n||'').replace(/\D/g,''); if(!d) return '—'; const x=d.replace(/^55/,''); return x.length>=10?`(${x.slice(0,2)}) ${x.slice(2,-4)}-${x.slice(-4)}`:d; };
   const esc=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-  const pri=st=>st==='open'?0:(st==='connecting'?1:2);   // no ar primeiro
+  const pri=st=>(st==='open'||st==='sc')?0:(st==='connecting'?1:2);   // no ar primeiro ('sc' = Sale Chat rodando)
   const rows=insts.slice().sort((a,b)=>pri(_waConnMap[a])-pri(_waConnMap[b])||a.localeCompare(b)).map(inst=>{
     const st=String(_waConnMap[inst]||'');
-    const on=st==='open', conn=st==='connecting';
+    const on=st==='open'||st==='sc', conn=st==='connecting';   // Sale Chat conta como no ar (senão o nº vivo aparecia "caiu")
     const cor=on?'var(--gr)':(conn?'var(--am)':'var(--rd)');
     const isAx=/^ax_/.test(inst);
     const at=String(inst).replace(/^ax_/,'').replace(/_b$/,'');
@@ -10823,12 +10821,12 @@ function _presselConnListHtml(bare){
     const papel=isAx?(/_b$/.test(inst)?' · reserva':' · principal'):'';
     return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11.5px;border-top:1px solid var(--b1)">
       <span style="width:7px;height:7px;border-radius:50%;background:${cor};flex-shrink:0"></span>
-      <span style="flex:1;min-width:0;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t?t.name:inst)}<span style="color:var(--t4)">${papel}</span></span>
+      <span style="flex:1;min-width:0;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t?t.name:(/^sc_/.test(inst)?'Número sem dono (cadastre na Contingência)':inst))}<span style="color:var(--t4)">${papel}</span></span>
       <span style="font-family:ui-monospace,monospace;color:var(--t3);white-space:nowrap">${fmtN(_waConnNum[inst])}</span>
       <span style="color:${cor};font-size:10px;font-weight:700;white-space:nowrap">${on?'conectado':(conn?'conectando':'caiu')}</span>
     </div>`;
   }).join('');
-  const nOn=insts.filter(i=>_waConnMap[i]==='open').length;
+  const nOn=insts.filter(i=>_waConnMap[i]==='open'||_waConnMap[i]==='sc').length;   // Sale Chat também é "no ar"
   if(bare){
     return `<div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:6px">
       <span style="font-size:11px;font-weight:700;color:var(--t3)">${nOn}/${insts.length} no ar</span>

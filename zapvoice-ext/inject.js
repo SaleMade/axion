@@ -264,7 +264,10 @@ async function buildLibrary(remote) {
   if (remoteMedia.length) { cleanCache(remoteMedia); prefetchMedia(remoteMedia); }
   if (remoteMedia.length) {
     for (const m of remoteMedia) {
-      if (!m || !m.key) continue;
+      if (!m) continue;
+      // Contato e so nome+numero (cartao de contato); nao tem arquivo pra baixar.
+      if (m.kind === 'contato') { media.push({ id: m.id, kind: 'contato', label: m.label || 'Contato', name: m.name || m.label || '', number: m.number || '', grp: m.grp || '' }); continue; }
+      if (!m.key) continue;
       const url = MEDIA_BASE + '/' + m.key;
       // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
       if (m.kind === 'video') {
@@ -540,6 +543,10 @@ async function run() {
             if (res.ack.length) {
               // remove SO o confirmado (nunca splice cego) e conta os enviados pro painel de teste
               await evaluate('(function(a){try{var s={};for(var i=0;i<a.length;i++)s[a[i]]=1;window.__zvOutbox=(window.__zvOutbox||[]).filter(function(e){return !s[e.msgId];});window.__zvSentCount=(window.__zvSentCount||0)+a.length;}catch(_){}})(' + JSON.stringify(res.ack) + ')');
+            }
+            // vendas confirmadas pelo servidor: marca por msgId pra o painel mostrar "VENDA CONFIRMADA"
+            if (Array.isArray(res.sales) && res.sales.length) {
+              await evaluate('(function(a){try{window.__zvSaleOk=window.__zvSaleOk||{};for(var i=0;i<a.length;i++){window.__zvSaleOk[a[i].msgId]=a[i].value;}}catch(_){}})(' + JSON.stringify(res.sales) + ')');
             }
             try { await evaluate('window.__zvIngestOk=true;'); } catch (_) {}
           } else { try { await evaluate('window.__zvIngestOk=false;'); } catch (_) {} }

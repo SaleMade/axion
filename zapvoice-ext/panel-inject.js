@@ -1,4 +1,4 @@
-// Sale Chat — painel injetado DENTRO do app (roda na pagina web.whatsapp.com).
+﻿// Sale Chat â€” painel injetado DENTRO do app (roda na pagina web.whatsapp.com).
 // O marcador de DADOS (linha do var DATA) e o de CSS sao trocados pelo inject.js.
 // Roda no mesmo contexto do WA-JS: chama window.WPP direto.
 (function () {
@@ -16,7 +16,7 @@
     if (window.__zvCapIv) { clearInterval(window.__zvCapIv); window.__zvCapIv = null; }
   } catch (_) {}
   window.__zvInstalled = true;
-  // ── Gancho de captura de chamada (WebRTC) ───────────────────────────────────────────────
+  // â”€â”€ Gancho de captura de chamada (WebRTC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // A ligacao do WhatsApp roda por WebRTC nesta pagina. Pra gravar as DUAS vozes, envolvemos o
   // RTCPeerConnection e guardamos as conexoes vivas em window.__zvPCs. Depois pegamos as faixas
   // de audio: os "senders" (SUA voz/microfone) e os "receivers" (a voz do LEAD). Roda cedo (o
@@ -48,9 +48,9 @@
   var DATA = "__LIBRARY__";
   var CSS = "__CSS__";
   var simulate = true, els = {}, itemById = {};
-  // ─── FILA de envios (a "pilha") ────────────────────────────────────────────────────────
+  // â”€â”€â”€ FILA de envios (a "pilha") â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // UM envio por vez, na ordem em que foi clicado. O funil/item da vez termina INTEIRO antes do
-  // proximo comecar — nunca dois leads recebendo ao mesmo tempo. Isso vale pra item, funil E
+  // proximo comecar â€” nunca dois leads recebendo ao mesmo tempo. Isso vale pra item, funil E
   // agendamento (todos entram na MESMA fila). O banner mostra o que esta indo agora e quem
   // esta esperando a vez, com a posicao.
   var jobs = [];              // jobs[0] = o da vez; o resto aguarda
@@ -64,7 +64,7 @@
   function jobAdd(job) { jobs.push(job); renderSending(); pumpJobs(); return job; }
   function jobDrop(job) {
     // IDEMPOTENTE de proposito: um fin() atrasado (promise orfa que voltou depois) NAO pode
-    // liberar a fila duas vezes — isso subiria DOIS jobs em paralelo (dois leads ao mesmo tempo).
+    // liberar a fila duas vezes â€” isso subiria DOIS jobs em paralelo (dois leads ao mesmo tempo).
     if (job.__dropped) return;
     job.__dropped = true;
     if (job.wdT) { clearTimeout(job.wdT); job.wdT = null; }
@@ -141,11 +141,11 @@
   }
   // O motor (WA-JS) esta VIVO? Nao basta window.WPP existir: o bundle define self.WPP no
   // fim mesmo se TODOS os module finders quebrarem contra um build novo do WhatsApp (foi o
-  // que aconteceu no WhatsApp Beta). O sinal honesto e o ChatStore ter resolvido — sem ele
+  // que aconteceu no WhatsApp Beta). O sinal honesto e o ChatStore ter resolvido â€” sem ele
   // nem getActiveChat nem sendTextMessage (que resolve o chat pelo ChatStore) funcionam.
   var ZV_ENGINE_ERR = 'O motor do WhatsApp nao carregou nesta versao do app. Feche o WhatsApp e abra de novo pelo start; se continuar, use o WhatsApp normal.';
   // MINIMO pra enviar: o WPP resolve o chat a partir do jid string, entao basta o sendTextMessage
-  // existir. NAO exigimos o ChatStore aqui de proposito — senao a gente barraria um envio que
+  // existir. NAO exigimos o ChatStore aqui de proposito â€” senao a gente barraria um envio que
   // funcionaria (o jid vem do fallback por DOM).
   function wppCanSend() {
     try { var W = window.WPP; return !!(W && W.chat && typeof W.chat.sendTextMessage === 'function'); } catch (_) { return false; }
@@ -187,7 +187,7 @@
       if (wppAlive()) { window.__zvWppFail = false; return cb(); }
       if (tries > 60) {   // 30s: sobe o painel mesmo assim, porem MARCADO como degradado
         window.__zvWppFail = true;
-        console.warn('[Sale Chat] O motor do WhatsApp (WA-JS) nao carregou nesta versao do app. Painel em modo degradado — rode __zvDiag().');
+        console.warn('[Sale Chat] O motor do WhatsApp (WA-JS) nao carregou nesta versao do app. Painel em modo degradado â€” rode __zvDiag().');
         cb(); watchLate(); return;
       }
       setTimeout(loop, 500);
@@ -222,7 +222,7 @@
     }
     return null;
   }
-  // ── Fallback por DOM: a UNICA fonte de verdade independente dos internals ──
+  // â”€â”€ Fallback por DOM: a UNICA fonte de verdade independente dos internals â”€â”€
   // Atencao: WPP.chat.getActiveChat() e literalmente ChatStore.findFirst(c => c.active), que e
   // o mesmo que _activeFromStore() faz na mao. Ou seja, os caminhos acima sao UM SO: se o build
   // do WhatsApp parar de marcar .active (ou o motor morrer), todos caem juntos. O DOM nao.
@@ -291,20 +291,20 @@
   function _domTitle(root) {
     try { var t = (root || document).querySelector('header span[title]'); return t ? (t.getAttribute('title') || t.textContent || '') : ''; } catch (_) { return ''; }
   }
-  // ── Resgate do ChatStore ────────────────────────────────────────────────────────────────
+  // â”€â”€ Resgate do ChatStore â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // No build do atendente o WA-JS NAO encontrou o modulo ChatStore: WPP.whatsapp.ChatStore fica
   // undefined e o envio estoura com "Cannot read properties of undefined (reading 'get')" (o
-  // sendTextMessage resolve o chat pelo ChatStore). Mas o ChatStore EXISTE na pagina — quem nao
+  // sendTextMessage resolve o chat pelo ChatStore). Mas o ChatStore EXISTE na pagina â€” quem nao
   // achou foi o WA-JS. Todo model do WhatsApp guarda a colecao dele em .collection, entao a gente
   // pega o chat REAL pelo React e recupera o store por ali, devolvendo pro motor.
   // De onde ancorar a busca no React (a conversa aberta).
   function _fiberAnchor() { return _mainEl() || document.querySelector('[data-id]') || null; }
-  // O model REAL do chat (nao o sintetico do DOM) — e dele que sai a .collection.
+  // O model REAL do chat (nao o sintetico do DOM) â€” e dele que sai a .collection.
   function _realChatModel() {
     try { var a = _fiberAnchor(); if (!a) return null; var c = _activeFromFiber(a); return (c && !c.__fromDom) ? c : null; } catch (_) { return null; }
   }
   function _storeOk(s) { try { return !!(s && (typeof s.get === 'function' || typeof s.find === 'function')); } catch (_) { return false; } }
-  // Peças que o envio encosta (tirado do proprio bundle). O finder do WA-JS procura cada uma por
+  // PeÃ§as que o envio encosta (tirado do proprio bundle). O finder do WA-JS procura cada uma por
   // NOME (ex: ChatStore = modulo que exporta "ChatCollection"); se o build novo renomeou, vira
   // undefined. Listar as que faltam diz de uma vez o tamanho do estrago.
   var ZV_KEYS = ['ChatStore', 'MsgStore', 'ContactStore', 'GroupMetadataStore', 'WidFactory', 'MsgKey', 'UserPrefs', 'Cmd', 'Conn'];
@@ -403,11 +403,11 @@
   // Alvo de cada video pendente: rid -> chatId. Fica no WINDOW, nao no escopo do painel: o painel
   // se AUTO-ATUALIZA e e reinjetado do zero. Se o alvo morasse aqui dentro, uma atualizacao no
   // meio do download do video (que demora, vem da nuvem) apagaria o alvo e o envio abortaria com
-  // "alvo expirado" — foi o que aconteceu no funil de video. No window, ele sobrevive.
+  // "alvo expirado" â€” foi o que aconteceu no funil de video. No window, ele sobrevive.
   var videoTargets = window.__zvTargets || (window.__zvTargets = {});
   // Videos CANCELADOS (o atendente pausou / o funil parou). Precisa ser explicito: o injetor
   // devolve o chatId do pedido junto com o video, entao apagar o alvo nao basta pra impedir o
-  // envio — sem esta marca, um video pausado seria entregue assim mesmo.
+  // envio â€” sem esta marca, um video pausado seria entregue assim mesmo.
   var videoCanc = window.__zvCanc || (window.__zvCanc = {});
   function videoCancel(rid) { try { videoCanc[rid] = 1; delete videoTargets[rid]; } catch (_) {} }
   // Fila de videos: window.__zvReq e um slot UNICO (o injetor le um por vez). Se dois videos
@@ -436,7 +436,7 @@
     return { name: ct.name || ct.pushname || ct.formattedName || c.formattedTitle || (c.id && c.id.user) || '', number: (c.id && c.id.user) || '', isGroup: !!c.isGroup };
   }
   // Diagnostico: se o painel disser "abra a conversa" mesmo com a conversa aberta, o
-  // atendente abre o console (F12) e digita __zvDiag() — manda o resultado pro suporte.
+  // atendente abre o console (F12) e digita __zvDiag() â€” manda o resultado pro suporte.
   window.__zvDiag = function () {
     var d = { motorVivo: false, wppExiste: false, wppReady: false, loader: null, getActiveChat: null, storeCount: 0, jidPeloDom: null, activeAchou: false, waVersion: null };
     try { d.motorVivo = wppAlive(); } catch (_) {}
@@ -496,7 +496,7 @@
       }
     } catch (_) {}
   }
-  // ─── Sale Chat Engine: CAPTURA (Fase 1) ────────────────────────────────────
+  // â”€â”€â”€ Sale Chat Engine: CAPTURA (Fase 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Captura toda mensagem do chat.new_message e enfileira em window.__zvOutbox.
   // O injetor (Node, sem CSP) drena e manda pro worker. Aqui NAO fazemos rede
   // (a CSP do WhatsApp bloqueia). A fila sobrevive a reinjecao do painel.
@@ -507,6 +507,18 @@
   function _scSelfNumber() {
     try {
       var now = Date.now();
+      // WhatsApp DESLOGADO (banido, sessÃ£o derrubada, tela de QR) = nÃ£o somos mais um nÃºmero vivo.
+      // Sem isso o nÃºmero banido continuava mandando sinal de presenÃ§a pra sempre; como nÃºmero
+      // banido nÃ£o recebe mensagem, o contador do dia dele ficava zerado e a roleta passava a
+      // preferir JUSTAMENTE ele, mandando quase toda a verba pra um nÃºmero morto.
+      // Fail-open de propÃ³sito: se nÃ£o der pra saber (auth null), mantÃ©m o comportamento antigo.
+      var auth = null;
+      try {
+        var Wc = window.WPP;
+        if (Wc && Wc.conn && Wc.conn.isAuthenticated) auth = !!Wc.conn.isAuthenticated();
+        else if (Wc && typeof Wc.isReady !== 'undefined') auth = !!Wc.isReady;
+      } catch (_) { auth = null; }
+      if (auth === false) { _scSelfNum = ''; _scSelfT = 0; return ''; }
       if (_scSelfNum && (now - _scSelfT) < 60000) return _scSelfNum;   // cacheia 60s (vendedor pode trocar de chip)
       var W = window.WPP, d = '';
       try { if (W && W.conn && W.conn.getMyUserId) d = _scDigits(_scSer(W.conn.getMyUserId())); } catch (_) {}
@@ -595,6 +607,13 @@
         ts: ts,
         fromRaw: fromS, toRaw: toS
       };
+      // VENDA: "Pedido ConcluÃ­do" enviado pelo vendedor. Marca aqui pra a aba Captura destacar
+      // (e o servidor confirma depois, devolvendo o msgId em res.sales -> window.__zvSaleOk).
+      if (fromMe && /pedido\s*conclu/i.test(ev.body)) {
+        ev.sale = 1;
+        var _vm = ev.body.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
+        ev.saleVal = _vm ? Number(_vm[1].replace(/\./g, '').replace(',', '.')) : 0;
+      }
       window.__zvOutbox.push(ev);   // fila de envio (o injetor drena)
       window.__zvCaptured = window.__zvCaptured || [];
       window.__zvCaptured.push(ev);   // historico de exibicao (NAO drena, pra a aba mostrar mesmo depois de enviado)
@@ -613,7 +632,7 @@
       var mFromS = (msg.from && (msg.from._serialized || (msg.from.toString && msg.from.toString()))) || '';
       var any = false;
       // So para o funil do lead que REALMENTE respondeu (match exato). Sem remetente
-      // identificavel, nao para nada — pra um evento ambiguo nao derrubar funis de outros leads.
+      // identificavel, nao para nada â€” pra um evento ambiguo nao derrubar funis de outros leads.
       jobs.slice().forEach(function (j) {
         if (!j.stopOnReply || j.stop || !mFromS || mFromS !== j.chatId) return;
         // Ja esta indo: pede pra parar. Ainda na fila: tira fora na hora (nem chega a comecar).
@@ -643,7 +662,7 @@
     }
   }
 
-  // ─── Agendamento (client-side, guardado no localStorage do WhatsApp Web) ───
+  // â”€â”€â”€ Agendamento (client-side, guardado no localStorage do WhatsApp Web) â”€â”€â”€
   function schedGet() { try { return JSON.parse(localStorage.getItem('zv_sched') || '[]'); } catch (_) { return []; } }
   function schedSet(a) { try { localStorage.setItem('zv_sched', JSON.stringify(a)); } catch (_) {} }
   function allItemsList() { return (DATA.messages || []).concat(DATA.funnel || [], DATA.social || [], DATA.media || []); }
@@ -678,7 +697,7 @@
     if (!due.length) return;
     schedSet(a.filter(function (s) { return s.at > now; }));
     // Agendado tambem ENTRA NA FILA (antes disparava direto e podia mandar pra outro lead no
-    // meio de um funil — dois leads recebendo ao mesmo tempo).
+    // meio de um funil â€” dois leads recebendo ao mesmo tempo).
     due.forEach(function (s) {
       var it = itemById[s.itemId]; if (!it || !s.chatId) return;
       jobAdd({
@@ -686,7 +705,7 @@
         name: 'Agendado: ' + (it.label || ''), sub: '', stop: false, started: false,
         budgetMs: it.kind === 'video' ? 480000 : 300000,
         run: function (j) {
-          j.sub = 'Enviando…'; renderSending();
+          j.sub = 'Enviandoâ€¦'; renderSending();
           return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
             status(r.ok ? ('Agendado enviado -> ' + (j.chatName || '')) : ('Falha no agendado -> ' + (j.chatName || '') + ': ' + (r.err || '')), r.ok ? 'ok' : 'err');
           });
@@ -698,7 +717,7 @@
 
   function showSuggestion(item, kw) {
     var s = document.getElementById('zv-suggest'); if (!s) return;
-    s.innerHTML = '<div class="zv-sg-txt">Cliente falou "<b>' + esc(kw) + '</b>" — sugestao:</div>' +
+    s.innerHTML = '<div class="zv-sg-txt">Cliente falou "<b>' + esc(kw) + '</b>" â€” sugestao:</div>' +
       '<div class="zv-sg-row"><button class="zv-sg-send"><span class="zv-play">' + SVG.play + '</span><span>' + esc(item.label) + '</span></button><span class="zv-sg-x" title="Fechar">&times;</span></div>';
     s.style.display = 'block';
     s.querySelector('.zv-sg-send').onclick = function () { s.style.display = 'none'; send(item); };
@@ -733,6 +752,7 @@
     rec:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>',
     stopsq:'<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
     dl:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    person:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     trash: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
   };
   function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (_) { return d; } }
@@ -741,7 +761,7 @@
   var FAVS = lsGet('zv_favs', {});
   var DARK = true; try { var _d = localStorage.getItem('zv_dark'); if (_d !== null) DARK = _d === '1'; } catch (_) {}
   var FILTER = '';
-  var SC_VERSION = '1.1.0';   // versao do Sale Chat (mostrada na aba Ajuda)
+  var SC_VERSION = '1.3.0';   // versao do Sale Chat (mostrada na aba Ajuda)
   var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
   var TYPEFILTER = 'all';
   var FAVONLY = false;
@@ -760,14 +780,16 @@
     { key: 'audio', label: 'Audios', icon: 'mic', color: '#13c273' },
     { key: 'video', label: 'Videos', icon: 'video', color: '#8e17f0' },
     { key: 'image', label: 'Imagens', icon: 'image', color: '#00bcf2' },
-    { key: 'document', label: 'Documentos', icon: 'doc', color: '#f0810f' }
+    { key: 'document', label: 'Documentos', icon: 'doc', color: '#f0810f' },
+    { key: 'contato', label: 'Contatos', icon: 'person', color: '#e0405a' }
   ];
   var ZKIND = {
     text:     { c: '#2563eb', ic: SVG.msg },
     audio:    { c: '#13c273', ic: SVG.mic },
     video:    { c: '#8e17f0', ic: SVG.video },
     image:    { c: '#00bcf2', ic: SVG.image },
-    document: { c: '#f0810f', ic: SVG.doc }
+    document: { c: '#f0810f', ic: SVG.doc },
+    contato:  { c: '#e0405a', ic: SVG.person }
   };
   function itemRow(it) {
     var k = ZKIND[it.kind] || ZKIND.text;
@@ -795,8 +817,8 @@
       return head + groups[g].map(itemRow).join('');
     }).join('');
   }
-  // Prévia expansível: mostra o conteúdo antes de disparar. Imagem/audio/doc vêm
-  // embutidos (dataUri). Vídeo é pesado: o injetor busca sob demanda (__zvPrevReq).
+  // PrÃ©via expansÃ­vel: mostra o conteÃºdo antes de disparar. Imagem/audio/doc vÃªm
+  // embutidos (dataUri). VÃ­deo Ã© pesado: o injetor busca sob demanda (__zvPrevReq).
   function togglePreview(id, wrap, exp) {
     var prev = wrap.querySelector('.zv-prev'); if (!prev) return;
     if (prev.style.display !== 'none') { prev.style.display = 'none'; prev.innerHTML = ''; if (exp) exp.classList.remove('open'); return; }
@@ -829,7 +851,7 @@
     prev.innerHTML = '<div class="zv-prev-note">Sem previa.</div>';
   }
   function mediaByKind(kind) { return (DATA.media || []).filter(function (m) { return m.kind === kind; }); }
-  // Seção recolhível com título, contador e chevron. inner = HTML da lista (itens ou funis).
+  // SeÃ§Ã£o recolhÃ­vel com tÃ­tulo, contador e chevron. inner = HTML da lista (itens ou funis).
   function section(key, title, ic, color, count, inner) {
     if (!count) return '';
     var col = !!COLLAPSED[key];
@@ -886,7 +908,7 @@
     var tb = document.getElementById('zv-theme'); if (tb) tb.innerHTML = DARK ? SVG.sun : SVG.moon;
   }
 
-  // Barra vertical de abas (à direita), estilo ZapVoice: Itens, Funis, Agenda, Ajustes, Ajuda.
+  // Barra vertical de abas (Ã  direita), estilo ZapVoice: Itens, Funis, Agenda, Ajustes, Ajuda.
   function renderRail() {
     var rail = document.getElementById('zv-rail'); if (!rail) return;
     rail.innerHTML = TABS.map(function (t) {
@@ -918,7 +940,7 @@
     return renderItensTab(c);
   }
 
-  // ── Aba ITENS: busca + "apenas favoritos" + filtro por tipo + esconder tudo + seções ──
+  // â”€â”€ Aba ITENS: busca + "apenas favoritos" + filtro por tipo + esconder tudo + seÃ§Ãµes â”€â”€
   function renderItensTab(c) {
     var typeChips = TYPES.map(function (t) {
       return '<button class="zv-type' + (TYPEFILTER === t.key ? ' on' : '') + '" data-type="' + t.key + '" title="' + t.label + '" style="--tc:' + t.color + '"><span style="color:' + t.color + '">' + SVG[t.icon] + '</span></button>';
@@ -943,7 +965,7 @@
     renderSections();
   }
 
-  // (Re)desenha só a área de seções da aba Itens, respeitando tipo e "apenas favoritos".
+  // (Re)desenha sÃ³ a Ã¡rea de seÃ§Ãµes da aba Itens, respeitando tipo e "apenas favoritos".
   function renderSections() {
     var host = document.getElementById('zv-sections'); if (!host) return;
     function flt(list) { return FAVONLY ? list.filter(function (it) { return FAVS[it.id]; }) : list; }
@@ -1002,7 +1024,7 @@
     });
   }
 
-  // ── Aba FUNIS ── (toque no funil = previa; botao roxo = disparar)
+  // â”€â”€ Aba FUNIS â”€â”€ (toque no funil = previa; botao roxo = disparar)
   function renderFunisTab(c) {
     var seqList = DATA.sequences || [];
     // Um funil (o indice ORIGINAL vai no data-fexp/data-si: disparar tem que acertar o funil certo
@@ -1059,16 +1081,16 @@
     var secs = Math.round(total / 1000);
     var totalTxt = secs >= 60 ? (Math.floor(secs / 60) + 'min ' + (secs % 60) + 's') : (secs + 's');
     var stopTxt = seq.stopOnReply ? 'Para se o lead responder no meio.' : 'Continua mesmo se o lead responder.';
-    return '<div class="zv-fp">' + rows + '<div class="zv-fp-foot">~' + totalTxt + ' no total · ' + stopTxt + '</div></div>';
+    return '<div class="zv-fp">' + rows + '<div class="zv-fp-foot">~' + totalTxt + ' no total Â· ' + stopTxt + '</div></div>';
   }
 
-  // ── Aba AGENDA ──
+  // â”€â”€ Aba AGENDA â”€â”€
   function renderAgendaTab(c) {
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#00bcf2">' + SVG.calendar + '</span>Agenda</div><p class="zv-tabhint">Programa um item pra sair depois de X minutos no chat aberto.</p></div><div class="zv-cbody"><div id="zv-sched"></div></div>';
     schedRender();
   }
 
-  // ── Aba AJUSTES ──
+  // â”€â”€ Aba AJUSTES â”€â”€
   function renderAjustesTab(c) {
     c.innerHTML = '<div class="zv-ctop"><div class="zv-tabhdr"><span class="zv-hi" style="color:#54656f">' + SVG.sliders + '</span>Ajustes</div></div>' +
       '<div class="zv-cbody"><div class="zv-set">' +
@@ -1083,7 +1105,7 @@
     var t2 = c.querySelector('#zv-theme2'); if (t2) t2.onclick = function () { setDark(!DARK); t2.textContent = DARK ? 'Escuro' : 'Claro'; };
   }
 
-  // ── Aba AJUDA ──
+  // â”€â”€ Aba AJUDA â”€â”€
   function renderAjudaTab(c) {
     var h = {}; try { h = _capHealth(); } catch (_) {}
     var probBox = (h && h.ok === false) ? ('<div style="padding:12px 14px;border-radius:10px;background:#e0405a1e;border:1px solid #e0405a66;margin-bottom:12px"><b style="color:#e0405a;font-size:13px">Problema agora: ' + _capEsc(h.problem || '') + '</b>' + (h.sol ? '<div style="font-size:12px;color:#d1d7db;margin-top:5px">Como resolver: ' + _capEsc(h.sol) + '</div>' : '') + '</div>') : '';
@@ -1104,7 +1126,7 @@
       '</div></div>';
   }
 
-  // ── Aba CAPTURA: mostra ao vivo os leads que o painel esta capturando ──
+  // â”€â”€ Aba CAPTURA: mostra ao vivo os leads que o painel esta capturando â”€â”€
   function _capEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (ch) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]; }); }
   function _capTime(ts) {
     try { if (!ts) return ''; var d = new Date(ts < 1e12 ? ts * 1000 : ts); var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); } catch (_) { return ''; }
@@ -1144,6 +1166,27 @@
     var box = []; try { box = (window.__zvCaptured || []).slice(); } catch (_) {}   // historico (nao a fila que drena)
     if (!box.length) { host.innerHTML = '<div style="padding:18px 8px;text-align:center;color:#8696a0;font-size:12px">Nada capturado ainda. Mande ou receba uma mensagem.</div>'; return; }
     host.innerHTML = box.slice(-40).reverse().map(function (e) {
+      // VENDA em destaque (Pedido ConcluÃ­do). Verde + "CONFIRMADA" quando o servidor devolveu o ok.
+      if (e.sale) {
+        var confirmed = false;
+        try { confirmed = !!(window.__zvSaleOk && Object.prototype.hasOwnProperty.call(window.__zvSaleOk, e.msgId)); } catch (_) {}
+        var sv = (typeof e.saleVal === 'number' && e.saleVal > 0) ? e.saleVal
+                 : (confirmed && Number(window.__zvSaleOk[e.msgId]) > 0 ? Number(window.__zvSaleOk[e.msgId]) : 0);
+        var valTxt = sv > 0 ? ('R$ ' + sv.toFixed(2).replace('.', ',')) : '';
+        // Conversa em @lid sem telefone resolvido o servidor NAO registra (e nao tem retry).
+        // Antes ficava eternamente no amarelo "VENDA / enviando...", e o vendedor achava que
+        // tinha entrado. Agora fala a verdade e manda lancar na mao.
+        var falhou = !confirmed && !!e.lid;
+        var lbl = confirmed ? 'VENDA CONFIRMADA' : (falhou ? 'VENDA NAO REGISTRADA' : 'VENDA');
+        var scol = confirmed ? '#13c273' : (falhou ? '#e0405a' : '#e0a516');
+        return '<div style="display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid rgba(134,150,160,.15);border-left:3px solid ' + scol + ';background:rgba(19,194,115,.07)">' +
+          '<span style="font-size:10px;font-weight:800;color:' + scol + ';min-width:70px;letter-spacing:.2px">' + lbl + '</span>' +
+          '<span style="font-size:12px;font-weight:700;flex:none">' + _capEsc(e.phone || '?') + '</span>' +
+          '<span style="flex:1;min-width:0;font-size:12px;font-weight:700;color:#13c273">' + valTxt + '</span>' +
+          '<span style="font-size:9.5px;color:' + (falhou ? '#e0405a' : '#8696a0') + ';flex:none">' + (confirmed ? 'no servidor' : (falhou ? 'lance na mao' : 'enviando...')) + '</span>' +
+          '<span style="font-size:10px;color:#8696a0;flex:none">' + _capTime(e.ts) + '</span>' +
+        '</div>';
+      }
       var env = !!e.fromMe, col = env ? '#13c273' : '#2563eb', tag = env ? 'enviado' : 'recebido';
       return '<div style="display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid rgba(134,150,160,.15)">' +
         '<span style="font-size:10px;font-weight:700;color:' + col + ';min-width:56px">' + tag + '</span>' +
@@ -1172,7 +1215,7 @@
     }, 1500);
   }
 
-  // ══════════════ GRAVACAO DE CHAMADA ══════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â• GRAVACAO DE CHAMADA â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // Pega as faixas de audio das chamadas WebRTC vivas: receivers = voz do LEAD, senders = SUA voz.
   function callParts() {
     var remote = [], local = [], seen = [], alive = [];
@@ -1223,7 +1266,7 @@
       rec.capStreams = [];
       var diag = { pc: 0, cap: 0, recv: 0, src: 0, mic: 0 };
       try { diag.pc = (window.__zvPCs || []).length; } catch (_) {}
-      // ── VOZ DO LEAD ── tentativas em ordem de confiabilidade ──
+      // â”€â”€ VOZ DO LEAD â”€â”€ tentativas em ordem de confiabilidade â”€â”€
       // 1) captureStream() dos <audio>/<video> tocando: pega a SAIDA decodificada do elemento (o
       //    som do lead que voce ouve), sem o bug de faixa remota muda no WebAudio.
       try {
@@ -1236,13 +1279,13 @@
           if (cs && cs.getAudioTracks) { rec.capStreams.push(cs); cs.getAudioTracks().forEach(function (t) { if (t && t.readyState === 'live' && !has(t)) { mix.push({ track: t, remote: true }); diag.cap++; } }); }
         }
       } catch (_) {}
-      // 2) fallback: faixas dos receivers (voz do lead) COM bombeamento — so se o captureStream falhou
+      // 2) fallback: faixas dos receivers (voz do lead) COM bombeamento â€” so se o captureStream falhou
       var parts = callParts();
       diag.recv = parts.remote.length;
       if (!diag.cap) parts.remote.forEach(function (t) { if (!has(t)) mix.push({ track: t, remote: true, pump: true }); });
-      // 3) fallback: faixas de srcObject dos elementos COM bombeamento — ultimo recurso
+      // 3) fallback: faixas de srcObject dos elementos COM bombeamento â€” ultimo recurso
       if (!diag.cap && !parts.remote.length) mediaElAudioTracks().forEach(function (t) { if (!has(t)) { mix.push({ track: t, remote: true, pump: true }); diag.src++; } });
-      // ── SUA VOZ ── sempre pelo microfone (garantido; roda junto com o WhatsApp)
+      // â”€â”€ SUA VOZ â”€â”€ sempre pelo microfone (garantido; roda junto com o WhatsApp)
       try {
         var mic = await navigator.mediaDevices.getUserMedia({ audio: true }); rec.micStream = mic;
         mic.getAudioTracks().forEach(function (t) { if (!has(t)) { mix.push({ track: t, remote: false }); diag.mic = 1; } });
@@ -1281,7 +1324,7 @@
       var blob = new Blob(rec.chunks.slice(), { type: rec.mime });
       if (blob.size > 0) {
         var at = Date.now();
-        var defDesc = 'Gravacao da chamada · ' + recFmtWhen(at);   // descricao automatica (editavel)
+        var defDesc = 'Gravacao da chamada Â· ' + recFmtWhen(at);   // descricao automatica (editavel)
         var meta = { id: 'rec' + at.toString(36) + Math.random().toString(36).slice(2, 5), chatId: rec.chatId || '', chatName: rec.chatName || '', at: at, durMs: dur, desc: defDesc, mime: rec.mime, micOnly: !!rec.micOnly, remote: !!rec.hadRemote, diag: rec.diag || '', size: blob.size };
         recPut(meta, blob).then(function () { if (TAB === 'gravar') renderContent(); }, function () { recToast('Nao consegui salvar a gravacao (armazenamento cheio?).'); });
       }
@@ -1320,7 +1363,7 @@
   }
   function recRenderLive() { if (TAB !== 'gravar') return; var t = document.getElementById('zv-rec-timer'); if (t && rec.on) t.textContent = recFmtDur(Date.now() - rec.startAt); }
 
-  // ── Armazenamento local (IndexedDB): metadados numa store, o audio em outra (lista leve) ──
+  // â”€â”€ Armazenamento local (IndexedDB): metadados numa store, o audio em outra (lista leve) â”€â”€
   var REC_DB = 'zvRecDB';
   function recDB() {
     return new Promise(function (res, rej) {
@@ -1404,7 +1447,7 @@
     if (rec.on) {
       card = '<div class="zv-rec-card zv-rec-live">' +
         '<div class="zv-rec-dotlive"></div>' +
-        '<div class="zv-rec-livetxt"><b id="zv-rec-timer">' + recFmtDur(Date.now() - rec.startAt) + '</b><span>Gravando' + (rec.chatName ? (' · ' + esc(rec.chatName)) : '') + (rec.micOnly ? ' · so seu microfone' : '') + '</span></div>' +
+        '<div class="zv-rec-livetxt"><b id="zv-rec-timer">' + recFmtDur(Date.now() - rec.startAt) + '</b><span>Gravando' + (rec.chatName ? (' Â· ' + esc(rec.chatName)) : '') + (rec.micOnly ? ' Â· so seu microfone' : '') + '</span></div>' +
         '<button class="zv-rec-btn zv-rec-stop" id="zv-rec-toggle">' + SVG.stopsq + ' Parar</button>' +
         '</div>';
     } else {
@@ -1422,7 +1465,7 @@
     var box = document.getElementById('zv-rec-list'); if (!box) return;
     if (!list.length) { box.innerHTML = '<div class="zv-tabhint" style="padding:8px 2px">Nenhuma gravacao ainda.</div>'; return; }
     box.innerHTML = list.map(function (r) {
-      var meta = recFmtWhen(r.at) + ' · ' + recFmtDur(r.durMs || 0) + (r.micOnly ? ' · so microfone' : (r.remote === false ? ' · sem voz do lead' : ''));
+      var meta = recFmtWhen(r.at) + ' Â· ' + recFmtDur(r.durMs || 0) + (r.micOnly ? ' Â· so microfone' : (r.remote === false ? ' Â· sem voz do lead' : ''));
       return '<div class="zv-rec-row" data-id="' + esc(r.id) + '">' +
         '<div class="zv-rec-main">' +
           '<div class="zv-rec-rtop"><b>' + esc(r.chatName || '(sem lead)') + '</b><span class="zv-rec-meta">' + esc(meta) + '</span></div>' +
@@ -1501,13 +1544,13 @@
     el.innerHTML = jobs.map(function (j, idx) {
       var waiting = !j.started;
       var stopping = j.started && j.stop;
-      var sub = stopping ? 'Parando…'
-              : waiting ? ('Na fila · ' + idx + (idx === 1 ? ' na frente' : ' na frente'))
+      var sub = stopping ? 'Parandoâ€¦'
+              : waiting ? ('Na fila Â· ' + idx + (idx === 1 ? ' na frente' : ' na frente'))
               : (j.sub || '');
       var cls = 'zv-snd-row' + (stopping ? ' zv-snd-stopping' : '') + (waiting ? ' zv-snd-wait' : '');
-      // Mesmo "Parando…" mantem botao: se o envio empacar, o atendente forca a saida e a fila anda.
+      // Mesmo "Parandoâ€¦" mantem botao: se o envio empacar, o atendente forca a saida e a fila anda.
       var btn = stopping
-        ? '<button class="zv-snd-stop" data-job="' + j.id + '" data-force="1">' + SVG.pause + ' Forçar saída</button>'
+        ? '<button class="zv-snd-stop" data-job="' + j.id + '" data-force="1">' + SVG.pause + ' ForÃ§ar saÃ­da</button>'
         : '<button class="zv-snd-stop" data-job="' + j.id + '">' + SVG.pause + (waiting ? ' Tirar da fila' : ' Pausar') + '</button>';
       return '<div class="' + cls + '">' +
         '<span class="zv-snd-spin"></span>' +
@@ -1546,6 +1589,13 @@
         videoTargets[rid] = chatId;
         videoQueue.push({ rid: rid, resolve: resolve, stopFn: opts.stopFn, req: { id: rid, file: item.file, url: item.mediaUrl, caption: item.caption || '', chatId: chatId } });
         pumpVideoQueue();
+        return;
+      }
+      if (item.kind === 'contato') {
+        var cdig = String(item.number || '').replace(/D/g, '');
+        if (!cdig) { resolve({ ok: false, err: 'contato sem numero' }); return; }
+        var cwid = (cdig.length <= 11 ? ('55' + cdig) : cdig) + '@c.us';
+        withTimeout(window.WPP.chat.sendVCardContactMessage(chatId, { id: cwid, name: item.name || item.label || 'Contato' }), 60000, 'contato').then(resolve);
         return;
       }
       if (item.kind === 'image') {
@@ -1593,7 +1643,7 @@
     var chatId = chatIdOf(c);
     if (!chatId) { status('Abra a conversa de um lead [' + engineDiag() + ']', 'err'); return; }
     for (var k = 0; k < jobs.length; k++) { if (jobs[k].chatId === chatId && jobs[k].itemId === item.id) { status('Esse item ja esta na fila pra esse lead', 'err'); return; } }
-    var kindLbl = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
+    var kindLbl = { text: 'Mensagem', audio: 'Ãudio', video: 'VÃ­deo', image: 'Imagem', document: 'Documento' }[item.kind] || 'Item';
     var who = chatName(c);
     jobAdd({
       id: jobId(), kind: 'item', itemId: item.id, chatId: chatId, chatName: who,
@@ -1602,7 +1652,7 @@
       run: function (j) {
         // re-resolve o item AGORA: ele pode ter sido editado na dash enquanto esperava na fila
         var it = itemById[item.id] || item;
-        j.sub = (it.kind === 'text' ? (simulate ? 'Digitando…' : 'Enviando…') : it.kind === 'audio' ? (simulate ? 'Gravando…' : 'Enviando…') : ('Enviando ' + kindLbl.toLowerCase() + '…'));
+        j.sub = (it.kind === 'text' ? (simulate ? 'Digitandoâ€¦' : 'Enviandoâ€¦') : it.kind === 'audio' ? (simulate ? 'Gravandoâ€¦' : 'Enviandoâ€¦') : ('Enviando ' + kindLbl.toLowerCase() + 'â€¦'));
         renderSending();
         return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
           status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || '') + ' [' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
@@ -1646,13 +1696,13 @@
             var it = itemById[steps[i].id];
             if (!it) { i++; setTimeout(next, 0); return; }   // item apagado na dash no meio: pula
             var wait = Math.max(0, steps[i].delay || 0) * 1000;
-            if (wait > 0) { job.sub = 'Aguardando ' + steps[i].delay + 's · próximo passo ' + (i + 1) + '/' + steps.length + ' (' + it.label + ')'; renderSending(); }
+            if (wait > 0) { job.sub = 'Aguardando ' + steps[i].delay + 's Â· prÃ³ximo passo ' + (i + 1) + '/' + steps.length + ' (' + it.label + ')'; renderSending(); }
             // Espera checando o stop a cada 500ms, pro Pausar responder rapido.
             var waited = 0;
             (function waitLoop() {
               if (job.stop) { finish('parado'); return; }
               if (waited >= wait) {
-                job.sub = 'Enviando passo ' + (i + 1) + ' de ' + steps.length + ' · ' + it.label; renderSending();
+                job.sub = 'Enviando passo ' + (i + 1) + ' de ' + steps.length + ' Â· ' + it.label; renderSending();
                 sendItemAsync(itemById[steps[i].id], job.chatId, { simMs: steps[i].sim ? steps[i].sim * 1000 : 0, stopFn: stopFn }).then(function (r) {
                   i++;
                   if (job.stop) { finish('parado'); return; }
@@ -1679,7 +1729,7 @@
       // ficava tentando abrir a conversa que JA estava aberta).
       if (!wppCanSend()) { els.dot.className = 'zv-off'; els.who.textContent = 'motor nao carregou (use o WhatsApp normal)'; return; }
       var a = activeInfo();
-      if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('→ ' + a.name) : '→ abra uma conversa'); }
+      if (a) { els.dot.className = 'zv-on'; els.who.textContent = a.isGroup ? 'grupo (abra um lead)' : (a.name ? ('â†’ ' + a.name) : 'â†’ abra uma conversa'); }
       else { els.dot.className = 'zv-off'; els.who.textContent = 'abra uma conversa'; }
     }, 2000);
   }
