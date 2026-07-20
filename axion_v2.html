@@ -4028,8 +4028,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.76.0';
-const APP_LAST_CHANGE = 'Respostas automaticas removidas (a API nao responde mais sozinha). No lugar, novo tipo de item no Sale Chat: CONTATOS. Voce cadastra nome + numero (ex: o rapaz da entrega) e o atendente manda o cartao de contato com 1 clique, igual manda mensagem ou audio. O cliente toca e ja fala com ele. Entra em funil, tem subcategoria e busca como qualquer item.';
+const APP_VERSION = '2.77.0';
+const APP_LAST_CHANGE = 'Contato no funil: o contato ja podia ser adicionado como passo, mas aparecia com o icone de audio (a lista nao conhecia o tipo). Agora mostra o icone de pessoa em vermelho, da pra achar na hora. O disparo do contato dentro do funil ja funcionava.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8695,7 +8695,7 @@ function scStep(raw){ return (typeof raw==='string')?{id:raw,delay:0,sim:0}:{id:
 function scItemMeta(id){
   const m=(SC().messages||[]).find(x=>x.id===id); if(m) return {label:m.label||m.id,color:'#2563eb',icon:'message-circle'};
   const d=(SC().media||[]).find(x=>x.id===id);
-  if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
+  if(d){ const km={audio:['#13c273','volume'],video:['#8e17f0','video'],image:['#00bcf2','image'],document:['#f0810f','clipboard-list'],contato:['#e0405a','user']}; const k=km[d.kind]||['#13c273','volume']; return {label:d.label||d.id,color:k[0],icon:k[1]}; }
   return {label:id,color:'#8696a0',icon:'circle'};
 }
 function scDdBind(){ if(window.__scDdBound) return; window.__scDdBound=true; document.addEventListener('click', function(e){ document.querySelectorAll('details.sc-adddd[open]').forEach(function(d){ if(!d.contains(e.target)) d.removeAttribute('open'); }); }); }
