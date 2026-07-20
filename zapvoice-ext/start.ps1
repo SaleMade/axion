@@ -34,6 +34,26 @@ $pkgName = ($pfn -split '_')[0]
 # (WhatsApp, Lenovo Vantage, Widgets, novo Outlook...) pega uma porta PROPRIA e ninguem briga
 # pela mesma porta. Depois a gente DESCOBRE qual foi a porta do WhatsApp (pelo processo dele).
 function Set-DebugPort { [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=0', 'User') }
+# MESMA opcao, porem pela POLITICA do WebView2 no registro. Diferenca que resolve o "reinicie o PC":
+# a variavel de ambiente e um retrato herdado no NASCIMENTO do processo, e app da Store nao nasce do
+# Explorer (nasce pelo DcomLaunch, que sobe no boot) — por isso so pega depois de reiniciar. Ja a
+# politica e lida PELO PROPRIO app na hora de criar o WebView2, entao vale JA no proximo start do
+# WhatsApp. O ramo Policies e admin-only (mesmo em HKCU) -> precisa rodar como Administrador 1x.
+function Set-DebugPolicy {
+  $ok = $false
+  foreach ($root in @('HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments',
+                      'HKCU:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments')) {
+    try {
+      if (-not (Test-Path $root)) { New-Item -Path $root -Force -ErrorAction Stop | Out-Null }
+      # Grava os 3 nomes possiveis: o AUMID do app, o exe host e o curinga (a resolucao e em cascata).
+      foreach ($id in @($app.AppID, 'WhatsApp.Root.exe', '*')) {
+        if ($id) { New-ItemProperty -Path $root -Name $id -Value '--remote-debugging-port=0' -PropertyType String -Force -ErrorAction Stop | Out-Null }
+      }
+      $ok = $true
+    } catch { }
+  }
+  return $ok
+}
 # Fecha o app POR COMPLETO (host + WebViews), pra o restart nao ficar na tela de erro (cacto).
 function Close-App {
   try {
@@ -81,6 +101,29 @@ function Discover-Port {
   for ($g = 0; $g -lt 4; $g++) { $p = Find-WhatsAppPort; if ($p -gt 0) { return $p }; Start-Sleep -Milliseconds 700 }
   return 0
 }
+# O WhatsApp JA abriu com a flag de debug? Deteccao DIRETA e definitiva: a variavel de ambiente
+# vira '--remote-debugging-port' na linha de comando do WebView2. Se o app esta rodando e a flag
+# NAO esta la, e porque ele nao herdou a variavel -> so um LOGIN NOVO resolve (app da Store so
+# recebe variavel de usuario nova num login novo). Retorna $true/$false, ou $null se indeterminado.
+# SO o processo BROWSER (o unico SEM '--type=' na linha de comando). Os filhos do WebView2
+# (gpu-process, utility, crashpad-handler) NUNCA recebem a flag, mesmo quando tudo deu certo —
+# olhar eles daria "nao herdou" errado.
+function Get-WaBrowserProc {
+  try {
+    return @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+             Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($pkgName)) -and ($_.CommandLine -notmatch '--type=') } |
+             Sort-Object CreationDate -Descending | Select-Object -First 1)
+  } catch { return @() }
+}
+function Test-AppHasDebugFlag {
+  $b = Get-WaBrowserProc
+  if ($b.Count -eq 0) { return $null }               # app sem WebView no ar: nao da pra afirmar
+  if ($b[0].CommandLine -match 'remote-debugging-port') { return $true }
+  # Sem a flag SO prova nao-heranca se o app nasceu DEPOIS de a gente configurar. Se ele ja estava
+  # aberto de antes, e esperado que nao tenha — nesse caso o certo e reabrir o app, nao reiniciar o PC.
+  try { if ($b[0].CreationDate -and $b[0].CreationDate -lt $ConfigAt) { return $null } } catch { }
+  return $false
+}
 # O WhatsApp esta rodando (tem processo), mesmo que ainda SEM porta de debug?
 function Test-AppRunning {
   try {
@@ -123,6 +166,14 @@ function Ensure-Node {
 #    Store so herdam esse ajuste depois de um LOGIN novo (reinicio do PC) — por isso, na 1a
 #    vez ou em maquina Lenovo (Vantage), pode precisar reiniciar o PC uma vez.
 Set-DebugPort
+$policyOk = Set-DebugPolicy      # caminho que dispensa reiniciar (precisa de admin)
+$ConfigAt = Get-Date             # a partir daqui, app que abrir DEVE vir com a flag
+if ($policyOk) {
+  Write-Host "Modo porta-livre ativado (vale ja no proximo start do $Label, sem reiniciar)."
+} else {
+  Write-Host "Obs: sem permissao de administrador pra ativar o modo instantaneo."
+  Write-Host "     Se pedir pra reiniciar o PC, feche e rode este atalho como Administrador uma vez (evita o reinicio)."
+}
 
 # 0) auto-atualizacao (best-effort)
 try {
@@ -171,9 +222,40 @@ while ($true) {
     & $nodeExe (Join-Path $here 'inject.js')
     Write-Host "Injetor encerrou. Retomando em 3s..."
   } else {
-    Write-Host "Ainda sem a porta de debug do $Label. Deixe esta janela ABERTA que ela entra sozinha assim que der."
-    Write-Host "  Se acabou de instalar OU a maquina e Lenovo: REINICIE o PC uma vez (ativa o modo porta-livre)."
-    Write-Host "  Alternativa sem reiniciar: feche o app que conflita (ex: 'Lenovo Vantage') e o WhatsApp, e reabra o WhatsApp."
+    if ((Test-AppHasDebugFlag) -eq $false) {
+      # CERTEZA: o app abriu SEM a flag -> a sessao do Windows nao tem a variavel ainda.
+      Write-Host ""
+      Write-Host "  ================================================================"
+      Write-Host "   FALTA 1 PASSO (so nesta primeira vez)"
+      Write-Host "  ================================================================"
+      if (-not $policyOk) {
+        Write-Host "   O $Label abriu sem o modo de conexao ligado."
+        Write-Host ""
+        Write-Host "   MAIS RAPIDO (sem reiniciar):"
+        Write-Host "     1) Feche esta janela."
+        Write-Host "     2) Clique com o BOTAO DIREITO no atalho do Sale Chat"
+        Write-Host "        e escolha 'Executar como administrador'."
+        Write-Host "     3) Feche o $Label por completo e abra de novo."
+        Write-Host ""
+        Write-Host "   Se nao der certo: reinicie o computador uma vez."
+      } else {
+        Write-Host "   O modo de conexao ja foi ligado, mas o $Label precisa"
+        Write-Host "   ser aberto DE NOVO pra pegar (ele le isso ao abrir)."
+        Write-Host ""
+        Write-Host "     1) Feche o $Label POR COMPLETO (inclusive o icone perto do relogio)."
+        Write-Host "     2) Abra o $Label de novo."
+        Write-Host ""
+        Write-Host "   Se depois disso continuar assim: reinicie o computador uma vez."
+      }
+      Write-Host "   So precisa fazer isso 1 vez. Deixe esta janela aberta."
+      Write-Host "  ================================================================"
+      Write-Host ""
+      Start-Sleep -Seconds 12   # nao spamar a tela; o aviso e o mesmo ate resolver
+    } else {
+      Write-Host "Ainda sem a porta de debug do $Label. Deixe esta janela ABERTA que ela entra sozinha assim que der."
+      Write-Host "  Se acabou de instalar OU a maquina e Lenovo: REINICIE o PC uma vez (ativa o modo porta-livre)."
+      Write-Host "  Alternativa sem reiniciar: feche o app que conflita (ex: 'Lenovo Vantage') e o WhatsApp, e reabra o WhatsApp."
+    }
   }
   Start-Sleep -Seconds 3
 }
