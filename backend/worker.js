@@ -165,6 +165,72 @@ async function handleMe(req, env) {
   return json({ user: rest });
 }
 
+// ─── Backup automático do estado (R2) ─────────────────────────────────────
+// Snapshot horário do dashboard_state. Existe porque o estado é um blob único
+// sobrescrito por completo a cada gravação: um cliente ruim apaga tudo de uma vez
+// e sem cópia não há volta. Retenção de 30 dias, limpeza automática.
+const BACKUP_PREFIX = 'backups/state-';
+const BACKUP_MIN_INTERVAL = 3600;      // no máx. 1 snapshot por hora
+const BACKUP_RETENTION = 30 * 86400;   // 30 dias
+
+async function _backupState(env) {
+  if (!env.MEDIA) return false;                       // sem R2 ligado, não faz nada
+  const agora = Math.floor(Date.now() / 1000);
+  const ultimo = Number(await _readConfig(env, 'backup_ts')) || 0;
+  if (agora - ultimo < BACKUP_MIN_INTERVAL) return false;
+
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row || !row.data) return false;
+  // Nada mudou desde o último snapshot? Não gasta espaço à toa.
+  const ultimaVer = Number(await _readConfig(env, 'backup_ver')) || -1;
+  if (Number(row.version) === ultimaVer) {
+    await _writeConfig(env, 'backup_ts', String(agora));  // adia a próxima checagem
+    return false;
+  }
+
+  const key = `${BACKUP_PREFIX}${agora}-v${row.version}.json`;
+  await env.MEDIA.put(key, row.data, {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { version: String(row.version), created_at: String(agora) },
+  });
+  await _writeConfig(env, 'backup_ts', String(agora));
+  await _writeConfig(env, 'backup_ver', String(row.version));
+
+  // Limpeza: remove snapshots com mais de 30 dias (o timestamp está na chave)
+  try {
+    const lista = await env.MEDIA.list({ prefix: BACKUP_PREFIX, limit: 1000 });
+    const corte = agora - BACKUP_RETENTION;
+    for (const obj of (lista.objects || [])) {
+      const ts = Number((obj.key.slice(BACKUP_PREFIX.length).split('-')[0]) || 0);
+      if (ts && ts < corte) { try { await env.MEDIA.delete(obj.key); } catch (_) {} }
+    }
+  } catch (_) {}
+  return true;
+}
+
+// Lista os backups disponíveis (só diretor) — pra saber o que dá pra restaurar
+async function handleListBackups(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!env.MEDIA) return json({ backups: [] });
+  const lista = await env.MEDIA.list({ prefix: BACKUP_PREFIX, limit: 1000, include: ['customMetadata'] });
+  const backups = (lista.objects || []).map(o => {
+    // chave: backups/state-<ts>-v<versao>.json — a versão sai da própria chave
+    // (o list do R2 nem sempre devolve customMetadata)
+    const resto = o.key.slice(BACKUP_PREFIX.length);
+    const ts = Number(resto.split('-')[0]) || 0;
+    const mv = /-v(\d+)\.json$/.exec(resto);
+    return {
+      key: o.key,
+      created_at: ts,
+      size: o.size,
+      version: mv ? Number(mv[1]) : ((o.customMetadata && Number(o.customMetadata.version)) || null),
+    };
+  }).sort((a, b) => b.created_at - a.created_at);
+  return json({ backups });
+}
+
 async function handleGetState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -3888,6 +3954,11 @@ export default {
   // Cron: mantém wa_conn (estado + número conectado) fresco mesmo com a dash FECHADA, puxando da Evolution.
   // Assim o roteador nunca manda lead pra número caído por causa de estado defasado (webhook às vezes perde o logout).
   async scheduled(event, env, ctx) {
+    // BACKUP AUTOMÁTICO do estado da dash (incidente 21/07: aba antiga sobrescreveu
+    // tudo e só deu pra recuperar porque o Time Travel do D1 existe — 30 dias e olhe lá).
+    // Guarda no R2 (blob de ~1.4MB não deve inchar o D1). Roda no máx. 1x/hora e só
+    // quando a versão mudou, e apaga sozinho o que passou de 30 dias.
+    try { await _backupState(env); } catch (_) {}
     // Semeia número → vendedor ANTES de falar com a Evolution. A chamada externa pode demorar
     // (VPS lenta/fora) e engolir a rodada inteira do cron, e foi isso que deixou a tabela de donos
     // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
@@ -3944,6 +4015,7 @@ export default {
       // state sync
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
+      if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // users CRUD
       if (req.method === 'GET'    && path === '/api/users')         return handleListUsers(req, env);
