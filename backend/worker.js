@@ -29,7 +29,7 @@ const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizan
 // Abaixo disso o cliente é uma aba velha em cache (lógica de sync antiga que
 // sobrescrevia o estado inteiro). Ele recebe 426 e é forçado a recarregar.
 // Ao subir uma versão que muda o formato do estado, atualize aqui também.
-const MIN_APP_VERSION = '2.78.0';
+const MIN_APP_VERSION = '2.79.0';
 
 // Coleções vigiadas pela guarda anti-apagamento em massa
 const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','aportes','payouts','produtos','pressels'];
