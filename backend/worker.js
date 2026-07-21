@@ -24,6 +24,27 @@
 
 const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizante (sliding),
                                     // sessão ATIVA nunca expira — só a inativa por 30 dias.
+
+// Versão mínima do app com permissão de ESCREVER no estado.
+// Abaixo disso o cliente é uma aba velha em cache (lógica de sync antiga que
+// sobrescrevia o estado inteiro). Ele recebe 426 e é forçado a recarregar.
+// Ao subir uma versão que muda o formato do estado, atualize aqui também.
+const MIN_APP_VERSION = '2.78.0';
+
+// Coleções vigiadas pela guarda anti-apagamento em massa
+const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','aportes','payouts','produtos','pressels'];
+
+// Compara "2.69.0" vs "2.68.0" → <0 se a<b, 0 se igual, >0 se a>b.
+// Versão ausente/inválida vira 0.0.0 (= cliente antigo).
+function cmpVer(a, b) {
+  const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
                                      // (era 30 dias — sessão zumbi viva por 1 mês se token vazasse)
 const ROLE_DIRETOR = ['diretor','socio','produtor'];
 
@@ -150,10 +171,11 @@ async function handleGetState(req, env) {
   const row = await env.DB.prepare(
     'SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1'
   ).first();
-  if (!row) return json({ data: {}, version: 0, updated_at: 0 });
+  if (!row) return json({ data: {}, version: 0, updated_at: 0, min_version: MIN_APP_VERSION });
   let data;
   try { data = JSON.parse(row.data); } catch (e) { data = {}; }
-  return json({ data, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by });
+  // min_version viaja junto pro cliente detectar sozinho que está velho e recarregar
+  return json({ data, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION });
 }
 
 async function handlePostState(req, env) {
@@ -162,11 +184,51 @@ async function handlePostState(req, env) {
   const body = await req.json().catch(() => null);
   if (!body || typeof body.data !== 'object') return err('Body inválido — esperado { data, base_version? }');
 
+  // ── TRAVA 1: gate de versão ────────────────────────────────────────────
+  // Aba antiga em cache roda a lógica de sync ANTIGA, que no conflito reenviava
+  // o blob inteiro e sobrescrevia tudo (apagou 5 vendas / 4 leads / 11 chips em
+  // 21/07/2026). Cliente desatualizado NÃO escreve: recebe 426 e recarrega.
+  if (cmpVer(body.app_version, MIN_APP_VERSION) < 0) {
+    return json({
+      error: 'versao_antiga',
+      message: 'Esta aba está com uma versão antiga da dash. Recarregue (Ctrl+F5) pra continuar.',
+      min_version: MIN_APP_VERSION,
+      your_version: body.app_version || null,
+    }, 426);
+  }
+
   // Optimistic concurrency: se cliente envia base_version, valida que não houve write desde então
-  const current = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id = 1').first();
+  const current = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   const curVer = current?.version || 0;
   if (typeof body.base_version === 'number' && body.base_version < curVer) {
     return json({ error: 'conflict', current_version: curVer }, 409);
+  }
+
+  // ── TRAVA 2: guarda anti-apagamento em massa ───────────────────────────
+  // Rede de segurança contra QUALQUER escrita (bug, aba zumbi, merge ruim) que
+  // sumiria com um monte de registro de uma vez. Exclusão pontual passa normal.
+  if (!body.allow_shrink && current?.data) {
+    let cur = {};
+    try { cur = JSON.parse(current.data); } catch (_) { cur = {}; }
+    const perdas = [];
+    for (const k of GUARDED_COLLECTIONS) {
+      const antes = Array.isArray(cur[k]) ? cur[k].length : 0;
+      const depois = Array.isArray(body.data[k]) ? body.data[k].length : 0;
+      if (antes >= 10 && depois < antes) {
+        const perdidos = antes - depois;
+        // Barra a partir de 3 itens sumindo numa única gravação. Apagar 1 ou 2 é
+        // uso normal e passa direto. Limite por PORCENTAGEM não serve: o estrago
+        // de 21/07 sumiu com 5 vendas de 179 (2,8%) e teria passado batido.
+        if (perdidos >= 3) perdas.push({ colecao: k, antes, depois, perdidos });
+      }
+    }
+    if (perdas.length) {
+      return json({
+        error: 'perda_em_massa',
+        message: 'Escrita bloqueada: apagaria muitos registros de uma vez.',
+        perdas,
+      }, 422);
+    }
   }
 
   const newVer = curVer + 1;
@@ -3224,6 +3286,18 @@ async function _presselBalancedPick(env, id, sellers){
     (rn.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(k) nasc[k]=Number(x.created_at)||0; });
   }catch(_){}
   const capOf=a=>{ const b=nasc[_k8(a.num)]||0; return (b && (now-b)/60 < WARMUP_MIN) ? WARM_MIN_CAP : BURST_CAP; };
+  // ── JUSTIÇA ENTRE VENDEDORES (por DIA, não por número) ────────────────────────────────────
+  // Equalizar só a última hora por NÚMERO fazia quem tem 2 números receber o DOBRO de quem tem 1,
+  // e o vendedor atrasado no dia nunca alcançava. Aqui a 1ª prioridade é o VENDEDOR com menos
+  // leads HOJE — é o que o Diretor vê na tela e o que ele quer emparelhar entre a equipe.
+  // O teto por número continua valendo por cima, então emparelhar nunca vira inundação.
+  const dayStart=Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
+  const diaAt={};
+  try{
+    const rd=await env.DB.prepare("SELECT inst, COUNT(*) n FROM wa_lead WHERE ts >= ? AND inst IS NOT NULL GROUP BY inst").bind(dayStart).all();
+    (rd.results||[]).forEach(x=>{ const at=String(x.inst||'').replace(/^ax_/,'').replace(/_b$/,''); if(at) diaAt[at]=(diaAt[at]||0)+(Number(x.n)||0); });
+  }catch(_){}
+  const diaOf=a=>diaAt[String(a.at)]||0;
   let avail=[];   // 'let' porque a proteção anti-buraco-negro abaixo pode reatribuir a lista
   for(const s of sellers){
     const cP=s.primary?g(s.primary.inst).load1h:0;
@@ -3275,15 +3349,24 @@ async function _presselBalancedPick(env, id, sellers){
   // desempata pela rajada dos últimos minutos. Empate real → rodízio atômico (o único imediato;
   // qualquer contador lido do banco atrasa alguns segundos e criaria "vencedor único" na rajada).
   const cmp=(a,b)=>{
+    // SATURADO (todos no teto) = protege o CHIP acima de tudo: vai pro número MENOS carregado
+    // agora. Priorizar o vendedor atrasado nessa hora concentraria a enxurrada num número só —
+    // é exatamente assim que se queima um chip (caso real: 109 cliques em 10min num número).
+    if(saturated){ return burstOf(a)-burstOf(b); }
+    const da=Math.floor(diaOf(a)/5), db=Math.floor(diaOf(b)/5);
+    if(da!==db) return da-db;                       // 1º: VENDEDOR com menos leads hoje (emparelha a equipe)
     const fa=Math.floor(g(a.inst).load1h/5), fb=Math.floor(g(b.inst).load1h/5);
-    if(fa!==fb) return fa-fb;                       // menos contatos na última hora primeiro
+    if(fa!==fb) return fa-fb;                       // 2º: número dele menos carregado na última hora
     const ba=burstOf(a), bb=burstOf(b);
-    if(ba!==bb) return ba-bb;                       // desempate: menos rajada recente (clique+conversa)
+    if(ba!==bb) return ba-bb;                       // 3º: menos rajada recente (clique+conversa)
     return 0;
   };
   pool.sort(cmp);
-  const topF=Math.floor(g(pool[0].inst).load1h/5), topB=burstOf(pool[0]);
-  const tied=pool.filter(a=>Math.floor(g(a.inst).load1h/5)===topF && burstOf(a)===topB);
+  const topB=burstOf(pool[0]);
+  const tied=saturated
+    ? pool.filter(a=>burstOf(a)===topB)
+    : pool.filter(a=>Math.floor(diaOf(a)/5)===Math.floor(diaOf(pool[0])/5)
+        && Math.floor(g(a.inst).load1h/5)===Math.floor(g(pool[0].inst).load1h/5) && burstOf(a)===topB);
   if(tied.length<=1) return _ret(pool[0]);
   const idx=await _presselNextIndex(env, id, tied.length);   // empate total → rotação
   return _ret(tied[idx]);

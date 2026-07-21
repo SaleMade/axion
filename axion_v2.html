@@ -4028,8 +4028,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.77.0';
-const APP_LAST_CHANGE = 'Contato no funil: o contato ja podia ser adicionado como passo, mas aparecia com o icone de audio (a lista nao conhecia o tipo). Agora mostra o icone de pessoa em vermelho, da pra achar na hora. O disparo do contato dentro do funil ja funcionava.';
+const APP_VERSION = '2.78.0';
+const APP_LAST_CHANGE = 'Protecao contra perda de dados. Uma aba antiga do sistema (aberta ha dias, com o codigo velho em cache) sobrescreveu o estado e apagou vendas, leads e a contingencia. Os dados foram recuperados. Agora: (1) o servidor RECUSA escrita de aba desatualizada e ela se recarrega sozinha; (2) qualquer gravacao que sumiria com muitos registros de uma vez e bloqueada e pede confirmacao. Ninguem mais consegue apagar tudo sem querer.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4188,7 +4188,10 @@ const api={
   logout:()=>api._fetch('/auth/logout',{method:'POST'}),
   me:()=>api._fetch('/auth/me'),
   getState:()=>api._fetch('/api/state'),
-  postState:(data,base_version)=>api._fetch('/api/state',{method:'POST',body:JSON.stringify({data,base_version})}),
+  // app_version vai junto: o worker recusa escrita de aba antiga (426) pra ela
+  // não sobrescrever o estado com dados velhos. allow_shrink só quando o usuário
+  // confirma um apagamento grande (guarda anti-perda em massa do worker).
+  postState:(data,base_version,allow_shrink)=>api._fetch('/api/state',{method:'POST',body:JSON.stringify({data,base_version,app_version:APP_VERSION,allow_shrink:!!allow_shrink})}),
   listUsers:()=>api._fetch('/api/users'),
   saveUser:(payload)=>api._fetch('/api/users',{method:'POST',body:JSON.stringify(payload)}),
   deleteUser:(id)=>api._fetch('/api/users/'+encodeURIComponent(id),{method:'DELETE'}),
@@ -4372,6 +4375,33 @@ let _syncing=false,_syncDirty=false;
 // Serializa os pushes pro servidor: se já há um rodando, marca "dirty" e o push
 // atual repete com o estado mais novo ao terminar. Evita corrida quando o usuário
 // arrasta vários números rápido em sequência (cada drop dispara um push).
+// Compara versões "2.69.0" — <0 se a<b. Espelha o cmpVer do worker.
+function cmpAppVer(a,b){
+  const pa=String(a||'0').split('.').map(n=>parseInt(n,10)||0);
+  const pb=String(b||'0').split('.').map(n=>parseInt(n,10)||0);
+  for(let i=0;i<3;i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d;}
+  return 0;
+}
+// Aba rodando versão antiga: recarrega furando o cache. Antes de recarregar,
+// guarda o estado local num backup (nada se perde se algo estava por salvar).
+let _reloadingVersao=false;
+function _forceReloadVersaoAntiga(min){
+  if(_reloadingVersao)return;
+  _reloadingVersao=true;
+  stopStateSync();
+  try{localStorage.setItem('axion_db_v2_prereload_'+Date.now(),JSON.stringify(DB))}catch(_){}
+  // Trava anti-loop: se o CDN ainda estiver servindo o HTML antigo, recarregar de
+  // novo não resolve. Recarrega no máximo 1x a cada 2 min e depois só avisa.
+  let ultimo=0;try{ultimo=Number(sessionStorage.getItem('axion_reload_versao'))||0}catch(_){}
+  if(Date.now()-ultimo<120000){
+    toast(`Dash desatualizada${min?' (mínima '+min+')':''}. Feche a aba e abra de novo com Ctrl+F5.`,'err');
+    return;
+  }
+  try{sessionStorage.setItem('axion_reload_versao',String(Date.now()))}catch(_){}
+  toast(`Esta aba está com uma versão antiga da dash${min?' (mínima '+min+')':''}. Recarregando...`,'err');
+  setTimeout(()=>{try{location.reload(true)}catch(_){location.reload()}},1800);
+}
+
 async function serverSyncNow(){
   if(!apiEnabled()||!apiToken())return;
   if(_syncing){_syncDirty=true;return;}
@@ -4387,6 +4417,32 @@ async function _doServerSync(){
     _409retry=false; // sucesso resetar flag
     _snapshotBase(); // estado confirmado no servidor = novo ancestral comum
   }catch(e){
+    if(e.status===426){
+      // Servidor recusou: esta aba está desatualizada. Recarrega em vez de insistir,
+      // pra não sobrescrever dado novo com o estado velho desta aba.
+      _forceReloadVersaoAntiga(e.data?.min_version);
+      return;
+    }
+    if(e.status===422&&e.data?.error==='perda_em_massa'){
+      // Guarda do servidor barrou uma escrita que sumiria com muitos registros.
+      const lista=(e.data.perdas||[]).map(x=>`${x.colecao}: ${x.antes} → ${x.depois} (−${x.perdidos})`).join('<br>');
+      const ok=await axConfirm(
+        `Essa alteração apagaria muitos registros de uma vez:<br><br><b>${lista}</b><br><br>`+
+        `Isso quase sempre é sinal de erro (aba velha ou sync ruim). Confirma que é pra apagar mesmo?`,
+        {okLabel:'Sim, apagar mesmo'});
+      if(ok){
+        try{
+          const r3=await api.postState(_buildSyncBlob(),serverVersion,true); // allow_shrink
+          serverVersion=r3.version;_snapshotBase();
+          toast('Alteração salva','ok');
+        }catch(_){ toast('Não consegui salvar','err'); }
+      }else{
+        // Não confirmou: descarta o local e volta o que está no servidor
+        await syncFromServer();refreshUI();
+        toast('Alteração descartada — recarreguei do servidor','ok');
+      }
+      return;
+    }
     if(e.status===409){
       // CONFLITO: outro PC escreveu antes. NÃO reenviar nosso blob inteiro (apagaria
       // a mudança do outro). Fazemos MERGE 3-way: servidor + nossas mudanças por item.
@@ -4433,6 +4489,12 @@ async function syncFromServer(){
   if(!apiEnabled()||!apiToken())return;
   try{
     const r=await api.getState();
+    // Aba velha se auto-detecta no PULL (não espera tentar salvar pra descobrir).
+    // É o que evita uma aba esquecida aberta ficar de zumbi sobrescrevendo dado novo.
+    if(r.min_version&&cmpAppVer(APP_VERSION,r.min_version)<0){
+      _forceReloadVersaoAntiga(r.min_version);
+      return;
+    }
     if(r.data&&typeof r.data==='object'){
       const team=DB.team;
       const feed=DB.feed;
@@ -10589,7 +10651,7 @@ function _renderPresselMetrics(){
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
-var _waConnMap={}, _waConnNum={}, _waConnLoaded=false;
+var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0;
 // número conectado bate com o chip selecionado? (últimos 8 dígitos, ignora DDI/9º dígito/formatação)
 function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
 // CONECTADO de verdade = o número é o ownerJid de ALGUMA instância 'open' (checa por NÚMERO, não pelo slot):
@@ -10610,6 +10672,7 @@ function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
+    _waSat=(r&&r.sat)||0;   // saturação: todos os números no teto → precisa de mais número
     // NÃO removemos o vendedor da roleta aqui: o serve-time já pula número caído/errado sozinho (temporário
     // e auto-recupera ao reconectar), e o card mostra "não conectado". Remover apagava a config do vendedor
     // (cota/reserva/troca) num simples blip de conexão — bug encontrado na revisão.
@@ -10723,7 +10786,9 @@ function _presselVendReserva(pid, at, v, roles){
     : `<span style="font-size:11px;color:var(--t3)" title="A conexão é o Sale Chat aberto na máquina do vendedor">abra o Sale Chat na máquina</span>`;
   const _sellerOff=(v && v.ativo===false);
   const stateHint=_sellerOff
-    ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal desligado · não recebe até religar o principal</span>`
+    ? (on
+        ? `<span style="font-size:10.5px;color:#13c273;font-weight:600">rodando só este número (principal desligado)</span>`
+        : `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">principal e este número desligados · não recebe</span>`)
     : (on && _waConnLoaded && !bconn)
     ? `<span style="font-size:10.5px;color:#f59e0b;font-weight:600">ligado · entra na roleta assim que o Sale Chat abrir nesse número</span>`
     : on
@@ -10793,8 +10858,18 @@ function renderPresselVendList(pid){
     const reservaBlock=(ok && (onVis || (roles&&roles.reserva&&roles.reserva.chip)))?_presselVendReserva(pid, at, v, roles):'';
     return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
   };
-  let html = ativos.length ? ativos.map(row).join('')
-    : '<div class="muted" style="font-size:12px;padding:8px 0">Nenhum atendente com número em uso. Marque um número como "Em uso" na Contingência pra ele entrar na roleta.</div>';
+  // ALERTA DE SATURAÇÃO bem na cara: os números no ar bateram o teto seguro. Nenhum balanceamento
+  // resolve isso — é volume demais pra quantidade de número. Fica AQUI (e não escondido num modal)
+  // porque é a única ação que evita ban: ligar mais um número ou segurar o anúncio.
+  const _satBanner=(_waSat && (Math.floor(Date.now()/1000)-Number(_waSat))<900)
+    ? `<div style="display:flex;align-items:flex-start;gap:9px;background:rgba(240,129,15,.12);border:1px solid var(--am);border-radius:10px;padding:11px 13px;margin-bottom:11px">
+         ${ico('alert-triangle',{size:15})}
+         <div style="font-size:12.5px;color:var(--am);font-weight:700;line-height:1.45">Os números no ar bateram o limite seguro
+           <div style="font-weight:500;color:var(--t2);margin-top:2px">Está chegando mais lead do que eles aguentam sem risco de ban. Ligue mais um número na roleta ou segure o anúncio.</div>
+         </div></div>`
+    : '';
+  let html = _satBanner + (ativos.length ? ativos.map(row).join('')
+    : '<div class="muted" style="font-size:12px;padding:8px 0">Nenhum atendente com número em uso. Marque um número como "Em uso" na Contingência pra ele entrar na roleta.</div>');
   if(fora.length){
     html += `<div style="height:1px;background:var(--b1);margin:14px 0 9px"></div>` + fora.map(row).join('');
   }
