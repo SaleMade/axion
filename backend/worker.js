@@ -310,14 +310,38 @@ async function handleRestoreUser(req, env, userId) {
 // ─── Config armazenada no D1 (API keys configuráveis via UI) ──
 // Tabela criada sob demanda (idempotente) — não precisa migrar manualmente.
 // Apenas Diretor pode ler/escrever.
+// Memoização de schema: criar tabela é idempotente e o schema não muda em runtime, então roda
+// UMA vez por isolate, não a cada request/mensagem. Isso era a causa do Erro 1102 (Worker
+// exceeded resource limits): um lote de 50 capturas fazia ~50x20 = 1000 subrequests só de DDL,
+// estourava o limite do Cloudflare e o lote inteiro falhava — a venda não era gravada e o painel
+// mostrava vermelho. Deploy novo = isolate novo = o DDL roda de novo (pega colunas novas).
+let _cfgTablesOk = false, _waTablesOk = false, _scTablesOk = false, _saleTablesOk = false, _leadTablesOk = false, _attribTablesOk = false, _cpfTablesOk = false;
 async function _ensureConfigTable(env) {
+  if (_cfgTablesOk) return;
   try {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)'
     ).run();
+    _cfgTablesOk = true;
   } catch (_) {}
 }
 
+// dashboard_state é um blob de ~1.3 MB (tem leads/chips/pressels tudo junto). Parsear ele a cada
+// lead novo / clique de pressel custava CPU demais e era a 2ª causa do Erro 1102 no pico. Aqui um
+// cache curto por isolate: os caminhos quentes do backend (pixel, roteamento, seed) leem 1x a cada
+// poucos segundos em vez de por evento. NÃO usar isto pra servir a tela do Diretor (ele precisa ver
+// a própria edição na hora); só pra leitura de config operacional, onde 8s de atraso é invisível.
+let _dashCache = null, _dashCacheT = 0;
+async function _getDashData(env, maxAgeMs) {
+  const now = Date.now();
+  if (_dashCache && (now - _dashCacheT) < (maxAgeMs || 8000)) return _dashCache;
+  try {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    _dashCache = JSON.parse(row?.data || '{}');
+    _dashCacheT = now;
+  } catch (_) { if (!_dashCache) _dashCache = {}; }
+  return _dashCache;
+}
 // Lê uma config do D1. Retorna null se não setada.
 async function _readConfig(env, key) {
   await _ensureConfigTable(env);
@@ -882,7 +906,7 @@ async function saveCpfAttrib(env, cpf, instance, name, phone) {
   const c = norm(cpf);
   if (c.length !== 11) return;
   try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS cpf_attrib (cpf TEXT PRIMARY KEY, at_id TEXT, instance TEXT, name TEXT, phone TEXT, updated_at INTEGER)').run();
+    if (!_cpfTablesOk) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS cpf_attrib (cpf TEXT PRIMARY KEY, at_id TEXT, instance TEXT, name TEXT, phone TEXT, updated_at INTEGER)').run(); _cpfTablesOk = true; }
     await env.DB.prepare(
       `INSERT INTO cpf_attrib (cpf, at_id, instance, name, phone, updated_at) VALUES (?,?,?,?,?,strftime('%s','now'))
        ON CONFLICT(cpf) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance,
@@ -1767,6 +1791,7 @@ async function handleWAInstanceDisconnect(req, env) {
 // caído). Tudo gated pela chave-mestra wa_autom_on. Conexão/atribuição/dedupe
 // ficam em tabelas D1 próprias, pra NÃO conflitar com o blob de estado da dash.
 async function _waEnsureTables(env) {
+  if (_waTablesOk) return;
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); }catch(_){}   // número REALMENTE conectado (ownerJid da Evolution)
@@ -1775,7 +1800,9 @@ async function _waEnsureTables(env) {
     // Conversas (inbox/CRM): cada mensagem in/out + resumo por contato pro inbox
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_messages (msg_id TEXT PRIMARY KEY, phone TEXT NOT NULL, instance TEXT, direction TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER)').run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON wa_messages(phone, ts)').run();
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_inst_ts ON wa_messages(instance, ts)').run(); } catch (_) {}   // carga recente por instância (balanceador)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_chats (phone TEXT PRIMARY KEY, instance TEXT, name TEXT, last_text TEXT, last_ts INTEGER, last_dir TEXT, unread INTEGER DEFAULT 0, assigned_to TEXT, updated_at INTEGER)').run();
+    _waTablesOk = true;
   } catch (_) {}
 }
 // Extrai tipo + texto de uma mensagem recebida da Evolution (pro histórico do inbox)
@@ -2018,7 +2045,7 @@ async function _waOnInbound(env, instance, data) {
   await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
   // Sale Chat Engine (sombra): espelha o inbound da Evolution na auditoria crua pra comparar cobertura (sc x evo). Fire-and-forget, nunca afeta o fluxo.
   try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, String(instance || '').replace(/^ax_/, '')).run(); } catch (_) {}
-  await _waLeadCapture(env, instance, phone, _ex.body);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
+  await _waLeadCapture(env, instance, phone, _ex.body, '', _ex.type, Number(data?.messageTimestamp) || 0);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
   await _waEnsureTables(env);
@@ -2092,13 +2119,22 @@ async function _waCaptureSource(env) {
   try { return (await _readConfig(env, 'wa_capture_source')) === 'sc' ? 'sc' : 'evo'; } catch (_) { return 'evo'; }
 }
 async function _scEnsureTables(env) {
+  if (_scTablesOk) return;
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_ingest_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, self_number TEXT, phone TEXT, from_me INTEGER, msg_id TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER, received_at INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS sc_heartbeat (self_number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, wpp_seen INTEGER, last_seen INTEGER, meta TEXT)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_number_owner (number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, source TEXT, updated_at INTEGER)').run();
     try { await env.DB.prepare('ALTER TABLE sc_ingest_audit ADD COLUMN at_id TEXT').run(); } catch (_) {}   // idempotente: falha se a coluna já existe
     try { await env.DB.prepare('ALTER TABLE wa_number_owner ADD COLUMN num_key TEXT').run(); } catch (_) {}   // chave canônica (DDD+8) pra casar com/sem DDI
+    try { await env.DB.prepare('ALTER TABLE wa_number_owner ADD COLUMN created_at INTEGER').run(); } catch (_) {}   // nascimento do número (só no 1º INSERT) → aquecimento por número
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_owner_key ON wa_number_owner(num_key)').run(); } catch (_) {}
+    // Índices pros scans quentes (proteção anti-buraco-negro, atribuição, painel de captura).
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sc_audit_recv ON sc_ingest_audit(received_at)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sc_audit_self ON sc_ingest_audit(self_number, received_at)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ts ON tt_pending(ts)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_numkey ON tt_pending(num_key, claimed, ts)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ttclid ON tt_pending(ttclid)').run(); } catch (_) {}
+    _scTablesOk = true;
   } catch (_) {}
 }
 // Chave canônica de número BR — resolve o desencontro que deixava TODO lead/venda sem dono:
@@ -2117,8 +2153,7 @@ function _waNumKey(n) {
 // Server-side: é a fonte de verdade da atribuição, nunca o que o cliente diz ser.
 async function _scSeedOwners(env) {
   try {
-    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-    let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (_) {}
+    const data = await _getDashData(env);   // cacheado
     const chips = Array.isArray(data.chips) ? data.chips : [];
     let n = 0;
     const vivos = [];
@@ -2132,7 +2167,10 @@ async function _scSeedOwners(env) {
       // mergeSc do handleWAConn (byInst) e só um apareceria como "WhatsApp rodando".
       const inst = 'ax_' + at + (c.bkp === true ? '_b' : '');
       await env.DB.prepare(
-        `INSERT INTO wa_number_owner (number, at_id, instance, source, num_key, updated_at) VALUES (?, ?, ?, 'chips', ?, strftime('%s','now'))
+        // created_at fica SÓ no INSERT (fora do DO UPDATE): é o nascimento do número no sistema, usado
+        // pelo aquecimento. Se entrasse no UPDATE, todo seed do cron "rejuvenesceria" o número e ele
+        // ficaria eternamente em aquecimento com teto baixo.
+        `INSERT INTO wa_number_owner (number, at_id, instance, source, num_key, created_at, updated_at) VALUES (?, ?, ?, 'chips', ?, strftime('%s','now'), strftime('%s','now'))
          ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, num_key=excluded.num_key, updated_at=excluded.updated_at`
       ).bind(num, at, inst, _waNumKey(num)).run();
       n++;
@@ -2218,8 +2256,8 @@ async function handleSalechatIngest(req, env, token) {
             if (sr && sr.sale && msgId) salesOut.push({ msgId: msgId, value: sr.value || 0 });
           } else {
             // mensagem do lead: 1ª vira LEAD (casa ttclid pelo código, pixel InitiateCheckout) + atribuição
-            try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); } catch (_) {}
-            await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber);   // selfNumber = número REAL que atendeu
+            if (!_attribTablesOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); _attribTablesOk = true; } catch (_) {} }
+            await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber, String(e?.type || ''), Number(e?.ts) || 0);   // selfNumber = número REAL que atendeu
             await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
           }
         } catch (_) {}
@@ -2361,9 +2399,13 @@ async function handleWAConn(req, env) {
     scConns.forEach(c => { byInst[c.instance] = c; });   // Sale Chat rodando ganha da Evolution
     return Object.values(byInst);
   };
-  // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também)
+  // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também).
+  // Com a captura 100% no Sale Chat a Evolution sai de cena: não consulta, não grava e não mostra
+  // conexão fantasma dela na tela. O Baileys é o maior risco de ban, então nada aqui pode dar a
+  // impressão de que ele ainda faz parte da operação.
+  const _src = await _waCaptureSource(env);
   try {
-    const live = await _evoInstances(env);
+    const live = _src === 'sc' ? null : await _evoInstances(env);
     if (live && live.length) {
       for (const it of live) {
         try {
@@ -2381,9 +2423,10 @@ async function handleWAConn(req, env) {
   // 'sc' velho = Sale Chat que parou de reportar. A linha fica gravada, então sem checar a idade
   // o número aparecia "WhatsApp rodando" depois de ter caído. Vencido vira 'close' (vermelho).
   const nowS = Math.floor(Date.now() / 1000);
-  const limpos = (rows.results || []).map(r =>
-    (String(r.state) === 'sc' && (nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r
-  );
+  const limpos = (rows.results || [])
+    // com a fonte no Sale Chat, linha da Evolution não aparece mais como conexão da operação
+    .filter(r => _src !== 'sc' || String(r.state) === 'sc')
+    .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
   return json({ ok: true, sat, conn: mergeSc(limpos) });
 }
 
@@ -2528,10 +2571,13 @@ async function _waDetectSale(env, instance, data) {
   const cpfDetect = extractCpf(text);
   if (cpfDetect) await saveCpfAttrib(env, cpfDetect, instance, name, phone);
   try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
-    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}
-    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // texto completo do "Pedido Concluído" (pra revisar na dash)
-    try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
+    if (!_saleTablesOk) {
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
+      try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // texto completo do "Pedido Concluído" (pra revisar na dash)
+      try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
+      _saleTablesOk = true;
+    }
     const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
     if (recent) return { sale: true, value }; // já registrada nas últimas 24h (ainda é venda, confirma)
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
@@ -2618,8 +2664,7 @@ async function _ttSend(pixel, token, event, phoneDigits, opts) {
 async function _ttPixelToken(env, pid, instance) {
   let pixel = '', token = '';
   try {
-    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-    const data = JSON.parse(row?.data || '{}');
+    const data = await _getDashData(env);   // cacheado: era parseado por lead (1.3MB), estourava CPU no lote
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
     let p = pid ? pressels.find(x => String(x.id) === String(pid) && x.pixel_tt && x.pixel_tt_token) : null;
     if (!p && instance) {
@@ -2633,23 +2678,54 @@ async function _ttPixelToken(env, pid, instance) {
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
   return { pixel, token };
 }
+// Tipos que o WhatsApp Web emite mas que NÃO são mensagem de gente: ruído de protocolo. Se um
+// desses criar o lead, ele nasce sem texto e sem código, e a mensagem real é descartada depois.
+// ATENÇÃO: 'ciphertext' NÃO entra aqui. Ele parece ruído (body vazio) mas é a mensagem REAL do lead
+// ainda não decifrada, e medido em produção só 12 de 2.002 ganham uma versão legível depois — o
+// injetor captura uma vez e o dedup por msgId barra a reemissão. Descartar ciphertext apagaria
+// ~2.000 leads reais. O tratamento certo dele é o caminho de UPGRADE mais abaixo.
+const _WA_NAO_MSG = new Set(['e2e_notification', 'notification_template', 'protocol',
+  'gp2', 'broadcast_notification', 'call_log', 'revoked', 'unknown', 'gp', 'newsletter_notification']);
 // LEAD: na 1ª mensagem do número, casa com o clique pelo CÓDIGO no texto (atribuição EXATA).
 // Quem manda sem código (lead antigo, indicação, orgânico) não veio de pressel → não conta. 1x por número.
-async function _waLeadCapture(env, instance, phone, body, selfNum) {
+async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgTs) {
   try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
-    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
-    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // origem da atribuição: 'code' (exato) | 'fifo' (clique recente no mesmo número)
-    try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}   // número (do atendente) que recebeu o lead — pra dividir por número na visão de Leads
-    const exists = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(phone).first();
-    if (exists) return; // já contabilizado como lead
-    // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
-    let ttclid = '', pid = '', src = '';
+    // GUARDA 1 — evento de PROTOCOLO não é mensagem de lead.
+    // O Sale Chat encaminha tudo que o WhatsApp Web emite, e ~94% do volume é ruído de protocolo:
+    // 'ciphertext' (mensagem ainda não decifrada, chega ANTES da versão legível), 'e2e_notification'
+    // (troca de chave) e 'notification_template'. Como esses vêm com body VAZIO e chegam primeiro,
+    // o lead era criado sem texto, o código nunca era lido, e a mensagem de verdade caía no
+    // `exists` e era ignorada. Foi isso que zerou a atribuição por código em 20/07.
+    const _t = String(msgType || '').toLowerCase();
+    if (_t && _WA_NAO_MSG.has(_t)) return;
+    // GUARDA 2 — sincronização de histórico não é lead novo.
+    // Quando um número reconecta, o injetor despeja a conversa inteira (855 msgs em 11min no
+    // número de cobrança em 21/07) e cada contato antigo virava "lead novo sem rastreio", inflando
+    // a métrica do gestor de tráfego. Mensagem com mais de 15min de idade é histórico, não lead.
+    const _ts = Number(msgTs) || 0;
+    if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > 900) return;
+    if (!_leadTablesOk) {   // DDL uma vez por isolate (era causa do 1102 no lote de captura)
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // origem da atribuição: 'code' (exato) | 'fifo' (clique recente no mesmo número)
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}   // número (do atendente) que recebeu o lead — pra dividir por número na visão de Leads
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}   // número que recebeu o clique (últimos 8 dígitos)
+      _leadTablesOk = true;
+    }
+    // O código precisa ser lido ANTES do `exists`, senão o caminho de upgrade nunca acontece.
     const codeM = String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
     const code = codeM ? codeM[1] : '';
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
-    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}   // número que recebeu o clique (últimos 8 dígitos)
+    const exists = await env.DB.prepare('SELECT phone, pid, ttclid, src FROM wa_lead WHERE phone=?').bind(phone).first();
+    // UPGRADE: o lead pode ter nascido de um evento sem texto (ciphertext chega cifrado e o injetor
+    // só manda uma vez). Nesse caso ele entrou por chute do FIFO, ou sem rastreio nenhum. Quando a
+    // mensagem legível com o código aparece depois, ela CORRIGE a atribuição em vez de ser jogada
+    // fora. Sem código novo não há o que melhorar, e quem já está em 'code' é exato: sai fora.
+    if (exists && (exists.src === 'code' || !code)) return;
+    const isUpgrade = !!exists;
+    // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
+    let ttclid = '', pid = '', src = '';
     if (code) {
       try {
         const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
@@ -2661,17 +2737,20 @@ async function _waLeadCapture(env, instance, phone, body, selfNum) {
     // Casa primeiro pelo NÚMERO que atendeu, não pelo slot. Trocar um número de principal↔
     // complementar muda a instância (ax_<at> ↔ ax_<at>_b) e os cliques ficavam órfãos no slot
     // antigo: o lead chegava e entrava "sem rastreio", sem pixel e sem saber de qual pressel veio.
+    // No UPGRADE os fallbacks ficam DE FORA de propósito: o lead já tem uma atribuição por chute, e
+    // deixar ele reivindicar outro clique roubaria a linha de um lead novo de verdade. No upgrade só
+    // vale o que é exato: o código, ou a letra dele.
     const nk = String(selfNum || '').replace(/\D/g, '').slice(-8);
-    if (!pid && nk) {
+    if (!isUpgrade && !pid && nk) {
       try {
-        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE num_key=? AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(nk).first();
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE num_key=? AND (claimed IS NULL OR claimed=0) AND ts > strftime('%s','now')-3600 ORDER BY (ttclid IS NOT NULL AND ttclid<>'') DESC, ts ASC LIMIT 1) RETURNING ttclid, pid").bind(nk).first();
         if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
       } catch (_) {}
     }
     // fallback: linhas antigas, gravadas antes do num_key existir
-    if (!pid) {
+    if (!isUpgrade && !pid) {
       try {
-        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance).first();
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE inst=? AND (claimed IS NULL OR claimed=0) AND ts > strftime('%s','now')-3600 ORDER BY (ttclid IS NOT NULL AND ttclid<>'') DESC, ts ASC LIMIT 1) RETURNING ttclid, pid").bind(instance).first();
         if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
       } catch (_) {}
     }
@@ -2679,21 +2758,45 @@ async function _waLeadCapture(env, instance, phone, body, selfNum) {
     // O número pode ter trocado de papel entre o clique e a mensagem, e aí o clique fica no slot
     // antigo. Dentro do mesmo vendedor a origem do tráfego é a mesma, então casar ali é honesto
     // e recupera o lead que entraria como "sem rastreio".
-    if (!pid && instance) {
+    if (!isUpgrade && !pid && instance) {
       const base = String(instance).replace(/_b$/, '');
       try {
-        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE (inst=? OR inst=?) AND (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>'' AND ts > strftime('%s','now')-3600 ORDER BY ts ASC LIMIT 1) RETURNING ttclid, pid").bind(base, base + '_b').first();
+        const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE (inst=? OR inst=?) AND (claimed IS NULL OR claimed=0) AND ts > strftime('%s','now')-3600 ORDER BY (ttclid IS NOT NULL AND ttclid<>'') DESC, ts ASC LIMIT 1) RETURNING ttclid, pid").bind(base, base + '_b').first();
         if (fb) { ttclid = fb.ttclid || ''; pid = fb.pid || ''; src = 'fifo'; }
       } catch (_) {}
     }
+    // REDE DE SEGURANÇA: o lead trouxe um código mas nenhuma linha casou (clique já reivindicado,
+    // purgado pelos 7 dias, ou banco recriado). A 1ª letra do código diz a pressel, então dá pra
+    // salvar a origem mesmo sem a linha. Perde-se o ttclid (logo o pixel), mas o gestor de tráfego
+    // continua vendo de qual BM o lead veio — que é o ponto todo do código carregar a letra.
+    if (!pid && code) {
+      const pl = await _pidFromCode(env, code);
+      if (pl) { pid = pl; src = 'letra'; }
+    }
+    // SEM NENHUMA atribuição (nem código, nem clique no número, nem no vendedor, nem pela letra) =
+    // NÃO veio da pressel. É conversa antiga do chip, orgânico, ou replay do histórico do WhatsApp
+    // quando o Sale Chat conecta num número que já era usado (caso real: 1422 mensagens antigas
+    // entraram de uma vez e viraram 20 "leads sem rastreio" num número recém-trocado).
+    // Não vira lead: a conversa continua no inbox, só não conta como lead de pressel nem suja a
+    // contagem do número. Assim todo lead que aparece na tela É rastreado, como o Bruno quer.
+    if (!pid && !ttclid) return;
     // Número que REALMENTE recebeu o lead. Prefere o que o Sale Chat informou (exato); só cai na
     // busca por instância quando não veio (Evolution). Derivar da instância carimbava o lead do
     // número complementar com o número do principal e escondia a divisão da roleta nas métricas.
     let num=String(selfNum||'').replace(/\D/g,'');
     if(!num){ try{ const cn=await env.DB.prepare('SELECT number FROM wa_conn WHERE instance=?').bind(instance).first(); num=(cn&&cn.number)||''; }catch(_){} }
-    await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
-    // só dispara evento de LEAD pro pixel se o lead veio de PRESSEL (tem ttclid/pid); orgânico não suja o pixel
-    if (ttclid || pid) {
+    if (isUpgrade) {
+      // corrige a atribuição do lead que já existia, sem mexer no ts (senão ele "renasce" e pula de
+      // dia na métrica) nem no inst (quem atendeu não mudou por causa de uma mensagem nova).
+      await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src=? WHERE phone=?").bind(pid, ttclid, src, phone).run();
+    } else {
+      await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
+    }
+    // só dispara evento de LEAD pro pixel quando existe ttclid (clique de anúncio rastreável).
+    // Agora que TODO lead de pressel tem pid (inclusive orgânico), testar `pid` mandaria evento
+    // sem ttclid pro TikTok — evento que ele não consegue atribuir e que só suja a otimização.
+    // No upgrade só dispara se o lead AINDA NÃO tinha ttclid, pra não mandar o evento duas vezes.
+    if (ttclid && !(exists && exists.ttclid)) {
       const { pixel, token } = await _ttPixelToken(env, pid, instance);
       await _ttSend(pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone });   // LEAD = InitiateCheckout (evento que o GT otimiza)
     }
@@ -2928,6 +3031,33 @@ function _waLink(num, msg){
 }
 // Código curto (sem caracteres ambíguos) que vai no texto do WhatsApp pra casar o lead com o clique
 function _genCode(n){ n=n||6; const cs='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a=new Uint8Array(n); crypto.getRandomValues(a); let s=''; for(let i=0;i<n;i++) s+=cs[a[i]%cs.length]; return s; }
+// 1ª LETRA do código = a pressel de origem. Redundância proposital: mesmo que a linha do clique
+// suma (purga de 7 dias, banco perdido), a própria mensagem do lead ainda diz de qual BM ele veio.
+// Alfabeto sem I/O/Q pra não confundir com 1/0 quando alguém lê o código na tela.
+const _PLET = 'ABCDEFGHJKLMNPRSTUVWXYZ';
+function _presselLetter(pid){
+  const s = String(pid == null ? '' : pid);
+  const n = parseInt(s, 10);
+  if (Number.isFinite(n) && n >= 1) return _PLET[(n - 1) % _PLET.length];   // id 1→A, 2→B, 3→C
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;   // id não-numérico → hash estável
+  return _PLET[h % _PLET.length];
+}
+// Código = letra da pressel + aleatório. Mesmo tamanho de antes (6), então nada mais muda.
+function _genLeadCode(pid){ return _presselLetter(pid) + _genCode(5); }
+// Reverso: dado o código, descobre a pressel pela 1ª letra. Só roda no caminho frio (quando o
+// clique não foi achado no banco), então pode ler o estado sem pesar no fluxo normal.
+async function _pidFromCode(env, code){
+  const L = String(code || '').charAt(0).toUpperCase();
+  if (!L) return '';
+  try {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    const st = row ? JSON.parse(row.data) : null;
+    const ps = (st && st.pressels) || [];
+    const hit = ps.filter(p => _presselLetter(p.id) === L);
+    if (hit.length === 1) return String(hit[0].id);   // ambíguo (2 pressels na mesma letra) → não chuta
+  } catch (_) {}
+  return '';
+}
 // Resolve os números da roleta a partir do estado salvo (chips + vendedores)
 function _resolvePresselNumbers(p, chips, liveSet){
   const out=[];
@@ -2974,8 +3104,11 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   // st_xxxx, então comparar com a string 'em_uso' não basta).
   const isEmUso=(c)=> c.em_uso===true || c.em_uso===1 || (emUsoIds && emUsoIds.has(String(c.wa_st||''))) || String(c.wa_st||'')==='em_uso';
   for(const v of (p.vendedores||[])){
-    if(v.ativo===false) continue;
     if(!v.at) continue;                                    // vendedor sem atendente → ignora
+    // v.ativo=false = PRINCIPAL desligado (não o vendedor inteiro). O complementar ainda pode rodar
+    // sozinho: o Bruno desliga o número sob risco de ban e mantém o outro. Só pula tudo se os DOIS
+    // estiverem desligados (checado no final: primary e backup ambos null).
+    const principalOn = v.ativo !== false;
     // c.at obrigatório: sem isso, String(null)==='null' casaria vendedor órfão com
     // os chips da coluna "Disponíveis" (número fora de uso recebendo lead sem aparecer na tela).
     const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
@@ -2995,9 +3128,9 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
     const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
     const rChip=swap?emChip:bkChip, rInst=swap?instP:instB;                         // reserva = overflow
-    const primary=(pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;
+    const primary=(principalOn && pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;   // principal só entra com o interruptor dele ligado
     const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
-    if(!primary && !backup) continue;
+    if(!primary && !backup) continue;   // os DOIS desligados/caídos → vendedor fora da roleta
     out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup});
   }
   return out;
@@ -3016,40 +3149,85 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
 //     da pressel — quem clica e não fala não conta pra ninguém.
 //  4) se TODOS bateram o teto (volume alto demais pros números no ar), não perde lead: manda pro
 //     menos carregado e marca "saturação" (a dash avisa pra adicionar mais números).
+// Buraco negro = número que recebe muito clique e quase não gera conversa (bloqueado, mas ainda
+// reportando presença). Cacheado por isolate pra não varrer tabela grande a cada clique.
+let _buracoCache = null, _buracoT = 0;
+async function _getBuracoNegro(env){
+  const now = Date.now();
+  if (_buracoCache && (now - _buracoT) < 30000) return _buracoCache;
+  const _k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+  const buraco={};
+  try{
+    const [cl, ct] = await Promise.all([
+      env.DB.prepare("SELECT num_key, COUNT(*) n FROM tt_pending WHERE ts > strftime('%s','now')-3600 AND num_key IS NOT NULL AND num_key<>'' GROUP BY num_key").all().then(r=>r.results||[]).catch(()=>[]),
+      env.DB.prepare("SELECT self_number, COUNT(DISTINCT phone) n FROM sc_ingest_audit WHERE from_me=0 AND received_at > strftime('%s','now')-3600 GROUP BY self_number").all().then(r=>r.results||[]).catch(()=>[]),
+    ]);
+    const contatos={}; ct.forEach(r=>{ const k=_k8(r.self_number); if(k) contatos[k]=(contatos[k]||0)+(Number(r.n)||0); });
+    cl.forEach(r=>{ const k=String(r.num_key||''), q=Number(r.n)||0;
+      if(k && q>=30 && (contatos[k]||0)*50 < q) buraco[k]=q;   // >=30 cliques e menos de 2% virou conversa
+    });
+  }catch(_){}
+  _buracoCache = buraco; _buracoT = now;
+  return buraco;
+}
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
+// Contador em MEMÓRIA dos últimos envios por número. A gravação do clique (tt_pending) leva alguns
+// instantes pra aparecer na LEITURA, e numa rajada isso deixava passar bem mais que o teto antes de
+// desviar (medido: 18 num teto de 10). Este contador é imediato e fecha essa janela. É por isolate,
+// então não é global — some junto com o isolate e serve só pra frear a rajada, não pra contabilidade.
+const _pickLog = {};   // num_key -> [timestamps]
+function _pickBump(k){ if(!k) return; const t=Math.floor(Date.now()/1000); (_pickLog[k]=_pickLog[k]||[]).push(t); }
+function _pickRecent(k, win){ if(!k) return 0; const t=Math.floor(Date.now()/1000); const a=_pickLog[k]; if(!a) return 0; const keep=a.filter(x=>t-x<win); _pickLog[k]=keep; return keep.length; }
 async function _presselBalancedPick(env, id, sellers){
   const now=Math.floor(Date.now()/1000);
-  const dayStart=Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
-  const m={};   // inst -> { pace, burst, today, lastmt }
+  // CARGA RECENTE por instância = contatos DISTINTOS na última hora (load1h) e nos últimos 10min
+  // (burst). Métrica direta e confiável (filtra por ts, usa índice) — substitui o antigo "primeiro
+  // contato hoje", que varria a tabela inteira e não media a carga real, deixando a distribuição
+  // desregulada. É exatamente o que o Bruno quer equalizar: quem iniciou MENOS contato recebe primeiro.
+  const m={};   // inst -> { load1h, burst, lastmt }
   try{
     const r=await env.DB.prepare(
       `SELECT instance,
-         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) pace,
-         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) burst,
-         SUM(CASE WHEN mt>=? THEN 1 ELSE 0 END) today,
-         MAX(mt) lastmt
-       FROM (SELECT phone, instance, MIN(ts) mt FROM wa_messages WHERE direction='in' GROUP BY phone, instance)
+         COUNT(DISTINCT CASE WHEN ts > ? THEN phone END) load1h,
+         COUNT(DISTINCT CASE WHEN ts > ? THEN phone END) burst,
+         MAX(ts) lastmt
+       FROM wa_messages WHERE direction='in' AND ts > ?
        GROUP BY instance`
-    ).bind(now-PACE_WIN, now-BURST_WIN, dayStart).all();
-    (r.results||[]).forEach(x=>{ m[x.instance]={ pace:Number(x.pace)||0, burst:Number(x.burst)||0, today:Number(x.today)||0, lastmt:Number(x.lastmt)||0 }; });
+    ).bind(now-3600, now-BURST_WIN, now-3600).all();
+    (r.results||[]).forEach(x=>{ m[x.instance]={ load1h:Number(x.load1h)||0, burst:Number(x.burst)||0, lastmt:Number(x.lastmt)||0 }; });
   }catch(_){}
-  const g=inst=>m[inst]||{pace:0,burst:0,today:0,lastmt:0};
-  // Aquecimento ancorado no NÚMERO (não na instância): quando ESTE número recebeu o 1º lead. Assim,
-  // trocar o número num slot antigo (ex: reconectar a reserva) aquece o número NOVO, não o herda "velho".
-  const numFirst={};
+  const g=inst=>m[inst]||{load1h:0,burst:0,lastmt:0};
+  const _k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+  // ── O TETO MEDE O CLIQUE, NÃO A CONVERSA ──────────────────────────────────────────────────
+  // A mensagem do lead chega 1 a 2 min DEPOIS do clique, e só parte dos cliques vira conversa
+  // (hoje 250 de 854). Medindo só wa_messages (quem já respondeu), no pico o teto lia quase zero e
+  // despejava a rajada inteira num número — foi exatamente isso que quase baniu o número do
+  // Guilherme. Aqui conta os cliques JÁ roteados (tt_pending grava na hora, junto com o número).
+  const clkBurst={};
   try{
-    const rn=await env.DB.prepare("SELECT num, MIN(ts) fm FROM wa_lead WHERE num IS NOT NULL AND num<>'' GROUP BY num").all();
-    (rn.results||[]).forEach(x=>{ const k=String(x.num).replace(/\D/g,'').slice(-8); const v=Number(x.fm)||0; if(k&&v) numFirst[k]=numFirst[k]?Math.min(numFirst[k],v):v; });
+    const rc=await env.DB.prepare("SELECT num_key, COUNT(*) n FROM tt_pending WHERE ts > ? AND num_key IS NOT NULL AND num_key<>'' GROUP BY num_key").bind(now-BURST_WIN).all();
+    (rc.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(k) clkBurst[k]=Number(x.n)||0; });
   }catch(_){}
-  const firstSeen=numTxt=>{ const k=String(numTxt||'').replace(/\D/g,'').slice(-8); return numFirst[k]||0; };
-  const warming=a=>{ const f=firstSeen(a.num); return !f || (now-f)/60 < WARMUP_MIN; };
-  // teto atual do número: número novo (aquecimento) sobe de WARM_MIN_CAP até BURST_CAP em WARMUP_MIN min.
-  const capOf=a=>{ const f=firstSeen(a.num); if(!f) return WARM_MIN_CAP; const ageMin=(now-f)/60; if(ageMin>=WARMUP_MIN) return BURST_CAP; return Math.max(WARM_MIN_CAP, Math.round(BURST_CAP*ageMin/WARMUP_MIN)); };
-  // Monta candidatos (mesma lógica split/overflow; a cota do overflow usa a contagem do DIA).
-  const avail=[];
+  // Carga do teto = o MAIOR entre conversa recente, clique recente (banco) e envios recentes
+  // (memória, imediato). Nunca subestima a rajada.
+  const burstOf=a=>{ const k=_k8(a.num); return Math.max(g(a.inst).burst||0, clkBurst[k]||0, _pickRecent(k, BURST_WIN)); };
+  const _ret=a=>{ try{ _pickBump(_k8(a.num)); }catch(_){} return a; };   // registra o envio na hora
+  // ── AQUECIMENTO POR NÚMERO ────────────────────────────────────────────────────────────────
+  // Chip novo é o mais frágil pra ban: entra com teto menor e sobe pro cheio em WARMUP_MIN.
+  // Ancorado no NÚMERO (created_at do wa_number_owner), não na instância: trocar o número reinicia
+  // o aquecimento do novo sem herdar do velho, e o excedente espalha pro próximo saudável (o bug
+  // antigo era o contrário: o novo era excluído e o VELHO absorvia tudo).
+  // Sem created_at (números que já existiam) = maduro, teto cheio → fail-open, não trava ninguém.
+  const nasc={};
+  try{
+    const rn=await env.DB.prepare("SELECT num_key, created_at FROM wa_number_owner WHERE created_at IS NOT NULL AND num_key IS NOT NULL").all();
+    (rn.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(k) nasc[k]=Number(x.created_at)||0; });
+  }catch(_){}
+  const capOf=a=>{ const b=nasc[_k8(a.num)]||0; return (b && (now-b)/60 < WARMUP_MIN) ? WARM_MIN_CAP : BURST_CAP; };
+  let avail=[];   // 'let' porque a proteção anti-buraco-negro abaixo pode reatribuir a lista
   for(const s of sellers){
-    const cP=s.primary?g(s.primary.inst).today:0;
-    const cB=s.backup?g(s.backup.inst).today:0;
+    const cP=s.primary?g(s.primary.inst).load1h:0;
+    const cB=s.backup?g(s.backup.inst).load1h:0;
     if(s.mode==='split' && s.primary && s.backup){
       avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst});
       avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst});
@@ -3063,45 +3241,52 @@ async function _presselBalancedPick(env, id, sellers){
     avail.push({num:eff.num, at:s.at, inst:eff.inst});
   }
   if(!avail.length) return null;
-  if(avail.length===1) return avail[0];
+  // ── PROTEÇÃO ANTI-BURACO-NEGRO ────────────────────────────────────────────────
+  // Número bloqueado continua reportando presença, mas ninguém consegue falar com ele. Como quase
+  // não gera conversa, o contador dele fica baixo, a roleta acha que está "atrasado" e despeja
+  // TUDO nele. Aconteceu de verdade: 366 cliques e 1 conversa, ~80% da verba num número morto.
+  // Regra: muito clique na última hora e conversão perto de zero = tira da roleta.
+  // Nunca zera a roleta: se todo mundo cair na regra, ignora a proteção (fail-open).
+  try{
+    // O conjunto de buracos negros é cacheado ~30s por isolate: essas 2 queries varrem tabelas
+    // grandes (tt_pending, sc_ingest_audit) e rodavam A CADA clique de anúncio, deixando a pressel
+    // lenta no pico. O status de um número não muda de segundo pra segundo, então recalcular a cada
+    // 30s é de sobra e tira o peso do caminho quente.
+    const buraco = await _getBuracoNegro(env);
+    if(buraco && Object.keys(buraco).length){
+      const limpo=avail.filter(a=>!buraco[_k8(a.num)]);
+      if(limpo.length) avail=limpo;   // só aplica se ainda sobrar número pra atender
+    }
+  }catch(_){}
+  // NÃO ter atalho pra 1 número só: era um buraco grave. Com um número sozinho na roleta (caso comum
+  // quando o Diretor desliga os outros pra "proteger"), o teto era pulado e ele recebia ILIMITADO —
+  // justamente o cenário de ban. Agora todo mundo passa pelo teto; se o único número estourar, cai em
+  // "saturado", que MARCA o alerta (pra dash avisar "adicione número") e ainda entrega o lead.
   // 1) preferir quem NÃO bateu o teto de rajada (com aquecimento do número novo)
-  let pool=avail.filter(a=>g(a.inst).burst < capOf(a));
+  let pool=avail.filter(a=>burstOf(a) < capOf(a));   // teto pelo clique+conversa (o que for maior)
   const saturated = pool.length===0;
   if(saturated){
     try{ await _roletaMarkSaturated(env); }catch(_){}
-    // Todos no teto (volume alto demais). Não perde lead, MAS protege o número NOVO: o excedente
-    // vai pros ESTABELECIDOS (aguentam um pico melhor que um chip fresco, que bane). Um número em
-    // aquecimento nunca passa do teto dele — mesmo saturado. Só cai nele se não houver estabelecido.
-    const established=avail.filter(a=>!warming(a));
-    pool = established.length ? established : avail.slice();
+    // Todos no teto = volume alto demais pros números no ar (a dash avisa pra ADICIONAR número).
+    // Não perde lead e NÃO despeja num "estabelecido" só: espalha pelo menos carregado entre todos.
+    pool = avail.slice();
   }
-  // 2) ordena por ritmo recente (menos nos últimos PACE_WIN); empate → menos hoje → recebeu há mais tempo
+  // Ordena por CARGA da última hora, em FAIXA de 5 contatos (quem recebeu menos vem primeiro), e
+  // desempata pela rajada dos últimos minutos. Empate real → rodízio atômico (o único imediato;
+  // qualquer contador lido do banco atrasa alguns segundos e criaria "vencedor único" na rajada).
   const cmp=(a,b)=>{
-    const A=g(a.inst), B=g(b.inst);
-    if(saturated && A.burst!==B.burst) return A.burst-B.burst;   // saturado: pro menos carregado agora
-    // EQUALIZAR O DIA: quem tem MENOS gente que iniciou contato hoje recebe primeiro (today vem
-    // antes de pace). Antes o ritmo dos últimos 15min mandava e o "hoje" só desempatava, então um
-    // número que entrou atrasado (ex: vendedor abriu o Sale Chat mais tarde) nunca alcançava o
-    // outro: ficava só andando no mesmo passo, mantendo a diferença do dia pra sempre.
-    // O atraso é recuperado SEM despejar rajada: o teto por número (pool acima) já limita quantos
-    // contatos cada um pode absorver por janela, e número em aquecimento tem teto menor ainda.
-    // ÚNICO critério: quem teve MENOS gente iniciando contato hoje. Empate → rodízio (abaixo).
-    // Nada de desempatar por ritmo/último contato/clique em trânsito: todos vêm de LEITURA do
-    // banco, que atrasa alguns segundos. Numa rajada eles não mudam a tempo, viram um vencedor
-    // único artificial e o rodízio nunca era chamado — a rajada inteira caía no mesmo número.
-    // O contador de rodízio é escrita atômica, então é o único imediato e confiável.
-    // Compara por FAIXA de 5 contatos, não pelo número exato. O contador só sobe quando o lead
-    // RESPONDE (30 a 120s depois do clique), então numa rajada ele não acompanha: com diferença de
-    // 1 contato o que está atrás levava 100% dos cliques seguidos e inundava um número só.
-    // Em faixas, quem está atrás ainda recupera, mas alternando pelo rodízio dentro da faixa.
-    return Math.floor(A.today/5)-Math.floor(B.today/5);
+    const fa=Math.floor(g(a.inst).load1h/5), fb=Math.floor(g(b.inst).load1h/5);
+    if(fa!==fb) return fa-fb;                       // menos contatos na última hora primeiro
+    const ba=burstOf(a), bb=burstOf(b);
+    if(ba!==bb) return ba-bb;                       // desempate: menos rajada recente (clique+conversa)
+    return 0;
   };
   pool.sort(cmp);
-  const top=g(pool[0].inst);
-  const tied=pool.filter(a=>{ const X=g(a.inst); return Math.floor(X.today/5)===Math.floor(top.today/5) && (!saturated || X.burst===top.burst); });
-  if(tied.length<=1) return pool[0];
+  const topF=Math.floor(g(pool[0].inst).load1h/5), topB=burstOf(pool[0]);
+  const tied=pool.filter(a=>Math.floor(g(a.inst).load1h/5)===topF && burstOf(a)===topB);
+  if(tied.length<=1) return _ret(pool[0]);
   const idx=await _presselNextIndex(env, id, tied.length);   // empate total → rotação
-  return tied[idx];
+  return _ret(tied[idx]);
 }
 // Marca que a roleta saturou (todos os números no teto). Throttle in-memory: no máx 1 escrita/min.
 let _lastSatWrite=0;
@@ -3457,6 +3642,7 @@ async function handlePresselsTotalPage(req, env){
       // ── VISÃO DIÁRIA (padrão) ──
       let leads=[];
       let saleSet=new Set();
+      const nameByPhone={};   // telefone (só dígitos) -> nome do perfil do WhatsApp
       try{
         try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
         try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
@@ -3465,6 +3651,9 @@ async function handlePresselsTotalPage(req, env){
         leads=r.results||[];
         // telefones que VIRARAM venda (do dia em diante) → pra pintar o número de verde
         try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=?").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
+        // NOME do lead: o WhatsApp manda o nome do perfil na captura (wa_chats.name). Puxa só pros
+        // telefones do dia (JOIN, sem estourar limite de parâmetro) pra mostrar ao lado do número.
+        try{ const nr=await env.DB.prepare("SELECT c.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON l.phone=c.phone WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
       }catch(_){}
       const isSale=ph=>!!(ph&&saleSet.has(ph));
       const byAt={};
@@ -3492,12 +3681,18 @@ async function handlePresselsTotalPage(req, env){
             const tag=attr?`<span style="font-size:9.5px;font-weight:700;color:#34d399">${_escHtml(_pnm[String(l.pid)]||'pressel')}</span>`:`<span style="font-size:9.5px;color:#6b7a93">sem rastreio</span>`;
             const ph=String(l.phone||'').replace(/\D/g,'');
             const sale=isSale(ph);
-            if(full && ph){ cpLines.push(fmtNum(ph)+'  '+hora+'  '+pnome+(sale?'  VENDA':'')+'  '+waHref(ph)); }
+            const nome=nameByPhone[ph]||'';   // nome do perfil do WhatsApp (se veio na captura)
+            if(full && ph){ cpLines.push(fmtNum(ph)+(nome?('  '+nome):'')+'  '+hora+'  '+pnome+(sale?'  VENDA':'')+'  '+waHref(ph)); }
             const numCol=sale?'#34d399':(full?'#e2e8f0':'#cbd5e1');   // verde = virou venda
+            const numTxt=full&&ph?fmtNum(ph):(ph?('…'+ph.slice(-4)):'');
+            // NÚMERO em cima (destaque), nome embaixo (menor, cinza). Sem nome, mostra só o número.
+            const ident=nome
+              ? `<span style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="color:${numCol};font-weight:${sale?'700':'600'};font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(numTxt)}</span><span style="color:#8b9bb4;font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(nome)}</span></span>`
+              : `<span style="color:${numCol};font-weight:${sale?'700':(full?'600':'400')};font-family:ui-monospace,monospace">${_escHtml(numTxt)}</span>`;
             const numCell=(full&&ph)
-              ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="flex:1;color:${numCol};font-weight:${sale?'700':'600'};font-family:ui-monospace,monospace;text-decoration:none;cursor:pointer">${_escHtml(fmtNum(ph))}</a>`
-              : `<span style="flex:1;color:${numCol};font-weight:${sale?'700':'400'};font-family:ui-monospace,monospace">${ph?('…'+ph.slice(-4)):''}</span>`;
-            return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums">${hora}</span>${numCell}${tag}</div>`;
+              ? `<a href="${waHref(ph)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp" style="flex:1;min-width:0;text-decoration:none;cursor:pointer">${ident}</a>`
+              : `<span style="flex:1;min-width:0">${ident}</span>`;
+            return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #1a2436;font-size:11.5px"><span style="color:#8b9bb4;font-variant-numeric:tabular-nums;flex:none">${hora}</span>${numCell}${tag}</div>`;
           }).join('');
           return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#7aa2ff;font-weight:700"><span style="font-family:ui-monospace,monospace">${_escHtml(fmtNum(k))}</span><span style="background:#1a2942;padding:1px 8px;border-radius:9px">${ls.length}</span></div>${rows}</div>`;
         }).join('');
@@ -3515,8 +3710,7 @@ async function handlePresselsTotalPage(req, env){
   return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}</style></head><body><div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
-  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
+  const data = await _getDashData(env);   // cacheado: era parseado (1.3MB) a cada clique de anúncio
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
   const chips=Array.isArray(data.chips)?data.chips:[];
   const p=pressels.find(x=>String(x.id)===String(id));
@@ -3531,7 +3725,10 @@ async function handlePresselPublic(req, env, id){
     // A linha 'sc' do wa_conn NÃO expira sozinha: ela fica gravada com o último heartbeat. Sem checar
     // a idade, um número que caiu continuava "vivo" pra sempre e seguia recebendo lead (aconteceu de
     // verdade: o WhatsApp caiu e a roleta continuou mandando). Só vale 'sc' com sinal dos últimos 3min.
-    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE state='open' OR (state='sc' AND updated_at > strftime('%s','now')-180)").all();
+    // A validade vale pros DOIS estados. Antes só o 'sc' expirava, e uma linha 'open' velha da
+    // Evolution ficava valendo pra sempre — bastava um registro antigo pra manter um número morto
+    // recebendo lead eternamente. Com a operação 100% no Sale Chat, isso viraria um ralo silencioso.
+    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc')").all();
     const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
     // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
     try{
@@ -3558,25 +3755,27 @@ async function handlePresselPublic(req, env, id){
   }catch(_){}
   const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
   let leadCode = '';
-  if(ttclid){
-    try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
-      await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
-      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}   // pra deduplicar "Foram pro WhatsApp" por ttclid
-      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
-      const ex = await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first();
-      if(ex){ leadCode = ex.code || ''; }
-      else {
-        leadCode = _genCode(6);
-        // Grava também o NÚMERO pra onde a pessoa foi. A atribuição casa por número, então
-        // trocar o número de principal↔complementar não desliga mais o rastreio do lead.
-        const _nk = String(pick.num||'').replace(/\D/g,'').slice(-8);
-        await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick.inst, ttclid, String(id), leadCode, _nk).run();
-        try{ await _bumpPressel(env, id, 'views'); }catch(_){}   // conta SÓ tráfego real do TikTok, 1x por clique
-      }
-    }catch(_){}
-  }
-  // mensagem do WhatsApp com o código do clique (só quando veio de anúncio) — pra atribuição exata pelo código
+  // SEMPRE gera o código, com ou sem ttclid. O servidor SABE qual pressel está servindo esta
+  // página, então deixar o lead chegar "sem rastreio" era jogar fora uma informação que já
+  // estava na mão. Sem ttclid (orgânico, link compartilhado, TikTok que não passou o parâmetro)
+  // perde-se só o pixel — a PRESSEL continua rastreada. A 1ª letra do código é a pressel.
+  try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}   // pra deduplicar "Foram pro WhatsApp" por ttclid
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
+    const ex = ttclid ? await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first() : null;
+    if(ex){ leadCode = ex.code || ''; }
+    else {
+      leadCode = _genLeadCode(id);
+      // Grava também o NÚMERO pra onde a pessoa foi. A atribuição casa por número, então
+      // trocar o número de principal↔complementar não desliga mais o rastreio do lead.
+      const _nk = String(pick.num||'').replace(/\D/g,'').slice(-8);
+      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick.inst, ttclid, String(id), leadCode, _nk).run();
+      if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok, 1x por clique
+    }
+  }catch(_){}
+  // mensagem do WhatsApp com o código do clique — pra atribuição exata pelo código
   let waMsg = String(p.msg||'');
   if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
   const wa=_waLink(pick.num, waMsg);
@@ -3611,8 +3810,15 @@ export default {
     // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
     // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
     try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
+    // Purga o que já não serve pra roteamento/atribuição, pra as tabelas quentes não crescerem sem
+    // fim (deixavam os scans lentos e o custo do Worker subindo com a verba). Só apaga o antigo:
+    // auditoria de captura > 3 dias e cliques pendentes > 7 dias (a janela de atribuição é 1h).
+    try { await env.DB.prepare("DELETE FROM sc_ingest_audit WHERE received_at < strftime('%s','now')-259200").run(); } catch (_) {}
+    try { await env.DB.prepare("DELETE FROM tt_pending WHERE ts < strftime('%s','now')-604800").run(); } catch (_) {}
     try {
-      const live = await _evoInstances(env);
+      // Fonte no Sale Chat = não conversa mais com a Evolution. Sem isso o cron ficava
+      // reescrevendo as linhas dela a cada 2min e ressuscitando conexão fantasma na tela.
+      const live = (await _waCaptureSource(env)) === 'sc' ? null : await _evoInstances(env);
       if (live && live.length) {
         await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
         try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
