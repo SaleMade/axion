@@ -2856,11 +2856,16 @@ async function _waAutoReplies(env, instance, data, ctx) {
 // sem ninguem ficar sabendo. Agora cada envio fica registrado com o resultado, e o que falhou o
 // cron reenvia sozinho. Reenvio e SEGURO: vai com o MESMO event_id, e o TikTok deduplica por ele
 // (nao conta a venda 2x).
+let _ttTableOk = false;   // roda no caminho de TODO lead: cria a tabela 1x por isolate, não a cada evento
 async function _ttEnsureTable(env) {
+  if (_ttTableOk) return;
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tt_events (
     event_id TEXT PRIMARY KEY, event TEXT, phone TEXT, value REAL, ttclid TEXT,
     pid TEXT, instance TEXT, status TEXT, code TEXT, msg TEXT,
     tries INTEGER DEFAULT 0, ts INTEGER, next_try INTEGER)`).run();
+  _ttTableOk = true;   // só marca DEPOIS de criar: se falhar, a próxima chamada tenta de novo
+  // Índice do reenvio: sem ele o cron varria a tabela inteira a cada 2min pra achar 0 falhas.
+  try { await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_tt_retry ON tt_events(status, next_try)").run(); } catch (_) {}
 }
 // Envia e CONFERE a resposta. Atencao: o TikTok responde HTTP 200 mesmo recusando o evento —
 // o que vale e o campo "code" do corpo (0 = aceito). Antes so o status HTTP era olhado (e nem isso).
@@ -3079,6 +3084,15 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
     if (!digits) return;
     let ttclid = '', pid = '';
     try { const l = await env.DB.prepare('SELECT pid, ttclid FROM wa_lead WHERE phone=?').bind(digits).first(); if (l) { ttclid = l.ttclid || ''; pid = l.pid || ''; } } catch (_) {}
+    // NÃO tentar adivinhar o ttclid da venda sem rastreio. Foi avaliado e REPROVADO em 22/07:
+    // tt_pending nasce quando a PÁGINA da pressel carrega, não quando a pessoa abre o WhatsApp
+    // (o `clicked=1` é que marca isso, e vem depois, por beacon). Entre uma coisa e outra o lead
+    // assiste a VSL, o que leva minutos, e nesse meio tempo entram vários outros page views que
+    // nunca viram lead. Logo "o clique mais próximo antes do contato" é quase sempre de OUTRA
+    // pessoa: mandaria a venda pro criativo errado e ainda queimaria (claimed=1) o clique que era a
+    // atribuição exata de um lead futuro, virando dois erros. Sem ttclid o TikTok ainda casa pelo
+    // telefone hasheado; com ttclid de estranho, não tem conserto. Quem resolve isso de verdade é a
+    // captura do CÓDIGO na 1ª mensagem, não palpite na hora da venda.
     // Venda SEM pressel identificada (lead sem rastreio, ou venda lançada na mão): antes caía no
     // pixel GLOBAL e a venda sumia da BM que realmente trouxe o lead — o gestor de tráfego via a
     // venda faltando. Agora deduz a pressel pelo tráfego REAL: a que mais mandou clique pros números

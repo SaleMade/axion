@@ -7502,7 +7502,7 @@ function _pcfRenderList(){
       const hora=isNaN(t)?'':t.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'});
       const val=Number(s.value)||0;
       const tag=_atr(s)
-        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
+        ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src&&s.src!=='code'?' (aprox)':''}</span>`
         : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
       // Selo do TikTok: prova de que a conversão foi ACEITA pelo pixel (code=0), não só "enviada".
       // Sem isso um envio recusado (token vencido, evento inválido) passava batido e o gestor via
