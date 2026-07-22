@@ -2773,8 +2773,17 @@ async function _waDetectSale(env, instance, data) {
       try{ await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_sales_msgid ON wa_sales(msg_id)').run(); }catch(_){}
       _saleTablesOk = true;
     }
-    const recent = await env.DB.prepare("SELECT ts FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 1").bind(phone).first();
-    if (recent) return { sale: true, value }; // já registrada nas últimas 24h (ainda é venda, confirma)
+    // Trava de 24h POR PEDIDO, não por telefone. Antes qualquer 2ª venda do mesmo número em 24h era
+    // descartada: se o cliente comprava DE NOVO no mesmo dia, a venda sumia da dash e do TikTok.
+    // Agora só é considerada repetição o mesmo pedido recolado pelo atendente (mesmo valor E mesmo
+    // CPF). Valor ou CPF diferente = pedido novo de verdade → registra e dispara o CompletePayment.
+    const rec = await env.DB.prepare("SELECT value, raw FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 10").bind(phone).all();
+    const dupe = (rec.results || []).some(r => {
+      const sameVal = Math.abs((Number(r.value) || 0) - (Number(value) || 0)) < 0.01;
+      const sameCpf = (extractCpf(String(r.raw || '')) || '') === (cpfDetect || '');
+      return sameVal && sameCpf;
+    });
+    if (dupe) return { sale: true, value }; // mesmo pedido já registrado nas últimas 24h
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)").bind(phone, instance, name, value, msgId, String(text||'').slice(0,2000)).run();
     if (ins.meta && ins.meta.changes === 0) return { sale: true, value }; // msg_id repetido → já registrada
@@ -2842,17 +2851,83 @@ async function _waAutoReplies(env, instance, data, ctx) {
 }
 // Envia um evento pro TikTok Events API (server-side). Telefone hasheado (advanced matching);
 // inclui ttclid quando temos (atribuição precisa ao anúncio).
-async function _ttSend(pixel, token, event, phoneDigits, opts) {
+// Tabela de conferencia dos eventos mandados pro TikTok. Antes o envio era "manda e esquece":
+// erro de rede, token vencido ou recusa do TikTok sumiam no catch e a venda NUNCA era remandada,
+// sem ninguem ficar sabendo. Agora cada envio fica registrado com o resultado, e o que falhou o
+// cron reenvia sozinho. Reenvio e SEGURO: vai com o MESMO event_id, e o TikTok deduplica por ele
+// (nao conta a venda 2x).
+async function _ttEnsureTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tt_events (
+    event_id TEXT PRIMARY KEY, event TEXT, phone TEXT, value REAL, ttclid TEXT,
+    pid TEXT, instance TEXT, status TEXT, code TEXT, msg TEXT,
+    tries INTEGER DEFAULT 0, ts INTEGER, next_try INTEGER)`).run();
+}
+// Envia e CONFERE a resposta. Atencao: o TikTok responde HTTP 200 mesmo recusando o evento —
+// o que vale e o campo "code" do corpo (0 = aceito). Antes so o status HTTP era olhado (e nem isso).
+async function _ttSend(env, pixel, token, event, phoneDigits, opts) {
   opts = opts || {};
-  if (!pixel || !token || !phoneDigits) return;
+  if (!phoneDigits) return { ok: false, code: 'sem_telefone' };
+  const evId = String(opts.eventId || (event + '_' + phoneDigits));
+  if (!pixel || !token) {
+    // Sem pixel/token nao da nem pra tentar: registra como pendente pro cron tentar depois
+    // (ex: a pressel ainda nao tinha token configurado na hora da venda).
+    try {
+      await _ttEnsureTable(env);
+      await env.DB.prepare(`INSERT INTO tt_events (event_id,event,phone,value,ttclid,pid,instance,status,code,msg,tries,ts,next_try)
+        VALUES (?,?,?,?,?,?,?, 'erro','sem_pixel','pressel sem pixel/token na hora do envio',0,strftime('%s','now'),strftime('%s','now')+300)
+        ON CONFLICT(event_id) DO NOTHING`)
+        .bind(evId, event, String(phoneDigits), (opts.value == null ? null : Number(opts.value)), String(opts.ttclid || ''), String(opts.pid || ''), String(opts.instance || '')).run();
+    } catch (_) {}
+    return { ok: false, code: 'sem_pixel' };
+  }
+  let ok = false, code = '', msg = '';
   try {
     const user = { phone: await sha256Hex('+' + phoneDigits) };
     if (opts.ttclid) user.ttclid = String(opts.ttclid);
-    const ev = { event, event_time: Math.floor(Date.now() / 1000), event_id: String(opts.eventId || (event + '_' + phoneDigits)), user };
+    const ev = { event, event_time: Math.floor((opts.eventTime ? Number(opts.eventTime) : Date.now() / 1000)), event_id: evId, user };
     if (opts.value != null) ev.properties = { currency: 'BRL', value: Number(opts.value) || 0, content_type: 'product' };
     const body = { event_source: 'web', event_source_id: pixel, data: [ev] };
     const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    try { console.log('TTEV', event, r.status, (await r.text()).slice(0, 120)); } catch (_) {}
+    const txt = await r.text();
+    let j = {}; try { j = JSON.parse(txt); } catch (_) {}
+    code = String(j.code != null ? j.code : r.status);
+    msg = String(j.message || '').slice(0, 180);
+    ok = (r.ok && String(j.code) === '0');            // 0 = aceito de verdade
+    console.log('TTEV', event, 'http=' + r.status, 'code=' + code, msg.slice(0, 60));
+  } catch (e) { code = 'rede'; msg = String((e && e.message) || e).slice(0, 180); }
+  // Registra o resultado. Se falhou, o cron reenvia (backoff: 5min, 10min, 20min...).
+  try {
+    await _ttEnsureTable(env);
+    await env.DB.prepare(`INSERT INTO tt_events (event_id,event,phone,value,ttclid,pid,instance,status,code,msg,tries,ts,next_try)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?)
+      ON CONFLICT(event_id) DO UPDATE SET status=excluded.status, code=excluded.code, msg=excluded.msg,
+        tries=tt_events.tries+1, next_try=excluded.next_try`)
+      .bind(evId, event, String(phoneDigits), (opts.value == null ? null : Number(opts.value)), String(opts.ttclid || ''),
+            String(opts.pid || ''), String(opts.instance || ''), ok ? 'ok' : 'erro', code, msg, ok ? 0 : 1,
+            ok ? 0 : (Math.floor(Date.now() / 1000) + 300)).run();
+  } catch (_) {}
+  return { ok, code, msg };
+}
+// Reenvia o que falhou (roda no cron). Mesmo event_id -> o TikTok deduplica, entao nao conta 2x.
+async function _ttRetryFailed(env) {
+  try {
+    await _ttEnsureTable(env);
+    const rows = await env.DB.prepare(
+      `SELECT * FROM tt_events WHERE status='erro' AND tries < 6 AND COALESCE(next_try,0) <= strftime('%s','now')
+       ORDER BY ts ASC LIMIT 20`).all();
+    for (const e of (rows.results || [])) {
+      const { pixel, token } = await _ttPixelToken(env, e.pid || '', e.instance || '');
+      if (!pixel || !token) {   // ainda sem pixel: adia sem gastar tentativa
+        try { await env.DB.prepare("UPDATE tt_events SET next_try=strftime('%s','now')+1800 WHERE event_id=?").bind(e.event_id).run(); } catch (_) {}
+        continue;
+      }
+      const backoff = Math.min(3600, 300 * Math.pow(2, Number(e.tries) || 0));
+      const res = await _ttSend(env, pixel, token, e.event, e.phone, {
+        value: e.value, ttclid: e.ttclid || '', eventId: e.event_id, pid: e.pid, instance: e.instance,
+        eventTime: e.ts,                      // hora REAL do evento (nao a do reenvio)
+      });
+      if (!res.ok) { try { await env.DB.prepare("UPDATE tt_events SET next_try=strftime('%s','now')+? WHERE event_id=?").bind(backoff, e.event_id).run(); } catch (_) {} }
+    }
   } catch (_) {}
 }
 // Resolve pixel+token: 1) da pressel (pid) se tiver os dois; 2) da pressel do vendedor (ax_<at>); 3) global.
@@ -2993,7 +3068,7 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // No upgrade só dispara se o lead AINDA NÃO tinha ttclid, pra não mandar o evento duas vezes.
     if (ttclid && !(exists && exists.ttclid)) {
       const { pixel, token } = await _ttPixelToken(env, pid, instance);
-      await _ttSend(pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone });   // LEAD = InitiateCheckout (evento que o GT otimiza)
+      await _ttSend(env, pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone, pid, instance });   // LEAD = InitiateCheckout (evento que o GT otimiza)
     }
   } catch (_) {}
 }
@@ -3021,7 +3096,7 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
       } catch (_) {}
     }
     const { pixel, token } = await _ttPixelToken(env, pid, instance);
-    await _ttSend(pixel, token, 'CompletePayment', digits, { value, ttclid, eventId });
+    await _ttSend(env, pixel, token, 'CompletePayment', digits, { value, ttclid, eventId, pid, instance });
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
@@ -3031,6 +3106,7 @@ async function handleWASales(req, env) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // garante a coluna pro SELECT
+    try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN msg_id TEXT').run(); }catch(_){}   // idem: sem ela o SELECT quebrava e a tela vinha VAZIA (sem erro)
     try{ await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run(); }catch(_){}
     try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // garante l.src pro JOIN
     const params = new URL(req.url).searchParams;
@@ -3045,8 +3121,15 @@ async function handleWASales(req, env) {
       const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
       where = 'WHERE s.ts>=? AND s.ts<?'; binds = [start, end];
     }
-    // LEFT JOIN wa_lead pra saber se a venda veio de pressel (pid) — mostra "da pressel" vs "sem rastreio" na tela
-    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw, l.pid AS pid, l.src AS src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone ${where} ORDER BY s.ts DESC LIMIT 1000`);
+    try { await _ttEnsureTable(env); } catch (_) {}   // garante o JOIN do status do TikTok
+    // LEFT JOIN wa_lead pra saber se a venda veio de pressel (pid) — mostra "da pressel" vs "sem rastreio" na tela.
+    // LEFT JOIN tt_events (pelo msg_id = event_id do envio) pra mostrar se o TikTok ACEITOU a venda.
+    const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw,
+        l.pid AS pid, l.src AS src, l.ttclid AS ttclid,
+        t.status AS tt_status, t.code AS tt_code, t.msg AS tt_msg, t.tries AS tt_tries
+      FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone
+      LEFT JOIN tt_events t ON t.event_id=s.msg_id AND t.event='CompletePayment'
+      ${where} ORDER BY s.ts DESC LIMIT 1000`);
     const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
@@ -4064,6 +4147,11 @@ export default {
     } catch (_) {}
     try { await env.DB.prepare("DELETE FROM sc_ingest_audit WHERE received_at < strftime('%s','now')-259200").run(); } catch (_) {}
     try { await env.DB.prepare("DELETE FROM tt_pending WHERE ts < strftime('%s','now')-604800").run(); } catch (_) {}
+    // Reenvia pro TikTok o que falhou (rede/token/recusa). Sem isso a venda ficava marcada só na
+    // dash e NUNCA chegava no pixel, e ninguém via. Mesmo event_id = TikTok deduplica, não conta 2x.
+    try { await _ttRetryFailed(env); } catch (_) {}
+    // Guarda o histórico dos envios por 60 dias (serve de prova pro gestor de tráfego).
+    try { await env.DB.prepare("DELETE FROM tt_events WHERE status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
     try {
       // Fonte no Sale Chat = não conversa mais com a Evolution. Sem isso o cron ficava
       // reescrevendo as linhas dela a cada 2min e ressuscitando conexão fantasma na tela.

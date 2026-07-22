@@ -4036,8 +4036,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.79.0';
-const APP_LAST_CHANGE = 'Aviso de apagamento agora se resolve sozinho. Se a sua aba estiver com dados velhos em cache, clicar em Cancelar descarta os dados velhos da aba e carrega o que esta salvo no servidor (antes o aviso voltava toda hora, em loop). O texto do aviso tambem ficou claro sobre qual botao clicar: Cancelar e o recomendado.';
+const APP_VERSION = '2.80.0';
+const APP_LAST_CHANGE = 'Conferencia das vendas no TikTok. Cada pedido agora mostra um selo dizendo se a conversao foi ACEITA pelo pixel (antes o sistema so mandava e nao olhava a resposta: envio recusado sumia calado e a venda nunca era remandada). O que falhar o sistema reenvia sozinho a cada 2 minutos, com o mesmo identificador, entao nao conta a venda duas vezes. E cliente que compra DE NOVO no mesmo dia agora conta como pedido novo (antes qualquer 2a venda do mesmo numero em 24h era descartada).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7480,7 +7480,20 @@ function _pcfRenderList(){
     const _pnome=pid=>{ const p=(DB.pressels||[]).find(x=>String(x.id)===String(pid)); return (p&&p.nome)||('Pressel '+pid); };
     const nPress=sales.filter(_atr).length, nSem=sales.length-nPress;
     const _dayKey=ts=>{ const t=new Date((Number(ts)||0)*1000); return isNaN(t)?'—':t.toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'}); };
-    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s) no período${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}</div>`;
+    let html=`<div style="font-size:12.5px;color:var(--t3);margin-bottom:10px"><b style="color:var(--tx)">${sales.length}</b> pedido(s) no período${totVal>0?` · total <b style="color:var(--gr)">R$ ${totVal}</b>`:''} · <b style="color:var(--gr)">${nPress}</b> das pressels${nSem>0?` · <b style="color:var(--t2)">${nSem}</b> sem rastreio`:''}${(()=>{const n=sales.filter(x=>x.tt_status==='erro').length;return n>0?` · <b style="color:var(--am)">${n}</b> não aceita(s) no TikTok`:'';})()}</div>`;
+    // Selo "marcada no TikTok". Só aparece em venda automática (a manual não dispara pixel por
+    // regra) e só quando existe registro do envio — pedido antigo, de antes do registro existir,
+    // fica sem selo em vez de mentir um status que ninguém conferiu.
+    const _ttSelo=s=>{
+      const st=s.tt_status||'';
+      if(!st) return '';
+      const pill=(c,bg,ic,tx,ti)=>`<span title="${_automEsc(ti||'')}" style="font-size:10px;font-weight:700;color:${c};background:${bg};padding:2px 8px;border-radius:20px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">${ico(ic,{size:11})}${tx}</span>`;
+      if(st==='ok') return pill('var(--gr)','var(--grd)','check-circle','TikTok','Conversão aceita pelo TikTok');
+      const t=Number(s.tt_tries)||0, why=(s.tt_msg||s.tt_code||'')+'';
+      return t>=6
+        ? pill('var(--rd)','var(--rdd)','alert-triangle','TikTok falhou','Não foi aceito após 6 tentativas: '+why)
+        : pill('var(--am)','var(--amd)','refresh-cw','reenviando','Ainda não aceito, o sistema está reenviando sozinho: '+why);
+    };
     // Card de um pedido (reusado dentro dos grupos por dia)
     const _card=s=>{
       const at=String(s.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
@@ -7491,13 +7504,17 @@ function _pcfRenderList(){
       const tag=_atr(s)
         ? `<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px;white-space:nowrap">${_automEsc(_pnome(s.pid))}${s.src==='fifo'?' (aprox)':''}</span>`
         : `<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px;white-space:nowrap">sem rastreio</span>`;
+      // Selo do TikTok: prova de que a conversão foi ACEITA pelo pixel (code=0), não só "enviada".
+      // Sem isso um envio recusado (token vencido, evento inválido) passava batido e o gestor via
+      // venda faltando no TikTok sem ninguém saber. O que falha o cron reenvia sozinho.
+      const ttTag=_ttSelo(s);
       const raw=s.raw?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--bl2);font-size:12px;user-select:none">ver pedido completo</summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--t2);background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:10px;margin-top:6px;overflow-x:auto">${_automEsc(s.raw)}</pre></details>`:'';
       const sellerSel = s.id ? `<select onchange="_pcfReassign(${s.id}, this.value)" onclick="event.stopPropagation()" title="Trocar o vendedor deste pedido" style="background:var(--s3);border:1px solid var(--b1);border-radius:7px;color:var(--t2);font-size:12px;font-weight:700;padding:2px 6px;cursor:pointer;font-family:inherit;max-width:170px">${(typeof TEAM!=='undefined'?TEAM:[]).filter(t=>!t.archived).map(t=>`<option value="${t.id}" ${String(t.id)===at?'selected':''}>${_automEsc(t.name)}</option>`).join('')}</select>` : `<b style="color:var(--t2)">${_automEsc(seller)}</b>`;
       return `<div style="border:1px solid var(--b1);border-radius:var(--r);background:var(--s2);padding:14px 16px;margin-bottom:9px">
         <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:0">
             <div style="font-size:14.5px;font-weight:700;color:var(--tx)">${_automEsc(s.name||'Cliente')}${val>0?` · <span style="color:var(--gr)">R$ ${val}</span>`:''}</div>
-            <div style="font-size:12px;color:var(--t3);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Vendedor: ${sellerSel} · ${_automEsc(s.phone||'')} · ${hora}</span>${tag}</div>
+            <div style="font-size:12px;color:var(--t3);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>Vendedor: ${sellerSel} · ${_automEsc(s.phone||'')} · ${hora}</span>${tag}${ttTag}</div>
             ${raw}
           </div>
           <button class="btn btn-gh btn-sm" style="color:var(--rd);border-color:var(--rd);flex-shrink:0" onclick="_removerPedidoConf(${s.id},'${_automEsc(String(s.name||'').replace(/'/g,''))}')">${ico('trash',{size:13})} Remover</button>
