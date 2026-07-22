@@ -3461,6 +3461,26 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   }
   return out;
 }
+// LEADS DE HOJE POR NÚMERO — fonte de verdade do placar da roleta.
+// Tem que vir de wa_lead, não do `claimed` de tt_pending. `claimed` conta CLIQUE reivindicado, e o
+// fallback de atribuição pode reivindicar o clique de um número pra um lead que chegou em OUTRO
+// número do mesmo vendedor. Medido em 22/07: claimed dava 90/53/33/11/1 enquanto o lead real era
+// 97/45/25/13/1. wa_lead bate exatamente com o que a dash mostra (143 x 38, total 181).
+// Cache de 30s por isolate: o placar anda ~1 lead a cada 3min, então não precisa ler a cada clique.
+let _leadDiaCache=null, _leadDiaT=0, _leadDiaKey=0;
+async function _leadsHojePorNumero(env, dayStart){
+  const agora=Date.now();
+  if(_leadDiaCache && _leadDiaKey===dayStart && (agora-_leadDiaT)<30000) return _leadDiaCache;
+  const out={};
+  try{
+    const r=await env.DB.prepare(
+      "SELECT substr(replace(num,'+',''),-8) AS nk, COUNT(*) AS n FROM wa_lead WHERE ts >= ? AND num IS NOT NULL AND num<>'' GROUP BY nk"
+    ).bind(dayStart).all();
+    (r.results||[]).forEach(x=>{ const k=String(x.nk||''); if(k) out[k]=Number(x.n)||0; });
+  }catch(_){ return _leadDiaCache || {}; }   // erro de leitura não pode zerar o placar
+  _leadDiaCache=out; _leadDiaT=agora; _leadDiaKey=dayStart;
+  return out;
+}
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
 // Contador em MEMÓRIA dos últimos envios por número. A gravação do clique (tt_pending) leva alguns
 // instantes pra aparecer na LEITURA, e numa rajada isso deixava passar bem mais que o teto antes de
@@ -3507,20 +3527,25 @@ async function _presselBalancedPick(env, id, sellers){
   //    ainda mais rápido. Ligado na pressel = recebe. Decisão do Diretor, com o risco conhecido.
   if(avail.length===1){ const u=avail[0]; try{ _pickBump(k8(u.num)); }catch(_){} return u; }
 
-  // 3) Quanto cada número recebeu HOJE (clique), quanto disso VIROU CONVERSA, e a rajada. Uma query só.
-  const hoje={}, rajada={}, conv={};
+  // 3) Clique de hoje e rajada (tt_pending) + LEAD de hoje (wa_lead, cacheado 30s). São tabelas
+  //    diferentes de propósito: clique é o que a roleta manda, lead é o que de fato chegou.
+  const hoje={}, rajada={};
+  let conv={};
   try{
-    const r=await env.DB.prepare(
-      `SELECT num_key,
-              COUNT(*) AS dia,
-              SUM(CASE WHEN claimed=1 THEN 1 ELSE 0 END) AS conv,
-              SUM(CASE WHEN ts > ? THEN 1 ELSE 0 END) AS agora
-         FROM tt_pending
-        WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
-        GROUP BY num_key`
-    ).bind(now-BURST_WIN, dayStart).all();
+    const [r, lh] = await Promise.all([
+      env.DB.prepare(
+        `SELECT num_key,
+                COUNT(*) AS dia,
+                SUM(CASE WHEN ts > ? THEN 1 ELSE 0 END) AS agora
+           FROM tt_pending
+          WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
+          GROUP BY num_key`
+      ).bind(now-BURST_WIN, dayStart).all(),
+      _leadsHojePorNumero(env, dayStart),
+    ]);
     (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return;
-      hoje[k]=Number(x.dia)||0; conv[k]=Number(x.conv)||0; rajada[k]=Number(x.agora)||0; });
+      hoje[k]=Number(x.dia)||0; rajada[k]=Number(x.agora)||0; });
+    conv=lh||{};
   }catch(_){}
   // _pickRecent = o que esta instância acabou de mandar e o banco ainda não enxerga (leitura atrasa
   // alguns segundos; sem isso, uma rajada de cliques ia toda pro mesmo número).
@@ -3722,24 +3747,36 @@ function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.domin
 async function _roletaDiagHtml(env, day, chips, nameMap){
   try{
     const ini=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), fim=ini+86400;
-    const r=await env.DB.prepare(
-      `SELECT num_key, COUNT(*) cliques, SUM(CASE WHEN claimed=1 THEN 1 ELSE 0 END) conversas
-         FROM tt_pending WHERE ts>=? AND ts<? AND num_key IS NOT NULL AND num_key<>''
-        GROUP BY num_key HAVING cliques >= 50`
-    ).bind(ini, fim).all();
+    // Clique vem de tt_pending; LEAD vem de wa_lead (o mesmo número que a dash mostra). Antes usava
+    // o `claimed` do tt_pending e dava valor aproximado, porque o fallback de atribuição reivindica
+    // clique de um número pra lead que chegou em outro do mesmo vendedor (dava 90 onde eram 97).
+    const [r, lr] = await Promise.all([
+      env.DB.prepare(
+        `SELECT num_key, COUNT(*) cliques FROM tt_pending
+          WHERE ts>=? AND ts<? AND num_key IS NOT NULL AND num_key<>''
+          GROUP BY num_key HAVING cliques >= 50`
+      ).bind(ini, fim).all(),
+      env.DB.prepare(
+        "SELECT substr(replace(num,'+',''),-8) AS nk, COUNT(*) n FROM wa_lead WHERE ts>=? AND ts<? AND num IS NOT NULL AND num<>'' GROUP BY nk"
+      ).bind(ini, fim).all(),
+    ]);
     const k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+    const leadDe={}; (lr.results||[]).forEach(x=>{ const k=String(x.nk||''); if(k) leadDe[k]=Number(x.n)||0; });
     const ruins=(r.results||[]).map(x=>{
-      const cl=Number(x.cliques)||0, cv=Number(x.conversas)||0;
-      return { k:String(x.num_key||''), cl, cv, taxa: cl?(cv*100/cl):0 };
+      const k=String(x.num_key||''), cl=Number(x.cliques)||0, cv=leadDe[k]||0;
+      return { k, cl, cv, taxa: cl?(cv*100/cl):0 };
     }).filter(x=>x.taxa<2).sort((a,b)=>b.cl-a.cl);
     if(!ruins.length) return '';
     const dono=k=>{ const c=chips.find(c=>k8(c.num)===k); return c&&c.at?(nameMap[String(c.at)]||String(c.at)):''; };
     const linhas=ruins.map(x=>{
       const d=dono(x.k);
-      return `<li style="margin:3px 0"><b style="font-family:ui-monospace,monospace;color:#e6edf6">${_escHtml(x.k)}</b>${d?` <span style="color:#8b9bb4">(${_escHtml(d)})</span>`:''} — <b style="color:#f87171">${x.cl}</b> cliques e só <b style="color:#f87171">${x.cv}</b> conversa${x.cv===1?'':'s'} (${x.taxa.toFixed(1)}%)</li>`;
+      return `<li style="margin:5px 0"><b style="font-family:ui-monospace,monospace;color:#e6edf6">${_escHtml(x.k)}</b>${d?` <span style="color:#8b9bb4">de ${_escHtml(d)}</span>`:''}<br><span style="color:#8b9bb4">recebeu</span> <b style="color:#f87171">${x.cl}</b> <span style="color:#8b9bb4">cliques e virou só</span> <b style="color:#f87171">${x.cv}</b> <span style="color:#8b9bb4">lead${x.cv===1?'':'s'}</span> (${x.taxa.toFixed(1)}%)</li>`;
     }).join('');
     return `<div style="background:#241d10;border:1px solid #7c5e10;border-radius:12px;padding:13px 16px">`
-      + `<div style="font-size:13px;font-weight:800;color:#fbbf24;margin-bottom:5px">Chip pedindo troca</div>`
+      + `<div style="font-size:13px;font-weight:800;color:#fbbf24">Chip pedindo troca</div>`
+      // Deixa explícito que a conta é POR NÚMERO. Sem isso dá pra ler "Guilherme, 1 lead" e achar
+      // que é o total do vendedor, quando é só o desempenho daquele chip específico dele.
+      + `<div style="font-size:10.5px;color:#8b9bb4;margin:2px 0 7px">número a número, não é o total do vendedor</div>`
       + `<ul style="margin:0 0 7px 18px;font-size:12.5px;color:#cbd5e1">${linhas}</ul>`
       + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">Clique entrando e quase ninguém falando é sinal de número <b style="color:#cbd5e1">restrito pelo WhatsApp</b>: o lead vê o aviso de conta suspeita e desiste antes de mandar mensagem. Continua recebendo lead normalmente, mas vale trocar o chip.</div></div>`;
   }catch(_){ return ''; }
