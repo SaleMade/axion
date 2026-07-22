@@ -2551,6 +2551,9 @@ async function handleWAConn(req, env) {
   // Saturação da roleta (todos os números bateram o teto de rajada recentemente) → a dash avisa
   // pra adicionar mais números. Só considera "agora" se foi nos últimos 15min.
   let satTs = 0; try { const v = await _readConfig(env, 'roleta_sat_ts'); satTs = Number(v) || 0; } catch (_) {}
+  // Números que a roleta está PAUSANDO por taxa baixa. Vai pra dash pra ela mostrar o motivo no
+  // card do vendedor, em vez de deixar o interruptor verde mentindo que o número está recebendo.
+  let buraco = {}; try { buraco = await _getBuracoNegro(env) || {}; } catch (_) {}
   const sat = satTs && (Math.floor(Date.now() / 1000) - satTs) < 900 ? satTs : 0;
   // Conexões do SALE CHAT: número com heartbeat recente (< 3min) = rodando ('sc'). Fonte nova, tem prioridade.
   let scConns = [];
@@ -2602,7 +2605,7 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, sat, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
+      return json({ ok: true, sat, buraco, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
@@ -2622,7 +2625,7 @@ async function handleWAConn(req, env) {
     // com a fonte no Sale Chat, linha da Evolution não aparece mais como conexão da operação
     .filter(r => _src !== 'sc' || String(r.state) === 'sc')
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
-  return json({ ok: true, sat, semDono, conn: mergeSc(limpos) });
+  return json({ ok: true, sat, semDono, buraco, conn: mergeSc(limpos) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -3360,7 +3363,11 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     const primary=(principalOn && pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;   // principal só entra com o interruptor dele ligado
     const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;   // os DOIS desligados/caídos → vendedor fora da roleta
-    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup});
+    // v.sempre = "receber mesmo com taxa baixa". A regra do buraco negro mede DESISTÊNCIA do lead
+    // (o WhatsApp mostra o aviso de conta suspeita e a pessoa não continua), não número morto: a
+    // mensagem chega normal. Quando só resta número restrito, tirar ele da roleta é pior que a
+    // taxa ruim, porque aí o vendedor não recebe nada. Esse interruptor é a palavra final do Diretor.
+    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup, sempre:v.sempre===true});
   }
   return out;
 }
@@ -3379,7 +3386,9 @@ async function _getBuracoNegro(env){
     ]);
     const contatos={}; ct.forEach(r=>{ const k=_k8(r.self_number); if(k) contatos[k]=(contatos[k]||0)+(Number(r.n)||0); });
     cl.forEach(r=>{ const k=String(r.num_key||''), q=Number(r.n)||0;
-      if(k && q>=30 && (contatos[k]||0)*50 < q) buraco[k]=q;   // >=30 cliques e menos de 2% virou conversa
+      // >=30 cliques e menos de 2% virou conversa. Guarda o PORQUÊ (cliques + conversas), não só o
+      // número: a dash mostra isso na cara do Diretor em vez de starvar o número em silêncio.
+      if(k && q>=30 && (contatos[k]||0)*50 < q) buraco[k]={ q, c:(contatos[k]||0) };
     });
   }catch(_){}
   _buracoCache = buraco; _buracoT = now;
@@ -3417,8 +3426,8 @@ async function _presselBalancedPick(env, id, sellers){
   // 1) Candidatos: TODO número ligado (principal e complementar valem igual).
   let avail=[];
   for(const s of sellers){
-    if(s.primary) avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst});
-    if(s.backup)  avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst});
+    if(s.primary) avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst, sempre:s.sempre});
+    if(s.backup)  avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst, sempre:s.sempre});
   }
   if(!avail.length) return null;
 
@@ -3427,7 +3436,7 @@ async function _presselBalancedPick(env, id, sellers){
   try{
     const buraco=await _getBuracoNegro(env);
     if(buraco && Object.keys(buraco).length){
-      const limpo=avail.filter(a=>!buraco[k8(a.num)]);
+      const limpo=avail.filter(a=>a.sempre || !buraco[k8(a.num)]);   // "sempre" ignora a regra
       if(limpo.length) avail=limpo;
     }
   }catch(_){}

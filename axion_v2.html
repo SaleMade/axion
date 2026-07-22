@@ -10687,7 +10687,12 @@ function _renderPresselMetrics(){
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
-var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0, _waSemDono=[];
+var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0, _waSemDono=[], _waBuraco={};
+// A roleta pausa sozinha o número que recebe clique e quase não vira conversa. Isso é DESISTÊNCIA
+// do lead (o WhatsApp avisa "conta suspeita" e ele não continua), não número morto — a mensagem
+// chega normal. Antes ficava invisível: o interruptor verde dizia que o número estava recebendo
+// enquanto a roleta desviava tudo. Agora o card mostra o motivo e dá o botão de forçar.
+function _buracoDo(num){ const k=String(num||'').replace(/\D/g,'').slice(-8); return (k&&_waBuraco[k])||null; }
 // Hora da última gravação CONFIRMADA no servidor. É o que prova que ligar/desligar um número já
 // está valendo pra pressel de verdade — antes só aparecia um toast que sumia e ficava a dúvida.
 var _lastPublishT=0;
@@ -10723,6 +10728,7 @@ function _loadWaConn(){
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
     _waSat=(r&&r.sat)||0;   // saturação: todos os números no teto → precisa de mais número
     _waSemDono=(r&&r.semDono)||[];   // número rodando o Sale Chat sem atendente → perde lead e VENDA
+    _waBuraco=(r&&r.buraco)||{};     // números que a roleta está pausando por taxa baixa (com o porquê)
     // NÃO removemos o vendedor da roleta aqui: o serve-time já pula número caído/errado sozinho (temporário
     // e auto-recupera ao reconectar), e o card mostra "não conectado". Remover apagava a config do vendedor
     // (cota/reserva/troca) num simples blip de conexão — bug encontrado na revisão.
@@ -10895,12 +10901,30 @@ function renderPresselVendList(pid){
     const connectLink=onVis?((connected&&_waConnLoaded)
       ? ``
       : `<span style="font-size:11px;color:var(--t3)" title="A conexão é o Sale Chat aberto na máquina do vendedor">abra o Sale Chat na máquina</span>`):'';
+    // A roleta está desviando os leads desse número por taxa baixa? Mostra o motivo com o número
+    // na cara, e o botão pra mandar receber mesmo assim (quando só sobrou número restrito, receber
+    // com taxa ruim é melhor que não receber nada).
+    const bur=onVis?_buracoDo(pChip&&pChip.num):null;
+    const forcado=v.sempre===true;
+    const pausaAviso=(bur&&!forcado)
+      ? `<div style="margin-top:6px;background:var(--rdd);border:1px solid var(--rd);border-radius:8px;padding:6px 9px">
+           <div style="font-size:11px;color:var(--rd);font-weight:700;line-height:1.4">Roleta pausou este número: ${bur.q} cliques e ${bur.c} conversa${bur.c===1?'':'s'} na última hora</div>
+           <div style="font-size:10.5px;color:var(--t3);margin-top:3px;line-height:1.45">O lead vê o aviso de conta suspeita e desiste antes de falar. Os leads estão indo pros outros números.</div>
+           <button onclick="togglePresselVendSempre(${pid},'${at.id}')" style="margin-top:5px;font-size:10.5px;font-weight:700;color:var(--am);background:transparent;border:1px solid var(--am);border-radius:7px;padding:3px 9px;cursor:pointer;font-family:inherit">Receber mesmo assim</button>
+         </div>`
+      : (forcado
+        ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+             <span style="font-size:10.5px;font-weight:700;color:var(--am)">${ico('alert-triangle',{size:11})} recebendo mesmo com taxa baixa</span>
+             <button onclick="togglePresselVendSempre(${pid},'${at.id}')" style="font-size:10px;color:var(--t3);background:transparent;border:none;text-decoration:underline;cursor:pointer;font-family:inherit;padding:0">voltar ao automático</button>
+           </div>`
+        : '');
     const primaryInner=`<div style="display:flex;align-items:center;gap:11px;padding:10px 12px">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--t3)">${at.name}${onVis?' <span style="color:var(--t4)">· principal</span>':''}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
+        ${pausaAviso}
       </div>
       <div class="ax-sw ${(isOn&&ok)?'on':''}" title="${ok?(isOn?('Na roleta'+((_waConnLoaded&&!connected)?' · WhatsApp parado agora: o servidor segura o lead e volta sozinho quando conectar':'')):'Fora da roleta: não recebe lead'):'Sem número utilizável (banido/aquecimento) — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
@@ -10986,6 +11010,17 @@ function togglePresselStatus(pid){
   p.status=(p.status||'ativa')==='ativa'?'pausada':'ativa';
   renderPressels();
   persistAndPushNow().catch(_=>{});
+}
+// "Receber mesmo assim": isenta o vendedor da regra de taxa baixa. Existe porque quando TODOS os
+// números estão restritos (o aviso do WhatsApp é por conta, não por chip), tirar da roleta faz o
+// vendedor não receber nada — que é pior que receber com conversão ruim. Decisão do Diretor.
+function togglePresselVendSempre(pid, atId){
+  const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
+  p.vendedores=p.vendedores||[];
+  const v=p.vendedores.find(x=>String(x.at)===String(atId)); if(!v) return;
+  v.sempre=(v.sempre!==true);
+  renderPresselVendList(pid);
+  persistAndPushNow().then(()=>toast(v.sempre?'Este número volta a receber lead mesmo com taxa baixa':'Voltou ao automático: a roleta pausa sozinha se a taxa cair','ok')).catch(_=>{});
 }
 function togglePresselVendInline(pid, atId){
   const p=_ensurePressels().find(x=>x.id===pid); if(!p) return;
