@@ -516,6 +516,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.06em}
 .tb-live::before{content:'';width:6px;height:6px;border-radius:50%;
   background:var(--bl);animation:pu 2s infinite;box-shadow:0 0 8px var(--bl)}
+/* Selo de publicação — UM só, ao lado do "Ao Vivo". Antes era um por pressel (3 repetidos
+   dizendo exatamente a mesma coisa, já que a publicação é global e não por pressel). */
+.tb-pub{font-size:11px;color:var(--t4);display:flex;align-items:center;gap:5px;
+  white-space:nowrap;padding:3px 10px;border-radius:999px;border:1px solid var(--b1);
+  background:var(--s2);transition:color .2s,border-color .2s,background .2s}
+.tb-pub.on{color:var(--gr);border-color:rgba(16,185,129,.35);background:rgba(16,185,129,.08)}
+.tb-pub:empty{display:none}   /* nunca mostra pílula vazia se o render não rodou */
 /* Breadcrumb "Operacional / CRM" — escondido por pedido do user
    (o título grande da página já indica onde está). */
 .tb-path{display:none}
@@ -2153,6 +2160,7 @@ body.no-producer #mp-mode-block{display:none}
 <div class="main" id="main-app" style="display:none">
   <div class="topbar">
     <span class="tb-live">Ao Vivo</span>
+    <span class="tb-pub" id="tb-pub" title="Última gravação confirmada no servidor (o que a pressel usa de verdade)"></span>
     <span class="tb-path" id="tb-path">Dashboard</span>
 
     <!-- Date Range Picker — completo (atalhos + meses + customizado) -->
@@ -4435,6 +4443,8 @@ async function _doServerSync(){
   try{
     const r=await api.postState(_buildSyncBlob(),serverVersion);
     serverVersion=r.version;
+    _lastPublishT=Date.now();   // confirmado NO SERVIDOR: é o que a pressel passa a usar de verdade
+    try{ _renderPubStamp(); }catch(_){}
     _409retry=false; // sucesso resetar flag
     _snapshotBase(); // estado confirmado no servidor = novo ancestral comum
   }catch(e){
@@ -5238,6 +5248,7 @@ function enterApp(member){
   migrateACL();   // garante que todo papel tenha todas as chaves antes de montar a sidebar
   buildSidebar();buildApp();
   hydrateCrmFilters();
+  try{ _renderPubStamp(); }catch(_){}   // selo de publicação nasce preenchido (senão fica pílula vazia no topo)
   try{ autoPromoteRestabChips(); }catch(_){}   // timer do "Reestabelecido" roda no boot (backend, sem UI) mesmo sem abrir a Contingência
   // Restaura página onde estava antes do F5 (se válida pro role atual)
   // Sessão atual da aba → não persiste entre abas/dispositivos
@@ -10479,7 +10490,7 @@ function presselPanel(p){
         <div id="pp-prev-${p.id}" style="width:375px;max-width:100%;margin:0 auto;border:1px solid var(--b2);border-radius:16px;overflow:hidden;background:#fff;min-height:420px"></div>
       </div>
       <div style="flex:1;min-width:280px">
-        <label class="pp-lbl" style="margin-bottom:10px">Vendedores na roleta</label>
+        <label class="pp-lbl" style="margin:0 0 10px">Vendedores na roleta</label>
         <div id="pp-vend-${p.id}"></div>
       </div>
     </div>
@@ -10676,7 +10687,20 @@ function _renderPresselMetrics(){
   }).catch(()=>{ $('ppm-body').innerHTML='<div style="text-align:center;color:var(--rd);padding:24px">Erro ao carregar. Tenta de novo.</div>'; });
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
-var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0;
+var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0, _waSemDono=[];
+// Hora da última gravação CONFIRMADA no servidor. É o que prova que ligar/desligar um número já
+// está valendo pra pressel de verdade — antes só aparecia um toast que sumia e ficava a dúvida.
+var _lastPublishT=0;
+function _renderPubStamp(){
+  try{
+    const el=document.getElementById('tb-pub'); if(!el) return;
+    const on=!!_lastPublishT;
+    el.classList.toggle('on',on);
+    el.innerHTML=on
+      ? ico('check-circle',{size:12})+' publicado '+new Date(_lastPublishT).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+      : ico('circle',{size:12})+' sem alteração';
+  }catch(_){}
+}
 // número conectado bate com o chip selecionado? (últimos 8 dígitos, ignora DDI/9º dígito/formatação)
 function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
 // CONECTADO de verdade = o número é o ownerJid de ALGUMA instância 'open' (checa por NÚMERO, não pelo slot):
@@ -10698,6 +10722,7 @@ function _loadWaConn(){
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
     _waConnMap=m; _waConnNum=mn; _waConnLoaded=true;
     _waSat=(r&&r.sat)||0;   // saturação: todos os números no teto → precisa de mais número
+    _waSemDono=(r&&r.semDono)||[];   // número rodando o Sale Chat sem atendente → perde lead e VENDA
     // NÃO removemos o vendedor da roleta aqui: o serve-time já pula número caído/errado sozinho (temporário
     // e auto-recupera ao reconectar), e o card mostra "não conectado". Remover apagava a config do vendedor
     // (cota/reserva/troca) num simples blip de conexão — bug encontrado na revisão.
@@ -10790,10 +10815,9 @@ function _presselVendReserva(pid, at, v, roles){
   const cap=Math.max(0, Number(v&&v.cap)||0);
   const on=!(v && v.reserva_on===false);   // default ligada
   const mode=(v && v.reserva_mode==='split')?'split':'overflow';   // overflow = reserva por cota; split = complementar (recebe junto)
-  const capField=`<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t3);flex-wrap:wrap">
-    <span>Depois de</span>
-    <input type="number" min="0" value="${cap||''}" placeholder="ilimitados" onclick="event.stopPropagation()" onchange="setPresselVendCap(${pid},'${at.id}',this.value)" style="width:64px;padding:4px 6px;border:1px solid var(--b1);border-radius:8px;background:var(--s1);color:var(--tx);font-size:12px">
-    <span>leads no principal, vira pra reserva</span></div>`;
+  // Cota removida: não existe mais "vira pra reserva depois de X". Todo número ligado trabalha e a
+  // roleta equilibra sozinha pelo total de leads do dia (o que tem menos, recebe).
+  const capField='';
   if(!rchip){
     const _emN=(()=>{ const e=_atendenteActiveChip(at.id); return e?String(e.num||'').replace(/\D/g,'').slice(-8):''; })();
     const others=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c) && !(c.em_uso===true||c.wa_st==='em_uso') && !(_emN && String(c.num||'').replace(/\D/g,'').slice(-8)===_emN));   // exclui o número do principal (não pode ser reserva)
@@ -10883,22 +10907,19 @@ function renderPresselVendList(pid){
     const reservaBlock=(ok && (onVis || (roles&&roles.reserva&&roles.reserva.chip)))?_presselVendReserva(pid, at, v, roles):'';
     return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
   };
-  // ALERTA DE SATURAÇÃO bem na cara: os números no ar bateram o teto seguro. Nenhum balanceamento
-  // resolve isso — é volume demais pra quantidade de número. Fica AQUI (e não escondido num modal)
-  // porque é a única ação que evita ban: ligar mais um número ou segurar o anúncio.
-  const _satBanner=(_waSat && (Math.floor(Date.now()/1000)-Number(_waSat))<900)
-    ? `<div style="display:flex;align-items:flex-start;gap:9px;background:rgba(240,129,15,.12);border:1px solid var(--am);border-radius:10px;padding:11px 13px;margin-bottom:11px">
-         ${ico('alert-triangle',{size:15})}
-         <div style="font-size:12.5px;color:var(--am);font-weight:700;line-height:1.45">Os números no ar bateram o limite seguro
-           <div style="font-weight:500;color:var(--t2);margin-top:2px">Está chegando mais lead do que eles aguentam sem risco de ban. Ligue mais um número na roleta ou segure o anúncio.</div>
-         </div></div>`
-    : '';
-  let html = _satBanner + (ativos.length ? ativos.map(row).join('')
+  const _satBanner='';   // aviso de saturação removido a pedido do Diretor (ele já sabe quando estoura)
+  // Aviso de "número sem atendente" REMOVIDO a pedido do Diretor: quem decide pra onde o lead vai é
+  // a PRESSEL, e o aviso dava a impressão errada de que o Sale Chat ainda estava roteando. A perda
+  // de atribuição que ele cobria já é resolvida pela identidade do Sale Chat (install id), que
+  // amarra a conversa ao VENDEDOR mesmo quando o número não está atribuído a ninguém.
+  const _sdBanner='';
+  let html = _sdBanner + _satBanner + (ativos.length ? ativos.map(row).join('')
     : '<div class="muted" style="font-size:12px;padding:8px 0">Nenhum atendente com número em uso. Marque um número como "Em uso" na Contingência pra ele entrar na roleta.</div>');
   if(fora.length){
     html += `<div style="height:1px;background:var(--b1);margin:14px 0 9px"></div>` + fora.map(row).join('');
   }
   wrap.innerHTML=html;   // "Instâncias conectadas" saiu do inline pro modal (botão ao lado de Métricas)
+  try{ _renderPubStamp(); }catch(_){}   // mostra a hora da última publicação confirmada no servidor
 }
 
 // Lista as instâncias que estão DE FATO conectadas na Evolution, abaixo dos vendedores.
