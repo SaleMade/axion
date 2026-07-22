@@ -3507,19 +3507,20 @@ async function _presselBalancedPick(env, id, sellers){
   //    ainda mais rápido. Ligado na pressel = recebe. Decisão do Diretor, com o risco conhecido.
   if(avail.length===1){ const u=avail[0]; try{ _pickBump(k8(u.num)); }catch(_){} return u; }
 
-  // 3) Quanto cada número já recebeu HOJE e na última janela de rajada. Uma query só.
-  const hoje={}, rajada={};
+  // 3) Quanto cada número recebeu HOJE (clique), quanto disso VIROU CONVERSA, e a rajada. Uma query só.
+  const hoje={}, rajada={}, conv={};
   try{
     const r=await env.DB.prepare(
       `SELECT num_key,
               COUNT(*) AS dia,
+              SUM(CASE WHEN claimed=1 THEN 1 ELSE 0 END) AS conv,
               SUM(CASE WHEN ts > ? THEN 1 ELSE 0 END) AS agora
          FROM tt_pending
         WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
         GROUP BY num_key`
     ).bind(now-BURST_WIN, dayStart).all();
     (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return;
-      hoje[k]=Number(x.dia)||0; rajada[k]=Number(x.agora)||0; });
+      hoje[k]=Number(x.dia)||0; conv[k]=Number(x.conv)||0; rajada[k]=Number(x.agora)||0; });
   }catch(_){}
   // _pickRecent = o que esta instância acabou de mandar e o banco ainda não enxerga (leitura atrasa
   // alguns segundos; sem isso, uma rajada de cliques ia toda pro mesmo número).
@@ -3531,14 +3532,38 @@ async function _presselBalancedPick(env, id, sellers){
   const pool=livres.length ? livres : avail;
   if(!livres.length){ try{ await _roletaMarkSaturated(env); }catch(_){} }
 
-  // 5) A REGRA: menos recebeu hoje, recebe agora. Empate → rodízio atômico (escrita no banco, é o
-  //    único contador imediato; qualquer leitura atrasaria e criaria um "vencedor" fixo na rajada).
-  pool.sort((a,b)=>cargaDia(a)-cargaDia(b));
-  const menor=cargaDia(pool[0]);
-  const empatados=pool.filter(a=>cargaDia(a)===menor);
-  const escolhido = empatados.length<=1
-    ? pool[0]
-    : empatados[await _presselNextIndex(env, id, empatados.length)];
+  // 5) A REGRA: o ATENDENTE que menos VIROU CONVERSA hoje recebe agora.
+  //
+  // Antes contava CLIQUE por número, e clique igual NÃO dá lead igual. Medido em 22/07: os três
+  // números ativos receberam 1130, 1124 e 1123 cliques (praticamente idênticos, a roleta estava
+  // certa) e viraram 53, 33 e 90 leads. Número restrito converte 2 a 3x pior, porque o WhatsApp
+  // mostra pro lead o aviso de conta suspeita e ele desiste antes de mandar mensagem. No fim do dia
+  // deu 144 x 44 e parecia falha de distribuição, mas era diferença de conversão.
+  //
+  // Agora o placar da roleta é o MESMO que o Bruno cobra: lead por atendente. Quem está atrás em
+  // LEAD recebe mais CLIQUE, até empatar. Também agrupa por atendente (não por número): quem roda
+  // dois números não leva o dobro só por isso.
+  const porAt={};
+  pool.forEach(a=>{
+    const k=String(a.at); const nk=k8(a.num);
+    if(!porAt[k]) porAt[k]={at:k, cli:0, cv:0, nums:[]};
+    porAt[k].cli+=cargaDia(a); porAt[k].cv+=(conv[nk]||0); porAt[k].nums.push(a);
+  });
+  let ats=Object.values(porAt);
+  // TRAVA: nenhum atendente passa de 3x o clique de quem menos recebeu. Sem ela um número morto
+  // (0% de conversa) nunca "alcançaria" no placar de lead e engoliria o tráfego inteiro pra sempre.
+  const minCli=Math.min(...ats.map(x=>x.cli));
+  const elegiveis=ats.filter(x=>x.cli <= Math.max(60, minCli*3));
+  if(elegiveis.length) ats=elegiveis;
+  ats.sort((a,b)=>(a.cv-b.cv) || (a.cli-b.cli));
+  const menorCv=ats[0].cv;
+  const empAt=ats.filter(x=>x.cv===menorCv);
+  // Empate → rodízio atômico (escrita no banco, é o único contador imediato; leitura atrasaria e
+  // criaria um "vencedor" fixo na rajada).
+  const escAt = empAt.length<=1 ? ats[0] : empAt[await _presselNextIndex(env, id, empAt.length)];
+  // Dentro do atendente, o número dele que menos recebeu clique hoje (espalha entre os dois dele).
+  escAt.nums.sort((a,b)=>cargaDia(a)-cargaDia(b));
+  const escolhido=escAt.nums[0];
   try{ _pickBump(k8(escolhido.num)); }catch(_){}
   return escolhido;
 }
