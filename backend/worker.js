@@ -3490,20 +3490,29 @@ const _pickLog = {};   // num_key -> [timestamps]
 function _pickBump(k){ if(!k) return; const t=Math.floor(Date.now()/1000); (_pickLog[k]=_pickLog[k]||[]).push(t); }
 function _pickRecent(k, win){ if(!k) return 0; const t=Math.floor(Date.now()/1000); const a=_pickLog[k]; if(!a) return 0; const keep=a.filter(x=>t-x<win); _pickLog[k]=keep; return keep.length; }
 // ═══════════════════════════════════════════════════════════════════════════════════════════
-// ROLETA — REGRA ÚNICA: o lead vai pro número que RECEBEU MENOS HOJE.
+// ROLETA — REGRA ÚNICA: o lead vai pro VENDEDOR que fez MENOS LEAD HOJE.
 //
 // Foi reescrita do zero porque a versão anterior tinha 7 sinais competindo (ritmo de 15min, carga
 // de 1h, justiça por vendedor, cota, aquecimento, regra especial de pico, rodízio) e, na hora do
 // aperto, um sinal derrubava o outro e um número levava 167 leads enquanto outro levava 50.
 // Regra que não dá pra entender numa lida é regra que ninguém consegue confiar.
 //
-// Conta pelo CLIQUE (tt_pending), não pelo lead: o clique é gravado no instante em que a roleta
-// decide, e o lead só aparece de 2 a 60 minutos depois. Contar lead fazia o placar ficar parado
-// durante a rajada e o mesmo número levava tudo antes de o contador mexer.
+// A MÉTRICA É LEAD, NÃO CLIQUE. Contar clique parecia certo e não era: em 22/07 os três números
+// receberam 1130, 1124 e 1123 cliques (diferença de 0,6%) e fizeram 53, 33 e 90 leads, fechando o
+// dia em 143 x 38. Número restrito converte 2 a 3x pior porque o WhatsApp avisa o lead que a conta
+// é suspeita e ele desiste antes de mandar mensagem. Igualar clique não iguala lead, e o placar que
+// vale pro negócio é lead. Fonte: wa_lead (o MESMO número que a dash mostra), não o `claimed` de
+// tt_pending, que é aproximado.
 //
-// Só existe uma trava por cima: um número não leva mais que BURST_CAP a cada BURST_WIN. Ela serve
-// pro caso do dia a dia — trocar de número no meio do dia. O número novo entra zerado e, sem a
-// trava, absorveria de uma vez tudo que os outros já receberam.
+// AGRUPA POR VENDEDOR, não por número. Quem roda dois números não leva o dobro só por isso. Dentro
+// do vendedor vale a mesma régua entre os números dele: o que fez menos lead recebe agora.
+//
+// SEM TETO. Não há trava de rajada nem limite de compensação: quem está atrás recebe o quanto for
+// preciso até empatar. Um número ou está restrito (converte pior mas funciona) ou banido — e banido
+// sai sozinho da roleta quando o Sale Chat para de dar sinal. O caso que um teto protegeria (número
+// vivo com 0% pra sempre) não existe na operação, e o teto só segurava a recuperação antes do
+// empate. Receber muita mensagem também não bane: a própria Meta documenta isso ("receiving many
+// messages at once will not result in an account ban"); o que bane é ENVIO em massa.
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 async function _presselBalancedPick(env, id, sellers){
   const now=Math.floor(Date.now()/1000);
@@ -3527,35 +3536,38 @@ async function _presselBalancedPick(env, id, sellers){
   //    ainda mais rápido. Ligado na pressel = recebe. Decisão do Diretor, com o risco conhecido.
   if(avail.length===1){ const u=avail[0]; try{ _pickBump(k8(u.num)); }catch(_){} return u; }
 
-  // 3) Clique de hoje e rajada (tt_pending) + LEAD de hoje (wa_lead, cacheado 30s). São tabelas
-  //    diferentes de propósito: clique é o que a roleta manda, lead é o que de fato chegou.
-  const hoje={}, rajada={};
+  // 3) Clique de hoje (tt_pending) + LEAD de hoje (wa_lead, cacheado 30s). São tabelas diferentes de
+  //    propósito: clique é o que a roleta manda, lead é o que de fato chegou. O clique só serve de
+  //    desempate; quem manda no placar é o lead.
+  const hoje={};
   let conv={};
   try{
     const [r, lh] = await Promise.all([
       env.DB.prepare(
-        `SELECT num_key,
-                COUNT(*) AS dia,
-                SUM(CASE WHEN ts > ? THEN 1 ELSE 0 END) AS agora
+        `SELECT num_key, COUNT(*) AS dia
            FROM tt_pending
           WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
           GROUP BY num_key`
-      ).bind(now-BURST_WIN, dayStart).all(),
+      ).bind(dayStart).all(),
       _leadsHojePorNumero(env, dayStart),
     ]);
-    (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return;
-      hoje[k]=Number(x.dia)||0; rajada[k]=Number(x.agora)||0; });
+    (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return; hoje[k]=Number(x.dia)||0; });
     conv=lh||{};
   }catch(_){}
   // _pickRecent = o que esta instância acabou de mandar e o banco ainda não enxerga (leitura atrasa
   // alguns segundos; sem isso, uma rajada de cliques ia toda pro mesmo número).
   const cargaDia=a=>{ const k=k8(a.num); return (hoje[k]||0) + _pickRecent(k, 120); };
-  const cargaJa =a=>{ const k=k8(a.num); return (rajada[k]||0) + _pickRecent(k, BURST_WIN); };
 
-  // 4) Trava de rajada. Se TODOS estourarem, não trava (o lead tem que ir pra algum lugar).
-  const livres=avail.filter(a=>cargaJa(a) < BURST_CAP);
-  const pool=livres.length ? livres : avail;
-  if(!livres.length){ try{ await _roletaMarkSaturated(env); }catch(_){} }
+  // 4) SEM teto de rajada. Ele existia justamente pra impedir que um número novo (que entra zerado)
+  //    absorvesse de uma vez o que os outros já tinham recebido — e é EXATAMENTE isso que precisa
+  //    acontecer pro vendedor atrasado alcançar dentro do mesmo dia. Na prática ele nem funcionava:
+  //    no volume real (~23 cliques por número a cada 10min contra um teto de 10) todos estouravam e
+  //    o código ignorava o teto. Pior, no meio da recuperação ele desviava justamente o lead do
+  //    número que estava correndo atrás, e aí a igualdade nunca fechava.
+  //    Também não se sustenta pelo lado do ban: a própria Meta documenta que RECEBER muita mensagem
+  //    de uma vez não bane ("receiving many messages at once will not result in an account ban").
+  //    O que bane é ENVIO em massa, e aqui quem manda a mensagem é o lead, não o número.
+  const pool=avail;
 
   // 5) A REGRA: o ATENDENTE que menos VIROU CONVERSA hoje recebe agora.
   //
@@ -3574,20 +3586,22 @@ async function _presselBalancedPick(env, id, sellers){
     if(!porAt[k]) porAt[k]={at:k, cli:0, cv:0, nums:[]};
     porAt[k].cli+=cargaDia(a); porAt[k].cv+=(conv[nk]||0); porAt[k].nums.push(a);
   });
-  let ats=Object.values(porAt);
-  // TRAVA: nenhum atendente passa de 3x o clique de quem menos recebeu. Sem ela um número morto
-  // (0% de conversa) nunca "alcançaria" no placar de lead e engoliria o tráfego inteiro pra sempre.
-  const minCli=Math.min(...ats.map(x=>x.cli));
-  const elegiveis=ats.filter(x=>x.cli <= Math.max(60, minCli*3));
-  if(elegiveis.length) ats=elegiveis;
-  ats.sort((a,b)=>(a.cv-b.cv) || (a.cli-b.cli));
+  // SEM teto de compensação. Existia uma trava de 3x aqui, tirada a pedido do Diretor: na operação
+  // real um número ou está restrito (converte pior, mas funciona) ou está banido — e banido sai
+  // sozinho da roleta, porque o Sale Chat para de dar sinal de vida e o número deixa de entrar em
+  // `avail`. Ou seja, o caso que a trava protegia (número vivo com 0% pra sempre) não existe, e ela
+  // só atrapalhava: segurava a recuperação antes de empatar. A métrica é UMA: lead por vendedor.
+  const ats=Object.values(porAt);
+  ats.sort((a,b)=>(a.cv-b.cv) || (a.cli-b.cli));   // menos LEAD hoje recebe; empate → menos clique
   const menorCv=ats[0].cv;
   const empAt=ats.filter(x=>x.cv===menorCv);
   // Empate → rodízio atômico (escrita no banco, é o único contador imediato; leitura atrasaria e
   // criaria um "vencedor" fixo na rajada).
   const escAt = empAt.length<=1 ? ats[0] : empAt[await _presselNextIndex(env, id, empAt.length)];
-  // Dentro do atendente, o número dele que menos recebeu clique hoje (espalha entre os dois dele).
-  escAt.nums.sort((a,b)=>cargaDia(a)-cargaDia(b));
+  // Dentro do vendedor, vale a MESMA régua: o número dele que fez menos LEAD hoje recebe agora
+  // (empate → o que recebeu menos clique). É a "escadinha": quem roda 40 num número e 10 no outro
+  // passa a alimentar o de 10 até emparelhar, sem parar de receber em nenhum dos dois.
+  escAt.nums.sort((a,b)=>((conv[k8(a.num)]||0)-(conv[k8(b.num)]||0)) || (cargaDia(a)-cargaDia(b)));
   const escolhido=escAt.nums[0];
   try{ _pickBump(k8(escolhido.num)); }catch(_){}
   return escolhido;
