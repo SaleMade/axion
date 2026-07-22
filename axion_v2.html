@@ -10688,6 +10688,35 @@ function _renderPresselMetrics(){
 }
 // Estado de conexão real (wa_conn) por instância, pra mostrar na roleta se o WhatsApp está de pé.
 var _waConnMap={}, _waConnNum={}, _waConnLoaded=false, _waSat=0, _waSemDono=[];
+// Hora da última gravação CONFIRMADA no servidor. É o que prova que ligar/desligar um número já
+// está valendo pra pressel de verdade — antes só aparecia um toast que sumia e ficava a dúvida.
+var _lastPublishT=0;
+function _renderPubStamp(){
+  try{
+    const el=document.getElementById('tb-pub'); if(!el) return;
+    const on=!!_lastPublishT;
+    el.classList.toggle('on',on);
+    el.innerHTML=on
+      ? ico('check-circle',{size:12})+' publicado '+new Date(_lastPublishT).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+      : ico('circle',{size:12})+' sem alteração';
+  }catch(_){}
+}
+// número conectado bate com o chip selecionado? (últimos 8 dígitos, ignora DDI/9º dígito/formatação)
+function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
+// CONECTADO de verdade = o número é o ownerJid de ALGUMA instância 'open' (checa por NÚMERO, não pelo slot):
+// trocar o número de principal↔reserva não gera mais falso "não conectado". Fail-open se nenhum número é conhecido.
+function _waConnOk(inst, chipNum){
+  if(!chipNum) return false;
+  const _isOn=st=>st==='open'||st==='sc';   // open = Evolution; sc = Sale Chat rodando (heartbeat)
+  let anyKnown=false;
+  for(const k in _waConnMap){
+    if(!_isOn(_waConnMap[k])) continue;
+    const cn=_waConnNum[k];
+    if(cn){ anyKnown=true; if(_numMatchWa(cn, chipNum)) return true; }
+  }
+  if(anyKnown) return false;
+  return _isOn(_waConnMap[inst]);
+}
 function _loadWaConn(){
   api.waConn().then(r=>{
     const m={}, mn={}; (r.conn||[]).forEach(c=>{m[c.instance]=c.state; mn[c.instance]=c.number||'';});
