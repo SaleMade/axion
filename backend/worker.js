@@ -2551,9 +2551,6 @@ async function handleWAConn(req, env) {
   // Saturação da roleta (todos os números bateram o teto de rajada recentemente) → a dash avisa
   // pra adicionar mais números. Só considera "agora" se foi nos últimos 15min.
   let satTs = 0; try { const v = await _readConfig(env, 'roleta_sat_ts'); satTs = Number(v) || 0; } catch (_) {}
-  // Números que a roleta está PAUSANDO por taxa baixa. Vai pra dash pra ela mostrar o motivo no
-  // card do vendedor, em vez de deixar o interruptor verde mentindo que o número está recebendo.
-  let buraco = {}; try { buraco = await _getBuracoNegro(env) || {}; } catch (_) {}
   const sat = satTs && (Math.floor(Date.now() / 1000) - satTs) < 900 ? satTs : 0;
   // Conexões do SALE CHAT: número com heartbeat recente (< 3min) = rodando ('sc'). Fonte nova, tem prioridade.
   let scConns = [];
@@ -2605,7 +2602,7 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, sat, buraco, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
+      return json({ ok: true, sat, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
@@ -2625,7 +2622,7 @@ async function handleWAConn(req, env) {
     // com a fonte no Sale Chat, linha da Evolution não aparece mais como conexão da operação
     .filter(r => _src !== 'sc' || String(r.state) === 'sc')
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
-  return json({ ok: true, sat, semDono, buraco, conn: mergeSc(limpos) });
+  return json({ ok: true, sat, semDono, conn: mergeSc(limpos) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -3363,36 +3360,9 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     const primary=(principalOn && pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;   // principal só entra com o interruptor dele ligado
     const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
     if(!primary && !backup) continue;   // os DOIS desligados/caídos → vendedor fora da roleta
-    // v.sempre = "receber mesmo com taxa baixa". A regra do buraco negro mede DESISTÊNCIA do lead
-    // (o WhatsApp mostra o aviso de conta suspeita e a pessoa não continua), não número morto: a
-    // mensagem chega normal. Quando só resta número restrito, tirar ele da roleta é pior que a
-    // taxa ruim, porque aí o vendedor não recebe nada. Esse interruptor é a palavra final do Diretor.
-    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup, sempre:v.sempre===true});
+    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup});
   }
   return out;
-}
-// Buraco negro = número que recebe muito clique e quase não gera conversa (bloqueado, mas ainda
-// reportando presença). Cacheado por isolate pra não varrer tabela grande a cada clique.
-let _buracoCache = null, _buracoT = 0;
-async function _getBuracoNegro(env){
-  const now = Date.now();
-  if (_buracoCache && (now - _buracoT) < 30000) return _buracoCache;
-  const _k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
-  const buraco={};
-  try{
-    const [cl, ct] = await Promise.all([
-      env.DB.prepare("SELECT num_key, COUNT(*) n FROM tt_pending WHERE ts > strftime('%s','now')-3600 AND num_key IS NOT NULL AND num_key<>'' GROUP BY num_key").all().then(r=>r.results||[]).catch(()=>[]),
-      env.DB.prepare("SELECT self_number, COUNT(DISTINCT phone) n FROM sc_ingest_audit WHERE from_me=0 AND received_at > strftime('%s','now')-3600 GROUP BY self_number").all().then(r=>r.results||[]).catch(()=>[]),
-    ]);
-    const contatos={}; ct.forEach(r=>{ const k=_k8(r.self_number); if(k) contatos[k]=(contatos[k]||0)+(Number(r.n)||0); });
-    cl.forEach(r=>{ const k=String(r.num_key||''), q=Number(r.n)||0;
-      // >=30 cliques e menos de 2% virou conversa. Guarda o PORQUÊ (cliques + conversas), não só o
-      // número: a dash mostra isso na cara do Diretor em vez de starvar o número em silêncio.
-      if(k && q>=30 && (contatos[k]||0)*50 < q) buraco[k]={ q, c:(contatos[k]||0) };
-    });
-  }catch(_){}
-  _buracoCache = buraco; _buracoT = now;
-  return buraco;
 }
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
 // Contador em MEMÓRIA dos últimos envios por número. A gravação do clique (tt_pending) leva alguns
@@ -3426,20 +3396,18 @@ async function _presselBalancedPick(env, id, sellers){
   // 1) Candidatos: TODO número ligado (principal e complementar valem igual).
   let avail=[];
   for(const s of sellers){
-    if(s.primary) avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst, sempre:s.sempre});
-    if(s.backup)  avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst, sempre:s.sempre});
+    if(s.primary) avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst});
+    if(s.backup)  avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst});
   }
   if(!avail.length) return null;
 
-  // 2) Tira número que virou buraco negro (recebe muito e ninguém fala = bloqueado). Se todos
-  //    caírem na regra, ignora ela: melhor entregar o lead do que não entregar.
-  try{
-    const buraco=await _getBuracoNegro(env);
-    if(buraco && Object.keys(buraco).length){
-      const limpo=avail.filter(a=>a.sempre || !buraco[k8(a.num)]);   // "sempre" ignora a regra
-      if(limpo.length) avail=limpo;
-    }
-  }catch(_){}
+  // 2) NÃO existe mais filtro de "buraco negro" aqui. Ele tirava da roleta o número que recebia
+  //    clique e quase não virava conversa, mas isso estava errado por dois motivos. Primeiro, taxa
+  //    baixa não é número morto: a mensagem chega normal, o que cai é a conversão, porque o
+  //    WhatsApp mostra pro lead o aviso de conta suspeita e ele desiste antes de falar. Segundo, e
+  //    mais importante: a restrição é por CONTA, não por chip, então quando todos estão restritos a
+  //    regra empurrava o dia inteiro pra um número só — e concentrar tudo num número queima ele
+  //    ainda mais rápido. Ligado na pressel = recebe. Decisão do Diretor, com o risco conhecido.
   if(avail.length===1){ const u=avail[0]; try{ _pickBump(k8(u.num)); }catch(_){} return u; }
 
   // 3) Quanto cada número já recebeu HOJE e na última janela de rajada. Uma query só.
@@ -3625,10 +3593,10 @@ const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
 // GET /pressels-total — página PÚBLICA consolidada: TOTAL somando todas + cada pressel numa seção.
 // Pega TODAS as pressels do estado automaticamente (pressel nova entra sozinha).
-// DIAGNÓSTICO DA ROLETA. Número que recebe clique e não vira conversa está restrito, e a roleta
-// desvia os leads dele sozinha (regra do "buraco negro" em _getBuracoNegro). O problema é que isso
-// acontecia em SILÊNCIO: a distribuição ficava torta, o Bruno percebia pelo placar e tinha que
-// perguntar o porquê. Agora a própria tela diz qual número está furando e por quê.
+// SAÚDE DOS NÚMEROS. Clique entrando e quase ninguém falando = o WhatsApp está mostrando pro lead
+// o aviso de conta suspeita e ele desiste antes de mandar mensagem. A mensagem de quem manda chega
+// normal, então não é número morto: é conversão caindo, e o sinal de que aquele chip precisa ser
+// trocado. Aqui é só INFORMATIVO — a roleta não tira ninguém por causa disso (ligado = recebe).
 async function _roletaDiagHtml(env, day, chips, nameMap){
   try{
     const ini=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), fim=ini+86400;
@@ -3648,10 +3616,10 @@ async function _roletaDiagHtml(env, day, chips, nameMap){
       const d=dono(x.k);
       return `<li style="margin:3px 0"><b style="font-family:ui-monospace,monospace;color:#e6edf6">${_escHtml(x.k)}</b>${d?` <span style="color:#8b9bb4">(${_escHtml(d)})</span>`:''} — <b style="color:#f87171">${x.cl}</b> cliques e só <b style="color:#f87171">${x.cv}</b> conversa${x.cv===1?'':'s'} (${x.taxa.toFixed(1)}%)</li>`;
     }).join('');
-    return `<div style="background:#2a1518;border:1px solid #7f1d1d;border-radius:12px;padding:13px 16px;margin-bottom:16px">`
-      + `<div style="font-size:13px;font-weight:800;color:#f87171;margin-bottom:5px">Número recebendo clique sem virar conversa</div>`
+    return `<div style="background:#241d10;border:1px solid #7c5e10;border-radius:12px;padding:13px 16px;margin-bottom:16px">`
+      + `<div style="font-size:13px;font-weight:800;color:#fbbf24;margin-bottom:5px">Chip pedindo troca</div>`
       + `<ul style="margin:0 0 7px 18px;font-size:12.5px;color:#cbd5e1">${linhas}</ul>`
-      + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">A roleta já está desviando os leads desses números sozinha, e é por isso que a divisão fica torta. Clique entrando e ninguém falando é a assinatura de número <b style="color:#cbd5e1">restrito pelo WhatsApp</b>. Troque o chip que a distribuição volta ao normal.</div></div>`;
+      + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">Clique entrando e quase ninguém falando é sinal de número <b style="color:#cbd5e1">restrito pelo WhatsApp</b>: o lead vê o aviso de conta suspeita e desiste antes de mandar mensagem. Continua recebendo lead normalmente, mas vale trocar o chip.</div></div>`;
   }catch(_){ return ''; }
 }
 async function handlePresselsTotalPage(req, env){
