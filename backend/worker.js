@@ -4018,7 +4018,7 @@ async function handlePresselsTotalPage(req, env){
       let leads=[];
       let saleSet=new Set();
       const nameByPhone={};   // telefone (só dígitos) -> nome do perfil do WhatsApp
-      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;   // fora do try: usado também na separação novo/antigo
+      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
       try{
         try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
         try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
@@ -4031,33 +4031,21 @@ async function handlePresselsTotalPage(req, env){
         try{ const nr=await env.DB.prepare("SELECT c.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON l.phone=c.phone WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
       }catch(_){}
       const isSale=ph=>!!(ph&&saleSet.has(ph));
-      // NOVO vs ANTIGO — separa a CAUDA. Um número que saiu da roleta (ex.: 8028) para de receber
-      // clique de anúncio, mas ainda pinga lead: gente que clicou dias atrás e só manda mensagem
-      // agora. Esses inflam o total do vendedor sem a roleta ter escolhido ele hoje.
-      //
-      // A régua é por NÚMERO, não por lead: "o número recebeu clique de anúncio HOJE?". É exatamente
-      // a pergunta do Diretor ("o 8028 tá recebendo lead novo?"). Se não pinga clique nele hoje, o
-      // que chega é cauda. Deliberadamente NÃO uso o ttclid do lead pra isso: o fallback de
-      // atribuição (fifo) rouba um clique de HOJE do vendedor pra um lead da cauda, então o ttclid
-      // dele aponta pra hoje mesmo tendo clicado dias atrás — mediria errado justo neste caso.
-      const _ativoHoje=new Set(); let _temSinal=false;
-      try{
-        const cr=await env.DB.prepare("SELECT DISTINCT num_key FROM tt_pending WHERE ts>=? AND ts<? AND num_key IS NOT NULL AND num_key<>''").bind(dstart,dend).all();
-        (cr.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(k){ _ativoHoje.add(k); _temSinal=true; } });
-      }catch(_){}
-      const _k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
-      // Sem sinal nenhum de clique no dia (histórico além dos 7 dias que o tt_pending guarda) não dá
-      // pra dizer o que é cauda → não separa, mostra tudo no principal como era antes.
-      const isNovo=l=>!_temSinal || _ativoHoje.has(_k8(l.num));
+      // Sem separação novo/antigo. A classificação por "clique no número hoje" não é confiável
+      // quando um vendedor roda DOIS números conectados ao mesmo tempo (ou troca o em_uso no meio do
+      // dia): o clique fica gravado no número que estava ativo na hora, mas a mensagem chega no
+      // outro, e a régua marcava lead NOVO como antigo (caso real 23/07: 65 leads frescos do
+      // Guilherme foram parar em "antigos"). Os leads não se perdem — caem no número conectado dele.
+      // Mostra todos como leads do dia, sem rótulo que engana.
       const byAt={};
       leads.forEach(l=>{ const at=baseAt(l.inst); (byAt[at]=byAt[at]||[]).push(l); });
-      // CARD de um vendedor a partir de um conjunto de leads (serve pros NOVOS e pros ANTIGOS).
-      const _card=(at, arr, antigo)=>{
+      // CARD de um vendedor a partir dos leads dele.
+      const _card=(at, arr)=>{
         const name=nameMap[at]||'Vendedor';
         const daP=arr.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
         const byNum={}, numOrder=[];
         arr.forEach(l=>{ const k=String(l.num||''); if(!(k in byNum)){ byNum[k]=[]; numOrder.push(k); } byNum[k].push(l); });
-        const cpLines=[name+(antigo?' — leads ANTIGOS de ':' — leads de ')+dLabel];
+        const cpLines=[name+' — leads de '+dLabel];
         const numSecs=numOrder.map(k=>{
           const ls=byNum[k];
           const rows=ls.map(l=>{
@@ -4083,35 +4071,26 @@ async function handlePresselsTotalPage(req, env){
           }).join('');
           return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#7aa2ff;font-weight:700"><span style="font-family:ui-monospace,monospace">${_escHtml(fmtNum(k))}</span><span style="background:#1a2942;padding:1px 8px;border-radius:9px">${ls.length}</span></div>${rows}</div>`;
         }).join('');
-        let cpBtn='';
-        if(full){ const idx=cpBlocks.length; cpBlocks.push(cpLines.join('\n')); cpBtn=`<button onclick="cpSeller(${idx},this)" style="font-size:10.5px;font-weight:700;color:#7aa2ff;background:#15233a;border:1px solid #2b6cb0;border-radius:8px;padding:4px 10px;cursor:pointer">Copiar leads</button>`; }
-        return `<div style="flex:1;min-width:230px;max-width:340px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px${antigo?';opacity:.72':''}"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="font-size:11.5px;color:#8b9bb4;margin-top:2px"><b style="color:#e6edf6">${arr.length}</b> leads · <b style="color:#34d399">${daP}</b> da pressel</div>${numSecs}</div>`;
+        // Botão "Copiar leads" removido a pedido do Bruno (23/07): não quer exportar leads da tela.
+        const cpBtn='';
+        return `<div style="flex:1;min-width:230px;max-width:340px;background:#141c2b;border:1px solid #233047;border-radius:14px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:14px;font-weight:800">${_escHtml(name)}</div>${cpBtn}</div><div style="font-size:11.5px;color:#8b9bb4;margin-top:2px"><b style="color:#e6edf6">${arr.length}</b> leads · <b style="color:#34d399">${daP}</b> da pressel</div>${numSecs}</div>`;
       };
-      // divide cada vendedor em NOVOS e ANTIGOS
-      const novosAt={}, antigosAt={};
-      Object.keys(byAt).forEach(at=>{ novosAt[at]=byAt[at].filter(isNovo); antigosAt[at]=byAt[at].filter(l=>!isNovo(l)); });
-      // ordena os tops pelos NOVOS (é o placar que a roleta persegue): mais venda → conversão → volume
-      const _dv=(mp,at)=>(mp[at]||[]).reduce((s,l)=>s+(isSale(String(l.phone||'').replace(/\D/g,''))?1:0),0);
-      const _rank=(mp)=>Object.keys(mp).filter(at=>(mp[at]||[]).length).sort((a,b)=>{
-        const va=_dv(mp,a), vb=_dv(mp,b), la=(mp[a]||[]).length, lb=(mp[b]||[]).length;
+      // ordena os tops: mais venda → conversão → volume (nome desempata)
+      const _dv=(at)=>(byAt[at]||[]).reduce((s,l)=>s+(isSale(String(l.phone||'').replace(/\D/g,''))?1:0),0);
+      const ats=Object.keys(byAt).filter(at=>(byAt[at]||[]).length).sort((a,b)=>{
+        const va=_dv(a), vb=_dv(b), la=byAt[a].length, lb=byAt[b].length;
         const pa=la>0?va/la:0, pb=lb>0?vb/lb:0;
         return (vb-va) || (pb-pa) || (lb-la) || byName(a,b);
       });
-      const atsNovos=_rank(novosAt);
-      const cols=atsNovos.length?atsNovos.map(at=>_card(at, novosAt[at], false)).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead novo nesse dia.</div>`;
-      // seção de ANTIGOS embaixo (cauda de dias anteriores)
-      const atsAnt=_rank(antigosAt);
-      const antTot=Object.values(antigosAt).reduce((s,a)=>s+a.length,0);
-      const antSec=atsAnt.length?`<div style="margin-top:26px;border-top:1px solid #233047;padding-top:18px"><div style="font-size:12.5px;color:#8b9bb4;margin-bottom:12px"><b style="color:#cbd5e1">${antTot}</b> leads antigos · clicaram em dias anteriores e só mandaram mensagem hoje (o número não recebe clique novo agora)</div><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${atsAnt.map(at=>_card(at, antigosAt[at], true)).join('')}</div></div>`:'';
-      const novosTot=Object.values(novosAt).reduce((s,a)=>s+a.length,0);
-      const novosP=Object.values(novosAt).reduce((s,a)=>s+a.filter(l=>l.pid&&String(l.pid).trim()!=='').length,0);
+      const cols=ats.length?ats.map(at=>_card(at, byAt[at])).join(''):`<div style="color:#8b9bb4;text-align:center;padding:40px">Nenhum lead nesse dia.</div>`;
+      const totL=leads.length, totP=leads.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
       const hint=full?' · <span style="color:#34d399">verde = virou venda</span> · toque no número pra abrir a conversa':'';
-      bodyHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${novosTot}</b> leads novos${novosP<novosTot?` · <b style="color:#34d399">${novosP}</b> da pressel · ${novosTot-novosP} sem rastreio`:''}${antTot?` · <b style="color:#cbd5e1">${antTot}</b> antigos (embaixo)`:''}${hint}</div><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>${antSec}`;
+      bodyHtml=`<div style="font-size:13px;color:#8b9bb4;margin-bottom:14px"><b style="color:#e6edf6">${totL}</b> leads${totP<totL?` · <b style="color:#34d399">${totP}</b> da pressel · ${totL-totP} sem rastreio`:''}${hint}</div><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">${cols}</div>`;
     }
   const cpData=full?`<script>var _CP=${JSON.stringify(cpBlocks).replace(/</g,'\\u003c')};function cpSeller(i,b){try{navigator.clipboard.writeText(_CP[i]||'');var o=b.textContent;b.textContent='Copiado!';setTimeout(function(){b.textContent=o},1400);}catch(e){}}</script>`:'';
     leadsHtml=`${perToggle}${bodyHtml}${cpData}`;
   }
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads do dia (1º contato de cada número), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = virou venda.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const data = await _getDashData(env);   // cacheado: era parseado (1.3MB) a cada clique de anúncio
