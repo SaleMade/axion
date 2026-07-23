@@ -3770,10 +3770,9 @@ const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
 // GET /pressels-total — página PÚBLICA consolidada: TOTAL somando todas + cada pressel numa seção.
 // Pega TODAS as pressels do estado automaticamente (pressel nova entra sozinha).
-// SAÚDE DOS NÚMEROS. Clique entrando e quase ninguém falando = o WhatsApp está mostrando pro lead
-// o aviso de conta suspeita e ele desiste antes de mandar mensagem. A mensagem de quem manda chega
-// normal, então não é número morto: é conversão caindo, e o sinal de que aquele chip precisa ser
-// trocado. Aqui é só INFORMATIVO — a roleta não tira ninguém por causa disso (ligado = recebe).
+// CONVERSÃO POR NÚMERO. Painel só de MÉTRICA (não é aviso): pra cada número que rodou hoje, quantos
+// cliques recebeu, quantos viraram lead e a %. Número a número, de cada atendente. O padrão da
+// operação é 1-2% e isso é normal — por isso nada de "trocar chip", só o dado.
 async function _roletaDiagHtml(env, day, chips, nameMap){
   try{
     const ini=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), fim=ini+86400;
@@ -3784,31 +3783,39 @@ async function _roletaDiagHtml(env, day, chips, nameMap){
       env.DB.prepare(
         `SELECT num_key, COUNT(*) cliques FROM tt_pending
           WHERE ts>=? AND ts<? AND num_key IS NOT NULL AND num_key<>''
-          GROUP BY num_key HAVING cliques >= 50`
+          GROUP BY num_key HAVING cliques >= 30`
       ).bind(ini, fim).all(),
       env.DB.prepare(
         "SELECT substr(replace(num,'+',''),-8) AS nk, COUNT(*) n FROM wa_lead WHERE ts>=? AND ts<? AND num IS NOT NULL AND num<>'' GROUP BY nk"
       ).bind(ini, fim).all(),
     ]);
     const k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+    const fmtTel=(raw)=>{ let t=String(raw||'').replace(/\D/g,''); if(t.startsWith('55')&&t.length>11) t=t.slice(2); if(t.length>=10){ const ddd=t.slice(0,2), rest=t.slice(2); return '('+ddd+') '+rest.slice(0,rest.length-4)+'-'+rest.slice(-4); } return String(raw||''); };
     const leadDe={}; (lr.results||[]).forEach(x=>{ const k=String(x.nk||''); if(k) leadDe[k]=Number(x.n)||0; });
-    const ruins=(r.results||[]).map(x=>{
+    const nums=(r.results||[]).map(x=>{
       const k=String(x.num_key||''), cl=Number(x.cliques)||0, cv=leadDe[k]||0;
-      return { k, cl, cv, taxa: cl?(cv*100/cl):0 };
-    }).filter(x=>x.taxa<2).sort((a,b)=>b.cl-a.cl);
-    if(!ruins.length) return '';
-    const dono=k=>{ const c=chips.find(c=>k8(c.num)===k); return c&&c.at?(nameMap[String(c.at)]||String(c.at)):''; };
-    const linhas=ruins.map(x=>{
-      const d=dono(x.k);
-      return `<li style="margin:5px 0"><b style="font-family:ui-monospace,monospace;color:#e6edf6">${_escHtml(x.k)}</b>${d?` <span style="color:#8b9bb4">de ${_escHtml(d)}</span>`:''}<br><span style="color:#8b9bb4">recebeu</span> <b style="color:#f87171">${x.cl}</b> <span style="color:#8b9bb4">cliques e virou só</span> <b style="color:#f87171">${x.cv}</b> <span style="color:#8b9bb4">lead${x.cv===1?'':'s'}</span> (${x.taxa.toFixed(1)}%)</li>`;
+      const c=chips.find(c=>k8(c.num)===k);
+      return { k, cl, cv, taxa: cl?(cv*100/cl):0, nome: (c&&c.at)?(nameMap[String(c.at)]||String(c.at)):'', tel: c?fmtTel(c.num):fmtTel(k) };
+    }).sort((a,b)=>b.cl-a.cl).slice(0,8);
+    if(!nums.length) return '';
+    const linhas=nums.map(x=>{
+      const pct=x.taxa.toFixed(1)+'%';
+      return `<div style="padding:9px 0;border-top:1px solid #1a2436">`
+        + `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">`
+        +   `<span style="font-family:ui-monospace,monospace;font-weight:700;color:#e6edf6;font-size:13px">${_escHtml(x.tel)}</span>`
+        +   `<span style="font-weight:800;color:#7aa2ff;font-size:13px;font-variant-numeric:tabular-nums">${pct}</span>`
+        + `</div>`
+        + `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:2px">`
+        +   `<span style="font-size:11px;color:#8b9bb4">${x.nome?_escHtml(x.nome):'—'}</span>`
+        +   `<span style="font-size:11px;color:#8b9bb4;font-variant-numeric:tabular-nums"><b style="color:#cbd5e1">${x.cl}</b> cliques → <b style="color:#34d399">${x.cv}</b> lead${x.cv===1?'':'s'}</span>`
+        + `</div>`
+      + `</div>`;
     }).join('');
-    return `<div style="background:#241d10;border:1px solid #7c5e10;border-radius:12px;padding:13px 16px">`
-      + `<div style="font-size:13px;font-weight:800;color:#fbbf24">Chip pedindo troca</div>`
-      // Deixa explícito que a conta é POR NÚMERO. Sem isso dá pra ler "Guilherme, 1 lead" e achar
-      // que é o total do vendedor, quando é só o desempenho daquele chip específico dele.
-      + `<div style="font-size:10.5px;color:#8b9bb4;margin:2px 0 7px">número a número, não é o total do vendedor</div>`
-      + `<ul style="margin:0 0 7px 18px;font-size:12.5px;color:#cbd5e1">${linhas}</ul>`
-      + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">Clique entrando e quase ninguém falando é sinal de número <b style="color:#cbd5e1">restrito pelo WhatsApp</b>: o lead vê o aviso de conta suspeita e desiste antes de mandar mensagem. Continua recebendo lead normalmente, mas vale trocar o chip.</div></div>`;
+    return `<div style="background:#101827;border:1px solid #233047;border-radius:12px;padding:14px 16px">`
+      + `<div style="font-size:13px;font-weight:800;color:#e6edf6">Conversão por número</div>`
+      + `<div style="font-size:10.5px;color:#8b9bb4;margin:2px 0 4px">quanto de clique virou lead, número a número</div>`
+      + linhas
+      + `</div>`;
   }catch(_){ return ''; }
 }
 async function handlePresselsTotalPage(req, env){
