@@ -2469,16 +2469,18 @@ async function handleSalechatHeartbeat(req, env, token) {
     } catch (_) {}
   }
   const now = Math.floor(Date.now() / 1000);
+  const _wppSeen = Number(body?.wppSeen) || 0;   // 1 = WhatsApp AUTENTICADO (injetor manda isAuthenticated)
   try {
     await env.DB.prepare(
       `INSERT INTO sc_heartbeat (self_number, at_id, instance, wpp_seen, last_seen, meta) VALUES (?,?,?,?,?,?)
        ON CONFLICT(self_number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, wpp_seen=excluded.wpp_seen, last_seen=excluded.last_seen, meta=excluded.meta`
-    ).bind(selfNumber, owner?.at_id || null, owner?.instance || null, Number(body?.wppSeen) || 0, now,
+    ).bind(selfNumber, owner?.at_id || null, owner?.instance || null, _wppSeen, now,
            JSON.stringify(body?.meta || {}).slice(0, 1000)).run();
   } catch (_) {}
-  // Mantém wa_conn vivo pela presença do Sale Chat (número logado), pra a página de Pressels/roleta
-  // e o "num" do lead funcionarem sem depender da Evolution.
-  if (owner && owner.instance) {
+  // Mantém wa_conn vivo pela presença do Sale Chat (número logado). SÓ marca vivo quando AUTENTICADO
+  // (_wppSeen): número deslogado que ainda bate heartbeat (WhatsApp Web quebrou o isAuthenticated) não
+  // pode marcar "conectado" e receber lead. Sem _wppSeen a linha não é renovada e expira em 180s.
+  if (owner && owner.instance && _wppSeen) {
     try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run(); } catch (_) {}
     try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
     try { await env.DB.prepare(`INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'sc', ?, strftime('%s','now')) ON CONFLICT(instance) DO UPDATE SET state='sc', number=excluded.number, updated_at=excluded.updated_at`).bind(owner.instance, selfNumber).run(); } catch (_) {}
@@ -2556,7 +2558,7 @@ async function handleWAConn(req, env) {
   let scConns = [];
   try {
     await _scEnsureTables(env);
-    const hb = await env.DB.prepare("SELECT self_number, instance FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180").all();
+    const hb = await env.DB.prepare("SELECT self_number, instance FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
     scConns = (hb.results || []).map(h => ({ instance: h.instance || ('sc_' + h.self_number), state: 'sc', number: h.self_number }));
     // Rede de segurança: número que ACABOU de entregar mensagem está vivo por definição, mesmo que
     // o heartbeat falhe (ex.: painel antigo sem __zvGetSelfNumber). Nunca mostrar "parado" pra quem
@@ -2942,7 +2944,10 @@ async function _ttPixelToken(env, pid, instance) {
     const data = await _getDashData(env);   // cacheado: era parseado por lead (1.3MB), estourava CPU no lote
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
     let p = pid ? pressels.find(x => String(x.id) === String(pid) && x.pixel_tt && x.pixel_tt_token) : null;
-    if (!p && instance) {
+    // fallback pelo vendedor SÓ quando NÃO se sabe a pressel (pid vazio). Com o pid conhecido mas sem
+    // pixel configurado, o evento tem que ir pro pixel GLOBAL, nunca pro de OUTRA pressel do vendedor
+    // (senão o GT de uma BM via lead que não era dele e o da certa não via nada).
+    if (!p && !pid && instance) {
       // fallback pelo vendedor: SÓ se ele estiver em UMA pressel com pixel (senão mandaria pro pixel/BM errado)
       const at = String(instance).replace(/^ax_/, '').replace(/_b$/, '');   // número backup (ax_<at>_b) cai no mesmo vendedor
       const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
@@ -3061,9 +3066,13 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     let num=String(selfNum||'').replace(/\D/g,'');
     if(!num){ try{ const cn=await env.DB.prepare('SELECT number FROM wa_conn WHERE instance=?').bind(instance).first(); num=(cn&&cn.number)||''; }catch(_){} }
     if (isUpgrade) {
-      // corrige a atribuição do lead que já existia, sem mexer no ts (senão ele "renasce" e pula de
-      // dia na métrica) nem no inst (quem atendeu não mudou por causa de uma mensagem nova).
-      await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src=? WHERE phone=?").bind(pid, ttclid, src, phone).run();
+      // Só melhora quando casou o clique EXATO pelo código (src='code'). Se só resolveu pela LETRA
+      // (pid sem ttclid), NÃO rebaixa: o lead já tinha uma atribuição com ttclid (do fifo que o
+      // criou), e sobrescrever com ttclid vazio apagava o click id — e a VENDA disparava sem ele.
+      // Não mexe no ts (senão "renasce" e pula de dia) nem no inst (quem atendeu não muda por msg nova).
+      if (src === 'code') {
+        await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src='code' WHERE phone=?").bind(pid, ttclid, phone).run();
+      }
     } else {
       await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
     }
@@ -4123,7 +4132,7 @@ async function handlePresselPublic(req, env, id){
     const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
     // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
     try{
-      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180").all();
+      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
       (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
     }catch(_){}
     liveSet = m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed

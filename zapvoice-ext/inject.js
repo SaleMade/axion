@@ -538,7 +538,8 @@ async function run() {
         const raw = valOf(await evaluate('window.__zvOutbox ? JSON.stringify(window.__zvOutbox.slice(0,50)) : "[]"', true));
         let batch = []; try { batch = JSON.parse(raw || '[]'); } catch (_) {}
         if (batch.length) {
-          const res = await httpPostJson(INGEST_BASE + '/ingest/' + encodeURIComponent(INGEST_TOKEN), { events: batch });
+          const iid = valOf(await evaluate('window.__zvInstallId || ""', true));
+          const res = await httpPostJson(INGEST_BASE + '/ingest/' + encodeURIComponent(INGEST_TOKEN), { events: batch, installId: String(iid || '') });
           if (res && res.ok && Array.isArray(res.ack)) {
             if (res.ack.length) {
               // remove SO o confirmado (nunca splice cego) e conta os enviados pro painel de teste
@@ -563,8 +564,21 @@ async function run() {
       if (INGEST_TOKEN) {
         const self = valOf(await evaluate('(window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ""', true));
         if (self) {
-          const wppSeen = valOf(await evaluate('(window.WPP && window.WPP.on) ? 1 : 0', true));
-          await httpPostJson(INGEST_BASE + '/heartbeat/' + encodeURIComponent(INGEST_TOKEN), { selfNumber: String(self), wppSeen: Number(wppSeen) || 0 });
+          // wppSeen = WhatsApp AUTENTICADO de verdade (isAuthenticated), não só a lib carregada. Antes
+          // era (WPP && WPP.on): WhatsApp deslogado ainda tem WPP.on, então mandava 1 mesmo deslogado,
+          // e o servidor achava o número vivo e mandava lead pra ninguém. Se o isAuthenticated não
+          // existir (WhatsApp Web mudou), manda 0 = não confirmado, e o servidor não roteia pra ele.
+          const wppSeen = valOf(await evaluate('(window.WPP && window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()) ? 1 : 0', true));
+          const iid = valOf(await evaluate('window.__zvInstallId || ""', true));
+          const hb = await httpPostJson(INGEST_BASE + '/heartbeat/' + encodeURIComponent(INGEST_TOKEN), { selfNumber: String(self), wppSeen: Number(wppSeen) || 0, installId: String(iid || '') });
+          // nome do vendedor dono deste Sale Chat -> o painel mostra na aba Captura
+          if (hb && typeof hb.ownerName === 'string') {
+            try { await evaluate('window.__zvVendorName=' + JSON.stringify(hb.ownerName) + ';'); } catch (_) {}
+          }
+          // SEM VENDEDOR VINCULADO: o servidor recebe mas nao sabe de quem e a conversa, entao
+          // lead e VENDA sao descartados. O painel precisa avisar o vendedor na hora, senao ele
+          // vende a tarde inteira achando que esta tudo certo (ja aconteceu, custou 4 vendas).
+          try { await evaluate('window.__zvSemVendedor=' + ((hb && hb.owner) ? 'false' : 'true') + ';'); } catch (_) {}
         }
       }
     } catch (_) {}

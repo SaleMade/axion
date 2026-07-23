@@ -264,7 +264,10 @@ async function buildLibrary(remote) {
   if (remoteMedia.length) { cleanCache(remoteMedia); prefetchMedia(remoteMedia); }
   if (remoteMedia.length) {
     for (const m of remoteMedia) {
-      if (!m || !m.key) continue;
+      if (!m) continue;
+      // Contato e so nome+numero (cartao de contato); nao tem arquivo pra baixar.
+      if (m.kind === 'contato') { media.push({ id: m.id, kind: 'contato', label: m.label || 'Contato', name: m.name || m.label || '', number: m.number || '', grp: m.grp || '' }); continue; }
+      if (!m.key) continue;
       const url = MEDIA_BASE + '/' + m.key;
       // video pesado: NAO embute; painel pede via __zvReq e injetor entrega base64 no clique.
       if (m.kind === 'video') {
@@ -535,11 +538,16 @@ async function run() {
         const raw = valOf(await evaluate('window.__zvOutbox ? JSON.stringify(window.__zvOutbox.slice(0,50)) : "[]"', true));
         let batch = []; try { batch = JSON.parse(raw || '[]'); } catch (_) {}
         if (batch.length) {
-          const res = await httpPostJson(INGEST_BASE + '/ingest/' + encodeURIComponent(INGEST_TOKEN), { events: batch });
+          const iid = valOf(await evaluate('window.__zvInstallId || ""', true));
+          const res = await httpPostJson(INGEST_BASE + '/ingest/' + encodeURIComponent(INGEST_TOKEN), { events: batch, installId: String(iid || '') });
           if (res && res.ok && Array.isArray(res.ack)) {
             if (res.ack.length) {
               // remove SO o confirmado (nunca splice cego) e conta os enviados pro painel de teste
               await evaluate('(function(a){try{var s={};for(var i=0;i<a.length;i++)s[a[i]]=1;window.__zvOutbox=(window.__zvOutbox||[]).filter(function(e){return !s[e.msgId];});window.__zvSentCount=(window.__zvSentCount||0)+a.length;}catch(_){}})(' + JSON.stringify(res.ack) + ')');
+            }
+            // vendas confirmadas pelo servidor: marca por msgId pra o painel mostrar "VENDA CONFIRMADA"
+            if (Array.isArray(res.sales) && res.sales.length) {
+              await evaluate('(function(a){try{window.__zvSaleOk=window.__zvSaleOk||{};for(var i=0;i<a.length;i++){window.__zvSaleOk[a[i].msgId]=a[i].value;}}catch(_){}})(' + JSON.stringify(res.sales) + ')');
             }
             try { await evaluate('window.__zvIngestOk=true;'); } catch (_) {}
           } else { try { await evaluate('window.__zvIngestOk=false;'); } catch (_) {} }
@@ -556,8 +564,21 @@ async function run() {
       if (INGEST_TOKEN) {
         const self = valOf(await evaluate('(window.__zvGetSelfNumber && window.__zvGetSelfNumber()) || ""', true));
         if (self) {
-          const wppSeen = valOf(await evaluate('(window.WPP && window.WPP.on) ? 1 : 0', true));
-          await httpPostJson(INGEST_BASE + '/heartbeat/' + encodeURIComponent(INGEST_TOKEN), { selfNumber: String(self), wppSeen: Number(wppSeen) || 0 });
+          // wppSeen = WhatsApp AUTENTICADO de verdade (isAuthenticated), não só a lib carregada. Antes
+          // era (WPP && WPP.on): WhatsApp deslogado ainda tem WPP.on, então mandava 1 mesmo deslogado,
+          // e o servidor achava o número vivo e mandava lead pra ninguém. Se o isAuthenticated não
+          // existir (WhatsApp Web mudou), manda 0 = não confirmado, e o servidor não roteia pra ele.
+          const wppSeen = valOf(await evaluate('(window.WPP && window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()) ? 1 : 0', true));
+          const iid = valOf(await evaluate('window.__zvInstallId || ""', true));
+          const hb = await httpPostJson(INGEST_BASE + '/heartbeat/' + encodeURIComponent(INGEST_TOKEN), { selfNumber: String(self), wppSeen: Number(wppSeen) || 0, installId: String(iid || '') });
+          // nome do vendedor dono deste Sale Chat -> o painel mostra na aba Captura
+          if (hb && typeof hb.ownerName === 'string') {
+            try { await evaluate('window.__zvVendorName=' + JSON.stringify(hb.ownerName) + ';'); } catch (_) {}
+          }
+          // SEM VENDEDOR VINCULADO: o servidor recebe mas nao sabe de quem e a conversa, entao
+          // lead e VENDA sao descartados. O painel precisa avisar o vendedor na hora, senao ele
+          // vende a tarde inteira achando que esta tudo certo (ja aconteceu, custou 4 vendas).
+          try { await evaluate('window.__zvSemVendedor=' + ((hb && hb.owner) ? 'false' : 'true') + ';'); } catch (_) {}
         }
       }
     } catch (_) {}
