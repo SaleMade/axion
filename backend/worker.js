@@ -3795,6 +3795,40 @@ async function _roletaDiagHtml(env, day, chips, nameMap){
       + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">Clique entrando e quase ninguém falando é sinal de número <b style="color:#cbd5e1">restrito pelo WhatsApp</b>: o lead vê o aviso de conta suspeita e desiste antes de mandar mensagem. Continua recebendo lead normalmente, mas vale trocar o chip.</div></div>`;
   }catch(_){ return ''; }
 }
+// CAUDA A RECUPERAR. Gente que clica na pressel e não manda mensagem na hora fica com o link de um
+// número SALVO no WhatsApp. Dias depois, quando manda, a mensagem vai DIRETO pra esse número (o
+// servidor não entra no meio, não dá pra redirecionar). Se nesse meio-tempo o número foi desligado
+// ou banido, a mensagem cai no vazio e o lead some sem a gente nem ver. Aqui listamos os números que
+// tiveram MUITO clique nos últimos 3 dias e estão SEM sinal de vida agora: reconectar o chip (deixar
+// o celular ligado com o Sale Chat rodando mais uns dias) captura essa cauda em vez de perder.
+async function _caudaDesconectadaHtml(env, chips, nameMap){
+  try{
+    const k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+    const [clk, hb] = await Promise.all([
+      env.DB.prepare("SELECT num_key, COUNT(*) c, MAX(ts) ult FROM tt_pending WHERE ts > strftime('%s','now')-86400*3 AND num_key IS NOT NULL AND num_key<>'' GROUP BY num_key HAVING c>=80").all(),
+      env.DB.prepare("SELECT self_number, MAX(last_seen) ls FROM sc_heartbeat GROUP BY self_number").all(),
+    ]);
+    const now=Math.floor(Date.now()/1000);
+    const vivo=new Set();
+    (hb.results||[]).forEach(h=>{ const kk=k8(h.self_number); if(kk && (now-Number(h.ls||0))<1800) vivo.add(kk); });   // heartbeat < 30min = vivo agora
+    const dono=k=>{ const c=chips.find(c=>k8(c.num)===k); return c&&c.at?(nameMap[String(c.at)]||String(c.at)):''; };
+    const dark=(clk.results||[]).map(x=>({ k:String(x.num_key||''), c:Number(x.c)||0, ult:Number(x.ult)||0 }))
+      .filter(x=>x.k && !vivo.has(x.k))
+      .sort((a,b)=>b.ult-a.ult).slice(0,6);   // cauda mais quente (clique mais recente) primeiro
+    if(!dark.length) return '';
+    const linhas=dark.map(x=>{
+      const d=dono(x.k);
+      const h=Math.max(1, Math.round((now-x.ult)/3600));
+      const desde = h<48 ? (h+'h') : (Math.round(h/24)+' dias');
+      return `<li style="margin:5px 0"><b style="font-family:ui-monospace,monospace;color:#e6edf6">${_escHtml(x.k)}</b>${d?` <span style="color:#8b9bb4">de ${_escHtml(d)}</span>`:''}<br><span style="color:#8b9bb4">teve</span> <b style="color:#7aa2ff">${x.c}</b> <span style="color:#8b9bb4">cliques (últ. há ${desde}) e está desligado</span></li>`;
+    }).join('');
+    return `<div style="background:#0e1f2e;border:1px solid #1e5a86;border-radius:12px;padding:13px 16px">`
+      + `<div style="font-size:13px;font-weight:800;color:#38bdf8">Cauda a recuperar</div>`
+      + `<div style="font-size:10.5px;color:#8b9bb4;margin:2px 0 7px">números desligados que ainda vão receber mensagem de quem clicou antes</div>`
+      + `<ul style="margin:0 0 7px 18px;font-size:12.5px;color:#cbd5e1">${linhas}</ul>`
+      + `<div style="font-size:11.5px;color:#8b9bb4;line-height:1.5">Quem clicou e não mandou na hora fica com esse número salvo e manda depois, direto (não dá pra redirecionar). Enquanto o chip está desligado, esse lead se perde. <b style="color:#cbd5e1">Reconecte o Sale Chat</b> desses números por mais uns dias pra capturar a cauda.</div></div>`;
+  }catch(_){ return ''; }
+}
 async function handlePresselsTotalPage(req, env){
   const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -3819,7 +3853,14 @@ async function handlePresselsTotalPage(req, env){
   const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
-  const _diagHtml=await _roletaDiagHtml(env, day, chips, nameMap);   // aviso de número furando a roleta (vale em todas as abas)
+  // Painéis da coluna direita: "Chip pedindo troca" + "Cauda a recuperar". Só valem pra HOJE (a
+  // cauda desconectada é sobre o estado de conexão agora, não faz sentido num dia passado).
+  const _isHoje=(day===today);
+  const [_diagHtml, _caudaHtml] = await Promise.all([
+    _roletaDiagHtml(env, day, chips, nameMap),
+    _isHoje ? _caudaDesconectadaHtml(env, chips, nameMap) : Promise.resolve(''),
+  ]);
+  const _sideHtml=[_diagHtml, _caudaHtml].filter(Boolean).join('<div style="height:14px"></div>');
   const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');   // instância -> id do vendedor
   // "Em uso" igual a dash enxerga (a dash usa ids de status customizados tipo st_xxxx com label "Em uso")
   const _emUsoIds=new Set(['em_uso']);
@@ -4096,7 +4137,7 @@ async function handlePresselsTotalPage(req, env){
   const cpData=full?`<script>var _CP=${JSON.stringify(cpBlocks).replace(/</g,'\\u003c')};function cpSeller(i,b){try{navigator.clipboard.writeText(_CP[i]||'');var o=b.textContent;b.textContent='Copiado!';setTimeout(function(){b.textContent=o},1400);}catch(e){}}</script>`:'';
     leadsHtml=`${perToggle}${bodyHtml}${cpData}`;
   }
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_diagHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_diagHtml?`<aside class="side">${_diagHtml}</aside>`:''}</div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads NOVOS do dia (1º contato de cada número — lead antigo que remanda NÃO conta de novo), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = veio da pressel · "~" = casado por tempo (código apagado).':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
 }
 async function handlePresselPublic(req, env, id){
   const data = await _getDashData(env);   // cacheado: era parseado (1.3MB) a cada clique de anúncio
