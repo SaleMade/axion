@@ -3067,11 +3067,12 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     } else {
       await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
     }
-    // só dispara evento de LEAD pro pixel quando existe ttclid (clique de anúncio rastreável).
-    // Agora que TODO lead de pressel tem pid (inclusive orgânico), testar `pid` mandaria evento
-    // sem ttclid pro TikTok — evento que ele não consegue atribuir e que só suja a otimização.
-    // No upgrade só dispara se o lead AINDA NÃO tinha ttclid, pra não mandar o evento duas vezes.
-    if (ttclid && !(exists && exists.ttclid)) {
+    // Dispara InitiateCheckout pra TODO lead que veio da pressel (tem pid), com ou sem ttclid. O
+    // GT compara o nº de leads da dash com o do TikTok, e limitar a `ttclid` deixava ~40% de fora
+    // (137 na dash x 77 com ttclid em 23/07). O _ttSend SEMPRE manda o telefone com hash (advanced
+    // matching), então o TikTok consegue casar por telefone mesmo sem o click id. Lead orgânico de
+    // verdade (sem pid) continua fora. No upgrade só dispara se ainda não tinha disparado.
+    if ((ttclid || pid) && !(exists && (exists.ttclid || exists.pid))) {
       const { pixel, token } = await _ttPixelToken(env, pid, instance);
       await _ttSend(env, pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone, pid, instance });   // LEAD = InitiateCheckout (evento que o GT otimiza)
     }
