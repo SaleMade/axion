@@ -4119,6 +4119,88 @@ async function handlePresselsTotalPage(req, env){
   }
   return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads do dia (1º contato de cada número), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = virou venda.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
 }
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// FUNIL V2 (isolado, à prova de cache). Área nova /f/<id> que NÃO substitui a /p/<id> (a antiga
+// segue intacta). O problema do "código dominante do dia" é que a pressel antiga embute um wa.me
+// ESTÁTICO no HTML, e o TikTok resolve/cacheia esse link 1x e serve pro dia inteiro. Aqui a página
+// NÃO tem wa.me nenhum: o botão chama /api/f/go NO CLIQUE, que resolve número+código+ttclid FRESCOS
+// e devolve o link. Sem link estático pra cachear, por construção. Reusa os helpers já testados
+// (_resolvePresselSellers, _presselBalancedPick, _genLeadCode, _waLink), só o FLUXO é limpo.
+async function _funnelPick(env, id){
+  const data = await _getDashData(env);
+  const pressels=Array.isArray(data.pressels)?data.pressels:[];
+  const chips=Array.isArray(data.chips)?data.chips:[];
+  const p=pressels.find(x=>String(x.id)===String(id));
+  if(!p || (p.status && p.status!=='ativa')) return null;
+  let liveSet=null;
+  try{
+    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc')").all();
+    const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
+    const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
+    (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
+    liveSet = m.size ? m : null;   // vazio = fail-open (null), nunca fail-closed
+  }catch(_){}
+  const emUsoIds=new Set(['em_uso']);
+  try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) emUsoIds.add(String(s.id)); }); }catch(_){}
+  const sellers=_resolvePresselSellers(p, chips, liveSet, emUsoIds);
+  if(!sellers.length) return null;
+  const pick=await _presselBalancedPick(env, id, sellers);
+  if(!pick) return null;
+  return { p, pick };
+}
+// Resolve o wa.me FRESCO de um clique: pick da roleta + código (1ª letra = pressel) + tt_pending.
+async function _funnelResolveWa(env, id, ttclid){
+  const r=await _funnelPick(env, id);
+  if(!r) return null;
+  const { p, pick }=r;
+  ttclid=String(ttclid||'');
+  let leadCode='';
+  try{
+    const ex = ttclid ? await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first() : null;
+    if(ex){ leadCode = ex.code || ''; }
+    else{
+      leadCode=_genLeadCode(id);
+      const _nk=String(pick.num||'').replace(/\D/g,'').slice(-8);
+      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick.inst, ttclid, String(id), leadCode, _nk).run();
+      if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} try{ await _bumpPressel(env, id, 'clicks'); }catch(_){} }
+    }
+  }catch(_){}
+  let waMsg=String(p.msg||'');
+  if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
+  return _waLink(pick.num, waMsg) || null;
+}
+// GET/POST /api/f/go?p=<id>&ttclid=<t> → { wa } | { offline:true }. O botão da /f/<id> chama no clique.
+async function handleFunnelGo(req, env){
+  const url=new URL(req.url);
+  const id=url.searchParams.get('p')||'';
+  const ttclid=url.searchParams.get('ttclid')||'';
+  const hd={ 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store, no-cache, must-revalidate, max-age=0', 'access-control-allow-origin':'*' };
+  try{
+    const wa=await _funnelResolveWa(env, id, ttclid);
+    return new Response(JSON.stringify(wa?{wa}:{offline:true}), { status:200, headers:hd });
+  }catch(_){ return new Response(JSON.stringify({offline:true}), { status:200, headers:hd }); }
+}
+// GET /f/<id> — pressel v2. Mesmos elementos/visual da /p, MAS o HTML não tem wa.me: o botão resolve
+// no clique via /api/f/go. Auto-redirect só com ttclid (resolvedor do TikTok sem ttclid não é levado).
+async function handleFunnelPage(req, env, id){
+  const data=await _getDashData(env);
+  const pressels=Array.isArray(data.pressels)?data.pressels:[];
+  const p=pressels.find(x=>String(x.id)===String(id));
+  if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
+  const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';
+  const secs=Math.max(0, Number(p.redirect)||0);
+  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _busy=false;function go(){if(_busy)return;_busy=true;try{if(IS_TT)ttq&&ttq.track('ClickButton')}catch(e){}fetch('/api/f/go?p=${encodeURIComponent(id)}&ttclid='+encodeURIComponent(_ttc),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d&&d.wa){location.href=d.wa}else{_busy=false}}).catch(function(){_busy=false});}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
+  const els=_presselElsServer(p);
+  let body=els.map(e=>_elPublicHtml(e, '#')).join('');   // '#' + onclick go() nos botões: nada de wa.me no HTML
+  if(p.fullclick){
+    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
+  }
+  if(!els.some(e=>e.type==='botao')){
+    body+=`<div style="padding:14px"><a href="#" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
+  }
+  return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
+}
 async function handlePresselPublic(req, env, id){
   const data = await _getDashData(env);   // cacheado: era parseado (1.3MB) a cada clique de anúncio
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
@@ -4454,6 +4536,11 @@ export default {
         }
         return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
       }
+
+      // FUNIL V2 (área nova, isolada — não mexe na /p/ antiga). Botão resolve o wa.me no clique.
+      if (path === '/api/f/go') return handleFunnelGo(req, env);
+      const funnelMatch = path.match(/^\/f\/([a-zA-Z0-9_-]+)$/);
+      if (req.method === 'GET' && funnelMatch) return handleFunnelPage(req, env, funnelMatch[1]);
 
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
