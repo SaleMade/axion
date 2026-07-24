@@ -3011,6 +3011,16 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
         const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
         if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; }
       } catch (_) {}
+      // 1b) O código É deste lead, mesmo que a linha já tenha sido reivindicada pelo FIFO de OUTRO
+      // lead antes (o fifo é guloso e drena o pool de cliques do vendedor). Sem re-reivindicar, lê o
+      // ttclid do clique DELE. Antes esses caíam em 'letra' sem ttclid e o TikTok não atribuía a venda
+      // ao anúncio — era a maior fonte do descasamento que o gestor de tráfego via.
+      if (!pid) {
+        try {
+          const cl2 = await env.DB.prepare("SELECT ttclid, pid FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1").bind(code).first();
+          if (cl2 && (cl2.ttclid || cl2.pid)) { ttclid = cl2.ttclid || ''; pid = cl2.pid || ''; src = 'code'; }
+        } catch (_) {}
+      }
     }
     // 2) FALLBACK (sem código): casa com o clique recente NÃO reivindicado no MESMO número (janela 60min, o mais antigo).
     // Recupera o lead que apagou o código. Vale porque esses números só recebem tráfego de pressel.
@@ -4180,21 +4190,32 @@ async function handlePresselPublic(req, env, id){
   if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
   const wa=_waLink(pick.num, waMsg);
   if(!wa) return _presselOffline();
+  // Modo REDIRECT (?_redir=1): o botão/link da pressel aponta pra CÁ, não embute o wa.me no HTML.
+  // Isso mata o "código dominante do dia": o TikTok carregava a pressel 1x (na criação do anúncio),
+  // pegava o wa.me estático do HTML e servia esse link o dia todo — todo tráfego caía num número só,
+  // sem ttclid, e o gestor de tráfego via venda muito menor que a dash. Agora o HTML não tem wa.me
+  // pra cachear; cada clique passa aqui, gera número/código FRESCOS, captura o ttclid, e é 302 pro
+  // WhatsApp. no-store forte pra não cachear o destino.
+  if(new URL(req.url).searchParams.get('_redir')!==null){
+    return new Response(null, { status:302, headers:{ 'Location': wa, 'cache-control':'no-store, no-cache, must-revalidate, max-age=0', 'referrer-policy':'no-referrer', 'x-robots-tag':'noindex, nofollow' } });
+  }
+  const redir='/p/'+id+'?_redir=1'+(ttclid?('&ttclid='+encodeURIComponent(ttclid)):'');
+  const redirJson=JSON.stringify(redir);
   const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
-  const waJson=JSON.stringify(wa);
-  let _wd=String(pick.num||'').replace(/\D/g,''); if(_wd.length<=11) _wd='55'+_wd;
-  const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));   // deep link: abre o app DIRETO na conversa (com o código no texto)
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`setTimeout(go,${secs*1000});`:''}</script>`;
+  // go() navega pro endpoint de redirect (não pro wa.me direto), pra o HTML não expor link estático.
+  // O auto-redirect só dispara com ttclid (clique real de anúncio): um resolvedor do TikTok sem
+  // ttclid não é mais mandado sozinho pro WhatsApp.
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();location.href=${redirJson};}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
   const els=_presselElsServer(p);
-  let body=els.map(e=>_elPublicHtml(e, wa)).join('');
+  let body=els.map(e=>_elPublicHtml(e, redir)).join('');
   if(p.fullclick){
     return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
   }
   // Garante um botão de WhatsApp se o usuário não adicionou nenhum
   if(!els.some(e=>e.type==='botao')){
-    body+=`<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
+    body+=`<div style="padding:14px"><a href="${_escHtml(redir)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
   }
   return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
 }
