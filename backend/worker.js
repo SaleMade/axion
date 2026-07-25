@@ -2442,6 +2442,76 @@ async function handleSalechatIngest(req, env, token) {
   }
   return json({ ok: true, ack, count: ack.length, sales: salesOut });
 }
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// WhatsApp Cloud API (OFICIAL) — webhook de captura.
+//  GET  = a Meta manda hub.challenge pra verificar o webhook (respondemos o challenge).
+//  POST = mensagens RECEBIDAS (o lead manda primeiro). Reusa TODA a atribuição do Sale Chat:
+//         resolveOwner(número oficial) → _waLeadCapture (casa o clique da pressel → lead + pixel) → wa_attrib.
+//  IMPORTANTE: a Cloud API NÃO devolve a mensagem que o VENDEDOR envia, então a venda ("Pedido
+//  Concluído", que é uma mensagem de saída) NÃO chega por aqui. A detecção de venda pela via oficial
+//  depende do ENVIO passar pelo AXION (fase seguinte, quando os nomes forem aprovados e ligarmos a
+//  caixa de saída). Por enquanto: captura de lead + atribuição + pixel de lead. É o grosso do valor.
+//  Pra atribuir ao vendedor, o número oficial precisa estar na Contingência atribuído a alguém.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+async function _waCloudVerifyToken(env) {
+  let t = await _readConfig(env, 'wa_api_verify_token');
+  if (!t) { t = 'ax_wh_' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12); await _writeConfig(env, 'wa_api_verify_token', t); }
+  return t;
+}
+async function handleWhatsappCloudWebhook(req, env) {
+  const url = new URL(req.url);
+  if (req.method === 'GET') {
+    const mode = url.searchParams.get('hub.mode');
+    const tok = url.searchParams.get('hub.verify_token');
+    const chal = url.searchParams.get('hub.challenge');
+    const expected = await _waCloudVerifyToken(env);
+    if (mode === 'subscribe' && tok && tok === expected) return new Response(chal || '', { status: 200, headers: { 'content-type': 'text/plain' } });
+    return new Response('forbidden', { status: 403 });
+  }
+  let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
+  try {
+    await _scEnsureTables(env);
+    const now = Math.floor(Date.now() / 1000);
+    const ownerCache = {};
+    for (const entry of (body?.entry || [])) {
+      for (const ch of (entry?.changes || [])) {
+        const val = ch?.value || {};
+        const selfNumber = String(val?.metadata?.display_phone_number || '').replace(/\D/g, '');
+        const nomePorWa = {};
+        (val?.contacts || []).forEach(c => { if (c?.wa_id) nomePorWa[String(c.wa_id).replace(/\D/g, '')] = (c?.profile?.name || ''); });
+        for (const m of (val?.messages || [])) {
+          const phone = String(m?.from || '').replace(/\D/g, '');
+          const msgId = String(m?.id || '');
+          const ts = Number(m?.timestamp) || now;
+          const type = String(m?.type || 'text');
+          const bodyTxt = (m?.text?.body) || (m?.button?.text) || (m?.interactive?.list_reply?.title)
+            || (m?.interactive?.button_reply?.title) || (m?.[type] && m[type].caption) || '';
+          const pushName = nomePorWa[phone] || '';
+          let atId = null, ownInst = '';
+          if (selfNumber) {
+            if (!(selfNumber in ownerCache)) ownerCache[selfNumber] = await resolveOwner(env, selfNumber);
+            const ow = ownerCache[selfNumber];
+            if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; }
+          }
+          try {
+            await env.DB.prepare('INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+              .bind('cloud', selfNumber, phone, 0, msgId, type, String(bodyTxt).slice(0, 2000), pushName, ts, now, atId).run();
+          } catch (_) {}
+          if (atId && phone) {
+            const inst = ownInst || ('ax_' + atId);
+            try { await _waLogMsg(env, { phone, instance: inst, direction: 'in', type, body: String(bodyTxt), pushName, ts, msgId: msgId || null }); } catch (_) {}
+            try {
+              if (!_attribTablesOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); _attribTablesOk = true; } catch (_) {} }
+              await _waLeadCapture(env, inst, phone, String(bodyTxt), selfNumber, type, ts);
+              await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return json({ ok: true });   // responde 200 rápido sempre; senão a Meta reenvia e pode desativar o webhook
+}
 // POST /api/salechat/heartbeat/<token> — o injetor avisa periodicamente que o número está vivo/logado.
 async function handleSalechatHeartbeat(req, env, token) {
   const expected = await _scIngestToken(env);
@@ -4190,31 +4260,27 @@ async function handlePresselPublic(req, env, id){
   if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
   const wa=_waLink(pick.num, waMsg);
   if(!wa) return _presselOffline();
-  // À PROVA DE CACHE (?_redir=1): o botão da pressel BUSCA este endpoint via fetch no clique e recebe
-  // o wa.me em JSON. O HTML não embute wa.me nenhum, e o TikTok não consegue seguir um fetch pra
-  // resolver/cachear um destino estático — era a causa do "código dominante do dia" (o TikTok pegava
-  // o wa.me do HTML e servia o mesmo link o dia todo, num número só, sem ttclid, furando a roleta).
-  // Cada clique passa aqui e gera número/código/ttclid FRESCOS. Retorna JSON (não 302, que o TikTok
-  // seguiria e cacharia). Essa ideia veio do funil v2 de teste, aplicada aqui na pressel de verdade.
-  if(new URL(req.url).searchParams.get('_redir')!==null){
-    return new Response(JSON.stringify({wa}), { status:200, headers:{ 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store, no-cache, must-revalidate, max-age=0', 'access-control-allow-origin':'*', 'x-robots-tag':'noindex, nofollow' } });
-  }
-  const goUrl='/p/'+id+'?_redir=1'+(ttclid?('&ttclid='+encodeURIComponent(ttclid)):'');
-  const goUrlJson=JSON.stringify(goUrl);
+  const waJson=JSON.stringify(wa);
+  let _wd=String(pick.num||'').replace(/\D/g,''); if(_wd.length<=11) _wd='55'+_wd;
+  // deep link whatsapp:// abre o app DIRETO com o texto (o CÓDIGO) preenchido. A NAVEGAÇÃO direta é o
+  // único jeito que preenche de verdade no celular — o fetch/JSON quebrava isso e todo lead chegava
+  // SEM código (medido 25/07: 63 pessoas, 0 códigos). Voltamos pro que funciona; o cache do wa.me no
+  // TikTok é problema do lado DELE (resolve trocando a URL do anúncio / migrando pra API oficial).
+  const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));
   const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
-  // go() BUSCA o wa.me via fetch no clique (não navega pra link estático): o HTML não expõe wa.me e o
-  // TikTok não segue fetch. Auto-redirect só com ttclid (resolvedor do TikTok sem ttclid não é levado).
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}var _busy=false;function go(){if(_busy)return;_busy=true;track();fetch(${goUrlJson},{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d&&d.wa){location.href=d.wa}else{_busy=false}}).catch(function(){_busy=false});}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
+  // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
+  // texto/código de verdade. Auto-redirect só com ttclid.
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
   const els=_presselElsServer(p);
-  let body=els.map(e=>_elPublicHtml(e, '#')).join('');   // '#' + onclick go(): nenhum wa.me no HTML
+  let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
     return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
   }
   // Garante um botão de WhatsApp se o usuário não adicionou nenhum
   if(!els.some(e=>e.type==='botao')){
-    body+=`<div style="padding:14px"><a href="#" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
+    body+=`<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
   }
   return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
 }
@@ -4393,6 +4459,8 @@ export default {
       if (scIngestMatch && req.method === 'POST')  return handleSalechatIngest(req, env, scIngestMatch[1]);
       const scHbMatch = path.match(/^\/api\/salechat\/heartbeat\/([a-zA-Z0-9_-]+)$/);
       if (scHbMatch && req.method === 'POST')      return handleSalechatHeartbeat(req, env, scHbMatch[1]);
+      // WhatsApp Cloud API (oficial): GET = verificação da Meta, POST = mensagens recebidas
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/cloud') return handleWhatsappCloudWebhook(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
