@@ -10908,14 +10908,19 @@ function renderPresselVendList(pid){
   const row=(r)=>{
     const {at,chip,ok,isOn}=r, onVis=isOn&&ok;
     const v=(p.vendedores||[]).find(x=>String(x.at)===String(at.id))||{};
+    // ALARME "sem número em uso": vendedor LIGADO na roleta, com número(s) na coluna, mas NENHUM
+    // marcado "Em uso" = não recebe lead nenhum e é fácil não perceber. Grita em vermelho pra o
+    // Diretor marcar o número (a roleta só roteia pra "Em uso"; só estacionar na coluna não ativa).
+    const _usaveis=(DB.chips||[]).filter(c=>c.at===at.id && _chipUsavel(c));
+    const semEmUso=isOn && !chip && _usaveis.length>0;
     const roles=ok?_vendRoles(at,v):null;   // computa os papéis mesmo com o principal desligado (pra bandeja da reserva persistir)
     const pChip=roles?roles.principal.chip:chip;
     const pInst=roles?roles.principal.inst:('ax_'+at.id);
     const pSlot=roles?roles.principal.slot:'';
     const connected=_waConnOk(pInst, pChip&&pChip.num);   // open E número conectado bate com o chip
-    const dot=(onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)');
-    const numTxt=!pChip?'sem número em uso':pChip.num+(ok?'':' · fora (banido/restrito)');
-    const numColor=!pChip?'var(--t4)':ok?'var(--tx)':'var(--rd)';
+    const dot=semEmUso?'var(--rd)':((onVis&&_waConnLoaded)?(connected?'var(--gr)':'var(--rd)'):(!chip?'var(--t4)':ok?'var(--gr)':'var(--rd)'));
+    const numTxt=semEmUso?'SEM NÚMERO EM USO — não recebe lead':(!pChip?'sem número em uso':pChip.num+(ok?'':' · fora (banido/restrito)'));
+    const numColor=semEmUso?'var(--rd)':(!pChip?'var(--t4)':ok?'var(--tx)':'var(--rd)');
     const connBadge=onVis?(!_waConnLoaded?`<span style="font-size:11px;color:var(--t3)">verificando…</span>`:`<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:${connected?'var(--gr)':'var(--rd)'}">${ico(connected?'check-circle':'alert-triangle',{size:12})} ${connected?'WhatsApp rodando':'WhatsApp parado'}</span>`):'';
     const connectLink=onVis?((connected&&_waConnLoaded)
       ? ``
@@ -10926,11 +10931,12 @@ function renderPresselVendList(pid){
         <div style="font-size:12px;color:var(--t3)">${at.name}${onVis?' <span style="color:var(--t4)">· principal</span>':''}</div>
         <div style="font-size:14.5px;font-weight:700;font-family:ui-monospace,monospace;color:${numColor};letter-spacing:.02em">${numTxt}</div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap">${connBadge}${connectLink}</div>
+        ${semEmUso?`<div style="margin-top:5px;font-size:11px;color:var(--rd);font-weight:700">Marque um número como "Em uso" na Contingência pra ele receber. Só deixar na coluna não ativa.</div>`:''}
       </div>
       <div class="ax-sw ${(isOn&&ok)?'on':''}" title="${ok?(isOn?('Na roleta'+((_waConnLoaded&&!connected)?' · WhatsApp parado agora: o servidor segura o lead e volta sozinho quando conectar':'')):'Fora da roleta: não recebe lead'):'Sem número utilizável (banido/aquecimento) — não entra na roleta'}" ${ok?`onclick="togglePresselVendInline(${pid},'${at.id}')"`:'style="opacity:.4;cursor:not-allowed"'}></div>
     </div>`;
     const reservaBlock=(ok && (onVis || (roles&&roles.reserva&&roles.reserva.chip)))?_presselVendReserva(pid, at, v, roles):'';
-    return `<div style="border:1px solid ${onVis?'var(--bl)':'var(--b1)'};border-radius:var(--r);margin-bottom:7px;background:${onVis?'var(--bld)':'var(--s2)'};${ok?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
+    return `<div style="border:1px solid ${semEmUso?'var(--rd)':(onVis?'var(--bl)':'var(--b1)')};border-radius:var(--r);margin-bottom:7px;background:${semEmUso?'var(--rdd)':(onVis?'var(--bld)':'var(--s2)')};${(ok||semEmUso)?'':'opacity:.6'};overflow:hidden">${primaryInner}${reservaBlock}</div>`;
   };
   const _satBanner='';   // aviso de saturação removido a pedido do Diretor (ele já sabe quando estoura)
   // Aviso de "número sem atendente" REMOVIDO a pedido do Diretor: quem decide pra onde o lead vai é
