@@ -957,6 +957,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   cursor:pointer;font-family:inherit;transition:all .12s;display:inline-flex;align-items:center;gap:5px}
 .wk-status-pill:hover{filter:brightness(1.15)}
 .wk-chip.wk-chip-reserva{outline:1.5px dashed var(--bl3);outline-offset:-3px}   /* número de reserva: contorno sutil, bem menos que o "ativo do dia" */
+.wk-chip.wk-chip-api{outline:2px solid #0e7a43;outline-offset:-2px;box-shadow:0 0 0 1px #0e7a4355,0 0 10px #0e7a4333 inset}   /* número da API oficial: contorno verde escuro */
 .wk-chip-add2{opacity:.32;transition:opacity .12s}
 .wk-chip:hover .wk-chip-add2,.wk-chip-add2:hover{opacity:1}
 /* Bolinha de status operacional no canto superior direito do chip */
@@ -2520,6 +2521,7 @@ body.no-producer #mp-mode-block{display:none}
       <div class="fg fg2">
         <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Número (WhatsApp) <button type="button" onclick="testChipWhats()" title="Abre o WhatsApp desse número numa nova aba pra você conferir se ele existe/está ativo" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit">testar ↗</button></label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
+        <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="mc-api" style="width:auto;margin:0"> <span>Número da API oficial <span style="color:var(--t4);font-weight:400">(contorno verde na contingência)</span></span></label></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>WhatsApp no celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
@@ -4036,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.81.0';
-const APP_LAST_CHANGE = 'Venda de cliente que fecha por LIGACAO e nunca manda mensagem (nao vira lead) parou de sair "sem rastreio": o sistema deduz a pressel pelo trafego real do numero e agora GRAVA essa pressel, entao o pedido mostra a pressel (aprox) e aparece tambem na aba Leads (antes a aba Pedidos marcava a venda mas a aba Leads nao, e os numeros nao batiam). Continua SEM inventar click id: no nivel certo, que e a pressel, nao um clique especifico chutado.';
+const APP_VERSION = '2.82.0';
+const APP_LAST_CHANGE = 'CORRECAO GRAVE da roleta: a pressel so manda lead pra numero que voce marcou "Em uso". Antes, qualquer numero so ESTACIONADO na coluna de um vendedor ativo (status "Ativo", sem "Em uso") virava principal e recebia lead: numero novo, de API oficial, de vendedor que nem estava trabalhando. Isso queimava chip e perdia venda. Agora numero estacionado NAO recebe nada; quem deve receber tem que estar "Em uso" (o painel mostra "sem numero em uso" pra quem nao esta).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -9612,7 +9614,7 @@ function _renderChipCard(c, showAtendente, activeId){
         style="background:transparent;color:var(--t4);border:1px dashed var(--b3);padding:4px 7px"
         title="Adicionar marcação extra (só visual)">${ico('plus',{size:11})}</button>`;
 
-  return `<div class="wk-chip${pinned?' wk-chip-pinned':''}${isReserva?' wk-chip-reserva':''}" draggable="true"
+  return `<div class="wk-chip${pinned?' wk-chip-pinned':''}${isReserva?' wk-chip-reserva':''}${c.api?' wk-chip-api':''}" draggable="true"
       ondragstart="_chipDragStart(event,${c.id})"
       ondragend="_chipDragEnd(event)"
       onclick="openChipDetail(${c.id})"
@@ -9620,6 +9622,7 @@ function _renderChipCard(c, showAtendente, activeId){
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:1px">★ Ativo do dia</div>`:''}
     ${isReserva?`<div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--bl3);text-transform:uppercase;margin-bottom:1px">reserva</div>`:''}
+    ${c.api?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:#2ecc71;text-transform:uppercase;margin-bottom:1px">API oficial</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       <span class="wk-chip-num">${c.num}</span>
@@ -10121,6 +10124,7 @@ function openChipDetail(id){
   const waList=getWaStatusList();
   $('mc-wa-st').innerHTML=waList.map(s=>`<option value="${s.id}">${s.ic||''} ${s.label}</option>`).join('');
   $('mc-wa-st').value=getWaStatus(c);
+  { const _a=$('mc-api'); if(_a) _a.checked=!!c.api; }   // marcador de número da API oficial
   // Dia de uso (rotação semanal) — '' = sem dia, 0=domingo .. 6=sábado
   $('mc-dia-uso').value=(chipWeekday(c)!==null)?String(chipWeekday(c)):'';
   $('mc-rec').value=c.rec||'';
@@ -10246,6 +10250,7 @@ function saveChip(){
     wa_st:$('mc-wa-st').value,
     dia_uso:$('mc-dia-uso').value===''?null:Number($('mc-dia-uso').value),
     rec:$('mc-rec').value,
+    api:!!($('mc-api')&&$('mc-api').checked),   // número da API oficial (contorno verde)
   });
   // Consistência: aquecimento/banido nunca está "em uso".
   if(!_chipUsavel(c)) c.em_uso=false;
@@ -10360,7 +10365,10 @@ function _atendenteActiveChip(atId){
   const chips=(DB.chips||[]).filter(c=>c.at===atId && _chipUsavel(c));
   if(!chips.length) return null;
   const aId=activeChipId(chips);
-  return (aId&&chips.find(c=>c.id===aId)) || chips[0];
+  // SÓ o chip "Em uso" (fonte de verdade). NÃO cai em chips[0]: número só ESTACIONADO na coluna
+  // não é o ativo, e tratar ele como principal fazia a roleta rotear lead pra ele (bug grave 25/07).
+  // Vendedor sem "Em uso" aparece como "sem número em uso" / fora da roleta, e não recebe nada.
+  return (aId&&chips.find(c=>c.id===aId)) || null;
 }
 // Número pode rodar na roleta? (não banido/restrito/aquecendo)
 function _chipOkRoleta(c){

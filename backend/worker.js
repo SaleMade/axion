@@ -3545,16 +3545,16 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
-    // SEM fallback pra mine[0]: se o vendedor não tem chip marcado "Em uso", ele está
-    // FORA da roleta (é o que o frontend mostra: "sem número em uso"). O fallback antigo
-    // pegava QUALQUER chip dele e roteava lead pra um número que a tela dava como fora.
-    // Principal = chip "Em uso". Se o vendedor não marcou NENHUM (caso real: a equipe usa a tag
-    // "Ativo" e nunca "Em uso"), cai no 1º número utilizável que NÃO seja a reserva — que é
-    // exatamente o número que a tela mostra como principal (o frontend também cai em chips[0]).
-    // Sem esse fallback o worker descartava vendedores que a dash exibia ligados → pressel offline.
-    const emChip=mine.find(isEmUso) || mine.find(c=>c.bkp!==true) || null;            // conectado em instP
-    if(!emChip) continue;                                                            // sem nenhum número = não entra na roleta
-    let bkChip=mine.find(c=>c.bkp===true);                                          // conectado em instB
+    // PRINCIPAL = SÓ o chip explicitamente "Em uso". NÃO cai mais no 1º número da coluna.
+    // BUG GRAVE corrigido (25/07): o fallback `mine.find(c=>c.bkp!==true)` pegava QUALQUER número
+    // não-reserva estacionado na coluna de um vendedor ativo (status "Ativo", sem "Em uso") e o
+    // roteava como principal, recebendo lead. Isso mandou lead pra número novo, de API oficial, e
+    // de vendedor que nem estava trabalhando, queimando chip e perdendo venda a semana toda. O
+    // próprio front declara "Em uso" como a FONTE DE VERDADE do número ativo; agora o backend
+    // respeita isso. Estacionar número não roteia mais nada; quem deve receber tem que estar "Em uso".
+    const emChip=mine.find(isEmUso) || null;                                        // principal só com "Em uso"
+    let bkChip=mine.find(c=>c.bkp===true);                                          // reserva = chip marcado bkp
+    if(!emChip && !bkChip) continue;                                                // sem principal "Em uso" E sem reserva = fora da roleta
     if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
     const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
     const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
@@ -3854,6 +3854,200 @@ async function handlePresselMetricsPage(req, env, id){
   const card=(lbl,val,color)=>`<div style="flex:1;min-width:150px;background:#141c2b;border:1px solid #233047;border-radius:16px;padding:18px 20px"><div style="font-size:12px;color:#8b9bb4">${lbl}</div><div style="font-size:30px;font-weight:800;color:${color};margin-top:4px">${val}</div></div>`;
   const rows=vend.length?vend.map(v=>{const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';return `<tr style="border-top:1px solid #233047"><td style="padding:13px 10px"><div style="font-weight:600;font-size:14px">${_escHtml(v.name)}</div><div style="font-size:12px;color:#8b9bb4;font-family:ui-monospace,monospace">${_escHtml(v.num)}</div></td><td style="text-align:center;color:#34d399">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:#7aa2ff">${conv}</td></tr>`;}).join(''):`<tr><td colspan="4" style="padding:16px;text-align:center;color:#8b9bb4">Nenhum vendedor nessa pressel.</td></tr>`;
   return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — ${_escHtml(p.nome||'')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:880px;margin:0 auto}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:18px}th{color:#8b9bb4;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px}</style></head><body><div class="wrap"><h1>Métricas — ${_escHtml(p.nome||'')}</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':'<a href="?" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>'}</div><div style="display:flex;gap:12px;flex-wrap:wrap">${card('Chegaram na pressel',views,'#7aa2ff')}${card('Foram pro WhatsApp',clicks,'#34d399')}${card('Iniciaram contato',contatos,'#34d399')}${card('Vendas',vendas,'#34d399')}</div><table><thead><tr><th style="text-align:left">Vendedor</th><th>Iniciaram</th><th>Vendas</th><th>Conversão</th></tr></thead><tbody>${rows}</tbody></table><p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">Todos os números são reais e do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp (Evolution).</p></div>${_diagHtml?`<aside class="side">${_diagHtml}</aside>`:''}</div></body></html>`);
+}
+// ─── Site institucional da marca (pra a Meta aprovar o nome de exibição do WhatsApp) ───
+// Serve na RAIZ dos domínios glico. As pressels ficam em /p/<id>, então não conflita.
+// Tom deliberadamente tranquilo, de marca de bem-estar, SEM promessa de saúde/cura (o que trava a
+// aprovação e viola política). O nome tem que BATER com o que a Meta vê no site: por isso o nome
+// da marca aqui (BRAND_NAME) é o mesmo do nome de exibição pedido no WhatsApp.
+const BRAND_NAME = 'Glico Natural';   // troca aqui pra mudar o nome no site inteiro
+const BRAND_DOMS = ['area-glico.fun', 'painel-glico.fun'];
+function _brandEmail(host){ return 'contato@' + (BRAND_DOMS.includes(host) ? host : 'painel-glico.fun'); }
+// Ilustração de frasco conta-gotas (SVG inline) — visual de marca natural, sem foto de terceiros.
+function _bottleSvg(){
+  return '<svg viewBox="0 0 120 150" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:96px;height:120px">'
+    + '<rect x="46" y="6" width="28" height="16" rx="4" fill="#0e7a43"/>'
+    + '<rect x="52" y="20" width="16" height="10" fill="#0b5c34"/>'
+    + '<path d="M38 34c0-3 3-6 6-6h32c3 0 6 3 6 6v92c0 8-6 14-14 14H52c-8 0-14-6-14-14V34z" fill="#ffffff" stroke="#0e7a43" stroke-width="3"/>'
+    + '<path d="M44 96c0 20 10 30 16 30s16-10 16-30c0-6-16-30-16-30S44 90 44 96z" fill="#d6f0e1"/>'
+    + '<circle cx="60" cy="104" r="7" fill="#12945a"/>'
+    + '</svg>';
+}
+function _brandShell(title, inner, withJs){
+  const js = withJs ? ('<script>(function(){var c=document.querySelector(".slides");if(c){var slides=c.children.length,i=0,dots=document.querySelectorAll(".dot");function go(n){i=(n+slides)%slides;c.style.transform="translateX("+(-i*100)+"%)";dots.forEach(function(d,k){d.className="dot"+(k===i?" on":"");});}var pv=document.querySelector(".c-prev"),nx=document.querySelector(".c-next");if(pv)pv.onclick=function(){go(i-1);};if(nx)nx.onclick=function(){go(i+1);};dots.forEach(function(d,k){d.onclick=function(){go(k);};});var t=setInterval(function(){go(i+1);},4500);c.parentElement.addEventListener("mouseenter",function(){clearInterval(t);});go(0);}'
+    + 'document.querySelectorAll(".acc-q").forEach(function(q){q.onclick=function(){q.parentElement.classList.toggle("open");};});})();<\/script>') : '';
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<meta name="description" content="${BRAND_NAME} — produtos naturais de bem-estar para o seu dia a dia.">
+<style>
+:root{--verde:#0e7a43;--verde2:#12945a;--claro:#e8f5ee;--tinta:#14231c;--cinza:#5b6b62;--linha:#e4ebe6;--fundo:#f6faf7;--card:#fff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--tinta);background:var(--fundo);line-height:1.6;-webkit-font-smoothing:antialiased}
+img{max-width:100%;display:block}a{color:inherit;text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+header{position:sticky;top:0;background:rgba(246,250,247,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--linha);z-index:9}
+.nav{display:flex;align-items:center;justify-content:space-between;height:66px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.01em}
+.logo .mark{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,var(--verde),var(--verde2));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px}
+.nav-links{display:flex;gap:24px;font-size:14.5px;color:var(--cinza)}
+.nav-links a:hover{color:var(--verde)}
+.nav .btn{padding:9px 18px;font-size:13.5px}
+.btn{display:inline-block;background:var(--verde);color:#fff;font-weight:700;font-size:15px;padding:13px 28px;border-radius:12px;transition:.15s;border:none;cursor:pointer}
+.btn:hover{background:var(--verde2);transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:var(--verde);border:1.5px solid var(--verde)}
+.hero{position:relative;overflow:hidden;background:linear-gradient(180deg,#eef8f2,var(--fundo))}
+.hero-in{display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:center;padding:66px 0 58px}
+.hero h1{font-size:clamp(30px,4.6vw,48px);line-height:1.12;letter-spacing:-.025em;margin-bottom:18px}
+.hero h1 span{color:var(--verde)}
+.hero p{font-size:clamp(15px,2.2vw,18px);color:var(--cinza);margin-bottom:26px;max-width:480px}
+.hero-cta{display:flex;gap:12px;flex-wrap:wrap}
+.hero-art{background:radial-gradient(120% 120% at 70% 20%,#d6f0e1,#eef8f2);border:1px solid var(--linha);border-radius:24px;min-height:280px;display:flex;align-items:center;justify-content:center;position:relative}
+.hero-art .badge{position:absolute;bottom:18px;left:18px;background:#fff;border:1px solid var(--linha);border-radius:12px;padding:9px 13px;font-size:12.5px;font-weight:700;box-shadow:0 6px 20px #0e7a4315}
+.trust{display:flex;flex-wrap:wrap;gap:26px;justify-content:center;padding:22px 0;border-bottom:1px solid var(--linha);font-size:13.5px;color:var(--cinza)}
+.trust b{color:var(--tinta)}
+.sec{padding:60px 0}
+.sec-h{text-align:center;max-width:620px;margin:0 auto 34px}
+.sec-h h2{font-size:clamp(23px,3.4vw,32px);letter-spacing:-.02em;margin-bottom:10px}
+.sec-h p{color:var(--cinza);font-size:15.5px}
+.carousel{position:relative;overflow:hidden;border-radius:22px;border:1px solid var(--linha);background:var(--card)}
+.slides{display:flex;transition:transform .5s ease}
+.slide{min-width:100%;display:grid;grid-template-columns:.9fr 1.1fr;gap:0}
+.slide .pic{min-height:300px;display:flex;align-items:center;justify-content:center}
+.slide .txt{padding:38px}
+.slide .txt span{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--verde);background:var(--claro);padding:5px 11px;border-radius:20px;margin-bottom:12px}
+.slide .txt h3{font-size:24px;letter-spacing:-.01em;margin-bottom:10px}
+.slide .txt p{color:var(--cinza);font-size:15px}
+.c-nav{position:absolute;top:50%;transform:translateY(-50%);width:40px;height:40px;border-radius:50%;background:#fff;border:1px solid var(--linha);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--verde);box-shadow:0 4px 14px #0e7a4318;z-index:2}
+.c-prev{left:14px}.c-next{right:14px}
+.dots{display:flex;gap:8px;justify-content:center;margin-top:18px}
+.dot{width:9px;height:9px;border-radius:50%;background:#cfe3d7;cursor:pointer;border:none}
+.dot.on{background:var(--verde);width:22px;border-radius:5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--linha);border-radius:18px;padding:26px}
+.card .ic{width:46px;height:46px;border-radius:12px;background:var(--claro);display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px}
+.card h3{font-size:16.5px;margin-bottom:6px}
+.card p{font-size:14px;color:var(--cinza)}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:center;background:var(--card);border:1px solid var(--linha);border-radius:22px;padding:40px;overflow:hidden}
+.about h2{font-size:clamp(22px,3.2vw,30px);letter-spacing:-.02em;margin-bottom:14px}
+.about p{color:var(--cinza);font-size:15.5px;margin-bottom:12px}
+.about .art{background:radial-gradient(120% 120% at 30% 20%,#d6f0e1,#f2faf5);border-radius:18px;min-height:240px;display:flex;align-items:center;justify-content:center}
+.faq{max-width:760px;margin:0 auto}
+.acc-item{background:var(--card);border:1px solid var(--linha);border-radius:14px;margin-bottom:12px;overflow:hidden}
+.acc-q{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:18px 22px;cursor:pointer;font-weight:700;font-size:15.5px}
+.acc-q .pl{color:var(--verde);font-size:22px;transition:.2s}
+.acc-item.open .acc-q .pl{transform:rotate(45deg)}
+.acc-a{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.acc-item.open .acc-a{max-height:240px}
+.acc-a p{padding:0 22px 20px;color:var(--cinza);font-size:14.5px}
+.contato{background:linear-gradient(135deg,var(--verde),var(--verde2));color:#fff;border-radius:22px;padding:38px;display:flex;flex-wrap:wrap;gap:22px;justify-content:space-between;align-items:center}
+.contato .lbl{font-size:12px;opacity:.85;text-transform:uppercase;letter-spacing:.06em}
+.contato .val{font-size:17px;font-weight:800}
+.contato .btn{background:#fff;color:var(--verde)}
+footer{border-top:1px solid var(--linha);margin-top:8px;padding:32px 0;color:var(--cinza);font-size:13.5px}
+.foot{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center}
+.foot a:hover{color:var(--verde)}
+.legal{max-width:760px}.legal h2{margin:26px 0 10px;font-size:20px}.legal p{color:var(--cinza);margin-bottom:12px;font-size:15px}
+.hero-art{overflow:hidden}.hero-art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.slide .pic{overflow:hidden;padding:0}.slide .pic img{width:100%;height:100%;object-fit:cover}
+.about .art{overflow:hidden}.about .art img{width:100%;height:100%;object-fit:cover;min-height:240px}
+@media(max-width:760px){.hero-in{grid-template-columns:1fr;padding:44px 0}.hero-art{min-height:220px}.slide{grid-template-columns:1fr}.slide .pic{min-height:200px}.slide .txt{padding:26px}.about{grid-template-columns:1fr;padding:28px}.nav-links{display:none}}
+</style></head><body>
+<header><div class="wrap nav">
+  <a class="logo" href="/"><span class="mark">G</span> ${BRAND_NAME}</a>
+  <nav class="nav-links"><a href="/#produtos">Produtos</a><a href="/#sobre">Sobre</a><a href="/#faq">Dúvidas</a><a href="/#contato">Contato</a></nav>
+  <a class="btn" href="/#contato">Fale conosco</a>
+</div></header>
+${inner}
+<footer><div class="wrap foot">
+  <div>© 2026 ${BRAND_NAME}. Todos os direitos reservados.</div>
+  <div style="display:flex;gap:16px"><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a><a href="/#contato">Contato</a></div>
+</div></footer>
+${js}</body></html>`;
+}
+function _brandHome(host){
+  const mail = _brandEmail(host);
+  const b = _bottleSvg();
+  const IMG = '/img/produto.jpg?v=2';
+  const slide = (tag, h, p) => '<div class="slide"><div class="pic"><img src="' + IMG + '" alt="" loading="lazy"></div><div class="txt"><span>' + tag + '</span><h3>' + h + '</h3><p>' + p + '</p></div></div>';
+  const inner = `<main>
+  <section class="hero"><div class="wrap hero-in">
+    <div>
+      <h1>Bem-estar natural para o seu <span>dia a dia</span></h1>
+      <p>A ${BRAND_NAME} reúne produtos naturais selecionados para acompanhar a sua rotina com mais leveza, praticidade e cuidado.</p>
+      <div class="hero-cta"><a class="btn" href="/#contato">Fale com a gente</a><a class="btn ghost" href="/#produtos">Ver produtos</a></div>
+    </div>
+    <div class="hero-art"><img src="/img/produto.jpg?v=2" alt="${BRAND_NAME}"><div class="badge">🌿 100% de origem natural</div></div>
+  </div></section>
+
+  <div class="trust wrap"><div>🌿 <b>Ingredientes naturais</b></div><div>📦 <b>Entrega em casa</b></div><div>💬 <b>Atendimento humano</b></div><div>🤝 <b>Compra sem complicação</b></div></div>
+
+  <section class="sec wrap" id="produtos">
+    <div class="sec-h"><h2>Nossos produtos</h2><p>Feitos para o cuidado do dia a dia, com componentes de origem natural.</p></div>
+    <div class="carousel">
+      <div class="slides">
+        ${slide('Linha bem-estar', 'Cuidado do dia a dia', 'Nossa linha principal, pensada para acompanhar a sua rotina de forma leve e prática.')}
+        ${slide('Origem natural', 'Feito com o que a natureza oferece', 'Selecionamos componentes de origem natural em cada uma das nossas fórmulas.')}
+        ${slide('Praticidade', 'Simples de usar no seu dia', 'Produtos pensados para caber na correria, sem complicar a sua rotina.')}
+      </div>
+      <button class="c-nav c-prev" aria-label="Anterior">‹</button>
+      <button class="c-nav c-next" aria-label="Próximo">›</button>
+    </div>
+    <div class="dots"><button class="dot on"></button><button class="dot"></button><button class="dot"></button></div>
+  </section>
+
+  <section class="sec wrap">
+    <div class="cards">
+      <div class="card"><div class="ic">🌿</div><h3>Ingredientes naturais</h3><p>Fórmulas com componentes de origem natural, para o cuidado do dia a dia.</p></div>
+      <div class="card"><div class="ic">✅</div><h3>Qualidade selecionada</h3><p>Cada item passa por um processo de seleção antes de chegar até você.</p></div>
+      <div class="card"><div class="ic">📦</div><h3>Entrega em casa</h3><p>Você recebe no conforto da sua casa, com acompanhamento do começo ao fim.</p></div>
+      <div class="card"><div class="ic">💬</div><h3>Atendimento próximo</h3><p>Uma equipe humana pra tirar dúvidas e acompanhar o seu pedido com atenção.</p></div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="sobre">
+    <div class="about">
+      <div>
+        <h2>Sobre a ${BRAND_NAME}</h2>
+        <p>Somos uma marca de produtos naturais de bem-estar. Nosso propósito é simples: oferecer opções de qualidade para quem busca cuidar da rotina de um jeito prático e tranquilo.</p>
+        <p>Trabalhamos com atendimento humano e próximo, acompanhando cada cliente com atenção e transparência, do primeiro contato até a entrega em casa.</p>
+      </div>
+      <div class="art"><img src="/img/produto.jpg?v=2" alt="${BRAND_NAME}" loading="lazy"></div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="faq">
+    <div class="sec-h"><h2>Dúvidas frequentes</h2></div>
+    <div class="faq">
+      <div class="acc-item open"><div class="acc-q">Como funciona a entrega?<span class="pl">+</span></div><div class="acc-a"><p>Você recebe no conforto da sua casa. Nossa equipe acompanha o pedido do início ao fim e avisa sobre cada etapa.</p></div></div>
+      <div class="acc-item"><div class="acc-q">Os produtos são naturais?<span class="pl">+</span></div><div class="acc-a"><p>Sim. Trabalhamos com componentes de origem natural, selecionados para o cuidado do dia a dia.</p></div></div>
+      <div class="acc-item"><div class="acc-q">Como faço para comprar?<span class="pl">+</span></div><div class="acc-a"><p>É só falar com a nossa equipe pelo contato abaixo. A gente te explica tudo com calma, sem complicação.</p></div></div>
+      <div class="acc-item"><div class="acc-q">Vocês dão suporte depois da compra?<span class="pl">+</span></div><div class="acc-a"><p>Damos sim. Nosso atendimento continua disponível para tirar dúvidas e ajudar no que você precisar.</p></div></div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="contato">
+    <div class="contato">
+      <div><div class="lbl">E-mail</div><div class="val">${mail}</div></div>
+      <div><div class="lbl">Atendimento</div><div class="val">Seg a sáb, 9h às 18h</div></div>
+      <a class="btn" href="mailto:${mail}">Enviar e-mail</a>
+    </div>
+  </section>
+</main>`;
+  return _brandShell(BRAND_NAME + ' — bem-estar natural', inner, true);
+}
+function _brandLegal(kind, host){
+  const mail = _brandEmail(host);
+  const priv = `<h2>Política de Privacidade</h2>
+    <p>A ${BRAND_NAME} respeita a sua privacidade. Coletamos apenas os dados necessários para atender e entregar os pedidos, como nome, endereço e telefone de contato.</p>
+    <p>Não vendemos nem compartilhamos os seus dados com terceiros para fins de marketing. As informações são usadas somente para o atendimento e a entrega.</p>
+    <p>Você pode solicitar a atualização ou a exclusão dos seus dados a qualquer momento pelo e-mail ${mail}.</p>`;
+  const term = `<h2>Termos de Uso</h2>
+    <p>Ao entrar em contato com a ${BRAND_NAME}, você concorda em fornecer informações verdadeiras para o atendimento e a entrega dos produtos.</p>
+    <p>Os produtos são de bem-estar e não substituem orientação de um profissional. Em caso de dúvida sobre o seu uso, consulte um especialista de confiança.</p>
+    <p>Dúvidas sobre estes termos podem ser enviadas para ${mail}.</p>`;
+  const inner = `<main class="wrap" style="padding:46px 0"><div class="legal">${kind === 'privacidade' ? priv : term}</div></main>`;
+  return _brandShell(BRAND_NAME + ' — ' + (kind === 'privacidade' ? 'Privacidade' : 'Termos'), inner, false);
 }
 const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
@@ -4401,7 +4595,23 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     try {
-      // health check + raiz
+      // Site institucional da marca na RAIZ dos domínios glico (pra a Meta aprovar o nome).
+      const _host = String(req.headers.get('host') || '').toLowerCase().split(':')[0];
+      // Imagens públicas do site (servidas do R2). Ex: /img/produto.jpg?v=2
+      const _imgMatch = path.match(/^\/img\/([a-zA-Z0-9._-]+)$/);
+      if (req.method === 'GET' && _imgMatch && BRAND_DOMS.includes(_host)) {
+        try {
+          const obj = await env.MEDIA.get('site/' + _imgMatch[1]);
+          if (obj) return new Response(obj.body, { status: 200, headers: { 'content-type': obj.httpMetadata && obj.httpMetadata.contentType || 'image/jpeg', 'cache-control': 'public, max-age=86400' } });
+        } catch (_) {}
+        return new Response('', { status: 404 });
+      }
+      if (req.method === 'GET' && BRAND_DOMS.includes(_host)) {
+        if (path === '/' )            return new Response(_brandHome(_host),           { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
+        if (path === '/privacidade')  return new Response(_brandLegal('privacidade', _host), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (path === '/termos')       return new Response(_brandLegal('termos', _host),       { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+      }
+      // health check + raiz (demais domínios)
       if (req.method === 'GET' && (path === '/' || path === '/api')) {
         return json({ name: 'axion-api', ok: true, version: 1 });
       }
