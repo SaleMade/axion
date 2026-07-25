@@ -2521,7 +2521,6 @@ body.no-producer #mp-mode-block{display:none}
       <div class="fg fg2">
         <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Número (WhatsApp) <button type="button" onclick="testChipWhats()" title="Abre o WhatsApp desse número numa nova aba pra você conferir se ele existe/está ativo" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit">testar ↗</button></label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
-        <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="mc-api" style="width:auto;margin:0"> <span>Número da API oficial <span style="color:var(--t4);font-weight:400">(contorno verde na contingência)</span></span></label></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>WhatsApp no celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
@@ -2529,6 +2528,7 @@ body.no-producer #mp-mode-block{display:none}
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
         <div class="field"><label>Dia de uso (rotação)</label><select id="mc-dia-uso" title="Dia da semana que esse número fica como ativo do dia"><option value="">— sem dia —</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option></select></div>
       </div>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:var(--t3);margin-top:4px" title="Marca o número da API oficial com um contorno verde no quadro da Contingência"><input type="checkbox" id="mc-api" style="width:auto;margin:0"> API oficial</label>
 
       <div id="mc-recharge-alert" class="hidden" style="background:var(--amd);border:1px solid var(--am);border-radius:var(--r);padding:12px 14px;margin-bottom:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -9622,7 +9622,6 @@ function _renderChipCard(c, showAtendente, activeId){
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:1px">★ Ativo do dia</div>`:''}
     ${isReserva?`<div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--bl3);text-transform:uppercase;margin-bottom:1px">reserva</div>`:''}
-    ${c.api?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:#2ecc71;text-transform:uppercase;margin-bottom:1px">API oficial</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       <span class="wk-chip-num">${c.num}</span>

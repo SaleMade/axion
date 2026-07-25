@@ -2521,7 +2521,6 @@ body.no-producer #mp-mode-block{display:none}
       <div class="fg fg2">
         <div class="field"><label>Nº (identificador)</label><input id="mc-idx" type="number" min="1" inputmode="numeric" placeholder="ex: 2" title="Número sequencial do chip, pra você achar fácil (#1, #2, #3...)"></div>
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Número (WhatsApp) <button type="button" onclick="testChipWhats()" title="Abre o WhatsApp desse número numa nova aba pra você conferir se ele existe/está ativo" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit">testar ↗</button></label><input id="mc-num" maxlength="15" oninput="maskWA(this)" inputmode="numeric"></div>
-        <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="mc-api" style="width:auto;margin:0"> <span>Número da API oficial <span style="color:var(--t4);font-weight:400">(contorno verde na contingência)</span></span></label></div>
         <div class="field"><label>Atendente designado</label><select id="mc-at"></select></div>
         <div class="field"><label>WhatsApp no celular</label><input id="mc-mod" placeholder="Ex: iPhone 13"></div>
         <div class="field"><label>Operadora</label><select id="mc-op"><option>Vivo</option><option>Claro</option><option>TIM</option><option>Oi</option></select></div>
@@ -2529,6 +2528,7 @@ body.no-producer #mp-mode-block{display:none}
         <div class="field"><label style="display:flex;align-items:center;gap:6px">Status WhatsApp <button type="button" onclick="openWaStatusManager()" style="background:transparent;border:none;color:var(--bl2);font-size:11px;cursor:pointer;padding:0;font-family:inherit" title="Gerenciar tags">⚙</button></label><select id="mc-wa-st"></select></div>
         <div class="field"><label>Dia de uso (rotação)</label><select id="mc-dia-uso" title="Dia da semana que esse número fica como ativo do dia"><option value="">— sem dia —</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option></select></div>
       </div>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:var(--t3);margin-top:4px" title="Marca o número da API oficial com um contorno verde no quadro da Contingência"><input type="checkbox" id="mc-api" style="width:auto;margin:0"> API oficial</label>
 
       <div id="mc-recharge-alert" class="hidden" style="background:var(--amd);border:1px solid var(--am);border-radius:var(--r);padding:12px 14px;margin-bottom:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -4240,6 +4240,14 @@ const api={
   captureHealth:()=>api._fetch('/api/salechat/health'),
   waSaleAdd:(raw,at)=>api._fetch('/api/wa/sale/add',{method:'POST',body:JSON.stringify({raw,at})}),   // pedido manual (indicação) — sem pixel
   waSaleReassign:(id,at)=>api._fetch('/api/wa/sale/reassign',{method:'POST',body:JSON.stringify({id,at})}),   // troca o vendedor de um pedido
+  // Conexão API oficial (Coexistência) — Embedded Signup
+  waEsConfig:()=>api._fetch('/api/wa/es/config'),
+  waEsFinish:(payload)=>api._fetch('/api/wa/es/finish',{method:'POST',body:JSON.stringify(payload)}),
+  // API oficial (Cloud API pura) — números oficiais, registro OTP e envio
+  waOfficialList:()=>api._fetch('/api/wa/official/numbers'),
+  waOfficialSave:(payload)=>api._fetch('/api/wa/official/numbers',{method:'POST',body:JSON.stringify(payload)}),
+  waRegister:(payload)=>api._fetch('/api/wa/register',{method:'POST',body:JSON.stringify(payload)}),
+  waCloudSend:(number,text,at_id)=>api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number,text,at_id})}),
 };
 
 // ─── Sync state com servidor ───
@@ -5395,7 +5403,7 @@ function defaultPage(){
 // e pra parar de bater na Evolution/API a cada 5s). TODO o código do inbox
 // (página "Atendimento") e do chat embutido no card do lead continua no
 // arquivo, dormente. Pra RELIGAR tudo, basta trocar pra true aqui.
-const WA_CHAT_ENABLED = false;
+const WA_CHAT_ENABLED = true;   // RELIGADO: inbox oficial (Cloud API) — o vendedor atende pela tela do AXION
 
 // Monta a estrutura de navegação por papel (sem aplicar ocultações do usuário).
 // Usada por buildSidebar (renderização) e por cfgAparencia (lista de toggles de visibilidade).
@@ -5451,6 +5459,7 @@ function computeNav(){
     {g:'WhatsApp',items:[
       ...(WA_CHAT_ENABLED&&can('ver_atendimento')?[{id:'atendimento',lbl:'Atendimento',live:true}]:[]),
       ...(can('ver_contingencia')?[{id:'contingencia',lbl:'Contingência'}]:[]),
+      ...(can('ver_contingencia')?[{id:'apioficial',lbl:'Conexão API'}]:[]),
       ...(can('ver_pressels')?[{id:'pressels',lbl:'Pressels'}]:[]),
       ...(can('ver_pressel_leads')?[{id:'presselleads',lbl:'Leads'}]:[]),
       ...(can('ver_pedidos_conf')?[{id:'pedidosconf',lbl:'Pedidos Confirmados'}]:[]),
@@ -5570,6 +5579,7 @@ const PNAMES={
   atendimento:"WhatsApp / <b>Atendimento</b>",
   salechat:"Automações / <b>Sale Chat</b>",
   contingencia:"WhatsApp / <b>Contingência</b>",
+  apioficial:"WhatsApp / <b>Conexão API oficial</b>",
   pressels:"WhatsApp / <b>Pressels</b>",
   presselleads:"WhatsApp / <b>Leads</b>",
   automacoes:"Automações / <b>Robô de WhatsApp</b>",
@@ -5603,7 +5613,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
+    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pageApiOficial(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig(),pageClientes()
   ].join('');
@@ -5760,6 +5770,7 @@ function goPage(id){
   if(id==='crm'){renderKanban();applyPersistedFilters();renderKanban()}
   if(id==='evolucao')    renderEvolucao();
   if(id==='contingencia'){autoPromoteWarmedChips();autoPromoteRestabChips();renderChips();renderChipsByAtendente();}
+  if(id==='apioficial'){try{waofInit();}catch(_){}}
   if(id==='pressels')    renderPressels();
   if(id==='presselleads') renderPresselLeads();
   if(id==='automacoes')  renderAutomacoes();
@@ -9082,6 +9093,178 @@ function pageContingencia(){
   </div>`;
 }
 
+// ═══ Página: Conexão API oficial (Coexistência) ═══
+// Página própria (menu WhatsApp → Conexão API). Liga um número do app WhatsApp Business
+// também na API oficial, sem tirar do app, pelo popup oficial da Meta (Embedded Signup).
+function pageApiOficial(){
+  return `<div class="page" id="apioficial-pg">
+    <div class="ph"><div><h1>WhatsApp <em>Oficial</em></h1></div></div>
+
+    <div style="margin-top:8px;max-width:820px;display:flex;flex-direction:column;gap:16px">
+
+      <!-- O que é -->
+      <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px">
+        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:8px">Números na API oficial (Cloud API)</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.65">
+          Aqui você registra um número na <b>API oficial da Meta</b> e ele passa a receber e enviar pelo canal oficial (sem automação não-oficial, sem risco de ban de conexão). O vendedor atende pela tela de <b>Atendimento</b> do AXION.
+          Regra de ouro: o número precisa estar <b>aquecido ~30 dias</b> no WhatsApp Business (Android) antes. Um número por vez (piloto).
+        </div>
+      </div>
+
+      <!-- Lista de números oficiais -->
+      <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <span style="font-size:14px;font-weight:700;color:var(--tx)">Números oficiais</span>
+          <span style="flex:1"></span>
+          <button type="button" onclick="waofLoadList()" style="background:transparent;border:1px solid var(--b1);color:var(--t2);font-size:11.5px;cursor:pointer;padding:5px 12px;border-radius:8px;font-family:inherit">Atualizar</button>
+        </div>
+        <div id="waof-list" style="font-size:13px;color:var(--t2)">Carregando...</div>
+      </div>
+
+      <!-- Registro OTP -->
+      <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px">
+        <div style="font-size:14px;font-weight:700;color:var(--tx);margin-bottom:6px">Registrar um número</div>
+        <div style="font-size:12.5px;color:var(--t3);line-height:1.55;margin-bottom:12px">Cole o WABA ID da sua conta e liste os números. Depois: pedir código → confirmar código do SMS → definir um PIN de 6 dígitos.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <input id="waof-waba" placeholder="WABA ID" style="flex:1;min-width:220px;padding:9px 11px;border:1px solid var(--b1);border-radius:8px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px">
+          <button type="button" onclick="waofListWaba()" style="background:#0e7a43;border:none;color:#fff;font-size:13px;font-weight:700;padding:9px 16px;border-radius:8px;cursor:pointer;font-family:inherit">Listar números</button>
+        </div>
+        <div id="waof-reg" style="font-size:13px;color:var(--t2)"></div>
+      </div>
+
+    </div>
+  </div>`;
+}
+// ═══ API oficial pura (Cloud API): números + registro OTP ═══
+function _waofEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function waofInit(){ waofLoadList(); try{ const l=(DB&&DB._waLastOnboard)||null; }catch(_){}}
+function waofLoadList(){
+  const el=$('waof-list'); if(!el) return; el.textContent='Carregando...';
+  api.waOfficialList().then(r=>{
+    const ns=(r&&r.numbers)||[];
+    if(!ns.length){ el.innerHTML='<span style="color:var(--t3)">Nenhum número oficial ainda. Registre um abaixo.</span>'; return; }
+    el.innerHTML=ns.map(n=>{
+      const ver=n.verified?'<span style="color:#2ecc71;font-weight:700">registrado</span>':'<span style="color:#f59e0b;font-weight:700">não registrado</span>';
+      const q=n.quality?(' · qualidade '+_waofEsc(n.quality)):'';
+      const dono=n.at_id?(' · vendedor '+_waofEsc(String(n.at_id))):' · <span style="color:#f59e0b">sem vendedor (marque o chip como API na Contingência)</span>';
+      return '<div style="padding:9px 0;border-top:1px solid var(--b1);display:flex;flex-wrap:wrap;gap:6px;align-items:center"><b style="color:var(--tx)">'+_waofEsc(n.display_phone||n.phone_number_id)+'</b> <span style="font-size:11.5px;color:var(--t3)">'+ver+q+dono+'</span><span style="flex:1"></span><span style="font-size:10.5px;color:var(--t4);font-family:monospace">'+_waofEsc(n.phone_number_id)+'</span></div>';
+    }).join('');
+  }).catch(e=>{ el.innerHTML='<span style="color:var(--rd)">Erro: '+_waofEsc(e.message||e)+'</span>'; });
+}
+function waofListWaba(){
+  const waba=($('waof-waba')&&$('waof-waba').value||'').trim();
+  const reg=$('waof-reg'); if(!reg) return;
+  reg.textContent='Listando...';
+  api.waRegister({step:'list',waba_id:waba}).then(r=>{
+    if(!r||!r.ok){ reg.innerHTML='<span style="color:var(--rd)">'+_waofEsc((r&&r.error)||'falhou')+'</span>'; return; }
+    const ns=(r.numbers)||[];
+    if(!ns.length){ reg.innerHTML='<span style="color:var(--t3)">Nenhum número nessa WABA.</span>'; return; }
+    reg.innerHTML=ns.map(n=>{
+      const reg2=(n.platform_type==='CLOUD_API'||n.code_verification_status==='VERIFIED');
+      const badge=reg2?'<span style="color:#2ecc71">já registrado</span>':'<span style="color:#f59e0b">registrar</span>';
+      return '<div style="padding:10px 0;border-top:1px solid var(--b1)"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="color:var(--tx)">'+_waofEsc(n.display_phone_number||n.id)+'</b> <span style="font-size:11px;color:var(--t3)">'+badge+'</span><span style="flex:1"></span>'+(reg2?'':'<button type="button" onclick="waofStartReg(\''+_waofEsc(n.id)+'\')" style="background:#0e7a43;border:none;color:#fff;font-size:12px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:inherit">Registrar</button>')+'</div><div id="waof-step-'+_waofEsc(n.id)+'" style="margin-top:8px"></div></div>';
+    }).join('');
+    waofLoadList();
+  }).catch(e=>{ reg.innerHTML='<span style="color:var(--rd)">Erro: '+_waofEsc(e.message||e)+'</span>'; });
+}
+function waofStartReg(pnid){
+  const el=$('waof-step-'+pnid); if(!el) return;
+  el.innerHTML='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button type="button" onclick="waofReq(\''+pnid+'\',\'SMS\')" style="background:transparent;border:1px solid var(--b1);color:var(--t2);font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:inherit">Pedir código por SMS</button><button type="button" onclick="waofReq(\''+pnid+'\',\'VOICE\')" style="background:transparent;border:1px solid var(--b1);color:var(--t2);font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:inherit">por ligação</button></div><div id="waof-msg-'+pnid+'" style="font-size:12px;color:var(--t3);margin-top:6px"></div>';
+}
+function _waofMsg(pnid,html){ const m=$('waof-msg-'+pnid); if(m) m.innerHTML=html; }
+function waofReq(pnid,method){
+  _waofMsg(pnid,'Pedindo código...');
+  api.waRegister({step:'request_code',phone_number_id:pnid,method}).then(r=>{
+    if(!r||!r.ok){ _waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(JSON.stringify(r&&r.resp||r))+'</span>'); return; }
+    _waofMsg(pnid,'Código enviado. Digite o código recebido:<div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"><input id="waof-code-'+pnid+'" placeholder="código" style="padding:7px 10px;border:1px solid var(--b1);border-radius:7px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px;width:120px"><button type="button" onclick="waofVerify(\''+pnid+'\')" style="background:#0e7a43;border:none;color:#fff;font-size:12px;font-weight:700;padding:7px 14px;border-radius:7px;cursor:pointer;font-family:inherit">Confirmar</button></div>');
+  }).catch(e=>_waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(e.message||e)+'</span>'));
+}
+function waofVerify(pnid){
+  const code=($('waof-code-'+pnid)&&$('waof-code-'+pnid).value||'').trim();
+  _waofMsg(pnid,'Confirmando...');
+  api.waRegister({step:'verify_code',phone_number_id:pnid,code}).then(r=>{
+    if(!r||!r.ok){ _waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(JSON.stringify(r&&r.resp||r))+'</span>'); return; }
+    _waofMsg(pnid,'Código ok. Defina um PIN de 6 dígitos (guarde ele):<div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"><input id="waof-pin-'+pnid+'" placeholder="PIN 6 dígitos" maxlength="6" style="padding:7px 10px;border:1px solid var(--b1);border-radius:7px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px;width:130px"><button type="button" onclick="waofFinish(\''+pnid+'\')" style="background:#0e7a43;border:none;color:#fff;font-size:12px;font-weight:700;padding:7px 14px;border-radius:7px;cursor:pointer;font-family:inherit">Registrar</button></div>');
+  }).catch(e=>_waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(e.message||e)+'</span>'));
+}
+function waofFinish(pnid){
+  const pin=($('waof-pin-'+pnid)&&$('waof-pin-'+pnid).value||'').trim();
+  if(!/^\d{6}$/.test(pin)){ _waofMsg(pnid,'<span style="color:var(--rd)">PIN precisa ter 6 dígitos.</span>'); return; }
+  _waofMsg(pnid,'Registrando...');
+  api.waRegister({step:'register',phone_number_id:pnid,pin}).then(r=>{
+    if(!r||!r.ok){ _waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(JSON.stringify(r&&r.resp||r))+'</span>'); return; }
+    _waofMsg(pnid,'<span style="color:#2ecc71;font-weight:700">Registrado!</span> Agora, na Contingência, marque o chip desse número como "API oficial" e atribua a um vendedor.');
+    waofLoadList();
+  }).catch(e=>_waofMsg(pnid,'<span style="color:var(--rd)">'+_waofEsc(e.message||e)+'</span>'));
+}
+
+// ═══ Conexão API oficial (Coexistência) — Embedded Signup ═══
+// Lança o popup oficial da Meta pra ligar um número do app WhatsApp Business também na API,
+// sem tirar do app. Só funciona quando (1) o app da Meta tem a configuração de Login (config_id)
+// e (2) o chip já está aquecido. Enquanto não, o botão fica travado e a UI explica o que falta.
+let _waEsCfg=null, _waEsCapture={}, _waEsSdkLoading=false;
+function waEsInit(){
+  const st=$('wa-es-status'); if(!st) return;
+  _waEsBindMsg();
+  api.waEsConfig().then(cfg=>{ _waEsCfg=cfg; _waEsRenderStatus(); })
+    .catch(()=>{ st.innerHTML='<span style="color:var(--t4)">Não consegui ler o status da conexão. Verifique o login.</span>'; });
+}
+function _waEsRenderStatus(){
+  const cfg=_waEsCfg||{}; const st=$('wa-es-status'); const btn=$('wa-es-btn'); const badge=$('wa-es-badge');
+  if(!st) return;
+  const ready=!!cfg.ready;
+  if(badge) badge.innerHTML = ready ? '<span style="color:#2ecc71">pronta pra conectar</span>' : '<span style="color:#f59e0b">falta 1 passo de config</span>';
+  st.innerHTML = ready
+    ? '<span style="color:#2ecc71;font-weight:700">Tudo pronto.</span> Com o chip aquecido, clique em Conectar e pareie pelo celular. O AXION assina o webhook e roda o sync inicial (janela de 24h) sozinho.'
+    : '<b style="color:#f59e0b">Ainda não dá pra conectar, e está tudo certo.</b><br>Faltam duas coisas, e nenhuma é ação sua agora:<br>1. Um ajuste técnico do nosso lado (a configuração no app da Meta). Quem faz sou eu.<br>2. O número precisa dos ~30 dias de aquecimento no app.<br><br><b>O que você faz hoje:</b> só deixar os chips vivendo no WhatsApp Business. Este botão libera sozinho quando chegar a hora.';
+  if(btn){ btn.disabled=!ready; btn.style.opacity=ready?'1':'.5'; btn.style.cursor=ready?'pointer':'not-allowed'; }
+}
+function _waEsBindMsg(){
+  if(window.__waEsMsgBound) return; window.__waEsMsgBound=true;
+  window.addEventListener('message',ev=>{
+    try{
+      const host=new URL(ev.origin).hostname;
+      if(!/(^|\.)facebook\.com$/.test(host)) return;
+      let d=ev.data; if(typeof d==='string'){ try{d=JSON.parse(d);}catch(_){return;} }
+      if(d && d.type==='WA_EMBEDDED_SIGNUP'){
+        const dt=d.data||{};
+        if(dt.waba_id) _waEsCapture.waba_id=dt.waba_id;
+        if(dt.phone_number_id) _waEsCapture.phone_number_id=dt.phone_number_id;
+        const rr=$('wa-es-result'); if(rr) rr.textContent='Recebido do popup: '+JSON.stringify(_waEsCapture);
+      }
+    }catch(_){}
+  });
+}
+function waEsLoadSdk(cb){
+  if(window.FB){ cb&&cb(); return; }
+  if(_waEsSdkLoading){ const t=setInterval(()=>{ if(window.FB){clearInterval(t);cb&&cb();} },200); return; }
+  _waEsSdkLoading=true;
+  window.fbAsyncInit=function(){ try{ FB.init({appId:(_waEsCfg&&_waEsCfg.app_id)||'',cookie:true,xfbml:false,version:'v21.0'}); }catch(_){} cb&&cb(); };
+  const s=document.createElement('script'); s.src='https://connect.facebook.net/pt_BR/sdk.js'; s.async=true; s.defer=true; s.crossOrigin='anonymous';
+  s.onerror=()=>{ const rr=$('wa-es-result'); if(rr) rr.textContent='Não consegui carregar o SDK da Meta (verifique a rede/bloqueadores).'; };
+  document.body.appendChild(s);
+}
+function waEsConnect(){
+  const cfg=_waEsCfg||{};
+  if(!cfg.ready){ toast&&toast('Ainda falta a configuração de Login no app da Meta. Me avise que eu finalizo.'); return; }
+  const rr=$('wa-es-result'); if(rr) rr.textContent='Abrindo o popup oficial da Meta...';
+  waEsLoadSdk(()=>{
+    if(!window.FB){ if(rr) rr.textContent='SDK da Meta não carregou. Tenta de novo.'; return; }
+    FB.login(function(resp){
+      const code=resp&&resp.authResponse&&resp.authResponse.code;
+      if(!code){ if(rr) rr.textContent='Login cancelado ou sem code. Tenta de novo.'; return; }
+      const payload={code:code,waba_id:_waEsCapture.waba_id||'',phone_number_id:_waEsCapture.phone_number_id||''};
+      if(rr) rr.textContent='Finalizando a ligação no servidor...';
+      api.waEsFinish(payload).then(r=>{
+        const ok=r&&r.steps&&r.steps.status&&r.steps.status.resp;
+        const plat=ok?(r.steps.status.resp.platform_type||'?'):'?';
+        if(rr) rr.innerHTML='<span style="color:#2ecc71;font-weight:700">Enviado.</span> platform_type: <b>'+esc(String(plat))+'</b> (alvo: CLOUD_API). Detalhe: <code style="font-size:10.5px">'+esc(JSON.stringify(r.steps||r)).slice(0,700)+'</code>';
+      }).catch(e=>{ if(rr) rr.textContent='Erro ao finalizar: '+(e.message||e); });
+    },{ config_id:cfg.config_id, response_type:'code', override_default_response_type:true,
+        extras:{ setup:{}, featureType:'whatsapp_business_app_onboarding', sessionInfoVersion:'3' } });
+  });
+}
+
 // ─── Status do WhatsApp (configuráveis pelo usuário, salvos no DB) ───
 // Padrão de fábrica — usado se DB.wa_statuses não estiver populado
 const WA_STATUSES_DEFAULT=[
@@ -9622,7 +9805,6 @@ function _renderChipCard(c, showAtendente, activeId){
     <span class="cont-mini-chip-dot" style="background:${opColor}" title="${opTitle}"></span>
     ${pinned&&!showAtendente?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:var(--bl2);text-transform:uppercase;margin-bottom:1px">★ Ativo do dia</div>`:''}
     ${isReserva?`<div style="font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--bl3);text-transform:uppercase;margin-bottom:1px">reserva</div>`:''}
-    ${c.api?`<div style="font-size:9px;font-weight:800;letter-spacing:.05em;color:#2ecc71;text-transform:uppercase;margin-bottom:1px">API oficial</div>`:''}
     <div class="wk-chip-top">
       <span class="cont-mini-chip-drag" title="Arraste pra outra coluna" onclick="event.stopPropagation()">⋮⋮</span>
       <span class="wk-chip-num">${c.num}</span>
