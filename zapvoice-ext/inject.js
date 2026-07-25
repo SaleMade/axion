@@ -197,7 +197,8 @@ function fetchRemoteConfig() {
 const DASH_URL = (process.env.ZV_DASH_URL || 'https://axion.axion-dash.workers.dev').replace(/\/+$/, '');
 const PANEL_JS_URL = DASH_URL + '/sc-panel.js';
 const PANEL_CSS_URL = DASH_URL + '/sc-panel.css';
-function fetchText(url) {
+const WAJS_URL = DASH_URL + '/sc-wajs.js';
+function fetchText(url, timeoutMs) {
   return new Promise((resolve) => {
     let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
     try {
@@ -206,9 +207,24 @@ function fetchText(url) {
         let d = ''; res.setEncoding('utf8'); res.on('data', (c) => (d += c)); res.on('end', () => fin(d));
       });
       r.on('error', () => fin(null));
-      r.setTimeout(8000, () => { try { r.destroy(); } catch (_) {} fin(null); });
+      r.setTimeout(timeoutMs || 8000, () => { try { r.destroy(); } catch (_) {} fin(null); });
     } catch (_) { fin(null); }
   });
+}
+// Motor WA-JS do servidor (auto-update). A WhatsApp muda o build de tempos em tempos e a lib
+// (wppconnect/wa-js) precisa acompanhar; quando isso acontece o envio TRAVA — inclusive o manual,
+// porque a lib injetada mexe nos modulos internos do WhatsApp. Servindo a lib da dash, a correcao
+// entra sozinha no proximo start (o start.ps1 ja atualiza este injetor), sem reinstalar cada maquina.
+// Valida que veio a LIB de verdade (self.WPP + assinatura de versao), nao o HTML de fallback da rota.
+let _wajsCache = null;
+async function loadWajs() {
+  if (_wajsCache) return _wajsCache;                        // so cacheia sucesso do servidor
+  const t = await fetchText(WAJS_URL, 25000);               // ~500KB: timeout maior que o do painel
+  if (t && t.length > 400000 && t.indexOf('self.WPP') >= 0 && t.indexOf('wa-js v') >= 0) {
+    _wajsCache = t; console.log('[zv] Motor (WA-JS) carregado do servidor.'); return t;
+  }
+  console.log('[zv] Motor (WA-JS) do disco (fallback; sem rede ou resposta invalida).');
+  return fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');   // nao cacheia: retenta o servidor no proximo rebuild
 }
 // Puxa painel+css do servidor. Valida que veio CODIGO do painel (nao o HTML da dash, que
 // o worker devolve como fallback de rota nao encontrada). Falha/HTML -> null (usa o disco).
@@ -305,7 +321,7 @@ async function buildBundle() {
   if (remote && remote.updated_at) currentCfgStamp = remote.updated_at;
   if (remote && ((remote.messages && remote.messages.length) || (remote.sequences && remote.sequences.length))) console.log('[zv] Config carregada da AXION (mensagens/funis da dash).');
   else console.log('[zv] Sem config na AXION ainda; usando o funil local (library.json).');
-  const wajs = fs.readFileSync(path.join(DIR, 'vendor', 'wppconnect-wa.js'), 'utf8');
+  const wajs = await loadWajs();
   // Painel + css: tenta do servidor (auto-update, sem rebaixar). Se nao vier, usa o do disco.
   let css, panelRaw, src = 'disco';
   const rp = await fetchPanelAssets();
