@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.82.0';
-const APP_LAST_CHANGE = 'CORRECAO GRAVE da roleta: a pressel so manda lead pra numero que voce marcou "Em uso". Antes, qualquer numero so ESTACIONADO na coluna de um vendedor ativo (status "Ativo", sem "Em uso") virava principal e recebia lead: numero novo, de API oficial, de vendedor que nem estava trabalhando. Isso queimava chip e perdia venda. Agora numero estacionado NAO recebe nada; quem deve receber tem que estar "Em uso" (o painel mostra "sem numero em uso" pra quem nao esta).';
+const APP_VERSION = '2.83.0';
+const APP_LAST_CHANGE = 'Dashboard reformulado no modelo do produtor (MIDAS): saiu o acordeao Financeiro, entrou Dashboard com 4 secoes. GESTAO (nova Visao Geral): lado a lado Pagamento Antecipado x Pagamento na Entrega, com Operacao, Vendas em Aberto, Comissao Recebida + Comissao Prevista do pipeline, e Resultado Consolidado com o trafego consolidado. EVOLUCAO DIARIA mantida (o grafico). PROJECAO MENSAL: taxa de recebimento, comissao media por pedido, pipeline em aberto e comissao prevista mes a mes (quanto ainda vai entrar). LIQUIDEZ MENSAL: resultado real por mes (comissao - trafego - despesas) com acumulado corrido. Tudo com dado real (leads, vendas Payt liquidas, gastos, investimentos).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4248,6 +4248,12 @@ const api={
   waOfficialSave:(payload)=>api._fetch('/api/wa/official/numbers',{method:'POST',body:JSON.stringify(payload)}),
   waRegister:(payload)=>api._fetch('/api/wa/register',{method:'POST',body:JSON.stringify(payload)}),
   waCloudSend:(number,text,at_id)=>api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number,text,at_id})}),
+  waCloudSendMedia:(payload)=>api._fetch('/api/wa/cloud/send-media',{method:'POST',body:JSON.stringify(payload)}),
+  waTemplateList:()=>api._fetch('/api/wa/template'),
+  waTemplateCreate:(payload)=>api._fetch('/api/wa/template',{method:'POST',body:JSON.stringify(payload)}),
+  waFunnelStart:(phone,seq_id)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'start',phone,seq_id})}),
+  waFunnelStop:(phone)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'stop',phone})}),
+  waFunnelStatus:(phone)=>api._fetch('/api/wa/funnel?phone='+encodeURIComponent(phone)),
 };
 
 // ─── Sync state com servidor ───
@@ -5414,7 +5420,7 @@ const PAGE_PERM={
   cobranca:'ver_follows',     clientes:'ver_clientes',    produtos:'ver_produtos',
   regioes:'ver_regioes',
   dre:'ver_dre',              pagequip:'ver_pagequip',    invest:'ver_invest',
-  trafego:'ver_trafego',
+  trafego:'ver_trafego',      projecao:'ver_dre',         liquidez:'ver_dre',
   atendimento:'ver_atendimento', contingencia:'ver_contingencia',
   pressels:'ver_pressels',    presselleads:'ver_pressel_leads',
   salechat:'ver_salechat',    automacoes:'ver_robo_wa',
@@ -5433,8 +5439,10 @@ function computeNav(){
   // defaults da ACL (gestor só Tráfego, designer só Criativos), e agora é ajustável.
   const nav=[
     {g:'Dashboard',items:[
-      ...(can('ver_home')?[{id:'home',lbl:'Visão Geral',live:true}]:[]),
+      ...(can('ver_home')?[{id:'home',lbl:'Gestão',live:true}]:[]),
       ...(can('ver_evolucao')?[{id:'evolucao',lbl:'Evolução Diária'}]:[]),
+      ...(can('ver_dre')?[{id:'projecao',lbl:'Projeção Mensal'}]:[]),
+      ...(can('ver_dre')?[{id:'liquidez',lbl:'Liquidez Mensal'}]:[]),
     ]},
     {g:'Operacional',items:[
       // Cobrador: Follows em destaque (live dot) e primeiro da lista
@@ -5445,12 +5453,6 @@ function computeNav(){
       ...(can('ver_produtos')?[{id:'produtos',lbl:'Produtos'}]:[]),
       ...(!rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
       ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
-    ]},
-    {g:'Financeiro',items:[
-      ...(can('ver_dre')?[{id:'dre',lbl:'Visão Geral'}]:[]),
-      ...(can('ver_pagequip')?[{id:'pagequip',lbl:'Pagamentos de Equipe'}]:[]),
-      ...(can('ver_invest')?[{id:'invest',lbl:'Investimentos'}]:[]),
-      ...(can('ver_trafego')?[{id:'trafego',lbl:'Tráfego Pago'}]:[]),
     ]},
     // "Meus Pagamentos" — quem recebe comissão/salário. Diretor já vê em Pagamentos de Equipe.
     ...(!dir&&['atendente','afiliado','cobrador','gestor'].includes(CUR?.role)?[{g:'Pessoal',items:[
@@ -5613,7 +5615,7 @@ function buildApp(){
 
   const p=$('pages');
   p.innerHTML=[
-    pageHome(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pageApiOficial(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
+    pageHome(),pageProjecao(),pageLiquidez(),pageEvolucao(),pageCRM(),pagePedidos(),pagePedidosConf(),pageProdutos(),pageAtendimento(),pageSaleChat(),pageContingencia(),pageApiOficial(),pagePressels(),pagePresselLeads(),pageAutomacoes(),
     pageRegioes(),pageDRE(),pagePagEquip(),pageMeusPag(),pageInvest(),pageCobranca(),
     pageTrafego(),pageEquipe(),pageRecuperacao(),pageCopies(),pageConfig(),pageClientes()
   ].join('');
@@ -5782,6 +5784,8 @@ function goPage(id){
   if(id==='cobranca')    renderCobranca();
   if(id==='recuperacao') renderRecup();
   if(id==='home')        renderHome();
+  if(id==='projecao')    renderProjecao();
+  if(id==='liquidez')    renderLiquidez();
   if(id==='pedidos')     renderPedidos();
   if(id==='pedidosconf') renderPedidosConf();
   if(id==='produtos')    renderProdutos();
@@ -5889,7 +5893,7 @@ function refreshDRPSelections(){
 function refreshActive(){
   const a=document.querySelector('.page.active');if(!a)return;
   const id=a.id.replace('-pg','');
-  const map={home:renderHome,evolucao:renderEvolucao,crm:renderKanban,
+  const map={home:renderHome,projecao:renderProjecao,liquidez:renderLiquidez,evolucao:renderEvolucao,crm:renderKanban,
     pedidos:renderPedidos,pedidosconf:renderPedidosConf,produtos:renderProdutos,contingencia:()=>{renderChips();renderChipsByAtendente();},pressels:renderPressels,presselleads:renderPresselLeads,
     cobranca:renderCobranca,dre:renderDRE,pagequip:renderPagEquip,
     meuspag:renderMeusPag,
@@ -5947,179 +5951,245 @@ function refreshUI(){
 /* ═══════════════════════════════════════════════════════
    PAGES — HOME (visão geral)
 ═══════════════════════════════════════════════════════ */
+// ─── Helpers da Gestão do Afiliado ─────────────────────────────
+function _dgt(s){return String(s||'').replace(/\D/g,'')}
+// % de comissão do vendedor (do membro da equipe)
+function _comPctOf(atId){const t=getTeam(atId);return Number(t&&t.com_pct)||0}
+// Calcula os números de uma modalidade (antecipado|entrega) no período.
+// Junta venda→lead por CPF pra saber a modalidade de cada comissão recebida.
+function calcModal(leads,vendas,modByCpf,mod){
+  const ml=leads.filter(l=>l.mod===mod);
+  const pg=ml.filter(l=>l.col==='Pago');
+  const fatGerado=ml.reduce((s,l)=>s+(Number(l.vl)||0),0);
+  const fatPago=pg.reduce((s,l)=>s+(Number(l.vl)||0),0);
+  const aberto=fatGerado-fatPago, nAberto=ml.length-pg.length;
+  const mv=vendas.filter(v=>modByCpf[_dgt(v.cpf)]===mod);
+  const comReceb=mv.reduce((s,v)=>s+(Number(v.comiss)||0),0);
+  const avgCom=fatPago>0?comReceb/fatPago:0.52;         // taxa de comissão sobre o faturamento pago
+  const comPrev=aberto*avgCom;                          // previsão do pipeline
+  const vendedorCom=mv.reduce((s,v)=>s+(Number(v.comiss)||0)*_comPctOf(v.at)/100,0);
+  const taxaPlat=0;                                     // "Você Recebe" da Payt já é líquido
+  const resultado=comReceb-taxaPlat-vendedorCom;
+  const ticket=pg.length?fatPago/pg.length:0;
+  const taxa=ml.length?pg.length/ml.length*100:0;
+  const margem=fatPago>0?resultado/fatPago*100:0;
+  return {criados:ml.length,pagos:pg.length,fatGerado,fatPago,aberto,nAberto,comReceb,comPrev,vendedorCom,taxaPlat,resultado,ticket,taxa,margem};
+}
+
+// ─── Agregação mensal (Projeção / Liquidez) ────────────────────
+// Agrupa TODA a base por mês (YYYY-MM), fora do filtro de período global,
+// pra montar as tabelas mês a mês do estilo do produtor (MIDAS).
+const _MESES_PT=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+function _mesLabel(k){const p=k.split('-');return _MESES_PT[Number(p[1])-1]+'/'+p[0].slice(2);}
+function buildMesesFin(){
+  const M={};
+  const g=k=>M[k]||(M[k]={fatGerado:0,fatPago:0,nCriados:0,nPagos:0,comReceb:0,traf:0,invest:0});
+  const mk=dt=>dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+  DB.leads.forEach(l=>{const dt=ddmmToDate(l.data);if(!dt)return;const m=g(mk(dt));m.fatGerado+=Number(l.vl)||0;m.nCriados++;if(l.col==='Pago'){m.fatPago+=Number(l.vl)||0;m.nPagos++;}});
+  DB.vendas.filter(v=>v.status!=='estornado').forEach(v=>{const dt=ddmmToDate(v.data);if(!dt)return;g(mk(dt)).comReceb+=Number(v.comiss)||0;});
+  DB.gastos.forEach(x=>{const dt=ddmmToDate(x.data);if(!dt)return;g(mk(dt)).traf+=Number(x.valor)||0;});
+  (DB.invest||[]).filter(i=>!i.is_budget).forEach(i=>{if(!i.dt)return;const dt=new Date(i.dt+'T12:00:00');if(isNaN(dt.getTime()))return;g(mk(dt)).invest+=Number(i.vl)||0;});
+  return M;
+}
+
 function pageHome(){return `<div class="page" id="home-pg"></div>`}
 function renderHome(){
   const c=$('home-pg');if(!c)return;
-  const dir=isDir(),afi=isAfi(),at=isAt(),gt=isGT();
-
+  const leads=DB.leads.filter(l=>inRange(l.data));
   const vendas=DB.vendas.filter(v=>inRange(v.data)&&v.status!=='estornado');
   const gastos=DB.gastos.filter(g=>inRange(g.data));
-  const myV=at?vendas.filter(v=>v.at===CUR.id)
-            :afi?vendas.filter(v=>v.at===CUR.id||v.at!=='dir')
-            :vendas;
-  const myL=dir?DB.leads:DB.leads.filter(l=>l.at===CUR.id);
+  const invests=(DB.invest||[]).filter(i=>!i.is_budget&&inRangeIso(i.dt));
+  const modByCpf={};leads.forEach(l=>{const k=_dgt(l.cpf);if(k&&l.mod)modByCpf[k]=l.mod;});
+  const A=calcModal(leads,vendas,modByCpf,'antecipado');
+  const E=calcModal(leads,vendas,modByCpf,'entrega');
+  const trafego=gastos.reduce((s,g)=>s+(Number(g.valor)||0),0);
+  const gestaoTraf=0;
+  const despOp=invests.reduce((s,i)=>s+(Number(i.vl)||0),0);
+  const consolidado=A.resultado+E.resultado-trafego-gestaoTraf-despOp;
+  const totFatPago=A.fatPago+E.fatPago;
+  const margemCons=totFatPago>0?consolidado/totFatPago*100:0;
 
-  const recBruta = myV.reduce((s,v)=>s+v.vl,0);
-  const forn     = myV.reduce((s,v)=>s+v.custo,0);
-  const com      = myV.reduce((s,v)=>s+v.comiss,0);
-  const traf     = gastos.reduce((s,g)=>s+g.valor,0);
-  // Fonte canônica única (Fase 0): lucro = comissão − tráfego − investimentos; ROAS = comissão/tráfego.
-  // Mesma base do DRE/calcFin (modo afiliado). Cards Lucro/ROAS aqui só aparecem pro diretor (operação inteira).
-  const _fin     = calcFin();
-  const lucro    = _fin.lucro;
-  const tLeads   = gastos.reduce((s,g)=>s+g.leads,0);
-  const cpl      = tLeads?traf/tLeads:0;
-  const roas     = _fin.roas;
-  const ticket   = myV.length?recBruta/myV.length:0;
-  const pago     = myL.filter(l=>l.col==='Pago').length;
-  const conv     = myL.length?Math.round(pago/myL.length*100):0;
+  // mini card de operação
+  const kc=(lbl,val,icon)=>`<div class="mc" style="padding:14px 16px">
+    <div class="mc-ic" style="width:30px;height:30px">${ico(icon,{size:13})}</div>
+    <div class="mc-lbl" style="font-size:10px">${lbl}</div>
+    <div class="mc-val" style="font-size:20px">${val}</div></div>`;
+  // linha de receita
+  const rr=(lbl,val,icon,neg,extra)=>`<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--b1);border-radius:var(--r);margin-bottom:8px;background:var(--s2)">
+    <span style="color:${neg?'var(--rd)':'var(--gr)'};display:inline-flex">${ico(icon,{size:14})}</span>
+    <span style="font-size:12.5px;color:var(--t2);font-weight:500">${lbl}</span>${extra||''}
+    <span style="margin-left:auto;font-size:15px;font-weight:700;color:${neg?'var(--rd)':'var(--gr)'};font-variant-numeric:tabular-nums">${neg&&val>0?'−':''}${fmt(val)}</span></div>`;
 
-  // ─── Hierarquia financeira ───
-  // Faturamento Bruto = total que o cliente pagou (recBruta)
-  // Receita do Afiliado = comissão que você efetivamente recebe (com)
-  // Taxas/impostos ficam no DRE — aqui só mostramos os valores brutos
-  const faturamentoBruto = recBruta;
-  const receitaAfiliado  = com;
-
-  let metrics='';
-  if(afi||at){
-    metrics=`
-    <div class="mg">
-      <div class="mc mc-go mc-feat">
-        <div class="mc-gl"></div>
-        <div class="mc-ic">${ico('banknote',{size:14})}</div>
-        <div class="mc-lbl">Faturamento Bruto</div>
-        <div class="mc-val">${fmt(faturamentoBruto)}</div>
-        <div class="mc-sub">total dos pedidos · ${myV.length} venda${myV.length!==1?'s':''}</div>
-      </div>
-      <div class="mc mc-bl mc-feat">
-        <div class="mc-gl"></div>
-        <div class="mc-ic">${ico('diamond',{size:14})}</div>
-        <div class="mc-lbl">Receita do Afiliado</div>
-        <div class="mc-val">${fmt(receitaAfiliado)}</div>
-        <div class="mc-sub">o que você recebe (comissão)</div>
-      </div>
-      <div class="mc mc-gr">
-        <div class="mc-gl"></div>
-        <div class="mc-ic">${ico('trending-up',{size:14})}</div>
-        <div class="mc-lbl">Vendas pagas</div>
-        <div class="mc-val">${pago}</div>
-        <div class="mc-sub">${conv}% de conversão</div>
-      </div>
-      <div class="mc mc-cy">
-        <div class="mc-gl"></div>
-        <div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-        <div class="mc-lbl">Ticket médio</div>
-        <div class="mc-val">${fmt(ticket)}</div>
-        <div class="mc-sub">por venda</div>
-      </div>
-    </div>`;
-  }
-
-  let dirMetrics='';
-  if(dir){
-    dirMetrics=`
-    <div class="section-title">${producerEnabled()?'Visão Afiliado (prioritário)':'Receita'}</div>
-    <div class="mg">
-      <div class="mc mc-go mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('banknote',{size:14})}</div>
-        <div class="mc-lbl">Faturamento Bruto</div>
-        <div class="mc-val">${fmt(faturamentoBruto)}</div>
-        <div class="mc-sub">total dos pedidos pagos</div>
-      </div>
-      <div class="mc mc-bl mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('diamond',{size:14})}</div>
-        <div class="mc-lbl">Receita do Afiliado</div>
-        <div class="mc-val">${fmt(receitaAfiliado)}</div>
-        <div class="mc-sub">comissão recebida</div>
-      </div>
+  const panel=(title,m,isEnt)=>`
+  <div class="panel" style="padding:20px 22px">
+    <h3 style="text-align:center;font-size:16px;margin:0 0 16px">${title}</h3>
+    <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:8px">Operação</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+      ${kc('Pedidos Criados',m.criados,'shopping-cart')}
+      ${kc('Pedidos Pagos',m.pagos,'credit-card')}
+      ${kc('Faturamento Gerado',fmt(m.fatGerado),'dollar-sign')}
+      ${kc('Faturamento Pago',fmt(m.fatPago),'trending-up')}
+      ${kc('Ticket Médio',fmt(m.ticket),'dollar-sign')}
+      ${kc(isEnt?'Taxa de Recebimento':'Taxa Pagamento',m.taxa.toFixed(1)+'%','percent')}
     </div>
+    ${isEnt?`<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:var(--r);margin-bottom:16px">
+      <span style="color:var(--gold);display:inline-flex">${ico('shopping-cart',{size:15})}</span>
+      <div><div style="font-size:12.5px;color:var(--tx);font-weight:600">Vendas em Aberto</div>
+        <div class="muted" style="font-size:11px">${m.nAberto} pedidos aguardando recebimento</div></div>
+      <span style="margin-left:auto;font-size:18px;font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums">${fmt(m.aberto)}</span></div>`:''}
+    <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:8px">Sua Receita</div>
+    ${rr('Comissão Recebida',m.comReceb,'wallet-cards',false)}
+    ${isEnt?rr('Comissão Prevista',m.comPrev,'trending-up',false,`<span title="Estimativa da comissão que ainda vai entrar dos ${m.nAberto} pedidos em aberto, com base na sua taxa de comissão real sobre o que já foi pago." style="color:var(--t4);cursor:help;font-size:11px">ⓘ</span>`):''}
+    ${rr('Taxa da Plataforma',m.taxaPlat,'credit-card',true)}
+    ${rr('Comissão do Vendedor',m.vendedorCom,'users',true)}
+    <div style="display:flex;align-items:center;gap:10px;padding:15px 16px;border:1.5px solid var(--gr);border-radius:var(--r);background:rgba(16,185,129,.05);margin-top:6px">
+      <span style="color:var(--gr);display:inline-flex">${ico('bar-chart',{size:16})}</span>
+      <span style="font-size:14px;font-weight:700;color:var(--tx)">Resultado Parcial</span>
+      <span style="margin-left:auto;display:flex;align-items:baseline;gap:8px">
+        <span style="font-size:20px;font-weight:800;color:var(--gr);font-variant-numeric:tabular-nums">${fmt(m.resultado)}</span>
+        <span class="muted" style="font-size:11px">${m.margem.toFixed(1)}%</span></span></div>
+  </div>`;
 
-    <div class="section-title">${producerEnabled()?'Visão Produtor (operação)':'Operação'}</div>
-    <div class="mg">
-      <div class="mc mc-gr mc-feat">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('arrow-up',{size:14})}</div>
-        <div class="mc-lbl">Lucro Líquido</div>
-        <div class="mc-val">${fmt(lucro)}</div>
-        <div class="mc-sub">comissão − tráfego − investimentos</div>
-      </div>
-      <div class="mc mc-pu">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('zap',{size:14})}</div>
-        <div class="mc-lbl">ROAS</div>
-        <div class="mc-val">${roas.toFixed(2)}x</div>
-        <div class="mc-sub">${fmt(traf)} em mídia</div>
-      </div>
-      <div class="mc mc-am">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('trending-up',{size:14})}</div>
-        <div class="mc-lbl">Conversão</div>
-        <div class="mc-val">${conv}%</div>
-        <div class="mc-sub">${pago}/${myL.length} leads pagos</div>
-      </div>
-      <div class="mc mc-re">
-        <div class="mc-gl"></div><div class="mc-ic">${ico('circle-dot',{size:14})}</div>
-        <div class="mc-lbl">Custo / Pedido</div>
-        <div class="mc-val">${fmt(cpl)}</div>
-        <div class="mc-sub">${tLeads} pedidos no período</div>
-      </div>
-    </div>`;
-  }
+  c.innerHTML=`
+  <div class="ph">
+    <div><h1>Gestão do <em>Afiliado</em></h1><div class="muted" style="font-size:12.5px;margin-top:2px">Resumo da operação · ${rangeLabel()}</div></div>
+  </div>
+  <p class="muted" style="font-size:12.5px;margin:-4px 0 16px">Visão lado a lado das modalidades de pagamento. O tráfego é único e aparece consolidado abaixo.</p>
 
-  // ─── Funil vertical ───
-  // Funil = primeiras 5 etapas do CRM (que o usuário pode ver)
-  const funilOrder=KB_COLS.filter(c=>colCanView(c)).slice(0,5).map(c=>c.id);
-  const funil=funilOrder.map(s=>({s,n:myL.filter(l=>l.col===s).length}));
-  const funMax=Math.max(1,...funil.map(f=>f.n));
-  const funilHTML=funil.map(f=>{
-    const w=Math.max(8,(f.n/funMax)*100);
-    const col=KB_COLS.find(c=>c.id===f.s)||{c:'#64748b'};
-    const pct=myL.length?Math.round(f.n/myL.length*100):0;
-    return `<div class="fv-row">
-      <div class="fv-label">${f.s}</div>
-      <div class="fv-bar"><div class="fv-fill" style="width:${w}%;background:linear-gradient(90deg,${col.c},${col.c}dd)">${f.n>0?f.n:''}</div></div>
-      <div class="fv-pct"><b>${pct}%</b> do total</div>
-    </div>`;
-  }).join('');
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+    ${panel('Pagamento Antecipado',A,false)}
+    ${panel('Pagamento na Entrega',E,true)}
+  </div>
 
-  // ─── Atividade × Vendas (Bug 2: filtragem por papel) ───
-  const myFeed=dir?DB.feed:DB.feed.filter(f=>!f.who||f.who===CUR.id||(f.tx||'').includes(CUR.name)||(f.tx||'').includes(CUR.abbr));
-  const feedHTML=myFeed.slice(0,8).map(f=>`
-    <div class="feed-item">
-      <span class="feed-dot" style="background:${f.c};color:${f.c}"></span>
-      <div class="feed-tx">${f.tx}</div>
-      <span class="feed-time">${f.t}</span>
-    </div>`).join('');
+  <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:22px 0 10px">Custos de tráfego (consolidados — não rateados por modalidade)</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('megaphone',{size:14})}</div>
+      <div class="mc-lbl">Tráfego (Anúncios)</div><div class="mc-val">${fmt(trafego)}</div></div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('users',{size:14})}</div>
+      <div class="mc-lbl">Gestão de Tráfego</div><div class="mc-val">${fmt(gestaoTraf)}</div></div>
+    <div class="mc mc-re"><div class="mc-gl"></div><div class="mc-ic">${ico('database',{size:14})}</div>
+      <div class="mc-lbl">Despesas Operacionais</div><div class="mc-val">${fmt(despOp)}</div></div>
+  </div>
 
-  // Bug 2: filtra vendas por papel (atendente/cobrador veem só as próprias)
-  const myVendasList=dir?DB.vendas:DB.vendas.filter(v=>v.at===CUR.id);
-  const lastV=myVendasList.slice(0,7).map(v=>{
-    const t=getTeam(v.at)||{color:'#94a3b8',bg:'rgba(148,163,184,.15)',abbr:'?'};
-    return `<div class="sitem">
-      <div class="sav" style="background:${t.bg};color:${t.color}">${t.abbr}</div>
-      <div class="sinfo"><div class="sname">${v.nome}</div><div class="sprod">${v.prod}</div></div>
-      <div><div class="sval">${fmt(v.vl)}</div><div class="sval-com">com. ${fmt(v.comiss)}</div></div>
-    </div>`;
+  <div style="display:flex;align-items:center;gap:12px;padding:18px 22px;border:1.5px solid var(--gr);border-radius:var(--rl);background:linear-gradient(180deg,rgba(16,185,129,.07),transparent);margin-top:16px">
+    <span style="color:var(--gr);display:inline-flex">${ico('bar-chart',{size:18})}</span>
+    <div><div style="font-size:16px;font-weight:800;color:var(--tx)">Resultado Consolidado</div>
+      <div class="muted" style="font-size:11.5px">Parcial Antecipado + Parcial na Entrega − Tráfego − Gestão − Despesas Operacionais</div></div>
+    <span style="margin-left:auto;display:flex;align-items:baseline;gap:10px">
+      <span style="font-size:26px;font-weight:800;color:${consolidado>=0?'var(--gr)':'var(--rd)'};font-variant-numeric:tabular-nums">${fmt(consolidado)}</span>
+      <span class="muted" style="font-size:12px">${margemCons.toFixed(1)}%</span></span></div>`;
+}
+
+// ═══ Projeção Mensal ═══════════════════════════════════════════
+// Quanto ainda vai entrar do pipeline em aberto, projetado pela taxa real
+// de comissão sobre o faturamento já pago. Coração do COD: o recebimento
+// é atrasado, então mostramos o previsto além do já realizado.
+function pageProjecao(){return `<div class="page" id="projecao-pg"></div>`}
+function renderProjecao(){
+  const c=$('projecao-pg');if(!c)return;
+  const M=buildMesesFin();
+  const keys=Object.keys(M).sort();
+  let tGer=0,tPago=0,tCom=0,tPedPg=0;
+  keys.forEach(k=>{const m=M[k];tGer+=m.fatGerado;tPago+=m.fatPago;tCom+=m.comReceb;tPedPg+=m.nPagos;});
+  const taxaRec=tGer>0?tPago/tGer*100:0;
+  const taxaCom=tPago>0?tCom/tPago:0.52;
+  const comMedia=tPedPg>0?tCom/tPedPg:0;
+  const pipeline=tGer-tPago;
+  const comPrevTot=pipeline*taxaCom;
+  const projTotal=tCom+comPrevTot;
+
+  const card=(lbl,val,sub,cls,icon)=>`<div class="mc ${cls||''}"><div class="mc-gl"></div><div class="mc-ic">${ico(icon,{size:14})}</div><div class="mc-lbl">${lbl}</div><div class="mc-val">${val}</div>${sub?`<div class="mc-sub">${sub}</div>`:''}</div>`;
+
+  const rows=keys.slice().reverse().map(k=>{
+    const m=M[k];
+    const aberto=m.fatGerado-m.fatPago;
+    const comPrev=aberto*taxaCom;
+    const proj=m.comReceb+comPrev;
+    return `<tr>
+      <td><b>${_mesLabel(k)}</b></td>
+      <td style="text-align:right">${m.nCriados}</td>
+      <td style="text-align:right">${fmt(m.fatGerado)}</td>
+      <td style="text-align:right">${fmt(m.fatPago)}</td>
+      <td style="text-align:right;color:var(--gold)">${fmt(aberto)}</td>
+      <td style="text-align:right;color:var(--gr)">${fmt(m.comReceb)}</td>
+      <td style="text-align:right;color:var(--bl)">${fmt(comPrev)}</td>
+      <td style="text-align:right;font-weight:700">${fmt(proj)}</td>
+    </tr>`;
   }).join('');
 
   c.innerHTML=`
-  <div class="ph"><div>
-    <h1>${dir?'Visão <em>Geral</em>':afi?`Olá, <em>${CUR.name}</em>`:`Olá, <em>${CUR.name.split(' ')[0]}</em>`}</h1>
-    <p>Período: ${rangeLabel()}</p>
-  </div></div>
-  ${metrics}${dirMetrics}
+  <div class="ph"><div><h1>Projeção <em>Mensal</em></h1><p>Quanto ainda vai entrar do pipeline em aberto · base histórica</p></div></div>
+  <div class="mg">
+    ${card('Taxa de Recebimento',taxaRec.toFixed(1)+'%','do faturamento gerado que já foi pago','mc-gr','percent')}
+    ${card('Comissão Média/Pedido',fmt(comMedia),tPedPg+' pedidos pagos','mc-bl','wallet-cards')}
+    ${card('Pipeline em Aberto',fmt(pipeline),'faturamento aguardando recebimento','mc-am','shopping-cart')}
+    ${card('Comissão Prevista',fmt(comPrevTot),'estimativa sobre o pipeline','mc-cy','trending-up')}
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;padding:18px 22px;border:1.5px solid var(--gr);border-radius:var(--rl);background:linear-gradient(180deg,rgba(16,185,129,.07),transparent);margin:6px 0 18px">
+    <span style="color:var(--gr);display:inline-flex">${ico('bar-chart',{size:18})}</span>
+    <div><div style="font-size:16px;font-weight:800;color:var(--tx)">Projeção Total de Comissão</div>
+      <div class="muted" style="font-size:11.5px">Comissão já recebida (${fmt(tCom)}) + Comissão prevista do pipeline (${fmt(comPrevTot)})</div></div>
+    <span style="margin-left:auto;font-size:26px;font-weight:800;color:var(--gr);font-variant-numeric:tabular-nums">${fmt(projTotal)}</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr>
+      <th>Mês</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Fat. Gerado</th>
+      <th style="text-align:right">Recebido</th><th style="text-align:right">Em Aberto</th>
+      <th style="text-align:right">Comissão Receb.</th><th style="text-align:right">Comissão Prevista</th>
+      <th style="text-align:right">Projeção Total</th>
+    </tr></thead>
+    <tbody>${rows||'<tr><td colspan="8" class="muted" style="text-align:center;padding:20px">Sem dados no período.</td></tr>'}</tbody>
+  </table></div>
+  <p class="muted" style="font-size:11.5px;margin-top:10px">A Comissão Prevista assume que os pedidos em aberto pagam na mesma taxa histórica (${(taxaCom*100).toFixed(0)}% de comissão sobre o faturamento pago). É estimativa, não garantia.</p>`;
+}
 
-  <div class="section-title">Funil de conversão</div>
-  <div class="panel">${funilHTML}</div>
+// ═══ Liquidez Mensal ═══════════════════════════════════════════
+// Resultado de caixa mês a mês (comissão recebida − tráfego − despesas),
+// com acumulado corrido pra enxergar a saúde da operação no tempo.
+function pageLiquidez(){return `<div class="page" id="liquidez-pg"></div>`}
+function renderLiquidez(){
+  const c=$('liquidez-pg');if(!c)return;
+  const M=buildMesesFin();
+  const keys=Object.keys(M).sort();
+  let tCom=0,tTraf=0,tInv=0;
+  keys.forEach(k=>{const m=M[k];tCom+=m.comReceb;tTraf+=m.traf;tInv+=m.invest;});
+  const tDesp=tTraf+tInv;
+  const resultado=tCom-tDesp;
+  const margem=tCom>0?resultado/tCom*100:0;
 
-  <div class="grid-2" style="margin-top:14px">
-    <div class="panel">
-      <div class="panel-h"><h3>Atividade Recente</h3><span class="ph-c">tempo real</span></div>
-      <div class="feed">${feedHTML||'<div class="muted" style="padding:14px">Sem atividade ainda.</div>'}</div>
-    </div>
-    <div class="panel">
-      <div class="panel-h"><h3>Últimas Vendas</h3><span class="ph-c">${myVendasList.length} no período</span></div>
-      <div class="slist">${lastV||'<div class="muted" style="padding:14px">Sem vendas ainda.</div>'}</div>
-    </div>
-  </div>`;
+  const card=(lbl,val,sub,cls,icon)=>`<div class="mc ${cls||''}"><div class="mc-gl"></div><div class="mc-ic">${ico(icon,{size:14})}</div><div class="mc-lbl">${lbl}</div><div class="mc-val">${val}</div>${sub?`<div class="mc-sub">${sub}</div>`:''}</div>`;
+
+  let acc=0;
+  const chron=keys.map(k=>{
+    const m=M[k];const desp=m.traf+m.invest;const res=m.comReceb-desp;acc+=res;
+    const taxaRec=m.fatGerado>0?m.fatPago/m.fatGerado*100:0;
+    return {k,m,desp,res,acc,taxaRec};
+  });
+  const rows=chron.slice().reverse().map(o=>`<tr>
+    <td><b>${_mesLabel(o.k)}</b></td>
+    <td style="text-align:right;color:var(--gr)">${fmt(o.m.comReceb)}</td>
+    <td style="text-align:right;color:var(--rd)">${fmt(o.m.traf)}</td>
+    <td style="text-align:right;color:var(--rd)">${fmt(o.m.invest)}</td>
+    <td style="text-align:right;font-weight:700;color:${o.res>=0?'var(--gr)':'var(--rd)'}">${fmt(o.res)}</td>
+    <td style="text-align:right">${o.taxaRec.toFixed(0)}%</td>
+    <td style="text-align:right;font-weight:700;color:${o.acc>=0?'var(--gr)':'var(--rd)'}">${fmt(o.acc)}</td>
+  </tr>`).join('');
+
+  c.innerHTML=`
+  <div class="ph"><div><h1>Liquidez <em>Mensal</em></h1><p>Resultado real por mês (comissão recebida − custos) e acumulado</p></div></div>
+  <div class="mg">
+    ${card('Comissão Bruta',fmt(tCom),'total recebido na base','mc-bl','wallet-cards')}
+    ${card('Despesas Totais',fmt(tDesp),'tráfego '+fmt(tTraf)+' + op '+fmt(tInv),'mc-re','credit-card')}
+    ${card('Resultado Acumulado',fmt(resultado),margem.toFixed(1)+'% de margem','mc-gr','bar-chart')}
+    ${card('Meses Ativos',keys.length,'com movimentação','mc-cy','calendar')}
+  </div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr>
+      <th>Mês</th><th style="text-align:right">Comissão Receb.</th><th style="text-align:right">Tráfego</th>
+      <th style="text-align:right">Despesas Op</th><th style="text-align:right">Resultado</th>
+      <th style="text-align:right">% Recebido</th><th style="text-align:right">Acumulado</th>
+    </tr></thead>
+    <tbody>${rows||'<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">Sem dados no período.</td></tr>'}</tbody>
+  </table></div>`;
 }
 
 function rangeLabel(){
@@ -7825,10 +7895,10 @@ function pageAtendimento(){
       <div class="atd-list">
         <div class="atd-lhead">
           <div class="atd-search">${ico('search',{size:14})}<input id="atd-q" placeholder="Buscar nome ou número" oninput="_atdSearch(this.value)"></div>
-          <div class="atd-filters">
+          ${isDir()?`<div class="atd-filters">
             <select id="atd-finst" onchange="_atd.fInst=this.value;_atdLoadChats()"><option value="">Todos os números</option></select>
             <select id="atd-fassign" onchange="_atd.fAssign=this.value;_atdLoadChats()"><option value="">Todos vendedores</option></select>
-          </div>
+          </div>`:''}
         </div>
         <div class="atd-chats" id="atd-chats"></div>
       </div>
@@ -7910,14 +7980,22 @@ async function _atdLoadThread(silent){
   const built=document.getElementById('atd-msgs');
   if(silent&&built){_atdSyncMsgs();}else{_atdRenderThread();}
 }
+function _atdMediaUrl(mu){ if(!mu) return ''; return /^https?:/i.test(mu)?mu:(typeof scMediaUrl==='function'?scMediaUrl(mu):mu); }
 function _atdMsgsHTML(){
   if(!_atd.msgs.length)return `<div class="atd-empty" style="height:100%">${ico('message-circle',{size:30})}<div>Sem mensagens nessa conversa</div></div>`;
   let html='',lastDay='';
   _atd.msgs.forEach(m=>{
     const day=_atdDay(m.ts);
     if(day!==lastDay){html+=`<div class="atd-day">${day}</div>`;lastDay=day;}
-    const body=(m.body&&m.body.length)?_atdEsc(m.body):('['+(m.type||'msg')+']');
-    html+=`<div class="atd-b ${m.direction==='out'?'out':'in'}">${body}<div class="atd-bt">${_atdHM(m.ts)}</div></div>`;
+    const mu=m.media_url?_atdMediaUrl(m.media_url):'';
+    const cap=(m.body&&m.body.length)?_atdEsc(m.body):'';
+    let inner;
+    if(mu && m.type==='image') inner=`<img src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px;display:block" loading="lazy">${cap?`<div style="margin-top:4px">${cap}</div>`:''}`;
+    else if(mu && (m.type==='audio'||m.type==='ptt'||m.type==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
+    else if(mu && m.type==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
+    else if(mu && m.type==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
+    else inner=(m.body&&m.body.length)?_atdEsc(m.body):('['+(m.type||'msg')+']');
+    html+=`<div class="atd-b ${m.direction==='out'?'out':'in'}">${inner}<div class="atd-bt">${_atdHM(m.ts)}</div></div>`;
   });
   return html;
 }
@@ -7946,15 +8024,23 @@ function _atdRenderThread(){
         <option value="">Sem responsável</option>
         ${members.map(m=>`<option value="${_atdEsc(m.id)}" ${c.assigned_to===m.id?'selected':''}>${_atdEsc(m.name)}</option>`).join('')}
       </select>
+      <button class="atd-cbtn" title="Disparar funil de áudios" onclick="_atdFunil()" style="background:transparent;border:1px solid var(--b1);color:var(--t2);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;font-family:inherit;display:flex;align-items:center;gap:6px">${ico('zap',{size:13})} Funil</button>
     </div>
+    <div id="atd-funilbar" style="display:none;padding:6px 14px;font-size:12px;color:var(--t2);border-bottom:1px solid var(--b1)"></div>
     <div class="atd-msgs" id="atd-msgs">${_atdMsgsHTML()}</div>
     <div class="atd-compose">
       ${_atd.instances.length>1?`<select class="atd-from" id="atd-from" title="Enviar por qual número">${_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}" ${i.name===fromInst?'selected':''}>${_atdEsc(_atdInstLabel(i.name))}</option>`).join('')}</select>`:''}
+      <input type="file" id="atd-file" accept="image/*,video/*,application/pdf" style="display:none" onchange="_atdAttach(this)">
+      <button class="atd-cbtn" title="Anexar imagem/documento" onclick="document.getElementById('atd-file').click()" style="background:transparent;border:none;color:var(--t3);cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px">${ico('paperclip',{size:17})}</button>
+      <button class="atd-cbtn" id="atd-mic" title="Gravar voz" onclick="_atdMicToggle()" style="background:transparent;border:none;color:var(--t3);cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px">${ico('mic',{size:17})}</button>
+      <button class="atd-cbtn" title="Biblioteca de áudios/mídia" onclick="_atdLib()" style="background:transparent;border:none;color:var(--t3);cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px">${ico('folder',{size:17})}</button>
       <textarea id="atd-input" placeholder="Escreva uma mensagem..." rows="1" onkeydown="_atdKey(event)" oninput="_atdGrow(this)"></textarea>
       <button class="atd-sendbtn" id="atd-send" onclick="_atdSend()">${ico('send',{size:17})}</button>
-    </div>`;
+    </div>
+    <div id="atd-libpop" style="display:none"></div>`;
   const el=document.getElementById('atd-msgs');if(el)el.scrollTop=el.scrollHeight;
   const inp=document.getElementById('atd-input');if(inp)inp.focus();
+  try{_atdFunilRefresh();}catch(_){}
 }
 async function _atdSend(){
   const inp=document.getElementById('atd-input');if(!inp)return;
@@ -7969,6 +8055,93 @@ async function _atdSend(){
     _atdLoadChats(true);
   }catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
   finally{_atd.sending=false;if(btn)btn.disabled=false;const i2=document.getElementById('atd-input');if(i2)i2.focus();}
+}
+// Envia mídia/áudio pela Cloud API (só funciona em número oficial). Sobe no R2 e manda o link.
+async function _atdUploadSend(blob, kind, filename, caption){
+  if(_atd.sending||!_atd.phone) return; _atd.sending=true; const btn=document.getElementById('atd-send'); if(btn)btn.disabled=true;
+  try{
+    toast('Enviando...');
+    const base=(apiUrl()||'').replace(/\/+$/,'');
+    const up=await fetch(base+'/api/salechat/media',{method:'POST',headers:{'content-type':blob.type||'application/octet-stream','authorization':'Bearer '+(apiToken()||'')},body:blob});
+    const uj=await up.json().catch(()=>({})); if(!up.ok||!uj.ok) throw new Error((uj&&uj.error)||('upload '+up.status));
+    const r=await api.waCloudSendMedia({number:_atd.phone,kind,link:scMediaUrl(uj.key),mediaKey:uj.key,caption:caption||'',filename:filename||''});
+    if(r&&r.ok===false) throw new Error(r.error||'envio falhou');
+    await _atdLoadThread(); _atdLoadChats(true);
+  }catch(e){ toast('Falha: '+(e.message||''),'err'); }
+  finally{ _atd.sending=false; if(btn)btn.disabled=false; }
+}
+function _atdAttach(inp){
+  const f=inp&&inp.files&&inp.files[0]; if(!f) return; inp.value='';
+  const kind=(f.type.indexOf('image')>=0)?'image':(f.type.indexOf('video')>=0)?'video':'document';
+  _atdUploadSend(f, kind, f.name, '');
+}
+let _atdRec=null,_atdRecChunks=[];
+async function _atdMicToggle(){
+  const mic=document.getElementById('atd-mic');
+  if(_atdRec && _atdRec.state==='recording'){ _atdRec.stop(); return; }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    let mime='';
+    try{ if(window.MediaRecorder){ if(MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'))mime='audio/ogg;codecs=opus'; else if(MediaRecorder.isTypeSupported('audio/mp4'))mime='audio/mp4'; else if(MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))mime='audio/webm;codecs=opus'; } }catch(_){}
+    _atdRec=new MediaRecorder(stream, mime?{mimeType:mime}:undefined); _atdRecChunks=[];
+    _atdRec.ondataavailable=e=>{ if(e.data&&e.data.size)_atdRecChunks.push(e.data); };
+    _atdRec.onstop=async()=>{ try{stream.getTracks().forEach(t=>t.stop());}catch(_){} if(mic)mic.style.color=''; const blob=new Blob(_atdRecChunks,{type:(_atdRec&&_atdRec.mimeType)||'audio/ogg'}); _atdRec=null; if(blob.size) await _atdUploadSend(blob,'audio','voz',''); };
+    _atdRec.start(); if(mic)mic.style.color='#e4715f';
+    toast('Gravando... clique no microfone de novo pra enviar');
+  }catch(e){ toast('Sem acesso ao microfone','err'); }
+}
+function _atdLib(){
+  const pop=document.getElementById('atd-libpop'); if(!pop) return;
+  if(pop.style.display==='block'){ pop.style.display='none'; return; }
+  let items=[]; try{ items=(SC().media||[]).filter(m=>['audio','image','video','document'].includes(m.kind)&&m.key); }catch(_){}
+  if(!items.length){ toast('Biblioteca vazia (cadastre em Sale Chat)'); return; }
+  pop.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40">'+items.map(m=>'<div onclick="_atdLibSend(\''+_atdEsc(m.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico(m.kind==='audio'?'mic':m.kind==='video'?'video':m.kind==='image'?'image':'file',{size:14})+' '+_atdEsc(m.label||m.id)+'</div>').join('')+'</div>';
+  pop.style.display='block';
+}
+function _atdLibSend(id){
+  const pop=document.getElementById('atd-libpop'); if(pop)pop.style.display='none';
+  let it=null; try{ it=(SC().media||[]).find(m=>m.id===id); }catch(_){}
+  if(!it||!it.key){ toast('Item não encontrado','err'); return; }
+  if(_atd.sending||!_atd.phone) return; _atd.sending=true; const btn=document.getElementById('atd-send'); if(btn)btn.disabled=true;
+  api.waCloudSendMedia({number:_atd.phone,kind:it.kind,link:scMediaUrl(it.key),mediaKey:it.key,caption:it.caption||'',filename:it.label||''})
+    .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
+    .catch(e=>toast('Falha: '+(e.message||''),'err'))
+    .finally(()=>{ _atd.sending=false; if(btn)btn.disabled=false; });
+}
+function _atdFunil(){
+  const lp=document.getElementById('atd-libpop'); if(!lp) return;
+  let seqs=[]; try{ seqs=(SC().sequences||[]); }catch(_){}
+  if(!seqs.length){ toast('Nenhum funil publicado (crie em Sale Chat)'); return; }
+  lp.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40"><div style="font-size:11px;color:var(--t3);padding:4px 10px">Disparar funil de áudios:</div>'+seqs.map(s=>'<div onclick="_atdFunilStart(\''+_atdEsc(s.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico('zap',{size:14})+' '+_atdEsc(s.label||s.id)+' <span style="color:var(--t4);font-size:11px">('+((s.items||[]).length)+' itens)</span></div>').join('')+'</div>';
+  lp.style.display='block';
+}
+function _atdFunilStart(seqId){
+  const lp=document.getElementById('atd-libpop'); if(lp)lp.style.display='none';
+  if(!_atd.phone) return;
+  toast('Disparando funil...');
+  api.waFunnelStart(_atd.phone, seqId).then(r=>{
+    if(r&&r.ok===false){ toast('Funil: '+(r.error||'falhou'),'err'); return; }
+    _atdFunilBar('Funil rodando '+(r.sent||1)+'/'+(r.total||'?')+' (para sozinho se o lead responder)');
+    _atdLoadThread();
+  }).catch(e=>toast('Falha: '+(e.message||''),'err'));
+}
+function _atdFunilBar(txt){
+  const bar=document.getElementById('atd-funilbar'); if(!bar) return;
+  if(!txt){ bar.style.display='none'; bar.innerHTML=''; return; }
+  bar.innerHTML=_atdEsc(txt)+' <a onclick="_atdFunilStop()" style="color:var(--bl2);cursor:pointer;font-weight:600;margin-left:8px">parar</a>';
+  bar.style.display='block';
+}
+function _atdFunilStop(){
+  if(!_atd.phone) return;
+  api.waFunnelStop(_atd.phone).then(()=>{ _atdFunilBar(''); toast('Funil parado'); }).catch(()=>{});
+}
+function _atdFunilRefresh(){
+  if(!_atd.phone) return;
+  api.waFunnelStatus(_atd.phone).then(r=>{
+    const run=r&&r.run;
+    if(run&&run.status==='running') _atdFunilBar('Funil rodando '+(run.idx||0)+'/'+(run.total||'?')+' (para sozinho se o lead responder)');
+    else _atdFunilBar('');
+  }).catch(()=>{});
 }
 async function _atdAssign(uid){
   if(!_atd.phone)return;
@@ -9132,12 +9305,64 @@ function pageApiOficial(){
         <div id="waof-reg" style="font-size:13px;color:var(--t2)"></div>
       </div>
 
+      <!-- Templates -->
+      <div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:18px 20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:14px;font-weight:700;color:var(--tx)">Templates de mensagem</span>
+          <span style="flex:1"></span>
+          <button type="button" onclick="waofTplLoad()" style="background:transparent;border:1px solid var(--b1);color:var(--t2);font-size:11.5px;cursor:pointer;padding:5px 12px;border-radius:8px;font-family:inherit">Atualizar</button>
+        </div>
+        <div style="font-size:12.5px;color:var(--t3);line-height:1.55;margin-bottom:12px">Templates são mensagens de <b>TEXTO</b> aprovadas pela Meta pra reabrir conversa fora das 24h (quebra-gelo). Áudio não entra em template: o áudio do funil vai depois que o lead responde. Evite promessa de saúde/cura (a Meta reprova).</div>
+        <div id="waof-tpl-list" style="font-size:13px;color:var(--t2)">Carregando...</div>
+        <details style="margin-top:14px">
+          <summary style="cursor:pointer;font-size:12.5px;color:var(--bl2);font-weight:600">+ Criar template</summary>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+            <input id="waof-tpl-name" placeholder="nome (ex: quebra_gelo_glico)" style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="waof-tpl-cat" style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px"><option value="MARKETING">Marketing</option><option value="UTILITY">Utilidade</option></select>
+              <input id="waof-tpl-lang" value="pt_BR" style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px;width:90px">
+            </div>
+            <textarea id="waof-tpl-body" rows="3" placeholder="Texto da mensagem" style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:var(--s1,#0000000d);color:var(--tx);font-family:inherit;font-size:13px;resize:vertical"></textarea>
+            <div><button type="button" onclick="waofTplCreate()" style="background:#0e7a43;border:none;color:#fff;font-size:13px;font-weight:700;padding:9px 16px;border-radius:8px;cursor:pointer;font-family:inherit">Enviar pra análise</button></div>
+            <div id="waof-tpl-msg" style="font-size:12px;color:var(--t3)"></div>
+          </div>
+        </details>
+      </div>
+
     </div>
   </div>`;
 }
-// ═══ API oficial pura (Cloud API): números + registro OTP ═══
+// ═══ API oficial pura (Cloud API): números + registro OTP + templates ═══
 function _waofEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-function waofInit(){ waofLoadList(); try{ const l=(DB&&DB._waLastOnboard)||null; }catch(_){}}
+function waofInit(){ waofLoadList(); waofTplLoad(); }
+function waofTplLoad(){
+  const el=$('waof-tpl-list'); if(!el) return; el.textContent='Carregando...';
+  api.waTemplateList().then(r=>{
+    const ts=(r&&r.templates)||[];
+    if(!ts.length){ el.innerHTML='<span style="color:var(--t3)">Nenhum template ainda.</span>'; return; }
+    el.innerHTML=ts.map(t=>{
+      const st=String(t.status||'').toUpperCase();
+      const col=st==='APPROVED'?'#2ecc71':st==='REJECTED'?'#e4715f':'#f59e0b';
+      const lbl=st==='APPROVED'?'aprovado':st==='REJECTED'?'reprovado':(st.toLowerCase()||'pendente');
+      const body=((t.components||[]).find(c=>c.type==='BODY')||{}).text||'';
+      return '<div style="padding:9px 0;border-top:1px solid var(--b1)"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="color:var(--tx)">'+_waofEsc(t.name)+'</b> <span style="font-size:11px;color:'+col+';font-weight:700">'+lbl+'</span> <span style="font-size:10.5px;color:var(--t4)">'+_waofEsc(t.category||'')+' · '+_waofEsc(t.language||'')+'</span></div>'+(body?'<div style="font-size:12px;color:var(--t3);margin-top:3px">'+_waofEsc(body)+'</div>':'')+'</div>';
+    }).join('');
+  }).catch(e=>{ el.innerHTML='<span style="color:var(--rd)">Erro: '+_waofEsc(e.message||e)+'</span>'; });
+}
+function waofTplCreate(){
+  const name=($('waof-tpl-name')&&$('waof-tpl-name').value||'').trim();
+  const body=($('waof-tpl-body')&&$('waof-tpl-body').value||'').trim();
+  const category=($('waof-tpl-cat')&&$('waof-tpl-cat').value)||'MARKETING';
+  const language=($('waof-tpl-lang')&&$('waof-tpl-lang').value||'pt_BR').trim();
+  const msg=$('waof-tpl-msg');
+  if(!name||!body){ if(msg)msg.innerHTML='<span style="color:var(--rd)">Preencha nome e texto.</span>'; return; }
+  if(msg)msg.textContent='Enviando pra análise...';
+  api.waTemplateCreate({name,body,category,language}).then(r=>{
+    if(r&&r.ok===false){ if(msg)msg.innerHTML='<span style="color:var(--rd)">'+_waofEsc(r.error||'falhou')+'</span>'; return; }
+    if(msg)msg.innerHTML='<span style="color:#2ecc71;font-weight:700">Enviado! Status: '+_waofEsc(r.status||'PENDING')+'</span>';
+    waofTplLoad();
+  }).catch(e=>{ if(msg)msg.innerHTML='<span style="color:var(--rd)">'+_waofEsc(e.message||e)+'</span>'; });
+}
 function waofLoadList(){
   const el=$('waof-list'); if(!el) return; el.textContent='Carregando...';
   api.waOfficialList().then(r=>{
