@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.83.0';
-const APP_LAST_CHANGE = 'Dashboard reformulado no modelo do produtor (MIDAS): saiu o acordeao Financeiro, entrou Dashboard com 4 secoes. GESTAO (nova Visao Geral): lado a lado Pagamento Antecipado x Pagamento na Entrega, com Operacao, Vendas em Aberto, Comissao Recebida + Comissao Prevista do pipeline, e Resultado Consolidado com o trafego consolidado. EVOLUCAO DIARIA mantida (o grafico). PROJECAO MENSAL: taxa de recebimento, comissao media por pedido, pipeline em aberto e comissao prevista mes a mes (quanto ainda vai entrar). LIQUIDEZ MENSAL: resultado real por mes (comissao - trafego - despesas) com acumulado corrido. Tudo com dado real (leads, vendas Payt liquidas, gastos, investimentos).';
+const APP_VERSION = '2.84.0';
+const APP_LAST_CHANGE = 'Limpeza das telas a pedido do Bruno. EQUIPE: tirei os cards de cima (os 3 blocos de numeros - overview, PG Antecipado, PG na Entrega), ficou so o header e a tabela Vendedores. FOLLOWS (Cobranca): removido do menu (valores nao batiam e a operacao roda pelo CRM/Sale Chat); a pagina continua no codigo, so nao aparece na navegacao. Regioes conferida: numeros vem direto de DB.leads por UF (pedidos/entregues/pagos/valor), metodologia correta. Proximo passo grande: verdade financeira mes a mes (trafego real do ContaSimples esta subcontado - falta reimportar).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -5445,13 +5445,12 @@ function computeNav(){
       ...(can('ver_dre')?[{id:'liquidez',lbl:'Liquidez Mensal'}]:[]),
     ]},
     {g:'Operacional',items:[
-      // Cobrador: Follows em destaque (live dot) e primeiro da lista
-      ...(rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',live:true,badge:codPendCount()}]:[]),
+      // Follows (Cobrança) removido do menu a pedido do Bruno: valores nao batiam
+      // e a operacao roda pelo CRM/Sale Chat. Pagina segue no codigo, so nao navegavel.
       ...(can('ver_pedidos')?[{id:'pedidos',lbl:'Pedidos'}]:[]),
       ...(can('ver_crm')?[{id:'crm',lbl:'CRM / Pipeline'}]:[]),
       ...(can('ver_clientes')?[{id:'clientes',lbl:'Base de Clientes'}]:[]),
       ...(can('ver_produtos')?[{id:'produtos',lbl:'Produtos'}]:[]),
-      ...(!rec&&can('ver_follows')?[{id:'cobranca',lbl:'Follows',badge:codPendCount()}]:[]),
       ...(can('ver_regioes')?[{id:'regioes',lbl:'Regiões'}]:[]),
     ]},
     // "Meus Pagamentos" — quem recebe comissão/salário. Diretor já vê em Pagamentos de Equipe.
@@ -14978,85 +14977,6 @@ function renderEquipe(){
     </div>
   </div>
 
-  <!-- Cards globais -->
-  <div class="mg" style="grid-template-columns:repeat(4,1fr)">
-    <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('users',{size:14})}</div>
-      <div class="mc-lbl">Vendedores</div>
-      <div class="mc-val">${totMembros}</div>
-    </div>
-    <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
-      <div class="mc-lbl">Total Pedidos</div>
-      <div class="mc-val">${totPedidos}</div>
-    </div>
-    <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-      <div class="mc-lbl">Total Vendas</div>
-      <div class="mc-val">${fmt(totVendasR$)}</div>
-    </div>
-    <div class="mc mc-re">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">A pagar pra equipe</div>
-      <div class="mc-val">${fmt(stats.reduce((s,x)=>s+x.comissaoR$,0))}</div>
-    </div>
-  </div>
-
-  <!-- PG Antecipado -->
-  <div class="mod-tag-bar">
-    <span class="mod-tag mod-ant-tag" style="display:inline-flex;align-items:center;gap:6px">${ico('credit-card',{size:12})} PG Antecipado</span>
-    <span class="muted" style="font-size:13px">Vendas com pagamento adiantado</span>
-  </div>
-  <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
-      <div class="mc-lbl">Pedidos</div>
-      <div class="mc-val">${ant.length}</div>
-    </div>
-    <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-      <div class="mc-lbl">Valor</div>
-      <div class="mc-val">${fmt(sumVL(ant))}</div>
-    </div>
-    <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">Pedidos Pagos</div>
-      <div class="mc-val">${antPagos.length}</div>
-    </div>
-    <div class="mc mc-go">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">Valor Pago</div>
-      <div class="mc-val">${fmt(sumVL(antPagos))}</div>
-    </div>
-  </div>
-
-  <!-- PG na Entrega -->
-  <div class="mod-tag-bar">
-    <span class="mod-tag mod-ent-tag" style="display:inline-flex;align-items:center;gap:6px">${ico('package',{size:12})} PG na Entrega</span>
-    <span class="muted" style="font-size:13px">Vendas com pagamento na entrega</span>
-  </div>
-  <div class="mg" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    <div class="mc mc-cy">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('shopping-cart',{size:14})}</div>
-      <div class="mc-lbl">Pedidos</div>
-      <div class="mc-val">${ent.length}</div>
-    </div>
-    <div class="mc mc-bl">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('dollar-sign',{size:14})}</div>
-      <div class="mc-lbl">Valor</div>
-      <div class="mc-val">${fmt(sumVL(ent))}</div>
-    </div>
-    <div class="mc mc-gr">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">Pedidos Pagos</div>
-      <div class="mc-val">${entPagos.length}</div>
-    </div>
-    <div class="mc mc-go">
-      <div class="mc-gl"></div><div class="mc-ic">${ico('bar-chart',{size:14})}</div>
-      <div class="mc-lbl">Valor Pago</div>
-      <div class="mc-val">${fmt(sumVL(entPagos))}</div>
-    </div>
-  </div>
 
   <!-- Tabela "Vendedores" -->
   <div class="panel" style="padding:18px 22px">
