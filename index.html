@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.84.0';
-const APP_LAST_CHANGE = 'Limpeza das telas a pedido do Bruno. EQUIPE: tirei os cards de cima (os 3 blocos de numeros - overview, PG Antecipado, PG na Entrega), ficou so o header e a tabela Vendedores. FOLLOWS (Cobranca): removido do menu (valores nao batiam e a operacao roda pelo CRM/Sale Chat); a pagina continua no codigo, so nao aparece na navegacao. Regioes conferida: numeros vem direto de DB.leads por UF (pedidos/entregues/pagos/valor), metodologia correta. Proximo passo grande: verdade financeira mes a mes (trafego real do ContaSimples esta subcontado - falta reimportar).';
+const APP_VERSION = '2.85.0';
+const APP_LAST_CHANGE = 'Grafico de Evolucao Diaria agora e interativo. Ao passar o mouse aparece uma agulhinha (linha vertical) no dia e um balao com o detalhe daquele dia: Vendas, Comissao, Gasto, Lucro e ROAS. O ponto do dia sob o mouse fica destacado e a data aparece no eixo. Adicionei tambem uma legenda "Como ler" explicando o COD: a comissao aparece no dia em que o cliente PAGOU, entao os dias mais recentes ainda estao recebendo e sobem nos proximos dias (por isso nao da pra saber o lucro final do dia na hora).';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -6268,6 +6268,9 @@ function renderEvolucao(){
       </div>
     </div>
     <canvas id="chart-ev" style="width:100%;display:block"></canvas>
+    <div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.5">
+      <b style="color:var(--t2)">Como ler:</b> a comissão aparece no dia em que o cliente <b>pagou</b> (COD), então os dias mais recentes ainda estão recebendo e vão subir nos próximos dias. Passe o mouse nos pontos pra ver o detalhe de cada dia.
+    </div>
   </div>
 
   <div class="section-title">Detalhamento por dia</div>
@@ -18501,7 +18504,6 @@ function renderChart(){
   cv.width=W*dpr;cv.height=H*dpr;
   cv.style.width=W+'px';cv.style.height=H+'px';
   const ctx=cv.getContext('2d');ctx.scale(dpr,dpr);
-  ctx.clearRect(0,0,W,H);
 
   // dados rolling — período do filtro global
   const cp=chartPeriodDays();
@@ -18514,63 +18516,108 @@ function renderChart(){
   const rec=days.map(d=>DB.vendas.filter(v=>v.data===d&&v.status!=='estornado').reduce((s,v)=>s+v.comiss,0));
   const gas=days.map(d=>DB.gastos.filter(g=>g.data===d).reduce((s,g)=>s+g.valor,0));
   const luc=rec.map((r,i)=>r-gas[i]);
+  const nven=days.map(d=>DB.vendas.filter(v=>v.data===d&&v.status!=='estornado').length);
 
   const pad={l:62,r:24,t:18,b:38};
   const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
   const rawMax=Math.max(...rec,...luc,...gas);
   const max=(rawMax>0?rawMax:1000)*1.15;
   const min=0;
+  const denom=Math.max(1,days.length-1);
+  const xFor=i=>pad.l+cw*i/denom;
+  const yFor=v=>pad.t+ch-((v-min)/(max-min))*ch;
 
-  // grid horizontal
-  ctx.strokeStyle='#1f2a44';ctx.lineWidth=1;ctx.font='11px Inter,sans-serif';
-  ctx.fillStyle='#94a3b8';ctx.textAlign='right';
-  for(let i=0;i<=5;i++){
-    const y=pad.t+ch*i/5;
-    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
-    const v=max-(max-min)*i/5;
-    ctx.fillText('R$ '+(v>=1000?(v/1000).toFixed(1)+'k':Math.round(v)),pad.l-8,y+4);
-  }
-
-  // eixo x — pula labels se >14 dias para não amontoar
-  ctx.textAlign='center';ctx.fillStyle='#94a3b8';
-  const step=days.length>14?Math.ceil(days.length/8):1;
-  days.forEach((d,i)=>{
-    if(i%step!==0 && i!==days.length-1)return;
-    const x=pad.l+cw*i/(days.length-1);
-    ctx.fillText(d,x,H-pad.b+20);
-  });
-
-  function line(data,color,fill){
+  function line(data,color,fill,hover){
     ctx.strokeStyle=color;ctx.lineWidth=2.5;
     ctx.beginPath();
-    data.forEach((v,i)=>{
-      const x=pad.l+cw*i/(data.length-1);
-      const y=pad.t+ch-((v-min)/(max-min))*ch;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    });
+    data.forEach((v,i)=>{const x=xFor(i),y=yFor(v);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
     ctx.stroke();
-
     if(fill){
       ctx.lineTo(pad.l+cw,pad.t+ch);ctx.lineTo(pad.l,pad.t+ch);ctx.closePath();
       const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+ch);
       grad.addColorStop(0,fill);grad.addColorStop(1,fill.replace(/[\d.]+\)$/,'0)'));
       ctx.fillStyle=grad;ctx.fill();
     }
-
-    // pontos
-    ctx.fillStyle=color;
     data.forEach((v,i)=>{
-      const x=pad.l+cw*i/(data.length-1);
-      const y=pad.t+ch-((v-min)/(max-min))*ch;
-      ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle='#0a1020';ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle=color;
+      const x=xFor(i),y=yFor(v);
+      if(i===hover){
+        ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,6.5,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle='#0a1020';ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fill();
+      }else{
+        ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle='#0a1020';ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();
+      }
     });
   }
 
-  line(rec,'#3b82f6','rgba(59,130,246,.18)');
-  line(luc,'#10b981',null);
-  line(gas,'#ef4444',null);
+  function draw(hover){
+    ctx.clearRect(0,0,W,H);
+    // grid horizontal
+    ctx.strokeStyle='#1f2a44';ctx.lineWidth=1;ctx.font='11px Inter,sans-serif';
+    ctx.fillStyle='#94a3b8';ctx.textAlign='right';
+    for(let i=0;i<=5;i++){
+      const y=pad.t+ch*i/5;
+      ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
+      const v=max-(max-min)*i/5;
+      ctx.fillText('R$ '+(v>=1000?(v/1000).toFixed(1)+'k':Math.round(v)),pad.l-8,y+4);
+    }
+    // agulhinha (crosshair) do dia sob o mouse — desenha atrás das linhas
+    if(hover!=null){
+      const hx=xFor(hover);
+      ctx.strokeStyle='rgba(148,163,184,.45)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+      ctx.beginPath();ctx.moveTo(hx,pad.t);ctx.lineTo(hx,pad.t+ch);ctx.stroke();ctx.setLineDash([]);
+    }
+    // eixo x — pula labels se >14 dias para não amontoar (mas sempre mostra o dia sob o mouse)
+    ctx.textAlign='center';
+    const step=days.length>14?Math.ceil(days.length/8):1;
+    days.forEach((d,i)=>{
+      if(i%step!==0 && i!==days.length-1 && i!==hover)return;
+      ctx.fillStyle=(i===hover)?'#e2e8f0':'#94a3b8';
+      ctx.fillText(d,xFor(i),H-pad.b+20);
+    });
+    line(rec,'#3b82f6','rgba(59,130,246,.18)',hover);
+    line(luc,'#10b981',null,hover);
+    line(gas,'#ef4444',null,hover);
+  }
+
+  let hover=null;
+  draw(null);
+
+  // tooltip flutuante (reaproveita 1 elemento, tema-aware)
+  let tip=document.getElementById('chart-ev-tip');
+  if(!tip){tip=document.createElement('div');tip.id='chart-ev-tip';document.body.appendChild(tip);}
+  const cs=getComputedStyle(document.body);
+  const bg=cs.getPropertyValue('--s2').trim()||'#15151b';
+  const acc=cs.getPropertyValue('--bl').trim()||'#3b82f6';
+  const txc=cs.getPropertyValue('--tx').trim()||'#c8d1de';
+  const mut=cs.getPropertyValue('--t3').trim()||'#7f8a9c';
+  tip.style.cssText=`position:fixed;background:${bg};border:1px solid ${acc};color:${txc};padding:9px 13px;border-radius:10px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .12s;z-index:9999;white-space:nowrap;box-shadow:0 6px 22px rgba(0,0,0,.45);min-width:158px`;
+  const row=(lbl,val,col)=>`<div style="display:flex;justify-content:space-between;gap:18px;margin-top:3px"><span style="color:${mut}">${lbl}</span><span style="color:${col||txc};font-weight:700;font-variant-numeric:tabular-nums">${val}</span></div>`;
+
+  function showTip(e,idx){
+    const r=rec[idx],g=gas[idx],l=luc[idx];
+    const ras=g?(r/g).toFixed(2)+'x':'—';
+    tip.innerHTML=`<div style="font-weight:800;color:${txc};font-size:12.5px;margin-bottom:3px;border-bottom:1px solid ${mut}33;padding-bottom:4px">${days[idx]}</div>`
+      +row('Vendas',nven[idx]||0)
+      +row('Comissão',fmt(r),'#3b82f6')
+      +row('Gasto',fmt(g),'#ef4444')
+      +row('Lucro',fmt(l),l>=0?'#10b981':'#ef4444')
+      +row('ROAS',ras,'#f59e0b');
+    tip.style.opacity='1';
+    let lx=e.clientX+16;if(lx+190>window.innerWidth)lx=e.clientX-190;
+    tip.style.left=lx+'px';tip.style.top=(e.clientY-12)+'px';
+  }
+
+  cv.style.cursor='crosshair';
+  cv.onmousemove=e=>{
+    const rect=cv.getBoundingClientRect();
+    const mx=e.clientX-rect.left;
+    let idx=Math.round((mx-pad.l)/(cw/denom));
+    idx=Math.max(0,Math.min(days.length-1,idx));
+    if(idx!==hover){hover=idx;draw(idx);}
+    showTip(e,idx);
+  };
+  cv.onmouseleave=()=>{hover=null;draw(null);tip.style.opacity='0';};
 }
 
 /* ═══════════════════════════════════════════════════════
