@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.87.0';
-const APP_LAST_CHANGE = 'Atendimento: o painel Sale Chat agora e IGUAL ao Sale Chat original. Header verde, trilho vertical de abas a direita (Itens, Funis, Templates, Leads), e a aba Itens completa: busca "Buscar item...", filtro por tipo (Todos/Mensagens/Audios/Videos/Imagens/Docs), favoritos (estrela), "Esconder todos" e secoes recolhiveis por tipo com contagem e subcategoria. Cada card tem icone colorido, estrela pra favoritar, botao play verde e a setinha que abre a PREVIA (texto, audio, imagem, video, doc) antes de enviar. Funis com card roxo + previa dos passos. Nova aba Leads mostra os dados do lead da conversa (nome, CPF, endereco, pedido, tags, notas) com botao pra abrir a ficha completa. Tudo dispara pela API oficial.';
+const APP_VERSION = '2.88.0';
+const APP_LAST_CHANGE = 'Atendimento, ajustes: (1) icone dos audios voltou (faltava o mic no sistema de icones). (2) Corrigido o "numero oficial nao registrado": ao disparar item/funil/template, agora sai pelo numero DA CONVERSA (o que o lead esta falando), nao pelo numero do usuario logado. (3) Aba Leads reformulada estilo CRM: avatar + nome no topo, Perfil (nome/telefone/e-mail/CPF/origem) com placeholder nos vazios, Endereco, Pedido, Tags, Notas e Historico, mais o botao "Abrir ficha completa".';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4066,6 +4066,7 @@ const ICONS = {
   'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
   'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   'file':           '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  'mic':            '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -4252,7 +4253,7 @@ const api={
   waCloudSendMedia:(payload)=>api._fetch('/api/wa/cloud/send-media',{method:'POST',body:JSON.stringify(payload)}),
   waTemplateList:()=>api._fetch('/api/wa/template'),
   waTemplateCreate:(payload)=>api._fetch('/api/wa/template',{method:'POST',body:JSON.stringify(payload)}),
-  waFunnelStart:(phone,seq_id)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'start',phone,seq_id})}),
+  waFunnelStart:(phone,seq_id,at_id)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'start',phone,seq_id,at_id})}),
   waFunnelStop:(phone)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'stop',phone})}),
   waFunnelStatus:(phone)=>api._fetch('/api/wa/funnel?phone='+encodeURIComponent(phone)),
 };
@@ -8217,7 +8218,7 @@ function _atdLibSend(id){
   let it=null; try{ it=(SC().media||[]).find(m=>m.id===id); }catch(_){}
   if(!it||!it.key){ toast('Item não encontrado','err'); return; }
   if(_atd.sending||!_atd.phone) return; _atd.sending=true; const btn=document.getElementById('atd-send'); if(btn)btn.disabled=true;
-  api.waCloudSendMedia({number:_atd.phone,kind:it.kind,link:scMediaUrl(it.key),mediaKey:it.key,caption:it.caption||'',filename:it.label||''})
+  api.waCloudSendMedia({number:_atd.phone,kind:it.kind,link:scMediaUrl(it.key),mediaKey:it.key,caption:it.caption||'',filename:it.label||'',at_id:_atdCurAt()})
     .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
     .catch(e=>toast('Falha: '+(e.message||''),'err'))
     .finally(()=>{ _atd.sending=false; if(btn)btn.disabled=false; });
@@ -8239,7 +8240,7 @@ function _atdFunilStart(seqId){
   _atdPopClose();
   if(!_atd.phone) return;
   toast('Disparando funil...');
-  api.waFunnelStart(_atd.phone, seqId).then(r=>{
+  api.waFunnelStart(_atd.phone, seqId, _atdCurAt()).then(r=>{
     if(r&&r.ok===false){ toast('Funil: '+(r.error||'falhou'),'err'); return; }
     _atdFunilBar('Funil rodando '+(r.sent||1)+'/'+(r.total||'?')+' (para sozinho se o lead responder)');
     _atdLoadThread();
@@ -8493,34 +8494,50 @@ function _atdSideTogglePrevTpl(itemEl){
 function _atdTabLeads(c){
   const chat=_atd.curChat;
   if(!_atd.phone||!chat){ c.innerHTML='<div class="ats-cbody"><div class="ats-empty">Abra uma conversa pra ver os dados do lead.</div></div>'; return; }
-  const lead=_atdLeadByPhone(chat.phone);
-  const name=(lead&&lead.nome)||chat.name||('+'+chat.phone);
-  const row=(k,v)=>v?'<div class="ats-lead-row"><span class="k">'+k+'</span><span class="v">'+_atdEsc(v)+'</span></div>':'';
-  let h='<div class="ats-ctop"><div class="ats-tabhdr"><span style="color:#3b82f6;display:inline-flex">'+ico('user',{size:16})+'</span>Dados do lead</div></div><div class="ats-cbody">';
-  h+='<div class="ats-lead-sec">Perfil</div>'+row('Nome',name)+row('Telefone','+'+chat.phone);
-  if(lead){
-    h+=row('CPF',lead.cpf)+row('E-mail',lead.email)+row('Origem',lead.orig);
-    h+='<div class="ats-lead-sec">Endereço</div>'+row('CEP',lead.cep)+row('Rua',lead.end)+row('Número',lead.num)+row('Bairro',lead.bairro)+row('Cidade',(lead.cidade||'')+(lead.uf?(' / '+lead.uf):''));
-    h+='<div class="ats-lead-sec">Pedido</div>'+row('Produto',lead.prod)+row('Tratamento',lead.trat)+row('Valor',lead.vl?('R$ '+lead.vl):'')+row('Pagamento',lead.pgto);
-    if((lead.tags||[]).length){ h+='<div class="ats-lead-sec">Tags</div><div style="padding:6px 2px">'+(lead.tags||[]).map(t=>'<span style="display:inline-block;background:var(--s3);color:var(--t2);font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;margin:0 5px 5px 0">'+_atdEsc(t)+'</span>').join('')+'</div>'; }
-    if(lead.obs){ h+='<div class="ats-lead-sec">Notas</div><div style="font-size:12px;color:var(--t2);line-height:1.5;padding:4px 2px;white-space:pre-wrap">'+_atdEsc(lead.obs)+'</div>'; }
-    h+='<button class="ats-lead-open" onclick="openLeadDetail(\''+_atdEsc(lead.id)+'\')">Abrir ficha completa</button>';
-  } else {
-    h+='<div class="ats-empty" style="padding-top:18px">Esse contato ainda não é um lead cadastrado no CRM.<br>Os dados aparecem quando ele virar lead.</div>';
+  const leadReal=_atdLeadByPhone(chat.phone), lead=leadReal||{};
+  const name=lead.nome||chat.name||('+'+chat.phone);
+  const av=_atdAvatar(name);
+  const row=(k,v,ph)=>'<div class="ats-lead-row"><span class="k">'+k+'</span><span class="v"'+(v?'':' style="color:var(--t4);font-weight:400"')+'>'+_atdEsc(v||ph||'—')+'</span></div>';
+  let h='<div class="ats-cbody">';
+  h+='<div style="display:flex;align-items:center;gap:11px;padding:2px 2px 12px;border-bottom:1px solid var(--b1);margin-bottom:4px">'
+    +'<span style="width:44px;height:44px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;background:'+av.bg+'">'+_atdEsc(av.ini)+'</span>'
+    +'<div style="min-width:0"><div style="font-size:14px;font-weight:700;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(name)+'</div>'
+    +'<div style="font-size:11.5px;color:var(--t3)">+'+_atdEsc(chat.phone)+'</div></div></div>';
+  h+='<div class="ats-lead-sec">Perfil</div>'+row('Nome',lead.nome,'—')+row('Telefone','+'+chat.phone)+row('E-mail',lead.email,'Sem e-mail')+row('Documento (CPF)',lead.cpf,'Sem CPF')+row('Origem',lead.orig,'—');
+  if(!leadReal){ h+='<div class="ats-empty" style="text-align:left;padding:16px 2px 4px">Esse contato ainda não é lead no CRM. Os dados completos aparecem quando ele virar lead.</div>'; c.innerHTML=h+'</div>'; return; }
+  h+='<div class="ats-lead-sec">Endereço</div>'+row('CEP',lead.cep,'—')+row('Rua',lead.end,'—')+row('Número',lead.num,'—')+row('Bairro',lead.bairro,'—')+row('Cidade',(lead.cidade||'')+(lead.uf?(' / '+lead.uf):''),'—');
+  h+='<div class="ats-lead-sec">Pedido</div>'+row('Produto',lead.prod,'—')+row('Tratamento',lead.trat,'—')+row('Valor',lead.vl?('R$ '+lead.vl):'','—')+row('Pagamento',lead.pgto,'—');
+  if((lead.tags||[]).length){ h+='<div class="ats-lead-sec">Tags</div><div style="padding:6px 2px">'+(lead.tags||[]).map(t=>'<span style="display:inline-block;background:var(--s3);color:var(--t2);font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;margin:0 5px 5px 0">'+_atdEsc(t)+'</span>').join('')+'</div>'; }
+  h+='<div class="ats-lead-sec">Notas</div><div style="font-size:12px;color:'+(lead.obs?'var(--t2)':'var(--t4)')+';line-height:1.5;padding:4px 2px;white-space:pre-wrap">'+_atdEsc(lead.obs||'Sem notas.')+'</div>';
+  if((lead.hist||[]).length){
+    h+='<div class="ats-lead-sec">Histórico</div>'+(lead.hist||[]).slice(-8).reverse().map(x=>{
+      if(typeof x==='string') return '<div style="font-size:11.5px;color:var(--t2);padding:6px 2px;border-bottom:1px solid var(--b1)">'+_atdEsc(x)+'</div>';
+      const t=(x&&(x.t||x.txt||x.text||x.label||x.acao))||'';const w=(x&&(x.by||x.who||x.user))||'';const d=(x&&(x.at||x.date||x.quando))||'';
+      return '<div style="font-size:11.5px;color:var(--t2);padding:6px 2px;border-bottom:1px solid var(--b1)">'+_atdEsc(String(t))+(w?(' <span style="color:var(--t4)">· '+_atdEsc(String(w))+'</span>'):'')+(d?(' <span style="color:var(--t4)">'+_atdEsc(String(d))+'</span>'):'')+'</div>';
+    }).join('');
   }
+  h+='<button class="ats-lead-open" onclick="openLeadDetail(\''+_atdEsc(lead.id)+'\')">Abrir ficha completa</button>';
   c.innerHTML=h+'</div>';
+}
+// at_id DA CONVERSA (o número que o lead está falando) — é por ele que a resposta tem que sair,
+// não pelo número do usuário logado. Sem isso, o diretor disparava pelo próprio número (não
+// registrado) e dava "número oficial não registrado".
+function _atdCurAt(){
+  const inst=(_atd.curChat&&_atd.curChat.instance)||_atd.fInst||'';
+  const at=String(inst).replace(/^ax_/,'').replace(/^ev_/,'').replace(/_b$/,'');
+  return at||undefined;
 }
 function _atdSideSendMsg(id){
   let m=null; try{ m=(SC().messages||[]).find(x=>x.id===id); }catch(_){}
   const txt=m&&(m.text||m.body); if(!txt){ toast('Mensagem sem texto'); return; }
   if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
   if(_atd.sending) return; _atd.sending=true;
-  api.waCloudSend(_atd.phone, txt).then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); }).catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
+  api.waCloudSend(_atd.phone, txt, _atdCurAt()).then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); }).catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
 }
 function _atdSideSendTpl(name,lang){
   if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
   if(_atd.sending) return; _atd.sending=true;
-  api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number:_atd.phone,template:{name:name,language:lang}})})
+  api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number:_atd.phone,template:{name:name,language:lang},at_id:_atdCurAt()})})
     .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
     .catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
 }
