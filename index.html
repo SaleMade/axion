@@ -4066,6 +4066,7 @@ const ICONS = {
   'chevron-down':   '<polyline points="6 9 12 15 18 9"/>',
   'download':       '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   'play':           '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'pause':          '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
   'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
   'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   'file':           '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
@@ -7963,6 +7964,14 @@ function pageAtendimento(){
       #atendimento-pg .atd-b.in{align-self:flex-start;background:var(--s2);color:var(--tx);border-bottom-left-radius:4px}
       #atendimento-pg .atd-b.out{align-self:flex-end;background:var(--bl);color:#fff;border-bottom-right-radius:4px}
       #atendimento-pg .atd-bt{font-size:9.5px;opacity:.6;margin-top:3px;text-align:right}
+      #atendimento-pg .atd-aud{display:flex;align-items:center;gap:9px;min-width:210px;padding:2px 0}
+      #atendimento-pg .atd-aud-btn{width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;background:rgba(255,255,255,.92);color:#0b7a5b}
+      #atendimento-pg .atd-b.in .atd-aud-btn{background:var(--bl);color:#fff}
+      #atendimento-pg .atd-aud-bar{flex:1;height:4px;border-radius:20px;background:rgba(255,255,255,.4);cursor:pointer;position:relative}
+      #atendimento-pg .atd-b.in .atd-aud-bar{background:var(--b2)}
+      #atendimento-pg .atd-aud-fill{height:100%;width:0;border-radius:20px;background:#fff}
+      #atendimento-pg .atd-b.in .atd-aud-fill{background:var(--bl)}
+      #atendimento-pg .atd-aud-t{font-size:10.5px;opacity:.85;flex:none;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
       #atendimento-pg .atd-day{align-self:center;font-size:10.5px;color:var(--t4);background:var(--s2);padding:3px 10px;border-radius:10px;margin:6px 0}
       #atendimento-pg .atd-compose{padding:11px 13px;border-top:1px solid var(--b2);display:flex;gap:9px;align-items:flex-end;background:var(--s1)}
       #atendimento-pg .atd-compose textarea{flex:1;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-size:13px;padding:9px 11px;font-family:inherit;outline:none;resize:none;max-height:120px;min-height:40px;line-height:1.4}
@@ -8101,7 +8110,7 @@ function _atdMsgsHTML(){
     const cap=hasBody?_atdEsc(m.body):'';
     let inner;
     if(mu && t==='image') inner=`<img src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px;display:block" loading="lazy">${cap?`<div style="margin-top:4px">${cap}</div>`:''}`;
-    else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
+    else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<div class="atd-aud" data-src="${_atdEsc(mu)}"><button class="atd-aud-btn" onclick="_atdAudPlay(this)">${ico('play',{size:15})}</button><div class="atd-aud-bar" onclick="_atdAudSeek(event,this)"><div class="atd-aud-fill"></div></div><span class="atd-aud-t">0:00</span></div>`;
     else if(mu && t==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
     else if(mu && t==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
     else if(hasBody){
@@ -8122,6 +8131,59 @@ function _atdSyncMsgs(){
   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<60;
   el.innerHTML=_atdMsgsHTML();
   if(nearBottom)el.scrollTop=el.scrollHeight;
+  try{_atdAudDurations();_atdAudRebind();}catch(_){}
+}
+// ── Player de áudio estilo WhatsApp (botão + barra + tempo). Um <audio> global toca por vez, então
+//    sobrevive ao redesenho da lista: ao redesenhar, re-liga a barra do áudio que estava tocando.
+function _atdAudEl(){
+  let a=document.getElementById('atd-audio-el');
+  if(!a){ a=document.createElement('audio'); a.id='atd-audio-el'; a.preload='metadata';
+    a.addEventListener('timeupdate',_atdAudTick); a.addEventListener('ended',_atdAudEnded); a.addEventListener('pause',_atdAudTick);
+    document.body.appendChild(a); }
+  return a;
+}
+function _atdAudFmt(s){ s=Math.max(0,Math.floor(s||0)); return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2); }
+function _atdAudPlay(btn){
+  const box=btn.closest('.atd-aud'); if(!box) return;
+  const src=box.getAttribute('data-src'); const a=_atdAudEl();
+  if(_atd._audSrc===src && !a.paused){ a.pause(); btn.innerHTML=ico('play',{size:15}); return; }   // mesmo áudio tocando → pausa
+  if(_atd._audBtn){ try{_atd._audBtn.innerHTML=ico('play',{size:15});}catch(_){} }                  // troca de áudio → zera o anterior
+  _atd._audBox=box; _atd._audBtn=btn; _atd._audSrc=src;
+  if(a.getAttribute('src')!==src){ a.src=src; }
+  a.play().then(()=>{ btn.innerHTML=ico('pause',{size:15}); }).catch(()=>{});
+}
+function _atdAudTick(){
+  const a=_atdAudEl(); const box=_atd._audBox; if(!box||!document.body.contains(box)) return;
+  const fill=box.querySelector('.atd-aud-fill'), t=box.querySelector('.atd-aud-t');
+  const dur=isFinite(a.duration)?a.duration:0, cur=a.currentTime||0;
+  if(fill) fill.style.width=(dur?Math.min(100,cur/dur*100):0)+'%';
+  if(t) t.textContent=_atdAudFmt(cur||dur);
+}
+function _atdAudEnded(){
+  if(_atd._audBtn){ try{_atd._audBtn.innerHTML=ico('play',{size:15});}catch(_){} }
+  const box=_atd._audBox; if(box){ const f=box.querySelector('.atd-aud-fill'); if(f)f.style.width='0'; const t=box.querySelector('.atd-aud-t'); if(t){ const a=_atdAudEl(); t.textContent=_atdAudFmt(isFinite(a.duration)?a.duration:0); } }
+}
+function _atdAudSeek(e,bar){
+  const a=_atdAudEl(); const box=bar.closest('.atd-aud');
+  if(box.getAttribute('data-src')!==_atd._audSrc || !isFinite(a.duration) || !a.duration) return;
+  const r=bar.getBoundingClientRect(); a.currentTime=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*a.duration; _atdAudTick();
+}
+// mostra a duração de cada áudio sem tocar (carrega só os metadados; o navegador cacheia)
+function _atdAudDurations(){
+  const el=document.getElementById('atd-msgs'); if(!el) return;
+  Array.prototype.forEach.call(el.querySelectorAll('.atd-aud'),function(box){
+    const t=box.querySelector('.atd-aud-t'); const src=box.getAttribute('data-src');
+    if(!t||box._durLoaded) return; box._durLoaded=1;
+    try{ const probe=new Audio(); probe.preload='metadata'; probe.src=src;
+      probe.addEventListener('loadedmetadata',function(){ if(box.getAttribute('data-src')!==_atd._audSrc && isFinite(probe.duration)) t.textContent=_atdAudFmt(probe.duration); }); }catch(_){}
+  });
+}
+// ao redesenhar a lista, re-liga a barra do áudio que continua tocando no <audio> global
+function _atdAudRebind(){
+  const a=document.getElementById('atd-audio-el'); if(!a||a.paused||!_atd._audSrc) return;
+  const el=document.getElementById('atd-msgs'); if(!el) return;
+  const box=el.querySelector('.atd-aud[data-src="'+(window.CSS&&CSS.escape?CSS.escape(_atd._audSrc):_atd._audSrc)+'"]');
+  if(box){ _atd._audBox=box; const btn=box.querySelector('.atd-aud-btn'); _atd._audBtn=btn; if(btn)btn.innerHTML=ico('pause',{size:15}); _atdAudTick(); }
 }
 function _atdRenderThread(){
   const box=document.getElementById('atd-thread');if(!box)return;
@@ -8158,6 +8220,7 @@ function _atdRenderThread(){
   const el=document.getElementById('atd-msgs');if(el)el.scrollTop=el.scrollHeight;
   const inp=document.getElementById('atd-input');if(inp)inp.focus();
   try{_atdFunilRefresh();}catch(_){}
+  try{_atdAudDurations();_atdAudRebind();}catch(_){}
 }
 async function _atdSend(){
   const inp=document.getElementById('atd-input');if(!inp)return;
