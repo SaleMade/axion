@@ -1609,10 +1609,20 @@ async function handleWAStatus(req, env) {
 async function handleWASend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
+  // Roteamento: se o vendedor tem número OFICIAL (Cloud API) verificado, envia por ele. Transparente.
+  const _atId = (isDirector(u) && body.at_id != null) ? String(body.at_id) : String(u.id);
+  try {
+    const apiNum = await resolveApiNumber(env, { atId: _atId });
+    if (apiNum && apiNum.verified) {
+      const r = await _waCloudSendText(env, _atId, body.number, body.text);
+      if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
+      return json({ ok: true, id: r.id, via: 'cloud', to: waNumber(body.number) });
+    }
+  } catch (_) {}
+  const cfg = await getWAConfig(env);
+  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const instance = String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
   const number = waNumber(body.number);
@@ -1630,6 +1640,121 @@ async function handleWASend(req, env) {
   } catch (e) {
     return err('Falha ao enviar: ' + e.message, 502);
   }
+}
+
+// Envia TEXTO pela Cloud API oficial. `atId` define o número de origem (phone_number_id do vendedor).
+// Loga outbound e roda detecção de venda (resgata o CompletePayment, já que o vendedor envia por aqui).
+async function _waCloudSendText(env, atId, number, text) {
+  const num = String(number || '').replace(/\D/g, '');
+  const txt = String(text || '');
+  if (!num || !txt) return { ok: false, error: 'number/text obrigatórios' };
+  const apiNum = await resolveApiNumber(env, { atId });
+  if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
+  if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
+  // guarda janela 24h: free-form só dentro de 24h do último inbound do lead
+  try {
+    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' ORDER BY ts DESC LIMIT 1").bind(num).first();
+    const lastIn = (li && Number(li.ts)) || 0;
+    if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) return { ok: false, error: 'janela de 24h fechada; use um template', code: 'window_closed' };
+  } catch (_) {}
+  const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'text', text: { body: txt, preview_url: false } })
+  });
+  if (!g.ok) {
+    const e = (g.data && g.data.error) || {};
+    return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status };
+  }
+  const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
+  const inst = 'ax_' + atId;
+  try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'text', body: txt, msgId: wamid }); } catch (_) {}
+  try { await _waDetectSale(env, inst, { message: { conversation: txt }, key: { remoteJid: num + '@c.us', remoteJidAlt: num + '@c.us', id: wamid || null, fromMe: true } }); } catch (_) {}
+  return { ok: true, id: wamid || null };
+}
+// POST /api/wa/cloud/send { number, text, at_id? } — entrypoint explícito de envio pela Cloud API.
+// Envia um TEMPLATE aprovado (pra reabrir conversa fora da janela de 24h). Sem variáveis por enquanto.
+async function _waCloudSendTemplate(env, atId, number, name, lang) {
+  const num = String(number || '').replace(/\D/g, '');
+  if (!num || !name) return { ok: false, error: 'number/name obrigatórios' };
+  const apiNum = await resolveApiNumber(env, { atId });
+  if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
+  if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
+  const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
+    method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'template', template: { name: String(name), language: { code: String(lang || 'pt_BR') } } })
+  });
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
+  const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
+  try { await _waLogMsg(env, { phone: num, instance: 'ax_' + atId, direction: 'out', type: 'template', body: '[template] ' + name, msgId: wamid }); } catch (_) {}
+  return { ok: true, id: wamid || null };
+}
+async function handleWACloudSend(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
+  if (b.template && b.template.name) {
+    const rt = await _waCloudSendTemplate(env, atId, b.number, b.template.name, b.template.language);
+    if (!rt.ok) return json({ ok: false, error: rt.error, code: rt.code || null }, 400);
+    return json({ ok: true, id: rt.id, via: 'cloud-template' });
+  }
+  const r = await _waCloudSendText(env, atId, b.number, b.text);
+  if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
+  return json({ ok: true, id: r.id, via: 'cloud' });
+}
+// Baixa a mídia recebida pela Cloud API (a Meta entrega um id, não os bytes) e grava no R2,
+// depois preenche wa_messages.media_url. Roda em ctx.waitUntil (nunca bloqueia o ACK do webhook).
+async function _waCloudDownloadMedia(env, mediaId, msgId) {
+  try {
+    if (!env.MEDIA || !mediaId) return;
+    const meta = await _graph(env, `/${encodeURIComponent(mediaId)}`);
+    const murl = meta.ok && meta.data && meta.data.url;
+    if (!murl) return;
+    const mime = (meta.data && meta.data.mime_type) || 'application/octet-stream';
+    const token = await _readConfig(env, 'wa_api_token');
+    const r = await fetch(murl, { headers: token ? { authorization: 'Bearer ' + token } : {} });
+    if (!r.ok) return;
+    const buf = await r.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return;
+    const ext = mime.indexOf('ogg') >= 0 ? 'ogg' : (mime.indexOf('mpeg') >= 0 || mime.indexOf('mp3') >= 0) ? 'mp3' : mime.indexOf('mp4') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('webp') >= 0 ? 'webp' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+    const key = 'm/wa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    await env.MEDIA.put(key, buf, { httpMetadata: { contentType: mime } });
+    if (msgId) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(key, msgId).run(); } catch (_) {} }
+  } catch (_) {}
+}
+// Envia MÍDIA (imagem/áudio/vídeo/documento) pela Cloud API, por um `link` público (R2).
+// opts: { kind, link, caption?, filename?, mediaKey? }.
+async function _waCloudSendMedia(env, atId, number, opts) {
+  const num = String(number || '').replace(/\D/g, '');
+  const kind = String((opts && opts.kind) || 'image');
+  if (!num || !opts || !opts.link) return { ok: false, error: 'number/link obrigatórios' };
+  const apiNum = await resolveApiNumber(env, { atId });
+  if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
+  if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
+  try {
+    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' ORDER BY ts DESC LIMIT 1").bind(num).first();
+    const lastIn = (li && Number(li.ts)) || 0;
+    if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) return { ok: false, error: 'janela de 24h fechada; use um template', code: 'window_closed' };
+  } catch (_) {}
+  const media = { link: opts.link };
+  if (kind === 'document' && opts.filename) media.filename = opts.filename;
+  if ((kind === 'image' || kind === 'video' || kind === 'document') && opts.caption) media.caption = opts.caption;
+  const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
+    method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: kind, [kind]: media })
+  });
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
+  const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
+  const inst = 'ax_' + atId;
+  try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: kind, body: opts.caption || '', msgId: wamid, media_url: opts.mediaKey || opts.link }); } catch (_) {}
+  return { ok: true, id: wamid || null };
+}
+// POST /api/wa/cloud/send-media { number, kind, link, caption?, filename?, mediaKey?, at_id? }
+async function handleWACloudSendMedia(req, env) {
+  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
+  const r = await _waCloudSendMedia(env, atId, b.number, { kind: b.kind, link: b.link, caption: b.caption, filename: b.filename, mediaKey: b.mediaKey });
+  if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
+  return json({ ok: true, id: r.id, via: 'cloud' });
 }
 
 // ── Gestão multi-instância (1 número/instância por atendente) ──
@@ -1927,8 +2052,11 @@ async function _waEnsureTables(env) {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_replied (phone TEXT PRIMARY KEY, updated_at INTEGER)').run();
     // Conversas (inbox/CRM): cada mensagem in/out + resumo por contato pro inbox
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_messages (msg_id TEXT PRIMARY KEY, phone TEXT NOT NULL, instance TEXT, direction TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN media_url TEXT').run(); } catch (_) {}   // chave R2 da mídia (imagem/áudio/vídeo/doc) pro render inline no inbox
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON wa_messages(phone, ts)').run();
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_inst_ts ON wa_messages(instance, ts)').run(); } catch (_) {}   // carga recente por instância (balanceador)
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_inst_last ON wa_chats(instance, last_ts)').run(); } catch (_) {}   // inbox do atendente ordenado por recente
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_last ON wa_chats(last_ts)').run(); } catch (_) {}   // inbox do diretor (todos os números)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_chats (phone TEXT PRIMARY KEY, instance TEXT, name TEXT, last_text TEXT, last_ts INTEGER, last_dir TEXT, unread INTEGER DEFAULT 0, assigned_to TEXT, updated_at INTEGER)').run();
     _waTablesOk = true;
   } catch (_) {}
@@ -1959,8 +2087,10 @@ async function _waLogMsg(env, m) {
     const type = m.type || 'text';
     const body = String(m.body == null ? '' : m.body).slice(0, 4000);
     await env.DB.prepare(
-      'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts) VALUES (?,?,?,?,?,?,?,?)'
-    ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts).run();
+      'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null).run();
+    // Preenche a mídia depois (download assíncrono da Cloud API grava o media_url pós-INSERT).
+    if (m.media_url) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(m.media_url, id).run(); } catch (_) {} }
     const incUnread = dir === 'in' ? 1 : 0;
     const preview = type === 'text' ? body : ('[' + type + ']');
     await env.DB.prepare(
@@ -2267,6 +2397,14 @@ async function _scEnsureTables(env) {
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ts ON tt_pending(ts)').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_numkey ON tt_pending(num_key, claimed, ts)').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ttclid ON tt_pending(ttclid)').run(); } catch (_) {}
+    // Número da API OFICIAL (Cloud API). Identidade de TRANSPORTE (phone_number_id, waba_id) — separada
+    // da atribuição (wa_number_owner), que é re-semeada/soft-deleted todo cron. Join por num_key.
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_api_numbers (phone_number_id TEXT PRIMARY KEY, display_phone TEXT, num_key TEXT, waba_id TEXT, at_id TEXT, quality TEXT, name_status TEXT, verified INTEGER DEFAULT 0, updated_at INTEGER, created_at INTEGER)').run();
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_key ON wa_api_numbers(num_key)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_at ON wa_api_numbers(at_id)').run(); } catch (_) {}
+    // Funil automático rodando numa conversa (envia os áudios um a um; para quando o lead responde).
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_funnel_run (phone TEXT PRIMARY KEY, at_id TEXT, seq_id TEXT, items TEXT, idx INTEGER, next_at INTEGER, status TEXT, updated_at INTEGER)').run();
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_funnel_due ON wa_funnel_run(status, next_at)').run(); } catch (_) {}
     _scTablesOk = true;
   } catch (_) {}
 }
@@ -2306,6 +2444,11 @@ async function _scSeedOwners(env) {
         `INSERT INTO wa_number_owner (number, at_id, instance, source, num_key, created_at, updated_at) VALUES (?, ?, ?, 'chips', ?, strftime('%s','now'), strftime('%s','now'))
          ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, num_key=excluded.num_key, updated_at=excluded.updated_at`
       ).bind(num, at, inst, _waNumKey(num)).run();
+      // Chip marcado como API oficial → liga o vendedor (at_id) ao número oficial (Cloud API) por num_key.
+      // O phone_number_id nasce no registro (Fase R); aqui só conecta o dono quando a linha já existe.
+      if (c && c.api === true) {
+        try { await env.DB.prepare("UPDATE wa_api_numbers SET at_id=?, updated_at=strftime('%s','now') WHERE num_key=?").bind(at, _waNumKey(num)).run(); } catch (_) {}
+      }
       n++;
     }
     // Remove dono ÓRFÃO: chip que perdeu o atendente ou saiu da base. Sem isso a linha velha fica
@@ -2367,6 +2510,59 @@ async function resolveOwner(env, selfNumber) {
   } catch (_) {}
   return null;
 }
+
+// ─── API OFICIAL (Cloud API) ───────────────────────────────────────────────
+// Chamada à Graph API v21.0 com o token de sistema permanente (wa_api_token). Espelha evoFetch.
+async function _graph(env, path, opts = {}) {
+  const token = await _readConfig(env, 'wa_api_token');
+  const base = 'https://graph.facebook.com/v21.0';
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers.authorization = 'Bearer ' + token;
+  if (opts.body && typeof opts.body === 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
+  try {
+    const r = await fetch(base + (path.startsWith('/') ? path : '/' + path), { ...opts, headers });
+    const data = await r.json().catch(() => ({}));
+    return { ok: r.ok && !data.error, status: r.status, data, token_present: !!token };
+  } catch (e) { return { ok: false, status: 0, data: { error: { message: String(e) } }, token_present: !!token }; }
+}
+// Grava/atualiza o número oficial. at_id/quality/etc só sobrescrevem quando vêm preenchidos (COALESCE).
+async function _waApiUpsert(env, o) {
+  await _scEnsureTables(env);
+  const pnid = String((o && o.phone_number_id) || '').trim();
+  if (!pnid) return;
+  const disp = String((o && o.display_phone) || '').replace(/\D/g, '');
+  await env.DB.prepare(
+    `INSERT INTO wa_api_numbers (phone_number_id, display_phone, num_key, waba_id, at_id, quality, name_status, verified, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,strftime('%s','now'),strftime('%s','now'))
+     ON CONFLICT(phone_number_id) DO UPDATE SET
+       display_phone=COALESCE(excluded.display_phone, wa_api_numbers.display_phone),
+       num_key=COALESCE(excluded.num_key, wa_api_numbers.num_key),
+       waba_id=COALESCE(excluded.waba_id, wa_api_numbers.waba_id),
+       at_id=COALESCE(excluded.at_id, wa_api_numbers.at_id),
+       quality=COALESCE(excluded.quality, wa_api_numbers.quality),
+       name_status=COALESCE(excluded.name_status, wa_api_numbers.name_status),
+       verified=MAX(excluded.verified, wa_api_numbers.verified),
+       updated_at=excluded.updated_at`
+  ).bind(pnid, disp || null, disp ? _waNumKey(disp) : null, (o.waba_id || null), (o.at_id != null && o.at_id !== '' ? String(o.at_id) : null), (o.quality || null), (o.name_status || null), (o.verified ? 1 : 0)).run();
+}
+// Resolve o número OFICIAL de transporte. Por at_id (vendedor) ou por telefone (display/num_key).
+async function resolveApiNumber(env, opts = {}) {
+  const cols = 'phone_number_id, waba_id, at_id, display_phone, verified';
+  try {
+    if (opts.atId != null && String(opts.atId) !== '') {
+      const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ORDER BY verified DESC, updated_at DESC LIMIT 1`).bind(String(opts.atId)).first();
+      if (row) return row;
+    }
+    const num = String(opts.phone || '').replace(/\D/g, '');
+    if (num) {
+      let row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE display_phone = ?`).bind(num).first();
+      if (!row) { const key = _waNumKey(num); if (key) row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE num_key = ? ORDER BY verified DESC, updated_at DESC LIMIT 1`).bind(key).first(); }
+      if (row) return row;
+    }
+  } catch (_) {}
+  return null;
+}
+
 // POST /api/salechat/ingest/<token> — recebe um LOTE de eventos capturados pelo Sale Chat.
 // FASE 0: grava só na auditoria crua e devolve o ack (msg_id aceitos) pro injetor drenar a fila.
 async function handleSalechatIngest(req, env, token) {
@@ -2458,7 +2654,265 @@ async function _waCloudVerifyToken(env) {
   if (!t) { t = 'ax_wh_' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12); await _writeConfig(env, 'wa_api_verify_token', t); }
   return t;
 }
-async function handleWhatsappCloudWebhook(req, env) {
+
+// ═══ Conexão API oficial (Coexistência) — Embedded Signup ═══
+// O front lança o popup oficial da Meta (Facebook Login for Business). Pra isso precisa do
+// app_id + de um config_id (a "configuração de Login" criada no painel do app da Meta).
+// Enquanto o config_id não existir, o botão fica travado (ready=false) e a UI explica o que falta.
+async function handleWaEsConfig(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const app_id = await _readConfig(env, 'wa_api_app_id');
+  const config_id = await _readConfig(env, 'wa_es_config_id');
+  const verify = await _readConfig(env, 'wa_api_verify_token');
+  let last = null; try { last = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); } catch (_) {}
+  return json({
+    ok: true,
+    app_id: app_id || '',
+    config_id: config_id || '',
+    ready: !!(app_id && config_id),
+    verify_token_set: !!verify,
+    webhook_url: 'https://axion-api.axion-dash.workers.dev/api/wa/cloud',
+    last
+  });
+}
+
+// POST /api/wa/es/finish — recebe o que o popup do Embedded Signup devolveu (code + waba_id +
+// phone_number_id) e finaliza a ligação: assina nosso app na WABA (webhook), e dispara o sync
+// inicial da coexistência (contatos + histórico), que a Meta exige rodar dentro de 24h do pareamento.
+// Cada passo é isolado e volta com status próprio pra a gente ver, no dia da conexão, o que passou.
+// Guarda o payload cru primeiro pra nunca perder o code (janela de 24h).
+async function handleWaEsFinish(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const waba_id = String(b?.waba_id || '').trim();
+  const phone_number_id = String(b?.phone_number_id || '').trim();
+  const code = String(b?.code || '').trim();
+  const phone = String(b?.phone || '').replace(/\D/g, '');
+  await _writeConfig(env, 'wa_es_last_onboard', JSON.stringify({ waba_id, phone_number_id, code, phone, at: Math.floor(Date.now() / 1000) }));
+  const token = await _readConfig(env, 'wa_api_token');
+  const V = 'https://graph.facebook.com/v21.0';
+  const steps = {};
+  async function step(name, url, opts) {
+    try {
+      const r = await fetch(url, opts);
+      const j = await r.json().catch(() => ({}));
+      steps[name] = { ok: r.ok && !j.error, status: r.status, resp: j };
+    } catch (e) { steps[name] = { ok: false, error: String(e) }; }
+  }
+  const H = token ? { authorization: 'Bearer ' + token } : {};
+  const HJ = token ? { authorization: 'Bearer ' + token, 'content-type': 'application/json' } : { 'content-type': 'application/json' };
+  if (token && waba_id) {
+    // confere se o app já está assinado (o ES normalmente já assina); assina se não estiver
+    await step('subscribed_apps_get', `${V}/${encodeURIComponent(waba_id)}/subscribed_apps`, { headers: H });
+    await step('subscribed_apps', `${V}/${encodeURIComponent(waba_id)}/subscribed_apps`, { method: 'POST', headers: H });
+  }
+  if (token && phone_number_id) {
+    // sync inicial da coexistência (precisa rodar em até 24h após o pareamento, senão a Meta desfaz)
+    await step('sync_contacts', `${V}/${encodeURIComponent(phone_number_id)}/smb_app_data`, { method: 'POST', headers: HJ, body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: 'smb_app_state_sync' }) });
+    await step('sync_history', `${V}/${encodeURIComponent(phone_number_id)}/smb_app_data`, { method: 'POST', headers: HJ, body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: 'history' }) });
+    // status final do número (o alvo é platform_type=CLOUD_API)
+    await step('status', `${V}/${encodeURIComponent(phone_number_id)}?fields=display_phone_number,platform_type,name_status,code_verification_status,quality_rating`, { headers: H });
+  }
+  // Grava no mapa de número oficial (transporte). Se veio pela coexistência, marca verificado.
+  if (phone_number_id) {
+    const st = steps.status && steps.status.resp || {};
+    try { await _waApiUpsert(env, { phone_number_id, display_phone: (st.display_phone_number || phone).replace(/\D/g, ''), waba_id, quality: st.quality_rating, name_status: st.name_status, verified: 1 }); } catch (_) {}
+  }
+  return json({ ok: true, waba_id, phone_number_id, token_present: !!token, steps });
+}
+
+// GET /api/wa/official/numbers  → lista os números oficiais mapeados (com dono, qualidade, status)
+// POST /api/wa/official/numbers → registra/atualiza um número { phone_number_id, display_phone?, waba_id?, at_id? }
+//   e busca quality_rating/name_status na Graph. Também faz backfill do último onboarding (wa_es_last_onboard).
+async function handleWaOfficialNumbers(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  await _scEnsureTables(env);
+  if (req.method === 'POST') {
+    let b; try { b = await req.json(); } catch (_) { b = {}; }
+    // backfill: se não passar phone_number_id, tenta puxar do último onboarding salvo
+    let pnid = String(b.phone_number_id || '').trim();
+    let waba = String(b.waba_id || '').trim();
+    let disp = String(b.display_phone || '').replace(/\D/g, '');
+    if (!pnid) {
+      try { const last = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); if (last) { pnid = pnid || last.phone_number_id; waba = waba || last.waba_id; disp = disp || String(last.phone || '').replace(/\D/g, ''); } } catch (_) {}
+    }
+    if (!pnid) return err('phone_number_id obrigatório (ou salve um onboarding antes)');
+    // busca metadados na Graph (display real, qualidade, status do nome)
+    let quality = null, name_status = null;
+    try {
+      const g = await _graph(env, `/${encodeURIComponent(pnid)}?fields=display_phone_number,quality_rating,name_status,platform_type`);
+      if (g.ok && g.data) { disp = disp || String(g.data.display_phone_number || '').replace(/\D/g, ''); quality = g.data.quality_rating || null; name_status = g.data.name_status || null; }
+    } catch (_) {}
+    await _waApiUpsert(env, { phone_number_id: pnid, display_phone: disp, waba_id: waba, at_id: b.at_id, quality, name_status, verified: b.verified ? 1 : 0 });
+    // religa o dono a partir dos chips marcados api (por num_key)
+    try { await _scSeedOwners(env); } catch (_) {}
+    const row = await env.DB.prepare('SELECT * FROM wa_api_numbers WHERE phone_number_id=?').bind(pnid).first();
+    return json({ ok: true, number: row || null });
+  }
+  const rows = await env.DB.prepare('SELECT * FROM wa_api_numbers ORDER BY updated_at DESC').all();
+  return json({ ok: true, numbers: rows.results || [] });
+}
+
+// POST /api/wa/register (diretor) — registro OTP de um número na Cloud API (self-serve com o token).
+// body.step: 'list' (lista números da WABA) | 'request_code' | 'verify_code' | 'register'
+async function handleWARegister(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  await _scEnsureTables(env);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const step = String(b.step || '').trim();
+  const pnid = String(b.phone_number_id || '').trim();
+  if (step === 'list') {
+    let waba = String(b.waba_id || '').trim();
+    if (!waba) { try { const l = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); if (l) waba = l.waba_id || ''; } catch (_) {} }
+    if (!waba) return err('waba_id obrigatório');
+    const g = await _graph(env, `/${encodeURIComponent(waba)}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,name_status,platform_type,code_verification_status`);
+    if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) }, 400);
+    for (const n of ((g.data && g.data.data) || [])) {
+      const isReg = (n.platform_type === 'CLOUD_API') || (n.code_verification_status === 'VERIFIED');
+      try { await _waApiUpsert(env, { phone_number_id: n.id, display_phone: n.display_phone_number, waba_id: waba, quality: n.quality_rating, name_status: n.name_status, verified: isReg ? 1 : 0 }); } catch (_) {}
+    }
+    try { await _scSeedOwners(env); } catch (_) {}
+    return json({ ok: true, numbers: (g.data && g.data.data) || [] });
+  }
+  if (!pnid) return err('phone_number_id obrigatório');
+  if (step === 'request_code') {
+    const g = await _graph(env, `/${encodeURIComponent(pnid)}/request_code`, { method: 'POST', body: JSON.stringify({ code_method: String(b.method || 'SMS'), language: String(b.language || 'pt_BR') }) });
+    return json({ ok: g.ok, resp: g.data, status: g.status });
+  }
+  if (step === 'verify_code') {
+    const g = await _graph(env, `/${encodeURIComponent(pnid)}/verify_code`, { method: 'POST', body: JSON.stringify({ code: String(b.code || '') }) });
+    return json({ ok: g.ok, resp: g.data, status: g.status });
+  }
+  if (step === 'register') {
+    const pin = String(b.pin || '').trim();
+    if (!/^\d{6}$/.test(pin)) return err('pin de 6 dígitos obrigatório');
+    const g = await _graph(env, `/${encodeURIComponent(pnid)}/register`, { method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', pin }) });
+    if (g.ok) { try { await _waApiUpsert(env, { phone_number_id: pnid, verified: 1 }); await _scSeedOwners(env); } catch (_) {} }
+    return json({ ok: g.ok, resp: g.data, status: g.status });
+  }
+  return err('step inválido');
+}
+
+// Descobre o waba_id: do body/query, senão do último onboarding, senão do 1º número oficial.
+async function _waWabaId(env, hint) {
+  let w = String(hint || '').trim();
+  if (w) return w;
+  try { const l = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); if (l && l.waba_id) return l.waba_id; } catch (_) {}
+  try { const r = await env.DB.prepare('SELECT waba_id FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>"" ORDER BY updated_at DESC LIMIT 1').first(); if (r && r.waba_id) return r.waba_id; } catch (_) {}
+  return '';
+}
+// GET /api/wa/template  → lista templates (name, status, category, language, components)
+// POST /api/wa/template → cria e SUBMETE um template { name, language?, category?, header?, body, footer?, buttons? }
+async function handleWATemplate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  if (req.method === 'GET') {
+    const url = new URL(req.url);
+    const waba = await _waWabaId(env, url.searchParams.get('waba_id'));
+    if (!waba) return json({ ok: true, templates: [], note: 'sem_waba' });
+    const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates?fields=name,status,category,language,components,quality_score&limit=200`);
+    if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) }, 400);
+    return json({ ok: true, waba_id: waba, templates: (g.data && g.data.data) || [] });
+  }
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const waba = await _waWabaId(env, b.waba_id);
+  if (!waba) return err('waba_id obrigatório');
+  const name = String(b.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 60);
+  if (!name) return err('nome obrigatório (só letras/números/underscore)');
+  if (!b.body) return err('corpo (body) obrigatório');
+  const language = String(b.language || 'pt_BR');
+  const category = String(b.category || 'MARKETING').toUpperCase();
+  const components = [];
+  if (b.header) components.push({ type: 'HEADER', format: 'TEXT', text: String(b.header).slice(0, 60) });
+  components.push({ type: 'BODY', text: String(b.body).slice(0, 1024) });
+  if (b.footer) components.push({ type: 'FOOTER', text: String(b.footer).slice(0, 60) });
+  if (Array.isArray(b.buttons) && b.buttons.length) components.push({ type: 'BUTTONS', buttons: b.buttons.slice(0, 3).map(t => ({ type: 'QUICK_REPLY', text: String(t).slice(0, 25) })) });
+  const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates`, { method: 'POST', body: JSON.stringify({ name, language, category, components }) });
+  if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status), resp: g.data }, 400);
+  return json({ ok: true, id: g.data && g.data.id, status: g.data && g.data.status, name });
+}
+
+// ─── Funil automático dentro do inbox (envia os itens um a um; para quando o lead responde) ───
+const WA_FUNNEL_GAP = 90;   // segundos entre itens (avançado pelo cron de 2min)
+function _r2PublicUrl(key) { return 'https://axion-api.axion-dash.workers.dev/api/salechat/media/' + String(key || '').split('/').map(encodeURIComponent).join('/'); }
+async function _waFunnelSeq(env, seqId) {
+  const data = await _getDashData(env);
+  const sc = (data && (data.salechatPub || data.salechat)) || {};
+  const seqs = Array.isArray(sc.sequences) ? sc.sequences : [];
+  const seq = seqs.find(s => s && s.id === seqId);
+  if (!seq) return null;
+  const items = (Array.isArray(seq.items) ? seq.items : []).map(it => (typeof it === 'string' ? it : (it && it.id))).filter(Boolean);
+  return { seq, items, media: Array.isArray(sc.media) ? sc.media : [], msgs: Array.isArray(sc.messages) ? sc.messages : [] };
+}
+async function _waFunnelSendItem(env, atId, phone, itemId, info) {
+  const md = (info.media || []).find(m => m && m.id === itemId);
+  if (md && md.key) {
+    const kind = ['image', 'audio', 'video', 'document'].includes(md.kind) ? md.kind : 'document';
+    return await _waCloudSendMedia(env, atId, phone, { kind, link: _r2PublicUrl(md.key), caption: md.caption || '', filename: md.label || '', mediaKey: md.key });
+  }
+  const tx = (info.msgs || []).find(m => m && m.id === itemId);
+  if (tx && (tx.text || tx.body)) return await _waCloudSendText(env, atId, phone, tx.text || tx.body);
+  return { ok: false, error: 'item não encontrado', code: 'no_item' };
+}
+async function _waFunnelStop(env, phone, why) {
+  try { await env.DB.prepare("UPDATE wa_funnel_run SET status=?, updated_at=strftime('%s','now') WHERE phone=? AND status='running'").bind(why || 'stopped', String(phone || '').replace(/\D/g, '')).run(); } catch (_) {}
+}
+async function _waFunnelTick(env) {
+  try {
+    await _scEnsureTables(env);
+    const now = Math.floor(Date.now() / 1000);
+    const due = await env.DB.prepare("SELECT phone, at_id, seq_id, items, idx FROM wa_funnel_run WHERE status='running' AND next_at <= ? LIMIT 20").bind(now).all();
+    const seqCache = {};
+    for (const r of (due.results || [])) {
+      const items = (() => { try { return JSON.parse(r.items || '[]'); } catch (_) { return []; } })();
+      const idx = Number(r.idx) || 0;
+      if (idx >= items.length) { await env.DB.prepare("UPDATE wa_funnel_run SET status='done', updated_at=? WHERE phone=?").bind(now, r.phone).run(); continue; }
+      if (!(r.seq_id in seqCache)) seqCache[r.seq_id] = await _waFunnelSeq(env, r.seq_id);
+      const info = seqCache[r.seq_id];
+      if (!info) { await env.DB.prepare("UPDATE wa_funnel_run SET status='error', updated_at=? WHERE phone=?").bind(now, r.phone).run(); continue; }
+      const send = await _waFunnelSendItem(env, r.at_id, r.phone, items[idx], info);
+      const nidx = idx + 1;
+      const st = (send && send.ok === false && (send.code === 'window_closed' || send.code === 'no_official' || send.code === 'not_registered')) ? 'error' : (nidx >= items.length ? 'done' : 'running');
+      await env.DB.prepare("UPDATE wa_funnel_run SET idx=?, next_at=?, status=?, updated_at=? WHERE phone=?").bind(nidx, now + WA_FUNNEL_GAP, st, now, r.phone).run();
+    }
+  } catch (_) {}
+}
+async function handleWAFunnel(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _scEnsureTables(env);
+  if (req.method === 'GET') {
+    const phone = String((new URL(req.url)).searchParams.get('phone') || '').replace(/\D/g, '');
+    const r = await env.DB.prepare('SELECT phone, seq_id, idx, items, status FROM wa_funnel_run WHERE phone=?').bind(phone).first();
+    let total = 0; try { total = JSON.parse((r && r.items) || '[]').length; } catch (_) {}
+    return json({ ok: true, run: r ? { phone: r.phone, seq_id: r.seq_id, idx: r.idx, status: r.status, total } : null });
+  }
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const phone = String(b.phone || '').replace(/\D/g, '');
+  if (!phone) return err('phone obrigatório');
+  if (b.action === 'stop') { await _waFunnelStop(env, phone, 'stopped'); return json({ ok: true }); }
+  const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
+  const info = await _waFunnelSeq(env, String(b.seq_id || ''));
+  if (!info || !info.items.length) return err('sequência sem itens');
+  const now = Math.floor(Date.now() / 1000);
+  const first = await _waFunnelSendItem(env, atId, phone, info.items[0], info);
+  if (first && first.ok === false) return json({ ok: false, error: first.error, code: first.code || null }, first.code === 'window_closed' ? 409 : 400);
+  const st = info.items.length > 1 ? 'running' : 'done';
+  await env.DB.prepare(
+    `INSERT INTO wa_funnel_run (phone, at_id, seq_id, items, idx, next_at, status, updated_at) VALUES (?,?,?,?,?,?,?,?)
+     ON CONFLICT(phone) DO UPDATE SET at_id=excluded.at_id, seq_id=excluded.seq_id, items=excluded.items, idx=excluded.idx, next_at=excluded.next_at, status=excluded.status, updated_at=excluded.updated_at`
+  ).bind(phone, atId, info.seq.id, JSON.stringify(info.items), 1, now + WA_FUNNEL_GAP, st, now).run();
+  return json({ ok: true, sent: 1, total: info.items.length, status: st });
+}
+
+async function handleWhatsappCloudWebhook(req, env, ctx) {
   const url = new URL(req.url);
   if (req.method === 'GET') {
     const mode = url.searchParams.get('hub.mode');
@@ -2500,6 +2954,13 @@ async function handleWhatsappCloudWebhook(req, env) {
           if (atId && phone) {
             const inst = ownInst || ('ax_' + atId);
             try { await _waLogMsg(env, { phone, instance: inst, direction: 'in', type, body: String(bodyTxt), pushName, ts, msgId: msgId || null }); } catch (_) {}
+            // Mídia recebida: a Meta manda só o id. Baixa em background (nunca bloqueia o ACK 200).
+            try {
+              const mid = (m && m[type] && m[type].id) || null;
+              if (mid && ctx && ctx.waitUntil) ctx.waitUntil(_waCloudDownloadMedia(env, mid, msgId));
+            } catch (_) {}
+            // Lead respondeu → para o funil automático (não empurra áudio por cima da resposta dele).
+            try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
             try {
               if (!_attribTablesOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); _attribTablesOk = true; } catch (_) {} }
               await _waLeadCapture(env, inst, phone, String(bodyTxt), selfNumber, type, ts);
@@ -2511,6 +2972,270 @@ async function handleWhatsappCloudWebhook(req, env) {
     }
   } catch (_) {}
   return json({ ok: true });   // responde 200 rápido sempre; senão a Meta reenvia e pode desativar o webhook
+}
+// ───────────────────────── Datacrazy → AXION ─────────────────────────
+// O Datacrazy é o CRM/inbox; ele FORWARDA cada evento (via Automação: gatilho "mensagem recebida"
+// + bloco API/HTTP) pra cá. A gente alimenta o MESMO pipeline do webhook oficial: log da mensagem,
+// captura de lead (dispara InitiateCheckout se tiver atribuição da pressel) e detecção de venda
+// (dispara CompletePayment). Instrumentado: grava o payload CRU em dc_events pra ver o formato real
+// que a Automação manda e travar o mapa de campos. Nunca bloqueia: responde 200 sempre.
+let _dcTablesOk = false;
+async function _dcEnsureTables(env) {
+  if (_dcTablesOk) return;
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_events (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at INTEGER, ok INTEGER, phone TEXT, self TEXT, direction TEXT, event TEXT, text TEXT, raw TEXT)').run(); } catch (_) {}
+  _dcTablesOk = true;
+}
+function _dcDeep(o, path) { try { return path.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o); } catch (_) { return undefined; } }
+function _dcPick(o, keys) { for (const k of keys) { const v = _dcDeep(o, k); if (v != null && String(v) !== '') return v; } return ''; }
+async function _dcApiGet(env, path) {
+  const key = await _readConfig(env, 'dc_api_key');
+  if (!key) return null;
+  try {
+    const r = await fetch('https://api.g1.datacrazy.io/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (_) { return null; }
+}
+// Dado o telefone do lead, acha a conversa no Datacrazy e devolve o NÚMERO que recebeu (self = instance.config.phoneNumber),
+// o TEXTO da última mensagem recebida e o nome. Reforço pra quando a Automação não mandar esses campos: basta o ${leadPhone}.
+async function _dcResolveConv(env, phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  const j = await _dcApiGet(env, '/conversations?take=5&search=' + encodeURIComponent(digits));
+  const arr = (j && (j.data || j)) || [];
+  if (!Array.isArray(arr) || !arr.length) return null;
+  const same = arr.filter(c => String((c.contact && c.contact.phoneNumber) || '').replace(/\D/g, '') === digits);
+  const inbound = same.filter(c => c.lastMessage && c.lastMessage.received === true);   // prefere a conversa de ENTRADA (o número que recebeu o lead)
+  const list = inbound.length ? inbound : (same.length ? same : arr);
+  list.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  const c = list[0];
+  const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
+  const lm = c.lastMessage || {};
+  const text = lm.received ? String(lm.body || '') : '';
+  const name = String((c.contact && c.contact.name) || '');
+  return { self, text, name, convId: c.id };
+}
+async function handleDatacrazyEvent(req, env, ctx) {
+  await _dcEnsureTables(env);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const url = new URL(req.url);
+  const secret = req.headers.get('x-dc-secret') || url.searchParams.get('secret') || (b && b.secret) || '';
+  const expected = await _readConfig(env, 'dc_hook_secret');
+  const authed = !!expected && secret === expected;
+  // Extração tolerante: o corpo é montado pelo Bruno na Automação, então aceitamos vários nomes.
+  const _ph = v => /^\{.*\}$/.test(String(v == null ? '' : v).trim());   // "{texto da mensagem}" = placeholder que o Bruno não trocou
+  const _cl = v => (_ph(v) ? '' : String(v == null ? '' : v));
+  const phone = String(_dcPick(b, ['phone', 'telefone', 'rawPhone', 'lead.phone', 'lead.rawPhone', 'leadPhone', 'from', 'contact.phone', 'contact.phoneNumber'])).replace(/\D/g, '');
+  let self = String(_dcPick(b, ['instance', 'number', 'numero', 'instancia', 'self', 'selfNumber', 'instancePhone', 'instance.phoneNumber', 'channel'])).replace(/\D/g, '');
+  let text = _cl(_dcPick(b, ['text', 'body', 'message', 'mensagem', 'message.text', 'content']));
+  let name = _cl(_dcPick(b, ['name', 'nome', 'lead.name', 'leadName', 'contact.name', 'pushName']));
+  const evt = String(_dcPick(b, ['event', 'type', 'trigger']) || 'message_in');
+  const dirRaw = String(_dcPick(b, ['direction', 'dir', 'fromMe']) || '').toLowerCase();
+  const isOut = dirRaw === 'out' || dirRaw === 'true' || dirRaw === 'outbound' || evt.includes('sent') || evt.includes('enviad');
+  const direction = isOut ? 'out' : 'in';
+  // Recuperação server-side: se o número que recebeu (self) ou o texto vierem vazios/placeholder,
+  // busca a conversa do lead no Datacrazy pela API — basta o telefone. Assim a Automação só precisa
+  // mandar o ${leadPhone} certo; instância e texto o AXION descobre sozinho.
+  if (authed && direction === 'in' && phone && (!self || !text)) {
+    try {
+      const rc = await _dcResolveConv(env, phone);
+      if (rc) { if (!self) self = rc.self; if (!text) text = rc.text; if (!name) name = rc.name; }
+    } catch (_) {}
+  }
+  try {
+    await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),?,?,?,?,?,?,?)")
+      .bind(authed ? 1 : 0, phone || null, self || null, direction, evt, String(text).slice(0, 500), JSON.stringify(b).slice(0, 4000)).run();
+  } catch (_) {}
+  if (!authed) return json({ ok: true, note: 'logged' });   // segredo ausente/errado: loga mas não processa
+  try {
+    if (phone) {
+      let atId = null, ownInst = '';
+      if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
+      const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+      const now = Math.floor(Date.now() / 1000);
+      if (inst) {
+        try { await _waLogMsg(env, { phone, instance: inst, direction, type: 'text', body: text, pushName: name, ts: now }); } catch (_) {}
+        if (direction === 'in') {
+          try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+          try { await _waLeadCapture(env, inst, phone, text, self, 'text', now); } catch (_) {}
+          try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // negócio em "Lead Novo" + tag
+        } else {
+          let _srw = null;
+          try { _srw = await _waDetectSale(env, inst, { message: { conversation: text }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: null, fromMe: true } }); } catch (_) {}
+          if (_srw && _srw.sale) { try { await _dcCrmSale(env, phone, name, _srw.value, phone); } catch (_) {} }   // tag "Comprou" + pedido em "A Enviar"
+        }
+      }
+    }
+  } catch (_) {}
+  return json({ ok: true });
+}
+// GET /api/dc/events — diretor inspeciona os últimos payloads crus recebidos do Datacrazy.
+async function handleDatacrazyEventsList(req, env) {
+  const u = await authUser(req, env); if (!u || !isDirector(u)) return err('Não autorizado', 403);
+  await _dcEnsureTables(env);
+  const r = await env.DB.prepare('SELECT id, received_at, ok, phone, self, direction, event, text, raw FROM dc_events ORDER BY id DESC LIMIT 30').all();
+  return json({ events: (r && r.results) || [] });
+}
+// PUXA os leads novos do Datacrazy pela API (roda no cron). Não depende da Automação do Datacrazy
+// disparar — o AXION busca as conversas recentes, pega as mensagens INBOUND novas (dedup por msg_id)
+// e roda o mesmo pipeline (log + captura de lead + pixel + para funil). É o backbone confiável;
+// a Automação/webhook é só o caminho em tempo real (os dois deduplicam, não conta lead 2x).
+let _dcSeenOk = false;
+async function _dcPoll(env) {
+  const key = await _readConfig(env, 'dc_api_key');
+  if (!key) return;
+  const j = await _dcApiGet(env, '/conversations?take=40');
+  const arr = (j && (j.data || j)) || [];
+  if (!Array.isArray(arr) || !arr.length) return;
+  await _dcEnsureTables(env);
+  if (!_dcSeenOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_seen (msg_id TEXT PRIMARY KEY, ts INTEGER)').run(); _dcSeenOk = true; } catch (_) {} }
+  const now = Math.floor(Date.now() / 1000);
+  try { await env.DB.prepare("DELETE FROM dc_seen WHERE ts < strftime('%s','now')-172800").run(); } catch (_) {}   // poda > 2 dias
+  for (const c of arr) {
+    try {
+      const lm = c.lastMessage;
+      if (!lm) continue;
+      const inbound = lm.received === true;   // true = lead mandou; false = vendedor mandou
+      const msgId = String(lm.id || '');
+      if (!msgId) continue;
+      const mts = lm.createdAt ? Math.floor(new Date(lm.createdAt).getTime() / 1000) : now;
+      if (now - mts > 900) continue;   // só o recente (15min) — não reprocessa histórico ao ligar
+      const text = String(lm.body || '');
+      // venda = "Pedido Concluído" que o VENDEDOR posta (mesma assinatura da dash). _waDetectSale confere o resto.
+      const isSale = !inbound && /pedido\s+conclu/i.test(text);
+      if (!inbound && !isSale) continue;   // mensagem normal do vendedor (não-venda): ignora
+      const ins = await env.DB.prepare("INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)").bind(msgId, now).run();
+      if (!ins.meta || ins.meta.changes === 0) continue;   // já visto
+      const phone = String((c.contact && c.contact.phoneNumber) || '').replace(/\D/g, '');
+      const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
+      const name = String((c.contact && c.contact.name) || '');
+      if (!phone) continue;
+      let atId = null, ownInst = '';
+      if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
+      const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+      try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,?,?,?,?)").bind(phone, self || null, inbound ? 'in' : 'out', isSale ? 'poll-sale' : 'poll', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId }).slice(0, 1000)).run(); } catch (_) {}
+      if (inst) {
+        try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: 'text', body: text, pushName: name, ts: mts, msgId }); } catch (_) {}
+        if (inbound) {
+          try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+          try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
+          try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy
+        } else if (isSale) {
+          let _sr2 = null;
+          try { _sr2 = await _waDetectSale(env, inst, { message: { conversation: text }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId, fromMe: true } }); } catch (_) {}   // "Pedido Concluído" → CompletePayment
+          if (_sr2 && _sr2.sale) { try { await _dcCrmSale(env, phone, name, _sr2.value, phone); } catch (_) {} }   // tag "Comprou" + pedido em "A Enviar"
+        }
+      }
+    } catch (_) {}
+  }
+  // Rede de segurança da VENDA: o "Pedido Concluído" pode NÃO ser a última msg (o lead responde depois e o
+  // poll só enxerga a última). Nas conversas cuja última é do LEAD, varre as mensagens e pega a venda ainda
+  // não vista. Limitado a 15 conversas/rodada pra não estourar a API do Datacrazy (120 req/min).
+  let _scanned = 0;
+  for (const c of arr) {
+    if (_scanned >= 15) break;
+    const lm = c.lastMessage;
+    if (!lm || lm.received !== true) continue;
+    const cu = c.updatedAt ? Math.floor(new Date(c.updatedAt).getTime() / 1000) : 0;
+    if (now - cu > 900) continue;   // só conversas ativas nos últimos 15min
+    _scanned++;
+    try { await _dcScanConvSales(env, c, now); } catch (_) {}
+  }
+}
+// Varre as últimas mensagens de UMA conversa e dispara a venda ("Pedido Concluído" do vendedor) ainda não vista.
+async function _dcScanConvSales(env, c, now) {
+  const j = await _dcApiGet(env, '/conversations/' + encodeURIComponent(c.id) + '/messages?take=12');
+  const msgs = (j && (j.data || j.messages || j)) || [];
+  if (!Array.isArray(msgs) || !msgs.length) return;
+  const phone = String((c.contact && c.contact.phoneNumber) || '').replace(/\D/g, '');
+  const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
+  if (!phone) return;
+  let atId = null, ownInst = '';
+  if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
+  const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+  if (!inst) return;
+  for (const m of msgs) {
+    if (m.received === true) continue;   // só outbound do vendedor
+    const body = String(m.body || '');
+    if (!/pedido\s+conclu/i.test(body)) continue;
+    const mid = String(m.id || '');
+    if (!mid) continue;
+    const mts = m.createdAt ? Math.floor(new Date(m.createdAt).getTime() / 1000) : now;
+    if (now - mts > 1800) continue;   // venda até 30min atrás
+    const ins = await env.DB.prepare("INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)").bind(mid, now).run();
+    if (!ins.meta || ins.meta.changes === 0) continue;   // já vista
+    try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,'out','poll-sale',?,?)").bind(phone, self || null, body.slice(0, 500), JSON.stringify({ via: 'poll-scan', convId: c.id, msgId: mid }).slice(0, 1000)).run(); } catch (_) {}
+    try { await _waLogMsg(env, { phone, instance: inst, direction: 'out', type: 'text', body, ts: mts, msgId: mid }); } catch (_) {}
+    let _sr = null;
+    try { _sr = await _waDetectSale(env, inst, { message: { conversation: body }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: mid, fromMe: true } }); } catch (_) {}
+    if (_sr && _sr.sale) { try { await _dcCrmSale(env, phone, (c.contact && c.contact.name) || '', _sr.value, phone); } catch (_) {} }
+  }
+}
+// ── CRM Datacrazy: cria lead+negócio e aplica tags, andando o kanban sozinho (dedup local em dc_crm) ──
+const DC_TAG_LEAD_NOVO = '36443ad1-0487-4fdc-8568-87e847972ca2';
+const DC_TAG_COMPROU = 'a5dfd99c-332f-4faa-96b4-aaa36284df2d';
+const DC_STAGE_LEAD_NOVO = 'bb318d1d-73ea-4f58-938a-bafe91dba925';   // Sale Made · Leads → Lead Novo
+const DC_STAGE_FECHOU = '119ab9a8-13e5-4729-accc-e06c3ccf330a';      // Sale Made · Leads → Fechou
+const DC_STAGE_A_ENVIAR = '85194b90-2371-4860-a3f6-b43558008140';    // Sale Made · Pedidos → A Enviar
+async function _dcApiSend(env, method, path, body) {
+  const key = await _readConfig(env, 'dc_api_key');
+  if (!key) return null;
+  try {
+    const r = await fetch('https://api.g1.datacrazy.io/api/v1' + path, { method, headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: body != null ? JSON.stringify(body) : undefined });
+    let j = null; try { const t = await r.text(); j = t ? JSON.parse(t) : null; } catch (_) {}
+    return { ok: r.ok, status: r.status, data: j };
+  } catch (_) { return null; }
+}
+function _dcId(r) { const d = r && r.data; return (d && (d.id || (d.data && d.data.id))) || null; }
+let _dcCrmOk = false;
+async function _dcCrmTable(env) {
+  if (_dcCrmOk) return;
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_crm (phone TEXT PRIMARY KEY, lead_id TEXT, lead_deal TEXT, order_deal TEXT, updated_at INTEGER)').run(); _dcCrmOk = true; } catch (_) {}
+}
+// Acha (no cache local) ou cria o lead no Datacrazy pelo telefone. Retorna leadId.
+async function _dcCrmLead(env, phone, name) {
+  await _dcCrmTable(env);
+  const row = await env.DB.prepare('SELECT lead_id FROM dc_crm WHERE phone=?').bind(phone).first();
+  if (row && row.lead_id) return row.lead_id;
+  const id = _dcId(await _dcApiSend(env, 'POST', '/leads', { name: name || ('+' + phone), phone: '+' + phone }));
+  if (!id) return null;
+  await env.DB.prepare("INSERT INTO dc_crm (phone, lead_id, updated_at) VALUES (?,?,strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET lead_id=excluded.lead_id, updated_at=excluded.updated_at").bind(phone, id).run();
+  return id;
+}
+// Adiciona uma tag ao lead SEM apagar as existentes (o PATCH substitui o array, então mescla).
+async function _dcCrmAddTag(env, leadId, tagId) {
+  const r = await _dcApiGet(env, '/leads/' + leadId);
+  const l = (r && (r.data || r)) || {};
+  const cur = (l.tags || []).map(t => t.id).filter(Boolean);
+  if (cur.includes(tagId)) return;
+  await _dcApiSend(env, 'PATCH', '/leads/' + leadId, { tags: [...new Set([...cur, tagId])].map(id => ({ id })) });
+}
+// Lead novo entrou → garante negócio em "Lead Novo" + tag (uma vez por telefone).
+async function _dcCrmLeadIn(env, phone, name) {
+  try {
+    await _dcCrmTable(env);
+    const row = await env.DB.prepare('SELECT lead_deal FROM dc_crm WHERE phone=?').bind(phone).first();
+    if (row && row.lead_deal) return;   // já tem negócio de lead
+    const leadId = await _dcCrmLead(env, phone, name);
+    if (!leadId) return;
+    const bid = _dcId(await _dcApiSend(env, 'POST', '/businesses', { leadId, stageId: DC_STAGE_LEAD_NOVO }));
+    await _dcCrmAddTag(env, leadId, DC_TAG_LEAD_NOVO);
+    if (bid) await env.DB.prepare("UPDATE dc_crm SET lead_deal=?, updated_at=strftime('%s','now') WHERE phone=?").bind(bid, phone).run();
+  } catch (_) {}
+}
+// Venda → tag "Comprou" + cria o pedido em "A Enviar" + move o negócio de lead pra "Fechou".
+async function _dcCrmSale(env, phone, name, valor, orderId) {
+  try {
+    await _dcCrmTable(env);
+    const row = await env.DB.prepare('SELECT lead_id, lead_deal, order_deal FROM dc_crm WHERE phone=?').bind(phone).first();
+    if (row && row.order_deal) return;   // pedido já criado (evita duplicar)
+    const leadId = (row && row.lead_id) || await _dcCrmLead(env, phone, name);
+    if (!leadId) return;
+    await _dcCrmAddTag(env, leadId, DC_TAG_COMPROU);
+    const bid = _dcId(await _dcApiSend(env, 'POST', '/businesses', { leadId, stageId: DC_STAGE_A_ENVIAR, externalId: String(orderId || ('venda-' + phone)) }));
+    if (row && row.lead_deal) { try { await _dcApiSend(env, 'POST', '/businesses/actions/move', { ids: [row.lead_deal], destinationStageId: DC_STAGE_FECHOU }); } catch (_) {} }
+    await env.DB.prepare("INSERT INTO dc_crm (phone, lead_id, order_deal, updated_at) VALUES (?,?,?,strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET order_deal=excluded.order_deal, lead_id=excluded.lead_id, updated_at=excluded.updated_at").bind(phone, leadId, bid || 'created').run();
+  } catch (_) {}
 }
 // POST /api/salechat/heartbeat/<token> — o injetor avisa periodicamente que o número está vivo/logado.
 async function handleSalechatHeartbeat(req, env, token) {
@@ -2776,6 +3501,8 @@ async function handleWAChats(req, env) {
   if (inst) { where.push('instance = ?'); binds.push(inst); }
   if (assigned) { where.push('assigned_to = ?'); binds.push(assigned); }
   if (q) { where.push('(name LIKE ? OR phone LIKE ?)'); binds.push('%' + q + '%', '%' + q.replace(/\D/g, '') + '%'); }
+  // Escopo por vendedor: quem não é diretor só vê as próprias conversas (a instância dele).
+  if (!isDirector(u)) { where.push('(instance = ? OR instance = ?)'); binds.push('ax_' + u.id, 'ax_' + u.id + '_b'); }
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY last_ts DESC LIMIT 300';
   const rows = await env.DB.prepare(sql).bind(...binds).all();
@@ -2790,10 +3517,15 @@ async function handleWAMessages(req, env) {
   const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   const limit = Math.min(500, Number(url.searchParams.get('limit')) || 200);
-  const rows = await env.DB.prepare(
-    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
-  ).bind(phone, limit).all();
   const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to FROM wa_chats WHERE phone = ?').bind(phone).first();
+  // Escopo por vendedor: quem não é diretor só abre conversa da própria instância.
+  if (!isDirector(u)) {
+    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
+    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a essa conversa', 403);
+  }
+  const rows = await env.DB.prepare(
+    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
+  ).bind(phone, limit).all();
   return json({ ok: true, phone, chat: chat || null, messages: rows.results || [] });
 }
 // POST /api/wa/chat/read { phone } → zera o não-lido
@@ -3861,6 +4593,14 @@ async function handlePresselMetricsPage(req, env, id){
 // aprovação e viola política). O nome tem que BATER com o que a Meta vê no site: por isso o nome
 // da marca aqui (BRAND_NAME) é o mesmo do nome de exibição pedido no WhatsApp.
 const BRAND_NAME = 'Glico Natural';   // troca aqui pra mudar o nome no site inteiro
+// Dados legais reais da empresa (do Cartão CNPJ). Aparecem no rodapé, no contato e nas políticas.
+// ATENÇÃO: preencher com os dados REAIS antes de deployar. Têm que bater AO CARACTERE com o
+// Cartão CNPJ e com o que for cadastrado no Business Manager da Meta (mismatch = causa nº 1 de reprovação).
+const BRAND_LEGAL = '[RAZÃO SOCIAL LTDA]';                      // razão social exata do Cartão CNPJ (não o nome fantasia)
+const BRAND_CNPJ  = '[00.000.000/0001-00]';                    // CNPJ formatado
+const BRAND_ADDR  = '[endereço completo, igual ao Cartão CNPJ]'; // sem abreviar
+const BRAND_PHONE = '[(00) 00000-0000]';                       // telefone comercial
+const BRAND_FB_DV = '';                                         // código da Verificação de Domínio da Meta (facebook-domain-verification); preencher quando a Meta gerar
 const BRAND_DOMS = ['area-glico.fun', 'painel-glico.fun'];
 function _brandEmail(host){ return 'contato@' + (BRAND_DOMS.includes(host) ? host : 'painel-glico.fun'); }
 // Ilustração de frasco conta-gotas (SVG inline) — visual de marca natural, sem foto de terceiros.
@@ -3873,6 +4613,18 @@ function _bottleSvg(){
     + '<circle cx="60" cy="104" r="7" fill="#12945a"/>'
     + '</svg>';
 }
+// Ícones SVG inline (padrão da marca — sem emoji). Cor verde por padrão, herda contexto.
+const _ICONS = {
+  leaf:['M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z','M2 22 17 7'],
+  box:['M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z','M3.3 7 12 12l8.7-5','M12 22V12'],
+  chat:['M7.9 20A9 9 0 1 0 4 16.1L2 22Z'],
+  bag:['M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z','M3 6h18','M16 10a4 4 0 0 1-8 0'],
+  check:['M20 6 9 17l-5-5']
+};
+function _ic(name, sz){
+  const arr = _ICONS[name] || [];
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:' + (sz||'1em') + ';height:' + (sz||'1em') + ';vertical-align:-.15em;color:var(--verde)" aria-hidden="true">' + arr.map(function(d){return '<path d="' + d + '"/>';}).join('') + '</svg>';
+}
 function _brandShell(title, inner, withJs){
   const js = withJs ? ('<script>(function(){var c=document.querySelector(".slides");if(c){var slides=c.children.length,i=0,dots=document.querySelectorAll(".dot");function go(n){i=(n+slides)%slides;c.style.transform="translateX("+(-i*100)+"%)";dots.forEach(function(d,k){d.className="dot"+(k===i?" on":"");});}var pv=document.querySelector(".c-prev"),nx=document.querySelector(".c-next");if(pv)pv.onclick=function(){go(i-1);};if(nx)nx.onclick=function(){go(i+1);};dots.forEach(function(d,k){d.onclick=function(){go(k);};});var t=setInterval(function(){go(i+1);},4500);c.parentElement.addEventListener("mouseenter",function(){clearInterval(t);});go(0);}'
     + 'document.querySelectorAll(".acc-q").forEach(function(q){q.onclick=function(){q.parentElement.classList.toggle("open");};});})();<\/script>') : '';
@@ -3880,6 +4632,7 @@ function _brandShell(title, inner, withJs){
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <meta name="description" content="${BRAND_NAME} — produtos naturais de bem-estar para o seu dia a dia.">
+${BRAND_FB_DV ? '<meta name="facebook-domain-verification" content="' + BRAND_FB_DV + '">' : ''}
 <style>
 :root{--verde:#0e7a43;--verde2:#12945a;--claro:#e8f5ee;--tinta:#14231c;--cinza:#5b6b62;--linha:#e4ebe6;--fundo:#f6faf7;--card:#fff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3959,9 +4712,14 @@ footer{border-top:1px solid var(--linha);margin-top:8px;padding:32px 0;color:var
   <a class="btn" href="/#contato">Fale conosco</a>
 </div></header>
 ${inner}
-<footer><div class="wrap foot">
-  <div>© 2026 ${BRAND_NAME}. Todos os direitos reservados.</div>
-  <div style="display:flex;gap:16px"><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a><a href="/#contato">Contato</a></div>
+<footer><div class="wrap" style="display:flex;flex-direction:column;gap:14px">
+  <div class="foot">
+    <div>© 2026 ${BRAND_NAME}. Todos os direitos reservados.</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap"><a href="/privacidade">Privacidade</a><a href="/termos">Termos</a><a href="/entrega-e-trocas">Trocas e Entrega</a><a href="/#contato">Contato</a></div>
+  </div>
+  <div style="font-size:12.5px;color:var(--cinza);line-height:1.55;border-top:1px solid var(--linha);padding-top:14px">
+    ${BRAND_LEGAL} — CNPJ ${BRAND_CNPJ}<br>${BRAND_ADDR}
+  </div>
 </div></footer>
 ${js}</body></html>`;
 }
@@ -3977,10 +4735,10 @@ function _brandHome(host){
       <p>A ${BRAND_NAME} reúne produtos naturais selecionados para acompanhar a sua rotina com mais leveza, praticidade e cuidado.</p>
       <div class="hero-cta"><a class="btn" href="/#contato">Fale com a gente</a><a class="btn ghost" href="/#produtos">Ver produtos</a></div>
     </div>
-    <div class="hero-art"><img src="/img/produto.jpg?v=2" alt="${BRAND_NAME}"><div class="badge">🌿 100% de origem natural</div></div>
+    <div class="hero-art"><img src="/img/produto.jpg?v=2" alt="${BRAND_NAME}"><div class="badge">${_ic('leaf','15px')} 100% de origem natural</div></div>
   </div></section>
 
-  <div class="trust wrap"><div>🌿 <b>Ingredientes naturais</b></div><div>📦 <b>Entrega em casa</b></div><div>💬 <b>Atendimento humano</b></div><div>🤝 <b>Compra sem complicação</b></div></div>
+  <div class="trust wrap"><div>${_ic('leaf','17px')} <b>Ingredientes naturais</b></div><div>${_ic('box','17px')} <b>Entrega em casa</b></div><div>${_ic('chat','17px')} <b>Atendimento humano</b></div><div>${_ic('bag','17px')} <b>Compra sem complicação</b></div></div>
 
   <section class="sec wrap" id="produtos">
     <div class="sec-h"><h2>Nossos produtos</h2><p>Feitos para o cuidado do dia a dia, com componentes de origem natural.</p></div>
@@ -3998,10 +4756,10 @@ function _brandHome(host){
 
   <section class="sec wrap">
     <div class="cards">
-      <div class="card"><div class="ic">🌿</div><h3>Ingredientes naturais</h3><p>Fórmulas com componentes de origem natural, para o cuidado do dia a dia.</p></div>
-      <div class="card"><div class="ic">✅</div><h3>Qualidade selecionada</h3><p>Cada item passa por um processo de seleção antes de chegar até você.</p></div>
-      <div class="card"><div class="ic">📦</div><h3>Entrega em casa</h3><p>Você recebe no conforto da sua casa, com acompanhamento do começo ao fim.</p></div>
-      <div class="card"><div class="ic">💬</div><h3>Atendimento próximo</h3><p>Uma equipe humana pra tirar dúvidas e acompanhar o seu pedido com atenção.</p></div>
+      <div class="card"><div class="ic">${_ic('leaf','24px')}</div><h3>Ingredientes naturais</h3><p>Fórmulas com componentes de origem natural, para o cuidado do dia a dia.</p></div>
+      <div class="card"><div class="ic">${_ic('check','24px')}</div><h3>Qualidade selecionada</h3><p>Cada item passa por um processo de seleção antes de chegar até você.</p></div>
+      <div class="card"><div class="ic">${_ic('box','24px')}</div><h3>Entrega em casa</h3><p>Você recebe no conforto da sua casa, com acompanhamento do começo ao fim.</p></div>
+      <div class="card"><div class="ic">${_ic('chat','24px')}</div><h3>Atendimento próximo</h3><p>Uma equipe humana pra tirar dúvidas e acompanhar o seu pedido com atenção.</p></div>
     </div>
   </section>
 
@@ -4011,6 +4769,7 @@ function _brandHome(host){
         <h2>Sobre a ${BRAND_NAME}</h2>
         <p>Somos uma marca de produtos naturais de bem-estar. Nosso propósito é simples: oferecer opções de qualidade para quem busca cuidar da rotina de um jeito prático e tranquilo.</p>
         <p>Trabalhamos com atendimento humano e próximo, acompanhando cada cliente com atenção e transparência, do primeiro contato até a entrega em casa.</p>
+        <p style="font-size:14px"><strong>${BRAND_LEGAL}</strong> — CNPJ ${BRAND_CNPJ}.</p>
       </div>
       <div class="art"><img src="/img/produto.jpg?v=2" alt="${BRAND_NAME}" loading="lazy"></div>
     </div>
@@ -4029,25 +4788,56 @@ function _brandHome(host){
   <section class="sec wrap" id="contato">
     <div class="contato">
       <div><div class="lbl">E-mail</div><div class="val">${mail}</div></div>
+      <div><div class="lbl">Telefone</div><div class="val">${BRAND_PHONE}</div></div>
       <div><div class="lbl">Atendimento</div><div class="val">Seg a sáb, 9h às 18h</div></div>
       <a class="btn" href="mailto:${mail}">Enviar e-mail</a>
     </div>
+    <p style="text-align:center;color:var(--cinza);font-size:13px;margin-top:16px;line-height:1.55">${BRAND_LEGAL} — CNPJ ${BRAND_CNPJ}<br>${BRAND_ADDR}</p>
   </section>
 </main>`;
   return _brandShell(BRAND_NAME + ' — bem-estar natural', inner, true);
 }
 function _brandLegal(kind, host){
   const mail = _brandEmail(host);
-  const priv = `<h2>Política de Privacidade</h2>
-    <p>A ${BRAND_NAME} respeita a sua privacidade. Coletamos apenas os dados necessários para atender e entregar os pedidos, como nome, endereço e telefone de contato.</p>
-    <p>Não vendemos nem compartilhamos os seus dados com terceiros para fins de marketing. As informações são usadas somente para o atendimento e a entrega.</p>
-    <p>Você pode solicitar a atualização ou a exclusão dos seus dados a qualquer momento pelo e-mail ${mail}.</p>`;
-  const term = `<h2>Termos de Uso</h2>
-    <p>Ao entrar em contato com a ${BRAND_NAME}, você concorda em fornecer informações verdadeiras para o atendimento e a entrega dos produtos.</p>
-    <p>Os produtos são de bem-estar e não substituem orientação de um profissional. Em caso de dúvida sobre o seu uso, consulte um especialista de confiança.</p>
-    <p>Dúvidas sobre estes termos podem ser enviadas para ${mail}.</p>`;
-  const inner = `<main class="wrap" style="padding:46px 0"><div class="legal">${kind === 'privacidade' ? priv : term}</div></main>`;
-  return _brandShell(BRAND_NAME + ' — ' + (kind === 'privacidade' ? 'Privacidade' : 'Termos'), inner, false);
+  const ident = BRAND_LEGAL + ', inscrita no CNPJ ' + BRAND_CNPJ + ', com sede em ' + BRAND_ADDR;
+  const priv = `<h1 style="font-size:26px;margin-bottom:6px">Política de Privacidade</h1>
+    <p>Esta Política descreve como a ${BRAND_NAME} (${ident}) trata os dados pessoais dos seus clientes, em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018 — LGPD).</p>
+    <h2>Controlador dos dados</h2>
+    <p>${ident}. Contato para assuntos de privacidade: ${mail}.</p>
+    <h2>Quais dados coletamos</h2>
+    <p>Coletamos apenas os dados necessários para atender e entregar os pedidos: nome, telefone de contato, endereço de entrega e as informações trocadas durante o atendimento.</p>
+    <h2>Para que usamos</h2>
+    <p>Usamos os dados exclusivamente para responder ao seu contato, combinar e realizar a entrega e prestar suporte após a compra.</p>
+    <h2>Com quem compartilhamos</h2>
+    <p>Não vendemos nem compartilhamos os seus dados para fins de marketing de terceiros. Compartilhamos apenas o necessário com parceiros de entrega e de pagamento, para concluir o seu pedido.</p>
+    <h2>Por quanto tempo guardamos</h2>
+    <p>Mantemos os dados apenas pelo tempo necessário para o atendimento, a entrega e o cumprimento de obrigações legais.</p>
+    <h2>Seus direitos</h2>
+    <p>Nos termos do art. 18 da LGPD, você pode a qualquer momento solicitar a confirmação, o acesso, a correção, a portabilidade ou a exclusão dos seus dados, além de revogar consentimentos. Basta escrever para ${mail}.</p>`;
+  const term = `<h1 style="font-size:26px;margin-bottom:6px">Termos de Uso</h1>
+    <p>Estes Termos regem o uso deste site e o atendimento da ${BRAND_NAME} (${ident}).</p>
+    <h2>Sobre os produtos</h2>
+    <p>Comercializamos produtos de bem-estar de origem natural. Eles não são medicamentos e não substituem a orientação, o diagnóstico ou o tratamento de um profissional de saúde. Em caso de dúvida sobre o uso, consulte um especialista de sua confiança.</p>
+    <h2>Atendimento e pedidos</h2>
+    <p>O atendimento e a finalização da compra são feitos por contato direto com a nossa equipe. Ao entrar em contato, você concorda em fornecer informações verdadeiras e necessárias para o atendimento e a entrega.</p>
+    <h2>Responsabilidades</h2>
+    <p>Comprometemo-nos a prestar informações claras sobre produtos, preços e condições de entrega. O cliente é responsável por fornecer dados corretos de contato e endereço.</p>
+    <h2>Contato</h2>
+    <p>Dúvidas sobre estes Termos podem ser enviadas para ${mail}.</p>`;
+  const troca = `<h1 style="font-size:26px;margin-bottom:6px">Trocas, Devolução e Entrega</h1>
+    <p>A ${BRAND_NAME} (${ident}) preza pela sua satisfação e segue o Código de Defesa do Consumidor (Lei nº 8.078/1990).</p>
+    <h2>Direito de arrependimento</h2>
+    <p>Conforme o art. 49 do CDC, você pode desistir da compra em até <strong>7 (sete) dias corridos</strong> a contar do recebimento do produto, sem necessidade de justificativa. Basta entrar em contato pelo ${mail}.</p>
+    <h2>Troca e devolução</h2>
+    <p>Aceitamos troca ou devolução de produtos com defeito ou avaria. Para solicitar, entre em contato pelo ${mail} informando o número do pedido e, se possível, fotos do produto. O item deve ser devolvido na embalagem original.</p>
+    <h2>Reembolso</h2>
+    <p>Confirmada a devolução dentro das condições acima, o valor pago é reembolsado pelo mesmo meio utilizado na compra, no prazo previsto em lei após o recebimento do produto de volta.</p>
+    <h2>Entrega</h2>
+    <p>As entregas são combinadas no atendimento e realizadas no endereço informado pelo cliente. O prazo e a forma de entrega são apresentados no momento da compra, conforme a sua região.</p>`;
+  const map = { privacidade: priv, termos: term, trocas: troca };
+  const titles = { privacidade: 'Privacidade', termos: 'Termos', trocas: 'Trocas e Entrega' };
+  const inner = `<main class="wrap" style="padding:46px 0"><div class="legal">${map[kind] || priv}</div></main>`;
+  return _brandShell(BRAND_NAME + ' — ' + (titles[kind] || 'Privacidade'), inner, false);
 }
 const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
@@ -4402,12 +5192,18 @@ async function handlePresselPublic(req, env, id){
     // A validade vale pros DOIS estados. Antes só o 'sc' expirava, e uma linha 'open' velha da
     // Evolution ficava valendo pra sempre — bastava um registro antigo pra manter um número morto
     // recebendo lead eternamente. Com a operação 100% no Sale Chat, isso viraria um ralo silencioso.
-    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc')").all();
+    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all();
     const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
     // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
     try{
       const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
       (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
+    }catch(_){}
+    // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
+    // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
+    try{
+      const api=await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
+      (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id, String(a.display_phone)); });
     }catch(_){}
     liveSet = m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
   }catch(_){}
@@ -4495,6 +5291,8 @@ export default {
     // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
     // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
     try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
+    try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
+    try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
     // Purga o que já não serve pra roteamento/atribuição, pra as tabelas quentes não crescerem sem
     // fim (deixavam os scans lentos e o custo do Worker subindo com a verba). Só apaga o antigo:
     // auditoria de captura > 3 dias e cliques pendentes > 7 dias (a janela de atribuição é 1h).
@@ -4610,6 +5408,7 @@ export default {
         if (path === '/' )            return new Response(_brandHome(_host),           { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
         if (path === '/privacidade')  return new Response(_brandLegal('privacidade', _host), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (path === '/termos')       return new Response(_brandLegal('termos', _host),       { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (path === '/entrega-e-trocas') return new Response(_brandLegal('trocas', _host),     { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
       }
       // health check + raiz (demais domínios)
       if (req.method === 'GET' && (path === '/' || path === '/api')) {
@@ -4645,6 +5444,8 @@ export default {
       if (req.method === 'POST'   && path === '/api/config/wa') return handleWAConfigSet(req, env);
       if (req.method === 'GET'    && path === '/api/wa/status') return handleWAStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/send')       return handleWASend(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/cloud/send') return handleWACloudSend(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/cloud/send-media') return handleWACloudSendMedia(req, env);
       if (req.method === 'POST'   && path === '/api/wa/send-audio') return handleWASendAudio(req, env);
       if (req.method === 'POST'   && path === '/api/wa/send-media') return handleWASendMedia(req, env);
       if (req.method === 'POST'   && path === '/api/wa/tts-test')   return handleTTSTest(req, env);
@@ -4670,7 +5471,17 @@ export default {
       const scHbMatch = path.match(/^\/api\/salechat\/heartbeat\/([a-zA-Z0-9_-]+)$/);
       if (scHbMatch && req.method === 'POST')      return handleSalechatHeartbeat(req, env, scHbMatch[1]);
       // WhatsApp Cloud API (oficial): GET = verificação da Meta, POST = mensagens recebidas
-      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/cloud') return handleWhatsappCloudWebhook(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/cloud') return handleWhatsappCloudWebhook(req, env, ctx);
+      // Datacrazy → AXION: recebe eventos das Automações do Datacrazy (pixel/atribuição/venda)
+      if (req.method === 'POST'   && path === '/api/dc/event')  return handleDatacrazyEvent(req, env, ctx);
+      if (req.method === 'GET'    && path === '/api/dc/events') return handleDatacrazyEventsList(req, env);
+      // Conexão API oficial (Coexistência) — Embedded Signup: status da config + finalizar ligação
+      if (req.method === 'GET'    && path === '/api/wa/es/config')        return handleWaEsConfig(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/es/finish')        return handleWaEsFinish(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/official/numbers') return handleWaOfficialNumbers(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/register')          return handleWARegister(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/template') return handleWATemplate(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);

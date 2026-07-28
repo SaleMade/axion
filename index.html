@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.88.0';
-const APP_LAST_CHANGE = 'Atendimento, ajustes: (1) icone dos audios voltou (faltava o mic no sistema de icones). (2) Corrigido o "numero oficial nao registrado": ao disparar item/funil/template, agora sai pelo numero DA CONVERSA (o que o lead esta falando), nao pelo numero do usuario logado. (3) Aba Leads reformulada estilo CRM: avatar + nome no topo, Perfil (nome/telefone/e-mail/CPF/origem) com placeholder nos vazios, Endereco, Pedido, Tags, Notas e Historico, mais o botao "Abrir ficha completa".';
+const APP_VERSION = '2.89.0';
+const APP_LAST_CHANGE = 'Atendimento mais RAPIDO (os vendedores vao viver aqui): a tela so redesenha a lista e as mensagens quando algo MUDA de verdade (antes reconstruia tudo a cada 5s, o que travava e piscava). O envio ficou instantaneo: a mensagem aparece na hora e o servidor reconcilia depois (envio otimista). O polling pausa quando a aba do navegador esta em segundo plano. E adicionei indices na lista de conversas por data. A busca de mensagens ja era indexada por telefone.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -8009,9 +8009,13 @@ async function renderAtendimento(){
 function _atdPoll(){
   const pg=document.getElementById('atendimento-pg');
   if(!pg||!pg.classList.contains('active')){ if(_atd.timer){clearInterval(_atd.timer);_atd.timer=null;} return; }
+  if(document.hidden) return;   // aba do navegador em segundo plano: não gasta rede à toa
   _atdLoadChats(true);
   if(_atd.phone)_atdLoadThread(true);
 }
+// Assinatura leve do estado — só redesenha quando MUDA de verdade (evita rebuild a cada 5s).
+function _atdChatsSig(){ return (_atd.chats||[]).map(c=>c.phone+'|'+c.last_ts+'|'+c.unread+'|'+String(c.last_text||'').length+'|'+(_atd.phone===c.phone?1:0)+'|'+(c.assigned_to||'')).join(';'); }
+function _atdMsgsSig(){ const a=_atd.msgs||[]; const l=a[a.length-1]; return a.length+'|'+(l?((l.msg_id||'')+'|'+l.ts+'|'+(l.media_url?1:0)):''); }
 async function _atdLoadInstances(){
   try{const r=await api.waInstances();_atd.instances=r.instances||[];}catch(_){_atd.instances=[];}
   const sel=document.getElementById('atd-finst');
@@ -8030,10 +8034,12 @@ async function _atdLoadChats(silent){
   if(_atd.fAssign)qs.push('assigned='+encodeURIComponent(_atd.fAssign));
   if(_atd.q)qs.push('q='+encodeURIComponent(_atd.q));
   try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent){console.warn('atd chats',e);const box=document.getElementById('atd-chats');if(box&&!_atd.chats.length)box.innerHTML='<div class="atd-loading"><div>Não consegui carregar.</div><div onclick="_atdLoadChats()" style="color:var(--bl);cursor:pointer;font-weight:600">Tentar de novo</div></div>';}return;}
+  if(_atdChatsSig()===_atd._chatsSig) return;   // nada mudou → não reconstrói a lista
   _atdRenderList();
 }
 function _atdRenderList(){
   const box=document.getElementById('atd-chats');if(!box)return;
+  _atd._chatsSig=_atdChatsSig();
   if(!_atd.chats.length){box.innerHTML=`<div style="padding:30px 16px;text-align:center;color:var(--t4);font-size:12.5px;line-height:1.6">Nenhuma conversa ainda.<br>Quando um lead mandar mensagem, ela aparece aqui.</div>`;return;}
   box.innerHTML=_atd.chats.map(c=>{
     const lead=_atdLeadByPhone(c.phone);
@@ -8068,7 +8074,9 @@ async function _atdLoadThread(silent){
   if(!_atd.phone)return;
   try{const r=await api.waMessages(_atd.phone);_atd.msgs=r.messages||[];_atd.curChat=r.chat||null;}catch(e){if(!silent)console.warn('atd thread',e);return;}
   const built=document.getElementById('atd-msgs');
-  if(silent&&built){_atdSyncMsgs();}else{_atdRenderThread();}
+  if(silent&&built){
+    if(_atdMsgsSig()!==_atd._msgsSig){ _atd._msgsSig=_atdMsgsSig(); _atdSyncMsgs(); }   // só redesenha se chegou/mudou mensagem
+  }else{ _atd._msgsSig=_atdMsgsSig(); _atdRenderThread(); }
 }
 function _atdMediaUrl(mu){ if(!mu) return ''; return /^https?:/i.test(mu)?mu:(typeof scMediaUrl==='function'?scMediaUrl(mu):mu); }
 function _atdMsgsHTML(){
@@ -8137,13 +8145,19 @@ async function _atdSend(){
   const text=inp.value.trim();if(!text||!_atd.phone||_atd.sending)return;
   const fromSel=document.getElementById('atd-from');
   const inst=(fromSel&&fromSel.value)||(_atd.curChat&&_atd.curChat.instance)||_atd.fInst||'';
+  // FEEDBACK INSTANTÂNEO: limpa o campo e mostra a bolha JÁ; o servidor reconcilia em seguida.
+  inp.value='';_atdGrow(inp);
+  _atd.msgs.push({direction:'out',type:'chat',body:text,ts:Math.floor(Date.now()/1000),_opt:1});
+  _atd._msgsSig=''; _atdSyncMsgs();
   _atd.sending=true;const btn=document.getElementById('atd-send');if(btn)btn.disabled=true;
   try{
     await api.waSend(_atd.phone,text,inst||undefined);
-    inp.value='';_atdGrow(inp);
-    await _atdLoadThread();
+    await _atdLoadThread(true);   // troca a bolha otimista pela real (leve: só a área de mensagens)
     _atdLoadChats(true);
-  }catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
+  }catch(e){
+    _atd.msgs=(_atd.msgs||[]).filter(m=>!m._opt);_atd._msgsSig='';_atdSyncMsgs();   // falhou: remove a bolha
+    toast('Falha ao enviar: '+(e.message||''),'err');
+  }
   finally{_atd.sending=false;if(btn)btn.disabled=false;const i2=document.getElementById('atd-input');if(i2)i2.focus();}
 }
 // Envia mídia/áudio pela Cloud API (só funciona em número oficial). Sobe no R2 e manda o link.
