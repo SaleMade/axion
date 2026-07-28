@@ -16,9 +16,11 @@
      que "tingia" toda a UI. Agora cinza-preto puro — o tom da cor
      fica APENAS nos accents (botões, links, ícones), não no fundo.
      Igual ao padrão Stripe/Linear/dash do fornecedor. */
-  --bg:#050507;--s1:#0d0d11;--s2:#15151b;--s3:#1c1c24;--s4:#24242c;
-  /* bordas neutras — sem tinta da cor primária */
-  --b1:#22232a;--b2:#2d2e37;--b3:#3a3b46;
+  /* Fundo levantado de quase-preto pra carvão (mais visível, "nem muito").
+     Cards sobem junto pra manter/melhorar a separação contra o fundo. */
+  --bg:#0c0e13;--s1:#12141b;--s2:#191c24;--s3:#21242e;--s4:#2a2e39;
+  /* bordas neutras — reforçadas pra definir melhor os cards */
+  --b1:#2b2e39;--b2:#373b48;--b3:#474c5c;
   /* primária — teal sóbrio (passada 1 do redesign visual). Antes era azul
      #3b82f6 que ficava muito vibrante contra o dark; agora é verde-azulado
      escuro estilo Stripe/Linear, combina com o --gr de positivo sem
@@ -37,7 +39,7 @@
      #e2e8f0 estava muito brilhante contra o fundo dark, "queimando"
      na vista. Agora #c8d1de — off-white quase azulado, fica neutro
      e mais confortável. */
-  --tx:#c8d1de;--t2:#a8b2c2;--t3:#7f8a9c;--t4:#525c6e;
+  --tx:#dbe3ef;--t2:#aeb8c9;--t3:#8894a7;--t4:#5c6578;
   /* layout */
   /* Border-radius escala generosa. --r controla botões/inputs/selects/
      pills. --rl controla cards grandes. --rxl pra heros e modais XL. */
@@ -4039,8 +4041,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.94.0';
-const APP_LAST_CHANGE = 'Novo visual em TODA a dash (estilo da tela de Gestao/MIDAS): o icone de cada card de metrica virou um selo arredondado no canto superior direito, com tint e borda na cor da categoria; botoes mais encorpados com degrade e brilho sutil no primario; e o item ativo da sidebar ganhou destaque em degrade com barrinha lateral. Como e CSS compartilhado, pegou em todas as paginas de uma vez. So visual, nenhuma logica mudou.';
+const APP_VERSION = '2.95.0';
+const APP_LAST_CHANGE = 'Dash menos escura (mais visivel, sem virar tema claro): fundo saiu do quase-preto pra um carvao mais claro, os cards subiram junto pra destacar melhor, as bordas ficaram mais definidas e o texto um pouco mais claro. Ajuste moderado no tema padrao; da pra clarear mais ou puxar de volta se quiser.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
