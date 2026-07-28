@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.90.0';
-const APP_LAST_CHANGE = 'Atendimento, 3 melhorias: (1) Funil agora mostra a barra "Funil rodando, passo X de Y" com botao Pausar e um toast "Funil disparado" na hora. (2) Audio agora vai como NOTA DE VOZ (com as ondinhas, igual gravado no celular): a API oficial so faz isso quando o audio e servido com codecs=opus, que era o que faltava. Vale pros PROXIMOS audios enviados. (3) Conversa mostra o conteudo real: texto, imagens, audio e video de verdade; ruido de protocolo (avisos internos do WhatsApp) nao aparece mais, e midia ainda baixando mostra um rotulo com icone em vez de [audio].';
+const APP_VERSION = '2.91.0';
+const APP_LAST_CHANGE = 'Atendimento: a barra "Funil rodando" saiu de dentro da conversa e foi pro TOPO do painel Sale Chat (logo abaixo do header verde), igual a pilha do Sale Chat original. Mostra o nome do funil, o passo X de Y e o botao Pausar, e pertence ao lead da conversa aberta.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -7882,6 +7882,7 @@ function pageAtendimento(){
       #atendimento-pg .atd-sc-head .t{font-weight:800;font-size:14px;flex:none}
       #atendimento-pg .atd-sc-head .w{flex:1;min-width:0;font-size:11.5px;color:rgba(255,255,255,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       #atendimento-pg .atd-sc-dot{width:9px;height:9px;border-radius:50%;flex:none;background:#eaffef;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
+      #atendimento-pg .atd-sc-sending{padding:9px 13px;background:#13c2730f;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:10px;flex:none}
       #atendimento-pg .atd-sc-main{flex:1;display:flex;min-height:0}
       #atendimento-pg .atd-sc-content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);overflow-x:hidden}
       #atendimento-pg .atd-sc-rail{width:66px;flex:none;background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;padding:9px 0;gap:2px;overflow-y:auto}
@@ -7987,6 +7988,7 @@ function pageAtendimento(){
       </div>
       <div class="atd-side" id="atd-side">
         <div class="atd-sc-head"><span class="atd-sc-dot"></span><span class="t">Sale Chat</span><span class="w" id="atd-sc-who">via API oficial</span></div>
+        <div class="atd-sc-sending" id="atd-sc-sending" style="display:none"></div>
         <div class="atd-sc-main">
           <div class="atd-sc-content" id="atd-sc-content"></div>
           <div class="atd-sc-rail" id="atd-sc-rail"></div>
@@ -8069,6 +8071,7 @@ async function _atdOpenChat(phone){
   const c=_atd.chats.find(x=>x.phone===phone);if(c)c.unread=0;
   _atdRenderList();
   try{_atdSideRender();}catch(_){}   // atualiza o header (nome do lead) e a aba Leads da conversa aberta
+  try{_atdFunilBar(null);_atdFunilRefresh();}catch(_){}   // barra do funil rodando pertence ao lead aberto
 }
 async function _atdLoadThread(silent){
   if(!_atd.phone)return;
@@ -8133,7 +8136,6 @@ function _atdRenderThread(){
       </select>
       <button class="atd-cbtn" title="Disparar funil de áudios" onclick="_atdFunil()" style="background:transparent;border:1px solid var(--b1);color:var(--t2);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;font-family:inherit;display:flex;align-items:center;gap:6px">${ico('zap',{size:13})} Funil</button>
     </div>
-    <div id="atd-funilbar" style="display:none;align-items:center;gap:9px;padding:8px 14px;font-size:12px;color:var(--t2);border-bottom:1px solid var(--b1);background:#13c2730f"></div>
     <div class="atd-msgs" id="atd-msgs">${_atdMsgsHTML()}</div>
     <div class="atd-compose">
       ${_atd.instances.length>1?`<select class="atd-from" id="atd-from" title="Enviar por qual número">${_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}" ${i.name===fromInst?'selected':''}>${_atdEsc(_atdInstLabel(i.name))}</option>`).join('')}</select>`:''}
@@ -8265,18 +8267,19 @@ function _atdFunilStart(seqId){
   api.waFunnelStart(_atd.phone, seqId, _atdCurAt()).then(r=>{
     if(r&&r.ok===false){ toast('Funil: '+(r.error||'falhou'),'err'); return; }
     toast('Funil disparado','ok');
-    _atdFunilBar({idx:(r.sent||1),total:(r.total||'?')});
+    _atdFunilBar({idx:(r.sent||1),total:(r.total||'?'),seqId:seqId});
     _atdLoadThread(true);
   }).catch(e=>toast('Falha: '+(e.message||''),'err'));
 }
-// Barra "funil rodando" (spinner + passo X/Y + Pausar), estilo pilha do Sale Chat original.
+// Barra "funil rodando" — fica no TOPO do painel Sale Chat (igual à pilha do original), não na conversa.
 function _atdFunilBar(st){
-  const bar=document.getElementById('atd-funilbar'); if(!bar) return;
+  const bar=document.getElementById('atd-sc-sending'); if(!bar) return;
   if(!st){ bar.style.display='none'; bar.innerHTML=''; return; }
   const total=st.total||'?', idx=st.idx||1;
-  bar.innerHTML='<span style="width:13px;height:13px;border-radius:50%;border:2px solid rgba(19,194,115,.3);border-top-color:#13c273;animation:atdspin .7s linear infinite;flex:none"></span>'
-    +'<span style="flex:1;min-width:0"><b style="color:#13c273">Funil rodando</b> · passo '+_atdEsc(String(idx))+' de '+_atdEsc(String(total))+' <span style="color:var(--t4)">· para sozinho se o lead responder</span></span>'
-    +'<button onclick="_atdFunilStop()" style="flex:none;background:#f0810f;border:none;color:#fff;font-size:11px;font-weight:800;padding:5px 11px;border-radius:8px;cursor:pointer;font-family:inherit">Pausar</button>';
+  let lbl='Funil'; try{ const s=(SC().sequences||[]).find(x=>String(x.id)===String(st.seqId)); if(s&&s.label)lbl=s.label; }catch(_){}
+  bar.innerHTML='<span style="width:14px;height:14px;border-radius:50%;border:2px solid rgba(19,194,115,.3);border-top-color:#13c273;animation:atdspin .7s linear infinite;flex:none"></span>'
+    +'<span style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:800;color:#13c273;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(lbl)+'</div><div style="font-size:10.5px;color:var(--t3)">Enviando · passo '+_atdEsc(String(idx))+' de '+_atdEsc(String(total))+'</div></span>'
+    +'<button onclick="_atdFunilStop()" style="flex:none;background:#f0810f;border:none;color:#fff;font-size:11px;font-weight:800;padding:6px 12px;border-radius:9px;cursor:pointer;font-family:inherit">Pausar</button>';
   bar.style.display='flex';
 }
 function _atdFunilStop(){
@@ -8284,10 +8287,10 @@ function _atdFunilStop(){
   api.waFunnelStop(_atd.phone).then(()=>{ _atdFunilBar(null); toast('Funil pausado','ok'); }).catch(()=>{});
 }
 function _atdFunilRefresh(){
-  if(!_atd.phone) return;
+  if(!_atd.phone){ _atdFunilBar(null); return; }
   api.waFunnelStatus(_atd.phone).then(r=>{
     const run=r&&r.run;
-    _atdFunilBar(run&&run.status==='running'?{idx:run.idx,total:run.total}:null);
+    _atdFunilBar(run&&run.status==='running'?{idx:run.idx,total:run.total,seqId:run.seq_id}:null);
   }).catch(()=>{});
 }
 // ── Aba lateral (Sale Chat integrado) — dispara tudo pela API oficial ──
@@ -11563,7 +11566,7 @@ function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), n
 // trocar o número de principal↔reserva não gera mais falso "não conectado". Fail-open se nenhum número é conhecido.
 function _waConnOk(inst, chipNum){
   if(!chipNum) return false;
-  const _isOn=st=>st==='open'||st==='sc';   // open = Evolution; sc = Sale Chat rodando (heartbeat)
+  const _isOn=st=>st==='open'||st==='sc'||st==='cloud';   // open = Evolution; sc = Sale Chat; cloud = API oficial (Datacrazy/coexistência) sempre viva
   let anyKnown=false;
   for(const k in _waConnMap){
     if(!_isOn(_waConnMap[k])) continue;
