@@ -4038,7 +4038,7 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.92.0';
+const APP_VERSION = '2.93.0';
 const APP_LAST_CHANGE = 'Atendimento: a barra "Funil rodando" saiu de dentro da conversa e foi pro TOPO do painel Sale Chat (logo abaixo do header verde), igual a pilha do Sale Chat original. Mostra o nome do funil, o passo X de Y e o botao Pausar, e pertence ao lead da conversa aberta.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
@@ -8047,12 +8047,13 @@ function _atdRenderList(){
     const lead=_atdLeadByPhone(c.phone);
     const disp=(lead&&lead.nome)||c.name||('+'+c.phone);
     const av=_atdAvatar(disp);
-    const last=(c.last_dir==='out'?'Você: ':'')+(c.last_text||'');
+    const lt=_atdLastText(c);
+    const lastHtml=(c.last_dir==='out'?'Você: ':'')+(lt.ic?ico(lt.ic,{size:11})+' ':'')+_atdEsc(lt.txt.slice(0,60));
     return `<div class="atd-ci ${_atd.phone===c.phone?'on':''}" onclick="_atdOpenChat('${c.phone}')">
       <div class="atd-av" style="background:${av.bg}">${av.ini}</div>
       <div class="atd-cibody">
         <div class="atd-ciname">${_atdEsc(disp)}</div>
-        <div class="atd-cilast">${_atdEsc(last.slice(0,64))}</div>
+        <div class="atd-cilast">${lastHtml}</div>
         <div class="atd-inst">${ico('smartphone',{size:10})} ${_atdEsc(_atdInstLabel(c.instance))}</div>
       </div>
       <div class="atd-cimeta">
@@ -8593,9 +8594,22 @@ function _atdGrow(t){t.style.height='auto';t.style.height=Math.min(120,t.scrollH
 function _atdEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function _atdInstLabel(inst){
   if(!inst)return 'número';
-  const ch=(DB.chips||[]).find(c=>c.instance===inst||c.inst===inst||c.id===inst);
-  if(ch&&(ch.label||ch.nome||ch.num))return ch.label||ch.nome||ch.num;
-  return String(inst).replace(/^ax_/,'').replace(/^ev_/,'');
+  const at=String(inst).replace(/^ax_/,'').replace(/^ev_/,'').replace(/_b$/,'');
+  const bkp=/_b$/.test(String(inst));
+  const m=(typeof getTeam==='function'?getTeam(at):null)||(DB.team||[]).find(t=>String(t.id)===at);
+  if(m&&m.name)return m.name+(bkp?' · reserva':'');
+  const ch=(DB.chips||[]).find(c=>String(c.at)===at||c.instance===inst||c.inst===inst||c.id===inst);
+  if(ch&&(ch.num||ch.label||ch.nome))return ch.num||ch.label||ch.nome;
+  return at;
+}
+// Preview da última mensagem em linguagem humana: [ptt]/[chat]/[video]/etc → rótulo + ícone.
+function _atdLastText(c){
+  const raw=String((c&&c.last_text)||'');
+  const m=raw.match(/^\[([a-z0-9_]+)\]$/i);
+  if(!m)return {ic:'',txt:raw};
+  const map={ptt:['mic','Áudio'],audio:['mic','Áudio'],voice:['mic','Áudio'],image:['image','Foto'],video:['video','Vídeo'],document:['file','Documento'],sticker:['image','Figurinha'],location:['','Localização'],contact:['user','Contato'],contacts:['user','Contato'],chat:['','Mensagem'],text:['','Mensagem']};
+  const e=map[m[1].toLowerCase()]||['','Mensagem'];
+  return {ic:e[0],txt:e[1]};
 }
 function _atdLeadByPhone(phone){
   const p=String(phone||'').replace(/\D/g,'');if(!p)return null;
