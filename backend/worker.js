@@ -1658,7 +1658,7 @@ async function _waCloudSendText(env, atId, number, text) {
     if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) return { ok: false, error: 'janela de 24h fechada; use um template', code: 'window_closed' };
   } catch (_) {}
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST',
+    method: 'POST', token: apiNum.token,
     body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'text', text: { body: txt, preview_url: false } })
   });
   if (!g.ok) {
@@ -1680,7 +1680,7 @@ async function _waCloudSendTemplate(env, atId, number, name, lang) {
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'template', template: { name: String(name), language: { code: String(lang || 'pt_BR') } } })
+    method: 'POST', token: apiNum.token, body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'template', template: { name: String(name), language: { code: String(lang || 'pt_BR') } } })
   });
   if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
@@ -1739,7 +1739,7 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   if (kind === 'document' && opts.filename) media.filename = opts.filename;
   if ((kind === 'image' || kind === 'video' || kind === 'document') && opts.caption) media.caption = opts.caption;
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: kind, [kind]: media })
+    method: 'POST', token: apiNum.token, body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: kind, [kind]: media })
   });
   if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
@@ -2400,6 +2400,7 @@ async function _scEnsureTables(env) {
     // Número da API OFICIAL (Cloud API). Identidade de TRANSPORTE (phone_number_id, waba_id) — separada
     // da atribuição (wa_number_owner), que é re-semeada/soft-deleted todo cron. Join por num_key.
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_api_numbers (phone_number_id TEXT PRIMARY KEY, display_phone TEXT, num_key TEXT, waba_id TEXT, at_id TEXT, quality TEXT, name_status TEXT, verified INTEGER DEFAULT 0, updated_at INTEGER, created_at INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN token TEXT').run(); } catch (_) {}   // token da Meta do PRÓPRIO número (vem do Datacrazy /instances) — envio usa ele, não o wa_api_token
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_key ON wa_api_numbers(num_key)').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_at ON wa_api_numbers(at_id)').run(); } catch (_) {}
     // Funil automático rodando numa conversa (envia os áudios um a um; para quando o lead responde).
@@ -2514,13 +2515,14 @@ async function resolveOwner(env, selfNumber) {
 // ─── API OFICIAL (Cloud API) ───────────────────────────────────────────────
 // Chamada à Graph API v21.0 com o token de sistema permanente (wa_api_token). Espelha evoFetch.
 async function _graph(env, path, opts = {}) {
-  const token = await _readConfig(env, 'wa_api_token');
+  const { token: optToken, ...fetchOpts } = opts;   // token do PRÓPRIO número (Datacrazy) tem prioridade; senão cai no wa_api_token
+  const token = optToken || await _readConfig(env, 'wa_api_token');
   const base = 'https://graph.facebook.com/v21.0';
-  const headers = { ...(opts.headers || {}) };
+  const headers = { ...(fetchOpts.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
-  if (opts.body && typeof opts.body === 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
+  if (fetchOpts.body && typeof fetchOpts.body === 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
   try {
-    const r = await fetch(base + (path.startsWith('/') ? path : '/' + path), { ...opts, headers });
+    const r = await fetch(base + (path.startsWith('/') ? path : '/' + path), { ...fetchOpts, headers });
     const data = await r.json().catch(() => ({}));
     return { ok: r.ok && !data.error, status: r.status, data, token_present: !!token };
   } catch (e) { return { ok: false, status: 0, data: { error: { message: String(e) } }, token_present: !!token }; }
@@ -2547,7 +2549,7 @@ async function _waApiUpsert(env, o) {
 }
 // Resolve o número OFICIAL de transporte. Por at_id (vendedor) ou por telefone (display/num_key).
 async function resolveApiNumber(env, opts = {}) {
-  const cols = 'phone_number_id, waba_id, at_id, display_phone, verified';
+  const cols = 'phone_number_id, waba_id, at_id, display_phone, verified, token';
   try {
     if (opts.atId != null && String(opts.atId) !== '') {
       const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ORDER BY verified DESC, updated_at DESC LIMIT 1`).bind(String(opts.atId)).first();
@@ -3080,6 +3082,24 @@ async function handleDatacrazyEventsList(req, env) {
 // disparar — o AXION busca as conversas recentes, pega as mensagens INBOUND novas (dedup por msg_id)
 // e roda o mesmo pipeline (log + captura de lead + pixel + para funil). É o backbone confiável;
 // a Automação/webhook é só o caminho em tempo real (os dois deduplicam, não conta lead 2x).
+// Sincroniza o token da Meta de cada número (do Datacrazy /instances) pra dentro do wa_api_numbers.
+// O envio (funil/áudio/mídia/texto) sai pela Cloud API usando o token do PRÓPRIO número — o wa_api_token
+// do AXION não tem permissão nos números da WABA do Datacrazy. Roda no cron pra manter o token fresco.
+async function _dcSyncInstances(env) {
+  const j = await _dcApiGet(env, '/instances');
+  const arr = (j && (j.data || j)) || [];
+  if (!Array.isArray(arr) || !arr.length) return;
+  for (const inst of arr) {
+    try {
+      const cfg = (inst && inst.config) || {};
+      const disp = String(cfg.phoneNumber || '').replace(/\D/g, '');
+      const token = String(cfg.token || '');
+      if (!disp || !token) continue;
+      const nk = _waNumKey(disp);
+      await env.DB.prepare("UPDATE wa_api_numbers SET token=?, waba_id=COALESCE(?, waba_id), updated_at=strftime('%s','now') WHERE num_key=?").bind(token, String(cfg.wabaId || '') || null, nk).run();
+    } catch (_) {}
+  }
+}
 let _dcSeenOk = false;
 async function _dcPoll(env) {
   const key = await _readConfig(env, 'dc_api_key');
@@ -3471,10 +3491,16 @@ async function handleSaleChatMediaGet(req, env, key) {
   try {
     const obj = await env.MEDIA.get(key);
     if (!obj) return err('Mídia não encontrada', 404);
+    let ct = (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream';
+    // A WhatsApp Cloud API só renderiza o áudio como NOTA DE VOZ (com as ondinhas, igual gravado no
+    // celular) quando o content-type DECLARA o codec opus. Servido como 'audio/ogg' puro, o WhatsApp
+    // trata como arquivo de áudio e mostra uma linha reta. Nossos áudios já são ogg/opus, então é só
+    // declarar o codec aqui. WhatsApp busca este link e lê este header pra decidir voz vs arquivo.
+    if (/^audio\/ogg/i.test(ct) || /\.ogg$/i.test(String(key || ''))) ct = 'audio/ogg; codecs=opus';
     return new Response(obj.body, { headers: {
       'access-control-allow-origin': '*',
       'cache-control': 'public, max-age=86400',
-      'content-type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream',
+      'content-type': ct,
     } });
   } catch (e) { return err('Erro ao ler mídia: ' + (e.message || ''), 502); }
 }
@@ -5292,6 +5318,7 @@ export default {
     // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
     try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
     try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
+    try { await _dcSyncInstances(env); } catch (_) {}   // token de envio (Meta) de cada número do Datacrazy — fresco
     try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
     // Purga o que já não serve pra roteamento/atribuição, pra as tabelas quentes não crescerem sem
     // fim (deixavam os scans lentos e o custo do Worker subindo com a verba). Só apaga o antigo:
