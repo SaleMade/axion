@@ -4038,7 +4038,7 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.91.0';
+const APP_VERSION = '2.92.0';
 const APP_LAST_CHANGE = 'Atendimento: a barra "Funil rodando" saiu de dentro da conversa e foi pro TOPO do painel Sale Chat (logo abaixo do header verde), igual a pilha do Sale Chat original. Mostra o nome do funil, o passo X de Y e o botao Pausar, e pertence ao lead da conversa aberta.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
@@ -8488,13 +8488,22 @@ function _atdSideTogglePrevFunil(itemEl){
 }
 function _atdFunnelPrevHtml(seq){
   const items=(seq&&seq.items)||[];
-  if(!items.length) return '<div class="ats-prev-note">Funil vazio.</div>';
-  const rows=items.map((it,j)=>{
-    let label=it.label||it.id||'passo', kindTxt='';
-    try{ const mm=(SC().media||[]).find(x=>x.id===it.id)||(SC().messages||[]).find(x=>x.id===it.id); if(mm)label=mm.label||label; if(it.kind)kindTxt=it.kind; }catch(_){}
-    return '<div class="ats-fp-step"><span class="ats-fp-n">'+(j+1)+'</span><span class="ats-fp-lb">'+_atdEsc(label)+(kindTxt?' <i>('+_atdEsc(kindTxt)+')</i>':'')+'</span></div>';
+  if(!items.length) return '<div class="ats-prev-note">Funil sem passos.</div>';
+  let total=0;
+  const rows=items.map((st,j)=>{
+    let label=st.label||st.id||'passo', kind='';
+    try{ const mm=(SC().media||[]).find(x=>x.id===st.id)||(SC().messages||[]).find(x=>x.id===st.id); if(mm){label=mm.label||label; kind=mm.kind||(mm.text!=null?'text':'');} }catch(_){}
+    const kindTxt={text:'msg',audio:'áudio',video:'vídeo',image:'imagem',document:'doc'}[kind]||'';
+    const delay=Math.max(0,Number(st.delay)||0), sim=Number(st.sim)||0;
+    const simMs=sim?sim*1000:(kind==='audio'?3000:kind==='text'?1200:800);
+    total+=delay*1000+simMs;
+    const timing='espera '+delay+'s'+(sim?' + simula '+sim+'s':'');
+    return '<div class="ats-fp-step"><span class="ats-fp-n">'+(j+1)+'</span><span class="ats-fp-lb">'+_atdEsc(label)+(kindTxt?' <i>('+kindTxt+')</i>':'')+'</span><span class="ats-fp-t">'+timing+'</span></div>';
   }).join('');
-  return '<div class="ats-fp">'+rows+'<div class="ats-fp-foot">'+items.length+' passos no total</div></div>';
+  const secs=Math.round(total/1000);
+  const totalTxt=secs>=60?(Math.floor(secs/60)+'min '+(secs%60)+'s'):(secs+'s');
+  const stopTxt=seq.stopOnReply?'Para se o lead responder no meio.':'Continua mesmo se o lead responder.';
+  return '<div class="ats-fp">'+rows+'<div class="ats-fp-foot">~'+totalTxt+' no total · '+stopTxt+'</div></div>';
 }
 // ── Aba TEMPLATES (Cloud API): reabrir lead frio fora das 24h ──
 function _atdTabTemplates(c){
