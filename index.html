@@ -8104,7 +8104,11 @@ function _atdMsgsHTML(){
     else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
     else if(mu && t==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
     else if(mu && t==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
-    else if(hasBody) inner=_atdEsc(m.body);
+    else if(hasBody){
+      const b64=_atdB64Label(m.body);   // corpo é base64 de mídia (thumbnail que a captura salvou no texto)?
+      if(b64){ const byType={image:['image','Foto'],video:['video','Vídeo'],ptv:['video','Vídeo'],document:['file','Documento'],audio:['mic','Áudio'],ptt:['mic','Áudio'],voice:['mic','Áudio'],sticker:['image','Figurinha'],location:['','Localização'],interactive:['','Mensagem']}[t]; const e=byType||[b64.ic,b64.txt]; inner=`<span style="opacity:.7;display:inline-flex;align-items:center;gap:5px">${e[0]?ico(e[0],{size:13}):''} ${e[1]}</span>`; }
+      else inner=_atdEsc(m.body);
+    }
     else if(lblOf[t]) inner=`<span style="opacity:.7;display:inline-flex;align-items:center;gap:5px">${ico(icoOf[t]||'file',{size:13})} ${lblOf[t]}</span>`;   // mídia ainda baixando/sem arquivo
     else return;   // nada pra mostrar → não polui a conversa
     const day=_atdDay(m.ts);
@@ -8606,10 +8610,21 @@ function _atdInstLabel(inst){
   return at;
 }
 // Preview da última mensagem em linguagem humana: [ptt]/[chat]/[video]/etc → rótulo + ícone.
+// Detecta base64 de mídia (thumbnail JPEG/PNG, pdf, etc) guardado no corpo → rótulo humano.
+function _atdB64Label(s){
+  s=String(s||'');
+  if(s.length<80)return null;
+  if(/^\/9j\/|^data:image|^iVBORw0KGgo|^R0lGOD|^UklGR/.test(s))return {ic:'image',txt:'Foto'};
+  if(/^JVBERi|^data:application\/pdf/.test(s))return {ic:'file',txt:'Documento'};
+  if(/^T2dnUw|^data:audio|^SUQz/.test(s))return {ic:'mic',txt:'Áudio'};
+  if(/^data:video/.test(s))return {ic:'video',txt:'Vídeo'};
+  if(/^[A-Za-z0-9+/]{160,}/.test(s) && !/\s/.test(s))return {ic:'file',txt:'Anexo'};
+  return null;
+}
 function _atdLastText(c){
   const raw=String((c&&c.last_text)||'');
   const m=raw.match(/^\[([a-z0-9_]+)\]$/i);
-  if(!m)return {ic:'',txt:raw};
+  if(!m){ const b=_atdB64Label(raw); return b||{ic:'',txt:raw}; }
   const map={ptt:['mic','Áudio'],audio:['mic','Áudio'],voice:['mic','Áudio'],image:['image','Foto'],video:['video','Vídeo'],document:['file','Documento'],sticker:['image','Figurinha'],location:['','Localização'],contact:['user','Contato'],contacts:['user','Contato'],chat:['','Mensagem'],text:['','Mensagem']};
   const e=map[m[1].toLowerCase()]||['','Mensagem'];
   return {ic:e[0],txt:e[1]};
