@@ -1721,6 +1721,24 @@ async function _waCloudDownloadMedia(env, mediaId, msgId) {
     if (msgId) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(key, msgId).run(); } catch (_) {} }
   } catch (_) {}
 }
+// Sobe um arquivo pra Media API da Meta e devolve o media id. Necessário pra NOTA DE VOZ (voice:true),
+// que a Meta só aceita com mídia enviada (id), não com link. Busca os bytes do R2 pelo próprio link.
+async function _waCloudUploadMedia(env, phoneNumberId, token, link, mime) {
+  try {
+    const r = await fetch(link);
+    if (!r.ok) return null;
+    const buf = await r.arrayBuffer();
+    if (!buf || !buf.byteLength) return null;
+    const tk = token || await _readConfig(env, 'wa_api_token');
+    const fd = new FormData();
+    fd.append('messaging_product', 'whatsapp');
+    fd.append('type', mime || 'audio/ogg');
+    fd.append('file', new Blob([buf], { type: mime || 'audio/ogg' }), 'audio.ogg');
+    const up = await fetch('https://graph.facebook.com/v21.0/' + encodeURIComponent(phoneNumberId) + '/media', { method: 'POST', headers: { authorization: 'Bearer ' + tk }, body: fd });
+    const j = await up.json().catch(() => ({}));
+    return (up.ok && j && j.id) ? String(j.id) : null;
+  } catch (_) { return null; }
+}
 // Envia MÍDIA (imagem/áudio/vídeo/documento) pela Cloud API, por um `link` público (R2).
 // opts: { kind, link, caption?, filename?, mediaKey? }.
 async function _waCloudSendMedia(env, atId, number, opts) {
@@ -1738,8 +1756,20 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   const media = { link: opts.link };
   if (kind === 'document' && opts.filename) media.filename = opts.filename;
   if ((kind === 'image' || kind === 'video' || kind === 'document') && opts.caption) media.caption = opts.caption;
+  // ÁUDIO como NOTA DE VOZ (ondinhas, igual gravado no celular): a Meta exige mídia ENVIADA (media
+  // id) + voice:true. Só o `link` vira ARQUIVO de áudio (linha reta). Subimos o ogg/opus, pegamos o
+  // id e mandamos voice:true. Se o upload falhar, cai no link (manda como arquivo, mas manda).
+  let payload;
+  if (kind === 'audio') {
+    const mid = await _waCloudUploadMedia(env, apiNum.phone_number_id, apiNum.token, opts.link, 'audio/ogg');
+    payload = mid
+      ? { messaging_product: 'whatsapp', to: num, type: 'audio', audio: { id: mid, voice: true } }
+      : { messaging_product: 'whatsapp', to: num, type: 'audio', audio: media };
+  } else {
+    payload = { messaging_product: 'whatsapp', to: num, type: kind, [kind]: media };
+  }
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', token: apiNum.token, body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: kind, [kind]: media })
+    method: 'POST', token: apiNum.token, body: JSON.stringify(payload)
   });
   if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
@@ -3403,6 +3433,14 @@ async function handleWAConn(req, env) {
     scConns.forEach(c => { byInst[c.instance] = c; });   // Sale Chat rodando ganha da Evolution
     return Object.values(byInst);
   };
+  // Número da API OFICIAL (Datacrazy/coexistência) está SEMPRE vivo do lado da Meta — não depende de
+  // Sale Chat/Evolution. Entra como 'cloud' pra dash mostrar verde (senão aparece "WhatsApp parado" à toa).
+  let apiConns = [];
+  try {
+    const api = await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
+    apiConns = (api.results || []).filter(a => a.at_id && a.display_phone).map(a => ({ instance: 'ax_' + a.at_id, state: 'cloud', number: String(a.display_phone) }));
+  } catch (_) {}
+  const withApi = (list) => { const seen = {}; (list || []).forEach(c => { seen[c.instance] = 1; }); return (list || []).concat(apiConns.filter(a => !seen[a.instance])); };
   // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também).
   // Com a captura 100% no Sale Chat a Evolution sai de cena: não consulta, não grava e não mostra
   // conexão fantasma dela na tela. O Baileys é o maior risco de ban, então nada aqui pode dar a
@@ -3419,7 +3457,7 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, sat, conn: mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number }))) });
+      return json({ ok: true, sat, conn: withApi(mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number })))) });
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
@@ -3439,7 +3477,7 @@ async function handleWAConn(req, env) {
     // com a fonte no Sale Chat, linha da Evolution não aparece mais como conexão da operação
     .filter(r => _src !== 'sc' || String(r.state) === 'sc')
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
-  return json({ ok: true, sat, semDono, conn: mergeSc(limpos) });
+  return json({ ok: true, sat, semDono, conn: withApi(mergeSc(limpos)) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -4917,6 +4955,164 @@ async function _roletaDiagHtml(env, day, chips, nameMap){
       + `</div>`;
   }catch(_){ return ''; }
 }
+// Dados da "Conversão por número" (mesma query do _roletaDiagHtml, pra dash renderizar nativo).
+async function _roletaDiagData(env, day, chips, nameMap){
+  try{
+    const ini=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), fim=ini+86400;
+    const [r, lr] = await Promise.all([
+      env.DB.prepare(
+        `SELECT num_key, COUNT(*) cliques FROM tt_pending
+          WHERE ts>=? AND ts<? AND num_key IS NOT NULL AND num_key<>''
+          GROUP BY num_key HAVING cliques >= 30`
+      ).bind(ini, fim).all(),
+      env.DB.prepare(
+        "SELECT substr(replace(num,'+',''),-8) AS nk, COUNT(*) n FROM wa_lead WHERE ts>=? AND ts<? AND num IS NOT NULL AND num<>'' GROUP BY nk"
+      ).bind(ini, fim).all(),
+    ]);
+    const k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
+    const fmtTel=(raw)=>{ let t=String(raw||'').replace(/\D/g,''); if(t.startsWith('55')&&t.length>11) t=t.slice(2); if(t.length>=10){ const ddd=t.slice(0,2), rest=t.slice(2); return '('+ddd+') '+rest.slice(0,rest.length-4)+'-'+rest.slice(-4); } return String(raw||''); };
+    const leadDe={}; (lr.results||[]).forEach(x=>{ const k=String(x.nk||''); if(k) leadDe[k]=Number(x.n)||0; });
+    return (r.results||[]).map(x=>{
+      const k=String(x.num_key||''), cl=Number(x.cliques)||0, cv=leadDe[k]||0;
+      const c=chips.find(c=>k8(c.num)===k);
+      return { cl, cv, taxa: cl?(cv*100/cl):0, nome: (c&&c.at)?(nameMap[String(c.at)]||String(c.at)):'', tel: c?fmtTel(c.num):fmtTel(k) };
+    }).sort((a,b)=>b.cl-a.cl).slice(0,8);
+  }catch(_){ return []; }
+}
+// MESMA computação da página /pressels-total, mas devolve DADOS estruturados pra dash renderizar nativo
+// (sem iframe). full = diretor logado → número completo; senão mascarado (…1234). Espelha exatamente a
+// lógica da página HTML (atribuição, ranking, split de vendedor, agregação de comprador).
+async function _presselsTotalData(env, day, view, per, full){
+  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
+  const pressels=Array.isArray(data.pressels)?data.pressels:[];
+  const chips=Array.isArray(data.chips)?data.chips:[];
+  let nameMap={};
+  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  const today=_brDay(); const isToday=(day===today);
+  const out={ ok:true, view, per, day, today, isToday, full:!!full };
+  out.side=await _roletaDiagData(env, day, chips, nameMap);
+  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');
+  const _emUsoIds=new Set(['em_uso']);
+  try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) _emUsoIds.add(String(s.id)); }); }catch(_){}
+  const _isEmUso=(c)=> !!c && (c.em_uso===true || c.em_uso===1 || _emUsoIds.has(String(c.wa_st||'')));
+  const _chipsDo=(at)=>chips.filter(c=>String(c.at)===String(at) && c.st!=='aquecimento' && c.st!=='banido');
+  const _splitAts=new Set();
+  pressels.forEach(p=>(p.vendedores||[]).forEach(v=>{ if(!v||!v.at||v.reserva_mode!=='split'||v.reserva_on===false) return; const mine=_chipsDo(v.at); if(mine.some(_isEmUso)&&mine.some(c=>c.bkp===true)) _splitAts.add(String(v.at)); }));
+  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); const em=mine.find(_isEmUso)||mine[0]; const nums=[]; if(em&&em.num) nums.push(em.num); if(_splitAts.has(at)){ const bk=mine.find(c=>c.bkp===true); if(bk&&bk.num&&bk.num!==(em&&em.num)) nums.push(bk.num); } if(!nums.length) nums.push('—'); return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };
+  const _rankVend=(vend)=>{ const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0?(Number(x.vendas)||0)/c:0; }; return (vend||[]).slice().sort((a,b)=> ((Number(b.vendas)||0)-(Number(a.vendas)||0)) || (cv(b)-cv(a)) || ((Number(b.contatos)||0)-(Number(a.contatos)||0))); };
+  const pad=n=>String(n).padStart(2,'0');
+  const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return ''; return n.startsWith('55')?n.slice(2):n; };
+  const mask=ph=>{ const p=String(ph||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):''; };
+  const baseAt=inst=>String(inst||'').replace(/^ax_/,'').replace(/_b$/,'')||'?';
+  const byName=(a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b));
+
+  if(view==='metricas'){
+    const M=await _presselDayMetrics(env, day);
+    const secs=pressels.map(p=>{
+      const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
+      const vm={}; const ens=(at)=>{ at=String(at); if(at && !vm[at]) vm[at]=_vendCell(at); };
+      (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>ens(v.at));
+      Object.keys(cvi).forEach(inst=>ens(_vAt(inst)));
+      Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
+      Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
+      Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
+      return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend:_rankVend(Object.values(vm))};
+    });
+    const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
+    tot.vendas=Object.values(M.vendasInst||{}).reduce((a,x)=>a+(Number(x.v)||0),0);
+    const _vt={}; const _vtEns=(k)=>{ k=String(k); if(k && !_vt[k]) _vt[k]=_vendCell(k); };
+    pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>_vtEns(v.at)));
+    Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>_vtEns(_vAt(inst))));
+    Object.keys(M.vendasInst||{}).forEach(inst=>_vtEns(_vAt(inst)));
+    Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));
+    Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });
+    out.total=tot; out.pressels=secs; out.totVend=_rankVend(Object.values(_vt));
+  } else if(view==='vendas'){
+    let orders=[];
+    try{
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
+      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
+      const r=await env.DB.prepare("SELECT s.name, s.phone phone, s.instance, s.value, s.ts, l.pid pid, l.src src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
+      orders=r.results||[];
+    }catch(_){}
+    const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
+    out.totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
+    out.nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length; out.nS=orders.length-out.nP; out.count=orders.length;
+    out.orders=orders.map(o=>{ const at=baseAt(o.instance); const attr=!!(o.pid&&String(o.pid).trim()!==''); const ph=String(o.phone||'').replace(/\D/g,''); return { name:o.name||'Cliente', seller:nameMap[at]||o.instance||'—', value:Number(o.value)||0, ts:Number(o.ts||0), attr, pnome:attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'', aprox:o.src==='fifo', phone: full?ph:'', phoneFmt: full?fmtNum(ph):mask(ph) }; });
+  } else if(view==='leads' && per==='mes'){
+    const dP=day.split('-'); const mY=+dP[0], mM=+dP[1];
+    const monthStart=Math.floor(new Date(dP[0]+'-'+dP[1]+'-01T00:00:00-03:00').getTime()/1000);
+    const nY=mM===12?mY+1:mY, nM=mM===12?1:mM+1;
+    const monthEnd=Math.floor(new Date(nY+'-'+pad(nM)+'-01T00:00:00-03:00').getTime()/1000);
+    const mNames=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+    out.monthLabel=mNames[mM-1]+'/'+mY;
+    let mLeads=[], mSales=[];
+    try{
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
+      const lr=await env.DB.prepare("SELECT phone, inst, ts FROM wa_lead WHERE ts>=? AND ts<?").bind(monthStart,monthEnd).all(); mLeads=lr.results||[];
+      const sr=await env.DB.prepare("SELECT phone, instance, name, value, ts FROM wa_sales WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(monthStart,monthEnd).all(); mSales=sr.results||[];
+    }catch(_){}
+    const lByAt={}; mLeads.forEach(l=>{ const at=baseAt(l.inst); (lByAt[at]=lByAt[at]||[]).push(l); });
+    const buyerInfo={}; mSales.forEach(s=>{ const p=String(s.phone||'').replace(/\D/g,''); if(!p) return; const v=Number(s.value)||0, t=Number(s.ts||0); if(!buyerInfo[p]){ buyerInfo[p]={value:v,ts:t,name:s.name||''}; } else { buyerInfo[p].value+=v; if(t>=buyerInfo[p].ts){ buyerInfo[p].ts=t; if(s.name) buyerInfo[p].name=s.name; } } });
+    const _mc=(at)=>(lByAt[at]||[]).reduce((s,l)=>{ const p=String(l.phone||'').replace(/\D/g,''); return s+((p&&buyerInfo[p])?1:0); },0);
+    const _mr=(at)=>(lByAt[at]||[]).reduce((s,l)=>{ const p=String(l.phone||'').replace(/\D/g,''); const b=p?buyerInfo[p]:null; return s+(b?(Number(b.value)||0):0); },0);
+    const allAts=Object.keys(lByAt).filter(a=>a&&a!=='?').sort((a,b)=>{ const ca=_mc(a), cb=_mc(b), la=(lByAt[a]||[]).length, lb=(lByAt[b]||[]).length; const pa=la>0?ca/la:0, pb=lb>0?cb/lb:0; return (cb-ca)||(pb-pa)||(_mr(b)-_mr(a))||(lb-la)||byName(a,b); });
+    if(lByAt['?']) allAts.push('?');
+    let totComp=0, totRev=0; mLeads.forEach(l=>{ const p=String(l.phone||'').replace(/\D/g,''); if(!p) return; const b=buyerInfo[p]; if(b){ totComp++; totRev+=Number(b.value)||0; } });
+    out.totLeads=mLeads.length; out.totComp=totComp; out.totRev=totRev;
+    out.sellers=allAts.map(at=>{
+      const name=nameMap[at]||(at==='?'?'Sem vendedor':'Vendedor');
+      const arrL=lByAt[at]||[]; const lc=arrL.length;
+      const buyers=[]; const bseen=new Set();
+      arrL.forEach(l=>{ const p=String(l.phone||'').replace(/\D/g,''); if(!p||bseen.has(p)) return; bseen.add(p); const b=buyerInfo[p]; if(b) buyers.push({phone:p,value:b.value,ts:b.ts,name:b.name}); });
+      buyers.sort((a,b)=>(Number(b.ts||0)-Number(a.ts||0)));
+      const comp=buyers.length; const rev=buyers.reduce((a,b)=>a+(Number(b.value)||0),0);
+      return { name, leads:lc, comp, rev, pct: lc>0?Math.round(comp/lc*100):null, buyers: buyers.map(b=>({ phone: full?b.phone:'', phoneFmt: full?fmtNum(b.phone):mask(b.phone), value:Number(b.value)||0, ts:Number(b.ts||0), name:b.name||'' })) };
+    });
+  } else {
+    let leads=[]; let saleSet=new Set(); const nameByPhone={};
+    const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
+    try{
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
+      const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(dstart,dend).all(); leads=r.results||[];
+      try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=?").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
+      try{ const nr=await env.DB.prepare("SELECT c.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON l.phone=c.phone WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
+    }catch(_){}
+    const isSale=ph=>!!(ph&&saleSet.has(ph));
+    const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
+    const byAt={}; leads.forEach(l=>{ const at=baseAt(l.inst); (byAt[at]=byAt[at]||[]).push(l); });
+    const _dv=(at)=>(byAt[at]||[]).reduce((s,l)=>s+(isSale(String(l.phone||'').replace(/\D/g,''))?1:0),0);
+    const ats=Object.keys(byAt).filter(at=>(byAt[at]||[]).length).sort((a,b)=>{ const va=_dv(a), vb=_dv(b), la=byAt[a].length, lb=byAt[b].length; const pa=la>0?va/la:0, pb=lb>0?vb/lb:0; return (vb-va)||(pb-pa)||(lb-la)||byName(a,b); });
+    out.sellers=ats.map(at=>{
+      const arr=byAt[at]; const name=nameMap[at]||'Vendedor';
+      const daP=arr.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
+      const byNum={}, numOrder=[];
+      arr.forEach(l=>{ const k=String(l.num||''); if(!(k in byNum)){ byNum[k]=[]; numOrder.push(k); } byNum[k].push(l); });
+      const nums=numOrder.map(k=>({ num:fmtNum(k)||'número não registrado', count:byNum[k].length, leads: byNum[k].map(l=>{ const ph=String(l.phone||'').replace(/\D/g,''); const bt=new Date((Number(l.ts||0)-10800)*1000); const hora=isNaN(bt)?'':`${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`; const attr=!!(l.pid&&String(l.pid).trim()!==''); return { hora, phone: full?ph:'', phoneFmt: full?(fmtNum(ph)||''):(ph?('…'+ph.slice(-4)):''), nome:nameByPhone[ph]||'', attr, pnome: attr?(_pnm[String(l.pid)]||'pressel'):'', sale:isSale(ph) }; }) }));
+      return { name, total:arr.length, daP, nums };
+    });
+    out.totL=leads.length; out.totP=leads.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
+  }
+  return out;
+}
+// GET /pressels-total.json — mesmos dados da página, em JSON, pra dash renderizar nativo. Auth por Bearer.
+async function handlePresselsTotalJson(req, env){
+  const u=await authUser(req, env);
+  if(!u) return err('Não autenticado', 401);
+  const full=isDirector(u);
+  const url=new URL(req.url);
+  let day=url.searchParams.get('day')||'';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
+  else { const _dp=day.split('-'); if(+_dp[1]<1||+_dp[1]>12||+_dp[2]<1||+_dp[2]>31) day=_brDay(); }
+  const today=_brDay(); if(day>today) day=today;
+  const _vq=url.searchParams.get('view')||''; const view=(_vq==='vendas'||_vq==='leads')?_vq:'metricas';
+  const _pq=url.searchParams.get('per')||''; const per=(_pq==='mes')?'mes':'dia';
+  // Leads (carteira dos vendedores) é só-diretor. Métricas/Pedidos qualquer autenticado vê (número já mascarado).
+  if(view==='leads' && !full) return err('Sem permissão', 403);
+  return json(await _presselsTotalData(env, day, view, per, full));
+}
 async function handlePresselsTotalPage(req, env){
   const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
@@ -5578,6 +5774,7 @@ export default {
       if (req.method === 'GET' && mMatch) return handlePresselMetricsPage(req, env, mMatch[1]);
 
       // Página pública CONSOLIDADA: total de todas + cada pressel numa seção
+      if (req.method === 'GET' && path === '/pressels-total.json') return handlePresselsTotalJson(req, env);
       if (req.method === 'GET' && path === '/pressels-total') return handlePresselsTotalPage(req, env);
 
       return err('Rota não encontrada', 404);

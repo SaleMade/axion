@@ -4041,8 +4041,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.95.0';
-const APP_LAST_CHANGE = 'Dash menos escura (mais visivel, sem virar tema claro): fundo saiu do quase-preto pra um carvao mais claro, os cards subiram junto pra destacar melhor, as bordas ficaram mais definidas e o texto um pouco mais claro. Ajuste moderado no tema padrao; da pra clarear mais ou puxar de volta se quiser.';
+const APP_VERSION = '2.96.0';
+const APP_LAST_CHANGE = 'Leads das Pressels agora e NATIVO na dash (antes era um iframe com fundo branco e tema proprio). As abas Metricas, Pedidos e Leads (Dia/Mes) renderizam no tema da dash, com os mesmos numeros do worker; troca de aba e de data sem recarregar a pagina e atualiza sozinho a cada 30s. Painel "Conversao por numero" na lateral.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -11272,25 +11272,146 @@ function confirmRechargeId(id){
    cada atendente e pula automaticamente os banidos/restritos.
 ═══════════════════════════════════════════════════════ */
 function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
-// Painel de Leads (embute a página pública /pressels-total?view=leads do worker num iframe).
-// Só diretor vê. Acompanhamento diário dos leads que caem nas roletas das pressels.
+// Leads das Pressels — NATIVO. Busca /pressels-total.json e renderiza no tema da dash (sem iframe).
+// Só diretor vê (perm ver_pressel_leads). Toda a lógica pesada (atribuição, ranking, conversão por
+// número) fica no worker; aqui é só apresentação. Abas Métricas / Pedidos / Leads (Dia/Mês).
+let _plView='metricas', _plPer='dia', _plDay='', _plData=null, _plLoading=false, _plTimer=null;
+function _plToday(){ return new Date(Date.now()-10800000).toISOString().slice(0,10); }   // hoje no fuso BR
+function _plIsToday(){ return !_plDay || _plDay===_plToday(); }
+function _plEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _plWa(ph){ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.length<=11) d='55'+d; return 'https://wa.me/'+d; }
+function _plHora(ts){ const bt=new Date((Number(ts||0)-10800)*1000); if(isNaN(bt)) return ''; const p=n=>String(n).padStart(2,'0'); return p(bt.getUTCDate())+'/'+p(bt.getUTCMonth()+1)+' '+p(bt.getUTCHours())+':'+p(bt.getUTCMinutes()); }
 function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
-function _presselLeadsSrc(){ const t=(typeof apiToken==='function'?apiToken():''); return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'+(t?('&k='+encodeURIComponent(t)):''); }
-function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
 function renderPresselLeads(){
   const wrap=$('presselleads-pg'); if(!wrap) return;
-  const src=_presselLeadsSrc();
-  // Monta uma vez só; nas próximas visitas mantém o iframe (não recarrega à toa).
-  if(wrap.getAttribute('data-src')===src && wrap.querySelector('iframe')) return;
-  wrap.setAttribute('data-src',src);
-  wrap.innerHTML=`
-    <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 14px">
-      <button class="btn btn-gh btn-sm" onclick="reloadPresselLeads()">${ico('refresh-cw',{size:14})} Atualizar</button>
-      <a class="btn btn-gh btn-sm" href="${src}" target="_blank" rel="noopener" style="text-decoration:none">${ico('arrow-up-right',{size:14})} Abrir em nova aba</a>
-    </div>
-    <iframe id="presselleads-frame" src="${src}" title="Leads das pressels" loading="lazy"
-      style="width:100%;height:calc(100vh - 160px);min-height:520px;border:1px solid var(--b2);border-radius:var(--rl);background:#fff;display:block"></iframe>`;
+  if(!_plDay) _plDay=_plToday();
+  if(!wrap.querySelector('#pl-shell')){
+    wrap.innerHTML=`
+      <style>
+        .pl-cols{display:flex;gap:18px;align-items:flex-start}
+        .pl-aside{flex:0 0 280px;position:sticky;top:14px}
+        .pl-grid{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+        .pl-seller{flex:1;min-width:240px;max-width:360px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px}
+        @media(max-width:1000px){.pl-cols{flex-wrap:wrap}.pl-aside{flex:1 1 100%;position:static;order:-1}}
+      </style>
+      <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
+      <p class="muted" style="font-size:12.5px;margin:-6px 0 16px">Acompanhamento das roletas: quanto chega, vira lead e vende, por pressel e por vendedor. Números reais do WhatsApp e do pixel.</p>
+      <div id="pl-shell">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+          <div id="pl-tabs" style="display:inline-flex;gap:6px"></div>
+          <input type="date" id="pl-date" max="${_plToday()}" value="${_plDay}" onchange="_plSetDay(this.value)"
+            style="background:var(--s2);border:1px solid var(--b1);color:var(--tx);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:inherit;color-scheme:dark;cursor:pointer">
+          <span id="pl-live" class="muted" style="font-size:12px"></span>
+          <div style="flex:1;min-width:8px"></div>
+          <button class="btn btn-gh btn-sm" onclick="_plFetch(true)">${ico('refresh-cw',{size:14})} Atualizar</button>
+        </div>
+        <div class="pl-cols">
+          <div id="pl-body" style="flex:1;min-width:0"></div>
+          <aside id="pl-side" class="pl-aside"></aside>
+        </div>
+      </div>`;
+  }
+  _plRenderTabs();
+  _plFetch();
+  _plScheduleRefresh();
+}
+function _plRenderTabs(){
+  const el=$('pl-tabs'); if(!el) return;
+  const tab=(v,l)=>`<button class="btn ${_plView===v?'btn-bl':'btn-gh'} btn-sm" onclick="_plSetView('${v}')">${l}</button>`;
+  el.innerHTML=tab('metricas','Métricas')+tab('vendas','Pedidos')+tab('leads','Leads');
+}
+function _plSetView(v){ if(_plView===v) return; _plView=v; _plRenderTabs(); _plData=null; _plFetch(); }
+function _plSetPer(p){ if(_plPer===p) return; _plPer=p; _plData=null; _plFetch(); }
+function _plSetDay(d){ if(!d) return; _plDay=d; _plData=null; _plFetch(); _plScheduleRefresh(); }
+function _plScheduleRefresh(){
+  if(_plTimer){ clearInterval(_plTimer); _plTimer=null; }
+  if(_plIsToday()) _plTimer=setInterval(()=>{ if(!$('pl-body')){ clearInterval(_plTimer); _plTimer=null; return; } _plFetch(); }, 30000);
+}
+async function _plFetch(manual){
+  const body=$('pl-body'); if(!body || _plLoading) return;
+  _plLoading=true;
+  const live=$('pl-live'); if(live) live.textContent=_plIsToday()?'atualiza sozinho a cada 30s':'';
+  if(!_plData) body.innerHTML=`<div class="muted" style="text-align:center;padding:44px">Carregando…</div>`;
+  try{
+    const qs=new URLSearchParams({view:_plView});
+    if(!_plIsToday()) qs.set('day',_plDay);
+    if(_plView==='leads'&&_plPer==='mes') qs.set('per','mes');
+    _plData=await api._fetch('/pressels-total.json?'+qs.toString());
+    _plRenderBody();
+    if(manual) toast('Atualizado','ok');
+  }catch(e){
+    if(!_plData) body.innerHTML=`<div style="text-align:center;padding:44px;color:var(--rd)">Erro ao carregar: ${_plEsc(e&&e.message||e)}</div>`;
+  }finally{ _plLoading=false; }
+}
+function _plRenderBody(){
+  const body=$('pl-body'), side=$('pl-side'); if(!body) return;
+  const j=_plData; if(!j) return;
+  body.innerHTML = j.view==='metricas' ? _plMetricas(j)
+    : j.view==='vendas' ? _plVendas(j)
+    : (j.per==='mes' ? _plLeadsMes(j) : _plLeadsDia(j));
+  if(side) side.innerHTML=_plSide(j.side||[]);
+}
+function _plCard(lbl,val,cls,icon){ return `<div class="mc ${cls}"><div class="mc-gl"></div><div class="mc-ic">${ico(icon,{size:14})}</div><div class="mc-lbl">${lbl}</div><div class="mc-val">${val}</div></div>`; }
+function _plCards(m){ return `<div class="mg" style="grid-template-columns:repeat(4,minmax(120px,1fr))">${_plCard('Chegaram na pressel',m.views||0,'mc-bl','eye')}${_plCard('Foram pro WhatsApp',m.clicks||0,'mc-cy','message-circle')}${_plCard('Iniciaram contato',m.contatos||0,'mc-gr','users')}${_plCard('Vendas',m.vendas||0,'mc-go','dollar-sign')}</div>`; }
+function _plVendTable(vend){
+  const rows=(vend&&vend.length)?vend.map(v=>{
+    const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';
+    const nums=(v.nums&&v.nums.length?v.nums:['—']).map(n=>`<div style="font-size:11.5px;color:var(--t3);font-family:ui-monospace,monospace;line-height:1.5">${_plEsc(n)}</div>`).join('');
+    return `<tr><td><div style="font-weight:600">${_plEsc(v.name)}</div>${nums}</td><td style="text-align:center;color:var(--gr)">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
+  }).join(''):`<tr><td colspan="4" class="muted" style="text-align:center;padding:12px">Sem vendedores.</td></tr>`;
+  return `<div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th style="text-align:left">Vendedor</th><th style="text-align:center">Iniciaram</th><th style="text-align:center">Vendas</th><th style="text-align:center">Conversão</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function _plMetricas(j){
+  const total=`<div style="border:1px solid var(--bl);background:color-mix(in srgb,var(--bl) 8%,transparent);border-radius:var(--rl);padding:18px;margin-bottom:20px"><div style="font-size:15px;font-weight:800;color:var(--bl2);margin-bottom:12px">TOTAL · todas as pressels</div>${_plCards(j.total||{})}${_plVendTable(j.totVend||[])}</div>`;
+  const secs=(j.pressels||[]).map(s=>`<div style="border:1px solid var(--b1);border-radius:var(--rl);padding:16px;margin-bottom:14px"><div style="font-size:15px;font-weight:700">${_plEsc(s.nome)}</div><div style="font-size:11.5px;color:var(--t4);font-family:ui-monospace,monospace;margin:2px 0 12px">${_plEsc(s.url)}</div>${_plCards(s)}${_plVendTable(s.vend||[])}</div>`).join('')||`<div class="muted" style="text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
+  return total+secs;
+}
+function _plVendas(j){
+  const head=`<div style="font-size:13px;color:var(--t3);margin-bottom:14px"><b style="color:var(--tx)">${j.count||0}</b> pedido(s)${j.totV>0?` · total <b style="color:var(--gr)">${fmt(j.totV)}</b>`:''}${j.nS>0?` · <b style="color:var(--gr)">${j.nP}</b> das pressels · <b style="color:var(--tx)">${j.nS}</b> sem rastreio`:''}</div>`;
+  const cards=(j.orders||[]).map(o=>{
+    const tag=o.attr?`<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px">${_plEsc(o.pnome)}${o.aprox?' <span style="opacity:.7;font-weight:500">(aprox)</span>':''}</span>`:`<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px">sem rastreio</span>`;
+    const wa=j.full&&o.phone?`<a href="${_plWa(o.phone)}" target="_blank" rel="noopener" title="Falar no WhatsApp" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--grd);color:var(--gr);text-decoration:none">${ico('message-circle',{size:16})}</a>`:'';
+    const phoneLine=j.full&&o.phoneFmt?`<div style="font-size:12px;color:var(--gr);margin-top:2px;font-family:ui-monospace,monospace">${_plEsc(o.phoneFmt)}</div>`:'';
+    return `<div style="border:1px solid var(--b1);background:var(--s2);border-radius:14px;padding:13px 15px;margin-bottom:9px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700">${_plEsc(o.name)}${o.value>0?` · <span style="color:var(--gr)">${fmt(o.value)}</span>`:''}</div><div style="font-size:12px;color:var(--t3);margin-top:3px">Vendedor: ${_plEsc(o.seller)} · ${_plHora(o.ts)}</div>${phoneLine}</div>${tag}${wa}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum pedido confirmado nesse dia.</div>`;
+  return head+cards;
+}
+function _plPerToggle(){ const b=(p,l)=>`<button class="btn ${_plPer===p?'btn-bl':'btn-gh'} btn-sm" onclick="_plSetPer('${p}')">${l}</button>`; return `<div style="display:inline-flex;gap:6px;margin-bottom:14px">${b('dia','Dia')}${b('mes','Mês')}</div>`; }
+function _plLeadsDia(j){
+  const head=`<div style="font-size:13px;color:var(--t3);margin-bottom:14px"><b style="color:var(--tx)">${j.totL||0}</b> leads${j.totP<j.totL?` · <b style="color:var(--gr)">${j.totP}</b> da pressel · ${j.totL-j.totP} sem rastreio`:''}${j.full?' · <span style="color:var(--gr)">verde = virou venda</span> · toque no número pra abrir a conversa':''}</div>`;
+  const cols=(j.sellers||[]).map(s=>{
+    const numSecs=(s.nums||[]).map(nn=>{
+      const rows=(nn.leads||[]).map(l=>{
+        const col=l.sale?'var(--gr)':'var(--tx)';
+        const ident=l.nome
+          ? `<span style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="color:${col};font-weight:${l.sale?'700':'600'};font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_plEsc(l.phoneFmt)}</span><span style="color:var(--t3);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_plEsc(l.nome)}</span></span>`
+          : `<span style="color:${col};font-weight:${l.sale?'700':'600'};font-family:ui-monospace,monospace">${_plEsc(l.phoneFmt)}</span>`;
+        const cell=(j.full&&l.phone)?`<a href="${_plWa(l.phone)}" target="_blank" rel="noopener" style="flex:1;min-width:0;text-decoration:none">${ident}</a>`:`<span style="flex:1;min-width:0">${ident}</span>`;
+        const tag=l.attr?`<span style="font-size:9.5px;font-weight:700;color:var(--gr)">${_plEsc(l.pnome)}</span>`:`<span style="font-size:9.5px;color:var(--t4)">sem rastreio</span>`;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--b1);font-size:11.5px"><span style="color:var(--t3);flex:none;font-variant-numeric:tabular-nums">${l.hora}</span>${cell}${tag}</div>`;
+      }).join('');
+      return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--bl2);font-weight:700"><span style="font-family:ui-monospace,monospace">${_plEsc(nn.num)}</span><span style="background:var(--s3);padding:1px 8px;border-radius:9px">${nn.count}</span></div>${rows}</div>`;
+    }).join('');
+    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px"><b style="color:var(--tx)">${s.total}</b> leads · <b style="color:var(--gr)">${s.daP}</b> da pressel</div>${numSecs}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum lead nesse dia.</div>`;
+  return _plPerToggle()+head+`<div class="pl-grid">${cols}</div>`;
+}
+function _plLeadsMes(j){
+  const summary=`<div style="font-size:13px;color:var(--t3);margin-bottom:12px">Mês de <b style="color:var(--tx);text-transform:capitalize">${_plEsc(j.monthLabel||'')}</b>${j.full?' · <span style="color:var(--gr)">verde = comprou</span> · toque no número pra abrir a conversa':''}</div><div class="mg" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin-bottom:16px">${_plCard('Leads no mês',j.totLeads||0,'mc-bl','users')}${_plCard('Converteram',j.totComp||0,'mc-gr','check-circle')}${_plCard('Faturou',fmt(j.totRev||0),'mc-go','dollar-sign')}</div>`;
+  const kpi=(l,v,c)=>`<div style="flex:1"><div style="font-size:10px;color:var(--t3)">${l}</div><div style="font-size:15px;font-weight:800;color:${c}">${v}</div></div>`;
+  const cols=(j.sellers||[]).map(s=>{
+    const buyers=(s.buyers||[]).map(b=>{
+      const numCell=(j.full&&b.phone)?`<a href="${_plWa(b.phone)}" target="_blank" rel="noopener" style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace;text-decoration:none">${_plEsc(b.phoneFmt)}</a>`:`<span style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace">${_plEsc(b.phoneFmt)}</span>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--b1);font-size:11.5px"><span style="color:var(--t3);font-variant-numeric:tabular-nums;white-space:nowrap">${_plHora(b.ts)}</span><span style="flex:1;min-width:0">${numCell}${b.name?` <span style="color:var(--t4)">· ${_plEsc(b.name)}</span>`:''}</span>${b.value>0?`<span style="color:var(--gr);font-weight:700;white-space:nowrap">${fmt(b.value)}</span>`:''}</div>`;
+    }).join('')||`<div style="font-size:11.5px;color:var(--t4);padding:8px 0">Nenhum lead comprou ainda.</div>`;
+    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="display:flex;gap:8px;margin:10px 0 6px">${kpi('Leads',s.leads,'var(--bl2)')}${kpi('Converteram',s.comp,'var(--gr)')}${kpi('Conversão',s.pct==null?'—':s.pct+'%','var(--tx)')}${kpi('Faturou',fmt(s.rev),'var(--gr)')}</div><div style="font-size:11px;color:var(--t3);font-weight:700;margin-top:6px;border-top:1px solid var(--b1);padding-top:8px">Compradores</div>${buyers}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum lead nesse mês.</div>`;
+  return _plPerToggle()+summary+`<div class="pl-grid">${cols}</div>`;
+}
+function _plSide(side){
+  if(!side||!side.length) return '';
+  const linhas=side.map(x=>`<div style="padding:9px 0;border-top:1px solid var(--b1)"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font-family:ui-monospace,monospace;font-weight:700;font-size:13px">${_plEsc(x.tel)}</span><span style="font-weight:800;color:var(--bl2);font-size:13px;font-variant-numeric:tabular-nums">${(Number(x.taxa)||0).toFixed(1)}%</span></div><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:2px"><span style="font-size:11px;color:var(--t3)">${x.nome?_plEsc(x.nome):'—'}</span><span style="font-size:11px;color:var(--t3);font-variant-numeric:tabular-nums"><b style="color:var(--t2)">${x.cl}</b> cliques → <b style="color:var(--gr)">${x.cv}</b> lead${x.cv===1?'':'s'}</span></div></div>`).join('');
+  return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:13px;font-weight:800">Conversão por número</div><div style="font-size:10.5px;color:var(--t3);margin:2px 0 4px">quanto de clique virou lead, número a número</div>${linhas}</div>`;
 }
 
 function _ensurePressels(){ if(!Array.isArray(DB.pressels)) DB.pressels=[]; return DB.pressels; }
