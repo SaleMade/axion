@@ -442,7 +442,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .sb-nav{padding:8px 10px;flex:1}
 
 /* Acordeão de seção (Dashboard ▾, Operacional ▾, etc.) */
-.sg-acc{display:flex;align-items:center;gap:10px;padding:11px 13px;cursor:pointer;
+.sg-acc{display:flex;align-items:center;gap:10px;padding:12px 13px;cursor:pointer;
   border-radius:11px;color:var(--t2);font-size:13.5px;font-weight:700;
   transition:all .15s;user-select:none;margin-top:5px;
   /* Background sutil em todos os acordeões pra ficarem visíveis quando fechados */
@@ -457,7 +457,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;align-items:center;justify-content:center}
 .sg-acc .sg-chev{font-size:12px;color:var(--t3);transition:transform .25s ease;line-height:1}
 .sg-acc.on .sg-chev{transform:rotate(180deg);color:var(--bl2)}
-.sg-acc.has-active{border-color:var(--bl);box-shadow:0 0 0 1px var(--bld)}
+.sg-acc.has-active{border-color:color-mix(in srgb,var(--bl) 45%,transparent);background:linear-gradient(90deg,var(--bld),transparent);box-shadow:inset 3px 0 0 var(--bl)}
 
 .sg-items{max-height:0;overflow:hidden;transition:max-height .25s ease;
   padding-left:6px;display:flex;flex-direction:column;gap:1px}
@@ -576,10 +576,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 }
 
 .tb-r{display:flex;gap:8px;align-items:center}
-.btn{padding:8px 16px;border-radius:var(--r);font-size:13px;font-weight:600;
-  cursor:pointer;border:none;transition:all .18s;font-family:inherit}
-.btn-bl{background:var(--bl);color:#fff}
-.btn-bl:hover{background:var(--bl2);box-shadow:0 0 18px var(--blg)}
+.btn{padding:9px 17px;border-radius:var(--r);font-size:13px;font-weight:650;
+  cursor:pointer;border:1px solid transparent;transition:all .18s;font-family:inherit}
+.btn-bl{background:linear-gradient(180deg,var(--bl2),var(--bl));color:#fff;box-shadow:0 6px 16px -10px var(--bl)}
+.btn-bl:hover{filter:brightness(1.08);box-shadow:0 8px 22px -10px var(--bl),0 0 18px var(--blg);transform:translateY(-1px)}
 .btn-gh{background:transparent;color:var(--t2);border:1px solid var(--b2)}
 .btn-gh:hover{background:var(--s3);color:var(--tx);border-color:var(--b3)}
 .btn-re{background:var(--rdd);color:var(--rd);border:1px solid rgba(239,68,68,.3)}
@@ -649,11 +649,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .mc-pu .mc-gl{background:var(--pu)}
 .mc-go .mc-gl{background:var(--gold)}
 .mc-am .mc-gl{background:var(--am)}
-.mc-ic{width:30px;height:30px;border-radius:7px;display:flex;
-  align-items:center;justify-content:center;font-size:14px;margin-bottom:10px}
-.mc-ic svg{display:block}
+/* Ícone vira SELO no canto superior direito (estilo Gestão/MIDAS) */
+.mc .mc-ic{position:absolute;top:15px;right:15px;width:42px;height:42px;border-radius:12px;display:flex;
+  align-items:center;justify-content:center;z-index:2;border:1px solid transparent}
+.mc .mc-ic svg{display:block;width:19px;height:19px}
 .mc-lbl{font-size:11px;color:var(--t3);font-weight:700;
-  text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;padding-right:50px}
 /* Número agora é neutro (branco) — cor só fica no ícone como "categoria" */
 .mc-val{font-size:24px;font-weight:800;line-height:1.1;margin-bottom:3px;letter-spacing:-.02em;color:var(--tx)}
 .mc-sub{font-size:12px;color:var(--t3);font-weight:500}
@@ -661,13 +662,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .delta.up{color:var(--gr)}.delta.down{color:var(--rd)}
 /* Cards monocromáticos: ícone com fundo levemente colorido (sem barra lateral
    neon — era poluição visual; o ícone colorido já diferencia a categoria). */
-.mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
-.mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
-.mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
-.mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
-.mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
-.mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
-.mc-am .mc-ic{background:var(--amd);color:var(--am)}
+.mc-bl .mc-ic{background:color-mix(in srgb,var(--bl2) 13%,transparent);border-color:color-mix(in srgb,var(--bl2) 32%,transparent);color:var(--bl2)}
+.mc-cy .mc-ic{background:color-mix(in srgb,var(--cy) 13%,transparent);border-color:color-mix(in srgb,var(--cy) 32%,transparent);color:var(--cy)}
+.mc-gr .mc-ic{background:color-mix(in srgb,var(--gr) 13%,transparent);border-color:color-mix(in srgb,var(--gr) 32%,transparent);color:var(--gr)}
+.mc-re .mc-ic{background:color-mix(in srgb,var(--rd) 13%,transparent);border-color:color-mix(in srgb,var(--rd) 32%,transparent);color:var(--rd)}
+.mc-pu .mc-ic{background:color-mix(in srgb,var(--pu) 13%,transparent);border-color:color-mix(in srgb,var(--pu) 32%,transparent);color:var(--pu)}
+.mc-go .mc-ic{background:color-mix(in srgb,var(--gold) 13%,transparent);border-color:color-mix(in srgb,var(--gold) 32%,transparent);color:var(--gold)}
+.mc-am .mc-ic{background:color-mix(in srgb,var(--am) 13%,transparent);border-color:color-mix(in srgb,var(--am) 32%,transparent);color:var(--am)}
 
 /* destaque "afiliado" */
 /* mc-feat: card de destaque — sutil, sem contorno azul brilhante */
@@ -4038,8 +4039,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.85.0';
-const APP_LAST_CHANGE = 'Grafico de Evolucao Diaria agora e interativo. Ao passar o mouse aparece uma agulhinha (linha vertical) no dia e um balao com o detalhe daquele dia: Vendas, Comissao, Gasto, Lucro e ROAS. O ponto do dia sob o mouse fica destacado e a data aparece no eixo. Adicionei tambem uma legenda "Como ler" explicando o COD: a comissao aparece no dia em que o cliente PAGOU, entao os dias mais recentes ainda estao recebendo e sobem nos proximos dias (por isso nao da pra saber o lucro final do dia na hora).';
+const APP_VERSION = '2.94.0';
+const APP_LAST_CHANGE = 'Novo visual em TODA a dash (estilo da tela de Gestao/MIDAS): o icone de cada card de metrica virou um selo arredondado no canto superior direito, com tint e borda na cor da categoria; botoes mais encorpados com degrade e brilho sutil no primario; e o item ativo da sidebar ganhou destaque em degrade com barrinha lateral. Como e CSS compartilhado, pegou em todas as paginas de uma vez. So visual, nenhuma logica mudou.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4065,6 +4066,8 @@ const ICONS = {
   'play':           '<polygon points="6 3 20 12 6 21 6 3"/>',
   'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
   'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  'file':           '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  'mic':            '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -4251,7 +4254,7 @@ const api={
   waCloudSendMedia:(payload)=>api._fetch('/api/wa/cloud/send-media',{method:'POST',body:JSON.stringify(payload)}),
   waTemplateList:()=>api._fetch('/api/wa/template'),
   waTemplateCreate:(payload)=>api._fetch('/api/wa/template',{method:'POST',body:JSON.stringify(payload)}),
-  waFunnelStart:(phone,seq_id)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'start',phone,seq_id})}),
+  waFunnelStart:(phone,seq_id,at_id)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'start',phone,seq_id,at_id})}),
   waFunnelStop:(phone)=>api._fetch('/api/wa/funnel',{method:'POST',body:JSON.stringify({action:'stop',phone})}),
   waFunnelStatus:(phone)=>api._fetch('/api/wa/funnel?phone='+encodeURIComponent(phone)),
 };
@@ -7874,7 +7877,81 @@ function pageAtendimento(){
       #atendimento-pg .atd-cimeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
       #atendimento-pg .atd-citime{font-size:10.5px;color:var(--t4)}
       #atendimento-pg .atd-unread{background:var(--bl);color:#fff;font-size:10.5px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 5px}
-      #atendimento-pg .atd-thread{flex:1;display:flex;flex-direction:column;min-width:0}
+      #atendimento-pg .atd-thread{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+      #atendimento-pg .atd-side{width:394px;min-width:340px;border-left:1px solid var(--b2);display:flex;flex-direction:column;background:var(--s1);overflow:hidden}
+      #atendimento-pg .atd-sc-head{display:flex;align-items:center;gap:9px;padding:12px 14px;background:linear-gradient(135deg,#13c273,#0eb267);color:#fff;flex:none}
+      #atendimento-pg .atd-sc-head .t{font-weight:800;font-size:14px;flex:none}
+      #atendimento-pg .atd-sc-head .w{flex:1;min-width:0;font-size:11.5px;color:rgba(255,255,255,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #atendimento-pg .atd-sc-dot{width:9px;height:9px;border-radius:50%;flex:none;background:#eaffef;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
+      #atendimento-pg .atd-sc-sending{padding:9px 13px;background:#13c2730f;border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:10px;flex:none}
+      #atendimento-pg .atd-sc-main{flex:1;display:flex;min-height:0}
+      #atendimento-pg .atd-sc-content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);overflow-x:hidden}
+      #atendimento-pg .atd-sc-rail{width:66px;flex:none;background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;padding:9px 0;gap:2px;overflow-y:auto}
+      #atendimento-pg .atd-sc-rail::-webkit-scrollbar{width:0}
+      #atendimento-pg .ats-tab{display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 4px;cursor:pointer;color:var(--t3);font-size:10px;font-weight:800;border:none;background:none;font-family:inherit;border-radius:11px;margin:0 7px;transition:background .12s,color .12s}
+      #atendimento-pg .ats-tab:hover{background:var(--s3);color:var(--tx)}
+      #atendimento-pg .ats-tab.on{color:#13c273;background:#13c2731f}
+      #atendimento-pg .ats-ctop{padding:11px 13px 7px;flex:none;border-bottom:1px solid var(--b1)}
+      #atendimento-pg .ats-cbody{flex:1;overflow-y:auto;overflow-x:hidden;padding:9px 12px 14px}
+      #atendimento-pg .ats-tabhdr{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:800;color:var(--tx)}
+      #atendimento-pg .ats-search{display:flex;align-items:center;gap:9px;background:var(--s2);border:1px solid var(--b2);border-radius:12px;padding:10px 12px;color:var(--t4)}
+      #atendimento-pg .ats-search input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-family:inherit;font-size:13px;color:var(--tx);font-weight:600}
+      #atendimento-pg .ats-toolrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+      #atendimento-pg .ats-types{display:flex;align-items:center;gap:4px;flex:1;flex-wrap:wrap}
+      #atendimento-pg .ats-type{width:33px;height:33px;border-radius:10px;border:1px solid var(--b2);background:var(--s2);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+      #atendimento-pg .ats-type.on{border-color:var(--tc);background:color-mix(in srgb,var(--tc) 16%,var(--s2));box-shadow:0 0 0 1px var(--tc) inset}
+      #atendimento-pg .ats-mini{width:33px;height:33px;border-radius:10px;border:1px solid var(--b2);background:var(--s2);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--t4);flex:none}
+      #atendimento-pg .ats-mini.on{color:#f5b60a;border-color:#f6d38a}
+      #atendimento-pg .ats-hideall{width:100%;margin-top:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);border-radius:9px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}
+      #atendimento-pg .ats-sec{margin-bottom:2px}
+      #atendimento-pg .ats-h{display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--t3);font-weight:800;margin:14px 3px 9px;cursor:pointer;user-select:none}
+      #atendimento-pg .ats-sec:first-child .ats-h{margin-top:4px}
+      #atendimento-pg .ats-hi{display:inline-flex;flex:none}
+      #atendimento-pg .ats-htxt{flex:1}
+      #atendimento-pg .ats-count{font-size:10px;background:var(--s3);color:var(--t3);border-radius:9px;padding:2px 8px;font-weight:800}
+      #atendimento-pg .ats-chev{display:inline-flex;color:var(--t4)}
+      #atendimento-pg .ats-list{display:flex;flex-direction:column;gap:8px}
+      #atendimento-pg .ats-subh{display:flex;align-items:center;gap:7px;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--t3);padding:6px 3px 1px}
+      #atendimento-pg .ats-subh:not(:first-child){margin-top:5px;border-top:1px solid var(--b1);padding-top:11px}
+      #atendimento-pg .ats-subn{font-size:9.5px;font-weight:700;background:rgba(19,194,115,.16);color:#13c273;border-radius:20px;padding:1px 6px}
+      #atendimento-pg .ats-itemwrap{display:flex;flex-direction:column;min-width:0}
+      #atendimento-pg .ats-item{display:flex;align-items:center;gap:11px;width:100%;min-width:0;background:var(--s2);border:1px solid var(--b2);color:var(--tx);border-radius:13px;padding:11px 12px;cursor:pointer;font-size:13px;transition:border-color .12s,box-shadow .12s}
+      #atendimento-pg .ats-item:hover{border-color:#13c273;box-shadow:0 0 0 1.5px rgba(19,194,115,.5) inset}
+      #atendimento-pg .ats-ic{width:36px;height:36px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center}
+      #atendimento-pg .ats-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
+      #atendimento-pg .ats-star{flex:none;display:inline-flex;color:var(--t4);padding:2px;border-radius:6px;cursor:pointer}
+      #atendimento-pg .ats-star.on{color:#f5b60a}
+      #atendimento-pg .ats-send{flex:none;width:38px;height:38px;border-radius:11px;border:none;background:#13c2731f;color:#13c273;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;transition:background .12s}
+      #atendimento-pg .ats-send:hover{background:#13c27333}
+      #atendimento-pg .ats-send.sending{background:rgba(224,64,90,.2);color:#e0405a}
+      #atendimento-pg .ats-exp{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;color:var(--t4);border-radius:9px;cursor:pointer;transition:transform .18s,color .12s}
+      #atendimento-pg .ats-exp.open{transform:rotate(180deg);color:#13c273}
+      #atendimento-pg .ats-prev{margin-top:6px;background:var(--s1);border:1px solid var(--b2);border-radius:10px;padding:9px 10px}
+      #atendimento-pg .ats-prev-txt{font-size:12px;line-height:1.5;color:var(--t2);white-space:pre-wrap;word-break:break-word}
+      #atendimento-pg .ats-prev-img{max-width:100%;border-radius:8px;display:block}
+      #atendimento-pg .ats-prev-audio{width:100%;height:36px}
+      #atendimento-pg .ats-prev-video{max-width:100%;max-height:220px;border-radius:8px;display:block;background:#000}
+      #atendimento-pg .ats-prev-doc{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#13c273;font-weight:700;text-decoration:none}
+      #atendimento-pg .ats-prev-note{font-size:11.5px;color:var(--t4)}
+      #atendimento-pg .ats-seq .ats-ic{background:rgba(142,23,240,.13);color:#8e17f0}
+      #atendimento-pg .ats-seqrow:hover{border-color:#8e17f0;box-shadow:0 0 0 1.5px rgba(142,23,240,.5) inset}
+      #atendimento-pg .ats-seqsend{background:rgba(142,23,240,.13);color:#8e17f0}
+      #atendimento-pg .ats-seqsend:hover{background:rgba(142,23,240,.26)}
+      #atendimento-pg .ats-fp{display:flex;flex-direction:column;gap:5px}
+      #atendimento-pg .ats-fp-step{display:flex;align-items:center;gap:8px;font-size:11.5px}
+      #atendimento-pg .ats-fp-n{flex:none;width:18px;height:18px;border-radius:50%;background:rgba(142,23,240,.13);color:#8e17f0;font-weight:800;font-size:10px;display:flex;align-items:center;justify-content:center}
+      #atendimento-pg .ats-fp-lb{flex:1;min-width:0;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+      #atendimento-pg .ats-fp-lb i{color:var(--t4);font-style:normal;font-weight:500}
+      #atendimento-pg .ats-fp-t{flex:none;color:var(--t4);font-size:10.5px}
+      #atendimento-pg .ats-fp-foot{margin-top:6px;padding-top:7px;border-top:1px solid var(--b1);font-size:11px;color:var(--t2);font-weight:700}
+      #atendimento-pg .ats-empty{color:var(--t4);font-size:12px;line-height:1.55;text-align:center;padding:22px 10px}
+      #atendimento-pg .ats-lead-row{display:flex;justify-content:space-between;gap:10px;padding:9px 2px;border-bottom:1px solid var(--b1);font-size:12.5px}
+      #atendimento-pg .ats-lead-row .k{color:var(--t3);flex:none}
+      #atendimento-pg .ats-lead-row .v{color:var(--tx);font-weight:600;text-align:right;min-width:0;word-break:break-word}
+      #atendimento-pg .ats-lead-sec{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--t4);margin:15px 2px 6px}
+      #atendimento-pg .ats-lead-open{display:block;width:100%;margin-top:14px;padding:9px;border:1px solid var(--b2);background:var(--s2);color:var(--bl2);border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;text-align:center}
+      #atendimento-pg .atd-pcard:hover{background:var(--s3)}
+      @media(max-width:1240px){#atendimento-pg .atd-side{display:none}}
       #atendimento-pg .atd-thead{padding:10px 14px;border-bottom:1px solid var(--b2);display:flex;align-items:center;gap:11px}
       #atendimento-pg .atd-thname{font-size:14px;font-weight:600;color:var(--tx)}
       #atendimento-pg .atd-thsub{font-size:11.5px;color:var(--t3);margin-top:1px;display:flex;align-items:center;gap:4px}
@@ -7891,6 +7968,9 @@ function pageAtendimento(){
       #atendimento-pg .atd-sendbtn{background:var(--bl);border:none;border-radius:var(--r);color:#fff;width:42px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
       #atendimento-pg .atd-sendbtn:disabled{opacity:.5;cursor:default}
       #atendimento-pg .atd-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--t4);font-size:13px;text-align:center}
+      #atendimento-pg .atd-loading{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;padding:40px 16px;color:var(--t4);font-size:12.5px;text-align:center}
+      #atendimento-pg .atd-spin{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--b2);border-top-color:var(--bl);animation:atdspin .7s linear infinite}
+      @keyframes atdspin{to{transform:rotate(360deg)}}
     </style>
     <div class="ph"><div><h1>Atendimento <em>WhatsApp</em></h1></div></div>
     <div class="atd-wrap">
@@ -7902,10 +7982,18 @@ function pageAtendimento(){
             <select id="atd-fassign" onchange="_atd.fAssign=this.value;_atdLoadChats()"><option value="">Todos vendedores</option></select>
           </div>`:''}
         </div>
-        <div class="atd-chats" id="atd-chats"></div>
+        <div class="atd-chats" id="atd-chats"><div class="atd-loading"><div class="atd-spin"></div><div>Carregando conversas...</div></div></div>
       </div>
       <div class="atd-thread" id="atd-thread">
         <div class="atd-empty">${ico('message-circle',{size:34})}<div>Selecione uma conversa pra começar</div></div>
+      </div>
+      <div class="atd-side" id="atd-side">
+        <div class="atd-sc-head"><span class="atd-sc-dot"></span><span class="t">Sale Chat</span><span class="w" id="atd-sc-who">via API oficial</span></div>
+        <div class="atd-sc-sending" id="atd-sc-sending" style="display:none"></div>
+        <div class="atd-sc-main">
+          <div class="atd-sc-content" id="atd-sc-content"></div>
+          <div class="atd-sc-rail" id="atd-sc-rail"></div>
+        </div>
       </div>
     </div>
   </div>`;
@@ -7917,15 +8005,20 @@ async function renderAtendimento(){
   await _atdLoadInstances();
   await _atdLoadChats();
   if(_atd.phone)await _atdLoadThread();
+  try{_atdSideRender();}catch(_){}
   if(_atd.timer)clearInterval(_atd.timer);
   _atd.timer=setInterval(_atdPoll,5000);
 }
 function _atdPoll(){
   const pg=document.getElementById('atendimento-pg');
   if(!pg||!pg.classList.contains('active')){ if(_atd.timer){clearInterval(_atd.timer);_atd.timer=null;} return; }
+  if(document.hidden) return;   // aba do navegador em segundo plano: não gasta rede à toa
   _atdLoadChats(true);
-  if(_atd.phone)_atdLoadThread(true);
+  if(_atd.phone){ _atdLoadThread(true); try{_atdFunilRefresh();}catch(_){} }   // atualiza a barra do funil rodando
 }
+// Assinatura leve do estado — só redesenha quando MUDA de verdade (evita rebuild a cada 5s).
+function _atdChatsSig(){ return (_atd.chats||[]).map(c=>c.phone+'|'+c.last_ts+'|'+c.unread+'|'+String(c.last_text||'').length+'|'+(_atd.phone===c.phone?1:0)+'|'+(c.assigned_to||'')).join(';'); }
+function _atdMsgsSig(){ const a=_atd.msgs||[]; const l=a[a.length-1]; return a.length+'|'+(l?((l.msg_id||'')+'|'+l.ts+'|'+(l.media_url?1:0)):''); }
 async function _atdLoadInstances(){
   try{const r=await api.waInstances();_atd.instances=r.instances||[];}catch(_){_atd.instances=[];}
   const sel=document.getElementById('atd-finst');
@@ -7943,22 +8036,25 @@ async function _atdLoadChats(silent){
   if(_atd.fInst)qs.push('instance='+encodeURIComponent(_atd.fInst));
   if(_atd.fAssign)qs.push('assigned='+encodeURIComponent(_atd.fAssign));
   if(_atd.q)qs.push('q='+encodeURIComponent(_atd.q));
-  try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent)console.warn('atd chats',e);return;}
+  try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent){console.warn('atd chats',e);const box=document.getElementById('atd-chats');if(box&&!_atd.chats.length)box.innerHTML='<div class="atd-loading"><div>Não consegui carregar.</div><div onclick="_atdLoadChats()" style="color:var(--bl);cursor:pointer;font-weight:600">Tentar de novo</div></div>';}return;}
+  if(_atdChatsSig()===_atd._chatsSig) return;   // nada mudou → não reconstrói a lista
   _atdRenderList();
 }
 function _atdRenderList(){
   const box=document.getElementById('atd-chats');if(!box)return;
+  _atd._chatsSig=_atdChatsSig();
   if(!_atd.chats.length){box.innerHTML=`<div style="padding:30px 16px;text-align:center;color:var(--t4);font-size:12.5px;line-height:1.6">Nenhuma conversa ainda.<br>Quando um lead mandar mensagem, ela aparece aqui.</div>`;return;}
   box.innerHTML=_atd.chats.map(c=>{
     const lead=_atdLeadByPhone(c.phone);
     const disp=(lead&&lead.nome)||c.name||('+'+c.phone);
     const av=_atdAvatar(disp);
-    const last=(c.last_dir==='out'?'Você: ':'')+(c.last_text||'');
+    const lt=_atdLastText(c);
+    const lastHtml=(c.last_dir==='out'?'Você: ':'')+(lt.ic?ico(lt.ic,{size:11})+' ':'')+_atdEsc(lt.txt.slice(0,60));
     return `<div class="atd-ci ${_atd.phone===c.phone?'on':''}" onclick="_atdOpenChat('${c.phone}')">
       <div class="atd-av" style="background:${av.bg}">${av.ini}</div>
       <div class="atd-cibody">
         <div class="atd-ciname">${_atdEsc(disp)}</div>
-        <div class="atd-cilast">${_atdEsc(last.slice(0,64))}</div>
+        <div class="atd-cilast">${lastHtml}</div>
         <div class="atd-inst">${ico('smartphone',{size:10})} ${_atdEsc(_atdInstLabel(c.instance))}</div>
       </div>
       <div class="atd-cimeta">
@@ -7971,35 +8067,49 @@ function _atdRenderList(){
 async function _atdOpenChat(phone){
   _atd.phone=phone;
   _atdRenderList();
+  const th=document.getElementById('atd-thread');if(th)th.innerHTML='<div class="atd-loading"><div class="atd-spin"></div><div>Carregando conversa...</div></div>';
   await _atdLoadThread();
   try{await api.waChatRead(phone);}catch(_){}
   const c=_atd.chats.find(x=>x.phone===phone);if(c)c.unread=0;
   _atdRenderList();
+  try{_atdSideRender();}catch(_){}   // atualiza o header (nome do lead) e a aba Leads da conversa aberta
+  try{_atdFunilBar(null);_atdFunilRefresh();}catch(_){}   // barra do funil rodando pertence ao lead aberto
 }
 async function _atdLoadThread(silent){
   if(!_atd.phone)return;
   try{const r=await api.waMessages(_atd.phone);_atd.msgs=r.messages||[];_atd.curChat=r.chat||null;}catch(e){if(!silent)console.warn('atd thread',e);return;}
   const built=document.getElementById('atd-msgs');
-  if(silent&&built){_atdSyncMsgs();}else{_atdRenderThread();}
+  if(silent&&built){
+    if(_atdMsgsSig()!==_atd._msgsSig){ _atd._msgsSig=_atdMsgsSig(); _atdSyncMsgs(); }   // só redesenha se chegou/mudou mensagem
+  }else{ _atd._msgsSig=_atdMsgsSig(); _atdRenderThread(); }
 }
 function _atdMediaUrl(mu){ if(!mu) return ''; return /^https?:/i.test(mu)?mu:(typeof scMediaUrl==='function'?scMediaUrl(mu):mu); }
 function _atdMsgsHTML(){
-  if(!_atd.msgs.length)return `<div class="atd-empty" style="height:100%">${ico('message-circle',{size:30})}<div>Sem mensagens nessa conversa</div></div>`;
+  const vazio=`<div class="atd-empty" style="height:100%">${ico('message-circle',{size:30})}<div>Sem mensagens nessa conversa</div></div>`;
+  if(!_atd.msgs.length)return vazio;
+  const icoOf={audio:'mic',ptt:'mic',voice:'mic',image:'image',video:'video',document:'file',sticker:'image'};
+  const lblOf={audio:'áudio',ptt:'áudio',voice:'áudio',image:'imagem',video:'vídeo',document:'documento',sticker:'figurinha'};
+  const ruido=/e2e_notification|notification_template|^notification$|^system$|ciphertext|reaction|call_log|unsupported|^protocol/i;
   let html='',lastDay='';
   _atd.msgs.forEach(m=>{
+    const t=String(m.type||'');
+    const hasBody=!!(m.body&&m.body.length);
+    const mu=m.media_url?_atdMediaUrl(m.media_url):'';
+    if(!hasBody && !mu && ruido.test(t)) return;   // ruído de protocolo sem conteúdo: não vira balão
+    const cap=hasBody?_atdEsc(m.body):'';
+    let inner;
+    if(mu && t==='image') inner=`<img src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px;display:block" loading="lazy">${cap?`<div style="margin-top:4px">${cap}</div>`:''}`;
+    else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
+    else if(mu && t==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
+    else if(mu && t==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
+    else if(hasBody) inner=_atdEsc(m.body);
+    else if(lblOf[t]) inner=`<span style="opacity:.7;display:inline-flex;align-items:center;gap:5px">${ico(icoOf[t]||'file',{size:13})} ${lblOf[t]}</span>`;   // mídia ainda baixando/sem arquivo
+    else return;   // nada pra mostrar → não polui a conversa
     const day=_atdDay(m.ts);
     if(day!==lastDay){html+=`<div class="atd-day">${day}</div>`;lastDay=day;}
-    const mu=m.media_url?_atdMediaUrl(m.media_url):'';
-    const cap=(m.body&&m.body.length)?_atdEsc(m.body):'';
-    let inner;
-    if(mu && m.type==='image') inner=`<img src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px;display:block" loading="lazy">${cap?`<div style="margin-top:4px">${cap}</div>`:''}`;
-    else if(mu && (m.type==='audio'||m.type==='ptt'||m.type==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
-    else if(mu && m.type==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
-    else if(mu && m.type==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
-    else inner=(m.body&&m.body.length)?_atdEsc(m.body):('['+(m.type||'msg')+']');
     html+=`<div class="atd-b ${m.direction==='out'?'out':'in'}">${inner}<div class="atd-bt">${_atdHM(m.ts)}</div></div>`;
   });
-  return html;
+  return html||vazio;
 }
 function _atdSyncMsgs(){
   const el=document.getElementById('atd-msgs');if(!el)return;
@@ -8028,7 +8138,6 @@ function _atdRenderThread(){
       </select>
       <button class="atd-cbtn" title="Disparar funil de áudios" onclick="_atdFunil()" style="background:transparent;border:1px solid var(--b1);color:var(--t2);cursor:pointer;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;font-family:inherit;display:flex;align-items:center;gap:6px">${ico('zap',{size:13})} Funil</button>
     </div>
-    <div id="atd-funilbar" style="display:none;padding:6px 14px;font-size:12px;color:var(--t2);border-bottom:1px solid var(--b1)"></div>
     <div class="atd-msgs" id="atd-msgs">${_atdMsgsHTML()}</div>
     <div class="atd-compose">
       ${_atd.instances.length>1?`<select class="atd-from" id="atd-from" title="Enviar por qual número">${_atd.instances.map(i=>`<option value="${_atdEsc(i.name)}" ${i.name===fromInst?'selected':''}>${_atdEsc(_atdInstLabel(i.name))}</option>`).join('')}</select>`:''}
@@ -8049,13 +8158,19 @@ async function _atdSend(){
   const text=inp.value.trim();if(!text||!_atd.phone||_atd.sending)return;
   const fromSel=document.getElementById('atd-from');
   const inst=(fromSel&&fromSel.value)||(_atd.curChat&&_atd.curChat.instance)||_atd.fInst||'';
+  // FEEDBACK INSTANTÂNEO: limpa o campo e mostra a bolha JÁ; o servidor reconcilia em seguida.
+  inp.value='';_atdGrow(inp);
+  _atd.msgs.push({direction:'out',type:'chat',body:text,ts:Math.floor(Date.now()/1000),_opt:1});
+  _atd._msgsSig=''; _atdSyncMsgs();
   _atd.sending=true;const btn=document.getElementById('atd-send');if(btn)btn.disabled=true;
   try{
     await api.waSend(_atd.phone,text,inst||undefined);
-    inp.value='';_atdGrow(inp);
-    await _atdLoadThread();
+    await _atdLoadThread(true);   // troca a bolha otimista pela real (leve: só a área de mensagens)
     _atdLoadChats(true);
-  }catch(e){toast('Falha ao enviar: '+(e.message||''),'err');}
+  }catch(e){
+    _atd.msgs=(_atd.msgs||[]).filter(m=>!m._opt);_atd._msgsSig='';_atdSyncMsgs();   // falhou: remove a bolha
+    toast('Falha ao enviar: '+(e.message||''),'err');
+  }
   finally{_atd.sending=false;if(btn)btn.disabled=false;const i2=document.getElementById('atd-input');if(i2)i2.focus();}
 }
 // Envia mídia/áudio pela Cloud API (só funciona em número oficial). Sobe no R2 e manda o link.
@@ -8092,58 +8207,379 @@ async function _atdMicToggle(){
     toast('Gravando... clique no microfone de novo pra enviar');
   }catch(e){ toast('Sem acesso ao microfone','err'); }
 }
+// Painel limpo (bottom-sheet) reutilizado pelo Funil e pela Biblioteca. Fecha no X, no Esc e clicando fora.
+function _atdPopEsc(e){ if(e && e.key==='Escape') _atdPopClose(); }
+function _atdPopClose(){
+  const pop=document.getElementById('atd-libpop'); if(pop){ pop.style.display='none'; pop.innerHTML=''; }
+  try{ document.removeEventListener('keydown', _atdPopEsc); }catch(_){}
+}
+function _atdPop(title, inner){
+  const pop=document.getElementById('atd-libpop'); if(!pop) return;
+  pop.innerHTML=''
+    +'<div onclick="_atdPopClose()" style="position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:49"></div>'
+    +'<div style="position:absolute;left:0;right:0;bottom:0;max-height:72%;display:flex;flex-direction:column;background:var(--s2);border-top:1px solid var(--b1);border-radius:16px 16px 0 0;box-shadow:0 -10px 34px rgba(0,0,0,.4);z-index:50;overflow:hidden">'
+    +  '<div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--b1)">'
+    +    '<span style="font-size:14px;font-weight:700;color:var(--tx);flex:1">'+title+'</span>'
+    +    '<button onclick="_atdPopClose()" title="Fechar" style="background:transparent;border:none;color:var(--t3);cursor:pointer;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center">'+ico('x',{size:18})+'</button>'
+    +  '</div>'
+    +  '<div style="padding:12px;overflow:auto">'+inner+'</div>'
+    +'</div>';
+  pop.style.display='block';
+  try{ document.addEventListener('keydown', _atdPopEsc); }catch(_){}
+}
 function _atdLib(){
   const pop=document.getElementById('atd-libpop'); if(!pop) return;
-  if(pop.style.display==='block'){ pop.style.display='none'; return; }
+  if(pop.style.display==='block'){ _atdPopClose(); return; }
   let items=[]; try{ items=(SC().media||[]).filter(m=>['audio','image','video','document'].includes(m.kind)&&m.key); }catch(_){}
   if(!items.length){ toast('Biblioteca vazia (cadastre em Sale Chat)'); return; }
-  pop.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40">'+items.map(m=>'<div onclick="_atdLibSend(\''+_atdEsc(m.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico(m.kind==='audio'?'mic':m.kind==='video'?'video':m.kind==='image'?'image':'file',{size:14})+' '+_atdEsc(m.label||m.id)+'</div>').join('')+'</div>';
-  pop.style.display='block';
+  const colr={audio:'#10b981',video:'#8b5cf6',image:'#3b82f6',document:'#f59e0b'};
+  const cards=items.map(m=>{ const c=colr[m.kind]||'#10b981';
+    return '<div class="atd-pcard" onclick="_atdLibSend(\''+_atdEsc(m.id)+'\')" style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px;cursor:pointer;border:1px solid var(--b1);margin-bottom:8px">'
+      +'<span style="width:32px;height:32px;border-radius:9px;background:'+c+'26;color:'+c+';display:flex;align-items:center;justify-content:center;flex:none">'+ico(m.kind==='audio'?'mic':m.kind==='video'?'video':m.kind==='image'?'image':'file',{size:15})+'</span>'
+      +'<div style="flex:1;min-width:0;font-size:13px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(m.label||m.id)+'</div></div>';
+  }).join('');
+  _atdPop('Biblioteca de áudios e mídia', cards);
 }
 function _atdLibSend(id){
-  const pop=document.getElementById('atd-libpop'); if(pop)pop.style.display='none';
+  _atdPopClose();
   let it=null; try{ it=(SC().media||[]).find(m=>m.id===id); }catch(_){}
   if(!it||!it.key){ toast('Item não encontrado','err'); return; }
   if(_atd.sending||!_atd.phone) return; _atd.sending=true; const btn=document.getElementById('atd-send'); if(btn)btn.disabled=true;
-  api.waCloudSendMedia({number:_atd.phone,kind:it.kind,link:scMediaUrl(it.key),mediaKey:it.key,caption:it.caption||'',filename:it.label||''})
+  api.waCloudSendMedia({number:_atd.phone,kind:it.kind,link:scMediaUrl(it.key),mediaKey:it.key,caption:it.caption||'',filename:it.label||'',at_id:_atdCurAt()})
     .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
     .catch(e=>toast('Falha: '+(e.message||''),'err'))
     .finally(()=>{ _atd.sending=false; if(btn)btn.disabled=false; });
 }
 function _atdFunil(){
-  const lp=document.getElementById('atd-libpop'); if(!lp) return;
+  const pop=document.getElementById('atd-libpop'); if(!pop) return;
+  if(pop.style.display==='block'){ _atdPopClose(); return; }
   let seqs=[]; try{ seqs=(SC().sequences||[]); }catch(_){}
   if(!seqs.length){ toast('Nenhum funil publicado (crie em Sale Chat)'); return; }
-  lp.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40"><div style="font-size:11px;color:var(--t3);padding:4px 10px">Disparar funil de áudios:</div>'+seqs.map(s=>'<div onclick="_atdFunilStart(\''+_atdEsc(s.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico('zap',{size:14})+' '+_atdEsc(s.label||s.id)+' <span style="color:var(--t4);font-size:11px">('+((s.items||[]).length)+' itens)</span></div>').join('')+'</div>';
-  lp.style.display='block';
+  const cards=seqs.map(s=>{ const n=(s.items||[]).length;
+    return '<div class="atd-pcard" onclick="_atdFunilStart(\''+_atdEsc(s.id)+'\')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;cursor:pointer;border:1px solid var(--b1);margin-bottom:8px">'
+      +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(16,185,129,.15);color:#10b981;display:flex;align-items:center;justify-content:center;flex:none">'+ico('zap',{size:16})+'</span>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--tx)">'+_atdEsc(s.label||s.id)+'</div><div style="font-size:11.5px;color:var(--t4)">'+n+' áudios</div></div>'
+      +'<span style="font-size:11.5px;color:#10b981;font-weight:700">Disparar</span></div>';
+  }).join('');
+  _atdPop('Disparar funil de áudios', cards);
 }
 function _atdFunilStart(seqId){
-  const lp=document.getElementById('atd-libpop'); if(lp)lp.style.display='none';
-  if(!_atd.phone) return;
-  toast('Disparando funil...');
-  api.waFunnelStart(_atd.phone, seqId).then(r=>{
+  _atdPopClose();
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  api.waFunnelStart(_atd.phone, seqId, _atdCurAt()).then(r=>{
     if(r&&r.ok===false){ toast('Funil: '+(r.error||'falhou'),'err'); return; }
-    _atdFunilBar('Funil rodando '+(r.sent||1)+'/'+(r.total||'?')+' (para sozinho se o lead responder)');
-    _atdLoadThread();
+    toast('Funil disparado','ok');
+    _atdFunilBar({idx:(r.sent||1),total:(r.total||'?'),seqId:seqId});
+    _atdLoadThread(true);
   }).catch(e=>toast('Falha: '+(e.message||''),'err'));
 }
-function _atdFunilBar(txt){
-  const bar=document.getElementById('atd-funilbar'); if(!bar) return;
-  if(!txt){ bar.style.display='none'; bar.innerHTML=''; return; }
-  bar.innerHTML=_atdEsc(txt)+' <a onclick="_atdFunilStop()" style="color:var(--bl2);cursor:pointer;font-weight:600;margin-left:8px">parar</a>';
-  bar.style.display='block';
+// Barra "funil rodando" — fica no TOPO do painel Sale Chat (igual à pilha do original), não na conversa.
+function _atdFunilBar(st){
+  const bar=document.getElementById('atd-sc-sending'); if(!bar) return;
+  if(!st){ bar.style.display='none'; bar.innerHTML=''; return; }
+  const total=st.total||'?', idx=st.idx||1;
+  let lbl='Funil'; try{ const s=(SC().sequences||[]).find(x=>String(x.id)===String(st.seqId)); if(s&&s.label)lbl=s.label; }catch(_){}
+  bar.innerHTML='<span style="width:14px;height:14px;border-radius:50%;border:2px solid rgba(19,194,115,.3);border-top-color:#13c273;animation:atdspin .7s linear infinite;flex:none"></span>'
+    +'<span style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:800;color:#13c273;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(lbl)+'</div><div style="font-size:10.5px;color:var(--t3)">Enviando · passo '+_atdEsc(String(idx))+' de '+_atdEsc(String(total))+'</div></span>'
+    +'<button onclick="_atdFunilStop()" style="flex:none;background:#f0810f;border:none;color:#fff;font-size:11px;font-weight:800;padding:6px 12px;border-radius:9px;cursor:pointer;font-family:inherit">Pausar</button>';
+  bar.style.display='flex';
 }
 function _atdFunilStop(){
   if(!_atd.phone) return;
-  api.waFunnelStop(_atd.phone).then(()=>{ _atdFunilBar(''); toast('Funil parado'); }).catch(()=>{});
+  api.waFunnelStop(_atd.phone).then(()=>{ _atdFunilBar(null); toast('Funil pausado','ok'); }).catch(()=>{});
 }
 function _atdFunilRefresh(){
-  if(!_atd.phone) return;
+  if(!_atd.phone){ _atdFunilBar(null); return; }
   api.waFunnelStatus(_atd.phone).then(r=>{
     const run=r&&r.run;
-    if(run&&run.status==='running') _atdFunilBar('Funil rodando '+(run.idx||0)+'/'+(run.total||'?')+' (para sozinho se o lead responder)');
-    else _atdFunilBar('');
+    _atdFunilBar(run&&run.status==='running'?{idx:run.idx,total:run.total,seqId:run.seq_id}:null);
   }).catch(()=>{});
+}
+// ── Aba lateral (Sale Chat integrado) — dispara tudo pela API oficial ──
+// Meta de cada tipo: ícone + cor (paleta do Sale Chat ORIGINAL / ZKIND) — pra o painel ficar idêntico.
+// ═══ Painel Sale Chat da Atendimento — visual IDÊNTICO ao Sale Chat original (panel-inject.js),
+//     mas todo disparo pela Cloud API oficial. Trilho vertical + aba Itens + Funis + Templates + Leads.
+var _ATD_KIND={   // paleta e ícone por tipo, iguais ao ZKIND do original
+  text:     {c:'#2563eb', ic:'message-circle'},
+  audio:    {c:'#13c273', ic:'mic'},
+  video:    {c:'#8e17f0', ic:'video'},
+  image:    {c:'#00bcf2', ic:'image'},
+  document: {c:'#f0810f', ic:'file'}
+};
+var _ATD_TYPES=[
+  {k:'all',      lbl:'Todos',     ic:'layout-grid',    c:'#7c8896'},
+  {k:'text',     lbl:'Mensagens', ic:'message-circle', c:'#2563eb'},
+  {k:'audio',    lbl:'Áudios',    ic:'mic',            c:'#13c273'},
+  {k:'video',    lbl:'Vídeos',    ic:'video',          c:'#8e17f0'},
+  {k:'image',    lbl:'Imagens',   ic:'image',          c:'#00bcf2'},
+  {k:'document', lbl:'Docs',      ic:'file',           c:'#f0810f'}
+];
+var _ATD_RAIL=[
+  {k:'itens',    lbl:'Itens',     ic:'layout-grid'},
+  {k:'funis',    lbl:'Funis',     ic:'zap'},
+  {k:'template', lbl:'Templates', ic:'check-circle'},
+  {k:'leads',    lbl:'Leads',     ic:'user'}
+];
+function _atdLsGet(k,def){try{const v=JSON.parse(localStorage.getItem(k));return v||def;}catch(_){return def;}}
+function _atdLsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(_){}}
+function _atdSideRender(){
+  const railEl=document.getElementById('atd-sc-rail');
+  if(railEl){ const cur=_atd.sideTab||'itens';
+    railEl.innerHTML=_ATD_RAIL.map(t=>'<button class="ats-tab'+(t.k===cur?' on':'')+'" onclick="_atd.sideTab=\''+t.k+'\';_atdSideRender()"><span style="display:inline-flex">'+ico(t.ic,{size:18})+'</span><span>'+t.lbl+'</span></button>').join('');
+  }
+  const who=document.getElementById('atd-sc-who');
+  if(who){ const c=_atd.curChat; const nm=c?((_atdLeadByPhone(c.phone)||{}).nome||c.name||('+'+c.phone)):''; who.textContent=nm?('→ '+nm):'via API oficial'; }
+  _atdSideContent();
+}
+function _atdSideContent(){
+  const c=document.getElementById('atd-sc-content'); if(!c) return;
+  const tab=_atd.sideTab||'itens';
+  if(tab==='funis') return _atdTabFunis(c);
+  if(tab==='template') return _atdTabTemplates(c);
+  if(tab==='leads') return _atdTabLeads(c);
+  return _atdTabItens(c);
+}
+// ── Aba ITENS: busca + filtro por tipo + favoritos + esconder todos + seções recolhíveis ──
+function _atdTabItens(c){
+  const type=_atd.sideType||'all';
+  const typeChips=_ATD_TYPES.map(t=>'<button class="ats-type'+(type===t.k?' on':'')+'" title="'+t.lbl+'" style="--tc:'+t.c+'" onclick="_atd.sideType=\''+t.k+'\';_atdSideContent()"><span style="color:'+t.c+'">'+ico(t.ic,{size:15})+'</span></button>').join('');
+  const col=_atd.sideCollapsed||(_atd.sideCollapsed=_atdLsGet('atd_sc_collapsed',{}));
+  const keys=['text','audio','video','image','document'];
+  const anyOpen=keys.some(k=>!col[k]);
+  const favOn=!!_atd.sideFav;
+  c.innerHTML='<div class="ats-ctop">'
+    +'<div class="ats-search">'+ico('search',{size:15})+'<input id="atd-sc-q" placeholder="Buscar item..." autocomplete="off" value="'+_atdEsc(_atd.sideQ||'')+'" oninput="_atd.sideQ=this.value;_atdSideSectionsApply()"></div>'
+    +'<div class="ats-toolrow"><div class="ats-types">'+typeChips+'</div>'
+      +'<button class="ats-mini'+(favOn?' on':'')+'" title="Apenas favoritos" onclick="_atd.sideFav=!_atd.sideFav;_atdSideContent()">'+ico('star',{size:15})+'</button></div>'
+    +'<button class="ats-hideall" onclick="_atdSideHideAll()">'+(anyOpen?'Esconder todos':'Mostrar todos')+'</button>'
+    +'</div><div class="ats-cbody"><div id="atd-sc-sections"></div></div>';
+  _atdSideSections();
+}
+function _atdSideSections(){
+  const host=document.getElementById('atd-sc-sections'); if(!host) return;
+  const favs=_atd.sideFavs||(_atd.sideFavs=_atdLsGet('atd_sc_favs',{}));
+  const flt=(list)=>_atd.sideFav?list.filter(it=>favs[it.id]):list;
+  const type=_atd.sideType||'all';
+  const show=(k)=>type==='all'||type===k;
+  const msgs=(SC().messages||[]).map(m=>({id:m.id,kind:'text',label:m.label||m.id,grp:m.grp||''}));
+  const mediaBy=(k)=>(SC().media||[]).filter(m=>m.kind===k&&m.key).map(m=>({id:m.id,kind:k,label:m.label||m.id,grp:m.grp||''}));
+  let html='';
+  if(show('text'))     html+=_atdSection('text','Mensagens','#2563eb','message-circle',flt(msgs));
+  if(show('audio'))    html+=_atdSection('audio','Áudios do funil','#13c273','mic',flt(mediaBy('audio')));
+  if(show('video'))    html+=_atdSection('video','Vídeos','#8e17f0','video',flt(mediaBy('video')));
+  if(show('image'))    html+=_atdSection('image','Imagens','#00bcf2','image',flt(mediaBy('image')));
+  if(show('document')) html+=_atdSection('document','Documentos','#f0810f','file',flt(mediaBy('document')));
+  host.innerHTML=html||'<div class="ats-empty">'+(_atd.sideFav?'Nenhum favorito ainda. Toque na estrela de um item.':'Nada aqui. Cadastre itens no Sale Chat.')+'</div>';
+  _atdSideSectionsApply();
+}
+function _atdSection(key,title,color,icName,items){
+  if(!items.length) return '';
+  const col=!!(_atd.sideCollapsed||{})[key];
+  const favs=_atd.sideFavs||{};
+  const groups={},order=[];
+  items.forEach(it=>{const g=String(it.grp||'').trim()||'Geral'; if(!groups[g]){groups[g]=[];order.push(g);} groups[g].push(it);});
+  const gi=order.indexOf('Geral'); if(gi>0){order.splice(gi,1);order.unshift('Geral');}
+  const single=order.length<=1;
+  const inner=order.map(g=>{
+    const head=single?'':'<div class="ats-subh" data-grp="'+_atdEsc(g==='Geral'?'':g)+'">'+_atdEsc(g)+'<span class="ats-subn">'+groups[g].length+'</span></div>';
+    return head+groups[g].map(it=>_atdItemRow2(it,favs)).join('');
+  }).join('');
+  return '<div class="ats-sec" data-sec="'+key+'"><div class="ats-h" onclick="_atdSideToggleSec(\''+key+'\')"><span class="ats-hi" style="color:'+color+'">'+ico(icName,{size:15})+'</span><span class="ats-htxt">'+title+'</span><span class="ats-count">'+items.length+'</span><span class="ats-chev">'+ico(col?'chevron-down':'chevron-up',{size:15})+'</span></div><div class="ats-list"'+(col?' style="display:none"':'')+'>'+inner+'</div></div>';
+}
+function _atdItemRow2(it,favs){
+  const k=_ATD_KIND[it.kind]||_ATD_KIND.text;
+  const fav=!!(favs&&favs[it.id]);
+  return '<div class="ats-itemwrap" data-grp="'+_atdEsc(String(it.grp||'').trim())+'">'
+    +'<div class="ats-item" data-kind="'+it.kind+'" data-id="'+_atdEsc(it.id)+'" onclick="_atdSideTogglePrev(this)">'
+      +'<span class="ats-ic" style="background:'+k.c+'1f;color:'+k.c+'">'+ico(k.ic,{size:16})+'</span>'
+      +'<span class="ats-label">'+_atdEsc(it.label)+'</span>'
+      +'<span class="ats-star'+(fav?' on':'')+'" title="Favoritar" onclick="event.stopPropagation();_atdSideFav(\''+_atdEsc(it.id)+'\')">'+ico('star',{size:14})+'</span>'
+      +'<button class="ats-send" title="Enviar" onclick="event.stopPropagation();_atdSideSend(\''+it.kind+'\',\''+_atdEsc(it.id)+'\')">'+ico('play',{size:15})+'</button>'
+      +'<span class="ats-exp" title="Prever antes de enviar">'+ico('chevron-down',{size:15})+'</span>'
+    +'</div><div class="ats-prev" style="display:none"></div></div>';
+}
+// clicar no corpo do item = abre/fecha prévia (enviar só pelo botão verde)
+function _atdSideTogglePrev(itemEl){
+  const wrap=itemEl.closest('.ats-itemwrap'); if(!wrap) return;
+  const prev=wrap.querySelector('.ats-prev'), exp=itemEl.querySelector('.ats-exp'); if(!prev) return;
+  if(prev.style.display!=='none'){ prev.style.display='none'; prev.innerHTML=''; if(exp)exp.classList.remove('open'); return; }
+  prev.style.display='block'; if(exp)exp.classList.add('open');
+  prev.innerHTML=_atdSidePrevHtml(itemEl.getAttribute('data-kind'),itemEl.getAttribute('data-id'));
+}
+function _atdSidePrevHtml(kind,id){
+  try{
+    if(kind==='text'){ const m=(SC().messages||[]).find(x=>String(x.id)===String(id)); return '<div class="ats-prev-txt">'+_atdEsc((m&&(m.text||m.body))||'(sem texto)')+'</div>'; }
+    const m=(SC().media||[]).find(x=>String(x.id)===String(id)); if(!m||!m.key) return '<div class="ats-prev-note">Sem prévia.</div>';
+    const url=scMediaUrl(m.key);
+    if(kind==='image') return '<img class="ats-prev-img" src="'+url+'">';
+    if(kind==='audio') return '<audio class="ats-prev-audio" controls preload="metadata" src="'+url+'"></audio>';
+    if(kind==='video') return '<video class="ats-prev-video" controls preload="metadata" src="'+url+'"></video>';
+    if(kind==='document') return '<a class="ats-prev-doc" href="'+url+'" target="_blank" rel="noopener">'+ico('file',{size:14})+' Abrir documento</a>';
+    return '<div class="ats-prev-note">Sem prévia.</div>';
+  }catch(_){ return '<div class="ats-prev-note">Sem prévia.</div>'; }
+}
+function _atdSideSend(kind,id){
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  if(kind==='text') _atdSideSendMsg(id); else _atdLibSend(id);
+}
+function _atdSideFav(id){
+  const favs=_atd.sideFavs||(_atd.sideFavs=_atdLsGet('atd_sc_favs',{}));
+  if(favs[id]) delete favs[id]; else favs[id]=1;
+  _atdLsSet('atd_sc_favs',favs); _atdSideSections();
+}
+function _atdSideToggleSec(key){
+  const col=_atd.sideCollapsed||(_atd.sideCollapsed=_atdLsGet('atd_sc_collapsed',{}));
+  col[key]=!col[key]; _atdLsSet('atd_sc_collapsed',col); _atdSideSections();
+}
+function _atdSideHideAll(){
+  const col=_atd.sideCollapsed||(_atd.sideCollapsed=_atdLsGet('atd_sc_collapsed',{}));
+  const keys=['text','audio','video','image','document'];
+  const anyOpen=keys.some(k=>!col[k]);
+  keys.forEach(k=>col[k]=anyOpen); _atdLsSet('atd_sc_collapsed',col); _atdSideContent();
+}
+// filtro por busca sem redesenhar (não perde o foco do input) — igual applyFilter do original
+function _atdSideSectionsApply(){
+  const host=document.getElementById('atd-sc-sections'); if(!host) return;
+  const q=String(_atd.sideQ||'').trim().toLowerCase();
+  Array.prototype.forEach.call(host.querySelectorAll('.ats-sec'),function(sec){
+    const key=sec.getAttribute('data-sec');
+    const nodes=sec.querySelectorAll('.ats-subh, .ats-itemwrap');
+    let visible=0, curHead=null, curVis=0;
+    const flush=()=>{ if(curHead) curHead.style.display=curVis?'':'none'; };
+    Array.prototype.forEach.call(nodes,function(n){
+      if(n.classList.contains('ats-subh')){ flush(); curHead=n; curVis=0; return; }
+      const lblEl=n.querySelector('.ats-label'); const lbl=lblEl?lblEl.textContent:'';
+      const grp=n.getAttribute('data-grp')||'';
+      const ok=!q||lbl.toLowerCase().indexOf(q)>=0||grp.toLowerCase().indexOf(q)>=0;
+      n.style.display=ok?'':'none'; if(ok){visible++;curVis++;}
+    });
+    flush();
+    const list=sec.querySelector('.ats-list');
+    const col=(_atd.sideCollapsed||{})[key];
+    if(q){ sec.style.display=visible?'':'none'; if(list)list.style.display=visible?'':'none'; }
+    else { sec.style.display=''; if(list)list.style.display=col?'none':''; }
+  });
+}
+// ── Aba FUNIS: cards roxos + prévia dos passos ──
+function _atdTabFunis(c){
+  const seqs=SC().sequences||[];
+  const seqRow=(s)=>'<div class="ats-itemwrap" data-grp="'+_atdEsc(String(s.grp||'').trim())+'">'
+    +'<div class="ats-item ats-seq ats-seqrow" data-fid="'+_atdEsc(s.id)+'" onclick="_atdSideTogglePrevFunil(this)">'
+      +'<span class="ats-ic">'+ico('zap',{size:16})+'</span>'
+      +'<span class="ats-label">'+_atdEsc(s.label||s.id)+'</span>'
+      +'<button class="ats-send ats-seqsend" title="Disparar funil" onclick="event.stopPropagation();_atdFunilStart(\''+_atdEsc(s.id)+'\')">'+ico('play',{size:15})+'</button>'
+      +'<span class="ats-exp" title="Prever funil">'+ico('chevron-down',{size:15})+'</span>'
+    +'</div><div class="ats-prev" style="display:none"></div></div>';
+  const groups={},order=[];
+  seqs.forEach(s=>{const g=String(s.grp||'').trim()||'Geral'; if(!groups[g]){groups[g]=[];order.push(g);} groups[g].push(s);});
+  const gi=order.indexOf('Geral'); if(gi>0){order.splice(gi,1);order.unshift('Geral');}
+  const single=order.length<=1;
+  const inner=seqs.length?order.map(g=>{
+    const head=single?'':'<div class="ats-subh" data-grp="'+_atdEsc(g==='Geral'?'':g)+'">'+_atdEsc(g)+'<span class="ats-subn">'+groups[g].length+'</span></div>';
+    return head+groups[g].map(seqRow).join('');
+  }).join(''):'<div class="ats-empty">Nenhum funil ainda. Crie no Sale Chat.</div>';
+  c.innerHTML='<div class="ats-ctop"><div class="ats-tabhdr"><span style="color:#8e17f0;display:inline-flex">'+ico('zap',{size:16})+'</span>Funis</div></div><div class="ats-cbody"><div class="ats-list">'+inner+'</div></div>';
+}
+function _atdSideTogglePrevFunil(itemEl){
+  const wrap=itemEl.closest('.ats-itemwrap'); if(!wrap) return;
+  const prev=wrap.querySelector('.ats-prev'), exp=itemEl.querySelector('.ats-exp'); if(!prev) return;
+  if(prev.style.display!=='none'){ prev.style.display='none'; prev.innerHTML=''; if(exp)exp.classList.remove('open'); return; }
+  prev.style.display='block'; if(exp)exp.classList.add('open');
+  const s=(SC().sequences||[]).find(x=>String(x.id)===String(itemEl.getAttribute('data-fid')));
+  prev.innerHTML=_atdFunnelPrevHtml(s);
+}
+function _atdFunnelPrevHtml(seq){
+  const items=(seq&&seq.items)||[];
+  if(!items.length) return '<div class="ats-prev-note">Funil sem passos.</div>';
+  let total=0;
+  const rows=items.map((st,j)=>{
+    let label=st.label||st.id||'passo', kind='';
+    try{ const mm=(SC().media||[]).find(x=>x.id===st.id)||(SC().messages||[]).find(x=>x.id===st.id); if(mm){label=mm.label||label; kind=mm.kind||(mm.text!=null?'text':'');} }catch(_){}
+    const kindTxt={text:'msg',audio:'áudio',video:'vídeo',image:'imagem',document:'doc'}[kind]||'';
+    const delay=Math.max(0,Number(st.delay)||0), sim=Number(st.sim)||0;
+    const simMs=sim?sim*1000:(kind==='audio'?3000:kind==='text'?1200:800);
+    total+=delay*1000+simMs;
+    const timing='espera '+delay+'s'+(sim?' + simula '+sim+'s':'');
+    return '<div class="ats-fp-step"><span class="ats-fp-n">'+(j+1)+'</span><span class="ats-fp-lb">'+_atdEsc(label)+(kindTxt?' <i>('+kindTxt+')</i>':'')+'</span><span class="ats-fp-t">'+timing+'</span></div>';
+  }).join('');
+  const secs=Math.round(total/1000);
+  const totalTxt=secs>=60?(Math.floor(secs/60)+'min '+(secs%60)+'s'):(secs+'s');
+  const stopTxt=seq.stopOnReply?'Para se o lead responder no meio.':'Continua mesmo se o lead responder.';
+  return '<div class="ats-fp">'+rows+'<div class="ats-fp-foot">~'+totalTxt+' no total · '+stopTxt+'</div></div>';
+}
+// ── Aba TEMPLATES (Cloud API): reabrir lead frio fora das 24h ──
+function _atdTabTemplates(c){
+  c.innerHTML='<div class="ats-ctop"><div class="ats-tabhdr"><span style="color:#2ecc71;display:inline-flex">'+ico('check-circle',{size:16})+'</span>Templates</div></div><div class="ats-cbody"><div id="atd-sc-tpl" class="ats-empty">Carregando templates aprovados...</div></div>';
+  api.waTemplateList().then(r=>{
+    const el=document.getElementById('atd-sc-tpl'); if(!el) return;
+    const ts=((r&&r.templates)||[]).filter(t=>String(t.status||'').toUpperCase()==='APPROVED');
+    if(!ts.length){ el.innerHTML='Nenhum template aprovado ainda.<br>Quando a Meta aprovar, aparecem aqui pra reabrir lead frio (fora das 24h).'; return; }
+    el.outerHTML='<div class="ats-list">'+ts.map(t=>{ const body=((t.components||[]).find(x=>x.type==='BODY')||{}).text||'';
+      return '<div class="ats-itemwrap"><div class="ats-item" data-body="'+_atdEsc(String(body))+'" onclick="_atdSideTogglePrevTpl(this)">'
+        +'<span class="ats-ic" style="background:#2ecc7122;color:#2ecc71">'+ico('check-circle',{size:16})+'</span>'
+        +'<span class="ats-label">'+_atdEsc(t.name)+'</span>'
+        +'<button class="ats-send" title="Enviar" onclick="event.stopPropagation();_atdSideSendTpl(\''+_atdEsc(t.name)+'\',\''+_atdEsc(t.language||'pt_BR')+'\')">'+ico('play',{size:15})+'</button>'
+        +'<span class="ats-exp">'+ico('chevron-down',{size:15})+'</span></div><div class="ats-prev" style="display:none"></div></div>';
+    }).join('')+'</div>';
+  }).catch(()=>{ const el=document.getElementById('atd-sc-tpl'); if(el)el.innerHTML='Erro ao carregar templates.'; });
+}
+function _atdSideTogglePrevTpl(itemEl){
+  const wrap=itemEl.closest('.ats-itemwrap'); if(!wrap) return;
+  const prev=wrap.querySelector('.ats-prev'), exp=itemEl.querySelector('.ats-exp'); if(!prev) return;
+  if(prev.style.display!=='none'){ prev.style.display='none'; prev.innerHTML=''; if(exp)exp.classList.remove('open'); return; }
+  prev.style.display='block'; if(exp)exp.classList.add('open');
+  prev.innerHTML='<div class="ats-prev-txt">'+_atdEsc(itemEl.getAttribute('data-body')||'')+'</div>';
+}
+// ── Aba LEADS: dados do lead da conversa aberta ──
+function _atdTabLeads(c){
+  const chat=_atd.curChat;
+  if(!_atd.phone||!chat){ c.innerHTML='<div class="ats-cbody"><div class="ats-empty">Abra uma conversa pra ver os dados do lead.</div></div>'; return; }
+  const leadReal=_atdLeadByPhone(chat.phone), lead=leadReal||{};
+  const name=lead.nome||chat.name||('+'+chat.phone);
+  const av=_atdAvatar(name);
+  const row=(k,v,ph)=>'<div class="ats-lead-row"><span class="k">'+k+'</span><span class="v"'+(v?'':' style="color:var(--t4);font-weight:400"')+'>'+_atdEsc(v||ph||'—')+'</span></div>';
+  let h='<div class="ats-cbody">';
+  h+='<div style="display:flex;align-items:center;gap:11px;padding:2px 2px 12px;border-bottom:1px solid var(--b1);margin-bottom:4px">'
+    +'<span style="width:44px;height:44px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;background:'+av.bg+'">'+_atdEsc(av.ini)+'</span>'
+    +'<div style="min-width:0"><div style="font-size:14px;font-weight:700;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(name)+'</div>'
+    +'<div style="font-size:11.5px;color:var(--t3)">+'+_atdEsc(chat.phone)+'</div></div></div>';
+  h+='<div class="ats-lead-sec">Perfil</div>'+row('Nome',lead.nome,'—')+row('Telefone','+'+chat.phone)+row('E-mail',lead.email,'Sem e-mail')+row('Documento (CPF)',lead.cpf,'Sem CPF')+row('Origem',lead.orig,'—');
+  if(!leadReal){ h+='<div class="ats-empty" style="text-align:left;padding:16px 2px 4px">Esse contato ainda não é lead no CRM. Os dados completos aparecem quando ele virar lead.</div>'; c.innerHTML=h+'</div>'; return; }
+  h+='<div class="ats-lead-sec">Endereço</div>'+row('CEP',lead.cep,'—')+row('Rua',lead.end,'—')+row('Número',lead.num,'—')+row('Bairro',lead.bairro,'—')+row('Cidade',(lead.cidade||'')+(lead.uf?(' / '+lead.uf):''),'—');
+  h+='<div class="ats-lead-sec">Pedido</div>'+row('Produto',lead.prod,'—')+row('Tratamento',lead.trat,'—')+row('Valor',lead.vl?('R$ '+lead.vl):'','—')+row('Pagamento',lead.pgto,'—');
+  if((lead.tags||[]).length){ h+='<div class="ats-lead-sec">Tags</div><div style="padding:6px 2px">'+(lead.tags||[]).map(t=>'<span style="display:inline-block;background:var(--s3);color:var(--t2);font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;margin:0 5px 5px 0">'+_atdEsc(t)+'</span>').join('')+'</div>'; }
+  h+='<div class="ats-lead-sec">Notas</div><div style="font-size:12px;color:'+(lead.obs?'var(--t2)':'var(--t4)')+';line-height:1.5;padding:4px 2px;white-space:pre-wrap">'+_atdEsc(lead.obs||'Sem notas.')+'</div>';
+  if((lead.hist||[]).length){
+    h+='<div class="ats-lead-sec">Histórico</div>'+(lead.hist||[]).slice(-8).reverse().map(x=>{
+      if(typeof x==='string') return '<div style="font-size:11.5px;color:var(--t2);padding:6px 2px;border-bottom:1px solid var(--b1)">'+_atdEsc(x)+'</div>';
+      const t=(x&&(x.t||x.txt||x.text||x.label||x.acao))||'';const w=(x&&(x.by||x.who||x.user))||'';const d=(x&&(x.at||x.date||x.quando))||'';
+      return '<div style="font-size:11.5px;color:var(--t2);padding:6px 2px;border-bottom:1px solid var(--b1)">'+_atdEsc(String(t))+(w?(' <span style="color:var(--t4)">· '+_atdEsc(String(w))+'</span>'):'')+(d?(' <span style="color:var(--t4)">'+_atdEsc(String(d))+'</span>'):'')+'</div>';
+    }).join('');
+  }
+  h+='<button class="ats-lead-open" onclick="openLeadDetail(\''+_atdEsc(lead.id)+'\')">Abrir ficha completa</button>';
+  c.innerHTML=h+'</div>';
+}
+// at_id DA CONVERSA (o número que o lead está falando) — é por ele que a resposta tem que sair,
+// não pelo número do usuário logado. Sem isso, o diretor disparava pelo próprio número (não
+// registrado) e dava "número oficial não registrado".
+function _atdCurAt(){
+  const inst=(_atd.curChat&&_atd.curChat.instance)||_atd.fInst||'';
+  const at=String(inst).replace(/^ax_/,'').replace(/^ev_/,'').replace(/_b$/,'');
+  return at||undefined;
+}
+function _atdSideSendMsg(id){
+  let m=null; try{ m=(SC().messages||[]).find(x=>x.id===id); }catch(_){}
+  const txt=m&&(m.text||m.body); if(!txt){ toast('Mensagem sem texto'); return; }
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  if(_atd.sending) return; _atd.sending=true;
+  api.waCloudSend(_atd.phone, txt, _atdCurAt()).then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); }).catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
+}
+function _atdSideSendTpl(name,lang){
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  if(_atd.sending) return; _atd.sending=true;
+  api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number:_atd.phone,template:{name:name,language:lang},at_id:_atdCurAt()})})
+    .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
+    .catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
 }
 async function _atdAssign(uid){
   if(!_atd.phone)return;
@@ -8159,9 +8595,22 @@ function _atdGrow(t){t.style.height='auto';t.style.height=Math.min(120,t.scrollH
 function _atdEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function _atdInstLabel(inst){
   if(!inst)return 'número';
-  const ch=(DB.chips||[]).find(c=>c.instance===inst||c.inst===inst||c.id===inst);
-  if(ch&&(ch.label||ch.nome||ch.num))return ch.label||ch.nome||ch.num;
-  return String(inst).replace(/^ax_/,'').replace(/^ev_/,'');
+  const at=String(inst).replace(/^ax_/,'').replace(/^ev_/,'').replace(/_b$/,'');
+  const bkp=/_b$/.test(String(inst));
+  const m=(typeof getTeam==='function'?getTeam(at):null)||(DB.team||[]).find(t=>String(t.id)===at);
+  if(m&&m.name)return m.name+(bkp?' · reserva':'');
+  const ch=(DB.chips||[]).find(c=>String(c.at)===at||c.instance===inst||c.inst===inst||c.id===inst);
+  if(ch&&(ch.num||ch.label||ch.nome))return ch.num||ch.label||ch.nome;
+  return at;
+}
+// Preview da última mensagem em linguagem humana: [ptt]/[chat]/[video]/etc → rótulo + ícone.
+function _atdLastText(c){
+  const raw=String((c&&c.last_text)||'');
+  const m=raw.match(/^\[([a-z0-9_]+)\]$/i);
+  if(!m)return {ic:'',txt:raw};
+  const map={ptt:['mic','Áudio'],audio:['mic','Áudio'],voice:['mic','Áudio'],image:['image','Foto'],video:['video','Vídeo'],document:['file','Documento'],sticker:['image','Figurinha'],location:['','Localização'],contact:['user','Contato'],contacts:['user','Contato'],chat:['','Mensagem'],text:['','Mensagem']};
+  const e=map[m[1].toLowerCase()]||['','Mensagem'];
+  return {ic:e[0],txt:e[1]};
 }
 function _atdLeadByPhone(phone){
   const p=String(phone||'').replace(/\D/g,'');if(!p)return null;
@@ -11141,7 +11590,7 @@ function _numMatchWa(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), n
 // trocar o número de principal↔reserva não gera mais falso "não conectado". Fail-open se nenhum número é conhecido.
 function _waConnOk(inst, chipNum){
   if(!chipNum) return false;
-  const _isOn=st=>st==='open'||st==='sc';   // open = Evolution; sc = Sale Chat rodando (heartbeat)
+  const _isOn=st=>st==='open'||st==='sc'||st==='cloud';   // open = Evolution; sc = Sale Chat; cloud = API oficial (Datacrazy/coexistência) sempre viva
   let anyKnown=false;
   for(const k in _waConnMap){
     if(!_isOn(_waConnMap[k])) continue;

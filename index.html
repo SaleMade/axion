@@ -442,7 +442,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .sb-nav{padding:8px 10px;flex:1}
 
 /* Acordeão de seção (Dashboard ▾, Operacional ▾, etc.) */
-.sg-acc{display:flex;align-items:center;gap:10px;padding:11px 13px;cursor:pointer;
+.sg-acc{display:flex;align-items:center;gap:10px;padding:12px 13px;cursor:pointer;
   border-radius:11px;color:var(--t2);font-size:13.5px;font-weight:700;
   transition:all .15s;user-select:none;margin-top:5px;
   /* Background sutil em todos os acordeões pra ficarem visíveis quando fechados */
@@ -457,7 +457,7 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
   display:flex;align-items:center;justify-content:center}
 .sg-acc .sg-chev{font-size:12px;color:var(--t3);transition:transform .25s ease;line-height:1}
 .sg-acc.on .sg-chev{transform:rotate(180deg);color:var(--bl2)}
-.sg-acc.has-active{border-color:var(--bl);box-shadow:0 0 0 1px var(--bld)}
+.sg-acc.has-active{border-color:color-mix(in srgb,var(--bl) 45%,transparent);background:linear-gradient(90deg,var(--bld),transparent);box-shadow:inset 3px 0 0 var(--bl)}
 
 .sg-items{max-height:0;overflow:hidden;transition:max-height .25s ease;
   padding-left:6px;display:flex;flex-direction:column;gap:1px}
@@ -576,10 +576,10 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 }
 
 .tb-r{display:flex;gap:8px;align-items:center}
-.btn{padding:8px 16px;border-radius:var(--r);font-size:13px;font-weight:600;
-  cursor:pointer;border:none;transition:all .18s;font-family:inherit}
-.btn-bl{background:var(--bl);color:#fff}
-.btn-bl:hover{background:var(--bl2);box-shadow:0 0 18px var(--blg)}
+.btn{padding:9px 17px;border-radius:var(--r);font-size:13px;font-weight:650;
+  cursor:pointer;border:1px solid transparent;transition:all .18s;font-family:inherit}
+.btn-bl{background:linear-gradient(180deg,var(--bl2),var(--bl));color:#fff;box-shadow:0 6px 16px -10px var(--bl)}
+.btn-bl:hover{filter:brightness(1.08);box-shadow:0 8px 22px -10px var(--bl),0 0 18px var(--blg);transform:translateY(-1px)}
 .btn-gh{background:transparent;color:var(--t2);border:1px solid var(--b2)}
 .btn-gh:hover{background:var(--s3);color:var(--tx);border-color:var(--b3)}
 .btn-re{background:var(--rdd);color:var(--rd);border:1px solid rgba(239,68,68,.3)}
@@ -649,11 +649,12 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .mc-pu .mc-gl{background:var(--pu)}
 .mc-go .mc-gl{background:var(--gold)}
 .mc-am .mc-gl{background:var(--am)}
-.mc-ic{width:30px;height:30px;border-radius:7px;display:flex;
-  align-items:center;justify-content:center;font-size:14px;margin-bottom:10px}
-.mc-ic svg{display:block}
+/* Ícone vira SELO no canto superior direito (estilo Gestão/MIDAS) */
+.mc .mc-ic{position:absolute;top:15px;right:15px;width:42px;height:42px;border-radius:12px;display:flex;
+  align-items:center;justify-content:center;z-index:2;border:1px solid transparent}
+.mc .mc-ic svg{display:block;width:19px;height:19px}
 .mc-lbl{font-size:11px;color:var(--t3);font-weight:700;
-  text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;padding-right:50px}
 /* Número agora é neutro (branco) — cor só fica no ícone como "categoria" */
 .mc-val{font-size:24px;font-weight:800;line-height:1.1;margin-bottom:3px;letter-spacing:-.02em;color:var(--tx)}
 .mc-sub{font-size:12px;color:var(--t3);font-weight:500}
@@ -661,13 +662,13 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 .delta.up{color:var(--gr)}.delta.down{color:var(--rd)}
 /* Cards monocromáticos: ícone com fundo levemente colorido (sem barra lateral
    neon — era poluição visual; o ícone colorido já diferencia a categoria). */
-.mc-bl .mc-ic{background:var(--bld);color:var(--bl2)}
-.mc-cy .mc-ic{background:var(--cyd);color:var(--cy)}
-.mc-gr .mc-ic{background:var(--grd);color:var(--gr)}
-.mc-re .mc-ic{background:var(--rdd);color:var(--rd)}
-.mc-pu .mc-ic{background:var(--pud);color:var(--pu)}
-.mc-go .mc-ic{background:var(--goldd);color:var(--gold)}
-.mc-am .mc-ic{background:var(--amd);color:var(--am)}
+.mc-bl .mc-ic{background:color-mix(in srgb,var(--bl2) 13%,transparent);border-color:color-mix(in srgb,var(--bl2) 32%,transparent);color:var(--bl2)}
+.mc-cy .mc-ic{background:color-mix(in srgb,var(--cy) 13%,transparent);border-color:color-mix(in srgb,var(--cy) 32%,transparent);color:var(--cy)}
+.mc-gr .mc-ic{background:color-mix(in srgb,var(--gr) 13%,transparent);border-color:color-mix(in srgb,var(--gr) 32%,transparent);color:var(--gr)}
+.mc-re .mc-ic{background:color-mix(in srgb,var(--rd) 13%,transparent);border-color:color-mix(in srgb,var(--rd) 32%,transparent);color:var(--rd)}
+.mc-pu .mc-ic{background:color-mix(in srgb,var(--pu) 13%,transparent);border-color:color-mix(in srgb,var(--pu) 32%,transparent);color:var(--pu)}
+.mc-go .mc-ic{background:color-mix(in srgb,var(--gold) 13%,transparent);border-color:color-mix(in srgb,var(--gold) 32%,transparent);color:var(--gold)}
+.mc-am .mc-ic{background:color-mix(in srgb,var(--am) 13%,transparent);border-color:color-mix(in srgb,var(--am) 32%,transparent);color:var(--am)}
 
 /* destaque "afiliado" */
 /* mc-feat: card de destaque — sutil, sem contorno azul brilhante */
@@ -4038,8 +4039,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.93.0';
-const APP_LAST_CHANGE = 'Atendimento: a barra "Funil rodando" saiu de dentro da conversa e foi pro TOPO do painel Sale Chat (logo abaixo do header verde), igual a pilha do Sale Chat original. Mostra o nome do funil, o passo X de Y e o botao Pausar, e pertence ao lead da conversa aberta.';
+const APP_VERSION = '2.94.0';
+const APP_LAST_CHANGE = 'Novo visual em TODA a dash (estilo da tela de Gestao/MIDAS): o icone de cada card de metrica virou um selo arredondado no canto superior direito, com tint e borda na cor da categoria; botoes mais encorpados com degrade e brilho sutil no primario; e o item ativo da sidebar ganhou destaque em degrade com barrinha lateral. Como e CSS compartilhado, pegou em todas as paginas de uma vez. So visual, nenhuma logica mudou.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
