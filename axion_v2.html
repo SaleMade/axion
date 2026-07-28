@@ -4038,8 +4038,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.85.0';
-const APP_LAST_CHANGE = 'Grafico de Evolucao Diaria agora e interativo. Ao passar o mouse aparece uma agulhinha (linha vertical) no dia e um balao com o detalhe daquele dia: Vendas, Comissao, Gasto, Lucro e ROAS. O ponto do dia sob o mouse fica destacado e a data aparece no eixo. Adicionei tambem uma legenda "Como ler" explicando o COD: a comissao aparece no dia em que o cliente PAGOU, entao os dias mais recentes ainda estao recebendo e sobem nos proximos dias (por isso nao da pra saber o lucro final do dia na hora).';
+const APP_VERSION = '2.86.0';
+const APP_LAST_CHANGE = 'Atendimento (WhatsApp via API oficial): o painel Sale Chat do lado direito ficou igual ao Sale Chat original. Cards ricos com icone colorido por tipo (audio verde, video roxo, imagem azul, doc laranja), botao play verde pra disparar, e uma setinha que abre a previa do texto do item. Abas com icone e busca "Buscar item..." pra achar rapido funil/audio/texto. Os disparos continuam pela API oficial.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4065,6 +4065,7 @@ const ICONS = {
   'play':           '<polygon points="6 3 20 12 6 21 6 3"/>',
   'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
   'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  'file':           '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   'dollar-sign':    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   'percent':        '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   'sigma':          '<path d="M18 7V4H6l8 8-8 8h12v-3"/>',
@@ -7874,7 +7875,34 @@ function pageAtendimento(){
       #atendimento-pg .atd-cimeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
       #atendimento-pg .atd-citime{font-size:10.5px;color:var(--t4)}
       #atendimento-pg .atd-unread{background:var(--bl);color:#fff;font-size:10.5px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 5px}
-      #atendimento-pg .atd-thread{flex:1;display:flex;flex-direction:column;min-width:0}
+      #atendimento-pg .atd-thread{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+      #atendimento-pg .atd-side{width:326px;min-width:290px;border-left:1px solid var(--b2);display:flex;flex-direction:column;background:var(--s1)}
+      #atendimento-pg .atd-side-head{padding:12px 14px;font-size:13.5px;font-weight:800;color:var(--tx);border-bottom:1px solid var(--b2);display:flex;align-items:center;gap:9px}
+      #atendimento-pg .atd-sh-ic{width:24px;height:24px;border-radius:7px;background:#13c27322;color:#13c273;display:flex;align-items:center;justify-content:center;flex:none}
+      #atendimento-pg .atd-side-search{margin:10px 11px 2px;display:flex;align-items:center;gap:7px;background:var(--s3);border:1px solid var(--b2);border-radius:10px;padding:7px 10px;color:var(--t3)}
+      #atendimento-pg .atd-side-search input{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--tx);font-size:12.5px;font-family:inherit}
+      #atendimento-pg .atd-side-tabs{display:flex;gap:6px;padding:9px 11px;overflow-x:auto;border-bottom:1px solid var(--b2);scrollbar-width:none}
+      #atendimento-pg .atd-side-tabs::-webkit-scrollbar{display:none}
+      #atendimento-pg .atd-stab{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:5px 10px;border-radius:9px;cursor:pointer;color:var(--t3);background:var(--s3);border:1px solid var(--b2);font-family:inherit;white-space:nowrap;flex:none}
+      #atendimento-pg .atd-stab.on{background:#13c273;color:#fff;border-color:#13c273}
+      #atendimento-pg .atd-side-body{flex:1;overflow:auto;padding:10px 11px}
+      #atendimento-pg .atd-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:13px;border:1px solid var(--b1);background:var(--s2);margin-bottom:8px;transition:border-color .12s}
+      #atendimento-pg .atd-item:hover{border-color:#13c27366}
+      #atendimento-pg .atd-item.hasprev{margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+      #atendimento-pg .atd-ic{width:37px;height:37px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex:none}
+      #atendimento-pg .atd-ilab{flex:1;min-width:0}
+      #atendimento-pg .atd-ilab .t{font-size:12.5px;font-weight:700;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #atendimento-pg .atd-ilab .s{font-size:10.5px;color:var(--t4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+      #atendimento-pg .atd-exp{width:22px;height:37px;background:transparent;border:none;color:var(--t4);cursor:pointer;flex:none;display:flex;align-items:center;justify-content:center;padding:0}
+      #atendimento-pg .atd-exp:hover{color:var(--t2)}
+      #atendimento-pg .atd-play{width:37px;height:37px;border-radius:11px;background:#13c273;color:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:filter .12s}
+      #atendimento-pg .atd-play:hover{filter:brightness(1.08)}
+      #atendimento-pg .atd-play:disabled{opacity:.5;cursor:default}
+      #atendimento-pg .atd-prev{padding:9px 12px;margin-bottom:8px;border:1px solid var(--b1);border-top:none;border-radius:0 0 13px 13px;background:var(--s1);font-size:11.5px;color:var(--t2);white-space:pre-wrap;line-height:1.45;word-break:break-word}
+      #atendimento-pg .atd-sec-h{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--t4);margin:13px 3px 8px}
+      #atendimento-pg .atd-side-empty{font-size:12px;color:var(--t4);padding:22px 14px;text-align:center;line-height:1.5}
+      #atendimento-pg .atd-pcard:hover{background:var(--s3)}
+      @media(max-width:1180px){#atendimento-pg .atd-side{display:none}}
       #atendimento-pg .atd-thead{padding:10px 14px;border-bottom:1px solid var(--b2);display:flex;align-items:center;gap:11px}
       #atendimento-pg .atd-thname{font-size:14px;font-weight:600;color:var(--tx)}
       #atendimento-pg .atd-thsub{font-size:11.5px;color:var(--t3);margin-top:1px;display:flex;align-items:center;gap:4px}
@@ -7891,6 +7919,9 @@ function pageAtendimento(){
       #atendimento-pg .atd-sendbtn{background:var(--bl);border:none;border-radius:var(--r);color:#fff;width:42px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
       #atendimento-pg .atd-sendbtn:disabled{opacity:.5;cursor:default}
       #atendimento-pg .atd-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--t4);font-size:13px;text-align:center}
+      #atendimento-pg .atd-loading{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;padding:40px 16px;color:var(--t4);font-size:12.5px;text-align:center}
+      #atendimento-pg .atd-spin{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--b2);border-top-color:var(--bl);animation:atdspin .7s linear infinite}
+      @keyframes atdspin{to{transform:rotate(360deg)}}
     </style>
     <div class="ph"><div><h1>Atendimento <em>WhatsApp</em></h1></div></div>
     <div class="atd-wrap">
@@ -7902,10 +7933,16 @@ function pageAtendimento(){
             <select id="atd-fassign" onchange="_atd.fAssign=this.value;_atdLoadChats()"><option value="">Todos vendedores</option></select>
           </div>`:''}
         </div>
-        <div class="atd-chats" id="atd-chats"></div>
+        <div class="atd-chats" id="atd-chats"><div class="atd-loading"><div class="atd-spin"></div><div>Carregando conversas...</div></div></div>
       </div>
       <div class="atd-thread" id="atd-thread">
         <div class="atd-empty">${ico('message-circle',{size:34})}<div>Selecione uma conversa pra começar</div></div>
+      </div>
+      <div class="atd-side" id="atd-side">
+        <div class="atd-side-head"><span class="atd-sh-ic">${ico('zap',{size:14})}</span>Sale Chat <span style="font-weight:500;color:var(--t4);font-size:11px">· via API oficial</span></div>
+        <div class="atd-side-search">${ico('search',{size:14})}<input id="atd-side-q" placeholder="Buscar item..." oninput="_atd.sideQ=this.value;_atdSideRenderBody()"></div>
+        <div class="atd-side-tabs" id="atd-side-tabs"></div>
+        <div class="atd-side-body" id="atd-side-body"></div>
       </div>
     </div>
   </div>`;
@@ -7917,6 +7954,7 @@ async function renderAtendimento(){
   await _atdLoadInstances();
   await _atdLoadChats();
   if(_atd.phone)await _atdLoadThread();
+  try{_atdSideRender();}catch(_){}
   if(_atd.timer)clearInterval(_atd.timer);
   _atd.timer=setInterval(_atdPoll,5000);
 }
@@ -7943,7 +7981,7 @@ async function _atdLoadChats(silent){
   if(_atd.fInst)qs.push('instance='+encodeURIComponent(_atd.fInst));
   if(_atd.fAssign)qs.push('assigned='+encodeURIComponent(_atd.fAssign));
   if(_atd.q)qs.push('q='+encodeURIComponent(_atd.q));
-  try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent)console.warn('atd chats',e);return;}
+  try{const r=await api.waChats(qs.join('&'));_atd.chats=r.chats||[];}catch(e){if(!silent){console.warn('atd chats',e);const box=document.getElementById('atd-chats');if(box&&!_atd.chats.length)box.innerHTML='<div class="atd-loading"><div>Não consegui carregar.</div><div onclick="_atdLoadChats()" style="color:var(--bl);cursor:pointer;font-weight:600">Tentar de novo</div></div>';}return;}
   _atdRenderList();
 }
 function _atdRenderList(){
@@ -7971,6 +8009,7 @@ function _atdRenderList(){
 async function _atdOpenChat(phone){
   _atd.phone=phone;
   _atdRenderList();
+  const th=document.getElementById('atd-thread');if(th)th.innerHTML='<div class="atd-loading"><div class="atd-spin"></div><div>Carregando conversa...</div></div>';
   await _atdLoadThread();
   try{await api.waChatRead(phone);}catch(_){}
   const c=_atd.chats.find(x=>x.phone===phone);if(c)c.unread=0;
@@ -8092,16 +8131,41 @@ async function _atdMicToggle(){
     toast('Gravando... clique no microfone de novo pra enviar');
   }catch(e){ toast('Sem acesso ao microfone','err'); }
 }
+// Painel limpo (bottom-sheet) reutilizado pelo Funil e pela Biblioteca. Fecha no X, no Esc e clicando fora.
+function _atdPopEsc(e){ if(e && e.key==='Escape') _atdPopClose(); }
+function _atdPopClose(){
+  const pop=document.getElementById('atd-libpop'); if(pop){ pop.style.display='none'; pop.innerHTML=''; }
+  try{ document.removeEventListener('keydown', _atdPopEsc); }catch(_){}
+}
+function _atdPop(title, inner){
+  const pop=document.getElementById('atd-libpop'); if(!pop) return;
+  pop.innerHTML=''
+    +'<div onclick="_atdPopClose()" style="position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:49"></div>'
+    +'<div style="position:absolute;left:0;right:0;bottom:0;max-height:72%;display:flex;flex-direction:column;background:var(--s2);border-top:1px solid var(--b1);border-radius:16px 16px 0 0;box-shadow:0 -10px 34px rgba(0,0,0,.4);z-index:50;overflow:hidden">'
+    +  '<div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--b1)">'
+    +    '<span style="font-size:14px;font-weight:700;color:var(--tx);flex:1">'+title+'</span>'
+    +    '<button onclick="_atdPopClose()" title="Fechar" style="background:transparent;border:none;color:var(--t3);cursor:pointer;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center">'+ico('x',{size:18})+'</button>'
+    +  '</div>'
+    +  '<div style="padding:12px;overflow:auto">'+inner+'</div>'
+    +'</div>';
+  pop.style.display='block';
+  try{ document.addEventListener('keydown', _atdPopEsc); }catch(_){}
+}
 function _atdLib(){
   const pop=document.getElementById('atd-libpop'); if(!pop) return;
-  if(pop.style.display==='block'){ pop.style.display='none'; return; }
+  if(pop.style.display==='block'){ _atdPopClose(); return; }
   let items=[]; try{ items=(SC().media||[]).filter(m=>['audio','image','video','document'].includes(m.kind)&&m.key); }catch(_){}
   if(!items.length){ toast('Biblioteca vazia (cadastre em Sale Chat)'); return; }
-  pop.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40">'+items.map(m=>'<div onclick="_atdLibSend(\''+_atdEsc(m.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico(m.kind==='audio'?'mic':m.kind==='video'?'video':m.kind==='image'?'image':'file',{size:14})+' '+_atdEsc(m.label||m.id)+'</div>').join('')+'</div>';
-  pop.style.display='block';
+  const colr={audio:'#10b981',video:'#8b5cf6',image:'#3b82f6',document:'#f59e0b'};
+  const cards=items.map(m=>{ const c=colr[m.kind]||'#10b981';
+    return '<div class="atd-pcard" onclick="_atdLibSend(\''+_atdEsc(m.id)+'\')" style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px;cursor:pointer;border:1px solid var(--b1);margin-bottom:8px">'
+      +'<span style="width:32px;height:32px;border-radius:9px;background:'+c+'26;color:'+c+';display:flex;align-items:center;justify-content:center;flex:none">'+ico(m.kind==='audio'?'mic':m.kind==='video'?'video':m.kind==='image'?'image':'file',{size:15})+'</span>'
+      +'<div style="flex:1;min-width:0;font-size:13px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_atdEsc(m.label||m.id)+'</div></div>';
+  }).join('');
+  _atdPop('Biblioteca de áudios e mídia', cards);
 }
 function _atdLibSend(id){
-  const pop=document.getElementById('atd-libpop'); if(pop)pop.style.display='none';
+  _atdPopClose();
   let it=null; try{ it=(SC().media||[]).find(m=>m.id===id); }catch(_){}
   if(!it||!it.key){ toast('Item não encontrado','err'); return; }
   if(_atd.sending||!_atd.phone) return; _atd.sending=true; const btn=document.getElementById('atd-send'); if(btn)btn.disabled=true;
@@ -8111,14 +8175,20 @@ function _atdLibSend(id){
     .finally(()=>{ _atd.sending=false; if(btn)btn.disabled=false; });
 }
 function _atdFunil(){
-  const lp=document.getElementById('atd-libpop'); if(!lp) return;
+  const pop=document.getElementById('atd-libpop'); if(!pop) return;
+  if(pop.style.display==='block'){ _atdPopClose(); return; }
   let seqs=[]; try{ seqs=(SC().sequences||[]); }catch(_){}
   if(!seqs.length){ toast('Nenhum funil publicado (crie em Sale Chat)'); return; }
-  lp.innerHTML='<div style="position:absolute;bottom:64px;left:12px;right:12px;max-height:240px;overflow:auto;background:var(--s2);border:1px solid var(--b1);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:8px;z-index:40"><div style="font-size:11px;color:var(--t3);padding:4px 10px">Disparar funil de áudios:</div>'+seqs.map(s=>'<div onclick="_atdFunilStart(\''+_atdEsc(s.id)+'\')" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t2);display:flex;gap:8px;align-items:center">'+ico('zap',{size:14})+' '+_atdEsc(s.label||s.id)+' <span style="color:var(--t4);font-size:11px">('+((s.items||[]).length)+' itens)</span></div>').join('')+'</div>';
-  lp.style.display='block';
+  const cards=seqs.map(s=>{ const n=(s.items||[]).length;
+    return '<div class="atd-pcard" onclick="_atdFunilStart(\''+_atdEsc(s.id)+'\')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;cursor:pointer;border:1px solid var(--b1);margin-bottom:8px">'
+      +'<span style="width:34px;height:34px;border-radius:10px;background:rgba(16,185,129,.15);color:#10b981;display:flex;align-items:center;justify-content:center;flex:none">'+ico('zap',{size:16})+'</span>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--tx)">'+_atdEsc(s.label||s.id)+'</div><div style="font-size:11.5px;color:var(--t4)">'+n+' áudios</div></div>'
+      +'<span style="font-size:11.5px;color:#10b981;font-weight:700">Disparar</span></div>';
+  }).join('');
+  _atdPop('Disparar funil de áudios', cards);
 }
 function _atdFunilStart(seqId){
-  const lp=document.getElementById('atd-libpop'); if(lp)lp.style.display='none';
+  _atdPopClose();
   if(!_atd.phone) return;
   toast('Disparando funil...');
   api.waFunnelStart(_atd.phone, seqId).then(r=>{
@@ -8144,6 +8214,94 @@ function _atdFunilRefresh(){
     if(run&&run.status==='running') _atdFunilBar('Funil rodando '+(run.idx||0)+'/'+(run.total||'?')+' (para sozinho se o lead responder)');
     else _atdFunilBar('');
   }).catch(()=>{});
+}
+// ── Aba lateral (Sale Chat integrado) — dispara tudo pela API oficial ──
+// Meta de cada tipo: ícone + cor (paleta do Sale Chat ORIGINAL / ZKIND) — pra o painel ficar idêntico.
+var _ATD_KIND={
+  funis:   {ic:'zap',            c:'#13c273', lbl:'Funis'},
+  audio:   {ic:'mic',            c:'#13c273', lbl:'Áudios'},
+  video:   {ic:'video',          c:'#8e17f0', lbl:'Vídeos'},
+  image:   {ic:'image',          c:'#00bcf2', lbl:'Imagens'},
+  document:{ic:'file',           c:'#f0810f', lbl:'Docs'},
+  msg:     {ic:'message-circle', c:'#2563eb', lbl:'Textos'},
+  template:{ic:'check-circle',   c:'#2ecc71', lbl:'Templates'}
+};
+var _ATD_TABS=['funis','audio','video','image','document','msg','template'];
+function _atdSideRender(){
+  const tabsEl=document.getElementById('atd-side-tabs'); if(!tabsEl) return;
+  const cur=_atd.sideTab||'funis';
+  tabsEl.innerHTML=_ATD_TABS.map(k=>{const m=_ATD_KIND[k];return '<button class="atd-stab'+(k===cur?' on':'')+'" onclick="_atd.sideTab=\''+k+'\';_atdSideRender()">'+ico(m.ic,{size:12})+_atdEsc(m.lbl)+'</button>';}).join('');
+  _atdSideRenderBody();
+}
+// Só o CORPO (a busca redesenha isso sem tocar nas abas nem perder o foco do input).
+function _atdSideRenderBody(){
+  const bodyEl=document.getElementById('atd-side-body'); if(!bodyEl) return;
+  bodyEl.innerHTML=_atdSideItems(_atd.sideTab||'funis');
+}
+// Card rico (igual ao Sale Chat original): chip de ícone colorido + label + prévia expansível + botão play verde.
+function _atdItemRow(kind,uid,title,sub,prevHtml,onSend){
+  const m=_ATD_KIND[kind]||{ic:'zap',c:'#13c273'};
+  const rid='atdp_'+kind+'_'+uid;
+  return '<div class="atd-irow">'
+    +'<div class="atd-item">'
+    +'<span class="atd-ic" style="background:'+m.c+'22;color:'+m.c+'">'+ico(m.ic,{size:16})+'</span>'
+    +'<div class="atd-ilab"><div class="t">'+title+'</div>'+(sub?'<div class="s">'+sub+'</div>':'')+'</div>'
+    +(prevHtml?'<button class="atd-exp" title="Ver prévia" onclick="_atdTogglePrev(\''+rid+'\',this)">'+ico('chevron-down',{size:15})+'</button>':'')
+    +'<button class="atd-play" title="Disparar" onclick="'+onSend+'">'+ico('play',{size:14})+'</button>'
+    +'</div>'
+    +(prevHtml?'<div class="atd-prev" id="'+rid+'" style="display:none">'+prevHtml+'</div>':'')
+    +'</div>';
+}
+function _atdTogglePrev(id,btn){
+  const el=document.getElementById(id); if(!el) return;
+  const open=el.style.display==='none';
+  el.style.display=open?'block':'none';
+  const item=el.previousElementSibling; if(item&&item.classList) item.classList.toggle('hasprev',open);
+  try{ btn.innerHTML=ico(open?'chevron-up':'chevron-down',{size:15}); }catch(_){}
+}
+function _atdSideItems(tab){
+  const q=String(_atd.sideQ||'').trim().toLowerCase();
+  const empty='<div class="atd-side-empty">Nada aqui ainda.<br>Cadastre no Sale Chat.</div>';
+  const noHit='<div class="atd-side-empty">Nenhum item pra "'+_atdEsc(q)+'".</div>';
+  const match=(txt)=>!q||String(txt||'').toLowerCase().indexOf(q)>=0;
+  try{
+    if(tab==='funis'){
+      const all=SC().sequences||[]; if(!all.length)return empty;
+      const seqs=all.filter(s=>match(s.label||s.id)); if(!seqs.length)return noHit;
+      return seqs.map(s=>_atdItemRow('funis',_atdEsc(s.id),_atdEsc(s.label||s.id),((s.items||[]).length)+' passos','','_atdFunilStart(\''+_atdEsc(s.id)+'\')')).join('');
+    }
+    if(tab==='msg'){
+      const all=SC().messages||[]; if(!all.length)return empty;
+      const msgs=all.filter(m=>match((m.label||'')+' '+(m.text||m.body||''))); if(!msgs.length)return noHit;
+      return msgs.map(m=>{const t=String(m.text||m.body||'');return _atdItemRow('msg',_atdEsc(m.id),_atdEsc(m.label||m.id),_atdEsc(t.slice(0,40)),_atdEsc(t),'_atdSideSendMsg(\''+_atdEsc(m.id)+'\')');}).join('');
+    }
+    if(tab==='template'){ setTimeout(_atdSideTemplates,0); return '<div id="atd-side-tpl" class="atd-side-empty">Carregando templates aprovados...</div>'; }
+    const all=(SC().media||[]).filter(m=>m.kind===tab && m.key); if(!all.length)return empty;
+    const media=all.filter(m=>match(m.label||m.id)); if(!media.length)return noHit;
+    return media.map(m=>_atdItemRow(tab,_atdEsc(m.id),_atdEsc(m.label||m.id),'','','_atdLibSend(\''+_atdEsc(m.id)+'\')')).join('');
+  }catch(_){ return empty; }
+}
+function _atdSideSendMsg(id){
+  let m=null; try{ m=(SC().messages||[]).find(x=>x.id===id); }catch(_){}
+  const txt=m&&(m.text||m.body); if(!txt){ toast('Mensagem sem texto'); return; }
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  if(_atd.sending) return; _atd.sending=true;
+  api.waCloudSend(_atd.phone, txt).then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); }).catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
+}
+function _atdSideTemplates(){
+  api.waTemplateList().then(r=>{
+    const el2=document.getElementById('atd-side-tpl'); if(!el2) return;
+    const ts=((r&&r.templates)||[]).filter(t=>String(t.status||'').toUpperCase()==='APPROVED');
+    if(!ts.length){ el2.innerHTML='<div style="font-size:11.5px;color:var(--t4);padding:12px;text-align:center;line-height:1.5">Nenhum template aprovado ainda.<br>Quando a Meta aprovar, eles aparecem aqui pra reabrir lead frio (fora das 24h).</div>'; return; }
+    el2.outerHTML='<div>'+ts.map(t=>{ const body=((t.components||[]).find(c=>c.type==='BODY')||{}).text||''; return _atdItemRow('template',_atdEsc(t.name),_atdEsc(t.name),_atdEsc(String(body).slice(0,40)),_atdEsc(String(body)),'_atdSideSendTpl(\''+_atdEsc(t.name)+'\',\''+_atdEsc(t.language||'pt_BR')+'\')'); }).join('')+'</div>';
+  }).catch(()=>{ const el2=document.getElementById('atd-side-tpl'); if(el2)el2.innerHTML='<div style="font-size:12px;color:var(--rd);padding:12px">Erro ao carregar templates.</div>'; });
+}
+function _atdSideSendTpl(name,lang){
+  if(!_atd.phone){ toast('Abra uma conversa primeiro'); return; }
+  if(_atd.sending) return; _atd.sending=true;
+  api._fetch('/api/wa/cloud/send',{method:'POST',body:JSON.stringify({number:_atd.phone,template:{name:name,language:lang}})})
+    .then(async r=>{ if(r&&r.ok===false)throw new Error(r.error||'falhou'); await _atdLoadThread(); _atdLoadChats(true); })
+    .catch(e=>toast('Falha: '+(e.message||''),'err')).finally(()=>{_atd.sending=false;});
 }
 async function _atdAssign(uid){
   if(!_atd.phone)return;
