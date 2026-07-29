@@ -4041,8 +4041,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.96.1';
-const APP_LAST_CHANGE = 'Leads das Pressels: no card de vendedor (Leads/Mes) o "Faturou" ganhou uma linha propria de largura total, entao o valor (ex R$ 65.712,00) para de ficar espremido e quebrar em duas linhas. Leads/Converteram/Conversao ficam na linha de cima.';
+const APP_VERSION = '2.96.2';
+const APP_LAST_CHANGE = 'Leads das Pressels: os cards de vendedor (aba Leads) ficaram mais largos (340px) e agora rolam na horizontal em vez de amontoar em varias linhas. Quando nao cabem na tela aparece uma barrinha embaixo pra deslizar e ver os vendedores escondidos a direita.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -11290,8 +11290,12 @@ function renderPresselLeads(){
       <style>
         .pl-cols{display:flex;gap:18px;align-items:flex-start}
         .pl-aside{flex:0 0 280px;position:sticky;top:14px}
-        .pl-grid{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
-        .pl-seller{flex:1;min-width:240px;max-width:360px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px}
+        .pl-grid{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:10px;scrollbar-width:thin}
+        .pl-grid::-webkit-scrollbar{height:9px}
+        .pl-grid::-webkit-scrollbar-thumb{background:var(--b3);border-radius:5px}
+        .pl-grid::-webkit-scrollbar-thumb:hover{background:var(--bl)}
+        .pl-grid::-webkit-scrollbar-track{background:transparent}
+        .pl-seller{flex:0 0 340px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px}
         @media(max-width:1000px){.pl-cols{flex-wrap:wrap}.pl-aside{flex:1 1 100%;position:static;order:-1}}
       </style>
       <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
