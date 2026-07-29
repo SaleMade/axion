@@ -155,7 +155,7 @@ body.theme-green{
 }
 
 /* TODOS os glows internos sumam — flat design puro */
-body.theme-green .mc-gl{display:none}
+body.theme-green .mc::after{display:none}
 body.theme-green .info-section::before{display:none}
 body.theme-green .aging-card::before{display:none}
 body.theme-green .follows-hero::before,
@@ -255,7 +255,7 @@ body.theme-light-green{
   --blg:rgba(22,163,74,.07);--bld:rgba(22,163,74,.05);
 }
 /* Mantém o flat design do Slim no light também */
-body.theme-light-green .mc-gl{display:none}
+body.theme-light-green .mc::after{display:none}
 body.theme-light-green .info-section::before{display:none}
 body.theme-light-green .aging-card::before{display:none}
 body.theme-light-green .follows-hero::before,
@@ -302,7 +302,7 @@ body.is-light ::-webkit-scrollbar-track{background:#f1f5f9}
 
 /* Glow interno dos cards de métrica fica MUITO sutil no claro
    (alpha menor — senão polui visualmente) */
-body.is-light .mc-gl{opacity:.07}
+body.is-light .mc::after{opacity:.10}
 
 /* Botões primários no light: texto branco em accent vivo */
 body.is-light .btn-bl{color:#ffffff;font-weight:600}
@@ -641,16 +641,19 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 /* Glow interno sutil no canto superior direito do card (esmaecer na cor
    da categoria). Cor é setada por classe específica (.mc-bl .mc-gl, etc).
    Pointer-events none pra não atrapalhar clique no card. */
-.mc-gl{display:block;position:absolute;top:-40px;right:-40px;width:170px;height:170px;
-  border-radius:50%;filter:blur(60px);opacity:.18;pointer-events:none;z-index:0}
-.mc>*:not(.mc-gl){position:relative;z-index:1}
-.mc-bl .mc-gl{background:var(--bl)}
-.mc-cy .mc-gl{background:var(--cy)}
-.mc-gr .mc-gl{background:var(--gr)}
-.mc-re .mc-gl{background:var(--rd)}
-.mc-pu .mc-gl{background:var(--pu)}
-.mc-go .mc-gl{background:var(--gold)}
-.mc-am .mc-gl{background:var(--am)}
+/* Glow de fundo em TODOS os cards via pseudo-elemento (não depende do HTML ter a div .mc-gl).
+   Colorido pela categoria (mc-bl/gr/go/...); default = primária. Igual ao visual de Leads das Pressels. */
+.mc::after{content:"";position:absolute;top:-40px;right:-40px;width:170px;height:170px;
+  border-radius:50%;filter:blur(60px);opacity:.20;pointer-events:none;z-index:0;background:var(--bl)}
+.mc-bl::after{background:var(--bl)}
+.mc-cy::after{background:var(--cy)}
+.mc-gr::after{background:var(--gr)}
+.mc-re::after{background:var(--rd)}
+.mc-pu::after{background:var(--pu)}
+.mc-go::after{background:var(--gold)}
+.mc-am::after{background:var(--am)}
+.mc-gl{display:none}
+.mc>*{position:relative;z-index:1}
 /* Ícone vira SELO no canto superior direito (estilo Gestão/MIDAS) */
 .mc .mc-ic{position:absolute;top:15px;right:15px;width:42px;height:42px;border-radius:12px;display:flex;
   align-items:center;justify-content:center;z-index:2;border:1px solid transparent}
@@ -4041,8 +4044,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.95.0';
-const APP_LAST_CHANGE = 'Dash menos escura (mais visivel, sem virar tema claro): fundo saiu do quase-preto pra um carvao mais claro, os cards subiram junto pra destacar melhor, as bordas ficaram mais definidas e o texto um pouco mais claro. Ajuste moderado no tema padrao; da pra clarear mais ou puxar de volta se quiser.';
+const APP_VERSION = '2.97.0';
+const APP_LAST_CHANGE = 'Visual da area de Leads das Pressels espalhado por TODA a dash: o glow (blur de fundo colorido) que antes so aparecia em alguns cards agora aparece em TODOS os cards de metrica automaticamente (virou pseudo-elemento, colorido pela categoria). A tela de Gestao ganhou cor por metrica (antes era tudo no mesmo tom). Selo do icone e cores consistentes. So visual. (A area de Atendimento/Sale Chat foi deixada pra depois, pra nao colidir com outra edicao em andamento.)';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -4066,6 +4069,7 @@ const ICONS = {
   'chevron-down':   '<polyline points="6 9 12 15 18 9"/>',
   'download':       '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   'play':           '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'pause':          '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
   'video':          '<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2" ry="2"/>',
   'image':          '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   'file':           '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
@@ -6014,8 +6018,8 @@ function renderHome(){
   const margemCons=totFatPago>0?consolidado/totFatPago*100:0;
 
   // mini card de operação
-  const kc=(lbl,val,icon)=>`<div class="mc" style="padding:14px 16px">
-    <div class="mc-ic" style="width:30px;height:30px">${ico(icon,{size:13})}</div>
+  const kc=(lbl,val,icon,cat)=>`<div class="mc ${cat||''}" style="padding:14px 16px">
+    <div class="mc-ic" style="width:34px;height:34px">${ico(icon,{size:14})}</div>
     <div class="mc-lbl" style="font-size:10px">${lbl}</div>
     <div class="mc-val" style="font-size:20px">${val}</div></div>`;
   // linha de receita
@@ -6029,12 +6033,12 @@ function renderHome(){
     <h3 style="text-align:center;font-size:16px;margin:0 0 16px">${title}</h3>
     <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:8px">Operação</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      ${kc('Pedidos Criados',m.criados,'shopping-cart')}
-      ${kc('Pedidos Pagos',m.pagos,'credit-card')}
-      ${kc('Faturamento Gerado',fmt(m.fatGerado),'dollar-sign')}
-      ${kc('Faturamento Pago',fmt(m.fatPago),'trending-up')}
-      ${kc('Ticket Médio',fmt(m.ticket),'dollar-sign')}
-      ${kc(isEnt?'Taxa de Recebimento':'Taxa Pagamento',m.taxa.toFixed(1)+'%','percent')}
+      ${kc('Pedidos Criados',m.criados,'shopping-cart','mc-cy')}
+      ${kc('Pedidos Pagos',m.pagos,'credit-card','mc-gr')}
+      ${kc('Faturamento Gerado',fmt(m.fatGerado),'dollar-sign','mc-go')}
+      ${kc('Faturamento Pago',fmt(m.fatPago),'trending-up','mc-gr')}
+      ${kc('Ticket Médio',fmt(m.ticket),'dollar-sign','mc-bl')}
+      ${kc(isEnt?'Taxa de Recebimento':'Taxa Pagamento',m.taxa.toFixed(1)+'%','percent','mc-am')}
     </div>
     ${isEnt?`<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:var(--r);margin-bottom:16px">
       <span style="color:var(--gold);display:inline-flex">${ico('shopping-cart',{size:15})}</span>
@@ -7963,6 +7967,14 @@ function pageAtendimento(){
       #atendimento-pg .atd-b.in{align-self:flex-start;background:var(--s2);color:var(--tx);border-bottom-left-radius:4px}
       #atendimento-pg .atd-b.out{align-self:flex-end;background:var(--bl);color:#fff;border-bottom-right-radius:4px}
       #atendimento-pg .atd-bt{font-size:9.5px;opacity:.6;margin-top:3px;text-align:right}
+      #atendimento-pg .atd-aud{display:flex;align-items:center;gap:9px;min-width:210px;padding:2px 0}
+      #atendimento-pg .atd-aud-btn{width:34px;height:34px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;background:rgba(255,255,255,.92);color:#0b7a5b}
+      #atendimento-pg .atd-b.in .atd-aud-btn{background:var(--bl);color:#fff}
+      #atendimento-pg .atd-aud-bar{flex:1;height:4px;border-radius:20px;background:rgba(255,255,255,.4);cursor:pointer;position:relative}
+      #atendimento-pg .atd-b.in .atd-aud-bar{background:var(--b2)}
+      #atendimento-pg .atd-aud-fill{height:100%;width:0;border-radius:20px;background:#fff}
+      #atendimento-pg .atd-b.in .atd-aud-fill{background:var(--bl)}
+      #atendimento-pg .atd-aud-t{font-size:10.5px;opacity:.85;flex:none;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
       #atendimento-pg .atd-day{align-self:center;font-size:10.5px;color:var(--t4);background:var(--s2);padding:3px 10px;border-radius:10px;margin:6px 0}
       #atendimento-pg .atd-compose{padding:11px 13px;border-top:1px solid var(--b2);display:flex;gap:9px;align-items:flex-end;background:var(--s1)}
       #atendimento-pg .atd-compose textarea{flex:1;background:var(--s3);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-size:13px;padding:9px 11px;font-family:inherit;outline:none;resize:none;max-height:120px;min-height:40px;line-height:1.4}
@@ -8101,10 +8113,14 @@ function _atdMsgsHTML(){
     const cap=hasBody?_atdEsc(m.body):'';
     let inner;
     if(mu && t==='image') inner=`<img src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px;display:block" loading="lazy">${cap?`<div style="margin-top:4px">${cap}</div>`:''}`;
-    else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<audio controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;height:38px"></audio>`;
+    else if(mu && (t==='audio'||t==='ptt'||t==='voice')) inner=`<div class="atd-aud" data-src="${_atdEsc(mu)}"><button class="atd-aud-btn" onclick="_atdAudPlay(this)">${ico('play',{size:15})}</button><div class="atd-aud-bar" onclick="_atdAudSeek(event,this)"><div class="atd-aud-fill"></div></div><span class="atd-aud-t">0:00</span></div>`;
     else if(mu && t==='video') inner=`<video controls preload="none" src="${_atdEsc(mu)}" style="max-width:230px;border-radius:8px"></video>`;
     else if(mu && t==='document') inner=`<a href="${_atdEsc(mu)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${ico('file',{size:13})} ${cap||'documento'}</a>`;
-    else if(hasBody) inner=_atdEsc(m.body);
+    else if(hasBody){
+      const b64=_atdB64Label(m.body);   // corpo é base64 de mídia (thumbnail que a captura salvou no texto)?
+      if(b64){ const byType={image:['image','Foto'],video:['video','Vídeo'],ptv:['video','Vídeo'],document:['file','Documento'],audio:['mic','Áudio'],ptt:['mic','Áudio'],voice:['mic','Áudio'],sticker:['image','Figurinha'],location:['','Localização'],interactive:['','Mensagem']}[t]; const e=byType||[b64.ic,b64.txt]; inner=`<span style="opacity:.7;display:inline-flex;align-items:center;gap:5px">${e[0]?ico(e[0],{size:13}):''} ${e[1]}</span>`; }
+      else inner=_atdEsc(m.body);
+    }
     else if(lblOf[t]) inner=`<span style="opacity:.7;display:inline-flex;align-items:center;gap:5px">${ico(icoOf[t]||'file',{size:13})} ${lblOf[t]}</span>`;   // mídia ainda baixando/sem arquivo
     else return;   // nada pra mostrar → não polui a conversa
     const day=_atdDay(m.ts);
@@ -8118,6 +8134,59 @@ function _atdSyncMsgs(){
   const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<60;
   el.innerHTML=_atdMsgsHTML();
   if(nearBottom)el.scrollTop=el.scrollHeight;
+  try{_atdAudDurations();_atdAudRebind();}catch(_){}
+}
+// ── Player de áudio estilo WhatsApp (botão + barra + tempo). Um <audio> global toca por vez, então
+//    sobrevive ao redesenho da lista: ao redesenhar, re-liga a barra do áudio que estava tocando.
+function _atdAudEl(){
+  let a=document.getElementById('atd-audio-el');
+  if(!a){ a=document.createElement('audio'); a.id='atd-audio-el'; a.preload='metadata';
+    a.addEventListener('timeupdate',_atdAudTick); a.addEventListener('ended',_atdAudEnded); a.addEventListener('pause',_atdAudTick);
+    document.body.appendChild(a); }
+  return a;
+}
+function _atdAudFmt(s){ s=Math.max(0,Math.floor(s||0)); return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2); }
+function _atdAudPlay(btn){
+  const box=btn.closest('.atd-aud'); if(!box) return;
+  const src=box.getAttribute('data-src'); const a=_atdAudEl();
+  if(_atd._audSrc===src && !a.paused){ a.pause(); btn.innerHTML=ico('play',{size:15}); return; }   // mesmo áudio tocando → pausa
+  if(_atd._audBtn){ try{_atd._audBtn.innerHTML=ico('play',{size:15});}catch(_){} }                  // troca de áudio → zera o anterior
+  _atd._audBox=box; _atd._audBtn=btn; _atd._audSrc=src;
+  if(a.getAttribute('src')!==src){ a.src=src; }
+  a.play().then(()=>{ btn.innerHTML=ico('pause',{size:15}); }).catch(()=>{});
+}
+function _atdAudTick(){
+  const a=_atdAudEl(); const box=_atd._audBox; if(!box||!document.body.contains(box)) return;
+  const fill=box.querySelector('.atd-aud-fill'), t=box.querySelector('.atd-aud-t');
+  const dur=isFinite(a.duration)?a.duration:0, cur=a.currentTime||0;
+  if(fill) fill.style.width=(dur?Math.min(100,cur/dur*100):0)+'%';
+  if(t) t.textContent=_atdAudFmt(cur||dur);
+}
+function _atdAudEnded(){
+  if(_atd._audBtn){ try{_atd._audBtn.innerHTML=ico('play',{size:15});}catch(_){} }
+  const box=_atd._audBox; if(box){ const f=box.querySelector('.atd-aud-fill'); if(f)f.style.width='0'; const t=box.querySelector('.atd-aud-t'); if(t){ const a=_atdAudEl(); t.textContent=_atdAudFmt(isFinite(a.duration)?a.duration:0); } }
+}
+function _atdAudSeek(e,bar){
+  const a=_atdAudEl(); const box=bar.closest('.atd-aud');
+  if(box.getAttribute('data-src')!==_atd._audSrc || !isFinite(a.duration) || !a.duration) return;
+  const r=bar.getBoundingClientRect(); a.currentTime=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*a.duration; _atdAudTick();
+}
+// mostra a duração de cada áudio sem tocar (carrega só os metadados; o navegador cacheia)
+function _atdAudDurations(){
+  const el=document.getElementById('atd-msgs'); if(!el) return;
+  Array.prototype.forEach.call(el.querySelectorAll('.atd-aud'),function(box){
+    const t=box.querySelector('.atd-aud-t'); const src=box.getAttribute('data-src');
+    if(!t||box._durLoaded) return; box._durLoaded=1;
+    try{ const probe=new Audio(); probe.preload='metadata'; probe.src=src;
+      probe.addEventListener('loadedmetadata',function(){ if(box.getAttribute('data-src')!==_atd._audSrc && isFinite(probe.duration)) t.textContent=_atdAudFmt(probe.duration); }); }catch(_){}
+  });
+}
+// ao redesenhar a lista, re-liga a barra do áudio que continua tocando no <audio> global
+function _atdAudRebind(){
+  const a=document.getElementById('atd-audio-el'); if(!a||a.paused||!_atd._audSrc) return;
+  const el=document.getElementById('atd-msgs'); if(!el) return;
+  const box=el.querySelector('.atd-aud[data-src="'+(window.CSS&&CSS.escape?CSS.escape(_atd._audSrc):_atd._audSrc)+'"]');
+  if(box){ _atd._audBox=box; const btn=box.querySelector('.atd-aud-btn'); _atd._audBtn=btn; if(btn)btn.innerHTML=ico('pause',{size:15}); _atdAudTick(); }
 }
 function _atdRenderThread(){
   const box=document.getElementById('atd-thread');if(!box)return;
@@ -8154,6 +8223,7 @@ function _atdRenderThread(){
   const el=document.getElementById('atd-msgs');if(el)el.scrollTop=el.scrollHeight;
   const inp=document.getElementById('atd-input');if(inp)inp.focus();
   try{_atdFunilRefresh();}catch(_){}
+  try{_atdAudDurations();_atdAudRebind();}catch(_){}
 }
 async function _atdSend(){
   const inp=document.getElementById('atd-input');if(!inp)return;
@@ -8606,10 +8676,21 @@ function _atdInstLabel(inst){
   return at;
 }
 // Preview da última mensagem em linguagem humana: [ptt]/[chat]/[video]/etc → rótulo + ícone.
+// Detecta base64 de mídia (thumbnail JPEG/PNG, pdf, etc) guardado no corpo → rótulo humano.
+function _atdB64Label(s){
+  s=String(s||'');
+  if(s.length<80)return null;
+  if(/^\/9j\/|^data:image|^iVBORw0KGgo|^R0lGOD|^UklGR/.test(s))return {ic:'image',txt:'Foto'};
+  if(/^JVBERi|^data:application\/pdf/.test(s))return {ic:'file',txt:'Documento'};
+  if(/^T2dnUw|^data:audio|^SUQz/.test(s))return {ic:'mic',txt:'Áudio'};
+  if(/^data:video/.test(s))return {ic:'video',txt:'Vídeo'};
+  if(/^[A-Za-z0-9+/]{160,}/.test(s) && !/\s/.test(s))return {ic:'file',txt:'Anexo'};
+  return null;
+}
 function _atdLastText(c){
   const raw=String((c&&c.last_text)||'');
   const m=raw.match(/^\[([a-z0-9_]+)\]$/i);
-  if(!m)return {ic:'',txt:raw};
+  if(!m){ const b=_atdB64Label(raw); return b||{ic:'',txt:raw}; }
   const map={ptt:['mic','Áudio'],audio:['mic','Áudio'],voice:['mic','Áudio'],image:['image','Foto'],video:['video','Vídeo'],document:['file','Documento'],sticker:['image','Figurinha'],location:['','Localização'],contact:['user','Contato'],contacts:['user','Contato'],chat:['','Mensagem'],text:['','Mensagem']};
   const e=map[m[1].toLowerCase()]||['','Mensagem'];
   return {ic:e[0],txt:e[1]};
@@ -11194,25 +11275,150 @@ function confirmRechargeId(id){
    cada atendente e pula automaticamente os banidos/restritos.
 ═══════════════════════════════════════════════════════ */
 function pagePressels(){return `<div class="page" id="pressels-pg"></div>`}
-// Painel de Leads (embute a página pública /pressels-total?view=leads do worker num iframe).
-// Só diretor vê. Acompanhamento diário dos leads que caem nas roletas das pressels.
+// Leads das Pressels — NATIVO. Busca /pressels-total.json e renderiza no tema da dash (sem iframe).
+// Só diretor vê (perm ver_pressel_leads). Toda a lógica pesada (atribuição, ranking, conversão por
+// número) fica no worker; aqui é só apresentação. Abas Métricas / Pedidos / Leads (Dia/Mês).
+let _plView='metricas', _plPer='dia', _plDay='', _plData=null, _plLoading=false, _plTimer=null;
+function _plToday(){ return new Date(Date.now()-10800000).toISOString().slice(0,10); }   // hoje no fuso BR
+function _plIsToday(){ return !_plDay || _plDay===_plToday(); }
+function _plEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _plWa(ph){ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.length<=11) d='55'+d; return 'https://wa.me/'+d; }
+function _plHora(ts){ const bt=new Date((Number(ts||0)-10800)*1000); if(isNaN(bt)) return ''; const p=n=>String(n).padStart(2,'0'); return p(bt.getUTCDate())+'/'+p(bt.getUTCMonth()+1)+' '+p(bt.getUTCHours())+':'+p(bt.getUTCMinutes()); }
 function pagePresselLeads(){return `<div class="page" id="presselleads-pg"></div>`}
-function _presselLeadsSrc(){ const t=(typeof apiToken==='function'?apiToken():''); return (apiUrl()||'https://axion-api.axion-dash.workers.dev').replace(/\/+$/,'')+'/pressels-total?view=leads'+(t?('&k='+encodeURIComponent(t)):''); }
-function reloadPresselLeads(){ const f=$('presselleads-frame'); if(f){ f.src=_presselLeadsSrc(); toast('Leads atualizados','ok'); } }
 function renderPresselLeads(){
   const wrap=$('presselleads-pg'); if(!wrap) return;
-  const src=_presselLeadsSrc();
-  // Monta uma vez só; nas próximas visitas mantém o iframe (não recarrega à toa).
-  if(wrap.getAttribute('data-src')===src && wrap.querySelector('iframe')) return;
-  wrap.setAttribute('data-src',src);
-  wrap.innerHTML=`
-    <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 14px">
-      <button class="btn btn-gh btn-sm" onclick="reloadPresselLeads()">${ico('refresh-cw',{size:14})} Atualizar</button>
-      <a class="btn btn-gh btn-sm" href="${src}" target="_blank" rel="noopener" style="text-decoration:none">${ico('arrow-up-right',{size:14})} Abrir em nova aba</a>
-    </div>
-    <iframe id="presselleads-frame" src="${src}" title="Leads das pressels" loading="lazy"
-      style="width:100%;height:calc(100vh - 160px);min-height:520px;border:1px solid var(--b2);border-radius:var(--rl);background:#fff;display:block"></iframe>`;
+  if(!_plDay) _plDay=_plToday();
+  if(!wrap.querySelector('#pl-shell')){
+    wrap.innerHTML=`
+      <style>
+        .pl-cols{display:flex;gap:18px;align-items:flex-start}
+        .pl-aside{flex:0 0 280px;position:sticky;top:14px}
+        .pl-grid{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:10px;scrollbar-width:thin}
+        .pl-grid::-webkit-scrollbar{height:9px}
+        .pl-grid::-webkit-scrollbar-thumb{background:var(--b3);border-radius:5px}
+        .pl-grid::-webkit-scrollbar-thumb:hover{background:var(--bl)}
+        .pl-grid::-webkit-scrollbar-track{background:transparent}
+        .pl-seller{flex:0 0 340px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px}
+        @media(max-width:1000px){.pl-cols{flex-wrap:wrap}.pl-aside{flex:1 1 100%;position:static;order:-1}}
+      </style>
+      <div class="ph"><div><h1>Leads <em>das Pressels</em></h1></div></div>
+      <p class="muted" style="font-size:12.5px;margin:-6px 0 16px">Acompanhamento das roletas: quanto chega, vira lead e vende, por pressel e por vendedor. Números reais do WhatsApp e do pixel.</p>
+      <div id="pl-shell">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+          <div id="pl-tabs" style="display:inline-flex;gap:6px"></div>
+          <input type="date" id="pl-date" max="${_plToday()}" value="${_plDay}" onchange="_plSetDay(this.value)"
+            style="background:var(--s2);border:1px solid var(--b1);color:var(--tx);border-radius:var(--r);padding:8px 11px;font-size:13px;font-family:inherit;color-scheme:dark;cursor:pointer">
+          <span id="pl-live" class="muted" style="font-size:12px"></span>
+          <div style="flex:1;min-width:8px"></div>
+          <button class="btn btn-gh btn-sm" onclick="_plFetch(true)">${ico('refresh-cw',{size:14})} Atualizar</button>
+        </div>
+        <div class="pl-cols">
+          <div id="pl-body" style="flex:1;min-width:0"></div>
+          <aside id="pl-side" class="pl-aside"></aside>
+        </div>
+      </div>`;
+  }
+  _plRenderTabs();
+  _plFetch();
+  _plScheduleRefresh();
+}
+function _plRenderTabs(){
+  const el=$('pl-tabs'); if(!el) return;
+  const tab=(v,l)=>`<button class="btn ${_plView===v?'btn-bl':'btn-gh'} btn-sm" onclick="_plSetView('${v}')">${l}</button>`;
+  el.innerHTML=tab('metricas','Métricas')+tab('vendas','Pedidos')+tab('leads','Leads');
+}
+function _plSetView(v){ if(_plView===v) return; _plView=v; _plRenderTabs(); _plData=null; _plFetch(); }
+function _plSetPer(p){ if(_plPer===p) return; _plPer=p; _plData=null; _plFetch(); }
+function _plSetDay(d){ if(!d) return; _plDay=d; _plData=null; _plFetch(); _plScheduleRefresh(); }
+function _plScheduleRefresh(){
+  if(_plTimer){ clearInterval(_plTimer); _plTimer=null; }
+  if(_plIsToday()) _plTimer=setInterval(()=>{ if(!$('pl-body')){ clearInterval(_plTimer); _plTimer=null; return; } _plFetch(); }, 30000);
+}
+async function _plFetch(manual){
+  const body=$('pl-body'); if(!body || _plLoading) return;
+  _plLoading=true;
+  const live=$('pl-live'); if(live) live.textContent=_plIsToday()?'atualiza sozinho a cada 30s':'';
+  if(!_plData) body.innerHTML=`<div class="muted" style="text-align:center;padding:44px">Carregando…</div>`;
+  try{
+    const qs=new URLSearchParams({view:_plView});
+    if(!_plIsToday()) qs.set('day',_plDay);
+    if(_plView==='leads'&&_plPer==='mes') qs.set('per','mes');
+    _plData=await api._fetch('/pressels-total.json?'+qs.toString());
+    _plRenderBody();
+    if(manual) toast('Atualizado','ok');
+  }catch(e){
+    if(!_plData) body.innerHTML=`<div style="text-align:center;padding:44px;color:var(--rd)">Erro ao carregar: ${_plEsc(e&&e.message||e)}</div>`;
+  }finally{ _plLoading=false; }
+}
+function _plRenderBody(){
+  const body=$('pl-body'), side=$('pl-side'); if(!body) return;
+  const j=_plData; if(!j) return;
+  body.innerHTML = j.view==='metricas' ? _plMetricas(j)
+    : j.view==='vendas' ? _plVendas(j)
+    : (j.per==='mes' ? _plLeadsMes(j) : _plLeadsDia(j));
+  if(side) side.innerHTML=_plSide(j.side||[]);
+}
+function _plCard(lbl,val,cls,icon){ return `<div class="mc ${cls}"><div class="mc-gl"></div><div class="mc-ic">${ico(icon,{size:14})}</div><div class="mc-lbl">${lbl}</div><div class="mc-val">${val}</div></div>`; }
+function _plCards(m){ return `<div class="mg" style="grid-template-columns:repeat(4,minmax(120px,1fr))">${_plCard('Chegaram na pressel',m.views||0,'mc-bl','eye')}${_plCard('Foram pro WhatsApp',m.clicks||0,'mc-cy','message-circle')}${_plCard('Iniciaram contato',m.contatos||0,'mc-gr','users')}${_plCard('Vendas',m.vendas||0,'mc-go','dollar-sign')}</div>`; }
+function _plVendTable(vend){
+  const rows=(vend&&vend.length)?vend.map(v=>{
+    const conv=v.contatos>0?Math.round((v.vendas/v.contatos)*100)+'%':'—';
+    const nums=(v.nums&&v.nums.length?v.nums:['—']).map(n=>`<div style="font-size:11.5px;color:var(--t3);font-family:ui-monospace,monospace;line-height:1.5">${_plEsc(n)}</div>`).join('');
+    return `<tr><td><div style="font-weight:600">${_plEsc(v.name)}</div>${nums}</td><td style="text-align:center;color:var(--gr)">${v.contatos}</td><td style="text-align:center">${v.vendas||'—'}</td><td style="text-align:center;color:var(--bl2)">${conv}</td></tr>`;
+  }).join(''):`<tr><td colspan="4" class="muted" style="text-align:center;padding:12px">Sem vendedores.</td></tr>`;
+  return `<div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th style="text-align:left">Vendedor</th><th style="text-align:center">Iniciaram</th><th style="text-align:center">Vendas</th><th style="text-align:center">Conversão</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function _plMetricas(j){
+  const total=`<div style="border:1px solid var(--bl);background:color-mix(in srgb,var(--bl) 8%,transparent);border-radius:var(--rl);padding:18px;margin-bottom:20px"><div style="font-size:15px;font-weight:800;color:var(--bl2);margin-bottom:12px">TOTAL · todas as pressels</div>${_plCards(j.total||{})}${_plVendTable(j.totVend||[])}</div>`;
+  const secs=(j.pressels||[]).map(s=>`<div style="border:1px solid var(--b1);border-radius:var(--rl);padding:16px;margin-bottom:14px"><div style="font-size:15px;font-weight:700">${_plEsc(s.nome)}</div><div style="font-size:11.5px;color:var(--t4);font-family:ui-monospace,monospace;margin:2px 0 12px">${_plEsc(s.url)}</div>${_plCards(s)}${_plVendTable(s.vend||[])}</div>`).join('')||`<div class="muted" style="text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
+  return total+secs;
+}
+function _plVendas(j){
+  const head=`<div style="font-size:13px;color:var(--t3);margin-bottom:14px"><b style="color:var(--tx)">${j.count||0}</b> pedido(s)${j.totV>0?` · total <b style="color:var(--gr)">${fmt(j.totV)}</b>`:''}${j.nS>0?` · <b style="color:var(--gr)">${j.nP}</b> das pressels · <b style="color:var(--tx)">${j.nS}</b> sem rastreio`:''}</div>`;
+  const cards=(j.orders||[]).map(o=>{
+    const tag=o.attr?`<span style="font-size:10px;font-weight:700;color:var(--gr);background:var(--grd);padding:2px 8px;border-radius:20px">${_plEsc(o.pnome)}${o.aprox?' <span style="opacity:.7;font-weight:500">(aprox)</span>':''}</span>`:`<span style="font-size:10px;font-weight:700;color:var(--t3);background:var(--s3);padding:2px 8px;border-radius:20px">sem rastreio</span>`;
+    const wa=j.full&&o.phone?`<a href="${_plWa(o.phone)}" target="_blank" rel="noopener" title="Falar no WhatsApp" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:var(--grd);color:var(--gr);text-decoration:none">${ico('message-circle',{size:16})}</a>`:'';
+    const phoneLine=j.full&&o.phoneFmt?`<div style="font-size:12px;color:var(--gr);margin-top:2px;font-family:ui-monospace,monospace">${_plEsc(o.phoneFmt)}</div>`:'';
+    return `<div style="border:1px solid var(--b1);background:var(--s2);border-radius:14px;padding:13px 15px;margin-bottom:9px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700">${_plEsc(o.name)}${o.value>0?` · <span style="color:var(--gr)">${fmt(o.value)}</span>`:''}</div><div style="font-size:12px;color:var(--t3);margin-top:3px">Vendedor: ${_plEsc(o.seller)} · ${_plHora(o.ts)}</div>${phoneLine}</div>${tag}${wa}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum pedido confirmado nesse dia.</div>`;
+  return head+cards;
+}
+function _plPerToggle(){ const b=(p,l)=>`<button class="btn ${_plPer===p?'btn-bl':'btn-gh'} btn-sm" onclick="_plSetPer('${p}')">${l}</button>`; return `<div style="display:inline-flex;gap:6px;margin-bottom:14px">${b('dia','Dia')}${b('mes','Mês')}</div>`; }
+function _plLeadsDia(j){
+  const head=`<div style="font-size:13px;color:var(--t3);margin-bottom:14px"><b style="color:var(--tx)">${j.totL||0}</b> leads${j.totP<j.totL?` · <b style="color:var(--gr)">${j.totP}</b> da pressel · ${j.totL-j.totP} sem rastreio`:''}${j.full?' · <span style="color:var(--gr)">verde = virou venda</span> · toque no número pra abrir a conversa':''}</div>`;
+  const cols=(j.sellers||[]).map(s=>{
+    const numSecs=(s.nums||[]).map(nn=>{
+      const rows=(nn.leads||[]).map(l=>{
+        const col=l.sale?'var(--gr)':'var(--tx)';
+        const ident=l.nome
+          ? `<span style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="color:${col};font-weight:${l.sale?'700':'600'};font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_plEsc(l.phoneFmt)}</span><span style="color:var(--t3);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_plEsc(l.nome)}</span></span>`
+          : `<span style="color:${col};font-weight:${l.sale?'700':'600'};font-family:ui-monospace,monospace">${_plEsc(l.phoneFmt)}</span>`;
+        const cell=(j.full&&l.phone)?`<a href="${_plWa(l.phone)}" target="_blank" rel="noopener" style="flex:1;min-width:0;text-decoration:none">${ident}</a>`:`<span style="flex:1;min-width:0">${ident}</span>`;
+        const tag=l.attr?`<span style="font-size:9.5px;font-weight:700;color:var(--gr)">${_plEsc(l.pnome)}</span>`:`<span style="font-size:9.5px;color:var(--t4)">sem rastreio</span>`;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--b1);font-size:11.5px"><span style="color:var(--t3);flex:none;font-variant-numeric:tabular-nums">${l.hora}</span>${cell}${tag}</div>`;
+      }).join('');
+      return `<div style="margin-top:11px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--bl2);font-weight:700"><span style="font-family:ui-monospace,monospace">${_plEsc(nn.num)}</span><span style="background:var(--s3);padding:1px 8px;border-radius:9px">${nn.count}</span></div>${rows}</div>`;
+    }).join('');
+    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px"><b style="color:var(--tx)">${s.total}</b> leads · <b style="color:var(--gr)">${s.daP}</b> da pressel</div>${numSecs}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum lead nesse dia.</div>`;
+  return _plPerToggle()+head+`<div class="pl-grid">${cols}</div>`;
+}
+function _plLeadsMes(j){
+  const summary=`<div style="font-size:13px;color:var(--t3);margin-bottom:12px">Mês de <b style="color:var(--tx);text-transform:capitalize">${_plEsc(j.monthLabel||'')}</b>${j.full?' · <span style="color:var(--gr)">verde = comprou</span> · toque no número pra abrir a conversa':''}</div><div class="mg" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin-bottom:16px">${_plCard('Leads no mês',j.totLeads||0,'mc-bl','users')}${_plCard('Converteram',j.totComp||0,'mc-gr','check-circle')}${_plCard('Faturou',fmt(j.totRev||0),'mc-go','dollar-sign')}</div>`;
+  const kpi=(l,v,c)=>`<div style="flex:1;min-width:0"><div style="font-size:10px;color:var(--t3)">${l}</div><div style="font-size:15px;font-weight:800;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v}</div></div>`;
+  const cols=(j.sellers||[]).map(s=>{
+    const buyers=(s.buyers||[]).map(b=>{
+      const numCell=(j.full&&b.phone)?`<a href="${_plWa(b.phone)}" target="_blank" rel="noopener" style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace;text-decoration:none">${_plEsc(b.phoneFmt)}</a>`:`<span style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace">${_plEsc(b.phoneFmt)}</span>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--b1);font-size:11.5px"><span style="color:var(--t3);font-variant-numeric:tabular-nums;white-space:nowrap">${_plHora(b.ts)}</span><span style="flex:1;min-width:0">${numCell}${b.name?` <span style="color:var(--t4)">· ${_plEsc(b.name)}</span>`:''}</span>${b.value>0?`<span style="color:var(--gr);font-weight:700;white-space:nowrap">${fmt(b.value)}</span>`:''}</div>`;
+    }).join('')||`<div style="font-size:11.5px;color:var(--t4);padding:8px 0">Nenhum lead comprou ainda.</div>`;
+    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="display:flex;gap:8px;margin:10px 0 4px">${kpi('Leads',s.leads,'var(--bl2)')}${kpi('Converteram',s.comp,'var(--gr)')}${kpi('Conversão',s.pct==null?'—':s.pct+'%','var(--tx)')}</div><div style="margin:0 0 8px">${kpi('Faturou',fmt(s.rev),'var(--gr)')}</div><div style="font-size:11px;color:var(--t3);font-weight:700;margin-top:6px;border-top:1px solid var(--b1);padding-top:8px">Compradores</div>${buyers}</div>`;
+  }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum lead nesse mês.</div>`;
+  return _plPerToggle()+summary+`<div class="pl-grid">${cols}</div>`;
+}
+function _plSide(side){
+  if(!side||!side.length) return '';
+  const linhas=side.map(x=>`<div style="padding:9px 0;border-top:1px solid var(--b1)"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font-family:ui-monospace,monospace;font-weight:700;font-size:13px">${_plEsc(x.tel)}</span><span style="font-weight:800;color:var(--bl2);font-size:13px;font-variant-numeric:tabular-nums">${(Number(x.taxa)||0).toFixed(1)}%</span></div><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:2px"><span style="font-size:11px;color:var(--t3)">${x.nome?_plEsc(x.nome):'—'}</span><span style="font-size:11px;color:var(--t3);font-variant-numeric:tabular-nums"><b style="color:var(--t2)">${x.cl}</b> cliques → <b style="color:var(--gr)">${x.cv}</b> lead${x.cv===1?'':'s'}</span></div></div>`).join('');
+  return `<div style="background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:14px 16px"><div style="font-size:13px;font-weight:800">Conversão por número</div><div style="font-size:10.5px;color:var(--t3);margin:2px 0 4px">quanto de clique virou lead, número a número</div>${linhas}</div>`;
 }
 
 function _ensurePressels(){ if(!Array.isArray(DB.pressels)) DB.pressels=[]; return DB.pressels; }

@@ -155,7 +155,7 @@ body.theme-green{
 }
 
 /* TODOS os glows internos sumam — flat design puro */
-body.theme-green .mc-gl{display:none}
+body.theme-green .mc::after{display:none}
 body.theme-green .info-section::before{display:none}
 body.theme-green .aging-card::before{display:none}
 body.theme-green .follows-hero::before,
@@ -255,7 +255,7 @@ body.theme-light-green{
   --blg:rgba(22,163,74,.07);--bld:rgba(22,163,74,.05);
 }
 /* Mantém o flat design do Slim no light também */
-body.theme-light-green .mc-gl{display:none}
+body.theme-light-green .mc::after{display:none}
 body.theme-light-green .info-section::before{display:none}
 body.theme-light-green .aging-card::before{display:none}
 body.theme-light-green .follows-hero::before,
@@ -302,7 +302,7 @@ body.is-light ::-webkit-scrollbar-track{background:#f1f5f9}
 
 /* Glow interno dos cards de métrica fica MUITO sutil no claro
    (alpha menor — senão polui visualmente) */
-body.is-light .mc-gl{opacity:.07}
+body.is-light .mc::after{opacity:.10}
 
 /* Botões primários no light: texto branco em accent vivo */
 body.is-light .btn-bl{color:#ffffff;font-weight:600}
@@ -641,16 +641,19 @@ body:has(#impersonate-banner:not(.hidden)) .topbar{margin-top:36px}
 /* Glow interno sutil no canto superior direito do card (esmaecer na cor
    da categoria). Cor é setada por classe específica (.mc-bl .mc-gl, etc).
    Pointer-events none pra não atrapalhar clique no card. */
-.mc-gl{display:block;position:absolute;top:-40px;right:-40px;width:170px;height:170px;
-  border-radius:50%;filter:blur(60px);opacity:.18;pointer-events:none;z-index:0}
-.mc>*:not(.mc-gl){position:relative;z-index:1}
-.mc-bl .mc-gl{background:var(--bl)}
-.mc-cy .mc-gl{background:var(--cy)}
-.mc-gr .mc-gl{background:var(--gr)}
-.mc-re .mc-gl{background:var(--rd)}
-.mc-pu .mc-gl{background:var(--pu)}
-.mc-go .mc-gl{background:var(--gold)}
-.mc-am .mc-gl{background:var(--am)}
+/* Glow de fundo em TODOS os cards via pseudo-elemento (não depende do HTML ter a div .mc-gl).
+   Colorido pela categoria (mc-bl/gr/go/...); default = primária. Igual ao visual de Leads das Pressels. */
+.mc::after{content:"";position:absolute;top:-40px;right:-40px;width:170px;height:170px;
+  border-radius:50%;filter:blur(60px);opacity:.20;pointer-events:none;z-index:0;background:var(--bl)}
+.mc-bl::after{background:var(--bl)}
+.mc-cy::after{background:var(--cy)}
+.mc-gr::after{background:var(--gr)}
+.mc-re::after{background:var(--rd)}
+.mc-pu::after{background:var(--pu)}
+.mc-go::after{background:var(--gold)}
+.mc-am::after{background:var(--am)}
+.mc-gl{display:none}
+.mc>*{position:relative;z-index:1}
 /* Ícone vira SELO no canto superior direito (estilo Gestão/MIDAS) */
 .mc .mc-ic{position:absolute;top:15px;right:15px;width:42px;height:42px;border-radius:12px;display:flex;
   align-items:center;justify-content:center;z-index:2;border:1px solid transparent}
@@ -4041,8 +4044,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.96.2';
-const APP_LAST_CHANGE = 'Leads das Pressels: os cards de vendedor (aba Leads) ficaram mais largos (340px) e agora rolam na horizontal em vez de amontoar em varias linhas. Quando nao cabem na tela aparece uma barrinha embaixo pra deslizar e ver os vendedores escondidos a direita.';
+const APP_VERSION = '2.97.0';
+const APP_LAST_CHANGE = 'Visual da area de Leads das Pressels espalhado por TODA a dash: o glow (blur de fundo colorido) que antes so aparecia em alguns cards agora aparece em TODOS os cards de metrica automaticamente (virou pseudo-elemento, colorido pela categoria). A tela de Gestao ganhou cor por metrica (antes era tudo no mesmo tom). Selo do icone e cores consistentes. So visual. (A area de Atendimento/Sale Chat foi deixada pra depois, pra nao colidir com outra edicao em andamento.)';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -6015,8 +6018,8 @@ function renderHome(){
   const margemCons=totFatPago>0?consolidado/totFatPago*100:0;
 
   // mini card de operação
-  const kc=(lbl,val,icon)=>`<div class="mc" style="padding:14px 16px">
-    <div class="mc-ic" style="width:30px;height:30px">${ico(icon,{size:13})}</div>
+  const kc=(lbl,val,icon,cat)=>`<div class="mc ${cat||''}" style="padding:14px 16px">
+    <div class="mc-ic" style="width:34px;height:34px">${ico(icon,{size:14})}</div>
     <div class="mc-lbl" style="font-size:10px">${lbl}</div>
     <div class="mc-val" style="font-size:20px">${val}</div></div>`;
   // linha de receita
@@ -6030,12 +6033,12 @@ function renderHome(){
     <h3 style="text-align:center;font-size:16px;margin:0 0 16px">${title}</h3>
     <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:8px">Operação</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      ${kc('Pedidos Criados',m.criados,'shopping-cart')}
-      ${kc('Pedidos Pagos',m.pagos,'credit-card')}
-      ${kc('Faturamento Gerado',fmt(m.fatGerado),'dollar-sign')}
-      ${kc('Faturamento Pago',fmt(m.fatPago),'trending-up')}
-      ${kc('Ticket Médio',fmt(m.ticket),'dollar-sign')}
-      ${kc(isEnt?'Taxa de Recebimento':'Taxa Pagamento',m.taxa.toFixed(1)+'%','percent')}
+      ${kc('Pedidos Criados',m.criados,'shopping-cart','mc-cy')}
+      ${kc('Pedidos Pagos',m.pagos,'credit-card','mc-gr')}
+      ${kc('Faturamento Gerado',fmt(m.fatGerado),'dollar-sign','mc-go')}
+      ${kc('Faturamento Pago',fmt(m.fatPago),'trending-up','mc-gr')}
+      ${kc('Ticket Médio',fmt(m.ticket),'dollar-sign','mc-bl')}
+      ${kc(isEnt?'Taxa de Recebimento':'Taxa Pagamento',m.taxa.toFixed(1)+'%','percent','mc-am')}
     </div>
     ${isEnt?`<div style="display:flex;align-items:center;gap:12px;padding:12px 15px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:var(--r);margin-bottom:16px">
       <span style="color:var(--gold);display:inline-flex">${ico('shopping-cart',{size:15})}</span>
