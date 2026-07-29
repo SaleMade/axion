@@ -5123,7 +5123,7 @@ async function handlePresselsTotalPage(req, env){
   else { const _dp=day.split('-'); if(+_dp[1]<1||+_dp[1]>12||+_dp[2]<1||+_dp[2]>31) day=_brDay(); }   // rejeita mês/dia impossível (ex: 2026-00-01)
   const today=_brDay(); if(day>today) day=today;   // seletor de data (não deixa escolher o futuro)
   const isToday=(day===today);
-  const _vq=new URL(req.url).searchParams.get('view')||''; const view=(_vq==='vendas'||_vq==='leads')?_vq:'metricas';   // alterna Métricas / Pedidos / Leads
+  const _vq=new URL(req.url).searchParams.get('view')||''; let view=(_vq==='vendas'||_vq==='leads')?_vq:'metricas';   // alterna Métricas / Pedidos / Leads
   // Modo completo (números de lead sem máscara + clicáveis + copiar): SÓ com sessão válida (token da dash via ?k=).
   // Sem token → página pública mostra só o final do número (protege os leads, que são o ativo da empresa).
   const kParam=new URL(req.url).searchParams.get('k')||'';
@@ -5131,6 +5131,9 @@ async function handlePresselsTotalPage(req, env){
   // Só libera modo completo pra DIRETOR/SÓCIO ativo (não arquivado). Leads é só-diretor; vendedor não pode
   // puxar a carteira dos outros. JOIN em users barra até sessão antiga de usuário já arquivado/demitido.
   if(/^[a-f0-9]{64}$/i.test(kParam)){ try{ const _now=Math.floor(Date.now()/1000); const _s=await env.DB.prepare('SELECT u.role role, COALESCE(u.archived,0) arch FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?').bind(kParam,_now).first(); if(_s && Number(_s.arch)!==1 && ROLE_DIRETOR.includes(_s.role)) full=true; }catch(_){} }
+  // PRIVACIDADE: Leads e Pedidos mostram telefone/nome do cliente — SÓ com token de diretor (a dash manda sozinha).
+  // Sem token (link público / ex-gestor de tráfego) cai nas Métricas, que continuam públicas (só o funil).
+  if((view==='leads'||view==='vendas') && !full) view='metricas';
   const kq=full?('k='+encodeURIComponent(kParam)):'';   // preserva o token na navegação interna (data/abas)
   const _pq=new URL(req.url).searchParams.get('per')||''; const per=(_pq==='mes')?'mes':'dia';   // Leads: visão diária (default) ou mensal
   // Pula a agregação pesada de métricas quando a aba é Pedidos/Leads (elas não usam) — deixa a troca de aba MUITO mais rápida.
@@ -5203,7 +5206,7 @@ async function handlePresselsTotalPage(req, env){
   const presselSecs=secs.length?secs.map(s=>`<div style="border:1px solid #233047;border-radius:16px;padding:18px;margin-bottom:16px"><div style="font-size:15px;font-weight:700">${_escHtml(s.nome)}</div><div style="font-size:11.5px;color:#6b7a93;font-family:ui-monospace,monospace;margin:2px 0 12px">${_escHtml(s.url)}</div>${cardsHtml(s)}${vendTable(s.vend)}</div>`).join(''):`<div style="color:#8b9bb4;text-align:center;padding:30px">Nenhuma pressel criada ainda.</div>`;
   const dayQ=isToday?'':('day='+day);
   const _seg=(lbl,v)=>{ const active=view===v; const qs=[v!=='metricas'?('view='+v):'',dayQ,kq,(v==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&'); return `<a href="?${qs}" style="padding:7px 12px;font-size:12.5px;font-weight:700;text-decoration:none;border-radius:8px;${active?'background:#2b6cb0;color:#fff':'color:#7aa2ff'}">${lbl}</a>`; };
-  const toggleBtn=`<div style="margin-left:auto;display:inline-flex;gap:2px;background:#141c2b;border:1px solid #2b6cb0;border-radius:10px;padding:3px">${_seg('Métricas','metricas')}${_seg('Pedidos','vendas')}${_seg('Leads','leads')}</div>`;
+  const toggleBtn=`<div style="margin-left:auto;display:inline-flex;gap:2px;background:#141c2b;border:1px solid #2b6cb0;border-radius:10px;padding:3px">${_seg('Métricas','metricas')}${full?(_seg('Pedidos','vendas')+_seg('Leads','leads')):''}</div>`;
   let ordersHtml='';
   if(view==='vendas'){
     let orders=[];
