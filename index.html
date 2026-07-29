@@ -4041,8 +4041,8 @@ let serverVersion=(function(){try{const v=+localStorage.getItem('axion_srvver');
 // ─── Versão do App ─────────────────────────────────────
 // Bumpar a cada deploy. Aparece em Configurações → Sobre e no backup JSON.
 // APP_LAST_CHANGE é a frase curta da última mudança (mostrada abaixo da versão).
-const APP_VERSION = '2.96.0';
-const APP_LAST_CHANGE = 'Leads das Pressels agora e NATIVO na dash (antes era um iframe com fundo branco e tema proprio). As abas Metricas, Pedidos e Leads (Dia/Mes) renderizam no tema da dash, com os mesmos numeros do worker; troca de aba e de data sem recarregar a pagina e atualiza sozinho a cada 30s. Painel "Conversao por numero" na lateral.';
+const APP_VERSION = '2.96.1';
+const APP_LAST_CHANGE = 'Leads das Pressels: no card de vendedor (Leads/Mes) o "Faturou" ganhou uma linha propria de largura total, entao o valor (ex R$ 65.712,00) para de ficar espremido e quebrar em duas linhas. Leads/Converteram/Conversao ficam na linha de cima.';
 
 // ─── Biblioteca de ícones SVG (Lucide-style) ───────────
 // Monocromáticos, herdam cor via currentColor — o CSS controla a cor
@@ -11398,13 +11398,13 @@ function _plLeadsDia(j){
 }
 function _plLeadsMes(j){
   const summary=`<div style="font-size:13px;color:var(--t3);margin-bottom:12px">Mês de <b style="color:var(--tx);text-transform:capitalize">${_plEsc(j.monthLabel||'')}</b>${j.full?' · <span style="color:var(--gr)">verde = comprou</span> · toque no número pra abrir a conversa':''}</div><div class="mg" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin-bottom:16px">${_plCard('Leads no mês',j.totLeads||0,'mc-bl','users')}${_plCard('Converteram',j.totComp||0,'mc-gr','check-circle')}${_plCard('Faturou',fmt(j.totRev||0),'mc-go','dollar-sign')}</div>`;
-  const kpi=(l,v,c)=>`<div style="flex:1"><div style="font-size:10px;color:var(--t3)">${l}</div><div style="font-size:15px;font-weight:800;color:${c}">${v}</div></div>`;
+  const kpi=(l,v,c)=>`<div style="flex:1;min-width:0"><div style="font-size:10px;color:var(--t3)">${l}</div><div style="font-size:15px;font-weight:800;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v}</div></div>`;
   const cols=(j.sellers||[]).map(s=>{
     const buyers=(s.buyers||[]).map(b=>{
       const numCell=(j.full&&b.phone)?`<a href="${_plWa(b.phone)}" target="_blank" rel="noopener" style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace;text-decoration:none">${_plEsc(b.phoneFmt)}</a>`:`<span style="color:var(--gr);font-weight:700;font-family:ui-monospace,monospace">${_plEsc(b.phoneFmt)}</span>`;
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--b1);font-size:11.5px"><span style="color:var(--t3);font-variant-numeric:tabular-nums;white-space:nowrap">${_plHora(b.ts)}</span><span style="flex:1;min-width:0">${numCell}${b.name?` <span style="color:var(--t4)">· ${_plEsc(b.name)}</span>`:''}</span>${b.value>0?`<span style="color:var(--gr);font-weight:700;white-space:nowrap">${fmt(b.value)}</span>`:''}</div>`;
     }).join('')||`<div style="font-size:11.5px;color:var(--t4);padding:8px 0">Nenhum lead comprou ainda.</div>`;
-    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="display:flex;gap:8px;margin:10px 0 6px">${kpi('Leads',s.leads,'var(--bl2)')}${kpi('Converteram',s.comp,'var(--gr)')}${kpi('Conversão',s.pct==null?'—':s.pct+'%','var(--tx)')}${kpi('Faturou',fmt(s.rev),'var(--gr)')}</div><div style="font-size:11px;color:var(--t3);font-weight:700;margin-top:6px;border-top:1px solid var(--b1);padding-top:8px">Compradores</div>${buyers}</div>`;
+    return `<div class="pl-seller"><div style="font-size:14px;font-weight:800">${_plEsc(s.name)}</div><div style="display:flex;gap:8px;margin:10px 0 4px">${kpi('Leads',s.leads,'var(--bl2)')}${kpi('Converteram',s.comp,'var(--gr)')}${kpi('Conversão',s.pct==null?'—':s.pct+'%','var(--tx)')}</div><div style="margin:0 0 8px">${kpi('Faturou',fmt(s.rev),'var(--gr)')}</div><div style="font-size:11px;color:var(--t3);font-weight:700;margin-top:6px;border-top:1px solid var(--b1);padding-top:8px">Compradores</div>${buyers}</div>`;
   }).join('')||`<div class="muted" style="text-align:center;padding:40px">Nenhum lead nesse mês.</div>`;
   return _plPerToggle()+summary+`<div class="pl-grid">${cols}</div>`;
 }
