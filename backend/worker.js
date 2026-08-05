@@ -253,7 +253,12 @@ async function handleFiveCapture(req, env, subpath) {
   return json({ ok: true, received: true });
 }
 
-// Tabela de pedidos da Five: um registro por orderId, atualizado a cada evento.
+// Modelo de dados do produtor (todas as tabelas se conversam por chaves):
+//  five_orders      1 linha por pedido (fatos do pedido, atualizado a cada evento)
+//  five_commissions comissão normalizada: (pedido, afiliado) -> percent, amount
+//  five_affiliates  registro de afiliados (afiliado da Five -> nome + nosso usuário)
+//  five_products    catálogo de produtos do produtor
+// tenant = project_id da Five (separa os produtores quando clonar pro amigo)
 async function _ensureFiveTables(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_orders (
     order_id TEXT PRIMARY KEY,
@@ -266,6 +271,18 @@ async function _ensureFiveTables(env) {
     shipping_platform TEXT, shipping_code TEXT, shipping_status TEXT, shipping_core_id TEXT,
     last_event TEXT, last_status TEXT, created_at INTEGER, updated_at INTEGER, raw TEXT
   )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_commissions (
+    order_id TEXT, affiliate_id TEXT, percent REAL, amount REAL,
+    PRIMARY KEY (order_id, affiliate_id)
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_affiliates (
+    affiliate_id TEXT PRIMARY KEY, tenant TEXT, name TEXT, our_user_id TEXT, created_at INTEGER
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_products (
+    product_id TEXT PRIMARY KEY, tenant TEXT, name TEXT, created_at INTEGER
+  )`).run();
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_five_comm_aff ON five_commissions(affiliate_id)').run(); } catch (_) {}
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_five_orders_prod ON five_orders(product_id)').run(); } catch (_) {}
 }
 function _num(v) { const n = Number(v); return isNaN(n) ? null : n; }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return null; } }
@@ -311,6 +328,26 @@ async function _fiveUpsertOrder(env, p) {
       Array.isArray(p.commissions) ? JSON.stringify(p.commissions) : null,
       ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship ? (ship.shippingStatus || null) : null, ship ? (ship.coreShippingId || null) : null,
       p.event || null, p.eventStatus || null, now, now, JSON.stringify(p).slice(0, 40000)).run();
+
+  // Catálogo de produto (stub) — conecta pedido -> produto do produtor
+  if (prod.id) {
+    await env.DB.prepare(`INSERT INTO five_products (product_id, tenant, name, created_at) VALUES (?,?,?,?)
+      ON CONFLICT(product_id) DO UPDATE SET name=COALESCE(excluded.name, five_products.name), tenant=COALESCE(excluded.tenant, five_products.tenant)`)
+      .bind(prod.id, proj.id || null, prod.name || null, now).run();
+  }
+  // Comissões: normaliza numa tabela própria e registra o afiliado (stub, nomeado depois).
+  // Só mexe quando o evento traz comissões (CHARGE_UPDATED), pra não apagar as existentes.
+  if (Array.isArray(p.commissions)) {
+    await env.DB.prepare('DELETE FROM five_commissions WHERE order_id=?').bind(oid).run();
+    for (const c of p.commissions) {
+      const afid = c && c.affiliateId; if (!afid) continue;
+      await env.DB.prepare('INSERT OR REPLACE INTO five_commissions (order_id, affiliate_id, percent, amount) VALUES (?,?,?,?)')
+        .bind(oid, afid, _num(c.percent), _num(c.amount)).run();
+      await env.DB.prepare(`INSERT INTO five_affiliates (affiliate_id, tenant, name, our_user_id, created_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(affiliate_id) DO UPDATE SET tenant=COALESCE(excluded.tenant, five_affiliates.tenant)`)
+        .bind(afid, proj.id || null, null, null, now).run();
+    }
+  }
   return true;
 }
 
@@ -328,6 +365,51 @@ async function handleFiveOrders(req, env) {
     });
     return json({ orders });
   } catch (e) { return json({ orders: [], error: String((e && e.message) || e) }); }
+}
+
+// Resumo do produtor: totais, comissões a pagar, por status, por afiliado, por produto.
+async function handleFiveSummary(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  try {
+    await _ensureFiveTables(env);
+    const totals = await env.DB.prepare(`SELECT COUNT(*) AS pedidos,
+       SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
+       COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita_paga
+       FROM five_orders`).first();
+    const comissoes = await env.DB.prepare('SELECT COUNT(DISTINCT order_id) AS pedidos_com_comissao, COALESCE(SUM(amount),0) AS total FROM five_commissions').first();
+    const porStatus = (await env.DB.prepare("SELECT COALESCE(last_status,'—') AS status, COUNT(*) AS n FROM five_orders GROUP BY last_status ORDER BY n DESC").all()).results || [];
+    const porAfiliado = (await env.DB.prepare(`SELECT c.affiliate_id, a.name, COUNT(*) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao
+       FROM five_commissions c LEFT JOIN five_affiliates a ON a.affiliate_id=c.affiliate_id
+       GROUP BY c.affiliate_id ORDER BY comissao DESC LIMIT 50`).all()).results || [];
+    const porProduto = (await env.DB.prepare(`SELECT o.product_id, COALESCE(p.name,o.product_name) AS name, COUNT(*) AS pedidos,
+       COALESCE(SUM(CASE WHEN o.charge_status='PAID' THEN o.charge_amount ELSE 0 END),0) AS receita
+       FROM five_orders o LEFT JOIN five_products p ON p.product_id=o.product_id
+       GROUP BY o.product_id ORDER BY receita DESC LIMIT 50`).all()).results || [];
+    return json({ totals, comissoes, porStatus, porAfiliado, porProduto });
+  } catch (e) { return json({ error: String((e && e.message) || e) }); }
+}
+
+// Afiliados: GET lista com totais; POST nomeia/vincula ao nosso usuário (só diretor).
+async function handleFiveAffiliates(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  await _ensureFiveTables(env);
+  if (req.method === 'POST') {
+    const b = await req.json().catch(() => null);
+    if (!b || !b.affiliate_id) return err('affiliate_id obrigatório');
+    await env.DB.prepare(`INSERT INTO five_affiliates (affiliate_id, tenant, name, our_user_id, created_at) VALUES (?,?,?,?,?)
+      ON CONFLICT(affiliate_id) DO UPDATE SET name=excluded.name, our_user_id=excluded.our_user_id`)
+      .bind(b.affiliate_id, b.tenant || null, b.name || null, b.our_user_id || null, Math.floor(Date.now() / 1000)).run();
+    return json({ ok: true });
+  }
+  const rows = (await env.DB.prepare(`SELECT a.affiliate_id, a.name, a.our_user_id, a.tenant,
+     COUNT(c.order_id) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao_total
+     FROM five_affiliates a LEFT JOIN five_commissions c ON c.affiliate_id=a.affiliate_id
+     GROUP BY a.affiliate_id ORDER BY comissao_total DESC`).all()).results || [];
+  return json({ affiliates: rows });
 }
 
 async function handleGetState(req, env) {
@@ -5750,8 +5832,10 @@ export default {
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
-      // Pedidos ingeridos da Five (leitura, só diretor)
+      // Dados do produtor (leitura, só diretor)
       if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
+      if (req.method === 'GET' && path === '/api/five/summary') return handleFiveSummary(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/five/affiliates') return handleFiveAffiliates(req, env);
       // Webhook da Five (captura + ingestão). Aceita qualquer subpath e método.
       const fiveMatch = path.match(/^\/five(?:\/(.*))?$/);
       if (fiveMatch) return handleFiveCapture(req, env, fiveMatch[1] || '');
