@@ -523,6 +523,27 @@ async function handleMoveLead(req, env, leadId) {
   return json({ ok: true, version: newVer, from, to: col });
 }
 
+// Reagenda um lead (campo `agend`, ISO 'YYYY-MM-DDTHH:MM'). Cirúrgico, só diretor.
+async function handleSetAgend(req, env, leadId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const agend = body && typeof body.agend === 'string' ? body.agend : '';
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data;
+  try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const leads = Array.isArray(data.leads) ? data.leads : [];
+  const lead = leads.find((l) => String(l.id) === String(leadId));
+  if (!lead) return err('Lead não encontrado', 404);
+  lead.agend = agend;
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'agenda:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, agend });
+}
+
 async function handlePostState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -2000,22 +2021,70 @@ async function _waCloudDownloadMedia(env, mediaId, msgId) {
     if (msgId) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(key, msgId).run(); } catch (_) {} }
   } catch (_) {}
 }
+// Baixa a mídia INBOUND da Evolution pro R2 e seta media_url (igual _waCloudDownloadMedia faz pro Cloud).
+// A Evolution entrega o arquivo CHEIO decriptado (não só thumbnail) via getBase64FromMediaMessage — o
+// mesmo endpoint da transcrição de áudio. Roda em ctx.waitUntil (não bloqueia o ACK do webhook).
+async function _waEvoDownloadMedia(env, instance, key, mm, msgId) {
+  try {
+    if (!env.MEDIA || !msgId) return;
+    const node = mm.imageMessage || mm.audioMessage || mm.videoMessage || mm.documentMessage || mm.stickerMessage;
+    if (!node) return;
+    const media = await evoFetch(env, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
+      method: 'POST',
+      body: { message: { key: { id: key.id, remoteJid: key.remoteJid, fromMe: !!key.fromMe } } },
+    });
+    const b64 = media && media.data && media.data.base64; if (!b64) return;
+    const mime = String((media.data && media.data.mimetype) || node.mimetype || 'application/octet-stream').split(';')[0];
+    const bytes = _b64ToBytes(b64);
+    if (!bytes || !bytes.byteLength) return;
+    const ext = mime.indexOf('ogg') >= 0 ? 'ogg' : (mime.indexOf('mpeg') >= 0 || mime.indexOf('mp3') >= 0) ? 'mp3' : mime.indexOf('mp4') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('webp') >= 0 ? 'webp' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+    const rkey = 'm/wa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    await env.MEDIA.put(rkey, bytes, { httpMetadata: { contentType: mime } });
+    try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(rkey, msgId).run(); } catch (_) {}
+  } catch (_) {}
+}
+// Guarda bytes de mídia (base64) do injetor Sale Chat no R2 e devolve a key. '' se falhar.
+// É assim que a mídia RECEBIDA do Sale Chat vira visualizável: o injetor baixa via WPP.chat.downloadMedia
+// e manda os bytes; aqui a gente persiste e o media_url aponta pra cá.
+async function _scStoreMedia(env, b64, mimeHint) {
+  try {
+    if (!env.MEDIA || !b64) return '';
+    const bytes = _b64ToBytes(String(b64).replace(/^data:[^;]+;base64,/, ''));
+    if (!bytes || !bytes.byteLength) return '';
+    const mime = String(mimeHint || 'application/octet-stream').split(';')[0];
+    const ext = mime.indexOf('ogg') >= 0 ? 'ogg' : (mime.indexOf('mpeg') >= 0 || mime.indexOf('mp3') >= 0) ? 'mp3' : mime.indexOf('mp4') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('webp') >= 0 ? 'webp' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+    const key = 'm/wa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: mime } });
+    return key;
+  } catch (_) { return ''; }
+}
 // Sobe um arquivo pra Media API da Meta e devolve o media id. Necessário pra NOTA DE VOZ (voice:true),
 // que a Meta só aceita com mídia enviada (id), não com link. Busca os bytes do R2 pelo próprio link.
-async function _waCloudUploadMedia(env, phoneNumberId, token, link, mime) {
+async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
   try {
     const r = await fetch(link);
     if (!r.ok) return null;
     const buf = await r.arrayBuffer();
     if (!buf || !buf.byteLength) return null;
+    // Detecta o formato pelos BYTES (não confia no hint): só ogg/opus vira NOTA DE VOZ (voice:true).
+    const head = new Uint8Array(buf.slice(0, 64));
+    const s = String.fromCharCode.apply(null, head);
+    const isOpus = s.indexOf('OggS') === 0 && s.indexOf('OpusHead') >= 0;
+    const rct = r.headers.get('content-type') || '';
+    const mime = isOpus ? 'audio/ogg'
+      : (/audio\/(mpeg|mp3)/i.test(rct) ? 'audio/mpeg'
+        : /audio\/(mp4|m4a|aac)/i.test(rct) ? 'audio/mp4'
+          : /audio\/webm/i.test(rct) ? 'audio/webm'
+            : (mimeHint || rct || 'audio/ogg'));
+    const ext = isOpus ? 'ogg' : (mime.indexOf('mpeg') >= 0 ? 'mp3' : mime.indexOf('mp4') >= 0 ? 'm4a' : mime.indexOf('webm') >= 0 ? 'webm' : 'ogg');
     const tk = token || await _readConfig(env, 'wa_api_token');
     const fd = new FormData();
     fd.append('messaging_product', 'whatsapp');
-    fd.append('type', mime || 'audio/ogg');
-    fd.append('file', new Blob([buf], { type: mime || 'audio/ogg' }), 'audio.ogg');
+    fd.append('type', mime);
+    fd.append('file', new Blob([buf], { type: mime }), 'audio.' + ext);
     const up = await fetch('https://graph.facebook.com/v21.0/' + encodeURIComponent(phoneNumberId) + '/media', { method: 'POST', headers: { authorization: 'Bearer ' + tk }, body: fd });
     const j = await up.json().catch(() => ({}));
-    return (up.ok && j && j.id) ? String(j.id) : null;
+    return (up.ok && j && j.id) ? { id: String(j.id), isOpus } : null;
   } catch (_) { return null; }
 }
 // Envia MÍDIA (imagem/áudio/vídeo/documento) pela Cloud API, por um `link` público (R2).
@@ -2040,9 +2109,10 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   // id e mandamos voice:true. Se o upload falhar, cai no link (manda como arquivo, mas manda).
   let payload;
   if (kind === 'audio') {
-    const mid = await _waCloudUploadMedia(env, apiNum.phone_number_id, apiNum.token, opts.link, 'audio/ogg');
-    payload = mid
-      ? { messaging_product: 'whatsapp', to: num, type: 'audio', audio: { id: mid, voice: true } }
+    const mu = await _waCloudUploadMedia(env, apiNum.phone_number_id, apiNum.token, opts.link, 'audio/ogg');
+    // voice:true (ondinhas) SÓ quando os bytes são realmente ogg/opus; senão manda como arquivo válido.
+    payload = mu
+      ? { messaging_product: 'whatsapp', to: num, type: 'audio', audio: mu.isOpus ? { id: mu.id, voice: true } : { id: mu.id } }
       : { messaging_product: 'whatsapp', to: num, type: 'audio', audio: media };
   } else {
     payload = { messaging_product: 'whatsapp', to: num, type: kind, [kind]: media };
@@ -2599,7 +2669,7 @@ async function _waBotTestReply(env, instance, key, data) {
   }
   return true;
 }
-async function _waOnInbound(env, instance, data) {
+async function _waOnInbound(env, instance, data, ctx) {
   const key = data?.key || {};
   if (key.fromMe) return;                          // ignora o que NÓS mandamos
   const jid = String(key.remoteJid || '');
@@ -2610,6 +2680,12 @@ async function _waOnInbound(env, instance, data) {
   // Guarda a mensagem recebida no histórico do inbox (independente de automação)
   const _ex = _waExtractMsg(data);
   await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
+  // Mídia recebida: baixa o arquivo cheio pro R2 e preenche media_url (assíncrono, não bloqueia).
+  if (['image', 'audio', 'ptt', 'voice', 'video', 'document', 'sticker'].includes(_ex.type)) {
+    const _mm = data && data.message ? data.message : {};
+    if (ctx && ctx.waitUntil) ctx.waitUntil(_waEvoDownloadMedia(env, instance, key, _mm, key.id));
+    else await _waEvoDownloadMedia(env, instance, key, _mm, key.id);
+  }
   // Sale Chat Engine (sombra): espelha o inbound da Evolution na auditoria crua pra comparar cobertura (sc x evo). Fire-and-forget, nunca afeta o fluxo.
   try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, String(instance || '').replace(/^ax_/, '')).run(); } catch (_) {}
   await _waLeadCapture(env, instance, phone, _ex.body, '', _ex.type, Number(data?.messageTimestamp) || 0);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
@@ -2657,7 +2733,7 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
     else if (event === 'messages.upsert') {
       // Se a fonte virou o Sale Chat, a Evolution NÃO computa (senão duplica lead/venda/pixel).
       if ((await _waCaptureSource(env)) === 'sc') { /* fonte = Sale Chat */ }
-      else { await _waOnInbound(env, instance, data); await _waDetectSale(env, instance, data); }
+      else { await _waOnInbound(env, instance, data, ctx); await _waDetectSale(env, instance, data); }
     }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
@@ -2922,10 +2998,15 @@ async function handleSalechatIngest(req, env, token) {
         // de rajada anti-ban; sem isso o balanceador ficava cego (nenhuma linha) e não conseguia
         // respeitar o limite por número. Também alimenta a caixa de entrada do CRM.
         try {
+          // Mídia recebida: o injetor manda os bytes (mediaB64); persiste no R2 e preenche media_url
+          // pra a bolha virar imagem/áudio/vídeo/doc de verdade (não mais base64 no corpo).
+          let mediaUrl = '';
+          if (e?.mediaB64) { try { mediaUrl = await _scStoreMedia(env, e.mediaB64, e.mediaMime); } catch (_) {} }
           await _waLogMsg(env, {
             phone, instance: inst, direction: e?.fromMe ? 'out' : 'in',
             type: String(e?.type || 'text'), body: String(e?.body || ''),
-            pushName: String(e?.pushName || ''), ts: Number(e?.ts) || now, msgId: msgId || null
+            pushName: String(e?.pushName || ''), ts: Number(e?.ts) || now, msgId: msgId || null,
+            media_url: mediaUrl || null
           });
         } catch (_) {}
         try {
@@ -3870,6 +3951,32 @@ async function handleWAMessages(req, env) {
     'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
   ).bind(phone, limit).all();
   return json({ ok: true, phone, chat: chat || null, messages: rows.results || [] });
+}
+// GET /api/wa/lead?phone= → o lead (CRM) da conversa, pra o painel Leads do Atendimento.
+// Escopado: o vendedor só lê o lead de conversa da própria instância (não expõe o CRM inteiro,
+// diferente do /api/state). Casa pelo telefone (últimos 8 dígitos, campo l.wa), igual à AXION.
+async function handleWALead(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const url = new URL(req.url);
+  const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
+  if (!phone) return err('phone obrigatório');
+  // Escopo por vendedor: quem não é diretor só vê lead de conversa da própria instância.
+  if (!isDirector(u)) {
+    const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
+    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a esse lead', 403);
+  }
+  const tail = phone.slice(-8);
+  if (tail.length < 8) return json({ ok: true, lead: null });
+  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let st = {}; try { st = JSON.parse(row?.data || '{}'); } catch (_) {}
+  const lead = (Array.isArray(st.leads) ? st.leads : []).find((l) => {
+    const p = String((l && (l.wa || l.tel || l.telefone || l.phone)) || '').replace(/\D/g, '');
+    return p && p.endsWith(tail);
+  }) || null;
+  return json({ ok: true, lead });
 }
 // POST /api/wa/chat/read { phone } → zera o não-lido
 async function handleWAChatRead(req, env) {
@@ -5930,6 +6037,8 @@ export default {
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
+      const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
+      if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // Dados do produtor (leitura, só diretor)
@@ -6005,6 +6114,7 @@ export default {
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/lead')             return handleWALead(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);

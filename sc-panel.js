@@ -486,21 +486,88 @@
 
   // Gatilhos: escuta mensagens recebidas e sugere o item configurado. Religavel: se o WPP
   // subir atrasado, o watchLate() chama isso de novo (antes, o listener morria pra sempre).
-  var _triggersOn = false;
+  var _triggersOn = false, _boundWPP = null;
+  function _zvOnMsg(m) { try { onIncoming(m); } catch (_) {} }
+  // PRENDE o capturador no WhatsApp — e RELIGA se ele se soltar.
+  // Bug real que custou caro: a flag `_triggersOn` travava em true pra sempre. Quando o WhatsApp
+  // Web recarrega por dentro, o objeto WPP é recriado e o listener antigo morre junto — mas a flag
+  // continuava dizendo "ligado", então o painel ficava VERDE e a captura estava MORTA. Aconteceu:
+  // 2 horas sem capturar, ~15 leads reais perdidos, e o vendedor jurando que estava tudo certo.
+  // Agora compara a INSTÂNCIA do WPP: se trocou, prende de novo. O watchdog abaixo chama isso
+  // periodicamente. Repetir é seguro: o dedupe por msgId impede capturar a mesma mensagem 2x.
   function bindTriggers() {
-    if (_triggersOn) return;
     try {
-      if (window.WPP && window.WPP.on) {
-        window.WPP.on('chat.new_message', function (m) { try { onIncoming(m); } catch (_) {} });
-        _triggersOn = true; window.__zvTriggersOn = true;
-      }
+      var W = window.WPP;
+      if (!W || !W.on) return;
+      if (_triggersOn && _boundWPP === W) return;   // já preso NESTE WPP
+      try { if (W.off && _boundWPP === W) W.off('chat.new_message', _zvOnMsg); } catch (_) {}
+      W.on('chat.new_message', _zvOnMsg);
+      _boundWPP = W; _triggersOn = true; window.__zvTriggersOn = true;
+      window.__zvBindT = Date.now();
     } catch (_) {}
   }
+  // Watchdog: reconfere a cada 20s se o capturador ainda está preso no WPP atual.
+  try { if (window.__zvBindIv) clearInterval(window.__zvBindIv); } catch (_) {}
+  try { window.__zvBindIv = setInterval(function () { try { bindTriggers(); } catch (_) {} }, 20000); } catch (_) {}
   // â”€â”€â”€ Sale Chat Engine: CAPTURA (Fase 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Captura toda mensagem do chat.new_message e enfileira em window.__zvOutbox.
   // O injetor (Node, sem CSP) drena e manda pro worker. Aqui NAO fazemos rede
   // (a CSP do WhatsApp bloqueia). A fila sobrevive a reinjecao do painel.
   window.__zvOutbox = window.__zvOutbox || [];
+  // ── BACKUP LOCAL da fila de envio ──────────────────────────────────────────────────────────
+  // Os contatos/vendas capturados ficam guardados NO DISCO da máquina do vendedor (localStorage),
+  // não só na memória. Assim, se o número cair ou o servidor não receber na hora (ex: pico/erro),
+  // nada se perde: quando o Sale Chat/WhatsApp reconectam, o injetor reenvia o que ficou pendente.
+  // Sobrevive a reload do WhatsApp Web, fechar/reabrir o Sale Chat e reboot do PC.
+  // Limpeza pra não pesar: no máximo 500 itens e descarta o que tem mais de 3 dias.
+  // IDENTIDADE DESTA INSTALAÇÃO do Sale Chat (a máquina do vendedor). Fixa: sobrevive a troca de
+  // número, reinstalação do WhatsApp e reboot. É ela que amarra a venda ao VENDEDOR — antes a
+  // atribuição dependia do número, que muda toda hora, e lead/venda sumiam quando o chip trocava.
+  try {
+    var _iid = localStorage.getItem('zv_install_id');
+    if (!_iid) {
+      _iid = 'sc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('zv_install_id', _iid);
+    }
+    window.__zvInstallId = _iid;
+  } catch (_) { window.__zvInstallId = window.__zvInstallId || ''; }
+  var _ZV_OB_KEY = 'zv_outbox_v1', _ZV_OB_MAX = 500, _ZV_OB_TTL = 3 * 86400;
+  function _scOutboxClean(arr) {
+    try {
+      var nowS = Date.now() / 1000;
+      var out = (arr || []).filter(function (e) { return e && (!e.ts || (nowS - Number(e.ts)) < _ZV_OB_TTL); });
+      if (out.length > _ZV_OB_MAX) out = out.slice(out.length - _ZV_OB_MAX);   // mantém os mais recentes
+      return out;
+    } catch (_) { return arr || []; }
+  }
+  var _scSaveT = 0;
+  function _scSaveOutbox(force) {
+    try {
+      var now = Date.now();
+      if (!force && (now - _scSaveT) < 2000) return;   // throttle: no máximo 1 gravação a cada 2s
+      _scSaveT = now;
+      window.__zvOutbox = _scOutboxClean(window.__zvOutbox || []);
+      localStorage.setItem(_ZV_OB_KEY, JSON.stringify(window.__zvOutbox));
+    } catch (_) { /* localStorage cheio/desativado: segue só na memória */ }
+  }
+  window.__zvSaveOutbox = _scSaveOutbox;
+  // Restaura a fila salva no disco (mescla com o que já estiver na memória, sem duplicar por msgId).
+  (function () {
+    try {
+      var raw = localStorage.getItem(_ZV_OB_KEY);
+      var restored = raw ? _scOutboxClean(JSON.parse(raw)) : [];
+      if (restored && restored.length) {
+        var mem = window.__zvOutbox || [], seen = {};
+        mem.forEach(function (e) { if (e && e.msgId) seen[e.msgId] = 1; });
+        restored.forEach(function (e) { if (e && e.msgId && !seen[e.msgId]) { mem.push(e); seen[e.msgId] = 1; } });
+        window.__zvOutbox = mem;
+      }
+    } catch (_) {}
+  })();
+  // Salva periodicamente — pega também as REMOÇÕES que o injetor faz ao confirmar o envio (assim o
+  // disco encolhe junto com a fila e não reenvia o que já foi).
+  try { if (window.__zvOutboxIv) clearInterval(window.__zvOutboxIv); } catch (_) {}
+  try { window.__zvOutboxIv = setInterval(function () { _scSaveOutbox(true); }, 4000); } catch (_) {}
   function _scSer(x) { try { return (x && (x._serialized || (x.toString && x.toString()))) || ''; } catch (_) { return ''; } }
   function _scDigits(s) { return String(s || '').split('@')[0].replace(/\D/g, ''); }
   var _scSelfNum = '', _scSelfT = 0;
@@ -578,6 +645,49 @@
       return { digits: p.digits, isLid: true };   // nao resolveu: lid marcado
     } catch (_) { return { digits: '', isLid: false }; }
   }
+  function _scB64FromBlob(blob) {
+    return new Promise(function (resolve) {
+      try {
+        var fr = new FileReader();
+        fr.onloadend = function () { try { var s = String(fr.result || ''); var i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : ''); } catch (_) { resolve(''); } };
+        fr.onerror = function () { resolve(''); };
+        fr.readAsDataURL(blob);
+      } catch (_) { resolve(''); }
+    });
+  }
+  // Baixa a midia (decriptada) da mensagem via WA-JS e devolve {b64, mime}. null se nao der / for grande demais.
+  function _scDownloadMedia(msg) {
+    return new Promise(function (resolve) {
+      try {
+        if (!(window.WPP && window.WPP.chat && window.WPP.chat.downloadMedia)) return resolve(null);
+        var id = (msg && msg.id && (msg.id._serialized || msg.id)) || msg;
+        var done = false;
+        var to = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 20000);
+        Promise.resolve(window.WPP.chat.downloadMedia(id)).then(function (blob) {
+          if (done) return; done = true; clearTimeout(to);
+          if (!blob || !blob.size || blob.size > 12 * 1024 * 1024) return resolve(null);   // ignora vazio / grande demais
+          var mime = blob.type || (msg && msg.mimetype) || '';
+          _scB64FromBlob(blob).then(function (b64) { resolve(b64 ? { b64: b64, mime: mime } : null); });
+        }).catch(function () { if (!done) { done = true; clearTimeout(to); resolve(null); } });
+      } catch (_) { resolve(null); }
+    });
+  }
+  // Enfileira o evento (outbox + historico) e detecta venda. Chamado apos baixar a midia (se houver).
+  function _scEnqueue(ev) {
+    try {
+      if (ev.fromMe && /pedido\s*conclu/i.test(ev.body)) {
+        ev.sale = 1;
+        var _vm = ev.body.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
+        ev.saleVal = _vm ? Number(_vm[1].replace(/\./g, '').replace(',', '.')) : 0;
+      }
+      window.__zvOutbox.push(ev);   // fila de envio (o injetor drena)
+      window.__zvCaptured = window.__zvCaptured || [];
+      window.__zvCaptured.push(ev);   // historico de exibicao (NAO drena)
+      if (window.__zvCaptured.length > 100) window.__zvCaptured.splice(0, window.__zvCaptured.length - 100);
+      if (window.__zvOutbox.length > 800) window.__zvOutbox.splice(0, window.__zvOutbox.length - 800);   // trava anti-estouro
+      _scSaveOutbox(ev.sale ? true : false);   // grava no disco na hora se for VENDA; senao respeita o throttle
+    } catch (_) {}
+  }
   function _scCapture(msg) {
     try {
       if (!msg) return;
@@ -595,6 +705,7 @@
       window.__zvSeenIds = window.__zvSeenIds || {};
       if (window.__zvSeenIds[msgId]) return;   // dedup: nao repete a mesma mensagem (replay / listeners duplicados)
       window.__zvSeenIds[msgId] = 1;
+      var isMedia = /^(image|audio|ptt|voice|video|document|sticker)$/i.test(String(msg.type || ''));
       var ev = {
         msgId: msgId,
         selfNumber: _scSelfNumber(),
@@ -602,30 +713,26 @@
         lid: pr.isLid ? 1 : 0,
         fromMe: fromMe,
         type: String(msg.type || 'chat'),
-        body: String(msg.body || msg.caption || '').slice(0, 2000),
+        // corpo: SO legenda pra midia (nunca o base64 gigante); texto normal pro resto
+        body: (isMedia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),
         pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
         ts: ts,
         fromRaw: fromS, toRaw: toS
       };
-      // VENDA: "Pedido ConcluÃ­do" enviado pelo vendedor. Marca aqui pra a aba Captura destacar
-      // (e o servidor confirma depois, devolvendo o msgId em res.sales -> window.__zvSaleOk).
-      if (fromMe && /pedido\s*conclu/i.test(ev.body)) {
-        ev.sale = 1;
-        var _vm = ev.body.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
-        ev.saleVal = _vm ? Number(_vm[1].replace(/\./g, '').replace(',', '.')) : 0;
+      // Midia: baixa o arquivo decriptado e anexa (mediaB64/mediaMime) ANTES de enfileirar, pra o
+      // servidor persistir no R2 e a bolha virar imagem/audio/video/doc de verdade (nao mais codigo gigante).
+      if (isMedia) {
+        _scDownloadMedia(msg).then(function (m) { if (m) { ev.mediaB64 = m.b64; ev.mediaMime = m.mime; } _scEnqueue(ev); });
+      } else {
+        _scEnqueue(ev);
       }
-      window.__zvOutbox.push(ev);   // fila de envio (o injetor drena)
-      window.__zvCaptured = window.__zvCaptured || [];
-      window.__zvCaptured.push(ev);   // historico de exibicao (NAO drena, pra a aba mostrar mesmo depois de enviado)
-      if (window.__zvCaptured.length > 100) window.__zvCaptured.splice(0, window.__zvCaptured.length - 100);
-      if (window.__zvOutbox.length > 800) window.__zvOutbox.splice(0, window.__zvOutbox.length - 800);   // trava anti-estouro
     } catch (_) {}
   }
   // Console do vendedor (F12): __zvOutboxDump() mostra o que ja foi capturado (PoC sem servidor).
   window.__zvOutboxDump = function () { try { return JSON.parse(JSON.stringify(window.__zvOutbox || [])); } catch (_) { return []; } };
 
   function onIncoming(msg) {
-    try { window.__zvSeenCount = (window.__zvSeenCount || 0) + 1; _scCapture(msg); } catch (_) {}   // Sale Chat Engine: conta o que viu + captura ANTES de qualquer filtro
+    try { window.__zvSeenCount = (window.__zvSeenCount || 0) + 1; window.__zvLastSeenT = Date.now(); _scCapture(msg); } catch (_) {}   // conta o que viu, marca a hora (pro painel provar que está capturando) e captura ANTES de qualquer filtro
     if (!msg || msg.fromMe || (msg.id && msg.id.fromMe)) return;
     // Interrompe os funis que pedem "parar se o lead responder", pro lead que respondeu.
     if (jobs.length) {
@@ -761,7 +868,7 @@
   var FAVS = lsGet('zv_favs', {});
   var DARK = true; try { var _d = localStorage.getItem('zv_dark'); if (_d !== null) DARK = _d === '1'; } catch (_) {}
   var FILTER = '';
-  var SC_VERSION = '1.3.0';   // versao do Sale Chat (mostrada na aba Ajuda)
+  var SC_VERSION = '1.8.0';   // versao do Sale Chat (mostrada na aba Ajuda)
   var TAB = 'itens'; try { TAB = localStorage.getItem('zv_tab') || 'itens'; } catch (_) {}
   var TYPEFILTER = 'all';
   var FAVONLY = false;
@@ -1143,6 +1250,14 @@
     var srvOk = window.__zvIngestOk, ingestOn = !!window.__zvIngestOn;
     if (!window.__zvCapStart) window.__zvCapStart = Date.now();
     var boot = (Date.now() - window.__zvCapStart) < 25000;   // 25s de tolerancia no inicio
+    // PROBLEMA MAIS CARO DE TODOS: o servidor recebe mas nao sabe de quem e a conversa, entao lead e
+    // VENDA sao descartados. O vendedor precisa saber NA HORA — ja aconteceu de trabalhar a tarde
+    // inteira, fazer 4 vendas e nenhuma contar. Vem antes de tudo porque e o unico que perde dinheiro.
+    if (window.__zvSemVendedor === true) {
+      return { ok: false,
+        problem: 'Este WhatsApp nao esta vinculado a nenhum vendedor. As vendas feitas aqui NAO estao sendo contabilizadas.',
+        sol: 'Avise o Bruno agora para vincular este numero. Nao perca as vendas: mande o "Pedido Concluido" no grupo tambem.' };
+    }
     if (!motor) return { ok: false, problem: 'O WhatsApp nao carregou direito aqui.', sol: 'Feche o WhatsApp completamente e abra de novo.' };
     if (!lis) return { ok: false, problem: 'A captura de mensagens nao ligou.', sol: 'Feche e abra o Sale Chat pelo atalho, e deixe a janela preta aberta.' };
     if (srvOk === false) return { ok: false, problem: 'Nao estou conseguindo enviar pro sistema.', sol: 'Confira a internet. Se continuar, feche e abra o Sale Chat.' };
@@ -1159,7 +1274,28 @@
         (h.ok !== true && h.problem ? '<div style="font-size:12px;color:#d1d7db;margin-top:6px">' + _capEsc(h.problem) + '</div>' : '') +
         (h.sol ? '<div style="font-size:11.5px;color:#8696a0;margin-top:4px">Como resolver: ' + _capEsc(h.sol) + '</div>' : '') +
       '</div>' +
-      '<div style="font-size:11.5px;color:#8696a0;margin-bottom:8px">Seu numero: <b style="color:#d1d7db">' + (self ? _capEsc(self) : 'lendo...') + '</b></div>';
+      _capVendedorHtml() +
+      '<div style="font-size:11.5px;color:#8696a0;margin-bottom:8px">Seu numero: <b style="color:#d1d7db">' + (self ? _capEsc(self) : 'lendo...') + '</b></div>' +
+      _capUltimaHtml();
+  }
+  // VENDEDOR dono deste Sale Chat. Fica marcado nesta maquina e NAO muda quando o numero troca —
+  // e o que garante que a venda seja creditada a quem atendeu, mesmo se o chip for banido depois.
+  function _capVendedorHtml() {
+    var v = window.__zvVendorName || '';
+    if (!v) return '<div style="font-size:12.5px;color:#f0a500;margin-bottom:6px">Vendedor: <b>identificando...</b></div>';
+    return '<div style="font-size:13px;color:#d1d7db;margin-bottom:6px;padding:7px 10px;border-radius:8px;background:rgba(19,194,115,.10);border:1px solid rgba(19,194,115,.35)">' +
+      'Vendedor: <b style="color:#13c273">' + _capEsc(v) + '</b></div>';
+  }
+  // "Ultima mensagem capturada ha X" — prova de que a captura esta VIVA, nao so conectada.
+  // Sem isso o painel dizia "Tudo funcionando" (conexao ok) com a captura morta ha 2 horas.
+  function _capUltimaHtml() {
+    var t = window.__zvLastSeenT || 0;
+    if (!t) return '<div style="font-size:11.5px;color:#f0a500;margin-bottom:8px">Ainda nao capturei nenhuma mensagem nesta sessao.</div>';
+    var min = Math.floor((Date.now() - t) / 60000);
+    var txt = min < 1 ? 'agora mesmo' : (min === 1 ? 'ha 1 minuto' : 'ha ' + min + ' minutos');
+    var cor = min >= 30 ? '#e0405a' : (min >= 10 ? '#f0a500' : '#8696a0');
+    return '<div style="font-size:11.5px;color:' + cor + ';margin-bottom:8px">Ultima mensagem capturada: <b>' + txt + '</b>' +
+      (min >= 30 ? ' — se esta chegando mensagem no WhatsApp, feche e abra o Sale Chat' : '') + '</div>';
   }
   function renderCapturaListInto(host) {
     if (!host) return;
@@ -1724,6 +1860,22 @@
     window.__zvPollIv = setInterval(function () {
       var pnl = document.getElementById('zv-panel');
       if (pnl && !pnl.classList.contains('zv-collapsed')) dockLayout();
+      // ALARME GLOBAL de "sem vendedor": aparece no TOPO do painel, em qualquer aba. Antes só existia
+      // dentro da aba Captura, e foi por isso que o vendedor trabalhou horas com o painel "verde"
+      // enquanto as vendas caíam em quarentena. Fica na cara dele, onde ele estiver.
+      try {
+        var bar = document.getElementById('zv-alerta-global');
+        if (window.__zvSemVendedor === true) {
+          if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'zv-alerta-global';
+            bar.style.cssText = 'background:#e0405a;color:#fff;font-size:11.5px;font-weight:700;padding:7px 10px;line-height:1.35;text-align:center';
+            bar.textContent = 'SEM VENDEDOR VINCULADO: suas vendas NAO estao sendo contabilizadas. Avise o Bruno.';
+            var host = document.getElementById('zv-panel');
+            if (host) host.insertBefore(bar, host.firstChild);
+          }
+        } else if (bar) { bar.remove(); }
+      } catch (_) {}
       if (!els.who) return;
       // Motor morto: fala a verdade em vez de mandar "abra uma conversa" (o atendente
       // ficava tentando abrir a conversa que JA estava aberta).
