@@ -544,6 +544,75 @@ async function handleSetAgend(req, env, leadId) {
   return json({ ok: true, version: newVer, agend });
 }
 
+// Salva UMA pressel (cirúrgico, só diretor). O cliente manda { id, patch } — NUNCA o blob inteiro,
+// então não tem risco de apagar chips/leads/etc (o incidente da aba antiga). id=0/ausente cria nova
+// (id = max+1 no servidor). patch só aplica campos permitidos; arrays (vendedores/elementos) quando
+// vierem SUBSTITUEM (edição intencional), quando não vierem ficam intactos.
+const _PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
+async function handlePresselSave(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const patch = (body && body.patch && typeof body.patch === 'object') ? body.patch : null;
+  if (!patch) return err('patch obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  if (!Array.isArray(data.pressels)) data.pressels = [];
+  let id = Number(body.id) || 0;
+  let target;
+  if (id) {
+    target = data.pressels.find((x) => String(x.id) === String(id));
+    if (!target) return err('Pressel não encontrada', 404);
+  } else {
+    id = data.pressels.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1;
+    target = { id, nome: 'Nova Pressel', status: 'ativa', msg: '', pixel_tt: '', pixel_tt_token: '',
+      pixel_meta: '', pixel_meta_token: '', bg: '#ffffff', redirect: 0, fullclick: false, dominio: 'painel-glico.fun',
+      elementos: [{ id: 1, type: 'imagem', src: '' }, { id: 2, type: 'botao', label: 'FALAR NO WHATSAPP', bg: '#22c55e', color: '#ffffff' }],
+      vendedores: [], metrics: { cliques: 0, contatos: 0, vendas: 0 }, _rr: 0 };
+    data.pressels.push(target);
+  }
+  const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg'];
+  for (const k of STR) if (k in patch) target[k] = String(patch[k] == null ? '' : patch[k]).slice(0, 4000);
+  if ('status' in patch) target.status = (patch.status === 'pausada' ? 'pausada' : 'ativa');
+  if ('redirect' in patch) target.redirect = Math.max(0, Number(patch.redirect) || 0);
+  if ('fullclick' in patch) target.fullclick = !!patch.fullclick;
+  if ('dominio' in patch && _PRESSEL_DOMS.includes(String(patch.dominio))) target.dominio = String(patch.dominio);
+  if (Array.isArray(patch.vendedores)) {
+    target.vendedores = patch.vendedores.map((v) => {
+      const o = { at: String((v && v.at) || ''), ativo: v.ativo !== false };
+      if (v && v.reserva_on !== undefined) o.reserva_on = !!v.reserva_on;
+      if (v && v.reserva_mode) o.reserva_mode = (v.reserva_mode === 'split' ? 'split' : 'overflow');
+      if (v && v.cap != null) o.cap = Math.max(0, Number(v.cap) || 0);
+      return o;
+    }).filter((v) => v.at);
+  }
+  if (Array.isArray(patch.elementos)) target.elementos = patch.elementos;   // editor de elementos valida no cliente
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, pressel: target });
+}
+// Remove UMA pressel (cirúrgico, só diretor).
+async function handlePresselDelete(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const id = Number(body && body.id);
+  if (!id) return err('id obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const before = Array.isArray(data.pressels) ? data.pressels.length : 0;
+  data.pressels = (data.pressels || []).filter((x) => String(x.id) !== String(id));
+  if (data.pressels.length === before) return err('Pressel não encontrada', 404);
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, removed: id });
+}
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
 async function handleCsCards(req, env) {
   const u = await authUser(req, env);
@@ -2456,6 +2525,7 @@ async function _waEnsureTables(env) {
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_inst_last ON wa_chats(instance, last_ts)').run(); } catch (_) {}   // inbox do atendente ordenado por recente
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_last ON wa_chats(last_ts)').run(); } catch (_) {}   // inbox do diretor (todos os números)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_chats (phone TEXT PRIMARY KEY, instance TEXT, name TEXT, last_text TEXT, last_ts INTEGER, last_dir TEXT, unread INTEGER DEFAULT 0, assigned_to TEXT, updated_at INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE wa_chats ADD COLUMN crm_stage TEXT').run(); } catch (_) {}   // etapa do CRM do atendimento (novo/atendimento/sem_resposta/qualificado/fechou/perdido)
     _waTablesOk = true;
   } catch (_) {}
 }
@@ -3949,7 +4019,7 @@ async function handleWAChats(req, env) {
   const inst = (url.searchParams.get('instance') || '').trim();
   const assigned = (url.searchParams.get('assigned') || '').trim();
   const q = (url.searchParams.get('q') || '').trim();
-  let sql = 'SELECT phone, instance, name, last_text, last_ts, last_dir, unread, assigned_to FROM wa_chats';
+  let sql = 'SELECT phone, instance, name, last_text, last_ts, last_dir, unread, assigned_to, crm_stage FROM wa_chats';
   const where = [], binds = [];
   if (inst) { where.push('instance = ?'); binds.push(inst); }
   if (assigned) { where.push('assigned_to = ?'); binds.push(assigned); }
@@ -4028,6 +4098,26 @@ async function handleWAChatAssign(req, env) {
   if (!phone) return err('phone obrigatório');
   const assigned = body?.user_id == null || body.user_id === '' ? null : String(body.user_id);
   await env.DB.prepare("UPDATE wa_chats SET assigned_to = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(assigned, phone).run();
+  return json({ ok: true });
+}
+// POST /api/wa/chat/stage { phone, stage } → move a conversa numa etapa do CRM do Atendimento
+// (novo/atendimento/sem_resposta/qualificado/fechou/perdido). Pipeline SEPARADA da do pedido (lead.col).
+async function handleWAChatStage(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _waEnsureTables(env);
+  const body = await req.json().catch(() => null);
+  const phone = String(body?.phone || '').replace(/\D/g, '');
+  const stage = String(body?.stage || '').trim().slice(0, 40);
+  if (!phone || !stage) return err('phone e stage obrigatórios');
+  if (!['novo', 'atendimento', 'sem_resposta', 'qualificado', 'fechou', 'perdido'].includes(stage)) return err('stage inválido');
+  // Escopo por vendedor: só mexe em conversa da própria instância.
+  if (!isDirector(u)) {
+    const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
+    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a essa conversa', 403);
+  }
+  await env.DB.prepare("UPDATE wa_chats SET crm_stage = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(stage, phone).run();
   return json({ ok: true });
 }
 // Detecta VENDA pela mensagem de confirmação ("Pedido Concluído", enviada após o
@@ -6064,6 +6154,8 @@ export default {
       // state sync
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
+      if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
+      if (req.method === 'POST'  && path === '/api/pressel/delete') return handlePresselDelete(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
@@ -6146,6 +6238,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
       if (req.method === 'GET'    && path === '/api/wa/lead')             return handleWALead(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/read')        return handleWAChatRead(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/chat/stage')       return handleWAChatStage(req, env);
       if (req.method === 'POST'   && path === '/api/wa/chat/assign')      return handleWAChatAssign(req, env);
       if (req.method === 'GET'    && path === '/api/wa/sales')            return handleWASales(req, env);
       if (req.method === 'POST'   && path === '/api/wa/sale/delete')      return handleWASaleDelete(req, env);
