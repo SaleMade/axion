@@ -5920,6 +5920,8 @@ export default {
       if (req.method === 'POST'   && path === '/api/users')         return handleCreateOrUpdateUser(req, env);
       const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
       if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
+      const userDelMatch = path.match(/^\/api\/users\/([^/]+)$/);
+      if (req.method === 'DELETE' && userDelMatch)                  return handleDeleteUser(req, env, decodeURIComponent(userDelMatch[1]));
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
