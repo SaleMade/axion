@@ -231,6 +231,105 @@ async function handleListBackups(req, env) {
   return json({ backups });
 }
 
+// ─── Captura de webhooks da Five (plataforma da fábrica/produtor) ──────────
+// Modo diagnóstico: guarda o payload CRU (headers + body) pra a gente ver o
+// formato exato de cada evento (Pedido Criado, Cobrança Atualizada, Envio...)
+// ANTES de construir a ingestão de verdade. Sem auth de propósito (webhook externo).
+async function handleFiveCapture(req, env, subpath) {
+  const now = Math.floor(Date.now() / 1000);
+  let bodyText = '';
+  try { bodyText = await req.text(); } catch (_) { bodyText = ''; }
+  const headers = {};
+  try { for (const [k, v] of req.headers.entries()) headers[k] = v; } catch (_) {}
+  const u = new URL(req.url);
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS five_debug (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, subpath TEXT, method TEXT, query TEXT, headers TEXT, body TEXT)').run();
+    await env.DB.prepare('INSERT INTO five_debug (ts, subpath, method, query, headers, body) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(now, subpath || '', req.method, u.search || '', JSON.stringify(headers).slice(0, 4000), String(bodyText).slice(0, 40000)).run();
+  } catch (_) {}
+  // Ingestão estruturada: além do log cru, sobe pro modelo de pedidos (best-effort).
+  // Nunca quebra o 200 (webhook precisa responder ok mesmo se o parse falhar).
+  try { await _fiveUpsertOrder(env, JSON.parse(bodyText)); } catch (_) {}
+  return json({ ok: true, received: true });
+}
+
+// Tabela de pedidos da Five: um registro por orderId, atualizado a cada evento.
+async function _ensureFiveTables(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_orders (
+    order_id TEXT PRIMARY KEY,
+    project_id TEXT, project_name TEXT,
+    product_id TEXT, product_name TEXT,
+    offer_id TEXT, offer_title TEXT, offer_price REAL, offer_qty INTEGER,
+    customer_name TEXT, customer_doc TEXT, customer_mail TEXT, customer_phone TEXT, customer_address TEXT,
+    charge_status TEXT, charge_method TEXT, charge_amount REAL, charge_code TEXT, charge_updated_at TEXT,
+    commissions TEXT,
+    shipping_platform TEXT, shipping_code TEXT, shipping_status TEXT, shipping_core_id TEXT,
+    last_event TEXT, last_status TEXT, created_at INTEGER, updated_at INTEGER, raw TEXT
+  )`).run();
+}
+function _num(v) { const n = Number(v); return isNaN(n) ? null : n; }
+function safeJson(s) { try { return JSON.parse(s); } catch (_) { return null; } }
+
+// Upsert de um pedido a partir de um payload da Five. Campos comuns sempre atualizam;
+// campos específicos do evento usam COALESCE pra não apagar o que outro evento já gravou.
+async function _fiveUpsertOrder(env, p) {
+  const oid = p && (p.orderId || (p.order && p.order.id));
+  if (!oid) return false;
+  await _ensureFiveTables(env);
+  const now = Math.floor(Date.now() / 1000);
+  const prod = p.product || {}, offer = prod.offer || {}, cust = p.customer || {}, proj = p.project || {};
+  const charge = p.charge || null, ship = p.shipping || null;
+  await env.DB.prepare(`INSERT INTO five_orders
+    (order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty,
+     customer_name, customer_doc, customer_mail, customer_phone, customer_address,
+     charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions,
+     shipping_platform, shipping_code, shipping_status, shipping_core_id,
+     last_event, last_status, created_at, updated_at, raw)
+    VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?)
+    ON CONFLICT(order_id) DO UPDATE SET
+     project_id=COALESCE(excluded.project_id, five_orders.project_id), project_name=COALESCE(excluded.project_name, five_orders.project_name),
+     product_id=COALESCE(excluded.product_id, five_orders.product_id), product_name=COALESCE(excluded.product_name, five_orders.product_name),
+     offer_id=COALESCE(excluded.offer_id, five_orders.offer_id), offer_title=COALESCE(excluded.offer_title, five_orders.offer_title), offer_price=COALESCE(excluded.offer_price, five_orders.offer_price), offer_qty=COALESCE(excluded.offer_qty, five_orders.offer_qty),
+     customer_name=COALESCE(excluded.customer_name, five_orders.customer_name), customer_doc=COALESCE(excluded.customer_doc, five_orders.customer_doc), customer_mail=COALESCE(excluded.customer_mail, five_orders.customer_mail), customer_phone=COALESCE(excluded.customer_phone, five_orders.customer_phone),
+     customer_address=COALESCE(excluded.customer_address, five_orders.customer_address),
+     charge_status=COALESCE(excluded.charge_status, five_orders.charge_status),
+     charge_method=COALESCE(excluded.charge_method, five_orders.charge_method),
+     charge_amount=COALESCE(excluded.charge_amount, five_orders.charge_amount),
+     charge_code=COALESCE(excluded.charge_code, five_orders.charge_code),
+     charge_updated_at=COALESCE(excluded.charge_updated_at, five_orders.charge_updated_at),
+     commissions=COALESCE(excluded.commissions, five_orders.commissions),
+     shipping_platform=COALESCE(excluded.shipping_platform, five_orders.shipping_platform),
+     shipping_code=COALESCE(excluded.shipping_code, five_orders.shipping_code),
+     shipping_status=COALESCE(excluded.shipping_status, five_orders.shipping_status),
+     shipping_core_id=COALESCE(excluded.shipping_core_id, five_orders.shipping_core_id),
+     last_event=excluded.last_event, last_status=excluded.last_status,
+     updated_at=excluded.updated_at, raw=excluded.raw`)
+    .bind(oid, proj.id || null, proj.name || null, prod.id || null, prod.name || null,
+      offer.id || null, offer.title || null, _num(offer.price), offer.numberOfItems != null ? _num(offer.numberOfItems) : null,
+      cust.name || null, cust.document || null, cust.mail || null, cust.phoneNumber || null, cust.address ? JSON.stringify(cust.address) : null,
+      charge ? (charge.status || null) : null, charge ? (charge.paymentMethod || null) : null, charge ? _num(charge.amount) : null, charge ? (charge.code || null) : null, charge ? (charge.updatedAt || null) : null,
+      Array.isArray(p.commissions) ? JSON.stringify(p.commissions) : null,
+      ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship ? (ship.shippingStatus || null) : null, ship ? (ship.coreShippingId || null) : null,
+      p.event || null, p.eventStatus || null, now, now, JSON.stringify(p).slice(0, 40000)).run();
+  return true;
+}
+
+// Lista os pedidos ingeridos da Five (só diretor). Consumido pelo dash de produtor.
+async function handleFiveOrders(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  try {
+    await _ensureFiveTables(env);
+    const rows = await env.DB.prepare('SELECT * FROM five_orders ORDER BY updated_at DESC LIMIT 200').all();
+    const orders = (rows.results || []).map(r => {
+      const { raw, ...rest } = r;
+      return { ...rest, customer_address: r.customer_address ? safeJson(r.customer_address) : null, commissions: r.commissions ? safeJson(r.commissions) : [] };
+    });
+    return json({ orders });
+  } catch (e) { return json({ orders: [], error: String((e && e.message) || e) }); }
+}
+
 async function handleGetState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -5650,6 +5749,12 @@ export default {
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
+
+      // Pedidos ingeridos da Five (leitura, só diretor)
+      if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
+      // Webhook da Five (captura + ingestão). Aceita qualquer subpath e método.
+      const fiveMatch = path.match(/^\/five(?:\/(.*))?$/);
+      if (fiveMatch) return handleFiveCapture(req, env, fiveMatch[1] || '');
 
       // users CRUD
       if (req.method === 'GET'    && path === '/api/users')         return handleListUsers(req, env);
