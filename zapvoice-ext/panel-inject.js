@@ -710,7 +710,11 @@
       window.__zvSeenIds = window.__zvSeenIds || {};
       if (window.__zvSeenIds[msgId]) return;   // dedup: nao repete a mesma mensagem (replay / listeners duplicados)
       window.__zvSeenIds[msgId] = 1;
-      var isMedia = /^(image|audio|ptt|voice|video|document|sticker)$/i.test(String(msg.type || ''));
+      var mtype = String(msg.type || '');
+      var isMedia = /^(image|audio|ptt|voice|video|document|sticker)$/i.test(mtype);
+      // TRAVA de download: baixa só o leve/essencial (áudio, foto, figurinha). Vídeo e documento são
+      // pesados e sobrecarregam o atendente/R2 -> NÃO baixam automático (viram rótulo "indisponível").
+      var dlMedia = /^(image|audio|ptt|voice|sticker)$/i.test(mtype);
       var ev = {
         msgId: msgId,
         selfNumber: _scSelfNumber(),
@@ -724,9 +728,10 @@
         ts: ts,
         fromRaw: fromS, toRaw: toS
       };
-      // Midia: baixa o arquivo decriptado e anexa (mediaB64/mediaMime) ANTES de enfileirar, pra o
-      // servidor persistir no R2 e a bolha virar imagem/audio/video/doc de verdade (nao mais codigo gigante).
-      if (isMedia) {
+      // Midia leve (foto/audio/figurinha): baixa o arquivo decriptado e anexa (mediaB64/mediaMime)
+      // ANTES de enfileirar, pra o servidor persistir no R2 e a bolha virar midia de verdade.
+      // Video/documento: NAO baixa (trava anti-sobrecarga) -> enfileira so o rotulo.
+      if (dlMedia) {
         _scDownloadMedia(msg).then(function (m) { if (m) { ev.mediaB64 = m.b64; ev.mediaMime = m.mime; } _scEnqueue(ev); });
       } else {
         _scEnqueue(ev);

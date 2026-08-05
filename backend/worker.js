@@ -544,6 +544,25 @@ async function handleSetAgend(req, env, leadId) {
   return json({ ok: true, version: newVer, agend });
 }
 
+// Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
+async function handleCsCards(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  let data = {};
+  try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
+  if (req.method === 'GET') return json({ cards: Array.isArray(data.cs_cards) ? data.cs_cards : [] });
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!row) return err('Estado não encontrado', 404);
+  const body = await req.json().catch(() => ({}));
+  const cards = Array.isArray(body.cards) ? body.cards : [];
+  data.cs_cards = cards;
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cscards:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, cards });
+}
+
 async function handlePostState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -3877,7 +3896,18 @@ async function handleSaleChatMediaUpload(req, env) {
   const buf = await req.arrayBuffer();
   if (!buf || buf.byteLength === 0) return err('Arquivo vazio', 400);
   if (buf.byteLength > 60 * 1024 * 1024) return err('Arquivo grande demais (máx 60MB)', 413);
-  const ext = mime.indexOf('audio') >= 0 ? 'ogg' : mime.indexOf('video') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+  // Extensão pelo SUBTIPO real do áudio (não forçar .ogg em tudo — quebrava mp4/aac do Safari,
+  // que a Meta aceita). Só cai em 'ogg' quando é áudio sem subtipo reconhecido.
+  const ext = /audio\/ogg/i.test(mime) ? 'ogg'
+    : /audio\/(mp4|m4a|aac)/i.test(mime) ? 'm4a'
+      : /audio\/(mpeg|mp3)/i.test(mime) ? 'mp3'
+        : /audio\/webm/i.test(mime) ? 'webm'
+          : /audio\/amr/i.test(mime) ? 'amr'
+            : mime.indexOf('audio') >= 0 ? 'ogg'
+              : mime.indexOf('video') >= 0 ? 'mp4'
+                : mime.indexOf('png') >= 0 ? 'png'
+                  : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg'
+                    : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
   const key = 'm/' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
   try { await env.MEDIA.put(key, buf, { httpMetadata: { contentType: mime } }); }
   catch (e) { return err('Falha ao salvar no R2: ' + (e.message || ''), 502); }
@@ -3890,11 +3920,10 @@ async function handleSaleChatMediaGet(req, env, key) {
     const obj = await env.MEDIA.get(key);
     if (!obj) return err('Mídia não encontrada', 404);
     let ct = (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream';
-    // A WhatsApp Cloud API só renderiza o áudio como NOTA DE VOZ (com as ondinhas, igual gravado no
-    // celular) quando o content-type DECLARA o codec opus. Servido como 'audio/ogg' puro, o WhatsApp
-    // trata como arquivo de áudio e mostra uma linha reta. Nossos áudios já são ogg/opus, então é só
-    // declarar o codec aqui. WhatsApp busca este link e lê este header pra decidir voz vs arquivo.
-    if (/^audio\/ogg/i.test(ct) || /\.ogg$/i.test(String(key || ''))) ct = 'audio/ogg; codecs=opus';
+    // Nota de voz (ondinhas) só quando o content-type DECLARA opus. Declaramos codecs=opus APENAS quando
+    // o áudio guardado É ogg (ct audio/ogg, ou legado sem type mas com key .ogg). NUNCA forçar em mp4/aac/webm
+    // (a key .ogg antiga era chumbada em TODO áudio): isso destruía o mp4/AAC do Safari, que a Meta aceitaria.
+    if (/^audio\/ogg/i.test(ct) || ((!ct || /octet-stream/i.test(ct)) && /\.ogg$/i.test(String(key || '')))) ct = 'audio/ogg; codecs=opus';
     return new Response(obj.body, { headers: {
       'access-control-allow-origin': '*',
       'cache-control': 'public, max-age=86400',
@@ -6039,6 +6068,7 @@ export default {
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
       if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
+      if (path === '/api/cs/cards' && (req.method === 'GET' || req.method === 'POST')) return handleCsCards(req, env);
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // Dados do produtor (leitura, só diretor)
