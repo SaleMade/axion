@@ -391,6 +391,77 @@ async function handleFiveSummary(req, env) {
   } catch (e) { return json({ error: String((e && e.message) || e) }); }
 }
 
+// ─── EQUIPE (fonte única de pessoas: produtor, sócio, vendedores, GT, cobrador) ───
+async function _ensureTeamTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS team_members (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    role TEXT,
+    role_label TEXT,
+    status TEXT,
+    task TEXT,
+    affiliate_id TEXT,
+    is_you INTEGER DEFAULT 0,
+    done INTEGER DEFAULT 0,
+    sort INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+  )`).run();
+}
+const _slug = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || ('m' + Date.now());
+// Seed inicial da equipe (exemplo) — vira a fonte única que todas as telas leem.
+const _TEAM_SEED = [
+  { id: 'bruno', name: 'Bruno', role: 'produtor', role_label: 'Produtor (você)', status: 'Online', task: 'Gestão e estratégia', is_you: 1, done: 48, sort: 1 },
+  { id: 'socio', name: 'Sócio', role: 'socio', role_label: 'Sócio', status: 'Online', task: 'Estratégia e finanças', is_you: 0, done: 35, sort: 2 },
+  { id: 'joao-vendas', name: 'João Vendas', role: 'vendedor', role_label: 'Vendedor', status: 'Online', task: 'Atendimento e fechamento', is_you: 0, done: 132, sort: 3 },
+  { id: 'lucas-ads', name: 'Lucas Ads', role: 'vendedor', role_label: 'Vendedor', status: 'Em reunião', task: 'Follow-up de leads', is_you: 0, done: 98, sort: 4 },
+  { id: 'maria-trafego', name: 'Maria Tráfego', role: 'gt', role_label: 'Gestor de tráfego', status: 'Ocupado', task: 'Campanhas no TikTok', is_you: 0, done: 64, sort: 5 },
+  { id: 'carlos-cobranca', name: 'Carlos Cobrança', role: 'cobrador', role_label: 'Cobrador', status: 'Online', task: 'Recuperação de pedidos', is_you: 0, done: 72, sort: 6 },
+];
+async function _seedTeamIfEmpty(env) {
+  const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM team_members').first();
+  if (row && row.n > 0) return;
+  const now = new Date().toISOString();
+  for (const m of _TEAM_SEED) {
+    await env.DB.prepare(`INSERT OR IGNORE INTO team_members (id,name,role,role_label,status,task,affiliate_id,is_you,done,sort,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(m.id, m.name, m.role, m.role_label, m.status, m.task, null, m.is_you, m.done, m.sort, now, now).run();
+  }
+}
+async function handleTeam(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  try {
+    await _ensureTeamTable(env);
+    if (req.method === 'POST') {
+      const b = await req.json().catch(() => ({}));
+      const id = b.id || _slug(b.name);
+      const now = new Date().toISOString();
+      await env.DB.prepare(`INSERT INTO team_members (id,name,role,role_label,status,task,affiliate_id,is_you,done,sort,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name, role=excluded.role, role_label=excluded.role_label,
+          status=excluded.status, task=excluded.task, affiliate_id=excluded.affiliate_id, is_you=excluded.is_you,
+          done=excluded.done, sort=excluded.sort, updated_at=excluded.updated_at`)
+        .bind(id, b.name || '', b.role || 'vendedor', b.role_label || '', b.status || 'Online', b.task || '', b.affiliate_id || null,
+          b.is_you ? 1 : 0, Number(b.done) || 0, Number(b.sort) || 0, now, now).run();
+      return json({ ok: true, id });
+    }
+    await _seedTeamIfEmpty(env);
+    const rows = (await env.DB.prepare('SELECT * FROM team_members ORDER BY sort ASC, name ASC').all()).results || [];
+    return json({ members: rows });
+  } catch (e) { return json({ members: [], error: String((e && e.message) || e) }); }
+}
+async function handleTeamDelete(req, env, id) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  try {
+    await _ensureTeamTable(env);
+    await env.DB.prepare('DELETE FROM team_members WHERE id=?').bind(id).run();
+    return json({ ok: true });
+  } catch (e) { return err(String((e && e.message) || e), 500); }
+}
+
 // Afiliados: GET lista com totais; POST nomeia/vincula ao nosso usuário (só diretor).
 async function handleFiveAffiliates(req, env) {
   const u = await authUser(req, env);
@@ -5836,6 +5907,10 @@ export default {
       if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
       if (req.method === 'GET' && path === '/api/five/summary') return handleFiveSummary(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/five/affiliates') return handleFiveAffiliates(req, env);
+      // Equipe (fonte única de pessoas: produtor, sócio, vendedores, GT, cobrador)
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/team') return handleTeam(req, env);
+      const teamDelMatch = path.match(/^\/api\/team\/([^/]+)$/);
+      if (req.method === 'DELETE' && teamDelMatch) return handleTeamDelete(req, env, decodeURIComponent(teamDelMatch[1]));
       // Webhook da Five (captura + ingestão). Aceita qualquer subpath e método.
       const fiveMatch = path.match(/^\/five(?:\/(.*))?$/);
       if (fiveMatch) return handleFiveCapture(req, env, fiveMatch[1] || '');
