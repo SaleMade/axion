@@ -496,6 +496,33 @@ async function handleGetState(req, env) {
   return json({ data, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION });
 }
 
+// Move UM lead de coluna (kanban) de forma cirúrgica: lê o estado, troca só o
+// campo `col` daquele lead e regrava. NÃO recebe o blob do cliente (evita o
+// incidente de sobrescrita da aba antiga). Só diretor.
+async function handleMoveLead(req, env, leadId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const col = body && body.col;
+  if (!col) return err('col obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data;
+  try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const leads = Array.isArray(data.leads) ? data.leads : [];
+  const lead = leads.find((l) => String(l.id) === String(leadId));
+  if (!lead) return err('Lead não encontrado', 404);
+  const from = lead.col;
+  if (from === col) return json({ ok: true, version: row.version, noop: true });
+  lead.col = col;
+  if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: new Date().toISOString() });
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, from, to: col });
+}
+
 async function handlePostState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -5901,6 +5928,8 @@ export default {
       // state sync
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
+      const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
+      if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // Dados do produtor (leitura, só diretor)
