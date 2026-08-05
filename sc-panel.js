@@ -547,7 +547,12 @@
       if (!force && (now - _scSaveT) < 2000) return;   // throttle: no máximo 1 gravação a cada 2s
       _scSaveT = now;
       window.__zvOutbox = _scOutboxClean(window.__zvOutbox || []);
-      localStorage.setItem(_ZV_OB_KEY, JSON.stringify(window.__zvOutbox));
+      // NUNCA persistir o base64 da mídia no disco (estoura a cota do localStorage e derruba o backup,
+      // podendo PERDER VENDA no reboot). mediaB64 fica só na memória pro drain; o que não drenar antes
+      // do reboot degrada pra rótulo (sem media_url), mas texto/legenda/venda sempre sobrevivem.
+      localStorage.setItem(_ZV_OB_KEY, JSON.stringify((window.__zvOutbox || []).map(function (e) {
+        return (e && e.mediaB64) ? Object.assign({}, e, { mediaB64: undefined, mediaMime: undefined }) : e;
+      })));
     } catch (_) { /* localStorage cheio/desativado: segue só na memória */ }
   }
   window.__zvSaveOutbox = _scSaveOutbox;
@@ -665,7 +670,7 @@
         var to = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 20000);
         Promise.resolve(window.WPP.chat.downloadMedia(id)).then(function (blob) {
           if (done) return; done = true; clearTimeout(to);
-          if (!blob || !blob.size || blob.size > 12 * 1024 * 1024) return resolve(null);   // ignora vazio / grande demais
+          if (!blob || !blob.size || blob.size > 5 * 1024 * 1024) return resolve(null);   // ignora vazio / grande demais (teto baixo: base64 pesa no lote de ingest)
           var mime = blob.type || (msg && msg.mimetype) || '';
           _scB64FromBlob(blob).then(function (b64) { resolve(b64 ? { b64: b64, mime: mime } : null); });
         }).catch(function () { if (!done) { done = true; clearTimeout(to); resolve(null); } });
