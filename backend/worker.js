@@ -675,7 +675,7 @@ async function handleChipCreate(req, env) {
     st: 'aquecimento', dia: 1, warm_start: hoje,
     wa_st: inp.wa_st ? String(inp.wa_st) : '',
     dia_uso: (inp.dia_uso === null || inp.dia_uso === '' || inp.dia_uso === undefined) ? null : Number(inp.dia_uso),
-    rec: String(inp.rec || hoje), recv: 0, tags: [], note: '',
+    rec: String(inp.rec || hoje), recv: 0, tags: [], note: String(inp.note || ''),
   };
   data.chips.unshift(chip);
   data.nextChip = nextId + 1;
@@ -4249,7 +4249,7 @@ async function handleWAChatStage(req, env) {
   const phone = String(body?.phone || '').replace(/\D/g, '');
   const stage = String(body?.stage || '').trim().slice(0, 40);
   if (!phone || !stage) return err('phone e stage obrigatórios');
-  if (!['novo', 'atendimento', 'sem_resposta', 'qualificado', 'fechou', 'perdido'].includes(stage)) return err('stage inválido');
+  if (!['novo', 'atendimento', 'sem_resposta', 'qualificado', 'fechou', 'perdido', 'lixo'].includes(stage)) return err('stage inválido');
   // Escopo por vendedor: só mexe em conversa da própria instância.
   if (!isDirector(u)) {
     const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
