@@ -723,6 +723,35 @@ async function handleContConfig(req, env) {
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cont:' + String(u.id)).run();
   return json({ ok: true, version: newVer });
 }
+// Salva o Sale Chat (cirúrgico, só diretor). Body { profile:'vend'|'cob', draft:{messages,media,sequences,triggers}, publish? }.
+// Escreve SÓ as fatias do salechat (rascunho + pub no publish), nunca o blob inteiro → sem risco pro resto.
+async function handleSaleChatSave(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const profile = (body && body.profile === 'cob') ? 'cob' : 'vend';
+  const draft = body && body.draft;
+  if (!draft || typeof draft !== 'object') return err('draft obrigatório');
+  const draftKey = profile === 'cob' ? 'salechatCob' : 'salechat';
+  const pubKey = profile === 'cob' ? 'salechatCobPub' : 'salechatPub';
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const arr = (x) => Array.isArray(x) ? x : [];
+  const now = Math.floor(Date.now() / 1000);
+  const clean = { messages: arr(draft.messages), media: arr(draft.media), sequences: arr(draft.sequences), triggers: arr(draft.triggers), updated_at: now };
+  const prev = data[draftKey] || {};
+  if (prev.champSeeded) clean.champSeeded = true;
+  data[draftKey] = clean;
+  if (body.publish) {
+    data[pubKey] = { messages: clean.messages, media: clean.media, sequences: clean.sequences, triggers: clean.triggers, updated_at: now, published_at: now, published_by: String((u.name || u.id) || '') };
+  }
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, now, 'salechat:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, updated_at: now, published: !!body.publish });
+}
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
 async function handleCsCards(req, env) {
   const u = await authUser(req, env);
@@ -6325,6 +6354,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
       if (req.method === 'GET'    && path === '/api/salechat')            return handleSaleChatGet(req, env);
+      if (req.method === 'POST'   && path === '/api/salechat/save')       return handleSaleChatSave(req, env);
       if (req.method === 'POST'   && path === '/api/salechat/media')      return handleSaleChatMediaUpload(req, env);
       const scMediaMatch = path.match(/^\/api\/salechat\/media\/(.+)$/);
       if (scMediaMatch && req.method === 'GET')    return handleSaleChatMediaGet(req, env, decodeURIComponent(scMediaMatch[1]));
