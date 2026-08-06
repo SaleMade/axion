@@ -631,9 +631,10 @@ async function handleChipSave(req, env) {
   const chip = data.chips.find((c) => String(c.id) === String(id));
   if (!chip) return err('Chip não encontrado', 404);
   const eq8 = (a, b) => { const x = String(a || '').replace(/\D/g, '').slice(-8), y = String(b || '').replace(/\D/g, '').slice(-8); return x.length >= 8 && x === y; };
-  const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st'];
+  const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start'];
   for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
   if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
+  if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
   if ('dia_uso' in patch) chip.dia_uso = (patch.dia_uso === null || patch.dia_uso === '') ? null : Number(patch.dia_uso);
   if ('api' in patch) chip.api = !!patch.api;
   if ('bkp' in patch) { chip.bkp = !!patch.bkp; if (chip.bkp) chip.em_uso = false; }
@@ -648,6 +649,60 @@ async function handleChipSave(req, env) {
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
   return json({ ok: true, version: newVer, chip });
+}
+// POST /api/chip/create { chip } → adiciona um chip novo (cirúrgico, só diretor; nasce em aquecimento)
+async function handleChipCreate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const inp = (body && body.chip && typeof body.chip === 'object') ? body.chip : null;
+  if (!inp || !String(inp.num || '').trim()) return err('num obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  if (!Array.isArray(data.chips)) data.chips = [];
+  const nextId = Number(data.nextChip) || (data.chips.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0) + 1);
+  const hoje = new Date().toISOString().split('T')[0];
+  const maxIdx = data.chips.reduce((m, c) => Math.max(m, Number(c.idx) || 0), 0);
+  const chip = {
+    id: nextId,
+    idx: Number(inp.idx) || (maxIdx + 1),
+    num: String(inp.num || ''),
+    at: inp.at ? String(inp.at) : null,
+    mod: String(inp.mod || ''),
+    op: String(inp.op || 'Vivo'),
+    st: 'aquecimento', dia: 1, warm_start: hoje,
+    wa_st: inp.wa_st ? String(inp.wa_st) : '',
+    dia_uso: (inp.dia_uso === null || inp.dia_uso === '' || inp.dia_uso === undefined) ? null : Number(inp.dia_uso),
+    rec: String(inp.rec || hoje), recv: 0, tags: [], note: '',
+  };
+  data.chips.unshift(chip);
+  data.nextChip = nextId + 1;
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, chip });
+}
+// POST /api/chip/delete { id } → remove um chip (cirúrgico, só diretor)
+async function handleChipDelete(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const id = body && body.id;
+  if (id == null) return err('id obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  if (!Array.isArray(data.chips)) return err('Sem chips', 404);
+  const before = data.chips.length;
+  data.chips = data.chips.filter((c) => String(c.id) !== String(id));
+  if (data.chips.length === before) return err('Chip não encontrado', 404);
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
+  return json({ ok: true, version: newVer });
 }
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
 async function handleCsCards(req, env) {
@@ -6193,6 +6248,8 @@ export default {
       if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/delete') return handlePresselDelete(req, env);
       if (req.method === 'POST'  && path === '/api/chip/save')      return handleChipSave(req, env);
+      if (req.method === 'POST'  && path === '/api/chip/create')    return handleChipCreate(req, env);
+      if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
