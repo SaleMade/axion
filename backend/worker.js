@@ -631,7 +631,7 @@ async function handleChipSave(req, env) {
   const chip = data.chips.find((c) => String(c.id) === String(id));
   if (!chip) return err('Chip não encontrado', 404);
   const eq8 = (a, b) => { const x = String(a || '').replace(/\D/g, '').slice(-8), y = String(b || '').replace(/\D/g, '').slice(-8); return x.length >= 8 && x === y; };
-  const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start'];
+  const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start', 'restab_start'];
   for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
   if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
   if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
@@ -702,6 +702,25 @@ async function handleChipDelete(req, env) {
   const newVer = (row.version || 0) + 1;
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
+  return json({ ok: true, version: newVer });
+}
+// POST /api/cont/save { wa_statuses?, contCols?, contColColors?, cont_col_order? } → patch cirúrgico da
+// config da Contingência (catálogo de status WhatsApp + colunas custom). Só diretor. NUNCA o blob inteiro.
+async function handleContConfig(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  if (Array.isArray(body.wa_statuses)) data.wa_statuses = body.wa_statuses;
+  if (Array.isArray(body.contCols)) data.contCols = body.contCols;
+  if (body.contColColors && typeof body.contColColors === 'object') data.contColColors = body.contColColors;
+  if (Array.isArray(body.cont_col_order)) data.cont_col_order = body.cont_col_order;
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cont:' + String(u.id)).run();
   return json({ ok: true, version: newVer });
 }
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
@@ -6250,6 +6269,7 @@ export default {
       if (req.method === 'POST'  && path === '/api/chip/save')      return handleChipSave(req, env);
       if (req.method === 'POST'  && path === '/api/chip/create')    return handleChipCreate(req, env);
       if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);
+      if (req.method === 'POST'  && path === '/api/cont/save')      return handleContConfig(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
