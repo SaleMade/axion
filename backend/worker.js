@@ -764,6 +764,13 @@ async function handleChipSave(req, env) {
   const chip = data.chips.find((c) => String(c.id) === String(id));
   if (!chip) return err('Chip não encontrado', 404);
   const eq8 = (a, b) => { const x = String(a || '').replace(/\D/g, '').slice(-8), y = String(b || '').replace(/\D/g, '').slice(-8); return x.length >= 8 && x === y; };
+  // helpers de status (a roleta conta "Em uso" pela TAG também, não só pela flag em_uso)
+  const _norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const _waSt = Array.isArray(data.wa_statuses) ? data.wa_statuses : [];
+  const _stLabel = (wid) => { const s = _waSt.find((x) => String(x.id) === String(wid)); return _norm(s ? (s.label || s.id) : wid); };
+  const _isEmUsoId = (wid) => !!wid && (String(wid) === 'em_uso' || _stLabel(wid) === 'em uso');
+  const _isRestabId = (wid) => { const n = _stLabel(wid); return n === 'restabelecido' || n === 'reestabelecido'; };
+  const _ativoId = (() => { const s = _waSt.find((x) => _norm(x.label || x.id) === 'ativo'); if (s) return s.id; const nb = _waSt.find((x) => { const n = _norm(x.label || x.id); return n !== 'em uso' && n !== 'banido'; }); return nb ? nb.id : 'ativo'; })();
   const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start', 'restab_start'];
   for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
   if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
@@ -775,9 +782,17 @@ async function handleChipSave(req, env) {
     chip.em_uso = !!patch.em_uso;
     if (chip.em_uso) {
       chip.bkp = false;
-      data.chips.forEach((c) => { if (c !== chip && String(c.at) === String(chip.at)) { if (c.em_uso) c.em_uso = false; if (eq8(c.num, chip.num)) c.bkp = false; } });
+      // só 1 "Em uso" por atendente: rebaixa o irmão na FLAG e na TAG (senão a roleta ainda enxerga 2)
+      data.chips.forEach((c) => { if (c !== chip && String(c.at) === String(chip.at)) { if (c.em_uso) c.em_uso = false; if (_isEmUsoId(c.wa_st)) c.wa_st = _ativoId; if (eq8(c.num, chip.num)) c.bkp = false; } });
     }
   }
+  // timer do "Restabelecido" (espelha _syncRestabTimer): liga ao entrar na tag, LIMPA ao sair — evita promoção precoce
+  if ('wa_st' in patch && !('restab_start' in patch)) {
+    if (_isRestabId(chip.wa_st)) { if (!chip.restab_start) chip.restab_start = new Date().toISOString().split('T')[0]; }
+    else chip.restab_start = '';
+  }
+  // saneamento (autocura da antiga): chip sem atendente nunca carrega "em uso" nem "reserva"
+  if (!String(chip.at || '').trim()) { chip.em_uso = false; chip.bkp = false; }
   const newVer = (row.version || 0) + 1;
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
