@@ -32,7 +32,7 @@ const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizan
 const MIN_APP_VERSION = '2.79.0';
 
 // Coleções vigiadas pela guarda anti-apagamento em massa
-const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','aportes','payouts','produtos','pressels'];
+const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','aportes','payouts','produtos','pressels','saques'];
 
 // Compara "2.69.0" vs "2.68.0" → <0 se a<b, 0 se igual, >0 se a>b.
 // Versão ausente/inválida vira 0.0.0 (= cliente antigo).
@@ -391,6 +391,74 @@ async function handleFiveSummary(req, env) {
   } catch (e) { return json({ error: String((e && e.message) || e) }); }
 }
 
+// Produtos da Five (do produtor): por produto -> ofertas/planos (título+preço+vendas), comissões,
+// evolução mensal e afiliados. Tudo derivado dos pedidos ingeridos (five_orders). Só diretor.
+async function handleFiveProducts(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  try {
+    await _ensureFiveTables(env);
+    const prods = (await env.DB.prepare(`SELECT o.product_id AS product_id, COALESCE(p.name,o.product_name,'Produto') AS name,
+        COUNT(*) AS pedidos,
+        SUM(CASE WHEN o.charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
+        SUM(CASE WHEN o.shipping_status='DELIVERED' THEN 1 ELSE 0 END) AS entregues,
+        COALESCE(SUM(CASE WHEN o.charge_status='PAID' THEN o.charge_amount ELSE 0 END),0) AS receita
+      FROM five_orders o LEFT JOIN five_products p ON p.product_id=o.product_id
+      GROUP BY o.product_id ORDER BY receita DESC`).all()).results || [];
+    const offers = (await env.DB.prepare(`SELECT product_id, offer_id, COALESCE(offer_title,'—') AS offer_title,
+        MAX(offer_price) AS offer_price,
+        COUNT(*) AS pedidos,
+        SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
+        COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita
+      FROM five_orders GROUP BY product_id, offer_id, offer_title ORDER BY receita DESC`).all()).results || [];
+    const comm = (await env.DB.prepare(`SELECT o.product_id AS product_id, COALESCE(SUM(c.amount),0) AS comissao, AVG(c.percent) AS pct
+      FROM five_commissions c JOIN five_orders o ON o.order_id=c.order_id GROUP BY o.product_id`).all()).results || [];
+    const monthly = (await env.DB.prepare(`SELECT product_id, strftime('%Y-%m', created_at, 'unixepoch') AS ym,
+        COUNT(*) AS pedidos, SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
+        COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita
+      FROM five_orders GROUP BY product_id, ym ORDER BY ym`).all()).results || [];
+    const afil = (await env.DB.prepare(`SELECT o.product_id AS product_id, c.affiliate_id, a.name,
+        COUNT(*) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao
+      FROM five_commissions c JOIN five_orders o ON o.order_id=c.order_id LEFT JOIN five_affiliates a ON a.affiliate_id=c.affiliate_id
+      GROUP BY o.product_id, c.affiliate_id ORDER BY comissao DESC`).all()).results || [];
+
+    const byId = {};
+    for (const p of prods) byId[p.product_id] = { ...p, comissao: 0, comPct: null, offers: [], monthly: [], afiliados: [] };
+    for (const o of offers) { const t = byId[o.product_id]; if (t) t.offers.push(o); }
+    for (const c of comm) { const t = byId[c.product_id]; if (t) { t.comissao = c.comissao || 0; t.comPct = c.pct != null ? Math.round(c.pct) : null; } }
+    for (const m of monthly) { const t = byId[m.product_id]; if (t) t.monthly.push(m); }
+    for (const a of afil) { const t = byId[a.product_id]; if (t && t.afiliados.length < 6) t.afiliados.push(a); }
+    try {
+      await _ensureProductImages(env);
+      const imgs = (await env.DB.prepare('SELECT product_id, image FROM product_images').all()).results || [];
+      for (const im of imgs) { const t = byId[im.product_id]; if (t) t.image = im.image; }
+    } catch (_) { /* imagem é opcional */ }
+    return json({ products: Object.values(byId) });
+  } catch (e) { return json({ products: [], error: String((e && e.message) || e) }); }
+}
+
+// Imagem custom por produto (nossa, não da Five) — data URL guardada no D1.
+async function _ensureProductImages(env) {
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS product_images (product_id TEXT PRIMARY KEY, image TEXT, updated_at INTEGER)').run();
+}
+async function handleProductImage(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  await _ensureProductImages(env);
+  const body = await req.json().catch(() => ({}));
+  const id = body && body.id != null ? String(body.id) : '';
+  if (!id) return err('id obrigatório');
+  const image = body && typeof body.image === 'string' ? body.image : '';
+  if (image === '') { await env.DB.prepare('DELETE FROM product_images WHERE product_id=?').bind(id).run(); return json({ ok: true, removed: true }); }
+  if (image.length > 400000) return err('Imagem muito grande (máx ~300KB)');
+  await env.DB.prepare(`INSERT INTO product_images (product_id, image, updated_at) VALUES (?,?,?)
+    ON CONFLICT(product_id) DO UPDATE SET image=excluded.image, updated_at=excluded.updated_at`)
+    .bind(id, image, Math.floor(Date.now() / 1000)).run();
+  return json({ ok: true });
+}
+
 // ─── EQUIPE (fonte única de pessoas: produtor, sócio, vendedores, GT, cobrador) ───
 async function _ensureTeamTable(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS team_members (
@@ -506,21 +574,24 @@ async function handleMoveLead(req, env, leadId) {
   const body = await req.json().catch(() => ({}));
   const col = body && body.col;
   if (!col) return err('col obrigatório');
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data;
-  try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
-  const leads = Array.isArray(data.leads) ? data.leads : [];
-  const lead = leads.find((l) => String(l.id) === String(leadId));
-  if (!lead) return err('Lead não encontrado', 404);
-  const from = lead.col;
-  if (from === col) return json({ ok: true, version: row.version, noop: true });
-  lead.col = col;
-  if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: new Date().toISOString() });
-  const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, from, to: col });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data;
+    try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const lead = leads.find((l) => String(l.id) === String(leadId));
+    if (!lead) return err('Lead não encontrado', 404);
+    const from = lead.col;
+    if (from === col) return json({ ok: true, version: row.version, noop: true });
+    lead.col = col;
+    if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: new Date().toISOString() });
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, from, to: col });
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
 // Reagenda um lead (campo `agend`, ISO 'YYYY-MM-DDTHH:MM'). Cirúrgico, só diretor.
@@ -530,18 +601,80 @@ async function handleSetAgend(req, env, leadId) {
   if (!isDirector(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const agend = body && typeof body.agend === 'string' ? body.agend : '';
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data;
-  try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
-  const leads = Array.isArray(data.leads) ? data.leads : [];
-  const lead = leads.find((l) => String(l.id) === String(leadId));
-  if (!lead) return err('Lead não encontrado', 404);
-  lead.agend = agend;
-  const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'agenda:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, agend });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data;
+    try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const lead = leads.find((l) => String(l.id) === String(leadId));
+    if (!lead) return err('Lead não encontrado', 404);
+    lead.agend = agend;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'agenda:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, agend });
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
+// Edita vários campos de UM lead (cirúrgico, whitelist, só diretor). CAS (WHERE version=?) num loop
+// pra NÃO sobrescrever writes concorrentes dos webhooks (evita o incidente da aba antiga).
+async function handleUpdateLead(req, env, leadId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const dir = isDirector(u);
+  // cobrador gerencia a cobrança (reagendar, marcar pago, mover etapa), mas NÃO reatribui/valor/comissão
+  const canManage = dir || String(u.role || '').toLowerCase() === 'cobrador';
+  const body = await req.json().catch(() => ({}));
+  const patch = (body && typeof body.patch === 'object' && body.patch) ? body.patch : (body || {});
+  // campos livres (qualquer usuário logado). spg/col/agend -> diretor ou cobrador; at/vl/com_pct -> só diretor.
+  const SCALAR = ['nome', 'cpf', 'wa', 'email', 'orig', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'mod', 'pgto', 'track', 'link', 'obs'];
+  const now14 = () => { const d = new Date(); const p = (x) => String(x).padStart(2, '0'); return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data;
+    try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const lead = leads.find((l) => String(l.id) === String(leadId));
+    if (!lead) return err('Lead não encontrado', 404);
+    const fromCol = lead.col;
+    for (const k of SCALAR) { if (k in patch) lead[k] = patch[k]; }
+    if (dir) {
+      if ('at' in patch) lead.at = patch.at;
+      if ('vl' in patch) lead.vl = Number(patch.vl) || 0;
+      if ('com_pct' in patch) { const c = Number(patch.com_pct); lead.com_pct = isNaN(c) ? 12 : c; }
+    }
+    if (canManage) {
+      if ('spg' in patch) lead.spg = patch.spg;
+      if ('agend' in patch) lead.agend = patch.agend;
+      if ('valor_neg' in patch) lead.valor_neg = Number(patch.valor_neg) || 0; // valor negociado (após desconto)
+      if (Array.isArray(patch.pagamentos)) { // ficha de cobrança: parcelas efetivamente pagas
+        lead.pagamentos = patch.pagamentos.slice(0, 60).map((p) => ({
+          ts: Number(p && p.ts) || 0, data: String((p && p.data) || ''), valor: Number(p && p.valor) || 0,
+          obs: String((p && p.obs) || ''), who: (p && p.who != null) ? String(p.who) : undefined,
+        })).filter((p) => p.valor > 0 || p.obs);
+      }
+      if ('col' in patch && patch.col) {
+        if (patch.col !== fromCol) {
+          if (!Array.isArray(lead.hist)) lead.hist = [];
+          lead.hist.push({ from: fromCol || '—', to: patch.col, who: 'kanban:' + String(u.id), time: now14() });
+        }
+        lead.col = patch.col;
+      }
+    }
+    if (Array.isArray(patch.tags)) {
+      const t = Array.isArray(data.tags) ? data.tags : [];
+      lead.tags = t.length ? patch.tags.filter((x) => t.some((y) => y.id === x)) : patch.tags;
+    }
+    if (Array.isArray(patch.comments)) lead.comments = patch.comments;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
 // Salva UMA pressel (cirúrgico, só diretor). O cliente manda { id, patch } — NUNCA o blob inteiro,
@@ -704,6 +837,55 @@ async function handleChipDelete(req, env) {
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
   return json({ ok: true, version: newVer });
 }
+// POST /api/saque/create { valor, obs? } → vendedor pede saque da comissão a receber.
+// Cirúrgico: grava data.saques (ciclo de vida pendente/aprovado/pago) + data.notifs (aviso pro diretor).
+// Qualquer usuário autenticado pede o PRÓPRIO saque (não exige diretor). NUNCA o blob inteiro.
+async function handleSaqueCreate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => ({}));
+  const valor = Math.round(Number(body && body.valor) * 100) / 100;
+  if (!valor || !(valor > 0)) return err('valor inválido');
+  const obs = String((body && body.obs) || '').slice(0, 300);
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  if (!Array.isArray(data.saques)) data.saques = [];
+  if (!Array.isArray(data.notifs)) data.notifs = [];
+  const nowSec = Math.floor(Date.now() / 1000);
+  const nome = String(u.name || u.login || u.id);
+  const nextId = data.saques.reduce((m, s) => Math.max(m, Number(s.id) || 0), 0) + 1;
+  const saque = {
+    id: nextId,
+    user_id: String(u.id),
+    nome,
+    com_pct: (u.com_pct != null ? Number(u.com_pct) : null),
+    valor,
+    status: 'pendente',
+    obs,
+    solicitado_em: nowSec,
+    aprovado_por: null, aprovado_em: null, pago_em: null, pago_por: null,
+  };
+  data.saques.unshift(saque);
+  const valorTxt = 'R$ ' + valor.toFixed(2).replace('.', ',');
+  const nextNotif = data.notifs.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0) + 1;
+  data.notifs.unshift({
+    id: nextNotif,
+    type: 'saque',
+    title: 'Solicitação de saque',
+    description: `${nome} solicitou saque de ${valorTxt}`,
+    to: 'diretor',
+    from_id: String(u.id),
+    unread: true,
+    ts: nowSec,
+    ref: 'saque:' + nextId,
+    link: '/dashboard/finance',
+  });
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, nowSec, 'saque:' + String(u.id)).run();
+  return json({ ok: true, version: newVer, saque });
+}
 // POST /api/cont/save { wa_statuses?, contCols?, contColColors?, cont_col_order? } → patch cirúrgico da
 // config da Contingência (catálogo de status WhatsApp + colunas custom). Só diretor. NUNCA o blob inteiro.
 async function handleContConfig(req, env) {
@@ -728,29 +910,54 @@ async function handleContConfig(req, env) {
 async function handleSaleChatSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  const dir = isDirector(u);
   const body = await req.json().catch(() => ({}));
   const profile = (body && body.profile === 'cob') ? 'cob' : 'vend';
   const draft = body && body.draft;
   if (!draft || typeof draft !== 'object') return err('draft obrigatório');
-  const draftKey = profile === 'cob' ? 'salechatCob' : 'salechat';
-  const pubKey = profile === 'cob' ? 'salechatCobPub' : 'salechatPub';
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
   const arr = (x) => Array.isArray(x) ? x : [];
   const now = Math.floor(Date.now() / 1000);
   const clean = { messages: arr(draft.messages), media: arr(draft.media), sequences: arr(draft.sequences), triggers: arr(draft.triggers), updated_at: now };
-  const prev = data[draftKey] || {};
-  if (prev.champSeeded) clean.champSeeded = true;
-  data[draftKey] = clean;
-  if (body.publish) {
-    data[pubKey] = { messages: clean.messages, media: clean.media, sequences: clean.sequences, triggers: clean.triggers, updated_at: now, published_at: now, published_by: String((u.name || u.id) || '') };
+  const pubOf = () => ({ messages: clean.messages, media: clean.media, sequences: clean.sequences, triggers: clean.triggers, updated_at: now, published_at: now, published_by: String((u.name || u.id) || '') });
+  if (dir) {
+    // diretor edita o MODELO (vendedores ou cobradores)
+    const draftKey = profile === 'cob' ? 'salechatCob' : 'salechat';
+    const pubKey = profile === 'cob' ? 'salechatCobPub' : 'salechatPub';
+    if ((data[draftKey] || {}).champSeeded) clean.champSeeded = true;
+    data[draftKey] = clean;
+    if (body.publish) data[pubKey] = pubOf();
+  } else {
+    // vendedor edita SÓ a cópia DELE (scVend[uid]), nunca o modelo; cobradores não têm slot por-usuário nesta fase
+    const uid = String(u.id);
+    if (!data.scVend || typeof data.scVend !== 'object') data.scVend = {};
+    if ((data.scVend[uid] || {}).champSeeded) clean.champSeeded = true;
+    data.scVend[uid] = clean;
+    if (body.publish) {
+      if (!data.scVendPub || typeof data.scVendPub !== 'object') data.scVendPub = {};
+      data.scVendPub[uid] = pubOf();
+    }
   }
   const newVer = (row.version || 0) + 1;
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, now, 'salechat:' + String(u.id)).run();
   return json({ ok: true, version: newVer, updated_at: now, published: !!body.publish });
+}
+
+// GET /api/salechat/mine → editor do VENDEDOR: a cópia dele (scVend), semeada do modelo publicado quando ainda não editou
+async function handleSaleChatMine(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
+  const uid = String(u.id);
+  const model = data.salechatPub || data.salechat || {};
+  const slotDraft = (data.scVend && data.scVend[uid]) || null;
+  const slotPub = (data.scVendPub && data.scVendPub[uid]) || null;
+  const pick = (x) => ({ messages: (x && x.messages) || [], media: (x && x.media) || [], sequences: (x && x.sequences) || [], triggers: (x && x.triggers) || [] });
+  return json({ ok: true, draft: pick(slotDraft || slotPub || model), pub: pick(slotPub || model), seeded: !!(slotDraft || slotPub) });
 }
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
 async function handleCsCards(req, env) {
@@ -2712,6 +2919,11 @@ async function _waLogMsg(env, m) {
          unread = CASE WHEN ? = 1 THEN wa_chats.unread + 1 ELSE wa_chats.unread END,
          updated_at = excluded.updated_at`
     ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, incUnread, incUnread).run();
+    // Auto CRM: a 1ª resposta do ATENDENTE (não do bot/auto-reply) tira o lead de "Lead Novo" pra
+    // "Em Atendimento". Só sobe de novo/vazio — não mexe nas etapas manuais nem na lixeira.
+    if (dir === 'out' && !m.bot) {
+      try { await env.DB.prepare("UPDATE wa_chats SET crm_stage='atendimento', updated_at=strftime('%s','now') WHERE phone=? AND (crm_stage IS NULL OR crm_stage='' OR crm_stage='novo')").bind(phone).run(); } catch (_) {}
+    }
   } catch (_) {}
 }
 async function _waWebhookToken(env) {
@@ -2887,7 +3099,7 @@ async function _waBotTestReply(env, instance, key, data) {
           // digitação proporcional ao tamanho: curtas ~1.8s, longas até ~9s
           const delayMs = Math.min(9000, Math.max(1800, Math.round(part.length * 75)));
           await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
-          await _waLogMsg(env, { phone: realPhone, instance, direction: 'out', type: 'text', body: part });
+          await _waLogMsg(env, { phone: realPhone, instance, direction: 'out', type: 'text', body: part, bot: true });
           // guarda a resposta no buffer (vira histórico do bot na próxima vez)
           try { await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,1)').bind('out_' + myMsgId + '_' + (oi++), realPhone, jid, Date.now(), 'out', part).run(); } catch (_) {}
         }
@@ -2947,7 +3159,7 @@ async function _waOnInbound(env, instance, data, ctx) {
   if (!claim.meta || claim.meta.changes === 0) return;  // já respondido nas últimas 12h
   // Responde pelo MESMO número que o lead contatou (é resposta, baixo risco de ban)
   await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
-  await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg });
+  await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg, bot: true });
 }
 async function handleEvolutionWebhook(req, env, token, ctx) {
   const expected = await _waWebhookToken(env);
@@ -4099,7 +4311,7 @@ async function handleSaleChatGet(req, env) {
 // Content-Type = mime do arquivo. Devolve a key; a dash guarda a metadata em DB.salechat.
 async function handleSaleChatMediaUpload(req, env) {
   const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode subir mídia', 403);
+  // qualquer usuário autenticado pode subir mídia (diretor pro modelo; vendedor pro material dele). Delete segue só-diretor.
   if (!env.MEDIA) return err('Armazenamento (R2) não configurado', 503);
   const mime = req.headers.get('content-type') || 'application/octet-stream';
   const buf = await req.arrayBuffer();
@@ -4270,6 +4482,8 @@ async function _waDetectSale(env, instance, data) {
   if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
   const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (!phone) return { sale: false };
+  // Auto CRM: venda fechada -> card do Atendimento vai automatico pra "Fechou" (override de qualquer etapa).
+  try { await env.DB.prepare("UPDATE wa_chats SET crm_stage='fechou', updated_at=strftime('%s','now') WHERE phone=?").bind(phone).run(); } catch (_) {}
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
@@ -6299,16 +6513,21 @@ export default {
       if (req.method === 'POST'  && path === '/api/chip/create')    return handleChipCreate(req, env);
       if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);
       if (req.method === 'POST'  && path === '/api/cont/save')      return handleContConfig(req, env);
+      if (req.method === 'POST'  && path === '/api/saque/create')   return handleSaqueCreate(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
       if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
+      const leadUpdMatch = path.match(/^\/api\/lead\/([^/]+)$/);
+      if (req.method === 'POST'  && leadUpdMatch)            return handleUpdateLead(req, env, decodeURIComponent(leadUpdMatch[1]));
       if (path === '/api/cs/cards' && (req.method === 'GET' || req.method === 'POST')) return handleCsCards(req, env);
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // Dados do produtor (leitura, só diretor)
       if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
       if (req.method === 'GET' && path === '/api/five/summary') return handleFiveSummary(req, env);
+      if (req.method === 'GET' && path === '/api/five/products') return handleFiveProducts(req, env);
+      if (req.method === 'POST' && path === '/api/product-image') return handleProductImage(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/five/affiliates') return handleFiveAffiliates(req, env);
       // Equipe (fonte única de pessoas: produtor, sócio, vendedores, GT, cobrador)
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/team') return handleTeam(req, env);
@@ -6354,6 +6573,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
       if (req.method === 'GET'    && path === '/api/salechat')            return handleSaleChatGet(req, env);
+      if (req.method === 'GET'    && path === '/api/salechat/mine')       return handleSaleChatMine(req, env);
       if (req.method === 'POST'   && path === '/api/salechat/save')       return handleSaleChatSave(req, env);
       if (req.method === 'POST'   && path === '/api/salechat/media')      return handleSaleChatMediaUpload(req, env);
       const scMediaMatch = path.match(/^\/api\/salechat\/media\/(.+)$/);
