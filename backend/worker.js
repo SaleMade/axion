@@ -5718,6 +5718,15 @@ function _servConnOk(liveSet, inst, chipNum){
   const alvo=base+'_'+String(chipNum).replace(/\D/g,'').slice(-8);   // instância POR NÚMERO deste chip
   // 1) a instância própria deste número está aberta? confere o dono quando já resolvido.
   if(liveSet.has(alvo)){ const cn=liveSet.get(alvo); if(!cn || _lastDigitsEq(cn, chipNum)) return true; }
+  // 1b) SALE CHAT: a chave é o próprio número (sc_<numero>), não o vendedor. Sem olhar essas chaves,
+  // vendedor com 2+ números "Em uso" no Sale Chat colapsava todos em `ax_<at>` (uma linha só no
+  // wa_conn, o último heartbeat vencia) e só UM número era aprovado por vez — os outros ficavam
+  // fora da roleta e o front ainda os desligava sozinho. Aqui o número é a identidade, então casar
+  // por número é exato e não cruza vendedor.
+  for(const [k,cn] of liveSet.entries()){
+    if(String(k).indexOf('sc_')!==0) continue;
+    if(cn && _lastDigitsEq(cn, chipNum)) return true;
+  }
   // 2) senão procura o número SÓ entre as instâncias DESTE vendedor.
   // Antes varria TODAS: um número aberto na instância de OUTRO vendedor aprovava este chip, e a
   // roleta mandava lead pra um número que quem atende é outra pessoa (a mensagem chega na instância
@@ -5739,7 +5748,25 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   // jeitos) ou um status cujo id/label é "Em uso" (a dash usa ids customizados tipo
   // st_xxxx, então comparar com a string 'em_uso' não basta).
   const isEmUso=(c)=> c.em_uso===true || c.em_uso===1 || (emUsoIds && emUsoIds.has(String(c.wa_st||''))) || String(c.wa_st||'')==='em_uso';
-  for(const v of (p.vendedores||[])){
+  // AUSENTE = LIGADO, igual a tela mostra. A dash lista TODO atendente que tem chip "Em uso" e,
+  // sem entrada em p.vendedores, pinta o interruptor de VERDE ("Recebendo lead") — porque a regra
+  // declarada é guardar os OFF, não os ON. Só que aqui o loop percorria apenas p.vendedores, então
+  // quem não tinha entrada NUNCA recebia lead: o Diretor via tudo verde e o vendedor ficava o dia
+  // zerado (foi o que aconteceu com a BM01 do Giovane, salva com vendedores:[]). Agora o backend
+  // enxerga o mesmo conjunto que a tela: quem tem chip "Em uso" entra, e quem não deve receber é
+  // desligado no interruptor (isso sim vira registro, em v.off).
+  const _vs = Array.isArray(p.vendedores) ? p.vendedores.slice() : [];
+  try {
+    const jaTem = new Set(_vs.map(v => String(v && v.at)));
+    for (const c of chips) {
+      if (!c || !c.at || jaTem.has(String(c.at))) continue;
+      if (c.st === 'aquecimento' || c.st === 'banido') continue;
+      if (!isEmUso(c) || !c.num || !okWa(c)) continue;
+      jaTem.add(String(c.at));
+      _vs.push({ at: c.at });   // sem off: todos os números "Em uso" dele entram ligados
+    }
+  } catch (_) {}
+  for(const v of _vs){
     if(!v.at) continue;                                    // vendedor sem atendente → ignora
     // v.ativo=false = PRINCIPAL desligado (não o vendedor inteiro). O complementar ainda pode rodar
     // sozinho: o Bruno desliga o número sob risco de ban e mantém o outro. Só pula tudo se os DOIS
@@ -6853,15 +6880,19 @@ async function handlePresselPublic(req, env, id){
     if(lbl==='em uso' && s && s.id) emUsoIds.add(String(s.id));
   }); }catch(_){}
   const sellers=_resolvePresselSellers(p, chips, liveSet, emUsoIds);
-  if(!sellers.length) return _presselOffline();
-  const pick=await _presselBalancedPick(env, id, sellers);   // número efetivo (overflow por cota) do vendedor mais "atrás" hoje
-  if(!pick) return _presselOffline();
+  // A PÁGINA SEMPRE ABRE quando a pressel está ativa. Ela é o destino do anúncio: derrubar tudo
+  // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
+  // visitante recebia "Indisponível no momento". Sem número, a oferta continua na tela e só o
+  // botão do WhatsApp fica inerte (não leva a lugar nenhum) até alguém conectar.
+  const pick = sellers.length ? await _presselBalancedPick(env, id, sellers) : null;
   try{  // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();
   }catch(_){}
   const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
   let leadCode = '';
+  // sem número pra mandar, não há o que atribuir: pula a geração do código (o resto da página segue)
+  if(pick){
   // SEMPRE gera o código, com ou sem ttclid. O servidor SABE qual pressel está servindo esta
   // página, então deixar o lead chegar "sem rastreio" era jogar fora uma informação que já
   // estava na mão. Sem ttclid (orgânico, link compartilhado, TikTok que não passou o parâmetro)
@@ -6882,13 +6913,13 @@ async function handlePresselPublic(req, env, id){
       if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok, 1x por clique
     }
   }catch(_){}
+  }
   // mensagem do WhatsApp com o código do clique — pra atribuição exata pelo código
   let waMsg = String(p.msg||'');
   if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
-  const wa=_waLink(pick.num, waMsg);
-  if(!wa) return _presselOffline();
+  const wa = pick ? (_waLink(pick.num, waMsg) || '') : '';
   const waJson=JSON.stringify(wa);
-  let _wd=String(pick.num||'').replace(/\D/g,''); if(_wd.length<=11) _wd='55'+_wd;
+  let _wd=String((pick&&pick.num)||'').replace(/\D/g,''); if(_wd && _wd.length<=11) _wd='55'+_wd;
   // deep link whatsapp:// abre o app DIRETO com o texto (o CÓDIGO) preenchido. A NAVEGAÇÃO direta é o
   // único jeito que preenche de verdade no celular — o fetch/JSON quebrava isso e todo lead chegava
   // SEM código (medido 25/07: 63 pessoas, 0 códigos). Voltamos pro que funciona; o cache do wa.me no
@@ -6899,7 +6930,7 @@ async function handlePresselPublic(req, env, id){
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
   // texto/código de verdade. Auto-redirect só com ttclid.
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();if(!${waJson})return;try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
@@ -6907,7 +6938,7 @@ async function handlePresselPublic(req, env, id){
   }
   // Garante um botão de WhatsApp se o usuário não adicionou nenhum
   if(!els.some(e=>e.type==='botao')){
-    body+=`<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
+    body+=`<div style="padding:14px"><a href="${_escHtml(wa||'#')}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
   }
   return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
 }
