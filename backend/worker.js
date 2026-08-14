@@ -4896,7 +4896,9 @@ async function handleWAChats(req, env) {
   if (assigned) { where.push('assigned_to = ?'); binds.push(assigned); }
   if (q) { where.push('(name LIKE ? OR phone LIKE ?)'); binds.push('%' + q + '%', '%' + q.replace(/\D/g, '') + '%'); }
   // Escopo por vendedor: quem não é diretor só vê as próprias conversas (a instância dele).
-  if (!isDirector(u)) { where.push('(instance = ? OR instance = ?)'); binds.push('ax_' + u.id, 'ax_' + u.id + '_b'); }
+  // Compara por PREFIXO: com a instância por número (ax_<at>_<8díg>) a igualdade exata deixava o
+  // vendedor com o Atendimento VAZIO. substr em vez de LIKE porque '_' é curinga no LIKE.
+  if (!isDirector(u)) { const _pf = 'ax_' + u.id + '_'; where.push('(instance = ? OR substr(instance,1,?) = ?)'); binds.push('ax_' + u.id, _pf.length, _pf); }
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY last_ts DESC LIMIT 300';
   const rows = await env.DB.prepare(sql).bind(...binds).all();
@@ -4914,8 +4916,9 @@ async function handleWAMessages(req, env) {
   const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to FROM wa_chats WHERE phone = ?').bind(phone).first();
   // Escopo por vendedor: quem não é diretor só abre conversa da própria instância.
   if (!isDirector(u)) {
-    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
-    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a essa conversa', 403);
+    // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
+    const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
+    if (!chat || !_meu(chat.instance)) return err('Sem acesso a essa conversa', 403);
   }
   const rows = await env.DB.prepare(
     'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
@@ -4935,8 +4938,9 @@ async function handleWALead(req, env) {
   // Escopo por vendedor: quem não é diretor só vê lead de conversa da própria instância.
   if (!isDirector(u)) {
     const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
-    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
-    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a esse lead', 403);
+    // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
+    const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
+    if (!chat || !_meu(chat.instance)) return err('Sem acesso a esse lead', 403);
   }
   const tail = phone.slice(-8);
   if (tail.length < 8) return json({ ok: true, lead: null });
@@ -4985,8 +4989,9 @@ async function handleWAChatStage(req, env) {
   // Escopo por vendedor: só mexe em conversa da própria instância.
   if (!isDirector(u)) {
     const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
-    const mine = new Set(['ax_' + u.id, 'ax_' + u.id + '_b']);
-    if (!chat || !mine.has(String(chat.instance || ''))) return err('Sem acesso a essa conversa', 403);
+    // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
+    const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
+    if (!chat || !_meu(chat.instance)) return err('Sem acesso a essa conversa', 403);
   }
   await env.DB.prepare("UPDATE wa_chats SET crm_stage = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(stage, phone).run();
   return json({ ok: true });
@@ -6891,8 +6896,10 @@ async function handlePresselPublic(req, env, id){
   }catch(_){}
   const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
   let leadCode = '';
-  // sem número pra mandar, não há o que atribuir: pula a geração do código (o resto da página segue)
-  if(pick){
+  // SEM número conectado o clique CONTINUA sendo registrado: o tráfego foi PAGO e tem que aparecer
+  // no funil. Antes isso ficava dentro de um `if(pick)` e um dia com todos os números offline ficava
+  // idêntico a um dia sem anúncio nenhum (0/0/0/0), escondendo justamente o prejuízo.
+  {
   // SEMPRE gera o código, com ou sem ttclid. O servidor SABE qual pressel está servindo esta
   // página, então deixar o lead chegar "sem rastreio" era jogar fora uma informação que já
   // estava na mão. Sem ttclid (orgânico, link compartilhado, TikTok que não passou o parâmetro)
@@ -6908,8 +6915,10 @@ async function handlePresselPublic(req, env, id){
       leadCode = _genLeadCode(id);
       // Grava também o NÚMERO pra onde a pessoa foi. A atribuição casa por número, então
       // trocar o número de principal↔complementar não desliga mais o rastreio do lead.
-      const _nk = String(pick.num||'').replace(/\D/g,'').slice(-8);
-      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick.inst, ttclid, String(id), leadCode, _nk).run();
+      // sem número: grava mesmo assim, com inst/num_key vazios. Guarda a PRESSEL de origem e mantém
+      // a deduplicação por ttclid (senão um refresh contaria a mesma visita duas vezes).
+      const _nk = pick ? String(pick.num||'').replace(/\D/g,'').slice(-8) : '';
+      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk).run();
       if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok, 1x por clique
     }
   }catch(_){}
