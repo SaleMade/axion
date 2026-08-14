@@ -11,7 +11,7 @@ services:
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - DEL_INSTANCE=false
       - LANGUAGE=pt-BR
-      - CONFIG_SESSION_PHONE_CLIENT=SaleMade
+      - CONFIG_SESSION_PHONE_CLIENT=Pressel
       - CONFIG_SESSION_PHONE_NAME=Chrome
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql

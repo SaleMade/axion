@@ -32,7 +32,7 @@ const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizan
 const MIN_APP_VERSION = '2.79.0';
 
 // Coleções vigiadas pela guarda anti-apagamento em massa
-const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','aportes','payouts','produtos','pressels','saques'];
+const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','entradas','aportes','payouts','produtos','pressels','saques'];
 
 // Compara "2.69.0" vs "2.68.0" → <0 se a<b, 0 se igual, >0 se a>b.
 // Versão ausente/inválida vira 0.0.0 (= cliente antigo).
@@ -51,6 +51,14 @@ const ROLE_DIRETOR = ['diretor','socio','produtor'];
 // Chave única configurada no postback da PAYT — acesso ao webhook
 // Pra trocar: editar aqui ou configurar como secret via `wrangler secret put PAYT_TOKEN`
 const PAYT_TOKEN_DEFAULT = 'b562d560380649cbc6c8ade3550eb7f8';
+
+// Segredo do webhook da FIVE (mesmo esquema do PAYT_TOKEN). Trocar via `wrangler secret put FIVE_TOKEN`.
+// A URL cadastrada na Five deve virar:  <API_BASE>/five/glico-six?k=<FIVE_TOKEN>
+const FIVE_TOKEN_DEFAULT = '78c6313579a0264cbf1eebef2b530570';
+// Modo estrito: quando true, REJEITA /five sem o ?k= correto. FICA FALSE até o Bruno trocar a URL
+// na Five (senão fail-closed derruba os pedidos). Ligar (true + deploy) depois que o five_debug
+// mostrar os eventos chegando com o ?k= certo.
+const FIVE_STRICT = false;
 
 // Chave única do webhook do FORNECEDOR — leads vindos de plataformas externas
 // (ex: ferramenta de captação, planilha automática, integração com landing page)
@@ -247,9 +255,21 @@ async function handleFiveCapture(req, env, subpath) {
     await env.DB.prepare('INSERT INTO five_debug (ts, subpath, method, query, headers, body) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(now, subpath || '', req.method, u.search || '', JSON.stringify(headers).slice(0, 4000), String(bodyText).slice(0, 40000)).run();
   } catch (_) {}
-  // Ingestão estruturada: além do log cru, sobe pro modelo de pedidos (best-effort).
-  // Nunca quebra o 200 (webhook precisa responder ok mesmo se o parse falhar).
-  try { await _fiveUpsertOrder(env, JSON.parse(bodyText)); } catch (_) {}
+  // Auth do webhook (modo transição): valida o ?k= quando vier; só BLOQUEIA de fato quando
+  // FIVE_STRICT=true (aí a URL cadastrada na Five já tem o ?k=). O log cru acima roda ANTES,
+  // então dá pra ver no five_debug quando os eventos começam a chegar com o ?k= certo (query LIKE '%k=...').
+  const _k = u.searchParams.get('k') || '';
+  const _expected = (env && env.FIVE_TOKEN) || FIVE_TOKEN_DEFAULT;
+  const _verified = !!_k && _k === _expected;
+  if (FIVE_STRICT && !_verified) return err('unauthorized', 401);
+  // Ingestão estruturada: além do log cru, sobe pro modelo de pedidos (five_orders)
+  // E espelha no Kanban (data.leads) pro acompanhamento andar sozinho. Best-effort:
+  // nunca quebra o 200 (webhook precisa responder ok mesmo se o parse/gravação falhar).
+  let _p = null; try { _p = JSON.parse(bodyText); } catch (_) { _p = null; }
+  if (_p) {
+    try { await _fiveUpsertOrder(env, _p); } catch (_) {}
+    try { await _fiveUpsertLead(env, _p); } catch (_) {}
+  }
   return json({ ok: true, received: true });
 }
 
@@ -292,6 +312,7 @@ function safeJson(s) { try { return JSON.parse(s); } catch (_) { return null; } 
 async function _fiveUpsertOrder(env, p) {
   const oid = p && (p.orderId || (p.order && p.order.id));
   if (!oid) return false;
+  if (_isFiveDemo(p)) return false; // payload de teste/demo não entra em five_orders (não infla receita)
   await _ensureFiveTables(env);
   const now = Math.floor(Date.now() / 1000);
   const prod = p.product || {}, offer = prod.offer || {}, cust = p.customer || {}, proj = p.project || {};
@@ -324,9 +345,9 @@ async function _fiveUpsertOrder(env, p) {
     .bind(oid, proj.id || null, proj.name || null, prod.id || null, prod.name || null,
       offer.id || null, offer.title || null, _num(offer.price), offer.numberOfItems != null ? _num(offer.numberOfItems) : null,
       cust.name || null, cust.document || null, cust.mail || null, cust.phoneNumber || null, cust.address ? JSON.stringify(cust.address) : null,
-      charge ? (charge.status || null) : null, charge ? (charge.paymentMethod || null) : null, charge ? _num(charge.amount) : null, charge ? (charge.code || null) : null, charge ? (charge.updatedAt || null) : null,
-      Array.isArray(p.commissions) ? JSON.stringify(p.commissions) : null,
-      ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship ? (ship.shippingStatus || null) : null, ship ? (ship.coreShippingId || null) : null,
+      charge && charge.status ? String(charge.status).toUpperCase() : null, charge ? (charge.paymentMethod || null) : null, charge ? _num(charge.amount) : null, charge ? (charge.code || null) : null, charge ? (charge.updatedAt || null) : null,
+      Array.isArray(p.commissions) && p.commissions.length ? JSON.stringify(p.commissions) : null, // array VAZIO -> null (COALESCE mantém a comissão já gravada, não zera)
+      ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship && ship.shippingStatus ? String(ship.shippingStatus).toUpperCase() : null, ship ? (ship.coreShippingId || null) : null,
       p.event || null, p.eventStatus || null, now, now, JSON.stringify(p).slice(0, 40000)).run();
 
   // Catálogo de produto (stub) — conecta pedido -> produto do produtor
@@ -336,8 +357,9 @@ async function _fiveUpsertOrder(env, p) {
       .bind(prod.id, proj.id || null, prod.name || null, now).run();
   }
   // Comissões: normaliza numa tabela própria e registra o afiliado (stub, nomeado depois).
-  // Só mexe quando o evento traz comissões (CHARGE_UPDATED), pra não apagar as existentes.
-  if (Array.isArray(p.commissions)) {
+  // Só mexe quando o evento traz comissões NÃO vazias (CHARGE_UPDATED), pra não apagar as existentes.
+  // (array vazio -> não mexe; senão um evento sem comissões zerava as já gravadas)
+  if (Array.isArray(p.commissions) && p.commissions.length) {
     await env.DB.prepare('DELETE FROM five_commissions WHERE order_id=?').bind(oid).run();
     for (const c of p.commissions) {
       const afid = c && c.affiliateId; if (!afid) continue;
@@ -351,6 +373,131 @@ async function _fiveUpsertOrder(env, p) {
   return true;
 }
 
+// ── Ponte Five -> Kanban (data.leads) ──────────────────────────────────────
+// Espelha o pedido da Five como card no Kanban pra o acompanhamento andar sozinho.
+// Casa por five_id = orderId (upsert). CAS otimista igual handleMoveLead (não sobrescreve
+// escrita concorrente). Best-effort: chamada dentro de try no webhook, nunca quebra o 200.
+const FIVE_COL_RANK = { 'A Enviar': 1, 'Enviado': 2, 'Rota de Entrega': 3, 'Retirada': 3, 'Cobrança': 4, 'Pago': 5 };
+// Coluna-alvo a partir do evento/status. null = não move (mantém a coluna atual).
+function _fiveColFor(p) {
+  const ev = String(p.event || '').toUpperCase();
+  const s = (String((p.shipping && p.shipping.shippingStatus) || '') + ' ' + String(p.eventStatus || '')).toLowerCase();
+  if (ev === 'ORDER_CREATE') return 'A Enviar';
+  if (ev === 'SHIPPING_REGISTER') return 'Enviado';
+  if (ev === 'CHARGE_UPDATED') {
+    const cs = String((p.charge && p.charge.status) || '').toUpperCase();
+    if (cs === 'PAID') return 'Pago';
+    if (/REFUND|CHARGEBACK|CANCEL|ESTORN/.test(cs)) return 'Cancelado'; // estorno/chargeback -> terminal negativo
+    return null;
+  }
+  if (ev === 'SHIPPING_UPDATE') {
+    // devolução/extravio -> terminal negativo (testar antes; "devolvido" não colide com os demais)
+    if (/devolv|return|extraviad|recus|nao.?retir|n[ãa]o.?retir/.test(s)) return 'Devolvido';
+    // ORDEM IMPORTA: "saiu para entrega" contém "entreg" -> testar saiu/rota ANTES do entregue.
+    if (/saiu|out.?for.?delivery|\brota\b/.test(s)) return 'Rota de Entrega';
+    if (/retir|waiting.?pickup|pickup|ag[êe]ncia|dispon[íi]vel para retirada/.test(s)) return 'Retirada';
+    if (/entregue|delivered|entrega efetuada|entrega realizada|entrega conclu/.test(s)) return 'Cobrança'; // entregue DE FATO -> cobrar (COD)
+    if (/tr[aâ]nsito|in.?transit|postado|posted|enviad/.test(s)) return 'Enviado';
+    return null;                                                   // status desconhecido: não move
+  }
+  return null;
+}
+// Pula os payloads DEMO (testes da Five) pra não poluir o Kanban real.
+function _isFiveDemo(p) {
+  const pj = String((p.project && p.project.name) || '').toLowerCase();
+  const cn = String((p.customer && p.customer.name) || '').toLowerCase();
+  const doc = String((p.customer && p.customer.document) || '').replace(/\D/g, '');
+  return pj.includes('demo') || cn.includes('fict') || doc === '12345678900';
+}
+async function _fiveUpsertLead(env, p) {
+  const oid = p && (p.orderId || (p.order && p.order.id));
+  if (!oid || _isFiveDemo(p)) return;
+  const ev = String(p.event || '').toUpperCase();
+  const prod = p.product || {}, offer = prod.offer || {}, cust = p.customer || {}, addr = cust.address || {}, charge = p.charge || {}, ship = p.shipping || {};
+  const targetCol = _fiveColFor(p);
+  const now = Math.floor(Date.now() / 1000), nowISO = new Date().toISOString();
+  const d = new Date();
+  // Atribuição do vendedor (mesma lógica do Payt): vínculo do afiliado da Five -> nosso vendedor,
+  // senão a ponte CPF->atendente, senão o telefone (wa_attrib/wa_lead). Resolve 1x, fora do CAS.
+  const _affId = (Array.isArray(p.commissions) && p.commissions.length) ? p.commissions[0].affiliateId : null;
+  const attribAt = (await resolveAtByAffiliate(env, _affId))
+    || (cust.document ? await resolveAtByCpf(env, cust.document) : null)
+    || (cust.phoneNumber ? await resolveAtByPhone(env, cust.phoneNumber) : null);
+  const _cpfC = String(cust.document || '').replace(/\D/g, '');
+  const _waC = String(cust.phoneNumber || '').replace(/\D/g, '');
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return; }
+    if (!Array.isArray(data.leads)) data.leads = [];
+    let lead = data.leads.find((l) => l && String(l.five_id) === String(oid));
+    if (!lead && (_cpfC || _waC.length >= 8)) {
+      // Adota um lead que JÁ existe (pressel/roleta/manual) do MESMO cliente sem five_id,
+      // casando por CPF (preferido) ou últimos 8 dígitos do telefone. Evita card duplicado
+      // e preserva o vendedor (lead.at) já atribuído. Banco canônico: 1 pedido por cliente.
+      lead = data.leads.find((l) => l && !l.five_id && (
+        (_cpfC && String(l.cpf || '').replace(/\D/g, '') === _cpfC) ||
+        (_waC.length >= 8 && String(l.wa || '').replace(/\D/g, '').length >= 8 && String(l.wa).replace(/\D/g, '').slice(-8) === _waC.slice(-8))
+      )) || null;
+      if (lead) {
+        lead.five_id = String(oid);
+        if (!lead.external_id) lead.external_id = 'FIVE-' + String(oid);
+        if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || 'A Enviar', who: 'five', time: nowISO, note: 'vinculado ao pedido Five ' + String(oid) });
+      }
+    }
+    if (!lead) {
+      lead = {
+        id: Date.now(), five_id: String(oid), external_id: 'FIVE-' + String(oid), orig: 'Five',
+        nome: '', cpf: '', wa: '', email: '', cep: '', end: '', num: '', comp: '', bairro: '', cidade: '', uf: '',
+        prod: '', trat: '', vl: 0, com_pct: 0, pgto: '', spg: 'Pendente', mod: 'entrega',
+        at: attribAt || null, col: 'A Enviar', obs: '', tags: [], fu: null, agend: '', track: '', link: '',
+        data: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,
+        hist: [{ from: '—', to: 'A Enviar', who: 'five', time: nowISO }], comments: [], five_status: ev.toLowerCase(),
+      };
+      data.leads.unshift(lead);
+    }
+    // Se ainda não tem dono e a Five/ponte sabe quem atendeu, credita agora (não sobrescreve dono manual).
+    if (!lead.at && attribAt) lead.at = attribAt;
+    // Preenche só o que está vazio (um evento não apaga o que outro trouxe).
+    const setIf = (k, v) => { if (v != null && v !== '' && (lead[k] == null || lead[k] === '')) lead[k] = v; };
+    setIf('nome', cust.name); setIf('cpf', cust.document); setIf('wa', cust.phoneNumber); setIf('email', cust.mail);
+    setIf('prod', prod.name || offer.title); setIf('trat', offer.title);
+    setIf('cep', addr.zipCode); setIf('end', addr.address); setIf('num', addr.number);
+    setIf('bairro', addr.neighborhood); setIf('cidade', addr.city); setIf('uf', addr.state);
+    if ((!lead.vl || lead.vl === 0) && offer.price != null) lead.vl = Number(offer.price) || 0;
+    lead.five_status = ev.toLowerCase();
+    if (ev === 'CHARGE_UPDATED') {
+      const _cs = String(charge.status || '').toUpperCase();
+      if (charge.amount != null) lead.vl = Number(charge.amount) || lead.vl;
+      if (charge.paymentMethod) lead.pgto = charge.paymentMethod;
+      if (_cs === 'PAID') lead.spg = 'Pago';
+      else if (/REFUND|CHARGEBACK|CANCEL|ESTORN/.test(_cs)) lead.spg = 'Recusado'; // estorno/chargeback tira o Pago
+      if (Array.isArray(p.commissions) && p.commissions.length) {
+        lead.five_commissions = p.commissions;
+        const pct = Number(p.commissions[0] && p.commissions[0].percent);
+        if (!isNaN(pct) && pct > 0) lead.com_pct = pct; // % de comissão real do afiliado (card mostrava 0%)
+      }
+    }
+    if ((ev === 'SHIPPING_REGISTER' || ev === 'SHIPPING_UPDATE') && ship.shippingCode) lead.track = ship.shippingCode;
+    // Coluna: só move PRA FRENTE (rank maior) ou pra terminal negativo. Nunca volta.
+    if (targetCol && targetCol !== lead.col) {
+      const cur = FIVE_COL_RANK[lead.col] || 0, tgt = FIVE_COL_RANK[targetCol] || 0;
+      if (tgt > cur || ['Frustrado', 'Devolvido', 'Cancelado'].includes(targetCol)) {
+        const from = lead.col; lead.col = targetCol;
+        if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: targetCol, who: 'five', time: nowISO });
+      }
+    }
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, now, 'five:' + String(oid), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return;
+    await new Promise((r) => setTimeout(r, 12 * (attempt + 1))); // backoff: outra escrita ganhou o version; espera e re-tenta
+  }
+  // CAS esgotado: o pedido está salvo em five_orders (atômico), mas o card do Kanban não subiu.
+  // Não fica em silêncio (a Five recebeu 200): registra pra dar pra reprocessar/depurar.
+  try { await env.DB.prepare('INSERT INTO five_debug (ts, subpath, method, query, headers, body) VALUES (?,?,?,?,?,?)').bind(now, 'CAS_EXHAUSTED', ev, String(oid), '', JSON.stringify(p).slice(0, 4000)).run(); } catch (_) {}
+}
+
 // Lista os pedidos ingeridos da Five (só diretor). Consumido pelo dash de produtor.
 async function handleFiveOrders(req, env) {
   const u = await authUser(req, env);
@@ -358,7 +505,16 @@ async function handleFiveOrders(req, env) {
   if (!isDirector(u)) return err('Sem permissão', 403);
   try {
     await _ensureFiveTables(env);
-    const rows = await env.DB.prepare('SELECT * FROM five_orders ORDER BY updated_at DESC LIMIT 200').all();
+    // Período opcional (startTs/endTs em ms). created_at/updated_at são epoch em SEGUNDOS.
+    // Teto alto (não os 200 de antes) pra o cliente ter o dataset completo e o filtro de período/derivadas baterem.
+    const url = new URL(req.url);
+    const startTs = Number(url.searchParams.get('startTs')) || 0;
+    const endTs = Number(url.searchParams.get('endTs')) || 0;
+    const conds = [], binds = [];
+    if (startTs) { conds.push('COALESCE(created_at, updated_at) >= ?'); binds.push(Math.floor(startTs / 1000)); }
+    if (endTs) { conds.push('COALESCE(created_at, updated_at) <= ?'); binds.push(Math.floor(endTs / 1000)); }
+    const where = conds.length ? ('WHERE ' + conds.join(' AND ')) : '';
+    const rows = await env.DB.prepare(`SELECT * FROM five_orders ${where} ORDER BY updated_at DESC LIMIT 20000`).bind(...binds).all();
     const orders = (rows.results || []).map(r => {
       const { raw, ...rest } = r;
       return { ...rest, customer_address: r.customer_address ? safeJson(r.customer_address) : null, commissions: r.commissions ? safeJson(r.commissions) : [] };
@@ -640,7 +796,10 @@ async function handleUpdateLead(req, env, leadId) {
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
     const fromCol = lead.col;
-    for (const k of SCALAR) { if (k in patch) lead[k] = patch[k]; }
+    // IDOR: só diretor/cobrador OU o dono do lead (vendedor atribuído) editam os campos do cliente.
+    // Antes qualquer autenticado alterava nome/cpf/endereço/rastreio de QUALQUER lead.
+    const owns = String(lead.at) === String(u.id);
+    if (canManage || owns) { for (const k of SCALAR) { if (k in patch) lead[k] = patch[k]; } }
     if (dir) {
       if ('at' in patch) lead.at = patch.at;
       if ('vl' in patch) lead.vl = Number(patch.vl) || 0;
@@ -715,9 +874,12 @@ async function handlePresselSave(req, env) {
   if (Array.isArray(patch.vendedores)) {
     target.vendedores = patch.vendedores.map((v) => {
       const o = { at: String((v && v.at) || ''), ativo: v.ativo !== false };
-      if (v && v.reserva_on !== undefined) o.reserva_on = !!v.reserva_on;
-      if (v && v.reserva_mode) o.reserva_mode = (v.reserva_mode === 'split' ? 'split' : 'overflow');
-      if (v && v.cap != null) o.cap = Math.max(0, Number(v.cap) || 0);
+      // Interruptor POR NÚMERO: mapa de números DESLIGADOS (chave = últimos 8 dígitos). Ausente = ligado.
+      // Guardar os "off" (e não os "on") faz todo número novo "Em uso" já entrar ligado por padrão.
+      if (v && v.off && typeof v.off === 'object') {
+        const off = {}; for (const k in v.off) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.off[k]) off[nk] = true; }
+        if (Object.keys(off).length) o.off = off;
+      }
       return o;
     }).filter((v) => v.at);
   }
@@ -780,11 +942,10 @@ async function handleChipSave(req, env) {
   if ('bkp' in patch) { chip.bkp = !!patch.bkp; if (chip.bkp) chip.em_uso = false; }
   if ('em_uso' in patch) {
     chip.em_uso = !!patch.em_uso;
-    if (chip.em_uso) {
-      chip.bkp = false;
-      // só 1 "Em uso" por atendente: rebaixa o irmão na FLAG e na TAG (senão a roleta ainda enxerga 2)
-      data.chips.forEach((c) => { if (c !== chip && String(c.at) === String(chip.at)) { if (c.em_uso) c.em_uso = false; if (_isEmUsoId(c.wa_st)) c.wa_st = _ativoId; if (eq8(c.num, chip.num)) c.bkp = false; } });
-    }
+    // Vários números "Em uso" por atendente são PERMITIDOS agora: a roleta simples distribui os leads
+    // entre TODOS os números ligados do vendedor. NÃO rebaixa mais os irmãos (cada "Em uso" entra na
+    // roleta com seu próprio interruptor, controlado por pressel em v.off).
+    if (chip.em_uso) chip.bkp = false;
   }
   // timer do "Restabelecido" (espelha _syncRestabTimer): liga ao entrar na tag, LIMPA ao sair — evita promoção precoce
   if ('wa_st' in patch && !('restab_start' in patch)) {
@@ -900,6 +1061,92 @@ async function handleSaqueCreate(req, env) {
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, nowSec, 'saque:' + String(u.id)).run();
   return json({ ok: true, version: newVer, saque });
+}
+
+// POST /api/gasto/estorno { key, estornado } → marca/desmarca um gasto do ContaSimples como ESTORNADO.
+// Gasto estornado (ex.: cobrança de verificação do cartão reembolsada) sai do total de gastos e do lucro.
+// key = cs_id (preferido, estável) ou id do gasto. Só diretor. Escrita com CAS (não atropela webhook concorrente).
+async function handleGastoEstorno(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const key = String((body && body.key) != null ? body.key : '').trim();
+  if (!key) return err('key obrigatório');
+  const estornado = !!(body && body.estornado);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const arr = Array.isArray(data.gastos) ? data.gastos : [];
+    const g = arr.find((x) => (x.cs_id != null && String(x.cs_id) === key) || String(x.id) === key);
+    if (!g) return err('Gasto não encontrado', 404);
+    if (estornado) g.estornado = true; else delete g.estornado;
+    const ok = await _casState(env, row.version, data, 'gasto-estorno:' + String(u.id));
+    if (ok) return json({ ok: true, key, estornado });
+  }
+  return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409);
+}
+
+// POST /api/saque/update { id, status } → o Financeiro PROCESSA o saque do funcionário (pagar/recusar). Só diretor.
+// 'pago' marca pago_em/pago_por + registra 1 linha em data.payouts (o repasse) + avisa o funcionário.
+// A comissão já está no lucro (accrual); o payout é o REGISTRO do pagamento, não conta de novo como despesa.
+async function handleSaqueUpdate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas o Financeiro pode processar saques', 403);
+  const body = await req.json().catch(() => ({}));
+  const id = body && body.id;
+  const status = String((body && body.status) || '').toLowerCase();
+  if (id == null) return err('id obrigatório');
+  if (!['pago', 'recusado', 'aprovado', 'pendente'].includes(status)) return err('status inválido');
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const arr = Array.isArray(data.saques) ? data.saques : [];
+    const s = arr.find((x) => String(x.id) === String(id));
+    if (!s) return err('Saque não encontrado', 404);
+    s.status = status;
+    if (status === 'pago') {
+      s.pago_em = nowSec; s.pago_por = String(u.id);
+      if (!s.aprovado_em) { s.aprovado_em = nowSec; s.aprovado_por = String(u.id); }
+      if (!Array.isArray(data.payouts)) data.payouts = [];
+      if (!data.payouts.some((p) => String(p.saque_id) === String(s.id))) {
+        const pid = data.payouts.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0) + 1;
+        data.payouts.unshift({ id: pid, saque_id: s.id, user_id: s.user_id, nome: s.nome, valor: s.valor, kind: 'saque', ts: nowSec, por: String(u.id) });
+      }
+    } else if (status === 'aprovado') { s.aprovado_em = nowSec; s.aprovado_por = String(u.id); }
+    else if (status === 'recusado') { s.recusado_em = nowSec; s.recusado_por = String(u.id); }
+    // Avisa o funcionário
+    if (!Array.isArray(data.notifs)) data.notifs = [];
+    const nid = data.notifs.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0) + 1;
+    const valorTxt = 'R$ ' + Number(s.valor || 0).toFixed(2).replace('.', ',');
+    const msg = status === 'pago' ? `Seu saque de ${valorTxt} foi PAGO` : status === 'recusado' ? `Seu saque de ${valorTxt} foi recusado` : `Seu saque de ${valorTxt} foi ${status}`;
+    data.notifs.unshift({ id: nid, type: 'saque', title: 'Atualização do saque', description: msg, to: String(s.user_id), from_id: String(u.id), unread: true, ts: nowSec, ref: 'saque:' + s.id, link: '/dashboard/settings/profile' });
+    const ok = await _casState(env, row.version, data, 'saque-update:' + String(u.id));
+    if (ok) return json({ ok: true, id: s.id, status });
+  }
+  return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409);
+}
+// POST /api/acl/save { acl } → salva a matriz de permissões por cargo (data.acl). Só diretor. Cirúrgico.
+// acl = { <cargo>: { <area>: 0|1, ... }, ... } — só cargos restritos; full sempre têm acesso total.
+async function handleAclSave(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const acl = (body && body.acl && typeof body.acl === 'object' && !Array.isArray(body.acl)) ? body.acl : null;
+  if (!acl) return err('acl obrigatório');
+  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+  if (!row) return err('Estado não encontrado', 404);
+  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  data.acl_v2 = acl; // campo NOVO (não colide com a ACL legada da AXION em data.acl)
+  const newVer = (row.version || 0) + 1;
+  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'acl:' + String(u.id)).run();
+  return json({ ok: true, version: newVer });
 }
 // POST /api/cont/save { wa_statuses?, contCols?, contColColors?, cont_col_order? } → patch cirúrgico da
 // config da Contingência (catálogo de status WhatsApp + colunas custom). Só diretor. NUNCA o blob inteiro.
@@ -1068,7 +1315,7 @@ async function handleListUsers(req, env) {
   let rows;
   try {
     rows = await env.DB.prepare(
-      'SELECT id, login, name, abbr, role, color, bg, com_pct, created_at, ' +
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
       'COALESCE(archived, 0) AS archived, archived_at, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
@@ -1081,8 +1328,13 @@ async function handleListUsers(req, env) {
     try {
       await env.DB.prepare('ALTER TABLE users ADD COLUMN archived_at INTEGER').run();
     } catch (_) {}
+    try {
+      await env.DB.prepare('ALTER TABLE users ADD COLUMN salario REAL DEFAULT 0').run();
+    } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN photo TEXT').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN banner TEXT').run(); } catch (_) {}
     rows = await env.DB.prepare(
-      'SELECT id, login, name, abbr, role, color, bg, com_pct, created_at, ' +
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
       'COALESCE(archived, 0) AS archived, archived_at, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
@@ -1094,21 +1346,31 @@ async function handleListUsers(req, env) {
 async function handleCreateOrUpdateUser(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode gerenciar usuários', 403);
+  // Permissão: diretor gerencia qualquer um; não-diretor só edita o PRÓPRIO perfil (campos sensíveis ficam travados abaixo).
+  const isDir = isDirector(u);
 
   const body = await req.json().catch(() => null);
   if (!body) return err('Body inválido');
-  const { id, login, password, name, abbr, role, color, bg, com_pct } = body;
+  const { id, login, password, name, abbr, role, color, bg, com_pct, salario, photo, banner } = body;
   if (!name || !login || !role) return err('Campos obrigatórios: name, login, role');
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN salario REAL DEFAULT 0').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN photo TEXT').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN banner TEXT').run(); } catch (_) {}
 
   const loginNorm = String(login).toLowerCase().trim();
 
   // Detecta create vs update
   const existing = id ? await env.DB.prepare('SELECT id, pwd_hash FROM users WHERE id = ?').bind(id).first() : null;
 
-  // Login único
+  // Só o diretor cria usuário ou edita outra pessoa. Não-diretor só mexe no próprio registro.
+  const isSelf = existing && String(id) === String(u.id);
+  if (!isDir && !isSelf) return err('Apenas Diretor pode gerenciar usuários', 403);
+  // Campos privilegiados (login, cargo, comissão, salário) só o diretor altera; no self-edit são preservados.
+  const canPriv = isDir;
+
+  // Login único (só barra quando o login vai de fato ser gravado)
   const dup = await env.DB.prepare('SELECT id FROM users WHERE lower(login) = ? AND id != ?').bind(loginNorm, id || '').first();
-  if (dup) return err('Login já está em uso', 409);
+  if (dup && (canPriv || !existing)) return err('Login já está em uso', 409);
 
   let pwdHash = existing?.pwd_hash || null;
   if (password) {
@@ -1117,18 +1379,30 @@ async function handleCreateOrUpdateUser(req, env) {
   }
   if (!pwdHash) return err('Senha obrigatória ao criar usuário');
 
+  // Cada campo opcional: só sobrescreve se vier no body (COALESCE mantém o atual quando não vier).
+  // Assim o perfil pessoal (que manda só name/login/role) não zera salário/comissão/cor, e a foto não some.
+  const photoB = (photo == null) ? null : String(photo);
+  const bannerB = (banner == null) ? null : String(banner);
+  const abbrB = (abbr === undefined) ? null : (abbr || null);
+  const colorB = (color === undefined) ? null : (color || null);
+  const bgB = (bg === undefined) ? null : (bg || null);
+  // Privilegiados: no self-edit de não-diretor viram null (COALESCE preserva o valor atual).
+  const loginB = canPriv ? loginNorm : null;
+  const roleB = canPriv ? role : null;
+  const comPctB = (!canPriv || com_pct === undefined) ? null : (Number(com_pct) || 0);
+  const salarioB = (!canPriv || salario === undefined) ? null : (Number(salario) || 0);
   if (existing) {
     // Update
     await env.DB.prepare(
-      `UPDATE users SET login=?, pwd_hash=?, name=?, abbr=?, role=?, color=?, bg=?, com_pct=? WHERE id=?`
-    ).bind(loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, id).run();
+      `UPDATE users SET login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner) WHERE id=?`
+    ).bind(loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, id).run();
     return json({ ok: true, id, action: 'updated' });
   } else {
     // Create — gera id se não veio
     const newId = id || `${role}_${Math.random().toString(36).slice(2, 8)}`;
     await env.DB.prepare(
-      `INSERT INTO users (id, login, pwd_hash, name, abbr, role, color, bg, com_pct) VALUES (?,?,?,?,?,?,?,?,?)`
-    ).bind(newId, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0).run();
+      `INSERT INTO users (id, login, pwd_hash, name, abbr, role, color, bg, com_pct, salario, photo, banner) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(newId, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, Number(salario) || 0, photoB, bannerB).run();
     return json({ ok: true, id: newId, action: 'created' });
   }
 }
@@ -1764,18 +2038,31 @@ function findLead(leads, data) {
 
 // instância Evolution (ax_<at> / ax_<at>_b) → id do atendente no time
 function _instToAt(instance) {
-  return String(instance || '').replace(/^ax_/, '').replace(/_b$/, '');
+  return _atFromInst(instance);
 }
 
 // Extrai um CPF (11 dígitos) de texto livre: tenta o rótulo "CPF:" primeiro,
 // depois o formato pontuado, e por fim qualquer sequência isolada de 11 dígitos.
+// Valida CPF pelo dígito verificador (usado só no fallback de 11 dígitos crus).
+function _cpfValid(d) {
+  if (!/^\d{11}$/.test(d)) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false; // todos iguais
+  let s = 0; for (let i = 0; i < 9; i++) s += Number(d[i]) * (10 - i);
+  let r = (s * 10) % 11; if (r === 10) r = 0; if (r !== Number(d[9])) return false;
+  s = 0; for (let i = 0; i < 10; i++) s += Number(d[i]) * (11 - i);
+  r = (s * 10) % 11; if (r === 10) r = 0; return r === Number(d[10]);
+}
 function extractCpf(text) {
   const t = String(text || '');
+  // 1) rótulo "CPF:" e 2) formatado xxx.xxx.xxx-xx têm contexto explícito → confia.
   let m = t.match(/CPF[^0-9]{0,8}(\d{3}\D?\d{3}\D?\d{3}\D?\d{2})/i);
-  if (!m) m = t.match(/\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b/);
-  if (!m) m = t.match(/(?:^|[^\d])(\d{11})(?:[^\d]|$)/);
-  const digits = m ? m[1].replace(/\D/g, '') : '';
-  return digits.length === 11 ? digits : '';
+  if (m) { const d = m[1].replace(/\D/g, ''); return d.length === 11 ? d : ''; }
+  m = t.match(/\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b/);
+  if (m) { const d = m[1].replace(/\D/g, ''); return d.length === 11 ? d : ''; }
+  // 3) fallback 11 dígitos crus: exige checksum válido, senão um TELEFONE (também 11 dígitos) virava "CPF" e sujava a ponte CPF→atendente.
+  m = t.match(/(?:^|[^\d])(\d{11})(?:[^\d]|$)/);
+  if (m && _cpfValid(m[1])) return m[1];
+  return '';
 }
 
 // Grava/atualiza a ligação CPF → atendente (chave: CPF só dígitos). Upsert idempotente.
@@ -1815,6 +2102,18 @@ async function resolveAtByPhone(env, phone) {
     let row = await env.DB.prepare("SELECT instance FROM wa_attrib WHERE phone LIKE ? ORDER BY rowid DESC LIMIT 1").bind(like).first();
     if (!row) row = await env.DB.prepare("SELECT inst AS instance FROM wa_lead WHERE phone LIKE ? ORDER BY ts DESC LIMIT 1").bind(like).first();
     const at = _instToAt(row && row.instance ? String(row.instance) : '');
+    return at || null;
+  } catch (_) { return null; }
+}
+
+// Resolve o NOSSO vendedor a partir do affiliateId da Five (vínculo salvo pelo diretor em
+// five_affiliates.our_user_id via /api/five/affiliates). Retorna o id do time ou null.
+async function resolveAtByAffiliate(env, affId) {
+  const a = String(affId || '').trim();
+  if (!a) return null;
+  try {
+    const row = await env.DB.prepare('SELECT our_user_id FROM five_affiliates WHERE affiliate_id = ?').bind(a).first();
+    const at = row && row.our_user_id ? String(row.our_user_id).trim() : '';
     return at || null;
   } catch (_) { return null; }
 }
@@ -1888,13 +2187,9 @@ async function handlePaytWebhook(req, env, urlToken) {
   });
   state.payt_debug = state.payt_debug.slice(0, 20);
   // Payload de teste (botão "Testar URL" da Payt): só captura, não cria lead/venda.
+  // Usa CAS (não INSERT incondicional) pra não sobrescrever uma gravação concorrente de webhook real (incidente da aba antiga).
   if (body && body.test === true) {
-    const tVer = curVer + 1, tNow = Math.floor(Date.now() / 1000);
-    await env.DB.prepare(
-      `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
-         updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-    ).bind(JSON.stringify(state), tVer, tNow, 'payt-webhook-test').run();
+    await _casState(env, curVer, state, 'payt-webhook-test');
     return json({ ok: true, test: true, captured: true, event_mapped: data.event });
   }
 
@@ -1919,12 +2214,17 @@ async function handlePaytWebhook(req, env, urlToken) {
     data.modality.toLowerCase().includes('entrega')
   );
 
+  // Comissão REAL do postback (comiss_real/amount) -> % pra o card e as telas do vendedor
+  // não estimarem 12% chutado. null quando o postback não trouxe comissão.
+  const _paytPct = (data.comiss_real != null && Number(data.amount) > 0)
+    ? Math.round((Number(data.comiss_real) / Number(data.amount)) * 1000) / 10 : null;
   if (lead) {
     // Aplica mapeamento sobre lead existente
     const prev = lead.col;
     // Backfill do atendente: se o lead ainda não tem dono e a ponte CPF conhece quem
     // atendeu, atribui agora (não sobrescreve atribuição manual já existente).
     if (!lead.at && attribAt) lead.at = attribAt;
+    if (_paytPct != null && _paytPct > 0 && (!lead.com_pct || lead.com_pct === 12)) lead.com_pct = _paytPct; // % real (não sobrescreve % editado à mão)
     if (mapping?.etapa) lead.col = mapping.etapa;
     if (mapping?.spg) lead.spg = mapping.spg;
     if (mapping?.action === 'tag' && mapping.tag) {
@@ -1969,7 +2269,7 @@ async function handlePaytWebhook(req, env, urlToken) {
       prod: data.product || '',
       trat: data.product || '',
       vl: data.amount || 0,
-      com_pct: 12,
+      com_pct: (_paytPct != null && _paytPct > 0) ? _paytPct : 12,
       track: data.tracking_code || '',
       pgto: data.payment_method || '',
       spg: mapping?.spg || 'Pendente',
@@ -2008,29 +2308,49 @@ async function handlePaytWebhook(req, env, urlToken) {
     'pagamento_expirado','pedido_frustrado'].includes(data.event);
   if (_paytId) {
     const _vi = state.vendas.findIndex(v => v.payt_id === _paytId);
+    const _existing = _vi >= 0 ? state.vendas[_vi] : null;
     if (_paidEvt && data.comiss_real != null) {
-      const _p = (data.paid_at || '').slice(0, 10);
-      const _ddmm = (_p && _p[4] === '-') ? (_p.slice(8, 10) + '/' + _p.slice(5, 7)) : todayBR().slice(0, 5);
-      const _venda = {
-        id: _vi >= 0 ? state.vendas[_vi].id : Date.now(),
-        payt_id: _paytId,
-        leadId: resolvedLead ? resolvedLead.id : null,
-        nome: data.name || (resolvedLead && resolvedLead.nome) || '',
-        cpf: data.cpf || '',
-        prod: data.product || '',
-        sku: data.sku || '',
-        vl: data.amount || 0,
-        custo: 0, com_pct: 0,
-        comiss: data.comiss_real,
-        lucro: data.comiss_real,
-        status: 'confirmado',
-        at: (resolvedLead && resolvedLead.at) || attribAt || '',
-        data: _ddmm,
-        orig: 'PAYT',
-      };
-      if (_vi >= 0) state.vendas[_vi] = _venda; else state.vendas.unshift(_venda);
-    } else if (_revEvt && _vi >= 0) {
-      state.vendas[_vi].status = 'estornado';
+      if (_existing && _existing.status === 'estornado') {
+        // Estorno é TERMINAL: um postback de pago reenviado depois do reembolso não ressuscita a receita.
+      } else {
+        const _p = (data.paid_at || '').slice(0, 10);
+        const _ddmm = (_p && _p[4] === '-') ? (_p.slice(8, 10) + '/' + _p.slice(5, 7)) : todayBR().slice(0, 5);
+        const _venda = {
+          id: _existing ? _existing.id : Date.now(),
+          payt_id: _paytId,
+          leadId: resolvedLead ? resolvedLead.id : null,
+          nome: data.name || (resolvedLead && resolvedLead.nome) || '',
+          cpf: data.cpf || '',
+          prod: data.product || '',
+          sku: data.sku || '',
+          vl: data.amount || 0,
+          custo: 0, com_pct: 0,
+          comiss: data.comiss_real,
+          lucro: data.comiss_real,
+          status: 'confirmado',
+          at: (resolvedLead && resolvedLead.at) || attribAt || '',
+          data: _ddmm,
+          orig: 'PAYT',
+        };
+        if (_vi >= 0) state.vendas[_vi] = _venda; else state.vendas.unshift(_venda);
+      }
+    } else if (_revEvt) {
+      if (_vi >= 0) {
+        state.vendas[_vi].status = 'estornado';
+      } else {
+        // Estorno chegou ANTES do evento de pago (webhooks fora de ordem): grava placeholder estornado
+        // pra um postback de pago atrasado não recriar a venda como confirmada.
+        state.vendas.unshift({
+          id: Date.now(), payt_id: _paytId,
+          leadId: resolvedLead ? resolvedLead.id : null,
+          nome: data.name || (resolvedLead && resolvedLead.nome) || '',
+          cpf: data.cpf || '', prod: data.product || '', sku: data.sku || '',
+          vl: data.amount || 0, custo: 0, com_pct: 0, comiss: 0, lucro: 0,
+          status: 'estornado',
+          at: (resolvedLead && resolvedLead.at) || attribAt || '',
+          data: todayBR().slice(0, 5), orig: 'PAYT',
+        });
+      }
     }
   }
 
@@ -2288,15 +2608,25 @@ async function handleFornecedorWebhook(req, env, urlToken) {
 // frontend) e evita mixed-content — navegador bloqueia https→http direto.
 // Config guardada no D1 (app_config): wa_url, wa_key, wa_instance.
 
+// Config da Evolution em CACHE por isolate. Antes eram 3 SELECTs no D1 a cada evoFetch, e o D1 fica
+// em outra região: ~100ms por leitura. Abrir o QR faz 3 evoFetch, ou seja ~1s jogado fora só lendo
+// config que quase nunca muda. Com cache, o custo vira zero da 2ª chamada em diante.
+let _waCfgCache = null, _waCfgAt = 0;
+const WA_CFG_TTL = 60000;
+function _waCfgInvalidate() { _waCfgCache = null; _waCfgAt = 0; }
 async function getWAConfig(env) {
-  const url = await _readConfig(env, 'wa_url');
-  const key = await _readConfig(env, 'wa_key');
-  const instance = await _readConfig(env, 'wa_instance');
-  return {
+  if (_waCfgCache && (Date.now() - _waCfgAt) < WA_CFG_TTL) return _waCfgCache;
+  // as 3 leituras não dependem uma da outra: em paralelo custam 1 ida, não 3
+  const [url, key, instance] = await Promise.all([
+    _readConfig(env, 'wa_url'), _readConfig(env, 'wa_key'), _readConfig(env, 'wa_instance'),
+  ]);
+  _waCfgCache = {
     url: String(url || '').replace(/\/+$/, ''),
     key: key || '',
     instance: instance || '',
   };
+  _waCfgAt = Date.now();
+  return _waCfgCache;
 }
 
 // Normaliza número pro formato da Evolution (DDI+DDD+numero, só dígitos)
@@ -2332,22 +2662,27 @@ async function handleWAConfigSet(req, env) {
   if (body.url !== undefined)      await _writeConfig(env, 'wa_url', String(body.url || '').trim().replace(/\/+$/, ''));
   if (body.key !== undefined)      await _writeConfig(env, 'wa_key', String(body.key || '').trim());
   if (body.instance !== undefined) await _writeConfig(env, 'wa_instance', String(body.instance || '').trim());
+  _waCfgInvalidate();   // senão o cache serviria a config velha por até 1min depois de salvar
   return json({ ok: true });
 }
 
-// GET /api/wa/status → estado da conexão da instância (open = conectado)
+// GET /api/wa/status → saúde da integração Evolution: cadastrada? servidor no ar? quantos números
+// conectados AGORA? Antes checava só UMA instância padrão (wa_instance); com vários números por QR,
+// essa instância "padrão" some/muda e o card acusava "Offline" mesmo com números conectados. Agora
+// não depende dela: 503 só sem servidor (url/key), 502 se o servidor cair, senão conta os 'open'.
 async function handleWAStatus(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key || !cfg.instance) return err('WhatsApp não configurado', 503);
+  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   try {
-    const r = await fetch(`${cfg.url}/instance/connectionState/${cfg.instance}`, {
-      headers: { apikey: cfg.key },
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return err(`Evolution respondeu ${r.status}`, 502);
-    return json({ ok: true, state: data?.instance?.state || 'unknown', instance: cfg.instance });
+    const list = await _evoInstances(env);   // TODAS as instâncias [{name, state, number}]
+    if (list == null) return err('Evolution não respondeu', 502);
+    const open = list.filter(i => String(i.state || '').toLowerCase() === 'open');
+    // estado da instância padrão, se ela existir (compat com telas antigas que leem state/instance)
+    let dstate = 'unknown';
+    if (cfg.instance) { const di = list.find(i => i.name === cfg.instance); dstate = di ? di.state : 'unknown'; }
+    return json({ ok: true, configured: true, server: true, connected: open.length, total: list.length, state: dstate, instance: cfg.instance || '' });
   } catch (e) {
     return err('Falha ao falar com a Evolution: ' + e.message, 502);
   }
@@ -2590,14 +2925,21 @@ async function handleWACloudSendMedia(req, env) {
 async function evoFetch(env, path, opts = {}) {
   const cfg = await getWAConfig(env);
   if (!cfg.url || !cfg.key) return { _noconfig: true };
-  const r = await fetch(`${cfg.url}${path}`, {
-    method: opts.method || 'GET',
-    headers: { apikey: cfg.key, ...(opts.body ? { 'content-type': 'application/json' } : {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  const text = await r.text();
-  let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
-  return { ok: r.ok, status: r.status, data };
+  // TIMEOUT obrigatório: sem ele, VPS pendurada = requisição pendurada, e a dash inteira trava
+  // esperando (o painel de conexão chama isso a cada 30s). Melhor falhar rápido e dizer que caiu.
+  try {
+    const r = await fetch(`${cfg.url}${path}`, {
+      method: opts.method || 'GET',
+      headers: { apikey: cfg.key, ...(opts.body ? { 'content-type': 'application/json' } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: AbortSignal.timeout(opts.timeout || 12000),
+    });
+    const text = await r.text();
+    let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: {}, _timeout: true, _err: String((e && e.message) || e) };
+  }
 }
 
 // ─── VOZ + MÍDIA (o "ZapVoice" nosso, server-side e conectado à Dash) ──
@@ -2784,23 +3126,35 @@ async function handleWAInstances(req, env) {
 }
 
 // POST /api/wa/instance/create → { instanceName } cria (idempotente) e já devolve QR
-async function handleWAInstanceCreate(req, env) {
+async function handleWAInstanceCreate(req, env, ctx) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const body = await req.json().catch(() => null);
   const name = String(body?.instanceName || '').trim();
   if (!name) return err('instanceName obrigatório');
-  // Cria (se já existir, a Evolution retorna erro 403/409 — tratamos como ok e seguimos pro connect)
-  await evoFetch(env, '/instance/create', {
+  // CAMINHO CURTO, igual à dash antiga (que conectava quase instantâneo): cria (idempotente) e já
+  // pede o QR. Nada de checar estado, deslogar, apagar e recriar aqui — isso custava ~10s por clique
+  // e é o que deixou a conexão lenta e instável. Se não vier QR, quem trata é o front (reset + retry).
+  // syncFullHistory:false + groupsIgnore:true = menos RAM por número e menos ruído (grupo não vira lead).
+  const cr = await evoFetch(env, '/instance/create', {
     method: 'POST',
-    body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
+    body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
   });
-  const res = await evoFetch(env, `/instance/connect/${name}`);
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  // Registra o webhook de volta apontando pro nosso Worker (best-effort)
-  try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
-  const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
-  return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
+  if (cr._noconfig) return err('WhatsApp não configurado', 503);
+  // Registrar o webhook é obrigatório (é o que faz o lead voltar pra dash), mas NÃO precisa segurar
+  // o QR na tela. waitUntil garante que roda até o fim mesmo depois da resposta sair.
+  const _hook = (async () => { try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {} })();
+  if (ctx && ctx.waitUntil) ctx.waitUntil(_hook); else await _hook;
+  // O QR já costuma vir no create (qrcode:true); senão, UMA tentativa pelo connect.
+  let qr = cr.data?.qrcode?.base64 || cr.data?.base64 || cr.data?.qr || null;
+  let pairingCode = cr.data?.qrcode?.pairingCode || cr.data?.pairingCode || cr.data?.code || null;
+  if (!qr) {
+    const res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
+    if (res._noconfig) return err('WhatsApp não configurado', 503);
+    qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
+    pairingCode = pairingCode || res.data?.pairingCode || res.data?.code || null;
+  }
+  return json({ ok: true, instance: name, qr, pairingCode });
 }
 
 // GET /api/wa/instance/connect?instance=NAME → QR atualizado pra reconectar
@@ -3142,7 +3496,7 @@ async function _waOnInbound(env, instance, data, ctx) {
     else await _waEvoDownloadMedia(env, instance, key, _mm, key.id);
   }
   // Sale Chat Engine (sombra): espelha o inbound da Evolution na auditoria crua pra comparar cobertura (sc x evo). Fire-and-forget, nunca afeta o fluxo.
-  try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, String(instance || '').replace(/^ax_/, '')).run(); } catch (_) {}
+  try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, _atFromInst(instance)).run(); } catch (_) {}
   await _waLeadCapture(env, instance, phone, _ex.body, '', _ex.type, Number(data?.messageTimestamp) || 0);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
   // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
   if (await _waBotTestReply(env, instance, key, data)) return;
@@ -3186,8 +3540,12 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
   try {
     if (event === 'connection.update') await _waOnConnection(env, instance, data);
     else if (event === 'messages.upsert') {
-      // Se a fonte virou o Sale Chat, a Evolution NÃO computa (senão duplica lead/venda/pixel).
-      if ((await _waCaptureSource(env)) === 'sc') { /* fonte = Sale Chat */ }
+      // A chave global (sc) vale pros números do Sale Chat. MAS um número conectado por QR na Evolution
+      // tem instância DEDICADA (ax_<at>_<8díg>) e SÓ é visto aqui — o Sale Chat nem o enxerga. Então
+      // ele computa pela Evolution mesmo com a global em 'sc', sem duplicar: os dois caminhos são
+      // DISJUNTOS (cada número físico está num único path). Números legados (ax_<at>) seguem a global.
+      const perNumEvo = /^ax_.+_\d{8}$/.test(String(instance || ''));
+      if ((await _waCaptureSource(env)) === 'sc' && !perNumEvo) { /* fonte = Sale Chat */ }
       else { await _waOnInbound(env, instance, data, ctx); await _waDetectSale(env, instance, data); }
     }
   } catch (_) { /* nunca quebra o webhook */ }
@@ -4260,9 +4618,13 @@ async function handleWAConn(req, env) {
   // Com a captura 100% no Sale Chat a Evolution sai de cena: não consulta, não grava e não mostra
   // conexão fantasma dela na tela. O Baileys é o maior risco de ban, então nada aqui pode dar a
   // impressão de que ele ainda faz parte da operação.
+  // A fonte de captura ('sc' x 'evo') decide QUEM computa lead/venda, NÃO o que a tela de conexão
+  // mostra. Desde que a roleta passou a conectar número por número por QR na Evolution, esconder as
+  // instâncias dela fazia número REALMENTE conectado aparecer vermelho na roleta (o Bruno conectava,
+  // dava certo no servidor, e a dash dizia que não). Aqui a tela mostra a realidade, sempre.
   const _src = await _waCaptureSource(env);
   try {
-    const live = _src === 'sc' ? null : await _evoInstances(env);
+    const live = await _evoInstances(env);
     if (live && live.length) {
       for (const it of live) {
         try {
@@ -4289,8 +4651,9 @@ async function handleWAConn(req, env) {
   // o número aparecia "WhatsApp rodando" depois de ter caído. Vencido vira 'close' (vermelho).
   const nowS = Math.floor(Date.now() / 1000);
   const limpos = (rows.results || [])
-    // com a fonte no Sale Chat, linha da Evolution não aparece mais como conexão da operação
-    .filter(r => _src !== 'sc' || String(r.state) === 'sc')
+    // Reserva (Evolution fora do ar): mostra o último estado conhecido. Só 'sc' (Sale Chat),
+    // 'open' (Evolution por QR) e 'cloud' (API oficial) contam como conexão viva.
+    .filter(r => ['sc', 'open', 'cloud'].includes(String(r.state)))
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
   return json({ ok: true, sat, semDono, conn: withApi(mergeSc(limpos)) });
 }
@@ -4491,7 +4854,7 @@ async function handleWAChatStage(req, env) {
 async function _waDetectSale(env, instance, data) {
   const m = data?.message || {};
   const text = m.conversation || m.extendedTextMessage?.text || '';
-  if (!text || text.indexOf('Pedido Conclu') < 0) return { sale: false }; // assinatura da venda
+  if (!text || text.toLowerCase().indexOf('pedido conclu') < 0) return { sale: false }; // assinatura da venda (case-insensitive: "PEDIDO CONCLUÍDO" também dispara)
   const key = data?.key || {};
   const jid = String(key.remoteJid || '');
   if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
@@ -4506,6 +4869,9 @@ async function _waDetectSale(env, instance, data) {
   // Ponte de atribuição: grava CPF → atendente (a instância = quem atendeu).
   const cpfDetect = extractCpf(text);
   if (cpfDetect) await saveCpfAttrib(env, cpfDetect, instance, name, phone);
+  // ID do evento pro pixel: usa o msg_id; se vier nulo, sintetiza um estável por PEDIDO (telefone+valor+cpf/nome)
+  // pra dois pedidos distintos não colidirem no CompletePayment (antes msgId nulo mandava '' pra todos).
+  const evId = msgId || ('wa:' + phone + ':' + Math.round((value || 0) * 100) + ':' + (cpfDetect || name || 'x'));
   try {
     if (!_saleTablesOk) {
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
@@ -4518,17 +4884,21 @@ async function _waDetectSale(env, instance, data) {
     // descartada: se o cliente comprava DE NOVO no mesmo dia, a venda sumia da dash e do TikTok.
     // Agora só é considerada repetição o mesmo pedido recolado pelo atendente (mesmo valor E mesmo
     // CPF). Valor ou CPF diferente = pedido novo de verdade → registra e dispara o CompletePayment.
-    const rec = await env.DB.prepare("SELECT value, raw FROM wa_sales WHERE phone=? AND ts > strftime('%s','now')-86400 LIMIT 10").bind(phone).all();
+    // Compara pelos últimos 8 dígitos (robusto a DDI/9º dígito): o mesmo número às vezes chega formatado diferente.
+    const last8 = phone.slice(-8);
+    const rec = await env.DB.prepare("SELECT value, raw FROM wa_sales WHERE substr(phone,-8)=? AND ts > strftime('%s','now')-86400 LIMIT 10").bind(last8).all();
     const dupe = (rec.results || []).some(r => {
       const sameVal = Math.abs((Number(r.value) || 0) - (Number(value) || 0)) < 0.01;
-      const sameCpf = (extractCpf(String(r.raw || '')) || '') === (cpfDetect || '');
+      // Só é o MESMO pedido se o CPF bater E existir: sem CPF não dá pra afirmar que é repetição
+      // (antes '' === '' fazia dois pedidos distintos sem CPF virarem duplicata e sumirem da dash).
+      const sameCpf = !!cpfDetect && (extractCpf(String(r.raw || '')) || '') === cpfDetect;
       return sameVal && sameCpf;
     });
     if (dupe) return { sale: true, value }; // mesmo pedido já registrado nas últimas 24h
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)").bind(phone, instance, name, value, msgId, String(text||'').slice(0,2000)).run();
     if (ins.meta && ins.meta.changes === 0) return { sale: true, value }; // msg_id repetido → já registrada
-    await _ttFireSale(env, phone, (value > 0 ? value : null), msgId || '', instance);   // venda pro pixel (sem value 0 se o parse falhar)
+    await _ttFireSale(env, phone, (value > 0 ? value : null), evId, instance);   // venda pro pixel (event_id estável por pedido; sem value 0 se o parse falhar)
     return { sale: true, value };   // registrada agora
   } catch (_) { return { sale: true, value, error: true }; }
 }
@@ -4688,7 +5058,7 @@ async function _ttPixelToken(env, pid, instance) {
     // (senão o GT de uma BM via lead que não era dele e o da certa não via nada).
     if (!p && !pid && instance) {
       // fallback pelo vendedor: SÓ se ele estiver em UMA pressel com pixel (senão mandaria pro pixel/BM errado)
-      const at = String(instance).replace(/^ax_/, '').replace(/_b$/, '');   // número backup (ax_<at>_b) cai no mesmo vendedor
+      const at = _atFromInst(instance);   // número backup (ax_<at>_b) cai no mesmo vendedor
       const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
       if (cand.length === 1) p = cand[0];
     }
@@ -4769,7 +5139,11 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // No UPGRADE os fallbacks ficam DE FORA de propósito: o lead já tem uma atribuição por chute, e
     // deixar ele reivindicar outro clique roubaria a linha de um lead novo de verdade. No upgrade só
     // vale o que é exato: o código, ou a letra dele.
-    const nk = String(selfNum || '').replace(/\D/g, '').slice(-8);
+    // num_key = últimos 8 díg do número que atendeu. O Sale Chat informa em selfNum; na Evolution vem
+    // vazio, então derivo da instância dedicada (ax_<at>_<8díg>) pra o casamento por número funcionar
+    // mesmo quando o lead não traz o código no texto.
+    let nk = String(selfNum || '').replace(/\D/g, '').slice(-8);
+    if (!nk) { const _mnk = String(instance || '').match(/_(\d{8})$/); if (_mnk) nk = _mnk[1]; }
     if (!isUpgrade && !pid && nk) {
       try {
         const fb = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE num_key=? AND (claimed IS NULL OR claimed=0) AND ts > strftime('%s','now')-3600 ORDER BY (ttclid IS NOT NULL AND ttclid<>'') DESC, ts ASC LIMIT 1) RETURNING ttclid, pid").bind(nk).first();
@@ -4820,7 +5194,11 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       // criou), e sobrescrever com ttclid vazio apagava o click id — e a VENDA disparava sem ele.
       // Não mexe no ts (senão "renasce" e pula de dia) nem no inst (quem atendeu não muda por msg nova).
       if (src === 'code') {
-        await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src='code' WHERE phone=?").bind(pid, ttclid, phone).run();
+        // Preserva o que já existia quando o novo vier vazio: um código que casou a PRESSEL (pid) mas
+        // sem ttclid não pode apagar o ttclid que o fifo já tinha gravado (a venda dispararia sem click id).
+        const newTt = ttclid || exists.ttclid || '';
+        const newPid = pid || exists.pid || '';
+        await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src='code' WHERE phone=?").bind(newPid, newTt, phone).run();
       }
     } else {
       await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
@@ -4858,7 +5236,7 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
     // desse vendedor hoje. Não é exato, mas é muito melhor que jogar no pixel errado.
     if (!pid && instance) {
       try {
-        const at = String(instance).replace(/^ax_/, '').replace(/_b$/, '');
+        const at = _atFromInst(instance);
         const dom = await env.DB.prepare(
           `SELECT p.pid, COUNT(*) n FROM tt_pending p
            JOIN wa_number_owner o ON substr(o.num_key,-8) = p.num_key
@@ -4934,26 +5312,26 @@ async function handleWASaleDelete(req, env) {
   return json({ ok: true, id, removed: true });
 }
 // POST /api/wa/sale/add → { raw, at } adiciona um pedido MANUAL (indicação/orgânico).
-// Faz o MESMO parse do "Pedido Concluído", grava em wa_sales no nome do vendedor
-// escolhido, mas NÃO dispara o pixel do TikTok (não é venda de anúncio). Entra como
-// "sem rastreio" e conta pro vendedor. Só diretor.
+// POST /api/wa/sale/add: registra um pedido a partir do texto "Pedido Concluído" e DISPARA o pixel
+// (CompletePayment), deduplicado por telefone/24h. Serve pra quando a captura automática falha (ex:
+// número banido finaliza a venda mas não é contabilizado). Diretor credita qualquer vendedor (body.at);
+// vendedor só credita a si mesmo (u.id).
 async function handleWASaleAdd(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode adicionar pedido', 403);
   const body = await req.json().catch(() => null);
   if (!body || !body.raw || !String(body.raw).trim()) return err('Cole a mensagem do "Pedido Concluído"');
   const text = String(body.raw);
-  const at = String(body.at || '').trim();
+  // Diretor pode creditar qualquer vendedor (body.at); vendedor só credita a si mesmo.
+  const at = isDirector(u) ? String(body.at || '').trim() : String(u.id);
   const instance = at ? ('ax_' + at) : 'manual';
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
   // telefone do cliente: a linha do 📲, senão o 1º celular com DDD que aparecer.
   // A classe NÃO pode conter \n (senão varre a próxima linha e gruda dígitos de outro campo).
-  let phone = '';
-  const phM = text.match(/📲[^\d\n]*([\d()\-. ]{10,})/);
-  if (phM) phone = phM[1].replace(/\D/g, '');
+  let phone = String(body.phone || '').replace(/\D/g, '');   // telefone da conversa, se veio (mais confiável que o parse do texto)
+  if (!phone) { const phM = text.match(/📲[^\d\n]*([\d()\-. ]{10,})/); if (phM) phone = phM[1].replace(/\D/g, ''); }
   if (!phone) { const any = text.match(/\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/); if (any) phone = any[0].replace(/\D/g, ''); }
   // CRÍTICO: normaliza pro MESMO formato do JID do WhatsApp (55+DDD+num), igual o caminho
   // automático (_waDetectSale usa os dígitos do remoteJid). Sem isso o telefone da venda
@@ -4984,6 +5362,8 @@ async function handleWASaleAdd(req, env) {
     }
     await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)")
       .bind(phone || '', instance, name || 'Cliente', value, msgId, text.slice(0, 2000)).run();
+    // Auto CRM: garante o card na coluna "Fechou" (o vendedor pode ter registrado direto, sem arrastar).
+    try { if (phone) await env.DB.prepare("UPDATE wa_chats SET crm_stage='fechou', updated_at=strftime('%s','now') WHERE phone=?").bind(phone).run(); } catch (_) {}
     // Venda lançada na mão TAMBÉM dispara o pixel. O Diretor só lança quando a captura falhou, e sem
     // isso a BM nunca recebia o crédito dessa venda — foi o que aconteceu com 6 vendas num único dia.
     // _ttFireSale busca a origem em wa_lead; se não achar, deduz a pressel dominante do vendedor.
@@ -5178,6 +5558,11 @@ function _resolvePresselNumbers(p, chips, liveSet){
 // Igual ao _resolvePresselNumbers mas devolve o vendedor completo {num, at, inst} pra balancear.
 // instância base do vendedor (tira o sufixo _b do número backup) — pra métrica/pixel somarem no mesmo vendedor
 function _instBase(inst){ return String(inst||'').replace(/_b$/,''); }
+// Instância → id do VENDEDOR. Tira o prefixo `ax_`, o sufixo `_b` (backup legado) E o `_<8dígitos>`
+// da instância POR NÚMERO (ax_<at>_<8díg>, usada desde que cada número passou a conectar sozinho).
+// Sem tirar o número, o lead/venda era atribuído a um vendedor inexistente (ex: "atendente_x_84384245")
+// e SUMIA das métricas por vendedor, da comissão e do placar da roleta, em silêncio.
+function _atFromInst(inst){ return String(inst||'').replace(/^ax_/,'').replace(/_b$/,'').replace(/_\d{8}$/,''); }
 // Compara dois números por os últimos 8 dígitos (ignora DDI 55, 9º dígito, formatação)
 function _lastDigitsEq(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8), nb=String(b||'').replace(/\D/g,'').slice(-8); return na.length>=8 && na===nb; }
 // Número OK pra rotear lead? Conectado = é o ownerJid de ALGUMA instância 'open'.
@@ -5221,17 +5606,21 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     // de vendedor que nem estava trabalhando, queimando chip e perdendo venda a semana toda. O
     // próprio front declara "Em uso" como a FONTE DE VERDADE do número ativo; agora o backend
     // respeita isso. Estacionar número não roteia mais nada; quem deve receber tem que estar "Em uso".
-    const emChip=mine.find(isEmUso) || null;                                        // principal só com "Em uso"
-    let bkChip=mine.find(c=>c.bkp===true);                                          // reserva = chip marcado bkp
-    if(!emChip && !bkChip) continue;                                                // sem principal "Em uso" E sem reserva = fora da roleta
-    if(bkChip && emChip && (String(bkChip.id)===String(emChip.id) || _lastDigitsEq(bkChip.num, emChip.num))) bkChip=null;   // reserva NÃO pode ser o mesmo número do principal (o mesmo WhatsApp em 2 instâncias briga e cai)
-    const swap=!!(v.swap && emChip && bkChip);                                      // v.swap troca só o PAPEL (número fica na sua conexão)
-    const pChip=swap?bkChip:emChip, pInst=swap?instB:instP;                         // principal = recebe primeiro
-    const rChip=swap?emChip:bkChip, rInst=swap?instP:instB;                         // reserva = overflow
-    const primary=(principalOn && pChip && okWa(pChip) && pChip.num && _servConnOk(liveSet, pInst, pChip.num)) ? {num:pChip.num, inst:pInst} : null;   // principal só entra com o interruptor dele ligado
-    const backup =(v.reserva_on!==false && rChip && okWa(rChip) && rChip.num && _servConnOk(liveSet, rInst, rChip.num)) ? {num:rChip.num, inst:rInst} : null;   // reserva só entra com o interruptor ligado
-    if(!primary && !backup) continue;   // os DOIS desligados/caídos → vendedor fora da roleta
-    out.push({at:String(v.at), cap:Math.max(0,Number(v.cap)||0), mode:(v.reserva_mode==='split'?'split':'overflow'), primary, backup});
+    if(!principalOn) continue;   // v.ativo===false = vendedor inteiro desligado (master/legado); a UI nova controla por número (v.off)
+    // ROLETA SIMPLES: TODOS os números "Em uso" do vendedor entram, cada um com seu interruptor (v.off).
+    // Sem principal/reserva/swap. Regra de ouro mantida: SÓ "Em uso" recebe, sem fallback pro mine[0].
+    // Todos vão pra MESMA instância ax_<at> (a atribuição casa por NÚMERO, não pela instância).
+    const off = (v.off && typeof v.off === 'object') ? v.off : null;               // números DESLIGADOS (chave = últimos 8 dígitos)
+    const nums = [];
+    for(const c of mine){
+      if(!isEmUso(c) || !c.num || !okWa(c)) continue;                              // só "Em uso", com número, não banido/restrito
+      const nk = String(c.num).replace(/\D/g,'').slice(-8);
+      if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
+      if(!_servConnOk(liveSet, instP, c.num)) continue;                            // não conectado agora (casa por número)
+      nums.push({num:c.num, inst:instP});
+    }
+    if(!nums.length) continue;                                                      // nenhum número ligado/conectado → fora da roleta
+    out.push({at:String(v.at), nums});
   }
   return out;
 }
@@ -5296,8 +5685,7 @@ async function _presselBalancedPick(env, id, sellers){
   // 1) Candidatos: TODO número ligado (principal e complementar valem igual).
   let avail=[];
   for(const s of sellers){
-    if(s.primary) avail.push({num:s.primary.num, at:s.at, inst:s.primary.inst});
-    if(s.backup)  avail.push({num:s.backup.num,  at:s.at, inst:s.backup.inst});
+    for(const n of (s.nums||[])) avail.push({num:n.num, at:s.at, inst:n.inst});
   }
   if(!avail.length) return null;
 
@@ -5486,7 +5874,7 @@ async function handlePresselMetricsLive(req, env){
     const vc = M.vc[pid]||{};
     const p = { views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, valor:M.valor[pid]||0, vend:{} };
     const cvi = M.contatosVI[pid]||{}, vvi = M.vendasVI[pid]||{};
-    new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ const b=_instBase(inst); const e=(p.vend[b]=p.vend[b]||{contatos:0,vendas:0}); e.contatos+=cvi[inst]||0; e.vendas+=vvi[inst]||0; });   // backup (_b) soma no mesmo vendedor
+    new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ const b=_atFromInst(inst); const e=(p.vend[b]=p.vend[b]||{contatos:0,vendas:0}); e.contatos+=cvi[inst]||0; e.vendas+=vvi[inst]||0; });   // chave = at (tira ax_ E _b) pra casar com metric.vend[at.id] no front
     pressels[pid] = p;
   });
   return json({ ok:true, day, today: _brDay(), pressels });
@@ -5510,7 +5898,7 @@ async function handlePresselMetricsPage(req, env, id){
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
   // vendedores da roleta AGORA + qualquer um com atividade hoje nesta pressel (mesmo já tirado da roleta) — o dado não some
-  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');
+  const _vAt=(inst)=>_atFromInst(inst);
   const vm={};
   const ens=(at)=>{ at=String(at); if(at && !vm[at]){ const mine=chips.filter(c=>String(c.at)===at && c.st!=='aquecimento' && c.st!=='banido'); const active=mine.find(c=>c.em_uso===true||c.wa_st==='em_uso')||mine[0]; vm[at]={name:nameMap[at]||'Vendedor', num:active?active.num:'—', contatos:0, vendas:0}; } };
   (p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>ens(v.at));
@@ -5864,20 +6252,22 @@ async function _presselsTotalData(env, day, view, per, full){
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
   const today=_brDay(); const isToday=(day===today);
   const out={ ok:true, view, per, day, today, isToday, full:!!full };
-  out.side=await _roletaDiagData(env, day, chips, nameMap);
-  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');
+  // "Conversão por número" (diagnóstico de chip queimando) expõe telefone completo do atendente +
+  // conversão por número: é privado do diretor. GT/vendedor NÃO vê perda (regra gt-nao-ve-perda).
+  out.side=full?await _roletaDiagData(env, day, chips, nameMap):[];
+  const _vAt=(inst)=>_atFromInst(inst);
   const _emUsoIds=new Set(['em_uso']);
   try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) _emUsoIds.add(String(s.id)); }); }catch(_){}
   const _isEmUso=(c)=> !!c && (c.em_uso===true || c.em_uso===1 || _emUsoIds.has(String(c.wa_st||'')));
   const _chipsDo=(at)=>chips.filter(c=>String(c.at)===String(at) && c.st!=='aquecimento' && c.st!=='banido');
   const _splitAts=new Set();
   pressels.forEach(p=>(p.vendedores||[]).forEach(v=>{ if(!v||!v.at||v.reserva_mode!=='split'||v.reserva_on===false) return; const mine=_chipsDo(v.at); if(mine.some(_isEmUso)&&mine.some(c=>c.bkp===true)) _splitAts.add(String(v.at)); }));
-  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); const em=mine.find(_isEmUso)||mine[0]; const nums=[]; if(em&&em.num) nums.push(em.num); if(_splitAts.has(at)){ const bk=mine.find(c=>c.bkp===true); if(bk&&bk.num&&bk.num!==(em&&em.num)) nums.push(bk.num); } if(!nums.length) nums.push('—'); return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };
+  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); const nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean); if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); } return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };   // TODOS os "Em uso" (roleta multi-número)
   const _rankVend=(vend)=>{ const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0?(Number(x.vendas)||0)/c:0; }; return (vend||[]).slice().sort((a,b)=> ((Number(b.vendas)||0)-(Number(a.vendas)||0)) || (cv(b)-cv(a)) || ((Number(b.contatos)||0)-(Number(a.contatos)||0))); };
   const pad=n=>String(n).padStart(2,'0');
   const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return ''; return n.startsWith('55')?n.slice(2):n; };
   const mask=ph=>{ const p=String(ph||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):''; };
-  const baseAt=inst=>String(inst||'').replace(/^ax_/,'').replace(/_b$/,'')||'?';
+  const baseAt=inst=>_atFromInst(inst)||'?';
   const byName=(a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b));
 
   if(view==='metricas'){
@@ -6013,8 +6403,8 @@ async function handlePresselsTotalPage(req, env){
   const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={};
   try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
-  const _sideHtml=await _roletaDiagHtml(env, day, chips, nameMap);   // painel "Chip pedindo troca" na coluna direita
-  const _vAt=(inst)=>String(inst).replace(/^ax_/,'').replace(/_b$/,'');   // instância -> id do vendedor
+  const _sideHtml=full?await _roletaDiagHtml(env, day, chips, nameMap):'';   // "Conversão por número" (telefone + conversão) é SÓ diretor (gt-nao-ve-perda)
+  const _vAt=(inst)=>_atFromInst(inst);   // instância -> id do vendedor
   // "Em uso" igual a dash enxerga (a dash usa ids de status customizados tipo st_xxxx com label "Em uso")
   const _emUsoIds=new Set(['em_uso']);
   try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) _emUsoIds.add(String(s.id)); }); }catch(_){}
@@ -6032,10 +6422,8 @@ async function handlePresselsTotalPage(req, env){
   const _vendCell=(at)=>{
     at=String(at);
     const mine=_chipsDo(at);
-    const em=mine.find(_isEmUso)||mine[0];
-    const nums=[]; if(em&&em.num) nums.push(em.num);
-    if(_splitAts.has(at)){ const bk=mine.find(c=>c.bkp===true); if(bk&&bk.num&&bk.num!==(em&&em.num)) nums.push(bk.num); }   // 2º número (complementar) empilhado embaixo
-    if(!nums.length) nums.push('—');
+    const nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean);   // TODOS os números "Em uso" (roleta multi-número)
+    if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); }
     return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0};
   };
   // TOPS EM CIMA: uma linha por vendedor, ranqueada por vendas → conversão → contatos.
@@ -6100,7 +6488,7 @@ async function handlePresselsTotalPage(req, env){
     const waHref=ph=>{ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.length<=11) d='55'+d; return 'https://wa.me/'+d; };
     const fmtPhone=ph=>{ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.startsWith('55')&&d.length>11) d=d.slice(2); return d; };
     const oCards=orders.length?orders.map(o=>{
-      const at=String(o.instance||'').replace(/^ax_/,'').replace(/_b$/,'');
+      const at=_atFromInst(o.instance);
       const seller=nameMap[at]||o.instance||'—';
       const bt=new Date((Number(o.ts||0)-10800)*1000);
       const hora=isNaN(bt)?'':`${pad(bt.getUTCDate())}/${pad(bt.getUTCMonth()+1)} ${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
@@ -6122,7 +6510,7 @@ async function handlePresselsTotalPage(req, env){
     const pad=n=>String(n).padStart(2,'0');
     const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return 'número não registrado'; return n.startsWith('55')?n.slice(2):n; };
     const waHref=ph=>{ let d=String(ph||'').replace(/\D/g,''); if(!d) return ''; if(d.length<=11) d='55'+d; return 'https://wa.me/'+d; };   // link direto pra conversa
-    const baseAt=inst=>String(inst||'').replace(/^ax_/,'').replace(/_b$/,'')||'?';   // instância -> id do vendedor (backup _b soma no mesmo)
+    const baseAt=inst=>_atFromInst(inst)||'?';   // instância -> id do vendedor (backup _b soma no mesmo)
     const byName=(a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b));
     const cpBlocks=[];   // texto de cópia por vendedor (só no modo autenticado)
     // Seletor Dia / Mês (fica dentro do painel de Leads)
@@ -6460,9 +6848,12 @@ export default {
     // Guarda o histórico dos envios por 60 dias (serve de prova pro gestor de tráfego).
     try { await env.DB.prepare("DELETE FROM tt_events WHERE status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
     try {
-      // Fonte no Sale Chat = não conversa mais com a Evolution. Sem isso o cron ficava
-      // reescrevendo as linhas dela a cada 2min e ressuscitando conexão fantasma na tela.
-      const live = (await _waCaptureSource(env)) === 'sc' ? null : await _evoInstances(env);
+      // Mantém wa_conn fresco pras instâncias da Evolution. NÃO pode depender da fonte de captura:
+      // a roleta só roteia lead pra quem tem wa_conn atualizado nos últimos 180s, então com o cron
+      // calado o número conectado por QR ficava verde na tela mas SAÍA DA ROLETA em 3 minutos e
+      // parava de receber lead em silêncio. O estado gravado é o REAL vindo da Evolution (open/close),
+      // então não ressuscita conexão fantasma: o que caiu entra como 'close' e é filtrado.
+      const live = await _evoInstances(env);
       if (live && live.length) {
         await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
         try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
@@ -6529,6 +6920,9 @@ export default {
       if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);
       if (req.method === 'POST'  && path === '/api/cont/save')      return handleContConfig(req, env);
       if (req.method === 'POST'  && path === '/api/saque/create')   return handleSaqueCreate(req, env);
+      if (req.method === 'POST'  && path === '/api/saque/update')   return handleSaqueUpdate(req, env);
+      if (req.method === 'POST'  && path === '/api/gasto/estorno')  return handleGastoEstorno(req, env);
+      if (req.method === 'POST'  && path === '/api/acl/save')       return handleAclSave(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
@@ -6581,7 +6975,7 @@ export default {
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/config/tts') return handleTTSConfig(req, env);
       // WhatsApp multi-instância (1 conexão por atendente)
       if (req.method === 'GET'    && path === '/api/wa/instances')        return handleWAInstances(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/instance/create')  return handleWAInstanceCreate(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/instance/create')  return handleWAInstanceCreate(req, env, ctx);
       if (req.method === 'GET'    && path === '/api/wa/instance/connect') return handleWAInstanceConnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
@@ -6647,15 +7041,13 @@ export default {
       // Fornecedor Webhook — recebe leads de plataforma externa de captação
       const fornMatch = path.match(/^\/webhook\/fornecedor\/([a-zA-Z0-9_-]+)$/);
       if (fornMatch && (req.method === 'POST' || req.method === 'GET')) {
+        // Webhook do FORNECEDOR ANTIGO DESLIGADO (viramos produtor; a fonte agora e Payt/FIVE).
+        // Responde 410 e NAO cria mais lead do fornecedor antigo. A funcao handleFornecedorWebhook
+        // fica no codigo caso precise reativar, mas a rota nao chama mais.
         if (req.method === 'GET') {
-          return json({
-            name: 'axion-fornecedor-webhook',
-            ok: true,
-            ready: true,
-            doc: 'POST com body JSON. Campos: nome (obrigatório), cpf, telefone/whatsapp, email, cep, endereco, cidade, uf, produto, valor, modalidade (antecipado|entrega), origem, obs, external_id'
-          });
+          return json({ name: 'axion-fornecedor-webhook', ok: false, disabled: true, doc: 'Endpoint desativado (viramos produtor; fonte agora e Payt/FIVE).' });
         }
-        return handleFornecedorWebhook(req, env, fornMatch[1]);
+        return new Response('fornecedor webhook desativado', { status: 410 });
       }
 
       // Pressel pública — lead da campanha cai aqui e a roleta manda pro WhatsApp
