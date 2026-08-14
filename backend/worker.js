@@ -3214,6 +3214,29 @@ async function handleWAInstanceCreate(req, env, ctx) {
     qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
     pairingCode = pairingCode || res.data?.pairingCode || res.data?.code || null;
   }
+  // AINDA sem QR = a instância está PRESA (segurando uma sessão que não é a que queremos, ou morta).
+  // Nesse ponto a Evolution não vai emitir QR nenhum enquanto ela existir. Reseta e tenta de novo,
+  // que é exatamente o que a dash antiga fazia. Isso só roda no caso travado, então não pesa no
+  // caminho normal — e resolve o "não consegui gerar o QR" sem depender de o front pedir reset.
+  if (!qr && !body?.reset) {
+    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+    try { await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+    try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}
+    await new Promise((r) => setTimeout(r, 1500));
+    const cr2 = await evoFetch(env, '/instance/create', {
+      method: 'POST',
+      body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
+    });
+    qr = cr2.data?.qrcode?.base64 || cr2.data?.base64 || cr2.data?.qr || null;
+    pairingCode = pairingCode || cr2.data?.qrcode?.pairingCode || cr2.data?.pairingCode || null;
+    for (let i = 0; i < 4 && !qr; i++) {
+      await new Promise((r) => setTimeout(r, 700));
+      const res2 = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
+      qr = res2.data?.base64 || res2.data?.qrcode?.base64 || res2.data?.qr || null;
+      pairingCode = pairingCode || res2.data?.pairingCode || res2.data?.code || null;
+    }
+    try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
+  }
   return json({ ok: true, instance: name, qr, pairingCode });
 }
 
@@ -3223,9 +3246,23 @@ async function handleWAInstanceConnect(req, env) {
   if (!u) return err('Não autenticado', 401);
   const name = new URL(req.url).searchParams.get('instance');
   if (!name) return err('parâmetro "instance" obrigatório');
-  const res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
+  let res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
   if (res._noconfig) return err('WhatsApp não configurado', 503);
-  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
+  // 404 = a instância não existe (foi apagada num reset). Antes isso virava "Evolution respondeu 404"
+  // vermelho na cara do usuário. Quem abre essa tela quer um QR, não um código de status: então
+  // recria a instância e pede o QR de novo. Autocura, sem erro técnico na tela.
+  if (!res.ok) {
+    await evoFetch(env, '/instance/create', {
+      method: 'POST',
+      body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
+    });
+    try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 600));
+      res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
+      if (res.ok && (res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr)) break;
+    }
+  }
   const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
   return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
 }
