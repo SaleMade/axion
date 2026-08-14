@@ -3283,9 +3283,19 @@ async function handleWAInstanceStatus(req, env) {
   let number = '';
   if (state === 'open') {
     try {
-      const live = await _evoInstances(env);
-      const it = (live || []).find((x) => x.name === name);
+      // A Evolution leva um instante pra publicar o dono da sessão (ownerJid) depois do QR. Enquanto
+      // ela não publica, a dash não tem como saber que ESTE número conectou e a linha fica vermelha
+      // (eram os ~10s de espera que o Bruno via). Insiste um pouco aqui, que é barato e acontece só
+      // no momento da conexão.
+      let live = await _evoInstances(env);
+      let it = (live || []).find((x) => x.name === name);
       number = (it && it.number) || '';
+      for (let i = 0; i < 2 && !number; i++) {
+        await new Promise((r) => setTimeout(r, 600));
+        live = await _evoInstances(env);
+        it = (live || []).find((x) => x.name === name);
+        number = (it && it.number) || '';
+      }
       if (number) {
         await env.DB.prepare(
           `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'open', ?, strftime('%s','now'))
@@ -3299,6 +3309,7 @@ async function handleWAInstanceStatus(req, env) {
 
 // POST /api/wa/instance/logout → { instance } desconecta e remove a instância
 async function handleWAInstanceLogout(req, env) {
+  _evoCache = null;
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Apenas Diretor pode remover conexões', 403);
@@ -3312,6 +3323,7 @@ async function handleWAInstanceLogout(req, env) {
 }
 // POST /api/wa/instance/disconnect → { instance } só DESCONECTA (logout), mantém a instância + configs (webhook/groupsIgnore)
 async function handleWAInstanceDisconnect(req, env) {
+  _evoCache = null;   // some com o cache: a queda tem que aparecer na hora
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   let body = {}; try { body = await req.json(); } catch (_) {}
@@ -4667,6 +4679,16 @@ async function handleSalechatSource(req, env) {
 // GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
 // Lista as instâncias direto da Evolution: estado REAL + número conectado (ownerJid).
 // Não confia só no webhook (que pode ficar defasado e mostrar "conectado" falso).
+// Cache curto da lista de instâncias. Existe pra dash poder perguntar de poucos em poucos segundos
+// (queda de número aparecendo rápido) sem transformar isso em ida à VPS a cada pergunta.
+// NUNCA cacheia resposta ruim (null): se a Evolution falhar, a próxima pergunta tenta de novo.
+let _evoCache = null, _evoCacheAt = 0;
+async function _evoInstancesCached(env, ttlMs = 4000) {
+  if (_evoCache && (Date.now() - _evoCacheAt) < ttlMs) return _evoCache;
+  const r = await _evoInstances(env);
+  if (r) { _evoCache = r; _evoCacheAt = Date.now(); }
+  return r;
+}
 async function _evoInstances(env) {
   const res = await evoFetch(env, '/instance/fetchInstances');
   if (res._noconfig || !res.ok) return null;
@@ -4739,9 +4761,14 @@ async function handleWAConn(req, env) {
   // dava certo no servidor, e a dash dizia que não). Aqui a tela mostra a realidade, sempre.
   const _src = await _waCaptureSource(env);
   try {
-    const live = await _evoInstances(env);
+    // A dash pergunta isso de poucos em poucos segundos (pra queda de número aparecer rápido).
+    // Sem cache, cada pergunta viraria uma ida à VPS + uma escrita no D1 por instância — com a dash
+    // aberta em várias abas isso vira martelo. O cache curto segura o custo sem atrasar a detecção,
+    // e as escritas só acontecem quando os dados são NOVOS (cache frio).
+    const _fresco = !(_evoCache && (Date.now() - _evoCacheAt) < 4000);
+    const live = await _evoInstancesCached(env);
     if (live && live.length) {
-      for (const it of live) {
+      if (_fresco) for (const it of live) {
         try {
           await env.DB.prepare(
             `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
