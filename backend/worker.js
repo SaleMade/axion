@@ -2690,15 +2690,58 @@ async function handleWAStatus(req, env) {
 
 // POST /api/wa/send → { number, text, instance? } envia texto.
 // Se instance não vier, usa a instância padrão configurada (wa_instance).
+// Qual instância usar pra ENVIAR a resposta do atendente.
+// Com a instância POR NÚMERO, mandar pra `ax_<vendedor>` (hoje fechada) ou pra instância padrão
+// `wa_instance` (que pode nem existir na VPS, no caso do Bruno era "salemade") fazia a resposta
+// falhar em silêncio. Ordem de preferência:
+//   1) a que o front pediu, SE estiver conectada agora
+//   2) a que ATENDEU esse telefone (responde pelo mesmo número que o lead procurou)
+//   3) qualquer instância conectada desse vendedor
+//   4) o que veio (comportamento antigo), pra não quebrar setup legado
+async function _resolveSendInstance(env, { atId, phone, hint }) {
+  const conectada = async (name) => {
+    if (!name) return false;
+    try {
+      const r = await env.DB.prepare(
+        "SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600"
+      ).bind(name).first();
+      return !!r;
+    } catch (_) { return false; }
+  };
+  if (hint && await conectada(hint)) return hint;
+  try {
+    const d = String(phone || '').replace(/\D/g, '');
+    if (d) {
+      const row = await env.DB.prepare('SELECT instance FROM wa_attrib WHERE phone=?').bind(d).first();
+      if (row && row.instance && await conectada(row.instance)) return row.instance;
+    }
+  } catch (_) {}
+  try {
+    if (atId) {
+      const row = await env.DB.prepare(
+        // só 'open' (Evolution): 'sc' é Sale Chat, que hoje SÓ captura, não envia. Escolher uma
+        // instância 'sc' aqui mandaria o texto pra uma instância que nem existe na Evolution.
+        "SELECT instance FROM wa_conn WHERE state='open' AND updated_at > strftime('%s','now')-600 AND (instance=? OR instance LIKE ?) ORDER BY updated_at DESC LIMIT 1"
+      ).bind('ax_' + atId, 'ax_' + atId + '_%').first();
+      if (row && row.instance) return row.instance;
+    }
+  } catch (_) {}
+  return String(hint || '').trim();
+}
 async function handleWASend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
-  // Roteamento: se o vendedor tem número OFICIAL (Cloud API) verificado, envia por ele. Transparente.
+  // Roteamento: responde PELO MESMO CAMINHO em que a conversa está.
+  // A conversa numa instância POR NÚMERO (ax_<at>_<8díg>) é da Evolution: responde por ela.
+  // Sem essa checagem, um vendedor que também tem número oficial respondia SEMPRE pelo oficial,
+  // ou seja: o lead escrevia pro número A e recebia resposta do número B (quebra a conversa no
+  // celular dele e queima a confiança). Só cai na Cloud API quando a conversa é do número oficial.
   const _atId = (isDirector(u) && body.at_id != null) ? String(body.at_id) : String(u.id);
+  const _convEvo = /^ax_.+_\d{8}$/.test(String(body.instance || ''));
   try {
-    const apiNum = await resolveApiNumber(env, { atId: _atId });
+    const apiNum = _convEvo ? null : await resolveApiNumber(env, { atId: _atId });
     if (apiNum && apiNum.verified) {
       const r = await _waCloudSendText(env, _atId, body.number, body.text);
       if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
@@ -2707,7 +2750,8 @@ async function handleWASend(req, env) {
   } catch (_) {}
   const cfg = await getWAConfig(env);
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
-  const instance = String(body.instance || cfg.instance || '').trim();
+  const instance = (await _resolveSendInstance(env, { atId: _atId, phone: body.number, hint: body.instance }))
+    || String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
   const number = waNumber(body.number);
   if (!number) return err('Número inválido');
@@ -3043,7 +3087,8 @@ async function handleWASendAudio(req, env) {
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const body = await req.json().catch(() => null);
   if (!body || !body.number) return err('Campo obrigatório: number');
-  const instance = String(body.instance || cfg.instance || '').trim();
+  const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
+    || String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
   const number = waNumber(body.number); if (!number) return err('Número inválido');
   let audioB64 = body.audio_base64 ? String(body.audio_base64).replace(/^data:[^;]+;base64,/, '') : '';
@@ -3066,7 +3111,8 @@ async function handleWASendMedia(req, env) {
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.media) return err('Campos obrigatórios: number, media');
-  const instance = String(body.instance || cfg.instance || '').trim();
+  const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
+    || String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
   const number = waNumber(body.number); if (!number) return err('Número inválido');
   const media = String(body.media).replace(/^data:[^;]+;base64,/, '');
