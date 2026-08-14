@@ -3178,6 +3178,16 @@ async function handleWAInstanceCreate(req, env, ctx) {
   const body = await req.json().catch(() => null);
   const name = String(body?.instanceName || '').trim();
   if (!name) return err('instanceName obrigatório');
+  // RESET EXPLÍCITO (só quando o usuário pede, ex: clicou em "conectado com outro número").
+  // Derruba a sessão atual de verdade e apaga a instância, pra o QR novo nascer limpo. Não fica no
+  // caminho normal de conexão de propósito: é lento (logout + delete + espera) e antes rodava em
+  // TODO clique, o que deixava conectar um número em ~10s.
+  if (body?.reset) {
+    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+    try { await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
+    try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}
+    await new Promise((r) => setTimeout(r, 1500));   // o Baileys precisa de um respiro antes de recriar
+  }
   // CAMINHO CURTO, igual à dash antiga (que conectava quase instantâneo): cria (idempotente) e já
   // pede o QR. Nada de checar estado, deslogar, apagar e recriar aqui — isso custava ~10s por clique
   // e é o que deixou a conexão lenta e instável. Se não vier QR, quem trata é o front (reset + retry).
@@ -3194,7 +3204,11 @@ async function handleWAInstanceCreate(req, env, ctx) {
   // O QR já costuma vir no create (qrcode:true); senão, UMA tentativa pelo connect.
   let qr = cr.data?.qrcode?.base64 || cr.data?.base64 || cr.data?.qr || null;
   let pairingCode = cr.data?.qrcode?.pairingCode || cr.data?.pairingCode || cr.data?.code || null;
-  if (!qr) {
+  // No reset, o Baileys às vezes leva um instante pra ter o QR pronto: tenta mais de uma vez.
+  // No fluxo normal segue uma tentativa só (é o que mantém a conexão rápida).
+  const tentativas = body?.reset ? 4 : 1;
+  for (let i = 0; i < tentativas && !qr; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 700));
     const res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
     if (res._noconfig) return err('WhatsApp não configurado', 503);
     qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
@@ -5636,11 +5650,20 @@ function _lastDigitsEq(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8),
 function _servConnOk(liveSet, inst, chipNum){
   if(!liveSet) return true;                             // sem info → fail-open
   if(!chipNum) return false;
+  const base=String(inst).replace(/_\d{8}$/,'');        // ax_<at> (identidade do vendedor)
+  const alvo=base+'_'+String(chipNum).replace(/\D/g,'').slice(-8);   // instância POR NÚMERO deste chip
+  // 1) a instância própria deste número está aberta? confere o dono quando já resolvido.
+  if(liveSet.has(alvo)){ const cn=liveSet.get(alvo); if(!cn || _lastDigitsEq(cn, chipNum)) return true; }
+  // 2) senão procura o número SÓ entre as instâncias DESTE vendedor.
+  // Antes varria TODAS: um número aberto na instância de OUTRO vendedor aprovava este chip, e a
+  // roleta mandava lead pra um número que quem atende é outra pessoa (a mensagem chega na instância
+  // do outro e a venda é creditada pra ele). Caso real com o número do Murilo no slot do Guilherme.
   let anyKnown=false;
-  for(const cn of liveSet.values()){                   // liveSet: instância(open) → número conectado
-    if(cn){ anyKnown=true; if(_lastDigitsEq(cn, chipNum)) return true; }   // número aberto em ALGUMA instância
+  for(const [k,cn] of liveSet.entries()){
+    if(k!==base && !String(k).startsWith(base+'_')) continue;
+    if(cn){ anyKnown=true; if(_lastDigitsEq(cn, chipNum)) return true; }
   }
-  if(anyKnown) return false;                            // sabemos os números abertos e este não está entre eles
+  if(anyKnown) return false;                            // sabemos os números abertos deste vendedor e este não está
   return liveSet.has(inst);                             // nenhum número conhecido → fail-open pelo slot
 }
 // Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
