@@ -3225,7 +3225,25 @@ async function handleWAInstanceStatus(req, env) {
   const res = await evoFetch(env, `/instance/connectionState/${encodeURIComponent(name)}`);
   if (res._noconfig) return err('WhatsApp não configurado', 503);
   if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
-  return json({ ok: true, instance: name, state: res.data?.instance?.state || 'unknown' });
+  const state = res.data?.instance?.state || 'unknown';
+  // Ao CONECTAR, já devolve QUAL número entrou e grava no wa_conn na hora. Assim a pressel fica
+  // verde imediatamente, sem esperar o próximo ciclo de leitura (eram ~5s de vermelho depois de
+  // um QR que já tinha dado certo). Só custa a consulta extra no momento da conexão.
+  let number = '';
+  if (state === 'open') {
+    try {
+      const live = await _evoInstances(env);
+      const it = (live || []).find((x) => x.name === name);
+      number = (it && it.number) || '';
+      if (number) {
+        await env.DB.prepare(
+          `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'open', ?, strftime('%s','now'))
+           ON CONFLICT(instance) DO UPDATE SET state='open', number=excluded.number, updated_at=excluded.updated_at`
+        ).bind(name, number).run();
+      }
+    } catch (_) {}
+  }
+  return json({ ok: true, instance: name, state, number });
 }
 
 // POST /api/wa/instance/logout → { instance } desconecta e remove a instância
