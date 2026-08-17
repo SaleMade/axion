@@ -55,10 +55,12 @@ const PAYT_TOKEN_DEFAULT = 'b562d560380649cbc6c8ade3550eb7f8';
 // Segredo do webhook da FIVE (mesmo esquema do PAYT_TOKEN). Trocar via `wrangler secret put FIVE_TOKEN`.
 // A URL cadastrada na Five deve virar:  <API_BASE>/five/glico-six?k=<FIVE_TOKEN>
 const FIVE_TOKEN_DEFAULT = '78c6313579a0264cbf1eebef2b530570';
-// Modo estrito: quando true, REJEITA /five sem o ?k= correto. FICA FALSE até o Bruno trocar a URL
-// na Five (senão fail-closed derruba os pedidos). Ligar (true + deploy) depois que o five_debug
-// mostrar os eventos chegando com o ?k= certo.
-const FIVE_STRICT = false;
+// Modo estrito: REJEITA /five sem o ?k= correto. Ficou FALSE até a URL na Five ser trocada; a
+// condição pra ligar era o five_debug mostrar os eventos chegando com o ?k= certo, e em 17/08/2026
+// os 16 eventos gravados vieram TODOS com a chave certa (uma query só, `?k=78c6...`). Ligado.
+// Sem isso, quem descobrisse a URL conseguia inventar pedido, receita e comissão na dash.
+// O log cru do five_debug roda ANTES desta checagem de propósito: evento recusado ainda deixa rastro.
+const FIVE_STRICT = true;
 
 // Chave única do webhook do FORNECEDOR — leads vindos de plataformas externas
 // (ex: ferramenta de captação, planilha automática, integração com landing page)
@@ -97,7 +99,8 @@ async function authUser(req, env) {
   const token = m[1];
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB.prepare(
-    `SELECT s.expires_at, s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct
+    `SELECT s.expires_at, s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct,
+            u.photo, u.banner, u.email
      FROM sessions s JOIN users u ON s.user_id = u.id
      WHERE s.token = ? AND s.expires_at > ?`
   ).bind(token, now).first();
@@ -134,7 +137,7 @@ async function handleLogin(req, env) {
   const pwdHash = await sha256Hex(body.password);
 
   const user = await env.DB.prepare(
-    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct FROM users WHERE lower(login) = ?'
+    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct, photo, banner, email FROM users WHERE lower(login) = ?'
   ).bind(login).first();
 
   if (!user || user.pwd_hash !== pwdHash) {
@@ -409,6 +412,39 @@ function _isFiveDemo(p) {
   const doc = String((p.customer && p.customer.document) || '').replace(/\D/g, '');
   return pj.includes('demo') || cn.includes('fict') || doc === '12345678900';
 }
+// Meses do tratamento a partir do título da oferta ("Glico Six - 6 Meses" -> 6). O tratamento é um
+// frasco por mês, então mês = frasco. É a única fonte que existe: a Five manda `numberOfItems` = 0
+// no pedido real (conferido no payload salvo), e sem isso todo kit entra valendo 1 frasco.
+function _mesesDoTitulo(titulo) {
+  const m = String(titulo || '').match(/(\d+)\s*m[eê]s/i);
+  if (m) return Math.max(1, parseInt(m[1], 10));
+  const u = String(titulo || '').match(/(\d+)\s*(frasco|pote)/i);
+  return u ? Math.max(1, parseInt(u[1], 10)) : 0;
+}
+// CATÁLOGO DE KITS NASCENDO SOZINHO DO PEDIDO.
+// `custos.kits` alimenta estoque, custo por frasco, conferência de devolução e o painel de Início.
+// Estava VAZIO (o Bruno nunca cadastrou na mão) e por isso tudo que conta frasco caía em 1. Cada
+// pedido da Five já traz oferta, título e preço; então o kit se cadastra na primeira venda.
+// Só PREENCHE o que falta: se ele editou preço ou frascos, o que vale é o que ele digitou.
+function _fiveUpsertKit(data, offer, prodNome) {
+  if (!offer || !offer.id) return;
+  if (!data.custos || typeof data.custos !== 'object') data.custos = {};
+  if (!Array.isArray(data.custos.kits)) data.custos.kits = [];
+  const lista = data.custos.kits;
+  const oid = String(offer.id);
+  const titulo = offer.title || prodNome || 'Kit';
+  const meses = _mesesDoTitulo(titulo);
+  const preco = _num(offer.price) || 0;
+  const k = lista.find((x) => x && String(x.offer_id || x.id) === oid);
+  if (!k) {
+    lista.push({ id: oid, offer_id: oid, nome: titulo, label: titulo, preco, frascos: meses || 0, ativo: true, origem: 'five' });
+    return;
+  }
+  if (!k.offer_id) k.offer_id = oid;
+  if (!k.nome) k.nome = titulo;
+  if (!Number(String(k.preco || '').toString().replace(',', '.')) && preco) k.preco = preco;
+  if (!Number(k.frascos) && meses) k.frascos = meses;
+}
 async function _fiveUpsertLead(env, p) {
   const oid = p && (p.orderId || (p.order && p.order.id));
   if (!oid || _isFiveDemo(p)) return;
@@ -430,6 +466,7 @@ async function _fiveUpsertLead(env, p) {
     if (!row) return;
     let data; try { data = JSON.parse(row.data); } catch (_) { return; }
     if (!Array.isArray(data.leads)) data.leads = [];
+    _fiveUpsertKit(data, offer, prod.name);   // catálogo de kits se cadastra na primeira venda
     let lead = data.leads.find((l) => l && String(l.five_id) === String(oid));
     if (!lead && (_cpfC || _waC.length >= 8)) {
       // Adota um lead que JÁ existe (pressel/roleta/manual) do MESMO cliente sem five_id,
@@ -470,6 +507,15 @@ async function _fiveUpsertLead(env, p) {
       const _cs = String(charge.status || '').toUpperCase();
       if (charge.amount != null) lead.vl = Number(charge.amount) || lead.vl;
       if (charge.paymentMethod) lead.pgto = charge.paymentMethod;
+      // MODALIDADE (antecipado x na entrega) pelo meio de pagamento da Five. O card do Kanban mostra
+      // isso num selo, e sem esta linha todo pedido nascido na Five ficava no default 'entrega'
+      // mesmo tendo sido pago no cartão. Só decide quando a Five diz alguma coisa reconhecível, e
+      // NÃO mexe no que veio do nosso cadastro (lá quem escolheu foi o vendedor, na hora da venda).
+      if (String(lead.orig || '') === 'Five') {
+        const _pm = String(charge.paymentMethod || '');
+        if (/cod|cash|delivery|entrega|contra/i.test(_pm)) lead.mod = 'entrega';
+        else if (/credit|debit|card|cart|pix|billet|boleto|bank/i.test(_pm)) lead.mod = 'antecipado';
+      }
       if (_cs === 'PAID') lead.spg = 'Pago';
       else if (/REFUND|CHARGEBACK|CANCEL|ESTORN/.test(_cs)) lead.spg = 'Recusado'; // estorno/chargeback tira o Pago
       if (Array.isArray(p.commissions) && p.commissions.length) {
@@ -746,6 +792,75 @@ async function handleMoveLead(req, env, leadId) {
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
     if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, from, to: col });
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
+// ACEITAR um pedido das Aceitações — e NÃO deixar virar dois cards.
+//
+// O fluxo do Bruno é: o pedido chega na dash → ele copia e lança na FIVE → só então clica em
+// Aceitar. Ou seja, o webhook da Five costuma chegar ANTES do aceite. Aí ficam dois cards do mesmo
+// cliente: o que a Five criou (com five_id) e o nosso manual indo pra "Enviado".
+//
+// O caminho contrário já era tratado (`_fiveUpsertLead` adota lead sem five_id casando por CPF),
+// mas ele só roda quando a Five fala. Depois que o card da Five existe, os eventos seguintes acham
+// pelo five_id e nunca mais procuram o irmão manual — o duplicado ficava pra sempre.
+//
+// Então o aceite faz a mesma checagem, do outro lado: acha o pedido da Five pelo CPF (ou pelos 8
+// últimos dígitos do telefone), joga pra dentro dele o que só o nosso tem (vendedor, comissão,
+// modalidade, observação, tags, agendamento) e APAGA o manual. Sem CPF batendo, é só mover pra
+// "Enviado" como antes — e aí quem adota é a Five quando chegar.
+async function handleAceitarLead(req, env, leadId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const col = (body && body.col) || 'Enviado';
+  const soDig = (v) => String(v == null ? '' : v).replace(/\D/g, '');
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data;
+    try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const i = leads.findIndex((l) => String(l.id) === String(leadId));
+    if (i < 0) return err('Lead não encontrado', 404);
+    const lead = leads[i];
+    const cpf = soDig(lead.cpf), wa = soDig(lead.wa);
+    const nowISO = new Date().toISOString();
+    // Irmão da Five: mesmo cliente, já com five_id. CPF é a chave (o Bruno pediu assim e é o que
+    // não muda); telefone é desempate pra pedido lançado sem documento.
+    const irmao = (cpf || wa.length >= 8) ? leads.find((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
+      (cpf && soDig(l.cpf) === cpf) ||
+      (!cpf && wa.length >= 8 && soDig(l.wa).length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8))
+    )) : null;
+    let resposta;
+    if (irmao) {
+      // O que a Five NÃO sabe vem do nosso cadastro. Só preenche o que está vazio lá, com uma
+      // exceção: o VENDEDOR. Quem registrou o pedido sabe de quem ele é; a Five no máximo deduz
+      // pelo afiliado, e errar isso é errar comissão.
+      if (lead.at) irmao.at = lead.at;
+      const puxa = ['nome', 'cpf', 'wa', 'email', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'obs', 'mod', 'pgto', 'agend', 'link'];
+      for (const k of puxa) if ((irmao[k] == null || irmao[k] === '') && lead[k] != null && lead[k] !== '') irmao[k] = lead[k];
+      if (!Number(irmao.vl) && Number(lead.vl)) irmao.vl = Number(lead.vl);
+      if (!Number(irmao.com_pct) && Number(lead.com_pct)) irmao.com_pct = Number(lead.com_pct);
+      if (Array.isArray(lead.tags) && lead.tags.length) irmao.tags = [...new Set([...(Array.isArray(irmao.tags) ? irmao.tags : []), ...lead.tags])];
+      if (Array.isArray(lead.comments) && lead.comments.length) irmao.comments = [...(Array.isArray(irmao.comments) ? irmao.comments : []), ...lead.comments];
+      if (!Array.isArray(irmao.hist)) irmao.hist = [];
+      irmao.hist.push({ from: irmao.col || '—', to: irmao.col || '—', who: String(u.id), time: nowISO, note: 'aceite juntou o cadastro manual #' + String(lead.id) + ' (mesmo CPF)' });
+      irmao.aceito = true; irmao.aceito_em = nowISO;
+      leads.splice(i, 1);   // o manual sai: o pedido da Five é o card que a operação acompanha
+      resposta = { ok: true, fundido: true, lead_id: irmao.id, five_id: irmao.five_id, col: irmao.col };
+    } else {
+      const from = lead.col;
+      lead.col = col; lead.aceito = true; lead.aceito_em = nowISO;
+      if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: nowISO, note: 'aceito (aguardando o pedido da Five casar por CPF)' });
+      resposta = { ok: true, fundido: false, lead_id: lead.id, col };
+    }
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'aceite:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ...resposta, version: newVer });
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
@@ -2159,6 +2274,18 @@ async function _casState(env, curVer, state, who) {
 }
 
 async function handlePaytWebhook(req, env, urlToken) {
+  // LOG CRU ANTES DE QUALQUER COISA, igual ao da Five. Sem isso a gente fica CEGO: hoje não dá pra
+  // saber se a Payt está postando e a dash rejeitou (token errado, payload estranho) ou se ela
+  // simplesmente nunca postou — e a diferença entre as duas muda quem tem que mexer onde.
+  const _tsPayt = Math.floor(Date.now() / 1000);
+  let _rawPayt = '';
+  try { _rawPayt = await req.clone().text(); } catch (_) { _rawPayt = ''; }
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS payt_debug (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, token_ok INTEGER, method TEXT, body TEXT)').run();
+    await env.DB.prepare('INSERT INTO payt_debug (ts, token_ok, method, body) VALUES (?,?,?,?)')
+      .bind(_tsPayt, urlToken === ((env && env.PAYT_TOKEN) || PAYT_TOKEN_DEFAULT) ? 1 : 0, req.method, String(_rawPayt).slice(0, 40000)).run();
+    await env.DB.prepare("DELETE FROM payt_debug WHERE ts < strftime('%s','now')-1209600").run();  // 14 dias, não vira depósito
+  } catch (_) {}
   // Validação da chave única
   const expected = (env && env.PAYT_TOKEN) || PAYT_TOKEN_DEFAULT;
   if (urlToken !== expected) {
@@ -7279,6 +7406,8 @@ export default {
       if (req.method === 'POST'  && path === '/api/acl/save')       return handleAclSave(req, env);
       const leadMoveMatch = path.match(/^\/api\/lead\/([^/]+)\/move$/);
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
+      const leadAceiteMatch = path.match(/^\/api\/lead\/([^/]+)\/aceitar$/);
+      if (req.method === 'POST'  && leadAceiteMatch)         return handleAceitarLead(req, env, decodeURIComponent(leadAceiteMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
       if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
       const leadUpdMatch = path.match(/^\/api\/lead\/([^/]+)$/);
