@@ -998,9 +998,22 @@ async function handlePresselSave(req, env) {
         const off = {}; for (const k in v.off) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.off[k]) off[nk] = true; }
         if (Object.keys(off).length) o.off = off;
       }
+      // Números SEM VENDEDOR (v.at === '__sd'): aqui o mapa é de LIGADOS, não de desligados. Número
+      // solto entra na roleta só quando alguém liga explicitamente — o padrão "ausente = ligado" dos
+      // vendedores colocaria todo número órfão do cadastro pra receber lead sem ninguém pedir.
+      if (v && v.on && typeof v.on === 'object') {
+        const on = {}; for (const k in v.on) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.on[k]) on[nk] = true; }
+        if (Object.keys(on).length) o.on = on;
+      }
       return o;
     }).filter((v) => v.at);
   }
+  // Link fixo do botão: só http/https entra (um javascript: aqui viraria execução na página do anúncio).
+  if ('link' in patch) {
+    const u2 = String(patch.link == null ? '' : patch.link).trim().slice(0, 500);
+    target.link = (!u2 || /^https?:\/\//i.test(u2)) ? u2 : (target.link || '');
+  }
+  if ('link_on' in patch) target.link_on = !!patch.link_on;
   if (Array.isArray(patch.elementos)) target.elementos = patch.elementos;   // editor de elementos valida no cliente
   const newVer = (row.version || 0) + 1;
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
@@ -6098,6 +6111,33 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     if(!nums.length) continue;                                                      // nenhum número ligado/conectado → fora da roleta
     out.push({at:String(v.at), nums});
   }
+  // NÚMEROS SEM VENDEDOR (pedido do Giovane, 17/08/2026). Ele distribui os leads entre os
+  // atendentes num sistema DELE, então exigir que cada número esteja dentro de um vendedor aqui só
+  // dava trabalho. Aqui o número entra na roleta sozinho.
+  // Duas diferenças de propósito em relação ao número com dono:
+  //  - é OPT-IN por número (`on`), nunca ligado por ausência. O padrão "ausente = ligado" vale pra
+  //    quem tem dono; aplicar isso aqui colocaria na roleta todo número solto do cadastro.
+  //  - NÃO passa pelo _servConnOk. Esse número costuma estar fora da nossa infra (é justamente o
+  //    caso de quem usa outro distribuidor), então a checagem de conexão reprovaria sempre. Quem
+  //    liga assume que ele está no ar; a tela avisa isso com todas as letras.
+  // A instância fica `ax__<8 dígitos>`: _atFromInst devolve string vazia, então o lead nasce SEM
+  // vendedor em vez de nascer com um dono inventado.
+  try{
+    const sd = _vs.find(v => v && String(v.at) === '__sd');
+    const liga = (sd && sd.on && typeof sd.on === 'object') ? sd.on : null;
+    if(liga){
+      const nums = [];
+      for(const c of chips){
+        if(!c || c.at) continue;                                   // aqui só entra quem NÃO tem dono
+        if(c.st === 'aquecimento' || c.st === 'banido') continue;
+        if(!isEmUso(c) || !c.num || !okWa(c)) continue;
+        const nk = String(c.num).replace(/\D/g,'').slice(-8);
+        if(!liga[nk]) continue;                                    // ligado um por um, na mão
+        nums.push({num:c.num, inst:'ax__'+nk});
+      }
+      if(nums.length) out.push({at:'', nums});
+    }
+  }catch(_){}
   return out;
 }
 // LEADS DE HOJE POR NÚMERO — fonte de verdade do placar da roleta.
@@ -6314,7 +6354,10 @@ async function _bumpPressel(env, id, field){
 async function handlePresselDiag(req, env){
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const data = await _getDashData(env);
+  // SEM CACHE (maxAge 0). O diagnóstico é lido logo depois de ligar/desligar um número, e o cache de
+  // 8s do estado devolvia a resposta ANTERIOR: o Bruno desligou o número e a faixa continuou verde.
+  // É uma tela de diretor, uma leitura por vez — ler direto do banco aqui não pesa.
+  const data = await _getDashData(env, 0);
   const pressels = Array.isArray(data.pressels) ? data.pressels : [];
   const chips = Array.isArray(data.chips) ? data.chips : [];
   const liveSet = await _presselLiveSet(env);
@@ -7248,14 +7291,20 @@ async function handlePresselPublic(req, env, id){
   // mensagem do WhatsApp com o código do clique — pra atribuição exata pelo código
   let waMsg = String(p.msg||'');
   if(leadCode){ waMsg += (waMsg?'\n':'') + 'Código de desconto "'+leadCode+'"!'; }
-  const wa = pick ? (_waLink(pick.num, waMsg) || '') : '';
+  // LINK FIXO NO BOTÃO (pedido do Bruno em 17/08/2026): com o interruptor ligado, a pressel deixa de
+  // distribuir e manda todo mundo pro endereço escolhido — vira uma página de anúncio comum. Só
+  // http/https: sem isso um `javascript:` colado no campo viraria execução na página do anúncio.
+  const _destino = (p.link_on && /^https?:\/\//i.test(String(p.link||'').trim())) ? String(p.link).trim() : '';
+  const wa = _destino || (pick ? (_waLink(pick.num, waMsg) || '') : '');
   const waJson=JSON.stringify(wa);
   let _wd=String((pick&&pick.num)||'').replace(/\D/g,''); if(_wd && _wd.length<=11) _wd='55'+_wd;
   // deep link whatsapp:// abre o app DIRETO com o texto (o CÓDIGO) preenchido. A NAVEGAÇÃO direta é o
   // único jeito que preenche de verdade no celular — o fetch/JSON quebrava isso e todo lead chegava
   // SEM código (medido 25/07: 63 pessoas, 0 códigos). Voltamos pro que funciona; o cache do wa.me no
   // TikTok é problema do lado DELE (resolve trocando a URL do anúncio / migrando pra API oficial).
-  const waAppJson=JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));
+  // Com link fixo não existe deep link de app: o destino é o mesmo dos dois lados, senão o go()
+  // tentaria abrir "whatsapp://send?phone=" vazio antes de cair no link.
+  const waAppJson=_destino ? waJson : JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));
   const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
