@@ -548,10 +548,16 @@ async function _fiveUpsertLead(env, p) {
 }
 
 // Lista os pedidos ingeridos da Five (só diretor). Consumido pelo dash de produtor.
+// O GESTOR DE TRÁFEGO também lê daqui, mas SEM dinheiro e SEM cliente. Ele precisa do volume (quantos
+// pedidos, de que produto, em que dia) pra medir campanha; comissão, dado do comprador e endereço não
+// são assunto dele. Antes o gate era binário (só diretor) e a dash dele abria vazia, que é pior que
+// não ter a tela: parece que a campanha não vendeu nada.
+const _gestorLe = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor';
 async function handleFiveOrders(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_gestorLe(u)) return err('Sem permissão', 403);
+  const _full = isDirector(u);
   try {
     await _ensureFiveTables(env);
     // Período opcional (startTs/endTs em ms). created_at/updated_at são epoch em SEGUNDOS.
@@ -566,9 +572,13 @@ async function handleFiveOrders(req, env) {
     const rows = await env.DB.prepare(`SELECT * FROM five_orders ${where} ORDER BY updated_at DESC LIMIT 20000`).bind(...binds).all();
     const orders = (rows.results || []).map(r => {
       const { raw, ...rest } = r;
-      return { ...rest, customer_address: r.customer_address ? safeJson(r.customer_address) : null, commissions: r.commissions ? safeJson(r.commissions) : [] };
+      const cheio = { ...rest, customer_address: r.customer_address ? safeJson(r.customer_address) : null, commissions: r.commissions ? safeJson(r.commissions) : [] };
+      if (_full) return cheio;
+      // Sem dinheiro e sem cliente: o que sobra é o que mede campanha (produto, oferta, status, data).
+      const { customer_name, customer_doc, customer_mail, customer_phone, customer_address, commissions, charge_code, ...semPii } = cheio;
+      return semPii;
     });
-    return json({ orders });
+    return json({ orders, escopo: _full ? 'full' : 'gestor' });
   } catch (e) { return json({ orders: [], error: String((e && e.message) || e) }); }
 }
 
@@ -601,7 +611,10 @@ async function handleFiveSummary(req, env) {
 async function handleFiveProducts(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  // Mesma regra dos pedidos: o gestor de tráfego precisa saber O QUE vende (produto, oferta, preço,
+  // volume) pra escolher criativo e oferta. Comissão e afiliado saem do payload dele.
+  if (!_gestorLe(u)) return err('Sem permissão', 403);
+  const _full = isDirector(u);
   try {
     await _ensureFiveTables(env);
     const prods = (await env.DB.prepare(`SELECT o.product_id AS product_id, COALESCE(p.name,o.product_name,'Produto') AS name,
@@ -639,7 +652,12 @@ async function handleFiveProducts(req, env) {
       const imgs = (await env.DB.prepare('SELECT product_id, image FROM product_images').all()).results || [];
       for (const im of imgs) { const t = byId[im.product_id]; if (t) t.image = im.image; }
     } catch (_) { /* imagem é opcional */ }
-    return json({ products: Object.values(byId) });
+    const saida = Object.values(byId).map((p) => {
+      if (_full) return p;
+      const { comissao, comPct, afiliados, ...semDinheiro } = p;   // comissão e afiliado não são assunto do gestor
+      return semDinheiro;
+    });
+    return json({ products: saida, escopo: _full ? 'full' : 'gestor' });
   } catch (e) { return json({ products: [], error: String((e && e.message) || e) }); }
 }
 
@@ -1477,6 +1495,15 @@ async function handleListUsers(req, env) {
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
     ).all();
+  }
+  // Comissão, salário e e-mail são do DIRETOR. Todo cargo restrito (vendedor, cobrador, gestor de
+  // tráfego) chama este endpoint só pra saber NOME de quem é quem, e estava recebendo a folha inteira
+  // da equipe junto. Aqui a resposta encolhe pro que a tela dele precisa.
+  if (!isDirector(u)) {
+    return json({ users: (rows.results || []).map((r) => ({
+      id: r.id, name: r.name, login: r.login, role: r.role, abbr: r.abbr,
+      color: r.color, bg: r.bg, photo: r.photo, archived: r.archived,
+    })) });
   }
   return json({ users: rows.results });
 }
@@ -7140,7 +7167,10 @@ async function _presselsTotalData(env, day, view, per, full){
   const _chipsDo=(at)=>chips.filter(c=>String(c.at)===String(at) && c.st!=='aquecimento' && c.st!=='banido');
   const _splitAts=new Set();
   pressels.forEach(p=>(p.vendedores||[]).forEach(v=>{ if(!v||!v.at||v.reserva_mode!=='split'||v.reserva_on===false) return; const mine=_chipsDo(v.at); if(mine.some(_isEmUso)&&mine.some(c=>c.bkp===true)) _splitAts.add(String(v.at)); }));
-  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); const nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean); if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); } return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };   // TODOS os "Em uso" (roleta multi-número)
+  // TODOS os "Em uso" (roleta multi-número). Fora do diretor o número sai MASCARADO: esta tela é a
+  // que o gestor de tráfego usa, e o telefone dos chips é o ativo mais sensível da operação (é o que
+  // permite mapear a roleta inteira por fora). Ele precisa do volume por vendedor, não do número.
+  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); let nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean); if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); } if(!full) nums=nums.map(n=>{ const p=String(n||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):'—'; }); return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };
   const _rankVend=(vend)=>{ const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0?(Number(x.vendas)||0)/c:0; }; return (vend||[]).slice().sort((a,b)=> ((Number(b.vendas)||0)-(Number(a.vendas)||0)) || (cv(b)-cv(a)) || ((Number(b.contatos)||0)-(Number(a.contatos)||0))); };
   const pad=n=>String(n).padStart(2,'0');
   const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return ''; return n.startsWith('55')?n.slice(2):n; };
