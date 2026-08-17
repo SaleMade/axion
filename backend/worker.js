@@ -1315,7 +1315,7 @@ async function handleListUsers(req, env) {
   let rows;
   try {
     rows = await env.DB.prepare(
-      'SELECT id, login, name, abbr, role, color, bg, com_pct, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, email, com_ant, com_ent, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
       'COALESCE(archived, 0) AS archived, archived_at, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
@@ -1333,8 +1333,13 @@ async function handleListUsers(req, env) {
     } catch (_) {}
     try { await env.DB.prepare('ALTER TABLE users ADD COLUMN photo TEXT').run(); } catch (_) {}
     try { await env.DB.prepare('ALTER TABLE users ADD COLUMN banner TEXT').run(); } catch (_) {}
+    // Vendedores (14/08/2026): e-mail e as DUAS comissões (antecipado x entrega), como na Midas.
+    // É por aqui que elas nascem: a primeira listagem falha por coluna inexistente e cai neste catch.
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN email TEXT').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ant REAL').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ent REAL').run(); } catch (_) {}
     rows = await env.DB.prepare(
-      'SELECT id, login, name, abbr, role, color, bg, com_pct, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
+      'SELECT id, login, name, abbr, role, color, bg, com_pct, email, com_ant, com_ent, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
       'COALESCE(archived, 0) AS archived, archived_at, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
@@ -1351,11 +1356,14 @@ async function handleCreateOrUpdateUser(req, env) {
 
   const body = await req.json().catch(() => null);
   if (!body) return err('Body inválido');
-  const { id, login, password, name, abbr, role, color, bg, com_pct, salario, photo, banner } = body;
+  const { id, login, password, name, abbr, role, color, bg, com_pct, salario, photo, banner, email, com_ant, com_ent } = body;
   if (!name || !login || !role) return err('Campos obrigatórios: name, login, role');
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN salario REAL DEFAULT 0').run(); } catch (_) {}
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN photo TEXT').run(); } catch (_) {}
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN banner TEXT').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN email TEXT').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ant REAL').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ent REAL').run(); } catch (_) {}
 
   const loginNorm = String(login).toLowerCase().trim();
 
@@ -1391,18 +1399,23 @@ async function handleCreateOrUpdateUser(req, env) {
   const roleB = canPriv ? role : null;
   const comPctB = (!canPriv || com_pct === undefined) ? null : (Number(com_pct) || 0);
   const salarioB = (!canPriv || salario === undefined) ? null : (Number(salario) || 0);
+  // E-mail e as duas comissões: mesma regra dos privilegiados (só diretor muda) e COALESCE
+  // pra o perfil pessoal, que manda só name/login/role, não zerar o que o diretor cadastrou.
+  const emailB = (!canPriv || email === undefined) ? null : (String(email || '').trim() || null);
+  const comAntB = (!canPriv || com_ant === undefined) ? null : (Number(com_ant) || 0);
+  const comEntB = (!canPriv || com_ent === undefined) ? null : (Number(com_ent) || 0);
   if (existing) {
     // Update
     await env.DB.prepare(
-      `UPDATE users SET login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner) WHERE id=?`
-    ).bind(loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, id).run();
+      `UPDATE users SET login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner), email=COALESCE(?, email), com_ant=COALESCE(?, com_ant), com_ent=COALESCE(?, com_ent) WHERE id=?`
+    ).bind(loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, emailB, comAntB, comEntB, id).run();
     return json({ ok: true, id, action: 'updated' });
   } else {
     // Create — gera id se não veio
     const newId = id || `${role}_${Math.random().toString(36).slice(2, 8)}`;
     await env.DB.prepare(
-      `INSERT INTO users (id, login, pwd_hash, name, abbr, role, color, bg, com_pct, salario, photo, banner) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(newId, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, Number(salario) || 0, photoB, bannerB).run();
+      `INSERT INTO users (id, login, pwd_hash, name, abbr, role, color, bg, com_pct, salario, photo, banner, email, com_ant, com_ent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(newId, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, Number(salario) || 0, photoB, bannerB, emailB, comAntB, comEntB).run();
     return json({ ok: true, id: newId, action: 'created' });
   }
 }
@@ -4328,6 +4341,72 @@ async function _dcApiGet(env, path) {
     return await r.json();
   } catch (_) { return null; }
 }
+// ── Sincronismo do INBOX: Datacrazy → wa_chats/wa_messages ──────────────────
+// Auditado em 15/08/2026: o inbox da dash estava com ZERO conversa enquanto o Datacrazy tinha 11.
+// Motivo: os números vivem em COEXISTÊNCIA e quem recebe o webhook da Meta é o app do Datacrazy
+// (conferido no subscribed_apps da WABA: só o número 6200 tem o nosso app junto, e mesmo assim
+// nada chegava). Depender do "forward por Automação" deixou a tela vazia e ninguém percebeu.
+// Aqui a gente PUXA: a API do Datacrazy lista conversas e mensagens, e isso alimenta as MESMAS
+// tabelas que o inbox já lê. Idempotente (msg_id é chave), então rodar de novo não duplica.
+async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
+  const key = await _readConfig(env, 'dc_api_key');
+  if (!key) return { ok: false, motivo: 'sem_dc_api_key' };
+  await _waEnsureTables(env);
+  const convs = await _dcApiGet(env, `/conversations?limit=${limiteConversas}`);
+  const lista = Array.isArray(convs) ? convs : (convs && Array.isArray(convs.data) ? convs.data : []);
+  let nChats = 0, nMsgs = 0;
+  for (const c of lista) {
+    const phone = String(c?.contact?.phoneNumber || c?.contact?.contactId || '').replace(/\D/g, '');
+    if (!phone) continue;
+    // instância = número NOSSO que recebeu. Mesmo formato do resto da dash (ax_<at>_<8díg>) quando
+    // o número já tem dono; senão marca a origem pra não sumir da lista do diretor.
+    const selfNum = String(c?.instance?.config?.phoneNumber || '').replace(/\D/g, '');
+    const dono = selfNum ? await env.DB.prepare('SELECT at_id FROM wa_api_numbers WHERE display_phone = ?').bind(selfNum).first().catch(() => null) : null;
+    const inst = (dono && dono.at_id) ? ('ax_' + dono.at_id + '_' + selfNum.slice(-8)) : ('dc_' + (selfNum || 'sem'));
+    const nome = String(c?.name || c?.contact?.name || '').slice(0, 120);
+    const lm = c?.lastMessage || {};
+    const ts = Math.floor(new Date(c?.lastMessageDate || lm.createdAt || Date.now()).getTime() / 1000);
+    const dir = lm.received ? 'in' : 'out';
+    const txt = String(lm.body || '').slice(0, 500);
+    await env.DB.prepare(
+      `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
+       VALUES (?,?,?,?,?,?,?,strftime('%s','now'))
+       ON CONFLICT(phone) DO UPDATE SET
+         instance=excluded.instance, name=COALESCE(NULLIF(excluded.name,''), wa_chats.name),
+         last_text=excluded.last_text, last_ts=excluded.last_ts, last_dir=excluded.last_dir,
+         unread=CASE WHEN excluded.last_ts > COALESCE(wa_chats.last_ts,0) AND excluded.last_dir='in'
+                     THEN COALESCE(wa_chats.unread,0) + 1 ELSE COALESCE(wa_chats.unread,0) END,
+         updated_at=strftime('%s','now')`
+    ).bind(phone, inst, nome, txt, ts, dir, dir === 'in' ? 1 : 0).run().catch(() => {});
+    nChats++;
+    // histórico da conversa
+    const ms = await _dcApiGet(env, `/conversations/${encodeURIComponent(c.id)}/messages?limit=${limiteMsgs}`);
+    const msgs = Array.isArray(ms?.messages) ? ms.messages : (Array.isArray(ms) ? ms : (ms?.data || []));
+    for (const m of msgs) {
+      const id = String(m?.id || m?._id || '');
+      if (!id) continue;
+      const corpo = String(m?.body || '').slice(0, 4000);
+      const tipo = String(m?.type || (m?.mediaURL ? 'media' : 'text')).toLowerCase();
+      const quando = Math.floor(new Date(m?.createdAt || Date.now()).getTime() / 1000);
+      await env.DB.prepare(
+        `INSERT INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url)
+         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(msg_id) DO NOTHING`
+      ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, m?.mediaURL || null).run().catch(() => {});
+      nMsgs++;
+    }
+  }
+  return { ok: true, conversas: nChats, mensagens: nMsgs };
+}
+
+// POST /api/wa/dc/sync — puxa o inbox do Datacrazy na hora (o cron de 2min já faz sozinho).
+// Serve pro botão de recarregar do Atendimento não depender de esperar a próxima rodada.
+async function handleDcSync(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const r = await _dcSyncInbox(env, 60, 60).catch((e) => ({ ok: false, motivo: String(e) }));
+  return json(r);
+}
+
 // Dado o telefone do lead, acha a conversa no Datacrazy e devolve o NÚMERO que recebeu (self = instance.config.phoneNumber),
 // o TEXTO da última mensagem recebida e o nome. Reforço pra quando a Automação não mandar esses campos: basta o ${leadPhone}.
 async function _dcResolveConv(env, phone) {
@@ -4426,7 +4505,20 @@ async function _dcSyncInstances(env) {
       const token = String(cfg.token || '');
       if (!disp || !token) continue;
       const nk = _waNumKey(disp);
-      await env.DB.prepare("UPDATE wa_api_numbers SET token=?, waba_id=COALESCE(?, waba_id), updated_at=strftime('%s','now') WHERE num_key=?").bind(token, String(cfg.wabaId || '') || null, nk).run();
+      const r = await env.DB.prepare("UPDATE wa_api_numbers SET token=?, waba_id=COALESCE(?, waba_id), updated_at=strftime('%s','now') WHERE num_key=?").bind(token, String(cfg.wabaId || '') || null, nk).run();
+      // Número CONECTADO NO DATACRAZY e ainda sem cadastro aqui entra agora. Antes isso era só
+      // UPDATE: número novo (coexistência de 15/08) nunca aparecia na dash, ficava sem dono, e a
+      // conversa dele só o diretor via. Sem at_id de propósito — quem escolhe o vendedor é o Bruno.
+      const mexeu = r && r.meta && (r.meta.changes || r.meta.rows_written);
+      if (!mexeu && cfg.phoneNumberId) {
+        await _waApiUpsert(env, {
+          phone_number_id: String(cfg.phoneNumberId),
+          display_phone: disp,
+          waba_id: String(cfg.wabaId || cfg.businessId || '') || null,
+          verified: 1,
+        });
+        await env.DB.prepare("UPDATE wa_api_numbers SET token=? WHERE phone_number_id=?").bind(token, String(cfg.phoneNumberId)).run().catch(() => {});
+      }
     } catch (_) {}
   }
 }
@@ -5746,6 +5838,45 @@ function _servConnOk(liveSet, inst, chipNum){
 }
 // Resolve, por vendedor, o número PRINCIPAL (em uso, instância ax_<at>) e o BACKUP (chip bkp, instância ax_<at>_b).
 // Os dois entram só se estiverem conectados AGORA (liveSet) COM O NÚMERO CERTO e não banidos/restritos.
+// Quem está VIVO agora: instância aberta na Evolution, Sale Chat com heartbeat dos últimos 3min e
+// número oficial da Cloud API (esse não cai como WhatsApp Web, entra direto).
+// Saiu de dentro do handler da pressel pra a TELA DE DIAGNÓSTICO poder chamar a MESMA função: com
+// duas cópias da regra, a tela diria "tudo certo" enquanto a roleta não entrega número nenhum.
+async function _presselLiveSet(env){
+  try{
+    // A linha 'sc' do wa_conn NÃO expira sozinha: ela fica gravada com o último heartbeat. Sem checar
+    // a idade, um número que caiu continuava "vivo" pra sempre e seguia recebendo lead (aconteceu de
+    // verdade: o WhatsApp caiu e a roleta continuou mandando). Só vale 'sc' com sinal dos últimos 3min.
+    // A validade vale pros DOIS estados. Antes só o 'sc' expirava, e uma linha 'open' velha da
+    // Evolution ficava valendo pra sempre — bastava um registro antigo pra manter um número morto
+    // recebendo lead eternamente. Com a operação 100% no Sale Chat, isso viraria um ralo silencioso.
+    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all();
+    const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
+    // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
+    try{
+      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
+      (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
+    }catch(_){}
+    // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
+    // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
+    try{
+      const api=await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
+      (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id, String(a.display_phone)); });
+    }catch(_){}
+    return m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
+  }catch(_){ return null; }
+}
+// ids de status que significam "Em uso" (a dash grava ids customizados tipo st_xxxx
+// com label "Em uso"; sem isso o worker não reconhecia o principal e tirava o
+// vendedor da roleta enquanto a tela mostrava ele ligado).
+function _emUsoIdsDe(data){
+  const ids=new Set(['em_uso']);
+  try{ (Array.isArray(data && data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{
+    const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim();
+    if(lbl==='em uso' && s && s.id) ids.add(String(s.id));
+  }); }catch(_){}
+  return ids;
+}
 function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
   const out=[];
   const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
@@ -6011,6 +6142,51 @@ async function _bumpPressel(env, id, field){
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare(`INSERT INTO pressel_day (pid, day, ${col}) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET ${col} = ${col} + 1`).bind(String(id), _brDay()).run();
   }catch(_){}
+}
+// GET /api/pressel/diag → por pressel, PRA ONDE o botão do WhatsApp está mandando agora.
+//
+// Existe porque o modo de falhar é silencioso e caro: a pressel continua abrindo bonita, o anúncio
+// continua gastando, e o botão simplesmente não leva a lugar nenhum (o worker serve `go(){...if(!"")
+// return}` quando não achou número). Já aconteceu de virar o dia inteiro assim. Aqui a dash pergunta
+// pro MESMO código que a roleta usa e mostra o número real — e, quando não tem, o motivo.
+async function handlePresselDiag(req, env){
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const data = await _getDashData(env);
+  const pressels = Array.isArray(data.pressels) ? data.pressels : [];
+  const chips = Array.isArray(data.chips) ? data.chips : [];
+  const liveSet = await _presselLiveSet(env);
+  const emUsoIds = _emUsoIdsDe(data);
+  const isEmUso = (c) => c.em_uso===true || c.em_uso===1 || emUsoIds.has(String(c.wa_st||'')) || String(c.wa_st||'')==='em_uso';
+  const okWa = (c) => { const w=String((c&&c.wa_st)||'').toLowerCase(); return w!=='restrito' && w!=='banido'; };
+  const out = pressels.map((p)=>{
+    const sellers = _resolvePresselSellers(p, chips, liveSet, emUsoIds);
+    const numeros = [];
+    for(const s of sellers) for(const n of (s.nums||[])) numeros.push({ at:s.at, num:n.num });
+    // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
+    let motivo = '';
+    if(!numeros.length){
+      const usaveis = chips.filter(c=>c && c.at && c.st!=='aquecimento' && c.st!=='banido' && c.num && isEmUso(c) && okWa(c));
+      const offMap = {};
+      for(const v of (Array.isArray(p.vendedores)?p.vendedores:[])){
+        if(!v || !v.at) continue;
+        if(v.ativo === false) offMap['@'+String(v.at)] = true;                       // vendedor inteiro desligado
+        for(const k of Object.keys((v.off && typeof v.off==='object') ? v.off : {})) if(v.off[k]) offMap[String(v.at)+':'+k] = true;
+      }
+      const desligados = usaveis.filter(c=>{
+        const nk = String(c.num).replace(/\D/g,'').slice(-8);
+        return offMap['@'+String(c.at)] || offMap[String(c.at)+':'+nk];
+      });
+      const ligados = usaveis.filter(c=>!desligados.includes(c));
+      const conectados = ligados.filter(c=>_servConnOk(liveSet, 'ax_'+String(c.at), c.num));
+      if(!usaveis.length) motivo = 'nenhum número está "Em uso" — a roleta só entrega lead pra número marcado assim';
+      else if(!ligados.length) motivo = 'os ' + usaveis.length + ' números "Em uso" estão DESLIGADOS nesta pressel (interruptor do vendedor)';
+      else if(!conectados.length) motivo = 'os números estão ligados, mas nenhum aparece conectado agora (WhatsApp caído ou Sale Chat fechado)';
+      else motivo = 'nenhum número disponível no momento';
+    }
+    return { id:p.id, nome:p.nome||'', status:p.status||'ativa', numeros, motivo };
+  });
+  return json({ ok:true, pressels: out });
 }
 // GET /api/pressel/stats → views/clicks por pressel (a dash mostra na métrica)
 async function handlePresselStats(req, env){
@@ -6555,9 +6731,22 @@ async function handlePresselsTotalJson(req, env){
   const today=_brDay(); if(day>today) day=today;
   const _vq=url.searchParams.get('view')||''; const view=(_vq==='vendas'||_vq==='leads')?_vq:'metricas';
   const _pq=url.searchParams.get('per')||''; const per=(_pq==='mes')?'mes':'dia';
-  // Leads (carteira dos vendedores) é só-diretor. Métricas/Pedidos qualquer autenticado vê (número já mascarado).
-  if(view==='leads' && !full) return err('Sem permissão', 403);
-  return json(await _presselsTotalData(env, day, view, per, full));
+  // Leads: o vendedor VÊ, mas só a carteira DELE (pedido do Bruno em 16/08/2026 — antes tomava
+  // "Só o diretor vê os leads" em vermelho na tela). O diretor continua vendo todo mundo.
+  // O corte é aqui no servidor, não no navegador: o lead dos outros nem sai daqui.
+  const dados = await _presselsTotalData(env, day, view, per, full);
+  if (view === 'leads' && !full) {
+    const meu = String(u.name || '').trim().toLowerCase();
+    const meuId = String(u.id || '');
+    dados.sellers = (dados.sellers || []).filter((s) => {
+      const n = String(s.name || '').trim().toLowerCase();
+      return n === meu || n === meuId;
+    });
+    dados.totL = (dados.sellers || []).reduce((soma, s) => soma + (s.total || 0), 0);
+    dados.totP = (dados.sellers || []).reduce((soma, s) => soma + (s.daP || 0), 0);
+    dados.escopo = 'meus';
+  }
+  return json(dados);
 }
 async function handlePresselsTotalPage(req, env){
   const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
@@ -6853,37 +7042,8 @@ async function handlePresselPublic(req, env, id){
   // 'sc' = Sale Chat rodando. A roleta NÃO pode depender só da Evolution (que está saindo de
   // operação): sem contar o Sale Chat, wa_conn fica sem nenhuma linha 'open', o Map fica VAZIO
   // (que é truthy!) e _servConnOk reprova TODO número → a pressel serve offline e não entra lead.
-  let liveSet=null;
-  try{
-    // A linha 'sc' do wa_conn NÃO expira sozinha: ela fica gravada com o último heartbeat. Sem checar
-    // a idade, um número que caiu continuava "vivo" pra sempre e seguia recebendo lead (aconteceu de
-    // verdade: o WhatsApp caiu e a roleta continuou mandando). Só vale 'sc' com sinal dos últimos 3min.
-    // A validade vale pros DOIS estados. Antes só o 'sc' expirava, e uma linha 'open' velha da
-    // Evolution ficava valendo pra sempre — bastava um registro antigo pra manter um número morto
-    // recebendo lead eternamente. Com a operação 100% no Sale Chat, isso viraria um ralo silencioso.
-    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all();
-    const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
-    // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
-    try{
-      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
-      (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
-    }catch(_){}
-    // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
-    // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
-    try{
-      const api=await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
-      (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id, String(a.display_phone)); });
-    }catch(_){}
-    liveSet = m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
-  }catch(_){}
-  // ids de status que significam "Em uso" (a dash grava ids customizados tipo st_xxxx
-  // com label "Em uso"; sem isso o worker não reconhecia o principal e tirava o
-  // vendedor da roleta enquanto a tela mostrava ele ligado).
-  const emUsoIds=new Set(['em_uso']);
-  try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{
-    const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim();
-    if(lbl==='em uso' && s && s.id) emUsoIds.add(String(s.id));
-  }); }catch(_){}
+  const liveSet = await _presselLiveSet(env);
+  const emUsoIds = _emUsoIdsDe(data);
   const sellers=_resolvePresselSellers(p, chips, liveSet, emUsoIds);
   // A PÁGINA SEMPRE ABRE quando a pressel está ativa. Ela é o destino do anúncio: derrubar tudo
   // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
@@ -6968,6 +7128,9 @@ export default {
     // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
     // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
     try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
+    // Puxa o inbox do Datacrazy (coexistência): sem isso a tela de Atendimento fica vazia, porque
+    // quem recebe o webhook da Meta nos números em coexistência é o app deles, não o nosso.
+    try { await _dcSyncInbox(env, 40, 40); } catch (_) {}
     try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
     try { await _dcSyncInstances(env); } catch (_) {}   // token de envio (Meta) de cada número do Datacrazy — fresco
     try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
@@ -7197,6 +7360,7 @@ export default {
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/official/numbers') return handleWaOfficialNumbers(req, env);
       if (req.method === 'POST'   && path === '/api/wa/register')          return handleWARegister(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/template') return handleWATemplate(req, env);
+      if (req.method === 'POST'   && path === '/api/wa/dc/sync')          return handleDcSync(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
@@ -7244,6 +7408,7 @@ export default {
       // Pressel pública — lead da campanha cai aqui e a roleta manda pro WhatsApp
       // Métricas da pressel (dash lê) + beacon de clique (público)
       if (req.method === 'GET' && path === '/api/pressel/stats') return handlePresselStats(req, env);
+      if (req.method === 'GET' && path === '/api/pressel/diag') return handlePresselDiag(req, env);
       if (req.method === 'GET' && path === '/api/pressel/metrics') return handlePresselMetricsLive(req, env);
       const pcMatch = path.match(/^\/pc\/([a-zA-Z0-9_-]+)$/);
       if (pcMatch) {
