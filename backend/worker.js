@@ -486,7 +486,10 @@ async function _fiveUpsertLead(env, p) {
       lead = {
         id: Date.now(), five_id: String(oid), external_id: 'FIVE-' + String(oid), orig: 'Five',
         nome: '', cpf: '', wa: '', email: '', cep: '', end: '', num: '', comp: '', bairro: '', cidade: '', uf: '',
-        prod: '', trat: '', vl: 0, com_pct: 0, pgto: '', spg: 'Pendente', mod: 'entrega',
+        // com_pct sai VAZIO, nao zero: zero valia como "taxa combinada neste pedido" e fazia todo
+        // pedido da Five pagar 0%, ignorando o cadastro do vendedor em silencio. Vazio deixa a
+        // dash cair na taxa do vendedor, que e o certo ate alguem combinar outra coisa.
+        prod: '', trat: '', vl: 0, com_pct: '', pgto: '', spg: 'Pendente', mod: 'entrega',
         at: attribAt || null, col: 'A Enviar', obs: '', tags: [], fu: null, agend: '', track: '', link: '',
         data: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,
         hist: [{ from: '—', to: 'A Enviar', who: 'five', time: nowISO }], comments: [], five_status: ev.toLowerCase(),
@@ -2409,7 +2412,9 @@ async function handlePaytWebhook(req, env, urlToken) {
       prod: data.product || '',
       trat: data.product || '',
       vl: data.amount || 0,
-      com_pct: (_paytPct != null && _paytPct > 0) ? _paytPct : 12,
+      // Sem comissao no postback, NAO chuta 12%: numero inventado vira dinheiro combinado na
+      // cabeca de alguem. Vazio faz a dash usar a taxa cadastrada do vendedor.
+      com_pct: (_paytPct != null && _paytPct > 0) ? _paytPct : '',
       track: data.tracking_code || '',
       pgto: data.payment_method || '',
       spg: mapping?.spg || 'Pendente',
@@ -2686,7 +2691,9 @@ async function handleFornecedorWebhook(req, env, urlToken) {
       prod: lead_data.produto,
       trat: lead_data.produto,
       vl: lead_data.valor,
-      com_pct: 12,
+      // Vazio, nao 12: taxa inventada no backend vira dinheiro combinado na cabeca de alguem.
+      // A dash usa a taxa cadastrada do vendedor quando o pedido nao tem uma combinada.
+      com_pct: '',
       track: lead_data.track,
       pgto: lead_data.payment_method,
       spg: mapping?.spg || (isCOD ? 'Pendente' : 'Pendente'),
@@ -4242,7 +4249,19 @@ async function handleWARegister(req, env) {
   if (step === 'list') {
     let waba = String(b.waba_id || '').trim();
     if (!waba) { try { const l = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); if (l) waba = l.waba_id || ''; } catch (_) {} }
-    if (!waba) return err('waba_id obrigatório');
+    // Sem Embedded Signup nunca existiu `wa_es_last_onboard`, e a tela morria em "waba_id
+    // obrigatório" — mas a WABA de cada número JÁ ESTÁ gravada (veio do Datacrazy, na coexistência).
+    // Usa a do número que está sendo conectado; se não vier número, a mais recente conhecida.
+    if (!waba) {
+      try {
+        const nk = String(b.num || b.display_phone || '').replace(/\D/g, '').slice(-8);
+        const row = nk
+          ? await env.DB.prepare('SELECT waba_id FROM wa_api_numbers WHERE num_key LIKE ? AND waba_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1').bind('%' + nk).first()
+          : await env.DB.prepare('SELECT waba_id FROM wa_api_numbers WHERE waba_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1').first();
+        if (row && row.waba_id) waba = String(row.waba_id);
+      } catch (_) {}
+    }
+    if (!waba) return err('Nenhuma conta oficial (WABA) conhecida ainda. Conecte um número pelo Datacrazy ou faça o cadastro na Meta primeiro.');
     const g = await _graph(env, `/${encodeURIComponent(waba)}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,name_status,platform_type,code_verification_status`);
     if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) }, 400);
     for (const n of ((g.data && g.data.data) || [])) {
@@ -4967,9 +4986,22 @@ async function handleWAConn(req, env) {
   let apiConns = [];
   try {
     const api = await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
-    apiConns = (api.results || []).filter(a => a.at_id && a.display_phone).map(a => ({ instance: 'ax_' + a.at_id, state: 'cloud', number: String(a.display_phone) }));
+    // Chave POR NÚMERO (ax_<at>_<8 dígitos>), não por vendedor. Com a chave só do vendedor, quem tem
+    // DOIS números oficiais (o caso do Guilherme e do Murilo) via os dois colapsarem numa linha só:
+    // sobrava um número no mapa e o outro aparecia "API desconectada" pra sempre.
+    apiConns = (api.results || []).filter(a => a.at_id && a.display_phone)
+      .map(a => ({ instance: 'ax_' + a.at_id + '_' + String(a.display_phone).replace(/\D/g, '').slice(-8), state: 'cloud', number: String(a.display_phone) }));
   } catch (_) {}
-  const withApi = (list) => { const seen = {}; (list || []).forEach(c => { seen[c.instance] = 1; }); return (list || []).concat(apiConns.filter(a => !seen[a.instance])); };
+  // Cloud API SOBRESCREVE o que já estiver na lista, não cede a vez. O número oficial vive do lado da
+  // Meta e não "cai" como WhatsApp Web; quem mandava aqui era uma linha VELHA da Evolution com
+  // state 'close' (e até com o número de outro vendedor), que escondia a entrada da API e pintava os
+  // 4 números oficiais de vermelho na tela de roleta.
+  const withApi = (list) => {
+    const byInst = {};
+    (list || []).forEach(c => { byInst[c.instance] = c; });
+    apiConns.forEach(a => { byInst[a.instance] = a; });
+    return Object.values(byInst);
+  };
   // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também).
   // Com a captura 100% no Sale Chat a Evolution sai de cena: não consulta, não grava e não mostra
   // conexão fantasma dela na tela. O Baileys é o maior risco de ban, então nada aqui pode dar a
@@ -5988,7 +6020,10 @@ async function _presselLiveSet(env){
     // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
     try{
       const api=await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
-      (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id, String(a.display_phone)); });
+      // Chave POR NÚMERO, igual à da tela de conexão: com a chave só do vendedor, o segundo número
+      // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
+      // exatamente ax_<at>_<8 dígitos>).
+      (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id+'_'+String(a.display_phone).replace(/\D/g,'').slice(-8), String(a.display_phone)); });
     }catch(_){}
     return m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
   }catch(_){ return null; }
