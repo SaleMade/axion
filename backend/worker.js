@@ -921,7 +921,9 @@ async function handleUpdateLead(req, env, leadId) {
     if (dir) {
       if ('at' in patch) lead.at = patch.at;
       if ('vl' in patch) lead.vl = Number(patch.vl) || 0;
-      if ('com_pct' in patch) { const c = Number(patch.com_pct); lead.com_pct = isNaN(c) ? 12 : c; }
+      // Valor invalido virava 12%, um numero que ninguem combinou. Agora vira VAZIO, e a dash usa
+      // a taxa cadastrada do vendedor. String vazia tambem passa: e como o front limpa a taxa.
+      if ('com_pct' in patch) { const c = Number(patch.com_pct); lead.com_pct = (patch.com_pct === '' || isNaN(c)) ? '' : c; }
     }
     if (canManage) {
       if ('spg' in patch) lead.spg = patch.spg;
@@ -2888,26 +2890,61 @@ async function _resolveSendInstance(env, { atId, phone, hint }) {
   } catch (_) {}
   return String(hint || '').trim();
 }
+// A conversa é de um número OFICIAL (Cloud API)? Descobre pela INSTÂNCIA da própria conversa, não
+// pelo dono. O sync do Datacrazy (_dcSyncInbox) grava a conversa como `ax_<at>_<8 últimos dígitos do
+// NOSSO número>` (e `dc_<num>` quando o número ainda não tem dono). Esses 8 dígitos identificam o
+// número EXATO que o lead procurou, então é por ele que a resposta tem que sair.
+// Resolver só por at_id erra quando o vendedor tem mais de um número oficial (hoje o atendente_iqq91p
+// tem o 5515991504525 e o 5515991258028): o lead escreve pro A e recebe do B.
+async function _apiNumFromInstance(env, inst) {
+  const s = String(inst || '');
+  const m = s.match(/^ax_.+_(\d{8})$/) || s.match(/^dc_(\d{8,})$/);
+  if (!m) return null;
+  const suf = String(m[1]).slice(-8);
+  try {
+    const row = await env.DB.prepare(
+      'SELECT phone_number_id, waba_id, at_id, display_phone, verified, token FROM wa_api_numbers WHERE substr(display_phone, -8) = ? ORDER BY verified DESC, updated_at DESC LIMIT 1'
+    ).bind(suf).first();
+    return row || null;
+  } catch (_) { return null; }
+}
 async function handleWASend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
-  // Roteamento: responde PELO MESMO CAMINHO em que a conversa está.
-  // A conversa numa instância POR NÚMERO (ax_<at>_<8díg>) é da Evolution: responde por ela.
-  // Sem essa checagem, um vendedor que também tem número oficial respondia SEMPRE pelo oficial,
-  // ou seja: o lead escrevia pro número A e recebia resposta do número B (quebra a conversa no
-  // celular dele e queima a confiança). Só cai na Cloud API quando a conversa é do número oficial.
+  // Roteamento: responde PELO MESMO NÚMERO em que a conversa está.
+  // O sufixo `_<8díg>` sozinho NÃO quer dizer Evolution: o sync do Datacrazy grava a conversa do
+  // número OFICIAL nesse mesmo formato. A regra antiga (`_convEvo`) tratava o sufixo como Evolution e
+  // por isso mandava 100% do inbox oficial pra uma instância que nem existe na VPS (wa_conn não tem
+  // ax_atendente_iqq91p_91258028 / ax_atendente_vra3lh_74076200 / ax_atendente_vra3lh_91215713), e a
+  // resposta morria em 502 "Evolution respondeu 404".
+  // Ordem nova: (1) a instância casa com um número oficial NOSSO -> Cloud API por ESSE número;
+  // (2) instância sem identidade de número -> regra antiga (número oficial do dono, se tiver);
+  // (3) qualquer outro caso segue pra Evolution exatamente como hoje.
   const _atId = (isDirector(u) && body.at_id != null) ? String(body.at_id) : String(u.id);
-  const _convEvo = /^ax_.+_\d{8}$/.test(String(body.instance || ''));
+  const _instConv = String(body.instance || '');
+  // instância que carrega identidade de NÚMERO (a que a regra antiga jogava direto na Evolution)
+  const _convPorNumero = /^ax_.+_\d{8}$/.test(_instConv) || /^dc_\d{8,}$/.test(_instConv);
+  let _apiNum = null, _oficialFixo = false;
   try {
-    const apiNum = _convEvo ? null : await resolveApiNumber(env, { atId: _atId });
-    if (apiNum && apiNum.verified) {
-      const r = await _waCloudSendText(env, _atId, body.number, body.text);
-      if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
-      return json({ ok: true, id: r.id, via: 'cloud', to: waNumber(body.number) });
-    }
-  } catch (_) {}
+    // A instância está VIVA na Evolution AGORA? Então o lead falou pelo app: responde pelo mesmo canal.
+    // Guarda contra o caso de coexistência em que o mesmo número existe nos dois lados.
+    const _evoViva = _instConv ? await env.DB.prepare(
+      "SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600"
+    ).bind(_instConv).first() : null;
+    if (!_evoViva) { _apiNum = await _apiNumFromInstance(env, _instConv); _oficialFixo = !!_apiNum; }
+    // sem identidade de número na instância -> comportamento antigo, pra não mexer em Sale Chat/legado
+    if (!_apiNum && !_convPorNumero) _apiNum = await resolveApiNumber(env, { atId: _atId, instance: _instConv, convPhone: body.number });
+  } catch (_) { _apiNum = null; _oficialFixo = false; }
+  // `_oficialFixo` = a conversa É daquele número oficial. Nesse caso a Evolution NÃO é alternativa:
+  // em vez de cair calado pro caminho errado, devolve o erro com motivo.
+  if (_apiNum && _apiNum.phone_number_id && (_apiNum.verified || _oficialFixo)) {
+    if (!_apiNum.verified) return json({ ok: false, error: 'Este número oficial ainda não foi registrado na Meta, então não dá pra responder por ele.', code: 'not_registered' }, 400);
+    const r = await _waCloudSendText(env, _atId, body.number, body.text, _apiNum);
+    if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
+    return json({ ok: true, id: r.id, via: 'cloud', from: _apiNum.display_phone || null, to: waNumber(body.number) });
+  }
   const cfg = await getWAConfig(env);
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const instance = (await _resolveSendInstance(env, { atId: _atId, phone: body.number, hint: body.instance }))
@@ -2932,18 +2969,28 @@ async function handleWASend(req, env) {
 
 // Envia TEXTO pela Cloud API oficial. `atId` define o número de origem (phone_number_id do vendedor).
 // Loga outbound e roda detecção de venda (resgata o CompletePayment, já que o vendedor envia por aqui).
-async function _waCloudSendText(env, atId, number, text) {
+// `apiNumFixo` (opcional) é o número oficial JÁ resolvido a partir da conversa (_apiNumFromInstance).
+// Sem ele a função resolve por at_id, e vendedor com DOIS números oficiais responderia pelo número
+// errado (o lead escreve pro A e recebe do B). Os 3 chamadores antigos passam 4 argumentos e continuam
+// funcionando igual: o parâmetro é opcional.
+async function _waCloudSendText(env, atId, number, text, apiNumFixo) {
   const num = String(number || '').replace(/\D/g, '');
   const txt = String(text || '');
   if (!num || !txt) return { ok: false, error: 'number/text obrigatórios' };
-  const apiNum = await resolveApiNumber(env, { atId });
+  const apiNum = apiNumFixo || await resolveApiNumber(env, { atId, convPhone: num });
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   // guarda janela 24h: free-form só dentro de 24h do último inbound do lead
   try {
     const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' ORDER BY ts DESC LIMIT 1").bind(num).first();
     const lastIn = (li && Number(li.ts)) || 0;
-    if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) return { ok: false, error: 'janela de 24h fechada; use um template', code: 'window_closed' };
+    if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) {
+      // Erro EXPLÍCITO e com a idade da janela. Hoje as 12 conversas do inbox estão fora das 24h (de
+      // 25h a 496h desde o último inbound), então esta é a mensagem que o vendedor mais vai ver: ela
+      // precisa dizer o motivo e a saída, não só "falha ao enviar".
+      const _h = Math.floor((Math.floor(Date.now() / 1000) - lastIn) / 3600);
+      return { ok: false, error: 'Janela de 24h fechada: o lead falou pela última vez há ' + _h + 'h. Só dá pra reabrir com um template aprovado.', code: 'window_closed' };
+    }
   } catch (_) {}
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
     method: 'POST', token: apiNum.token,
@@ -2954,25 +3001,45 @@ async function _waCloudSendText(env, atId, number, text) {
     return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status };
   }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
-  const inst = 'ax_' + atId;
+  // Instância no MESMO formato que o sync do Datacrazy grava (ax_<at>_<8 últimos díg do nosso número>).
+  // Antes o outbound entrava como ax_<at> e a mesma conversa ficava com duas instâncias diferentes na
+  // wa_messages, então a métrica POR NÚMERO perdia o envio. _atFromInst tira o sufixo `_<8díg>`, então
+  // a atribuição por vendedor (_waDetectSale) continua exatamente igual.
+  const _disp = String((apiNum && apiNum.display_phone) || '').replace(/\D/g, '');
+  const inst = 'ax_' + atId + (_disp.length >= 8 ? '_' + _disp.slice(-8) : '');
   try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'text', body: txt, msgId: wamid }); } catch (_) {}
   try { await _waDetectSale(env, inst, { message: { conversation: txt }, key: { remoteJid: num + '@c.us', remoteJidAlt: num + '@c.us', id: wamid || null, fromMe: true } }); } catch (_) {}
   return { ok: true, id: wamid || null };
 }
 // POST /api/wa/cloud/send { number, text, at_id? } — entrypoint explícito de envio pela Cloud API.
 // Envia um TEMPLATE aprovado (pra reabrir conversa fora da janela de 24h). Sem variáveis por enquanto.
-async function _waCloudSendTemplate(env, atId, number, name, lang) {
+// `params` = valores das variáveis do corpo, na ordem ({{1}}, {{2}}, ...). Sem eles a Meta RECUSA
+// todo template que tem variável, que é a maioria dos 26 aprovados aqui: o payload antigo mandava só
+// name + language e o envio morria com "number of parameters does not match".
+// `bodyTxt` é o corpo já preenchido, só pra thread mostrar o que o lead vai ler (em vez de "[template]").
+async function _waCloudSendTemplate(env, atId, number, name, lang, params, bodyTxt) {
   const num = String(number || '').replace(/\D/g, '');
   if (!num || !name) return { ok: false, error: 'number/name obrigatórios' };
-  const apiNum = await resolveApiNumber(env, { atId });
+  const vars = (Array.isArray(params) ? params : []).map((v) => String(v == null ? '' : v)).filter((v) => v !== '');
+  const componentes = vars.length ? [{ type: 'body', parameters: vars.map((v) => ({ type: 'text', text: v })) }] : [];
+  // Template TEM que sair do número que recebeu: ele é aprovado dentro da WABA daquele número.
+  const apiNum = await resolveApiNumber(env, { atId, convPhone: num });
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', token: apiNum.token, body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'template', template: { name: String(name), language: { code: String(lang || 'pt_BR') } } })
+    method: 'POST', token: apiNum.token, body: JSON.stringify({
+      messaging_product: 'whatsapp', to: num, type: 'template',
+      template: componentes.length
+        ? { name: String(name), language: { code: String(lang || 'pt_BR') }, components: componentes }
+        : { name: String(name), language: { code: String(lang || 'pt_BR') } },
+    })
   });
   if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
-  try { await _waLogMsg(env, { phone: num, instance: 'ax_' + atId, direction: 'out', type: 'template', body: '[template] ' + name, msgId: wamid }); } catch (_) {}
+  // Grava na thread o texto QUE O LEAD VAI LER, não "[template] nome": o vendedor precisa saber o que
+  // foi disparado pra continuar a conversa sem repetir.
+  const _logTxt = String(bodyTxt || '').trim() || ('[template] ' + name);
+  try { await _waLogMsg(env, { phone: num, instance: 'ax_' + atId, direction: 'out', type: 'template', body: _logTxt, msgId: wamid }); } catch (_) {}
   return { ok: true, id: wamid || null };
 }
 async function handleWACloudSend(req, env) {
@@ -2981,7 +3048,8 @@ async function handleWACloudSend(req, env) {
   let b; try { b = await req.json(); } catch (_) { b = {}; }
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
   if (b.template && b.template.name) {
-    const rt = await _waCloudSendTemplate(env, atId, b.number, b.template.name, b.template.language);
+    // params = valores das variáveis na ordem; body = corpo cru do template (só pra logar já preenchido)
+    const rt = await _waCloudSendTemplate(env, atId, b.number, b.template.name, b.template.language, b.template.params, b.template.body);
     if (!rt.ok) return json({ ok: false, error: rt.error, code: rt.code || null }, 400);
     return json({ ok: true, id: rt.id, via: 'cloud-template' });
   }
@@ -3081,7 +3149,8 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   const num = String(number || '').replace(/\D/g, '');
   const kind = String((opts && opts.kind) || 'image');
   if (!num || !opts || !opts.link) return { ok: false, error: 'number/link obrigatórios' };
-  const apiNum = await resolveApiNumber(env, { atId });
+  // Mídia pelo mesmo número da conversa (o upload fica preso ao phone_number_id de origem).
+  const apiNum = await resolveApiNumber(env, { atId, convPhone: num });
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   try {
@@ -4032,18 +4101,55 @@ async function _waApiUpsert(env, o) {
        updated_at=excluded.updated_at`
   ).bind(pnid, disp || null, disp ? _waNumKey(disp) : null, (o.waba_id || null), (o.at_id != null && o.at_id !== '' ? String(o.at_id) : null), (o.quality || null), (o.name_status || null), (o.verified ? 1 : 0)).run();
 }
-// Resolve o número OFICIAL de transporte. Por at_id (vendedor) ou por telefone (display/num_key).
+// Tira os 8 dígitos finais do NOSSO número de dentro da instância da conversa.
+// Formatos que existem em produção hoje: `ax_<at>_<8díg>` (padrão da dash) e `dc_<número cheio>`
+// (número do Datacrazy ainda sem dono). `ax_<at>` e `ax_<at>_b` não carregam número: devolve ''.
+function _instNum8(inst) {
+  const s = String(inst || '');
+  let m = /_(\d{8})$/.exec(s);
+  if (m) return m[1];
+  m = /^dc_(\d{10,15})$/.exec(s);
+  if (m) return m[1].slice(-8);
+  return '';
+}
+// Resolve o número OFICIAL de transporte (de onde a mensagem SAI).
+// ORDEM: 1) o número que RECEBEU a conversa  2) o at_id (vendedor)  3) o telefone informado.
 async function resolveApiNumber(env, opts = {}) {
   const cols = 'phone_number_id, waba_id, at_id, display_phone, verified, token';
+  // Desempate ESTÁVEL. `updated_at` NÃO serve de critério: _dcSyncInstances e _scSeedOwners
+  // reescrevem wa_api_numbers inteira a cada rodada do cron (2min) e os números caem no MESMO
+  // segundo, então o "mais recente" virava sorteio e o vendedor respondia o mesmo lead por um
+  // número diferente a cada mensagem. phone_number_id é imutável: a escolha não muda mais.
+  const ORD = 'ORDER BY verified DESC, phone_number_id ASC LIMIT 1';
   try {
+    // 1) MESMO NÚMERO QUE RECEBEU. Responder por outro número quebra a conversa no celular do lead
+    // (ele pergunta num chat e a resposta chega em outro) e a janela de 24h daquele chat não vale
+    // pro outro número. Só assume se o número for oficial E registrado; senão cai pro vendedor.
+    let inst = String(opts.instance || '');
+    const conv = String(opts.convPhone || '').replace(/\D/g, '');
+    if (!_instNum8(inst) && conv) {
+      const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(conv).first();
+      inst = (c && c.instance) || '';
+      if (!_instNum8(inst)) {
+        const ms = await env.DB.prepare('SELECT instance FROM wa_messages WHERE phone = ? ORDER BY ts DESC LIMIT 30').bind(conv).all();
+        for (const r of ((ms && ms.results) || [])) { if (_instNum8(r.instance)) { inst = String(r.instance); break; } }
+      }
+    }
+    const n8 = _instNum8(inst);
+    if (n8) {
+      const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE display_phone LIKE ? ${ORD}`).bind('%' + n8).first();
+      if (row && row.verified) return row;
+    }
+    // 2) número do vendedor (conversa nova, sem histórico ainda)
     if (opts.atId != null && String(opts.atId) !== '') {
-      const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ORDER BY verified DESC, updated_at DESC LIMIT 1`).bind(String(opts.atId)).first();
+      const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ${ORD}`).bind(String(opts.atId)).first();
       if (row) return row;
     }
+    // 3) telefone explícito
     const num = String(opts.phone || '').replace(/\D/g, '');
     if (num) {
       let row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE display_phone = ?`).bind(num).first();
-      if (!row) { const key = _waNumKey(num); if (key) row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE num_key = ? ORDER BY verified DESC, updated_at DESC LIMIT 1`).bind(key).first(); }
+      if (!row) { const key = _waNumKey(num); if (key) row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE num_key = ? ${ORD}`).bind(key).first(); }
       if (row) return row;
     }
   } catch (_) {}
@@ -4303,14 +4409,39 @@ async function handleWARegister(req, env) {
   return err('step inválido');
 }
 
-// Descobre o waba_id: do body/query, senão do último onboarding, senão do 1º número oficial.
-async function _waWabaId(env, hint) {
-  let w = String(hint || '').trim();
-  if (w) return w;
-  try { const l = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null'); if (l && l.waba_id) return l.waba_id; } catch (_) {}
-  try { const r = await env.DB.prepare('SELECT waba_id FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>"" ORDER BY updated_at DESC LIMIT 1').first(); if (r && r.waba_id) return r.waba_id; } catch (_) {}
-  return '';
+// Lista as WABAs conhecidas, cada uma com o TOKEN que enxerga ela e o número dono.
+// Na coexistência pelo Datacrazy cada número tem WABA PRÓPRIA e token PRÓPRIO (medido: 4 números =
+// 4 WABAs diferentes) e o wa_api_token do AXION não enxerga nenhuma delas — era por isso que a aba
+// Templates ficava em erro. Ordem ESTÁVEL por phone_number_id (imutável): com `updated_at` o cron
+// reescrevia a tabela a cada 2min e a WABA escolhida trocava sozinha entre uma leitura e a seguinte.
+async function _waWabaList(env, hint) {
+  const w = String(hint || '').trim();
+  let rows = [];
+  try {
+    const r = await env.DB.prepare("SELECT waba_id, token, display_phone FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>'' ORDER BY verified DESC, CASE WHEN token IS NULL OR token='' THEN 1 ELSE 0 END, phone_number_id ASC").all();
+    rows = (r && r.results) || [];
+  } catch (_) {}
+  const vistas = new Set();
+  const out = [];
+  for (const x of rows) {
+    const id = String(x.waba_id);
+    if (vistas.has(id)) continue;   // 1 entrada por WABA (a de melhor token, pela ordem acima)
+    vistas.add(id);
+    out.push({ waba: id, token: x.token || null, display_phone: x.display_phone || null });
+  }
+  if (w) { const achou = out.find(x => x.waba === w); return [achou || { waba: w, token: null, display_phone: null }]; }
+  try {
+    const l = JSON.parse((await _readConfig(env, 'wa_es_last_onboard')) || 'null');
+    if (l && l.waba_id) {
+      const i = out.findIndex(x => x.waba === String(l.waba_id));
+      if (i > 0) out.unshift(out.splice(i, 1)[0]);
+      else if (i < 0) out.unshift({ waba: String(l.waba_id), token: null, display_phone: null });
+    }
+  } catch (_) {}
+  return out;
 }
+// Uma WABA só, agora estável: a 1ª da lista. Mantido pra quem só precisa do id.
+async function _waWabaId(env, hint) { const l = await _waWabaList(env, hint); return l.length ? l[0].waba : ''; }
 // GET /api/wa/template  → lista templates (name, status, category, language, components)
 // POST /api/wa/template → cria e SUBMETE um template { name, language?, category?, header?, body, footer?, buttons? }
 async function handleWATemplate(req, env) {
@@ -4319,14 +4450,32 @@ async function handleWATemplate(req, env) {
   if (!isDirector(u)) return err('Só o diretor', 403);
   if (req.method === 'GET') {
     const url = new URL(req.url);
-    const waba = await _waWabaId(env, url.searchParams.get('waba_id'));
-    if (!waba) return json({ ok: true, templates: [], note: 'sem_waba' });
-    const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates?fields=name,status,category,language,components,quality_score&limit=200`);
-    if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) }, 400);
-    return json({ ok: true, waba_id: waba, templates: (g.data && g.data.data) || [] });
+    // Varre TODAS as WABAs, cada uma com o SEU token. Antes pegava só "a mais recente" e chamava a
+    // Graph com o wa_api_token, que não tem permissão na WABA do Datacrazy: a tela ficava em erro.
+    const alvos = await _waWabaList(env, url.searchParams.get('waba_id'));
+    if (!alvos.length) return json({ ok: true, templates: [], note: 'sem_waba' });
+    const porChave = new Map(); const erros = [];
+    for (const a of alvos) {
+      const g = await _graph(env, `/${encodeURIComponent(a.waba)}/message_templates?fields=name,status,category,language,components,quality_score&limit=200`, { token: a.token || undefined });
+      if (!g.ok) { erros.push({ waba_id: a.waba, numero: a.display_phone, erro: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) }); continue; }
+      for (const t of ((g.data && g.data.data) || [])) {
+        // dedup por nome+idioma: o front usa essa chave como key do React, duplicata quebrava a lista
+        const k = String(t.name || '') + '|' + String(t.language || '');
+        const ant = porChave.get(k);
+        if (!ant || (String(t.status || '').toUpperCase() === 'APPROVED' && String(ant.status || '').toUpperCase() !== 'APPROVED')) {
+          porChave.set(k, { ...t, waba_id: a.waba, display_phone: a.display_phone || null });
+        }
+      }
+    }
+    const lista = Array.from(porChave.values());
+    if (!lista.length && erros.length) return json({ ok: false, error: erros[0].erro, erros }, 400);
+    return json({ ok: true, waba_id: alvos[0].waba, templates: lista, erros: erros.length ? erros : undefined });
   }
   let b; try { b = await req.json(); } catch (_) { b = {}; }
-  const waba = await _waWabaId(env, b.waba_id);
+  // Submeter template precisa do token DA WABA (o wa_api_token do AXION não enxerga a do Datacrazy).
+  const _wc = (await _waWabaList(env, b.waba_id))[0] || null;
+  const waba = _wc ? _wc.waba : '';
+  const wabaTok = _wc ? _wc.token : null;
   if (!waba) return err('waba_id obrigatório');
   const name = String(b.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 60);
   if (!name) return err('nome obrigatório (só letras/números/underscore)');
@@ -4338,7 +4487,7 @@ async function handleWATemplate(req, env) {
   components.push({ type: 'BODY', text: String(b.body).slice(0, 1024) });
   if (b.footer) components.push({ type: 'FOOTER', text: String(b.footer).slice(0, 60) });
   if (Array.isArray(b.buttons) && b.buttons.length) components.push({ type: 'BUTTONS', buttons: b.buttons.slice(0, 3).map(t => ({ type: 'QUICK_REPLY', text: String(t).slice(0, 25) })) });
-  const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates`, { method: 'POST', body: JSON.stringify({ name, language, category, components }) });
+  const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates`, { method: 'POST', token: wabaTok || undefined, body: JSON.stringify({ name, language, category, components }) });
   if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status), resp: g.data }, 400);
   return json({ ok: true, id: g.data && g.data.id, status: g.data && g.data.status, name });
 }
@@ -4491,14 +4640,52 @@ async function _dcEnsureTables(env) {
 }
 function _dcDeep(o, path) { try { return path.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o); } catch (_) { return undefined; } }
 function _dcPick(o, keys) { for (const k of keys) { const v = _dcDeep(o, k); if (v != null && String(v) !== '') return v; } return ''; }
-async function _dcApiGet(env, path) {
+// GET CRU na API do Datacrazy. Devolve SEMPRE { ok, status, dados, erro } pra quem chama conseguir
+// separar "deu certo e veio vazio" de "falhou". Antes virava null nos dois casos e o inbox mostrava
+// "nenhuma conversa" tanto com a chave vencida quanto num dia sem mensagem. Medido em 17/08/2026:
+// com chave invalida a API responde HTTP 401 {"message":"Unauthorized","statusCode":401} — o motivo
+// vinha no corpo e o `if (!r.ok) return null` jogava fora.
+async function _dcApiGetRaw(env, path) {
   const key = await _readConfig(env, 'dc_api_key');
-  if (!key) return null;
+  if (!key) return { ok: false, status: 0, dados: null, erro: 'sem_dc_api_key' };
+  let r;
   try {
-    const r = await fetch('https://api.g1.datacrazy.io/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' } });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch (_) { return null; }
+    r = await fetch('https://api.g1.datacrazy.io/api/v1' + path, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' } });
+  } catch (e) {
+    return { ok: false, status: 0, dados: null, erro: 'rede: ' + String((e && e.message) || e) };
+  }
+  if (!r.ok) {
+    // o CORPO do erro e o que diz se e chave vencida (401), permissao/plano (403) ou throttle (429)
+    const corpo = await r.text().catch(() => '');
+    return { ok: false, status: r.status, dados: null, erro: 'HTTP ' + r.status + ' ' + corpo.slice(0, 200) };
+  }
+  try {
+    return { ok: true, status: r.status, dados: await r.json(), erro: '' };
+  } catch (_) {
+    return { ok: false, status: r.status, dados: null, erro: 'resposta nao-JSON' };
+  }
+}
+// Compatibilidade: os outros caminhos do Datacrazy (leads, tags, instancias, CRM) continuam
+// recebendo o corpo ou null, entao nada mais muda de contrato. A diferenca e que agora a falha
+// DEIXA RASTRO no log do Worker (observability ja esta ligado no wrangler.toml; o problema era o
+// `catch (_) {}` mudo, que aparece 226 vezes neste arquivo contra 1 unico console.error).
+async function _dcApiGet(env, path) {
+  const r = await _dcApiGetRaw(env, path);
+  if (!r.ok) console.error('[dc] GET ' + path + ' falhou: ' + r.erro);
+  return r.ok ? r.dados : null;
+}
+// Rastro da ultima rodada do sync do inbox. Fica em app_config, que ja e a tabela de estado
+// operacional do worker (backup_ts, roleta_sat_ts e sc_reseed_ts moram la) — nao inventa tabela
+// nova e nao precisa de migracao. Sem isto o cron de 2min podia falhar por dias sem nada mudar.
+let _dcSaudeCache = null, _dcSaudeCacheT = 0;
+async function _dcSyncSaude(env, reg) {
+  const r = Object.assign({ ts: Math.floor(Date.now() / 1000), ok: false, parcial: false, erro: '', conversas: 0, mensagens: 0 }, reg || {});
+  r.erro = String(r.erro || '').slice(0, 300);
+  if (!r.ok || r.parcial) console.error('[dc-sync] ' + (r.ok ? 'parcial: ' : 'falhou: ') + (r.erro || 'sem motivo'));
+  try { await _writeConfig(env, 'dc_sync_health', JSON.stringify(r)); }
+  catch (e) { console.error('[dc-sync] nao gravou dc_sync_health: ' + String((e && e.message) || e)); }
+  _dcSaudeCache = r; _dcSaudeCacheT = Date.now();
+  return r;
 }
 // ── Sincronismo do INBOX: Datacrazy → wa_chats/wa_messages ──────────────────
 // Auditado em 15/08/2026: o inbox da dash estava com ZERO conversa enquanto o Datacrazy tinha 11.
@@ -4507,13 +4694,65 @@ async function _dcApiGet(env, path) {
 // nada chegava). Depender do "forward por Automação" deixou a tela vazia e ninguém percebeu.
 // Aqui a gente PUXA: a API do Datacrazy lista conversas e mensagens, e isso alimenta as MESMAS
 // tabelas que o inbox já lê. Idempotente (msg_id é chave), então rodar de novo não duplica.
+// Anexo do Datacrazy. O payload REAL deles (conferido na API em 17/08/2026) NAO tem m.type nem
+// m.mediaURL: a midia vem em m.attachments[] = [{ type:'IMAGE'|'AUDIO'|'VIDEO', mimeType, url,
+// fileName, size }] e o body vem AUSENTE quando a foto/audio nao tem legenda. Sem ler isso aqui, a
+// foto virava type='text' + body='' + media_url=null, ou seja, uma linha invisivel no inbox (o
+// msgVisible do front descarta mensagem 'text' sem corpo e sem arquivo).
+function _dcAttach(m) {
+  const a = (m && Array.isArray(m.attachments) && m.attachments.length) ? m.attachments[0] : null;
+  if (!a || !a.url) return null;
+  const mime = String(a.mimeType || '').split(';')[0].trim().toLowerCase();   // "audio/ogg; codecs=opus" -> "audio/ogg"
+  const t = String(a.type || '').toLowerCase();
+  // tipo no vocabulario que o inbox JA entende (image/audio/video/document/sticker): decide pelo mime
+  // (que e o dado confiavel) e so cai no a.type se o mime vier estranho.
+  const tipo = /^image\//.test(mime) ? (t === 'sticker' ? 'sticker' : 'image')
+    : /^audio\//.test(mime) ? 'audio'
+    : /^video\//.test(mime) ? 'video'
+    : (t === 'image' ? 'image' : t === 'audio' ? 'audio' : t === 'video' ? 'video' : t === 'sticker' ? 'sticker' : 'document');
+  return { url: String(a.url), mime: mime || 'application/octet-stream', tipo };
+}
+// Copia o anexo do CDN do Datacrazy pro NOSSO R2 e devolve a key, exatamente como _waCloudDownloadMedia
+// (Cloud API) e _waEvoDownloadMedia (Evolution) ja fazem. Devolve '' se falhar: nesse caso o sync deixa
+// a URL do Datacrazy gravada e a imagem aparece do mesmo jeito.
+// Guardar o audio como .ogg com contentType audio/ogg faz o /api/salechat/media devolver
+// "audio/ogg; codecs=opus", que e o que transforma o balao em nota de voz com ondinha.
+async function _dcStoreAttachment(env, url, mime) {
+  try {
+    if (!env.MEDIA || !url) return '';
+    const r = await fetch(url);   // CDN deles e publico: responde 200 sem Authorization (conferido com curl)
+    if (!r.ok) return '';
+    const buf = await r.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return '';
+    const m = String(mime || '').toLowerCase();
+    const ext = m.indexOf('ogg') >= 0 ? 'ogg' : (m.indexOf('mpeg') >= 0 || m.indexOf('mp3') >= 0) ? 'mp3' : m.indexOf('mp4') >= 0 ? 'mp4' : m.indexOf('png') >= 0 ? 'png' : (m.indexOf('jpeg') >= 0 || m.indexOf('jpg') >= 0) ? 'jpg' : m.indexOf('webp') >= 0 ? 'webp' : m.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
+    const key = 'm/dc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    await env.MEDIA.put(key, buf, { httpMetadata: { contentType: m || 'application/octet-stream' } });
+    return key;
+  } catch (_) { return ''; }
+}
 async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
   const key = await _readConfig(env, 'dc_api_key');
-  if (!key) return { ok: false, motivo: 'sem_dc_api_key' };
+  // Sem chave nao e "inbox vazio", e integracao DESLIGADA: fica registrado como falha, senao a tela
+  // mostra "nenhuma conversa" com a mesma cara de um dia parado.
+  if (!key) { await _dcSyncSaude(env, { ok: false, erro: 'sem_dc_api_key' }); return { ok: false, motivo: 'sem_dc_api_key' }; }
   await _waEnsureTables(env);
-  const convs = await _dcApiGet(env, `/conversations?limit=${limiteConversas}`);
+  // A API deles IGNORA "limit" e so obedece "take" (conferido: ?limit=1 devolveu as 13 conversas,
+  // ?take=1 devolveu 1, da mais recente pra mais antiga). Com "limit" o sync puxa TODAS as conversas
+  // e dispara 1 request de mensagens pra cada uma, a cada 2 minutos do cron: com a base crescendo isso
+  // estoura o limite de subrequests do Worker e o rate limit do Datacrazy, e ai o inbox para calado.
+  // Se a LISTA falhar nao existe "0 conversa", existe ERRO: antes o null virava lista vazia e a
+  // funcao respondia ok:true, deixando chave vencida identica a dia sem mensagem nenhuma.
+  const res = await _dcApiGetRaw(env, `/conversations?take=${limiteConversas}`);
+  if (!res.ok) {
+    await _dcSyncSaude(env, { ok: false, erro: 'lista de conversas: ' + res.erro });
+    return { ok: false, motivo: res.erro, status: res.status };
+  }
+  const convs = res.dados;
   const lista = Array.isArray(convs) ? convs : (convs && Array.isArray(convs.data) ? convs.data : []);
-  let nChats = 0, nMsgs = 0;
+  // baixadas = teto de downloads de midia por rodada do cron. nFalhasMsgs = conversa cujo historico
+  // falhou: e o que faz o sync se declarar PARCIAL em vez de dizer que deu tudo certo.
+  let nChats = 0, nMsgs = 0, baixadas = 0, nFalhasMsgs = 0;
   for (const c of lista) {
     const phone = String(c?.contact?.phoneNumber || c?.contact?.contactId || '').replace(/\D/g, '');
     if (!phone) continue;
@@ -4526,7 +4765,11 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
     const lm = c?.lastMessage || {};
     const ts = Math.floor(new Date(c?.lastMessageDate || lm.createdAt || Date.now()).getTime() / 1000);
     const dir = lm.received ? 'in' : 'out';
-    const txt = String(lm.body || '').slice(0, 500);
+    // Preview da lista: foto/audio sem legenda vem com body vazio, entao mostra o rotulo do tipo,
+    // igual o _waLogMsg ja faz ('[image]', '[audio]'). Senao o lead que mandou comprovante aparece
+    // com a linha em branco e parece que nao respondeu nada.
+    const anexoLM = _dcAttach(lm);
+    const txt = (String(lm.body || '') || (anexoLM ? '[' + anexoLM.tipo + ']' : '')).slice(0, 500);
     await env.DB.prepare(
       `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
        VALUES (?,?,?,?,?,?,?,strftime('%s','now'))
@@ -4539,22 +4782,47 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
     ).bind(phone, inst, nome, txt, ts, dir, dir === 'in' ? 1 : 0).run().catch(() => {});
     nChats++;
     // histórico da conversa
-    const ms = await _dcApiGet(env, `/conversations/${encodeURIComponent(c.id)}/messages?limit=${limiteMsgs}`);
+    // Falha aqui NAO derruba a rodada (a conversa ja entrou na lista), mas e CONTADA: senao
+    // "puxei 40 conversas e zero mensagem" passava como sucesso completo.
+    const rm = await _dcApiGetRaw(env, `/conversations/${encodeURIComponent(c.id)}/messages?limit=${limiteMsgs}`);
+    if (!rm.ok) { nFalhasMsgs++; console.error('[dc-sync] historico da conversa ' + c.id + ' falhou: ' + rm.erro); continue; }
+    const ms = rm.dados;
     const msgs = Array.isArray(ms?.messages) ? ms.messages : (Array.isArray(ms) ? ms : (ms?.data || []));
     for (const m of msgs) {
       const id = String(m?.id || m?._id || '');
       if (!id) continue;
       const corpo = String(m?.body || '').slice(0, 4000);
-      const tipo = String(m?.type || (m?.mediaURL ? 'media' : 'text')).toLowerCase();
+      const anexo = _dcAttach(m);   // foto/audio/video vem em attachments[], NAO em m.type/m.mediaURL
+      const tipo = anexo ? anexo.tipo : String(m?.type || 'text').toLowerCase();
       const quando = Math.floor(new Date(m?.createdAt || Date.now()).getTime() / 1000);
-      await env.DB.prepare(
+      // Grava JA com a URL do CDN deles: a foto aparece na hora, mesmo se o R2 falhar (o resolveMedia
+      // do front aceita tanto key do R2 quanto URL absoluta). Logo abaixo a gente troca pela key do R2.
+      // O DO UPDATE conserta as linhas que o sync antigo gravou sem midia e as que ainda estao na URL
+      // deles; nunca sobrescreve midia que ja foi pro R2 (key nao comeca com http).
+      const ins = await env.DB.prepare(
         `INSERT INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url)
-         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(msg_id) DO NOTHING`
-      ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, m?.mediaURL || null).run().catch(() => {});
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(msg_id) DO UPDATE SET type=excluded.type, media_url=excluded.media_url
+           WHERE excluded.media_url IS NOT NULL
+             AND (wa_messages.media_url IS NULL OR wa_messages.media_url LIKE 'http%')`
+      ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, anexo ? anexo.url : null).run().catch(() => null);
+      // So a mensagem NOVA (ou a recem-consertada) baixa o arquivo: 1 download por midia. Teto por
+      // rodada pra nao estourar o tempo do cron; o que passar do teto continua com a URL do Datacrazy
+      // e cai no R2 na proxima rodada (o WHERE acima deixa passar enquanto for http).
+      const nova = !!(ins && ins.meta && ins.meta.changes);
+      if (anexo && nova && baixadas < 12) {
+        baixadas++;
+        const rkey = await _dcStoreAttachment(env, anexo.url, anexo.mime);
+        if (rkey) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(rkey, 'dc:' + id).run(); } catch (_) {} }
+      }
       nMsgs++;
     }
   }
-  return { ok: true, conversas: nChats, mensagens: nMsgs };
+  // Sucesso de verdade = a lista veio. Se o historico de alguma conversa falhou sai como PARCIAL,
+  // com o numero na mao, pra tela poder avisar em vez de mostrar um "ok" mentiroso.
+  const parcial = nFalhasMsgs > 0;
+  await _dcSyncSaude(env, { ok: true, parcial, erro: parcial ? (nFalhasMsgs + ' conversa(s) sem historico') : '', conversas: nChats, mensagens: nMsgs });
+  return { ok: true, parcial, conversas: nChats, mensagens: nMsgs, falhas_msgs: nFalhasMsgs };
 }
 
 // POST /api/wa/dc/sync — puxa o inbox do Datacrazy na hora (o cron de 2min já faz sozinho).
@@ -4562,7 +4830,15 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
 async function handleDcSync(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const r = await _dcSyncInbox(env, 60, 60).catch((e) => ({ ok: false, motivo: String(e) }));
+  const r = await _dcSyncInbox(env, 60, 60).catch((e) => ({ ok: false, motivo: String((e && e.message) || e) }));
+  // Falha de verdade (chave vencida, API fora, rede) tem que sair como ERRO HTTP: o api() do front
+  // (axion-produtor/src/lib/api.js) so joga excecao quando o status nao e 2xx, e era exatamente por
+  // isso que o botao de recarregar mostrava sucesso com a integracao morta. O campo que o front le
+  // e `error`.
+  if (!r || r.ok === false) {
+    console.error('[dc-sync] sync manual falhou: ' + ((r && r.motivo) || 'sem motivo'));
+    return json({ ok: false, error: 'Datacrazy nao respondeu: ' + ((r && r.motivo) || 'erro desconhecido'), motivo: (r && r.motivo) || '', status_dc: (r && r.status) || 0 }, 502);
+  }
   return json(r);
 }
 
@@ -4705,8 +4981,11 @@ async function _dcPoll(env) {
       // venda = "Pedido Concluído" que o VENDEDOR posta (mesma assinatura da dash). _waDetectSale confere o resto.
       const isSale = !inbound && /pedido\s+conclu/i.test(text);
       if (!inbound && !isSale) continue;   // mensagem normal do vendedor (não-venda): ignora
-      const ins = await env.DB.prepare("INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)").bind(msgId, now).run();
-      if (!ins.meta || ins.meta.changes === 0) continue;   // já visto
+      // DEDUPE só CONSULTA aqui. Marcar como visto ANTES de processar era o que apagava a mensagem
+      // pra sempre: número sem dono caía fora do "if (inst)" e na rodada seguinte batia em "já visto".
+      let jaVisto = null;
+      try { jaVisto = await env.DB.prepare('SELECT 1 FROM dc_seen WHERE msg_id=? LIMIT 1').bind(msgId).first(); } catch (_) {}
+      if (jaVisto) continue;
       const phone = String((c.contact && c.contact.phoneNumber) || '').replace(/\D/g, '');
       const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
       const name = String((c.contact && c.contact.name) || '');
@@ -4714,19 +4993,43 @@ async function _dcPoll(env) {
       let atId = null, ownInst = '';
       if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
       const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
-      try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,?,?,?,?)").bind(phone, self || null, inbound ? 'in' : 'out', isSale ? 'poll-sale' : 'poll', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId }).slice(0, 1000)).run(); } catch (_) {}
-      if (inst) {
-        try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: 'text', body: text, pushName: name, ts: mts, msgId }); } catch (_) {}
-        if (inbound) {
-          try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
-          try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
-          try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy
-        } else if (isSale) {
-          let _sr2 = null;
-          try { _sr2 = await _waDetectSale(env, inst, { message: { conversation: text }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId, fromMe: true } }); } catch (_) {}   // "Pedido Concluído" → CompletePayment
-          if (_sr2 && _sr2.sale) { try { await _dcCrmSale(env, phone, name, _sr2.value, phone); } catch (_) {} }   // tag "Comprou" + pedido em "A Enviar"
+      // QUARENTENA: número ainda SEM DONO (o _dcSyncInstances cadastra número novo do Datacrazy com
+      // at_id nulo de propósito; até o Bruno atribuir na Contingência, resolveOwner devolve nada).
+      // NÃO marca como visto: a próxima rodada do cron (2min) tenta de novo. Enquanto isso a mensagem
+      // fica registrada na auditoria com source 'dc' (antes NADA escrevia 'dc' lá, por isso o resgate
+      // do cron não cobria este caminho) pro resgate conseguir enxergar depois que o dono aparecer.
+      // Não vira loop eterno: a janela de 15min lá em cima (now - mts > 900) para de trazer a
+      // mensagem quando ela envelhece. É a mesma janela do _waLeadCapture, que também recusa
+      // mensagem com mais de 900s pra histórico não virar lead novo.
+      if (!inst) {
+        let jaAud = null;
+        try { jaAud = await env.DB.prepare('SELECT 1 FROM sc_ingest_audit WHERE msg_id=? LIMIT 1').bind(msgId).first(); } catch (_) {}
+        if (!jaAud) {
+          try {
+            await env.DB.prepare('INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,NULL)')
+              .bind('dc', self || '', phone, inbound ? 0 : 1, msgId, 'text', text.slice(0, 2000), name, mts, now).run();
+          } catch (_) {}
+          try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),0,?,?,?,'poll-sem-dono',?,?)").bind(phone, self || null, inbound ? 'in' : 'out', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId, motivo: 'numero_sem_dono' }).slice(0, 1000)).run(); } catch (_) {}
         }
+        continue;
       }
+      try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,?,?,?,?)").bind(phone, self || null, inbound ? 'in' : 'out', isSale ? 'poll-sale' : 'poll', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId }).slice(0, 1000)).run(); } catch (_) {}
+      // msg_id com o MESMO prefixo do _dcSyncInbox ('dc:'), senão a mesma mensagem entra 2x no inbox
+      // (o sync grava 'dc:<id>' e o poll gravaria '<id>', chaves diferentes, linha duplicada na tela).
+      try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId }); } catch (_) {}
+      if (inbound) {
+        try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+        try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
+        try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy
+      } else if (isSale) {
+        let _sr2 = null;
+        try { _sr2 = await _waDetectSale(env, inst, { message: { conversation: text }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId, fromMe: true } }); } catch (_) {}   // "Pedido Concluído" → CompletePayment
+        if (_sr2 && _sr2.sale) { try { await _dcCrmSale(env, phone, name, _sr2.value, phone); } catch (_) {} }   // tag "Comprou" + pedido em "A Enviar"
+      }
+      // BAIXA no FIM: só marca como visto depois de processar com dono. Se a rodada morrer no meio
+      // (D1 fora, cron cortado), a mensagem volta na próxima. Repassar é seguro porque tudo acima é
+      // idempotente (wa_messages por msg_id, wa_lead por telefone, _waDetectSale por msg_id, dc_crm).
+      try { await env.DB.prepare("INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)").bind(msgId, now).run(); } catch (_) {}
     } catch (_) {}
   }
   // Rede de segurança da VENDA: o "Pedido Concluído" pode NÃO ser a última msg (o lead responde depois e o
@@ -5166,7 +5469,18 @@ async function handleWAChats(req, env) {
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY last_ts DESC LIMIT 300';
   const rows = await env.DB.prepare(sql).bind(...binds).all();
-  return json({ ok: true, chats: rows.results || [] });
+  // Saude do sync do Datacrazy junto da lista: e o unico jeito de a tela avisar sem ninguem clicar
+  // em nada (o cron roda a cada 2min e o botao de recarregar quase nunca e apertado). Cache de 30s
+  // por isolate pra nao somar 1 leitura de D1 a cada poll de 6s de cada atendente.
+  let dcSaude = null;
+  try {
+    if (!_dcSaudeCache || (Date.now() - _dcSaudeCacheT) > 30000) {
+      _dcSaudeCache = JSON.parse((await _readConfig(env, 'dc_sync_health')) || 'null');
+      _dcSaudeCacheT = Date.now();
+    }
+    dcSaude = _dcSaudeCache;
+  } catch (_) { dcSaude = null; }
+  return json({ ok: true, chats: rows.results || [], dc: dcSaude });
 }
 // GET /api/wa/messages?phone=&limit= → thread de uma conversa
 async function handleWAMessages(req, env) {
@@ -7341,7 +7655,16 @@ export default {
     try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
     // Puxa o inbox do Datacrazy (coexistência): sem isso a tela de Atendimento fica vazia, porque
     // quem recebe o webhook da Meta nos números em coexistência é o app deles, não o nosso.
-    try { await _dcSyncInbox(env, 40, 40); } catch (_) {}
+    // Rastro obrigatorio: esta e a rodada que mantem o Atendimento cheio. Falhando calada, a tela
+    // fica igual a um dia sem mensagem. Agora grava app_config.dc_sync_health e loga no Worker
+    // (observability ligado no wrangler.toml), entao da pra ver em Workers Logs e no banco.
+    try {
+      const rDc = await _dcSyncInbox(env, 40, 40);
+      if (!rDc || rDc.ok === false) console.error('[dc-sync] cron nao sincronizou: ' + ((rDc && rDc.motivo) || 'sem motivo'));
+    } catch (e) {
+      console.error('[dc-sync] cron explodiu: ' + String((e && e.stack) || e));
+      try { await _dcSyncSaude(env, { ok: false, erro: 'excecao: ' + String((e && e.message) || e) }); } catch (_) {}
+    }
     try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
     try { await _dcSyncInstances(env); } catch (_) {}   // token de envio (Meta) de cada número do Datacrazy — fresco
     try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
@@ -7403,6 +7726,41 @@ export default {
           key: { remoteJid: String(r.phone || '') + '@c.us', remoteJidAlt: String(r.phone || '') + '@c.us', id: r.msg_id || null, fromMe: true }
         });
         try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE msg_id=?').bind(ow.at_id, r.msg_id).run(); } catch (_) {}
+      }
+    } catch (_) {}
+    // RESGATE DO LEAD EM QUARENTENA (caminho Datacrazy): mensagem que chegou num número SEM DONO fica
+    // só na auditoria com source 'dc' e at_id nulo. Quando o Bruno atribui o número na Contingência,
+    // esta rodada transforma ela em lead, dentro de 24h. Sem isso, "deixar pra próxima rodada" só
+    // resolveria os 15min da janela do poll, e o dono costuma aparecer horas depois.
+    // Ancora o clique NA HORA DA MENSAGEM (nunca em "agora", senão o FIFO rouba o ttclid de outro).
+    try {
+      const qa = await env.DB.prepare(
+        `SELECT a.id, a.self_number, a.phone, a.msg_id, a.body, a.push_name, a.ts FROM sc_ingest_audit a
+         WHERE a.source='dc' AND a.from_me=0 AND (a.at_id IS NULL OR a.at_id='')
+           AND a.received_at > strftime('%s','now')-86400
+           AND NOT EXISTS (SELECT 1 FROM wa_lead l WHERE l.phone = a.phone)
+         LIMIT 20`
+      ).all();
+      for (const r of (qa.results || [])) {
+        const ow = await resolveOwner(env, String(r.self_number || ''));
+        if (!ow || !ow.at_id) continue;   // ainda sem dono: fica pra próxima rodada
+        const inst = ow.instance || ('ax_' + ow.at_id);
+        const mts = Number(r.ts) || 0;
+        const fone = String(r.phone || '');
+        try { await _waLogMsg(env, { phone: fone, instance: inst, direction: 'in', type: 'text', body: String(r.body || ''), pushName: String(r.push_name || ''), ts: mts, msgId: 'dc:' + String(r.msg_id || '') }); } catch (_) {}
+        if (mts) {
+          try {
+            const cl = await env.DB.prepare(
+              `UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending
+                 WHERE (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>''
+                   AND ts <= ? AND ts > ?-3600
+                 ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid`
+            ).bind(mts, mts).first();
+            await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,'resgate',?,?)")
+              .bind(fone, (cl && cl.pid) || '', (cl && cl.ttclid) || '', inst, String(r.self_number || ''), mts).run();
+          } catch (_) {}
+        }
+        try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE id=?').bind(ow.at_id, r.id).run(); } catch (_) {}
       }
     } catch (_) {}
     try { await env.DB.prepare("DELETE FROM sc_ingest_audit WHERE received_at < strftime('%s','now')-259200").run(); } catch (_) {}
