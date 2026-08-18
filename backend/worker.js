@@ -946,7 +946,19 @@ async function handleUpdateLead(req, env, leadId) {
     // IDOR: só diretor/cobrador OU o dono do lead (vendedor atribuído) editam os campos do cliente.
     // Antes qualquer autenticado alterava nome/cpf/endereço/rastreio de QUALQUER lead.
     const owns = String(lead.at) === String(u.id);
+    // O QUE FOR RECUSADO VOLTA NA RESPOSTA. Antes os campos sem permissão eram descartados em
+    // silêncio e o endpoint respondia 200 ok: a tela dava "Lead salvo", o valor continuava na frente
+    // dele (edição otimista) e só no F5 seguinte voltava tudo. Isso é a queixa do Bruno de "edito e
+    // volta ao antigo", só que vinda da permissão, não do salvamento.
+    // Não bloqueio a chamada inteira de propósito: quem edita o próprio cliente e de passagem manda
+    // um campo de diretor deve gravar o que pode, e SABER o que não gravou.
+    const negados = [];
+    const nega = (cond, ...ks) => { if (!cond) for (const k of ks) if (k in patch) negados.push(k); };
     if (canManage || owns) { for (const k of SCALAR) { if (k in patch) lead[k] = patch[k]; } }
+    else nega(false, ...SCALAR);
+    nega(dir, 'at', 'vl', 'com_pct');
+    nega(canManage, 'spg', 'agend', 'valor_neg', 'col');
+    if (!canManage && Array.isArray(patch.pagamentos)) negados.push('pagamentos');
     if (dir) {
       if ('at' in patch) lead.at = patch.at;
       if ('vl' in patch) lead.vl = Number(patch.vl) || 0;
@@ -980,7 +992,10 @@ async function handleUpdateLead(req, env, leadId) {
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+    if (res && res.meta && res.meta.changes > 0) {
+      // `negados` só aparece quando existe: chamador antigo continua vendo { ok, version }.
+      return negados.length ? json({ ok: true, version: newVer, negados }) : json({ ok: true, version: newVer });
+    }
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
@@ -3121,12 +3136,29 @@ async function _waCloudSendTemplate(env, atId, number, name, lang, params, bodyT
   const apiNum = await resolveApiNumber(env, { atId, convPhone: num });
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
+  // Confere o template NA CONTA DO NUMERO que vai enviar.
+  let _lang = String(lang || 'pt_BR');
+  try {
+    if (apiNum.waba_id) {
+      const lst = await _graph(env, `/${encodeURIComponent(apiNum.waba_id)}/message_templates?fields=name,language,status&limit=200`, { token: apiNum.token || undefined });
+      if (lst.ok) {
+        const todos = (lst.data && lst.data.data) || [];
+        const doNome = todos.filter((t) => String(t.name || '') === String(name));
+        if (!doNome.length) {
+          return { ok: false, code: 'template_outra_conta', error: 'Esse template não existe na conta do número ' + (apiNum.display_phone || '') + '. Escolha um template desse número.' };
+        }
+        // idioma exato do template (o cadastro pode estar em pt_BR, pt ou en_US)
+        const igual = doNome.find((t) => String(t.language || '') === _lang);
+        if (!igual) _lang = String((doNome.find((t) => String(t.status || '').toUpperCase() === 'APPROVED') || doNome[0]).language || _lang);
+      }
+    }
+  } catch (_) {}
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
     method: 'POST', token: apiNum.token, body: JSON.stringify({
       messaging_product: 'whatsapp', to: num, type: 'template',
       template: componentes.length
-        ? { name: String(name), language: { code: String(lang || 'pt_BR') }, components: componentes }
-        : { name: String(name), language: { code: String(lang || 'pt_BR') } },
+        ? { name: String(name), language: { code: _lang }, components: componentes }
+        : { name: String(name), language: { code: _lang } },
     })
   });
   if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
@@ -4522,14 +4554,21 @@ async function handleWARegister(req, env) {
 // reescrevia a tabela a cada 2min e a WABA escolhida trocava sozinha entre uma leitura e a seguinte.
 // `atId` restringe às WABAs dos números DAQUELE atendente: o vendedor precisa dos templates que ele
 // pode disparar, não do catálogo da casa inteira.
-async function _waWabaList(env, hint, atId) {
+// `num` (8 dígitos) restringe à conta DAQUELE número: template vive dentro de uma conta, e oferecer
+// template de outra só produz o erro #132001 da Meta na cara do vendedor.
+async function _waWabaList(env, hint, atId, num) {
   const w = String(hint || '').trim();
   let rows = [];
   try {
     const so = atId != null && String(atId) !== '';
-    const sql = "SELECT waba_id, token, display_phone FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>''" + (so ? ' AND at_id = ?' : '') + " ORDER BY verified DESC, CASE WHEN token IS NULL OR token='' THEN 1 ELSE 0 END, phone_number_id ASC";
+    const n8 = String(num || '').replace(/D/g, '').slice(-8);
+    const cond = ["waba_id IS NOT NULL AND waba_id<>''"];
+    const binds = [];
+    if (so) { cond.push('at_id = ?'); binds.push(String(atId)); }
+    if (n8) { cond.push('display_phone LIKE ?'); binds.push('%' + n8); }
+    const sql = 'SELECT waba_id, token, display_phone FROM wa_api_numbers WHERE ' + cond.join(' AND ') + " ORDER BY verified DESC, CASE WHEN token IS NULL OR token='' THEN 1 ELSE 0 END, phone_number_id ASC";
     const st = env.DB.prepare(sql);
-    const r = await (so ? st.bind(String(atId)) : st).all();
+    const r = await (binds.length ? st.bind(...binds) : st).all();
     rows = (r && r.results) || [];
   } catch (_) {}
   const vistas = new Set();
@@ -4568,7 +4607,8 @@ async function handleWATemplate(req, env) {
     // Varre TODAS as WABAs, cada uma com o SEU token. Antes pegava só "a mais recente" e chamava a
     // Graph com o wa_api_token, que não tem permissão na WABA do Datacrazy: a tela ficava em erro.
     // Diretor ve todas; atendente ve so as contas dos numeros dele.
-    const alvos = await _waWabaList(env, url.searchParams.get('waba_id'), isDirector(u) ? null : u.id);
+    // `num` = número da conversa aberta. Com ele, a lista traz SÓ o que aquele número dispara.
+    const alvos = await _waWabaList(env, url.searchParams.get('waba_id'), isDirector(u) ? null : u.id, url.searchParams.get('num'));
     if (!alvos.length) return json({ ok: true, templates: [], note: 'sem_waba' });
     const porChave = new Map(); const erros = [];
     for (const a of alvos) {
