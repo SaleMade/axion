@@ -1563,6 +1563,16 @@ async function handleCreateOrUpdateUser(req, env) {
   let pwdHash = existing?.pwd_hash || null;
   if (password) {
     if (String(password).length < 6) return err('Senha precisa ter pelo menos 6 caracteres');
+    // TROCAR A PRÓPRIA SENHA EXIGE A SENHA ATUAL. Sem isto, qualquer um que pegasse a dash aberta
+    // (o celular do vendedor na mesa, o navegador do escritório) trocava a senha dele e o dono
+    // perdia a conta. O diretor continua podendo redefinir a senha de alguém sem saber a antiga:
+    // é ele quem socorre quem esqueceu.
+    if (!isDir && isSelf) {
+      const atual = String((body && (body.senha_atual || body.current_password)) || '');
+      if (!atual) return err('Informe a senha atual pra trocar a senha', 400);
+      const hashAtual = await sha256Hex(atual);
+      if (!existing?.pwd_hash || hashAtual !== existing.pwd_hash) return err('Senha atual não confere', 403);
+    }
     pwdHash = await sha256Hex(password);
   }
   if (!pwdHash) return err('Senha obrigatória ao criar usuário');
@@ -5015,6 +5025,55 @@ async function _dcSyncInstances(env) {
   }
 }
 let _dcSeenOk = false;
+// AGENDA: avisa quem marcou o retorno na hora marcada.
+// O cobrador marcava "retornar 14:30" e ninguém avisava ninguém: data.notifs só tinha saque e
+// mudança de permissão, e nada no servidor olhava os agendamentos. Sem isto a Agenda é um caderno
+// que ninguém abre na hora certa — que é exatamente quando ela vale.
+// Regras que evitam os dois jeitos de isso virar lixo:
+//  - só avisa uma vez por HORÁRIO (grava lead.agend_avisado com o horário avisado). Reagendou pra
+//    outra hora, avisa de novo; salvou o pedido sem mexer na hora, não repete.
+//  - ignora agendamento com mais de 24h de atraso: ligar isso hoje não pode despejar um ano de
+//    retorno vencido no sino de todo mundo.
+//  - o aviso vai pra QUEM É DONO do lead (lead.at). Sem dono, vai pro diretor, que é quem sobra.
+async function _agendaTick(env) {
+  const agora = Math.floor(Date.now() / 1000);
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return 0;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return 0; }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    if (!Array.isArray(data.notifs)) data.notifs = [];
+    let proximoId = data.notifs.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0) + 1;
+    const criadas = [];
+    for (const l of leads) {
+      if (!l || !l.agend) continue;
+      if (String(l.agend_avisado || '') === String(l.agend)) continue;   // esse horário já foi avisado
+      // 'YYYY-MM-DDTHH:MM' é hora LOCAL (BR, UTC-3). Sem o fuso explícito o JS trataria como UTC e o
+      // aviso sairia 3 horas adiantado.
+      const t = Math.floor(new Date(String(l.agend).length <= 16 ? String(l.agend) + ':00-03:00' : String(l.agend)).getTime() / 1000);
+      if (!t || isNaN(t)) continue;
+      if (t > agora) continue;                       // ainda não chegou a hora
+      if (agora - t > 86400) { l.agend_avisado = l.agend; continue; }   // atrasado demais: marca e não avisa
+      const quem = String(l.at || '') || 'diretor';
+      const hora = String(l.agend).slice(11, 16);
+      criadas.push({
+        id: proximoId++, type: 'cobranca', title: 'Retorno agendado agora',
+        description: (l.nome || 'Cliente') + (hora ? (' · combinado pra ' + hora) : ''),
+        to: quem, unread: true, ts: agora, ref: 'agend:' + l.id + ':' + l.agend, link: '/apps/calendar',
+      });
+      l.agend_avisado = l.agend;
+      if (criadas.length >= 20) break;   // teto por rodada: sino não vira enxurrada
+    }
+    if (!criadas.length) return 0;
+    data.notifs = [...criadas.reverse(), ...data.notifs].slice(0, 200);   // guarda as 200 últimas
+    const novaV = (row.version || 0) + 1;
+    const r = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), novaV, agora, 'agenda', row.version).run();
+    if (r && r.meta && r.meta.changes > 0) { console.error('[agenda] ' + criadas.length + ' aviso(s) de retorno'); return criadas.length; }
+    await new Promise((res) => setTimeout(res, 15 * (tentativa + 1)));   // outra escrita ganhou: relê e refaz
+  }
+  return 0;
+}
 async function _dcPoll(env, opts = {}) {
   // JANELA DE 6 HORAS, não de 15 minutos. O corte de 15min existia pra não transformar histórico em
   // lead ao ligar a integração, mas ele media a idade da MENSAGEM e nós só enxergamos a mensagem
@@ -7845,6 +7904,7 @@ export default {
     try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
     try { await _dcSyncInstances(env); } catch (_) {}   // token de envio (Meta) de cada número do Datacrazy — fresco
     try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
+    try { await _agendaTick(env); } catch (e) { console.error('[agenda] falhou: ' + String((e && e.message) || e)); }   // avisa quem marcou retorno pra agora
     // Purga o que já não serve pra roteamento/atribuição, pra as tabelas quentes não crescerem sem
     // fim (deixavam os scans lentos e o custo do Worker subindo com a verba). Só apaga o antigo:
     // auditoria de captura > 3 dias e cliques pendentes > 7 dias (a janela de atribuição é 1h).
