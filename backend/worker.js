@@ -1082,6 +1082,44 @@ async function handlePresselDelete(req, env) {
 // Salva UM chip (cirúrgico, só diretor). patch por id. Regra "Em uso": ligar em_uso num chip
 // desliga os irmãos do mesmo atendente (um por atendente). Usado pela roleta (reserva/swap) e pela
 // Contingência. Nunca manda o blob inteiro → não apaga o resto.
+// POST /api/wa/meu-numero — o ATENDENTE escolhe por qual dos SEUS números ele vai disparar.
+// Antes a tela chamava /api/chip/save, que é do diretor: o vendedor tomava 'Sem permissão' e ficava
+// preso num número só. E o caminho era errado de origem, porque marcava o chip como 'Em uso' —
+// isso é decisão de ROLETA (quem recebe lead), não de quem dispara. São duas coisas diferentes:
+// os dois números dele podem receber lead ao mesmo tempo, e ele escolhe de qual fala.
+// A escolha vive em data.wa_ativo[<usuário>] e vale só pra CONVERSA NOVA: respondendo alguém, a
+// resposta sai pelo número que recebeu (senão o lead vê a conversa pular de número).
+async function handleMeuNumero(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => ({}));
+  const chipId = body && body.chip_id != null ? String(body.chip_id) : '';
+  if (!chipId) return err('chip_id obrigatório');
+  for (let t = 0; t < 5; t++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const chip = chips.find((c) => String(c.id) === chipId);
+    if (!chip) return err('Número não encontrado', 404);
+    // Só o dono do número escolhe (o diretor pode escolher por qualquer um, pra socorrer).
+    if (!isDirector(u) && String(chip.at || '') !== String(u.id)) return err('Esse número não é seu', 403);
+    // Só número EM USO dispara. Estacionado/aquecendo não: era exatamente assim que lead ia parar
+    // em chip parado e queimava número (regra antiga da roleta, vale aqui também).
+    const emUsoIds = _emUsoIdsDe(data);
+    const emUso = chip.em_uso === true || chip.em_uso === 1 || emUsoIds.has(String(chip.wa_st || '')) || String(chip.wa_st || '') === 'em_uso';
+    if (!emUso) return err('Esse número não está "Em uso" — só número em uso pode disparar', 400);
+    if (chip.st === 'banido' || chip.st === 'aquecimento') return err('Número em aquecimento ou banido não dispara', 400);
+    if (!data.wa_ativo || typeof data.wa_ativo !== 'object') data.wa_ativo = {};
+    data.wa_ativo[String(chip.at || u.id)] = String(chip.num || '').replace(/D/g, '').slice(-8);
+    const novaV = (row.version || 0) + 1;
+    const r = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), novaV, Math.floor(Date.now() / 1000), 'meunum:' + String(u.id), row.version).run();
+    if (r && r.meta && r.meta.changes > 0) return json({ ok: true, num: chip.num, num_key: data.wa_ativo[String(chip.at || u.id)] });
+    await new Promise((res) => setTimeout(res, 12 * (t + 1)));
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
 async function handleChipSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -4197,8 +4235,19 @@ async function resolveApiNumber(env, opts = {}) {
       const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE display_phone LIKE ? ${ORD}`).bind('%' + n8).first();
       if (row && row.verified) return row;
     }
-    // 2) número do vendedor (conversa nova, sem histórico ainda)
+    // 2) número do vendedor (conversa nova, sem histórico ainda).
+    // Antes do desempate automático vem a ESCOLHA DELE (data.wa_ativo, o seletor do inbox): quem tem
+    // dois números em uso decide de qual fala, e essa decisão não pode ser sobrescrita por um
+    // 'ORDER BY' qualquer.
     if (opts.atId != null && String(opts.atId) !== '') {
+      try {
+        const st = await _getDashData(env, 30000);
+        const escolhido = st && st.wa_ativo && st.wa_ativo[String(opts.atId)];
+        if (escolhido) {
+          const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? AND display_phone LIKE ? ${ORD}`).bind(String(opts.atId), '%' + String(escolhido)).first();
+          if (row && row.verified) return row;
+        }
+      } catch (_) {}
       const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ${ORD}`).bind(String(opts.atId)).first();
       if (row) return row;
     }
@@ -4471,11 +4520,16 @@ async function handleWARegister(req, env) {
 // 4 WABAs diferentes) e o wa_api_token do AXION não enxerga nenhuma delas — era por isso que a aba
 // Templates ficava em erro. Ordem ESTÁVEL por phone_number_id (imutável): com `updated_at` o cron
 // reescrevia a tabela a cada 2min e a WABA escolhida trocava sozinha entre uma leitura e a seguinte.
-async function _waWabaList(env, hint) {
+// `atId` restringe às WABAs dos números DAQUELE atendente: o vendedor precisa dos templates que ele
+// pode disparar, não do catálogo da casa inteira.
+async function _waWabaList(env, hint, atId) {
   const w = String(hint || '').trim();
   let rows = [];
   try {
-    const r = await env.DB.prepare("SELECT waba_id, token, display_phone FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>'' ORDER BY verified DESC, CASE WHEN token IS NULL OR token='' THEN 1 ELSE 0 END, phone_number_id ASC").all();
+    const so = atId != null && String(atId) !== '';
+    const sql = "SELECT waba_id, token, display_phone FROM wa_api_numbers WHERE waba_id IS NOT NULL AND waba_id<>''" + (so ? ' AND at_id = ?' : '') + " ORDER BY verified DESC, CASE WHEN token IS NULL OR token='' THEN 1 ELSE 0 END, phone_number_id ASC";
+    const st = env.DB.prepare(sql);
+    const r = await (so ? st.bind(String(atId)) : st).all();
     rows = (r && r.results) || [];
   } catch (_) {}
   const vistas = new Set();
@@ -4504,12 +4558,17 @@ async function _waWabaId(env, hint) { const l = await _waWabaList(env, hint); re
 async function handleWATemplate(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Só o diretor', 403);
+  // LISTAR e de quem ATENDE. Era 403 pra todo mundo fora do diretor, e por isso a aba Templates do
+  // vendedor aparecia vazia com "nenhum template ainda" mesmo havendo 26 aprovados na Meta - ele
+  // ficava sem a unica forma de reabrir conversa fora das 24h. CRIAR e submeter continua do diretor:
+  // template mal escrito e reprovacao que respinga na qualidade do numero.
+  if (req.method !== 'GET' && !isDirector(u)) return err('Só o diretor', 403);
   if (req.method === 'GET') {
     const url = new URL(req.url);
     // Varre TODAS as WABAs, cada uma com o SEU token. Antes pegava só "a mais recente" e chamava a
     // Graph com o wa_api_token, que não tem permissão na WABA do Datacrazy: a tela ficava em erro.
-    const alvos = await _waWabaList(env, url.searchParams.get('waba_id'));
+    // Diretor ve todas; atendente ve so as contas dos numeros dele.
+    const alvos = await _waWabaList(env, url.searchParams.get('waba_id'), isDirector(u) ? null : u.id);
     if (!alvos.length) return json({ ok: true, templates: [], note: 'sem_waba' });
     const porChave = new Map(); const erros = [];
     for (const a of alvos) {
@@ -8171,6 +8230,7 @@ export default {
       // Diagnóstico do pull: roda o MESMO caminho que o cron e devolve em qual guarda cada mensagem
       // parou. Sem simular=0 ele não grava nada, então dá pra perguntar "esse lead viraria lead?"
       // sem criar lead nem disparar pixel.
+      if (req.method === 'POST'   && path === '/api/wa/meu-numero')     return handleMeuNumero(req, env);
       if (req.method === 'POST'   && path === '/api/wa/dc/poll')        return handleDcPollDiag(req, env);
       if (req.method === 'POST'   && path === '/api/wa/dc/sync')          return handleDcSync(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
