@@ -122,6 +122,17 @@ function isDirector(user) {
   return user && ROLE_DIRETOR.includes(user.role);
 }
 
+// QUEM PODE MEXER NA PRESSEL E NA ROLETA (só estes handlers, nada mais).
+//
+// A pressel é a ferramenta de trabalho de quem toca anúncio: pixel, domínio, criativo, mensagem e
+// pra qual número o lead vai. O Bruno pediu em 17/08/2026 que o gestor de tráfego tenha aqui o mesmo
+// que ele. A tela já foi liberada, mas sem isto o gestor via os botões e levava 403 em todos: pior
+// que o botão escondido, porque parece defeito da dash.
+//
+// NÃO adicione 'gestor' em ROLE_DIRETOR pra resolver isso. Aquela lista governa financeiro, aprovar
+// saque, apagar usuário e configuração de IA: seria dar a operação inteira pra quem cuida de anúncio.
+const _podeMexerPressel = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor';
+
 // Limpa sessões expiradas (oportunístico)
 async function cleanExpiredSessions(env) {
   const now = Math.floor(Date.now() / 1000);
@@ -982,7 +993,7 @@ const _PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
 async function handlePresselSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const patch = (body && body.patch && typeof body.patch === 'object') ? body.patch : null;
   if (!patch) return err('patch obrigatório');
@@ -1005,6 +1016,15 @@ async function handlePresselSave(req, env) {
   }
   const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg'];
   for (const k of STR) if (k in patch) target[k] = String(patch[k] == null ? '' : patch[k]).slice(0, 4000);
+  // EVENTO DE CADA ETAPA. Guardado à parte do STR de propósito: aqui o valor NÃO pode ser texto
+  // livre. Ele acaba interpolado dentro de um <script> na pressel, que é página de tráfego pago —
+  // texto livre ali seria execução de código. Só passa nome da lista do TikTok ou 'off' (desligar);
+  // qualquer outra coisa vira '' e o disparo volta ao padrão de hoje.
+  for (const k of ['ev_view', 'ev_click', 'ev_lead', 'ev_sale']) {
+    if (!(k in patch)) continue;
+    const v = String(patch[k] == null ? '' : patch[k]).trim();
+    target[k] = (v === 'off' || _EV_TT.includes(v)) ? v : '';
+  }
   if ('status' in patch) target.status = (patch.status === 'pausada' ? 'pausada' : 'ativa');
   if ('redirect' in patch) target.redirect = Math.max(0, Number(patch.redirect) || 0);
   if ('fullclick' in patch) target.fullclick = !!patch.fullclick;
@@ -1044,7 +1064,7 @@ async function handlePresselSave(req, env) {
 async function handlePresselDelete(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const id = Number(body && body.id);
   if (!id) return err('id obrigatório');
@@ -1065,7 +1085,7 @@ async function handlePresselDelete(req, env) {
 async function handleChipSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const id = body && body.id;
   const patch = (body && body.patch && typeof body.patch === 'object') ? body.patch : null;
@@ -1114,7 +1134,7 @@ async function handleChipSave(req, env) {
 async function handleChipCreate(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const inp = (body && body.chip && typeof body.chip === 'object') ? body.chip : null;
   if (!inp || !String(inp.num || '').trim()) return err('num obrigatório');
@@ -1148,7 +1168,7 @@ async function handleChipCreate(req, env) {
 async function handleChipDelete(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const id = body && body.id;
   if (id == null) return err('id obrigatório');
@@ -4354,7 +4374,7 @@ async function handleWaEsFinish(req, env) {
 async function handleWaOfficialNumbers(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Só o diretor', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   await _scEnsureTables(env);
   if (req.method === 'POST') {
     let b; try { b = await req.json(); } catch (_) { b = {}; }
@@ -4387,7 +4407,7 @@ async function handleWaOfficialNumbers(req, env) {
 async function handleWARegister(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Só o diretor', 403);
+  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   await _scEnsureTables(env);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
   const step = String(b.step || '').trim();
@@ -5725,7 +5745,11 @@ async function _ttEnsureTable(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tt_events (
     event_id TEXT PRIMARY KEY, event TEXT, phone TEXT, value REAL, ttclid TEXT,
     pid TEXT, instance TEXT, status TEXT, code TEXT, msg TEXT,
-    tries INTEGER DEFAULT 0, ts INTEGER, next_try INTEGER)`).run();
+    tries INTEGER DEFAULT 0, ts INTEGER, next_try INTEGER, stage TEXT)`).run();
+  // `stage` guarda a ETAPA do funil (pressel/whatsapp/contato/venda), que NÃO muda quando o Bruno
+  // troca o nome do evento. Quem pergunta "o TikTok aceitou a venda?" pergunta pela etapa.
+  // ALTER separado pro banco que já existia antes desta coluna (erro = já tem, e tudo bem).
+  try { await env.DB.prepare('ALTER TABLE tt_events ADD COLUMN stage TEXT').run(); } catch (_) {}
   _ttTableOk = true;   // só marca DEPOIS de criar: se falhar, a próxima chamada tenta de novo
   // Índice do reenvio: sem ele o cron varria a tabela inteira a cada 2min pra achar 0 falhas.
   try { await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_tt_retry ON tt_events(status, next_try)").run(); } catch (_) {}
@@ -5766,13 +5790,17 @@ async function _ttSend(env, pixel, token, event, phoneDigits, opts) {
   // Registra o resultado. Se falhou, o cron reenvia (backoff: 5min, 10min, 20min...).
   try {
     await _ttEnsureTable(env);
-    await env.DB.prepare(`INSERT INTO tt_events (event_id,event,phone,value,ttclid,pid,instance,status,code,msg,tries,ts,next_try)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?)
+    // O UPDATE do conflito passou a gravar `event` e `stage` também. Antes só mexia em status/code:
+    // se o Bruno trocasse o nome do evento, a linha antiga guardava o nome VELHO pra sempre, e o
+    // cron reenviava com ele por dias.
+    await env.DB.prepare(`INSERT INTO tt_events (event_id,event,phone,value,ttclid,pid,instance,status,code,msg,tries,ts,next_try,stage)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?,?)
       ON CONFLICT(event_id) DO UPDATE SET status=excluded.status, code=excluded.code, msg=excluded.msg,
+        event=excluded.event, stage=excluded.stage,
         tries=tt_events.tries+1, next_try=excluded.next_try`)
       .bind(evId, event, String(phoneDigits), (opts.value == null ? null : Number(opts.value)), String(opts.ttclid || ''),
             String(opts.pid || ''), String(opts.instance || ''), ok ? 'ok' : 'erro', code, msg, ok ? 0 : 1,
-            ok ? 0 : (Math.floor(Date.now() / 1000) + 300)).run();
+            ok ? 0 : (Math.floor(Date.now() / 1000) + 300), String(opts.stage || '')).run();
   } catch (_) {}
   return { ok, code, msg };
 }
@@ -5784,15 +5812,21 @@ async function _ttRetryFailed(env) {
       `SELECT * FROM tt_events WHERE status='erro' AND tries < 6 AND COALESCE(next_try,0) <= strftime('%s','now')
        ORDER BY ts ASC LIMIT 20`).all();
     for (const e of (rows.results || [])) {
-      const { pixel, token } = await _ttPixelToken(env, e.pid || '', e.instance || '');
+      const { pixel, token, ev } = await _ttPixelToken(env, e.pid || '', e.instance || '');
       if (!pixel || !token) {   // ainda sem pixel: adia sem gastar tentativa
         try { await env.DB.prepare("UPDATE tt_events SET next_try=strftime('%s','now')+1800 WHERE event_id=?").bind(e.event_id).run(); } catch (_) {}
         continue;
       }
       const backoff = Math.min(3600, 300 * Math.pow(2, Number(e.tries) || 0));
-      const res = await _ttSend(env, pixel, token, e.event, e.phone, {
+      // Reenvia com o nome que a pressel usa HOJE, não com o que estava gravado. Se o Bruno trocou
+      // o evento justamente porque o antigo estava errado, a fila presa em erro continuaria saindo
+      // com o nome velho por dias. A ETAPA é que manda; linha antiga (sem stage) mantém o nome dela.
+      const chave = { pressel: 'ev_view', whatsapp: 'ev_click', contato: 'ev_lead', venda: 'ev_sale' }[String(e.stage || '')];
+      const nome = (chave && ev[chave]) || e.event;
+      const res = await _ttSend(env, pixel, token, nome, e.phone, {
         value: e.value, ttclid: e.ttclid || '', eventId: e.event_id, pid: e.pid, instance: e.instance,
         eventTime: e.ts,                      // hora REAL do evento (nao a do reenvio)
+        stage: e.stage || '',
       });
       if (!res.ok) { try { await env.DB.prepare("UPDATE tt_events SET next_try=strftime('%s','now')+? WHERE event_id=?").bind(backoff, e.event_id).run(); } catch (_) {} }
     }
@@ -5800,7 +5834,7 @@ async function _ttRetryFailed(env) {
 }
 // Resolve pixel+token: 1) da pressel (pid) se tiver os dois; 2) da pressel do vendedor (ax_<at>); 3) global.
 async function _ttPixelToken(env, pid, instance) {
-  let pixel = '', token = '';
+  let pixel = '', token = '', ev = _evTodos(null);
   try {
     const data = await _getDashData(env);   // cacheado: era parseado por lead (1.3MB), estourava CPU no lote
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
@@ -5814,10 +5848,12 @@ async function _ttPixelToken(env, pid, instance) {
       const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
       if (cand.length === 1) p = cand[0];
     }
-    if (p) { pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); }
+    if (p) { pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); ev = _evTodos(p); }
   } catch (_) {}
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
-  return { pixel, token };
+  // `ev` sai junto do pixel porque vem da MESMA pressel: quem resolve "qual pixel" já resolveu
+  // "quais eventos". Caindo no pixel global (sem pressel), valem os padrões.
+  return { pixel, token, ev };
 }
 // Tipos que o WhatsApp Web emite mas que NÃO são mensagem de gente: ruído de protocolo. Se um
 // desses criar o lead, ele nasce sem texto e sem código, e a mensagem real é descartada depois.
@@ -5850,6 +5886,10 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // origem da atribuição: 'code' (exato) | 'fifo' (clique recente no mesmo número)
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}   // número (do atendente) que recebeu o lead — pra dividir por número na visão de Leads
+      // Campanha que trouxe o lead (JSON com os utm_* e as macros do TikTok). Sem isso o gestor de
+      // tráfego sabe QUANTO lead entrou e não sabe de QUAL anúncio: o ttclid identifica a pessoa,
+      // não a campanha, e ele só descobriria abrindo o TikTok e cruzando na mão.
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN utm TEXT').run(); }catch(_){}
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}   // número que recebeu o clique (últimos 8 dígitos)
@@ -5866,11 +5906,11 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     if (exists && (exists.src === 'code' || !code)) return;
     const isUpgrade = !!exists;
     // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
-    let ttclid = '', pid = '', src = '';
+    let ttclid = '', pid = '', src = '', utm = '';
     if (code) {
       try {
-        const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid").bind(code).first();
-        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; }
+        const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid, utm").bind(code).first();
+        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; utm = cl.utm || ''; }
       } catch (_) {}
       // 1b) O código É deste lead, mesmo que a linha já tenha sido reivindicada pelo FIFO de OUTRO
       // lead antes (o fifo é guloso e drena o pool de cliques do vendedor). Sem re-reivindicar, lê o
@@ -5878,8 +5918,8 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       // ao anúncio — era a maior fonte do descasamento que o gestor de tráfego via.
       if (!pid) {
         try {
-          const cl2 = await env.DB.prepare("SELECT ttclid, pid FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1").bind(code).first();
-          if (cl2 && (cl2.ttclid || cl2.pid)) { ttclid = cl2.ttclid || ''; pid = cl2.pid || ''; src = 'code'; }
+          const cl2 = await env.DB.prepare("SELECT ttclid, pid, utm FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1").bind(code).first();
+          if (cl2 && (cl2.ttclid || cl2.pid)) { ttclid = cl2.ttclid || ''; pid = cl2.pid || ''; src = 'code'; utm = cl2.utm || ''; }
         } catch (_) {}
       }
     }
@@ -5953,7 +5993,7 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
         await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src='code' WHERE phone=?").bind(newPid, newTt, phone).run();
       }
     } else {
-      await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,?,?,strftime('%s','now'))").bind(phone, pid, ttclid, instance, src, num).run();
+      await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts, utm) VALUES (?,?,?,?,?,?,strftime('%s','now'),?)").bind(phone, pid, ttclid, instance, src, num, utm).run();
     }
     // Dispara InitiateCheckout pra TODO lead que veio da pressel (tem pid), com ou sem ttclid. O
     // GT compara o nº de leads da dash com o do TikTok, e limitar a `ttclid` deixava ~40% de fora
@@ -5961,8 +6001,10 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // matching), então o TikTok consegue casar por telefone mesmo sem o click id. Lead orgânico de
     // verdade (sem pid) continua fora. No upgrade só dispara se ainda não tinha disparado.
     if ((ttclid || pid) && !(exists && (exists.ttclid || exists.pid))) {
-      const { pixel, token } = await _ttPixelToken(env, pid, instance);
-      await _ttSend(env, pixel, token, 'InitiateCheckout', phone, { ttclid, eventId: 'lead_' + phone, pid, instance });   // LEAD = InitiateCheckout (evento que o GT otimiza)
+      const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
+      // O nome vem da pressel (padrão InitiateCheckout, que é o evento que o GT otimiza). Vazio =
+      // o Bruno desligou esta etapa nas Configurações da pressel.
+      if (ev.ev_lead) await _ttSend(env, pixel, token, ev.ev_lead, phone, { ttclid, eventId: 'lead_' + phone, pid, instance, stage: 'contato' });
     }
   } catch (_) {}
 }
@@ -6013,8 +6055,11 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
         ).bind(digits, pid, instance, num).run();
       } catch (_) {}
     }
-    const { pixel, token } = await _ttPixelToken(env, pid, instance);
-    await _ttSend(env, pixel, token, 'CompletePayment', digits, { value, ttclid, eventId, pid, instance });
+    const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
+    // `stage:'venda'` é o que a tela de pedidos consulta pra mostrar "o TikTok aceitou". Antes ela
+    // procurava pelo NOME 'CompletePayment' num JOIN; com o nome configurável, o selo sumiria em
+    // silêncio no dia em que o Bruno trocasse o evento. A etapa não muda, o nome sim.
+    if (ev.ev_sale) await _ttSend(env, pixel, token, ev.ev_sale, digits, { value, ttclid, eventId, pid, instance, stage: 'venda' });
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
@@ -6046,7 +6091,7 @@ async function handleWASales(req, env) {
         l.pid AS pid, l.src AS src, l.ttclid AS ttclid,
         t.status AS tt_status, t.code AS tt_code, t.msg AS tt_msg, t.tries AS tt_tries
       FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone
-      LEFT JOIN tt_events t ON t.event_id=s.msg_id AND t.event='CompletePayment'
+      LEFT JOIN tt_events t ON t.event_id=s.msg_id AND (t.stage='venda' OR (t.stage IS NULL AND t.event='CompletePayment'))
       ${where} ORDER BY s.ts DESC LIMIT 1000`);
     const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
@@ -6633,6 +6678,37 @@ async function _roletaMarkSaturated(env){
   _lastSatWrite=now;
   try{ await _ensureConfigTable(env); await env.DB.prepare("INSERT INTO app_config (key,value,updated_at) VALUES ('roleta_sat_ts',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").bind(String(now),now).run(); }catch(_){}
 }
+// QUAL EVENTO SAI EM CADA ETAPA DO FUNIL (escolhido por pressel).
+//
+// Pedido do Bruno em 17/08/2026: "gostaria de poder configurar quais são os eventos que vão ser
+// disparados em cada etapa do funil". São 4 etapas, e elas saem de DOIS lugares diferentes do
+// código: as duas primeiras no NAVEGADOR (dentro do HTML da pressel) e as duas últimas no SERVIDOR
+// (Events API). Mexer só num lado configura metade do funil.
+//
+//   ev_view  "chegaram na pressel"   navegador   padrão PageView
+//   ev_click "foram pro WhatsApp"    navegador   padrão ClickButton
+//   ev_lead  "iniciaram contato"     servidor    padrão InitiateCheckout   <- é o que o GT otimiza
+//   ev_sale  "vendas"                servidor    padrão CompletePayment
+//
+// TRÊS REGRAS QUE NÃO PODEM CAIR:
+// 1. NOME SÓ DA LISTA. O nome é interpolado dentro de um <script> na página do anúncio, que é
+//    tráfego pago. Nome livre ali é execução de código na pressel. Fora da lista cai no padrão:
+//    configuração errada nunca pode derrubar o pixel.
+// 2. O PADRÃO É O DE HOJE, byte a byte. Pressel que ninguém configurou continua disparando igual.
+// 3. 'off' desliga a etapa de propósito (devolve string vazia).
+const _EV_TT = ['PageView', 'ViewContent', 'ClickButton', 'Search', 'AddToWishlist', 'AddToCart',
+  'InitiateCheckout', 'AddPaymentInfo', 'CompletePayment', 'PlaceAnOrder', 'Contact', 'Download',
+  'SubmitForm', 'CompleteRegistration', 'Subscribe'];
+const _EV_PADRAO = { ev_view: 'PageView', ev_click: 'ClickButton', ev_lead: 'InitiateCheckout', ev_sale: 'CompletePayment' };
+const _EV_ETAPA = { ev_view: 'pressel', ev_click: 'whatsapp', ev_lead: 'contato', ev_sale: 'venda' };
+function _evDe(p, chave) {
+  const v = String((p && p[chave]) || '').trim();
+  if (v === 'off') return '';
+  if (v && _EV_TT.includes(v)) return v;
+  return _EV_PADRAO[chave] || '';
+}
+const _evTodos = (p) => ({ ev_view: _evDe(p, 'ev_view'), ev_click: _evDe(p, 'ev_click'), ev_lead: _evDe(p, 'ev_lead'), ev_sale: _evDe(p, 'ev_sale') });
+
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
   const id=JSON.stringify(String(p.pixel_tt)).replace(/</g,'\\u003c');   // neutraliza </script>
@@ -7603,7 +7679,19 @@ async function handlePresselPublic(req, env, id){
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();
   }catch(_){}
-  const ttclid = new URL(req.url).searchParams.get('ttclid') || '';   // click id do anúncio do TikTok
+  const _qs = new URL(req.url).searchParams;
+  const ttclid = _qs.get('ttclid') || '';   // click id do anúncio do TikTok
+  // CAMPANHA. O ttclid diz QUEM clicou, mas não de QUAL anúncio: sem isso o gestor de tráfego
+  // sabe que entrou lead e não sabe qual campanha trouxe. Guardamos os utm_* padrão e também os
+  // nomes que o TikTok manda nas macros (campaign_name, adgroup_name, ad_name, campaign_id...).
+  // Fica como JSON num campo só: parâmetro de anúncio muda com o tempo e não vale uma coluna nova
+  // por vez. Só entra o que veio; link sem utm continua funcionando igual.
+  const _utm = (() => {
+    const campos = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','campaign_name','campaign_id','adgroup_name','adgroup_id','ad_name','ad_id','placement','sub1'];
+    const o = {};
+    for (const c of campos) { const v = (_qs.get(c) || '').trim(); if (v) o[c] = v.slice(0, 120); }
+    return Object.keys(o).length ? JSON.stringify(o) : '';
+  })();
   let leadCode = '';
   // SEM número conectado o clique CONTINUA sendo registrado: o tráfego foi PAGO e tem que aparecer
   // no funil. Antes isso ficava dentro de um `if(pick)` e um dia com todos os números offline ficava
@@ -7627,7 +7715,8 @@ async function handlePresselPublic(req, env, id){
       // sem número: grava mesmo assim, com inst/num_key vazios. Guarda a PRESSEL de origem e mantém
       // a deduplicação por ttclid (senão um refresh contaria a mesma visita duas vezes).
       const _nk = pick ? String(pick.num||'').replace(/\D/g,'').slice(-8) : '';
-      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key) VALUES (?,?,?,strftime('%s','now'),0,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk).run();
+      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN utm TEXT').run(); }catch(_){}
+      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key, utm) VALUES (?,?,?,strftime('%s','now'),0,?,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk, _utm).run();
       if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok, 1x por clique
     }
   }catch(_){}
@@ -7654,7 +7743,23 @@ async function handlePresselPublic(req, env, id){
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
   // texto/código de verdade. Auto-redirect só com ttclid.
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){try{ttq&&ttq.page()}catch(e){}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{ttq&&ttq.track('ClickButton')}catch(e){}try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}}function go(){track();if(!${waJson})return;try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
+  // Evento das DUAS etapas do navegador, escolhido nas Configurações da pressel.
+  //
+  // O nome entra dentro de um <script> desta página, então passa pelo mesmo escape do _ttPixel
+  // (JSON.stringify + <): um nome com </script> executaria código na página do anúncio. O
+  // _evDe já só devolve nome da lista, mas o escape fica porque defesa de injeção não se apoia numa
+  // validação só.
+  //
+  // "Chegaram na pressel" no padrão emite ttq.page(), e NÃO ttq.track('PageView'): para o TikTok os
+  // dois não são a mesma coisa (page() alimenta o relatório de tráfego do pixel; um track('PageView')
+  // entraria como evento customizado). Só quando o Bruno escolhe OUTRO evento é que vira track.
+  const _evV=_evDe(p,'ev_view'), _evC=_evDe(p,'ev_click');
+  const _esc=(s)=>JSON.stringify(String(s)).replace(/</g,'\\u003c');
+  const _jsView=!_evV ? '' : (_evV==='PageView' ? 'try{ttq&&ttq.page()}catch(e){}' : `try{ttq&&ttq.track(${_esc(_evV)})}catch(e){}`);
+  const _jsClick=!_evC ? '' : `try{ttq&&ttq.track(${_esc(_evC)})}catch(e){}`;
+  // O beacon vem ANTES do ttq de propósito: ele é quem alimenta "Foram pro WhatsApp" na dash. Com o
+  // pixel primeiro, um erro ali levava a métrica junto.
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){${_jsView}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}${_jsClick}}function go(){track();if(!${waJson})return;try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa)).join('');
   if(p.fullclick){
