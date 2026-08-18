@@ -4874,6 +4874,16 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
 
 // POST /api/wa/dc/sync — puxa o inbox do Datacrazy na hora (o cron de 2min já faz sozinho).
 // Serve pro botão de recarregar do Atendimento não depender de esperar a próxima rodada.
+async function handleDcPollDiag(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  const url = new URL(req.url);
+  const janela = Math.min(Number(url.searchParams.get('janela')) || 900, 604800);
+  const simular = url.searchParams.get('simular') !== '0';   // padrão: NÃO grava
+  const passo = await _dcPoll(env, { janela, simular });
+  return json({ ok: true, janela, simular, passo });
+}
 async function handleDcSync(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -5005,12 +5015,26 @@ async function _dcSyncInstances(env) {
   }
 }
 let _dcSeenOk = false;
-async function _dcPoll(env) {
+async function _dcPoll(env, opts = {}) {
+  // JANELA DE 6 HORAS, não de 15 minutos. O corte de 15min existia pra não transformar histórico em
+  // lead ao ligar a integração, mas ele media a idade da MENSAGEM e nós só enxergamos a mensagem
+  // quando a API do Datacrazy a expõe. Medido em 17/08/2026: as 13 conversas do dia foram TODAS
+  // rejeitadas por 'velha' (a mais nova tinha 97 minutos) e por isso wa_lead estava zerado - lead
+  // nenhum, evento nenhum pro pixel, com a campanha prestes a subir.
+  // Abrir a janela é seguro porque quem impede reprocessar é o dc_seen (uma linha por mensagem já
+  // tratada), não o relógio. O histórico que existia antes desta mudança foi marcado como visto na
+  // mão, então nada velho vira lead novo.
+  const janela = Number(opts.janela) > 0 ? Number(opts.janela) : 21600;   // idade máxima da mensagem, em segundos
+  const simular = !!opts.simular;                                       // true = não grava nada, só conta
+  // CONTADOR POR GUARDA. Sem isto o poll é caixa preta: ele roda "ok", não cria lead nenhum e não há
+  // como saber em qual guarda a mensagem parou. Cada campo é uma porta por onde a mensagem sai.
+  const passo = { conversas: 0, sem_lastmessage: 0, sem_id: 0, velha: 0, so_vendedor: 0, ja_vista: 0, sem_telefone: 0, sem_dono: 0, processada: 0, erro: 0 };
   const key = await _readConfig(env, 'dc_api_key');
-  if (!key) return;
+  if (!key) return passo;
   const j = await _dcApiGet(env, '/conversations?take=40');
   const arr = (j && (j.data || j)) || [];
-  if (!Array.isArray(arr) || !arr.length) return;
+  if (!Array.isArray(arr) || !arr.length) return passo;
+  passo.conversas = arr.length;
   await _dcEnsureTables(env);
   if (!_dcSeenOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_seen (msg_id TEXT PRIMARY KEY, ts INTEGER)').run(); _dcSeenOk = true; } catch (_) {} }
   const now = Math.floor(Date.now() / 1000);
@@ -5018,25 +5042,25 @@ async function _dcPoll(env) {
   for (const c of arr) {
     try {
       const lm = c.lastMessage;
-      if (!lm) continue;
+      if (!lm) { passo.sem_lastmessage++; continue; }
       const inbound = lm.received === true;   // true = lead mandou; false = vendedor mandou
       const msgId = String(lm.id || '');
-      if (!msgId) continue;
+      if (!msgId) { passo.sem_id++; continue; }
       const mts = lm.createdAt ? Math.floor(new Date(lm.createdAt).getTime() / 1000) : now;
-      if (now - mts > 900) continue;   // só o recente (15min) — não reprocessa histórico ao ligar
+      if (now - mts > janela) { passo.velha++; continue; }   // só o recente — não reprocessa histórico ao ligar
       const text = String(lm.body || '');
       // venda = "Pedido Concluído" que o VENDEDOR posta (mesma assinatura da dash). _waDetectSale confere o resto.
       const isSale = !inbound && /pedido\s+conclu/i.test(text);
-      if (!inbound && !isSale) continue;   // mensagem normal do vendedor (não-venda): ignora
+      if (!inbound && !isSale) { passo.so_vendedor++; continue; }   // mensagem normal do vendedor (não-venda): ignora
       // DEDUPE só CONSULTA aqui. Marcar como visto ANTES de processar era o que apagava a mensagem
       // pra sempre: número sem dono caía fora do "if (inst)" e na rodada seguinte batia em "já visto".
       let jaVisto = null;
       try { jaVisto = await env.DB.prepare('SELECT 1 FROM dc_seen WHERE msg_id=? LIMIT 1').bind(msgId).first(); } catch (_) {}
-      if (jaVisto) continue;
+      if (jaVisto) { passo.ja_vista++; continue; }
       const phone = String((c.contact && c.contact.phoneNumber) || '').replace(/\D/g, '');
       const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
       const name = String((c.contact && c.contact.name) || '');
-      if (!phone) continue;
+      if (!phone) { passo.sem_telefone++; continue; }
       let atId = null, ownInst = '';
       if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
       const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
@@ -5049,6 +5073,8 @@ async function _dcPoll(env) {
       // mensagem quando ela envelhece. É a mesma janela do _waLeadCapture, que também recusa
       // mensagem com mais de 900s pra histórico não virar lead novo.
       if (!inst) {
+        passo.sem_dono++;
+        if (simular) continue;
         let jaAud = null;
         try { jaAud = await env.DB.prepare('SELECT 1 FROM sc_ingest_audit WHERE msg_id=? LIMIT 1').bind(msgId).first(); } catch (_) {}
         if (!jaAud) {
@@ -5060,13 +5086,19 @@ async function _dcPoll(env) {
         }
         continue;
       }
+      passo.processada++;
+      // Em SIMULAÇÃO o item para aqui: contou, não gravou. É o que permite perguntar "esse lead
+      // viraria lead?" sem criar lead, sem disparar pixel e sem mexer no Datacrazy.
+      if (simular) continue;
       try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,?,?,?,?)").bind(phone, self || null, inbound ? 'in' : 'out', isSale ? 'poll-sale' : 'poll', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId }).slice(0, 1000)).run(); } catch (_) {}
       // msg_id com o MESMO prefixo do _dcSyncInbox ('dc:'), senão a mesma mensagem entra 2x no inbox
       // (o sync grava 'dc:<id>' e o poll gravaria '<id>', chaves diferentes, linha duplicada na tela).
       try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId }); } catch (_) {}
       if (inbound) {
         try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
-        try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
+        // passa a MESMA janela do poll: aqui a mensagem já foi deduplicada por dc_seen, então o
+        // teto de 15min só serviria pra descartar lead de verdade por atraso da API deles.
+        try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts, janela); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
         try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy
       } else if (isSale) {
         let _sr2 = null;
@@ -5092,6 +5124,10 @@ async function _dcPoll(env) {
     _scanned++;
     try { await _dcScanConvSales(env, c, now); } catch (_) {}
   }
+  // Uma linha por rodada COM movimento. Rodada parada não loga (senão vira ruído a cada 2min), mas
+  // no dia em que o lead não virar lead, o log diz em qual guarda ele parou.
+  if (passo.processada || passo.sem_dono || passo.erro) console.error('[dc-poll] ' + JSON.stringify(passo));
+  return passo;
 }
 // Varre as últimas mensagens de UMA conversa e dispara a venda ("Pedido Concluído" do vendedor) ainda não vista.
 async function _dcScanConvSales(env, c, now) {
@@ -5865,7 +5901,12 @@ const _WA_NAO_MSG = new Set(['e2e_notification', 'notification_template', 'proto
   'gp2', 'broadcast_notification', 'call_log', 'revoked', 'unknown', 'gp', 'newsletter_notification']);
 // LEAD: na 1ª mensagem do número, casa com o clique pelo CÓDIGO no texto (atribuição EXATA).
 // Quem manda sem código (lead antigo, indicação, orgânico) não veio de pressel → não conta. 1x por número.
-async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgTs) {
+// `maxIdade` (segundos) só é passado por quem JÁ deduplica a mensagem por id — hoje, o pull do
+// Datacrazy. Ele existe porque o pull não vê a mensagem na hora em que ela é enviada: em 17/08/2026
+// a conversa mais nova da API tinha 97 minutos, e a guarda de 15min descartava TODAS, deixando
+// wa_lead zerado com a campanha prestes a subir. Quem não passa nada continua com os 15min de
+// sempre, que é o que protege do despejo de histórico quando um número reconecta.
+async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgTs, maxIdade) {
   try {
     // GUARDA 1 — evento de PROTOCOLO não é mensagem de lead.
     // O Sale Chat encaminha tudo que o WhatsApp Web emite, e ~94% do volume é ruído de protocolo:
@@ -5880,7 +5921,8 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // número de cobrança em 21/07) e cada contato antigo virava "lead novo sem rastreio", inflando
     // a métrica do gestor de tráfego. Mensagem com mais de 15min de idade é histórico, não lead.
     const _ts = Number(msgTs) || 0;
-    if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > 900) return;
+    const _teto = Number(maxIdade) > 0 ? Number(maxIdade) : 900;
+    if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > _teto) return;
     if (!_leadTablesOk) {   // DDL uma vez por isolate (era causa do 1102 no lote de captura)
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
@@ -8066,6 +8108,10 @@ export default {
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/official/numbers') return handleWaOfficialNumbers(req, env);
       if (req.method === 'POST'   && path === '/api/wa/register')          return handleWARegister(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/template') return handleWATemplate(req, env);
+      // Diagnóstico do pull: roda o MESMO caminho que o cron e devolve em qual guarda cada mensagem
+      // parou. Sem simular=0 ele não grava nada, então dá pra perguntar "esse lead viraria lead?"
+      // sem criar lead nem disparar pixel.
+      if (req.method === 'POST'   && path === '/api/wa/dc/poll')        return handleDcPollDiag(req, env);
       if (req.method === 'POST'   && path === '/api/wa/dc/sync')          return handleDcSync(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
