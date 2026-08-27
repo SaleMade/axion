@@ -18,7 +18,10 @@ routes = [
 # ─── Cron: sincroniza o estado de conexão (wa_conn) com a Evolution a cada 2min ──
 # (mantém "conectado/número" certo mesmo com a dash fechada — serve-time confia no wa_conn)
 [triggers]
-crons = ["*/2 * * * *"]
+# DE 1 EM 1 MINUTO, e cada batida faz UM passo (ver o scheduled no worker.js). Era */2 fazendo tudo
+# junto, e no plano Workers Free (10ms de CPU por invocacao) a batida inteira estourava e morria
+# calada: em 18/08/2026 ficamos 4h20 sem capturar lead com a campanha rodando.
+crons = ["* * * * *"]
 
 # ─── D1 (SQLite gerenciado) ────────────────────────────────────
 # Após `wrangler d1 create axion`, copie o `database_id` exibido

@@ -1,0 +1,55 @@
+# CONFIG DO WORKER DO AMIGO (Giovane). Criado em 27/08/2026.
+#
+# O MESMO worker.js roda em DUAS contas Cloudflare. O wrangler.toml ao lado deste arquivo e
+# 100% NOSSO (name axion-api, D1 axion, R2 salechat-media, dominios area-*). Rodar
+# `npx wrangler deploy` puro aqui com o token DELE cria um worker errado na conta dele, ou
+# falha no meio. Publicar na conta dele e SEMPRE com `-c wrangler-cg.toml`.
+#
+# As quatro decisoes deste arquivo, cada uma custou uma checagem:
+#
+# 1) workers_dev = true, EXPLICITO. A dash dele (dashboard-cg.pages.dev) fala com
+#    https://axion-api-cg.sellwave-cg.workers.dev - conferido dentro do bundle que ela serve.
+#    Sem esta linha o wrangler assume false, a URL workers.dev vira 404 e a dash dele apaga
+#    inteira. E o jeito mais traicoeiro de quebrar: a pressel continua respondendo 200 pelos
+#    custom domains, entao parece que o deploy deu certo.
+#
+# 2) SEM [[routes]]. Os dois custom domains dele (nutrapremium.sbs e nutrapremium.site) sao
+#    recurso SEPARADO do script e sobrevivem sozinhos a um deploy que nao os declara.
+#    Declara-los faria o wrangler subir o script e SO DEPOIS tentar anexar a rota: se o token
+#    dele nao tiver permissao de editar rota de zona, o terminal fica vermelho com o codigo
+#    novo ja publicado.
+#
+# 3) SEM [[r2_buckets]]. A conta dele nao tem R2 habilitado (a API responde 10042 "Please
+#    enable R2"). Declarar o binding quebra o deploy. Ausencia e inofensiva: todo uso de
+#    env.MEDIA no worker.js esta atras de `if (!env.MEDIA)` ou try/catch, e o bundle dele ja
+#    roda assim desde 14/08. O que ele nao tem por causa disso: _backupState (sem snapshot do
+#    estado), midia do inbox e /api/arquivo*.
+#
+# 4) crons = ["*/2 * * * *"], NAO o "* * * * *" do nosso toml. O nosso assume Workers Paid
+#    (o Bruno assinou em 18/08); a conta dele esta no plano Free, com teto de 10ms de CPU.
+#    E nunca deixar crons = []: isso APAGA o schedule dele e para o funil de WhatsApp, o
+#    estado das conexoes e o vinculo numero->vendedor, sem nada avisar.
+#
+# [vars] repete o que ja estava nos bindings dele. O deploy substitui os bindings pelo que
+# esta no config, entao sem estas duas linhas elas sumiriam. O SEGREDO (CF_API_TOKEN) nao:
+# wrangler nao apaga segredo sem `wrangler secret delete`.
+
+name = "axion-api-cg"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+workers_dev = true
+
+[triggers]
+crons = ["*/2 * * * *"]
+
+[vars]
+CF_ACCOUNT_ID = "588fe0a3e1dcd39b9bfb53bdee593d08"
+WORKER_NAME = "axion-api-cg"
+
+[[d1_databases]]
+binding       = "DB"
+database_name = "axion-cg"
+database_id   = "353f45f6-23ed-4567-9572-d8773867375c"
+
+[observability]
+enabled = true

@@ -47,6 +47,23 @@ function cmpVer(a, b) {
 }
                                      // (era 30 dias — sessão zumbi viva por 1 mês se token vazasse)
 const ROLE_DIRETOR = ['diretor','socio','produtor'];
+// CARGO AFILIADO (23/08/2026). Gente de FORA que vende pra gente e ganha uma dash propria: o
+// afiliado ve os pedidos DELE, a equipe DELE e a comissao DELE, e mais nada da nossa operacao.
+// Nunca entra em ROLE_DIRETOR: aquela lista governa financeiro da empresa, folha e permissoes.
+// `u.afiliado_id` e o que amarra a pessoa ao afiliado. Vale pro proprio afiliado E pra equipe dele
+// (o vendedor de um afiliado tem o afiliado_id do dono), e e assim que o escopo desce em cascata.
+const isAfiliado = (u) => String((u && u.role) || '').toLowerCase() === 'afiliado';
+const aflDe = (u) => (u && u.afiliado_id) ? String(u.afiliado_id) : null;
+// Alguem preso ao mundo de um afiliado: o afiliado ou alguem da equipe dele.
+const noMundoAfiliado = (u) => !isDirector(u) && !!aflDe(u);
+// FALHA FECHADA (24/08/2026). O Bruno cadastrou um afiliado pela tela "Novo usuario" (Lista de
+// Usuarios) em vez da area de Afiliados. Aquela tela cria o USUARIO mas nao cria o afiliado nem
+// preenche afiliado_id - entao `noMundoAfiliado` dava false e ele caia na regra do vendedor comum:
+// recebia os 48 leads da operacao INTEIRA, com nome, CPF, telefone e endereco de cada cliente.
+// Conferido ao vivo antes de corrigir.
+// Regra nova: cargo afiliado SEM vinculo nao ve nada. Um afiliado sem afiliado_id e um cadastro
+// pela metade, e a metade que falta e justamente a que diz o que e dele. Na duvida, nada.
+const afiliadoSemVinculo = (u) => isAfiliado(u) && !aflDe(u);
 
 // Chave única configurada no postback da PAYT — acesso ao webhook
 // Pra trocar: editar aqui ou configurar como secret via `wrangler secret put PAYT_TOKEN`
@@ -98,12 +115,24 @@ async function authUser(req, env) {
   if (!m) return null;
   const token = m[1];
   const now = Math.floor(Date.now() / 1000);
-  const row = await env.DB.prepare(
-    `SELECT s.expires_at, s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct,
-            u.photo, u.banner, u.email
+  // A COLUNA afiliado_id PODE NAO EXISTIR AINDA. Este SELECT roda em TODA requisicao e ANTES de
+  // qualquer ALTER TABLE do worker - entao, num banco que ainda nao tem a coluna, ele derruba a API
+  // INTEIRA com "no such column" (aconteceu em 23/08/2026: /api/state e /api/wa/chats caindo em
+  // 1101 ate a coluna ser criada na mao). O mesmo valeria pro banco do Giovane, que roda este
+  // codigo com D1 proprio. Por isso: tenta o SELECT completo, e se a coluna faltar, cria e refaz.
+  // Nunca deixe este caminho depender de uma coluna nova sem esta rede.
+  let row;
+  const SEL = (extra) => `SELECT s.expires_at, s.user_id, u.id, u.login, u.name, u.abbr, u.role, u.color, u.bg, u.com_pct,
+            u.photo, u.banner, u.email${extra}
      FROM sessions s JOIN users u ON s.user_id = u.id
-     WHERE s.token = ? AND s.expires_at > ?`
-  ).bind(token, now).first();
+     WHERE s.token = ? AND s.expires_at > ?`;
+  try {
+    row = await env.DB.prepare(SEL(', u.afiliado_id')).bind(token, now).first();
+  } catch (_) {
+    try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_2) {}
+    try { row = await env.DB.prepare(SEL(', u.afiliado_id')).bind(token, now).first(); }
+    catch (_3) { row = await env.DB.prepare(SEL('')).bind(token, now).first(); }
+  }
   if (!row) return null;
   // Sliding expiry: enquanto o usuário usa, renova o prazo. Pra não gravar a cada
   // request (polling de 10s), só renova quando falta menos de (TTL - 1 dia) →
@@ -116,6 +145,15 @@ async function authUser(req, env) {
     } catch (_) { /* renovação é best-effort */ }
   }
   return row;
+}
+
+// O valor pago so pode DESCER em relacao ao pedido: e desconto, nao remarcacao. Sem este teto, um
+// vendedor poderia inflar a propria comissao digitando um numero maior que o pedido.
+function _valorPago(v, lead) {
+  const n = Number(v) || 0;
+  const cheio = Number(lead && lead.vl) || 0;
+  if (n <= 0) return 0;
+  return cheio > 0 ? Math.min(n, cheio) : n;
 }
 
 function isDirector(user) {
@@ -131,7 +169,43 @@ function isDirector(user) {
 //
 // NÃO adicione 'gestor' em ROLE_DIRETOR pra resolver isso. Aquela lista governa financeiro, aprovar
 // saque, apagar usuário e configuração de IA: seria dar a operação inteira pra quem cuida de anúncio.
-const _podeMexerPressel = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor';
+// Pressel e roleta agora tem DONO (24/08/2026). Sem `afl` = nossa. Com `afl` = daquele afiliado.
+// O afiliado mexe na dele; o gestor de trafego continua mexendo na nossa.
+const _podeMexerPressel = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor' || isAfiliado(u);
+const _donoDe = (x) => String((x && x.afl) || '');
+// QUEM MEXE NA NOSSA CONTA DA META. Separado do _podeMexerPressel de proposito: la o afiliado entra
+// porque tem pressel e chip PROPRIOS, com dono. Aqui nao ha "dele": a WABA, o token da Graph e os
+// numeros oficiais sao da casa, e registrar numero pela API ja queimou dois chips em coexistencia.
+const _podeMexerMeta = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor';
+// Cargo que so toca campanha e nunca ve cliente (vale tambem pra equipe de um afiliado).
+const _soCampanhaRole = (u) => ['gestor', 'designer'].includes(String((u && u.role) || '').toLowerCase());
+
+// CHIPS QUE UMA PRESSEL PODE USAR: so os do MESMO dono.
+//
+// E a linha que separa os dois mundos na roleta. Pressel nossa (sem afl) so roteia pra chip nosso
+// (sem afl); pressel de afiliado so roteia pros numeros daquele afiliado. Sem isto, publicar a
+// pressel de um afiliado mandaria lead dele pros NOSSOS numeros - e vice-versa.
+//
+// NO DIA DO DEPLOY ISTO E INOCUO, de proposito: nenhuma pressel e nenhum chip tem `afl`, entao os
+// dois lados da comparacao sao '' e nada muda na roleta que esta rodando. A memoria do projeto tem
+// quatro casos de roleta que morreu em silencio; a forma segura de mexer aqui e assim, com um
+// filtro que comprovadamente nao filtra nada ate alguem criar o primeiro registro com dono.
+// IDS DE PRESSEL QUE ESTE USUARIO PODE VER. null = todas (diretor, gestor). Pro afiliado, so as
+// dele - e afiliado sem vinculo recebe Set vazio, que corta tudo (fail-closed).
+const _presselIdsVisiveis = (u, data) => {
+  // VALE PRO MUNDO INTEIRO DELE, nao so pro afiliado (auditoria de 24/08/2026). Testar so
+  // isAfiliado devolvia null pro vendedor, cobrador e gestor que ELE cadastrou - e null quer dizer
+  // "ve tudo". Ou seja, a equipe dele enxergava as NOSSAS pressels em tres rotas de metrica.
+  if (!noMundoAfiliado(u) && !afiliadoSemVinculo(u)) return null;
+  const meu = aflDe(u);
+  const ps = Array.isArray(data && data.pressels) ? data.pressels : [];
+  return new Set(ps.filter((p) => p && meu && String(p.afl || '') === meu).map((p) => String(p.id)));
+};
+
+const _chipsDaPressel = (p, chips) => {
+  const dono = _donoDe(p);
+  return (chips || []).filter((c) => _donoDe(c) === dono);
+};
 
 // Limpa sessões expiradas (oportunístico)
 async function cleanExpiredSessions(env) {
@@ -148,7 +222,9 @@ async function handleLogin(req, env) {
   const pwdHash = await sha256Hex(body.password);
 
   const user = await env.DB.prepare(
-    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct, photo, banner, email FROM users WHERE lower(login) = ?'
+    // afiliado_id vai junto: a dash do afiliado usa ele pra saber quais pedidos sao dele nas telas
+    // que filtram no cliente (painel, destaques). O escopo de verdade continua sendo do servidor.
+    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct, photo, banner, email, afiliado_id FROM users WHERE lower(login) = ?'
   ).bind(login).first();
 
   if (!user || user.pwd_hash !== pwdHash) {
@@ -294,6 +370,12 @@ async function handleFiveCapture(req, env, subpath) {
 //  five_products    catálogo de produtos do produtor
 // tenant = project_id da Five (separa os produtores quando clonar pro amigo)
 async function _ensureFiveTables(env) {
+  // UMA VEZ POR ISOLATE, igual _waEnsureTables e _scEnsureTables ja faziam. Sem esta linha as seis
+  // DDL (CREATE/ALTER) rodavam a CADA requisicao, e como cada ida ao D1 custa uns 200ms de rede, o
+  // /api/five/summary e o /api/five/orders levavam DOIS SEGUNDOS pra devolver 200 bytes. Era pura
+  // espera de ida e volta, com uma tabela de 1 linha. Deploy novo zera o isolate e as DDL rodam de
+  // novo, entao continua seguro pra mudanca de schema.
+  if (_fiveTablesOk) return;
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_orders (
     order_id TEXT PRIMARY KEY,
     project_id TEXT, project_name TEXT,
@@ -315,11 +397,71 @@ async function _ensureFiveTables(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS five_products (
     product_id TEXT PRIMARY KEY, tenant TEXT, name TEXT, created_at INTEGER
   )`).run();
+  // CADASTRO DE AFILIADO (23/08/2026). A tabela nasceu como um stub que a Five preenchia sozinha:
+  // so id + nome. O Bruno passou a GERIR afiliado (area propria na dash), e gerir pede o que a Five
+  // nao manda: contato, chave Pix, % combinado e se esta ativo. Colunas adicionadas uma a uma e com
+  // try/catch porque o D1 nao tem "ADD COLUMN IF NOT EXISTS" e isto roda a cada boot.
+  // `slug` (25/08/2026): a etiqueta do afiliado na URL publica da pressel dele, ver _aflSlugDe.
+  for (const col of ['phone TEXT', 'doc TEXT', 'pix TEXT', 'pct REAL', 'status TEXT', 'obs TEXT',
+                     'origem TEXT', 'updated_at INTEGER', 'slug TEXT']) {
+    try { await env.DB.prepare('ALTER TABLE five_affiliates ADD COLUMN ' + col).run(); } catch (_) {}
+  }
+  // O QUE JA FOI PAGO A CADA AFILIADO. Sem isto, "a pagar" seria sempre a comissao inteira: a dash
+  // nunca saberia que o Bruno ja acertou. Uma linha por pagamento (nao um saldo), pra o historico
+  // sobreviver a correcao e a dash poder mostrar quando e como cada acerto saiu.
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS afiliado_pagamentos (
+    id TEXT PRIMARY KEY, affiliate_id TEXT, valor REAL, data TEXT, metodo TEXT, obs TEXT,
+    criado_por TEXT, created_at INTEGER
+  )`).run();
+  // O QUE O CLIENTE PAGOU DE VERDADE (com o juro do parcelamento) e quanto foi so juro.
+  // charge_amount guarda o valor da VENDA, que e o dinheiro do produtor - e o que as ~10 somas
+  // daqui e os ~30 pontos do front leem como receita. Estas duas colunas existem pra NAO perder
+  // o valor real da fatura, que e o que bate com o extrato numa conferencia. Ver _valorDaVenda.
+  for (const col of ['charge_pago REAL', 'charge_juros REAL']) {
+    try { await env.DB.prepare('ALTER TABLE five_orders ADD COLUMN ' + col).run(); } catch (_) {}
+  }
+  // A dash do afiliado depende desta coluna, e o authUser (que roda antes de tudo) ja a le.
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_afil_pag ON afiliado_pagamentos(affiliate_id)').run(); } catch (_) {}
   try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_five_comm_aff ON five_commissions(affiliate_id)').run(); } catch (_) {}
   try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_five_orders_prod ON five_orders(product_id)').run(); } catch (_) {}
+  _fiveTablesOk = true;
 }
 function _num(v) { const n = Number(v); return isNaN(n) ? null : n; }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return null; } }
+
+// ── QUANTO DESTA VENDA E DINHEIRO DO BRUNO ──────────────────────────────────
+//
+// O cliente que parcela no cartao paga MAIS que o preco do kit, e a diferenca e juro do
+// parcelamento: e da operadora, nunca do produtor. O primeiro cartao parcelado da operacao
+// (Jose Francisco, 24/08/2026) chegou como charge.amount = 541,12 num kit de 497 e os 44,12 de
+// juro entraram na dash como receita: card do Kanban, "Receita recebida", ticket, lucro, ROAS e
+// ate a base da comissao do vendedor. Palavras do Bruno: "esse valor mais alto e apenas juros, o
+// que eu recebo sempre vai ser o valor de 497".
+//
+// A conta certa esta no MESMO payload: offer.price e o preco de tabela do kit e numberOfItems a
+// quantidade. Regras, nesta ordem:
+//   - sem preco de tabela, so resta o cobrado (melhor um numero com juro do que nenhum);
+//   - cobrado MENOR que a tabela e DESCONTO de verdade (o vendedor negociou), e vale o cobrado;
+//   - cobrado MAIOR e juro de parcelamento, e vale a tabela.
+// numberOfItems 0 vale 1: a Five manda 0 na maioria dos pedidos reais (mesmo caso ja tratado no
+// _frascosDoPedido). Multiplicar por 0 zeraria a venda inteira.
+function _valorDaVenda(offer, charge) {
+  const preco = _num(offer && offer.price);
+  const itens = Math.max(1, _num(offer && offer.numberOfItems) || 1);
+  const cobrado = (charge && charge.amount != null) ? (_num(charge.amount) || 0) : 0;
+  if (!(preco > 0)) return cobrado;       // sem preco de tabela so resta o cobrado (_num devolve null, nao 0)
+  if (cobrado <= 0) return preco;         // evento sem cobranca: preco de tabela, sem multiplicar
+  const tabela = preco * itens;
+  // A multiplicacao so vale se o cliente REALMENTE pagou o total: se pagou menos, ou foi desconto
+  // ou numberOfItems nao era quantidade de kits, e nos dois casos o cobrado e a verdade.
+  return cobrado < tabela ? cobrado : tabela;
+}
+// Quanto o cliente pagou a mais so de juro (0 quando pagou a vista ou com desconto).
+function _jurosDaVenda(offer, charge) {
+  const cobrado = (charge && charge.amount != null) ? _num(charge.amount) : 0;
+  return Math.max(0, Math.round((cobrado - _valorDaVenda(offer, charge)) * 100) / 100);
+}
 
 // Upsert de um pedido a partir de um payload da Five. Campos comuns sempre atualizam;
 // campos específicos do evento usam COALESCE pra não apagar o que outro evento já gravou.
@@ -334,10 +476,10 @@ async function _fiveUpsertOrder(env, p) {
   await env.DB.prepare(`INSERT INTO five_orders
     (order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty,
      customer_name, customer_doc, customer_mail, customer_phone, customer_address,
-     charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions,
+     charge_status, charge_method, charge_amount, charge_pago, charge_juros, charge_code, charge_updated_at, commissions,
      shipping_platform, shipping_code, shipping_status, shipping_core_id,
      last_event, last_status, created_at, updated_at, raw)
-    VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?)
     ON CONFLICT(order_id) DO UPDATE SET
      project_id=COALESCE(excluded.project_id, five_orders.project_id), project_name=COALESCE(excluded.project_name, five_orders.project_name),
      product_id=COALESCE(excluded.product_id, five_orders.product_id), product_name=COALESCE(excluded.product_name, five_orders.product_name),
@@ -347,6 +489,8 @@ async function _fiveUpsertOrder(env, p) {
      charge_status=COALESCE(excluded.charge_status, five_orders.charge_status),
      charge_method=COALESCE(excluded.charge_method, five_orders.charge_method),
      charge_amount=COALESCE(excluded.charge_amount, five_orders.charge_amount),
+     charge_pago=COALESCE(excluded.charge_pago, five_orders.charge_pago),
+     charge_juros=COALESCE(excluded.charge_juros, five_orders.charge_juros),
      charge_code=COALESCE(excluded.charge_code, five_orders.charge_code),
      charge_updated_at=COALESCE(excluded.charge_updated_at, five_orders.charge_updated_at),
      commissions=COALESCE(excluded.commissions, five_orders.commissions),
@@ -359,7 +503,14 @@ async function _fiveUpsertOrder(env, p) {
     .bind(oid, proj.id || null, proj.name || null, prod.id || null, prod.name || null,
       offer.id || null, offer.title || null, _num(offer.price), offer.numberOfItems != null ? _num(offer.numberOfItems) : null,
       cust.name || null, cust.document || null, cust.mail || null, cust.phoneNumber || null, cust.address ? JSON.stringify(cust.address) : null,
-      charge && charge.status ? String(charge.status).toUpperCase() : null, charge ? (charge.paymentMethod || null) : null, charge ? _num(charge.amount) : null, charge ? (charge.code || null) : null, charge ? (charge.updatedAt || null) : null,
+      charge && charge.status ? String(charge.status).toUpperCase() : null, charge ? (charge.paymentMethod || null) : null,
+      // charge_amount = valor da VENDA (sem juro de parcelamento). So preenche quando a Five mandou
+      // cobranca de verdade: deixar null pra pedido sem cobranca e o que mantem 'pago x nao pago'
+      // funcionando nas somas e no front (que testa charge_amount antes de cair no offer_price).
+      (charge && charge.amount != null) ? _valorDaVenda(offer, charge) : null,
+      (charge && charge.amount != null) ? _num(charge.amount) : null,
+      (charge && charge.amount != null) ? _jurosDaVenda(offer, charge) : null,
+      charge ? (charge.code || null) : null, charge ? (charge.updatedAt || null) : null,
       Array.isArray(p.commissions) && p.commissions.length ? JSON.stringify(p.commissions) : null, // array VAZIO -> null (COALESCE mantém a comissão já gravada, não zera)
       ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship && ship.shippingStatus ? String(ship.shippingStatus).toUpperCase() : null, ship ? (ship.coreShippingId || null) : null,
       p.event || null, p.eventStatus || null, now, now, JSON.stringify(p).slice(0, 40000)).run();
@@ -391,7 +542,24 @@ async function _fiveUpsertOrder(env, p) {
 // Espelha o pedido da Five como card no Kanban pra o acompanhamento andar sozinho.
 // Casa por five_id = orderId (upsert). CAS otimista igual handleMoveLead (não sobrescreve
 // escrita concorrente). Best-effort: chamada dentro de try no webhook, nunca quebra o 200.
-const FIVE_COL_RANK = { 'A Enviar': 1, 'Enviado': 2, 'Rota de Entrega': 3, 'Retirada': 3, 'Cobrança': 4, 'Pago': 5 };
+// A MESMA coluna tem dois nomes no sistema: o que a Five manda ('Enviado', 'Cobranca', 'Pago') e o
+// id do board na dash ('Enviados', 'Entregues', 'Pagos'), que e o que fica gravado quando alguem
+// arrasta o card na mao. So os nomes da Five estavam ranqueados aqui: depois de UM arrasto manual o
+// rank do pedido virava 0 e o proximo evento da Five empurrava ele PRA TRAS (um pedido em 'Pagos'
+// voltava pra 'Enviado' no primeiro rastreio novo dos Correios). Os dois nomes valem o mesmo rank.
+const FIVE_COL_RANK = {
+  'A Enviar': 1, 'Reportado': 1, 'Reportados': 1,
+  'Enviado': 2, 'Enviada': 2, 'Enviados': 2,
+  'Rota de Entrega': 3, 'Saiu para Entrega': 3, 'Saiu pra Entrega': 3, 'Retirada': 3, 'Retirar nos Correios': 3,
+  // 3.5 de proposito: 'Requer Atenção' e um DESVIO no meio do caminho, nao uma etapa a mais. Precisa
+  // ser maior que a rota (senao a entrega que falha nao tira o card de 'Saiu para Entrega', que e
+  // justamente de onde ela falha) e menor que a cobranca (pra entrega refeita seguir pra frente).
+  'Atenção': 3.5, 'Requer Atenção': 3.5,
+  'Cobrança': 4, 'Entregue': 4, 'Entregues': 4, 'Inadimplência': 4, 'Inadimplências': 4,
+  'Pago': 5, 'Pagos': 5,
+};
+// Fim de linha: pedido que ja deu errado nao volta pro fluxo normal por causa de um rastreio atrasado.
+const FIVE_COL_FIM = ['Frustrado', 'Frustrados', 'Devolvido', 'Devolvido com Reverso', 'Retornado', 'Cancelado', 'Cancelado sem Custo', 'Roubo', 'Roubos'];
 // Coluna-alvo a partir do evento/status. null = não move (mantém a coluna atual).
 function _fiveColFor(p) {
   const ev = String(p.event || '').toUpperCase();
@@ -407,11 +575,24 @@ function _fiveColFor(p) {
   if (ev === 'SHIPPING_UPDATE') {
     // devolução/extravio -> terminal negativo (testar antes; "devolvido" não colide com os demais)
     if (/devolv|return|extraviad|recus|nao.?retir|n[ãa]o.?retir/.test(s)) return 'Devolvido';
-    // ORDEM IMPORTA: "saiu para entrega" contém "entreg" -> testar saiu/rota ANTES do entregue.
-    if (/saiu|out.?for.?delivery|\brota\b/.test(s)) return 'Rota de Entrega';
-    if (/retir|waiting.?pickup|pickup|ag[êe]ncia|dispon[íi]vel para retirada/.test(s)) return 'Retirada';
+    // A FIVE MANDA O STATUS EM INGLES E EM MAIUSCULA. Conferido no que ela ja enviou de verdade:
+    // IN_TRANSIT, IN_TRANSIT_TO_DELIVERY, DELIVERED, SENDED (e vazio no SHIPPING_REGISTER). Os
+    // termos em portugues ficam por seguranca, caso ela mude o texto.
+    // ORDEM IMPORTA DUAS VEZES: "saiu para entrega" contem "entreg", entao vem ANTES do entregue;
+    // e IN_TRANSIT_TO_DELIVERY contem IN_TRANSIT, entao a rota vem ANTES do transito. Era isso que
+    // estava errado (23/08/2026): o pedido do Elias saiu pra entrega na Five e caiu em "Enviado"
+    // aqui, porque nenhum termo de rota casava com o nome ingles e o teste de transito pegava
+    // primeiro. A coluna "Saiu para Entrega" vivia zerada por causa disso.
+    // ENTREGA QUE FALHOU -> 'Requer Atenção', a mesma coluna que ele ve no painel da Five.
+    // TEM QUE VIR ANTES do teste de entregue, porque NOT_DELIVERED contem DELIVERED: ate 24/08/2026
+    // o pedido NAO entregue caia em 'Cobrança' e o cobrador ligava cobrando quem nunca recebeu o
+    // produto (aconteceu com o pedido do Carlos Roberto, R$ 497). Nao e terminal de proposito: se a
+    // transportadora reentregar, o DELIVERED seguinte leva o card pra Cobrança normalmente.
+    if (/not.?deliver|deliver\w*.?fail|fail\w*.?deliver|n[ãa]o.?entregue|entrega.?frustrad|entrega.?n[ãa]o.?(realizada|efetuada)|sem.?sucesso|destinat[áa]rio.?ausente|ausente|endere[çc]o.?(incorreto|errado|inv[áa]lido|insuficiente|incompleto|n[ãa]o.?localizado)|address.?(issue|problem|incorrect|invalid|not.?found)|avaria|damaged|retido|on.?hold|aten[çc][ãa]o|attention|pend[êe]ncia|problem/.test(s)) return 'Requer Atenção';
+    if (/saiu|out.?for.?delivery|to.?delivery|delivery.?route|\brota\b/.test(s)) return 'Rota de Entrega';
+    if (/retir|waiting.?pickup|awaiting.?pickup|available.?for.?pickup|pickup|withdraw|ag[êe]ncia|dispon[íi]vel para retirada/.test(s)) return 'Retirada';
     if (/entregue|delivered|entrega efetuada|entrega realizada|entrega conclu/.test(s)) return 'Cobrança'; // entregue DE FATO -> cobrar (COD)
-    if (/tr[aâ]nsito|in.?transit|postado|posted|enviad/.test(s)) return 'Enviado';
+    if (/tr[aâ]nsito|in.?transit|postado|posted|sended|shipped|\bsent\b|enviad/.test(s)) return 'Enviado';
     return null;                                                   // status desconhecido: não move
   }
   return null;
@@ -455,6 +636,26 @@ function _fiveUpsertKit(data, offer, prodNome) {
   if (!k.nome) k.nome = titulo;
   if (!Number(String(k.preco || '').toString().replace(',', '.')) && preco) k.preco = preco;
   if (!Number(k.frascos) && meses) k.frascos = meses;
+}
+// QUANTOS FRASCOS SAEM NESTE PEDIDO. O kit e a mesma coisa que o tratamento: 4 Meses = 4 frascos.
+// Procura na ordem: kit cadastrado em Custos & Regras (regras.kits, que e o que a tela edita), kit
+// que a Five cadastrou sozinha (custos.kits), e por ultimo o proprio titulo da oferta ("... - 4
+// Meses"). Zero = nao da pra saber, e ai NAO baixa estoque (melhor saldo parado que saldo errado).
+function _frascosDoPedido(data, offer, prodNome) {
+  const oid = String((offer && offer.id) || '');
+  const titulo = String((offer && offer.title) || prodNome || '');
+  const nm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const listas = [
+    (data && data.regras && Array.isArray(data.regras.kits)) ? data.regras.kits : [],
+    (data && data.custos && Array.isArray(data.custos.kits)) ? data.custos.kits : [],
+  ];
+  for (const lista of listas) {
+    const k = lista.find((x) => x && (String(x.offer_id || '') === oid || String(x.id || '') === oid))
+      || lista.find((x) => x && nm(x.nome || x.label) === nm(titulo));
+    const fr = k ? Number(k.frascos) || 0 : 0;
+    if (fr > 0) return fr;
+  }
+  return _mesesDoTitulo(titulo) || 0;
 }
 async function _fiveUpsertLead(env, p) {
   const oid = p && (p.orderId || (p.order && p.order.id));
@@ -507,8 +708,30 @@ async function _fiveUpsertLead(env, p) {
       };
       data.leads.unshift(lead);
     }
+    // ACEITE AUTOMATICO (pedido do Bruno em 20/08/2026). O pedido chegar da plataforma JA E o
+    // aceite: o time lanca o pedido la, a plataforma devolve o pedido pra ca, e ficar clicando
+    // "Aceitar" depois disso e trabalho repetido - e enquanto ninguem clica, o pedido fica parado na
+    // fila de aceitacao como se estivesse pendente.
+    // So vale pro que NASCEU na nossa dash (orig 'Manual'), que e o que aparece na fila de
+    // Aceitacoes. Pedido que nasceu na Five nunca esteve nessa fila e nao vira "aceito" a toa - se
+    // virasse, a tabela de aceitos viraria a lista de todos os pedidos da operacao.
+    if (String(lead.orig) === 'Manual' && !lead.aceito) {
+      lead.aceito = true;
+      lead.aceito_em = nowISO;
+      lead.aceito_por = 'auto';   // quem aceitou: 'auto' = veio da plataforma, senao e o id de quem clicou
+      if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: 'five', time: nowISO, note: 'aceito automaticamente: o pedido voltou da plataforma (' + String(oid) + ')' });
+    }
     // Se ainda não tem dono e a Five/ponte sabe quem atendeu, credita agora (não sobrescreve dono manual).
     if (!lead.at && attribAt) lead.at = attribAt;
+    // DE QUAL AFILIADO E ESTE PEDIDO (23/08/2026). O Kanban dos Afiliados e a versao de dash do
+    // afiliado filtram por este campo; sem ele o pedido de afiliado ficaria indistinguivel do nosso
+    // e o afiliado veria pedido que nao e dele. Sempre atualiza (nao e setIf): quem manda e a Five,
+    // e um evento posterior corrigindo o afiliado tem que valer.
+    if (_affId) {
+      lead.afl = String(_affId);
+      const _an = (p.commissions[0] && (p.commissions[0].affiliateName || p.commissions[0].name)) || null;
+      if (_an) lead.afl_nome = String(_an);
+    }
     // Preenche só o que está vazio (um evento não apaga o que outro trouxe).
     const setIf = (k, v) => { if (v != null && v !== '' && (lead[k] == null || lead[k] === '')) lead[k] = v; };
     setIf('nome', cust.name); setIf('cpf', cust.document); setIf('wa', cust.phoneNumber); setIf('email', cust.mail);
@@ -519,7 +742,17 @@ async function _fiveUpsertLead(env, p) {
     lead.five_status = ev.toLowerCase();
     if (ev === 'CHARGE_UPDATED') {
       const _cs = String(charge.status || '').toUpperCase();
-      if (charge.amount != null) lead.vl = Number(charge.amount) || lead.vl;
+      // VALOR DO PEDIDO SEM O JURO DO PARCELAMENTO (ver _valorDaVenda). Esta linha gravava
+      // charge.amount direto e o card do Jose Francisco virou R$ 541,12 num kit de R$ 497.
+      const _vv = _valorDaVenda(offer, charge);
+      if (_vv > 0) lead.vl = _vv;
+      // O que o cliente pagou de verdade fica gravado a parte: e o numero que bate com a
+      // fatura/extrato numa conferencia, e some se a gente so guardar o valor da venda.
+      if (charge.amount != null) {
+        lead.vl_cobrado = _num(charge.amount);
+        const _ju = _jurosDaVenda(offer, charge);
+        if (_ju > 0) lead.vl_juros = _ju; else delete lead.vl_juros;
+      }
       if (charge.paymentMethod) lead.pgto = charge.paymentMethod;
       // MODALIDADE (antecipado x na entrega) pelo meio de pagamento da Five. O card do Kanban mostra
       // isso num selo, e sem esta linha todo pedido nascido na Five ficava no default 'entrega'
@@ -539,12 +772,60 @@ async function _fiveUpsertLead(env, p) {
       }
     }
     if ((ev === 'SHIPPING_REGISTER' || ev === 'SHIPPING_UPDATE') && ship.shippingCode) lead.track = ship.shippingCode;
+    // O NUMERO QUE RASTREIA DE VERDADE E OUTRO. `shippingCode` (FVJ...BR) e o codigo da FIVE, e a
+    // pagina deles exige o CPF do comprador e ainda assim nao mostra nada (o Bruno tentou). Quem
+    // entrega e a J&T Express, e o numero dela vem no MESMO payload como `coreShippingId`
+    // (ex: 888030889629565) - esse abre em qualquer rastreador, sem CPF e sem captcha.
+    if (ship.coreShippingId) lead.track_core = String(ship.coreShippingId);
+    if (ship.platform) lead.transp_nome = String(ship.platform);
+    // SELO DE ENTREGA NO CARD (25/08/2026, pedido do Bruno: "o Kanban da Five tem os selinhos
+    // Preparando / Em transito / Rota de Entrega / Nao entregue / Entregue, quero na nossa").
+    // A Five ja mandava isso: `shipping.shippingStatus`, que ja era gravado em five_orders e era
+    // JOGADO FORA na hora de espelhar no lead - o front so tinha a COLUNA, que e grossa demais
+    // (os 27 "Enviado" incluem quem so foi postado e quem ja esta na rua).
+    //
+    // TRES CUIDADOS, cada um vale um bug:
+    // 1) So escreve DENTRO de evento de envio e so quando tem valor. Um CHARGE_UPDATED chega depois
+    //    do entregue (3 pedidos em producao estao assim) e, se a escrita fosse incondicional, ele
+    //    apagaria o selo verde de quem ja recebeu - e o cobrador ligaria cobrando no escuro.
+    // 2) SHIPPING_REGISTER vem com shippingStatus NULL (5 pedidos hoje): isso NAO e ausencia, e
+    //    "postado, sem evento da transportadora ainda" = o "Preparando" da Five. Vira REGISTERED.
+    // 3) REGISTERED nao rebaixa quem ja andou. A Five reenvia evento (327 webhooks pra 42 pedidos)
+    //    e um SHIPPING_REGISTER repetido faria um pedido entregue voltar pra "Preparando".
+    if (ev === 'SHIPPING_REGISTER' || ev === 'SHIPPING_UPDATE') {
+      const _ss = ship.shippingStatus ? String(ship.shippingStatus).toUpperCase()
+        : (ev === 'SHIPPING_REGISTER' ? 'REGISTERED' : '');
+      if (_ss && !(_ss === 'REGISTERED' && lead.ship)) {
+        lead.ship = _ss;
+        lead.ship_ts = now;   // "Rastreio atualizado em" do card, em segundos
+      }
+    }
     // Coluna: só move PRA FRENTE (rank maior) ou pra terminal negativo. Nunca volta.
     if (targetCol && targetCol !== lead.col) {
       const cur = FIVE_COL_RANK[lead.col] || 0, tgt = FIVE_COL_RANK[targetCol] || 0;
-      if (tgt > cur || ['Frustrado', 'Devolvido', 'Cancelado'].includes(targetCol)) {
+      const jaAcabou = FIVE_COL_FIM.includes(lead.col);
+      if (!jaAcabou && (tgt > cur || FIVE_COL_FIM.includes(targetCol))) {
         const from = lead.col; lead.col = targetCol;
         if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: targetCol, who: 'five', time: nowISO });
+      }
+    }
+    // BAIXA DE ESTOQUE NO DESPACHO. "Saiu o pedido" = SHIPPING_REGISTER, que e quando a Five posta.
+    // Vai no MESMO salvamento do card, entao ou grava tudo ou nao grava nada. A repeticao e barrada
+    // pelo proprio extrato: se ja existe uma saida deste pedido, nao lanca de novo (a Five reenvia
+    // evento, e estoque contado duas vezes some com frasco que existe na prateleira).
+    if (ev === 'SHIPPING_REGISTER') {
+      if (!Array.isArray(data.estoque_movs)) data.estoque_movs = [];
+      const jaBaixou = data.estoque_movs.some((m) => m && m.tipo === 'saida_pedido' && String(m.order_id) === String(oid));
+      if (!jaBaixou) {
+        const fr = _frascosDoPedido(data, offer, prod.name);
+        if (fr > 0) {
+          data.estoque_movs.unshift({
+            id: 'mv' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            ts: Date.now(), tipo: 'saida_pedido', qtd: fr,
+            motivo: 'Pedido despachado na Five', obs: String(cust.name || ''),
+            order_id: String(oid), ref: '',
+          });
+        }
       }
     }
     const newVer = (row.version || 0) + 1;
@@ -564,10 +845,58 @@ async function _fiveUpsertLead(env, p) {
 // são assunto dele. Antes o gate era binário (só diretor) e a dash dele abria vazia, que é pior que
 // não ter a tela: parece que a campanha não vendeu nada.
 const _gestorLe = (u) => isDirector(u) || String((u && u.role) || '').toLowerCase() === 'gestor';
+
+// QUEM SAO AS PESSOAS DO MUNDO DE UM AFILIADO (ele + a equipe dele). O inbox amarra a conversa a
+// uma INSTANCIA nomeada ax_<id-do-usuario>_<8digitos>, entao pra saber quais conversas sao do mundo
+// dele o caminho e: pegar os ids das pessoas dele e casar pelo prefixo da instancia.
+// O afiliado e o "diretor" do mundo dele: ve a conversa dos vendedores DELE, como o Bruno ve a dos
+// nossos. Um vendedor dentro do mundo dele continua vendo so as proprias (regra que ja existia).
+// AS INSTANCIAS QUE ESTE USUARIO PODE TOCAR. Um lugar so, porque a auditoria de 24/08/2026 achou
+// SEIS rotas de WhatsApp repetindo (ou esquecendo) essa regra: conversa, mensagem, envio, funil,
+// venda e conexao. Regra: diretor tudo; quem e do mundo de um afiliado leva as instancias do mundo
+// dele; o resto so a propria. Instancia sem atendente resolvido (dc_*, sc_*) so diretor.
+async function _idsQuePossoVer(env, u) {
+  if (isDirector(u)) return null;                       // null = sem corte
+  if (afiliadoSemVinculo(u)) return [];                 // fail-closed
+  if (noMundoAfiliado(u)) return await _idsDoMundoAfiliado(env, aflDe(u));
+  return [String(u.id)];
+}
+// A instancia `inst` pertence a algum dos ids? (nome e ax_<id> ou ax_<id>_<sufixo>)
+const _instEhDe = (inst, ids) => {
+  const t = String(inst || '');
+  return (ids || []).some((id) => t === 'ax_' + id || t.indexOf('ax_' + id + '_') === 0);
+};
+// Condicao SQL + binds pro corte por instancia. ids vazio vira 1=0 (nunca "sem filtro").
+// substr e nao LIKE: '_' e curinga no LIKE e casaria instancia de outro vendedor.
+function _sqlInst(col, ids) {
+  if (!ids || !ids.length) return { cond: '1=0', binds: [] };
+  const ors = [], binds = [];
+  for (const id of ids) {
+    const pf = 'ax_' + id + '_';
+    ors.push('(' + col + ' = ? OR substr(' + col + ',1,?) = ?)');
+    binds.push('ax_' + id, pf.length, pf);
+  }
+  return { cond: '(' + ors.join(' OR ') + ')', binds };
+}
+
+async function _idsDoMundoAfiliado(env, afiliadoId) {
+  if (!afiliadoId) return [];
+  try {
+    const r = await env.DB.prepare('SELECT id FROM users WHERE afiliado_id = ?').bind(afiliadoId).all();
+    return ((r && r.results) || []).map((x) => String(x.id));
+  } catch (_) { return []; }
+}
 async function handleFiveOrders(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!_gestorLe(u)) return err('Sem permissão', 403);
+  // O AFILIADO LE A FATIA DELE (24/08/2026). As telas que o Bruno liberou pra ele - Evolucao
+  // Diaria, Projecao Mensal, Analise de Pedidos - leem TODAS daqui, via useProdutor. Com o 403 de
+  // antes elas abririam vazias e pareceriam quebradas. O recorte e por five_commissions: pedido com
+  // comissao do afiliado dele. Sem vinculo, nao le nada (fail-closed, igual ao resto).
+  const _afl = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? aflDe(u) : null;
+  const _souAfl = isAfiliado(u) || afiliadoSemVinculo(u) || (noMundoAfiliado(u) && !isDirector(u));
+  if (!_gestorLe(u) && !_souAfl) return err('Sem permissão', 403);
+  if (_souAfl && !_afl) return json({ orders: [], escopo: 'afiliado-sem-vinculo' });
   const _full = isDirector(u);
   try {
     await _ensureFiveTables(env);
@@ -579,17 +908,30 @@ async function handleFiveOrders(req, env) {
     const conds = [], binds = [];
     if (startTs) { conds.push('COALESCE(created_at, updated_at) >= ?'); binds.push(Math.floor(startTs / 1000)); }
     if (endTs) { conds.push('COALESCE(created_at, updated_at) <= ?'); binds.push(Math.floor(endTs / 1000)); }
+    // O corte do afiliado entra como condicao de SQL, nao como filtro depois: assim nem chega a
+    // sair do banco pedido que nao e dele.
+    if (_afl) { conds.push('order_id IN (SELECT order_id FROM five_commissions WHERE affiliate_id = ?)'); binds.push(_afl); }
     const where = conds.length ? ('WHERE ' + conds.join(' AND ')) : '';
     const rows = await env.DB.prepare(`SELECT * FROM five_orders ${where} ORDER BY updated_at DESC LIMIT 20000`).bind(...binds).all();
     const orders = (rows.results || []).map(r => {
       const { raw, ...rest } = r;
       const cheio = { ...rest, customer_address: r.customer_address ? safeJson(r.customer_address) : null, commissions: r.commissions ? safeJson(r.commissions) : [] };
       if (_full) return cheio;
+      // O afiliado ve o pedido INTEIRO - ele e dele: e o cliente dele que comprou, e ele precisa do
+      // nome e do endereco pra tocar a entrega. O gestor de trafego e que nao pode ver cliente.
+      // O gestor de trafego e o designer DELE nao veem cliente (mesma regra do nosso gestor), e a
+      // linha de comissao do PRODUTOR (a nossa margem, com e-mail) nunca vai pra ninguem do mundo
+      // dele: so a linha de AFILIADO. Auditoria de 24/08/2026 achou a margem de R$473,69 saindo aqui.
+      if (_afl && _soCampanhaRole(u)) {
+        const { customer_name, customer_doc, customer_mail, customer_phone, customer_address, commissions, charge_code, ...semPii2 } = cheio;
+        return semPii2;
+      }
+      if (_afl) return { ...cheio, commissions: (Array.isArray(cheio.commissions) ? cheio.commissions : []).filter((c) => /affiliate|afiliad/i.test(String((c && c.type) || ''))) };
       // Sem dinheiro e sem cliente: o que sobra é o que mede campanha (produto, oferta, status, data).
       const { customer_name, customer_doc, customer_mail, customer_phone, customer_address, commissions, charge_code, ...semPii } = cheio;
       return semPii;
     });
-    return json({ orders, escopo: _full ? 'full' : 'gestor' });
+    return json({ orders, escopo: _full ? 'full' : (_afl ? 'afiliado' : 'gestor') });
   } catch (e) { return json({ orders: [], error: String((e && e.message) || e) }); }
 }
 
@@ -597,22 +939,52 @@ async function handleFiveOrders(req, env) {
 async function handleFiveSummary(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  // Mesma logica do /api/five/orders: o afiliado recebe o resumo da fatia dele.
+  const _afl = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? aflDe(u) : null;
+  const _souAfl = isAfiliado(u) || afiliadoSemVinculo(u) || (noMundoAfiliado(u) && !isDirector(u));
+  if (!isDirector(u) && !_souAfl) return err('Sem permissão', 403);
+  if (_souAfl && !_afl) return json({ totals: {}, comissoes: {}, porStatus: [], porAfiliado: [], porProduto: [] });
+  // Filtro reaproveitado nas 5 consultas. Diretor: sem corte. Afiliado: so o que tem comissao dele.
+  // Cada consulta recebe o bind so quando o corte existe (por isso o array `bAfl`).
+  const cutO = _afl ? " AND o.order_id IN (SELECT order_id FROM five_commissions WHERE affiliate_id = ?)" : '';
+  const cutBare = _afl ? " WHERE order_id IN (SELECT order_id FROM five_commissions WHERE affiliate_id = ?)" : '';
+  const cutC = _afl ? " AND c.affiliate_id = ?" : '';
+  const bAfl = _afl ? [_afl] : [];
   try {
     await _ensureFiveTables(env);
-    const totals = await env.DB.prepare(`SELECT COUNT(*) AS pedidos,
+    const qTotals = env.DB.prepare(`SELECT COUNT(*) AS pedidos,
        SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
        COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita_paga
-       FROM five_orders`).first();
-    const comissoes = await env.DB.prepare('SELECT COUNT(DISTINCT order_id) AS pedidos_com_comissao, COALESCE(SUM(amount),0) AS total FROM five_commissions').first();
-    const porStatus = (await env.DB.prepare("SELECT COALESCE(last_status,'—') AS status, COUNT(*) AS n FROM five_orders GROUP BY last_status ORDER BY n DESC").all()).results || [];
-    const porAfiliado = (await env.DB.prepare(`SELECT c.affiliate_id, a.name, COUNT(*) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao
-       FROM five_commissions c LEFT JOIN five_affiliates a ON a.affiliate_id=c.affiliate_id
-       GROUP BY c.affiliate_id ORDER BY comissao DESC LIMIT 50`).all()).results || [];
-    const porProduto = (await env.DB.prepare(`SELECT o.product_id, COALESCE(p.name,o.product_name) AS name, COUNT(*) AS pedidos,
+       FROM five_orders${cutBare}`).bind(...bAfl).first();
+    // COMISSAO SO DE PEDIDO PAGO. Duas linhas acima a receita ja filtra charge_status='PAID'; esta
+    // somava TODAS as linhas de comissao, inclusive de pedido que nunca foi pago. O numero vira
+    // "Comissoes a cair" / "Total devido aos afiliados" e e SUBTRAIDO do lucro: um pedido de R$ 397
+    // que ninguem pagou entrava como R$ 47,64 devidos e comia esse tanto do lucro, tendo gerado
+    // R$ 0,00 de receita. Numa operacao COD, onde boa parte nao paga, era a maior distorcao da dash.
+    // Regra do Bruno (18/08/2026): comissao existe sobre o que o cliente PAGOU. Nao pagou, nao ha.
+    const qComissoes = env.DB.prepare(`SELECT COUNT(DISTINCT c.order_id) AS pedidos_com_comissao, COALESCE(SUM(c.amount),0) AS total
+       FROM five_commissions c JOIN five_orders o ON o.order_id=c.order_id
+       WHERE o.charge_status='PAID'${cutC}`).bind(...bAfl).first();
+    const qPorStatus = (env.DB.prepare(`SELECT COALESCE(last_status,'—') AS status, COUNT(*) AS n FROM five_orders${cutBare} GROUP BY last_status ORDER BY n DESC`).bind(...bAfl).all());
+    // idem por afiliado: so pedido pago gera comissao devida
+    const qPorAfiliado = (env.DB.prepare(`SELECT c.affiliate_id, a.name, COUNT(*) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao
+       FROM five_commissions c
+       JOIN five_orders o ON o.order_id=c.order_id AND o.charge_status='PAID'
+       LEFT JOIN five_affiliates a ON a.affiliate_id=c.affiliate_id
+       WHERE 1=1${cutC}
+       GROUP BY c.affiliate_id ORDER BY comissao DESC LIMIT 50`).bind(...bAfl).all());
+    const qPorProduto = (env.DB.prepare(`SELECT o.product_id, COALESCE(p.name,o.product_name) AS name, COUNT(*) AS pedidos,
        COALESCE(SUM(CASE WHEN o.charge_status='PAID' THEN o.charge_amount ELSE 0 END),0) AS receita
        FROM five_orders o LEFT JOIN five_products p ON p.product_id=o.product_id
-       GROUP BY o.product_id ORDER BY receita DESC LIMIT 50`).all()).results || [];
+       WHERE 1=1${cutO}
+       GROUP BY o.product_id ORDER BY receita DESC LIMIT 50`).bind(...bAfl).all());
+    // AS CINCO CONSULTAS RODAM JUNTAS. Elas nao dependem uma da outra, mas estavam em await
+    // sequencial: cada ida ao D1 custa uns 200ms de rede, entao a tela do diretor esperava a soma de
+    // todas (medido em 18/08/2026: quase 2s pra devolver 200 bytes, com a tabela tendo 1 linha).
+    const [totals, comissoes, rStatus, rAfiliado, rProduto] = await Promise.all([qTotals, qComissoes, qPorStatus, qPorAfiliado, qPorProduto]);
+    const porStatus = (rStatus && rStatus.results) || [];
+    const porAfiliado = (rAfiliado && rAfiliado.results) || [];
+    const porProduto = (rProduto && rProduto.results) || [];
     return json({ totals, comissoes, porStatus, porAfiliado, porProduto });
   } catch (e) { return json({ error: String((e && e.message) || e) }); }
 }
@@ -624,7 +996,14 @@ async function handleFiveProducts(req, env) {
   if (!u) return err('Não autenticado', 401);
   // Mesma regra dos pedidos: o gestor de tráfego precisa saber O QUE vende (produto, oferta, preço,
   // volume) pra escolher criativo e oferta. Comissão e afiliado saem do payload dele.
-  if (!_gestorLe(u)) return err('Sem permissão', 403);
+  //
+  // O AFILIADO TAMBEM LE (25/08/2026). Ele vende o NOSSO produto, entao precisa do catalogo - e a
+  // IMAGEM do produto vem por aqui: com o 403, a tela de Produtos dele abria sem a foto do
+  // GlicoSix, que era o defeito que o Bruno viu. Ele entra na mesma faixa do gestor: produto,
+  // oferta, preco e imagem; a comissao por afiliado e o dinheiro por produto ficam de fora (o
+  // `_full` continua so pro diretor).
+  if (!_gestorLe(u) && !isAfiliado(u)) return err('Sem permissão', 403);
+  if (afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const _full = isDirector(u);
   try {
     await _ensureFiveTables(env);
@@ -635,12 +1014,21 @@ async function handleFiveProducts(req, env) {
         COALESCE(SUM(CASE WHEN o.charge_status='PAID' THEN o.charge_amount ELSE 0 END),0) AS receita
       FROM five_orders o LEFT JOIN five_products p ON p.product_id=o.product_id
       GROUP BY o.product_id ORDER BY receita DESC`).all()).results || [];
-    const offers = (await env.DB.prepare(`SELECT product_id, offer_id, COALESCE(offer_title,'—') AS offer_title,
+    // AGRUPA POR offer_id, NAO PELO TITULO (20/08/2026). O titulo e texto que a Five edita quando
+    // quer: a oferta b1c4c1fd nasceu como "Glico Six - 4 Meses" e virou "GlicoSix - 4 Meses" (so o
+    // espaco), e como o GROUP BY tinha offer_title junto, o MESMO kit apareceu DUAS VEZES na tela do
+    // Bruno, com 2 e 5 pedidos, sem somar os 7. offer_id e a identidade e nao muda.
+    // O nome exibido passa a ser o do pedido MAIS RECENTE daquela oferta: se a Five renomeou, a
+    // dash mostra o nome novo, nao o primeiro que entrou.
+    const offers = (await env.DB.prepare(`SELECT product_id, offer_id,
+        COALESCE((SELECT f2.offer_title FROM five_orders f2
+                   WHERE f2.offer_id = f.offer_id AND f2.product_id = f.product_id AND f2.offer_title IS NOT NULL AND f2.offer_title <> ''
+                   ORDER BY f2.created_at DESC LIMIT 1), '—') AS offer_title,
         MAX(offer_price) AS offer_price,
         COUNT(*) AS pedidos,
         SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
         COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita
-      FROM five_orders GROUP BY product_id, offer_id, offer_title ORDER BY receita DESC`).all()).results || [];
+      FROM five_orders f GROUP BY product_id, offer_id ORDER BY receita DESC`).all()).results || [];
     const comm = (await env.DB.prepare(`SELECT o.product_id AS product_id, COALESCE(SUM(c.amount),0) AS comissao, AVG(c.percent) AS pct
       FROM five_commissions c JOIN five_orders o ON o.order_id=c.order_id GROUP BY o.product_id`).all()).results || [];
     const monthly = (await env.DB.prepare(`SELECT product_id, strftime('%Y-%m', created_at, 'unixepoch') AS ym,
@@ -710,6 +1098,63 @@ async function _ensureTeamTable(env) {
     updated_at TEXT
   )`).run();
 }
+// A ETIQUETA DO AFILIADO NA URL DA PRESSEL (25/08/2026).
+//
+// PEDIDO DO BRUNO: "eu quero que esses links da URL publica sejam sempre diferentes pra eles nao
+// ficarem iguais aos meus da minha dash principal (...) o da deles deve ser algo como
+// https://painel-glico.fun/p/giovane/1".
+//
+// O id da pressel ja era global (o proximo numero sai do maior de TODAS), entao /p/3 do afiliado
+// nunca foi /p/3 nosso - colisao de verdade nao havia. O que havia era pior de outro jeito: o link
+// dele nascia no MESMO espaco de numeros que o nosso, sem nada dizendo de quem e, e a numeracao
+// dele pulava buracos conforme a gente criasse pressel (ele criava a primeira dele e recebia /p/3).
+// Agora cada afiliado tem a faixa dele: /p/<slug>/1, /p/<slug>/2... e o `n` e um contador SO dele,
+// gravado na pressel no momento da criacao. Gravado, e nao calculado por posicao no array: se ele
+// apagar a pressel 1, a 2 continua sendo a 2 e o anuncio que aponta pra ela nao vira outra pagina.
+//
+// O slug sai do nome e e gravado UMA VEZ em five_affiliates.slug. Renomear o afiliado depois NAO
+// muda o slug de proposito: o link ja esta em anuncio pago, e trocar a URL derruba a campanha.
+// O /p/<id> antigo continua respondendo pra todo mundo - link velho em anuncio nao pode morrer.
+const _slugLivre = async (env, base, aflId) => {
+  const raiz = _slug(base) || 'afiliado';
+  // 'img' colidiria com /p/<id>/img/<hash>; so-digitos colidiria com o /p/<id> das nossas.
+  const proibido = (t) => ['img', 'p', 'm', 'api', 'pc'].includes(t) || /^\d+$/.test(t);
+  for (let i = 0; i < 50; i++) {
+    const tent = i === 0 ? raiz : raiz + '-' + (i + 1);
+    if (proibido(tent)) continue;
+    const ja = await env.DB.prepare('SELECT affiliate_id FROM five_affiliates WHERE slug=? AND affiliate_id<>?')
+      .bind(tent, String(aflId || '')).first().catch(() => null);
+    if (!ja) return tent;
+  }
+  return 'afl-' + String(aflId || '').slice(-6);
+};
+async function _aflSlugDe(env, aflId) {
+  if (!aflId) return '';
+  try {
+    // A COLUNA PODE NAO EXISTIR AINDA. Ela e criada no _ensureFiveTables, que NAO roda no caminho
+    // de salvar pressel - foi assim que o slug voltou vazio no primeiro teste, sem erro nenhum na
+    // tela. Mesmo remendo do users.afiliado_id: tenta ler, cria a coluna, tenta de novo.
+    let r;
+    try { r = await env.DB.prepare('SELECT slug, name FROM five_affiliates WHERE affiliate_id=?').bind(String(aflId)).first(); }
+    catch (_) {
+      try { await env.DB.prepare('ALTER TABLE five_affiliates ADD COLUMN slug TEXT').run(); } catch (_2) {}
+      r = await env.DB.prepare('SELECT slug, name FROM five_affiliates WHERE affiliate_id=?').bind(String(aflId)).first();
+    }
+    if (!r) return '';
+    if (r.slug) return String(r.slug);
+    const novo = await _slugLivre(env, r.name || aflId, aflId);
+    await env.DB.prepare('UPDATE five_affiliates SET slug=? WHERE affiliate_id=?').bind(novo, String(aflId)).run();
+    return novo;
+  } catch (_) { return ''; }
+}
+// Acha a pressel pelas DUAS formas de endereco: /p/<id> (a nossa, e todo link antigo) e
+// /p/<slug>/<n> (a do afiliado). Devolve o objeto; quem chama passa a usar p.id daqui pra frente.
+function _acharPressel(pressels, a, b) {
+  const lista = Array.isArray(pressels) ? pressels : [];
+  if (b == null || b === '') return lista.find((x) => x && String(x.id) === String(a)) || null;
+  return lista.find((x) => x && String(x.afl_slug || '') === String(a) && String(x.num || '') === String(b)) || null;
+}
+
 const _slug = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || ('m' + Date.now());
 // Seed inicial da equipe (exemplo) — vira a fonte única que todas as telas leem.
 const _TEAM_SEED = [
@@ -785,6 +1230,685 @@ async function handleFiveAffiliates(req, env) {
   return json({ affiliates: rows });
 }
 
+// -- AFILIADOS ---------------------------------------------------------------
+//
+// Area propria pedida pelo Bruno em 23/08/2026: "toda a nossa dash que a gente ja tem hoje continua
+// do jeito que esta; tudo que tem a ver com afiliado fica separado nesse acordeao". Por isso estes
+// endpoints sao NOVOS e nao mexem em nenhum calculo do produtor.
+//
+// DE ONDE VEM O NUMERO (importa entender, senao alguem vai "consertar" um zero que e verdade):
+//   - QUEM e o afiliado: five_affiliates. A Five preenche sozinha quando manda commissions[], e o
+//     Bruno tambem cadastra na mao (origem='manual') pra ja ter a lista antes da Five ligar.
+//   - QUANTO vendeu / comissionou: five_commissions X five_orders. Hoje a Five NAO manda
+//     commissions[] (conferido em 23/08/2026: 36 pedidos, campo vazio em todos), entao estes numeros
+//     saem 0 de verdade. O campo `five_ligada` na resposta diz isso pra tela ser honesta em vez de
+//     mostrar zero como se fosse resultado ruim.
+//   - QUANTO ja foi pago: afiliado_pagamentos, digitado por ele.
+//
+// REGRA DE COMISSAO (a mesma do resto da dash, ver handleFiveSummary): comissao existe sobre o que o
+// cliente PAGOU. charge_status='PAID'. Pedido nao pago nao gera comissao devida.
+const _AFIL_PAGO = "o.charge_status='PAID'";
+
+const _afilId = () => 'afl_' + Math.random().toString(16).slice(2, 10);
+
+// ACESSO DO AFILIADO (23/08/2026). O Bruno pediu: "na hora que eu cadastrar ele, automaticamente ja
+// gera um login para ele acessar a nossa dash na versao de afiliado dele".
+//
+// A senha e mostrada UMA VEZ, na resposta do cadastro, e nunca mais: o banco guarda so o hash, igual
+// a de qualquer usuario. Se ele perder, o caminho e gerar outra (botao "Novo acesso"), nao consultar
+// a antiga. Guardar senha legivel pra poder reexibir seria a pior troca possivel aqui.
+const _afilSlug = (nome) => String(nome || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '').slice(0, 20) || 'afiliado';
+
+// Sem I/l/0/O de proposito: essa senha vai ser DITADA no WhatsApp ou lida de um print, e o par
+// I/l e o 0/O sao exatamente onde a pessoa erra e volta dizendo que a dash nao aceita.
+const _afilSenha = () => {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let out = '';
+  const buf = new Uint8Array(10);
+  crypto.getRandomValues(buf);
+  for (const b of buf) out += abc[b % abc.length];
+  return out;
+};
+
+// Cria (ou refaz) o usuario de um afiliado. Devolve { login, senha } pra tela mostrar uma vez so.
+async function _afilCriarAcesso(env, affiliateId, nome, loginDesejado) {
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
+  const senha = _afilSenha();
+  const hash = await sha256Hex(senha);
+  const jaTem = await env.DB.prepare("SELECT id, login FROM users WHERE afiliado_id=? AND role='afiliado'").bind(affiliateId).first();
+  if (jaTem) {
+    // Ja existe: isto e "gerar nova senha", nao criar outro usuario. Criar um segundo login pro
+    // mesmo afiliado deixaria dois donos pro mesmo mundo e ninguem saberia qual vale.
+    await env.DB.prepare('UPDATE users SET pwd_hash=?, name=? WHERE id=?').bind(hash, nome, jaTem.id).run();
+    return { login: jaTem.login, senha, id: jaTem.id, novo: false };
+  }
+  // Login unico: tenta o nome, depois nome.2, nome.3... Um afiliado homonimo nao pode roubar o
+  // login do outro nem fazer o cadastro falhar calado.
+  const base = _afilSlug(loginDesejado || nome);
+  let login = base;
+  for (let i = 2; i < 40; i++) {
+    const dup = await env.DB.prepare('SELECT id FROM users WHERE lower(login)=?').bind(login).first();
+    if (!dup) break;
+    login = base + '.' + i;
+  }
+  const id = 'afiliado_' + Math.random().toString(36).slice(2, 8);
+  const abbr = String(nome || 'AF').trim().split(/\s+/).map((x) => x[0]).join('').slice(0, 2).toUpperCase() || 'AF';
+  await env.DB.prepare('INSERT INTO users (id, login, pwd_hash, name, abbr, role, com_pct, salario, afiliado_id) VALUES (?,?,?,?,?,?,?,?,?)')
+    .bind(id, login, hash, nome, abbr, 'afiliado', 0, 0, affiliateId).run();
+  return { login, senha, id, novo: true };
+}
+const _afilTexto = (v, max) => { const t = String(v == null ? '' : v).trim(); return t ? t.slice(0, max || 200) : null; };
+
+// Uma consulta so com tudo que a tela precisa por afiliado: cadastro + venda + comissao + pago.
+async function handleAfiliados(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  await _ensureFiveTables(env);
+  try {
+    const qLista = env.DB.prepare('SELECT a.affiliate_id AS id, a.name AS nome, a.phone AS telefone, a.doc,' +
+      " a.pix, a.pct, COALESCE(a.status,'ativo') AS status, a.obs, a.our_user_id, a.tenant," +
+      " COALESCE(a.origem, CASE WHEN a.affiliate_id LIKE 'afl_%' THEN 'manual' ELSE 'five' END) AS origem," +
+      ' a.created_at,' +
+      ' COUNT(DISTINCT c.order_id) AS pedidos,' +
+      ' COUNT(DISTINCT CASE WHEN ' + _AFIL_PAGO + ' THEN c.order_id END) AS pedidos_pagos,' +
+      ' COALESCE(SUM(CASE WHEN ' + _AFIL_PAGO + ' THEN o.charge_amount ELSE 0 END),0) AS vendas,' +
+      ' COALESCE(SUM(CASE WHEN ' + _AFIL_PAGO + ' THEN c.amount ELSE 0 END),0) AS comissao' +
+      ' FROM five_affiliates a' +
+      ' LEFT JOIN five_commissions c ON c.affiliate_id = a.affiliate_id' +
+      ' LEFT JOIN five_orders o ON o.order_id = c.order_id' +
+      ' GROUP BY a.affiliate_id').all();
+    const qPagos = env.DB.prepare('SELECT affiliate_id, COALESCE(SUM(valor),0) AS pago, COUNT(*) AS n FROM afiliado_pagamentos GROUP BY affiliate_id').all();
+    // A Five ja mandou comissao alguma vez? E o que separa "ninguem vendeu" de "a integracao ainda
+    // nao manda esse dado". A tela escreve coisas diferentes pros dois casos.
+    const qLigada = env.DB.prepare('SELECT COUNT(*) AS n FROM five_commissions').first();
+    // Quem ja tem login na dash de afiliado, pra tela nao oferecer "criar acesso" pra quem ja tem.
+    const qAcessos = env.DB.prepare("SELECT afiliado_id, login FROM users WHERE role='afiliado' AND afiliado_id IS NOT NULL").all();
+    // Tamanho do time de cada afiliado. Eles ficam isolados, mas o Bruno continua acompanhando
+    // daqui - e este e o unico lugar onde a equipe deles aparece pra ele.
+    const qEquipes = env.DB.prepare("SELECT afiliado_id, COUNT(*) AS n FROM users WHERE afiliado_id IS NOT NULL AND role <> 'afiliado' AND COALESCE(archived,0)=0 GROUP BY afiliado_id").all();
+    const [rLista, rPagos, rLigada, rAcessos, rEquipes] = await Promise.all([qLista, qPagos, qLigada, qAcessos, qEquipes]);
+    const equipePor = {};
+    for (const r of (rEquipes && rEquipes.results) || []) equipePor[r.afiliado_id] = Number(r.n) || 0;
+    const loginPor = {};
+    for (const r of (rAcessos && rAcessos.results) || []) loginPor[r.afiliado_id] = r.login;
+
+    const pagoPor = {};
+    for (const r of (rPagos && rPagos.results) || []) pagoPor[r.affiliate_id] = { pago: Number(r.pago) || 0, n: Number(r.n) || 0 };
+
+    const afiliados = ((rLista && rLista.results) || []).map((r) => {
+      const pg = pagoPor[r.id] || { pago: 0, n: 0 };
+      const comissao = Number(r.comissao) || 0;
+      return Object.assign({}, r, {
+        pct: r.pct == null ? null : Number(r.pct),
+        vendas: Number(r.vendas) || 0,
+        comissao: comissao,
+        pago: pg.pago,
+        pagamentos: pg.n,
+        login: loginPor[r.id] || null,
+        equipe: equipePor[r.id] || 0,
+        // A PAGAR nunca fica negativo: se ele adiantou mais do que devia, isso e credito e nao
+        // "divida negativa". Mostrar -R$ 200 na coluna "a pagar" so confunde na hora de acertar.
+        a_pagar: Math.max(0, comissao - pg.pago),
+      });
+    }).sort((x, y) => (y.comissao - x.comissao) || String(x.nome || '').localeCompare(String(y.nome || '')));
+
+    const soma = (f) => afiliados.reduce((t, a) => t + (Number(f(a)) || 0), 0);
+    return json({
+      afiliados: afiliados,
+      five_ligada: !!(rLigada && Number(rLigada.n) > 0),
+      totais: {
+        afiliados: afiliados.length,
+        ativos: afiliados.filter((a) => a.status === 'ativo').length,
+        pedidos: soma((a) => a.pedidos_pagos),
+        vendas: soma((a) => a.vendas),
+        comissao: soma((a) => a.comissao),
+        pago: soma((a) => a.pago),
+        a_pagar: soma((a) => a.a_pagar),
+      },
+    });
+  } catch (e) { return err('Falha ao ler afiliados: ' + String((e && e.message) || e), 500); }
+}
+
+// Criar ou editar. Sem `id` cria um afiliado manual; com `id` edita (inclusive um que veio da Five,
+// pra ele poder por o contato e o Pix de quem a Five so mandou o nome).
+async function handleAfiliadoSalvar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  const b = await req.json().catch(() => null);
+  if (!b) return err('Corpo invalido');
+  const nome = _afilTexto(b.nome || b.name, 120);
+  if (!nome) return err('O nome do afiliado e obrigatorio');
+  await _ensureFiveTables(env);
+  const idInformado = _afilTexto(b.id, 80);
+  const id = idInformado || _afilId();
+  const novo = !idInformado;
+  const pct = (b.pct === '' || b.pct == null) ? null : Math.max(0, Math.min(100, Number(b.pct) || 0));
+  const status = b.status === 'pausado' ? 'pausado' : 'ativo';
+  const agora = Math.floor(Date.now() / 1000);
+  try {
+    // Um UPSERT so pros dois casos. O created_at nao entra no UPDATE de proposito: editar um
+    // afiliado nao pode fazer ele "nascer" hoje e sumir da ordem de entrada.
+    await env.DB.prepare('INSERT INTO five_affiliates' +
+      ' (affiliate_id, tenant, name, our_user_id, phone, doc, pix, pct, status, obs, origem, created_at, updated_at)' +
+      ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)' +
+      ' ON CONFLICT(affiliate_id) DO UPDATE SET' +
+      ' name=excluded.name, our_user_id=excluded.our_user_id, phone=excluded.phone, doc=excluded.doc,' +
+      ' pix=excluded.pix, pct=excluded.pct, status=excluded.status, obs=excluded.obs,' +
+      ' updated_at=excluded.updated_at')
+      .bind(id, _afilTexto(b.tenant, 80), nome, _afilTexto(b.our_user_id, 80), _afilTexto(b.telefone || b.phone, 40),
+            _afilTexto(b.doc, 40), _afilTexto(b.pix, 140), pct, status, _afilTexto(b.obs, 500),
+            novo ? 'manual' : (_afilTexto(b.origem, 20) || 'five'), agora, agora).run();
+    // ACESSO AUTOMATICO no cadastro novo. Sai desligado no update: reeditar o telefone de um
+    // afiliado nao pode trocar a senha dele por acidente.
+    let acesso = null;
+    if (novo && b.criar_login !== false) {
+      try { acesso = await _afilCriarAcesso(env, id, nome, b.login); }
+      catch (e2) {
+        // O afiliado esta cadastrado; so o login falhou. Devolver erro aqui apagaria o cadastro da
+        // tela e ele digitaria tudo de novo. Melhor: cadastro salvo + aviso, e o botao "Novo acesso"
+        // resolve depois.
+        return json({ ok: true, id: id, acesso: null, acesso_erro: String((e2 && e2.message) || e2) });
+      }
+    }
+    // A COMISSAO TEM UMA VERDADE SO (25/08/2026). O percentual mora em five_affiliates.pct (o que o
+    // Bruno edita na area de Afiliados), mas varias telas leem users.com_pct do usuario dele - e as
+    // duas ficavam divergindo: ele atualizou pra 65% aqui e a tela de Produtos continuou mostrando
+    // 55%, que era o valor velho no cadastro de usuario. Agora salvar aqui espelha no usuario.
+    // O caminho contrario (editar pela Lista de Usuarios) espelha de volta, logo abaixo.
+    if (pct != null) {
+      try { await env.DB.prepare("UPDATE users SET com_pct=? WHERE afiliado_id=? AND role='afiliado'").bind(pct, id).run(); } catch (_) {}
+    }
+    return json({ ok: true, id: id, acesso: acesso });
+  } catch (e) { return err('Falha ao salvar: ' + String((e && e.message) || e), 500); }
+}
+
+// Gerar acesso pra um afiliado que ainda nao tem (ou trocar a senha do que tem). Devolve a senha
+// uma vez so.
+async function handleAfiliadoAcesso(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  const b = await req.json().catch(() => null);
+  const id = b && _afilTexto(b.id, 80);
+  if (!id) return err('id obrigatorio');
+  await _ensureFiveTables(env);
+  const a = await env.DB.prepare('SELECT name FROM five_affiliates WHERE affiliate_id=?').bind(id).first();
+  if (!a) return err('Afiliado nao encontrado', 404);
+  try {
+    const acesso = await _afilCriarAcesso(env, id, a.name || 'Afiliado', b.login);
+    return json({ ok: true, acesso: acesso });
+  } catch (e) { return err('Falha ao gerar acesso: ' + String((e && e.message) || e), 500); }
+}
+
+// Remover. So sai da lista quem NAO tem pedido nem pagamento: apagar um afiliado com comissao
+// lancada deixaria a comissao orfa e o total do mes mudaria sozinho. Nesse caso a saida e pausar.
+async function handleAfiliadoRemover(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  const b = await req.json().catch(() => null);
+  const id = b && _afilTexto(b.id, 80);
+  if (!id) return err('id obrigatorio');
+  await _ensureFiveTables(env);
+  try {
+    const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM five_commissions WHERE affiliate_id=?').bind(id).first();
+    if (c && Number(c.n) > 0) return err('Este afiliado ja tem ' + c.n + ' comissao(oes) lancada(s). Pause ele em vez de remover, senao a comissao fica sem dono.', 409);
+    const pg = await env.DB.prepare('SELECT COUNT(*) AS n FROM afiliado_pagamentos WHERE affiliate_id=?').bind(id).first();
+    if (pg && Number(pg.n) > 0) return err('Este afiliado tem ' + pg.n + ' pagamento(s) registrado(s). Pause ele em vez de remover.', 409);
+    await env.DB.prepare('DELETE FROM five_affiliates WHERE affiliate_id=?').bind(id).run();
+    // O LOGIN VAI JUNTO. Sem isto, remover o afiliado tirava ele da lista mas deixava a conta dele
+    // VIVA: ele continuaria entrando na dash de afiliado normalmente, so que invisivel pro Bruno,
+    // que acabou de ver "removido" na tela. A sessao aberta tambem cai (o authUser faz JOIN em
+    // users, entao sem a linha o token para de valer na hora).
+    try {
+      await env.DB.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE afiliado_id=?)").bind(id).run();
+      await env.DB.prepare('DELETE FROM users WHERE afiliado_id=?').bind(id).run();
+    } catch (_) {}
+    return json({ ok: true });
+  } catch (e) { return err('Falha ao remover: ' + String((e && e.message) || e), 500); }
+}
+
+// Pagamentos feitos a afiliado: listar, registrar e apagar.
+async function handleAfiliadoPagamentos(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  await _ensureFiveTables(env);
+  if (req.method === 'POST') {
+    const b = await req.json().catch(() => null);
+    if (!b) return err('Corpo invalido');
+    const id = _afilTexto(b.affiliate_id || b.id, 80);
+    const valor = Number(b.valor);
+    if (!id) return err('Escolha o afiliado');
+    if (!(valor > 0)) return err('O valor precisa ser maior que zero');
+    try {
+      await env.DB.prepare('INSERT INTO afiliado_pagamentos (id, affiliate_id, valor, data, metodo, obs, criado_por, created_at) VALUES (?,?,?,?,?,?,?,?)')
+        .bind('pag_' + Math.random().toString(16).slice(2, 10), id, valor,
+              _afilTexto(b.data, 20) || new Date().toISOString().slice(0, 10),
+              _afilTexto(b.metodo, 40) || 'Pix', _afilTexto(b.obs, 300), String(u.id || u.login || ''), Math.floor(Date.now() / 1000)).run();
+      return json({ ok: true });
+    } catch (e) { return err('Falha ao registrar: ' + String((e && e.message) || e), 500); }
+  }
+  if (req.method === 'DELETE') {
+    const b = await req.json().catch(() => null);
+    const pid = b && _afilTexto(b.id, 80);
+    if (!pid) return err('id obrigatorio');
+    try { await env.DB.prepare('DELETE FROM afiliado_pagamentos WHERE id=?').bind(pid).run(); return json({ ok: true }); }
+    catch (e) { return err('Falha ao apagar: ' + String((e && e.message) || e), 500); }
+  }
+  try {
+    const rows = (await env.DB.prepare('SELECT p.*, a.name AS afiliado_nome FROM afiliado_pagamentos p' +
+      ' LEFT JOIN five_affiliates a ON a.affiliate_id=p.affiliate_id' +
+      ' ORDER BY p.data DESC, p.created_at DESC LIMIT 300').all()).results || [];
+    return json({ pagamentos: rows });
+  } catch (e) { return err('Falha ao ler pagamentos: ' + String((e && e.message) || e), 500); }
+}
+
+// LINK DE CHECKOUT POR KIT, POR AFILIADO (25/08/2026).
+//
+// COMO O BRUNO DESCREVEU: cada afiliado tem os links de checkout DELE na Payt, um por kit e por
+// modalidade (antecipado x pagamento na entrega). Ele abre o kit em Produtos, clica em "Link de
+// checkout" e cola os dois. Quando ele cadastra um pedido daquele kit, o lead ja nasce com o link
+// certo, e e esse link que aparece no card - o mesmo que ele configurou aqui.
+//
+// Onde mora: data.afl_checkout = { <affiliate_id>: { <id do kit>: { antecipado, entrega } } }.
+// Endpoint proprio, e nao o POST /api/state generico, pelo mesmo motivo das outras chaves com dono:
+// assim o afiliado escreve SO o galho dele e nunca reescreve o mapa inteiro.
+async function handleAfiliadoCheckout(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (afiliadoSemVinculo(u)) return err('Sem permissao', 403);
+  const meu = isAfiliado(u) ? aflDe(u) : null;
+  if (!isDirector(u) && !meu) return err('Sem permissao', 403);
+
+  if (req.method === 'GET') {
+    const data = await _getDashData(env).catch(() => ({}));
+    const todos = (data && data.afl_checkout) || {};
+    // O afiliado le so o galho dele; o diretor pode pedir o de um especifico ou o mapa inteiro.
+    if (meu) return json({ ok: true, checkout: { [meu]: todos[meu] || {} } });
+    const q = String(new URL(req.url).searchParams.get('afiliado') || '').trim();
+    return json({ ok: true, checkout: q ? { [q]: todos[q] || {} } : todos });
+  }
+
+  const b = await req.json().catch(() => null);
+  if (!b) return err('Corpo invalido');
+  // O diretor pode gravar pra um afiliado (mandando `afiliado`); o afiliado sempre grava no dele.
+  const alvo = meu || String(b.afiliado || '').trim();
+  if (!alvo) return err('Informe o afiliado');
+  const kit = String(b.kit || '').trim();
+  if (!kit) return err('Informe o kit');
+  const limpaUrl = (v) => {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return '';
+    // So http(s). Sem isto daria pra guardar javascript: e o link acabaria clicavel na tela.
+    if (!/^https?:\/\//i.test(t)) return null;
+    return t.slice(0, 600);
+  };
+  const ant = limpaUrl(b.antecipado);
+  const ent = limpaUrl(b.entrega);
+  if (ant === null || ent === null) return err('O link precisa comecar com http:// ou https://');
+
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado nao encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado invalido', 500); }
+    if (!data.afl_checkout || typeof data.afl_checkout !== 'object') data.afl_checkout = {};
+    if (!data.afl_checkout[alvo] || typeof data.afl_checkout[alvo] !== 'object') data.afl_checkout[alvo] = {};
+    if (!ant && !ent) delete data.afl_checkout[alvo][kit];
+    else data.afl_checkout[alvo][kit] = { antecipado: ant, entrega: ent };
+    const nv = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), nv, Math.floor(Date.now() / 1000), 'checkout:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: nv });
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
+// Qual link vale pra este lead: o do afiliado dele, no kit e na modalidade do pedido.
+// Sem configuracao, devolve '' e o card cai no checkout padrao da Five, como sempre foi.
+function _linkCheckoutDoLead(data, lead) {
+  try {
+    const afl = String((lead && lead.afl) || '');
+    if (!afl) return '';
+    const mapa = ((data && data.afl_checkout) || {})[afl] || {};
+    const kits = ((data && data.regras) || {}).kits || [];
+    // Casa o kit pelo id da oferta ou pelo nome do tratamento, normalizado (a Five manda
+    // "GlicoSix - 4 Meses" sem espaco e o cadastro tem "Glico Six - 4 Meses").
+    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const alvo = norm(lead && (lead.trat || lead.prod));
+    let chave = null;
+    for (const k of kits) {
+      const id = String(k.offer_id || k.id || '');
+      if (id && mapa[id] && (norm(k.nome) === alvo || norm(k.id) === norm(lead && lead.offer_id))) { chave = id; break; }
+    }
+    if (!chave) for (const id of Object.keys(mapa)) { if (norm(id) === alvo) { chave = id; break; } }
+    if (!chave) return '';
+    const cfg = mapa[chave] || {};
+    const ant = String((lead && lead.mod) || '').toLowerCase() === 'antecipado';
+    return String((ant ? cfg.antecipado : cfg.entrega) || cfg.entrega || cfg.antecipado || '');
+  } catch (_) { return ''; }
+}
+
+// Pedidos que vieram POR AFILIADO. Alimenta o Kanban e a tela de logistica do acordeao. So pedido
+// com comissao de afiliado entra aqui - e o que faz dele "pedido de afiliado" e nao pedido nosso.
+async function handleAfiliadoPedidos(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  await _ensureFiveTables(env);
+  try {
+    const rows = (await env.DB.prepare('SELECT o.order_id, o.customer_name, o.customer_phone, o.customer_address,' +
+      ' o.product_name, o.offer_id, o.offer_title, o.offer_price, o.offer_qty, o.charge_status, o.charge_amount, o.charge_method,' +
+      ' o.shipping_status, o.shipping_code, o.shipping_core_id, o.shipping_platform, o.last_status,' +
+      ' o.created_at, o.updated_at, o.devolucao_id,' +
+      ' c.affiliate_id, c.amount AS comissao, c.percent AS pct,' +
+      ' a.name AS afiliado_nome' +
+      ' FROM five_commissions c' +
+      ' JOIN five_orders o ON o.order_id = c.order_id' +
+      ' LEFT JOIN five_affiliates a ON a.affiliate_id = c.affiliate_id' +
+      ' ORDER BY o.created_at DESC LIMIT 500').all()).results || [];
+    return json({ pedidos: rows });
+  } catch (e) { return err('Falha ao ler pedidos: ' + String((e && e.message) || e), 500); }
+}
+
+// ── QUEM VE / QUEM ESCREVE O BLOB DA EMPRESA (/api/state) ────────────────────
+//
+// O endpoint entregava o blob INTEIRO pra qualquer login e aceitava o blob inteiro de volta. Numa
+// operacao com gente de fora (o gestor de trafego e contratado) isso quer dizer: os 123 lancamentos
+// de gasto, o extrato do ContaSimples, os cartoes, a margem por kit, o custo do frasco e - o pior -
+// `regras.fixos`, que e a FOLHA SALARIAL nominal ("Salario - Thiago, R$ 2.400"). A dash escondia as
+// telas, mas a rota entregava tudo pra quem pedisse com o token dela.
+//
+// Duas listas, porque sao dois problemas diferentes:
+// OCULTO   = nao sai no GET pra quem nao e diretor (dinheiro e segredo de operacao).
+// SO_DIR   = nao entra pelo POST de quem nao e diretor. Isso vale para o OCULTO inteiro (senao a
+//            primeira gravacao de uma tela permitida - aparencia, pressel - salvava de volta um blob
+//            SEM as chaves que ele nunca recebeu, e apagava a empresa) e vale tambem pra acl_v2, que
+//            e a matriz de permissao: sem isso um vendedor se promovia a diretor com um POST.
+// cs_ok / cs_motivos / cats_despesa entraram em 24/08/2026 com a curadoria de gastos do cartao.
+// PRECISAM estar aqui: quem esta no STATE_OCULTO tambem entra no STATE_SO_DIRETOR_ESCREVE, e e
+// isso que faz o _stateProtegido devolver a chave do banco quando um cargo restrito salva o
+// estado. Sem isso o primeiro POST do gestor (ele grava Registros de Trafego pelo /api/state com
+// o blob inteiro) apagaria as decisoes de despesa em silencio, e o lucro pularia sozinho.
+const STATE_OCULTO = ['gastos','entradas','saidas','aportes','nextAporte','invest','invCats','nextInv','payouts','nextPayout','fechamentos','caixaPlat','caixaPlatUpd','cs_cards','payt_debug','lancamentos','proConfig','demConfig','trafego_aloc','nextGasto','nextEntrada','nextSaida','cs_ok','cs_motivos','cats_despesa'];
+const STATE_SO_DIRETOR_ESCREVE = STATE_OCULTO.concat(['acl_v2','regras','custos','custos_produtor']);
+// CHAVES QUE NINGUEM GRAVA POR ESTE CAMINHO. Cada uma tem endpoint proprio, com gate proprio:
+// chips e pressels vao por /api/pressel/save e /api/chip/save, o Sale Chat por /api/salechat/save.
+// Deixa-las passar no POST /api/state generico e dar a qualquer login uma porta lateral pra
+// reescrever a roleta, a pressel e o roteiro de venda inteiro. Vale pra TODO cargo, diretor
+// inclusive: se um dia uma tela precisar gravar por aqui, o certo e ela usar o endpoint dela.
+const STATE_NUNCA_POR_AQUI = ['chips', 'pressels', 'salechat', 'salechatPub', 'salechatCob', 'salechatCobPub', 'scVend', 'scVendPub'];
+
+// Cargo que so toca campanha: nao trabalha pedido nenhum, entao nao ve nem custo de produto.
+// (O gestor de trafego e contratado de fora; designer idem.)
+const ROLE_SO_CAMPANHA = ['gestor', 'designer'];
+
+// O que o GET devolve pra quem nao e diretor.
+async function _stateVisivel(u, data, env) {
+  if (isDirector(u)) return data;
+  // Ids do mundo do afiliado, pra filtrar o Sale Chat por pessoa. So consulta quando e o caso.
+  const _idsMundo = (env && (noMundoAfiliado(u) || afiliadoSemVinculo(u))) ? await _idsDoMundoAfiliado(env, aflDe(u)) : [];
+  const d = { ...data };
+  for (const k of STATE_OCULTO) delete d[k];
+  const soCampanha = ROLE_SO_CAMPANHA.includes(String(u && u.role || ''));
+  // `regras` guarda duas coisas muito diferentes no mesmo lugar: o custo do produto (que o vendedor
+  // PRECISA ver - a tela "Analise por vendedor" e liberada pra ele justamente pra mostrar o lucro
+  // por pedido) e `fixos`, que e a FOLHA nominal ("Salario - Thiago"). Sai a folha, fica o resto.
+  // Quem so toca campanha nao precisa de nenhum dos dois: leva so o catalogo de kits.
+  if (d.regras && typeof d.regras === 'object') {
+    if (soCampanha) d.regras = { kits: Array.isArray(d.regras.kits) ? d.regras.kits : [] };
+    else { const { fixos, ...semFolha } = d.regras; d.regras = semFolha; }
+  }
+  if (soCampanha) {
+    delete d.custos_produtor; delete d.custos;
+    // DADO DE CLIENTE TAMBEM NAO. A poda cuidou do dinheiro e esqueceu o cliente: o gestor de
+    // trafego, que e contratado de FORA, recebia nome, CPF, telefone e endereco de cada lead dentro
+    // do blob. As telas dele (Dashboard de Trafego e Meu Painel) so usam a CONTAGEM e a data - o
+    // gastoTs le apenas o campo `data`. Entao o lead vai reduzido ao minimo que faz as telas dele
+    // funcionarem, e nada mais.
+    // `afl` VAI JUNTO. A poda de campanha reduz o lead ao minimo, e onze linhas abaixo o corte do
+    // afiliado exige l.afl === o dele: sem esta chave, o gestor de trafego DELE ficava com leads
+    // sempre vazio e o Dashboard mostrava "0 pedidos" com "N pagos" logo abaixo, se contradizendo.
+    // Preservar nao abre nada: `afl` e um id opaco, sem nome, CPF, telefone ou endereco.
+    if (Array.isArray(d.leads)) d.leads = d.leads.map((l) => ({ id: l && l.id, data: l && l.data, ts: l && l.ts, afl: l && l.afl }));
+    d.clientes = [];
+    d.vendas = [];
+  }
+  // O MUNDO DO AFILIADO. Ele e de fora: leva os pedidos DELE e nada da nossa operacao.
+  //
+  // LISTA BRANCA, E NAO LISTA NEGRA (25/08/2026). Ate hoje isto era "apague o que e nosso", e o
+  // Bruno perguntou se podia confiar. Varri as 92 rotas e o blob inteiro: continuavam passando as
+  // FOTOS da nossa equipe (37 KB), a matriz de permissao de TODOS os cargos, os mapeamentos da
+  // Payt e do fornecedor. Nenhum deles estava na lista de apagar - e nunca estaria, porque lista
+  // negra so cobre o que alguem lembrou de escrever.
+  // Invertido: ele recebe SO o que esta em CHAVES_DO_AFILIADO. Chave nova no blob (hoje ou daqui a
+  // seis meses) nasce INVISIVEL pra ele por padrao, e so aparece se alguem decidir e escrever aqui.
+  // Quem mexer: acrescentar chave nesta lista e uma decisao de exposicao. Pense antes.
+  //
+  // O corte dos pedidos e por `lead.afl`, carimbado pelo webhook da Five e NAO editavel pelo
+  // /api/lead - e o que impede um afiliado de se dar de presente o pedido dos outros.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) {
+    const meuAfl = aflDe(u);
+    // Sem vinculo, meuAfl e null e nenhum lead casa: a lista sai vazia, que e o certo.
+    if (Array.isArray(d.leads)) d.leads = d.leads.filter((l) => l && meuAfl && String(l.afl || '') === meuAfl);
+    // Base de clientes e vendas sao da NOSSA operacao inteira; ele reconstroi a parte dele pelos
+    // proprios leads. Mandar a lista completa e podar depois seria facil de esquecer.
+    d.clientes = [];
+    d.vendas = [];
+    // Custo do nosso produto, margem por kit e regras de custo sao segredo de operacao: e o que ele
+    // usaria pra saber exatamente quanto a gente ganha em cima dele. Fica so o catalogo de kits,
+    // que ele precisa pra reconhecer o que foi vendido.
+    delete d.custos_produtor; delete d.custos;
+    if (d.regras && typeof d.regras === 'object') d.regras = { kits: Array.isArray(d.regras.kits) ? d.regras.kits : [] };
+    // PRESSEL E ROLETA DELE, SIM (24/08/2026). Cada pressel e cada chip tem dono (`afl`); ele leva
+    // os dele e nunca os nossos. Um afiliado sem vinculo tem meuAfl null e nada casa: lista vazia.
+    for (const k of ['pressels', 'chips']) {
+      if (Array.isArray(d[k])) d[k] = d[k].filter((x) => x && meuAfl && String(x.afl || '') === meuAfl);
+    }
+    // SALE CHAT: O MODELO PADRAO FICA (24/08/2026, pedido do Bruno: "o nosso sale chat, que hoje ja
+    // tem um funilzinho padrao ali de vendas, pode deixar"). Ele recebe o PUBLICADO (salechatPub),
+    // que e o funil que roda de verdade, e usa como ponto de partida - do mesmo jeito que o vendedor
+    // da casa herda o modelo. O RASCUNHO nosso (salechat) sai: e a nossa mesa de trabalho, com
+    // versao pela metade. E o do cobrador nao e assunto dele.
+    // Gravar continua indo pro slot dele (handleSaleChatSave escreve scVend[uid] pra quem nao e
+    // diretor), entao ele nunca edita o nosso modelo - so a copia dele.
+    // SALE CHAT VAZIO PRO AFILIADO (25/08/2026). Em 24/08 o Bruno mandou deixar o nosso funil
+    // padrao como base; no dia seguinte ele reviu: "o certo e a gente separar as coisas; nao quero
+    // que voce deixe meu funil, minhas mensagens, meus audios pra eles". Faz sentido: o roteiro e o
+    // audio sao a voz da operacao dele, nao um template. Sai tudo que e nosso; ele comeca em branco
+    // e monta o proprio, que vai pro slot dele (scVend[uid]) e chega por outro caminho.
+    delete d.salechat; delete d.salechatPub; delete d.salechatCob; delete d.salechatCobPub;
+    delete d.cs_cards;
+    // GASTO DE TRAFEGO TEM DONO (24/08/2026). Eu tinha escrito `delete d.trafego`, mas a chave de
+    // verdade e `trafego_registros` - entao a poda nao pegava nada e os NOSSOS 6 lancamentos de
+    // anuncio (R$ 503,60 e companhia) estavam indo inteiros pro afiliado. Conferido ao vivo.
+    //
+    // Agora, em vez de apagar, RECORTA: o afiliado tem gestor de trafego proprio e precisa lancar e
+    // ver o gasto DELE. Cada registro carrega `afl`; o nosso continua sem o campo.
+    if (Array.isArray(d.trafego_registros)) {
+      d.trafego_registros = d.trafego_registros.filter((r) => r && meuAfl && String(r.afl || '') === meuAfl);
+    }
+    // ESTOQUE E NOSSO (24/08/2026). O extrato de frascos (39 movimentos) estava indo inteiro pro
+    // afiliado e virava a faixa "Estoque de frascos" na tela de Produtos dele. Estoque e logistica
+    // da casa: quanto a gente tem em maos, quanto entrou e quanto saiu nao e conta dele.
+    delete d.estoque_movs; delete d.estoque; delete d.nextEstoque;
+    // NUNCA FORAM PODADAS (auditoria de 24/08/2026): o nosso investimento em midia lancado a mao,
+    // as despesas recorrentes, as devolucoes e os snapshots viajavam item a item no GET pra todo o
+    // mundo do afiliado. Nao apareciam em tela nenhuma dele - o que e pior, porque ninguem ia notar.
+    delete d.midia_gasto; delete d.despesas_rec; delete d.devolucoes; delete d.snapshots;
+    // A PODA FINAL, por lista branca. O que nao esta aqui nao chega nele.
+    //   leads/clientes/vendas -> ja recortados acima, sao os pedidos DELE
+    //   regras                -> so o catalogo de kits (a folha e o custo ja sairam acima)
+    //   tags                  -> so as usadas nos pedidos dele (recortadas abaixo)
+    //   wa_*                  -> configuracao de atendimento que a tela dele usa
+    //   cont*                 -> contingencia DELE (o sufixo do mundo dele ja foi resolvido acima)
+    //   scVend/scVendPub      -> Sale Chat por pessoa, ja filtrado ao mundo dele
+    //   team                  -> derivado, ja escopado no handleGetState
+    //   estoque_movs          -> NAO entra: e logistica da casa
+    const CHAVES_DO_AFILIADO = new Set([
+      'leads', 'clientes', 'vendas', 'regras', 'tags', 'team',
+      'kb_cols', 'wa_statuses', 'contCols', 'contColColors', 'cont_col_order',
+      'scVend', 'scVendPub', 'wa_ativo', 'wa_automacoes', 'wa_autom_on', 'wa_bot_on', 'funil_auto',
+      'pressels', 'chips', 'trafego_registros', 'saques', 'notifs',
+      'afl_checkout',
+    ]);
+    // ...mas so o galho DELE do mapa de checkout (o mapa tem um galho por afiliado).
+    if (d.afl_checkout && typeof d.afl_checkout === 'object') {
+      d.afl_checkout = meuAfl && d.afl_checkout[meuAfl] ? { [meuAfl]: d.afl_checkout[meuAfl] } : {};
+    }
+    for (const k of Object.keys(d)) if (!CHAVES_DO_AFILIADO.has(k)) delete d[k];
+    // CONTINGENCIA DELE. Se ja tem as proprias, leva as dele; se ainda nao mexeu, leva uma COPIA
+    // das nossas como ponto de partida (a organizacao que ja funciona), e o primeiro ajuste cria as
+    // dele. As chaves com sufixo de OUTROS afiliados saem todas.
+    for (const k of ['wa_statuses', 'contCols', 'contColColors', 'cont_col_order']) {
+      const minha = d[k + '__' + meuAfl];
+      if (minha !== undefined) d[k] = minha;
+    }
+    for (const k of Object.keys(d)) {
+      if (/^(wa_statuses|contCols|contColColors|cont_col_order)__/.test(k)) delete d[k];
+    }
+    // TAGS: SO AS QUE APARECEM NOS PEDIDOS DELE. O catalogo de etiquetas do nosso CRM (VIP, Quente,
+    // Frio, Recuperar, Fornecedor...) e leitura da nossa operacao: diz como a gente classifica
+    // cliente. Mandar so as usadas nos leads dele mantem nome e cor certos no card, sem entregar o
+    // catalogo. Este filtro roda DEPOIS do corte de d.leads, de proposito.
+    if (Array.isArray(d.tags)) {
+      const usadas = new Set();
+      for (const l of (d.leads || [])) for (const t of ((l && l.tags) || [])) usadas.add(String(t));
+      d.tags = d.tags.filter((t) => t && usadas.has(String(t.id)));
+    }
+    // O CATALOGO DELE VEM JUNTO (27/08/2026, pedido do Bruno: "gostaria que eles conseguissem
+    // controlar ali as tags deles"). Ele guarda em tags__<afl>, igual as colunas da Contingencia.
+    // As NOSSAS continuam fora - so sobrevivem as que ja estao marcadas num pedido dele, pra o card
+    // nao perder nome e cor. Ele comeca com a lista vazia de proposito: nome de etiqueta nossa diz
+    // como a gente classifica cliente, e isso nao e dele.
+    {
+      const _minhas = data['tags' + String(meuAfl ? ('__' + meuAfl) : '')];
+      if (Array.isArray(_minhas) && meuAfl) {
+        const jaTem = new Set((d.tags || []).map((t) => t && String(t.id)));
+        d.tags = (d.tags || []).concat(_minhas.filter((t) => t && !jaTem.has(String(t.id))));
+      }
+    }
+    // SALE CHAT DELE, SIM (24/08/2026). O roteiro por pessoa vive em scVend[<id do usuario>], entao
+    // da pra entregar so os do mundo dele: o dele e o dos vendedores dele. O MODELO da casa
+    // (salechat) continua fora - ele monta o proprio, nao herda o nosso.
+    const _meus = new Set(_idsMundo || []);
+    for (const k of ['scVend', 'scVendPub']) {
+      const orig = d[k];
+      if (orig && typeof orig === 'object') {
+        const so = {};
+        for (const uid of Object.keys(orig)) if (_meus.has(String(uid))) so[uid] = orig[uid];
+        d[k] = so;
+      }
+    }
+  }
+  // saque e notificacao sao pessoais: cada um ve o seu (e o que e pra todo mundo).
+  const meu = String(u && u.id || '');
+  if (Array.isArray(d.saques)) d.saques = d.saques.filter((x) => String(x && (x.at || x.user_id || x.para) || '') === meu);
+  // 'owner' e recado de dono (aprovar saque, alerta de caixa): nao vai pra quem nao e diretor.
+  if (Array.isArray(d.notifs)) d.notifs = d.notifs.filter((x) => { const t = String(x && x.to || ''); return !t || t === meu || t === 'todos' || t === 'all'; });
+  return d;
+}
+
+// O que o POST aceita de quem nao e diretor: o resto volta a valer o que ja estava no banco.
+function _stateProtegido(u, novo, atual) {
+  // As chaves com endpoint proprio voltam sempre do banco, pra qualquer cargo.
+  if (novo && typeof novo === 'object') {
+    novo = { ...novo };
+    for (const k of STATE_NUNCA_POR_AQUI) {
+      if (Object.prototype.hasOwnProperty.call(atual, k)) novo[k] = atual[k]; else delete novo[k];
+    }
+  }
+  // QUEM RECEBE PODADO NAO PODE GRAVAR PODADO. O gestor recebe os leads reduzidos a {id,data,ts} e
+  // TEM permissao de gravar (ele salva Registros de Trafego, que passam pelo /api/state com o blob
+  // inteiro). Sem esta restauracao, o primeiro registro dele apagaria nome, CPF, telefone e endereco
+  // de todo mundo em silencio - e a guarda anti-apagamento nao pegaria, porque a lista continua com
+  // o mesmo TAMANHO, so vazia por dentro.
+  if (novo && typeof novo === 'object' && ROLE_SO_CAMPANHA.includes(String(u && u.role || ''))) {
+    novo = { ...novo };
+    for (const k of ['leads', 'clientes', 'vendas']) {
+      if (Object.prototype.hasOwnProperty.call(atual, k)) novo[k] = atual[k]; else delete novo[k];
+    }
+  }
+  // MESMA REGRA PRO AFILIADO, e aqui ela e ainda mais critica: ele recebe SO os leads dele, entao um
+  // POST inocente da tela dele reescreveria data.leads com a listinha curta e apagaria os pedidos de
+  // todo mundo. A guarda anti-apagamento tambem nao pegaria isso sozinha em todos os casos.
+  if (novo && typeof novo === 'object' && (noMundoAfiliado(u) || afiliadoSemVinculo(u))) {
+    novo = { ...novo };
+    // As chaves de contingencia entram aqui tambem: o afiliado RECEBE uma copia das nossas (pra ter
+    // base), e sem esta restauracao o primeiro salvamento generico dele gravaria essa copia por
+    // cima das NOSSAS. Quem grava as dele e o /api/cont/save, que usa o sufixo do mundo dele.
+    for (const k of ['clientes', 'vendas', 'custos', 'custos_produtor', 'regras', 'cs_cards', 'estoque_movs', 'estoque', 'nextEstoque',
+                     'midia_gasto', 'despesas_rec', 'devolucoes', 'snapshots', 'tags',
+                     'wa_statuses', 'contCols', 'contColColors', 'cont_col_order', 'afl_checkout']) {
+      if (Object.prototype.hasOwnProperty.call(atual, k)) novo[k] = atual[k]; else delete novo[k];
+    }
+    // GASTO DE TRAFEGO: aqui NAO da pra so restaurar do banco, senao o gestor de trafego dele nunca
+    // conseguiria lancar nada (ele recebe so os registros dele e devolveria a lista curta, que
+    // apagaria os nossos). Entao: MERGE. Ficam os nossos como estao, e entram os dele vindos da
+    // tela, carimbados no dono. Registro que ele mandar sem ser dele simplesmente nao entra.
+    const meuAfl = aflDe(u);
+    const antigos = Array.isArray(atual.trafego_registros) ? atual.trafego_registros : [];
+    const nossos = antigos.filter((r) => !r || String(r.afl || '') !== String(meuAfl || ''));
+    const dele = (Array.isArray(novo.trafego_registros) ? novo.trafego_registros : [])
+      .filter((r) => r && typeof r === 'object')
+      .map((r) => ({ ...r, afl: meuAfl }));
+    novo.trafego_registros = meuAfl ? nossos.concat(dele) : antigos;
+
+    // PEDIDO NOVO DELE PRECISA ENTRAR (auditoria de 24/08/2026). `leads` estava na lista de cima,
+    // restaurada cega do banco: o botao "Novo Pedido" respondia 200, o toast dizia "cadastrado", a
+    // version subia e o lead SUMIA. Pior tipo de defeito - o sistema mente que salvou.
+    // Aqui e merge conservador: nada do banco e alterado por ele (nem coluna, nem valor, nem dono),
+    // e da tela dele so entram ids que AINDA NAO EXISTEM, carimbados no mundo dele. Teto de 20 por
+    // gravacao porque este caminho aceita array vindo do navegador e o blob tem teto de 1 MB.
+    const leadsBanco = Array.isArray(atual.leads) ? atual.leads : [];
+    if (meuAfl) {
+      const idsBanco = new Set(leadsBanco.map((l) => String(l && l.id)));
+      const novosDele = (Array.isArray(novo.leads) ? novo.leads : [])
+        .filter((l) => l && typeof l === 'object' && !idsBanco.has(String(l.id)))
+        .slice(0, 20)
+        // JA NASCE COM O LINK DE CHECKOUT DELE. E o mesmo link que ele configurou por kit em
+        // Produtos; o card do lead le `lead.link` e monta a URL com os dados do cliente
+        // (checkoutPreenchido no orders.js), entao nao ha caminho novo pra manter.
+        // So preenche quando ele NAO mandou link proprio no cadastro.
+        .map((l) => {
+          const novo = { ...l, afl: meuAfl };
+          if (!String(novo.link || '').trim()) {
+            const lk = _linkCheckoutDoLead(atual, novo);
+            if (lk) novo.link = lk;
+          }
+          return novo;
+        });
+      novo.leads = leadsBanco.concat(novosDele);
+    } else {
+      novo.leads = leadsBanco;
+    }
+  }
+  // `team` e DERIVADO (montado na leitura a partir da tabela users) e nunca deve ser gravado no
+  // blob: se entrar, vira copia velha do cadastro e ainda come o teto de 1 MB. Vale pra todo cargo,
+  // diretor inclusive - por isso sai antes do atalho de diretor.
+  if (novo && typeof novo === 'object' && 'team' in novo) { novo = { ...novo }; delete novo.team; }
+  if (isDirector(u)) return novo;
+  const d = { ...novo };
+  for (const k of STATE_SO_DIRETOR_ESCREVE) {
+    if (Object.prototype.hasOwnProperty.call(atual, k)) d[k] = atual[k];
+    else delete d[k];
+  }
+  // saques/notifs vem filtrados no GET, entao regravar direto apagaria os dos outros: mantem os
+  // alheios e aceita so a parte que e da pessoa.
+  const meu = String(u && u.id || '');
+  const meuDono = (x) => String(x && (x.at || x.user_id || x.para) || '') === meu;
+  if (Array.isArray(atual.saques)) d.saques = (atual.saques.filter((x) => !meuDono(x))).concat(Array.isArray(novo.saques) ? novo.saques.filter(meuDono) : []);
+  if (Array.isArray(atual.notifs)) {
+    const meuN = (x) => String(x && x.to || '') === meu;
+    d.notifs = (atual.notifs.filter((x) => !meuN(x))).concat(Array.isArray(novo.notifs) ? novo.notifs.filter(meuN) : []);
+  }
+  return d;
+}
+
 async function handleGetState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -795,7 +1919,38 @@ async function handleGetState(req, env) {
   let data;
   try { data = JSON.parse(row.data); } catch (e) { data = {}; }
   // min_version viaja junto pro cliente detectar sozinho que está velho e recarregar
-  return json({ data, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION });
+  // QUEM E CADA VENDEDOR VAI JUNTO. O front tem um teamMapFrom(state) que le `state.team` pra
+  // mostrar nome, iniciais e cor do vendedor no Kanban, na Agenda, no Dashboard e no Financeiro - e
+  // essa chave NUNCA existiu no blob (nem `team` nem `users`). Resultado: o card do pedido dizia
+  // "Sem vendedor", o filtro por vendedor vinha vazio e o seletor mostrava o id cru
+  // ("atendente_iqq91p"). Justo na tela onde o diretor confirma pagamento e comissao.
+  // E derivado da tabela users, montado na leitura: nao entra no blob (o _stateProtegido apaga na
+  // escrita) e nao gasta o teto de 1 MB.
+  let team = [];
+  try {
+    // ESCOPO DO `team` (24/08/2026). Esta lista e montada FORA do _stateVisivel, entao ela escapava
+    // inteira da poda: o afiliado recebia a NOSSA EQUIPE toda em data.team - Bruno Correa (socio),
+    // os tres vendedores, o cobrador, o diretor e o gestor de trafego, com nome e cargo. Era o que
+    // o Bruno viu na tela "Vendedores" da dash do afiliado. Conferido ao vivo antes de corrigir.
+    // Agora quem esta no mundo de um afiliado so recebe o proprio mundo.
+    const _mundo = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? aflDe(u) : null;
+    const _souDoMundo = isAfiliado(u) || afiliadoSemVinculo(u) || noMundoAfiliado(u);
+    const tr = _souDoMundo
+      ? await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id = ? ORDER BY name').bind(_mundo || '__sem_vinculo__').all()
+      // Do lado do produtor, `team` tambem so tem a CASA: e este mapa que da nome ao card do
+      // Kanban, e lead nosso nunca e atendido por gente de afiliado. Sem o afiliado_id IS NULL, o
+      // vendedor que o afiliado cadastrou aparecia como se fosse nosso.
+      : await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id IS NULL ORDER BY name').all();
+    const dir = isDirector(u);
+    team = (tr.results || []).map((x) => ({
+      id: x.id, name: x.name, abbr: x.abbr, role: x.role, color: x.color, bg: x.bg,
+      photo: _fotoUrl(req, x.id, x.photo),
+      // a taxa de comissao e do diretor, MENOS a propria: o vendedor precisa dela pra ver o que ele
+      // ganha (sem isso a comissao dele aparece como R$ 0,00 no painel dele).
+      ...(dir || String(x.id) === String(u.id) ? { com_pct: x.com_pct } : {}),
+    }));
+  } catch (_) { team = []; }
+  return json({ data: { ...(await _stateVisivel(u, data, env)), team }, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION });
 }
 
 // Move UM lead de coluna (kanban) de forma cirúrgica: lê o estado, troca só o
@@ -804,7 +1959,10 @@ async function handleGetState(req, env) {
 async function handleMoveLead(req, env, leadId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  // O afiliado toca o funil DELE: sem isso a dash dele teria um Kanban que nao move, e trabalhar o
+  // pedido e justamente o que ele vai fazer o dia inteiro. QUAL card e dele so da pra saber depois
+  // de achar o lead, entao a checagem de dono fica logo abaixo, dentro do laco.
+  if (!isDirector(u) && !noMundoAfiliado(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const col = body && body.col;
   if (!col) return err('col obrigatório');
@@ -816,6 +1974,9 @@ async function handleMoveLead(req, env, leadId) {
     const leads = Array.isArray(data.leads) ? data.leads : [];
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
+    // Card de OUTRO afiliado responde 404, nao 403: 403 confirmaria que o pedido existe, e dai da
+    // pra varrer os ids pra descobrir o volume dos concorrentes. Pra ele, simplesmente nao existe.
+    if (noMundoAfiliado(u) && String(lead.afl || '') !== aflDe(u)) return err('Lead não encontrado', 404);
     const from = lead.col;
     if (from === col) return json({ ok: true, version: row.version, noop: true });
     lead.col = col;
@@ -932,7 +2093,14 @@ async function handleUpdateLead(req, env, leadId) {
   const body = await req.json().catch(() => ({}));
   const patch = (body && typeof body.patch === 'object' && body.patch) ? body.patch : (body || {});
   // campos livres (qualquer usuário logado). spg/col/agend -> diretor ou cobrador; at/vl/com_pct -> só diretor.
-  const SCALAR = ['nome', 'cpf', 'wa', 'email', 'orig', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'mod', 'pgto', 'track', 'link', 'obs'];
+  // comprovante_url/mime entram aqui: sao do PEDIDO (o arquivo que prova a venda COD), e ficavam de
+  // fora, entao anexar comprovante ao EDITAR um pedido dizia "atualizado" e nao gravava nada. O
+  // vendedor via salvo, reabria e nao tinha anexo. Sao so a URL no R2 e o mime, nunca o arquivo.
+  // 'transp' = como o pedido vai (transportadora que entrega em casa x Correios com retirada na
+  // agencia). Faltava aqui E nas duas listas do front: o vendedor escolhia Correios, a tela dizia
+  // salvo e o valor era descartado antes de sair do navegador. Mesmo defeito do comprovante, que
+  // ja tinha acontecido nesta mesma lista - campo novo TEM que entrar nas TRES.
+  const SCALAR = ['nome', 'cpf', 'wa', 'email', 'orig', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'mod', 'pgto', 'track', 'link', 'obs', 'transp', 'comprovante_url', 'comprovante_mime', 'entrega_url', 'entrega_mime', 'track_core', 'transp_nome'];
   const now14 = () => { const d = new Date(); const p = (x) => String(x).padStart(2, '0'); return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
   for (let attempt = 0; attempt < 6; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
@@ -943,9 +2111,17 @@ async function handleUpdateLead(req, env, leadId) {
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
     const fromCol = lead.col;
+    // GATE DE MUNDO, NO TOPO (auditoria 24/08/2026). O handleMoveLead ja tinha; aqui faltava, e
+    // `tags` e `comments` eram gravados FORA do bloco de dono - entao qualquer autenticado
+    // reescrevia etiqueta e comentario de QUALQUER pedido nosso.
+    if (afiliadoSemVinculo(u)) return err('Lead não encontrado', 404);
+    if (noMundoAfiliado(u) && String(lead.afl || '') !== aflDe(u)) return err('Lead não encontrado', 404);
     // IDOR: só diretor/cobrador OU o dono do lead (vendedor atribuído) editam os campos do cliente.
     // Antes qualquer autenticado alterava nome/cpf/endereço/rastreio de QUALQUER lead.
-    const owns = String(lead.at) === String(u.id);
+    // Dono do lead: o vendedor atribuido OU, no mundo de afiliado, quem e daquele afiliado. Sem a
+    // segunda metade o afiliado abria o proprio pedido e nao conseguia anotar nada (o lead.at e o
+    // vendedor, nunca ele).
+    const owns = String(lead.at) === String(u.id) || (noMundoAfiliado(u) && String(lead.afl || '') === aflDe(u));
     // O QUE FOR RECUSADO VOLTA NA RESPOSTA. Antes os campos sem permissão eram descartados em
     // silêncio e o endpoint respondia 200 ok: a tela dava "Lead salvo", o valor continuava na frente
     // dele (edição otimista) e só no F5 seguinte voltava tudo. Isso é a queixa do Bruno de "edito e
@@ -953,23 +2129,65 @@ async function handleUpdateLead(req, env, leadId) {
     // Não bloqueio a chamada inteira de propósito: quem edita o próprio cliente e de passagem manda
     // um campo de diretor deve gravar o que pode, e SABER o que não gravou.
     const negados = [];
-    const nega = (cond, ...ks) => { if (!cond) for (const k of ks) if (k in patch) negados.push(k); };
+    // SO E RECUSA SE O VALOR MUDA. O Novo Pedido manda o formulario INTEIRO em todo salvamento, e
+    // `at`, `vl` e `com_pct` vao sempre - entao o vendedor levava "Salvo, menos: vendedor, valor,
+    // comissao" em TODA edicao, mesmo corrigindo so o endereco. Nada tinha sido recusado de
+    // verdade: o valor que chegou era o mesmo que ja estava gravado. Reclamacao do vendedor do
+    // Bruno em 21/08/2026 ("nao consigo editar, ta dando bug").
+    const _igual = (a2, b2) => String(a2 == null ? '' : a2) === String(b2 == null ? '' : b2);
+    const nega = (cond, ...ks) => { if (!cond) for (const k of ks) if (k in patch && !_igual(patch[k], lead[k])) negados.push(k); };
+    // PRECO DO KIT, do catalogo (data.regras.kits, o mesmo que a tela oferece no seletor).
+    const _precoDoKit = (nome) => {
+      const kits = (data.regras && Array.isArray(data.regras.kits)) ? data.regras.kits : [];
+      const alvo = String(nome || '').trim().toLowerCase();
+      for (const k of kits) {
+        if (String((k && k.nome) || '').trim().toLowerCase() !== alvo) continue;
+        const p = Number(String(k.preco == null ? '' : k.preco).replace(/\./g, '').replace(',', '.'));
+        if (p > 0) return p;
+      }
+      return 0;
+    };
+    // TROCAR O KIT NAO E DIGITAR PRECO. `vl` e campo de diretor pra impedir preco inventado, mas o
+    // Novo Pedido nao deixa digitar valor nenhum: ele vem do tratamento escolhido. Com a regra
+    // antiga, o vendedor trocava de 4 pra 3 meses e o pedido ficava "Glico Six - 3 Meses" custando
+    // R$ 497 - nome de um kit com o preco de outro, envenenando receita, comissao e margem (caso
+    // real: Romi Machado Teixeira, 21/08/2026). Agora o dono do lead pode gravar o valor QUANDO ele
+    // bate com o preco de catalogo do tratamento que veio no mesmo salvamento.
+    const _vlDeCatalogo = ('vl' in patch) && ('trat' in patch)
+      && Math.abs(_precoDoKit(patch.trat) - (Number(patch.vl) || 0)) < 0.01;
+    const _podeVl = dir || (owns && _vlDeCatalogo);
     if (canManage || owns) { for (const k of SCALAR) { if (k in patch) lead[k] = patch[k]; } }
     else nega(false, ...SCALAR);
-    nega(dir, 'at', 'vl', 'com_pct');
-    nega(canManage, 'spg', 'agend', 'valor_neg', 'col');
+    nega(dir, 'at', 'com_pct');
+    nega(_podeVl, 'vl');
+    nega(canManage, 'spg', 'agend', 'col');
+    // valor_neg (o que o cliente PAGOU de verdade) sai da lista de diretor: quem negocia o desconto
+    // e o vendedor, no WhatsApp, e a dash nao ve isso. Sem poder registrar, a comissao dele saia
+    // sobre o valor cheio - o oposto da regra do Bruno. O dono do lead pode gravar.
+    nega(canManage || owns, 'valor_neg');
+    // NAO GRAVA METADE. Quando o vendedor manda o mesmo patch com `spg: Pago` e `valor_neg: 350`, o
+    // `spg` era recusado (so diretor/cobrador marcam pago) e o `valor_neg` gravava. O pedido ficava
+    // "Pendente" valendo 350: a receita nao entrava, a comissao nao registrava e ainda sumia a
+    // diferenca do que o cliente devia. Meia gravacao e pior que recusa inteira - agora os dois caem
+    // juntos, e a tela avisa.
+    if (negados.includes('spg') && 'valor_neg' in patch && !negados.includes('valor_neg')) negados.push('valor_neg');
     if (!canManage && Array.isArray(patch.pagamentos)) negados.push('pagamentos');
+    if (_podeVl && 'vl' in patch) lead.vl = Number(patch.vl) || 0;   // diretor sempre; dono so com preco do catalogo
     if (dir) {
       if ('at' in patch) lead.at = patch.at;
-      if ('vl' in patch) lead.vl = Number(patch.vl) || 0;
       // Valor invalido virava 12%, um numero que ninguem combinou. Agora vira VAZIO, e a dash usa
       // a taxa cadastrada do vendedor. String vazia tambem passa: e como o front limpa a taxa.
       if ('com_pct' in patch) { const c = Number(patch.com_pct); lead.com_pct = (patch.com_pct === '' || isNaN(c)) ? '' : c; }
     }
+    // Fora do bloco de gestao: o vendedor grava o valor pago do PROPRIO pedido.
+    // O `nega()` acima so MARCA o campo como recusado, quem grava e esta linha. Na primeira versao
+    // deste conserto eu marquei o valor_neg como negado e esqueci de barrar a gravacao: a resposta
+    // dizia "recusado" e o valor entrava no banco assim mesmo - a tela desfazia na frente do
+    // vendedor e o banco ficava com 350. Pior que o bug original. Pego num teste com o dono do lead.
+    if ((canManage || owns) && 'valor_neg' in patch && !negados.includes('valor_neg')) lead.valor_neg = _valorPago(patch.valor_neg, lead);
     if (canManage) {
       if ('spg' in patch) lead.spg = patch.spg;
       if ('agend' in patch) lead.agend = patch.agend;
-      if ('valor_neg' in patch) lead.valor_neg = Number(patch.valor_neg) || 0; // valor negociado (após desconto)
       if (Array.isArray(patch.pagamentos)) { // ficha de cobrança: parcelas efetivamente pagas
         lead.pagamentos = patch.pagamentos.slice(0, 60).map((p) => ({
           ts: Number(p && p.ts) || 0, data: String((p && p.data) || ''), valor: Number(p && p.valor) || 0,
@@ -985,7 +2203,10 @@ async function handleUpdateLead(req, env, leadId) {
       }
     }
     if (Array.isArray(patch.tags)) {
-      const t = Array.isArray(data.tags) ? data.tags : [];
+      // O catalogo que vale e o de quem esta salvando: sem isto, o afiliado marcava uma etiqueta que
+      // ele mesmo criou, o servidor respondia 200 e a etiqueta sumia - o pior tipo de defeito, o que
+      // mente que salvou. As nossas continuam valendo pra quem e da casa.
+      const t = (Array.isArray(data.tags) ? data.tags : []).concat(_tagsDe(data, u));
       lead.tags = t.length ? patch.tags.filter((x) => t.some((y) => y.id === x)) : patch.tags;
     }
     if (Array.isArray(patch.comments)) lead.comments = patch.comments;
@@ -1000,6 +2221,68 @@ async function handleUpdateLead(req, env, leadId) {
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
+// POST /api/lead/delete { id } → apaga UM pedido de data.leads. SÓ DIRETOR/SÓCIO/PRODUTOR.
+//
+// Pedido do Bruno em 18/08/2026: "quero a opção de excluir, apenas eu como diretor ou sócio; meus
+// vendedores não vão ter a opção de deletar nenhum pedido".
+//
+// Até aqui só existia /api/wa/sale/delete, que remove a linha de VENDA detectada no WhatsApp. Pedido
+// cadastrado na mão vive em data.leads e não tinha como sair: o botão da lixeira nem aparecia.
+//
+// Apagar é IRREVERSÍVEL no blob, então: gate de cargo antes de qualquer leitura, CAS pra não
+// atropelar escrita concorrente, e devolve o que removeu pra tela poder conferir.
+// ── COMPROVANTE DE ENTREGA (a foto que a transportadora tira ao entregar) ──────────────────────
+//
+// Onde plugar quando a Five comecar a mandar. Em 18/08/2026 eu varri TODOS os payloads que ela ja
+// enviou (five_orders.raw + five_debug): 52 campos distintos e NENHUM de foto, imagem, anexo ou
+// assinatura. Ou seja, hoje ela nao manda - nao e questao de a gente nao estar lendo.
+//
+// O Bruno vai confirmar com a Five se existe evento/endpoint pra isso. Enquanto nao existe, o campo
+// `entrega_url` do lead e preenchido A MAO (a tela deixa anexar a foto que a transportadora manda no
+// WhatsApp). Quando a Five ligar o evento, e so chamar esta funcao de dentro do webhook dela com a
+// URL que vier: o resto da dash ja le esse campo, nada mais muda.
+//
+// Guardar no NOSSO R2 e nao a URL deles e de proposito: link de terceiro expira, e o comprovante de
+// entrega e justamente o que segura uma contestacao meses depois.
+async function _salvarComprovanteEntrega(env, leadId, url, mime) {
+  if (!leadId || !url) return false;
+  for (let t = 0; t < 4; t++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return false;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return false; }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const l = leads.find((x) => String(x.id) === String(leadId));
+    if (!l) return false;
+    l.entrega_url = String(url);
+    l.entrega_mime = String(mime || '');
+    if (await _casState(env, row.version, data, 'entrega-foto')) return true;
+  }
+  return false;
+}
+
+async function handleLeadDelete(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só um diretor pode excluir pedido', 403);
+  const body = await req.json().catch(() => ({}));
+  const id = String((body && body.id) || '').trim();
+  if (!id) return err('id obrigatório');
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data;
+    try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const i = leads.findIndex((l) => String(l.id) === id);
+    if (i < 0) return err('Pedido não encontrado', 404);
+    const removido = leads[i];
+    data.leads = leads.filter((_, k) => k !== i);
+    const ok = await _casState(env, row.version, data, 'lead-delete:' + String(u.id));
+    if (ok) return json({ ok: true, version: (row.version || 0) + 1, removido: { id: removido.id, nome: removido.nome || '' } });
+  }
+  return err('Estado ocupado, tente de novo', 409);
+}
+
 // Salva UMA pressel (cirúrgico, só diretor). O cliente manda { id, patch } — NUNCA o blob inteiro,
 // então não tem risco de apagar chips/leads/etc (o incidente da aba antiga). id=0/ausente cria nova
 // (id = max+1 no servidor). patch só aplica campos permitidos; arrays (vendedores/elementos) quando
@@ -1012,68 +2295,142 @@ async function handlePresselSave(req, env) {
   const body = await req.json().catch(() => ({}));
   const patch = (body && body.patch && typeof body.patch === 'object') ? body.patch : null;
   if (!patch) return err('patch obrigatório');
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
-  if (!Array.isArray(data.pressels)) data.pressels = [];
-  let id = Number(body.id) || 0;
-  let target;
-  if (id) {
-    target = data.pressels.find((x) => String(x.id) === String(id));
-    if (!target) return err('Pressel não encontrada', 404);
-  } else {
-    id = data.pressels.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1;
-    target = { id, nome: 'Nova Pressel', status: 'ativa', msg: '', pixel_tt: '', pixel_tt_token: '',
-      pixel_meta: '', pixel_meta_token: '', bg: '#ffffff', redirect: 0, fullclick: false, dominio: 'painel-glico.fun',
-      elementos: [{ id: 1, type: 'imagem', src: '' }, { id: 2, type: 'botao', label: 'FALAR NO WHATSAPP', bg: '#22c55e', color: '#ffffff' }],
-      vendedores: [], metrics: { cliques: 0, contatos: 0, vendas: 0 }, _rr: 0 };
-    data.pressels.push(target);
-  }
-  const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg'];
-  for (const k of STR) if (k in patch) target[k] = String(patch[k] == null ? '' : patch[k]).slice(0, 4000);
-  // EVENTO DE CADA ETAPA. Guardado à parte do STR de propósito: aqui o valor NÃO pode ser texto
-  // livre. Ele acaba interpolado dentro de um <script> na pressel, que é página de tráfego pago —
-  // texto livre ali seria execução de código. Só passa nome da lista do TikTok ou 'off' (desligar);
-  // qualquer outra coisa vira '' e o disparo volta ao padrão de hoje.
-  for (const k of ['ev_view', 'ev_click', 'ev_lead', 'ev_sale']) {
-    if (!(k in patch)) continue;
-    const v = String(patch[k] == null ? '' : patch[k]).trim();
-    target[k] = (v === 'off' || _EV_TT.includes(v)) ? v : '';
-  }
-  if ('status' in patch) target.status = (patch.status === 'pausada' ? 'pausada' : 'ativa');
-  if ('redirect' in patch) target.redirect = Math.max(0, Number(patch.redirect) || 0);
-  if ('fullclick' in patch) target.fullclick = !!patch.fullclick;
-  if ('dominio' in patch && _PRESSEL_DOMS.includes(String(patch.dominio))) target.dominio = String(patch.dominio);
-  if (Array.isArray(patch.vendedores)) {
-    target.vendedores = patch.vendedores.map((v) => {
-      const o = { at: String((v && v.at) || ''), ativo: v.ativo !== false };
-      // Interruptor POR NÚMERO: mapa de números DESLIGADOS (chave = últimos 8 dígitos). Ausente = ligado.
-      // Guardar os "off" (e não os "on") faz todo número novo "Em uso" já entrar ligado por padrão.
-      if (v && v.off && typeof v.off === 'object') {
-        const off = {}; for (const k in v.off) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.off[k]) off[nk] = true; }
-        if (Object.keys(off).length) o.off = off;
+  // GRAVA COM CONFERENCIA DE VERSAO (pedido do Bruno em 25/08/2026: "quero que o interruptor mande").
+  // Sem o "AND version=?" abaixo, uma gravacao concorrente do blob desfazia esta em silencio, e a tela
+  // ainda dizia que salvou. E o jeito de um numero que ele tirou da roleta voltar a receber sozinho.
+  // Se a versao mudou no meio, refaz do estado novo em vez de sobrescrever o trabalho do outro.
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    if (!Array.isArray(data.pressels)) data.pressels = [];
+    let id = Number(body.id) || 0;
+    let target;
+    // DONO DA PRESSEL. O afiliado so abre e edita a dele; a nossa responde 404 (nao 403: 403
+    // confirmaria que existe, e daria pra varrer ids pra mapear a operacao da casa).
+    const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
+    if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
+    if (id) {
+      target = data.pressels.find((x) => String(x.id) === String(id));
+      if (!target) return err('Pressel não encontrada', 404);
+      if (_meuAfl && String(target.afl || '') !== _meuAfl) return err('Pressel não encontrada', 404);
+    } else {
+      id = data.pressels.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1;
+      target = { id, nome: 'Nova Pressel', status: 'ativa', msg: '', pixel_tt: '', pixel_tt_token: '',
+        pixel_meta: '', pixel_meta_token: '', bg: '#ffffff', redirect: 0, fullclick: false, dominio: 'painel-glico.fun',
+        elementos: [{ id: 1, type: 'imagem', src: '' }, { id: 2, type: 'botao', label: 'FALAR NO WHATSAPP', bg: '#22c55e', color: '#ffffff' }],
+        vendedores: [], metrics: { cliques: 0, contatos: 0, vendas: 0 }, _rr: 0 };
+      // Nasce carimbada com o dono. Pressel nossa continua sem o campo, que e o que mantem a roleta
+      // de hoje intacta.
+      if (_meuAfl) {
+        target.afl = _meuAfl;
+        // ENDERECO PROPRIO: /p/<slug dele>/<n dele>. O `n` conta so as pressels DELE, entao a
+        // primeira dele e sempre 1 - independente de quantas a gente ja tenha criado.
+        target.afl_slug = await _aflSlugDe(env, _meuAfl);
+        target.num = data.pressels.reduce((m, x) => (x && String(x.afl || '') === _meuAfl ? Math.max(m, Number(x.num) || 0) : m), 0) + 1;
+        // A PRESSEL DELE NASCE EM BRANCO (25/08/2026). Por algumas horas ela herdou a APARENCIA da
+        // nossa (so elementos e cor, nunca pixel nem dominio), a pedido do Bruno; no mesmo dia ele
+        // reviu e mandou tirar. E coerente com o Sale Chat: o criativo e a mensagem sao a cara da
+        // operacao DELE, nao um template da casa. Ele monta a dele do zero.
       }
-      // Números SEM VENDEDOR (v.at === '__sd'): aqui o mapa é de LIGADOS, não de desligados. Número
-      // solto entra na roleta só quando alguém liga explicitamente — o padrão "ausente = ligado" dos
-      // vendedores colocaria todo número órfão do cadastro pra receber lead sem ninguém pedir.
-      if (v && v.on && typeof v.on === 'object') {
-        const on = {}; for (const k in v.on) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.on[k]) on[nk] = true; }
-        if (Object.keys(on).length) o.on = on;
+      data.pressels.push(target);
+    }
+    // PRESSEL DE AFILIADO QUE NASCEU ANTES DISTO ganha slug e numero na primeira gravacao. Sem
+    // este remendo ela ficaria pra sempre so no /p/<id>, que e justamente o que o Bruno pediu pra
+    // separar. Roda dentro do laco de CAS, junto com o resto da gravacao.
+    for (const x of data.pressels) {
+      if (!x || !x.afl || (x.afl_slug && Number(x.num) > 0)) continue;
+      if (!x.afl_slug) x.afl_slug = await _aflSlugDe(env, x.afl);
+      if (!(Number(x.num) > 0)) {
+        x.num = data.pressels.reduce((m, y) => (y && y !== x && String(y.afl || '') === String(x.afl) ? Math.max(m, Number(y.num) || 0) : m), 0) + 1;
       }
-      return o;
-    }).filter((v) => v.at);
+    }
+    const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg', 'pixel2_tt', 'pixel2_token'];
+    for (const k of STR) if (k in patch) target[k] = String(patch[k] == null ? '' : patch[k]).slice(0, 4000);
+    if ('pixel2_on' in patch) target.pixel2_on = !!patch.pixel2_on;   // liga/desliga o espelho do 2º pixel
+    // EVENTO DE CADA ETAPA. Guardado à parte do STR de propósito: aqui o valor NÃO pode ser texto
+    // livre. Ele acaba interpolado dentro de um <script> na pressel, que é página de tráfego pago —
+    // texto livre ali seria execução de código. Só passa nome da lista do TikTok ou 'off' (desligar);
+    // qualquer outra coisa vira '' e o disparo volta ao padrão de hoje.
+    for (const k of ['ev_view', 'ev_click', 'ev_lead', 'ev_sale']) {
+      if (!(k in patch)) continue;
+      const v = String(patch[k] == null ? '' : patch[k]).trim();
+      target[k] = (v === 'off' || _EV_TT.includes(v)) ? v : '';
+    }
+    // Eventos do 2º pixel (contato/venda). MESMA validação, MAIS a trava: só ev2_sale pode ser evento
+    // de compra. Se mandarem CompletePayment/Purchase no contato, cai pra '' e volta ao padrão — é o
+    // ponto onde a regra "espelho real, não conversão fabricada" é imposta no servidor, não na tela.
+    for (const k of ['ev2_lead', 'ev2_sale']) {
+      if (!(k in patch)) continue;
+      const v = String(patch[k] == null ? '' : patch[k]).trim();
+      const proibido = (k !== 'ev2_sale' && _EV_COMPRA.includes(v));
+      target[k] = ((v === 'off' || _EV_TT.includes(v)) && !proibido) ? v : '';
+    }
+    if ('status' in patch) target.status = (patch.status === 'pausada' ? 'pausada' : 'ativa');
+    if ('redirect' in patch) target.redirect = Math.max(0, Number(patch.redirect) || 0);
+    if ('fullclick' in patch) target.fullclick = !!patch.fullclick;
+    if ('dominio' in patch && _PRESSEL_DOMS.includes(String(patch.dominio))) target.dominio = String(patch.dominio);
+    // LIGAR/DESLIGAR UM NUMERO E UM COMANDO, NAO O ARRAY INTEIRO.
+    //
+    // A tela mandava `vendedores` inteiro, montado da copia que ela carregou no boot. Com a aba
+    // aberta ha horas (ou duas abas, ou o desligamento automatico gravando junto), a copia velha
+    // voltava por cima e o "desliguei esse numero" sumia sem erro nenhum. O CAS nao salva disso: a
+    // gravacao e valida, o conteudo e que esta velho. Aqui o pedido diz so o que MUDOU e a mudanca
+    // e aplicada em cima do estado que acabou de ser lido, dentro do laco de tentativa.
+    // Pedido do Bruno em 25/08/2026: "quero que o interruptor mande".
+    if (patch.vend_off && typeof patch.vend_off === 'object') {
+      const at = String(patch.vend_off.at || '');
+      const nk = String(patch.vend_off.num || '').replace(/\D/g, '').slice(-8);
+      const ligar = !!patch.vend_off.on;
+      if (at && nk) {
+        if (!Array.isArray(target.vendedores)) target.vendedores = [];
+        let v = target.vendedores.find((x) => x && String(x.at) === at);
+        if (!v) { v = { at, ativo: true }; target.vendedores.push(v); }
+        if (at === '__sd') {
+          // Numero sem dono guarda os LIGADOS (o contrario dos vendedores): ausente = desligado.
+          const on = (v.on && typeof v.on === 'object') ? { ...v.on } : {};
+          if (ligar) on[nk] = true; else delete on[nk];
+          if (Object.keys(on).length) v.on = on; else delete v.on;
+        } else {
+          const off = (v.off && typeof v.off === 'object') ? { ...v.off } : {};
+          if (ligar) { delete off[nk]; v.ativo = true; } else off[nk] = true;
+          if (Object.keys(off).length) v.off = off; else delete v.off;
+        }
+      }
+    }
+    if (Array.isArray(patch.vendedores)) {
+      target.vendedores = patch.vendedores.map((v) => {
+        const o = { at: String((v && v.at) || ''), ativo: v.ativo !== false };
+        // Interruptor POR NÚMERO: mapa de números DESLIGADOS (chave = últimos 8 dígitos). Ausente = ligado.
+        // Guardar os "off" (e não os "on") faz todo número novo "Em uso" já entrar ligado por padrão.
+        if (v && v.off && typeof v.off === 'object') {
+          const off = {}; for (const k in v.off) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.off[k]) off[nk] = true; }
+          if (Object.keys(off).length) o.off = off;
+        }
+        // Números SEM VENDEDOR (v.at === '__sd'): aqui o mapa é de LIGADOS, não de desligados. Número
+        // solto entra na roleta só quando alguém liga explicitamente — o padrão "ausente = ligado" dos
+        // vendedores colocaria todo número órfão do cadastro pra receber lead sem ninguém pedir.
+        if (v && v.on && typeof v.on === 'object') {
+          const on = {}; for (const k in v.on) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.on[k]) on[nk] = true; }
+          if (Object.keys(on).length) o.on = on;
+        }
+        return o;
+      }).filter((v) => v.at);
+    }
+    // Link fixo do botão: só http/https entra (um javascript: aqui viraria execução na página do anúncio).
+    if ('link' in patch) {
+      const u2 = String(patch.link == null ? '' : patch.link).trim().slice(0, 500);
+      target.link = (!u2 || /^https?:\/\//i.test(u2)) ? u2 : (target.link || '');
+    }
+    if ('link_on' in patch) target.link_on = !!patch.link_on;
+    if (Array.isArray(patch.elementos)) target.elementos = patch.elementos;   // editor de elementos valida no cliente
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, pressel: target });
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra escrita ganhou o version: espera e refaz
   }
-  // Link fixo do botão: só http/https entra (um javascript: aqui viraria execução na página do anúncio).
-  if ('link' in patch) {
-    const u2 = String(patch.link == null ? '' : patch.link).trim().slice(0, 500);
-    target.link = (!u2 || /^https?:\/\//i.test(u2)) ? u2 : (target.link || '');
-  }
-  if ('link_on' in patch) target.link_on = !!patch.link_on;
-  if (Array.isArray(patch.elementos)) target.elementos = patch.elementos;   // editor de elementos valida no cliente
-  const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, pressel: target });
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // Remove UMA pressel (cirúrgico, só diretor).
 async function handlePresselDelete(req, env) {
@@ -1087,6 +2444,13 @@ async function handlePresselDelete(req, env) {
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
   const before = Array.isArray(data.pressels) ? data.pressels.length : 0;
+  // O afiliado so apaga a pressel DELE. Sem esta guarda, ele apagaria a nossa mandando o id na mao -
+  // e apagar pressel derruba trafego pago que esta rodando.
+  if (isAfiliado(u)) {
+    const _a = aflDe(u);
+    const alvo = (data.pressels || []).find((x) => String(x.id) === String(id));
+    if (!_a || !alvo || String(alvo.afl || '') !== _a) return err('Pressel não encontrada', 404);
+  }
   data.pressels = (data.pressels || []).filter((x) => String(x.id) !== String(id));
   if (data.pressels.length === before) return err('Pressel não encontrada', 404);
   const newVer = (row.version || 0) + 1;
@@ -1126,7 +2490,7 @@ async function handleMeuNumero(req, env) {
     if (!emUso) return err('Esse número não está "Em uso" — só número em uso pode disparar', 400);
     if (chip.st === 'banido' || chip.st === 'aquecimento') return err('Número em aquecimento ou banido não dispara', 400);
     if (!data.wa_ativo || typeof data.wa_ativo !== 'object') data.wa_ativo = {};
-    data.wa_ativo[String(chip.at || u.id)] = String(chip.num || '').replace(/D/g, '').slice(-8);
+    data.wa_ativo[String(chip.at || u.id)] = String(chip.num || '').replace(/\D/g, '').slice(-8);
     const novaV = (row.version || 0) + 1;
     const r = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), novaV, Math.floor(Date.now() / 1000), 'meunum:' + String(u.id), row.version).run();
@@ -1143,45 +2507,70 @@ async function handleChipSave(req, env) {
   const id = body && body.id;
   const patch = (body && body.patch && typeof body.patch === 'object') ? body.patch : null;
   if (id == null || !patch) return err('id e patch obrigatórios');
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
-  if (!Array.isArray(data.chips)) return err('Sem chips', 404);
-  const chip = data.chips.find((c) => String(c.id) === String(id));
-  if (!chip) return err('Chip não encontrado', 404);
-  const eq8 = (a, b) => { const x = String(a || '').replace(/\D/g, '').slice(-8), y = String(b || '').replace(/\D/g, '').slice(-8); return x.length >= 8 && x === y; };
-  // helpers de status (a roleta conta "Em uso" pela TAG também, não só pela flag em_uso)
-  const _norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-  const _waSt = Array.isArray(data.wa_statuses) ? data.wa_statuses : [];
-  const _stLabel = (wid) => { const s = _waSt.find((x) => String(x.id) === String(wid)); return _norm(s ? (s.label || s.id) : wid); };
-  const _isEmUsoId = (wid) => !!wid && (String(wid) === 'em_uso' || _stLabel(wid) === 'em uso');
-  const _isRestabId = (wid) => { const n = _stLabel(wid); return n === 'restabelecido' || n === 'reestabelecido'; };
-  const _ativoId = (() => { const s = _waSt.find((x) => _norm(x.label || x.id) === 'ativo'); if (s) return s.id; const nb = _waSt.find((x) => { const n = _norm(x.label || x.id); return n !== 'em uso' && n !== 'banido'; }); return nb ? nb.id : 'ativo'; })();
-  const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start', 'restab_start'];
-  for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
-  if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
-  if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
-  if ('dia_uso' in patch) chip.dia_uso = (patch.dia_uso === null || patch.dia_uso === '') ? null : Number(patch.dia_uso);
-  if ('api' in patch) chip.api = !!patch.api;
-  if ('bkp' in patch) { chip.bkp = !!patch.bkp; if (chip.bkp) chip.em_uso = false; }
-  if ('em_uso' in patch) {
-    chip.em_uso = !!patch.em_uso;
-    // Vários números "Em uso" por atendente são PERMITIDOS agora: a roleta simples distribui os leads
-    // entre TODOS os números ligados do vendedor. NÃO rebaixa mais os irmãos (cada "Em uso" entra na
-    // roleta com seu próprio interruptor, controlado por pressel em v.off).
-    if (chip.em_uso) chip.bkp = false;
+  // GRAVA COM CONFERENCIA DE VERSAO (pedido do Bruno em 25/08/2026: "quero que o interruptor mande").
+  // Sem o "AND version=?" abaixo, uma gravacao concorrente do blob desfazia esta em silencio, e a tela
+  // ainda dizia que salvou. E o jeito de um numero que ele tirou da roleta voltar a receber sozinho.
+  // Se a versao mudou no meio, refaz do estado novo em vez de sobrescrever o trabalho do outro.
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    if (!Array.isArray(data.chips)) return err('Sem chips', 404);
+    const chip = data.chips.find((c) => String(c.id) === String(id));
+    if (!chip) return err('Chip não encontrado', 404);
+    const _donoAntes = String(chip.at || '').trim();
+    // Mesmo gate da pressel: o afiliado so mexe no numero dele.
+    const _meuAflC = isAfiliado(u) ? aflDe(u) : null;
+    if (isAfiliado(u) && !_meuAflC) return err('Cadastro de afiliado incompleto', 403);
+    if (_meuAflC && String(chip.afl || '') !== _meuAflC) return err('Chip não encontrado', 404);
+    const eq8 = (a, b) => { const x = String(a || '').replace(/\D/g, '').slice(-8), y = String(b || '').replace(/\D/g, '').slice(-8); return x.length >= 8 && x === y; };
+    // helpers de status (a roleta conta "Em uso" pela TAG também, não só pela flag em_uso)
+    const _norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+    const _waSt = Array.isArray(data.wa_statuses) ? data.wa_statuses : [];
+    const _stLabel = (wid) => { const s = _waSt.find((x) => String(x.id) === String(wid)); return _norm(s ? (s.label || s.id) : wid); };
+    const _isEmUsoId = (wid) => !!wid && (String(wid) === 'em_uso' || _stLabel(wid) === 'em uso');
+    const _isRestabId = (wid) => { const n = _stLabel(wid); return n === 'restabelecido' || n === 'reestabelecido'; };
+    const _ativoId = (() => { const s = _waSt.find((x) => _norm(x.label || x.id) === 'ativo'); if (s) return s.id; const nb = _waSt.find((x) => { const n = _norm(x.label || x.id); return n !== 'em uso' && n !== 'banido'; }); return nb ? nb.id : 'ativo'; })();
+    // 'proxy' = o endereco da proxy que esse numero usa (host:porta:usuario:senha, do jeito que o
+    // provedor entrega). E anotacao operacional: fica guardada junto do chip pra o Bruno achar rapido
+    // quando for reconectar o aparelho. O worker NAO usa esse valor pra sair pra internet.
+    const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start', 'restab_start', 'proxy'];
+    for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
+    if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
+    if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
+    if ('dia_uso' in patch) chip.dia_uso = (patch.dia_uso === null || patch.dia_uso === '') ? null : Number(patch.dia_uso);
+    if ('api' in patch) chip.api = !!patch.api;
+    if ('bkp' in patch) { chip.bkp = !!patch.bkp; if (chip.bkp) chip.em_uso = false; }
+    if ('em_uso' in patch) {
+      chip.em_uso = !!patch.em_uso;
+      // Vários números "Em uso" por atendente são PERMITIDOS agora: a roleta simples distribui os leads
+      // entre TODOS os números ligados do vendedor. NÃO rebaixa mais os irmãos (cada "Em uso" entra na
+      // roleta com seu próprio interruptor, controlado por pressel em v.off).
+      if (chip.em_uso) chip.bkp = false;
+    }
+    // timer do "Restabelecido" (espelha _syncRestabTimer): liga ao entrar na tag, LIMPA ao sair — evita promoção precoce
+    if ('wa_st' in patch && !('restab_start' in patch)) {
+      if (_isRestabId(chip.wa_st)) { if (!chip.restab_start) chip.restab_start = new Date().toISOString().split('T')[0]; }
+      else chip.restab_start = '';
+    }
+    // saneamento (autocura da antiga): chip sem atendente nunca carrega "em uso" nem "reserva"
+    if (!String(chip.at || '').trim()) { chip.em_uso = false; chip.bkp = false; }
+    // TROCOU DE DONO? PERDE O "EM USO".
+    //
+    // Arrastar o chip de um vendedor pro outro na Contingencia manda so { at, st } e o numero
+    // continuava marcado "Em uso" - so que o interruptor da pressel e guardado DENTRO da entrada do
+    // vendedor ANTIGO (v.off e por par vendedor+numero). Resultado: o numero reaparecia LIGADO
+    // embaixo do dono novo e voltava a receber lead sozinho, sem ninguem pedir. Ja ha desligamento
+    // orfao gravado hoje na pressel 1 por causa disso. Mesma regra que estacionar ja tinha ("entra
+    // com status neutro, pra nao fixar chip sem querer"): trocou de dono, o Diretor remarca.
+    if (_donoAntes !== String(chip.at || '').trim() && chip.em_uso) { chip.em_uso = false; if (_isEmUsoId(chip.wa_st)) chip.wa_st = _ativoId; }
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, chip });
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra escrita ganhou o version: espera e refaz
   }
-  // timer do "Restabelecido" (espelha _syncRestabTimer): liga ao entrar na tag, LIMPA ao sair — evita promoção precoce
-  if ('wa_st' in patch && !('restab_start' in patch)) {
-    if (_isRestabId(chip.wa_st)) { if (!chip.restab_start) chip.restab_start = new Date().toISOString().split('T')[0]; }
-    else chip.restab_start = '';
-  }
-  // saneamento (autocura da antiga): chip sem atendente nunca carrega "em uso" nem "reserva"
-  if (!String(chip.at || '').trim()) { chip.em_uso = false; chip.bkp = false; }
-  const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, chip });
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // POST /api/chip/create { chip } → adiciona um chip novo (cirúrgico, só diretor; nasce em aquecimento)
 async function handleChipCreate(req, env) {
@@ -1210,6 +2599,12 @@ async function handleChipCreate(req, env) {
     dia_uso: (inp.dia_uso === null || inp.dia_uso === '' || inp.dia_uso === undefined) ? null : Number(inp.dia_uso),
     rec: String(inp.rec || hoje), recv: 0, tags: [], note: String(inp.note || ''),
   };
+  // Dono do numero. Chip nosso continua SEM o campo - e o que mantem a roleta de hoje identica.
+  if (isAfiliado(u)) {
+    const _a = aflDe(u);
+    if (!_a) return err('Cadastro de afiliado incompleto', 403);
+    chip.afl = _a;
+  }
   data.chips.unshift(chip);
   data.nextChip = nextId + 1;
   const newVer = (row.version || 0) + 1;
@@ -1230,6 +2625,12 @@ async function handleChipDelete(req, env) {
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
   if (!Array.isArray(data.chips)) return err('Sem chips', 404);
   const before = data.chips.length;
+  // Idem pro numero: o afiliado so apaga o dele.
+  if (isAfiliado(u)) {
+    const _a = aflDe(u);
+    const alvo = data.chips.find((c) => String(c.id) === String(id));
+    if (!_a || !alvo || String(alvo.afl || '') !== _a) return err('Chip não encontrado', 404);
+  }
   data.chips = data.chips.filter((c) => String(c.id) !== String(id));
   if (data.chips.length === before) return err('Chip não encontrado', 404);
   const newVer = (row.version || 0) + 1;
@@ -1374,22 +2775,80 @@ async function handleAclSave(req, env) {
 }
 // POST /api/cont/save { wa_statuses?, contCols?, contColColors?, cont_col_order? } → patch cirúrgico da
 // config da Contingência (catálogo de status WhatsApp + colunas custom). Só diretor. NUNCA o blob inteiro.
+// AS COLUNAS DA CONTINGENCIA TEM DONO (25/08/2026, pedido do Bruno: "usa a nossa contingencia que a
+// gente tem hoje, as colunas, como base pra eles, e caso queiram editar, acesso total").
+//
+// COMO FUNCIONA: as nossas ficam em contCols/wa_statuses/etc. As do afiliado ficam nas MESMAS
+// chaves com o id dele no fim (contCols__afl_xxx). Na leitura, se ele ainda nao tem as dele, ele
+// recebe uma COPIA das nossas - e a partir do primeiro ajuste passa a ter as proprias. Assim ele
+// comeca com a nossa organizacao pronta e mexe a vontade sem nunca tocar na nossa.
+const _sufAfl = (u) => (isAfiliado(u) && aflDe(u)) ? ('__' + aflDe(u)) : '';
+// Mesmo sufixo, mas valendo pro MUNDO dele (o afiliado E quem trabalha pra ele). Tag e catalogo
+// de equipe: o vendedor dele precisa ver e marcar a mesma etiqueta que o chefe criou.
+const _sufMundoAfl = (u) => ((noMundoAfiliado(u) || afiliadoSemVinculo(u)) && aflDe(u)) ? ('__' + aflDe(u)) : '';
+// O catalogo de tags que vale PRA ESTA PESSOA: o do mundo dela, se existir.
+const _tagsDe = (data, u) => {
+  const sfx = _sufMundoAfl(u);
+  const minhas = sfx ? data['tags' + sfx] : data.tags;
+  return Array.isArray(minhas) ? minhas : [];
+};
+const _CHAVES_CONT = ['wa_statuses', 'contCols', 'contColColors', 'cont_col_order'];
+
 async function handleContConfig(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Sem permissão', 403);
+  // O afiliado gerencia a contingencia DELE. Sem isto a tela abria e nenhum botao funcionava.
+  if (!isDirector(u) && !isAfiliado(u)) return err('Sem permissão', 403);
+  if (afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
-  if (Array.isArray(body.wa_statuses)) data.wa_statuses = body.wa_statuses;
-  if (Array.isArray(body.contCols)) data.contCols = body.contCols;
-  if (body.contColColors && typeof body.contColColors === 'object') data.contColColors = body.contColColors;
-  if (Array.isArray(body.cont_col_order)) data.cont_col_order = body.cont_col_order;
+  const sfx = _sufAfl(u);   // '' pro diretor = grava nas chaves da casa
+  if (Array.isArray(body.wa_statuses)) data['wa_statuses' + sfx] = body.wa_statuses;
+  if (Array.isArray(body.contCols)) data['contCols' + sfx] = body.contCols;
+  if (body.contColColors && typeof body.contColColors === 'object') data['contColColors' + sfx] = body.contColColors;
+  if (Array.isArray(body.cont_col_order)) data['cont_col_order' + sfx] = body.cont_col_order;
   const newVer = (row.version || 0) + 1;
   await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cont:' + String(u.id)).run();
   return json({ ok: true, version: newVer });
+}
+// POST /api/tags/save { tags: [...] } → grava SO o catalogo de etiquetas do CRM.
+//
+// Antes isso ia pelo POST /api/state generico: a tela baixava o blob inteiro, trocava `tags` e
+// mandava tudo de volta. Funcionava pra quem recebe o blob completo, mas o AFILIADO recebe podado,
+// entao `tags` estava na lista de chaves restauradas do banco e a gravacao dele era descartada em
+// silencio. Aqui e cirurgico e cada mundo grava a chave dele: a casa em `tags`, o afiliado em
+// `tags__<afl>` (mesma convencao das colunas da Contingencia).
+async function handleTagsSave(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const _cob = String(u.role || '').toLowerCase() === 'cobrador';
+  const _afl = noMundoAfiliado(u) || afiliadoSemVinculo(u);
+  if (!isDirector(u) && !_cob && !_afl) return err('Sem permissão', 403);
+  if (_afl && !aflDe(u)) return err('Cadastro de afiliado incompleto', 403);
+  const body = await req.json().catch(() => ({}));
+  if (!Array.isArray(body.tags)) return err('tags obrigatório');
+  // Teto: isto aceita array vindo do navegador e o blob tem limite de 1 MB.
+  const limpas = body.tags.slice(0, 200).map((t) => ({
+    id: String((t && t.id) || '').slice(0, 60),
+    name: String((t && t.name) || '').slice(0, 60),
+    color: String((t && t.color) || '').slice(0, 30),
+  })).filter((t) => t.id && t.name);
+  const chave = 'tags' + _sufMundoAfl(u);
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    data[chave] = limpas;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'tags:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, tags: limpas });
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // Salva o Sale Chat (cirúrgico, só diretor). Body { profile:'vend'|'cob', draft:{messages,media,sequences,triggers}, publish? }.
 // Escreve SÓ as fatias do salechat (rascunho + pub no publish), nunca o blob inteiro → sem risco pro resto.
@@ -1406,7 +2865,27 @@ async function handleSaleChatSave(req, env) {
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
   const arr = (x) => Array.isArray(x) ? x : [];
   const now = Math.floor(Date.now() / 1000);
-  const clean = { messages: arr(draft.messages), media: arr(draft.media), sequences: arr(draft.sequences), triggers: arr(draft.triggers), updated_at: now };
+  // PASSO SEM ITEM NAO ENTRA NO ESTADO. Em 18/08/2026 um bug do seletor da tela gravou tres passos
+  // com id vazio; o funil ficava com cara de montado e o motor descartava aqueles passos, entao o
+  // cliente recebia menos do que estava na tela e ninguem via. O bug do front foi corrigido, mas a
+  // porta fica fechada aqui: e um lugar so, e vale pra qualquer tela que venha a gravar errado.
+  const _limpaSeqs = (seqs) => arr(seqs).map((s2) => {
+    if (!s2 || typeof s2 !== 'object') return s2;
+    const itens = arr(s2.items).filter((it) => (typeof it === 'string' ? it.trim() : String((it && it.id) || '').trim()));
+    return { ...s2, items: itens };
+  });
+  // DISPARO AUTOMATICO no lead novo. Vem junto do salvamento do Sale Chat porque e la que o funil
+  // e montado - separar em outro endpoint faria a escolha e o funil viverem em telas diferentes.
+  // So DIRETOR muda: e uma regra da operacao inteira, nao preferencia de um vendedor.
+  if (dir && body && body.funil_auto && typeof body.funil_auto === 'object') {
+    const fa = body.funil_auto;
+    data.funil_auto = {
+      on: !!fa.on,
+      seq_id: String(fa.seq_id || '').slice(0, 80),
+      delay_s: Math.max(0, Math.min(60, Number(fa.delay_s) || 1)),
+    };
+  }
+  const clean = { messages: arr(draft.messages), media: arr(draft.media), sequences: _limpaSeqs(draft.sequences), triggers: arr(draft.triggers), updated_at: now };
   const pubOf = () => ({ messages: clean.messages, media: clean.media, sequences: clean.sequences, triggers: clean.triggers, updated_at: now, published_at: now, published_by: String((u.name || u.id) || '') });
   if (dir) {
     // diretor edita o MODELO (vendedores ou cobradores)
@@ -1439,11 +2918,46 @@ async function handleSaleChatMine(req, env) {
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
   const uid = String(u.id);
-  const model = data.salechatPub || data.salechat || {};
+  // COBRADOR PARTE DO ROTEIRO DE COBRANCA, nao do de vendas. O Bruno liberou esta tela pra eles em
+  // 24/08/2026 pra acrescentarem mensagem e audio proprios; semeando do modelo de VENDEDOR, o
+  // cobrador abria a tela cheia de script de venda ("Fechar pedido", "Pedir dados") e nenhum dos
+  // audios de cobranca. A copia continua sendo dele (scVend[uid]) - ele nunca escreve no modelo.
+  const ehCob = String(u.role || '').toLowerCase() === 'cobrador';
+  // NO MUNDO DO AFILIADO NAO HA MODELO DA CASA (25/08/2026). Aqui a copia de cada pessoa nasce
+  // semeada do nosso roteiro; pro afiliado e pra equipe dele isso entregava justamente o funil e os
+  // audios que o Bruno mandou separar. Eles comecam do zero e montam o proprio.
+  const _semModelo = noMundoAfiliado(u) || afiliadoSemVinculo(u);
+  const model = _semModelo ? {} : (ehCob
+    ? (data.salechatCobPub || data.salechatCob || {})
+    : (data.salechatPub || data.salechat || {}));
   const slotDraft = (data.scVend && data.scVend[uid]) || null;
   const slotPub = (data.scVendPub && data.scVendPub[uid]) || null;
-  const pick = (x) => ({ messages: (x && x.messages) || [], media: (x && x.media) || [], sequences: (x && x.sequences) || [], triggers: (x && x.triggers) || [] });
-  return json({ ok: true, draft: pick(slotDraft || slotPub || model), pub: pick(slotPub || model), seeded: !!(slotDraft || slotPub) });
+  // O MODELO SEMPRE ENTRA, E ELE MANDA.
+  //
+  // Antes era `slotDraft || slotPub || model`: bastava a pessoa ter uma copia propria pra ela NUNCA
+  // MAIS enxergar o que o diretor publicasse depois. A copia nasce na primeira vez que ela salva
+  // qualquer coisa e congela ali. Medido em 25/08/2026: o modelo tinha 12 mensagens, 34 midias e 15
+  // funis; a copia do vendedor tinha 8, 22 e 9, e nenhum item proprio - ou seja ele so estava
+  // PERDENDO 4 mensagens, 12 midias e 6 funis que o socio publicou depois. E o mesmo material que o
+  // Inbox mostra pra ele (o Inbox le o modelo publicado direto), entao a mesma pessoa via duas
+  // listas diferentes na mesma dash. Palavras do Bruno: "quero que apareca tudo que tem hoje no ar".
+  //
+  // Regra: item do MODELO sempre aparece e vale a versao do modelo; o que a pessoa acrescentou por
+  // conta propria (id que nao existe no modelo) fica junto, no fim. Item do modelo que ela apagou
+  // volta - de proposito: o roteiro do diretor nao e opcional. Casar por id e seguro porque todo
+  // item tem id estavel (m1, f1, seq_abertura, mmsz0tabr6xv...) e os funis referenciam midia por
+  // esse mesmo id, entao trazer o funil do modelo traz junto a midia que ele usa.
+  const juntar = (base, extra) => {
+    const out = {};
+    for (const balde of ['messages', 'media', 'sequences', 'triggers']) {
+      const m = Array.isArray(base && base[balde]) ? base[balde] : [];
+      const e = Array.isArray(extra && extra[balde]) ? extra[balde] : [];
+      const jaTem = new Set(m.map((x) => x && x.id).filter(Boolean));
+      out[balde] = m.concat(e.filter((x) => x && x.id && !jaTem.has(x.id)));
+    }
+    return out;
+  };
+  return json({ ok: true, draft: juntar(model, slotDraft || slotPub), pub: juntar(model, slotPub), seeded: !!(slotDraft || slotPub) });
 }
 // Roster de cartões do ContaSimples (data.cs_cards). GET lê; POST substitui a lista (cirúrgico, só diretor).
 async function handleCsCards(req, env) {
@@ -1452,8 +2966,8 @@ async function handleCsCards(req, env) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   let data = {};
   try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
-  if (req.method === 'GET') return json({ cards: Array.isArray(data.cs_cards) ? data.cs_cards : [] });
   if (!isDirector(u)) return err('Sem permissão', 403);
+  if (req.method === 'GET') return json({ cards: Array.isArray(data.cs_cards) ? data.cs_cards : [] });
   if (!row) return err('Estado não encontrado', 404);
   const body = await req.json().catch(() => ({}));
   const cards = Array.isArray(body.cards) ? body.cards : [];
@@ -1489,6 +3003,12 @@ async function handlePostState(req, env) {
   if (typeof body.base_version === 'number' && body.base_version < curVer) {
     return json({ error: 'conflict', current_version: curVer }, 409);
   }
+
+  // Poda o que este cargo nao pode escrever ANTES de qualquer conferencia: pra quem nao e diretor o
+  // GET nem mandou essas chaves, entao o blob que volta vem sem elas e a guarda de baixo leria isso
+  // como "apagou 123 gastos" e recusaria a gravacao inteira (422) numa tela legitima.
+  let _atual = {}; try { _atual = JSON.parse(current?.data || '{}'); } catch (_) { _atual = {}; }
+  body.data = _stateProtegido(u, body.data, _atual);
 
   // ── TRAVA 2: guarda anti-apagamento em massa ───────────────────────────
   // Rede de segurança contra QUALQUER escrita (bug, aba zumbi, merge ruim) que
@@ -1530,6 +3050,57 @@ async function handlePostState(req, env) {
   return json({ ok: true, version: newVer, updated_at: now });
 }
 
+// ── FOTO DE PERFIL FORA DO JSON ──────────────────────────────────────────────
+//
+// As fotos sao guardadas como data URI na coluna users.photo, e o /api/users devolvia isso inteiro.
+// Medido em 18/08/2026: a lista de 7 pessoas pesava 225 KB, sendo 224 KB de foto - a do Guilherme
+// sozinha tem 187 KB. Dez telas chamam /api/users, e toda chamada rebaixava tudo de novo, porque
+// JSON nao entra no cache do navegador. Era a maior parte da lentidao ao trocar de tela.
+//
+// Agora a lista devolve uma URL no lugar do data URI. Como o front sempre usa o campo dentro de um
+// <img src>, nada muda pra ele; e a imagem passa a ser um arquivo de verdade, com cache de 1 ano.
+// O hash do conteudo vai NA URL: trocou a foto, muda a URL, e o cache velho nao atrapalha.
+function _fotoHash(txt) {
+  // hash curto e estavel (FNV-1a). Nao precisa ser cripto: so serve pra invalidar cache.
+  let h = 2166136261;
+  const t = String(txt || '');
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+function _fotoUrl(req, id, photo) {
+  if (!photo) return null;
+  const p = String(photo);
+  if (!p.startsWith('data:')) return p;   // ja e URL (ou veio de fora): passa direto
+  const origem = new URL(req.url).origin;
+  return origem + '/api/users/foto/' + encodeURIComponent(String(id)) + '/' + _fotoHash(p);
+}
+// GET /api/users/foto/:id/:hash  → a imagem de verdade, cacheavel. Publica de proposito: <img> nao
+// manda cabecalho de autorizacao, e o que ela expoe e um avatar de equipe atras de um hash.
+async function handleUserPhoto(req, env, id) {
+  const row = await env.DB.prepare('SELECT photo FROM users WHERE id = ?').bind(String(id)).first().catch(() => null);
+  const p = String((row && row.photo) || '');
+  if (!p.startsWith('data:')) return new Response('sem foto', { status: 404 });
+  const m = p.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+  if (!m) return new Response('foto invalida', { status: 404 });
+  const mime = m[1] || 'image/jpeg';
+  let corpo;
+  if (m[2]) {
+    const bin = atob(m[3]);
+    corpo = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) corpo[i] = bin.charCodeAt(i);
+  } else {
+    corpo = decodeURIComponent(m[3]);
+  }
+  return new Response(corpo, {
+    headers: {
+      'content-type': mime,
+      // immutable porque a URL carrega o hash do conteudo: foto nova = URL nova.
+      'cache-control': 'public, max-age=31536000, immutable',
+      'access-control-allow-origin': '*',
+    },
+  });
+}
+
 async function handleListUsers(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -1540,7 +3111,7 @@ async function handleListUsers(req, env) {
   try {
     rows = await env.DB.prepare(
       'SELECT id, login, name, abbr, role, color, bg, com_pct, email, com_ant, com_ent, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
-      'COALESCE(archived, 0) AS archived, archived_at, ' +
+      'COALESCE(archived, 0) AS archived, archived_at, afiliado_id, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
     ).all();
@@ -1564,21 +3135,53 @@ async function handleListUsers(req, env) {
     try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ent REAL').run(); } catch (_) {}
     rows = await env.DB.prepare(
       'SELECT id, login, name, abbr, role, color, bg, com_pct, email, com_ant, com_ent, COALESCE(salario, 0) AS salario, photo, banner, created_at, ' +
-      'COALESCE(archived, 0) AS archived, archived_at, ' +
+      'COALESCE(archived, 0) AS archived, archived_at, afiliado_id, ' +
       'CASE WHEN pwd_hash IS NOT NULL AND pwd_hash != "" THEN 1 ELSE 0 END AS has_password ' +
       'FROM users ORDER BY archived ASC, name'
     ).all();
+  }
+  // DOIS MUNDOS, DUAS LISTAS (25/08/2026, pedido do Bruno: "a dash dele de afiliado e algo a parte,
+  // nao quero nenhuma ligacao"). A regra e simetrica:
+  //   - quem e do mundo de um afiliado ve SO o mundo dele;
+  //   - o PRODUTOR ve so a equipe DA CASA. O afiliado e o time dele NAO entram no "Diretorio de
+  //     usuarios": ele criou um vendedor dentro da area do Giovane e o vendedor apareceu na lista
+  //     dele, como se fosse funcionario nosso. Afiliado se gerencia no acordeao de Afiliados.
+  // `?afiliado=<id>` e a excecao explicita, pra nossa area de Afiliados poder mostrar a equipe de
+  // um deles quando pedirmos. Nunca e o padrao.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) {
+    const meuAfl = aflDe(u);
+    if (rows && rows.results) rows = { ...rows, results: rows.results.filter((r) => meuAfl && String(r.afiliado_id || '') === meuAfl) };
+  } else if (rows && rows.results) {
+    const _quer = String(new URL(req.url).searchParams.get('afiliado') || '').trim();
+    rows = { ...rows, results: rows.results.filter((r) => (_quer ? String(r.afiliado_id || '') === _quer : !r.afiliado_id)) };
   }
   // Comissão, salário e e-mail são do DIRETOR. Todo cargo restrito (vendedor, cobrador, gestor de
   // tráfego) chama este endpoint só pra saber NOME de quem é quem, e estava recebendo a folha inteira
   // da equipe junto. Aqui a resposta encolhe pro que a tela dele precisa.
   if (!isDirector(u)) {
+    // A PROPRIA COMISSAO E DELE. Esconder a taxa dos OUTROS esta certo; esconder a DO PROPRIO
+    // vendedor quebrava a tela dele: sem com_pct a conta cai em zero e o painel mostrava o pedido
+    // mas "R$ 0,00" em comissao, como se ele nao tivesse vendido nada. Foi o que o Guilherme
+    // reportou em 19/08/2026. Cada um ve a sua linha completa; a dos colegas continua so com nome,
+    // cor e foto.
+    const meu = String(u.id);
+    // O AFILIADO PRECISA DA LINHA COMPLETA DA EQUIPE DELE (auditoria 24/08/2026), e a falta disso
+    // DESTRUIA DADO: sem com_pct/com_ant/com_ent/salario na resposta, o formulario da Lista de
+    // Usuarios abria com 0, e o Salvar - que manda todos os campos - gravava 0 por cima da comissao
+    // real do vendedor dele. Ele so queria corrigir o nome e apagava a remuneracao no banco.
+    // E dele o mundo: pode ver a remuneracao de quem ele mesmo contratou. A dos NOSSOS continua
+    // fora (a condicao exige o afiliado_id dele).
+    const meuAfl = isAfiliado(u) ? aflDe(u) : null;
+    const linhaCheia = (r) => String(r.id) === meu || (!!meuAfl && String(r.afiliado_id || '') === meuAfl);
     return json({ users: (rows.results || []).map((r) => ({
       id: r.id, name: r.name, login: r.login, role: r.role, abbr: r.abbr,
-      color: r.color, bg: r.bg, photo: r.photo, archived: r.archived,
+      color: r.color, bg: r.bg, photo: _fotoUrl(req, r.id, r.photo), archived: r.archived,
+      ...(linhaCheia(r) ? { com_pct: r.com_pct, com_ant: r.com_ant, com_ent: r.com_ent, email: r.email, salario: r.salario, created_at: r.created_at, has_password: r.has_password } : {}),
     })) });
   }
-  return json({ users: rows.results });
+  // banner tambem sai da lista: e imagem grande e NENHUMA tela de lista usa (so o proprio perfil,
+  // que le do usuario logado).
+  return json({ users: (rows.results || []).map((r) => ({ ...r, photo: _fotoUrl(req, r.id, r.photo), banner: r.banner ? '1' : null })) });
 }
 
 async function handleCreateOrUpdateUser(req, env) {
@@ -1597,6 +3200,7 @@ async function handleCreateOrUpdateUser(req, env) {
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN email TEXT').run(); } catch (_) {}
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ant REAL').run(); } catch (_) {}
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN com_ent REAL').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
 
   const loginNorm = String(login).toLowerCase().trim();
 
@@ -1605,9 +3209,29 @@ async function handleCreateOrUpdateUser(req, env) {
 
   // Só o diretor cria usuário ou edita outra pessoa. Não-diretor só mexe no próprio registro.
   const isSelf = existing && String(id) === String(u.id);
-  if (!isDir && !isSelf) return err('Apenas Diretor pode gerenciar usuários', 403);
+  // O AFILIADO MONTA A PROPRIA EQUIPE (23/08/2026): "ele vai ter os proprios cobradores dele, os
+  // proprios vendedores dele". Ele cria e edita gente DENTRO do mundo dele e so nos cargos de
+  // operacao - nunca diretor, nunca outro afiliado, e nunca alguem de fora do afiliado dele.
+  // OS CARGOS QUE O AFILIADO CONTRATA. 'gestor' entrou em 24/08/2026 a pedido do Bruno: o afiliado
+  // tem gestor de trafego proprio, que lanca o gasto DELE (trafego_registros com o afl dele) e le o
+  // dashboard de trafego dele. Nunca 'diretor'/'socio'/'produtor' e nunca outro 'afiliado': isso
+  // criaria alguem fora do mundo dele, ou um segundo dono pro mesmo mundo.
+  const CARGOS_DO_AFILIADO = ['vendedor', 'atendente', 'cobrador', 'gestor', 'designer'];
+  const aflDono = aflDe(u);
+  let comoAfiliado = false;
+  if (!isDir && isAfiliado(u) && aflDono) {
+    const alvoJaEDele = existing
+      ? String((await env.DB.prepare('SELECT afiliado_id FROM users WHERE id=?').bind(id).first() || {}).afiliado_id || '') === aflDono
+      : true;
+    if (alvoJaEDele && CARGOS_DO_AFILIADO.includes(String(role || '').toLowerCase())) comoAfiliado = true;
+  }
+  if (!isDir && !isSelf && !comoAfiliado) return err('Apenas Diretor pode gerenciar usuários', 403);
   // Campos privilegiados (login, cargo, comissão, salário) só o diretor altera; no self-edit são preservados.
-  const canPriv = isDir;
+  const canPriv = isDir || comoAfiliado;
+  // A QUE MUNDO A PESSOA PERTENCE. Quem o afiliado cria nasce carimbado com o afiliado DELE, sem
+  // ele poder escolher: e o campo que decide o que a pessoa enxerga. O diretor pode carimbar de
+  // proposito (mover alguem pro time de um afiliado). Ninguem mais mexe nisso.
+  const aflB = comoAfiliado ? aflDono : (isDir && body.afiliado_id !== undefined ? (String(body.afiliado_id || '').trim() || null) : null);
 
   // Login único (só barra quando o login vai de fato ser gravado)
   const dup = await env.DB.prepare('SELECT id FROM users WHERE lower(login) = ? AND id != ?').bind(loginNorm, id || '').first();
@@ -1632,8 +3256,14 @@ async function handleCreateOrUpdateUser(req, env) {
 
   // Cada campo opcional: só sobrescreve se vier no body (COALESCE mantém o atual quando não vier).
   // Assim o perfil pessoal (que manda só name/login/role) não zera salário/comissão/cor, e a foto não some.
-  const photoB = (photo == null) ? null : String(photo);
-  const bannerB = (banner == null) ? null : String(banner);
+  // A LISTA NAO MANDA MAIS O DATA URI, manda a URL da foto (ver _fotoUrl). Entao, quando a tela de
+  // perfil salva sem trocar a imagem, o que volta e a URL - e gravar isso apagaria a foto de
+  // verdade. Aqui a URL nossa (e o marcador '1' do banner) contam como "nao mexeu": vira null e o
+  // COALESCE do UPDATE mantem o que ja estava. String vazia continua sendo "remover", que e o botao
+  // Remover da tela.
+  const _naoMexeu = (v) => { const t = String(v || ''); return t !== '' && !t.startsWith('data:') && (t.includes('/api/users/foto/') || t === '1'); };
+  const photoB = (photo == null || _naoMexeu(photo)) ? null : String(photo);
+  const bannerB = (banner == null || _naoMexeu(banner)) ? null : String(banner);
   const abbrB = (abbr === undefined) ? null : (abbr || null);
   const colorB = (color === undefined) ? null : (color || null);
   const bgB = (bg === undefined) ? null : (bg || null);
@@ -1650,15 +3280,39 @@ async function handleCreateOrUpdateUser(req, env) {
   if (existing) {
     // Update
     await env.DB.prepare(
-      `UPDATE users SET login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner), email=COALESCE(?, email), com_ant=COALESCE(?, com_ant), com_ent=COALESCE(?, com_ent) WHERE id=?`
-    ).bind(loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, emailB, comAntB, comEntB, id).run();
+      `UPDATE users SET afiliado_id=COALESCE(?, afiliado_id), login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner), email=COALESCE(?, email), com_ant=COALESCE(?, com_ant), com_ent=COALESCE(?, com_ent) WHERE id=?`
+    ).bind(aflB, loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, emailB, comAntB, comEntB, id).run();
+    // Espelha de volta no cadastro de afiliado quando o percentual e editado pela Lista de
+    // Usuarios: sem isto, as duas telas voltariam a divergir pelo outro lado.
+    if (String(role || '').toLowerCase() === 'afiliado' && comPctB != null) {
+      try {
+        const _r = await env.DB.prepare('SELECT afiliado_id FROM users WHERE id=?').bind(id).first();
+        if (_r && _r.afiliado_id) await env.DB.prepare('UPDATE five_affiliates SET pct=? WHERE affiliate_id=?').bind(comPctB, _r.afiliado_id).run();
+      } catch (_) {}
+    }
     return json({ ok: true, id, action: 'updated' });
   } else {
     // Create — gera id se não veio
     const newId = id || `${role}_${Math.random().toString(36).slice(2, 8)}`;
+    // CARGO AFILIADO CRIADO POR AQUI TAMBEM VIRA AFILIADO DE VERDADE. O Bruno cadastrou o Giovane
+    // pela Lista de Usuarios, que e o caminho natural de quem esta criando "mais um usuario" - e
+    // ficava um afiliado sem afiliado_id, ou seja, sem dono dos pedidos. Em vez de proibir a tela
+    // (ele ia bater na parede sem entender), ela passa a fazer a coisa certa: cria a linha em
+    // five_affiliates e amarra o usuario nela. Os dois caminhos levam ao mesmo lugar.
+    let aflFinal = aflB;
+    if (!aflFinal && isDir && String(role || '').toLowerCase() === 'afiliado') {
+      try {
+        await _ensureFiveTables(env);
+        const novoAfl = _afilId();
+        const agoraS = Math.floor(Date.now() / 1000);
+        await env.DB.prepare('INSERT INTO five_affiliates (affiliate_id, name, pct, status, origem, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
+          .bind(novoAfl, name, (Number(com_pct) || null), 'ativo', 'manual', agoraS, agoraS).run();
+        aflFinal = novoAfl;
+      } catch (_) { /* se falhar, o usuario nasce sem vinculo - e o fail-closed nao deixa ele ver nada */ }
+    }
     await env.DB.prepare(
-      `INSERT INTO users (id, login, pwd_hash, name, abbr, role, color, bg, com_pct, salario, photo, banner, email, com_ant, com_ent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(newId, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, Number(salario) || 0, photoB, bannerB, emailB, comAntB, comEntB).run();
+      `INSERT INTO users (id, afiliado_id, login, pwd_hash, name, abbr, role, color, bg, com_pct, salario, photo, banner, email, com_ant, com_ent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(newId, aflFinal, loginNorm, pwdHash, name, abbr || null, role, color || null, bg || null, Number(com_pct) || 0, Number(salario) || 0, photoB, bannerB, emailB, comAntB, comEntB).run();
     return json({ ok: true, id: newId, action: 'created' });
   }
 }
@@ -1722,7 +3376,7 @@ async function handleRestoreUser(req, env, userId) {
 // exceeded resource limits): um lote de 50 capturas fazia ~50x20 = 1000 subrequests só de DDL,
 // estourava o limite do Cloudflare e o lote inteiro falhava — a venda não era gravada e o painel
 // mostrava vermelho. Deploy novo = isolate novo = o DDL roda de novo (pega colunas novas).
-let _cfgTablesOk = false, _waTablesOk = false, _scTablesOk = false, _saleTablesOk = false, _leadTablesOk = false, _attribTablesOk = false, _cpfTablesOk = false;
+let _cfgTablesOk = false, _waTablesOk = false, _scTablesOk = false, _saleTablesOk = false, _leadTablesOk = false, _attribTablesOk = false, _cpfTablesOk = false, _fiveTablesOk = false;
 async function _ensureConfigTable(env) {
   if (_cfgTablesOk) return;
   try {
@@ -2226,10 +3880,23 @@ function extractPaytData(body) {
   const modality = order.payment_modality || order.modalidade_pagamento || (body?.type === 'cash_on_delivery' ? 'on_delivery' : '') || '';
   const event = mapPaytEvent(eventRaw, status, modality);
 
-  // Valor bruto: Payt V1 manda transaction.total_price em CENTAVOS
-  const amount = tx.total_price != null
-    ? Number(tx.total_price) / 100
-    : Number(order.total_amount || order.amount || order.valor || order.total || body?.amount || body?.valor || 0);
+  // VALOR DA VENDA, SEM O JURO DO PARCELAMENTO (em CENTAVOS no payload da Payt).
+  //
+  // total_price e o que o CLIENTE paga: no cartao parcelado ele vem inflado pelo juro da operadora,
+  // que nao e receita do produtor. A propria Payt entrega o numero certo ao lado, e o nome do campo
+  // nao deixa duvida: `price_without_installments`. Payload real de 24/08/2026 (Jose Francisco):
+  //   total_price 54112 | installments 4 | installment_price 13528 | price_without_installments 49700
+  // Ou seja: R$ 541,12 pagos em 4x de R$ 135,28 num kit de R$ 497,00.
+  // Palavras do Bruno: "esse valor mais alto e apenas juros, o que eu recebo sempre vai ser 497".
+  const amount = tx.price_without_installments != null
+    ? Number(tx.price_without_installments) / 100
+    : (tx.total_price != null
+      ? Number(tx.total_price) / 100
+      : Number(order.total_amount || order.amount || order.valor || order.total || body?.amount || body?.valor || 0));
+  // O que o cliente pagou de verdade (com juro) e em quantas vezes. Nao entra em receita nenhuma:
+  // existe pra conferir com a fatura e pra tela poder explicar a diferenca.
+  const amount_pago = tx.total_price != null ? Number(tx.total_price) / 100 : amount;
+  const parcelas = tx.installments != null ? Number(tx.installments) : null;
   // Comissão REAL do afiliado (centavos → reais). null se não veio.
   const comiss_real = aff ? Number(aff.amount) / 100 : null;
 
@@ -2245,6 +3912,8 @@ function extractPaytData(body) {
     phone: customer.phone || order.client_whatsapp || order.client_phone || customer.telefone || customer.whatsapp || customer.celular || '',
     cpf: customer.doc || order.cpf || order.client_cpf || customer.cpf || customer.document || customer.documento || '',
     amount,
+    amount_pago,
+    parcelas,
     comiss_real,
     paid_at: tx.paid_at || '',
     product: body?.product?.name || body?.link?.title || body?.treatment?.name || order.treatment?.name || order.product || order.produto || (Array.isArray(order.products) ? order.products[0]?.name : '') || '',
@@ -2493,7 +4162,16 @@ async function handlePaytWebhook(req, env, urlToken) {
     // atendeu, atribui agora (não sobrescreve atribuição manual já existente).
     if (!lead.at && attribAt) lead.at = attribAt;
     if (_paytPct != null && _paytPct > 0 && (!lead.com_pct || lead.com_pct === 12)) lead.com_pct = _paytPct; // % real (não sobrescreve % editado à mão)
-    if (mapping?.etapa) lead.col = mapping.etapa;
+    if (mapping?.etapa) {
+      // A FIVE E DONA DA ETAPA DO PEDIDO DELA. O mapeamento da Payt escrevia a coluna sem olhar
+      // onde o pedido estava: um postback de cartao chegando depois ('aguardando_pagamento' ->
+      // 'A Enviar') devolvia pro comeco um pedido que a Five ja tinha postado, e a etapa que o
+      // Bruno le no Cadastro de Pedidos andava pra tras sozinha. Pedido sem five_id (venda so de
+      // cartao) segue como era: quem manda na coluna dele e a Payt.
+      const _cur = FIVE_COL_RANK[lead.col] || 0, _tgt = FIVE_COL_RANK[mapping.etapa] || 0;
+      const _paraTras = lead.five_id && (FIVE_COL_FIM.includes(lead.col) || (_tgt && _cur && _tgt < _cur));
+      if (!_paraTras) lead.col = mapping.etapa;
+    }
     if (mapping?.spg) lead.spg = mapping.spg;
     if (mapping?.action === 'tag' && mapping.tag) {
       lead.tags = Array.isArray(lead.tags) ? lead.tags : [];
@@ -2503,6 +4181,12 @@ async function handlePaytWebhook(req, env, urlToken) {
     if (data.tracking_code && !lead.track) lead.track = data.tracking_code;
     if (data.payment_method && !lead.pgto) lead.pgto = data.payment_method;
     if (data.amount && !lead.vl) lead.vl = data.amount;
+    // Juro do parcelamento: fica registrado no lead so pra explicar a diferenca na tela.
+    if (data.amount_pago > 0 && data.amount > 0 && data.amount_pago > data.amount) {
+      lead.vl_cobrado = data.amount_pago;
+      lead.vl_juros = Math.round((data.amount_pago - data.amount) * 100) / 100;
+      if (data.parcelas > 1) lead.vl_parcelas = data.parcelas;
+    }
     // Histórico do lead
     lead.hist = Array.isArray(lead.hist) ? lead.hist : [];
     lead.hist.push({
@@ -3018,11 +4702,35 @@ async function _apiNumFromInstance(env, inst) {
     return row || null;
   } catch (_) { return null; }
 }
+// DONO DA CONVERSA (19/08/2026). Os 5 handlers de envio so conferiam se o usuario estava LOGADO.
+// Como o resolveApiNumber tira o numero de saida do wa_chats.instance, um vendedor que chamasse a
+// rota com o telefone de um lead do COLEGA mandava mensagem SAINDO PELO NUMERO DO COLEGA - o cliente
+// recebia do outro atendente e o dono da conversa nem ficava sabendo. Mesma regra que o
+// handleWAChatStage ja usava. Conversa que ainda NAO existe passa (e o vendedor abrindo contato
+// novo); o diretor passa sempre, pra poder socorrer.
+// O COBRADOR VE O INBOX INTEIRO, MAS SO O QUE FECHOU, E SO PRA LER (24/08/2026).
+// Ele nao atende: entra pra consultar o historico do cliente que ja comprou, antes de ligar
+// cobrando. Por isso ele nao cai no filtro por instancia (nenhuma conversa e "dele", a lista sairia
+// vazia) e ganha um filtro proprio pela etapa do CRM. Enviar continua barrado no
+// _podeFalarNaConversa, que e o gate dos 5 endpoints de envio.
+const _ehCobrador = (u) => String((u && u.role) || '').toLowerCase() === 'cobrador';
+async function _podeFalarNaConversa(env, u, phone) {
+  if (_ehCobrador(u)) return false;                 // cobrador NUNCA manda mensagem
+  if (isDirector(u)) return true;
+  const fone = String(phone || '').replace(/\D/g, '');
+  if (!fone) return true;
+  let chat = null;
+  try { chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(fone).first(); } catch (_) { return true; }
+  if (!chat) return true;   // conversa nova: nao ha dono ainda
+  const x = String(chat.instance || '');
+  return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0;
+}
 async function handleWASend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
+  if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   // Roteamento: responde PELO MESMO NÚMERO em que a conversa está.
   // O sufixo `_<8díg>` sozinho NÃO quer dizer Evolution: o sync do Datacrazy grava a conversa do
   // número OFICIAL nesse mesmo formato. A regra antiga (`_convEvo`) tratava o sufixo como Evolution e
@@ -3103,12 +4811,13 @@ async function _waCloudSendText(env, atId, number, text, apiNumFixo) {
     }
   } catch (_) {}
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', token: apiNum.token,
+    method: 'POST', token: apiNum.token, retry: 1,
     body: JSON.stringify({ messaging_product: 'whatsapp', to: num, type: 'text', text: { body: txt, preview_url: false } })
   });
   if (!g.ok) {
     const e = (g.data && g.data.error) || {};
-    return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status };
+    await _waFalhaLog(env, { phone: num, instance: 'ax_' + atId, kind: 'text', code: e.code || g.status, msg: e.message || '' });
+    return { ok: false, error: _waErroTxt(e.code, e.message || ('graph ' + g.status)), code: e.code || g.status };
   }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
   // Instância no MESMO formato que o sync do Datacrazy grava (ax_<at>_<8 últimos díg do nosso número>).
@@ -3154,31 +4863,65 @@ async function _waCloudSendTemplate(env, atId, number, name, lang, params, bodyT
     }
   } catch (_) {}
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', token: apiNum.token, body: JSON.stringify({
+    method: 'POST', token: apiNum.token, retry: 1, body: JSON.stringify({
       messaging_product: 'whatsapp', to: num, type: 'template',
       template: componentes.length
         ? { name: String(name), language: { code: _lang }, components: componentes }
         : { name: String(name), language: { code: _lang } },
     })
   });
-  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; await _waFalhaLog(env, { phone: num, instance: 'ax_' + atId, kind: 'midia/template', code: e.code || g.status, msg: e.message || '' }); return { ok: false, error: _waErroTxt(e.code, e.message || ('graph ' + g.status)), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
   // Grava na thread o texto QUE O LEAD VAI LER, não "[template] nome": o vendedor precisa saber o que
   // foi disparado pra continuar a conversa sem repetir.
   const _logTxt = String(bodyTxt || '').trim() || ('[template] ' + name);
-  try { await _waLogMsg(env, { phone: num, instance: 'ax_' + atId, direction: 'out', type: 'template', body: _logTxt, msgId: wamid }); } catch (_) {}
+  // CARIMBO COM O NUMERO, igual texto e midia. Era o unico envio que gravava 'ax_<at>' pelado, e
+  // isso re-carimbava a conversa SEM os 8 digitos: dali pra frente resolveApiNumber nao reconhecia
+  // mais o chip da conversa e caia no numero escolhido no seletor. Com dois numeros por vendedor,
+  // um template mandava as respostas seguintes pelo numero errado.
+  const _dispT = String((apiNum && apiNum.display_phone) || '').replace(/\D/g, '');
+  const _instT = 'ax_' + atId + (_dispT.length >= 8 ? '_' + _dispT.slice(-8) : '');
+  try { await _waLogMsg(env, { phone: num, instance: _instT, direction: 'out', type: 'template', body: _logTxt, msgId: wamid }); } catch (_) {}
   return { ok: true, id: wamid || null };
+}
+// A CONVERSA ESTA NUMA EVOLUTION VIVA? Devolve a instancia, ou '' quando o caminho e Cloud API.
+// Existe porque o painel Sale Chat (texto rapido, audio do microfone, midia) mandava TUDO pela
+// Cloud API sem olhar onde a conversa vive. Com o vendedor trocando um numero restrito por um de
+// QR (21/08/2026), isso fazia o audio e a midia sairem pelo numero RESTRITO do mesmo vendedor -
+// o lead recebendo mensagem de um contato com quem nunca falou, pelo chip que acabou de ser punido.
+async function _instEvoViva(env, phone, hint) {
+  const num = String(phone || '').replace(/\D/g, '');
+  let inst = String(hint || '');
+  if (!inst && num) {
+    try { const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(num).first(); inst = String((c && c.instance) || ''); } catch (_) { inst = ''; }
+  }
+  if (!inst) return '';
+  try {
+    const viva = await env.DB.prepare("SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600").bind(inst).first();
+    return viva ? inst : '';
+  } catch (_) { return ''; }
 }
 async function handleWACloudSend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
+  if (!(await _podeFalarNaConversa(env, u, b.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
   if (b.template && b.template.name) {
     // params = valores das variáveis na ordem; body = corpo cru do template (só pra logar já preenchido)
     const rt = await _waCloudSendTemplate(env, atId, b.number, b.template.name, b.template.language, b.template.params, b.template.body);
     if (!rt.ok) return json({ ok: false, error: rt.error, code: rt.code || null }, 400);
     return json({ ok: true, id: rt.id, via: 'cloud-template' });
+  }
+  const _evo = await _instEvoViva(env, b.number, b.instance);
+  if (_evo) {
+    const num = String(b.number || '').replace(/\D/g, '');
+    const rr = await evoFetch(env, '/message/sendText/' + encodeURIComponent(_evo), { method: 'POST', body: { number: num, text: String(b.text || '') } });
+    if (!rr || rr.ok === false || rr._noconfig) return json({ ok: false, error: 'O WhatsApp deste número não respondeu agora. Tente de novo.', code: 'evo' }, 502);
+    const _id = (rr.data && rr.data.key && rr.data.key.id) || null;
+    try { await _waLogMsg(env, { phone: num, instance: _evo, direction: 'out', type: 'text', body: String(b.text || ''), msgId: _id }); } catch (_) {}
+    try { await _waDetectSale(env, _evo, { message: { conversation: String(b.text || '') }, key: { remoteJid: num + '@c.us', id: _id, fromMe: true } }); } catch (_) {}
+    return json({ ok: true, id: _id, via: 'evolution' });
   }
   const r = await _waCloudSendText(env, atId, b.number, b.text);
   if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
@@ -3243,17 +4986,54 @@ async function _scStoreMedia(env, b64, mimeHint) {
 }
 // Sobe um arquivo pra Media API da Meta e devolve o media id. Necessário pra NOTA DE VOZ (voice:true),
 // que a Meta só aceita com mídia enviada (id), não com link. Busca os bytes do R2 pelo próprio link.
+// O PORQUE DA FALHA TEM QUE APARECER. Esta funcao devolvia null em quatro pontos diferentes, todos
+// calados, e a tela mostrava sempre a mesma frase ("Nao consegui preparar o audio"). O vendedor fica
+// sem saber se e o microfone, o navegador dele ou a Meta, e quem for consertar tambem nao sabe.
+// Agora cada saida diz o motivo no log do Worker e o motivo volta em .motivo pra quem chamou.
 async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
+  const falha = (motivo, extra) => { try { console.error('WA_UPLOAD_FALHOU ' + motivo + (extra ? ' | ' + String(extra).slice(0, 200) : '')); } catch (_) {} return { erro: true, motivo }; };
   try {
-    const r = await fetch(link);
-    if (!r.ok) return null;
-    const buf = await r.arrayBuffer();
-    if (!buf || !buf.byteLength) return null;
+    // O ARQUIVO E NOSSO: le DIRETO do R2, sem HTTP.
+    //
+    // Antes isto era um fetch(link) na propria URL publica do worker - ou seja, o worker fazendo
+    // requisicao pra ele mesmo. Isso falha (o Cloudflare barra/instabiliza subrequest pro proprio
+    // host) e o vendedor via "O audio nao foi encontrado no servidor. Grave de novo." - gravando de
+    // novo dez vezes sem nunca resolver, porque o arquivo SEMPRE esteve la.
+    // Le do bucket pela chave; so cai no fetch quando o link e de terceiro (nao e do nosso R2).
+    let buf = null, rct = '';
+    const _key = (() => {
+      const m = String(link || '').match(/\/api\/salechat\/media\/(.+)$/);
+      if (!m) return '';
+      try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+    })();
+    if (_key && env.MEDIA) {
+      try {
+        const obj = await env.MEDIA.get(_key);
+        if (obj) { buf = await obj.arrayBuffer(); rct = (obj.httpMetadata && obj.httpMetadata.contentType) || ''; }
+        else return falha('r2_sem_objeto', _key);
+      } catch (e) { return falha('r2_erro', String((e && e.message) || e)); }
+    }
+    if (!buf) {
+      let r;
+      try { r = await fetch(link); } catch (e) { return falha('nao_baixou_do_r2', String((e && e.message) || e)); }
+      if (!r.ok) return falha('r2_http_' + r.status, link);
+      buf = await r.arrayBuffer();
+      rct = r.headers.get('content-type') || '';
+    }
+    if (!buf || !buf.byteLength) return falha('arquivo_vazio', link);
     // Detecta o formato pelos BYTES (não confia no hint): só ogg/opus vira NOTA DE VOZ (voice:true).
     const head = new Uint8Array(buf.slice(0, 64));
     const s = String.fromCharCode.apply(null, head);
     const isOpus = s.indexOf('OggS') === 0 && s.indexOf('OpusHead') >= 0;
-    const rct = r.headers.get('content-type') || '';
+    // NAO ADIANTA MANDAR 'audio/ogg; codecs=opus' AQUI - ja testei em 19/08/2026, contra a API de
+    // verdade, quando o Bruno relatou "o audio vai como arquivo e nao como voz gravada":
+    //   - subindo como 'audio/ogg'            -> a Meta aceita e guarda mime_type = audio/ogg
+    //   - subindo como 'audio/ogg; codecs=opus' -> a Meta aceita e guarda mime_type = audio/ogg
+    // Ela DESCARTA o parametro do codec nos dois casos, entao mudar esta linha nao muda nada no que
+    // chega no celular do lead. Nao repita esse teste.
+    // O que ja esta certo do nosso lado (medido no mesmo dia): os 79 audios do sistema sao ogg/opus
+    // de verdade (73 vivos, 6 apagados do R2), mono, e o envio usa media id + voice:true - nunca o
+    // link, que e o que fazia o WhatsApp marcar como ENCAMINHADA.
     const mime = isOpus ? 'audio/ogg'
       : (/audio\/(mpeg|mp3)/i.test(rct) ? 'audio/mpeg'
         : /audio\/(mp4|m4a|aac)/i.test(rct) ? 'audio/mp4'
@@ -3266,9 +5046,11 @@ async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
     fd.append('type', mime);
     fd.append('file', new Blob([buf], { type: mime }), 'audio.' + ext);
     const up = await fetch('https://graph.facebook.com/v21.0/' + encodeURIComponent(phoneNumberId) + '/media', { method: 'POST', headers: { authorization: 'Bearer ' + tk }, body: fd });
-    const j = await up.json().catch(() => ({}));
-    return (up.ok && j && j.id) ? { id: String(j.id), isOpus } : null;
-  } catch (_) { return null; }
+    const txt = await up.text();
+    let j = {}; try { j = JSON.parse(txt); } catch (_) {}
+    if (up.ok && j && j.id) return { id: String(j.id), isOpus, mime };
+    return falha('meta_recusou_http_' + up.status + '_mime_' + mime, txt);
+  } catch (e) { return falha('excecao', String((e && e.stack) || e)); }
 }
 // Envia MÍDIA (imagem/áudio/vídeo/documento) pela Cloud API, por um `link` público (R2).
 // opts: { kind, link, caption?, filename?, mediaKey? }.
@@ -3277,7 +5059,8 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   const kind = String((opts && opts.kind) || 'image');
   if (!num || !opts || !opts.link) return { ok: false, error: 'number/link obrigatórios' };
   // Mídia pelo mesmo número da conversa (o upload fica preso ao phone_number_id de origem).
-  const apiNum = await resolveApiNumber(env, { atId, convPhone: num });
+  // opts.apiNum = número JÁ resolvido pelo chamador (o funil manda o dele, pinado no início).
+  const apiNum = (opts && opts.apiNum) || await resolveApiNumber(env, { atId, convPhone: num });
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   try {
@@ -3293,20 +5076,39 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   // id e mandamos voice:true. Se o upload falhar, cai no link (manda como arquivo, mas manda).
   let payload;
   if (kind === 'audio') {
-    const mu = await _waCloudUploadMedia(env, apiNum.phone_number_id, apiNum.token, opts.link, 'audio/ogg');
+    const _mu = await _waCloudUploadMedia(env, apiNum.phone_number_id, apiNum.token, opts.link, 'audio/ogg');
+    const mu = (_mu && !_mu.erro) ? _mu : null;
+    const _motivo = (_mu && _mu.motivo) || 'sem_motivo';
     // voice:true (ondinhas) SÓ quando os bytes são realmente ogg/opus; senão manda como arquivo válido.
-    payload = mu
-      ? { messaging_product: 'whatsapp', to: num, type: 'audio', audio: mu.isOpus ? { id: mu.id, voice: true } : { id: mu.id } }
-      : { messaging_product: 'whatsapp', to: num, type: 'audio', audio: media };
+    // NUNCA cair no `link` pra audio. O link faz a Meta reusar a midia que ela ja baixou daquela
+    // URL, e o WhatsApp marca a mensagem como ENCAMINHADA - foi o que o Guilherme viu: audio com a
+    // setinha de encaminhado, cara de arquivo repassado, nao de voz gravada pra aquele cliente.
+    // Sem upload nao ha envio: prefiro devolver erro a mandar algo que chega com cara de spam.
+    if (!mu) {
+      // A frase muda conforme o motivo: mandar o vendedor "gravar de novo" quando o problema e a Meta
+      // recusando o formato faz ele gravar dez vezes e nada resolver.
+      const amigavel = _motivo.startsWith('meta_recusou') ? 'O WhatsApp recusou o formato deste áudio. Grave pelo celular ou pelo Chrome (o Safari grava num formato que a Meta não aceita como voz).'
+        : _motivo.startsWith('r2_http') || _motivo === 'nao_baixou_do_r2' ? 'O áudio não foi encontrado no servidor. Grave de novo.'
+          : _motivo === 'arquivo_vazio' ? 'A gravação saiu vazia. Segure o botão até terminar de falar.'
+            : 'Não consegui preparar o áudio pra enviar como voz. Tente gravar de novo.';
+      return { ok: false, error: amigavel, motivo: _motivo };
+    }
+    payload = { messaging_product: 'whatsapp', to: num, type: 'audio', audio: mu.isOpus ? { id: mu.id, voice: true } : { id: mu.id } };
+    // Fica registrado quando NAO foi como nota de voz, pra dar pra achar depois de quem e o problema
+    // (hoje: iPhone/Safari, que so grava AAC e nao tem o conversor do navegador).
+    if (!mu.isOpus) { try { console.log('WA_AUDIO_NAO_VOZ', atId, num); } catch (_) {} }
   } else {
     payload = { messaging_product: 'whatsapp', to: num, type: kind, [kind]: media };
   }
   const g = await _graph(env, `/${encodeURIComponent(apiNum.phone_number_id)}/messages`, {
-    method: 'POST', token: apiNum.token, body: JSON.stringify(payload)
+    method: 'POST', token: apiNum.token, retry: 1, body: JSON.stringify(payload)
   });
-  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, error: e.message || ('graph ' + g.status), code: e.code || g.status }; }
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; await _waFalhaLog(env, { phone: num, instance: 'ax_' + atId, kind: 'midia/template', code: e.code || g.status, msg: e.message || '' }); return { ok: false, error: _waErroTxt(e.code, e.message || ('graph ' + g.status)), code: e.code || g.status }; }
   const wamid = g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id;
-  const inst = 'ax_' + atId;
+  // A instancia da SAIDA leva o numero que REALMENTE enviou. O _waLogMsg faz upsert em wa_chats
+  // com essa instancia; gravando 'ax_<at>' pelado, a saida APAGAVA da conversa a pista de qual
+  // numero atende aquele lead, e a proxima resposta saia pelo outro numero (janela fechada, 131047).
+  const inst = _instComNumero(atId, apiNum && apiNum.display_phone, '');
   try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: kind, body: opts.caption || '', msgId: wamid, media_url: opts.mediaKey || opts.link }); } catch (_) {}
   return { ok: true, id: wamid || null };
 }
@@ -3314,7 +5116,28 @@ async function _waCloudSendMedia(env, atId, number, opts) {
 async function handleWACloudSendMedia(req, env) {
   const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
+  if (!(await _podeFalarNaConversa(env, u, b.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
+  const _evo = await _instEvoViva(env, b.number, b.instance);
+  if (_evo) {
+    const num = String(b.number || '').replace(/\D/g, '');
+    const kind = ['image', 'audio', 'video', 'document'].includes(String(b.kind)) ? String(b.kind) : 'document';
+    let rr = null;
+    if (kind === 'audio') {
+      // NOTA DE VOZ, nao arquivo de audio: e assim que o vendedor grava no microfone da dash.
+      let b64 = '';
+      try { if (b.mediaKey && env.MEDIA) { const o = await env.MEDIA.get(String(b.mediaKey)); if (o) b64 = _bytesToB64(new Uint8Array(await o.arrayBuffer())); } } catch (_) {}
+      if (!b64 && b.link) { try { const g = await fetch(String(b.link)); if (g.ok) b64 = _bytesToB64(new Uint8Array(await g.arrayBuffer())); } catch (_) {} }
+      if (!b64) return json({ ok: false, error: 'Não consegui ler o áudio pra enviar.', code: 'sem_midia' }, 400);
+      rr = await _waSendAudio(env, _evo, num, b64);
+    } else {
+      rr = await _waSendMedia(env, _evo, num, { mediatype: kind, media: String(b.link || ''), ...(b.filename ? { fileName: String(b.filename) } : {}), ...(b.caption ? { caption: String(b.caption) } : {}) });
+    }
+    if (!rr || rr.ok === false || rr._noconfig) return json({ ok: false, error: 'O WhatsApp deste número não respondeu agora. Tente de novo.', code: 'evo' }, 502);
+    const _id = (rr.data && rr.data.key && rr.data.key.id) || null;
+    try { await _waLogMsg(env, { phone: num, instance: _evo, direction: 'out', type: kind, body: String(b.caption || ''), msgId: _id, media_url: String(b.link || '') }); } catch (_) {}
+    return json({ ok: true, id: _id, via: 'evolution' });
+  }
   const r = await _waCloudSendMedia(env, atId, b.number, { kind: b.kind, link: b.link, caption: b.caption, filename: b.filename, mediaKey: b.mediaKey });
   if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
   return json({ ok: true, id: r.id, via: 'cloud' });
@@ -3443,6 +5266,7 @@ async function handleWASendAudio(req, env) {
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const body = await req.json().catch(() => null);
   if (!body || !body.number) return err('Campo obrigatório: number');
+  if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
     || String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
@@ -3467,6 +5291,7 @@ async function handleWASendMedia(req, env) {
   if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.media) return err('Campos obrigatórios: number, media');
+  if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
     || String(body.instance || cfg.instance || '').trim();
   if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
@@ -3515,6 +5340,10 @@ async function handleTTSTest(req, env) {
 async function handleWAInstances(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // O NOME DA INSTANCIA CARREGA O ID DO VENDEDOR (ax_<id>_<8dig>), entao listar todas entregava o
+  // mapa da nossa operacao - e servia de cardapio pras rotas de envio, que aceitam `instance` do
+  // corpo. Auditoria de 24/08/2026.
+  const _idsInst = await _idsQuePossoVer(env, u);
   const res = await evoFetch(env, '/instance/fetchInstances');
   if (res._noconfig) return err('WhatsApp não configurado', 503);
   if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
@@ -3524,7 +5353,7 @@ async function handleWAInstances(req, env) {
     const i = x.instance || x;
     return { name: i.instanceName || i.name, state: i.connectionStatus || i.state || i.status || 'unknown' };
   }).filter(x => x.name);
-  return json({ ok: true, instances: list });
+  return json({ ok: true, instances: _filtraInst(list, _idsInst) });
 }
 
 // POST /api/wa/instance/create → { instanceName } cria (idempotente) e já devolve QR
@@ -3534,6 +5363,12 @@ async function handleWAInstanceCreate(req, env, ctx) {
   const body = await req.json().catch(() => null);
   const name = String(body?.instanceName || '').trim();
   if (!name) return err('instanceName obrigatório');
+  // SO O DONO DO NUMERO (ou um diretor). Esta rota nao e so "criar": com reset:true, e tambem no
+  // ramo sem QR, ela faz logout + delete na Evolution e limpa o wa_conn. Estava aberta pra qualquer
+  // login, entao qualquer usuario derrubava o WhatsApp de qualquer vendedor com uma chamada - e com
+  // verba rodando o lead chega e nao entra em lugar nenhum.
+  // NAO uso isDirector puro de proposito: o atendente precisa gerar o QR do proprio numero.
+  if (!isDirector(u) && _atFromInst(name) !== String(u.id)) return err('Esse número não é seu', 403);
   // RESET EXPLÍCITO (só quando o usuário pede, ex: clicou em "conectado com outro número").
   // Derruba a sessão atual de verdade e apaga a instância, pra o QR novo nascer limpo. Não fica no
   // caminho normal de conexão de propósito: é lento (logout + delete + espera) e antes rodava em
@@ -3597,17 +5432,42 @@ async function handleWAInstanceCreate(req, env, ctx) {
 }
 
 // GET /api/wa/instance/connect?instance=NAME → QR atualizado pra reconectar
+// Pode tocar nesta instancia? Fail-closed: nome que nao resolve num atendente do mundo dele nao passa.
+async function _instMinha(env, u, name) {
+  const ids = await _idsQuePossoVer(env, u);
+  if (ids === null) return true;
+  return _instEhDe(name, ids);
+}
 async function handleWAInstanceConnect(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // AS IRMAS (create e disconnect) JA TINHAM ESTA GUARDA; esta faltava. Sem ela, o afiliado gerava o
+  // QR de uma instancia NOSSA desconectada, pareava o celular dele no nosso slot e derrubava o
+  // vendedor da roleta - e o worker ainda RECRIAVA a instancia no 404. Auditoria de 24/08/2026.
+  {
+    const _n = String(new URL(req.url).searchParams.get('instanceName') || new URL(req.url).searchParams.get('name') || '');
+    if (_n && !(await _instMinha(env, u, _n))) return err('Instância não encontrada', 404);
+  }
   const name = new URL(req.url).searchParams.get('instance');
   if (!name) return err('parâmetro "instance" obrigatório');
+  // JA CONECTADO = NAO ENCOSTA. Pedir QR pra uma instancia que acabou de parear e o que estava
+  // DERRUBANDO a conexao: a Evolution recusa o connect nesse estado, o codigo abaixo lia o "!ok"
+  // como "instancia sumiu" e RECRIAVA - matando a sessao que o vendedor tinha acabado de ativar no
+  // celular. Foi o "conecta, aparece sincronizando e cai" de 21/08/2026 (a instancia do Murilo
+  // abriu 14:51 e voltou pra close as 15:00). Agora confere o estado ANTES.
+  const st0 = await evoFetch(env, `/instance/connectionState/${encodeURIComponent(name)}`);
+  if (st0._noconfig) return err('WhatsApp não configurado', 503);
+  if (st0.ok && String(st0.data?.instance?.state || '') === 'open') {
+    return json({ ok: true, instance: name, qr: null, state: 'open', pairingCode: null });
+  }
   let res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
   if (res._noconfig) return err('WhatsApp não configurado', 503);
   // 404 = a instância não existe (foi apagada num reset). Antes isso virava "Evolution respondeu 404"
   // vermelho na cara do usuário. Quem abre essa tela quer um QR, não um código de status: então
   // recria a instância e pede o QR de novo. Autocura, sem erro técnico na tela.
-  if (!res.ok) {
+  // SO recria quando a instancia REALMENTE nao existe (404). Recriar por qualquer erro derrubava
+  // sessao viva - ver o comentario acima.
+  if (!res.ok && res.status === 404) {
     await evoFetch(env, '/instance/create', {
       method: 'POST',
       body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
@@ -3685,6 +5545,10 @@ async function handleWAInstanceDisconnect(req, env) {
   let body = {}; try { body = await req.json(); } catch (_) {}
   const name = String(body?.instance || '').trim();
   if (!name) return err('instance obrigatório');
+  // SO O DONO DO NUMERO (ou um diretor) DERRUBA. Estava aberto pra qualquer login: um clique e o
+  // WhatsApp de outro vendedor caia, e com verba rodando o lead chega e nao entra em lugar nenhum.
+  // O nome da instancia carrega o atendente (ax_<at>_<8digitos>), entao da pra conferir sem consultar.
+  if (!isDirector(u) && _atFromInst(name) !== String(u.id)) return err('Esse numero nao e seu', 403);
   // desconecta DE VERDADE: logout → confere o estado REAL na Evolution → se ainda 'open', tenta de novo
   // (o logout às vezes não pega de primeira quando o socket travou). Não grava 'close' otimista:
   // se o número seguir conectado, a dash mostra a verdade em vez de mentir "desconectado".
@@ -3718,6 +5582,13 @@ async function _waEnsureTables(env) {
     // Conversas (inbox/CRM): cada mensagem in/out + resumo por contato pro inbox
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_messages (msg_id TEXT PRIMARY KEY, phone TEXT NOT NULL, instance TEXT, direction TEXT, type TEXT, body TEXT, push_name TEXT, ts INTEGER)').run();
     try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN media_url TEXT').run(); } catch (_) {}   // chave R2 da mídia (imagem/áudio/vídeo/doc) pro render inline no inbox
+    // O QUE A META RESPONDEU DEPOIS. A gente guardava só que MANDOU: o inbox dizia "enviado" porque
+    // a requisição saiu, não porque chegou. Em 18/08/2026 um vendedor mandou áudio, o inbox mostrou
+    // enviado, e 15 minutos depois a mensagem não estava no WhatsApp do lead. A Meta AVISA isso por
+    // webhook (sent/delivered/read/failed + o motivo do erro) e a gente ignorava o aviso inteiro.
+    try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN status TEXT').run(); } catch (_) {}     // sent | delivered | read | failed
+    try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN err TEXT').run(); } catch (_) {}        // motivo, quando failed
+    try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN status_ts INTEGER').run(); } catch (_) {}
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON wa_messages(phone, ts)').run();
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_inst_ts ON wa_messages(instance, ts)').run(); } catch (_) {}   // carga recente por instância (balanceador)
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_inst_last ON wa_chats(instance, last_ts)').run(); } catch (_) {}   // inbox do atendente ordenado por recente
@@ -3749,9 +5620,66 @@ async function _waLogMsg(env, m) {
     if (!phone) return;
     const ts = Number(m.ts) || Math.floor(Date.now() / 1000);
     const dir = m.direction === 'out' ? 'out' : 'in';
-    const id = m.msgId || (dir + '_' + ts + '_' + Math.random().toString(36).slice(2, 8));
     const type = m.type || 'text';
     const body = String(m.body == null ? '' : m.body).slice(0, 4000);
+    // SEM msg_id A DEDUPLICACAO NAO EXISTE. O id vira aleatorio, o INSERT OR IGNORE nunca colide e a
+    // MESMA mensagem entra de novo por outro caminho. Foi assim que o Bruno viu 4 baloes iguais em
+    // 19/08/2026 (webhook do Datacrazy gravando sem id) e uma venda "Pedido Concluido" duplicada
+    // (scan gravando o id sem o prefixo 'dc:'). Consertei os dois na origem, mas AINDA existem
+    // caminhos que podem chegar aqui sem id (auto-resposta do bot pela Evolution, ingest do Sale
+    // Chat e webhook da Cloud quando a origem nao manda id), entao a guarda fica AQUI, valendo pra
+    // todos - inclusive pros que forem escritos amanha.
+    //
+    // A ASSIMETRIA E DE PROPOSITO e vale mais que a simetria:
+    //   SAIDA sem id  -> deduplica. Nos sabemos que mandamos uma vez; repetir na tela e ruido, e
+    //                    mandar de novo pro cliente e o que queima numero.
+    //   ENTRADA sem id -> NAO deduplica, insere sempre. Lead pode mandar "sim" duas vezes em 1min de
+    //                    verdade, e SUMIR com mensagem de lead e o pior defeito possivel deste inbox
+    //                    (foi o que consertei de manha). Balao repetido incomoda; mensagem perdida
+    //                    custa venda. Fica so o log pra achar o caminho culpado.
+    let id = m.msgId;
+    if (!id) {
+      if (dir === 'out') {
+        try {
+          const ja = await env.DB.prepare(
+            "SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND type=? AND COALESCE(body,'')=? AND ts > ? LIMIT 1"
+          ).bind(phone, type, body, ts - 120).first();
+          if (ja) return;   // ja registramos este envio
+        } catch (_) {}
+      } else {
+        try { console.error('WA_MSG_SEM_ID entrada fone=' + phone + ' tipo=' + type + ' inst=' + String(m.instance || '')); } catch (_) {}
+      }
+      id = dir + '_' + ts + '_' + Math.random().toString(36).slice(2, 8);
+    }
+    // DEDUP DE ENTRADA ENTRE FONTES (26/08/2026). O MESMO inbound chega por DOIS caminhos com id
+    // DIFERENTE: webhook da Cloud API ('wamid.<id>') e Datacrazy ('dc:<id>') — e às vezes Evolution.
+    // Como o PK é o msg_id, cada fonte insere e o balão aparece 2x (visto em 558781723121: 'wamid.' e
+    // 'dc:', MESMO ts 18:13:57, MESMO texto). O Datacrazy NÃO expõe o wamid (conferido na API deles:
+    // campos id/createdAt/received/attachments, nenhum id do WhatsApp), então não dá pra convergir o id
+    // na origem. Deduplica aqui pelo que as fontes têm IGUAL: telefone + ts EXATO + tipo + corpo.
+    // ts EXATO de propósito: repetição de verdade do lead ("sim" "sim") sai em segundos DIFERENTES e
+    // por isso NUNCA é fundida — sumir com mensagem de lead é o pior defeito, balão repetido é só ruído.
+    // Só roda quando há msg_id (o caso das duas fontes); entrada SEM id segue inserindo sempre (regra
+    // antiga de nunca perder mensagem de lead). Ligado a [[inbox-datacrazy-poll-vs-sync]].
+    if (dir === 'in' && m.msgId) {
+      try {
+        const dup = await env.DB.prepare(
+          "SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND type=? AND COALESCE(body,'')=? AND ts=? AND msg_id<>? LIMIT 1"
+        ).bind(phone, type, body, ts, id).first();
+        if (dup) {
+          // Preferir o 'wamid' quando ele chega DEPOIS do 'dc:' (recibo de leitura e citação precisam
+          // dele): sobe o id da linha existente pro wamid e completa mídia/instância se faltarem.
+          if (String(id).startsWith('wamid') && !String(dup.msg_id).startsWith('wamid')) {
+            try {
+              await env.DB.prepare(
+                "UPDATE wa_messages SET msg_id=?, media_url=COALESCE(media_url, ?), instance=CASE WHEN COALESCE(instance,'')='' THEN ? ELSE instance END WHERE msg_id=?"
+              ).bind(id, m.media_url || null, m.instance || '', dup.msg_id).run();
+            } catch (_) {}
+          }
+          return;   // dedup: a mensagem já está na thread pela outra fonte
+        }
+      } catch (_) {}
+    }
     await env.DB.prepare(
       'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
     ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null).run();
@@ -3763,13 +5691,23 @@ async function _waLogMsg(env, m) {
       `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
        VALUES (?,?,?,?,?,?,?,strftime('%s','now'))
        ON CONFLICT(phone) DO UPDATE SET
-         instance = excluded.instance,
+         -- QUEM RECEBEU manda no carimbo. Antes era instance = excluded.instance seco, entao um
+         -- ENVIO pelo chip errado reescrevia a conversa com esse chip, e o resolveApiNumber (passo 1)
+         -- passava a ler dali: errou uma vez, travou ali pra sempre. Em 19/08/2026 o Guilherme ficou
+         -- com 6 conversas presas no 15 97407-6200 (chip que nao recebe inbound desde 28/07) e TODA
+         -- resposta morria com 131047. Agora: entrada sempre manda; saida so carimba se a conversa
+         -- ainda nao souber o numero.
+         instance = CASE WHEN excluded.last_dir = 'in' THEN excluded.instance
+                         WHEN wa_chats.instance GLOB '*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                           OR wa_chats.instance GLOB 'dc_[0-9]*' THEN wa_chats.instance
+                         ELSE excluded.instance END,
          name = COALESCE(NULLIF(excluded.name,''), wa_chats.name),
          last_text = excluded.last_text,
          last_ts = excluded.last_ts,
          last_dir = excluded.last_dir,
          unread = CASE WHEN ? = 1 THEN wa_chats.unread + 1 ELSE wa_chats.unread END,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at
+       WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
     ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, incUnread, incUnread).run();
     // Auto CRM: a 1ª resposta do ATENDENTE (não do bot/auto-reply) tira o lead de "Lead Novo" pra
     // "Em Atendimento". Só sobe de novo/vazio — não mexe nas etapas manuais nem na lixeira.
@@ -4031,6 +5969,39 @@ async function handleEvolutionWebhook(req, env, token, ctx) {
       if ((await _waCaptureSource(env)) === 'sc' && !perNumEvo) { /* fonte = Sale Chat */ }
       else { await _waOnInbound(env, instance, data, ctx); await _waDetectSale(env, instance, data); }
     }
+    else if (event === 'messages.update') {
+      // ACK DE ENTREGA DA EVOLUTION (26/08/2026). Os números de QR/Evolution NÃO davam retorno nenhum:
+      // o inbox mostrava "enviado" pra sempre e, se o áudio não saía, NINGUÉM via (queixa do vendedor,
+      // 26/08). A Cloud API já processa isto (statuses do webhook da Meta, ~linha 7124); aqui é o mesmo
+      // pros números da Evolution. Casa pelo msg_id que a gente gravou no envio (res.data.key.id) com o
+      // keyId/key.id do update. Aceita as DUAS formas de payload (array cru do Baileys e objeto
+      // normalizado da Evolution) e status tanto string ('DELIVERY_ACK') quanto número (Baileys 2/3/4).
+      // Só AVANÇA (read não volta pra sent) e 'failed'/ERROR sempre ganha. Se a Evolution não estiver
+      // inscrita no evento MESSAGES_UPDATE, este ramo fica dormente (nunca dispara) — não quebra nada.
+      // Ligado a [[carimbo-chip-conversa-131047]], [[inbox-datacrazy-poll-vs-sync]].
+      const ups = Array.isArray(data) ? data : [data];
+      const _mapa = { pending: 'sent', server_ack: 'sent', delivery_ack: 'delivered', read: 'read', read_ack: 'read', played: 'read', error: 'failed' };
+      const _rank = { sent: 1, delivered: 2, read: 3 };
+      for (const u of ups) {
+        if (!u || typeof u !== 'object') continue;
+        const mid = String(u.keyId || (u.key && u.key.id) || u.messageId || '').trim();
+        if (!mid) continue;
+        const raw = String((u.status != null ? u.status : (u.update && u.update.status)) || '').toLowerCase();
+        const estado = _mapa[raw] || (raw === '2' ? 'sent' : raw === '3' ? 'delivered' : (raw === '4' || raw === '5') ? 'read' : (raw === '0' || raw === '1') ? 'failed' : '');
+        if (!estado) continue;
+        try {
+          if (estado === 'failed') {
+            await env.DB.prepare("UPDATE wa_messages SET status='failed', err=COALESCE(NULLIF(err,''),'Evolution: falha na entrega'), status_ts=strftime('%s','now') WHERE msg_id=? AND direction='out'").bind(mid).run();
+          } else {
+            await env.DB.prepare(
+              `UPDATE wa_messages SET status=?, status_ts=strftime('%s','now') WHERE msg_id=? AND direction='out'
+                 AND COALESCE(status,'') <> 'failed'
+                 AND (CASE COALESCE(status,'') WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 WHEN 'sent' THEN 1 ELSE 0 END) < ?`
+            ).bind(estado, mid, _rank[estado]).run();
+          }
+        } catch (_) {}
+      }
+    }
   } catch (_) { /* nunca quebra o webhook */ }
   return json({ ok: true });
 }
@@ -4087,6 +6058,18 @@ async function _scEnsureTables(env) {
     // Funil automático rodando numa conversa (envia os áudios um a um; para quando o lead responde).
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_funnel_run (phone TEXT PRIMARY KEY, at_id TEXT, seq_id TEXT, items TEXT, idx INTEGER, next_at INTEGER, status TEXT, updated_at INTEGER)').run();
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_funnel_due ON wa_funnel_run(status, next_at)').run(); } catch (_) {}
+    // CREATE TABLE IF NOT EXISTS nao acrescenta coluna em tabela que ja existe: as tres abaixo
+    // precisam de ALTER proprio. tentativas = quantas vezes o passo atual falhou; parar_resp = a
+    // caixinha "Parar se o lead responder"; iniciado_em = quando o funil comecou (pra so contar
+    // resposta que veio DEPOIS disso).
+    try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN tentativas INTEGER DEFAULT 0').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN parar_resp INTEGER DEFAULT 0').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN iniciado_em INTEGER').run(); } catch (_) {}
+    // POR QUAL NUMERO ESTE FUNIL FALA. Guardado no INICIO e nao redescoberto a cada passo: o
+    // vendedor passou a ter DOIS numeros oficiais, e o chip vinha do carimbo da conversa, que muda
+    // se o lead escrever pro outro numero nosso no meio do funil. Sem isto, o passo 3 sai por um
+    // numero diferente do passo 2 e o lead ve a mesma sequencia vindo de dois contatos.
+    try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN inst TEXT').run(); } catch (_) {}
     _scTablesOk = true;
   } catch (_) {}
 }
@@ -4195,18 +6178,64 @@ async function resolveOwner(env, selfNumber) {
 
 // ─── API OFICIAL (Cloud API) ───────────────────────────────────────────────
 // Chamada à Graph API v21.0 com o token de sistema permanente (wa_api_token). Espelha evoFetch.
+// TROPECO DA META NAO PODE VIRAR FALHA NA CARA DO VENDEDOR. 131000 ("Something went wrong") e
+// 131016 ("Service unavailable") nao dizem nada sobre a mensagem: sao erro do lado deles, sem causa
+// do nosso. Idem 5xx e queda de rede (status 0). Aconteceu em 20/08/2026 com o Murilo, disparando
+// funil: uma vez, e nunca mais. Com uma segunda tentativa 2s depois isso nao chega na tela.
+// So vale com `retry: 1` explicito, e SO nos envios: nao e pra sair repetindo POST de configuracao.
+const _GRAPH_TRANSITORIO = new Set([131000, 131016]);
+// O QUE O VENDEDOR LE. A Meta responde em ingles e com o codigo colado no texto
+// ("(#131000) Something went wrong"), que nao diz nada pra quem esta atendendo: ele nao sabe se a
+// culpa e dele, se o lead recebeu, nem o que fazer. Cada codigo aqui vira uma frase que responde
+// essas tres coisas. Codigo que nao esta na lista continua mostrando o texto cru da Meta.
+const _WA_ERRO_PT = {
+  131000: 'O WhatsApp tropeçou agora (erro temporário da Meta, não é você). Já tentei de novo automaticamente. Espere alguns segundos e mande outra vez.',
+  131016: 'O serviço do WhatsApp está fora do ar neste momento. Tente de novo em instantes.',
+  131026: 'A Meta não conseguiu entregar: o número pode não ter WhatsApp ou estar escrito errado.',
+  131047: 'Janela de 24h fechada: esse lead só recebe por template aprovado agora.',
+  131051: 'Esse tipo de mensagem não é aceito por este número.',
+  130429: 'Muita mensagem em pouco tempo neste número. Espere um pouco antes de mandar de novo.',
+  368: 'Número bloqueado temporariamente pela Meta por violação de política.',
+};
+const _waErroTxt = (code, cru) => _WA_ERRO_PT[Number(code)] || cru;
+// REGISTRO DA FALHA. Sem isto, envio que falha na hora (a resposta da Meta, nao o webhook de
+// status) nao deixa rastro nenhum: o vendedor ve o aviso vermelho, fecha, e nao sobra nada pra
+// olhar depois. Foi o que aconteceu em 20/08/2026 com o 131000 do Murilo.
+async function _waFalhaLog(env, o) {
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_send_fail (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, phone TEXT, instance TEXT, kind TEXT, code TEXT, msg TEXT)').run();
+    await env.DB.prepare("INSERT INTO wa_send_fail (ts, phone, instance, kind, code, msg) VALUES (strftime('%s','now'),?,?,?,?,?)")
+      .bind(String(o.phone || ''), String(o.instance || ''), String(o.kind || ''), String(o.code || ''), String(o.msg || '').slice(0, 300)).run();
+  } catch (_) {}
+}
+function _graphTropecou(r) {
+  if (!r || r.ok) return false;
+  if (r.status === 0 || r.status >= 500) return true;
+  const c = Number(r.data && r.data.error && r.data.error.code);
+  return _GRAPH_TRANSITORIO.has(c);
+}
 async function _graph(env, path, opts = {}) {
-  const { token: optToken, ...fetchOpts } = opts;   // token do PRÓPRIO número (Datacrazy) tem prioridade; senão cai no wa_api_token
+  const { token: optToken, retry, ...fetchOpts } = opts;   // token do PRÓPRIO número (Datacrazy) tem prioridade; senão cai no wa_api_token
   const token = optToken || await _readConfig(env, 'wa_api_token');
   const base = 'https://graph.facebook.com/v21.0';
   const headers = { ...(fetchOpts.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
   if (fetchOpts.body && typeof fetchOpts.body === 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
-  try {
-    const r = await fetch(base + (path.startsWith('/') ? path : '/' + path), { ...fetchOpts, headers });
-    const data = await r.json().catch(() => ({}));
-    return { ok: r.ok && !data.error, status: r.status, data, token_present: !!token };
-  } catch (e) { return { ok: false, status: 0, data: { error: { message: String(e) } }, token_present: !!token }; }
+  const uma = async () => {
+    try {
+      const r = await fetch(base + (path.startsWith('/') ? path : '/' + path), { ...fetchOpts, headers });
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok && !data.error, status: r.status, data, token_present: !!token };
+    } catch (e) { return { ok: false, status: 0, data: { error: { message: String(e) } }, token_present: !!token }; }
+  };
+  let out = await uma();
+  const _n = Math.max(0, Math.min(Number(retry) || 0, 2));
+  for (let i = 0; i < _n && _graphTropecou(out); i++) {
+    console.log('GRAPH_RETRY ' + path + ' status=' + out.status + ' code=' + String((out.data && out.data.error && out.data.error.code) || ''));
+    await _dorme(2);
+    out = await uma();
+  }
+  return out;
 }
 // Grava/atualiza o número oficial. at_id/quality/etc só sobrescrevem quando vêm preenchidos (COALESCE).
 async function _waApiUpsert(env, o) {
@@ -4231,6 +6260,21 @@ async function _waApiUpsert(env, o) {
 // Tira os 8 dígitos finais do NOSSO número de dentro da instância da conversa.
 // Formatos que existem em produção hoje: `ax_<at>_<8díg>` (padrão da dash) e `dc_<número cheio>`
 // (número do Datacrazy ainda sem dono). `ax_<at>` e `ax_<at>_b` não carregam número: devolve ''.
+// A instancia PRECISA dizer QUAL numero recebeu, senao a resposta sai por outro.
+//
+// Incidente de 18/08/2026: o lead escreveu 11:17 e o audio saiu 13:38 - duas horas depois, dentro
+// da janela. A Meta recusou com 131047 ("mais de 24h desde a ultima resposta PARA ESTE NUMERO"),
+// porque a resposta saiu por um numero diferente do que recebeu. O vendedor tem dois numeros, e a
+// instancia gravada no inbound era so 'ax_<at>', sem dizer qual. Sem essa pista o resolveApiNumber
+// escolhe um dos dois, e quando escolhe o errado a janela esta fechada e a mensagem morre calada.
+function _instComNumero(atId, selfNumber, ownInst) {
+  if (_instNum8(ownInst)) return String(ownInst);          // ja veio com o numero: mantem
+  const d = String(selfNumber || '').replace(/\D/g, '');
+  const n8 = d.length >= 8 ? d.slice(-8) : '';
+  if (atId != null && n8) return 'ax_' + atId + '_' + n8;
+  return ownInst || (atId != null ? ('ax_' + atId) : '');
+}
+
 function _instNum8(inst) {
   const s = String(inst || '');
   let m = /_(\d{8})$/.exec(s);
@@ -4337,7 +6381,7 @@ async function handleSalechatIngest(req, env, token) {
         // Instância do PAPEL do número (complementar = ax_<at>_b). Antes era 'ax_'+atId fixo, e por
         // isso TODO lead do 2º número era carimbado com o número do principal nas métricas, e o
         // casamento do ttclid (tt_pending por instância) falhava justamente pros leads do complementar.
-        const inst = ownInst || ('ax_' + atId);
+        const inst = _instComNumero(atId, selfNumber, ownInst);   // sem o numero, a resposta sai pelo outro chip (131047)
         // Espelha no histórico (wa_messages/wa_chats). É daqui que saem o RITMO da roleta e o TETO
         // de rajada anti-ban; sem isso o balanceador ficava cego (nenhuma linha) e não conseguia
         // respeitar o limite por número. Também alimenta a caixa de entrada do CRM.
@@ -4398,6 +6442,8 @@ async function _waCloudVerifyToken(env) {
 async function handleWaEsConfig(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // app_id e verify_token sao da NOSSA conta Meta: nao ha "a conta dele" aqui.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const app_id = await _readConfig(env, 'wa_api_app_id');
   const config_id = await _readConfig(env, 'wa_es_config_id');
   const verify = await _readConfig(env, 'wa_api_verify_token');
@@ -4465,6 +6511,12 @@ async function handleWaEsFinish(req, env) {
 async function handleWaOfficialNumbers(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // A WABA E DA CASA. Eu tinha trocado o gate do /api/wa/register pra _podeMexerMeta e esqueci
+  // deste, que LISTA: a varredura de 25/08 mostrou 7 numeros nossos, com display_phone e o id do
+  // nosso vendedor, indo pro afiliado. Devolvo lista VAZIA em vez de 403 porque o modal da tela de
+  // pressels cai no catch com 403 e trava em erro; com lista vazia o fluxo segue e ele le a
+  // mensagem certa.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return json({ ok: true, numbers: [] });
   if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
   await _scEnsureTables(env);
   if (req.method === 'POST') {
@@ -4490,7 +6542,12 @@ async function handleWaOfficialNumbers(req, env) {
     return json({ ok: true, number: row || null });
   }
   const rows = await env.DB.prepare('SELECT * FROM wa_api_numbers ORDER BY updated_at DESC').all();
-  return json({ ok: true, numbers: rows.results || [] });
+  // O TOKEN DA META NAO SAI DAQUI. O SELECT * trazia a coluna `token` junto, e esta rota e liberada
+  // pra quem mexe na pressel - o gestor de trafego inclusive, que e gente de fora. Com esse token da
+  // pra mandar mensagem como a empresa, ler conversa e apagar template. Nenhuma tela usa o campo: a
+  // dash so mostra numero, dono, qualidade e status.
+  const numbers = (rows.results || []).map((r) => { const { token, ...resto } = r; return { ...resto, tem_token: token ? 1 : 0 }; });
+  return json({ ok: true, numbers });
 }
 
 // POST /api/wa/register (diretor) — registro OTP de um número na Cloud API (self-serve com o token).
@@ -4498,7 +6555,9 @@ async function handleWaOfficialNumbers(req, env) {
 async function handleWARegister(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!_podeMexerPressel(u)) return err('Sem permissão', 403);
+  // _podeMexerMeta e nao _podeMexerPressel: registrar numero usa o NOSSO token da Graph na NOSSA
+  // WABA, e ja queimou dois chips em coexistencia. O afiliado nao tem "conta Meta dele" aqui.
+  if (!_podeMexerMeta(u)) return err('Sem permissão', 403);
   await _scEnsureTables(env);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
   const step = String(b.step || '').trim();
@@ -4561,7 +6620,7 @@ async function _waWabaList(env, hint, atId, num) {
   let rows = [];
   try {
     const so = atId != null && String(atId) !== '';
-    const n8 = String(num || '').replace(/D/g, '').slice(-8);
+    const n8 = String(num || '').replace(/\D/g, '').slice(-8);
     const cond = ["waba_id IS NOT NULL AND waba_id<>''"];
     const binds = [];
     if (so) { cond.push('at_id = ?'); binds.push(String(atId)); }
@@ -4649,7 +6708,10 @@ async function handleWATemplate(req, env) {
 }
 
 // ─── Funil automático dentro do inbox (envia os itens um a um; para quando o lead responde) ───
-const WA_FUNNEL_GAP = 90;   // segundos entre itens (avançado pelo cron de 2min)
+// SEM USO desde 18/08/2026: o intervalo entre passos passou a ser o que o Bruno configura em cada
+// item ("espera", no Sale Chat). Este 90 fixo era aplicado em TODO funil e apagava a configuracao
+// dele. Fica aqui so como piso de referencia; se voltar a aparecer no codigo, e regressao.
+const WA_FUNNEL_GAP = 90;
 function _r2PublicUrl(key) { return 'https://axion-api.axion-dash.workers.dev/api/salechat/media/' + String(key || '').split('/').map(encodeURIComponent).join('/'); }
 async function _waFunnelSeq(env, seqId) {
   const data = await _getDashData(env);
@@ -4657,41 +6719,395 @@ async function _waFunnelSeq(env, seqId) {
   const seqs = Array.isArray(sc.sequences) ? sc.sequences : [];
   const seq = seqs.find(s => s && s.id === seqId);
   if (!seq) return null;
-  const items = (Array.isArray(seq.items) ? seq.items : []).map(it => (typeof it === 'string' ? it : (it && it.id))).filter(Boolean);
-  return { seq, items, media: Array.isArray(sc.media) ? sc.media : [], msgs: Array.isArray(sc.messages) ? sc.messages : [] };
+  // GUARDA O PASSO INTEIRO, nao so o id. Antes era .map(it => it.id) e a ESPERA que o Bruno
+  // configurou (21s, 70s, 20s...) era jogada fora: todo funil andava num intervalo fixo de 90s.
+  // Ele acertava o ritmo na tela e o cliente recebia outro. Os ids soltos (formato antigo) viram
+  // passo com espera 0, que e como se comportavam.
+  const passos = (Array.isArray(seq.items) ? seq.items : [])
+    .map(it => (typeof it === 'string' ? { id: it, delay: 0, sim: 0 } : { id: (it && it.id) || '', delay: Math.max(0, Number(it && it.delay) || 0), sim: Math.max(0, Number(it && it.sim) || 0) }))
+    .filter(p => p.id);
+  return { seq, items: passos, media: Array.isArray(sc.media) ? sc.media : [], msgs: Array.isArray(sc.messages) ? sc.messages : [], pararResp: seq.stopOnReply === true };
 }
-async function _waFunnelSendItem(env, atId, phone, itemId, info) {
+// ── A PAUSA DO FUNIL ─────────────────────────────────────────────────────────
+//
+// A tela tinha DOIS campos por passo, "espera" e "simula", e eles SOMAVAM: o Bruno reclamou em
+// 18/08/2026 que ficava 10s parado e depois mais 10s "digitando" antes de sair a mensagem. Ele quer
+// UMA pausa so, e que ela aconteca colada no envio (manda, pausa, manda), nao como tempo morto
+// depois da mensagem anterior.
+//
+// Agora e uma pausa efetiva por passo: vale `sim` se estiver preenchido, senao `delay`. Nunca soma.
+const _pausaDoPasso = (p) => {
+  const sim = Math.max(0, Number(p && p.sim) || 0);
+  const del = Math.max(0, Number(p && p.delay) || 0);
+  return sim > 0 ? sim : del;
+};
+const _dorme = (seg) => new Promise((r) => setTimeout(r, Math.max(0, Math.min(seg, 120)) * 1000));
+
+// "DIGITANDO..." DE VERDADE, quando der. A Cloud API tem o indicador (conferido: o endpoint aceita
+// typing_indicator e so reclama do id), mas ele exige o wamid de uma mensagem RECEBIDA - a Meta nao
+// tem um "comecar a digitar" solto. Hoje quem recebe o webhook dos 4 numeros e o app do Datacrazy, e
+// as mensagens chegam pra nos pelo poll deles, com id proprio ('dc:...'): nunca tivemos um wamid de
+// entrada (conferido, zero). Entao a funcao existe, tenta, e se nao houver wamid ela simplesmente
+// nao faz nada - a pausa acontece do mesmo jeito. No dia em que o webhook for nosso, o "digitando"
+// liga sozinho, sem mexer aqui.
+async function _waDigitando(env, atId, phone, apiNumFixo) {
+  try {
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (!digits) return false;
+    const m = await env.DB.prepare("SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND msg_id LIKE 'wamid%' ORDER BY ts DESC LIMIT 1").bind(digits).first();
+    const wamid = m && m.msg_id;
+    if (!wamid) return false;
+    const apiNum = apiNumFixo || await resolveApiNumber(env, { atId, convPhone: digits });
+    if (!apiNum || !apiNum.phone_number_id) return false;
+    const r = await fetch('https://graph.facebook.com/v21.0/' + encodeURIComponent(apiNum.phone_number_id) + '/messages', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + (apiNum.token || await _readConfig(env, 'wa_api_token')), 'content-type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: String(wamid), typing_indicator: { type: 'text' } }),
+    });
+    return r.ok;
+  } catch (_) { return false; }
+}
+
+// O FUNIL PELA EVOLUTION (numero conectado por QR, nao oficial). Existe porque o funil inteiro
+// falava so Cloud API: numero de Evolution NAO esta em wa_api_numbers, entao o disparo ou morria
+// com "vendedor sem numero oficial" ou - pior - saia pelo OUTRO numero do mesmo vendedor, o
+// oficial. Com o Bruno trocando um numero restrito por um de Evolution no meio da campanha
+// (21/08/2026), isso seria o funil do vendedor saindo pelo chip errado sem ninguem ver.
+async function _waFunnelEvo(env, inst, phone, passo, info) {
+  const itemId = (passo && typeof passo === 'object') ? passo.id : passo;
+  const num = String(phone || '').replace(/\D/g, '');
+  const falha = (r, oq) => ({ ok: false, error: 'Evolution nao enviou o ' + oq + ' (' + String((r && (r._err || r.status)) || 'sem resposta') + ')', code: 'evo' });
   const md = (info.media || []).find(m => m && m.id === itemId);
   if (md && md.key) {
     const kind = ['image', 'audio', 'video', 'document'].includes(md.kind) ? md.kind : 'document';
-    return await _waCloudSendMedia(env, atId, phone, { kind, link: _r2PublicUrl(md.key), caption: md.caption || '', filename: md.label || '', mediaKey: md.key });
+    if (kind === 'audio') {
+      // AUDIO TEM QUE SAIR COMO NOTA DE VOZ (ondinhas). Pelo sendMedia ele viraria ARQUIVO de audio,
+      // que o cliente quase nao abre - e o funil do Bruno e feito de audio. Por isso le do R2 e manda
+      // no endpoint de PTT, que e o unico que grava como voz.
+      let b64 = '';
+      try { const o = await env.MEDIA.get(md.key); if (o) b64 = _bytesToB64(new Uint8Array(await o.arrayBuffer())); } catch (_) {}
+      if (!b64) return { ok: false, error: 'audio do passo nao esta no arquivo', code: 'sem_midia' };
+      const r = await _waSendAudio(env, inst, num, b64);
+      if (!r || r.ok === false || r._noconfig) return falha(r, 'audio');
+      try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'audio', body: '', msgId: r.data && r.data.key && r.data.key.id, media_url: _r2PublicUrl(md.key) }); } catch (_) {}
+      return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
+    }
+    const r = await _waSendMedia(env, inst, num, {
+      mediatype: kind, media: _r2PublicUrl(md.key),
+      ...(md.mime ? { mimetype: md.mime } : {}),
+      ...(md.label ? { fileName: md.label } : {}),
+      ...(md.caption ? { caption: md.caption } : {}),
+    });
+    if (!r || r.ok === false || r._noconfig) return falha(r, kind);
+    try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: kind, body: md.caption || '', msgId: r.data && r.data.key && r.data.key.id, media_url: _r2PublicUrl(md.key) }); } catch (_) {}
+    return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
   }
   const tx = (info.msgs || []).find(m => m && m.id === itemId);
-  if (tx && (tx.text || tx.body)) return await _waCloudSendText(env, atId, phone, tx.text || tx.body);
+  const texto = tx && (tx.text || tx.body);
+  if (texto) {
+    const r = await evoFetch(env, '/message/sendText/' + encodeURIComponent(inst), { method: 'POST', body: { number: num, text: String(texto) } });
+    if (!r || r.ok === false || r._noconfig) return falha(r, 'texto');
+    try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'text', body: String(texto), msgId: r.data && r.data.key && r.data.key.id }); } catch (_) {}
+    try { await _waDetectSale(env, inst, { message: { conversation: String(texto) }, key: { remoteJid: num + '@c.us', id: (r.data && r.data.key && r.data.key.id) || null, fromMe: true } }); } catch (_) {}
+    return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
+  }
+  console.error('WA_FUNIL_PASSO_INEXISTENTE(evo) fone=' + num + ' item=' + JSON.stringify(itemId));
+  return { ok: false, error: 'item nao encontrado', code: 'no_item' };
+}
+// apiNum = numero oficial JA resolvido (o chip pinado no inicio do funil). Sem ele, cada passo
+// resolveria de novo pela conversa e poderia trocar de numero no meio.
+// inst = a instancia da conversa; se ela estiver VIVA na Evolution, o passo sai por la.
+async function _waFunnelSendItem(env, atId, phone, passo, info, apiNum, inst) {
+  // Canal pela CONEXAO, nao pelo cadastro: a mesma conta pode ter numero oficial e numero de QR.
+  // Vale so quando a instancia esta 'open' e com sinal recente (10 min), igual ao compositor.
+  if (inst) {
+    let viva = null;
+    try {
+      viva = await env.DB.prepare("SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600").bind(String(inst)).first();
+    } catch (_) { viva = null; }
+    if (viva) return await _waFunnelEvo(env, String(inst), phone, passo, info);
+    // NAO VAZAR PRO OUTRO CHIP. Se a conversa tem numero proprio no carimbo, esse numero nao e um
+    // oficial nosso (apiNum vazio) e a Evolution dele nao esta viva, entao NAO existe canal pra
+    // esta conversa. Sem esta parada o passo cairia no resolveApiNumber e sairia pelo OUTRO numero
+    // do mesmo vendedor - o cliente recebendo funil de um contato com quem nunca falou.
+    const _temNum = /^ax_.+_\d{8}$/.test(String(inst)) || /^dc_\d{8,}$/.test(String(inst));
+    if (_temNum && !apiNum) {
+      return { ok: false, error: 'O número desta conversa não está conectado agora (WhatsApp caiu ou saiu do ar). O funil parou aqui.', code: 'canal_fora' };
+    }
+  }
+  const itemId = (passo && typeof passo === 'object') ? passo.id : passo;
+  const md = (info.media || []).find(m => m && m.id === itemId);
+  if (md && md.key) {
+    const kind = ['image', 'audio', 'video', 'document'].includes(md.kind) ? md.kind : 'document';
+    return await _waCloudSendMedia(env, atId, phone, { kind, link: _r2PublicUrl(md.key), caption: md.caption || '', filename: md.label || '', mediaKey: md.key, apiNum: apiNum || null });
+  }
+  const tx = (info.msgs || []).find(m => m && m.id === itemId);
+  if (tx && (tx.text || tx.body)) return await _waCloudSendText(env, atId, phone, tx.text || tx.body, apiNum || null);
+  // PASSO QUE NAO EXISTE NAO PODE PASSAR EM SILENCIO. Ele acontece quando o funil guarda um id que
+  // nao casa com nenhuma midia nem mensagem: ou a midia foi apagada nas abas do Sale Chat, ou o item
+  // entrou sem id (bug do seletor, corrigido em 18/08/2026 - o React lia e.target.value depois de o
+  // campo ja ter sido zerado). O tick trata 'no_item' como passo comum e SEGUE pro proximo, que e o
+  // comportamento certo em tempo de execucao (melhor pular um passo do que travar o funil inteiro do
+  // cliente), so que ninguem ficava sabendo: o funil dizia que rodou e o cliente nunca recebeu aquele
+  // audio. Agora fica no log do Worker com o funil e o item, pra dar pra achar qual passo consertar.
+  console.error('WA_FUNIL_PASSO_INEXISTENTE at=' + String(atId) + ' fone=' + String(phone) + ' item=' + JSON.stringify(itemId));
   return { ok: false, error: 'item não encontrado', code: 'no_item' };
 }
 async function _waFunnelStop(env, phone, why) {
-  try { await env.DB.prepare("UPDATE wa_funnel_run SET status=?, updated_at=strftime('%s','now') WHERE phone=? AND status='running'").bind(why || 'stopped', String(phone || '').replace(/\D/g, '')).run(); } catch (_) {}
+  // RESPEITA A CAIXINHA "parar se o lead responder" (parar_resp). O _waFunnelTick ja conferia isso
+  // com cuidado, mas nunca chegava a rodar: os 3 caminhos de entrada de mensagem chamavam esta
+  // funcao com 'lead_respondeu' e ela parava TODO run 'running', marcada ou desmarcada. Resultado:
+  // as 9 sequencias estavam com a caixinha DESMARCADA e mesmo assim o funil morria na 1a resposta
+  // do lead - justo quem demonstrou interesse parava de receber. Parada manual ('stopped') e as
+  // outras razoes seguem incondicionais; so o gatilho da resposta passa a olhar parar_resp.
+  const fone = String(phone || '').replace(/\D/g, '');
+  const cond = (why === 'lead_respondeu') ? " AND COALESCE(parar_resp,0)=1" : "";
+  try { await env.DB.prepare("UPDATE wa_funnel_run SET status=?, updated_at=strftime('%s','now') WHERE phone=? AND status='running'" + cond).bind(why || 'stopped', fone).run(); } catch (_) {}
 }
 async function _waFunnelTick(env) {
   try {
     await _scEnsureTables(env);
     const now = Math.floor(Date.now() / 1000);
-    const due = await env.DB.prepare("SELECT phone, at_id, seq_id, items, idx FROM wa_funnel_run WHERE status='running' AND next_at <= ? LIMIT 20").bind(now).all();
+    // LIMIT 5, nao 20: cada linha pode dormir a pausa dela dentro desta invocacao, entao pegar 20 de
+    // uma vez faria a batida arrastar e a seguinte pegar as mesmas linhas.
+    // `inst_agora` = o numero em que a conversa esta AGORA (wa_chats segue o ultimo inbound). Vem
+    // junto pra dar pra ver, sem consulta extra, se o lead voltou por outro numero no meio do funil.
+    const due = await env.DB.prepare("SELECT f.phone, f.at_id, f.seq_id, f.items, f.idx, COALESCE(f.tentativas,0) tentativas, COALESCE(f.parar_resp,0) parar_resp, f.iniciado_em, f.next_at, f.inst, c.instance inst_agora FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone WHERE f.status='running' AND f.next_at <= ? ORDER BY f.next_at ASC LIMIT 5").bind(now).all();
     const seqCache = {};
+    const chipCache = {};   // instancia -> numero oficial (resolve 1x, vale pra todos os passos dela)
     for (const r of (due.results || [])) {
+      // ── RESERVA A LINHA ANTES DE TRABALHAR ────────────────────────────────
+      // O cron bate de minuto em minuto e um passo pode DORMIR mais que isso (a pausa que o Bruno
+      // configura, ate 70s, mais o encadeamento). Enquanto dormia, a linha continuava 'running' com
+      // next_at ja vencido: a batida seguinte pegava a MESMA linha e mandava o MESMO audio de novo.
+      // Cliente recebendo a mesma mensagem duas vezes e o tipo de coisa que queima numero.
+      // A reserva e um UPDATE condicionado ao estado exato que eu li; se outra invocacao chegou
+      // antes, changes=0 e esta aqui desiste em silencio. O prazo cobre pausa + os 100s do
+      // encadeamento, e o passo 'manutencao' destrava quem ficar presa (ver _cronPurga).
+      const reserva = await env.DB.prepare(
+        "UPDATE wa_funnel_run SET status='enviando', updated_at=? WHERE phone=? AND idx=? AND status='running' AND next_at=?"
+      ).bind(now, r.phone, Number(r.idx) || 0, Number(r.next_at) || 0).run().catch(() => null);
+      if (!reserva || !reserva.meta || !reserva.meta.changes) continue;
       const items = (() => { try { return JSON.parse(r.items || '[]'); } catch (_) { return []; } })();
       const idx = Number(r.idx) || 0;
       if (idx >= items.length) { await env.DB.prepare("UPDATE wa_funnel_run SET status='done', updated_at=? WHERE phone=?").bind(now, r.phone).run(); continue; }
       if (!(r.seq_id in seqCache)) seqCache[r.seq_id] = await _waFunnelSeq(env, r.seq_id);
       const info = seqCache[r.seq_id];
       if (!info) { await env.DB.prepare("UPDATE wa_funnel_run SET status='error', updated_at=? WHERE phone=?").bind(now, r.phone).run(); continue; }
-      const send = await _waFunnelSendItem(env, r.at_id, r.phone, items[idx], info);
+      // PARAR SE O LEAD RESPONDER. A caixinha existia na tela e NAO EXISTIA no worker (grep zero):
+      // marcar ou desmarcar dava no mesmo, o funil ia ate o fim por cima de quem respondeu. Conferido
+      // aqui, e nao la no caminho de quem RECEBE mensagem, de proposito: mexer na entrada de
+      // mensagem hoje, com verba rodando, e risco que nao vale. A diferenca pratica e o funil parar
+      // no proximo passo em vez de na hora, e os passos sao espacados de qualquer jeito.
+      if (Number(r.parar_resp) === 1) {
+        const desde = Number(r.iniciado_em) || 0;
+        let resp = null;
+        try { resp = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? LIMIT 1").bind(String(r.phone), desde).first(); } catch (_) {}
+        if (resp) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=? AND status='enviando'").bind(now, r.phone).run(); continue; }
+      }
+      // A PAUSA VEM ANTES DO ENVIO, colada nele. Antes ela virava tempo morto depois da mensagem
+      // anterior (next_at) e ainda somava com o segundo campo: dava mensagem, silencio, silencio de
+      // novo, mensagem. Agora e: pausa (com "digitando" quando houver wamid) e manda.
+      // CHIP DESTE FUNIL: o que foi pinado quando ele comecou. Linha antiga (sem inst) segue como
+      // antes, resolvendo pela conversa.
+      const _instPin = String(r.inst || '');
+      // O LEAD VOLTOU POR OUTRO NUMERO: o funil deste chip PARA aqui. Regra do ultimo clique
+      // (Bruno, 20/08/2026): a partir do segundo numero tudo e do vendedor novo, entao continuar
+      // mandando por este seria o cliente recebendo a mesma sequencia de dois contatos diferentes.
+      // So compara quando os DOIS lados tem numero no carimbo; sem isso ninguem para por engano.
+      const _s8 = (x) => (String(x || '').match(/_(\d{8})$/) || [])[1] || '';
+      const _pinN = _s8(_instPin), _agoraN = _s8(r.inst_agora);
+      if (_pinN && _agoraN && _pinN !== _agoraN) {
+        console.log('WA_FUNIL_MIGROU fone=' + String(r.phone) + ' pino=' + _pinN + ' agora=' + _agoraN);
+        await env.DB.prepare("UPDATE wa_funnel_run SET status='migrou', updated_at=? WHERE phone=? AND status='enviando'").bind(now, r.phone).run().catch(() => {});
+        continue;
+      }
+      if (_instPin && !(_instPin in chipCache)) chipCache[_instPin] = await _apiNumFromInstance(env, _instPin);
+      const apiNumPin = _instPin ? chipCache[_instPin] : null;
+      const passo = items[idx];
+      const pausa = _pausaDoPasso(passo);
+      if (pausa > 0) {
+        await _waDigitando(env, r.at_id, r.phone, apiNumPin);
+        await _dorme(pausa);
+      }
+      const send = await _waFunnelSendItem(env, r.at_id, r.phone, passo, info, apiNumPin, _instPin || r.inst_agora);
+      const falhou = !!(send && send.ok === false);
+      const semItem = falhou && send.code === 'no_item';
+      // FALHA DE ENVIO NAO PODE CONTAR COMO ENTREGUE. Antes so tres codigos viravam erro; qualquer
+      // outra falha (a Meta recusando o audio, rede caindo) avancava o indice do mesmo jeito e o
+      // funil terminava 'done'. O cliente nao recebia nada e a dash dizia que recebeu.
+      // Passo que NAO EXISTE continua pulando: melhor perder um passo do que travar o funil inteiro.
+      // Falha de envio de verdade PARA e fica marcada, em vez de reenviar: audio repetido no cliente
+      // e pior do que um funil parado que o vendedor ve e retoma na mao.
+      if (falhou && !semItem) {
+        console.error('WA_FUNIL_PASSO_FALHOU fone=' + String(r.phone) + ' seq=' + String(r.seq_id) + ' idx=' + idx + ' code=' + String(send.code || '') + ' erro=' + String(send.error || '').slice(0, 120));
+        await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'").bind(now, r.phone).run();
+        continue;
+      }
       const nidx = idx + 1;
-      const st = (send && send.ok === false && (send.code === 'window_closed' || send.code === 'no_official' || send.code === 'not_registered')) ? 'error' : (nidx >= items.length ? 'done' : 'running');
-      await env.DB.prepare("UPDATE wa_funnel_run SET idx=?, next_at=?, status=?, updated_at=? WHERE phone=?").bind(nidx, now + WA_FUNNEL_GAP, st, now, r.phone).run();
+      // O PROXIMO PASSO NAO ESPERA O PROXIMO MINUTO DO CRON. Se ele cabe no tempo que sobra desta
+      // invocacao, sai agora, com a pausa dele. Sem isso, um funil de 3 passos com pausa de 3s
+      // levava 3 MINUTOS pra sair, porque cada passo esperava a batida seguinte - e o ritmo que o
+      // Bruno monta na tela nao existia na pratica. O teto de 100s por invocacao segura o resto: o
+      // que passar disso continua na batida seguinte, normalmente.
+      // `AND status='enviando'` em toda escrita de avanco: se a manutencao destravou a linha no meio
+      // (invocacao presa), esta aqui nao pode rebobinar o idx e repetir a sequencia.
+      // A LINHA FICA RESERVADA ENQUANTO ESTA INVOCACAO TRABALHA (19/08/2026, "funil 3 de prova social
+      // esta repetindo 2x", reportado pelo vendedor). Aqui a linha voltava pra 'running' com
+      // next_at=AGORA e so DEPOIS vinha o encadeamento, que dorme ate ~100s. Ou seja: a linha ficava
+      // livre e vencida enquanto a invocacao ainda estava mandando. A batida seguinte do cron
+      // reservava a MESMA linha e remandava o MESMO passo. Media no ar: o mesmo audio 4x em 166s
+      // pro mesmo lead, ~55s de intervalo, que e exatamente o ritmo do cron.
+      // Pior: o UPDATE de avanco de dentro do encadeamento exige status='enviando', e como esta
+      // linha ja tinha voltado pra 'running' ele nao casava com nada - o idx NUNCA avancava no
+      // banco pelo encadeamento. Cada batida andava 1 passo e repetia a cauda toda de novo.
+      // Agora: segue 'enviando' com next_at no futuro ate a invocacao acabar, e o status final
+      // ('done' ou 'running') so e escrito no fim, fora do laco. Funil comprido (prova social tem 5
+      // passos) e justamente o que mais sofria, porque o encadeamento dele atravessa a batida.
+      const GUARDA = 240;   // folga > pausa maxima + os 100s do encadeamento; a manutencao destrava aos 10min
+      await env.DB.prepare("UPDATE wa_funnel_run SET idx=?, next_at=?, status='enviando', tentativas=0, updated_at=? WHERE phone=? AND status='enviando'").bind(nidx, Math.floor(Date.now() / 1000) + GUARDA, now, r.phone).run();
+      let i2 = nidx, gasto = 0;
+      while (i2 < items.length && gasto < 100) {
+        if (Number(r.parar_resp) === 1) {
+          let resp2 = null;
+          try { resp2 = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? LIMIT 1").bind(String(r.phone), Number(r.iniciado_em) || 0).first(); } catch (_) {}
+          if (resp2) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=?").bind(Math.floor(Date.now() / 1000), r.phone).run(); break; }
+        }
+        const p2 = items[i2];
+        const pa2 = _pausaDoPasso(p2);
+        if (gasto + pa2 > 100) break;                 // nao cabe: fica pra proxima batida
+        if (pa2 > 0) { await _waDigitando(env, r.at_id, r.phone, apiNumPin); await _dorme(pa2); gasto += pa2; }
+        const s2 = await _waFunnelSendItem(env, r.at_id, r.phone, p2, info, apiNumPin, _instPin || r.inst_agora);   // MESMO chip do passo anterior
+        const f2 = !!(s2 && s2.ok === false);
+        if (f2 && s2.code !== 'no_item') {
+          console.error('WA_FUNIL_PASSO_FALHOU fone=' + String(r.phone) + ' seq=' + String(r.seq_id) + ' idx=' + i2 + ' code=' + String(s2.code || ''));
+          await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=?").bind(Math.floor(Date.now() / 1000), r.phone).run();
+          break;
+        }
+        i2++;
+        await env.DB.prepare("UPDATE wa_funnel_run SET idx=?, next_at=?, status='enviando', updated_at=? WHERE phone=? AND status='enviando'").bind(i2, Math.floor(Date.now() / 1000) + GUARDA, Math.floor(Date.now() / 1000), r.phone).run();
+      }
+      // LIBERA A LINHA no fim da invocacao. So mexe em quem continua 'enviando': se o laco saiu por
+      // resposta do lead ou por falha de envio, o status de la e o que vale e nao pode ser desfeito.
+      const fim = Math.floor(Date.now() / 1000);
+      await env.DB.prepare("UPDATE wa_funnel_run SET status=?, next_at=?, updated_at=? WHERE phone=? AND status='enviando'")
+        .bind(i2 >= items.length ? 'done' : 'running', fim, fim, r.phone).run();
     }
   } catch (_) {}
+}
+// GET /api/wa/funnel/queue -> TODOS os funis ativos DO VENDEDOR, nao so o da conversa aberta.
+// Nasceu porque no inbox a barra "Funil em andamento" vivia dentro da conversa: trocou de lead, a
+// barra sumia e o vendedor ficava sem saber se ainda estava enviando, em que passo estava e sem
+// como pausar. No Sale Chat antigo (painel injetado) a pilha de envios ficava fixa no canto, com
+// uma linha por lead, o passo atual e um Pausar proprio - e era assim que eles queriam.
+// Devolve o rotulo do funil e o rotulo do passo atual, que e o que a linha mostra.
+// GET /api/leads/contagem?de=<ts>&ate=<ts> -> quantos LEADS DE VERDADE entraram no periodo.
+// Nasceu porque o Dashboard de Trafego mostrava "Total de leads" lendo data.leads, que NAO sao leads:
+// sao os CARDS DE PEDIDO do Kanban. Em 20/08/2026 a tela dizia 23 leads num dia de 198 - o gestor de
+// trafego tomava decisao de verba com um numero que era, na pratica, a contagem de pedidos.
+// A fonte certa e wa_lead (1 linha por telefone na PRIMEIRA vez que ele fala com a gente), a mesma
+// que a Chegada de Leads usa. `de`/`ate` em segundos; sem eles, conta o dia de hoje.
+async function handleLeadsContagem(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const q = new URL(req.url).searchParams;
+  const hojeIni = Math.floor(new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).setHours(0, 0, 0, 0) / 1000);
+  const de = Number(q.get('de')) || hojeIni;
+  // SEM `ate` = ATE AGORA, nao "de + 1 dia" (bug meu, corrigido em 20/08/2026). O filtro do topo da
+  // dash usa endTs=0 pra dizer "ate agora" (hoje, esta semana, este mes), entao a tela nao manda o
+  // `ate` nesses casos. Com o padrao antigo a janela fechava no dia seguinte ao INICIO do periodo:
+  // com o filtro no mes, contava leads de 1 e 2 de agosto e devolvia ZERO - foi o "Leads gerados: 0"
+  // que o Bruno viu com 201 leads no dia.
+  const ate = Number(q.get('ate')) || (Math.floor(Date.now() / 1000) + 60);
+  // O MUNDO DO AFILIADO VEM ANTES (auditoria 24/08/2026). O gate abaixo libera o total da operacao
+  // pra qualquer role 'gestor', e o gestor de trafego que o AFILIADO cadastra tem exatamente esse
+  // role - ele lia o volume de leads da nossa operacao em tres telas. Aqui o mundo dele resolve
+  // primeiro e retorna; quem sobra cai nas regras de sempre.
+  if (afiliadoSemVinculo(u)) return json({ total: 0, porVendedor: {} });
+  if (noMundoAfiliado(u)) {
+    const _idsC = await _idsDoMundoAfiliado(env, aflDe(u));
+    const _cut = _sqlInst('inst', _idsC);
+    try {
+      const r = await env.DB.prepare('SELECT inst, COUNT(*) AS n FROM wa_lead WHERE ts>=? AND ts<? AND ' + _cut.cond + ' GROUP BY inst')
+        .bind(de, ate, ..._cut.binds).all();
+      const linhas = (r && r.results) || [];
+      const porVendedor = {};
+      let total = 0;
+      for (const x of linhas) { const at = _atFromInst(x.inst); total += Number(x.n) || 0; if (at) porVendedor[at] = (porVendedor[at] || 0) + (Number(x.n) || 0); }
+      return json({ total, porVendedor });
+    } catch (_) { return json({ total: 0, porVendedor: {} }); }
+  }
+  // Escopo: cargo full ve a operacao; o resto so o que entrou no PROPRIO numero. O gestor de trafego
+  // NAO e full, mas o total de leads e o numero que ele precisa pra decidir verba - e volume de
+  // anuncio, nao dado de cliente - entao ele entra na lista de quem ve o total.
+  const papel = String(u.role || '').toLowerCase();
+  const veTudo = isDirector(u) || papel === 'gestor';
+  try {
+    if (veTudo) {
+      const r = await env.DB.prepare('SELECT COUNT(*) n FROM wa_lead WHERE ts >= ? AND ts < ?').bind(de, ate).first();
+      const porV = await env.DB.prepare(
+        "SELECT inst, COUNT(*) n FROM wa_lead WHERE ts >= ? AND ts < ? AND inst IS NOT NULL AND inst <> '' GROUP BY inst"
+      ).bind(de, ate).all().catch(() => null);
+      const vend = {};
+      for (const x of ((porV && porV.results) || [])) { const at = _atFromInst(x.inst); if (at) vend[at] = (vend[at] || 0) + (Number(x.n) || 0); }
+      return json({ ok: true, total: Number(r && r.n) || 0, porVendedor: vend, de, ate });
+    }
+    const pf = 'ax_' + u.id;
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) n FROM wa_lead WHERE ts >= ? AND ts < ? AND (inst = ? OR substr(inst,1,?) = ?)"
+    ).bind(de, ate, pf, pf.length + 1, pf + '_').first();
+    return json({ ok: true, total: Number(r && r.n) || 0, porVendedor: {}, de, ate });
+  } catch (e) { return err('Não consegui contar os leads: ' + String((e && e.message) || e), 500); }
+}
+async function handleWAFunnelQueue(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  await _scEnsureTables(env);
+  // Escopo por cargo: vendedor so ve o que e dele. Diretor ve a operacao inteira.
+  const dono = isDirector(u) ? null : String(u.id);
+  const sql = "SELECT f.phone, f.at_id, f.seq_id, f.idx, f.items, f.status, f.next_at, c.name nome"
+    + " FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone"
+    + " WHERE f.status IN ('running','enviando')" + (dono ? " AND f.at_id = ?" : "")
+    + " ORDER BY f.status DESC, f.next_at ASC LIMIT 30";
+  const st = dono ? env.DB.prepare(sql).bind(dono) : env.DB.prepare(sql);
+  const rs = await st.all().catch(() => null);
+  const linhas = (rs && rs.results) || [];
+  const cache = {};
+  const runs = [];
+  let naFila = 0;
+  for (const r of linhas) {
+    if (!(r.seq_id in cache)) cache[r.seq_id] = await _waFunnelSeq(env, r.seq_id).catch(() => null);
+    const info = cache[r.seq_id];
+    let itens = [];
+    try { itens = JSON.parse(r.items || '[]'); } catch (_) {}
+    const idx = Number(r.idx) || 0;
+    const enviando = r.status === 'enviando';
+    // rotulo do passo ATUAL: no 'enviando' e o item de indice idx-1 (o que acabou de sair ou esta
+    // saindo); no 'running' e o proximo a sair. Vem do catalogo (midia/mensagem), igual a aba Funis.
+    const alvo = itens[enviando ? Math.max(0, idx - 1) : idx];
+    let passoLbl = '';
+    if (alvo && info) {
+      const pid = String((alvo && alvo.id) || alvo || '');
+      const md = (info.media || []).find((x) => x && x.id === pid);
+      const ms = (info.msgs || []).find((x) => x && x.id === pid);
+      passoLbl = String((md && md.label) || (ms && ms.label) || '');
+    }
+    if (!enviando) naFila++;
+    runs.push({
+      phone: r.phone,
+      nome: r.nome || '',
+      at_id: r.at_id,
+      seq_id: r.seq_id,
+      label: (info && info.seq && info.seq.label) || r.seq_id,
+      grp: (info && info.seq && info.seq.grp) || '',
+      idx, total: itens.length,
+      status: r.status,
+      enviando,
+      fila: enviando ? 0 : naFila,   // quantos na frente (o proprio incluido), pra "Na fila · N na frente"
+      passo: passoLbl,
+    });
+  }
+  return json({ ok: true, runs });
 }
 async function handleWAFunnel(req, env) {
   const u = await authUser(req, env);
@@ -4708,17 +7124,63 @@ async function handleWAFunnel(req, env) {
   if (!phone) return err('phone obrigatório');
   if (b.action === 'stop') { await _waFunnelStop(env, phone, 'stopped'); return json({ ok: true }); }
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
-  const info = await _waFunnelSeq(env, String(b.seq_id || ''));
-  if (!info || !info.items.length) return err('sequência sem itens');
+  const r = await _waFunnelIniciar(env, atId, phone, String(b.seq_id || ''));
+  if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
+  return json(r);
+}
+
+// DISPARO AUTOMATICO no lead novo (pedido do Bruno em 21/08/2026).
+//
+// Config no blob: data.funil_auto = { on: true, seq_id: '<id>', delay_s: 1 }. Sem ela ligada, nada
+// acontece - quem decide qual funil sai e a tela do Sale Chat, nao o codigo.
+//
+// TRES TRAVAS, todas necessarias:
+// 1. So na PRIMEIRA mensagem daquele telefone. Sem isso, todo "oi" do lead re-disparava o funil.
+// 2. So se NAO houver funil rodando/rodado pra ele. Evita empilhar em cima de um manual.
+// 3. Roda em waitUntil, nunca no caminho do ACK do webhook: se a Meta nao recebe 200 rapido, ela
+//    reenvia o evento e a mensagem entra duplicada.
+async function _waFunnelAuto(env, atId, phone) {
+  try {
+    if (!atId || !phone) return;
+    const data = await _getDashData(env);
+    const cfg = (data && data.funil_auto) || null;
+    if (!cfg || !cfg.on || !cfg.seq_id) return;
+    // ja existe run pra esse telefone? (rodando, pausado ou concluido) -> nao dispara de novo
+    const jaTem = await env.DB.prepare('SELECT phone FROM wa_funnel_run WHERE phone=?').bind(phone).first();
+    if (jaTem) return;
+    // primeira mensagem da conversa? conta o que existe de ENTRADA
+    const n = await env.DB.prepare("SELECT COUNT(*) c FROM wa_messages WHERE phone=? AND direction='in'").bind(phone).first();
+    if (Number((n && n.c) || 0) > 1) return;
+    const esperar = Math.max(0, Math.min(60, Number(cfg.delay_s) || 1));
+    if (esperar > 0) await new Promise((r) => setTimeout(r, esperar * 1000));
+    const r = await _waFunnelIniciar(env, String(atId), phone, String(cfg.seq_id));
+    if (!r.ok) console.log('FUNIL_AUTO_FALHOU', phone, r.error || '');
+  } catch (e) { try { console.log('FUNIL_AUTO_ERRO', String((e && e.message) || e).slice(0, 120)); } catch (_) {} }
+}
+
+// INICIA UM FUNIL numa conversa. Extraida do handleWAFunnel pra o disparo AUTOMATICO (lead novo)
+// usar exatamente o mesmo caminho do manual - duas implementacoes divergiriam na primeira mudanca.
+async function _waFunnelIniciar(env, atId, phone, seqId) {
+  const info = await _waFunnelSeq(env, String(seqId || ''));
+  if (!info || !info.items.length) return { ok: false, error: 'sequência sem itens' };
   const now = Math.floor(Date.now() / 1000);
-  const first = await _waFunnelSendItem(env, atId, phone, info.items[0], info);
-  if (first && first.ok === false) return json({ ok: false, error: first.error, code: first.code || null }, first.code === 'window_closed' ? 409 : 400);
+  // PINA O NUMERO AGORA. O funil inteiro vai falar por este chip, mesmo que a conversa seja
+  // re-carimbada no meio (o lead escrevendo pro outro numero do mesmo vendedor).
+  let instConv = '';
+  try {
+    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(phone).first();
+    instConv = String((c && c.instance) || '');
+  } catch (_) {}
+  const _pin = instConv ? await _apiNumFromInstance(env, instConv) : null;
+  const apiNumPin = (_pin && _pin.verified) ? _pin : null;
+  const first = await _waFunnelSendItem(env, atId, phone, info.items[0], info, apiNumPin, instConv);
+  if (first && first.ok === false) return { ok: false, error: first.error, code: first.code || null };
   const st = info.items.length > 1 ? 'running' : 'done';
   await env.DB.prepare(
-    `INSERT INTO wa_funnel_run (phone, at_id, seq_id, items, idx, next_at, status, updated_at) VALUES (?,?,?,?,?,?,?,?)
-     ON CONFLICT(phone) DO UPDATE SET at_id=excluded.at_id, seq_id=excluded.seq_id, items=excluded.items, idx=excluded.idx, next_at=excluded.next_at, status=excluded.status, updated_at=excluded.updated_at`
-  ).bind(phone, atId, info.seq.id, JSON.stringify(info.items), 1, now + WA_FUNNEL_GAP, st, now).run();
-  return json({ ok: true, sent: 1, total: info.items.length, status: st });
+    `INSERT INTO wa_funnel_run (phone, at_id, seq_id, items, idx, next_at, status, updated_at, tentativas, parar_resp, iniciado_em, inst) VALUES (?,?,?,?,?,?,?,?,0,?,?,?)
+     ON CONFLICT(phone) DO UPDATE SET at_id=excluded.at_id, seq_id=excluded.seq_id, items=excluded.items, idx=excluded.idx, next_at=excluded.next_at, status=excluded.status, updated_at=excluded.updated_at, tentativas=0, parar_resp=excluded.parar_resp, iniciado_em=excluded.iniciado_em, inst=excluded.inst`
+  ).bind(phone, atId, info.seq.id, JSON.stringify(info.items), 1, now, st, now, info.pararResp ? 1 : 0, now, instConv || '').run();
+  return { ok: true, sent: 1, total: info.items.length, status: st };
 }
 
 async function handleWhatsappCloudWebhook(req, env, ctx) {
@@ -4742,6 +7204,47 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
         const selfNumber = String(val?.metadata?.display_phone_number || '').replace(/\D/g, '');
         const nomePorWa = {};
         (val?.contacts || []).forEach(c => { if (c?.wa_id) nomePorWa[String(c.wa_id).replace(/\D/g, '')] = (c?.profile?.name || ''); });
+        // ── O QUE ACONTECEU COM O QUE A GENTE MANDOU ──────────────────────────────
+        // A Meta manda um evento por mudanca de estado da mensagem: sent (ela aceitou e vai
+        // entregar), delivered (chegou no aparelho), read (o lead abriu) e failed (nao vai chegar,
+        // com o motivo). A gente nunca leu isso, entao o inbox mostrava "enviado" pra sempre - foi
+        // o que fez o vendedor achar que tinha mandado e o lead nunca receber.
+        //
+        // Guardo direto na propria mensagem (msg_id = o wamid que a Meta devolveu no envio). Ordem
+        // importa: a Meta pode reentregar eventos fora de ordem, entao 'read' nao pode voltar pra
+        // 'sent'. O `failed` sempre ganha, porque e o unico que exige acao de alguem.
+        const _ordemSt = { sent: 1, delivered: 2, read: 3 };
+        for (const st of (val?.statuses || [])) {
+          const wamid = String(st?.id || '');
+          if (!wamid) continue;
+          const estado = String(st?.status || '').toLowerCase();
+          const quando = Number(st?.timestamp) || now;
+          const e0 = (Array.isArray(st?.errors) && st.errors[0]) || null;
+          const motivo = e0 ? [e0.code, e0.title || e0.message, e0?.error_data?.details].filter(Boolean).join(' · ').slice(0, 300) : null;
+          try {
+            if (estado === 'failed') {
+              await env.DB.prepare('UPDATE wa_messages SET status=?, err=?, status_ts=? WHERE msg_id=?')
+                .bind('failed', motivo || 'falhou (sem motivo informado)', quando, wamid).run();
+            } else if (_ordemSt[estado]) {
+              // so avanca: COALESCE trata a linha que ainda nao tem status
+              await env.DB.prepare(
+                `UPDATE wa_messages SET status=?, status_ts=? WHERE msg_id=?
+                   AND COALESCE(status,'') <> 'failed'
+                   AND (CASE COALESCE(status,'') WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 WHEN 'sent' THEN 1 ELSE 0 END) < ?`
+              ).bind(estado, quando, wamid, _ordemSt[estado]).run();
+            }
+          } catch (_) {}
+          // Falha fica registrada tambem no audit, que e onde a gente olha quando o Bruno pergunta
+          // "por que nao chegou" - a linha da mensagem guarda o estado atual, o audit guarda a
+          // historia.
+          if (estado === 'failed') {
+            try {
+              await env.DB.prepare('INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+                .bind('cloud-status', selfNumber, String(st?.recipient_id || '').replace(/\D/g, ''), 1, wamid, 'failed', String(motivo || '').slice(0, 2000), '', quando, now, null).run();
+            } catch (_) {}
+          }
+        }
+
         for (const m of (val?.messages || [])) {
           const phone = String(m?.from || '').replace(/\D/g, '');
           const msgId = String(m?.id || '');
@@ -4761,7 +7264,7 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
               .bind('cloud', selfNumber, phone, 0, msgId, type, String(bodyTxt).slice(0, 2000), pushName, ts, now, atId).run();
           } catch (_) {}
           if (atId && phone) {
-            const inst = ownInst || ('ax_' + atId);
+            const inst = _instComNumero(atId, selfNumber, ownInst);
             try { await _waLogMsg(env, { phone, instance: inst, direction: 'in', type, body: String(bodyTxt), pushName, ts, msgId: msgId || null }); } catch (_) {}
             // Mídia recebida: a Meta manda só o id. Baixa em background (nunca bloqueia o ACK 200).
             try {
@@ -4770,6 +7273,8 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
             } catch (_) {}
             // Lead respondeu → para o funil automático (não empurra áudio por cima da resposta dele).
             try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+            // Lead NOVO: dispara o funil escolhido em Sale Chat. Em waitUntil pra nao segurar o ACK.
+            try { if (ctx && ctx.waitUntil) ctx.waitUntil(_waFunnelAuto(env, atId, phone)); } catch (_) {}
             try {
               if (!_attribTablesOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); _attribTablesOk = true; } catch (_) {} }
               await _waLeadCapture(env, inst, phone, String(bodyTxt), selfNumber, type, ts);
@@ -4909,14 +7414,48 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
   // baixadas = teto de downloads de midia por rodada do cron. nFalhasMsgs = conversa cujo historico
   // falhou: e o que faz o sync se declarar PARCIAL em vez de dizer que deu tudo certo.
   let nChats = 0, nMsgs = 0, baixadas = 0, nFalhasMsgs = 0;
+  // ORCAMENTO DE CPU (18/08/2026). Esta conta e Workers FREE: 10ms de CPU por invocacao. O laco
+  // abaixo fazia, PARA CADA conversa, um SELECT no D1 (dono do numero) e um GET de historico na API
+  // do Datacrazy - com 19 conversas isso e 19 consultas e 19 requisicoes por batida, toda batida,
+  // inclusive pras conversas que ninguem tocou desde ontem. Estourava o limite e a batida morria no
+  // meio, calada. Tres economias, nenhuma muda o resultado:
+  //  (a) os donos vem numa consulta so, num mapa;
+  //  (b) o que ja esta gravado vem numa consulta so, num mapa;
+  //  (c) conversa cujo lastMessageDate NAO passou do que ja temos nao busca historico nenhum.
+  const donos = new Map();
+  try {
+    const dr = await env.DB.prepare('SELECT display_phone, at_id FROM wa_api_numbers').all();
+    for (const x of (dr.results || [])) if (x.display_phone) donos.set(String(x.display_phone), x.at_id || '');
+  } catch (_) {}
+  // MARCADOR PROPRIO DO SYNC ("ja puxei o historico desta conversa ate T"). Antes o gate comparava a
+  // lastMessageDate do Datacrazy com wa_chats.last_ts, e isso furava de DOIS jeitos, os dois medidos
+  // em 19/08/2026:
+  //   1) ENVIO NOSSO adiantava o last_ts. O Datacrazy NAO enxerga o que sai pela Cloud API, entao uma
+  //      mensagem que o VENDEDOR mandou do celular as 09:44 ficava atras do nosso envio das 09:46 e a
+  //      conversa era pulada PARA SEMPRE - 45min depois ela ainda nao estava na thread.
+  //   2) O POLL, que roda ANTES na mesma batida, gravava a ULTIMA mensagem e ja igualava o last_ts.
+  //      Se o lead mandasse tres audios seguidos, o sync pulava a conversa e os dois primeiros
+  //      sumiam: so o ultimo entrava no inbox.
+  // Agora o marcador so anda quando o historico foi REALMENTE puxado, e quem escreve nele e so este
+  // sync. Envio nosso e gravacao do poll nao mexem mais nele.
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_sync_wm (phone TEXT PRIMARY KEY, ts INTEGER)').run(); } catch (_) {}
+  const jaTem = new Map();
+  try {
+    const jr = await env.DB.prepare('SELECT phone, ts FROM dc_sync_wm').all();
+    for (const x of (jr.results || [])) jaTem.set(String(x.phone), Number(x.ts) || 0);
+  } catch (_) {}
+  // Teto de historicos por batida. O que passar do teto entra na proxima (a lista vem da mais nova
+  // pra mais antiga, entao o que interessa vem primeiro).
+  let historicos = 0;
+  const TETO_HISTORICO = 10;   // era 6; com o marcador proprio passam mais conversas por batida e o plano e pago
   for (const c of lista) {
     const phone = String(c?.contact?.phoneNumber || c?.contact?.contactId || '').replace(/\D/g, '');
     if (!phone) continue;
     // instância = número NOSSO que recebeu. Mesmo formato do resto da dash (ax_<at>_<8díg>) quando
     // o número já tem dono; senão marca a origem pra não sumir da lista do diretor.
     const selfNum = String(c?.instance?.config?.phoneNumber || '').replace(/\D/g, '');
-    const dono = selfNum ? await env.DB.prepare('SELECT at_id FROM wa_api_numbers WHERE display_phone = ?').bind(selfNum).first().catch(() => null) : null;
-    const inst = (dono && dono.at_id) ? ('ax_' + dono.at_id + '_' + selfNum.slice(-8)) : ('dc_' + (selfNum || 'sem'));
+    const donoAt = selfNum ? (donos.get(selfNum) || '') : '';
+    const inst = donoAt ? ('ax_' + donoAt + '_' + selfNum.slice(-8)) : ('dc_' + (selfNum || 'sem'));
     const nome = String(c?.name || c?.contact?.name || '').slice(0, 120);
     const lm = c?.lastMessage || {};
     const ts = Math.floor(new Date(c?.lastMessageDate || lm.createdAt || Date.now()).getTime() / 1000);
@@ -4926,17 +7465,38 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
     // com a linha em branco e parece que nao respondeu nada.
     const anexoLM = _dcAttach(lm);
     const txt = (String(lm.body || '') || (anexoLM ? '[' + anexoLM.tipo + ']' : '')).slice(0, 500);
+    // GUARDA DE RECENCIA (WHERE no fim do DO UPDATE). wa_chats e chaveada so por TELEFONE, mas o
+    // mesmo contato pode ter uma conversa por numero NOSSO. Sem esta guarda as duas caiam na mesma
+    // linha e se desfaziam a cada rodada de 2 min: a mais nova entrava e subia o last_ts, a mais
+    // velha empurrava de volta, e no ciclo seguinte a condicao de nao-lida dava verdadeiro de novo.
+    // O contador crescia sozinho pra sempre (achamos um em 65 sem mensagem desde 28/07), o inbox
+    // tocava o ding e notificava de 2 em 2 minutos sem ninguem ter escrito, e o `instance` ficava
+    // preso na conversa MAIS ANTIGA - o que joga a conversa pro inbox do vendedor errado, porque o
+    // escopo por cargo filtra justamente por instance.
+    // Com a guarda a linha assenta na conversa mais RECENTE, que e a que tem o dono certo.
     await env.DB.prepare(
       `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
        VALUES (?,?,?,?,?,?,?,strftime('%s','now'))
        ON CONFLICT(phone) DO UPDATE SET
-         instance=excluded.instance, name=COALESCE(NULLIF(excluded.name,''), wa_chats.name),
+         -- mesma regra do _waLogMsg: quem RECEBEU manda no carimbo (ver comentario la).
+         instance=CASE WHEN excluded.last_dir='in' THEN excluded.instance
+                       WHEN wa_chats.instance GLOB '*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                         OR wa_chats.instance GLOB 'dc_[0-9]*' THEN wa_chats.instance
+                       ELSE excluded.instance END, name=COALESCE(NULLIF(excluded.name,''), wa_chats.name),
          last_text=excluded.last_text, last_ts=excluded.last_ts, last_dir=excluded.last_dir,
          unread=CASE WHEN excluded.last_ts > COALESCE(wa_chats.last_ts,0) AND excluded.last_dir='in'
                      THEN COALESCE(wa_chats.unread,0) + 1 ELSE COALESCE(wa_chats.unread,0) END,
-         updated_at=strftime('%s','now')`
+         updated_at=strftime('%s','now')
+       WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
     ).bind(phone, inst, nome, txt, ts, dir, dir === 'in' ? 1 : 0).run().catch(() => {});
     nChats++;
+    // NADA MUDOU NESTA CONVERSA: pula o historico. A lista ja traz o lastMessageDate, entao da pra
+    // saber sem gastar uma requisicao. Conversa nova (nao esta no mapa) sempre busca, pra trazer o
+    // historico da primeira vez.
+    const tinha = jaTem.get(phone);
+    if (tinha !== undefined && ts <= tinha) continue;
+    if (historicos >= TETO_HISTORICO) { nFalhasMsgs++; continue; }   // fica pra proxima batida
+    historicos++;
     // histórico da conversa
     // Falha aqui NAO derruba a rodada (a conversa ja entrou na lista), mas e CONTADA: senao
     // "puxei 40 conversas e zero mensagem" passava como sucesso completo.
@@ -4966,6 +7526,19 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
       // rodada pra nao estourar o tempo do cron; o que passar do teto continua com a URL do Datacrazy
       // e cai no R2 na proxima rodada (o WHERE acima deixa passar enquanto for http).
       const nova = !!(ins && ins.meta && ins.meta.changes);
+      // ── A VENDA E DETECTADA AQUI, NO HISTORICO, e nao so na ultima mensagem ────────────────
+      // O _dcPoll so olha `lastMessage` da conversa. Se o vendedor manda "Pedido Concluido" e digita
+      // qualquer outra coisa antes da proxima rodada (2 min), a frase deixa de ser a ultima e a
+      // venda NUNCA e detectada: nao entra em wa_sales, nao conta pro vendedor e nao vai pro pixel.
+      // Foi o que aconteceu com a venda do Guilherme em 19/08/2026 - ele mandou o "Pedido Concluido"
+      // as 11:42:37 e a mensagem seguinte saiu 13 SEGUNDOS depois. A do Murilo entrou porque a frase
+      // dele ficou por acaso como ultima na hora da rodada. Ou seja: detectar venda estava na sorte.
+      // Aqui a gente ve TODA mensagem do historico, entao a frase nao escapa. So dispara na primeira
+      // vez que a mensagem entra (`nova`), e o _waDetectSale ainda e idempotente por msg_id.
+      if (nova && !m?.received && /pedido\s+conclu/i.test(corpo)) {
+        try { await _waDetectSale(env, inst, { message: { conversation: corpo }, key: { remoteJid: phone + '@c.us', id: 'dc:' + id, fromMe: true } }); }
+        catch (e) { console.error('[dc-sync] venda do historico falhou: ' + String((e && e.message) || e)); }
+      }
       if (anexo && nova && baixadas < 12) {
         baixadas++;
         const rkey = await _dcStoreAttachment(env, anexo.url, anexo.mime);
@@ -4973,6 +7546,8 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
       }
       nMsgs++;
     }
+    // Historico desta conversa puxado ate a ultima mensagem que o Datacrazy conhece: marca. So aqui.
+    try { await env.DB.prepare('INSERT INTO dc_sync_wm (phone, ts) VALUES (?,?) ON CONFLICT(phone) DO UPDATE SET ts=excluded.ts WHERE excluded.ts > dc_sync_wm.ts').bind(phone, ts).run(); } catch (_) {}
   }
   // Sucesso de verdade = a lista veio. Se o historico de alguma conversa falhou sai como PARCIAL,
   // com o numero na mao, pra tela poder avisar em vez de mostrar um "ok" mentiroso.
@@ -4983,6 +7558,98 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
 
 // POST /api/wa/dc/sync — puxa o inbox do Datacrazy na hora (o cron de 2min já faz sozinho).
 // Serve pro botão de recarregar do Atendimento não depender de esperar a próxima rodada.
+// GET /api/tt/diag  → descobre POR QUE o TikTok recusa o evento quando ele sai do Worker.
+// Nao cria evento nenhum: bate no user/info (leitura) e num event/track com data VAZIO, que a API
+// recusa por validacao em vez de registrar conversao. O que interessa e o HTTP: 403 significa que
+// fomos barrados antes de chegar na API; 200 significa que passamos.
+// POST /api/tt/ads-config { token, advertiser_id }  → liga a leitura de gasto do TikTok.
+// Guarda em app_config e JA TESTA a credencial, devolvendo o gasto de hoje. Sem o teste, uma
+// credencial errada ficaria salva e o cartao mostraria zero pra sempre, parecendo que nao gastou.
+async function handleTtAdsConfig(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  let b = {}; try { b = await req.json(); } catch (_) {}
+  const token = String(b.token || '').trim();
+  const adv = String(b.advertiser_id || '').replace(/\D/g, '');
+  if (!token || !adv) return err('Preciso do token e do advertiser_id');
+  const hoje = _brDay();
+  const qs = new URLSearchParams({
+    advertiser_id: adv, report_type: 'BASIC', data_level: 'AUCTION_ADVERTISER',
+    dimensions: JSON.stringify(['advertiser_id']), metrics: JSON.stringify(['spend']),
+    start_date: hoje, end_date: hoje, page_size: '1',
+  });
+  let j = {}, http = 0;
+  try {
+    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/?' + qs.toString(), {
+      headers: { 'Access-Token': token, 'Accept': 'application/json', 'User-Agent': 'SellWave/1.0 (+https://sellwave.com.br)' },
+    });
+    http = r.status; j = await r.json().catch(() => ({}));
+  } catch (e) { return err('Não consegui falar com o TikTok: ' + String((e && e.message) || e), 502); }
+  if (String(j.code) !== '0') return err('O TikTok recusou: ' + String(j.message || ('HTTP ' + http)), 400);
+  await _writeConfig(env, 'tt_ads_token', token);
+  await _writeConfig(env, 'tt_advertiser_id', adv);
+  const lista = (j.data && j.data.list) || [];
+  const gasto = lista.reduce((a, x) => a + (Number(x && x.metrics && x.metrics.spend) || 0), 0);
+  return json({ ok: true, gasto_hoje: gasto, advertiser_id: adv });
+}
+async function handleTtDiag(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor', 403);
+  const { pixel, token } = await _ttPixelToken(env, '1', '');
+  const provas = [];
+  const bate = async (nome, url, init) => {
+    try {
+      const r = await fetch(url, init);
+      const t = await r.text();
+      provas.push({ nome, http: r.status, corpo: t.slice(0, 160) });
+    } catch (e) { provas.push({ nome, http: 0, corpo: 'rede: ' + String((e && e.message) || e) }); }
+  };
+  await bate('leitura (user/info)', 'https://business-api.tiktok.com/open_api/v1.3/user/info/', { headers: { 'Access-Token': token } });
+  const corpoVazio = JSON.stringify({ event_source: 'web', event_source_id: pixel, data: [] });
+  await bate('track sem UA', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json' }, body: corpoVazio });
+  await bate('track com UA de navegador', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json', 'Accept': 'application/json', 'Accept-Language': 'pt-BR,pt;q=0.9', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' }, body: corpoVazio });
+  await bate('track com UA curl', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json', 'User-Agent': 'curl/8.4.0' }, body: corpoVazio });
+  // ISOLA O QUE DISPARA O 403. Todos os eventos presos tem ttclid longo (250-320 caracteres); as
+  // sondas que passaram nao tinham. Aqui vai o MESMO formato, com ttclid de verdade, mas com pixel
+  // INVALIDO: se voltar 401/40001 (permissao), passamos pela protecao e o ttclid nao e o problema;
+  // se voltar 403, e ele (ou o tamanho do corpo). Nao registra conversao nenhuma nos dois casos.
+  let clidReal = '';
+  try { const q = await env.DB.prepare("SELECT ttclid FROM tt_events WHERE ttclid<>'' ORDER BY ts DESC LIMIT 1").first(); clidReal = (q && q.ttclid) || ''; } catch (_) {}
+  const comClid = JSON.stringify({ event_source: 'web', event_source_id: 'PIXEL_INVALIDO_DIAG',
+    data: [{ event: 'InitiateCheckout', event_time: Math.floor(Date.now() / 1000), event_id: 'diag_clid',
+             user: { phone: await sha256Hex('+5500000000000'), ttclid: clidReal } }] });
+  const semClid = JSON.stringify({ event_source: 'web', event_source_id: 'PIXEL_INVALIDO_DIAG',
+    data: [{ event: 'InitiateCheckout', event_time: Math.floor(Date.now() / 1000), event_id: 'diag_semclid',
+             user: { phone: await sha256Hex('+5500000000000') } }] });
+  const cab = { 'Access-Token': token, 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'SellWave/1.0 (+https://sellwave.com.br)' };
+  await bate('pixel invalido COM ttclid real (' + clidReal.length + ' chars)', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: cab, body: comClid });
+  await bate('pixel invalido SEM ttclid', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: cab, body: semClid });
+  // SONDA REMOVIDA (2a vez). Ela mandava pro pixel REAL um evento com nome invalido, apostando que o
+  // TikTok recusaria na validacao. Ele respondeu code=0 e ACEITOU: diagnostico registrando lixo no
+  // pixel que paga a campanha, exatamente o que eu tinha dito que nao ia repetir.
+  // REGRA: sonda que toca o pixel real usa event_source_id INVALIDO. Sempre.
+
+
+  // MESMO FORMATO DE UM EVENTO REAL (user com telefone em sha256 e ttclid), mas com pixel INVALIDO:
+  // a API recusa por validacao e nao registra conversao. Serve pra separar "fomos barrados por causa
+  // do formato" de "fomos barrados por causa do IP/ritmo".
+  const corpoReal = JSON.stringify({
+    event_source: 'web', event_source_id: 'PIXEL_INVALIDO_DIAG',
+    data: [{ event: 'InitiateCheckout', event_time: Math.floor(Date.now() / 1000), event_id: 'diag_' + Date.now(),
+             user: { phone: await sha256Hex('+5500000000000'), ttclid: 'E_C_P_DIAGNOSTICO' } }],
+  });
+  await bate('track com payload real (pixel invalido)', 'https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'SellWave/1.0 (+https://sellwave.com.br)' }, body: corpoReal });
+  // SONDA REMOVIDA (18/08/2026). Ela mandava um evento com o pixel VERDADEIRO e data de 8 dias
+  // atras, esperando que o TikTok recusasse por janela. Ele ACEITOU (code 0), ou seja: a sonda
+  // registrou um evento de mentira no pixel do Bruno. Um evento sem ttclid e com telefone falso nao
+  // muda otimizacao, mas diagnostico NAO PODE escrever no pixel que paga a campanha. O que ela
+  // provou ja esta provado: o Worker consegue enviar evento real, logo o 403 e passageiro, e o
+  // conserto e insistir (ver o reenvio em _ttRetryFailed).
+
+  return json({ ok: true, pixel_len: String(pixel || '').length, token_len: String(token || '').length, provas });
+}
 async function handleDcPollDiag(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -4996,6 +7663,11 @@ async function handleDcPollDiag(req, env) {
 async function handleDcSync(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // O sync fala com o Datacrazy pela NOSSA chave e traz as NOSSAS conversas. O botao de recarregar
+  // do Atendimento chama isto, e o afiliado tem a tela - entao ele gastava a nossa cota e via a
+  // contagem do nosso inbox no toast. Nao uso isDirector aqui de proposito: vendedor, cobrador e
+  // gestor NOSSOS usam esse botao todo dia e passariam a levar erro vermelho.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const r = await _dcSyncInbox(env, 60, 60).catch((e) => ({ ok: false, motivo: String((e && e.message) || e) }));
   // Falha de verdade (chave vencida, API fora, rede) tem que sair como ERRO HTTP: o api() do front
   // (axion-produtor/src/lib/api.js) so joga excecao quando o status nao e 2xx, e era exatamente por
@@ -5063,12 +7735,35 @@ async function handleDatacrazyEvent(req, env, ctx) {
     if (phone) {
       let atId = null, ownInst = '';
       if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
-      const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+      const inst = _instComNumero(atId, self, ownInst);   // idem: a instancia TEM que dizer qual numero recebeu
       const now = Math.floor(Date.now() / 1000);
       if (inst) {
-        try { await _waLogMsg(env, { phone, instance: inst, direction, type: 'text', body: text, pushName: name, ts: now }); } catch (_) {}
+        // MESMA MENSAGEM ENTRANDO 2x NO INBOX (19/08/2026, o Bruno viu 4 baloes iguais na tela).
+        // Este webhook gravava SEM msg_id, entao o _waLogMsg gerava um id aleatorio e o INSERT OR
+        // IGNORE nunca colidia com o 'dc:<id>' que o poll/sync grava da MESMA mensagem: as duas
+        // versoes ficavam na thread, com segundos de diferenca.
+        // 1) se a Automacao mandar o id da mensagem, usa ele com o MESMO prefixo do poll ('dc:') e a
+        //    colisao resolve sozinha;
+        // 2) se nao mandar (o corpo e montado a mao no Datacrazy), procura uma mensagem igual na
+        //    mesma conversa nos ultimos 120s e desiste. Perder uma repeticao real do lead dentro de
+        //    2min e MUITO mais barato que mostrar tudo dobrado.
+        const _dcId = String(_dcPick(b, ['msgId', 'messageId', 'message.id', 'messageID', 'id']) || '').trim();
+        let _pular = false;
+        if (!_dcId) {
+          try {
+            const _ja = await env.DB.prepare(
+              "SELECT 1 FROM wa_messages WHERE phone=? AND direction=? AND COALESCE(body,'')=? AND ts > ? LIMIT 1"
+            ).bind(phone, direction, String(text || ''), now - 120).first();
+            _pular = !!_ja;
+          } catch (_) {}
+        }
+        if (!_pular) {
+          try { await _waLogMsg(env, { phone, instance: inst, direction, type: 'text', body: text, pushName: name, ts: now, msgId: _dcId ? ('dc:' + _dcId) : null }); } catch (_) {}
+        }
         if (direction === 'in') {
           try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+          // Lead NOVO por este caminho tambem dispara o funil escolhido no Sale Chat.
+          try { if (ctx && ctx.waitUntil) ctx.waitUntil(_waFunnelAuto(env, atId, phone)); } catch (_) {}
           try { await _waLeadCapture(env, inst, phone, text, self, 'text', now); } catch (_) {}
           try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // negócio em "Lead Novo" + tag
         } else {
@@ -5197,6 +7892,7 @@ async function _dcPoll(env, opts = {}) {
   if (!_dcSeenOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_seen (msg_id TEXT PRIMARY KEY, ts INTEGER)').run(); _dcSeenOk = true; } catch (_) {} }
   const now = Math.floor(Date.now() / 1000);
   try { await env.DB.prepare("DELETE FROM dc_seen WHERE ts < strftime('%s','now')-172800").run(); } catch (_) {}   // poda > 2 dias
+  let baixadasLM = 0;   // teto de midias copiadas pro R2 por batida (igual ao _dcSyncInbox)
   for (const c of arr) {
     try {
       const lm = c.lastMessage;
@@ -5221,7 +7917,7 @@ async function _dcPoll(env, opts = {}) {
       if (!phone) { passo.sem_telefone++; continue; }
       let atId = null, ownInst = '';
       if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
-      const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+      const inst = _instComNumero(atId, self, ownInst);   // idem: a instancia TEM que dizer qual numero recebeu
       // QUARENTENA: número ainda SEM DONO (o _dcSyncInstances cadastra número novo do Datacrazy com
       // at_id nulo de propósito; até o Bruno atribuir na Contingência, resolveOwner devolve nada).
       // NÃO marca como visto: a próxima rodada do cron (2min) tenta de novo. Enquanto isso a mensagem
@@ -5251,12 +7947,29 @@ async function _dcPoll(env, opts = {}) {
       try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,?,?,?,?)").bind(phone, self || null, inbound ? 'in' : 'out', isSale ? 'poll-sale' : 'poll', text.slice(0, 500), JSON.stringify({ via: 'poll', convId: c.id, msgId }).slice(0, 1000)).run(); } catch (_) {}
       // msg_id com o MESMO prefixo do _dcSyncInbox ('dc:'), senão a mesma mensagem entra 2x no inbox
       // (o sync grava 'dc:<id>' e o poll gravaria '<id>', chaves diferentes, linha duplicada na tela).
-      try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId }); } catch (_) {}
+      // AUDIO DO LEAD SUMINDO DO INBOX (19/08/2026, reportado pelo vendedor do Guilherme). Aqui era
+      // type:'text' chumbado e o lastMessage.attachments ia pro lixo: nota de voz virava linha
+      // type='text' com body VAZIO, e o msgVisible() do front nao desenha balao nenhum pra isso. O
+      // vendedor ouvia o audio no WhatsApp e nao achava nada no inbox - "estava confundindo a cabeca,
+      // eu ouvia por um e respondia pelo outro".
+      // NAO adiantava contar com o _dcSyncInbox pra consertar depois: ele roda DEPOIS do poll na
+      // MESMA batida e pula a conversa quando `ts <= wa_chats.last_ts`, valor que o proprio poll
+      // acabou de igualar. Quem grava primeiro decide o tipo, e o poll grava primeiro quase sempre.
+      // Medido em 19/08: 16 audios no Datacrazy, 12 certos e 4 (os mais recentes) virados texto vazio.
+      const anexoLM = _dcAttach(lm);
+      let mediaLM = anexoLM ? anexoLM.url : null;   // CDN deles; o resolveMedia do front aceita url absoluta
+      if (anexoLM && baixadasLM < 12) {             // copia pro R2 (o CDN deles pode expirar); teto por batida
+        baixadasLM++;
+        try { const k = await _dcStoreAttachment(env, anexoLM.url, anexoLM.mime); if (k) mediaLM = k; } catch (_) {}
+      }
+      try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: anexoLM ? anexoLM.tipo : 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId, media_url: mediaLM }); } catch (_) {}
       if (inbound) {
         try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
+        // Aqui NAO ha ctx (roda no cron, que ja e fora do caminho de request), entao chama direto.
+        try { await _waFunnelAuto(env, atId, phone); } catch (_) {}
         // passa a MESMA janela do poll: aqui a mensagem já foi deduplicada por dc_seen, então o
         // teto de 15min só serviria pra descartar lead de verdade por atraso da API deles.
-        try { await _waLeadCapture(env, inst, phone, text, self, 'text', mts, janela); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
+        try { await _waLeadCapture(env, inst, phone, text, self, anexoLM ? anexoLM.tipo : 'text', mts, janela); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
         try { await _dcCrmLeadIn(env, phone, name); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy
       } else if (isSale) {
         let _sr2 = null;
@@ -5297,7 +8010,7 @@ async function _dcScanConvSales(env, c, now) {
   if (!phone) return;
   let atId = null, ownInst = '';
   if (self) { const ow = await resolveOwner(env, self); if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; } }
-  const inst = ownInst || (atId != null ? ('ax_' + atId) : '');
+  const inst = _instComNumero(atId, self, ownInst);   // idem
   if (!inst) return;
   for (const m of msgs) {
     if (m.received === true) continue;   // só outbound do vendedor
@@ -5310,7 +8023,11 @@ async function _dcScanConvSales(env, c, now) {
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)").bind(mid, now).run();
     if (!ins.meta || ins.meta.changes === 0) continue;   // já vista
     try { await env.DB.prepare("INSERT INTO dc_events (received_at, ok, phone, self, direction, event, text, raw) VALUES (strftime('%s','now'),1,?,?,'out','poll-sale',?,?)").bind(phone, self || null, body.slice(0, 500), JSON.stringify({ via: 'poll-scan', convId: c.id, msgId: mid }).slice(0, 1000)).run(); } catch (_) {}
-    try { await _waLogMsg(env, { phone, instance: inst, direction: 'out', type: 'text', body, ts: mts, msgId: mid }); } catch (_) {}
+    // PREFIXO 'dc:' OBRIGATORIO, igual ao _dcPoll e ao _dcSyncInbox. Sem ele a MESMA mensagem de
+    // "Pedido Concluido" entrava 2x na thread: aqui como '<id>' e la como 'dc:<id>', chaves
+    // diferentes, entao o INSERT OR IGNORE nunca colidia. Achado em 19/08/2026 com uma venda real
+    // duplicada no inbox. O proprio comentario do _dcPoll ja avisava disso.
+    try { await _waLogMsg(env, { phone, instance: inst, direction: 'out', type: 'text', body, ts: mts, msgId: 'dc:' + mid }); } catch (_) {}
     let _sr = null;
     try { _sr = await _waDetectSale(env, inst, { message: { conversation: body }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: mid, fromMe: true } }); } catch (_) {}
     if (_sr && _sr.sale) { try { await _dcCrmSale(env, phone, (c.contact && c.contact.name) || '', _sr.value, phone); } catch (_) {} }
@@ -5496,8 +8213,20 @@ async function _evoInstances(env) {
     return { name, state, number };
   }).filter(x => x.name);
 }
+// Recorta uma lista de instancias pelo que o usuario pode ver. null = sem corte (diretor).
+const _filtraInst = (lista, ids) => (ids === null ? lista : (lista || []).filter((x) => _instEhDe(x && x.name, ids)));
+// Filtra a lista de conexao pelo mundo de quem pediu. null = sem corte.
+const _connDoMundo = (lista, ids) => (ids === null ? lista : (lista || []).filter((x) => {
+  const inst = String((x && x.instance) || '');
+  // Instancia nomeada ax_<id>_... ou o Sale Chat, que usa sc_<numero> e nao carrega o id do dono.
+  // Sem dono resolvido, so diretor ve (fail-closed).
+  return _instEhDe(inst, ids);
+}));
 async function handleWAConn(req, env) {
   const u = await authUser(req, env);
+  // ESTA ROTA ENTREGAVA 19 CONEXOES COM O TELEFONE REAL DOS NOSSOS CHIPS (25/08/2026), e a tela de
+  // Pressels faz poll nela de 8 em 8 segundos. O corte e por instancia do mundo de quem pediu.
+  const _idsConn = u ? await _idsQuePossoVer(env, u) : [];
   if (!u) return err('Não autenticado', 401);
   await _waEnsureTables(env);
   // Saturação da roleta (todos os números bateram o teto de rajada recentemente) → a dash avisa
@@ -5584,7 +8313,7 @@ async function handleWAConn(req, env) {
           ).bind(it.name, String(it.state), it.number || '').run();
         } catch (_) {}
       }
-      return json({ ok: true, sat, conn: withApi(mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number })))) });
+      return json({ ok: true, sat, conn: _connDoMundo(withApi(mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number })))), _idsConn) });
     }
   } catch (_) {}
   // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
@@ -5605,7 +8334,8 @@ async function handleWAConn(req, env) {
     // 'open' (Evolution por QR) e 'cloud' (API oficial) contam como conexão viva.
     .filter(r => ['sc', 'open', 'cloud'].includes(String(r.state)))
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
-  return json({ ok: true, sat, semDono, conn: withApi(mergeSc(limpos)) });
+  // `semDono` e diagnostico da casa (numero sem atendente resolvido): nao vai pro mundo do afiliado.
+  return json({ ok: true, sat, semDono: (_idsConn === null ? semDono : []), conn: _connDoMundo(withApi(mergeSc(limpos)), _idsConn) });
 }
 
 // ─── Sale Chat (soundboard) ──────────────────────────────────
@@ -5614,6 +8344,17 @@ async function handleWAConn(req, env) {
 // Publico de proposito: sao roteiros de venda, nao dado sensivel; o injetor
 // (Node) e a extensao puxam isso pra montar o painel dentro do WhatsApp.
 async function handleSaleChatGet(req, env) {
+  // ESTA ROTA ENTREGAVA O NOSSO FUNIL INTEIRO (25/08/2026). Eu tinha podado o Sale Chat do
+  // /api/state e dado o assunto por resolvido; a varredura por rota mostrou que este endpoint
+  // dedicado continuava servindo o modelo da casa - 12 mensagens, 15 sequencias e 34 audios, que e
+  // exatamente o que o Bruno mandou NAO dar pra eles.
+  // Ele nao e publico: e o mesmo caminho que os bots usam, entao o gate e por mundo, nao 403 seco.
+  {
+    const _u = await authUser(req, env);
+    if (_u && (noMundoAfiliado(_u) || afiliadoSemVinculo(_u))) {
+      return json({ ok: true, perfil: 'vendedores', messages: [], media: [], sequences: [], triggers: [] });
+    }
+  }
   const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
   // Perfis independentes: vendedores (state.salechat) e cobradores (state.salechatCob).
@@ -5632,7 +8373,13 @@ async function handleSaleChatGet(req, env) {
     media: Array.isArray(sc.media) ? sc.media : [],
     triggers: Array.isArray(sc.triggers) ? sc.triggers : [],
     updated_at: sc.updated_at || 0,
-    ingest_token: await _scIngestToken(env),   // MODO TESTE: o injetor pega o token de captura daqui (travar antes de producao real)
+    // O TOKEN DE CAPTURA SAIU DAQUI (18/08/2026, auditoria pre-producao). Esta rota é PÚBLICA — os
+    // bots leem o modelo sem login — e ela devolvia o token junto. Com ele, qualquer um na internet
+    // injetava venda falsa (comissão pra vendedor + CompletePayment no pixel, envenenando a
+    // otimização da campanha) e batimento falso de número (a roleta mandaria lead de verdade pra um
+    // número que não está rodando nada, e o lead sumia).
+    // Quem já tem o Sale Chat instalado guardou o token na instalação; pra reconfigurar, ele sai em
+    // /api/salechat/health, que é só do diretor.
   });
 }
 // POST /api/salechat/media (Diretor) → sobe um arquivo pro R2. Body = bytes crus,
@@ -5663,8 +8410,76 @@ async function handleSaleChatMediaUpload(req, env) {
   return json({ ok: true, key, mime, size: buf.byteLength });
 }
 // GET /api/salechat/media/<key> → serve a mídia do R2 (público; o injetor puxa por aqui)
+// ── COMPROVANTE DO PEDIDO (imagem, video ou audio) ───────────────────────────
+//
+// A tela de Cadastro de Pedidos EXIGE comprovante pra venda na entrega, e o arquivo nunca era
+// guardado: o front chamava dispatchToFive(), que e um stub e so escrevia no console do navegador.
+// O vendedor anexava, cadastrava, e depois nao achava o arquivo em lugar nenhum - do lado dele
+// parecia que o upload nao funcionava. E o modal do pedido no Kanban lia lead.comprovante_url, um
+// campo que NINGUEM gravava, entao mostrava "Nenhum comprovante anexado" pra sempre.
+//
+// Aqui o arquivo vai pro R2 (mesmo bucket da midia do Sale Chat) e a resposta devolve a URL, que o
+// front guarda no lead. O arquivo NAO entra no estado: o blob tem teto de 1 MB e um video estouraria
+// tudo, derrubando qualquer gravacao da dash.
+// TETO DO COMPROVANTE. Subiu de 25 MB pra 95 MB em 19/08/2026: o Guilherme fechou uma venda, o
+// comprovante tinha 56 MB e o PEDIDO NAO FOI CADASTRADO - o erro barrava o cadastro inteiro, nao so
+// o anexo. Video de celular gravado em 4K passa fácil dos 25 MB.
+// 95 e o maximo com folga: o teto de corpo de requisicao do Cloudflare e 100 MB e NAO sobe com o
+// plano Workers Paid (ele muda CPU e invocacoes, nao o tamanho do corpo). Acima de 100 MB a
+// requisicao morre ANTES de chegar no nosso codigo, entao nao adianta subir mais este numero.
+const COMPROVANTE_MAX = 95 * 1024 * 1024;
+const COMPROVANTE_MAX_MB = Math.round(COMPROVANTE_MAX / 1048576);
+async function handleComprovanteUpload(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!env.MEDIA) return err('Armazenamento de arquivo não configurado', 503);
+  const qs = new URL(req.url).searchParams;
+  const mime = String(req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!/^(image|audio|video)\//.test(mime)) return err('Só imagem, áudio ou vídeo (recebi "' + (mime || 'nada') + '")');
+  // MEDE PELO CABECALHO E NAO CARREGA O ARQUIVO NA MEMORIA. Antes era arrayBuffer() antes de qualquer
+  // conferencia: um video de 90 MB era lido inteiro pra RAM do isolate (que tem 128 MB) so pra ser
+  // recusado na linha seguinte. Agora recusa pelo content-length, antes de ler um byte, e o corpo vai
+  // DIRETO pro R2 em fluxo. So cai no buffer quando o navegador nao manda o tamanho.
+  const declarado = Number(req.headers.get('content-length') || 0);
+  if (declarado > COMPROVANTE_MAX) {
+    return err('Arquivo muito grande (' + Math.round(declarado / 1048576) + ' MB). O limite é ' + COMPROVANTE_MAX_MB + ' MB.');
+  }
+  // extensao pelo nome que o front mandou; se nao vier, deduz do mime. Serve pra download e pro
+  // handleSaleChatMediaGet acertar o content-type do audio.
+  const nome = String(qs.get('nome') || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-60);
+  const extNome = (nome.match(/\.([a-zA-Z0-9]{2,5})$/) || [])[1];
+  const ext = (extNome || (mime.split('/')[1] || 'bin')).toLowerCase();
+  const lead = String(qs.get('lead') || 'sem').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'sem';
+  const key = 'comprovante/' + lead + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+  let tam = declarado;
+  try {
+    if (declarado > 0) {
+      await env.MEDIA.put(key, req.body, { httpMetadata: { contentType: mime } });
+    } else {
+      // sem content-length: nao da pra confiar no tamanho, entao le e confere antes de gravar
+      const buf = await req.arrayBuffer();
+      if (!buf || !buf.byteLength) return err('Arquivo vazio');
+      if (buf.byteLength > COMPROVANTE_MAX) return err('Arquivo muito grande (' + Math.round(buf.byteLength / 1048576) + ' MB). O limite é ' + COMPROVANTE_MAX_MB + ' MB.');
+      tam = buf.byteLength;
+      await env.MEDIA.put(key, buf, { httpMetadata: { contentType: mime } });
+    }
+  } catch (e) {
+    return err('Não deu pra guardar o arquivo: ' + String((e && e.message) || e), 502);
+  }
+  if (!tam) return err('Arquivo vazio');
+  const origem = new URL(req.url).origin;
+  return json({ ok: true, url: origem + '/api/arquivo/' + encodeURIComponent(key), key, mime, tam });
+}
+
 async function handleSaleChatMediaGet(req, env, key) {
   if (!env.MEDIA) return err('R2 não configurado', 503);
+  // O BACKUP DO ESTADO MORA NO MESMO BUCKET DA MIDIA, e esta rota e publica de proposito (o <img> e
+  // o <audio> do painel nao mandam cabecalho de autorizacao, e a Meta busca a midia do funil por
+  // link cru). Sem esta linha, quem adivinhasse a chave baixava a empresa inteira sem login:
+  // conferido em 18/08/2026, 270 KB com CPF do cliente, folha salarial nominal, 7 cartoes do
+  // ContaSimples e os 42 chips. A chave e previsivel (backups/state-<ts>-v<versao>.json).
+  // Backup nao e midia: nao sai por aqui, ponto.
+  if (String(key || '').startsWith(BACKUP_PREFIX) || String(key || '').startsWith('backups/')) return err('Mídia não encontrada', 404);
   try {
     const obj = await env.MEDIA.get(key);
     if (!obj) return err('Mídia não encontrada', 404);
@@ -5681,10 +8496,31 @@ async function handleSaleChatMediaGet(req, env, key) {
   } catch (e) { return err('Erro ao ler mídia: ' + (e.message || ''), 502); }
 }
 // DELETE /api/salechat/media/<key> (Diretor)
+// APAGAR ARQUIVO E IRREVERSIVEL, entao ele so sai se ninguem estiver usando.
+//
+// Antes esta rota apagava do R2 direto, sem olhar nada. O caminho perigoso e trocar o arquivo de um
+// audio: a tela apaga o antigo NA HORA, mas o PUBLICADO (que o bot e os vendedores usam) continua
+// apontando pro arquivo velho ate o Bruno clicar em "Salvar e publicar" - e se ele fechar a tela no
+// meio, ou nunca publicar, o funil publicado fica apontando pra um arquivo que nao existe mais. Nao
+// da pra desfazer: o R2 aqui nao tem versao anterior. Conferido em 18/08/2026: a copia particular do
+// Guilherme ja tem 11 audios nessa situacao (o modelo publicado, esse sim, esta inteiro).
+//
+// Arquivo orfao acumulando no R2 custa centavos. Audio de venda perdido custa venda.
 async function handleSaleChatMediaDelete(req, env, key) {
   const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Apenas Diretor', 403);
-  if (env.MEDIA) { try { await env.MEDIA.delete(key); } catch (_) {} }
+  const alvo = String(key || '');
+  if (!alvo) return err('key obrigatória');
+  try {
+    const data = await _getDashData(env, 0);   // sem cache: a decisao e sobre o estado de AGORA
+    const perfis = [data.salechat, data.salechatPub, data.salechatCob, data.salechatCobPub];
+    for (const m of [data.scVend, data.scVendPub]) {
+      if (m && typeof m === 'object') for (const k of Object.keys(m)) perfis.push(m[k]);
+    }
+    const usada = perfis.some((sc) => sc && Array.isArray(sc.media) && sc.media.some((x) => x && String(x.key || '') === alvo));
+    if (usada) return json({ ok: false, em_uso: true, error: 'Esse arquivo ainda está em uso no Sale Chat. Tire ele da lista primeiro; o arquivo antigo fica guardado.' }, 409);
+  } catch (_) { return err('Não deu pra conferir se o arquivo está em uso; não apaguei.', 503); }
+  if (env.MEDIA) { try { await env.MEDIA.delete(alvo); } catch (_) {} }
   return json({ ok: true });
 }
 
@@ -5698,17 +8534,50 @@ async function handleWAChats(req, env) {
   const inst = (url.searchParams.get('instance') || '').trim();
   const assigned = (url.searchParams.get('assigned') || '').trim();
   const q = (url.searchParams.get('q') || '').trim();
-  let sql = 'SELECT phone, instance, name, last_text, last_ts, last_dir, unread, assigned_to, crm_stage FROM wa_chats';
+  // LEVA A JANELA DE 24H JUNTO DA LISTA (19/08/2026). A tela so sabia da janela DENTRO da conversa
+  // aberta, entao lead esperando resposta era invisivel na lista: em 19/08 dois leads perderam a
+  // janela sem ninguem responder e outros tres estavam a menos de 40min de perder. `ult_in` = ultima
+  // mensagem QUE O LEAD mandou (e dela que conta as 24h da Meta); `ult_out` = ultima resposta NOSSA
+  // que nao falhou. Se ult_out < ult_in, a bola esta com a gente.
+  // Um LEFT JOIN sobre um GROUP BY unico, nao subconsulta por linha: sao ate 300 conversas por
+  // requisicao e o inbox faz poll.
+  let sql = `SELECT c.phone, c.instance, c.name, c.last_text, c.last_ts, c.last_dir, c.unread, c.assigned_to, c.crm_stage,
+                    m.ult_in, m.ult_out
+             FROM wa_chats c
+             LEFT JOIN (SELECT phone,
+                               MAX(CASE WHEN direction='in' THEN ts END) ult_in,
+                               MAX(CASE WHEN direction='out' AND status IS NULL THEN ts END) ult_out
+                        FROM wa_messages GROUP BY phone) m ON m.phone = c.phone`;
   const where = [], binds = [];
-  if (inst) { where.push('instance = ?'); binds.push(inst); }
-  if (assigned) { where.push('assigned_to = ?'); binds.push(assigned); }
-  if (q) { where.push('(name LIKE ? OR phone LIKE ?)'); binds.push('%' + q + '%', '%' + q.replace(/\D/g, '') + '%'); }
+  if (inst) { where.push('c.instance = ?'); binds.push(inst); }
+  if (assigned) { where.push('c.assigned_to = ?'); binds.push(assigned); }
+  if (q) { where.push('(c.name LIKE ? OR c.phone LIKE ?)'); binds.push('%' + q + '%', '%' + q.replace(/\D/g, '') + '%'); }
   // Escopo por vendedor: quem não é diretor só vê as próprias conversas (a instância dele).
   // Compara por PREFIXO: com a instância por número (ax_<at>_<8díg>) a igualdade exata deixava o
   // vendedor com o Atendimento VAZIO. substr em vez de LIKE porque '_' é curinga no LIKE.
-  if (!isDirector(u)) { const _pf = 'ax_' + u.id + '_'; where.push('(instance = ? OR substr(instance,1,?) = ?)'); binds.push('ax_' + u.id, _pf.length, _pf); }
+  // O MUNDO DO AFILIADO VEM PRIMEIRO, ANTES DO COBRADOR (25/08/2026). O cobrador que o AFILIADO
+  // cadastra tem role 'cobrador': testando cobrador antes, ele caia no ramo "ve tudo que fechou
+  // venda" e enxergava as NOSSAS conversas. Medido: 56 conversas nossas na conta dele.
+  // Dentro do mundo dele o cobrador continua com a regra de cobrador (ve o que fechou), mas so
+  // entre as conversas do mundo dele - as duas condicoes se somam com AND.
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) {
+    if (_ehCobrador(u)) where.push("c.crm_stage = 'fechou'");
+    // Afiliado: as conversas dele E as da equipe dele. Sem nenhuma pessoa no mundo (nem ele), a
+    // condicao vira 1=0 e a lista sai vazia - nunca "sem filtro", que entregaria o inbox inteiro.
+    const ids = await _idsDoMundoAfiliado(env, aflDe(u));
+    if (!ids.length) where.push('1=0');
+    else {
+      const ors = [], bs = [];
+      for (const id of ids) { const pf = 'ax_' + id + '_'; ors.push('(c.instance = ? OR substr(c.instance,1,?) = ?)'); bs.push('ax_' + id, pf.length, pf); }
+      where.push('(' + ors.join(' OR ') + ')');
+      binds.push(...bs);
+    }
+  } else if (_ehCobrador(u)) {
+    // Cobrador: todas as conversas, de qualquer vendedor, MAS so as que ja fecharam venda.
+    where.push("c.crm_stage = 'fechou'");
+  } else if (!isDirector(u)) { const _pf = 'ax_' + u.id + '_'; where.push('(c.instance = ? OR substr(c.instance,1,?) = ?)'); binds.push('ax_' + u.id, _pf.length, _pf); }
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
-  sql += ' ORDER BY last_ts DESC LIMIT 300';
+  sql += ' ORDER BY c.last_ts DESC LIMIT 300';
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   // Saude do sync do Datacrazy junto da lista: e o unico jeito de a tela avisar sem ninguem clicar
   // em nada (o cron roda a cada 2min e o botao de recarregar quase nunca e apertado). Cache de 30s
@@ -5732,15 +8601,18 @@ async function handleWAMessages(req, env) {
   const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   const limit = Math.min(500, Number(url.searchParams.get('limit')) || 200);
-  const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to FROM wa_chats WHERE phone = ?').bind(phone).first();
-  // Escopo por vendedor: quem não é diretor só abre conversa da própria instância.
-  if (!isDirector(u)) {
+  const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to, crm_stage FROM wa_chats WHERE phone = ?').bind(phone).first();
+  // Cobrador: abre QUALQUER conversa que ja fechou venda (e o historico do cliente que ele vai
+  // cobrar), e so essas. Ler nao e falar: o envio segue barrado no _podeFalarNaConversa.
+  if (_ehCobrador(u)) {
+    if (!chat || String(chat.crm_stage || '') !== 'fechou') return err('Sem acesso a essa conversa', 403);
+  } else if (!isDirector(u)) {
     // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
     const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
     if (!chat || !_meu(chat.instance)) return err('Sem acesso a essa conversa', 403);
   }
   const rows = await env.DB.prepare(
-    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
+    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url, status, err FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
   ).bind(phone, limit).all();
   return json({ ok: true, phone, chat: chat || null, messages: rows.results || [] });
 }
@@ -5755,7 +8627,10 @@ async function handleWALead(req, env) {
   const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   // Escopo por vendedor: quem não é diretor só vê lead de conversa da própria instância.
-  if (!isDirector(u)) {
+  if (_ehCobrador(u)) {
+    const chat = await env.DB.prepare('SELECT crm_stage FROM wa_chats WHERE phone = ?').bind(phone).first();
+    if (!chat || String(chat.crm_stage || '') !== 'fechou') return err('Sem acesso a esse lead', 403);
+  } else if (!isDirector(u)) {
     const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
     // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
     const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
@@ -5779,6 +8654,14 @@ async function handleWAChatRead(req, env) {
   const body = await req.json().catch(() => null);
   const phone = String(body?.phone || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
+  // ERA O UNICO DA FAMILIA SEM CHECAGEM (auditoria 24/08/2026): zerava o "nao lido" de qualquer
+  // conversa nossa so mandando o telefone. Marcar como lido some com o aviso na tela de quem
+  // deveria responder, entao vale a mesma regra de dono das irmas.
+  const _idsR = await _idsQuePossoVer(env, u);
+  if (_idsR !== null && !_ehCobrador(u)) {
+    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    if (c && !_instEhDe(c.instance, _idsR)) return err('Conversa não encontrada', 404);
+  }
   await env.DB.prepare('UPDATE wa_chats SET unread = 0 WHERE phone = ?').bind(phone).run();
   return json({ ok: true });
 }
@@ -5791,6 +8674,21 @@ async function handleWAChatAssign(req, env) {
   const phone = String(body?.phone || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   const assigned = body?.user_id == null || body.user_id === '' ? null : String(body.user_id);
+  // QUEM PODE PASSAR CONVERSA PRA QUEM. Sem isto, qualquer login (ate um afiliado) reatribuia
+  // QUALQUER conversa pra QUALQUER pessoa - e como a venda segue o dono da conversa, era comissao
+  // trocando de mao com uma chamada. Diretor remaneja a vontade; o resto so puxa pra si mesmo, e so
+  // conversa que esta sem dono ou que ja e dele.
+  if (!isDirector(u)) {
+    if (assigned !== null && assigned !== String(u.id)) return err('Voce so pode puxar a conversa pra voce', 403);
+    const dono = await env.DB.prepare('SELECT assigned_to, instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const atual = dono && dono.assigned_to != null ? String(dono.assigned_to) : '';
+    if (atual && atual !== String(u.id)) return err('Essa conversa e de outro vendedor. So um diretor passa.', 403);
+    // CONVERSA SEM DONO TAMBEM TEM MUNDO (auditoria 24/08/2026). A checagem acima so barra conversa
+    // que JA tem dono, entao uma conversa NOSSA ainda sem assigned_to podia ser carimbada pelo
+    // afiliado. E como a venda segue o dono da conversa, isso e comissao trocando de mao.
+    const _idsA = await _idsQuePossoVer(env, u);
+    if (_idsA !== null && dono && !_instEhDe(dono.instance, _idsA)) return err('Conversa não encontrada', 404);
+  }
   await env.DB.prepare("UPDATE wa_chats SET assigned_to = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(assigned, phone).run();
   return json({ ok: true });
 }
@@ -5805,6 +8703,8 @@ async function handleWAChatStage(req, env) {
   const stage = String(body?.stage || '').trim().slice(0, 40);
   if (!phone || !stage) return err('phone e stage obrigatórios');
   if (!['novo', 'atendimento', 'sem_resposta', 'qualificado', 'fechou', 'perdido', 'lixo'].includes(stage)) return err('stage inválido');
+  // Cobrador NAO move card: a area dele e de leitura. Mover mudaria a etapa do vendedor.
+  if (_ehCobrador(u)) return err('Sua área do inbox é só pra consulta', 403);
   // Escopo por vendedor: só mexe em conversa da própria instância.
   if (!isDirector(u)) {
     const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
@@ -5820,10 +8720,22 @@ async function handleWAChatStage(req, env) {
 async function _waDetectSale(env, instance, data) {
   const m = data?.message || {};
   const text = m.conversation || m.extendedTextMessage?.text || '';
-  if (!text || text.toLowerCase().indexOf('pedido conclu') < 0) return { sale: false }; // assinatura da venda (case-insensitive: "PEDIDO CONCLUÍDO" também dispara)
+  // ASSINATURA DA VENDA. Era so 'pedido conclu': no primeiro dia real (18/08/2026) o vendedor
+  // escreveu "Pedido finalizado" e NENHUMA venda foi capturada - wa_sales ficou vazia o dia inteiro,
+  // e com ela sumiu o verde na lista de leads, a aba Pedidos e a ponte CPF/atendente.
+  // Agora aceita as formas que eles usam de verdade. Continua exigindo a palavra "pedido" junto, pra
+  // um "finalizado" solto no meio da conversa nao virar venda.
+  const _txtV = text.toLowerCase();
+  if (!text || !/pedido\s*(conclu|finaliz|fechad|confirmad)/i.test(_txtV)) return { sale: false };
   const key = data?.key || {};
   const jid = String(key.remoteJid || '');
   if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
+  // QUEM FECHA A VENDA SOMOS NOS. O texto "Pedido Concluído" e a mensagem que o VENDEDOR manda; se
+  // o proprio lead escrever isso (reenviando a confirmacao, mandando print em texto, ou so
+  // repetindo), virava venda registrada + evento de compra no pixel do TikTok - dinheiro de
+  // anuncio otimizando pra mentira. No caminho Cloud a chamada sempre vem com fromMe:true; no
+  // webhook da Evolution ela chega pros DOIS lados, entao a guarda mora aqui, que e o lugar unico.
+  if (key.fromMe === false) return { sale: false };
   const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (!phone) return { sale: false };
   // Auto CRM: venda fechada -> card do Atendimento vai automatico pra "Fechou" (override de qualquer etapa).
@@ -5831,7 +8743,14 @@ async function _waDetectSale(env, instance, data) {
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
-  const msgId = (key && key.id) || null;
+  // MESMA MENSAGEM, DUAS CHAVES. Os dois caminhos do Datacrazy passam o MESMO id da mensagem em
+  // formatos diferentes: o _dcSyncInbox manda 'dc:<id>' e o _dcPoll manda '<id>' cru. Como o unico
+  // dedup era o indice UNIQUE em msg_id, e as duas strings sao diferentes, a venda entrava DUAS
+  // vezes - e, pior que a linha repetida na tela, o event_id do pixel tambem saia diferente e o
+  // TikTok recebeu DOIS CompletePayment da mesma venda (caso real: Geraldo Domingos, R$ 497, em
+  // 22/08/2026, os dois com code=0). Este mesmo erro ja tinha acontecido no wa_messages em 19/08 e
+  // foi corrigido la; aqui tinha ficado. Agora a chave e sempre a CRUA.
+  const msgId = String((key && key.id) || '').replace(/^dc:/, '') || null;
   // Ponte de atribuição: grava CPF → atendente (a instância = quem atendeu).
   const cpfDetect = extractCpf(text);
   if (cpfDetect) await saveCpfAttrib(env, cpfDetect, instance, name, phone);
@@ -5862,6 +8781,23 @@ async function _waDetectSale(env, instance, data) {
     });
     if (dupe) return { sale: true, value }; // mesmo pedido já registrado nas últimas 24h
     // idempotente por msg_id: reentrega do mesmo webhook não conta 2x nem dispara 2 CompletePayment
+    // TRES REDES, nesta ordem, porque cada uma pega um tipo de repetido:
+    //  1) a linha antiga que ficou gravada com 'dc:' (antes da normalizacao acima);
+    //  2) MESMO CLIENTE, MESMO VALOR, EM 10 MINUTOS - e o pedido do Bruno de "controle de
+    //     duplicata" aqui tambem: cobre o caso em que os ids sao completamente diferentes (a
+    //     mensagem chegou por dois caminhos, ou o vendedor mandou a confirmacao duas vezes);
+    //  3) o indice UNIQUE em msg_id, que continua sendo a trava final.
+    // Venda de verdade repetida pro mesmo cliente no mesmo valor em menos de 10 min nao existe na
+    // operacao: e sempre o mesmo pedido chegando de novo.
+    try {
+      const jaTem = await env.DB.prepare(
+        "SELECT 1 FROM wa_sales WHERE (msg_id IS NOT NULL AND msg_id = ?) OR (phone = ? AND ABS(COALESCE(value,0) - ?) < 0.01 AND ts > strftime('%s','now') - 600) LIMIT 1"
+      ).bind('dc:' + String(msgId || ''), phone, value || 0).first();
+      if (jaTem) {
+        console.log('WA_VENDA_REPETIDA fone=' + phone + ' valor=' + value + ' msg=' + String(msgId || ''));
+        return { sale: false, dup: true, value };
+      }
+    } catch (_) { /* se a checagem falhar, o INSERT OR IGNORE abaixo ainda segura o repetido por id */ }
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)").bind(phone, instance, name, value, msgId, String(text||'').slice(0,2000)).run();
     if (ins.meta && ins.meta.changes === 0) return { sale: true, value }; // msg_id repetido → já registrada
     await _ttFireSale(env, phone, (value > 0 ? value : null), evId, instance);   // venda pro pixel (event_id estável por pedido; sem value 0 se o parse falhar)
@@ -5973,7 +8909,21 @@ async function _ttSend(env, pixel, token, event, phoneDigits, opts) {
     const ev = { event, event_time: Math.floor((opts.eventTime ? Number(opts.eventTime) : Date.now() / 1000)), event_id: evId, user };
     if (opts.value != null) ev.properties = { currency: 'BRL', value: Number(opts.value) || 0, content_type: 'product' };
     const body = { event_source: 'web', event_source_id: pixel, data: [ev] };
-    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', { method: 'POST', headers: { 'Access-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // O User-Agent NAO E ENFEITE. Em 18/08/2026, com a campanha rodando, 4 dos 10 leads do dia
+    // levaram 403 do TikTok com o corpo VAZIO - nao e erro de token nem de pixel: o mesmo evento,
+    // byte por byte, foi aceito (code 0) quando saiu de um computador comum. A diferenca era o
+    // cabecalho: o fetch do Worker vai sem User-Agent, e a protecao deles trata isso como robo.
+    // Sem esses eventos a campanha otimiza no escuro, que e pior do que nao ter pixel.
+    const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', {
+      method: 'POST',
+      headers: {
+        'Access-Token': token,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'SellWave/1.0 (+https://sellwave.com.br)',
+      },
+      body: JSON.stringify(body),
+    });
     const txt = await r.text();
     let j = {}; try { j = JSON.parse(txt); } catch (_) {}
     code = String(j.code != null ? j.code : r.status);
@@ -5999,11 +8949,216 @@ async function _ttSend(env, pixel, token, event, phoneDigits, opts) {
   return { ok, code, msg };
 }
 // Reenvia o que falhou (roda no cron). Mesmo event_id -> o TikTok deduplica, entao nao conta 2x.
-async function _ttRetryFailed(env) {
+// LEAD QUE NAO GEROU EVENTO NENHUM NO PIXEL.
+//
+// O _ttRetryFailed so enxerga linha com status='erro'. Quando a batida do cron morria ANTES de
+// chamar o pixel (era o que acontecia enquanto o cron estourava o limite de CPU), o lead era gravado
+// e o evento nunca chegava a existir - nao havia linha nenhuma, entao nada reenviava. Aconteceu com
+// 2 dos 7 leads de 18/08/2026, com verba rodando: conversao que o TikTok nunca soube que existiu.
+//
+// Esta varredura pega lead das ultimas 24h sem linha em tt_events e manda o evento com a HORA REAL
+// do lead (nao a de agora, senao o TikTok atribui a janela errada). O event_id e o mesmo que o
+// caminho normal usaria ('lead_<telefone>'), entao se o evento tiver saido por outro caminho o
+// TikTok deduplica e nao conta duas vezes.
+// CONVERSAO QUE NAO ENTRA TEM QUE APARECER PRA ALGUEM.
+//
+// O 403 do TikTok e passageiro e quase sempre o reenvio resolve, mas quando nao resolve o prejuizo e
+// invisivel: a campanha otimiza sem saber que a venda aconteceu, e nada na dash diz isso. Passando de
+// 8 tentativas, o diretor recebe notificacao com a conta. Uma notificacao por dia, no maximo, pra nao
+// virar barulho que ninguem le.
+// VENDA QUE NAO VIROU EVENTO NO PIXEL.
+//
+// O CompletePayment so era disparado por DOIS caminhos: a frase "Pedido Concluido" que o vendedor
+// manda no WhatsApp (_waDetectSale) e o postback da Payt. Quem CADASTRA o pedido na dash - que e como
+// o vendedor fecha venda na entrega, o padrao aqui - nao disparava nada. A tela contava a venda e o
+// TikTok nunca ficava sabendo. Conferido em 18/08/2026: a venda do dia estava no painel e tt_events
+// nao tinha um unico CompletePayment.
+//
+// Isso e pior do que perder o evento do lead: CompletePayment e o evento que ensina a campanha a
+// achar comprador. Sem ele o TikTok otimiza pra quem conversa, nao pra quem compra.
+//
+// Esta varredura fecha o buraco por fora, sem depender de qual tela criou a venda: pega pedido dos
+// ultimos 3 dias que ainda nao tem evento de venda e dispara. O event_id e o do PEDIDO (venda_<id>),
+// entao reenviar nao conta duas vezes; e antes de disparar confere se aquele telefone ja teve evento
+// de venda por qualquer outro caminho, pra nao contar a mesma venda duas vezes com ids diferentes.
+async function _ttVarrerVendasSemEvento(env) {
+  try {
+    await _ttEnsureTable(env);
+    const data = await _getDashData(env);
+    const leads = Array.isArray(data && data.leads) ? data.leads : [];
+    if (!leads.length) return;
+    const desde = Math.floor(Date.now() / 1000) - 3 * 86400;
+    let n = 0;
+    for (const l of leads) {
+      if (n >= 10) break;
+      const val = Number((l && (l.valor_neg || l.vl)) || 0);
+      if (!(val > 0)) continue;
+      // SO VENDA PAGA VIRA CompletePayment. Antes bastava o lead ter valor: uma VENDA FUTURA de
+      // R$ 497, nao paga e nem despachada, ensinou o TikTok que houve compra hoje. Numa operacao COD
+      // isso e a distorcao mais cara que existe - o cliente so paga na entrega, dias depois, e nao ha
+      // como desfazer um evento ja enviado. Se ele nunca pagar, a campanha otimizou pra um comprador
+      // que nao existiu.
+      // DISPARA NO CADASTRO DO PEDIDO, nao no pagamento. Decisao do Bruno em 19/08/2026, e faz
+      // sentido pro modelo dele: no COD o dinheiro so entra na entrega, dias depois, e a janela de
+      // atribuicao do TikTok (7 dias) ja teria fechado - a campanha aprenderia com quase nada.
+      // Cadastrar o pedido E o momento em que o vendedor fechou a venda.
+      // (Isto substitui de proposito a trava que exigia 'pago'; se for reverter, falar com ele.)
+      const quando = Number(l && l.ts) > 0 ? Number(l.ts) : Math.floor((Number(l && l.id) || 0) / 1000);
+      if (!(quando >= desde)) continue;
+      const fone = String((l && l.wa) || '').replace(/\D/g, '');
+      if (fone.length < 10) continue;
+      // Ja existe evento de venda pra este telefone? (qualquer caminho, qualquer id)
+      let ja = null;
+      try { ja = await env.DB.prepare("SELECT 1 FROM tt_events WHERE substr(phone,-8)=? AND stage='venda' AND ts > ? LIMIT 1").bind(fone.slice(-8), desde).first(); } catch (_) {}
+      if (ja) continue;
+      // CASA PELOS ULTIMOS 8 DIGITOS, e usa o telefone do RASTREIO, nao o do pedido.
+      // O pedido guarda o que o vendedor digitou ("(73) 9905-7792"); o rastreio guarda o numero que
+      // chegou no WhatsApp, com DDI ("5573999057792"). Comparar inteiro nunca casa - foi por isso
+      // que a primeira versao desta varredura nao disparou nada. E o telefone que vai pro TikTok
+      // tem que ser o do rastreio: e o hash dele que o TikTok cruza com o clique.
+      let lead = null;
+      try { lead = await env.DB.prepare('SELECT phone, pid, inst FROM wa_lead WHERE substr(phone,-8)=? ORDER BY ts DESC LIMIT 1').bind(fone.slice(-8)).first(); } catch (_) {}
+      // SEM RASTREIO TAMBEM DISPARA. O Bruno garantiu: "nenhuma venda vem por fora, sempre vem de um
+      // lead da pressel". Quando nao existe wa_lead e porque a captura falhou no meio (o cliente
+      // fechou por ligacao, o inbox engasgou), nao porque o cliente caiu do ceu. Descartar a venda
+      // por falta da nossa propria linha era punir a campanha pelo nosso furo.
+      // O _ttFireSale sabe se virar: com lead, usa o ttclid exato; sem lead, deduz a PRESSEL pelo
+      // trafego dominante daquele vendedor (nivel pressel, nao chute de clique) e ainda grava um
+      // wa_lead minimo com src='deduzido' - que e o que faz a venda passar a contar pro vendedor no
+      // painel de leads.
+      let fonePixel = lead && lead.phone ? String(lead.phone) : '';
+      let instPixel = lead && lead.inst ? String(lead.inst) : '';
+      if (!fonePixel) {
+        // Sem lead: acha o numero REAL (com DDI) pelo historico de conversa, que e o que o TikTok
+        // cruza. O pedido guarda o que o vendedor digitou, sem DDI.
+        try {
+          const c = await env.DB.prepare("SELECT phone, instance FROM wa_messages WHERE substr(phone,-8)=? ORDER BY ts DESC LIMIT 1").bind(fone.slice(-8)).first();
+          if (c && c.phone) { fonePixel = String(c.phone); instPixel = instPixel || String(c.instance || ''); }
+        } catch (_) {}
+      }
+      if (!fonePixel) fonePixel = fone.length <= 11 ? ('55' + fone) : fone;   // ultimo recurso
+      if (!instPixel && l && l.at) instPixel = 'ax_' + String(l.at);          // pra deduzir a pressel do vendedor
+      n++;
+      await _ttFireSale(env, fonePixel, val, 'venda_' + String((l && l.id) || fone), instPixel);
+    }
+    if (n) console.log('[tt] varredura de venda: ' + n + ' disparada(s)');
+  } catch (e) { console.error('[tt] varredura de venda falhou: ' + String((e && e.message) || e)); }
+}
+
+async function _ttAvisarPresos(env) {
+  try {
+    // AVISA SO O QUE NAO VAI SE RESOLVER SOZINHO (23/08/2026). O corte era `tries >= 8`, e com a
+    // auto-cura do _ttRetryFailed isso vira alarme falso: o 403 do TikTok e passageiro, o evento
+    // acumula tentativa e volta a passar minutos depois. Avisar nesse meio-tempo e incomodar o Bruno
+    // com um problema que ja esta se consertando - e ele pediu exatamente pra parar de ser incomodado
+    // com isso. Agora so entra no aviso quem falha HA MAIS DE 6 HORAS: passou disso, a insistencia ja
+    // teve dezenas de chances e ai sim e problema de verdade.
+    const r = await env.DB.prepare("SELECT COUNT(*) n FROM tt_events WHERE status='erro' AND tries >= 8 AND ts < strftime('%s','now')-21600").first();
+    const n = Number((r && r.n) || 0);
+    if (!n) {
+      // ZERO PRESOS: FECHA O AVISO ANTIGO. Ate 24/08/2026 esta funcao so sabia ABRIR alarme, nunca
+      // fechar: os eventos foram recuperados no dia 23 e o sino continuou dizendo "3 conversoes nao
+      // chegaram no TikTok", com o Bruno perguntando por que ninguem tinha arrumado - sendo que ja
+      // estava arrumado. Alarme que nao se apaga sozinho vira ruido e, pior, ensina a ignorar o sino.
+      // Troca os avisos abertos por UM aviso de encerramento, pra ele saber que terminou bem.
+      try {
+        const row0 = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+        if (!row0) return;
+        let d0 = {}; try { d0 = JSON.parse(row0.data || '{}'); } catch (_) { return; }
+        const antes = Array.isArray(d0.notifs) ? d0.notifs : [];
+        const abertos = antes.filter((x) => x && String(x.id || '').startsWith('ttpresos-') && !String(x.id || '').startsWith('ttpresos-ok-'));
+        if (!abertos.length) return;                       // nada aberto: nao mexe no blob a toa
+        d0.notifs = antes.filter((x) => !(x && String(x.id || '').startsWith('ttpresos-')));
+        d0.notifs.unshift({
+          id: 'ttpresos-ok-' + Date.now(), type: 'geral', to: 'owner',
+          title: 'Conversões do TikTok em dia',
+          description: 'O que estava preso foi enviado e aceito. Nenhuma conversão pendente agora.',
+          ts: Math.floor(Date.now() / 1000), unread: true, link: '/pressels/leads',
+        });
+        d0.notifs = d0.notifs.slice(0, 100);
+        await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+          .bind(JSON.stringify(d0), (row0.version || 0) + 1, Math.floor(Date.now() / 1000), 'ttpresos:ok', row0.version).run();
+        // Libera a marca do dia: se travar de novo depois, o aviso pode voltar hoje mesmo.
+        try { await _writeConfig(env, 'ttpresos:' + _brDay(), ''); } catch (_) {}
+      } catch (_) {}
+      return;
+    }
+    const marca = 'ttpresos:' + _brDay();
+    if (await _readConfig(env, marca)) return;   // ja avisou hoje
+    await _writeConfig(env, marca, String(n));
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (_) { return; }
+    if (!Array.isArray(data.notifs)) data.notifs = [];
+    data.notifs.unshift({
+      id: 'ttpresos-' + Date.now(), type: 'alerta', to: 'owner',
+      // Singular e plural escritos por extenso. "conversão(ões) não chegaram" e a cara de aviso
+      // gerado por sistema, e o Bruno pediu pra tirar. Aviso que ele le todo dia tem que estar em
+      // portugues de gente.
+      title: n === 1 ? 'Uma conversão não chegou no TikTok' : (n + ' conversões não chegaram no TikTok'),
+      description: n === 1
+        ? 'O TikTok recusou o envio mesmo depois de várias tentativas. A campanha está otimizando sem esse evento.'
+        : 'O TikTok recusou o envio mesmo depois de várias tentativas. A campanha está otimizando sem esses eventos.',
+      ts: Math.floor(Date.now() / 1000), unread: true, link: '/pressels/leads',
+    });
+    data.notifs = data.notifs.slice(0, 100);
+    await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'ttpresos', row.version).run();
+  } catch (e) { console.error('[tt] aviso de presos falhou: ' + String((e && e.message) || e)); }
+}
+async function _ttVarrerLeadsSemEvento(env) {
   try {
     await _ttEnsureTable(env);
     const rows = await env.DB.prepare(
-      `SELECT * FROM tt_events WHERE status='erro' AND tries < 6 AND COALESCE(next_try,0) <= strftime('%s','now')
+      `SELECT l.phone, l.pid, l.ttclid, l.inst, l.ts FROM wa_lead l
+       WHERE l.ts > strftime('%s','now')-86400
+         AND NOT EXISTS (SELECT 1 FROM tt_events e WHERE e.event_id = 'lead_' || l.phone)
+       ORDER BY l.ts DESC LIMIT 10`).all();
+    for (const l of (rows.results || [])) {
+      const { pixel, token, ev } = await _ttPixelToken(env, l.pid || '', l.inst || '');
+      if (!pixel || !token || !ev.ev_lead) continue;
+      await _ttSend(env, pixel, token, ev.ev_lead, l.phone, {
+        ttclid: l.ttclid || '', eventId: 'lead_' + l.phone, pid: l.pid, instance: l.inst,
+        eventTime: l.ts, stage: 'contato',
+      });
+    }
+  } catch (e) { console.error('[tt] varredura de lead sem evento falhou: ' + String((e && e.message) || e)); }
+}
+
+async function _ttRetryFailed(env) {
+  try {
+    await _ttEnsureTable(env);
+    // AUTO-CURA: SUCESSO RECENTE DESTRAVA QUEM FICOU PRESO (23/08/2026).
+    //
+    // O 403 do TikTok e passageiro e do lado deles - o MESMO evento, byte por byte, e aceito minutos
+    // depois (ja provado em 18/08 e de novo hoje: peguei dois presos com 60 tentativas e os dois
+    // voltaram code=0 na hora). O problema nunca foi o evento; era o freio: `tries < 60` matava a
+    // linha PRA SEMPRE, e o corte de 24h enterrava o resto. Resultado de hoje: 110 conversoes presas,
+    // 107 delas do proprio dia, com a campanha otimizando sem elas.
+    //
+    // A regra agora e: se ALGUM evento saiu com code=0 na ultima hora, o caminho esta funcionando
+    // (token, pixel, User-Agent, rede) - entao nao existe motivo pra manter ninguem parado. Zera o
+    // contador e a espera de quem ficou pra tras e deixa a fila andar de novo. E o proprio sucesso
+    // que destrava; nao depende de ninguem perceber e mexer na mao.
+    // Idempotente: o TikTok deduplica pelo event_id, entao reenviar o mesmo evento nao conta 2x.
+    try {
+      const vivo = await env.DB.prepare(
+        "SELECT 1 FROM tt_events WHERE status='ok' AND code='0' AND ts > strftime('%s','now')-3600 LIMIT 1").first();
+      if (vivo) {
+        await env.DB.prepare(
+          "UPDATE tt_events SET tries=0, next_try=0 WHERE status='erro' AND tries >= 20 AND ts > strftime('%s','now')-259200").run();
+      }
+    } catch (_) {}
+    const rows = await env.DB.prepare(
+      // NUNCA DESISTIR DE CONVERSAO DO DIA. O corte era por numero de tentativas (6, depois 12, depois
+      // 20) e foi ele que perdeu evento em 18/08/2026: seis leads bateram as 20 tentativas durante uma
+      // janela em que o TikTok estava recusando (HTTP 403 com corpo vazio, do lado deles - o mesmo
+      // evento e aceito minutos depois), e a partir dai ficaram fora da fila PRA SEMPRE. Provado: zerei
+      // o contador e os seis entraram de primeira, code=0.
+      // Agora o corte e por IDADE: enquanto o evento for do ultimo dia, ele continua tentando. Passou
+      // de 24h, a janela de atribuicao do TikTok ja nao ajuda muito e o _ttAvisarPresos ja avisou o
+      // diretor. O teto de 20 fica so como freio de loop.
+      `SELECT * FROM tt_events WHERE status='erro' AND ts > strftime('%s','now')-259200
+         AND COALESCE(next_try,0) <= strftime('%s','now')
        ORDER BY ts ASC LIMIT 20`).all();
     for (const e of (rows.results || [])) {
       const { pixel, token, ev } = await _ttPixelToken(env, e.pid || '', e.instance || '');
@@ -6011,7 +9166,11 @@ async function _ttRetryFailed(env) {
         try { await env.DB.prepare("UPDATE tt_events SET next_try=strftime('%s','now')+1800 WHERE event_id=?").bind(e.event_id).run(); } catch (_) {}
         continue;
       }
-      const backoff = Math.min(3600, 300 * Math.pow(2, Number(e.tries) || 0));
+      // Espera menor entre tentativas (teto de 15 min, nao de 1 hora): a recusa e passageira, entao
+      // insistir cedo resolve; e o proprio TikTok deduplica pelo event_id, nao ha risco de contar 2x.
+      // Espera entre tentativas do MESMO evento (teto 30min). O `tries` agora so espaca; ele nao
+      // elimina mais ninguem - quem elimina e a idade (3 dias), e ate la a auto-cura acima reabre.
+      const backoff = Math.min(1800, 120 * Math.pow(2, Math.min(Number(e.tries) || 0, 8)));
       // Reenvia com o nome que a pressel usa HOJE, não com o que estava gravado. Se o Bruno trocou
       // o evento justamente porque o antigo estava errado, a fila presa em erro continuaria saindo
       // com o nome velho por dias. A ETAPA é que manda; linha antiga (sem stage) mantém o nome dela.
@@ -6029,6 +9188,7 @@ async function _ttRetryFailed(env) {
 // Resolve pixel+token: 1) da pressel (pid) se tiver os dois; 2) da pressel do vendedor (ax_<at>); 3) global.
 async function _ttPixelToken(env, pid, instance) {
   let pixel = '', token = '', ev = _evTodos(null);
+  let pixel2 = '', token2 = '', ev2 = { ev_lead: '', ev_sale: '' };   // 2º pixel (espelho), só sai quando ligado na pressel
   try {
     const data = await _getDashData(env);   // cacheado: era parseado por lead (1.3MB), estourava CPU no lote
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
@@ -6042,12 +9202,15 @@ async function _ttPixelToken(env, pid, instance) {
       const cand = pressels.filter(x => x.pixel_tt && x.pixel_tt_token && (x.vendedores || []).some(v => String(v.at) === at && v.ativo !== false));
       if (cand.length === 1) p = cand[0];
     }
-    if (p) { pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); ev = _evTodos(p); }
+    if (p) {
+      pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); ev = _evTodos(p);
+      if (_pixel2On(p)) { pixel2 = String(p.pixel2_tt); token2 = String(p.pixel2_token); ev2 = _evTodos2(p); }
+    }
   } catch (_) {}
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
   // `ev` sai junto do pixel porque vem da MESMA pressel: quem resolve "qual pixel" já resolveu
   // "quais eventos". Caindo no pixel global (sem pressel), valem os padrões.
-  return { pixel, token, ev };
+  return { pixel, token, ev, pixel2, token2, ev2 };
 }
 // Tipos que o WhatsApp Web emite mas que NÃO são mensagem de gente: ruído de protocolo. Se um
 // desses criar o lead, ele nasce sem texto e sem código, e a mensagem real é descartada depois.
@@ -6098,13 +9261,27 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // O código precisa ser lido ANTES do `exists`, senão o caminho de upgrade nunca acontece.
     const codeM = String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
     const code = codeM ? codeM[1] : '';
-    const exists = await env.DB.prepare('SELECT phone, pid, ttclid, src FROM wa_lead WHERE phone=?').bind(phone).first();
+    const exists = await env.DB.prepare('SELECT phone, pid, ttclid, src, inst, num FROM wa_lead WHERE phone=?').bind(phone).first();
+    // ÚLTIMO CLIQUE MANDA (decisão do Bruno, 20/08/2026). Cada vendedor passou a rodar DOIS números,
+    // então o mesmo lead pode clicar no anúncio de novo e cair num número diferente - inclusive de
+    // outro vendedor. Quando isso acontece, o lead é DO NÚMERO NOVO: a conversa já migra sozinha
+    // (wa_chats segue o último inbound) e a venda já sai carimbada pelo chip atual, mas o wa_lead
+    // ficava preso no primeiro para sempre (INSERT OR IGNORE + a saída antecipada logo abaixo), e a
+    // métrica continuava contando o contato pro vendedor que perdeu o lead.
+    // MIGRAÇÃO = a mensagem chegou num número NOSSO diferente do que está gravado no lead.
+    const _nk8 = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 ? d.slice(-8) : ''; };
+    const _nkAgora = _nk8(selfNum) || ((String(instance || '').match(/_(\d{8})$/) || [])[1] || '');
+    const _nkAntes = _nk8(exists && exists.num) || ((String((exists && exists.inst) || '').match(/_(\d{8})$/) || [])[1] || '');
+    const migrou = !!(exists && _nkAgora && _nkAntes && _nkAgora !== _nkAntes);
     // UPGRADE: o lead pode ter nascido de um evento sem texto (ciphertext chega cifrado e o injetor
     // só manda uma vez). Nesse caso ele entrou por chute do FIFO, ou sem rastreio nenhum. Quando a
     // mensagem legível com o código aparece depois, ela CORRIGE a atribuição em vez de ser jogada
     // fora. Sem código novo não há o que melhorar, e quem já está em 'code' é exato: sai fora.
-    if (exists && (exists.src === 'code' || !code)) return;
-    const isUpgrade = !!exists;
+    // Na MIGRAÇÃO nada disso vale: número novo é lead novo, refaz a atribuição do zero.
+    if (!migrou && exists && (exists.src === 'code' || !code)) return;
+    // Migração entra pelo caminho de lead NOVO (isUpgrade=false) de propósito: assim os fallbacks
+    // por número voltam a valer e o clique que trouxe ele de volta é reivindicado pro número certo.
+    const isUpgrade = !!exists && !migrou;
     // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
     let ttclid = '', pid = '', src = '', utm = '';
     if (code) {
@@ -6174,7 +9351,10 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // entraram de uma vez e viraram 20 "leads sem rastreio" num número recém-trocado).
     // Não vira lead: a conversa continua no inbox, só não conta como lead de pressel nem suja a
     // contagem do número. Assim todo lead que aparece na tela É rastreado, como o Bruno quer.
-    if (!pid && !ttclid) return;
+    // Lead que JA e de pressel e voltou por outro numero transfere mesmo sem casar clique novo: ele
+    // ja foi rastreado uma vez, o que mudou foi com quem ele fala. Sem esta ressalva a transferencia
+    // so acontecia quando o clique novo casasse, e o contato ficava no vendedor que perdeu o lead.
+    if (!pid && !ttclid && !(migrou && exists && (exists.pid || exists.ttclid))) return;
     // Número que REALMENTE recebeu o lead. Prefere o que o Sale Chat informou (exato); só cai na
     // busca por instância quando não veio (Evolution). Derivar da instância carimbava o lead do
     // número complementar com o número do principal e escondia a divisão da roleta nas métricas.
@@ -6192,6 +9372,14 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
         const newPid = pid || exists.pid || '';
         await env.DB.prepare("UPDATE wa_lead SET pid=?, ttclid=?, src='code' WHERE phone=?").bind(newPid, newTt, phone).run();
       }
+    } else if (migrou) {
+      // TRANSFERE o lead pro número/vendedor novo. pid/ttclid só trocam se o clique novo trouxe algo
+      // (senão o rastreio do anúncio original se perderia à toa). O `ts` NÃO muda: é quando o lead
+      // apareceu pela primeira vez, e mexer nele faria relatório de dia fechado mudar sozinho.
+      await env.DB.prepare(
+        "UPDATE wa_lead SET inst=?, num=?, pid=CASE WHEN ?<>'' THEN ? ELSE pid END, ttclid=CASE WHEN ?<>'' THEN ? ELSE ttclid END, src=CASE WHEN ?<>'' THEN ? ELSE src END WHERE phone=?"
+      ).bind(instance, num, pid, pid, ttclid, ttclid, src, src, phone).run();
+      console.log('WA_LEAD_MIGROU fone=' + phone + ' de=' + String((exists && exists.inst) || '') + ' para=' + String(instance) + ' src=' + String(src || exists.src || ''));
     } else {
       await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts, utm) VALUES (?,?,?,?,?,?,strftime('%s','now'),?)").bind(phone, pid, ttclid, instance, src, num, utm).run();
     }
@@ -6201,10 +9389,12 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // matching), então o TikTok consegue casar por telefone mesmo sem o click id. Lead orgânico de
     // verdade (sem pid) continua fora. No upgrade só dispara se ainda não tinha disparado.
     if ((ttclid || pid) && !(exists && (exists.ttclid || exists.pid))) {
-      const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
+      const { pixel, token, ev, pixel2, token2, ev2 } = await _ttPixelToken(env, pid, instance);
       // O nome vem da pressel (padrão InitiateCheckout, que é o evento que o GT otimiza). Vazio =
       // o Bruno desligou esta etapa nas Configurações da pressel.
       if (ev.ev_lead) await _ttSend(env, pixel, token, ev.ev_lead, phone, { ttclid, eventId: 'lead_' + phone, pid, instance, stage: 'contato' });
+      // ESPELHO no 2º pixel (mesmo lead real, event_id/stage próprios pra não colidir no log).
+      if (pixel2 && token2 && ev2.ev_lead) await _ttSend(env, pixel2, token2, ev2.ev_lead, phone, { ttclid, eventId: 'lead_' + phone + '.p2', pid, instance, stage: 'contato_p2' });
     }
   } catch (_) {}
 }
@@ -6255,17 +9445,28 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
         ).bind(digits, pid, instance, num).run();
       } catch (_) {}
     }
-    const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
+    const { pixel, token, ev, pixel2, token2, ev2 } = await _ttPixelToken(env, pid, instance);
     // `stage:'venda'` é o que a tela de pedidos consulta pra mostrar "o TikTok aceitou". Antes ela
     // procurava pelo NOME 'CompletePayment' num JOIN; com o nome configurável, o selo sumiria em
     // silêncio no dia em que o Bruno trocasse o evento. A etapa não muda, o nome sim.
     if (ev.ev_sale) await _ttSend(env, pixel, token, ev.ev_sale, digits, { value, ttclid, eventId, pid, instance, stage: 'venda' });
+    // ESPELHO no 2º pixel. Só chega aqui em VENDA REAL, então a compra sai igual nos dois — nunca em engajamento.
+    if (pixel2 && token2 && ev2.ev_sale) await _ttSend(env, pixel2, token2, ev2.ev_sale, digits, { value, ttclid, eventId: eventId + '.p2', pid, instance, stage: 'venda_p2' });
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
 async function handleWASales(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // ESTA ROTA NAO TINHA ESCOPO NENHUM (auditoria 24/08/2026) e devolvia as ultimas 1000 vendas da
+  // operacao com o TEXTO CRU do pedido: nome, CPF, endereco e telefone do nosso cliente. O afiliado
+  // abre isto so de entrar em Cadastro de Pedidos e no Atendimento.
+  const _idsWS = await _idsQuePossoVer(env, u);
+  // Cobrador NOSSO continua vendo tudo: a tela dele e justamente trabalhar o pedido dos outros.
+  const _semCorte = (_idsWS === null) || (_ehCobrador(u) && !noMundoAfiliado(u) && !afiliadoSemVinculo(u));
+  const _cutWS = _semCorte ? { cond: '', binds: [] } : _sqlInst('s.instance', _idsWS);
+  // O corte entra como AND depois do where do periodo; sem where, vira o proprio WHERE.
+
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_sales (phone TEXT, instance TEXT, name TEXT, value REAL, ts INTEGER)').run();
     try{ await env.DB.prepare('ALTER TABLE wa_sales ADD COLUMN raw TEXT').run(); }catch(_){}   // garante a coluna pro SELECT
@@ -6287,13 +9488,16 @@ async function handleWASales(req, env) {
     try { await _ttEnsureTable(env); } catch (_) {}   // garante o JOIN do status do TikTok
     // LEFT JOIN wa_lead pra saber se a venda veio de pressel (pid) — mostra "da pressel" vs "sem rastreio" na tela.
     // LEFT JOIN tt_events (pelo msg_id = event_id do envio) pra mostrar se o TikTok ACEITOU a venda.
+    // Junta o filtro de periodo com o corte por mundo. Sem periodo, o corte vira o WHERE.
+    const _where2 = _cutWS.cond ? (where ? (where + ' AND ' + _cutWS.cond) : ('WHERE ' + _cutWS.cond)) : where;
     const stmt = env.DB.prepare(`SELECT s.rowid AS id, s.phone, s.instance, s.name, s.value, s.ts, s.raw,
         l.pid AS pid, l.src AS src, l.ttclid AS ttclid,
         t.status AS tt_status, t.code AS tt_code, t.msg AS tt_msg, t.tries AS tt_tries
       FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone
       LEFT JOIN tt_events t ON t.event_id=s.msg_id AND (t.stage='venda' OR (t.stage IS NULL AND t.event='CompletePayment'))
-      ${where} ORDER BY s.ts DESC LIMIT 1000`);
-    const rows = await (binds.length ? stmt.bind(...binds) : stmt).all();
+      ${_where2} ORDER BY s.ts DESC LIMIT 1000`);
+    const _bindsFinais = binds.concat(_cutWS.binds);
+    const rows = await (_bindsFinais.length ? stmt.bind(..._bindsFinais) : stmt).all();
     return json({ ok: true, sales: rows.results || [] });
   } catch (e) { return json({ ok: true, sales: [] }); }
 }
@@ -6320,7 +9524,17 @@ async function handleWASaleAdd(req, env) {
   if (!body || !body.raw || !String(body.raw).trim()) return err('Cole a mensagem do "Pedido Concluído"');
   const text = String(body.raw);
   // Diretor pode creditar qualquer vendedor (body.at); vendedor só credita a si mesmo.
-  const at = isDirector(u) ? String(body.at || '').trim() : String(u.id);
+  // AFILIADO credita alguem do MUNDO DELE (auditoria 24/08/2026): sem isto ele inseria venda na
+  // NOSSA tabela wa_sales (que alimenta a pagina publica do gestor de trafego) e o disparo caia no
+  // NOSSO pixel do TikTok. Fora do mundo dele, recusa.
+  let at = isDirector(u) ? String(body.at || '').trim() : String(u.id);
+  if (!isDirector(u) && noMundoAfiliado(u)) {
+    const _idsV = await _idsDoMundoAfiliado(env, aflDe(u));
+    const alvo = String(body.at || '').trim() || String(u.id);
+    if (!_idsV.includes(alvo)) return err('Esse vendedor não é da sua equipe', 403);
+    at = alvo;
+  }
+  if (afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const instance = at ? ('ax_' + at) : 'manual';
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
@@ -6608,17 +9822,35 @@ async function _presselLiveSet(env){
     // A validade vale pros DOIS estados. Antes só o 'sc' expirava, e uma linha 'open' velha da
     // Evolution ficava valendo pra sempre — bastava um registro antigo pra manter um número morto
     // recebendo lead eternamente. Com a operação 100% no Sale Chat, isso viraria um ralo silencioso.
-    const cs=await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all();
+    // UMA IDA SO PRAS TRES CONSULTAS (27/08/2026). Eram tres awaits em fila, ~3 idas ao D1 no
+    // caminho do clique pago. O batch manda tudo junto e devolve na mesma ordem. Se o batch falhar
+    // (banco antigo, tabela faltando), cai no jeito antigo, uma a uma, sem mudar o resultado.
+    // FLAG, NAO O CONTEUDO. A primeira versao testava `_hb && _hb.results` pra decidir se caia no
+    // jeito antigo - e `{ results: [] }` e TRUTHY, entao a queda NUNCA acontecia: se o batch
+    // estourasse, sc_heartbeat e wa_api_numbers viravam vazio em silencio e os numeros da Cloud API
+    // sumiam do liveSet. Como o Map nao fica vazio (o wa_conn ainda responde), o fail-open nao
+    // salvava: a roleta simplesmente parava de entregar pra esses vendedores.
+    let cs = { results: [] }, _hb = null, _api = null, _loteOk = false;
+    try {
+      const _lote = await env.DB.batch([
+        env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')"),
+        env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1"),
+        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')"),
+      ]);
+      cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true;
+    } catch (_) {
+      try { cs = await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all(); } catch (_2) {}
+    }
     const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
     // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
     try{
-      const hb=await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
+      const hb = (_loteOk && _hb) ? _hb : await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
       (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
     }catch(_){}
     // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
     // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
     try{
-      const api=await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
+      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
       // Chave POR NÚMERO, igual à da tela de conexão: com a chave só do vendedor, o segundo número
       // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
       // exatamente ax_<at>_<8 dígitos>).
@@ -6638,9 +9870,22 @@ function _emUsoIdsDe(data){
   }); }catch(_){}
   return ids;
 }
-function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
+// Ids dos status que TIRAM o numero da roleta. Mesma historia do "Em uso": a dash guarda no chip o
+// ID do status (st_mpafn8zm), e o nome ("Restrito") vive em data.wa_statuses. O guard comparava o id
+// com a palavra 'restrito' e portanto NUNCA barrava ninguem: numero marcado Restrito ou Banido
+// continuava elegivel pra receber lead. E o mesmo erro que ja tinha mandado lead pra numero parado.
+function _foraIdsDe(data){
+  const ids=new Set(['restrito','banido']);
+  try{ (Array.isArray(data && data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{
+    const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim();
+    if((lbl==='restrito' || lbl==='banido' || lbl==='sem whatspp' || lbl==='sem whatsapp') && s && s.id) ids.add(String(s.id));
+  }); }catch(_){}
+  return ids;
+}
+function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
   const out=[];
-  const okWa=(c)=>{ const wa=String((c&&c.wa_st)||'').toLowerCase(); return wa!=='restrito' && wa!=='banido'; };
+  const _fora = foraIds || new Set(['restrito','banido']);
+  const okWa=(c)=>!_fora.has(String((c&&c.wa_st)||'').toLowerCase());
   // "Em uso" igual o frontend enxerga: flag em_uso (true OU 1 — o JSON grava dos dois
   // jeitos) ou um status cujo id/label é "Em uso" (a dash usa ids customizados tipo
   // st_xxxx, então comparar com a string 'em_uso' não basta).
@@ -6657,6 +9902,12 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds){
     const jaTem = new Set(_vs.map(v => String(v && v.at)));
     for (const c of chips) {
       if (!c || !c.at || jaTem.has(String(c.at))) continue;
+      // ccol_N e id de COLUNA da Contingencia (o "Nova coluna"), nao pessoa. Chip estacionado numa
+      // coluna e marcado "Em uso" entrava na roleta por este caminho e ficava INVISIVEL na tela de
+      // Pressels, que so desenha linha pra quem existe em /api/users - ou seja, recebia lead pago e
+      // nao tinha interruptor pra desligar. Pior: o lead nascia com dono inexistente
+      // (ax_ccol_4_91258028 esta gravado em wa_lead) e sumia da metrica e da comissao.
+      if (/^ccol_/i.test(String(c.at))) continue;
       if (c.st === 'aquecimento' || c.st === 'banido') continue;
       if (!isEmUso(c) || !c.num || !okWa(c)) continue;
       jaTem.add(String(c.at));
@@ -6909,10 +10160,27 @@ function _evDe(p, chave) {
 }
 const _evTodos = (p) => ({ ev_view: _evDe(p, 'ev_view'), ev_click: _evDe(p, 'ev_click'), ev_lead: _evDe(p, 'ev_lead'), ev_sale: _evDe(p, 'ev_sale') });
 
+// 2º PIXEL (espelho). O Bruno quis mandar os MESMOS eventos reais pra um segundo pixel (outra BM),
+// escolhendo o evento por etapa. A REGRA que separa espelho de fraude: SÓ a etapa de VENDA real
+// (ev_sale) pode disparar evento de compra concluída. Em contato/engajamento, CompletePayment/
+// Purchase/PlaceAnOrder são bloqueados (viram o padrão), então não dá pra marcar compra sem compra.
+const _EV_COMPRA = ['CompletePayment', 'Purchase', 'PlaceAnOrder'];
+function _ev2De(p, chave) {                       // chave: 'ev_lead' | 'ev_sale'
+  const v = String((p && p[chave.replace('ev_', 'ev2_')]) || '').trim();
+  if (v === 'off') return '';
+  const proibido = (chave !== 'ev_sale' && _EV_COMPRA.includes(v));   // compra só na venda real
+  return (_EV_TT.includes(v) && !proibido) ? v : (_EV_PADRAO[chave] || '');
+}
+const _evTodos2 = (p) => ({ ev_lead: _ev2De(p, 'ev_lead'), ev_sale: _ev2De(p, 'ev_sale') });
+const _pixel2On = (p) => !!(p && p.pixel2_on && p.pixel2_tt && p.pixel2_token);
+
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
   const id=JSON.stringify(String(p.pixel_tt)).replace(/</g,'\\u003c');   // neutraliza </script>
-  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});}(window,document,'ttq');</script>`;
+  // 2º pixel (espelho): carrega junto. ttq.track dispara pra TODOS os pixels carregados, então
+  // PageView/ClickButton do navegador saem iguais nos dois. Contato/venda (server) usam o ev2 dele.
+  const load2 = _pixel2On(p) ? ('ttq.load('+JSON.stringify(String(p.pixel2_tt)).replace(/</g,'\\u003c')+');') : '';
+  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});${load2}}(window,document,'ttq');</script>`;
 }
 function _presselHtml(html){
   return new Response(html, { status:200, headers:{ 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' } });
@@ -6921,6 +10189,34 @@ function _presselOffline(){
   return _presselHtml(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#cbd5e1;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px"><div><h2 style="margin:0 0 8px">Indisponível no momento</h2><p style="opacity:.7">Tente novamente em instantes.</p></div></body>`);
 }
 // Elementos da pressel (compat: monta de img+cta se ainda não tiver elementos)
+// GET /p/:pid/img/:hash  → a imagem da pressel como arquivo, cacheavel pra sempre.
+// Publica de proposito: a pressel inteira e publica, e a URL so existe pra quem recebeu a pagina.
+async function handlePresselImg(env, pid, hash, num) {
+  const data = await _getDashData(env).catch(() => null);
+  const p = _acharPressel((data && data.pressels) || [], pid, num);
+  if (!p) return new Response('nao achei', { status: 404 });
+  const cands = [];
+  for (const e of _presselElsServer(p)) if (e && e.type === 'imagem' && e.src) cands.push(String(e.src));
+  if (p.img) cands.push(String(p.img));
+  const achou = cands.find((src) => src.startsWith('data:') && _fotoHash(src) === String(hash));
+  if (!achou) return new Response('imagem nao encontrada', { status: 404 });
+  const m = achou.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+  if (!m) return new Response('imagem invalida', { status: 404 });
+  let corpo;
+  if (m[2]) {
+    const bin = atob(m[3]);
+    corpo = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) corpo[i] = bin.charCodeAt(i);
+  } else corpo = decodeURIComponent(m[3]);
+  return new Response(corpo, {
+    headers: {
+      'content-type': m[1] || 'image/jpeg',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'access-control-allow-origin': '*',
+    },
+  });
+}
+
 function _presselElsServer(p){
   if(Array.isArray(p.elementos) && p.elementos.length) return p.elementos;
   const els=[]; let n=1;
@@ -6928,8 +10224,23 @@ function _presselElsServer(p){
   els.push({id:n++,type:'botao',label:p.cta||'FALAR NO WHATSAPP',bg:'#22c55e',color:'#ffffff'});
   return els;
 }
-function _elPublicHtml(e, wa){
-  if(e.type==='imagem') return e.src?`<img src="${_escHtml(e.src)}" alt="">`:'';
+// A IMAGEM DA PRESSEL NAO VAI MAIS DENTRO DO HTML.
+//
+// Ela e guardada como data URI no estado, e a pagina saia com o base64 embutido: 122 KB de pagina,
+// sendo 118 KB de imagem (o HTML de verdade tem 4 KB). Medido em 18/08/2026, com a campanha no ar:
+// 94 KB transferidos e 2,2s pra pagina aparecer - e com `no-store`, entao cada visita baixava tudo
+// de novo. Isso e trafego PAGO chegando numa tela em branco por dois segundos.
+//
+// Agora a imagem e um arquivo separado, com o hash do conteudo na URL e cache de 1 ano. A pagina cai
+// pra ~4 KB e pinta na hora; a imagem entra logo atras e, na segunda visita, ja esta no aparelho.
+// Trocou a imagem na dash, muda o hash, muda a URL: nao existe imagem velha presa em cache.
+function _presselImgSrc(pid, src){
+  const t = String(src || '');
+  if (!t.startsWith('data:')) return t;   // ja e URL: passa direto
+  return '/p/' + encodeURIComponent(String(pid)) + '/img/' + _fotoHash(t);
+}
+function _elPublicHtml(e, wa, pid){
+  if(e.type==='imagem') return e.src?`<img src="${_escHtml(_presselImgSrc(pid, e.src))}" alt="" fetchpriority="high">`:'';
   if(e.type==='texto') return `<div style="padding:14px;font-size:${Number(e.size)||16}px;text-align:${_escHtml(e.align||'center')};color:${_escHtml(e.color||'#111')};line-height:1.4">${_escHtml(e.text||'')}</div>`;
   if(e.type==='botao') return `<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:${_escHtml(e.bg||'#22c55e')};color:${_escHtml(e.color||'#fff')};border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>${_escHtml(e.label||'FALAR NO WHATSAPP')}</span></a></div>`;
   if(e.type==='html') return e.html||'';
@@ -6940,14 +10251,13 @@ function _elPublicHtml(e, wa){
 async function _presselNextIndex(env, id, len){
   if(len<=1) return 0;
   try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_rr (pid TEXT PRIMARY KEY, n INTEGER)').run();
     // Incremento ATÔMICO num só statement (D1 serializa writes): duas roletas
     // concorrentes recebem n distintos, mantendo a distribuição igual. Antes era
     // SELECT + UPDATE separados, e uma rajada podia dar o mesmo índice pros dois.
     const row=await env.DB.prepare('INSERT INTO pressel_rr (pid,n) VALUES (?,1) ON CONFLICT(pid) DO UPDATE SET n=n+1 RETURNING n').bind(String(id)).first();
     const n=(Number(row&&row.n)||1)-1;   // n vem 1-based após o incremento; volta pra 0-based
     return n%len;
-  }catch(_){ return Math.floor(Math.random()*len); }
+  }catch(_){ return Math.floor(Math.random()*len); }   // tabela ainda nao criada: sorteia, que e o mesmo efeito
 }
 // Contador de métricas da pressel (views = chegou; clicks = foi pro WhatsApp)
 // Dia no fuso do Brasil (UTC-3, sem horário de verão), formato YYYY-MM-DD.
@@ -6955,10 +10265,9 @@ function _brDay(tsSec){ const ms=(tsSec?tsSec*1000:Date.now())-3*3600000; return
 async function _bumpPressel(env, id, field){
   const col = field === 'clicks' ? 'clicks' : 'views';
   try{
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    await _presselEnsure(env);
     await env.DB.prepare(`INSERT INTO pressel_stats (pid, ${col}) VALUES (?, 1) ON CONFLICT(pid) DO UPDATE SET ${col} = ${col} + 1`).bind(String(id)).run();
     // e por DIA, pra dash conseguir filtrar por data
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare(`INSERT INTO pressel_day (pid, day, ${col}) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET ${col} = ${col} + 1`).bind(String(id), _brDay()).run();
   }catch(_){}
 }
@@ -6975,14 +10284,16 @@ async function handlePresselDiag(req, env){
   // 8s do estado devolvia a resposta ANTERIOR: o Bruno desligou o número e a faixa continuou verde.
   // É uma tela de diretor, uma leitura por vez — ler direto do banco aqui não pesa.
   const data = await _getDashData(env, 0);
-  const pressels = Array.isArray(data.pressels) ? data.pressels : [];
+  const _idsDiag = _presselIdsVisiveis(u, data);
+  const pressels = (Array.isArray(data.pressels) ? data.pressels : []).filter((p) => !_idsDiag || _idsDiag.has(String(p && p.id)));
   const chips = Array.isArray(data.chips) ? data.chips : [];
   const liveSet = await _presselLiveSet(env);
   const emUsoIds = _emUsoIdsDe(data);
+  const foraIds = _foraIdsDe(data);
   const isEmUso = (c) => c.em_uso===true || c.em_uso===1 || emUsoIds.has(String(c.wa_st||'')) || String(c.wa_st||'')==='em_uso';
-  const okWa = (c) => { const w=String((c&&c.wa_st)||'').toLowerCase(); return w!=='restrito' && w!=='banido'; };
+  const okWa = (c) => !foraIds.has(String((c&&c.wa_st)||'').toLowerCase());
   const out = pressels.map((p)=>{
-    const sellers = _resolvePresselSellers(p, chips, liveSet, emUsoIds);
+    const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds);
     const numeros = [];
     for(const s of sellers) for(const n of (s.nums||[])) numeros.push({ at:s.at, num:n.num });
     // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
@@ -7015,8 +10326,13 @@ async function handlePresselStats(req, env){
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_rr (pid TEXT PRIMARY KEY, n INTEGER)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    // RECORTE POR DONO (auditoria 24/08/2026): era a unica das tres rotas de metrica sem corte, e
+    // devolvia views/clicks de TODAS as pressels.
+    const _idsS = _presselIdsVisiveis(u, await _getDashData(env).catch(() => ({})));
     const rows = await env.DB.prepare('SELECT pid, views, clicks FROM pressel_stats').all();
+    if (_idsS) rows.results = (rows.results || []).filter((r) => _idsS.has(String(r.pid)));
     return json({ ok:true, stats: rows.results || [] });
   }catch(e){ return json({ ok:true, stats: [] }); }
 }
@@ -7030,18 +10346,65 @@ async function _presselDayMetrics(env, day){
   // As 5 consultas são INDEPENDENTES — roda em PARALELO (1 ida ao banco no lugar de 5). Tabelas já existem
   // em produção; se faltar (DB novo) o .catch devolve vazio (zeros) sem quebrar.
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r=>r.results||[]).catch(()=>[]);
-  const [pr, c, c2, s, sa] = await Promise.all([
+  // As duas consultas do bloco de baixo (dupes/vinc) entram AQUI tambem: elas nao dependem de nada
+  // do primeiro bloco, e esperar por elas depois somava mais duas idas ao banco em fila. Esta tela e
+  // a que o Bruno mais abre.
+  const [pr, c, c2, s, sa, dupes0, vinc0, st0] = await Promise.all([
     q('SELECT pid, views, clicks FROM pressel_day WHERE day=?', day),
     q("SELECT pid, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' GROUP BY pid", start, end),
     q("SELECT pid, inst, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' AND inst IS NOT NULL GROUP BY pid, inst", start, end),
     q("SELECT l.pid pid, s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND l.pid IS NOT NULL AND l.pid<>'' GROUP BY l.pid, s.instance", start, end),
     q("SELECT s.instance inst, COUNT(*) v, COALESCE(SUM(s.value),0) val FROM wa_sales s WHERE s.ts>=? AND s.ts<? GROUP BY s.instance", start, end),
+    q("SELECT s.phone p FROM wa_sales s WHERE s.ts>=? AND s.ts<?", start, end),
+    q("SELECT phone, pid, inst FROM wa_lead WHERE pid IS NOT NULL AND pid<>''"),
+    _getDashData(env).catch(() => ({})),
   ]);
   pr.forEach(r=>{ m.vc[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
   c.forEach(r=>{ m.contatos[String(r.pid)]=Number(r.c)||0; });
   c2.forEach(r=>{ const pid=String(r.pid); (m.contatosVI[pid]=m.contatosVI[pid]||{})[r.inst]=Number(r.c)||0; });
   s.forEach(r=>{ const pid=String(r.pid); m.vendas[pid]=(m.vendas[pid]||0)+(Number(r.v)||0); m.valor[pid]=(m.valor[pid]||0)+(Number(r.val)||0); (m.vendasVI[pid]=m.vendasVI[pid]||{})[r.inst||'']=Number(r.v)||0; });
   sa.forEach(r=>{ m.vendasInst[String(r.inst||'')]={ v:Number(r.v)||0, val:Number(r.val)||0 }; });
+
+  // VENDA CADASTRADA NA DASH TAMBEM CONTA.
+  //
+  // Ate aqui "Vendas" saia SO da wa_sales, que e a venda detectada pela frase "Pedido Concluido" no
+  // WhatsApp. Pedido criado pelo Novo Pedido vive em data.leads e nao aparecia: em 18/08/2026 o
+  // Murilo cadastrou uma venda de R$ 497 e a Chegada de leads seguiu marcando zero. Sao duas fontes
+  // pro mesmo fato e a tela olhava so uma.
+  //
+  // Casa pelo TELEFONE com wa_lead, que e quem sabe de qual pressel o lead veio. Dedup pelo telefone:
+  // se a mesma venda existe nas duas fontes (o vendedor cadastrou E mandou a frase), conta UMA.
+  try {
+    const st = st0 || {};
+    const leads = Array.isArray(st && st.leads) ? st.leads : [];
+    if (leads.length) {
+      const jaTem = new Set();
+      const dupes = dupes0 || [];
+      dupes.forEach(r => jaTem.add(String(r.p || '').replace(/\D/g, '').slice(-8)));
+      const vinc = vinc0 || [];
+      const porTel = {};
+      vinc.forEach(r => { const k = String(r.phone || '').replace(/\D/g, '').slice(-8); if (k) porTel[k] = r; });
+      for (const l of leads) {
+        const ts = Number(l && l.ts) || 0;
+        // sem carimbo de tempo no lead, usa o id (o Novo Pedido usa Date.now() como id)
+        const quando = ts > 0 ? ts : Math.floor((Number(l && l.id) || 0) / 1000);
+        if (!(quando >= start && quando < end)) continue;
+        const tel = String((l && l.wa) || '').replace(/\D/g, '').slice(-8);
+        if (!tel || jaTem.has(tel)) continue;
+        const v = porTel[tel];
+        if (!v) continue;                       // sem pressel conhecida: nao da pra atribuir
+        jaTem.add(tel);
+        const pid = String(v.pid);
+        const inst = String(v.inst || '');
+        const val = Number((l && (l.valor_neg || l.vl)) || 0);
+        m.vendas[pid] = (m.vendas[pid] || 0) + 1;
+        m.valor[pid] = (m.valor[pid] || 0) + val;
+        (m.vendasVI[pid] = m.vendasVI[pid] || {})[inst] = (m.vendasVI[pid][inst] || 0) + 1;
+        const ai = m.vendasInst[inst] || (m.vendasInst[inst] = { v: 0, val: 0 });
+        ai.v += 1; ai.val += val;
+      }
+    }
+  } catch (_) { /* sem blob: mantem so o que veio da wa_sales */ }
   return m;
 }
 async function handlePresselMetricsLive(req, env){
@@ -7050,12 +10413,15 @@ async function handlePresselMetricsLive(req, env){
   let day = new URL(req.url).searchParams.get('day') || '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) day = _brDay();
   const M = await _presselDayMetrics(env, day);
+  // Metrica e por id de pressel: com o conjunto permitido em maos, o resto sai sozinho.
+  const _idsM = _presselIdsVisiveis(u, await _getDashData(env).catch(() => ({})));
   const pressels = {};
   new Set([...Object.keys(M.vc), ...Object.keys(M.contatos), ...Object.keys(M.vendas)]).forEach(pid=>{
     const vc = M.vc[pid]||{};
     const p = { views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, valor:M.valor[pid]||0, vend:{} };
     const cvi = M.contatosVI[pid]||{}, vvi = M.vendasVI[pid]||{};
     new Set([...Object.keys(cvi), ...Object.keys(vvi)]).forEach(inst=>{ const b=_atFromInst(inst); const e=(p.vend[b]=p.vend[b]||{contatos:0,vendas:0}); e.contatos+=cvi[inst]||0; e.vendas+=vvi[inst]||0; });   // chave = at (tira ax_ E _b) pra casar com metric.vend[at.id] no front
+    if (_idsM && !_idsM.has(String(pid))) return;
     pressels[pid] = p;
   });
   return json({ ok:true, day, today: _brDay(), pressels });
@@ -7077,7 +10443,19 @@ async function handlePresselMetricsPage(req, env, id){
   const contatos=M.contatos[String(id)]||0, vendas=M.vendas[String(id)]||0;
   const cvi=M.contatosVI[String(id)]||{}, vvi=M.vendasVI[String(id)]||{};
   let nameMap={};
-  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  // O NOME VEM DE users e nao passava pelo recorte: com sessao de afiliado, "Guilherme" e "Murilo"
+  // continuavam na tabela por vendedor mesmo com as pressels ja filtradas. Agora, quando ha recorte
+  // ativo (_idsPag na pagina, _idsOk no JSON), so entram os nomes do mundo de quem pediu.
+  try{
+    const _cortaNome = (typeof _idsPag !== 'undefined' ? _idsPag : (typeof _idsOk !== 'undefined' ? _idsOk : null)) !== null;
+    const _uNome = _cortaNome ? await authUser(req, env).catch(() => null) : null;
+    const _aflNome = _uNome ? aflDe(_uNome) : null;
+    const us=await env.DB.prepare('SELECT id, name, afiliado_id FROM users').all();
+    (us.results||[]).forEach(u=>{
+      if (_cortaNome && String(u.afiliado_id||'') !== String(_aflNome||' ')) return;
+      nameMap[String(u.id)]=u.name;
+    });
+  }catch(_){}
   // vendedores da roleta AGORA + qualquer um com atividade hoje nesta pressel (mesmo já tirado da roleta) — o dado não some
   const _vAt=(inst)=>_atFromInst(inst);
   const vm={};
@@ -7424,18 +10802,37 @@ async function _roletaDiagData(env, day, chips, nameMap){
 // MESMA computação da página /pressels-total, mas devolve DADOS estruturados pra dash renderizar nativo
 // (sem iframe). full = diretor logado → número completo; senão mascarado (…1234). Espelha exatamente a
 // lógica da página HTML (atribuição, ranking, split de vendedor, agregação de comprador).
-async function _presselsTotalData(env, day, view, per, full){
-  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-  let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
-  const pressels=Array.isArray(data.pressels)?data.pressels:[];
-  const chips=Array.isArray(data.chips)?data.chips:[];
+async function _presselsTotalData(env, day, view, per, full, _uAtual){
+  // DUAS ECONOMIAS DE ESPERA, e as duas doiam: esta tela e a que o Bruno mais abre e levava de 1,2 a
+  // 2,0 SEGUNDOS pra devolver menos de 1 KB - era tudo ida e volta ao banco, uma esperando a outra.
+  //  (a) o blob vinha de um SELECT cru, relido e reparseado (275 KB) a CADA requisicao, ignorando o
+  //      _getDashData, que ja guarda o mesmo objeto por 8s. Esta funcao so LE o data (conferido),
+  //      entao pode usar o cache compartilhado sem risco de sujar o estado de ninguem.
+  //  (b) a lista de usuarios nao depende do blob: as duas saem juntas em vez de em fila.
+  const [data, us] = await Promise.all([
+    _getDashData(env).catch(() => ({})),
+    env.DB.prepare('SELECT id, name, COALESCE(archived,0) AS archived FROM users').all().catch(() => null),
+  ]);
+  // Recorte por dono: o afiliado ve so as pressels dele nesta tela inteira (metricas, pedidos e
+  // leads). Filtrar aqui, na origem, cobre os tres modos de uma vez.
+  const _idsOk = _presselIdsVisiveis(_uAtual, data);
+  const pressels=(Array.isArray(data.pressels)?data.pressels:[]).filter(p=>!_idsOk||_idsOk.has(String(p&&p.id)));
+  // Os chips entram no _vendCell, que anexa os 4 ultimos digitos do numero na linha do vendedor.
+  // Sem recorte, o afiliado veria o final dos NOSSOS numeros.
+  const _meuMundoChip = _idsOk ? (isAfiliado(_uAtual) ? aflDe(_uAtual) : '\u0000') : null;
+  const chips=(Array.isArray(data.chips)?data.chips:[]).filter(c=>!_idsOk||String((c&&c.afl)||'')===String(_meuMundoChip||''));
   let nameMap={};
-  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  const _arquivados=new Set(); let _temUsers=false;
+  try{ ((us&&us.results)||[]).forEach(u=>{nameMap[String(u.id)]=u.name; if(Number(u.archived)) _arquivados.add(String(u.id));}); _temUsers=((us&&us.results)||[]).length>0; }catch(_){}
   const today=_brDay(); const isToday=(day===today);
   const out={ ok:true, view, per, day, today, isToday, full:!!full };
   // "Conversão por número" (diagnóstico de chip queimando) expõe telefone completo do atendente +
   // conversão por número: é privado do diretor. GT/vendedor NÃO vê perda (regra gt-nao-ve-perda).
-  out.side=full?await _roletaDiagData(env, day, chips, nameMap):[];
+  // O DIAGNOSTICO LATERAL E AS METRICAS DO DIA NAO DEPENDEM UM DO OUTRO, entao saem juntos. Antes o
+  // `await` aqui segurava tudo: o diagnostico ia inteiro (varias consultas) e SO DEPOIS comecavam as
+  // metricas. Agora os dois disparam e a espera e a do mais lento, nao a soma.
+  const pDiag = full ? _roletaDiagData(env, day, chips, nameMap).catch(() => []) : Promise.resolve([]);
+  const pMetr = _presselDayMetrics(env, day).catch(() => null);
   const _vAt=(inst)=>_atFromInst(inst);
   const _emUsoIds=new Set(['em_uso']);
   try{ (Array.isArray(data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{ const lbl=String((s&&(s.label||s.id))||'').toLowerCase().replace(/[_\s]+/g,' ').trim(); if(lbl==='em uso' && s && s.id) _emUsoIds.add(String(s.id)); }); }catch(_){}
@@ -7446,8 +10843,37 @@ async function _presselsTotalData(env, day, view, per, full){
   // TODOS os "Em uso" (roleta multi-número). Fora do diretor o número sai MASCARADO: esta tela é a
   // que o gestor de tráfego usa, e o telefone dos chips é o ativo mais sensível da operação (é o que
   // permite mapear a roleta inteira por fora). Ele precisa do volume por vendedor, não do número.
-  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); let nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean); if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); } if(!full) nums=nums.map(n=>{ const p=String(n||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):'—'; }); return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };
+  // Numero sempre no MESMO formato. O chip e cadastrado a mao e vem de dois jeitos no banco
+  // ("(15) 99125-8028" e "8291215713"), e a tabela mostrava um de cada, o que parece defeito.
+  const _fmtFone=(n)=>{ const d=String(n||'').replace(/\D/g,'').replace(/^55/,''); if(d.length<10) return String(n||'—'); const ddd=d.slice(0,2), r=d.slice(2); return '(' + ddd + ') ' + r.slice(0, r.length-4) + '-' + r.slice(-4); };
+  const _vendCell=(at)=>{ at=String(at); const mine=_chipsDo(at); let nums=mine.filter(_isEmUso).map(c=>c.num).filter(Boolean); if(!nums.length){ const any=mine[0]; nums.push((any&&any.num)||'—'); } nums=full?nums.map(_fmtFone):nums.map(n=>{ const p=String(n||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):'—'; }); return {at, name:nameMap[at]||'Vendedor', nums, contatos:0, vendas:0}; };
   const _rankVend=(vend)=>{ const cv=(x)=>{ const c=Number(x.contatos)||0; return c>0?(Number(x.vendas)||0)/c:0; }; return (vend||[]).slice().sort((a,b)=> ((Number(b.vendas)||0)-(Number(a.vendas)||0)) || (cv(b)-cv(a)) || ((Number(b.contatos)||0)-(Number(a.contatos)||0))); };
+  // ── QUEM APARECE NA TABELA POR VENDEDOR ─────────────────────────────────────
+  //
+  // Ela listava TODO mundo cadastrado na pressel, e o Bruno abriu em 18/08/2026 com cinco linhas onde
+  // duas trabalhavam: aparecia um vendedor ARQUIVADO havia semanas, o socio (que nao atende), e uma
+  // linha "Vendedor" sem numero, que e um balde interno (__sd) sem usuario nenhum atras. Tabela cheia
+  // de gente que nao trabalha esconde o que importa, que e quem esta recebendo lead agora.
+  //
+  // A regra: entra quem PRODUZIU no periodo (contato ou venda) ou quem esta NA ESCALA agora, isto e,
+  // tem numero "Em uso" e nao esta desligado no interruptor da pressel. Assim, no comeco do dia quem
+  // esta de plantao aparece com zero (e certo: ele esta recebendo), e quem saiu de operacao nao volta.
+  // Arquivado nunca entra. `at` sem usuario no banco tambem nao - esse corte so vale quando a lista de
+  // usuarios carregou, senao uma falha na consulta esvaziaria a tabela inteira.
+  const _naEscala=(p, at)=>{
+    const v=(p&&(p.vendedores||[])).find(x=>x&&String(x.at)===String(at));
+    if(!v || v.ativo===false) return false;
+    const off=v.off||{};
+    return _chipsDo(at).some(c=>_isEmUso(c) && !off[String(c.num||'').replace(/\D/g,'').slice(-8)] && !off[String(c.id)]);
+  };
+  const _vendVisivel=(x, p)=>{
+    const at=String((x&&x.at)||'');
+    if(!at) return false;
+    if(_arquivados.has(at)) return false;
+    if(_temUsers && !nameMap[at]) return false;
+    if(Number(x.contatos)>0 || Number(x.vendas)>0) return true;
+    return p ? _naEscala(p, at) : pressels.some(pp=>_naEscala(pp, at));
+  };
   const pad=n=>String(n).padStart(2,'0');
   const fmtNum=n=>{ n=String(n||'').replace(/\D/g,''); if(!n) return ''; return n.startsWith('55')?n.slice(2):n; };
   const mask=ph=>{ const p=String(ph||'').replace(/\D/g,''); return p?('…'+p.slice(-4)):''; };
@@ -7455,7 +10881,35 @@ async function _presselsTotalData(env, day, view, per, full){
   const byName=(a,b)=>String(nameMap[a]||a).localeCompare(String(nameMap[b]||b));
 
   if(view==='metricas'){
-    const M=await _presselDayMetrics(env, day);
+    const M=await pMetr;
+    // RECORTE DAS METRICAS CRUAS (25/08/2026). Erro critico que o Bruno pegou: a Chegada de leads
+    // do afiliado mostrava "2 vendas" com ZERO pressels dele. O filtro por dono cortava so a LISTA
+    // de pressels; o cartao TOTAL vinha de M.vendasInst e a tabela por vendedor de M.contatosVI,
+    // que sao mapas da operacao INTEIRA e nao sabem de quem e a pressel.
+    //
+    // Aqui as duas fontes viram copias podadas ANTES de qualquer soma:
+    //   _cvi  = contatos por instancia, so das pressels que ele pode ver;
+    //   _vinst = vendas por instancia, reconstruidas a partir de vendasVI das pressels dele
+    //            (vendasInst e por instancia e nao guarda de qual pressel veio, entao nao da pra
+    //             filtrar; tem que remontar).
+    // Com _idsOk null (diretor e gestor), copia tudo e a conta do Bruno nao muda em nada.
+    const _cvi = {}, _vinst = {};
+    for (const pid of Object.keys(M.contatosVI || {})) {
+      if (_idsOk && !_idsOk.has(String(pid))) continue;
+      _cvi[pid] = M.contatosVI[pid];
+    }
+    if (!_idsOk) {
+      Object.assign(_vinst, M.vendasInst || {});
+    } else {
+      for (const pid of Object.keys(M.vendasVI || {})) {
+        if (!_idsOk.has(String(pid))) continue;
+        for (const inst of Object.keys(M.vendasVI[pid] || {})) {
+          const n = Number(M.vendasVI[pid][inst]) || 0;
+          const e = _vinst[inst] || (_vinst[inst] = { v: 0, val: 0 });
+          e.v += n;
+        }
+      }
+    }
     const secs=pressels.map(p=>{
       const pid=String(p.id), vc=M.vc[pid]||{}, cvi=M.contatosVI[pid]||{}, vvi=M.vendasVI[pid]||{};
       const vm={}; const ens=(at)=>{ at=String(at); if(at && !vm[at]) vm[at]=_vendCell(at); };
@@ -7464,17 +10918,47 @@ async function _presselsTotalData(env, day, view, per, full){
       Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
       Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
       Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
-      return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend:_rankVend(Object.values(vm))};
+      return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend:_rankVend(Object.values(vm).filter(x=>_vendVisivel(x,p)))};
     });
     const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
-    tot.vendas=Object.values(M.vendasInst||{}).reduce((a,x)=>a+(Number(x.v)||0),0);
+    // O override existe pra contar venda que chegou SEM pid (nao casou com pressel). Pro afiliado
+    // isso nao vale: venda sem pressel identificada nao e dele, e era exatamente o caminho pelo
+    // qual as nossas 2 vendas entravam no total dele. Com corte, o total e a soma das pressels dele.
+    if (!_idsOk) tot.vendas=Object.values(M.vendasInst||{}).reduce((a,x)=>a+(Number(x.v)||0),0);
     const _vt={}; const _vtEns=(k)=>{ k=String(k); if(k && !_vt[k]) _vt[k]=_vendCell(k); };
     pressels.forEach(p=>(p.vendedores||[]).filter(v=>v.ativo!==false).forEach(v=>_vtEns(v.at)));
-    Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>_vtEns(_vAt(inst))));
-    Object.keys(M.vendasInst||{}).forEach(inst=>_vtEns(_vAt(inst)));
-    Object.keys(M.contatosVI||{}).forEach(pid=>Object.keys(M.contatosVI[pid]).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].contatos+=Number(M.contatosVI[pid][inst])||0; }));
-    Object.keys(M.vendasInst||{}).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].vendas+=Number((M.vendasInst[inst]||{}).v)||0; });
-    out.total=tot; out.pressels=secs; out.totVend=_rankVend(Object.values(_vt));
+    Object.keys(_cvi).forEach(pid=>Object.keys(_cvi[pid]).forEach(inst=>_vtEns(_vAt(inst))));
+    Object.keys(_vinst).forEach(inst=>_vtEns(_vAt(inst)));
+    Object.keys(_cvi).forEach(pid=>Object.keys(_cvi[pid]).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].contatos+=Number(_cvi[pid][inst])||0; }));
+    Object.keys(_vinst).forEach(inst=>{ const at=_vAt(inst); if(_vt[at]) _vt[at].vendas+=Number((_vinst[inst]||{}).v)||0; });
+    out.total=tot; out.pressels=secs; out.totVend=_rankVend(Object.values(_vt).filter(x=>_vendVisivel(x,null)));
+    // Investido no MESMO periodo que a tela esta mostrando. Em 'mes' pega o mes inteiro do dia
+    // escolhido; no resto, o dia. So pra quem ve tudo (o gestor de trafego nao ve dinheiro).
+    if (full) {
+      const de = (per === 'mes') ? (day.slice(0, 7) + '-01') : day;
+      const ate = (per === 'mes') ? (day.slice(0, 7) + '-31') : day;
+      out.gasto = await _ttGasto(env, de, ate);
+      // CPA NA LATERAL (pedido do Bruno em 20/08/2026, os mesmos dois numeros do Dashboard de
+      // Trafego, pra tela nenhuma contar diferente da outra):
+      //   por pedido -> investido / pedidos fechados. Assume que todo pedido paga.
+      //   real       -> investido / pedidos que PAGARAM. Sempre maior, porque COD nem sempre paga.
+      // `pagos` nao existia neste payload (tot.vendas e pedido fechado, nao pago), entao conta aqui.
+      try {
+        const ini = Math.floor(new Date(de + 'T00:00:00-03:00').getTime() / 1000);
+        const fim = Math.floor(new Date(ate + 'T23:59:59-03:00').getTime() / 1000);
+        const pg = await env.DB.prepare(
+          "SELECT COUNT(*) n FROM five_orders WHERE charge_status='PAID' AND created_at >= ? AND created_at <= ?"
+        ).bind(ini, fim).first();
+        const inv = Number(out.gasto && out.gasto.valor) || 0;
+        const ped = Number(tot && tot.vendas) || 0;
+        const pagos = Number(pg && pg.n) || 0;
+        out.cpa = {
+          investido: inv, pedidos: ped, pagos,
+          porPedido: ped > 0 && inv > 0 ? inv / ped : 0,
+          real: pagos > 0 && inv > 0 ? inv / pagos : 0,
+        };
+      } catch (_) { out.cpa = null; }
+    }
   } else if(view==='vendas'){
     let orders=[];
     try{
@@ -7486,7 +10970,7 @@ async function _presselsTotalData(env, day, view, per, full){
     const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
     out.totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
     out.nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length; out.nS=orders.length-out.nP; out.count=orders.length;
-    out.orders=orders.map(o=>{ const at=baseAt(o.instance); const attr=!!(o.pid&&String(o.pid).trim()!==''); const ph=String(o.phone||'').replace(/\D/g,''); return { name:o.name||'Cliente', seller:nameMap[at]||o.instance||'—', value:Number(o.value)||0, ts:Number(o.ts||0), attr, pnome:attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'', aprox:o.src==='fifo', phone: full?ph:'', phoneFmt: full?fmtNum(ph):mask(ph) }; });
+    out.orders=orders.map(o=>{ const at=baseAt(o.instance); const attr=!!(o.pid&&String(o.pid).trim()!==''); const ph=String(o.phone||'').replace(/\D/g,''); return { at, name:o.name||'Cliente', seller:nameMap[at]||o.instance||'—', value:Number(o.value)||0, ts:Number(o.ts||0), attr, pnome:attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'', aprox:o.src==='fifo', phone: full?ph:'', phoneFmt: full?fmtNum(ph):mask(ph) }; });
   } else if(view==='leads' && per==='mes'){
     const dP=day.split('-'); const mY=+dP[0], mM=+dP[1];
     const monthStart=Math.floor(new Date(dP[0]+'-'+dP[1]+'-01T00:00:00-03:00').getTime()/1000);
@@ -7542,9 +11026,82 @@ async function _presselsTotalData(env, day, view, per, full){
     });
     out.totL=leads.length; out.totP=leads.filter(l=>l.pid&&String(l.pid).trim()!=='').length;
   }
+  // O painel lateral vale pra TODAS as abas, como era antes de eu paralelizar. Se ficasse so dentro
+  // do ramo 'metricas', ele sumiria em Pedidos e Leads sem ninguem pedir.
+  out.side = await pDiag;
   return out;
 }
 // GET /pressels-total.json — mesmos dados da página, em JSON, pra dash renderizar nativo. Auth por Bearer.
+// ── QUANTO JA SE GASTOU EM ANUNCIO NO PERIODO ────────────────────────────────
+//
+// O Bruno pediu em 18/08/2026 o investido do periodo em cima do "Conversao por numero", pra ver o
+// gasto junto do resultado sem abrir o gerenciador do TikTok.
+//
+// DUAS FONTES, nesta ordem:
+//  1. TIKTOK AO VIVO, quando existirem `tt_ads_token` e `tt_advertiser_id` no app_config. O token do
+//     pixel que temos hoje NAO SERVE: ele e de Events API e o TikTok recusa leitura de relatorio com
+//     ele ("advertiser does not grant you /pixel/list/:GET permission", conferido no dia). Precisa de
+//     token com escopo de Reporting/Ads Management.
+//  2. LANCADO A MAO, enquanto o token nao vem: soma data.trafego_registros do periodo e, na falta
+//     dele, os gastos do ContaSimples com cara de TikTok. Assim o cartao ja nasce com numero de
+//     verdade em vez de zero, e a tela diz de onde veio.
+//
+// A resposta carrega `fonte` de proposito: numero de dinheiro sem origem e o comeco de toda
+// discussao boba sobre "esse valor esta certo?".
+async function _ttGasto(env, de, ate) {
+  const cacheKey = 'ttgasto:' + de + ':' + ate;
+  try {
+    const c = JSON.parse((await _readConfig(env, cacheKey)) || 'null');
+    if (c && (Math.floor(Date.now() / 1000) - Number(c.ts || 0)) < 300) return c;   // 5 min
+  } catch (_) {}
+  let out = { valor: 0, fonte: 'sem_dado', moeda: 'BRL', ts: Math.floor(Date.now() / 1000) };
+  const token = await _readConfig(env, 'tt_ads_token');
+  const adv = await _readConfig(env, 'tt_advertiser_id');
+  if (token && adv) {
+    try {
+      const qs = new URLSearchParams({
+        advertiser_id: String(adv), report_type: 'BASIC', data_level: 'AUCTION_ADVERTISER',
+        dimensions: JSON.stringify(['advertiser_id']), metrics: JSON.stringify(['spend']),
+        start_date: de, end_date: ate, page_size: '1',
+      });
+      const r = await fetch('https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/?' + qs.toString(), {
+        headers: { 'Access-Token': token, 'Accept': 'application/json', 'User-Agent': 'SellWave/1.0 (+https://sellwave.com.br)' },
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && String(j.code) === '0') {
+        const lista = (j.data && j.data.list) || [];
+        const soma = lista.reduce((a, x) => a + (Number(x && x.metrics && x.metrics.spend) || 0), 0);
+        out = { valor: soma, fonte: 'tiktok', moeda: 'BRL', ts: Math.floor(Date.now() / 1000) };
+      } else {
+        out.erro = 'tiktok: ' + String(j.message || ('HTTP ' + r.status)).slice(0, 120);
+      }
+    } catch (e) { out.erro = 'tiktok: ' + String((e && e.message) || e).slice(0, 120); }
+  }
+  if (out.fonte !== 'tiktok') {
+    // Lancado a mao. `dia` e YYYY-MM-DD nos registros de trafego; nos gastos do ContaSimples a data
+    // vem 'DD/MM', entao compara pelo par dia+mes dentro do intervalo.
+    try {
+      const data = await _getDashData(env);
+      const regs = (Array.isArray(data.trafego_registros) ? data.trafego_registros : [])
+        .filter((x) => { const d = String((x && x.dia) || '').slice(0, 10); return d >= de && d <= ate; });
+      if (regs.length) {
+        out = { valor: regs.reduce((a, x) => a + (Number(x.total) || 0), 0), fonte: 'manual', moeda: 'BRL', ts: Math.floor(Date.now() / 1000) };
+      } else {
+        const dentro = (ddmm) => {
+          const m = String(ddmm || '').match(/^(\d{2})\/(\d{2})/); if (!m) return false;
+          const iso = de.slice(0, 4) + '-' + m[2] + '-' + m[1];
+          return iso >= de && iso <= ate;
+        };
+        const g = (Array.isArray(data.gastos) ? data.gastos : [])
+          .filter((x) => /tiktok|bytedance/i.test(String((x && x.campanha) || '')) && dentro(x && x.data));
+        if (g.length) out = { valor: g.reduce((a, x) => a + (Number(x.valor) || 0), 0), fonte: 'contasimples', moeda: 'BRL', ts: Math.floor(Date.now() / 1000) };
+      }
+    } catch (_) {}
+  }
+  try { await _writeConfig(env, cacheKey, JSON.stringify(out)); } catch (_) {}
+  return out;
+}
+
 async function handlePresselsTotalJson(req, env){
   const u=await authUser(req, env);
   if(!u) return err('Não autenticado', 401);
@@ -7559,7 +11116,7 @@ async function handlePresselsTotalJson(req, env){
   // Leads: o vendedor VÊ, mas só a carteira DELE (pedido do Bruno em 16/08/2026 — antes tomava
   // "Só o diretor vê os leads" em vermelho na tela). O diretor continua vendo todo mundo.
   // O corte é aqui no servidor, não no navegador: o lead dos outros nem sai daqui.
-  const dados = await _presselsTotalData(env, day, view, per, full);
+  const dados = await _presselsTotalData(env, day, view, per, full, u);
   if (view === 'leads' && !full) {
     const meu = String(u.name || '').trim().toLowerCase();
     const meuId = String(u.id || '');
@@ -7571,13 +11128,58 @@ async function handlePresselsTotalJson(req, env){
     dados.totP = (dados.sellers || []).reduce((soma, s) => soma + (s.daP || 0), 0);
     dados.escopo = 'meus';
   }
+  // LEADS DO MES TAMBEM E POR VENDEDOR. O corte acima so pegava a aba de leads do DIA; no mes o
+  // vendedor via os cartoes do topo com o numero da operacao inteira (137 leads, R$ 3.876) e a
+  // propria linha dele logo abaixo com outro valor - dois numeros brigando na mesma tela.
+  // E no lugar do FATUROU ele ve COMISSAO PREVISTA: faturamento e numero do dono; o que interessa
+  // pro vendedor e quanto daquilo e dele. Sai calculado aqui pra taxa dele nao viajar pro navegador.
+  // ABA PEDIDOS: mesma regra da aba Leads, que ate agora nao valia aqui. Sem este corte o vendedor
+  // recebia nome do cliente, valor e VENDEDOR de toda a empresa, mais o faturamento do dia no
+  // cartao do topo. O corte de leads compara por NOME (fragil: dois 'Murilo' se confundem); aqui
+  // uso o ID que veio na propria linha, que e o dono da instancia que fechou a venda.
+  if (view === 'vendas' && !full) {
+    const meuId = String(u.id || '');
+    dados.orders = (dados.orders || []).filter((o) => String(o.at || '') === meuId);
+    dados.totV = dados.orders.reduce((soma, o) => soma + (Number(o.value) || 0), 0);
+    dados.nP = dados.orders.filter((o) => o.attr).length;
+    dados.nS = dados.orders.length - dados.nP;
+    dados.count = dados.orders.length;
+    dados.escopo = 'meus';
+  }
+
+  if (view === 'leads' && per === 'mes' && !full) {
+    const meu = String(u.name || '').trim().toLowerCase();
+    const meuId = String(u.id || '');
+    dados.sellers = (dados.sellers || []).filter((s) => {
+      const n = String(s.name || '').trim().toLowerCase();
+      return n === meu || n === meuId;
+    });
+    dados.totLeads = dados.sellers.reduce((a2, s2) => a2 + (Number(s2.leads) || 0), 0);
+    dados.totComp = dados.sellers.reduce((a2, s2) => a2 + (Number(s2.comp) || 0), 0);
+    dados.totRev = dados.sellers.reduce((a2, s2) => a2 + (Number(s2.rev) || 0), 0);
+    const pct = Number(u.com_pct) || 0;
+    dados.totCom = Math.round(dados.totRev * pct) / 100;   // comissao prevista sobre o que ele vendeu
+    dados.comPct = pct;
+    dados.escopo = 'meus';
+  }
   return json(dados);
 }
 async function handlePresselsTotalPage(req, env){
   const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
-  const pressels=Array.isArray(data.pressels)?data.pressels:[];
-  const chips=Array.isArray(data.chips)?data.chips:[];
+  // ESTA PAGINA E PUBLICA DE PROPOSITO (o gestor de trafego abre sem login), mas quem chega com
+  // SESSAO de afiliado nao pode ver a nossa: a varredura de 25/08 achou "BM Br", "Guilherme" e
+  // "Murilo" servidos pro token do afiliado. Aqui o recorte vale quando ha sessao identificada;
+  // sem sessao, a pagina segue como sempre foi.
+  // (O acesso anonimo por URL continua existindo e e decisao antiga - ver memoria gt-nao-ve-perda.)
+  let _idsPag = null;
+  try {
+    const _up = await authUser(req, env);
+    if (_up) _idsPag = _presselIdsVisiveis(_up, data);
+  } catch (_) { /* sem sessao: pagina publica normal */ }
+  const _donoPag = _idsPag ? ' ' : null;
+  const pressels=(Array.isArray(data.pressels)?data.pressels:[]).filter(p=>!_idsPag||_idsPag.has(String(p&&p.id)));
+  const chips=(Array.isArray(data.chips)?data.chips:[]).filter(c=>!_idsPag||String((c&&c.afl)||'')!==String(_donoPag));
   let day=new URL(req.url).searchParams.get('day')||'';
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) day=_brDay();
   else { const _dp=day.split('-'); if(+_dp[1]<1||+_dp[1]>12||+_dp[2]<1||+_dp[2]>31) day=_brDay(); }   // rejeita mês/dia impossível (ex: 2026-00-01)
@@ -7599,7 +11201,19 @@ async function handlePresselsTotalPage(req, env){
   // Pula a agregação pesada de métricas quando a aba é Pedidos/Leads (elas não usam) — deixa a troca de aba MUITO mais rápida.
   const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={};
-  try{ const us=await env.DB.prepare('SELECT id, name FROM users').all(); (us.results||[]).forEach(u=>{nameMap[String(u.id)]=u.name;}); }catch(_){}
+  // O NOME VEM DE users e nao passava pelo recorte: com sessao de afiliado, "Guilherme" e "Murilo"
+  // continuavam na tabela por vendedor mesmo com as pressels ja filtradas. Agora, quando ha recorte
+  // ativo (_idsPag na pagina, _idsOk no JSON), so entram os nomes do mundo de quem pediu.
+  try{
+    const _cortaNome = (typeof _idsPag !== 'undefined' ? _idsPag : (typeof _idsOk !== 'undefined' ? _idsOk : null)) !== null;
+    const _uNome = _cortaNome ? await authUser(req, env).catch(() => null) : null;
+    const _aflNome = _uNome ? aflDe(_uNome) : null;
+    const us=await env.DB.prepare('SELECT id, name, afiliado_id FROM users').all();
+    (us.results||[]).forEach(u=>{
+      if (_cortaNome && String(u.afiliado_id||'') !== String(_aflNome||' ')) return;
+      nameMap[String(u.id)]=u.name;
+    });
+  }catch(_){}
   const _sideHtml=full?await _roletaDiagHtml(env, day, chips, nameMap):'';   // "Conversão por número" (telefone + conversão) é SÓ diretor (gt-nao-ve-perda)
   const _vAt=(inst)=>_atFromInst(inst);   // instância -> id do vendedor
   // "Em uso" igual a dash enxerga (a dash usa ids de status customizados tipo st_xxxx com label "Em uso")
@@ -7856,29 +11470,75 @@ async function handlePresselsTotalPage(req, env){
   }
   return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads do dia (1º contato de cada número), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = virou venda.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
 }
-async function handlePresselPublic(req, env, id){
-  const data = await _getDashData(env);   // cacheado: era parseado (1.3MB) a cada clique de anúncio
+// ── AS TABELAS DA PRESSEL SO SAO PREPARADAS UMA VEZ ──────────────────────────
+//
+// A pagina da pressel e o destino do anuncio: cada clique PAGO passa por ela. E ela rodava, a cada
+// clique, dez comandos de esquema (CREATE TABLE IF NOT EXISTS e ALTER TABLE ADD COLUMN) espalhados
+// pelo caminho. Cada ida ao D1 custa uns 200ms, entao so isso somava ~2 segundos: medido em
+// 18/08/2026 com a campanha no ar, a pagina levava 2,2s pra sair, com 3,7 KB de conteudo. Dois
+// segundos de tela branca em cima de clique comprado.
+//
+// Agora roda uma vez por isolate, igual _waEnsureTables e _scEnsureTables. Deploy novo zera o
+// isolate e o esquema e reaplicado, entao continua seguro pra mudanca de coluna.
+let _presselTablesOk = false;
+async function _presselEnsure(env){
+  if (_presselTablesOk) return;
+  try{
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN utm TEXT').run(); }catch(_){}
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
+    _presselTablesOk = true;
+  }catch(_){ /* nao trava a pagina: se o esquema falhar, o proximo acesso tenta de novo */ }
+}
+
+async function handlePresselPublic(req, env, id, ctx){
+  // CONTADOR NAO SEGURA A PAGINA. Cada gravacao no D1 custa ~200ms de rede, e o caminho do clique
+  // pago fazia sete delas em fila (visita, clique pendente, views, roleta) antes de mandar o HTML.
+  // O visitante nao precisa esperar por nenhuma: `depois()` joga isso pro waitUntil, que roda com a
+  // resposta ja entregue. Se nao houver ctx (chamada interna), roda como antes, aguardando.
+  const _depois = [];
+  const depois = (p) => { if (ctx && ctx.waitUntil) _depois.push(p); return ctx && ctx.waitUntil ? null : p; };
+  const soltar = () => { if (ctx && ctx.waitUntil && _depois.length) ctx.waitUntil(Promise.allSettled(_depois)); };
+  // O ESQUEMA NAO SEGURA A PAGINA (27/08/2026). _presselEnsure roda 9 comandos de tabela EM FILA e
+  // so e memoizado por isolate - e a Cloudflare cria isolate novo o tempo todo, entao boa parte dos
+  // visitantes pagava ~9 idas ao banco antes de qualquer coisa. As tabelas ja existem em producao,
+  // e tudo que escreve nelas aqui e best-effort (`depois()` com catch) ou cria a propria tabela.
+  // Entao: dispara em segundo plano e segue. Numa base nova, o primeiro clique nao grava contador e
+  // o segundo ja grava - preco baratissimo perto de 1,8s no clique pago.
+  depois(_presselEnsure(env));
+  // AS DUAS LEITURAS DE ABERTURA VAO JUNTAS. Sao independentes (uma le o blob, a outra a conexao dos
+  // numeros) e estavam em fila, custando uma ida a mais em todo clique.
+  const [data, liveSetInicial] = await Promise.all([
+    _getDashData(env),   // cacheado: era parseado (1.3MB) a cada clique de anúncio
+    _presselLiveSet(env),
+  ]);
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
   const chips=Array.isArray(data.chips)?data.chips:[];
-  const p=pressels.find(x=>String(x.id)===String(id));
+  // `id` pode chegar como o numero de sempre ou como { slug, num } do afiliado; daqui pra baixo
+  // vale sempre o id interno, que e o que as metricas, a roleta e o pixel usam.
+  const p = _acharPressel(pressels, (id && id.slug != null) ? id.slug : id, (id && id.num != null) ? id.num : '');
   if(!p || (p.status && p.status!=='ativa')) return _presselOffline();
+  id = String(p.id);
   // só roteia lead pra número com WhatsApp conectado AGORA (pula número caído automaticamente)
   // Map: instância → número conectado (pra roteador conferir o número certo).
   // 'sc' = Sale Chat rodando. A roleta NÃO pode depender só da Evolution (que está saindo de
   // operação): sem contar o Sale Chat, wa_conn fica sem nenhuma linha 'open', o Map fica VAZIO
   // (que é truthy!) e _servConnOk reprova TODO número → a pressel serve offline e não entra lead.
-  const liveSet = await _presselLiveSet(env);
+  const liveSet = liveSetInicial;   // ja veio no Promise.all la de cima (nao chamar de novo: sao 3 consultas)
   const emUsoIds = _emUsoIdsDe(data);
-  const sellers=_resolvePresselSellers(p, chips, liveSet, emUsoIds);
+  const sellers=_resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, _foraIdsDe(data));
   // A PÁGINA SEMPRE ABRE quando a pressel está ativa. Ela é o destino do anúncio: derrubar tudo
   // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
   // visitante recebia "Indisponível no momento". Sem número, a oferta continua na tela e só o
   // botão do WhatsApp fica inerte (não leva a lugar nenhum) até alguém conectar.
   const pick = sellers.length ? await _presselBalancedPick(env, id, sellers) : null;
-  try{  // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
-    await env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run();
-  }catch(_){}
+  // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
+  await depois(env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run().catch(()=>{}));
   const _qs = new URL(req.url).searchParams;
   const ttclid = _qs.get('ttclid') || '';   // click id do anúncio do TikTok
   // CAMPANHA. O ttclid diz QUEM clicou, mas não de QUAL anúncio: sem isso o gestor de tráfego
@@ -7902,10 +11562,7 @@ async function handlePresselPublic(req, env, id){
   // estava na mão. Sem ttclid (orgânico, link compartilhado, TikTok que não passou o parâmetro)
   // perde-se só o pixel — a PRESSEL continua rastreada. A 1ª letra do código é a pressel.
   try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
-    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
-    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}   // pra deduplicar "Foram pro WhatsApp" por ttclid
-    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
+    // (esquema garantido no _presselEnsure, no comeco do handler)
     const ex = ttclid ? await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first() : null;
     if(ex){ leadCode = ex.code || ''; }
     else {
@@ -7915,9 +11572,8 @@ async function handlePresselPublic(req, env, id){
       // sem número: grava mesmo assim, com inst/num_key vazios. Guarda a PRESSEL de origem e mantém
       // a deduplicação por ttclid (senão um refresh contaria a mesma visita duas vezes).
       const _nk = pick ? String(pick.num||'').replace(/\D/g,'').slice(-8) : '';
-      try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN utm TEXT').run(); }catch(_){}
-      await env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key, utm) VALUES (?,?,?,strftime('%s','now'),0,?,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk, _utm).run();
-      if(ttclid){ try{ await _bumpPressel(env, id, 'views'); }catch(_){} }   // conta SÓ tráfego real do TikTok, 1x por clique
+      await depois(env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key, utm) VALUES (?,?,?,strftime('%s','now'),0,?,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk, _utm).run().catch(()=>{}));
+      if(ttclid){ await depois(_bumpPressel(env, id, 'views').catch(()=>{})); }   // conta SÓ tráfego real do TikTok, 1x por clique
     }
   }catch(_){}
   }
@@ -7930,6 +11586,15 @@ async function handlePresselPublic(req, env, id){
   const _destino = (p.link_on && /^https?:\/\//i.test(String(p.link||'').trim())) ? String(p.link).trim() : '';
   const wa = _destino || (pick ? (_waLink(pick.num, waMsg) || '') : '');
   const waJson=JSON.stringify(wa);
+  // SEM DESTINO = A UNICA FORMA DE ALGUEM NAO SER REDIRECIONADO (27/08/2026). Se a roleta nao
+  // devolveu numero e nao ha link fixo, o go() nao tem pra onde ir E o botao tambem morre: a
+  // pessoa fica olhando uma pagina que nao faz nada, e nada na dash acusa. Nao invento um numero
+  // aqui de proposito (mandaria lead pago pra um WhatsApp que ninguem esta olhando, que e pior);
+  // o que faco e gritar, pra parar de ser silencioso. Medido em 27/08: 0 ocorrencias em 12.350
+  // visitas dos ultimos 8 dias, entao isto e rede de seguranca, nao remendo de bug corrente.
+  if(!wa){
+    try{ await depois(env.DB.prepare("INSERT INTO five_debug (ts, subpath, method, body) VALUES (strftime('%s','now'),?,?,?)").bind('PRESSEL_SEM_NUMERO/'+String(id),'GET',JSON.stringify({pid:String(id),ttclid:ttclid||''}).slice(0,900)).run().catch(()=>{})); }catch(_){}
+  }
   let _wd=String((pick&&pick.num)||'').replace(/\D/g,''); if(_wd && _wd.length<=11) _wd='55'+_wd;
   // deep link whatsapp:// abre o app DIRETO com o texto (o CÓDIGO) preenchido. A NAVEGAÇÃO direta é o
   // único jeito que preenche de verdade no celular — o fetch/JSON quebrava isso e todo lead chegava
@@ -7942,7 +11607,19 @@ async function handlePresselPublic(req, env, id){
   const secs=Math.max(0, Number(p.redirect)||0);
   const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
-  // texto/código de verdade. Auto-redirect só com ttclid.
+  // texto/código de verdade.
+  //
+  // O AUTO-REDIRECT VALE PRA TODO MUNDO (27/08/2026). Ate aqui ele estava dentro de um
+  // `if(IS_TT)`, ou seja so acontecia quando a URL trazia `ttclid`. Quem chegasse sem o click
+  // id NUNCA era levado pro WhatsApp: tinha que achar e tocar no botao. Isso pegava (a) o
+  // Bruno testando a propria pressel, que abria e nao ia a lugar nenhum e leu como bug; e,
+  // pior, (b) trafego pago de verdade - na operacao do amigo 55% das visitas chegam sem
+  // ttclid (769 de 1.396 linhas de tt_pending), entao mais da metade do que ele pagou parava
+  // numa pagina que nao redirecionava.
+  // O `track()` CONTINUA exigindo ttclid por conta propria (guarda `if(_tk||!IS_TT)return`),
+  // entao o contador de "Foram pro WhatsApp" e o pixel nao mudam de base: quem nao tem click
+  // id segue fora da metrica, so passa a ser redirecionado. Sem isso, a serie historica de
+  // cliques quebraria no meio.
   // Evento das DUAS etapas do navegador, escolhido nas Configurações da pressel.
   //
   // O nome entra dentro de um <script> desta página, então passa pelo mesmo escape do _ttPixel
@@ -7959,173 +11636,399 @@ async function handlePresselPublic(req, env, id){
   const _jsClick=!_evC ? '' : `try{ttq&&ttq.track(${_esc(_evC)})}catch(e){}`;
   // O beacon vem ANTES do ttq de propósito: ele é quem alimenta "Foram pro WhatsApp" na dash. Com o
   // pixel primeiro, um erro ali levava a métrica junto.
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;if(IS_TT){${_jsView}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}${_jsClick}}function go(){track();if(!${waJson})return;try{location.href=${waAppJson}}catch(e){}setTimeout(function(){if(!document.hidden)location.href=${waJson}},1500);}${secs>0?`if(IS_TT){setTimeout(go,${secs*1000});}`:''}</script>`;
+  // TODO MUNDO VAI PRO WHATSAPP (27/08/2026, exigencia do Bruno: "nao tolero erro nessa parte,
+  // literalmente todo mundo tem que ser redirecionado"). Tres mudancas em cima do que existia:
+  //
+  // 1) O AGENDAMENTO E INCONDICIONAL. Era `${secs>0 ? ... : ''}`, entao `0` significava DESLIGADO.
+  //    Agora 0 quer dizer 0 SEGUNDOS: manda na hora. Nao existe mais valor que desliga o redirect.
+  // 2) O DISPARO TEM REDE. Antes era uma unica tentativa web 1,5s depois do deep link. Se o
+  //    `whatsapp://` nao pegasse (navegador que ignora o esquema, app fechando sozinho) e essa
+  //    unica tentativa caisse com a aba escondida, a pessoa ficava parada na pagina pra sempre.
+  //    Agora sao duas tentativas (1,2s e 3,5s) MAIS uma quando a aba volta a ficar visivel, que e
+  //    exatamente o caso de quem tentou abrir o app e voltou. Essa terceira e UMA VEZ SO: quem
+  //    abriu o WhatsApp, mandou a mensagem e voltou pro navegador nao pode ficar sendo jogado
+  //    de volta pro app em loop.
+  // 3) `?preview=1` pula SO o automatico (o botao continua indo). E pra ele abrir a propria pressel
+  //    pelo botao "Abrir pagina" da dash sem ser jogado no WhatsApp a cada conferida. Trafego de
+  //    anuncio nunca traz esse parametro.
+  //
+  // O `track()` continua exigindo ttclid por conta propria: quem chega sem click id passa a ser
+  // redirecionado, mas nao entra no contador de cliques nem no pixel, entao a serie historica nao
+  // quebra. A atribuicao dele acontece pelo CODIGO que vai no texto do WhatsApp.
+  // DE ONDE VINHAM OS ~2 SEGUNDOS QUE O BRUNO SENTIA (medido em 27/08/2026).
+  //
+  // Nao era o servidor: com a pagina de 4 KB, o custo dela em cima de uma rota vazia do mesmo worker
+  // ficou em 30 a 260ms depois que as idas ao D1 sairam da fila. O tempo estava AQUI, na espera do
+  // deep link. O fluxo e: `whatsapp://` primeiro (abre o app com o texto pronto) e, se ele nao
+  // pegar, cai no wa.me. A primeira tentativa de queda era 1,2s DEPOIS - e ela e justamente o caso
+  // COMUM no trafego pago: o TikTok abre o link no navegador de dentro do proprio app, onde o
+  // esquema `whatsapp://` costuma nao fazer nada e nao avisa. Resultado: 1,2 segundo de tela parada
+  // pra boa parte de quem clicou no anuncio.
+  //
+  // Agora sao tres tentativas (350ms, 1,4s e 3,5s). Baixar a primeira e seguro porque `_web` so age
+  // com a aba VISIVEL: se o app abriu, a pagina esta escondida e a queda nao faz nada. O pior caso
+  // de quem abriu o app e o wa.me carregar atras, que tambem leva pro WhatsApp. Mantive as duas
+  // tentativas longas porque aparelho lento demora mais pra trocar de app.
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;var _pv=new URLSearchParams(location.search).get('preview')==='1';if(IS_TT){${_jsView}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}${_jsClick}}var _foi=false;function _web(){if(document.hidden)return;try{location.href=${waJson}}catch(e){}}function go(){if(!${waJson})return;track();_foi=true;try{location.href=${waAppJson}}catch(e){}setTimeout(_web,350);setTimeout(_web,1400);setTimeout(_web,3500);}var _volta=false;document.addEventListener('visibilitychange',function(){if(_foi&&!_volta&&!document.hidden){_volta=true;setTimeout(_web,400)}});if(!_pv){setTimeout(go,${secs*1000});}</script>`;
   const els=_presselElsServer(p);
-  let body=els.map(e=>_elPublicHtml(e, wa)).join('');
+  let body=els.map(e=>_elPublicHtml(e, wa, id)).join('');
   if(p.fullclick){
+    soltar();
     return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
   }
   // Garante um botão de WhatsApp se o usuário não adicionou nenhum
   if(!els.some(e=>e.type==='botao')){
     body+=`<div style="padding:14px"><a href="${_escHtml(wa||'#')}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
   }
+  soltar();
   return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
 }
 
 // ─── Router ───
 
+
+// ── PASSOS DO CRON (cada um roda numa invocacao propria; ver o scheduled la embaixo) ──────────
+// Estes tres blocos sairam de dentro do scheduled na mesma mudanca de 18/08/2026. Estavam inline
+// e rodavam TODOS na mesma batida, que e o que estourava o limite de CPU.
+
+// Resgata venda e lead que ficaram em quarentena por falta de dono do numero.
+async function _cronResgates(env) {
+  try {
+    const q = await env.DB.prepare(
+      `SELECT a.self_number, a.phone, a.msg_id, a.body FROM sc_ingest_audit a
+       WHERE a.from_me=1 AND a.body LIKE '%Pedido Conclu%'
+         AND a.received_at > strftime('%s','now')-86400
+         AND NOT EXISTS (SELECT 1 FROM wa_sales s WHERE s.msg_id = a.msg_id)
+       LIMIT 20`
+    ).all();
+    for (const r of (q.results || [])) {
+      let ow = await resolveOwner(env, String(r.self_number || ''));
+      // O número pode não estar mais atribuído na Contingência (o Diretor tirou o chip da coluna),
+      // mas o SALE CHAT que capturou continua sendo de um vendedor. Vale a identidade da máquina.
+      if (!ow || !ow.at_id) {
+        try {
+          const ins = await env.DB.prepare('SELECT at_id FROM sc_install WHERE num_last = ? AND at_id IS NOT NULL ORDER BY last_seen DESC LIMIT 1').bind(String(r.self_number || '')).first();
+          if (ins && ins.at_id) ow = { at_id: String(ins.at_id), instance: 'ax_' + ins.at_id };
+        } catch (_) {}
+      }
+      if (!ow || !ow.at_id) continue;   // ainda sem dono: fica pra próxima rodada
+      // RESGATA TAMBÉM A ORIGEM: sem o LEAD, a venda entra "sem rastreio" e o CompletePayment sai
+      // sem ttclid — a BM não recebe o crédito (43% das vendas de hoje ficaram assim). Recupera a
+      // 1ª mensagem daquele cliente e casa com o clique ancorado NA HORA DA MENSAGEM (nunca em
+      // "agora", senão o FIFO rouba o clique de outra pessoa e o pixel sai com o ttclid errado).
+      try {
+        const ja = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(String(r.phone || '')).first();
+        if (!ja) {
+          const inb = await env.DB.prepare(
+            "SELECT body, ts, received_at FROM sc_ingest_audit WHERE phone=? AND from_me=0 ORDER BY received_at ASC LIMIT 1"
+          ).bind(String(r.phone || '')).first();
+          if (inb) {
+            const mts = Number(inb.ts) || Number(inb.received_at) || 0;
+            if (mts) {
+              const cl = await env.DB.prepare(
+                `UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending
+                   WHERE (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>''
+                     AND ts <= ? AND ts > ?-3600
+                   ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid`
+              ).bind(mts, mts).first();
+              if (cl && cl.pid) {
+                await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,'resgate',?,?)")
+                  .bind(String(r.phone || ''), cl.pid, cl.ttclid || '', ow.instance || ('ax_' + ow.at_id), String(r.self_number || ''), mts).run();
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      await _waDetectSale(env, ow.instance || ('ax_' + ow.at_id), {
+        message: { conversation: String(r.body || '') },
+        key: { remoteJid: String(r.phone || '') + '@c.us', remoteJidAlt: String(r.phone || '') + '@c.us', id: r.msg_id || null, fromMe: true }
+      });
+      try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE msg_id=?').bind(ow.at_id, r.msg_id).run(); } catch (_) {}
+    }
+  } catch (_) {}
+  // RESGATE DO LEAD EM QUARENTENA (caminho Datacrazy): mensagem que chegou num número SEM DONO fica
+  // só na auditoria com source 'dc' e at_id nulo. Quando o Bruno atribui o número na Contingência,
+  // esta rodada transforma ela em lead, dentro de 24h. Sem isso, "deixar pra próxima rodada" só
+  // resolveria os 15min da janela do poll, e o dono costuma aparecer horas depois.
+  // Ancora o clique NA HORA DA MENSAGEM (nunca em "agora", senão o FIFO rouba o ttclid de outro).
+  try {
+    const qa = await env.DB.prepare(
+      `SELECT a.id, a.self_number, a.phone, a.msg_id, a.body, a.push_name, a.ts FROM sc_ingest_audit a
+       WHERE a.source='dc' AND a.from_me=0 AND (a.at_id IS NULL OR a.at_id='')
+         AND a.received_at > strftime('%s','now')-86400
+         AND NOT EXISTS (SELECT 1 FROM wa_lead l WHERE l.phone = a.phone)
+       LIMIT 20`
+    ).all();
+    for (const r of (qa.results || [])) {
+      const ow = await resolveOwner(env, String(r.self_number || ''));
+      if (!ow || !ow.at_id) continue;   // ainda sem dono: fica pra próxima rodada
+      const inst = ow.instance || ('ax_' + ow.at_id);
+      const mts = Number(r.ts) || 0;
+      const fone = String(r.phone || '');
+      try { await _waLogMsg(env, { phone: fone, instance: inst, direction: 'in', type: 'text', body: String(r.body || ''), pushName: String(r.push_name || ''), ts: mts, msgId: 'dc:' + String(r.msg_id || '') }); } catch (_) {}
+      if (mts) {
+        try {
+          const cl = await env.DB.prepare(
+            `UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending
+               WHERE (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>''
+                 AND ts <= ? AND ts > ?-3600
+               ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid`
+          ).bind(mts, mts).first();
+          await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,'resgate',?,?)")
+            .bind(fone, (cl && cl.pid) || '', (cl && cl.ttclid) || '', inst, String(r.self_number || ''), mts).run();
+        } catch (_) {}
+      }
+      try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE id=?').bind(ow.at_id, r.id).run(); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+// Limpeza das tabelas quentes + reenvio pro TikTok do que falhou.
+// AVISO DE ESTOQUE BAIXO. O saldo cai sozinho a cada pedido despachado, entao o Bruno so ia
+// descobrir que acabou abrindo a tela. Aqui o proprio cron olha o extrato e manda pro sino quando
+// cruza os limites (padrao 500 = metade, e 100 = comprar agora), que foi o que ele pediu.
+// Avisa UMA VEZ por nivel: `estoque_nivel_avisado` guarda o ultimo nivel avisado e so zera quando o
+// saldo sobe de novo (compra nova), senao o sino repetiria o mesmo aviso a cada 80 minutos.
+async function _cronEstoque(env) {
+  for (let tent = 0; tent < 4; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return; }
+    const movs = Array.isArray(data.estoque_movs) ? data.estoque_movs : [];
+    if (!movs.length) return;                                   // sem extrato nao ha o que avisar
+    const soma = (t) => movs.filter((m) => m && m.tipo === t).reduce((a, m) => a + (Number(m.qtd) || 0), 0);
+    const saldo = soma('entrada') + soma('reintegracao') + soma('ajuste') - soma('perda') - soma('saida_pedido');
+    const regras = (data.regras && typeof data.regras === 'object') ? data.regras : {};
+    const meio = Number(regras.estoque_alerta_meio) > 0 ? Number(regras.estoque_alerta_meio) : 500;
+    const critico = Number(regras.estoque_alerta_critico) > 0 ? Number(regras.estoque_alerta_critico) : 100;
+    const nivel = saldo <= critico ? 'critico' : (saldo <= meio ? 'meio' : '');
+    const antes = String(data.estoque_nivel_avisado || '');
+    if (nivel === antes) return;                                 // nada mudou de nivel
+    if (!nivel) { data.estoque_nivel_avisado = ''; }              // subiu de novo (compra): rearma
+    else {
+      if (!Array.isArray(data.notifs)) data.notifs = [];
+      const nextId = data.notifs.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0) + 1;
+      data.notifs.unshift({
+        id: nextId,
+        type: 'estoque',
+        title: nivel === 'critico' ? 'Estoque acabando' : 'Estoque na metade',
+        description: 'Restam ' + saldo + ' frascos' + (nivel === 'critico' ? '. Hora de comprar mais.' : ' (menos de ' + meio + ').'),
+        to: 'diretor', unread: true, ts: Math.floor(Date.now() / 1000),
+        ref: 'estoque:' + nivel, link: '/logistica/estoque',
+      });
+      data.estoque_nivel_avisado = nivel;
+    }
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'cron:estoque', row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return;
+    await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
+  }
+}
+// RECONCILIA O SELO DE ENTREGA (25/08/2026). O caminho normal e o webhook (_fiveUpsertLead), mas
+// ele tem tres buracos que so esta funcao tapa:
+//   1) BACKFILL. Os 42 pedidos que ja existiam quando o selo nasceu nao tem o campo. Os que ainda
+//      andam recebem evento novo e se resolvem sozinhos, mas os TERMINAIS (entregue / nao entregue)
+//      nunca mais recebem nada: sem isso ficariam pra sempre sem selo.
+//   2) WEBHOOK PERDIDO. O _fiveUpsertLead roda dentro de `catch (_) {}` e o CAS dele desiste depois
+//      de 8 tentativas (grava CAS_EXHAUSTED e devolve 200 pra Five, que nunca reenvia). O pedido
+//      fica salvo em five_orders (escrita atomica, fora do CAS) e some do lead. Aqui ele volta.
+//   3) DIVERGENCIA. five_orders e a verdade do que a Five mandou; o lead e a copia. Nada mais no
+//      worker compara os dois.
+// Roda junto do passo frequente porque e BARATA quando nao ha nada: uma consulta por marca d'agua e
+// sai. So encosta no blob (que e caro, tem CAS e teto de 1 MB) quando ha pedido novo de verdade.
+async function _cronRastreio(env) {
+  const MARCA = 'rastreio_wm';
+  let wm = Number(await _readConfig(env, MARCA)) || 0;
+  let rows;
+  try {
+    rows = await env.DB.prepare(
+      `SELECT order_id, shipping_status, last_event, updated_at FROM five_orders
+        WHERE updated_at > ? ORDER BY updated_at ASC LIMIT 300`
+    ).bind(wm).all();
+  } catch (_) { return; }
+  const lista = (rows && rows.results) || [];
+  if (!lista.length) return;
+  const maior = lista.reduce((m, r) => Math.max(m, Number(r.updated_at) || 0), wm);
+  // Mesma escada do webhook: status nulo em SHIPPING_REGISTER e "postado, sem evento ainda".
+  const statusDe = (r) => (r.shipping_status ? String(r.shipping_status).toUpperCase()
+    : (String(r.last_event || '') === 'SHIPPING_REGISTER' ? 'REGISTERED' : ''));
+
+  for (let tent = 0; tent < 4; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return; }
+    if (!Array.isArray(data.leads)) return;
+    const porId = new Map();
+    for (const l of data.leads) if (l && l.five_id) porId.set(String(l.five_id), l);
+    let mudou = 0;
+    for (const r of lista) {
+      const lead = porId.get(String(r.order_id));
+      if (!lead) continue;
+      const ss = statusDe(r);
+      // Nao rebaixa quem ja andou (a Five reenvia SHIPPING_REGISTER) e nao reescreve o que ja bate:
+      // reescrita a toa gera versao nova do blob e briga de CAS com o resto da dash a toa.
+      if (!ss || lead.ship === ss || (ss === 'REGISTERED' && lead.ship)) continue;
+      lead.ship = ss;
+      lead.ship_ts = Number(r.updated_at) || Math.floor(Date.now() / 1000);
+      mudou++;
+    }
+    if (!mudou) { await _writeConfig(env, MARCA, String(maior)); return; }
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'cron:rastreio', row.version).run();
+    if (res && res.meta && res.meta.changes > 0) { await _writeConfig(env, MARCA, String(maior)); return; }
+    await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
+  }
+  // CAS perdido nas 4 tentativas: NAO avanca a marca d'agua, entao a proxima batida tenta de novo.
+}
+
+async function _cronPurga(env) {
+  // FUNIL PRESO EM 'enviando'. A reserva do _waFunnelTick marca a linha antes de dormir; se aquela
+  // invocacao morrer no meio (deploy, limite de recurso, rede), a linha ficaria travada pra sempre e
+  // o lead nunca receberia o resto. Passou de 10 minutos, vira 'error': fica visivel pro vendedor
+  // retomar na mao. NAO volta pra 'running' de proposito - reenviar sozinho um passo que talvez
+  // tenha saido e como mandar o mesmo audio duas vezes, que e justamente o que a reserva evita.
+  try {
+    await env.DB.prepare("UPDATE wa_funnel_run SET status='error', updated_at=strftime('%s','now') WHERE status='enviando' AND updated_at < strftime('%s','now')-600").run();
+  } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM sc_ingest_audit WHERE received_at < strftime('%s','now')-259200").run(); } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM tt_pending WHERE ts < strftime('%s','now')-604800").run(); } catch (_) {}
+  // Reenvia pro TikTok o que falhou (rede/token/recusa). Sem isso a venda ficava marcada só na
+  // dash e NUNCA chegava no pixel, e ninguém via. Mesmo event_id = TikTok deduplica, não conta 2x.
+  try { await _ttRetryFailed(env); } catch (_) {}
+  // Guarda o histórico dos envios por 60 dias (serve de prova pro gestor de tráfego).
+  try { await env.DB.prepare("DELETE FROM tt_events WHERE status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
+}
+
+// Mantem wa_conn fresco pras instancias da Evolution.
+async function _cronEvolution(env) {
+  try {
+    // Mantém wa_conn fresco pras instâncias da Evolution. NÃO pode depender da fonte de captura:
+    // a roleta só roteia lead pra quem tem wa_conn atualizado nos últimos 180s, então com o cron
+    // calado o número conectado por QR ficava verde na tela mas SAÍA DA ROLETA em 3 minutos e
+    // parava de receber lead em silêncio. O estado gravado é o REAL vindo da Evolution (open/close),
+    // então não ressuscita conexão fantasma: o que caiu entra como 'close' e é filtrado.
+    const live = await _evoInstances(env);
+    if (live && live.length) {
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
+      try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
+      for (const it of live) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
+             ON CONFLICT(instance) DO UPDATE SET state=excluded.state, number=excluded.number, updated_at=excluded.updated_at`
+          ).bind(it.name, String(it.state), it.number || '').run();
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
 export default {
   // Cron: mantém wa_conn (estado + número conectado) fresco mesmo com a dash FECHADA, puxando da Evolution.
   // Assim o roteador nunca manda lead pra número caído por causa de estado defasado (webhook às vezes perde o logout).
+  // ── O CRON FAZ UM PASSO POR BATIDA ──────────────────────────────────────────
+  //
+  // Descoberto em 18/08/2026, com a campanha do Bruno JA NO AR: toda batida do cron morria com
+  // outcome=exceededCpu. Esta conta e Workers FREE, que da 10ms de CPU por invocacao, e a batida
+  // fazia tudo de uma vez: backup, semear donos, sincronizar o inbox, funil, tokens da Meta, poll de
+  // lead, agenda, dois resgates de quarentena, purga e Evolution. Estourava no meio e MORRIA CALADA
+  // (nao vira excecao: a invocacao e cortada). Da metade pra frente nada acontecia, e o poll de
+  // lead - o passo que transforma mensagem em lead e o lead em evento pro pixel - estava justamente
+  // na segunda metade. Deu 4h20 sem capturar UM lead com verba rodando: 14 cliques, zero lead.
+  //
+  // O conserto e servir um passo por vez. A batida passou a ser de 1 em 1 minuto (wrangler.toml) e
+  // cada uma faz UM passo, com os 10ms so pra ela. Passo sozinho cabe: o mesmo sync rodando como
+  // requisicao HTTP responde 200 gastando menos de 10ms de CPU - os 15 segundos dele sao espera de
+  // rede, e espera de rede nao conta CPU.
+  //
+  // A ordem abaixo e o que a operacao precisa: LEAD a cada 2 minutos (e o dinheiro), inbox a cada 4
+  // (o atendente esta conversando agora), conexao e agenda a cada 10, e a manutencao gira devagar.
+  //
+  // SE FOR ACRESCENTAR PASSO: crie um slot novo, NAO empilhe dentro de um que ja existe - empilhar e
+  // exatamente o que quebrou. Se um dia a conta virar Workers Paid (30s de CPU), da pra voltar tudo
+  // pra uma batida so, mas nao precisa: assim tambem esta certo e falha isolado.
   async scheduled(event, env, ctx) {
-    // BACKUP AUTOMÁTICO do estado da dash (incidente 21/07: aba antiga sobrescreveu
-    // tudo e só deu pra recuperar porque o Time Travel do D1 existe — 30 dias e olhe lá).
-    // Guarda no R2 (blob de ~1.4MB não deve inchar o D1). Roda no máx. 1x/hora e só
-    // quando a versão mudou, e apaga sozinho o que passou de 30 dias.
-    try { await _backupState(env); } catch (_) {}
-    // Semeia número → vendedor ANTES de falar com a Evolution. A chamada externa pode demorar
-    // (VPS lenta/fora) e engolir a rodada inteira do cron, e foi isso que deixou a tabela de donos
-    // 18min desatualizada: número novo do vendedor ficava sem dono e a captura dele não virava
-    // lead nem venda. O que é nosso roda primeiro; o que depende de fora roda depois.
-    try { await _scEnsureTables(env); await _scSeedOwners(env); } catch (_) {}
-    // Puxa o inbox do Datacrazy (coexistência): sem isso a tela de Atendimento fica vazia, porque
-    // quem recebe o webhook da Meta nos números em coexistência é o app deles, não o nosso.
-    // Rastro obrigatorio: esta e a rodada que mantem o Atendimento cheio. Falhando calada, a tela
-    // fica igual a um dia sem mensagem. Agora grava app_config.dc_sync_health e loga no Worker
-    // (observability ligado no wrangler.toml), entao da pra ver em Workers Logs e no banco.
+    const minuto = Math.floor((event && event.scheduledTime ? event.scheduledTime : Date.now()) / 60000);
+    // LEAD E INBOX TODA BATIDA (ou seja, de minuto em minuto). O rodizio abaixo nasceu como remedio
+    // pro teto de 10ms de CPU do plano gratuito; em 18/08/2026 o Bruno assinou o Workers Paid e o
+    // teto virou 30 SEGUNDOS por invocacao, entao nao ha mais motivo pra fazer lead so a cada 2min e
+    // inbox a cada 4. Esses dois sao o que o dinheiro e o atendimento sentem: lead que nao entra nao
+    // vira evento no pixel, e mensagem que nao aparece e cliente esperando.
+    //
+    // MANTIVE a divisao pro RESTO. Nao e mais por CPU, e por isolamento: estourar recurso NAO gera
+    // excecao (a invocacao e cortada no meio e o try/catch nao pega), entao empilhar tudo numa batida
+    // faz um passo pesado levar os outros junto - foi assim que ficamos 4h20 sem capturar lead. Passo
+    // pesado e raro (backup, resgates, purga) roda sozinho, na vez dele.
+    const RODIZIO = ['conexao', 'agenda', 'conexao', 'agenda', 'manutencao'];
+    const passo = RODIZIO[minuto % RODIZIO.length];
+    let erro = '';
+    // BATIMENTO EM DOIS TEMPOS. Grava ANTES de trabalhar ('ini') e de novo depois ('ok'/'erro').
+    // Estourar o limite de CPU NAO gera excecao: a invocacao e cortada e nada mais roda. Se so
+    // houvesse a gravacao do fim, a batida morta seria invisivel de novo. Com o 'ini' fica assim: se
+    // o batimento estiver velho E marcado 'ini', o passo escrito ali e exatamente o que esta matando
+    // a batida. Foi assim que este bug apareceu.
+    const hb = async (fase) => { try { await _writeConfig(env, 'cron_hb', JSON.stringify({ ts: Math.floor(Date.now() / 1000), passo, fase, erro })); } catch (_) {} };
+    await hb('ini');
+    // PUXA lead novo do Datacrazy (nao depende da automacao deles disparar) e sincroniza o inbox
+    // (nos numeros em coexistencia quem recebe o webhook da Meta e o app do Datacrazy, nao o nosso).
+    // Os dois em try separado: a API deles cair de um lado nao pode parar o outro.
+    try { await _dcPoll(env); } catch (e) { erro = 'lead: ' + String((e && e.message) || e).slice(0, 90); console.error('[cron] lead falhou: ' + String((e && e.stack) || e)); }
+    // FUNIL TODA BATIDA. Ele entrega UM passo por conversa por rodada, entao a frequencia dele E a
+    // velocidade do funil pro cliente. Eu tinha mandado ele pro rodizio lento quando dividi o cron
+    // por causa do teto de CPU do plano gratuito, e com isso o passo seguinte demorava 20 minutos:
+    // pro vendedor pareceu que "nao vai funil nenhum" (foi o que o Guilherme reportou em 18/08/2026).
+    // Nao ha mais motivo pra economia: a conta e paga.
+    try { await _waFunnelTick(env); } catch (e) { erro = (erro ? erro + ' | ' : '') + 'funil: ' + String((e && e.message) || e).slice(0, 90); console.error('[cron] funil falhou: ' + String((e && e.stack) || e)); }
     try {
       const rDc = await _dcSyncInbox(env, 40, 40);
       if (!rDc || rDc.ok === false) console.error('[dc-sync] cron nao sincronizou: ' + ((rDc && rDc.motivo) || 'sem motivo'));
     } catch (e) {
+      erro = (erro ? erro + ' | ' : '') + 'inbox: ' + String((e && e.message) || e).slice(0, 90);
       console.error('[dc-sync] cron explodiu: ' + String((e && e.stack) || e));
       try { await _dcSyncSaude(env, { ok: false, erro: 'excecao: ' + String((e && e.message) || e) }); } catch (_) {}
     }
-    try { await _waFunnelTick(env); } catch (_) {}   // avança os funis automáticos (1 item por conversa por rodada)
-    try { await _dcSyncInstances(env); } catch (_) {}   // token de envio (Meta) de cada número do Datacrazy — fresco
-    try { await _dcPoll(env); } catch (_) {}   // PUXA leads novos do Datacrazy (não depende da automação deles disparar)
-    try { await _agendaTick(env); } catch (e) { console.error('[agenda] falhou: ' + String((e && e.message) || e)); }   // avisa quem marcou retorno pra agora
-    // Purga o que já não serve pra roteamento/atribuição, pra as tabelas quentes não crescerem sem
-    // fim (deixavam os scans lentos e o custo do Worker subindo com a verba). Só apaga o antigo:
-    // auditoria de captura > 3 dias e cliques pendentes > 7 dias (a janela de atribuição é 1h).
-    // RESGATE DE VENDA EM QUARENTENA: "Pedido Concluído" que chegou quando o número ainda não tinha
-    // dono ficou só na auditoria e NÃO virou venda (custou 6 vendas num único dia, todas lançadas na
-    // mão). Agora, toda rodada, reprocessa as das últimas 24h cujo número JÁ tem dono. O
-    // _waDetectSale é idempotente (dedupe por msg_id e por telefone/24h), então repassar é seguro.
     try {
-      const q = await env.DB.prepare(
-        `SELECT a.self_number, a.phone, a.msg_id, a.body FROM sc_ingest_audit a
-         WHERE a.from_me=1 AND a.body LIKE '%Pedido Conclu%'
-           AND a.received_at > strftime('%s','now')-86400
-           AND NOT EXISTS (SELECT 1 FROM wa_sales s WHERE s.msg_id = a.msg_id)
-         LIMIT 20`
-      ).all();
-      for (const r of (q.results || [])) {
-        let ow = await resolveOwner(env, String(r.self_number || ''));
-        // O número pode não estar mais atribuído na Contingência (o Diretor tirou o chip da coluna),
-        // mas o SALE CHAT que capturou continua sendo de um vendedor. Vale a identidade da máquina.
-        if (!ow || !ow.at_id) {
-          try {
-            const ins = await env.DB.prepare('SELECT at_id FROM sc_install WHERE num_last = ? AND at_id IS NOT NULL ORDER BY last_seen DESC LIMIT 1').bind(String(r.self_number || '')).first();
-            if (ins && ins.at_id) ow = { at_id: String(ins.at_id), instance: 'ax_' + ins.at_id };
-          } catch (_) {}
-        }
-        if (!ow || !ow.at_id) continue;   // ainda sem dono: fica pra próxima rodada
-        // RESGATA TAMBÉM A ORIGEM: sem o LEAD, a venda entra "sem rastreio" e o CompletePayment sai
-        // sem ttclid — a BM não recebe o crédito (43% das vendas de hoje ficaram assim). Recupera a
-        // 1ª mensagem daquele cliente e casa com o clique ancorado NA HORA DA MENSAGEM (nunca em
-        // "agora", senão o FIFO rouba o clique de outra pessoa e o pixel sai com o ttclid errado).
-        try {
-          const ja = await env.DB.prepare('SELECT phone FROM wa_lead WHERE phone=?').bind(String(r.phone || '')).first();
-          if (!ja) {
-            const inb = await env.DB.prepare(
-              "SELECT body, ts, received_at FROM sc_ingest_audit WHERE phone=? AND from_me=0 ORDER BY received_at ASC LIMIT 1"
-            ).bind(String(r.phone || '')).first();
-            if (inb) {
-              const mts = Number(inb.ts) || Number(inb.received_at) || 0;
-              if (mts) {
-                const cl = await env.DB.prepare(
-                  `UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending
-                     WHERE (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>''
-                       AND ts <= ? AND ts > ?-3600
-                     ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid`
-                ).bind(mts, mts).first();
-                if (cl && cl.pid) {
-                  await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,'resgate',?,?)")
-                    .bind(String(r.phone || ''), cl.pid, cl.ttclid || '', ow.instance || ('ax_' + ow.at_id), String(r.self_number || ''), mts).run();
-                }
-              }
-            }
-          }
-        } catch (_) {}
-        await _waDetectSale(env, ow.instance || ('ax_' + ow.at_id), {
-          message: { conversation: String(r.body || '') },
-          key: { remoteJid: String(r.phone || '') + '@c.us', remoteJidAlt: String(r.phone || '') + '@c.us', id: r.msg_id || null, fromMe: true }
-        });
-        try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE msg_id=?').bind(ow.at_id, r.msg_id).run(); } catch (_) {}
-      }
-    } catch (_) {}
-    // RESGATE DO LEAD EM QUARENTENA (caminho Datacrazy): mensagem que chegou num número SEM DONO fica
-    // só na auditoria com source 'dc' e at_id nulo. Quando o Bruno atribui o número na Contingência,
-    // esta rodada transforma ela em lead, dentro de 24h. Sem isso, "deixar pra próxima rodada" só
-    // resolveria os 15min da janela do poll, e o dono costuma aparecer horas depois.
-    // Ancora o clique NA HORA DA MENSAGEM (nunca em "agora", senão o FIFO rouba o ttclid de outro).
-    try {
-      const qa = await env.DB.prepare(
-        `SELECT a.id, a.self_number, a.phone, a.msg_id, a.body, a.push_name, a.ts FROM sc_ingest_audit a
-         WHERE a.source='dc' AND a.from_me=0 AND (a.at_id IS NULL OR a.at_id='')
-           AND a.received_at > strftime('%s','now')-86400
-           AND NOT EXISTS (SELECT 1 FROM wa_lead l WHERE l.phone = a.phone)
-         LIMIT 20`
-      ).all();
-      for (const r of (qa.results || [])) {
-        const ow = await resolveOwner(env, String(r.self_number || ''));
-        if (!ow || !ow.at_id) continue;   // ainda sem dono: fica pra próxima rodada
-        const inst = ow.instance || ('ax_' + ow.at_id);
-        const mts = Number(r.ts) || 0;
-        const fone = String(r.phone || '');
-        try { await _waLogMsg(env, { phone: fone, instance: inst, direction: 'in', type: 'text', body: String(r.body || ''), pushName: String(r.push_name || ''), ts: mts, msgId: 'dc:' + String(r.msg_id || '') }); } catch (_) {}
-        if (mts) {
-          try {
-            const cl = await env.DB.prepare(
-              `UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending
-                 WHERE (claimed IS NULL OR claimed=0) AND ttclid IS NOT NULL AND ttclid<>''
-                   AND ts <= ? AND ts > ?-3600
-                 ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid`
-            ).bind(mts, mts).first();
-            await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts) VALUES (?,?,?,?,'resgate',?,?)")
-              .bind(fone, (cl && cl.pid) || '', (cl && cl.ttclid) || '', inst, String(r.self_number || ''), mts).run();
-          } catch (_) {}
-        }
-        try { await env.DB.prepare('UPDATE sc_ingest_audit SET at_id=? WHERE id=?').bind(ow.at_id, r.id).run(); } catch (_) {}
-      }
-    } catch (_) {}
-    try { await env.DB.prepare("DELETE FROM sc_ingest_audit WHERE received_at < strftime('%s','now')-259200").run(); } catch (_) {}
-    try { await env.DB.prepare("DELETE FROM tt_pending WHERE ts < strftime('%s','now')-604800").run(); } catch (_) {}
-    // Reenvia pro TikTok o que falhou (rede/token/recusa). Sem isso a venda ficava marcada só na
-    // dash e NUNCA chegava no pixel, e ninguém via. Mesmo event_id = TikTok deduplica, não conta 2x.
-    try { await _ttRetryFailed(env); } catch (_) {}
-    // Guarda o histórico dos envios por 60 dias (serve de prova pro gestor de tráfego).
-    try { await env.DB.prepare("DELETE FROM tt_events WHERE status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
-    try {
-      // Mantém wa_conn fresco pras instâncias da Evolution. NÃO pode depender da fonte de captura:
-      // a roleta só roteia lead pra quem tem wa_conn atualizado nos últimos 180s, então com o cron
-      // calado o número conectado por QR ficava verde na tela mas SAÍA DA ROLETA em 3 minutos e
-      // parava de receber lead em silêncio. O estado gravado é o REAL vindo da Evolution (open/close),
-      // então não ressuscita conexão fantasma: o que caiu entra como 'close' e é filtrado.
-      const live = await _evoInstances(env);
-      if (live && live.length) {
-        await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
-        try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
-        for (const it of live) {
-          try {
-            await env.DB.prepare(
-              `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
-               ON CONFLICT(instance) DO UPDATE SET state=excluded.state, number=excluded.number, updated_at=excluded.updated_at`
-            ).bind(it.name, String(it.state), it.number || '').run();
-          } catch (_) {}
+      if (passo === 'conexao') {
+        // Semeia numero -> vendedor e atualiza o estado real das instancias. Numero sem dono nao
+        // vira lead nem venda.
+        await _scEnsureTables(env); await _scSeedOwners(env);
+        await _cronEvolution(env);
+      } else if (passo === 'agenda') {
+        await _agendaTick(env);   // avisa quem marcou retorno pra agora
+        // O PIXEL ANDA JUNTO DA AGENDA porque os dois sao leves e os dois precisam ser frequentes.
+        // Evento recusado pelo TikTok (403 em rajada, token trocado) e conversao que a campanha nao
+        // recebe: deixar isso pra manutencao, de 80 em 80 minutos, e tarde demais com verba rodando.
+        await _ttRetryFailed(env);
+        await _ttVarrerLeadsSemEvento(env);
+        await _ttVarrerVendasSemEvento(env);
+        await _ttAvisarPresos(env);
+        // Anda junto porque e do mesmo feitio: consulta barata por marca d'agua, e so mexe no blob
+        // quando a Five mandou movimento novo. Poe o selo de entrega no card em minutos, nao no
+        // rodizio de 80 em 80 (o Bruno acompanha entrega pelo Kanban durante o dia).
+        await _cronRastreio(env);
+      } else if (passo === 'manutencao') {
+        // Gira entre quatro tarefas lentas: cada uma cai a cada 80 minutos, que e de sobra pro que
+        // elas fazem. Backup e guardado por dentro (1x/hora e so se a versao mudou).
+        const volta = Math.floor(minuto / RODIZIO.length) % 4;
+        if (volta === 0) await _backupState(env);
+        else if (volta === 1) await _dcSyncInstances(env);        // token de envio (Meta) de cada numero
+        else if (volta === 2) await _cronResgates(env);           // venda/lead que ficaram sem dono
+        else {
+          await _cronEstoque(env); // avisa quando o saldo de frascos cruza os limites
+          await _cronPurga(env);   // limpeza (o reenvio do pixel saiu daqui: roda no passo 'agenda')
+          // SESSAO EXPIRADA NAO E APAGADA POR NINGUEM. Conferido em 18/08/2026: 227 linhas em
+          // sessions, 57 ja vencidas. Nao e falha de seguranca (o authUser confere expires_at), mas e
+          // tabela crescendo pra sempre num banco que a gente le o tempo todo. Some o que venceu ha
+          // mais de 7 dias; o que venceu ontem fica, pra ajudar a investigar acesso se precisar.
+          try { await env.DB.prepare("DELETE FROM sessions WHERE expires_at < strftime('%s','now')-604800").run(); } catch (_) {}
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      erro = (erro ? erro + ' | ' : '') + passo + ': ' + String((e && e.message) || e).slice(0, 120);
+      console.error('[cron] passo ' + passo + ' falhou: ' + String((e && e.stack) || e));
+    }
+    // A dash le este batimento no Atendimento e avisa quando o cron para.
+    await hb(erro ? 'erro' : 'ok');
   },
   async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return new Response(null, {
@@ -8178,6 +12081,7 @@ export default {
       if (req.method === 'POST'  && path === '/api/chip/create')    return handleChipCreate(req, env);
       if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);
       if (req.method === 'POST'  && path === '/api/cont/save')      return handleContConfig(req, env);
+      if (req.method === 'POST'  && path === '/api/tags/save')      return handleTagsSave(req, env);
       if (req.method === 'POST'  && path === '/api/saque/create')   return handleSaqueCreate(req, env);
       if (req.method === 'POST'  && path === '/api/saque/update')   return handleSaqueUpdate(req, env);
       if (req.method === 'POST'  && path === '/api/gasto/estorno')  return handleGastoEstorno(req, env);
@@ -8188,6 +12092,10 @@ export default {
       if (req.method === 'POST'  && leadAceiteMatch)         return handleAceitarLead(req, env, decodeURIComponent(leadAceiteMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
       if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
+      // ORDEM IMPORTA: /api/lead/delete casa com o padrao de editar (/api/lead/<id>), que fica
+      // logo abaixo. Registrado depois, ele viraria uma edicao do lead de id 'delete' e devolveria
+      // 404 em silencio - a lixeira nao funcionaria e o erro nao diria por que.
+      if (req.method === 'POST' && path === '/api/lead/delete') return handleLeadDelete(req, env);
       const leadUpdMatch = path.match(/^\/api\/lead\/([^/]+)$/);
       if (req.method === 'POST'  && leadUpdMatch)            return handleUpdateLead(req, env, decodeURIComponent(leadUpdMatch[1]));
       if (path === '/api/cs/cards' && (req.method === 'GET' || req.method === 'POST')) return handleCsCards(req, env);
@@ -8199,6 +12107,23 @@ export default {
       if (req.method === 'GET' && path === '/api/five/products') return handleFiveProducts(req, env);
       if (req.method === 'POST' && path === '/api/product-image') return handleProductImage(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/five/affiliates') return handleFiveAffiliates(req, env);
+      // Area de Afiliados (23/08/2026). Separada do produtor de proposito: nenhuma destas rotas
+      // toca no calculo das telas que ja existiam.
+      // AFILIADO SEM VINCULO NAO ENCOSTA NO WHATSAPP. O afiliado COM vinculo tem inbox e Sale Chat
+      // (pedido do Bruno em 24/08/2026), mas escopados: o inbox filtra pelas instancias do mundo
+      // dele (_waEscopoInstancias) e o Sale Chat ja gravava so no slot do proprio usuario. Quem
+      // esta sem vinculo e cadastro pela metade e nao ve nada - fail-closed, igual ao resto.
+      if (path.startsWith('/api/wa/') || path.startsWith('/api/salechat')) {
+        const _uw = await authUser(req, env);
+        if (_uw && afiliadoSemVinculo(_uw)) return err('Sem permissão', 403);
+      }
+      if (req.method === 'GET' && path === '/api/afiliados') return handleAfiliados(req, env);
+      if (req.method === 'POST' && path === '/api/afiliados/salvar') return handleAfiliadoSalvar(req, env);
+      if (req.method === 'POST' && path === '/api/afiliados/remover') return handleAfiliadoRemover(req, env);
+      if (req.method === 'POST' && path === '/api/afiliados/acesso') return handleAfiliadoAcesso(req, env);
+      if (['GET', 'POST'].includes(req.method) && path === '/api/afiliados/checkout') return handleAfiliadoCheckout(req, env);
+      if (req.method === 'GET' && path === '/api/afiliados/pedidos') return handleAfiliadoPedidos(req, env);
+      if (['GET', 'POST', 'DELETE'].includes(req.method) && path === '/api/afiliados/pagamentos') return handleAfiliadoPagamentos(req, env);
       // Equipe (fonte única de pessoas: produtor, sócio, vendedores, GT, cobrador)
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/team') return handleTeam(req, env);
       const teamDelMatch = path.match(/^\/api\/team\/([^/]+)$/);
@@ -8209,6 +12134,7 @@ export default {
 
       // users CRUD
       if (req.method === 'GET'    && path === '/api/users')         return handleListUsers(req, env);
+      if (req.method === 'GET'    && path.startsWith('/api/users/foto/')) return handleUserPhoto(req, env, decodeURIComponent(path.split('/')[4] || ''));
       if (req.method === 'POST'   && path === '/api/users')         return handleCreateOrUpdateUser(req, env);
       const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
       if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
@@ -8246,6 +12172,11 @@ export default {
       if (req.method === 'GET'    && path === '/api/salechat/mine')       return handleSaleChatMine(req, env);
       if (req.method === 'POST'   && path === '/api/salechat/save')       return handleSaleChatSave(req, env);
       if (req.method === 'POST'   && path === '/api/salechat/media')      return handleSaleChatMediaUpload(req, env);
+      // Comprovante do pedido: sobe aqui e e servido pelo /api/arquivo (mesmo leitor do R2 que a
+      // midia do Sale Chat usa, so com nome que faz sentido pra quem le o codigo).
+      if (req.method === 'POST' && path === '/api/comprovante') return handleComprovanteUpload(req, env);
+      const arqMatch = path.match(/^\/api\/arquivo\/(.+)$/);
+      if (arqMatch && req.method === 'GET') return handleSaleChatMediaGet(req, env, decodeURIComponent(arqMatch[1]));
       const scMediaMatch = path.match(/^\/api\/salechat\/media\/(.+)$/);
       if (scMediaMatch && req.method === 'GET')    return handleSaleChatMediaGet(req, env, decodeURIComponent(scMediaMatch[1]));
       if (scMediaMatch && req.method === 'DELETE') return handleSaleChatMediaDelete(req, env, decodeURIComponent(scMediaMatch[1]));
@@ -8272,7 +12203,11 @@ export default {
       // sem criar lead nem disparar pixel.
       if (req.method === 'POST'   && path === '/api/wa/meu-numero')     return handleMeuNumero(req, env);
       if (req.method === 'POST'   && path === '/api/wa/dc/poll')        return handleDcPollDiag(req, env);
+      if (req.method === 'GET'    && path === '/api/tt/diag')           return handleTtDiag(req, env);
+      if (req.method === 'POST'   && path === '/api/tt/ads-config')     return handleTtAdsConfig(req, env);
       if (req.method === 'POST'   && path === '/api/wa/dc/sync')          return handleDcSync(req, env);
+      if (req.method === 'GET' && path === '/api/leads/contagem') return handleLeadsContagem(req, env);
+      if (req.method === 'GET' && path === '/api/wa/funnel/queue') return handleWAFunnelQueue(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/messages')         return handleWAMessages(req, env);
@@ -8336,8 +12271,16 @@ export default {
         return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
       }
 
+      // A imagem da pressel como arquivo separado (ver _presselImgSrc). Tem que vir ANTES da rota da
+      // pagina, senao /p/1/img/xxx nao casa com nenhuma das duas.
+      const presselImgMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)(?:\/([a-zA-Z0-9_-]+))?\/img\/([a-zA-Z0-9]+)$/);
+      if (req.method === 'GET' && presselImgMatch) return handlePresselImg(env, presselImgMatch[1], presselImgMatch[3], presselImgMatch[2]);
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
-      if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1]);
+      if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1], ctx);
+      // A PRESSEL DO AFILIADO: /p/<slug dele>/<n dele>. Depois da rota de imagem de proposito,
+      // senao /p/1/img/xxx casaria aqui como se 'img' fosse o numero da pressel.
+      const presselAflMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)\/([0-9]+)$/);
+      if (req.method === 'GET' && presselAflMatch) return handlePresselPublic(req, env, { slug: presselAflMatch[1], num: presselAflMatch[2] }, ctx);
 
       // Página pública de métricas (compartilhar com gestores de tráfego)
       const mMatch = path.match(/^\/m\/([a-zA-Z0-9_-]+)$/);
