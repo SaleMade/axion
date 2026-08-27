@@ -1638,7 +1638,7 @@ async function handleAfiliadoPedidos(req, env) {
 // isso que faz o _stateProtegido devolver a chave do banco quando um cargo restrito salva o
 // estado. Sem isso o primeiro POST do gestor (ele grava Registros de Trafego pelo /api/state com
 // o blob inteiro) apagaria as decisoes de despesa em silencio, e o lucro pularia sozinho.
-const STATE_OCULTO = ['gastos','entradas','saidas','aportes','nextAporte','invest','invCats','nextInv','payouts','nextPayout','fechamentos','caixaPlat','caixaPlatUpd','cs_cards','payt_debug','lancamentos','proConfig','demConfig','trafego_aloc','nextGasto','nextEntrada','nextSaida','cs_ok','cs_motivos','cats_despesa'];
+const STATE_OCULTO = ['gastos','entradas','saidas','aportes','nextAporte','invest','invCats','nextInv','payouts','nextPayout','fechamentos','caixaPlat','caixaPlatUpd','cs_cards','payt_debug','lancamentos','proConfig','demConfig','trafego_aloc','nextGasto','nextEntrada','nextSaida','cs_ok','cs_motivos','cats_despesa','doms_off'];
 const STATE_SO_DIRETOR_ESCREVE = STATE_OCULTO.concat(['acl_v2','regras','custos','custos_produtor']);
 // CHAVES QUE NINGUEM GRAVA POR ESTE CAMINHO. Cada uma tem endpoint proprio, com gate proprio:
 // chips e pressels vao por /api/pressel/save e /api/chip/save, o Sale Chat por /api/salechat/save.
