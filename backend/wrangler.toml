@@ -9,6 +9,15 @@ workers_dev = true   # mantem a URL axion-api.axion-dash.workers.dev viva (a das
 # ─── Domínios custom pras pressels (TikTok com domínios diferentes) ──
 # Cada domínio serve o Worker; a pressel fica em https://dominio/p/<id>.
 # (Já anexados via API; aqui ficam declarados pra não sumirem em deploy.)
+# OS 4 DOMINIOS NOVOS (.shop) NAO ENTRAM AQUI AINDA - 27/08/2026.
+# O Bruno comprou glico6-painel.shop, glico6-acesso.shop, glico-area.shop e glico-painel.shop
+# porque os tres de cima queimaram, mas eles ainda NAO estao na conta Cloudflare. Declarar uma
+# route de zona que nao existe faz o `wrangler deploy` SUBIR o script e SO DEPOIS falhar ao anexar
+# a rota: o terminal fica vermelho e todo deploy do worker passa a parecer quebrado, inclusive os
+# que nao tem nada a ver com dominio. Por isso a ordem e: (1) ele aponta o dominio pro Cloudflare
+# e a zona fica `active`, (2) so entao acrescentar a linha aqui e deployar.
+# O salvamento na dash ja aceita os quatro (ver _PRESSEL_DOMS no worker.js): o que falta e so a
+# pressel RESPONDER neles.
 routes = [
   { pattern = "area-acesso.com", custom_domain = true },
   { pattern = "area-glico.fun", custom_domain = true },

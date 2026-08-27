@@ -1149,6 +1149,10 @@ async function _aflSlugDe(env, aflId) {
 }
 // Acha a pressel pelas DUAS formas de endereco: /p/<id> (a nossa, e todo link antigo) e
 // /p/<slug>/<n> (a do afiliado). Devolve o objeto; quem chama passa a usar p.id daqui pra frente.
+// O caminho publico da pressel: /p/<id> pra nossa, /p/<slug>/<n> pra de afiliado.
+function _presselRefPub(p) {
+  return (p && p.afl_slug && Number(p.num) > 0) ? (p.afl_slug + '/' + p.num) : String(p && p.id);
+}
 function _acharPressel(pressels, a, b) {
   const lista = Array.isArray(pressels) ? pressels : [];
   if (b == null || b === '') return lista.find((x) => x && String(x.id) === String(a)) || null;
@@ -2287,7 +2291,19 @@ async function handleLeadDelete(req, env) {
 // então não tem risco de apagar chips/leads/etc (o incidente da aba antiga). id=0/ausente cria nova
 // (id = max+1 no servidor). patch só aplica campos permitidos; arrays (vendedores/elementos) quando
 // vierem SUBSTITUEM (edição intencional), quando não vierem ficam intactos.
-const _PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
+// DOMINIOS QUE O SALVAMENTO DA PRESSEL ACEITA. Esta lista e uma TRAVA: se o dominio escolhido na
+// dash nao estiver aqui, a linha do `dominio` no patch e simplesmente ignorada, SEM erro nenhum -
+// o Bruno escolhe, salva, e o campo volta pro valor antigo sem explicacao. Entao dominio novo tem
+// que entrar AQUI antes de qualquer outra coisa.
+//
+// Os 4 `.shop` entraram em 27/08/2026: os tres antigos queimaram e o Bruno comprou os novos. Eles
+// ficam na lista mesmo ANTES de existirem no Cloudflare, porque isto so libera o SALVAMENTO - a
+// pressel so responde de verdade depois que o dominio for anexado ao worker como Custom Domain.
+// Ver o comentario em wrangler.toml sobre por que eles NAO entram nas `routes` ainda.
+const _PRESSEL_DOMS = [
+  'area-acesso.com', 'area-glico.fun', 'painel-glico.fun',
+  'glico6-painel.shop', 'glico6-acesso.shop', 'glico-area.shop', 'glico-painel.shop',
+];
 async function handlePresselSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -10723,8 +10739,26 @@ function _brandLegal(kind, host){
   const inner = `<main class="wrap" style="padding:46px 0"><div class="legal">${map[kind] || priv}</div></main>`;
   return _brandShell(BRAND_NAME + ' — ' + (titles[kind] || 'Privacidade'), inner, false);
 }
+// NAO acrescentar os dominios novos aqui. Esta lista so serve de ULTIMO recurso no _presselDom
+// (`PRESSEL_DOMS[length-1]`), pra pressel sem dominio salvo e sem host na requisicao. O ultimo
+// elemento tem que ser um dominio que RESPONDE hoje; por um que ainda nao foi anexado e trocar um
+// fallback que funciona por um que da erro de DNS.
 const PRESSEL_DOMS = ['area-acesso.com', 'area-glico.fun', 'painel-glico.fun'];
-function _presselDom(p){ return (p && p.dominio && PRESSEL_DOMS.includes(p.dominio)) ? p.dominio : 'painel-glico.fun'; }
+// O DOMINIO DA PRESSEL E O DELA, NAO O NOSSO (27/08/2026).
+//
+// Isto exigia que o dominio estivesse na lista dos NOSSOS tres e, quando nao estava, devolvia
+// 'painel-glico.fun' chumbado. Numa operacao que roda em dominio proprio (a do Giovane usa
+// nutrapremium.sbs) a pressel dele aparecia na tela de Leads com o NOSSO endereco - ele ve o
+// dominio da nossa operacao dentro da dash dele, e o link nem abre a pressel dele.
+// A lista continua existindo pro que e NOSSO (as rotas de marca), mas ela nao manda mais no que
+// se mostra: vale o dominio gravado na pressel e, sem ele, o host de quem esta pedindo a pagina -
+// que e o proprio worker de cada operacao. Dominio de outra gente nunca mais entra por padrao.
+const _hostOk = (h) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(String(h || ''));
+function _presselDom(p, host){
+  const d = String((p && p.dominio) || '').trim();
+  if (_hostOk(d)) return d;
+  return _hostOk(host) ? String(host) : PRESSEL_DOMS[PRESSEL_DOMS.length - 1];
+}
 // GET /pressels-total — página PÚBLICA consolidada: TOTAL somando todas + cada pressel numa seção.
 // Pega TODAS as pressels do estado automaticamente (pressel nova entra sozinha).
 // CONVERSÃO POR NÚMERO. Painel só de MÉTRICA (não é aviso): pra cada número que rodou hoje, quantos
@@ -10802,7 +10836,7 @@ async function _roletaDiagData(env, day, chips, nameMap){
 // MESMA computação da página /pressels-total, mas devolve DADOS estruturados pra dash renderizar nativo
 // (sem iframe). full = diretor logado → número completo; senão mascarado (…1234). Espelha exatamente a
 // lógica da página HTML (atribuição, ranking, split de vendedor, agregação de comprador).
-async function _presselsTotalData(env, day, view, per, full, _uAtual){
+async function _presselsTotalData(env, day, view, per, full, _uAtual, _host){
   // DUAS ECONOMIAS DE ESPERA, e as duas doiam: esta tela e a que o Bruno mais abre e levava de 1,2 a
   // 2,0 SEGUNDOS pra devolver menos de 1 KB - era tudo ida e volta ao banco, uma esperando a outra.
   //  (a) o blob vinha de um SELECT cru, relido e reparseado (275 KB) a CADA requisicao, ignorando o
@@ -10918,7 +10952,7 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual){
       Object.keys(vvi).forEach(inst=>ens(_vAt(inst)));
       Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
       Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
-      return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend:_rankVend(Object.values(vm).filter(x=>_vendVisivel(x,p)))};
+      return {id:String(p.id), nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p,_host)+'/p/'+_presselRefPub(p), views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend:_rankVend(Object.values(vm).filter(x=>_vendVisivel(x,p)))};
     });
     const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
     // O override existe pra contar venda que chegou SEM pid (nao casou com pressel). Pro afiliado
@@ -11102,6 +11136,90 @@ async function _ttGasto(env, de, ate) {
   return out;
 }
 
+// ANALISE DE ANUNCIOS DO TIKTOK (27/08/2026, pedido do Bruno). Tudo sai do NOSSO banco: o
+// `tt_pending.utm` guarda campanha, conjunto e ad_id de cada visita (11.903 de 12.365 nos ultimos
+// 7 dias, 96%), o `wa_lead` guarda uma copia do utm no momento em que o lead nasce e o `wa_sales`
+// fecha a venda. Ou seja o funil anuncio -> visita -> lead -> venda fecha INTEIRO sem falar com o
+// TikTok. Ler relatorio pela API deles so acrescenta gasto/impressao/CPM, e isso depende de um
+// token que ainda nao existe (ver handleTtAdsConfig).
+//
+// ROTA PROPRIA, E SO DIRETOR, de proposito. A tela usa `verTudo = !isGestor(role)` pra decidir as
+// abas, e isso da true pro AFILIADO. O recorte por dono (_presselIdsVisiveis) filtra data.pressels
+// e NAO alcanca tt_pending, entao pendurar isto no /pressels-total.json mostraria os nossos
+// anuncios pro afiliado. Aqui o gate e isDirector e ponto.
+//
+// DUAS RESSALVAS QUE A TELA PRECISA DIZER, senao o numero mente:
+//  - `clicked` NAO e toque no botao. Com o redirect ligado o go() dispara sozinho, entao a coluna
+//    mede PERMANENCIA (~1s na pagina), nao intencao. Por isso ela se chama "Ficaram".
+//  - tt_pending so tem quem chegou COM ttclid. Cerca de 35% dos acessos pagos chegam sem, entao o
+//    denominador daqui e menor que o acesso real (pressel_hits). O KPI de acessos mostra os dois.
+async function handleTtAnuncios(req, env){
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Só o diretor vê o desempenho dos anúncios', 403);
+  const q = new URL(req.url).searchParams;
+  const dias = Math.min(30, Math.max(1, Number(q.get('dias')) || 7));
+  const de = Math.floor(Date.now()/1000) - dias*86400;
+  const J = (c) => "json_extract(utm,'$." + c + "')";
+  const one = async (sql, ...b) => { try { const r = await env.DB.prepare(sql).bind(...b).all(); return (r && r.results) || []; } catch(_) { return []; } };
+  try{
+    // Por ANUNCIO. A cauda e enorme e inutil (142 ad_id em 7 dias, mas 5 concentram 98% das
+    // visitas e 93 tem UMA visita so: e variacao automatica do CBO, nao criativo novo). Corta em
+    // 25 e a tela agrega o resto numa linha, pra ninguem achar que sumiu.
+    const ads = await one(
+      "SELECT " + J('ad_id') + " ad_id, " + J('utm_campaign') + " campanha, " + J('utm_content') + " criativo," +
+      " COUNT(*) visitas, SUM(clicked) ficaram, SUM(claimed) leads" +
+      " FROM tt_pending WHERE ts >= ? AND utm IS NOT NULL AND utm <> '' AND " + J('ad_id') + " IS NOT NULL" +
+      " GROUP BY 1,2,3 ORDER BY 4 DESC", de);
+    // Venda por anuncio: wa_sales -> wa_lead (phone e chave unica, o join nao infla) -> utm do lead.
+    const vendas = await one(
+      "SELECT json_extract(l.utm,'$.ad_id') ad_id, COUNT(*) vendas, COALESCE(SUM(s.value),0) receita" +
+      " FROM wa_sales s JOIN wa_lead l ON l.phone = s.phone" +
+      " WHERE s.ts >= ? AND l.utm IS NOT NULL AND l.utm <> '' GROUP BY 1", de);
+    const vmap = {}; for (const v of vendas) if (v.ad_id) vmap[String(v.ad_id)] = v;
+    // Por CAMPANHA (o corte que decide verba)
+    const camps = await one(
+      "SELECT " + J('utm_campaign') + " campanha, COUNT(*) visitas, SUM(clicked) ficaram, SUM(claimed) leads" +
+      " FROM tt_pending WHERE ts >= ? AND utm IS NOT NULL AND utm <> '' GROUP BY 1 ORDER BY 2 DESC", de);
+    // Serie diaria por campanha (mostra sozinha quando a verba trocou de criativo)
+    const serie = await one(
+      "SELECT date(ts,'unixepoch','-3 hours') dia, " + J('utm_campaign') + " campanha, COUNT(*) visitas, SUM(claimed) leads" +
+      " FROM tt_pending WHERE ts >= ? AND utm IS NOT NULL AND utm <> '' GROUP BY 1,2 ORDER BY 1", de);
+    // Hora do dia: metrica barata que ninguem tem hoje e que serve de argumento de dayparting.
+    const horas = await one(
+      "SELECT CAST(strftime('%H',ts,'unixepoch','-3 hours') AS INTEGER) h, COUNT(*) visitas, SUM(claimed) leads" +
+      " FROM tt_pending WHERE ts >= ? GROUP BY 1 ORDER BY 1", de);
+    // Contraste honesto: acesso REAL a pagina (inclui quem chegou sem ttclid) x o que da pra
+    // atribuir. Sem isto a tela sugere que o TikTok mandou menos gente do que mandou.
+    const hits = await one("SELECT COALESCE(SUM(hits),0) n FROM pressel_hits WHERE day >= date('now','-" + dias + " days')");
+    const janela = await one("SELECT MIN(ts) a, MAX(ts) b FROM tt_pending");
+
+    const nAds = ads.map((a) => { const v = vmap[String(a.ad_id)] || {}; return {
+      ad_id: String(a.ad_id||''), campanha: String(a.campanha||'—'), criativo: String(a.criativo||'—'),
+      visitas: Number(a.visitas)||0, ficaram: Number(a.ficaram)||0, leads: Number(a.leads)||0,
+      vendas: Number(v.vendas)||0, receita: Number(v.receita)||0 }; });
+    const top = nAds.slice(0, 25);
+    const resto = nAds.slice(25);
+    const kpi = {
+      visitas: nAds.reduce((s,a)=>s+a.visitas,0),
+      ficaram: nAds.reduce((s,a)=>s+a.ficaram,0),
+      leads: nAds.reduce((s,a)=>s+a.leads,0),
+      vendas: nAds.reduce((s,a)=>s+a.vendas,0),
+      receita: nAds.reduce((s,a)=>s+a.receita,0),
+      acessos: Number((hits[0]||{}).n)||0,
+      anuncios: nAds.length,
+    };
+    return json({ ok:true, dias, de,
+      kpi, top, outros: { n: resto.length, visitas: resto.reduce((s,a)=>s+a.visitas,0), leads: resto.reduce((s,a)=>s+a.leads,0) },
+      campanhas: camps.map((c)=>({ campanha:String(c.campanha||'—'), visitas:Number(c.visitas)||0, ficaram:Number(c.ficaram)||0, leads:Number(c.leads)||0 })),
+      serie: serie.map((x)=>({ dia:String(x.dia||''), campanha:String(x.campanha||'—'), visitas:Number(x.visitas)||0, leads:Number(x.leads)||0 })),
+      horas: horas.map((x)=>({ h:Number(x.h)||0, visitas:Number(x.visitas)||0, leads:Number(x.leads)||0 })),
+      // A tela avisa que o historico e curto: o cron apaga tt_pending com mais de 7 dias, entao
+      // "semana passada" por anuncio simplesmente nao existe ainda.
+      janela: { desde: Number((janela[0]||{}).a)||0, ate: Number((janela[0]||{}).b)||0, purga_dias: 7 },
+    });
+  } catch(e){ return err('Não consegui montar a análise: ' + String((e&&e.message)||e), 500); }
+}
 async function handlePresselsTotalJson(req, env){
   const u=await authUser(req, env);
   if(!u) return err('Não autenticado', 401);
@@ -11116,7 +11234,7 @@ async function handlePresselsTotalJson(req, env){
   // Leads: o vendedor VÊ, mas só a carteira DELE (pedido do Bruno em 16/08/2026 — antes tomava
   // "Só o diretor vê os leads" em vermelho na tela). O diretor continua vendo todo mundo.
   // O corte é aqui no servidor, não no navegador: o lead dos outros nem sai daqui.
-  const dados = await _presselsTotalData(env, day, view, per, full, u);
+  const dados = await _presselsTotalData(env, day, view, per, full, u, (() => { try { return new URL(req.url).host; } catch (_) { return ''; } })());
   if (view === 'leads' && !full) {
     const meu = String(u.name || '').trim().toLowerCase();
     const meuId = String(u.id || '');
@@ -11165,6 +11283,9 @@ async function handlePresselsTotalJson(req, env){
   return json(dados);
 }
 async function handlePresselsTotalPage(req, env){
+  // Host de quem pediu: e o dominio da operacao dona desta pagina. Serve de padrao quando a
+  // pressel nao tem dominio proprio gravado (ver _presselDom).
+  const _hostReq = (() => { try { return new URL(req.url).host; } catch (_) { return ''; } })();
   const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
   // ESTA PAGINA E PUBLICA DE PROPOSITO (o gestor de trafego abre sem login), mas quem chega com
@@ -11253,7 +11374,7 @@ async function handlePresselsTotalPage(req, env){
     Object.keys(cvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].contatos+=Number(cvi[inst])||0; });
     Object.keys(vvi).forEach(inst=>{ const at=_vAt(inst); if(vm[at]) vm[at].vendas+=Number(vvi[inst])||0; });
     const vend=Object.values(vm);
-    return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p)+'/p/'+p.id, views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
+    return {nome:p.nome||('Pressel '+p.id), url:'https://'+_presselDom(p,_hostReq)+'/p/'+_presselRefPub(p), views:Number(vc.views)||0, clicks:Number(vc.clicks)||0, contatos:M.contatos[pid]||0, vendas:M.vendas[pid]||0, vend};
   });
   const tot=secs.reduce((a,s)=>({views:a.views+s.views, clicks:a.clicks+s.clicks, contatos:a.contatos+s.contatos, vendas:a.vendas+s.vendas}), {views:0,clicks:0,contatos:0,vendas:0});
   tot.vendas=Object.values(M.vendasInst||{}).reduce((a,x)=>a+(Number(x.v)||0),0);   // TOTAL conta TODAS as vendas fechadas (com ou sem código)
@@ -12287,6 +12408,7 @@ export default {
       if (req.method === 'GET' && mMatch) return handlePresselMetricsPage(req, env, mMatch[1]);
 
       // Página pública CONSOLIDADA: total de todas + cada pressel numa seção
+      if (req.method === 'GET' && path === '/api/tt/anuncios') return handleTtAnuncios(req, env);
       if (req.method === 'GET' && path === '/pressels-total.json') return handlePresselsTotalJson(req, env);
       if (req.method === 'GET' && path === '/pressels-total') return handlePresselsTotalPage(req, env);
 
