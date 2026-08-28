@@ -1941,17 +1941,30 @@ async function handleGetState(req, env) {
     const _souDoMundo = isAfiliado(u) || afiliadoSemVinculo(u) || noMundoAfiliado(u);
     const tr = _souDoMundo
       ? await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id = ? ORDER BY name').bind(_mundo || '__sem_vinculo__').all()
-      // Do lado do produtor, `team` tambem so tem a CASA: e este mapa que da nome ao card do
-      // Kanban, e lead nosso nunca e atendido por gente de afiliado. Sem o afiliado_id IS NULL, o
-      // vendedor que o afiliado cadastrou aparecia como se fosse nosso.
-      : await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id IS NULL ORDER BY name').all();
+      // Do lado do produtor, `team` tinha SO A CASA, com a justificativa de que "lead nosso nunca
+      // e atendido por gente de afiliado". ESSA PREMISSA MORREU (28/08/2026): pedido que o vendedor
+      // do afiliado cadastra cai tambem na NOSSA area de pedidos, de proposito. Resultado: o card
+      // do Antonio Portella aparecia como "Sem vendedor" pro Bruno, sendo que tinha vendedor - o
+      // nome so nao existia no mapa. Perder de vista quem vendeu e pior que a mistura que o filtro
+      // evitava.
+      // O DIRETOR passa a receber todo mundo, com `afl` carimbado em quem e de afiliado. E mapa de
+      // NOME (o Diretorio de usuarios e a tela de Vendedores leem /api/users, que segue so com a
+      // casa), e remuneracao de gente de afiliado NAO entra - ver o com_pct logo abaixo.
+      : isDirector(u)
+        ? await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo, afiliado_id FROM users WHERE COALESCE(archived,0)=0 ORDER BY name').all()
+        : await env.DB.prepare('SELECT id, name, abbr, role, color, bg, com_pct, salario, photo FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id IS NULL ORDER BY name').all();
     const dir = isDirector(u);
     team = (tr.results || []).map((x) => ({
       id: x.id, name: x.name, abbr: x.abbr, role: x.role, color: x.color, bg: x.bg,
       photo: _fotoUrl(req, x.id, x.photo),
+      // De quem e essa pessoa. Vazio = da casa. A tela usa pra nao contar gente de afiliado como
+      // nossa equipe (o nome aparece no card, mas ele nao e nosso funcionario).
+      ...(x.afiliado_id ? { afl: String(x.afiliado_id) } : {}),
       // a taxa de comissao e do diretor, MENOS a propria: o vendedor precisa dela pra ver o que ele
       // ganha (sem isso a comissao dele aparece como R$ 0,00 no painel dele).
-      ...(dir || String(x.id) === String(u.id) ? { com_pct: x.com_pct } : {}),
+      // Gente de AFILIADO fica de fora: quanto o vendedor do Giovane ganha e assunto do Giovane, e
+      // aqui e so mapa de nome.
+      ...((dir && !x.afiliado_id) || String(x.id) === String(u.id) ? { com_pct: x.com_pct } : {}),
     }));
   } catch (_) { team = []; }
   return json({ data: { ...(await _stateVisivel(u, data, env)), team }, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION });
@@ -2361,9 +2374,12 @@ async function handlePresselSave(req, env) {
         x.num = data.pressels.reduce((m, y) => (y && y !== x && String(y.afl || '') === String(x.afl) ? Math.max(m, Number(y.num) || 0) : m), 0) + 1;
       }
     }
-    const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg', 'pixel2_tt', 'pixel2_token'];
+    const STR = ['nome', 'msg', 'pixel_tt', 'pixel_tt_token', 'pixel_meta', 'pixel_meta_token', 'bg'];
     for (const k of STR) if (k in patch) target[k] = String(patch[k] == null ? '' : patch[k]).slice(0, 4000);
-    if ('pixel2_on' in patch) target.pixel2_on = !!patch.pixel2_on;   // liga/desliga o espelho do 2º pixel
+    // O 2º PIXEL DO TIKTOK SAIU (27/08/2026, pedido do Bruno: "pode remover esse segundo pixel do
+    // TikTok, que não vamos usar essa função"). Era o espelho que mandava os mesmos eventos reais
+    // pra uma segunda BM. Nada aqui aceita mais pixel2_*; o que já estiver gravado numa pressel
+    // vira campo morto e não dispara nada.
     // EVENTO DE CADA ETAPA. Guardado à parte do STR de propósito: aqui o valor NÃO pode ser texto
     // livre. Ele acaba interpolado dentro de um <script> na pressel, que é página de tráfego pago —
     // texto livre ali seria execução de código. Só passa nome da lista do TikTok ou 'off' (desligar);
@@ -2372,15 +2388,6 @@ async function handlePresselSave(req, env) {
       if (!(k in patch)) continue;
       const v = String(patch[k] == null ? '' : patch[k]).trim();
       target[k] = (v === 'off' || _EV_TT.includes(v)) ? v : '';
-    }
-    // Eventos do 2º pixel (contato/venda). MESMA validação, MAIS a trava: só ev2_sale pode ser evento
-    // de compra. Se mandarem CompletePayment/Purchase no contato, cai pra '' e volta ao padrão — é o
-    // ponto onde a regra "espelho real, não conversão fabricada" é imposta no servidor, não na tela.
-    for (const k of ['ev2_lead', 'ev2_sale']) {
-      if (!(k in patch)) continue;
-      const v = String(patch[k] == null ? '' : patch[k]).trim();
-      const proibido = (k !== 'ev2_sale' && _EV_COMPRA.includes(v));
-      target[k] = ((v === 'off' || _EV_TT.includes(v)) && !proibido) ? v : '';
     }
     if ('status' in patch) target.status = (patch.status === 'pausada' ? 'pausada' : 'ativa');
     if ('redirect' in patch) target.redirect = Math.max(0, Number(patch.redirect) || 0);
@@ -4174,6 +4181,7 @@ async function handlePaytWebhook(req, env, urlToken) {
   if (lead) {
     // Aplica mapeamento sobre lead existente
     const prev = lead.col;
+    let _colMantida = false;   // ver a regra "quem paga manda no pagamento" logo abaixo
     // Backfill do atendente: se o lead ainda não tem dono e a ponte CPF conhece quem
     // atendeu, atribui agora (não sobrescreve atribuição manual já existente).
     if (!lead.at && attribAt) lead.at = attribAt;
@@ -4184,9 +4192,30 @@ async function handlePaytWebhook(req, env, urlToken) {
       // 'A Enviar') devolvia pro comeco um pedido que a Five ja tinha postado, e a etapa que o
       // Bruno le no Cadastro de Pedidos andava pra tras sozinha. Pedido sem five_id (venda so de
       // cartao) segue como era: quem manda na coluna dele e a Payt.
+      //
+      // E O CHECKOUT NAO DECIDE O DESTINO DE UM PEDIDO QUE JA ESTA VIAJANDO (28/08/2026).
+      // Caso real, pedido do Antonio Portella (R$ 297, pagamento NA ENTREGA, postado pela Five e
+      // 'em transito' no rastreio): o afiliado mandou o link de Pix pra ele, o cliente abriu e nao
+      // pagou, e a Payt disparou `abandono_checkout` e depois `pagamento_expirado`. O mapeamento
+      // levou o card pra 'Cobranca' e em seguida pra 'Frustrado' - um pedido que estava a caminho
+      // do cliente aparecia como perdido na dash, enquanto na Five estava normal.
+      // O mapeamento nao esta errado: ele foi escrito pra venda que so existe no checkout, onde
+      // link expirado E o fim. Errado e aplica-lo a um pedido COD que a Five ja despachou, onde o
+      // Pix e apenas UMA tentativa de pagar e o cliente ainda pode pagar na porta.
+      //
+      // A REGRA: com five_id, a Payt so mexe na COLUNA quando traz pagamento CONFIRMADO - que e o
+      // unico fato que a Five nao conhece e que de verdade adianta o pedido. Todo o resto continua
+      // valendo em `spg` e nas tags (o Bruno segue vendo "nao pagou o Pix"), mas a etapa fisica
+      // continua sendo da Five. Quem paga manda no pagamento; quem envia manda na etapa.
+      const _confirmouPgto = mapping.action === 'pagar' || String(mapping.spg || '') === 'Pago';
       const _cur = FIVE_COL_RANK[lead.col] || 0, _tgt = FIVE_COL_RANK[mapping.etapa] || 0;
       const _paraTras = lead.five_id && (FIVE_COL_FIM.includes(lead.col) || (_tgt && _cur && _tgt < _cur));
-      if (!_paraTras) lead.col = mapping.etapa;
+      const _soCheckout = !!lead.five_id && !_confirmouPgto;
+      if (!_paraTras && !_soCheckout) lead.col = mapping.etapa;
+      // Barrado fica REGISTRADO: o historico logo abaixo grava o evento de qualquer jeito (com
+      // from == to) e ganha o motivo no fim da nota. Sem dizer o motivo, o card mostraria o
+      // postback chegando e nada acontecendo, que parece integracao quebrada.
+      else if (_soCheckout && mapping.etapa !== lead.col) _colMantida = true;
     }
     if (mapping?.spg) lead.spg = mapping.spg;
     if (mapping?.action === 'tag' && mapping.tag) {
@@ -4210,7 +4239,8 @@ async function handlePaytWebhook(req, env, urlToken) {
       to: lead.col,
       who: 'payt',
       time: `${todayBR()} ${nowTimeBR()}`,
-      note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`,
+      note: `PAYT: ${data.event_raw||data.event} (${data.status||'-'})`
+        + (_colMantida ? ' - coluna mantida: a Five e dona da etapa deste pedido' : ''),
     });
     action_taken = 'updated';
     lead_id_result = lead.id;
@@ -7376,6 +7406,20 @@ async function _dcSyncSaude(env, reg) {
 // fileName, size }] e o body vem AUSENTE quando a foto/audio nao tem legenda. Sem ler isso aqui, a
 // foto virava type='text' + body='' + media_url=null, ou seja, uma linha invisivel no inbox (o
 // msgVisible do front descarta mensagem 'text' sem corpo e sem arquivo).
+// MENSAGEM NAO SUPORTADA VEM COM TEXTO DE SISTEMA (28/08/2026). O Datacrazy marca a mensagem com
+// `unsupported: true` e MESMO ASSIM preenche o `body` com o nome interno do evento dele -
+// "campaign_event_trigger" foi o que apareceu. Gravar esse texto faz o inbox mostrar
+// "campaign_event_trigger" como se o LEAD tivesse escrito aquilo, na lista e no balao. O Bruno viu e
+// perguntou "que merda e essa".
+//
+// Nao e mensagem: e evento de sistema que o WhatsApp nao sabe representar. Vira o marcador que o
+// front JA desenha como "Mensagem nao suportada" (wa.js, NAO_SUPORTADA), entao a conversa continua
+// aparecendo - o lead existe e precisa ser atendido - so para de fingir que ele mandou um texto.
+//
+// Olha o `unsupported`, nao o texto: assim vale pra QUALQUER nome de evento que eles inventem
+// depois, e nao so pra este. Medido em 28/08: 12 mensagens, 7 telefones, desde 20/08.
+const _dcBody = (m) => (m && m.unsupported ? 'unsupported_unknown_message_type' : String((m && m.body) || ''));
+
 function _dcAttach(m) {
   const a = (m && Array.isArray(m.attachments) && m.attachments.length) ? m.attachments[0] : null;
   if (!a || !a.url) return null;
@@ -7523,7 +7567,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40) {
     for (const m of msgs) {
       const id = String(m?.id || m?._id || '');
       if (!id) continue;
-      const corpo = String(m?.body || '').slice(0, 4000);
+      const corpo = _dcBody(m).slice(0, 4000);
       const anexo = _dcAttach(m);   // foto/audio/video vem em attachments[], NAO em m.type/m.mediaURL
       const tipo = anexo ? anexo.tipo : String(m?.type || 'text').toLowerCase();
       const quando = Math.floor(new Date(m?.createdAt || Date.now()).getTime() / 1000);
@@ -7711,7 +7755,7 @@ async function _dcResolveConv(env, phone) {
   const c = list[0];
   const self = String((c.instance && c.instance.config && c.instance.config.phoneNumber) || '').replace(/\D/g, '');
   const lm = c.lastMessage || {};
-  const text = lm.received ? String(lm.body || '') : '';
+  const text = lm.received ? _dcBody(lm) : '';
   const name = String((c.contact && c.contact.name) || '');
   return { self, text, name, convId: c.id };
 }
@@ -7918,7 +7962,7 @@ async function _dcPoll(env, opts = {}) {
       if (!msgId) { passo.sem_id++; continue; }
       const mts = lm.createdAt ? Math.floor(new Date(lm.createdAt).getTime() / 1000) : now;
       if (now - mts > janela) { passo.velha++; continue; }   // só o recente — não reprocessa histórico ao ligar
-      const text = String(lm.body || '');
+      const text = _dcBody(lm);
       // venda = "Pedido Concluído" que o VENDEDOR posta (mesma assinatura da dash). _waDetectSale confere o resto.
       const isSale = !inbound && /pedido\s+conclu/i.test(text);
       if (!inbound && !isSale) { passo.so_vendedor++; continue; }   // mensagem normal do vendedor (não-venda): ignora
@@ -9204,7 +9248,6 @@ async function _ttRetryFailed(env) {
 // Resolve pixel+token: 1) da pressel (pid) se tiver os dois; 2) da pressel do vendedor (ax_<at>); 3) global.
 async function _ttPixelToken(env, pid, instance) {
   let pixel = '', token = '', ev = _evTodos(null);
-  let pixel2 = '', token2 = '', ev2 = { ev_lead: '', ev_sale: '' };   // 2º pixel (espelho), só sai quando ligado na pressel
   try {
     const data = await _getDashData(env);   // cacheado: era parseado por lead (1.3MB), estourava CPU no lote
     const pressels = Array.isArray(data.pressels) ? data.pressels : [];
@@ -9220,13 +9263,12 @@ async function _ttPixelToken(env, pid, instance) {
     }
     if (p) {
       pixel = String(p.pixel_tt); token = String(p.pixel_tt_token); ev = _evTodos(p);
-      if (_pixel2On(p)) { pixel2 = String(p.pixel2_tt); token2 = String(p.pixel2_token); ev2 = _evTodos2(p); }
     }
   } catch (_) {}
   if (!pixel || !token) { pixel = await _readConfig(env, 'tt_pixel_id'); token = await _readConfig(env, 'tt_access_token'); }
   // `ev` sai junto do pixel porque vem da MESMA pressel: quem resolve "qual pixel" já resolveu
   // "quais eventos". Caindo no pixel global (sem pressel), valem os padrões.
-  return { pixel, token, ev, pixel2, token2, ev2 };
+  return { pixel, token, ev };
 }
 // Tipos que o WhatsApp Web emite mas que NÃO são mensagem de gente: ruído de protocolo. Se um
 // desses criar o lead, ele nasce sem texto e sem código, e a mensagem real é descartada depois.
@@ -9262,6 +9304,11 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > _teto) return;
     if (!_leadTablesOk) {   // DDL uma vez por isolate (era causa do 1102 no lote de captura)
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
+      // A identificacao da Meta acompanha o lead: e o que liga a VENDA (que acontece dias depois)
+      // ao clique que a pagou. Sem isto, Purchase chega na Meta sem `fbc` e ela nao sabe de qual
+      // anuncio veio - o gerenciador mostra venda "organica" e o ROAS da campanha fica falso.
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN fbc TEXT').run(); }catch(_){}
+      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN fbp TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN inst TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // origem da atribuição: 'code' (exato) | 'fifo' (clique recente no mesmo número)
       try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}   // número (do atendente) que recebeu o lead — pra dividir por número na visão de Leads
@@ -9300,10 +9347,13 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     const isUpgrade = !!exists && !migrou;
     // 1) casa pelo CÓDIGO da mensagem (ex: Código de desconto "k2EGu"!) — atribuição EXATA.
     let ttclid = '', pid = '', src = '', utm = '';
+    // Viajam junto com a atribuicao: quem descobriu de QUAL visita veio este lead ja sabe qual era
+    // o clique da Meta daquela visita. Buscar isso depois, por telefone, nao teria como acertar.
+    let fbc = '', fbp = '';
     if (code) {
       try {
         const cl = await env.DB.prepare("UPDATE tt_pending SET claimed=1 WHERE id=(SELECT id FROM tt_pending WHERE code=? AND (claimed IS NULL OR claimed=0) ORDER BY ts DESC LIMIT 1) RETURNING ttclid, pid, utm").bind(code).first();
-        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; utm = cl.utm || ''; }
+        if (cl) { ttclid = cl.ttclid || ''; pid = cl.pid || ''; src = 'code'; utm = cl.utm || ''; fbc = cl.fbc || ''; fbp = cl.fbp || ''; }
       } catch (_) {}
       // 1b) O código É deste lead, mesmo que a linha já tenha sido reivindicada pelo FIFO de OUTRO
       // lead antes (o fifo é guloso e drena o pool de cliques do vendedor). Sem re-reivindicar, lê o
@@ -9311,8 +9361,8 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       // ao anúncio — era a maior fonte do descasamento que o gestor de tráfego via.
       if (!pid) {
         try {
-          const cl2 = await env.DB.prepare("SELECT ttclid, pid, utm FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1").bind(code).first();
-          if (cl2 && (cl2.ttclid || cl2.pid)) { ttclid = cl2.ttclid || ''; pid = cl2.pid || ''; src = 'code'; utm = cl2.utm || ''; }
+          const cl2 = await env.DB.prepare("SELECT ttclid, pid, utm, fbc, fbp FROM tt_pending WHERE code=? ORDER BY ts DESC LIMIT 1").bind(code).first();
+          if (cl2 && (cl2.ttclid || cl2.pid)) { ttclid = cl2.ttclid || ''; pid = cl2.pid || ''; src = 'code'; utm = cl2.utm || ''; fbc = cl2.fbc || ''; fbp = cl2.fbp || ''; }
         } catch (_) {}
       }
     }
@@ -9397,7 +9447,7 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       ).bind(instance, num, pid, pid, ttclid, ttclid, src, src, phone).run();
       console.log('WA_LEAD_MIGROU fone=' + phone + ' de=' + String((exists && exists.inst) || '') + ' para=' + String(instance) + ' src=' + String(src || exists.src || ''));
     } else {
-      await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts, utm) VALUES (?,?,?,?,?,?,strftime('%s','now'),?)").bind(phone, pid, ttclid, instance, src, num, utm).run();
+      await env.DB.prepare("INSERT OR IGNORE INTO wa_lead (phone, pid, ttclid, inst, src, num, ts, utm, fbc, fbp) VALUES (?,?,?,?,?,?,strftime('%s','now'),?,?,?)").bind(phone, pid, ttclid, instance, src, num, utm, fbc, fbp).run();
     }
     // Dispara InitiateCheckout pra TODO lead que veio da pressel (tem pid), com ou sem ttclid. O
     // GT compara o nº de leads da dash com o do TikTok, e limitar a `ttclid` deixava ~40% de fora
@@ -9405,22 +9455,26 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // matching), então o TikTok consegue casar por telefone mesmo sem o click id. Lead orgânico de
     // verdade (sem pid) continua fora. No upgrade só dispara se ainda não tinha disparado.
     if ((ttclid || pid) && !(exists && (exists.ttclid || exists.pid))) {
-      const { pixel, token, ev, pixel2, token2, ev2 } = await _ttPixelToken(env, pid, instance);
+      const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
       // O nome vem da pressel (padrão InitiateCheckout, que é o evento que o GT otimiza). Vazio =
       // o Bruno desligou esta etapa nas Configurações da pressel.
       if (ev.ev_lead) await _ttSend(env, pixel, token, ev.ev_lead, phone, { ttclid, eventId: 'lead_' + phone, pid, instance, stage: 'contato' });
-      // ESPELHO no 2º pixel (mesmo lead real, event_id/stage próprios pra não colidir no log).
-      if (pixel2 && token2 && ev2.ev_lead) await _ttSend(env, pixel2, token2, ev2.ev_lead, phone, { ttclid, eventId: 'lead_' + phone + '.p2', pid, instance, stage: 'contato_p2' });
+      // META: `Lead` sai aqui, no contato REAL (a mensagem chegou). O `Contact` do navegador e
+      // outra coisa - e a INTENCAO, disparada quando a pessoa toca no botao. Nomes diferentes de
+      // proposito: sao dois fatos diferentes e nenhum conta o outro em dobro.
+      const _fb = await _fbPixelToken(env, pid);
+      if (_fb.pixel) await _fbSend(env, _fb.pixel, _fb.token, 'Lead', phone, { fbc, fbp, pid, eventId: 'lead_' + phone });
     }
   } catch (_) {}
 }
 // VENDA: usa a pressel/ttclid capturados do lead (wa_lead) e dispara pro pixel certo, com ttclid.
 async function _ttFireSale(env, phone, value, eventId, instance) {
+  let _fbcL = '', _fbpL = '';   // identificacao da Meta guardada no lead (ver wa_lead.fbc/fbp)
   try {
     const digits = String(phone || '').replace(/\D/g, '');
     if (!digits) return;
     let ttclid = '', pid = '', hadLead = false;
-    try { const l = await env.DB.prepare('SELECT pid, ttclid FROM wa_lead WHERE phone=?').bind(digits).first(); if (l) { hadLead = true; ttclid = l.ttclid || ''; pid = l.pid || ''; } } catch (_) {}
+    try { const l = await env.DB.prepare('SELECT pid, ttclid, fbc, fbp FROM wa_lead WHERE phone=?').bind(digits).first(); if (l) { hadLead = true; _fbcL = l.fbc || ''; _fbpL = l.fbp || ''; ttclid = l.ttclid || ''; pid = l.pid || ''; } } catch (_) {}
     // NÃO tentar adivinhar o ttclid da venda sem rastreio. Foi avaliado e REPROVADO em 22/07:
     // tt_pending nasce quando a PÁGINA da pressel carrega, não quando a pessoa abre o WhatsApp
     // (o `clicked=1` é que marca isso, e vem depois, por beacon). Entre uma coisa e outra o lead
@@ -9461,13 +9515,17 @@ async function _ttFireSale(env, phone, value, eventId, instance) {
         ).bind(digits, pid, instance, num).run();
       } catch (_) {}
     }
-    const { pixel, token, ev, pixel2, token2, ev2 } = await _ttPixelToken(env, pid, instance);
+    const { pixel, token, ev } = await _ttPixelToken(env, pid, instance);
     // `stage:'venda'` é o que a tela de pedidos consulta pra mostrar "o TikTok aceitou". Antes ela
     // procurava pelo NOME 'CompletePayment' num JOIN; com o nome configurável, o selo sumiria em
     // silêncio no dia em que o Bruno trocasse o evento. A etapa não muda, o nome sim.
     if (ev.ev_sale) await _ttSend(env, pixel, token, ev.ev_sale, digits, { value, ttclid, eventId, pid, instance, stage: 'venda' });
-    // ESPELHO no 2º pixel. Só chega aqui em VENDA REAL, então a compra sai igual nos dois — nunca em engajamento.
-    if (pixel2 && token2 && ev2.ev_sale) await _ttSend(env, pixel2, token2, ev2.ev_sale, digits, { value, ttclid, eventId: eventId + '.p2', pid, instance, stage: 'venda_p2' });
+    // META: `Purchase` com o valor. So chega aqui em VENDA REAL - nao existe caminho que dispare
+    // compra a partir de engajamento, que e o que estraga a otimizacao da campanha (e o motivo de
+    // a Meta punir conta que reporta compra demais). O `fbc` vem do clique guardado no lead, entao
+    // a venda de hoje ainda credita o anuncio que a trouxe dias atras.
+    const _fbv = await _fbPixelToken(env, pid);
+    if (_fbv.pixel) await _fbSend(env, _fbv.pixel, _fbv.token, 'Purchase', digits, { value, fbc: _fbcL, fbp: _fbpL, pid, eventId: 'venda_' + String(eventId || digits) });
   } catch (_) {}
 }
 // GET /api/wa/sales → vendas detectadas no WhatsApp (a dash mostra/usa)
@@ -10180,23 +10238,119 @@ const _evTodos = (p) => ({ ev_view: _evDe(p, 'ev_view'), ev_click: _evDe(p, 'ev_
 // escolhendo o evento por etapa. A REGRA que separa espelho de fraude: SÓ a etapa de VENDA real
 // (ev_sale) pode disparar evento de compra concluída. Em contato/engajamento, CompletePayment/
 // Purchase/PlaceAnOrder são bloqueados (viram o padrão), então não dá pra marcar compra sem compra.
-const _EV_COMPRA = ['CompletePayment', 'Purchase', 'PlaceAnOrder'];
-function _ev2De(p, chave) {                       // chave: 'ev_lead' | 'ev_sale'
-  const v = String((p && p[chave.replace('ev_', 'ev2_')]) || '').trim();
-  if (v === 'off') return '';
-  const proibido = (chave !== 'ev_sale' && _EV_COMPRA.includes(v));   // compra só na venda real
-  return (_EV_TT.includes(v) && !proibido) ? v : (_EV_PADRAO[chave] || '');
+
+// ══ META (Facebook / Instagram) ═══════════════════════════════════════════
+//
+// ISTO NAO EXISTIA (27/08/2026). Os campos "Pixel da Meta" e "Access Token" estavam no editor da
+// pressel e eram gravados no estado desde sempre, mas NADA no worker os lia: nenhuma linha injetava
+// o pixel na pagina, nenhuma chamada ia pra Conversions API. Ou seja, quem preenchesse aqueles dois
+// campos e subisse campanha no Meta Ads rodaria com ZERO traqueamento e sem perceber - o campo
+// preenchido da a impressao de que esta ligado. O Bruno avisou que vai comecar a rodar Meta Ads,
+// entao o caminho foi construido inteiro, espelhando o que ja existe pro TikTok.
+//
+// COMO FICA O FUNIL (de proposito SEM nome de evento repetido entre navegador e servidor, que e o
+// que dispensa deduplicacao e e onde esse tipo de integracao costuma contar em dobro):
+//   navegador  PageView  -> ao abrir a pressel
+//   navegador  Contact   -> quando a pessoa vai pro WhatsApp
+//   servidor   Lead      -> quando a mensagem CHEGA de verdade (nao e intencao, e lead real)
+//   servidor   Purchase  -> so em venda confirmada, com valor
+//
+// A parte que da qualidade de match e a identificacao: `fbc` (o clique do anuncio) e `fbp` (o
+// cookie do proprio pixel) sao gravados na visita e reaproveitados no envio do servidor, junto do
+// telefone com hash. Sem eles a Meta recebe o evento mas casa mal, e o custo por resultado no
+// gerenciador fica pior do que a operacao realmente e.
+function _fbPixel(p){
+  if(!p || !p.pixel_meta) return '';
+  const id = JSON.stringify(String(p.pixel_meta)).replace(/</g,'\\u003c');   // neutraliza </script>
+  // PageView sai pra TODO visitante, e nao so pra quem tem fbclid: e assim que a Meta monta
+  // publico e atribui. (O TikTok aqui e gated por ttclid pra nao quebrar a serie historica de
+  // cliques, que ja existe ha meses; na Meta estamos comecando do zero.)
+  return `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init',${id});fbq('track','PageView');</script>`;
 }
-const _evTodos2 = (p) => ({ ev_lead: _ev2De(p, 'ev_lead'), ev_sale: _ev2De(p, 'ev_sale') });
-const _pixel2On = (p) => !!(p && p.pixel2_on && p.pixel2_tt && p.pixel2_token);
+
+// SHA-256 em hex. A Meta exige os dados pessoais com hash (telefone, email); mandar cru e recusado.
+async function _sha256Hex(txt){
+  const b = new TextEncoder().encode(String(txt || ''));
+  const h = await crypto.subtle.digest('SHA-256', b);
+  return Array.from(new Uint8Array(h)).map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+async function _fbEnsureTable(env){
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS fb_events (
+      event_id TEXT PRIMARY KEY, event TEXT, phone TEXT, value REAL, fbc TEXT, fbp TEXT,
+      pid TEXT, status TEXT, code TEXT, msg TEXT, ts INTEGER)`).run();
+  } catch (_) {}
+}
+
+// Conversions API. Mesma ideia do _ttSend: manda e GUARDA a resposta, porque erro de pixel/token
+// aqui e silencioso - a Meta responde 200 com o problema descrito dentro do corpo.
+async function _fbSend(env, pixel, token, event, phoneDigits, opts){
+  opts = opts || {};
+  const evId = String(opts.eventId || (event + '_' + phoneDigits));
+  await _fbEnsureTable(env);
+  const reg = async (status, code, msg) => {
+    try {
+      await env.DB.prepare(`INSERT INTO fb_events (event_id,event,phone,value,fbc,fbp,pid,status,code,msg,ts)
+        VALUES (?,?,?,?,?,?,?,?,?,?,strftime('%s','now')) ON CONFLICT(event_id) DO UPDATE SET
+        status=excluded.status, code=excluded.code, msg=excluded.msg, ts=excluded.ts`)
+        .bind(evId, event, String(phoneDigits || ''), (opts.value == null ? null : Number(opts.value)),
+              String(opts.fbc || ''), String(opts.fbp || ''), String(opts.pid || ''), status, String(code || ''), String(msg || '').slice(0, 300)).run();
+    } catch (_) {}
+  };
+  if (!pixel || !token) { await reg('erro', 'sem_pixel', 'pressel sem pixel/token da Meta'); return { ok: false }; }
+  try {
+    const user = {};
+    const tel = String(phoneDigits || '').replace(/\D/g, '');
+    // Telefone com DDI: a Meta casa por E.164 sem o "+". Numero BR sem 55 na frente nao bate.
+    if (tel) user.ph = [await _sha256Hex(tel.length <= 11 ? '55' + tel : tel)];
+    if (opts.fbc) user.fbc = String(opts.fbc);
+    if (opts.fbp) user.fbp = String(opts.fbp);
+    if (opts.ip) user.client_ip_address = String(opts.ip);
+    if (opts.ua) user.client_user_agent = String(opts.ua);
+    if (tel) user.external_id = [await _sha256Hex(tel)];
+    const ev = {
+      event_name: event,
+      event_time: Math.floor(Date.now() / 1000),
+      event_id: evId,                    // se um dia o mesmo nome sair tambem do navegador, dedup pronto
+      action_source: 'website',
+      user_data: user,
+    };
+    if (opts.url) ev.event_source_url = String(opts.url);
+    if (opts.value != null) ev.custom_data = { value: Number(opts.value), currency: 'BRL' };
+    const r = await fetch('https://graph.facebook.com/v21.0/' + encodeURIComponent(pixel) + '/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data: [ev], access_token: String(token) }),
+    });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (_) {}
+    // A Meta responde 200 com `events_received`. Erro vem em `error.message`, tambem com 200 as vezes.
+    const erro = j && j.error;
+    if (!r.ok || erro) { await reg('erro', String((erro && erro.code) || r.status), String((erro && erro.message) || txt).slice(0, 300)); return { ok: false }; }
+    await reg('ok', String((j && j.events_received) || 1), '');
+    return { ok: true };
+  } catch (e) {
+    await reg('erro', 'excecao', String((e && e.message) || e));
+    return { ok: false };
+  }
+}
+
+// Qual pixel/token da Meta vale pra esta pressel. Mesma regra do TikTok: o da pressel; sem ele,
+// nada (a Meta nao tem pixel global configurado hoje).
+async function _fbPixelToken(env, pid){
+  try {
+    const data = await _getDashData(env);
+    const p = (Array.isArray(data.pressels) ? data.pressels : []).find((x) => String(x.id) === String(pid));
+    if (p && p.pixel_meta && p.pixel_meta_token) return { pixel: String(p.pixel_meta), token: String(p.pixel_meta_token) };
+  } catch (_) {}
+  return { pixel: '', token: '' };
+}
 
 function _ttPixel(p){
   if(!p.pixel_tt) return '';
   const id=JSON.stringify(String(p.pixel_tt)).replace(/</g,'\\u003c');   // neutraliza </script>
-  // 2º pixel (espelho): carrega junto. ttq.track dispara pra TODOS os pixels carregados, então
-  // PageView/ClickButton do navegador saem iguais nos dois. Contato/venda (server) usam o ev2 dele.
-  const load2 = _pixel2On(p) ? ('ttq.load('+JSON.stringify(String(p.pixel2_tt)).replace(/</g,'\\u003c')+');') : '';
-  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});${load2}}(window,document,'ttq');</script>`;
+  return `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=i,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};ttq.load(${id});}(window,document,'ttq');</script>`;
 }
 function _presselHtml(html){
   return new Response(html, { status:200, headers:{ 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' } });
@@ -11611,6 +11765,14 @@ async function _presselEnsure(env){
     try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN clicked INTEGER DEFAULT 0').run(); }catch(_){}
     try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}
     try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN utm TEXT').run(); }catch(_){}
+    // IDENTIFICACAO DA META (27/08/2026). `fbc` e o clique do anuncio (fb.1.<ts>.<fbclid>) e `fbp`
+    // e o cookie do proprio pixel. Guardados na visita porque o envio server-side acontece DEPOIS,
+    // quando a mensagem chega no WhatsApp - e ali nao ha mais navegador nem URL do anuncio.
+    // Ficam na MESMA linha do tt_pending de proposito: ela ja e criada em toda visita (mesmo sem
+    // ttclid) e ja carrega o `code` que casa a mensagem com a visita. Tabela nova so duplicaria o
+    // mecanismo de atribuicao que ja funciona.
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN fbc TEXT').run(); }catch(_){}
+    try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN fbp TEXT').run(); }catch(_){}
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_stats (pid TEXT PRIMARY KEY, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_day (pid TEXT, day TEXT, views INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     _presselTablesOk = true;
@@ -11662,6 +11824,15 @@ async function handlePresselPublic(req, env, id, ctx){
   await depois(env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run().catch(()=>{}));
   const _qs = new URL(req.url).searchParams;
   const ttclid = _qs.get('ttclid') || '';   // click id do anúncio do TikTok
+  // META: o clique do anuncio vem em `fbclid` e a Meta espera ele guardado como `fb.1.<ms>.<id>`.
+  // O `_fbp` e cookie que o proprio pixel cria; na PRIMEIRA visita ele ainda nao existe (o pixel
+  // roda depois desta resposta), por isso o beacon do clique atualiza a linha mais tarde.
+  const _fbclid = (_qs.get('fbclid') || '').slice(0, 400);
+  const _fbc = _fbclid ? ('fb.1.' + Date.now() + '.' + _fbclid) : '';
+  const _fbp = (() => {
+    const m = String(req.headers.get('cookie') || '').match(/(?:^|;\s*)_fbp=([^;]+)/);
+    return m ? decodeURIComponent(m[1]).slice(0, 120) : '';
+  })();
   // CAMPANHA. O ttclid diz QUEM clicou, mas não de QUAL anúncio: sem isso o gestor de tráfego
   // sabe que entrou lead e não sabe qual campanha trouxe. Guardamos os utm_* padrão e também os
   // nomes que o TikTok manda nas macros (campaign_name, adgroup_name, ad_name, campaign_id...).
@@ -11693,7 +11864,7 @@ async function handlePresselPublic(req, env, id, ctx){
       // sem número: grava mesmo assim, com inst/num_key vazios. Guarda a PRESSEL de origem e mantém
       // a deduplicação por ttclid (senão um refresh contaria a mesma visita duas vezes).
       const _nk = pick ? String(pick.num||'').replace(/\D/g,'').slice(-8) : '';
-      await depois(env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key, utm) VALUES (?,?,?,strftime('%s','now'),0,?,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk, _utm).run().catch(()=>{}));
+      await depois(env.DB.prepare("INSERT INTO tt_pending (inst, ttclid, pid, ts, claimed, code, num_key, utm, fbc, fbp) VALUES (?,?,?,strftime('%s','now'),0,?,?,?,?,?)").bind(pick?pick.inst:'', ttclid, String(id), leadCode, _nk, _utm, _fbc, _fbp).run().catch(()=>{}));
       if(ttclid){ await depois(_bumpPressel(env, id, 'views').catch(()=>{})); }   // conta SÓ tráfego real do TikTok, 1x por clique
     }
   }catch(_){}
@@ -11726,7 +11897,7 @@ async function handlePresselPublic(req, env, id, ctx){
   const waAppJson=_destino ? waJson : JSON.stringify('whatsapp://send?phone='+_wd+(waMsg?('&text='+encodeURIComponent(waMsg)):''));
   const bg=/^(#[0-9a-fA-F]{3,8}|rgb\([\d,\s.]+\)|rgba\([\d,\s.%]+\)|[a-zA-Z]+)$/.test(String(p.bg||''))?String(p.bg):'#ffffff';   // valida cor, evita injeção de CSS no <style>
   const secs=Math.max(0, Number(p.redirect)||0);
-  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
+  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${_ttPixel(p)}${_fbPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
   // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
   // texto/código de verdade.
   //
@@ -11755,6 +11926,14 @@ async function handlePresselPublic(req, env, id, ctx){
   const _esc=(s)=>JSON.stringify(String(s)).replace(/</g,'\\u003c');
   const _jsView=!_evV ? '' : (_evV==='PageView' ? 'try{ttq&&ttq.page()}catch(e){}' : `try{ttq&&ttq.track(${_esc(_evV)})}catch(e){}`);
   const _jsClick=!_evC ? '' : `try{ttq&&ttq.track(${_esc(_evC)})}catch(e){}`;
+  // META no clique. Duas coisas, as duas de fora do `track()` de proposito - aquele exige ttclid e
+  // trafego da Meta nunca traz ttclid:
+  //   1. `Contact` no pixel do navegador (a INTENCAO de falar; o Lead real sai do servidor).
+  //   2. um beacon com o CODIGO da visita, so pra o servidor gravar o cookie `_fbp` na linha dela.
+  //      O _fbp so passa a existir depois que o pixel roda, ou seja, DEPOIS que a pagina ja
+  //      respondeu - por isso ele nao da pra capturar na renderizacao.
+  // Tudo em try/catch e sem nada bloqueante: o redirect nao pode depender de pixel.
+  const _jsFbClick = !p.pixel_meta ? '' : `try{window.fbq&&fbq('track','Contact')}catch(e){}try{navigator.sendBeacon('/pc/${id}?fb=1&code='+encodeURIComponent(${JSON.stringify(String(leadCode||''))}))}catch(e){}`;
   // O beacon vem ANTES do ttq de propósito: ele é quem alimenta "Foram pro WhatsApp" na dash. Com o
   // pixel primeiro, um erro ali levava a métrica junto.
   // TODO MUNDO VAI PRO WHATSAPP (27/08/2026, exigencia do Bruno: "nao tolero erro nessa parte,
@@ -11790,7 +11969,7 @@ async function handlePresselPublic(req, env, id, ctx){
   // com a aba VISIVEL: se o app abriu, a pagina esta escondida e a queda nao faz nada. O pior caso
   // de quem abriu o app e o wa.me carregar atras, que tambem leva pro WhatsApp. Mantive as duas
   // tentativas longas porque aparelho lento demora mais pra trocar de app.
-  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;var _pv=new URLSearchParams(location.search).get('preview')==='1';if(IS_TT){${_jsView}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}${_jsClick}}var _foi=false;function _web(){if(document.hidden)return;try{location.href=${waJson}}catch(e){}}function go(){if(!${waJson})return;track();_foi=true;try{location.href=${waAppJson}}catch(e){}setTimeout(_web,350);setTimeout(_web,1400);setTimeout(_web,3500);}var _volta=false;document.addEventListener('visibilitychange',function(){if(_foi&&!_volta&&!document.hidden){_volta=true;setTimeout(_web,400)}});if(!_pv){setTimeout(go,${secs*1000});}</script>`;
+  const script=`<script>var _ttc=new URLSearchParams(location.search).get('ttclid')||'';var IS_TT=!!_ttc;var _pv=new URLSearchParams(location.search).get('preview')==='1';if(IS_TT){${_jsView}}var _tk=false;function track(){if(_tk||!IS_TT)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc))}catch(e){}${_jsClick}}var _foi=false;function _web(){if(document.hidden)return;try{location.href=${waJson}}catch(e){}}function go(){if(!${waJson})return;track();${_jsFbClick}_foi=true;try{location.href=${waAppJson}}catch(e){}setTimeout(_web,350);setTimeout(_web,1400);setTimeout(_web,3500);}var _volta=false;document.addEventListener('visibilitychange',function(){if(_foi&&!_volta&&!document.hidden){_volta=true;setTimeout(_web,400)}});if(!_pv){setTimeout(go,${secs*1000});}</script>`;
   const els=_presselElsServer(p);
   let body=els.map(e=>_elPublicHtml(e, wa, id)).join('');
   if(p.fullclick){
@@ -12382,6 +12561,22 @@ export default {
       if (pcMatch) {
         if (req.method === 'POST') {
           try {
+            // META: guarda o cookie `_fbp` na linha desta visita. Ele so nasce depois que o pixel
+            // roda no navegador, ou seja, DEPOIS que a pagina ja respondeu - entao nao ha como
+            // captura-lo na renderizacao. Aqui o beacon chega ao nosso proprio dominio, o cookie
+            // vem junto no cabecalho e a linha da visita (achada pelo codigo) recebe o valor.
+            // NAO mexe em `clicked` nem chama _bumpPressel: "Foram pro WhatsApp" continua contando
+            // so trafego com ttclid, entao a serie historica do TikTok nao muda de base.
+            if (url.searchParams.get('fb') === '1') {
+              try {
+                const _cod = (url.searchParams.get('code') || '').slice(0, 40);
+                const m = String(req.headers.get('cookie') || '').match(/(?:^|;\s*)_fbp=([^;]+)/);
+                const _fbpC = m ? decodeURIComponent(m[1]).slice(0, 120) : '';
+                if (_cod && _fbpC) {
+                  await env.DB.prepare("UPDATE tt_pending SET fbp=? WHERE code=? AND (fbp IS NULL OR fbp='')").bind(_fbpC, _cod).run();
+                }
+              } catch (_) {}
+            }
             const _ttc = url.searchParams.get('ttclid') || '';
             if (_ttc) {   // dedup por ttclid: 1 "Foram pro WhatsApp" por visitante (nunca passa de "Chegaram")
               const u = await env.DB.prepare('UPDATE tt_pending SET clicked=1 WHERE ttclid=? AND (clicked IS NULL OR clicked=0)').bind(_ttc).run();
