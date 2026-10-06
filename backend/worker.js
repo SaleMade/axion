@@ -5607,6 +5607,11 @@ async function handlePresselDelete(req, env) {
   const body = await req.json().catch(() => ({}));
   const id = Number(body && body.id);
   if (!id) return err('id obrigatório');
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
@@ -5621,9 +5626,12 @@ async function handlePresselDelete(req, env) {
   data.pressels = (data.pressels || []).filter((x) => String(x.id) !== String(id));
   if (data.pressels.length === before) return err('Pressel não encontrada', 404);
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, removed: id });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, removed: id });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // Salva UM chip (cirúrgico, só diretor). patch por id. Regra "Em uso": ligar em_uso num chip
 // desliga os irmãos do mesmo atendente (um por atendente). Usado pela roleta (reserva/swap) e pela
@@ -5821,6 +5829,11 @@ async function handleChipCreate(req, env) {
   const body = await req.json().catch(() => ({}));
   const inp = (body && body.chip && typeof body.chip === 'object') ? body.chip : null;
   if (!inp || !String(inp.num || '').trim()) return err('num obrigatório');
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
@@ -5849,9 +5862,12 @@ async function handleChipCreate(req, env) {
   data.chips.unshift(chip);
   data.nextChip = nextId + 1;
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, chip });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, chip });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // POST /api/chip/delete { id } → remove um chip (cirúrgico, só diretor)
 async function handleChipDelete(req, env) {
@@ -5862,6 +5878,11 @@ async function handleChipDelete(req, env) {
   const body = await req.json().catch(() => ({}));
   const id = body && body.id;
   if (id == null) return err('id obrigatório');
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
@@ -5876,9 +5897,12 @@ async function handleChipDelete(req, env) {
   data.chips = data.chips.filter((c) => String(c.id) !== String(id));
   if (data.chips.length === before) return err('Chip não encontrado', 404);
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id)).run();
-  return json({ ok: true, version: newVer });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // POST /api/saque/create { valor, obs? } → vendedor pede saque da comissão a receber.
 // Cirúrgico: grava data.saques (ciclo de vida pendente/aprovado/pago) + data.notifs (aviso pro diretor).
@@ -6073,14 +6097,22 @@ async function handleAclSave(req, env) {
   const body = await req.json().catch(() => ({}));
   const acl = (body && body.acl && typeof body.acl === 'object' && !Array.isArray(body.acl)) ? body.acl : null;
   if (!acl) return err('acl obrigatório');
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
   data.acl_v2 = acl; // campo NOVO (não colide com a ACL legada da AXION em data.acl)
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'acl:' + String(u.id)).run();
-  return json({ ok: true, version: newVer });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'acl:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // POST /api/cont/save { wa_statuses?, contCols?, contColColors?, cont_col_order?, cont_recarga? } → patch cirúrgico da
 // config da Contingência (catálogo de status WhatsApp + colunas custom). Só diretor. NUNCA o blob inteiro.
@@ -6110,6 +6142,11 @@ async function handleContConfig(req, env) {
   if (!isDirector(u) && !isAfiliado(u)) return err('Sem permissão', 403);
   if (afiliadoSemVinculo(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => ({}));
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
@@ -6125,9 +6162,12 @@ async function handleContConfig(req, env) {
     data['cont_recarga' + sfx] = { meses: _int(body.cont_recarga.meses, 1, 12, 3), aviso: _int(body.cont_recarga.aviso, 0, 30, 7) };
   }
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cont:' + String(u.id)).run();
-  return json({ ok: true, version: newVer });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cont:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 // POST /api/tags/save { tags: [...] } → grava SO o catalogo de etiquetas do CRM.
 //
@@ -6210,7 +6250,8 @@ async function handleComentProntosSave(req, env) {
 }
 
 // Salva o Sale Chat (cirúrgico, só diretor). Body { profile:'vend'|'cob', draft:{messages,media,sequences,triggers}, publish? }.
-// Escreve SÓ as fatias do salechat (rascunho + pub no publish), nunca o blob inteiro → sem risco pro resto.
+// Mexe SÓ nas fatias do salechat (rascunho + pub no publish), mas regrava o blob INTEIRO: por isso grava
+// conferindo a versão (laço abaixo, 06/10/2026). O comentário antigo dizia que não regravava, e regravava.
 async function handleSaleChatSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -6219,6 +6260,11 @@ async function handleSaleChatSave(req, env) {
   const profile = (body && body.profile === 'cob') ? 'cob' : 'vend';
   const draft = body && body.draft;
   if (!draft || typeof draft !== 'object') return err('draft obrigatório');
+  // CONFERE A VERSAO AO GRAVAR (06/10/2026, item 5 da auditoria). Esta rota lia o blob, mexia numa chave
+  // e regravava ele INTEIRO sem 'AND version=?'. Um webhook da PayLog/Five que gravasse no meio (card
+  // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
+  // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
+  for (let tent = 0; tent < 6; tent++) {
   const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
   if (!row) return err('Estado não encontrado', 404);
   let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
@@ -6265,9 +6311,12 @@ async function handleSaleChatSave(req, env) {
     }
   }
   const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, now, 'salechat:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, updated_at: now, published: !!body.publish });
+  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+    .bind(JSON.stringify(data), newVer, now, 'salechat:' + String(u.id), row.version).run();
+  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, updated_at: now, published: !!body.publish });
+  await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
 // GET /api/salechat/mine → editor do VENDEDOR: a cópia dele (scVend), semeada do modelo publicado quando ainda não editou
@@ -6322,19 +6371,31 @@ async function handleSaleChatMine(req, env) {
 async function handleCsCards(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  let data = {};
-  try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
   if (!isDirector(u)) return err('Sem permissão', 403);
-  if (req.method === 'GET') return json({ cards: Array.isArray(data.cs_cards) ? data.cs_cards : [] });
-  if (!row) return err('Estado não encontrado', 404);
+  if (req.method === 'GET') {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    let data = {};
+    try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
+    return json({ cards: Array.isArray(data.cs_cards) ? data.cs_cards : [] });
+  }
   const body = await req.json().catch(() => ({}));
   const cards = Array.isArray(body.cards) ? body.cards : [];
-  data.cs_cards = cards;
-  const newVer = (row.version || 0) + 1;
-  await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cscards:' + String(u.id)).run();
-  return json({ ok: true, version: newVer, cards });
+  // ESTADO QUE NAO ABRE NAO E GRAVADO (06/10/2026, item 5 da auditoria). Antes o POST caia no `data = {}`
+  // do GET e gravava {cs_cards} no lugar do estado inteiro: leads, chips, pressels e regras sumiam num
+  // clique. E grava conferindo a versao, como as outras rotas cirurgicas, pra nao apagar um webhook que
+  // grave no meio.
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    data.cs_cards = cards;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'cscards:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, cards });
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
 async function handlePostState(req, env) {
@@ -6420,11 +6481,28 @@ async function handlePostState(req, env) {
   const newVer = curVer + 1;
   const now = Math.floor(Date.now() / 1000);
 
-  await env.DB.prepare(
-    `INSERT INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET data = excluded.data, version = excluded.version,
-       updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).bind(dataStr, newVer, now, u.user_id).run();
+  // GRAVA SO SE NINGUEM GRAVOU NO MEIO (06/10/2026, item 5 da auditoria). Entre o SELECT la de cima e
+  // esta linha vao dois parse do blob, a poda por cargo, a guarda e o stringify: dezenas de ms. Era a
+  // unica gravacao do blob sem conferir a versao, entao um webhook da PayLog/Five que gravasse nessa
+  // janela (pago, card novo, baixa de estoque) era apagado pela copia velha da tela, e a versao repetia
+  // o numero que o webhook tinha usado. Agora grava no molde do _casState: INSERT OR IGNORE quando a
+  // linha nao existe, UPDATE com 'AND version=?' no resto. Se mudou, devolve o mesmo 409 'conflict' do
+  // gate de base_version, que o front ja trata relendo o estado e tentando de novo.
+  let _grav;
+  if (!curVer) {
+    _grav = await env.DB.prepare(
+      `INSERT OR IGNORE INTO dashboard_state (id, data, version, updated_at, updated_by) VALUES (1, ?, ?, ?, ?)`
+    ).bind(dataStr, newVer, now, u.user_id).run();
+  } else {
+    _grav = await env.DB.prepare(
+      `UPDATE dashboard_state SET data = ?, version = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ?`
+    ).bind(dataStr, newVer, now, u.user_id, curVer).run();
+  }
+  if (!(_grav && _grav.meta && _grav.meta.changes > 0)) {
+    let _verAgora = curVer + 1;
+    try { const _r = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id = 1').first(); if (_r && Number(_r.version)) _verAgora = Number(_r.version); } catch (_) {}
+    return json({ error: 'conflict', current_version: _verAgora }, 409);
+  }
 
   return json({ ok: true, version: newVer, updated_at: now });
 }
