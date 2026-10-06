@@ -8,21 +8,52 @@ workers_dev = true   # mantem a URL axion-api.axion-dash.workers.dev viva (a das
 
 # ─── Domínios custom pras pressels (TikTok com domínios diferentes) ──
 # Cada domínio serve o Worker; a pressel fica em https://dominio/p/<id>.
-# (Já anexados via API; aqui ficam declarados pra não sumirem em deploy.)
-# OS 4 DOMINIOS NOVOS (.shop) NAO ENTRAM AQUI AINDA - 27/08/2026.
-# O Bruno comprou glico6-painel.shop, glico6-acesso.shop, glico-area.shop e glico-painel.shop
-# porque os tres de cima queimaram, mas eles ainda NAO estao na conta Cloudflare. Declarar uma
-# route de zona que nao existe faz o `wrangler deploy` SUBIR o script e SO DEPOIS falhar ao anexar
-# a rota: o terminal fica vermelho e todo deploy do worker passa a parecer quebrado, inclusive os
-# que nao tem nada a ver com dominio. Por isso a ordem e: (1) ele aponta o dominio pro Cloudflare
-# e a zona fica `active`, (2) so entao acrescentar a linha aqui e deployar.
-# O salvamento na dash ja aceita os quatro (ver _PRESSEL_DOMS no worker.js): o que falta e so a
-# pressel RESPONDER neles.
-routes = [
-  { pattern = "area-acesso.com", custom_domain = true },
-  { pattern = "area-glico.fun", custom_domain = true },
-  { pattern = "painel-glico.fun", custom_domain = true }
-]
+#
+# NAO DECLARE `routes` AQUI. Quem anexa dominio agora e o CRON (_cronDominios no worker.js): o
+# Bruno cadastra na tela de Dominios, ele nasce com a marca `pend` e o cron anexa sozinho quando os
+# name servers propagarem. Uma lista de routes neste arquivo DESFAZ isso - o deploy REMOVE todo
+# Custom Domain que nao esteja nela, e deploy acontece varias vezes por dia, de varias conversas.
+#
+# DUAS VEZES ISSO JA MORDEU, com o mesmo formato:
+#  - 27/08/2026: anexei 4 dominios pela API, conferi que estavam la, e os dois deploys seguintes
+#    apagaram os 4; a pressel ficou sem DNS e so apareceu quando o Bruno foi montar as campanhas.
+#  - 23/09/2026: o cron anexou nutrapremium.site e nutrapremium.sbs e o deploy seguinte apagou os
+#    dois, com o agravante de que o dominio ja tinha saido da fila e apareceria no seletor DO
+#    AFILIADO como endereco morto. Foi quando esta lista saiu daqui.
+# O worker do amigo (wrangler-cg.toml) nunca declarou routes e por isso la o Custom Domain anexado
+# por fora sempre sobreviveu. Agora os dois se comportam igual.
+#
+# Os ja anexados (area-acesso.com, area-glico.fun, painel-glico.fun, glico6-painel.shop,
+# glico6-acesso.shop, glico-area.shop, glico-painel.shop, sellwave01.fun, nutrasell.sbs) continuam
+# no ar: sem a chave `routes` o wrangler nao mexe no que existe, so para de recriar. Pra conferir a
+# lista de verdade: GET /accounts/<acc>/workers/domains (e a mesma que o cron le).
+
+# ─── Detector de dominios da Cloudflare (area Dominios) ─────────
+# CF_ACCOUNT_ID nao e segredo (id da conta); o CF_API_TOKEN vai como SECRET (wrangler secret put).
+# Cada worker usa a conta/nome DELE: no worker do amigo (wrangler-cg.toml) isto seria a conta dele.
+[vars]
+CF_ACCOUNT_ID = "b093e977b0ea6c9c022526dc02ca6d78"
+CF_WORKER_NAME = "axion-api"
+
+# ─── Aviso de venda no aplicativo (Web Push, Fase 2 — 22/09/2026) ───
+# A CHAVE PUBLICA NAO FICA AQUI DE PROPOSITO, mesmo nao sendo segredo.
+#
+# Ela e METADE de um par: o navegador se inscreve com a publica e o servidor assina com a privada.
+# Se as duas vierem de lugares diferentes, nada impede de divergirem - e uma publica em [vars] que
+# nao seja o par da privada do secret faz TODO envio voltar 401 (Chrome/FCM) ou 403 VapidKeyMismatch
+# (iPhone/Apple), com a inscricao gravada, o interruptor ligado e nenhuma mensagem de erro em lugar
+# nenhum. Ninguem recebe nada e nao ha como perceber olhando a tela.
+#
+# Entao a fonte e UMA: o secret VAPID_JWK guarda o par inteiro (x, y e d) e o worker DERIVA a
+# publica dele (0x04 || x || y). O mesmo valor derivado e o que a /api/push/chave entrega pro app.
+# Par trocado deixa de ser possivel.
+#   cd AXION/backend && npx wrangler secret put VAPID_JWK    (o JSON esta em _segredos/vapid.md)
+#
+# TROCAR O PAR INVALIDA TODA INSCRICAO JA FEITA: os aparelhos param de receber calados e so voltam
+# se cada um se inscrever de novo.
+#
+# Quem assina o aviso. O servico de push usa isto pra falar com a gente se algo der errado.
+VAPID_SUBJECT = "mailto:brunomc1416@gmail.com"
 
 # ─── Cron: sincroniza o estado de conexão (wa_conn) com a Evolution a cada 2min ──
 # (mantém "conectado/número" certo mesmo com a dash fechada — serve-time confia no wa_conn)
