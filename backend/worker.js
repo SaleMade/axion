@@ -1058,6 +1058,12 @@ async function _plApi(env, caminho, mundo) {
 // pelo lead" que hoje o Bruno digita a mao no lapis do card.
 // O que ela tem a MENOS: endereco. A listagem nao devolve. Por isso o upsert usa COALESCE em tudo:
 // reconciliar por API nunca apaga o endereco que o webhook trouxe.
+// Meio REAL de pagamento (pix, boleto, cartao, transferencia). 'advance_payment' e 'other' sao modalidade
+// ou ausencia de meio, nao meio: devolve '' pra nao sujar o pgto do card (07/10/2026).
+function _plMetodoReal(v) {
+  const m = String(v || '').trim().toLowerCase();
+  return /pix|slip|boleto|billet|card|cart|transfer/.test(m) ? m : '';
+}
 function _plApiToFive(o, mundo) {
   if (!o || !o.code) return null;
   const code = String(o.code);
@@ -1126,6 +1132,12 @@ function _plApiToFive(o, mundo) {
       updatedAt: null,
     };
   }
+  // O MEIO DE PAGAMENTO VEM NA API MESMO SEM PAGAMENTO (07/10/2026, auditoria item 5). O webhook da
+  // PayLog nao traz payment_method em evento nenhum, e ate aqui a API so o gravava dentro de `charge`
+  // (so pedido pago). Resultado: 47 de 53 cards da PayLog sem meio, e o pedido que o vendedor fechou
+  // no Pix aparecia "sem meio" ate ser pago. Vai num campo proprio, sem montar `charge` (a regra
+  // "charge so quando pago" e o que sustenta pago x nao pago). Antecipado/outro nao sao meio: ficam fora.
+  q.__plMetodo = _plMetodoReal(o.payment_method && o.payment_method.value);
   // CANCELADO NO PAINEL (01/10/2026). A API diz platform_status 'cancelado_sem_custo' e o
   // payment_status segue 'pending_payment', entao a regra acima nao cria cobranca e o cancelamento
   // nunca chegava por aqui - e mudanca feita a mao la dentro nao dispara webhook. O webhook do
@@ -2104,7 +2116,7 @@ async function _fiveUpsertOrder(env, p) {
     .bind(oid, proj.id || null, proj.name || null, prod.id || null, prod.name || null,
       offer.id || null, offer.title || null, _num(offer.price), offer.numberOfItems != null ? _num(offer.numberOfItems) : null,
       cust.name || null, cust.document || null, cust.mail || null, cust.phoneNumber || null, cust.address ? JSON.stringify(cust.address) : null,
-      charge && charge.status ? String(charge.status).toUpperCase() : null, charge ? (charge.paymentMethod || null) : null,
+      charge && charge.status ? String(charge.status).toUpperCase() : null, charge ? (charge.paymentMethod || null) : (p.__plMetodo || null),
       // charge_amount = valor da VENDA (sem juro de parcelamento). So preenche quando a Five mandou
       // cobranca de verdade: deixar null pra pedido sem cobranca e o que mantem 'pago x nao pago'
       // funcionando nas somas e no front (que testa charge_amount antes de cair no offer_price).
@@ -2431,6 +2443,7 @@ async function _fiveUpsertLead(env, p, ctx) {
         }
         if (!lead.external_id) lead.external_id = 'FIVE-' + String(oid);
         if (p.__fonte === 'paylog') lead.fonte = 'paylog';
+        if (p.__plMetodo && !lead.pgto) lead.pgto = String(p.__plMetodo);
         if (p.__paymentLink) lead.checkout_url = String(p.__paymentLink).slice(0, 300);
         if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || 'A Enviar', who: 'five', time: nowISO, note: 'vinculado ao pedido Five ' + String(oid) });
       }
@@ -2469,6 +2482,7 @@ async function _fiveUpsertLead(env, p, ctx) {
         if (/^(FIVE|PAYLOG)-/.test(String(lead.external_id || ''))) lead.external_id = (p.__fonte === 'paylog' ? 'PAYLOG-' : 'FIVE-') + String(oid);
         lead.five_id = String(oid);
         if (p.__fonte === 'paylog') lead.fonte = 'paylog'; else delete lead.fonte;
+        if (p.__plMetodo && !lead.pgto) lead.pgto = String(p.__plMetodo);   // meio da API em pedido pendente (07/10/2026)
         if (p.__paymentLink) lead.checkout_url = String(p.__paymentLink).slice(0, 300);
         const _colAntes = lead.col || '—';
         lead.col = 'A Enviar';   // o pedido novo comeca do zero; o evento abaixo leva pra frente
@@ -2492,7 +2506,7 @@ async function _fiveUpsertLead(env, p, ctx) {
         // com_pct sai VAZIO, nao zero: zero valia como "taxa combinada neste pedido" e fazia todo
         // pedido da Five pagar 0%, ignorando o cadastro do vendedor em silencio. Vazio deixa a
         // dash cair na taxa do vendedor, que e o certo ate alguem combinar outra coisa.
-        prod: '', trat: '', vl: 0, com_pct: '', pgto: '', spg: 'Pendente', mod: 'entrega',
+        prod: '', trat: '', vl: 0, com_pct: '', pgto: p.__plMetodo ? String(p.__plMetodo) : '', spg: 'Pendente', mod: 'entrega',
         at: attribAt || null, col: 'A Enviar', obs: '', tags: [], fu: null, agend: '', track: '', link: '',
         data: `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
         hist: [{ from: '—', to: 'A Enviar', who: 'five', time: nowISO }], comments: [], five_status: ev.toLowerCase(),
@@ -2569,6 +2583,9 @@ async function _fiveUpsertLead(env, p, ctx) {
         if (/cod|cash|delivery|entrega|contra/i.test(_pm)) lead.mod = 'entrega';
         else if (/credit|debit|card|cart|pix|billet|boleto|bank/i.test(_pm)) lead.mod = 'antecipado';
       }
+      // Na PayLog (07/10/2026) o COD e a regra: so advance_payment e pagamento antecipado; o resto fica
+      // com a modalidade que o vendedor escolheu no cadastro.
+      if (p.__fonte === 'paylog' && /advance/i.test(String(charge.paymentMethod || ''))) lead.mod = 'antecipado';
       const _eraPagoTs = _ehPago(lead);
       if (_cs === 'PAID') lead.spg = 'Pago';
       else if (/REFUND|CHARGEBACK|CANCEL|ESTORN/.test(_cs)) lead.spg = 'Recusado'; // estorno/chargeback tira o Pago
@@ -5059,6 +5076,9 @@ async function _aceitarComPaylog(env, u, leadId) {
     if (_anterior) lead.recompra_de = _anterior.id;
     pedido = _plPedidoDoLead(lead);
     if (pedido.problemas.length) return { parar: true, problemas: pedido.problemas };
+    // O MEIO QUE FOI PRO PEDIDO FICA NO CARD (07/10/2026, auditoria item 5): a PayLog nao devolve
+    // payment_method no webhook, entao 47 de 53 cards estavam sem meio mesmo tendo sido criados com um.
+    if (!lead.pgto && pedido.campos) { const _mp = _plMetodoReal(pedido.campos.payment_method); if (_mp) lead.pgto = _mp; }
     if (lead.pl_desp && (agora - Number(lead.pl_desp.ts || 0)) < 120) return { parar: true, emAndamento: true };
     lead.pl_desp = { ts: agora, por: String(u.id) };
     return null;
@@ -5452,11 +5472,19 @@ async function handleUpdateLead(req, env, leadId) {
     const _eraPagoEd = _ehPago(lead);
     if (canManage) {
       if ('spg' in patch) lead.spg = patch.spg;
+      // CONTA QUE RECEBEU (07/10/2026, pedido do Bruno: "uso varios bancos"). Nome de uma conta cadastrada
+      // em Custos & Regras > Pagamentos > Contas que recebem; nome que nao existe la vira vazio.
+      const _contasOk = new Set(((((data || {}).regras || {}).pagamentos || {}).contas || []).filter((c) => c && c.ativo !== false).map((c) => String(c.nome || '').trim()).filter(Boolean));
+      const _contaOk = (v) => { const n = String(v || '').trim().slice(0, 60); return _contasOk.has(n) ? n : ''; };
+      if ('pgto_conta' in patch) lead.pgto_conta = _contaOk(patch.pgto_conta);
       if (Array.isArray(patch.pagamentos)) { // ficha de cobrança: parcelas efetivamente pagas
         lead.pagamentos = patch.pagamentos.slice(0, 60).map((p) => ({
           ts: Number(p && p.ts) || 0, data: String((p && p.data) || ''), valor: Number(p && p.valor) || 0,
           obs: String((p && p.obs) || ''), who: (p && p.who != null) ? String(p.who) : undefined,
+          conta: _contaOk(p && p.conta) || undefined,
         })).filter((p) => p.valor > 0 || p.obs);
+        const _ultima = lead.pagamentos.filter((p) => p.conta).slice(-1)[0];
+        if (_ultima && !lead.pgto_conta) lead.pgto_conta = _ultima.conta;
       }
       if ('col' in patch && patch.col) {
         if (patch.col !== fromCol) {
