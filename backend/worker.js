@@ -1479,6 +1479,82 @@ async function handlePaylogFotos(req, env, ctx) {
   return json({ ok: true, dry, total: out.length, gravados: out.filter((x) => x.ok && !x.ja).length, jaTinham: out.filter((x) => x.ja).length, semCard: out.filter((x) => !x.ok).length, detalhe: out.filter((x) => !x.ok) });
 }
 
+// ============================================================================================
+// PAYLOG 2.0 (a plataforma "PayLog normal", que NAO e o AfterPayLog) - 06/10/2026
+//
+// SAO DOIS SISTEMAS DIFERENTES, e o suporte deles confirmou isso ao Bruno. O AfterPayLog fala em
+// `after.paylog.cash` (Laravel) e e quem alimenta a porta `/paylog`. O PayLog normal e outra coisa:
+// microservicos NestJS (account-api-v2 / order-api / paylog-rastreio-api), outro token, e eventos
+// com nomes proprios (Pedido Criado, Etiqueta Pronta, Em Preparacao, Parado, Estornado, Cancelado,
+// Objeto Postado, Em Transito, Saiu para Entrega, Aguardando Retirada, Em Devolucao, Entregue,
+// Comprovante de Entrega, Devolvido).
+//
+// POR QUE PORTA SEPARADA E NAO `/paylog`: hoje `app_config.pl_ingest` esta em 'full', ou seja a
+// porta do AfterPayLog NAO e mais inerte - ela chama _fiveUpsertOrder e _fiveUpsertLead e MOVE
+// CARD. Jogar o payload de outro sistema naquele mapeador criaria pedido torto e sujaria o Kanban,
+// que e exatamente o que nao pode acontecer.
+//
+// COMECA SO ESCUTANDO, pelo mesmo motivo que a porta do AfterPayLog comecou assim em 07/09: mapear
+// campo por documentacao e chute, mapear por payload real e engenharia. Esta porta NAO grava card,
+// NAO mexe em estoque e NAO dispara pixel. So guarda o que chegou, pra eu desenhar o de-para em
+// cima de payload de verdade.
+async function _pl2Ensure(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS paylog2_debug (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, subpath TEXT, method TEXT,
+    event TEXT, order_code TEXT, idem TEXT,
+    query TEXT, headers TEXT, body TEXT)`).run();
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_pl2_ts ON paylog2_debug(ts)').run(); } catch (_) {}
+}
+
+async function handlePaylog2Capture(req, env, subpath, ctx) {
+  // Responder rapido e requisito: plataforma de webhook costuma pausar a integracao depois de
+  // algumas falhas HTTP. Le o corpo, devolve 200, e grava depois pelo waitUntil.
+  let raw = '';
+  try { raw = await req.text(); } catch (_) { raw = ''; }
+  const cab = {};
+  try { for (const [k, v] of req.headers.entries()) cab[k] = v; } catch (_) {}
+  const u = new URL(req.url);
+
+  const guardar = (async () => {
+    try {
+      await _pl2Ensure(env);
+      let p = null; try { p = JSON.parse(raw); } catch (_) { p = null; }
+      // Ainda nao sabemos o formato deles. Tento os lugares mais provaveis e, se nao achar, fica
+      // vazio mesmo - o corpo cru esta guardado e e dele que o de-para vai sair.
+      const cava = (...cs) => { for (const c of cs) { if (c !== undefined && c !== null && String(c) !== '') return String(c); } return ''; };
+      const ev = p ? cava(p.event, p.type, p.event_type, p.status, (p.data && (p.data.event || p.data.type || p.data.status))) : '';
+      const cod = p ? cava(p.code, (p.order && (p.order.code || p.order.id)), (p.data && (p.data.code || (p.data.order && p.data.order.code))), p.order_code, p.id) : '';
+      const idem = cava(cab['idempotency-key'], cab['x-idempotency-key'], cab['x-request-id']);
+      await env.DB.prepare(
+        'INSERT INTO paylog2_debug (ts, subpath, method, event, order_code, idem, query, headers, body) VALUES (?,?,?,?,?,?,?,?,?)'
+      ).bind(
+        Date.now(), String(subpath || ''), req.method, ev, cod, idem,
+        u.search || '', JSON.stringify(cab).slice(0, 4000), String(raw).slice(0, 60000)
+      ).run();
+      console.log('PAYLOG2 capturado event=' + ev + ' code=' + cod + ' subpath=' + String(subpath || ''));
+    } catch (e) { console.log('PAYLOG2 falhou ao guardar: ' + String((e && e.message) || e)); }
+  })();
+  try { if (ctx && ctx.waitUntil) ctx.waitUntil(guardar); else await guardar; } catch (_) { await guardar; }
+  return json({ ok: true });
+}
+
+// Leitura do que a porta 2.0 capturou. So diretor. E a tela por onde eu descubro o formato deles.
+async function handlePaylog2Debug(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  await _pl2Ensure(env);
+  const urlD = new URL(req.url);
+  const lim = Math.min(200, Math.max(1, Number(urlD.searchParams.get('limit') || 50)));
+  const r = await env.DB.prepare(
+    'SELECT id, ts, subpath, method, event, order_code, idem, query, body FROM paylog2_debug ORDER BY id DESC LIMIT ?'
+  ).bind(lim).all();
+  const linhas = (r && r.results) || [];
+  const eventos = {};
+  for (const l of linhas) eventos[l.event || '(vazio)'] = (eventos[l.event || '(vazio)'] || 0) + 1;
+  return json({ ok: true, total: linhas.length, eventos, linhas });
+}
+
 async function handlePaylogCapture(req, env, subpath, ctx) {
   // RESPONDER RAPIDO E O REQUISITO, NAO UMA GENTILEZA. A PayLog tem timeout de 30s e PAUSA o
   // webhook sozinha depois de 3 falhas seguidas (imediata, +10s, +60s), com e-mail. Um pico de
@@ -1618,6 +1694,27 @@ async function _fiveIgnorar(env, oid) {
   if (!lista.includes(String(oid))) { lista.push(String(oid)); await _writeConfig(env, 'five_ignorar', JSON.stringify(lista)); }
   _fiveIgnCache = new Set(lista); _fiveIgnT = Date.now();
 }
+// SOLTAR UM PEDIDO DA LISTA (06/10/2026). Ate aqui a lista so crescia e tirar um id exigia editar
+// app_config no D1 na mao. POST /api/five/ignorar {oid, acao:'soltar'}, so diretor: o proximo
+// webhook desse pedido volta a entrar em five_orders e no Kanban. {acao:'listar'} devolve a lista.
+async function handleFiveIgnorarSoltar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const body = await req.json().catch(() => ({}));
+  const oid = String((body && body.oid) || '').trim();
+  const acao = String((body && body.acao) || 'soltar');
+  let lista = [];
+  try { const v = await _readConfig(env, 'five_ignorar'); const j = v ? JSON.parse(v) : []; if (Array.isArray(j)) lista = j.map(String); } catch (_) {}
+  if (acao === 'listar') return json({ ok: true, lista });
+  if (!oid) return err('Falta o oid', 400);
+  if (!lista.includes(oid)) return json({ ok: true, lista, solto: false });
+  lista = lista.filter((x) => x !== oid);
+  await _writeConfig(env, 'five_ignorar', JSON.stringify(lista));
+  _fiveIgnCache = new Set(lista); _fiveIgnT = Date.now();
+  console.log('FIVE_IGNORAR_SOLTO oid=' + oid + ' por=' + String(u.id));
+  return json({ ok: true, lista, solto: true });
+}
 // O PEDIDO DESTE CARD AINDA NAO SAIU: esta em A Enviar ou Preparando, sem rastreio andando e sem
 // pagamento. E o unico pedido que pode ser trocado por um pedido refeito (ver _fiveUpsertLead).
 function _pedidoAindaNaoSaiu(l) {
@@ -1640,7 +1737,53 @@ function _canceladoHaPouco(l, agoraMs) {
   const t = h.length ? Date.parse(String(h[h.length - 1].time || '')) : NaN;
   return Number.isFinite(t) && t <= agoraMs && agoraMs - t <= 72 * 3600 * 1000;
 }
-// O que e do PEDIDO (e nao do cliente nem da venda): sai do card quando ele troca de pedido.
+// O PEDIDO DESTE CARD AINDA VALE (06/10/2026, decisao do Bruno: refeito x recompra). E a pergunta
+// que o Aceitar faz quando chega um cadastro novo do MESMO CPF: se o pedido antigo ainda esta em
+// aberto, o cadastro novo e o mesmo pedido (junta, como sempre); se nao, e RECOMPRA e vira pedido
+// novo na PayLog. Regra igual a do webhook (_pedidoAindaNaoSaiu, _canceladoHaPouco) mais o pedido
+// que ja saiu e ainda esta na rua sem pagamento. Card Pago, entregue (Cobranca), devolvido, roubado,
+// frustrado ou cancelado ha mais de 72h e venda anterior: ate 06/10 o cadastro novo era fundido
+// nele (e apagado) ou barrado com 422, e a recompra nunca chegava na PayLog. Entregue sem pagar
+// (Cobranca) ainda e o MESMO pedido: o cliente deve, nao esta comprando de novo.
+function _cardComPedidoEmAberto(l, agoraMs) {
+  if (!l) return false;
+  if (_pedidoAindaNaoSaiu(l) || _canceladoHaPouco(l, agoraMs)) return true;
+  if (_ehPago(l) || String(l.spg || '') === 'Pago') return false;
+  const col = String(l.col || '');
+  if (FIVE_COL_FIM.includes(col)) return false;
+  const ship = String(l.ship || '').toUpperCase();
+  // ENTREGUE E NAO PAGO CONTINUA EM ABERTO (decisao da conversa principal, 06/10/2026): em COD o
+  // cliente que recebeu e ainda deve nao esta recomprando; um cadastro novo dele e o mesmo pedido
+  // (junta), nunca um segundo pedido na PayLog. Devolvido/retornado e que encerra.
+  if (/RETURN|DEVOL|REVERS/i.test(ship)) return false;
+  // Sem selo numa coluna de rua (card movido na mao) conta como em aberto: na duvida, nunca criar
+  // um segundo pedido na PayLog pra um cliente cujo pacote ainda pode estar andando.
+  return true;
+}
+// Quando o card nasceu, em ms (o id e Date.now() da criacao; card velho de webhook cai no hist).
+function _quandoNasceuMs(l) {
+  if (!l) return NaN;
+  if (Number(l.id) > 1.5e12) return Number(l.id);
+  const h = Array.isArray(l.hist) && l.hist.length ? Date.parse(String(l.hist[0].time || '')) : NaN;
+  return Number.isFinite(h) ? h : NaN;
+}
+// Data do card em DD/MM/AAAA (Brasilia) pra aviso e toast; cai no lead.data (DD/MM) se nao souber.
+function _dataCardBR(l) {
+  const t = _quandoNasceuMs(l);
+  if (Number.isFinite(t)) { try { return new Date(t).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }); } catch (_) {} }
+  return String((l && l.data) || '');
+}
+const _mesesDoKit = (l) => { const m = /(\d+)\s*m[e\u00ea]s/i.exec(String((l && (l.trat || l.prod)) || '')); return m ? Number(m[1]) : 0; };
+// PEDIDO EM DOBRO (06/10/2026, decisao do Bruno): mesmo kit cadastrado de novo em menos de 48h de um
+// pedido que ja saiu ou ja foi pago e erro de digitacao, nao recompra. Volta pro botao vermelho.
+function _pedidoEmDobro(novo, antigo, agoraMs) {
+  const k1 = _mesesDoKit(novo), k2 = _mesesDoKit(antigo);
+  if (!k1 || !k2 || k1 !== k2) return false;
+  const t = _quandoNasceuMs(antigo);
+  return Number.isFinite(t) && agoraMs - t < 48 * 3600 * 1000;
+}
+// O que e do PEDIDO (e nao do cliente nem da venda): sai do card quando ele troca de pedido
+// (e "o pedido ainda vale" e o _cardComPedidoEmAberto, logo acima).
 const _CAMPOS_DO_PEDIDO_ANTIGO = ['track', 'track_core', 'transp_nome', 'track_url', 'checkout_url', 'ship', 'ship_ts',
   'col_plat', 'five_status', 'entrega_url', 'entrega_ts', 'entrega_assinante', 'five_commissions'];
 
@@ -1809,6 +1952,16 @@ function _jurosDaVenda(offer, charge) {
 
 // Upsert de um pedido a partir de um payload da Five. Campos comuns sempre atualizam;
 // campos específicos do evento usam COALESCE pra não apagar o que outro evento já gravou.
+// COBRANCA PAGA NAO VOLTA PRA PENDENTE (06/10/2026, item 32 da auditoria). A Five reenvia evento o
+// tempo todo e manda PENDING_PAYMENT e PAID com segundos de diferenca; com COALESCE puro o ULTIMO
+// que chegava vencia, e um PENDING atrasado tirava a venda do summary, da receita e da comissao
+// (todo mundo le charge_status='PAID'). Agora, com a linha em PAID, so estorno/chargeback/
+// cancelamento passa por cima; o valor, o metodo e a data da cobranca seguem a mesma trava, pra
+// uma cobranca pendente velha nao trocar o valor da venda paga. O mesmo pro envio: DELIVERED so sai
+// pra devolucao ou nao entregue (sem ranking rigido: NOT_DELIVERED seguido de rota e nova tentativa
+// real e acontece nos dados).
+const _SQL_TRAVA_PAGO = "five_orders.charge_status='PAID' AND COALESCE(excluded.charge_status,'PAID') NOT IN ('PAID','REFUNDED','REFUND','CHARGEBACK','CANCELED','CANCELLED')";
+const _SQL_TRAVA_ENTREGUE = "five_orders.shipping_status='DELIVERED' AND COALESCE(excluded.shipping_status,'DELIVERED') NOT IN ('DELIVERED','RETURNED','NOT_DELIVERED','RETURNING')";
 async function _fiveUpsertOrder(env, p) {
   const oid = p && (p.orderId || (p.order && p.order.id));
   if (!oid) return false;
@@ -1831,17 +1984,17 @@ async function _fiveUpsertOrder(env, p) {
      offer_id=COALESCE(excluded.offer_id, five_orders.offer_id), offer_title=COALESCE(excluded.offer_title, five_orders.offer_title), offer_price=COALESCE(excluded.offer_price, five_orders.offer_price), offer_qty=COALESCE(excluded.offer_qty, five_orders.offer_qty),
      customer_name=COALESCE(excluded.customer_name, five_orders.customer_name), customer_doc=COALESCE(excluded.customer_doc, five_orders.customer_doc), customer_mail=COALESCE(excluded.customer_mail, five_orders.customer_mail), customer_phone=COALESCE(excluded.customer_phone, five_orders.customer_phone),
      customer_address=COALESCE(excluded.customer_address, five_orders.customer_address),
-     charge_status=COALESCE(excluded.charge_status, five_orders.charge_status),
-     charge_method=COALESCE(excluded.charge_method, five_orders.charge_method),
-     charge_amount=COALESCE(excluded.charge_amount, five_orders.charge_amount),
-     charge_pago=COALESCE(excluded.charge_pago, five_orders.charge_pago),
-     charge_juros=COALESCE(excluded.charge_juros, five_orders.charge_juros),
+     charge_status=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_status ELSE COALESCE(excluded.charge_status, five_orders.charge_status) END,
+     charge_method=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_method ELSE COALESCE(excluded.charge_method, five_orders.charge_method) END,
+     charge_amount=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_amount ELSE COALESCE(excluded.charge_amount, five_orders.charge_amount) END,
+     charge_pago=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_pago ELSE COALESCE(excluded.charge_pago, five_orders.charge_pago) END,
+     charge_juros=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_juros ELSE COALESCE(excluded.charge_juros, five_orders.charge_juros) END,
      charge_code=COALESCE(excluded.charge_code, five_orders.charge_code),
-     charge_updated_at=COALESCE(excluded.charge_updated_at, five_orders.charge_updated_at),
+     charge_updated_at=CASE WHEN ${_SQL_TRAVA_PAGO} THEN five_orders.charge_updated_at ELSE COALESCE(excluded.charge_updated_at, five_orders.charge_updated_at) END,
      commissions=COALESCE(excluded.commissions, five_orders.commissions),
      shipping_platform=COALESCE(excluded.shipping_platform, five_orders.shipping_platform),
      shipping_code=COALESCE(excluded.shipping_code, five_orders.shipping_code),
-     shipping_status=COALESCE(excluded.shipping_status, five_orders.shipping_status),
+     shipping_status=CASE WHEN ${_SQL_TRAVA_ENTREGUE} THEN five_orders.shipping_status ELSE COALESCE(excluded.shipping_status, five_orders.shipping_status) END,
      shipping_core_id=COALESCE(excluded.shipping_core_id, five_orders.shipping_core_id),
      last_event=excluded.last_event, last_status=excluded.last_status,
      charge_paid_ts=COALESCE(five_orders.charge_paid_ts, excluded.charge_paid_ts),
@@ -2156,12 +2309,24 @@ async function _fiveUpsertLead(env, p, ctx) {
       // Adota um lead que JÁ existe (pressel/roleta/manual) do MESMO cliente sem five_id,
       // casando por CPF (preferido) ou últimos 8 dígitos do telefone. Evita card duplicado
       // e preserva o vendedor (lead.at) já atribuído. Banco canônico: 1 pedido por cliente.
-      lead = data.leads.find((l) => l && !l.five_id && (
+      // CARD ENCERRADO NAO CAPTURA PEDIDO NOVO (06/10/2026, item 32 da auditoria). Card Manual
+      // cancelado (sem five_id) do mesmo CPF era adotado, ficava em Cancelado (FIM absorve tudo no
+      // gate) e o pedido novo nunca aparecia em A Enviar nem na cobranca. Agora so adota card vivo,
+      // ou cancelado ha menos de 72h (a regra do pedido refeito, 05/10): esse volta pra A Enviar.
+      lead = data.leads.find((l) => l && !l.five_id && (!FIVE_COL_FIM.includes(String(l.col || '')) || _canceladoHaPouco(l, Date.now())) && (
         (_cpfC && String(l.cpf || '').replace(/\D/g, '') === _cpfC) ||
         (_waC.length >= 8 && String(l.wa || '').replace(/\D/g, '').length >= 8 && String(l.wa).replace(/\D/g, '').slice(-8) === _waC.slice(-8))
       )) || null;
       if (lead) {
         lead.five_id = String(oid);
+        if (FIVE_COL_FIM.includes(String(lead.col || ''))) {
+          // cancelado ha pouco e relancado: o card reaproveitado comeca do zero, como o pedido refeito
+          const _colFim = lead.col;
+          lead.col = 'A Enviar';
+          delete lead.col_plat;
+          if (String(lead.spg || '') === 'Recusado') lead.spg = 'Pendente';
+          if (Array.isArray(lead.hist)) lead.hist.push({ from: _colFim, to: 'A Enviar', who: 'sistema', time: nowISO, note: 'pedido refeito: card cancelado reaproveitado pelo pedido ' + String(oid) });
+        }
         if (!lead.external_id) lead.external_id = 'FIVE-' + String(oid);
         if (p.__fonte === 'paylog') lead.fonte = 'paylog';
         if (p.__paymentLink) lead.checkout_url = String(p.__paymentLink).slice(0, 300);
@@ -2178,13 +2343,22 @@ async function _fiveUpsertLead(env, p, ctx) {
     // venda, vendedor, comprovante, obs) e so troca de pedido. O pedido antigo vai pro five_ignorar e
     // sai da five_orders depois do salvamento (la embaixo), pra um reenvio dele nao recriar o card.
     // So com UM candidato: com dois, ninguem adivinha e nasce card novo, como antes.
+    // SO QUEM CRIA PEDIDO REFAZ PEDIDO (06/10/2026, auditoria). O bloco rodava pra qualquer evento:
+    // um cancelado_sem_custo atrasado do pedido ANTIGO, chegando noutro isolate (cache de 60s do
+    // five_ignorar) ou perdendo o CAS, nao achava o card pelo five_id, achava pelo CPF o card recem
+    // passado pro pedido novo (A Enviar) e o readotava pro antigo, mandando o NOVO pro five_ignorar.
+    // Agora so ORDER_CREATE adota, nunca com cobranca cancelada/estornada; e com candidato a lista
+    // e relida direto do banco antes de mexer.
     let _refeitoDe = '';
-    if (!lead && _cpfC.length === 11) {
+    if (!lead && _cpfC.length === 11 && ev === 'ORDER_CREATE' && !/CANCEL|REFUND|CHARGEBACK/i.test(String(charge.status || ''))) {
       const _mesmoCpf = data.leads.filter((l) => l && l.five_id && String(l.five_id) !== String(oid)
         && String(l.cpf || '').replace(/\D/g, '') === _cpfC);
       let _cands = _mesmoCpf.filter(_pedidoAindaNaoSaiu);
       if (!_cands.length) { const _agMs = Date.now(); _cands = _mesmoCpf.filter((l) => _canceladoHaPouco(l, _agMs)); }
       if (_cands.length === 1) {
+        let _ignNoBanco = [];
+        try { const _v = await _readConfig(env, 'five_ignorar'); const _j = _v ? JSON.parse(_v) : []; if (Array.isArray(_j)) _ignNoBanco = _j.map(String); } catch (_) {}
+        if (_ignNoBanco.includes(String(oid))) { _fiveIgnCache = new Set(_ignNoBanco); _fiveIgnT = Date.now(); return; }
         lead = _cands[0];
         _refeitoDe = String(lead.five_id);
         if (String(lead.spg || '') === 'Recusado') lead.spg = 'Pendente';   // o Recusado era do pedido cancelado
@@ -2386,7 +2560,10 @@ async function _fiveUpsertLead(env, p, ctx) {
     if (ev === 'SHIPPING_REGISTER' || ev === 'SHIPPING_UPDATE') {
       const _ss = ship.shippingStatus ? String(ship.shippingStatus).toUpperCase()
         : (ev === 'SHIPPING_REGISTER' ? 'REGISTERED' : '');
-      if (_ss && !(_ss === 'REGISTERED' && lead.ship)) {
+      // ENTREGUE NAO VOLTA PRA TRANSITO (06/10/2026, item 32): um IN_TRANSIT reenviado depois do
+      // DELIVERED ligava _shipMudou e descia o card de Cobranca pra Enviado. So devolucao/nao
+      // entregue passa; o proprio DELIVERED repetido continua renovando o "rastreio atualizado em".
+      if (_ss && !(_ss === 'REGISTERED' && lead.ship) && !(String(lead.ship || '').toUpperCase() === 'DELIVERED' && _ss !== 'DELIVERED' && !/RETURN|NOT_DELIVERED|DEVOL|REVERS/i.test(_ss))) {
         const _shipAntes = String(lead.ship || '');
         if (_shipAntes !== _ss) _shipMudou = true;
         lead.ship = _ss;
@@ -3551,7 +3728,10 @@ async function _stateVisivel(u, data, env) {
   // grava essa lista podada por cima da de verdade - o _stateProtegido devolve a do banco.
   if (Array.isArray(data && data.lancamentos) && u && u.id) {
     const _meu = String(u.id);
-    d.lancamentos = data.lancamentos.filter((l) => l && String(l.at || '') === _meu);
+    // SO O TIPO `pagamento_equipe` (06/10/2026, auditoria): o filtro olhava apenas o `at`, e `at` em
+    // outro tipo de lancamento e quem LANCOU, nao quem recebeu. Hoje a lista so tem esse tipo, mas
+    // uma categoria nova com `at` = autor viraria extrato do vendedor por acidente.
+    d.lancamentos = data.lancamentos.filter((l) => l && String(l.tipo || '') === 'pagamento_equipe' && String(l.at || '') === _meu);
   }
   // DOMINIOS LIBERADOS PRO AFILIADO (11/09/2026, pedido do Bruno). O produtor gerencia os dominios
   // em data.doms_meta (escondido acima) e marca o DONO de cada um. Aqui o mundo do afiliado (ele e a
@@ -3638,6 +3818,56 @@ async function _stateVisivel(u, data, env) {
         }));
       }
       delete d.wa_ativo;
+    }
+  }
+  // ══ A PODA DA CASA PRA QUEM NAO E DIRETOR (06/10/2026, auditoria: itens 13 e seguranca-escopo-3) ══
+  //
+  // Ate aqui a poda cuidava do DINHEIRO (STATE_OCULTO) e do gestor de trafego (soCampanha). O
+  // atendente e o cobrador da casa recebiam o resto do blob do jeito que esta no banco. Medido na
+  // copia de 06/10: a atendente_vra3lh recebia 304 pedidos (79 de colegas, com nome, CPF, telefone
+  // e endereco), as 5 pressels da casa com o token da Events API do TikTok dentro, 47 chips com
+  // proxy (host:porta:usuario:senha), nota e limites, e os 32 registros de gasto de anuncio da
+  // casa (R$ 23.558). O corte por dono existia so no navegador (crm-leads.jsx, Kanban).
+  const _ehCasaSemDir = !soCampanha && !(noMundoAfiliado(u) || afiliadoSemVinculo(u));
+  // ATENDENTE SO LEVA OS PEDIDOS DELE. O cobrador continua com a base inteira: e a fila unica de
+  // cobranca (buildCollector le todos). Lead sem dono (at vazio) nao e de ninguem e sai tambem.
+  // O POST generico devolve do banco o que saiu daqui (ver _stateProtegido), senao o primeiro
+  // Novo Pedido do atendente mandaria so a lista curta e cairia no 422 perda_em_massa.
+  if (_ehCasaSemDir && String((u && u.role) || '').toLowerCase() === 'atendente') {
+    const _meuId = String((u && u.id) || '');
+    if (Array.isArray(d.leads)) d.leads = d.leads.filter((l) => l && _meuId && String(l.at || '') === _meuId);
+  }
+  // GASTO DE ANUNCIO: so a parte rateada pra ele. O registro da casa e o gasto diario inteiro com
+  // o rateio por vendedor em `itens`; quem nao e diretor leva so os itens com at = ele, com o
+  // total refeito a partir deles, e registro sem parte dele nem vai. O gestor de trafego continua
+  // com tudo (soCampanha, ele e quem lanca). A Analise por vendedor le os itens (getTrafegoAloc).
+  if (_ehCasaSemDir && Array.isArray(d.trafego_registros)) {
+    const _meuId = String((u && u.id) || '');
+    d.trafego_registros = d.trafego_registros.map((r) => {
+      if (!r || typeof r !== 'object') return null;
+      const meus = (Array.isArray(r.itens) ? r.itens : []).filter((i) => i && String(i.at || '') === _meuId);
+      if (!meus.length) return null;
+      return { ...r, itens: meus, total: meus.reduce((s, i) => s + (Number(i.valor) || 0), 0) };
+    }).filter(Boolean);
+  }
+  // TOKEN DO PIXEL E SEGREDO DO CHIP NAO VAO PRA QUEM NAO PODE SALVAR PRESSEL. Quem dispara o
+  // evento do pixel e o worker (_ttPixelToken), nunca o navegador; a tela de quem nao passa em
+  // _podeMexerPressel nem abre o editor (SO_INTERRUPTOR le /api/pressel/meus). O NUMERO do chip
+  // fica inteiro de proposito: o inbox e a Contingencia casam conversa com chip pelos 8 ultimos
+  // digitos (chat.jsx) e o `myChips` do proprio atendente depende disso. Saem so proxy, nota e
+  // os limites da roleta. Gravar ja era barrado: chips e pressels sao STATE_NUNCA_POR_AQUI e os
+  // endpoints proprios exigem _podeMexerPressel, entao o que sai daqui nunca volta vazio pro banco.
+  if (!_podeMexerPressel(u)) {
+    if (Array.isArray(d.pressels)) {
+      d.pressels = d.pressels.map((p) => {
+        if (!p || typeof p !== 'object') return p;
+        const { pixel_tt_token, pixel_meta_token, pixel2_token, gtm_server, ...resto } = p;
+        if (Array.isArray(resto.pixels_extra)) resto.pixels_extra = resto.pixels_extra.map((x) => { if (!x || typeof x !== 'object') return x; const { token, ...sx } = x; return sx; });
+        return resto;
+      });
+    }
+    if (Array.isArray(d.chips)) {
+      d.chips = d.chips.map((c) => { if (!c || typeof c !== 'object') return c; const { proxy, note, lim_dia, lim_ordem, lim_livre, dist, ...resto } = c; return resto; });
     }
   }
   // O MUNDO DO AFILIADO. Ele e de fora: leva os pedidos DELE e nada da nossa operacao.
@@ -4023,11 +4253,94 @@ async function _stateProtegido(env, u, novo, atual) {
     if (Object.prototype.hasOwnProperty.call(atual, k)) d[k] = atual[k];
     else delete d[k];
   }
+  // ══ A COSTURA DA CASA (06/10/2026, auditoria: item 12) ═══════════════════════════════════
+  //
+  // Quem chega aqui nao e diretor; o mundo do afiliado ja foi costurado la em cima. Faltava o
+  // atendente e o cobrador da casa: pra eles `leads`, `vendas`, `produtos`, estoque e `app`
+  // entravam do jeito que o navegador mandasse, e o proprio saque tambem (o filtro meuDono so
+  // conferia o dono). Ou seja, as travas do /api/lead (dono, valor e comissao so diretor; pago e
+  // etapa so diretor ou cobrador), do /move (vendedor so cancela o proprio, nao aceito) e do
+  // /api/saque/update (so diretor aprova ou paga) eram enfeite: o mesmo efeito passava pelo POST
+  // generico, que a propria dash usa (o createOrder manda o estado inteiro de volta). Medido na
+  // copia de 06/10: os 3 nao-diretores ativos gravavam lead de outro dono como deles em Pagos com
+  // valor forjado, saque forjado ja 'pago' e o saque recusado da atendente voltava como pago.
+  //
+  // A regra agora e a mesma do afiliado: nada do banco e alterado por este caminho, so entra o
+  // que a tela dele grava de verdade por aqui (pedido NOVO do createOrder e a parte livre do
+  // proprio card). Tudo mais que o pedido tem de dinheiro, dono, etapa e plataforma continua
+  // vindo pelos endpoints proprios, que conferem cargo. E o que o GET podou (item 13: o atendente
+  // recebe so os pedidos dele) volta do banco ANTES da guarda anti-apagamento, senao o primeiro
+  // Novo Pedido dele cairia no 422 perda_em_massa com a lista curta.
+  if (!(noMundoAfiliado(u) || afiliadoSemVinculo(u))) {
+    const _soCampW = ROLE_SO_CAMPANHA.includes(String((u && u.role) || '').toLowerCase());
+    // Catalogo, estoque e configuracao do app sao da casa; nenhuma tela desses cargos grava isso.
+    // Gasto de anuncio: o GET entrega so a parte rateada pra ele, entao volta inteiro do banco
+    // (o gestor de trafego e quem lanca, e ja tem a costura dele no bloco soCampanha acima).
+    const _doBanco = ['vendas', 'produtos', 'estoque', 'estoque_movs', 'nextEstoque', 'app'].concat(_soCampW ? [] : ['trafego_registros', 'trafego_aloc']);
+    for (const k of _doBanco) {
+      if (Object.prototype.hasOwnProperty.call(atual, k)) d[k] = atual[k]; else delete d[k];
+    }
+    // PEDIDOS. Card de outro dono volta inteiro do banco. No proprio card so passa o que e trabalho
+    // de quem atende (anotacao, etiqueta, comentario, follow-up, historico, comprovante, modo de
+    // envio); dono, etapa, aceite, valor, comissao, pagamento e carimbo da plataforma ficam como
+    // estao no banco. Unica excecao, a mesma do handleMoveLead: cancelar o proprio pedido enquanto
+    // nao foi aceito. Pedido novo (id que o banco nao tem) entra com o dono forcado pra quem esta
+    // logado, sem aceite, sem pagamento, sem vinculo de plataforma e na coluna inicial se vier
+    // ja em etapa de dinheiro ou despacho. Teto de 20 por gravacao, igual ao afiliado.
+    if (!_soCampW) {
+      const _meuW = String((u && u.id) || '');
+      const _leadsBanco = Array.isArray(atual.leads) ? atual.leads : [];
+      if (Array.isArray(novo.leads) && _meuW) {
+        const LIVRE = ['obs', 'tags', 'comments', 'fu', 'hist', 'comprovante_url', 'comprovante_mime', 'comprovantes', 'transp'];
+        const NASCE_SEM = ['aceito', 'aceito_em', 'aceito_por', 'pago_ts', 'spg', 'pago_ts_fonte', 'five_id', 'order_id', 'five_status', 'col_plat'];
+        const COL_AVANCADA = ['Pago', 'Pagos', 'Enviado', 'Entregue', 'Preparando', 'Rota de Entrega', 'Retirada', 'Cobrança'];
+        const _mapaNovo = new Map();
+        for (const l of novo.leads) if (l && typeof l === 'object') _mapaNovo.set(String(l.id), l);
+        const _idsBanco = new Set();
+        const _saida = _leadsBanco.map((lb) => {
+          if (!lb || typeof lb !== 'object') return lb;
+          _idsBanco.add(String(lb.id));
+          if (String(lb.at || '') !== _meuW) return lb;
+          const ln = _mapaNovo.get(String(lb.id));
+          if (!ln) return lb;
+          const m = { ...lb };
+          for (const k of LIVRE) if (Object.prototype.hasOwnProperty.call(ln, k)) m[k] = ln[k];
+          if (String(ln.col || '') === 'Cancelado' && !lb.aceito && String(lb.col || '') !== 'Cancelado') m.col = 'Cancelado';
+          return m;
+        });
+        const _novos = novo.leads
+          .filter((l) => l && typeof l === 'object' && l.id != null && !_idsBanco.has(String(l.id)))
+          .slice(0, 20)
+          .map((l) => {
+            const n = { ...l, at: _meuW };
+            for (const k of NASCE_SEM) delete n[k];
+            if (COL_AVANCADA.includes(String(n.col || ''))) n.col = 'A Enviar';
+            return n;
+          });
+        d.leads = _saida.concat(_novos);
+      } else if (Object.prototype.hasOwnProperty.call(atual, 'leads')) {
+        d.leads = atual.leads;
+      } else {
+        delete d.leads;
+      }
+    }
+  }
   // saques/notifs vem filtrados no GET, entao regravar direto apagaria os dos outros: mantem os
   // alheios e aceita so a parte que e da pessoa.
   const meu = String(u && u.id || '');
   const meuDono = (x) => String(x && (x.at || x.user_id || x.para) || '') === meu;
-  if (Array.isArray(atual.saques)) d.saques = (atual.saques.filter((x) => !meuDono(x))).concat(Array.isArray(novo.saques) ? novo.saques.filter(meuDono) : []);
+  // SAQUE QUE JA EXISTE E DO BANCO (06/10/2026, item 12). Antes o filtro so conferia o dono, entao o
+  // proprio vendedor reescrevia status e valor do pedido dele (o saque 2, recusado, voltava como
+  // 'pago' de 99.999 na prova). Agora: os que existem ficam como estao; do navegador so entra saque
+  // NOVO dele, e nasce pendente, sem carimbo de aprovacao ou pagamento. O caminho normal continua
+  // sendo /api/saque/create e /api/saque/update, que conferem cargo.
+  if (Array.isArray(atual.saques)) {
+    const _idsS = new Set(atual.saques.map((s) => String(s && s.id)));
+    const _novosMeus = (Array.isArray(novo.saques) ? novo.saques : [])
+      .filter((s) => s && typeof s === 'object' && meuDono(s) && !_idsS.has(String(s.id)))
+      .map((s) => { const n = { ...s, status: 'pendente' }; for (const k of ['aprovado_em', 'aprovado_por', 'pago_em', 'pago_por', 'recusado_em', 'recusado_por']) delete n[k]; return n; });
+    d.saques = atual.saques.concat(_novosMeus);
+  }
   if (Array.isArray(atual.notifs)) {
     const meuN = (x) => String(x && x.to || '') === meu;
     d.notifs = (atual.notifs.filter((x) => !meuN(x))).concat(Array.isArray(novo.notifs) ? novo.notifs.filter(meuN) : []);
@@ -4548,20 +4861,26 @@ function _plPedidoDoLead(l) {
 async function _plTokenCasa(env) {
   return (await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || '');
 }
-// Pedido VIVO desse CPF na PayLog (nao cancelado, dos ultimos 30 dias). E a trava contra o pedido em
+// Pedido VIVO desse CPF na PayLog (em andamento, dos ultimos 30 dias). E a trava contra o pedido em
 // dobro quando alguem ja lancou na mao antes de clicar em Aceitar - a API nao tem idempotencia.
 // Devolve o codigo (ORDxxxx), '' se nao tem, ou null se a consulta falhou (ai NAO se cria nada).
-async function _plPedidoVivoDoCpf(env, cpf) {
+// VIVO E SO O QUE AINDA ANDA (06/10/2026, decisao do Bruno: recompra). Ate aqui 'vivo' era qualquer
+// pedido nao cancelado de 30 dias, inclusive concluido (pago) e entregue: a recompra do kit de 1 mes
+// caia como "ja existia na PayLog", o card novo era ligado ao pedido antigo e nada era despachado.
+// `ignorar` sao os codigos ja presos a outro card da dash (pedido antigo do mesmo cliente).
+const _PL_STATUS_EM_ANDAMENTO = ['cadastrado', 'aprovado', 'preparando', 'em_transito', 'rota_entrega', 'aguardando_retirada', 'reportado', 'pedido_reportado', 'delayed'];
+async function _plPedidoVivoDoCpf(env, cpf, ignorar) {
   if (!cpf) return '';
   const r = await _plApi(env, '/api/v1/orders?per_page=50&search=' + encodeURIComponent(cpf), '');
   if (!r || !r.ok) return null;
   const lista = (r.dados && Array.isArray(r.dados.data)) ? r.dados.data : [];
   const corte = Date.now() - 30 * 86400000;
+  const _ign = new Set((Array.isArray(ignorar) ? ignorar : []).map((c) => String(c || '').replace(/^PL-/i, '')));
   const vivos = lista.filter((o) => {
     const doc = String((o && o.client && o.client.document) || '').replace(/\D/g, '');
     const st = String((o && o.platform_status && o.platform_status.value) || '').toLowerCase();
     const quando = Date.parse((o && o.created_at) || '') || 0;
-    return doc === cpf && !/cancel/.test(st) && quando >= corte;
+    return doc === cpf && _PL_STATUS_EM_ANDAMENTO.includes(st) && quando >= corte && !_ign.has(String((o && o.code) || ''));
   }).sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
   return vivos.length ? String(vivos[0].code || '') : '';
 }
@@ -4617,12 +4936,25 @@ async function _aceitarComPaylog(env, u, leadId) {
   };
   // 1) confere e reserva (a reserva e o que impede dois cliques de criarem dois pedidos)
   let pedido = null;
+  let _presos = [], _anterior = null;   // pedidos antigos do mesmo cliente (recompra): nao sao "vivos" pra adotar
   const reserva = await _gravaLead((lead, leads) => {
     if (lead.five_id) return { parar: true, naoAplica: true };
     const cpf = soDig(lead.cpf), wa = soDig(lead.wa);
-    const irmao = (cpf || wa.length >= 8) ? leads.find((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
-      (cpf && soDig(l.cpf) === cpf) || (!cpf && wa.length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8)))) : null;
+    // REFEITO x RECOMPRA (06/10/2026, decisao do Bruno). Irmao e so o card do mesmo cliente cujo
+    // pedido ainda vale (_cardComPedidoEmAberto): ai o aceite de sempre junta os dois. Card Pago,
+    // entregue, devolvido ou cancelado ha mais de 72h e venda anterior: o cadastro novo e recompra
+    // e segue pra criar o pedido. Mesmo kit em menos de 48h e dobro, e para no botao vermelho.
+    const _agMs = Date.now();
+    const _mesmoCliente = (cpf || wa.length >= 8) ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
+      (cpf && soDig(l.cpf) === cpf) || (!cpf && wa.length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8)))) : [];
+    const irmao = _mesmoCliente.find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
     if (irmao) return { parar: true, naoAplica: true };
+    const dobro = _mesmoCliente.find((l) => _pedidoEmDobro(lead, l, _agMs));
+    if (dobro) return { parar: true, dobro: ['Este cliente já tem o pedido ' + String(dobro.five_id) + ' do mesmo kit, criado em ' + _dataCardBR(dobro) + ' (menos de 48h)',
+      'Se for recompra de verdade, espere 48h ou ajuste o kit; se for engano, cancele este cadastro'] };
+    _presos = _mesmoCliente.map((l) => String(l.five_id));
+    _anterior = _mesmoCliente.slice().sort((a, b) => (_quandoNasceuMs(b) || 0) - (_quandoNasceuMs(a) || 0))[0] || null;
+    if (_anterior) lead.recompra_de = _anterior.id;
     pedido = _plPedidoDoLead(lead);
     if (pedido.problemas.length) return { parar: true, problemas: pedido.problemas };
     if (lead.pl_desp && (agora - Number(lead.pl_desp.ts || 0)) < 120) return { parar: true, emAndamento: true };
@@ -4633,10 +4965,11 @@ async function _aceitarComPaylog(env, u, leadId) {
   if (reserva.sumiu) return err('Lead não encontrado', 404);
   if (reserva.naoAplica) return null;
   if (reserva.problemas) return json({ error: 'Pedido com dado errado', problemas: reserva.problemas }, 422);
+  if (reserva.dobro) return json({ error: 'Pedido em dobro', problemas: reserva.dobro }, 422);
   if (reserva.emAndamento) return json({ error: 'Este pedido já está sendo enviado pra PayLog' }, 409);
   const soltaReserva = () => _gravaLead((lead) => { delete lead.pl_desp; return null; });
   // 2) ja existe pedido vivo desse CPF na PayLog? entao so liga o card a ele
-  const jaTem = await _plPedidoVivoDoCpf(env, pedido.cpf);
+  const jaTem = await _plPedidoVivoDoCpf(env, pedido.cpf, _presos);
   if (jaTem === null) { await soltaReserva(); return json({ error: 'Não consegui consultar a PayLog agora. Nada foi criado, tente de novo em instantes.', problemas: ['PayLog sem resposta'] }, 502); }
   let codigo = jaTem;
   const adotado = !!jaTem;
@@ -4645,7 +4978,7 @@ async function _aceitarComPaylog(env, u, leadId) {
     if (!r.ok) {
       if (r.incerto) {
         // sem resposta: pode ter criado. A busca pelo CPF diz a verdade antes de liberar outro clique.
-        const depois = await _plPedidoVivoDoCpf(env, pedido.cpf);
+        const depois = await _plPedidoVivoDoCpf(env, pedido.cpf, _presos);
         if (depois) { codigo = depois; }
         else { await soltaReserva(); return json({ error: 'A PayLog não respondeu. Nada foi criado, tente de novo.', problemas: [r.erro] }, 502); }
       } else {
@@ -4653,13 +4986,17 @@ async function _aceitarComPaylog(env, u, leadId) {
         return json({ error: 'A PayLog recusou o pedido', problemas: [r.erro] }, 422);
       }
     } else {
-      codigo = r.code || (await _plPedidoVivoDoCpf(env, pedido.cpf)) || '';
+      codigo = r.code || (await _plPedidoVivoDoCpf(env, pedido.cpf, _presos)) || '';
     }
   }
   // 3) liga o card ao pedido da PayLog. O webhook "cadastrado" costuma chegar antes disto e ja adota
   // o card pelo CPF (ele esta sem five_id); aqui so completa o que faltar, sem brigar com ele.
   const nowISO = new Date().toISOString();
-  const fim = await _gravaLead((lead) => {
+  const fim = await _gravaLead((lead, leads) => {
+    // NUNCA DOIS CARDS COM O MESMO PEDIDO (06/10/2026): se o codigo ja esta preso a outro card, nao
+    // grava; devolve 422 com quem e o dono. O webhook 'cadastrado' continua adotando pelo CPF.
+    const _dono = codigo ? leads.find((l) => l && String(l.id) !== String(lead.id) && String(l.five_id || '') === 'PL-' + codigo) : null;
+    if (_dono) return { parar: true, duplicado: _dono };
     delete lead.pl_desp;
     // Card que o aceite antigo jogou em "Enviado" sem nada ter saido volta pra "A Enviar": e o que ele
     // e na PayLog agora (aprovado, esperando envio). Sem isto o card ficaria um passo na frente do
@@ -4676,10 +5013,16 @@ async function _aceitarComPaylog(env, u, leadId) {
     if (!Array.isArray(lead.hist)) lead.hist = [];
     lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: String(u.id), time: nowISO,
       note: adotado ? ('aceito: ja existia o pedido ' + codigo + ' na PayLog pro mesmo CPF, card ligado a ele') : ('aceito e criado na PayLog (' + (codigo || 'codigo a confirmar pelo webhook') + ')') });
+    if (_anterior) lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: 'sistema', time: nowISO, note: 'recompra: cliente do pedido ' + String(_anterior.five_id) + ' (' + _dataCardBR(_anterior) + ')' });
     return null;
   });
+  if (fim && fim.duplicado) {
+    await soltaReserva();
+    return json({ error: 'O pedido ' + codigo + ' já está ligado a outro card', problemas: ['O card de ' + String(fim.duplicado.nome || 'cliente') + ' (' + _dataCardBR(fim.duplicado) + ') já tem o pedido PL-' + codigo, 'Confira os dois cards antes de aceitar de novo'] }, 422);
+  }
   if (!fim) console.log('PAYLOG_ACEITE_CAS_ESGOTADO lead=' + leadId + ' pedido=' + codigo + ' — aceito=true nao gravado; webhook da PayLog vai resolver');
-  return json({ ok: true, paylog: codigo, adotado, lead_id: leadId, col: (fim && fim.lead) ? fim.lead.col : '', version: fim && fim.version });
+  return json({ ok: true, paylog: codigo, adotado, lead_id: leadId, col: (fim && fim.lead) ? fim.lead.col : '', version: fim && fim.version,
+    recompra_de: _anterior ? String(_anterior.five_id) : '', recompra_data: _anterior ? _dataCardBR(_anterior) : '' });
 }
 
 // ACEITAR um pedido das Aceitações — e NÃO deixar virar dois cards.
@@ -4726,10 +5069,16 @@ async function handleAceitarLead(req, env, leadId) {
     const nowISO = new Date().toISOString();
     // Irmão da Five: mesmo cliente, já com five_id. CPF é a chave (o Bruno pediu assim e é o que
     // não muda); telefone é desempate pra pedido lançado sem documento.
-    const irmao = (cpf || wa.length >= 8) ? leads.find((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
+    // SO CARD COM PEDIDO EM ABERTO E IRMAO (06/10/2026, decisao do Bruno: refeito x recompra). A mesma
+    // regra do _aceitarComPaylog e do webhook: card Pago/entregue/devolvido ou cancelado ha mais de
+    // 72h e venda anterior, e o cadastro novo segue como recompra (nao e mais fundido nem apagado).
+    const _agMs = Date.now();
+    const _mesmoCliente = (cpf || wa.length >= 8) ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
       (cpf && soDig(l.cpf) === cpf) ||
       (!cpf && wa.length >= 8 && soDig(l.wa).length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8))
-    )) : null;
+    )) : [];
+    const irmao = _mesmoCliente.find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
+    const _anterior = irmao ? null : (_mesmoCliente.slice().sort((a, b) => (_quandoNasceuMs(b) || 0) - (_quandoNasceuMs(a) || 0))[0] || null);
     let resposta;
     if (irmao) {
       // DOIS CADASTROS QUE DISCORDAM NAO SE JUNTAM CALADOS (05/10/2026). A fusao foi feita pra card que
@@ -4745,7 +5094,7 @@ async function handleAceitarLead(req, env, leadId) {
         try { const _r = await env.DB.prepare('SELECT id, name FROM users WHERE id IN (?, ?)').bind(String(irmao.at || ''), String(lead.at || '')).all(); for (const x of ((_r && _r.results) || [])) _nm[x.id] = x.name; } catch (_) {}
         const _quem = (id) => _nm[String(id || '')] || String(id || 'sem vendedor');
         const _desc = (l) => (_mesesKit(l) ? _mesesKit(l) + ' meses' : String(l.trat || l.prod || 'kit ?')) + ', R$ ' + (Number(l.vl) || 0).toFixed(2).replace('.', ',');
-        const problemas = ['Este cliente já tem pedido ' + String(irmao.five_id) + ' de ' + _quem(irmao.at) + ' (' + _desc(irmao) + ')',
+        const problemas = ['Este cliente já tem pedido ' + String(irmao.five_id) + ' de ' + _quem(irmao.at) + ' (' + _desc(irmao) + ', criado em ' + _dataCardBR(irmao) + ')',
           'Este cadastro é de ' + _quem(lead.at) + ' (' + _desc(lead) + ')',
           'Confira com os vendedores e cancele o cadastro que sobrou, ou ajuste um dos dois'];
         return json({ error: 'Cliente já tem pedido de outro vendedor ou com outro kit', problemas }, 422);
@@ -4771,12 +5120,21 @@ async function handleAceitarLead(req, env, leadId) {
       irmao.hist.push({ from: irmao.col || '—', to: irmao.col || '—', who: String(u.id), time: nowISO, note: 'aceite juntou o cadastro manual #' + String(lead.id) + ' (mesmo CPF)' });
       irmao.aceito = true; irmao.aceito_em = nowISO;
       leads.splice(i, 1);   // o manual sai: o pedido da Five é o card que a operação acompanha
-      resposta = { ok: true, fundido: true, lead_id: irmao.id, five_id: irmao.five_id, col: irmao.col };
+      resposta = { ok: true, fundido: true, lead_id: irmao.id, five_id: irmao.five_id, col: irmao.col, pedido_data: _dataCardBR(irmao) };
+    } else if (lead.five_id) {
+      // O PEDIDO JA EXISTE NA PLATAFORMA (06/10/2026, auditoria). O webhook 'cadastrado' adotou o card
+      // antes do clique (corrida de ate 5s): mover pra 'Enviado' punha o card um passo na frente do
+      // pedido, e a escada de coluna nao deixava 'aprovado' traze-lo de volta. So marca o aceite.
+      lead.aceito = true; lead.aceito_em = nowISO; lead.aceito_por = String(u.id);
+      if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: String(u.id), time: nowISO, note: 'aceito: o pedido ja existe na plataforma (' + String(lead.five_id) + ')' });
+      resposta = { ok: true, fundido: false, lead_id: lead.id, col: lead.col, five_id: lead.five_id };
     } else {
       const from = lead.col;
       lead.col = col; lead.aceito = true; lead.aceito_em = nowISO; lead.aceito_por = String(u.id);
-      if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: nowISO, note: 'aceito (aguardando o pedido da Five casar por CPF)' });
-      resposta = { ok: true, fundido: false, lead_id: lead.id, col };
+      if (_anterior) lead.recompra_de = _anterior.id;
+      if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: nowISO, note: 'aceito (aguardando o pedido da plataforma casar por CPF)' });
+      if (_anterior && Array.isArray(lead.hist)) lead.hist.push({ from: col, to: col, who: 'sistema', time: nowISO, note: 'recompra: cliente do pedido ' + String(_anterior.five_id) + ' (' + _dataCardBR(_anterior) + ')' });
+      resposta = { ok: true, fundido: false, lead_id: lead.id, col, recompra_de: _anterior ? String(_anterior.five_id) : '', recompra_data: _anterior ? _dataCardBR(_anterior) : '' };
     }
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
@@ -6441,7 +6799,9 @@ async function handlePostState(req, env) {
   // ── TRAVA 2: guarda anti-apagamento em massa ───────────────────────────
   // Rede de segurança contra QUALQUER escrita (bug, aba zumbi, merge ruim) que
   // sumiria com um monte de registro de uma vez. Exclusão pontual passa normal.
-  if (!body.allow_shrink && current?.data) {
+  // `allow_shrink` SO VALE PRO DIRETOR (06/10/2026, item 12): a flag era lida de qualquer login, e
+  // nenhuma tela manda ela - so quem montasse o POST na mao. Pra cargo restrito a guarda roda sempre.
+  if (!(body.allow_shrink && isDirector(u)) && current?.data) {
     let cur = {};
     try { cur = JSON.parse(current.data); } catch (_) { cur = {}; }
     const perdas = [];
@@ -22043,6 +22403,7 @@ export default {
       if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
       if (req.method === 'GET' && path === '/api/five/summary') return handleFiveSummary(req, env);
       if (req.method === 'GET' && path === '/api/five/products') return handleFiveProducts(req, env);
+      if (req.method === 'POST' && path === '/api/five/ignorar') return handleFiveIgnorarSoltar(req, env);
       if (req.method === 'POST' && path === '/api/product-image') return handleProductImage(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/five/affiliates') return handleFiveAffiliates(req, env);
       // Area de Afiliados (23/08/2026). Separada do produtor de proposito: nenhuma destas rotas
@@ -22073,6 +22434,11 @@ export default {
       // A URL a cadastrar no painel deles tem que ser completa, com https://.
       if (req.method === 'GET' && path === '/api/paylog/sync') return handlePaylogSync(req, env);
       if (req.method === 'POST' && path === '/api/paylog/fotos') return handlePaylogFotos(req, env, ctx);
+      // PAYLOG 2.0 (plataforma 'PayLog normal'): porta PROPRIA, so captura. Fica ANTES do
+      // /paylog de proposito, pra ninguem confundir as duas portas no futuro.
+      if (req.method === 'GET' && path === '/api/paylog2/debug') return handlePaylog2Debug(req, env);
+      const pl2Match = path.match(/^\/paylog2(?:\/(.*))?$/);
+      if (pl2Match) return handlePaylog2Capture(req, env, pl2Match[1] || '', ctx);
       const plMatch = path.match(/^\/paylog(?:\/(.*))?$/);
       if (plMatch) return handlePaylogCapture(req, env, plMatch[1] || '', ctx);
 
