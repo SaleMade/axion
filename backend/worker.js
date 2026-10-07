@@ -340,13 +340,36 @@ async function _authSessaoBanco(req, env, token, now) {
 // (charge.updatedAt) -> ela vence a nossa hora; deixou de ser pago -> apaga. Nunca sobrescreve uma
 // data real por uma hora de clique.
 const _ehPago = (l) => String((l && l.spg) || '') === 'Pago' || ['Pago', 'Pagos'].includes(String((l && l.col) || ''));
+// A DATA DE PAGAMENTO SO ANDA PRA TRAS (07/10/2026). Antes, QUALQUER data real da plataforma
+// sobrescrevia a que ja estava la, inclusive uma MAIS NOVA. Efeito medido no banco: o cliente
+// pagava as 21:36 e, de madrugada, a Payt mandava "finalizada (paid)" com o horario DELA (02:04,
+// 02:09, 02:59) - a venda pulava pro dia seguinte sozinha, horas depois, sem ninguem encostar nela.
+//
+// O Guilherme viu e estava certo: as 22:11 o aplicativo dele mostrava 17 vendas e R$ 997,44 no dia;
+// no dia seguinte o MESMO dia aparecia com 14 vendas e R$ 818,52. Tres vendas tinham mudado de dia
+// durante a noite. Varri o banco: 11 pedidos com a data empurrada pra frente, 10 deles trocando de
+// dia, quase todos dele - ele vende a noite, e a Payt fecha as cobrancas por volta das 2h.
+//
+// A REGRA AGORA e uma invariante so, facil de conferir: o pagamento aconteceu UMA vez, no instante
+// mais cedo em que alguem o observou. Entao a data pode ser corrigida pra TRAS (a plataforma sabe
+// que foi antes do nosso clique) e nunca pra frente. Evento posterior sobre a mesma cobranca
+// (finalizada, liquidada, baixa) e status, nao um pagamento novo.
+//
+// ESTORNO NAO QUEBRA ISSO: quando o pedido deixa de ser pago, o carimbo e APAGADO logo abaixo.
+// Se ele voltar a ser pago depois, comeca sem data e a nova vale normalmente, mesmo sendo posterior.
 function _carimbaPagoTs(lead, eraPago, tsPlataforma) {
   if (!lead) return;
   const agora = _ehPago(lead);
   const real = Number(tsPlataforma) || 0;
   if (!agora) { if (lead.pago_ts) delete lead.pago_ts; if (lead.pago_ts_fonte) delete lead.pago_ts_fonte; return; }
-  if (real > 1.5e12) { lead.pago_ts = real; lead.pago_ts_fonte = 'plataforma'; return; }
-  if (!eraPago || !(Number(lead.pago_ts) > 1.5e12)) { lead.pago_ts = Date.now(); lead.pago_ts_fonte = 'dash'; }
+  const atual = Number(lead.pago_ts) || 0;
+  const temReal = atual > 1.5e12;
+  if (real > 1.5e12) {
+    // So aceita a data da plataforma se ainda nao ha nenhuma, ou se ela e ANTERIOR a que esta la.
+    if (!temReal || real < atual) { lead.pago_ts = real; lead.pago_ts_fonte = 'plataforma'; }
+    return;
+  }
+  if (!eraPago || !temReal) { lead.pago_ts = Date.now(); lead.pago_ts_fonte = 'dash'; }
 }
 // paid_at da Payt vem 'YYYY-MM-DD HH:MM:SS' no horario de Brasilia (sem fuso): soma 3h pra UTC.
 function _paidAtPayt(v) {
@@ -5658,20 +5681,60 @@ async function handleDomainsDetect(req, env) {
   if (!_podeMexerMeta(u)) return err('Sem permissão', 403);
   const token = env.CF_API_TOKEN, acc = env.CF_ACCOUNT_ID, svc = env.CF_WORKER_NAME || 'axion-api';
   if (!token || !acc) return json({ ok: false, error: 'nao_configurado', doms: [] });
+  // AS DUAS CHAMADAS SAO INDEPENDENTES, E UMA SO JA SERVE (07/10/2026).
+  //
+  // Ate hoje, se a listagem de ZONAS falhasse, a funcao devolvia 'cf_zones' e uma lista VAZIA - mesmo
+  // quando a outra chamada tinha funcionado. Isso apagava da tela justamente o que importa: o dominio
+  // ANEXADO ao worker, que e o unico que ja esta pronto pra receber pressel.
+  //
+  // E as duas pedem permissoes diferentes. Listar zona exige Zone:Read; listar os Custom Domains do
+  // worker exige so permissao de CONTA, que todo token de deploy tem. Na conta do amigo o token
+  // interno e de conta, sem escopo de zona: a chamada de zonas falhava e levava a boa junto. Por isso
+  // o dominio novo "nunca aparecia" e alguem tinha que vir anexar na mao.
+  //
+  // Agora cada uma vale por si. So devolve erro se as DUAS falharem, e `avisos` diz o que faltou, em
+  // vez de a tela ficar muda.
   try {
     const H = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
     const [zr, dr] = await Promise.all([
       fetch('https://api.cloudflare.com/client/v4/zones?account.id=' + acc + '&per_page=50', { headers: H }).then((r) => r.json()).catch(() => null),
       fetch('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', { headers: H }).then((r) => r.json()).catch(() => null),
     ]);
-    if (!zr || !zr.success) return json({ ok: false, error: 'cf_zones', doms: [] });
-    const attached = new Set((dr && dr.success ? dr.result : []).filter((x) => x && x.service === svc).map((x) => String(x.hostname || '').toLowerCase()));
-    const doms = (zr.result || []).map((z) => {
-      const dom = String(z.name || '').toLowerCase();
-      return { dom, zone: String(z.status || ''), attached: attached.has(dom) };
-    }).filter((d) => d.dom);
-    return json({ ok: true, doms });
-  } catch (e) { return json({ ok: false, error: String((e && e.message) || e), doms: [] }); }
+    const zonasOk = !!(zr && zr.success);
+    const anexOk = !!(dr && dr.success);
+    const _msg = (r) => (r && Array.isArray(r.errors) && r.errors.length ? String(r.errors[0].message || '') : 'sem resposta');
+    if (!zonasOk && !anexOk) {
+      return json({ ok: false, error: 'cf_sem_acesso', doms: [], avisos: ['zonas: ' + _msg(zr), 'domínios do worker: ' + _msg(dr)] });
+    }
+
+    // O que ja esta ANEXADO a ESTE worker. E a lista de verdade do que esta pronto pra uso.
+    const attached = new Set(
+      (anexOk ? (dr.result || []) : [])
+        .filter((x) => x && x.service === svc)
+        .map((x) => String(x.hostname || '').toLowerCase())
+        .filter(Boolean)
+    );
+
+    const porDom = new Map();
+    if (zonasOk) {
+      for (const z of (zr.result || [])) {
+        const dom = String(z.name || '').toLowerCase();
+        if (dom) porDom.set(dom, { dom, zone: String(z.status || ''), attached: attached.has(dom) });
+      }
+    }
+    // ANEXADO QUE NAO APARECEU NAS ZONAS entra do mesmo jeito. Dois casos reais: (a) o token nao le
+    // zona, entao a lista veio vazia; (b) a zona mudou de conta e o Custom Domain ficou (foi o que
+    // aconteceu com nutrapremium em 23/09, que saiu da conta do amigo pra do Bruno). Nos dois, o
+    // dominio responde e serve pra pressel - esconder dele seria mentir sobre o que esta no ar.
+    for (const dom of attached) {
+      if (!porDom.has(dom)) porDom.set(dom, { dom, zone: zonasOk ? '' : 'desconhecida', attached: true });
+    }
+
+    const avisos = [];
+    if (!zonasOk) avisos.push('Não consegui listar as zonas (' + _msg(zr) + '). Mostrando só os domínios já anexados ao worker.');
+    if (!anexOk) avisos.push('Não consegui listar os domínios do worker (' + _msg(dr) + '). Não dá pra dizer quais já estão prontos.');
+    return json({ ok: true, doms: [...porDom.values()], avisos });
+  } catch (e) { return json({ ok: false, error: String((e && e.message) || e), doms: [], avisos: [] }); }
 }
 
 // REENVIA EVENTOS REAIS JA GRAVADOS pro pixel ATUAL da pressel (22/09/2026, pedido do Bruno). Caso
