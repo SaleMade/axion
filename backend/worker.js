@@ -2677,6 +2677,9 @@ async function _fiveUpsertLead(env, p, ctx) {
     // aqui embaixo ela decide se manda aviso, e la no gate de coluna ela decide se o card pode
     // DESCER. A Five reenvia evento velho o tempo todo (327 webhooks pra 42 pedidos), entao
     // 'chegou um status menor' nao basta; 'chegou um status DIFERENTE do que o lead tinha' basta.
+    // O MEIO DO PEDIDO PENDENTE chega ao card em todo evento (07/10/2026, item 5): a varredura traz o
+    // payment_method da API (__plMetodo) e o card so ganha pgto se ainda nao tiver.
+    if (p.__plMetodo && !lead.pgto) lead.pgto = String(p.__plMetodo);
     let _shipMudou = false;
     if (ev === 'SHIPPING_REGISTER' || ev === 'SHIPPING_UPDATE') {
       const _ss = ship.shippingStatus ? String(ship.shippingStatus).toUpperCase()
