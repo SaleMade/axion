@@ -1900,8 +1900,10 @@ function _pedidoEmDobro(novo, antigo, agoraMs) {
 }
 // O que e do PEDIDO (e nao do cliente nem da venda): sai do card quando ele troca de pedido
 // (e "o pedido ainda vale" e o _cardComPedidoEmAberto, logo acima).
+// `com_pct` entra (07/10/2026): a taxa congelada era a da plataforma antiga (a Payt do pedido da Five,
+// 61,3% do afiliado) e sobrevivia no card refeito na PayLog; limpa, vale o cadastro de quem vende.
 const _CAMPOS_DO_PEDIDO_ANTIGO = ['track', 'track_core', 'transp_nome', 'track_url', 'checkout_url', 'ship', 'ship_ts',
-  'col_plat', 'five_status', 'entrega_url', 'entrega_ts', 'entrega_assinante', 'five_commissions'];
+  'col_plat', 'five_status', 'entrega_url', 'entrega_ts', 'entrega_assinante', 'five_commissions', 'com_pct'];
 
 async function handleFiveCapture(req, env, subpath, ctx) {
   const now = Math.floor(Date.now() / 1000);
@@ -4625,10 +4627,8 @@ function _trimBlobData(data) {
       l.hist = l.hist.slice(-MAX_HIST_TERM);
       trimHist++;
     }
-    if (Array.isArray(l.comments) && l.comments.length > MAX_COMM_TERM) {
-      l.comments = l.comments.slice(-MAX_COMM_TERM);
-      trimComm++;
-    }
+    // COMENTARIO NAO E CORTADO (07/10/2026, decisao do Bruno, item 9 da auditoria): e o registro do
+    // atendimento e pesa pouco (391 comentarios = 1% do blob). O corte continua so no historico.
   }
   const paytBefore = Array.isArray(data.payt_debug) ? data.payt_debug.length : 0;
   data.payt_debug = [];
