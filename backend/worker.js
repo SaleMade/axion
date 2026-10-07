@@ -8700,7 +8700,12 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
   // nao volta pra pendente por causa de um evento da Payt.
   try {
     const _qp = (body && body.link && body.link.query_params) || {};
-    const _mPed = /^ped(\d{1,20})$/.exec(String(_qp.utm_content || '').trim());
+    // O utm_content VEM EM link.sources, nao em query_params (07/10/2026). A Payt devolve os campos do
+    // cliente em query_params e os utm em link.sources; este codigo so olhava query_params, entao o
+    // "pago pelo link" nunca disparava: 4 pagamentos de 06 e 07/10 (Juarez, Ari, Raimunda, Paulo Cruz)
+    // ficaram com a nota "PAYT: finalizada (paid)" no card e o card parado em Cobranca.
+    const _src = (body && body.link && body.link.sources) || {};
+    const _mPed = /^ped(\d{1,20})$/.exec(String(_qp.utm_content || _src.utm_content || '').trim());
     const _lp = _mPed ? state.leads.find((l) => l && String(l.id) === _mPed[1]) : null;
     if (_lp) {
       const _quando = `${todayBR()} ${nowTimeBR()}`;
@@ -8720,6 +8725,27 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
         }
         if (data.payment_method && !_lp.pgto) _lp.pgto = data.payment_method;
         _lp.hist.push({ from: _lp.col, to: _lp.col, who: 'payt', time: _quando, note: 'Pago pelo link de pagamento (Payt' + (data.payment_method ? ', ' + data.payment_method : '') + ')' });
+        // PEDIDO DA PAYLOG PAGO PELO LINK DA PAYT (07/10/2026). A PayLog nao fica sabendo desse
+        // pagamento (a ponte Payt->plataforma so existia pela Five, que recebia o postback da Payt e
+        // mandava CHARGE_UPDATED), entao e AQUI que o pedido vira pago de verdade: a linha em
+        // five_orders (receita, DRE, comissao real do afiliado) e a coluna do card, que sobe pra Pago
+        // quando o pedido ja saiu. Card esperando aceite fica onde esta (ver o comentario acima).
+        if (/^PL-/.test(String(_lp.five_id || ''))) {
+          const _colAgora = String(_lp.col || '');
+          if (!['A Enviar', 'Reportado', 'Pago', 'Pagos'].includes(_colAgora) && !FIVE_COL_FIM.includes(_colAgora)) {
+            _lp.hist.push({ from: _colAgora, to: 'Pago', who: 'payt', time: _quando, note: 'pago pelo link: o card vai pra Pago' });
+            _lp.col = 'Pago'; _lp.col_plat = 'Pago';
+          }
+          try {
+            const _cm = (body && body.commission) || {};
+            const _tipo = (t) => { const x = String(t || '').toLowerCase(); return x === 'platform' ? 'PAYMENT_PLATFORM' : x === 'affiliation' ? 'AFFILIATION' : x === 'producer' ? 'PRODUCER' : x.toUpperCase(); };
+            const _lin = Object.values(_cm).filter((c) => c && typeof c === 'object').map((c) => ({ type: _tipo(c.type), amount: Math.round(Number(c.amount) || 0) / 100, name: String(c.name || '') }));
+            const _paidMs = _paidAtPayt(data.paid_at) || Date.now();
+            const _vl = Number(data.amount) || null, _vlPago = Number(data.amount_pago) || null;
+            await env.DB.prepare("UPDATE five_orders SET charge_status='PAID', charge_method=COALESCE(?, charge_method), charge_amount=COALESCE(?, charge_amount), charge_pago=?, charge_juros=?, charge_updated_at=?, charge_paid_ts=COALESCE(charge_paid_ts, ?), commissions=?, last_event='CHARGE_UPDATED', last_status='pago pelo link (Payt)', updated_at=? WHERE order_id=? AND (charge_status IS NULL OR charge_status<>'PAID')")
+              .bind(data.payment_method || null, _vl, _vlPago, (_vl && _vlPago && _vlPago > _vl) ? Math.round((_vlPago - _vl) * 100) / 100 : null, new Date(_paidMs).toISOString(), Math.floor(_paidMs / 1000), JSON.stringify(_lin), Math.floor(Date.now() / 1000), String(_lp.five_id)).run();
+          } catch (e) { console.log('PAYT_PL_PAGO_LINK five_orders erro: ' + String((e && e.message) || e)); }
+        }
         if (!lead_id_result) { lead_id_result = _lp.id; action_taken = 'pago_pelo_link'; }
       } else if (['cancelada_reembolsada', 'cancelada_chargeback'].includes(data.event) && _lp.spg === 'Pago' && _lp.pago_link) {
         _lp.spg = 'Pendente';
