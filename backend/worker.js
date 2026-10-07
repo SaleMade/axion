@@ -1502,8 +1502,108 @@ async function _pl2Ensure(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS paylog2_debug (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, subpath TEXT, method TEXT,
     event TEXT, order_code TEXT, idem TEXT,
-    query TEXT, headers TEXT, body TEXT)`).run();
+    query TEXT, headers TEXT, body TEXT, verified INTEGER DEFAULT 0, sig_info TEXT)`).run();
   try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_pl2_ts ON paylog2_debug(ts)').run(); } catch (_) {}
+  // Tabela criada antes das colunas de assinatura existirem: ALTER tolerante.
+  for (const c of ['verified INTEGER DEFAULT 0', 'sig_info TEXT']) {
+    try { await env.DB.prepare('ALTER TABLE paylog2_debug ADD COLUMN ' + c).run(); } catch (_) {}
+  }
+}
+
+// DESCOBRIR O FORMATO DA ASSINATURA SEM PERGUNTAR (06/10/2026).
+// A gente tem o segredo do webhook, mas nao sabe em QUAL cabecalho o PayLog normal manda a
+// assinatura nem em que formato. Em vez de chutar e errar calado, calculo todos os candidatos
+// sobre o corpo CRU e comparo com o valor de TODOS os cabecalhos que chegaram. O primeiro evento
+// real ja diz qual e o esquema, e fica escrito em sig_info.
+//
+// Nada e RECUSADO por causa disso ainda: a porta so registra. Recusar antes de saber o formato
+// derrubaria a integracao inteira, porque plataforma de webhook pausa depois de algumas falhas.
+async function _pl2Assinatura(env, raw, cab) {
+  const seg = (env && env.PAYLOG2_SECRET) || '';
+  if (!seg) return { verified: 0, info: 'sem segredo configurado' };
+  const enc = new TextEncoder();
+  const hex = (b) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, '0')).join('');
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  const cand = {};
+  try {
+    for (const alg of ['SHA-256', 'SHA-1']) {
+      const k = await crypto.subtle.importKey('raw', enc.encode(seg), { name: 'HMAC', hash: alg }, false, ['sign']);
+      const sig = await crypto.subtle.sign('HMAC', k, enc.encode(raw));
+      cand['hex-' + alg] = hex(sig);
+      cand['b64-' + alg] = b64(sig);
+    }
+  } catch (_) {}
+  cand['segredo-cru'] = seg;
+  // Tira prefixos comuns (sha256=, sha1=, hmac-sha256=) antes de comparar.
+  const limpa = (v) => String(v || '').trim().replace(/^(sha256|sha1|hmac-sha256|hmac)[=\s:]+/i, '');
+  for (const [h, v] of Object.entries(cab || {})) {
+    const alvo = limpa(v);
+    if (!alvo || alvo.length < 16) continue;
+    for (const [nome, esperado] of Object.entries(cand)) {
+      if (alvo.toLowerCase() === String(esperado).toLowerCase()) {
+        return { verified: 1, info: 'cabecalho=' + h + ' esquema=' + nome };
+      }
+    }
+  }
+  const quais = Object.keys(cab || {}).filter((h) => /sign|hash|hmac|secret|token|auth/i.test(h)).join(',');
+  return { verified: 0, info: 'nenhum casou' + (quais ? ' (candidatos vistos: ' + quais + ')' : '') };
+}
+
+// A API PUBLICA DO PAYLOG NORMAL (ev.paylog.cash) - achada em 06/10/2026.
+// Nao confundir com `after.paylog.cash`, que e o AfterPayLog e tem OUTRO token. As rotas desta
+// aqui sao em PORTUGUES (/api/v1/produtos, /api/v1/pedidos, /api/v1/clientes, /api/v1/pacotes,
+// /api/v1/frete/calcular), o que e exatamente por que as tentativas em ingles davam 404.
+//
+// O QUE ELA TEM E O AFTERPAYLOG NAO TINHA: estoque por produto (/produtos devolve { estoque }) e
+// ENDERECO do cliente na propria listagem de pedidos. Eram os dois buracos que obrigavam a digitar
+// na mao.
+async function _pl2Api(env, caminho) {
+  const tok = (env && env.PAYLOG2_TOKEN) || '';
+  if (!tok) return { erro: 'sem token' };
+  try {
+    const r = await _fetchComTeto('https://ev.paylog.cash' + caminho, 20000, {
+      headers: { Authorization: 'Bearer ' + tok, Accept: 'application/json' },
+    });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (_) {}
+    if (!r.ok) return { erro: 'http ' + r.status, corpo: String(txt).slice(0, 300) };
+    return { ok: true, dados: j };
+  } catch (e) { return { erro: String((e && e.message) || e) }; }
+}
+
+// GET /api/paylog2/estoque - quanto a PayLog diz que tem, e quanto o nosso extrato diz.
+//
+// POR QUE SO COMPARA E NAO CONSERTA SOZINHO: o saldo da dash e um livro-caixa (data.estoque_movs)
+// e lancar ajuste automatico por diferenca apagaria a unica pista de QUANTO entrou sem registro.
+// A tela mostra os dois numeros e o Bruno decide; quem lanca o ajuste e ele, com motivo escrito.
+async function handlePaylog2Estoque(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const r = await _pl2Api(env, '/api/v1/produtos?per_page=500');
+  if (!r.ok) return json({ ok: false, erro: r.erro, corpo: r.corpo }, 502);
+  const lista = ((r.dados && r.dados.data) || []).map((p) => ({
+    id: p.id, nome: p.nome, status: p.status, estoque: Number(p.estoque || 0),
+  }));
+  const naPaylog = lista.reduce((a, p) => a + p.estoque, 0);
+
+  // O nosso lado: mesma conta do fechaEstoque do front (entrada + reintegracao + ajuste - perda - saida).
+  let nosso = null, movs = 0;
+  try {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    const st = row && row.data ? JSON.parse(row.data) : {};
+    const arr = (st && st.estoque_movs) || [];
+    movs = arr.length;
+    const t = {};
+    for (const m of arr) t[m.tipo] = (t[m.tipo] || 0) + Number(m.qtd || 0);
+    nosso = (t.entrada || 0) + (t.reintegracao || 0) + (t.ajuste || 0) - (t.perda || 0) - (t.saida_pedido || 0);
+  } catch (_) {}
+
+  return json({
+    ok: true, produtos: lista, naPaylog, nosso, movimentos: movs,
+    diferenca: (nosso === null ? null : naPaylog - nosso),
+    dica: 'diferenca positiva = entrada que existe na PayLog e nunca foi lancada no extrato da dash',
+  });
 }
 
 async function handlePaylog2Capture(req, env, subpath, ctx) {
@@ -1525,13 +1625,15 @@ async function handlePaylog2Capture(req, env, subpath, ctx) {
       const ev = p ? cava(p.event, p.type, p.event_type, p.status, (p.data && (p.data.event || p.data.type || p.data.status))) : '';
       const cod = p ? cava(p.code, (p.order && (p.order.code || p.order.id)), (p.data && (p.data.code || (p.data.order && p.data.order.code))), p.order_code, p.id) : '';
       const idem = cava(cab['idempotency-key'], cab['x-idempotency-key'], cab['x-request-id']);
+      const asg = await _pl2Assinatura(env, raw, cab);
       await env.DB.prepare(
-        'INSERT INTO paylog2_debug (ts, subpath, method, event, order_code, idem, query, headers, body) VALUES (?,?,?,?,?,?,?,?,?)'
+        'INSERT INTO paylog2_debug (ts, subpath, method, event, order_code, idem, query, headers, body, verified, sig_info) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
       ).bind(
         Date.now(), String(subpath || ''), req.method, ev, cod, idem,
-        u.search || '', JSON.stringify(cab).slice(0, 4000), String(raw).slice(0, 60000)
+        u.search || '', JSON.stringify(cab).slice(0, 4000), String(raw).slice(0, 60000),
+        asg.verified, asg.info
       ).run();
-      console.log('PAYLOG2 capturado event=' + ev + ' code=' + cod + ' subpath=' + String(subpath || ''));
+      console.log('PAYLOG2 capturado event=' + ev + ' code=' + cod + ' assinatura=' + (asg.verified ? 'OK ' : 'nao ') + asg.info);
     } catch (e) { console.log('PAYLOG2 falhou ao guardar: ' + String((e && e.message) || e)); }
   })();
   try { if (ctx && ctx.waitUntil) ctx.waitUntil(guardar); else await guardar; } catch (_) { await guardar; }
@@ -1547,7 +1649,7 @@ async function handlePaylog2Debug(req, env) {
   const urlD = new URL(req.url);
   const lim = Math.min(200, Math.max(1, Number(urlD.searchParams.get('limit') || 50)));
   const r = await env.DB.prepare(
-    'SELECT id, ts, subpath, method, event, order_code, idem, query, body FROM paylog2_debug ORDER BY id DESC LIMIT ?'
+    'SELECT id, ts, subpath, method, event, order_code, idem, verified, sig_info, query, headers, body FROM paylog2_debug ORDER BY id DESC LIMIT ?'
   ).bind(lim).all();
   const linhas = (r && r.results) || [];
   const eventos = {};
@@ -22437,6 +22539,7 @@ export default {
       // PAYLOG 2.0 (plataforma 'PayLog normal'): porta PROPRIA, so captura. Fica ANTES do
       // /paylog de proposito, pra ninguem confundir as duas portas no futuro.
       if (req.method === 'GET' && path === '/api/paylog2/debug') return handlePaylog2Debug(req, env);
+      if (req.method === 'GET' && path === '/api/paylog2/estoque') return handlePaylog2Estoque(req, env);
       const pl2Match = path.match(/^\/paylog2(?:\/(.*))?$/);
       if (pl2Match) return handlePaylog2Capture(req, env, pl2Match[1] || '', ctx);
       const plMatch = path.match(/^\/paylog(?:\/(.*))?$/);
