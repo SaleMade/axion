@@ -1207,7 +1207,9 @@ async function _plReconciliar(env, opts) {
       const shNovo = (q.shipping && q.shipping.shippingStatus) ? String(q.shipping.shippingStatus).toUpperCase() : '';
       const chNovo = (q.charge && q.charge.status) ? String(q.charge.status).toUpperCase() : '';
       const shCodeNovo = (q.shipping && q.shipping.shippingCode) ? String(q.shipping.shippingCode) : '';
-      const cmNovo = (q.charge && q.charge.paymentMethod) ? String(q.charge.paymentMethod).toLowerCase() : '';
+      // O meio do pedido PENDENTE tambem conta como mudanca (07/10/2026, item 5): e assim que ele chega
+      // ao five_orders e ao card uma vez; depois fica igual e a varredura volta a pular o pedido.
+      const cmNovo = (q.charge && q.charge.paymentMethod) ? String(q.charge.paymentMethod).toLowerCase() : String(q.__plMetodo || '').toLowerCase();
       const mudou = !atual
         || (shNovo && shNovo !== String(atual.shipping_status || '').toUpperCase())
         || (chNovo && chNovo !== String(atual.charge_status || '').toUpperCase())
