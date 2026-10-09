@@ -1170,6 +1170,10 @@ function _plApiToFive(o, mundo) {
   }
   const afl = (o.affiliate && o.affiliate.code) || null;
   if (afl) q.commissions = [{ affiliateId: String(afl), type: 'AFFILIATION', percent: null, amount: null }];
+  // VEIO DA VARREDURA, NAO DE UM EVENTO (09/10/2026, item 13): a API nao diz QUANDO o pedido saiu ou
+  // chegou, so o estado de agora. Marcar aqui e o que impede o _fiveUpsertOrder de carimbar
+  // shipped_ts/delivered_ts com a hora da varredura, que seria uma data inventada.
+  q.__reconciliacao = true;
   return q;
 }
 
@@ -1238,6 +1242,12 @@ async function _plReconciliar(env, opts) {
         || (chNovo && chNovo !== String(atual.charge_status || '').toUpperCase())
         || (shCodeNovo && shCodeNovo !== String(atual.shipping_code || ''))
         || (cmNovo && cmNovo !== String(atual.charge_method || '').toLowerCase());
+      // PAID QUE SO A VARREDURA VIU (09/10/2026, item 38): sinal de webhook pausado ou perdido na
+      // PayLog. Fica no log pra alguem perceber antes de a receita do dia aparecer atrasada.
+      if (chNovo === 'PAID' && atual && String(atual.charge_status || '').toUpperCase() !== 'PAID') {
+        linha.pago_pela_varredura = true;
+        console.log('PAYLOG varredura: PAID sem webhook ' + String(q.orderId) + ' (' + String(o.code) + ')');
+      }
       if (!mudou) { linha.igual = true; saida.push(linha); continue; }
     }
     if (!dry && modo !== 'off') {
@@ -1340,17 +1350,67 @@ async function _cronPaylogAbertos(env) {
 
 // GET /api/paylog/sync — so diretor. `?dry=1` mostra o que ENTRARIA sem gravar nada, que e como
 // se confere uma esteira nova sem apostar o dia de campanha nela.
+// O MUNDO TEM PAYLOG? (09/10/2026, item 38). Mundo '' e a casa (token em app_config pl_token ou no
+// secret PAYLOG_TOKEN); mundo 'afl_xxx' e um afiliado, que precisa existir (five_affiliates ou
+// users.afiliado_id) E ter pl_token__<mundo>. Sem isso a varredura ia bater na API com token vazio
+// e devolver um erro generico que o Bruno leria como "a PayLog caiu".
+async function _plMundoPronto(env, mundo) {
+  const m = String(mundo || '');
+  if (!m) {
+    const tok = (await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || '');
+    return tok ? { ok: true } : { ok: false, erro: 'a casa nao tem PayLog configurada' };
+  }
+  let existe = false;
+  try {
+    const r = await env.DB.prepare('SELECT 1 AS x FROM five_affiliates WHERE affiliate_id = ? UNION SELECT 1 AS x FROM users WHERE afiliado_id = ? LIMIT 1').bind(m, m).first();
+    existe = !!(r && r.x);
+  } catch (_) { existe = false; }
+  if (!existe) return { ok: false, erro: 'afiliado nao encontrado' };
+  const tok = await _readConfig(env, _cfgNome('pl_token', m));
+  if (!tok) return { ok: false, erro: 'afiliado sem PayLog configurada' };
+  return { ok: true };
+}
+
+// GET /api/paylog/mundos - so diretor. Quais mundos tem pl_token: e o que o Kanban usa pra desligar
+// o botao "Sincronizar PayLog" com explicacao, em vez de deixar clicar e falhar.
+async function handlePaylogMundos(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const lista = (await _mundosCom(env, 'pl_token')).filter((m) => m !== '');
+  const casa = !!((await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || ''));
+  return json({ ok: true, mundos: lista, casa });
+}
+
+// GET ou POST /api/paylog/sync - so diretor. Parametros no corpo (POST) ou na query (GET):
+// mundo, de, ate, per_page, page, busca, dry. `dry=1` mostra o que ENTRARIA sem gravar nada.
+// SEMPRE soMudou quando grava (09/10/2026): este era o unico caminho que ainda regravava o blob
+// inteiro por pedido - 100 pedidos de um ano = 100 reescritas de 1 MB num clique. Teto de 90 dias e
+// 50 por pagina pelo mesmo motivo.
 async function handlePaylogSync(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Sem permissão', 403);
   const q = new URL(req.url).searchParams;
+  let b = null;
+  if (req.method === 'POST') { b = await req.json().catch(() => null); }
+  const pega = (k) => { const v = (b && b[k] != null) ? b[k] : q.get(k); return v == null ? '' : String(v); };
+  const mundo = pega('mundo').trim();
+  const pronto = await _plMundoPronto(env, mundo);
+  if (!pronto.ok) return json({ ok: false, erro: pronto.erro, mundo });
+  const dry = pega('dry') === '1' || pega('dry') === 'true';
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  let ate = /^\d{4}-\d{2}-\d{2}$/.test(pega('ate')) ? pega('ate') : hojeISO;
+  let de = /^\d{4}-\d{2}-\d{2}$/.test(pega('de')) ? pega('de') : '';
+  const ateMs = Date.parse(ate + 'T00:00:00Z');
+  const pisoMs = ateMs - 90 * 86400000;
+  if (!de || Date.parse(de + 'T00:00:00Z') < pisoMs) de = new Date(pisoMs).toISOString().slice(0, 10);
+  const perPage = Math.min(50, Math.max(1, Number(pega('per_page')) || 50));
+  const page = Math.max(1, Number(pega('page')) || 1);
   const r = await _plReconciliar(env, {
-    dry: q.get('dry') === '1',
-    de: q.get('de') || '', ate: q.get('ate') || '', busca: q.get('busca') || '',
-    perPage: Number(q.get('per_page')) || 50, page: Number(q.get('page')) || 1,
+    mundo, dry, de, ate, busca: pega('busca'), perPage, page, soMudou: !dry,
   });
-  return json(r);
+  return json(Object.assign({ mundo, de, ate }, r));
 }
 
 // ── O TRADUTOR ─────────────────────────────────────────────────────────────
@@ -1459,6 +1519,11 @@ function _plToFive(p) {
   // vazia ate hoje e a comissao de afiliado da zero pra tudo. Aqui vem no evento.
   const afl = (ord.affiliate && ord.affiliate.code) || null;
   if (afl) q.commissions = [{ affiliateId: String(afl), type: 'AFFILIATION', percent: null, amount: null }];
+
+  // A HORA REAL DO EVENTO (09/10/2026, item 13): vira shipped_ts/delivered_ts em five_orders. Sem
+  // ela a dash so tinha o updated_at, que muda com qualquer coisa.
+  const _evTs = Date.parse(String(p.event_timestamp || ''));
+  if (_evTs > 0) q.__eventoTs = Math.floor(_evTs / 1000);
 
   return q;
 }
@@ -2036,7 +2101,7 @@ async function _ensureFiveTables(env) {
     'origem TEXT', 'updated_at INTEGER', 'slug TEXT']) {
     try { await env.DB.prepare('ALTER TABLE five_affiliates ADD COLUMN ' + col).run(); } catch (_) {}
   }
-  for (const col of ['charge_pago REAL', 'charge_juros REAL', 'fonte TEXT', 'charge_paid_ts INTEGER']) {
+  for (const col of ['charge_pago REAL', 'charge_juros REAL', 'fonte TEXT', 'charge_paid_ts INTEGER', 'shipped_ts INTEGER', 'delivered_ts INTEGER']) {
     try { await env.DB.prepare('ALTER TABLE five_orders ADD COLUMN ' + col).run(); } catch (_) {}
   }
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
@@ -2112,13 +2177,23 @@ async function _fiveUpsertOrder(env, p) {
   const now = Math.floor(Date.now() / 1000);
   const prod = p.product || {}, offer = prod.offer || {}, cust = p.customer || {}, proj = p.project || {};
   const charge = p.charge || null, ship = p.shipping || null;
+  // QUANDO O PEDIDO SAIU E QUANDO CHEGOU (09/10/2026, auditoria item 14/13). Ate aqui a dash media o
+  // atraso da cobranca por `updated_at`, que muda com QUALQUER evento (ate CHARGE_UPDATED depois da
+  // entrega) - o relogio zerava sozinho. Agora a hora do evento fica em coluna propria e so na
+  // TRANSICAO (ver o ON CONFLICT): reenvio de evento velho nao mexe. A hora e a do evento da PayLog
+  // (__eventoTs, do event_timestamp) ou o agora no webhook da Five; a varredura pela API
+  // (__reconciliacao) nunca carimba, porque a API nao diz quando aconteceu.
+  const _tsEvento = p.__reconciliacao ? null : ((Number(p.__eventoTs) > 0) ? Math.floor(Number(p.__eventoTs)) : now);
+  const _shNovo = (ship && ship.shippingStatus) ? String(ship.shippingStatus).toUpperCase() : '';
+  const _shippedTs = (_tsEvento && ship && (ship.shippingCode || _shNovo)) ? _tsEvento : null;
+  const _deliveredTs = (_tsEvento && _shNovo === 'DELIVERED') ? _tsEvento : null;
   await env.DB.prepare(`INSERT INTO five_orders
     (order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty,
      customer_name, customer_doc, customer_mail, customer_phone, customer_address,
      charge_status, charge_method, charge_amount, charge_pago, charge_juros, charge_code, charge_updated_at, commissions,
      shipping_platform, shipping_code, shipping_status, shipping_core_id,
-     last_event, last_status, created_at, updated_at, raw, fonte, charge_paid_ts)
-    VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?)
+     last_event, last_status, created_at, updated_at, raw, fonte, charge_paid_ts, shipped_ts, delivered_ts)
+    VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?, ?,?)
     ON CONFLICT(order_id) DO UPDATE SET
      project_id=COALESCE(excluded.project_id, five_orders.project_id), project_name=COALESCE(excluded.project_name, five_orders.project_name),
      product_id=COALESCE(excluded.product_id, five_orders.product_id), product_name=COALESCE(excluded.product_name, five_orders.product_name),
@@ -2139,6 +2214,8 @@ async function _fiveUpsertOrder(env, p) {
      shipping_core_id=COALESCE(excluded.shipping_core_id, five_orders.shipping_core_id),
      last_event=excluded.last_event, last_status=excluded.last_status,
      charge_paid_ts=COALESCE(five_orders.charge_paid_ts, excluded.charge_paid_ts),
+     shipped_ts=COALESCE(five_orders.shipped_ts, CASE WHEN five_orders.shipping_status IS NULL AND five_orders.shipping_code IS NULL AND COALESCE(five_orders.last_event,'') NOT LIKE 'SHIPPING%' THEN excluded.shipped_ts END),
+     delivered_ts=COALESCE(five_orders.delivered_ts, CASE WHEN COALESCE(five_orders.shipping_status,'') <> 'DELIVERED' THEN excluded.delivered_ts END),
      updated_at=excluded.updated_at, raw=excluded.raw`)
     .bind(oid, proj.id || null, proj.name || null, prod.id || null, prod.name || null,
       offer.id || null, offer.title || null, _num(offer.price), offer.numberOfItems != null ? _num(offer.numberOfItems) : null,
@@ -2155,8 +2232,17 @@ async function _fiveUpsertOrder(env, p) {
       ship ? (ship.platform || null) : null, ship ? (ship.shippingCode || null) : null, ship && ship.shippingStatus ? String(ship.shippingStatus).toUpperCase() : null, ship ? (ship.coreShippingId || null) : null,
       p.event || null, p.eventStatus || null, now, now, JSON.stringify(p).slice(0, 40000),
       p.__fonte || 'five',
-      // data em que a plataforma disse PAID (charge.updatedAt, ISO ou o formato longo do Node)
-      (charge && String(charge.status || '').toUpperCase() === 'PAID' && Date.parse(String(charge.updatedAt || '')) > 0) ? Math.floor(Date.parse(String(charge.updatedAt)) / 1000) : null).run();
+      // data em que a plataforma disse PAID (charge.updatedAt, ISO ou o formato longo do Node).
+      // SEM DATA, VALE O AGORA (09/10/2026, auditoria item 38): a API da PayLog nao traz a hora do
+      // pagamento, entao o PAID que entra pela varredura (webhook perdido ou pausado) chegava aqui
+      // com null e o pedido ficava pago SEM DATA - o pagoTsO caia na criacao e a venda aparecia no
+      // dia do pedido, nao no dia em que pagou. Espelha o pago_ts = Date.now() do lead. O COALESCE
+      // do ON CONFLICT segue: a primeira data gravada fica, e o webhook (que normalmente chega antes
+      // da varredura de 30 min) continua vencendo no caso comum.
+      (charge && String(charge.status || '').toUpperCase() === 'PAID')
+        ? ((Date.parse(String(charge.updatedAt || '')) > 0) ? Math.floor(Date.parse(String(charge.updatedAt)) / 1000) : now)
+        : null,
+      _shippedTs, _deliveredTs).run();
 
   // Catálogo de produto (stub) — conecta pedido -> produto do produtor
   if (prod.id) {
@@ -2425,7 +2511,28 @@ async function _fiveUpsertLead(env, p, ctx) {
   // nao vem nunca (a conta e DELE la, nao existe "afiliado" no payload), entao quem sabe e a PORTA
   // por onde o evento entrou - e ela carimba `p.afl`. A comissao continua tendo prioridade: quando
   // a plataforma diz de quem e, ela ganha.
-  const _affId = ((Array.isArray(p.commissions) && p.commissions.length) ? p.commissions[0].affiliateId : null) || p.afl || null;
+  const _c0 = (Array.isArray(p.commissions) && p.commissions[0]) ? p.commissions[0] : null;
+  const _codPlat = (_c0 && _c0.affiliateId) ? String(_c0.affiliateId).trim() : '';
+  const _aflPorta = p.afl ? String(p.afl).trim() : '';
+  const _affId = _codPlat || _aflPorta || null;
+  // O CODIGO DA PLATAFORMA SO VALE QUANDO ESTA VINCULADO (09/10/2026, item 38). Um codigo de afiliado
+  // que a PayLog/Five manda e que NAO casa com five_affiliates.our_user_id nem com users.afiliado_id
+  // ia virar lead.afl do mesmo jeito - e o card sumia da casa (o Kanban filtra por afl) sem ninguem
+  // ter esse afiliado cadastrado. Agora: codigo vinculado vence; senao vale a PORTA (p.afl, a conta
+  // PayLog por onde o evento entrou); senao o card fica na CASA e o codigo vai pra lead.afl_plat, com
+  // log, ate o diretor vincular. Resolvido aqui, fora do CAS, pra nao repetir leitura a cada tentativa.
+  let _codVinculado = false;
+  if (_codPlat) {
+    _codVinculado = !!(await resolveAtByAffiliate(env, _codPlat));
+    if (!_codVinculado) {
+      try {
+        const _ru = await env.DB.prepare('SELECT 1 AS x FROM users WHERE afiliado_id = ? LIMIT 1').bind(_codPlat).first();
+        _codVinculado = !!(_ru && _ru.x);
+      } catch (_) { _codVinculado = false; }
+    }
+  }
+  const _aflFinal = (_codPlat && _codVinculado) ? _codPlat : _aflPorta;
+  if (_codPlat && !_codVinculado) console.log('AFILIADO NAO VINCULADO ' + _codPlat + ' no pedido ' + String(oid) + (_aflPorta ? ' (vale a porta ' + _aflPorta + ')' : ' (card fica na casa)'));
   const attribAt = (await resolveAtByAffiliate(env, _affId))
     || (cust.document ? await resolveAtByCpf(env, cust.document) : null)
     || (cust.phoneNumber ? await resolveAtByPhone(env, cust.phoneNumber) : null);
@@ -2574,10 +2681,13 @@ async function _fiveUpsertLead(env, p, ctx) {
     // afiliado filtram por este campo; sem ele o pedido de afiliado ficaria indistinguivel do nosso
     // e o afiliado veria pedido que nao e dele. Sempre atualiza (nao e setIf): quem manda e a Five,
     // e um evento posterior corrigindo o afiliado tem que valer.
-    if (_affId) {
-      lead.afl = String(_affId);
-      const _an = (p.commissions[0] && (p.commissions[0].affiliateName || p.commissions[0].name)) || null;
+    if (_aflFinal) {
+      lead.afl = String(_aflFinal);
+      const _an = (_c0 && (_c0.affiliateName || _c0.name)) || null;
       if (_an) lead.afl_nome = String(_an);
+      if (lead.afl_plat) delete lead.afl_plat;
+    } else if (_codPlat) {
+      lead.afl_plat = _codPlat;   // rastro pro diretor vincular; NAO e escopo (o card segue na casa)
     }
     // Preenche só o que está vazio (um evento não apaga o que outro trouxe).
     const setIf = (k, v) => { if (v != null && v !== '' && (lead[k] == null || lead[k] === '')) lead[k] = v; };
@@ -7429,7 +7539,7 @@ let _waLeadSrcOk = false;                    // o ALTER do /pressels-total.json 
 let _saleDdlOk = false;                      // a DDL do /api/wa/sales ja rodou neste isolate
 // AS COLUNAS DA five_orders, sem `raw` (22/09/2026, ver /api/five/orders). Tiradas do PRAGMA da
 // tabela no banco de producao; coluna nova precisa entrar aqui pra chegar na tela.
-const COLS_FIVE_ORDERS = 'order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty, customer_name, customer_doc, customer_mail, customer_phone, customer_address, charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions, shipping_platform, shipping_code, shipping_status, shipping_core_id, last_event, last_status, created_at, updated_at, estoque_baixado, devolucao_id, charge_pago, charge_juros, fonte, charge_paid_ts';
+const COLS_FIVE_ORDERS = 'order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty, customer_name, customer_doc, customer_mail, customer_phone, customer_address, charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions, shipping_platform, shipping_code, shipping_status, shipping_core_id, last_event, last_status, created_at, updated_at, estoque_baixado, devolucao_id, charge_pago, charge_juros, fonte, charge_paid_ts, shipped_ts, delivered_ts';
 let _cfgTablesOk = false, _waTablesOk = false, _scTablesOk = false, _saleTablesOk = false, _leadTablesOk = false, _attribTablesOk = false, _cpfTablesOk = false, _fiveTablesOk = false;
 async function _ensureConfigTable(env) {
   if (_cfgTablesOk) return;
@@ -21608,7 +21718,10 @@ export default {
       if (fiveMatch) return handleFiveCapture(req, env, fiveMatch[1] || '', ctx);
       // Webhook da PayLog. Rota IRMA da de cima, e por enquanto so escuta (ver handlePaylogCapture).
       // A URL a cadastrar no painel deles tem que ser completa, com https://.
-      if (req.method === 'GET' && path === '/api/paylog/sync') return handlePaylogSync(req, env);
+      // GET e POST (09/10/2026, auditoria item 38): o botao "Sincronizar PayLog" do Kanban manda POST
+      // com {mundo, de, ate, per_page} e caia em 404 'Rota nao encontrada' - a rota so aceitava GET.
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/paylog/sync') return handlePaylogSync(req, env);
+      if (req.method === 'GET' && path === '/api/paylog/mundos') return handlePaylogMundos(req, env);
       if (req.method === 'POST' && path === '/api/paylog/fotos') return handlePaylogFotos(req, env, ctx);
       // PAYLOG 2.0 (plataforma 'PayLog normal'): porta PROPRIA, so captura. Fica ANTES do
       // /paylog de proposito, pra ninguem confundir as duas portas no futuro.
