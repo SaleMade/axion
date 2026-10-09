@@ -4569,10 +4569,7 @@ async function _stateConexoes(env, uVis) {
     // mediana pra devolver 156 bytes, dentro de uma rota de 2,0s. As chaves sao as mesmas e a regra
     // de queda tambem; so a busca virou um SELECT com IN.
     const _chavesC = ['dc_api_key', 'pl_token', 'pl_secret', 'five_token', 'payt_token'];
-    const _cfgC = await _readConfigMuitas(env, [
-      ..._chavesC.map((k) => _cfgNome(k, _m)),
-      'wa_url', 'wa_key',
-    ]);
+    const _cfgC = await _readConfigMuitas(env, _chavesC.map((k) => _cfgNome(k, _m)));
     // A MESMA REGRA DO _integChave, em memoria: no mundo do afiliado vale so a chave DELE (sem
     // queda pro segredo do servidor, que e nosso); na casa vale a chave salva e, faltando ela, o
     // secret do worker ou o padrao.
@@ -4584,10 +4581,7 @@ async function _stateConexoes(env, uVis) {
     };
     const _dc = _tem('dc_api_key');
     const _pl = _tem('pl_token') && _tem('pl_secret');
-    // Evolution ainda e UMA por dash (nao tem dono): o afiliado atende pelos numeros conectados no
-    // mesmo servidor, entao pra ele isto vale igual. No dia em que ela virar por dono, e so passar
-    // o `_m` aqui.
-    const _wa = !!_cfgC.wa_url && !!_cfgC.wa_key;
+    const _wa = false;   // a Evolution saiu em 09/10/2026: o atendimento e alimentado pelo Datacrazy
     const _five = _m ? false : _tem('five_token');
     const _payt = _m ? false : _tem('payt_token');
     conexoes = {
@@ -9139,34 +9133,12 @@ async function handleFornecedorWebhook(req, env, urlToken) {
   }
 }
 
-// ─── WhatsApp (Evolution API) ─────────────────────────────────
-// A Dash chama o Worker (HTTPS) e o Worker repassa pra Evolution API na VPS.
-// Vantagem dupla: esconde a API key da Evolution (fica só no D1, nunca no
-// frontend) e evita mixed-content — navegador bloqueia https→http direto.
-// Config guardada no D1 (app_config): wa_url, wa_key, wa_instance.
-
-// Config da Evolution em CACHE por isolate. Antes eram 3 SELECTs no D1 a cada evoFetch, e o D1 fica
-// em outra região: ~100ms por leitura. Abrir o QR faz 3 evoFetch, ou seja ~1s jogado fora só lendo
-// config que quase nunca muda. Com cache, o custo vira zero da 2ª chamada em diante.
-let _waCfgCache = null, _waCfgAt = 0;
-const WA_CFG_TTL = 60000;
-function _waCfgInvalidate() { _waCfgCache = null; _waCfgAt = 0; }
-async function getWAConfig(env) {
-  if (_waCfgCache && (Date.now() - _waCfgAt) < WA_CFG_TTL) return _waCfgCache;
-  // as 3 leituras não dependem uma da outra: em paralelo custam 1 ida, não 3
-  const [url, key, instance] = await Promise.all([
-    _readConfig(env, 'wa_url'), _readConfig(env, 'wa_key'), _readConfig(env, 'wa_instance'),
-  ]);
-  _waCfgCache = {
-    url: String(url || '').replace(/\/+$/, ''),
-    key: key || '',
-    instance: instance || '',
-  };
-  _waCfgAt = Date.now();
-  return _waCfgCache;
-}
-
-// Normaliza número pro formato da Evolution (DDI+DDD+numero, só dígitos)
+// ─── WhatsApp ───────────────────────────────────────────────────────────
+// A PONTE DA EVOLUTION (QR/VPS) SAIU DAQUI em 09/10/2026, a pedido do Bruno ("nunca mais o
+// utilizarei, quero remover permanentemente"): config wa_url/wa_key/wa_instance, evoFetch, QR,
+// instancias, status, webhook de volta e cron. O WhatsApp da operacao e a Cloud API oficial
+// (numeros em wa_api_numbers) com o inbound pelo Datacrazy e a captura pelo Sale Chat.
+// Normaliza número pro formato do WhatsApp (DDI+DDD+numero, só dígitos)
 function waNumber(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (!d) return '';
@@ -9246,7 +9218,7 @@ async function handleConexoesGet(req, env) {
     // _stateConexoes). Medido no ar antes: 1,13s de mediana pra devolver 156 bytes, porque eram sete
     // SELECTs em serie no app_config e o banco fica em outra regiao. A regra de queda e a mesma.
     const _chaves = ['dc_api_key', 'pl_token', 'pl_secret', 'five_token', 'payt_token'];
-    const _cfg = await _readConfigMuitas(env, [..._chaves.map((k) => _cfgNome(k, mundo)), 'wa_url', 'wa_key']);
+    const _cfg = await _readConfigMuitas(env, _chaves.map((k) => _cfgNome(k, mundo)));
     const tem = (k) => {
       if (_cfg[_cfgNome(k, mundo)]) return true;
       if (mundo) return false;   // o mundo do afiliado nao herda o segredo da casa (ver _integChave)
@@ -9255,7 +9227,7 @@ async function handleConexoesGet(req, env) {
     };
     const dc = tem('dc_api_key');
     const pl = tem('pl_token') && tem('pl_secret');
-    const wa = !!_cfg.wa_url && !!_cfg.wa_key;
+    const wa = false;   // a Evolution saiu em 09/10/2026
     const five = mundo ? false : tem('five_token');
     const payt = mundo ? false : tem('payt_token');
     return json({
@@ -9521,96 +9493,6 @@ async function handleIntegracoesTest(req, env) {
   return err('Alvo desconhecido');
 }
 
-async function handleWAConfigGet(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode ver config do WhatsApp', 403);
-  const cfg = await getWAConfig(env);
-  const mask = k => k ? (k.length < 12 ? k.slice(0, 3) + '…' : `${k.slice(0, 6)}…${k.slice(-4)}`) : null;
-  return json({
-    configured: !!(cfg.url && cfg.key && cfg.instance),
-    url: cfg.url,
-    instance: cfg.instance,
-    key_preview: mask(cfg.key),
-  });
-}
-
-// POST /api/config/wa → salva { url, key, instance } (qualquer um pode vir)
-async function handleWAConfigSet(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode mudar config do WhatsApp', 403);
-  const body = await req.json().catch(() => null);
-  if (!body) return err('Body inválido');
-  if (body.url !== undefined)      await _writeConfig(env, 'wa_url', String(body.url || '').trim().replace(/\/+$/, ''));
-  if (body.key !== undefined)      await _writeConfig(env, 'wa_key', String(body.key || '').trim());
-  if (body.instance !== undefined) await _writeConfig(env, 'wa_instance', String(body.instance || '').trim());
-  _waCfgInvalidate();   // senão o cache serviria a config velha por até 1min depois de salvar
-  return json({ ok: true });
-}
-
-// GET /api/wa/status → saúde da integração Evolution: cadastrada? servidor no ar? quantos números
-// conectados AGORA? Antes checava só UMA instância padrão (wa_instance); com vários números por QR,
-// essa instância "padrão" some/muda e o card acusava "Offline" mesmo com números conectados. Agora
-// não depende dela: 503 só sem servidor (url/key), 502 se o servidor cair, senão conta os 'open'.
-async function handleWAStatus(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
-  try {
-    const list = await _evoInstances(env);   // TODAS as instâncias [{name, state, number}]
-    if (list == null) return err('Evolution não respondeu', 502);
-    const open = list.filter(i => String(i.state || '').toLowerCase() === 'open');
-    // estado da instância padrão, se ela existir (compat com telas antigas que leem state/instance)
-    let dstate = 'unknown';
-    if (cfg.instance) { const di = list.find(i => i.name === cfg.instance); dstate = di ? di.state : 'unknown'; }
-    return json({ ok: true, configured: true, server: true, connected: open.length, total: list.length, state: dstate, instance: cfg.instance || '' });
-  } catch (e) {
-    return err('Falha ao falar com a Evolution: ' + e.message, 502);
-  }
-}
-
-// POST /api/wa/send → { number, text, instance? } envia texto.
-// Se instance não vier, usa a instância padrão configurada (wa_instance).
-// Qual instância usar pra ENVIAR a resposta do atendente.
-// Com a instância POR NÚMERO, mandar pra `ax_<vendedor>` (hoje fechada) ou pra instância padrão
-// `wa_instance` (que pode nem existir na VPS, no caso do Bruno era "salemade") fazia a resposta
-// falhar em silêncio. Ordem de preferência:
-//   1) a que o front pediu, SE estiver conectada agora
-//   2) a que ATENDEU esse telefone (responde pelo mesmo número que o lead procurou)
-//   3) qualquer instância conectada desse vendedor
-//   4) o que veio (comportamento antigo), pra não quebrar setup legado
-async function _resolveSendInstance(env, { atId, phone, hint }) {
-  const conectada = async (name) => {
-    if (!name) return false;
-    try {
-      const r = await env.DB.prepare(
-        "SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600"
-      ).bind(name).first();
-      return !!r;
-    } catch (_) { return false; }
-  };
-  if (hint && await conectada(hint)) return hint;
-  try {
-    const d = String(phone || '').replace(/\D/g, '');
-    if (d) {
-      const row = await env.DB.prepare('SELECT instance FROM wa_attrib WHERE phone=?').bind(d).first();
-      if (row && row.instance && await conectada(row.instance)) return row.instance;
-    }
-  } catch (_) {}
-  try {
-    if (atId) {
-      const row = await env.DB.prepare(
-        // só 'open' (Evolution): 'sc' é Sale Chat, que hoje SÓ captura, não envia. Escolher uma
-        // instância 'sc' aqui mandaria o texto pra uma instância que nem existe na Evolution.
-        "SELECT instance FROM wa_conn WHERE state='open' AND updated_at > strftime('%s','now')-600 AND (instance=? OR instance LIKE ?) ORDER BY updated_at DESC LIMIT 1"
-      ).bind('ax_' + atId, 'ax_' + atId + '_%').first();
-      if (row && row.instance) return row.instance;
-    }
-  } catch (_) {}
-  return String(hint || '').trim();
-}
 // A conversa é de um número OFICIAL (Cloud API)? Descobre pela INSTÂNCIA da própria conversa, não
 // pelo dono. O sync do Datacrazy (_dcSyncInbox) grava a conversa como `ax_<at>_<8 últimos dígitos do
 // NOSSO número>` (e `dc_<num>` quando o número ainda não tem dono). Esses 8 dígitos identificam o
@@ -9658,58 +9540,25 @@ async function handleWASend(req, env) {
   const body = await req.json().catch(() => null);
   if (!body || !body.number || !body.text) return err('Campos obrigatórios: number, text');
   if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
-  // Roteamento: responde PELO MESMO NÚMERO em que a conversa está.
-  // O sufixo `_<8díg>` sozinho NÃO quer dizer Evolution: o sync do Datacrazy grava a conversa do
-  // número OFICIAL nesse mesmo formato. A regra antiga (`_convEvo`) tratava o sufixo como Evolution e
-  // por isso mandava 100% do inbox oficial pra uma instância que nem existe na VPS (wa_conn não tem
-  // ax_atendente_iqq91p_91258028 / ax_atendente_vra3lh_74076200 / ax_atendente_vra3lh_91215713), e a
-  // resposta morria em 502 "Evolution respondeu 404".
-  // Ordem nova: (1) a instância casa com um número oficial NOSSO -> Cloud API por ESSE número;
-  // (2) instância sem identidade de número -> regra antiga (número oficial do dono, se tiver);
-  // (3) qualquer outro caso segue pra Evolution exatamente como hoje.
+  // SO CLOUD API (09/10/2026, a Evolution saiu da operacao). A conversa carimbada com um numero
+  // oficial NOSSO responde por ESSE numero (_apiNumFromInstance); instancia sem identidade de
+  // numero resolve pelo vendedor (resolveApiNumber). Sem numero oficial, nao existe canal: o erro
+  // sai com motivo em vez de cair calado num caminho que nao existe mais.
   const _atId = (isDirector(u) && body.at_id != null) ? String(body.at_id) : String(u.id);
   const _instConv = String(body.instance || '');
-  // instância que carrega identidade de NÚMERO (a que a regra antiga jogava direto na Evolution)
   const _convPorNumero = /^ax_.+_\d{8}$/.test(_instConv) || /^dc_\d{8,}$/.test(_instConv);
   let _apiNum = null, _oficialFixo = false;
   try {
-    // A instância está VIVA na Evolution AGORA? Então o lead falou pelo app: responde pelo mesmo canal.
-    // Guarda contra o caso de coexistência em que o mesmo número existe nos dois lados.
-    const _evoViva = _instConv ? await env.DB.prepare(
-      "SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600"
-    ).bind(_instConv).first() : null;
-    if (!_evoViva) { _apiNum = await _apiNumFromInstance(env, _instConv); _oficialFixo = !!_apiNum; }
-    // sem identidade de número na instância -> comportamento antigo, pra não mexer em Sale Chat/legado
+    _apiNum = await _apiNumFromInstance(env, _instConv); _oficialFixo = !!_apiNum;
     if (!_apiNum && !_convPorNumero) _apiNum = await resolveApiNumber(env, { atId: _atId, instance: _instConv, convPhone: body.number });
   } catch (_) { _apiNum = null; _oficialFixo = false; }
-  // `_oficialFixo` = a conversa É daquele número oficial. Nesse caso a Evolution NÃO é alternativa:
-  // em vez de cair calado pro caminho errado, devolve o erro com motivo.
   if (_apiNum && _apiNum.phone_number_id && (_apiNum.verified || _oficialFixo)) {
     if (!_apiNum.verified) return json({ ok: false, error: 'Este número oficial ainda não foi registrado na Meta, então não dá pra responder por ele.', code: 'not_registered' }, 400);
     const r = await _waCloudSendText(env, _atId, body.number, body.text, _apiNum);
     if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
     return json({ ok: true, id: r.id, via: 'cloud', from: _apiNum.display_phone || null, to: waNumber(body.number) });
   }
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
-  const instance = (await _resolveSendInstance(env, { atId: _atId, phone: body.number, hint: body.instance }))
-    || String(body.instance || cfg.instance || '').trim();
-  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
-  const number = waNumber(body.number);
-  if (!number) return err('Número inválido');
-  try {
-    const r = await _fetchComTeto(`${cfg.url}/message/sendText/${instance}`, 12000, {
-      method: 'POST',
-      headers: { apikey: cfg.key, 'content-type': 'application/json' },
-      body: JSON.stringify({ number, text: String(body.text) }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return err(`Evolution respondeu ${r.status}: ${JSON.stringify(data).slice(0, 200)}`, 502);
-    await _waLogMsg(env, { phone: number, instance, direction: 'out', type: 'text', body: String(body.text), msgId: data?.key?.id });
-    return json({ ok: true, id: data?.key?.id || null, status: data?.status || null, to: number, instance });
-  } catch (e) {
-    return err('Falha ao enviar: ' + e.message, 502);
-  }
+  return json({ ok: false, error: 'Esta conversa não tem número oficial pra responder por ele.', code: 'no_official' }, 400);
 }
 
 // Envia TEXTO pela Cloud API oficial. `atId` define o número de origem (phone_number_id do vendedor).
@@ -9811,23 +9660,6 @@ async function _waCloudSendTemplate(env, atId, number, name, lang, params, bodyT
   try { await _waLogMsg(env, { phone: num, instance: _instT, direction: 'out', type: 'template', body: _logTxt, msgId: wamid }); } catch (_) {}
   return { ok: true, id: wamid || null };
 }
-// A CONVERSA ESTA NUMA EVOLUTION VIVA? Devolve a instancia, ou '' quando o caminho e Cloud API.
-// Existe porque o painel Sale Chat (texto rapido, audio do microfone, midia) mandava TUDO pela
-// Cloud API sem olhar onde a conversa vive. Com o vendedor trocando um numero restrito por um de
-// QR (21/08/2026), isso fazia o audio e a midia sairem pelo numero RESTRITO do mesmo vendedor -
-// o lead recebendo mensagem de um contato com quem nunca falou, pelo chip que acabou de ser punido.
-async function _instEvoViva(env, phone, hint) {
-  const num = String(phone || '').replace(/\D/g, '');
-  let inst = String(hint || '');
-  if (!inst && num) {
-    try { const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(num).first(); inst = String((c && c.instance) || ''); } catch (_) { inst = ''; }
-  }
-  if (!inst) return '';
-  try {
-    const viva = await env.DB.prepare("SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600").bind(inst).first();
-    return viva ? inst : '';
-  } catch (_) { return ''; }
-}
 async function handleWACloudSend(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -9839,16 +9671,6 @@ async function handleWACloudSend(req, env) {
     const rt = await _waCloudSendTemplate(env, atId, b.number, b.template.name, b.template.language, b.template.params, b.template.body);
     if (!rt.ok) return json({ ok: false, error: rt.error, code: rt.code || null }, 400);
     return json({ ok: true, id: rt.id, via: 'cloud-template' });
-  }
-  const _evo = await _instEvoViva(env, b.number, b.instance);
-  if (_evo) {
-    const num = String(b.number || '').replace(/\D/g, '');
-    const rr = await evoFetch(env, '/message/sendText/' + encodeURIComponent(_evo), { method: 'POST', body: { number: num, text: String(b.text || '') } });
-    if (!rr || rr.ok === false || rr._noconfig) return json({ ok: false, error: 'O WhatsApp deste número não respondeu agora. Tente de novo.', code: 'evo' }, 502);
-    const _id = (rr.data && rr.data.key && rr.data.key.id) || null;
-    try { await _waLogMsg(env, { phone: num, instance: _evo, direction: 'out', type: 'text', body: String(b.text || ''), msgId: _id }); } catch (_) {}
-    try { await _waDetectSale(env, _evo, { message: { conversation: String(b.text || '') }, key: { remoteJid: num + '@c.us', id: _id, fromMe: true } }); } catch (_) {}
-    return json({ ok: true, id: _id, via: 'evolution' });
   }
   const r = await _waCloudSendText(env, atId, b.number, b.text);
   if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
@@ -9872,28 +9694,6 @@ async function _waCloudDownloadMedia(env, mediaId, msgId) {
     const key = 'm/wa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
     await env.MEDIA.put(key, buf, { httpMetadata: { contentType: mime } });
     if (msgId) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(key, msgId).run(); } catch (_) {} }
-  } catch (_) {}
-}
-// Baixa a mídia INBOUND da Evolution pro R2 e seta media_url (igual _waCloudDownloadMedia faz pro Cloud).
-// A Evolution entrega o arquivo CHEIO decriptado (não só thumbnail) via getBase64FromMediaMessage — o
-// mesmo endpoint da transcrição de áudio. Roda em ctx.waitUntil (não bloqueia o ACK do webhook).
-async function _waEvoDownloadMedia(env, instance, key, mm, msgId) {
-  try {
-    if (!env.MEDIA || !msgId) return;
-    const node = mm.imageMessage || mm.audioMessage || mm.videoMessage || mm.documentMessage || mm.stickerMessage;
-    if (!node) return;
-    const media = await evoFetch(env, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
-      method: 'POST',
-      body: { message: { key: { id: key.id, remoteJid: key.remoteJid, fromMe: !!key.fromMe } } },
-    });
-    const b64 = media && media.data && media.data.base64; if (!b64) return;
-    const mime = String((media.data && media.data.mimetype) || node.mimetype || 'application/octet-stream').split(';')[0];
-    const bytes = _b64ToBytes(b64);
-    if (!bytes || !bytes.byteLength) return;
-    const ext = mime.indexOf('ogg') >= 0 ? 'ogg' : (mime.indexOf('mpeg') >= 0 || mime.indexOf('mp3') >= 0) ? 'mp3' : mime.indexOf('mp4') >= 0 ? 'mp4' : mime.indexOf('png') >= 0 ? 'png' : (mime.indexOf('jpeg') >= 0 || mime.indexOf('jpg') >= 0) ? 'jpg' : mime.indexOf('webp') >= 0 ? 'webp' : mime.indexOf('pdf') >= 0 ? 'pdf' : 'bin';
-    const rkey = 'm/wa' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + '.' + ext;
-    await env.MEDIA.put(rkey, bytes, { httpMetadata: { contentType: mime } });
-    try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(rkey, msgId).run(); } catch (_) {}
   } catch (_) {}
 }
 // Guarda bytes de mídia (base64) do injetor Sale Chat no R2 e devolve a key. '' se falhar.
@@ -10067,51 +9867,9 @@ async function handleWACloudSendMedia(req, env) {
   let b; try { b = await req.json(); } catch (_) { b = {}; }
   if (!(await _podeFalarNaConversa(env, u, b.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
-  const _evo = await _instEvoViva(env, b.number, b.instance);
-  if (_evo) {
-    const num = String(b.number || '').replace(/\D/g, '');
-    const kind = ['image', 'audio', 'video', 'document'].includes(String(b.kind)) ? String(b.kind) : 'document';
-    let rr = null;
-    if (kind === 'audio') {
-      // NOTA DE VOZ, nao arquivo de audio: e assim que o vendedor grava no microfone da dash.
-      let b64 = '';
-      try { if (b.mediaKey && env.MEDIA) { const o = await _r2Get(env, String(b.mediaKey)); if (o) b64 = _bytesToB64(new Uint8Array(await o.arrayBuffer())); } } catch (_) {}
-      if (!b64 && b.link) { try { const g = await _fetchComTeto(String(b.link), 15000); if (g.ok) b64 = _bytesToB64(new Uint8Array(await g.arrayBuffer())); } catch (_) {} }
-      if (!b64) return json({ ok: false, error: 'Não consegui ler o áudio pra enviar.', code: 'sem_midia' }, 400);
-      rr = await _waSendAudio(env, _evo, num, b64);
-    } else {
-      rr = await _waSendMedia(env, _evo, num, { mediatype: kind, media: String(b.link || ''), ...(b.filename ? { fileName: String(b.filename) } : {}), ...(b.caption ? { caption: String(b.caption) } : {}) });
-    }
-    if (!rr || rr.ok === false || rr._noconfig) return json({ ok: false, error: 'O WhatsApp deste número não respondeu agora. Tente de novo.', code: 'evo' }, 502);
-    const _id = (rr.data && rr.data.key && rr.data.key.id) || null;
-    try { await _waLogMsg(env, { phone: num, instance: _evo, direction: 'out', type: kind, body: String(b.caption || ''), msgId: _id, media_url: String(b.link || '') }); } catch (_) {}
-    return json({ ok: true, id: _id, via: 'evolution' });
-  }
   const r = await _waCloudSendMedia(env, atId, b.number, { kind: b.kind, link: b.link, caption: b.caption, filename: b.filename, mediaKey: b.mediaKey });
   if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
   return json({ ok: true, id: r.id, via: 'cloud' });
-}
-
-// ── Gestão multi-instância (1 número/instância por atendente) ──
-// Helper: chama a Evolution com a config global (url+key do D1). Nunca expõe a key.
-async function evoFetch(env, path, opts = {}) {
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return { _noconfig: true };
-  // TIMEOUT obrigatório: sem ele, VPS pendurada = requisição pendurada, e a dash inteira trava
-  // esperando (o painel de conexão chama isso a cada 30s). Melhor falhar rápido e dizer que caiu.
-  try {
-    const r = await fetch(`${cfg.url}${path}`, {
-      method: opts.method || 'GET',
-      headers: { apikey: cfg.key, ...(opts.body ? { 'content-type': 'application/json' } : {}) },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-      signal: AbortSignal.timeout(opts.timeout || 12000),
-    });
-    const text = await r.text();
-    let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
-    return { ok: r.ok, status: r.status, data };
-  } catch (e) {
-    return { ok: false, status: 0, data: {}, _timeout: true, _err: String((e && e.message) || e) };
-  }
 }
 
 // ─── VOZ + MÍDIA (o "ZapVoice" nosso, server-side e conectado à Dash) ──
@@ -10190,69 +9948,6 @@ async function _ttsGenerate(env, text, opts = {}) {
     return null;
   } catch (_) { return null; }
 }
-// Envia áudio (nota de voz/PTT) via Evolution. audioB64 = base64 puro.
-async function _waSendAudio(env, instance, number, audioB64, delay) {
-  return evoFetch(env, `/message/sendWhatsAppAudio/${encodeURIComponent(instance)}`, {
-    method: 'POST', body: { number, audio: audioB64, encoding: true, ...(delay ? { delay } : {}) },
-  });
-}
-// Envia mídia (imagem/vídeo/documento) via Evolution. media = URL ou base64 puro.
-async function _waSendMedia(env, instance, number, m) {
-  return evoFetch(env, `/message/sendMedia/${encodeURIComponent(instance)}`, {
-    method: 'POST', body: {
-      number, mediatype: m.mediatype || 'image',
-      ...(m.mimetype ? { mimetype: m.mimetype } : {}),
-      media: m.media,
-      ...(m.fileName ? { fileName: m.fileName } : {}),
-      ...(m.caption ? { caption: m.caption } : {}),
-    },
-  });
-}
-// POST /api/wa/send-audio { number, instance?, audio_base64?, text?, voice?, provider?, delay? }
-async function handleWASendAudio(req, env) {
-  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
-  const body = await req.json().catch(() => null);
-  if (!body || !body.number) return err('Campo obrigatório: number');
-  if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
-  const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
-    || String(body.instance || cfg.instance || '').trim();
-  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
-  const number = waNumber(body.number); if (!number) return err('Número inválido');
-  let audioB64 = body.audio_base64 ? String(body.audio_base64).replace(/^data:[^;]+;base64,/, '') : '';
-  if (!audioB64 && body.text) {
-    const tts = await _ttsGenerate(env, body.text, { voice: body.voice, provider: body.provider });
-    if (!tts) return err('Falha ao gerar áudio (TTS). Configure a chave/provider de voz.', 502);
-    audioB64 = tts.b64;
-  }
-  if (!audioB64) return err('Informe audio_base64 ou text', 400);
-  const res = await _waSendAudio(env, instance, number, audioB64, body.delay);
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  if (!res.ok) return err(`Evolution respondeu ${res.status}: ${JSON.stringify(res.data).slice(0, 200)}`, 502);
-  await _waLogMsg(env, { phone: number, instance, direction: 'out', type: 'audio', body: body.text ? ('🎤 ' + body.text) : '[áudio]', msgId: res.data?.key?.id });
-  return json({ ok: true, id: res.data?.key?.id || null, to: number, instance });
-}
-// POST /api/wa/send-media { number, instance?, media(url|base64), mediatype, mimetype?, fileName?, caption? }
-async function handleWASendMedia(req, env) {
-  const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
-  const cfg = await getWAConfig(env);
-  if (!cfg.url || !cfg.key) return err('WhatsApp não configurado', 503);
-  const body = await req.json().catch(() => null);
-  if (!body || !body.number || !body.media) return err('Campos obrigatórios: number, media');
-  if (!(await _podeFalarNaConversa(env, u, body.number))) return err(String(u.role || '').toLowerCase() === 'cobrador' ? 'Sua área do inbox é só pra consulta' : 'Essa conversa é de outro atendente', 403);
-  const instance = (await _resolveSendInstance(env, { atId: (body.at_id != null ? String(body.at_id) : String(u.id)), phone: body.number, hint: body.instance }))
-    || String(body.instance || cfg.instance || '').trim();
-  if (!instance) return err('Nenhuma instância informada nem padrão configurada', 400);
-  const number = waNumber(body.number); if (!number) return err('Número inválido');
-  const media = String(body.media).replace(/^data:[^;]+;base64,/, '');
-  const mediatype = ['image', 'video', 'document'].includes(body.mediatype) ? body.mediatype : 'image';
-  const res = await _waSendMedia(env, instance, number, { mediatype, mimetype: body.mimetype, media, fileName: body.fileName, caption: body.caption });
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  if (!res.ok) return err(`Evolution respondeu ${res.status}: ${JSON.stringify(res.data).slice(0, 200)}`, 502);
-  await _waLogMsg(env, { phone: number, instance, direction: 'out', type: mediatype, body: body.caption || ('[' + mediatype + ']'), msgId: res.data?.key?.id });
-  return json({ ok: true, id: res.data?.key?.id || null, to: number, instance });
-}
 // GET/POST /api/config/tts — provider/voz + status das chaves (sem expor valor)
 async function handleTTSConfig(req, env) {
   const u = await authUser(req, env); if (!u) return err('Não autenticado', 401);
@@ -10285,244 +9980,9 @@ async function handleTTSTest(req, env) {
   return json({ ok: true, mime: tts.mime, bytes: Math.round(tts.b64.length * 3 / 4), provider: (b?.provider || (await _readConfig(env, 'tts_provider')) || 'auto') });
 }
 
-// GET /api/wa/instances → lista todas as instâncias e seus estados
-async function handleWAInstances(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  // O NOME DA INSTANCIA CARREGA O ID DO VENDEDOR (ax_<id>_<8dig>), entao listar todas entregava o
-  // mapa da nossa operacao - e servia de cardapio pras rotas de envio, que aceitam `instance` do
-  // corpo. Auditoria de 24/08/2026.
-  const _idsInst = await _idsQuePossoVer(env, u);
-  const res = await evoFetch(env, '/instance/fetchInstances');
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
-  // Normaliza pra { name, state } (a Evolution varia o formato entre versões)
-  const arr = Array.isArray(res.data) ? res.data : (res.data?.instances || []);
-  const list = arr.map(x => {
-    const i = x.instance || x;
-    return { name: i.instanceName || i.name, state: i.connectionStatus || i.state || i.status || 'unknown' };
-  }).filter(x => x.name);
-  // A casa (diretor, _idsInst null) nao lista instancia de afiliado - ver _foraDaCasa.
-  const _fora = _idsInst === null ? await _foraDaCasa(env) : null;
-  return json({ ok: true, instances: _filtraInst(list, _idsInst).filter((x) => !_ehDeOutraOperacao(x && x.name, '', _fora)) });
-}
-
-// POST /api/wa/instance/create → { instanceName } cria (idempotente) e já devolve QR
-async function handleWAInstanceCreate(req, env, ctx) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  const body = await req.json().catch(() => null);
-  const name = String(body?.instanceName || '').trim();
-  if (!name) return err('instanceName obrigatório');
-  // SO O DONO DO NUMERO (ou um diretor). Esta rota nao e so "criar": com reset:true, e tambem no
-  // ramo sem QR, ela faz logout + delete na Evolution e limpa o wa_conn. Estava aberta pra qualquer
-  // login, entao qualquer usuario derrubava o WhatsApp de qualquer vendedor com uma chamada - e com
-  // verba rodando o lead chega e nao entra em lugar nenhum.
-  // NAO uso isDirector puro de proposito: o atendente precisa gerar o QR do proprio numero.
-  if (!isDirector(u) && _atFromInst(name) !== String(u.id)) return err('Esse número não é seu', 403);
-  // RESET EXPLÍCITO (só quando o usuário pede, ex: clicou em "conectado com outro número").
-  // Derruba a sessão atual de verdade e apaga a instância, pra o QR novo nascer limpo. Não fica no
-  // caminho normal de conexão de propósito: é lento (logout + delete + espera) e antes rodava em
-  // TODO clique, o que deixava conectar um número em ~10s.
-  if (body?.reset) {
-    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-    try { await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-    try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}
-    await new Promise((r) => setTimeout(r, 1500));   // o Baileys precisa de um respiro antes de recriar
-  }
-  // CAMINHO CURTO, igual à dash antiga (que conectava quase instantâneo): cria (idempotente) e já
-  // pede o QR. Nada de checar estado, deslogar, apagar e recriar aqui — isso custava ~10s por clique
-  // e é o que deixou a conexão lenta e instável. Se não vier QR, quem trata é o front (reset + retry).
-  // syncFullHistory:false + groupsIgnore:true = menos RAM por número e menos ruído (grupo não vira lead).
-  const cr = await evoFetch(env, '/instance/create', {
-    method: 'POST',
-    body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
-  });
-  if (cr._noconfig) return err('WhatsApp não configurado', 503);
-  // Registrar o webhook é obrigatório (é o que faz o lead voltar pra dash), mas NÃO precisa segurar
-  // o QR na tela. waitUntil garante que roda até o fim mesmo depois da resposta sair.
-  const _hook = (async () => { try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {} })();
-  if (ctx && ctx.waitUntil) ctx.waitUntil(_hook); else await _hook;
-  // O QR já costuma vir no create (qrcode:true); senão, UMA tentativa pelo connect.
-  let qr = cr.data?.qrcode?.base64 || cr.data?.base64 || cr.data?.qr || null;
-  let pairingCode = cr.data?.qrcode?.pairingCode || cr.data?.pairingCode || cr.data?.code || null;
-  // No reset, o Baileys às vezes leva um instante pra ter o QR pronto: tenta mais de uma vez.
-  // No fluxo normal segue uma tentativa só (é o que mantém a conexão rápida).
-  const tentativas = body?.reset ? 4 : 1;
-  for (let i = 0; i < tentativas && !qr; i++) {
-    if (i) await new Promise((r) => setTimeout(r, 700));
-    const res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
-    if (res._noconfig) return err('WhatsApp não configurado', 503);
-    qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
-    pairingCode = pairingCode || res.data?.pairingCode || res.data?.code || null;
-  }
-  // AINDA sem QR = a instância está PRESA (segurando uma sessão que não é a que queremos, ou morta).
-  // Nesse ponto a Evolution não vai emitir QR nenhum enquanto ela existir. Reseta e tenta de novo,
-  // que é exatamente o que a dash antiga fazia. Isso só roda no caso travado, então não pesa no
-  // caminho normal — e resolve o "não consegui gerar o QR" sem depender de o front pedir reset.
-  if (!qr && !body?.reset) {
-    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-    try { await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-    try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}
-    await new Promise((r) => setTimeout(r, 1500));
-    const cr2 = await evoFetch(env, '/instance/create', {
-      method: 'POST',
-      body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
-    });
-    qr = cr2.data?.qrcode?.base64 || cr2.data?.base64 || cr2.data?.qr || null;
-    pairingCode = pairingCode || cr2.data?.qrcode?.pairingCode || cr2.data?.pairingCode || null;
-    for (let i = 0; i < 4 && !qr; i++) {
-      await new Promise((r) => setTimeout(r, 700));
-      const res2 = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
-      qr = res2.data?.base64 || res2.data?.qrcode?.base64 || res2.data?.qr || null;
-      pairingCode = pairingCode || res2.data?.pairingCode || res2.data?.code || null;
-    }
-    try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
-  }
-  return json({ ok: true, instance: name, qr, pairingCode });
-}
-
-// GET /api/wa/instance/connect?instance=NAME → QR atualizado pra reconectar
-// Pode tocar nesta instancia? Fail-closed: nome que nao resolve num atendente do mundo dele nao passa.
-async function _instMinha(env, u, name) {
-  const ids = await _idsQuePossoVer(env, u);
-  if (ids === null) return true;
-  return _instEhDe(name, ids);
-}
-async function handleWAInstanceConnect(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  // AS IRMAS (create e disconnect) JA TINHAM ESTA GUARDA; esta faltava. Sem ela, o afiliado gerava o
-  // QR de uma instancia NOSSA desconectada, pareava o celular dele no nosso slot e derrubava o
-  // vendedor da roleta - e o worker ainda RECRIAVA a instancia no 404. Auditoria de 24/08/2026.
-  {
-    const _n = String(new URL(req.url).searchParams.get('instanceName') || new URL(req.url).searchParams.get('name') || '');
-    if (_n && !(await _instMinha(env, u, _n))) return err('Instância não encontrada', 404);
-  }
-  const name = new URL(req.url).searchParams.get('instance');
-  if (!name) return err('parâmetro "instance" obrigatório');
-  // JA CONECTADO = NAO ENCOSTA. Pedir QR pra uma instancia que acabou de parear e o que estava
-  // DERRUBANDO a conexao: a Evolution recusa o connect nesse estado, o codigo abaixo lia o "!ok"
-  // como "instancia sumiu" e RECRIAVA - matando a sessao que o vendedor tinha acabado de ativar no
-  // celular. Foi o "conecta, aparece sincronizando e cai" de 21/08/2026 (a instancia do Murilo
-  // abriu 14:51 e voltou pra close as 15:00). Agora confere o estado ANTES.
-  const st0 = await evoFetch(env, `/instance/connectionState/${encodeURIComponent(name)}`);
-  if (st0._noconfig) return err('WhatsApp não configurado', 503);
-  if (st0.ok && String(st0.data?.instance?.state || '') === 'open') {
-    return json({ ok: true, instance: name, qr: null, state: 'open', pairingCode: null });
-  }
-  let res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  // 404 = a instância não existe (foi apagada num reset). Antes isso virava "Evolution respondeu 404"
-  // vermelho na cara do usuário. Quem abre essa tela quer um QR, não um código de status: então
-  // recria a instância e pede o QR de novo. Autocura, sem erro técnico na tela.
-  // SO recria quando a instancia REALMENTE nao existe (404). Recriar por qualquer erro derrubava
-  // sessao viva - ver o comentario acima.
-  if (!res.ok && res.status === 404) {
-    await evoFetch(env, '/instance/create', {
-      method: 'POST',
-      body: { instanceName: name, qrcode: true, integration: 'WHATSAPP-BAILEYS', syncFullHistory: false, groupsIgnore: true },
-    });
-    try { await _waSetWebhook(env, name, new URL(req.url).origin); } catch (_) {}
-    for (let i = 0; i < 3; i++) {
-      await new Promise((r) => setTimeout(r, 600));
-      res = await evoFetch(env, `/instance/connect/${encodeURIComponent(name)}`);
-      if (res.ok && (res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr)) break;
-    }
-  }
-  const qr = res.data?.base64 || res.data?.qrcode?.base64 || res.data?.qr || null;
-  return json({ ok: true, instance: name, qr, pairingCode: res.data?.pairingCode || res.data?.code || null });
-}
-
-// GET /api/wa/instance/status?instance=NAME → estado de uma instância
-async function handleWAInstanceStatus(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  const name = new URL(req.url).searchParams.get('instance');
-  if (!name) return err('parâmetro "instance" obrigatório');
-  const res = await evoFetch(env, `/instance/connectionState/${encodeURIComponent(name)}`);
-  if (res._noconfig) return err('WhatsApp não configurado', 503);
-  if (!res.ok) return err(`Evolution respondeu ${res.status}`, 502);
-  const state = res.data?.instance?.state || 'unknown';
-  // Ao CONECTAR, já devolve QUAL número entrou e grava no wa_conn na hora. Assim a pressel fica
-  // verde imediatamente, sem esperar o próximo ciclo de leitura (eram ~5s de vermelho depois de
-  // um QR que já tinha dado certo). Só custa a consulta extra no momento da conexão.
-  let number = '';
-  if (state === 'open') {
-    try {
-      // A Evolution leva um instante pra publicar o dono da sessão (ownerJid) depois do QR. Enquanto
-      // ela não publica, a dash não tem como saber que ESTE número conectou e a linha fica vermelha
-      // (eram os ~10s de espera que o Bruno via). Insiste um pouco aqui, que é barato e acontece só
-      // no momento da conexão.
-      let live = await _evoInstances(env);
-      let it = (live || []).find((x) => x.name === name);
-      number = (it && it.number) || '';
-      for (let i = 0; i < 2 && !number; i++) {
-        await new Promise((r) => setTimeout(r, 600));
-        live = await _evoInstances(env);
-        it = (live || []).find((x) => x.name === name);
-        number = (it && it.number) || '';
-      }
-      if (number) {
-        await env.DB.prepare(
-          `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'open', ?, strftime('%s','now'))
-           ON CONFLICT(instance) DO UPDATE SET state='open', number=excluded.number, updated_at=excluded.updated_at`
-        ).bind(name, number).run();
-      }
-    } catch (_) {}
-  }
-  return json({ ok: true, instance: name, state, number });
-}
-
-// POST /api/wa/instance/logout → { instance } desconecta e remove a instância
-async function handleWAInstanceLogout(req, env) {
-  _evoCache = null;
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas Diretor pode remover conexões', 403);
-  const body = await req.json().catch(() => null);
-  const name = String(body?.instance || '').trim();
-  if (!name) return err('instance obrigatório');
-  await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  await evoFetch(env, `/instance/delete/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  try { await env.DB.prepare('DELETE FROM wa_conn WHERE instance=?').bind(name).run(); } catch (_) {}   // tira do liveSet pra roleta não mandar lead pra número removido
-  return json({ ok: true, instance: name, removed: true });
-}
-// POST /api/wa/instance/disconnect → { instance } só DESCONECTA (logout), mantém a instância + configs (webhook/groupsIgnore)
-async function handleWAInstanceDisconnect(req, env) {
-  _evoCache = null;   // some com o cache: a queda tem que aparecer na hora
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  let body = {}; try { body = await req.json(); } catch (_) {}
-  const name = String(body?.instance || '').trim();
-  if (!name) return err('instance obrigatório');
-  // SO O DONO DO NUMERO (ou um diretor) DERRUBA. Estava aberto pra qualquer login: um clique e o
-  // WhatsApp de outro vendedor caia, e com verba rodando o lead chega e nao entra em lugar nenhum.
-  // O nome da instancia carrega o atendente (ax_<at>_<8digitos>), entao da pra conferir sem consultar.
-  if (!isDirector(u) && _atFromInst(name) !== String(u.id)) return err('Esse numero nao e seu', 403);
-  // desconecta DE VERDADE: logout → confere o estado REAL na Evolution → se ainda 'open', tenta de novo
-  // (o logout às vezes não pega de primeira quando o socket travou). Não grava 'close' otimista:
-  // se o número seguir conectado, a dash mostra a verdade em vez de mentir "desconectado".
-  const _state = async () => {
-    try { const live = await _evoInstances(env); if (!live) return null; const f = live.find(i => String(i.name) === name); return f ? { state: f.state, number: f.number || '' } : { state: 'close', number: '' }; }
-    catch (_) { return null; }
-  };
-  let st = null;
-  for (let i = 0; i < 2; i++) {
-    try { await evoFetch(env, `/instance/logout/${encodeURIComponent(name)}`, { method: 'DELETE' }); } catch (_) {}
-    st = await _state();
-    if (!st || st.state !== 'open') break;   // st null = Evolution fora do ar; não fica em loop
-  }
-  const open = !!(st && st.state === 'open');
-  try { await env.DB.prepare("UPDATE wa_conn SET state=?, number=?, updated_at=strftime('%s','now') WHERE instance=?").bind(open ? 'open' : 'close', open ? (st.number || '') : '', name).run(); } catch (_) {}
-  return json({ ok: !open, instance: name, disconnected: !open, state: open ? 'open' : 'close' });
-}
-
-// ─── Webhook de volta (Evolution → Worker) ───────────────────
-// Recebe eventos da Evolution: mensagens recebidas (auto-resposta de primeiro
-// contato + atribuição de vendedor) e mudança de conexão (detectar número
-// caído). Tudo gated pela chave-mestra wa_autom_on. Conexão/atribuição/dedupe
-// ficam em tabelas D1 próprias, pra NÃO conflitar com o blob de estado da dash.
+// ─── Tabelas do WhatsApp (conexao, atribuicao, inbox) ───────────────────
+// O webhook de volta da Evolution (/webhook/evolution/<token>) SAIU em 09/10/2026 junto com a
+// ponte. As tabelas ficam: Sale Chat, Cloud API e Datacrazy gravam nelas.
 async function _waEnsureTables(env) {
   if (_waTablesOk) return;
   // NADA DE DDL NO CAMINHO QUENTE (22/09/2026, mesmo remedio que o _ensureFiveTables ganhou hoje de
@@ -10573,19 +10033,6 @@ async function _waEnsureTables(env) {
     try { await env.DB.prepare('ALTER TABLE wa_chats ADD COLUMN crm_ts INTEGER').run(); } catch (_) {}
     _waTablesOk = true;
   } catch (_) {}
-}
-// Extrai tipo + texto de uma mensagem recebida da Evolution (pro histórico do inbox)
-function _waExtractMsg(data) {
-  const mm = data?.message || {};
-  if (mm.conversation) return { type: 'text', body: mm.conversation };
-  if (mm.extendedTextMessage?.text) return { type: 'text', body: mm.extendedTextMessage.text };
-  if (mm.imageMessage) return { type: 'image', body: mm.imageMessage.caption || '' };
-  if (mm.audioMessage) return { type: 'audio', body: '' };
-  if (mm.videoMessage) return { type: 'video', body: mm.videoMessage.caption || '' };
-  if (mm.documentMessage) return { type: 'document', body: mm.documentMessage.fileName || '' };
-  if (mm.stickerMessage) return { type: 'sticker', body: '' };
-  if (mm.locationMessage) return { type: 'location', body: '' };
-  return { type: 'other', body: '' };
 }
 // Grava uma mensagem (in/out) no histórico e atualiza o resumo do inbox.
 // Dedup natural por msg_id (PK). Nunca quebra o fluxo de quem chama.
@@ -10713,299 +10160,9 @@ async function _waLogMsg(env, m) {
     }
   } catch (_) {}
 }
-async function _waWebhookToken(env) {
-  // Fail-closed: o token só vem do D1 (config) ou de um secret do Worker. Sem
-  // fallback fixo no código — antes o token estava hardcoded no fonte, então
-  // quem visse o repo podia forjar eventos (venda fantasma no pixel, envio forçado).
-  return (await _readConfig(env, 'wa_webhook_token')) || (env && env.WA_WEBHOOK_TOKEN) || '';
-}
-// Registra o webhook na Evolution pra uma instância apontando pro nosso Worker
-async function _waSetWebhook(env, instance, origin) {
-  const token = await _waWebhookToken(env);
-  const url = `${origin}/webhook/evolution/${token}`;
-  await evoFetch(env, `/webhook/set/${encodeURIComponent(instance)}`, {
-    method: 'POST',
-    body: { webhook: { enabled: true, url, webhookByEvents: false, webhookBase64: false, events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'] } },
-  });
-}
-// Preenche template no servidor (lead pode ser parcial; usa pushName de fallback)
-function _waFillTpl(tpl, lead, pushName) {
-  const nome = (lead && lead.nome) || pushName || '';
-  const f = String(nome).split(' ')[0];
-  return String(tpl || '')
-    .replace(/\{primeiro_nome\}/g, f)
-    .replace(/\{nome\}/g, nome)
-    .replace(/\{produto\}/g, (lead && (lead.prod || lead.trat)) || '')
-    .replace(/\{valor\}/g, lead && lead.vl ? ('R$ ' + Number(lead.vl).toFixed(2).replace('.', ',')) : '')
-    .replace(/\{cidade\}/g, (lead && lead.cidade) || '')
-    .replace(/\{rastreio\}/g, (lead && lead.track) || '');
-}
-// Escolhe a regra de primeiro contato que casa com a instância (vendedor)
-function _waPickInboundRule(state, instance) {
-  const rules = (state.wa_automacoes || []).filter(r => r.ativo && r.gatilho === 'primeiro_contato');
-  if (!rules.length) return null;
-  const atId = instance.indexOf('ax_') === 0 ? instance.slice(3) : null;
-  // O Worker não tem o time (fora do blob), então casa por 'todos', 'user:<atId>'
-  // ou qualquer 'role:' (inbound é sempre contexto de atendente).
-  for (const r of rules) {
-    const a = r.alvo || 'todos';
-    if (a === 'todos') return r;
-    if (atId && a === 'user:' + atId) return r;
-    if (a.indexOf('role:') === 0) return r;
-  }
-  return null;
-}
-async function _waOnConnection(env, instance, data) {
-  if (!instance) return;
-  await _waEnsureTables(env);
-  const st = data?.state || data?.connection || 'unknown';
-  // No 'open', já captura o número que conectou (ownerJid) e grava junto — evita janela em que o
-  // wa_conn.number fica com o número antigo e o roteador pula o número recém-conectado.
-  if (String(st) === 'open') {
-    let num = '';
-    try { const live = await _evoInstances(env); const it = (live || []).find(x => x.name === instance); if (it) num = it.number || ''; } catch (_) {}
-    // conectou: grava o número que entrou. Se não resolveu (num=''), LIMPA o antigo → serve-time fica fail-open (não usa número velho errado).
-    await env.DB.prepare(
-      `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
-       ON CONFLICT(instance) DO UPDATE SET state = excluded.state, number = excluded.number, updated_at = excluded.updated_at`
-    ).bind(instance, String(st), num).run();
-  } else {
-    await env.DB.prepare(
-      `INSERT INTO wa_conn (instance, state, updated_at) VALUES (?, ?, strftime('%s','now'))
-       ON CONFLICT(instance) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
-    ).bind(instance, String(st)).run();
-  }
-}
-// Transcreve um áudio recebido (Gemini). Retorna texto ou ''.
-async function _waTranscribeAudio(env, instance, msgKey) {
-  try {
-    const gkey = await getAIKey(env, 'gemini'); if (!gkey) return '';
-    const media = await evoFetch(env, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, { method: 'POST', body: { message: { key: { id: msgKey.id, remoteJid: msgKey.remoteJid, fromMe: !!msgKey.fromMe } } } });
-    const b64 = media?.data?.base64; if (!b64) return '';
-    const body = { contents: [{ parts: [{ text: 'Transcreva este áudio em português do Brasil. Responda só a transcrição.' }, { inline_data: { mime_type: 'audio/ogg', data: b64 } }] }] };
-    for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp']) {
-      const g = await _fetchComTeto(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, 25000, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      if (g.ok) { const d = await g.json(); return (d.candidates?.[0]?.content?.parts?.[0]?.text || '').trim(); }
-      if (![429, 403, 404].includes(g.status)) break;
-    }
-  } catch (_) {}
-  return '';
-}
-// Texto de um registro: conversation/extendedText, ou transcreve áudio se pedido.
-async function _waRecText(env, instance, rec, transcribe) {
-  const mm = rec.message || {};
-  if (mm.conversation) return mm.conversation;
-  if (mm.extendedTextMessage?.text) return mm.extendedTextMessage.text;
-  if (mm.audioMessage) return transcribe ? await _waTranscribeAudio(env, instance, rec.key) : '[áudio]';
-  if (mm.imageMessage) return mm.imageMessage.caption || '[imagem]';
-  return '';
-}
-// Bot de IA em TESTE: responde só o chat whitelistado (wa_bot_test_*). Agrupa
-// mensagens picadas usando um BUFFER próprio no D1 (confiável, sem depender do
-// findMessages que atrasa), transcreve áudio, responde como humano (várias
-// mensagens curtas com "digitando..."). Retorna true se tratou.
-async function _waBotTestReply(env, instance, key, data) {
-  const testInst = await _readConfig(env, 'wa_bot_test_instance');
-  const testPhone = await _readConfig(env, 'wa_bot_test_phone');
-  if (!testInst || !testPhone) return false;
-  if (instance !== testInst) return false;
-  const realPhone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
-  const testPhones = String(testPhone).split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
-  if (!testPhones.includes(realPhone)) return false; // whitelist: aceita vários números de teste
-  // Interruptor mestre do robô (aba Automações → DB.wa_bot_on). Desligado por padrão.
-  try {
-    const st = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-    if (!JSON.parse(st?.data || '{}').wa_bot_on) return false; // bot desligado → não responde
-  } catch (_) { return false; }
-  const jid = key.remoteJid, myMsgId = key.id || ('m' + Date.now());
-  const mm = data?.message || {};
-  let kind = 'text', payload = '';
-  if (mm.conversation) payload = mm.conversation;
-  else if (mm.extendedTextMessage?.text) payload = mm.extendedTextMessage.text;
-  else if (mm.audioMessage) kind = 'audio';
-  else if (mm.imageMessage) payload = mm.imageMessage.caption || '[imagem]';
-  else return true; // tipo não suportado, mas não cai no template
-  console.log('BOTTEST in:', realPhone, 'kind', kind, 'id', myMsgId);
-  // 1) Grava no buffer NA HORA (fonte confiável pro agrupamento)
-  try {
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_buf (id TEXT PRIMARY KEY, phone TEXT, jid TEXT, ts INTEGER, kind TEXT, payload TEXT, done INTEGER DEFAULT 0)').run();
-    await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,0)')
-      .bind(myMsgId, realPhone, jid, Date.now(), kind, payload).run();
-  } catch (e) { console.log('BOTTEST buf err', e.message); }
-  // 2) Debounce: espera juntar as mensagens picadas
-  await new Promise(res => setTimeout(res, 7000));
-  // 3) Reivindica atomicamente TODAS as pendentes desse telefone (1 invocação só pega)
-  let claimed = [];
-  try {
-    const r = await env.DB.prepare('UPDATE wa_buf SET done=1 WHERE phone=? AND done=0 RETURNING id, jid, ts, kind, payload').bind(realPhone).all();
-    claimed = (r?.results) || [];
-  } catch (e) { console.log('BOTTEST claim err', e.message); return true; }
-  console.log('BOTTEST claimed', claimed.length, 'mine?', claimed.some(c => c.id === myMsgId));
-  if (!claimed.length || !claimed.some(c => c.id === myMsgId)) return true; // outra invocação respondeu o lote
-  claimed.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  const claimedIds = new Set(claimed.map(c => c.id));
-  // 4) Monta a fala do lead (transcreve áudios do lote)
-  const pendTexts = [];
-  for (const c of claimed) {
-    if (c.kind === 'audio') {
-      const t = await _waTranscribeAudio(env, instance, { id: c.id, remoteJid: c.jid, fromMe: false });
-      if (t) { pendTexts.push(t); try { await env.DB.prepare('UPDATE wa_buf SET payload=? WHERE id=?').bind(t, c.id).run(); } catch (_) {} try { await env.DB.prepare("UPDATE wa_messages SET body=? WHERE msg_id=?").bind('🎤 ' + t, c.id).run(); } catch (_) {} }
-    } else if (c.payload) pendTexts.push(c.payload);
-  }
-  const userTurn = pendTexts.join('\n').trim();
-  console.log('BOTTEST userTurn:', JSON.stringify(userTurn).slice(0, 160));
-  if (!userTurn) return true;
-  // 5) Histórico do NOSSO buffer (confiável, inclui as respostas do bot = kind 'out'),
-  //    excluindo o turno atual. Resolve o re-cumprimento (o bot enxerga o que já falou).
-  const contents = [];
-  try {
-    const hr = await env.DB.prepare('SELECT id, ts, kind, payload FROM wa_buf WHERE phone=? ORDER BY ts ASC').bind(realPhone).all();
-    const rows = (hr?.results || []).filter(x => !claimedIds.has(x.id) && x.payload);
-    for (const row of rows.slice(-16)) {
-      contents.push({ role: row.kind === 'out' ? 'model' : 'user', parts: [{ text: row.payload }] });
-    }
-  } catch (_) {}
-  contents.push({ role: 'user', parts: [{ text: userTurn }] });
-  // 6) Gemini → resposta → envio humano
-  const gkey = await getAIKey(env, 'gemini'); if (!gkey) return true;
-  let prompt = await getBotPrompt(env);
-  const leadName = String(data?.pushName || '').trim();
-  if (leadName) prompt += `\n\nNOME DO LEAD (do WhatsApp dele): "${leadName}". Trate ele pelo PRIMEIRO nome, de forma natural e calorosa (ex: "Oi, seu João!", "Beleza, dona Maria?"). Só caia pra "senhor"/"senhora" sem nome se esse valor parecer um nome comercial, número, ou algo que claramente não é nome de pessoa.`;
-  const reqBody = { system_instruction: { parts: [{ text: prompt }] }, contents: contents.slice(-16), generationConfig: { temperature: 0.9, maxOutputTokens: 400 } };
-  for (const mdl of ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-2.5-flash-lite']) {
-    try {
-      const g = await _fetchComTeto(`https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${gkey}`, 25000, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(reqBody) });
-      if (!g.ok) { if ([429, 403, 404].includes(g.status)) continue; console.log('BOTTEST gemini fail', g.status); return true; }
-      const d = await g.json();
-      let reply = (d.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/\[HANDOFF\]/ig, '').trim();
-      console.log('BOTTEST reply len', reply.length);
-      if (reply) {
-        const parts = reply.split(/\n*-{3,}\n*|\n\s*\n/).map(s => s.trim()).filter(Boolean);
-        let oi = 0;
-        for (const part of parts) {
-          // digitação proporcional ao tamanho: curtas ~1.8s, longas até ~9s
-          const delayMs = Math.min(9000, Math.max(1800, Math.round(part.length * 75)));
-          await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: realPhone, text: part, delay: delayMs } });
-          await _waLogMsg(env, { phone: realPhone, instance, direction: 'out', type: 'text', body: part, bot: true });
-          // guarda a resposta no buffer (vira histórico do bot na próxima vez)
-          try { await env.DB.prepare('INSERT OR IGNORE INTO wa_buf (id, phone, jid, ts, kind, payload, done) VALUES (?,?,?,?,?,?,1)').bind('out_' + myMsgId + '_' + (oi++), realPhone, jid, Date.now(), 'out', part).run(); } catch (_) {}
-        }
-      }
-      return true;
-    } catch (_) { continue; }
-  }
-  return true;
-}
-async function _waOnInbound(env, instance, data, ctx) {
-  const key = data?.key || {};
-  if (key.fromMe) return;                          // ignora o que NÓS mandamos
-  const jid = String(key.remoteJid || '');
-  if (!jid || jid.indexOf('@g.us') >= 0) return;   // ignora grupo
-  // telefone REAL: em chat @lid o remoteJid é um id interno, o número certo vem em remoteJidAlt (mesma regra da venda)
-  const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
-  if (!phone) return;
-  // Guarda a mensagem recebida no histórico do inbox (independente de automação)
-  const _ex = _waExtractMsg(data);
-  await _waLogMsg(env, { phone, instance, direction: 'in', type: _ex.type, body: _ex.body, msgId: key.id, pushName: data?.pushName, ts: Number(data?.messageTimestamp) || 0 });
-  // Mídia recebida: baixa o arquivo cheio pro R2 e preenche media_url (assíncrono, não bloqueia).
-  if (['image', 'audio', 'ptt', 'voice', 'video', 'document', 'sticker'].includes(_ex.type)) {
-    const _mm = data && data.message ? data.message : {};
-    if (ctx && ctx.waitUntil) ctx.waitUntil(_waEvoDownloadMedia(env, instance, key, _mm, key.id));
-    else await _waEvoDownloadMedia(env, instance, key, _mm, key.id);
-  }
-  // Sale Chat Engine (sombra): espelha o inbound da Evolution na auditoria crua pra comparar cobertura (sc x evo). Fire-and-forget, nunca afeta o fluxo.
-  try { await env.DB.prepare("INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES ('evo',?,?,0,?,?,?,?,?,strftime('%s','now'),?)").bind(String(instance || ''), phone, String(key.id || ''), String(_ex.type || 'text'), String(_ex.body || '').slice(0, 2000), String(data?.pushName || ''), Number(data?.messageTimestamp) || 0, _atFromInst(instance)).run(); } catch (_) {}
-  await _waLeadCapture(env, instance, phone, _ex.body, '', _ex.type, Number(data?.messageTimestamp) || 0);   // 1ª msg = LEAD: casa com o clique pelo código no texto e dispara evento pro pixel
-  // Bot de IA em teste: trata só o chat whitelistado e encerra (não cai no template)
-  if (await _waBotTestReply(env, instance, key, data)) return;
-  await _waEnsureTables(env);
-  // Atribuição: qual número (vendedor) falou com esse lead
-  await env.DB.prepare(
-    `INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now'))
-     ON CONFLICT(phone) DO UPDATE SET instance = excluded.instance, updated_at = excluded.updated_at`
-  ).bind(phone, instance).run();
-  // Auto-resposta de primeiro contato — só com a chave-mestra ligada
-  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-  let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
-  if (!state.wa_autom_on) return;
-  const rule = _waPickInboundRule(state, instance);
-  if (!rule) return;
-  const lead = (state.leads || []).find(l => norm(l.wa) === phone);
-  const msg = _waFillTpl(rule.msg, lead, data?.pushName);
-  if (!msg) return;
-  const now = Math.floor(Date.now() / 1000);
-  // Claim ATÔMICO antes de enviar: só a 1ª invocação dentro de 12h passa. Evita
-  // auto-resposta DUPLICADA quando o lead manda várias mensagens em rajada (dois
-  // webhooks concorrentes liam o dedupe vazio e ambos enviavam). Um só statement
-  // com WHERE no conflito → a 2ª invocação vê changes=0 e não envia.
-  const claim = await env.DB.prepare(
-    `INSERT INTO wa_replied (phone, updated_at) VALUES (?, ?)
-     ON CONFLICT(phone) DO UPDATE SET updated_at = excluded.updated_at
-     WHERE wa_replied.updated_at < ?`
-  ).bind(phone, now, now - 12 * 3600).run();
-  if (!claim.meta || claim.meta.changes === 0) return;  // já respondido nas últimas 12h
-  // Responde pelo MESMO número que o lead contatou (é resposta, baixo risco de ban)
-  await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: phone, text: msg } });
-  await _waLogMsg(env, { phone, instance, direction: 'out', type: 'text', body: msg, bot: true });
-}
-async function handleEvolutionWebhook(req, env, token, ctx) {
-  const expected = await _waWebhookToken(env);
-  if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
-  let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
-  const event = String(body?.event || '').toLowerCase().replace(/_/g, '.');
-  const instance = body?.instance || body?.instanceName || '';
-  const data = body?.data || {};
-  try {
-    if (event === 'connection.update') await _waOnConnection(env, instance, data);
-    else if (event === 'messages.upsert') {
-      // A chave global (sc) vale pros números do Sale Chat. MAS um número conectado por QR na Evolution
-      // tem instância DEDICADA (ax_<at>_<8díg>) e SÓ é visto aqui — o Sale Chat nem o enxerga. Então
-      // ele computa pela Evolution mesmo com a global em 'sc', sem duplicar: os dois caminhos são
-      // DISJUNTOS (cada número físico está num único path). Números legados (ax_<at>) seguem a global.
-      const perNumEvo = /^ax_.+_\d{8}$/.test(String(instance || ''));
-      if ((await _waCaptureSource(env)) === 'sc' && !perNumEvo) { /* fonte = Sale Chat */ }
-      else { await _waOnInbound(env, instance, data, ctx); await _waDetectSale(env, instance, data); }
-    }
-    else if (event === 'messages.update') {
-      // ACK DE ENTREGA DA EVOLUTION (26/08/2026). Os números de QR/Evolution NÃO davam retorno nenhum:
-      // o inbox mostrava "enviado" pra sempre e, se o áudio não saía, NINGUÉM via (queixa do vendedor,
-      // 26/08). A Cloud API já processa isto (statuses do webhook da Meta, ~linha 7124); aqui é o mesmo
-      // pros números da Evolution. Casa pelo msg_id que a gente gravou no envio (res.data.key.id) com o
-      // keyId/key.id do update. Aceita as DUAS formas de payload (array cru do Baileys e objeto
-      // normalizado da Evolution) e status tanto string ('DELIVERY_ACK') quanto número (Baileys 2/3/4).
-      // Só AVANÇA (read não volta pra sent) e 'failed'/ERROR sempre ganha. Se a Evolution não estiver
-      // inscrita no evento MESSAGES_UPDATE, este ramo fica dormente (nunca dispara) — não quebra nada.
-      // Ligado a [[carimbo-chip-conversa-131047]], [[inbox-datacrazy-poll-vs-sync]].
-      const ups = Array.isArray(data) ? data : [data];
-      const _mapa = { pending: 'sent', server_ack: 'sent', delivery_ack: 'delivered', read: 'read', read_ack: 'read', played: 'read', error: 'failed' };
-      const _rank = { sent: 1, delivered: 2, read: 3 };
-      for (const u of ups) {
-        if (!u || typeof u !== 'object') continue;
-        const mid = String(u.keyId || (u.key && u.key.id) || u.messageId || '').trim();
-        if (!mid) continue;
-        const raw = String((u.status != null ? u.status : (u.update && u.update.status)) || '').toLowerCase();
-        const estado = _mapa[raw] || (raw === '2' ? 'sent' : raw === '3' ? 'delivered' : (raw === '4' || raw === '5') ? 'read' : (raw === '0' || raw === '1') ? 'failed' : '');
-        if (!estado) continue;
-        try {
-          if (estado === 'failed') {
-            await env.DB.prepare("UPDATE wa_messages SET status='failed', err=COALESCE(NULLIF(err,''),'Evolution: falha na entrega'), status_ts=strftime('%s','now') WHERE msg_id=? AND direction='out'").bind(mid).run();
-          } else {
-            await env.DB.prepare(
-              `UPDATE wa_messages SET status=?, status_ts=strftime('%s','now') WHERE msg_id=? AND direction='out'
-                 AND COALESCE(status,'') <> 'failed'
-                 AND (CASE COALESCE(status,'') WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 WHEN 'sent' THEN 1 ELSE 0 END) < ?`
-            ).bind(estado, mid, _rank[estado]).run();
-          }
-        } catch (_) {}
-      }
-    }
-  } catch (_) { /* nunca quebra o webhook */ }
-  return json({ ok: true });
-}
-
 // ═══════════════════════════════════════════════════════════════
-// SALE CHAT ENGINE — motor que vai substituir a Evolution API.
-// FASE 0 (aditiva, NADA aqui altera o fluxo vivo da Evolution):
+// SALE CHAT ENGINE — captura pelo WhatsApp Web do vendedor (a Evolution saiu em 09/10/2026).
+// FASE 0 (aditiva):
 // o Sale Chat captura no navegador e manda pra cá; por ora só gravamos
 // numa auditoria CRUA pra PROVAR a captura (as PoCs) antes de ligar o
 // fluxo real. Token fail-closed em app_config (sc_ingest_token).
@@ -11020,11 +10177,9 @@ async function _scIngestToken(env) {
   }
   return t;
 }
-// Chave de virada: 'evo' (padrão, Evolution computa) ou 'sc' (o Sale Chat vira a fonte:
-// o ingest computa lead/venda + pixel, e a Evolution para de computar pra não duplicar).
-async function _waCaptureSource(env) {
-  try { return (await _readConfig(env, 'wa_capture_source')) === 'sc' ? 'sc' : 'evo'; } catch (_) { return 'evo'; }
-}
+// FONTE DE CAPTURA: SO O SALE CHAT (09/10/2026). A chave wa_capture_source ('evo' | 'sc') existia
+// pra virada gradual; com a Evolution removida, 'evo' significaria "ninguem computa". Fixo em 'sc'.
+async function _waCaptureSource() { return 'sc'; }
 async function _scEnsureTables(env) {
   if (_scTablesOk) return;
   // MESMA SONDA BARATA DO _waEnsureTables (22/09/2026): sao 27 DDL em serie, ~5,4s na primeira
@@ -11204,7 +10359,7 @@ async function resolveOwner(env, selfNumber) {
 }
 
 // ─── API OFICIAL (Cloud API) ───────────────────────────────────────────────
-// Chamada à Graph API v21.0 com o token de sistema permanente (wa_api_token). Espelha evoFetch.
+// Chamada à Graph API v21.0 com o token de sistema permanente (wa_api_token).
 // TROPECO DA META NAO PODE VIRAR FALHA NA CARA DO VENDEDOR. 131000 ("Something went wrong") e
 // 131016 ("Service unavailable") nao dizem nada sobre a mensagem: sao erro do lado deles, sem causa
 // do nosso. Idem 5xx e queda de rede (status 0). Aconteceu em 20/08/2026 com o Murilo, disparando
@@ -11826,68 +10981,15 @@ async function _waDigitando(env, atId, phone, apiNumFixo) {
   } catch (_) { return false; }
 }
 
-// O FUNIL PELA EVOLUTION (numero conectado por QR, nao oficial). Existe porque o funil inteiro
-// falava so Cloud API: numero de Evolution NAO esta em wa_api_numbers, entao o disparo ou morria
-// com "vendedor sem numero oficial" ou - pior - saia pelo OUTRO numero do mesmo vendedor, o
-// oficial. Com o Bruno trocando um numero restrito por um de Evolution no meio da campanha
-// (21/08/2026), isso seria o funil do vendedor saindo pelo chip errado sem ninguem ver.
-async function _waFunnelEvo(env, inst, phone, passo, info) {
-  const itemId = (passo && typeof passo === 'object') ? passo.id : passo;
-  const num = String(phone || '').replace(/\D/g, '');
-  const falha = (r, oq) => ({ ok: false, error: 'Evolution nao enviou o ' + oq + ' (' + String((r && (r._err || r.status)) || 'sem resposta') + ')', code: 'evo' });
-  const md = (info.media || []).find(m => m && m.id === itemId);
-  if (md && md.key) {
-    const kind = ['image', 'audio', 'video', 'document'].includes(md.kind) ? md.kind : 'document';
-    if (kind === 'audio') {
-      // AUDIO TEM QUE SAIR COMO NOTA DE VOZ (ondinhas). Pelo sendMedia ele viraria ARQUIVO de audio,
-      // que o cliente quase nao abre - e o funil do Bruno e feito de audio. Por isso le do R2 e manda
-      // no endpoint de PTT, que e o unico que grava como voz.
-      let b64 = '';
-      try { const o = await _r2Get(env, md.key); if (o) b64 = _bytesToB64(new Uint8Array(await o.arrayBuffer())); } catch (_) {}
-      if (!b64) return { ok: false, error: 'audio do passo nao esta no arquivo', code: 'sem_midia' };
-      const r = await _waSendAudio(env, inst, num, b64);
-      if (!r || r.ok === false || r._noconfig) return falha(r, 'audio');
-      try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'audio', body: '', msgId: r.data && r.data.key && r.data.key.id, media_url: _r2PublicUrl(md.key) }); } catch (_) {}
-      return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
-    }
-    const r = await _waSendMedia(env, inst, num, {
-      mediatype: kind, media: _r2PublicUrl(md.key),
-      ...(md.mime ? { mimetype: md.mime } : {}),
-      ...(md.label ? { fileName: md.label } : {}),
-      ...(md.caption ? { caption: md.caption } : {}),
-    });
-    if (!r || r.ok === false || r._noconfig) return falha(r, kind);
-    try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: kind, body: md.caption || '', msgId: r.data && r.data.key && r.data.key.id, media_url: _r2PublicUrl(md.key) }); } catch (_) {}
-    return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
-  }
-  const tx = (info.msgs || []).find(m => m && m.id === itemId);
-  const texto = tx && (tx.text || tx.body);
-  if (texto) {
-    const r = await evoFetch(env, '/message/sendText/' + encodeURIComponent(inst), { method: 'POST', body: { number: num, text: String(texto) } });
-    if (!r || r.ok === false || r._noconfig) return falha(r, 'texto');
-    try { await _waLogMsg(env, { phone: num, instance: inst, direction: 'out', type: 'text', body: String(texto), msgId: r.data && r.data.key && r.data.key.id }); } catch (_) {}
-    try { await _waDetectSale(env, inst, { message: { conversation: String(texto) }, key: { remoteJid: num + '@c.us', id: (r.data && r.data.key && r.data.key.id) || null, fromMe: true } }); } catch (_) {}
-    return { ok: true, id: (r.data && r.data.key && r.data.key.id) || null };
-  }
-  console.error('WA_FUNIL_PASSO_INEXISTENTE(evo) fone=' + num + ' item=' + JSON.stringify(itemId));
-  return { ok: false, error: 'item nao encontrado', code: 'no_item' };
-}
 // apiNum = numero oficial JA resolvido (o chip pinado no inicio do funil). Sem ele, cada passo
 // resolveria de novo pela conversa e poderia trocar de numero no meio.
 // inst = a instancia da conversa; se ela estiver VIVA na Evolution, o passo sai por la.
 async function _waFunnelSendItem(env, atId, phone, passo, info, apiNum, inst) {
-  // Canal pela CONEXAO, nao pelo cadastro: a mesma conta pode ter numero oficial e numero de QR.
-  // Vale so quando a instancia esta 'open' e com sinal recente (10 min), igual ao compositor.
+  // NAO VAZAR PRO OUTRO CHIP. Se a conversa tem numero proprio no carimbo e esse numero nao e um
+  // oficial nosso (apiNum vazio), NAO existe canal pra esta conversa: sem esta parada o passo
+  // cairia no resolveApiNumber e sairia pelo OUTRO numero do mesmo vendedor. (O outro canal
+  // possivel, a Evolution, saiu em 09/10/2026.)
   if (inst) {
-    let viva = null;
-    try {
-      viva = await env.DB.prepare("SELECT 1 FROM wa_conn WHERE instance=? AND state='open' AND updated_at > strftime('%s','now')-600").bind(String(inst)).first();
-    } catch (_) { viva = null; }
-    if (viva) return await _waFunnelEvo(env, String(inst), phone, passo, info);
-    // NAO VAZAR PRO OUTRO CHIP. Se a conversa tem numero proprio no carimbo, esse numero nao e um
-    // oficial nosso (apiNum vazio) e a Evolution dele nao esta viva, entao NAO existe canal pra
-    // esta conversa. Sem esta parada o passo cairia no resolveApiNumber e sairia pelo OUTRO numero
-    // do mesmo vendedor - o cliente recebendo funil de um contato com quem nunca falou.
     const _temNum = /^ax_.+_\d{8}$/.test(String(inst)) || /^dc_\d{8,}$/.test(String(inst));
     if (_temNum && !apiNum) {
       return { ok: false, error: 'O número desta conversa não está conectado agora (WhatsApp caiu ou saiu do ar). O funil parou aqui.', code: 'canal_fora' };
@@ -12662,7 +11764,7 @@ async function _dcApiGetRaw(env, path, mundo) {
   // conversa do cliente dele com a nossa chave nao devolveria nada e ainda gastaria requisicao.
   const key = await _readConfig(env, _cfgNome('dc_api_key', mundo));
   if (!key) return { ok: false, status: 0, dados: null, erro: 'sem_dc_api_key' };
-  // TIMEOUT OBRIGATORIO (22/09/2026), a mesma guarda que o evoFetch ja tinha e este caminho nao:
+  // TIMEOUT OBRIGATORIO (22/09/2026), a mesma guarda que a ponte da Evolution ja tinha e este caminho nao:
   // sem ele, Datacrazy pendurado = requisicao pendurada, e como e a propria TELA do inbox que chama
   // isto (/api/wa/dc/tick), a dash inteira fica esperando. Medido no ar antes da correcao: 83
   // segundos de relogio com 61ms de CPU numa chamada so, e batidas de cron de 394s e 440s
@@ -12764,7 +11866,7 @@ function _dcAttach(m) {
   return { url: String(a.url), mime: mime || 'application/octet-stream', tipo };
 }
 // Copia o anexo do CDN do Datacrazy pro NOSSO R2 e devolve a key, exatamente como _waCloudDownloadMedia
-// (Cloud API) e _waEvoDownloadMedia (Evolution) ja fazem. Devolve '' se falhar: nesse caso o sync deixa
+// (Cloud API) ja faz. Devolve '' se falhar: nesse caso o sync deixa
 // a URL do Datacrazy gravada e a imagem aparece do mesmo jeito.
 // Guardar o audio como .ogg com contentType audio/ogg faz o /api/salechat/media devolver
 // "audio/ogg; codecs=opus", que e o que transforma o balao em nota de voz com ondinha.
@@ -13913,60 +13015,15 @@ async function handleSalechatSource(req, env) {
   if (!isDirector(u)) return err('Apenas Diretor', 403);
   if (req.method === 'POST') {
     let body = {}; try { body = await req.json(); } catch (_) {}
-    const s = body?.source === 'sc' ? 'sc' : 'evo';
+    const s = 'sc';   // so existe uma fonte desde 09/10/2026 (ver _waCaptureSource)
     await _writeConfig(env, 'wa_capture_source', s);
     return json({ ok: true, source: s });
   }
   return json({ ok: true, source: await _waCaptureSource(env) });
 }
 
-// GET /api/wa/conn → estados de conexão recebidos (dash age em número caído)
-// Lista as instâncias direto da Evolution: estado REAL + número conectado (ownerJid).
-// Não confia só no webhook (que pode ficar defasado e mostrar "conectado" falso).
-// Cache curto da lista de instâncias. Existe pra dash poder perguntar de poucos em poucos segundos
-// (queda de número aparecendo rápido) sem transformar isso em ida à VPS a cada pergunta.
-// NUNCA cacheia resposta ruim (null): se a Evolution falhar, a próxima pergunta tenta de novo.
-let _evoCache = null, _evoCacheAt = 0;
-// ── DISJUNTOR DA EVOLUTION (27/09/2026) ────────────────────────────────────
-//
-// A VPS da Evolution esta FORA DO AR. Medido de fora: 10,6 segundos ate falhar, tres vezes
-// seguidas, em https://69-197-134-180.sslip.io/instance/fetchInstances. A captura mudou pro Sale
-// Chat em 11/09 (wa_capture_source='sc'), entao ninguem depende mais dela - mas o /api/wa/conn
-// continuava perguntando.
-//
-// O ESTRAGO ERA GRANDE porque a tela de Pressels chama esse endpoint DE 8 EM 8 SEGUNDOS e o cache
-// era de 4: toda pergunta ia pra VPS morta e esperava o timeout. Medido no ar: /api/wa/conn levava
-// de 4,2 a 6,1 segundos enquanto /api/state levava 744ms, /api/wa/chats 316ms e /api/pressel/diag
-// 692ms. Ou seja a rota mais chamada da tela era de 6 a 14 vezes mais lenta que todas as outras, e
-// a culpa nao era do nosso codigo nem do D1: era espera de rede num servidor que nao existe mais.
-//
-// O disjuntor: falhou, para de tentar por 10 minutos e responde na hora com o que ja tem. Nao
-// arranca a Evolution do codigo de proposito - se a VPS voltar, a primeira tentativa depois dos 10
-// minutos religa sozinha. E o cache do sucesso subiu de 4s pra 30s, que ainda e menos que o
-// intervalo em que o Bruno quer ver um numero cair, e deixa de ser sempre frio.
-let _evoFalhouAte = 0;
-async function _evoInstancesCached(env, ttlMs = 30000) {
-  if (_evoCache && (Date.now() - _evoCacheAt) < ttlMs) return _evoCache;
-  if (Date.now() < _evoFalhouAte) return _evoCache;   // disjuntor aberto: nem tenta
-  const r = await _evoInstances(env);
-  if (r) { _evoCache = r; _evoCacheAt = Date.now(); _evoFalhouAte = 0; }
-  else { _evoFalhouAte = Date.now() + 600000; console.log('EVO_DISJUNTOR_ABRIU sem resposta da VPS; nao pergunto de novo por 10 min'); }
-  return r;
-}
-async function _evoInstances(env) {
-  const res = await evoFetch(env, '/instance/fetchInstances');
-  if (res._noconfig || !res.ok) return null;
-  const arr = Array.isArray(res.data) ? res.data : (res.data?.instances || []);
-  return arr.map(x => {
-    const i = x.instance || x;
-    const name = i.instanceName || i.name;
-    const state = i.connectionStatus || i.state || i.status || 'unknown';
-    const number = String(i.ownerJid || i.owner || i.number || '').replace(/@.*/, '').replace(/\D/g, '');
-    return { name, state, number };
-  }).filter(x => x.name);
-}
-// Recorta uma lista de instancias pelo que o usuario pode ver. null = sem corte (diretor).
-const _filtraInst = (lista, ids) => (ids === null ? lista : (lista || []).filter((x) => _instEhDe(x && x.name, ids)));
+// GET /api/wa/conn → estado das conexoes: Sale Chat (heartbeat) e numeros da Cloud API.
+// A lista ao vivo da Evolution (cache + disjuntor) saiu em 09/10/2026.
 // O QUE E DE OUTRA OPERACAO, PRA CASA NAO LISTAR (12/09/2026).
 //
 // O diretor recebia TODA instancia do servidor da Evolution, e ali estavam os dois numeros do
@@ -14077,40 +13134,7 @@ async function handleWAConn(req, env) {
     apiConns.forEach(a => { byInst[a.instance] = a; });
     return Object.values(byInst);
   };
-  // Estado REAL + número conectado direto da Evolution; grava no wa_conn (pra roleta usar também).
-  // Com a captura 100% no Sale Chat a Evolution sai de cena: não consulta, não grava e não mostra
-  // conexão fantasma dela na tela. O Baileys é o maior risco de ban, então nada aqui pode dar a
-  // impressão de que ele ainda faz parte da operação.
-  // A fonte de captura ('sc' x 'evo') decide QUEM computa lead/venda, NÃO o que a tela de conexão
-  // mostra. Desde que a roleta passou a conectar número por número por QR na Evolution, esconder as
-  // instâncias dela fazia número REALMENTE conectado aparecer vermelho na roleta (o Bruno conectava,
-  // dava certo no servidor, e a dash dizia que não). Aqui a tela mostra a realidade, sempre.
-  const _src = await _waCaptureSource(env);
-  try {
-    // A dash pergunta isso de poucos em poucos segundos (pra queda de número aparecer rápido).
-    // Sem cache, cada pergunta viraria uma ida à VPS + uma escrita no D1 por instância — com a dash
-    // aberta em várias abas isso vira martelo. O cache curto segura o custo sem atrasar a detecção,
-    // e as escritas só acontecem quando os dados são NOVOS (cache frio).
-    // Casa com o TTL do cache la em cima (30s). Com 4s aqui e 30s la, toda chamada entre 4 e 30
-    // segundos regravaria no wa_conn exatamente o mesmo dado que ja esta la.
-    const _fresco = !(_evoCache && (Date.now() - _evoCacheAt) < 30000);
-    const live = await _evoInstancesCached(env);
-    if (live && live.length) {
-      if (_fresco) for (const it of live) {
-        try {
-          await env.DB.prepare(
-            `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
-             ON CONFLICT(instance) DO UPDATE SET state=excluded.state, number=excluded.number, updated_at=excluded.updated_at`
-          ).bind(it.name, String(it.state), it.number || '').run();
-        } catch (_) {}
-      }
-      // `escopo` diz o que esta resposta ABRANGE: 'tudo' pro diretor, ou a lista de ids que a
-      // pessoa pode ver. Sem isso a tela confunde "nao me mandaram" com "esta caido" e pinta de
-      // vermelho a conexao de numero que nao e do mundo dela.
-      return json({ ok: true, sat, apiOk, escopo: (_idsConn === null ? 'tudo' : _idsConn), conn: _semOutros(_connDoMundo(withApi(mergeSc(live.map(it => ({ instance: it.name, state: it.state, number: it.number })))), _idsConn)) });
-    }
-  } catch (_) {}
-  // fallback: Evolution não respondeu → usa o DB (que ja tem os heartbeats do Sale Chat)
+  // Fonte: o DB (heartbeats do Sale Chat) mais os numeros oficiais (apiConns). A Evolution saiu em 09/10/2026.
   // NÚMERO CAPTURANDO SEM DONO: o chip perdeu o atendente na Contingência mas o Sale Chat continua
   // rodando nele. Sem dono o servidor joga tudo em quarentena e LEAD E VENDA SOMEM EM SILÊNCIO
   // (caso real: 2 vendas de R$697 perdidas). Isso tem que aparecer na cara do Diretor.
@@ -14124,9 +13148,8 @@ async function handleWAConn(req, env) {
   // o número aparecia "WhatsApp rodando" depois de ter caído. Vencido vira 'close' (vermelho).
   const nowS = Math.floor(Date.now() / 1000);
   const limpos = (rows.results || [])
-    // Reserva (Evolution fora do ar): mostra o último estado conhecido. Só 'sc' (Sale Chat),
-    // 'open' (Evolution por QR) e 'cloud' (API oficial) contam como conexão viva.
-    .filter(r => ['sc', 'open', 'cloud'].includes(String(r.state)))
+    // So 'sc' (Sale Chat) e 'cloud' (API oficial) contam como conexao viva.
+    .filter(r => ['sc', 'cloud'].includes(String(r.state)))
     .map(r => ((nowS - Number(r.updated_at || 0)) > 180) ? { ...r, state: 'close' } : r);
   // `semDono` e diagnostico da casa (numero sem atendente resolvido): nao vai pro mundo do afiliado.
   return json({ ok: true, sat, apiOk, escopo: (_idsConn === null ? 'tudo' : _idsConn), semDono: (_idsConn === null ? semDono : []), conn: _semOutros(_connDoMundo(withApi(mergeSc(limpos)), _idsConn)) });
@@ -15055,63 +14078,6 @@ async function _waDetectSale(env, instance, data) {
   } catch (_) { return { sale: true, value, error: true }; }
 }
 
-// ─── Respostas automáticas ───────────────────────────────────────────────────────────────
-// Configuradas na dash (Sale Chat > Respostas automáticas, perfil vendedores). Quando o VENDEDOR
-// envia uma mensagem com a palavra-gatilho (ex: "Pedido Concluído"), a API responde sozinha pro
-// cliente com um texto e, se configurado, um CARD DE CONTATO (ex: o rapaz da entrega/cobrança).
-async function _evoSendContact(env, instance, to, name, number) {
-  const digits = String(number || '').replace(/\D/g, '');
-  if (!digits) return;
-  const wuid = digits.length <= 11 ? ('55' + digits) : digits;   // garante DDI 55
-  await evoFetch(env, `/message/sendContact/${encodeURIComponent(instance)}`, {
-    method: 'POST',
-    body: { number: to, contact: [{ fullName: String(name || 'Contato'), wuid, phoneNumber: '+' + wuid }] },
-  });
-}
-async function _waAutoReplies(env, instance, data, ctx) {
-  try {
-    const key = data?.key || {};
-    if (!key.fromMe) return;                              // só dispara na mensagem DO VENDEDOR (saída)
-    const jid = String(key.remoteJid || '');
-    if (!jid || jid.indexOf('@g.us') >= 0) return;        // ignora grupo
-    const m = data?.message || {};
-    const text = (m.conversation || m.extendedTextMessage?.text || '').toLowerCase();
-    if (!text) return;
-    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-    let st = {}; try { st = JSON.parse(row?.data || '{}'); } catch (_) {}
-    const sc = st.salechatPub || st.salechat || {};       // publicado (vendedores)
-    const replies = Array.isArray(sc.autoreplies) ? sc.autoreplies : [];
-    if (!replies.length) return;
-    const to = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
-    if (!to) return;
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_autoreply_log (k TEXT PRIMARY KEY, ts INTEGER)').run();
-    for (const rp of replies) {
-      if (!rp || rp.on === false) continue;
-      const kws = String(rp.trigger || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
-      if (!kws.length || !kws.some(k => text.indexOf(k) >= 0)) continue;
-      // dedup GRAVADO JÁ (antes do delay): se o webhook reentregar nos próximos segundos, não agenda 2x.
-      const dk = 'ar_' + (rp.id || '') + '_' + to;
-      const recent = await env.DB.prepare("SELECT ts FROM wa_autoreply_log WHERE k=? AND ts > strftime('%s','now')-21600").bind(dk).first();
-      if (recent) continue;
-      await env.DB.prepare("INSERT INTO wa_autoreply_log (k, ts) VALUES (?, strftime('%s','now')) ON CONFLICT(k) DO UPDATE SET ts=strftime('%s','now')").bind(dk).run();
-      // Espera antes de enviar (padrão 10s, mais humano). Roda em segundo plano (ctx.waitUntil):
-      // o webhook responde na hora e o envio dispara depois — sem segurar a conexão da Evolution.
-      const delayMs = Math.max(0, Math.min(90, (rp.delaySec == null ? 10 : Number(rp.delaySec) || 0))) * 1000;
-      const send = async () => {
-        try {
-          if (delayMs) await new Promise(r => setTimeout(r, delayMs));
-          if (rp.text && String(rp.text).trim()) {
-            try { await evoFetch(env, `/message/sendText/${encodeURIComponent(instance)}`, { method: 'POST', body: { number: to, text: String(rp.text) } }); } catch (_) {}
-          }
-          if (rp.contactNumber && String(rp.contactNumber).replace(/\D/g, '')) {
-            try { await _evoSendContact(env, instance, to, rp.contactName || 'Contato', rp.contactNumber); } catch (_) {}
-          }
-        } catch (_) {}
-      };
-      if (ctx && ctx.waitUntil) ctx.waitUntil(send()); else await send();
-    }
-  } catch (_) {}
-}
 // Envia um evento pro TikTok Events API (server-side). Telefone hasheado (advanced matching);
 // inclui ttclid quando temos (atribuição precisa ao anúncio).
 // Tabela de conferencia dos eventos mandados pro TikTok. Antes o envio era "manda e esquece":
@@ -22227,33 +21193,8 @@ async function _cronEnxugarLeads(env) {
   }
 }
 
-// Mantem wa_conn fresco pras instancias da Evolution.
-async function _cronEvolution(env) {
-  try {
-    // Mantém wa_conn fresco pras instâncias da Evolution. NÃO pode depender da fonte de captura:
-    // a roleta só roteia lead pra quem tem wa_conn atualizado nos últimos 180s, então com o cron
-    // calado o número conectado por QR ficava verde na tela mas SAÍA DA ROLETA em 3 minutos e
-    // parava de receber lead em silêncio. O estado gravado é o REAL vindo da Evolution (open/close),
-    // então não ressuscita conexão fantasma: o que caiu entra como 'close' e é filtrado.
-    const live = await _evoInstances(env);
-    if (live && live.length) {
-      await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_conn (instance TEXT PRIMARY KEY, state TEXT, updated_at INTEGER)').run();
-      try { await env.DB.prepare('ALTER TABLE wa_conn ADD COLUMN number TEXT').run(); } catch (_) {}
-      for (const it of live) {
-        try {
-          await env.DB.prepare(
-            `INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, ?, ?, strftime('%s','now'))
-             ON CONFLICT(instance) DO UPDATE SET state=excluded.state, number=excluded.number, updated_at=excluded.updated_at`
-          ).bind(it.name, String(it.state), it.number || '').run();
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
-}
-
 export default {
-  // Cron: mantém wa_conn (estado + número conectado) fresco mesmo com a dash FECHADA, puxando da Evolution.
-  // Assim o roteador nunca manda lead pra número caído por causa de estado defasado (webhook às vezes perde o logout).
+  // Cron: um passo por batida (ver abaixo). A sincronia com a Evolution saiu em 09/10/2026.
   // ── O CRON FAZ UM PASSO POR BATIDA ──────────────────────────────────────────
   //
   // Descoberto em 18/08/2026, com a campanha do Bruno JA NO AR: toda batida do cron morria com
@@ -22473,7 +21414,6 @@ export default {
         // Semeia numero -> vendedor e atualiza o estado real das instancias. Numero sem dono nao
         // vira lead nem venda.
         await _scEnsureTables(env); await _scSeedOwners(env);
-        await _cronEvolution(env);
       } else if (passo === 'agenda') {
         // numero desligado "ate amanha" volta pro lugar dele na roleta (ver _presselVoltaTick)
         try { await _presselVoltaTick(env); } catch (e) { console.error('[cron] volta da roleta falhou: ' + String((e && e.message) || e)); }
@@ -22700,7 +21640,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/config/ai-keys')      return handleAIConfigSet(req, env);
       if (req.method === 'POST'   && path === '/api/config/ai-keys/test') return handleAIConfigTest(req, env);
 
-      // WhatsApp (Evolution API) — ponte segura Dash → Worker → Evolution
+      // WhatsApp: envio pela Cloud API oficial (a ponte da Evolution saiu em 09/10/2026)
       // Conexoes com as plataformas (Payt, Five, PayLog, Datacrazy), configuraveis pelo diretor
       // de cada dash. Ver o bloco do handleIntegracoesGet.
       // O ESTADO DAS CONEXOES, SOZINHO. O /api/state tambem devolve, mas ele pesa centenas de KB:
@@ -22711,23 +21651,11 @@ export default {
       if (req.method === 'GET'    && path === '/api/config/integracoes')        return handleIntegracoesGet(req, env);
       if (req.method === 'POST'   && path === '/api/config/integracoes')        return handleIntegracoesSet(req, env);
       if (req.method === 'POST'   && path === '/api/config/integracoes/testar') return handleIntegracoesTest(req, env);
-      if (req.method === 'GET'    && path === '/api/config/wa') return handleWAConfigGet(req, env);
-      if (req.method === 'POST'   && path === '/api/config/wa') return handleWAConfigSet(req, env);
-      if (req.method === 'GET'    && path === '/api/wa/status') return handleWAStatus(req, env);
       if (req.method === 'POST'   && path === '/api/wa/send')       return handleWASend(req, env);
       if (req.method === 'POST'   && path === '/api/wa/cloud/send') return handleWACloudSend(req, env);
       if (req.method === 'POST'   && path === '/api/wa/cloud/send-media') return handleWACloudSendMedia(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/send-audio') return handleWASendAudio(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/send-media') return handleWASendMedia(req, env);
       if (req.method === 'POST'   && path === '/api/wa/tts-test')   return handleTTSTest(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/config/tts') return handleTTSConfig(req, env);
-      // WhatsApp multi-instância (1 conexão por atendente)
-      if (req.method === 'GET'    && path === '/api/wa/instances')        return handleWAInstances(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/instance/create')  return handleWAInstanceCreate(req, env, ctx);
-      if (req.method === 'GET'    && path === '/api/wa/instance/connect') return handleWAInstanceConnect(req, env);
-      if (req.method === 'GET'    && path === '/api/wa/instance/status')  return handleWAInstanceStatus(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/instance/logout')  return handleWAInstanceLogout(req, env);
-      if (req.method === 'POST'   && path === '/api/wa/instance/disconnect') return handleWAInstanceDisconnect(req, env);
       if (req.method === 'GET'    && path === '/api/wa/conn')             return handleWAConn(req, env);
       if (req.method === 'GET'    && path === '/api/salechat')            return handleSaleChatGet(req, env);
       if (req.method === 'GET'    && path === '/api/salechat/mine')       return handleSaleChatMine(req, env);
@@ -22788,12 +21716,6 @@ export default {
       if (req.method === 'POST'   && path === '/api/wa/sale/reassign')    return handleWASaleReassign(req, env);
       if (req.method === 'POST'   && path === '/api/wa/bot/preview')      return handleBotPreview(req, env);
 
-      // Webhook de volta da Evolution (mensagens recebidas + conexão)
-      const evoMatch = path.match(/^\/webhook\/evolution\/([a-zA-Z0-9_-]+)$/);
-      if (evoMatch && (req.method === 'POST' || req.method === 'GET')) {
-        if (req.method === 'GET') return json({ name: 'axion-evolution-webhook', ok: true, ready: true });
-        return handleEvolutionWebhook(req, env, evoMatch[1], ctx);
-      }
       const delMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (req.method === 'DELETE' && delMatch)                      return handleDeleteUser(req, env, delMatch[1]);
 

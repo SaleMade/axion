@@ -55,8 +55,8 @@ CF_WORKER_NAME = "axion-api"
 # Quem assina o aviso. O servico de push usa isto pra falar com a gente se algo der errado.
 VAPID_SUBJECT = "mailto:brunomc1416@gmail.com"
 
-# ─── Cron: sincroniza o estado de conexão (wa_conn) com a Evolution a cada 2min ──
-# (mantém "conectado/número" certo mesmo com a dash fechada — serve-time confia no wa_conn)
+# ─── Cron: um passo por batida (funil, conexoes do Sale Chat, PayLog, Datacrazy...) ──
+# (a sincronia com a Evolution saiu em 09/10/2026 junto com a ponte)
 [triggers]
 # DE 1 EM 1 MINUTO, e cada batida faz UM passo (ver o scheduled no worker.js). Era */2 fazendo tudo
 # junto, e no plano Workers Free (10ms de CPU por invocacao) a batida inteira estourava e morria
