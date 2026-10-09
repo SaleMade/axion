@@ -12864,13 +12864,22 @@ async function _dcSyncInstances(env, mundo) {
       const cfg = (inst && inst.config) || {};
       const disp = String(cfg.phoneNumber || '').replace(/\D/g, '');
       const token = String(cfg.token || '');
-      if (!disp || !token) continue;
+      if (!disp) continue;
       // TOKEN MASCARADO NAO VALE (03/10/2026). Hoje de manha o Datacrazy passou a devolver o token na
       // API como "EAB*" (10 caracteres, escondido). Esta rotina gravava isso por cima do token de
       // verdade em TODOS os numeros dele, e a partir das 09:46 todo envio pela Meta voltou 401 - e a
       // tela dizia "o WhatsApp recusou o formato deste audio". Token de verdade tem centenas de
       // caracteres e nunca tem asterisco. Mascarado: nao toca no que ja esta gravado.
-      if (token.indexOf('*') >= 0 || token.length < 60) { console.error('DC_TOKEN_MASCARADO ' + disp.slice(-4)); continue; }
+      if (!token || token.indexOf('*') >= 0 || token.length < 60) {
+        console.error('DC_TOKEN_MASCARADO ' + disp.slice(-4));
+        // MAS O NUMERO NOVO ENTRA (09/10/2026). O `continue` acima vinha antes do cadastro, entao todo
+        // numero ligado no Datacrazy depois de 03/10 nunca entrou aqui: a roleta o via "nao conectado"
+        // e pulava ele em silencio. O (24) 99277-4144 era o 1o da fila do Kevin e passou o dia sem
+        // lead enquanto o 3o da fila levava tudo, ate ser banido. Cadastra e herda o token que a
+        // Graph confirmar pra este numero (os numeros do Datacrazy dividem o mesmo usuario de sistema).
+        if (cfg.phoneNumberId) await _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial);
+        continue;
+      }
       const nk = _waNumKey(disp);
       const r = await env.DB.prepare("UPDATE wa_api_numbers SET token=?, waba_id=COALESCE(?, waba_id), updated_at=strftime('%s','now') WHERE num_key=?").bind(token, String(cfg.wabaId || '') || null, nk).run();
       // Número CONECTADO NO DATACRAZY e ainda sem cadastro aqui entra agora. Antes isso era só
@@ -12893,6 +12902,24 @@ async function _dcSyncInstances(env, mundo) {
       }
     } catch (_) {}
   }
+}
+// Numero do Datacrazy que veio com token mascarado: cadastra se for novo e, se o token gravado nao
+// presta, procura entre os tokens bons ja gravados um que a Graph aceite PARA ESTE numero.
+async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial) {
+  const pnid = String(cfg.phoneNumberId);
+  const tokBom = (t) => !!t && String(t).length >= 60 && String(t).indexOf('*') < 0;
+  const ja = await env.DB.prepare('SELECT phone_number_id, token FROM wa_api_numbers WHERE num_key=? LIMIT 1').bind(_waNumKey(disp)).first();
+  if (ja && tokBom(ja.token)) return;
+  if (!ja) {
+    await _waApiUpsert(env, { phone_number_id: pnid, display_phone: disp, waba_id: String(cfg.wabaId || cfg.businessId || '') || null, verified: 1 });
+    if (donoInicial) await env.DB.prepare("UPDATE wa_api_numbers SET at_id=? WHERE phone_number_id=? AND COALESCE(at_id,'')=''").bind(donoInicial, pnid).run().catch(() => {});
+  }
+  const cands = ((await env.DB.prepare("SELECT token, COUNT(*) n FROM wa_api_numbers WHERE length(token) >= 60 AND instr(token,'*') = 0 GROUP BY token ORDER BY n DESC LIMIT 5").all()).results || []);
+  for (const c of cands) {
+    const r = await _graph(env, '/' + pnid + '?fields=id', { token: c.token });
+    if (r.ok) { await env.DB.prepare('UPDATE wa_api_numbers SET token=? WHERE phone_number_id=?').bind(c.token, (ja && ja.phone_number_id) || pnid).run(); return; }
+  }
+  console.error('DC_SEM_TOKEN ' + disp.slice(-4));
 }
 let _dcSeenOk = false;
 // AGENDA: avisa quem marcou o retorno na hora marcada.
