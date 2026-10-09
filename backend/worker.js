@@ -10071,6 +10071,9 @@ async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
     let j = {}; try { j = JSON.parse(txt); } catch (_) {}
     if (up.ok && j && j.id) return { id: String(j.id), isOpus, mime };
     if (up.status === 401 || up.status === 403 || /"code":\s*(190|10|200)/.test(txt)) return falha('meta_acesso_http_' + up.status, txt);
+    // "Authorization Error" vem com code 100 (09/10/2026, 4144 do Kevin): sem esta linha a tela dizia
+    // que o FORMATO do audio era o problema e o vendedor regravava a toa.
+    if (/Authorization Error/i.test(txt)) return falha('meta_acesso_http_' + up.status, txt);
     return falha('meta_recusou_http_' + up.status + '_mime_' + mime, txt);
   } catch (e) { return falha('excecao', String((e && e.stack) || e)); }
 }
@@ -12914,9 +12917,12 @@ async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial) {
     await _waApiUpsert(env, { phone_number_id: pnid, display_phone: disp, waba_id: String(cfg.wabaId || cfg.businessId || '') || null, verified: 1 });
     if (donoInicial) await env.DB.prepare("UPDATE wa_api_numbers SET at_id=? WHERE phone_number_id=? AND COALESCE(at_id,'')=''").bind(donoInicial, pnid).run().catch(() => {});
   }
-  const cands = ((await env.DB.prepare("SELECT token, COUNT(*) n FROM wa_api_numbers WHERE length(token) >= 60 AND instr(token,'*') = 0 GROUP BY token ORDER BY n DESC LIMIT 5").all()).results || []);
+  const cands = ((await env.DB.prepare("SELECT token, COUNT(*) n FROM wa_api_numbers WHERE length(token) >= 60 AND instr(token,'*') = 0 GROUP BY token ORDER BY n DESC LIMIT 20").all()).results || []);
   for (const c of cands) {
-    const r = await _graph(env, '/' + pnid + '?fields=id', { token: c.token });
+    // O PERFIL, NAO O `?fields=id`. O usuario "API Geral Claude" LE o numero novo mas nao ENVIA por
+    // ele (Authorization Error no upload): passou no teste antigo e o funil do Kevin falhou no 4144.
+    // O perfil exige a mesma permissao de mensagem do envio e nao manda nada pra ninguem.
+    const r = await _graph(env, '/' + pnid + '/whatsapp_business_profile?fields=about', { token: c.token });
     if (r.ok) { await env.DB.prepare('UPDATE wa_api_numbers SET token=? WHERE phone_number_id=?').bind(c.token, (ja && ja.phone_number_id) || pnid).run(); return; }
   }
   console.error('DC_SEM_TOKEN ' + disp.slice(-4));
