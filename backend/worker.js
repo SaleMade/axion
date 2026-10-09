@@ -115,6 +115,9 @@ const _INTEG_SEGREDOS = {
   pl_secret:      { env: 'PAYLOG_SECRET' },
   dc_api_key:     {},
   dc_hook_secret: {},
+  // APP SECRET DO APP DA META (09/10/2026, item 34): assina o POST /api/wa/cloud. Secret do worker
+  // ou salvo pela tela de Integracoes; so da casa (a porta e uma so, do app 234648803045985).
+  wa_api_app_secret: { env: 'WA_APP_SECRET' },
 };
 // ══ CADA MUNDO TEM AS PROPRIAS CHAVES ═════════════════════════════════════
 //
@@ -228,7 +231,69 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
 
 const err = (msg, status = 400) => json({ error: msg }, status);
 
+// SENHA COM SAL (09/10/2026, auditoria item 36). Ate aqui a senha era sha256 puro do texto: duas
+// pessoas com a mesma senha tinham o mesmo hash, e um vazamento da tabela users dava pra quebrar
+// por tabela pronta. Agora: PBKDF2-SHA256, 100 mil iteracoes, sal de 16 bytes, no formato
+// `pbkdf2$<iter>$<sal hex>$<hash hex>`. O hash ANTIGO (64 hex) continua entrando: confereSenha
+// reconhece os dois, e o login bem-sucedido com hash antigo regrava no formato novo (migracao
+// transparente, sem ninguem precisar trocar de senha). O banco do Giovane roda este mesmo codigo.
+const _PBKDF2_ITER = 100000;
+const _hex = (buf) => Array.from(new Uint8Array(buf)).map((x) => x.toString(16).padStart(2, '0')).join('');
+async function _pbkdf2Hex(senha, salHex, iter) {
+  const sal = new Uint8Array(salHex.match(/.{2}/g).map((h) => parseInt(h, 16)));
+  const chave = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(senha)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: sal, iterations: iter }, chave, 256);
+  return _hex(bits);
+}
+async function hashSenha(senha) {
+  const salHex = _hex(crypto.getRandomValues(new Uint8Array(16)));
+  return 'pbkdf2$' + _PBKDF2_ITER + '$' + salHex + '$' + (await _pbkdf2Hex(senha, salHex, _PBKDF2_ITER));
+}
+// Devolve { ok, legado }: legado = true quando conferiu pelo sha256 antigo (hora de regravar).
+async function confereSenha(senha, guardado) {
+  const g = String(guardado || '');
+  if (!g) return { ok: false, legado: false };
+  if (g.startsWith('pbkdf2$')) {
+    const [, iter, salHex, hash] = g.split('$');
+    const calc = await _pbkdf2Hex(senha, salHex, Number(iter) || _PBKDF2_ITER);
+    return { ok: _iguaisConstante(calc, hash), legado: false };
+  }
+  if (/^[a-f0-9]{64}$/i.test(g)) {
+    const calc = await sha256Hex(senha);
+    return { ok: _iguaisConstante(calc, g.toLowerCase()), legado: true };
+  }
+  return { ok: false, legado: false };
+}
+function _iguaisConstante(a, b) {
+  const x = String(a), y = String(b);
+  if (x.length !== y.length) return false;
+  let d = 0;
+  for (let i = 0; i < x.length; i++) d |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return d === 0;
+}
+
+// LIMITE DE TENTATIVAS DE LOGIN (09/10/2026, item 36). Sem binding novo no wrangler.toml (decisao do
+// ADENDO): contador em memoria do isolate, por login e por IP, 10 tentativas por 60 s, com teto de
+// chaves pra nunca crescer sem fim. E por isolate, entao nao e absoluto - mas transforma "milhares
+// de tentativas por minuto" em "dez por isolate por minuto", e cada falha fica no log. Zero escrita
+// no D1 (uma falha de login virar um write era o que a auditoria proibiu).
+const _loginTent = new Map();
+const _LOGIN_MAX = 10, _LOGIN_JANELA_MS = 60000;
+function _loginEstourou(chave) {
+  const agora = Date.now();
+  if (_loginTent.size > 500) _loginTent.clear();
+  const lista = (_loginTent.get(chave) || []).filter((t) => agora - t < _LOGIN_JANELA_MS);
+  _loginTent.set(chave, lista);
+  return lista.length >= _LOGIN_MAX;
+}
+function _loginFalhou(chave) {
+  const lista = _loginTent.get(chave) || [];
+  lista.push(Date.now());
+  _loginTent.set(chave, lista);
+}
+
 async function sha256Hex(text) {
+  // (sem sal: so pro hash LEGADO da senha e pros hashes do pixel; senha nova usa hashSenha)
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -767,7 +832,11 @@ async function handleLogin(req, env) {
   const body = await req.json().catch(() => null);
   if (!body || !body.login || !body.password) return err('Login e senha obrigatórios');
   const login = String(body.login).toLowerCase().trim();
-  const pwdHash = await sha256Hex(body.password);
+  const _ip = String(req.headers.get('cf-connecting-ip') || '');
+  if (_loginEstourou('login:' + login) || (_ip && _loginEstourou('ip:' + _ip))) {
+    console.log('LOGIN limite de tentativas: ' + login + ' ' + _ip);
+    return err('Muitas tentativas. Aguarde um minuto.', 429);
+  }
 
   const user = await env.DB.prepare(
     // afiliado_id vai junto: a dash do afiliado usa ele pra saber quais pedidos sao dele nas telas
@@ -784,8 +853,16 @@ async function handleLogin(req, env) {
     ).bind(login).first();
   });
 
-  if (!user || user.pwd_hash !== pwdHash) {
+  const _conf = user ? await confereSenha(body.password, user.pwd_hash) : { ok: false, legado: false };
+  if (!user || !_conf.ok) {
+    _loginFalhou('login:' + login);
+    if (_ip) _loginFalhou('ip:' + _ip);
+    console.log('LOGIN falhou: ' + login + ' ' + _ip);
     return err('Login ou senha inválidos', 401);
+  }
+  // Conferiu pelo sha256 antigo: regrava no formato com sal. Falha aqui nao impede o login.
+  if (_conf.legado) {
+    try { await env.DB.prepare('UPDATE users SET pwd_hash=? WHERE id=?').bind(await hashSenha(body.password), user.id).run(); } catch (_) {}
   }
 
   const token = randomToken();
@@ -876,17 +953,59 @@ function _shortCode() {
   return s;
 }
 
+// HOSTS QUE A DASH ENCURTA (09/10/2026, auditoria item 35). O encurtador aceitava QUALQUER URL de
+// qualquer usuario logado, e o link saia como sellwave.com.br/checkout/<code>: um vendedor conseguia
+// fabricar um link da marca apontando pra onde quisesse. Agora so https e so os hosts que a
+// operacao usa de verdade: os checkouts cadastrados (data.afl_checkout), a Five, a PayLog e o
+// rastreador. Lista fixa + o que estiver no estado, pra um checkout novo nao precisar de deploy.
+const _SHORT_HOSTS_FIXOS = ['app.fivedelivery.com.br', 'glico-six.rastreio.vip', 'sellwave.com.br', 'ev.paylog.cash', 'pay.paylog.cash', 'checkout.paylog.cash', 'paylog.cash'];
+async function _shortHostsPermitidos(env) {
+  const hosts = new Set(_SHORT_HOSTS_FIXOS);
+  try {
+    const d = await _getDashData(env, 0);
+    const ck = d && d.afl_checkout;
+    const urls = [];
+    if (typeof ck === 'string') urls.push(ck);
+    else if (Array.isArray(ck)) for (const x of ck) urls.push(typeof x === 'string' ? x : (x && (x.url || x.link)) || '');
+    else if (ck && typeof ck === 'object') for (const v of Object.values(ck)) urls.push(typeof v === 'string' ? v : (v && (v.url || v.link)) || '');
+    for (const s of urls) { try { const h = new URL(String(s)).hostname.toLowerCase(); if (h) hosts.add(h); } catch (_) {} }
+  } catch (_) {}
+  return hosts;
+}
+const _hostPermitido = (host, lista) => { const h = String(host || '').toLowerCase(); for (const p of lista) { if (h === p || h.endsWith('.' + p)) return true; } return false; };
+let _shortTabelaOk = false;
+async function _shortEnsure(env) {
+  if (_shortTabelaOk) return;
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS short_links (code TEXT PRIMARY KEY, url TEXT, created_at INTEGER, lead_id TEXT, created_by TEXT)').run(); } catch (_) {}
+  try { await env.DB.prepare('ALTER TABLE short_links ADD COLUMN created_by TEXT').run(); } catch (_) {}
+  _shortTabelaOk = true;
+}
 async function handleShortCreate(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   let body;
   try { body = await req.json(); } catch { return err('JSON inválido', 400); }
   const longUrl = String(body.url || '').trim();
-  if (!longUrl.startsWith('http')) return err('URL inválida', 400);
+  let alvo;
+  try { alvo = new URL(longUrl); } catch (_) { return err('URL inválida', 400); }
+  if (alvo.protocol !== 'https:') return err('Só endereço https', 400);
+  if (!_hostPermitido(alvo.hostname, await _shortHostsPermitidos(env))) return err('Esse endereço não é de checkout nem de rastreio da operação', 400);
+  // O LINK E DE UM PEDIDO QUE A PESSOA ENXERGA. Diretor ve todos; vendedor/cobrador so o proprio (at);
+  // o mundo do afiliado so o que e dele.
+  const leadId = String(body.lead_id || '').slice(0, 40);
+  if (!leadId) return err('lead_id obrigatório', 400);
+  if (!isDirector(u)) {
+    let lead = null;
+    try { const d = await _getDashData(env, 0); lead = (Array.isArray(d && d.leads) ? d.leads : []).find((l) => l && String(l.id) === leadId) || null; } catch (_) { lead = null; }
+    if (!lead) return err('Pedido não encontrado', 404);
+    const meuAfl = String(u.afiliado_id || '');
+    const doMeuMundo = String(lead.afl || '') === meuAfl;
+    if (!(String(lead.at || '') === String(u.id) || (meuAfl && doMeuMundo && isAfiliado(u)))) return err('Sem permissão para esse pedido', 403);
+  }
+  await _shortEnsure(env);
   const code = _shortCode();
-  const leadId = String(body.lead_id || '').slice(0, 40) || null;
-  await env.DB.prepare('INSERT INTO short_links (code, url, created_at, lead_id) VALUES (?, ?, ?, ?)')
-    .bind(code, longUrl, Date.now(), leadId).run();
+  await env.DB.prepare('INSERT INTO short_links (code, url, created_at, lead_id, created_by) VALUES (?, ?, ?, ?, ?)')
+    .bind(code, longUrl, Date.now(), leadId, String(u.id)).run();
   return json({ ok: true, code, short_url: `https://sellwave.com.br/checkout/${code}` });
 }
 
@@ -951,20 +1070,27 @@ async function _plEnsure(env) {
 // unica vez la em cima e so depois passa por JSON.parse: reler ou reserializar muda o byte e
 // derruba a assinatura.
 // Comparacao em tempo constante: comparar hash com === vaza informacao pelo tempo de resposta.
-async function _plAssinaturaOk(env, raw, header, mundo) {
+// HMAC-SHA256 EM TEMPO CONSTANTE, um so pra PayLog e Meta (09/10/2026, item 34). O cabecalho vem
+// como 'sha256=<hex>' nas duas; a comparacao nao pode encurtar no primeiro byte diferente.
+async function _hmacSha256Ok(segredo, raw, header) {
   try {
-    // A TELA VENCE O SECRET (10/09/2026). Estava ao contrario: quem salvasse o segredo dele pela
-    // tela veria "salvo" e o worker continuaria conferindo com o meu, calado.
-    const segredo = (await _readConfig(env, _cfgNome('pl_secret', mundo))) || (mundo ? '' : ((env && env.PAYLOG_SECRET) || ''));
     const recebido = String(header || '').replace(/^sha256=/i, '').trim().toLowerCase();
     if (!segredo || !recebido) return false;
-    const chave = await crypto.subtle.importKey('raw', new TextEncoder().encode(segredo), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const chave = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(segredo)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const mac = await crypto.subtle.sign('HMAC', chave, new TextEncoder().encode(raw));
     const esperado = Array.from(new Uint8Array(mac)).map((x) => x.toString(16).padStart(2, '0')).join('');
     if (esperado.length !== recebido.length) return false;
     let dif = 0;
     for (let i = 0; i < esperado.length; i++) dif |= esperado.charCodeAt(i) ^ recebido.charCodeAt(i);
     return dif === 0;
+  } catch (_) { return false; }
+}
+async function _plAssinaturaOk(env, raw, header, mundo) {
+  try {
+    // A TELA VENCE O SECRET (10/09/2026). Estava ao contrario: quem salvasse o segredo dele pela
+    // tela veria "salvo" e o worker continuaria conferindo com o meu, calado.
+    const segredo = (await _readConfig(env, _cfgNome('pl_secret', mundo))) || (mundo ? '' : ((env && env.PAYLOG_SECRET) || ''));
+    return await _hmacSha256Ok(segredo, raw, header);
   } catch (_) { return false; }
 }
 
@@ -3475,7 +3601,7 @@ const _afilSenha = () => {
 async function _afilCriarAcesso(env, affiliateId, nome, loginDesejado) {
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
   const senha = _afilSenha();
-  const hash = await sha256Hex(senha);
+  const hash = await hashSenha(senha);
   const jaTem = await env.DB.prepare("SELECT id, login FROM users WHERE afiliado_id=? AND role='afiliado'").bind(affiliateId).first();
   if (jaTem) {
     // Ja existe: isto e "gerar nova senha", nao criar outro usuario. Criar um segundo login pro
@@ -7201,10 +7327,18 @@ function _fotoUrl(req, id, photo) {
 }
 // GET /api/users/foto/:id/:hash  → a imagem de verdade, cacheavel. Publica de proposito: <img> nao
 // manda cabecalho de autorizacao, e o que ela expoe e um avatar de equipe atras de um hash.
-async function handleUserPhoto(req, env, id) {
+async function handleUserPhoto(req, env, id, hash) {
   const row = await env.DB.prepare('SELECT photo FROM users WHERE id = ?').bind(String(id)).first().catch(() => null);
   const p = String((row && row.photo) || '');
   if (!p.startsWith('data:')) return new Response('sem foto', { status: 404 });
+  // A URL TEM QUE TRAZER O HASH QUE A LISTA ENTREGOU (09/10/2026, item 35). A rota e publica de
+  // proposito (<img> nao manda autorizacao), e sem esta conferencia qualquer um enumerava os ids e
+  // baixava a foto de toda a equipe. O hash da lista e calculado sobre o SUBSTITUTO que o SQL
+  // devolve ('data:#' + tamanho + ultimos 12 chars), nunca sobre a foto crua - conferir contra a
+  // crua daria 404 em todo avatar. Aceita os dois so por seguranca.
+  const _h = String(hash || '').trim();
+  const _subst = 'data:#' + p.length + p.slice(-12);
+  if (!_h || (_h !== _fotoHash(_subst) && _h !== _fotoHash(p))) return new Response('sem foto', { status: 404 });
   const m = p.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
   if (!m) return new Response('foto invalida', { status: 404 });
   const mime = m[1] || 'image/jpeg';
@@ -7325,8 +7459,11 @@ async function handleListUsers(req, env) {
     // fora (a condicao exige o afiliado_id dele).
     const meuAfl = isAfiliado(u) ? aflDe(u) : null;
     const linhaCheia = (r) => String(r.id) === meu || (!!meuAfl && String(r.afiliado_id || '') === meuAfl);
+    // O LOGIN DOS OUTROS NAO SAI PRA CARGO RESTRITO (09/10/2026, item 36): e metade da credencial, e
+    // nenhuma tela de vendedor/cobrador usa. Fica so na propria linha e nas do time do afiliado
+    // (que ele edita pela Lista de Usuarios, e o formulario manda o login de volta).
     return json({ users: (rows.results || []).map((r) => ({
-      id: r.id, name: r.name, login: r.login, role: r.role, abbr: r.abbr,
+      id: r.id, name: r.name, ...(linhaCheia(r) ? { login: r.login } : {}), role: r.role, abbr: r.abbr,
       color: r.color, bg: r.bg, photo: _fotoUrl(req, r.id, r.photo), archived: r.archived,
       ...(r.afl_pct ? { afl_pct: r.afl_pct } : {}),
       // DE QUEM E ESSA PESSOA (16/09/2026). Sem isto, a tela do AFILIADO nao sabia que a vendedora
@@ -7405,10 +7542,9 @@ async function handleCreateOrUpdateUser(req, env) {
     if (!isDir && isSelf) {
       const atual = String((body && (body.senha_atual || body.current_password)) || '');
       if (!atual) return err('Informe a senha atual pra trocar a senha', 400);
-      const hashAtual = await sha256Hex(atual);
-      if (!existing?.pwd_hash || hashAtual !== existing.pwd_hash) return err('Senha atual não confere', 403);
+      if (!existing?.pwd_hash || !(await confereSenha(atual, existing.pwd_hash)).ok) return err('Senha atual não confere', 403);
     }
-    pwdHash = await sha256Hex(password);
+    pwdHash = await hashSenha(password);
   }
   if (!pwdHash) return err('Senha obrigatória ao criar usuário');
 
@@ -7440,6 +7576,13 @@ async function handleCreateOrUpdateUser(req, env) {
     await env.DB.prepare(
       `UPDATE users SET afiliado_id=COALESCE(?, afiliado_id), login=COALESCE(?, login), pwd_hash=?, name=?, abbr=COALESCE(?, abbr), role=COALESCE(?, role), color=COALESCE(?, color), bg=COALESCE(?, bg), com_pct=COALESCE(?, com_pct), salario=COALESCE(?, salario), photo=COALESCE(?, photo), banner=COALESCE(?, banner), email=COALESCE(?, email), com_ant=COALESCE(?, com_ant), com_ent=COALESCE(?, com_ent) WHERE id=?`
     ).bind(aflB, loginB, pwdHash, name, abbrB, roleB, colorB, bgB, comPctB, salarioB, photoB, bannerB, emailB, comAntB, comEntB, id).run();
+    // SENHA NOVA DERRUBA AS OUTRAS SESSOES (09/10/2026, item 36). Quem troca a senha porque alguem
+    // pegou a conta precisa que o outro navegador caia; antes o token velho vivia ate expirar (30
+    // dias). Fica so a sessao de quem esta trocando. O cache de 10 s do _authSessao e aceito.
+    if (password) {
+      const _tokAtual = ((req.headers.get('authorization') || '').match(/^Bearer\s+([a-f0-9]{64})$/i) || [])[1] || '';
+      try { await env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token <> ?').bind(String(id), _tokAtual).run(); } catch (_) {}
+    }
     // Espelha de volta no cadastro de afiliado quando o percentual e editado pela Lista de
     // Usuarios: sem isto, as duas telas voltariam a divergir pelo outro lado.
     if (String(role || '').toLowerCase() === 'afiliado' && comPctB != null) {
@@ -8009,6 +8152,9 @@ const CRIATIVO_TIPOS_OK = /^(video|audio|image)\//;
 
 // Quem usa: cargo cheio e o gestor de tráfego (é ele quem sobe criativo). Vendedor e afiliado não.
 function _podeTestarCriativo(u) {
+  // A CHAVE DO GEMINI E DA CASA (decisao 18 do item 41, 06/10/2026): quem e do mundo de um
+  // afiliado (tem afiliado_id) nao usa o testador nem a copy, mesmo sendo gestor ou designer la.
+  if (u && String(u.afiliado_id || '').trim()) return false;
   const r = String((u && u.role) || '').toLowerCase();
   return isDirector(u) || r === 'gestor' || r === 'designer';
 }
@@ -8257,6 +8403,8 @@ async function handleCriativoTestar(req, env) {
 async function handleAIGenerateCopy(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // Mesmo portao do testador (item 35): copy e IA da casa.
+  if (!_podeTestarCriativo(u)) return err('Sem permissão para a IA', 403);
 
   // Busca keys preferindo D1 (configurado via UI) → env (wrangler secret)
   const geminiKey = await getAIKey(env, 'gemini');
@@ -9422,6 +9570,9 @@ async function handleIntegracoesGet(req, env) {
   const _pIgual = mundo ? ("COALESCE(subpath,'') = '" + mundo.replace(/'/g, "") + "'") : "COALESCE(subpath,'') NOT LIKE 'afl!_%' ESCAPE '!'";
   const hbPl = await um('SELECT MAX(ts) ult, COUNT(*) n, SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) ok FROM paylog_debug WHERE ts > ' + desde + ' AND ' + _pIgual);
   const _dIgual = mundo ? ("COALESCE(afl,'') = '" + mundo.replace(/'/g, "") + "'") : "COALESCE(afl,'') = ''";
+  // ASSINATURA DO WEBHOOK DA META, ultimos 3 dias (item 34). So da casa: a porta e uma.
+  const _desde3 = Math.floor(Date.now() / 1000) - 3 * 86400;
+  const hbCloud = mundo ? null : await um("SELECT SUM(CASE WHEN source='cloud-sig-ok' THEN 1 ELSE 0 END) ok, SUM(CASE WHEN source='cloud-sig-invalida' THEN 1 ELSE 0 END) invalida, SUM(CASE WHEN source='cloud-sig-ausente' THEN 1 ELSE 0 END) ausente, SUM(CASE WHEN source='cloud-sig-sem-segredo' THEN 1 ELSE 0 END) sem_segredo FROM sc_ingest_audit WHERE source LIKE 'cloud-sig-%' AND received_at > " + _desde3);
   const hbDc = await um('SELECT MAX(received_at) ult, COUNT(*) n, SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) ok FROM dc_events WHERE received_at > ' + desde + ' AND ' + _dIgual);
 
   const dcHook = await _integChave(env, 'dc_hook_secret', mundo);
@@ -9449,9 +9600,16 @@ async function handleIntegracoesGet(req, env) {
       recebidos7: n(hbFive7 && hbFive7.n),
       ultimo7: n(hbFiveOk && hbFiveOk.ult7), aceitos24: n(hbFiveOk && hbFiveOk.ok24), aceitos7: n(hbFiveOk && hbFiveOk.ok7),
     },
+    cloud: mundo ? null : {
+      url: base + '/api/wa/cloud',
+      app_secret: await _integFicha(env, 'wa_api_app_secret', ''),
+      strict: String((await _readConfig(env, 'wa_cloud_strict')) || '0') === '1',
+      sig3d: { ok: n(hbCloud && hbCloud.ok), invalida: n(hbCloud && hbCloud.invalida), ausente: n(hbCloud && hbCloud.ausente), sem_segredo: n(hbCloud && hbCloud.sem_segredo) },
+    },
     paylog: {
-      // A PORTA DE CADA DONO E UM ENDERECO DIFERENTE. E o que faz a assinatura ser conferida com o
-      // segredo certo e o pedido nascer carimbado com o dono - ver handlePaylogCapture.
+      // A PORTA DE CADA DONO E UM ENDERECO DIFERENTE (a da Meta, logo acima, e uma so). E o que faz
+      // a assinatura ser conferida com o segredo certo e o pedido nascer carimbado com o dono - ver
+      // handlePaylogCapture.
       url: base + '/paylog' + (mundo ? '/' + mundo : ''),
       api: await _integFicha(env, 'pl_token', mundo),
       segredo: await _integFicha(env, 'pl_secret', mundo),
@@ -9531,7 +9689,14 @@ async function handleIntegracoesSet(req, env) {
   }
   if (b.pl_strict !== undefined) {
     await _writeConfig(env, _cfgNome('pl_strict', mundo), (b.pl_strict === false || txt(b.pl_strict) === '0') ? '0' : '1');
-    salvos.push('pl_strict');
+    salvos.push('pl_strict');   // (o da Meta, wa_cloud_strict, vem logo abaixo e e so da casa)
+  }
+  // EXIGIR ASSINATURA NO WEBHOOK DA META (item 34). Nasce desligado: liga so depois de uns dias de
+  // 'cloud-sig-ok' na tela, senao um App Secret colado errado cala o inbox inteiro sem aviso.
+  if (b.wa_cloud_strict !== undefined) {
+    if (mundo) return err('Esta conexão é da operação principal e não pode ser alterada aqui', 403);
+    await _writeConfig(env, 'wa_cloud_strict', (b.wa_cloud_strict === true || txt(b.wa_cloud_strict) === '1') ? '1' : '0');
+    salvos.push('wa_cloud_strict');
   }
   for (const k of (Array.isArray(b.limpar) ? b.limpar : [])) {
     if (!_INTEG_SEGREDOS[String(k)]) continue;
@@ -11680,7 +11845,35 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
     if (mode === 'subscribe' && tok && tok === expected) return new Response(chal || '', { status: 200, headers: { 'content-type': 'text/plain' } });
     return new Response('forbidden', { status: 403 });
   }
-  let body; try { body = await req.json(); } catch (_) { return json({ ok: true }); }
+  // CORPO CRU, LIDO UMA VEZ (09/10/2026, item 34): a assinatura da Meta e sobre os bytes que
+  // chegaram; reserializar o JSON muda espaco e ordem e o HMAC nunca bate. req.json() nunca mais.
+  let raw = '';
+  try { raw = await req.text(); } catch (_) { return json({ ok: true }); }
+  let body; try { body = JSON.parse(raw); } catch (_) { return json({ ok: true }); }
+  // MODO TRANSICAO (item 34): sem segredo salvo, nada e bloqueado (so se anota). Com segredo, cada
+  // POST vira uma linha 'cloud-sig-ok|ausente|invalida' no sc_ingest_audit, que a tela de
+  // Integracoes le pra avisar. Bloquear de verdade so com app_config wa_cloud_strict = '1' E
+  // segredo salvo - e ai o descarte responde 200 (criterio da PayLog: a Meta nao reentrega o que
+  // ela acha que falhou, e 4xx so faria ela desligar o webhook).
+  let _sig = 'sem-segredo';
+  try {
+    const _segredoMeta = (await _integChave(env, 'wa_api_app_secret', '')).valor;
+    if (_segredoMeta) {
+      const _cab = req.headers.get('x-hub-signature-256') || '';
+      _sig = !_cab ? 'ausente' : ((await _hmacSha256Ok(_segredoMeta, raw, _cab)) ? 'ok' : 'invalida');
+    }
+    const _e0 = (body && Array.isArray(body.entry) && body.entry[0]) || null;
+    const _v0 = (_e0 && Array.isArray(_e0.changes) && _e0.changes[0] && _e0.changes[0].value) || {};
+    const _self0 = String((_v0.metadata && _v0.metadata.display_phone_number) || '').replace(/\D/g, '');
+    const _m0 = (Array.isArray(_v0.messages) && _v0.messages[0] && _v0.messages[0].id) || (Array.isArray(_v0.statuses) && _v0.statuses[0] && _v0.statuses[0].id) || '';
+    await _scEnsureTables(env);
+    await env.DB.prepare('INSERT INTO sc_ingest_audit (source, self_number, phone, from_me, msg_id, type, body, push_name, ts, received_at, at_id) VALUES (?,?,?,?,?,?,?,?,?,?,NULL)')
+      .bind('cloud-sig-' + _sig, _self0, '', 0, String(_m0 || ''), 'sig', String(raw).slice(0, 200), '', Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)).run();
+    if (_sig !== 'ok' && _sig !== 'sem-segredo') {
+      const _estrito = String((await _readConfig(env, 'wa_cloud_strict')) || '0') === '1';
+      if (_estrito) { console.log('WA CLOUD descartado (assinatura ' + _sig + ')'); return json({ ok: true, descartado: _sig }); }
+    }
+  } catch (_) { /* a auditoria da assinatura nunca derruba o webhook */ }
   try {
     await _scEnsureTables(env);
     const now = Math.floor(Date.now() / 1000);
@@ -15589,6 +15782,8 @@ async function getBotPrompt(env) {
 async function handleBotPreview(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // O preview do robo le o prompt inteiro da casa e gasta a chave do Gemini: so o diretor (item 35).
+  if (!isDirector(u)) return err('Sem permissão', 403);
   const body = await req.json().catch(() => null);
   const message = String(body?.message || '').trim();
   if (!message) return err('Campo "message" obrigatório');
@@ -21162,6 +21357,8 @@ async function _cronRastreio(env) {
 }
 
 async function _cronPurga(env) {
+  // Link curto de checkout com mais de 90 dias (item 35): o pedido ja teve desfecho ha muito.
+  try { await env.DB.prepare("DELETE FROM short_links WHERE created_at < (strftime('%s','now') - 7776000) * 1000").run(); } catch (_) {}
   // (o destravador de funil preso em 'enviando' MUDOU DE LUGAR em 23/09/2026: foi pro comeco do
   // _waFunnelTick, que roda em toda batida. Aqui ele so rodava quando o rodizio calhava de cair em
   // 'manutencao' E o `volta` calhava de ser 3 E a batida nao tinha sido pulada pela trava - e nesse
@@ -21734,7 +21931,7 @@ export default {
 
       // users CRUD
       if (req.method === 'GET'    && path === '/api/users')         return handleListUsers(req, env);
-      if (req.method === 'GET'    && path.startsWith('/api/users/foto/')) return handleUserPhoto(req, env, decodeURIComponent(path.split('/')[4] || ''));
+      if (req.method === 'GET'    && path.startsWith('/api/users/foto/')) return handleUserPhoto(req, env, decodeURIComponent(path.split('/')[4] || ''), path.split('/')[5] || '');
       if (req.method === 'POST'   && path === '/api/users')         return handleCreateOrUpdateUser(req, env);
       const restoreMatch = path.match(/^\/api\/users\/([^/]+)\/restore$/);
       if (req.method === 'POST'   && restoreMatch)                  return handleRestoreUser(req, env, restoreMatch[1]);
