@@ -45,6 +45,11 @@ crons = ["*/2 * * * *"]
 [vars]
 CF_ACCOUNT_ID = "588fe0a3e1dcd39b9bfb53bdee593d08"
 WORKER_NAME = "axion-api-cg"
+# CF_WORKER_NAME e a MESMA coisa que WORKER_NAME, com outro nome: o detector de dominios
+# (handleDomainsDetect) le esta, o _ehDashDaCasa le a de cima. O dono desta dash tinha criado esta
+# aqui NA MAO no painel pra os dominios aparecerem como "Ativos", e cada deploy nosso apagava, porque
+# o wrangler substitui os [vars] pelo que esta neste arquivo. Agora mora aqui e sobrevive.
+CF_WORKER_NAME = "axion-api-cg"
 
 [[d1_databases]]
 binding       = "DB"

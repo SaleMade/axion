@@ -5679,7 +5679,13 @@ async function handleDomainsDetect(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!_podeMexerMeta(u)) return err('Sem permissão', 403);
-  const token = env.CF_API_TOKEN, acc = env.CF_ACCOUNT_ID, svc = env.CF_WORKER_NAME || 'axion-api';
+  // DUAS GRAFIAS DA MESMA COISA, E SO UMA ESTAVA NO CONFIG (08/10/2026). O _ehDashDaCasa le
+  // `WORKER_NAME`, que esta no wrangler-cg.toml; este trecho lia so `CF_WORKER_NAME`, que NAO
+  // estava. Como o deploy substitui os [vars] pelo que esta no arquivo, todo deploy apagava a
+  // variavel que o dono da outra dash tinha criado na mao no painel, e os dominios dele voltavam
+  // a aparecer como "nao anexados" (o filtro comparava com 'axion-api', o nome do worker da casa).
+  // Agora vale qualquer uma das duas, e o fallback so entra se nenhuma existir.
+  const token = env.CF_API_TOKEN, acc = env.CF_ACCOUNT_ID, svc = env.CF_WORKER_NAME || env.WORKER_NAME || 'axion-api';
   if (!token || !acc) return json({ ok: false, error: 'nao_configurado', doms: [] });
   // AS DUAS CHAMADAS SAO INDEPENDENTES, E UMA SO JA SERVE (07/10/2026).
   //
@@ -22126,7 +22132,13 @@ async function _cronPurga(env) {
 // so entrega dominio sem `pend`, entao ele nunca ve na lista um endereco que ainda nao responde.
 // Na dash do amigo isto nao roda: ela nao tem CF_API_TOKEN (o detector ja cai em nao_configurado).
 async function _cronDominios(env) {
-  const token = env.CF_API_TOKEN, acc = env.CF_ACCOUNT_ID, svc = env.CF_WORKER_NAME || 'axion-api';
+  // DUAS GRAFIAS DA MESMA COISA, E SO UMA ESTAVA NO CONFIG (08/10/2026). O _ehDashDaCasa le
+  // `WORKER_NAME`, que esta no wrangler-cg.toml; este trecho lia so `CF_WORKER_NAME`, que NAO
+  // estava. Como o deploy substitui os [vars] pelo que esta no arquivo, todo deploy apagava a
+  // variavel que o dono da outra dash tinha criado na mao no painel, e os dominios dele voltavam
+  // a aparecer como "nao anexados" (o filtro comparava com 'axion-api', o nome do worker da casa).
+  // Agora vale qualquer uma das duas, e o fallback so entra se nenhuma existir.
+  const token = env.CF_API_TOKEN, acc = env.CF_ACCOUNT_ID, svc = env.CF_WORKER_NAME || env.WORKER_NAME || 'axion-api';
   if (!token || !acc) return;
   let data = null;
   try { data = await _getDashData(env); } catch (_) { return; }
