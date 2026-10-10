@@ -958,16 +958,22 @@ function _shortCode() {
 // fabricar um link da marca apontando pra onde quisesse. Agora so https e so os hosts que a
 // operacao usa de verdade: os checkouts cadastrados (data.afl_checkout), a Five, a PayLog e o
 // rastreador. Lista fixa + o que estiver no estado, pra um checkout novo nao precisar de deploy.
-const _SHORT_HOSTS_FIXOS = ['app.fivedelivery.com.br', 'glico-six.rastreio.vip', 'sellwave.com.br', 'ev.paylog.cash', 'pay.paylog.cash', 'checkout.paylog.cash', 'paylog.cash'];
+// A PAYT FICOU DE FORA (10/10/2026): o checkout do kit e checkout.payt.com.br (casa) e
+// seguro.payt.com.br (afiliado), e o afl_checkout e { dono: { kit: { antecipado, entrega } } }, dois
+// niveis que a leitura antiga nao descia. Resultado: desde o item 35 nenhum link foi encurtado e a
+// tela copiava o link longo calada. 'payt.com.br' cobre os dois subdominios.
+const _SHORT_HOSTS_FIXOS = ['app.fivedelivery.com.br', 'glico-six.rastreio.vip', 'sellwave.com.br', 'ev.paylog.cash', 'pay.paylog.cash', 'checkout.paylog.cash', 'paylog.cash', 'payt.com.br'];
 async function _shortHostsPermitidos(env) {
   const hosts = new Set(_SHORT_HOSTS_FIXOS);
   try {
     const d = await _getDashData(env, 0);
-    const ck = d && d.afl_checkout;
     const urls = [];
-    if (typeof ck === 'string') urls.push(ck);
-    else if (Array.isArray(ck)) for (const x of ck) urls.push(typeof x === 'string' ? x : (x && (x.url || x.link)) || '');
-    else if (ck && typeof ck === 'object') for (const v of Object.values(ck)) urls.push(typeof v === 'string' ? v : (v && (v.url || v.link)) || '');
+    const junta = (v, fundo) => {
+      if (typeof v === 'string') { if (/^https:\/\//i.test(v)) urls.push(v); return; }
+      if (!v || typeof v !== 'object' || fundo > 3) return;
+      for (const x of (Array.isArray(v) ? v : Object.values(v))) junta(x, fundo + 1);
+    };
+    junta(d && d.afl_checkout, 0);
     for (const s of urls) { try { const h = new URL(String(s)).hostname.toLowerCase(); if (h) hosts.add(h); } catch (_) {} }
   } catch (_) {}
   return hosts;
@@ -1000,7 +1006,9 @@ async function handleShortCreate(req, env) {
     if (!lead) return err('Pedido não encontrado', 404);
     const meuAfl = String(u.afiliado_id || '');
     const doMeuMundo = String(lead.afl || '') === meuAfl;
-    if (!(String(lead.at || '') === String(u.id) || (meuAfl && doMeuMundo && isAfiliado(u)))) return err('Sem permissão para esse pedido', 403);
+    // O COBRADOR NUNCA E DONO (lead.at e sempre o vendedor), e e ele quem mais manda link de
+    // pagamento. Vale o pedido do mundo dele, igual o /api/lead deixa ele mexer em pago e etapa.
+    if (!(String(lead.at || '') === String(u.id) || (meuAfl && doMeuMundo && isAfiliado(u)) || (_ehCobrador(u) && doMeuMundo))) return err('Sem permissão para esse pedido', 403);
   }
   await _shortEnsure(env);
   const code = _shortCode();
