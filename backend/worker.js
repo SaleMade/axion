@@ -7309,6 +7309,46 @@ async function handlePostState(req, env) {
   return json({ ok: true, version: newVer, updated_at: now });
 }
 
+// PEDIDO NOVO SEM O NAVEGADOR REGRAVAR O ESTADO (12/10/2026, queixa dos vendedores: "demora demais
+// pra salvar o pedido"). O createOrder baixava o estado inteiro, somava o pedido e mandava tudo de
+// volta: medido no servidor, GET 0,5 a 1,1s + POST 1,7s, fora a rede do vendedor, e qualquer
+// gravacao no meio (Kanban, webhook) dava 409 e o ciclo recomecava do zero. Aqui o navegador manda
+// SO o pedido e a soma acontece aqui, passando pelas MESMAS regras do POST /api/state
+// (_stateProtegido: dono forcado, nasce sem aceite nem pagamento, mundo do afiliado). O conflito de
+// versao se resolve aqui dentro, sem ida e volta. Reenvio do mesmo id nao duplica.
+async function handlePedidoNovo(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => null);
+  const lead = body && body.lead;
+  if (!lead || typeof lead !== 'object' || Array.isArray(lead) || lead.id == null || lead.__como) return err('Pedido inválido', 400);
+  if (JSON.stringify(lead).length > 60000) return err('Pedido grande demais', 400);
+  const idStr = String(lead.id);
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 500);
+    let atual;
+    try { atual = JSON.parse(row.data || '{}'); } catch (_) { return err('Estado ilegível', 500); }
+    const leadsAtual = Array.isArray(atual.leads) ? atual.leads : [];
+    if (leadsAtual.some((l) => l && String(l.id) === idStr)) return json({ ok: true, id: lead.id, version: row.version, ja: true });
+    // SO OS PEDIDOS saem da regra de cargo. Ela foi escrita pro estado PODADO que a tela manda; com o
+    // estado inteiro, a costura do afiliado carimbava o trafego DA CASA como dele (52 registros viraram
+    // 124 no teste). Todo o resto fica exatamente como esta no banco.
+    const prot = await _stateProtegido(env, u, { ...atual, leads: [lead, ...leadsAtual] }, atual);
+    const leadsD = Array.isArray(prot && prot.leads) ? prot.leads : [];
+    const d = { ...atual, leads: leadsD };
+    if (!leadsD.some((l) => l && String(l.id) === idStr)) return err('Seu cargo não cadastra pedido', 403);
+    if (leadsD.length !== leadsAtual.length + 1) return err('Gravação recusada: mexeria em outros pedidos', 422);
+    let dataStr = JSON.stringify(d);
+    if (dataStr.length > 1200000 && new TextEncoder().encode(dataStr).length > 1600000) { _trimBlobData(d); dataStr = JSON.stringify(d); }
+    const g = await env.DB.prepare('UPDATE dashboard_state SET data = ?, version = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ?')
+      .bind(dataStr, (row.version || 0) + 1, Math.floor(Date.now() / 1000), u.user_id, row.version).run();
+    if (g && g.meta && g.meta.changes > 0) return json({ ok: true, id: lead.id, version: (row.version || 0) + 1 });
+    await new Promise((r) => setTimeout(r, 40 + tent * 80));
+  }
+  return json({ error: 'conflict' }, 409);
+}
+
 // ── FOTO DE PERFIL FORA DO JSON ──────────────────────────────────────────────
 //
 // As fotos sao guardadas como data URI na coluna users.photo, e o /api/users devolvia isso inteiro.
@@ -21881,6 +21921,7 @@ export default {
       if (req.method === 'GET'   && path === '/api/state/pulso') return handleStatePulso(req, env);
       if (req.method === 'POST'  && path === '/api/state/trim')  return handleStateTrim(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
+      if (req.method === 'POST'  && path === '/api/pedido/novo') return handlePedidoNovo(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/domains/detect') return handleDomainsDetect(req, env);
       if (req.method === 'POST'  && path === '/api/tt/reenviar')             return handleTtReenviar(req, env);
