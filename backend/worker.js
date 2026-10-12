@@ -16424,9 +16424,14 @@ async function _presselBalancedPick(env, id, sellers){
   // 2c) MODO LIMITE (13/09/2026, ver _aplicaFilaLimite). Os numeros do vendedor em modo Limite viram
   //     fila: so a VEZ de cada fila fica (o primeiro que ainda nao bateu o teto de hoje); os de roleta
   //     seguem todos. E um filtro POR CIMA da regra (nao mexe no balanceamento entre vendedores).
-  //     NUNCA ESVAZIA: se nao sobrar ninguem (toda fila bateu o teto e nao ha roleta), segue como
-  //     estava e o de menos lead recebe - sem numero a pagina vira botao morto e o clique ja foi pago.
-  //     A tela avisa esse caso em vermelho pelo /api/pressel/diag.
+  //     TODO MUNDO NO TETO = NINGUEM RECEBE (12/10/2026, pedido do Bruno: "tem que ajeitar pra nao
+  //     sobrecarregar e cair o chip"). Ate hoje este ramo seguia "como estava" e o numero de menos
+  //     lead recebia MESMO acima do teto: em 12/10 o (15) 97407-6200 chegou a 126 leads com teto 70
+  //     porque o 3o numero da fila estava desligado "ate amanha" e nao sobrou ninguem. O teto existe
+  //     pra proteger o chip; passar por cima dele e exatamente o que ele proibe. Sem numero a pagina
+  //     abre sem botao (o mesmo caminho de "nenhum numero ligado") e o /api/pressel/diag avisa em
+  //     vermelho. Quem quiser receber mesmo assim religa o numero na mao (lim_livre vale o dia) ou
+  //     sobe o teto na Contingencia.
   let _foraLimite = [];
   if(avail.some(u => u.dist === 'limite')){
     try{
@@ -16437,7 +16442,8 @@ async function _presselBalancedPick(env, id, sellers){
         for(const u of r.bateram) console.log('ROLETA_LIMITE num=' + k8(u.num) + ' leads=' + (lh[k8(u.num)]||0) + ' limite=' + u.lim);
         avail = r.ficam;
       } else {
-        console.log('ROLETA_TODOS_NO_LIMITE pressel=' + id + ' numeros=' + avail.length);
+        console.log('ROLETA_TODOS_NO_LIMITE pressel=' + id + ' numeros=' + avail.length + ' -> sem numero ate a meia-noite');
+        return null;
       }
     }catch(_){ }
   }
