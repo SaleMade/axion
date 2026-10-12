@@ -1197,7 +1197,7 @@ function _plEndereco(a) {
 async function _plApi(env, caminho, mundo) {
   // `mundo` vazio = a casa. O do afiliado NAO cai no nosso token: seria ler a nossa conta da
   // PayLog com a credencial errada de dono.
-  const tok = (await _readConfig(env, _cfgNome('pl_token', mundo))) || (mundo ? '' : ((env && env.PAYLOG_TOKEN) || ''));
+  const tok = mundo ? ((await _readConfig(env, _cfgNome('pl_token', mundo))) || '') : (await _plTokenCasa(env));
   if (!tok) return { erro: 'sem token' };
   try {
     const r = await _fetchComTeto('https://after.paylog.cash' + caminho, 12000, {
@@ -5243,9 +5243,32 @@ function _plPedidoDoLead(l) {
   };
   return { problemas, campos, cpf, meses };
 }
+// A CHAVE DA PAYLOG LIDA UMA VEZ POR CLIQUE (12/10/2026, Aceitacoes lenta: 4,8s de mediana). O
+// Aceitar lia a mesma config tres vezes (token, busca por CPF, criacao), ~200ms cada ida ao banco.
+// Lembrada por 30s no isolate: trocar o token na tela vale no maximo meio minuto depois.
+let _plTokMemo = null, _plTokMemoT = 0;
 async function _plTokenCasa(env) {
-  return (await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || '');
+  if (_plTokMemo !== null && Date.now() - _plTokMemoT < 30000) return _plTokMemo;
+  const t = (await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || '');
+  _plTokMemo = t; _plTokMemoT = Date.now();
+  return t;
 }
+// A RESERVA DO ACEITE VIROU UMA LINHA (12/10/2026). Ela so existe pra barrar o segundo clique (dois
+// pedidos na PayLog pro mesmo card), e era uma gravacao do estado INTEIRO (1,3 MB, ~1s) antes de
+// qualquer coisa acontecer - mais outra pra soltar quando dava erro. Aqui e um INSERT numa tabela
+// propria: so entra quem chegou primeiro; trava com mais de 120s (worker caiu no meio) e liberada.
+let _aceiteTravaOk = false;
+async function _aceiteTrava(env, leadId, por) {
+  if (!_aceiteTravaOk) {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS aceite_trava (lead_id TEXT PRIMARY KEY, ts INTEGER, por TEXT)').run();
+    _aceiteTravaOk = true;
+  }
+  const agora = Math.floor(Date.now() / 1000);
+  const r = await env.DB.prepare('INSERT INTO aceite_trava (lead_id, ts, por) VALUES (?, ?, ?) ON CONFLICT(lead_id) DO UPDATE SET ts = excluded.ts, por = excluded.por WHERE aceite_trava.ts < ?')
+    .bind(String(leadId), agora, String(por || ''), agora - 120).run();
+  return !!(r && r.meta && r.meta.changes > 0);
+}
+const _aceiteSolta = (env, leadId) => env.DB.prepare('DELETE FROM aceite_trava WHERE lead_id = ?').bind(String(leadId)).run().catch(() => {});
 // Pedido VIVO desse CPF na PayLog (em andamento, dos ultimos 30 dias). E a trava contra o pedido em
 // dobro quando alguem ja lancou na mao antes de clicar em Aceitar - a API nao tem idempotencia.
 // Devolve o codigo (ORDxxxx), '' se nao tem, ou null se a consulta falhou (ai NAO se cria nada).
@@ -5319,10 +5342,26 @@ async function _aceitarComPaylog(env, u, leadId) {
     }
     return null;
   };
-  // 1) confere e reserva (a reserva e o que impede dois cliques de criarem dois pedidos)
+  // 1) confere (so LE o estado) e reserva numa linha propria (_aceiteTrava): a reserva e o que impede
+  // dois cliques de criarem dois pedidos. O que esta conferencia decide pro card (meio de pagamento,
+  // recompra) e gravado junto com o aceite, no passo 3, numa gravacao so.
   let pedido = null;
   let _presos = [], _anterior = null;   // pedidos antigos do mesmo cliente (recompra): nao sao "vivos" pra adotar
-  const reserva = await _gravaLead((lead, leads) => {
+  let _pgtoNovo = '';
+  const _soLeLead = async (fn) => {
+    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+    if (!row) return null;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return null; }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const lead = leads.find((l) => String(l.id) === String(leadId));
+    if (!lead) return { sumiu: true };
+    return fn(lead, leads) || { ok: true };
+  };
+  // A TRAVA VEM ANTES DA LEITURA: um segundo clique que chega logo depois do primeiro terminar ja le
+  // o card com o pedido ligado (five_id) e cai no aceite de sempre, sem tentar criar outro.
+  if (!(await _aceiteTrava(env, leadId, u.id))) return json({ error: 'Este pedido já está sendo enviado pra PayLog' }, 409);
+  const soltaReserva = () => _aceiteSolta(env, leadId);
+  const reserva = await _soLeLead((lead, leads) => {
     if (lead.five_id) return { parar: true, naoAplica: true };
     const cpf = soDig(lead.cpf), wa = soDig(lead.wa);
     // REFEITO x RECOMPRA (06/10/2026, decisao do Bruno). Irmao e so o card do mesmo cliente cujo
@@ -5339,23 +5378,19 @@ async function _aceitarComPaylog(env, u, leadId) {
       'Se for recompra de verdade, espere 48h ou ajuste o kit; se for engano, cancele este cadastro'] };
     _presos = _mesmoCliente.map((l) => String(l.five_id));
     _anterior = _mesmoCliente.slice().sort((a, b) => (_quandoNasceuMs(b) || 0) - (_quandoNasceuMs(a) || 0))[0] || null;
-    if (_anterior) lead.recompra_de = _anterior.id;
     pedido = _plPedidoDoLead(lead);
     if (pedido.problemas.length) return { parar: true, problemas: pedido.problemas };
     // O MEIO QUE FOI PRO PEDIDO FICA NO CARD (07/10/2026, auditoria item 5): a PayLog nao devolve
     // payment_method no webhook, entao 47 de 53 cards estavam sem meio mesmo tendo sido criados com um.
-    if (!lead.pgto && pedido.campos) { const _mp = _plMetodoReal(pedido.campos.payment_method); if (_mp) lead.pgto = _mp; }
-    if (lead.pl_desp && (agora - Number(lead.pl_desp.ts || 0)) < 120) return { parar: true, emAndamento: true };
-    lead.pl_desp = { ts: agora, por: String(u.id) };
+    if (!lead.pgto && pedido.campos) _pgtoNovo = _plMetodoReal(pedido.campos.payment_method) || '';
     return null;
   });
-  if (!reserva) return err('Conflito ao salvar. Tente de novo.', 409);
+  if (!reserva || reserva.sumiu || reserva.naoAplica || reserva.problemas || reserva.dobro) await soltaReserva();
+  if (!reserva) return err('Não consegui ler o pedido. Tente de novo.', 409);
   if (reserva.sumiu) return err('Lead não encontrado', 404);
   if (reserva.naoAplica) return null;
   if (reserva.problemas) return json({ error: 'Pedido com dado errado', problemas: reserva.problemas }, 422);
   if (reserva.dobro) return json({ error: 'Pedido em dobro', problemas: reserva.dobro }, 422);
-  if (reserva.emAndamento) return json({ error: 'Este pedido já está sendo enviado pra PayLog' }, 409);
-  const soltaReserva = () => _gravaLead((lead) => { delete lead.pl_desp; return null; });
   // 2) ja existe pedido vivo desse CPF na PayLog? entao so liga o card a ele
   const jaTem = await _plPedidoVivoDoCpf(env, pedido.cpf, _presos);
   if (jaTem === null) { await soltaReserva(); return json({ error: 'Não consegui consultar a PayLog agora. Nada foi criado, tente de novo em instantes.', problemas: ['PayLog sem resposta'] }, 502); }
@@ -5385,7 +5420,9 @@ async function _aceitarComPaylog(env, u, leadId) {
     // grava; devolve 422 com quem e o dono. O webhook 'cadastrado' continua adotando pelo CPF.
     const _dono = codigo ? leads.find((l) => l && String(l.id) !== String(lead.id) && String(l.five_id || '') === 'PL-' + codigo) : null;
     if (_dono) return { parar: true, duplicado: _dono };
-    delete lead.pl_desp;
+    delete lead.pl_desp;   // marca do jeito antigo (reserva no estado), se ainda houver alguma
+    if (_anterior) lead.recompra_de = _anterior.id;
+    if (!lead.pgto && _pgtoNovo) lead.pgto = _pgtoNovo;
     // Card que o aceite antigo jogou em "Enviado" sem nada ter saido volta pra "A Enviar": e o que ele
     // e na PayLog agora (aprovado, esperando envio). Sem isto o card ficaria um passo na frente do
     // pedido, e a escada da coluna (so sobe) nao deixaria o evento "aprovado" traze-lo de volta.
@@ -5409,6 +5446,7 @@ async function _aceitarComPaylog(env, u, leadId) {
     return json({ error: 'O pedido ' + codigo + ' já está ligado a outro card', problemas: ['O card de ' + String(fim.duplicado.nome || 'cliente') + ' (' + _dataCardBR(fim.duplicado) + ') já tem o pedido PL-' + codigo, 'Confira os dois cards antes de aceitar de novo'] }, 422);
   }
   if (!fim) console.log('PAYLOG_ACEITE_CAS_ESGOTADO lead=' + leadId + ' pedido=' + codigo + ' — aceito=true nao gravado; webhook da PayLog vai resolver');
+  await soltaReserva();
   return json({ ok: true, paylog: codigo, adotado, lead_id: leadId, col: (fim && fim.lead) ? fim.lead.col : '', version: fim && fim.version,
     recompra_de: _anterior ? String(_anterior.five_id) : '', recompra_data: _anterior ? _dataCardBR(_anterior) : '' });
 }
