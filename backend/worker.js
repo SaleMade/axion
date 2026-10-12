@@ -8245,6 +8245,794 @@ function _podeTestarCriativo(u) {
   return isDirector(u) || r === 'gestor' || r === 'designer';
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// BOT DE WHATSAPP DO TIME (12/10/2026, pedido do Bruno). Ferramenta da area Ferramentas da dash.
+//
+// O que faz: pelo numero OFICIAL (Cloud API) escolhido como "numero do bot", manda (1) um RESUMO
+// DIARIO de vendas da equipe num horario marcado, com os numeros de cada vendedor e o total;
+// (2) um resumo semanal, opcional; (3) COMEMORACOES quando um vendedor cruza um marco de pedidos
+// no dia (5, 10, 15...) e quando bate a meta semanal.
+//
+// POR QUE NAO VAI NO GRUPO. Conferido na documentacao da Meta em 12/10/2026: a Cloud API so manda
+// pra grupo pela Groups API, que exige Official Business Account, cria grupos proprios de ate 8
+// pessoas e nao entra em grupo que ja existe. Todos os numeros da casa sao coexistencia (numero
+// no app + API), e a Meta nao da OBA pra numero do app. Entao o bot manda a MESMA mensagem no
+// privado de cada pessoa da lista. A Evolution (que mandava em grupo) saiu em 09/10/2026 e nao volta.
+//
+// JANELA DE 24H. A Meta so aceita texto livre pra quem escreveu pro numero do bot nas ultimas 24h.
+// Com a janela fechada o bot manda um TEMPLATE curto ("tem uma mensagem nova da equipe", botao
+// "Ver mensagem") e guarda o texto em bot_pend; quando a pessoa toca no botao, a resposta chega
+// pelo Datacrazy em wa_messages e o tick do cron entrega o texto completo. Tocando dentro de 24h
+// todo dia, o resumo seguinte sai direto, sem template.
+//
+// ONDE VIVE A CONFIG. app_config, chave `bot_wa` (JSON), nunca chave nova no blob (memoria
+// chave-nova-no-blob-some). Dedupe de disparo tambem em app_config: bot_rel_<dia>, bot_sem_<dia>,
+// bot_marcos_<dia>, bot_meta_<segunda>, bot_ver. Envios em bot_envios; textos esperando a janela em
+// bot_pend. Nada aqui escreve no blob dashboard_state.
+//
+// AS CONTAS SAO AS DO KANBAN E DO PERFIL (uma venda marcada num lugar vale pra toda a dash):
+//   pedido        = card criado no periodo, do vendedor (l.at), fora cancelado (crm-leads.js:
+//                   criadoTs, naoCancelado). O card manual AINDA NAO ACEITO CONTA (diferente do
+//                   Kanban e do Perfil, que so contam depois do aceite): o resumo sai a noite e o
+//                   aceite costuma vir no dia seguinte; sem isso o vendedor que fez 10 pedidos leria
+//                   "Pedidos: 0", e a comemoracao de 5 vendas so sairia quando o Bruno aceitasse. O
+//                   numero de cards esperando aceite vai junto, em "Aguardando aceite";
+//   antecipado    = l.mod === 'antecipado'; na entrega = o resto; venda futura = vendaFuturaLead;
+//   pago          = _ehPago ou ficha de parcelas quitada (pagamentos.js: pagoLead);
+//   pago hoje     = data do PAGAMENTO (pago_ts, que so anda pra tras), e nao a criacao;
+//   lead          = wa_lead com ts no periodo, fora 'deduzido', pelo numero que recebeu;
+//   conversao     = pedidos / leads (a conta da Chegada de leads);
+//   meta semanal  = pedidos da semana (segunda 00:00 a domingo, Brasilia) contra a meta cadastrada.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+const BOT_CFG_KEY = 'bot_wa';
+const BOT_TEMPLATE_NAME = 'sellwave_mensagem_equipe';
+const BOT_TEMPLATE_BODY = 'Olá {{1}}, tem uma mensagem nova da equipe SellWave ({{2}}). Toque no botão para receber.';
+const BOT_TEMPLATE_BOTAO = 'Ver mensagem';
+const BOT_TEXTO_TESTE = 'Teste do bot da SellWave. Se esta mensagem chegou, o número do bot está pronto.';
+const BOT_MARCOS_PADRAO = [
+  { n: 5, frase: 'Parabéns, {nome}. Hoje você bateu {n} vendas, tu é fera.' },
+  { n: 10, frase: '{nome}, {n} vendas hoje. Isso é de outro nível.' },
+  { n: 15, frase: '{nome} fechou {n} vendas hoje. Dia histórico, parabéns.' },
+];
+const BOT_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos. Agora é passar da meta.';
+let _botCfgCache = null, _botCfgAt = 0, _botTablesOk = false, _botTplCache = null, _botTplAt = 0;
+
+function _botPodeUsar(u) {
+  if (!u) return false;
+  if (String(u.afiliado_id || '').trim()) return false;   // o numero e o time sao da casa
+  return isDirector(u);
+}
+const _botSoDigitos = (v) => String(v || '').replace(/\D/g, '');
+// Telefone no formato da Meta: DDI + DDD + numero. 10 ou 11 digitos = numero brasileiro sem DDI.
+function _botFone(v) {
+  const d = _botSoDigitos(v);
+  if (!d) return '';
+  if (d.length === 10 || d.length === 11) return '55' + d;
+  return d.length >= 12 && d.length <= 15 ? d : '';
+}
+const _botHoraOk = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(h || ''));
+const _botTexto300 = (v, n) => String(v == null ? '' : v).replace(/\r/g, '').slice(0, n || 300);
+
+function _botCfgPadrao() {
+  return {
+    ativo: false,
+    numero: { phone_number_id: '', display_phone: '' },
+    pessoas: [],
+    relatorio: {
+      ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Resumo do dia', ordenar: 'pedidos',
+      mostrar: { detalhe_pedidos: true, futuras: true, leads: true, conversao: true, pagos_antigos: true, meta: true, geral: true, aguardando: true, ontem: false },
+      sem_pedido: '', rodape: '',
+    },
+    semanal: { ativo: false, dia: 0, hora: '20:30' },
+    metas: { semanal: {} },
+    marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m })) },
+    meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO },
+    canais: { whatsapp: true, push: false },
+  };
+}
+// Mescla o que veio (raw) com a base (a config gravada ou o padrao) e valida tipo por tipo. Campo
+// desconhecido e ignorado; campo invalido volta pro valor da base. Nunca lanca.
+function _botNormaliza(raw, base) {
+  const b = base || _botCfgPadrao();
+  const r = (raw && typeof raw === 'object') ? raw : {};
+  const o = _botCfgPadrao();
+  o.ativo = 'ativo' in r ? !!r.ativo : !!b.ativo;
+  const num = (r.numero && typeof r.numero === 'object') ? r.numero : b.numero || {};
+  o.numero = { phone_number_id: _botSoDigitos(num.phone_number_id).slice(0, 32), display_phone: _botSoDigitos(num.display_phone).slice(0, 20) };
+  const pes = Array.isArray(r.pessoas) ? r.pessoas : (Array.isArray(b.pessoas) ? b.pessoas : []);
+  const vistos = new Set();
+  o.pessoas = pes.map((p) => (p && typeof p === 'object') ? {
+    id: String(p.id || '').slice(0, 60), nome: _botTexto300(p.nome, 80).trim(), fone: _botFone(p.fone),
+    role: String(p.role || '').toLowerCase().slice(0, 20), recebe: p.recebe !== false,
+  } : null).filter((p) => p && (p.id || p.nome || p.fone)).filter((p) => { const k = p.id || ('f:' + p.fone + ':' + p.nome); if (vistos.has(k)) return false; vistos.add(k); return true; }).slice(0, 40);
+  const rel = (r.relatorio && typeof r.relatorio === 'object') ? r.relatorio : {};
+  const brel = b.relatorio || o.relatorio;
+  o.relatorio.ativo = 'ativo' in rel ? !!rel.ativo : brel.ativo !== false;
+  o.relatorio.hora = _botHoraOk(rel.hora) ? rel.hora : (_botHoraOk(brel.hora) ? brel.hora : '20:00');
+  const dias = Array.isArray(rel.dias) ? rel.dias : (Array.isArray(brel.dias) ? brel.dias : o.relatorio.dias);
+  o.relatorio.dias = [...new Set(dias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
+  o.relatorio.titulo = _botTexto300('titulo' in rel ? rel.titulo : brel.titulo, 60).trim() || 'Resumo do dia';
+  o.relatorio.ordenar = ['pedidos', 'nome'].includes(rel.ordenar) ? rel.ordenar : (['pedidos', 'nome'].includes(brel.ordenar) ? brel.ordenar : 'pedidos');
+  const mos = (rel.mostrar && typeof rel.mostrar === 'object') ? rel.mostrar : (brel.mostrar || {});
+  for (const k of Object.keys(o.relatorio.mostrar)) o.relatorio.mostrar[k] = (k in mos) ? !!mos[k] : o.relatorio.mostrar[k];
+  o.relatorio.sem_pedido = _botTexto300('sem_pedido' in rel ? rel.sem_pedido : brel.sem_pedido, 300).trim();
+  o.relatorio.rodape = _botTexto300('rodape' in rel ? rel.rodape : brel.rodape, 300).trim();
+  const sem = (r.semanal && typeof r.semanal === 'object') ? r.semanal : {};
+  const bsem = b.semanal || o.semanal;
+  o.semanal.ativo = 'ativo' in sem ? !!sem.ativo : !!bsem.ativo;
+  const sd = Number('dia' in sem ? sem.dia : bsem.dia);
+  o.semanal.dia = Number.isInteger(sd) && sd >= 0 && sd <= 6 ? sd : 0;
+  o.semanal.hora = _botHoraOk(sem.hora) ? sem.hora : (_botHoraOk(bsem.hora) ? bsem.hora : '20:30');
+  const metas = (r.metas && typeof r.metas === 'object' && r.metas.semanal && typeof r.metas.semanal === 'object') ? r.metas.semanal : ((b.metas && b.metas.semanal) || {});
+  o.metas.semanal = {};
+  for (const k of Object.keys(metas)) { const n = Math.floor(Number(metas[k]) || 0); if (n > 0 && n <= 9999) o.metas.semanal[String(k).slice(0, 60)] = n; }
+  const mar = (r.marcos && typeof r.marcos === 'object') ? r.marcos : {};
+  const bmar = b.marcos || o.marcos;
+  o.marcos.ativo = 'ativo' in mar ? !!mar.ativo : bmar.ativo !== false;
+  o.marcos.para = ['vendedor', 'todos'].includes(mar.para) ? mar.para : (['vendedor', 'todos'].includes(bmar.para) ? bmar.para : 'todos');
+  const lista = Array.isArray(mar.lista) ? mar.lista : (Array.isArray(bmar.lista) ? bmar.lista : o.marcos.lista);
+  const vistosN = new Set();
+  o.marcos.lista = lista.map((m) => ({ n: Math.floor(Number(m && m.n) || 0), frase: _botTexto300(m && m.frase, 300).trim() }))
+    .filter((m) => m.n > 0 && m.n <= 999 && m.frase && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
+  const mb = (r.meta_batida && typeof r.meta_batida === 'object') ? r.meta_batida : {};
+  const bmb = b.meta_batida || o.meta_batida;
+  o.meta_batida.ativo = 'ativo' in mb ? !!mb.ativo : bmb.ativo !== false;
+  o.meta_batida.para = ['vendedor', 'todos'].includes(mb.para) ? mb.para : (['vendedor', 'todos'].includes(bmb.para) ? bmb.para : 'todos');
+  o.meta_batida.frase = _botTexto300('frase' in mb ? mb.frase : bmb.frase, 300).trim() || BOT_META_FRASE_PADRAO;
+  const can = (r.canais && typeof r.canais === 'object') ? r.canais : {};
+  const bcan = b.canais || o.canais;
+  o.canais.whatsapp = 'whatsapp' in can ? !!can.whatsapp : bcan.whatsapp !== false;
+  o.canais.push = 'push' in can ? !!can.push : !!bcan.push;
+  return o;
+}
+async function _botCfgLer(env) {
+  const agora = Date.now();
+  if (_botCfgCache && (agora - _botCfgAt) < 30000) return _botCfgCache;
+  let o = null;
+  try { o = JSON.parse((await _readConfig(env, BOT_CFG_KEY)) || 'null'); } catch (_) { o = null; }
+  _botCfgCache = _botNormaliza(o || {}, null);
+  _botCfgAt = agora;
+  return _botCfgCache;
+}
+async function _botCfgGravar(env, cfg) {
+  await _writeConfig(env, BOT_CFG_KEY, JSON.stringify(cfg));
+  _botCfgCache = cfg; _botCfgAt = Date.now(); _botTplCache = null;
+}
+async function _botEnsureTables(env) {
+  if (_botTablesOk) return;
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_envios (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, nome TEXT, fone TEXT, via TEXT, status TEXT, erro TEXT, texto TEXT, wamid TEXT)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_envios_ts ON bot_envios(ts)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_pend (fone TEXT PRIMARY KEY, nome TEXT, texto TEXT, tipo TEXT, ts INTEGER)').run();
+    _botTablesOk = true;
+  } catch (_) {}
+}
+// INBOUND QUE E DO BOT NAO E LEAD. A resposta do vendedor ao bot chega no numero do bot pelo
+// Datacrazy, e a mensagem do bot chega no numero do vendedor: nenhuma das duas e conversa de
+// cliente. Sem esta guarda o "Ver mensagem" viraria lead (ate casando um clique recente, 'fifo').
+async function _botEhDoBot(env, instance, phone, selfNum) {
+  try {
+    const cfg = await _botCfgLer(env);
+    const d = _botSoDigitos(cfg.numero.display_phone);
+    if (!d || d.length < 8) return false;
+    const n8 = d.slice(-8);
+    if (_botSoDigitos(phone).slice(-8) === n8) return true;                  // quem escreveu foi o bot
+    if (_botSoDigitos(selfNum).slice(-8) === n8) return true;                // chegou no numero do bot
+    const inst = String(instance || '');
+    if (inst.slice(-8) === n8 && /_\d{8}$/.test(inst)) return true;
+    if (inst === 'dc_' + d) return true;
+    return false;
+  } catch (_) { return false; }
+}
+
+// ─── Datas (Brasilia, UTC-3 fixo, igual ao resto do arquivo) ─────────────────────────────
+const _botInicioDia = (dia) => Math.floor(new Date(dia + 'T00:00:00-03:00').getTime() / 1000);
+const _botDiaOk = (dia) => /^\d{4}-\d{2}-\d{2}$/.test(String(dia || '')) && !isNaN(Date.parse(dia + 'T12:00:00Z'));
+const _botDiaMais = (dia, n) => new Date(Date.parse(dia + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+const _botDataBR = (dia) => String(dia).slice(8, 10) + '/' + String(dia).slice(5, 7) + '/' + String(dia).slice(0, 4);
+const BOT_DIAS_SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const _botDiaSemana = (dia) => BOT_DIAS_SEMANA[new Date(dia + 'T12:00:00Z').getUTCDay()];
+// Semana de SEGUNDA 00:00 a domingo 23:59 (Brasilia). Definida aqui uma vez; a meta semanal e
+// o "meta batida" usam esta e nenhuma outra.
+function _botSemanaDe(dia) {
+  const d = new Date(dia + 'T12:00:00Z');
+  const volta = (d.getUTCDay() + 6) % 7;
+  const seg = new Date(d.getTime() - volta * 86400000).toISOString().slice(0, 10);
+  const dom = _botDiaMais(seg, 6);
+  return { inicio: seg, fim: dom, iniTs: _botInicioDia(seg), fimTs: _botInicioDia(dom) + 86400 };
+}
+// 'DD/MM HH:MM' (hora de Brasilia, sem ano) ou ISO. Devolve ms ou 0.
+function _botParseHora(v) {
+  const s = String(v || '').trim();
+  if (!s) return 0;
+  const m = s.match(/^(\d{2})\/(\d{2})(?:\/(\d{4}))?(?:\s+(\d{2}):(\d{2}))?$/);
+  if (m) {
+    const agora = _agoraBR();
+    let ano = m[3] ? Number(m[3]) : agora.getUTCFullYear();
+    let t = Date.parse(ano + '-' + m[2] + '-' + m[1] + 'T' + (m[4] || '00') + ':' + (m[5] || '00') + ':00-03:00');
+    if (!m[3] && t > Date.now() + 2 * 86400000) t = Date.parse((ano - 1) + '-' + m[2] + '-' + m[1] + 'T' + (m[4] || '00') + ':' + (m[5] || '00') + ':00-03:00');
+    return isNaN(t) ? 0 : t;
+  }
+  const t = Date.parse(s);
+  return isNaN(t) ? 0 : t;
+}
+// ─── As regras do pedido, copiadas do front (crm-leads.js / profile-metrics.js / pagamentos.js) ──
+function _botCriadoMs(l) {
+  const t = Number(l && l.ts) || 0;
+  if (t > 1e12) return t;
+  if (t > 1e9) return t * 1000;
+  const id = Number(l && l.id) || 0;
+  if (id > 1e12) return id;
+  const h = Array.isArray(l && l.hist) && l.hist.length ? _botParseHora(l.hist[0] && l.hist[0].time) : 0;
+  if (h) return h;
+  return _botParseHora(l && l.data);
+}
+const _botCancelado = (l) => _COLS_VENDA_CANCELADA.includes(String((l && l.col) || ''));
+const _botManualNaoAceito = (l) => String((l && l.orig) || '') === 'Manual' && !(l && l.aceito) && ['A Enviar', 'Reportado'].includes(String((l && l.col) || ''));
+function _botVendaFutura(l) {
+  if (l && l.vf) return true;
+  const tags = Array.isArray(l && l.tags) ? l.tags.map((t) => String(t).toLowerCase()) : [];
+  if (tags.includes('venda-futura')) return true;
+  if (tags.length) return false;
+  const ag = String((l && l.agend) || '');
+  return !!ag && new Date(ag).getTime() > Date.now();
+}
+function _botPago(l) {
+  if (_ehPago(l)) return true;
+  const pgs = Array.isArray(l && l.pagamentos) ? l.pagamentos : [];
+  if (!pgs.length) return false;
+  const tot = pgs.reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
+  const cobrar = Number(l && l.valor_neg) > 0 ? Number(l.valor_neg) : (Number(l && l.vl) || 0);
+  return tot > 0 && cobrar > 0 && tot + 0.005 >= cobrar;
+}
+function _botPagoMs(l) {
+  const pt = Number(l && l.pago_ts) || 0;
+  if (pt > 1.5e12) return pt;
+  const pgs = Array.isArray(l && l.pagamentos) ? l.pagamentos : [];
+  for (let i = pgs.length - 1; i >= 0; i--) {
+    const p = pgs[i];
+    if (!p) continue;
+    const t = p.ts != null ? (Number(p.ts) < 1e12 ? Number(p.ts) * 1000 : Number(p.ts)) : _botParseHora(p.data);
+    if (t) return t;
+  }
+  let ht = 0;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) if (/^(Pago|Pagos)$/.test(String((h && h.to) || ''))) { const t = _botParseHora(h && h.time); if (t) ht = t; }
+  return ht || _botCriadoMs(l);
+}
+async function _botVendedores(env) {
+  const r = await env.DB.prepare("SELECT id, name FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role)='atendente' ORDER BY name").all().catch(() => null);
+  return ((r && r.results) || []).map((u) => ({ id: String(u.id), nome: String(u.name || u.id) }));
+}
+async function _botEquipe(env) {
+  const r = await env.DB.prepare("SELECT id, name, role FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') ORDER BY CASE lower(role) WHEN 'atendente' THEN 0 WHEN 'cobrador' THEN 1 WHEN 'diretor' THEN 2 WHEN 'socio' THEN 3 ELSE 4 END, name").all().catch(() => null);
+  return ((r && r.results) || []).map((u) => ({ id: String(u.id), nome: String(u.name || u.id), role: String(u.role || '').toLowerCase() }));
+}
+const _botZero = () => ({ pedidos: 0, entrega: 0, antecipados: 0, futuras: 0, leads: 0, conversao: 0, pagos: 0, pagos_antigos: 0, aguardando: 0 });
+// OS NUMEROS DO PERIODO, por vendedor e o geral. `tipo` 'diario' (o dia) ou 'semanal' (a semana do dia).
+// UMA passada no blob (cache do _getDashData) e UMA consulta em wa_lead.
+async function _botDados(env, dia, cfg, tipo) {
+  const st = await _getDashData(env);
+  const leads = Array.isArray(st && st.leads) ? st.leads : [];
+  const chips = Array.isArray(st && st.chips) ? st.chips : [];
+  const vendedores = await _botVendedores(env);
+  const sem = _botSemanaDe(dia);
+  const semanal = tipo === 'semanal';
+  const ini = semanal ? sem.iniTs * 1000 : _botInicioDia(dia) * 1000;
+  const fim = semanal ? sem.fimTs * 1000 : ini + 86400000;
+  const ontemIni = ini - (fim - ini), ontemFim = ini;   // o periodo anterior do mesmo tamanho
+  const por = {};
+  for (const v of vendedores) {
+    const meta = Number((cfg && cfg.metas && cfg.metas.semanal && cfg.metas.semanal[v.id]) || 0);
+    por[v.id] = { id: v.id, nome: v.nome, ..._botZero(), semana: 0, meta, faltam: 0, ontem: { pedidos: 0, leads: 0 } };
+  }
+  const geral = { ..._botZero(), semana: 0, ontem: { pedidos: 0, leads: 0 } };
+  for (const l of leads) {
+    if (!l || l.afl) continue;                              // o mundo do afiliado nao entra
+    const v = por[String(l.at || '')];
+    if (!v) continue;                                       // so vendedor ativo da casa
+    const criado = _botCriadoMs(l);
+    if (!criado) continue;
+    const noPer = criado >= ini && criado < fim;
+    const ontem = criado >= ontemIni && criado < ontemFim;
+    const naSemana = criado >= sem.iniTs * 1000 && criado < sem.fimTs * 1000;
+    if (_botCancelado(l)) continue;                         // cancelado nunca foi pedido
+    if (_botManualNaoAceito(l) && noPer) { v.aguardando++; geral.aguardando++; }   // conta como pedido (ver cabecalho)
+    const futura = _botVendaFutura(l);
+    if (noPer) {
+      v.pedidos++; geral.pedidos++;
+      if (futura) { v.futuras++; geral.futuras++; }
+      else if (String(l.mod || '') === 'antecipado') { v.antecipados++; geral.antecipados++; }
+      else { v.entrega++; geral.entrega++; }
+    }
+    if (ontem) { v.ontem.pedidos++; geral.ontem.pedidos++; }
+    if (naSemana) { v.semana++; geral.semana++; }
+    if (_botPago(l)) {
+      const pg = _botPagoMs(l);
+      if (pg >= ini && pg < fim) { v.pagos++; geral.pagos++; if (criado < ini) { v.pagos_antigos++; geral.pagos_antigos++; } }
+    }
+  }
+  // LEADS: pelo numero que recebeu. Dono do numero = Contingencia (chip.at), senao wa_api_numbers,
+  // senao a instancia (ax_<at>_<8dig>). Lead 'deduzido' (venda por ligacao) nao e conversa.
+  const dono = {};
+  for (const c of chips) { const n8 = _botSoDigitos(c && c.num).slice(-8); if (n8 && c && c.at && por[String(c.at)]) dono[n8] = String(c.at); }
+  try {
+    const rn = await env.DB.prepare("SELECT display_phone, at_id FROM wa_api_numbers WHERE at_id IS NOT NULL AND at_id<>''").all();
+    for (const x of ((rn && rn.results) || [])) { const n8 = _botSoDigitos(x.display_phone).slice(-8); if (n8 && !dono[n8] && por[String(x.at_id)]) dono[n8] = String(x.at_id); }
+  } catch (_) {}
+  try {
+    const rl = await env.DB.prepare("SELECT inst, num, ts FROM wa_lead WHERE ts >= ? AND ts < ? AND COALESCE(src,'') <> 'deduzido'").bind(Math.floor(ontemIni / 1000), Math.floor(fim / 1000)).all();
+    for (const x of ((rl && rl.results) || [])) {
+      const n8 = _botSoDigitos(x.num).slice(-8);
+      let at = n8 && dono[n8] ? dono[n8] : '';
+      if (!at) { const a = _atFromInst(x.inst); if (por[a]) at = a; }
+      if (!at) { const m = String(x.inst || '').match(/_(\d{8})$/); if (m && dono[m[1]]) at = dono[m[1]]; }
+      const v = at ? por[at] : null;
+      if (!v) continue;
+      const t = Number(x.ts) * 1000;
+      if (t >= ini && t < fim) { v.leads++; geral.leads++; }
+      else if (t >= ontemIni && t < ontemFim) { v.ontem.leads++; geral.ontem.leads++; }
+    }
+  } catch (_) {}
+  const lista = Object.values(por);
+  for (const v of lista) {
+    v.conversao = v.leads > 0 ? Math.round((v.pedidos / v.leads) * 100) : 0;
+    v.faltam = v.meta > 0 ? Math.max(0, v.meta - v.semana) : 0;
+  }
+  geral.conversao = geral.leads > 0 ? Math.round((geral.pedidos / geral.leads) * 100) : 0;
+  return { dia, tipo: semanal ? 'semanal' : 'diario', semana: { inicio: sem.inicio, fim: sem.fim }, vendedores: lista, geral };
+}
+const _botPlural = (n, um, varios) => n + ' ' + (n === 1 ? um : varios);
+function _botPartesPedido(v, mostrar) {
+  const p = [];
+  if (v.entrega) p.push(v.entrega + ' na entrega');
+  if (v.antecipados) p.push(_botPlural(v.antecipados, 'antecipado', 'antecipados'));
+  if (mostrar.futuras !== false && v.futuras) p.push(_botPlural(v.futuras, 'futura', 'futuras'));
+  return p.join(', ');
+}
+// O TEXTO QUE VAI NO WHATSAPP. Negrito com asteriscos, sem emoji, sem travessao (regra do Bruno).
+function _botTextoRelatorio(cfg, dados) {
+  const r = (cfg && cfg.relatorio) || _botCfgPadrao().relatorio;
+  const m = r.mostrar || {};
+  const semanal = dados.tipo === 'semanal';
+  const L = [];
+  const titulo = semanal ? 'Resumo da semana' : (r.titulo || 'Resumo do dia');
+  const quando = semanal ? (_botDataBR(dados.semana.inicio) + ' a ' + _botDataBR(dados.semana.fim)) : (_botDataBR(dados.dia) + ' (' + _botDiaSemana(dados.dia) + ')');
+  L.push('*' + titulo + ' · ' + quando + '*');
+  const vs = dados.vendedores.slice();
+  if (r.ordenar === 'nome') vs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  else vs.sort((a, b) => (b.pedidos - a.pedidos) || (b.leads - a.leads) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  if (!vs.length) { L.push(''); L.push('Nenhum vendedor ativo no cadastro.'); return L.join('\n'); }
+  const ninguem = vs.every((v) => v.pedidos === 0);
+  if (ninguem && r.sem_pedido) { L.push(''); L.push(r.sem_pedido); }
+  const rotPagos = semanal ? 'Pagos na semana (pedidos anteriores)' : 'Pagos hoje (pedidos anteriores)';
+  vs.forEach((v, i) => {
+    L.push('');
+    L.push('*' + (r.ordenar === 'nome' ? '' : (i + 1) + '. ') + v.nome + '*');
+    const partes = m.detalhe_pedidos !== false && v.pedidos ? _botPartesPedido(v, m) : '';
+    L.push('Pedidos: ' + v.pedidos + (partes ? ' (' + partes + ')' : ''));
+    if (m.leads !== false) L.push('Leads: ' + v.leads + (m.conversao !== false && v.leads ? ' · Conversão: ' + v.conversao + '%' : ''));
+    if (m.pagos_antigos !== false) L.push(rotPagos + ': ' + v.pagos_antigos);
+    if (m.meta !== false && v.meta > 0) L.push('Meta da semana: ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' · faltam ' + v.faltam : ' · meta batida'));
+    if (m.ontem && !semanal) L.push('Ontem: ' + _botPlural(v.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(v.ontem.leads, 'lead', 'leads'));
+  });
+  if (m.geral !== false && vs.length > 1) {
+    const g = dados.geral;
+    L.push('');
+    L.push('*Geral*');
+    const partes = m.detalhe_pedidos !== false && g.pedidos ? _botPartesPedido(g, m) : '';
+    L.push('Pedidos: ' + g.pedidos + (partes ? ' (' + partes + ')' : ''));
+    if (m.leads !== false) L.push('Leads: ' + g.leads + (m.conversao !== false && g.leads ? ' · Conversão: ' + g.conversao + '%' : ''));
+    if (m.pagos_antigos !== false) L.push(rotPagos + ': ' + g.pagos_antigos);
+    if (m.ontem && !semanal) L.push('Ontem: ' + _botPlural(g.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(g.ontem.leads, 'lead', 'leads'));
+  }
+  if (m.aguardando !== false && dados.geral.aguardando) { L.push(''); L.push('Aguardando aceite: ' + dados.geral.aguardando); }
+  if (r.rodape) { L.push(''); L.push(r.rodape); }
+  return L.join('\n');
+}
+function _botFrase(frase, vars) {
+  const v = vars || {};
+  const nomeCompleto = String(v.nome_completo || v.nome || '').trim();
+  const primeiro = nomeCompleto.split(/\s+/)[0] || '';
+  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data };
+  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
+}
+
+// ─── Envio ──────────────────────────────────────────────────────────────────────────────
+async function _botNumeroRow(env, cfg) {
+  const pnid = _botSoDigitos(cfg && cfg.numero && cfg.numero.phone_number_id);
+  if (!pnid) return null;
+  try {
+    const row = await env.DB.prepare('SELECT phone_number_id, display_phone, waba_id, at_id, quality, verified, token FROM wa_api_numbers WHERE phone_number_id=?').bind(pnid).first();
+    if (!row || !row.token || String(row.token).length < 60 || String(row.token).indexOf('*') >= 0) return null;   // sem token que envia
+    return row;
+  } catch (_) { return null; }
+}
+// Quando a pessoa escreveu pela ultima vez PRO NUMERO DO BOT (epoch s). A janela da Meta e por par
+// (numero do bot x pessoa); a conversa chega pelo Datacrazy com a instancia do bot (sufixo 8 digitos).
+async function _botJanela(env, fone, row) {
+  const d = _botSoDigitos(row && row.display_phone);
+  if (!d || !fone) return 0;
+  try {
+    const r = await env.DB.prepare("SELECT MAX(ts) AS t FROM wa_messages WHERE phone=? AND direction='in' AND (instance LIKE ? OR instance=?)").bind(fone, '%_' + d.slice(-8), 'dc_' + d).first();
+    return Number(r && r.t) || 0;
+  } catch (_) { return 0; }
+}
+async function _botGraphTexto(env, row, fone, texto) {
+  const g = await _graph(env, `/${encodeURIComponent(row.phone_number_id)}/messages`, {
+    method: 'POST', token: row.token, retry: 1,
+    body: JSON.stringify({ messaging_product: 'whatsapp', to: fone, type: 'text', text: { body: String(texto).slice(0, 4000), preview_url: false } }),
+  });
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, code: Number(e.code) || g.status || 0, erro: _waErroTxt(e.code, e.message || ('graph ' + g.status)) }; }
+  return { ok: true, id: (g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id) || '' };
+}
+async function _botTemplateStatus(env, row, semCache) {
+  if (!row || !row.waba_id) return null;
+  const agora = Date.now();
+  if (!semCache && _botTplCache && _botTplCache.waba === row.waba_id && (agora - _botTplAt) < 300000) return _botTplCache.tpl;
+  const g = await _graph(env, `/${encodeURIComponent(row.waba_id)}/message_templates?name=${encodeURIComponent(BOT_TEMPLATE_NAME)}&fields=name,status,category,language&limit=20`, { token: row.token });
+  if (!g.ok) return { erro: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status) };
+  const lista = ((g.data && g.data.data) || []).filter((t) => String(t.name || '') === BOT_TEMPLATE_NAME);
+  const t = lista.find((x) => String(x.status || '').toUpperCase() === 'APPROVED') || lista[0] || null;
+  const tpl = t ? { name: t.name, status: String(t.status || '').toUpperCase(), category: t.category || '', language: t.language || 'pt_BR' } : null;
+  _botTplCache = { waba: row.waba_id, tpl }; _botTplAt = agora;
+  return tpl;
+}
+async function _botGraphTemplate(env, row, fone, nome, dataTxt, lang) {
+  const g = await _graph(env, `/${encodeURIComponent(row.phone_number_id)}/messages`, {
+    method: 'POST', token: row.token, retry: 1,
+    body: JSON.stringify({ messaging_product: 'whatsapp', to: fone, type: 'template', template: {
+      name: BOT_TEMPLATE_NAME, language: { code: lang || 'pt_BR' },
+      components: [{ type: 'body', parameters: [{ type: 'text', text: String(nome || 'time').slice(0, 60) }, { type: 'text', text: String(dataTxt || '').slice(0, 40) }] }],
+    } }),
+  });
+  if (!g.ok) { const e = (g.data && g.data.error) || {}; return { ok: false, code: Number(e.code) || g.status || 0, erro: _waErroTxt(e.code, e.message || ('graph ' + g.status)) }; }
+  return { ok: true, id: (g.data && g.data.messages && g.data.messages[0] && g.data.messages[0].id) || '' };
+}
+async function _botLog(env, o) {
+  try {
+    await _botEnsureTables(env);
+    await env.DB.prepare('INSERT INTO bot_envios (ts, dia, tipo, nome, fone, via, status, erro, texto, wamid) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .bind(Math.floor(Date.now() / 1000), String(o.dia || _brDay()), String(o.tipo || ''), String(o.nome || ''), String(o.fone || ''), String(o.via || ''), String(o.status || ''), String(o.erro || '').slice(0, 300), String(o.texto || '').slice(0, 2000), String(o.wamid || '')).run();
+  } catch (_) {}
+}
+// ENTREGA UMA MENSAGEM A UMA PESSOA. Texto livre se a janela esta aberta; senao template + fila
+// (bot_pend) ate a pessoa tocar em "Ver mensagem". Push e canal paralelo, quando ligado.
+async function _botEntregar(env, cfg, row, pessoa, texto, tipo, dia) {
+  const out = { fone: pessoa.fone || '', nome: pessoa.nome || '', status: 'erro', via: '', erro: '', id: '' };
+  const agora = Math.floor(Date.now() / 1000);
+  let feito = false;
+  if (cfg.canais.whatsapp !== false) {
+    if (!pessoa.fone) { out.erro = 'sem telefone'; }
+    else if (!row) { out.erro = 'número do bot sem token de envio'; }
+    else {
+      const ultimoIn = await _botJanela(env, pessoa.fone, row);
+      let tentarTemplate = true;
+      if (ultimoIn && (agora - ultimoIn) < 86400 - 120) {
+        const r = await _botGraphTexto(env, row, pessoa.fone, texto);
+        if (r.ok) { out.status = 'enviado'; out.via = 'texto'; out.id = r.id; feito = true; tentarTemplate = false; }
+        else if (r.code !== 131047) { out.erro = r.erro; out.via = 'texto'; tentarTemplate = false; }
+      }
+      if (tentarTemplate) {
+        const tpl = await _botTemplateStatus(env, row);
+        if (!tpl || tpl.erro || tpl.status !== 'APPROVED') {
+          out.erro = 'Janela de 24h fechada e o template de abertura ' + (!tpl || tpl.erro ? 'não existe' : 'está ' + (tpl.status === 'PENDING' ? 'aguardando aprovação' : tpl.status.toLowerCase())) + '. A pessoa pode escrever pro bot pra abrir a janela.';
+          out.via = 'template';
+        } else {
+          await _botEnsureTables(env);
+          let pend = null;
+          try { pend = await env.DB.prepare('SELECT ts, texto FROM bot_pend WHERE fone=?').bind(pessoa.fone).first(); } catch (_) {}
+          const textoFila = pend && pend.texto ? (String(pend.texto) + '\n\n' + texto).slice(-3800) : texto;
+          // Template ja mandado nas ultimas 12h e ainda nao respondido: so junta o texto na fila,
+          // sem repetir o template (a Meta cobra cada um e a pessoa cansaria).
+          const repetir = !(pend && (agora - Number(pend.ts)) < 12 * 3600);
+          let r = { ok: true, id: '' };
+          if (repetir) r = await _botGraphTemplate(env, row, pessoa.fone, pessoa.nome, _botDataBR(dia || _brDay()).slice(0, 5), tpl.language);
+          if (r.ok) {
+            try { await env.DB.prepare('INSERT INTO bot_pend (fone, nome, texto, tipo, ts) VALUES (?,?,?,?,?) ON CONFLICT(fone) DO UPDATE SET nome=excluded.nome, texto=excluded.texto, tipo=excluded.tipo, ts=CASE WHEN ? THEN excluded.ts ELSE bot_pend.ts END').bind(pessoa.fone, pessoa.nome || '', textoFila, tipo, agora, repetir ? 1 : 0).run(); } catch (_) {}
+            out.status = 'aguardando'; out.via = 'template'; out.id = r.id; feito = true;
+          } else { out.erro = r.erro; out.via = 'template'; }
+        }
+      }
+    }
+  }
+  if (cfg.canais.push && pessoa.id) {
+    try {
+      const n = await _wpParaPessoa(env, pessoa.id, { title: tipo === 'relatorio' || tipo === 'semanal' ? (cfg.relatorio.titulo || 'Resumo do dia') : 'Equipe SellWave', body: String(texto).replace(/\*/g, '').slice(0, 220), tag: 'bot-' + tipo, icon: '/icons/venda-192.png?v=2', url: '/ferramentas/bot' }, 'bot', null);
+      if (n > 0 && !feito) { out.status = 'enviado'; out.via = 'push'; feito = true; }
+      else if (n > 0) out.via = out.via + '+push';
+    } catch (_) {}
+  }
+  if (!feito && !out.erro) out.erro = cfg.canais.whatsapp === false ? 'WhatsApp desligado e push não entregou' : 'não entregou';
+  await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: out.via, status: out.status, erro: out.erro, texto, wamid: out.id });
+  return out;
+}
+// O texto que ficou na fila sai assim que a pessoa escreve pro bot (toca em "Ver mensagem").
+async function _botEntregarPendentes(env, cfg, row) {
+  await _botEnsureTables(env);
+  let rows = [];
+  try { rows = ((await env.DB.prepare('SELECT fone, nome, texto, tipo, ts FROM bot_pend').all()).results) || []; } catch (_) { return; }
+  if (!rows.length || !row) return;
+  const agora = Math.floor(Date.now() / 1000);
+  for (const p of rows) {
+    const ultimoIn = await _botJanela(env, p.fone, row);
+    if (ultimoIn && ultimoIn >= Number(p.ts) - 60) {
+      const r = await _botGraphTexto(env, row, p.fone, p.texto);
+      if (r.ok || r.code !== 131047) {
+        try { await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run(); } catch (_) {}
+        await _botLog(env, { tipo: p.tipo, nome: p.nome, fone: p.fone, via: 'texto', status: r.ok ? 'enviado' : 'erro', erro: r.ok ? '' : r.erro, texto: p.texto, wamid: r.id });
+      }
+    } else if (agora - Number(p.ts) > 36 * 3600) {
+      try { await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run(); } catch (_) {}
+      await _botLog(env, { tipo: p.tipo, nome: p.nome, fone: p.fone, via: 'template', status: 'erro', erro: 'A pessoa não tocou em Ver mensagem em 36h. Texto descartado.', texto: p.texto });
+    }
+  }
+}
+const _botDestinatarios = (cfg) => (cfg.pessoas || []).filter((p) => p.recebe !== false && p.fone);
+// Manda o relatorio (diario ou semanal) pra lista inteira. `para` (lista de fones) restringe.
+async function _botDisparar(env, cfg, row, tipo, dia, para) {
+  const dados = await _botDados(env, dia, cfg, tipo === 'semanal' ? 'semanal' : 'diario');
+  const texto = _botTextoRelatorio(cfg, dados);
+  let alvos = _botDestinatarios(cfg);
+  if (Array.isArray(para) && para.length) {
+    const set = new Set(para.map(_botFone).filter(Boolean));
+    const conhecidos = alvos.filter((p) => set.has(p.fone));
+    for (const f of set) if (!conhecidos.some((p) => p.fone === f)) conhecidos.push({ id: '', nome: '', fone: f, recebe: true });
+    alvos = conhecidos;
+  }
+  const resultados = [];
+  for (const p of alvos.slice(0, 40)) resultados.push(await _botEntregar(env, cfg, row, p, texto, tipo, dia));
+  return { texto, dados, resultados };
+}
+// Reserva atomica de "ja disparei X hoje": so a primeira batida grava a chave.
+async function _botReserva(env, chave) {
+  try {
+    await _ensureConfigTable(env);
+    const r = await env.DB.prepare('INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, strftime(\'%s\',\'now\')) ON CONFLICT(key) DO NOTHING').bind(chave, String(Math.floor(Date.now() / 1000))).run();
+    return !!(r && r.meta && r.meta.changes > 0);
+  } catch (_) { return false; }
+}
+const _botMinutos = (hhmm) => { const m = String(hhmm || '').match(/^(\d{2}):(\d{2})$/); return m ? Number(m[1]) * 60 + Number(m[2]) : -1; };
+// COMEMORACOES. Reconta do blob (o contador do dia pode descer: cancelamento, estorno, nao aceito)
+// e so dispara o marco que ainda nao foi comemorado hoje; o maior patamar avisado fica em
+// bot_marcos_<dia>. Meta semanal batida fica em bot_meta_<segunda>. So roda quando o estado mudou.
+async function _botMarcosTick(env, cfg, row, dia) {
+  let ver = 0;
+  try { const r = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id=1').first(); ver = Number(r && r.version) || 0; } catch (_) { return; }
+  const antes = Number(await _readConfig(env, 'bot_ver').catch(() => 0)) || 0;
+  if (ver === antes) return;
+  const dados = await _botDados(env, dia, cfg, 'diario');
+  const chaveM = 'bot_marcos_' + dia, chaveS = 'bot_meta_' + dados.semana.inicio;
+  let feito = {}, feitoS = {};
+  try { feito = JSON.parse((await _readConfig(env, chaveM)) || '{}') || {}; } catch (_) { feito = {}; }
+  try { feitoS = JSON.parse((await _readConfig(env, chaveS)) || '{}') || {}; } catch (_) { feitoS = {}; }
+  const envios = [];
+  let mudouM = false, mudouS = false;
+  for (const v of dados.vendedores) {
+    if (cfg.marcos.ativo && cfg.marcos.lista.length) {
+      const max = Number(feito[v.id]) || 0;
+      const novos = cfg.marcos.lista.filter((m) => m.n > max && m.n <= v.pedidos);
+      for (const m of novos) envios.push({ v, frase: m.frase, n: m.n, para: cfg.marcos.para, tipo: 'marco' });
+      if (novos.length) { feito[v.id] = novos[novos.length - 1].n; mudouM = true; }
+    }
+    if (cfg.meta_batida.ativo && v.meta > 0 && v.semana >= v.meta && !feitoS[v.id]) {
+      envios.push({ v, frase: cfg.meta_batida.frase, n: v.semana, para: cfg.meta_batida.para, tipo: 'meta' });
+      feitoS[v.id] = 1; mudouS = true;
+    }
+  }
+  // Primeiro a marca (a reserva), depois o envio: uma batida cortada no meio repete no maximo um
+  // envio, nunca comemora o mesmo marco em toda batida.
+  if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
+  if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
+  await _writeConfig(env, 'bot_ver', String(ver)).catch(() => {});
+  for (const e of envios) {
+    const texto = _botFrase(e.frase, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
+    const alvos = e.para === 'vendedor' ? _botDestinatarios(cfg).filter((p) => p.id === e.v.id) : _botDestinatarios(cfg);
+    if (!alvos.length) { await _botLog(env, { dia, tipo: e.tipo, nome: e.v.nome, fone: '', via: '', status: 'erro', erro: e.para === 'vendedor' ? 'o vendedor não está na lista de quem recebe (ou está sem telefone)' : 'ninguém na lista de quem recebe', texto }); continue; }
+    for (const p of alvos) await _botEntregar(env, cfg, row, p, texto, e.tipo, dia);
+  }
+}
+// O TICK DO CRON (toda batida, leve): fila de pendentes, resumo diario, resumo semanal, marcos.
+async function _botTick(env) {
+  const cfg = await _botCfgLer(env);
+  if (!cfg.ativo) return;
+  const row = await _botNumeroRow(env, cfg);
+  const dia = _brDay();
+  const agoraBR = _agoraBR();
+  const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  const wd = agoraBR.getUTCDay();
+  if (row) await _botEntregarPendentes(env, cfg, row);
+  // O resumo sai quando passou da hora e ainda nao saiu hoje. Passou de 3h da hora marcada (cron
+  // parado, bot ligado tarde), deixa pra amanha em vez de mandar de madrugada.
+  const r = cfg.relatorio;
+  if (r.ativo && r.dias.includes(wd)) {
+    const mh = _botMinutos(r.hora);
+    if (mh >= 0 && minAgora >= mh && minAgora - mh <= 180 && (await _botReserva(env, 'bot_rel_' + dia))) {
+      try { await _botDisparar(env, cfg, row, 'relatorio', dia, null); } catch (e) { console.error('[bot] resumo diario falhou: ' + String((e && e.message) || e)); }
+    }
+  }
+  const s = cfg.semanal;
+  if (s.ativo && wd === s.dia) {
+    const mh = _botMinutos(s.hora);
+    if (mh >= 0 && minAgora >= mh && minAgora - mh <= 180 && (await _botReserva(env, 'bot_sem_' + dia))) {
+      try { await _botDisparar(env, cfg, row, 'semanal', dia, null); } catch (e) { console.error('[bot] resumo semanal falhou: ' + String((e && e.message) || e)); }
+    }
+  }
+  if (cfg.marcos.ativo || cfg.meta_batida.ativo) {
+    try { await _botMarcosTick(env, cfg, row, dia); } catch (e) { console.error('[bot] marcos falhou: ' + String((e && e.message) || e)); }
+  }
+}
+// Quando e o proximo resumo, em texto, pra tela.
+async function _botProximo(env, cfg) {
+  const r = cfg.relatorio;
+  if (!cfg.ativo || !r.ativo || !r.dias.length) return 'desligado';
+  const agoraBR = _agoraBR();
+  const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  const hoje = _brDay();
+  const jaHoje = !!(await _readConfig(env, 'bot_rel_' + hoje).catch(() => null));
+  for (let i = 0; i < 8; i++) {
+    const dia = _botDiaMais(hoje, i);
+    const wd = new Date(dia + 'T12:00:00Z').getUTCDay();
+    if (!r.dias.includes(wd)) continue;
+    if (i === 0 && (jaHoje || minAgora > _botMinutos(r.hora))) continue;
+    const quando = i === 0 ? 'hoje' : (i === 1 ? 'amanhã' : _botDiaSemana(dia) + ' (' + _botDataBR(dia).slice(0, 5) + ')');
+    return quando + ' às ' + r.hora;
+  }
+  return 'desligado';
+}
+async function _botRotuloDono(env, atId, equipe) {
+  const a = String(atId || '');
+  if (!a) return 'sem dono';
+  const u = (equipe || []).find((x) => x.id === a);
+  if (u) return u.nome;
+  const m = a.match(/^ccol_(\d+)$/);
+  if (m) return 'Contingência (coluna ' + m[1] + ')';
+  return a;
+}
+// ─── Rotas /api/bot/* (so diretor/socio/produtor da casa) ───────────────────────────────
+async function handleBotConfig(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Só a direção da casa configura o bot', 403);
+  await _botEnsureTables(env);
+  if (req.method === 'POST') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const atual = await _botCfgLer(env);
+    const cfg = _botNormaliza(b, atual);
+    if (cfg.numero.phone_number_id) {
+      let row = null;
+      try { row = await env.DB.prepare('SELECT display_phone, at_id FROM wa_api_numbers WHERE phone_number_id=?').bind(cfg.numero.phone_number_id).first(); } catch (_) {}
+      if (!row) return err('Esse número não está entre os números oficiais da casa');
+      const _idsAfl = new Set(await _idsDeTodoAfiliado(env).catch(() => []));
+      if (_idsAfl.has(String(row.at_id || ''))) return err('Esse número é de um afiliado');
+      cfg.numero.display_phone = _botSoDigitos(row.display_phone);
+    } else cfg.numero.display_phone = '';
+    // Ligou o bot (ou mudou a hora) depois da hora de hoje: o resumo de hoje nao sai atrasado.
+    const agoraBR = _agoraBR();
+    const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+    const mudouHora = !atual.ativo || atual.relatorio.hora !== cfg.relatorio.hora || !atual.relatorio.ativo;
+    if (cfg.ativo && cfg.relatorio.ativo && mudouHora && minAgora > _botMinutos(cfg.relatorio.hora)) await _botReserva(env, 'bot_rel_' + _brDay());
+    await _botCfgGravar(env, cfg);
+    return json({ ok: true, cfg });
+  }
+  const cfg = await _botCfgLer(env);
+  const equipe = await _botEquipe(env);
+  // Numeros oficiais da casa (os de afiliado ficam fora), com quantas conversas cada um teve em 30 dias.
+  let numeros = [];
+  try {
+    const _idsAfl = new Set(await _idsDeTodoAfiliado(env).catch(() => []));
+    const rows = ((await env.DB.prepare('SELECT phone_number_id, display_phone, at_id, quality, verified, token FROM wa_api_numbers ORDER BY display_phone').all()).results) || [];
+    const conv = {};
+    try {
+      const rc = await env.DB.prepare("SELECT substr(instance,-8) AS k, COUNT(*) AS n FROM wa_chats WHERE last_ts > strftime('%s','now')-30*86400 GROUP BY k").all();
+      for (const x of ((rc && rc.results) || [])) conv[String(x.k)] = Number(x.n) || 0;
+    } catch (_) {}
+    for (const r of rows) {
+      if (_idsAfl.has(String(r.at_id || ''))) continue;
+      const tok = String(r.token || '');
+      numeros.push({ phone_number_id: String(r.phone_number_id), display_phone: _botSoDigitos(r.display_phone), dono: await _botRotuloDono(env, r.at_id, equipe), quality: r.quality || '', verified: Number(r.verified) || 0, tem_token: (tok.length >= 60 && tok.indexOf('*') < 0) ? 1 : 0, conversas30d: conv[_botSoDigitos(r.display_phone).slice(-8)] || 0 });
+    }
+  } catch (_) {}
+  const row = await _botNumeroRow(env, cfg);
+  let template = null;
+  if (row) { try { template = await _botTemplateStatus(env, row); } catch (_) { template = null; } }
+  const janelas = {};
+  for (const p of (cfg.pessoas || []).slice(0, 40)) { if (p.fone && row) { const t = await _botJanela(env, p.fone, row); if (t) janelas[p.fone] = t; } }
+  let ultimo = null;
+  try {
+    const r = await env.DB.prepare("SELECT dia, MAX(ts) AS ts, SUM(CASE WHEN status IN ('enviado','aguardando') THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN status='erro' THEN 1 ELSE 0 END) AS erro FROM bot_envios WHERE tipo='relatorio' GROUP BY dia ORDER BY ts DESC LIMIT 1").first();
+    if (r && r.ts) ultimo = { ts: Number(r.ts), dia: r.dia, ok: Number(r.ok) || 0, erro: Number(r.erro) || 0 };
+  } catch (_) {}
+  const sem = _botSemanaDe(_brDay());
+  return json({ ok: true, cfg, equipe, numeros, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
+    status: { proximo: await _botProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
+}
+async function handleBotWaPreview(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  const url = new URL(req.url);
+  const dia = _botDiaOk(url.searchParams.get('dia')) ? url.searchParams.get('dia') : _brDay();
+  const tipo = url.searchParams.get('tipo') === 'semanal' ? 'semanal' : 'diario';
+  const cfg = await _botCfgLer(env);
+  const dados = await _botDados(env, dia, cfg, tipo);
+  return json({ ok: true, texto: _botTextoRelatorio(cfg, dados), dados });
+}
+async function handleBotEnviar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const tipo = ['relatorio', 'semanal', 'teste', 'marco'].includes(b.tipo) ? b.tipo : 'teste';
+  const cfg = await _botCfgLer(env);
+  const row = await _botNumeroRow(env, cfg);
+  const dia = _botDiaOk(b.dia) ? b.dia : _brDay();
+  if (cfg.canais.whatsapp !== false && !row) return err('Escolha um número do bot com token de envio antes de testar');
+  if (tipo === 'relatorio' || tipo === 'semanal') {
+    const r = await _botDisparar(env, cfg, row, tipo, dia, Array.isArray(b.para) ? b.para : null);
+    return json({ ok: true, resultados: r.resultados, texto: r.texto });
+  }
+  let texto = BOT_TEXTO_TESTE;
+  if (tipo === 'marco') {
+    const n = Math.floor(Number(b.n) || 0);
+    const m = cfg.marcos.lista.find((x) => x.n === n) || cfg.marcos.lista[0];
+    if (!m) return err('Cadastre um marco antes de testar');
+    const vendedores = await _botVendedores(env);
+    const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
+    const dados = await _botDados(env, dia, cfg, 'diario');
+    const vd = dados.vendedores.find((x) => x.id === v.id) || { pedidos: m.n, leads: 0, meta: 0, faltam: 0 };
+    texto = _botFrase(m.frase, { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(dia) });
+  }
+  let alvos = _botDestinatarios(cfg);
+  if (Array.isArray(b.para) && b.para.length) {
+    const set = new Set(b.para.map(_botFone).filter(Boolean));
+    const conhecidos = alvos.filter((p) => set.has(p.fone));
+    for (const f of set) if (!conhecidos.some((p) => p.fone === f)) conhecidos.push({ id: '', nome: '', fone: f, recebe: true });
+    alvos = conhecidos;
+  }
+  if (!alvos.length) return err('Ninguém na lista de quem recebe (ou todo mundo sem telefone)');
+  const resultados = [];
+  for (const p of alvos.slice(0, 40)) resultados.push(await _botEntregar(env, cfg, row, p, texto, tipo, dia));
+  return json({ ok: true, resultados, texto });
+}
+async function handleBotLog(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  await _botEnsureTables(env);
+  const lim = Math.max(1, Math.min(200, Number(new URL(req.url).searchParams.get('limite')) || 60));
+  let envios = [];
+  try {
+    const r = await env.DB.prepare('SELECT id, ts, dia, tipo, nome, fone, via, status, erro, substr(texto,1,160) AS texto, wamid FROM bot_envios ORDER BY id DESC LIMIT ?').bind(lim).all();
+    envios = (r && r.results) || [];
+  } catch (_) {}
+  let pendentes = [];
+  try { pendentes = ((await env.DB.prepare('SELECT fone, nome, tipo, ts FROM bot_pend ORDER BY ts DESC').all()).results) || []; } catch (_) {}
+  return json({ ok: true, envios, pendentes });
+}
+async function handleBotTemplate(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  const cfg = await _botCfgLer(env);
+  const row = await _botNumeroRow(env, cfg);
+  if (!row) return err('Escolha um número do bot com token de envio antes');
+  if (req.method === 'GET') { const t = await _botTemplateStatus(env, row, true); return json({ ok: true, template: t && !t.erro ? t : null, erro: t && t.erro ? t.erro : '' }); }
+  const existe = await _botTemplateStatus(env, row, true);
+  if (existe && !existe.erro) return json({ ok: true, template: existe, ja_existia: true });
+  const g = await _graph(env, `/${encodeURIComponent(row.waba_id)}/message_templates`, {
+    method: 'POST', token: row.token,
+    body: JSON.stringify({ name: BOT_TEMPLATE_NAME, language: 'pt_BR', category: 'UTILITY', allow_category_change: true, components: [
+      { type: 'BODY', text: BOT_TEMPLATE_BODY, example: { body_text: [['Guilherme', '12/10']] } },
+      { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: BOT_TEMPLATE_BOTAO }] },
+    ] }),
+  });
+  if (!g.ok) return json({ ok: false, error: (g.data && g.data.error && g.data.error.message) || ('graph ' + g.status), resp: g.data }, 400);
+  _botTplCache = null;
+  const t = await _botTemplateStatus(env, row, true);
+  return json({ ok: true, template: t && !t.erro ? t : { name: BOT_TEMPLATE_NAME, status: String((g.data && g.data.status) || 'PENDING').toUpperCase(), category: (g.data && g.data.category) || 'UTILITY', language: 'pt_BR' } });
+}
+// ═══════════════════════════════════════ fim do bot ═══════════════════════════════════════
+
 // POST /api/criativo/midia — corpo CRU (o arquivo), content-type = o do arquivo.
 // Sobe pro Gemini Files e devolve a URI. Nada fica guardado do nosso lado: o criativo é material de
 // campanha, não é dado da operação, e o R2 aqui só viraria lixo acumulando.
@@ -22069,6 +22857,12 @@ export default {
       // TESTADOR DE CRIATIVO: le o criativo e a LP antes de subir e aponta o que reprova.
       if (req.method === 'POST'   && path === '/api/criativo/midia')  return handleCriativoUpload(req, env);
       if (req.method === 'POST'   && path === '/api/criativo/testar') return handleCriativoTestar(req, env);
+      // BOT DE WHATSAPP DO TIME (12/10/2026): resumo diario, metas e comemoracoes. Ver o bloco do bot.
+      if (path === '/api/bot/config' && (req.method === 'GET' || req.method === 'POST')) return handleBotConfig(req, env);
+      if (req.method === 'GET'    && path === '/api/bot/preview')  return handleBotWaPreview(req, env);
+      if (req.method === 'POST'   && path === '/api/bot/enviar')   return handleBotEnviar(req, env);
+      if (req.method === 'GET'    && path === '/api/bot/log')      return handleBotLog(req, env);
+      if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
