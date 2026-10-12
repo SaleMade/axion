@@ -16041,6 +16041,7 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     const _ts = Number(msgTs) || 0;
     const _teto = Number(maxIdade) > 0 ? Number(maxIdade) : 900;
     if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > _teto) return;
+    if (await _botEhDoBot(env, instance, phone, selfNum)) return;   // bot do time (12/10/2026): resposta ao bot nao e lead
     if (!_leadTablesOk) {   // DDL uma vez por isolate (era causa do 1102 no lote de captura)
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
       // A identificacao da Meta acompanha o lead: e o que liga a VENDA (que acontece dias depois)
@@ -22595,6 +22596,7 @@ export default {
     // Fica ANTES do _dcPoll: estourar recurso nao gera excecao, a invocacao e cortada no meio, e o
     // que vem depois do que trava simplesmente nao roda. O aviso sai primeiro.
     try { await _cronPush(env); } catch (e) { console.error('[cron] push falhou: ' + String((e && e.stack) || e)); }
+    try { await _botTick(env); } catch (e) { console.error('[cron] bot do time falhou: ' + String((e && e.stack) || e)); }
     // PUXA lead novo do Datacrazy (nao depende da automacao deles disparar) e sincroniza o inbox
     // (nos numeros em coexistencia quem recebe o webhook da Meta e o app do Datacrazy, nao o nosso).
     // Os dois em try separado: a API deles cair de um lado nao pode parar o outro.
