@@ -14122,8 +14122,10 @@ async function handleWAMessages(req, env) {
     const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
     if (!chat || !_meu(chat.instance)) return err('Sem acesso a essa conversa', 403);
   }
+  // AS MAIS NOVAS, NA ORDEM (12/10/2026). Era ORDER BY ts ASC LIMIT: passando do limite, a conversa
+  // mostrava as MAIS ANTIGAS e cortava justo as ultimas (2 de 12.398 conversas, a maior com 651).
   const rows = await env.DB.prepare(
-    'SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url, status, err FROM wa_messages WHERE phone = ? ORDER BY ts ASC LIMIT ?'
+    'SELECT * FROM (SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url, status, err FROM wa_messages WHERE phone = ? ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC'
   ).bind(phone, limit).all();
   // MESMA IDEIA DA LISTA (19/09/2026): a conversa aberta rele de 3 em 3 segundos e quase sempre esta
   // igual. Assinatura bate, resposta curta - o que muda de verdade (mensagem nova, entregue, lida)
