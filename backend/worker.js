@@ -8395,11 +8395,14 @@ function _podeTestarCriativo(u) {
 // (2) um resumo semanal, opcional; (3) COMEMORACOES quando um vendedor cruza um marco de pedidos
 // no dia (5, 10, 15...) e quando bate a meta semanal.
 //
-// POR QUE NAO VAI NO GRUPO. Conferido na documentacao da Meta em 12/10/2026: a Cloud API so manda
-// pra grupo pela Groups API, que exige Official Business Account, cria grupos proprios de ate 8
-// pessoas e nao entra em grupo que ja existe. Todos os numeros da casa sao coexistencia (numero
-// no app + API), e a Meta nao da OBA pra numero do app. Entao o bot manda a MESMA mensagem no
-// privado de cada pessoa da lista. A Evolution (que mandava em grupo) saiu em 09/10/2026 e nao volta.
+// O GRUPO. A Cloud API NAO manda pra grupo (conferido na doc da Meta em 12/10/2026: a Groups API
+// exige Official Business Account, cria grupos proprios de ate 8 e nao entra em grupo que ja
+// existe; todos os numeros da casa sao coexistencia). Por isso o grupo vai por OUTRO caminho,
+// pedido pelo Bruno na noite de 12/10/2026: um WhatsApp Web do numero do bot (instancia `salebot`
+// numa Evolution API so do bot; servidor em app_config bot_evo_url e bot_evo_key), conectado por QR
+// na tela. O resumo diario, o semanal e as comemoracoes vao pro grupo escolhido (cfg.grupo) quando
+// o grupo esta ligado; a lista de pessoas continua recebendo no privado pela Cloud API. Essa
+// Evolution NAO recebe webhook, nao captura lead e nao entra no inbox: e so a saida pro grupo.
 //
 // JANELA DE 24H. A Meta so aceita texto livre pra quem escreveu pro numero do bot nas ultimas 24h.
 // Com a janela fechada o bot manda um TEMPLATE curto ("tem uma mensagem nova da equipe", botao
@@ -8485,6 +8488,7 @@ function _botCfgPadrao() {
     marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m })) },
     meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO },
     canais: { whatsapp: true, push: false },
+    grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true },
   };
 }
 // Mescla o que veio (raw) com a base (a config gravada ou o padrao) e valida tipo por tipo. Campo
@@ -8541,6 +8545,12 @@ function _botNormaliza(raw, base) {
   const bcan = b.canais || o.canais;
   o.canais.whatsapp = 'whatsapp' in can ? !!can.whatsapp : bcan.whatsapp !== false;
   o.canais.push = 'push' in can ? !!can.push : !!bcan.push;
+  const gr = (r.grupo && typeof r.grupo === 'object') ? r.grupo : {};
+  const bgr = b.grupo || o.grupo;
+  const gid = ('id' in gr) ? String(gr.id || '').trim() : String(bgr.id || '');
+  o.grupo.id = _botJidGrupoOk(gid) ? gid : '';
+  o.grupo.nome = _botTexto300(('nome' in gr) ? gr.nome : bgr.nome, 80).trim();
+  for (const k of ['diario', 'semanal', 'marcos']) o.grupo[k] = (k in gr) ? !!gr[k] : ((k in bgr) ? bgr[k] !== false : true);
   return o;
 }
 // `semCache`: o cron e o POST da config leem direto do banco. O cache de 30s por isolate serve so
@@ -8941,10 +8951,28 @@ async function _botEntregarPendentes(env, cfg, row) {
   await _botEnsureTables(env);
   let rows = [];
   try { rows = ((await env.DB.prepare('SELECT fone, nome, texto, tipo, ts, COALESCE(tent,0) AS tent FROM bot_pend').all()).results) || []; } catch (_) { return; }
-  if (!rows.length || !row) return;
+  if (!rows.length) return;
   const agora = Math.floor(Date.now() / 1000);
-  const janelas = await _botJanelas(env, rows.map((p) => p.fone), row);
-  for (const p of rows) {
+  // Textos do GRUPO esperando o servidor ou a sessao voltar: uma tentativa a cada (5 min x tentativas), ate 6h.
+  for (const p of rows.filter((x) => /@g\.us$/.test(String(x.fone)))) {
+    if (agora - Number(p.ts) > 6 * 3600) {
+      try { await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run(); } catch (_) {}
+      await _botLog(env, { tipo: p.tipo, nome: p.nome, fone: p.fone, via: 'grupo', status: 'erro', erro: 'O grupo ficou 6h sem conseguir receber. Texto descartado.', texto: p.texto });
+      continue;
+    }
+    if (agora - Number(p.ts) < Number(p.tent) * 300) continue;
+    const r = await _botEvoTexto(env, p.fone, p.texto);
+    if (r.ok || !r.repetir) {
+      try { await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run(); } catch (_) {}
+      await _botLog(env, { tipo: p.tipo, nome: p.nome, fone: p.fone, via: 'grupo', status: r.ok ? 'enviado' : 'erro', erro: r.ok ? '' : r.erro, texto: p.texto, wamid: r.id });
+    } else {
+      try { await env.DB.prepare('UPDATE bot_pend SET tent=COALESCE(tent,0)+1 WHERE fone=?').bind(p.fone).run(); } catch (_) {}
+    }
+  }
+  const pessoas = rows.filter((x) => !/@g\.us$/.test(String(x.fone)));
+  if (!pessoas.length || !row) return;
+  const janelas = await _botJanelas(env, pessoas.map((p) => p.fone), row);
+  for (const p of pessoas) {
     const ultimoIn = Number(janelas[_bot8(p.fone)]) || 0;
     if (ultimoIn && ultimoIn >= Number(p.ts) - 60) {
       const r = await _botGraphTexto(env, row, p.fone, p.texto);
@@ -8989,7 +9017,11 @@ const _botAlvosDe = (cfg, para) => {
 async function _botDisparar(env, cfg, row, tipo, diaResumo, para, dia) {
   const dados = await _botDados(env, diaResumo, cfg, tipo === 'semanal' ? 'semanal' : 'diario');
   const texto = _botTextoRelatorio(cfg, dados);
-  const resultados = await _botEnviarLista(env, cfg, row, _botAlvosDe(cfg, para), texto, tipo, dia || diaResumo);
+  const resultados = [];
+  // O grupo vai primeiro (e onde o time le) e so no disparo completo: `para` e reenvio pra pessoas certas.
+  const g = cfg.grupo || {};
+  if (!para && g.id && (tipo === 'semanal' ? g.semanal !== false : g.diario !== false)) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, dia || diaResumo));
+  resultados.push(...(await _botEnviarLista(env, cfg, row, _botAlvosDe(cfg, para), texto, tipo, dia || diaResumo)));
   return { texto, dados, resultados };
 }
 // Reserva atomica de "ja disparei X hoje": so a primeira batida grava a chave.
@@ -9045,30 +9077,40 @@ async function _botMarcosTick(env, cfg, row, dia) {
   _botVerVista = ver;
   await _writeConfig(env, 'bot_ver', String(ver)).catch(() => {});
   if (!envios.length) return;
-  // Agrupa por pessoa: quem recebe varias comemoracoes na mesma batida recebe UMA mensagem.
-  const porPessoa = new Map();
   let mudouM = false, mudouS = false;
+  const consome = (e) => { e.marca(); if (e.tipo === 'meta') mudouS = true; else mudouM = true; };
+  for (const e of envios) e.texto = _botFrase(e.frase, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
+  // NO GRUPO: todas as comemoracoes da batida numa mensagem so. Entregue (ou na fila) = consumido.
+  const g = cfg.grupo || {};
+  const noGrupo = !!(g.id && g.marcos !== false);
+  if (noGrupo) {
+    const tipoG = envios.some((e) => e.tipo === 'meta') && !envios.some((e) => e.tipo === 'marco') ? 'meta' : 'marco';
+    const r = await _botEntregarGrupo(env, cfg, envios.map((e) => e.texto).join('\n\n'), tipoG, dia);
+    if (r.status !== 'erro') for (const e of envios) consome(e);
+  }
+  // NO PRIVADO: agrupa por pessoa (quem recebe varias comemoracoes na mesma batida recebe UMA mensagem).
+  const porPessoa = new Map();
   for (const e of envios) {
-    const texto = _botFrase(e.frase, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
     const alvos = e.para === 'vendedor' ? _botDestinatarios(cfg).filter((p) => p.id === e.v.id) : _botDestinatarios(cfg);
     if (!alvos.length) {
-      // Nao ha a quem mandar: marca mesmo assim, senao repete o registro de erro em toda batida.
-      e.marca(); if (e.tipo === 'meta') mudouS = true; else mudouM = true;
-      await _botLog(env, { dia, tipo: e.tipo, nome: e.v.nome, fone: '', via: '', status: 'erro', erro: e.para === 'vendedor' ? 'o vendedor não está na lista de quem recebe (ou está sem telefone)' : 'ninguém na lista de quem recebe', texto });
+      // Nao ha a quem mandar no privado: marca mesmo assim, senao repete o registro em toda batida.
+      // Com o grupo ligado, lista vazia e o normal, nao e erro.
+      if (!noGrupo) await _botLog(env, { dia, tipo: e.tipo, nome: e.v.nome, fone: '', via: '', status: 'erro', erro: e.para === 'vendedor' ? 'o vendedor não está na lista de quem recebe (ou está sem telefone)' : 'ninguém na lista de quem recebe', texto: e.texto });
+      consome(e);
       continue;
     }
     for (const p of alvos) {
       const k = p.fone;
       if (!porPessoa.has(k)) porPessoa.set(k, { pessoa: p, textos: [], itens: [] });
-      porPessoa.get(k).textos.push(texto); porPessoa.get(k).itens.push(e);
+      porPessoa.get(k).textos.push(e.texto); porPessoa.get(k).itens.push(e);
     }
   }
-  const janelas = row ? await _botJanelas(env, [...porPessoa.keys()], row) : {};
+  const janelas = row && porPessoa.size ? await _botJanelas(env, [...porPessoa.keys()], row) : {};
   for (const { pessoa, textos, itens } of porPessoa.values()) {
     const tipo = itens.some((e) => e.tipo === 'meta') && !itens.some((e) => e.tipo === 'marco') ? 'meta' : 'marco';
     const r = await _botEntregar(env, cfg, row, pessoa, textos.join('\n\n'), tipo, dia, janelas);
     const consumiu = r.status !== 'erro' || /sem telefone|desligado/.test(String(r.erro || ''));
-    if (consumiu) for (const e of itens) { e.marca(); if (e.tipo === 'meta') mudouS = true; else mudouM = true; }
+    if (consumiu) for (const e of itens) consome(e);
   }
   if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
   if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
@@ -9083,14 +9125,15 @@ async function _botTick(env) {
   const dia = _brDay();
   const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length);
   if (!temAlgo) return;
+  const temGrupo = !!(cfg.grupo && cfg.grupo.id);
   const row = await _botNumeroRow(env, cfg);
-  if (!row && cfg.canais.whatsapp !== false) {
+  if (!row && cfg.canais.whatsapp !== false && !temGrupo) {
     if (_botSemTokenDia !== dia) { _botSemTokenDia = dia; await _botLog(env, { dia, tipo: 'relatorio', nome: '', fone: '', via: '', status: 'erro', erro: 'O número do bot está sem token de envio. Nada sai até ele voltar (escolha outro número na tela).' }); }
     return;
   }
   const agoraBR = _agoraBR();
   const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
-  if (row) await _botEntregarPendentes(env, cfg, row);
+  await _botEntregarPendentes(env, cfg, row);   // trata a fila do grupo mesmo sem numero oficial
   const r = cfg.relatorio;
   if (r.ativo) {
     const slot = _botSlot(r.hora, dia, minAgora);
@@ -9134,6 +9177,147 @@ async function _botRotuloDono(env, atId, equipe) {
   const m = a.match(/^ccol_(\d+)$/);
   if (m) return 'Contingência (coluna ' + m[1] + ')';
   return a;
+}
+// ─── O GRUPO: WhatsApp Web do numero do bot (Evolution API so do bot) ──────────────────────
+// Servidor em app_config (bot_evo_url, bot_evo_key), instancia fixa `salebot`. Tudo aqui tem teto
+// de tempo: VPS fora do ar nao pode pendurar a batida do cron nem a tela. Nada daqui recebe
+// webhook, captura lead ou entra no inbox: e so a SAIDA pro grupo.
+const BOT_EVO_INST = 'salebot';
+let _botEvoCache = null, _botEvoAt = 0, _botGruposCache = null, _botGruposAt = 0;
+const _botHost = (u) => { try { return new URL(String(u || '')).host; } catch (_) { return ''; } };
+const _botJidGrupoOk = (v) => /^\d{5,30}(-\d{3,20})?@g\.us$/.test(String(v || ''));
+async function _botEvoCfg(env, semCache) {
+  const agora = Date.now();
+  if (!semCache && _botEvoCache && (agora - _botEvoAt) < 60000) return _botEvoCache;
+  let url = '', key = '';
+  try { const m = await _readConfigMuitas(env, ['bot_evo_url', 'bot_evo_key']); url = String(m.bot_evo_url || '').trim().replace(/\/+$/, ''); key = String(m.bot_evo_key || '').trim(); } catch (_) {}
+  _botEvoCache = { url, key }; _botEvoAt = agora;
+  return _botEvoCache;
+}
+function _botEvoErroTxt(data, status) {
+  let m = '';
+  if (data && data.response) m = Array.isArray(data.response.message) ? data.response.message.join('; ') : (data.response.message || '');
+  if (!m && data) m = data.message || data.error || data.raw || '';
+  const s = String(m || '').slice(0, 200);
+  return s || ('servidor respondeu ' + status);
+}
+async function _botEvo(env, path, opts) {
+  const o = opts || {};
+  const c = await _botEvoCfg(env);
+  if (!c.url || !c.key) return { ok: false, status: 0, data: {}, sem_config: true, repetir: true, erro: 'Servidor do WhatsApp Web não configurado' };
+  try {
+    const r = await fetch(c.url + path, { method: o.method || 'GET', headers: { apikey: c.key, ...(o.body ? { 'content-type': 'application/json' } : {}) }, body: o.body ? JSON.stringify(o.body) : undefined, signal: AbortSignal.timeout(o.timeout || 12000) });
+    const text = await r.text();
+    let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
+    return { ok: r.ok, status: r.status, data, erro: r.ok ? '' : _botEvoErroTxt(data, r.status), repetir: r.status >= 500 };
+  } catch (e) {
+    return { ok: false, status: 0, data: {}, fora: true, repetir: true, erro: 'O servidor do WhatsApp Web não respondeu' };
+  }
+}
+// Estado da sessao: servidor sem_config | fora | ok; estado nao_existe | close | connecting | open.
+async function _botEvoEstado(env) {
+  const c = await _botEvoCfg(env);
+  const out = { servidor: c.url && c.key ? 'ok' : 'sem_config', host: _botHost(c.url), estado: 'nao_existe', numero: '', nome: '', erro: '' };
+  if (out.servidor !== 'ok') return out;
+  const r = await _botEvo(env, '/instance/connectionState/' + BOT_EVO_INST, { timeout: 8000 });
+  if (r.fora) { out.servidor = 'fora'; out.erro = r.erro; return out; }
+  if (r.status === 404) return out;
+  if (!r.ok) { out.erro = r.erro; return out; }
+  out.estado = String((r.data && r.data.instance && r.data.instance.state) || 'close');
+  if (out.estado === 'open') {
+    const f = await _botEvo(env, '/instance/fetchInstances?instanceName=' + BOT_EVO_INST, { timeout: 8000 });
+    const lista = Array.isArray(f.data) ? f.data : [];
+    const i = lista.find((x) => String((x && (x.name || x.instanceName || (x.instance && x.instance.instanceName))) || '') === BOT_EVO_INST) || lista[0];
+    if (i) {
+      out.numero = String(i.ownerJid || i.owner || (i.instance && i.instance.owner) || '').replace(/@.*/, '').replace(/\D/g, '');
+      out.nome = String(i.profileName || (i.instance && i.instance.profileName) || '').slice(0, 60);
+    }
+  }
+  return out;
+}
+// Cria a sessao se nao existe e devolve o QR (ou o codigo de pareamento, quando veio `number`).
+async function _botEvoConectar(env, b) {
+  const o = b || {};
+  if (o.reset) {
+    await _botEvo(env, '/instance/logout/' + BOT_EVO_INST, { method: 'DELETE', timeout: 8000 });
+    await _botEvo(env, '/instance/delete/' + BOT_EVO_INST, { method: 'DELETE', timeout: 8000 });
+    _botGruposCache = null;
+  }
+  const st = await _botEvo(env, '/instance/connectionState/' + BOT_EVO_INST, { timeout: 8000 });
+  if (st.fora || st.sem_config) return { ok: false, erro: st.erro };
+  let qr = '', pairingCode = '';
+  if (st.status === 404) {
+    const cr = await _botEvo(env, '/instance/create', { method: 'POST', timeout: 20000, body: { instanceName: BOT_EVO_INST, integration: 'WHATSAPP-BAILEYS', qrcode: true, syncFullHistory: false, groupsIgnore: false, readMessages: false, alwaysOnline: false, rejectCall: false } });
+    if (!cr.ok) return { ok: false, erro: 'Não consegui criar a sessão: ' + cr.erro };
+    qr = String((cr.data && cr.data.qrcode && cr.data.qrcode.base64) || (cr.data && cr.data.base64) || '');
+    pairingCode = String((cr.data && cr.data.qrcode && cr.data.qrcode.pairingCode) || (cr.data && cr.data.pairingCode) || '');
+  } else if (st.ok && String(st.data && st.data.instance && st.data.instance.state) === 'open') {
+    const e = await _botEvoEstado(env);
+    return { ok: true, estado: 'open', numero: e.numero, nome: e.nome };
+  }
+  const num = _botSoDigitos(o.number);
+  for (let i = 0; i < 4 && !qr && !pairingCode; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 800));
+    const r = await _botEvo(env, '/instance/connect/' + BOT_EVO_INST + (num ? '?number=' + num : ''), { timeout: 15000 });
+    if (r.fora) return { ok: false, erro: r.erro };
+    if (r.ok && String(r.data && r.data.instance && r.data.instance.state) === 'open') { const e = await _botEvoEstado(env); return { ok: true, estado: 'open', numero: e.numero, nome: e.nome }; }
+    qr = String((r.data && (r.data.base64 || (r.data.qrcode && r.data.qrcode.base64))) || '');
+    pairingCode = String((r.data && r.data.pairingCode) || '');
+  }
+  if (!qr && !pairingCode) return { ok: false, erro: 'A Evolution não devolveu o QR. Tente de novo em alguns segundos, ou use Recomeçar.' };
+  return { ok: true, estado: 'connecting', qr, pairingCode: num ? pairingCode : '' };
+}
+async function _botEvoSair(env) {
+  const a = await _botEvo(env, '/instance/logout/' + BOT_EVO_INST, { method: 'DELETE', timeout: 10000 });
+  if (a.fora || a.sem_config) return { ok: false, erro: a.erro };
+  const b = await _botEvo(env, '/instance/delete/' + BOT_EVO_INST, { method: 'DELETE', timeout: 10000 });
+  _botGruposCache = null;
+  return { ok: true, saiu: a.ok || a.status === 404 || b.ok };
+}
+// Grupos em que o numero do bot esta (cache de 60s: a Evolution demora nessa chamada).
+async function _botEvoGrupos(env, fresco) {
+  const agora = Date.now();
+  if (!fresco && _botGruposCache && (agora - _botGruposAt) < 60000) return { ok: true, grupos: _botGruposCache };
+  const r = await _botEvo(env, '/group/fetchAllGroups/' + BOT_EVO_INST + '?getParticipants=false', { timeout: 25000 });
+  if (!r.ok) return { ok: false, erro: r.erro, grupos: _botGruposCache || [] };
+  const lista = Array.isArray(r.data) ? r.data : (Array.isArray(r.data && r.data.groups) ? r.data.groups : []);
+  const grupos = lista.map((g) => ({ id: String((g && g.id) || ''), nome: String((g && (g.subject || g.name)) || '').slice(0, 80), tamanho: Number(g && g.size) || 0 }))
+    .filter((g) => _botJidGrupoOk(g.id)).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  _botGruposCache = grupos; _botGruposAt = agora;
+  return { ok: true, grupos };
+}
+// Manda texto pro grupo. `repetir` = vale tentar de novo depois (servidor fora, sessao caida).
+async function _botEvoTexto(env, jid, texto) {
+  const r = await _botEvo(env, '/message/sendText/' + BOT_EVO_INST, { method: 'POST', timeout: 15000, body: { number: String(jid), text: String(texto).slice(0, 4000), linkPreview: false } });
+  if (r.ok) return { ok: true, id: String((r.data && r.data.key && r.data.key.id) || '') };
+  const txt = String(r.erro || '');
+  const caiu = !r.fora && !r.sem_config && (r.status === 404 || /not found|connection closed|not connected|closed|instance/i.test(txt));
+  return { ok: false, erro: caiu ? 'O WhatsApp Web do bot está desconectado (' + txt + ')' : txt, repetir: !!(r.repetir || caiu) };
+}
+async function _botPendGrupo(env, g, texto, tipo) {
+  await _botEnsureTables(env);
+  const agora = Math.floor(Date.now() / 1000);
+  const nome = 'Grupo: ' + (g.nome || g.id);
+  try {
+    const pend = await env.DB.prepare('SELECT ts, texto FROM bot_pend WHERE fone=?').bind(g.id).first();
+    const textoFila = pend && pend.texto ? (String(pend.texto) + '\n\n' + texto).slice(-3800) : texto;
+    if (pend) await env.DB.prepare('UPDATE bot_pend SET nome=?, texto=?, tipo=? WHERE fone=?').bind(nome, textoFila, tipo, g.id).run();
+    else await env.DB.prepare('INSERT INTO bot_pend (fone, nome, texto, tipo, ts, tent) VALUES (?,?,?,?,?,0)').bind(g.id, nome, textoFila, tipo, agora).run();
+    return true;
+  } catch (_) { return false; }
+}
+// ENTREGA NO GRUPO. Falhou por servidor fora ou sessao caida: guarda em bot_pend e o tick tenta de
+// novo (5 min a mais por tentativa, por ate 6h). Falha definitiva so registra.
+async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
+  const g = (cfg && cfg.grupo) || {};
+  const out = { fone: String(g.id || ''), nome: 'Grupo: ' + (g.nome || g.id || ''), status: 'erro', via: 'grupo', erro: '', id: '', grupo: true };
+  if (!g.id) { out.erro = 'nenhum grupo escolhido'; return out; }
+  const r = await _botEvoTexto(env, g.id, texto);
+  if (r.ok) { out.status = 'enviado'; out.id = r.id; }
+  else if (r.repetir && (await _botPendGrupo(env, g, texto, tipo))) { out.status = 'aguardando'; out.erro = r.erro + '. Vou tentar de novo por até 6h.'; }
+  else out.erro = r.erro;
+  await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: out.status, erro: out.erro, texto, wamid: out.id });
+  return out;
 }
 // ─── Rotas /api/bot/* (so diretor/socio/produtor da casa) ───────────────────────────────
 async function handleBotConfig(req, env) {
@@ -9203,7 +9387,8 @@ async function handleBotConfig(req, env) {
     }
   } catch (_) {}
   const sem = _botSemanaDe(_brDay());
-  return json({ ok: true, cfg, equipe, numeros, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
+  const evo = await _botEvoCfg(env, true);
+  return json({ ok: true, cfg, equipe, numeros, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
     status: { proximo: await _botProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, dia_resumo: _botDiaDoResumo(cfg, _brDay()), ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
 }
 async function handleBotWaPreview(req, env) {
@@ -9226,7 +9411,8 @@ async function handleBotEnviar(req, env) {
   const cfg = await _botCfgLer(env, true);
   const row = await _botNumeroRow(env, cfg);
   const hoje = _brDay();
-  if (cfg.canais.whatsapp !== false && !row) return err('Escolha um número do bot com token de envio antes de testar');
+  const temGrupo = !!(cfg.grupo && cfg.grupo.id);
+  if (cfg.canais.whatsapp !== false && !row && !temGrupo) return err('Escolha um número do bot com token de envio (ou conecte o grupo) antes de testar');
   const para = Array.isArray(b.para) ? b.para : null;
   if (tipo === 'relatorio' || tipo === 'semanal') {
     const diaResumo = _botDiaOk(b.dia) ? b.dia : (tipo === 'relatorio' ? _botDiaDoResumo(cfg, hoje) : hoje);
@@ -9247,8 +9433,11 @@ async function handleBotEnviar(req, env) {
     texto = _botFrase(m.frase, { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
   }
   const alvos = _botAlvosDe(cfg, para);
-  if (!alvos.length) return err('Ninguém na lista de quem recebe (ou todo mundo sem telefone)');
-  const resultados = await _botEnviarLista(env, cfg, row, alvos, texto, tipo, hoje);
+  const grupoVai = !para && temGrupo && (tipo !== 'marco' || cfg.grupo.marcos !== false);
+  if (!alvos.length && !grupoVai) return err('Ninguém na lista de quem recebe (ou todo mundo sem telefone)');
+  const resultados = [];
+  if (grupoVai) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, hoje));
+  resultados.push(...(await _botEnviarLista(env, cfg, row, alvos, texto, tipo, hoje)));
   return json({ ok: true, resultados, texto });
 }
 async function handleBotLog(req, env) {
@@ -9294,6 +9483,53 @@ async function handleBotTemplate(req, env) {
   _botTplCache = null;
   const t = await _botTemplateStatus(env, row, true);
   return json({ ok: true, template: t && !t.erro ? t : { name: BOT_TEMPLATE_NAME, status: String((g.data && g.data.status) || 'PENDING').toUpperCase(), category: String((g.data && g.data.category) || 'UTILITY').toUpperCase(), language: 'pt_BR' } });
+}
+// WhatsApp Web do bot (o caminho do grupo): estado, QR, grupos, servidor e mensagem livre.
+async function handleBotWa(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  const url = new URL(req.url);
+  const acao = url.pathname.replace(/^\/api\/bot\/wa\//, '').replace(/\/+$/, '');
+  const m = req.method;
+  if (m === 'GET' && acao === 'estado') return json({ ok: true, ...(await _botEvoEstado(env)) });
+  if (m === 'GET' && acao === 'grupos') {
+    const r = await _botEvoGrupos(env, url.searchParams.get('fresco') === '1');
+    return r.ok ? json({ ok: true, grupos: r.grupos }) : json({ ok: false, error: r.erro, grupos: r.grupos }, 502);
+  }
+  let b = {};
+  if (m === 'POST') { try { b = await req.json(); } catch (_) { b = {}; } }
+  if (m === 'POST' && acao === 'conectar') { const r = await _botEvoConectar(env, b); return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502); }
+  if (m === 'POST' && acao === 'sair') { const r = await _botEvoSair(env); return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502); }
+  if (m === 'POST' && acao === 'servidor') {
+    const u2 = String(b.url || '').trim().replace(/\/+$/, '');
+    const key = String(b.key || '').trim();
+    const atual = await _botEvoCfg(env, true);
+    if (!/^https?:\/\/[^\s/]+$/i.test(u2)) return err('Endereço inválido. Use https://nome-do-servidor, sem caminho no fim');
+    if (/^https?:\/\/\d+\.\d+\.\d+\.\d+/.test(u2)) return err('O Cloudflare não chama IP cru. Use o domínio (ex: https://69-197-134-180.sslip.io)');
+    const chave = key || atual.key;
+    if (!chave) return err('Informe a chave (apikey) da Evolution');
+    // Confere antes de gravar: a raiz da Evolution responde com a versao.
+    let versao = '';
+    try {
+      const r = await fetch(u2 + '/', { headers: { apikey: chave }, signal: AbortSignal.timeout(10000) });
+      const t = await r.text(); let d = {}; try { d = JSON.parse(t); } catch (_) { d = {}; }
+      if (!r.ok) return err('O servidor respondeu ' + r.status + ' na raiz. Confira o endereço.');
+      versao = String((d && d.version) || '');
+    } catch (_) { return err('O servidor não respondeu em 10s. Está no ar? (porta 443 aberta e domínio certo)'); }
+    await _writeConfig(env, 'bot_evo_url', u2);
+    if (key) await _writeConfig(env, 'bot_evo_key', key);
+    _botEvoCache = null; _botGruposCache = null;
+    return json({ ok: true, host: _botHost(u2), versao });
+  }
+  if (m === 'POST' && acao === 'enviar') {
+    const cfg = await _botCfgLer(env, true);
+    if (!cfg.grupo || !cfg.grupo.id) return err('Escolha e salve o grupo antes');
+    const texto = _botTexto300(b.texto, 4000).trim() || BOT_TEXTO_TESTE;
+    const r = await _botEntregarGrupo(env, cfg, texto, b.tipo === 'teste' ? 'teste' : 'livre', _brDay());
+    return json({ ok: r.status !== 'erro', resultado: r, error: r.status === 'erro' ? r.erro : '' });
+  }
+  return err('Rota do bot desconhecida', 404);
 }
 // ═══════════════════════════════════════ fim do bot ═══════════════════════════════════════
 
@@ -23514,6 +23750,7 @@ export default {
       if (req.method === 'POST'   && path === '/api/bot/enviar')   return handleBotEnviar(req, env);
       if (req.method === 'GET'    && path === '/api/bot/log')      return handleBotLog(req, env);
       if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
+      if (path.startsWith('/api/bot/wa/')) return handleBotWa(req, env);   // WhatsApp Web do bot (grupo)
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
