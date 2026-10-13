@@ -18776,7 +18776,25 @@ async function handlePresselMeus(req, env) {
     return { id: c.id, num: c.num, api: !!c.api, dist: c.dist === 'limite' ? 'limite' : '', lim_ordem: Number(c.lim_ordem) || 0,
       lim_dia: Number(c.lim_dia) || 0, lim_livre: String(c.lim_livre || ''), idx: Number(c.idx) || 0 };
   });
-  return json({ ok: true, hoje, numeros, pressels, leadsHoje });
+  // ONDE ESTA RECEBENDO AGORA (13/10/2026): a mesma conta do diagnostico (roleta + fila do Limite),
+  // pra tela do vendedor dizer a verdade em vez de "ligado em alguma pressel".
+  const recebendo = {};
+  try {
+    const liveSet = await _presselLiveSet(env);
+    const emUsoIds = _emUsoIdsDe(data), foraIds = _foraIdsDe(data);
+    const chipsAll = Array.isArray(data.chips) ? data.chips : [];
+    for (const p of (Array.isArray(data.pressels) ? data.pressels : [])) {
+      if (!p || !conta(p.id) || (p.status && p.status !== 'ativa') || !_chipsDaPressel(p, meus).length) continue;
+      const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds);
+      const todos = [];
+      for (const s of sellers) for (const n of (s.nums || [])) todos.push({ at: s.at, num: n.num, lim: n.lim, livre: n.livre, dist: n.dist, ordem: n.ordem, idx: n.idx });
+      const f = _aplicaFilaLimite(todos, lh, hoje);
+      for (const n of f.ficam) if (String(n.at) === meu) { const k = k8(n.num); (recebendo[k] = recebendo[k] || []).push(p.id); }
+    }
+  } catch (_) {}
+  let mexidas = {};
+  try { const m = await _presselMexidas(env); for (const k of Object.keys(m)) if (k.indexOf(meu + ':') === 0) mexidas[k.slice(meu.length + 1)] = m[k]; } catch (_) {}
+  return json({ ok: true, hoje, numeros, pressels, leadsHoje, recebendo, mexidas });
 }
 // MARCAS DO NUMERO DESLIGADO NA ROLETA (15/09/2026). A fila do modo Limite do Guilherme pulou o 2
 // ((15) 99237-1970): ele saiu da roleta em 14/09 14:16, quando tinha caido da API, voltou 14:25 e
@@ -18829,7 +18847,12 @@ async function _presselVoltaTick(env) {
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel-volta', row.version).run();
-    if (res && res.meta && res.meta.changes > 0) { console.log('PRESSEL_VOLTA religou ' + feitos.join(' ')); return; }
+    if (res && res.meta && res.meta.changes > 0) {
+      console.log('PRESSEL_VOLTA religou ' + feitos.join(' '));
+      const _vistos = new Set();
+      for (const f of feitos) { const [pid, at, nk] = f.split(':'); const k = at + ':' + nk; if (_vistos.has(k)) continue; _vistos.add(k); await _presselNumLog(env, { por: 'cron', por_nome: 'meia-noite', at, nk, acao: 'volta', pids: feitos.filter((x) => x.endsWith(':' + at + ':' + nk)).map((x) => x.split(':')[0]).join(',') }); }
+      return;
+    }
     await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
   }
 }
@@ -18877,12 +18900,173 @@ async function handlePresselMeuNumero(req, env) {
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel-vend:' + meu, row.version).run();
     if (res && res.meta && res.meta.changes > 0) {
       console.log('PRESSEL_VEND_NUM at=' + meu + ' num=' + nk + ' on=' + (ligar ? 1 : 0) + ' pressels=' + alvos.map((p) => p.id).join(','));
+      try { _dashCache = null; } catch (_) {}
+      await _presselNumLog(env, { por: meu, por_nome: u.name || meu, at: meu, nk, acao: ligar ? 'liga' : (ateAmanha ? 'ate_amanha' : 'desliga'), pids: alvos.map((p) => p.id).join(',') });
       return json({ ok: true, pressels: alvos.map((p) => p.id) });
     }
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
+// ═══ CHEGADA DE LEADS: UM INTERRUPTOR POR NUMERO, VALENDO PRA TODAS AS PRESSELS (13/10/2026) ═══
+// O incidente de 13/10/2026, medido no banco e nos logs: o interruptor era POR PRESSEL (5 copias do
+// mesmo numero na casa). O Bruno ligou o Kevin na Pressel 01 (8 cliques no dia) enquanto o anuncio
+// rodava nas Pressels 02 e 04, onde o Kevin estava desligado: o Guilherme levou tudo. As 10:56 o
+// Guilherme desligou os proprios numeros na tela dele (que ja vale pra todas) e as 02 e 04 ficaram
+// SEM NUMERO NENHUM ate as 12:37: 422 cliques pagos num botao morto. A tela mostrava uma pressel por
+// vez e nada avisava. O conserto e de MODELO: o diretor passa a ligar e desligar o numero num lugar
+// so (o topo da tela, "Chegada de leads") e a gravacao vai pra TODAS as pressels da operacao do
+// numero, numa escrita so. O dado continua em p.vendedores[].off (a roleta nao mudou uma linha);
+// muda quem escreve. Cada mexida fica registrada em pressel_num_log (quem, quando, o que), e a tela
+// mostra "desligado por Guilherme as 10:56". Pressel publicada que fica sem numero manda push.
+let _pnlOk = false;
+async function _presselNumLogEnsure(env) {
+  if (_pnlOk) return;
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_num_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, por TEXT, por_nome TEXT, at TEXT, nk TEXT, acao TEXT, pids TEXT)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_pnl_ts ON pressel_num_log(ts)').run();
+    _pnlOk = true;
+  } catch (_) {}
+}
+// acao: 'liga' | 'desliga' | 'ate_amanha' | 'volta' (o cron religou)
+async function _presselNumLog(env, o) {
+  try {
+    await _presselNumLogEnsure(env);
+    await env.DB.prepare('INSERT INTO pressel_num_log (ts, por, por_nome, at, nk, acao, pids) VALUES (?,?,?,?,?,?,?)')
+      .bind(Math.floor(Date.now() / 1000), String(o.por || ''), String(o.por_nome || '').slice(0, 60), String(o.at || ''), String(o.nk || ''), String(o.acao || ''), String(o.pids || '').slice(0, 200)).run();
+  } catch (_) {}
+}
+// A ultima mexida de cada (vendedor, numero) nos ultimos 3 dias: { 'at:nk': { acao, por_nome, ts, pids } }
+async function _presselMexidas(env) {
+  const out = {};
+  try {
+    await _presselNumLogEnsure(env);
+    const r = await env.DB.prepare('SELECT at, nk, acao, por, por_nome, ts, pids FROM pressel_num_log WHERE ts > ? ORDER BY id DESC LIMIT 400')
+      .bind(Math.floor(Date.now() / 1000) - 3 * 86400).all();
+    for (const x of ((r && r.results) || [])) {
+      const k = String(x.at) + ':' + String(x.nk);
+      if (!out[k]) out[k] = { acao: x.acao, por: x.por, por_nome: x.por_nome, ts: Number(x.ts) || 0, pids: x.pids };
+    }
+  } catch (_) {}
+  return out;
+}
+// Aplica o interruptor de UM numero num vendedor de UMA pressel (o mesmo que o vend_off sempre fez).
+function _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVendedor) {
+  if (!Array.isArray(p.vendedores)) p.vendedores = [];
+  let v = p.vendedores.find((x) => x && String(x.at) === String(at));
+  if (!v) { v = { at: String(at), ativo: true }; p.vendedores.push(v); }
+  const off = (v.off && typeof v.off === 'object') ? { ...v.off } : {};
+  if (ligar) {
+    // Vendedor inteiro desligado (v.ativo=false, legado): religar UM numero nao religa os outros dele.
+    if (v.ativo === false) { for (const k of (numsDoVendedor || [])) if (k !== nk) off[k] = true; v.ativo = true; }
+    delete off[nk];
+  } else off[nk] = true;
+  if (Object.keys(off).length) v.off = off; else delete v.off;
+  _limpaMarcasDesligado(v, nk);
+  if (!ligar && ateAmanha) v.volta = { ...((v.volta && typeof v.volta === 'object') ? v.volta : {}), [nk]: _amanhaBR() };
+}
+// O estado do numero em cada pressel, lido do dado (pra tela confirmar o que de fato ficou gravado).
+function _presselEstadoNum(pressels, at, nk) {
+  const out = {};
+  for (const p of pressels) {
+    const v = (Array.isArray(p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === String(at)) || {};
+    const off = v.ativo === false || !!(v.off && v.off[nk]);
+    out[String(p.id)] = { on: !off, volta: off && v.volta && v.volta[nk] ? String(v.volta[nk]) : '' };
+  }
+  return out;
+}
+// POST /api/pressel/num { at, num, on, volta? } -> liga/desliga o numero do vendedor em TODAS as
+// pressels da operacao dele. Quem pode: quem mexe na roleta (diretor, socio, produtor, afiliado na dele).
+async function handlePresselNum(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_podeMexerPressel(u) || _roletaResumida(u)) return err('Sem permissão pra mexer na roleta', 403);
+  const body = await req.json().catch(() => ({}));
+  const at = String((body && body.at) || '');
+  const nk = String((body && body.num) || '').replace(/\D/g, '').slice(-8);
+  const ligar = !!(body && body.on);
+  const ateAmanha = !ligar && !!(body && body.volta);
+  if (!at || nk.length < 8) return err('Vendedor e número obrigatórios');
+  const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
+  if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const dosVend = chips.filter((c) => c && String(c.at || '') === at && c.num);
+    const chip = dosVend.find((c) => String(c.num).replace(/\D/g, '').slice(-8) === nk);
+    if (!chip) return err('Esse número não é desse vendedor (confira na Contingência)', 404);
+    if (_meuAfl && String(chip.afl || '') !== _meuAfl) return err('Número não encontrado', 404);
+    const conta = _presselNaConta(u, data);
+    const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
+      .filter((p) => p && _donoDe(p) === _donoDe(chip) && (_meuAfl ? String(p.afl || '') === _meuAfl : conta(p.id)));
+    if (!alvos.length) return err('Nenhuma pressel dessa operação', 404);
+    const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
+    for (const p of alvos) _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend);
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel-num:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) {
+      try { _dashCache = null; } catch (_) {}
+      const pids = alvos.map((p) => p.id).join(',');
+      console.log('PRESSEL_NUM por=' + String(u.id) + ' at=' + at + ' num=' + nk + ' on=' + (ligar ? 1 : 0) + (ateAmanha ? ' ate_amanha' : '') + ' pressels=' + pids);
+      await _presselNumLog(env, { por: u.id, por_nome: u.name || u.id, at, nk, acao: ligar ? 'liga' : (ateAmanha ? 'ate_amanha' : 'desliga'), pids });
+      return json({ ok: true, at, num: nk, on: ligar, pressels: alvos.map((p) => p.id), estado: _presselEstadoNum(alvos, at, nk), ts: Math.floor(Date.now() / 1000) });
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+// CLIQUE SEM NUMERO HOJE, POR PRESSEL. A pressel sem numero continua gravando a visita em tt_pending,
+// so que com num_key vazio: e o clique pago que caiu no botao morto. Cache de 60s (a consulta anda
+// pelo indice (ts, num_key)).
+let _semNumCache = null, _semNumT = 0, _semNumDia = '';
+async function _presselCliquesSemNumero(env) {
+  const hoje = _brDay();
+  const agora = Date.now();
+  if (_semNumCache && _semNumDia === hoje && (agora - _semNumT) < 60000) return _semNumCache;
+  const out = {};
+  try {
+    const ini = Math.floor(new Date(hoje + 'T00:00:00-03:00').getTime() / 1000);
+    const r = await env.DB.prepare("SELECT pid, COUNT(*) AS n, MIN(ts) AS de, MAX(ts) AS ate FROM tt_pending WHERE ts >= ? AND (num_key IS NULL OR num_key='') GROUP BY pid").bind(ini).all();
+    for (const x of ((r && r.results) || [])) out[String(x.pid)] = { n: Number(x.n) || 0, de: Number(x.de) || 0, ate: Number(x.ate) || 0 };
+  } catch (_) { return _semNumCache || {}; }
+  _semNumCache = out; _semNumT = agora; _semNumDia = hoje;
+  return out;
+}
+// PUSH QUANDO A PRESSEL PUBLICADA FICA SEM NUMERO. Um aviso a cada 30 min por pressel, pra direcao da
+// casa (ou pro afiliado dono). O trinco e no banco (app_config) pra nao repetir entre isolates.
+let _mudaMem = {};
+async function _presselSemNumeroAvisa(env, p) {
+  try {
+    const pid = String(p && p.id);
+    const agora = Math.floor(Date.now() / 1000);
+    if (_mudaMem[pid] && agora - _mudaMem[pid] < 600) return;
+    _mudaMem[pid] = agora;
+    await _ensureConfigTable(env);
+    const chave = 'pressel_sem_num_' + pid;
+    const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE CAST(app_config.value AS INTEGER) < ?")
+      .bind(chave, String(agora), agora, agora - 1800).run();
+    if (!(ins && ins.meta && ins.meta.changes > 0)) return;
+    const afl = String((p && p.afl) || '');
+    const r = afl
+      ? await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND afiliado_id=? AND lower(role)='afiliado'").bind(afl).all()
+      : await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+    const nome = String((p && p.nome) || ('Pressel ' + pid)).trim();
+    for (const x of ((r && r.results) || [])) {
+      await _wpParaPessoa(env, String(x.id), {
+        title: nome + ' está sem número',
+        body: 'O botão do anúncio não abre o WhatsApp. Ligue um número em Chegada de leads.',
+        tag: 'pressel-sem-num-' + pid,
+        icon: '/icons/venda-192.png?v=2',
+        url: '/pressels/config',
+      }, 'pressel').catch(() => 0);
+    }
+    console.log('PRESSEL_SEM_NUMERO pid=' + pid + ' avisados=' + (((r && r.results) || []).length));
+  } catch (e) { console.error('[pressel] aviso sem numero falhou: ' + String((e && e.message) || e)); }
+}
+// ═══ fim da Chegada de leads ═══
 // GET /api/pressel/diag → por pressel, PRA ONDE o botão do WhatsApp está mandando agora.
 //
 // Existe porque o modo de falhar é silencioso e caro: a pressel continua abrindo bonita, o anúncio
@@ -18917,6 +19101,8 @@ async function handlePresselDiag(req, env){
   // indo, cortado: "Entregando lead para" e o que diz a ele que a pressel esta viva.
   const _resumido = _roletaResumida(u);
   const _cortaNum = _acessoReduzido(u) || _resumido;
+  let _semNumD = {};
+  try { _semNumD = await _presselCliquesSemNumero(env); } catch (_) { _semNumD = {}; }
   const out = pressels.map((p)=>{
     const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds);
     const _todos = [];
@@ -18949,7 +19135,12 @@ async function handlePresselDiag(req, env){
     // Quem tem janela de entrada ve o numero reduzido no resto da tela; aqui era o unico lugar
     // que ainda entregava ele inteiro ("Entregando lead para: ..."). Mascarar em um lugar so nao
     // vale nada se o de baixo publica a lista completa.
-    return { id:p.id, nome:p.nome||'', status:p.status||'ativa',
+    // O INTERRUPTOR COMO ESTA NO BANCO AGORA (13/10/2026): a Chegada de leads no topo da tela le daqui,
+    // a cada 15s, e por isso enxerga quem mexeu em outra tela (o vendedor desligando o dele, outra aba).
+    const vend = (Array.isArray(p.vendedores) ? p.vendedores : []).filter((v) => v && v.at && String(v.at) !== '__sd')
+      .map((v) => ({ at: String(v.at), ativo: v.ativo !== false, off: (v.off && typeof v.off === 'object') ? v.off : {}, volta: (v.volta && typeof v.volta === 'object') ? v.volta : {} }));
+    return { id:p.id, nome:p.nome||'', status:p.status||'ativa', vend,
+      semNumero: _semNumD[String(p.id)] || null,
       numeros: _cortaNum ? numeros.map((n) => ({ ...n, num: _num4(n && n.num) })) : numeros,
       noLimite: _resumido ? [] : (_acessoReduzido(u) ? noLimite.map((n) => ({ ...n, num: _num4(n && n.num) })) : noLimite),
       todosNoLimite: _resumido ? false : todosNoLimite,
@@ -19036,7 +19227,9 @@ async function handlePresselDiag(req, env){
   const _chipPorK8 = {};
   try { for (const c of chips) { const k = String((c && c.num) || '').replace(/\D/g, '').slice(-8); if (k && !_chipPorK8[k]) _chipPorK8[k] = c; } } catch (_) {}
   const _saiuMesmo = (k) => { const c = _chipPorK8[String(k || '').replace(/\D/g, '').slice(-8)]; return !_modoRoleta(c); };
-  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k) })) });
+  let mexidas = {};
+  if (!_resumido && !_acessoReduzido(u)) { try { mexidas = await _presselMexidas(env); } catch (_) { mexidas = {}; } }
+  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k) })) });
 }
 // GET /api/pressel/stats → views/clicks por pressel (a dash mostra na métrica)
 async function handlePresselStats(req, env){
@@ -21562,6 +21755,7 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // FIFO - justamente o defeito que o conserto de hoje existe pra matar. E o preco de deixar como
   // esta e nada: 2 linhas de preview em 7 dias (0,5% da pressel 7, 0% da pressel 1).
   const _ehDev = new URL(req.url).searchParams.get('dev') === '1';
+  if (!pick && !_ehDev) depois(_presselSemNumeroAvisa(env, p));   // pressel publicada sem numero: push pra quem decide (13/10/2026)
   // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
   if (!_ehDev) await depois(env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run().catch(()=>{}));
   const _qs = new URL(req.url).searchParams;
@@ -24080,6 +24274,7 @@ export default {
       // vendedor: so o interruptor dos numeros dele (13/09/2026)
       if (req.method === 'GET' && path === '/api/pressel/meus') return handlePresselMeus(req, env);
       if (req.method === 'POST' && path === '/api/pressel/meu-numero') return handlePresselMeuNumero(req, env);
+      if (req.method === 'POST' && path === '/api/pressel/num') return handlePresselNum(req, env);   // Chegada de leads: o numero em todas as pressels
       if (req.method === 'GET' && path === '/api/pressel/metrics') return handlePresselMetricsLive(req, env);
       const pcMatch = path.match(/^\/pc\/([a-zA-Z0-9_-]+)$/);
       if (pcMatch) {
