@@ -8488,7 +8488,7 @@ function _botCfgPadrao() {
     marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m })) },
     meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO },
     canais: { whatsapp: true, push: false },
-    grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true },
+    grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true, via: 'pc' },
   };
 }
 // Mescla o que veio (raw) com a base (a config gravada ou o padrao) e valida tipo por tipo. Campo
@@ -8551,6 +8551,7 @@ function _botNormaliza(raw, base) {
   o.grupo.id = _botJidGrupoOk(gid) ? gid : '';
   o.grupo.nome = _botTexto300(('nome' in gr) ? gr.nome : bgr.nome, 80).trim();
   for (const k of ['diario', 'semanal', 'marcos']) o.grupo[k] = (k in gr) ? !!gr[k] : ((k in bgr) ? bgr[k] !== false : true);
+  o.grupo.via = ['pc', 'evolution'].includes(gr.via) ? gr.via : (['pc', 'evolution'].includes(bgr.via) ? bgr.via : 'pc');
   return o;
 }
 // `semCache`: o cron e o POST da config leem direto do banco. O cache de 30s por isolate serve so
@@ -8576,6 +8577,8 @@ async function _botEnsureTables(env) {
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_envios_tipo ON bot_envios(tipo, id)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_pend (fone TEXT PRIMARY KEY, nome TEXT, texto TEXT, tipo TEXT, ts INTEGER, tent INTEGER DEFAULT 0)').run();
     try { await env.DB.prepare('ALTER TABLE bot_pend ADD COLUMN tent INTEGER DEFAULT 0').run(); } catch (_) {}
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, jid TEXT, nome TEXT, texto TEXT, status TEXT, tent INTEGER DEFAULT 0, msg_id TEXT, erro TEXT, feito_ts INTEGER)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_outbox_status ON bot_outbox(status, id)').run();
     _botTablesOk = true;
   } catch (_) {}
 }
@@ -9133,6 +9136,7 @@ async function _botTick(env) {
   }
   const agoraBR = _agoraBR();
   const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  try { await _botOutboxFaxina(env); } catch (_) {}
   await _botEntregarPendentes(env, cfg, row);   // trata a fila do grupo mesmo sem numero oficial
   const r = cfg.relatorio;
   if (r.ativo) {
@@ -9308,17 +9312,94 @@ async function _botPendGrupo(env, g, texto, tipo) {
     return true;
   } catch (_) { return false; }
 }
-// ENTREGA NO GRUPO. Falhou por servidor fora ou sessao caida: guarda em bot_pend e o tick tenta de
-// novo (5 min a mais por tentativa, por ate 6h). Falha definitiva so registra.
+// ─── O BOT NO PC (agente): o WhatsApp Web do bot roda num PC do Bruno (AXION/bot-grupo, Baileys) ──
+// O Bruno nao tem mais VPS (12/10/2026). O worker NAO fala com o WhatsApp: guarda a FILA (bot_outbox)
+// e o ESTADO que o agente manda no ping (app_config bot_agente: ts, estado, numero, nome, qr;
+// bot_agente_grupos: os grupos). O agente busca a fila a cada 15s com o token bot_agente_token.
+// PC desligado = a mensagem espera na fila (ate 20h) e sai quando ele liga.
+const BOT_AGENTE_VIVO_S = 90;          // sem ping ha 90s = PC desligado (o agente pinga a cada 15s)
+const BOT_AGENTE_FILA_MAX_H = 20;      // texto esperando ha mais de 20h: descarta com registro
+const BOT_AGENTE_TENT_MAX = 5;
+const _botHoraBR = (ts) => { const d = new Date(Number(ts) * 1000 - 3 * 3600000); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+async function _botAgenteToken(env, gerar) {
+  let t = '';
+  try { t = String((await _readConfig(env, 'bot_agente_token')) || ''); } catch (_) { t = ''; }
+  if (!t || gerar) {
+    t = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    await _writeConfig(env, 'bot_agente_token', t);
+  }
+  return t;
+}
+async function _botAgenteEstado(env) {
+  let o = null;
+  try { o = JSON.parse((await _readConfig(env, 'bot_agente')) || 'null'); } catch (_) { o = null; }
+  const ts = Number(o && o.ts) || 0;
+  const vivo = !!ts && (Math.floor(Date.now() / 1000) - ts) < BOT_AGENTE_VIVO_S;
+  const estado = vivo ? String((o && o.estado) || 'close') : 'offline';
+  return { via: 'pc', ts, vivo, estado, numero: String((o && o.numero) || ''), nome: String((o && o.nome) || ''), qr: estado === 'qr' ? String((o && o.qr) || '') : '', versao: String((o && o.versao) || ''), pc: String((o && o.pc) || '') };
+}
+async function _botAgenteGrupos(env) {
+  let g = [];
+  try { g = JSON.parse((await _readConfig(env, 'bot_agente_grupos')) || '[]'); } catch (_) { g = []; }
+  return Array.isArray(g) ? g.filter((x) => x && _botJidGrupoOk(x.id)).map((x) => ({ id: String(x.id), nome: String(x.nome || '').slice(0, 80), tamanho: Number(x.tamanho) || 0 })) : [];
+}
+async function _botAgenteCmd(env, cmd) { await _writeConfig(env, 'bot_agente_cmd', String(cmd || '')); }
+async function _botOutboxPor(env, g, texto, tipo, dia) {
+  await _botEnsureTables(env);
+  await env.DB.prepare('INSERT INTO bot_outbox (ts, dia, tipo, jid, nome, texto, status, tent) VALUES (?,?,?,?,?,?,?,0)')
+    .bind(Math.floor(Date.now() / 1000), String(dia || _brDay()), String(tipo || ''), String(g.id), String(g.nome || ''), String(texto).slice(0, 4000), 'pend').run();
+}
+// Fila: descarta o que esperou demais (PC desligado), com registro; apaga o que ja foi, depois de 30 dias.
+async function _botOutboxFaxina(env) {
+  await _botEnsureTables(env);
+  const agora = Math.floor(Date.now() / 1000);
+  let rows = [];
+  try { rows = ((await env.DB.prepare("SELECT id, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND ts < ? LIMIT 20").bind(agora - BOT_AGENTE_FILA_MAX_H * 3600).all()).results) || []; } catch (_) { return; }
+  const motivo = 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
+  for (const r of rows) {
+    try { await env.DB.prepare("UPDATE bot_outbox SET status='erro', erro=?, feito_ts=? WHERE id=?").bind(motivo, agora, r.id).run(); } catch (_) {}
+    await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: r.texto });
+  }
+  try { await env.DB.prepare("DELETE FROM bot_outbox WHERE status<>'pend' AND ts < ?").bind(agora - 30 * 86400).run(); } catch (_) {}
+}
+// Resultado de um envio que o agente fez. `repetir` = erro passageiro: fica na fila (tent ja subiu no ping).
+async function _botAgenteAck(env, id, ok, msgId, erro, repetir) {
+  let row = null;
+  try { row = await env.DB.prepare('SELECT id, dia, tipo, jid, nome, texto, status FROM bot_outbox WHERE id=?').bind(id).first(); } catch (_) {}
+  if (!row) return { achou: false };
+  if (row.status !== 'pend') return { achou: true, ja: true };
+  if (!ok && repetir) return { achou: true, repete: true };
+  try { await env.DB.prepare('UPDATE bot_outbox SET status=?, msg_id=?, erro=?, feito_ts=? WHERE id=?').bind(ok ? 'enviado' : 'erro', String(msgId || ''), String(erro || '').slice(0, 300), Math.floor(Date.now() / 1000), id).run(); } catch (_) {}
+  await _botLog(env, { dia: row.dia, tipo: row.tipo, nome: 'Grupo: ' + (row.nome || row.jid), fone: row.jid, via: 'grupo', status: ok ? 'enviado' : 'erro', erro: ok ? '' : erro, texto: row.texto, wamid: msgId });
+  return { achou: true };
+}
+// ENTREGA NO GRUPO. via 'pc': entra na fila e o agente pega no proximo ping (o registro de envio e
+// feito no ack, ou no descarte). via 'evolution': manda na hora; servidor fora ou sessao caida vai pra
+// bot_pend e o tick repete por ate 6h.
 async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
   const g = (cfg && cfg.grupo) || {};
   const out = { fone: String(g.id || ''), nome: 'Grupo: ' + (g.nome || g.id || ''), status: 'erro', via: 'grupo', erro: '', id: '', grupo: true };
   if (!g.id) { out.erro = 'nenhum grupo escolhido'; return out; }
-  const r = await _botEvoTexto(env, g.id, texto);
-  if (r.ok) { out.status = 'enviado'; out.id = r.id; }
-  else if (r.repetir && (await _botPendGrupo(env, g, texto, tipo))) { out.status = 'aguardando'; out.erro = r.erro + '. Vou tentar de novo por até 6h.'; }
-  else out.erro = r.erro;
-  await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: out.status, erro: out.erro, texto, wamid: out.id });
+  if (g.via === 'evolution') {
+    const r = await _botEvoTexto(env, g.id, texto);
+    if (r.ok) { out.status = 'enviado'; out.id = r.id; }
+    else if (r.repetir && (await _botPendGrupo(env, g, texto, tipo))) { out.status = 'aguardando'; out.erro = r.erro + '. Vou tentar de novo por até 6h.'; }
+    else out.erro = r.erro;
+    await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: out.status, erro: out.erro, texto, wamid: out.id });
+    return out;
+  }
+  try {
+    await _botOutboxPor(env, g, texto, tipo, dia);
+    const ag = await _botAgenteEstado(env);
+    out.status = 'aguardando';
+    out.erro = !ag.vivo ? ('na fila. O bot do PC está desligado' + (ag.ts ? ' (visto às ' + _botHoraBR(ag.ts) + ')' : ' (nunca rodou)') + '; sai quando ele ligar')
+      : ag.estado === 'open' ? 'na fila do bot do PC, sai em instantes'
+        : ag.estado === 'qr' ? 'na fila. O bot do PC está esperando o QR'
+          : 'na fila. O bot do PC está reconectando';
+  } catch (e) {
+    out.erro = 'não consegui guardar na fila: ' + String((e && e.message) || e);
+    await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: 'erro', erro: out.erro, texto });
+  }
   return out;
 }
 // ─── Rotas /api/bot/* (so diretor/socio/produtor da casa) ───────────────────────────────
@@ -9390,7 +9471,9 @@ async function handleBotConfig(req, env) {
   } catch (_) {}
   const sem = _botSemanaDe(_brDay());
   const evo = await _botEvoCfg(env, true);
-  return json({ ok: true, cfg, equipe, numeros, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
+  const agente = await _botAgenteEstado(env);
+  agente.token = await _botAgenteToken(env);
+  return json({ ok: true, cfg, equipe, numeros, agente, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
     status: { proximo: await _botProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, dia_resumo: _botDiaDoResumo(cfg, _brDay()), ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
 }
 async function handleBotWaPreview(req, env) {
@@ -9486,7 +9569,8 @@ async function handleBotTemplate(req, env) {
   const t = await _botTemplateStatus(env, row, true);
   return json({ ok: true, template: t && !t.erro ? t : { name: BOT_TEMPLATE_NAME, status: String((g.data && g.data.status) || 'PENDING').toUpperCase(), category: String((g.data && g.data.category) || 'UTILITY').toUpperCase(), language: 'pt_BR' } });
 }
-// WhatsApp Web do bot (o caminho do grupo): estado, QR, grupos, servidor e mensagem livre.
+// WhatsApp Web do bot (o caminho do grupo): estado, QR, grupos, servidor, token e mensagem livre.
+// cfg.grupo.via decide quem e o WhatsApp Web: 'pc' (agente AXION/bot-grupo num PC) ou 'evolution'.
 async function handleBotWa(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -9494,15 +9578,37 @@ async function handleBotWa(req, env) {
   const url = new URL(req.url);
   const acao = url.pathname.replace(/^\/api\/bot\/wa\//, '').replace(/\/+$/, '');
   const m = req.method;
-  if (m === 'GET' && acao === 'estado') return json({ ok: true, ...(await _botEvoEstado(env)) });
+  const cfg = await _botCfgLer(env, true);
+  const pc = !(cfg.grupo && cfg.grupo.via === 'evolution');
+  if (m === 'GET' && acao === 'estado') {
+    if (pc) return json({ ok: true, ...(await _botAgenteEstado(env)), servidor: 'ok', host: '' });
+    return json({ ok: true, via: 'evolution', ...(await _botEvoEstado(env)) });
+  }
   if (m === 'GET' && acao === 'grupos') {
-    const r = await _botEvoGrupos(env, url.searchParams.get('fresco') === '1');
+    const fresco = url.searchParams.get('fresco') === '1';
+    if (pc) { if (fresco) await _botAgenteCmd(env, 'grupos'); return json({ ok: true, grupos: await _botAgenteGrupos(env) }); }
+    const r = await _botEvoGrupos(env, fresco);
     return r.ok ? json({ ok: true, grupos: r.grupos }) : json({ ok: false, error: r.erro, grupos: r.grupos }, 502);
   }
   let b = {};
   if (m === 'POST') { try { b = await req.json(); } catch (_) { b = {}; } }
-  if (m === 'POST' && acao === 'conectar') { const r = await _botEvoConectar(env, b); return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502); }
-  if (m === 'POST' && acao === 'sair') { const r = await _botEvoSair(env); return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502); }
+  if (m === 'POST' && acao === 'conectar') {
+    if (pc) {
+      if (b.reset) await _botAgenteCmd(env, 'logout');
+      const ag = await _botAgenteEstado(env);
+      if (!ag.vivo) return json({ ok: false, error: 'O bot do PC não está rodando' + (ag.ts ? ' (visto às ' + _botHoraBR(ag.ts) + ')' : '') + '. No PC, abra a pasta AXION\\bot-grupo e dê dois cliques em bot-grupo.bat.' }, 502);
+      if (ag.estado === 'open' && !b.reset) return json({ ok: true, estado: 'open', numero: ag.numero, nome: ag.nome });
+      return json({ ok: true, estado: 'connecting', qr: ag.estado === 'qr' ? ag.qr : '', pairingCode: '' });
+    }
+    const r = await _botEvoConectar(env, b);
+    return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502);
+  }
+  if (m === 'POST' && acao === 'sair') {
+    if (pc) { await _botAgenteCmd(env, 'logout'); return json({ ok: true, saiu: true }); }
+    const r = await _botEvoSair(env);
+    return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502);
+  }
+  if (m === 'POST' && acao === 'token') return json({ ok: true, token: await _botAgenteToken(env, true) });
   if (m === 'POST' && acao === 'servidor') {
     const u2 = String(b.url || '').trim().replace(/\/+$/, '');
     const key = String(b.key || '').trim();
@@ -9525,13 +9631,53 @@ async function handleBotWa(req, env) {
     return json({ ok: true, host: _botHost(u2), versao });
   }
   if (m === 'POST' && acao === 'enviar') {
-    const cfg = await _botCfgLer(env, true);
     if (!cfg.grupo || !cfg.grupo.id) return err('Escolha e salve o grupo antes');
     const texto = _botTexto300(b.texto, 4000).trim() || BOT_TEXTO_TESTE;
     const r = await _botEntregarGrupo(env, cfg, texto, b.tipo === 'teste' ? 'teste' : 'livre', _brDay());
     return json({ ok: r.status !== 'erro', resultado: r, error: r.status === 'erro' ? r.erro : '' });
   }
   return err('Rota do bot desconhecida', 404);
+}
+// O AGENTE NO PC fala aqui, com o token bot_agente_token (nao e sessao de usuario).
+// ping = estado do WhatsApp Web + grupos (quando mudam) -> volta comando pendente + itens da fila.
+// ack  = resultado de um item da fila.
+async function handleBotAgente(req, env) {
+  const tok = String(req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  const esperado = await _botAgenteToken(env);
+  if (!tok || tok.length < 20 || tok !== esperado) return err('Token do bot inválido', 401);
+  if (req.method !== 'POST') return err('Use POST', 405);
+  const acao = new URL(req.url).pathname.replace(/^\/api\/bot\/agente\//, '').replace(/\/+$/, '');
+  let b = {}; try { b = await req.json(); } catch (_) { b = {}; }
+  await _botEnsureTables(env);
+  if (acao === 'ping') {
+    const estado = ['open', 'qr', 'close'].includes(b.estado) ? b.estado : 'close';
+    const atual = { ts: Math.floor(Date.now() / 1000), estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
+    await _writeConfig(env, 'bot_agente', JSON.stringify(atual));
+    if (Array.isArray(b.grupos)) {
+      const grupos = b.grupos.slice(0, 300).map((g) => ({ id: String((g && g.id) || ''), nome: String((g && g.nome) || '').slice(0, 80), tamanho: Number(g && g.tamanho) || 0 })).filter((g) => _botJidGrupoOk(g.id));
+      await _writeConfig(env, 'bot_agente_grupos', JSON.stringify(grupos));
+    }
+    let cmd = '';
+    try { cmd = String((await _readConfig(env, 'bot_agente_cmd')) || ''); } catch (_) { cmd = ''; }
+    if (cmd) await _writeConfig(env, 'bot_agente_cmd', '');
+    const itens = [];
+    if (estado === 'open') {
+      try {
+        const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' ORDER BY id LIMIT 10").all();
+        for (const x of ((r && r.results) || [])) {
+          if (Number(x.tent) >= BOT_AGENTE_TENT_MAX) { await _botAgenteAck(env, Number(x.id), false, '', 'o bot do PC tentou ' + BOT_AGENTE_TENT_MAX + ' vezes e não conseguiu', false); continue; }
+          itens.push({ id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') });
+        }
+        if (itens.length) await env.DB.prepare('UPDATE bot_outbox SET tent=COALESCE(tent,0)+1 WHERE id IN (' + itens.map(() => '?').join(',') + ')').bind(...itens.map((x) => x.id)).run();
+      } catch (_) {}
+    }
+    return json({ ok: true, cmd, itens });
+  }
+  if (acao === 'ack') {
+    const r = await _botAgenteAck(env, Number(b.id) || 0, !!b.ok, String(b.msg_id || ''), String(b.erro || ''), !!b.repetir);
+    return json({ ok: true, ...r });
+  }
+  return err('Rota do agente desconhecida', 404);
 }
 // ═══════════════════════════════════════ fim do bot ═══════════════════════════════════════
 
@@ -23753,6 +23899,7 @@ export default {
       if (req.method === 'GET'    && path === '/api/bot/log')      return handleBotLog(req, env);
       if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
       if (path.startsWith('/api/bot/wa/')) return handleBotWa(req, env);   // WhatsApp Web do bot (grupo)
+      if (path.startsWith('/api/bot/agente/')) return handleBotAgente(req, env);   // o bot no PC (token, sem sessao)
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
