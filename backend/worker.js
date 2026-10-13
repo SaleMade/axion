@@ -1702,17 +1702,52 @@ async function handlePaylogFotos(req, env, ctx) {
   if (!isDirector(u)) return err('Sem permissão', 403);
   const dry = new URL(req.url).searchParams.get('dry') === '1';
   await _plEnsure(env);
-  const rows = (await env.DB.prepare("SELECT body FROM paylog_debug WHERE event='proof_of_delivery' AND verified=1 ORDER BY ts ASC LIMIT 200").all()).results || [];
-  const out = [];
+  // AS MAIS NOVAS PRIMEIRO E O BLOB LIDO UMA VEZ (12/10/2026, auditoria item 31). Era ORDER BY ts ASC
+  // (as 200 fotos mais VELHAS, que ja estao aplicadas) e, pra cada uma, uma leitura e um CAS do
+  // estado inteiro. Agora: as 200 mais novas, uma leitura, tudo aplicado em memoria, uma gravacao;
+  // e quando nada falta responde sem gravar.
+  const rows = (await env.DB.prepare("SELECT body FROM paylog_debug WHERE event='proof_of_delivery' AND verified=1 ORDER BY ts DESC LIMIT 200").all()).results || [];
+  const fotos = [];
+  const _vistos = new Set();
   for (const r of rows) {
     let p = null; try { p = JSON.parse(r.body); } catch (_) {}
     if (!p || !p.delivery_proof_url) continue;
-    const code = String((p.order && p.order.code) || '');
-    if (dry) { out.push({ code, foto: true }); continue; }
-    const res = await _plGravaComprovante(env, p, ctx);
-    out.push({ code, ...res });
+    const code = String((p.order && p.order.code) || '').trim();
+    if (!code || /-SAMPLE/i.test(code) || _vistos.has(code)) continue;
+    _vistos.add(code);
+    fotos.push({ code, p });
   }
-  return json({ ok: true, dry, total: out.length, gravados: out.filter((x) => x.ok && !x.ja).length, jaTinham: out.filter((x) => x.ja).length, semCard: out.filter((x) => !x.ok).length, detalhe: out.filter((x) => !x.ok) });
+  if (dry) return json({ ok: true, dry, total: fotos.length, detalhe: fotos.map((f) => ({ code: f.code, foto: true })) });
+  const out = [];
+  const resumo = () => json({ ok: true, dry, total: out.length, gravados: out.filter((x) => x.ok && !x.ja).length, jaTinham: out.filter((x) => x.ja).length, semCard: out.filter((x) => !x.ok).length, detalhe: out.filter((x) => !x.ok) });
+  for (let t = 0; t < 6; t++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Sem estado', 500);
+    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const porFive = new Map();
+    for (const l of (Array.isArray(data.leads) ? data.leads : [])) if (l && l.five_id) porFive.set(String(l.five_id), l);
+    out.length = 0;
+    const copiar = [];
+    for (const f of fotos) {
+      const l = porFive.get('PL-' + f.code);
+      if (!l) { out.push({ code: f.code, ok: false, motivo: 'card nao encontrado' }); continue; }
+      if (l.entrega_url) { out.push({ code: f.code, ok: true, ja: true, leadId: l.id }); continue; }
+      const p = f.p;
+      l.entrega_url = String(p.delivery_proof_url).trim().slice(0, 400);
+      l.entrega_ts = Math.floor(Date.now() / 1000);
+      if (p.delivery_proof_signatory) l.entrega_assinante = String(p.delivery_proof_signatory).slice(0, 80);
+      if (p.delivery_proof_signature_url) l.entrega_assin_url = String(p.delivery_proof_signature_url).slice(0, 400);
+      copiar.push([String(l.id), l.entrega_url]);
+      out.push({ code: f.code, ok: true, leadId: l.id });
+    }
+    if (!copiar.length) return resumo();   // nada falta: responde sem gravar
+    if (await _casState(env, row.version, data, 'paylog-comprovante')) {
+      for (const [id, url] of copiar) { const c = _copiarFotoEntrega(env, id, url).catch(() => {}); if (ctx && ctx.waitUntil) ctx.waitUntil(c); else await c; }
+      return resumo();
+    }
+    await new Promise((r) => setTimeout(r, 15 * (t + 1)));
+  }
+  return err('Estado ocupado, tente de novo', 409);
 }
 
 // ============================================================================================
@@ -5979,8 +6014,8 @@ async function handleDomainsDetect(req, env) {
   try {
     const H = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
     const [zr, dr] = await Promise.all([
-      fetch('https://api.cloudflare.com/client/v4/zones?account.id=' + acc + '&per_page=50', { headers: H }).then((r) => r.json()).catch(() => null),
-      fetch('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', { headers: H }).then((r) => r.json()).catch(() => null),
+      _fetchComTeto('https://api.cloudflare.com/client/v4/zones?account.id=' + acc + '&per_page=50', 10000, { headers: H }).then((r) => r.json()).catch(() => null),
+      _fetchComTeto('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', 10000, { headers: H }).then((r) => r.json()).catch(() => null),
     ]);
     const zonasOk = !!(zr && zr.success);
     const anexOk = !!(dr && dr.success);
@@ -11294,7 +11329,7 @@ async function _waEnsureTables(env) {
     // TODA visita de pressel). Sem ele a consulta varria as 34 mil mensagens: 62.708 linhas lidas por
     // visita. Com ele o indice COBRE a consulta (instance entra so pra isso) e ela caiu de 19ms pra
     // 0,94ms, medido em producao em 22/09.
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_dir_ts ON wa_messages(direction, ts, instance)').run(); } catch (_) {} (balanceador)
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_dir_ts ON wa_messages(direction, ts, instance)').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_inst_last ON wa_chats(instance, last_ts)').run(); } catch (_) {}   // inbox do atendente ordenado por recente
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_last ON wa_chats(last_ts)').run(); } catch (_) {}   // inbox do diretor (todos os números)
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_chats (phone TEXT PRIMARY KEY, instance TEXT, name TEXT, last_text TEXT, last_ts INTEGER, last_dir TEXT, unread INTEGER DEFAULT 0, assigned_to TEXT, updated_at INTEGER)').run();
@@ -11305,8 +11340,38 @@ async function _waEnsureTables(env) {
     // toda mensagem mexe nele. So muda quando a ETAPA muda (_CRM_TS abaixo); null em Lead Novo = vale
     // a chegada do lead.
     try { await env.DB.prepare('ALTER TABLE wa_chats ADD COLUMN crm_ts INTEGER').run(); } catch (_) {}
+    // OS FILTROS DA LISTA NO SERVIDOR (12/10/2026, auditoria item 26): nao lida, aguardando (ultima
+    // e do lead) e etapa agora entram no WHERE antes do LIMIT 300, e cada um tem indice. Em producao
+    // foram criados por fora (a sonda la em cima pula este bloco); aqui e pra banco novo.
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_unread_last ON wa_chats(last_ts) WHERE unread > 0').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_dir_last ON wa_chats(last_dir, last_ts)').run(); } catch (_) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_chats_stage_last ON wa_chats(crm_stage, last_ts)').run(); } catch (_) {}
     _waTablesOk = true;
   } catch (_) {}
+}
+// A ASSINATURA DA VENDA, UMA SO (12/10/2026, auditoria item 26/30). O _waDetectSale ja aceitava
+// "pedido concluido/finalizado/fechado/confirmado" desde 18/08, mas os tres caminhos do Datacrazy
+// (sync, poll e varredura) filtravam ANTES com a regra velha de 'pedido conclu' e descartavam o
+// resto: "Pedido finalizado! Valor do Pedido: R$ 497" nunca chegava ao detector. Agora todo mundo
+// pergunta a mesma regex. _vendaFormaNova registra no log quando so a forma nova casou (medir uma
+// semana; o detector nao exige valor, entao falso positivo = card Fechou + venda R$ 0).
+const _RE_VENDA = /pedido\s*(conclu|finaliz|fechad|confirmad)/i;
+const _RE_VENDA_VELHA = /pedido\s+conclu/i;
+function _vendaFormaNova(texto, origem) {
+  const t = String(texto || '');
+  if (!_RE_VENDA.test(t)) return false;
+  if (!_RE_VENDA_VELHA.test(t)) { try { console.log('WA_VENDA_FORMA_NOVA origem=' + String(origem || '') + ' texto=' + t.slice(0, 60).replace(/\s+/g, ' ')); } catch (_) {} }
+  return true;
+}
+// FORMAS NOVAS DO CODIGO DE DESCONTO (item 26/30). A regra principal e 'desconto' + ate 4 caracteres
+// + codigo. O lead que apaga a frase e manda so "Au3fte"! (_RE_COD2), e a pressel com emoji entre
+// 'desconto' e o codigo (_RE_COD3, ate 12 caracteres no meio), ficavam sem codigo e caiam no FIFO.
+// As duas tambem casam texto comum ("desconto para voce"), entao o codigo so vale se EXISTE em
+// tt_pending (idx_ttp_code); senao e tratado como texto qualquer, igual antes.
+const _RE_COD2 = /"([A-Za-z0-9]{4,12})"\s*!/;
+const _RE_COD3 = /desconto[^A-Za-z0-9]{0,12}([A-Za-z0-9]{4,12})/i;
+async function _codigoExiste(env, code) {
+  try { return !!(await env.DB.prepare('SELECT 1 FROM tt_pending WHERE code=? LIMIT 1').bind(String(code || '')).first()); } catch (_) { return false; }
 }
 // Grava uma mensagem (in/out) no histórico e atualiza o resumo do inbox.
 // Dedup natural por msg_id (PK). Nunca quebra o fluxo de quem chama.
@@ -11377,9 +11442,10 @@ async function _waLogMsg(env, m) {
         }
       } catch (_) {}
     }
-    await env.DB.prepare(
+    const _ins = await env.DB.prepare(
       'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
     ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null).run();
+    const _novaLinha = !!(_ins && _ins.meta && Number(_ins.meta.changes) > 0);   // inseriu DE VERDADE (nao era repetida)
     // CORRIDA ENTRE AS DUAS FONTES (03/10/2026). O dedup de cima e "procura, depois insere": quando o
     // webhook direto da Meta ('wamid.') e o Datacrazy ('dc:') chegam NO MESMO INSTANTE, os dois
     // procuram, nenhum acha, e os dois inserem - balao em dobro. Passou a acontecer em escala no
@@ -11403,7 +11469,6 @@ async function _waLogMsg(env, m) {
     }
     // Preenche a mídia depois (download assíncrono da Cloud API grava o media_url pós-INSERT).
     if (m.media_url) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(m.media_url, id).run(); } catch (_) {} }
-    const incUnread = dir === 'in' ? 1 : 0;
     const preview = type === 'text' ? body : ('[' + type + ']');
     await env.DB.prepare(
       `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
@@ -11423,10 +11488,20 @@ async function _waLogMsg(env, m) {
          last_text = excluded.last_text,
          last_ts = excluded.last_ts,
          last_dir = excluded.last_dir,
-         unread = CASE WHEN ? = 1 THEN wa_chats.unread + 1 ELSE wa_chats.unread END,
+         unread = COALESCE(wa_chats.unread, 0),
          updated_at = excluded.updated_at
        WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
-    ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, incUnread, incUnread).run();
+    ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, 0).run();
+    // A BOLINHA SOMA FORA DA GUARDA DE RECENCIA (12/10/2026, auditoria item 26/27D). O "+1" morava no
+    // DO UPDATE acima, debaixo do WHERE de recencia: quando a NOSSA resposta ja tinha adiantado o
+    // last_ts (lead escreve em T, a gente responde em T+10, o sync grava a mensagem dele em T+25), o
+    // UPDATE inteiro era pulado e a mensagem do lead entrava SEM acender a conversa. Medido em 3 dias:
+    // 283 mensagens assim e 86 conversas sem bolinha. Agora soma a parte, e so quando a linha foi
+    // inserida DE VERDADE (repetida e gemeo nao contam) e a mensagem tem ate 30 min: o que o sync
+    // traz de historico mais velho que isso nao acende (regra registrada pro Bruno).
+    if (dir === 'in' && _novaLinha && (Math.floor(Date.now() / 1000) - ts) <= 1800) {
+      try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(phone).run(); } catch (_) {}
+    }
     // Auto CRM: a 1ª resposta do ATENDENTE (não do bot/auto-reply) tira o lead de "Lead Novo" pra
     // "Em Atendimento". Só sobe de novo/vazio — não mexe nas etapas manuais nem na lixeira.
     if (dir === 'out' && !m.bot) {
@@ -13392,11 +13467,12 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
                          OR wa_chats.instance GLOB 'dc_[0-9]*' THEN wa_chats.instance
                        ELSE excluded.instance END, name=COALESCE(NULLIF(excluded.name,''), wa_chats.name),
          last_text=excluded.last_text, last_ts=excluded.last_ts, last_dir=excluded.last_dir,
-         unread=CASE WHEN excluded.last_ts > COALESCE(wa_chats.last_ts,0) AND excluded.last_dir='in'
-                     THEN COALESCE(wa_chats.unread,0) + 1 ELSE COALESCE(wa_chats.unread,0) END,
+         unread=COALESCE(wa_chats.unread,0),
          updated_at=strftime('%s','now')
        WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
-    ).bind(phone, inst, nome, txt, ts, dir, dir === 'in' ? 1 : 0).run().catch(() => {});
+    ).bind(phone, inst, nome, txt, ts, dir, 0).run().catch(() => {});
+    // (12/10/2026, item 26/27D) o +1 da bolinha saiu daqui: ele soma por MENSAGEM nova do lead, no
+    // laco do historico logo abaixo, fora da guarda de recencia - ver o comentario la.
     nChats++;
     if (historicos >= TETO_HISTORICO) { nAdiadas++; continue; }   // fica pra proxima batida
     // ESTOUROU O ORCAMENTO: para aqui e deixa o resto pra proxima batida (ver tetoMs, no topo).
@@ -13436,26 +13512,60 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
       // lead sai em segundos diferentes e nunca e fundida. Se o wamid chegar DEPOIS, o _waLogMsg tira o 'dc:'.
       if (m?.received) {
         try {
-          const _gm = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND type=? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' LIMIT 1")
-            .bind(phone, quando, tipo, corpo).first();
-          if (_gm) continue;
+          // LINHA dc: VAZIA COM GEMEO wamid (12/10/2026, auditoria item 26/worker-1): a foto/audio que o
+          // Datacrazy entrega sem anexo reconhecivel chegava aqui como texto vazio, nao casava com o
+          // wamid de MIDIA do mesmo instante (tipo diferente) e virava um balao em branco ao lado do
+          // certo: 321 pares no banco em 12/10. Vazia + wamid de entrada no mesmo segundo = a mesma
+          // mensagem; a linha vazia que ja existir sai, e o anexo (se vier) vira reserva de midia.
+          const _vazia = (tipo === 'text' && !corpo);
+          const _gm = _vazia
+            ? await env.DB.prepare("SELECT msg_id, media_url FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando).first()
+            : await env.DB.prepare("SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND type=? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando, tipo, corpo).first();
+          if (_gm) {
+            if (_vazia) {
+              try { await env.DB.prepare("DELETE FROM wa_messages WHERE msg_id=? AND type='text' AND COALESCE(body,'')=''").bind('dc:' + id).run(); } catch (_) {}
+              if (anexo && anexo.url && !_gm.media_url) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=? AND media_url IS NULL').bind(anexo.url, _gm.msg_id).run(); } catch (_) {} }
+            }
+            continue;
+          }
+        } catch (_) {}
+      } else if (tipo === 'text' && corpo) {
+        // ECO DO NOSSO ENVIO (12/10/2026, item 26/35.4): o que a gente manda pela Cloud API ja esta na
+        // thread como 'wamid'; o Datacrazy enxerga a mesma saida e devolvia ela como 'dc:', balao em
+        // dobro. Texto igual, mesma conversa, ate 3 min antes do deles = eco; fica marcado em dc_seen.
+        // Audio e midia nunca passam por aqui (o corpo e vazio).
+        try {
+          const _eco = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND ts >= ? AND ts <= ? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando - 180, quando + 30, corpo).first();
+          if (_eco) { try { await env.DB.prepare('INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)').bind('eco:' + id, _agoraSync).run(); } catch (_) {} continue; }
         } catch (_) {}
       }
       // Grava JA com a URL do CDN deles: a foto aparece na hora, mesmo se o R2 falhar (o resolveMedia
       // do front aceita tanto key do R2 quanto URL absoluta). Logo abaixo a gente troca pela key do R2.
-      // O DO UPDATE conserta as linhas que o sync antigo gravou sem midia e as que ainda estao na URL
-      // deles; nunca sobrescreve midia que ja foi pro R2 (key nao comeca com http).
+      // INSERIR E CONSERTAR SAO DOIS PASSOS (12/10/2026, item 26/27D): o INSERT ... ON CONFLICT DO
+      // UPDATE antigo devolvia changes=1 tambem quando so CONSERTAVA a midia de uma linha velha, e
+      // `nova` virava verdade de novo. Agora `nova` e so o INSERT OR IGNORE que inseriu; o conserto
+      // da midia (linha gravada sem anexo, ou ainda na URL deles) e um UPDATE a parte, que nunca
+      // sobrescreve midia que ja foi pro R2 (key nao comeca com http).
       const ins = await env.DB.prepare(
-        `INSERT INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url)
-         VALUES (?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(msg_id) DO UPDATE SET type=excluded.type, media_url=excluded.media_url
-           WHERE excluded.media_url IS NOT NULL
-             AND (wa_messages.media_url IS NULL OR wa_messages.media_url LIKE 'http%')`
+        'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
       ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, anexo ? anexo.url : null).run().catch(() => null);
+      const nova = !!(ins && ins.meta && ins.meta.changes);
+      let consertada = false;
+      if (!nova && anexo && anexo.url) {
+        try {
+          const _up = await env.DB.prepare("UPDATE wa_messages SET type=?, media_url=? WHERE msg_id=? AND (media_url IS NULL OR media_url LIKE 'http%')").bind(tipo, anexo.url, 'dc:' + id).run();
+          consertada = !!(_up && _up.meta && _up.meta.changes);
+        } catch (_) {}
+      }
+      // A BOLINHA DA CONVERSA SOMA POR MENSAGEM NOVA DO LEAD, ate 30 min (item 26/27D). Antes era um
+      // +1 por CONVERSA no upsert la em cima, debaixo da guarda de recencia - a mesma armadilha do
+      // _waLogMsg: a nossa resposta adiantava o last_ts e o lead entrava sem acender.
+      if (nova && m?.received && (_agoraSync - quando) <= 1800) {
+        try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(phone).run(); } catch (_) {}
+      }
       // So a mensagem NOVA (ou a recem-consertada) baixa o arquivo: 1 download por midia. Teto por
       // rodada pra nao estourar o tempo do cron; o que passar do teto continua com a URL do Datacrazy
-      // e cai no R2 na proxima rodada (o WHERE acima deixa passar enquanto for http).
-      const nova = !!(ins && ins.meta && ins.meta.changes);
+      // e cai no R2 na proxima rodada (o UPDATE acima deixa passar enquanto for http).
       // ── A VENDA E DETECTADA AQUI, NO HISTORICO, e nao so na ultima mensagem ────────────────
       // O _dcPoll so olha `lastMessage` da conversa. Se o vendedor manda "Pedido Concluido" e digita
       // qualquer outra coisa antes da proxima rodada (2 min), a frase deixa de ser a ultima e a
@@ -13465,7 +13575,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
       // dele ficou por acaso como ultima na hora da rodada. Ou seja: detectar venda estava na sorte.
       // Aqui a gente ve TODA mensagem do historico, entao a frase nao escapa. So dispara na primeira
       // vez que a mensagem entra (`nova`), e o _waDetectSale ainda e idempotente por msg_id.
-      if (nova && !m?.received && /pedido\s+conclu/i.test(corpo)) {
+      if (nova && !m?.received && _vendaFormaNova(corpo, 'sync')) {
         try { await _waDetectSale(env, inst, { message: { conversation: corpo }, key: { remoteJid: phone + '@c.us', id: 'dc:' + id, fromMe: true } }); }
         catch (e) { console.error('[dc-sync] venda do historico falhou: ' + String((e && e.message) || e)); }
       }
@@ -13500,7 +13610,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
           catch (e) { console.error('[dc-sync] captura de lead falhou: ' + String((e && e.message) || e)); }
         }
       }
-      if (anexo && nova && baixadas < 12) {
+      if (anexo && (nova || consertada) && baixadas < 12) {
         baixadas++;
         const rkey = await _dcStoreAttachment(env, anexo.url, anexo.mime);
         if (rkey) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(rkey, 'dc:' + id).run(); } catch (_) {} }
@@ -13937,8 +14047,29 @@ let _dcSeenOk = false;
 // Quanto tempo ANTES do horario combinado o aviso sai. Ver o comentario no teste la embaixo.
 const _AGENDA_ANTECEDENCIA_S = 20 * 60;
 
+// UM CANDIDATO DA AGENDA, em funcao pura (12/10/2026, auditoria item 31): retorno de pedido pago com
+// data passada (vai ser limpo) ou retorno ainda nao avisado que ja esta na janela de antecedencia.
+// E a MESMA regra do laco do _agendaTick, so que sem escrever nada.
+function _agendaCandidato(l, agora, hojeBR) {
+  if (!l || !l.agend) return false;
+  if ((l.spg === 'Pago' || l.col === 'Pago' || l.col === 'Pagos') && String(l.agend).slice(0, 10) < hojeBR) return true;
+  if (String(l.agend_avisado || '') === String(l.agend)) return false;
+  const t = Math.floor(new Date(String(l.agend).length <= 16 ? String(l.agend) + ':00-03:00' : String(l.agend)).getTime() / 1000);
+  if (!t || isNaN(t)) return false;
+  return t <= agora + _AGENDA_ANTECEDENCIA_S;
+}
 async function _agendaTick(env) {
   const agora = Math.floor(Date.now() / 1000);
+  // PASSE DE CONTAGEM ANTES DE LER O BLOB (12/10/2026, auditoria item 31). O laco abaixo lia
+  // 'data, version' (1,2 MB) em toda batida de agenda pra, quase sempre, nao avisar ninguem. A copia
+  // em cache do _getDashData (8 s) responde "tem candidato?" de graca; so com candidato a leitura
+  // de verdade (com versao, pro CAS) acontece.
+  try {
+    const _st = await _getDashData(env, 8000);
+    const _hojeP = new Date((agora - 3 * 3600) * 1000).toISOString().slice(0, 10);
+    const _tem = (Array.isArray(_st && _st.leads) ? _st.leads : []).some((l) => _agendaCandidato(l, agora, _hojeP));
+    if (!_tem) return 0;
+  } catch (_) { /* sem a copia: segue pelo caminho de sempre */ }
   for (let tentativa = 0; tentativa < 4; tentativa++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return 0;
@@ -14051,7 +14182,7 @@ async function _dcPoll(env, opts = {}) {
       if (now - mts > janela) { passo.velha++; continue; }   // só o recente — não reprocessa histórico ao ligar
       const text = _dcBody(lm);
       // venda = "Pedido Concluído" que o VENDEDOR posta (mesma assinatura da dash). _waDetectSale confere o resto.
-      const isSale = !inbound && /pedido\s+conclu/i.test(text);
+      const isSale = !inbound && _vendaFormaNova(text, 'poll');
       if (!inbound && !isSale) { passo.so_vendedor++; continue; }   // mensagem normal do vendedor (não-venda): ignora
       // DEDUPE só CONSULTA aqui. Marcar como visto ANTES de processar era o que apagava a mensagem
       // pra sempre: número sem dono caía fora do "if (inst)" e na rodada seguinte batia em "já visto".
@@ -14119,7 +14250,8 @@ async function _dcPoll(env, opts = {}) {
         baixadasLM++;
         try { const k = await _dcStoreAttachment(env, anexoLM.url, anexoLM.mime); if (k) mediaLM = k; } catch (_) {}
       }
-      try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: anexoLM ? anexoLM.tipo : 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId, media_url: mediaLM }); } catch (_) {}
+      // SEM ANEXO E SEM TEXTO NAO HA O QUE GRAVAR (12/10/2026, item 26/worker-1): virava linha dc: vazia.
+      if (anexoLM || String(text || '').trim()) try { await _waLogMsg(env, { phone, instance: inst, direction: inbound ? 'in' : 'out', type: anexoLM ? anexoLM.tipo : 'text', body: text, pushName: name, ts: mts, msgId: 'dc:' + msgId, media_url: mediaLM }); } catch (_) {}
       // DE QUAL OPERACAO E ESTA CONVERSA. A passada do cron ja diz (opts.mundo), e o dono do numero
       // confirma - os dois tem que concordar pra nada da casa encostar no cliente do afiliado.
       const _mundoMsg = String(opts.mundo || '') || (await _mundoDoAt(env, atId));
@@ -14175,7 +14307,7 @@ async function _dcScanConvSales(env, c, now, mundo) {
   for (const m of msgs) {
     if (m.received === true) continue;   // só outbound do vendedor
     const body = String(m.body || '');
-    if (!/pedido\s+conclu/i.test(body)) continue;
+    if (!_vendaFormaNova(body, 'varredura')) continue;
     const mid = String(m.id || '');
     if (!mid) continue;
     const mts = m.createdAt ? Math.floor(new Date(m.createdAt).getTime() / 1000) : now;
@@ -14504,15 +14636,21 @@ async function handleSaleChatGet(req, env) {
       return json({ ok: true, perfil: 'vendedores', messages: [], media: [], sequences: [], triggers: [] });
     }
   }
-  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-  let state = {}; try { state = JSON.parse(row?.data || '{}'); } catch (_) {}
   // Perfis independentes: vendedores (state.salechat) e cobradores (state.salechatCob).
   const perfil = ((new URL(req.url)).searchParams.get('perfil') || 'vendedores');
   const cob = perfil === 'cobradores';
+  // SO O PEDACO QUE A ROTA DEVOLVE (12/10/2026, auditoria item 31). Esta rota lia o blob inteiro
+  // (1,2 MB) pra devolver 10 KB, e os bots batem nela o dia todo. json_extract traz so as duas
+  // chaves; o resto do estado nem viaja.
   // Os bots recebem o que foi PUBLICADO (botão "Salvar e publicar" na dash), NAO o rascunho.
   // Fallback pro rascunho so na transicao (antes da 1a publicacao existir).
-  const pub = cob ? state.salechatCobPub : state.salechatPub;
-  const draft = cob ? state.salechatCob : state.salechat;
+  let pub = null, draft = null;
+  try {
+    const row = await env.DB.prepare('SELECT json_extract(data, ?) pub, json_extract(data, ?) draft FROM dashboard_state WHERE id = 1')
+      .bind(cob ? '$.salechatCobPub' : '$.salechatPub', cob ? '$.salechatCob' : '$.salechat').first();
+    try { pub = row && row.pub ? JSON.parse(row.pub) : null; } catch (_) { pub = null; }
+    try { draft = row && row.draft ? JSON.parse(row.draft) : null; } catch (_) { draft = null; }
+  } catch (_) {}
   const sc = (pub || draft || {});
   return json({
     ok: true,
@@ -14721,6 +14859,16 @@ async function handleWAChats(req, env) {
   const inst = (url.searchParams.get('instance') || '').trim();
   const assigned = (url.searchParams.get('assigned') || '').trim();
   const q = (url.searchParams.get('q') || '').trim();
+  // FILTROS NO SERVIDOR, ANTES DO LIMIT 300 (12/10/2026, auditoria item 26/27A). A tela filtrava
+  // "Nao lidas", "Aguardando", "Fechados", etapa e tag DEPOIS de receber as 300 conversas mais
+  // recentes: com 12 mil conversas no banco, o diretor tinha 1.868 aguardando e a lista mostrava
+  // 123; a Thariky tinha conversas com janela aberta fora das 300 e nunca as via. Agora o recorte
+  // entra no WHERE da CTE, com indice proprio (idx_wa_chats_unread_last, _dir_last, _stage_last).
+  // `hoje` e um superconjunto (last_ts de hoje): a tela continua refinando por `chegou`.
+  // Quem nao manda nada recebe exatamente o que recebia.
+  const _f = (url.searchParams.get('f') || '').trim().toLowerCase();
+  const _etapa = (url.searchParams.get('etapa') || '').trim().toLowerCase().slice(0, 40);
+  const _tag = (url.searchParams.get('tag') || '').trim().replace(/[%_\\"']/g, '').slice(0, 64);
   // LEVA A JANELA DE 24H JUNTO DA LISTA (19/08/2026). A tela so sabia da janela DENTRO da conversa
   // aberta, entao lead esperando resposta era invisivel na lista: em 19/08 dois leads perderam a
   // janela sem ninguem responder e outros tres estavam a menos de 40min de perder. `ult_in` = ultima
@@ -14763,6 +14911,13 @@ async function handleWAChats(req, env) {
     if (_dig.length >= 4) { ors.push('c.phone LIKE ?'); binds.push('%' + _dig.slice(-8) + '%'); }
     if (ors.length) where.push('(' + ors.join(' OR ') + ')');
   }
+  if (_f === 'unread') where.push("c.unread > 0 AND COALESCE(c.crm_stage,'') <> 'lixo'");
+  else if (_f === 'aguardando') where.push("c.last_dir = 'in' AND COALESCE(c.crm_stage,'') <> 'lixo'");
+  else if (_f === 'fechados') where.push("c.crm_stage = 'fechou'");
+  else if (_f === 'lixo') where.push("c.crm_stage = 'lixo'");
+  else if (_f === 'hoje') { where.push("c.last_ts >= ? AND COALESCE(c.crm_stage,'') <> 'lixo'"); binds.push(Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000)); }
+  if (_etapa) { where.push("COALESCE(c.crm_stage,'novo') = ?"); binds.push(_etapa); }
+  if (_tag) { where.push('c.tags LIKE ?'); binds.push('%"' + _tag + '"%'); }
   const _esc = await _waChatsEscopo(env, u);
   where.push(..._esc.where); binds.push(..._esc.binds);
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
@@ -14791,7 +14946,7 @@ async function handleWAChats(req, env) {
   // Agora o servidor assina o que desenharia e a tela devolve a assinatura no pedido seguinte; se
   // for a mesma, a resposta sao ~60 bytes e a tela mantem o que ja tem na tela. Nao e cache: a
   // consulta roda igual, o que encolhe e so o que viaja.
-  const _assinatura = _waAssinaChats(rows.results || [], q);
+  const _assinatura = _waAssinaChats(rows.results || [], q + '|' + _f + '|' + _etapa + '|' + _tag);
   // Saude do sync do Datacrazy junto da lista: e o unico jeito de a tela avisar sem ninguem clicar
   // em nada (o cron roda a cada 2min e o botao de recarregar quase nunca e apertado). Cache de 30s
   // por isolate pra nao somar 1 leitura de D1 a cada poll de 6s de cada atendente.
@@ -14826,6 +14981,41 @@ async function handleWAChats(req, env) {
     return json({ ok: true, igual: true, sig: _assinatura, dc: dcSaude });
   }
   return json({ ok: true, chats: rows.results || [], sig: _assinatura, dc: dcSaude });
+}
+// GET /api/wa/chats/contagem -> os numeros dos chips da lista (nao lidas, aguardando, fechados,
+// hoje, lixeira, total) contados NO BANCO, no mesmo escopo da lista (12/10/2026, auditoria item
+// 26/27B). A tela contava em cima das 300 conversas que recebia, entao "Nao lidas (300+)" era o
+// teto e nao o numero. Cache de 60 s por pessoa e por isolate: a tela pede de minuto em minuto, em
+// intervalo proprio, nunca no poll de 4 s. `instance` recorta o "so as minhas", como na lista.
+const _waContCache = new Map();
+async function handleWAChatsContagem(req, env) {
+  const _real = await authUser(req, env);
+  if (!_real) return err('Não autenticado', 401);
+  const u = await _usuarioDeConexao(req, env, _real);
+  await _waEnsureTables(env);
+  const url = new URL(req.url);
+  const inst = (url.searchParams.get('instance') || '').trim();
+  const chave = String(u.id) + '|' + String(aflDe(u) || '') + '|' + inst;
+  const hit = _waContCache.get(chave);
+  if (hit && (Date.now() - hit.t) < 60000) return json({ ok: true, cache: true, ...hit.v });
+  const where = [], binds = [];
+  if (inst) { where.push('c.instance = ?'); binds.push(inst); }
+  const _esc = await _waChatsEscopo(env, u);
+  where.push(..._esc.where); binds.push(..._esc.binds);
+  const _ini = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
+  const sql = 'SELECT COUNT(*) total, ' +
+    "SUM(CASE WHEN c.unread > 0 AND COALESCE(c.crm_stage,'') <> 'lixo' THEN 1 ELSE 0 END) unread, " +
+    "SUM(CASE WHEN c.last_dir = 'in' AND COALESCE(c.crm_stage,'') <> 'lixo' THEN 1 ELSE 0 END) aguardando, " +
+    "SUM(CASE WHEN c.crm_stage = 'fechou' THEN 1 ELSE 0 END) fechados, " +
+    "SUM(CASE WHEN c.last_ts >= ? AND COALESCE(c.crm_stage,'') <> 'lixo' THEN 1 ELSE 0 END) hoje, " +
+    "SUM(CASE WHEN c.crm_stage = 'lixo' THEN 1 ELSE 0 END) lixo " +
+    'FROM wa_chats c' + (where.length ? ' WHERE ' + where.join(' AND ') : '');
+  const r = await env.DB.prepare(sql).bind(_ini, ...binds).first();
+  const n = (k) => Number((r && r[k]) || 0);
+  const v = { total: n('total'), unread: n('unread'), aguardando: n('aguardando'), fechados: n('fechados'), hoje: n('hoje'), lixo: n('lixo'), ts: Math.floor(Date.now() / 1000) };
+  if (_waContCache.size > 200) _waContCache.clear();
+  _waContCache.set(chave, { t: Date.now(), v });
+  return json({ ok: true, ...v });
 }
 // ASSINATURA DO QUE A LISTA DESENHA. Entra tudo que a tela mostra ou usa pra ordenar; fica de fora o
 // texto inteiro da previa (o tamanho basta pra perceber que mudou) pra assinatura nao custar caro.
@@ -15327,7 +15517,7 @@ async function _waDetectSale(env, instance, data) {
   // Agora aceita as formas que eles usam de verdade. Continua exigindo a palavra "pedido" junto, pra
   // um "finalizado" solto no meio da conversa nao virar venda.
   const _txtV = text.toLowerCase();
-  if (!text || !/pedido\s*(conclu|finaliz|fechad|confirmad)/i.test(_txtV)) return { sale: false };
+  if (!text || !_vendaFormaNova(_txtV, 'detector')) return { sale: false };
   const key = data?.key || {};
   const jid = String(key.remoteJid || '');
   if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
@@ -15877,6 +16067,11 @@ async function _ttAvisarPresos(env) {
       // estava arrumado. Alarme que nao se apaga sozinho vira ruido e, pior, ensina a ignorar o sino.
       // Troca os avisos abertos por UM aviso de encerramento, pra ele saber que terminou bem.
       try {
+        // SO OS AVISOS, ANTES DO BLOB (12/10/2026, auditoria item 31): esta volta roda em toda batida
+        // de agenda e lia 1,2 MB pra descobrir que nao havia aviso aberto. json_extract decide.
+        const _n0 = await env.DB.prepare("SELECT json_extract(data, '$.notifs') n FROM dashboard_state WHERE id = 1").first();
+        let _ns = []; try { _ns = JSON.parse((_n0 && _n0.n) || '[]'); } catch (_) { _ns = []; }
+        if (!(Array.isArray(_ns) && _ns.some((x) => x && String(x.id || '').startsWith('ttpresos-') && !String(x.id || '').startsWith('ttpresos-ok-')))) return;
         const row0 = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
         if (!row0) return;
         let d0 = {}; try { d0 = JSON.parse(row0.data || '{}'); } catch (_) { return; }
@@ -16181,11 +16376,22 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN code TEXT').run(); }catch(_){}
       try{ await env.DB.prepare('ALTER TABLE tt_pending ADD COLUMN num_key TEXT').run(); }catch(_){}   // número que recebeu o clique (últimos 8 dígitos)
+      // idx_wa_lead_ts (ts, inst) e idx_ttp_code (12/10/2026, item 31): as 4 consultas por periodo da
+      // wa_lead varriam a tabela (SCAN); o codigo nas formas novas e procurado por `code`.
+      try{ await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_lead_ts ON wa_lead(ts, inst)').run(); }catch(_){}
+      try{ await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_code ON tt_pending(code)').run(); }catch(_){}
       _leadTablesOk = true;
     }
     // O código precisa ser lido ANTES do `exists`, senão o caminho de upgrade nunca acontece.
     const codeM = String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
     let code = codeM ? codeM[1] : '';
+    // FORMAS NOVAS (12/10/2026, item 26/30; ver _RE_COD2/_RE_COD3): so valem com o codigo EXISTINDO em
+    // tt_pending, senao e texto comum e segue pro FIFO como sempre.
+    if (!code) {
+      const _b0 = String(body || '');
+      const _m2 = _b0.match(_RE_COD2) || _b0.match(_RE_COD3);
+      if (_m2 && (await _codigoExiste(env, _m2[1]))) { code = _m2[1]; console.log('WA_LEAD_CODIGO_FORMA2 fone=' + phone + ' code=' + code); }
+    }
     const exists = await env.DB.prepare('SELECT phone, pid, ttclid, src, inst, num, ts FROM wa_lead WHERE phone=?').bind(phone).first();
     // ══ O CÓDIGO PODE TER VINDO NA MENSAGEM DE ANTES (22/09/2026) ═══════════
     //
@@ -16219,7 +16425,10 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
           "SELECT body FROM wa_messages WHERE phone=? AND direction='in' AND ts >= ? AND ts <= ? AND substr(instance,-8)=? AND body LIKE '%desconto%' ORDER BY ts DESC LIMIT 3"
         ).bind(phone, _ts - 1800, _ts + 1800, _nkBusca).all();
         for (const x of ((r && r.results) || [])) {
-          const m2 = String((x && x.body) || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
+          const _bx = String((x && x.body) || '');
+          let m2 = _bx.match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i);
+          // a vizinha tambem aceita as formas novas, com a mesma exigencia de existir em tt_pending (item 26/30)
+          if (!m2) { const _m3 = _bx.match(_RE_COD2) || _bx.match(_RE_COD3); if (_m3 && (await _codigoExiste(env, _m3[1]))) m2 = _m3; }
           if (m2) { code = m2[1]; _codeVizinho = true; console.log('WA_LEAD_CODIGO_VIZINHO fone=' + phone + ' num=' + _nkBusca + ' code=' + code); break; }
         }
       } catch (_) {}
@@ -18137,7 +18346,7 @@ async function _presselDayMetrics(env, day){
   // As duas consultas do bloco de baixo (dupes/vinc) entram AQUI tambem: elas nao dependem de nada
   // do primeiro bloco, e esperar por elas depois somava mais duas idas ao banco em fila. Esta tela e
   // a que o Bruno mais abre.
-  const [pr, c, c2, vinc0, st0] = await Promise.all([
+  const [pr, c, c2, st0] = await Promise.all([
     q('SELECT pid, views, clicks FROM pressel_day WHERE day=?', day),
     q("SELECT pid, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' GROUP BY pid", start, end),
     // A MESMA VARREDURA, AGORA TAMBEM POR NUMERO (24/09/2026, pedido do Bruno pra ver a chegada de
@@ -18159,7 +18368,8 @@ async function _presselDayMetrics(env, day){
     // ttclids tem mais de uma linha) e o join cru multiplicaria o lead. So dispara nas linhas em que
     // num esta vazio, porque o COALESCE avalia da esquerda pra direita, e cai no idx_ttp_ttclid.
     q("SELECT pid, inst, COALESCE(NULLIF(substr(replace(replace(num,'+',''),' ',''),-8),''), (SELECT t.num_key FROM tt_pending t WHERE COALESCE(wa_lead.ttclid,'')<>'' AND t.ttclid=wa_lead.ttclid AND COALESCE(t.num_key,'')<>'' ORDER BY t.ts ASC LIMIT 1), '') k8, COUNT(*) c FROM wa_lead WHERE ts>=? AND ts<? AND pid IS NOT NULL AND pid<>'' AND inst IS NOT NULL GROUP BY pid, inst, k8", start, end),
-    q("SELECT phone, pid, inst, COALESCE(num,'') num FROM wa_lead WHERE pid IS NOT NULL AND pid<>''"),
+    // (12/10/2026, item 31) a consulta de vinculo pedido<->pressel saiu daqui: ela trazia a wa_lead
+    // INTEIRA (11.917 linhas, ~880 KB) pra casar meia duzia de pedidos. Agora e por lote, la embaixo.
     _getDashData(env).catch(() => ({})),
   ]);
   pr.forEach(r=>{ m.vc[String(r.pid)]={views:Number(r.views)||0, clicks:Number(r.clicks)||0}; });
@@ -18196,7 +18406,15 @@ async function _presselDayMetrics(env, day){
       // da wa_sales pra nao duplicar entre as duas fontes; como a wa_sales nao conta mais, semear
       // aqui passaria a ESCONDER pedido cadastrado que tambem teve a frase no WhatsApp.
       const jaTem = new Set();
-      const vinc = vinc0 || [];
+      // SO OS TELEFONES DOS PEDIDOS DO DIA (12/10/2026, auditoria item 31), em lotes de 100 (teto de
+      // parametros do D1). Mesmo recorte de data e de telefone do laco logo abaixo.
+      const _tels = [];
+      { const _v = new Set(); for (const l of leads) { const ts = Number(l && l.ts) || 0; const quando = ts > 0 ? ts : Math.floor((Number(l && l.id) || 0) / 1000); if (!(quando >= start && quando < end)) continue; const tel = String((l && l.wa) || '').replace(/\D/g, '').slice(-8); if (tel.length === 8 && !_v.has(tel)) { _v.add(tel); _tels.push(tel); } } }
+      let vinc = [];
+      for (let i = 0; i < _tels.length; i += 100) {
+        const lote = _tels.slice(i, i + 100);
+        vinc = vinc.concat(await q("SELECT phone, pid, inst, COALESCE(num,'') num FROM wa_lead WHERE pid IS NOT NULL AND pid<>'' AND substr(phone, -8) IN (" + lote.map(() => '?').join(',') + ')', ...lote));
+      }
       const porTel = {};
       vinc.forEach(r => { const k = String(r.phone || '').replace(/\D/g, '').slice(-8); if (k) porTel[k] = r; });
       for (const l of leads) {
@@ -19065,7 +19283,6 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
   } else if(view==='vendas'){
     let orders=[];
     try{
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
       const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
       // SO O MUNDO DE QUEM PEDE (21/09/2026). Esta consulta saia sem corte nenhum: a aba Pedidos da
       // casa listava a venda do afiliado com nome do cliente, telefone inteiro e o vendedor dele.
@@ -19086,7 +19303,6 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
     out.monthLabel=mNames[mM-1]+'/'+mY;
     let mLeads=[], mSales=[];
     try{
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
       // SO O MUNDO DE QUEM PEDE (21/09/2026): lead e venda do afiliado nao entram no mes da casa, nem
       // o contrario. Corte no SQL e de novo no JS (pelo dono da instancia), como na aba do dia.
       const _cL=await _corteMundoSql(env, _uAtual, { pid: 'pid', inst: 'inst' });
@@ -19127,8 +19343,6 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
     let leads=[]; let saleSet=new Set(); const nameByPhone={};
     const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
     try{
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}
       // SO O MUNDO DE QUEM PEDE (21/09/2026). Foi aqui que o Bruno viu os leads do vendedor do
       // afiliado na Chegada de leads DA CASA: as tres consultas saiam sem corte e o ramo 'metricas'
       // era o unico com _foraDoMundo. Corte no SQL (_corteMundoSql: casa = tudo menos o que e de
@@ -20316,7 +20530,6 @@ async function handlePresselsTotalPage(req, env){
   if(view==='vendas'){
     let orders=[];
     try{
-      try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){}   // garante l.src pro JOIN
       const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
       const r=await env.DB.prepare("SELECT s.name, s.phone phone, s.instance, s.value, s.ts, l.pid pid, l.src src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND COALESCE(s.cancelado,0)=0 ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
       orders=r.results||[];
@@ -20371,7 +20584,6 @@ async function handlePresselsTotalPage(req, env){
       const monthLabel=mNames[mM-1]+'/'+mY;
       let mLeads=[], mSales=[];
       try{
-        try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
         const lr=await env.DB.prepare("SELECT phone, inst, ts FROM wa_lead WHERE ts>=? AND ts<?").bind(monthStart,monthEnd).all();
         mLeads=lr.results||[];
         const sr=await env.DB.prepare("SELECT phone, instance, name, value, ts FROM wa_sales WHERE ts>=? AND ts<? AND COALESCE(cancelado,0)=0 ORDER BY ts ASC").bind(monthStart,monthEnd).all();
@@ -20443,11 +20655,10 @@ async function handlePresselsTotalPage(req, env){
       const nameByPhone={};   // telefone (só dígitos) -> nome do perfil do WhatsApp
       const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
       try{
-        try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN num TEXT').run(); }catch(_){}
         // UMA VEZ POR ISOLATE (22/09/2026): esta coluna existe desde sempre, e o ALTER rodava em
        // TODA chamada do /pressels-total.json - uma ida ao banco (uns 200ms) pra falhar de proposito,
        // numa rota que leva 1,4s pra devolver 2 KB.
-       if (!_waLeadSrcOk) { try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){} _waLeadSrcOk = true; }
+       if (!_waLeadSrcOk) { try{ await env.DB.prepare('ALTER TABLE wa_lead ADD COLUMN src TEXT').run(); }catch(_){} try{ await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_lead_ts ON wa_lead(ts, inst)').run(); }catch(_){} _waLeadSrcOk = true; }
         const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(dstart,dend).all();
         leads=r.results||[];
         // telefones que VIRARAM venda (do dia em diante) → pra pintar o número de verde
@@ -22470,8 +22681,8 @@ async function _cronDominios(env) {
   let zonas = new Map(), anexados = new Set();
   try {
     const [zr, dr] = await Promise.all([
-      fetch('https://api.cloudflare.com/client/v4/zones?account.id=' + acc + '&per_page=50', { headers: H }).then((r) => r.json()).catch(() => null),
-      fetch('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', { headers: H }).then((r) => r.json()).catch(() => null),
+      _fetchComTeto('https://api.cloudflare.com/client/v4/zones?account.id=' + acc + '&per_page=50', 10000, { headers: H }).then((r) => r.json()).catch(() => null),
+      _fetchComTeto('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', 10000, { headers: H }).then((r) => r.json()).catch(() => null),
     ]);
     if (!zr || !zr.success) return;
     for (const z of (zr.result || [])) zonas.set(String(z.name || '').toLowerCase(), { id: z.id, status: String(z.status || '') });
@@ -22487,7 +22698,7 @@ async function _cronDominios(env) {
     if (anexados.has(dom)) { prontos.push(dom); continue; }   // CONFIRMADO na lista: so aqui sai da fila
     if (z.status !== 'active') continue;               // name server ainda nao apontou
     try {
-      const r = await fetch('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', {
+      const r = await _fetchComTeto('https://api.cloudflare.com/client/v4/accounts/' + acc + '/workers/domains', 10000, {
         method: 'PUT', headers: H,
         body: JSON.stringify({ environment: 'production', hostname: dom, service: svc, zone_id: z.id }),
       });
@@ -22574,7 +22785,7 @@ export default {
     // faz um passo pesado levar os outros junto - foi assim que ficamos 4h20 sem capturar lead. Passo
     // pesado e raro (backup, resgates, purga) roda sozinho, na vez dele.
     const RODIZIO = ['conexao', 'agenda', 'conexao', 'agenda', 'manutencao'];
-    const passo = RODIZIO[minuto % RODIZIO.length];
+    let passo = RODIZIO[minuto % RODIZIO.length];   // queda, se o contador (logo apos a trava) falhar
     // UMA BATIDA POR VEZ (22/09/2026). O Bruno: "os vendedores dizem que TODO o sistema ficou lento".
     // A telemetria mostrou batidas de cron de 259 e 278 SEGUNDOS, sobrepostas: como o Cloudflare
     // dispara de minuto em minuto sem perguntar se a anterior acabou, ficavam quatro ou cinco vivas
@@ -22698,13 +22909,24 @@ export default {
       await _writeConfig(env, 'cron_lock', _meuLock);
       _travei = true;
     } catch (_) { /* sem trava disponivel: segue assim mesmo - rodar duas vezes e melhor que nao rodar */ }
+    // PASSO POR CONTADOR, NAO PELO MINUTO (12/10/2026, auditoria item 31). `minuto % 5` so e rodizio
+    // quando a batida cabe no minuto. Medido em 06/10: com batidas de ~225 s o residuo caia SEMPRE no
+    // mesmo passo (72 vezes no passo 0 e zero nos outros), e agenda/manutencao nao rodavam. Agora o
+    // ultimo passo executado fica em app_config e a batida que PEGA A TRAVA avanca um; batida pulada
+    // nao consome passo. Com o contador cada passo roda uma vez a cada 5 batidas de verdade.
+    try {
+      const _ultP = await _readConfig(env, 'cron_passo_ult');
+      const _idxP = (_ultP === null || _ultP === '' || isNaN(Number(_ultP))) ? (minuto % RODIZIO.length) : ((Number(_ultP) + 1) % RODIZIO.length);
+      passo = RODIZIO[_idxP];
+      await _writeConfig(env, 'cron_passo_ult', String(_idxP));
+    } catch (_) {}
     let erro = _erroFunil;
     // BATIMENTO EM DOIS TEMPOS. Grava ANTES de trabalhar ('ini') e de novo depois ('ok'/'erro').
     // Estourar o limite de CPU NAO gera excecao: a invocacao e cortada e nada mais roda. Se so
     // houvesse a gravacao do fim, a batida morta seria invisivel de novo. Com o 'ini' fica assim: se
     // o batimento estiver velho E marcado 'ini', o passo escrito ali e exatamente o que esta matando
     // a batida. Foi assim que este bug apareceu.
-    const hb = async (fase) => { try { await _writeConfig(env, 'cron_hb', JSON.stringify({ ts: Math.floor(Date.now() / 1000), passo, fase, erro })); } catch (_) {} };
+    const hb = async (fase) => { try { await _writeConfig(env, 'cron_hb', JSON.stringify({ ts: Math.floor(Date.now() / 1000), passo, fase, erro, dur: Math.round((Date.now() - _lockMs) / 1000) })); } catch (_) {} };
     await hb('ini');
     // A REDE DE SEGURANCA DO AVISO DE VENDA (24/09/2026). O caminho principal agora e o postback:
     // a Five e a Payt chamam a gente no instante do pagamento e o aviso sai junto com o delas (ver
@@ -23055,6 +23277,7 @@ export default {
       if (req.method === 'GET' && path === '/api/leads/contagem') return handleLeadsContagem(req, env);
       if (req.method === 'GET' && path === '/api/wa/funnel/queue') return handleWAFunnelQueue(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/funnel') return handleWAFunnel(req, env);
+      if (req.method === 'GET'    && path === '/api/wa/chats/contagem')   return handleWAChatsContagem(req, env);
       if (req.method === 'GET'    && path === '/api/wa/chats')            return handleWAChats(req, env);
       if (req.method === 'GET'    && path === '/api/wa/crm')              return handleWACrm(req, env);
       if (req.method === 'GET'    && path === '/api/vendas/sem-pedido')   return handleVendasSemPedido(req, env);
