@@ -8577,7 +8577,8 @@ async function _botEnsureTables(env) {
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_envios_tipo ON bot_envios(tipo, id)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_pend (fone TEXT PRIMARY KEY, nome TEXT, texto TEXT, tipo TEXT, ts INTEGER, tent INTEGER DEFAULT 0)').run();
     try { await env.DB.prepare('ALTER TABLE bot_pend ADD COLUMN tent INTEGER DEFAULT 0').run(); } catch (_) {}
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, jid TEXT, nome TEXT, texto TEXT, status TEXT, tent INTEGER DEFAULT 0, msg_id TEXT, erro TEXT, feito_ts INTEGER)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, jid TEXT, nome TEXT, texto TEXT, status TEXT, tent INTEGER DEFAULT 0, msg_id TEXT, erro TEXT, feito_ts INTEGER, pego_ts INTEGER)').run();
+    try { await env.DB.prepare('ALTER TABLE bot_outbox ADD COLUMN pego_ts INTEGER').run(); } catch (_) {}
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_outbox_status ON bot_outbox(status, id)').run();
     _botTablesOk = true;
   } catch (_) {}
@@ -8957,7 +8958,16 @@ async function _botEntregarPendentes(env, cfg, row) {
   if (!rows.length) return;
   const agora = Math.floor(Date.now() / 1000);
   // Textos do GRUPO esperando o servidor ou a sessao voltar: uma tentativa a cada (5 min x tentativas), ate 6h.
-  for (const p of rows.filter((x) => /@g\.us$/.test(String(x.fone)))) {
+  const gruposPend = rows.filter((x) => /@g\.us$/.test(String(x.fone)));
+  if (gruposPend.length && !(cfg && cfg.grupo && cfg.grupo.via === 'evolution')) {
+    // A via mudou pra pc: o que esperava a Evolution vai pra fila do bot do PC.
+    for (const p of gruposPend) {
+      try {
+        await _botOutboxPor(env, { id: p.fone, nome: String(p.nome || '').replace(/^Grupo: /, '') }, p.texto, p.tipo, _brDay());
+        await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run();
+      } catch (_) {}
+    }
+  } else for (const p of gruposPend) {
     if (agora - Number(p.ts) > 6 * 3600) {
       try { await env.DB.prepare('DELETE FROM bot_pend WHERE fone=?').bind(p.fone).run(); } catch (_) {}
       await _botLog(env, { tipo: p.tipo, nome: p.nome, fone: p.fone, via: 'grupo', status: 'erro', erro: 'O grupo ficou 6h sem conseguir receber. Texto descartado.', texto: p.texto });
@@ -9124,6 +9134,7 @@ async function _botMarcosTick(env, cfg, row, dia) {
 // do dia ainda sai (dentro das 3h de tolerancia).
 async function _botTick(env) {
   const cfg = await _botCfgLer(env, true);
+  try { await _botOutboxFaxina(env); } catch (_) {}   // a fila do PC recebe item mesmo com o bot desligado: a faxina nao depende do resto
   if (!cfg.ativo) return;
   const dia = _brDay();
   const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length);
@@ -9136,7 +9147,6 @@ async function _botTick(env) {
   }
   const agoraBR = _agoraBR();
   const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
-  try { await _botOutboxFaxina(env); } catch (_) {}
   await _botEntregarPendentes(env, cfg, row);   // trata a fila do grupo mesmo sem numero oficial
   const r = cfg.relatorio;
   if (r.ativo) {
@@ -9320,6 +9330,7 @@ async function _botPendGrupo(env, g, texto, tipo) {
 const BOT_AGENTE_VIVO_S = 90;          // sem ping ha 90s = PC desligado (o agente pinga a cada 15s)
 const BOT_AGENTE_FILA_MAX_H = 20;      // texto esperando ha mais de 20h: descarta com registro
 const BOT_AGENTE_TENT_MAX = 5;
+const BOT_AGENTE_LEASE_S = 120;       // item entregue a um ping fica reservado por 2 min (sem isso dois pings mandam em dobro)
 const _botHoraBR = (ts) => { const d = new Date(Number(ts) * 1000 - 3 * 3600000); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
 async function _botAgenteToken(env, gerar) {
   let t = '';
@@ -9331,45 +9342,78 @@ async function _botAgenteToken(env, gerar) {
   return t;
 }
 async function _botAgenteEstado(env) {
-  let o = null;
-  try { o = JSON.parse((await _readConfig(env, 'bot_agente')) || 'null'); } catch (_) { o = null; }
+  let o = null, ts401 = 0;
+  try { const m = await _readConfigMuitas(env, ['bot_agente', 'bot_agente_401']); o = JSON.parse(m.bot_agente || 'null'); ts401 = Number(m.bot_agente_401) || 0; } catch (_) { o = null; }
+  const agora = Math.floor(Date.now() / 1000);
   const ts = Number(o && o.ts) || 0;
-  const vivo = !!ts && (Math.floor(Date.now() / 1000) - ts) < BOT_AGENTE_VIVO_S;
+  const vivo = !!ts && (agora - ts) < BOT_AGENTE_VIVO_S;
   const estado = vivo ? String((o && o.estado) || 'close') : 'offline';
-  return { via: 'pc', ts, vivo, estado, numero: String((o && o.numero) || ''), nome: String((o && o.nome) || ''), qr: estado === 'qr' ? String((o && o.qr) || '') : '', pairingCode: estado === 'qr' ? String((o && o.pairingCode) || '') : '', versao: String((o && o.versao) || ''), pc: String((o && o.pc) || '') };
+  // Um agente pingando com token errado nos ultimos 90s: a tela avisa em vez de dizer "desligado".
+  const tokenErrado = !vivo && !!ts401 && (agora - ts401) < BOT_AGENTE_VIVO_S;
+  return { via: 'pc', ts, vivo, estado, token_errado: tokenErrado, numero: String((o && o.numero) || ''), nome: String((o && o.nome) || ''), qr: estado === 'qr' ? String((o && o.qr) || '') : '', pairingCode: estado === 'qr' ? String((o && o.pairingCode) || '') : '', versao: String((o && o.versao) || ''), pc: String((o && o.pc) || '') };
 }
 async function _botAgenteGrupos(env) {
   let g = [];
   try { g = JSON.parse((await _readConfig(env, 'bot_agente_grupos')) || '[]'); } catch (_) { g = []; }
   return Array.isArray(g) ? g.filter((x) => x && _botJidGrupoOk(x.id)).map((x) => ({ id: String(x.id), nome: String(x.nome || '').slice(0, 80), tamanho: Number(x.tamanho) || 0 })) : [];
 }
-async function _botAgenteCmd(env, cmd) { await _writeConfig(env, 'bot_agente_cmd', String(cmd || '')); }
+// Um slot so de comando. 'logout' e o que importa e nao pode ser apagado por um 'grupos' que chega logo depois.
+async function _botAgenteCmd(env, cmd) {
+  let atual = '';
+  try { atual = String((await _readConfig(env, 'bot_agente_cmd')) || ''); } catch (_) { atual = ''; }
+  if (atual === 'logout' && cmd !== 'logout') return;
+  await _writeConfig(env, 'bot_agente_cmd', String(cmd || ''));
+}
+// Depois de pedir logout, o estado gravado vira 'close' na hora: a tela nao pode ver 'Conectado' ate o agente pingar.
+async function _botAgenteMarcaClose(env) {
+  let o = null;
+  try { o = JSON.parse((await _readConfig(env, 'bot_agente')) || 'null'); } catch (_) { o = null; }
+  if (!o || typeof o !== 'object') return;
+  o.estado = 'close'; o.qr = ''; o.pairingCode = '';
+  await _writeConfig(env, 'bot_agente', JSON.stringify(o));
+}
 async function _botOutboxPor(env, g, texto, tipo, dia) {
   await _botEnsureTables(env);
   await env.DB.prepare('INSERT INTO bot_outbox (ts, dia, tipo, jid, nome, texto, status, tent) VALUES (?,?,?,?,?,?,?,0)')
     .bind(Math.floor(Date.now() / 1000), String(dia || _brDay()), String(tipo || ''), String(g.id), String(g.nome || ''), String(texto).slice(0, 4000), 'pend').run();
 }
-// Fila: descarta o que esperou demais (PC desligado), com registro; apaga o que ja foi, depois de 30 dias.
+// Fila: descarta o que esperou demais (PC desligado) e a comemoracao de outro dia, com registro; nao mexe em
+// item reservado por um ping (o agente pode estar mandando agora); apaga o que ja foi, depois de 30 dias.
 async function _botOutboxFaxina(env) {
   await _botEnsureTables(env);
   const agora = Math.floor(Date.now() / 1000);
+  const hoje = _brDay();
   let rows = [];
-  try { rows = ((await env.DB.prepare("SELECT id, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND ts < ? LIMIT 20").bind(agora - BOT_AGENTE_FILA_MAX_H * 3600).all()).results) || []; } catch (_) { return; }
-  const motivo = 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
+  try {
+    rows = ((await env.DB.prepare("SELECT id, ts, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) AND (ts < ? OR (tipo IN ('marco','meta') AND dia <> ?)) LIMIT 20")
+      .bind(agora - BOT_AGENTE_LEASE_S, agora - BOT_AGENTE_FILA_MAX_H * 3600, hoje).all()).results) || [];
+  } catch (_) { return; }
   for (const r of rows) {
-    try { await env.DB.prepare("UPDATE bot_outbox SET status='erro', erro=?, feito_ts=? WHERE id=?").bind(motivo, agora, r.id).run(); } catch (_) {}
-    await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: r.texto });
+    const deOutroDia = (r.tipo === 'marco' || r.tipo === 'meta') && String(r.dia || '') !== hoje;
+    const motivo = deOutroDia ? 'A comemoração era de ' + _botDataBR(r.dia).slice(0, 5) + ' e o bot do PC não ligou naquele dia. Texto descartado.' : 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
+    let mudou = false;
+    try { const u = await env.DB.prepare("UPDATE bot_outbox SET status='erro', erro=?, feito_ts=? WHERE id=? AND status='pend'").bind(motivo, agora, r.id).run(); mudou = !!(u && u.meta && u.meta.changes > 0); } catch (_) {}
+    if (mudou) await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: r.texto });
   }
   try { await env.DB.prepare("DELETE FROM bot_outbox WHERE status<>'pend' AND ts < ?").bind(agora - 30 * 86400).run(); } catch (_) {}
 }
-// Resultado de um envio que o agente fez. `repetir` = erro passageiro: fica na fila (tent ja subiu no ping).
+// Resultado de um envio que o agente fez. `repetir` = erro passageiro: solta a reserva e fica na fila
+// (tent ja subiu no ping). O UPDATE exige status='pend': dois acks do mesmo item registram uma vez so.
 async function _botAgenteAck(env, id, ok, msgId, erro, repetir) {
   let row = null;
   try { row = await env.DB.prepare('SELECT id, dia, tipo, jid, nome, texto, status FROM bot_outbox WHERE id=?').bind(id).first(); } catch (_) {}
   if (!row) return { achou: false };
   if (row.status !== 'pend') return { achou: true, ja: true };
-  if (!ok && repetir) return { achou: true, repete: true };
-  try { await env.DB.prepare('UPDATE bot_outbox SET status=?, msg_id=?, erro=?, feito_ts=? WHERE id=?').bind(ok ? 'enviado' : 'erro', String(msgId || ''), String(erro || '').slice(0, 300), Math.floor(Date.now() / 1000), id).run(); } catch (_) {}
+  if (!ok && repetir) {
+    try { await env.DB.prepare("UPDATE bot_outbox SET pego_ts=NULL WHERE id=? AND status='pend'").bind(id).run(); } catch (_) {}
+    return { achou: true, repete: true };
+  }
+  let mudou = false;
+  try {
+    const u = await env.DB.prepare("UPDATE bot_outbox SET status=?, msg_id=?, erro=?, feito_ts=? WHERE id=? AND status='pend'").bind(ok ? 'enviado' : 'erro', String(msgId || ''), String(erro || '').slice(0, 300), Math.floor(Date.now() / 1000), id).run();
+    mudou = !!(u && u.meta && u.meta.changes > 0);
+  } catch (_) {}
+  if (!mudou) return { achou: true, ja: true };
   await _botLog(env, { dia: row.dia, tipo: row.tipo, nome: 'Grupo: ' + (row.nome || row.jid), fone: row.jid, via: 'grupo', status: ok ? 'enviado' : 'erro', erro: ok ? '' : erro, texto: row.texto, wamid: msgId });
   return { achou: true };
 }
@@ -9538,7 +9582,9 @@ async function handleBotLog(req, env) {
   } catch (_) {}
   let pendentes = [];
   try { pendentes = ((await env.DB.prepare('SELECT fone, nome, tipo, ts FROM bot_pend ORDER BY ts DESC').all()).results) || []; } catch (_) {}
-  return json({ ok: true, envios, pendentes });
+  let fila = [];
+  try { fila = ((await env.DB.prepare("SELECT id, jid AS fone, nome, tipo, ts, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' ORDER BY id").all()).results) || []; } catch (_) {}
+  return json({ ok: true, envios, pendentes, fila });
 }
 // GET = estado do template (sem cache). POST = cria; se o que existe foi recusado ou pausado,
 // apaga e cria de novo (a Meta nao aceita dois com o mesmo nome).
@@ -9594,7 +9640,7 @@ async function handleBotWa(req, env) {
   if (m === 'POST') { try { b = await req.json(); } catch (_) { b = {}; } }
   if (m === 'POST' && acao === 'conectar') {
     if (pc) {
-      if (b.reset) await _botAgenteCmd(env, 'logout');
+      if (b.reset) { await _botAgenteCmd(env, 'logout'); await _botAgenteMarcaClose(env); }
       const ag = await _botAgenteEstado(env);
       if (!ag.vivo) return json({ ok: false, error: 'O bot do PC não está rodando' + (ag.ts ? ' (visto às ' + _botHoraBR(ag.ts) + ')' : '') + '. No PC, abra a pasta AXION\\bot-grupo e dê dois cliques em bot-grupo.bat.' }, 502);
       if (ag.estado === 'open' && !b.reset) return json({ ok: true, estado: 'open', numero: ag.numero, nome: ag.nome });
@@ -9604,7 +9650,7 @@ async function handleBotWa(req, env) {
     return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502);
   }
   if (m === 'POST' && acao === 'sair') {
-    if (pc) { await _botAgenteCmd(env, 'logout'); return json({ ok: true, saiu: true }); }
+    if (pc) { await _botAgenteCmd(env, 'logout'); await _botAgenteMarcaClose(env); return json({ ok: true, saiu: true }); }
     const r = await _botEvoSair(env);
     return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502);
   }
@@ -9644,31 +9690,35 @@ async function handleBotWa(req, env) {
 async function handleBotAgente(req, env) {
   const tok = String(req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   const esperado = await _botAgenteToken(env);
-  if (!tok || tok.length < 20 || tok !== esperado) return err('Token do bot inválido', 401);
+  if (!tok || tok.length < 20 || tok !== esperado) { try { await _writeConfig(env, 'bot_agente_401', String(Math.floor(Date.now() / 1000))); } catch (_) {} return err('Token do bot inválido', 401); }
   if (req.method !== 'POST') return err('Use POST', 405);
   const acao = new URL(req.url).pathname.replace(/^\/api\/bot\/agente\//, '').replace(/\/+$/, '');
   let b = {}; try { b = await req.json(); } catch (_) { b = {}; }
   await _botEnsureTables(env);
   if (acao === 'ping') {
-    const estado = ['open', 'qr', 'close'].includes(b.estado) ? b.estado : 'close';
+    const estadoAg = ['open', 'qr', 'close'].includes(b.estado) ? b.estado : 'close';
+    let cmd = '';
+    try { cmd = String((await _readConfig(env, 'bot_agente_cmd')) || ''); } catch (_) { cmd = ''; }
+    if (cmd) await _writeConfig(env, 'bot_agente_cmd', '');
+    // Com logout a caminho o estado gravado e 'close': a tela nao ve 'Conectado' depois de pedir pra sair.
+    const estado = cmd === 'logout' ? 'close' : estadoAg;
     const atual = { ts: Math.floor(Date.now() / 1000), estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', pairingCode: estado === 'qr' ? String(b.pairingCode || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
     await _writeConfig(env, 'bot_agente', JSON.stringify(atual));
     if (Array.isArray(b.grupos)) {
       const grupos = b.grupos.slice(0, 300).map((g) => ({ id: String((g && g.id) || ''), nome: String((g && g.nome) || '').slice(0, 80), tamanho: Number(g && g.tamanho) || 0 })).filter((g) => _botJidGrupoOk(g.id));
       await _writeConfig(env, 'bot_agente_grupos', JSON.stringify(grupos));
     }
-    let cmd = '';
-    try { cmd = String((await _readConfig(env, 'bot_agente_cmd')) || ''); } catch (_) { cmd = ''; }
-    if (cmd) await _writeConfig(env, 'bot_agente_cmd', '');
     const itens = [];
-    if (estado === 'open') {
+    if (estadoAg === 'open' && cmd !== 'logout') {
       try {
-        const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' ORDER BY id LIMIT 10").all();
+        const agora = Math.floor(Date.now() / 1000);
+        // So o que nao esta reservado: o item entregue a um ping fica 2 min fora da vista dos outros.
+        const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) ORDER BY id LIMIT 10").bind(agora - BOT_AGENTE_LEASE_S).all();
         for (const x of ((r && r.results) || [])) {
           if (Number(x.tent) >= BOT_AGENTE_TENT_MAX) { await _botAgenteAck(env, Number(x.id), false, '', 'o bot do PC tentou ' + BOT_AGENTE_TENT_MAX + ' vezes e não conseguiu', false); continue; }
           itens.push({ id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') });
         }
-        if (itens.length) await env.DB.prepare('UPDATE bot_outbox SET tent=COALESCE(tent,0)+1 WHERE id IN (' + itens.map(() => '?').join(',') + ')').bind(...itens.map((x) => x.id)).run();
+        if (itens.length) await env.DB.prepare('UPDATE bot_outbox SET tent=COALESCE(tent,0)+1, pego_ts=? WHERE id IN (' + itens.map(() => '?').join(',') + ')').bind(agora, ...itens.map((x) => x.id)).run();
       } catch (_) {}
     }
     return json({ ok: true, cmd, itens });

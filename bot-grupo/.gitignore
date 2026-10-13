@@ -3,3 +3,5 @@ sessao/
 bot-grupo.json
 bot-grupo.log
 *.lock
+enviados.json
+agente.lock

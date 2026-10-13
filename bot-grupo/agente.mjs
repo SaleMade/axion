@@ -6,9 +6,12 @@
 // Config: bot-grupo.json ao lado deste arquivo: { "api": "https://axion-api.axion-dash.workers.dev", "token": "<token da tela>" }
 // Flags: --uma-vez (conecta, esvazia a fila e sai) | --codigo 5515981430517 (parear por codigo de 8
 // letras em vez do QR, quando o QR trava na etapa de "passkey" do WhatsApp).
-// Higiene (pra nao banir): UM socket por vez, reconexao com recuo, nunca religa depois de 401 sem QR
-// novo, markOnlineOnConnect false, identidade fixa, metadados do grupo em cache.
+// NUNCA EM DOBRO: o id de cada item enviado fica em enviados.json antes do ack; se o ack falhar, o
+// item volta no proximo ping e so recebe o ack de novo, sem sendMessage.
+// Higiene (pra nao banir): UM socket por vez, reconexao com recuo, 440 (outra copia) espera 2 min,
+// nunca religa depois de 401 sem QR novo, markOnlineOnConnect false, identidade fixa, metadados em cache.
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { hostname } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,10 +21,11 @@ import qrterm from 'qrcode-terminal'
 import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.1.0'
+const VERSAO = '1.2.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
+const ENVIADOS_ARQ = path.join(AQUI, 'enviados.json')
 const UMA_VEZ = process.argv.includes('--uma-vez')
 const CODIGO_NUM = (() => { const i = process.argv.indexOf('--codigo'); return i >= 0 ? String(process.argv[i + 1] || '').replace(/\D/g, '') : '' })()
 const PING_S = 15
@@ -29,6 +33,7 @@ const PING_QR_S = 5
 
 const hora = () => new Date().toLocaleTimeString('pt-BR', { hour12: false })
 const log = (...a) => console.log(hora(), ...a)
+const dorme = (ms) => new Promise((res) => setTimeout(res, ms))
 
 function lerCfg() {
   if (!existsSync(CFG_ARQ)) {
@@ -44,13 +49,19 @@ function lerCfg() {
 const cfg = lerCfg()
 
 // So um bot por pasta: dois ao mesmo tempo derrubam a sessao um do outro (e isso costuma virar bloqueio).
+// No Windows o PID pode ser reaproveitado por outro programa: confere se o PID vivo e mesmo um node.
+function pidEhNode(pid) {
+  try {
+    if (process.platform !== 'win32') { process.kill(pid, 0); return true }
+    const saida = execSync('tasklist /FI "PID eq ' + pid + '" /FO CSV /NH', { encoding: 'utf8', windowsHide: true })
+    return /node\.exe/i.test(saida)
+  } catch { return false }
+}
 let fechando = false
 try {
   if (existsSync(LOCK)) {
     const pid = Number(readFileSync(LOCK, 'utf8')) || 0
-    let vivo = false
-    try { if (pid && pid !== process.pid) { process.kill(pid, 0); vivo = true } } catch { vivo = false }
-    if (vivo) { log('Ja tem um bot rodando nesta pasta (processo ' + pid + '). Saindo.'); process.exit(0) }
+    if (pid && pid !== process.pid && pidEhNode(pid)) { log('Ja tem um bot rodando nesta pasta (processo ' + pid + '). Saindo.'); process.exit(0) }
   }
   writeFileSync(LOCK, String(process.pid))
 } catch {}
@@ -59,6 +70,16 @@ process.on('exit', limparLock)
 process.on('SIGINT', () => { fechando = true; limparLock(); process.exit(0) })
 process.on('SIGTERM', () => { fechando = true; limparLock(); process.exit(0) })
 
+// Ids ja enviados (id da fila -> id da mensagem no WhatsApp). Gravado ANTES do ack: ack perdido nunca vira envio em dobro.
+let enviadosMapa = {}
+try { enviadosMapa = JSON.parse(readFileSync(ENVIADOS_ARQ, 'utf8')) || {} } catch { enviadosMapa = {} }
+function guardarEnviado(id, msgId) {
+  enviadosMapa[String(id)] = { msg_id: String(msgId || ''), ts: Date.now() }
+  const chaves = Object.keys(enviadosMapa)
+  if (chaves.length > 300) for (const k of chaves.sort((a, b) => enviadosMapa[a].ts - enviadosMapa[b].ts).slice(0, chaves.length - 300)) delete enviadosMapa[k]
+  try { writeFileSync(ENVIADOS_ARQ, JSON.stringify(enviadosMapa)) } catch {}
+}
+
 let sock = null
 let estado = 'close'          // 'qr' | 'open' | 'close'
 let qrDataUrl = ''
@@ -66,11 +87,11 @@ let pairingCode = ''
 let ultimoQrTexto = ''
 let numero = ''
 let nome = ''
-let gruposPend = null         // lista pra mandar no proximo ping (so quando mudou)
+let gruposPend = null         // lista pra mandar no proximo ping (so quando mudou); fica ate um ping dar certo
 let ocupado = false
 let conectando = false
 let tentativa = 0
-let pingsSemItem = 0
+let pingsSemItemAberto = 0    // so conta com a sessao aberta (pra --uma-vez)
 let enviados = 0
 const cacheGrupo = new Map()
 const logger = pino({ level: 'silent' })
@@ -87,6 +108,14 @@ const api = async (rota, body) => {
   if (r.status === 401) log('O worker recusou o token (401). Confira o token do bot-grupo.json com o da tela (Gerar outro troca o token).')
   return { status: r.status, j }
 }
+// Ack com insistencia: ate 3 vezes, 2s entre elas. Devolve true se o worker respondeu 200.
+async function ack(body) {
+  for (let i = 0; i < 3; i++) {
+    try { const r = await api('/api/bot/agente/ack', body); if (r.status === 200) return true; if (r.status === 401) return false } catch {}
+    await dorme(2000)
+  }
+  return false
+}
 
 async function lerGrupos() {
   const g = await sock.groupFetchAllParticipating()
@@ -97,6 +126,24 @@ async function lerGrupos() {
     .filter((x) => /@g\.us$/.test(x.id))
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
 }
+// Logo depois de abrir, a lista pode vir vazia (o WhatsApp ainda esta sincronizando): tenta de novo em 10s e 30s.
+async function lerGruposComInsistencia() {
+  for (const espera of [0, 10000, 30000]) {
+    if (espera) await dorme(espera)
+    if (estado !== 'open') return
+    try {
+      const lista = await lerGrupos()
+      if (lista.length || espera === 30000) { gruposPend = lista; log(lista.length + ' grupo(s) encontrado(s)'); return }
+    } catch (e) { log('nao consegui listar os grupos agora: ' + String((e && e.message) || e)) }
+  }
+}
+
+function agendaReconexao(ms) {
+  if (fechando) return
+  setTimeout(() => {
+    conectar().catch((e) => { log('erro ao reconectar: ' + String((e && e.message) || e) + '. Tento de novo em 15s.'); conectando = false; agendaReconexao(15000) })
+  }, ms)
+}
 
 async function conectar() {
   if (fechando || conectando) return
@@ -105,7 +152,7 @@ async function conectar() {
     mkdirSync(SESSAO, { recursive: true })
     const { state, saveCreds } = await useMultiFileAuthState(SESSAO)
     let version
-    try { version = (await fetchLatestBaileysVersion()).version } catch { version = undefined }
+    try { version = (await Promise.race([fetchLatestBaileysVersion(), dorme(8000).then(() => ({}))])).version } catch { version = undefined }
     sock = makeWASocket({
       version,
       auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
@@ -116,9 +163,11 @@ async function conectar() {
       generateHighQualityLinkPreview: false,
       cachedGroupMetadata: async (jid) => cacheGrupo.get(jid),
     })
+    const meuSock = sock
     sock.ev.on('creds.update', saveCreds)
     sock.ev.on('group-participants.update', (u) => { if (u && u.id) cacheGrupo.delete(u.id) })
     sock.ev.on('connection.update', async (u) => {
+      if (meuSock !== sock) return   // evento de um socket velho
       if (u.qr && u.qr !== ultimoQrTexto) {
         ultimoQrTexto = u.qr
         estado = 'qr'
@@ -142,10 +191,11 @@ async function conectar() {
         pairingCode = ''
         ultimoQrTexto = ''
         tentativa = 0
+        pingsSemItemAberto = 0
         numero = String((sock.user && sock.user.id) || '').split(':')[0].split('@')[0].replace(/\D/g, '')
         nome = String((sock.user && (sock.user.name || sock.user.verifiedName)) || '')
         log('WhatsApp Web conectado como ' + numero + (nome ? ' (' + nome + ')' : ''))
-        try { gruposPend = await lerGrupos(); log(gruposPend.length + ' grupo(s) encontrado(s)') } catch (e) { log('nao consegui listar os grupos agora: ' + String((e && e.message) || e)) }
+        lerGruposComInsistencia().then(() => ping().catch(() => {})).catch(() => {})
         ping().catch(() => {})
       }
       if (u.connection === 'close') {
@@ -158,12 +208,17 @@ async function conectar() {
           log('Sessao encerrada no celular (ou pela dash). Apagando a sessao local; vai pedir QR de novo.')
           try { rmSync(SESSAO, { recursive: true, force: true }) } catch {}
           pairingCode = ''
-          setTimeout(() => conectar().catch((e) => log('erro ao reconectar: ' + String((e && e.message) || e))), 3000)
+          agendaReconexao(3000)
+          return
+        }
+        if (code === DisconnectReason.connectionReplaced) {
+          log('Outra copia do bot conectou com esta mesma sessao (440). Esta copia espera 2 min antes de tentar de novo.')
+          agendaReconexao(120000)
           return
         }
         const espera = code === DisconnectReason.restartRequired ? 500 : Math.min(60000, 2000 * Math.pow(2, tentativa++))
         log('Conexao caiu (' + (code || 'sem codigo') + '). Reconectando em ' + Math.round(espera / 1000) + 's.')
-        setTimeout(() => conectar().catch((e) => log('erro ao reconectar: ' + String((e && e.message) || e))), espera)
+        agendaReconexao(espera)
       }
     })
   } catch (e) {
@@ -178,38 +233,55 @@ async function sair() {
   try { rmSync(SESSAO, { recursive: true, force: true }) } catch {}
 }
 
+async function enviarItem(it) {
+  const jid = String(it.jid)
+  const ja = enviadosMapa[String(it.id)]
+  if (ja) {
+    // Ja saiu no grupo numa rodada anterior e o ack nao chegou: so confirma, sem mandar de novo.
+    log('item ' + it.id + ' ja tinha sido enviado; confirmando de novo')
+    await ack({ id: it.id, ok: true, msg_id: ja.msg_id })
+    return
+  }
+  let msgId = ''
+  try {
+    if (!cacheGrupo.has(jid)) { try { cacheGrupo.set(jid, await sock.groupMetadata(jid)) } catch {} }
+    const m = await sock.sendMessage(jid, { text: String(it.texto || '') })
+    msgId = (m && m.key && m.key.id) || ''
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200)
+    const passageiro = /timed out|timeout|connection|closed|not open|rate|socket/i.test(msg)
+    log('falhou no grupo ' + jid + ': ' + msg + (passageiro ? ' (tento de novo)' : ''))
+    await ack({ id: it.id, ok: false, erro: msg, repetir: passageiro })
+    return
+  }
+  // Daqui pra frente a mensagem JA ESTA no grupo: nada aqui pode virar ok:false.
+  guardarEnviado(it.id, msgId)
+  enviados++
+  log('enviado no grupo ' + jid + ' (' + (it.tipo || 'texto') + ')' + (msgId ? ', id ' + msgId : ''))
+  const confirmou = await ack({ id: it.id, ok: true, msg_id: msgId })
+  if (!confirmou) log('o worker nao confirmou o item ' + it.id + ' agora; confirmo no proximo ping (sem mandar de novo)')
+}
+
 async function ping() {
   if (ocupado) return
   ocupado = true
   try {
     const body = { estado, numero, nome, qr: estado === 'qr' ? qrDataUrl : '', pairingCode: estado === 'qr' ? pairingCode : '', versao: VERSAO, pc: hostname() }
-    if (gruposPend) { body.grupos = gruposPend; gruposPend = null }
+    if (gruposPend) body.grupos = gruposPend
     const r = await api('/api/bot/agente/ping', body)
     if (r.status !== 200 || !r.j || !r.j.ok) {
       if (r.status !== 401) log('ping falhou: ' + r.status + ' ' + JSON.stringify(r.j || {}).slice(0, 120))
       return
     }
+    if (gruposPend) gruposPend = null   // so solta a lista depois que o worker recebeu
     if (r.j.cmd === 'logout') { await sair(); return }
     if (r.j.cmd === 'grupos' && estado === 'open') { try { gruposPend = await lerGrupos() } catch {} }
     const itens = Array.isArray(r.j.itens) ? r.j.itens : []
-    if (!itens.length) pingsSemItem++; else pingsSemItem = 0
+    if (estado === 'open') { if (!itens.length) pingsSemItemAberto++; else pingsSemItemAberto = 0 }
     for (const it of itens) {
       if (estado !== 'open') break
-      try {
-        const jid = String(it.jid)
-        if (!cacheGrupo.has(jid)) { try { cacheGrupo.set(jid, await sock.groupMetadata(jid)) } catch {} }
-        const m = await sock.sendMessage(jid, { text: String(it.texto || '') })
-        const id = (m && m.key && m.key.id) || ''
-        enviados++
-        log('enviado no grupo ' + jid + ' (' + (it.tipo || 'texto') + ')' + (id ? ', id ' + id : ''))
-        await api('/api/bot/agente/ack', { id: it.id, ok: true, msg_id: id })
-      } catch (e) {
-        const msg = String((e && e.message) || e).slice(0, 200)
-        const passageiro = /timed out|timeout|connection|closed|not open|rate|socket/i.test(msg)
-        log('falhou no grupo ' + it.jid + ': ' + msg + (passageiro ? ' (tento de novo)' : ''))
-        await api('/api/bot/agente/ack', { id: it.id, ok: false, erro: msg, repetir: passageiro }).catch(() => {})
-      }
-      await new Promise((res) => setTimeout(res, 1500))
+      await enviarItem(it)
+      await dorme(1500)
     }
   } catch (e) {
     log('ping: ' + String((e && e.message) || e))
@@ -223,8 +295,8 @@ await conectar()
 const laco = async () => {
   if (fechando) return
   await ping()
-  // --uma-vez: conectado e 4 pings seguidos sem nada na fila (1 min) = acabou por hoje.
-  if (UMA_VEZ && estado === 'open' && pingsSemItem >= 4) {
+  // --uma-vez: sessao aberta e 4 pings seguidos sem nada na fila (1 min) = acabou por hoje.
+  if (UMA_VEZ && estado === 'open' && pingsSemItemAberto >= 4) {
     log('Fila vazia. ' + enviados + ' envio(s) nesta rodada. Saindo.')
     fechando = true
     try { sock.end(undefined) } catch {}
