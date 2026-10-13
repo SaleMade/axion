@@ -9209,7 +9209,9 @@ async function _botEvo(env, path, opts) {
     const r = await fetch(c.url + path, { method: o.method || 'GET', headers: { apikey: c.key, ...(o.body ? { 'content-type': 'application/json' } : {}) }, body: o.body ? JSON.stringify(o.body) : undefined, signal: AbortSignal.timeout(o.timeout || 12000) });
     const text = await r.text();
     let data = {}; try { data = JSON.parse(text); } catch (_) { data = { raw: text.slice(0, 300) }; }
-    return { ok: r.ok, status: r.status, data, erro: r.ok ? '' : _botEvoErroTxt(data, r.status), repetir: r.status >= 500 };
+    // 521/522/523/530 com corpo 'error code: NNN' e a borda do Cloudflare dizendo que o servidor nao respondeu (porta fechada, DNS): e 'fora', nao 'desconectado'.
+    const fora = r.status >= 520 && r.status <= 530;
+    return { ok: r.ok, status: r.status, data, fora, erro: fora ? 'O servidor do WhatsApp Web não respondeu (erro ' + r.status + ')' : (r.ok ? '' : _botEvoErroTxt(data, r.status)), repetir: r.status >= 500 };
   } catch (e) {
     return { ok: false, status: 0, data: {}, fora: true, repetir: true, erro: 'O servidor do WhatsApp Web não respondeu' };
   }
@@ -9514,7 +9516,7 @@ async function handleBotWa(req, env) {
     try {
       const r = await fetch(u2 + '/', { headers: { apikey: chave }, signal: AbortSignal.timeout(10000) });
       const t = await r.text(); let d = {}; try { d = JSON.parse(t); } catch (_) { d = {}; }
-      if (!r.ok) return err('O servidor respondeu ' + r.status + ' na raiz. Confira o endereço.');
+      if (!r.ok) return err(r.status >= 520 && r.status <= 530 ? 'O servidor não respondeu (erro ' + r.status + '). Está no ar, com a porta 443 aberta e o domínio certo?' : 'O servidor respondeu ' + r.status + ' na raiz. Confira o endereço.');
       versao = String((d && d.version) || '');
     } catch (_) { return err('O servidor não respondeu em 10s. Está no ar? (porta 443 aberta e domínio certo)'); }
     await _writeConfig(env, 'bot_evo_url', u2);
