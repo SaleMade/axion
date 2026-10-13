@@ -1,0 +1,5 @@
+node_modules/
+sessao/
+bot-grupo.json
+bot-grupo.log
+*.lock

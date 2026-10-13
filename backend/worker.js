@@ -9336,7 +9336,7 @@ async function _botAgenteEstado(env) {
   const ts = Number(o && o.ts) || 0;
   const vivo = !!ts && (Math.floor(Date.now() / 1000) - ts) < BOT_AGENTE_VIVO_S;
   const estado = vivo ? String((o && o.estado) || 'close') : 'offline';
-  return { via: 'pc', ts, vivo, estado, numero: String((o && o.numero) || ''), nome: String((o && o.nome) || ''), qr: estado === 'qr' ? String((o && o.qr) || '') : '', versao: String((o && o.versao) || ''), pc: String((o && o.pc) || '') };
+  return { via: 'pc', ts, vivo, estado, numero: String((o && o.numero) || ''), nome: String((o && o.nome) || ''), qr: estado === 'qr' ? String((o && o.qr) || '') : '', pairingCode: estado === 'qr' ? String((o && o.pairingCode) || '') : '', versao: String((o && o.versao) || ''), pc: String((o && o.pc) || '') };
 }
 async function _botAgenteGrupos(env) {
   let g = [];
@@ -9598,7 +9598,7 @@ async function handleBotWa(req, env) {
       const ag = await _botAgenteEstado(env);
       if (!ag.vivo) return json({ ok: false, error: 'O bot do PC não está rodando' + (ag.ts ? ' (visto às ' + _botHoraBR(ag.ts) + ')' : '') + '. No PC, abra a pasta AXION\\bot-grupo e dê dois cliques em bot-grupo.bat.' }, 502);
       if (ag.estado === 'open' && !b.reset) return json({ ok: true, estado: 'open', numero: ag.numero, nome: ag.nome });
-      return json({ ok: true, estado: 'connecting', qr: ag.estado === 'qr' ? ag.qr : '', pairingCode: '' });
+      return json({ ok: true, estado: 'connecting', qr: ag.estado === 'qr' ? ag.qr : '', pairingCode: ag.estado === 'qr' ? ag.pairingCode : '' });
     }
     const r = await _botEvoConectar(env, b);
     return r.ok ? json(r) : json({ ok: false, error: r.erro }, 502);
@@ -9651,7 +9651,7 @@ async function handleBotAgente(req, env) {
   await _botEnsureTables(env);
   if (acao === 'ping') {
     const estado = ['open', 'qr', 'close'].includes(b.estado) ? b.estado : 'close';
-    const atual = { ts: Math.floor(Date.now() / 1000), estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
+    const atual = { ts: Math.floor(Date.now() / 1000), estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', pairingCode: estado === 'qr' ? String(b.pairingCode || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
     await _writeConfig(env, 'bot_agente', JSON.stringify(atual));
     if (Array.isArray(b.grupos)) {
       const grupos = b.grupos.slice(0, 300).map((g) => ({ id: String((g && g.id) || ''), nome: String((g && g.nome) || '').slice(0, 80), tamanho: Number(g && g.tamanho) || 0 })).filter((g) => _botJidGrupoOk(g.id));
