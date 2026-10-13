@@ -3000,7 +3000,7 @@ async function _fiveUpsertLead(env, p, ctx) {
         // isso de novo, do lado do envio - duas travas porque a Five reenvia MUITO).
         if (_shipAntes !== _ss) {
           _etapasAgora.push({
-            id: lead.id, etapa: _ss,
+            id: lead.id, etapa: _ss, afl: String(lead.afl || ''),   // afl: o cobrador da casa nao recebe etapa de pedido de afiliado (item 30)
             nome: String(lead.nome || 'Cliente').trim().split(/\s+/).slice(0, 2).join(' '),
             valor: (Number(lead.valor_neg) > 0 ? Number(lead.valor_neg) : Number(lead.vl || 0)) || 0,
           });
@@ -3304,7 +3304,8 @@ async function handleFiveSummary(req, env) {
   }
   try {
     await _ensureFiveTables(env);
-    const qTotals = env.DB.prepare(`SELECT COUNT(*) AS pedidos,
+    // CANCELADO NAO E PEDIDO (item 6, decisao de 23/09): o COUNT do resumo exclui o cancelado.
+    const qTotals = env.DB.prepare(`SELECT SUM(CASE WHEN COALESCE(charge_status,'') NOT LIKE '%CANCEL%' AND COALESCE(last_status,'') NOT LIKE '%CANCEL%' THEN 1 ELSE 0 END) AS pedidos,
        SUM(CASE WHEN charge_status='PAID' THEN 1 ELSE 0 END) AS pagos,
        COALESCE(SUM(CASE WHEN charge_status='PAID' THEN charge_amount ELSE 0 END),0) AS receita_paga
        FROM five_orders${cutBare}`).bind(...bAfl).first();
@@ -3314,17 +3315,25 @@ async function handleFiveSummary(req, env) {
     // que ninguem pagou entrava como R$ 47,64 devidos e comia esse tanto do lucro, tendo gerado
     // R$ 0,00 de receita. Numa operacao COD, onde boa parte nao paga, era a maior distorcao da dash.
     // Regra do Bruno (18/08/2026): comissao existe sobre o que o cliente PAGOU. Nao pagou, nao ha.
-    const qComissoes = env.DB.prepare(`SELECT COUNT(DISTINCT c.order_id) AS pedidos_com_comissao, COALESCE(SUM(c.amount),0) AS total
-       FROM five_commissions c JOIN five_orders o ON o.order_id=c.order_id
-       WHERE o.charge_status='PAID'${cutC}`).bind(...bAfl).first();
+    // A COMISSAO DO AFILIADO MORA NO JSON DO PEDIDO (12/10/2026, auditoria item 23/16). A tabela
+    // five_commissions so recebia linha com affiliateId, e a PayLog nao manda id: o servidor devolvia
+    // 0 "por construcao" enquanto o front, lendo five_orders.commissions, achava R$ 8 mil. Agora as
+    // duas consultas leem o MESMO JSON com json_each e a MESMA regra do ehComissaoAfiliado do front:
+    // tem affiliateId, ou o tipo diz affili/afiliac; nunca produc, platform ou plataforma; so pago.
+    const _cmTipo = "LOWER(COALESCE(json_extract(c.value,'$.type'),''))";
+    const _cmCond = "json_extract(c.value,'$.amount') IS NOT NULL AND (COALESCE(json_extract(c.value,'$.affiliateId'), json_extract(c.value,'$.affiliate_id')) IS NOT NULL OR " + _cmTipo + " LIKE '%affili%' OR " + _cmTipo + " LIKE '%afiliac%') AND " + _cmTipo + " NOT LIKE '%produc%' AND " + _cmTipo + " NOT LIKE '%platform%' AND " + _cmTipo + " NOT LIKE '%plataforma%'";
+    const qComissoes = env.DB.prepare(`SELECT COUNT(DISTINCT o.order_id) AS pedidos_com_comissao, COALESCE(SUM(json_extract(c.value,'$.amount')),0) AS total
+       FROM five_orders o, json_each(CASE WHEN json_valid(o.commissions) THEN o.commissions ELSE '[]' END) c
+       WHERE o.charge_status='PAID'${cutO} AND ${_cmCond}`).bind(...bAfl).first();
     const qPorStatus = (env.DB.prepare(`SELECT COALESCE(last_status,'—') AS status, COUNT(*) AS n FROM five_orders${cutBare} GROUP BY last_status ORDER BY n DESC`).bind(...bAfl).all());
     // idem por afiliado: so pedido pago gera comissao devida
-    const qPorAfiliado = (env.DB.prepare(`SELECT c.affiliate_id, a.name, COUNT(*) AS pedidos, COALESCE(SUM(c.amount),0) AS comissao
-       FROM five_commissions c
-       JOIN five_orders o ON o.order_id=c.order_id AND o.charge_status='PAID'
-       LEFT JOIN five_affiliates a ON a.affiliate_id=c.affiliate_id
-       WHERE 1=1${cutC}
-       GROUP BY c.affiliate_id ORDER BY comissao DESC LIMIT 50`).bind(...bAfl).all());
+    // Por afiliado: uma linha por comissao paga; o agrupamento e por quem a dash sabe que e o dono do
+    // pedido (_mapaAfl, pelo card), depois pelo id da linha, e sem nada vira 'sem_vinculo' com o nome.
+    const qPorAfiliado = (env.DB.prepare(`SELECT o.order_id, json_extract(c.value,'$.amount') AS amount,
+       COALESCE(json_extract(c.value,'$.affiliateId'), json_extract(c.value,'$.affiliate_id')) AS affiliate_id, json_extract(c.value,'$.name') AS name
+       FROM five_orders o, json_each(CASE WHEN json_valid(o.commissions) THEN o.commissions ELSE '[]' END) c
+       WHERE o.charge_status='PAID'${cutO} AND ${_cmCond} LIMIT 5000`).bind(...bAfl).all());
+    const qNomesAfl = env.DB.prepare('SELECT affiliate_id, name FROM five_affiliates').all().catch(() => null);
     const qPorProduto = (env.DB.prepare(`SELECT o.product_id, COALESCE(p.name,o.product_name) AS name, COUNT(*) AS pedidos,
        COALESCE(SUM(CASE WHEN o.charge_status='PAID' THEN o.charge_amount ELSE 0 END),0) AS receita
        FROM five_orders o LEFT JOIN five_products p ON p.product_id=o.product_id
@@ -3333,9 +3342,18 @@ async function handleFiveSummary(req, env) {
     // AS CINCO CONSULTAS RODAM JUNTAS. Elas nao dependem uma da outra, mas estavam em await
     // sequencial: cada ida ao D1 custa uns 200ms de rede, entao a tela do diretor esperava a soma de
     // todas (medido em 18/08/2026: quase 2s pra devolver 200 bytes, com a tabela tendo 1 linha).
-    const [totals, comissoes, rStatus, rAfiliado, rProduto] = await Promise.all([qTotals, qComissoes, qPorStatus, qPorAfiliado, qPorProduto]);
+    const [totals, comissoes, rStatus, rAfiliado, rProduto, rNomes] = await Promise.all([qTotals, qComissoes, qPorStatus, qPorAfiliado, qPorProduto, qNomesAfl]);
     const porStatus = (rStatus && rStatus.results) || [];
-    const porAfiliado = (rAfiliado && rAfiliado.results) || [];
+    const _nomesAfl = {};
+    for (const a of ((rNomes && rNomes.results) || [])) _nomesAfl[String(a.affiliate_id)] = a.name;
+    const _grp = {};
+    for (const r of ((rAfiliado && rAfiliado.results) || [])) {
+      const k = _mapaAfl.get(String(r.order_id)) || String(r.affiliate_id || '') || 'sem_vinculo';
+      const g = _grp[k] || (_grp[k] = { affiliate_id: k, name: _nomesAfl[k] || String(r.name || '') || k, pedidos: new Set(), comissao: 0 });
+      g.pedidos.add(String(r.order_id)); g.comissao += Number(r.amount) || 0;
+    }
+    const porAfiliado = Object.values(_grp).map((g) => ({ affiliate_id: g.affiliate_id, name: g.name, pedidos: g.pedidos.size, comissao: Math.round(g.comissao * 100) / 100 }))
+      .sort((a, b) => b.comissao - a.comissao).slice(0, 50);
     const porProduto = (rProduto && rProduto.results) || [];
     return json({ totals, comissoes, porStatus, porAfiliado, porProduto });
   } catch (e) { return json({ error: String((e && e.message) || e) }); }
@@ -6780,6 +6798,35 @@ async function handleChipDelete(req, env) {
 // POST /api/saque/create { valor, obs? } → vendedor pede saque da comissão a receber.
 // Cirúrgico: grava data.saques (ciclo de vida pendente/aprovado/pago) + data.notifs (aviso pro diretor).
 // Qualquer usuário autenticado pede o PRÓPRIO saque (não exige diretor). NUNCA o blob inteiro.
+// O SALDO DE COMISSAO DE QUEM PEDE SAQUE, calculado no servidor (12/10/2026, auditoria item 23/11).
+// E a MESMA conta do "Disponivel para saque" do app/perfil (buildSaques em lib/profile-metrics):
+// comissao dos pedidos PAGOS de quem pede (a regra do aviso de venda, _wpComissaoVendedor, que
+// espelha comissaoPaga), menos os saques pendentes/aprovados/pagos, menos o que ja foi pago fora
+// de saque (lancamento pagamento_equipe sem saque_id, categoria Salario ou Comissoes: a regra do
+// quitaComissao). `mundo` = '' na casa, o afl no mundo do afiliado: o mesmo recorte do leadsDoMundo.
+// Funcao pura, sem banco: o teste roda sobre a copia do estado.
+function _saldoComissao(data, uRow, mundo, pctAfl) {
+  const meu = String((uRow && uRow.id) || '');
+  const pago = (l) => String((l && l.spg) || '') === 'Pago' || ['Pago', 'Pagos'].includes(String((l && l.col) || ''));
+  const semAcento = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+  let ganho = 0;
+  for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
+    if (!l || String(l.at || '') !== meu || !pago(l)) continue;
+    if (String(l.afl || '') !== String(mundo || '')) continue;
+    ganho += _wpComissaoVendedor(_wpValor(l), l, uRow, pctAfl).comissao;
+  }
+  let comprometido = 0;
+  for (const x of (Array.isArray(data && data.saques) ? data.saques : [])) {
+    if (x && String(x.user_id) === meu && ['pendente', 'aprovado', 'pago'].includes(String(x.status || ''))) comprometido += Number(x.valor) || 0;
+  }
+  let quitado = 0;
+  for (const x of (Array.isArray(data && data.lancamentos) ? data.lancamentos : [])) {
+    if (!x || String(x.tipo || '') !== 'pagamento_equipe' || String(x.at || '') !== meu || x.saque_id) continue;
+    if (!['salario', 'comissoes'].includes(semAcento(x.categoria))) continue;
+    quitado += Number(x.valor) || 0;
+  }
+  return Math.round((ganho - comprometido - quitado) * 100) / 100;
+}
 async function handleSaqueCreate(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -6798,6 +6845,17 @@ async function handleSaqueCreate(req, env) {
   if (data.saques.some((s) => String(s.user_id) === String(u.id) && (s.status === 'pendente' || s.status === 'aprovado'))) {
     return err('Você já tem um saque aguardando decisão', 409);
   }
+  // O PEDIDO NASCE COM O SALDO QUE O SERVIDOR ENXERGA (item 23/11). NAO recusa por valor nem por cargo
+  // (decisao do Bruno: so marcar, quem paga confirma na tela); a marca viaja no proprio saque e no aviso.
+  let _saldo = null;
+  try {
+    const _uRow = await env.DB.prepare('SELECT id, role, com_pct, com_ant, com_ent, afiliado_id FROM users WHERE id=?').bind(String(u.id)).first();
+    const _mundoS = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '') : '';
+    let _pctAfl = 0;
+    if (_mundoS) { try { const _ra = await env.DB.prepare('SELECT COALESCE(pct,0) pct FROM five_affiliates WHERE affiliate_id=?').bind(_mundoS).first(); _pctAfl = Number(_ra && _ra.pct) || 0; } catch (_) {} }
+    _saldo = _saldoComissao(data, _uRow || u, _mundoS, _pctAfl);
+  } catch (_) { _saldo = null; }
+  const _acima = _saldo != null && valor > _saldo + 0.01;
   const nowSec = Math.floor(Date.now() / 1000);
   const nome = String(u.name || u.login || u.id);
   const nextId = data.saques.reduce((m, s) => Math.max(m, Number(s.id) || 0), 0) + 1;
@@ -6809,6 +6867,7 @@ async function handleSaqueCreate(req, env) {
     valor,
     status: 'pendente',
     obs,
+    saldo_servidor: _saldo, acima_do_saldo: _acima,   // item 23/11: a tela de Pagamentos avisa e pede confirmacao
     solicitado_em: nowSec,
     aprovado_por: null, aprovado_em: null, pago_em: null, pago_por: null,
   };
@@ -6830,7 +6889,7 @@ async function handleSaqueCreate(req, env) {
     id: nextNotif,
     type: 'saque',
     title: 'Solicitação de saque',
-    description: `${nome} solicitou saque de ${valorTxt}`,
+    description: `${nome} solicitou saque de ${valorTxt}` + (_acima ? ' (acima do saldo)' : ''),
     to: destino,
     from_id: String(u.id),
     unread: true,
@@ -12377,84 +12436,13 @@ async function _waFunnelStop(env, phone, why) {
   // linha ainda e dele e sai fora). 'fila' e o disparo que ainda nem comecou - "tirar da fila".
   try { await env.DB.prepare("UPDATE wa_funnel_run SET status=?, updated_at=strftime('%s','now') WHERE phone=? AND status IN ('running','enviando','fila')" + cond).bind(why || 'stopped', fone).run(); } catch (_) {}
 }
-async function _waFunnelTick(env) {
-  try {
-    await _scEnsureTables(env);
-    const now = Math.floor(Date.now() / 1000);
-    // ── DESTRAVA QUEM FICOU PRESO EM 'enviando' (23/09/2026) ────────────────
-    //
-    // TEM QUE SER AQUI, EM TODA BATIDA. Esta UPDATE existia, e certa, mas morava no fundo do
-    // _cronPurga: dentro do passo 'manutencao' do rodizio, dentro do `volta === 3` de uma segunda
-    // rotacao, e tudo isso dentro da trava de reentrancia do cron - que pula a maioria das batidas
-    // porque a batida leva de 100 a 260s. Na teoria rodava de 40 em 40 minutos; na pratica, menos.
-    //
-    // Isso nao e detalhe por causa da PILHA logo abaixo: um funil por vendedor por vez. Uma unica
-    // linha orfa em 'enviando' deixa o at_id dentro do `_ocup` e SEGURA A FILA INTEIRA daquele
-    // vendedor. Foi o que aconteceu em 23/09/2026: o Guilherme ficou com 11 disparos parados no
-    // passo 0 por causa de UMA conversa cujos dois passos ja tinham saido, mas que nao gravou
-    // 'done' porque a invocacao morreu num deploy. Os funis do `dir` continuaram saindo normalmente,
-    // entao pela metrica global nada parecia errado.
-    //
-    // Vira 'error' e NAO 'running', de proposito: reenviar sozinho um passo que TALVEZ tenha saido e
-    // mandar o mesmo audio duas vezes pro cliente. Errar pra menos, nunca pra mais - o vendedor ve o
-    // erro e retoma na mao se quiser. O que muda e o prazo: 10 minutos, sempre, em vez de "ate a
-    // manutencao dar a sorte de rodar".
-    try {
-      const _solto = await env.DB.prepare(
-        "UPDATE wa_funnel_run SET status='error', updated_at=? WHERE status='enviando' AND updated_at < ?"
-      ).bind(now, now - 600).run().catch(() => null);
-      const _n = (_solto && _solto.meta && _solto.meta.changes) || 0;
-      if (_n) console.log('WA_FUNIL_DESTRAVOU ' + _n + ' linha(s) presa(s) em enviando ha mais de 10min');
-    } catch (_) {}
-    // ── A PILHA ANDA AQUI (17/09/2026) ──────────────────────────────────────
-    // Disparo manual entra como 'fila' (ver _waFunnelIniciar). Vendedor que nao tem funil andando
-    // pega o mais antigo da fila DELE e ele vira 'running' com a hora de agora - ou seja, sai nesta
-    // mesma batida, logo abaixo. Um por vendedor por vez: e o que o Bruno chama de pilha.
-    try {
-      const _ocup = new Set();
-      const _at = await env.DB.prepare("SELECT DISTINCT at_id FROM wa_funnel_run WHERE status IN ('running','enviando')").all();
-      for (const x of ((_at && _at.results) || [])) _ocup.add(String(x.at_id || ''));
-      const _fila = await env.DB.prepare("SELECT phone, at_id FROM wa_funnel_run WHERE status='fila' ORDER BY iniciado_em ASC, updated_at ASC LIMIT 20").all();
-      for (const f of ((_fila && _fila.results) || [])) {
-        const dono = String(f.at_id || '');
-        if (_ocup.has(dono)) continue;   // este vendedor ainda esta enviando: o proximo espera
-        const up = await env.DB.prepare("UPDATE wa_funnel_run SET status='running', next_at=?, updated_at=? WHERE phone=? AND status='fila'").bind(now, now, f.phone).run().catch(() => null);
-        if (up && up.meta && up.meta.changes) { _ocup.add(dono); console.log('WA_FUNIL_PILHA_ANDOU at=' + dono + ' fone=' + String(f.phone)); }
-      }
-    } catch (_) {}
-    // LIMIT 12 DESDE QUE AS LINHAS ANDAM JUNTAS (28/09/2026). Era 5, e o motivo estava certo pra
-
-    // quando o laco era em fila: cada linha dorme a sequencia dela, entao pegar muitas de uma vez
-
-    // fazia a batida arrastar. Agora que elas rodam em paralelo o custo de tempo e o da MAIS LENTA,
-
-    // nao a soma, e 12 cabe folgado. O teto continua existindo de proposito: sem ele, uma fila
-
-    // acumulada viraria uma rajada de envios do mesmo chip, que e o que queima numero.
-    // `inst_agora` = o numero em que a conversa esta AGORA (wa_chats segue o ultimo inbound). Vem
-    // junto pra dar pra ver, sem consulta extra, se o lead voltou por outro numero no meio do funil.
-    const due = await env.DB.prepare("SELECT f.phone, f.at_id, f.seq_id, f.items, f.idx, COALESCE(f.tentativas,0) tentativas, COALESCE(f.parar_resp,0) parar_resp, f.iniciado_em, f.next_at, f.inst, c.instance inst_agora FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone WHERE f.status='running' AND f.next_at <= ? ORDER BY f.next_at ASC LIMIT 12").bind(now).all();
-    const seqCache = {};
-    const chipCache = {};   // instancia -> numero oficial (resolve 1x, vale pra todos os passos dela)
-    // ── AS CONVERSAS ANDAM JUNTAS, NAO EM FILA (28/09/2026) ───────────────
-    //
-    // Aqui era um `for` com `await` dentro: as 5 linhas eram trabalhadas UMA DE CADA VEZ, e cada
-    // uma dorme a sequencia inteira dela antes de a proxima comecar. Como o encadeamento manda a
-    // sequencia toda de uma vez, uma linha segura a invocacao por 10 a 35 segundos - e a quinta
-    // conversa so comecava depois de mais de dois minutos.
-    //
-    // MEDIDO EM 27/09, com o Guilherme reclamando que "os funis nao sao enviados": as sequencias
-    // dele tem pausa de 3 a 4 segundos no primeiro passo, ou seja a primeira mensagem DEVERIA sair
-    // quase na hora. Dos 274 funis do dia, so 58 sairam em ate 30 segundos. A mediana foi de 177
-    // segundos, o p90 de 632 e o pior caso de 18 minutos. Nao era a pausa configurada nem o ritmo
-    // do cron: era esta fila.
-    //
-    // Rodar junto e seguro pelo mesmo desenho que ja protegia o `for`: cada linha so e trabalhada
-    // depois de uma reserva que e um UPDATE condicionado ao estado exato lido, entao duas
-    // invocacoes nunca mandam o mesmo passo duas vezes (ver a memoria funil-passo-repetido-reserva).
-    // E o ritmo que o cliente sente NAO MUDA: a pausa de cada passo continua igual, dentro da
-    // conversa dela. O que deixa de existir e uma conversa esperando a outra terminar.
-    await Promise.all((due.results || []).map(async (r) => {
+// UMA LINHA DO FUNIL, do jeito que o laco do _waFunnelTick sempre fez (12/10/2026, auditoria item
+// 27): reserva, pausa, envio, encadeamento ate 100 s e liberacao no fim. O corpo e o MESMO que
+// vivia dentro do map (movido, nao reescrito); so ganhou um retorno: o status final da linha no
+// banco, que e o que diz ao encadeamento da pilha se pode promover o proximo da fila.
+const _FUNIL_TERMINAIS = new Set(['done', 'error', 'lead_respondeu', 'migrou']);
+async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
+  await (async () => {
       // ── RESERVA A LINHA ANTES DE TRABALHAR ────────────────────────────────
       // O cron bate de minuto em minuto e um passo pode DORMIR mais que isso (a pausa que o Bruno
       // configura, ate 70s, mais o encadeamento). Enquanto dormia, a linha continuava 'running' com
@@ -12550,7 +12538,7 @@ async function _waFunnelTick(env) {
         if (Number(r.parar_resp) === 1) {
           let resp2 = null;
           try { resp2 = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? LIMIT 1").bind(String(r.phone), Number(r.iniciado_em) || 0).first(); } catch (_) {}
-          if (resp2) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=?").bind(Math.floor(Date.now() / 1000), r.phone).run(); break; }
+          if (resp2) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=? AND status='enviando'").bind(Math.floor(Date.now() / 1000), r.phone).run(); break; }
         }
         const p2 = items[i2];
         const pa2 = _pausaDoPasso(p2);
@@ -12560,7 +12548,7 @@ async function _waFunnelTick(env) {
         const f2 = !!(s2 && s2.ok === false);
         if (f2 && s2.code !== 'no_item') {
           console.error('WA_FUNIL_PASSO_FALHOU fone=' + String(r.phone) + ' seq=' + String(r.seq_id) + ' idx=' + i2 + ' code=' + String(s2.code || ''));
-          await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=?").bind(Math.floor(Date.now() / 1000), r.phone).run();
+          await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'").bind(Math.floor(Date.now() / 1000), r.phone).run();
           break;
         }
         i2++;
@@ -12575,6 +12563,118 @@ async function _waFunnelTick(env) {
       const fim = Math.floor(Date.now() / 1000);
       await env.DB.prepare("UPDATE wa_funnel_run SET status=?, next_at=?, updated_at=? WHERE phone=? AND status='enviando'")
         .bind(i2 >= items.length ? 'done' : 'running', fim, fim, r.phone).run();
+  })();
+  try { const x = await env.DB.prepare('SELECT status FROM wa_funnel_run WHERE phone=?').bind(r.phone).first(); return x ? String(x.status || '') : ''; } catch (_) { return ''; }
+}
+// O PROXIMO DA FILA DESTE VENDEDOR, promovido num UPDATE so (item 27): a subconsulta escolhe o mais
+// antigo em 'fila', e o NOT EXISTS garante que nao ha outro dele em running/enviando - duas
+// invocacoes nunca promovem duas linhas do mesmo at_id. Devolve a linha no formato do `due`.
+async function _waFunnelProximoDaFila(env, atId, now) {
+  if (!atId) return null;
+  try {
+    const up = await env.DB.prepare(
+      "UPDATE wa_funnel_run SET status='running', next_at=?, updated_at=? WHERE phone=(SELECT phone FROM wa_funnel_run WHERE at_id=? AND status='fila' ORDER BY iniciado_em ASC, updated_at ASC LIMIT 1) AND status='fila' AND NOT EXISTS (SELECT 1 FROM wa_funnel_run WHERE at_id=? AND status IN ('running','enviando')) RETURNING phone, at_id, seq_id, items, idx, COALESCE(tentativas,0) tentativas, COALESCE(parar_resp,0) parar_resp, iniciado_em, next_at, inst"
+    ).bind(now, now, atId, atId).first();
+    if (!up || !up.phone) return null;
+    let instAgora = '';
+    try { const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(up.phone).first(); instAgora = String((c && c.instance) || ''); } catch (_) {}
+    console.log('WA_FUNIL_PILHA_ENCADEOU at=' + atId + ' fone=' + String(up.phone));
+    return { ...up, inst_agora: instAgora };
+  } catch (_) { return null; }
+}
+async function _waFunnelTick(env) {
+  try {
+    await _scEnsureTables(env);
+    const now = Math.floor(Date.now() / 1000);
+    // ── DESTRAVA QUEM FICOU PRESO EM 'enviando' (23/09/2026) ────────────────
+    //
+    // TEM QUE SER AQUI, EM TODA BATIDA. Esta UPDATE existia, e certa, mas morava no fundo do
+    // _cronPurga: dentro do passo 'manutencao' do rodizio, dentro do `volta === 3` de uma segunda
+    // rotacao, e tudo isso dentro da trava de reentrancia do cron - que pula a maioria das batidas
+    // porque a batida leva de 100 a 260s. Na teoria rodava de 40 em 40 minutos; na pratica, menos.
+    //
+    // Isso nao e detalhe por causa da PILHA logo abaixo: um funil por vendedor por vez. Uma unica
+    // linha orfa em 'enviando' deixa o at_id dentro do `_ocup` e SEGURA A FILA INTEIRA daquele
+    // vendedor. Foi o que aconteceu em 23/09/2026: o Guilherme ficou com 11 disparos parados no
+    // passo 0 por causa de UMA conversa cujos dois passos ja tinham saido, mas que nao gravou
+    // 'done' porque a invocacao morreu num deploy. Os funis do `dir` continuaram saindo normalmente,
+    // entao pela metrica global nada parecia errado.
+    //
+    // Vira 'error' e NAO 'running', de proposito: reenviar sozinho um passo que TALVEZ tenha saido e
+    // mandar o mesmo audio duas vezes pro cliente. Errar pra menos, nunca pra mais - o vendedor ve o
+    // erro e retoma na mao se quiser. O que muda e o prazo: 10 minutos, sempre, em vez de "ate a
+    // manutencao dar a sorte de rodar".
+    try {
+      const _solto = await env.DB.prepare(
+        "UPDATE wa_funnel_run SET status='error', updated_at=? WHERE status='enviando' AND updated_at < ?"
+      ).bind(now, now - 600).run().catch(() => null);
+      const _n = (_solto && _solto.meta && _solto.meta.changes) || 0;
+      if (_n) console.log('WA_FUNIL_DESTRAVOU ' + _n + ' linha(s) presa(s) em enviando ha mais de 10min');
+    } catch (_) {}
+    // ── A PILHA ANDA AQUI (17/09/2026) ──────────────────────────────────────
+    // Disparo manual entra como 'fila' (ver _waFunnelIniciar). Vendedor que nao tem funil andando
+    // pega o mais antigo da fila DELE e ele vira 'running' com a hora de agora - ou seja, sai nesta
+    // mesma batida, logo abaixo. Um por vendedor por vez: e o que o Bruno chama de pilha.
+    try {
+      const _ocup = new Set();
+      const _at = await env.DB.prepare("SELECT DISTINCT at_id FROM wa_funnel_run WHERE status IN ('running','enviando')").all();
+      for (const x of ((_at && _at.results) || [])) _ocup.add(String(x.at_id || ''));
+      const _fila = await env.DB.prepare("SELECT phone, at_id FROM wa_funnel_run WHERE status='fila' ORDER BY iniciado_em ASC, updated_at ASC LIMIT 20").all();
+      for (const f of ((_fila && _fila.results) || [])) {
+        const dono = String(f.at_id || '');
+        if (_ocup.has(dono)) continue;   // este vendedor ainda esta enviando: o proximo espera
+        const up = await env.DB.prepare("UPDATE wa_funnel_run SET status='running', next_at=?, updated_at=? WHERE phone=? AND status='fila'").bind(now, now, f.phone).run().catch(() => null);
+        if (up && up.meta && up.meta.changes) { _ocup.add(dono); console.log('WA_FUNIL_PILHA_ANDOU at=' + dono + ' fone=' + String(f.phone)); }
+      }
+    } catch (_) {}
+    // LIMIT 12 DESDE QUE AS LINHAS ANDAM JUNTAS (28/09/2026). Era 5, e o motivo estava certo pra
+
+    // quando o laco era em fila: cada linha dorme a sequencia dela, entao pegar muitas de uma vez
+
+    // fazia a batida arrastar. Agora que elas rodam em paralelo o custo de tempo e o da MAIS LENTA,
+
+    // nao a soma, e 12 cabe folgado. O teto continua existindo de proposito: sem ele, uma fila
+
+    // acumulada viraria uma rajada de envios do mesmo chip, que e o que queima numero.
+    // `inst_agora` = o numero em que a conversa esta AGORA (wa_chats segue o ultimo inbound). Vem
+    // junto pra dar pra ver, sem consulta extra, se o lead voltou por outro numero no meio do funil.
+    const due = await env.DB.prepare("SELECT f.phone, f.at_id, f.seq_id, f.items, f.idx, COALESCE(f.tentativas,0) tentativas, COALESCE(f.parar_resp,0) parar_resp, f.iniciado_em, f.next_at, f.inst, c.instance inst_agora FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone WHERE f.status='running' AND f.next_at <= ? ORDER BY f.next_at ASC LIMIT 12").bind(now).all();
+    const seqCache = {};
+    const chipCache = {};   // instancia -> numero oficial (resolve 1x, vale pra todos os passos dela)
+    // ── AS CONVERSAS ANDAM JUNTAS, NAO EM FILA (28/09/2026) ───────────────
+    //
+    // Aqui era um `for` com `await` dentro: as 5 linhas eram trabalhadas UMA DE CADA VEZ, e cada
+    // uma dorme a sequencia inteira dela antes de a proxima comecar. Como o encadeamento manda a
+    // sequencia toda de uma vez, uma linha segura a invocacao por 10 a 35 segundos - e a quinta
+    // conversa so comecava depois de mais de dois minutos.
+    //
+    // MEDIDO EM 27/09, com o Guilherme reclamando que "os funis nao sao enviados": as sequencias
+    // dele tem pausa de 3 a 4 segundos no primeiro passo, ou seja a primeira mensagem DEVERIA sair
+    // quase na hora. Dos 274 funis do dia, so 58 sairam em ate 30 segundos. A mediana foi de 177
+    // segundos, o p90 de 632 e o pior caso de 18 minutos. Nao era a pausa configurada nem o ritmo
+    // do cron: era esta fila.
+    //
+    // Rodar junto e seguro pelo mesmo desenho que ja protegia o `for`: cada linha so e trabalhada
+    // depois de uma reserva que e um UPDATE condicionado ao estado exato lido, entao duas
+    // invocacoes nunca mandam o mesmo passo duas vezes (ver a memoria funil-passo-repetido-reserva).
+    // E o ritmo que o cliente sente NAO MUDA: a pausa de cada passo continua igual, dentro da
+    // conversa dela. O que deixa de existir e uma conversa esperando a outra terminar.
+    await Promise.all((due.results || []).map(async (r) => {
+      let _st = await _waFunnelRodaLinha(env, r, now, seqCache, chipCache);
+      // A PILHA DO VENDEDOR ANDA SEM O MINUTO MORTO (12/10/2026, auditoria item 27). Quando um funil
+      // termina (done, error, lead respondeu, migrou), o proximo da fila DELE so saia na batida
+      // seguinte do cron: medido em 03/10, mediana de 252 s entre o fim de um e o primeiro envio do
+      // outro, 59 minutos com exatamente 1 primeiro envio e nenhum com 2. Agora promove o proximo
+      // num UPDATE atomico (uma linha por vendedor, nunca duas), dorme 3 s e roda ele nesta mesma
+      // invocacao, ate 4 por vendedor por batida. A cadeia pode segurar a invocacao alguns minutos
+      // e atrasar o sync do inbox DESTA batida; as seguintes cobrem (ver a trava propria do sync).
+      for (let _n = 0; _n < 4 && _FUNIL_TERMINAIS.has(String(_st || '')); _n++) {
+        await _dorme(3);
+        const _agora2 = Math.floor(Date.now() / 1000);
+        const _prox = await _waFunnelProximoDaFila(env, String(r.at_id || ''), _agora2);
+        if (!_prox) break;
+        _st = await _waFunnelRodaLinha(env, _prox, _agora2, seqCache, chipCache);
+      }
     }));
   } catch (_) {}
 }
@@ -12713,9 +12813,12 @@ async function handleWAFunnelQueue(req, env) {
   const dono = isDirector(u) ? (_atPedido || null) : String(u.id);
   const sql = "SELECT f.phone, f.at_id, f.seq_id, f.idx, f.items, f.status, f.next_at, c.name nome"
     + " FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone"
-    + " WHERE f.status IN ('running','enviando','fila')" + (dono ? " AND f.at_id = ?" : "")
+    + " WHERE (f.status IN ('running','enviando','fila') OR (f.status IN ('error','migrou') AND f.updated_at > ?))" + (dono ? " AND f.at_id = ?" : "")
     + " ORDER BY f.status DESC, f.next_at ASC LIMIT 30";
-  const st = dono ? env.DB.prepare(sql).bind(dono) : env.DB.prepare(sql);
+  // PARADOS DAS ULTIMAS 24 H TAMBEM (12/10/2026, auditoria item 27): funil em 'error' ou 'migrou' sumia da
+  // pilha e o vendedor nao sabia que parou nem tinha como retomar. Vem com `parado: true`.
+  const _desde24 = Math.floor(Date.now() / 1000) - 86400;
+  const st = dono ? env.DB.prepare(sql).bind(_desde24, dono) : env.DB.prepare(sql).bind(_desde24);
   const rs = await st.all().catch(() => null);
   const linhas = (rs && rs.results) || [];
   const cache = {};
@@ -12738,7 +12841,8 @@ async function handleWAFunnelQueue(req, env) {
       const ms = (info.msgs || []).find((x) => x && x.id === pid);
       passoLbl = String((md && md.label) || (ms && ms.label) || '');
     }
-    if (!enviando) naFila++;
+    const parado = r.status === 'error' || r.status === 'migrou';
+    if (!enviando && !parado) naFila++;
     runs.push({
       phone: r.phone,
       nome: r.nome || '',
@@ -12749,7 +12853,8 @@ async function handleWAFunnelQueue(req, env) {
       idx, total: itens.length,
       status: r.status,
       enviando,
-      fila: enviando ? 0 : naFila,   // quantos na frente (o proprio incluido), pra "Na fila · N na frente"
+      parado,
+      fila: (enviando || parado) ? 0 : naFila,   // quantos na frente (o proprio incluido), pra "Na fila · N na frente"
       passo: passoLbl,
     });
   }
@@ -12778,6 +12883,15 @@ async function handleWAFunnel(req, env) {
   const phone = String(b.phone || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   if (b.action === 'stop') { await _waFunnelStop(env, phone, 'stopped'); return json({ ok: true }); }
+  // RETOMAR UM FUNIL PARADO (12/10/2026, auditoria item 27): volta pra 'running' no MESMO passo (o idx
+  // fica), tentativas zeradas; so a linha do proprio vendedor (diretor: qualquer). Sai na batida seguinte.
+  if (b.action === 'resume') {
+    const _agoraR = Math.floor(Date.now() / 1000);
+    const _r = await env.DB.prepare("UPDATE wa_funnel_run SET status='running', next_at=?, tentativas=0, updated_at=? WHERE phone=? AND status IN ('error','migrou')" + (isDirector(u) ? '' : ' AND at_id=?'))
+      .bind(...[_agoraR, _agoraR, phone].concat(isDirector(u) ? [] : [String(u.id)])).run().catch(() => null);
+    const _ok = !!(_r && _r.meta && _r.meta.changes);
+    return _ok ? json({ ok: true, retomado: phone }) : json({ ok: false, error: 'Nenhum funil parado pra retomar' }, 404);
+  }
   const atId = (isDirector(u) && b.at_id != null) ? String(b.at_id) : String(u.id);
   const r = await _waFunnelIniciar(env, atId, phone, String(b.seq_id || ''), { fila: true });
   if (!r.ok) return json({ ok: false, error: r.error, code: r.code || null }, r.code === 'window_closed' ? 409 : 400);
@@ -14116,7 +14230,9 @@ async function _agendaTick(env) {
       // PRO CELULAR DO COBRADOR, alem do sino da dash. O sino e endereçado ao VENDEDOR do lead
       // (`to: quem`), e nenhum lead tem o cobrador como `at` - pedido nao tem dono de cobranca -
       // entao ele nunca recebeu nem receberia um unico aviso por esse caminho.
-      paraCobrar.push({
+      // SO QUEM ESTA NA FILA DO COBRADOR (item 30): retorno de pedido em A Enviar, Enviados, Cancelado ou
+      // de afiliado continua no sino do vendedor, mas nao toca o celular do cobrador da casa.
+      if (_wpNaFilaCobranca(l)) paraCobrar.push({
         id: l.id,
         nome: _wpQuemCobrar(l),
         hora,
@@ -14171,6 +14287,7 @@ async function _dcPoll(env, opts = {}) {
   const now = Math.floor(Date.now() / 1000);
   try { await env.DB.prepare("DELETE FROM dc_seen WHERE ts < strftime('%s','now')-172800").run(); } catch (_) {}   // poda > 2 dias
   let baixadasLM = 0;   // teto de midias copiadas pro R2 por batida (igual ao _dcSyncInbox)
+  let _scanned = 0;   // teto de 15 conversas por rodada, dividido entre a busca de codigo no historico (item 28) e a varredura de venda
   for (const c of arr) {
     try {
       const lm = c.lastMessage;
@@ -14261,6 +14378,34 @@ async function _dcPoll(env, opts = {}) {
         try { await _waFunnelAuto(env, atId, phone); } catch (_) {}
         // passa a MESMA janela do poll: aqui a mensagem já foi deduplicada por dc_seen, então o
         // teto de 15min só serviria pra descartar lead de verdade por atraso da API deles.
+        // O CODIGO PODE ESTAR NA MENSAGEM DE ANTES (12/10/2026, auditoria item 28/29.1). O poll so ve a
+        // ULTIMA mensagem: o lead manda o texto com o codigo e emenda um audio, e o lead nascia por
+        // chute do FIFO com o InitiateCheckout amarrado ao clique de OUTRA pessoa (a correcao de
+        // depois, pelo sync, nao reenvia o evento). Sem codigo nesta mensagem e sem lead exato ainda,
+        // olha as ultimas 12 da conversa na API e, achando codigo de ate 30 min, captura por ELE
+        // primeiro. Entra no mesmo teto de 15 conversas por rodada da varredura de venda.
+        if (!/desconto[^A-Za-z0-9]{0,4}[A-Za-z0-9]{4,12}/i.test(text) && _scanned < 15) {
+          try {
+            const _wl = await env.DB.prepare('SELECT ts, src FROM wa_lead WHERE phone=?').bind(phone).first();
+            if (!_wl || (String(_wl.src || '') !== 'code' && (mts - (Number(_wl.ts) || 0)) < 3600)) {
+              _scanned++;
+              const _jh = await _dcApiGet(env, '/conversations/' + encodeURIComponent(c.id) + '/messages?take=12', opts.mundo);
+              const _hm = (_jh && (_jh.data || _jh.messages || _jh)) || [];
+              let _achou = null;
+              for (const h of (Array.isArray(_hm) ? _hm : [])) {
+                if (!h || h.received !== true) continue;
+                const _hb = _dcBody(h);
+                const _hts = h.createdAt ? Math.floor(new Date(h.createdAt).getTime() / 1000) : 0;
+                if (!_hts || Math.abs(mts - _hts) > 1800) continue;
+                if (/desconto[^A-Za-z0-9]{0,4}[A-Za-z0-9]{4,12}/i.test(_hb) || _RE_COD2.test(_hb)) { _achou = { body: _hb, ts: _hts }; break; }
+              }
+              if (_achou) {
+                console.log('DC_POLL_CODIGO_HISTORICO fone=' + phone);
+                try { await _waLeadCapture(env, inst, phone, _achou.body, self, 'text', _achou.ts, janela); } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
         try { await _waLeadCapture(env, inst, phone, text, self, anexoLM ? anexoLM.tipo : 'text', mts, janela); } catch (_) {}   // 1ª msg = lead → InitiateCheckout
         try { await _dcCrmLeadIn(env, phone, name, _mundoMsg); } catch (_) {}   // cria negócio em "Lead Novo" + tag no Datacrazy (so da casa)
       } else if (isSale) {
@@ -14277,7 +14422,6 @@ async function _dcPoll(env, opts = {}) {
   // Rede de segurança da VENDA: o "Pedido Concluído" pode NÃO ser a última msg (o lead responde depois e o
   // poll só enxerga a última). Nas conversas cuja última é do LEAD, varre as mensagens e pega a venda ainda
   // não vista. Limitado a 15 conversas/rodada pra não estourar a API do Datacrazy (120 req/min).
-  let _scanned = 0;
   for (const c of arr) {
     if (_scanned >= 15) break;
     const lm = c.lastMessage;
@@ -16645,7 +16789,16 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     const _corrigindo = isUpgrade && src === 'code' && Number((exists && exists.ts) || 0) > 0
       && (Math.floor(Date.now() / 1000) - Number(exists.ts)) < 3600;
     if (_corrigindo) console.log('LEAD_CORRIGIDO fone=' + phone + ' src_antes=' + String(exists.src || '') + ' pid=' + String(pid || exists.pid || '') + ' (sem evento novo: o TikTok ja recebeu este contato)');
-    const _cliqueNovo = !_corrigindo && !!(ttclid && exists && (exists.ttclid || exists.pid) && ttclid !== (exists.ttclid || ''));
+    // CLIQUE REPETIDO NAO REDISPARA (12/10/2026, auditoria item 28/29.3). O lead que volta pro ttclid
+    // que ja tinha (vai e volta entre dois numeros, chute do FIFO corrigido pelo mesmo clique) ganhava
+    // um InitiateCheckout novo com event_id novo: 83 redisparos em 2.380 eventos, 5 com o MESMO
+    // ttclid ja enviado. tt_events (phone, stage, ttclid) diz se este contato ja foi mandado.
+    let _jaMandou = false;
+    if (ttclid && exists && ttclid !== (exists.ttclid || '')) {
+      try { _jaMandou = !!(await env.DB.prepare("SELECT 1 FROM tt_events WHERE phone=? AND stage='contato' AND ttclid=? AND COALESCE(status,'') <> 'ignorado' LIMIT 1").bind(phone, ttclid).first()); } catch (_) {}
+      if (_jaMandou) console.log('LEAD_CLIQUE_REPETIDO fone=' + phone + ' ttclid=' + String(ttclid).slice(0, 18));
+    }
+    const _cliqueNovo = !_corrigindo && !_jaMandou && !!(ttclid && exists && (exists.ttclid || exists.pid) && ttclid !== (exists.ttclid || ''));
     if (((ttclid || pid) && !(exists && (exists.ttclid || exists.pid))) || _cliqueNovo) {
       // event_id novo no redisparo, senao o TikTok deduplica e o segundo evento morre calado.
       const _evId = _cliqueNovo ? ('lead_' + phone + '_' + Math.floor(Date.now() / 1000)) : ('lead_' + phone);
@@ -18401,6 +18554,9 @@ async function _presselDayMetrics(env, day){
   try {
     const st = st0 || {};
     const leads = Array.isArray(st && st.leads) ? st.leads : [];
+    // De que mundo e cada pressel (item 28/35.1): '' = casa, 'afl_x' = afiliado.
+    const _aflPressel = {};
+    for (const p of (Array.isArray(st.pressels) ? st.pressels : [])) if (p && p.id != null) _aflPressel[String(p.id)] = String(p.afl || '');
     if (leads.length) {
       // `jaTem` agora so evita contar o MESMO pedido duas vezes. Antes ele nascia com os telefones
       // da wa_sales pra nao duplicar entre as duas fontes; como a wa_sales nao conta mais, semear
@@ -18442,9 +18598,17 @@ async function _presselDayMetrics(env, day){
         const _atPed = String((l && l.at) || '');
         if (_atPed && _atFromInst(inst) !== _atPed && _atFromInst('ax_' + _atPed) === _atPed) inst = 'ax_' + _atPed;
         const val = Number((l && (l.valor_neg || l.vl)) || 0);
-        m.vendas[pid] = (m.vendas[pid] || 0) + 1;
-        m.valor[pid] = (m.valor[pid] || 0) + val;
-        (m.vendasVI[pid] = m.vendasVI[pid] || {})[inst] = (m.vendasVI[pid][inst] || 0) + 1;
+        // PEDIDO DE UM MUNDO, PRESSEL DE OUTRO (12/10/2026, auditoria item 28/35.1): o cliente que falou
+        // com as duas operacoes tem UM wa_lead so, e a venda da CASA caia na pressel do afiliado (3
+        // pedidos nas pressels 6 e 11 em setembro). Nos mapas POR PRESSEL ela sai; no total por
+        // vendedor (vendasInst) continua, porque a venda e real e e do vendedor da casa.
+        const _mundoPed = String((l && l.afl) || '');
+        const _porPressel = (_aflPressel[pid] === undefined) || (_aflPressel[pid] === _mundoPed);
+        if (_porPressel) {
+          m.vendas[pid] = (m.vendas[pid] || 0) + 1;
+          m.valor[pid] = (m.valor[pid] || 0) + val;
+          (m.vendasVI[pid] = m.vendasVI[pid] || {})[inst] = (m.vendasVI[pid][inst] || 0) + 1;
+        }
         // VENDA TAMBEM POR NUMERO (24/09/2026). O Bruno abriu o detalhe por numero e cobrou a
         // coluna de conversao: "conversao e sobre as vendas, quantos por cento dos que chegaram
         // viraram compradores". Ele tem razao, e da pra responder: a venda ja foi casada com o
@@ -18457,8 +18621,10 @@ async function _presselDayMetrics(env, day){
         // dono do numero do lead, e nesses casos o numero aparece na linha de quem cadastrou -
         // que e o certo: a venda e dele, o lead e que entrou por outro numero.
         const _k8v = (/_(\d{8})$/.exec(String(v.inst || '')) || [])[1] || String(v.num || '').replace(/\D/g, '').slice(-8) || '';
-        const _vn = (m.vendasVN[pid] = m.vendasVN[pid] || {}); const _vni = (_vn[inst] = _vn[inst] || {});
-        _vni[_k8v] = (_vni[_k8v] || 0) + 1;
+        if (_porPressel) {
+          const _vn = (m.vendasVN[pid] = m.vendasVN[pid] || {}); const _vni = (_vn[inst] = _vn[inst] || {});
+          _vni[_k8v] = (_vni[_k8v] || 0) + 1;
+        }
         const ai = m.vendasInst[inst] || (m.vendasInst[inst] = { v: 0, val: 0 });
         ai.v += 1; ai.val += val;
       }
@@ -18519,14 +18685,13 @@ async function handlePresselMetricsPage(req, env, id){
   // continuavam na tabela por vendedor mesmo com as pressels ja filtradas. Agora, quando ha recorte
   // ativo (_idsPag na pagina, _idsOk no JSON), so entram os nomes do mundo de quem pediu.
   try{
-    const _cortaNome = (typeof _idsPag !== 'undefined' ? _idsPag : (typeof _idsOk !== 'undefined' ? _idsOk : null)) !== null;
-    const _uNome = _cortaNome ? await authUser(req, env).catch(() => null) : null;
-    const _aflNome = _uNome ? aflDe(_uNome) : null;
+    // SO OS NOMES DO MUNDO DA PRESSEL (12/10/2026, auditoria item 28/seg-9). O bloco antigo testava
+    // `typeof _idsPag`/`_idsOk`, variaveis que nao existem neste escopo: o corte era SEMPRE falso e a
+    // pagina publica listava vendedor da OUTRA operacao (9 linhas no /m/6). A pressel diz de que
+    // mundo ela e (p.afl); nao depende de sessao, que esta pagina nao tem.
+    const _mundoP = String(p.afl || '');
     const us=await env.DB.prepare('SELECT id, name, afiliado_id FROM users').all();
-    (us.results||[]).forEach(u=>{
-      if (_cortaNome && String(u.afiliado_id||'') !== String(_aflNome||'\u0000')) return;
-      nameMap[String(u.id)]=u.name;
-    });
+    (us.results||[]).forEach(u=>{ if (String(u.afiliado_id||'') !== _mundoP) return; nameMap[String(u.id)]=u.name; });
   }catch(_){}
   // vendedores da roleta AGORA + qualquer um com atividade hoje nesta pressel (mesmo já tirado da roleta) — o dado não some
   const _vAt=(inst)=>_atFromInst(inst);
@@ -22050,6 +22215,22 @@ async function _wpAvisarHoraDeCobrar(env, itens, st) {
 // nasce paga nunca esteve na fila, e avisar ele disso seria o aviso de venda com outro nome, que e
 // exatamente o que o Bruno nao quer. O sinal e o historico do card: ele passou por Cobranca,
 // Entregues ou Retirada em algum momento.
+// NA FILA DO COBRADOR AGORA (12/10/2026, auditoria item 30). So pedido DA CASA que esta em Entregues
+// ou Retirar nos Correios (pelo mapa LITERAL de apelidos do front, crm-leads COL_ALIAS: Entregue,
+// Cobranca e Inadimplencia(s) sao Entregues; Retirada e Retirar nos Correios) e que ainda nao pagou.
+// E o que decide se o retorno agendado vira push pro cobrador: medido em 14 dias, 12 dos 23 pushes
+// eram de pedido em A Enviar, Enviados ou Cancelado, e 2 eram de lead de afiliado.
+const _WP_COL_ALIAS = { 'Retirada': 'Retirar nos Correios', 'Entregue': 'Entregues', 'Cobrança': 'Entregues', 'Inadimplência': 'Entregues', 'Inadimplências': 'Entregues' };
+const _wpNaFilaCobranca = (l) => {
+  if (!l || l.afl) return false;
+  const col0 = String(l.col || '').trim();
+  const col = _WP_COL_ALIAS[col0] || col0;
+  if (col !== 'Entregues' && col !== 'Retirar nos Correios') return false;
+  if (String(l.spg || '') === 'Pago') return false;
+  const alvo = _wpValor(l);
+  const pago = (Array.isArray(l.pagamentos) ? l.pagamentos : []).reduce((t, p) => t + (Number(p && p.valor) || 0), 0);
+  return !(alvo > 0 && pago >= alvo);
+};
 const _wpEraCobranca = (l) => {
   if (!l) return false;
   if (/cobran|entregue|retirar|inadimpl/i.test(String(l.col_plat || ''))) return true;
@@ -22089,7 +22270,9 @@ const _WP_ETAPAS = {
 // Engole erro: aviso nao pode derrubar o ACK do postback (ver o comentario do _wpAvisarVendaNova).
 async function _wpAvisarEtapa(env, itens, st) {
   try {
-    const lista = (itens || []).filter((x) => x && _WP_ETAPAS[x.etapa]);
+    // SO PEDIDO DA CASA (12/10/2026, auditoria item 30): o cobrador da casa recebia a etapa do pedido do
+    // afiliado (4 de 88 reservas em 06/10), que nao e dele pra cobrar.
+    const lista = (itens || []).filter((x) => x && !x.afl && _WP_ETAPAS[x.etapa]);
     if (!lista.length) return;
     await _ensurePushTables(env);
     const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs').first().catch(() => null);
@@ -22149,7 +22332,8 @@ async function _wpAvisarLead(env, l, apoio) {
 
   // O COBRADOR RECEBE QUE A COBRANCA DELE ENTROU. Nao e o aviso de venda com outro rotulo: nao fala
   // em comissao (ele tem salario fixo) nem em faturamento, e so sai pro pedido que passou pela fila.
-  if (apoio.cobradoresDaCasa && apoio.cobradoresDaCasa.length && _wpEraCobranca(l)) {
+  // E so da CASA (item 30): a cobranca do mundo do afiliado nao e do nosso cobrador.
+  if (!doAfiliado && apoio.cobradoresDaCasa && apoio.cobradoresDaCasa.length && _wpEraCobranca(l)) {
     for (const id of apoio.cobradoresDaCasa) {
       await _wpParaPessoa(env, id, {
         title: 'Cobrança recebida',
