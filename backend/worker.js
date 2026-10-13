@@ -5138,7 +5138,8 @@ async function handleGetState(req, env) {
       });
     }
   } catch (_) {}
-  return json({ data: { ..._vis, team, ...(conexoes ? { conexoes } : {}), ...(_vendoComo ? { __como: _vendoComo } : {}) }, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION, ...(blob ? { blob } : {}) });
+  // os links de comprovante saem ASSINADOS (item 37); o resto e o json() de sempre
+  return jsonAssinado(env, { data: { ..._vis, team, ...(conexoes ? { conexoes } : {}), ...(_vendoComo ? { __como: _vendoComo } : {}) }, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION, ...(blob ? { blob } : {}) });
 }
 
 // Pedido de plataforma (Five/PayLog) que ainda nao tem `col_plat`: a coluna em que ele esta ANTES
@@ -5649,13 +5650,27 @@ async function handleSetAgend(req, env, leadId) {
 
 // Edita vários campos de UM lead (cirúrgico, whitelist, só diretor). CAS (WHERE version=?) num loop
 // pra NÃO sobrescrever writes concorrentes dos webhooks (evita o incidente da aba antiga).
+// UM COMENTARIO QUE ENTRA PELO PATCH (12/10/2026, auditoria item 15): so os campos que a tela usa,
+// com teto. `who` e quem esta logado quando a tela nao diz; `time` vem da tela (DD/MM HH:MM, o
+// formato do Kanban) ou e agora.
+function _comentarioLimpo(c, u) {
+  const sx = (v, n) => String(v == null ? '' : v).slice(0, n);
+  const out = { who: sx((c && c.who) || (u && u.id), 80), tx: sx(c && c.tx, 4000), time: sx((c && c.time) || (todayBR().slice(0, 5) + ' ' + nowTimeBR().slice(0, 5)), 24) };
+  if (c && c.kind) out.kind = sx(c.kind, 20);
+  if (c && c.url) out.url = sx(c.url, 300);
+  if (c && c.mime) out.mime = sx(c.mime, 60);
+  if (c && c.file_name) out.file_name = sx(c.file_name, 80);
+  if (c && c.editado) out.editado = true;
+  return out;
+}
 async function handleUpdateLead(req, env, leadId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   const dir = isDirector(u);
   // cobrador gerencia a cobrança (reagendar, marcar pago, mover etapa), mas NÃO reatribui/valor/comissão
   const canManage = dir || String(u.role || '').toLowerCase() === 'cobrador';
-  const body = await req.json().catch(() => ({}));
+  let body = {};
+  try { body = JSON.parse(_arqLimpaJson(await req.text())); } catch (_) { body = {}; }   // link assinado nunca e gravado (item 37)
   const patch = (body && typeof body.patch === 'object' && body.patch) ? body.patch : (body || {});
   // campos livres (qualquer usuário logado). spg/col/agend -> diretor ou cobrador; at/vl/com_pct -> só diretor.
   // comprovante_url/mime entram aqui: sao do PEDIDO (o arquivo que prova a venda COD), e ficavam de
@@ -5688,6 +5703,15 @@ async function handleUpdateLead(req, env, leadId) {
     // cobranca (agend) e limpo junto (pedido do Bruno, 11/09/2026). Nao mexe se o proprio patch ja
     // traz `agend` (ai quem decidiu a data foi ele).
     const _eraPagoUp = String(lead.spg || '') === 'Pago' || ['Pago', 'Pagos'].includes(String(lead.col || ''));
+    // O PEDIDO MUDOU DESDE QUE VOCE ABRIU (12/10/2026, auditoria item 15). A tela manda em `antes` a
+    // etapa e o pagamento que ela viu ao abrir o pedido; se o banco ja esta diferente (outra aba
+    // marcou pago, o webhook moveu a coluna), recusa com 409 e a tela recarrega em vez de gravar
+    // por cima. Chamador que nao manda `antes` segue como sempre.
+    if (patch.antes && typeof patch.antes === 'object') {
+      const _a = patch.antes;
+      const _mudou = ('spg' in _a && String(_a.spg || '') !== String(lead.spg || '')) || ('col' in _a && String(_a.col || '') !== String(lead.col || ''));
+      if (_mudou) return json({ ok: false, error: 'O pedido mudou desde que você abriu. Recarregue e tente de novo.', mudou: true, spg: String(lead.spg || ''), col: String(lead.col || '') }, 409);
+    }
     // GATE DE MUNDO, NO TOPO (auditoria 24/08/2026). O handleMoveLead ja tinha; aqui faltava, e
     // `tags` e `comments` eram gravados FORA do bloco de dono - entao qualquer autenticado
     // reescrevia etiqueta e comentario de QUALQUER pedido nosso.
@@ -5868,6 +5892,25 @@ async function handleUpdateLead(req, env, leadId) {
       lead.tags = t.length ? patch.tags.filter((x) => t.some((y) => y.id === x)) : patch.tags;
     }
     if (Array.isArray(patch.comments)) lead.comments = patch.comments;
+    // COMENTARIO COMO OPERACAO (12/10/2026, auditoria item 15). A tela mandava a LISTA inteira em todo
+    // salvamento, entao duas abas no mesmo pedido se apagavam (quem salvasse por ultimo levava a
+    // lista velha). Agora ela manda so o que fez: comment_add (entra no topo), comment_set {time,
+    // who, tx} e comment_del {time, who}, que so mexem na linha com o MESMO carimbo. A lista inteira
+    // (chamador antigo) continua aceita, logo acima.
+    if (patch.comment_add && typeof patch.comment_add === 'object') {
+      if (!Array.isArray(lead.comments)) lead.comments = [];
+      lead.comments.unshift(_comentarioLimpo(patch.comment_add, u));
+      lead.comments = lead.comments.slice(0, 200);
+    }
+    if (patch.comment_set && typeof patch.comment_set === 'object' && Array.isArray(lead.comments)) {
+      const _cs = patch.comment_set;
+      const _i = lead.comments.findIndex((c) => c && String(c.time || '') === String(_cs.time || '') && String(c.who || '') === String(_cs.who || ''));
+      if (_i >= 0) lead.comments[_i] = { ...lead.comments[_i], tx: String(_cs.tx == null ? '' : _cs.tx).slice(0, 4000), editado: true };
+    }
+    if (patch.comment_del && typeof patch.comment_del === 'object' && Array.isArray(lead.comments)) {
+      const _cd = patch.comment_del;
+      lead.comments = lead.comments.filter((c) => !(c && String(c.time || '') === String(_cd.time || '') && String(c.who || '') === String(_cd.who || '')));
+    }
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
@@ -7333,7 +7376,11 @@ async function handleCsCards(req, env) {
 async function handlePostState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const body = await req.json().catch(() => null);
+  // LINK ASSINADO NUNCA E GRAVADO (item 37): a tela devolve o estado inteiro, com os links que recebeu
+  // assinados; a assinatura sai do texto antes de virar objeto, senao o blob cresceria e o link
+  // venceria dentro do banco.
+  let body = null;
+  try { body = JSON.parse(_arqLimpaJson(await req.text())); } catch (_) { body = null; }
   if (!body || typeof body.data !== 'object') return err('Body inválido — esperado { data, base_version? }');
 
   // ── TRAVA 1: gate de versão ────────────────────────────────────────────
@@ -7451,7 +7498,8 @@ async function handlePostState(req, env) {
 async function handlePedidoNovo(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const body = await req.json().catch(() => null);
+  let body = null;
+  try { body = JSON.parse(_arqLimpaJson(await req.text())); } catch (_) { body = null; }   // link assinado nunca e gravado (item 37)
   const lead = body && body.lead;
   if (!lead || typeof lead !== 'object' || Array.isArray(lead) || lead.id == null || lead.__como) return err('Pedido inválido', 400);
   if (JSON.stringify(lead).length > 60000) return err('Pedido grande demais', 400);
@@ -14899,9 +14947,74 @@ async function handleComprovanteUpload(req, env) {
   }
   if (!tam) return err('Arquivo vazio');
   const origem = new URL(req.url).origin;
-  return json({ ok: true, url: origem + '/api/arquivo/' + encodeURIComponent(key), key, mime, tam });
+  return jsonAssinado(env, { ok: true, url: origem + '/api/arquivo/' + encodeURIComponent(key), key, mime, tam });   // (item 37) a tela ja recebe o link assinado
 }
 
+// ── LINK ASSINADO DO COMPROVANTE (12/10/2026, auditoria item 37) ─────────────────────────────
+// /api/arquivo/comprovante%2F... (comprovante do pedido, print no comentario, foto da entrega) era
+// publico: quem tivesse o link abria sem login, pra sempre - 648 links no estado (433 videos, 123
+// fotos, 56 audios). Agora o GET exige ?exp=<unix>&sig=<hmac> (8 dias) e o worker ASSINA na saida
+// (GET /api/state, lead da conversa, resposta do upload) e LIMPA na entrada (POST /api/state, PATCH
+// do pedido, pedido novo): o link assinado nunca e persistido, o blob nao cresce e nenhum link
+// "vence dentro do banco". m/, m/wa e m/dc continuam publicos (a Meta e o injetor puxam por link
+// cru). Interruptor: app_config arquivo_sig_strict = '0' desliga a EXIGENCIA no GET (a assinatura
+// continua saindo), pra uma tela que eu nao vi nao ficar sem imagem enquanto se conserta.
+let _arqSegredo = null, _arqStrictCache = { t: 0, v: true };
+const _arqSigCache = new Map();
+async function _arqSegredoDe(env) {
+  if (_arqSegredo) return _arqSegredo;
+  let seg = await _readConfig(env, 'arquivo_sig_secret');
+  if (!seg) { seg = crypto.randomUUID() + crypto.randomUUID(); await _writeConfig(env, 'arquivo_sig_secret', seg); }
+  _arqSegredo = seg;
+  return seg;
+}
+async function _arqStrict(env) {
+  if (Date.now() - _arqStrictCache.t < 30000) return _arqStrictCache.v;
+  let v = true;
+  try { v = String((await _readConfig(env, 'arquivo_sig_strict')) || '1') !== '0'; } catch (_) {}
+  _arqStrictCache = { t: Date.now(), v };
+  return v;
+}
+// `chave` e a chave DECODIFICADA do R2 ('comprovante/<lead>/<arquivo>'); exp em segundos.
+async function _arqSig(env, chave, exp) {
+  const k = String(chave) + '|' + String(exp);
+  const c = _arqSigCache.get(k);
+  if (c) return c;
+  const seg = await _arqSegredoDe(env);
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(seg), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(k));
+  const sig = Array.from(new Uint8Array(mac)).slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
+  if (_arqSigCache.size > 5000) _arqSigCache.clear();
+  _arqSigCache.set(k, sig);
+  return sig;
+}
+// Vence num dia redondo, 8 dias a frente: o mesmo link sai igual o dia inteiro (e o cache vale).
+const _arqExp = () => (Math.floor(Date.now() / 86400000) + 8) * 86400;
+const _ARQ_RE_LIMPA = /(\/api\/arquivo\/comprovante%2F[^"'?\s\\&]+)\?exp=\d+&sig=[0-9a-f]+/g;
+const _ARQ_RE_ACHA = /\/api\/arquivo\/(comprovante%2F[^"'?\s\\&]+)/g;
+const _arqLimpaJson = (txt) => String(txt || '').replace(_ARQ_RE_LIMPA, '$1');
+async function _arqAssinaJson(env, txt) {
+  const limpo = _arqLimpaJson(txt);
+  const exp = _arqExp();
+  const sigs = new Map();
+  for (const m of limpo.matchAll(_ARQ_RE_ACHA)) {
+    const cod = m[1];
+    if (sigs.has(cod)) continue;
+    let dec = cod; try { dec = decodeURIComponent(cod); } catch (_) {}
+    sigs.set(cod, await _arqSig(env, dec, exp));
+  }
+  if (!sigs.size) return limpo;
+  return limpo.replace(_ARQ_RE_ACHA, (todo, cod) => todo + '?exp=' + exp + '&sig=' + sigs.get(cod));
+}
+// A mesma resposta do json(), com os links de comprovante assinados.
+async function jsonAssinado(env, data, status = 200) {
+  const txt = await _arqAssinaJson(env, JSON.stringify(data));
+  return new Response(txt, { status, headers: {
+    'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*',
+    'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+    'access-control-max-age': '86400', 'cache-control': 'no-store',
+  } });
+}
 async function handleSaleChatMediaGet(req, env, key) {
   if (!env.MEDIA) return err('R2 não configurado', 503);
   // O BACKUP DO ESTADO MORA NO MESMO BUCKET DA MIDIA, e esta rota e publica de proposito (o <img> e
@@ -14911,6 +15024,14 @@ async function handleSaleChatMediaGet(req, env, key) {
   // ContaSimples e os 42 chips. A chave e previsivel (backups/state-<ts>-v<versao>.json).
   // Backup nao e midia: nao sai por aqui, ponto.
   if (String(key || '').startsWith(BACKUP_PREFIX) || String(key || '').startsWith('backups/')) return err('Mídia não encontrada', 404);
+  // COMPROVANTE SO COM LINK ASSINADO E NO PRAZO (item 37; ver o bloco logo acima).
+  const _ehComprovante = String(key || '').startsWith('comprovante/');
+  if (_ehComprovante) {
+    const _q = new URL(req.url).searchParams;
+    const _exp = Number(_q.get('exp')) || 0, _sig = String(_q.get('sig') || '').toLowerCase();
+    const _ok = _exp > Math.floor(Date.now() / 1000) && !!_sig && _sig === (await _arqSig(env, String(key), _exp));
+    if (!_ok && (await _arqStrict(env))) return err('Mídia não encontrada', 404);
+  }
   try {
     // PULAR TRECHO DO AUDIO (12/09/2026, vendedor: "pego a bolinha pra ouvir so o final, ou volto no
     // meio pra ouvir o endereco de novo, e nao tem como - ou ouve ate o fim ou volta pro comeco").
@@ -14940,7 +15061,7 @@ async function handleSaleChatMediaGet(req, env, key) {
       'access-control-allow-origin': '*',
       'access-control-expose-headers': 'content-range, accept-ranges, content-length',
       'accept-ranges': 'bytes',
-      'cache-control': 'public, max-age=86400',
+      'cache-control': _ehComprovante ? 'private, max-age=86400' : 'public, max-age=86400',   // comprovante assinado nao vai pra cache compartilhado (item 37)
       'content-type': ct,
     };
     if (pedaco) {
@@ -15468,7 +15589,7 @@ async function handleWALead(req, env) {
     const p = String((l && (l.wa || l.tel || l.telefone || l.phone)) || '').replace(/\D/g, '');
     return p && p.endsWith(tail) && String((l && l.afl) || '') === _mEuL;
   }) || null;
-  return json({ ok: true, lead });
+  return jsonAssinado(env, { ok: true, lead });   // comprovante do pedido assinado (item 37)
 }
 // POST /api/wa/chat/read { phone } → zera o não-lido
 async function handleWAChatRead(req, env) {
