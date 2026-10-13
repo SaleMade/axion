@@ -1,13 +1,15 @@
 // Bot do grupo da SellWave: o WhatsApp Web do numero do bot, rodando neste PC (Baileys 7, como um
 // "aparelho conectado"). O worker axion-api guarda a fila e o estado; este processo so:
-//   1. conecta (QR na dash, em Grupo do WhatsApp > Conectar por QR, ou aqui no terminal);
-//   2. pinga o worker a cada 15s (estado, numero, grupos quando mudam);
+//   1. conecta (QR na dash, no cartao do bot > Conectar por QR, ou aqui no terminal);
+//   2. pinga o worker a cada 5s (estado, numero; a lista de grupos vai na hora em que muda ou e pedida);
 //   3. pega os itens da fila, manda no grupo e confirma (ack). Erro passageiro volta pra fila.
 // Config: bot-grupo.json ao lado deste arquivo: { "api": "https://axion-api.axion-dash.workers.dev", "token": "<token da tela>" }
 // Flags: --uma-vez (conecta, esvazia a fila e sai) | --codigo 5515981430517 (parear por codigo de 8
 // letras em vez do QR, quando o QR trava na etapa de "passkey" do WhatsApp).
 // NUNCA EM DOBRO: o id de cada item enviado fica em enviados.json antes do ack; se o ack falhar, o
 // item volta no proximo ping e so recebe o ack de novo, sem sendMessage.
+// GRUPOS: a lista vai pro worker num ping "so_estado" (nao consome comando nem leva item) assim que
+// muda, quando a tela pede (comando grupos) e de 5 em 5 minutos. A tela espera esse ping pra atualizar.
 // Higiene (pra nao banir): UM socket por vez, reconexao com recuo, 440 (outra copia) espera 2 min,
 // nunca religa depois de 401 sem QR novo, markOnlineOnConnect false, identidade fixa, metadados em cache.
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs'
@@ -21,15 +23,15 @@ import qrterm from 'qrcode-terminal'
 import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.2.0'
+const VERSAO = '1.3.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
 const ENVIADOS_ARQ = path.join(AQUI, 'enviados.json')
 const UMA_VEZ = process.argv.includes('--uma-vez')
 const CODIGO_NUM = (() => { const i = process.argv.indexOf('--codigo'); return i >= 0 ? String(process.argv[i + 1] || '').replace(/\D/g, '') : '' })()
-const PING_S = 15
-const PING_QR_S = 5
+const PING_S = 5
+const GRUPOS_CADA_MS = 5 * 60 * 1000
 
 const hora = () => new Date().toLocaleTimeString('pt-BR', { hour12: false })
 const log = (...a) => console.log(hora(), ...a)
@@ -38,12 +40,12 @@ const dorme = (ms) => new Promise((res) => setTimeout(res, ms))
 function lerCfg() {
   if (!existsSync(CFG_ARQ)) {
     console.log('Falta o arquivo bot-grupo.json ao lado do agente.mjs, com este conteudo:')
-    console.log('{ "api": "https://axion-api.axion-dash.workers.dev", "token": "<token da tela: Ferramentas > Bot de WhatsApp > Grupo do WhatsApp>" }')
+    console.log('{ "api": "https://axion-api.axion-dash.workers.dev", "token": "<token da tela: Ferramentas > Bot de WhatsApp>" }')
     process.exit(1)
   }
   let c = {}
   try { c = JSON.parse(readFileSync(CFG_ARQ, 'utf8')) } catch (e) { console.log('bot-grupo.json invalido: ' + e.message); process.exit(1) }
-  if (!c.token || String(c.token).length < 20) { console.log('bot-grupo.json sem token. Copie o token em Ferramentas > Bot de WhatsApp > Grupo do WhatsApp.'); process.exit(1) }
+  if (!c.token || String(c.token).length < 20) { console.log('bot-grupo.json sem token. Copie o token em Ferramentas > Bot de WhatsApp.'); process.exit(1) }
   return { api: String(c.api || 'https://axion-api.axion-dash.workers.dev').replace(/\/+$/, ''), token: String(c.token).trim() }
 }
 const cfg = lerCfg()
@@ -87,7 +89,9 @@ let pairingCode = ''
 let ultimoQrTexto = ''
 let numero = ''
 let nome = ''
-let gruposPend = null         // lista pra mandar no proximo ping (so quando mudou); fica ate um ping dar certo
+let gruposPend = null         // lista que nao conseguiu ir na hora; vai no proximo ping
+let ultimaListaJson = ''      // a ultima lista que o worker recebeu
+let timerGrupos = null
 let ocupado = false
 let conectando = false
 let tentativa = 0
@@ -126,17 +130,24 @@ async function lerGrupos() {
     .filter((x) => /@g\.us$/.test(x.id))
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
 }
-// Logo depois de abrir, a lista pode vir vazia (o WhatsApp ainda esta sincronizando): tenta de novo em 10s e 30s.
-async function lerGruposComInsistencia() {
-  for (const espera of [0, 10000, 30000]) {
-    if (espera) await dorme(espera)
-    if (estado !== 'open') return
-    try {
-      const lista = await lerGrupos()
-      if (lista.length || espera === 30000) { gruposPend = lista; log(lista.length + ' grupo(s) encontrado(s)'); return }
-    } catch (e) { log('nao consegui listar os grupos agora: ' + String((e && e.message) || e)) }
-  }
+// Manda a lista AGORA, num ping que so leva estado (nao consome comando nem pega item da fila).
+async function mandarGrupos(lista) {
+  try {
+    const r = await api('/api/bot/agente/ping', { estado, numero, nome, qr: '', pairingCode: '', versao: VERSAO, pc: hostname(), grupos: lista, so_estado: true })
+    if (r.status === 200) { ultimaListaJson = JSON.stringify(lista); gruposPend = null; return true }
+  } catch {}
+  gruposPend = lista
+  return false
 }
+// Rele os grupos e manda se mudou. `forcar` = a tela pediu: manda mesmo igual, pra tela parar de esperar.
+async function atualizarGrupos(forcar) {
+  if (estado !== 'open' || fechando) return
+  try {
+    const lista = await lerGrupos()
+    if (forcar || JSON.stringify(lista) !== ultimaListaJson) { await mandarGrupos(lista); log(lista.length + ' grupo(s) na lista') }
+  } catch (e) { log('nao consegui listar os grupos agora: ' + String((e && e.message) || e)) }
+}
+const agendaGrupos = () => { clearTimeout(timerGrupos); timerGrupos = setTimeout(() => atualizarGrupos(false).catch(() => {}), 3000) }
 
 function agendaReconexao(ms) {
   if (fechando) return
@@ -165,7 +176,9 @@ async function conectar() {
     })
     const meuSock = sock
     sock.ev.on('creds.update', saveCreds)
-    sock.ev.on('group-participants.update', (u) => { if (u && u.id) cacheGrupo.delete(u.id) })
+    sock.ev.on('group-participants.update', (u) => { if (u && u.id) cacheGrupo.delete(u.id); agendaGrupos() })
+    sock.ev.on('groups.upsert', agendaGrupos)   // entrou num grupo novo
+    sock.ev.on('groups.update', agendaGrupos)   // nome do grupo mudou
     sock.ev.on('connection.update', async (u) => {
       if (meuSock !== sock) return   // evento de um socket velho
       if (u.qr && u.qr !== ultimoQrTexto) {
@@ -179,7 +192,7 @@ async function conectar() {
         }
         try { qrDataUrl = await QRCode.toDataURL(u.qr, { margin: 1, scale: 6 }) } catch { qrDataUrl = '' }
         if (!pairingCode) {
-          log('QR novo. Escaneie na dash (Grupo do WhatsApp > Conectar por QR) ou aqui embaixo, com o celular do numero do bot:')
+          log('QR novo. Escaneie na dash (cartao do bot > Conectar por QR) ou aqui embaixo, com o celular do numero do bot:')
           try { qrterm.generate(u.qr, { small: true }) } catch {}
         }
         ping().catch(() => {})
@@ -192,11 +205,19 @@ async function conectar() {
         ultimoQrTexto = ''
         tentativa = 0
         pingsSemItemAberto = 0
+        ultimaListaJson = ''
         numero = String((sock.user && sock.user.id) || '').split(':')[0].split('@')[0].replace(/\D/g, '')
         nome = String((sock.user && (sock.user.name || sock.user.verifiedName)) || '')
         log('WhatsApp Web conectado como ' + numero + (nome ? ' (' + nome + ')' : ''))
-        lerGruposComInsistencia().then(() => ping().catch(() => {})).catch(() => {})
         ping().catch(() => {})
+        // Logo depois de abrir o WhatsApp ainda esta sincronizando: le agora, em 10s e em 30s, e manda sempre que mudar.
+        ;(async () => {
+          for (const espera of [0, 10000, 30000]) {
+            if (espera) await dorme(espera)
+            if (meuSock !== sock || estado !== 'open') return
+            await atualizarGrupos(false)
+          }
+        })().catch(() => {})
       }
       if (u.connection === 'close') {
         const code = u.lastDisconnect && u.lastDisconnect.error && u.lastDisconnect.error.output && u.lastDisconnect.error.output.statusCode
@@ -267,15 +288,16 @@ async function ping() {
   ocupado = true
   try {
     const body = { estado, numero, nome, qr: estado === 'qr' ? qrDataUrl : '', pairingCode: estado === 'qr' ? pairingCode : '', versao: VERSAO, pc: hostname() }
-    if (gruposPend) body.grupos = gruposPend
+    const levando = gruposPend
+    if (levando) body.grupos = levando
     const r = await api('/api/bot/agente/ping', body)
     if (r.status !== 200 || !r.j || !r.j.ok) {
       if (r.status !== 401) log('ping falhou: ' + r.status + ' ' + JSON.stringify(r.j || {}).slice(0, 120))
       return
     }
-    if (gruposPend) gruposPend = null   // so solta a lista depois que o worker recebeu
+    if (levando) { ultimaListaJson = JSON.stringify(levando); if (gruposPend === levando) gruposPend = null }
     if (r.j.cmd === 'logout') { await sair(); return }
-    if (r.j.cmd === 'grupos' && estado === 'open') { try { gruposPend = await lerGrupos() } catch {} }
+    if (r.j.cmd === 'grupos') await atualizarGrupos(true)   // a tela esta esperando: le e manda na hora
     const itens = Array.isArray(r.j.itens) ? r.j.itens : []
     if (estado === 'open') { if (!itens.length) pingsSemItemAberto++; else pingsSemItemAberto = 0 }
     for (const it of itens) {
@@ -292,17 +314,18 @@ async function ping() {
 
 log('SellWave Bot do grupo v' + VERSAO + ' em ' + hostname() + ' -> ' + cfg.api + (UMA_VEZ ? ' (uma vez)' : '') + (CODIGO_NUM ? ' (pareamento por codigo)' : ''))
 await conectar()
+setInterval(() => atualizarGrupos(false).catch(() => {}), GRUPOS_CADA_MS)
 const laco = async () => {
   if (fechando) return
   await ping()
-  // --uma-vez: sessao aberta e 4 pings seguidos sem nada na fila (1 min) = acabou por hoje.
-  if (UMA_VEZ && estado === 'open' && pingsSemItemAberto >= 4) {
+  // --uma-vez: sessao aberta e 12 pings seguidos sem nada na fila (1 min) = acabou por hoje.
+  if (UMA_VEZ && estado === 'open' && pingsSemItemAberto >= 12) {
     log('Fila vazia. ' + enviados + ' envio(s) nesta rodada. Saindo.')
     fechando = true
     try { sock.end(undefined) } catch {}
     limparLock()
     process.exit(0)
   }
-  setTimeout(laco, (estado === 'qr' ? PING_QR_S : PING_S) * 1000)
+  setTimeout(laco, PING_S * 1000)
 }
 setTimeout(laco, 3000)

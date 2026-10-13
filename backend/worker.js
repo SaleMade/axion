@@ -9632,9 +9632,14 @@ async function handleBotWa(req, env) {
   }
   if (m === 'GET' && acao === 'grupos') {
     const fresco = url.searchParams.get('fresco') === '1';
-    if (pc) { if (fresco) await _botAgenteCmd(env, 'grupos'); return json({ ok: true, grupos: await _botAgenteGrupos(env) }); }
+    if (pc) {
+      if (fresco) await _botAgenteCmd(env, 'grupos');
+      // `ts` = quando o agente mandou a lista (ms). A tela pede fresco e espera esse numero subir.
+      let gts = 0; try { gts = Number(await _readConfig(env, 'bot_agente_grupos_ts')) || 0; } catch (_) { gts = 0; }
+      return json({ ok: true, via: 'pc', ts: gts, grupos: await _botAgenteGrupos(env) });
+    }
     const r = await _botEvoGrupos(env, fresco);
-    return r.ok ? json({ ok: true, grupos: r.grupos }) : json({ ok: false, error: r.erro, grupos: r.grupos }, 502);
+    return r.ok ? json({ ok: true, via: 'evolution', ts: Date.now(), grupos: r.grupos }) : json({ ok: false, error: r.erro, grupos: r.grupos }, 502);
   }
   let b = {};
   if (m === 'POST') { try { b = await req.json(); } catch (_) { b = {}; } }
@@ -9696,22 +9701,29 @@ async function handleBotAgente(req, env) {
   let b = {}; try { b = await req.json(); } catch (_) { b = {}; }
   await _botEnsureTables(env);
   if (acao === 'ping') {
+    const agora = Math.floor(Date.now() / 1000);
     const estadoAg = ['open', 'qr', 'close'].includes(b.estado) ? b.estado : 'close';
-    let cmd = '';
-    try { cmd = String((await _readConfig(env, 'bot_agente_cmd')) || ''); } catch (_) { cmd = ''; }
+    // so_estado = ping extra do agente que so traz estado e a lista de grupos (a tela pediu a lista):
+    // nao consome comando nem leva item da fila.
+    const soEstado = !!b.so_estado;
+    let cmdPend = '', antes = null;
+    try { const m = await _readConfigMuitas(env, ['bot_agente', 'bot_agente_cmd']); cmdPend = String(m.bot_agente_cmd || ''); antes = JSON.parse(m.bot_agente || 'null'); } catch (_) { antes = null; }
+    const cmd = soEstado ? '' : cmdPend;
     if (cmd) await _writeConfig(env, 'bot_agente_cmd', '');
     // Com logout a caminho o estado gravado e 'close': a tela nao ve 'Conectado' depois de pedir pra sair.
-    const estado = cmd === 'logout' ? 'close' : estadoAg;
-    const atual = { ts: Math.floor(Date.now() / 1000), estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', pairingCode: estado === 'qr' ? String(b.pairingCode || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
-    await _writeConfig(env, 'bot_agente', JSON.stringify(atual));
+    const estado = cmdPend === 'logout' ? 'close' : estadoAg;
+    const atual = { ts: agora, estado, numero: _botSoDigitos(b.numero).slice(0, 20), nome: _botTexto300(b.nome, 60), qr: estado === 'qr' ? String(b.qr || '').slice(0, 20000) : '', pairingCode: estado === 'qr' ? String(b.pairingCode || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12) : '', versao: _botTexto300(b.versao, 40), pc: _botTexto300(b.pc, 60) };
+    // O agente pinga a cada 5s: so grava quando algo mudou ou a cada 20s (a tela so precisa do ts pra saber que ele esta vivo).
+    const mudou = !antes || typeof antes !== 'object' || ['estado', 'numero', 'nome', 'qr', 'pairingCode', 'versao', 'pc'].some((k) => String(antes[k] || '') !== String(atual[k] || ''));
+    if (mudou || agora - (Number(antes.ts) || 0) >= 20) await _writeConfig(env, 'bot_agente', JSON.stringify(atual));
     if (Array.isArray(b.grupos)) {
       const grupos = b.grupos.slice(0, 300).map((g) => ({ id: String((g && g.id) || ''), nome: String((g && g.nome) || '').slice(0, 80), tamanho: Number(g && g.tamanho) || 0 })).filter((g) => _botJidGrupoOk(g.id));
       await _writeConfig(env, 'bot_agente_grupos', JSON.stringify(grupos));
+      await _writeConfig(env, 'bot_agente_grupos_ts', String(Date.now()));
     }
     const itens = [];
-    if (estadoAg === 'open' && cmd !== 'logout') {
+    if (estadoAg === 'open' && cmdPend !== 'logout' && !soEstado) {
       try {
-        const agora = Math.floor(Date.now() / 1000);
         // So o que nao esta reservado: o item entregue a um ping fica 2 min fora da vista dos outros.
         const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) ORDER BY id LIMIT 10").bind(agora - BOT_AGENTE_LEASE_S).all();
         for (const x of ((r && r.results) || [])) {
