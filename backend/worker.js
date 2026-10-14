@@ -14404,11 +14404,22 @@ async function _dcNumeroDaInstancia(env, instObj, mundo) {
 function _fetchComTeto(url, ms, init = {}) {
   return fetch(url, { ...init, signal: AbortSignal.timeout(ms || 10000) });
 }
+// A CHAVE DO DATACRAZY, SEPARANDO "NAO TEM" DE "O BANCO NAO RESPONDEU" (14/10/2026). O _readConfig
+// engole o erro e devolve null: com o D1 sobrecarregado (14/10, das 16:46 as 16:56) o inbox avisou
+// "sem_dc_api_key" com a chave salva ali, e quem le acha que a integracao foi desligada.
+async function _dcChave(env, mundo) {
+  try {
+    await _ensureConfigTable(env);
+    const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(_cfgNome('dc_api_key', mundo)).first();
+    const key = (row && row.value) || '';
+    return { key, erro: key ? '' : 'sem_dc_api_key' };
+  } catch (_) { return { key: '', erro: 'o banco de dados nao respondeu agora (lentidao momentanea)' }; }
+}
 async function _dcApiGetRaw(env, path, mundo) {
   // `mundo` vazio = a casa. Com afiliado, a chave e a DELE e nao existe queda pra nossa: puxar a
   // conversa do cliente dele com a nossa chave nao devolveria nada e ainda gastaria requisicao.
-  const key = await _readConfig(env, _cfgNome('dc_api_key', mundo));
-  if (!key) return { ok: false, status: 0, dados: null, erro: 'sem_dc_api_key' };
+  const { key, erro: _semChave } = await _dcChave(env, mundo);
+  if (!key) return { ok: false, status: 0, dados: null, erro: _semChave };
   // TIMEOUT OBRIGATORIO (22/09/2026), a mesma guarda que a ponte da Evolution ja tinha e este caminho nao:
   // sem ele, Datacrazy pendurado = requisicao pendurada, e como e a propria TELA do inbox que chama
   // isto (/api/wa/dc/tick), a dash inteira fica esperando. Medido no ar antes da correcao: 83
@@ -14552,10 +14563,10 @@ async function _dc429Seq(env, mundo, delta) {
 async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, tetoMs = 20000) {
   const _comecou = Date.now();
   const _estourou = () => (Date.now() - _comecou) > tetoMs;
-  const key = await _readConfig(env, _cfgNome('dc_api_key', mundo));
+  const { key, erro: _semChave } = await _dcChave(env, mundo);
   // Sem chave nao e "inbox vazio", e integracao DESLIGADA: fica registrado como falha, senao a tela
   // mostra "nenhuma conversa" com a mesma cara de um dia parado.
-  if (!key) { await _dcSyncSaude(env, { ok: false, erro: 'sem_dc_api_key' }, mundo); return { ok: false, motivo: 'sem_dc_api_key' }; }
+  if (!key) { await _dcSyncSaude(env, { ok: false, erro: _semChave }, mundo); return { ok: false, motivo: _semChave }; }
   await _waEnsureTables(env);
   // A API deles IGNORA "limit" e so obedece "take" (conferido: ?limit=1 devolveu as 13 conversas,
   // ?take=1 devolveu 1, da mais recente pra mais antiga). Com "limit" o sync puxa TODAS as conversas
