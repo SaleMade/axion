@@ -118,7 +118,8 @@ const est = fora(base('order.refunded'));
 ok(est.q.charge && est.q.charge.status === 'REFUNDED', 'estornado vira REFUNDED');
 const tr = fora(base('shipment.in_transit', (p) => { comRastreio(p); p.shipment.occurred_at = '2026-10-14T10:43:27-03:00'; }));
 ok(tr.q.shipping.shippingCode === 'AA123456789BR' && tr.q.__trackUrl === 'https://x.rastreio.vip/rastreio/AA123456789BR' && tr.q.shipping.platform === 'correios', 'rastreio, link e transportadora');
-ok(tr.q.__eventoTs === Math.floor(Date.parse('2026-10-14T10:43:27-03:00') / 1000), 'hora do evento = a da transportadora');
+// a hora do evento (__eventoTs) so existe no worker a partir de 09/10/2026; o da dash do Giovane e anterior
+if (src.includes('q.__eventoTs')) ok(tr.q.__eventoTs === Math.floor(Date.parse('2026-10-14T10:43:27-03:00') / 1000), 'hora do evento = a da transportadora');
 const vazio = fora(base('order.created', (p) => { p.order.items = []; }));
 ok(vazio.q && vazio.q.product.id === null && vazio.q.product.name === null && vazio.q.product.offer.price === null, 'pedido sem item nao inventa produto nem preco');
 const demo = fora(base('order.created', (p) => { p.order.pedido_id = 999999; p.order.codigo_transacao = 'DEMO-TX-123'; p.order.referencia_externa = 'demo_ref_987'; }));

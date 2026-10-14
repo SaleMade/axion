@@ -112,7 +112,9 @@ const _INTEG_SEGREDOS = {
   payt_token:     { env: 'PAYT_TOKEN', padrao: (env) => (_ehDashDaCasa(env) ? PAYT_TOKEN_DEFAULT : '') },
   five_token:     { env: 'FIVE_TOKEN', padrao: (env) => (_ehDashDaCasa(env) ? FIVE_TOKEN_DEFAULT : '') },
   pl_token:       { env: 'PAYLOG_TOKEN' },
-  pl_secret:      { env: 'PAYLOG_SECRET' },
+  // env2 (14/10/2026): o segredo do Webhooks v2 da PayLog normal tambem vale (ver _plSegredoOk). Sem ele a
+  // tela dizia "falta o segredo" numa dash que so tem a PayLog normal e o segredo no secret do servidor.
+  pl_secret:      { env: 'PAYLOG_SECRET', env2: 'PAYLOG2_SECRET' },
   dc_api_key:     {},
   dc_hook_secret: {},
   // APP SECRET DO APP DA META (09/10/2026, item 34): assina o POST /api/wa/cloud. Secret do worker
@@ -146,7 +148,7 @@ async function _integChave(env, chave, mundo) {
   // nosso Datacrazy. Sem chave propria a conexao dele esta DESLIGADA - que e a verdade, e e o que
   // a tela precisa dizer pra ele ir configurar.
   if (mundo) return { valor: '', fonte: '' };
-  const noEnv = def.env && env ? env[def.env] : '';
+  const noEnv = def.env && env ? (env[def.env] || (def.env2 ? env[def.env2] : '')) : '';
   if (noEnv) return { valor: String(noEnv), fonte: 'servidor' };
   const pad = def.padrao ? def.padrao(env) : '';
   if (pad) return { valor: String(pad), fonte: 'padrao' };
@@ -5078,7 +5080,7 @@ async function _stateConexoes(env, uVis) {
       if (_cfgC[_cfgNome(k, _m)]) return true;
       if (_m) return false;
       const _def = _INTEG_SEGREDOS[k] || {};
-      return !!((_def.env && env ? env[_def.env] : '') || (_def.padrao ? _def.padrao(env) : ''));
+      return !!((_def.env && env ? (env[_def.env] || (_def.env2 ? env[_def.env2] : '')) : '') || (_def.padrao ? _def.padrao(env) : ''));
     };
     const _dc = _tem('dc_api_key');
     const _pl = _tem('pl_token') && _tem('pl_secret');
@@ -11577,7 +11579,7 @@ async function handleConexoesGet(req, env) {
       if (_cfg[_cfgNome(k, mundo)]) return true;
       if (mundo) return false;   // o mundo do afiliado nao herda o segredo da casa (ver _integChave)
       const _def = _INTEG_SEGREDOS[k] || {};
-      return !!((_def.env && env ? env[_def.env] : '') || (_def.padrao ? _def.padrao(env) : ''));
+      return !!((_def.env && env ? (env[_def.env] || (_def.env2 ? env[_def.env2] : '')) : '') || (_def.padrao ? _def.padrao(env) : ''));
     };
     const dc = tem('dc_api_key');
     const pl = tem('pl_token') && tem('pl_secret');
