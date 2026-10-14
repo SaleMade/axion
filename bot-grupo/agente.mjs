@@ -23,7 +23,7 @@ import qrterm from 'qrcode-terminal'
 import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.3.0'
+const VERSAO = '1.4.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
@@ -31,7 +31,7 @@ const ENVIADOS_ARQ = path.join(AQUI, 'enviados.json')
 const UMA_VEZ = process.argv.includes('--uma-vez')
 const CODIGO_NUM = (() => { const i = process.argv.indexOf('--codigo'); return i >= 0 ? String(process.argv[i + 1] || '').replace(/\D/g, '') : '' })()
 const PING_S = 5
-const GRUPOS_CADA_MS = 5 * 60 * 1000
+const GRUPOS_ESPERA_MS = 30 * 60 * 1000   // o WhatsApp devolveu rate-overlimit: 30 min sem pedir a lista
 
 const hora = () => new Date().toLocaleTimeString('pt-BR', { hour12: false })
 const log = (...a) => console.log(hora(), ...a)
@@ -140,14 +140,34 @@ async function mandarGrupos(lista) {
   return false
 }
 // Rele os grupos e manda se mudou. `forcar` = a tela pediu: manda mesmo igual, pra tela parar de esperar.
+// LISTA DE GRUPOS SEM ABUSAR DO WHATSAPP (14/10/2026): a releitura de 5 em 5 minutos tomava
+// 'rate-overlimit' o dia inteiro (361 vezes em 13/10), e insistir num limite do WhatsApp e o tipo de
+// coisa que leva a bloqueio. Agora so le ao conectar, quando um grupo muda e quando a tela pede; se o
+// WhatsApp mandar esperar, fica 30 min sem pedir (a tela recebe a lista que ja temos). Devolve quantos
+// grupos leu (-1 = nao leu).
+let gruposLivreEm = 0
 async function atualizarGrupos(forcar) {
-  if (estado !== 'open' || fechando) return
+  if (estado !== 'open' || fechando) return -1
+  if (Date.now() < gruposLivreEm) {
+    if (forcar && ultimaListaJson) { try { await mandarGrupos(JSON.parse(ultimaListaJson)) } catch {} }
+    return -1
+  }
   try {
     const lista = await lerGrupos()
     if (forcar || JSON.stringify(lista) !== ultimaListaJson) { await mandarGrupos(lista); log(lista.length + ' grupo(s) na lista') }
-  } catch (e) { log('nao consegui listar os grupos agora: ' + String((e && e.message) || e)) }
+    return lista.length
+  } catch (e) {
+    const msg = String((e && e.message) || e)
+    if (/rate-?overlimit|rate limit|too many/i.test(msg)) {
+      gruposLivreEm = Date.now() + GRUPOS_ESPERA_MS
+      log('o WhatsApp pediu pra esperar antes de listar os grupos de novo; proxima tentativa em 30 min')
+      if (forcar && ultimaListaJson) { try { await mandarGrupos(JSON.parse(ultimaListaJson)) } catch {} }
+    } else log('nao consegui listar os grupos agora: ' + msg)
+    return -1
+  }
 }
-const agendaGrupos = () => { clearTimeout(timerGrupos); timerGrupos = setTimeout(() => atualizarGrupos(false).catch(() => {}), 3000) }
+// Mudanca de grupo chega em rajada (entrou alguem, mudou o nome): uma leitura so, 60s depois da ultima.
+const agendaGrupos = () => { clearTimeout(timerGrupos); timerGrupos = setTimeout(() => atualizarGrupos(false).catch(() => {}), 60000) }
 
 function agendaReconexao(ms) {
   if (fechando) return
@@ -210,12 +230,13 @@ async function conectar() {
         nome = String((sock.user && (sock.user.name || sock.user.verifiedName)) || '')
         log('WhatsApp Web conectado como ' + numero + (nome ? ' (' + nome + ')' : ''))
         ping().catch(() => {})
-        // Logo depois de abrir o WhatsApp ainda esta sincronizando: le agora, em 10s e em 30s, e manda sempre que mudar.
+        // Logo depois de abrir o WhatsApp ainda esta sincronizando: le agora e, SO se vier vazia, de novo em 10s e em 30s.
         ;(async () => {
           for (const espera of [0, 10000, 30000]) {
             if (espera) await dorme(espera)
             if (meuSock !== sock || estado !== 'open') return
-            await atualizarGrupos(false)
+            const n = await atualizarGrupos(false)
+            if (n > 0 || Date.now() < gruposLivreEm) return
           }
         })().catch(() => {})
       }
@@ -314,7 +335,6 @@ async function ping() {
 
 log('SellWave Bot do grupo v' + VERSAO + ' em ' + hostname() + ' -> ' + cfg.api + (UMA_VEZ ? ' (uma vez)' : '') + (CODIGO_NUM ? ' (pareamento por codigo)' : ''))
 await conectar()
-setInterval(() => atualizarGrupos(false).catch(() => {}), GRUPOS_CADA_MS)
 const laco = async () => {
   if (fechando) return
   await ping()
