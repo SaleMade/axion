@@ -24817,14 +24817,12 @@ export default {
       try { await _dcPoll(env, { mundo: _m }); } catch (e) { console.error('[cron] lead do afiliado ' + _m + ' falhou: ' + String((e && e.message) || e)); }
     }
     // (o funil ja rodou la em cima, ANTES da trava - ver o comentario no comeco do scheduled)
-    try {
-      const rDc = await _dcSyncInbox(env, 40, 40);
-      if (!rDc || rDc.ok === false) console.error('[dc-sync] cron nao sincronizou: ' + ((rDc && rDc.motivo) || 'sem motivo'));
-    } catch (e) {
-      erro = (erro ? erro + ' | ' : '') + 'inbox: ' + String((e && e.message) || e).slice(0, 90);
-      console.error('[dc-sync] cron explodiu: ' + String((e && e.stack) || e));
-      try { await _dcSyncSaude(env, { ok: false, erro: 'excecao: ' + String((e && e.message) || e) }); } catch (_) {}
-    }
+    // O SEGUNDO SYNC DO INBOX SAIU DAQUI (14/10/2026). Desde 28/09 a casa sincroniza ANTES da trava, em
+    // toda batida e com a trava propria dc_sync_lock (ver "DC_SYNC_PRE_TRAVA" la em cima); este aqui,
+    // que ficou de antes, repetia a mesma rodada no mesmo minuto - o dobro de chamadas ao Datacrazy
+    // (a fonte dos 429) e de escrita no banco - e SEM a trava, que e justamente o que o comentario de
+    // la diz que nao pode (duas rodadas juntas na mesma conversa = mensagem dobrada no inbox, 12/09).
+    // O inbox continua: o sync de antes da trava roda todo minuto e a tela aberta pede de 6 em 6s.
     // O inbox de cada afiliado, com teto MENOR que o da casa (20 contra 40): sao varias contas na
     // mesma batida e o que nao couber entra na proxima, que vem em um minuto.
     try { await _botTick(env); } catch (e) { console.error('[cron] bot do time falhou: ' + String((e && e.stack) || e)); }
