@@ -8629,9 +8629,22 @@ async function _botCfgLer(env, semCache) {
   _botCfgAt = agora;
   return _botCfgCache;
 }
-async function _botCfgGravar(env, cfg) {
+// `quem` = { id, nome } de quem salvou; sem ele (cron, teste) a versao fica sem autor.
+async function _botCfgGravar(env, cfg, quem) {
   await _writeConfig(env, BOT_CFG_KEY, JSON.stringify(cfg));
   _botCfgCache = cfg; _botCfgAt = Date.now(); _botTplCache = null;
+  const ant = await _botCfgMeta(env);
+  const meta = { ver: (Number(ant.ver) || 0) + 1, ts: Math.floor(Date.now() / 1000), por: String((quem && quem.id) || ''), por_nome: String((quem && quem.nome) || '').slice(0, 60), acao: String((quem && quem.acao) || 'salvou') };
+  try { await _writeConfig(env, 'bot_wa_meta', JSON.stringify(meta)); } catch (_) {}
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_cfg_hist (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, ver INTEGER, por TEXT, por_nome TEXT, acao TEXT, cfg TEXT)').run();
+    await env.DB.prepare('INSERT INTO bot_cfg_hist (ts, ver, por, por_nome, acao, cfg) VALUES (?,?,?,?,?,?)').bind(meta.ts, meta.ver, meta.por, meta.por_nome, meta.acao, JSON.stringify(cfg)).run();
+    await env.DB.prepare('DELETE FROM bot_cfg_hist WHERE id <= (SELECT id FROM bot_cfg_hist ORDER BY id DESC LIMIT 1 OFFSET 60)').run();
+  } catch (_) {}
+  return meta;
+}
+async function _botCfgMeta(env) {
+  try { return JSON.parse((await _readConfig(env, 'bot_wa_meta')) || '{}') || {}; } catch (_) { return {}; }
 }
 async function _botEnsureTables(env) {
   if (_botTablesOk) return;
@@ -9619,8 +9632,8 @@ async function handleBotConfig(req, env) {
     const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
     const mudouHora = !atual.ativo || atual.relatorio.hora !== cfg.relatorio.hora || !atual.relatorio.ativo;
     if (cfg.ativo && cfg.relatorio.ativo && mudouHora && minAgora > _botMinutos(cfg.relatorio.hora)) await _botReserva(env, 'bot_rel_' + _brDay());
-    await _botCfgGravar(env, cfg);
-    return json({ ok: true, cfg });
+    const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id });
+    return json({ ok: true, cfg, meta });
   }
   const cfg = await _botCfgLer(env, true);
   const equipe = await _botEquipe(env);
@@ -9661,8 +9674,36 @@ async function handleBotConfig(req, env) {
   const evo = await _botEvoCfg(env, true);
   const agente = await _botAgenteEstado(env);
   agente.token = await _botAgenteToken(env);
-  return json({ ok: true, cfg, equipe, numeros, agente, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
+  const meta = await _botCfgMeta(env);
+  return json({ ok: true, cfg, meta, equipe, numeros, agente, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
     status: { proximo: await _botProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, dia_resumo: _botDiaDoResumo(cfg, _brDay()), ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
+}
+// GET /api/bot/config/ver -> { ver, ts, por_nome }: a tela pergunta a cada 10s se outro login salvou.
+// GET /api/bot/config/historico -> as ultimas versoes (sem a config inteira).
+// POST /api/bot/config/restaurar { id } -> grava aquela versao como a atual (vira uma versao nova).
+async function handleBotCfgVersoes(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  const acao = new URL(req.url).pathname.replace(/^\/api\/bot\/config\//, '');
+  if (req.method === 'GET' && acao === 'ver') return json({ ok: true, meta: await _botCfgMeta(env) });
+  try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_cfg_hist (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, ver INTEGER, por TEXT, por_nome TEXT, acao TEXT, cfg TEXT)').run(); } catch (_) {}
+  if (req.method === 'GET' && acao === 'historico') {
+    let lista = [];
+    try { lista = ((await env.DB.prepare('SELECT id, ts, ver, por_nome, acao, length(cfg) AS tam FROM bot_cfg_hist ORDER BY id DESC LIMIT 40').all()).results) || []; } catch (_) {}
+    return json({ ok: true, versoes: lista });
+  }
+  if (req.method === 'POST' && acao === 'restaurar') {
+    let b = {}; try { b = await req.json(); } catch (_) { b = {}; }
+    const row = await env.DB.prepare('SELECT ver, cfg, ts, por_nome FROM bot_cfg_hist WHERE id=?').bind(Number(b.id) || 0).first().catch(() => null);
+    if (!row) return err('Versão não encontrada', 404);
+    let antiga = null; try { antiga = JSON.parse(row.cfg); } catch (_) { antiga = null; }
+    if (!antiga) return err('Versão ilegível', 500);
+    const cfg = _botNormaliza(antiga, _botCfgPadrao());
+    const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id, acao: 'restaurou a versão ' + row.ver });
+    return json({ ok: true, cfg, meta });
+  }
+  return err('Rota desconhecida', 404);
 }
 async function handleBotWaPreview(req, env) {
   const u = await authUser(req, env);
@@ -24314,6 +24355,7 @@ export default {
       if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
       if (path.startsWith('/api/bot/wa/')) return handleBotWa(req, env);   // WhatsApp Web do bot (grupo)
       if (path.startsWith('/api/bot/agente/')) return handleBotAgente(req, env);   // o bot no PC (token, sem sessao)
+      if (path.startsWith('/api/bot/config/')) return handleBotCfgVersoes(req, env);   // versao, historico e restaurar da config do bot
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
