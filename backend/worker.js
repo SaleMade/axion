@@ -6433,6 +6433,10 @@ async function handlePresselSave(req, env) {
     // e aplicada em cima do estado que acabou de ser lido, dentro do laco de tentativa.
     // Pedido do Bruno em 25/08/2026: "quero que o interruptor mande".
     if (patch.vend_off && typeof patch.vend_off === 'object') {
+      // CHAVE "MANDAR DAQUI EM TODAS" LIGADA (regras.roleta_hub; ausente = ligada): quem manda e a Chegada
+      // de leads. O interruptor de dentro da pressel fica travado na tela; aqui a mesma regra vale pra aba
+      // velha ou pra qualquer outro caminho, senao as copias por pressel voltam a divergir (13/10/2026).
+      if (!(data.regras && data.regras.roleta_hub === false)) return err('A chave "mandar daqui em todas" está ligada: ligue ou desligue o número em Chegada de leads, que vale pra todas as pressels.', 409);
       const at = String(patch.vend_off.at || '');
       const nk = String(patch.vend_off.num || '').replace(/\D/g, '').slice(-8);
       const ligar = !!patch.vend_off.on;
@@ -6528,7 +6532,13 @@ async function handlePresselSave(req, env) {
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, pressel: target });
+    if (res && res.meta && res.meta.changes > 0) {
+      if (patch.vend_off && typeof patch.vend_off === 'object' && patch.vend_off.at) {
+        const _nkL = String(patch.vend_off.num || '').replace(/\D/g, '').slice(-8);
+        await _presselNumLog(env, { por: u.id, por_nome: u.name || u.id, at: String(patch.vend_off.at), nk: _nkL, acao: patch.vend_off.on ? 'liga' : (patch.vend_off.volta === true ? 'ate_amanha' : 'desliga'), pids: String(target.id) });
+      }
+      return json({ ok: true, version: newVer, pressel: target });
+    }
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra escrita ganhou o version: espera e refaz
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
@@ -8601,6 +8611,8 @@ function _botNormaliza(raw, base) {
   o.incentivo.max_dia = Math.floor(_num(inc.max_dia, binc.max_dia, 1, 12, 3));
   o.incentivo.de = _botHoraOk(inc.de) ? inc.de : (_botHoraOk(binc.de) ? binc.de : '09:00');
   o.incentivo.ate = _botHoraOk(inc.ate) ? inc.ate : (_botHoraOk(binc.ate) ? binc.ate : '21:00');
+  // Horario que termina antes de comecar nunca dispararia: fica o que estava gravado.
+  if (_botMinutos(o.incentivo.ate) <= _botMinutos(o.incentivo.de)) { o.incentivo.de = _botHoraOk(binc.de) ? binc.de : '09:00'; o.incentivo.ate = _botHoraOk(binc.ate) ? binc.ate : '21:00'; }
   const idias = Array.isArray(inc.dias) ? inc.dias : (Array.isArray(binc.dias) ? binc.dias : o.incentivo.dias);
   o.incentivo.dias = [...new Set(idias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
   const ifr = _botLista(Array.isArray(inc.frases) ? inc.frases : binc.frases);
@@ -8629,19 +8641,57 @@ async function _botCfgLer(env, semCache) {
   _botCfgAt = agora;
   return _botCfgCache;
 }
-// `quem` = { id, nome } de quem salvou; sem ele (cron, teste) a versao fica sem autor.
-async function _botCfgGravar(env, cfg, quem) {
-  await _writeConfig(env, BOT_CFG_KEY, JSON.stringify(cfg));
-  _botCfgCache = cfg; _botCfgAt = Date.now(); _botTplCache = null;
-  const ant = await _botCfgMeta(env);
-  const meta = { ver: (Number(ant.ver) || 0) + 1, ts: Math.floor(Date.now() / 1000), por: String((quem && quem.id) || ''), por_nome: String((quem && quem.nome) || '').slice(0, 60), acao: String((quem && quem.acao) || 'salvou') };
-  try { await _writeConfig(env, 'bot_wa_meta', JSON.stringify(meta)); } catch (_) {}
+// LEITURA ESTRITA (14/10/2026): o POST so junta em cima do que esta gravado DE VERDADE. A leitura comum
+// devolve o padrao quando o banco falha, e um salvar so do incentivo gravaria o padrao por cima de tudo
+// (pessoas, numero, grupo, metas). Aqui falha = excecao = 503, e nada e gravado.
+async function _botCfgLerEstrito(env) {
+  await _ensureConfigTable(env);
+  const r = await env.DB.batch([
+    env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(BOT_CFG_KEY),
+    env.DB.prepare("SELECT value FROM app_config WHERE key = 'bot_wa_meta'"),
+  ]);
+  const v = r[0] && r[0].results && r[0].results[0] ? r[0].results[0].value : null;
+  const m = r[1] && r[1].results && r[1].results[0] ? r[1].results[0].value : null;
+  let o = null; try { o = v ? JSON.parse(v) : null; } catch (_) { throw new Error('config ilegivel'); }
+  let meta = {}; try { meta = m ? (JSON.parse(m) || {}) : {}; } catch (_) { meta = {}; }
+  return { cfg: _botNormaliza(o || {}, null), meta, existe: !!v };
+}
+// GRAVA COM CONFERENCIA DE VERSAO (14/10/2026). A config e a versao sobem numa transacao so, e so se a
+// versao gravada ainda for `base` (a que a tela tinha): dois salvamentos ao mesmo tempo nao tem como sair
+// com a mesma versao, e quem chegou depois recebe { conflito: true } em vez de gravar por cima calado.
+// Sem `base` (restaurar, uso interno) le a versao atual e tenta ate 3 vezes.
+// `quem` = { id, nome, acao } de quem salvou.
+async function _botCfgGravar(env, cfg, quem, base) {
+  await _ensureConfigTable(env);
+  const agora = Math.floor(Date.now() / 1000);
+  const json1 = JSON.stringify(cfg);
+  for (let tent = 0; tent < 3; tent++) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES ('bot_wa_meta', '{\"ver\":0}', ?) ON CONFLICT(key) DO NOTHING").bind(agora),
+      env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, '{}', ?) ON CONFLICT(key) DO NOTHING").bind(BOT_CFG_KEY, agora),
+    ]);
+    let b0 = base;
+    if (b0 == null) { const m = await env.DB.prepare("SELECT value FROM app_config WHERE key='bot_wa_meta'").first(); try { b0 = Number(JSON.parse((m && m.value) || '{}').ver) || 0; } catch (_) { b0 = 0; } }
+    const meta = { ver: b0 + 1, ts: agora, por: String((quem && quem.id) || ''), por_nome: String((quem && quem.nome) || '').slice(0, 60), acao: String((quem && quem.acao) || 'salvou') };
+    const cond = "(SELECT COALESCE(json_extract(value,'$.ver'),0) FROM app_config WHERE key='bot_wa_meta') = ?";
+    const res = await env.DB.batch([
+      env.DB.prepare('UPDATE app_config SET value = ?, updated_at = ? WHERE key = ? AND ' + cond).bind(json1, agora, BOT_CFG_KEY, b0),
+      env.DB.prepare("UPDATE app_config SET value = ?, updated_at = ? WHERE key = 'bot_wa_meta' AND COALESCE(json_extract(value,'$.ver'),0) = ?").bind(JSON.stringify(meta), agora, b0),
+    ]);
+    const gravou = !!(res && res[0] && res[0].meta && res[0].meta.changes > 0);
+    if (!gravou) { if (base != null) return { conflito: true }; continue; }
+    _botCfgCache = cfg; _botCfgAt = Date.now(); _botTplCache = null;
+    await _botCfgHist(env, meta, cfg);
+    return meta;
+  }
+  return { conflito: true };
+}
+async function _botCfgHist(env, meta, cfg) {
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_cfg_hist (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, ver INTEGER, por TEXT, por_nome TEXT, acao TEXT, cfg TEXT)').run();
     await env.DB.prepare('INSERT INTO bot_cfg_hist (ts, ver, por, por_nome, acao, cfg) VALUES (?,?,?,?,?,?)').bind(meta.ts, meta.ver, meta.por, meta.por_nome, meta.acao, JSON.stringify(cfg)).run();
     await env.DB.prepare('DELETE FROM bot_cfg_hist WHERE id <= (SELECT id FROM bot_cfg_hist ORDER BY id DESC LIMIT 1 OFFSET 60)').run();
   } catch (_) {}
-  return meta;
 }
 async function _botCfgMeta(env) {
   try { return JSON.parse((await _readConfig(env, 'bot_wa_meta')) || '{}') || {}; } catch (_) { return {}; }
@@ -9209,7 +9259,12 @@ async function _botMarcosTick(env, cfg, row, dia) {
   if (noGrupo) {
     const tipoG = envios.some((e) => e.tipo === 'meta') && !envios.some((e) => e.tipo === 'marco') ? 'meta' : 'marco';
     const r = await _botEntregarGrupo(env, cfg, envios.map((e) => e.texto).join('\n\n'), tipoG, dia);
-    if (r.status !== 'erro') for (const e of envios) consome(e);
+    if (r.status !== 'erro') {
+      for (const e of envios) consome(e);
+      // Grava JA: se a batida for cortada no meio do privado, a proxima nao repete no grupo.
+      if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
+      if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
+    }
   }
   // NO PRIVADO: agrupa por pessoa (quem recebe varias comemoracoes na mesma batida recebe UMA mensagem).
   const porPessoa = new Map();
@@ -9271,6 +9326,8 @@ async function _botIncentivoTick(env, cfg, row, dia) {
   try { est = JSON.parse((await _readConfig(env, 'bot_incent_' + dia)) || '{}') || {}; } catch (_) { est = {}; }
   const feitos = Number(est.n) || 0;
   if (feitos >= inc.max_dia) return;
+  // Conta barata primeiro: se nem contando do comeco do horario (ou do ultimo incentivo) deu o tempo, nao le o estado.
+  if (agora - Math.max(comeco, Number(est.ultimo) || 0) < inc.horas * 3600) return;
   const { ultima, pedidos } = await _botUltimaVenda(env, dia);
   const desdeVenda = Math.max(comeco, ultima || 0);
   if (agora - Math.max(desdeVenda, Number(est.ultimo) || 0) < inc.horas * 3600) return;
@@ -9316,11 +9373,12 @@ async function _botTick(env) {
       try { await _botDisparar(env, cfg, row, 'semanal', _botMinutos(s.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(slot, -1) : slot, null, slot); } catch (e) { console.error('[bot] resumo semanal falhou: ' + String((e && e.message) || e)); }
     }
   }
-  if (cfg.incentivo && cfg.incentivo.ativo) {
-    try { await _botIncentivoTick(env, cfg, row, dia); } catch (e) { console.error('[bot] incentivo falhou: ' + String((e && e.message) || e)); }
-  }
+  // Marcos antes do incentivo: se a batida estourar o tempo, a comemoracao (que vale mais) ja saiu.
   if ((cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length)) {
     try { await _botMarcosTick(env, cfg, row, dia); } catch (e) { console.error('[bot] marcos falhou: ' + String((e && e.message) || e)); }
+  }
+  if (cfg.incentivo && cfg.incentivo.ativo) {
+    try { await _botIncentivoTick(env, cfg, row, dia); } catch (e) { console.error('[bot] incentivo falhou: ' + String((e && e.message) || e)); }
   }
 }
 // Quando e o proximo resumo, em texto, pra tela.
@@ -9489,9 +9547,16 @@ const BOT_AGENTE_FILA_MAX_H = 20;      // texto esperando ha mais de 20h: descar
 const BOT_AGENTE_TENT_MAX = 5;
 const BOT_AGENTE_LEASE_S = 120;       // item entregue a um ping fica reservado por 2 min (sem isso dois pings mandam em dobro)
 const _botHoraBR = (ts) => { const d = new Date(Number(ts) * 1000 - 3 * 3600000); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+// So cria token quando a leitura DEU CERTO e nao achou nenhum (14/10/2026): uma leitura que falhe nao
+// pode gerar um token novo e trancar o bot do PC do lado de fora.
 async function _botAgenteToken(env, gerar) {
   let t = '';
-  try { t = String((await _readConfig(env, 'bot_agente_token')) || ''); } catch (_) { t = ''; }
+  if (!gerar) {
+    let row;
+    try { await _ensureConfigTable(env); row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'bot_agente_token'").first(); }
+    catch (_) { return ''; }
+    t = String((row && row.value) || '');
+  }
   if (!t || gerar) {
     t = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
     await _writeConfig(env, 'bot_agente_token', t);
@@ -9542,12 +9607,14 @@ async function _botOutboxFaxina(env) {
   const hoje = _brDay();
   let rows = [];
   try {
-    rows = ((await env.DB.prepare("SELECT id, ts, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) AND (ts < ? OR (tipo IN ('marco','meta') AND dia <> ?)) LIMIT 20")
-      .bind(agora - BOT_AGENTE_LEASE_S, agora - BOT_AGENTE_FILA_MAX_H * 3600, hoje).all()).results) || [];
+    rows = ((await env.DB.prepare("SELECT id, ts, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) AND (ts < ? OR (tipo IN ('marco','meta') AND dia <> ?) OR (tipo = 'incentivo' AND (dia <> ? OR ts < ?))) LIMIT 20")
+      .bind(agora - BOT_AGENTE_LEASE_S, agora - BOT_AGENTE_FILA_MAX_H * 3600, hoje, hoje, agora - 2700).all()).results) || [];
   } catch (_) { return; }
   for (const r of rows) {
     const deOutroDia = (r.tipo === 'marco' || r.tipo === 'meta') && String(r.dia || '') !== hoje;
-    const motivo = deOutroDia ? 'A comemoração era de ' + _botDataBR(r.dia).slice(0, 5) + ' e o bot do PC não ligou naquele dia. Texto descartado.' : 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
+    const incVelho = r.tipo === 'incentivo' && (String(r.dia || '') !== hoje || Number(r.ts) < agora - 2700);
+    const motivo = incVelho ? 'O incentivo ficou mais de 45 min esperando o bot do PC e perdeu o sentido. Texto descartado.'
+      : deOutroDia ? 'A comemoração era de ' + _botDataBR(r.dia).slice(0, 5) + ' e o bot do PC não ligou naquele dia. Texto descartado.' : 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
     let mudou = false;
     try { const u = await env.DB.prepare("UPDATE bot_outbox SET status='erro', erro=?, feito_ts=? WHERE id=? AND status='pend'").bind(motivo, agora, r.id).run(); mudou = !!(u && u.meta && u.meta.changes > 0); } catch (_) {}
     if (mudou) await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: r.texto });
@@ -9604,6 +9671,23 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
   return out;
 }
 // ─── Rotas /api/bot/* (so diretor/socio/produtor da casa) ───────────────────────────────
+// O NUMERO OFICIAL DO BOT tem que existir, nao ser de afiliado nem de vendedor ativo. Devolve
+// { erro } ou { display_phone }. So roda quando o pedido mexe no numero (ou ao restaurar uma versao).
+async function _botConfereNumero(env, pnid) {
+  if (!pnid) return { display_phone: '' };
+  let row = null;
+  try { row = await env.DB.prepare('SELECT display_phone, at_id FROM wa_api_numbers WHERE phone_number_id=?').bind(pnid).first(); } catch (_) {}
+  if (!row) return { erro: 'Esse número não está entre os números oficiais da casa' };
+  const _idsAfl = new Set(await _idsDeTodoAfiliado(env).catch(() => []));
+  if (_idsAfl.has(String(row.at_id || ''))) return { erro: 'Esse número é de um afiliado' };
+  // Numero de VENDEDOR ativo nao pode ser o bot: ele recebe cliente, e a guarda do inbound
+  // (_botEhDoBot) ia descartar a resposta de quem e do time sem distinguir nada mais.
+  try {
+    const dono = row.at_id ? await env.DB.prepare('SELECT name, role FROM users WHERE id=? AND COALESCE(archived,0)=0').bind(String(row.at_id)).first() : null;
+    if (dono && String(dono.role || '').toLowerCase() === 'atendente') return { erro: 'Esse número é do vendedor ' + String(dono.name || row.at_id) + '. Use um número parado na Contingência.' };
+  } catch (_) {}
+  return { display_phone: _botSoDigitos(row.display_phone) };
+}
 async function handleBotConfig(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -9611,28 +9695,26 @@ async function handleBotConfig(req, env) {
   await _botEnsureTables(env);
   if (req.method === 'POST') {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const atual = await _botCfgLer(env, true);
+    const baseVer = (b && b._base_ver != null && Number.isFinite(Number(b._base_ver))) ? Number(b._base_ver) : null;
+    if (b) delete b._base_ver;
+    let lido;
+    try { lido = await _botCfgLerEstrito(env); } catch (e) { return json({ ok: false, error: 'Não consegui ler a configuração salva agora. Nada foi gravado; tente de novo.' }, 503); }
+    const atual = lido.cfg;
+    // Outro login salvou depois que esta tela carregou: devolve a versao nova pra tela juntar e conferir.
+    if (baseVer != null && lido.existe && baseVer !== (Number(lido.meta.ver) || 0)) return json({ ok: false, error: 'conflito', cfg: atual, meta: lido.meta }, 409);
     const cfg = _botNormaliza(b, atual);
-    if (cfg.numero.phone_number_id) {
-      let row = null;
-      try { row = await env.DB.prepare('SELECT display_phone, at_id FROM wa_api_numbers WHERE phone_number_id=?').bind(cfg.numero.phone_number_id).first(); } catch (_) {}
-      if (!row) return err('Esse número não está entre os números oficiais da casa');
-      const _idsAfl = new Set(await _idsDeTodoAfiliado(env).catch(() => []));
-      if (_idsAfl.has(String(row.at_id || ''))) return err('Esse número é de um afiliado');
-      // Numero de VENDEDOR ativo nao pode ser o bot: ele recebe cliente, e a guarda do inbound
-      // (_botEhDoBot) ia descartar a resposta de quem e do time sem distinguir nada mais.
-      try {
-        const dono = row.at_id ? await env.DB.prepare('SELECT name, role FROM users WHERE id=? AND COALESCE(archived,0)=0').bind(String(row.at_id)).first() : null;
-        if (dono && String(dono.role || '').toLowerCase() === 'atendente') return err('Esse número é do vendedor ' + String(dono.name || row.at_id) + '. Use um número parado na Contingência.');
-      } catch (_) {}
-      cfg.numero.display_phone = _botSoDigitos(row.display_phone);
-    } else cfg.numero.display_phone = '';
+    if (b && 'numero' in b) {
+      const n = await _botConfereNumero(env, cfg.numero.phone_number_id);
+      if (n.erro) return err(n.erro);
+      cfg.numero.display_phone = n.display_phone;
+    }
     // Ligou o bot (ou mudou a hora) depois da hora de hoje: o resumo de hoje nao sai atrasado.
     const agoraBR = _agoraBR();
     const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
     const mudouHora = !atual.ativo || atual.relatorio.hora !== cfg.relatorio.hora || !atual.relatorio.ativo;
     if (cfg.ativo && cfg.relatorio.ativo && mudouHora && minAgora > _botMinutos(cfg.relatorio.hora)) await _botReserva(env, 'bot_rel_' + _brDay());
-    const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id });
+    const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id }, baseVer != null ? (Number(lido.meta.ver) || 0) : null);
+    if (meta.conflito) { const ag = await _botCfgLerEstrito(env).catch(() => null); return json({ ok: false, error: 'conflito', cfg: ag ? ag.cfg : atual, meta: ag ? ag.meta : lido.meta }, 409); }
     return json({ ok: true, cfg, meta });
   }
   const cfg = await _botCfgLer(env, true);
@@ -9700,8 +9782,18 @@ async function handleBotCfgVersoes(req, env) {
     let antiga = null; try { antiga = JSON.parse(row.cfg); } catch (_) { antiga = null; }
     if (!antiga) return err('Versão ilegível', 500);
     const cfg = _botNormaliza(antiga, _botCfgPadrao());
+    // O numero daquela versao pode ter virado de vendedor (ou saido): confere de novo; se nao servir mais,
+    // fica o numero de agora e a tela avisa.
+    let aviso = '';
+    const n = await _botConfereNumero(env, cfg.numero.phone_number_id);
+    if (n.erro) {
+      const ag = await _botCfgLer(env, true);
+      cfg.numero = { ...ag.numero };
+      aviso = 'O número do bot daquela versão não serve mais (' + n.erro + '). Ficou o número atual.';
+    } else cfg.numero.display_phone = n.display_phone;
     const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id, acao: 'restaurou a versão ' + row.ver });
-    return json({ ok: true, cfg, meta });
+    if (meta.conflito) return err('Outra pessoa salvou no mesmo instante. Abra as versões e tente de novo.', 409);
+    return json({ ok: true, cfg, meta, aviso });
   }
   return err('Rota desconhecida', 404);
 }
@@ -9710,7 +9802,7 @@ async function handleBotWaPreview(req, env) {
   if (!u) return err('Não autenticado', 401);
   if (!_botPodeUsar(u)) return err('Sem permissão', 403);
   const url = new URL(req.url);
-  const cfg = await _botCfgLer(env);
+  const cfg = await _botCfgLer(env, true);   // sem cache: a previa e a da config que acabou de ser salva
   const tipo = url.searchParams.get('tipo') === 'semanal' ? 'semanal' : 'diario';
   const dia = _botDiaOk(url.searchParams.get('dia')) ? url.searchParams.get('dia') : (tipo === 'diario' ? _botDiaDoResumo(cfg, _brDay()) : _brDay());
   const dados = await _botDados(env, dia, cfg, tipo);
@@ -9730,8 +9822,13 @@ async function handleBotEnviar(req, env) {
   const para = Array.isArray(b.para) ? b.para : null;
   if (tipo === 'relatorio' || tipo === 'semanal') {
     const diaResumo = _botDiaOk(b.dia) ? b.dia : (tipo === 'relatorio' ? _botDiaDoResumo(cfg, hoje) : hoje);
-    // Mandou pra lista inteira o resumo de hoje: o automatico de hoje nao sai de novo.
-    if (!para && diaResumo === _botDiaDoResumo(cfg, hoje)) await _botReserva(env, (tipo === 'relatorio' ? 'bot_rel_' : 'bot_sem_') + hoje);
+    // Mandou pra lista inteira o resumo de hoje DEPOIS do horario marcado: o automatico de hoje nao sai
+    // de novo. Antes do horario nao segura nada (13/10/2026: o teste das 00:30 segurou o das 22:00).
+    const _hm = _botMinutos(tipo === 'relatorio' ? cfg.relatorio.hora : cfg.semanal.hora);
+    const _agBR = _agoraBR();
+    const _jaChegou = _hm >= 0 && (_agBR.getUTCHours() * 60 + _agBR.getUTCMinutes()) >= _hm && (tipo === 'relatorio' || _botWd(hoje) === cfg.semanal.dia);
+    const _diaEsperado = tipo === 'relatorio' ? _botDiaDoResumo(cfg, hoje) : (_botMinutos(cfg.semanal.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(hoje, -1) : hoje);
+    if (!para && _jaChegou && diaResumo === _diaEsperado) await _botReserva(env, (tipo === 'relatorio' ? 'bot_rel_' : 'bot_sem_') + hoje);
     const r = await _botDisparar(env, cfg, row, tipo, diaResumo, para, hoje);
     return json({ ok: true, resultados: r.resultados, texto: r.texto });
   }
@@ -9925,11 +10022,18 @@ async function handleBotAgente(req, env) {
       try {
         // So o que nao esta reservado: o item entregue a um ping fica 2 min fora da vista dos outros.
         const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) ORDER BY id LIMIT 10").bind(agora - BOT_AGENTE_LEASE_S).all();
+        const cands = [];
         for (const x of ((r && r.results) || [])) {
           if (Number(x.tent) >= BOT_AGENTE_TENT_MAX) { await _botAgenteAck(env, Number(x.id), false, '', 'o bot do PC tentou ' + BOT_AGENTE_TENT_MAX + ' vezes e não conseguiu', false); continue; }
-          itens.push({ id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') });
+          cands.push({ id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') });
         }
-        if (itens.length) await env.DB.prepare('UPDATE bot_outbox SET tent=COALESCE(tent,0)+1, pego_ts=? WHERE id IN (' + itens.map(() => '?').join(',') + ')').bind(agora, ...itens.map((x) => x.id)).run();
+        // RESERVA ATOMICA (14/10/2026): so leva o item quem conseguiu marcar a reserva; dois pings ao
+        // mesmo tempo (dois PCs com o mesmo token) nao levam o mesmo item.
+        if (cands.length) {
+          const u2 = await env.DB.prepare("UPDATE bot_outbox SET tent=COALESCE(tent,0)+1, pego_ts=? WHERE id IN (" + cands.map(() => '?').join(',') + ") AND status='pend' AND (pego_ts IS NULL OR pego_ts < ?) RETURNING id").bind(agora, ...cands.map((x) => x.id), agora - BOT_AGENTE_LEASE_S).all();
+          const meus = new Set(((u2 && u2.results) || []).map((x) => Number(x.id)));
+          for (const c of cands) if (meus.has(c.id)) itens.push(c);
+        }
       } catch (_) {}
     }
     return json({ ok: true, cmd, itens });
@@ -19266,14 +19370,16 @@ async function _presselCliquesSemNumero(env) {
 // PUSH QUANDO A PRESSEL PUBLICADA FICA SEM NUMERO. Um aviso a cada 30 min por pressel, pra direcao da
 // casa (ou pro afiliado dono). O trinco e no banco (app_config) pra nao repetir entre isolates.
 let _mudaMem = {};
-async function _presselSemNumeroAvisa(env, p) {
+// `noTeto` = tem numero ligado, mas todos bateram o limite do dia (a roleta nao passa por cima do teto
+// desde 12/10): o aviso diz isso, com trinco proprio.
+async function _presselSemNumeroAvisa(env, p, noTeto) {
   try {
     const pid = String(p && p.id);
     const agora = Math.floor(Date.now() / 1000);
-    if (_mudaMem[pid] && agora - _mudaMem[pid] < 600) return;
-    _mudaMem[pid] = agora;
+    const chave = (noTeto ? 'pressel_teto_' : 'pressel_sem_num_') + pid;
+    if (_mudaMem[chave] && agora - _mudaMem[chave] < 600) return;
+    _mudaMem[chave] = agora;
     await _ensureConfigTable(env);
-    const chave = 'pressel_sem_num_' + pid;
     const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE CAST(app_config.value AS INTEGER) < ?")
       .bind(chave, String(agora), agora, agora - 1800).run();
     if (!(ins && ins.meta && ins.meta.changes > 0)) return;
@@ -19284,14 +19390,14 @@ async function _presselSemNumeroAvisa(env, p) {
     const nome = String((p && p.nome) || ('Pressel ' + pid)).trim();
     for (const x of ((r && r.results) || [])) {
       await _wpParaPessoa(env, String(x.id), {
-        title: nome + ' está sem número',
-        body: 'O botão do anúncio não abre o WhatsApp. Ligue um número em Chegada de leads.',
-        tag: 'pressel-sem-num-' + pid,
+        title: noTeto ? nome + ': todos os números bateram o limite do dia' : nome + ' está sem número',
+        body: noTeto ? 'O botão do anúncio não abre o WhatsApp até subir o limite ou ligar outro número em Chegada de leads.' : 'O botão do anúncio não abre o WhatsApp. Ligue um número em Chegada de leads.',
+        tag: (noTeto ? 'pressel-teto-' : 'pressel-sem-num-') + pid,
         icon: '/icons/venda-192.png?v=2',
         url: '/pressels/config',
       }, 'pressel').catch(() => 0);
     }
-    console.log('PRESSEL_SEM_NUMERO pid=' + pid + ' avisados=' + (((r && r.results) || []).length));
+    console.log('PRESSEL_SEM_NUMERO pid=' + pid + (noTeto ? ' teto' : '') + ' avisados=' + (((r && r.results) || []).length));
   } catch (e) { console.error('[pressel] aviso sem numero falhou: ' + String((e && e.message) || e)); }
 }
 // ═══ fim da Chegada de leads ═══
@@ -19456,7 +19562,15 @@ async function handlePresselDiag(req, env){
   try { for (const c of chips) { const k = String((c && c.num) || '').replace(/\D/g, '').slice(-8); if (k && !_chipPorK8[k]) _chipPorK8[k] = c; } } catch (_) {}
   const _saiuMesmo = (k) => { const c = _chipPorK8[String(k || '').replace(/\D/g, '').slice(-8)]; return !_modoRoleta(c); };
   let mexidas = {};
-  if (!_resumido && !_acessoReduzido(u)) { try { mexidas = await _presselMexidas(env); } catch (_) { mexidas = {}; } }
+  if (!_resumido && !_acessoReduzido(u)) {
+    try {
+      mexidas = await _presselMexidas(env);
+      // So as do mundo de quem pede: a casa nao ve quem mexeu nos numeros do afiliado, nem o contrario.
+      const _mMx = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '\u0000') : '';
+      const _meusMx = new Set(chips.filter((c) => c && String(c.afl || '') === _mMx).map((c) => String(c.num || '').replace(/\D/g, '').slice(-8)).filter(Boolean));
+      for (const k of Object.keys(mexidas)) if (!_meusMx.has(k.slice(k.lastIndexOf(':') + 1))) delete mexidas[k];
+    } catch (_) { mexidas = {}; }
+  }
   return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k) })) });
 }
 // GET /api/pressel/stats → views/clicks por pressel (a dash mostra na métrica)
@@ -21983,7 +22097,10 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // FIFO - justamente o defeito que o conserto de hoje existe pra matar. E o preco de deixar como
   // esta e nada: 2 linhas de preview em 7 dias (0,5% da pressel 7, 0% da pressel 1).
   const _ehDev = new URL(req.url).searchParams.get('dev') === '1';
-  if (!pick && !_ehDev) depois(_presselSemNumeroAvisa(env, p));   // pressel publicada sem numero: push pra quem decide (13/10/2026)
+  // Pressel publicada sem numero: push pra quem decide (13/10/2026). Com link proprio ligado o botao vai
+  // pro link e nao precisa de numero.
+  const _vaiProLink = !!(p.link_on && /^https?:\/\//i.test(String(p.link || '').trim()));
+  if (!pick && !_ehDev && !_vaiProLink) depois(_presselSemNumeroAvisa(env, p, sellers.some((x) => x && Array.isArray(x.nums) && x.nums.length > 0)));
   // conta TODO acesso à pressel (diagnóstico: tráfego real vs rastreado)
   if (!_ehDev) await depois(env.DB.prepare('INSERT INTO pressel_hits (pid, day, hits) VALUES (?, ?, 1) ON CONFLICT(pid,day) DO UPDATE SET hits = hits + 1').bind(String(id), _brDay()).run().catch(()=>{}));
   const _qs = new URL(req.url).searchParams;
