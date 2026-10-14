@@ -8,6 +8,8 @@
 // letras em vez do QR, quando o QR trava na etapa de "passkey" do WhatsApp).
 // NUNCA EM DOBRO: o id de cada item enviado fica em enviados.json antes do ack; se o ack falhar, o
 // item volta no proximo ping e so recebe o ack de novo, sem sendMessage.
+// IMAGEM/VIDEO (1.5.0): item com `midia` { url, tipo, mime } baixa o arquivo do worker e manda com o
+// texto de legenda. Arquivo que sumiu (404) vai so o texto; falha de rede volta pra fila.
 // GRUPOS: a lista vai pro worker num ping "so_estado" (nao consome comando nem leva item) assim que
 // muda, quando a tela pede (comando grupos) e de 5 em 5 minutos. A tela espera esse ping pra atualizar.
 // Higiene (pra nao banir): UM socket por vez, reconexao com recuo, 440 (outra copia) espera 2 min,
@@ -23,7 +25,7 @@ import qrterm from 'qrcode-terminal'
 import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.4.0'
+const VERSAO = '1.5.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
@@ -275,6 +277,19 @@ async function sair() {
   try { rmSync(SESSAO, { recursive: true, force: true }) } catch {}
 }
 
+// Baixa a imagem/video do item (ate 20 MB, 60s). { buf } ou { sumiu } (404/410) ou { erro } (passageiro).
+async function baixarMidia(m) {
+  try {
+    const r = await fetch(String(m.url), { signal: AbortSignal.timeout(60000) })
+    if (r.status === 404 || r.status === 410) return { sumiu: true }
+    if (!r.ok) return { erro: 'baixar a midia deu ' + r.status }
+    const buf = Buffer.from(await r.arrayBuffer())
+    if (!buf.length) return { sumiu: true }
+    if (buf.length > 20 * 1048576) return { erro: 'midia acima de 20 MB', grande: true }
+    return { buf }
+  } catch (e) { return { erro: 'baixar a midia: ' + String((e && e.message) || e).slice(0, 120) } }
+}
+
 async function enviarItem(it) {
   const jid = String(it.jid)
   const ja = enviadosMapa[String(it.id)]
@@ -287,11 +302,23 @@ async function enviarItem(it) {
   let msgId = ''
   try {
     if (!cacheGrupo.has(jid)) { try { cacheGrupo.set(jid, await sock.groupMetadata(jid)) } catch {} }
-    const m = await sock.sendMessage(jid, { text: String(it.texto || '') })
+    const texto = String(it.texto || '')
+    let conteudo = { text: texto }
+    if (it.midia && it.midia.url) {
+      const d = await baixarMidia(it.midia)
+      if (d.buf) conteudo = it.midia.tipo === 'video' ? { video: d.buf, caption: texto, mimetype: it.midia.mime || 'video/mp4' } : { image: d.buf, caption: texto, mimetype: it.midia.mime || 'image/jpeg' }
+      else if (d.sumiu && texto.trim()) log('item ' + it.id + ': a midia nao existe mais; vai so o texto')
+      else {
+        log('item ' + it.id + ': ' + (d.erro || 'a midia nao existe mais') + (d.sumiu || d.grande ? '' : ' (tento de novo)'))
+        await ack({ id: it.id, ok: false, erro: d.erro || 'a imagem anexada nao existe mais', repetir: !(d.sumiu || d.grande) })
+        return
+      }
+    }
+    const m = await sock.sendMessage(jid, conteudo)
     msgId = (m && m.key && m.key.id) || ''
   } catch (e) {
     const msg = String((e && e.message) || e).slice(0, 200)
-    const passageiro = /timed out|timeout|connection|closed|not open|rate|socket/i.test(msg)
+    const passageiro = /timed out|timeout|connection|closed|not open|rate|socket|upload/i.test(msg)
     log('falhou no grupo ' + jid + ': ' + msg + (passageiro ? ' (tento de novo)' : ''))
     await ack({ id: it.id, ok: false, erro: msg, repetir: passageiro })
     return
@@ -299,7 +326,7 @@ async function enviarItem(it) {
   // Daqui pra frente a mensagem JA ESTA no grupo: nada aqui pode virar ok:false.
   guardarEnviado(it.id, msgId)
   enviados++
-  log('enviado no grupo ' + jid + ' (' + (it.tipo || 'texto') + ')' + (msgId ? ', id ' + msgId : ''))
+  log('enviado no grupo ' + jid + ' (' + (it.tipo || 'texto') + (it.midia ? ', com ' + (it.midia.tipo === 'video' ? 'video' : 'imagem') : '') + ')' + (msgId ? ', id ' + msgId : ''))
   const confirmou = await ack({ id: it.id, ok: true, msg_id: msgId })
   if (!confirmou) log('o worker nao confirmou o item ' + it.id + ' agora; confirmo no proximo ping (sem mandar de novo)')
 }

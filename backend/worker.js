@@ -8741,6 +8741,33 @@ function _botCfgPadrao() {
 }
 // Mescla o que veio (raw) com a base (a config gravada ou o padrao) e valida tipo por tipo. Campo
 // desconhecido e ignorado; campo invalido volta pro valor da base. Nunca lanca.
+// MIDIA DAS MENSAGENS (14/10/2026). key = 24 hex + extensao (nao da pra adivinhar: a rota GET e publica,
+// porque quem baixa e o bot do PC). Ate 5 por mensagem; com mais de uma o bot sorteia.
+const BOT_MIDIA_RE = /^[a-f0-9]{24}\.(jpg|png|webp|mp4)$/;
+const BOT_MIDIA_MIME = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4' };
+const BOT_MIDIA_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4' };
+const BOT_MIDIA_MAX = { imagem: 5 * 1048576, video: 16 * 1048576 };
+const _botMidiaTipo = (key) => (/\.mp4$/.test(String(key)) ? 'video' : 'imagem');
+function _botMidias(v) {
+  const vistos = new Set();
+  return (Array.isArray(v) ? v : []).map((m) => (m && BOT_MIDIA_RE.test(String(m.key || ''))) ? { key: String(m.key), tipo: _botMidiaTipo(m.key), nome: _botTexto300(m.nome, 80).trim() } : null)
+    .filter((m) => m && !vistos.has(m.key) && vistos.add(m.key)).slice(0, 5);
+}
+const _botMidia1 = (m) => (m && BOT_MIDIA_RE.test(String(m.key || ''))) ? { key: String(m.key), tipo: _botMidiaTipo(m.key) } : null;
+async function _botSorteiaMidia(env, chave, lista) {
+  const l = _botMidias(lista);
+  if (!l.length) return null;
+  const k = await _botSorteia(env, 'midia_' + chave, l.map((m) => m.key));
+  const m = l.find((x) => x.key === k) || l[0];
+  return { key: m.key, tipo: m.tipo };
+}
+// O registro de envio diz que foi com imagem (a tela de envios mostra so o texto).
+const _botTxtLog = (texto, midia) => {
+  let m = midia;
+  if (typeof m === 'string') { try { m = JSON.parse(m); } catch (_) { m = null; } }
+  if (!m || !m.key) return texto;
+  return '[' + (m.tipo === 'video' ? 'vídeo' : 'imagem') + ']' + (texto ? ' ' + texto : '');
+};
 function _botNormaliza(raw, base) {
   const b = base || _botCfgPadrao();
   const r = (raw && typeof raw === 'object') ? raw : {};
@@ -8802,7 +8829,7 @@ function _botNormaliza(raw, base) {
   const vistosN = new Set();
   o.marcos.lista = lista.map((m) => {
     const fr = _botLista(m && Array.isArray(m.frases) && m.frases.length ? m.frases : [m && m.frase]);
-    return { n: Math.floor(Number(m && m.n) || 0), frases: fr, frase: fr[0] || '' };
+    return { n: Math.floor(Number(m && m.n) || 0), frases: fr, frase: fr[0] || '', midias: _botMidias(m && m.midias) };
   }).filter((m) => m.n > 0 && m.n <= 999 && m.frases.length && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
   const mb = (r.meta_batida && typeof r.meta_batida === 'object') ? r.meta_batida : {};
   const bmb = b.meta_batida || o.meta_batida;
@@ -8814,6 +8841,7 @@ function _botNormaliza(raw, base) {
     o.meta_batida.frases = fr.length ? fr : [BOT_META_FRASE_PADRAO];
     o.meta_batida.frase = o.meta_batida.frases[0];
   }
+  o.meta_batida.midias = _botMidias('midias' in mb ? mb.midias : bmb.midias);
   const inc = (r.incentivo && typeof r.incentivo === 'object') ? r.incentivo : {};
   const binc = b.incentivo || o.incentivo;
   o.incentivo.ativo = 'ativo' in inc ? !!inc.ativo : !!binc.ativo;
@@ -8828,6 +8856,7 @@ function _botNormaliza(raw, base) {
   o.incentivo.dias = [...new Set(idias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
   const ifr = _botLista(Array.isArray(inc.frases) ? inc.frases : binc.frases);
   o.incentivo.frases = ifr.length ? ifr : BOT_INCENTIVO_PADRAO.slice();
+  o.incentivo.midias = _botMidias('midias' in inc ? inc.midias : binc.midias);
   const can = (r.canais && typeof r.canais === 'object') ? r.canais : {};
   const bcan = b.canais || o.canais;
   o.canais.whatsapp = 'whatsapp' in can ? !!can.whatsapp : bcan.whatsapp !== false;
@@ -8915,8 +8944,9 @@ async function _botEnsureTables(env) {
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_envios_tipo ON bot_envios(tipo, id)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_pend (fone TEXT PRIMARY KEY, nome TEXT, texto TEXT, tipo TEXT, ts INTEGER, tent INTEGER DEFAULT 0)').run();
     try { await env.DB.prepare('ALTER TABLE bot_pend ADD COLUMN tent INTEGER DEFAULT 0').run(); } catch (_) {}
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, jid TEXT, nome TEXT, texto TEXT, status TEXT, tent INTEGER DEFAULT 0, msg_id TEXT, erro TEXT, feito_ts INTEGER, pego_ts INTEGER)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, tipo TEXT, jid TEXT, nome TEXT, texto TEXT, status TEXT, tent INTEGER DEFAULT 0, msg_id TEXT, erro TEXT, feito_ts INTEGER, pego_ts INTEGER, midia TEXT)').run();
     try { await env.DB.prepare('ALTER TABLE bot_outbox ADD COLUMN pego_ts INTEGER').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE bot_outbox ADD COLUMN midia TEXT').run(); } catch (_) {}
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_outbox_status ON bot_outbox(status, id)').run();
     _botTablesOk = true;
   } catch (_) {}
@@ -9449,10 +9479,10 @@ async function _botMarcosTick(env, cfg, row, dia) {
     if (cfg.marcos.ativo && cfg.marcos.lista.length) {
       const max = Number(feito[v.id]) || 0;
       const novos = cfg.marcos.lista.filter((m) => m.n > max && m.n <= v.pedidos);
-      for (const m of novos) envios.push({ v, frases: m.frases && m.frases.length ? m.frases : [m.frase], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } });
+      for (const m of novos) envios.push({ v, frases: m.frases && m.frases.length ? m.frases : [m.frase], midias: m.midias || [], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } });
     }
     if (cfg.meta_batida.ativo && v.meta > 0 && v.semana >= v.meta && !feitoS[v.id]) {
-      envios.push({ v, frases: cfg.meta_batida.frases && cfg.meta_batida.frases.length ? cfg.meta_batida.frases : [cfg.meta_batida.frase], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
+      envios.push({ v, frases: cfg.meta_batida.frases && cfg.meta_batida.frases.length ? cfg.meta_batida.frases : [cfg.meta_batida.frase], midias: cfg.meta_batida.midias || [], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
     }
   }
   _botVerVista = ver;
@@ -9463,15 +9493,26 @@ async function _botMarcosTick(env, cfg, row, dia) {
   for (const e of envios) {
     const fr = await _botSorteia(env, e.tipo === 'meta' ? 'meta' : 'marco_' + e.n, e.frases);
     e.texto = _botFrase(fr, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
+    e.midia = await _botSorteiaMidia(env, e.tipo === 'meta' ? 'meta' : 'marco_' + e.n, e.midias);
   }
   // NO GRUPO: todas as comemoracoes da batida numa mensagem so. Entregue (ou na fila) = consumido.
   const g = cfg.grupo || {};
   const noGrupo = !!(g.id && g.marcos !== false);
   if (noGrupo) {
-    const tipoG = envios.some((e) => e.tipo === 'meta') && !envios.some((e) => e.tipo === 'marco') ? 'meta' : 'marco';
-    const r = await _botEntregarGrupo(env, cfg, envios.map((e) => e.texto).join('\n\n'), tipoG, dia);
-    if (r.status !== 'erro') {
-      for (const e of envios) consome(e);
+    // Sem midia: todas numa mensagem so (como sempre). Com midia: cada uma sai sozinha, com a frase de legenda.
+    const semMidia = envios.filter((e) => !e.midia);
+    const entregues = [];
+    if (semMidia.length) {
+      const tipoG = semMidia.some((e) => e.tipo === 'meta') && !semMidia.some((e) => e.tipo === 'marco') ? 'meta' : 'marco';
+      const r = await _botEntregarGrupo(env, cfg, semMidia.map((e) => e.texto).join('\n\n'), tipoG, dia);
+      if (r.status !== 'erro') entregues.push(...semMidia);
+    }
+    for (const e of envios.filter((x) => x.midia)) {
+      const r = await _botEntregarGrupo(env, cfg, e.texto, e.tipo, dia, e.midia);
+      if (r.status !== 'erro') entregues.push(e);
+    }
+    if (entregues.length) {
+      for (const e of entregues) consome(e);
       // Grava JA: se a batida for cortada no meio do privado, a proxima nao repete no grupo.
       if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
       if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
@@ -9547,7 +9588,7 @@ async function _botIncentivoTick(env, cfg, row, dia) {
   const frase = await _botSorteia(env, 'incentivo', inc.frases);
   const texto = _botFrase(frase, { horas, pedidos, data: _botDataBR(dia) });
   await _writeConfig(env, 'bot_incent_' + dia, JSON.stringify({ n: feitos + 1, ultimo: agora }));
-  if (cfg.grupo && cfg.grupo.id) await _botEntregarGrupo(env, cfg, texto, 'incentivo', dia);
+  if (cfg.grupo && cfg.grupo.id) await _botEntregarGrupo(env, cfg, texto, 'incentivo', dia, await _botSorteiaMidia(env, 'incentivo', inc.midias));
   else await _botEnviarLista(env, cfg, row, _botDestinatarios(cfg), texto, 'incentivo', dia);
 }
 // O TICK DO CRON (toda batida, leve): fila de pendentes, resumo diario, resumo semanal, marcos.
@@ -9805,10 +9846,11 @@ async function _botAgenteMarcaClose(env) {
   o.estado = 'close'; o.qr = ''; o.pairingCode = '';
   await _writeConfig(env, 'bot_agente', JSON.stringify(o));
 }
-async function _botOutboxPor(env, g, texto, tipo, dia) {
+async function _botOutboxPor(env, g, texto, tipo, dia, midia) {
   await _botEnsureTables(env);
-  await env.DB.prepare('INSERT INTO bot_outbox (ts, dia, tipo, jid, nome, texto, status, tent) VALUES (?,?,?,?,?,?,?,0)')
-    .bind(Math.floor(Date.now() / 1000), String(dia || _brDay()), String(tipo || ''), String(g.id), String(g.nome || ''), String(texto).slice(0, 4000), 'pend').run();
+  const m = _botMidia1(midia);
+  await env.DB.prepare('INSERT INTO bot_outbox (ts, dia, tipo, jid, nome, texto, status, tent, midia) VALUES (?,?,?,?,?,?,?,0,?)')
+    .bind(Math.floor(Date.now() / 1000), String(dia || _brDay()), String(tipo || ''), String(g.id), String(g.nome || ''), String(texto).slice(0, 4000), 'pend', m ? JSON.stringify(m) : null).run();
 }
 // Fila: descarta o que esperou demais (PC desligado) e a comemoracao de outro dia, com registro; nao mexe em
 // item reservado por um ping (o agente pode estar mandando agora); apaga o que ja foi, depois de 30 dias.
@@ -9818,7 +9860,7 @@ async function _botOutboxFaxina(env) {
   const hoje = _brDay();
   let rows = [];
   try {
-    rows = ((await env.DB.prepare("SELECT id, ts, dia, tipo, jid, nome, texto FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) AND (ts < ? OR (tipo IN ('marco','meta') AND dia <> ?) OR (tipo = 'incentivo' AND (dia <> ? OR ts < ?))) LIMIT 20")
+    rows = ((await env.DB.prepare("SELECT id, ts, dia, tipo, jid, nome, texto, midia FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) AND (ts < ? OR (tipo IN ('marco','meta') AND dia <> ?) OR (tipo = 'incentivo' AND (dia <> ? OR ts < ?))) LIMIT 20")
       .bind(agora - BOT_AGENTE_LEASE_S, agora - BOT_AGENTE_FILA_MAX_H * 3600, hoje, hoje, agora - 2700).all()).results) || [];
   } catch (_) { return; }
   for (const r of rows) {
@@ -9828,7 +9870,7 @@ async function _botOutboxFaxina(env) {
       : deOutroDia ? 'A comemoração era de ' + _botDataBR(r.dia).slice(0, 5) + ' e o bot do PC não ligou naquele dia. Texto descartado.' : 'O bot do PC ficou desligado por ' + BOT_AGENTE_FILA_MAX_H + 'h. Texto descartado.';
     let mudou = false;
     try { const u = await env.DB.prepare("UPDATE bot_outbox SET status='erro', erro=?, feito_ts=? WHERE id=? AND status='pend'").bind(motivo, agora, r.id).run(); mudou = !!(u && u.meta && u.meta.changes > 0); } catch (_) {}
-    if (mudou) await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: r.texto });
+    if (mudou) await _botLog(env, { dia: r.dia, tipo: r.tipo, nome: 'Grupo: ' + (r.nome || r.jid), fone: r.jid, via: 'grupo', status: 'erro', erro: motivo, texto: _botTxtLog(r.texto, r.midia) });
   }
   try { await env.DB.prepare("DELETE FROM bot_outbox WHERE status<>'pend' AND ts < ?").bind(agora - 30 * 86400).run(); } catch (_) {}
 }
@@ -9836,7 +9878,7 @@ async function _botOutboxFaxina(env) {
 // (tent ja subiu no ping). O UPDATE exige status='pend': dois acks do mesmo item registram uma vez so.
 async function _botAgenteAck(env, id, ok, msgId, erro, repetir) {
   let row = null;
-  try { row = await env.DB.prepare('SELECT id, dia, tipo, jid, nome, texto, status FROM bot_outbox WHERE id=?').bind(id).first(); } catch (_) {}
+  try { row = await env.DB.prepare('SELECT id, dia, tipo, jid, nome, texto, status, midia FROM bot_outbox WHERE id=?').bind(id).first(); } catch (_) {}
   if (!row) return { achou: false };
   if (row.status !== 'pend') return { achou: true, ja: true };
   if (!ok && repetir) {
@@ -9849,17 +9891,19 @@ async function _botAgenteAck(env, id, ok, msgId, erro, repetir) {
     mudou = !!(u && u.meta && u.meta.changes > 0);
   } catch (_) {}
   if (!mudou) return { achou: true, ja: true };
-  await _botLog(env, { dia: row.dia, tipo: row.tipo, nome: 'Grupo: ' + (row.nome || row.jid), fone: row.jid, via: 'grupo', status: ok ? 'enviado' : 'erro', erro: ok ? '' : erro, texto: row.texto, wamid: msgId });
+  await _botLog(env, { dia: row.dia, tipo: row.tipo, nome: 'Grupo: ' + (row.nome || row.jid), fone: row.jid, via: 'grupo', status: ok ? 'enviado' : 'erro', erro: ok ? '' : erro, texto: _botTxtLog(row.texto, row.midia), wamid: msgId });
   return { achou: true };
 }
 // ENTREGA NO GRUPO. via 'pc': entra na fila e o agente pega no proximo ping (o registro de envio e
 // feito no ack, ou no descarte). via 'evolution': manda na hora; servidor fora ou sessao caida vai pra
 // bot_pend e o tick repete por ate 6h.
-async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
+async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia) {
   const g = (cfg && cfg.grupo) || {};
   const out = { fone: String(g.id || ''), nome: 'Grupo: ' + (g.nome || g.id || ''), status: 'erro', via: 'grupo', erro: '', id: '', grupo: true };
   if (!g.id) { out.erro = 'nenhum grupo escolhido'; return out; }
   if (g.via === 'evolution') {
+    // A Evolution (desligada desde 12/10) manda so o texto.
+    if (!String(texto || '').trim()) { out.erro = 'pela Evolution só vai texto'; return out; }
     const r = await _botEvoTexto(env, g.id, texto);
     if (r.ok) { out.status = 'enviado'; out.id = r.id; }
     else if (r.repetir && (await _botPendGrupo(env, g, texto, tipo))) { out.status = 'aguardando'; out.erro = r.erro + '. Vou tentar de novo por até 6h.'; }
@@ -9868,7 +9912,7 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
     return out;
   }
   try {
-    await _botOutboxPor(env, g, texto, tipo, dia);
+    await _botOutboxPor(env, g, texto, tipo, dia, midia);
     const ag = await _botAgenteEstado(env);
     out.status = 'aguardando';
     out.erro = !ag.vivo ? ('na fila. O bot do PC está desligado' + (ag.ts ? ' (visto às ' + _botHoraBR(ag.ts) + ')' : ' (nunca rodou)') + '; sai quando ele ligar')
@@ -9877,7 +9921,7 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia) {
           : 'na fila. O bot do PC está reconectando';
   } catch (e) {
     out.erro = 'não consegui guardar na fila: ' + String((e && e.message) || e);
-    await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: 'erro', erro: out.erro, texto });
+    await _botLog(env, { dia, tipo, nome: out.nome, fone: out.fone, via: 'grupo', status: 'erro', erro: out.erro, texto: _botTxtLog(texto, _botMidia1(midia)) });
   }
   return out;
 }
@@ -10044,6 +10088,7 @@ async function handleBotEnviar(req, env) {
     return json({ ok: true, resultados: r.resultados, texto: r.texto });
   }
   let texto = BOT_TEXTO_TESTE;
+  let midia = null;
   if (tipo === 'marco') {
     const n = Math.floor(Number(b.n) || 0);
     const m = cfg.marcos.lista.find((x) => x.n === n) || cfg.marcos.lista[0];
@@ -10053,6 +10098,7 @@ async function handleBotEnviar(req, env) {
     const dados = await _botDados(env, hoje, cfg, 'diario');
     const vd = dados.vendedores.find((x) => x.id === v.id) || { pedidos: m.n, leads: 0, meta: 0, faltam: 0 };
     texto = _botFrase(await _botSorteia(env, 'marco_' + m.n, m.frases && m.frases.length ? m.frases : [m.frase]), { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
+    midia = await _botSorteiaMidia(env, 'marco_' + m.n, m.midias);
   }
   if (tipo === 'meta') {
     const vendedores = await _botVendedores(env);
@@ -10060,6 +10106,7 @@ async function handleBotEnviar(req, env) {
     const dados = await _botDados(env, hoje, cfg, 'diario');
     const vd = dados.vendedores.find((x) => x.id === v.id) || { semana: 0, meta: 0, pedidos: 0, leads: 0, faltam: 0 };
     texto = _botFrase(await _botSorteia(env, 'meta', cfg.meta_batida.frases), { nome: v.nome, n: vd.meta || vd.semana, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: 0, data: _botDataBR(hoje) });
+    midia = await _botSorteiaMidia(env, 'meta', cfg.meta_batida.midias);
   }
   if (tipo === 'incentivo') {
     const { ultima, pedidos } = await _botUltimaVenda(env, hoje);
@@ -10067,14 +10114,15 @@ async function handleBotEnviar(req, env) {
     const desde = Math.max(_botInicioDia(hoje) + Math.max(0, de) * 60, ultima || 0);
     const horas = Math.max(1, Math.floor((Math.floor(Date.now() / 1000) - desde) / 3600));
     texto = _botFrase(await _botSorteia(env, 'incentivo', cfg.incentivo.frases), { horas, pedidos, data: _botDataBR(hoje) });
+    midia = await _botSorteiaMidia(env, 'incentivo', cfg.incentivo.midias);
   }
   const alvos = _botAlvosDe(cfg, para);
   const grupoVai = !para && temGrupo && (!['marco', 'meta'].includes(tipo) || cfg.grupo.marcos !== false);
   if (!alvos.length && !grupoVai) return err('Ninguém na lista de quem recebe (ou todo mundo sem telefone)');
   const resultados = [];
-  if (grupoVai) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, hoje));
+  if (grupoVai) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, hoje, midia));
   resultados.push(...(await _botEnviarLista(env, cfg, row, alvos, texto, tipo, hoje)));
-  return json({ ok: true, resultados, texto });
+  return json({ ok: true, resultados, texto, midia: midia && grupoVai ? midia : null });
 }
 async function handleBotLog(req, env) {
   const u = await authUser(req, env);
@@ -10190,11 +10238,53 @@ async function handleBotWa(req, env) {
   }
   if (m === 'POST' && acao === 'enviar') {
     if (!cfg.grupo || !cfg.grupo.id) return err('Escolha e salve o grupo antes');
-    const texto = _botTexto300(b.texto, 4000).trim() || BOT_TEXTO_TESTE;
-    const r = await _botEntregarGrupo(env, cfg, texto, b.tipo === 'teste' ? 'teste' : 'livre', _brDay());
+    const midia = _botMidia1(b.midia);
+    if (b.midia && !midia) return err('Anexo inválido. Anexe de novo.');
+    const texto = _botTexto300(b.texto, 4000).trim() || (midia ? '' : BOT_TEXTO_TESTE);
+    const r = await _botEntregarGrupo(env, cfg, texto, b.tipo === 'teste' ? 'teste' : 'livre', _brDay(), midia);
     return json({ ok: r.status !== 'erro', resultado: r, error: r.status === 'erro' ? r.erro : '' });
   }
   return err('Rota do bot desconhecida', 404);
+}
+// /api/bot/midia: POST (corpo cru, content-type do arquivo, ?nome=) guarda no R2 e devolve { midia };
+// GET /api/bot/midia/<key> devolve o arquivo. O GET e publico de proposito: quem baixa e o bot do PC
+// (sem sessao), e a key tem 24 hex aleatorios.
+async function handleBotMidia(req, env) {
+  const url = new URL(req.url);
+  const key = url.pathname.replace(/^\/api\/bot\/midia\/?/, '');
+  if (req.method === 'GET' && key) {
+    if (!BOT_MIDIA_RE.test(key) || !env.MEDIA) return new Response('nao achei', { status: 404 });
+    let obj = null;
+    try { obj = await env.MEDIA.get('bot/' + key); } catch (_) { obj = null; }
+    if (!obj) return new Response('nao achei', { status: 404 });
+    return new Response(obj.body, { headers: {
+      'content-type': BOT_MIDIA_MIME[key.split('.').pop()] || 'application/octet-stream',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'access-control-allow-origin': '*',
+    } });
+  }
+  if (req.method !== 'POST' || key) return err('Rota do bot desconhecida', 404);
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_botPodeUsar(u)) return err('Sem permissão', 403);
+  if (!env.MEDIA) return err('Armazenamento de arquivo não configurado', 503);
+  const mime = String(req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const ext = BOT_MIDIA_EXT[mime];
+  if (!ext) return err(mime === 'image/gif' ? 'GIF não anima no WhatsApp. Mande o GIF como vídeo MP4.' : 'Só imagem (JPG, PNG ou WEBP) ou vídeo MP4.');
+  const tipo = ext === 'mp4' ? 'video' : 'imagem';
+  const max = BOT_MIDIA_MAX[tipo];
+  const declarado = Number(req.headers.get('content-length') || 0);
+  if (declarado > max) return err((tipo === 'video' ? 'Vídeo' : 'Imagem') + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
+  let buf;
+  try { buf = await req.arrayBuffer(); } catch (_) { return err('Não consegui ler o arquivo'); }
+  if (!buf || !buf.byteLength) return err('Arquivo vazio');
+  if (buf.byteLength > max) return err((tipo === 'video' ? 'Vídeo' : 'Imagem') + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
+  const nova = [...crypto.getRandomValues(new Uint8Array(12))].map((x) => x.toString(16).padStart(2, '0')).join('') + '.' + ext;
+  try { await env.MEDIA.put('bot/' + nova, buf, { httpMetadata: { contentType: BOT_MIDIA_MIME[ext] } }); }
+  catch (e) { return err('Não deu pra guardar o arquivo: ' + String((e && e.message) || e), 502); }
+  const nome = _botTexto300(url.searchParams.get('nome'), 80).trim();
+  console.log('BOT_MIDIA por=' + String(u.id) + ' key=' + nova + ' tam=' + buf.byteLength);
+  return json({ ok: true, midia: { key: nova, tipo, nome }, url: url.origin + '/api/bot/midia/' + nova, tam: buf.byteLength });
 }
 // O AGENTE NO PC fala aqui, com o token bot_agente_token (nao e sessao de usuario).
 // ping = estado do WhatsApp Web + grupos (quando mudam) -> volta comando pendente + itens da fila.
@@ -10232,11 +10322,15 @@ async function handleBotAgente(req, env) {
     if (estadoAg === 'open' && cmdPend !== 'logout' && !soEstado) {
       try {
         // So o que nao esta reservado: o item entregue a um ping fica 2 min fora da vista dos outros.
-        const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) ORDER BY id LIMIT 10").bind(agora - BOT_AGENTE_LEASE_S).all();
+        const r = await env.DB.prepare("SELECT id, jid, texto, tipo, COALESCE(tent,0) AS tent, midia FROM bot_outbox WHERE status='pend' AND (pego_ts IS NULL OR pego_ts < ?) ORDER BY id LIMIT 10").bind(agora - BOT_AGENTE_LEASE_S).all();
         const cands = [];
+        const origem = new URL(req.url).origin;
         for (const x of ((r && r.results) || [])) {
           if (Number(x.tent) >= BOT_AGENTE_TENT_MAX) { await _botAgenteAck(env, Number(x.id), false, '', 'o bot do PC tentou ' + BOT_AGENTE_TENT_MAX + ' vezes e não conseguiu', false); continue; }
-          cands.push({ id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') });
+          let md = null; try { md = _botMidia1(x.midia ? JSON.parse(x.midia) : null); } catch (_) { md = null; }
+          const it = { id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') };
+          if (md) it.midia = { url: origem + '/api/bot/midia/' + md.key, tipo: md.tipo, mime: BOT_MIDIA_MIME[md.key.split('.').pop()] };
+          cands.push(it);
         }
         // RESERVA ATOMICA (14/10/2026): so leva o item quem conseguiu marcar a reserva; dois pings ao
         // mesmo tempo (dois PCs com o mesmo token) nao levam o mesmo item.
@@ -24807,6 +24901,7 @@ export default {
       if (path.startsWith('/api/bot/wa/')) return handleBotWa(req, env);   // WhatsApp Web do bot (grupo)
       if (path.startsWith('/api/bot/agente/')) return handleBotAgente(req, env);   // o bot no PC (token, sem sessao)
       if (path.startsWith('/api/bot/config/')) return handleBotCfgVersoes(req, env);   // versao, historico e restaurar da config do bot
+      if (path.startsWith('/api/bot/midia')) return handleBotMidia(req, env);   // imagem/video das mensagens do bot (GET publico, pro bot do PC)
 
       // IA — gera copy via Gemini/Anthropic
       if (req.method === 'POST'   && path === '/api/ai/generate-copy') return handleAIGenerateCopy(req, env);
