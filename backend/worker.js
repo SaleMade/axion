@@ -12337,6 +12337,11 @@ async function _scEnsureTables(env) {
     // se o lead escrever pro outro numero nosso no meio do funil. Sem isto, o passo 3 sai por um
     // numero diferente do passo 2 e o lead ve a mesma sequencia vindo de dois contatos.
     try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN inst TEXT').run(); } catch (_) {}
+    // POR QUE PAROU (12/10/2026). Sem isto a pilha dizia so que o funil parou, e o vendedor
+    // retomava em cima de um motivo que ia falhar de novo. Medido no dia da queixa do Guilherme:
+    // 18 das 20 paradas do dia eram a JANELA DE 24H fechada (o lead tinha falado 33 a 46 horas
+    // antes), coisa que nem o vendedor nem o diretor tinham como adivinhar olhando a tela.
+    try { await env.DB.prepare('ALTER TABLE wa_funnel_run ADD COLUMN motivo TEXT').run(); } catch (_) {}
     _scTablesOk = true;
   } catch (_) {}
 }
@@ -13134,6 +13139,16 @@ async function _waFunnelStop(env, phone, why) {
 // vivia dentro do map (movido, nao reescrito); so ganhou um retorno: o status final da linha no
 // banco, que e o que diz ao encadeamento da pilha se pode promover o proximo da fila.
 const _FUNIL_TERMINAIS = new Set(['done', 'error', 'lead_respondeu', 'migrou']);
+// O MOTIVO DA PARADA EM UMA FRASE QUE O VENDEDOR ENTENDE. O codigo cru ('window_closed') nao diz
+// nada pra quem esta atendendo; a frase diz o que fazer. Qualquer codigo novo cai no texto do erro.
+function _motivoDaFalha(send) {
+  const code = String((send && send.code) || '');
+  if (code === 'window_closed') return 'A janela de 24h fechou: o lead nao fala com a gente ha mais de um dia. So volta a sair quando ele responder, ou por template aprovado.';
+  if (code === 'canal_fora') return 'O numero desta conversa nao estava conectado na hora do envio.';
+  if (code === 'no_official') return 'O vendedor estava sem numero oficial pra enviar.';
+  if (code === 'not_registered') return 'O numero oficial ainda nao foi registrado na Meta.';
+  return String((send && send.error) || 'Falha no envio.').slice(0, 180);
+}
 async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
   await (async () => {
       // ── RESERVA A LINHA ANTES DE TRABALHAR ────────────────────────────────
@@ -13201,7 +13216,8 @@ async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
       // e pior do que um funil parado que o vendedor ve e retoma na mao.
       if (falhou && !semItem) {
         console.error('WA_FUNIL_PASSO_FALHOU fone=' + String(r.phone) + ' seq=' + String(r.seq_id) + ' idx=' + idx + ' code=' + String(send.code || '') + ' erro=' + String(send.error || '').slice(0, 120));
-        await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'").bind(now, r.phone).run();
+        await env.DB.prepare("UPDATE wa_funnel_run SET status='error', motivo=?, tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'")
+          .bind(_motivoDaFalha(send), now, r.phone).run();
         return;
       }
       const nidx = idx + 1;
@@ -13241,7 +13257,8 @@ async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
         const f2 = !!(s2 && s2.ok === false);
         if (f2 && s2.code !== 'no_item') {
           console.error('WA_FUNIL_PASSO_FALHOU fone=' + String(r.phone) + ' seq=' + String(r.seq_id) + ' idx=' + i2 + ' code=' + String(s2.code || ''));
-          await env.DB.prepare("UPDATE wa_funnel_run SET status='error', tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'").bind(Math.floor(Date.now() / 1000), r.phone).run();
+          await env.DB.prepare("UPDATE wa_funnel_run SET status='error', motivo=?, tentativas=COALESCE(tentativas,0)+1, updated_at=? WHERE phone=? AND status='enviando'")
+            .bind(_motivoDaFalha(s2), Math.floor(Date.now() / 1000), r.phone).run();
           break;
         }
         i2++;
@@ -13504,7 +13521,7 @@ async function handleWAFunnelQueue(req, env) {
   // todo mundo, entao o "N na frente" que o vendedor lia nao era o dele.
   const _atPedido = String((new URL(req.url)).searchParams.get('at') || '').trim();
   const dono = isDirector(u) ? (_atPedido || null) : String(u.id);
-  const sql = "SELECT f.phone, f.at_id, f.seq_id, f.idx, f.items, f.status, f.next_at, c.name nome"
+  const sql = "SELECT f.phone, f.at_id, f.seq_id, f.idx, f.items, f.status, f.next_at, f.motivo, c.name nome"
     + " FROM wa_funnel_run f LEFT JOIN wa_chats c ON c.phone = f.phone"
     + " WHERE (f.status IN ('running','enviando','fila') OR (f.status IN ('error','migrou') AND f.updated_at > ?))" + (dono ? " AND f.at_id = ?" : "")
     + " ORDER BY f.status DESC, f.next_at ASC LIMIT 30";
@@ -13547,6 +13564,7 @@ async function handleWAFunnelQueue(req, env) {
       status: r.status,
       enviando,
       parado,
+      motivo: r.motivo || '',
       fila: (enviando || parado) ? 0 : naFila,   // quantos na frente (o proprio incluido), pra "Na fila · N na frente"
       passo: passoLbl,
     });
@@ -13578,9 +13596,20 @@ async function handleWAFunnel(req, env) {
   if (b.action === 'stop') { await _waFunnelStop(env, phone, 'stopped'); return json({ ok: true }); }
   // RETOMAR UM FUNIL PARADO (12/10/2026, auditoria item 27): volta pra 'running' no MESMO passo (o idx
   // fica), tentativas zeradas; so a linha do proprio vendedor (diretor: qualquer). Sai na batida seguinte.
+  // DISPENSAR UM FUNIL PARADO (12/10/2026). O 'stop' so pega running/enviando/fila, entao clicar em
+  // "Tirar da fila" num funil que ja estava em error/migrou nao fazia NADA e ele voltava na proxima
+  // leitura da pilha - foi exatamente a queixa do Guilherme ("pausei todos, mas voltam a aparecer").
+  // Aqui a linha vai pra 'stopped', que e o mesmo estado de quem foi parado na mao, e some da pilha.
+  if (b.action === 'dispensar') {
+    const _agoraD = Math.floor(Date.now() / 1000);
+    const _d = await env.DB.prepare("UPDATE wa_funnel_run SET status='stopped', updated_at=? WHERE phone=? AND status IN ('error','migrou')" + (isDirector(u) ? '' : ' AND at_id=?'))
+      .bind(...[_agoraD, phone].concat(isDirector(u) ? [] : [String(u.id)])).run().catch(() => null);
+    const _okD = !!(_d && _d.meta && _d.meta.changes);
+    return _okD ? json({ ok: true, dispensado: phone }) : json({ ok: false, error: 'Nenhum funil parado pra dispensar' }, 404);
+  }
   if (b.action === 'resume') {
     const _agoraR = Math.floor(Date.now() / 1000);
-    const _r = await env.DB.prepare("UPDATE wa_funnel_run SET status='running', next_at=?, tentativas=0, updated_at=? WHERE phone=? AND status IN ('error','migrou')" + (isDirector(u) ? '' : ' AND at_id=?'))
+    const _r = await env.DB.prepare("UPDATE wa_funnel_run SET status='running', next_at=?, tentativas=0, motivo=NULL, updated_at=? WHERE phone=? AND status IN ('error','migrou')" + (isDirector(u) ? '' : ' AND at_id=?'))
       .bind(...[_agoraR, _agoraR, phone].concat(isDirector(u) ? [] : [String(u.id)])).run().catch(() => null);
     const _ok = !!(_r && _r.meta && _r.meta.changes);
     return _ok ? json({ ok: true, retomado: phone }) : json({ ok: false, error: 'Nenhum funil parado pra retomar' }, 404);
