@@ -1164,6 +1164,15 @@ const _PL_EVENTOS = {
   // alcanca essas colunas (ver _fiveColFor).
   frustrado:           { ev: 'SHIPPING_UPDATE', sh: 'PL_FRUSTRADO' },
   furtado:             { ev: 'SHIPPING_UPDATE', sh: 'PL_ROUBADO' },
+  // SO A PAYLOG NORMAL MANDA ESTES QUATRO (14/10/2026, ver _PL2_EVENTOS). 'parado' e o pedido pausado
+  // antes de sair (o motivo vai no event_status): e criacao e nao desvio, porque TODO pedido que vem
+  // do AfterPayLog passa por "Parado: Erro fiscal" no mesmo segundo em que nasce e sai dele horas
+  // depois (83 de 83 na casa, de 07 a 14/10); mandar pra Requer Atencao encheria a coluna de alarme
+  // falso. 'postado' e 'devolvido' sao o inicio e o fim do caminho que o AfterPayLog nao separava.
+  parado:              { ev: 'ORDER_CREATE' },
+  estornado:           { ev: 'CHARGE_UPDATED', ch: 'REFUNDED' },
+  postado:             { ev: 'SHIPPING_UPDATE', sh: 'SENDED' },
+  devolvido:           { ev: 'SHIPPING_UPDATE', sh: 'RETURNED' },
   // Nao movem card: o comprovante e anexo, e o nao-mapeado e diagnostico deles.
   proof_of_delivery:   { ev: null },
   postback_unmapped:   { ev: null },
@@ -1175,9 +1184,11 @@ const _PL_EVENTOS = {
 function _plEndereco(a) {
   const linha = String((a && a.line) || '').trim();
   const m = linha.match(/^(.*?)[,\s]+(\d+[A-Za-z]?)$/);
+  // A PAYLOG NORMAL JA MANDA SEPARADO (logradouro + numero): ai nao se adivinha nada pela linha.
+  const sep = !!(a && (a.logradouro || a.numero));
   return {
-    address: (m ? m[1] : linha).trim() || null,
-    number: m ? m[2] : 'S/N',
+    address: sep ? (String(a.logradouro || '').trim() || null) : ((m ? m[1] : linha).trim() || null),
+    number: sep ? (String(a.numero || '').trim() || 'S/N') : (m ? m[2] : 'S/N'),
     neighborhood: (a && a.neighborhood) || null,
     zipCode: (a && a.zip) || null,
     city: (a && a.city) || null,
@@ -1199,15 +1210,57 @@ async function _plApi(env, caminho, mundo) {
   // PayLog com a credencial errada de dono.
   const tok = mundo ? ((await _readConfig(env, _cfgNome('pl_token', mundo))) || '') : (await _plTokenCasa(env));
   if (!tok) return { erro: 'sem token' };
+  // CONTA DA PAYLOG NORMAL NAO TEM ESTA API (14/10/2026). O token dela e recusado aqui com 401; bater
+  // de novo a cada 5 minutos (cron) ou a cada Aceitar so produz erro. Ver _plPlataforma.
+  if ((await _plPlataformaSalva(env, mundo)) === 'normal') return { erro: 'conta da PayLog normal', normal: true };
   try {
     const r = await _fetchComTeto('https://after.paylog.cash' + caminho, 12000, {
       headers: { Authorization: 'Bearer ' + tok, Accept: 'application/json' },
     });
     const txt = await r.text();
     let j = null; try { j = JSON.parse(txt); } catch (_) {}
+    if (r.status === 401 && (await _plPlataforma(env, mundo, true)) === 'normal') return { erro: 'conta da PayLog normal', normal: true };
     if (!r.ok) return { erro: 'http ' + r.status, corpo: String(txt).slice(0, 300) };
     return { ok: true, dados: j };
   } catch (e) { return { erro: String((e && e.message) || e) }; }
+}
+
+// QUAL PAYLOG E ESTA CONTA (14/10/2026). Sao duas plataformas com o mesmo nome e tokens no mesmo
+// formato (Laravel, "123|..."), e cada token so abre a API da sua: o do AfterPayLog abre
+// after.paylog.cash, o da PayLog normal abre ev.paylog.cash. A dash do Giovane salvou um token da
+// PayLog normal e o worker so sabia falar com o AfterPayLog: o Testar dizia "recusou: http 401" e o
+// Aceitar parava em "nao consegui consultar a PayLog". Aqui a pergunta e feita as duas APIs e a
+// resposta fica em app_config `pl_plataforma` ('after' | 'normal'), por dono.
+// So grava quando uma das duas responde 200: erro de rede nao vira veredito.
+const _plPlatMemo = new Map();
+async function _plPlataformaSalva(env, mundo) {
+  const k = String(mundo || '');
+  const m = _plPlatMemo.get(k);
+  if (m && Date.now() - m.t < 60000) return m.v;
+  const v = String((await _readConfig(env, _cfgNome('pl_plataforma', k))) || '');
+  _plPlatMemo.set(k, { v, t: Date.now() });
+  return v;
+}
+async function _plPlataforma(env, mundo, perguntar) {
+  const k = String(mundo || '');
+  if (!perguntar) { const v = await _plPlataformaSalva(env, k); if (v) return v; }
+  const tok = k ? ((await _readConfig(env, _cfgNome('pl_token', k))) || '') : ((await _readConfig(env, 'pl_token')) || ((env && env.PAYLOG_TOKEN) || ''));
+  if (!tok) return '';
+  const abre = async (url) => {
+    try {
+      const r = await _fetchComTeto(url, 12000, { headers: { Authorization: 'Bearer ' + tok, Accept: 'application/json' } });
+      try { await r.text(); } catch (_) {}
+      return r.status;
+    } catch (_) { return 0; }
+  };
+  let v = '';
+  if ((await abre('https://after.paylog.cash/api/v1/orders?per_page=1')) === 200) v = 'after';
+  else if ((await abre('https://ev.paylog.cash/api/v1/pedidos?per_page=1')) === 200) v = 'normal';
+  if (v) {
+    try { await _writeConfig(env, _cfgNome('pl_plataforma', k), v); } catch (_) {}
+    _plPlatMemo.set(k, { v, t: Date.now() });
+  }
+  return v;
 }
 
 // Converte a linha da API no MESMO dialeto que o _plToFive emite. O que a API tem a mais que o
@@ -1328,7 +1381,7 @@ async function _plReconciliar(env, opts) {
   if (opts.ate) qs.set('date_finish', opts.ate);
   if (opts.busca) qs.set('search', opts.busca);
   const r = await _plApi(env, '/api/v1/orders?' + qs.toString(), mundo);
-  if (!r.ok) return { ok: false, erro: r.erro, corpo: r.corpo };
+  if (!r.ok) return { ok: false, erro: r.erro, corpo: r.corpo, normal: !!r.normal };
   const lista = (r.dados && r.dados.data) || [];
   const total = (r.dados && r.dados.meta && r.dados.meta.total) || lista.length;
   const saida = [];
@@ -1424,7 +1477,9 @@ async function _cronPaylog(env) {
     // soMudou TAMBEM AQUI (06/10/2026): sem ele, toda batida de 5 min reprocessava todo pedido de ontem
     // e de hoje, regravando o blob inteiro por pedido mesmo sem nada ter mudado (ver _plReconciliar).
     const r = modo === 'off' ? { ok: true, pedidos: [], trazidos: 0 } : await _plReconciliar(env, { de: ontem, ate: hoje, perPage: 50, soMudou: true });
-    if (!r.ok) console.log('PAYLOG cron falhou: ' + String(r.erro || ''));
+    // Conta da PayLog normal nao tem a API do AfterPayLog: nao e falha, os pedidos dela chegam pelo
+    // webhook v2 (14/10/2026). Sem isto o log ganhava um "falhou: http 401" a cada 5 minutos.
+    if (!r.ok) { if (!r.normal) console.log('PAYLOG cron falhou: ' + String(r.erro || '')); }
     else {
       const mexeu = (r.pedidos || []).filter((x) => x && x.gravado).length;
       if (mexeu) console.log('PAYLOG cron: ' + mexeu + ' de ' + r.trazidos + ' pedidos reconciliados');
@@ -1434,7 +1489,7 @@ async function _cronPaylog(env) {
     for (const _m of (await _mundosCom(env, 'pl_token')).filter(Boolean)) {
       try {
         const rm = await _plReconciliar(env, { de: ontem, ate: hoje, perPage: 50, mundo: _m, soMudou: true });
-        if (!rm.ok) { console.log('PAYLOG cron do afiliado ' + _m + ' falhou: ' + String(rm.erro || '')); continue; }
+        if (!rm.ok) { if (!rm.normal) console.log('PAYLOG cron do afiliado ' + _m + ' falhou: ' + String(rm.erro || '')); continue; }
         const n = (rm.pedidos || []).filter((x) => x && x.gravado).length;
         if (n) console.log('PAYLOG cron ' + _m + ': ' + n + ' de ' + rm.trazidos + ' reconciliados');
       } catch (e) { console.log('PAYLOG cron do afiliado ' + _m + ' erro: ' + String((e && e.message) || e)); }
@@ -1472,7 +1527,7 @@ async function _cronPaylogAbertos(env) {
         let gravados = 0;
         for (let page = 1; page <= 10; page++) {
           const r = await _plReconciliar(env, { de, ate: hoje, perPage: 50, page, mundo, soMudou: true });
-          if (!r.ok) { console.log('PAYLOG varredura ' + (mundo || 'casa') + ' falhou: ' + String(r.erro || '')); break; }
+          if (!r.ok) { if (!r.normal) console.log('PAYLOG varredura ' + (mundo || 'casa') + ' falhou: ' + String(r.erro || '')); break; }
           gravados += (r.pedidos || []).filter((x) => x && x.gravado).length;
           if ((r.trazidos || 0) < 50) break;
         }
@@ -1549,8 +1604,14 @@ async function handlePaylogSync(req, env) {
 
 // ── O TRADUTOR ─────────────────────────────────────────────────────────────
 // Devolve um objeto no formato EXATO que a Five manda, ou null (evento que nao ingere).
-function _plToFive(p) {
+// `opts.semDePara` (14/10/2026): nao casa a oferta com os kits do GlicoSix (_PL_OFERTAS). E o caso da
+// dash do Giovane, que roda este mesmo worker e vende OUTRO produto (GLUCOSENSE, "Tratamento 10 Meses"):
+// casando por meses do titulo, o pedido dele virava o kit "Glico Six - 10 Meses" a R$997, com o id e o
+// preco do nosso catalogo. Sem de-para a oferta entra com o titulo e o preco da propria PayLog e o kit
+// se cadastra sozinho na dash dele.
+function _plToFive(p, opts) {
   if (!p || typeof p !== 'object') return null;
+  const semDePara = !!(opts && opts.semDePara);
   const slug = String(p.event || '').toLowerCase().trim();
   const regra = _PL_EVENTOS[slug];
   if (!regra || !regra.ev) return null;
@@ -1563,15 +1624,20 @@ function _plToFive(p) {
   // diferente do _isFiveDemo, que adivinha por nome ("demo", "fict") e ja quase descartou pedido real.
   if (/-SAMPLE/i.test(code)) return null;
 
-  const item = (Array.isArray(ord.items) && ord.items[0]) || {};
+  // PEDIDO SEM ITEM (PayLog normal, 14/10/2026): o order.created dos pedidos que vem do AfterPayLog chega
+  // com items [] (83 de 83 na casa). Sem item nao se inventa produto: o 'Glico Six' de reserva gravaria
+  // o produto errado no card de quem vende outra coisa, e o setIf do card nao deixa o evento seguinte
+  // corrigir. Fica vazio e o primeiro evento com item preenche.
+  const temItem = Array.isArray(ord.items) && ord.items.length > 0;
+  const item = (temItem && ord.items[0]) || {};
   const of = item.offer || {};
   const cli = ord.customer || {};
 
   // A OFERTA. Meses do titulo -> kit da Five. Sem casar, passa o codigo da PayLog e o kit se
   // cadastra sozinho (comportamento de kit novo), mas fica no log pra alguem completar o de-para.
   const meses = _mesesDoTitulo(of.title || of.name || '');
-  const kit = _PL_OFERTAS[meses] || null;
-  if (!kit) console.log('PAYLOG oferta sem de-para: ' + JSON.stringify({ code: of.code, title: of.title }));
+  const kit = semDePara ? null : (_PL_OFERTAS[meses] || null);
+  if (!kit && temItem && !semDePara) console.log('PAYLOG oferta sem de-para: ' + JSON.stringify({ code: of.code, title: of.title }));
 
   // CENTAVOS -> REAIS. `price_cents`, `amount_total_cents`: inteiros em centavos. Entrando crus,
   // o kit de R$497 viraria R$49.700 em receita, ticket, ROAS e base de comissao, sem erro nenhum
@@ -1589,8 +1655,8 @@ function _plToFive(p) {
     order: { id: 'PL-' + code },
     project: { id: 'paylog', name: 'PayLog' },
     product: {
-      id: kit ? _PL_PRODUTO_FIVE : String((item.product && item.product.code) || 'paylog'),
-      name: String((item.product && item.product.name) || 'Glico Six'),
+      id: kit ? _PL_PRODUTO_FIVE : (temItem ? String((item.product && item.product.code) || 'paylog') : null),
+      name: temItem ? (String((item.product && item.product.name) || (semDePara ? '' : 'Glico Six')) || null) : null,
       offer: {
         id: kit ? kit.id : String(of.code || ''),
         title: kit ? kit.title : String(of.title || of.name || ''),
@@ -1769,56 +1835,30 @@ async function handlePaylogFotos(req, env, ctx) {
 // campo por documentacao e chute, mapear por payload real e engenharia. Esta porta NAO grava card,
 // NAO mexe em estoque e NAO dispara pixel. So guarda o que chegou, pra eu desenhar o de-para em
 // cima de payload de verdade.
+// Uma vez por isolate (14/10/2026): com a porta ingerindo, cada evento pagava 5 idas ao banco so pra
+// confirmar que a tabela existe.
+let _pl2EnsureOk = false;
 async function _pl2Ensure(env) {
+  if (_pl2EnsureOk) return;
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS paylog2_debug (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, subpath TEXT, method TEXT,
     event TEXT, order_code TEXT, idem TEXT,
     query TEXT, headers TEXT, body TEXT, verified INTEGER DEFAULT 0, sig_info TEXT)`).run();
   try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_pl2_ts ON paylog2_debug(ts)').run(); } catch (_) {}
+  // A idempotency_key do evento: e o que liga o que chegou ao historico de entregas do painel deles.
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_pl2_idem ON paylog2_debug(idem)').run(); } catch (_) {}
   // Tabela criada antes das colunas de assinatura existirem: ALTER tolerante.
   for (const c of ['verified INTEGER DEFAULT 0', 'sig_info TEXT']) {
     try { await env.DB.prepare('ALTER TABLE paylog2_debug ADD COLUMN ' + c).run(); } catch (_) {}
   }
+  _pl2EnsureOk = true;
 }
 
-// DESCOBRIR O FORMATO DA ASSINATURA SEM PERGUNTAR (06/10/2026).
-// A gente tem o segredo do webhook, mas nao sabe em QUAL cabecalho o PayLog normal manda a
-// assinatura nem em que formato. Em vez de chutar e errar calado, calculo todos os candidatos
-// sobre o corpo CRU e comparo com o valor de TODOS os cabecalhos que chegaram. O primeiro evento
-// real ja diz qual e o esquema, e fica escrito em sig_info.
-//
-// Nada e RECUSADO por causa disso ainda: a porta so registra. Recusar antes de saber o formato
-// derrubaria a integracao inteira, porque plataforma de webhook pausa depois de algumas falhas.
-async function _pl2Assinatura(env, raw, cab) {
-  const seg = (env && env.PAYLOG2_SECRET) || '';
-  if (!seg) return { verified: 0, info: 'sem segredo configurado' };
-  const enc = new TextEncoder();
-  const hex = (b) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, '0')).join('');
-  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
-  const cand = {};
-  try {
-    for (const alg of ['SHA-256', 'SHA-1']) {
-      const k = await crypto.subtle.importKey('raw', enc.encode(seg), { name: 'HMAC', hash: alg }, false, ['sign']);
-      const sig = await crypto.subtle.sign('HMAC', k, enc.encode(raw));
-      cand['hex-' + alg] = hex(sig);
-      cand['b64-' + alg] = b64(sig);
-    }
-  } catch (_) {}
-  cand['segredo-cru'] = seg;
-  // Tira prefixos comuns (sha256=, sha1=, hmac-sha256=) antes de comparar.
-  const limpa = (v) => String(v || '').trim().replace(/^(sha256|sha1|hmac-sha256|hmac)[=\s:]+/i, '');
-  for (const [h, v] of Object.entries(cab || {})) {
-    const alvo = limpa(v);
-    if (!alvo || alvo.length < 16) continue;
-    for (const [nome, esperado] of Object.entries(cand)) {
-      if (alvo.toLowerCase() === String(esperado).toLowerCase()) {
-        return { verified: 1, info: 'cabecalho=' + h + ' esquema=' + nome };
-      }
-    }
-  }
-  const quais = Object.keys(cab || {}).filter((h) => /sign|hash|hmac|secret|token|auth/i.test(h)).join(',');
-  return { verified: 0, info: 'nenhum casou' + (quais ? ' (candidatos vistos: ' + quais + ')' : '') };
-}
+// O FORMATO DA ASSINATURA, DESCOBERTO (06/10/2026) E FIXADO (14/10/2026). Ate o primeiro evento real
+// esta porta testava todo cabecalho contra hex/base64 de SHA-256 e SHA-1; deu sempre hex-SHA-256 em
+// X-Webhook-Signature (1.327 de 1.327), que e o que a doc deles diz. A conferencia agora e a mesma do
+// AfterPayLog: ver _plSegredoOk.
+
 
 // A API PUBLICA DO PAYLOG NORMAL (ev.paylog.cash) - achada em 06/10/2026.
 // Nao confundir com `after.paylog.cash`, que e o AfterPayLog e tem OUTRO token. As rotas desta
@@ -1828,8 +1868,13 @@ async function _pl2Assinatura(env, raw, cab) {
 // O QUE ELA TEM E O AFTERPAYLOG NAO TINHA: estoque por produto (/produtos devolve { estoque }) e
 // ENDERECO do cliente na propria listagem de pedidos. Eram os dois buracos que obrigavam a digitar
 // na mao.
-async function _pl2Api(env, caminho) {
-  const tok = (env && env.PAYLOG2_TOKEN) || '';
+// O TOKEN DA TELA TAMBEM VALE (14/10/2026): conta cujo token salvo em Integracoes e da PayLog normal
+// (pl_plataforma = 'normal', ver _plPlataforma) usa ele aqui. A casa continua no secret PAYLOG2_TOKEN,
+// porque o token da tela dela e o do AfterPayLog.
+async function _pl2Api(env, caminho, mundo) {
+  const k = String(mundo || '');
+  let tok = (!k && env && env.PAYLOG2_TOKEN) || '';
+  if (!tok && (await _plPlataformaSalva(env, k)) === 'normal') tok = (await _readConfig(env, _cfgNome('pl_token', k))) || '';
   if (!tok) return { erro: 'sem token' };
   try {
     const r = await _fetchComTeto('https://ev.paylog.cash' + caminho, 20000, {
@@ -1877,38 +1922,12 @@ async function handlePaylog2Estoque(req, env) {
   });
 }
 
+// A /paylog2 E A MESMA PORTA (14/10/2026). Nasceu em 06/10 so escutando, pra desenhar o de-para em
+// cima de payload real (1.327 eventos guardados ate 14/10). Com o tradutor pronto ela passa a ser um
+// apelido da /paylog: o webhook v2 que a casa ja cadastrou nela continua valendo, sem ninguem ter de
+// trocar a URL no painel da PayLog.
 async function handlePaylog2Capture(req, env, subpath, ctx) {
-  // Responder rapido e requisito: plataforma de webhook costuma pausar a integracao depois de
-  // algumas falhas HTTP. Le o corpo, devolve 200, e grava depois pelo waitUntil.
-  let raw = '';
-  try { raw = await req.text(); } catch (_) { raw = ''; }
-  const cab = {};
-  try { for (const [k, v] of req.headers.entries()) cab[k] = v; } catch (_) {}
-  const u = new URL(req.url);
-
-  const guardar = (async () => {
-    try {
-      await _pl2Ensure(env);
-      let p = null; try { p = JSON.parse(raw); } catch (_) { p = null; }
-      // Ainda nao sabemos o formato deles. Tento os lugares mais provaveis e, se nao achar, fica
-      // vazio mesmo - o corpo cru esta guardado e e dele que o de-para vai sair.
-      const cava = (...cs) => { for (const c of cs) { if (c !== undefined && c !== null && String(c) !== '') return String(c); } return ''; };
-      const ev = p ? cava(p.event, p.type, p.event_type, p.status, (p.data && (p.data.event || p.data.type || p.data.status))) : '';
-      const cod = p ? cava(p.code, (p.order && (p.order.code || p.order.id)), (p.data && (p.data.code || (p.data.order && p.data.order.code))), p.order_code, p.id) : '';
-      const idem = cava(cab['idempotency-key'], cab['x-idempotency-key'], cab['x-request-id']);
-      const asg = await _pl2Assinatura(env, raw, cab);
-      await env.DB.prepare(
-        'INSERT INTO paylog2_debug (ts, subpath, method, event, order_code, idem, query, headers, body, verified, sig_info) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
-      ).bind(
-        Date.now(), String(subpath || ''), req.method, ev, cod, idem,
-        u.search || '', JSON.stringify(cab).slice(0, 4000), String(raw).slice(0, 60000),
-        asg.verified, asg.info
-      ).run();
-      console.log('PAYLOG2 capturado event=' + ev + ' code=' + cod + ' assinatura=' + (asg.verified ? 'OK ' : 'nao ') + asg.info);
-    } catch (e) { console.log('PAYLOG2 falhou ao guardar: ' + String((e && e.message) || e)); }
-  })();
-  try { if (ctx && ctx.waitUntil) ctx.waitUntil(guardar); else await guardar; } catch (_) { await guardar; }
-  return json({ ok: true });
+  return handlePaylogCapture(req, env, subpath, ctx);
 }
 
 // Leitura do que a porta 2.0 capturou. So diretor. E a tela por onde eu descubro o formato deles.
@@ -1926,6 +1945,231 @@ async function handlePaylog2Debug(req, env) {
   const eventos = {};
   for (const l of linhas) eventos[l.event || '(vazio)'] = (eventos[l.event || '(vazio)'] || 0) + 1;
   return json({ ok: true, total: linhas.length, eventos, linhas });
+}
+
+// ── AS DUAS PAYLOGS NA MESMA PORTA (14/10/2026, pedido do Bruno) ───────────────────────────────
+//
+// "Nesse local onde a gente coloca os webhooks, tanto o da AfterPayLog quanto o da PayLog normal, ele
+// aceite os dois; identifica automaticamente de qual e a plataforma." A URL da tela de Integracoes
+// (/paylog) recebe os dois contratos, e a /paylog2 tambem. Quem diz qual e o proprio corpo:
+//   AfterPayLog:         event em portugues sem ponto (cadastrado, em_transito), order.code ORDxxxx
+//   PayLog normal (v2):  event com ponto (order.created, shipment.in_transit), order.pedido_id,
+//                        meta.webhook_version 2 e o cabecalho X-Webhook-Event com o mesmo nome
+// O v2 e TRADUZIDO pro formato do AfterPayLog e segue o MESMO cano (_plIngerir -> _plToFive ou
+// _plGravaComprovante): a escada de colunas, o gate de rank e a adocao por CPF ja foram acertados
+// nesse caminho e nao se reescrevem aqui. A traducao foi conferida contra os 1.327 eventos v2 reais
+// que a casa guardou de 07 a 14/10: o valor do pedido bateu com o do AfterPayLog em todos os 1.241
+// eventos que tinham item.
+// O webhook v1 LEGADO da PayLog normal ({"dados": {...}}) NAO entra: a doc deles diz que ele nao tem
+// assinatura, nem nome de evento, nem reenvio. Fica no log, e o caminho e cadastrar o Webhooks v2.
+const _PL2_EVENTOS = {
+  'order.created': 'cadastrado',
+  'order.label_ready': 'preparando',            // Etiqueta Pronta
+  'order.preparing': 'preparando',
+  'order.blocked': 'parado',
+  'order.refunded': 'estornado',
+  'order.canceled': 'cancelado_sem_custo',
+  'shipment.posted': 'postado',
+  'shipment.in_transit': 'em_transito',
+  'shipment.out_for_delivery': 'rota_entrega',
+  'shipment.awaiting_pickup': 'aguardando_retirada',
+  'shipment.returning': 'ao_remetente',
+  'shipment.returned': 'devolvido',
+  'shipment.delivered': 'entregue',
+  'shipment.delivery_proof': 'proof_of_delivery',
+};
+function _plEhV2(p, cab) {
+  if (!p || typeof p !== 'object') return false;
+  if (p.meta && Number(p.meta.webhook_version) === 2) return true;
+  if (/^(order|shipment)\.[a-z_]+$/.test(String(p.event || ''))) return true;
+  return /^(order|shipment)\./.test(String((cab && cab['x-webhook-event']) || ''));
+}
+function _plEhLegado(p) {
+  return !!(p && typeof p === 'object' && !p.event && p.dados && typeof p.dados === 'object');
+}
+// Codigo estavel pra oferta que nao tem codigo: o v2 nao manda o da oferta, so a descricao do item
+// ("Tratamento 10 Meses"), e e por ela que o kit se cadastra na dash (custos.kits e por offer_id).
+const _plSlugOferta = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+
+// O TRADUTOR v2 -> v1. Devolve { p1, afterpay }: p1 e o corpo no formato do AfterPayLog (null quando o
+// evento nao ingere) e afterpay diz se o pedido nasceu no AfterPayLog.
+//   CODIGO DO PEDIDO: o que veio do AfterPayLog mantem o ORD (codigo_transacao) e cai no MESMO five_id
+//   'PL-ORDxxx' que o webhook do AfterPayLog e o Aceitar ja usam; o resto usa o pedido_id da PayLog, o
+//   unico que existe em todo pedido (codigo_transacao pode vir nulo, e referencia_externa e o que quem
+//   criou quis escrever).
+//   VALOR: soma de valor_unitario_cents SEM multiplicar pela quantidade. Na PayLog normal a quantidade
+//   do item e a de frascos do pacote ("2 Meses (2 Frascos)" vem com quantidade 2 e valor 29700, que e
+//   o preco do kit, R$297). Multiplicar dobraria a venda.
+//   HORA: a do evento na transportadora (occurred_at) quando ha; senao a do payload.
+function _pl2ParaPl1(p) {
+  const o = (p && p.order) || {};
+  const slug = _PL2_EVENTOS[String((p && p.event) || '')] || '';
+  const tx = String(o.codigo_transacao || '').trim();
+  const afterpay = /after\s*pay/i.test(String(o.plataforma || '')) && /^ORD[A-Z0-9]+$/i.test(tx);
+  const code = afterpay ? tx.toUpperCase() : ((o.pedido_id != null && o.pedido_id !== '') ? String(o.pedido_id) : '');
+  if (!slug || !code) return { p1: null, afterpay, code };
+  // Pedido de demonstracao do painel deles (DEMO-TX-123 / demo_ref_987) vira -SAMPLE, que o cano ja descarta.
+  const demo = /^DEMO-/i.test(tx) || /^demo_/i.test(String(o.referencia_externa || ''));
+  const c = o.customer || {}, e = c.endereco || {};
+  const itens = Array.isArray(o.items) ? o.items.filter(Boolean) : [];
+  const it = itens[0] || null;
+  const total = itens.reduce((acc, i) => acc + (Number(i.valor_unitario_cents) || 0), 0);
+  const sh = (p && p.shipment) || {}, car = sh.carrier || {}, dp = sh.delivery_proof || {};
+  const mot = (o.motivo_parado && o.motivo_parado.label) ? String(o.motivo_parado.label) : '';
+  const mail = String(c.email || '').trim();
+  const titulo = it ? String(it.descricao || (it.produto && it.produto.nome) || '').trim() : '';
+  return {
+    afterpay,
+    code,
+    p1: {
+      event: slug,
+      event_status: String((p && p.event_label) || slug) + (mot ? ': ' + mot : ''),
+      event_timestamp: sh.occurred_at || (p && p.event_timestamp) || null,
+      idempotency_key: (p && p.idempotency_key) || '',
+      order: {
+        code: demo ? code + '-SAMPLE' : code,
+        customer: {
+          name: c.nome || null,
+          document: c.cpf || null,
+          // E-mail que a PayLog inventa pro cliente sem e-mail (noreply+xxx@paylog.cash) nao e do cliente.
+          email: /^noreply\+[^@]*@paylog\.cash$/i.test(mail) ? null : (mail || null),
+          phone: c.telefone || null,
+          address: {
+            line: [e.logradouro, e.numero].filter(Boolean).join(' '),
+            logradouro: e.logradouro || null, numero: e.numero || null,
+            complement: e.complemento || null, neighborhood: e.bairro || null,
+            city: e.cidade || null, state: e.uf || null, zip: e.cep || null, country: e.pais || 'BR',
+          },
+        },
+        items: it ? [{
+          product: { code: (it.produto && it.produto.id != null) ? 'PL2-' + it.produto.id : '', name: (it.produto && it.produto.nome) || null },
+          offer: { code: titulo ? 'PL2-' + _plSlugOferta(titulo) : '', title: titulo, price_cents: total, number_of_items: Number(it.quantidade) || 1 },
+        }] : [],
+        amount_total_cents: itens.length ? total : null,
+        affiliate: { code: null },
+      },
+      tracking_code: sh.tracking_code || null,
+      tracking: { type: car.code || car.name || null, code: sh.tracking_code || null, url: sh.tracking_url || null },
+      delivery_proof_url: dp.image_url || null,
+      delivery_proof_signatory: dp.signatory || dp.received_by || null,
+      delivery_proof_signature_url: dp.signature_url || null,
+      payment_link: null,
+    },
+  };
+}
+
+// QUEM ASSINA O v2: o segredo salvo na tela (pl_secret do dono) ou, so na casa, os secrets do worker
+// (PAYLOG2_SECRET da PayLog normal e PAYLOG_SECRET do AfterPayLog). As duas assinam do mesmo jeito
+// (HMAC-SHA256 hex do corpo cru, "sha256=<hex>" em X-Webhook-Signature), entao vale o que casar: quem
+// cadastra o webhook v2 numa conta que ja tinha o do AfterPayLog nao precisa escolher qual segredo fica.
+async function _plSegredoOk(env, raw, header, mundo) {
+  if (!header) return false;
+  const lista = [];
+  try { const t = await _readConfig(env, _cfgNome('pl_secret', mundo)); if (t) lista.push(String(t)); } catch (_) {}
+  if (!mundo && env) {
+    if (env.PAYLOG2_SECRET) lista.push(String(env.PAYLOG2_SECRET));
+    if (env.PAYLOG_SECRET) lista.push(String(env.PAYLOG_SECRET));
+  }
+  for (const seg of lista) { if (await _hmacSha256Ok(seg, raw, header)) return true; }
+  return false;
+}
+
+// O AFTERPAYLOG AINDA FALA COM ESTA PORTA? Pedido que nasce no AfterPayLog chega DUAS vezes na casa:
+// pelo webhook dele (/paylog/glico-six) e pelo v2 da PayLog normal, que e quem despacha. Os dois dizem a
+// mesma coisa, e o v2 diz mais vezes (698 'em transito' contra 101 de 07 a 14/10), e cada evento regrava
+// o estado inteiro. Entao, enquanto chegar evento assinado do AfterPayLog (ultimos 3 dias), o v2 desses
+// pedidos fica so no log. Se o webhook do AfterPayLog for desligado, em 3 dias o v2 assume sozinho.
+// Na duvida (banco falhou) responde que sim: o caminho do AfterPayLog e o que a casa ja usa.
+const _plV1Memo = new Map();
+async function _plV1Vivo(env, mundo) {
+  const k = String(mundo || '');
+  const m = _plV1Memo.get(k);
+  if (m && Date.now() - m.t < 600000) return m.v;
+  let v = true;
+  try {
+    const desde = Math.floor(Date.now() / 1000) - 3 * 86400;
+    const r = k
+      ? await env.DB.prepare("SELECT 1 x FROM paylog_debug WHERE verified = 1 AND ts > ? AND COALESCE(subpath,'') = ? LIMIT 1").bind(desde, k).first()
+      : await env.DB.prepare("SELECT 1 x FROM paylog_debug WHERE verified = 1 AND ts > ? AND COALESCE(subpath,'') NOT LIKE 'afl!_%' ESCAPE '!' LIMIT 1").bind(desde).first();
+    v = !!(r && r.x);
+  } catch (_) { v = true; }
+  _plV1Memo.set(k, { v, t: Date.now() });
+  return v;
+}
+
+// A ENTRADA DA PAYLOG NORMAL. Guarda o cru em paylog2_debug (a tabela de 06/10, que a tela de
+// Integracoes tambem le pro batimento) e manda o traduzido pro cano comum.
+// Disparo de teste do painel deles (X-Webhook-Test: true) e dado sintetico: so confere a assinatura.
+async function _pl2Receber(env, metodo, subpath, busca, cab, raw, p, mundoPl, ctx) {
+  const ok = await _plSegredoOk(env, raw, cab['x-webhook-signature'] || '', mundoPl);
+  const teste = String(cab['x-webhook-test'] || '').toLowerCase() === 'true';
+  const legado = _plEhLegado(p);
+  const t = legado ? { p1: null, afterpay: false, code: String((p.dados && p.dados.pedido_id) || '') } : _pl2ParaPl1(p);
+  const info = legado ? 'webhook v1 legado (sem assinatura): cadastre o Webhooks v2'
+    : (ok ? 'assinatura ok' : (cab['x-webhook-signature'] ? 'assinatura nao bate com o segredo salvo' : 'sem assinatura')) + (teste ? ' · teste do painel' : '');
+  try {
+    await _pl2Ensure(env);
+    await env.DB.prepare('INSERT INTO paylog2_debug (ts, subpath, method, event, order_code, idem, query, headers, body, verified, sig_info) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(Date.now(), String(subpath || ''), metodo, String((p && p.event) || (legado ? 'v1-legado' : '')),
+        String(t.code || ''), String((p && p.idempotency_key) || ''), busca,
+        JSON.stringify(cab).slice(0, 4000), String(raw).slice(0, 60000), ok ? 1 : 0, info).run();
+  } catch (e) { console.log('PAYLOG2 falhou ao guardar: ' + String((e && e.message) || e)); }
+  if (legado) { console.log('PAYLOG2 webhook v1 legado ignorado (sem assinatura)'); return; }
+  if (teste) { console.log('PAYLOG2 teste do painel recebido, assinatura ' + (ok ? 'ok' : 'NAO confere')); return; }
+  if (!t.p1) { console.log('PAYLOG2 evento sem ingestao: ' + String((p && p.event) || '')); return; }
+  if (t.afterpay && (await _plV1Vivo(env, mundoPl))) return;   // o webhook do AfterPayLog ja traz este pedido
+  await _plIngerir(env, t.p1, mundoPl, ok, ctx, 'PAYLOG2');
+}
+
+// A INGESTAO DOS DOIS FORMATOS (14/10/2026). Era o miolo do handlePaylogCapture; saiu pra ca sem mudar
+// a regra pra que o evento da PayLog normal, depois de traduzido (_pl2ParaPl1), passe exatamente pelo
+// mesmo interruptor (pl_ingest), pela mesma exigencia de assinatura (pl_strict) e pelo mesmo cano.
+// `rot` so muda o prefixo do log (PAYLOG ou PAYLOG2), pra dar pra separar no Observability.
+async function _plIngerir(env, p, mundoPl, ok, ctx, rot) {
+  try {
+    const modo = String((await _readConfig(env, _cfgNome('pl_ingest', mundoPl))) || 'off');
+    // A ASSINATURA MANDA (07/09/2026, achado da revisao). Ate aqui o HMAC era calculado e so
+    // virava a coluna `verified`: o bloco de ingestao nao olhava. Com a ingestao ligada, um POST
+    // forjado nesta URL - que e publica e responde nos 8 dominios das pressels - criaria pedido,
+    // receita, comissao e baixa de estoque. Pior: o _fiveUpsertLead resolve o vendedor por CPF ou
+    // telefone, entao quem soubesse o dado de um cliente real creditaria a venda falsa a um
+    // vendedor real, com comissao a pagar.
+    //
+    // A da Five ja bloqueia (FIVE_STRICT + ?k=); esta chamava a rota de "irma" e nao bloqueava.
+    //
+    // O LOG CRU CONTINUA ANTES da verificacao, de proposito: e assim que da pra ver tentativa
+    // recusada em vez de ela sumir. E a resposta continua 200 em todo caso - a PayLog pausa o
+    // webhook depois de 3 falhas HTTP, entao recusar com erro derrubaria a integracao inteira.
+    //
+    // `pl_strict` = '0' no app_config afrouxa sem deploy, se um dia eles mudarem o formato do
+    // header. Padrao e exigir.
+    const _exige = String((await _readConfig(env, _cfgNome('pl_strict', mundoPl))) || '1') !== '0';
+    if (modo !== 'off' && p && !ok && _exige) {
+      console.log(rot + ' RECUSADO: assinatura invalida. event=' + String(p.event || '') + ' code=' + String((p.order && p.order.code) || ''));
+    } else if (modo !== 'off' && p && String(p.event || '').toLowerCase() === 'proof_of_delivery') {
+      // Comprovante de entrega: caminho proprio, so grava a foto no card (ver _plGravaComprovante).
+      const rf = await _plGravaComprovante(env, p, ctx);
+      console.log(rot + ' comprovante pedido=' + String((p.order && p.order.code) || '') + ' ' + (rf.ok ? (rf.ja ? 'ja tinha' : 'gravado') : 'nao gravou: ' + rf.motivo));
+    } else if (modo !== 'off' && p) {
+      const q = _plToFive(p, { semDePara: !_ehDashDaCasa(env) });
+      if (q) {
+        // DE QUEM E O PEDIDO. Sem este carimbo o pedido que entrou pela porta do afiliado ficaria
+        // indistinguivel dos nossos: apareceria no Kanban da casa e sumiria do dele, que filtra
+        // por este campo. A porta e a unica fonte confiavel disso - a PayLog nao sabe que existe
+        // afiliado do nosso lado.
+        if (mundoPl) q.afl = mundoPl;
+        try { await _fiveUpsertOrder(env, q); } catch (e) { console.log(rot + ' upsertOrder falhou: ' + String((e && e.message) || e)); }
+        if (modo === 'full') {
+          q.__aoVivo = true;   // porta ao vivo da PayLog (ver o comentario do __aoVivo na porta da Five)
+          try { await _fiveUpsertLead(env, q, ctx); } catch (e) { console.log(rot + ' upsertLead falhou: ' + String((e && e.message) || e)); }
+        }
+        console.log(rot + ' ingerido modo=' + modo + ' event=' + String(p.event) + ' pedido=' + q.orderId);
+      } else {
+        console.log(rot + ' ignorado (teste ou evento sem ingestao) event=' + String(p.event) + ' code=' + String((p.order && p.order.code) || ''));
+      }
+    }
+  } catch (_) {}
 }
 
 async function handlePaylogCapture(req, env, subpath, ctx) {
@@ -1959,6 +2203,8 @@ async function handlePaylogCapture(req, env, subpath, ctx) {
 
   const guardar = (async () => {
     let p = null; try { p = JSON.parse(raw); } catch (_) { p = null; }
+    // QUAL PAYLOG MANDOU (14/10/2026): a PayLog normal tem tabela de log, assinatura e tradutor proprios.
+    if (_plEhV2(p, cab) || _plEhLegado(p)) { await _pl2Receber(env, req.method, subpath, u.search || '', cab, raw, p, mundoPl, ctx); return; }
     const ok = await _plAssinaturaOk(env, raw, cab['x-webhook-signature'] || '', mundoPl);
     try {
       await _plEnsure(env);
@@ -1988,49 +2234,7 @@ async function handlePaylogCapture(req, env, subpath, ctx) {
     //   'full'   espelha o card no Kanban tambem
     // Virar o nivel e uma escrita no banco - sem deploy, sem build, valendo em segundos. Se der
     // errado no meio de um dia de campanha, o socorro e escrever 'off', nao rollback de deploy.
-    try {
-      const modo = String((await _readConfig(env, _cfgNome('pl_ingest', mundoPl))) || 'off');
-      // A ASSINATURA MANDA (07/09/2026, achado da revisao). Ate aqui o HMAC era calculado e so
-      // virava a coluna `verified`: o bloco de ingestao nao olhava. Com a ingestao ligada, um POST
-      // forjado nesta URL - que e publica e responde nos 8 dominios das pressels - criaria pedido,
-      // receita, comissao e baixa de estoque. Pior: o _fiveUpsertLead resolve o vendedor por CPF ou
-      // telefone, entao quem soubesse o dado de um cliente real creditaria a venda falsa a um
-      // vendedor real, com comissao a pagar.
-      //
-      // A da Five ja bloqueia (FIVE_STRICT + ?k=); esta chamava a rota de "irma" e nao bloqueava.
-      //
-      // O LOG CRU CONTINUA ANTES da verificacao, de proposito: e assim que da pra ver tentativa
-      // recusada em vez de ela sumir. E a resposta continua 200 em todo caso - a PayLog pausa o
-      // webhook depois de 3 falhas HTTP, entao recusar com erro derrubaria a integracao inteira.
-      //
-      // `pl_strict` = '0' no app_config afrouxa sem deploy, se um dia eles mudarem o formato do
-      // header. Padrao e exigir.
-      const _exige = String((await _readConfig(env, _cfgNome('pl_strict', mundoPl))) || '1') !== '0';
-      if (modo !== 'off' && p && !ok && _exige) {
-        console.log('PAYLOG RECUSADO: assinatura invalida. event=' + String(p.event || '') + ' code=' + String((p.order && p.order.code) || ''));
-      } else if (modo !== 'off' && p && String(p.event || '').toLowerCase() === 'proof_of_delivery') {
-        // Comprovante de entrega: caminho proprio, so grava a foto no card (ver _plGravaComprovante).
-        const rf = await _plGravaComprovante(env, p, ctx);
-        console.log('PAYLOG comprovante pedido=' + String((p.order && p.order.code) || '') + ' ' + (rf.ok ? (rf.ja ? 'ja tinha' : 'gravado') : 'nao gravou: ' + rf.motivo));
-      } else if (modo !== 'off' && p) {
-        const q = _plToFive(p);
-        if (q) {
-          // DE QUEM E O PEDIDO. Sem este carimbo o pedido que entrou pela porta do afiliado ficaria
-          // indistinguivel dos nossos: apareceria no Kanban da casa e sumiria do dele, que filtra
-          // por este campo. A porta e a unica fonte confiavel disso - a PayLog nao sabe que existe
-          // afiliado do nosso lado.
-          if (mundoPl) q.afl = mundoPl;
-          try { await _fiveUpsertOrder(env, q); } catch (e) { console.log('PAYLOG upsertOrder falhou: ' + String((e && e.message) || e)); }
-          if (modo === 'full') {
-            q.__aoVivo = true;   // porta ao vivo da PayLog (ver o comentario do __aoVivo na porta da Five)
-            try { await _fiveUpsertLead(env, q, ctx); } catch (e) { console.log('PAYLOG upsertLead falhou: ' + String((e && e.message) || e)); }
-          }
-          console.log('PAYLOG ingerido modo=' + modo + ' event=' + String(p.event) + ' pedido=' + q.orderId);
-        } else {
-          console.log('PAYLOG ignorado (teste ou evento sem ingestao) event=' + String(p.event) + ' code=' + String((p.order && p.order.code) || ''));
-        }
-      }
-    } catch (_) {}
+    await _plIngerir(env, p, mundoPl, ok, ctx, 'PAYLOG');
   })();
 
   // ctx.waitUntil deixa a gravacao terminar DEPOIS da resposta sair. Sem ele (chamada local,
@@ -5377,6 +5581,11 @@ async function _aceitarComPaylog(env, u, leadId) {
   // Dash sem PayLog ligada (a do Giovane roda este mesmo codigo): o aceite e o de sempre. Sem isto,
   // todo Aceitar dele viraria "sem token" em vez de aceitar.
   if (!(await _plTokenCasa(env))) return null;
+  // CONTA DA PAYLOG NORMAL (14/10/2026): criar pedido aqui e na API do AfterPayLog, que o token dela nao
+  // abre. Sem isto o Aceitar da dash do Giovane parava em "Nao consegui consultar a PayLog" e nao
+  // aceitava nada. Com ela o aceite e o de sempre, e o pedido lancado na PayLog adota o card pelo CPF
+  // quando o webhook chegar.
+  if ((await _plPlataformaSalva(env, '')) === 'normal') return null;
   const soDig = (v) => String(v == null ? '' : v).replace(/\D/g, '');
   const agora = Math.floor(Date.now() / 1000);
   const _gravaLead = async (fn) => {
@@ -11419,6 +11628,7 @@ async function handleIntegracoesGet(req, env) {
   const n = (v) => Number(v || 0);
 
   try { await _plEnsure(env); } catch (_) {}
+  try { await _pl2Ensure(env); } catch (_) {}
   try { await _dcEnsureTables(env); } catch (_) {}
 
   // PAYT E FIVE SAO DA CASA e nao entram no mundo do afiliado. As duas sao a nossa conta de
@@ -11455,7 +11665,10 @@ async function handleIntegracoesGet(req, env) {
   // subpath (o endereco que a pessoa colou la); a do Datacrazy pela coluna `afl`, carimbada com o
   // mundo que o segredo identificou.
   const _pIgual = mundo ? ("COALESCE(subpath,'') = '" + mundo.replace(/'/g, "") + "'") : "COALESCE(subpath,'') NOT LIKE 'afl!_%' ESCAPE '!'";
-  const hbPl = await um('SELECT MAX(ts) ult, COUNT(*) n, SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) ok FROM paylog_debug WHERE ts > ' + desde + ' AND ' + _pIgual);
+  // OS DOIS FORMATOS CONTAM (14/10/2026): o evento da PayLog normal fica em paylog2_debug, com ts em ms.
+  const hbPl = await um('SELECT MAX(ult) ult, SUM(n) n, SUM(ok) ok FROM ('
+    + 'SELECT MAX(ts) ult, COUNT(*) n, SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) ok FROM paylog_debug WHERE ts > ' + desde + ' AND ' + _pIgual
+    + ' UNION ALL SELECT MAX(ts) / 1000, COUNT(*), SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) FROM paylog2_debug WHERE ts > ' + (desde * 1000) + ' AND ' + _pIgual + ')');
   const _dIgual = mundo ? ("COALESCE(afl,'') = '" + mundo.replace(/'/g, "") + "'") : "COALESCE(afl,'') = ''";
   // ASSINATURA DO WEBHOOK DA META, ultimos 3 dias (item 34). So da casa: a porta e uma.
   const _desde3 = Math.floor(Date.now() / 1000) - 3 * 86400;
@@ -11501,6 +11714,7 @@ async function handleIntegracoesGet(req, env) {
       api: await _integFicha(env, 'pl_token', mundo),
       segredo: await _integFicha(env, 'pl_secret', mundo),
       ingest: String((await _readConfig(env, _cfgNome('pl_ingest', mundo))) || 'off'),
+      plataforma: await _plPlataformaSalva(env, mundo),   // 'after' | 'normal' | '' (ver _plPlataforma)
       strict: String((await _readConfig(env, _cfgNome('pl_strict', mundo))) || '1') !== '0',
       ultimo: n(hbPl && hbPl.ult), recebidos24: n(hbPl && hbPl.n), assinados24: n(hbPl && hbPl.ok),
     },
@@ -11540,6 +11754,9 @@ async function handleIntegracoesSet(req, env) {
     if (!_deleMesmo(k)) return err('Esta conexão é da operação principal e não pode ser alterada aqui', 403);
     const v = txt(b[k]);
     if (!v) continue;
+    // O ENDERECO NO LUGAR DO SEGREDO (14/10/2026): foi o que a dash do Giovane tinha salvo. A tela dizia
+    // "segredo salvo" e nenhum evento passava na assinatura.
+    if (k === 'pl_secret' && /^https?:\/\//i.test(v)) return err('Isso é o endereço do webhook, não o segredo. O segredo é o código que a PayLog mostra uma vez quando o webhook é criado lá.');
     const antes = await _readConfig(env, _cfgNome(k, mundo));
     if (antes === v) continue;
     // GUARDA A ANTERIOR (ver _integTokenOk): e o que deixa a URL ja cadastrada na plataforma
@@ -11558,6 +11775,11 @@ async function handleIntegracoesSet(req, env) {
     }
     await _writeConfig(env, _cfgNome(k, mundo), v);
     salvos.push(k);
+    // TOKEN NOVO, PLATAFORMA DE NOVO (14/10/2026): o token pode ser do AfterPayLog ou da PayLog normal, e
+    // e isso que decide qual API o worker chama (ver _plPlataforma).
+    if (k === 'pl_token') {
+      try { await _writeConfig(env, _cfgNome('pl_plataforma', mundo), ''); _plPlatMemo.delete(String(mundo || '')); await _plPlataforma(env, mundo, true); } catch (_) {}
+    }
     // OS NUMEROS DO AFILIADO ENTRAM NA HORA (12/09/2026). O cadastro dos numeros do Datacrazy roda
     // no rodizio lento do cron, de 80 em 80 minutos. Esperar por ele no dia em que o afiliado liga
     // a conexao significa uma hora de conversa sem dono. Aqui ele roda no mesmo instante do salvar.
@@ -11610,13 +11832,23 @@ async function handleIntegracoesTest(req, env) {
   if (mundo && (alvo === 'payt' || alvo === 'five')) return err('Esta conexão é da operação principal', 403);
 
   if (alvo === 'paylog') {
+    // QUAL DAS DUAS PAYLOGS (14/10/2026): pergunta de novo a cada Testar, que e quando a pessoa acabou de
+    // colar o token. O token da PayLog normal da 401 na API do AfterPayLog, e era isso que a tela mostrava.
+    const plat = await _plPlataforma(env, mundo, true);
+    const _seg = String((await _readConfig(env, _cfgNome('pl_secret', mundo))) || '');
+    const aviso = /^https?:\/\//i.test(_seg) ? ' · Atenção: o campo Segredo do webhook está com um endereço, não com o segredo.' : '';
+    if (plat === 'normal') {
+      const r2 = await _pl2Api(env, '/api/v1/pedidos?per_page=1', mundo);
+      if (!r2.ok) return json({ ok: false, msg: 'A PayLog normal recusou: ' + String(r2.erro || '') + (r2.corpo ? ' · ' + r2.corpo : '') });
+      return json({ ok: true, msg: 'Conectado · PayLog normal' + aviso });
+    }
     const r = await _plApi(env, '/api/v1/orders?per_page=1', mundo);
     // Sem token nao e a PayLog recusando: a chamada nem saiu. Dizer "recusou" mandaria o dono
     // procurar o problema do lado de la.
     if (!r.ok && /sem token/i.test(String(r.erro || ''))) return json({ ok: false, msg: 'Sem token da API salvo. Cole o token e salve.' });
-    if (!r.ok) return json({ ok: false, msg: 'A PayLog recusou: ' + String(r.erro || '') + (r.corpo ? ' — ' + r.corpo : '') });
+    if (!r.ok) return json({ ok: false, msg: 'A PayLog recusou: ' + String(r.erro || '') + (r.corpo ? ' — ' + r.corpo : '') + (plat ? '' : ' (o token também não abriu na PayLog normal)') });
     const total = (r.dados && r.dados.meta && r.dados.meta.total);
-    return json({ ok: true, msg: 'Conectado' + (total != null ? (' · ' + total + ' pedido(s) na conta') : '') });
+    return json({ ok: true, msg: 'Conectado · AfterPayLog' + (total != null ? (' · ' + total + ' pedido(s) na conta') : '') + aviso });
   }
 
   if (alvo === 'datacrazy') {
@@ -23917,6 +24149,7 @@ async function _cronPurga(env) {
   try { await env.DB.prepare("DELETE FROM five_debug   WHERE ts < strftime('%s','now')-1814400").run(); } catch (_) {}   // 21 dias
   try { await env.DB.prepare("DELETE FROM payt_debug   WHERE ts < strftime('%s','now')-1814400").run(); } catch (_) {}
   try { await env.DB.prepare("DELETE FROM paylog_debug WHERE ts < strftime('%s','now')-1814400").run(); } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM paylog2_debug WHERE ts < (strftime('%s','now')-1814400) * 1000").run(); } catch (_) {}   // ts em ms
   try { await env.DB.prepare("DELETE FROM dc_events    WHERE received_at < strftime('%s','now')-2592000").run(); } catch (_) {}   // 30 dias
   try { await env.DB.prepare("DELETE FROM wa_send_fail WHERE ts < strftime('%s','now')-2592000").run(); } catch (_) {}
   try { await env.DB.prepare("DELETE FROM wa_autoreply_log WHERE ts < strftime('%s','now')-2592000").run(); } catch (_) {}
