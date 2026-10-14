@@ -15396,6 +15396,7 @@ async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial) {
   console.error('DC_SEM_TOKEN ' + disp.slice(-4));
 }
 let _dcSeenOk = false;
+let _dcSeenPodaT = 0;   // ver "PODA UMA VEZ POR HORA" no _dcPoll
 // AGENDA: avisa quem marcou o retorno na hora marcada.
 // O cobrador marcava "retornar 14:30" e ninguém avisava ninguém: data.notifs só tinha saque e
 // mudança de permissão, e nada no servidor olhava os agendamentos. Sem isto a Agenda é um caderno
@@ -15533,7 +15534,13 @@ async function _dcPoll(env, opts = {}) {
   await _dcEnsureTables(env);
   if (!_dcSeenOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS dc_seen (msg_id TEXT PRIMARY KEY, ts INTEGER)').run(); _dcSeenOk = true; } catch (_) {} }
   const now = Math.floor(Date.now() / 1000);
-  try { await env.DB.prepare("DELETE FROM dc_seen WHERE ts < strftime('%s','now')-172800").run(); } catch (_) {}   // poda > 2 dias
+  // PODA UMA VEZ POR HORA (14/10/2026). Rodava em toda batida do poll (~5 por minuto) e, sem indice em
+  // ts, cada uma varria a tabela inteira: 28 mil linhas lidas por minuto, 75 por cento de tudo que o
+  // banco lia depois do cache do estado. Guardar uma linha de "ja vi" por uma hora a mais nao muda nada.
+  if (Date.now() - _dcSeenPodaT > 3600000) {
+    _dcSeenPodaT = Date.now();
+    try { await env.DB.prepare("DELETE FROM dc_seen WHERE ts < strftime('%s','now')-172800").run(); } catch (_) {}   // poda > 2 dias
+  }
   let baixadasLM = 0;   // teto de midias copiadas pro R2 por batida (igual ao _dcSyncInbox)
   let _scanned = 0;   // teto de 15 conversas por rodada, dividido entre a busca de codigo no historico (item 28) e a varredura de venda
   for (const c of arr) {
