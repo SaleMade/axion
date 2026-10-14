@@ -8451,6 +8451,31 @@ const BOT_MARCOS_PADRAO = [
   { n: 15, frase: '{nome} fechou {n} vendas hoje. Dia histórico, parabéns.' },
 ];
 const BOT_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos. Agora é passar da meta.';
+// O NOME DE CADA LINHA DO RESUMO (13/10/2026): o socio quis reescrever as linhas ("tirar esse
+// negocio de pedidos pagos no dia, ou reformular"). Cada linha tem o nome padrao abaixo e pode ser
+// renomeada na tela; liga e desliga continua no relatorio.mostrar.
+const BOT_ROTULOS_PADRAO = { pedidos: 'Pedidos', leads: 'Leads', conversao: 'Conversão', pagos_antigos: 'Pagos hoje (pedidos anteriores)', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', aguardando: 'Aguardando aceite' };
+// INCENTIVO (13/10/2026): o time passou X horas sem venda dentro do horario, o bot manda uma frase
+// sorteada no grupo ("E ai, rapaziada?"). A lista nasce com estas e o socio troca do jeito dele.
+const BOT_INCENTIVO_PADRAO = [
+  'E aí, time? Faz {horas} horas sem venda. Bora virar esse jogo!',
+  'Rapaziada, {horas} horas sem pedido. Quem vai quebrar o gelo?',
+  'Tá muito quieto por aqui. Quem puxa a próxima venda?',
+  '{horas} horas sem pedido. Bora responder aqueles leads parados!',
+  'Quem fizer a próxima venda ganha o respeito do grupo. Bora!',
+  'Hora de acelerar, time. Faz {horas} horas que ninguém vende.',
+  'Lead esfriando não vira venda. Bora chamar quem está esperando!',
+  'Cadê aquele fechamento? Faz {horas} horas que o placar não mexe.',
+  'Hoje já foram {pedidos} pedidos. Bora aumentar esse número!',
+  'Um pedido agora muda o clima do grupo. Bora!',
+];
+// Uma lista de frases: aceita array ou texto com uma frase por linha; tira linha vazia e repetida.
+const _botLista = (v, max) => {
+  const arr = Array.isArray(v) ? v : (typeof v === 'string' ? v.split('\n') : []);
+  const out = [], vistos = new Set();
+  for (const x of arr) { const t = _botTexto300(x, 300).trim(); if (t && !vistos.has(t)) { vistos.add(t); out.push(t); } }
+  return out.slice(0, max || 60);
+};
 const BOT_MADRUGADA_MIN = 360;    // hora marcada antes das 06:00 = resumo do dia anterior
 const BOT_ATRASO_MAX_MIN = 180;   // passou de 3h da hora marcada, deixa pra amanha
 let _botCfgCache = null, _botCfgAt = 0, _botTablesOk = false, _botTplCache = null, _botTplAt = 0, _botVerVista = -1, _botSemTokenDia = '';
@@ -8482,11 +8507,13 @@ function _botCfgPadrao() {
       ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Resumo do dia', ordenar: 'pedidos',
       mostrar: { detalhe_pedidos: true, leads: true, conversao: true, pagos_antigos: true, meta: true, geral: true, aguardando: true, ontem: false },
       sem_pedido: '', rodape: '',
+      rotulos: { ...BOT_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_pedidos: [],
     },
     semanal: { ativo: false, dia: 0, hora: '20:30' },
     metas: { semanal: {} },
-    marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m })) },
-    meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO },
+    marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m, frases: [m.frase] })) },
+    meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO, frases: [BOT_META_FRASE_PADRAO] },
+    incentivo: { ativo: false, horas: 2, de: '09:00', ate: '21:00', dias: [1, 2, 3, 4, 5, 6], max_dia: 3, frases: BOT_INCENTIVO_PADRAO.slice() },
     canais: { whatsapp: true, push: false },
     grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true, via: 'pc' },
   };
@@ -8519,6 +8546,24 @@ function _botNormaliza(raw, base) {
   for (const k of Object.keys(o.relatorio.mostrar)) o.relatorio.mostrar[k] = (k in mos) ? !!mos[k] : ((k in bmos) ? !!bmos[k] : o.relatorio.mostrar[k]);
   o.relatorio.sem_pedido = _botTexto300('sem_pedido' in rel ? rel.sem_pedido : brel.sem_pedido, 300).trim();
   o.relatorio.rodape = _botTexto300('rodape' in rel ? rel.rodape : brel.rodape, 300).trim();
+  // AS VARIACOES (13/10/2026). Config antiga tem so a frase solta (rodape, sem_pedido): ela vira a
+  // primeira da lista, entao nada some quando a tela nova grava.
+  const _lst = (k, solto) => {
+    const daqui = (k in rel) ? _botLista(rel[k]) : null;
+    if (daqui) return daqui;
+    const base = Array.isArray(brel[k]) ? _botLista(brel[k]) : [];
+    if (base.length) return base;
+    return solto ? [solto] : [];
+  };
+  o.relatorio.aberturas = _lst('aberturas', '');
+  o.relatorio.rodapes = _lst('rodapes', o.relatorio.rodape);
+  o.relatorio.sem_pedidos = _lst('sem_pedidos', o.relatorio.sem_pedido);
+  o.relatorio.rodape = o.relatorio.rodapes[0] || '';
+  o.relatorio.sem_pedido = o.relatorio.sem_pedidos[0] || '';
+  const rot = (rel.rotulos && typeof rel.rotulos === 'object') ? rel.rotulos : {};
+  const brot = (brel.rotulos && typeof brel.rotulos === 'object') ? brel.rotulos : {};
+  o.relatorio.rotulos = {};
+  for (const k of Object.keys(BOT_ROTULOS_PADRAO)) o.relatorio.rotulos[k] = _botTexto300((k in rot) ? rot[k] : brot[k], 40).trim() || BOT_ROTULOS_PADRAO[k];
   const sem = (r.semanal && typeof r.semanal === 'object') ? r.semanal : {};
   const bsem = b.semanal || o.semanal;
   o.semanal.ativo = 'ativo' in sem ? !!sem.ativo : !!bsem.ativo;
@@ -8534,13 +8579,32 @@ function _botNormaliza(raw, base) {
   o.marcos.para = ['vendedor', 'todos'].includes(mar.para) ? mar.para : (['vendedor', 'todos'].includes(bmar.para) ? bmar.para : 'todos');
   const lista = Array.isArray(mar.lista) ? mar.lista : (Array.isArray(bmar.lista) ? bmar.lista : o.marcos.lista);
   const vistosN = new Set();
-  o.marcos.lista = lista.map((m) => ({ n: Math.floor(Number(m && m.n) || 0), frase: _botTexto300(m && m.frase, 300).trim() }))
-    .filter((m) => m.n > 0 && m.n <= 999 && m.frase && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
+  o.marcos.lista = lista.map((m) => {
+    const fr = _botLista(m && Array.isArray(m.frases) && m.frases.length ? m.frases : [m && m.frase]);
+    return { n: Math.floor(Number(m && m.n) || 0), frases: fr, frase: fr[0] || '' };
+  }).filter((m) => m.n > 0 && m.n <= 999 && m.frases.length && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
   const mb = (r.meta_batida && typeof r.meta_batida === 'object') ? r.meta_batida : {};
   const bmb = b.meta_batida || o.meta_batida;
   o.meta_batida.ativo = 'ativo' in mb ? !!mb.ativo : bmb.ativo !== false;
   o.meta_batida.para = ['vendedor', 'todos'].includes(mb.para) ? mb.para : (['vendedor', 'todos'].includes(bmb.para) ? bmb.para : 'todos');
   o.meta_batida.frase = _botTexto300('frase' in mb ? mb.frase : bmb.frase, 300).trim() || BOT_META_FRASE_PADRAO;
+  {
+    const fr = _botLista(Array.isArray(mb.frases) ? mb.frases : (Array.isArray(bmb.frases) && bmb.frases.length && !('frase' in mb) ? bmb.frases : [o.meta_batida.frase]));
+    o.meta_batida.frases = fr.length ? fr : [BOT_META_FRASE_PADRAO];
+    o.meta_batida.frase = o.meta_batida.frases[0];
+  }
+  const inc = (r.incentivo && typeof r.incentivo === 'object') ? r.incentivo : {};
+  const binc = b.incentivo || o.incentivo;
+  o.incentivo.ativo = 'ativo' in inc ? !!inc.ativo : !!binc.ativo;
+  const _num = (v, bv, min, max, pad) => { const x = Number(v); if (Number.isFinite(x) && x >= min && x <= max) return x; const y = Number(bv); return (Number.isFinite(y) && y >= min && y <= max) ? y : pad; };
+  o.incentivo.horas = _num(inc.horas, binc.horas, 0.5, 12, 2);
+  o.incentivo.max_dia = Math.floor(_num(inc.max_dia, binc.max_dia, 1, 12, 3));
+  o.incentivo.de = _botHoraOk(inc.de) ? inc.de : (_botHoraOk(binc.de) ? binc.de : '09:00');
+  o.incentivo.ate = _botHoraOk(inc.ate) ? inc.ate : (_botHoraOk(binc.ate) ? binc.ate : '21:00');
+  const idias = Array.isArray(inc.dias) ? inc.dias : (Array.isArray(binc.dias) ? binc.dias : o.incentivo.dias);
+  o.incentivo.dias = [...new Set(idias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
+  const ifr = _botLista(Array.isArray(inc.frases) ? inc.frases : binc.frases);
+  o.incentivo.frases = ifr.length ? ifr : BOT_INCENTIVO_PADRAO.slice();
   const can = (r.canais && typeof r.canais === 'object') ? r.canais : {};
   const bcan = b.canais || o.canais;
   o.canais.whatsapp = 'whatsapp' in can ? !!can.whatsapp : bcan.whatsapp !== false;
@@ -8775,26 +8839,31 @@ function _botPartesPedido(v) {
   return p.join(', ');
 }
 // O TEXTO QUE VAI NO WHATSAPP. Negrito com asteriscos, sem emoji, sem travessao (regra do Bruno).
-function _botTextoRelatorio(cfg, dados) {
+// `esc` = as frases ja sorteadas pra este envio ({ abertura, rodape, sem_pedido }); sem ela (a previa)
+// sorteia na hora, sem gravar memoria.
+function _botTextoRelatorio(cfg, dados, esc) {
   const r = (cfg && cfg.relatorio) || _botCfgPadrao().relatorio;
   const m = r.mostrar || {};
+  const rot = { ...BOT_ROTULOS_PADRAO, ...(r.rotulos || {}) };
+  const e = esc || { abertura: _botUmaDe(r.aberturas), rodape: _botUmaDe((r.rodapes && r.rodapes.length) ? r.rodapes : (r.rodape ? [r.rodape] : [])), sem_pedido: _botUmaDe((r.sem_pedidos && r.sem_pedidos.length) ? r.sem_pedidos : (r.sem_pedido ? [r.sem_pedido] : [])) };
   const semanal = dados.tipo === 'semanal';
   const L = [];
   const titulo = semanal ? 'Resumo da semana' : (r.titulo || 'Resumo do dia');
   const quando = semanal ? (_botDataBR(dados.semana.inicio) + ' a ' + _botDataBR(dados.semana.fim)) : (_botDataBR(dados.dia) + ' (' + _botDiaSemana(dados.dia) + ')');
   L.push('*' + titulo + ' · ' + quando + '*');
+  if (e.abertura) L.push(_botFrase(e.abertura, { data: _botDataBR(dados.dia) }));
   const vs = dados.vendedores.slice();
   if (r.ordenar === 'nome') vs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   else vs.sort((a, b) => (b.pedidos - a.pedidos) || (b.leads - a.leads) || a.nome.localeCompare(b.nome, 'pt-BR'));
   if (!vs.length) { L.push(''); L.push('Nenhum vendedor ativo no cadastro.'); return L.join('\n'); }
   const ninguem = vs.every((v) => v.pedidos === 0);
-  if (ninguem && r.sem_pedido) { L.push(''); L.push(r.sem_pedido); }
-  const rotPagos = semanal ? 'Pagos na semana (pedidos anteriores)' : 'Pagos hoje (pedidos anteriores)';
+  if (ninguem && e.sem_pedido) { L.push(''); L.push(e.sem_pedido); }
+  const rotPagos = semanal && rot.pagos_antigos === BOT_ROTULOS_PADRAO.pagos_antigos ? 'Pagos na semana (pedidos anteriores)' : rot.pagos_antigos;
   const linhas = (v) => {
     const out = [];
     const partes = m.detalhe_pedidos !== false && v.pedidos ? _botPartesPedido(v) : '';
-    out.push('Pedidos: ' + v.pedidos + (partes ? ' (' + partes + ')' : ''));
-    if (m.leads !== false) out.push('Leads: ' + v.leads + (m.conversao !== false && v.leads ? ' · Conversão: ' + v.conversao + '%' : ''));
+    out.push(rot.pedidos + ': ' + v.pedidos + (partes ? ' (' + partes + ')' : ''));
+    if (m.leads !== false) out.push(rot.leads + ': ' + v.leads + (m.conversao !== false && v.leads ? ' · ' + rot.conversao + ': ' + v.conversao + '%' : ''));
     if (m.pagos_antigos !== false) out.push(rotPagos + ': ' + v.pagos_antigos);
     return out;
   };
@@ -8802,26 +8871,45 @@ function _botTextoRelatorio(cfg, dados) {
     L.push('');
     L.push('*' + (r.ordenar === 'nome' ? '' : (i + 1) + '. ') + v.nome + '*');
     L.push(...linhas(v));
-    if (m.meta !== false && v.meta > 0) L.push('Meta da semana: ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' · faltam ' + v.faltam : ' · meta batida'));
-    if (m.ontem && !semanal) L.push('Ontem: ' + _botPlural(v.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(v.ontem.leads, 'lead', 'leads'));
+    if (m.meta !== false && v.meta > 0) L.push(rot.meta + ': ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' · faltam ' + v.faltam : ' · meta batida'));
+    if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(v.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(v.ontem.leads, 'lead', 'leads'));
   });
   if (m.geral !== false && vs.length > 1) {
     const g = dados.geral;
     L.push('');
-    L.push('*Geral*');
+    L.push('*' + rot.geral + '*');
     L.push(...linhas(g));
-    if (m.ontem && !semanal) L.push('Ontem: ' + _botPlural(g.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(g.ontem.leads, 'lead', 'leads'));
+    if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(g.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(g.ontem.leads, 'lead', 'leads'));
   }
-  if (m.aguardando !== false && dados.geral.aguardando) { L.push(''); L.push('Aguardando aceite: ' + dados.geral.aguardando); }
-  if (r.rodape) { L.push(''); L.push(r.rodape); }
+  if (m.aguardando !== false && dados.geral.aguardando) { L.push(''); L.push(rot.aguardando + ': ' + dados.geral.aguardando); }
+  if (e.rodape) { L.push(''); L.push(_botFrase(e.rodape, { data: _botDataBR(dados.dia) })); }
   return L.join('\n');
 }
+// O SORTEIO (13/10/2026): o bot escolhe uma frase da lista e evita as ultimas que ja saiu (ate 3, ou
+// menos se a lista for curta), pra nao parecer robo repetindo. A memoria e por tipo de mensagem
+// (marco_5, meta, incentivo, abertura...), em app_config bot_sorteio. Sem banco, sorteia solto.
+async function _botSorteia(env, chave, lista) {
+  const l = Array.isArray(lista) ? lista.filter(Boolean) : [];
+  if (!l.length) return '';
+  if (l.length === 1) return l[0];
+  let mem = {};
+  try { mem = JSON.parse((await _readConfig(env, 'bot_sorteio')) || '{}') || {}; } catch (_) { mem = {}; }
+  const recentes = Array.isArray(mem[chave]) ? mem[chave] : [];
+  const guarda = Math.min(3, l.length - 1);
+  const evita = new Set(recentes.slice(-guarda));
+  const livres = l.filter((f) => !evita.has(f.slice(0, 60)));
+  const escolhida = (livres.length ? livres : l)[Math.floor(Math.random() * (livres.length ? livres.length : l.length))];
+  mem[chave] = [...recentes.filter((x) => x !== escolhida.slice(0, 60)), escolhida.slice(0, 60)].slice(-6);
+  try { await _writeConfig(env, 'bot_sorteio', JSON.stringify(mem)); } catch (_) {}
+  return escolhida;
+}
+const _botUmaDe = (lista) => { const l = Array.isArray(lista) ? lista.filter(Boolean) : []; return l.length ? l[Math.floor(Math.random() * l.length)] : ''; };
 function _botFrase(frase, vars) {
   const v = vars || {};
   const nomeCompleto = String(v.nome_completo || v.nome || '').trim();
   const primeiro = nomeCompleto.split(/\s+/)[0] || '';
-  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data };
-  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
+  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data, horas: v.horas };
+  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data|horas)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
 }
 
 // ─── Envio ──────────────────────────────────────────────────────────────────────────────
@@ -9029,7 +9117,13 @@ const _botAlvosDe = (cfg, para) => {
 // `diaResumo` = o dia que o texto cobre (ver _botDiaDoResumo); `dia` = o dia do disparo (vai no log).
 async function _botDisparar(env, cfg, row, tipo, diaResumo, para, dia) {
   const dados = await _botDados(env, diaResumo, cfg, tipo === 'semanal' ? 'semanal' : 'diario');
-  const texto = _botTextoRelatorio(cfg, dados);
+  const r0 = cfg.relatorio;
+  const esc = {
+    abertura: await _botSorteia(env, 'abertura', r0.aberturas),
+    rodape: await _botSorteia(env, 'rodape', (r0.rodapes && r0.rodapes.length) ? r0.rodapes : (r0.rodape ? [r0.rodape] : [])),
+    sem_pedido: await _botSorteia(env, 'sem_pedido', (r0.sem_pedidos && r0.sem_pedidos.length) ? r0.sem_pedidos : (r0.sem_pedido ? [r0.sem_pedido] : [])),
+  };
+  const texto = _botTextoRelatorio(cfg, dados, esc);
   const resultados = [];
   // O grupo vai primeiro (e onde o time le) e so no disparo completo: `para` e reenvio pra pessoas certas.
   const g = cfg.grupo || {};
@@ -9048,7 +9142,7 @@ async function _botReserva(env, chave) {
 // Faxina, uma vez por dia (junto do resumo): envios com mais de 90 dias e chaves de dedupe com mais de 30.
 async function _botFaxina(env) {
   try { await env.DB.prepare('DELETE FROM bot_envios WHERE ts < ?').bind(Math.floor(Date.now() / 1000) - 90 * 86400).run(); } catch (_) {}
-  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%' OR key LIKE 'bot_incent_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
 }
 // O SLOT DE UM HORARIO MARCADO. Devolve o dia do slot que esta "na hora" agora (hoje, ou ontem se a
 // hora marcada foi perto da meia-noite e a batida caiu depois dela), respeitando o atraso maximo.
@@ -9081,10 +9175,10 @@ async function _botMarcosTick(env, cfg, row, dia) {
     if (cfg.marcos.ativo && cfg.marcos.lista.length) {
       const max = Number(feito[v.id]) || 0;
       const novos = cfg.marcos.lista.filter((m) => m.n > max && m.n <= v.pedidos);
-      for (const m of novos) envios.push({ v, frase: m.frase, n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } });
+      for (const m of novos) envios.push({ v, frases: m.frases && m.frases.length ? m.frases : [m.frase], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } });
     }
     if (cfg.meta_batida.ativo && v.meta > 0 && v.semana >= v.meta && !feitoS[v.id]) {
-      envios.push({ v, frase: cfg.meta_batida.frase, n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
+      envios.push({ v, frases: cfg.meta_batida.frases && cfg.meta_batida.frases.length ? cfg.meta_batida.frases : [cfg.meta_batida.frase], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
     }
   }
   _botVerVista = ver;
@@ -9092,7 +9186,10 @@ async function _botMarcosTick(env, cfg, row, dia) {
   if (!envios.length) return;
   let mudouM = false, mudouS = false;
   const consome = (e) => { e.marca(); if (e.tipo === 'meta') mudouS = true; else mudouM = true; };
-  for (const e of envios) e.texto = _botFrase(e.frase, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
+  for (const e of envios) {
+    const fr = await _botSorteia(env, e.tipo === 'meta' ? 'meta' : 'marco_' + e.n, e.frases);
+    e.texto = _botFrase(fr, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
+  }
   // NO GRUPO: todas as comemoracoes da batida numa mensagem so. Entregue (ou na fila) = consumido.
   const g = cfg.grupo || {};
   const noGrupo = !!(g.id && g.marcos !== false);
@@ -9128,6 +9225,50 @@ async function _botMarcosTick(env, cfg, row, dia) {
   if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
   if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
 }
+// QUANDO FOI A ULTIMA VENDA DO TIME HOJE (s) e quantos pedidos o time fez: mesma regra de pedido do
+// resumo (card do dia, do vendedor ativo da casa, fora cancelado).
+async function _botUltimaVenda(env, dia) {
+  const st = await _getDashData(env);
+  const leads = Array.isArray(st && st.leads) ? st.leads : [];
+  const ids = new Set((await _botVendedores(env)).map((v) => v.id));
+  const ini = _botInicioDia(dia) * 1000, fim = ini + 86400000;
+  let ultima = 0, pedidos = 0;
+  for (const l of leads) {
+    if (!l || l.afl || !ids.has(String(l.at || '')) || _botCancelado(l)) continue;
+    const t = _botCriadoMs(l);
+    if (!t || t < ini || t >= fim) continue;
+    pedidos++;
+    if (t > ultima) ultima = t;
+  }
+  return { ultima: Math.floor(ultima / 1000), pedidos };
+}
+// INCENTIVO (13/10/2026). Dentro do horario e nos dias marcados: passou `horas` sem venda (contando
+// da ultima venda, do comeco do horario ou do ultimo incentivo, o que for mais recente), manda UMA
+// frase sorteada. No maximo `max_dia` por dia. Vai pro grupo; sem grupo, pra lista do privado.
+async function _botIncentivoTick(env, cfg, row, dia) {
+  const inc = cfg.incentivo;
+  if (!inc || !inc.ativo || !inc.frases.length || !inc.dias.includes(_botWd(dia))) return;
+  const agoraBR = _agoraBR();
+  const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  const de = _botMinutos(inc.de), ate = _botMinutos(inc.ate);
+  if (de < 0 || ate < 0 || minAgora < de || minAgora >= ate) return;
+  const agora = Math.floor(Date.now() / 1000);
+  const comeco = _botInicioDia(dia) + de * 60;
+  let est = {};
+  try { est = JSON.parse((await _readConfig(env, 'bot_incent_' + dia)) || '{}') || {}; } catch (_) { est = {}; }
+  const feitos = Number(est.n) || 0;
+  if (feitos >= inc.max_dia) return;
+  const { ultima, pedidos } = await _botUltimaVenda(env, dia);
+  const desdeVenda = Math.max(comeco, ultima || 0);
+  if (agora - Math.max(desdeVenda, Number(est.ultimo) || 0) < inc.horas * 3600) return;
+  if (!(await _botReserva(env, 'bot_incent_' + dia + '_' + (feitos + 1)))) return;
+  const horas = Math.max(1, Math.floor((agora - desdeVenda) / 3600));
+  const frase = await _botSorteia(env, 'incentivo', inc.frases);
+  const texto = _botFrase(frase, { horas, pedidos, data: _botDataBR(dia) });
+  await _writeConfig(env, 'bot_incent_' + dia, JSON.stringify({ n: feitos + 1, ultimo: agora }));
+  if (cfg.grupo && cfg.grupo.id) await _botEntregarGrupo(env, cfg, texto, 'incentivo', dia);
+  else await _botEnviarLista(env, cfg, row, _botDestinatarios(cfg), texto, 'incentivo', dia);
+}
 // O TICK DO CRON (toda batida, leve): fila de pendentes, resumo diario, resumo semanal, marcos.
 // Roda DEPOIS do poll do Datacrazy na mesma batida, pra enxergar a resposta ao "Ver mensagem"
 // que acabou de chegar. Sem numero com token nada e reservado: quando o token voltar, o resumo
@@ -9137,7 +9278,7 @@ async function _botTick(env) {
   try { await _botOutboxFaxina(env); } catch (_) {}   // a fila do PC recebe item mesmo com o bot desligado: a faxina nao depende do resto
   if (!cfg.ativo) return;
   const dia = _brDay();
-  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length);
+  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length) || (cfg.incentivo && cfg.incentivo.ativo);
   if (!temAlgo) return;
   const temGrupo = !!(cfg.grupo && cfg.grupo.id);
   const row = await _botNumeroRow(env, cfg);
@@ -9161,6 +9302,9 @@ async function _botTick(env) {
     if (slot && _botWd(slot) === s.dia && (await _botReserva(env, 'bot_sem_' + slot))) {
       try { await _botDisparar(env, cfg, row, 'semanal', _botMinutos(s.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(slot, -1) : slot, null, slot); } catch (e) { console.error('[bot] resumo semanal falhou: ' + String((e && e.message) || e)); }
     }
+  }
+  if (cfg.incentivo && cfg.incentivo.ativo) {
+    try { await _botIncentivoTick(env, cfg, row, dia); } catch (e) { console.error('[bot] incentivo falhou: ' + String((e && e.message) || e)); }
   }
   if ((cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length)) {
     try { await _botMarcosTick(env, cfg, row, dia); } catch (e) { console.error('[bot] marcos falhou: ' + String((e && e.message) || e)); }
@@ -9536,7 +9680,7 @@ async function handleBotEnviar(req, env) {
   if (!u) return err('Não autenticado', 401);
   if (!_botPodeUsar(u)) return err('Sem permissão', 403);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
-  const tipo = ['relatorio', 'semanal', 'teste', 'marco'].includes(b.tipo) ? b.tipo : 'teste';
+  const tipo = ['relatorio', 'semanal', 'teste', 'marco', 'meta', 'incentivo'].includes(b.tipo) ? b.tipo : 'teste';
   const cfg = await _botCfgLer(env, true);
   const row = await _botNumeroRow(env, cfg);
   const hoje = _brDay();
@@ -9559,10 +9703,24 @@ async function handleBotEnviar(req, env) {
     const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
     const dados = await _botDados(env, hoje, cfg, 'diario');
     const vd = dados.vendedores.find((x) => x.id === v.id) || { pedidos: m.n, leads: 0, meta: 0, faltam: 0 };
-    texto = _botFrase(m.frase, { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
+    texto = _botFrase(await _botSorteia(env, 'marco_' + m.n, m.frases && m.frases.length ? m.frases : [m.frase]), { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
+  }
+  if (tipo === 'meta') {
+    const vendedores = await _botVendedores(env);
+    const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
+    const dados = await _botDados(env, hoje, cfg, 'diario');
+    const vd = dados.vendedores.find((x) => x.id === v.id) || { semana: 0, meta: 0, pedidos: 0, leads: 0, faltam: 0 };
+    texto = _botFrase(await _botSorteia(env, 'meta', cfg.meta_batida.frases), { nome: v.nome, n: vd.meta || vd.semana, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: 0, data: _botDataBR(hoje) });
+  }
+  if (tipo === 'incentivo') {
+    const { ultima, pedidos } = await _botUltimaVenda(env, hoje);
+    const de = _botMinutos(cfg.incentivo.de);
+    const desde = Math.max(_botInicioDia(hoje) + Math.max(0, de) * 60, ultima || 0);
+    const horas = Math.max(1, Math.floor((Math.floor(Date.now() / 1000) - desde) / 3600));
+    texto = _botFrase(await _botSorteia(env, 'incentivo', cfg.incentivo.frases), { horas, pedidos, data: _botDataBR(hoje) });
   }
   const alvos = _botAlvosDe(cfg, para);
-  const grupoVai = !para && temGrupo && (tipo !== 'marco' || cfg.grupo.marcos !== false);
+  const grupoVai = !para && temGrupo && (!['marco', 'meta'].includes(tipo) || cfg.grupo.marcos !== false);
   if (!alvos.length && !grupoVai) return err('Ninguém na lista de quem recebe (ou todo mundo sem telefone)');
   const resultados = [];
   if (grupoVai) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, hoje));
