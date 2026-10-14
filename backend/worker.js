@@ -18760,9 +18760,14 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
     // Todos vão pra MESMA instância ax_<at> (a atribuição casa por NÚMERO, não pela instância).
     const off = (v.off && typeof v.off === 'object') ? v.off : null;               // números DESLIGADOS (chave = últimos 8 dígitos)
     const nums = [];
+    // TODOS os números "Em uso" do vendedor, LIGADOS OU NÃO. Não escolhe quem recebe: serve pro
+    // PLACAR (ver a nota do `cv` no _presselBalancedPick). Lead que já entrou é do vendedor, e
+    // continua sendo quando ele desliga o número.
+    const nksTodos = [];
     for(const c of mine){
       if(!isEmUso(c) || !c.num || !okWa(c)) continue;                              // só "Em uso", com número, não banido/restrito
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
+      if(nk) nksTodos.push(nk);
       if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
       // MODO ROLETA NAO EXIGE CONEXAO (11/09/2026, pedido do Bruno: "a Evolution a gente nao vai
       // utilizar mais, substitui por uma coleta padrao, como se fosse uma pressel normal").
@@ -18779,7 +18784,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
       nums.push({num:c.num, inst:instP, roleta, lim:Number(c.lim_dia)||0, livre:String(c.lim_livre||''), dist:(c.dist==='limite'?'limite':''), ordem:Number(c.lim_ordem)||0, idx:Number(c.idx)||0});
     }
     if(!nums.length) continue;                                                      // nenhum número ligado/conectado → fora da roleta
-    out.push({at:String(v.at), nums});
+    out.push({at:String(v.at), nums, nksTodos});
   }
   // NÚMEROS SEM VENDEDOR (pedido do Giovane, 17/08/2026). Ele distribui os leads entre os
   // atendentes num sistema DELE, então exigir que cada número esteja dentro de um vendedor aqui só
@@ -19137,13 +19142,37 @@ async function _presselBalancedPick(env, id, sellers){
   pool.forEach(a=>{
     const k=String(a.at); const nk=k8(a.num);
     if(!porAt[k]) porAt[k]={at:k, cli:0, cv:0, nums:[]};
-    porAt[k].cli+=cargaDia(a); porAt[k].cv+=(conv[nk]||0); porAt[k].nums.push(a);
+    porAt[k].cli+=cargaDia(a); porAt[k].nums.push(a);   // o cv e somado abaixo, pelo vendedor inteiro
   });
   // Numero que saiu pelo LIMITE (bateu o teto ou esta esperando a vez na fila) continua contando no
   // placar do vendedor dele: os leads que ele recebeu hoje sao do vendedor. Sem isto, bater o teto num numero fazia o vendedor parecer "atrasado" e
   // puxar pelo numero que sobrou os leads que eram dos outros (medido no harness: Guilherme com
   // 110 no dia levava tudo contra 60 do Murilo, porque so o numero de 40 contava).
-  for(const u of _foraLimite){ const k=String(u.at); if(porAt[k]) porAt[k].cv+=(conv[k8(u.num)]||0); }
+  // ══ O PLACAR E DO VENDEDOR, NAO DOS NUMEROS LIGADOS AGORA (14/10/2026) ═══════════════════
+  //
+  // INCIDENTE QUE OBRIGOU ISTO. As 13:22 de 14/10 o Kevin desligou o proprio numero 91215713, que
+  // ja tinha feito 74 leads no dia. Como o laco acima so somava `conv` dos numeros que ESTAVAM na
+  // roleta, o placar dele caiu de ~88 pra ~14 no mesmo segundo, ele virou "o mais atrasado" e a
+  // roleta despejou tudo nele: das 13:20 as 13:50 o Kevin levou 89, 69, 35 e 34 cliques e o
+  // Guilherme levou 0, 0, 0 e 10 - com o Guilherme ATRAS no placar o tempo todo. O dia fechou
+  // 133 x 105. Desligar um numero virava um jeito de puxar a fila inteira pra si.
+  //
+  // E O MESMO BUG que ja tinha sido consertado pro teto diario - a linha que existia aqui cobria
+  // so o `_foraLimite` e nao o interruptor. Agora a conta e uma so e cobre os tres casos: numero
+  // ligado, numero no teto e numero desligado. Lead que entrou hoje e do vendedor, ponto; o que o
+  // interruptor controla e quem RECEBE daqui pra frente, nao o historico do dia.
+  //
+  // `nksTodos` vem do _resolvePresselSellers com todos os numeros "Em uso" do vendedor, ligados ou
+  // nao. Sem ele (numeros sem dono, que nao passam por aquele caminho) cai no comportamento
+  // antigo, que pra esse caso e o certo: so o que esta na roleta mais o que saiu pelo teto.
+  for(const sv of sellers){
+    const k=String(sv.at); if(!porAt[k]) continue;
+    const lista = (Array.isArray(sv.nksTodos) && sv.nksTodos.length)
+      ? sv.nksTodos
+      : porAt[k].nums.map(a=>k8(a.num)).concat(_foraLimite.filter(u=>String(u.at)===k).map(u=>k8(u.num)));
+    const vistos = new Set();
+    for(const nk of lista){ if(nk && !vistos.has(nk)){ vistos.add(nk); porAt[k].cv += (conv[nk]||0); } }
+  }
   // SEM teto de compensação. Existia uma trava de 3x aqui, tirada a pedido do Diretor: na operação
   // real um número ou está restrito (converte pior, mas funciona) ou está banido — e banido sai
   // sozinho da roleta, porque o Sale Chat para de dar sinal de vida e o número deixa de entrar em
