@@ -5229,9 +5229,9 @@ async function handleGetState(req, env) {
   // um do outro, e rodavam em serie: com 150 a 250ms por ida ao D1, era ~350ms de espera empilhada
   // em TODA tela da dash. Cada uma tem o proprio try/catch la dentro, entao uma falha continua
   // caindo pro vazio sem derrubar a resposta.
-  const _rowP = env.DB.prepare(
-    'SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1'
-  ).first();
+  // PELO CACHE DE VERSAO (14/10/2026, ver _dashRawAtual): a tela recebe o mesmo texto e a mesma versao
+  // que o banco tem agora; so nao baixa 1,47 MB quando nada mudou desde a ultima leitura do isolate.
+  const _rowP = _dashRawAtual(env).then((r) => (r ? { data: r.raw, version: r.version, updated_at: r.updated_at, updated_by: r.updated_by } : null));
   const _teamP = _stateTeam(req, env, uVis);
   const _conexP = _stateConexoes(env, uVis);
   const _qualityP = env.DB.prepare('SELECT display_phone, quality FROM wa_api_numbers WHERE quality IS NOT NULL').all();
@@ -7519,7 +7519,7 @@ async function handleSaleChatSave(req, env) {
 async function handleSaleChatMine(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  const row = await _dashRawAtual(env).then((r) => (r ? { data: r.raw } : null));   // cache por versao (14/10/2026)
   let data = {}; try { data = JSON.parse(row?.data || '{}'); } catch (e) { data = {}; }
   const uid = String(u.id);
   // COBRADOR PARTE DO ROTEIRO DE COBRANCA, nao do de vendas. O Bruno liberou esta tela pra eles em
@@ -8149,16 +8149,52 @@ async function _ensureConfigTable(env) {
 // poucos segundos em vez de por evento. NÃO usar isto pra servir a tela do Diretor (ele precisa ver
 // a própria edição na hora); só pra leitura de config operacional, onde 8s de atraso é invisível.
 let _dashCache = null, _dashCacheT = 0;
+// ══ O ESTADO SO E BAIXADO QUANDO MUDOU (14/10/2026) ══════════════════════════════════════════
+//
+// MEDIDO NO DIA EM QUE O BANCO ENGASGOU (14/10, 16:46 a 16:56, "D1 DB is overloaded"): a leitura do
+// blob inteiro (1,47 MB) foi 62 por cento de TODO o tempo do D1 nas 24h anteriores - 31.937 leituras
+// de "SELECT data FROM dashboard_state", fora as do GET /api/state. Em 4 minutos do pico foram 331,
+// ou 480 MB trafegando, pra devolver quase sempre o MESMO texto: o estado muda ~700 vezes por dia
+// (versao 59.589 em 06/10, 65.211 em 14/10), e cada isolate relia a cada 8 segundos.
+//
+// Agora a pergunta e "a versao mudou?" (uma linha, um numero). Igual = usa o texto que ja esta na
+// memoria; diferente = baixa. TODA escrita do estado sobe a versao (CAS em todos os UPDATE, conferido
+// um por um), entao versao igual e texto igual. Ainda assim o texto e rebaixado a cada 2 minutos no
+// maximo, de seguro contra alguma escrita feita na mao sem subir a versao.
+//
+// O _getDashData continua devolvendo um objeto NOVO a cada vez que o prazo dele vence (JSON.parse do
+// texto guardado): quem mexer no objeto devolvido nao suja a copia dos outros por mais tempo do que ja
+// sujava antes. So a ida ao banco mudou.
+let _dashRaw = null, _dashRawV = null, _dashRawMeta = null, _dashRawLido = 0;
+async function _dashRawAtual(env) {
+  const agora = Date.now();
+  if (_dashRaw != null && _dashRawV != null && (agora - _dashRawLido) < 120000) {
+    try {
+      const v = await env.DB.prepare('SELECT version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
+      if (v && Number(v.version) === _dashRawV) return { raw: _dashRaw, version: _dashRawV, updated_at: v.updated_at, updated_by: v.updated_by };
+    } catch (e) {
+      // Banco nao respondeu a pergunta da versao: quem le recebe o ultimo texto que temos (o mesmo que
+      // o _getDashData ja fazia no erro). Quem precisa GRAVAR nao passa por aqui: le com a versao.
+      return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by };
+    }
+  }
+  const row = await env.DB.prepare('SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
+  if (!row) return null;
+  _dashRaw = row.data || '{}'; _dashRawV = Number(row.version) || 0; _dashRawLido = agora;
+  _dashRawMeta = { updated_at: row.updated_at, updated_by: row.updated_by };
+  return { raw: _dashRaw, version: _dashRawV, updated_at: row.updated_at, updated_by: row.updated_by };
+}
 async function _getDashData(env, maxAgeMs) {
   const now = Date.now();
   // 0 = SEM cache de verdade (13/09/2026). Era `maxAgeMs || 8000`, e o 0 virava 8000: o diagnostico e
   // as outras 2 leituras que pedem "o estado de AGORA" liam uma copia de ate 8s atras - o vendedor
   // desligava o numero e a tela voltava a mostrar ligado.
+  // (14/10/2026) "Sem cache" continua sendo o estado de AGORA: a versao e perguntada ao banco toda vez.
   const _idade = (maxAgeMs == null) ? 8000 : maxAgeMs;
   if (_dashCache && (now - _dashCacheT) < _idade) return _dashCache;
   try {
-    const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
-    _dashCache = JSON.parse(row?.data || '{}');
+    const r = await _dashRawAtual(env);
+    _dashCache = JSON.parse((r && r.raw) || '{}');
     _dashCacheT = now;
   } catch (_) { if (!_dashCache) _dashCache = {}; }
   return _dashCache;
@@ -12818,10 +12854,29 @@ function _waNumKey(n) {
 }
 // Semeia wa_number_owner a partir dos chips do estado da dash (número -> vendedor).
 // Server-side: é a fonte de verdade da atribuição, nunca o que o cliente diz ser.
-async function _scSeedOwners(env) {
+// SO QUANDO A LISTA MUDOU (14/10/2026). O cron chama isto a cada batida de 'conexao' (umas 576 por
+// dia) e cada chamada regravava os ~60 numeros um a um: 36 mil escritas por dia em wa_number_owner,
+// e uma fila de idas ao banco segurando a batida, pra gravar a mesma coisa. Agora, com `soSeMudou`,
+// ele compara a lista (numero, dono, reserva, API) com a da ultima vez e so grava se mudou, ou se
+// passou meia hora (seguro contra linha mexida por fora). Quem chama depois de mudar alguma coisa
+// (cadastro de numero, registro na API) continua chamando sem a opcao, e grava sempre.
+let _seedSig = '', _seedT = 0;
+async function _scSeedOwners(env, opts) {
   try {
     const data = await _getDashData(env);   // cacheado
     const chips = Array.isArray(data.chips) ? data.chips : [];
+    const _sig = JSON.stringify(chips.map((c) => [String((c && c.num) || ''), c && c.at != null ? String(c.at) : '', !!(c && c.bkp === true), !!(c && c.api === true)]));
+    if (opts && opts.soSeMudou && _sig === _seedSig && (Date.now() - _seedT) < 1800000) {
+      // A ligacao do numero OFICIAL ao vendedor continua a cada batida: o _dcSyncInstances tambem
+      // escreve em wa_api_numbers, e era esta linha que devolvia o dono certo. Sao poucos numeros.
+      for (const c of chips) {
+        if (!(c && c.api === true)) continue;
+        const num = String(c.num || '').replace(/\D/g, ''), at = c.at != null ? String(c.at) : '';
+        if (!num || !at) continue;
+        try { await env.DB.prepare("UPDATE wa_api_numbers SET at_id=?, updated_at=strftime('%s','now') WHERE num_key=? AND COALESCE(at_id,'')<>?").bind(at, _waNumKey(num), at).run(); } catch (_) {}
+      }
+      return 0;
+    }
     let n = 0;
     const vivos = [];
     for (const c of chips) {
@@ -12863,6 +12918,7 @@ async function _scSeedOwners(env) {
         await env.DB.prepare(`UPDATE wa_number_owner SET source='chips_off' WHERE source='chips' AND number NOT IN (${ph})`).bind(...vivos).run();
       } catch (_) {}
     }
+    _seedSig = _sig; _seedT = Date.now();
     return n;
   } catch (_) { return 0; }
 }
@@ -15882,7 +15938,13 @@ async function handleWAConn(req, env) {
     // está entregando captura pro servidor agora.
     try {
       const vistos = {}; scConns.forEach(c => { vistos[String(c.number)] = 1; });
-      const ing = await env.DB.prepare("SELECT DISTINCT self_number FROM sc_ingest_audit WHERE source='sc' AND received_at > strftime('%s','now')-180").all();
+      // INDEXED BY (14/10/2026): sem ele o SQLite varria a tabela inteira (4,8 mil linhas por chamada,
+      // 50 milhoes por dia, porque a tela chama de minuto em minuto pra cada pessoa logada) pra achar
+      // as linhas dos ultimos 3 minutos - quase sempre zero. Pelo indice de received_at le so a janela.
+      // Indice sumido = cai na consulta antiga, que da o mesmo resultado.
+      let ing;
+      try { ing = await env.DB.prepare("SELECT DISTINCT self_number FROM sc_ingest_audit INDEXED BY idx_sc_audit_recv WHERE source='sc' AND received_at > strftime('%s','now')-180").all(); }
+      catch (_) { ing = await env.DB.prepare("SELECT DISTINCT self_number FROM sc_ingest_audit WHERE source='sc' AND received_at > strftime('%s','now')-180").all(); }
       (ing.results || []).forEach(r => {
         const n = String(r.self_number || ''); if (!n || vistos[n]) return;
         scConns.push({ instance: 'sc_' + n, state: 'sc', number: n });
@@ -15960,6 +16022,7 @@ async function handleWAConn(req, env) {
 // que o Diretor edita na dash (fica em DB.salechat, salvo pelo sync normal).
 // Publico de proposito: sao roteiros de venda, nao dado sensivel; o injetor
 // (Node) e a extensao puxam isso pra montar o painel dentro do WhatsApp.
+const _scGetMemo = {};   // ver "SO QUANDO A VERSAO MUDOU" no handleSaleChatGet
 async function handleSaleChatGet(req, env) {
   // ESTA ROTA ENTREGAVA O NOSSO FUNIL INTEIRO (25/08/2026). Eu tinha podado o Sale Chat do
   // /api/state e dado o assunto por resolvido; a varredura por rota mostrou que este endpoint
@@ -15981,11 +16044,21 @@ async function handleSaleChatGet(req, env) {
   // Os bots recebem o que foi PUBLICADO (botão "Salvar e publicar" na dash), NAO o rascunho.
   // Fallback pro rascunho so na transicao (antes da 1a publicacao existir).
   let pub = null, draft = null;
+  // SO QUANDO A VERSAO MUDOU (14/10/2026): o json_extract ainda faz o SQLite atravessar o blob de
+  // 1,47 MB inteiro. Versao igual = o que foi publicado e o mesmo de antes.
+  const _memoK = cob ? 'cob' : 'vend';
   try {
-    const row = await env.DB.prepare('SELECT json_extract(data, ?) pub, json_extract(data, ?) draft FROM dashboard_state WHERE id = 1')
-      .bind(cob ? '$.salechatCobPub' : '$.salechatPub', cob ? '$.salechatCob' : '$.salechat').first();
-    try { pub = row && row.pub ? JSON.parse(row.pub) : null; } catch (_) { pub = null; }
-    try { draft = row && row.draft ? JSON.parse(row.draft) : null; } catch (_) { draft = null; }
+    const _v = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id = 1').first();
+    const _vv = _v ? Number(_v.version) : -1;
+    const _m = _scGetMemo[_memoK];
+    if (_m && _m.v === _vv) { pub = _m.pub; draft = _m.draft; }
+    else {
+      const row = await env.DB.prepare('SELECT json_extract(data, ?) pub, json_extract(data, ?) draft FROM dashboard_state WHERE id = 1')
+        .bind(cob ? '$.salechatCobPub' : '$.salechatPub', cob ? '$.salechatCob' : '$.salechat').first();
+      try { pub = row && row.pub ? JSON.parse(row.pub) : null; } catch (_) { pub = null; }
+      try { draft = row && row.draft ? JSON.parse(row.draft) : null; } catch (_) { draft = null; }
+      _scGetMemo[_memoK] = { v: _vv, pub, draft };
+    }
   } catch (_) {}
   const sc = (pub || draft || {});
   return json({
@@ -16723,7 +16796,7 @@ async function handleWALead(req, env) {
   }
   const tail = phone.slice(-8);
   if (tail.length < 8) return json({ ok: true, lead: null });
-  const row = await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  const row = await _dashRawAtual(env).then((r) => (r ? { data: r.raw } : null));   // cache por versao (14/10/2026)
   let st = {}; try { st = JSON.parse(row?.data || '{}'); } catch (_) {}
   // PEDIDO DO MUNDO DE QUEM PERGUNTA (21/09/2026): o diretor da casa nao le pedido de afiliado por
   // aqui (nome, CPF, endereco), e ninguem do mundo do afiliado le pedido da casa. Devolve null, nao
@@ -17627,8 +17700,17 @@ async function _ttRetryFailed(env) {
     // que destrava; nao depende de ninguem perceber e mexer na mao.
     // Idempotente: o TikTok deduplica pelo event_id, entao reenviar o mesmo evento nao conta 2x.
     try {
-      const vivo = await env.DB.prepare(
-        "SELECT 1 FROM tt_events WHERE status='ok' AND code='0' AND ts > strftime('%s','now')-3600 LIMIT 1").first();
+      // INDEXED BY (14/10/2026): o SQLite escolhia o indice (status, next_try) e passava por TODOS os
+      // eventos 'ok' da tabela (15 mil linhas) pra responder sim ou nao. Pelo indice de ts le so a
+      // ultima hora.
+      let vivo;
+      try {
+        vivo = await env.DB.prepare(
+          "SELECT 1 FROM tt_events INDEXED BY idx_tt_events_ts WHERE ts > strftime('%s','now')-3600 AND status='ok' AND code='0' LIMIT 1").first();
+      } catch (_) {
+        vivo = await env.DB.prepare(
+          "SELECT 1 FROM tt_events WHERE status='ok' AND code='0' AND ts > strftime('%s','now')-3600 LIMIT 1").first();
+      }
       if (vivo) {
         await env.DB.prepare(
           // next_try=0 soltava TODAS as linhas presas na mesma batida, e era metade da tempestade
@@ -19032,6 +19114,7 @@ function _pickRecent(k, win){ if(!k) return 0; const t=Math.floor(Date.now()/100
 // empate. Receber muita mensagem também não bane: a própria Meta documenta isso ("receiving many
 // messages at once will not result in an account ban"); o que bane é ENVIO em massa.
 // ═══════════════════════════════════════════════════════════════════════════════════════════
+let _cliqueCache = null, _cliqueT = 0, _cliqueKey = 0;   // ver _cliqueDiaCache
 async function _presselBalancedPick(env, id, sellers){
   const now=Math.floor(Date.now()/1000);
   const dayStart=Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
@@ -19143,8 +19226,20 @@ async function _presselBalancedPick(env, id, sellers){
         ).bind(dayStart).all();
       }
     };
+    // 15 SEGUNDOS DE CACHE (14/10/2026). Esta contagem le TODA visita do dia (22 mil linhas as 16h de
+    // 14/10) e rodava a cada clique de anuncio: 211 milhoes de linhas lidas em 24h, 58 por cento de
+    // tudo que o banco leu. O clique e so o desempate (quem manda e o lead, que ja vinha de um cache de
+    // 30s), e o que esta instancia acabou de mandar entra pelo _pickRecent logo abaixo, entao a
+    // distribuicao continua a mesma.
+    const _cliqueDiaCache = async () => {
+      const _ag = Date.now();
+      if (_cliqueCache && _cliqueKey === dayStart && (_ag - _cliqueT) < 15000) return _cliqueCache;
+      const _r = await _cliqueDia();
+      _cliqueCache = _r; _cliqueT = _ag; _cliqueKey = dayStart;
+      return _r;
+    };
     const [r, lh] = await Promise.all([
-      _cliqueDia(),
+      _cliqueDiaCache(),
       _leadsHojePorNumero(env, dayStart),
     ]);
     (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return; hoje[k]=Number(x.dia)||0; });
@@ -20233,7 +20328,7 @@ async function handlePresselMetricsLive(req, env){
 }
 // GET /m/<id> — página PÚBLICA de métricas (pra compartilhar com gestores de tráfego)
 async function handlePresselMetricsPage(req, env, id){
-  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  const row=await _dashRawAtual(env).then((r) => (r ? { data: r.raw } : null));   // cache por versao (14/10/2026)
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
   const p=(Array.isArray(data.pressels)?data.pressels:[]).find(x=>String(x.id)===String(id));
   if(!p) return _presselHtml(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b1220;color:#cbd5e1;text-align:center;padding:60px">Pressel não encontrada.</body>`);
@@ -22105,7 +22200,7 @@ async function handlePresselsTotalPage(req, env){
   // Host de quem pediu: e o dominio da operacao dona desta pagina. Serve de padrao quando a
   // pressel nao tem dominio proprio gravado (ver _presselDom).
   const _hostReq = (() => { try { return new URL(req.url).host; } catch (_) { return ''; } })();
-  const row=await env.DB.prepare('SELECT data FROM dashboard_state WHERE id = 1').first();
+  const row=await _dashRawAtual(env).then((r) => (r ? { data: r.raw } : null));   // cache por versao (14/10/2026)
   let data={}; try{ data=JSON.parse(row?.data||'{}'); }catch(_){}
   // ESTA PAGINA E PUBLICA DE PROPOSITO (o gestor de trafego abre sem login), mas quem chega com
   // SESSAO de afiliado nao pode ver a nossa: a varredura de 25/08 achou "BM Br", "Guilherme" e
@@ -24737,7 +24832,7 @@ export default {
       if (passo === 'conexao') {
         // Semeia numero -> vendedor e atualiza o estado real das instancias. Numero sem dono nao
         // vira lead nem venda.
-        await _scEnsureTables(env); await _scSeedOwners(env);
+        await _scEnsureTables(env); await _scSeedOwners(env, { soSeMudou: true });
       } else if (passo === 'agenda') {
         // numero desligado "ate amanha" volta pro lugar dele na roleta (ver _presselVoltaTick)
         try { await _presselVoltaTick(env); } catch (e) { console.error('[cron] volta da roleta falhou: ' + String((e && e.message) || e)); }
