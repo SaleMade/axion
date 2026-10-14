@@ -17157,6 +17157,12 @@ async function _ttSend(env, pixel, token, event, phoneDigits, opts) {
       VALUES (?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'),?,?,?,?,?,?,?)
       ON CONFLICT(event_id) DO UPDATE SET status=excluded.status, code=excluded.code, msg=excluded.msg,
         event=excluded.event, stage=excluded.stage,
+        -- GUARDA O CLICK ID QUE REALMENTE FOI (14/10/2026). Antes o reenvio nao atualizava estas
+        -- duas colunas, entao a linha continuava dizendo que saiu sem click id mesmo depois de sair
+        -- com ele, e a segunda chance da varredura ficaria reenviando o mesmo evento pra sempre.
+        -- COALESCE/NULLIF pra nunca APAGAR um click id que a linha ja tinha.
+        ttclid=COALESCE(NULLIF(excluded.ttclid,''), tt_events.ttclid),
+        pid=COALESCE(NULLIF(excluded.pid,''), tt_events.pid),
         ip=COALESCE(NULLIF(excluded.ip,''), tt_events.ip),
         ua=COALESCE(NULLIF(excluded.ua,''), tt_events.ua),
         url=COALESCE(NULLIF(excluded.url,''), tt_events.url),
@@ -17268,13 +17274,50 @@ async function _ttVarrerVendasSemEvento(env) {
       // A regra do valor e a mesma que o _waDetectSale ja usa pra decidir se e pedido novo.
       const _evPedido = 'venda_' + String((l && l.id) || fone);
       let ja = null;
-      try { ja = await env.DB.prepare('SELECT 1 FROM tt_events WHERE event_id=? LIMIT 1').bind(_evPedido).first(); } catch (_) {}
-      if (ja) continue;
       try {
         ja = await env.DB.prepare(
-          "SELECT 1 FROM tt_events WHERE substr(phone,-8)=? AND stage='venda' AND ts > strftime('%s','now')-1800" +
+          "SELECT COALESCE(ttclid,'') ttclid, COALESCE(status,'') status, COALESCE(ts,0) ts FROM tt_events WHERE event_id=? LIMIT 1"
+        ).bind(_evPedido).first();
+      } catch (_) {}
+      // SEGUNDA CHANCE QUANDO A VENDA SAIU SEM CLICK ID (14/10/2026, pedido do Bruno: "seria
+      // interessante reler o lead quando ele vier vazio, mas isso so em caso de se tiver realmente
+      // uma venda saindo, nao quero que isso aconteca o tempo todo").
+      //
+      // O QUE ACONTECIA: esta varredura dispara UMA vez por pedido e nunca mais, porque a chave do
+      // evento e o proprio pedido. Quando o cliente manda a 1a mensagem e o vendedor lanca o pedido
+      // quase no mesmo instante, as duas coisas caem no MESMO lote de ingestao: o evento sai antes
+      // do lead estar legivel, sem click id, e o pedido fica marcado como ja disparado pra sempre.
+      // MEDIDO em 14/10: 9 vendas em 20 dias com o lead tendo click id e o evento tendo saido sem
+      // (0,45 por dia), 7 delas com lead e venda gravados no MESMO segundo.
+      //
+      // TRES TRAVAS, pra nao virar reenvio em loop nem contagem dobrada:
+      //  1) so se o evento saiu SEM click id e deu certo (de erro quem cuida e o _ttRetryFailed);
+      //  2) so se AGORA existe lead com click id, senao nao ha o que ganhar;
+      //  3) so na primeira HORA do evento. O TikTok deduplica pelo event_id e o mesmo id reenviado
+      //     nao conta duas vezes, mas a janela de deduplicacao nao e eterna: a corrida acontece em
+      //     SEGUNDOS, entao uma hora e folga enorme e mantem o reenvio bem dentro dela.
+      // Depois do reenvio o ttclid fica gravado na propria linha (ver o ON CONFLICT do _ttSend),
+      // o que faz a trava 1 fechar e o pedido nao voltar mais aqui.
+      if (ja) {
+        if (ja.ttclid || ja.status !== 'ok') continue;
+        if (!(Number(ja.ts) > 0 && Number(ja.ts) > (Math.floor(Date.now() / 1000) - 3600))) continue;
+        let _ag = null;
+        try {
+          _ag = await env.DB.prepare(
+            "SELECT 1 FROM wa_lead WHERE substr(phone,-8)=? AND COALESCE(ttclid,'')<>'' LIMIT 1"
+          ).bind(fone.slice(-8)).first();
+        } catch (_) {}
+        if (!_ag) continue;
+        console.log('[tt] venda ' + _evPedido + ': saiu sem click id e o lead agora tem, reenviando o MESMO evento');
+      }
+      try {
+        // `event_id<>?` pra nao achar a PROPRIA linha no reenvio: ela tem o mesmo telefone e o mesmo
+        // valor, e sem isso a segunda chance se barraria sozinha. Esta trava existe pra pegar a mesma
+        // venda chegando por OUTRO caminho, nao o reenvio do mesmo evento.
+        ja = await env.DB.prepare(
+          "SELECT 1 FROM tt_events WHERE substr(phone,-8)=? AND stage='venda' AND event_id<>? AND ts > strftime('%s','now')-1800" +
           " AND ABS(COALESCE(value,0) - ?) < 0.01 LIMIT 1"
-        ).bind(fone.slice(-8), val).first();
+        ).bind(fone.slice(-8), _evPedido, val).first();
       } catch (_) {}
       if (ja) continue;
       // CASA PELOS ULTIMOS 8 DIGITOS, e usa o telefone do RASTREIO, nao o do pedido.
@@ -17960,6 +18003,33 @@ async function _ttFireSale(env, phone, value, eventId, instance, mundo) {
     if (!digits) return;
     let ttclid = '', pid = '', hadLead = false;
     try { const l = await env.DB.prepare('SELECT pid, ttclid, fbc, fbp FROM wa_lead WHERE phone=?').bind(digits).first(); if (l) { hadLead = true; _fbcL = l.fbc || ''; _fbpL = l.fbp || ''; ttclid = l.ttclid || ''; pid = l.pid || ''; } } catch (_) {}
+    // SEGUNDA LEITURA DO LEAD, POR 8 DIGITOS, SO QUANDO O CLICK ID VEIO VAZIO (14/10/2026).
+    //
+    // A leitura de cima e por telefone EXATO, e isso esta certo no caminho normal: a varredura de
+    // venda ja resolveu o telefone do RASTREIO antes de chamar aqui. Mas ela nao e o unico caminho.
+    // Quando a venda chega pelo postback da Payt, ou quando o pedido foi lancado com o telefone
+    // digitado pelo vendedor (com o nono digito) e o rastreio guardou o que o WhatsApp entregou (sem
+    // ele), o telefone nao e identico e a leitura exata volta vazia. Nesse caso o evento saia so com
+    // o hash do telefone, que e o sinal mais fraco que existe.
+    //
+    // POR QUE SO QUANDO ESTA VAZIO, e nao sempre: casar por 8 digitos e mais frouxo (dois numeros de
+    // DDD diferente podem terminar igual). Enquanto a leitura exata responde, ela manda. Esta aqui e
+    // rede de seguranca, nao regra, e por isso exige ttclid nao vazio: se o lead achado por 8
+    // digitos nao tem click id, nao ha nada a ganhar e nao vale o risco de pegar o lead do vizinho.
+    // O filtro de MUNDO logo abaixo continua valendo pro pid que vier daqui.
+    if (!ttclid && digits.length >= 8) {
+      try {
+        const l2 = await env.DB.prepare(
+          "SELECT pid, ttclid, fbc, fbp FROM wa_lead WHERE substr(phone,-8)=? AND COALESCE(ttclid,'')<>'' ORDER BY ts DESC LIMIT 1"
+        ).bind(digits.slice(-8)).first();
+        if (l2) {
+          hadLead = true;
+          _fbcL = _fbcL || (l2.fbc || ''); _fbpL = _fbpL || (l2.fbp || '');
+          ttclid = l2.ttclid || ''; pid = pid || (l2.pid || '');
+          console.log('[tt] venda ' + String(eventId) + ': click id achado na 2a leitura (8 digitos)');
+        }
+      } catch (_) {}
+    }
     // Mundo conhecido: pressel de OUTRO mundo no wa_lead nao e a origem DESTA venda.
     let _presselsMundo = null;
     if (mundo != null) {
