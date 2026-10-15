@@ -6903,6 +6903,18 @@ async function handleChipSave(req, env) {
     // orfao gravado hoje na pressel 1 por causa disso. Mesma regra que estacionar ja tinha ("entra
     // com status neutro, pra nao fixar chip sem querer"): trocou de dono, o Diretor remarca.
     if (_donoAntes !== String(chip.at || '').trim() && chip.em_uso) { chip.em_uso = false; if (_isEmUsoId(chip.wa_st)) chip.wa_st = _ativoId; }
+    // TROCOU DE DONO? VAI PRO FIM DA FILA DO LIMITE (15/10/2026). O lim_ordem e a posicao na fila do dono
+    // ANTIGO: o (11) 96663-2248 era o 1o da Barbara, foi pro Guilherme e passou na frente do numero que
+    // estava recebendo. Entra depois do ultimo da fila do dono novo; a liberacao do dia (lim_livre) era
+    // do contexto antigo e sai junto. A tela pode reordenar depois (/api/chip/ordem).
+    const _donoNovo = String(chip.at || '').trim();
+    if (_donoAntes !== _donoNovo && !('lim_ordem' in patch)) {
+      delete chip.lim_livre;
+      if (_donoNovo) {
+        const _ult = data.chips.reduce((m, c) => (c && c !== chip && String(c.at || '').trim() === _donoNovo ? Math.max(m, Number(c.lim_ordem) || 0) : m), 0);
+        chip.lim_ordem = Math.min(_ult + 1, 99);
+      } else delete chip.lim_ordem;
+    }
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
@@ -12352,6 +12364,9 @@ async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
     // "Authorization Error" vem com code 100 (09/10/2026, 4144 do Kevin): sem esta linha a tela dizia
     // que o FORMATO do audio era o problema e o vendedor regravava a toa.
     if (/Authorization Error/i.test(txt)) return falha('meta_acesso_http_' + up.status, txt);
+    // A chave nao alcanca este numero (15/10/2026, 2248 do Guilherme): "Object with ID ... does not exist,
+    // cannot be loaded due to missing permissions". O audio estava certo; a tela dizia que era o formato.
+    if (/does not exist, cannot be loaded due to missing permissions|Unsupported (post|get) request/i.test(txt)) return falha('meta_sem_permissao_http_' + up.status, txt);
     return falha('meta_recusou_http_' + up.status + '_mime_' + mime, txt);
   } catch (e) { return falha('excecao', String((e && e.stack) || e)); }
 }
@@ -12390,7 +12405,8 @@ async function _waCloudSendMedia(env, atId, number, opts) {
     if (!mu) {
       // A frase muda conforme o motivo: mandar o vendedor "gravar de novo" quando o problema e a Meta
       // recusando o formato faz ele gravar dez vezes e nada resolver.
-      const amigavel = _motivo.startsWith('meta_acesso') ? 'A chave de acesso do WhatsApp deste número está inválida (não é problema do áudio). Avise o Bruno.'
+      const amigavel = _motivo.startsWith('meta_sem_permissao') ? WA_SEM_PERMISSAO_TXT
+        : _motivo.startsWith('meta_acesso') ? 'A chave de acesso do WhatsApp deste número está inválida (não é problema do áudio). Avise o Bruno.'
         : _motivo.startsWith('meta_recusou') ? 'O WhatsApp recusou o formato deste áudio. Grave pelo celular ou pelo Chrome (o Safari grava num formato que a Meta não aceita como voz).'
         : _motivo.startsWith('r2_http') || _motivo === 'nao_baixou_do_r2' ? 'O áudio não foi encontrado no servidor. Grave de novo.'
           : _motivo === 'arquivo_vazio' ? 'A gravação saiu vazia. Segure o botão até terminar de falar.'
@@ -13000,7 +13016,9 @@ const _WA_ERRO_PT = {
   130429: 'Muita mensagem em pouco tempo neste número. Espere um pouco antes de mandar de novo.',
   368: 'Número bloqueado temporariamente pela Meta por violação de política.',
 };
-const _waErroTxt = (code, cru) => _WA_ERRO_PT[Number(code)] || cru;
+// Code 100 com "does not exist / missing permissions": a chave gravada nao alcanca o numero (15/10/2026).
+const WA_SEM_PERMISSAO_TXT = 'Este número não aceita envio pela dash: a chave do WhatsApp não tem permissão nele (não é problema da mensagem nem do áudio). Responda pelo celular e avise o Bruno.';
+const _waErroTxt = (code, cru) => _WA_ERRO_PT[Number(code)] || (Number(code) === 100 && /does not exist, cannot be loaded due to missing permissions|Unsupported (post|get) request/i.test(String(cru || '')) ? WA_SEM_PERMISSAO_TXT : cru);
 // REGISTRO DA FALHA. Sem isto, envio que falha na hora (a resposta da Meta, nao o webhook de
 // status) nao deixa rastro nenhum: o vendedor ve o aviso vermelho, fecha, e nao sobra nada pra
 // olhar depois. Foi o que aconteceu em 20/08/2026 com o 131000 do Murilo.
