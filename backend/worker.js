@@ -12243,14 +12243,17 @@ async function handleWACloudSend(req, env) {
 }
 // Baixa a mídia recebida pela Cloud API (a Meta entrega um id, não os bytes) e grava no R2,
 // depois preenche wa_messages.media_url. Roda em ctx.waitUntil (nunca bloqueia o ACK do webhook).
-async function _waCloudDownloadMedia(env, mediaId, msgId) {
+// `tokNum` (15/10/2026): a chave do numero que recebeu. Numero da Dualhook so baixa midia pela rota
+// deles (api.dualhook.com/v25.0/<id>/content), com a chave dele; o token da Meta nao enxerga.
+async function _waCloudDownloadMedia(env, mediaId, msgId, tokNum) {
   try {
     if (!env.MEDIA || !mediaId) return;
-    const meta = await _graph(env, `/${encodeURIComponent(mediaId)}`);
+    const _dh = _ehChaveDualhook(tokNum);
+    const meta = await _graph(env, `/${encodeURIComponent(mediaId)}`, _dh ? { token: tokNum } : {});
     const murl = meta.ok && meta.data && meta.data.url;
     if (!murl) return;
     const mime = (meta.data && meta.data.mime_type) || 'application/octet-stream';
-    const token = await _readConfig(env, 'wa_api_token');
+    const token = _dh ? tokNum : await _readConfig(env, 'wa_api_token');
     const r = await _fetchComTeto(murl, 15000, { headers: token ? { authorization: 'Bearer ' + token } : {} });
     if (!r.ok) return;
     const buf = await r.arrayBuffer();
@@ -12356,7 +12359,7 @@ async function _waCloudUploadMedia(env, phoneNumberId, token, link, mimeHint) {
     fd.append('messaging_product', 'whatsapp');
     fd.append('type', mime);
     fd.append('file', new Blob([buf], { type: mime }), 'audio.' + ext);
-    const up = await _fetchComTeto('https://graph.facebook.com/v21.0/' + encodeURIComponent(phoneNumberId) + '/media', 20000, { method: 'POST', headers: { authorization: 'Bearer ' + tk }, body: fd });
+    const up = await _fetchComTeto(_waHost(tk) + '/' + encodeURIComponent(phoneNumberId) + '/media', 20000, { method: 'POST', headers: { authorization: 'Bearer ' + tk }, body: fd });
     const txt = await up.text();
     let j = {}; try { j = JSON.parse(txt); } catch (_) {}
     if (up.ok && j && j.id) return { id: String(j.id), isOpus, mime };
@@ -13043,10 +13046,20 @@ function _graphTropecou(r) {
   const c = Number(r.data && r.data.error && r.data.error.code);
   return _GRAPH_TRANSITORIO.has(c);
 }
+// ══ DUALHOOK (15/10/2026, o Bruno trocou o Datacrazy por ele) ══════════════════════════════════
+// O numero ligado pela Dualhook nao manda pela graph.facebook.com: ele usa a "Runtime API" deles, que
+// e o MESMO caminho da Graph (/<phone_number_id>/messages, /media, /<waba>/message_templates...) em
+// api.dualhook.com/v25.0, com uma chave POR NUMERO (dh_live_...) no lugar do token da Meta. Por isso a
+// chave fica no mesmo lugar do token (wa_api_numbers.token) e e ELA que decide o endereco: todo envio,
+// upload de audio, template e leitura de status do numero ja passa pelo lugar certo sem nenhuma
+// outra tela saber que existe Dualhook. A chave nunca vai pra Meta, e o token da Meta nunca vai pra
+// Dualhook (a runtime deles recusa).
+const _ehChaveDualhook = (t) => /^dh_live_/.test(String(t || ''));
+const _waHost = (t) => (_ehChaveDualhook(t) ? 'https://api.dualhook.com/v25.0' : 'https://graph.facebook.com/v21.0');
 async function _graph(env, path, opts = {}) {
   const { token: optToken, retry, ...fetchOpts } = opts;   // token do PRÓPRIO número (Datacrazy) tem prioridade; senão cai no wa_api_token
   const token = optToken || await _readConfig(env, 'wa_api_token');
-  const base = 'https://graph.facebook.com/v21.0';
+  const base = _waHost(token);
   const headers = { ...(fetchOpts.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
   if (fetchOpts.body && typeof fetchOpts.body === 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
@@ -13090,13 +13103,14 @@ async function _waApiUpsert(env, o) {
 // Roda no passo 'manutencao' volta===1 (junto com o sync de instâncias): a cada ~80min a grade
 // da Contingência mostra as cores verdes/amarelas/vermelhas sem nenhum clique manual.
 async function _syncWaQuality(env) {
-  const rows = await env.DB.prepare('SELECT phone_number_id FROM wa_api_numbers').all();
+  const rows = await env.DB.prepare('SELECT phone_number_id, token FROM wa_api_numbers').all();
   if (!rows || !rows.results || !rows.results.length) return;
   for (const row of rows.results) {
     const pnid = String(row.phone_number_id || '').trim();
     if (!pnid) continue;
     try {
-      const r = await _graph(env, '/' + pnid + '?fields=quality_rating');
+      // Numero da Dualhook so le pela chave dele (15/10/2026); os outros seguem como sempre.
+      const r = await _graph(env, '/' + pnid + '?fields=quality_rating', _ehChaveDualhook(row.token) ? { token: row.token } : {});
       if (!r.ok || !r.data) continue;
       const q = String(r.data.quality_rating || '').toUpperCase();
       if (!q || q === 'UNKNOWN') continue;
@@ -13355,6 +13369,50 @@ async function handleWaEsFinish(req, env) {
     try { await _waApiUpsert(env, { phone_number_id, display_phone: (st.display_phone_number || phone).replace(/\D/g, ''), waba_id, quality: st.quality_rating, name_status: st.name_status, verified: 1 }); } catch (_) {}
   }
   return json({ ok: true, waba_id, phone_number_id, token_present: !!token, steps });
+}
+
+// POST /api/wa/dualhook/numero { phone_number_id, waba_id, chave } -> liga um numero da Dualhook na dash
+// (15/10/2026). A Dualhook nao tem API de conta (nao da pra listar as conexoes por fora): cada numero
+// ganha uma chave propria no painel deles (Connection > Overview > Outbound API key, aparece uma vez
+// so). A tela manda os tres, o worker confere a chave lendo o proprio numero pela Dualhook e grava em
+// wa_api_numbers. Quem liga o numero ao VENDEDOR continua sendo a Contingencia, como os outros.
+// GET devolve o que a tela precisa pra configurar a Dualhook: o endereco do webhook e o codigo de
+// verificacao, e os numeros que ja estao ligados por ela (sem a chave).
+async function handleWaDualhookNumero(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u) || noMundoAfiliado(u)) return err('Sem permissão', 403);
+  await _scEnsureTables(env);
+  if (req.method === 'GET') {
+    const rows = await env.DB.prepare("SELECT phone_number_id, display_phone, waba_id, at_id, quality, updated_at FROM wa_api_numbers WHERE token LIKE 'dh_live_%' ORDER BY updated_at DESC").all();
+    return json({
+      ok: true,
+      webhook_url: (() => { try { return new URL(req.url).origin + '/api/wa/cloud'; } catch (_) { return '/api/wa/cloud'; } })(),
+      verify_token: await _waCloudVerifyToken(env),
+      numeros: (rows && rows.results) || [],
+    });
+  }
+  let b; try { b = await req.json(); } catch (_) { b = {}; }
+  const pnid = String(b.phone_number_id || '').replace(/\D/g, '');
+  const waba = String(b.waba_id || '').replace(/\D/g, '');
+  const chave = String(b.chave || '').trim();
+  if (!pnid) return err('Falta o Phone number ID (aparece na conexão, no painel da Dualhook)');
+  if (!_ehChaveDualhook(chave)) return err('A chave da Dualhook começa com dh_live_ (Connection > Overview > Outbound API key)');
+  const g = await _graph(env, '/' + pnid + '?fields=display_phone_number,verified_name,quality_rating', { token: chave });
+  if (!g.ok) return json({ ok: false, error: 'A Dualhook recusou a chave pra este número: ' + String((g.data && g.data.error && g.data.error.message) || ('HTTP ' + g.status)).slice(0, 200) }, 400);
+  const disp = String((g.data && g.data.display_phone_number) || '').replace(/\D/g, '');
+  if (!disp) return json({ ok: false, error: 'A Dualhook não devolveu o número desta conexão' }, 400);
+  await _waApiUpsert(env, { phone_number_id: pnid, display_phone: disp, waba_id: waba || null, quality: (g.data && g.data.quality_rating) || null, verified: 1 });
+  await env.DB.prepare("UPDATE wa_api_numbers SET token=?, updated_at=strftime('%s','now') WHERE phone_number_id=?").bind(chave, pnid).run();
+  // Mesmo numero cadastrado antes com outro id (veio do Datacrazy): a linha velha sai e o dono passa
+  // pra esta, igual ao numero reconectado (ver _waTrocaIdDoNumero).
+  try {
+    const velhos = ((await env.DB.prepare('SELECT phone_number_id FROM wa_api_numbers WHERE num_key=? AND phone_number_id<>?').bind(_waNumKey(disp), pnid).all()).results || []);
+    for (const v of velhos) await _waTrocaIdDoNumero(env, String(v.phone_number_id), pnid, waba || null);
+  } catch (_) {}
+  try { await _scSeedOwners(env); } catch (_) {}
+  const row = await env.DB.prepare('SELECT phone_number_id, display_phone, waba_id, at_id, quality FROM wa_api_numbers WHERE phone_number_id=?').bind(pnid).first();
+  return json({ ok: true, numero: row, nome: (g.data && g.data.verified_name) || '' });
 }
 
 // GET /api/wa/official/numbers  → lista os números oficiais mapeados (com dono, qualidade, status)
@@ -13628,9 +13686,10 @@ async function _waDigitando(env, atId, phone, apiNumFixo) {
     if (!apiNum || !apiNum.phone_number_id) return false;
     // timeout: ver o cabecalho de _dcApiGetRaw (22/09/2026). Envio pendurado segurava o funil,
     // e o funil roda dentro do cron de minuto em minuto - as batidas empilhavam.
-    const r = await _fetchComTeto('https://graph.facebook.com/v21.0/' + encodeURIComponent(apiNum.phone_number_id) + '/messages', 12000, {
+    const _tkD = apiNum.token || await _readConfig(env, 'wa_api_token');
+    const r = await _fetchComTeto(_waHost(_tkD) + '/' + encodeURIComponent(apiNum.phone_number_id) + '/messages', 12000, {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + (apiNum.token || await _readConfig(env, 'wa_api_token')), 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer ' + _tkD, 'content-type': 'application/json' },
       body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: String(wamid), typing_indicator: { type: 'text' } }),
     });
     return r.ok;
@@ -14342,6 +14401,10 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
       for (const ch of (entry?.changes || [])) {
         const val = ch?.value || {};
         const selfNumber = String(val?.metadata?.display_phone_number || '').replace(/\D/g, '');
+        // A chave do numero que recebeu (so pesa pra Dualhook: e com ela que a midia baixa).
+        const _pnidW = String(val?.metadata?.phone_number_id || '');
+        let _tokNum = null;
+        if (_pnidW) { try { const _rt = await env.DB.prepare('SELECT token FROM wa_api_numbers WHERE phone_number_id=?').bind(_pnidW).first(); _tokNum = (_rt && _rt.token) || null; } catch (_) {} }
         const nomePorWa = {};
         (val?.contacts || []).forEach(c => { if (c?.wa_id) nomePorWa[String(c.wa_id).replace(/\D/g, '')] = (c?.profile?.name || ''); });
         // ── O QUE ACONTECEU COM O QUE A GENTE MANDOU ──────────────────────────────
@@ -14409,7 +14472,7 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
             // Mídia recebida: a Meta manda só o id. Baixa em background (nunca bloqueia o ACK 200).
             try {
               const mid = (m && m[type] && m[type].id) || null;
-              if (mid && ctx && ctx.waitUntil) ctx.waitUntil(_waCloudDownloadMedia(env, mid, msgId));
+              if (mid && ctx && ctx.waitUntil) ctx.waitUntil(_waCloudDownloadMedia(env, mid, msgId, _tokNum));
             } catch (_) {}
             // Lead respondeu → para o funil automático (não empurra áudio por cima da resposta dele).
             try { await _waFunnelStop(env, phone, 'lead_respondeu'); } catch (_) {}
@@ -14421,6 +14484,30 @@ async function handleWhatsappCloudWebhook(req, env, ctx) {
               await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
             } catch (_) {}
           }
+        }
+        // ── O QUE O VENDEDOR DIGITOU NO CELULAR (coexistencia, 15/10/2026) ─────────────────────
+        // Numero em coexistencia continua no app WhatsApp Business, e o que o vendedor manda POR LA
+        // chega aqui como `smb_message_echoes` (a Meta manda pra quem recebe o webhook: com a Dualhook,
+        // e o nosso endpoint). Sem isto o inbox ficava cego pra metade da conversa, e o "Pedido
+        // Concluido" digitado no celular nao contava venda. O Datacrazy entregava isso pelo poll dele;
+        // aqui e o mesmo papel. Nao e lead nem resposta do lead: nao para funil nem vira captura.
+        for (const e of (val?.message_echoes || [])) {
+          const phone = String(e?.to || '').replace(/\D/g, '');
+          const msgId = String(e?.id || '');
+          if (!phone || !selfNumber) continue;
+          const ts = Number(e?.timestamp) || now;
+          const type = String(e?.type || 'text');
+          const bodyTxt = (e?.text?.body) || (e?.[type] && e[type].caption) || '';
+          if (!(selfNumber in ownerCache)) ownerCache[selfNumber] = await resolveOwner(env, selfNumber);
+          const ow = ownerCache[selfNumber];
+          if (!ow || !ow.at_id) continue;
+          const inst = _instComNumero(ow.at_id, selfNumber, ow.instance || '');
+          try { await _waLogMsg(env, { phone, instance: inst, direction: 'out', type, body: String(bodyTxt), pushName: '', ts, msgId: msgId || null }); } catch (_) {}
+          try {
+            const mid = (e && e[type] && e[type].id) || null;
+            if (mid && ctx && ctx.waitUntil) ctx.waitUntil(_waCloudDownloadMedia(env, mid, msgId, _tokNum));
+          } catch (_) {}
+          if (bodyTxt) { try { await _waDetectSale(env, inst, { message: { conversation: String(bodyTxt) }, key: { remoteJid: phone + '@c.us', remoteJidAlt: phone + '@c.us', id: msgId || null, fromMe: true } }); } catch (_) {} }
         }
       }
     }
@@ -15371,6 +15458,13 @@ async function _dcSyncInstances(env, mundo) {
       const disp = String(cfg.phoneNumber || '').replace(/\D/g, '');
       const token = String(cfg.token || '');
       if (!disp) continue;
+      // NUMERO QUE JA E DA DUALHOOK NAO E MAIS DO DATACRAZY (15/10/2026). Numero que saiu de la pode
+      // continuar listado (desconectado) por um tempo; sem esta guarda, a rotina abaixo trocaria a
+      // chave dh_live_ pelo token do Datacrazy e o envio voltaria pro caminho morto.
+      try {
+        const _jaDh = await env.DB.prepare("SELECT 1 x FROM wa_api_numbers WHERE num_key=? AND token LIKE 'dh_live_%' LIMIT 1").bind(_waNumKey(disp)).first();
+        if (_jaDh) continue;
+      } catch (_) {}
       // O NUMERO GANHOU ID NOVO NA META (15/10/2026). O (11) 96663-2248 foi reconectado no Datacrazy e
       // voltou com outro phone_number_id e outra WABA. A nossa linha continuou no id velho, que a Meta
       // ja nao conhece ("Object with ID ... does not exist ... missing permissions"): o numero recebia
@@ -25187,6 +25281,7 @@ export default {
       if (scHbMatch && req.method === 'POST')      return handleSalechatHeartbeat(req, env, scHbMatch[1]);
       // WhatsApp Cloud API (oficial): GET = verificação da Meta, POST = mensagens recebidas
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/cloud') return handleWhatsappCloudWebhook(req, env, ctx);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/wa/dualhook/numero') return handleWaDualhookNumero(req, env);
       // Datacrazy → AXION: recebe eventos das Automações do Datacrazy (pixel/atribuição/venda)
       if (req.method === 'POST'   && path === '/api/dc/event')  return handleDatacrazyEvent(req, env, ctx);
       if (req.method === 'GET'    && path === '/api/dc/events') return handleDatacrazyEventsList(req, env);
