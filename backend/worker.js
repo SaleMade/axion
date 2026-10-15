@@ -15362,6 +15362,21 @@ async function _dcSyncInstances(env, mundo) {
       const disp = String(cfg.phoneNumber || '').replace(/\D/g, '');
       const token = String(cfg.token || '');
       if (!disp) continue;
+      // O NUMERO GANHOU ID NOVO NA META (15/10/2026). O (11) 96663-2248 foi reconectado no Datacrazy e
+      // voltou com outro phone_number_id e outra WABA. A nossa linha continuou no id velho, que a Meta
+      // ja nao conhece ("Object with ID ... does not exist ... missing permissions"): o numero recebia
+      // lead e a dash nao conseguia mandar NADA por ele, nem funil nem resposta. Nenhuma das duas rotas
+      // abaixo percebia: uma atualiza por num_key (fica no id velho) e a outra so cadastra numero novo.
+      // So segue o id do Datacrazy quando a instancia esta CONECTADA e ativa: instancia velha
+      // desconectada do mesmo numero nao pode puxar a linha de volta pro id morto.
+      let _idTrocado = false;
+      if (cfg.phoneNumberId && String(inst.status || '').toUpperCase() === 'CONNECTED' && inst.isActive !== false) {
+        try {
+          const _novoId = String(cfg.phoneNumberId);
+          const _velhos = ((await env.DB.prepare('SELECT phone_number_id FROM wa_api_numbers WHERE num_key=? AND phone_number_id<>?').bind(_waNumKey(disp), _novoId).all()).results || []);
+          for (const v of _velhos) { if (await _waTrocaIdDoNumero(env, String(v.phone_number_id), _novoId, String(cfg.wabaId || '') || null)) _idTrocado = true; }
+        } catch (_) {}
+      }
       // TOKEN MASCARADO NAO VALE (03/10/2026). Hoje de manha o Datacrazy passou a devolver o token na
       // API como "EAB*" (10 caracteres, escondido). Esta rotina gravava isso por cima do token de
       // verdade em TODOS os numeros dele, e a partir das 09:46 todo envio pela Meta voltou 401 - e a
@@ -15374,7 +15389,7 @@ async function _dcSyncInstances(env, mundo) {
         // e pulava ele em silencio. O (24) 99277-4144 era o 1o da fila do Kevin e passou o dia sem
         // lead enquanto o 3o da fila levava tudo, ate ser banido. Cadastra e herda o token que a
         // Graph confirmar pra este numero (os numeros do Datacrazy dividem o mesmo usuario de sistema).
-        if (cfg.phoneNumberId) await _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial);
+        if (cfg.phoneNumberId) await _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial, _idTrocado);
         continue;
       }
       const nk = _waNumKey(disp);
@@ -15402,11 +15417,17 @@ async function _dcSyncInstances(env, mundo) {
 }
 // Numero do Datacrazy que veio com token mascarado: cadastra se for novo e, se o token gravado nao
 // presta, procura entre os tokens bons ja gravados um que a Graph aceite PARA ESTE numero.
-async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial) {
+// `idTrocado`: a linha acabou de ir pro id novo (ver o _dcSyncInstances). A chave que servia no id velho
+// pode nao servir na WABA nova, entao ela e conferida de novo em vez de ser aceita de cara.
+async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial, idTrocado) {
   const pnid = String(cfg.phoneNumberId);
   const tokBom = (t) => !!t && String(t).length >= 60 && String(t).indexOf('*') < 0;
   const ja = await env.DB.prepare('SELECT phone_number_id, token FROM wa_api_numbers WHERE num_key=? LIMIT 1').bind(_waNumKey(disp)).first();
-  if (ja && tokBom(ja.token)) return;
+  if (ja && tokBom(ja.token) && !idTrocado) return;
+  if (ja && tokBom(ja.token) && idTrocado) {
+    const _r0 = await _graph(env, '/' + pnid + '/whatsapp_business_profile?fields=about', { token: ja.token });
+    if (_r0.ok) return;
+  }
   if (!ja) {
     await _waApiUpsert(env, { phone_number_id: pnid, display_phone: disp, waba_id: String(cfg.wabaId || cfg.businessId || '') || null, verified: 1 });
     if (donoInicial) await env.DB.prepare("UPDATE wa_api_numbers SET at_id=? WHERE phone_number_id=? AND COALESCE(at_id,'')=''").bind(donoInicial, pnid).run().catch(() => {});
@@ -15420,6 +15441,21 @@ async function _dcCadastraNumeroSemToken(env, cfg, disp, donoInicial) {
     if (r.ok) { await env.DB.prepare('UPDATE wa_api_numbers SET token=? WHERE phone_number_id=?').bind(c.token, (ja && ja.phone_number_id) || pnid).run(); return; }
   }
   console.error('DC_SEM_TOKEN ' + disp.slice(-4));
+}
+// Leva a linha do numero pro phone_number_id novo, sem perder dono, chave nem data de cadastro. Se a
+// linha do id novo ja existir (cadastrada por outra rota), a velha sai e o dono passa pra nova.
+async function _waTrocaIdDoNumero(env, velho, novo, waba) {
+  try {
+    const existe = await env.DB.prepare('SELECT 1 x FROM wa_api_numbers WHERE phone_number_id=?').bind(novo).first();
+    if (existe) {
+      await env.DB.prepare("UPDATE wa_api_numbers SET at_id=COALESCE(NULLIF(at_id,''), (SELECT at_id FROM wa_api_numbers WHERE phone_number_id=?)) WHERE phone_number_id=?").bind(velho, novo).run();
+      await env.DB.prepare('DELETE FROM wa_api_numbers WHERE phone_number_id=?').bind(velho).run();
+    } else {
+      await env.DB.prepare("UPDATE wa_api_numbers SET phone_number_id=?, waba_id=COALESCE(?, waba_id), quality=NULL, updated_at=strftime('%s','now') WHERE phone_number_id=?").bind(novo, waba, velho).run();
+    }
+    console.log('WA_NUMERO_ID_NOVO ' + velho + ' -> ' + novo);
+    return true;
+  } catch (e) { console.error('WA_NUMERO_ID_NOVO falhou ' + velho + ': ' + String((e && e.message) || e)); return false; }
 }
 let _dcSeenOk = false;
 let _dcSeenPodaT = 0;   // ver "PODA UMA VEZ POR HORA" no _dcPoll
