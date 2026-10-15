@@ -13556,8 +13556,17 @@ async function handleWATemplate(req, env) {
   const language = String(b.language || 'pt_BR');
   const category = String(b.category || 'MARKETING').toUpperCase();
   const components = [];
+  // VARIAVEL SEM EXEMPLO A META RECUSA (15/10/2026, junto da tela Ferramentas > Templates). O corpo com
+  // {{1}}, {{2}}... precisa de um exemplo pra cada, na ordem; sem isso a criacao volta erro e o
+  // diretor nao entende por que. Cabecalho com variavel exigiria outro exemplo e a tela nao oferece:
+  // recusa com frase clara em vez de deixar a Meta recusar.
+  const corpo = String(b.body).slice(0, 1024);
+  const _vars = [...new Set((corpo.match(/\{\{\s*(\d+)\s*\}\}/g) || []).map((m) => Number(m.replace(/\D/g, ''))))].sort((x, y) => x - y);
+  const _ex = Array.isArray(b.exemplos) ? b.exemplos.map((x) => String(x == null ? '' : x).trim()) : [];
+  if (_vars.length && (_ex.length < _vars.length || _ex.slice(0, _vars.length).some((x) => !x))) return err('Preencha um exemplo pra cada variável do texto ({{1}}, {{2}}...)');
+  if (b.header && /\{\{/.test(String(b.header))) return err('O cabeçalho não aceita variável');
   if (b.header) components.push({ type: 'HEADER', format: 'TEXT', text: String(b.header).slice(0, 60) });
-  components.push({ type: 'BODY', text: String(b.body).slice(0, 1024) });
+  components.push(_vars.length ? { type: 'BODY', text: corpo, example: { body_text: [_ex.slice(0, _vars.length)] } } : { type: 'BODY', text: corpo });
   if (b.footer) components.push({ type: 'FOOTER', text: String(b.footer).slice(0, 60) });
   if (Array.isArray(b.buttons) && b.buttons.length) components.push({ type: 'BUTTONS', buttons: b.buttons.slice(0, 3).map(t => ({ type: 'QUICK_REPLY', text: String(t).slice(0, 25) })) });
   const g = await _graph(env, `/${encodeURIComponent(waba)}/message_templates`, { method: 'POST', token: wabaTok || undefined, body: JSON.stringify({ name, language, category, components }) });
