@@ -13002,13 +13002,20 @@ async function resolveOwner(env, selfNumber) {
 // do nosso. Idem 5xx e queda de rede (status 0). Aconteceu em 20/08/2026 com o Murilo, disparando
 // funil: uma vez, e nunca mais. Com uma segunda tentativa 2s depois isso nao chega na tela.
 // So vale com `retry: 1` explicito, e SO nos envios: nao e pra sair repetindo POST de configuracao.
-const _GRAPH_TRANSITORIO = new Set([131000, 131016]);
+// SO O QUE A META GARANTE QUE NAO PROCESSOU (15/10/2026). O 131000 ("Something went wrong") e o HTTP
+// 500 SAIRAM daqui: no dia 15/10, das 12:15 as 12:21, o numero 6574 do Guilherme estava sendo banido e
+// a Meta respondia 500/131000 MAS ENTREGAVA a mensagem. A segunda tentativa 2s depois mandava de novo,
+// e o lead recebia o audio do funil em dobro (9 repeticoes em 6 minutos; o Guilherme viu "ta
+// duplicando, enviando 2x"). Erro ambiguo nao se repete sozinho: quem decide reenviar e o vendedor,
+// olhando o celular. Fica so o 131016 ("Service unavailable"), que e recusa antes de processar.
+const _GRAPH_TRANSITORIO = new Set([131016]);
 // O QUE O VENDEDOR LE. A Meta responde em ingles e com o codigo colado no texto
 // ("(#131000) Something went wrong"), que nao diz nada pra quem esta atendendo: ele nao sabe se a
 // culpa e dele, se o lead recebeu, nem o que fazer. Cada codigo aqui vira uma frase que responde
 // essas tres coisas. Codigo que nao esta na lista continua mostrando o texto cru da Meta.
 const _WA_ERRO_PT = {
-  131000: 'O WhatsApp tropeçou agora (erro temporário da Meta, não é você). Já tentei de novo automaticamente. Espere alguns segundos e mande outra vez.',
+  // 15/10/2026: a frase antiga dizia "ja tentei de novo, mande outra vez" - e a mensagem tinha CHEGADO.
+  131000: 'A Meta deu erro neste envio, mas às vezes a mensagem chega mesmo assim. Confira no celular antes de mandar de novo. Se acontecer com vários leads seguidos, o número pode estar sendo bloqueado.',
   131016: 'O serviço do WhatsApp está fora do ar neste momento. Tente de novo em instantes.',
   131026: 'A Meta não conseguiu entregar: o número pode não ter WhatsApp ou estar escrito errado.',
   131047: 'Janela de 24h fechada: esse lead só recebe por template aprovado agora.',
@@ -13031,7 +13038,8 @@ async function _waFalhaLog(env, o) {
 }
 function _graphTropecou(r) {
   if (!r || r.ok) return false;
-  if (r.status === 0 || r.status >= 500) return true;
+  // Queda de rede (status 0) e 5xx tambem NAO repetem mais (15/10/2026): nos dois a mensagem pode ter
+  // saido. Ver o comentario do _GRAPH_TRANSITORIO.
   const c = Number(r.data && r.data.error && r.data.error.code);
   return _GRAPH_TRANSITORIO.has(c);
 }
