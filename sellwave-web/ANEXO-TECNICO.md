@@ -180,3 +180,27 @@ Electron 30**. O caminho é **`WebContentsView`** com `win.contentView.addChildV
 4. **O nome que aparece em "Aparelhos conectados" vem do User-Agent?** Se vier, vira correlacionador
    entre os números — foi exatamente o problema do `CONFIG_SESSION_PHONE_CLIENT` na Evolution
    (memória `antiban-whatsapp-evidencia`).
+
+## A11. Ligação de voz com a trava de proxy (spike 1) — AINDA EM ABERTO, e por quê
+
+**O que está medido, e é pouco:** com `disable_non_proxied_udp` e **sem proxy configurado**, a
+página nem carrega (`ERR_FAILED` em `https://example.com`). Ou seja a política só é utilizável
+**com** proxy de pé, o que casa com o desenho fail-closed: nada sai pelo IP real.
+
+**O que NÃO está medido:** se a ligação de voz completa. A pergunta é se a Meta oferece caminho de
+relay em **TCP ou TLS** quando o UDP não existe, e isso depende do servidor dela, não do nosso
+navegador.
+
+**Uma tentativa de medir por fora deu errado e quase virou conclusão falsa (16/10/2026).** O teste
+foi montado contra o `openrelay.metered.ca`, que está **morto** (timeout em 443 e em 80). O cenário
+de CONTROLE não formou candidato relay nem sem política e sem proxy — e isso quase foi lido como "a
+política mata o TCP", que seria exatamente a conclusão errada com cara de medição. A sessão
+paralela pegou o próprio erro antes de reportar.
+
+**A lição, que vale além deste spike:** teste sintético precisa de um controle que você **provou**
+que funciona. Controle silenciosamente quebrado não devolve "não sei", devolve a resposta errada com
+a mesma cara da certa.
+
+**E mesmo com um TURN vivo não fecharia.** Provar que o Chromium consegue relay por TCP através do
+proxy não prova que a **Meta** oferece esse caminho. Só sai com uma chamada de verdade, num número
+pareado, com a trava ligada. **Depende do Bruno, e não há substituto.**

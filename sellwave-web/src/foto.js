@@ -12,6 +12,7 @@ const vivas = []
 
 // Roteiro e lead de exemplo, so pra foto mostrar a tela cheia em vez do estado vazio.
 const EXEMPLO = `(() => {
+  window.__swFoto = true            // o mesmo sinalizador da casca: a tela sai cedo de toda releitura
   clearInterval(window.__swPulso)   // congela: senao o pulso apaga o exemplo e a foto sai vazia
   roteiro = {
     mediaBase: '',
@@ -70,7 +71,14 @@ async function rodar(ctx) {
   // que ele nunca vai ver. A regra e do Bruno: "para meus vendedores nao quero que nem apareca nada
   // de proxy".
   const monta = (direcao) => `(() => {
-      clearInterval(window.__swSync)   // congela: senao a sincronia troca o exemplo pelos numeros reais
+      // CONGELA A TELA ENQUANTO A FOTO ACONTECE.
+      //
+      // Limpar o intervalo nao bastava: a releitura tambem acontece ao GANHAR FOCO, e a janela
+      // ganha foco exatamente quando eu a trago pra frente pra fotografar. Ou seja o exemplo era
+      // trocado pelos numeros reais na pior hora possivel. O sinalizador resolve de uma vez: a
+      // tela confere ele e sai cedo, em qualquer caminho de releitura.
+      window.__swFoto = true
+      clearInterval(window.__swSync)
       estado.temToken = true
       estado.nome = 'Guilherme'
       estado.maxAbertos = 6
