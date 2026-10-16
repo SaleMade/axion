@@ -27,6 +27,20 @@ const UA_LIMPO =
   'Chrome/' + process.versions.chrome + ' Safari/537.36'
 app.userAgentFallback = UA_LIMPO
 
+// UMA INSTANCIA SO (16/10/2026).
+//
+// Duas copias do app rodando compartilham a MESMA pasta de dados: a fila de captura, a
+// configuracao e - o que morde primeiro - a trava de uso. Uma fecha o numero e manda soltar
+// enquanto a outra renova o aluguel, e o numero fica "aberto por voce mesmo" por dois minutos. Foi
+// o que o Bruno viu. Abrir duas vezes agora so traz a janela que ja existe pra frente.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    try { if (janela) { if (janela.isMinimized()) janela.restore(); janela.focus() } } catch (_) { /* ok */ }
+  })
+}
+
 // PASTA DOS DADOS FIXA, e de proposito.
 //
 // `app.getPath('userData')` deriva do NOME do app. Trocar o nome no package.json - ou o empacotador
@@ -47,7 +61,12 @@ const ALTURA_TOPO = 0                  // a casca desenha o topo dentro da propr
 // 'notifications' entra porque o vendedor precisa ser avisado de mensagem nova.
 // Tudo o mais e NEGADO: o padrao do Electron e liberar tudo, entao o risco aqui e sobrar
 // permissao, nao faltar.
-const PERMISSOES_OK = new Set(['media', 'persistent-storage', 'notifications', 'clipboard-sanitized-write'])
+// `notifications` SAIU em 16/10/2026, pedido do Bruno: "toda hora essa notificacao aparece, eu
+// acho que nao precisa disso". Ele pareou um numero com 8.082 mensagens de historico e o Windows
+// passou a repetir "WhatsApp - 8.082 novas mensagens" sem parar. Num numero de TRABALHO isso nunca
+// vai ser util: ele esta olhando a conversa, e o painel do lado ja avisa o que importa. Notificacao
+// que aparece o tempo todo nao avisa nada, so ensina a ignorar o canto da tela.
+const PERMISSOES_OK = new Set(['media', 'persistent-storage', 'clipboard-sanitized-write'])
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // 2) Configuracao local (token da dash, proxies por numero, trava)
@@ -509,6 +528,12 @@ async function abreDeVerdade(nk, numero, meu) {
       backgroundThrottling: false,
     },
   })
+  // TETO DE OUVINTES EXPLICITO. O padrao do Node e 10 e o Electron registra os dele (loadURL
+  // sozinho poe tres por navegacao), entao uma pagina que recarrega sozinha - o WhatsApp faz isso -
+  // enche o console de MaxListenersExceededWarning sem que haja vazamento no nosso codigo. O aviso
+  // em si nao e o problema; o problema e ele ESCONDER um vazamento de verdade no meio do barulho.
+  // 40 e folga pra recarga normal e ainda grita se algo passar disso.
+  try { view.webContents.setMaxListeners(40) } catch (_) { /* ok */ }
   const s = { view, nk, numero, carregado: false, ultimoUso: Date.now() }
   abertos.set(nk, s)
   particaoDoWc.set(view.webContents.id, particaoDe(nk))
@@ -518,6 +543,29 @@ async function abreDeVerdade(nk, numero, meu) {
     avisaCasca('sw:aberto', { nk })
     injetaPainel(s)
   })
+  // O RENDERER MORREU: ate hoje isso dava TELA BRANCA e mais nada.
+  //
+  // O Bruno ficou cinco minutos olhando uma tela branca que nao sincronizava: a pasta da particao
+  // nao crescia um byte e o processo nao gastava CPU. Parado, nao carregando. O Electron avisa isso
+  // por `render-process-gone` e ninguem estava escutando, entao o app nao tinha como contar - e
+  // "esta sincronizando, espera" e exatamente a leitura errada que custa meia hora de alguem.
+  view.webContents.on('render-process-gone', (_e, d) => {
+    const motivo = (d && d.reason) || 'desconhecido'
+    anota('[numero] ' + nk + ' o WhatsApp caiu: ' + motivo + (d && d.exitCode != null ? ' (codigo ' + d.exitCode + ')' : ''))
+    avisaCasca('sw:erro', {
+      nk,
+      erro: motivo === 'oom'
+        ? 'O WhatsApp deste número ficou sem memória. Feche algum outro número e abra este de novo.'
+        : 'A tela deste número caiu (' + motivo + '). Clique em Tentar de novo.',
+    })
+  })
+  // Pagina que trava de vez em quando tambem conta, e o Electron sabe antes de voce.
+  view.webContents.on('unresponsive', () => {
+    anota('[numero] ' + nk + ' parou de responder')
+    avisaCasca('sw:status', { nk, texto: 'Esta tela parou de responder. Se não voltar, feche e abra o número.' })
+  })
+  view.webContents.on('responsive', () => { anota('[numero] ' + nk + ' voltou a responder') })
+
   view.webContents.on('did-fail-load', (_e, code, desc, url, ehPrincipal) => {
     if (code === -3) return                       // navegacao abortada, normal
     // SO O QUADRO PRINCIPAL. Um subframe do proprio WhatsApp falhando nao e o numero caindo, e
@@ -736,16 +784,32 @@ async function pedeUso(nk) {
     return { ok: false, erro: 'Não deu pra falar com a dash pra conferir se alguém está usando este número.' }
   }
 }
+// SOLTAR TEM QUE VENCER A RENOVACAO.
+//
+// `soltaUso` e `pedeUso` podem estar no ar ao mesmo tempo: se a renovacao de 45s disparou um
+// instante antes do fechamento, o INSERT dela chega DEPOIS do DELETE e ressuscita o aluguel por
+// mais dois minutos. O `soltandoAgora` corta isso: a renovacao confere na hora de mandar, nao so
+// quando o laco comecou.
+const soltandoAgora = new Set()
 async function soltaUso(nk) {
   alugados.delete(nk)
-  if (!config.token) return
+  soltandoAgora.add(nk)
+  if (!config.token) { soltandoAgora.delete(nk); return }
   try {
     await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/uso', {
       method: 'POST', headers: cabecalhos(), body: JSON.stringify({ nk, soltar: true }), signal: AbortSignal.timeout(10000),
     })
   } catch (_) { /* vence sozinho em 2 min */ }
+  finally { soltandoAgora.delete(nk) }
 }
-setInterval(() => { for (const nk of alugados) pedeUso(nk) }, 45000)
+// A renovacao confere DUAS vezes: ao montar o laco e na hora de mandar. Entre uma e outra cabe um
+// fechamento inteiro.
+setInterval(() => {
+  for (const nk of [...alugados]) {
+    if (!alugados.has(nk) || soltandoAgora.has(nk)) continue
+    pedeUso(nk)
+  }
+}, 45000)
 
 const ARQ_AGENTE_BAIXADO = () => path.join(app.getPath('userData'), 'agente-servido.js')
 let agenteReprovado = false        // a copia baixada ja falhou nesta sessao: nao tenta de novo
