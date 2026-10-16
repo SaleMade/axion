@@ -10032,6 +10032,16 @@ const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario,
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
 // vendedor, entao mudar a regra aqui faz todo numero pedir QR de novo. Nao mexa.
 function _swwebKey(n) { return _waNumKey(n); }
+// Os 8 finais, que e a chave que o interruptor da roleta usa (pressel.vendedores[].off).
+const _swwebK8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
+// Chip APTO a receber lead, pela mesma regra do _resolvePresselNumbers: so "Em uso", e fora de
+// aquecimento, banido e restrito.
+function _swwebApto(c, nomeSt) {
+  if (!c || !c.em_uso) return false;
+  if (c.st === 'aquecimento' || c.st === 'banido') return false;
+  const wa = String((nomeSt && nomeSt[String(c.wa_st || '')]) || '').toLowerCase();
+  return wa !== 'restrito' && wa !== 'banido';
+}
 
 function _swwebLerJson(txt, padrao) {
   try { const o = JSON.parse(txt || ''); return (o && typeof o === 'object') ? o : padrao; } catch (_) { return padrao; }
@@ -10147,6 +10157,62 @@ async function handleSwWeb(req, env, path) {
     // Teto por lote: o app manda de 50 em 50.
     if (eventos.length > 200) return err('Lote grande demais', 413);
     const installId = 'swweb:' + String(u.id);
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // O LOTE E CONFERIDO AQUI, NAO CONFIADO (16/10/2026, varredura final).
+    //
+    // Esta rota nasceu pra tirar o token de ingestao de dentro do app. So que autenticar nao e
+    // validar: com o PROPRIO login, um vendedor podia mandar evento forjado e
+    //   (1) carimbar wa_attrib do telefone de um lead de outro vendedor pro numero DELE, roubando
+    //       a atribuicao do pedido que ainda nao tem dono;
+    //   (2) mandar fromMe com "Pedido Concluido" e inventar venda em wa_sales, que alimenta o ROAS
+    //       por anuncio, a pagina do gestor de trafego e a revisao de vendas.
+    // Duas travas, e as duas sao do SERVIDOR.
+    const soDig = (v) => String(v || '').replace(/\D/g, '');
+    const _k8 = (v) => soDig(v).slice(-8);
+
+    // TRAVA 1: o numero que diz ter recebido a mensagem tem que ser CHIP DESTE USUARIO.
+    // Sem isso, da pra dizer "o lead escreveu pro numero do fulano" e assinar embaixo.
+    let meusNums = null;
+    if (!isDirector(u)) {
+      try {
+        const _d = await _getDashData(env);
+        meusNums = new Set((Array.isArray(_d && _d.chips) ? _d.chips : [])
+          .filter((c) => c && c.num && String(c.at || '') === String(u.id))
+          .map((c) => _k8(c.num)));
+      } catch (_) { meusNums = new Set(); }
+    }
+
+    // TRAVA 2: venda so vale se aquele telefone JA TINHA escrito pra aquele numero ANTES deste
+    // lote. Senao a conferencia seria circular: bastava mandar um "recebido" forjado no mesmo lote
+    // pra validar o "Pedido Concluido" logo abaixo dele.
+    const fonesDeVenda = [...new Set(eventos
+      .filter((e) => e && e.fromMe && _RE_VENDA.test(String(e.body || '')))
+      .map((e) => _k8(e.phone)).filter((x) => x.length === 8))];
+    const temHistorico = new Set();
+    if (fonesDeVenda.length) {
+      try {
+        const r = await env.DB.prepare(
+          "SELECT DISTINCT substr(phone,-8) k FROM wa_messages WHERE direction='in' AND substr(phone,-8) IN (" +
+          fonesDeVenda.map(() => '?').join(',') + ')'
+        ).bind(...fonesDeVenda).all();
+        for (const x of ((r && r.results) || [])) temHistorico.add(String(x.k));
+      } catch (_) { /* sem historico legivel, a trava fecha: nenhuma venda passa */ }
+    }
+
+    const limpos = [];
+    let barrados = 0;
+    for (const e of eventos) {
+      if (!e) continue;
+      if (meusNums && !meusNums.has(_k8(e.selfNumber))) { barrados++; continue; }
+      if (e.fromMe && _RE_VENDA.test(String(e.body || '')) && !temHistorico.has(_k8(e.phone))) { barrados++; continue; }
+      limpos.push(e);
+    }
+    // DESCARTA COM 200, DE PROPOSITO. O app devolve o lote pra fila quando a resposta nao e ok, e
+    // reenviaria pra sempre o que o servidor nunca vai aceitar.
+    if (barrados) console.log('SWWEB_CAPTURA_BARRADOS por=' + String(u.id) + ' n=' + barrados + ' de=' + eventos.length);
+    if (!limpos.length) return json({ ok: true, ack: [], barrados });
+
     try {
       await _scEnsureTables(env);
       await env.DB.prepare(
@@ -10160,7 +10226,7 @@ async function handleSwWeb(req, env, path) {
     const req2 = new Request(new URL(req.url).origin + '/api/salechat/ingest/' + token, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ installId, events: eventos }),
+      body: JSON.stringify({ installId, events: limpos }),
     });
     return handleSalechatIngest(req2, env, token);
   }
@@ -10220,19 +10286,65 @@ async function handleSwWeb(req, env, path) {
     // ESCOPO POR CARGO: diretor/socio/produtor ve todos; vendedor ve SO os dele. E a mesma regra do
     // resto da dash (ver src/lib/roles.js), e aqui ela importa mais, porque numero e credencial.
     const tudo = isDirector(u);
-    const meus = chips.filter((c) => c && c.num && (tudo || String(c.at || '') === String(u.id)));
+    // NUMERO SEM DONO NAO APARECE (16/10/2026, pedido do Bruno: "os numeros que nao estao atribuidos
+    // a nenhum vendedor nem precisam aparecer").
+    //
+    // "Sem dono" aqui e sem dono DE VERDADE: o campo `at` do chip tambem guarda id de coluna do
+    // cadastro (ccol_1, ccol_2...), que nao e usuario nenhum. Medido em 16/10: de 91 chips, 77
+    // apontavam pra ccol_1 ou ccol_2, que nao existem na tabela de usuarios. Por isso o filtro e
+    // "o dono existe na lista de usuarios", e nao so "tem alguma coisa escrita no campo".
+    const meus = chips.filter((c) => c && c.num && donos[String(c.at || '')]
+      && (tudo || String(c.at || '') === String(u.id)));
+    // QUAIS NUMEROS ESTAO DESLIGADOS NA ROLETA. O interruptor mora em pressel.vendedores[].off, e
+    // desde 13/10 ele vale pra TODAS as pressels da operacao: basta um `off` em qualquer uma pra o
+    // numero estar fora (foi o incidente de cinco copias divergindo sem ninguem ver).
+    //
+    // A CHAVE E VENDEDOR + NUMERO, nunca so o numero. O `off` vive dentro da entrada de UM vendedor,
+    // e sobra interruptor ORFAO quando um numero troca de dono (ja aconteceu: residuo do 91258028
+    // dentro das entradas do dir e de outro atendente). Olhando so os 8 digitos, um orfao alheio
+    // marcaria como desligado um numero que esta ligado.
+    const desligados = new Set();
+    const marca = (at, k8) => desligados.add(String(at) + ':' + String(k8));
+    for (const p of (Array.isArray(data && data.pressels) ? data.pressels : [])) {
+      for (const v of (Array.isArray(p && p.vendedores) ? p.vendedores : [])) {
+        if (!v || !v.at) continue;
+        // Vendedor inteiro desligado: todos os numeros dele saem.
+        if (v.ativo === false) {
+          for (const c of chips) if (String(c.at || '') === String(v.at)) marca(v.at, _swwebK8(c.num));
+        }
+        for (const k of Object.keys(v.off || {})) if (v.off[k]) marca(v.at, k);
+      }
+    }
+    // LEAD DE HOJE POR NUMERO: e o mesmo placar que a roleta usa pra respeitar o teto. O vendedor
+    // ve quantos ja chegaram no numero dele sem precisar abrir a dash.
+    let lh = {};
+    try {
+      const dia = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
+      lh = (await _leadsHojePorNumero(env, dia)) || {};
+    } catch (_) { lh = {}; }
     const numeros = meus.map((c) => {
       const nk = _swwebKey(c.num);
       const px = proxies[nk] || null;
+      const k8 = String(c.num || '').replace(/\D/g, '').slice(-8);
       return {
         numero: String(c.num),
         nk,
+        at: String(c.at || ''),
         // Sem nome na tabela de usuarios, manda VAZIO em vez do id: a barra lateral ja escreve
         // 'sem dono', e id tecnico na tela de um vendedor leigo so confunde.
         dono: donos[String(c.at || '')] || '',
         status: nomeSt[String(c.wa_st || '')] || '',
         cor: corSt[String(c.wa_st || '')] || '',
         em_uso: !!c.em_uso,
+        // RECEBENDO LEAD AGORA? Duas coisas, e as duas tem que ser verdade:
+        //  1) o chip esta apto (Em uso, e nao esta em aquecimento, banido nem restrito) - e a
+        //     mesma regra do _resolvePresselNumbers;
+        //  2) o INTERRUPTOR esta ligado nas pressels (v.off[nk]) - e a chave que o POST
+        //     /api/pressel/num vira, e e ela que o vendedor mexe aqui.
+        // Ler so o em_uso mentiria: numero apto mas desligado aparecia como ligado.
+        roleta: _swwebApto(c, nomeSt) && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
+        lim_dia: Number(c.lim_dia) || 0,
+        leads_hoje: Number(lh[k8]) || 0,
         // NUNCA devolve a senha do proxy pra lista: so se ha proxy e qual o endereco.
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
       };
@@ -20311,9 +20423,19 @@ function _presselEstadoNum(pressels, at, nk) {
 async function handlePresselNum(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!_podeMexerPressel(u) || _roletaResumida(u)) return err('Sem permissão pra mexer na roleta', 403);
   const body = await req.json().catch(() => ({}));
   const at = String((body && body.at) || '');
+  // QUEM MEXE: a direção em qualquer número; o VENDEDOR só no número DELE.
+  //
+  // (16/10/2026, pedido do Bruno pro Sellwave Web: "quero que eles possam ativar ou desativar, como
+  // se fosse uma roleta do lado deles, pra controlarem em qual número vão chegar os leads".)
+  //
+  // O corpo diz `at`, mas isso NÃO é confiança: logo abaixo o código exige que o chip seja daquele
+  // `at`, e aqui a gente exige que o `at` seja o próprio usuário. As duas travas juntas fazem o
+  // vendedor só conseguir mexer no que é dele, mesmo mandando a requisição na mão.
+  const _souEu = !!at && String(at) === String(u.id);
+  const _daDirecao = _podeMexerPressel(u) && !_roletaResumida(u);
+  if (!_daDirecao && !_souEu) return err('Sem permissão pra mexer na roleta', 403);
   const nk = String((body && body.num) || '').replace(/\D/g, '').slice(-8);
   const ligar = !!(body && body.on);
   const ateAmanha = !ligar && !!(body && body.volta);

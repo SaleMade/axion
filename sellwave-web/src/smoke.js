@@ -119,7 +119,7 @@ async function rodar(ctx) {
 
   // 6) A casca sobe de verdade (HTML e JS sem erro de carregamento).
   conta('a casca carregou', ctx.cascaOk === true, ctx.cascaErro || '')
-  conta('a casca desenhou a barra lateral', ctx.temBarra === true, ctx.textoBarra || '')
+  conta('a logo da SellWave carregou na barra', ctx.temBarra === true, ctx.textoBarra || '')
 
   // 7) O TESTE QUE IMPORTA: o WhatsApp Web abre de verdade e mostra o QR?
   //    Fica atras de SW_SMOKE_WA=1 porque precisa de internet e sai SEM proxy (so pra provar que o

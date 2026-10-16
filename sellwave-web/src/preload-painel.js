@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('swp', {
   lead: (phone) => ipcRenderer.invoke('swp:lead', { phone }),
   estado: () => ipcRenderer.invoke('swp:estado-wa'),
   manda: (chatId, item) => ipcRenderer.invoke('swp:manda', { chatId, item }),
+  fechar: () => ipcRenderer.invoke('swp:fechar-ativo'),
+  recarregar: () => ipcRenderer.invoke('swp:recarregar-ativo'),
 })

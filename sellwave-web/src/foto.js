@@ -15,17 +15,22 @@ const EXEMPLO = `(() => {
   roteiro = {
     mediaBase: '',
     messages: [
-      { id: 'm1', label: 'Tudo ficou claro?', text: 'Tudo ficou bem claro pra voce?', grp: 'Abertura' },
-      { id: 'm2', label: 'Confirma o endereco', text: 'Pode confirmar o endereco?', grp: 'Abertura' },
-      { id: 'm3', label: 'Pagamento na entrega', text: 'O pagamento e na entrega.', grp: 'Fechamento' },
+      { id: 'm1', label: 'Tudo ficou claro?', text: 'Tudo ficou bem claro pra voce? Ficou alguma duvida?', grp: 'Geral' },
+      { id: 'm2', label: 'Confirma o endereco', text: 'Pode confirmar o endereco pra mim?', grp: 'Geral' },
+      { id: 'm3', label: 'Pagamento na entrega', text: 'O pagamento e na entrega, em dinheiro ou cartao.', grp: 'Fechamento' },
       { id: 'm4', label: 'Prazo de entrega', text: 'Chega em ate 5 dias uteis.', grp: 'Fechamento' }
     ],
     sequences: [
-      { id: 's1', label: 'H - Etapa 1 - Abertura', items: [{},{}], grp: 'Homem' },
-      { id: 's2', label: 'H - Etapa 2 - Dor', items: [{},{},{}], grp: 'Homem' },
-      { id: 's3', label: 'M - Etapa 1 - Abertura', items: [{},{}], grp: 'Mulher' }
+      { id: 's1', label: 'H - Etapa 1 - Abertura', items: [{id:'m1',delay:0},{id:'f1',delay:3}], grp: 'Homem' },
+      { id: 's2', label: 'H - Etapa 2 - Dor', items: [{id:'f2',delay:0},{id:'m3',delay:2},{id:'f3',delay:4}], grp: 'Homem' },
+      { id: 's3', label: 'M - Etapa 1 - Abertura', items: [{id:'m2',delay:0},{id:'f1',delay:3}], grp: 'Mulher' }
     ],
-    media: []
+    media: [
+      { id: 'f1', kind: 'audio', label: 'H - 01 Abertura', key: 'x', grp: 'Homem' },
+      { id: 'f2', kind: 'audio', label: 'H - 02 Explicacao', key: 'x', grp: 'Homem' },
+      { id: 'f3', kind: 'image', label: 'Foto do produto', key: 'x', grp: 'Homem' },
+      { id: 'f4', kind: 'document', label: 'Bula em PDF', key: 'x', grp: 'Geral' }
+    ]
   }
   estadoWa = { motor: true, envia: true, chatId: '5592993117635@c.us', phone: '5592993117635', nome: 'Raimunda', eu: '5515974076200' }
   document.getElementById('meu').textContent = '(15) 97407-6200'
@@ -83,7 +88,11 @@ async function rodar(ctx) {
 
   // 3) o painel de venda, que agora e janela propria
   try {
-    const j2 = new BaseWindow({ width: 316, height: 900, show: true })
+    // PRECISA ESTAR VISIVEL. capturePage com show:false devolve UnknownVizError e, fora da area da
+    // tela, "Current display surface not available for capture": o Windows so entrega pixel do que
+    // esta sendo desenhado de verdade. Por isso o MODO FOTO pisca janela, e so ele: o autoteste
+    // (SW_SMOKE) roda sem janela nenhuma. Nao rode o modo foto com alguem usando o computador.
+    const j2 = new BaseWindow({ width: 316, height: 900, show: true, skipTaskbar: true })
     const v = new WebContentsView({
       webPreferences: { preload: path.join(__dirname, 'preload-painel.js'), contextIsolation: true, partition: 'persist:sw-foto-painel' },
     })
@@ -91,9 +100,14 @@ async function rodar(ctx) {
     j2.contentView.addChildView(v)
     v.setBounds({ x: 0, y: 0, width: 316, height: 900 })
     vivas.push(v, j2)
+    // UM CALLBACK POR EVENTO, e com guarda. Registrar a MESMA funcao em dois `once` faz o Electron
+    // estourar "One-time callback was called more than once" quando os dois eventos acontecem.
     await new Promise((ok) => {
-      v.webContents.once('did-finish-load', ok)
-      v.webContents.once('did-fail-load', ok)
+      let pronto = false
+      const fim = () => { if (!pronto) { pronto = true; ok() } }
+      v.webContents.once('did-finish-load', () => fim())
+      v.webContents.once('did-fail-load', () => fim())
+      setTimeout(fim, 30000)
       v.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))
     })
     await new Promise((r) => setTimeout(r, 900))

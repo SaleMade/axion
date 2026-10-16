@@ -1,7 +1,8 @@
 // Interface do painel. Roda na PRÓPRIA janela, ao lado da página do WhatsApp.
 //
-// Por que não dentro da página: aí o layout do WhatsApp teria que ser empurrado por CSS (depende do
-// DOM deles, que muda) e o CSS deles poderia quebrar o nosso. Aqui o painel é imune.
+// O DESENHO É O MESMO DO INBOX DA DASH (pedido do Bruno em 16/10: "quero que fique igualzinho,
+// idêntico"). As cores, os raios e os tamanhos estão no painel.html, resolvidos em hex: o inbox
+// vive dentro do `.wa-scope`, que troca o tema da SellWave pela paleta do WhatsApp Web escuro.
 //
 // Quem fala com o WhatsApp é o agente injetado (src/ui/agente.js). Este arquivo só pede, por IPC:
 // "qual é o estado?" e "manda este item".
@@ -9,56 +10,205 @@
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
+// CATÁLOGO DE TIPOS, a mesma paleta do inbox (KIND em chat.jsx). A cor é por TIPO, não por tema.
+const TIPOS = {
+  text: { cor: '#2563eb', rotulo: 'Mensagens', ic: '<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 21l2.1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/>' },
+  audio: { cor: '#13c273', rotulo: 'Áudios', ic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>' },
+  video: { cor: '#8e17f0', rotulo: 'Vídeos', ic: '<path d="m23 7-7 5 7 5V7Z"/><rect x="1" y="5" width="15" height="14" rx="2"/>' },
+  image: { cor: '#00bcf2', rotulo: 'Imagens', ic: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>' },
+  document: { cor: '#f0810f', rotulo: 'Documentos', ic: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>' },
+}
+const svg = (d, cls) => '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>'
+const IC_PLAY = svg('<path d="m6 3 14 9-14 9V3Z"/>')
+const IC_GIRA = svg('<path d="M21 12a9 9 0 1 1-6.2-8.6"/>', 'girando')
+const IC_ZAP = svg('<path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/>')
+const IC_SETA = svg('<path d="m6 9 6 6 6-6"/>', 'seta')
+const IC_ESTRELA = (cheia) => '<svg viewBox="0 0 24 24" fill="' + (cheia ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2Z"/></svg>'
+
 let roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
-let aba = 'msg'
+let aba = 'itens'
 let filtro = ''
+let tipoFiltro = ''          // '' = todos
+let favoritos = {}
+let fechadas = {}            // seções recolhidas, por tipo
+let aberto = ''              // prévia aberta: 'item:<id>' ou 'funil:<id>'
 let ocupado = false
+let disparando = ''
 let pararPedido = false
 let ultimoFone = ''
-let estadoWa = { motor: false, envia: false, chatId: '', phone: '', nome: '' }
+let estadoWa = { motor: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
 
-// ───────────────────────────────────────────────────────────── lista
+try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
+const guardaFavs = () => { try { localStorage.setItem('sw_favs', JSON.stringify(favoritos)) } catch { /* sem armazenamento o favorito vale só nesta sessão */ } }
 
-const porGrupo = (lista) => {
-  const g = {}
-  for (const x of (lista || [])) { const k = x.grp || ''; (g[k] = g[k] || []).push(x) }
-  return g
+// ───────────────────────────────────────────────────────────── catálogo
+
+// Junta mensagens e mídias num catálogo só, como a aba Itens do inbox.
+function catalogo() {
+  const saida = []
+  for (const m of (roteiro.messages || [])) saida.push({ id: m.id, tipo: 'text', label: m.label || m.text || m.id, texto: m.text || '', grp: m.grp || '' })
+  for (const md of (roteiro.media || [])) {
+    const t = TIPOS[md.kind] ? md.kind : 'document'
+    saida.push({ id: md.id, tipo: t, label: md.label || md.id, caption: md.caption || '', key: md.key, grp: md.grp || '' })
+  }
+  return saida
 }
 
-function itensDaAba() {
-  const base = aba === 'msg' ? roteiro.messages : aba === 'seq' ? roteiro.sequences : roteiro.media
-  if (!filtro) return base || []
-  return (base || []).filter((x) => (String(x.label || '') + ' ' + String(x.text || '') + ' ' + String(x.grp || '')).toLowerCase().includes(filtro))
+function visiveis() {
+  let itens = catalogo()
+  if (aba === 'favs') itens = itens.filter((x) => favoritos[x.id])
+  if (tipoFiltro) itens = itens.filter((x) => x.tipo === tipoFiltro)
+  if (filtro) itens = itens.filter((x) => (x.label + ' ' + (x.texto || '') + ' ' + (x.grp || '')).toLowerCase().includes(filtro))
+  return itens
+}
+
+function porGrupo(lista) {
+  const ordem = [], g = {}
+  for (const x of lista) { const k = x.grp || 'Geral'; if (!g[k]) { g[k] = []; ordem.push(k) } g[k].push(x) }
+  return { ordem, g }
+}
+
+const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
+
+// ───────────────────────────────────────────────────────────── desenho
+
+function desenhaChips() {
+  const el = $('chips')
+  if (aba === 'funis') { el.style.display = 'none'; return }
+  el.style.display = ''
+  const usados = [...new Set(catalogo().map((x) => x.tipo))]
+  let html = '<button class="chip' + (tipoFiltro ? '' : ' on') + '" data-t="" style="--kc:#54656f" title="Todos">'
+    + svg('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>') + '</button>'
+  for (const t of ['text', 'audio', 'video', 'image', 'document']) {
+    if (!usados.includes(t)) continue
+    const k = TIPOS[t]
+    html += '<button class="chip' + (tipoFiltro === t ? ' on' : '') + '" data-t="' + t + '" style="--kc:' + k.cor + '" title="' + k.rotulo + '">' + svg(k.ic) + '</button>'
+  }
+  el.innerHTML = html
+  for (const b of el.querySelectorAll('.chip')) b.onclick = () => { tipoFiltro = b.dataset.t; desenha() }
 }
 
 function desenha() {
+  desenhaChips()
   const corpo = $('corpo')
-  const itens = itensDaAba()
+  const nFunis = (roteiro.sequences || []).length
+  const selo = $('selo-funis')
+  selo.hidden = !nFunis
+  selo.textContent = nFunis
+
+  if (aba === 'funis') { corpo.innerHTML = desenhaFunis(); ligaFunis(corpo); return }
+
+  const itens = visiveis()
   if (!itens.length) {
-    corpo.innerHTML = filtro
-      ? '<div class="vazio">Nada com esse nome.</div>'
-      : '<div class="vazio">Nada publicado aqui ainda.<br>O roteiro vem do Sale Chat, na dash.</div>'
+    corpo.innerHTML = '<div class="vazio">' + (aba === 'favs'
+      ? 'Nenhum favorito ainda. Toque na estrela de um item.'
+      : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : 'Nada aqui. Cadastre itens no Sale Chat.')) + '</div>'
     return
   }
-  const g = porGrupo(itens)
+
+  // Duas camadas, como no inbox: seção por TIPO e, dentro dela, subgrupo pela divisória do roteiro.
   let html = ''
-  for (const k of Object.keys(g)) {
-    if (k) html += `<div class="grp">${esc(k)}</div>`
-    for (const x of g[k]) {
-      const ic = aba === 'seq' ? '&#9656;' : aba === 'mid' ? '&#9834;' : '&#8250;'
-      const n = aba === 'seq' && Array.isArray(x.items) ? `<span class="n">${x.items.length}</span>` : ''
-      html += `<button class="it" data-id="${esc(x.id)}" title="${esc(x.text || x.caption || x.label || '')}">`
-        + `<span class="ic">${ic}</span><span class="tx">${esc(x.label || x.text || x.id)}</span>${n}</button>`
-    }
+  for (const t of ['text', 'audio', 'video', 'image', 'document']) {
+    const doTipo = itens.filter((x) => x.tipo === t)
+    if (!doTipo.length) continue
+    const k = TIPOS[t]
+    const fechada = !!fechadas[t]
+    html += '<button class="sec' + (fechada ? ' fechada' : '') + '" data-sec="' + t + '" style="--kc:' + k.cor + '">'
+      + svg(k.ic) + '<span>' + k.rotulo + '</span><span class="n">' + doTipo.length + '</span>' + IC_SETA + '</button>'
+    if (fechada) continue
+    const { ordem, g } = porGrupo(doTipo)
+    const umSo = ordem.length === 1
+    ordem.forEach((nome, i) => {
+      if (!umSo) html += '<div class="grp' + (i === 0 ? ' primeiro' : '') + '" style="--ac:' + k.cor + '">'
+        + '<span>' + esc(nome) + '</span><span class="n">' + g[nome].length + '</span></div>'
+      for (const x of g[nome]) html += cartaoItem(x, k)
+    })
   }
   corpo.innerHTML = html
-  for (const b of corpo.querySelectorAll('.it')) b.onclick = () => disparar(b.dataset.id)
-  travaBotoes(ocupado)
+  ligaItens(corpo)
 }
 
-function travaBotoes(trava) {
-  for (const b of document.querySelectorAll('.it')) b.disabled = trava
-  $('parar').style.display = trava ? 'inline' : 'none'
+function cartaoItem(x, k) {
+  const ab = aberto === 'item:' + x.id
+  const fav = !!favoritos[x.id]
+  let prev = ''
+  if (ab) {
+    const corpo = x.tipo === 'text' ? (x.texto || '') : (x.caption || ('[' + TIPOS[x.tipo].rotulo.slice(0, -1).toLowerCase() + '] ' + x.label))
+    prev = '<div class="prev"><div class="prev-bandeja"><div class="prev-balao">' + esc(corpo)
+      + '<span class="prev-hora">agora</span></div></div></div>'
+  }
+  return '<div class="item" style="--kc:' + k.cor + '">'
+    + '<div class="item-linha">'
+    + '<span class="item-ic">' + svg(k.ic) + '</span>'
+    + '<button class="item-lbl" data-abre="item:' + esc(x.id) + '">' + esc(x.label) + '</button>'
+    + '<button class="estrela' + (fav ? ' on' : '') + '" data-fav="' + esc(x.id) + '" title="Favorito">' + IC_ESTRELA(fav) + '</button>'
+    + '<button class="enviar" data-envia="' + esc(x.id) + '" title="Enviar"' + (podeEnviar() ? '' : ' disabled') + '>'
+    + (disparando === x.id ? IC_GIRA : IC_PLAY) + '</button>'
+    + '</div>' + prev + '</div>'
+}
+
+function desenhaFunis() {
+  let seqs = roteiro.sequences || []
+  if (filtro) seqs = seqs.filter((s) => (String(s.label || '') + ' ' + String(s.grp || '')).toLowerCase().includes(filtro))
+  if (!seqs.length) return '<div class="vazio">Nenhum funil ainda. Crie no Sale Chat.</div>'
+  const { ordem, g } = porGrupo(seqs)
+  const umSo = ordem.length === 1
+  let html = ''
+  ordem.forEach((nome, i) => {
+    if (!umSo) html += '<div class="grp' + (i === 0 ? ' primeiro' : '') + '" style="--ac:#8e17f0">'
+      + '<span>' + esc(nome) + '</span><span class="n">' + g[nome].length + '</span></div>'
+    for (const s of g[nome]) {
+      const ab = aberto === 'funil:' + s.id
+      let prev = ''
+      if (ab) {
+        const passos = (s.items || [])
+        prev = '<div class="funil-prev">' + (passos.length ? passos.map((p, j) => {
+          const info = infoDoPasso(p.id || p)
+          const k = TIPOS[info.tipo]
+          const pausa = Number(p.delay || 0)
+          return '<div class="passo" style="--kc:' + k.cor + '">'
+            + '<span class="passo-ic">' + svg(k.ic) + '</span>'
+            + '<span class="passo-n">' + (j + 1) + '</span>'
+            + '<span class="passo-lbl">' + esc(info.label) + '</span>'
+            + '<span class="passo-pausa">' + (pausa > 0 ? 'pausa ' + pausa + 's' : 'sem pausa') + '</span></div>'
+        }).join('') : 'Funil sem passos.')
+          + (s.stopOnReply ? '<div style="margin-top:4px;font-size:10px">Para se o lead responder.</div>' : '')
+          + '</div>'
+      }
+      html += '<div class="funil">'
+        + '<div class="funil-linha">'
+        + '<span class="funil-ic">' + IC_ZAP + '</span>'
+        + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id)
+        + '<span class="passos">' + (s.items || []).length + ' passos</span></button>'
+        + '<button class="enviar" data-funil="' + esc(s.id) + '" title="Disparar funil"' + (podeEnviar() ? '' : ' disabled') + '>'
+        + (disparando === s.id ? IC_GIRA : IC_PLAY) + '</button>'
+        + '</div>' + prev + '</div>'
+    }
+  })
+  return html
+}
+
+function infoDoPasso(id) {
+  const m = (roteiro.messages || []).find((x) => x.id === id)
+  if (m) return { tipo: 'text', label: m.label || m.text || id }
+  const md = (roteiro.media || []).find((x) => x.id === id)
+  if (md) return { tipo: TIPOS[md.kind] ? md.kind : 'document', label: md.label || id }
+  return { tipo: 'text', label: String(id) }
+}
+
+function ligaItens(corpo) {
+  for (const b of corpo.querySelectorAll('.sec')) b.onclick = () => { fechadas[b.dataset.sec] = !fechadas[b.dataset.sec]; desenha() }
+  for (const b of corpo.querySelectorAll('[data-abre]')) b.onclick = () => { aberto = aberto === b.dataset.abre ? '' : b.dataset.abre; desenha() }
+  for (const b of corpo.querySelectorAll('[data-fav]')) b.onclick = () => {
+    const id = b.dataset.fav
+    if (favoritos[id]) delete favoritos[id]; else favoritos[id] = 1
+    guardaFavs(); desenha()
+  }
+  for (const b of corpo.querySelectorAll('[data-envia]')) b.onclick = () => disparaItem(b.dataset.envia)
+}
+function ligaFunis(corpo) {
+  for (const b of corpo.querySelectorAll('[data-abre]')) b.onclick = () => { aberto = aberto === b.dataset.abre ? '' : b.dataset.abre; desenha() }
+  for (const b of corpo.querySelectorAll('[data-funil]')) b.onclick = () => disparaFunil(b.dataset.funil)
 }
 
 function rodape(txt, pct) {
@@ -73,64 +223,79 @@ function rodape(txt, pct) {
 const achaMsg = (id) => (roteiro.messages || []).find((m) => m.id === id)
 const achaMidia = (id) => (roteiro.media || []).find((m) => m.id === id)
 
-// Monta os itens de um funil. O item da sequência aponta pro id de uma mensagem OU de uma mídia; é
-// o mesmo roteiro do Sale Chat, então a resolução é igual à de lá.
-function itensDoFunil(seq) {
-  const saida = []
-  for (const it of (seq.items || [])) {
-    const m = achaMsg(it.id)
-    if (m) { saida.push({ tipo: 'texto', texto: m.text || '', sim: it.sim || 0, delay: it.delay || 0 }); continue }
-    const md = achaMidia(it.id)
-    if (md) saida.push({ tipo: 'midia', kind: md.kind, url: roteiro.mediaBase + md.key, caption: md.caption || '', label: md.label || '', sim: it.sim || 0, delay: it.delay || 0 })
-  }
-  return saida
+function itemParaEnvio(id, simPadrao) {
+  const m = achaMsg(id)
+  if (m) return { tipo: 'texto', texto: m.text || '', sim: simPadrao == null ? 2 : simPadrao }
+  const md = achaMidia(id)
+  if (md) return { tipo: 'midia', kind: md.kind, url: roteiro.mediaBase + md.key, caption: md.caption || '', label: md.label || '', sim: simPadrao == null ? (md.kind === 'audio' ? 3 : 0) : simPadrao }
+  return null
 }
 
-async function disparar(id) {
+async function disparaItem(id) {
+  const it = itemParaEnvio(id)
+  if (!it) { rodape('não achei esse item no roteiro'); return }
+  await roda([it], id)
+}
+
+async function disparaFunil(id) {
+  const s = (roteiro.sequences || []).find((x) => x.id === id)
+  if (!s) return
+  const lista = []
+  for (const p of (s.items || [])) {
+    const it = itemParaEnvio(p.id || p, p.sim)
+    if (it) { it.delay = p.delay || 0; lista.push(it) }
+  }
+  if (!lista.length) { rodape('funil sem passos'); return }
+  await roda(lista, id)
+}
+
+async function roda(lista, marca) {
   if (ocupado) return
   if (!estadoWa.chatId) { rodape('abra uma conversa primeiro'); return }
   if (!estadoWa.envia) { rodape('o motor do WhatsApp não está pronto'); return }
-
-  let lista = []
-  if (aba === 'msg') { const m = achaMsg(id); if (m) lista = [{ tipo: 'texto', texto: m.text || '', sim: 2 }] }
-  else if (aba === 'mid') { const md = achaMidia(id); if (md) lista = [{ tipo: 'midia', kind: md.kind, url: roteiro.mediaBase + md.key, caption: md.caption || '', label: md.label || '', sim: md.kind === 'audio' ? 3 : 0 }] }
-  else { const s = (roteiro.sequences || []).find((x) => x.id === id); if (s) lista = itensDoFunil(s) }
-  if (!lista.length) { rodape('não achei esse item no roteiro'); return }
 
   // TRAVA O ALVO NO CLIQUE. Se o vendedor trocar de conversa no meio do funil, o resto tem que ir
   // pra quem ele mandou, não pra quem está na tela agora.
   const alvo = estadoWa.chatId
   ocupado = true
+  disparando = marca
   pararPedido = false
-  travaBotoes(true)
+  desenha()
+  $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
+
   for (let i = 0; i < lista.length; i++) {
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
-    rodape(`enviando ${i + 1} de ${lista.length}`, (i + 1) / lista.length)
+    if (lista.length > 1) rodape('enviando ' + (i + 1) + ' de ' + lista.length, (i + 1) / lista.length)
+    else rodape('enviando...')
     const it = lista[i]
     if (it.delay) await new Promise((r) => setTimeout(r, Number(it.delay) * 1000))
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
     const r = await window.swp.manda(alvo, it)
     if (!r || !r.ok) {
+      ocupado = false; disparando = ''; $('parar').style.display = 'none'
       rodape('falhou: ' + ((r && r.erro) || 'sem resposta'))
-      ocupado = false
-      travaBotoes(false)
+      desenha()
       return
     }
   }
   ocupado = false
-  travaBotoes(false)
+  disparando = ''
+  $('parar').style.display = 'none'
   if (!pararPedido) rodape('enviado')
+  desenha()
   setTimeout(() => { if (!ocupado) rodape(estadoWa.motor ? 'pronto' : 'esperando o WhatsApp') }, 2500)
 }
 
 $('parar').onclick = () => { pararPedido = true }
+$('fechar').onclick = () => window.swp.fechar()
+$('recarregar').onclick = () => { rodape('recarregando...'); window.swp.recarregar() }
 
 // ───────────────────────────────────────────────────────────── lead
 
 const formata = (d) => {
   const x = String(d || '').replace(/^55/, '')
-  if (x.length === 11) return `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}`
-  if (x.length === 10) return `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}`
+  if (x.length === 11) return '(' + x.slice(0, 2) + ') ' + x.slice(2, 7) + '-' + x.slice(7)
+  if (x.length === 10) return '(' + x.slice(0, 2) + ') ' + x.slice(2, 6) + '-' + x.slice(6)
   return String(d || '')
 }
 
@@ -146,41 +311,49 @@ async function atualizaLead() {
   if (fone === ultimoFone) return
   ultimoFone = fone
   const cabecalho = esc(estadoWa.nome || formata(fone))
-  $('lead').innerHTML = `<div class="nm">${cabecalho}</div><div class="ln">procurando na dash...</div>`
+  $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">procurando na dash...</div>'
   const d = await window.swp.lead(fone)
   if (estadoWa.phone !== fone) return    // trocou de conversa no meio da busca
   if (!d || !d.achou) {
-    $('lead').innerHTML = `<div class="nm">${cabecalho}</div><div class="ln">${esc(formata(fone))} · sem pedido na dash</div>`
+    $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone)) + ' · sem pedido na dash</div>'
     return
   }
-  const linha = [d.produto, d.cidade ? `${d.cidade}/${d.uf}` : ''].filter(Boolean).join(' · ')
-  $('lead').innerHTML = `<div class="nm">${esc(d.nome || cabecalho)}</div>`
-    + `<div class="ln">${esc(linha || formata(fone))}</div>`
-    + (d.etapa ? `<span class="tag">${esc(d.etapa)}${d.pedidos > 1 ? ' · ' + d.pedidos + ' pedidos' : ''}</span>` : '')
+  const linha = [d.produto, d.cidade ? d.cidade + '/' + d.uf : ''].filter(Boolean).join(' · ')
+  $('lead').innerHTML = '<div class="nm">' + esc(d.nome || cabecalho) + '</div>'
+    + '<div class="ln">' + esc(linha || formata(fone)) + '</div>'
+    + (d.etapa ? '<span class="tag">' + esc(d.etapa) + (d.pedidos > 1 ? ' · ' + d.pedidos + ' pedidos' : '') + '</span>' : '')
 }
 
 // ───────────────────────────────────────────────────────────── ciclo
 
+let podiaEnviar = false
 async function pulso() {
   const e = await window.swp.estado()
   if (e) estadoWa = e
   $('pt').className = 'pt' + (estadoWa.motor ? '' : ' off')
   $('meu').textContent = estadoWa.eu ? formata(estadoWa.eu) : ''
-  // NUMERO TROCADO: o QR deste slot foi lido por outro aparelho. Grita, porque dali pra frente a
-  // dash e o app discordam do que esta acontecendo.
+
+  // NÚMERO TROCADO: o QR deste slot foi lido por outro aparelho. Grita, porque dali pra frente a
+  // dash e o app discordam do que está acontecendo.
   const av = $('trocado')
   if (estadoWa.trocado) {
     av.textContent = 'Atenção: este slot está pareado com ' + formata(estadoWa.trocado) + '. Desconecte e leia o QR com o aparelho certo.'
     av.style.display = 'block'
   } else { av.style.display = 'none' }
+
   if (!ocupado) rodape(estadoWa.motor ? 'pronto' : 'esperando o WhatsApp carregar')
+  // Só redesenha quando o botão de enviar muda de estado: redesenhar a cada pulso apagaria a
+  // seleção de texto e piscaria a lista.
+  const agora = podeEnviar()
+  if (agora !== podiaEnviar) { podiaEnviar = agora; desenha() }
   await atualizaLead()
 }
 
-for (const b of document.querySelectorAll('.abas button')) {
+for (const b of document.querySelectorAll('.aba')) {
   b.onclick = () => {
     aba = b.dataset.aba
-    for (const o of document.querySelectorAll('.abas button')) o.classList.toggle('on', o === b)
+    for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o === b)
+    aberto = ''
     desenha()
   }
 }

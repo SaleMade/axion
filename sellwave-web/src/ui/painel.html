@@ -2,63 +2,170 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" />
 <title>Painel</title>
+<link rel="stylesheet" href="fonte/mulish.css" />
 <style>
+  /* ═══════════════════════════════════════════════════════════════════════════════════════════
+     O PAINEL É O MESMO DO INBOX DA DASH.
+     Pedido do Bruno em 16/10: "quero que fique igualzinho, idêntico ao que a gente tem hoje no
+     inbox de WhatsApp, inclusive a personalização".
+
+     As cores NÃO são as do tema escuro da dash: o painel do inbox vive dentro do `.wa-scope`, que
+     reescreve os tokens pra paleta do WhatsApp Web escuro. Por isso aqui o fundo é #111b21 e não
+     #171c27, e o texto apagado é #8696a0 e não #90a1b9. Resolver pelo tema global sairia errado.
+     ═══════════════════════════════════════════════════════════════════════════════════════════ */
   :root {
-    --verde: #24c278; --verde-fraco: rgba(36,194,120,.14);
-    --fundo: #0f131b; --card: #171c27; --linha: rgba(255,255,255,.08);
-    --texto: #e8ecf3; --apagado: #8b94a6; --ambar: #f5a524; --vermelho: #f0506a;
+    --fundo: #111b21;          /* fundo do painel */
+    --conversa: #0b141a;       /* bandeja da prévia, imita o fundo da conversa */
+    --texto: #e9edef;
+    --apagado: #8696a0;
+    --linha: rgba(32, 44, 51, .6);
+    --fraco: rgba(32, 44, 51, .2);
+    --hover: rgba(32, 44, 51, .4);
+    --borda: rgba(134, 150, 160, .15);
+    --verde: #00a884;          /* o emerald do .wa-scope */
+    --balao: #005c4b;          /* balão de saída */
+    --roxo: #ad46ff;           /* funil */
+    --ambar: #ffb900;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
-    background: var(--fundo); color: var(--texto); display: flex; flex-direction: column;
-    font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-    overflow: hidden; user-select: none; border-left: 1px solid var(--linha);
+    display: flex; flex-direction: column; height: 100%;
+    background: var(--fundo); color: var(--texto);
+    font-family: Mulish, "Segoe UI", system-ui, sans-serif; font-size: 13px; line-height: 1.4;
+    border-left: 1px solid var(--linha);
+    overflow: hidden; user-select: none; color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
   }
-  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 0; background: none; }
 
-  header { padding: 12px 14px 10px; border-bottom: 1px solid var(--linha); display: flex; align-items: center; gap: 8px; }
-  header b { font-size: 13px; font-weight: 650; }
-  header .pt { width: 8px; height: 8px; border-radius: 50%; background: var(--verde); flex: 0 0 8px; }
-  header .pt.off { background: var(--vermelho); }
-  header .num { margin-left: auto; font-size: 10.5px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  /* ─────────────── topo ─────────────── */
+  .topo { display: flex; align-items: center; gap: 8px; padding: 10px 12px 9px; border-bottom: 1px solid var(--linha); }
+  .topo .pt { width: 8px; height: 8px; border-radius: 50%; background: var(--verde); flex: 0 0 8px; }
+  .topo .pt.off { background: #f0506a; }
+  .topo b { font-size: 13px; font-weight: 700; }
+  .topo .meu { margin-left: auto; font-size: 10.5px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .topo .ic { color: var(--apagado); display: flex; padding: 4px; border-radius: 6px; }
+  .topo .ic:hover { background: var(--hover); color: var(--texto); }
 
-  .lead { padding: 11px 14px; border-bottom: 1px solid var(--linha); min-height: 66px; }
-  .lead .nm { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #trocado { display: none; margin: 8px 8px 0; padding: 8px 10px; border-radius: 10px;
+    background: rgba(240, 80, 106, .12); border: 1px solid rgba(240, 80, 106, .3); color: #ffb3bf; font-size: 11.5px; }
+
+  /* ─────────────── lead ─────────────── */
+  .lead { padding: 10px 12px; border-bottom: 1px solid var(--linha); min-height: 62px; }
+  .lead .nm { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lead .ln { font-size: 11.5px; color: var(--apagado); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .lead .tag { display: inline-block; margin-top: 6px; padding: 2px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 650; background: var(--verde-fraco); color: #5fe0a1; }
+  .lead .tag { display: inline-block; margin-top: 6px; padding: 2px 7px; border-radius: 9999px;
+    font-size: 9px; font-weight: 700; background: rgba(0, 168, 132, .13); color: var(--verde);
+    text-transform: uppercase; letter-spacing: .04em; }
 
-  .abas { display: flex; gap: 4px; padding: 8px 10px 0; }
-  .abas button { flex: 1; padding: 6px; border-radius: 7px; color: var(--apagado); font-size: 11.5px; font-weight: 600; }
-  .abas button.on { background: rgba(255,255,255,.08); color: var(--texto); }
-
-  .busca { padding: 8px 10px 0; }
-  .busca input {
-    width: 100%; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--linha);
-    background: rgba(255,255,255,.03); color: var(--texto); outline: none; font: inherit; font-size: 12px;
+  /* ─────────────── abas ─────────────── */
+  .abas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px; border-bottom: 1px solid var(--linha); }
+  .aba {
+    position: relative; display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; padding: 6px 0; border-radius: 8px; font-size: 11px; font-weight: 600; color: var(--apagado);
+    transition: background-color .15s, color .15s;
   }
-  .busca input:focus { border-color: rgba(36,194,120,.45); }
+  .aba svg { width: 16px; height: 16px; }
+  .aba:hover { background: var(--hover); }
+  .aba.on { background: var(--fraco); color: var(--texto); }
+  .aba .selo { position: absolute; right: 4px; top: 2px; display: grid; place-items: center; min-width: 16px;
+    padding: 0 4px; border-radius: 9999px; background: var(--verde); font-size: 9px; font-weight: 700; line-height: 16px; color: #fff; }
 
-  .corpo { flex: 1; overflow-y: auto; padding: 8px 10px 12px; }
-  .corpo::-webkit-scrollbar { width: 8px; }
-  .corpo::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 8px; }
+  /* ─────────────── busca e filtros ─────────────── */
+  .cabeca { padding: 8px; border-bottom: 1px solid var(--linha); }
+  .cabeca > * + * { margin-top: 8px; }
+  .busca { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px;
+    border: 1px solid var(--borda); border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
+  .busca:focus-within { border-color: rgba(153, 161, 175, .6); box-shadow: 0 0 0 3px rgba(0, 168, 132, .15); }
+  .busca svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--apagado); }
+  .busca input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font-size: 13px; }
+  .busca input::placeholder { color: var(--apagado); }
 
-  .grp { font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: #6b7486; padding: 10px 4px 5px; }
-  .it {
-    width: 100%; text-align: left; padding: 8px 10px; margin-bottom: 4px; border-radius: 8px;
-    background: rgba(255,255,255,.035); border: 1px solid transparent; display: flex; align-items: center; gap: 8px;
-  }
-  .it:hover { background: rgba(255,255,255,.07); border-color: rgba(36,194,120,.3); }
-  .it:disabled { opacity: .45; cursor: default; }
-  .it .ic { font-size: 10px; color: var(--verde); flex: 0 0 13px; }
-  .it .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .it .n { font-size: 10px; color: var(--apagado); flex: 0 0 auto; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0;
+    border: 1px solid var(--borda); border-radius: 10px; background: transparent;
+    transition: background-color .15s, border-color .15s; color: var(--kc); }
+  .chip svg { width: 16px; height: 16px; }
+  .chip:hover { background: var(--hover); }
+  .chip.on { border-color: var(--kc); background: color-mix(in srgb, var(--kc) 12%, transparent); box-shadow: inset 0 0 0 1px var(--kc); }
 
-  .vazio { padding: 24px 12px; text-align: center; color: #6b7486; font-size: 12px; line-height: 1.6; }
+  /* ─────────────── lista ─────────────── */
+  .rolo { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
+  .rolo::-webkit-scrollbar { width: 8px; }
+  .rolo::-webkit-scrollbar-track { background: transparent; }
+  .rolo::-webkit-scrollbar-thumb { background: #6a7282; border-radius: 4px; border: 1px solid transparent; background-clip: padding-box; }
 
-  footer { padding: 8px 12px; border-top: 1px solid var(--linha); font-size: 11px; color: #6b7486; display: flex; align-items: center; gap: 8px; min-height: 36px; }
+  .sec { display: flex; width: 100%; align-items: center; gap: 6px; margin: 0 0 6px; padding: 0 2px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .025em; color: var(--kc); }
+  .sec svg:first-child { width: 14px; height: 14px; flex-shrink: 0; }
+  .sec .n { padding: 1px 6px; border-radius: 9999px; font-size: 10px; font-weight: 700; line-height: 1;
+    background: color-mix(in srgb, var(--kc) 13%, transparent); color: var(--kc); }
+  .sec .seta { margin-left: auto; width: 14px; height: 14px; color: var(--apagado); transition: transform .15s; }
+  .sec.fechada .seta { transform: rotate(-90deg); }
+
+  .grp { display: flex; align-items: center; gap: 6px; padding: 6px 2px 4px;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--apagado); }
+  .grp > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grp:not(.primeiro) { margin-top: 4px; border-top: 1px solid var(--linha); padding-top: 10px; }
+  .grp .n { padding: 1px 6px; border-radius: 9999px; font-size: 9px; font-weight: 700; line-height: 1;
+    background: color-mix(in srgb, var(--ac) 13%, transparent); color: var(--ac); }
+
+  .item { border: 1px solid var(--linha); border-radius: 14px; background: var(--fraco);
+    transition: transform .15s, box-shadow .15s, border-color .15s; animation: entra .15s ease both; margin-bottom: 6px; }
+  .item:hover { transform: translateY(-1px); border-color: var(--kc); box-shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px -1px rgba(0,0,0,.1); }
+  @keyframes entra { from { opacity: 0; transform: translate3d(0, 4px, 0); } }
+  .item-linha { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+  .item-ic { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px;
+    background: color-mix(in srgb, var(--kc) 15%, transparent); color: var(--kc); }
+  .item-ic svg { width: 16px; height: 16px; }
+  .item-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: left; font-size: 13px; color: var(--texto); }
+  .estrela { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; color: rgba(134,150,160,.4); }
+  .estrela:hover { color: var(--ambar); }
+  .estrela.on { color: var(--ambar); }
+  .estrela svg { width: 14px; height: 14px; }
+  .enviar { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px;
+    background: rgba(0, 79, 59, .5); color: #5ee9b5; transition: background-color .15s; }
+  .enviar:hover { background: #004f3b; }
+  .enviar:disabled { opacity: .45; cursor: default; }
+  .enviar svg { width: 14px; height: 14px; }
+  @keyframes gira { to { transform: rotate(360deg); } }
+  .girando { animation: gira .9s linear infinite; }
+
+  .prev { border-top: 1px solid var(--linha); padding: 8px; animation: entraCima .15s ease both; }
+  @keyframes entraCima { from { opacity: 0; transform: translate3d(0, -4px, 0); } }
+  .prev-bandeja { display: flex; padding: 10px; border-radius: 10px; background: var(--conversa); }
+  .prev-balao { margin-left: auto; width: fit-content; max-width: 88%; padding: 6px 8px 4px;
+    background: var(--balao); border-radius: 8px 0 8px 8px; font-size: 12px; line-height: 16px;
+    color: var(--texto); white-space: pre-wrap; word-break: break-word; }
+  .prev-hora { display: block; margin-top: 2px; text-align: right; font-size: 10px; color: rgba(233,237,239,.6); }
+
+  .funil { border: 1px solid var(--linha); border-radius: 10px; margin-bottom: 6px; }
+  .funil-linha { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+  .funil-ic { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 8px; background: rgba(173, 70, 255, .2); color: var(--roxo); }
+  .funil-ic svg { width: 16px; height: 16px; }
+  .funil-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: left; font-size: 13px; color: var(--texto); }
+  .funil-lbl .passos { margin-left: 4px; font-size: 11px; color: var(--apagado); }
+  .funil-prev { border-top: 1px solid var(--linha); padding: 10px; font-size: 12px; line-height: 16px; color: var(--apagado); }
+  .passo { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .passo-ic { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0;
+    border-radius: 8px; background: color-mix(in srgb, var(--kc) 15%, transparent); color: var(--kc); }
+  .passo-ic svg { width: 12px; height: 12px; }
+  .passo-n { width: 12px; flex-shrink: 0; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--apagado); }
+  .passo-lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .passo-pausa { font-size: 10px; flex-shrink: 0; }
+
+  .vazio { padding: 24px; text-align: center; font-size: 12px; line-height: 16px; color: var(--apagado); }
+
+  /* ─────────────── rodapé ─────────────── */
+  footer { padding: 8px 12px; border-top: 1px solid var(--linha); font-size: 11px; color: var(--apagado);
+    display: flex; align-items: center; gap: 8px; min-height: 36px; }
   footer .barra { flex: 1; height: 3px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; display: none; }
   footer .barra i { display: block; height: 100%; background: var(--verde); width: 0; transition: width .25s; }
   footer button { color: var(--apagado); font-size: 11px; }
@@ -66,12 +173,18 @@
 </style>
 </head>
 <body>
-  <header>
+  <div class="topo">
     <span class="pt" id="pt"></span><b>Sellwave</b>
-    <span class="num" id="meu"></span>
-  </header>
+    <span class="meu" id="meu"></span>
+    <button class="ic" id="recarregar" title="Recarregar o WhatsApp">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+    </button>
+    <button class="ic" id="fechar" title="Fechar este número (a sessão fica salva)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
 
-  <div id="trocado" style="display:none;margin:8px 10px 0;padding:8px 10px;border-radius:8px;background:rgba(240,80,106,.12);border:1px solid rgba(240,80,106,.3);color:#ffb3bf;font-size:11.5px"></div>
+  <div id="trocado"></div>
 
   <div class="lead" id="lead">
     <div class="nm">Abra uma conversa</div>
@@ -79,12 +192,27 @@
   </div>
 
   <div class="abas">
-    <button data-aba="msg" class="on">Respostas</button>
-    <button data-aba="seq">Funis</button>
-    <button data-aba="mid">Áudios</button>
+    <button class="aba on" data-aba="itens">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Itens
+    </button>
+    <button class="aba" data-aba="funis">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>Funis
+      <span class="selo" id="selo-funis" hidden></span>
+    </button>
+    <button class="aba" data-aba="favs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2Z"/></svg>Favoritos
+    </button>
   </div>
-  <div class="busca"><input id="busca" placeholder="Procurar" spellcheck="false" /></div>
-  <div class="corpo" id="corpo"></div>
+
+  <div class="cabeca" id="cabeca">
+    <div class="busca">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="busca" placeholder="Procurar" spellcheck="false" />
+    </div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="rolo" id="corpo"></div>
 
   <footer>
     <span id="rod">carregando</span>

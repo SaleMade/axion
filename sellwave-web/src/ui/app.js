@@ -1,5 +1,9 @@
-// Casca do Sellwave Web: barra lateral, login, travas e janelinha de proxy.
-// Ela NAO fala com a rede: tudo passa pelo processo principal, via window.sw (ver preload.js).
+// Casca do Sellwave Web: a barra de números, o login e os ajustes.
+// Ela NÃO fala com a rede: tudo passa pelo processo principal, via window.sw (ver preload.js).
+//
+// DUAS CARAS, uma do vendedor e uma da direção (16/10/2026, pedido do Bruno: "para meus vendedores
+// não quero que apareça nada de proxy: conectar proxy, trava de proxy, nada a ver com proxy; só
+// para mim"). Quem decide é o servidor, no campo `direcao` do /api/swweb/numeros, nunca o cliente.
 
 const $ = (id) => document.getElementById(id)
 const palco = $('palco')
@@ -7,16 +11,17 @@ const lista = $('lista')
 const modal = $('modal')
 const modalCorpo = $('modal-corpo')
 
-let estado = { numeros: [], proxies: {}, abertos: [], travaProxy: true, exigirBrasil: false, temToken: false }
+let estado = { numeros: [], proxies: {}, abertos: [], travaProxy: true, exigirBrasil: false, temToken: false, direcao: false }
 let ativo = ''
-let carregando = new Set()
-let falhou = new Map()
+const carregando = new Set()
+const falhou = new Map()
+const mexendo = new Set()      // números com a chave da roleta em trânsito
 let filtro = ''
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
-// Chave do numero: DDD + 8 ultimos digitos. A MESMA do worker e do processo principal. Se mudar,
-// a particao muda e o numero pede QR de novo.
+// Chave do número: DDD + 8 últimos dígitos. A MESMA do worker e do processo principal. Se mudar, a
+// partição muda e o número pede QR de novo.
 function numKey(n) {
   let d = String(n || '').replace(/\D/g, '')
   if (!d) return ''
@@ -25,9 +30,8 @@ function numKey(n) {
   return d.slice(0, 2) + d.slice(-8)
 }
 
-// A chave do numero tem 10 digitos (DDD + 8) e NAO da pra formatar como telefone: sai
-// "(15) 7407-6200", sem o nono digito, e numero de DDD 55 sai pior ainda. Quando a lista tem o
-// numero cheio, usa ele.
+// A chave tem 10 dígitos e NÃO dá pra formatar como telefone (sai sem o nono dígito). Quando a
+// lista tem o número cheio, usa ele.
 function cheio(nk) {
   const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
   return n ? n.numero : nk
@@ -39,77 +43,101 @@ function bonito(n) {
   return String(n || '')
 }
 
-// ───────────────────────────────────────────────────────────────── barra lateral
+const ZAP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.1-.2 0-.4.1-.5l.5-.6.2-.4v-.4l-.7-1.7c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2c0 1.3.9 2.5 1 2.7.2.2 1.9 2.9 4.6 4 .6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.2.2-.6.2-1 .1-1.1l-.3-.2Z"/></svg>'
+
+// ───────────────────────────────────────────────────────────── barra lateral
 
 function desenhaTrava() {
   const el = $('trava')
+  // Proxy é assunto da direção. Para o vendedor a trava nem existe na tela.
+  el.hidden = !estado.direcao
+  if (!estado.direcao) return
   const t = estado.travaProxy
   el.className = 'trava ' + (t ? 'ligada' : 'solta')
   $('trava-txt').innerHTML = t
-    ? '<b>Trava de proxy ligada</b>' + (estado.exigirBrasil ? ' · só IP do Brasil' : '')
+    ? '<b>Trava de proxy ligada</b>' + (estado.exigirBrasil ? ' · só Brasil' : '')
     : '<b>Trava de proxy desligada</b>'
 }
 
 function desenhaLista() {
+  if (!estado.temToken) { lista.innerHTML = ''; return }
   const nums = (estado.numeros || []).filter((n) => {
     if (!filtro) return true
-    const alvo = (String(n.numero || '') + ' ' + String(n.dono || '')).toLowerCase()
-    return alvo.includes(filtro)
+    return (String(n.numero || '') + ' ' + String(n.dono || '')).toLowerCase().includes(filtro)
   })
-
-  if (!estado.temToken) { lista.innerHTML = ''; return }
   if (!nums.length) {
-    lista.innerHTML = '<div class="rotulo">' + (filtro ? 'Nada encontrado' : 'Nenhum número liberado') + '</div>'
+    lista.innerHTML = '<div class="vend">' + (filtro ? 'Nada encontrado' : 'Nenhum número liberado') + '</div>'
     return
   }
 
-  const dentro = nums.filter((n) => estado.abertos.includes(numKey(n.numero)))
-  const fora = nums.filter((n) => !estado.abertos.includes(numKey(n.numero)))
-
+  // AGRUPA POR VENDEDOR (pedido do Bruno em 16/10). Quem atende vem primeiro, e dentro do grupo os
+  // que estão recebendo lead sobem.
+  const grupos = new Map()
+  for (const n of nums) {
+    const k = n.dono || 'Sem vendedor'
+    if (!grupos.has(k)) grupos.set(k, [])
+    grupos.get(k).push(n)
+  }
   let html = ''
-  if (dentro.length) html += '<div class="rotulo">Abertos</div>' + dentro.map(linha).join('')
-  if (fora.length) html += '<div class="rotulo">' + (dentro.length ? 'Disponíveis' : 'Números') + '</div>' + fora.map(linha).join('')
+  for (const [dono, itens] of grupos) {
+    itens.sort((a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0))
+    const ligados = itens.filter((x) => x.roleta).length
+    html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
+      + '<span class="qtd">' + ligados + '/' + itens.length + '</span></div>'
+    html += itens.map(linha).join('')
+  }
   lista.innerHTML = html
 
-  lista.querySelectorAll('.num').forEach((el) => {
-    el.onclick = () => abrir(el.dataset.numero)
-    el.oncontextmenu = (e) => { e.preventDefault(); janelaProxy(el.dataset.numero) }
-  })
+  for (const el of lista.querySelectorAll('.num')) {
+    el.onclick = (e) => {
+      if (e.target.closest('.sw')) return
+      abrir(el.dataset.numero)
+    }
+    if (estado.direcao) el.oncontextmenu = (ev) => { ev.preventDefault(); janelaProxy(el.dataset.numero) }
+  }
+  for (const b of lista.querySelectorAll('.sw')) {
+    b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
+  }
 }
 
 function linha(n) {
   const nk = numKey(n.numero)
   const aberto = estado.abertos.includes(nk)
-  const px = estado.proxies && estado.proxies[nk]
   const cls = ['num']
   if (nk === ativo) cls.push('ativo')
   if (carregando.has(nk)) cls.push('carregando')
-  else if (falhou.has(nk)) cls.push('falhou')
-  else if (aberto) cls.push('aberto')
-  // A BOLINHA USA A COR DO STATUS DO CHIP, a mesma que o Bruno escolheu na Contingencia (pedido
-  // dele em 16/10). Vem pronta do servidor, entao trocar a cor la muda aqui sem mexer em codigo.
-  // Quem avisa que a sessao esta ABERTA e a faixa verde e o grupo "Abertos", nao a bolinha.
+
+  // A bolinha usa a cor do status do chip, a mesma que o diretor escolheu na Contingência. Vem
+  // pronta do servidor, então trocar a cor lá muda aqui sem mexer em código.
   const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
-  const estiloSinal = corChip && !carregando.has(nk) && !falhou.has(nk) ? ' style="background:' + corChip + '"' : ''
+  const estiloSinal = corChip ? ' style="background:' + corChip + '"' : ''
 
-  const cadeado = px
-    ? '<span class="px" title="' + esc(px.host + ':' + px.porta) + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>'
-    : '<span class="px sem" title="Sem proxy. Clique com o botão direito para cadastrar."><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></span>'
+  // O ícone do WhatsApp diz o que importa pro vendedor: esta sessão está aberta aqui?
+  const zap = '<span class="zap' + (aberto ? '' : ' off') + '" title="' + (aberto ? 'Aberto nesta máquina' : 'Fechado') + '">' + ZAP + '</span>'
+  const leads = Number(n.leads_hoje) || 0
+  const teto = Number(n.lim_dia) || 0
+  const conta = leads || teto ? (leads + (teto ? '/' + teto : '') + ' hoje') : (n.status || '')
 
-  const sub = [n.dono || 'sem dono', n.status || ''].filter(Boolean).join(' · ')
+  // Proxy só aparece pra direção.
+  const px = estado.direcao
+    ? ((estado.proxies && estado.proxies[nk]) || n.proxy
+      ? '<span class="px" title="proxy cadastrado"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>'
+      : '<span class="px sem" title="Sem proxy. Clique com o botão direito."><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></span>')
+    : ''
+
+  const chave = '<span class="sw' + (n.roleta ? ' on' : '') + (mexendo.has(nk) ? ' ocupado' : '')
+    + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
+    + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
+
   return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="' + esc(n.status || '') + '">'
     + '<span class="sinal"' + estiloSinal + '></span>'
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + esc(sub) + '</span></span>'
-    + cadeado + '</button>'
+    + '<span class="sub">' + zap + esc(conta) + '</span></span>'
+    + px + chave + '</button>'
 }
 
-// ───────────────────────────────────────────────────────────────── palco
+// ───────────────────────────────────────────────────────────── palco
 
-// TELA DE ENTRAR. Usuario e senha, os MESMOS da dash (16/10/2026, pedido do Bruno: "eu vou passar
-// isso pros meus vendedores, eles sao bem leigos, como e que eles vao entender o que e token da
-// dash e endereco da API"). O token existe, mas e assunto do programa, nao do vendedor: o app troca
-// login e senha por token no /auth/login e guarda sozinho. O endereco da API saiu da tela.
 function telaLogin(erro) {
   palco.innerHTML = ''
     + '<div class="cartao">'
@@ -139,7 +167,7 @@ function telaVazia() {
     + '<div class="vazio"><div class="icone">'
     + '<svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 21l2.1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/></svg>'
     + '</div><h2>Escolha um número</h2>'
-    + '<p>Cada número abre numa sessão própria, com proxy próprio. Clique com o botão direito para cadastrar o proxy.</p></div>'
+    + '<p>Cada número abre numa sessão própria. A chave do lado liga e desliga a chegada de lead.</p></div>'
   desenhaLista()
 }
 
@@ -152,18 +180,20 @@ function telaErro(nk, erro) {
     + '<div class="cartao"><h2>Não abriu</h2>'
     + '<p>' + esc(bonito(cheio(nk))) + '</p>'
     + '<div class="aviso erro" style="display:block">' + esc(erro) + '</div>'
-    + '<div class="acoes"><button class="secundario" id="cfg">Cadastrar proxy</button>'
+    + '<div class="acoes">'
+    + (estado.direcao ? '<button class="secundario" id="cfg">Proxy</button>' : '')
     + '<button class="principal" style="margin:0" id="tentar">Tentar de novo</button></div></div>'
-  $('cfg').onclick = () => janelaProxy(nk)
+  const cfg = $('cfg')
+  if (cfg) cfg.onclick = () => janelaProxy(nk)
   $('tentar').onclick = () => abrir(nk)
   desenhaLista()
 }
 
-// ───────────────────────────────────────────────────────────────── acoes
+// ───────────────────────────────────────────────────────────── ações
 
 async function abrir(numero) {
   const nk = numKey(numero)
-  if (!nk) return
+  if (!nk || carregando.has(nk)) return
   falhou.delete(nk)
   if (estado.abertos.includes(nk)) {
     ativo = nk
@@ -184,24 +214,43 @@ async function abrir(numero) {
   desenhaLista()
 }
 
-// O APP NAO CADASTRA PROXY, so mostra e testa. Quem cadastra e a direcao, em Ferramentas >
-// Sellwave Web. Antes o vendedor podia abrir o numero com o proxy certo, passar no preflight e
-// DEPOIS trocar por um proxy dele: a trava era contornada por quem ela deveria conter.
+async function fechar(nk) {
+  await window.sw.fechar(nk)
+  await recarregaEstado()
+  if (ativo === nk) { ativo = ''; telaVazia() } else desenhaLista()
+}
+
+// LIGA E DESLIGA A CHEGADA DE LEAD naquele número. É a mesma chave da Contingência: muda o chip,
+// e a roleta passa a pular (ou a incluir) o número na escolha seguinte.
+async function viraRoleta(nk) {
+  if (mexendo.has(nk)) return
+  const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
+  if (!n) return
+  mexendo.add(nk)
+  const antes = n.roleta
+  n.roleta = !antes            // otimista: a chave vira na hora
+  desenhaLista()
+  const r = await window.sw.roleta(nk, !antes)
+  mexendo.delete(nk)
+  if (!r || !r.ok) { n.roleta = antes; desenhaLista(); return }
+  await recarregaEstado()
+}
+
 function janelaProxy(numero) {
+  if (!estado.direcao) return
   const nk = numKey(numero)
   const px = (estado.proxies && estado.proxies[nk]) || null
   modalCorpo.innerHTML = ''
     + '<h2>Proxy de ' + esc(bonito(cheio(nk))) + '</h2>'
     + (px
       ? '<p>Saindo por <b>' + esc(px.host + ':' + px.porta) + '</b>.</p>'
-      : '<p>Este número ainda não tem proxy. Quem cadastra é a direção, em Ferramentas &gt; Sellwave Web, na dash.</p>')
+      : '<p>Este número ainda não tem proxy. Cadastre em Ferramentas &gt; Sellwave Web, na dash.</p>')
     + '<div class="aviso" id="p-av"></div>'
     + '<div class="acoes">'
     + (px ? '<button class="secundario" id="p-testar">Testar saída</button>' : '')
     + '<button class="principal" style="margin:0" id="p-fechar">Fechar</button></div>'
   abreModal()
-  const fechar = $('p-fechar')
-  if (fechar) fechar.onclick = fechaModal
+  $('p-fechar').onclick = fechaModal
   const testar = $('p-testar')
   if (testar) testar.onclick = async () => {
     testar.disabled = true; testar.textContent = 'Testando...'
@@ -210,32 +259,40 @@ function janelaProxy(numero) {
     const av = $('p-av')
     av.className = 'aviso ' + (r.ok ? 'ok' : 'erro')
     av.textContent = r.ok
-      ? 'Saiu por ' + r.ip + (r.pais ? ' · ' + r.pais : '') + (r.cidade ? ' · ' + r.cidade : '') + (r.provedor ? ' · ' + r.provedor : '')
+      ? 'Saiu por ' + r.ip + (r.pais ? ' · ' + r.pais : '') + (r.cidade ? ' · ' + r.cidade : '')
       : r.erro
   }
 }
 
-function janelaTravas() {
+// AJUSTES. O vendedor vê só o teto de janelas; proxy é da direção.
+function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
-  modalCorpo.innerHTML = ''
-    + '<h2>Ajustes</h2><p>As travas valem para todas as máquinas. O teto é só desta.</p>'
-    + '<div class="chave"><div class="txt"><b>Exigir proxy</b><span>Sem proxy cadastrado e respondendo, o número não abre.</span></div>'
-    + '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + estado.travaProxy + '"></button></div>'
-    + '<div class="chave"><div class="txt"><b>Exigir IP do Brasil</b><span>Proxy de fora num número +55 é pior que proxy nenhum.</span></div>'
-    + '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + estado.exigirBrasil + '"></button></div>'
-    + '<div class="chave"><div class="txt"><b>Números abertos ao mesmo tempo</b>'
-    + '<span>Cada um consome entre 400 MB e 2 GB. Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.</span></div>'
+  let html = '<h2>Ajustes</h2>'
+  if (estado.direcao) {
+    html += '<p>As travas valem para todas as máquinas. O teto é só desta.</p>'
+      + '<div class="chave"><div class="txt"><b>Exigir proxy</b><span>Sem proxy cadastrado e respondendo, o número não abre.</span></div>'
+      + '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + estado.travaProxy + '"></button></div>'
+      + '<div class="chave"><div class="txt"><b>Exigir IP do Brasil</b><span>Proxy de fora num número +55 é pior que proxy nenhum.</span></div>'
+      + '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + estado.exigirBrasil + '"></button></div>'
+  } else {
+    html += '<p>Ajustes desta máquina.</p>'
+  }
+  html += '<div class="chave"><div class="txt"><b>Números abertos ao mesmo tempo</b>'
+    + '<span>Cada um consome memória. Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.</span></div>'
     + '<input id="teto" value="' + t + '" inputmode="numeric" style="width:54px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--linha);background:rgba(255,255,255,.03);outline:none" /></div>'
     + '<div class="acoes"><button class="secundario" id="t-log">Abrir registro</button>'
     + '<button class="secundario" id="t-fechar">Fechar</button></div>'
+  modalCorpo.innerHTML = html
   abreModal()
-  $('sw1').onclick = async () => {
-    const r = await window.sw.trava({ travaProxy: !estado.travaProxy })
-    estado.travaProxy = r.travaProxy; desenhaTrava(); janelaTravas()
-  }
-  $('sw2').onclick = async () => {
-    const r = await window.sw.trava({ exigirBrasil: !estado.exigirBrasil })
-    estado.exigirBrasil = r.exigirBrasil; desenhaTrava(); janelaTravas()
+  if (estado.direcao) {
+    $('sw1').onclick = async () => {
+      const r = await window.sw.trava({ travaProxy: !estado.travaProxy })
+      estado.travaProxy = r.travaProxy; desenhaTrava(); janelaAjustes()
+    }
+    $('sw2').onclick = async () => {
+      const r = await window.sw.trava({ exigirBrasil: !estado.exigirBrasil })
+      estado.exigirBrasil = r.exigirBrasil; desenhaTrava(); janelaAjustes()
+    }
   }
   $('teto').onchange = async (e) => {
     const r = await window.sw.teto(e.target.value)
@@ -247,26 +304,34 @@ function janelaTravas() {
   $('t-fechar').onclick = fechaModal
 }
 
-// A janelinha e desenhada pela CASCA, que fica ATRAS da view do numero e da do painel. Com um
-// numero aberto, ela abria invisivel. Entao esconder as views enquanto ela estiver na tela.
+// A janelinha é desenhada pela CASCA, que fica ATRÁS da view do número e da do painel. Com um
+// número aberto, ela abria invisível. Então esconder as views enquanto ela estiver na tela.
 function fechaModal() {
   modal.classList.remove('on')
   if (ativo) window.sw.mostrar(ativo)
 }
 function abreModal() {
   window.sw.esconder()
-  abreModal()
+  modal.classList.add('on')
 }
 
-// ───────────────────────────────────────────────────────────────── inicio
+// ───────────────────────────────────────────────────────────── início
 
 async function recarregaEstado() {
   estado = await window.sw.estado()
-  $('versao').textContent = estado.nome ? estado.nome : ('v' + estado.versao)
+  $('versao').textContent = estado.nome || ('v' + estado.versao)
   $('versao').title = 'Sellwave Web v' + estado.versao
   desenhaTrava()
   desenhaLista()
   return estado
+}
+
+function avisoRede(txt) {
+  const el = $('trava')
+  el.hidden = false
+  el.className = 'trava solta'
+  $('trava-txt').innerHTML = '<b>Sem contato com a dash</b> · usando o que está salvo'
+  el.title = String(txt || '')
 }
 
 async function inicio() {
@@ -275,9 +340,8 @@ async function inicio() {
   const r = await window.sw.numeros()
   await recarregaEstado()
   if (!r.ok) {
-    // SESSAO MORTA vai pro login; FALTA DE REDE nao. Antes, dash fora do ar derrubava o vendedor
-    // pra tela de entrar, onde o login tambem falhava: ele ficava preso sem conseguir trabalhar,
-    // com os numeros e os proxies em cache ali do lado.
+    // Sessão morta vai pro login; falta de rede não. Antes, dash fora do ar derrubava o vendedor
+    // pra tela de entrar, onde o login também falhava: ele ficava preso sem conseguir trabalhar.
     if (/401|403|sess|senha|autenti/i.test(String(r.erro || ''))) return telaLogin(r.erro)
     avisoRede(r.erro)
     return telaVazia()
@@ -285,15 +349,8 @@ async function inicio() {
   telaVazia()
 }
 
-// Aviso de "sem contato com a dash", sem tirar o vendedor do trabalho.
-function avisoRede(txt) {
-  const el = $('trava')
-  el.className = 'trava solta'
-  $('trava-txt').innerHTML = '<b>Sem contato com a dash</b> · usando o que está salvo'
-  el.title = String(txt || '')
-}
-
-$('trava').onclick = janelaTravas
+$('trava').onclick = janelaAjustes
+$('ajustes').onclick = janelaAjustes
 $('atualizar').onclick = async () => { await window.sw.numeros(); await recarregaEstado() }
 $('sair').onclick = async () => { await window.sw.sair(); await recarregaEstado(); telaLogin('') }
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenhaLista() }
@@ -303,27 +360,28 @@ document.onkeydown = (e) => { if (e.key === 'Escape') fechaModal() }
 window.sw.ao('sw:status', (d) => { const p = $('passo'); if (p && d) p.textContent = d.texto })
 window.sw.ao('sw:erro', (d) => {
   if (!d || !d.nk) return
-  // So troca a tela se for o numero que esta na frente. Um numero escondido falhando nao pode
-  // arrancar da tela o numero em que o vendedor esta conversando.
+  // Só troca a tela se for o número que está na frente: um número escondido falhando não pode
+  // arrancar da tela o número em que o vendedor está conversando.
   if (d.nk === ativo || !ativo) { telaErro(d.nk, d.erro); return }
   falhou.set(d.nk, d.erro)
   desenhaLista()
 })
 window.sw.ao('sw:aberto', async () => { await recarregaEstado() })
-// Numero que o app fechou sozinho pra caber na memoria: avisa e redesenha, senao o vendedor
-// acha que caiu.
-// Quantas mensagens ainda nao subiram. Some quando zera: numero na tela so quando ha o que dizer.
 window.sw.ao('sw:fila', (d) => {
   const el = $('fila')
   if (!el) return
   const n = (d && Number(d.n)) || 0
-  el.textContent = n ? (n + ' na fila') : ''
-  el.title = n ? 'Mensagens capturadas que ainda não subiram para a dash' : ''
+  el.textContent = n ? (n + ' mensagens na fila') : ''
+  el.title = n ? 'Capturadas, ainda não subiram para a dash' : ''
 })
-
 window.sw.ao('sw:hibernou', async (d) => {
   await recarregaEstado()
   if (d && d.nk === ativo) { ativo = ''; telaVazia() }
+})
+
+// Fechar o número que está aberto: Ctrl+W é o que todo mundo espera num navegador.
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'w' && ativo) { e.preventDefault(); fechar(ativo) }
 })
 
 inicio()

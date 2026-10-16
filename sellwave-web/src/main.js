@@ -73,6 +73,7 @@ const CONFIG_PADRAO = {
   numeros: [],             // cache da ultima lista vinda da dash
   maxAbertos: 6,           // teto de sessoes abertas ao mesmo tempo (ver hibernacao)
   nome: '',                // nome de quem entrou, so pra barra lateral
+  direcao: false,          // quem entrou e da direcao? quem decide e o servidor, nao o app
 }
 
 let config = { ...CONFIG_PADRAO }
@@ -649,6 +650,7 @@ async function buscaNumeros() {
     const d = await r.json()
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
+    config.direcao = !!(d && d.direcao)
     if (d && d.config) {
       if (typeof d.config.travaProxy === 'boolean') config.travaProxy = d.config.travaProxy
       if (typeof d.config.exigirBrasil === 'boolean') config.exigirBrasil = d.config.exigirBrasil
@@ -672,6 +674,7 @@ ipcMain.handle('sw:estado', () => ({
   numeros: config.numeros,
   proxies: config.proxies,
   maxAbertos: Number(config.maxAbertos) || 6,
+  direcao: !!config.direcao,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
   chromium: process.versions.chrome,
@@ -813,6 +816,18 @@ ipcMain.handle('swp:manda', async (_e, { chatId, item }) => {
   }
 })
 
+// Fechar e recarregar a sessao que esta na tela, pelo proprio painel: e onde a mao do vendedor ja
+// esta. A sessao fica no disco, entao fechar NAO pede QR de novo depois.
+ipcMain.handle('swp:fechar-ativo', () => {
+  if (ativoAgora) fechaNumero(ativoAgora)
+  return { ok: true }
+})
+ipcMain.handle('swp:recarregar-ativo', () => {
+  const wc = viewAtiva()
+  if (wc) wc.reload()
+  return { ok: true }
+})
+
 ipcMain.handle('swp:lead', async (_e, { phone }) => {
   const fone = String(phone || '').replace(/\D/g, '')
   if (!config.token || fone.length < 8) return { ok: true, achou: false }
@@ -838,6 +853,33 @@ ipcMain.on('swp:captura', (_e, dados) => {
   filaSuja = true
   avisaCasca('sw:fila', { n: filaCaptura.length })
   if (filaCaptura.length >= 50) drenaCaptura()
+})
+
+// LIGA E DESLIGA A CHEGADA DE LEAD naquele numero.
+//
+// Vai pela MESMA rota que a Contingencia usa (POST /api/pressel/num), nao por um caminho novo: a
+// roleta ja derrubou a operacao antes e nao e lugar pra ter duas implementacoes. O `at` sai da
+// lista que o servidor mandou, e o servidor confere de novo que o numero e daquele vendedor.
+ipcMain.handle('sw:roleta', async (_e, { nk, on }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo.' }
+  const n = (config.numeros || []).find((x) => numKey(x.numero) === String(nk))
+  if (!n || !n.at) return { ok: false, erro: 'Número não encontrado na lista.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/pressel/num', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      body: JSON.stringify({ at: n.at, num: n.numero, on: !!on }),
+    })
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('A dash respondeu ' + r.status) }
+    n.roleta = !!on
+    gravarConfig()
+    // Puxa a lista de novo pra pegar o estado de verdade (e o placar de leads).
+    buscaNumeros().catch(() => {})
+    return { ok: true, on: !!on }
+  } catch (e) {
+    return { ok: false, erro: 'Não deu pra falar com a dash.' }
+  }
 })
 
 ipcMain.handle('sw:teto', (_e, { maxAbertos }) => {
@@ -869,11 +911,16 @@ app.whenReady().then(() => {
     session.defaultSession.setProxy({ mode: 'fixed_servers', proxyRules: 'socks5://127.0.0.1:1' })
   } catch (_) { /* ok */ }
 
+  // MODO DE TESTE NAO ABRE JANELA NA TELA (16/10/2026). O autoteste e o modo foto rodam o app de
+  // verdade, e cada rodada piscava uma janela no monitor de quem estiver usando o computador.
   janela = new BaseWindow({
     width: 1440, height: 920, minWidth: 1024, minHeight: 640,
     title: 'Sellwave Web',
     backgroundColor: '#0b0e14',
     autoHideMenuBar: true,
+    // O modo FOTO precisa da janela desenhando (capturePage nao funciona em janela escondida),
+    // entao so o autoteste roda invisivel. Quem mexer aqui: ver o comentario em foto.js.
+    show: process.env.SW_SMOKE !== '1',
   })
 
   // A casca usa a sessao PROPRIA dela (nao a default, que esta no buraco negro) e fala com a dash
@@ -953,10 +1000,12 @@ app.whenReady().then(() => {
     casca.webContents.once('did-finish-load', async () => {
       ctx.cascaOk = true
       try {
+        // A marca e a LOGO, nao texto: confere que a imagem carregou de verdade (naturalWidth > 0),
+        // porque <img> quebrada tambem existe no DOM e passaria num teste de presenca.
         ctx.textoBarra = String(await casca.webContents.executeJavaScript(
-          'document.querySelector("aside h1") && document.querySelector("aside h1").textContent'
+          '(() => { const i = document.querySelector("aside .marca img"); return i ? (i.naturalWidth + "x" + i.naturalHeight) : "sem logo" })()'
         ) || '')
-        ctx.temBarra = ctx.textoBarra.indexOf('Sellwave Web') >= 0
+        ctx.temBarra = /^[1-9]\d*x[1-9]\d*$/.test(ctx.textoBarra)
       } catch (e) { ctx.textoBarra = 'erro: ' + (e && e.message) }
       require('./smoke').rodar(ctx)
     })
