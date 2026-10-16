@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('swp', {
     { nk: '81430517', numero: '5515974015754', dono: 'Guilherme', funil: 'Boas-vindas', passo: 2, total: 5, alvo: '5519995983293', inicio: Date.now() },
   ] }),
   aoMudarDisparos: () => {},
+  tratamentos: reg('tratamentos', { ok: true, offers: [
+    { key: 'k1', label: 'Produto A - 1 Mes', price: 197, prod: 'Produto A' },
+    { key: 'k3', label: 'Produto A - 3 Meses', price: 397, prod: 'Produto A' },
+    { key: 'k6', label: 'Produto A - 6 Meses', price: 697, prod: 'Produto A' },
+  ] }),
+  comprovante: reg('comprovante', { ok: true, url: 'https://r2.exemplo/comprovante/print.jpg', mime: 'image/jpeg' }),
   pedidoNovo: reg('pedidoNovo', { ok: true, id: 123, ja: false }),
   rascunhos: reg('rascunhos', { ok: true, rascunhos: [
     { id: 7, phone: '5519995983293', dados: { nome: 'Maria Teste', trat: 'Produto A - 2 Meses', vl: '297,00', cidade: 'Campinas' }, criado: 1, mexido: 2 },

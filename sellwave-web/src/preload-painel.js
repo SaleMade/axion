@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld('swp', {
   rascunhos: (phone) => ipcRenderer.invoke('swp:rascunhos', { phone }),
   rascunhoSalvar: (id, phone, dados) => ipcRenderer.invoke('swp:rascunho-salvar', { id, phone, dados }),
   rascunhoApagar: (id) => ipcRenderer.invoke('swp:rascunho-salvar', { id, apagar: true }),
+  // TRATAMENTO VEM DE LISTA, NUNCA DIGITADO. Na dash o kit e escolhido do catalogo e o preco e so
+  // leitura, porque preco digitado a mao diverge do catalogo e contamina receita, comissao e margem
+  // sem ninguem ver de onde veio (decisao do Bruno em 14/08/2026). O painel segue a mesma regra.
+  tratamentos: () => ipcRenderer.invoke('swp:tratamentos'),
+  // O arquivo vai em bytes crus, sem base64: um video de 9 MB viraria 12 e passaria duas vezes pela
+  // memoria. `bytes` e o Uint8Array que a pagina leu do arquivo.
+  comprovante: (nome, mime, bytes, lead) => ipcRenderer.invoke('swp:comprovante', { nome, mime, bytes, lead }),
   // PILHA DE DISPAROS: o que esta saindo nos numeros abertos. Hoje da 0 ou 1 (o painel roda um
   // funil por vez), mas a lista ja vem como lista pro dia em que isso mudar.
   disparos: () => ipcRenderer.invoke('swp:disparos'),

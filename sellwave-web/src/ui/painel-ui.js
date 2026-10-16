@@ -351,35 +351,57 @@ const IC_SALVAR = svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11
 const IC_CHECK = svg('<path d="M20 6 9 17l-5-5"/>')
 const IC_X = svg('<path d="M18 6 6 18M6 6l12 12"/>')
 const IC_RASC = svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>')
+const IC_CLIPE = svg('<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.9-2.9l8.5-8.5"/>')
 const IC_NOTA = svg('<path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/>')
 
-// Os campos do formulário, na ordem em que aparecem. `req` entra na conferência do cadastro; o
-// rascunho não confere nada, de propósito: rascunho existe justamente pra guardar o que ainda está
-// pela metade enquanto o cliente responde.
-const CAMPOS_PED = [
-  { k: 'nome', r: 'Nome do cliente', req: true },
-  { k: 'cpf', r: 'CPF', req: true, ph: '000.000.000-00' },
-  { k: 'wa', r: 'WhatsApp', req: true },
-  { k: 'cep', r: 'CEP', req: true, ph: '00000-000' },
-  { k: 'end', r: 'Endereço', req: true },
-  { k: 'num', r: 'Número', req: true, par: 'comp' },
-  { k: 'comp', r: 'Complemento' },
-  { k: 'bairro', r: 'Bairro', req: true },
-  { k: 'cidade', r: 'Cidade', req: true, par: 'uf' },
-  { k: 'uf', r: 'UF', req: true, max: 2 },
-  { k: 'trat', r: 'Produto / kit', req: true },
-  { k: 'vl', r: 'Valor', req: true, par: 'pgto', ph: '197,00' },
-  { k: 'pgto', r: 'Pagamento', sel: ['', 'PIX', 'Dinheiro', 'Cartão'] },
-  { k: 'obs', r: 'Observação', area: true },
+// DOIS PASSOS, COMO NA DASH (16/10/2026, pedido do Bruno vendo a aba rodando). Primeiro o tipo de
+// pagamento, nos dois cartoes verde e azul; depois o formulario. Na dash o formulario e tres
+// COLUNAS; aqui a coluna e fina, entao viram tres blocos empilhados na mesma ordem e com os mesmos
+// titulos: Dados do Cliente, Endereco, Tratamento e Anexo. Palavras dele: "eu gostaria de deixar o
+// mais parecido possivel com o layout em que eles ja trabalham hoje".
+const BLOCOS_PED = [
+  {
+    t: 'Dados do Cliente',
+    ic: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    linhas: [['cpf'], ['nome'], ['wa']],
+  },
+  {
+    t: 'Endereço',
+    ic: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+    linhas: [['cep'], ['end', 'num'], ['bairro', 'comp'], ['cidade', 'uf']],
+  },
+  {
+    t: 'Tratamento e Anexo',
+    ic: '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+    linhas: [['trat'], ['obs']],
+  },
 ]
+const CAMPOS_PED = {
+  cpf: { r: 'CPF', req: true, ph: '000.000.000-00' },
+  nome: { r: 'Nome', req: true, ph: 'Nome do cliente' },
+  wa: { r: 'WhatsApp', req: true, ph: '(00) 90000-0000' },
+  cep: { r: 'CEP', req: true, ph: '00000-000' },
+  end: { r: 'Rua', req: true, ph: 'Rua' },
+  num: { r: 'Número', req: true, ph: 'Nº' },
+  bairro: { r: 'Bairro', req: true, ph: 'Bairro' },
+  comp: { r: 'Complemento', ph: 'Compl.' },
+  cidade: { r: 'Cidade', req: true, ph: 'Cidade' },
+  uf: { r: 'UF', req: true, ph: 'UF', max: 2 },
+  obs: { r: 'Observações (opcional)', area: true, ph: 'Ex: Vai pagar dia 5, desconto de R$50...' },
+}
+const PARES = { end: 'num', bairro: 'comp', cidade: 'uf' }
 const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
 
 let ped = {}             // o que está digitado agora
+let pedTipo = ''         // '' = ainda escolhendo | 'entrega' | 'antecipado'
 let rascunhos = []
 let rascId = 0           // > 0 = está editando um rascunho que já existe no servidor
 let pedErros = []        // só preenche depois de tentar cadastrar
-let pedSalvando = ''     // 'rascunho' | 'cadastro'
+let pedSalvando = ''     // 'rascunho' | 'cadastro' | 'anexo'
 let pedFeito = ''        // mensagem verde depois de cadastrar
+let ofertas = []         // o catálogo de tratamentos, do servidor
+let ofertasEstado = ''   // '' | 'carregando' | 'ok' | 'erro'
+let anexos = []          // comprovantes já no R2: { nome, url, mime }
 
 const dig = (v) => String(v == null ? '' : v).replace(/\D/g, '')
 const mascCpf = (v) => { const c = dig(v).slice(0, 11); return c.length === 11 ? c.slice(0, 3) + '.' + c.slice(3, 6) + '.' + c.slice(6, 9) + '-' + c.slice(9) : c }
@@ -402,25 +424,23 @@ function cpfValido(v) {
   return d === Number(c[10])
 }
 
-// "197,00", "1.197,00" e "197.00" viram 197 e 1197. O vendedor digita do jeito dele.
-function emNumero(v) {
-  const t = String(v == null ? '' : v).trim().replace(/[R$\s]/g, '')
-  if (!t) return 0
-  const n = Number(t.replace(/\./g, '').replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
-}
 const emDinheiro = (n) => Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// O TRATAMENTO E COMPARADO PELO `key`, NUNCA PELO ROTULO. "GlicoSix - 4 Meses" e "Glico Six - 4
+// Meses" sao a MESMA oferta (a Five renomeou e mudou so o espaco) e casar por nome duplica o kit.
+const ofertaDe = (k) => ofertas.find((o) => String(o.key) === String(k)) || null
 
 function confere(f) {
   const faltam = []
-  for (const c of CAMPOS_PED) {
-    if (!c.req) continue
-    if (!String(f[c.k] || '').trim()) faltam.push(c.r)
+  for (const [k, c] of Object.entries(CAMPOS_PED)) {
+    if (c.req && !String(f[k] || '').trim()) faltam.push(c.r)
   }
+  if (!ofertaDe(f.tratKey)) faltam.push('Tratamento')
   if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF não confere')
   if (String(f.uf || '').trim() && !UFS.includes(String(f.uf).toUpperCase())) faltam.push('UF inválida')
   if (String(f.cep || '').trim() && dig(f.cep).length !== 8) faltam.push('CEP precisa de 8 dígitos')
-  if (String(f.vl || '').trim() && emNumero(f.vl) <= 0) faltam.push('Valor precisa ser maior que zero')
+  // COMPROVANTE SO E OBRIGATORIO NO PAGAMENTO NA ENTREGA, a mesma regra da dash (novo-pedido.jsx):
+  // no antecipado o dinheiro ja entrou e nao ha o que comprovar.
+  if (pedTipo === 'entrega' && !anexos.length) faltam.push('Comprovante (imagem, vídeo ou áudio)')
   return faltam
 }
 
@@ -454,37 +474,66 @@ function textoPedido(o) {
   ].join(NL)
 }
 
+// O TERMO, igual ao textoTermo do orders.js. Vai ANTES do pedido concluído: o cliente confirma e
+// só então o vendedor manda o resto.
+function textoTermo(o) {
+  const produto = String(o.prod || '').trim()
+  return [
+    'Declaração de Confirmação de Compra',
+    'Eu, ' + (o.nome || 'o cliente') + ', portador do CPF n ' + mascCpf(o.cpf) + ', confirmo a compra do produto'
+      + (produto ? ' ' + produto : '') + ', comprometendo-me a realizar o pagamento no ato do recebimento, conforme as condições acordadas.',
+    '', 'Advertência',
+    'Em caso de inadimplemento, estou ciente de que será aplicada uma multa de 10% sobre o valor do produto, juros de 1% ao mês, correção monetária com base no IGPM-FGV, e honorários advocatícios no percentual de 20% sobre o montante devido.',
+    '', 'Data: ' + ddmm() + '/' + new Date().getFullYear(),
+  ].join(NL)
+}
+
 function montaPedido(f) {
   const id = Date.now()
+  const of = ofertaDe(f.tratKey) || {}
   const o = {
     id, external_id: 'MAN-' + id, orig: 'Manual',
     nome: String(f.nome || '').trim(), cpf: dig(f.cpf), wa: dig(f.wa), email: '',
     cep: dig(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(), comp: String(f.comp || '').trim(),
     bairro: String(f.bairro || '').trim(), cidade: String(f.cidade || '').trim(), uf: String(f.uf || '').toUpperCase().trim(),
-    prod: String(f.trat || '').trim(), trat: String(f.trat || '').trim(), vl: emNumero(f.vl),
-    // VAZIO fica VAZIO: sem taxa no pedido, a dash usa a do vendedor. Pôr um número aqui inventaria
-    // uma comissão que ninguém combinou (foi o que aconteceu com os dois pedidos manuais antigos).
+    // PRODUTO E VALOR SAEM DO CATALOGO, nunca do que foi digitado. Preço à mão diverge do catálogo
+    // e contamina receita, comissão e margem sem ninguém ver de onde veio (decisão de 14/08/2026).
+    prod: String(of.prod || of.label || '').trim(), trat: String(of.label || '').trim(), vl: Number(of.price) || 0,
+    // VAZIO fica VAZIO: sem taxa no pedido, a dash usa a do vendedor.
     com_pct: '',
-    pgto: String(f.pgto || '').trim(), spg: 'Pendente',
-    transp: '', mod: 'entrega',
-    // O DONO É DECIDIDO NO SERVIDOR, pelo login. Mandar `at` daqui deixaria o painel escolhendo de
-    // quem é a venda, e quem recorta por cargo é a rota.
+    pgto: '', spg: 'Pendente',
+    transp: '', mod: pedTipo === 'antecipado' ? 'antecipado' : 'entrega',
+    // O DONO É DECIDIDO NO SERVIDOR, pelo login (handlePedidoNovo carimba o `at`). Mandar daqui
+    // deixaria o painel escolhendo de quem é a venda.
     col: 'A Enviar', obs: String(f.obs || '').trim(),
     tags: [], fu: null, agend: '', track: '', link: '',
     data: ddmm(),
     hist: [{ from: '—', to: 'A Enviar', who: 'Sellwave Web', time: ddmm() + ' ' + hhmm() }],
     comments: [],
     five_status: 'pendente_despacho',
-    comprovante_url: '', comprovante_mime: '', comprovantes: [],
+    comprovante_url: (anexos[0] && anexos[0].url) || '',
+    comprovante_mime: (anexos[0] && anexos[0].mime) || '',
+    comprovantes: anexos.map((a) => ({ url: a.url, mime: a.mime })),
   }
   o.raw = textoPedido(o)
   return o
 }
 
-// ─── rascunhos ───
+// ─── catálogo e rascunhos ───
+
+async function pegaOfertas() {
+  if (ofertasEstado === 'carregando') return
+  ofertasEstado = 'carregando'
+  try {
+    const r = await window.swp.tratamentos()
+    ofertas = (r && r.ok && Array.isArray(r.offers)) ? r.offers : []
+    ofertasEstado = ofertas.length ? 'ok' : 'erro'
+  } catch (_) { ofertas = []; ofertasEstado = 'erro' }
+  if (aba === 'pedidos') desenha()
+}
 
 async function pegaRascunhos() {
-  if (window.__swFoto) return          // o exemplo da foto ja traz a lista que ela quer retratar
+  if (window.__swFoto) return          // o exemplo da foto já traz a lista que ela quer retratar
   try {
     const r = await window.swp.rascunhos('')
     rascunhos = (r && r.ok && Array.isArray(r.rascunhos)) ? r.rascunhos : []
@@ -499,107 +548,171 @@ const rotuloRasc = (r) => {
 }
 const detalheRasc = (r) => {
   const d = (r && r.dados) || {}
-  const partes = [d.trat, d.vl ? 'R$ ' + emDinheiro(emNumero(d.vl)) : '', d.cidade]
-  return partes.filter(Boolean).join(' · ') || 'nada preenchido ainda'
+  const of = d.tratKey ? ofertaDe(d.tratKey) : null
+  return [of && of.label, d.cidade].filter(Boolean).join(' · ') || 'nada preenchido ainda'
 }
 
 // ─── desenho ───
 
 function desenhaPedidos() {
-  const grupo = estadoWa.grupo
-  const semFone = !estadoWa.phone
-  if (grupo) return '<div class="vazio">Conversa de grupo.<br>O cadastro de pedido é por cliente.</div>'
+  if (estadoWa.grupo) return '<div class="vazio">Conversa de grupo.<br>O cadastro de pedido é por cliente.</div>'
 
-  let h = '<div class="form">'
+  let h = ''
+  if (pedFeito) h += '<div class="form"><div class="aviso bom">' + esc(pedFeito) + '</div></div>'
 
-  if (pedFeito) h += '<div class="aviso bom">' + esc(pedFeito) + '</div>'
+  // PASSO 1: o tipo de pagamento, antes de qualquer campo.
+  if (!pedTipo) {
+    if (!estadoWa.phone) return h + '<div class="vazio">Abra a conversa do cliente.<br>O pedido nasce com o número dela.</div>'
+    h += '<div class="tipo">'
+      + '<button class="tipo-cx ent" data-tipo="entrega">'
+      + '<span class="ic">' + svg('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>') + '</span>'
+      + '<span><span class="t1">Pagamento na Entrega</span><span class="t2">Cliente paga ao receber o produto</span></span>'
+      + '</button>'
+      + '<button class="tipo-cx ant" data-tipo="antecipado">'
+      + '<span class="ic">' + svg('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>') + '</span>'
+      + '<span><span class="t1">Pagamento Antecipado</span><span class="t2">Cliente paga antes do envio</span></span>'
+      + '</button>'
+      + '</div>'
+    if (rascunhos.length) h += '<div class="form">' + listaRascunhos() + '</div>'
+    return h
+  }
+
+  // PASSO 2: o formulário.
+  h += '<div class="form">'
   if (pedErros.length) {
     h += '<div class="aviso ruim">Falta preencher:<ul>'
       + pedErros.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
   }
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">'
+    + '<span class="selo-tipo ' + (pedTipo === 'entrega' ? 'ent' : 'ant') + '">'
+    + (pedTipo === 'entrega' ? 'Pagamento na entrega' : 'Pagamento antecipado') + '</span>'
+    + '<button class="bt sec" id="pd-voltar" style="height:26px;padding:0 9px;font-size:11px;margin-left:auto">Trocar</button>'
+    + '</div>'
 
-  if (rascunhos.length) {
-    h += '<div class="grp primeiro"><span>Rascunhos</span><span class="n" style="--ac:' + TIPOS.text.cor + '">' + rascunhos.length + '</span></div>'
-    for (const r of rascunhos) {
-      h += '<div class="rasc" data-r="' + esc(r.id) + '">'
-        + '<span class="ic">' + IC_RASC + '</span>'
-        + '<button class="txt" data-abre="' + esc(r.id) + '">'
-        + '<div class="t1">' + esc(rotuloRasc(r)) + '</div>'
-        + '<div class="t2">' + esc(detalheRasc(r)) + '</div>'
-        + '</button>'
-        + '<button class="x" data-apaga="' + esc(r.id) + '" title="Apagar rascunho">' + IC_X + '</button>'
-        + '</div>'
+  for (const b of BLOCOS_PED) {
+    h += '<div class="bloco"><h3>' + svg(b.ic) + esc(b.t) + '</h3>'
+    for (const linha of b.linhas) {
+      if (linha[0] === 'trat') { h += campoTratamento(); continue }
+      const par = PARES[linha[0]]
+      h += '<div class="cx' + (par ? ' par' : '') + (par === 'uf' ? ' uf' : '') + '">'
+        + campoPed(linha[0]) + (par ? campoPed(par) : '') + '</div>'
     }
-    h += '<div style="height:10px"></div>'
-  }
-
-  if (semFone) {
-    h += '<div class="vazio">Abra a conversa do cliente.<br>O pedido nasce com o número dela.</div></div>'
-    return h
-  }
-
-  for (const c of CAMPOS_PED) {
-    // O campo que tem `par` abre uma dupla e o par vem junto, pra não gastar duas linhas com
-    // "Número" e "Complemento" numa coluna estreita.
-    if (CAMPOS_PED.some((o) => o.par === c.k)) continue
-    const par = c.par ? CAMPOS_PED.find((o) => o.k === c.par) : null
-    const classe = 'cx' + (par ? ' par' : '') + (par && par.k === 'uf' ? ' uf' : '')
-    h += '<div class="' + classe + '">'
-    h += campoPed(c)
-    if (par) h += campoPed(par)
+    if (b.t === 'Tratamento e Anexo') h += campoAnexo()
     h += '</div>'
   }
 
   const trabalhando = !!pedSalvando
+  h += '<div class="acoes" style="grid-template-columns:1fr 1fr">'
+    + '<button class="bt sec" id="pd-copia-dados"' + (trabalhando ? ' disabled' : '') + '>Copiar envio</button>'
+    + '<button class="bt sec" id="pd-copia-termo"' + (trabalhando ? ' disabled' : '') + '>Copiar termo</button>'
+    + '</div>'
   h += '<div class="acoes">'
     + '<button class="bt sec" id="pd-rasc"' + (trabalhando ? ' disabled' : '') + '>'
     + (pedSalvando === 'rascunho' ? IC_GIRA : IC_SALVAR) + 'Rascunho</button>'
     + '<button class="bt pri" id="pd-ok"' + (trabalhando ? ' disabled' : '') + '>'
-    + (pedSalvando === 'cadastro' ? IC_GIRA : IC_CHECK) + 'Cadastrar pedido</button>'
+    + (pedSalvando === 'cadastro' ? IC_GIRA : IC_CHECK)
+    + (pedSalvando === 'anexo' ? 'Enviando anexo' : 'Cadastrar Pedido') + '</button>'
     + '</div>'
   h += '<div style="margin-top:8px;font-size:10.5px;line-height:14px;color:var(--apagado)">'
     + 'O pedido entra em Aceitações, como o da dash. Quem envia pra PayLog é o Aceitar.</div>'
 
+  if (rascunhos.length) h += '<div style="margin-top:12px">' + listaRascunhos() + '</div>'
   return h + '</div>'
 }
 
-function campoPed(c) {
-  const erro = pedErros.length && c.req && !String(ped[c.k] || '').trim() ? ' erro' : ''
-  const v = esc(ped[c.k] == null ? '' : ped[c.k])
-  let dentro
-  if (c.sel) {
-    dentro = '<select data-k="' + c.k + '">'
-      + c.sel.map((o) => '<option value="' + esc(o) + '"' + (String(ped[c.k] || '') === o ? ' selected' : '') + '>' + esc(o || 'escolher') + '</option>').join('')
-      + '</select>'
-  } else if (c.area) {
-    dentro = '<textarea data-k="' + c.k + '" placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
-  } else {
-    dentro = '<input data-k="' + c.k + '" value="' + v + '" placeholder="' + esc(c.ph || '') + '"'
-      + (c.max ? ' maxlength="' + c.max + '"' : '') + ' spellcheck="false" />'
+function listaRascunhos() {
+  let h = '<div class="grp primeiro"><span>Rascunhos</span><span class="n" style="--ac:' + TIPOS.text.cor + '">' + rascunhos.length + '</span></div>'
+  for (const r of rascunhos) {
+    h += '<div class="rasc">'
+      + '<span class="ic">' + IC_RASC + '</span>'
+      + '<button class="txt" data-abre="' + esc(r.id) + '">'
+      + '<div class="t1">' + esc(rotuloRasc(r)) + '</div>'
+      + '<div class="t2">' + esc(detalheRasc(r)) + '</div>'
+      + '</button>'
+      + '<button class="x" data-apaga="' + esc(r.id) + '" title="Apagar rascunho">' + IC_X + '</button>'
+      + '</div>'
   }
+  return h
+}
+
+function campoPed(k) {
+  const c = CAMPOS_PED[k]
+  if (!c) return ''
+  const erro = pedErros.length && c.req && !String(ped[k] || '').trim() ? ' erro' : ''
+  const v = esc(ped[k] == null ? '' : ped[k])
+  const dentro = c.area
+    ? '<textarea data-k="' + k + '" placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
+    : '<input data-k="' + k + '" value="' + v + '" placeholder="' + esc(c.ph || '') + '"'
+      + (c.max ? ' maxlength="' + c.max + '"' : '') + ' spellcheck="false" />'
   return '<div class="' + (erro ? 'erro' : '') + '"><label>' + esc(c.r) + '</label>' + dentro + '</div>'
 }
 
+// SO TRATAMENTO CADASTRADO, sem digitar livre, e o total e leitura. O vendedor nao escolhe preco.
+function campoTratamento() {
+  const erro = pedErros.length && !ofertaDe(ped.tratKey) ? ' erro' : ''
+  const of = ofertaDe(ped.tratKey)
+  let dentro
+  if (ofertasEstado === 'ok') {
+    dentro = '<select data-k="tratKey"><option value="">Selecione</option>'
+      + ofertas.map((o) => '<option value="' + esc(o.key) + '"' + (String(ped.tratKey || '') === String(o.key) ? ' selected' : '') + '>'
+        + esc(o.label) + ' · R$ ' + emDinheiro(o.price) + '</option>').join('')
+      + '</select>'
+  } else if (ofertasEstado === 'erro') {
+    dentro = '<select disabled><option>não deu pra buscar</option></select>'
+      + '<button class="bt sec" id="pd-retrat" style="height:28px;margin-top:6px;font-size:11px;width:100%">Tentar de novo</button>'
+  } else {
+    dentro = '<select disabled><option>carregando tratamentos...</option></select>'
+  }
+  return '<div class="' + (erro ? 'erro' : '') + '"><label>Tratamento *</label>' + dentro + '</div>'
+    + '<div class="total' + (of ? '' : ' vazio') + '"><span class="r">Total</span>'
+    + '<span class="v">' + (of ? 'R$ ' + emDinheiro(of.price) : 'escolha o tratamento') + '</span></div>'
+}
+
+function campoAnexo() {
+  const obrig = pedTipo === 'entrega'
+  const falta = pedErros.length && obrig && !anexos.length
+  let h = '<div class="cx" style="margin-top:8px"><label' + (falta ? ' style="color:#ffb3bf"' : '') + '>'
+    + 'Comprovante (imagem, vídeo ou áudio)' + (obrig ? ' *' : '') + '</label>'
+  for (const a of anexos) {
+    h += '<div class="anexo tem" style="margin-bottom:6px">' + IC_CHECK
+      + '<span class="nm">' + esc(a.nome) + '</span>'
+      + '<button class="x" data-tiraanexo="' + esc(a.url) + '" title="Tirar">' + IC_X + '</button></div>'
+  }
+  h += '<button class="anexo' + (falta ? '' : '') + '" id="pd-anexar"' + (pedSalvando ? ' disabled' : '') + '>'
+    + (pedSalvando === 'anexo' ? IC_GIRA : IC_CLIPE)
+    + '<span class="nm">' + (pedSalvando === 'anexo' ? 'enviando...' : (anexos.length ? 'Adicionar outro' : 'Clique para adicionar')) + '</span></button>'
+    + '<input type="file" id="pd-arquivo" accept="image/*,video/*,audio/*" multiple hidden />'
+  return h + '</div>'
+}
+
 function ligaPedidos(corpo) {
+  for (const b of corpo.querySelectorAll('[data-tipo]')) {
+    b.onclick = () => { pedTipo = b.dataset.tipo; pedErros = []; pedFeito = ''; preenchePed(); if (!ofertas.length) pegaOfertas(); desenha() }
+  }
   for (const el of corpo.querySelectorAll('[data-k]')) {
     el.oninput = () => {
       const k = el.dataset.k
       let v = el.value
-      // A máscara é aplicada enquanto digita, mas só quando o campo já está completo: mascarar no
-      // meio empurra o cursor e a pessoa perde a conta do que digitou.
+      // A máscara entra só com o campo COMPLETO: mascarar no meio empurra o cursor e a pessoa
+      // perde a conta do que digitou.
       if (k === 'cpf' && dig(v).length === 11) { v = mascCpf(v); el.value = v }
       if (k === 'cep' && dig(v).length === 8) { v = mascCep(v); el.value = v }
       if (k === 'uf') { v = v.toUpperCase(); el.value = v }
       ped[k] = v
+      if (k === 'tratKey') desenha()      // o Total acompanha
     }
+    if (el.tagName === 'SELECT') el.onchange = el.oninput
   }
   for (const b of corpo.querySelectorAll('[data-abre]')) {
     b.onclick = () => {
       const r = rascunhos.find((x) => String(x.id) === String(b.dataset.abre))
       if (!r) return
       ped = { ...(r.dados || {}) }
+      pedTipo = String(ped.__tipo || 'entrega')
+      anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       rascId = Number(r.id) || 0
       pedErros = []; pedFeito = ''
+      if (!ofertas.length) pegaOfertas()
       desenha()
     }
   }
@@ -612,17 +725,52 @@ function ligaPedidos(corpo) {
       desenha()
     }
   }
-  const bR = $('pd-rasc'); if (bR) bR.onclick = salvaRascunho
-  const bO = $('pd-ok'); if (bO) bO.onclick = cadastraPedido
+  for (const b of corpo.querySelectorAll('[data-tiraanexo]')) {
+    b.onclick = () => { anexos = anexos.filter((a) => a.url !== b.dataset.tiraanexo); desenha() }
+  }
+  const liga = (id, fn) => { const e = $(id); if (e) e.onclick = fn }
+  liga('pd-voltar', () => { pedTipo = ''; pedErros = []; desenha() })
+  liga('pd-rasc', salvaRascunho)
+  liga('pd-ok', cadastraPedido)
+  liga('pd-retrat', () => { ofertasEstado = ''; pegaOfertas(); desenha() })
+  liga('pd-anexar', () => { const i = $('pd-arquivo'); if (i) i.click() })
+  liga('pd-copia-dados', () => copia(textoPedido(montaPedido(ped)), 'Dados de envio copiados'))
+  liga('pd-copia-termo', () => copia(textoTermo(montaPedido(ped)), 'Termo copiado'))
+  const inp = $('pd-arquivo')
+  if (inp) inp.onchange = () => subirAnexos([...(inp.files || [])])
+}
+
+function copia(txt, aviso) {
+  try { navigator.clipboard.writeText(txt); rodape(aviso) }
+  catch (_) { rodape('não deu pra copiar') }
+}
+
+// O ARQUIVO SOBE NA HORA DE ANEXAR, não no clique de cadastrar. É a mesma escolha da dash, e o
+// motivo está na memória: vídeo de 3 a 9 MB em 60% dos pedidos, e subir só no fim deixa o vendedor
+// olhando "Salvando..." parado achando que travou.
+async function subirAnexos(arquivos) {
+  if (!arquivos.length || pedSalvando) return
+  pedSalvando = 'anexo'; desenha()
+  for (const f of arquivos) {
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer())
+      const r = await window.swp.comprovante(f.name || 'comprovante', f.type || '', bytes, '')
+      if (r && r.ok && r.url) anexos.push({ nome: f.name || 'comprovante', url: r.url, mime: r.mime || f.type || '' })
+      else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
+    } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
+  }
+  pedSalvando = ''; desenha()
 }
 
 async function salvaRascunho() {
   if (pedSalvando) return
   pedSalvando = 'rascunho'; pedFeito = ''; desenha()
   try {
-    const r = await window.swp.rascunhoSalvar(rascId || 0, estadoWa.phone || '', ped)
+    // O tipo e os anexos viajam DENTRO do rascunho: sem eles, reabrir cairia no passo do tipo com os
+    // campos preenchidos e o comprovante perdido.
+    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos }
+    const r = await window.swp.rascunhoSalvar(rascId || 0, estadoWa.phone || '', dados)
     if (r && r.ok) { rascId = Number(r.id) || rascId; pedFeito = 'Rascunho guardado.' }
-    else pedFeito = ''
     await pegaRascunhos()
   } catch (_) {
     pedErros = ['Não deu pra guardar o rascunho agora. O que você digitou continua na tela.']
@@ -640,9 +788,8 @@ async function cadastraPedido() {
       // `ja` = o servidor reconheceu que este pedido já tinha entrado. Dizer "cadastrado" de novo
       // faria o vendedor achar que criou dois.
       pedFeito = r.ja ? 'Esse pedido já estava cadastrado.' : 'Pedido cadastrado. Está em Aceitações.'
-      // O rascunho deste cliente não serve mais: virou pedido.
       if (rascId) { try { await window.swp.rascunhoApagar(rascId) } catch (_) { /* some sozinho depois */ } }
-      ped = {}; rascId = 0
+      ped = {}; rascId = 0; anexos = []; pedTipo = ''
       preenchePed()
       await pegaRascunhos()
     } else {
@@ -654,7 +801,7 @@ async function cadastraPedido() {
 }
 
 // O que já se sabe do cliente entra sozinho: o número vem da conversa aberta e o nome vem do que o
-// WhatsApp mostra, ou do que a dash já tem. É a prévia dos dados do cliente que o Bruno pediu.
+// WhatsApp mostra. É a prévia dos dados do cliente que o Bruno pediu.
 let fonePreenchido = ''
 function preenchePed() {
   const fone = estadoWa.phone || ''
@@ -796,12 +943,10 @@ const formata = (d) => {
   return String(d || '')
 }
 
-// O BOTÃO COLORIDO AO LADO DO CLIENTE (pedido do Bruno em 16/10: "mais um botão colorido do lado do
-// cliente pra entrar nesse cadastro"). Mora no bloco do lead porque é o único lugar do painel que
-// já fala do cliente da conversa aberta. Não aparece em grupo nem em conversa sem número visível:
-// nos dois casos não há cliente pra cadastrar, e botão que abre uma tela vazia é pior que nenhum.
-const botaoCadastro = () => '<button class="lead-cad" id="lead-cad" title="Cadastrar pedido deste cliente">'
-  + IC_NOTA + 'Pedido</button>'
+// O BLOCO DO CLIENTE NÃO TEM BOTÃO DE PEDIDO (16/10/2026). Nasceu com um, e o Bruno mandou tirar
+// no mesmo dia: "gostaria que não tivesse esse botãozinho de Pedido, que o pedido só fosse feito na
+// hora que clicar na área de Pedidos". Uma porta por função; a aba já é a porta.
+const botaoCadastro = () => ''
 
 // Troca pra uma aba de fora dela (o clique no botão do lead). Mexe no mesmo lugar que o clique na
 // aba mexeria, pra as duas entradas não divergirem.
@@ -864,12 +1009,7 @@ async function atualizaLead() {
   ligaBotaoCadastro()
 }
 
-// O bloco do lead e reescrito inteiro a cada troca de conversa, entao o botao nasce sem clique:
-// religar faz parte de cada escrita.
-function ligaBotaoCadastro() {
-  const b = $('lead-cad')
-  if (b) b.onclick = () => vaiPara('pedidos')
-}
+function ligaBotaoCadastro() { /* o bloco do lead não tem mais botão; ver botaoCadastro */ }
 
 // ───────────────────────────────────────────────────────────── ciclo
 
