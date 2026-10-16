@@ -204,7 +204,15 @@ const EM_AQUECIMENTO = 'aquecimento'
 // inacessivel no app e um numero em aquecimento pela tag aparecia como se nao fosse nada.
 // Regra de negocio refeita no cliente diverge do servidor no primeiro caso que ninguem previu.
 const aquecendo = (n) => !!n && (n.aquecendo === true || n.aquec != null || String(n.st || '') === EM_AQUECIMENTO)
-const podeReceber = (n) => !!n && (n.apto === true || n.em_uso === true || aquecendo(n))
+// O VEREDICTO DO SERVIDOR VENCE, E NAO E UM DOS TERMOS DO OU (16/10/2026).
+//
+// Com `||`, um numero que o worker REPROVOU (apto:false) ainda passaria aqui pela flag crua
+// `em_uso`. O caso concreto: chip marcado Restrito pela tag e com `em_uso: true` parado no campo -
+// o worker diz que nao recebe, a roleta nao manda nada, e o app mostraria o interruptor ligado.
+// Mentira de tela sobre numero restrito, que e a mesma familia dos cinco bugs de hoje.
+// Os criterios crus ficam como RESERVA pra worker mais velho, que nao manda `apto` - e so nesse
+// caso. Quando o servidor opina, e ele quem decide.
+const podeReceber = (n) => !!n && (n.apto != null ? n.apto === true : (n.em_uso === true || aquecendo(n)))
 
 function linhaFina(n) {
   const nk = numKey(n.numero)
