@@ -2324,6 +2324,48 @@ function _canceladoHaPouco(l, agoraMs) {
 // frustrado ou cancelado ha mais de 72h e venda anterior: ate 06/10 o cadastro novo era fundido
 // nele (e apagado) ou barrado com 422, e a recompra nunca chegava na PayLog. Entregue sem pagar
 // (Cobranca) ainda e o MESMO pedido: o cliente deve, nao esta comprando de novo.
+// MESMO CPF NAO E MESMA PESSOA (16/10/2026, auditoria; incidente de 12/10/2026).
+//
+// O QUE ACONTECEU: dois cadastros com o MESMO CPF digitado - Jurassi de Almeida, (24) 99298-2998,
+// Barra Mansa/RJ, e Joana Batista Precioso, (34) 99897-7090, Uberlandia/MG. Mesmo vendedor, mesmo
+// kit de 4 meses, R$ 497 cada, as duas com video de comprovante. O aceite tratou as duas como a
+// MESMA pessoa (a identidade era so o CPF), juntou uma na outra e apagou o card da Joana com um
+// `leads.splice`. Resultado: venda de R$ 497 que nao existe em tela nenhuma, cliente que nunca
+// recebeu o produto, vendedor sem comissao, e nenhum erro em lugar nenhum - o toast saiu VERDE.
+// O rastro que sobrou e uma nota no card do Jurassi: "aceite juntou o cadastro manual #...".
+//
+// A REGRA AQUI SO AFIRMA O QUE CONSEGUE PROVAR. Ela nao tenta decidir que sao a mesma pessoa; ela
+// so levanta a mao quando ha PROVA DOS DOIS LADOS de que sao diferentes: telefone conhecido nos
+// dois e diferente, E nome conhecido nos dois e diferente. Faltando um dos dois campos, ou batendo
+// qualquer um deles, continua tudo como estava - porque CPF igual com telefone igual e a mesma
+// pessoa, e cadastro sem nome ou sem telefone nao prova nada.
+const _semAcento = (t) => String(t == null ? '' : t).normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const _fone8 = (v) => String(v == null ? '' : v).replace(/\D/g, '').slice(-8);
+// Nome bate quando e o mesmo, quando um e comeco do outro ("Joana Batista" x "Joana Batista
+// Precioso" e a mesma pessoa com o cadastro mais completo) ou quando primeiro e ultimo nome batem.
+function _nomeBate(a, b) {
+  const x = _semAcento(a), y = _semAcento(b);
+  if (!x || !y) return false;
+  if (x === y || x.startsWith(y + ' ') || y.startsWith(x + ' ')) return true;
+  const px = x.split(' ').filter(Boolean), py = y.split(' ').filter(Boolean);
+  if (px.length < 2 || py.length < 2) return false;
+  return px[0] === py[0] && px[px.length - 1] === py[py.length - 1];
+}
+function _pessoaDiferente(a, b) {
+  if (!a || !b) return false;
+  const fa = _fone8(a.wa), fb = _fone8(b.wa);
+  const temFone = fa.length >= 8 && fb.length >= 8;
+  if (temFone && fa === fb) return false;                 // mesmo telefone: mesma pessoa
+  if (_nomeBate(a.nome, b.nome)) return false;            // mesmo nome: mesma pessoa
+  const temNome = _semAcento(a.nome).length >= 3 && _semAcento(b.nome).length >= 3;
+  return temFone && temNome;                              // so com prova nos DOIS campos
+}
+// Lista legivel pra devolver no 422: quem e quem, pra uma pessoa decidir qual CPF esta errado.
+const _quemE = (l) => String((l && l.nome) || 'sem nome').trim()
+  + ((l && l.wa) ? ' · ' + String(l.wa) : '')
+  + ((l && l.cidade) ? ' · ' + String(l.cidade) + (l.uf ? '/' + String(l.uf) : '') : '');
+
 function _cardComPedidoEmAberto(l, agoraMs) {
   if (!l) return false;
   if (_pedidoAindaNaoSaiu(l) || _canceladoHaPouco(l, agoraMs)) return true;
@@ -2936,10 +2978,15 @@ async function _fiveUpsertLead(env, p, ctx) {
       // cancelado (sem five_id) do mesmo CPF era adotado, ficava em Cancelado (FIM absorve tudo no
       // gate) e o pedido novo nunca aparecia em A Enviar nem na cobranca. Agora so adota card vivo,
       // ou cancelado ha menos de 72h (a regra do pedido refeito, 05/10): esse volta pra A Enviar.
+      // MESMO CPF, PESSOA DIFERENTE, NAO ADOTA (16/10/2026, mesma causa do incidente de 12/10).
+      // Aqui nao se apaga nada, mas carimbar o five_id no card do cliente ERRADO e igualmente
+      // invisivel: o pedido do cliente certo nunca aparece, e o card do outro passa a mostrar uma
+      // entrega que nao e dele. Sem candidato que case, o fluxo normal cria um card novo.
+      const _doPedido = { nome: cust.name, wa: _waC };
       lead = data.leads.find((l) => l && !l.five_id && (!FIVE_COL_FIM.includes(String(l.col || '')) || _canceladoHaPouco(l, Date.now())) && (
         (_cpfC && String(l.cpf || '').replace(/\D/g, '') === _cpfC) ||
         (_waC.length >= 8 && String(l.wa || '').replace(/\D/g, '').length >= 8 && String(l.wa).replace(/\D/g, '').slice(-8) === _waC.slice(-8))
-      )) || null;
+      ) && !_pessoaDiferente(l, _doPedido)) || null;
       if (lead) {
         lead.five_id = String(oid);
         if (FIVE_COL_FIM.includes(String(lead.col || ''))) {
@@ -5992,8 +6039,21 @@ async function _aceitarComPaylog(env, u, leadId) {
     // entregue, devolvido ou cancelado ha mais de 72h e venda anterior: o cadastro novo e recompra
     // e segue pra criar o pedido. Mesmo kit em menos de 48h e dobro, e para no botao vermelho.
     const _agMs = Date.now();
-    const _mesmoCliente = (cpf || wa.length >= 8) ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
+    const _cand = (cpf || wa.length >= 8) ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
       (cpf && soDig(l.cpf) === cpf) || (!cpf && wa.length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8)))) : [];
+    // MESMA REGRA DA FUSAO, e tem que ser a mesma: sem isto o irmao ERRADO (outra pessoa com o CPF
+    // digitado igual) continuaria bloqueando a criacao do pedido legitimo, so que em silencio -
+    // `naoAplica` nao mostra nada na tela.
+    const _mesmoCliente = _cand.filter((l) => !_pessoaDiferente(l, lead));
+    const _confl = _cand.filter((l) => _pessoaDiferente(l, lead)).find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
+    if (_confl) {
+      return { parar: true, problemas: [
+        'O CPF ' + String(lead.cpf || '') + ' ja tem o pedido ' + String(_confl.five_id) + ', mas de outra pessoa',
+        'Pedido ' + String(_confl.five_id) + ': ' + _quemE(_confl),
+        'Este cadastro: ' + _quemE(lead),
+        'Um dos dois CPFs esta errado. Corrija no cadastro certo e aceite de novo - nada foi apagado.',
+      ] };
+    }
     const irmao = _mesmoCliente.find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
     if (irmao) return { parar: true, naoAplica: true };
     const dobro = _mesmoCliente.find((l) => _pedidoEmDobro(lead, l, _agMs));
@@ -6122,10 +6182,27 @@ async function handleAceitarLead(req, env, leadId) {
     // regra do _aceitarComPaylog e do webhook: card Pago/entregue/devolvido ou cancelado ha mais de
     // 72h e venda anterior, e o cadastro novo segue como recompra (nao e mais fundido nem apagado).
     const _agMs = Date.now();
-    const _mesmoCliente = (cpf || wa.length >= 8) ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && (
-      (cpf && soDig(l.cpf) === cpf) ||
-      (!cpf && wa.length >= 8 && soDig(l.wa).length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8))
-    )) : [];
+    const _casaCpf = (l) => (cpf && soDig(l.cpf) === cpf)
+      || (!cpf && wa.length >= 8 && soDig(l.wa).length >= 8 && soDig(l.wa).slice(-8) === wa.slice(-8));
+    const _candidatos = (cpf || wa.length >= 8)
+      ? leads.filter((l) => l && l.five_id && String(l.id) !== String(lead.id) && _casaCpf(l)) : [];
+    // CPF IGUAL COM NOME E TELEFONE DIFERENTES NAO SE JUNTA (ver _pessoaDiferente): era exatamente
+    // assim que a venda da Joana foi apagada em 12/10. Sai da lista de irmaos e vira 422 logo
+    // abaixo, pra uma pessoa olhar qual dos dois CPFs foi digitado errado.
+    const _outraPessoa = _candidatos.filter((l) => _pessoaDiferente(l, lead));
+    const _mesmoCliente = _candidatos.filter((l) => !_pessoaDiferente(l, lead));
+    const _conflitoCpf = _outraPessoa.find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
+    if (_conflitoCpf) {
+      return json({
+        error: 'Mesmo CPF, cliente diferente',
+        problemas: [
+          'O CPF ' + String(lead.cpf || '') + ' ja tem o pedido ' + String(_conflitoCpf.five_id) + ', mas de outra pessoa',
+          'Pedido ' + String(_conflitoCpf.five_id) + ': ' + _quemE(_conflitoCpf),
+          'Este cadastro: ' + _quemE(lead),
+          'Um dos dois CPFs esta errado. Corrija no cadastro certo e aceite de novo - nada foi apagado.',
+        ],
+      }, 422);
+    }
     const irmao = _mesmoCliente.find((l) => _cardComPedidoEmAberto(l, _agMs)) || null;
     const _anterior = irmao ? null : (_mesmoCliente.slice().sort((a, b) => (_quandoNasceuMs(b) || 0) - (_quandoNasceuMs(a) || 0))[0] || null);
     let resposta;
