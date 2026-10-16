@@ -12,6 +12,15 @@
 //   npm run teste-painel
 // (ou, na mao: env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe src/teste-painel.js)
 
+// ELECTRON_RUN_AS_NODE LIGADO = o binario vira Node puro, `require('electron')` devolve so um
+// caminho e `app` vem undefined. O erro que sai disso nao explica nada. Neste ambiente essa env
+// vive setada, entao avisa e sai, em vez de estourar em outro lugar.
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  console.log('ELECTRON_RUN_AS_NODE esta ligado: este teste precisa do Electron de verdade.')
+  console.log('Rode assim:  env -u ELECTRON_RUN_AS_NODE npx electron src/teste-painel.js')
+  process.exit(2)
+}
+
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 
@@ -147,7 +156,16 @@ app.whenReady().then(async () => {
   const rl = JSON.parse(rascOk)
   conta('o rascunho guarda mesmo faltando campo obrigatorio', rl.length === 1 && rl[0][2] && rl[0][2].nome === 'So o nome por enquanto', rascOk.slice(0, 140))
 
-  // 14) Nada quebrou no console
+  // 14) A PILHA DE DISPAROS no topo da aba Funis
+  await js('document.querySelector("[data-aba=funis]").click()')
+  await espera(200)
+  const pil = await js('({ tem: !!document.querySelector(".saindo"), nm: (document.querySelector(".saindo .nm")||{}).textContent || "", ln: (document.querySelector(".saindo .ln")||{}).textContent || "", passos: document.querySelectorAll(".saindo .passos i").length, feitos: document.querySelectorAll(".saindo .passos i.ja").length })')
+  conta('a pilha mostra o funil que esta saindo', pil.tem === true && /Boas-vindas/.test(pil.nm), JSON.stringify(pil))
+  conta('mostra em que passo esta', /2 de 5/.test(pil.nm), pil.nm)
+  conta('mostra por qual numero e pra quem', /97401-5754/.test(pil.ln) && /99598-3293/.test(pil.ln), pil.ln)
+  conta('a barrinha tem um tracinho por passo, 2 preenchidos', pil.passos === 5 && pil.feitos === 2, pil.passos + '/' + pil.feitos)
+
+  // 15) Nada quebrou no console
   conta('nenhum erro de javascript na tela', erros.length === 0, erros.join(' | ').slice(0, 200))
 
   console.log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram')

@@ -45,6 +45,10 @@ let alvoNkAtual = ''
 const paraQuem = () => (alvoNkAtual && estadoWa.nk && alvoNkAtual !== estadoWa.nk && (alvoNome || alvoFone))
   ? ' para ' + (alvoNome || alvoFone) : ''
 let estadoWa = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
+// O QUE ESTA SAINDO NOS NUMEROS ABERTOS (a "pilha de disparos" que o Bruno perguntou se ja existia;
+// nao existia). Hoje da 0 ou 1 porque o painel roda UM funil por vez no app inteiro - a trava
+// `ocupado`. Fica como lista de proposito: no dia em que o disparo for por numero, a tela ja serve.
+let saindo = []
 
 try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
 const guardaFavs = () => { try { localStorage.setItem('sw_favs', JSON.stringify(favoritos)) } catch { /* sem armazenamento o favorito vale só nesta sessão */ } }
@@ -83,6 +87,38 @@ const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
 
 // ───────────────────────────────────────────────────────────── desenho
 
+async function pegaDisparos() {
+  try {
+    const r = await window.swp.disparos()
+    saindo = (r && r.ok && Array.isArray(r.itens)) ? r.itens : []
+  } catch (_) { saindo = [] }
+  if (aba === 'funis') desenha()
+}
+
+// A faixa do topo da aba Funis. O vendedor que trocou de numero no meio de um funil ve AQUI que ele
+// continua saindo, e por qual numero: antes a unica pista era o rodape, que fala do numero da tela.
+function desenhaSaindo() {
+  if (!saindo.length) return ''
+  let h = ''
+  for (const d of saindo) {
+    const total = Number(d.total) || 0
+    const passo = Math.max(0, Math.min(total, Number(d.passo) || 0))
+    const onde = [formata(d.numero || ''), d.dono || ''].filter(Boolean).join(' · ')
+    const alvo = d.alvo ? 'para ' + formata(d.alvo) : ''
+    h += '<div class="saindo">'
+      + '<div class="cab"><span class="bolha"></span>saindo agora</div>'
+      + '<div class="nm">' + esc(d.funil || 'funil') + (total ? ' <span style="font-weight:400;color:var(--apagado)">' + passo + ' de ' + total + '</span>' : '') + '</div>'
+      + (onde || alvo ? '<div class="ln">' + esc([onde, alvo].filter(Boolean).join(' · ')) + '</div>' : '')
+    if (total) {
+      h += '<div class="passos">'
+      for (let i = 1; i <= total; i++) h += '<i class="' + (i <= passo ? 'ja' : '') + '"></i>'
+      h += '</div>'
+    }
+    h += '</div>'
+  }
+  return h
+}
+
 function desenhaChips() {
   const el = $('chips')
   const linha = $('linha-chips')
@@ -118,7 +154,7 @@ function desenha() {
   selo.hidden = !saindo
   selo.textContent = '1'
 
-  if (aba === 'funis') { corpo.innerHTML = desenhaFunis(); ligaFunis(corpo); return }
+  if (aba === 'funis') { corpo.innerHTML = desenhaSaindo() + desenhaFunis(); ligaFunis(corpo); return }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); return }
 
   const itens = visiveis()
@@ -900,6 +936,10 @@ pegaRoteiro().then(desenha)
 // Os rascunhos entram no selo da aba sem o vendedor precisar abrir ela. Falha em silencio: sem
 // rascunho a aba continua cadastrando normalmente.
 pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
+// O processo principal AVISA quando um disparo comeca ou termina, entao a tela nao precisa ficar
+// perguntando. A leitura de boot existe pro caso de o painel abrir com um funil ja rodando.
+pegaDisparos()
+if (window.swp.aoMudarDisparos) window.swp.aoMudarDisparos(() => { pegaDisparos() })
 
 // O apelido existe pro MODO FOTO congelar a tela: sem isso o pulso sobrescreve o exemplo
 // 1,5 s depois e a foto sai sempre com o estado vazio.

@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('swp', {
   manda: reg('manda', { ok: true }),
   indica: reg('indica', { ok: true }),
   disparo: reg('disparo', { ok: true }),
+  disparos: reg('disparos', { ok: true, itens: [
+    { nk: '81430517', numero: '5515974015754', dono: 'Guilherme', funil: 'Boas-vindas', passo: 2, total: 5, alvo: '5519995983293', inicio: Date.now() },
+  ] }),
+  aoMudarDisparos: () => {},
   pedidoNovo: reg('pedidoNovo', { ok: true, id: 123, ja: false }),
   rascunhos: reg('rascunhos', { ok: true, rascunhos: [
     { id: 7, phone: '5519995983293', dados: { nome: 'Maria Teste', trat: 'Produto A - 2 Meses', vl: '297,00', cidade: 'Campinas' }, criado: 1, mexido: 2 },

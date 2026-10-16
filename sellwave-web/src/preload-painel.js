@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld('swp', {
   rascunhos: (phone) => ipcRenderer.invoke('swp:rascunhos', { phone }),
   rascunhoSalvar: (id, phone, dados) => ipcRenderer.invoke('swp:rascunho-salvar', { id, phone, dados }),
   rascunhoApagar: (id) => ipcRenderer.invoke('swp:rascunho-salvar', { id, apagar: true }),
+  // PILHA DE DISPAROS: o que esta saindo nos numeros abertos. Hoje da 0 ou 1 (o painel roda um
+  // funil por vez), mas a lista ja vem como lista pro dia em que isso mudar.
+  disparos: () => ipcRenderer.invoke('swp:disparos'),
+  // O evento NAO entrega o objeto do ipc pra pagina: so o que interessa. Passar o `event` cru
+  // daria a ela um `sender` com poder de mandar mensagem pro processo principal.
+  aoMudarDisparos: (cb) => {
+    ipcRenderer.on('swp:disparos-mudou', (_ev, dados) => { try { cb(Number((dados && dados.n) || 0)) } catch (_) { /* a pagina que se vire */ } })
+  },
   fechar: () => ipcRenderer.invoke('swp:fechar-ativo'),
   recarregar: () => ipcRenderer.invoke('swp:recarregar-ativo'),
   esconder: () => ipcRenderer.invoke('swp:painel', { ligado: false }),
