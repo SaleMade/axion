@@ -1617,6 +1617,73 @@ ipcMain.handle('swp:pedido-novo', async (_e, { lead }) => {
 // Aqui isso seria pior: o vendedor comeca o pedido no app e termina na dash, ou troca de PC, e o
 // trabalho sumiria sem aviso. Fica numa tabela propria (nunca no blob do estado, que tem teto e
 // perde chave nova quando outra tela regrava).
+// A LISTA DE TRATAMENTO, com o PRECO, pro app nao deixar digitar nenhum dos dois.
+//
+// Na dash o tratamento e SEMPRE escolhido de uma lista cadastrada e o valor vem do catalogo, so
+// leitura - decisao do Bruno em 14/08/2026. O motivo esta escrito no novo-pedido.jsx e e de
+// dinheiro: preco digitado a mao diverge do catalogo e contamina receita, comissao e margem sem
+// ninguem ver de onde veio. O app nascia com "Produto / kit" em texto livre e "Valor" digitado, ou
+// seja deixava cadastrar pelo celular do vendedor um pedido que a propria dash recusaria.
+//
+// Quem monta a lista e o SERVIDOR (GET /api/swweb/tratamentos), juntando o que ja vendeu com o
+// catalogo cadastrado - a mesma dupla fonte da dash, numa conta so, pra nao existirem dois
+// catalogos. Guardado em memoria por 10 minutos: o vendedor abre essa aba dezenas de vezes por dia
+// e o catalogo muda uma vez por semana.
+let tratCache = { t: 0, lista: [] }
+ipcMain.handle('swp:tratamentos', async () => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.', offers: [] }
+  if (tratCache.lista.length && Date.now() - tratCache.t < 600000) return { ok: true, offers: tratCache.lista }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/tratamentos' + comoNaUrl(),
+      { headers: cabecalhos(), signal: AbortSignal.timeout(20000) })
+    ajustaRelogio(r)
+    if (!r.ok) return { ok: false, erro: 'a dash respondeu ' + r.status, offers: tratCache.lista }
+    const d = await r.json()
+    const lista = Array.isArray(d && d.offers) ? d.offers : []
+    // SO GUARDA LISTA CHEIA. Guardar uma resposta vazia (dash engasgada, catalogo ainda carregando)
+    // deixaria o vendedor dez minutos sem conseguir escolher tratamento nenhum.
+    if (lista.length) tratCache = { t: Date.now(), lista }
+    return { ok: true, offers: lista }
+  } catch (_) {
+    return { ok: false, erro: 'não deu pra falar com a dash', offers: tratCache.lista }
+  }
+})
+
+// O COMPROVANTE. Na dash ele e OBRIGATORIO quando o pedido e na entrega (COD), e pedido sem anexo
+// chega capenga na fila de Aceitacoes do Bruno.
+//
+// OS BYTES SOBEM DAQUI, nao da tela: o processo principal nao passa por CSP nem por CORS, e o
+// arquivo vai DIRETO pro corpo da requisicao - sem base64, que incharia um video de 9 MB pra 12 e
+// ainda passaria duas vezes pela memoria.
+ipcMain.handle('swp:comprovante', async (_e, { nome, mime, bytes, lead }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const tipo = String(mime || '').split(';')[0].trim().toLowerCase()
+  if (!/^(image|audio|video)\//.test(tipo)) return { ok: false, erro: 'Só imagem, áudio ou vídeo.' }
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || [])
+  if (!buf.length) return { ok: false, erro: 'O arquivo veio vazio.' }
+  // O teto e o mesmo do servidor (95 MB). Recusar aqui poupa subir 90 MB pra levar erro no fim.
+  if (buf.length > 95 * 1024 * 1024) {
+    return { ok: false, erro: 'Arquivo de ' + Math.round(buf.length / 1048576) + ' MB. O limite é 95 MB.' }
+  }
+  const qs = new URLSearchParams({ nome: String(nome || 'comprovante'), lead: String(lead || 'sem') })
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/comprovante?' + qs.toString(), {
+      method: 'POST',
+      headers: { 'content-type': tipo, Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId() },
+      body: buf,
+      // Video de 9 MB numa subida de vendedor pode levar minutos. 5 minutos e folgado e ainda solta
+      // conexao meia-aberta, que e o que o prazo existe pra pegar.
+      signal: AbortSignal.timeout(300000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    return { ok: true, url: (d && d.url) || '', mime: (d && d.mime) || tipo }
+  } catch (_) {
+    return { ok: false, erro: 'não deu pra subir o comprovante' }
+  }
+})
+
 ipcMain.handle('swp:rascunhos', async (_e, { phone }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.', rascunhos: [] }
   try {

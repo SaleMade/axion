@@ -11049,6 +11049,80 @@ async function handleSwWeb(req, env, path) {
     return json({ ok: true, nk, apagou: !host });
   }
 
+  // GET /api/swweb/tratamentos — a lista de tratamento que o app pode oferecer, com o PREÇO.
+  //
+  // POR QUE ISSO E UMA ROTA E NAO UM CAMPO DE TEXTO NO APP (16/10/2026). Na dash o tratamento e
+  // SEMPRE escolhido de uma lista cadastrada e o valor vem do catalogo, so leitura - decisao do
+  // Bruno em 14/08/2026, e o motivo esta escrito no novo-pedido.jsx: preco digitado a mao diverge
+  // do catalogo e contamina receita, comissao e margem sem ninguem ver de onde veio. O app nascia
+  // com "Produto / kit" em texto livre e "Valor" digitado, ou seja deixava cadastrar pelo celular
+  // do vendedor um pedido que a propria dash recusaria.
+  //
+  // A MONTAGEM E A MESMA DA DASH, de proposito: as ofertas que JA VENDERAM (da rota de produtos) E
+  // os kits do catalogo. Sem a segunda metade so aparece plano que ja teve pedido - foi o que o
+  // Bruno pegou em 16/08/2026, quando so o de 6 meses aparecia e ele nao conseguia cadastrar venda
+  // dos outros tres. Erro grave: trava a venda.
+  if (req.method === 'GET' && path === '/api/swweb/tratamentos') {
+    const saida = [];
+    const vistos = new Set();
+    const idsVistos = new Set();
+    // DUAS CHAVES, E AS DUAS SAO NECESSARIAS.
+    //
+    // Pelo NOME nao basta: a mesma oferta aparece como "GlicoSix - 4 Meses" (vindo das vendas) e
+    // "Glico Six - 4 Meses" (vindo do catalogo), so o espaco de diferenca - e a propria Five ja
+    // renomeou essa oferta assim, esta escrito no comentario do handleFiveProducts. Por isso o
+    // normalizador tira TODO caractere que nao e letra ou numero, sem deixar espaco: "glicosix4meses"
+    // nos dois casos.
+    //
+    // E o nome sozinho ainda erraria se a Five mudasse mais que o espaco. Entao vale tambem o ID DA
+    // OFERTA, que e a identidade de verdade e nao muda: o catalogo guarda ele no `k.id` e as vendas
+    // no fim da chave. E a mesma dupla conferencia que o comCatalogo da dash faz.
+    const chave = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    // 1) O QUE JA VENDEU. Reaproveita a rota de produtos em vez de copiar o SQL dela: duas consultas
+    //    pro mesmo catalogo viram dois catalogos no dia em que uma mudar.
+    try {
+      const r = await handleFiveProducts(req, env);
+      const d = await r.json();
+      for (const p of (Array.isArray(d && d.products) ? d.products : [])) {
+        const nome = p.name || p.produto || '';
+        const ofs = Array.isArray(p.offers) ? p.offers : [];
+        if (ofs.length) {
+          for (const o of ofs) {
+            const label = String(o.offer_title || o.title || nome || '').trim();
+            if (!label || vistos.has(chave(label))) continue;
+            vistos.add(chave(label));
+            if (o.offer_id) idsVistos.add(String(o.offer_id));
+            saida.push({
+              key: String(p.product_id || nome) + '|' + String(o.offer_id || label),
+              label, price: Number(o.offer_price || o.price || 0) || 0, prod: String(nome),
+            });
+          }
+        } else if (nome) {
+          if (vistos.has(chave(nome))) continue;
+          vistos.add(chave(nome));
+          saida.push({ key: String(p.product_id || nome), label: String(nome), price: Number(p.price || 0) || 0, prod: String(nome) });
+        }
+      }
+    } catch (_) { /* sem a rota de produtos, o catalogo abaixo ainda serve */ }
+    // 2) O CATALOGO CADASTRADO, que inclui kit que ainda nao vendeu nenhuma vez.
+    try {
+      const dd = await _getDashData(env);
+      for (const k of (Array.isArray(dd && dd.regras && dd.regras.kits) ? dd.regras.kits : [])) {
+        if (!k || k.ativo === false) continue;
+        const label = String(k.nome || '').trim();
+        const kid = String(k.id || '');
+        if (!label || vistos.has(chave(label)) || (kid && idsVistos.has(kid))) continue;
+        vistos.add(chave(label));
+        const preco = Number(String(k.preco == null ? '' : k.preco).replace(/\./g, '').replace(',', '.')) || 0;
+        saida.push({
+          key: 'cad|' + String(k.id || label), label, price: preco,
+          prod: label.split(' - ')[0].trim() || 'Produto',
+        });
+      }
+    } catch (_) { /* ok */ }
+    return json({ ok: true, offers: saida });
+  }
+
   // GET /api/swweb/rascunhos — os rascunhos DESTA pessoa, do mais mexido pro mais velho.
   //
   // Sempre so os dela, inclusive pra direcao: rascunho e trabalho pela metade de alguem, nao e
