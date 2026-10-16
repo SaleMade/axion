@@ -7229,10 +7229,14 @@ async function handleChipSave(req, env) {
     for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
     if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
     if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
-    // CORRECAO MANUAL DO DIA DE AQUECIMENTO (16/10/2026). A tela manda `warm_dias` SO quando o
-    // Bruno digita, pra corrigir numero que chegou meio aquecido de outro lugar ou que precisa
-    // recomecar. Campo vazio nao vem no patch, entao editar o chip por outro motivo nao atropela
-    // nada.
+    // CORRECAO MANUAL DO DIA DE AQUECIMENTO (16/10/2026). O campo existe pra corrigir numero que
+    // chegou meio aquecido de outro lugar ou que precisa recomecar.
+    //
+    // QUEM CHAMA HOJE: ninguem. A dash converte o dia em `warm_start` ANTES de mandar, entao este
+    // ramo e REDE, nao caminho principal - vale pra quem chamar a rota de fora e pra versao de
+    // tela que ainda mande o numero. Fica de proposito: campo que o servidor descarta em silencio
+    // e o jeito de perder a correcao dele sem ninguem ver, e isso ja aconteceu duas vezes aqui
+    // hoje (o dia_uso da tela de chip e o rascunho do app).
     //
     // E ELE VIRA `warm_start` AQUI, nao fica guardado como numero. O motivo e que numero parado
     // CONGELA o dia: se ele digita 5 hoje e a gente guardasse 5, o chip ficaria no dia 5 pra
