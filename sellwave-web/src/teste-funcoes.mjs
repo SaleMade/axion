@@ -195,6 +195,82 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o Parar alcanca a pagina', main.indexOf("ipcMain.handle('swp:parar'") > 0 && main.indexOf('__swParar') > 0)
 }
 
+// ── 10b) O NOME DO LEAD. Com o contato NAO salvo, o WhatsApp Web poe o NUMERO no titulo e o push
+//    name logo abaixo, com til: "+55 74 9995-7871" / "~Amor". O painel estava levando o NUMERO pro
+//    campo NOME do cadastro de pedido. Este teste roda a funcao DE VERDADE, tirada do fonte, pra
+//    nao virar uma segunda copia da regra que pode discordar dela.
+{
+  const fonte = leia('ui/agente.js')
+  const pedaco = fonte.slice(fonte.indexOf('var NAO_E_NOME'), fonte.indexOf('function nomeDaConversa'))
+  const limpaNome = new Function(pedaco + '; return limpaNome')()
+
+  const casos = [
+    ['+55 74 9995-7871', '', 'numero do cabecalho nao e nome'],
+    ['(19) 99598-3293', '', 'numero formatado em (DD) tambem nao'],
+    ['+5574999957871', '', 'numero colado tambem nao'],
+    ['~Amor', 'Amor', 'o push name entra, sem o til'],
+    ['~ Joao Pedro', 'Joao Pedro', 'til com espaco tambem sai'],
+    ['Maria Silva', 'Maria Silva', 'nome salvo na agenda passa inteiro'],
+    ['Loja do Ze LTDA', 'Loja do Ze LTDA', 'nome de empresa passa'],
+    ['Dados do perfil', '', 'rotulo da gaveta de contato continua barrado'],
+    ['2112', '2112', 'apelido curto de digito ainda e nome'],
+    ['   ', '', 'so espaco nao e nome'],
+  ]
+  for (const [entra, sai, oque] of casos) vale(oque, limpaNome(entra) === sai, JSON.stringify(limpaNome(entra)))
+
+  // PRESENCA NAO PODE VIRAR NOME. A linha onde o push name aparece e a MESMA onde o WhatsApp
+  // escreve "online" e "visto por ultimo". Sem este filtro, "visto por ultimo hoje as 14:02" ia
+  // parar no campo Nome do pedido e, dali, na etiqueta de despacho.
+  for (const p of ['online', 'digitando...', 'gravando audio...', 'visto por ultimo hoje as 14:02',
+    'última vez hoje às 09:12', 'last seen today at 3:04 PM']) {
+    vale('presenca "' + p + '" nao vira nome', limpaNome(p) === '', JSON.stringify(limpaNome(p)))
+  }
+
+  // EMOJI SAI. O valor nao para na tela: vai pro campo Nome do pedido e, quando o Bruno aceita,
+  // pro customer[name] da PayLog - ou seja pra etiqueta e pra cobranca. Coracao na etiqueta nao
+  // ajuda ninguem, e o campo continua editavel.
+  vale('o emoji sai e o nome fica', limpaNome('~Amor ❤️') === 'Amor', limpaNome('~Amor ❤️'))
+  vale('acento NAO e emoji, fica', limpaNome('João Pedro') === 'João Pedro', limpaNome('João Pedro'))
+
+  // ── A FUNCAO INTEIRA, com um WPP de mentira. Isto e o que pega a causa raiz de verdade:
+  //    `WPP.contact.get` e ASSINCRONO (devolve Promise), entao qualquer versao que leia nome dele
+  //    volta vazio. Aqui o fake devolve Promise de proposito.
+  const corpo = recorta(fonte, 'function nomeDaConversa()')
+  const monta = (chat, titulo) => {
+    const ctx = {
+      window: {
+        WPP: {
+          contact: { get: async () => ({ name: 'NAO DEVE SER LIDO', pushname: 'NAO DEVE SER LIDO' }) },
+          chat: { get: () => chat },
+        },
+      },
+      document: { querySelector: () => (titulo ? { getAttribute: () => titulo, textContent: titulo } : null) },
+      // Grupo = conversaAberta devolve vazio (o ehPessoa recusa). E o caso que prova que o DOM
+      // nao e consultado sem conversa de pessoa aberta.
+      conversaAberta: () => (chat ? '5574999957871@c.us' : ''),
+    }
+    const f = new Function('window', 'document', 'conversaAberta',
+      pedaco + '\n' + corpo + '\n; return nomeDaConversa')
+    return f(ctx.window, ctx.document, ctx.conversaAberta)()
+  }
+
+  vale('contato NAO salvo: o push name vence o numero do titulo',
+    monta({ formattedTitle: '+55 74 9995-7871', contact: { pushname: 'Amor', formattedName: '+55 74 9995-7871' } }) === 'Amor',
+    monta({ formattedTitle: '+55 74 9995-7871', contact: { pushname: 'Amor', formattedName: '+55 74 9995-7871' } }))
+  vale('contato SALVO: o nome da agenda vence o push name',
+    monta({ formattedTitle: 'Maria', contact: { name: 'Maria Cliente', pushname: 'Amor' } }) === 'Maria Cliente')
+  vale('empresa: o nome verificado vence o apelido',
+    monta({ formattedTitle: 'Loja', contact: { verifiedName: 'Loja do Ze LTDA', pushname: 'Zezinho' } }) === 'Loja do Ze LTDA')
+  vale('sem push name nenhum, volta VAZIO em vez de devolver o numero',
+    monta({ formattedTitle: '+55 74 9995-7871', contact: { formattedName: '+55 74 9995-7871' } }) === '')
+  vale('sem conversa aberta (grupo), nem olha o desenho da tela',
+    monta(null, 'Equipe SellWave') === '')
+  vale('com conversa aberta, o DOM so vale pelo titulo e passa pelo mesmo filtro',
+    monta({ formattedTitle: '' }, 'Maria Cliente') === 'Maria Cliente')
+  vale('e o DOM nao entrega presenca como nome',
+    monta({ formattedTitle: '' }, 'visto por ultimo hoje as 14:02') === '')
+}
+
 // ── 11) A URL DE DADOS DA MIDIA. Este custou o dia: todo funil com audio morria no primeiro
 //    passo com `invalid_data_url`, porque o R2 devolve "audio/ogg; codecs=opus" e o espaco
 //    invalida a URL. O teste usa os tipos REAIS que a nossa midia tem.

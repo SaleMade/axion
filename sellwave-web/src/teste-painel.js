@@ -227,9 +227,53 @@ app.whenReady().then(async () => {
   // seria trocar um pedido errado por outro.
   conta('os campos do cliente anterior NAO vao junto', dps.cidade === '', dps.cidade)
   conta('e avisa que o anterior virou rascunho', /rascunho/i.test(dps.msg), dps.msg)
-  const ultR = JSON.parse(await js('JSON.stringify(((window.__ver()).filter(c => c.nome === "rascunhoSalvar").slice(-1)[0]||{}).args||[])'))
+  const chamR = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").map(c => [String(c.args[0] || ""), String(c.args[1] || "")]))'))
+  const ultR = chamR[chamR.length - 1] || []
   conta('o rascunho guardado e do cliente ANTERIOR, nao do novo',
     String(ultR[1] || '') === '5519995983293', JSON.stringify(ultR[1]))
+  // O PAINEL TEM QUE GUARDAR O ID QUE O SERVIDOR DEVOLVEU. Sem isso, cada gravacao manda id vazio
+  // de novo e nasce UMA LINHA NOVA por troca de conversa - a lista de rascunhos do vendedor vira
+  // lixo. O defeito irmao deste (o worker recusando id vazio) ficou escondido por semanas porque o
+  // preload falso respondia ok pra tudo.
+  const primeiroSemId = (chamR[0] || [])[0] === ''
+  const depoisComId = chamR.length < 2 || chamR.slice(1).every((c) => c[0] !== '')
+  conta('o 1o save vai sem id e os seguintes reusam o que o servidor deu',
+    primeiroSemId && depoisComId, JSON.stringify(chamR.map((c) => c[0])))
+
+  // ── CADASTRAR COM A CONVERSA TROCADA PEDE CONFIRMACAO ──────────────────────────
+  // A faixa ambar e o botao avisam; esta e a ultima trava, e e o que ele pediu em palavras: "pra
+  // que o meu vendedor nao confunda e acabe subindo um pedido pra um cliente que ja saiu".
+  await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); if (!e) return;'
+    + ' e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("cpf","52998224725"); s("cep","13000000"); s("end","Rua A"); s("num","10");'
+    + ' s("bairro","Centro"); s("cidade","Campinas"); s("uf","sp"); })()')
+  await js('(() => { const o = [...document.querySelectorAll("[data-op=trat]")].find(e => /3 Meses/.test(e.textContent)); if (o) o.click() })()')
+  await espera(300)
+  await js('(() => { const i = document.getElementById("pd-arquivo");'
+    + ' const f = new File([new Uint8Array([1,2,3])], "print2.jpg", { type: "image/jpeg" });'
+    + ' const dt = new DataTransfer(); dt.items.add(f); i.files = dt.files;'
+    + ' i.dispatchEvent(new Event("change")); })()')
+  await espera(700)
+  const antesConf = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").length)'))
+  // a conversa muda DEPOIS do formulario pronto, que e o caso perigoso
+  await js('(() => { window.__trocaConversa("5521970001111", "Cliente Que Chegou Agora") })()')
+  await espera(2000)
+  await clica('#pd-ok')
+  await espera(400)
+  const conf1 = await js('({ txt: (document.querySelector(".aviso.ruim")||{}).textContent || "",'
+    + ' n: (window.__ver()).filter(c => c.nome === "pedidoNovo").length })')
+  conta('com a conversa trocada, o primeiro Cadastrar NAO manda',
+    conf1.n === antesConf, JSON.stringify(conf1.n) + ' vs ' + antesConf)
+  conta('e o aviso diz de QUEM e o pedido', /Outro Cliente/.test(conf1.txt), conf1.txt.slice(0, 120))
+  await clica('#pd-ok')
+  await espera(600)
+  const conf2 = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].wa))'))
+  conta('o segundo clique confirma e manda', conf2.length === antesConf + 1, String(conf2.length))
+  // O `wa` vai so com digitos e sem o 55 (montaPedido usa dig()), entao o que se confere e que e o
+  // numero do dono congelado e NAO o da conversa que estava na tela na hora do clique.
+  const ultWa = String(conf2[conf2.length - 1] || '')
+  conta('e o pedido sai com o telefone do dono CONGELADO, nao o da tela',
+    ultWa === '11988887777' && !/2197000/.test(ultWa), ultWa)
 
   await clica('#pd-voltar')
   await espera(300)

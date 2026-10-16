@@ -174,14 +174,17 @@ Electron 30**. O caminho é **`WebContentsView`** com `win.contentView.addChildV
 
 ## A10. O que continua EM ABERTO (spikes, em ordem de risco)
 
-1. **A ligação de voz completa com `disable_non_proxied_udp`?** Precisa de um número real.
+1. ~~A ligação de voz completa com `disable_non_proxied_udp`?~~ **FECHADO em 16/10/2026.** Com aquela política NÃO completa (6 conexões TCP, zero UDP, *"sua rede Wi-Fi não permite fazer ligações"*). O Bruno escolheu ter a ligação, a política virou `default_public_interface_only`, e ele confirmou no mesmo dia: *"acabei de testar a ligação e funcionou perfeitamente"*. Ver A12.
 2. **Os proxies do Bruno são HTTP ou SOCKS5 com senha?** Trava a fase 1.
 3. **Quantas sessões logadas de verdade cabem na máquina?** Só dá para medir depois de parear.
 4. **O nome que aparece em "Aparelhos conectados" vem do User-Agent?** Se vier, vira correlacionador
    entre os números — foi exatamente o problema do `CONFIG_SESSION_PHONE_CLIENT` na Evolution
    (memória `antiban-whatsapp-evidencia`).
 
-## A11. Ligação de voz com a trava de proxy (spike 1) — AINDA EM ABERTO, e por quê
+## A11. Ligação de voz com a trava de proxy (spike 1) — RESPONDIDO no A12, a lição fica
+
+> Este bloco ficou como está de propósito: ele é o registro de uma tentativa de medir por
+> fora que deu errado. A resposta veio da medição numa ligação de verdade e está no A12.
 
 **O que está medido, e é pouco:** com `disable_non_proxied_udp` e **sem proxy configurado**, a
 página nem carrega (`ERR_FAILED` em `https://example.com`). Ou seja a política só é utilizável
@@ -233,6 +236,11 @@ máquina aparece.
 `default_public_interface_only` e não `default`: as duas deixam a ligação funcionar, mas a `default`
 entrega junto a topologia da rede local. Perder o IP público na ligação é inevitável pra ela
 existir; entregar o resto não compra nada.
+
+**CONFIRMADO PELO BRUNO EM 16/10/2026, à noite:** *"acabei de testar a ligação e funcionou
+perfeitamente"*. Ou seja a troca entregou o que prometia: com `default_public_interface_only` a
+chamada **completa**, com o resto do tráfego ainda saindo pelo proxy. Spike 1 fechado dos dois
+lados: medido por nós e confirmado no uso dele.
 
 **O que fica em aberto, e é honesto dizer:** ninguém sabe se o WhatsApp correlaciona o IP visto numa
 chamada com a identidade da conta. Se correlacionar, dois números que fizerem ligação da mesma

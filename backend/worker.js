@@ -11147,8 +11147,22 @@ async function handleSwWeb(req, env, path) {
   // POST /api/swweb/rascunho — grava ou apaga um rascunho. { id, phone, dados } ou { id, apagar }
   if (req.method === 'POST' && path === '/api/swweb/rascunho') {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 48);
-    if (!id) return err('Falta o id do rascunho');
+    // O ID DE UM RASCUNHO NOVO NASCE AQUI (16/10/2026).
+    //
+    // ANTES: `String((b && b.id) || '')` com `b.id = 0` da string vazia e caia no 400 logo abaixo.
+    // O painel manda 0 (ou vazio) pro PRIMEIRO save de qualquer rascunho, entao rascunho novo NUNCA
+    // gravava. Medido na producao: POST com id 0 respondia "Falta o id do rascunho" e a tabela
+    // estava vazia, zero linhas. Ou seja o "o pedido fica salvo como rascunho" que o Bruno pediu
+    // nunca funcionou um dia - e passava calado, porque o painel so olhava excecao e um ok:false
+    // nao e excecao.
+    //
+    // O ID E SO DIGITO DE PROPOSITO, e cabe num inteiro seguro de JS (13 digitos do relogio + 2 de
+    // sorteio = 15). Versao antiga do app guarda o id com `Number(id)`; id com letra viraria NaN,
+    // o app acharia que ainda nao tem rascunho e CADA gravacao criaria uma linha nova.
+    const idCru = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 48);
+    // Apagar exige id de verdade: cunhar um aqui apagaria nada e responderia "apaguei".
+    if (b && b.apagar && !idCru) return err('Falta o id do rascunho');
+    const id = idCru || (String(Date.now()) + String(Math.floor(Math.random() * 100)).padStart(2, '0'));
     await _swwebRascunhoTabela(env);
     const agoraR = Math.floor(Date.now() / 1000);
     // APAGAR SO O PROPRIO, sempre com o user_id na clausula: id adivinhado nao apaga o dos outros.

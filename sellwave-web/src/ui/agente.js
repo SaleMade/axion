@@ -102,35 +102,93 @@
     return null
   }
   var ultimoRecusado = ''
-  // O NOME VEM DO MOTOR, NAO DO DESENHO DA TELA (16/10/2026).
+  // O NOME DA CONVERSA. Este bloco inteiro foi REESCRITO em 16/10/2026, a noite, depois de uma
+  // revisao adversarial achar que a primeira tentativa dele era CODIGO MORTO:
   //
-  // Lendo `#main header [title]` o painel mostrava "Dados do perfil" no lugar do nome do cliente:
-  // com a gaveta de contato aberta, o primeiro elemento com `title` dentro do cabecalho deixa de
-  // ser o nome e passa a ser o titulo da gaveta. O Bruno viu isso na aba Pedidos, onde o nome entra
-  // no cadastro - ou seja o erro ia parar DENTRO do pedido, nao so na tela.
+  //   `WPP.contact.get(chatId)` E ASSINCRONO. Provado no proprio motor (sc-wajs.js, modulo 296910:
+  //   `t.get=async function(e){...return o.ContactStore.get(t)}`). Ele devolve uma PROMESSA, e
+  //   promessa e truthy, entao o `if (c)` entrava e `c.name`, `c.pushname`, `c.verifiedName` e
+  //   `c.attributes` saiam TODOS undefined. Nove candidatos empilhados, zero contribuicao.
   //
-  // Quem sabe o nome e o WhatsApp, nao o HTML dele: pergunta ao contato pelo motor e so cai no DOM
-  // se o motor nao souber. E recusa os rotulos conhecidos da propria interface, que e o jeito de
-  // nao trocar um nome errado por outro no dia em que a Meta mexer no desenho.
+  // Com aquele bloco morto, quem respondia era `chat.get` (esse e SINCRONO: `t.get=function(e)`),
+  // e ali o `formattedTitle` vinha primeiro. Pra contato NAO SALVO o WhatsApp preenche o
+  // formattedTitle com o TELEFONE FORMATADO - e era por isso que o campo NOME do cadastro de
+  // pedido nascia com "+55 74 9995-7871" em vez do push name que aparece logo abaixo dele.
+  //
+  // A FORMA CERTA JA ESTAVA EM PRODUCAO, no `activeInfo()` do AXION/sc-panel.js (por volta da
+  // linha 436), rodando ha meses no Sale Chat do Bruno:
+  //
+  //     var ct = c.contact || {}
+  //     ct.name || ct.pushname || ct.formattedName || c.formattedTitle || c.id.user
+  //
+  // Nome da AGENDA primeiro, PUSH NAME antes do formattedName e do formattedTitle, tudo lido do
+  // contato DO MODEL DO CHAT, de forma sincrona, sem `contact.get` nenhum. E a regra do Bruno:
+  // quando a casa ja resolveu o problema, a versao que roda vence a ideia nova.
+  //
+  // A unica diferenca daqui pra la e o fim da fila: o sc-panel cai em `c.id.user` (o numero) porque
+  // la o valor so vira rotulo na tela. Aqui ele entra no CADASTRO DE PEDIDO, e dali vai pro nome do
+  // cliente na PayLog, na etiqueta e na cobranca. Entao numero NAO vale como nome: melhor voltar
+  // vazio e o painel mostrar `formata(fone)` do que carimbar telefone no campo Nome.
   var NAO_E_NOME = /^(dados do perfil|informacoes do contato|informa..es do contato|perfil|contact info|profile details)$/i
+
+  // PRESENCA NAO E NOME. A segunda linha do cabecalho, onde o push name aparece, e o MESMO lugar
+  // onde o WhatsApp escreve "online", "digitando...", "gravando audio..." e "visto por ultimo hoje
+  // as 14:02". Tudo isso tem letra, entao passaria por qualquer filtro de telefone e viraria nome
+  // de cliente dentro do pedido. E a mesma familia do incidente do "Dados do perfil".
+  var PRESENCA = /^(online|offline|digitando|gravando( [aá]udio)?|typing|recording|visto por [uú]ltimo\b.*|[uú]ltima vez\b.*|last seen\b.*|aqui para.*|clique aqui.*|click here.*)[.…]*$/i
+
+  // SO TELEFONE TAMBEM NAO E NOME. O minimo de 6 caracteres evita jogar fora apelido curto e
+  // legitimo feito de digito (um "2112" e nome ruim, mas e nome).
+  var SO_TELEFONE = /^[\s+()\-.\d]{6,}$/
+
+  // O TIL E ENFEITE DO WHATSAPP: ele marca "isto e push name, nao e contato salvo", igual na lista
+  // de participantes de grupo. No atributo do motor ele nao vem (prova: o push name capturado e
+  // gravado CRU em wa_messages.push_name e nao ha strip de til em lugar nenhum do worker); pelo DOM
+  // vem. Tirar aqui e o unico lugar que serve pros dois caminhos.
+  //
+  // E EMOJI SAI, de proposito. O que o Bruno pediu e o NOME ("~Amor"), e esse valor nao para na
+  // tela: ele vai pro campo Nome do pedido, e dali pro `customer[name]` da PayLog quando ele aceita
+  // - ou seja pra etiqueta de despacho e pra cobranca. Coracao na etiqueta nao ajuda ninguem, e o
+  // campo continua editavel se ele quiser por de volta.
+  function limpaNome(v) {
+    var t = String(v == null ? '' : v).replace(/^[~\s]+/, '').trim()
+    if (!t) return ''
+    if (NAO_E_NOME.test(t) || PRESENCA.test(t)) return ''
+    // Sobram letra (com acento), digito, espaco, apostrofo, hifen, ponto e &. O resto vira espaco.
+    try { t = t.replace(/[^\p{L}\p{N} '\-.&]/gu, ' ').replace(/\s+/g, ' ').trim() }
+    catch (_) { t = t.replace(/[^A-Za-z0-9À-ɏ '\-.&]/g, ' ').replace(/\s+/g, ' ').trim() }
+    if (!t) return ''
+    if (SO_TELEFONE.test(t)) return ''
+    return t
+  }
+
   function nomeDaConversa() {
     var chatId = ''
     try { chatId = conversaAberta() || '' } catch (_) { chatId = '' }
+    // SEM CONVERSA DE PESSOA, SEM NOME. `conversaAberta` ja recusa grupo; sem este corte, o ultimo
+    // recurso do DOM devolveria o ASSUNTO DO GRUPO como se fosse nome de lead.
+    if (!chatId) return ''
     try {
-      var W = window.WPP
-      var c = chatId && W && W.contact && W.contact.get ? W.contact.get(chatId) : null
-      var n = c && (c.name || c.pushname || c.verifiedName || (c.attributes && (c.attributes.name || c.attributes.pushname)))
-      if (n && String(n).trim() && !NAO_E_NOME.test(String(n).trim())) return String(n).trim()
-    } catch (_) { /* sem motor, o DOM resolve */ }
+      var ch = (window.WPP && window.WPP.chat && window.WPP.chat.get) ? window.WPP.chat.get(chatId) : null
+      if (ch) {
+        var ct = ch.contact || {}
+        // A ordem do sc-panel, com `verifiedName` somado depois do nome da agenda: pra empresa, o
+        // nome verificado vale mais que o apelido que ela escolheu.
+        var cands = [ct.name, ct.verifiedName, ct.pushname, ct.notifyName, ct.formattedName,
+          ch.formattedTitle, ch.name]
+        for (var i = 0; i < cands.length; i++) {
+          var bom = limpaNome(cands[i])
+          if (bom) return bom
+        }
+      }
+    } catch (_) { /* sem motor, o DOM tenta */ }
+    // ULTIMO RECURSO: SO O TITULO, e so o `span[title]`, que e o mesmo seletor que o sc-panel usa
+    // (`header span[title]`). Varrer os outros span do cabecalho seria pescar a linha de presenca.
+    // Pra contato nao salvo o titulo e o telefone, o filtro recusa, e o nome volta VAZIO - que e o
+    // resultado certo: o painel mostra `formata(fone)` e o vendedor digita se quiser.
     try {
-      var ch = chatId && window.WPP && window.WPP.chat && window.WPP.chat.get ? window.WPP.chat.get(chatId) : null
-      var t = ch && (ch.formattedTitle || (ch.contact && (ch.contact.name || ch.contact.pushname)))
-      if (t && String(t).trim() && !NAO_E_NOME.test(String(t).trim())) return String(t).trim()
-    } catch (_) { /* ok */ }
-    try {
-      var h = document.querySelector('#main header [title]')
-      var d = h ? String(h.getAttribute('title') || h.textContent || '').trim() : ''
-      return NAO_E_NOME.test(d) ? '' : d
+      var t = document.querySelector('#main header span[title]')
+      return limpaNome(t && (t.getAttribute('title') || t.textContent))
     } catch (_) { return '' }
   }
   // QUATRO TENTATIVAS, as mesmas do painel que ja roda em producao. Com duas so, o numero voltava

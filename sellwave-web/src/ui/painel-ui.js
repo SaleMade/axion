@@ -419,7 +419,7 @@ const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', '
 let ped = {}             // o que está digitado agora
 let pedTipo = ''         // '' = ainda escolhendo | 'entrega' | 'antecipado'
 let rascunhos = []
-let rascId = 0           // > 0 = está editando um rascunho que já existe no servidor
+let rascId = ''          // vazio = ainda nao existe no servidor; o id vem de la no 1o save
 let pedErros = []        // só preenche depois de tentar cadastrar
 let pedSalvando = ''     // 'rascunho' | 'cadastro' | 'anexo'
 let pedFeito = ''        // mensagem verde depois de cadastrar
@@ -628,10 +628,20 @@ function desenhaPedidos() {
   // cadastrar achando que e do que esta vendo agora.
   if (pedLead) {
     const trocou = (estadoWa.phone || '') && (estadoWa.phone || '') !== pedLead.phone
-    h += '<div class="dono-ped">'
+    const agora = estadoWa.nome || formata(estadoWa.phone || '') || 'o cliente de agora'
+    h += '<div class="dono-ped' + (trocou ? ' trocou' : '') + '">'
+      + '<div class="l">'
       + svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>')
       + '<span class="q">' + esc(pedLead.nome || formata(pedLead.phone) || 'cliente') + '</span>'
       + (trocou ? '<span class="a">a conversa mudou</span>' : '')
+      + '</div>'
+      // O BOTAO SO EXISTE QUANDO HA PRA ONDE IR. Fora da troca ele seria um jeito de zerar o
+      // formulario sem querer.
+      + (trocou
+        ? '<button class="bt-troca" id="pd-troca"' + (pedSalvando ? ' disabled' : '') + '>'
+          + svg('<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>')
+          + '<span>Trocar para ' + esc(agora) + '</span></button>'
+        : '')
       + '</div>'
   }
 
@@ -785,7 +795,7 @@ function ligaPedidos(corpo) {
       pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: String(ped.nome || '') }
       delete ped.__tipo; delete ped.__anexos; delete ped.__lead
       guardaNascimento()
-      rascId = Number(r.id) || 0
+      rascId = String(r.id || '')
       pedErros = []; pedFeito = ''
       if (!ofertas.length) pegaOfertas()
       desenha()
@@ -795,7 +805,7 @@ function ligaPedidos(corpo) {
     b.onclick = async () => {
       const id = b.dataset.apaga
       try { await window.swp.rascunhoApagar(id) } catch (_) { /* some da lista no próximo pulso */ }
-      if (String(rascId) === String(id)) rascId = 0
+      if (String(rascId) === String(id)) rascId = ''
       await pegaRascunhos()
       desenha()
     }
@@ -842,11 +852,12 @@ function ligaPedidos(corpo) {
   // comecar um pedido novo: "clico em Voltar (...) aquele vai ficar salvo como rascunho".
   liga('pd-voltar', async () => {
     await rascunhoSozinho()
-    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = 0; pedErros = []
+    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = ''; pedErros = []
     preenchePed()
     guardaNascimento()
     desenha()
   })
+  liga('pd-troca', trocaDeLead)
   liga('pd-rasc', salvaRascunho)
   liga('pd-ok', cadastraPedido)
   liga('pd-retrat', () => { ofertasEstado = ''; pegaOfertas(); desenha() })
@@ -883,7 +894,6 @@ async function subirAnexos(arquivos) {
 // conversa"). Nao avisa nada na tela: aviso a cada troca de conversa seria pior que o problema.
 // So grava se houver algo ALEM do que entrou sozinho - nome e telefone vem preenchidos da conversa,
 // entao rascunho com so os dois e um rascunho vazio, e encheria a lista de lixo.
-let gravandoSozinho = false
 // COMO ELE NASCEU, pra saber se o vendedor mexeu em alguma coisa.
 //
 // A primeira versao disto era uma LISTA DE EXCECAO ("ignore nome e wa porque entram sozinhos da
@@ -898,21 +908,33 @@ let gravandoSozinho = false
 // A foto e tirada DEPOIS do preenchimento automatico, e compara o valor ja aparado: mascara de CPF
 // e de CEP so rodam quando a pessoa digita, mas comparar texto cru deixaria uma diferenca de espaco
 // virar "mexeu".
+let trocandoLead = false
 let nasceuAssim = ''
 const fotoDoForm = () => JSON.stringify(Object.keys(ped).sort().map((k) => k + '=' + String(ped[k] == null ? '' : ped[k]).trim()))
-const guardaNascimento = () => { nasceuAssim = fotoDoForm() }
+// O nascimento tambem zera a confirmacao da troca: formulario novo, medo novo.
+const guardaNascimento = () => { nasceuAssim = fotoDoForm(); confirmouOutro = false }
 function temConteudo() { return fotoDoForm() !== nasceuAssim || anexos.length > 0 }
-async function rascunhoSozinho() {
-  if (gravandoSozinho || pedSalvando || !pedTipo || !temConteudo()) return
-  gravandoSozinho = true
-  try {
-    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
-    const r = await window.swp.rascunhoSalvar(rascId || 0, (pedLead && pedLead.phone) || '', dados)
-    if (r && r.ok && Number(r.id)) rascId = Number(r.id)
-    await pegaRascunhos()
-    if (aba === 'pedidos') desenha()
-  } catch (_) { /* fica na tela do mesmo jeito; a proxima saida tenta de novo */ }
-  finally { gravandoSozinho = false }
+// DEVOLVE A GRAVACAO EM VOO EM VEZ DE DESISTIR (16/10/2026). Antes, `gravandoSozinho` fazia a
+// funcao VOLTAR NA HORA sem gravar nada se ja houvesse uma salvando. Pro pulso tanto faz, mas o
+// botao de trocar de cliente faz `await rascunhoSozinho()` e limpa a tela logo depois: cair nesse
+// desistir silencioso jogaria fora o que o vendedor digitou. Agora quem chega no meio ESPERA.
+let gravandoAgora = null
+function rascunhoSozinho() {
+  if (gravandoAgora) return gravandoAgora
+  if (pedSalvando || !pedTipo || !temConteudo()) return Promise.resolve(false)
+  gravandoAgora = (async () => {
+    try {
+      const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
+      // O id vai como esta: vazio significa "ainda nao existe", e quem cunha e o servidor.
+      const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || '', dados)
+      if (r && r.ok && r.id) rascId = String(r.id)
+      await pegaRascunhos()
+      if (aba === 'pedidos') desenha()
+      return !!(r && r.ok)
+    } catch (_) { return false }   // fica na tela do mesmo jeito; a proxima saida tenta de novo
+    finally { gravandoAgora = null }
+  })()
+  return gravandoAgora
 }
 
 async function salvaRascunho() {
@@ -922,18 +944,36 @@ async function salvaRascunho() {
     // O tipo e os anexos viajam DENTRO do rascunho: sem eles, reabrir cairia no passo do tipo com os
     // campos preenchidos e o comprovante perdido.
     const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
-    const r = await window.swp.rascunhoSalvar(rascId || 0, (pedLead && pedLead.phone) || estadoWa.phone || '', dados)
-    if (r && r.ok) { rascId = Number(r.id) || rascId; pedFeito = 'Rascunho guardado.' }
+    const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || estadoWa.phone || '', dados)
+    // RECUSA DO SERVIDOR TAMBEM E ERRO. O `catch` so pega exceção; um `ok:false` passava calado e o
+    // vendedor clicava em Rascunho sem ver confirmação NEM erro. Foi assim que o rascunho ficou
+    // quebrado sem ninguém perceber.
+    if (r && r.ok) { rascId = String(r.id || rascId); pedFeito = 'Rascunho guardado.' }
+    else pedErros = [humano((r && r.erro) || 'não deu pra guardar o rascunho')]
     await pegaRascunhos()
   } catch (_) {
     pedErros = ['Não deu pra guardar o rascunho agora. O que você digitou continua na tela.']
   } finally { pedSalvando = ''; desenha() }
 }
 
+// CADASTRAR COM A CONVERSA TROCADA PEDE CONFIRMACAO (16/10/2026). O que ele pediu foi destaque
+// "pra que o meu vendedor nao confunda e acabe subindo um pedido pra um cliente que ja saiu". A
+// faixa ambar e o botao de trocar avisam; esta trava e a ultima, e ela custa um clique so no caso
+// em que o pedido REALMENTE e do cliente de antes (que e legitimo e acontece o tempo todo).
+let confirmouOutro = false
 async function cadastraPedido() {
   if (pedSalvando) return
   const faltam = confere(ped)
   if (faltam.length) { pedErros = faltam; pedFeito = ''; desenha(); return }
+  const outro = pedLead && estadoWa.phone && estadoWa.phone !== pedLead.phone
+  if (outro && !confirmouOutro) {
+    confirmouOutro = true
+    pedErros = ['Este pedido é de ' + (pedLead.nome || formata(pedLead.phone) || 'outro cliente')
+      + ', não de quem está na tela. Clique em Cadastrar de novo para confirmar, ou use o botão de trocar.']
+    pedFeito = ''
+    desenha()
+    return
+  }
   pedSalvando = 'cadastro'; pedErros = []; pedFeito = ''; desenha()
   try {
     const r = await window.swp.pedidoNovo(montaPedido(ped))
@@ -942,7 +982,15 @@ async function cadastraPedido() {
       // faria o vendedor achar que criou dois.
       pedFeito = r.ja ? 'Esse pedido já estava cadastrado.' : 'Pedido cadastrado. Está em Aceitações.'
       if (rascId) { try { await window.swp.rascunhoApagar(rascId) } catch (_) { /* some sozinho depois */ } }
-      ped = {}; rascId = 0; anexos = []; pedTipo = ''
+      // O DONO TAMBEM ZERA (16/10/2026, achado numa revisao adversarial). Sem `pedLead = null`, ele
+      // continuava apontando pro cliente que ACABOU de ser cadastrado, e o `preenchePed()` logo
+      // abaixo reenchia `wa` e `nome` com os dados DELE. O vendedor ia pro cliente seguinte,
+      // escolhia o tipo de pagamento (o que troca o pedLead pro novo) e o formulario seguia com o
+      // TELEFONE E O NOME DO ANTERIOR - sem aviso nenhum, porque o "a conversa mudou" compara com o
+      // pedLead, que ja era o novo. Era exatamente o que ele descreveu temer: "subir um pedido pra
+      // um cliente que ja saiu". `preenchePed` so escreve em campo vazio, entao o `ped = {}` sozinho
+      // nao resolvia: o dono tinha que cair junto.
+      ped = {}; rascId = ''; anexos = []; pedTipo = ''; pedLead = null
       preenchePed()
       guardaNascimento()
       await pegaRascunhos()
@@ -957,6 +1005,42 @@ async function cadastraPedido() {
 // O que já se sabe do cliente entra sozinho: o número vem da conversa aberta e o nome vem do que o
 // WhatsApp mostra. É a prévia dos dados do cliente que o Bruno pediu.
 let fonePreenchido = ''
+// TROCAR O PEDIDO PRO CLIENTE DA CONVERSA DE AGORA (16/10/2026, pedido do Bruno).
+//
+// O congelamento do dono continua valendo e e ele que protege o pedido; o que faltava era a SAIDA
+// pra quando a troca foi de proposito. Palavras dele: "eu gostaria que tivesse um botaozinho ali,
+// tipo Trocar para novo cliente, pra atualizar, e isso ficasse um pouco mais destacado, pra que o
+// meu vendedor nao confunda e acabe subindo um pedido pra um cliente que ja saiu".
+//
+// TRES CUIDADOS, nesta ordem:
+// 1. O que ja foi digitado pro cliente ANTIGO vira rascunho DELE antes de qualquer coisa. O botao
+//    nao pode ser um jeito de perder dez minutos de digitacao por um clique.
+// 2. O alvo e lido NA HORA (window.swp.estado()), nao do ultimo pulso de 1,5s - a mesma correcao
+//    que a fila de disparos levou hoje, e pela mesma razao: ele clica no lead e age em seguida.
+// 3. O formulario nasce LIMPO pro novo cliente, guardando so o tipo de pagamento. CPF, endereco,
+//    tratamento e valor sao daquela pessoa; levar junto seria trocar um pedido errado por outro.
+async function trocaDeLead() {
+  if (pedSalvando || trocandoLead) return
+  trocandoLead = true
+  try {
+    const tinha = temConteudo()
+    // Grava com o pedLead ANTIGO ainda de pe: e o dono certo do que esta na tela agora.
+    if (tinha) await rascunhoSozinho()
+    let e = null
+    try { e = await window.swp.estado() } catch (_) { /* vale o ultimo pulso */ }
+    const at = (e && e.chatId) ? e : estadoWa
+    if (e) estadoWa = e
+    if (!at.phone) { rodape('abra a conversa do cliente primeiro'); return }
+    pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: at.nome || '' }
+    ped = {}; anexos = []; rascId = ''; pedErros = []
+    preenchePed()
+    guardaNascimento()
+    pedFeito = tinha ? 'O pedido anterior ficou guardado em rascunho.' : ''
+    await pegaRascunhos()
+    desenha()
+  } finally { trocandoLead = false }
+}
+
 function preenchePed() {
   const de = pedLead || estadoWa
   const fone = de.phone || ''

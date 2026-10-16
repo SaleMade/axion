@@ -3,6 +3,7 @@
 const { contextBridge } = require('electron')
 
 const chamadas = []
+let rascSeq = 0
 const reg = (nome, valor) => (...args) => { chamadas.push({ nome, args }); return Promise.resolve(valor) }
 
 const ESTADO = {
@@ -43,7 +44,20 @@ contextBridge.exposeInMainWorld('swp', {
   rascunhos: reg('rascunhos', { ok: true, rascunhos: [
     { id: 7, phone: '5519995983293', dados: { nome: 'Maria Teste', trat: 'Produto A - 2 Meses', vl: '297,00', cidade: 'Campinas' }, criado: 1, mexido: 2 },
   ] }),
-  rascunhoSalvar: reg('rascunhoSalvar', { ok: true, id: 7 }),
+  // RESPONDE COMO O WORKER DE VERDADE, nao com ok pra tudo (16/10/2026).
+  //
+  // O preload antigo devolvia `{ok:true, id:7}` pra QUALQUER chamada, e foi isso que escondeu um
+  // defeito real por semanas: o worker recusava id vazio com "Falta o id do rascunho", entao
+  // rascunho NOVO nunca gravava na producao, e a bateria passava feliz. Medido depois, direto na
+  // API: a tabela estava vazia, zero linhas.
+  //
+  // Agora o id novo nasce no servidor, como la, e o teste pode provar que o painel GUARDA o id
+  // devolvido - sem isso, cada gravacao criaria uma linha nova.
+  rascunhoSalvar: (id, phone, dados) => {
+    chamadas.push({ nome: 'rascunhoSalvar', args: [id, phone, dados] })
+    if (!id) { rascSeq += 1; return Promise.resolve({ ok: true, id: '99000' + rascSeq }) }
+    return Promise.resolve({ ok: true, id: String(id) })
+  },
   rascunhoApagar: reg('rascunhoApagar', { ok: true }),
   fechar: reg('fechar', { ok: true }),
   recarregar: reg('recarregar', { ok: true }),

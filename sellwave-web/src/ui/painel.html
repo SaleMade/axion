@@ -280,11 +280,26 @@
   .lista-op::-webkit-scrollbar-thumb { background: #6a7282; border-radius: 4px; border: 1px solid transparent; background-clip: padding-box; }
 
   /* de quem e o pedido, congelado desde que o formulario abriu */
-  .dono-ped { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; padding: 8px 10px;
-    border-radius: 10px; background: rgba(0, 168, 132, .08); border: 1px solid rgba(0, 168, 132, .22); }
-  .dono-ped svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--verde); }
+  .dono-ped { display: flex; flex-direction: column; align-items: stretch; gap: 7px; margin-bottom: 9px;
+    padding: 8px 10px; border-radius: 10px; background: rgba(0, 168, 132, .08); border: 1px solid rgba(0, 168, 132, .22); }
+  .dono-ped .l { display: flex; align-items: center; gap: 7px; }
+  .dono-ped .l svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--verde); }
   .dono-ped .q { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dono-ped .a { font-size: 10px; color: var(--ambar); font-weight: 700; }
+  /* CONVERSA TROCADA COM O PEDIDO ABERTO (16/10/2026, pedido do Bruno). Era so um rotulo de 10px no
+     canto, e a consequencia de nao ver e cadastrar pedido pro cliente errado: ele pediu que ficasse
+     "um pouco mais destacado, pra que o meu vendedor nao confunda e acabe subindo um pedido pra um
+     cliente que ja saiu". Entao o bloco inteiro vira ambar e ganha SAIDA, que e o que faltava:
+     avisar sem oferecer o que fazer so deixa o vendedor parado. */
+  .dono-ped.trocou { background: rgba(255, 185, 0, .1); border-color: rgba(255, 185, 0, .38); }
+  .dono-ped.trocou .l svg { color: var(--ambar); }
+  .bt-troca { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
+    height: 32px; padding: 0 10px; border-radius: 9px; background: var(--ambar); color: #2a1d00;
+    font-size: 12px; font-weight: 700; transition: background-color .15s; }
+  .bt-troca:hover { background: #ffc933; }
+  .bt-troca:disabled { opacity: .5; cursor: default; }
+  .bt-troca svg { width: 13px; height: 13px; flex-shrink: 0; color: inherit; }
+  .bt-troca span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .form input:focus, .form select:focus, .form textarea:focus {
     border-color: rgba(153, 161, 175, .6); box-shadow: 0 0 0 3px rgba(0, 168, 132, .15); }
   .form input::placeholder, .form textarea::placeholder { color: rgba(134, 150, 160, .55); }
