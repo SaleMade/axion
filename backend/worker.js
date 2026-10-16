@@ -4274,7 +4274,10 @@ async function handleAfiliadoPedidos(req, env) {
     const nomePorAfl = {}, pctPorAfl = {};
     for (const a of rAfl) { nomePorAfl[a.affiliate_id] = a.name; pctPorAfl[a.affiliate_id] = Number(a.pct) || 0; }
     const ids = [...metaPorOrder.keys()];
-    const ph = ids.map(() => '?').join(',');
+    // A LISTA VAI NUM PARAMETRO SO (16/10/2026, o Bruno viu SQLITE_ERROR na aba Time do app). Era um '?'
+    // por pedido, e o D1 aceita no maximo 100 parametros por consulta: com 105 pedidos de afiliado a
+    // consulta morria com 'too many SQL variables' e a area inteira de afiliados ficava fora. O json_each
+    // desdobra a lista dentro do banco e continua usando a chave de five_orders, entao nao tem teto.
     // charge_paid_ts e charge_updated_at entraram em 22/09/2026, pro filtro de periodo do aplicativo.
     // Em COD o pedido nasce num mes e paga 1-2 semanas depois: sem a data do PAGAMENTO, quem filtra
     // "hoje" so consegue perguntar "dos pedidos criados hoje, quantos pagaram" - que num dia com 11
@@ -4285,7 +4288,7 @@ async function handleAfiliadoPedidos(req, env) {
       ' charge_paid_ts, charge_updated_at,' +
       ' shipping_status, shipping_code, shipping_core_id, shipping_platform, last_status,' +
       ' created_at, updated_at, devolucao_id' +
-      ' FROM five_orders WHERE order_id IN (' + ph + ') ORDER BY created_at DESC').bind(...ids).all()).results) || [];
+      ' FROM five_orders WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC').bind(JSON.stringify(ids)).all()).results) || [];
     const pedidos = rows.map((o) => {
       const meta = metaPorOrder.get(String(o.order_id)) || {};
       const afl = meta.afl || null;
