@@ -34,7 +34,6 @@ let favoritos = {}
 let fechadas = {}            // seções recolhidas, por tipo
 let aberto = ''              // prévia aberta: 'item:<id>' ou 'funil:<id>'
 let ocupado = false
-let disparando = ''
 let pararPedido = false
 let ultimoFone = ''
 let alvoFone = ''        // de quem e o disparo em andamento (o painel e um so pra todos os numeros)
@@ -48,7 +47,7 @@ let estadoWa = { motor: false, autenticado: false, envia: false, chatId: '', pho
 // O QUE ESTA SAINDO NOS NUMEROS ABERTOS (a "pilha de disparos" que o Bruno perguntou se ja existia;
 // nao existia). Hoje da 0 ou 1 porque o painel roda UM funil por vez no app inteiro - a trava
 // `ocupado`. Fica como lista de proposito: no dia em que o disparo for por numero, a tela ja serve.
-let saindo = []
+
 
 try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
 const guardaFavs = () => { try { localStorage.setItem('sw_favs', JSON.stringify(favoritos)) } catch { /* sem armazenamento o favorito vale só nesta sessão */ } }
@@ -83,43 +82,58 @@ function porGrupo(lista) {
   return { ordem, g }
 }
 
-const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
+// ENVIAR NAO DEPENDE MAIS DE ESTAR LIVRE. Com fila, clicar durante um disparo e o caminho normal:
+// o segundo entra atras do primeiro. Antes isso deixava todos os botoes cinzas e parecia travado.
+const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId)
 
 // ───────────────────────────────────────────────────────────── desenho
 
-async function pegaDisparos() {
-  if (window.__swFoto) return          // idem: a faixa "saindo agora" da foto e montada pelo exemplo
-  try {
-    const r = await window.swp.disparos()
-    saindo = (r && r.ok && Array.isArray(r.itens)) ? r.itens : []
-  } catch (_) { saindo = [] }
-  if (aba === 'funis') desenha()
-}
-
-// A faixa do topo da aba Funis. O vendedor que trocou de numero no meio de um funil ve AQUI que ele
-// continua saindo, e por qual numero: antes a unica pista era o rodape, que fala do numero da tela.
+// A PILHA SAI DA FILA, nao de uma leitura do processo principal. O painel e um so pra todos os
+// numeros, entao a fila daqui JA E tudo que esta saindo - e ela muda na hora, sem esperar aviso.
+// O desenho e o do PilhaEnvios do chat.jsx no modo integrado, que e o que ele ja le no inbox.
 function desenhaSaindo() {
-  if (!saindo.length) return ''
-  // A contagem do cabecalho e o texto do inbox, no singular e no plural.
-  const n = saindo.length
+  if (!fila.length) return ''
+  const rodando = fila.filter((j) => j.rodando).length
+  const n = fila.length
   let h = '<div class="saindo">'
-    + '<div class="cab"><span class="roda"></span>'
-    + '<span class="t">Enviando funil' + (n > 1 ? 's' : '') + ' · ' + n + '</span></div>'
-  // MOSTRAR O DONO so quando ha mais de um, como no inbox: com um envio so, repetir de quem e o
-  // numero em toda linha e ruido.
-  const donos = new Set(saindo.map((d) => String(d.dono || '')))
-  for (const d of saindo) {
-    const total = Number(d.total) || 0
-    const passo = Math.max(1, Math.min(total || 1, Number(d.passo) || 1))
-    h += '<div class="item-env"><span class="roda"></span><div class="txt">'
-      + '<div class="l1"><span class="rot">Funil:</span> ' + esc(d.funil || 'sem nome')
-      + (d.alvo ? '<span class="para"> &rarr; ' + esc(formata(d.alvo)) + '</span>' : '') + '</div>'
-      + (donos.size > 1 && d.dono ? '<div class="dono">' + esc(d.dono) + '</div>' : '')
-      + '<div class="l2">' + (total ? 'Enviando passo ' + passo + ' de ' + total : 'Enviando')
-      + (d.numero ? ' · ' + esc(formata(d.numero)) : '') + '</div>'
-      + '</div></div>'
+    + '<div class="cab">' + (rodando ? '<span class="roda"></span>' : '<span class="pt-fila"></span>')
+    + '<span class="t">Enviando ' + (n > 1 ? 'funis' : 'funil') + ' · ' + n + '</span></div>'
+  for (const j of fila) {
+    const total = j.lista.length
+    const passo = Math.max(1, Math.min(total, j.passo || 1))
+    h += '<div class="item-env">'
+      + (j.rodando ? '<span class="roda"></span>' : '<span class="pt-fila"></span>')
+      + '<div class="txt">'
+      + '<div class="l1"><span class="rot">Funil:</span> ' + esc(j.rotulo)
+      + (j.nome || j.fone ? '<span class="para"> &rarr; ' + esc(j.nome || formata(j.fone)) + '</span>' : '') + '</div>'
+      + '<div class="l2">' + (j.rodando
+        ? 'Enviando passo ' + passo + ' de ' + total
+        : 'Na fila · próximo: passo 1 de ' + total) + '</div>'
+      + '</div>'
+      // TIRAR DA FILA: no que esta rodando, para; no que espera, some sem enviar. Sem isto, mandar
+      // um funil pro lead errado so se desfazia esperando ele sair inteiro.
+      + '<button class="x" data-tirafila="' + j.id + '" title="' + (j.rodando ? 'Parar este' : 'Tirar da fila') + '">' + IC_X + '</button>'
+      + '</div>'
   }
   return h + '</div>'
+}
+
+// O x da faixa existe nas duas abas que a desenham, entao o clique mora numa funcao so.
+function ligaFaixa(corpo) {
+  for (const b of corpo.querySelectorAll('[data-tirafila]')) {
+    b.onclick = () => {
+      const id = Number(b.dataset.tirafila)
+      const j = fila.find((x) => x.id === id)
+      if (!j) return
+      if (j.rodando) {
+        pararPedido = true
+        try { window.swp.parar(j.nk, true) } catch (_) { /* o laco para do mesmo jeito */ }
+      } else {
+        fila = fila.filter((x) => x.id !== id)
+        desenha()
+      }
+    }
+  }
 }
 
 function desenhaChips() {
@@ -152,12 +166,20 @@ function desenha() {
   // Esta e a mesma regra do inbox, e ela foi escrita la depois de um erro igual: contar tudo fazia
   // "5 funis cadastrados" virar um 5 verde na aba, e o vendedor lia como 5 disparos acontecendo.
   // Aqui so roda um funil por vez (um painel por numero), entao o selo e 1 ou nada.
-  const saindo = disparando && (roteiro.sequences || []).some((s) => s.id === disparando)
+  // O SELO CONTA QUANTOS FUNIS ESTAO NA FILA, nao o tamanho do catalogo (a mesma regra do inbox,
+  // escrita la depois do mesmo erro: "5 funis cadastrados" virava um 5 verde e o vendedor lia como
+  // 5 disparos acontecendo). Agora pode ser mais de 1 de verdade, porque existe fila.
+  const nFunis = fila.filter((j) => (roteiro.sequences || []).some((x) => x.id === j.marca)).length
   const selo = $('selo-funis')
-  selo.hidden = !saindo
-  selo.textContent = '1'
+  selo.hidden = !nFunis
+  selo.textContent = String(nFunis)
 
-  if (aba === 'funis') { corpo.innerHTML = desenhaSaindo() + desenhaFunis(); ligaFunis(corpo); return }
+  if (aba === 'funis') {
+    corpo.innerHTML = desenhaSaindo() + desenhaFunis()
+    ligaFunis(corpo)
+    ligaFaixa(corpo)
+    return
+  }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); return }
 
   const itens = visiveis()
@@ -247,7 +269,7 @@ function cartaoItem(x, k) {
     + '<button class="item-lbl" data-abre="item:' + esc(x.id) + '">' + esc(x.label) + '</button>'
     + '<button class="estrela' + (fav ? ' on' : '') + '" data-fav="' + esc(x.id) + '" title="Favorito">' + IC_ESTRELA(fav) + '</button>'
     + '<button class="enviar" data-envia="' + esc(x.id) + '" title="Enviar"' + (podeEnviar() ? '' : ' disabled') + '>'
-    + (disparando === x.id ? IC_GIRA : IC_PLAY) + '</button>'
+    + (naFila(x.id) ? IC_GIRA : IC_PLAY) + '</button>'
     + '</div>' + prev + '</div>'
 }
 
@@ -285,7 +307,7 @@ function desenhaFunis() {
         + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id)
         + '<span class="passos">' + (s.items || []).length + ' passos</span></button>'
         + '<button class="enviar" data-funil="' + esc(s.id) + '" title="Disparar funil"' + (podeEnviar() ? '' : ' disabled') + '>'
-        + (disparando === s.id ? IC_GIRA : IC_PLAY) + '</button>'
+        + (naFila(s.id) ? IC_GIRA : IC_PLAY) + '</button>'
         + '</div>' + prev + '</div>'
     }
   })
@@ -781,6 +803,20 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tiraanexo]')) {
     b.onclick = () => { anexos = anexos.filter((a) => a.url !== b.dataset.tiraanexo); desenha() }
   }
+  for (const b of corpo.querySelectorAll('[data-tirafila]')) {
+    b.onclick = () => {
+      const id = Number(b.dataset.tirafila)
+      const j = fila.find((x) => x.id === id)
+      if (!j) return
+      if (j.rodando) {
+        pararPedido = true
+        try { window.swp.parar(j.nk, true) } catch (_) { /* o laco para do mesmo jeito */ }
+      } else {
+        fila = fila.filter((x) => x.id !== id)
+        desenha()
+      }
+    }
+  }
   for (const b of corpo.querySelectorAll('[data-abrelista]')) {
     b.onclick = (ev) => {
       ev.stopPropagation()
@@ -963,13 +999,13 @@ function itemParaEnvio(id, pausa) {
   return null
 }
 
-async function disparaItem(id) {
+function disparaItem(id) {
   const it = itemParaEnvio(id)
   if (!it) { rodape('não achei esse item no roteiro'); return }
-  await roda([it], id, it.label || 'item avulso')
+  enfileira([it], id, it.label || 'item avulso')
 }
 
-async function disparaFunil(id) {
+function disparaFunil(id) {
   const s = (roteiro.sequences || []).find((x) => x.id === id)
   if (!s) return
   const lista = []
@@ -978,83 +1014,116 @@ async function disparaFunil(id) {
     if (it) lista.push(it)
   }
   if (!lista.length) { rodape('funil sem passos'); return }
-  await roda(lista, id, s.label || s.nome || 'funil')
+  enfileira(lista, id, s.label || s.nome || 'funil')
 }
 
-async function roda(lista, marca, rotulo = '') {
-  if (ocupado) return
+// A FILA DE DISPAROS (16/10/2026, pedido do Bruno). Antes, disparar um funil TRAVAVA o painel: o
+// `ocupado` recusava qualquer outro clique ate o primeiro acabar. Palavras dele: "vamos supor que
+// eu dispare o funil da etapa 1 para tres leads diferentes, quero que seja mandado em formato de
+// pilha, para cada um daqueles clientes, UM DE CADA VEZ, respeitando o tempo de cada um dos
+// disparos. E o que esta funcionando hoje dentro do inbox, e e exatamente o que eu quero aqui".
+//
+// E ELE FOI EXPLICITO que um por vez e o certo, nao uma limitacao a remover: "nao atrapalha, e
+// inclusive o certo". Entao NAO e pra rodar funis em paralelo - e pra ENFILEIRAR. Isso simplifica
+// tudo: nada de `roda` reentrante, nada de trava por numero. Uma fila, um consumidor.
+//
+// Cada job carrega o alvo CONGELADO do clique. Trocar de conversa pra disparar o proximo nao mexe
+// no que ja esta na fila: quem entrou pro Fulano continua indo pro Fulano.
+let fila = []
+let jobSeq = 0
+let consumindo = false
+
+const naFila = (marca) => fila.some((j) => j.marca === marca)
+
+function enfileira(lista, marca, rotulo) {
   if (!estadoWa.chatId) { rodape('abra uma conversa primeiro'); return }
   if (!estadoWa.envia) { rodape('o motor do WhatsApp não está pronto'); return }
+  fila.push({
+    id: ++jobSeq,
+    marca,
+    rotulo: rotulo || 'funil',
+    lista,
+    alvo: estadoWa.chatId,
+    nk: estadoWa.nk || '',
+    nome: estadoWa.nome || '',
+    fone: estadoWa.phone || '',
+    passo: 0,
+    rodando: false,
+  })
+  if (fila.length > 1) rodape(fila.length - 1 + (fila.length === 2 ? ' na fila' : ' na fila'))
+  desenha()
+  consome()
+}
 
-  // TRAVA O ALVO NO CLIQUE. Se o vendedor trocar de conversa no meio do funil, o resto tem que ir
-  // pra quem ele mandou, não pra quem está na tela agora.
-  const alvo = estadoWa.chatId
-  const alvoNk = estadoWa.nk || ''
-  // DE QUEM E O DISPARO. O painel e um so pra todos os numeros: sem carimbar, o vendedor trocava
-  // de numero no meio do funil, via o lead NOVO no topo, o rodape dizendo "enviando 3 de 5" e todos
-  // os botoes cinzas - e lia como "estou disparando pro numero errado e travou".
-  alvoFone = estadoWa.phone ? formata(estadoWa.phone) : ''
-  alvoNome = estadoWa.nome || ''
-  alvoNkAtual = alvoNk
+async function consome() {
+  if (consumindo) return
+  consumindo = true
+  while (fila.length) {
+    const job = fila[0]
+    job.rodando = true
+    pararPedido = false
+    desenha()
+    await rodaJob(job)
+    // SAI DA FILA DEPOIS DE RODAR, nunca antes: enquanto ele esta na posicao 0 e `rodando`, a pilha
+    // mostra ele como o que esta saindo agora. Tirar antes faria sumir da tela no meio do envio.
+    fila = fila.filter((j) => j.id !== job.id)
+    desenha()
+  }
+  consumindo = false
+  ocupado = false
+  alvoNkAtual = ''
+  setTimeout(() => { if (!fila.length) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
+}
+
+async function rodaJob(job) {
+  const lista = job.lista
+  alvoFone = job.fone ? formata(job.fone) : ''
+  alvoNome = job.nome || ''
+  alvoNkAtual = job.nk
   ocupado = true
-  disparando = marca
-  pararPedido = false
-  // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil. E o MESMO
-  // aviso alimenta a faixa "saindo agora": sem mandar o rotulo, o passo e o alvo, o registro do
-  // processo principal fica com o padrao e a faixa diz literalmente "funil" no lugar do nome.
+  // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil. O mesmo aviso
+  // carimba o que esta saindo, pra quem olhar o processo principal ver nome e passo e nao o padrao.
   const avisa = (passo) => {
-    try { window.swp.disparo(alvoNk, true, { funil: rotulo, passo, total: lista.length, alvo: estadoWa.phone || '', inicio: Date.now() }) }
-    catch (_) { /* a faixa some, o disparo continua */ }
+    try { window.swp.disparo(job.nk, true, { funil: job.rotulo, passo, total: lista.length, alvo: job.fone, inicio: Date.now() }) }
+    catch (_) { /* o disparo continua */ }
   }
   avisa(0)
-  // Zera a bandeirinha de parar da pagina: um Parar de um funil anterior cancelaria o primeiro item
+  // Zera a bandeirinha de parar da pagina: um Parar do job anterior cancelaria o primeiro item
   // deste sem ninguem entender por que.
-  try { window.swp.parar(alvoNk, false) } catch (_) { /* ok */ }
-  desenha()
+  try { window.swp.parar(job.nk, false) } catch (_) { /* ok */ }
   $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
 
   for (let i = 0; i < lista.length; i++) {
     if (pararPedido) { rodape('parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
     const it = lista[i]
     const de = lista.length > 1 ? ' ' + (i + 1) + ' de ' + lista.length : ''
+    job.passo = i + 1
     avisa(i + 1)
+    desenha()
     const pct = lista.length > 1 ? (i + 1) / lista.length : null
-    // A PAUSA ACONTECE AQUI, com o "digitando..." ligado na conversa, e EM FATIAS: assim o botao
-    // Parar responde no meio de uma pausa longa em vez de so depois do item.
-    //
-    // O TETO DE 120 SEGUNDOS e o mesmo do _dorme no worker. Um passo com pausa absurda (dedo
-    // escorregado no cadastro) travava o funil sem nada na tela explicando o que estava havendo.
-    // A PAUSA NAO ACONTECE MAIS AQUI (16/10/2026). Ela vive DENTRO da pagina, grudada no envio,
-    // porque la ela e uma cadeia so: indicador, espera e envio na mesma promessa, do jeito que o
-    // sc-panel faz ha meses. Antes eram tres saltos entre processos, e cada salto e uma chance de a
-    // barra de escrever estar em outro estado na hora do envio.
-    //
-    // ESPERAR TAMBEM AQUI SOMARIA: passo de 8s viraria 16s. E a terceira vez que essa soma aparece
-    // hoje, por tres caminhos diferentes, e por isso existe um teste amarrando que o painel NAO
-    // espera. Quem conta o tempo e a pagina; aqui so se diz o que esta acontecendo.
+    // A PAUSA NAO ACONTECE AQUI. Ela vive DENTRO da pagina, grudada no envio, porque la e uma
+    // cadeia so: indicador, espera e envio na mesma promessa, do jeito que o sc-panel faz ha meses.
+    // Esperar dos dois lados SOMA - passo de 8s vira 16s -, e essa soma ja voltou tres vezes por
+    // caminhos diferentes. Ha um teste cronometrando o primeiro envio por causa disso.
     const pausa = Math.min(120, Math.max(0, Number(it.pausa) || 0))
     if (pausa > 0) rodape(((it.kind === 'audio') ? 'gravando' : 'digitando') + de + paraQuem(), pct)
     else rodape((lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem() + (lista.length > 1 ? '' : '...'), pct)
-    const r = await window.swp.manda(alvoNk, alvo, it)
+    const r = await window.swp.manda(job.nk, job.alvo, it)
     if (!r || !r.ok) {
-      ocupado = false; disparando = ''; alvoNkAtual = ''; $('parar').style.display = 'none'
-      try { window.swp.disparo(alvoNk, false) } catch (_) { /* ok */ }
+      try { window.swp.disparo(job.nk, false) } catch (_) { /* ok */ }
+      $('parar').style.display = 'none'
       const feitos = i
-      rodape(lista.length > 1
-        ? 'parou no item ' + (i + 1) + ' de ' + lista.length + (feitos ? ', os ' + feitos + ' primeiros já foram' : '') + ': ' + humano((r && r.erro) || 'sem resposta')
-        : 'não enviou: ' + humano((r && r.erro) || 'sem resposta'), null, true)
-      desenha()
+      // O ERRO FICA NA TELA e a fila SEGUE. Parar a fila inteira porque um lead deu erro faria o
+      // vendedor perder os outros disparos que ele ja tinha mandado enfileirar.
+      rodape((lista.length > 1
+        ? 'parou no item ' + (i + 1) + ' de ' + lista.length + (feitos ? ', os ' + feitos + ' primeiros já foram' : '')
+        : 'não enviou') + (job.nome ? ' para ' + job.nome : '') + ': ' + humano((r && r.erro) || 'sem resposta'), null, true)
       return
     }
   }
-  ocupado = false
-  disparando = ''
-  alvoNkAtual = ''
-  try { window.swp.disparo(alvoNk, false) } catch (_) { /* ok */ }
+  try { window.swp.disparo(job.nk, false) } catch (_) { /* ok */ }
   $('parar').style.display = 'none'
-  if (!pararPedido) rodape('enviado' + (alvoNome || alvoFone ? ' para ' + (alvoNome || alvoFone) : ''))
-  desenha()
-  setTimeout(() => { if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
+  if (!pararPedido) rodape('enviado' + (job.nome || alvoFone ? ' para ' + (job.nome || alvoFone) : ''))
 }
 
 // O PARAR AGORA TEM DOIS LADOS: a bandeirinha que a espera DENTRO da pagina confere a cada 400ms,
@@ -1221,8 +1290,7 @@ pegaRoteiro().then(desenha)
 pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
 // O processo principal AVISA quando um disparo comeca ou termina, entao a tela nao precisa ficar
 // perguntando. A leitura de boot existe pro caso de o painel abrir com um funil ja rodando.
-pegaDisparos()
-if (window.swp.aoMudarDisparos) window.swp.aoMudarDisparos(() => { pegaDisparos() })
+
 
 // O apelido existe pro MODO FOTO congelar a tela: sem isso o pulso sobrescreve o exemplo
 // 1,5 s depois e a foto sai sempre com o estado vazio.

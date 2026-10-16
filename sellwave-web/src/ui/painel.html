@@ -346,6 +346,14 @@
   .saindo .l1 .para { color: var(--apagado); font-weight: 400; }
   .saindo .l2 { margin-top: 1px; font-size: 11px; color: var(--apagado);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* QUEM ESPERA A VEZ fica com o ponto PARADO, e quem anda com a rodinha girando: e assim que se
+     separa de longe quem esta saindo de quem esta na fila. Mesma regra do inbox. */
+  .pt-fila { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: rgba(134, 150, 160, .45); }
+  .saindo .cab .pt-fila { background: rgba(255, 255, 255, .65); }
+  .saindo .item-env .x { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0;
+    border-radius: 7px; color: rgba(134, 150, 160, .55); }
+  .saindo .item-env .x:hover { background: rgba(240, 80, 106, .16); color: #f0506a; }
+  .saindo .item-env .x svg { width: 13px; height: 13px; }
   .saindo .dono { margin-top: 1px; font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: .04em; color: rgba(134, 150, 160, .7); }
 

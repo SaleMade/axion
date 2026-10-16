@@ -218,34 +218,31 @@ app.whenReady().then(async () => {
   conta('o rascunho guarda o TIPO junto, senao reabrir perde o passo', ult[2] && ult[2].__tipo === 'entrega', String(ult[2] && ult[2].__tipo))
   conta('o rascunho guarda de quem e o pedido', !!(ult[2] && ult[2].__lead && ult[2].__lead.phone), JSON.stringify(ult[2] && ult[2].__lead))
 
-  // ── a pilha de disparos ────────────────────────────────────────────────────────────────────
+  // ── A FILA: dois disparos para leads diferentes, um atras do outro ─────────────────────────
   await clica('[data-aba=funis]')
   await espera(250)
-  const pil = await js('({ tem: !!document.querySelector(".saindo"), cab: (document.querySelector(".saindo .cab .t")||{}).textContent || "", l1: (document.querySelector(".saindo .l1")||{}).textContent || "", l2: (document.querySelector(".saindo .l2")||{}).textContent || "", roda: document.querySelectorAll(".saindo .roda").length, cor: getComputedStyle(document.querySelector(".saindo .cab")).backgroundColor })')
-  conta('a pilha existe e conta como no inbox', pil.tem === true && /Enviando funil · 1/.test(pil.cab), JSON.stringify(pil.cab))
-  conta('o cabecalho e verde solido, como o do inbox', pil.cor === 'rgb(16, 185, 129)', pil.cor)
-  conta('a linha diz "Funil: nome -> quem"', /Funil:\s*Boas-vindas/.test(pil.l1) && /99598-3293/.test(pil.l1), pil.l1)
-  conta('mostra em que passo esta', /Enviando passo 2 de 5/.test(pil.l2), pil.l2)
-  conta('mostra por qual numero esta saindo', /97401-5754/.test(pil.l2), pil.l2)
-  conta('tem a rodinha girando no cabecalho e na linha', pil.roda === 2, String(pil.roda))
-
-  // ── O PAINEL NAO ESPERA A PAUSA: quem espera e a pagina ────────────────────────────────────
-  // A soma de pausa ja voltou TRES vezes hoje, por tres caminhos diferentes (o painel dormindo e o
-  // agente dormindo; o retorno do indicador so vindo no fim; e agora a pagina esperando junto com o
-  // painel). Com um passo de 3s, se o painel esperasse, o primeiro envio sairia depois de 3s.
-  await clica('[data-aba=funis]')
-  await espera(250)
-  const t0 = Date.now()
   await clica('[data-funil=s1]')
-  await espera(900)
-  const envios = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "manda").map(c => c.t))'))
-  conta('o painel NAO espera a pausa: ela acontece dentro da pagina',
-    envios.length >= 1 && (envios[0] - t0) < 900, 'primeiro envio em ' + (envios.length ? (envios[0] - t0) + 'ms' : 'nenhum'))
-  const itemMandado = JSON.parse(await js('JSON.stringify(((window.__ver()).find(c => c.nome === "manda") || {}).args || [])'))
-  conta('e a pausa do passo viaja junto com o item, pra pagina esperar', (itemMandado[2] || {}).pausa === 3, JSON.stringify((itemMandado[2] || {}).pausa))
-  const zerou = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "parar").map(c => c.args[1]))'))
-  conta('o funil zera a bandeirinha de parar antes de comecar', zerou[0] === false, JSON.stringify(zerou))
-  await espera(900)
+  await espera(250)
+  // troca de conversa e dispara de novo: o segundo tem que ENTRAR NA FILA, nao ser recusado
+  await js('(() => { window.__trocaConversa("5562961529830", "Segundo Cliente") })()')
+  await espera(1800)
+  await clica('[data-funil=s1]')
+  await espera(300)
+  const pil = await js('({ cab: (document.querySelector(".saindo .cab .t")||{}).textContent || "", linhas: document.querySelectorAll(".saindo .item-env").length, l1: [...document.querySelectorAll(".saindo .l1")].map(e => e.textContent.trim()), l2: [...document.querySelectorAll(".saindo .l2")].map(e => e.textContent.trim()), rodando: document.querySelectorAll(".saindo .item-env .roda").length, esperando: document.querySelectorAll(".saindo .item-env .pt-fila").length })')
+  conta('o segundo disparo ENTRA NA FILA em vez de ser recusado', pil.linhas === 2, JSON.stringify(pil.linhas))
+  conta('o cabecalho conta os dois, no plural certo', /Enviando funis · 2/.test(pil.cab), pil.cab)
+  conta('cada um guarda o SEU lead, congelado no clique',
+    (pil.l1[0] || '') !== (pil.l1[1] || '') && /Segundo Cliente/.test(pil.l1[1] || ''), JSON.stringify(pil.l1))
+  conta('um roda e o outro espera a vez', pil.rodando === 1 && pil.esperando === 1, JSON.stringify(pil))
+  conta('quem espera diz que esta na fila', /Na fila/.test(pil.l2[1] || ''), JSON.stringify(pil.l2))
+  const seloFunis = await js('({ txt: $("selo-funis").textContent, escondido: $("selo-funis").hidden })')
+  conta('o selo da aba conta os funis da fila', seloFunis.txt === '2' && seloFunis.escondido === false, JSON.stringify(seloFunis))
+
+  // tirar da fila quem ainda nao saiu
+  const tirou = await js('(() => { const bs = document.querySelectorAll(".saindo .item-env [data-tirafila]");'
+    + ' if (bs.length < 2) return -1; bs[bs.length - 1].click();'
+    + ' return document.querySelectorAll(".saindo .item-env").length })()')
+  conta('da pra tirar da fila quem ainda nao saiu', tirou === 1, String(tirou))
 
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'

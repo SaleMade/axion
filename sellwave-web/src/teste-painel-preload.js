@@ -19,7 +19,13 @@ contextBridge.exposeInMainWorld('swp', {
     media: [], mediaBase: '' }),
   lead: reg('lead', { ok: true, achou: true, nome: 'Cliente de Teste', cidade: 'Campinas', uf: 'SP', produto: 'Produto A - 3 Meses', etapa: 'A Enviar', pedidos: 1 }),
   estado: reg('estado', ESTADO),
-  manda: (nk, chatId, item) => { chamadas.push({ nome: 'manda', args: [nk, chatId, item], t: Date.now() }); return Promise.resolve({ ok: true }) },
+  // DEMORA DE PROPOSITO. Na vida real a pausa do passo acontece DENTRO desta chamada (a pagina
+  // espera antes de enviar), entao um `manda` instantaneo faria todo job acabar em milissegundos e
+  // a fila nunca teria dois ao mesmo tempo pro teste olhar.
+  manda: (nk, chatId, item) => {
+    chamadas.push({ nome: 'manda', args: [nk, chatId, item], t: Date.now() })
+    return new Promise((r) => setTimeout(() => r({ ok: true }), 1200))
+  },
   parar: (nk, parar) => { chamadas.push({ nome: 'parar', args: [nk, parar] }); return Promise.resolve({ ok: true }) },
   indica: reg('indica', { ok: true }),
   disparo: reg('disparo', { ok: true }),

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "teste": "node src/teste-funcoes.mjs",
-    "teste-painel": "electron src/teste-painel.js",
+    "teste-painel": "node --check src/teste-painel.js && node --check src/teste-painel-preload.js && node --check src/teste-casca-preload.js && electron src/teste-painel.js",
     "confere-pacote": "node src/confere-pacote.cjs dist-pub/win-unpacked/resources/app.asar",
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64"
