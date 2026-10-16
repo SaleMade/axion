@@ -452,9 +452,14 @@ function janelaAjustes() {
   if (estado.direcao && vends.length) {
     html += '<div class="chave"><div class="txt"><b>Ver como vendedor</b>'
       + '<span>A tela fica igualzinha à dele: só os números dele, sem nada de proxy. Leitura apenas.</span></div>'
-      + '<select id="como" class="escolha"><option value="">Eu mesmo</option>'
-      + vends.map((v) => '<option value="' + esc(v.id) + '">' + esc(v.nome) + '</option>').join('')
-      + '</select></div>'
+      + '<div class="escolha" id="como">'
+      + '<button type="button" id="como-bt"><span class="v">'
+      + esc((vends.find((v) => v.id === estado.como) || {}).nome || 'Eu mesmo') + '</span>'
+      + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>'
+      + '</button><div class="ops">'
+      + '<button type="button" data-como="" class="' + (estado.como ? '' : 'on') + '">Eu mesmo</button>'
+      + vends.map((v) => '<button type="button" data-como="' + esc(v.id) + '" class="' + (estado.como === v.id ? 'on' : '') + '">' + esc(v.nome) + '</button>').join('')
+      + '</div></div></div>'
   }
   if (estado.como) {
     html += '<div class="chave"><div class="txt"><b>Você está vendo como outra pessoa</b>'
@@ -504,8 +509,16 @@ function janelaAjustes() {
   }
   const sel = $('como')
   if (sel) {
-    sel.value = estado.como || ''
-    sel.onchange = async () => { await window.sw.verComo(sel.value); await recarregaEstado(); janelaAjustes() }
+    $('como-bt').onclick = (ev) => { ev.stopPropagation(); sel.classList.toggle('aberta') }
+    for (const b of sel.querySelectorAll('[data-como]')) {
+      b.onclick = async (ev) => {
+        ev.stopPropagation()
+        sel.classList.remove('aberta')
+        await window.sw.verComo(b.dataset.como)
+        await recarregaEstado()
+        janelaAjustes()
+      }
+    }
   }
   const sair = $('como-sair')
   if (sair) sair.onclick = async () => { await window.sw.verComo(''); await recarregaEstado(); janelaAjustes() }

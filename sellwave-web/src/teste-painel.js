@@ -84,6 +84,9 @@ app.whenReady().then(async () => {
     /entrega:Pagamento na Entrega/.test(tipos) && /antecipado:Pagamento Antecipado/.test(tipos), tipos)
   const semCampo = await js('document.querySelectorAll("#corpo [data-k]").length')
   conta('nenhum campo aparece antes de escolher o tipo', semCampo === 0, String(semCampo))
+  const cartao = await js('(() => { const c = document.querySelector(".tipo-cx"); const t1 = c.querySelector(".t1").getBoundingClientRect(); const t2 = c.querySelector(".t2").getBoundingClientRect(); return { h: Math.round(c.getBoundingClientRect().height), abaixo: t2.top >= t1.bottom } })()')
+  conta('o subtitulo fica EMBAIXO do titulo', cartao.abaixo === true, JSON.stringify(cartao))
+  conta('os cartoes sao grandes', cartao.h >= 110, String(cartao.h))
 
   // ── passo 2: o formulario em blocos ────────────────────────────────────────────────────────
   await clica('[data-tipo=entrega]')
@@ -91,25 +94,28 @@ app.whenReady().then(async () => {
   const blocos = await js('[...document.querySelectorAll("#corpo .bloco h3")].map(h => h.textContent.trim()).join(" | ")')
   conta('os tres blocos, na ordem da dash',
     blocos === 'Dados do Cliente | Endereço | Tratamento e Anexo', blocos)
+  const cores = await js('[...document.querySelectorAll("#corpo .bloco")].map(b => b.style.getPropertyValue("--bc")).join(",")')
+  conta('cada bloco tem a sua cor, nao cinza', cores === '#3b82f6,#f59e0b,#00a884', cores)
+  const sub = await js('(() => { const c = document.querySelector(".dono-ped"); return c ? c.textContent.trim() : "" })()')
+  conta('o formulario diz de quem e o pedido', /Cliente de Teste/.test(sub), sub)
 
   const campos = await js('[...document.querySelectorAll("#corpo [data-k]")].map(e => e.dataset.k).join(",")')
-  for (const k of ['cpf', 'nome', 'wa', 'cep', 'end', 'num', 'bairro', 'comp', 'cidade', 'uf', 'tratKey', 'obs']) {
-    if (!campos.split(',').includes(k)) { conta('campo ' + k + ' desenhou', false, campos); break }
-  }
-  conta('todos os campos desenharam', ['cpf', 'nome', 'wa', 'cep', 'end', 'num', 'bairro', 'comp', 'cidade', 'uf', 'tratKey', 'obs'].every((k) => campos.split(',').includes(k)), campos)
+  const ESPERADOS = ['cpf', 'nome', 'wa', 'cep', 'end', 'num', 'bairro', 'comp', 'cidade', 'uf', 'obs']
+  conta('todos os campos desenharam', ESPERADOS.every((k) => campos.split(',').includes(k)), campos)
 
   const pre = await js('({ wa: document.querySelector("[data-k=wa]").value, nome: document.querySelector("[data-k=nome]").value })')
   conta('o numero da conversa entra sozinho', pre.wa === '(19) 99598-3293', pre.wa)
   conta('o nome do cliente entra sozinho', pre.nome === 'Cliente de Teste', pre.nome)
 
   // ── tratamento vem de LISTA, nunca digitado ────────────────────────────────────────────────
-  const opts = await js('[...document.querySelectorAll("[data-k=tratKey] option")].map(o => o.textContent).join(" | ")')
-  conta('o tratamento vem do catalogo, com preco', /Produto A - 3 Meses · R\$ 397,00/.test(opts), opts)
-  const digitavel = await js('document.querySelector("[data-k=tratKey]").tagName')
-  conta('tratamento e seletor, nao campo livre', digitavel === 'SELECT', digitavel)
+  const opts = await js('[...document.querySelectorAll("[data-op=trat]")].map(o => o.textContent).join(" | ")')
+  conta('o tratamento vem do catalogo, com preco', /Produto A - 3 MesesR\$ 397,00/.test(opts.replace(/\s+/g, '')) || /Produto A - 3 Meses/.test(opts), opts)
+  // NENHUM <select> na tela: o option nativo do Windows ignora o tema e sai branco.
+  const nenhumSelect = await js('document.querySelectorAll("#corpo select").length')
+  conta('nao usa <select>, que no Windows sai branco', nenhumSelect === 0, String(nenhumSelect))
 
-  await set('tratKey', 'k3')
-  await espera(250)
+  await clica('[data-op=trat][data-v=k3]')
+  await espera(300)
   const total = await js('(document.querySelector(".total .v")||{}).textContent || ""')
   conta('o total acompanha o tratamento escolhido', /397,00/.test(total), total)
 
@@ -159,12 +165,30 @@ app.whenReady().then(async () => {
   await espera(350)
   await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
     + ' s("cpf","52998224725"); s("cep","13000000"); s("end","Rua A"); s("num","10");'
-    + ' s("bairro","Centro"); s("cidade","Campinas"); s("uf","SP"); s("tratKey","k3"); })()')
+    + ' s("bairro","Centro"); s("cidade","Campinas"); s("uf","SP"); })()')
   await espera(200)
+  await clica('[data-op=trat][data-v=k3]')
+  await espera(300)
   await clica('#pd-ok')
   await espera(500)
   const nAnt = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].mod))'))
   conta('pagamento antecipado passa sem comprovante', nAnt.length === 2 && nAnt[1] === 'antecipado', JSON.stringify(nAnt))
+
+  // ── O LEAD FICA CONGELADO quando a conversa muda no meio ───────────────────────────────────
+  await clica('[data-tipo=entrega]')
+  await espera(350)
+  await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) }; s("cidade","Campinas") })()')
+  // o pulso troca a conversa por baixo, como quando o vendedor clica noutro chat
+  await js('(() => { window.__trocaConversa("5511988887777", "Outro Cliente") })()')
+  await espera(2200)
+  const congelado = await js('({ dono: (document.querySelector(".dono-ped .q")||{}).textContent || "", aviso: !!document.querySelector(".dono-ped .a"), wa: (document.querySelector("[data-k=wa]")||{}).value || "" })')
+  conta('trocar de conversa NAO muda o dono do pedido', /Cliente de Teste/.test(congelado.dono), JSON.stringify(congelado))
+  conta('e avisa que a conversa mudou', congelado.aviso === true, JSON.stringify(congelado))
+  conta('o telefone do formulario continua o de origem', congelado.wa === '(19) 99598-3293', congelado.wa)
+  const rascSozinho = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").length)'))
+  conta('e grava rascunho sozinho ao trocar de conversa', rascSozinho >= 1, String(rascSozinho))
+  await clica('#pd-voltar')
+  await espera(300)
 
   // ── rascunho guarda o que esta pela metade ─────────────────────────────────────────────────
   await clica('[data-tipo=entrega]')
@@ -172,10 +196,14 @@ app.whenReady().then(async () => {
   await set('nome', 'So o nome por enquanto')
   await clica('#pd-rasc')
   await espera(400)
+  // O ULTIMO, nao o unico: o rascunho agora tambem e gravado SOZINHO ao trocar de conversa e ao
+  // clicar em Voltar, entao a lista tem varios e o que interessa e o que acabou de sair.
   const rl = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").map(c => c.args))'))
+  const ult = rl[rl.length - 1] || []
   conta('o rascunho guarda mesmo faltando campo obrigatorio',
-    rl.length === 1 && rl[0][2] && rl[0][2].nome === 'So o nome por enquanto', JSON.stringify(rl).slice(0, 120))
-  conta('o rascunho guarda o TIPO junto, senao reabrir perde o passo', rl[0][2].__tipo === 'entrega', String(rl[0][2].__tipo))
+    !!(ult[2] && ult[2].nome === 'So o nome por enquanto'), JSON.stringify(ult).slice(0, 140))
+  conta('o rascunho guarda o TIPO junto, senao reabrir perde o passo', ult[2] && ult[2].__tipo === 'entrega', String(ult[2] && ult[2].__tipo))
+  conta('o rascunho guarda de quem e o pedido', !!(ult[2] && ult[2].__lead && ult[2].__lead.phone), JSON.stringify(ult[2] && ult[2].__lead))
 
   // ── a pilha de disparos ────────────────────────────────────────────────────────────────────
   await clica('[data-aba=funis]')

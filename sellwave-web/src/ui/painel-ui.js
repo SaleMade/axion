@@ -361,17 +361,17 @@ const IC_NOTA = svg('<path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 
 // mais parecido possivel com o layout em que eles ja trabalham hoje".
 const BLOCOS_PED = [
   {
-    t: 'Dados do Cliente',
+    t: 'Dados do Cliente', bc: '#3b82f6',
     ic: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     linhas: [['cpf'], ['nome'], ['wa']],
   },
   {
-    t: 'Endereço',
+    t: 'Endereço', bc: '#f59e0b',
     ic: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
     linhas: [['cep'], ['end', 'num'], ['bairro', 'comp'], ['cidade', 'uf']],
   },
   {
-    t: 'Tratamento e Anexo',
+    t: 'Tratamento e Anexo', bc: '#00a884',
     ic: '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
     linhas: [['trat'], ['obs']],
   },
@@ -402,6 +402,17 @@ let pedFeito = ''        // mensagem verde depois de cadastrar
 let ofertas = []         // o catálogo de tratamentos, do servidor
 let ofertasEstado = ''   // '' | 'carregando' | 'ok' | 'erro'
 let anexos = []          // comprovantes já no R2: { nome, url, mime }
+// DE QUEM E O PEDIDO: congelado no instante em que o formulario abriu, e NAO muda mais.
+//
+// Regra do Bruno em 16/10: "caso eu esteja na metade do processo de criar aquele pedido para aquele
+// lead e eu clico em outra conversa, aquele pedido ainda assim vai ser criado pelo antigo, porque eu
+// estava na conversa na qual eu iniciei o processo".
+//
+// E o MESMO padrao que o disparo de funil ja usa (ver o `alvo` dentro do `roda`), e aqui a
+// consequencia de errar e pior: funil errado manda mensagem pra pessoa errada; pedido errado cria
+// PEDIDO no nome da pessoa errada, e isso vira comissao, despacho e cobranca. Depois que o
+// formulario abre, nada neste arquivo pode voltar a ler `estadoWa` pra saber de quem e o pedido.
+let pedLead = null       // { chatId, phone, nome }
 
 const dig = (v) => String(v == null ? '' : v).replace(/\D/g, '')
 const mascCpf = (v) => { const c = dig(v).slice(0, 11); return c.length === 11 ? c.slice(0, 3) + '.' + c.slice(3, 6) + '.' + c.slice(6, 9) + '-' + c.slice(9) : c }
@@ -588,9 +599,20 @@ function desenhaPedidos() {
     + (pedTipo === 'entrega' ? 'Pagamento na entrega' : 'Pagamento antecipado') + '</span>'
     + '<button class="bt sec" id="pd-voltar" style="height:26px;padding:0 9px;font-size:11px;margin-left:auto">Trocar</button>'
     + '</div>'
+  // DE QUEM E O PEDIDO, sempre a vista. Com a conversa trocada na tela, esta linha e a unica coisa
+  // que diz que o formulario continua sendo do cliente de antes - e e o que evita o vendedor
+  // cadastrar achando que e do que esta vendo agora.
+  if (pedLead) {
+    const trocou = (estadoWa.phone || '') && (estadoWa.phone || '') !== pedLead.phone
+    h += '<div class="dono-ped">'
+      + svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>')
+      + '<span class="q">' + esc(pedLead.nome || formata(pedLead.phone) || 'cliente') + '</span>'
+      + (trocou ? '<span class="a">a conversa mudou</span>' : '')
+      + '</div>'
+  }
 
   for (const b of BLOCOS_PED) {
-    h += '<div class="bloco"><h3>' + svg(b.ic) + esc(b.t) + '</h3>'
+    h += '<div class="bloco" style="--bc:' + b.bc + '"><h3>' + svg(b.ic) + esc(b.t) + '</h3>'
     for (const linha of b.linhas) {
       if (linha[0] === 'trat') { h += campoTratamento(); continue }
       const par = PARES[linha[0]]
@@ -653,19 +675,35 @@ function campoTratamento() {
   const of = ofertaDe(ped.tratKey)
   let dentro
   if (ofertasEstado === 'ok') {
-    dentro = '<select data-k="tratKey"><option value="">Selecione</option>'
-      + ofertas.map((o) => '<option value="' + esc(o.key) + '"' + (String(ped.tratKey || '') === String(o.key) ? ' selected' : '') + '>'
-        + esc(o.label) + ' · R$ ' + emDinheiro(o.price) + '</option>').join('')
-      + '</select>'
+    dentro = listaPropria('trat', of ? of.label : '', 'Selecione',
+      ofertas.map((o) => ({ v: o.key, r: o.label, p: 'R$ ' + emDinheiro(o.price), on: String(ped.tratKey || '') === String(o.key) })))
   } else if (ofertasEstado === 'erro') {
-    dentro = '<select disabled><option>não deu pra buscar</option></select>'
+    dentro = listaPropria('trat', '', 'não deu pra buscar', [], true)
       + '<button class="bt sec" id="pd-retrat" style="height:28px;margin-top:6px;font-size:11px;width:100%">Tentar de novo</button>'
   } else {
-    dentro = '<select disabled><option>carregando tratamentos...</option></select>'
+    dentro = listaPropria('trat', '', 'carregando tratamentos...', [], true)
   }
   return '<div class="' + (erro ? 'erro' : '') + '"><label>Tratamento *</label>' + dentro + '</div>'
     + '<div class="total' + (of ? '' : ' vazio') + '"><span class="r">Total</span>'
     + '<span class="v">' + (of ? 'R$ ' + emDinheiro(of.price) : 'escolha o tratamento') + '</span></div>'
+}
+
+// LISTA PROPRIA NO LUGAR DO <select> (16/10: "os select ficam BRANCOS e so dao pra ler passando o
+// mouse"). O <option> nativo no Windows e desenhado pelo SISTEMA e ignora o tema da pagina: o fundo
+// sai branco por mais CSS que se escreva, e num painel escuro vira uma mancha ilegivel. A unica
+// saida e nao usar select.
+function listaPropria(id, valor, vazio, ops, travada = false) {
+  let h = '<div class="sel" data-sel="' + id + '">'
+    + '<button type="button" class="lista-bt" data-abrelista="' + id + '"' + (travada ? ' disabled' : '') + '>'
+    + '<span class="v' + (valor ? '' : ' vazio') + '">' + esc(valor || vazio) + '</span>'
+    + svg('<path d="m6 9 6 6 6-6"/>') + '</button>'
+  if (!travada) {
+    h += '<div class="lista-op">'
+      + ops.map((o) => '<button type="button" class="' + (o.on ? 'on' : '') + '" data-op="' + id + '" data-v="' + esc(o.v) + '">'
+        + esc(o.r) + (o.p ? '<span class="p">' + esc(o.p) + '</span>' : '') + '</button>').join('')
+      + '</div>'
+  }
+  return h + '</div>'
 }
 
 function campoAnexo() {
@@ -687,7 +725,14 @@ function campoAnexo() {
 
 function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tipo]')) {
-    b.onclick = () => { pedTipo = b.dataset.tipo; pedErros = []; pedFeito = ''; preenchePed(); if (!ofertas.length) pegaOfertas(); desenha() }
+    b.onclick = () => {
+      pedTipo = b.dataset.tipo
+      pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: estadoWa.nome || '' }
+      pedErros = []; pedFeito = ''
+      preenchePed()
+      if (!ofertas.length) pegaOfertas()
+      desenha()
+    }
   }
   for (const el of corpo.querySelectorAll('[data-k]')) {
     el.oninput = () => {
@@ -710,6 +755,10 @@ function ligaPedidos(corpo) {
       ped = { ...(r.dados || {}) }
       pedTipo = String(ped.__tipo || 'entrega')
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
+      // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
+      // de origem - senao o congelamento valeria so ate a primeira interrupcao.
+      pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: String(ped.nome || '') }
+      delete ped.__tipo; delete ped.__anexos; delete ped.__lead
       rascId = Number(r.id) || 0
       pedErros = []; pedFeito = ''
       if (!ofertas.length) pegaOfertas()
@@ -728,8 +777,35 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tiraanexo]')) {
     b.onclick = () => { anexos = anexos.filter((a) => a.url !== b.dataset.tiraanexo); desenha() }
   }
+  for (const b of corpo.querySelectorAll('[data-abrelista]')) {
+    b.onclick = (ev) => {
+      ev.stopPropagation()
+      const cx = b.closest('.sel')
+      const abrindo = !cx.classList.contains('aberta')
+      for (const o of corpo.querySelectorAll('.sel')) o.classList.remove('aberta')
+      if (abrindo) cx.classList.add('aberta')
+    }
+  }
+  for (const b of corpo.querySelectorAll('[data-op]')) {
+    b.onclick = (ev) => {
+      ev.stopPropagation()
+      if (b.dataset.op === 'trat') ped.tratKey = b.dataset.v
+      desenha()
+    }
+  }
+  // Clicar FORA fecha. Sem isto a lista fica aberta por cima dos campos de baixo e o vendedor tem
+  // que clicar no proprio botao de novo pra enxergar o que esta embaixo.
+  corpo.onclick = () => { for (const o of corpo.querySelectorAll('.sel.aberta')) o.classList.remove('aberta') }
+
   const liga = (id, fn) => { const e = $(id); if (e) e.onclick = fn }
-  liga('pd-voltar', () => { pedTipo = ''; pedErros = []; desenha() })
+  // VOLTAR guarda o que estava pela metade antes de sair. E o caminho que ele descreveu pra
+  // comecar um pedido novo: "clico em Voltar (...) aquele vai ficar salvo como rascunho".
+  liga('pd-voltar', async () => {
+    await rascunhoSozinho()
+    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = 0; pedErros = []
+    preenchePed()
+    desenha()
+  })
   liga('pd-rasc', salvaRascunho)
   liga('pd-ok', cadastraPedido)
   liga('pd-retrat', () => { ofertasEstado = ''; pegaOfertas(); desenha() })
@@ -762,14 +838,37 @@ async function subirAnexos(arquivos) {
   pedSalvando = ''; desenha()
 }
 
+// GRAVA SOZINHO AO SAIR (16/10, pedido dele: "rascunho gravado sozinho ao trocar de aba ou de
+// conversa"). Nao avisa nada na tela: aviso a cada troca de conversa seria pior que o problema.
+// So grava se houver algo ALEM do que entrou sozinho - nome e telefone vem preenchidos da conversa,
+// entao rascunho com so os dois e um rascunho vazio, e encheria a lista de lixo.
+let gravandoSozinho = false
+function temConteudo() {
+  const sobra = { ...ped }
+  delete sobra.nome; delete sobra.wa
+  return Object.values(sobra).some((v) => String(v || '').trim()) || anexos.length > 0
+}
+async function rascunhoSozinho() {
+  if (gravandoSozinho || pedSalvando || !pedTipo || !temConteudo()) return
+  gravandoSozinho = true
+  try {
+    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
+    const r = await window.swp.rascunhoSalvar(rascId || 0, (pedLead && pedLead.phone) || '', dados)
+    if (r && r.ok && Number(r.id)) rascId = Number(r.id)
+    await pegaRascunhos()
+    if (aba === 'pedidos') desenha()
+  } catch (_) { /* fica na tela do mesmo jeito; a proxima saida tenta de novo */ }
+  finally { gravandoSozinho = false }
+}
+
 async function salvaRascunho() {
   if (pedSalvando) return
   pedSalvando = 'rascunho'; pedFeito = ''; desenha()
   try {
     // O tipo e os anexos viajam DENTRO do rascunho: sem eles, reabrir cairia no passo do tipo com os
     // campos preenchidos e o comprovante perdido.
-    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos }
-    const r = await window.swp.rascunhoSalvar(rascId || 0, estadoWa.phone || '', dados)
+    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
+    const r = await window.swp.rascunhoSalvar(rascId || 0, (pedLead && pedLead.phone) || estadoWa.phone || '', dados)
     if (r && r.ok) { rascId = Number(r.id) || rascId; pedFeito = 'Rascunho guardado.' }
     await pegaRascunhos()
   } catch (_) {
@@ -804,10 +903,11 @@ async function cadastraPedido() {
 // WhatsApp mostra. É a prévia dos dados do cliente que o Bruno pediu.
 let fonePreenchido = ''
 function preenchePed() {
-  const fone = estadoWa.phone || ''
-  if (!fone || estadoWa.lid) return
+  const de = pedLead || estadoWa
+  const fone = de.phone || ''
+  if (!fone) return
   if (!ped.wa) ped.wa = formata(fone)
-  if (!ped.nome && estadoWa.nome) ped.nome = estadoWa.nome
+  if (!ped.nome && de.nome) ped.nome = de.nome
 }
 
 function humano(txt) {
@@ -951,6 +1051,7 @@ const botaoCadastro = () => ''
 // Troca pra uma aba de fora dela (o clique no botão do lead). Mexe no mesmo lugar que o clique na
 // aba mexeria, pra as duas entradas não divergirem.
 function vaiPara(nome) {
+  if (aba === 'pedidos' && nome !== 'pedidos') rascunhoSozinho()
   aba = nome
   for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o.dataset.aba === nome)
   aberto = ''
@@ -1047,11 +1148,12 @@ async function pulso() {
   // o valor em `ped` a cada tecla, mas o redesenho recria os campos e leva junto o cursor e a
   // seleção. Como ali não existe botão de enviar pra habilitar, não há nada a redesenhar mesmo.
   if (agora !== podiaEnviar) { podiaEnviar = agora; if (aba !== 'pedidos') desenha() }
-  // Trocou de conversa: o formulário passa a falar do cliente novo. Só mexe no que está em branco,
-  // pra não apagar o que já foi digitado sobre o mesmo cliente.
+  // TROCOU DE CONVERSA. Com o formulario ABERTO, o pedido continua sendo do lead congelado e nada
+  // aqui o toca: o que acontece e que o rascunho e gravado sozinho, pra o trabalho nao se perder se
+  // ele nao voltar. Sem formulario aberto, a previa do proximo pedido acompanha a conversa.
   if (estadoWa.phone !== fonePreenchido) {
     fonePreenchido = estadoWa.phone || ''
-    preenchePed()
+    if (pedTipo) { rascunhoSozinho() } else { preenchePed() }
     if (aba === 'pedidos') desenha()
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).

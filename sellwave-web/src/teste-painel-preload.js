@@ -41,3 +41,7 @@ contextBridge.exposeInMainWorld('swp', {
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
+// Pro teste simular o vendedor clicando noutra conversa enquanto o formulario esta aberto.
+contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome) => {
+  ESTADO.phone = phone; ESTADO.chatId = phone + '@c.us'; ESTADO.nome = nome
+})
