@@ -446,7 +446,25 @@ env -u ELECTRON_RUN_AS_NODE npx electron-builder --win --x64 --config.directorie
 npm run confere-pacote                           # 3) A GUARDA. Sem ela, não suba.
 npx wrangler r2 object put "salechat-media/sellwave-web/instalador.exe" --file "dist-pub/SellWave Web Setup <v>.exe" --content-type "application/octet-stream" --remote
 # e carimbar a versão publicada: POST /api/swweb/app { versao, bytes, notas } como diretor
+
+# 4) SE MEXEU NO src/ui/agente.js, PUBLIQUE A CÓPIA SERVIDA TAMBÉM:
+npx wrangler r2 object put "salechat-media/sellwave-web/agente.js" --file "src/ui/agente.js" --content-type "application/javascript; charset=utf-8" --remote
+# confira com query e compare o tamanho com o do disco:
+#   curl -s ".../api/swweb/agente.js?v=$RANDOM" -H "Authorization: Bearer <tok>" | wc -c
 ```
+
+**POR QUE O PASSO 4 EXISTE (incidente 16/10/2026, noite).** O `agente.js` é publicado em **DOIS
+lugares**: dentro do instalador e no R2, de onde o worker serve `/api/swweb/agente.js`. E o app
+**prefere a cópia baixada** — o arquivo do instalador é só o piso de segurança. Então publicar só o
+instalador **não entrega** mudança nenhuma do agente: o app baixa a versão velha do R2 e usa ela.
+
+Aconteceu com o conserto do nome do lead. O `nomeDaConversa` foi reescrito, empacotado na 1.13.0 e
+conferido byte a byte no asar — e o Bruno continuou vendo o telefone no campo Nome, porque o R2
+ainda servia o agente de antes (25.706 bytes contra 29.363 do disco). Três versões saíram no meio
+disso sem que a correção chegasse nele.
+
+**Como perceber:** baixe `/api/swweb/agente.js` e compare o tamanho com `src/ui/agente.js`. Se
+diferirem, o que está rodando na máquina dele não é o que está no git.
 
 **POR QUE O PASSO 3 EXISTE (incidente 16/10/2026).** A 1.3.1 foi publicada com o `app.asar`
 **corrompido**: os NOVE arquivos com o tamanho certo e o conteúdo de OUTRO arquivo — o
