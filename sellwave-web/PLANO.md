@@ -371,6 +371,39 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   **50** contas em Node, **64** de painel e casca (3 novas: botão não gira, alvo é o do clique,
   três leads na ordem), **21 de 21** do autoteste, e o pacote **9 de 9** byte a byte.
 
+- **16/10/2026, noite — o nome do lead, o botão de trocar de cliente, e dois bugs que ninguém via
+  (1.13.0).** Ele pediu duas coisas pequenas e a investigação achou dois defeitos sérios no caminho.
+  **O NOME.** Com o contato não salvo, o WhatsApp mostra o número no título e o push name logo
+  abaixo (*"~Amor"*); o campo NOME do cadastro nascia com o NÚMERO. A causa raiz não era ordem de
+  preferência: **`WPP.contact.get` é ASSÍNCRONO** (prova no próprio motor, `sc-wajs.js` módulo
+  296910: `t.get=async function`). Ele devolve uma Promise, e Promise é truthy, então o bloco
+  inteiro lia nove propriedades `undefined` sem quebrar e sem avisar. Com ele morto, quem respondia
+  era `chat.get` — e ali o `formattedTitle` vinha primeiro, que para contato fora da agenda **é o
+  telefone formatado**. A forma certa já rodava há meses no `sc-panel.js` (`activeInfo`, linha 436),
+  e agora o agente faz igual. O filtro recusa também **presença** (*online*, *digitando...*, *visto
+  por último às 14:02* — que moram na MESMA linha do push name) e tira emoji, porque esse valor vai
+  pro `customer[name]` da PayLog quando ele aceita, ou seja pra etiqueta e pra cobrança.
+  **A TROCA DE CONVERSA.** O aviso virou faixa âmbar com **saída**: botão *"Trocar para \<nome\>"*
+  que guarda o pedido anterior como rascunho, lê o lead NA HORA do clique e começa limpo. Endereço,
+  CPF, tratamento e comprovante não vão junto: são daquela pessoa. E cadastrar com a conversa
+  trocada passou a pedir confirmação.
+  **OS DOIS BUGS, medidos na produção.** (1) `cadastraPedido` **não zerava `pedLead`**: o
+  `preenchePed` seguinte reenchia `wa` e `nome` com o cliente que ACABOU de ser cadastrado e, como
+  ele só escreve em campo vazio, o próximo pedido nascia com o telefone e o nome do anterior — **sem
+  aviso nenhum**, porque o `pedLead` já era o novo e não havia o que comparar. Era o caminho
+  silencioso pro medo que ele descreveu. (2) **Rascunho novo nunca gravou um dia**: o painel mandava
+  `id: 0` e o worker recusava com *"Falta o id do rascunho"*; conferido na API, 400 na resposta e a
+  tabela **vazia**. O painel engolia porque só olhava exceção. Agora o id nasce no servidor, só com
+  dígito (pra caber em inteiro seguro: versão antiga do app faz `Number(id)`), o painel guarda como
+  texto e a recusa aparece na tela. **O que escondia isso era o duble de teste**, que respondia
+  `{ok:true}` pra qualquer chamada — ele passou a responder como o worker.
+  **No ar:** app **1.13.0** (111.391.915 bytes conferidos no ar) e `axion-api`. Três suítes: **50**
+  contas em Node (13 novas rodam a função de verdade com um WPP de mentira, inclusive o
+  `contact.get` devolvendo Promise), **80** de painel e casca, **21 de 21** do autoteste, pacote
+  **9 de 9**.
+  **E a LIGAÇÃO DE VOZ foi confirmada por ele:** *"acabei de testar a ligação e funcionou
+  perfeitamente"*. Spike 1 fechado dos dois lados. Ver ANEXO A12.
+
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
 Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,
