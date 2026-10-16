@@ -761,7 +761,7 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tipo]')) {
     b.onclick = () => {
       pedTipo = b.dataset.tipo
-      pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: estadoWa.nome || '' }
+      pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: nomeDeVerdade(estadoWa.nome) }
       pedErros = []; pedFeito = ''
       preenchePed()
       guardaNascimento()
@@ -792,7 +792,7 @@ function ligaPedidos(corpo) {
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
       // de origem - senao o congelamento valeria so ate a primeira interrupcao.
-      pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: String(ped.nome || '') }
+      pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: nomeDeVerdade(ped.nome) }
       delete ped.__tipo; delete ped.__anexos; delete ped.__lead
       guardaNascimento()
       rascId = String(r.id || '')
@@ -1002,6 +1002,24 @@ async function cadastraPedido() {
   } finally { pedSalvando = ''; desenha() }
 }
 
+// NOME QUE E SO O TELEFONE NAO E NOME (16/10/2026, pedido do Bruno: "continua aparecendo ali na
+// area do nome o numero desse lead, ao inves de aparecer o nome dele. Caso nao seja possivel pegar
+// o nome, deixe em branco").
+//
+// O `estadoWa.nome` e o TITULO DA CONVERSA no WhatsApp, e pra quem nao esta na agenda do celular
+// esse titulo E o telefone ("+55 96 9100-5541"). O formulario copiava isso pro campo NOME e o
+// pedido ia pra Five com o telefone no lugar do nome do cliente - que depois vira etiqueta de
+// entrega, cobranca e comissao.
+//
+// O TESTE E "TEM LETRA?", nao "parece telefone": qualquer formatacao do numero (com +55, com
+// parenteses, com ponto, so digitos) cai fora por nao ter nenhuma letra, e nome em alfabeto que
+// nao seja o nosso continua passando, porque \p{L} e letra em qualquer escrita. O `~` que o
+// WhatsApp poe antes do nome de perfil de quem nao e contato sai junto: e marca, nao nome.
+const nomeDeVerdade = (txt) => {
+  const t = String(txt == null ? '' : txt).replace(/^~\s*/, '').trim()
+  return /\p{L}/u.test(t) ? t : ''
+}
+
 // O que já se sabe do cliente entra sozinho: o número vem da conversa aberta e o nome vem do que o
 // WhatsApp mostra. É a prévia dos dados do cliente que o Bruno pediu.
 let fonePreenchido = ''
@@ -1031,7 +1049,7 @@ async function trocaDeLead() {
     const at = (e && e.chatId) ? e : estadoWa
     if (e) estadoWa = e
     if (!at.phone) { rodape('abra a conversa do cliente primeiro'); return }
-    pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: at.nome || '' }
+    pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: nomeDeVerdade(at.nome) }
     ped = {}; anexos = []; rascId = ''; pedErros = []
     preenchePed()
     guardaNascimento()
@@ -1046,7 +1064,10 @@ function preenchePed() {
   const fone = de.phone || ''
   if (!fone) return
   if (!ped.wa) ped.wa = formata(fone)
-  if (!ped.nome && de.nome) ped.nome = de.nome
+  // Filtra de novo aqui de proposito: `preenchePed` tambem roda com o `estadoWa` cru quando ainda
+  // nao ha dono congelado, e e esse caminho que enchia o campo com o telefone.
+  const nome = nomeDeVerdade(de.nome)
+  if (!ped.nome && nome) ped.nome = nome
 }
 
 function humano(txt) {

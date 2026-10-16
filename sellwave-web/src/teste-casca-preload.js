@@ -15,7 +15,9 @@ const ESTADO = () => ({
     { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     { numero: '5515974060653', dono: 'Heynan Dantas', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // em aquecimento: area propria e interruptor liberado
-    { numero: '5515974068551', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 5, cor: '', st: 'aquecimento', aquec: { dia: 1, teto: 5, agora: 2 } },
+    // lim_dia ZERO de proposito: o teto de quem aquece vem da RAMPA (`aquec.teto`), nao do campo do
+    // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
+    { numero: '5515974068551', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2 } },
     // estado que NAO recebe: sem interruptor
     { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise' },
     // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e

@@ -407,8 +407,9 @@ app.whenReady().then(async () => {
 
   const dentro = await js2('({ fino: document.querySelectorAll(".fino").length, d: [...document.querySelectorAll(".fino .d")].map(e => e.textContent).join(","), c: [...document.querySelectorAll(".fino .c")].map(e => e.textContent).join(","), vend: document.querySelectorAll(".vend").length, busca: getComputedStyle(document.querySelector(".busca")).display })')
   conta('encolhida, mostra um numero por linha', dentro.fino === 6, JSON.stringify(dentro.fino))
-  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,3344,8551,0653', dentro.d)
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,3/5,0/70', dentro.c)
+  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,3344,0653,8551', dentro.d)
+  // O '3/5' do 8551 PROVA que o teto sai da rampa: o `lim_dia` dele no stub e zero.
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,3/5', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
 
   const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
@@ -419,6 +420,22 @@ app.whenReady().then(async () => {
   // aquecimento saiu da roleta ou a fila voltou a ser serial entre os dois, e os dois sao bug.
   conta('encolhida, o destaque de "recebendo agora" tambem aparece', destFino.n === 2 && destFino.qual === '3293,8551', JSON.stringify(destFino))
 
+  // ── A BARRINHA LARANJA DA BARRA ENCOLHIDA ─────────────────────────────────────────────────
+  // Encolhida nao ha cabecalho nenhum, entao sem a barrinha o numero em aquecimento fica igual
+  // aos de venda: "nao sei qual deles esta em aquecimento ou qual e o numero de vendas normal".
+  // Conferir que ela EXISTE nao basta - tem que estar na posicao certa, senao ela separa o
+  // lugar errado e mente com mais confianca do que separacao nenhuma.
+  const risco = await js2('(() => { const r = document.querySelector(".risco-aq"); if (!r) return null;'
+    + ' const itens = [...document.querySelector(".lista").children];'
+    + ' const i = itens.indexOf(r);'
+    + ' const dig = (e) => (e.querySelector(".d") || {}).textContent || "";'
+    + ' return { i, antes: itens.slice(0, i).map(dig).join(","), depois: itens.slice(i + 1).map(dig).join(","),'
+    + ' cor: getComputedStyle(r).borderTopColor, fogo: !!r.querySelector("svg") } })()')
+  conta('encolhida, uma barrinha separa o aquecimento', !!risco && risco.fogo === true, JSON.stringify(risco))
+  conta('e ela fica na divisa certa: tudo que aquece embaixo dela',
+    risco && risco.antes === '2248,3293,1122,3344,0653' && risco.depois === '8551', JSON.stringify(risco))
+  conta('na cor do aquecimento', risco && /245, 158, 11/.test(risco.cor), risco && risco.cor)
+
   await js2('document.getElementById("encolhe").click()')
   await espera(600)
   // O DESTAQUE na barra larga, que e onde ele olha no dia a dia. So UM dos tres: os outros estao
@@ -428,6 +445,25 @@ app.whenReady().then(async () => {
     + ' qual: [...document.querySelectorAll(".num.recebendo .fone")].map(e => e.textContent.trim()).join(",") } })()')
   conta('so quem esta na vez fica destacado', dest.total === 6 && dest.n === 2, JSON.stringify(dest))
   conta('e sao o estabelecido da vez e o em aquecimento', /99598-3293/.test(dest.qual) && /97406-8551/.test(dest.qual), dest.qual)
+
+  // ── O DIA DO AQUECIMENTO NA LINHA, com o foguinho ─────────────────────────────────────────
+  // Com rampa, "aquecendo" sozinho cobre um numero que recebe 5 e um que recebe 50. O dia e o
+  // que diz qual dos dois. Tem que estar ANTES do icone do WhatsApp, que foi onde ele pediu.
+  const selo8551 = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97406-8551/.test(e.textContent));'
+    + ' if (!l) return null; const aq = l.querySelector(".sub .aq"); const sub = [...l.querySelectorAll(".sub > *")].map(e => e.className.split(" ")[0]);'
+    + ' return { txt: aq ? aq.textContent.trim() : "", fogo: !!(aq && aq.querySelector("svg")), ordem: sub.join(","),'
+    + ' cor: aq ? getComputedStyle(aq).color : "" } })()')
+  conta('o numero em aquecimento mostra o dia na linha', selo8551 && selo8551.txt === 'dia 3', JSON.stringify(selo8551))
+  conta('com o foguinho, e a esquerda do icone do WhatsApp',
+    selo8551 && selo8551.fogo === true && /^aq,zap/.test(selo8551.ordem), JSON.stringify(selo8551))
+  conta('na cor do aquecimento', selo8551 && selo8551.cor === 'rgb(245, 158, 11)', selo8551 && selo8551.cor)
+  // E o contador do mesmo numero sai da RAMPA: o lim_dia dele e zero.
+  const cnt8551 = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97406-8551/.test(e.textContent));'
+    + ' const c = l && l.querySelector(".cnt"); return c ? c.textContent.replace(/\s+/g, " ").trim() : "" })()')
+  conta('e o contador dele vem do teto da rampa, nao do campo do chip', /^3\/5/.test(cnt8551), cnt8551)
+  // O numero que NAO aquece nao pode ganhar o selo - senao o sinal perde o sentido.
+  const semSelo = await js2('[...document.querySelectorAll(".num")].filter(e => e.querySelector(".sub .aq")).length')
+  conta('e so o que aquece ganha o selo', semSelo === 1, String(semSelo))
 
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
   conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 3, JSON.stringify(voltou))

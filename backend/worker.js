@@ -21319,10 +21319,25 @@ async function handlePresselMeus(req, env) {
   let lh = {};
   try { lh = await _leadsNovosHojePorNumero(env, Math.floor(new Date(hoje + 'T00:00:00-03:00').getTime() / 1000)); } catch (_) { lh = {}; }
   const leadsHoje = {};
+  // O NUMERO EM AQUECIMENTO JA VINHA NESTA LISTA (ele recebe lead, tem que aparecer pro vendedor),
+  // mas vinha DISFARCADO de numero comum: dist vazio e lim_dia zero, ou seja, a tela dele dizia
+  // "roleta, sem teto" num numero que recebe 5 por dia e entra na frente da fila. O vendedor via
+  // um numero que nunca recebia nada e nenhuma explicacao do porque.
+  // Agora vai carimbado, igual ao /api/swweb/numeros: o `dist` e sempre 'limite' (e o worker quem
+  // forca isso ao distribuir), a `ordem` e -1, e `aquec` leva o dia e o teto do dia inteiro.
+  const _aquecMeus = _aquecIdsDe(data);
   const numeros = meus.map((c) => {
     const nk = k8(c.num); leadsHoje[nk] = lh[nk] || 0;
-    return { id: c.id, num: c.num, api: !!c.api, dist: c.dist === 'limite' ? 'limite' : '', lim_ordem: Number(c.lim_ordem) || 0,
-      lim_dia: Number(c.lim_dia) || 0, lim_livre: String(c.lim_livre || ''), idx: Number(c.idx) || 0 };
+    const aq = _chipAquecendo(c, _aquecMeus) ? _numDoAquecimento(c) : null;
+    return { id: c.id, num: c.num, api: !!c.api, dist: (aq || c.dist === 'limite') ? 'limite' : '',
+      lim_ordem: aq ? -1 : (Number(c.lim_ordem) || 0),
+      // `lim_dia` continua sendo o campo do chip pra numero comum; pro que aquece e o teto do dia
+      // inteiro, que e o que faz sentido ler ("este numero recebe 5 hoje"). O quanto ja abriu nesta
+      // hora vai em `aquec.agora`, porque e calculado no fuso de Brasilia e nao pode ser refeito no
+      // navegador do vendedor.
+      lim_dia: aq ? aq.teto : (Number(c.lim_dia) || 0), lim_livre: aq ? '' : String(c.lim_livre || ''),
+      aquec: aq ? { dia: aq.dia, teto: aq.teto, agora: aq.lim } : null,
+      idx: Number(c.idx) || 0 };
   });
   // ONDE ESTA RECEBENDO AGORA (13/10/2026): a mesma conta do diagnostico (roleta + fila do Limite),
   // pra tela do vendedor dizer a verdade em vez de "ligado em alguma pressel".

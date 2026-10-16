@@ -46,6 +46,10 @@ function bonito(n) {
   return String(n || '')
 }
 
+// O foguinho do aquecimento (lucide `flame`). Icone, nunca emoji: emoji muda de desenho em cada
+// maquina e nao herda a cor do texto.
+const FOGO = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>'
 const ZAP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.1-.2 0-.4.1-.5l.5-.6.2-.4v-.4l-.7-1.7c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2c0 1.3.9 2.5 1 2.7.2.2 1.9 2.9 4.6 4 .6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.2.2-.6.2-1 .1-1.1l-.3-.2Z"/></svg>'
 
 // ───────────────────────────────────────────────────────────── barra lateral
@@ -88,39 +92,65 @@ function desenhaLista() {
     if (!grupos.has(k)) grupos.set(k, [])
     grupos.get(k).push(n)
   }
+  const ordena = (a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
+
+  // NA BARRA ENCOLHIDA O AQUECIMENTO VAI TODO PRO FIM, DEPOIS DE UMA BARRINHA LARANJA (16/10/2026).
+  //
+  // Encolhida nao ha cabecalho nenhum (em 56px o nome do vendedor nao cabe), entao a separacao por
+  // area que existe na barra larga simplesmente SUMIA: palavras do Bruno, "os numeros acabam
+  // ficando sem essa separacao, eu nao sei qual deles esta em aquecimento ou qual e o numero de
+  // vendas normal". Numa lista de quatro bolinhas iguais, confundir um numero que aquece com um
+  // que vende e errar pra qual numero mandar o cliente.
+  //
+  // POR QUE UMA SO, E NAO UMA POR VENDEDOR: encolhida nao existe agrupamento visivel por vendedor
+  // (o dono fica no passe de mouse), entao uma barrinha por grupo separaria blocos que a tela nao
+  // diz de quem sao. Com uma so, a leitura e a que ele pediu: tudo acima e numero de trabalho,
+  // tudo abaixo esta aquecendo. A ordem dos vendedores continua valendo dentro de cada metade.
+  if (barraFina) {
+    const trabalho = []
+    const aquece = []
+    for (const [, itens] of grupos) {
+      itens.filter((x) => !aquecendo(x)).sort(ordena).forEach((x) => trabalho.push(x))
+      itens.filter(aquecendo).sort(ordena).forEach((x) => aquece.push(x))
+    }
+    lista.innerHTML = trabalho.map(linhaFina).join('')
+      + (aquece.length
+        ? '<div class="risco-aq" title="Daqui pra baixo, números em aquecimento">' + FOGO + '</div>'
+          + aquece.map(linhaFina).join('')
+        : '')
+    ligaCliques()
+    return
+  }
+
   let html = ''
   for (const [dono, itens] of grupos) {
     // O AQUECIMENTO TEM AREA PROPRIA (16/10/2026). Antes o numero em aquecimento ficava solto no
     // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
     // ali, ele so esta simplesmente jogado ali". Agora tem cabecalho proprio, na cor do aquecimento
     // (a mesma ambar da Contingencia), pra o vendedor entender que aqueles numeros sao outra coisa.
-    const emAquec = itens.filter(aquecendo)
-    const normais = itens.filter((x) => !aquecendo(x))
-    const ordena = (a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
-    normais.sort(ordena)
-    emAquec.sort(ordena)
+    const emAquec = itens.filter(aquecendo).sort(ordena)
+    const normais = itens.filter((x) => !aquecendo(x)).sort(ordena)
 
-    // ENCOLHIDA NAO TEM CABECALHO: em 56px o nome nao cabe e um risco separando grupos sem dizer de
-    // quem sao e so ruido. O dono fica no passe de mouse de cada numero.
     if (normais.length) {
-      if (!barraFina) {
-        html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
-          + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
-      }
-      html += normais.map(barraFina ? linhaFina : linha).join('')
+      html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
+        + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
+      html += normais.map(linha).join('')
     }
     if (emAquec.length) {
-      if (!barraFina) {
-        const leads = emAquec.reduce((t, x) => t + (Number(x.leads_hoje) || 0), 0)
-        html += '<div class="vend aquec"><span>Aquecimento</span><span class="risco"></span>'
-          + '<span class="qtd" title="Leads que chegaram hoje nos números em aquecimento">'
-          + leads + (leads === 1 ? ' lead' : ' leads') + '</span></div>'
-      }
-      html += emAquec.map(barraFina ? linhaFina : linha).join('')
+      const leads = emAquec.reduce((t, x) => t + (Number(x.leads_hoje) || 0), 0)
+      html += '<div class="vend aquec"><span>Aquecimento</span><span class="risco"></span>'
+        + '<span class="qtd" title="Leads que chegaram hoje nos números em aquecimento">'
+        + leads + (leads === 1 ? ' lead' : ' leads') + '</span></div>'
+      html += emAquec.map(linha).join('')
     }
   }
   lista.innerHTML = html
+  ligaCliques()
+}
 
+// Os cliques das linhas, num lugar so porque a lista e desenhada por DOIS caminhos (encolhida e
+// larga). Esquecer de ligar num deles deixaria metade da barra sem reagir a clique nenhum.
+function ligaCliques() {
   for (const el of lista.querySelectorAll('.fino')) {
     el.onclick = () => abrir(cheio(el.dataset.nk))
   }
@@ -166,6 +196,16 @@ function fraseEstado(n) {
   return 'espera a vez'
 }
 
+// O TETO DE QUEM ESTA AQUECENDO NAO E O `lim_dia` DO CHIP (16/10/2026).
+//
+// Quem aquece tem o teto calculado pela RAMPA, no worker, a partir do dia de aquecimento - o
+// `lim_dia` gravado no chip e outra coisa e costuma vir zero. Lendo so o `lim_dia`, o numero em
+// aquecimento aparecia SEM contador nenhum na barra lateral, do jeito que o Bruno viu o 8551: a
+// unica linha da lista sem placar, logo a unica sobre a qual a tela nao dizia nada.
+// `aquec.teto` e a cota do dia inteiro, e vem pronto do servidor de proposito (calcular aqui usaria
+// o fuso do cliente e as duas telas passariam a discordar).
+const tetoDe = (n) => Number((n && n.aquec && n.aquec.teto) || (n && n.lim_dia)) || 0
+
 // Cor do contador, pela regra do spec: quem bateu e ambar; quem esta na vez vira ambar a partir de
 // 80% do teto (o aviso vem ANTES de parar, nao depois); quem espera e cinza.
 function corDoContador(n) {
@@ -173,7 +213,7 @@ function corDoContador(n) {
   const st = n.dist === 'limite' && n.fila ? n.fila.st : 'vez'
   if (st === 'bateu') return '#f59e0b'
   if (st !== 'vez') return '#94a3b8'
-  const teto = Number(n.lim_dia) || 0
+  const teto = tetoDe(n)
   const pct = teto ? (Number(n.leads_hoje) || 0) / teto : 0
   return pct >= 0.8 ? '#f59e0b' : '#24c278'
 }
@@ -224,7 +264,7 @@ function linhaFina(n) {
     : '<span class="sinal"' + (corChip ? ' style="background:' + corChip + '"' : '') + '></span>'
   const quatro = cheio(nk).replace(/\D/g, '').slice(-4)
   const leads = Number(n.leads_hoje) || 0
-  const teto = Number(n.lim_dia) || 0
+  const teto = tetoDe(n)
   return '<button class="fino' + (recebendoAgora(n) ? ' recebendo' : '') + (nk === ativo ? ' ativo' : '') + '" data-nk="' + nk + '"'
     + ' title="' + esc(bonito(cheio(nk))) + (n.dono ? ' · ' + esc(n.dono) : '') + ' · ' + esc(fraseEstado(n)) + '">'
     + sinal
@@ -254,6 +294,19 @@ function linha(n) {
     : '<span class="sinal"' + (corChip ? ' style="background:' + corChip + '"' : '') + '></span>'
 
   const zap = '<span class="zap' + (aberto ? '' : ' off') + '" title="' + (aberto ? 'Aberto nesta máquina' : 'Fechado') + '">' + ZAP + '</span>'
+  // O DIA DO AQUECIMENTO NA PROPRIA LINHA (16/10/2026, pedido do Bruno: "do lado esquerdo do icone
+  // de WhatsApp, o dia em que aquele numero esta de aquecimento - vai ter um foguinho, o dia e o
+  // numero do ladinho").
+  //
+  // O cabecalho ambar ja diz QUE aquele bloco aquece; o que faltava era QUANTO FALTA. Com rampa, o
+  // dia e a informacao que muda tudo: dia 2 recebe 5 leads, dia 12 recebe 35, e o mesmo rotulo
+  // "aquecendo" cobria os dois. O dia vem do servidor (`aquec.dia`) porque ele e contado do
+  // warm_start - a tela nao recalcula, pela mesma razao do `apto`.
+  const dia = Number(n.aquec && n.aquec.dia) || 0
+  const fogo = dia
+    ? '<span class="aq" title="Dia ' + dia + ' do aquecimento. O teto de leads sobe conforme os dias passam: 5 até o dia 3, 10 até o 6, 20 até o 9, 35 até o 15, e 50 do 16 em diante.">'
+      + FOGO + 'dia ' + dia + '</span>'
+    : ''
   // CADEADO: outra MAQUINA esta com este numero aberto agora. Nao e erro nem bloqueio permanente -
   // e o aviso de que abrir ali criaria o cruzamento que derruba chip.
   const trancado = n.uso && !n.uso.meu
@@ -270,7 +323,7 @@ function linha(n) {
   // O CONTADOR: leads de hoje sobre o teto, com o rotulo do estado e uma barra de 2px na base.
   // Sem teto cadastrado nao ha o que medir, entao mostra so quantos chegaram.
   const leads = Number(n.leads_hoje) || 0
-  const teto = Number(n.lim_dia) || 0
+  const teto = tetoDe(n)
   const rot = !n.roleta ? 'desligado'
     : n.livre_hoje ? 'liberado'
       : (n.dist === 'limite' && n.fila ? (FILA_ROTULO[n.fila.st] || '') : 'recebendo')
@@ -302,7 +355,7 @@ function linha(n) {
     + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + (n.status ? ' · ' + n.status : '')) + '">'
     + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + zap + trancado + alerta + conta + '</span></span>'
+    + '<span class="sub">' + fogo + zap + trancado + alerta + conta + '</span></span>'
     + fecha + chave + '</button>'
 }
 // ───────────────────────────────────────────────────────────── palco
