@@ -1596,10 +1596,15 @@ ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
   const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
   if (!wc) return { ok: false }
   try {
-    const r = await wc.executeJavaScript(
-      'window.__swIndica ? window.__swIndica(' + JSON.stringify(String(chatId || '')) + ','
-      + JSON.stringify(String(kind || '')) + ',' + JSON.stringify(Math.max(0, Number(seg) || 0) * 1000) + ') : false', true
-    )
+    // PRAZO CURTO E DE PROPOSITO. Este caminho e enfeite: se a pagina engasgar, o funil nao pode
+    // ficar esperando por ele. Estourou, segue - a pausa e o envio acontecem do mesmo jeito.
+    const r = await Promise.race([
+      wc.executeJavaScript(
+        'window.__swIndica ? window.__swIndica(' + JSON.stringify(String(chatId || '')) + ','
+        + JSON.stringify(String(kind || '')) + ',' + JSON.stringify(Math.max(0, Number(seg) || 0) * 1000) + ') : false', true
+      ),
+      new Promise((ok) => setTimeout(() => ok(false), 3000)),
+    ])
     return { ok: !!r }
   } catch (_) { return { ok: false } }
 })

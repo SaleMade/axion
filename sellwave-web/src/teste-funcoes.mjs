@@ -171,6 +171,20 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('porta que nao e numero nao passa', separaProxy('host:abc:u:s') === null)
 }
 
+// ── 10) O INDICADOR NAO PODE TRAVAR O ENVIO. Este custou um funil que nao saia.
+{
+  const fonte = leia('ui/agente.js')
+  const bloco = fonte.slice(fonte.indexOf('window.__swIndica = function'), fonte.indexOf('window.__swManda = function'))
+  vale('audio NAO abre o gravador da barra', /kind === 'audio'/.test(bloco) && !/markIsRecording/.test(bloco))
+  vale('texto continua mostrando digitando', /markIsComposing/.test(bloco))
+  vale('nao espera a promessa do indicador (ela so volta no fim da duracao)',
+    !/return comPrazo/.test(bloco) && /Promise\.resolve\(true\)/.test(bloco))
+
+  const main = leia('main.js')
+  const ipc = main.slice(main.indexOf("ipcMain.handle('swp:indica'"), main.indexOf("ipcMain.handle('swp:manda'"))
+  vale('o IPC do indicador tem prazo proprio', /Promise\.race/.test(ipc) && /3000/.test(ipc))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

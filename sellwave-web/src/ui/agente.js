@@ -169,14 +169,29 @@
   // Quem espera é o painel, não aqui, e isso não é detalhe: a pausa do passo precisa acontecer num
   // lugar onde o botão Parar seja olhado. Antes o envio ligava o indicador E dormia, então apertar
   // Parar no meio de uma pausa de 10 s não fazia nada até o item terminar.
+  // DUAS COISAS QUE ESTE INDICADOR APRENDEU DO JEITO RUIM (16/10/2026, funil do Bruno parando em
+  // "gravando 1 de 2" sem mandar nada):
+  //
+  // 1. `markIsRecording` NAO e so presenca: no WhatsApp Web de hoje ele ABRE O GRAVADOR na barra de
+  //    escrever - da pra ver na tela, com o x e o visto. Com o gravador aberto a barra esta ocupada
+  //    e o envio do audio que vinha em seguida nao acontecia. O "gravando..." e enfeite; mandar o
+  //    audio e o trabalho. Entao em AUDIO nao se mexe mais na barra: a pausa continua existindo (o
+  //    lead ve o intervalo), so nao se finge gravacao.
+  //
+  // 2. O PROMETIDO SO VOLTA NO FIM DA DURACAO. `markIsComposing(chatId, 5000)` resolve em 5
+  //    segundos, nao na hora. Como o painel ESPERA esse retorno e DEPOIS conta a pausa dele, a
+  //    pausa era contada duas vezes - o passo de 8s virava 16s e parecia travamento. Agora e
+  //    dispara-e-esquece: liga o indicador e volta no mesmo instante, com quem conta o tempo sendo
+  //    o painel, que e onde o botao Parar e olhado.
   window.__swIndica = function (chatId, kind, ms) {
     try {
       var W = window.WPP
       if (!chatId || !ehPessoa(chatId) || !podeEnviar()) return Promise.resolve(false)
       var t = Math.max(0, Number(ms) || 0)
-      if (!t) return Promise.resolve(false)
-      var p = kind === 'audio' ? W.chat.markIsRecording(chatId, t + 300) : W.chat.markIsComposing(chatId, t + 300)
-      return comPrazo(p, 8000, 'indicador').then(function () { return true }).catch(function () { return false })
+      if (!t || kind === 'audio') return Promise.resolve(false)
+      // Nada de `await` aqui: a promessa so volta no fim da duracao, e quem conta o tempo e o painel.
+      try { Promise.resolve(W.chat.markIsComposing(chatId, t + 300)).catch(function () {}) } catch (_) { /* ok */ }
+      return Promise.resolve(true)
     } catch (_) { return Promise.resolve(false) }
   }
 
