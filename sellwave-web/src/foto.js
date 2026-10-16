@@ -163,6 +163,12 @@ async function rodar(ctx) {
     await v.webContents.executeJavaScript("aba='funis'; aberto='funil:s1'; for (const b of document.querySelectorAll('.aba')) b.classList.toggle('on', b.dataset.aba==='funis'); desenha(); 'ok'")
     await new Promise((r) => setTimeout(r, 500))
     await salva(v, '8-painel-funis', pasta)
+
+    // 9) a aba PEDIDOS, que a conversa paralela desenhou. Fotografo porque sou eu que empacoto:
+    //    publicar tela que eu nunca vi e publicar no escuro.
+    await v.webContents.executeJavaScript("aba='pedidos'; aberto=''; for (const b of document.querySelectorAll('.aba')) b.classList.toggle('on', b.dataset.aba==='pedidos'); desenha(); 'ok'")
+    await new Promise((r) => setTimeout(r, 600))
+    await salva(v, '9-painel-pedidos', pasta)
   } catch (e) { console.error('  nao fotografei o painel: ' + ((e && e.message) || e)) }
 
 
