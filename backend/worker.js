@@ -10075,6 +10075,30 @@ const _swwebMundo = (u) => String(aflDe(u) || '').trim();
 // por mundo, nunca no lugar dele.
 const _swwebManda = (u) => (_swwebMundo(u) ? ehDonoDoMundo(u) : isDirector(u));
 
+// TRAVA DE USO: O MESMO NUMERO NAO ABRE EM DUAS MAQUINAS (16/10/2026, pedido do Bruno).
+//
+// Palavras dele: "imagina o mesmo WhatsApp abrir em dois computadores ao mesmo tempo, o WhatsApp ia
+// detectar que tem alguma coisa estranha". Ele esta certo, e e assim que o AdsPower funciona: o
+// navegador tem um botao de iniciar e nao deixa abrir o que ja esta aberto noutro lugar.
+//
+// E UM ALUGUEL COM PRAZO, nao uma marca de ligado/desligado. Marca presa e pior que trava nenhuma:
+// basta um PC desligar na tomada pra o numero ficar bloqueado pra sempre e alguem ter que mexer no
+// banco. Entao quem abre PEDE o numero por 2 minutos e renova de 45 em 45 segundos enquanto
+// estiver com ele; parou de renovar (fechou, caiu a luz, acabou a internet), o aluguel vence
+// sozinho e o proximo abre.
+//
+// O DONO DO ALUGUEL E A MAQUINA, nao a pessoa: o Bruno pareia os numeros do time no PC dele e
+// depois o vendedor usa no PC dele. Sao duas maquinas e as duas sao "dele" no sentido de login, e
+// e exatamente o cruzamento que a trava existe pra impedir.
+const SWWEB_USO_SEG = 120;      // quanto tempo o aluguel vale sem renovar
+async function _swwebUsoTabela(env) {
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)'
+    ).run();
+  } catch (_) { /* ja existe */ }
+}
+
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
   // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
@@ -10160,6 +10184,11 @@ async function handleSwWeb(req, env, path) {
   //
   // A chave da casa continua sendo a MESMA de antes (`_cfgNome` com mundo vazio nao poe sufixo),
   // entao nada do que ja esta gravado precisa ser migrado.
+  // A MAQUINA de quem esta falando. O app manda um id proprio, sorteado uma vez e guardado no
+  // %APPDATA%: e ele que distingue "o Bruno no PC dele" de "o Bruno no PC do vendedor".
+  let maquina = '';
+  try { maquina = String(req.headers.get('x-sw-maquina') || '').replace(/[^a-z0-9-]/gi, '').slice(0, 40); } catch (_) { maquina = ''; }
+
   const mundo = _swwebMundo(u);
   const K_CFG = _cfgNome(SWWEB_CFG, mundo);
   const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
@@ -10478,6 +10507,47 @@ async function handleSwWeb(req, env, path) {
       const dia = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
       lh = (await _leadsHojePorNumero(env, dia)) || {};
     } catch (_) { lh = {}; }
+    // A FILA DO MODO LIMITE, pro app mostrar o MESMO que a Chegada de leads mostra.
+    //
+    // O Bruno pediu a lista do app "parecida com a area de Pressels": posicao na fila, limite e
+    // quantos leads chegaram. Esses tres so fazem sentido juntos - 31/70 "recebendo" e 4/70 "na
+    // fila" tem o mesmo teto e significam coisas opostas, e quem decide qual e a FILA.
+    //
+    // Calculado com a FUNCAO DE VERDADE (_aplicaFilaLimite), nao com uma copia: duas contas pro
+    // mesmo estado viram duas telas discordando, e ai ninguem sabe qual acreditar. Ela quer
+    // { num, at, dist, lim, livre, ordem, idx }, que e o mesmo formato que a roleta monta.
+    // QUEM ESTA COM CADA NUMERO ABERTO AGORA. Vai junto da lista pra o cadeado aparecer sem o app
+    // ter que perguntar numero por numero.
+    const usoDe = {};
+    try {
+      await _swwebUsoTabela(env);
+      const agoraU = Math.floor(Date.now() / 1000);
+      const ru = await env.DB.prepare('SELECT nk, user_id, nome, maquina, desde FROM swweb_uso WHERE ate > ?').bind(agoraU).all();
+      for (const x of ((ru && ru.results) || [])) usoDe[String(x.nk)] = { nome: x.nome || '', user: String(x.user_id || ''), maquina: String(x.maquina || ''), desde: Number(x.desde) || 0 };
+    } catch (_) { /* sem a tabela o app so nao mostra cadeado */ }
+
+    const filaDe = {};
+    try {
+      const emFila = chips
+        .filter((c) => c && c.num && String(c.dist || '') === 'limite')
+        .map((c, i) => ({
+          num: c.num, at: String(c.at || ''), dist: 'limite',
+          lim: Number(c.lim_dia) || 0, livre: String(c.lim_livre || ''),
+          ordem: Number(c.lim_ordem) || 999, idx: i,
+        }));
+      if (emFila.length) {
+        const r = _aplicaFilaLimite(emFila, lh, _brDay());
+        // A POSICAO E DENTRO DA FILA DO VENDEDOR, nao da lista toda: o vendedor ve "1, 2, 3" dele.
+        const posDe = {};
+        for (const u of emFila.slice().sort((a, b) => (a.ordem - b.ordem) || (a.idx - b.idx))) {
+          posDe[u.at] = (posDe[u.at] || 0) + 1;
+          filaDe[_swwebK8(u.num)] = { pos: posDe[u.at], st: 'espera' };
+        }
+        for (const u of r.ficam) if (filaDe[_swwebK8(u.num)]) filaDe[_swwebK8(u.num)].st = 'vez';
+        for (const u of r.bateram) if (filaDe[_swwebK8(u.num)]) filaDe[_swwebK8(u.num)].st = 'bateu';
+      }
+    } catch (_) { /* sem fila a tela cai no modo roleta, que e o padrao */ }
+
     const numeros = meus.map((c) => {
       const nk = _swwebKey(c.num);
       const px = proxies[nk] || null;
@@ -10501,6 +10571,19 @@ async function handleSwWeb(req, env, path) {
         roleta: _swwebApto(c, nomeSt) && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
+        // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
+        dist: String(c.dist || '') === 'limite' ? 'limite' : '',
+        // { pos, st } so em modo limite. st: vez (recebendo), espera (na fila), bateu (no teto).
+        // O interruptor desligado vence tudo, e quem decide isso e o campo `roleta` ao lado.
+        fila: filaDe[_swwebK8(c.num)] || null,
+        // O teto foi liberado so por hoje pela direcao? Muda o rotulo pra "liberado".
+        livre_hoje: String(c.lim_livre || '') === _brDay(),
+        // ABERTO AGORA POR QUEM? null = livre. `meu` = e esta maquina, entao nao e impedimento.
+        uso: (() => {
+          const u2 = usoDe[nk];
+          if (!u2) return null;
+          return { nome: u2.nome, desde: u2.desde, meu: u2.maquina === maquina };
+        })(),
         // NUNCA devolve a senha do proxy pra lista: so se ha proxy e qual o endereco.
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
       };
@@ -10568,6 +10651,52 @@ async function handleSwWeb(req, env, path) {
     }
     await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
+  }
+
+  // POST /api/swweb/uso — pega, renova ou solta o numero. { nk, soltar? }
+  //
+  // Devolve 200 com ok:false quando esta com outra maquina, de proposito: nao e erro do app, e
+  // resposta de negocio, e o app precisa do NOME de quem esta pra mostrar na tela.
+  if (req.method === 'POST' && path === '/api/swweb/uso') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    if (!nk) return err('Falta o número');
+    if (!maquina) return err('Falta identificar a máquina');
+    await _swwebUsoTabela(env);
+    const agoraU = Math.floor(Date.now() / 1000);
+
+    // SO EM NUMERO QUE A PESSOA ALCANCA. Sem isto da pra trancar o numero dos outros de fora.
+    const dataU = await _getDashData(env);
+    const chipU = (Array.isArray(dataU && dataU.chips) ? dataU.chips : []).find((c) => c && _swwebKey(c.num) === nk);
+    const donoU = String((chipU && chipU.at) || '');
+    if (!donoU) return err('Número não encontrado', 404);
+    if (!manda && donoU !== String(u.id)) return err('Este número não é seu', 403);
+    if (manda) {
+      const mDonoU = String((await _mundoDoAt(env, donoU)) || '');
+      if (mDonoU !== mundo) return err('Este número não é da sua operação', 403);
+    }
+
+    if (b && b.soltar) {
+      // SO SOLTA O QUE E SEU. Senao uma maquina derruba a outra sem querer, e o cruzamento que a
+      // trava existe pra impedir acontece do mesmo jeito.
+      try { await env.DB.prepare('DELETE FROM swweb_uso WHERE nk=? AND maquina=?').bind(nk, maquina).run(); } catch (_) { /* ok */ }
+      return json({ ok: true, soltou: true });
+    }
+
+    let atual = null;
+    try { atual = await env.DB.prepare('SELECT user_id, nome, maquina, desde, ate FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { atual = null; }
+    const vivo = atual && Number(atual.ate) > agoraU;
+    if (vivo && String(atual.maquina || '') !== maquina) {
+      return json({ ok: false, ocupado: { nome: atual.nome || 'outra pessoa', desde: Number(atual.desde) || 0 } });
+    }
+    const desde = vivo ? (Number(atual.desde) || agoraU) : agoraU;
+    try {
+      await env.DB.prepare(
+        'INSERT INTO swweb_uso (nk, user_id, nome, maquina, desde, ate) VALUES (?,?,?,?,?,?) ' +
+        'ON CONFLICT(nk) DO UPDATE SET user_id=excluded.user_id, nome=excluded.nome, maquina=excluded.maquina, desde=excluded.desde, ate=excluded.ate'
+      ).bind(nk, String(u.id), String(u.name || u.id), maquina, desde, agoraU + SWWEB_USO_SEG).run();
+    } catch (e) { return err('Não consegui reservar o número agora.', 503); }
+    return json({ ok: true, ate: agoraU + SWWEB_USO_SEG });
   }
 
   // POST /api/swweb/app — carimba qual build esta no R2. Roda junto com o upload do instalador.

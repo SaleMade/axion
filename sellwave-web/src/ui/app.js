@@ -52,14 +52,16 @@ const ZAP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"
 
 function desenhaTrava() {
   const el = $('trava')
-  // Proxy é assunto da direção. Para o vendedor a trava nem existe na tela.
-  el.hidden = !estado.direcao
-  if (!estado.direcao) return
-  const t = estado.travaProxy
-  el.className = 'trava ' + (t ? 'ligada' : 'solta')
-  $('trava-txt').innerHTML = t
-    ? '<b>Trava de proxy ligada</b>' + (estado.exigirBrasil ? ' · só Brasil' : '')
-    : '<b>Trava de proxy desligada</b>'
+  // A FAIXA SO FALA QUANDO ALGO PEDE ATENCAO (16/10/2026, pedido do Bruno: "fica so com o
+  // essencial, o resto vai pra dentro de Ajustes").
+  //
+  // Trava LIGADA e o estado normal: anunciar isso todo dia, no topo, ensina a ignorar a faixa - e
+  // no dia em que ela disser algo util ninguem le. Ligada, some; desligada, aparece em ambar,
+  // porque ai o numero abre sem proxy e sai pelo IP da casa.
+  if (!estado.direcao || estado.travaProxy !== false) { el.hidden = true; return }
+  el.hidden = false
+  el.className = 'trava solta'
+  $('trava-txt').innerHTML = '<b>Trava de proxy desligada</b> · o número abre sem proxy'
 }
 
 function desenhaLista() {
@@ -96,7 +98,6 @@ function desenhaLista() {
       if (e.target.closest('.sw') || e.target.closest('.fecha')) return
       abrir(el.dataset.numero)
     }
-    if (estado.direcao) el.oncontextmenu = (ev) => { ev.preventDefault(); janelaProxy(el.dataset.numero) }
   }
   for (const b of lista.querySelectorAll('.sw')) {
     b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
@@ -104,6 +105,42 @@ function desenhaLista() {
   for (const b of lista.querySelectorAll('.fecha')) {
     b.onclick = (e) => { e.stopPropagation(); fechar(b.dataset.fecha) }
   }
+}
+
+// A LINHA DO NUMERO, no mesmo desenho da Chegada de leads da dash (16/10/2026, pedido do Bruno:
+// "quero parecido com a area de Pressels: ativo ou desativado, a sequencia, o limite e quantos
+// leads chegaram").
+//
+// POR QUE COPIAR E NAO INVENTAR: ele ja le essas frases e essas cores na dash todo dia. Duas telas
+// mostrando o MESMO estado com desenhos diferentes e o jeito mais barato de criar duvida sobre qual
+// esta certa - e aqui as duas leem a mesma fonte, entao elas nunca discordam de verdade.
+//
+// O SIGNIFICADO DAS CORES NAO PODE MUDAR:
+//   verde  #24c278 = recebendo agora
+//   ambar  #f59e0b = fora AGORA, mas volta sozinho a meia-noite (bateu o teto, ou esta perto)
+//   cinza  #94a3b8 = fora e so volta se alguem ligar
+const FILA_ROTULO = { vez: 'recebendo', espera: 'na fila', bateu: 'no limite' }
+
+// A frase inteira, do jeito que esta na dash. Vai no title: em 268px nao cabe na linha, e cortar
+// pela metade seria pior que esconder.
+function fraseEstado(n) {
+  if (!n.roleta) return 'desligado'
+  if (n.dist !== 'limite' || !n.fila) return 'distribuindo'
+  if (n.fila.st === 'vez') return 'recebendo agora'
+  if (n.fila.st === 'bateu') return 'bateu o limite, volta à meia-noite'
+  return 'espera a vez'
+}
+
+// Cor do contador, pela regra do spec: quem bateu e ambar; quem esta na vez vira ambar a partir de
+// 80% do teto (o aviso vem ANTES de parar, nao depois); quem espera e cinza.
+function corDoContador(n) {
+  if (!n.roleta) return '#94a3b8'
+  const st = n.dist === 'limite' && n.fila ? n.fila.st : 'vez'
+  if (st === 'bateu') return '#f59e0b'
+  if (st !== 'vez') return '#94a3b8'
+  const teto = Number(n.lim_dia) || 0
+  const pct = teto ? (Number(n.leads_hoje) || 0) / teto : 0
+  return pct >= 0.8 ? '#f59e0b' : '#24c278'
 }
 
 function linha(n) {
@@ -114,28 +151,42 @@ function linha(n) {
   if (carregando.has(nk)) cls.push('carregando')
   if (semMotor.has(nk)) cls.push('sem-motor')
 
-  // A bolinha usa a cor do status do chip, a mesma que o diretor escolheu na Contingência. Vem
-  // pronta do servidor, então trocar a cor lá muda aqui sem mexer em código.
+  // NA FILA, A BOLINHA VIRA A POSICAO. E a mesma troca da dash: no modo Limite o que importa nao e
+  // "esta de pe?", e "e a vez de quem?". Fora da fila, continua o ponto com a cor do cadastro.
+  const emFila = n.dist === 'limite' && n.fila && n.fila.pos
   const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
-  const estiloSinal = corChip ? ' style="background:' + corChip + '"' : ''
+  const corEstado = corDoContador(n)
+  const sinal = emFila
+    ? '<span class="pos" style="--pc:' + corEstado + '">' + n.fila.pos + '</span>'
+    : '<span class="sinal"' + (corChip ? ' style="background:' + corChip + '"' : '') + '></span>'
 
-  // O ícone do WhatsApp diz o que importa pro vendedor: esta sessão está aberta aqui?
   const zap = '<span class="zap' + (aberto ? '' : ' off') + '" title="' + (aberto ? 'Aberto nesta máquina' : 'Fechado') + '">' + ZAP + '</span>'
+  // CADEADO: outra MAQUINA esta com este numero aberto agora. Nao e erro nem bloqueio permanente -
+  // e o aviso de que abrir ali criaria o cruzamento que derruba chip.
+  const trancado = n.uso && !n.uso.meu
+    ? '<span class="trancado" title="Aberto por ' + esc(n.uso.nome || 'outra pessoa') + '. Dois computadores no mesmo WhatsApp derruba número.">'
+      + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">'
+      + '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>'
+    : ''
   const alerta = semMotor.has(nk)
     ? '<span class="alerta" title="O WhatsApp não carregou o motor aqui. Este número não está recebendo lead novo. Feche e abra de novo.">'
       + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">'
       + '<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></span>'
     : ''
+
+  // O CONTADOR: leads de hoje sobre o teto, com o rotulo do estado e uma barra de 2px na base.
+  // Sem teto cadastrado nao ha o que medir, entao mostra so quantos chegaram.
   const leads = Number(n.leads_hoje) || 0
   const teto = Number(n.lim_dia) || 0
-  const conta = leads || teto ? (leads + (teto ? '/' + teto : '') + ' hoje') : (n.status || '')
-
-  // Proxy só aparece pra direção.
-  const px = estado.direcao
-    ? ((estado.proxies && estado.proxies[nk]) || n.proxy
-      ? '<span class="px" title="proxy cadastrado"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>'
-      : '<span class="px sem" title="Sem proxy. Clique com o botão direito."><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></span>')
-    : ''
+  const rot = !n.roleta ? 'desligado'
+    : n.livre_hoje ? 'liberado'
+      : (n.dist === 'limite' && n.fila ? (FILA_ROTULO[n.fila.st] || '') : 'recebendo')
+  const pct = teto ? Math.min(100, Math.round((leads / teto) * 100)) : 0
+  const conta = teto
+    ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + '/' + teto
+      + (rot ? ' <i>' + rot + '</i>' : '')
+      + '<b style="width:' + pct + '%"></b></span>'
+    : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
 
   // Fechar so faz sentido no que esta aberto. A sessao fica no disco: fechar NAO pede QR depois.
   const fecha = aberto
@@ -147,13 +198,13 @@ function linha(n) {
     + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
     + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
 
-  return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="' + esc(n.status || '') + '">'
-    + '<span class="sinal"' + estiloSinal + '></span>'
+  return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="'
+    + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + (n.status ? ' · ' + n.status : '')) + '">'
+    + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + zap + alerta + esc(conta) + '</span></span>'
-    + fecha + px + chave + '</button>'
+    + '<span class="sub">' + zap + trancado + alerta + conta + '</span></span>'
+    + fecha + chave + '</button>'
 }
-
 // ───────────────────────────────────────────────────────────── palco
 
 function telaLogin(erro) {
@@ -224,10 +275,46 @@ function telaErro(nk, erro) {
 
 // ───────────────────────────────────────────────────────────── ações
 
+// CLICAR NO NUMERO NAO ABRE DIRETO (16/10/2026, pedido do Bruno, e o motivo e dele):
+// "imagina o mesmo WhatsApp abrir em dois computadores ao mesmo tempo, o WhatsApp ia detectar que
+// tem alguma coisa estranha". E assim que o AdsPower funciona: o navegador tem um botao de iniciar
+// e nao deixa abrir o que ja esta aberto noutro lugar.
+//
+// Entao o clique mostra a sessao: o simbolo do WhatsApp, o numero, quem esta com ele se for o caso,
+// e um botao. Abrir de verdade so no botao - e so depois de o servidor confirmar que ninguem mais
+// esta com aquele numero.
+function telaAbrir(nk) {
+  const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
+  if (!n) return telaVazia()
+  window.sw.esconder()
+  ativo = nk
+  const ocupado = n.uso && !n.uso.meu ? n.uso : null
+  palco.innerHTML = ''
+    + '<div class="abrir">'
+    + '<span class="zapg' + (ocupado ? ' trancado' : '') + '">'
+    + '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.1-.2 0-.4.1-.5l.5-.6.2-.4v-.4l-.7-1.7c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2c0 1.3.9 2.5 1 2.7.2.2 1.9 2.9 4.6 4 .6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.2.2-.6.2-1 .1-1.1l-.3-.2Z"/></svg>'
+    + '</span>'
+    + '<h2>' + esc(bonito(cheio(nk))) + '</h2>'
+    + (n.dono ? '<p class="de">' + esc(n.dono) + '</p>' : '')
+    + (ocupado
+      ? '<div class="aviso erro" style="display:block;max-width:360px;margin:14px auto 0">'
+        + '<b>Aberto por ' + esc(ocupado.nome || 'outra pessoa') + '</b><br>'
+        + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
+        + 'Quando a outra pessoa fechar, este botão libera sozinho.</div>'
+        + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
+      : '<p class="dica">A sessão deste número fica guardada aqui. Abrir não pede QR de novo.</p>'
+        + '<button class="principal" id="ab-abrir" style="margin-top:4px">Abrir WhatsApp</button>')
+    + '</div>'
+  const b = $('ab-abrir')
+  if (b) b.onclick = () => abrirDeVerdade(nk)
+  desenhaLista()
+}
+
 async function abrir(numero) {
   const nk = numKey(numero)
   if (!nk || carregando.has(nk)) return
   falhou.delete(nk)
+  // Numero JA ABERTO nesta maquina so volta pra tela: nao ha nada pra reservar nem pra perguntar.
   if (estado.abertos.includes(nk)) {
     ativo = nk
     await window.sw.mostrar(nk)
@@ -235,6 +322,13 @@ async function abrir(numero) {
     desenhaLista()
     return
   }
+  telaAbrir(nk)
+}
+
+async function abrirDeVerdade(nk) {
+  if (!nk || carregando.has(nk)) return
+  const numero = (((estado.numeros || []).find((x) => numKey(x.numero) === nk)) || {}).numero || nk
+  falhou.delete(nk)
   carregando.add(nk)
   ativo = nk
   desenhaLista()
@@ -249,6 +343,9 @@ async function abrir(numero) {
   // tinha sumido da tela, e ele nao tinha como saber.
   if (!r.ok) {
     if (ativo !== nk) { falhou.set(nk, r.erro || 'Falhou.'); desenhaLista(); return }
+    // OCUPADO NAO E FALHA: e a trava fazendo o trabalho dela. Volta pra tela da sessao, que ja sabe
+    // dizer quem esta com o numero, em vez da tela vermelha de "Nao abriu".
+    if (r.ocupado) { await recarregaEstado(); return telaAbrir(nk) }
     return telaErro(nk, r.erro || 'Falhou.')
   }
   await recarregaEstado()
@@ -257,7 +354,6 @@ async function abrir(numero) {
   if (ativo === nk) palco.innerHTML = ''
   desenhaLista()
 }
-
 async function fechar(nk) {
   await window.sw.fechar(nk)
   await recarregaEstado()
@@ -301,89 +397,6 @@ function separaProxy(txt) {
   return { host, porta, usuario: (p[2] || '').trim(), senha: p.slice(3).join(':').trim() }
 }
 
-function janelaProxy(numero) {
-  if (!estado.direcao) return
-  const nk = numKey(numero)
-  const px = (estado.proxies && estado.proxies[nk]) || null
-  // O FORMULARIO FICA AQUI, e nao so na dash.
-  //
-  // Esconder o cadastro do app foi erro meu: o motivo (vendedor nao troca o proprio proxy e fura a
-  // trava) e certo, mas quem decide isso e o SERVIDOR, que recusa com 403 quem nao manda. Tirando
-  // a tela de todo mundo, sobrou o diretor preso em "cadastre na dash" justamente na hora em que
-  // ele descobre que falta proxy. Agora ele cadastra aqui, e o vendedor continua sem poder.
-  modalCorpo.innerHTML = ''
-    + '<h2>Proxy de ' + esc(bonito(cheio(nk))) + '</h2>'
-    + '<p>' + (px ? 'Saindo por <b>' + esc(px.host + ':' + px.porta) + '</b>.' : 'Este número ainda não tem proxy.')
-    + ' Só HTTP: o Chromium não autentica SOCKS com senha.</p>'
-    + '<div class="campo"><label for="px-colar">Colar de uma vez</label>'
-    + '<input id="px-colar" placeholder="isp.exemplo.com:10001:usuario:senha" autocomplete="off" spellcheck="false" /></div>'
-    + '<div class="campo-par">'
-    + '<div class="campo"><label for="px-host">Endereço</label><input id="px-host" value="' + esc(px ? px.host : '') + '" autocomplete="off" spellcheck="false" /></div>'
-    + '<div class="campo campo-curto"><label for="px-porta">Porta</label><input id="px-porta" value="' + esc(px ? px.porta : '') + '" inputmode="numeric" autocomplete="off" /></div>'
-    + '</div>'
-    + '<div class="campo-par">'
-    + '<div class="campo"><label for="px-user">Usuário</label><input id="px-user" autocomplete="off" spellcheck="false" /></div>'
-    + '<div class="campo"><label for="px-senha">Senha</label><input id="px-senha" type="password" autocomplete="off"'
-    + (px && px.temSenha ? ' placeholder="deixe em branco pra manter"' : '') + ' /></div>'
-    + '</div>'
-    + '<div class="aviso" id="p-av"></div>'
-    + '<div class="acoes">'
-    + (px ? '<button class="secundario" id="p-remover">Remover</button>' : '')
-    + (px ? '<button class="secundario" id="p-testar">Testar saída</button>' : '')
-    + '<button class="principal" style="margin:0" id="p-salvar">Salvar</button>'
-    + '<button class="secundario" id="p-fechar">Fechar</button></div>'
-  abreModal()
-
-  $('px-colar').oninput = (e) => {
-    const p = separaProxy(e.target.value)
-    if (!p) return
-    $('px-host').value = p.host
-    $('px-porta').value = p.porta
-    if (p.usuario) $('px-user').value = p.usuario
-    if (p.senha) $('px-senha').value = p.senha
-  }
-
-  const aviso = (txt, ok) => {
-    const av = $('p-av')
-    av.className = 'aviso ' + (ok ? 'ok' : 'erro')
-    av.style.display = 'block'
-    av.textContent = txt
-  }
-
-  const salvar = async (apagar) => {
-    const b = $('p-salvar'), br = $('p-remover')
-    const host = apagar ? '' : String($('px-host').value || '').trim()
-    if (!apagar && (!host || !String($('px-porta').value || '').trim())) return aviso('Falta o endereço ou a porta.')
-    if (b) { b.disabled = true; b.textContent = 'Salvando...' }
-    if (br) br.disabled = true
-    const r = await window.sw.salvarProxy({
-      nk, host,
-      porta: $('px-porta').value, usuario: $('px-user').value, senha: $('px-senha').value,
-    })
-    if (b) { b.disabled = false; b.textContent = 'Salvar' }
-    if (br) br.disabled = false
-    if (!r || !r.ok) return aviso((r && r.erro) || 'Não salvou')
-    await recarregaEstado()
-    if (apagar) { fechaModal(); return }
-    aviso('Proxy salvo. Agora abra o número.', true)
-  }
-
-  $('p-salvar').onclick = () => salvar(false)
-  const rem = $('p-remover')
-  if (rem) rem.onclick = () => salvar(true)
-  $('p-fechar').onclick = fechaModal
-  const testar = $('p-testar')
-  if (testar) testar.onclick = async () => {
-    testar.disabled = true; testar.textContent = 'Testando...'
-    const r = await window.sw.testarProxy(nk)
-    testar.disabled = false; testar.textContent = 'Testar saída'
-    aviso(r.ok
-      ? 'Saiu por ' + r.ip + (r.pais ? ' · ' + r.pais : '') + (r.cidade ? ' · ' + r.cidade : '')
-      : r.erro, !!r.ok)
-  }
-}
-
-// AJUSTES. O vendedor vê só o teto de janelas; proxy é da direção.
 function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
   let html = '<h2>Ajustes</h2>'
@@ -395,6 +408,26 @@ function janelaAjustes() {
       + '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + estado.exigirBrasil + '"></button></div>'
   } else {
     html += '<p>Ajustes desta máquina.</p>'
+  }
+  // VER COMO UM DOS VENDEDORES (16/10/2026, pedido do Bruno: "quero ver como seria a visualizacao
+  // dele, pra acompanhar o dia a dia e ver se ele esta convertendo certinho").
+  //
+  // Quem responde como a pessoa e a DASH, nao o app: o pedido sai com ?como=<id> e volta com o que
+  // o login dela traria. E a mesma peca do "ver como" da dash e ela so ESTREITA. Por isso o preview
+  // aparece so pra quem ja e direcao de verdade - dentro dele `estado.direcao` vem false do
+  // servidor e esta tela some sozinha, que e o certo.
+  const vends = (estado.vendedores || []).filter((v) => v && v.id && v.id !== 'dir')
+  if (estado.direcao && vends.length) {
+    html += '<div class="chave"><div class="txt"><b>Ver como vendedor</b>'
+      + '<span>A tela fica igualzinha à dele: só os números dele, sem nada de proxy. Leitura apenas.</span></div>'
+      + '<select id="como" class="escolha"><option value="">Eu mesmo</option>'
+      + vends.map((v) => '<option value="' + esc(v.id) + '">' + esc(v.nome) + '</option>').join('')
+      + '</select></div>'
+  }
+  if (estado.como) {
+    html += '<div class="chave"><div class="txt"><b>Você está vendo como outra pessoa</b>'
+      + '<span>Ligar ou desligar número continua acontecendo como você, não como ela.</span></div>'
+      + '<button class="secundario" id="como-sair" style="margin:0">Voltar a ser eu</button></div>'
   }
   html += '<div class="chave"><div class="txt"><b>Painel de venda ao lado</b>'
     + '<span>As respostas rápidas e os funis, do lado direito do WhatsApp.</span></div>'
@@ -437,6 +470,13 @@ function janelaAjustes() {
     e.target.value = r.maxAbertos
     await recarregaEstado()
   }
+  const sel = $('como')
+  if (sel) {
+    sel.value = estado.como || ''
+    sel.onchange = async () => { await window.sw.verComo(sel.value); await recarregaEstado(); janelaAjustes() }
+  }
+  const sair = $('como-sair')
+  if (sair) sair.onclick = async () => { await window.sw.verComo(''); await recarregaEstado(); janelaAjustes() }
   $('t-log').onclick = () => window.sw.abrirLog()
   $('t-fechar').onclick = fechaModal
 }
@@ -456,7 +496,10 @@ function abreModal() {
 
 async function recarregaEstado() {
   estado = await window.sw.estado()
-  $('versao').textContent = estado.nome || ('v' + estado.versao)
+  $('versao').textContent = estado.como
+    ? (((estado.vendedores || []).find((x) => x.id === estado.como) || {}).nome || 'vendedor')
+    : (estado.nome || ('v' + estado.versao))
+  desenhaPreview()
   $('versao').title = 'SellWave Web v' + estado.versao
     + (estado.agenteDeOnde === 'servidor' ? ' · motor de conversa atualizado' : '')
   avisaVersao(estado.precisaBaixar ? estado : null)
@@ -480,6 +523,22 @@ function avisaVersao(d) {
     + '. Clique pra baixar, instale por cima.</span>'
   el.title = 'As conversas e os números pareados continuam salvos'
   el.onclick = () => window.sw.abrirInstalador()
+}
+
+// A TELA TEM QUE DIZER QUE E PREVIEW. Sem isto, o Bruno entra no "ver como", some metade da tela
+// (proxy, travas, numeros dos outros) e a leitura natural e "quebrou" ou "perdi permissao".
+function desenhaPreview() {
+  const el = $('preview')
+  if (!el) return
+  if (!estado.como) { el.hidden = true; return }
+  const nome = ((estado.vendedores || []).find((x) => x.id === estado.como) || {}).nome || 'vendedor'
+  el.hidden = false
+  el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+    + 'stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 12px"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>'
+    + '<circle cx="12" cy="12" r="3"/></svg><span>Vendo como <b>' + esc(nome) + '</b></span>'
+    + '<button id="preview-sair" title="Voltar a ser você">sair</button>'
+  const b = $('preview-sair')
+  if (b) b.onclick = async () => { await window.sw.verComo(''); await recarregaEstado() }
 }
 
 function avisoRede(txt) {
@@ -507,7 +566,31 @@ async function inicio() {
 
 $('trava').onclick = janelaAjustes
 $('ajustes').onclick = janelaAjustes
-$('atualizar').onclick = async () => { await window.sw.numeros(); await recarregaEstado() }
+// SINCRONIA NOS DOIS SENTIDOS, SEM BOTAO (16/10/2026, pedido do Bruno). Ligar ou desligar um
+// numero na Chegada de leads da dash passa a refletir aqui sozinho, e o contrario tambem - as duas
+// telas leem a MESMA fonte, entao basta reler.
+//
+// 20 SEGUNDOS, e nao 3: a leitura passa pelo estado inteiro da dash e o poll curto em consulta
+// quente ja derrubou a dash uma vez (ver memoria d1-lentidao-consultas-quentes). O interruptor da
+// propria tela ja e otimista, entao quem mexe aqui ve na hora; os 20s sao pra mudanca que veio de
+// FORA.
+async function sincroniza() {
+  if (!estado.temToken || document.hidden) return
+  try { await window.sw.numeros(); await recarregaEstado() } catch (_) { /* a proxima tentativa resolve */ }
+}
+setInterval(sincroniza, 20000)
+// Voltar pra janela e o momento em que a pessoa MAIS repara que algo mudou noutro lugar.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sincroniza() })
+// E AO GANHAR FOCO, que e o que de fato acontece aqui: o SellWave Web e uma JANELA, e alternar
+// entre a janela dele e a do navegador NAO muda o visibilityState. So com visibilitychange, voltar
+// da dash pro app continuaria mostrando o estado velho - justo o caso que a sincronia existe pra
+// resolver. Trava de 5s pra alt-tab repetido nao virar leitura em rajada.
+let ultimoFoco = 0
+window.addEventListener('focus', () => {
+  if (Date.now() - ultimoFoco < 5000) return
+  ultimoFoco = Date.now()
+  sincroniza()
+})
 $('sair').onclick = async () => { await window.sw.sair(); await recarregaEstado(); telaLogin('') }
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenhaLista() }
 modal.onclick = (e) => { if (e.target === modal) fechaModal() }

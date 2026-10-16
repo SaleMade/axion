@@ -74,6 +74,7 @@ async function rodar(ctx) {
       estado.nome = 'Guilherme'
       estado.maxAbertos = 6
       estado.direcao = ${direcao ? 'true' : 'false'}
+      estado.vendedores = [{ id: 'a1', nome: 'Guilherme' }, { id: 'a2', nome: 'Kevin Marques' }, { id: 'a3', nome: 'Murilo' }]
       estado.numeros = [
         { numero: '(15) 97407-6200', nk: '1574076200', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 23, proxy: { host: 'isp.decodo.com', porta: 10001 } },
         { numero: '(19) 99598-3293', nk: '1995983293', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 41, proxy: { host: 'isp.decodo.com', porta: 10002 } },
@@ -102,12 +103,15 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 400))
     await salva(ctx.casca, '3-lista-vendedor', pasta)
 
-    // a janelinha de PROXY da direcao: e por onde o Bruno cadastra sem sair do app
-    await ctx.casca.webContents.executeJavaScript(monta(true))
-    await ctx.casca.webContents.executeJavaScript("janelaProxy('(15) 97407-6200'); 'ok'")
+    // A TELA DA SESSAO: e o que o vendedor ve ao clicar num numero. Duas fotos, porque as duas
+    // caras importam: livre (com botao) e em uso por outra pessoa (sem botao).
+    await ctx.casca.webContents.executeJavaScript("telaAbrir('1995983293'); 'ok'")
     await new Promise((r) => setTimeout(r, 400))
-    await salva(ctx.casca, '6-proxy-direcao', pasta)
-    await ctx.casca.webContents.executeJavaScript('fechaModal(); "ok"')
+    await salva(ctx.casca, '3b-abrir-livre', pasta)
+    await ctx.casca.webContents.executeJavaScript("estado.numeros.find(n => n.nk === '1995983293').uso = { nome: 'Kevin Marques', meu: false }; desenhaLista(); telaAbrir('1995983293'); 'ok'")
+    await new Promise((r) => setTimeout(r, 400))
+    await salva(ctx.casca, '3c-abrir-ocupado', pasta)
+    await ctx.casca.webContents.executeJavaScript("delete estado.numeros.find(n => n.nk === '1995983293').uso; desenhaLista(); 'ok'")
 
     // os Ajustes do VENDEDOR: tem que sobrar so o que e da maquina dele
     await ctx.casca.webContents.executeJavaScript('janelaAjustes(); "ok"')

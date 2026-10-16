@@ -444,6 +444,14 @@ async function abreNumero(numero) {
     return { ok: true, jaAberto: true }
   }
   if (abrindo.has(nk)) return { ok: true, jaAberto: true }
+  // A TRAVA VEM ANTES DE QUALQUER COISA PESADA: antes do proxy, antes de subir a sessao. Se o
+  // numero esta com outra maquina, nem comeca.
+  const uso = await pedeUso(nk)
+  if (!uso.ok) {
+    return uso.ocupado
+      ? { ok: false, ocupado: uso.ocupado, erro: 'Este número está aberto por ' + (uso.ocupado.nome || 'outra pessoa') + '. Dois computadores no mesmo WhatsApp é o que mais derruba número.' }
+      : { ok: false, erro: uso.erro || 'Não consegui reservar este número.' }
+  }
   abrindo.add(nk)
   const meu = ++pedidoAtual
   try {
@@ -613,6 +621,7 @@ function salvaSessao(particao) {
 function fechaNumero(nk) {
   const s = abertos.get(nk)
   if (!s) return
+  soltaUso(nk)
   salvaSessao(particaoDe(nk))
   try { janela.contentView.removeChildView(s.view) } catch (_) { /* ok */ }
   try { s.view.webContents.close() } catch (_) { /* ok */ }
@@ -684,6 +693,59 @@ async function confereVersao() {
     }
   } catch (_) { /* sem rede: o aviso espera, o app funciona */ }
 }
+
+// ID DESTA MAQUINA, sorteado uma vez e guardado junto da configuracao.
+//
+// E o que distingue "o Bruno no PC dele" de "o Bruno no PC do vendedor". Tem que ser a MAQUINA e
+// nao a pessoa: ele mesmo contou que pareia os numeros do time no computador dele e depois o
+// vendedor usa no dele - sao dois lugares, o mesmo login, e e exatamente o cruzamento que a trava
+// existe pra impedir.
+function maquinaId() {
+  if (!config.maquina) {
+    config.maquina = 'm' + require('node:crypto').randomBytes(8).toString('hex')
+    gravarConfig()
+  }
+  return config.maquina
+}
+const cabecalhos = () => ({
+  'content-type': 'application/json',
+  Authorization: 'Bearer ' + config.token,
+  'x-sw-maquina': maquinaId(),
+})
+
+// TRAVA DE USO: PEDE, RENOVA E SOLTA.
+//
+// O aluguel vale 2 minutos no servidor e a renovacao vai de 45 em 45 segundos: tres chances de
+// renovar antes de vencer, entao uma falha de rede nao derruba o numero da mao de quem esta
+// usando. Fechou, solta na hora; caiu a luz, vence sozinho.
+const alugados = new Set()
+async function pedeUso(nk) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/uso', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ nk }), signal: AbortSignal.timeout(15000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    if (d && d.ok) { alugados.add(nk); return { ok: true } }
+    return { ok: false, ocupado: (d && d.ocupado) || { nome: 'outra pessoa' } }
+  } catch (_) {
+    // SEM RESPOSTA, NAO ABRE. Abrir "no escuro" e justamente o cruzamento que a trava evita, e o
+    // preco de errar pro lado permissivo e um chip banido.
+    return { ok: false, erro: 'Não deu pra falar com a dash pra conferir se alguém está usando este número.' }
+  }
+}
+async function soltaUso(nk) {
+  alugados.delete(nk)
+  if (!config.token) return
+  try {
+    await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/uso', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ nk, soltar: true }), signal: AbortSignal.timeout(10000),
+    })
+  } catch (_) { /* vence sozinho em 2 min */ }
+}
+setInterval(() => { for (const nk of alugados) pedeUso(nk) }, 45000)
 
 const ARQ_AGENTE_BAIXADO = () => path.join(app.getPath('userData'), 'agente-servido.js')
 let agenteReprovado = false        // a copia baixada ja falhou nesta sessao: nao tenta de novo
@@ -881,6 +943,9 @@ function leFila() {
 setInterval(gravaFila, 10000)
 app.on('before-quit', () => {
   gravaFila()
+  // Solta o que esta na mao antes de sair. Nao da pra esperar a resposta (o before-quit nao espera
+  // promessa), mas o pedido sai; e se nao sair, o aluguel vence em 2 minutos de qualquer jeito.
+  for (const nk of alugados) soltaUso(nk)
   // Antes de morrer, manda gravar TODAS as sessoes abertas. Sem isto, fechar o app com seis
   // numeros abertos podia perder o pareamento dos ultimos que o Chromium ainda nao tinha gravado.
   for (const nk of abertos.keys()) salvaSessao(particaoDe(nk))
@@ -1058,9 +1123,29 @@ setInterval(bateSinal, 60000)
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // 7) Conversa com a dash
 
+// VER COMO UM DOS VENDEDORES (16/10/2026, pedido do Bruno: "quero ver como seria a visualizacao
+// dele, pra acompanhar o dia a dia e ver se ele esta convertendo certinho").
+//
+// Isto NAO e simulacao do lado do app. Quem responde como a pessoa e a dash: qualquer GET com
+// `?como=<id>` vindo de diretor volta com as MESMAS colunas que o login dela traria, inclusive as
+// que mudam o recorte. E a mesma peca que ja faz o "ver como" da dash inteira desde 15/09, e ela
+// so ESTREITA: o alvo nunca e diretor, entao nao da pra ver mais do que se ve.
+//
+// So vale pra LEITURA, de proposito. Ligar ou desligar um numero enquanto esta no preview continua
+// acontecendo como VOCE, nao como ele - gravacao com a cara de outra pessoa seria registro falso.
+let comoId = ''
+let donosConhecidos = []   // [{ id, nome }] dos donos vistos na ultima leitura REAL
+const comoNaUrl = () => (comoId ? '?como=' + encodeURIComponent(comoId) : '')
+
+ipcMain.handle('sw:como', async (_e, { id }) => {
+  comoId = String(id || '')
+  const r = await buscaNumeros()
+  return { ok: true, como: comoId, numeros: (r && r.numeros) || [] }
+})
+
 async function buscaNumeros() {
   if (!config.token) return { ok: false, erro: 'Falta entrar com o token da dash.' }
-  const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/numeros'
+  const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/numeros' + comoNaUrl()
   try {
     const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(20000) })
     ajustaRelogio(r)
@@ -1069,6 +1154,13 @@ async function buscaNumeros() {
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // A LISTA DE QUEM DA PRA VER so e remontada fora do preview. Dentro dele a resposta traz so os
+    // numeros de uma pessoa, e guardar isso apagaria as outras opcoes do seletor.
+    if (!comoId) {
+      const vistos = new Map()
+      for (const n of lista) if (n && n.at && n.dono) vistos.set(String(n.at), String(n.dono))
+      donosConhecidos = [...vistos].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+    }
     if (d && d.config) {
       if (typeof d.config.travaProxy === 'boolean') config.travaProxy = d.config.travaProxy
       if (typeof d.config.exigirBrasil === 'boolean') config.exigirBrasil = d.config.exigirBrasil
@@ -1100,6 +1192,13 @@ ipcMain.handle('sw:estado', () => ({
   }])),
   maxAbertos: Number(config.maxAbertos) || 6,
   direcao: !!config.direcao,
+  // Em preview, `direcao` ja vem false do servidor (ele responde como a pessoa), entao a tela
+  // esconde proxy e trava sozinha. `comoId` existe so pra marcar a tela: preview sem aviso e o
+  // jeito mais rapido de alguem achar que perdeu permissao.
+  como: comoId,
+  // De quem da pra ver a tela. Sai dos donos dos numeros que a dash mandou na ULTIMA leitura REAL
+  // (sem preview), senao entrar no preview de um vendedor apagaria a lista de escolha.
+  vendedores: donosConhecidos,
   painelLigado: painelLigado,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
@@ -1386,7 +1485,8 @@ ipcMain.handle('swp:lead', async (_e, { phone }) => {
   if (fone.length < 8) return { ok: true, achou: false }
   if (!config.token) return { ok: false, erro: 'entre de novo na dash' }
   try {
-    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/lead?phone=' + encodeURIComponent(fone),
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/lead?phone=' + encodeURIComponent(fone)
+      + (comoId ? '&como=' + encodeURIComponent(comoId) : ''),
       { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(15000) })
     ajustaRelogio(r)
     if (r.status === 401 || r.status === 403) return { ok: false, erro: 'entre de novo na dash' }
@@ -1469,6 +1569,8 @@ ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } 
 // ABRE O INSTALADOR NO NAVEGADOR. O arquivo tem 111 MB: baixar por dentro do app seria uma barra
 // de progresso nova pra manter e nenhuma vantagem. O navegador ja sabe fazer isso, e a rota e
 // publica de proposito (um <a href> nao manda Authorization).
+ipcMain.handle('sw:uso-soltar', async (_e, { nk }) => { await soltaUso(numKey(nk)); return { ok: true } })
+
 ipcMain.handle('sw:abrirInstalador', () => {
   const url = urlInstalador || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/instalador')
   try { shell.openExternal(url) } catch (_) { /* ok */ }
