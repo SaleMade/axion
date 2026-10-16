@@ -1,4 +1,4 @@
-// Casca do Sellwave Web: a barra de números, o login e os ajustes.
+// Casca do SellWave Web: a barra de números, o login e os ajustes.
 // Ela NÃO fala com a rede: tudo passa pelo processo principal, via window.sw (ver preload.js).
 //
 // DUAS CARAS, uma do vendedor e uma da direção (16/10/2026, pedido do Bruno: "para meus vendedores
@@ -261,7 +261,7 @@ function janelaProxy(numero) {
     + '<h2>Proxy de ' + esc(bonito(cheio(nk))) + '</h2>'
     + (px
       ? '<p>Saindo por <b>' + esc(px.host + ':' + px.porta) + '</b>.</p>'
-      : '<p>Este número ainda não tem proxy. Cadastre em Ferramentas &gt; Sellwave Web, na dash.</p>')
+      : '<p>Este número ainda não tem proxy. Cadastre em Ferramentas &gt; SellWave Web, na dash.</p>')
     + '<div class="aviso" id="p-av"></div>'
     + '<div class="acoes">'
     + (px ? '<button class="secundario" id="p-testar">Testar saída</button>' : '')
@@ -355,7 +355,7 @@ function abreModal() {
 async function recarregaEstado() {
   estado = await window.sw.estado()
   $('versao').textContent = estado.nome || ('v' + estado.versao)
-  $('versao').title = 'Sellwave Web v' + estado.versao
+  $('versao').title = 'SellWave Web v' + estado.versao
   desenhaTrava()
   desenhaLista()
   return estado

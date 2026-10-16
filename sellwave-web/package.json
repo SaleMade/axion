@@ -15,7 +15,7 @@
   },
   "build": {
     "appId": "br.com.sellwave.web",
-    "productName": "Sellwave Web",
+    "productName": "SellWave Web",
     "files": ["src/**/*", "package.json"],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }]

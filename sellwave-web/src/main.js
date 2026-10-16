@@ -1,4 +1,4 @@
-// Sellwave Web - processo principal.
+// SellWave Web - processo principal.
 //
 // O que este arquivo faz: abre uma janela com a casca da SellWave (barra lateral) e, pra cada
 // numero de WhatsApp, cria uma WebContentsView COMPLETAMENTE isolada (particao propria, proxy
@@ -26,6 +26,15 @@ const UA_LIMPO =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/' + process.versions.chrome + ' Safari/537.36'
 app.userAgentFallback = UA_LIMPO
+
+// PASTA DOS DADOS FIXA, e de proposito.
+//
+// `app.getPath('userData')` deriva do NOME do app. Trocar o nome no package.json - ou o empacotador
+// resolver `productName` em vez de `name` - muda a pasta, e com ela somem TODAS as sessoes
+// pareadas: o vendedor atualiza o app e cada numero volta pra tela do QR. Escrevendo o caminho aqui,
+// renomear o produto deixa de ser perigoso e o app em dev usa exatamente a mesma pasta do instalado.
+// Tem que vir antes de qualquer `session.fromPartition`, senao o disco ja foi escolhido.
+try { app.setPath('userData', path.join(app.getPath('appData'), 'sellwave-web')) } catch (_) { /* ok */ }
 
 const WA_URL = 'https://web.whatsapp.com'
 const WA_ORIGEM = 'https://web.whatsapp.com'
@@ -193,7 +202,7 @@ function proxyDoNumero(nk) {
 
 // O PROXY MANDA DA DASH, nao da maquina do vendedor.
 // Proxy errado (ou de fora do Brasil) num numero +55 e pior que proxy nenhum, entao quem cadastra e
-// a direcao, em Ferramentas > Sellwave Web. A copia local existe so pra o app continuar abrindo se
+// a direcao, em Ferramentas > SellWave Web. A copia local existe so pra o app continuar abrindo se
 // a dash estiver fora do ar na hora. A senha nao vem na listagem: so nesta chamada, por numero.
 async function puxaProxyDaDash(nk) {
   if (!config.token || !nk) return null
@@ -433,7 +442,7 @@ async function abreDeVerdade(nk, numero, meu) {
   await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
   if (config.travaProxy && !px) {
-    return { ok: false, erro: 'Este número não tem proxy cadastrado, e a trava está ligada. Cadastre o proxy em Ferramentas > Sellwave Web, na dash.' }
+    return { ok: false, erro: 'Este número não tem proxy cadastrado, e a trava está ligada. Cadastre o proxy em Ferramentas > SellWave Web, na dash.' }
   }
 
   const ses = preparaSessao(nk)
@@ -851,7 +860,7 @@ ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true
 //
 // Antes o vendedor podia abrir o numero com o proxy da direcao, passar no preflight, e DEPOIS
 // trocar por um proxy dele (ou pelo IP da casa dele) com o botao direito: a trava era contornada
-// pelo proprio lado que ela deveria conter. Quem cadastra e a direcao, em Ferramentas > Sellwave
+// pelo proprio lado que ela deveria conter. Quem cadastra e a direcao, em Ferramentas > SellWave
 // Web, e o app so LE.
 ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   await puxaProxyDaDash(nk)
@@ -963,6 +972,20 @@ async function dataUriDe(url) {
   cacheMidia.set(url, uri)
   return uri
 }
+
+// "DIGITANDO..." NA CONVERSA, sem bloquear ninguem. Quem conta o tempo e o painel.
+ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
+  const alvo = String(nk || '') ? abertos.get(String(nk)) : null
+  const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
+  if (!wc) return { ok: false }
+  try {
+    const r = await wc.executeJavaScript(
+      'window.__swIndica ? window.__swIndica(' + JSON.stringify(String(chatId || '')) + ','
+      + JSON.stringify(String(kind || '')) + ',' + JSON.stringify(Math.max(0, Number(seg) || 0) * 1000) + ') : false', true
+    )
+    return { ok: !!r }
+  } catch (_) { return { ok: false } }
+})
 
 ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
   // O ENVIO VAI PRA VIEW DAQUELE NUMERO, nao pra "a que esta na tela".
@@ -1099,7 +1122,7 @@ app.whenReady().then(() => {
     // 1180 = barra (268) + painel (316) + 596 pro WhatsApp. Medido: abaixo disso a tela de entrar
     // da Meta corta na direita e o vendedor nao ve o QR inteiro.
     width: 1440, height: 920, minWidth: 1180, minHeight: 680,
-    title: 'Sellwave Web',
+    title: 'SellWave Web',
     backgroundColor: '#0b0e14',
     autoHideMenuBar: true,
     // O modo FOTO precisa da janela desenhando (capturePage nao funciona em janela escondida),
@@ -1175,7 +1198,7 @@ app.whenReady().then(() => {
       try {
         await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
         await new Promise((r) => setTimeout(r, 1200))
-        out.agente = !!(await wc.executeJavaScript('typeof window.__swEstado === "function" && typeof window.__swManda === "function"'))
+        out.agente = !!(await wc.executeJavaScript('typeof window.__swEstado === "function" && typeof window.__swManda === "function" && typeof window.__swIndica === "function"'))
         out.estado = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null')
       } catch (e) { out.painelErro = String((e && e.message) || e).slice(0, 110) }
       return out
@@ -1217,5 +1240,5 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 
 process.on('uncaughtException', (e) => {
   console.error('[sellwave-web] erro nao tratado:', e)
-  try { dialog.showErrorBox('Sellwave Web', String((e && e.message) || e)) } catch (_) { /* ok */ }
+  try { dialog.showErrorBox('SellWave Web', String((e && e.message) || e)) } catch (_) { /* ok */ }
 })

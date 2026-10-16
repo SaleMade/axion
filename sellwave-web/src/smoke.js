@@ -135,7 +135,7 @@ async function rodar(ctx) {
     if (r.carregou && ctx.injeta) {
       const p = await ctx.injeta(r.wc)
       conta('o motor do WhatsApp (WA-JS) carregou', !!p.wpp, p.wppErro || (p.wpp ? 'window.WPP presente' : ''))
-      conta('o agente instalou na pagina', !!p.agente, p.painelErro || (p.agente ? '__swEstado e __swManda presentes' : ''))
+      conta('o agente instalou na pagina', !!p.agente, p.painelErro || (p.agente ? '__swEstado, __swManda e __swIndica presentes' : ''))
       conta('o agente responde o estado', !!p.estado, p.estado ? JSON.stringify(p.estado).slice(0, 70) : 'sem resposta')
       // O TESTE QUE IMPEDE LEAD PAGO IR PRA NINGUEM. Na tela do QR o motor ja responde true, mas
       // ninguem pareou aparelho nenhum: se `autenticado` vier true aqui, o sinal de vida vai dizer

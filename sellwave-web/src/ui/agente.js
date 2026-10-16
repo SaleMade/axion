@@ -109,7 +109,6 @@
   }
 
   // ───────────────────────────────────────────────────────────── envio
-  function espera(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
   function comPrazo(p, ms, oque) {
     return Promise.race([p, new Promise(function (_, x) { setTimeout(function () { x(new Error('demorou demais: ' + oque)) }, ms) })])
   }
@@ -120,8 +119,23 @@
   // baixa e o processo principal (que nao passa por CSP nem por CORS) e manda o dataUri pronto
   // junto do item. Mesmo motivo de nao existir tag script aqui.
 
-  // Manda UM item. `sim` é o tempo de "digitando"/"gravando" em segundos: é o que faz a conversa
-  // não parecer disparo automático.
+  // LIGA O "DIGITANDO.../GRAVANDO..." E VOLTA NA HORA.
+  //
+  // Quem espera é o painel, não aqui, e isso não é detalhe: a pausa do passo precisa acontecer num
+  // lugar onde o botão Parar seja olhado. Antes o envio ligava o indicador E dormia, então apertar
+  // Parar no meio de uma pausa de 10 s não fazia nada até o item terminar.
+  window.__swIndica = function (chatId, kind, ms) {
+    try {
+      var W = window.WPP
+      if (!chatId || !ehPessoa(chatId) || !podeEnviar()) return Promise.resolve(false)
+      var t = Math.max(0, Number(ms) || 0)
+      if (!t) return Promise.resolve(false)
+      var p = kind === 'audio' ? W.chat.markIsRecording(chatId, t + 300) : W.chat.markIsComposing(chatId, t + 300)
+      return comPrazo(p, 8000, 'indicador').then(function () { return true }).catch(function () { return false })
+    } catch (_) { return Promise.resolve(false) }
+  }
+
+  // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
   window.__swManda = function (chatId, item) {
     var W = window.WPP
     if (!chatId) return Promise.reject(new Error('nenhuma conversa aberta'))
@@ -129,20 +143,13 @@
     if (!ehPessoa(chatId)) return Promise.reject(new Error('essa conversa não é de uma pessoa'))
     if (!podeEnviar()) return Promise.reject(new Error('o motor do WhatsApp não está pronto'))
     if (item.tipo === 'texto') {
-      var ms = Math.max(0, Number(item.sim || 0)) * 1000
-      var pre = ms ? comPrazo(W.chat.markIsComposing(chatId, ms + 300), 8000, 'digitando').catch(function () {}) : Promise.resolve()
-      return pre.then(function () { return espera(ms) })
-        .then(function () { return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto') })
-        .then(function () { return true })
+      return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
     }
     var dataUri = item.dataUri
     if (!dataUri) return Promise.reject(new Error('mídia não veio junto'))
     return Promise.resolve().then(function () {
       if (item.kind === 'audio') {
-        var ms2 = Math.max(0, Number(item.sim || 0)) * 1000
-        var pre2 = ms2 ? comPrazo(W.chat.markIsRecording(chatId, ms2 + 300), 8000, 'gravando').catch(function () {}) : Promise.resolve()
-        return pre2.then(function () { return espera(ms2) })
-          .then(function () { return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio') })
+        return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
       }
       if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
       if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')

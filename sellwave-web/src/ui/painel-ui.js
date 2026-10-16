@@ -27,6 +27,7 @@ const IC_ESTRELA = (cheia) => '<svg viewBox="0 0 24 24" fill="' + (cheia ? 'curr
 
 let roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
 let aba = 'itens'
+let soFavs = false        // o mesmo filtro do inbox: estrela ao lado dos chips
 let filtro = ''
 let tipoFiltro = ''          // '' = todos
 let favoritos = {}
@@ -59,7 +60,7 @@ function catalogo() {
 
 function visiveis() {
   let itens = catalogo()
-  if (aba === 'favs') itens = itens.filter((x) => favoritos[x.id])
+  if (soFavs) itens = itens.filter((x) => favoritos[x.id])
   if (tipoFiltro) itens = itens.filter((x) => x.tipo === tipoFiltro)
   if (filtro) itens = itens.filter((x) => (x.label + ' ' + (x.texto || '') + ' ' + (x.grp || '')).toLowerCase().includes(filtro))
   return itens
@@ -77,8 +78,11 @@ const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
 
 function desenhaChips() {
   const el = $('chips')
-  if (aba === 'funis') { el.style.display = 'none'; return }
-  el.style.display = ''
+  const linha = $('linha-chips')
+  if (aba === 'funis') { linha.style.display = 'none'; return }
+  linha.style.display = ''
+  $('fav-filtro').classList.toggle('on', soFavs)
+  $('fav-filtro').setAttribute('aria-pressed', String(soFavs))
   const usados = [...new Set(catalogo().map((x) => x.tipo))]
   let html = '<button class="chip' + (tipoFiltro ? '' : ' on') + '" data-t="" style="--kc:#54656f" title="Todos">'
     + svg('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>') + '</button>'
@@ -94,16 +98,21 @@ function desenhaChips() {
 function desenha() {
   desenhaChips()
   const corpo = $('corpo')
-  const nFunis = (roteiro.sequences || []).length
+  // O SELO CONTA SO O QUE ESTA SAINDO AGORA, nunca o tamanho do catalogo.
+  //
+  // Esta e a mesma regra do inbox, e ela foi escrita la depois de um erro igual: contar tudo fazia
+  // "5 funis cadastrados" virar um 5 verde na aba, e o vendedor lia como 5 disparos acontecendo.
+  // Aqui so roda um funil por vez (um painel por numero), entao o selo e 1 ou nada.
+  const saindo = disparando && (roteiro.sequences || []).some((s) => s.id === disparando)
   const selo = $('selo-funis')
-  selo.hidden = !nFunis
-  selo.textContent = nFunis
+  selo.hidden = !saindo
+  selo.textContent = '1'
 
   if (aba === 'funis') { corpo.innerHTML = desenhaFunis(); ligaFunis(corpo); return }
 
   const itens = visiveis()
   if (!itens.length) {
-    corpo.innerHTML = '<div class="vazio">' + (aba === 'favs'
+    corpo.innerHTML = '<div class="vazio">' + (soFavs
       ? 'Nenhum favorito ainda. Toque na estrela de um item.'
       : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : 'Nada aqui. Cadastre itens no Sale Chat.')) + '</div>'
     return
@@ -168,7 +177,7 @@ function desenhaFunis() {
         prev = '<div class="funil-prev">' + (passos.length ? passos.map((p, j) => {
           const info = infoDoPasso(p.id || p)
           const k = TIPOS[info.tipo]
-          const pausa = Number(p.delay || 0)
+          const pausa = pausaDoPasso(p)
           return '<div class="passo" style="--kc:' + k.cor + '">'
             + '<span class="passo-ic">' + svg(k.ic) + '</span>'
             + '<span class="passo-n">' + (j + 1) + '</span>'
@@ -189,6 +198,19 @@ function desenhaFunis() {
     }
   })
   return html
+}
+
+// PAUSA EFETIVA DO PASSO: vale sim se estiver preenchido, senao delay. NUNCA soma.
+//
+// E a mesma conta do _pausaDoPasso do worker, e ela existe por reclamacao do Bruno em 18/08/2026:
+// a tela tinha dois campos (espera e simula) e eles somavam, entao um passo de 10+10 ficava 20
+// segundos parado. Aqui estava somando DE NOVO, por outro caminho: o painel dormia delay e o
+// agente dormia mais sim por dentro do envio. Agora ha uma pausa so, e ela acontece com o
+// "digitando..." ligado.
+function pausaDoPasso(p) {
+  const sim = Math.max(0, Number(p && p.sim) || 0)
+  const del = Math.max(0, Number(p && p.delay) || 0)
+  return sim > 0 ? sim : del
 }
 
 function infoDoPasso(id) {
@@ -242,11 +264,13 @@ function rodape(txt, pct, segura) {
 const achaMsg = (id) => (roteiro.messages || []).find((m) => m.id === id)
 const achaMidia = (id) => (roteiro.media || []).find((m) => m.id === id)
 
-function itemParaEnvio(id, simPadrao) {
+// `pausa` e em SEGUNDOS e ja vem resolvida (uma so). Clique avulso nao tem passo, entao usa um
+// valor curto de cortesia: 2 s digitando no texto, 3 s gravando no audio.
+function itemParaEnvio(id, pausa) {
   const m = achaMsg(id)
-  if (m) return { tipo: 'texto', texto: m.text || '', sim: simPadrao == null ? 2 : simPadrao }
+  if (m) return { tipo: 'texto', texto: m.text || '', pausa: pausa == null ? 2 : pausa }
   const md = achaMidia(id)
-  if (md) return { tipo: 'midia', kind: md.kind, url: roteiro.mediaBase + md.key, caption: md.caption || '', label: md.label || '', sim: simPadrao == null ? (md.kind === 'audio' ? 3 : 0) : simPadrao }
+  if (md) return { tipo: 'midia', kind: md.kind, url: roteiro.mediaBase + md.key, caption: md.caption || '', label: md.label || '', pausa: pausa == null ? (md.kind === 'audio' ? 3 : 0) : pausa }
   return null
 }
 
@@ -261,8 +285,8 @@ async function disparaFunil(id) {
   if (!s) return
   const lista = []
   for (const p of (s.items || [])) {
-    const it = itemParaEnvio(p.id || p, p.sim)
-    if (it) { it.delay = p.delay || 0; lista.push(it) }
+    const it = itemParaEnvio(p.id || p, pausaDoPasso(p))
+    if (it) lista.push(it)
   }
   if (!lista.length) { rodape('funil sem passos'); return }
   await roda(lista, id)
@@ -288,7 +312,14 @@ async function roda(lista, marca) {
     if (lista.length > 1) rodape('enviando ' + (i + 1) + ' de ' + lista.length, (i + 1) / lista.length)
     else rodape('enviando...')
     const it = lista[i]
-    if (it.delay) await new Promise((r) => setTimeout(r, Number(it.delay) * 1000))
+    // A PAUSA ACONTECE AQUI, com o "digitando..." ligado na conversa, e EM FATIAS: assim o botao
+    // Parar responde no meio de uma pausa longa em vez de so depois do item.
+    const pausa = Math.max(0, Number(it.pausa) || 0)
+    if (pausa > 0) {
+      await window.swp.indica(alvoNk, alvo, it.kind === 'audio' ? 'audio' : 'texto', pausa)
+      const fim = Date.now() + pausa * 1000
+      while (Date.now() < fim && !pararPedido) await new Promise((r) => setTimeout(r, 200))
+    }
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
     const r = await window.swp.manda(alvoNk, alvo, it)
     if (!r || !r.ok) {
@@ -387,6 +418,7 @@ for (const b of document.querySelectorAll('.aba')) {
   }
 }
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenha() }
+$('fav-filtro').onclick = () => { soFavs = !soFavs; desenha() }
 
 // O PAINEL CARREGA ANTES DO LOGIN. A janela dele sobe junto com o app, e nessa hora pode nao
 // haver token ainda: o roteiro volta vazio e, sem tentar de novo, o vendedor ficaria com Respostas
@@ -406,5 +438,7 @@ async function pegaRoteiro() {
 const roteiroVazio = () => !(roteiro.messages || []).length && !(roteiro.sequences || []).length && !(roteiro.media || []).length
 pegaRoteiro().then(desenha)
 
-setInterval(pulso, 1500)
+// O apelido existe pro MODO FOTO congelar a tela: sem isso o pulso sobrescreve o exemplo
+// 1,5 s depois e a foto sai sempre com o estado vazio.
+window.__swPulso = setInterval(pulso, 1500)
 pulso()

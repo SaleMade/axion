@@ -63,7 +63,7 @@
     text-transform: uppercase; letter-spacing: .04em; }
 
   /* ─────────────── abas ─────────────── */
-  .abas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px; border-bottom: 1px solid var(--linha); }
+  .abas { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; padding: 8px; border-bottom: 1px solid var(--linha); }
   .aba {
     position: relative; display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; padding: 6px 0; border-radius: 8px; font-size: 11px; font-weight: 600; color: var(--apagado);
@@ -72,6 +72,7 @@
   .aba svg { width: 16px; height: 16px; }
   .aba:hover { background: var(--hover); }
   .aba.on { background: var(--fraco); color: var(--texto); }
+  .aba .selo[hidden] { display: none; }   /* [hidden] perde pra qualquer `display` na regra */
   .aba .selo { position: absolute; right: 4px; top: 2px; display: grid; place-items: center; min-width: 16px;
     padding: 0 4px; border-radius: 9999px; background: var(--verde); font-size: 9px; font-weight: 700; line-height: 16px; color: #fff; }
 
@@ -85,7 +86,14 @@
   .busca input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font-size: 13px; }
   .busca input::placeholder { color: var(--apagado); }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .linha-chips { display: flex; align-items: flex-start; gap: 6px; }
+  .chips { display: flex; flex: 1; flex-wrap: wrap; gap: 6px; }
+  .fav-filtro { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0;
+    border: 1px solid var(--borda); border-radius: 999px; background: transparent; color: var(--apagado);
+    transition: background-color .15s, border-color .15s, color .15s; }
+  .fav-filtro svg { width: 16px; height: 16px; }
+  .fav-filtro:hover { background: var(--hover); }
+  .fav-filtro.on { border-color: rgba(251, 191, 36, .6); background: rgba(251, 191, 36, .1); color: #fbbf24; }
   .chip { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0;
     border: 1px solid var(--borda); border-radius: 10px; background: transparent;
     transition: background-color .15s, border-color .15s; color: var(--kc); }
@@ -174,7 +182,7 @@
 </head>
 <body>
   <div class="topo">
-    <span class="pt" id="pt"></span><b>Sellwave</b>
+    <span class="pt" id="pt"></span><b>SellWave</b>
     <span class="meu" id="meu"></span>
     <button class="ic" id="esconder" title="Esconder o painel (volta em Ajustes)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
@@ -202,17 +210,19 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>Funis
       <span class="selo" id="selo-funis" hidden></span>
     </button>
-    <button class="aba" data-aba="favs">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2Z"/></svg>Favoritos
-    </button>
   </div>
 
   <div class="cabeca" id="cabeca">
     <div class="busca">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="busca" placeholder="Procurar" spellcheck="false" />
+      <input id="busca" placeholder="Buscar item..." spellcheck="false" />
     </div>
-    <div class="chips" id="chips"></div>
+    <div class="linha-chips" id="linha-chips">
+      <div class="chips" id="chips"></div>
+      <button class="fav-filtro" id="fav-filtro" title="Apenas favoritos" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1L12 2Z"/></svg>
+      </button>
+    </div>
   </div>
 
   <div class="rolo" id="corpo"></div>

@@ -12,6 +12,7 @@ const vivas = []
 
 // Roteiro e lead de exemplo, so pra foto mostrar a tela cheia em vez do estado vazio.
 const EXEMPLO = `(() => {
+  clearInterval(window.__swPulso)   // congela: senao o pulso apaga o exemplo e a foto sai vazia
   roteiro = {
     mediaBase: '',
     messages: [
@@ -21,7 +22,7 @@ const EXEMPLO = `(() => {
       { id: 'm4', label: 'Prazo de entrega', text: 'Chega em ate 5 dias uteis.', grp: 'Fechamento' }
     ],
     sequences: [
-      { id: 's1', label: 'H - Etapa 1 - Abertura', items: [{id:'m1',delay:0},{id:'f1',delay:3}], grp: 'Homem' },
+      { id: 's1', label: 'H - Etapa 1 - Abertura', items: [{id:'m1',sim:4,delay:0},{id:'f1',delay:3}], grp: 'Homem' },
       { id: 's2', label: 'H - Etapa 2 - Dor', items: [{id:'f2',delay:0},{id:'m3',delay:2},{id:'f3',delay:4}], grp: 'Homem' },
       { id: 's3', label: 'M - Etapa 1 - Abertura', items: [{id:'m2',delay:0},{id:'f1',delay:3}], grp: 'Mulher' }
     ],
@@ -32,9 +33,10 @@ const EXEMPLO = `(() => {
       { id: 'f4', kind: 'document', label: 'Bula em PDF', key: 'x', grp: 'Geral' }
     ]
   }
-  estadoWa = { motor: true, envia: true, chatId: '5592993117635@c.us', phone: '5592993117635', nome: 'Raimunda', eu: '5515974076200' }
+  estadoWa = { motor: true, autenticado: true, envia: true, chatId: '5592993117635@c.us', phone: '5592993117635', nome: 'Raimunda', eu: '5515974076200' }
   document.getElementById('meu').textContent = '(15) 97407-6200'
   document.getElementById('lead').innerHTML = '<div class="nm">Raimunda Souza</div><div class="ln">Glico Six - 4 Meses · Manaus/AM</div><span class="tag">A Enviar</span>'
+  document.getElementById('pt').className = 'pt'   // pareado: quem pinta e o pulso, que a foto congelou
   document.getElementById('rod').textContent = 'pronto'
   desenha()
   return 'ok'
@@ -61,12 +63,17 @@ async function rodar(ctx) {
   // 1) a casca como o vendedor ve ao abrir
   await salva(ctx.casca, '1-entrar', pasta)
 
-  // 2) a casca com numeros de exemplo na barra, pra ver a lista colorida sem precisar de login
-  try {
-    await ctx.casca.webContents.executeJavaScript(`(() => {
+  // 2) a casca com numeros de exemplo na barra, pra ver a lista colorida sem precisar de login.
+  //
+  // DUAS FOTOS, e as duas importam: a direcao ve cadeado de proxy e a trava no topo, o vendedor NAO
+  // pode ver nada disso. Sem a foto do vendedor eu so olhava a tela que EU abro, que e justamente a
+  // que ele nunca vai ver. A regra e do Bruno: "para meus vendedores nao quero que nem apareca nada
+  // de proxy".
+  const monta = (direcao) => `(() => {
       estado.temToken = true
       estado.nome = 'Guilherme'
       estado.maxAbertos = 6
+      estado.direcao = ${direcao ? 'true' : 'false'}
       estado.numeros = [
         { numero: '(15) 97407-6200', nk: '1574076200', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 23, proxy: { host: 'isp.decodo.com', porta: 10001 } },
         { numero: '(19) 99598-3293', nk: '1995983293', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 41, proxy: { host: 'isp.decodo.com', porta: 10002 } },
@@ -81,9 +88,29 @@ async function rodar(ctx) {
       ativo = '1574076200'; desenhaLista()
       document.getElementById('versao').textContent = 'Guilherme'
       return 'ok'
-    })()`)
+    })()`
+
+  try {
+    await ctx.casca.webContents.executeJavaScript(monta(true))
     await new Promise((r) => setTimeout(r, 600))
-    await salva(ctx.casca, '2-lista', pasta)
+    await salva(ctx.casca, '2-lista-direcao', pasta)
+
+    await ctx.casca.webContents.executeJavaScript(monta(false))
+    await new Promise((r) => setTimeout(r, 400))
+    await salva(ctx.casca, '3-lista-vendedor', pasta)
+
+    // os Ajustes do VENDEDOR: tem que sobrar so o que e da maquina dele
+    await ctx.casca.webContents.executeJavaScript('janelaAjustes(); "ok"')
+    await new Promise((r) => setTimeout(r, 400))
+    await salva(ctx.casca, '4-ajustes-vendedor', pasta)
+    await ctx.casca.webContents.executeJavaScript('fechaModal(); "ok"')
+
+    // e os da direcao, com as duas travas
+    await ctx.casca.webContents.executeJavaScript(monta(true))
+    await ctx.casca.webContents.executeJavaScript('janelaAjustes(); "ok"')
+    await new Promise((r) => setTimeout(r, 400))
+    await salva(ctx.casca, '5-ajustes-direcao', pasta)
+    await ctx.casca.webContents.executeJavaScript('fechaModal(); "ok"')
   } catch (e) { console.error('  nao montei a lista: ' + ((e && e.message) || e)) }
 
   // 3) o painel de venda, que agora e janela propria
@@ -113,7 +140,13 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 900))
     await v.webContents.executeJavaScript(EXEMPLO)
     await new Promise((r) => setTimeout(r, 700))
-    await salva(v, '3-painel', pasta)
+    await salva(v, '6-painel', pasta)
+
+    // 7) a aba FUNIS com a previa de um funil aberta: e onde se ve a pausa de cada passo, que e
+    //    justamente o numero que estava errado (somava espera + digitando).
+    await v.webContents.executeJavaScript("aba='funis'; aberto='funil:s1'; for (const b of document.querySelectorAll('.aba')) b.classList.toggle('on', b.dataset.aba==='funis'); desenha(); 'ok'")
+    await new Promise((r) => setTimeout(r, 500))
+    await salva(v, '7-painel-funis', pasta)
   } catch (e) { console.error('  nao fotografei o painel: ' + ((e && e.message) || e)) }
 
 
