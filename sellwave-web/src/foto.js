@@ -162,6 +162,8 @@ async function rodar(ctx) {
     //    justamente o numero que estava errado (somava espera + digitando).
     await v.webContents.executeJavaScript("aba='funis'; aberto='funil:s1'; for (const b of document.querySelectorAll('.aba')) b.classList.toggle('on', b.dataset.aba==='funis'); desenha(); 'ok'")
     await new Promise((r) => setTimeout(r, 500))
+    await v.webContents.executeJavaScript("saindo = [{ nk: '1574076200', numero: '(15) 97407-6200', dono: 'Guilherme', funil: 'H - Etapa 1 - Abertura', passo: 2, total: 5, alvo: '5592993117635', inicio: 1 }]; desenha(); 'ok'").catch(() => {})
+    await new Promise((r) => setTimeout(r, 400))
     await salva(v, '8-painel-funis', pasta)
 
     // 9) a aba PEDIDOS, que a conversa paralela desenhou. Fotografo porque sou eu que empacoto:
