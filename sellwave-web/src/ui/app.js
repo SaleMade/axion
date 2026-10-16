@@ -203,7 +203,7 @@ const EM_AQUECIMENTO = 'aquecimento'
 // esta na cara de quem abre o chip). Olhando so os campos crus, um numero Em Uso pela tag virava
 // inacessivel no app e um numero em aquecimento pela tag aparecia como se nao fosse nada.
 // Regra de negocio refeita no cliente diverge do servidor no primeiro caso que ninguem previu.
-const aquecendo = (n) => !!n && (n.aquec != null || String(n.st || '') === EM_AQUECIMENTO)
+const aquecendo = (n) => !!n && (n.aquecendo === true || n.aquec != null || String(n.st || '') === EM_AQUECIMENTO)
 const podeReceber = (n) => !!n && (n.apto === true || n.em_uso === true || aquecendo(n))
 
 function linhaFina(n) {
