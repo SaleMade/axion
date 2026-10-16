@@ -87,6 +87,9 @@ async function rodar(ctx) {
       desenhaTrava(); desenhaLista(); telaVazia()
       ativo = '1574076200'; desenhaLista()
       document.getElementById('versao').textContent = 'Guilherme'
+      // O aviso de versao nova so aparece quando ha versao mais nova publicada; a foto forca, pra
+      // dar pra conferir como ele fica antes de o vendedor ver.
+      avisaVersao({ publicada: '1.2.0', atual: '1.1.0' })
       return 'ok'
     })()`
 

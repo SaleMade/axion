@@ -16,6 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
 const leia = (rel) => fs.readFileSync(path.join(AQUI, rel), 'utf8')
@@ -115,6 +116,40 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('html do lead sai escapado', formatado('<script>x</script>').indexOf('<script') < 0,
     formatado('<script>x</script>'))
   vale('aspas do lead saem escapadas', formatado('ele disse "oi"').indexOf('&quot;') >= 0)
+}
+
+// ── 6) VERSAO: comparar como TEXTO diz que 1.10.0 e menor que 1.9.0.
+{
+  const fonte = leia('main.js')
+  const versaoMenor = eval('(' + recorta(fonte, 'function versaoMenor(a, b)') + ')')
+  vale('1.0.0 e menor que 1.1.0', versaoMenor('1.0.0', '1.1.0') === true)
+  vale('1.1.0 NAO e menor que 1.1.0', versaoMenor('1.1.0', '1.1.0') === false)
+  vale('1.2.0 NAO e menor que 1.1.9', versaoMenor('1.2.0', '1.1.9') === false)
+  vale('1.9.0 e menor que 1.10.0 (o caso que texto erra)', versaoMenor('1.9.0', '1.10.0') === true)
+  vale('versao vazia nao derruba', versaoMenor('', '1.0.0') === true && versaoMenor('1.0.0', '') === false)
+}
+
+// ── 7) AS PORTAS DO AGENTE SERVIDO. Deixar entrar texto ruim aqui e tela em branco no
+//    WhatsApp do vendedor, entao cada porta tem um teste.
+{
+  const fonte = leia('main.js')
+  const require = createRequire(import.meta.url)
+  void require
+  const agenteServe = eval('(' + recorta(fonte, 'function agenteServe(txt)') + ')')
+  const bom = 'window.__swEstado = function(){}; window.__swManda = function(){};' + ' '.repeat(9000)
+  vale('o agente de verdade passa', agenteServe(bom) === true)
+  vale('vazio nao passa', agenteServe('') === false && agenteServe(null) === false)
+  vale('arquivo curto nao passa (pagina de erro disfarcada)', agenteServe('window.__swEstado=1;window.__swManda=1') === false)
+  vale('arquivo grande SEM as nossas funcoes nao passa', agenteServe('<html>' + 'x'.repeat(9000) + '</html>') === false)
+  vale('sintaxe quebrada nao passa', agenteServe('window.__swEstado = function({ window.__swManda' + ' '.repeat(9000)) === false)
+}
+
+// ── 8) A SENHA DO PROXY NAO PODE SAIR NO ESTADO DA CASCA.
+{
+  const fonte = leia('main.js')
+  const bloco = fonte.slice(fonte.indexOf("ipcMain.handle('sw:estado'"), fonte.indexOf("ipcMain.handle('sw:estado'") + 1400)
+  vale('sw:estado manda so host, porta e temSenha', /temSenha: !!\(p && \(p\.usuario \|\| p\.senha\)\)/.test(bloco))
+  vale('sw:estado NAO manda config.proxies cru', !/proxies: config\.proxies/.test(bloco))
 }
 
 console.log('')

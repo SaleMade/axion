@@ -10028,6 +10028,7 @@ async function _botConfereNumero(env, pnid) {
 // o /five tem catch-all, e subpath novo ali dentro ja foi engolido antes. Prefixo proprio evita.
 const SWWEB_CFG = 'swweb_cfg';          // { travaProxy, exigirBrasil }
 const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario, senha } }
+const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
 // vendedor, entao mudar a regra aqui faz todo numero pedir QR de novo. Nao mexa.
@@ -10091,6 +10092,48 @@ async function handleSwWeb(req, env, path) {
     return new Response(obj.body, {
       headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=1800' },
     });
+  }
+
+  // GET /api/swweb/agente.js - o pedaco do app que fala com a pagina do WhatsApp por dentro.
+  //
+  // POR QUE ESTE E SO ESTE. O agente e o arquivo mais acoplado ao DOM e as APIs da Meta: e ele que
+  // quebra quando o WhatsApp muda, e quebra pra todo mundo no mesmo dia. Servindo daqui, o conserto
+  // chega sem ninguem reinstalar nada - basta recarregar a pagina do numero, porque o app rele o
+  // agente a cada injecao.
+  //
+  // O QUE NAO VEM POR AQUI, DE PROPOSITO: o main.js e os tres preloads. Eles sao a FRONTEIRA DE
+  // CONFIANCA (a lista fechada de canais que a pagina alcanca, o token da dash, a senha do proxy, o
+  // DPAPI). Servir a fronteira significaria que uma resposta ruim daqui apaga a propria trava que
+  // deveria conter o estrago. Regra curta: o que separa a pagina do sistema NAO se baixa.
+  //
+  // Publico como o motor e o instalador: nao tem segredo dentro, e quem carrega e o app antes de
+  // ter sessao. O app confere a resposta (tamanho minimo, sintaxe e as tres funcoes de pe depois
+  // de injetar) e volta pra copia que veio no instalador se qualquer coisa falhar.
+  if (req.method === 'GET' && path === '/api/swweb/agente.js') {
+    if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
+    const obj = await env.MEDIA.get('sellwave-web/agente.js');
+    if (!obj) return err('Agente nao publicado.', 404);
+    return new Response(obj.body, {
+      headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=600' },
+    });
+  }
+
+  // GET /api/swweb/versao - qual build esta publicado. O app compara com o dele e, sendo mais
+  // velho, poe uma linha na barra mandando baixar. Sem isto o vendedor roda versao velha pra
+  // sempre e ninguem descobre - que e exatamente o que deu o banimento da dash de teste: codigo
+  // velho na tela de quem achava que era o atual.
+  if (req.method === 'GET' && path === '/api/swweb/versao') {
+    const txt = await _readConfig(env, SWWEB_APP);
+    const d = _swwebLerJson(txt, {});
+    const origem = new URL(req.url).origin;
+    return new Response(JSON.stringify({
+      ok: true,
+      versao: String(d.versao || ''),
+      bytes: Number(d.bytes) || 0,
+      publicada_em: Number(d.publicada_em) || 0,
+      notas: String(d.notas || ''),
+      url: origem + '/api/swweb/instalador',
+    }), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   }
 
   if (req.method === 'GET' && path === '/api/swweb/instalador') {
@@ -10509,6 +10552,23 @@ async function handleSwWeb(req, env, path) {
     else proxies[nk] = { host, porta: Number(b.porta) || 0, usuario: String(b.usuario || ''), senha: String(b.senha || '') };
     await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
+  }
+
+  // POST /api/swweb/app — carimba qual build esta no R2. Roda junto com o upload do instalador.
+  // So a direcao da casa: o aviso de versao e do app inteiro, nao de um mundo.
+  if (req.method === 'POST' && path === '/api/swweb/app') {
+    if (mundo || !isDirector(u)) return err('Só a direção da casa publica versão', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const versao = String((b && b.versao) || '').trim();
+    if (!/^\d+\.\d+\.\d+$/.test(versao)) return err('Versão inválida (use 1.2.3)');
+    const novo = {
+      versao,
+      bytes: Number(b && b.bytes) || 0,
+      publicada_em: Math.floor(Date.now() / 1000),
+      notas: String((b && b.notas) || '').slice(0, 400),
+    };
+    await _writeConfig(env, SWWEB_APP, JSON.stringify(novo));
+    return json({ ok: true, app: novo });
   }
 
   // POST /api/swweb/config — as travas. Valem pra TODA maquina que abrir o app, por isso ficam

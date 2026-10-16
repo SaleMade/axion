@@ -21,10 +21,11 @@ contextBridge.exposeInMainWorld('sw', {
   painel: (ligado) => chamar('swp:painel', { ligado }),
   teto: (maxAbertos) => chamar('sw:teto', { maxAbertos }),
   abrirLog: () => chamar('sw:abrirLog'),
+  abrirInstalador: () => chamar('sw:abrirInstalador'),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)

@@ -53,4 +53,8 @@ window.addEventListener('message', (ev) => {
 })
 
 // Marca de presenca, util no console pra saber se o preload subiu.
-contextBridge.exposeInMainWorld('sellwaveInfo', { versao: '1.0.0', fase: 3 })
+// A VERSAO VEM DO package.json, nunca escrita na mao. Ela estava chumbada em '1.0.0' aqui e o
+// app.getVersion() do outro lado lia o package.json: bastava bumpar pra ter duas versoes
+// diferentes dentro do mesmo app, e a que a pagina ve e justamente a que ninguem confere.
+const { version: VERSAO } = require('../package.json')
+contextBridge.exposeInMainWorld('sellwaveInfo', { versao: VERSAO, fase: 3 })

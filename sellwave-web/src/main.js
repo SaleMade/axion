@@ -632,6 +632,135 @@ function fechaNumero(nk) {
 // ORDEM IMPORTA: primeiro o motor (WA-JS), depois o painel. O painel espera o window.WPP ficar
 // pronto sozinho, entao nao trava se o motor demorar.
 const CAMINHO_AGENTE = path.join(__dirname, 'ui', 'agente.js')
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// AGENTE ATUALIZAVEL SEM REINSTALAR (16/10/2026, pergunta do Bruno: "preciso baixar o aplicativo de
+// novo, ou voce atualiza tudo?").
+//
+// POR QUE SO O AGENTE, e nao o app inteiro. Ele e o arquivo mais acoplado ao DOM e as APIs da Meta:
+// e ele que quebra quando o WhatsApp muda, e quebra pra todo mundo no mesmo dia. E e o UNICO que da
+// pra trocar QUENTE, porque o app rele o arquivo a cada injecao - recarregar a pagina do numero ja
+// pega o novo, sem fechar nada.
+//
+// O QUE NUNCA VEM DO SERVIDOR: main.js e os tres preloads. Eles sao a FRONTEIRA DE CONFIANCA - a
+// lista fechada de canais que a pagina do WhatsApp alcanca, o token da dash, a senha do proxy, o
+// DPAPI. Baixar a fronteira significa que uma resposta ruim apaga a propria trava que deveria
+// conter o estrago. O agente nao acrescenta poder nenhum: ele ja roda no mesmo mundo do MOTOR, que
+// e biblioteca de terceiro e desce do servidor desde o primeiro dia.
+//
+// A COPIA DO INSTALADOR E O PISO. Ela mora no app.asar, e read-only e nunca falta. Toda duvida -
+// sem rede, arquivo curto, sintaxe que nao parseia, ou as funcoes nao de pe depois de injetar -
+// cai nela.
+// AVISO DE VERSAO NOVA.
+//
+// O que NAO da pra atualizar sozinho (o processo principal, os preloads, o Electron) continua
+// exigindo baixar o instalador. A diferenca e o vendedor SABER: antes ele rodava versao velha pra
+// sempre e ninguem descobria. E exatamente o que causou o banimento da dash de teste - codigo
+// velho na tela de quem achava que era o atual.
+let versaoPublicada = ''
+let urlInstalador = ''
+// Compara 1.2.3 numero a numero. Comparar como texto diz que "1.10.0" e menor que "1.9.0".
+function versaoMenor(a, b) {
+  const pa = String(a || '').split('.').map((x) => Number(x) || 0)
+  const pb = String(b || '').split('.').map((x) => Number(x) || 0)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) < (pb[i] || 0)) return true
+    if ((pa[i] || 0) > (pb[i] || 0)) return false
+  }
+  return false
+}
+async function confereVersao() {
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/versao',
+      { signal: AbortSignal.timeout(15000) })
+    if (!r.ok) return
+    ajustaRelogio(r)
+    const d = await r.json()
+    versaoPublicada = String((d && d.versao) || '')
+    urlInstalador = String((d && d.url) || '')
+    if (versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada)) {
+      anota('[versao] este app e ' + app.getVersion() + ' e a publicada e ' + versaoPublicada)
+      avisaCasca('sw:versao', { atual: app.getVersion(), publicada: versaoPublicada, url: urlInstalador })
+    }
+  } catch (_) { /* sem rede: o aviso espera, o app funciona */ }
+}
+
+const ARQ_AGENTE_BAIXADO = () => path.join(app.getPath('userData'), 'agente-servido.js')
+let agenteReprovado = false        // a copia baixada ja falhou nesta sessao: nao tenta de novo
+let agenteDeOnde = 'instalador'    // so pro log e pro rodape dizerem a verdade
+
+// O agente que vale AGORA, resolvido na hora da injecao (nao no boot): e isso que faz o conserto
+// chegar sem fechar o app.
+function agenteAgora() {
+  if (!agenteReprovado) {
+    try {
+      const txt = fs.readFileSync(ARQ_AGENTE_BAIXADO(), 'utf8')
+      if (agenteServe(txt)) { agenteDeOnde = 'servidor'; return txt }
+      console.error('[agente] a copia baixada nao passou na conferencia; usando a do instalador')
+    } catch (_) { /* nunca baixou, ou foi apagada: o piso resolve */ }
+  }
+  agenteDeOnde = 'instalador'
+  try { return fs.readFileSync(CAMINHO_AGENTE, 'utf8') } catch (_) { return '' }
+}
+
+// TRES PORTAS ANTES DE DEIXAR O TEXTO ENTRAR NA PAGINA.
+//  1. tamanho: resposta curta e pagina de erro disfarcada de script (o mesmo golpe que o motor leva)
+//  2. assinatura: tem que ser o nosso arquivo, nao um HTML qualquer que tambem seja grande
+//  3. sintaxe: `new vm.Script` parseia SEM executar. Pega arquivo truncado no meio do caminho.
+// A quarta porta nao cabe aqui e acontece depois de injetar: conferir se as funcoes subiram.
+function agenteServe(txt) {
+  try {
+    if (!txt || txt.length < 8000) return false
+    if (txt.indexOf('window.__swEstado') < 0 || txt.indexOf('window.__swManda') < 0) return false
+    new (require('node:vm').Script)(txt, { filename: 'agente-servido.js' })
+    return true
+  } catch (_) { return false }
+}
+
+// Busca a versao servida em segundo plano. Nunca bloqueia o boot: o que chegar vale na proxima
+// injecao, que e recarregar a pagina do numero.
+let buscandoAgente = false
+async function atualizaAgente() {
+  if (buscandoAgente || agenteReprovado) return
+  buscandoAgente = true
+  try {
+    const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/agente.js'
+    const r = await fetch(url, { signal: AbortSignal.timeout(20000) })
+    if (!r.ok) throw new Error('respondeu ' + r.status)
+    const txt = await r.text()
+    if (!agenteServe(txt)) throw new Error('nao passou na conferencia (' + txt.length + ' bytes)')
+    let igual = false
+    try { igual = fs.readFileSync(ARQ_AGENTE_BAIXADO(), 'utf8') === txt } catch (_) { igual = false }
+    if (igual) return
+    // Grava em temporario e renomeia: queda de luz no meio nao deixa arquivo pela metade.
+    const tmp = ARQ_AGENTE_BAIXADO() + '.tmp'
+    fs.writeFileSync(tmp, txt, 'utf8')
+    fs.renameSync(tmp, ARQ_AGENTE_BAIXADO())
+    anota('[agente] versao nova baixada (' + txt.length + ' bytes); vale ao recarregar o numero')
+    avisaCasca('sw:agente', { novo: true })
+  } catch (e) {
+    console.error('[agente] nao atualizei: ' + ((e && e.message) || e))
+  } finally { buscandoAgente = false }
+}
+
+// A QUARTA PORTA, e a que de fato protege: depois de injetar, as tres funcoes tem que estar de pe.
+// Se nao estiverem, a copia baixada e REPROVADA na hora e o piso do instalador entra no lugar, na
+// MESMA sessao - sem reiniciar, sem o vendedor ficar parado esperando alguem perceber.
+async function confereAgente(wc) {
+  let ok = false
+  try {
+    ok = !!(await wc.executeJavaScript(
+      'typeof window.__swEstado === "function" && typeof window.__swManda === "function" && typeof window.__swIndica === "function"'))
+  } catch (_) { ok = false }
+  if (ok || agenteDeOnde !== 'servidor') return ok
+  agenteReprovado = true
+  try { fs.unlinkSync(ARQ_AGENTE_BAIXADO()) } catch (_) { /* ok */ }
+  anota('[agente] a versao servida nao subiu; voltei pra do instalador e nao tento de novo nesta sessao')
+  try {
+    await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
+    return true
+  } catch (_) { return false }
+}
 let motorCache = ''
 async function pegaMotor() {
   if (motorCache) return motorCache
@@ -656,7 +785,7 @@ async function pegaMotor() {
 // baixado na hora em que a pagina comecou).
 ipcMain.on('sw:codigo', (e) => {
   let agente = ''
-  try { agente = fs.readFileSync(CAMINHO_AGENTE, 'utf8') } catch (_) { /* ok */ }
+  try { agente = agenteAgora() } catch (_) { /* ok */ }
   e.returnValue = { motor: motorCache || '', agente }
 })
 
@@ -675,7 +804,10 @@ async function injetaPainel(s) {
       else console.error('[painel] sem motor em ' + s.nk + ': o painel nao vai conseguir mandar')
     }
     const temAgente = await wc.executeJavaScript('typeof window.__swEstado === "function"').catch(() => false)
-    if (!temAgente) await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
+    if (!temAgente) await wc.executeJavaScript(agenteAgora(), true)
+    // A QUARTA PORTA. Injetou (ou ja estava la): as funcoes estao de pe? Se a copia servida falhar,
+    // `confereAgente` volta pra do instalador aqui mesmo, sem reiniciar nada.
+    await confereAgente(wc)
     console.log('[painel] pronto em ' + s.nk + (temMotor ? '' : ' (motor injetado agora)'))
   } catch (e) {
     console.error('[painel] falhou em ' + s.nk + ': ' + ((e && e.message) || e))
@@ -958,12 +1090,24 @@ ipcMain.handle('sw:estado', () => ({
   travaProxy: config.travaProxy,
   exigirBrasil: config.exigirBrasil,
   numeros: config.numeros,
-  proxies: config.proxies,
+  // SO O ENDERECO, NUNCA A CREDENCIAL. `config.proxies` guarda usuario e senha decifrados (o
+  // lerConfig abre o DPAPI), e a casca so usa host, porta e "tem proxy?" - conferido: app.js le
+  // px.host, px.porta e a existencia, mais nada. Mandar a senha inteira pra um renderer era
+  // credencial viajando a troco de nada, e vira risco de verdade no dia em que a casca for servida
+  // do servidor.
+  proxies: Object.fromEntries(Object.entries(config.proxies || {}).map(([k, p]) => [k, {
+    host: (p && p.host) || '', porta: Number(p && p.porta) || 0, temSenha: !!(p && (p.usuario || p.senha)),
+  }])),
   maxAbertos: Number(config.maxAbertos) || 6,
   direcao: !!config.direcao,
   painelLigado: painelLigado,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
+  // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
+  versaoPublicada,
+  precisaBaixar: !!(versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada)),
+  urlInstalador,
+  agenteDeOnde,
   chromium: process.versions.chrome,
 }))
 
@@ -1287,6 +1431,14 @@ ipcMain.handle('sw:teto', (_e, { maxAbertos }) => {
 })
 
 ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } catch (_) { /* ok */ } return { ok: true } })
+// ABRE O INSTALADOR NO NAVEGADOR. O arquivo tem 111 MB: baixar por dentro do app seria uma barra
+// de progresso nova pra manter e nenhuma vantagem. O navegador ja sabe fazer isso, e a rota e
+// publica de proposito (um <a href> nao manda Authorization).
+ipcMain.handle('sw:abrirInstalador', () => {
+  const url = urlInstalador || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/instalador')
+  try { shell.openExternal(url) } catch (_) { /* ok */ }
+  return { ok: true }
+})
 
 ipcMain.handle('sw:recarregar', (_e, { nk }) => {
   const s = abertos.get(nk)
@@ -1301,6 +1453,12 @@ app.whenReady().then(() => {
   lerConfig()
   painelLigado = config.painelLigado !== false
   leFila()
+
+  // EM SEGUNDO PLANO, SEMPRE. Nenhuma das duas segura o boot: sem internet o app abre igual, com a
+  // copia do instalador e sem aviso de versao. Esperar rede pra abrir seria trocar "painel da
+  // semana passada" por "o app nao abre", que e pior.
+  setTimeout(() => { confereVersao(); atualizaAgente() }, 3000)
+  setInterval(() => { confereVersao(); atualizaAgente() }, 6 * 60 * 60 * 1000)
 
   // A sessao PADRAO tambem vai pro buraco negro. Assim, qualquer parte do app que esqueca de usar
   // a particao certa FALHA em vez de vazar o IP real da maquina.

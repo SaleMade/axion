@@ -383,9 +383,28 @@ async function recarregaEstado() {
   estado = await window.sw.estado()
   $('versao').textContent = estado.nome || ('v' + estado.versao)
   $('versao').title = 'SellWave Web v' + estado.versao
+    + (estado.agenteDeOnde === 'servidor' ? ' · motor de conversa atualizado' : '')
+  avisaVersao(estado.precisaBaixar ? estado : null)
   desenhaTrava()
   desenhaLista()
   return estado
+}
+
+// VERSAO NOVA PUBLICADA. O botao abre o instalador no navegador; a instalacao e por cima e a
+// sessao de cada numero fica salva (a pasta de dados e fixa, ver main.js).
+function avisaVersao(d) {
+  const el = $('versao-nova')
+  if (!el) return
+  if (!d || !d.publicada && !d.versaoPublicada) { el.hidden = true; return }
+  const nova = d.publicada || d.versaoPublicada
+  el.hidden = false
+  el.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 13px;color:var(--verde)">'
+    + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>'
+    + '<span><b>Versão ' + esc(nova) + ' disponível</b><br>Você está na ' + esc(d.atual || estado.versao)
+    + '. Clique pra baixar, instale por cima.</span>'
+  el.title = 'As conversas e os números pareados continuam salvos'
+  el.onclick = () => window.sw.abrirInstalador()
 }
 
 function avisoRede(txt) {
@@ -454,6 +473,16 @@ window.sw.ao('sw:fechado', async (d) => {
   semMotor.delete((d && d.nk) || '')
   await recarregaEstado()
   if (d && d.nk === ativo) { ativo = ''; telaVazia() }
+})
+window.sw.ao('sw:versao', (d) => avisaVersao(d))
+// Agente novo baixado: vale ao recarregar a pagina do numero, que e o botao que ja existe no
+// painel. Sem fechar o app.
+window.sw.ao('sw:agente', () => {
+  const el = $('fila')
+  if (el && !el.textContent) {
+    el.textContent = 'Motor de conversa atualizado. Recarregue o número pra usar o novo.'
+    setTimeout(() => { if (el.textContent.startsWith('Motor de conversa')) el.textContent = '' }, 20000)
+  }
 })
 window.sw.ao('sw:semMotor', (d) => {
   if (!d || !d.nk) return
