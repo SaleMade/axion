@@ -10015,6 +10015,138 @@ async function _botConfereNumero(env, pnid) {
   } catch (_) {}
   return { display_phone: _botSoDigitos(row.display_phone) };
 }
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// SELLWAVE WEB (15/10/2026) — o navegador multi-sessao de WhatsApp Web que roda na maquina do
+// vendedor. Plano e decisoes em `sellwave-web/PLANO.md`; o que ja foi MEDIDO esta no
+// `sellwave-web/ANEXO-TECNICO.md`. Leia os dois antes de mexer aqui.
+//
+// O app NAO fala com a Meta nem com o D1: ele pergunta a ESTA rota quais numeros aquele login pode
+// abrir, com qual proxy, e se as travas estao ligadas. Tudo o mais (sessao, QR, conversa) acontece
+// dentro do Chromium dele.
+//
+// POR QUE O PREFIXO E /api/swweb/ E NAO /api/wa/swweb/: o bloco de /api/wa/ tem gate de afiliado e
+// o /five tem catch-all, e subpath novo ali dentro ja foi engolido antes. Prefixo proprio evita.
+const SWWEB_CFG = 'swweb_cfg';          // { travaProxy, exigirBrasil }
+const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario, senha } }
+
+// Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
+// vendedor, entao mudar a regra aqui faz todo numero pedir QR de novo. Nao mexa.
+function _swwebKey(n) { return _waNumKey(n); }
+
+function _swwebLerJson(txt, padrao) {
+  try { const o = JSON.parse(txt || ''); return (o && typeof o === 'object') ? o : padrao; } catch (_) { return padrao; }
+}
+
+// Quem pode usar: a casa (afiliado tem o mundo dele e numero dele; nao entra por aqui).
+function _swwebPodeUsar(u) {
+  if (!u) return false;
+  if (String(u.afiliado_id || '').trim()) return false;
+  return true;
+}
+
+async function handleSwWeb(req, env, path) {
+  // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
+  // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
+  // instalador publico, sem segredo nenhum dentro (token, proxy e numero vem depois, por API
+  // autenticada). Nao coloque nada sensivel neste caminho.
+  if (req.method === 'GET' && path === '/api/swweb/instalador') {
+    if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
+    const obj = await env.MEDIA.get('sellwave-web/instalador.exe');
+    if (!obj) return err('O instalador ainda nao foi publicado.', 404);
+    return new Response(obj.body, {
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment; filename="Sellwave Web Setup.exe"',
+        'cache-control': 'public, max-age=300',
+      },
+    });
+  }
+
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_swwebPodeUsar(u)) return err('Sem acesso', 403);
+
+  const lidas = await _readConfigMuitas(env, [SWWEB_CFG, SWWEB_PROXIES]);
+  const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[SWWEB_CFG], {}) };
+  const proxies = _swwebLerJson(lidas[SWWEB_PROXIES], {});
+
+  // GET /api/swweb/numeros — a lista que a barra lateral do app mostra.
+  if (req.method === 'GET' && path === '/api/swweb/numeros') {
+    const data = await _getDashData(env);
+    const chips = Array.isArray(data && data.chips) ? data.chips : [];
+    // Nome do dono de cada chip, numa ida so.
+    const donos = {};
+    try {
+      const r = await env.DB.prepare('SELECT id, name FROM users WHERE COALESCE(archived,0)=0').all();
+      for (const x of ((r && r.results) || [])) donos[String(x.id)] = x.name || x.id;
+    } catch (_) { /* sem nome a tela mostra o id */ }
+    // Nome do status (Em Uso, Restrito, Banido...) pra barra lateral nao mentir sobre o chip.
+    const nomeSt = {};
+    for (const st of (Array.isArray(data && data.wa_statuses) ? data.wa_statuses : [])) {
+      if (st && st.id) nomeSt[String(st.id)] = st.label || st.nome || st.name || '';
+    }
+    // ESCOPO POR CARGO: diretor/socio/produtor ve todos; vendedor ve SO os dele. E a mesma regra do
+    // resto da dash (ver src/lib/roles.js), e aqui ela importa mais, porque numero e credencial.
+    const tudo = isDirector(u);
+    const meus = chips.filter((c) => c && c.num && (tudo || String(c.at || '') === String(u.id)));
+    const numeros = meus.map((c) => {
+      const nk = _swwebKey(c.num);
+      const px = proxies[nk] || null;
+      return {
+        numero: String(c.num),
+        nk,
+        dono: donos[String(c.at || '')] || (c.at ? String(c.at) : ''),
+        status: nomeSt[String(c.wa_st || '')] || '',
+        em_uso: !!c.em_uso,
+        // NUNCA devolve a senha do proxy pra lista: so se ha proxy e qual o endereco.
+        proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
+      };
+    });
+    return json({ ok: true, numeros, config: cfg });
+  }
+
+  // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder
+  // usar. Separado da lista de proposito: senha nao viaja em listagem.
+  if (req.method === 'GET' && path === '/api/swweb/proxy') {
+    const nk = _swwebKey(new URL(req.url).searchParams.get('nk') || '');
+    if (!nk) return err('Falta o número');
+    if (!isDirector(u)) {
+      const data = await _getDashData(env);
+      const meu = (Array.isArray(data && data.chips) ? data.chips : []).some((c) => c && _swwebKey(c.num) === nk && String(c.at || '') === String(u.id));
+      if (!meu) return err('Este número não é seu', 403);
+    }
+    const px = proxies[nk] || null;
+    return json({ ok: true, nk, proxy: px });
+  }
+
+  // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
+  // (ou de fora do Brasil) e pior que proxy nenhum, entao nao e escolha de vendedor.
+  if (req.method === 'POST' && path === '/api/swweb/proxy') {
+    if (!isDirector(u)) return err('Só a direção cadastra proxy', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    if (!nk) return err('Falta o número');
+    const host = String((b && b.host) || '').trim();
+    if (!host) delete proxies[nk];
+    else proxies[nk] = { host, porta: Number(b.porta) || 0, usuario: String(b.usuario || ''), senha: String(b.senha || '') };
+    await _writeConfig(env, SWWEB_PROXIES, JSON.stringify(proxies));
+    return json({ ok: true, nk, apagou: !host });
+  }
+
+  // POST /api/swweb/config — as travas. Valem pra TODA maquina que abrir o app, por isso ficam
+  // aqui e nao no disco do vendedor: senao cada um desligaria a sua.
+  if (req.method === 'POST' && path === '/api/swweb/config') {
+    if (!isDirector(u)) return err('Só a direção mexe nas travas', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    if (typeof (b && b.travaProxy) === 'boolean') cfg.travaProxy = b.travaProxy;
+    if (typeof (b && b.exigirBrasil) === 'boolean') cfg.exigirBrasil = b.exigirBrasil;
+    await _writeConfig(env, SWWEB_CFG, JSON.stringify(cfg));
+    return json({ ok: true, config: cfg });
+  }
+
+  return err('Rota não encontrada', 404);
+}
+
 async function handleBotConfig(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -25224,6 +25356,9 @@ export default {
       // TESTADOR DE CRIATIVO: le o criativo e a LP antes de subir e aponta o que reprova.
       if (req.method === 'POST'   && path === '/api/criativo/midia')  return handleCriativoUpload(req, env);
       if (req.method === 'POST'   && path === '/api/criativo/testar') return handleCriativoTestar(req, env);
+      // SELLWAVE WEB (15/10/2026): o navegador multi-sessao na maquina do vendedor pergunta aqui
+      // quais numeros ele pode abrir, com qual proxy, e se as travas estao ligadas.
+      if (path.startsWith('/api/swweb/')) return handleSwWeb(req, env, path);
       // BOT DE WHATSAPP DO TIME (12/10/2026): resumo diario, metas e comemoracoes. Ver o bloco do bot.
       if (path === '/api/bot/config' && (req.method === 'GET' || req.method === 'POST')) return handleBotConfig(req, env);
       if (req.method === 'GET'    && path === '/api/bot/preview')  return handleBotWaPreview(req, env);
