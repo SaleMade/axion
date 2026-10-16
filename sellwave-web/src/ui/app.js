@@ -94,11 +94,11 @@ function desenhaLista() {
     // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
     // ali, ele so esta simplesmente jogado ali". Agora tem cabecalho proprio, na cor do aquecimento
     // (a mesma ambar da Contingencia), pra o vendedor entender que aqueles numeros sao outra coisa.
-    const aquecendo = itens.filter((x) => String(x.st || '') === EM_AQUECIMENTO)
-    const normais = itens.filter((x) => String(x.st || '') !== EM_AQUECIMENTO)
+    const emAquec = itens.filter(aquecendo)
+    const normais = itens.filter((x) => !aquecendo(x))
     const ordena = (a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
     normais.sort(ordena)
-    aquecendo.sort(ordena)
+    emAquec.sort(ordena)
 
     // ENCOLHIDA NAO TEM CABECALHO: em 56px o nome nao cabe e um risco separando grupos sem dizer de
     // quem sao e so ruido. O dono fica no passe de mouse de cada numero.
@@ -109,14 +109,14 @@ function desenhaLista() {
       }
       html += normais.map(barraFina ? linhaFina : linha).join('')
     }
-    if (aquecendo.length) {
+    if (emAquec.length) {
       if (!barraFina) {
-        const leads = aquecendo.reduce((t, x) => t + (Number(x.leads_hoje) || 0), 0)
+        const leads = emAquec.reduce((t, x) => t + (Number(x.leads_hoje) || 0), 0)
         html += '<div class="vend aquec"><span>Aquecimento</span><span class="risco"></span>'
           + '<span class="qtd" title="Leads que chegaram hoje nos números em aquecimento">'
           + leads + (leads === 1 ? ' lead' : ' leads') + '</span></div>'
       }
-      html += aquecendo.map(barraFina ? linhaFina : linha).join('')
+      html += emAquec.map(barraFina ? linhaFina : linha).join('')
     }
   }
   lista.innerHTML = html
@@ -194,7 +194,17 @@ const recebendoAgora = (n) => !!(n && n.roleta && (!n.fila || n.fila.st === 'vez
 // a tela parando de OFERECER o que nao tem efeito: interruptor que nao liga nada e pior que
 // interruptor nenhum, porque o vendedor clica, nada acontece e ele acha que o app travou.
 const EM_AQUECIMENTO = 'aquecimento'
-const podeReceber = (n) => !!n && (n.em_uso === true || String(n.st || '') === EM_AQUECIMENTO)
+// QUEM DECIDE E O SERVIDOR, e `apto` e a resposta dele. Os outros tres sao reserva pra versao de
+// worker que ainda nao manda o campo.
+//
+// POR QUE NAO REFAZER A CONTA AQUI (16/10/2026, tres bugs na tela do Bruno): "em uso" e
+// "aquecimento" existem por DOIS caminhos - o estado operacional (`st`, escrito ao arrastar entre
+// colunas) e a TAG (`wa_st`, escrita no seletor "Status WhatsApp" do editor, que e o caminho que
+// esta na cara de quem abre o chip). Olhando so os campos crus, um numero Em Uso pela tag virava
+// inacessivel no app e um numero em aquecimento pela tag aparecia como se nao fosse nada.
+// Regra de negocio refeita no cliente diverge do servidor no primeiro caso que ninguem previu.
+const aquecendo = (n) => !!n && (n.aquec != null || String(n.st || '') === EM_AQUECIMENTO)
+const podeReceber = (n) => !!n && (n.apto === true || n.em_uso === true || aquecendo(n))
 
 function linhaFina(n) {
   const nk = numKey(n.numero)
