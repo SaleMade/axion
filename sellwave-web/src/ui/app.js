@@ -90,13 +90,16 @@ function desenhaLista() {
 
   for (const el of lista.querySelectorAll('.num')) {
     el.onclick = (e) => {
-      if (e.target.closest('.sw')) return
+      if (e.target.closest('.sw') || e.target.closest('.fecha')) return
       abrir(el.dataset.numero)
     }
     if (estado.direcao) el.oncontextmenu = (ev) => { ev.preventDefault(); janelaProxy(el.dataset.numero) }
   }
   for (const b of lista.querySelectorAll('.sw')) {
     b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
+  }
+  for (const b of lista.querySelectorAll('.fecha')) {
+    b.onclick = (e) => { e.stopPropagation(); fechar(b.dataset.fecha) }
   }
 }
 
@@ -125,6 +128,12 @@ function linha(n) {
       : '<span class="px sem" title="Sem proxy. Clique com o botão direito."><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></span>')
     : ''
 
+  // Fechar so faz sentido no que esta aberto. A sessao fica no disco: fechar NAO pede QR depois.
+  const fecha = aberto
+    ? '<span class="fecha" data-fecha="' + nk + '" role="button" title="Fechar este número (a sessão fica salva)">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>'
+    : ''
+
   const chave = '<span class="sw' + (n.roleta ? ' on' : '') + (mexendo.has(nk) ? ' ocupado' : '')
     + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
     + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
@@ -133,7 +142,7 @@ function linha(n) {
     + '<span class="sinal"' + estiloSinal + '></span>'
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
     + '<span class="sub">' + zap + esc(conta) + '</span></span>'
-    + px + chave + '</button>'
+    + fecha + px + chave + '</button>'
 }
 
 // ───────────────────────────────────────────────────────────── palco

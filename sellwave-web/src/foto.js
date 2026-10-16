@@ -18,7 +18,7 @@ const EXEMPLO = `(() => {
     messages: [
       { id: 'm1', label: 'Tudo ficou claro?', text: 'Tudo ficou bem claro pra voce? Ficou alguma duvida?', grp: 'Geral' },
       { id: 'm2', label: 'Confirma o endereco', text: 'Pode confirmar o endereco pra mim?', grp: 'Geral' },
-      { id: 'm3', label: 'Pagamento na entrega', text: 'O pagamento e na entrega, em dinheiro ou cartao.', grp: 'Fechamento' },
+      { id: 'm3', label: 'Pagamento na entrega', text: 'O pagamento e *na entrega*, em dinheiro ou cartao. _Sem taxa._', grp: 'Fechamento' },
       { id: 'm4', label: 'Prazo de entrega', text: 'Chega em ate 5 dias uteis.', grp: 'Fechamento' }
     ],
     sequences: [
@@ -140,6 +140,8 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 900))
     await v.webContents.executeJavaScript(EXEMPLO)
     await new Promise((r) => setTimeout(r, 700))
+    await v.webContents.executeJavaScript("aberto='item:m3'; desenha(); 'ok'")
+    await new Promise((r) => setTimeout(r, 400))
     await salva(v, '6-painel', pasta)
 
     // 7) a aba FUNIS com a previa de um funil aberta: e onde se ve a pausa de cada passo, que e

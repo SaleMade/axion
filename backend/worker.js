@@ -10080,7 +10080,7 @@ async function handleSwWeb(req, env, path) {
     return new Response(obj.body, {
       headers: {
         'content-type': 'application/octet-stream',
-        'content-disposition': 'attachment; filename="Sellwave Web Setup.exe"',
+        'content-disposition': 'attachment; filename="SellWave Web Setup.exe"',
         'cache-control': 'public, max-age=300',
       },
     });

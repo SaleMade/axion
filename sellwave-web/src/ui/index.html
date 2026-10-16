@@ -86,6 +86,14 @@
   .num .sub { font-size: 10.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 5px; }
   .num .sub .zap { color: var(--verde); display: inline-flex; }
   .num .sub .zap.off { color: #4b5566; }
+  /* FECHAR O NAVEGADOR DAQUELE NUMERO, na propria linha.
+     Pedido do Bruno em 16/10: "gostaria que tivesse um botao de abrir e fechar o navegador". Abrir
+     ja era o clique na linha; fechar so existia no X do painel e no Ctrl+W - e quem desliga o
+     painel nos Ajustes ficava SEM saida nenhuma. So aparece na linha que esta aberta. */
+  .num .fecha { flex: 0 0 18px; width: 18px; height: 18px; display: grid; place-items: center;
+    border-radius: 5px; color: var(--apagado); opacity: 0; transition: opacity .12s, background .12s, color .12s; }
+  .num:hover .fecha, .num.ativo .fecha { opacity: 1; }
+  .num .fecha:hover { background: rgba(255, 255, 255, .09); color: var(--texto); }
   .num .px { flex: 0 0 auto; color: var(--apagado); display: flex; opacity: .75; margin-left: 2px; }
   .num .px.sem { color: var(--ambar); opacity: 1; }
   .num .px[hidden] { display: none; }

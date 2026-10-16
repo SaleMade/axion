@@ -140,13 +140,55 @@ function desenha() {
   ligaItens(corpo)
 }
 
+// FORMATAÇÃO DO WHATSAPP NO BALÃO. O inbox faz isso desde 16/09/2026, por pedido do Bruno: "texto
+// que eu mando em negrito tem que aparecer em negrito aqui". Sem isto a prévia mostra os símbolos
+// crus (*assim*), que é justamente o que ele mandou tirar de lá.
+//
+// Mesma regra do WhatsApp, pra não comer asterisco que não é marcação: o símbolo só vale colado no
+// texto, o trecho não pode ser vazio e não pode atravessar linha. Escrito na mão, sem lookbehind.
+const MARCAS = { '*': 'neg', _: 'ita', '~': 'ris' }
+const podeAbrir = (t, i) => i === 0 || /[\s(]/.test(t[i - 1])
+const podeFechar = (t, i) => i === t.length - 1 || /[\s.,!?:;)]/.test(t[i + 1])
+function formatado(txt) {
+  const t = String(txt == null ? '' : txt)
+  let saida = ''
+  let plano = ''
+  const solta = () => { if (plano) { saida += esc(plano); plano = '' } }
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (c === '`' && t.startsWith('```', i)) {
+      const fim = t.indexOf('```', i + 3)
+      const dentro = fim > i + 3 ? t.slice(i + 3, fim) : ''
+      if (fim > i + 3 && dentro.indexOf('\n') < 0) {
+        solta(); saida += '<span class="mono">' + esc(dentro) + '</span>'; i = fim + 2; continue
+      }
+    }
+    const cls = MARCAS[c]
+    if (cls && podeAbrir(t, i)) {
+      let fim = -1
+      for (let j = i + 2; j < t.length; j++) {
+        if (t[j] === '\n') break
+        if (t[j] !== c || t[j - 1] === ' ' || !podeFechar(t, j)) continue
+        fim = j; break
+      }
+      const dentro = fim > 0 ? t.slice(i + 1, fim) : ''
+      if (fim > 0 && dentro.trim()) {
+        solta(); saida += '<span class="' + cls + '">' + formatado(dentro) + '</span>'; i = fim; continue
+      }
+    }
+    plano += c
+  }
+  solta()
+  return saida
+}
+
 function cartaoItem(x, k) {
   const ab = aberto === 'item:' + x.id
   const fav = !!favoritos[x.id]
   let prev = ''
   if (ab) {
     const corpo = x.tipo === 'text' ? (x.texto || '') : (x.caption || ('[' + TIPOS[x.tipo].rotulo.slice(0, -1).toLowerCase() + '] ' + x.label))
-    prev = '<div class="prev"><div class="prev-bandeja"><div class="prev-balao">' + esc(corpo)
+    prev = '<div class="prev"><div class="prev-bandeja"><div class="prev-balao">' + formatado(corpo)
       + '<span class="prev-hora">agora</span></div></div></div>'
   }
   return '<div class="item" style="--kc:' + k.cor + '">'
@@ -309,18 +351,26 @@ async function roda(lista, marca) {
 
   for (let i = 0; i < lista.length; i++) {
     if (pararPedido) { rodape('parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
-    if (lista.length > 1) rodape('enviando ' + (i + 1) + ' de ' + lista.length, (i + 1) / lista.length)
-    else rodape('enviando...')
     const it = lista[i]
+    const de = lista.length > 1 ? ' ' + (i + 1) + ' de ' + lista.length : ''
+    const pct = lista.length > 1 ? (i + 1) / lista.length : null
     // A PAUSA ACONTECE AQUI, com o "digitando..." ligado na conversa, e EM FATIAS: assim o botao
     // Parar responde no meio de uma pausa longa em vez de so depois do item.
-    const pausa = Math.max(0, Number(it.pausa) || 0)
+    //
+    // O TETO DE 120 SEGUNDOS e o mesmo do _dorme no worker. Um passo com pausa absurda (dedo
+    // escorregado no cadastro) travava o funil sem nada na tela explicando o que estava havendo.
+    const pausa = Math.min(120, Math.max(0, Number(it.pausa) || 0))
     if (pausa > 0) {
-      await window.swp.indica(alvoNk, alvo, it.kind === 'audio' ? 'audio' : 'texto', pausa)
+      const audio = it.kind === 'audio'
+      // O rodape diz a VERDADE do momento. Dizer "enviando" durante a pausa fazia o vendedor achar
+      // que tinha travado, porque nada aparecia na conversa por dez segundos.
+      rodape((audio ? 'gravando' : 'digitando') + de, pct)
+      await window.swp.indica(alvoNk, alvo, audio ? 'audio' : 'texto', pausa)
       const fim = Date.now() + pausa * 1000
       while (Date.now() < fim && !pararPedido) await new Promise((r) => setTimeout(r, 200))
     }
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
+    rodape(lista.length > 1 ? 'enviando' + de : 'enviando...', pct)
     const r = await window.swp.manda(alvoNk, alvo, it)
     if (!r || !r.ok) {
       ocupado = false; disparando = ''; $('parar').style.display = 'none'
