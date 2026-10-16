@@ -1530,9 +1530,27 @@ async function dataUriDe(url) {
   const buf = Buffer.from(await r.arrayBuffer())
   if (!buf.length) throw new Error('o arquivo veio vazio')
   if (buf.length > TETO_MIDIA) throw new Error('o arquivo tem ' + Math.round(buf.length / 1048576) + ' MB, grande demais')
-  const tipo = r.headers.get('content-type') || 'application/octet-stream'
+  // O TIPO VAI SEM PARAMETRO, E ESSA LINHA E O CONSERTO DO FUNIL QUE NAO ENVIAVA (16/10/2026).
+  //
+  // O R2 devolve `audio/ogg; codecs=opus` nos audios do Sale Chat. Jogando isso inteiro numa URL de
+  // dados sai `data:audio/ogg; codecs=opus;base64,...`, que e INVALIDA por causa do espaco - e o
+  // WhatsApp recusa com `invalid_data_url`, que foi exatamente o que apareceu no rodape do Bruno:
+  // "parou no item 1 de 2: invalid_data_url". Todo funil com audio morria no primeiro passo.
+  //
+  // Guardei um dia cacando isso no lugar errado (achei que era o indicador de "gravando"). O que
+  // fechou foi a FRASE DO RODAPE: `invalid_data_url` aponta pro conteudo, nao pro fluxo.
+  //
+  // Fica so `tipo/subtipo`. Os parametros nao servem pra nada aqui: quem decide o formato do audio
+  // enviado e o proprio WhatsApp, pelo `isPtt`.
+  const tipoCru = r.headers.get('content-type') || 'application/octet-stream'
+  const tipo = String(tipoCru).split(';')[0].trim().toLowerCase() || 'application/octet-stream'
   // SO CACHEIA O QUE PASSOU. Guardar um resultado ruim grudava o erro na sessao inteira.
   const uri = 'data:' + tipo + ';base64,' + buf.toString('base64')
+  // E CONFERE ANTES DE ENTREGAR. Um content-type esquisito nunca mais vira URL invalida chegando
+  // na pagina como erro tecnico: morre aqui, com nome.
+  if (!/^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(uri)) {
+    throw new Error('o arquivo veio com tipo estranho (' + tipoCru + ')')
+  }
   // TETO EM BYTES, nao so em contagem. 120 itens de ate 32 MB dariam quase 4 GB de dataUri vivo
   // na memoria do processo principal - e um roteiro com video de oferta chega perto disso.
   cacheMidia.set(url, uri)

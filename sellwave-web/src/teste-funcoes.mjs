@@ -195,6 +195,24 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o Parar alcanca a pagina', main.indexOf("ipcMain.handle('swp:parar'") > 0 && main.indexOf('__swParar') > 0)
 }
 
+// ── 11) A URL DE DADOS DA MIDIA. Este custou o dia: todo funil com audio morria no primeiro
+//    passo com `invalid_data_url`, porque o R2 devolve "audio/ogg; codecs=opus" e o espaco
+//    invalida a URL. O teste usa os tipos REAIS que a nossa midia tem.
+{
+  const fonte = leia('main.js')
+  const corpo = recorta(fonte, 'async function dataUriDe(url)')
+  const limpa = (t) => String(t).split(';')[0].trim().toLowerCase() || 'application/octet-stream'
+  const valida = (u) => /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(u)
+
+  vale('o tipo e cortado no ponto-e-virgula', /split\(';'\)\[0\]/.test(corpo))
+  vale('a URL montada e conferida antes de sair', /invalid|tipo estranho/.test(corpo) && /base64,/.test(corpo))
+
+  for (const t of ['audio/ogg; codecs=opus', 'audio/ogg', 'image/jpeg', 'video/mp4; codecs="avc1.4d"', '']) {
+    const u = 'data:' + limpa(t) + ';base64,QUJD'
+    vale('tipo real "' + (t || '(vazio)') + '" vira URL valida', valida(u), u.slice(0, 34))
+  }
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')
