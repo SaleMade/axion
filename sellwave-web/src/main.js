@@ -27,18 +27,29 @@ const UA_LIMPO =
   'Chrome/' + process.versions.chrome + ' Safari/537.36'
 app.userAgentFallback = UA_LIMPO
 
+// MODO DE TESTE: autoteste e modo foto.
+//
+// Os dois rodam o app DE VERDADE, e isso criou dois choques com o uso real no mesmo computador:
+// a trava de instancia unica fazia o teste morrer calado quando o app do vendedor ja estava aberto
+// (foi o que aconteceu comigo em 16/10), e a pasta de dados compartilhada punha o teste dentro da
+// sessao pareada dele - mexendo no cache, na fila de captura e na configuracao de quem esta
+// trabalhando. Teste nao pode encostar em producao, nem ser impedido por ela.
+const EH_TESTE = process.env.SW_SMOKE === '1' || process.env.SW_FOTO === '1'
+
 // UMA INSTANCIA SO (16/10/2026).
 //
 // Duas copias do app rodando compartilham a MESMA pasta de dados: a fila de captura, a
 // configuracao e - o que morde primeiro - a trava de uso. Uma fecha o numero e manda soltar
 // enquanto a outra renova o aluguel, e o numero fica "aberto por voce mesmo" por dois minutos. Foi
 // o que o Bruno viu. Abrir duas vezes agora so traz a janela que ja existe pra frente.
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
-} else {
-  app.on('second-instance', () => {
-    try { if (janela) { if (janela.isMinimized()) janela.restore(); janela.focus() } } catch (_) { /* ok */ }
-  })
+if (!EH_TESTE) {
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+  } else {
+    app.on('second-instance', () => {
+      try { if (janela) { if (janela.isMinimized()) janela.restore(); janela.focus() } } catch (_) { /* ok */ }
+    })
+  }
 }
 
 // PASTA DOS DADOS FIXA, e de proposito.
@@ -48,12 +59,26 @@ if (!app.requestSingleInstanceLock()) {
 // pareadas: o vendedor atualiza o app e cada numero volta pra tela do QR. Escrevendo o caminho aqui,
 // renomear o produto deixa de ser perigoso e o app em dev usa exatamente a mesma pasta do instalado.
 // Tem que vir antes de qualquer `session.fromPartition`, senao o disco ja foi escolhido.
-try { app.setPath('userData', path.join(app.getPath('appData'), 'sellwave-web')) } catch (_) { /* ok */ }
+// Em teste a pasta e OUTRA, de proposito: ela e apagavel e nao tem nada de ninguem dentro.
+try { app.setPath('userData', path.join(app.getPath('appData'), EH_TESTE ? 'sellwave-web-teste' : 'sellwave-web')) } catch (_) { /* ok */ }
 
 const WA_URL = 'https://web.whatsapp.com'
 const WA_ORIGEM = 'https://web.whatsapp.com'
+// GEOMETRIA DAS TRES COLUNAS (16/10/2026, pedido do Bruno: "cliquei sem querer numa setinha que
+// esconde o painel e nao consegui abrir de volta; tive que ir nos Ajustes").
+//
+// O BURACO ERA ESTE: escondido, o painel devolvia a largura INTEIRA pro WhatsApp e nao sobrava um
+// pixel pra desenhar o caminho de volta. A casca fica ATRAS da view do WhatsApp, entao botao
+// flutuante dela tambem nao aparece. O unico jeito de voltar era os Ajustes, que e exatamente onde
+// ele se perdeu. Esconder algo sem deixar como trazer de volta nao e esconder, e perder.
+//
+// Agora o painel escondido deixa uma FRESTA de 22px, que e onde mora a abinha de voltar, e a barra
+// da esquerda ENCOLHE em vez de sumir - ele pediu que continuasse "uma coluna fininha mostrando o
+// numero", porque sumir a lista inteira tira a unica forma de saber onde ele esta.
 const LARGURA_BARRA = 268              // barra lateral da casca (lista de numeros)
+const LARGURA_BARRA_MIN = 56           // encolhida: so o ponto de estado, os ultimos digitos e o contador
 const LARGURA_PAINEL = 316             // painel de venda, na direita
+const FRESTA_PAINEL = 22               // painel escondido: o tanto que sobra pra abinha de voltar
 const ALTURA_TOPO = 0                  // a casca desenha o topo dentro da propria barra
 
 // Permissoes que a pagina do WhatsApp realmente pede (capturadas no handler em 15/10):
@@ -385,11 +410,16 @@ let ativoAgora = ''         // qual numero esta na tela (a hibernacao nunca fech
 let painelLigado = true
 function temPainel() { return painelLigado && !!ativoAgora && abertos.has(ativoAgora) }
 
+// A largura da barra AGORA, que depende de ela estar encolhida ou nao.
+const larguraBarra = () => (config.barraEncolhida ? LARGURA_BARRA_MIN : LARGURA_BARRA)
+
 function areaConteudo() {
   if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
   const b = janela.getContentBounds()
-  const reserva = temPainel() ? LARGURA_PAINEL : 0
-  return { x: LARGURA_BARRA, y: ALTURA_TOPO, width: Math.max(0, b.width - LARGURA_BARRA - reserva), height: Math.max(0, b.height - ALTURA_TOPO) }
+  // Painel escondido NAO devolve a largura inteira: deixa a fresta da abinha de voltar.
+  const reserva = temPainel() ? LARGURA_PAINEL : FRESTA_PAINEL
+  const esq = larguraBarra()
+  return { x: esq, y: ALTURA_TOPO, width: Math.max(0, b.width - esq - reserva), height: Math.max(0, b.height - ALTURA_TOPO) }
 }
 
 function areaPainel() {
@@ -577,6 +607,24 @@ async function abreDeVerdade(nk, numero, meu) {
 
   janela.contentView.addChildView(view)
   view.setBounds(areaConteudo())
+  // CARREGAMENTO QUE NAO TERMINA (16/10/2026). O Bruno ficou minutos numa tela branca e o 1.4.0
+  // nao disse nada - porque o processo NAO morreu e NAO estava travado: ele estava vivo, a rede
+  // viva, e o WhatsApp Web simplesmente nunca terminava de carregar. Esse caso nao dispara
+  // `render-process-gone` nem `unresponsive`, entao precisa de relogio proprio.
+  //
+  // 45 segundos: o WhatsApp Web numa conta grande leva uns 15 a 20 pela rede do vendedor, com
+  // proxy no meio. O dobro disso nao e lentidao, e emperro.
+  const relogioCarga = setTimeout(() => {
+    if (s.carregado) return
+    anota('[numero] ' + nk + ' nao terminou de carregar em 45s')
+    avisaCasca('sw:status', {
+      nk,
+      texto: 'O WhatsApp deste número não terminou de carregar. Feche e abra de novo; se repetir, avise a direção.',
+    })
+  }, 45000)
+  view.webContents.once('did-finish-load', () => clearTimeout(relogioCarga))
+  view.webContents.once('destroyed', () => clearTimeout(relogioCarga))
+
   view.webContents.loadURL(WA_URL)
   // SO VAI PRA TELA SE AINDA FOR O QUE ELE QUER.
   //
@@ -1264,6 +1312,7 @@ ipcMain.handle('sw:estado', () => ({
   // (sem preview), senao entrar no preview de um vendedor apagaria a lista de escolha.
   vendedores: donosConhecidos,
   painelLigado: painelLigado,
+  barraEncolhida: !!config.barraEncolhida,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
   // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
@@ -1558,6 +1607,15 @@ ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
 
 // Fechar e recarregar a sessao que esta na tela, pelo proprio painel: e onde a mao do vendedor ja
 // esta. A sessao fica no disco, entao fechar NAO pede QR de novo depois.
+// A BARRA ENCOLHE E VOLTA. Guarda na configuracao, igual ao painel: se ele encolheu, e porque
+// quer assim, e reabrir o app com ela larga de novo seria desfazer a escolha dele todo dia.
+ipcMain.handle('sw:barra', (_e, { encolhida }) => {
+  config.barraEncolhida = !!encolhida
+  gravarConfig()
+  reposiciona()
+  return { ok: true, encolhida: !!config.barraEncolhida }
+})
+
 ipcMain.handle('swp:painel', (_e, { ligado }) => {
   painelLigado = ligado !== false
   if (config.painelLigado !== painelLigado) { config.painelLigado = painelLigado; gravarConfig() }

@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('sw', {
   salvarProxy: (d) => chamar('sw:proxy-salvar', d),
   verComo: (id) => chamar('sw:como', { id }),
   soltarUso: (nk) => chamar('sw:uso-soltar', { nk }),
+  barra: (encolhida) => chamar('sw:barra', { encolhida }),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
