@@ -72,6 +72,7 @@ const CONFIG_PADRAO = {
   proxies: {},             // { "<numkey>": { host, porta, usuario, senha } }
   numeros: [],             // cache da ultima lista vinda da dash
   maxAbertos: 6,           // teto de sessoes abertas ao mesmo tempo (ver hibernacao)
+  painelLigado: true,      // o painel de venda aparece ao lado do WhatsApp?
   nome: '',                // nome de quem entrou, so pra barra lateral
   direcao: false,          // quem entrou e da direcao? quem decide e o servidor, nao o app
 }
@@ -156,7 +157,16 @@ const particaoDe = (nk) => 'persist:sw-' + nk
 // O fail-closed sai de graca: SEM "direct://" na lista, proxy fora do ar devolve
 // ERR_PROXY_CONNECTION_FAILED e o Chromium NAO sai pelo IP real.
 
-const credenciais = new Map()   // "host:porta" -> { usuario, senha }
+// CREDENCIAL POR PARTICAO, nao por host:porta (16/10/2026, varredura final).
+//
+// Proxy de ISP (o caso do isp.decodo.com dele) distingue a sessao pelo USUARIO, com o mesmo host e
+// a mesma porta pra todos. Chaveando por "host:porta", o segundo numero sobrescrevia a credencial
+// do primeiro e os dois passavam a sair pelo MESMO IP - exatamente a correlacao que o proxy existe
+// pra evitar, e em silencio.
+// A chave agora e a particao, e o evento 'login' do Electron diz qual webContents pediu, o que
+// permite achar de quem e a autenticacao.
+const credenciais = new Map()   // particao -> { host, porta, usuario, senha }
+const particaoDoWc = new Map()  // id do webContents -> particao
 
 // ROTEIRO (respostas rapidas, funis, audios) e as credenciais de captura. Vem da dash uma vez e
 // fica aqui: o painel de cada numero pede por IPC, entao N sessoes abertas = 1 busca, nao N.
@@ -203,7 +213,11 @@ async function puxaProxyDaDash(nk) {
   }
 }
 
-async function aplicaProxy(ses, px) {
+async function aplicaProxy(ses, px, particao) {
+  if (particao) {
+    if (px && px.usuario) credenciais.set(particao, px)
+    else credenciais.delete(particao)
+  }
   if (!px) {
     // Sem proxy: deixa a sessao num buraco negro em vez de "direct". Assim, se alguma parte do
     // codigo esquecer de travar, a requisicao FALHA em vez de vazar o IP real.
@@ -211,7 +225,6 @@ async function aplicaProxy(ses, px) {
     await ses.closeAllConnections()
     return
   }
-  credenciais.set(px.host + ':' + px.porta, { usuario: px.usuario, senha: px.senha })
   // Regra UNICA e sem "=": vira PROXY_LIST e vale pra http, https, ws e wss. Com "scheme=" o que
   // ficou de fora sai DIRETO, que e o vazamento classico.
   await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'http://' + px.host + ':' + px.porta })
@@ -222,10 +235,15 @@ async function aplicaProxy(ses, px) {
 // Autenticacao do proxy. Vale pra navegacao de verdade (WebContents), que e o caminho que a gente
 // usa. NAO vale pra net.fetch/ses.fetch: la o evento sai no proprio objeto, nao no app - foi por
 // isso que o preflight abaixo e feito num WebContents escondido, e nao com ses.fetch.
-app.on('login', (event, _wc, _det, authInfo, callback) => {
+app.on('login', (event, wc, _det, authInfo, callback) => {
   if (!authInfo || !authInfo.isProxy) return
-  const c = credenciais.get(authInfo.host + ':' + authInfo.port)
+  // De QUEM e esta autenticacao: acha a particao daquele webContents.
+  const part = wc ? particaoDoWc.get(wc.id) : ''
+  const c = part ? credenciais.get(part) : null
   if (!c || !c.usuario) return
+  // So responde se for o MESMO proxy que a gente mandou aquela particao usar. Proxy diferente
+  // pedindo senha significa que alguma coisa redirecionou o trafego: melhor nao autenticar.
+  if (String(authInfo.host) !== String(c.host) || Number(authInfo.port) !== Number(c.porta)) return
   event.preventDefault()
   callback(c.usuario, c.senha)
 })
@@ -244,6 +262,7 @@ function testaSaida(particao) {
     })
     viewsDoTeste.add(view)
     const wc = view.webContents
+    particaoDoWc.set(wc.id, particao)
     let respondeu = false
     const acabou = (r) => {
       if (respondeu) return
@@ -292,15 +311,23 @@ app.on('web-contents-created', (_e, wc) => {
   }
   // Link externo abre no navegador do sistema, nunca dentro de uma sessao de numero.
   wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) shell.openExternal(url)
+    // So http e https vao pro navegador do sistema. Outros esquemas (ms-..., file:, javascript:)
+    // sao recusados sem abrir nada: entregar esquema desconhecido pro Windows e abrir porta.
+    if (/^https?:\/\//i.test(String(url || ''))) shell.openExternal(url)
     return { action: 'deny' }
   })
   // O PAR DO DE CIMA. Sem isto, um link com target proprio navega a sessao PRA FORA do WhatsApp:
   // a view vira um navegador comum, ainda com o proxy e a sessao do numero. Link externo vai pro
   // navegador do sistema; a sessao so anda dentro do WhatsApp.
+  // COMPARA ORIGEM, NAO PREFIXO. "https://web.whatsapp.com.evil.com/" comeca com o nosso endereco
+  // e passaria num startsWith, levando junto o preload e a sessao autenticada daquele numero.
   wc.on('will-navigate', (ev, url) => {
     const u = String(url || '')
-    if (u.startsWith(WA_URL) || u.startsWith('file://') || u === 'about:blank') return
+    let origem = ''
+    try { origem = new URL(u).origin } catch (_) { origem = '' }
+    if (origem === WA_ORIGEM) return
+    // A casca e o painel sao file://, e cada um tem a propria view: a de numero nunca navega pra la.
+    if (u.startsWith('file://') && wc.getURL().startsWith('file://')) return
     ev.preventDefault()
     if (/^https?:/i.test(u)) shell.openExternal(u)
   })
@@ -321,7 +348,10 @@ let ativoAgora = ''         // qual numero esta na tela (a hibernacao nunca fech
 // cobrir a conversa a gente teria que encolher o layout do WhatsApp por CSS - que depende do DOM
 // deles e quebra quando eles mudam - e o CSS deles poderia quebrar o nosso. Separado, cada um cuida
 // do seu espaco e nenhum estraga o outro.
-function temPainel() { return !!ativoAgora && abertos.has(ativoAgora) }
+// O painel pode ser escondido: em tela pequena ele e a barra comiam 584 px e sobrava pouco pro
+// WhatsApp, que corta a tela de entrar da Meta.
+let painelLigado = true
+function temPainel() { return painelLigado && !!ativoAgora && abertos.has(ativoAgora) }
 
 function areaConteudo() {
   if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
@@ -377,6 +407,9 @@ function preparaSessao(nk) {
 // leigo faz direto, ainda mais com a lista redesenhando embaixo do dedo) criam DUAS views na MESMA
 // particao, e o WhatsApp Web entra em conflito de sessao.
 const abrindo = new Set()
+// Qual foi o ULTIMO numero que o vendedor pediu. Duas aberturas correm em paralelo e a mais lenta
+// terminava por ultimo, roubando a tela de quem ele clicou depois.
+let pedidoAtual = 0
 
 async function abreNumero(numero) {
   const nk = numKey(numero)
@@ -388,12 +421,13 @@ async function abreNumero(numero) {
   }
   if (abrindo.has(nk)) return { ok: true, jaAberto: true }
   abrindo.add(nk)
+  const meu = ++pedidoAtual
   try {
-    return await abreDeVerdade(nk, numero)
+    return await abreDeVerdade(nk, numero, meu)
   } finally { abrindo.delete(nk) }
 }
 
-async function abreDeVerdade(nk, numero) {
+async function abreDeVerdade(nk, numero, meu) {
 
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
   await puxaProxyDaDash(nk)
@@ -403,20 +437,20 @@ async function abreDeVerdade(nk, numero) {
   }
 
   const ses = preparaSessao(nk)
-  await aplicaProxy(ses, px)
+  await aplicaProxy(ses, px, particaoDe(nk))
 
   if (config.travaProxy && px) {
     avisaCasca('sw:status', { nk, texto: 'Conferindo o proxy...' })
     const teste = await testaSaida(particaoDe(nk))
     if (!teste.ok) {
       // Fail-closed: deixa a sessao no buraco negro, pra nada escapar depois.
-      await aplicaProxy(ses, null)
-      return { ok: false, erro: 'O proxy nao respondeu: ' + teste.erro }
+      await aplicaProxy(ses, null, particaoDe(nk))
+      return { ok: false, erro: 'O proxy não respondeu: ' + teste.erro }
     }
     // FECHA quando NAO SABE o pais, nao so quando sabe que e outro. Antes, resposta sem countryCode
     // passava - e o teste e http em texto claro, entao o proprio dono do proxy podia forjar.
     if (config.exigirBrasil && teste.pais !== 'BR') {
-      await aplicaProxy(ses, null)
+      await aplicaProxy(ses, null, particaoDe(nk))
       return { ok: false, erro: teste.pais
         ? 'O proxy saiu por ' + teste.pais + ', e a exigência de IP brasileiro está ligada.'
         : 'Não deu pra confirmar que o IP é do Brasil, e a exigência está ligada.' }
@@ -444,6 +478,7 @@ async function abreDeVerdade(nk, numero) {
   })
   const s = { view, nk, numero, carregado: false, ultimoUso: Date.now() }
   abertos.set(nk, s)
+  particaoDoWc.set(view.webContents.id, particaoDe(nk))
 
   view.webContents.on('did-finish-load', () => {
     s.carregado = true
@@ -462,8 +497,11 @@ async function abreDeVerdade(nk, numero) {
   janela.contentView.addChildView(view)
   view.setBounds(areaConteudo())
   view.webContents.loadURL(WA_URL)
-  mostra(nk)
-  return { ok: true }
+  // SO VAI PRA TELA SE AINDA FOR O QUE ELE QUER. Se ele clicou noutro numero enquanto este abria,
+  // a sessao fica pronta escondida e a casca so é avisada.
+  if (!meu || meu === pedidoAtual) mostra(nk)
+  else avisaCasca('sw:aberto', { nk })
+  return { ok: true, naTela: !meu || meu === pedidoAtual }
 }
 
 function mostra(nk) {
@@ -566,13 +604,20 @@ ipcMain.on('sw:codigo', (e) => {
 async function injetaPainel(s) {
   if (!s || !s.view || s.view.webContents.isDestroyed()) return
   const wc = s.view.webContents
+  // DUAS PERGUNTAS SEPARADAS. O agente vem do disco e sempre entra; o MOTOR vem da rede e pode ter
+  // falhado. Perguntar so pelo agente dava "ja esta instalado" com o motor ausente, e o painel
+  // ficava em "esperando o WhatsApp carregar" pra sempre, sem ninguem saber por que.
   try {
-    const jaTem = await wc.executeJavaScript('typeof window.__swEstado === "function"').catch(() => false)
-    if (jaTem) return                      // o preload ja injetou no inicio do documento
-    const motor = await pegaMotor()
-    if (motor) await wc.executeJavaScript(motor, true).catch((e) => console.error('[painel] motor nao rodou:', e && e.message))
-    await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
-    console.log('[painel] agente instalado (tardio) em ' + s.nk)
+    const temMotor = await wc.executeJavaScript('typeof window.WPP !== "undefined"').catch(() => false)
+    if (!temMotor) {
+      motorCache = ''                      // a copia vazia nao serve: busca de novo
+      const motor = await pegaMotor()
+      if (motor) await wc.executeJavaScript(motor, true).catch((e) => console.error('[painel] motor nao rodou:', e && e.message))
+      else console.error('[painel] sem motor em ' + s.nk + ': o painel nao vai conseguir mandar')
+    }
+    const temAgente = await wc.executeJavaScript('typeof window.__swEstado === "function"').catch(() => false)
+    if (!temAgente) await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
+    console.log('[painel] pronto em ' + s.nk + (temMotor ? '' : ' (motor injetado agora)'))
   } catch (e) {
     console.error('[painel] falhou em ' + s.nk + ': ' + ((e && e.message) || e))
   }
@@ -589,6 +634,9 @@ let drenando = false
 let filaSuja = false
 function gravaFila() {
   if (!filaSuja) return
+  gravaFilaAgora()
+}
+function gravaFilaAgora() {
   filaSuja = false
   try { fs.writeFileSync(ARQ_FILA(), JSON.stringify(filaCaptura.slice(0, 5000)), 'utf8') } catch (_) { /* ok */ }
 }
@@ -610,24 +658,51 @@ async function drenaCaptura() {
   drenando = true
   try {
     while (filaCaptura.length) {
-      const lote = filaCaptura.splice(0, 50)
+      // NÃO TIRA DA FILA ANTES DA CONFIRMAÇÃO. Antes o lote saía da fila no `splice` e só existia
+      // em memória: fechar o app (ou um travamento) no meio do envio perdia aquelas mensagens, sem
+      // erro nenhum. Agora a fila só encolhe pelo que o servidor confirmou no ack, e reenviar é
+      // seguro porque a ingestão deduplica por id.
+      const lote = filaCaptura.slice(0, 50)
+      gravaFilaAgora()
+      let aceitos = null
       try {
         const resp = await fetch(alvo, {
           method: 'POST',
           headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
           body: JSON.stringify({ events: lote }),
         })
-        if (!resp.ok) {
-          // Devolve pra fila e para: melhor segurar do que perder conversa.
-          filaCaptura.unshift(...lote)
-          console.error('[captura] ingestao respondeu ' + resp.status)
+        if (resp.status === 401 || resp.status === 403) {
+          console.error('[captura] sessao vencida: a fila fica guardada ate entrar de novo')
+          avisaCasca('sw:fila', { n: filaCaptura.length, erro: 'entre de novo na dash' })
           break
         }
+        if (!resp.ok) { console.error('[captura] ingestao respondeu ' + resp.status); break }
+        const d = await resp.json().catch(() => null)
+        aceitos = d && Array.isArray(d.ack) ? new Set(d.ack.map(String)) : null
+        const barrados = Number(d && d.barrados) || 0
+        if (barrados) console.error('[captura] o servidor recusou ' + barrados + ' evento(s) deste lote')
       } catch (e) {
-        filaCaptura.unshift(...lote)
         console.error('[captura] nao enviou: ' + ((e && e.message) || e))
         break
       }
+      // Sem ack detalhado (lote todo aceito ou todo barrado), tira o lote inteiro: o servidor
+      // respondeu 200, e segurar pra sempre o que ele nunca vai aceitar enche a fila.
+      const antes = filaCaptura.length
+      if (aceitos && aceitos.size) {
+        for (let i = filaCaptura.length - 1; i >= 0; i--) {
+          const id = String(filaCaptura[i] && filaCaptura[i].msgId)
+          if (aceitos.has(id)) filaCaptura.splice(i, 1)
+        }
+        // O que ficou do lote e nao voltou no ack sai mesmo assim: senao o mesmo evento recusado
+        // bloquearia a fila inteira pra sempre.
+        for (const ev of lote) {
+          const i = filaCaptura.indexOf(ev)
+          if (i >= 0) filaCaptura.splice(i, 1)
+        }
+      } else {
+        filaCaptura.splice(0, lote.length)
+      }
+      if (filaCaptura.length === antes) break   // nada saiu: para em vez de girar
       filaSuja = true
     }
   } finally {
@@ -637,6 +712,32 @@ async function drenaCaptura() {
   }
 }
 setInterval(drenaCaptura, 15000)
+
+// SINAL DE VIDA DOS NUMEROS ABERTOS.
+//
+// A roleta so manda lead pra numero que ela considera vivo, e a linha expira em 3 minutos. Sem
+// isto, numero que sai do Datacrazy e passa a viver aqui some da roleta e para de receber lead em
+// silencio - o pior desfecho possivel numa migracao. Manda a cada 60 segundos, e so marca vivo
+// quando o motor do WhatsApp esta de pe naquela sessao.
+async function bateSinal() {
+  if (!config.token || !abertos.size) return
+  const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/heartbeat'
+  for (const s of abertos.values()) {
+    if (!s.view || s.view.webContents.isDestroyed()) continue
+    let e = null
+    try { e = await s.view.webContents.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
+    const numero = (e && e.eu) || s.numero
+    if (!numero) continue
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+        body: JSON.stringify({ numero, motor: !!(e && e.motor) }),
+      })
+    } catch (_) { /* sem rede o sinal expira sozinho, que e o certo */ }
+  }
+}
+setInterval(bateSinal, 60000)
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // 7) Conversa com a dash
@@ -675,6 +776,7 @@ ipcMain.handle('sw:estado', () => ({
   proxies: config.proxies,
   maxAbertos: Number(config.maxAbertos) || 6,
   direcao: !!config.direcao,
+  painelLigado: painelLigado,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
   chromium: process.versions.chrome,
@@ -727,9 +829,9 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   if (!px) return { ok: false, erro: 'Sem proxy cadastrado pra este número. Cadastre na dash.' }
   // PARTICAO DESCARTAVEL: testar na particao viva aplicaria o proxy numa sessao ja aberta.
   const teste = 'persist:sw-teste-' + nk
-  await aplicaProxy(session.fromPartition(teste), px)
+  await aplicaProxy(session.fromPartition(teste), px, teste)
   const r = await testaSaida(teste)
-  await aplicaProxy(session.fromPartition(teste), null)
+  await aplicaProxy(session.fromPartition(teste), null, teste)
   return r
 })
 
@@ -763,6 +865,7 @@ const ESTADO_VAZIO = { motor: false, envia: false, chatId: '', phone: '', nome: 
 ipcMain.handle('swp:estado-wa', async () => {
   const wc = viewAtiva()
   if (!wc) return { ...ESTADO_VAZIO }
+  const nkAtual = ativoAgora
   let e
   try { e = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
   if (!e) return { ...ESTADO_VAZIO }
@@ -772,8 +875,11 @@ ipcMain.handle('swp:estado-wa', async () => {
   // A dash e o app passam a discordar do que esta acontecendo, em silencio. Melhor gritar.
   const esperado = ativoAgora
   const real = numKey(e.eu || '')
-  e.trocado = (real && esperado && real !== esperado) ? real : ''
+  // MANDA O NUMERO CHEIO, nao a chave de 10 digitos: a chave formatada como telefone perde o nono
+  // digito e mostra um numero que nao existe.
+  e.trocado = (real && esperado && real !== esperado) ? String(e.eu || '') : ''
   if (e.trocado) console.error('[slot] ' + esperado + ' esta pareado com ' + real)
+  e.nk = nkAtual
   return e
 })
 
@@ -796,9 +902,15 @@ async function dataUriDe(url) {
   return uri
 }
 
-ipcMain.handle('swp:manda', async (_e, { chatId, item }) => {
-  const wc = viewAtiva()
-  if (!wc) return { ok: false, erro: 'nenhum numero aberto' }
+ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
+  // O ENVIO VAI PRA VIEW DAQUELE NUMERO, nao pra "a que esta na tela".
+  //
+  // O funil dura dezenas de segundos (tem pausa e simulacao de digitando). Se o vendedor clicasse
+  // noutro numero no meio, os passos seguintes saiam pelo OUTRO chip, pro mesmo lead: metade da
+  // conversa de um numero, metade de outro, e a atribuicao da venda quebrada.
+  const alvo = String(nk || '') ? abertos.get(String(nk)) : null
+  const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
+  if (!wc) return { ok: false, erro: nk ? 'o número foi fechado, o funil parou aqui' : 'nenhum número aberto' }
   const pedaco = { ...(item || {}) }
   if (pedaco.tipo === 'midia') {
     if (!pedaco.url) return { ok: false, erro: 'esse item nao tem arquivo' }
@@ -818,6 +930,13 @@ ipcMain.handle('swp:manda', async (_e, { chatId, item }) => {
 
 // Fechar e recarregar a sessao que esta na tela, pelo proprio painel: e onde a mao do vendedor ja
 // esta. A sessao fica no disco, entao fechar NAO pede QR de novo depois.
+ipcMain.handle('swp:painel', (_e, { ligado }) => {
+  painelLigado = ligado !== false
+  if (config.painelLigado !== painelLigado) { config.painelLigado = painelLigado; gravarConfig() }
+  reposiciona()
+  return { ok: true, ligado: painelLigado }
+})
+
 ipcMain.handle('swp:fechar-ativo', () => {
   if (ativoAgora) fechaNumero(ativoAgora)
   return { ok: true }
@@ -903,6 +1022,7 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 
 app.whenReady().then(() => {
   lerConfig()
+  painelLigado = config.painelLigado !== false
   leFila()
 
   // A sessao PADRAO tambem vai pro buraco negro. Assim, qualquer parte do app que esqueca de usar
@@ -914,7 +1034,9 @@ app.whenReady().then(() => {
   // MODO DE TESTE NAO ABRE JANELA NA TELA (16/10/2026). O autoteste e o modo foto rodam o app de
   // verdade, e cada rodada piscava uma janela no monitor de quem estiver usando o computador.
   janela = new BaseWindow({
-    width: 1440, height: 920, minWidth: 1024, minHeight: 640,
+    // 1180 = barra (268) + painel (316) + 596 pro WhatsApp. Medido: abaixo disso a tela de entrar
+    // da Meta corta na direita e o vendedor nao ve o QR inteiro.
+    width: 1440, height: 920, minWidth: 1180, minHeight: 680,
     title: 'Sellwave Web',
     backgroundColor: '#0b0e14',
     autoHideMenuBar: true,
@@ -996,7 +1118,7 @@ app.whenReady().then(() => {
       } catch (e) { out.painelErro = String((e && e.message) || e).slice(0, 110) }
       return out
     }
-    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', aplicaProxy, testaSaida, particaoDe, injeta }
+    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', modal: '', aplicaProxy, testaSaida, particaoDe, injeta }
     casca.webContents.once('did-finish-load', async () => {
       ctx.cascaOk = true
       try {
@@ -1006,6 +1128,18 @@ app.whenReady().then(() => {
           '(() => { const i = document.querySelector("aside .marca img"); return i ? (i.naturalWidth + "x" + i.naturalHeight) : "sem logo" })()'
         ) || '')
         ctx.temBarra = /^[1-9]\d*x[1-9]\d*$/.test(ctx.textoBarra)
+        // AS JANELINHAS ABREM? E o tipo de quebra que nao aparece em teste de sintaxe: ja houve uma
+        // versao em que abreModal chamava a si mesma e NENHUM dialogo do app abria.
+        ctx.modal = await casca.webContents.executeJavaScript(`(async () => {
+          try {
+            document.getElementById('ajustes').click()
+            await new Promise((r) => setTimeout(r, 250))
+            const on = !!document.querySelector('.fundo-modal.on')
+            const temTexto = (document.getElementById('modal-corpo') || {}).textContent || ''
+            document.onkeydown({ key: 'Escape' })
+            return on && temTexto.indexOf('Ajustes') >= 0 ? 'abriu' : ('nao abriu (on=' + on + ')')
+          } catch (e) { return 'erro: ' + (e && e.message) }
+        })()`).catch((e) => 'erro: ' + (e && e.message))
       } catch (e) { ctx.textoBarra = 'erro: ' + (e && e.message) }
       require('./smoke').rodar(ctx)
     })

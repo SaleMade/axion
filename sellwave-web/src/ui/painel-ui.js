@@ -48,8 +48,11 @@ function catalogo() {
   const saida = []
   for (const m of (roteiro.messages || [])) saida.push({ id: m.id, tipo: 'text', label: m.label || m.text || m.id, texto: m.text || '', grp: m.grp || '' })
   for (const md of (roteiro.media || [])) {
-    const t = TIPOS[md.kind] ? md.kind : 'document'
-    saida.push({ id: md.id, tipo: t, label: md.label || md.id, caption: md.caption || '', key: md.key, grp: md.grp || '' })
+    // SÓ O QUE O AGENTE SABE MANDAR. O catálogo do Sale Chat guarda tudo que não é mensagem no
+    // mesmo lugar, inclusive cartão de contato, que não tem arquivo e não tem envio aqui: clicar
+    // nele dava um erro técnico sem explicação. Melhor não aparecer.
+    if (!TIPOS[md.kind] || !md.key) continue
+    saida.push({ id: md.id, tipo: md.kind, label: md.label || md.id, caption: md.caption || '', key: md.key, grp: md.grp || '' })
   }
   return saida
 }
@@ -211,7 +214,23 @@ function ligaFunis(corpo) {
   for (const b of corpo.querySelectorAll('[data-funil]')) b.onclick = () => disparaFunil(b.dataset.funil)
 }
 
-function rodape(txt, pct) {
+// AVISO QUE DURA. O pulso roda a cada 1,5 segundo e reescrevia o rodapé com "pronto": toda
+// mensagem de erro sumia antes de o vendedor ler. Agora erro segura a linha por 10 segundos.
+let avisoAte = 0
+// Traduz o erro do navegador. ERR_PROXY_CONNECTION_FAILED não diz nada pra um vendedor.
+function humano(txt) {
+  const t = String(txt || '')
+  if (/ERR_PROXY|ERR_TUNNEL|NO_SUPPORTED_PROXIES/i.test(t)) return 'o proxy deste número não respondeu'
+  if (/ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|fetch failed|Failed to fetch/i.test(t)) return 'sem internet'
+  if (/demorou demais/i.test(t)) return t
+  if (/não baixei a mídia|midia/i.test(t)) return 'não consegui baixar o arquivo'
+  if (/motor/i.test(t)) return 'o WhatsApp ainda não está pronto'
+  return t
+}
+
+function rodape(txt, pct, segura) {
+  if (!segura && Date.now() < avisoAte) return
+  if (segura) avisoAte = Date.now() + 10000
   $('rod').textContent = txt
   const barra = $('barra')
   barra.style.display = pct == null ? 'none' : 'block'
@@ -257,6 +276,7 @@ async function roda(lista, marca) {
   // TRAVA O ALVO NO CLIQUE. Se o vendedor trocar de conversa no meio do funil, o resto tem que ir
   // pra quem ele mandou, não pra quem está na tela agora.
   const alvo = estadoWa.chatId
+  const alvoNk = estadoWa.nk || ''
   ocupado = true
   disparando = marca
   pararPedido = false
@@ -264,16 +284,19 @@ async function roda(lista, marca) {
   $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
 
   for (let i = 0; i < lista.length; i++) {
-    if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
+    if (pararPedido) { rodape('parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
     if (lista.length > 1) rodape('enviando ' + (i + 1) + ' de ' + lista.length, (i + 1) / lista.length)
     else rodape('enviando...')
     const it = lista[i]
     if (it.delay) await new Promise((r) => setTimeout(r, Number(it.delay) * 1000))
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
-    const r = await window.swp.manda(alvo, it)
+    const r = await window.swp.manda(alvoNk, alvo, it)
     if (!r || !r.ok) {
       ocupado = false; disparando = ''; $('parar').style.display = 'none'
-      rodape('falhou: ' + ((r && r.erro) || 'sem resposta'))
+      const feitos = i
+      rodape(lista.length > 1
+        ? 'parou no item ' + (i + 1) + ' de ' + lista.length + (feitos ? ', os ' + feitos + ' primeiros já foram' : '') + ': ' + humano((r && r.erro) || 'sem resposta')
+        : 'não enviou: ' + humano((r && r.erro) || 'sem resposta'), null, true)
       desenha()
       return
     }
@@ -289,6 +312,7 @@ async function roda(lista, marca) {
 $('parar').onclick = () => { pararPedido = true }
 $('fechar').onclick = () => window.swp.fechar()
 $('recarregar').onclick = () => { rodape('recarregando...'); window.swp.recarregar() }
+$('esconder').onclick = () => window.swp.esconder()
 
 // ───────────────────────────────────────────────────────────── lead
 
@@ -327,6 +351,7 @@ async function atualizaLead() {
 // ───────────────────────────────────────────────────────────── ciclo
 
 let podiaEnviar = false
+let ultimaTentativa = 0
 async function pulso() {
   const e = await window.swp.estado()
   if (e) estadoWa = e
@@ -346,6 +371,8 @@ async function pulso() {
   // seleção de texto e piscaria a lista.
   const agora = podeEnviar()
   if (agora !== podiaEnviar) { podiaEnviar = agora; desenha() }
+  // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
+  if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }
   await atualizaLead()
 }
 
@@ -359,10 +386,23 @@ for (const b of document.querySelectorAll('.aba')) {
 }
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenha() }
 
-window.swp.roteiro().then((r) => {
-  if (r && r.ok) roteiro = { messages: r.messages || [], sequences: r.sequences || [], media: r.media || [], mediaBase: r.mediaBase || '' }
-  desenha()
-}).catch(() => desenha())
+// O PAINEL CARREGA ANTES DO LOGIN. A janela dele sobe junto com o app, e nessa hora pode nao
+// haver token ainda: o roteiro volta vazio e, sem tentar de novo, o vendedor ficaria com Respostas
+// e Funis em branco pra sempre, mesmo depois de entrar. Por isso insiste enquanto estiver vazio.
+let buscandoRoteiro = false
+async function pegaRoteiro() {
+  if (buscandoRoteiro) return
+  buscandoRoteiro = true
+  try {
+    const r = await window.swp.roteiro()
+    if (r && r.ok) {
+      roteiro = { messages: r.messages || [], sequences: r.sequences || [], media: r.media || [], mediaBase: r.mediaBase || '' }
+      desenha()
+    }
+  } catch (_) { /* tenta de novo no próximo pulso */ } finally { buscandoRoteiro = false }
+}
+const roteiroVazio = () => !(roteiro.messages || []).length && !(roteiro.sequences || []).length && !(roteiro.media || []).length
+pegaRoteiro().then(desenha)
 
 setInterval(pulso, 1500)
 pulso()

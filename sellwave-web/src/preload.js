@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('sw', {
   testarProxy: (nk) => chamar('sw:proxy-testar', { nk }),
   trava: (v) => chamar('sw:trava', v),
   roleta: (nk, on) => chamar('sw:roleta', { nk, on }),
+  painel: (ligado) => chamar('swp:painel', { ligado }),
   teto: (maxAbertos) => chamar('sw:teto', { maxAbertos }),
   abrirLog: () => chamar('sw:abrirLog'),
 

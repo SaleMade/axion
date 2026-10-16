@@ -128,31 +128,86 @@
   // é normal. Sem isso a dash enche de repetida (já aconteceu: 357 duplicadas em setembro).
   var vistas = {}
   window.__swVistasN = 0
+
+  // SÓ CONVERSA DE PESSOA. Lista de PERMITIDOS, não de proibidos: filtrar só @g.us deixava passar
+  // status@broadcast, newsletter e lista de transmissão, que viravam conversa no inbox do CRM e
+  // lead fantasma na roleta.
+  var SO_PESSOA = /^\d{5,}@(c\.us|s\.whatsapp\.net|lid)$/i
+
+  function partes(wid) {
+    try {
+      var s = (wid && (wid._serialized || (wid.id && wid.id._serialized))) || (typeof wid === 'string' ? wid : '')
+      if (!s) return { digits: '', isLid: false, ser: '' }
+      return { digits: String(s).replace(/@.*/, '').replace(/\D/g, ''), isLid: /@lid$/i.test(s), ser: String(s) }
+    } catch (_) { return { digits: '', isLid: false, ser: '' } }
+  }
+
+  // TELEFONE DE VERDADE QUANDO A CONVERSA É POR LID (portado do painel em produção).
+  //
+  // Em conversa endereçada por LID, o identificador NÃO é telefone. Mandar os dígitos dele como
+  // telefone faz o worker descartar o evento inteiro (a guarda do `lid`), e aí a mensagem do lead
+  // não vira lead, não vira bolha no inbox e não casa com o pedido. Some sem erro nenhum.
+  function telefoneReal(msg, deMim) {
+    try {
+      var W = window.WPP
+      var wid = deMim ? msg.to : msg.from
+      var p = partes(wid)
+      if (p.digits && !p.isLid) return { digits: p.digits, isLid: false }
+      var meu = numeroDoAparelho()
+      var cands = []
+      var push = function (x) { if (x != null) cands.push(x) }
+      // O remetente só serve quando a mensagem é RECEBIDA: numa enviada o remetente sou eu.
+      if (!deMim) {
+        try { var so = msg.senderObj || msg.sender; push(so && (so.id || (so.attributes && so.attributes.id))); push(so && so.phoneNumber) } catch (_) { /* ok */ }
+        try { push(msg.author) } catch (_) { /* ok */ }
+      }
+      try { var c = W && W.contact && W.contact.get ? W.contact.get(p.ser) : null; if (c) { push(c.id || (c.attributes && c.attributes.id)); push(c.phoneNumber || (c.attributes && c.attributes.phoneNumber)) } } catch (_) { /* ok */ }
+      try { var ch = W && W.chat && W.chat.get ? W.chat.get(p.ser) : null; var cc = ch && ch.contact; if (cc) { push(cc.id || (cc.attributes && cc.attributes.id)); push(cc.phoneNumber || (cc.attributes && cc.attributes.phoneNumber)) } } catch (_) { /* ok */ }
+      try { var LU = W && W.whatsapp && (W.whatsapp.LidUtils || W.whatsapp.functions); if (LU && LU.getPhoneNumberForLid) push(LU.getPhoneNumberForLid(wid)) } catch (_) { /* ok */ }
+      for (var i = 0; i < cands.length; i++) {
+        var cp = partes(cands[i])
+        if (cp.digits && !cp.isLid && cp.digits !== meu) return { digits: cp.digits, isLid: false }
+        if (typeof cands[i] === 'string' && cands[i].indexOf('@lid') < 0) {
+          var ds = String(cands[i]).replace(/\D/g, '')
+          if (ds.length >= 12 && ds !== meu) return { digits: ds, isLid: false }
+        }
+      }
+      return { digits: p.digits, isLid: true }   // não resolveu: marca lid e o worker decide
+    } catch (_) { return { digits: '', isLid: false } }
+  }
+
   function capturar(msg) {
     try {
       if (!msg) return
       var deMim = !!(msg.fromMe || (msg.id && msg.id.fromMe))
-      var ser = function (x) { try { return (x && (x._serialized || (x.toString && x.toString()))) || String(x || '') } catch (_) { return '' } }
-      var de = ser(msg.from), para = ser(msg.to)
-      var outro = deMim ? para : de
-      if (!outro || outro.indexOf('@g.us') >= 0) return           // grupo não é lead
+      var p = partes(deMim ? msg.to : msg.from)
+      if (!p.ser || !SO_PESSOA.test(p.ser)) return            // grupo, status, newsletter: não é lead
+      var pr = telefoneReal(msg, deMim)
+      if (!pr.digits) return
+      if (pr.digits === numeroDoAparelho()) return            // conversa comigo mesmo
       var ts = Number(msg.t || msg.timestamp || 0)
-      if (ts && (Date.now() / 1000 - ts) > 1800) return           // replay velho da sincronização
-      var fone = soDigitos(outro)
-      if (!fone) return
       var id = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || ''
-      if (!id) id = 'sw_' + (ts || Date.now()) + '_' + fone + '_' + deMim
+      if (!id) id = 'sw_' + (ts || Date.now()) + '_' + pr.digits + '_' + deMim
       if (vistas[id]) return
       vistas[id] = 1
       window.__swVistasN++
-      var tipo = String(msg.type || 'chat')
-      var ehMidia = /^(image|audio|ptt|voice|video|document|sticker)$/i.test(tipo)
+      var tipoBruto = String(msg.type || 'chat')
+      // VOCABULÁRIO DA META, não o do WA-JS. O resto do sistema fala 'text' e 'audio'; o WA-JS fala
+      // 'chat' e 'ptt'. Sem traduzir, a mesma conversa fica com dois vocabulários no banco e a
+      // bolha do inbox não sabe o que desenhar.
+      var tipo = { chat: 'text', ptt: 'audio', voice: 'audio' }[tipoBruto.toLowerCase()] || tipoBruto
+      var ehMidia = /^(image|audio|video|document|sticker)$/i.test(tipo)
+      // A MENSAGEM VELHA VAI JUNTO, MARCADA. Descartar aqui dentro fazia ela sumir sem rastro
+      // nenhum: o notebook fechado por uma hora perdia tudo que chegou no meio. Quem decide o que
+      // fazer com mensagem velha é o servidor, que tem contexto e deduplicação.
+      var velha = ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0
       window.postMessage({
         alvo: MARCA, canal: 'swp:captura', dados: { eventos: [{
           msgId: id,
           selfNumber: numeroDoAparelho(),
-          phone: fone,
-          lid: /@lid$/i.test(outro) ? 1 : 0,
+          phone: pr.digits,
+          lid: pr.isLid ? 1 : 0,
+          velha: velha,
           fromMe: deMim,
           type: tipo,
           body: (ehMidia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),

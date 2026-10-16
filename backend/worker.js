@@ -10205,7 +10205,14 @@ async function handleSwWeb(req, env, path) {
     for (const e of eventos) {
       if (!e) continue;
       if (meusNums && !meusNums.has(_k8(e.selfNumber))) { barrados++; continue; }
-      if (e.fromMe && _RE_VENDA.test(String(e.body || '')) && !temHistorico.has(_k8(e.phone))) { barrados++; continue; }
+      if (e.fromMe && _RE_VENDA.test(String(e.body || ''))) {
+        // Venda so passa se o telefone JA TINHA escrito pra aquele numero antes deste lote...
+        if (!temHistorico.has(_k8(e.phone))) { barrados++; continue; }
+        // ...e nunca quando a mensagem e VELHA. Ao reconectar, o WhatsApp reemite o historico: um
+        // "Pedido Concluido" de ontem viraria venda de HOJE, porque a gravacao usa a hora de agora.
+        // A venda de verdade ja foi capturada quando aconteceu.
+        if (e.velha) { barrados++; continue; }
+      }
       limpos.push(e);
     }
     // DESCARTA COM 200, DE PROPOSITO. O app devolve o lote pra fila quando a resposta nao e ok, e
@@ -10229,6 +10236,46 @@ async function handleSwWeb(req, env, path) {
       body: JSON.stringify({ installId, events: limpos }),
     });
     return handleSalechatIngest(req2, env, token);
+  }
+
+  // POST /api/swweb/heartbeat { numero, motor } - o app avisa que o numero esta de pe.
+  //
+  // POR QUE ISSO EXISTE: a roleta so manda lead pra numero que ela considera VIVO, e quem alimenta
+  // essa lista e o wa_conn. Numero que sai do Datacrazy e passa a viver no Sellwave Web pararia de
+  // aparecer como vivo e deixaria de receber lead, em silencio - o pior desfecho possivel numa
+  // migracao. Reusa a mesma tabela do heartbeat do Sale Chat.
+  if (req.method === 'POST' && path === '/api/swweb/heartbeat') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const num = String((b && b.numero) || '').replace(/\D/g, '');
+    if (num.length < 10) return json({ ok: true, ignorado: true });
+    // O DONO E O DO NUMERO, nao o do login. Dois logins podem abrir o mesmo chip (a direcao
+    // olhando o numero de um vendedor), e carimbar o wa_conn com quem esta olhando trocaria o dono
+    // da conversa. Quem resolve isso e o resolveOwner, igual faz o heartbeat do Sale Chat.
+    const dono = await resolveOwner(env, num);
+    if (!dono || !dono.at_id) return json({ ok: true, semDono: true });
+    // SO MARCA VIVO QUANDO O WHATSAPP ESTA AUTENTICADO. Numero deslogado que continua batendo
+    // sinal nao pode receber lead - e exatamente a mesma regra do heartbeat do Sale Chat, e ela
+    // existe porque uma vez a roleta seguiu mandando lead pra um numero que tinha caido.
+    const vivo = (b && b.motor) ? 1 : 0;
+    try {
+      await _scEnsureTables(env);
+      await env.DB.prepare(
+        "INSERT INTO sc_heartbeat (self_number, at_id, instance, wpp_seen, last_seen, meta) VALUES (?,?,?,?,strftime('%s','now'),'swweb')" +
+        " ON CONFLICT(self_number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, wpp_seen=excluded.wpp_seen, last_seen=excluded.last_seen, meta=excluded.meta"
+      ).bind(num, String(dono.at_id), dono.instance || null, vivo).run();
+      if (dono.instance && vivo) {
+        await env.DB.prepare(
+          "INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'sc', ?, strftime('%s','now'))" +
+          " ON CONFLICT(instance) DO UPDATE SET state='sc', number=excluded.number, updated_at=excluded.updated_at"
+        ).bind(dono.instance, num).run();
+        // Um numero so pode estar num slot: linha velha de outro vendedor vira conexao fantasma.
+        await env.DB.prepare("DELETE FROM wa_conn WHERE number=? AND instance<>?").bind(num, dono.instance).run();
+      }
+    } catch (e2) {
+      console.error('[swweb] heartbeat falhou: ' + String((e2 && e2.message) || e2));
+      return json({ ok: false }, 500);
+    }
+    return json({ ok: true, instancia: dono.instance || '', vivo: !!vivo });
   }
 
   // GET /api/swweb/lead?phone=... - quem e a pessoa do outro lado, pro painel mostrar.
@@ -13649,7 +13696,11 @@ async function handleSalechatIngest(req, env, token) {
           } else {
             // mensagem do lead: 1ª vira LEAD (casa ttclid pelo código, pixel InitiateCheckout) + atribuição
             if (!_attribTablesOk) { try { await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_attrib (phone TEXT PRIMARY KEY, instance TEXT, updated_at INTEGER)').run(); _attribTablesOk = true; } catch (_) {} }
-            await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber, String(e?.type || ''), Number(e?.ts) || 0);   // selfNumber = número REAL que atendeu
+            // TETO DE 1800s, igual ao do app e ao dos caminhos do Datacrazy. Sem passar nada, o
+            // padrao do _waLeadCapture e 900s: a mensagem com 900 a 1800 segundos virava bolha no
+            // inbox mas NAO virava lead, e o codigo de desconto dela ia pro lixo - o lead ficava
+            // sem click id e a venda saia sem atribuicao.
+            await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber, String(e?.type || ''), Number(e?.ts) || 0, 1800);   // selfNumber = número REAL que atendeu
             await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
           }
         } catch (_) {}

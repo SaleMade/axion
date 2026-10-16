@@ -120,6 +120,7 @@ async function rodar(ctx) {
   // 6) A casca sobe de verdade (HTML e JS sem erro de carregamento).
   conta('a casca carregou', ctx.cascaOk === true, ctx.cascaErro || '')
   conta('a logo da SellWave carregou na barra', ctx.temBarra === true, ctx.textoBarra || '')
+  conta('a janelinha de Ajustes abre', ctx.modal === 'abriu', ctx.modal || '')
 
   // 7) O TESTE QUE IMPORTA: o WhatsApp Web abre de verdade e mostra o QR?
   //    Fica atras de SW_SMOKE_WA=1 porque precisa de internet e sai SEM proxy (so pra provar que o
@@ -147,15 +148,15 @@ async function rodar(ctx) {
     const p = String(process.env.SW_SMOKE_PROXY).split(':')
     const px = { host: p[0], porta: Number(p[1]), usuario: p[2] || '', senha: p.slice(3).join(':') }
     const part = 'persist:sw-teste-proxy'
-    await ctx.aplicaProxy(session.fromPartition(part), px)
+    await ctx.aplicaProxy(session.fromPartition(part), px, part)
     const r = await ctx.testaSaida(part)
     conta('o proxy responde e autentica', !!r.ok, r.ok ? (r.ip + ' · ' + r.pais + ' · ' + (r.cidade || '')) : r.erro)
     conta('o IP de saida e do Brasil', r.ok && r.pais === 'BR', r.pais || '')
     // E a trava: com o proxy errado, a sessao NAO pode cair pra conexao direta.
-    await ctx.aplicaProxy(session.fromPartition(part), { host: '127.0.0.1', porta: 9, usuario: '', senha: '' })
+    await ctx.aplicaProxy(session.fromPartition(part), { host: '127.0.0.1', porta: 9, usuario: '', senha: '' }, part)
     const ruim = await ctx.testaSaida(part)
     conta('proxy morto NAO vira conexao direta', !ruim.ok, ruim.ok ? ('VAZOU por ' + ruim.ip) : (ruim.erro || '').slice(0, 60))
-    await ctx.aplicaProxy(session.fromPartition(part), null)
+    await ctx.aplicaProxy(session.fromPartition(part), null, part)
   }
 
   const falhas = resultados.filter((r) => !r.passou)

@@ -7,7 +7,8 @@ contextBridge.exposeInMainWorld('swp', {
   roteiro: () => ipcRenderer.invoke('swp:roteiro'),
   lead: (phone) => ipcRenderer.invoke('swp:lead', { phone }),
   estado: () => ipcRenderer.invoke('swp:estado-wa'),
-  manda: (chatId, item) => ipcRenderer.invoke('swp:manda', { chatId, item }),
+  manda: (nk, chatId, item) => ipcRenderer.invoke('swp:manda', { nk, chatId, item }),
   fechar: () => ipcRenderer.invoke('swp:fechar-ativo'),
   recarregar: () => ipcRenderer.invoke('swp:recarregar-ativo'),
+  esconder: () => ipcRenderer.invoke('swp:painel', { ligado: false }),
 })

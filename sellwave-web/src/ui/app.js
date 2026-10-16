@@ -171,6 +171,21 @@ function telaVazia() {
   desenhaLista()
 }
 
+// TRADUZ O ERRO DO NAVEGADOR. O Chromium devolve coisas como ERR_PROXY_CONNECTION_FAILED (-130),
+// que nao diz nada pra um vendedor. A frase tem que dizer o que fazer.
+function humano(txt) {
+  const t = String(txt || '')
+  if (/ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ERR_NO_SUPPORTED_PROXIES/i.test(t))
+    return 'O proxy deste número não respondeu. Avise a direção.'
+  if (/ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|fetch failed|Failed to fetch/i.test(t))
+    return 'Sem internet. Confira a conexão e tente de novo.'
+  if (/ERR_CONNECTION_TIMED_OUT|ERR_TIMED_OUT|demorou/i.test(t))
+    return 'A conexão demorou demais. Tente de novo.'
+  if (/ERR_CERT|SSL/i.test(t))
+    return 'A conexão não é segura. Avise a direção.'
+  return t
+}
+
 function telaErro(nk, erro) {
   falhou.set(nk, erro)
   carregando.delete(nk)
@@ -179,7 +194,7 @@ function telaErro(nk, erro) {
   palco.innerHTML = ''
     + '<div class="cartao"><h2>Não abriu</h2>'
     + '<p>' + esc(bonito(cheio(nk))) + '</p>'
-    + '<div class="aviso erro" style="display:block">' + esc(erro) + '</div>'
+    + '<div class="aviso erro" style="display:block">' + esc(humano(erro)) + '</div>'
     + '<div class="acoes">'
     + (estado.direcao ? '<button class="secundario" id="cfg">Proxy</button>' : '')
     + '<button class="principal" style="margin:0" id="tentar">Tentar de novo</button></div></div>'
@@ -210,7 +225,9 @@ async function abrir(numero) {
   carregando.delete(nk)
   if (!r.ok) return telaErro(nk, r.erro || 'Falhou.')
   await recarregaEstado()
-  palco.innerHTML = ''
+  // O cartao "Abrindo..." SO SAI quando a view ja esta por cima, senao fica um retangulo vazio na
+  // tela por segundos enquanto o WhatsApp carrega.
+  if (ativo === nk) palco.innerHTML = ''
   desenhaLista()
 }
 
@@ -269,7 +286,7 @@ function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
   let html = '<h2>Ajustes</h2>'
   if (estado.direcao) {
-    html += '<p>As travas valem para todas as máquinas. O teto é só desta.</p>'
+    html += '<p>As travas são da operação. O teto é só desta máquina.</p>'
       + '<div class="chave"><div class="txt"><b>Exigir proxy</b><span>Sem proxy cadastrado e respondendo, o número não abre.</span></div>'
       + '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + estado.travaProxy + '"></button></div>'
       + '<div class="chave"><div class="txt"><b>Exigir IP do Brasil</b><span>Proxy de fora num número +55 é pior que proxy nenhum.</span></div>'
@@ -277,6 +294,9 @@ function janelaAjustes() {
   } else {
     html += '<p>Ajustes desta máquina.</p>'
   }
+  html += '<div class="chave"><div class="txt"><b>Painel de venda ao lado</b>'
+    + '<span>As respostas rápidas e os funis, do lado direito do WhatsApp.</span></div>'
+    + '<button class="sw ' + (estado.painelLigado !== false ? 'on' : '') + '" id="sw3" role="switch" aria-checked="' + (estado.painelLigado !== false) + '"></button></div>'
   html += '<div class="chave"><div class="txt"><b>Números abertos ao mesmo tempo</b>'
     + '<span>Cada um consome memória. Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.</span></div>'
     + '<input id="teto" value="' + t + '" inputmode="numeric" style="width:54px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--linha);background:rgba(255,255,255,.03);outline:none" /></div>'
@@ -293,6 +313,11 @@ function janelaAjustes() {
       const r = await window.sw.trava({ exigirBrasil: !estado.exigirBrasil })
       estado.exigirBrasil = r.exigirBrasil; desenhaTrava(); janelaAjustes()
     }
+  }
+  $('sw3').onclick = async () => {
+    const r = await window.sw.painel(!(estado.painelLigado !== false))
+    estado.painelLigado = r.ligado
+    janelaAjustes()
   }
   $('teto').onchange = async (e) => {
     const r = await window.sw.teto(e.target.value)
