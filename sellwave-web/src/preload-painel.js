@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('swp', {
   // O QUE ESTA SAINDO, com nome e passo. Sem os campos extras o registro do processo principal
   // nascia com o rotulo padrao e a faixa do painel dizia literalmente "funil" no lugar do nome.
   disparo: (nk, ligado, info) => ipcRenderer.invoke('swp:disparo', { nk, ligado, ...(info || {}) }),
+  parar: (nk, parar) => ipcRenderer.invoke('swp:parar', { nk, parar }),
   // ABA PEDIDOS (16/10/2026). O painel NUNCA cria pedido na PayLog: ele faz o mesmo passo que o
   // Novo Pedido da dash faz, o card cai em Aceitacoes e quem cria la e o Aceitar, com a conferencia
   // dupla e a trava anti-dobro por CPF. Decisao do Bruno, perguntada e confirmada em 16/10.

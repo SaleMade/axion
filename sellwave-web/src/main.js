@@ -1591,6 +1591,17 @@ ipcMain.handle('swp:disparos', () => ({
   }),
 }))
 
+// O PARAR CHEGA NA PAGINA. A espera do passo agora acontece DENTRO da pagina (igual ao Sale Chat
+// que roda em producao), entao o botao Parar precisa alcancar la: ele liga uma bandeirinha que o
+// `esperaOuPara` confere a cada 400ms.
+ipcMain.handle('swp:parar', async (_e, { nk, parar }) => {
+  const alvo = String(nk || '') ? abertos.get(String(nk)) : null
+  const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
+  if (!wc) return { ok: false }
+  try { await wc.executeJavaScript('window.__swParar = ' + (parar ? 'true' : 'false') + '; true') } catch (_) { /* ok */ }
+  return { ok: true }
+})
+
 ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
   const alvo = String(nk || '') ? abertos.get(String(nk)) : null
   const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())

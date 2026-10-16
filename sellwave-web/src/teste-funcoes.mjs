@@ -171,18 +171,28 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('porta que nao e numero nao passa', separaProxy('host:abc:u:s') === null)
 }
 
-// ── 10) O INDICADOR NAO PODE TRAVAR O ENVIO. Este custou um funil que nao saia.
+// ── 10) O ENVIO TEM QUE SER IGUAL AO DO SALE CHAT QUE JA RODA EM PRODUCAO.
+//
+//    Eu tinha concluido que `markIsRecording` travava o envio do audio e tirei ele. O sc-panel do
+//    Bruno desmente: usa ha meses e manda audio. Estes testes amarram o app NAQUELE desenho -
+//    indicador, espera e envio GRUDADOS na mesma promessa, dentro da pagina - pra ninguem (eu
+//    inclusive) voltar a quebrar isso em saltos entre processos.
 {
   const fonte = leia('ui/agente.js')
-  const bloco = fonte.slice(fonte.indexOf('window.__swIndica = function'), fonte.indexOf('window.__swManda = function'))
-  vale('audio NAO abre o gravador da barra', /kind === 'audio'/.test(bloco) && !/markIsRecording/.test(bloco))
-  vale('texto continua mostrando digitando', /markIsComposing/.test(bloco))
-  vale('nao espera a promessa do indicador (ela so volta no fim da duracao)',
-    !/return comPrazo/.test(bloco) && /Promise\.resolve\(true\)/.test(bloco))
+  const bloco = fonte.slice(fonte.indexOf('window.__swManda = function'))
+  vale('o audio mostra "gravando", como em producao', /markIsRecording/.test(bloco))
+  vale('o texto mostra "digitando"', /markIsComposing/.test(bloco))
+  vale('a espera do passo acontece DENTRO do envio', bloco.indexOf('esperaOuPara(pausaMs)') > 0)
+  const ramoAudio = bloco.slice(bloco.indexOf("item.kind === 'audio'"))
+  vale('no audio o indicador vem ANTES da espera',
+    ramoAudio.indexOf('markIsRecording') > 0 && ramoAudio.indexOf('markIsRecording') < ramoAudio.indexOf('esperaOuPara'))
+  vale('o envio vem depois da espera', bloco.indexOf('esperaOuPara') < bloco.indexOf('sendFileMessage'))
+
+  const espera = recorta(fonte, 'function esperaOuPara(ms)')
+  vale('a espera confere o Parar em fatias', espera.indexOf('__swParar') > 0 && espera.indexOf('400') > 0)
 
   const main = leia('main.js')
-  const ipc = main.slice(main.indexOf("ipcMain.handle('swp:indica'"), main.indexOf("ipcMain.handle('swp:manda'"))
-  vale('o IPC do indicador tem prazo proprio', /Promise\.race/.test(ipc) && /3000/.test(ipc))
+  vale('o Parar alcanca a pagina', main.indexOf("ipcMain.handle('swp:parar'") > 0 && main.indexOf('__swParar') > 0)
 }
 
 console.log('')

@@ -169,31 +169,38 @@
   // Quem espera é o painel, não aqui, e isso não é detalhe: a pausa do passo precisa acontecer num
   // lugar onde o botão Parar seja olhado. Antes o envio ligava o indicador E dormia, então apertar
   // Parar no meio de uma pausa de 10 s não fazia nada até o item terminar.
-  // DUAS COISAS QUE ESTE INDICADOR APRENDEU DO JEITO RUIM (16/10/2026, funil do Bruno parando em
-  // "gravando 1 de 2" sem mandar nada):
+  // O ENVIO INTEIRO ACONTECE AQUI DENTRO, COMO NO SALE CHAT QUE JA RODA EM PRODUCAO.
   //
-  // 1. `markIsRecording` NAO e so presenca: no WhatsApp Web de hoje ele ABRE O GRAVADOR na barra de
-  //    escrever - da pra ver na tela, com o x e o visto. Com o gravador aberto a barra esta ocupada
-  //    e o envio do audio que vinha em seguida nao acontecia. O "gravando..." e enfeite; mandar o
-  //    audio e o trabalho. Entao em AUDIO nao se mexe mais na barra: a pausa continua existindo (o
-  //    lead ve o intervalo), so nao se finge gravacao.
+  // CORRIGINDO UM DIAGNOSTICO MEU QUE ESTAVA ERRADO (16/10/2026): eu tinha concluido que o
+  // `markIsRecording` travava o envio do audio, porque o gravador aparece aberto na barra no print
+  // do Bruno. O proprio Sale Chat dele desmente isso - ele usa `markIsRecording` do mesmo jeito,
+  // ha meses, e manda audio sem problema (AXION/sc-panel.js, por volta da linha 1784). Diagnostico
+  // bonito que a producao desmente e palpite, nao achado.
   //
-  // 2. O PROMETIDO SO VOLTA NO FIM DA DURACAO. `markIsComposing(chatId, 5000)` resolve em 5
-  //    segundos, nao na hora. Como o painel ESPERA esse retorno e DEPOIS conta a pausa dele, a
-  //    pausa era contada duas vezes - o passo de 8s virava 16s e parecia travamento. Agora e
-  //    dispara-e-esquece: liga o indicador e volta no mesmo instante, com quem conta o tempo sendo
-  //    o painel, que e onde o botao Parar e olhado.
-  window.__swIndica = function (chatId, kind, ms) {
-    try {
-      var W = window.WPP
-      if (!chatId || !ehPessoa(chatId) || !podeEnviar()) return Promise.resolve(false)
-      var t = Math.max(0, Number(ms) || 0)
-      if (!t || kind === 'audio') return Promise.resolve(false)
-      // Nada de `await` aqui: a promessa so volta no fim da duracao, e quem conta o tempo e o painel.
-      try { Promise.resolve(W.chat.markIsComposing(chatId, t + 300)).catch(function () {}) } catch (_) { /* ok */ }
-      return Promise.resolve(true)
-    } catch (_) { return Promise.resolve(false) }
+  // O QUE EU TINHA DE DIFERENTE, E QUE AGORA DEIXOU DE SER: eu quebrei o que la e UMA cadeia
+  // continua dentro da pagina em TRES saltos entre processos - indicador, espera no painel, envio.
+  // Cada salto e uma chance de a ordem mudar, de um retorno nao chegar e de o estado da barra de
+  // escrever ser outro na hora do envio. A versao que funciona faz indicador, espera e envio
+  // GRUDADOS, na mesma promessa, do lado de dentro. Agora esta igual.
+  //
+  // A ESPERA CONTINUA INTERROMPIVEL: `esperaOuPara` confere a cada 400ms se o Parar foi apertado,
+  // que e exatamente o `sleepStop` de la. O painel so precisa ligar `window.__swParar`.
+  window.__swParar = false
+  function esperaOuPara(ms) {
+    return new Promise(function (ok) {
+      var feito = 0
+      ;(function passo() {
+        if (window.__swParar) { ok(true); return }
+        if (feito >= ms) { ok(false); return }
+        var p = Math.min(400, ms - feito)
+        setTimeout(function () { feito += p; passo() }, p)
+      })()
+    })
   }
+
+  // Continua existindo pra quem ja chama, mas nao espera mais nada: quem liga o indicador agora e
+  // o proprio envio, colado na espera.
+  window.__swIndica = function () { return Promise.resolve(true) }
 
   // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
   window.__swManda = function (chatId, item) {
@@ -202,18 +209,40 @@
     // TRAVA FINAL DO ENVIO. Mesmo que algo mais acima erre, nada sai pra grupo ou lista.
     if (!ehPessoa(chatId)) return Promise.reject(new Error('essa conversa não é de uma pessoa'))
     if (!podeEnviar()) return Promise.reject(new Error('o motor do WhatsApp não está pronto'))
+    // A PAUSA DO PASSO E DAQUI PRA BAIXO. Vem em `item.pausa`, em segundos, ja resolvida pelo
+    // painel (vale `sim` se preenchido, senao `delay`, nunca a soma).
+    var pausaMs = Math.max(0, Math.min(120, Number(item.pausa) || 0)) * 1000
+    window.__swParar = false
+
     if (item.tipo === 'texto') {
-      return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
+      var pre = Promise.resolve()
+      if (pausaMs) { try { pre = comPrazo(W.chat.markIsComposing(chatId, pausaMs + 300), 8000, 'digitando') } catch (_) { /* ok */ } }
+      return pre.catch(function () {})
+        .then(function () { return esperaOuPara(pausaMs) })
+        .then(function (parou) {
+          if (parou) return false
+          return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
+        })
     }
     var dataUri = item.dataUri
     if (!dataUri) return Promise.reject(new Error('mídia não veio junto'))
     return Promise.resolve().then(function () {
       if (item.kind === 'audio') {
-        return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
+        var preA = Promise.resolve()
+        if (pausaMs) { try { preA = comPrazo(W.chat.markIsRecording(chatId, pausaMs + 300), 8000, 'gravando') } catch (_) { /* ok */ } }
+        return preA.catch(function () {})
+          .then(function () { return esperaOuPara(pausaMs) })
+          .then(function (parou) {
+            if (parou) return false
+            return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
+          })
       }
-      if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
-      if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')
-      return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
+      return esperaOuPara(pausaMs).then(function (parou) {
+        if (parou) return false
+        if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
+        if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')
+        return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
+      })
     }).then(function () { return true })
   }
 
