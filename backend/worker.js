@@ -10412,8 +10412,11 @@ const _swwebK8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
 // Chip APTO a receber lead, pela mesma regra do _resolvePresselNumbers: so "Em uso", e fora de
 // aquecimento, banido e restrito.
 function _swwebApto(c, nomeSt) {
-  if (!c || !c.em_uso) return false;
-  if (c.st === 'aquecimento' || c.st === 'banido') return false;
+  if (!c) return false;
+  if (c.st === 'banido') return false;
+  // O CHIP EM AQUECIMENTO ABRE NO APP (16/10/2026). Ele recebe lead agora, e quem aquece e o
+  // atendimento: barrar ele aqui seria mandar lead pra um numero que o vendedor nao consegue abrir.
+  if (!_chipAquecendo(c) && (!c.em_uso || c.st === 'aquecimento')) return false;
   const wa = String((nomeSt && nomeSt[String(c.wa_st || '')]) || '').toLowerCase();
   return wa !== 'restrito' && wa !== 'banido';
 }
@@ -10958,9 +10961,17 @@ async function handleSwWeb(req, env, path) {
         status: nomeSt[String(c.wa_st || '')] || '',
         cor: corSt[String(c.wa_st || '')] || '',
         em_uso: !!c.em_uso,
+        // EM AQUECIMENTO? O app desenha esses numa secao propria, com o dia visivel - porque com
+        // rampa o mesmo rotulo "aquecendo" cobriria um numero que recebe 5 e um que recebe 50.
+        // `teto` e a cota do DIA INTEIRO (verdade as 6h e as 23h); `agora` e quanto ja liberou
+        // nesta hora, e vem DAQUI de proposito: calcular no navegador usaria o fuso do cliente e
+        // as duas telas passariam a discordar.
+        aquec: _chipAquecendo(c) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
+        // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
+        st: String(c.st || ''),
         // RECEBENDO LEAD AGORA? Duas coisas, e as duas tem que ser verdade:
-        //  1) o chip esta apto (Em uso, e nao esta em aquecimento, banido nem restrito) - e a
-        //     mesma regra do _resolvePresselNumbers;
+        //  1) o chip esta apto (Em uso, OU em aquecimento com dono; nunca banido nem restrito) - e
+        //     a mesma regra do _resolvePresselNumbers;
         //  2) o INTERRUPTOR esta ligado nas pressels (v.off[nk]) - e a chave que o POST
         //     /api/pressel/num vira, e e ela que o vendedor mexe aqui.
         // Ler so o em_uso mentiria: numero apto mas desligado aparecia como ligado.
@@ -20279,8 +20290,12 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
       // nao tinha interruptor pra desligar. Pior: o lead nascia com dono inexistente
       // (ax_ccol_4_91258028 esta gravado em wa_lead) e sumia da metrica e da comissao.
       if (/^ccol_/i.test(String(c.at))) continue;
-      if (c.st === 'aquecimento' || c.st === 'banido') continue;
-      if (!isEmUso(c) || !c.num || !okWa(c)) continue;
+      if (c.st === 'banido') continue;
+      // AQUECIMENTO ENTRA (16/10/2026) e NAO precisa estar "Em uso": "Em uso" e o cargo do numero
+      // de producao, e o chip em aquecimento por definicao nao esta la ainda. O que ele precisa e
+      // de DONO - quem atende e quem aquece.
+      if (!_chipAquecendo(c) && (c.st === 'aquecimento' || !isEmUso(c))) continue;
+      if (!c.num || !okWa(c)) continue;
       jaTem.add(String(c.at));
       _vs.push({ at: c.at });   // sem off: todos os números "Em uso" dele entram ligados
     }
@@ -20293,7 +20308,8 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
     const principalOn = v.ativo !== false;
     // c.at obrigatório: sem isso, String(null)==='null' casaria vendedor órfão com
     // os chips da coluna "Disponíveis" (número fora de uso recebendo lead sem aparecer na tela).
-    const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='aquecimento' && c.st!=='banido');
+    const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='banido'
+      && (c.st!=='aquecimento' || _chipAquecendo(c)));
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
     // PRINCIPAL = SÓ o chip explicitamente "Em uso". NÃO cai mais no 1º número da coluna.
@@ -20314,7 +20330,9 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
     // continua sendo quando ele desliga o número.
     const nksTodos = [];
     for(const c of mine){
-      if(!isEmUso(c) || !c.num || !okWa(c)) continue;                              // só "Em uso", com número, não banido/restrito
+      const aquec = _chipAquecendo(c) ? _numDoAquecimento(c) : null;
+      // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
+      if((!aquec && !isEmUso(c)) || !c.num || !okWa(c)) continue;
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
       if(nk) nksTodos.push(nk);
       if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
@@ -20330,7 +20348,13 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
       // Sale Chat e API oficial seguem exigindo conexao, como antes.
       const roleta = _modoRoleta(c);
       if(!roleta && !_servConnOk(liveSet, instP, c.num)) continue;                 // não conectado agora (casa por número)
-      nums.push({num:c.num, inst:instP, roleta, lim:Number(c.lim_dia)||0, livre:String(c.lim_livre||''), dist:(c.dist==='limite'?'limite':''), ordem:Number(c.lim_ordem)||0, idx:Number(c.idx)||0});
+      // O CHIP EM AQUECIMENTO IGNORA o lim_dia/dist/ordem gravados: quem manda neles e a rampa, e
+      // o teto muda de hora em hora. Ele tambem NAO respeita `lim_livre` (o "religa por hoje" que o
+      // Bruno usa num numero de producao): soltar o teto de um chip de tres dias e exatamente o que
+      // a rampa existe pra impedir.
+      nums.push(aquec
+        ? {num:c.num, inst:instP, roleta, lim:aquec.lim, livre:'', dist:'limite', ordem:aquec.ordem, idx:Number(c.idx)||0, aquec:aquec.dia}
+        : {num:c.num, inst:instP, roleta, lim:Number(c.lim_dia)||0, livre:String(c.lim_livre||''), dist:(c.dist==='limite'?'limite':''), ordem:Number(c.lim_ordem)||0, idx:Number(c.idx)||0});
     }
     if(!nums.length) continue;                                                      // nenhum número ligado/conectado → fora da roleta
     out.push({at:String(v.at), nums, nksTodos});
@@ -20406,6 +20430,109 @@ async function _leadsNovosHojePorNumero(env, dayStart){
 // conversa chegando, e so uns 30% dos cliques viram conversa. O placar e o do _leadsHojePorNumero
 // (cache de 30s), entao numa rajada ele pode passar alguns leads do teto - aceito, e nao ha como
 // saber antes do lead chegar.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AQUECIMENTO DE CHIP (16/10/2026, pedido do Bruno). Numero em aquecimento DEIXA de ficar fora da
+// roleta e passa a receber pouco, crescendo. Palavras dele: alem dos numeros em uso, o vendedor tem
+// N em aquecimento; eles recebem poucos leads por dia, o vendedor ATENDE esses leads normalmente -
+// e e o atendimento de verdade que aquece o chip - e o teto cresce ao longo de 15 dias. Pode
+// inclusive vender neles.
+//
+// NAO HA SINAL NOVO NA ROLETA, e isso e deliberado. Ja existiu rampa de aquecimento aqui e ela foi
+// REMOVIDA depois de incidente real (21/07/2026, memoria roleta-pressel-gotchas item 10): ela dava
+// teto de RAJADA menor pro numero novo e o efeito foi o inverso do pretendido - o estabelecido
+// absorvia o excedente, 46 contatos/h num e 9 no outro. E o item 14 da mesma memoria e explicito:
+// "nao voltar a empilhar sinal: a versao anterior tinha 7 regras e uma derrubava a outra, 167 leads
+// num numero e 50 no outro no mesmo dia".
+// Entao aquecimento reusa o que JA existe: o numero entra na roleta em modo `limite`, com `lim_dia`
+// calculado. O balanceador nao sabe que existe aquecimento.
+const RAMPA_AQUECIMENTO = [
+  { ate: 3, teto: 5 },      // dias 1 a 3
+  { ate: 6, teto: 10 },     // dias 4 a 6
+  { ate: 9, teto: 20 },     // dias 7 a 9
+  { ate: 15, teto: 35 },    // dias 10 a 15
+];
+const TETO_AQUECIDO = 50;   // dia 16 em diante, e fica aqui ate ele mover pra "Em uso" NA MAO
+function limiteDoAquecimento(dia) {
+  const d = Math.max(1, Math.floor(Number(dia) || 1));
+  for (const f of RAMPA_AQUECIMENTO) if (d <= f.ate) return f.teto;
+  return TETO_AQUECIDO;
+}
+
+// O TETO ACUMULA AO LONGO DO DIA, E ISSO NAO E ENFEITE: sem ele, o chip em aquecimento leva a cota
+// inteira EM RAJADA logo cedo. Dentro do vendedor a ordem e comparacao EXATA de leads do dia
+// (`escAt.nums.sort` mais abaixo), entao um chip com 0 lead ganha de um estabelecido com 30 em TODA
+// escolha e continua ganhando ate bater o proprio teto. Cinco conversas em cinco minutos num chip
+// de um dia e o oposto de aquecer - e e a mesma familia do incidente de 21/07, so que invertida.
+//
+// E A CURVA E MEDIDA, NAO CHUTADA. Com janela fixa de relogio comercial (8h-20h) o teto acumularia
+// no vazio da noite e daria rajada na primeira hora cheia. Esta tabela e a distribuicao REAL dos
+// leads por hora da operacao:
+//
+//   MEDIDO EM 16/10/2026: 4.716 leads em 14 dias. A query, pra remedir sem arqueologia:
+//     SELECT strftime('%H', datetime(ts,'unixepoch','-3 hours')) h, COUNT(*) n
+//       FROM wa_lead WHERE ts > strftime('%s','now') - 14*86400 GROUP BY h ORDER BY h
+//   O dia dele comeca as 6h, 92,8% dos leads caem entre 07h e 17h59, e as 18h despenca. A hora das
+//   07h sozinha (4,5%) vale mais que 18h+19h+20h somadas.
+//
+// E uma CONSTANTE MEDIDA, nao uma lei: se o trafego virar noturno, remede com a query acima.
+// Acumulado ate o INICIO de cada hora, em milesimos:
+const DIA_ACUM = [0, 1, 2, 3, 3, 4, 5, 19, 64, 125, 185, 265, 348, 466, 572, 671, 781, 874, 947, 972, 983, 990, 995, 998];
+// O PISO DE 1 E O PONTO DA FEATURE: sem ele o chip fica fora da roleta de madrugada e as 6h, que e
+// exatamente quando chega o primeiro lead que o Bruno quer que caia no numero em aquecimento.
+function _horaBR() {
+  const d = new Date(Date.now() - 3 * 3600 * 1000);
+  return d.getUTCHours();
+}
+function _tetoAcumulado(teto, hora) {
+  const t = Math.max(0, Number(teto) || 0);
+  if (!t) return 0;
+  const h = Math.min(23, Math.max(0, Number(hora == null ? _horaBR() : hora) || 0));
+  return Math.max(1, Math.ceil(t * DIA_ACUM[h] / 1000));
+}
+
+// O DIA DE AQUECIMENTO. Sai do `warm_start` do chip (YYYY-MM-DD), em dias de CALENDARIO.
+//
+// FICOU COMBINADO COM A OUTRA SESSAO medir por DIA COM ATENDIMENTO, e continua sendo o certo: chip
+// parado nove dias nao aqueceu nove dias. Nao entrou AGORA por dois motivos concretos, e fica como
+// proximo passo com desenho ja definido (tabela propria no D1 + cron, nunca o blob):
+//   1. derivar do wa_lead exigiria uma consulta agrupada no caminho POR VISITA da pressel, que e o
+//      caminho mais quente da operacao - e ja derrubou o banco do Giovane uma vez (memoria
+//      roleta-pressel-gotchas item 9);
+//   2. gravar `warm_dias` no chip significa escrever no dashboard_state, que e o blob de 2 MB com
+//      tres memorias de incidente em cima dele.
+// E com a fila "aquecendo na frente" (abaixo) os dois quase nao divergem: em dia com trafego TODO
+// chip em aquecimento recebe a cota dele, entao dia de calendario e dia de atendimento batem. A
+// diferenca sobra pra dia sem movimento nenhum.
+// A dash cai no mesmo calendario quando nao tem `warm_dias`, entao as duas telas concordam - que e
+// o que importa pra tela nao mentir.
+function _diaDoAquecimento(c) {
+  const ini = String((c && (c.warm_start || c.warmStart)) || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ini)) return Math.max(1, Number(c && c.dia) || 1);
+  const ms = Date.parse(ini + 'T00:00:00-03:00');
+  if (!isFinite(ms)) return Math.max(1, Number(c && c.dia) || 1);
+  return Math.max(1, Math.floor((Date.now() - ms) / 86400000) + 1);
+}
+// Chip em aquecimento QUE TEM DONO. Sem dono continua fora: o pool e sala de espera, e numero sem
+// dono nao tem a quem mandar o lead.
+// DECLARACAO DE FUNCAO, nao const: ela e usada 10 mil linhas ACIMA daqui (_swwebApto, linha
+// ~10419). Como funcao ela e icada e nao existe janela morta; como const, bastaria alguem chamar
+// no caminho de boot pra dar ReferenceError e a dash abrir em branco - foi exatamente isso que
+// aconteceu com o WA_STATUSES_DEFAULT (memoria roleta-pressel-gotchas item 4).
+function _chipAquecendo(c) {
+  return !!(c && c.st === 'aquecimento' && c.at && !/^ccol_/i.test(String(c.at)));
+}
+// O que o chip em aquecimento leva pra roleta: modo limite, teto da rampa acumulado pela hora, e a
+// VEZ NA FRENTE dos estabelecidos. A vez na frente e metade da feature: a fila do modo limite e por
+// VENDEDOR e inclui os numeros estabelecidos dele, entao em posicao 4, 5 e 6 o chip em aquecimento
+// so receberia depois dos tres estabelecidos baterem o teto deles - o que na maioria dos dias nao
+// acontece, e a feature nunca sairia do papel. `ordem` -1 porque o comparador usa `Number(x)||999`,
+// e 0 e falsy la (viraria 999, o fim da fila).
+function _numDoAquecimento(c) {
+  const dia = _diaDoAquecimento(c);
+  const teto = limiteDoAquecimento(dia);
+  return { dia, teto, lim: _tetoAcumulado(teto, _horaBR()), dist: 'limite', ordem: -1 };
+}
+
 function _numNoLimite(n, lh, hoje){
   const lim = Number(n && n.lim) || 0;
   if (lim <= 0 || String((n && n.livre) || '') === hoje) return false;
@@ -21064,8 +21191,11 @@ function _meusNumerosRoleta(data, uid) {
   const emUsoIds = _emUsoIdsDe(data), foraIds = _foraIdsDe(data);
   const isEmUso = (c) => c.em_uso === true || c.em_uso === 1 || emUsoIds.has(String(c.wa_st || '')) || String(c.wa_st || '') === 'em_uso';
   const okWa = (c) => !foraIds.has(String((c && c.wa_st) || '').toLowerCase());
+  // O em aquecimento entra aqui tambem: ele recebe lead, entao tem que aparecer pro vendedor com
+  // o interruptor dele. Numero que recebe e nao aparece na tela foi o incidente de 16/08.
   return (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && String(c.at || '') === String(uid)
-    && c.num && c.st !== 'aquecimento' && c.st !== 'banido' && isEmUso(c) && okWa(c));
+    && c.num && c.st !== 'banido' && okWa(c)
+    && (_chipAquecendo(c) || (c.st !== 'aquecimento' && isEmUso(c))));
 }
 // GET /api/pressel/meus -> { hoje, numeros:[...], pressels:[{id,nome,status,off:{nk:true}}], leadsHoje }
 async function handlePresselMeus(req, env) {
@@ -21447,7 +21577,11 @@ async function handlePresselDiag(req, env){
     // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
     let motivo = '';
     if(!numeros.length){
-      const usaveis = chips.filter(c=>c && c.at && c.st!=='aquecimento' && c.st!=='banido' && c.num && isEmUso(c) && okWa(c));
+      // MESMOS TESTES DA ROLETA, incluindo o aquecimento (16/10/2026). O diag existe pra dizer
+      // POR QUE ninguem recebe; se ele usar regra diferente, mente justamente no dia em que precisa
+      // avisar (memoria roleta-pressel-gotchas, nota de 16/08).
+      const usaveis = chips.filter(c=>c && c.at && c.st!=='banido' && c.num && okWa(c)
+        && (_chipAquecendo(c) || (c.st!=='aquecimento' && isEmUso(c))));
       const offMap = {};
       for(const v of (Array.isArray(p.vendedores)?p.vendedores:[])){
         if(!v || !v.at) continue;
