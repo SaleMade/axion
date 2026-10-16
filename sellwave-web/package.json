@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "teste": "node src/teste-funcoes.mjs",
+    "teste-painel": "electron src/teste-painel.js",
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64"
   },

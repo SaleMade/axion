@@ -175,6 +175,69 @@
 
   .vazio { padding: 24px; text-align: center; font-size: 12px; line-height: 16px; color: var(--apagado); }
 
+  /* ─────────────── pedido ───────────────
+     O BOTÃO COLORIDO AO LADO DO CLIENTE (pedido do Bruno em 16/10). Fica no bloco do lead, que é o
+     único lugar do painel que já fala do cliente da conversa aberta: o vendedor lê o nome e cadastra
+     dali, sem procurar aba. Some em grupo e em conversa sem número, pelo mesmo motivo que o disparo
+     some: não há cliente nenhum pra cadastrar. */
+  .lead { position: relative; }
+  .lead-cad { position: absolute; right: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 9px; border-radius: 9px; background: var(--balao); color: #d9fdd3;
+    font-size: 11px; font-weight: 700; transition: background-color .15s, opacity .15s; }
+  .lead-cad:hover { background: #046a53; }
+  .lead-cad svg { width: 13px; height: 13px; }
+  .lead-cad[hidden] { display: none; }
+  .lead .nm, .lead .ln { padding-right: 96px; }
+
+  .form { padding: 2px; }
+  .form .cx { margin-bottom: 8px; }
+  .form .cx.par { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .form .cx.uf { grid-template-columns: 1fr 62px; }
+  .form label { display: block; margin-bottom: 3px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--apagado); }
+  .form input, .form select, .form textarea {
+    width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--borda); border-radius: 9px;
+    background: var(--fraco); color: var(--texto); font-size: 13px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .form textarea { height: 56px; padding: 7px 9px; resize: none; line-height: 1.35; }
+  .form select { appearance: none; cursor: pointer; }
+  .form input:focus, .form select:focus, .form textarea:focus {
+    border-color: rgba(153, 161, 175, .6); box-shadow: 0 0 0 3px rgba(0, 168, 132, .15); }
+  .form input::placeholder, .form textarea::placeholder { color: rgba(134, 150, 160, .55); }
+  /* O CAMPO QUE FALTA FICA VERMELHO, mas só depois de tentar cadastrar: pintar enquanto a pessoa
+     ainda está preenchendo é só barulho. Mesma regra do botão vermelho das Aceitações. */
+  .form .erro input, .form .erro select { border-color: rgba(240, 80, 106, .7); }
+  .form .erro label { color: #ffb3bf; }
+
+  .aviso { margin-bottom: 8px; padding: 8px 10px; border-radius: 10px; font-size: 11.5px; line-height: 15px; }
+  .aviso.ruim { background: rgba(240, 80, 106, .12); border: 1px solid rgba(240, 80, 106, .3); color: #ffb3bf; }
+  .aviso.bom { background: rgba(0, 168, 132, .12); border: 1px solid rgba(0, 168, 132, .3); color: #7ee8c6; }
+  .aviso ul { margin: 4px 0 0; padding-left: 16px; }
+
+  .acoes { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 10px; }
+  .bt { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px;
+    padding: 0 12px; border-radius: 10px; font-size: 12.5px; font-weight: 700; transition: background-color .15s, opacity .15s; }
+  .bt svg { width: 14px; height: 14px; }
+  .bt.pri { background: var(--verde); color: #04231c; }
+  .bt.pri:hover { background: #00bf96; }
+  .bt.sec { border: 1px solid var(--borda); color: var(--apagado); }
+  .bt.sec:hover { background: var(--hover); color: var(--texto); }
+  .bt:disabled { opacity: .45; cursor: default; }
+
+  .rasc { display: flex; align-items: center; gap: 9px; padding: 7px 9px; margin-bottom: 6px;
+    border: 1px solid var(--linha); border-radius: 11px; background: var(--fraco); }
+  .rasc .ic { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0;
+    border-radius: 9px; background: rgba(255, 185, 0, .14); color: var(--ambar); }
+  .rasc .ic svg { width: 14px; height: 14px; }
+  .rasc .txt { flex: 1; min-width: 0; text-align: left; }
+  .rasc .t1 { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rasc .t2 { margin-top: 1px; font-size: 10.5px; color: var(--apagado); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rasc .x { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0;
+    border-radius: 7px; color: rgba(134,150,160,.5); }
+  .rasc .x:hover { background: rgba(240, 80, 106, .14); color: #f0506a; }
+  .rasc .x svg { width: 13px; height: 13px; }
+
   /* ─────────────── rodapé ─────────────── */
   footer { padding: 8px 12px; border-top: 1px solid var(--linha); font-size: 11px; color: var(--apagado);
     display: flex; align-items: center; gap: 8px; min-height: 36px; }
@@ -213,6 +276,10 @@
     <button class="aba" data-aba="funis">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>Funis
       <span class="selo" id="selo-funis" hidden></span>
+    </button>
+    <button class="aba" data-aba="pedidos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg>Pedidos
+      <span class="selo" id="selo-pedidos" hidden></span>
     </button>
   </div>
 

@@ -86,7 +86,10 @@ const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
 function desenhaChips() {
   const el = $('chips')
   const linha = $('linha-chips')
-  if (aba === 'funis') { linha.style.display = 'none'; return }
+  // Busca e chips são do catálogo de itens. Nas outras abas eles não filtram nada, e deixar a busca
+  // ali faz o vendedor digitar nela achando que procura pedido.
+  if (aba === 'funis' || aba === 'pedidos') { linha.style.display = 'none'; $('cabeca').style.display = aba === 'pedidos' ? 'none' : ''; return }
+  $('cabeca').style.display = ''
   linha.style.display = ''
   $('fav-filtro').classList.toggle('on', soFavs)
   $('fav-filtro').setAttribute('aria-pressed', String(soFavs))
@@ -116,6 +119,7 @@ function desenha() {
   selo.textContent = '1'
 
   if (aba === 'funis') { corpo.innerHTML = desenhaFunis(); ligaFunis(corpo); return }
+  if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); return }
 
   const itens = visiveis()
   if (!itens.length) {
@@ -289,6 +293,338 @@ function ligaFunis(corpo) {
 // mensagem de erro sumia antes de o vendedor ler. Agora erro segura a linha por 10 segundos.
 let avisoAte = 0
 // Traduz o erro do navegador. ERR_PROXY_CONNECTION_FAILED não diz nada pra um vendedor.
+// ───────────────────────────────────────────────────────────── pedidos
+//
+// A ABA PEDIDOS (16/10/2026, pedido do Bruno). O vendedor cadastra o pedido do cliente que está na
+// conversa aberta, sem sair do WhatsApp.
+//
+// ONDE O PEDIDO VAI PARAR, e isto foi decidido pelo Bruno em 16/10 depois de a pergunta ir pra ele
+// com as três saídas na mesa: o pedido daqui CAI EM ACEITAÇÕES, igualzinho ao Novo Pedido da dash.
+// Quem cria o pedido na PayLog continua sendo o botão Aceitar. Não é burocracia: a API da PayLog não
+// tem idempotência nem referência externa, então o anti-dobro por CPF é NOSSO (ver a memória
+// aceitar-cria-pedido-paylog) e mandar direto daqui pularia ele, a conferência dupla e a trava
+// aceite_trava. Pedido duplicado lá não tem desfazer barato.
+//
+// O OBJETO É O MESMO que o `buildOrder` do axion-produtor/src/lib/orders.js monta. Está portado aqui
+// porque o painel roda com CSP fechada e sem empacotador, então não dá pra importar. É a mesma
+// situação do `despacho-paylog.js`, que tem gêmeo no worker: MEXEU NUM, MEXE NO OUTRO. Campo com
+// nome diferente faz o card entrar torto no meio dos outros e ninguém percebe até o Aceitar recusar.
+
+const IC_SALVAR = svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>')
+const IC_CHECK = svg('<path d="M20 6 9 17l-5-5"/>')
+const IC_X = svg('<path d="M18 6 6 18M6 6l12 12"/>')
+const IC_RASC = svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>')
+const IC_NOTA = svg('<path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/>')
+
+// Os campos do formulário, na ordem em que aparecem. `req` entra na conferência do cadastro; o
+// rascunho não confere nada, de propósito: rascunho existe justamente pra guardar o que ainda está
+// pela metade enquanto o cliente responde.
+const CAMPOS_PED = [
+  { k: 'nome', r: 'Nome do cliente', req: true },
+  { k: 'cpf', r: 'CPF', req: true, ph: '000.000.000-00' },
+  { k: 'wa', r: 'WhatsApp', req: true },
+  { k: 'cep', r: 'CEP', req: true, ph: '00000-000' },
+  { k: 'end', r: 'Endereço', req: true },
+  { k: 'num', r: 'Número', req: true, par: 'comp' },
+  { k: 'comp', r: 'Complemento' },
+  { k: 'bairro', r: 'Bairro', req: true },
+  { k: 'cidade', r: 'Cidade', req: true, par: 'uf' },
+  { k: 'uf', r: 'UF', req: true, max: 2 },
+  { k: 'trat', r: 'Produto / kit', req: true },
+  { k: 'vl', r: 'Valor', req: true, par: 'pgto', ph: '197,00' },
+  { k: 'pgto', r: 'Pagamento', sel: ['', 'PIX', 'Dinheiro', 'Cartão'] },
+  { k: 'obs', r: 'Observação', area: true },
+]
+const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
+
+let ped = {}             // o que está digitado agora
+let rascunhos = []
+let rascId = 0           // > 0 = está editando um rascunho que já existe no servidor
+let pedErros = []        // só preenche depois de tentar cadastrar
+let pedSalvando = ''     // 'rascunho' | 'cadastro'
+let pedFeito = ''        // mensagem verde depois de cadastrar
+
+const dig = (v) => String(v == null ? '' : v).replace(/\D/g, '')
+const mascCpf = (v) => { const c = dig(v).slice(0, 11); return c.length === 11 ? c.slice(0, 3) + '.' + c.slice(3, 6) + '.' + c.slice(6, 9) + '-' + c.slice(9) : c }
+const mascCep = (v) => { const c = dig(v).slice(0, 8); return c.length === 8 ? c.slice(0, 5) + '-' + c.slice(5) : c }
+
+// CPF de verdade, com os dois dígitos. A mesma conta do despacho-paylog.js: CPF errado só aparece
+// quando a PayLog recusa, e aí o pedido já está na fila do Bruno.
+function cpfValido(v) {
+  const c = dig(v)
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false
+  let s = 0
+  for (let i = 0; i < 9; i++) s += Number(c[i]) * (10 - i)
+  let d = (s * 10) % 11
+  if (d === 10) d = 0
+  if (d !== Number(c[9])) return false
+  s = 0
+  for (let i = 0; i < 10; i++) s += Number(c[i]) * (11 - i)
+  d = (s * 10) % 11
+  if (d === 10) d = 0
+  return d === Number(c[10])
+}
+
+// "197,00", "1.197,00" e "197.00" viram 197 e 1197. O vendedor digita do jeito dele.
+function emNumero(v) {
+  const t = String(v == null ? '' : v).trim().replace(/[R$\s]/g, '')
+  if (!t) return 0
+  const n = Number(t.replace(/\./g, '').replace(',', '.'))
+  return Number.isFinite(n) ? n : 0
+}
+const emDinheiro = (n) => Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function confere(f) {
+  const faltam = []
+  for (const c of CAMPOS_PED) {
+    if (!c.req) continue
+    if (!String(f[c.k] || '').trim()) faltam.push(c.r)
+  }
+  if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF não confere')
+  if (String(f.uf || '').trim() && !UFS.includes(String(f.uf).toUpperCase())) faltam.push('UF inválida')
+  if (String(f.cep || '').trim() && dig(f.cep).length !== 8) faltam.push('CEP precisa de 8 dígitos')
+  if (String(f.vl || '').trim() && emNumero(f.vl) <= 0) faltam.push('Valor precisa ser maior que zero')
+  return faltam
+}
+
+const p2 = (x) => String(x).padStart(2, '0')
+const ddmm = () => { const d = new Date(); return p2(d.getDate()) + '/' + p2(d.getMonth() + 1) }
+const hhmm = () => { const d = new Date(); return p2(d.getHours()) + ':' + p2(d.getMinutes()) }
+const NL = String.fromCharCode(10)
+
+// A MENSAGEM QUE O CLIENTE RECEBE fica gravada no pedido, no campo `raw`. O Cadastro de Pedidos da
+// dash mostra esse campo como "mensagem enviada ao lead", e pedido nascido sem ele aparece em branco
+// lá (já aconteceu, e o Bruno viu). Texto igual ao textoDadosEnvio do orders.js.
+function textoPedido(o) {
+  const rua = [o.end, o.num].filter(Boolean).join(', ')
+  const cidUf = [o.cidade, (o.uf || '').toUpperCase()].filter(Boolean).join(' / ')
+  return [
+    '⭐ Pedido Concluído! ⭐', '',
+    '👤 Nome: ' + (o.nome || ''),
+    '📍CPF: ' + mascCpf(o.cpf),
+    '📍Rua : ' + rua,
+    '📍Bairro: ' + (o.bairro || ''),
+    '📍Cidade e Estado: ' + cidUf,
+    '📍Complemento: ' + (o.comp || ''),
+    '📍CEP: ' + mascCep(o.cep || ''),
+    '📲 : ' + formata(o.wa || ''), '',
+    'Tratamento Referente: ' + (o.trat || o.prod || ''),
+    'Valor do Pedido: R$ ' + emDinheiro(o.vl),
+    'Forma de Pagamento após a Entrega',
+    'Prazo de entrega de 10 a 12 dias úteis.', '',
+    'Assim que o produto chegar a Equipe vai entrar em contato para enviar o meio de pagamento.',
+    'Importante: Seu pedido será despachado em 10 minutos.',
+  ].join(NL)
+}
+
+function montaPedido(f) {
+  const id = Date.now()
+  const o = {
+    id, external_id: 'MAN-' + id, orig: 'Manual',
+    nome: String(f.nome || '').trim(), cpf: dig(f.cpf), wa: dig(f.wa), email: '',
+    cep: dig(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(), comp: String(f.comp || '').trim(),
+    bairro: String(f.bairro || '').trim(), cidade: String(f.cidade || '').trim(), uf: String(f.uf || '').toUpperCase().trim(),
+    prod: String(f.trat || '').trim(), trat: String(f.trat || '').trim(), vl: emNumero(f.vl),
+    // VAZIO fica VAZIO: sem taxa no pedido, a dash usa a do vendedor. Pôr um número aqui inventaria
+    // uma comissão que ninguém combinou (foi o que aconteceu com os dois pedidos manuais antigos).
+    com_pct: '',
+    pgto: String(f.pgto || '').trim(), spg: 'Pendente',
+    transp: '', mod: 'entrega',
+    // O DONO É DECIDIDO NO SERVIDOR, pelo login. Mandar `at` daqui deixaria o painel escolhendo de
+    // quem é a venda, e quem recorta por cargo é a rota.
+    col: 'A Enviar', obs: String(f.obs || '').trim(),
+    tags: [], fu: null, agend: '', track: '', link: '',
+    data: ddmm(),
+    hist: [{ from: '—', to: 'A Enviar', who: 'Sellwave Web', time: ddmm() + ' ' + hhmm() }],
+    comments: [],
+    five_status: 'pendente_despacho',
+    comprovante_url: '', comprovante_mime: '', comprovantes: [],
+  }
+  o.raw = textoPedido(o)
+  return o
+}
+
+// ─── rascunhos ───
+
+async function pegaRascunhos() {
+  try {
+    const r = await window.swp.rascunhos('')
+    rascunhos = (r && r.ok && Array.isArray(r.rascunhos)) ? r.rascunhos : []
+  } catch (_) { /* servidor fora: a aba ainda cadastra, só não lista rascunho */ }
+  const selo = $('selo-pedidos')
+  if (selo) { selo.hidden = !rascunhos.length; selo.textContent = String(rascunhos.length) }
+}
+
+const rotuloRasc = (r) => {
+  const d = (r && r.dados) || {}
+  return String(d.nome || '').trim() || formata(r && r.phone) || 'rascunho sem nome'
+}
+const detalheRasc = (r) => {
+  const d = (r && r.dados) || {}
+  const partes = [d.trat, d.vl ? 'R$ ' + emDinheiro(emNumero(d.vl)) : '', d.cidade]
+  return partes.filter(Boolean).join(' · ') || 'nada preenchido ainda'
+}
+
+// ─── desenho ───
+
+function desenhaPedidos() {
+  const grupo = estadoWa.grupo
+  const semFone = !estadoWa.phone
+  if (grupo) return '<div class="vazio">Conversa de grupo.<br>O cadastro de pedido é por cliente.</div>'
+
+  let h = '<div class="form">'
+
+  if (pedFeito) h += '<div class="aviso bom">' + esc(pedFeito) + '</div>'
+  if (pedErros.length) {
+    h += '<div class="aviso ruim">Falta preencher:<ul>'
+      + pedErros.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
+  }
+
+  if (rascunhos.length) {
+    h += '<div class="grp primeiro"><span>Rascunhos</span><span class="n" style="--ac:' + TIPOS.text.cor + '">' + rascunhos.length + '</span></div>'
+    for (const r of rascunhos) {
+      h += '<div class="rasc" data-r="' + esc(r.id) + '">'
+        + '<span class="ic">' + IC_RASC + '</span>'
+        + '<button class="txt" data-abre="' + esc(r.id) + '">'
+        + '<div class="t1">' + esc(rotuloRasc(r)) + '</div>'
+        + '<div class="t2">' + esc(detalheRasc(r)) + '</div>'
+        + '</button>'
+        + '<button class="x" data-apaga="' + esc(r.id) + '" title="Apagar rascunho">' + IC_X + '</button>'
+        + '</div>'
+    }
+    h += '<div style="height:10px"></div>'
+  }
+
+  if (semFone) {
+    h += '<div class="vazio">Abra a conversa do cliente.<br>O pedido nasce com o número dela.</div></div>'
+    return h
+  }
+
+  for (const c of CAMPOS_PED) {
+    // O campo que tem `par` abre uma dupla e o par vem junto, pra não gastar duas linhas com
+    // "Número" e "Complemento" numa coluna estreita.
+    if (CAMPOS_PED.some((o) => o.par === c.k)) continue
+    const par = c.par ? CAMPOS_PED.find((o) => o.k === c.par) : null
+    const classe = 'cx' + (par ? ' par' : '') + (par && par.k === 'uf' ? ' uf' : '')
+    h += '<div class="' + classe + '">'
+    h += campoPed(c)
+    if (par) h += campoPed(par)
+    h += '</div>'
+  }
+
+  const trabalhando = !!pedSalvando
+  h += '<div class="acoes">'
+    + '<button class="bt sec" id="pd-rasc"' + (trabalhando ? ' disabled' : '') + '>'
+    + (pedSalvando === 'rascunho' ? IC_GIRA : IC_SALVAR) + 'Rascunho</button>'
+    + '<button class="bt pri" id="pd-ok"' + (trabalhando ? ' disabled' : '') + '>'
+    + (pedSalvando === 'cadastro' ? IC_GIRA : IC_CHECK) + 'Cadastrar pedido</button>'
+    + '</div>'
+  h += '<div style="margin-top:8px;font-size:10.5px;line-height:14px;color:var(--apagado)">'
+    + 'O pedido entra em Aceitações, como o da dash. Quem envia pra PayLog é o Aceitar.</div>'
+
+  return h + '</div>'
+}
+
+function campoPed(c) {
+  const erro = pedErros.length && c.req && !String(ped[c.k] || '').trim() ? ' erro' : ''
+  const v = esc(ped[c.k] == null ? '' : ped[c.k])
+  let dentro
+  if (c.sel) {
+    dentro = '<select data-k="' + c.k + '">'
+      + c.sel.map((o) => '<option value="' + esc(o) + '"' + (String(ped[c.k] || '') === o ? ' selected' : '') + '>' + esc(o || 'escolher') + '</option>').join('')
+      + '</select>'
+  } else if (c.area) {
+    dentro = '<textarea data-k="' + c.k + '" placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
+  } else {
+    dentro = '<input data-k="' + c.k + '" value="' + v + '" placeholder="' + esc(c.ph || '') + '"'
+      + (c.max ? ' maxlength="' + c.max + '"' : '') + ' spellcheck="false" />'
+  }
+  return '<div class="' + (erro ? 'erro' : '') + '"><label>' + esc(c.r) + '</label>' + dentro + '</div>'
+}
+
+function ligaPedidos(corpo) {
+  for (const el of corpo.querySelectorAll('[data-k]')) {
+    el.oninput = () => {
+      const k = el.dataset.k
+      let v = el.value
+      // A máscara é aplicada enquanto digita, mas só quando o campo já está completo: mascarar no
+      // meio empurra o cursor e a pessoa perde a conta do que digitou.
+      if (k === 'cpf' && dig(v).length === 11) { v = mascCpf(v); el.value = v }
+      if (k === 'cep' && dig(v).length === 8) { v = mascCep(v); el.value = v }
+      if (k === 'uf') { v = v.toUpperCase(); el.value = v }
+      ped[k] = v
+    }
+  }
+  for (const b of corpo.querySelectorAll('[data-abre]')) {
+    b.onclick = () => {
+      const r = rascunhos.find((x) => String(x.id) === String(b.dataset.abre))
+      if (!r) return
+      ped = { ...(r.dados || {}) }
+      rascId = Number(r.id) || 0
+      pedErros = []; pedFeito = ''
+      desenha()
+    }
+  }
+  for (const b of corpo.querySelectorAll('[data-apaga]')) {
+    b.onclick = async () => {
+      const id = b.dataset.apaga
+      try { await window.swp.rascunhoApagar(id) } catch (_) { /* some da lista no próximo pulso */ }
+      if (String(rascId) === String(id)) rascId = 0
+      await pegaRascunhos()
+      desenha()
+    }
+  }
+  const bR = $('pd-rasc'); if (bR) bR.onclick = salvaRascunho
+  const bO = $('pd-ok'); if (bO) bO.onclick = cadastraPedido
+}
+
+async function salvaRascunho() {
+  if (pedSalvando) return
+  pedSalvando = 'rascunho'; pedFeito = ''; desenha()
+  try {
+    const r = await window.swp.rascunhoSalvar(rascId || 0, estadoWa.phone || '', ped)
+    if (r && r.ok) { rascId = Number(r.id) || rascId; pedFeito = 'Rascunho guardado.' }
+    else pedFeito = ''
+    await pegaRascunhos()
+  } catch (_) {
+    pedErros = ['Não deu pra guardar o rascunho agora. O que você digitou continua na tela.']
+  } finally { pedSalvando = ''; desenha() }
+}
+
+async function cadastraPedido() {
+  if (pedSalvando) return
+  const faltam = confere(ped)
+  if (faltam.length) { pedErros = faltam; pedFeito = ''; desenha(); return }
+  pedSalvando = 'cadastro'; pedErros = []; pedFeito = ''; desenha()
+  try {
+    const r = await window.swp.pedidoNovo(montaPedido(ped))
+    if (r && r.ok) {
+      // `ja` = o servidor reconheceu que este pedido já tinha entrado. Dizer "cadastrado" de novo
+      // faria o vendedor achar que criou dois.
+      pedFeito = r.ja ? 'Esse pedido já estava cadastrado.' : 'Pedido cadastrado. Está em Aceitações.'
+      // O rascunho deste cliente não serve mais: virou pedido.
+      if (rascId) { try { await window.swp.rascunhoApagar(rascId) } catch (_) { /* some sozinho depois */ } }
+      ped = {}; rascId = 0
+      preenchePed()
+      await pegaRascunhos()
+    } else {
+      pedErros = [humano((r && r.erro) || 'não deu pra cadastrar')]
+    }
+  } catch (e) {
+    pedErros = [humano((e && e.message) || 'não deu pra falar com a dash')]
+  } finally { pedSalvando = ''; desenha() }
+}
+
+// O que já se sabe do cliente entra sozinho: o número vem da conversa aberta e o nome vem do que o
+// WhatsApp mostra, ou do que a dash já tem. É a prévia dos dados do cliente que o Bruno pediu.
+let fonePreenchido = ''
+function preenchePed() {
+  const fone = estadoWa.phone || ''
+  if (!fone || estadoWa.lid) return
+  if (!ped.wa) ped.wa = formata(fone)
+  if (!ped.nome && estadoWa.nome) ped.nome = estadoWa.nome
+}
+
 function humano(txt) {
   const t = String(txt || '')
   if (/ERR_PROXY|ERR_TUNNEL|NO_SUPPORTED_PROXIES/i.test(t)) return 'o proxy deste número não respondeu'
@@ -422,6 +758,22 @@ const formata = (d) => {
   return String(d || '')
 }
 
+// O BOTÃO COLORIDO AO LADO DO CLIENTE (pedido do Bruno em 16/10: "mais um botão colorido do lado do
+// cliente pra entrar nesse cadastro"). Mora no bloco do lead porque é o único lugar do painel que
+// já fala do cliente da conversa aberta. Não aparece em grupo nem em conversa sem número visível:
+// nos dois casos não há cliente pra cadastrar, e botão que abre uma tela vazia é pior que nenhum.
+const botaoCadastro = () => '<button class="lead-cad" id="lead-cad" title="Cadastrar pedido deste cliente">'
+  + IC_NOTA + 'Pedido</button>'
+
+// Troca pra uma aba de fora dela (o clique no botão do lead). Mexe no mesmo lugar que o clique na
+// aba mexeria, pra as duas entradas não divergirem.
+function vaiPara(nome) {
+  aba = nome
+  for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o.dataset.aba === nome)
+  aberto = ''
+  desenha()
+}
+
 async function atualizaLead() {
   const fone = estadoWa.phone
   if (!fone) {
@@ -440,7 +792,8 @@ async function atualizaLead() {
   if (fone === ultimoFone) return
   ultimoFone = fone
   const cabecalho = esc(estadoWa.nome || formata(fone))
-  $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">procurando na dash...</div>'
+  $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">procurando na dash...</div>' + botaoCadastro()
+  ligaBotaoCadastro()
   // LID NAO RESOLVIDO: os digitos nao sao telefone nenhum. Procurar lead com eles sempre devolve
   // vazio, e a tela diria "sem pedido na dash" pra um cliente que pode ter tres pedidos.
   if (estadoWa.lid) {
@@ -456,17 +809,28 @@ async function atualizaLead() {
   if (d && d.ok === false) {
     ultimoFone = ''
     $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone))
-      + ' · ' + esc(humano(d.erro || 'não deu pra falar com a dash')) + '</div>'
+      + ' · ' + esc(humano(d.erro || 'não deu pra falar com a dash')) + '</div>' + botaoCadastro()
+    ligaBotaoCadastro()
     return
   }
   if (!d || !d.achou) {
-    $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone)) + ' · sem pedido na dash</div>'
+    $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone)) + ' · sem pedido na dash</div>' + botaoCadastro()
+    ligaBotaoCadastro()
     return
   }
   const linha = [d.produto, d.cidade ? d.cidade + '/' + d.uf : ''].filter(Boolean).join(' · ')
   $('lead').innerHTML = '<div class="nm">' + esc(d.nome || cabecalho) + '</div>'
     + '<div class="ln">' + esc(linha || formata(fone)) + '</div>'
     + (d.etapa ? '<span class="tag">' + esc(d.etapa) + (d.pedidos > 1 ? ' · ' + d.pedidos + ' pedidos' : '') + '</span>' : '')
+    + botaoCadastro()
+  ligaBotaoCadastro()
+}
+
+// O bloco do lead e reescrito inteiro a cada troca de conversa, entao o botao nasce sem clique:
+// religar faz parte de cada escrita.
+function ligaBotaoCadastro() {
+  const b = $('lead-cad')
+  if (b) b.onclick = () => vaiPara('pedidos')
 }
 
 // ───────────────────────────────────────────────────────────── ciclo
@@ -496,20 +860,23 @@ async function pulso() {
   // Só redesenha quando o botão de enviar muda de estado: redesenhar a cada pulso apagaria a
   // seleção de texto e piscaria a lista.
   const agora = podeEnviar()
-  if (agora !== podiaEnviar) { podiaEnviar = agora; desenha() }
+  // REDESENHAR COM A ABA PEDIDOS ABERTA APAGA O QUE O VENDEDOR ESTÁ DIGITANDO. O formulário guarda
+  // o valor em `ped` a cada tecla, mas o redesenho recria os campos e leva junto o cursor e a
+  // seleção. Como ali não existe botão de enviar pra habilitar, não há nada a redesenhar mesmo.
+  if (agora !== podiaEnviar) { podiaEnviar = agora; if (aba !== 'pedidos') desenha() }
+  // Trocou de conversa: o formulário passa a falar do cliente novo. Só mexe no que está em branco,
+  // pra não apagar o que já foi digitado sobre o mesmo cliente.
+  if (estadoWa.phone !== fonePreenchido) {
+    fonePreenchido = estadoWa.phone || ''
+    preenchePed()
+    if (aba === 'pedidos') desenha()
+  }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }
   await atualizaLead()
 }
 
-for (const b of document.querySelectorAll('.aba')) {
-  b.onclick = () => {
-    aba = b.dataset.aba
-    for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o === b)
-    aberto = ''
-    desenha()
-  }
-}
+for (const b of document.querySelectorAll('.aba')) b.onclick = () => vaiPara(b.dataset.aba)
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenha() }
 $('fav-filtro').onclick = () => { soFavs = !soFavs; desenha() }
 
@@ -530,6 +897,9 @@ async function pegaRoteiro() {
 }
 const roteiroVazio = () => !(roteiro.messages || []).length && !(roteiro.sequences || []).length && !(roteiro.media || []).length
 pegaRoteiro().then(desenha)
+// Os rascunhos entram no selo da aba sem o vendedor precisar abrir ela. Falha em silencio: sem
+// rascunho a aba continua cadastrando normalmente.
+pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
 
 // O apelido existe pro MODO FOTO congelar a tela: sem isso o pulso sobrescreve o exemplo
 // 1,5 s depois e a foto sai sempre com o estado vazio.
