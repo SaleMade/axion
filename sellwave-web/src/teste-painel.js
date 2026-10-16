@@ -221,11 +221,13 @@ app.whenReady().then(async () => {
   // ── a pilha de disparos ────────────────────────────────────────────────────────────────────
   await clica('[data-aba=funis]')
   await espera(250)
-  const pil = await js('({ tem: !!document.querySelector(".saindo"), nm: (document.querySelector(".saindo .nm")||{}).textContent || "", ln: (document.querySelector(".saindo .ln")||{}).textContent || "", passos: document.querySelectorAll(".saindo .passos i").length, feitos: document.querySelectorAll(".saindo .passos i.ja").length })')
-  conta('a pilha mostra o funil que esta saindo', pil.tem === true && /Boas-vindas/.test(pil.nm), JSON.stringify(pil))
-  conta('mostra em que passo esta', /2 de 5/.test(pil.nm), pil.nm)
-  conta('mostra por qual numero e pra quem', /97401-5754/.test(pil.ln) && /99598-3293/.test(pil.ln), pil.ln)
-  conta('a barrinha tem um tracinho por passo, 2 preenchidos', pil.passos === 5 && pil.feitos === 2, pil.passos + '/' + pil.feitos)
+  const pil = await js('({ tem: !!document.querySelector(".saindo"), cab: (document.querySelector(".saindo .cab .t")||{}).textContent || "", l1: (document.querySelector(".saindo .l1")||{}).textContent || "", l2: (document.querySelector(".saindo .l2")||{}).textContent || "", roda: document.querySelectorAll(".saindo .roda").length, cor: getComputedStyle(document.querySelector(".saindo .cab")).backgroundColor })')
+  conta('a pilha existe e conta como no inbox', pil.tem === true && /Enviando funil · 1/.test(pil.cab), JSON.stringify(pil.cab))
+  conta('o cabecalho e verde solido, como o do inbox', pil.cor === 'rgb(16, 185, 129)', pil.cor)
+  conta('a linha diz "Funil: nome -> quem"', /Funil:\s*Boas-vindas/.test(pil.l1) && /99598-3293/.test(pil.l1), pil.l1)
+  conta('mostra em que passo esta', /Enviando passo 2 de 5/.test(pil.l2), pil.l2)
+  conta('mostra por qual numero esta saindo', /97401-5754/.test(pil.l2), pil.l2)
+  conta('tem a rodinha girando no cabecalho e na linha', pil.roda === 2, String(pil.roda))
 
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'

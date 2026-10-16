@@ -100,24 +100,26 @@ async function pegaDisparos() {
 // continua saindo, e por qual numero: antes a unica pista era o rodape, que fala do numero da tela.
 function desenhaSaindo() {
   if (!saindo.length) return ''
-  let h = ''
+  // A contagem do cabecalho e o texto do inbox, no singular e no plural.
+  const n = saindo.length
+  let h = '<div class="saindo">'
+    + '<div class="cab"><span class="roda"></span>'
+    + '<span class="t">Enviando funil' + (n > 1 ? 's' : '') + ' · ' + n + '</span></div>'
+  // MOSTRAR O DONO so quando ha mais de um, como no inbox: com um envio so, repetir de quem e o
+  // numero em toda linha e ruido.
+  const donos = new Set(saindo.map((d) => String(d.dono || '')))
   for (const d of saindo) {
     const total = Number(d.total) || 0
-    const passo = Math.max(0, Math.min(total, Number(d.passo) || 0))
-    const onde = [formata(d.numero || ''), d.dono || ''].filter(Boolean).join(' · ')
-    const alvo = d.alvo ? 'para ' + formata(d.alvo) : ''
-    h += '<div class="saindo">'
-      + '<div class="cab"><span class="bolha"></span>saindo agora</div>'
-      + '<div class="nm">' + esc(d.funil || 'funil') + (total ? ' <span style="font-weight:400;color:var(--apagado)">' + passo + ' de ' + total + '</span>' : '') + '</div>'
-      + (onde || alvo ? '<div class="ln">' + esc([onde, alvo].filter(Boolean).join(' · ')) + '</div>' : '')
-    if (total) {
-      h += '<div class="passos">'
-      for (let i = 1; i <= total; i++) h += '<i class="' + (i <= passo ? 'ja' : '') + '"></i>'
-      h += '</div>'
-    }
-    h += '</div>'
+    const passo = Math.max(1, Math.min(total || 1, Number(d.passo) || 1))
+    h += '<div class="item-env"><span class="roda"></span><div class="txt">'
+      + '<div class="l1"><span class="rot">Funil:</span> ' + esc(d.funil || 'sem nome')
+      + (d.alvo ? '<span class="para"> &rarr; ' + esc(formata(d.alvo)) + '</span>' : '') + '</div>'
+      + (donos.size > 1 && d.dono ? '<div class="dono">' + esc(d.dono) + '</div>' : '')
+      + '<div class="l2">' + (total ? 'Enviando passo ' + passo + ' de ' + total : 'Enviando')
+      + (d.numero ? ' · ' + esc(formata(d.numero)) : '') + '</div>'
+      + '</div></div>'
   }
-  return h
+  return h + '</div>'
 }
 
 function desenhaChips() {
@@ -964,7 +966,7 @@ function itemParaEnvio(id, pausa) {
 async function disparaItem(id) {
   const it = itemParaEnvio(id)
   if (!it) { rodape('não achei esse item no roteiro'); return }
-  await roda([it], id)
+  await roda([it], id, it.label || 'item avulso')
 }
 
 async function disparaFunil(id) {
@@ -976,10 +978,10 @@ async function disparaFunil(id) {
     if (it) lista.push(it)
   }
   if (!lista.length) { rodape('funil sem passos'); return }
-  await roda(lista, id)
+  await roda(lista, id, s.label || s.nome || 'funil')
 }
 
-async function roda(lista, marca) {
+async function roda(lista, marca, rotulo = '') {
   if (ocupado) return
   if (!estadoWa.chatId) { rodape('abra uma conversa primeiro'); return }
   if (!estadoWa.envia) { rodape('o motor do WhatsApp não está pronto'); return }
@@ -997,8 +999,14 @@ async function roda(lista, marca) {
   ocupado = true
   disparando = marca
   pararPedido = false
-  // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil.
-  try { window.swp.disparo(alvoNk, true) } catch (_) { /* ok */ }
+  // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil. E o MESMO
+  // aviso alimenta a faixa "saindo agora": sem mandar o rotulo, o passo e o alvo, o registro do
+  // processo principal fica com o padrao e a faixa diz literalmente "funil" no lugar do nome.
+  const avisa = (passo) => {
+    try { window.swp.disparo(alvoNk, true, { funil: rotulo, passo, total: lista.length, alvo: estadoWa.phone || '', inicio: Date.now() }) }
+    catch (_) { /* a faixa some, o disparo continua */ }
+  }
+  avisa(0)
   desenha()
   $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
 
@@ -1006,6 +1014,7 @@ async function roda(lista, marca) {
     if (pararPedido) { rodape('parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
     const it = lista[i]
     const de = lista.length > 1 ? ' ' + (i + 1) + ' de ' + lista.length : ''
+    avisa(i + 1)
     const pct = lista.length > 1 ? (i + 1) / lista.length : null
     // A PAUSA ACONTECE AQUI, com o "digitando..." ligado na conversa, e EM FATIAS: assim o botao
     // Parar responde no meio de uma pausa longa em vez de so depois do item.

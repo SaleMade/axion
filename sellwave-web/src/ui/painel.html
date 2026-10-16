@@ -325,20 +325,29 @@
      A "pilha de disparos" que o Bruno perguntou se já existia. Não existia. Hoje ela mostra 0 ou 1,
      porque o painel roda um funil por vez no app inteiro; o desenho já é de lista pro dia em que
      isso mudar. Fica no topo da aba Funis, que é de onde o disparo sai. */
-  .saindo { margin-bottom: 8px; border: 1px solid rgba(173, 70, 255, .35);
-    border-radius: 12px; background: rgba(173, 70, 255, .08); padding: 8px 10px; }
-  .saindo .cab { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .05em; color: var(--roxo); }
-  .saindo .bolha { width: 7px; height: 7px; border-radius: 50%; background: var(--roxo); flex-shrink: 0;
-    animation: pulsa 1.4s ease-in-out infinite; }
-  @keyframes pulsa { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
-  .saindo .nm { margin-top: 4px; font-size: 12.5px; font-weight: 700;
+  /* IGUAL A PILHA DO INBOX (16/10: "deveria ser exatamente o mesmo que a gente usa no inbox, com as
+     mesmas informacoes"). A referencia e o PilhaEnvios do chat.jsx no modo integrado: cartao com
+     borda verde, cabecalho SOLIDO verde com a contagem, e uma linha por envio com a rodinha girando,
+     "Funil: <nome> -> <quem>" e "Enviando passo X de Y". O verde e o emerald-500 da dash (#10b981),
+     nao o do .wa-scope: la o cabecalho e solido nessa cor e e o que ele reconhece de relance. */
+  .saindo { margin-bottom: 9px; border: 1px solid rgba(16, 185, 129, .4); border-radius: 12px;
+    background: var(--fraco); overflow: hidden; }
+  .saindo .cab { display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+    background: #10b981; color: #fff; font-size: 12.5px; font-weight: 600; }
+  .saindo .cab .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .roda { width: 13px; height: 13px; flex-shrink: 0; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: gira .9s linear infinite; }
+  .saindo .item-env { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border-top: 1px solid var(--linha); }
+  .saindo .item-env .roda { border-color: rgba(16, 185, 129, .25); border-top-color: #10b981; }
+  .saindo .item-env .txt { flex: 1; min-width: 0; }
+  .saindo .l1 { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .saindo .l1 .rot { color: #34d399; }
+  .saindo .l1 .para { color: var(--apagado); font-weight: 400; }
+  .saindo .l2 { margin-top: 1px; font-size: 11px; color: var(--apagado);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .saindo .ln { margin-top: 2px; font-size: 11px; color: var(--apagado);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .saindo .passos { display: flex; gap: 3px; margin-top: 6px; }
-  .saindo .passos i { flex: 1; height: 3px; border-radius: 2px; background: rgba(173, 70, 255, .25); }
-  .saindo .passos i.ja { background: var(--roxo); }
+  .saindo .dono { margin-top: 1px; font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; color: rgba(134, 150, 160, .7); }
 
   /* ─────────────── rodapé ─────────────── */
   footer { padding: 8px 12px; border-top: 1px solid var(--linha); font-size: 11px; color: var(--apagado);
