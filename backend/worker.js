@@ -10981,13 +10981,31 @@ async function handleSwWeb(req, env, path) {
 
     const filaDe = {};
     try {
+      // QUEM AQUECE ENTRA NA FILA AQUI TAMBEM (16/10/2026, auditoria).
+      //
+      // O chip em aquecimento tem `dist` e `lim_dia` VAZIOS no cadastro - quem poe ele em modo
+      // limite, com o teto da rampa e na frente da fila, e o _resolvePresselSellers, na hora de
+      // distribuir. Lendo so os campos crus, ele ficava de FORA desta conta e saia daqui com
+      // `fila: null`, e ai a barra lateral do app escrevia "recebendo" o dia inteiro: o
+      // `recebendoAgora` da tela e `roleta && (!fila || fila.st === 'vez')`, e sem fila a primeira
+      // metade ja resolve. Resultado: nas horas em que o worker tinha segurado o numero (a cota da
+      // rampa abre ao longo do dia), o app dizia que ele estava recebendo e a Chegada de leads, no
+      // mesmo instante, dizia que nao. Tela que mente sobre quem recebe lead e a familia de bug que
+      // custou o dia de ontem.
+      //
+      // O `lim` e o ACUMULADO DA HORA (aquec.lim), nao o teto do dia: e com ele que o
+      // _aplicaFilaLimite decide a vez, igual na distribuicao de verdade.
       const emFila = chips
-        .filter((c) => c && c.num && String(c.dist || '') === 'limite')
-        .map((c, i) => ({
-          num: c.num, at: String(c.at || ''), dist: 'limite',
-          lim: Number(c.lim_dia) || 0, livre: String(c.lim_livre || ''),
-          ordem: Number(c.lim_ordem) || 999, idx: i,
-        }));
+        .filter((c) => c && c.num && (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec)))
+        .map((c, i) => {
+          const aq = _chipAquecendo(c, _ids.aquec) ? _numDoAquecimento(c) : null;
+          return {
+            num: c.num, at: String(c.at || ''), dist: 'limite',
+            lim: aq ? aq.lim : (Number(c.lim_dia) || 0),
+            livre: aq ? '' : String(c.lim_livre || ''),
+            ordem: aq ? aq.ordem : (Number(c.lim_ordem) || 999), idx: i,
+          };
+        });
       if (emFila.length) {
         const r = _aplicaFilaLimite(emFila, lh, _brDay());
         // A POSICAO E DENTRO DA FILA DO VENDEDOR, nao da lista toda: o vendedor ve "1, 2, 3" dele.
@@ -11042,7 +11060,10 @@ async function handleSwWeb(req, env, path) {
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
         // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
-        dist: String(c.dist || '') === 'limite' ? 'limite' : '',
+        // Quem aquece esta SEMPRE em fila, mesmo com o campo do chip vazio - e o worker que forca
+        // isso ao distribuir. Sem dizer 'limite' aqui, a tela nem chega a olhar a `fila` que a
+        // linha de cima acabou de calcular (ela so le a fila no modo limite).
+        dist: (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec)) ? 'limite' : '',
         // { pos, st } so em modo limite. st: vez (recebendo), espera (na fila), bateu (no teto).
         // O interruptor desligado vence tudo, e quem decide isso e o campo `roleta` ao lado.
         fila: filaDe[_swwebK8(c.num)] || null,

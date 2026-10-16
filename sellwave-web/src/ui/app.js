@@ -192,7 +192,12 @@ function fraseEstado(n) {
   if (!n.roleta) return 'desligado'
   if (n.dist !== 'limite' || !n.fila) return 'distribuindo'
   if (n.fila.st === 'vez') return 'recebendo agora'
-  if (n.fila.st === 'bateu') return 'bateu o limite, volta à meia-noite'
+  // EM QUEM AQUECE, "bateu" NAO E LIMITE ESTOURADO: a cota da rampa abre ao longo do dia, entao ele
+  // pegou a desta hora e volta a receber na proxima. Dizer "volta a meia-noite" faria o vendedor
+  // achar que o numero travou ate amanha e desligar o interruptor por engano.
+  if (n.fila.st === 'bateu') {
+    return aquecendo(n) ? 'no ritmo do aquecimento, recebe mais daqui a pouco' : 'bateu o limite, volta à meia-noite'
+  }
   return 'espera a vez'
 }
 
@@ -211,7 +216,12 @@ const tetoDe = (n) => Number((n && n.aquec && n.aquec.teto) || (n && n.lim_dia))
 function corDoContador(n) {
   if (!n.roleta) return '#94a3b8'
   const st = n.dist === 'limite' && n.fila ? n.fila.st : 'vez'
-  if (st === 'bateu') return '#f59e0b'
+  // EM QUEM AQUECE, "bateu" E O ESTADO NORMAL DA MAIOR PARTE DO DIA: a cota da rampa abre de hora
+  // em hora, ele pega a desta hora e espera a proxima. Pintar de ambar (que aqui significa aviso)
+  // deixaria o numero em aquecimento parecendo problema o dia inteiro - e aviso que aparece sempre
+  // e aviso que ninguem le mais, inclusive no numero estabelecido, onde ele importa.
+  // Cinza de "esperando a vez", que e exatamente o que esta acontecendo.
+  if (st === 'bateu') return aquecendo(n) ? '#94a3b8' : '#f59e0b'
   if (st !== 'vez') return '#94a3b8'
   const teto = tetoDe(n)
   const pct = teto ? (Number(n.leads_hoje) || 0) / teto : 0
@@ -324,9 +334,13 @@ function linha(n) {
   // Sem teto cadastrado nao ha o que medir, entao mostra so quantos chegaram.
   const leads = Number(n.leads_hoje) || 0
   const teto = tetoDe(n)
+  // O rotulo curto do contador. Em quem aquece, "no limite" viraria mentira curta (ver fraseEstado):
+  // "no ritmo" cabe no mesmo espaco e diz a verdade; a frase inteira fica no passe de mouse.
   const rot = !n.roleta ? 'desligado'
     : n.livre_hoje ? 'liberado'
-      : (n.dist === 'limite' && n.fila ? (FILA_ROTULO[n.fila.st] || '') : 'recebendo')
+      : (n.dist === 'limite' && n.fila
+        ? ((n.fila.st === 'bateu' && aquecendo(n)) ? 'no ritmo' : (FILA_ROTULO[n.fila.st] || ''))
+        : 'recebendo')
   const pct = teto ? Math.min(100, Math.round((leads / teto) * 100)) : 0
   const conta = teto
     ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + '/' + teto
@@ -351,8 +365,15 @@ function linha(n) {
     : '<span class="sw-off" title="Só recebe lead quem está Em uso ou Em aquecimento na Contingência'
       + (n.status ? '. Este está como ' + esc(n.status) : '') + '">—</span>'
 
+  // A DICA DE QUEM AQUECE PRECISA DOS DOIS NUMEROS. O contador mostra o teto do DIA (5), mas quem
+  // decide se ele recebe agora e a cota JA LIBERADA nesta hora (`aquec.agora`, 2 por exemplo) - sem
+  // dizer isso, "2/5" parado se le como numero travado por engano.
+  const explicaAquec = (dia && n.aquec)
+    ? ' · dia ' + dia + ': ' + (Number(n.aquec.teto) || 0) + ' no dia, '
+      + (Number(n.aquec.agora) || 0) + ' liberados até agora'
+    : ''
   return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="'
-    + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + (n.status ? ' · ' + n.status : '')) + '">'
+    + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + explicaAquec + (n.status ? ' · ' + n.status : '')) + '">'
     + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
     + '<span class="sub">' + fogo + zap + trancado + alerta + conta + '</span></span>'

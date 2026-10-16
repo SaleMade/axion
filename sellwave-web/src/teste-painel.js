@@ -384,10 +384,10 @@ app.whenReady().then(async () => {
     + ' selos: document.querySelectorAll(".num .sw-off").length }))()')
   conta('o aquecimento ganha cabecalho proprio', sec.cabecalhos.includes('Aquecimento'), JSON.stringify(sec.cabecalhos))
   conta('na cor do aquecimento, nao na cinza dos vendedores', sec.aquecCor === 'rgb(245, 158, 11)', sec.aquecCor)
-  conta('e diz quantos leads chegaram hoje', /3 leads/.test(sec.aquecQtd), sec.aquecQtd)
+  conta('e diz quantos leads chegaram hoje', /10 leads/.test(sec.aquecQtd), sec.aquecQtd)
   // 3 em uso + 1 em aquecimento = 4 interruptores; o "Em analise" fica com o selo
   // 3 em uso + 1 em aquecimento = 4 interruptores; "Em analise" e "Restrito" ficam com o selo
-  conta('interruptor so pra quem pode receber', sec.chaves === 4 && sec.selos === 2, JSON.stringify(sec))
+  conta('interruptor so pra quem pode receber', sec.chaves === 5 && sec.selos === 2, JSON.stringify(sec))
   // O SERVIDOR VENCE O CAMPO CRU: numero com em_uso true e apto false NAO ganha interruptor. Sem
   // esta conferencia, trocar o ternario por um OU devolveria o interruptor pra numero restrito, e
   // isso e mentira de tela no lado perigoso - o vendedor acharia que esta recebendo e nao esta.
@@ -405,11 +405,23 @@ app.whenReady().then(async () => {
   conta('clicar encolhe a barra pra 56px', fina.larg === 56, JSON.stringify(fina))
   conta('e avisa o processo principal, que e quem move a view', JSON.stringify(fina.pediu) === '[true]', JSON.stringify(fina.pediu))
 
+  // A ORDEM ESPERADA SAI DO PROPRIO STUB, com a mesma regra da tela: agrupa por vendedor (na ordem
+  // em que aparecem), dentro do grupo quem esta na roleta sobe, e o aquecimento de TODOS vai pro
+  // fim, depois da barrinha. Escrever a lista a mao quebrava a cada numero novo, e o erro parecia
+  // regressao quando era so contagem.
+  const esperado = await js2('(() => { const ns = window.__stub().numeros;'
+    + ' const aq = (n) => n.aquecendo === true || n.aquec != null || String(n.st || "") === "aquecimento";'
+    + ' const donos = []; for (const n of ns) if (!donos.includes(n.dono)) donos.push(n.dono);'
+    + ' const porDono = (f) => donos.flatMap(d => ns.filter(n => n.dono === d && f(n))'
+    + '   .sort((a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)));'
+    + ' const q = [...porDono(n => !aq(n)), ...porDono(aq)];'
+    + ' return { n: ns.length, digitos: q.map(x => x.numero.slice(-4)).join(","),'
+    + ' naAquec: porDono(aq).map(x => x.numero.slice(-4)).join(",") } })()')
   const dentro = await js2('({ fino: document.querySelectorAll(".fino").length, d: [...document.querySelectorAll(".fino .d")].map(e => e.textContent).join(","), c: [...document.querySelectorAll(".fino .c")].map(e => e.textContent).join(","), vend: document.querySelectorAll(".vend").length, busca: getComputedStyle(document.querySelector(".busca")).display })')
-  conta('encolhida, mostra um numero por linha', dentro.fino === 6, JSON.stringify(dentro.fino))
-  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,3344,0653,8551', dentro.d)
+  conta('encolhida, mostra um numero por linha', dentro.fino === esperado.n, dentro.fino + ' de ' + esperado.n)
+  conta('mostra os 4 ultimos digitos', dentro.d === esperado.digitos, dentro.d + '   esperado ' + esperado.digitos)
   // O '3/5' do 8551 PROVA que o teto sai da rampa: o `lim_dia` dele no stub e zero.
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,3/5', dentro.c)
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,3/5,7/20', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
 
   const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
@@ -433,7 +445,7 @@ app.whenReady().then(async () => {
     + ' cor: getComputedStyle(r).borderTopColor, fogo: !!r.querySelector("svg") } })()')
   conta('encolhida, uma barrinha separa o aquecimento', !!risco && risco.fogo === true, JSON.stringify(risco))
   conta('e ela fica na divisa certa: tudo que aquece embaixo dela',
-    risco && risco.antes === '2248,3293,1122,3344,0653' && risco.depois === '8551', JSON.stringify(risco))
+    risco && risco.depois === esperado.naAquec, JSON.stringify(risco) + '   esperado embaixo: ' + esperado.naAquec)
   conta('na cor do aquecimento', risco && /245, 158, 11/.test(risco.cor), risco && risco.cor)
 
   await js2('document.getElementById("encolhe").click()')
@@ -443,7 +455,7 @@ app.whenReady().then(async () => {
   const dest = await js2('(() => { const r = [...document.querySelectorAll(".num")].map(e => e.className);'
     + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
     + ' qual: [...document.querySelectorAll(".num.recebendo .fone")].map(e => e.textContent.trim()).join(",") } })()')
-  conta('so quem esta na vez fica destacado', dest.total === 6 && dest.n === 2, JSON.stringify(dest))
+  conta('so quem esta na vez fica destacado', dest.total === esperado.n && dest.n === 2, JSON.stringify(dest))
   conta('e sao o estabelecido da vez e o em aquecimento', /99598-3293/.test(dest.qual) && /97406-8551/.test(dest.qual), dest.qual)
 
   // ── O DIA DO AQUECIMENTO NA LINHA, com o foguinho ─────────────────────────────────────────
@@ -461,9 +473,24 @@ app.whenReady().then(async () => {
   const cnt8551 = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97406-8551/.test(e.textContent));'
     + ' const c = l && l.querySelector(".cnt"); return c ? c.textContent.replace(/\s+/g, " ").trim() : "" })()')
   conta('e o contador dele vem do teto da rampa, nao do campo do chip', /^3\/5/.test(cnt8551), cnt8551)
+  // ── AQUECENDO QUE JA PEGOU A COTA DESTA HORA ──────────────────────────────────────────────
+  // Sem a fila carimbada pelo worker, este numero escrevia "recebendo" em verde e com o contorno
+  // de "recebendo agora" nas horas em que o worker tinha segurado ele - e a Chegada de leads, no
+  // mesmo instante, dizia o contrario. Duas telas discordando sobre quem recebe lead.
+  // E o rotulo NAO pode ser "no limite": a cota da rampa volta na hora seguinte, nao a meia-noite.
+  const naCota = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97700-5566|7700-5566/.test(e.textContent));'
+    + ' if (!l) return null; const c = l.querySelector(".cnt");'
+    + ' return { destacado: /recebendo/.test(l.className), txt: c ? c.textContent.replace(/\\s+/g, " ").trim() : "",'
+    + ' dica: l.getAttribute("title") || "" } })()')
+  conta('aquecendo que pegou a cota da hora NAO fica destacado', naCota && naCota.destacado === false, JSON.stringify(naCota))
+  conta('e o contador dele diz "no ritmo", nao "no limite"',
+    naCota && /7\/20/.test(naCota.txt) && /no ritmo/.test(naCota.txt) && !/no limite/.test(naCota.txt), JSON.stringify(naCota))
+  conta('e o passe de mouse explica que volta daqui a pouco',
+    naCota && /daqui a pouco/.test(naCota.dica) && !/meia-noite/.test(naCota.dica), naCota && naCota.dica)
+
   // O numero que NAO aquece nao pode ganhar o selo - senao o sinal perde o sentido.
   const semSelo = await js2('[...document.querySelectorAll(".num")].filter(e => e.querySelector(".sub .aq")).length')
-  conta('e so o que aquece ganha o selo', semSelo === 1, String(semSelo))
+  conta('e so o que aquece ganha o selo', semSelo === 2, String(semSelo))
 
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
   conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 3, JSON.stringify(voltou))

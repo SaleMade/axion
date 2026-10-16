@@ -23,6 +23,11 @@ const ESTADO = () => ({
     // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e
     // ninguem limpou o campo). Quem manda e o `apto`: o interruptor NAO pode aparecer.
     { numero: '5515977003344', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: true, apto: false, status: 'Restrito' },
+    // AQUECENDO E JA PEGOU A COTA DESTA HORA (fila.st 'bateu'). O teto do DIA e 20 e ele tem 7, ou
+    // seja nao bateu limite nenhum: a rampa libera a cota aos poucos e ele volta na hora seguinte.
+    // E o caso que fazia o app escrever "recebendo" o dia inteiro, antes de o worker passar a
+    // carimbar a fila de quem aquece.
+    { numero: '5515977005566', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 7, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 8, teto: 20, agora: 7 } },
   ],
   vendedores: [],
 })
@@ -53,3 +58,7 @@ contextBridge.exposeInMainWorld('sw', {
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
 // Pra o teste poder simular o que o processo principal devolveria depois de esconder o painel.
 contextBridge.exposeInMainWorld('__painelOff', () => { painelLigado = false })
+// O PROPRIO STUB, pro teste contar a partir dele em vez de repetir o numero na mao. Expectativa
+// escrita a mao quebra toda vez que a lista cresce, e quem le o erro acha que quebrou alguma coisa
+// de verdade - ja aconteceu duas vezes aqui.
+contextBridge.exposeInMainWorld('__stub', () => JSON.parse(JSON.stringify(ESTADO())))
