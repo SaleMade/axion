@@ -30,10 +30,52 @@
   button { cursor: pointer; border: 0; background: none; }
 
   /* ─────────────── barra lateral ─────────────── */
+  /* AS DUAS LARGURAS SAO AS DO main.js (LARGURA_BARRA e LARGURA_BARRA_MIN). Quem manda na geometria
+     e ele, porque e ele que posiciona a view do WhatsApp: numero diferente aqui faria a view passar
+     por baixo da barra ou sobrar um vao. Mudou la, muda aqui. */
   aside {
     width: 268px; flex: 0 0 268px; height: 100vh; background: var(--barra);
     border-right: 1px solid var(--linha); display: flex; flex-direction: column;
+    transition: width .14s ease, flex-basis .14s ease;
   }
+  /* ENCOLHIDA, NAO ESCONDIDA (pedido do Bruno em 16/10: "na versao da coluna esquerda, eu gostaria
+     que ainda ficasse uma coluna fininha mostrando o numero, algo que seja relevante"). Some o que
+     e texto de apoio; fica o que diz de qual numero se trata e como ele esta. */
+  body.fina aside { width: 56px; flex-basis: 56px; }
+  body.fina .marca img, body.fina .marca span, body.fina .busca,
+  body.fina .trava, body.fina #fila, body.fina #preview, body.fina #versao-nova { display: none; }
+  body.fina .marca { padding: 13px 0 10px; justify-content: center; }
+  body.fina .lista { padding: 2px 6px 8px; }
+  body.fina .rodape { flex-direction: column; padding: 6px; }
+  body.fina .rodape button { font-size: 0; padding: 8px 0; justify-content: center; gap: 0; }
+  body.fina .rodape button svg { width: 15px; height: 15px; }
+
+  .encolhe { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px;
+    border-radius: 7px; color: var(--apagado); transition: background .12s, color .12s; }
+  .encolhe:hover { background: rgba(255, 255, 255, .06); color: var(--texto); }
+  .encolhe svg { width: 14px; height: 14px; transition: transform .14s; }
+  body.fina .encolhe svg { transform: rotate(180deg); }
+
+  /* a linha do numero na barra fina: ponto, 4 digitos e o contador, um embaixo do outro */
+  .fino { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 7px 2px; border-radius: 9px; transition: background .12s; }
+  .fino:hover { background: rgba(255, 255, 255, .05); }
+  .fino.ativo { background: rgba(255, 255, 255, .08); }
+  .fino .d { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .fino .c { font-size: 9px; font-variant-numeric: tabular-nums; color: var(--apagado); }
+  .fino .sinal, .fino .pos { margin: 0 0 1px; }
+
+  /* ─────────────── a abinha de voltar o painel ───────────────
+     O painel escondido deixa uma FRESTA de 22px (main.js), e ela existe SO pra isto. Antes nao
+     sobrava pixel nenhum e o unico caminho de volta era Ajustes - foi onde o Bruno se perdeu:
+     "cliquei sem querer numa setinha que esconde o painel, porem eu nao consegui abrir de volta". */
+  .fresta { position: fixed; top: 0; right: 0; width: 22px; height: 100vh; z-index: 5;
+    display: none; align-items: center; justify-content: center;
+    background: var(--barra); border-left: 1px solid var(--linha);
+    color: var(--apagado); transition: background .12s, color .12s; }
+  body.sem-painel .fresta { display: flex; }
+  .fresta:hover { background: rgba(255, 255, 255, .06); color: var(--texto); }
+  .fresta svg { width: 13px; height: 13px; }
   .marca { display: flex; align-items: center; gap: 9px; padding: 15px 16px 12px; }
   .marca img { height: 17px; width: auto; display: block; }
   .marca span { margin-left: auto; font-size: 10.5px; color: var(--apagado); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -230,6 +272,9 @@
     <div class="marca">
       <img src="img/logo.png" alt="SellWave" />
       <span id="versao"></span>
+      <button class="encolhe" id="encolhe" title="Encolher a barra">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
     </div>
 
     <button class="trava" id="trava" title="Travas e ajustes" hidden>
@@ -267,6 +312,10 @@
   </aside>
 
   <main id="palco"></main>
+
+  <button class="fresta" id="fresta" title="Mostrar o painel de venda">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+  </button>
 
   <div class="fundo-modal" id="modal">
     <div class="cartao" id="modal-corpo"></div>

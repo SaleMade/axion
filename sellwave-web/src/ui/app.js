@@ -64,6 +64,11 @@ function desenhaTrava() {
   $('trava-txt').innerHTML = '<b>Trava de proxy desligada</b> · o número abre sem proxy'
 }
 
+// A BARRA ENCOLHIDA E DECISAO GUARDADA, nao estado da sessao: quem gosta dela fina quer ela fina
+// amanha tambem. Quem guarda e o processo principal (sw:barra -> config), porque e ele que tambem
+// precisa do valor pra posicionar a view do WhatsApp.
+let barraFina = false
+
 function desenhaLista() {
   if (!estado.temToken) { lista.innerHTML = ''; return }
   const nums = (estado.numeros || []).filter((n) => {
@@ -87,11 +92,19 @@ function desenhaLista() {
   for (const [dono, itens] of grupos) {
     itens.sort((a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0))
     const ligados = itens.filter((x) => x.roleta).length
-    html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
-      + '<span class="qtd">' + ligados + '/' + itens.length + '</span></div>'
-    html += itens.map(linha).join('')
+    // ENCOLHIDA NAO TEM CABECALHO DE VENDEDOR: em 56px o nome nao cabe e um risco separando grupos
+    // sem dizer de quem sao e so ruido. O dono fica no passe de mouse de cada numero.
+    if (!barraFina) {
+      html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
+        + '<span class="qtd">' + ligados + '/' + itens.length + '</span></div>'
+    }
+    html += itens.map(barraFina ? linhaFina : linha).join('')
   }
   lista.innerHTML = html
+
+  for (const el of lista.querySelectorAll('.fino')) {
+    el.onclick = () => abrir(cheio(el.dataset.nk))
+  }
 
   for (const el of lista.querySelectorAll('.num')) {
     el.onclick = (e) => {
@@ -141,6 +154,28 @@ function corDoContador(n) {
   const teto = Number(n.lim_dia) || 0
   const pct = teto ? (Number(n.leads_hoje) || 0) / teto : 0
   return pct >= 0.8 ? '#f59e0b' : '#24c278'
+}
+
+// A LINHA DA BARRA ENCOLHIDA. So o que o Bruno chamou de "algo que seja relevante": em que estado
+// o numero esta (a cor, ou a posicao na fila), QUAL numero e (os 4 ultimos digitos, que e como a
+// equipe se refere a eles) e quantos leads entraram hoje. O resto esta a um clique de distancia.
+function linhaFina(n) {
+  const nk = numKey(n.numero)
+  const emFila = n.dist === 'limite' && n.fila && n.fila.pos
+  const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
+  const corEstado = corDoContador(n)
+  const sinal = emFila
+    ? '<span class="pos" style="--pc:' + corEstado + '">' + n.fila.pos + '</span>'
+    : '<span class="sinal"' + (corChip ? ' style="background:' + corChip + '"' : '') + '></span>'
+  const quatro = cheio(nk).replace(/\D/g, '').slice(-4)
+  const leads = Number(n.leads_hoje) || 0
+  const teto = Number(n.lim_dia) || 0
+  return '<button class="fino' + (nk === ativo ? ' ativo' : '') + '" data-nk="' + nk + '"'
+    + ' title="' + esc(bonito(cheio(nk))) + (n.dono ? ' · ' + esc(n.dono) : '') + ' · ' + esc(fraseEstado(n)) + '">'
+    + sinal
+    + '<span class="d">' + quatro + '</span>'
+    + '<span class="c" style="color:' + corEstado + '">' + leads + (teto ? '/' + teto : '') + '</span>'
+    + '</button>'
 }
 
 function linha(n) {
@@ -504,6 +539,11 @@ async function recarregaEstado() {
     ? (((estado.vendedores || []).find((x) => x.id === estado.como) || {}).nome || 'vendedor')
     : (estado.nome || ('v' + estado.versao))
   desenhaPreview()
+  // As duas classes que mudam o layout da casca. `sem-painel` acende a abinha de voltar, que so
+  // existe porque o painel escondido deixa uma fresta de 22px (ver main.js).
+  barraFina = !!estado.barraEncolhida
+  document.body.classList.toggle('fina', barraFina)
+  document.body.classList.toggle('sem-painel', estado.painelLigado === false)
   $('versao').title = 'SellWave Web v' + estado.versao
     + (estado.agenteDeOnde === 'servidor' ? ' · motor de conversa atualizado' : '')
   avisaVersao(estado.precisaBaixar ? estado : null)
@@ -566,6 +606,22 @@ async function inicio() {
     return telaVazia()
   }
   telaVazia()
+}
+
+// ENCOLHER E VOLTAR. Quem muda a largura de verdade e o processo principal, porque e ele que
+// reposiciona a view do WhatsApp; aqui so pedimos e pintamos. O estado volta no sw:estado, entao
+// nao ha duas verdades sobre a barra estar fina.
+$('encolhe').onclick = async () => {
+  const quer = !barraFina
+  $('encolhe').title = quer ? 'Voltar a barra' : 'Encolher a barra'
+  try { await window.sw.barra(quer) } catch (_) { /* o estado seguinte corrige */ }
+  await recarregaEstado()
+}
+// A ABINHA DE VOLTAR O PAINEL. O botao de esconder vive DENTRO do painel, entao sem isto o caminho
+// de volta era so Ajustes - e foi exatamente onde o Bruno se perdeu em 16/10.
+$('fresta').onclick = async () => {
+  try { await window.sw.painel(true) } catch (_) { /* idem */ }
+  await recarregaEstado()
 }
 
 $('trava').onclick = janelaAjustes

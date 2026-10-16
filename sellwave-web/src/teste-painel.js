@@ -22,6 +22,11 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 
+// PASTA DE DADOS SEPARADA. O app fixa a pasta em %APPDATA%/sellwave-web, que e onde moram as
+// sessoes pareadas de verdade; sem trocar aqui, o teste escreve dentro delas e ainda esbarra na
+// trava de instancia unica quando o app esta aberto. Mesma guarda que o SW_SMOKE usa.
+app.setPath('userData', path.join(app.getPath('appData'), 'sellwave-web-teste'))
+
 const PROJ = path.join(__dirname, '..')
 const PRELOAD = path.join(__dirname, 'teste-painel-preload.js')
 
@@ -188,6 +193,59 @@ app.whenReady().then(async () => {
     /sair/.test(x.classe) && x.borda !== '0px', JSON.stringify(x))
 
   conta('nenhum erro de javascript na tela', erros.length === 0, erros.join(' | ').slice(0, 200))
+
+  // ══ A CASCA (barra lateral): encolher e voltar ═════════════════════════════════════════════
+  ponto = 'casca'
+  const w2 = new BrowserWindow({
+    show: false, width: 1200, height: 900,
+    webPreferences: { preload: path.join(__dirname, 'teste-casca-preload.js'), sandbox: false, contextIsolation: true },
+  })
+  const erros2 = []
+  w2.webContents.on('console-message', (ev) => {
+    if (ev && (ev.level === 'error' || ev.level === 'warning')) erros2.push(String(ev.message || ''))
+  })
+  await w2.loadFile(path.join(PROJ, 'src/ui/index.html'))
+  const js2 = (c) => w2.webContents.executeJavaScript(c, true)
+  await espera(1200)
+
+  const temBt = await js2('!!document.getElementById("encolhe") && !!document.getElementById("fresta")')
+  conta('a casca tem o botao de encolher e a abinha de voltar', temBt)
+
+  const largaAntes = await js2('document.querySelector("aside").getBoundingClientRect().width')
+  conta('a barra comeca larga', Math.round(largaAntes) === 268, String(largaAntes))
+
+  await js2('document.getElementById("encolhe").click()')
+  await espera(600)
+  const fina = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), classe: document.body.className, pediu: (window.__ver()).filter(c => c.nome === "barra").map(c => c.args[0]) })')
+  conta('clicar encolhe a barra pra 56px', fina.larg === 56, JSON.stringify(fina))
+  conta('e avisa o processo principal, que e quem move a view', JSON.stringify(fina.pediu) === '[true]', JSON.stringify(fina.pediu))
+
+  const dentro = await js2('({ fino: document.querySelectorAll(".fino").length, d: [...document.querySelectorAll(".fino .d")].map(e => e.textContent).join(","), c: [...document.querySelectorAll(".fino .c")].map(e => e.textContent).join(","), vend: document.querySelectorAll(".vend").length, busca: getComputedStyle(document.querySelector(".busca")).display })')
+  conta('encolhida, mostra um numero por linha', dentro.fino === 3, JSON.stringify(dentro.fino))
+  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,0653', dentro.d)
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0/70', dentro.c)
+  conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
+
+  await js2('document.getElementById("encolhe").click()')
+  await espera(600)
+  const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
+  conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 2, JSON.stringify(voltou))
+
+  // A ABINHA so aparece com o painel escondido, e e o unico caminho de volta fora de Ajustes.
+  const escondida = await js2('getComputedStyle(document.getElementById("fresta")).display')
+  conta('com o painel ligado, a abinha nao aparece', escondida === 'none', escondida)
+  await js2('window.__painelOff()')
+  await js2('(async () => { await recarregaEstado() })()')
+  await espera(500)
+  const aparece = await js2('({ d: getComputedStyle(document.getElementById("fresta")).display, w: Math.round(document.getElementById("fresta").getBoundingClientRect().width) })')
+  conta('com o painel escondido, a abinha aparece na fresta', aparece.d === 'flex' && aparece.w === 22, JSON.stringify(aparece))
+  await js2('document.getElementById("fresta").click()')
+  await espera(400)
+  const pediu = JSON.parse(await js2('JSON.stringify((window.__ver()).filter(c => c.nome === "painel").map(c => c.args[0]))'))
+  conta('clicar na abinha manda mostrar o painel de novo', JSON.stringify(pediu) === '[true]', JSON.stringify(pediu))
+
+  conta('nenhum erro de javascript na casca', erros2.length === 0, erros2.join(' | ').slice(0, 200))
+  w2.destroy()
 
   console.log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram')
   if (falhas.length) console.log('  falharam: ' + falhas.join(', '))
