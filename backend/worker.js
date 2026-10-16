@@ -5127,6 +5127,360 @@ async function handleStatePulso(req, env) {
   return json({ version: Number(row && row.version) || 0, updated_at: Number(row && row.updated_at) || 0 });
 }
 
+// ══ ARQUIVO DE LEADS (12/10/2026, item 22 da auditoria) ═════════════════════════════════════
+//
+// O PROBLEMA. O estado inteiro mora numa linha do D1, que aceita 2 MB. Em 12/10 ela estava em 66%
+// e subia ~27 KB por dia; metade do peso (675 KB) era pedido ENCERRADO (Pago, Cancelado, Devolvido,
+// Roubos, Frustrados), que ninguem mexe mais mas que toda conta de receita e comissao precisa ler.
+// Cortar historico (o _trimBlobData) so adia: o que pesa e o pedido inteiro, nao so a trilha dele.
+//
+// O CONSERTO. O pedido encerrado e parado ha dias sai da linha e vai pra tabela `leads_arquivo`
+// (uma linha por pedido, o JSON inteiro). E o resto do worker NAO FICA SABENDO: sao 51 leituras e
+// 34 gravacoes do dashboard_state espalhadas por 45 funcoes (webhook, cron, saque, bot, pixel...),
+// e ensinar cada uma a olhar em dois lugares era o jeito certo de esquecer uma. Em vez disso, o
+// env.DB entra envelopado nas duas portas do worker (fetch e scheduled) e so os SQL do estado sao
+// interceptados:
+//   LEITURA  ('SELECT data... FROM dashboard_state'): devolve o estado com os arquivados de volta
+//            em data.leads. Quem le enxerga exatamente o que sempre enxergou.
+//   GRAVACAO ('UPDATE dashboard_state SET data=?...'): reparte. Arquivado intocado continua no
+//            arquivo; arquivado que mudou e segue encerrado e atualizado la; arquivado que saiu de
+//            coluna encerrada (estorno, reabertura) VOLTA pra linha; arquivado que nao veio na
+//            gravacao foi apagado por quem gravou. Tudo no MESMO lote do UPDATE (transacao), com a
+//            mesma trava de versao: ou grava a linha e o arquivo juntos, ou nao grava nada.
+// Quem decide ARQUIVAR e so o _arqCron (encerrado + parado ha `dias`), nunca a gravacao comum.
+//
+// COMO A LINHA FICA. '{"_arq":<geracao>, ...chaves..., "leads":[...],"_fim":1}'. A geracao sobe a
+// cada mudanca no arquivo e e a chave do cache por isolate (o arquivo so e relido do banco quando
+// ela muda). `leads` por ultimo e `_fim` fechando deixam a juncao ser um corte de string, sem parse.
+// Quem le pelo worker nunca ve `_arq` nem `_fim`. Linha sem `_arq` na frente = arquivo nunca usado:
+// passagem direta, byte a byte como era antes deste bloco.
+//
+// SE FOR MEXER NO ESTADO POR FORA DO WORKER (script no D1): a linha nao tem mais todos os pedidos.
+// Leia junto a `leads_arquivo`, ou use GET /api/state. Ver a memoria `arquivo-de-leads`.
+const _ARQ_COLS = new Set(['Pago', 'Pagos', 'Cancelado', 'Cancelado sem Custo', 'Devolvido', 'Roubos', 'Frustrados']);
+const _ARQ_SQL_GRAVA = 'UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?';
+const _ARQ_FIM = '],"_fim":1}';
+const _ARQ_COND = ' (SELECT version FROM dashboard_state WHERE id = 1) = ?';
+let _arqCache = null;              // { gen, map: Map(id -> json), joined, bytes } do arquivo, por geracao
+const _arqVerGen = new Map();      // versao do estado -> geracao do arquivo naquela versao (fato do banco, vale pra todos)
+let _arqVazioAte = 0;              // ate quando vale o "o arquivo esta vazio" (so consultado com geracao 0)
+let _arqTabelaOk = false;
+
+function _arqTerminal(l) { return !!l && _ARQ_COLS.has(String(l.col || '')); }
+function _arqGenDe(s) { const m = /^\{"_arq":(\d+)[,}]/.exec(String(s || '').slice(0, 40)); return m ? Number(m[1]) : 0; }
+function _arqAnota(ver, gen) {
+  const v = Number(ver); if (!Number.isFinite(v)) return;
+  _arqVerGen.set(v, gen);
+  if (_arqVerGen.size > 96) { let n = 0; for (const k of _arqVerGen.keys()) { _arqVerGen.delete(k); if (++n >= 32) break; } }
+}
+function _arqMontaCache(gen, linhas) {
+  const map = new Map();
+  for (const r of (linhas || [])) {
+    const id = String(r && r.id != null ? r.id : ''), js = r && r.json;
+    if (!id || typeof js !== 'string' || js[0] !== '{') continue;
+    // linha corrompida no arquivo NAO pode derrubar o estado de todo mundo: confere e pula
+    try { JSON.parse(js); } catch (_) { console.error('[arquivo] linha invalida, ignorada: ' + id); continue; }
+    map.set(id, js);
+  }
+  return _arqCacheDeMap(gen, map);
+}
+function _arqCacheDeMap(gen, map) {
+  const joined = [...map.values()].join(',');
+  return { gen, map, joined, bytes: joined ? new TextEncoder().encode(joined).length : 0 };
+}
+async function _arqGaranteTabela(real) {
+  if (_arqTabelaOk) return;
+  await real.prepare('CREATE TABLE IF NOT EXISTS leads_arquivo (id TEXT PRIMARY KEY, json TEXT NOT NULL, col TEXT, ts INTEGER)').run();
+  _arqTabelaOk = true;
+}
+// Com geracao 0 a linha diz "nunca arquivei". Isto confere se e verdade (uma consulta barata, e a
+// resposta "vazio" vale 5 min por isolate). Linha em geracao 0 COM pedido no arquivo so acontece se
+// alguem regravou o estado por fora do worker; ai a leitura junta assim mesmo e a gravacao conserta.
+async function _arqTemSobra(real) {
+  if (Date.now() < _arqVazioAte) return false;
+  try {
+    const r = await real.prepare('SELECT COUNT(*) n FROM leads_arquivo').first();
+    if (r && Number(r.n) > 0) return true;
+  } catch (_) { /* tabela ainda nao existe = vazio */ }
+  _arqVazioAte = Date.now() + 300000;
+  return false;
+}
+// Junta os arquivados de volta em data.leads. Caminho rapido = corte de string (a linha no formato
+// canonico); qualquer outra coisa cai no caminho lento, por parse, que tambem tira duplicado.
+function _arqJunta(s, cache) {
+  const m = /^\{"_arq":\d+,/.exec(s.slice(0, 40));
+  if (m && s.endsWith(_ARQ_FIM)) {
+    const corpo = s.slice(m[0].length, s.length - _ARQ_FIM.length);   // ..."leads":[ a , b   (sem o ] final)
+    if (!cache.joined) return '{' + corpo + ']}';
+    return '{' + corpo + (corpo.endsWith('[') ? '' : ',') + cache.joined + ']}';
+  }
+  let d; try { d = JSON.parse(s); } catch (_) { return s; }
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return s;
+  delete d._arq; delete d._fim;
+  const blob = Array.isArray(d.leads) ? d.leads : [];
+  const tem = new Set(); for (const l of blob) if (l && l.id != null && l.id !== '') tem.add(String(l.id));
+  const extra = [];
+  for (const [id, js] of cache.map) { if (tem.has(id)) continue; try { extra.push(JSON.parse(js)); } catch (_) {} }
+  d.leads = blob.concat(extra);
+  return JSON.stringify(d);
+}
+async function _arqAbre(real, sql, row) {
+  if (!row || typeof row.data !== 'string') return row;
+  let gen = _arqGenDe(row.data);
+  let cache = _arqCache;
+  let sobra = false;
+  if (gen === 0) {
+    sobra = await _arqTemSobra(real);
+    if (!sobra) { if (row.version != null) _arqAnota(row.version, 0); return row; }   // arquivo nunca usado: passagem direta
+  }
+  if (sobra || !cache || cache.gen !== gen) {
+    // LEITURA CASADA: a linha e o arquivo do MESMO instante (lote = transacao). Sem isto, uma
+    // gravacao entre as duas leituras mostraria um pedido duas vezes, ou nenhuma.
+    const lote = await real.batch([real.prepare(sql), real.prepare('SELECT id, json FROM leads_arquivo ORDER BY rowid')]);
+    const novo = lote && lote[0] && lote[0].results && lote[0].results[0];
+    if (!novo || typeof novo.data !== 'string') return novo || row;
+    row = novo;
+    gen = _arqGenDe(row.data);
+    cache = _arqMontaCache(gen, (lote[1] && lote[1].results) || []);
+    if (gen > 0) _arqCache = cache;
+  }
+  if (row.version != null) _arqAnota(row.version, gen);
+  const out = { ...row, data: _arqJunta(row.data, cache) };
+  // por fora do JSON: quem precisa (tamanho real da linha, o cron do arquivo) le daqui
+  Object.defineProperty(out, '__arq', { value: { gen, n: cache.map.size, bytes: cache.bytes, map: cache.map }, enumerable: false });
+  return out;
+}
+// A gravacao. `binds` = [dataStr, versaoNova, agora, quem, versaoLida], na ordem do UPDATE.
+// `opts.arquivar` / `opts.voltar` (Set de ids) so vem do cron e da rota de administracao.
+async function _arqGrava(real, sql, binds, opts, db) {
+  const [dataStr, newVer, now, by, oldVer] = binds;
+  const simples = () => real.prepare(sql).bind(...binds).run();
+  if (typeof dataStr !== 'string') return simples();
+  const querMexer = !!(opts && (opts.arquivar || opts.voltar));
+  let gen = _arqVerGen.get(Number(oldVer));
+  let cache = _arqCache;
+  if (gen === 0 && !querMexer && !(await _arqTemSobra(real))) return simples();   // arquivo nunca usado: grava como sempre gravou
+  if (gen === undefined || gen === 0 || !cache || cache.gen !== gen) {
+    // Nao sei (ou nao tenho mais) o arquivo da versao que este gravador leu: leio do banco, casado
+    // com a versao. Se a versao ja andou, a trava do UPDATE ia recusar de qualquer jeito.
+    if (querMexer) await _arqGaranteTabela(real);
+    let lote = null;
+    try {
+      lote = await real.batch([
+        real.prepare('SELECT version, substr(data, 1, 40) pre FROM dashboard_state WHERE id = 1'),
+        real.prepare('SELECT id, json FROM leads_arquivo ORDER BY rowid'),
+      ]);
+    } catch (_) { return simples(); }   // sem tabela = sem arquivo
+    const st = lote[0] && lote[0].results && lote[0].results[0];
+    if (!st || Number(st.version) !== Number(oldVer)) return { success: true, meta: { changes: 0 } };
+    gen = _arqGenDe(st.pre);
+    cache = _arqMontaCache(gen, (lote[1] && lote[1].results) || []);
+    if (gen > 0) _arqCache = cache;
+    _arqAnota(oldVer, gen);
+    if (gen === 0 && !cache.map.size && !querMexer) return simples();
+  }
+  let d; try { d = JSON.parse(dataStr); } catch (_) { return simples(); }
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return simples();
+
+  const A = cache.map;
+  const novoMap = new Map(A);
+  const leads = Array.isArray(d.leads) ? d.leads : [];
+  const blob = [], stmts = [], vistos = new Set();
+  const agora = Math.floor(Date.now() / 1000);
+  const ins = (id, js, l) => real.prepare('INSERT OR REPLACE INTO leads_arquivo (id, json, col, ts) SELECT ?, ?, ?, ? WHERE' + _ARQ_COND).bind(id, js, String(l.col || ''), agora, oldVer);
+  const upd = (id, js, l) => real.prepare('UPDATE leads_arquivo SET json = ?, col = ?, ts = ? WHERE id = ? AND' + _ARQ_COND).bind(js, String(l.col || ''), agora, id, oldVer);
+  const del = (id) => real.prepare('DELETE FROM leads_arquivo WHERE id = ? AND' + _ARQ_COND).bind(id, oldVer);
+  let nBlobId = 0, nArq = 0;
+  for (const l of leads) {
+    const id = (l && typeof l === 'object' && l.id != null && l.id !== '') ? String(l.id) : '';
+    const js = JSON.stringify(l);
+    if (!id) { blob.push(js); continue; }
+    if (vistos.has(id)) { if (!A.has(id)) blob.push(js); continue; }   // id repetido: se e arquivado, a 1a copia ja decidiu
+    vistos.add(id);
+    if (A.has(id)) {
+      if (opts && opts.voltar && opts.voltar.has(id)) { stmts.push(del(id)); novoMap.delete(id); blob.push(js); nBlobId++; continue; }
+      if (A.get(id) === js) { nArq++; continue; }                                   // segue arquivado, intocado
+      if (_arqTerminal(l)) { stmts.push(upd(id, js, l)); novoMap.set(id, js); nArq++; continue; }   // mudou e segue encerrado
+      stmts.push(del(id)); novoMap.delete(id); blob.push(js); nBlobId++; continue;     // reabriu: volta pra linha
+    }
+    if (opts && opts.arquivar && opts.arquivar.has(id) && _arqTerminal(l)) { stmts.push(ins(id, js, l)); novoMap.set(id, js); nArq++; continue; }
+    blob.push(js); nBlobId++;
+  }
+  // Arquivado que nao veio na gravacao = quem gravou apagou. Um ou dois, apaga (e o que a exclusao
+  // de pedido faz). Mais que isso so com a liberacao explicita do diretor (allow_shrink): sem ela
+  // os pedidos FICAM no arquivo e reaparecem, que e o lado seguro de errar.
+  const sumiram = []; for (const id of A.keys()) if (!vistos.has(id)) sumiram.push(id);
+  const teto = (db && db.__arqSumirAte != null) ? db.__arqSumirAte : 2;
+  if (sumiram.length && sumiram.length <= teto) { for (const id of sumiram) { stmts.push(del(id)); novoMap.delete(id); } }
+  else if (sumiram.length) console.error('[arquivo] gravacao de ' + by + ' veio sem ' + sumiram.length + ' pedido(s) arquivado(s); mantidos');
+  // A CONTA TEM QUE FECHAR: cada id que veio esta na linha OU no arquivo, nunca nos dois, nunca em
+  // nenhum. Se um dia nao fechar (bug novo aqui dentro), nao reparte: grava tudo na linha.
+  if (nBlobId + nArq !== vistos.size) { console.error('[arquivo] conta nao fechou (' + nBlobId + '+' + nArq + ' x ' + vistos.size + '); gravando sem repartir'); return simples(); }
+
+  // Linha em geracao 0 com pedido no arquivo (estado regravado por fora): mesmo sem nada pra mover,
+  // a linha volta pro formato canonico agora, senao ela nunca mais saberia do arquivo.
+  const genNovo = (stmts.length || (gen === 0 && A.size > 0)) ? gen + 1 : gen;
+  if (genNovo === 0) return simples();
+  const resto = {};
+  for (const k of Object.keys(d)) { if (k !== '_arq' && k !== '_fim' && k !== 'leads') resto[k] = d[k]; }
+  const cab = JSON.stringify(resto);
+  const linha = '{"_arq":' + genNovo + (cab.length > 2 ? ',' + cab.slice(1, -1) : '') + ',"leads":[' + blob.join(',') + _ARQ_FIM;
+  const grava = real.prepare(sql).bind(linha, newVer, now, by, oldVer);
+  let res;
+  if (!stmts.length) res = await grava.run();
+  else { const rs = await real.batch([...stmts, grava]); res = rs[rs.length - 1]; }
+  if (res && res.meta && res.meta.changes > 0) {
+    _arqAnota(newVer, genNovo);
+    if (genNovo !== gen) _arqCache = _arqCacheDeMap(genNovo, novoMap);
+  }
+  return res;
+}
+function _arqTipoSql(sql) {
+  const s = String(sql);
+  if (s.indexOf('dashboard_state') < 0) return null;
+  const n = s.replace(/\s+/g, ' ').trim();
+  if (/^SELECT data(, version(, updated_at, updated_by)?)? FROM dashboard_state WHERE id ?= ?1$/i.test(n)) return 'le';
+  if (/^UPDATE dashboard_state SET data ?= ?\?, version ?= ?\?, updated_at ?= ?\?, updated_by ?= ?\? WHERE id ?= ?1 AND version ?= ?\?$/i.test(n)) return 'grava';
+  return null;   // SELECT version, json_extract e o INSERT da primeira gravacao passam direto
+}
+// O envelope. Devolve um env novo (por requisicao) com o DB interceptando SO o estado.
+function _arqEnvolve(env) {
+  if (!env || !env.DB || env.DB.__arq) return env;
+  const real = env.DB;
+  const naoDa = (o) => { throw new Error('arquivo de leads: ' + o + ' no dashboard_state nao e suportado; use .first() na leitura e .bind(...).run() na gravacao'); };
+  const db = {
+    __arq: true, __real: real, __arqSumirAte: 2,
+    prepare(sql) {
+      const tipo = _arqTipoSql(sql);
+      if (!tipo) return real.prepare(sql);
+      if (tipo === 'le') {
+        const st = { __arqStmt: true, bind() { return st; }, first: async (col) => { const row = await _arqAbre(real, sql, await real.prepare(sql).first()); return (col && row) ? row[col] : row; }, all: () => naoDa('.all()'), run: () => naoDa('.run()'), raw: () => naoDa('.raw()') };
+        return st;
+      }
+      const mk = (binds) => ({ __arqStmt: true, bind: (...b) => mk(b), run: () => _arqGrava(real, sql, binds, null, db), first: () => naoDa('.first()'), all: () => naoDa('.all()'), raw: () => naoDa('.raw()') });
+      return mk([]);
+    },
+    batch(lista) { for (const s of (lista || [])) if (s && s.__arqStmt) naoDa('batch()'); return real.batch(lista); },
+    exec: (sql) => real.exec(sql),
+    dump: () => real.dump(),
+    withSession: (...a) => (real.withSession ? real.withSession(...a) : real),
+    __arqGrava: (binds, opts) => _arqGrava(real, _ARQ_SQL_GRAVA, binds, opts, db),
+  };
+  return { ...env, DB: db };
+}
+// O que mora no arquivo nao pesa na linha: o corte de emergencia (1,6 MB) olha so o que vai ser gravado.
+function _arqPassouDoTeto(dataStr) {
+  const fora = (_arqCache && _arqCache.gen > 0) ? _arqCache.bytes : 0;
+  if (dataStr.length - fora <= 1200000) return false;
+  return new TextEncoder().encode(dataStr).length - fora > 1600000;
+}
+// Hora de um carimbo do pedido, em ms. Aceita ISO, epoch (s ou ms) e o 'DD/MM HH:MM' do Kanban
+// (hora de Brasilia, sem ano: assume o ano corrente e volta um se cair no futuro).
+function _arqTempo(v, agoraMs) {
+  if (v == null || v === '') return 0;
+  const s = String(v);
+  if (typeof v === 'number' || /^\d{9,14}$/.test(s)) { let n = Number(v); if (n < 1e11) n *= 1000; return (n > 1.5e12 && n < agoraMs + 172800000) ? n : 0; }
+  if (/^\d{4}-\d\d-\d\dT/.test(s)) { const x = Date.parse(s); return (Number.isFinite(x) && x < agoraMs + 172800000) ? x : 0; }
+  const m = /^(\d\d)\/(\d\d)(?:\/(\d{4}))? (\d\d):(\d\d)/.exec(s);
+  if (!m) return 0;
+  let ano = m[3] ? Number(m[3]) : new Date(agoraMs - 10800000).getUTCFullYear();
+  let x = Date.UTC(ano, Number(m[2]) - 1, Number(m[1]), Number(m[4]) + 3, Number(m[5]));
+  if (!m[3] && x > agoraMs + 86400000) x = Date.UTC(ano - 1, Number(m[2]) - 1, Number(m[1]), Number(m[4]) + 3, Number(m[5]));
+  return Number.isFinite(x) ? x : 0;
+}
+function _arqUltimoMov(l, agoraMs) {
+  let t = 0;
+  const p = (v) => { const x = _arqTempo(v, agoraMs); if (x > t) t = x; };
+  for (const h of (Array.isArray(l.hist) ? l.hist : [])) p(h && h.time);
+  for (const c of (Array.isArray(l.comments) ? l.comments : [])) p(c && c.time);
+  p(l.pago_ts); p(l.ship_ts); p(l.entrega_ts); p(l.aceito_em);
+  if (!t) p(l.id);   // o id e o ms da criacao
+  return t;
+}
+function _arqConfig(txt) {
+  let c = {}; try { c = JSON.parse(txt || '{}') || {}; } catch (_) { c = {}; }
+  const num = (v, pad, min, max) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : pad; };
+  return { on: c.on === 1 || c.on === true, dias: num(c.dias, 7, 2, 365), lote: num(c.lote, 25, 1, 60) };
+}
+// O PASSO DO CRON: arquiva ate `lote` pedidos encerrados e parados ha `dias`, os mais antigos antes.
+// Desligado (app_config leads_arq sem on:1) sai na primeira linha.
+async function _arqCron(env, forca) {
+  if (!env.DB || !env.DB.__arq) return { ok: false, error: 'sem envelope' };
+  const cfg = { ..._arqConfig(await _readConfig(env, 'leads_arq')), ...(forca || {}) };
+  if (!forca && !cfg.on) return { ok: true, desligado: true };
+  await _arqGaranteTabela(env.DB.__real);
+  const agoraMs = Date.now();
+  const corte = agoraMs - cfg.dias * 86400000;
+  for (let tent = 0; tent < 3; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row || !row.data) return { ok: true, n: 0 };
+    let data; try { data = JSON.parse(row.data); } catch (_) { return { ok: false, error: 'estado invalido' }; }
+    const ja = (row.__arq && row.__arq.map) || new Map();
+    const cand = [];
+    for (const l of (Array.isArray(data.leads) ? data.leads : [])) {
+      if (!l || l.id == null || l.id === '' || ja.has(String(l.id)) || !_arqTerminal(l)) continue;
+      const t = _arqUltimoMov(l, agoraMs);
+      if (t > 0 && t <= corte) cand.push({ id: String(l.id), t });
+    }
+    if (!cand.length) return { ok: true, n: 0, arquivados: ja.size };
+    cand.sort((a, b) => a.t - b.t);
+    const ids = new Set(cand.slice(0, cfg.lote).map((c) => c.id));
+    const res = await env.DB.__arqGrava([row.data, (row.version || 0) + 1, Math.floor(agoraMs / 1000), 'arquivo:cron', row.version], { arquivar: ids });
+    if (res && res.meta && res.meta.changes > 0) return { ok: true, n: ids.size, restam: cand.length - ids.size, arquivados: ja.size + ids.size };
+    await new Promise((r) => setTimeout(r, 20 * (tent + 1)));   // outra escrita ganhou: rele e refaz
+  }
+  return { ok: false, error: 'conflito' };
+}
+// GET  /api/state/arquivo                         -> situacao (so diretor)
+// POST /api/state/arquivo { acao: 'ligar' | 'desligar', dias?, lote? }
+//                         { acao: 'rodar', dias?, lote? }      roda um passo agora
+//                         { acao: 'voltar', max? }             devolve pedidos do arquivo pra linha
+async function handleStateArquivo(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const real = env.DB.__real || env.DB;
+  const situacao = async () => {
+    let arq = { n: 0, bytes: 0 }, linha = { bytes: 0, gen: 0, version: 0 };
+    try { const r = await real.prepare('SELECT COUNT(*) n, COALESCE(SUM(LENGTH(CAST(json AS BLOB))), 0) b FROM leads_arquivo').first(); arq = { n: Number(r && r.n) || 0, bytes: Number(r && r.b) || 0 }; } catch (_) {}
+    try { const r = await real.prepare('SELECT LENGTH(CAST(data AS BLOB)) b, substr(data, 1, 40) pre, version FROM dashboard_state WHERE id = 1').first(); linha = { bytes: Number(r && r.b) || 0, gen: _arqGenDe(r && r.pre), version: Number(r && r.version) || 0 }; } catch (_) {}
+    return { ok: true, config: _arqConfig(await _readConfig(env, 'leads_arq')), arquivo: arq, linha, pct: Math.round((linha.bytes / 2000000) * 100) };
+  };
+  if (req.method === 'GET') return json(await situacao());
+  const b = await req.json().catch(() => ({}));
+  const acao = String((b && b.acao) || '');
+  if (acao === 'ligar' || acao === 'desligar') {
+    const atual = _arqConfig(await _readConfig(env, 'leads_arq'));
+    const novo = _arqConfig(JSON.stringify({ ...atual, ...(b.dias != null ? { dias: b.dias } : {}), ...(b.lote != null ? { lote: b.lote } : {}), on: acao === 'ligar' ? 1 : 0 }));
+    await _writeConfig(env, 'leads_arq', JSON.stringify({ on: novo.on ? 1 : 0, dias: novo.dias, lote: novo.lote }));
+    return json(await situacao());
+  }
+  if (acao === 'rodar') {
+    const base = _arqConfig(JSON.stringify({ dias: b.dias, lote: b.lote }));
+    const r = await _arqCron(env, { dias: base.dias, lote: base.lote });
+    return json({ ...(await situacao()), passo: r });
+  }
+  if (acao === 'voltar') {
+    const max = Math.min(80, Math.max(1, Number(b.max) || 40));
+    for (let tent = 0; tent < 3; tent++) {
+      const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+      const mapa = (row && row.__arq && row.__arq.map) || new Map();
+      if (!mapa.size) return json({ ...(await situacao()), voltaram: 0 });
+      const ids = [...mapa.keys()].slice(-max);
+      let peso = 0; for (const id of ids) peso += mapa.get(id).length;
+      const cheia = row.data.length - ((row.__arq && row.__arq.bytes) || 0) + peso;
+      // 1,5 MB e a folga de sempre. Com `forca` (desfazer tudo numa emergencia) aceita ate 1,9 MB:
+      // desligar o arquivo de vez exige trazer TODOS de volta, e o estado inteiro ja passa de 1,5 MB.
+      if (cheia > (b.forca ? 1900000 : 1500000)) return err('Não cabe: a linha passaria de ' + (b.forca ? '1,9' : '1,5') + ' MB', 409);
+      const res = await env.DB.__arqGrava([row.data, (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'arquivo:volta:' + String(u.id), row.version], { voltar: new Set(ids) });
+      if (res && res.meta && res.meta.changes > 0) return json({ ...(await situacao()), voltaram: ids.length });
+      await new Promise((r) => setTimeout(r, 20 * (tent + 1)));
+    }
+    return err('Conflito ao gravar. Tente de novo.', 409);
+  }
+  return err('acao invalida', 400);
+}
+
 // ══ TRIM DO BLOB (29/09/2026) ═══════════════════════════════════════════════
 // Problema: o blob cresce sem teto — cada pedido add ~2,3 KB de hist/comments.
 // Este endpoint enxuga de forma atômica (CAS interno), sem race condition.
@@ -5234,7 +5588,7 @@ async function handleGetState(req, env) {
   // caindo pro vazio sem derrubar a resposta.
   // PELO CACHE DE VERSAO (14/10/2026, ver _dashRawAtual): a tela recebe o mesmo texto e a mesma versao
   // que o banco tem agora; so nao baixa 1,47 MB quando nada mudou desde a ultima leitura do isolate.
-  const _rowP = _dashRawAtual(env).then((r) => (r ? { data: r.raw, version: r.version, updated_at: r.updated_at, updated_by: r.updated_by } : null));
+  const _rowP = _dashRawAtual(env).then((r) => (r ? { data: r.raw, version: r.version, updated_at: r.updated_at, updated_by: r.updated_by, __arq: r.arq || null } : null));
   const _teamP = _stateTeam(req, env, uVis);
   const _conexP = _stateConexoes(env, uVis);
   const _qualityP = env.DB.prepare('SELECT display_phone, quality FROM wa_api_numbers WHERE quality IS NOT NULL').all();
@@ -5269,12 +5623,13 @@ async function handleGetState(req, env) {
       // UMA VEZ POR VERSION (22/09/2026): o TextEncoder percorre os 562 KB da linha inteira e o
       // numero so muda quando o blob muda. Era CPU do worker em toda leitura do diretor.
       if (_blobTamCache.ver !== row.version) {
-        _blobTamCache = { ver: row.version, bytes: new TextEncoder().encode(String(row.data || '')).length };
+        // menos o que veio do arquivo de leads: aquilo nao mora na linha, entao nao conta pro teto dela
+        _blobTamCache = { ver: row.version, bytes: new TextEncoder().encode(String(row.data || '')).length - ((row.__arq && row.__arq.bytes) || 0), arq: row.__arq ? { n: row.__arq.n, bytes: row.__arq.bytes } : null };
       }
       const bytes = _blobTamCache.bytes;
       // TETO DE 2 MB, NAO 1 MB (29/09/2026): e o limite de linha do D1 na documentacao oficial. O medidor
       // dividia por 1.048.576 e mostrava 75% quando o estado estava em 39% do teto de verdade.
-      blob = { bytes, teto: 2000000, pct: Math.round((bytes / 2000000) * 100) };
+      blob = { bytes, teto: 2000000, pct: Math.round((bytes / 2000000) * 100), arquivo: _blobTamCache.arq || null };
     } catch (_) {}
   }
   // ══ O QUE ESTA CONECTADO NO MUNDO DE QUEM ESTA OLHANDO ═════════════════
@@ -7658,6 +8013,8 @@ async function handlePostState(req, env) {
   // sumiria com um monte de registro de uma vez. Exclusão pontual passa normal.
   // `allow_shrink` SO VALE PRO DIRETOR (06/10/2026, item 12): a flag era lida de qualquer login, e
   // nenhuma tela manda ela - so quem montasse o POST na mao. Pra cargo restrito a guarda roda sempre.
+  // A liberacao explicita do diretor vale tambem pros pedidos que moram no arquivo de leads.
+  if (body.allow_shrink && isDirector(u) && env.DB && env.DB.__arq) env.DB.__arqSumirAte = Infinity;
   if (!(body.allow_shrink && isDirector(u)) && current?.data) {
     let cur = {};
     try { cur = JSON.parse(current.data); } catch (_) { cur = {}; }
@@ -7690,7 +8047,7 @@ async function handlePostState(req, env) {
   // comissao e estorno. Agora so corta passando de 1,6 MB (80% do teto): segue sendo a rede contra o
   // "para TODO salvamento", sem comer dado com folga sobrando. Bytes, nao length: acento pesa 2 bytes.
   let dataStr = JSON.stringify(body.data);
-  if (dataStr.length > 1200000 && new TextEncoder().encode(dataStr).length > 1600000) {
+  if (_arqPassouDoTeto(dataStr)) {
     _trimBlobData(body.data);
     dataStr = JSON.stringify(body.data);
   }
@@ -7768,7 +8125,7 @@ async function handlePedidoNovo(req, env) {
     if (!leadsD.some((l) => l && String(l.id) === idStr)) return err('Seu cargo não cadastra pedido', 403);
     if (leadsD.length !== leadsAtual.length + 1) return err('Gravação recusada: mexeria em outros pedidos', 422);
     let dataStr = JSON.stringify(d);
-    if (dataStr.length > 1200000 && new TextEncoder().encode(dataStr).length > 1600000) { _trimBlobData(d); dataStr = JSON.stringify(d); }
+    if (_arqPassouDoTeto(dataStr)) { _trimBlobData(d); dataStr = JSON.stringify(d); }
     const g = await env.DB.prepare('UPDATE dashboard_state SET data = ?, version = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ?')
       .bind(dataStr, (row.version || 0) + 1, Math.floor(Date.now() / 1000), u.user_id, row.version).run();
     if (g && g.meta && g.meta.changes > 0) return json({ ok: true, id: lead.id, version: (row.version || 0) + 1 });
@@ -8193,23 +8550,25 @@ let _dashCache = null, _dashCacheT = 0;
 // texto guardado): quem mexer no objeto devolvido nao suja a copia dos outros por mais tempo do que ja
 // sujava antes. So a ida ao banco mudou.
 let _dashRaw = null, _dashRawV = null, _dashRawMeta = null, _dashRawLido = 0;
+let _dashRawArq = null;   // { n, bytes } dos pedidos que vieram do arquivo de leads nesta leitura (ver ARQUIVO DE LEADS)
 async function _dashRawAtual(env) {
   const agora = Date.now();
   if (_dashRaw != null && _dashRawV != null && (agora - _dashRawLido) < 120000) {
     try {
       const v = await env.DB.prepare('SELECT version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
-      if (v && Number(v.version) === _dashRawV) return { raw: _dashRaw, version: _dashRawV, updated_at: v.updated_at, updated_by: v.updated_by };
+      if (v && Number(v.version) === _dashRawV) return { raw: _dashRaw, version: _dashRawV, updated_at: v.updated_at, updated_by: v.updated_by, arq: _dashRawArq };
     } catch (e) {
       // Banco nao respondeu a pergunta da versao: quem le recebe o ultimo texto que temos (o mesmo que
       // o _getDashData ja fazia no erro). Quem precisa GRAVAR nao passa por aqui: le com a versao.
-      return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by };
+      return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by, arq: _dashRawArq };
     }
   }
   const row = await env.DB.prepare('SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
   if (!row) return null;
   _dashRaw = row.data || '{}'; _dashRawV = Number(row.version) || 0; _dashRawLido = agora;
   _dashRawMeta = { updated_at: row.updated_at, updated_by: row.updated_by };
-  return { raw: _dashRaw, version: _dashRawV, updated_at: row.updated_at, updated_by: row.updated_by };
+  _dashRawArq = row.__arq ? { n: row.__arq.n, bytes: row.__arq.bytes } : null;
+  return { raw: _dashRaw, version: _dashRawV, updated_at: row.updated_at, updated_by: row.updated_by, arq: _dashRawArq };
 }
 async function _getDashData(env, maxAgeMs) {
   const now = Date.now();
@@ -25616,6 +25975,7 @@ export default {
   // exatamente o que quebrou. Se um dia a conta virar Workers Paid (30s de CPU), da pra voltar tudo
   // pra uma batida so, mas nao precisa: assim tambem esta certo e falha isolado.
   async scheduled(event, env, ctx) {
+    env = _arqEnvolve(env);   // arquivo de leads: so os SQL do dashboard_state sao interceptados (ver ARQUIVO DE LEADS)
     const minuto = Math.floor((event && event.scheduledTime ? event.scheduledTime : Date.now()) / 60000);
     // LEAD E INBOX TODA BATIDA (ou seja, de minuto em minuto). O rodizio abaixo nasceu como remedio
     // pro teto de 10ms de CPU do plano gratuito; em 18/08/2026 o Bruno assinou o Workers Paid e o
@@ -25848,6 +26208,9 @@ export default {
         // sai na primeira linha sem tocar em rede nenhuma; quando ha, o afiliado esta esperando a
         // campanha subir e 5 minutos ja e bastante espera. Ver _cronDominios.
         try { await _cronDominios(env); } catch (e) { console.error('[cron] dominios falhou: ' + String((e && e.message) || e)); }
+        // Arquivo de leads: desligado sai na primeira linha (uma leitura de config); ligado, move ate
+        // `lote` pedidos encerrados por batida de manutencao (de 5 em 5 minutos).
+        try { const _ra = await _arqCron(env); if (_ra && _ra.n) console.error('[arquivo] ' + _ra.n + ' pedido(s) arquivado(s), restam ' + (_ra.restam || 0)); } catch (e) { console.error('[cron] arquivo de leads falhou: ' + String((e && e.message) || e)); }
         // Gira entre quatro tarefas lentas: cada uma cai a cada 80 minutos, que e de sobra pro que
         // elas fazem. Backup e guardado por dentro (1x/hora e so se a versao mudou).
         const volta = Math.floor(minuto / RODIZIO.length) % 4;
@@ -25896,6 +26259,7 @@ export default {
     }
   },
   async fetch(req, env, ctx) {
+    env = _arqEnvolve(env);   // idem: o resto do worker enxerga o estado inteiro, como sempre
     if (req.method === 'OPTIONS') return new Response(null, {
       status: 204,
       headers: {
@@ -25941,6 +26305,7 @@ export default {
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'GET'   && path === '/api/state/pulso') return handleStatePulso(req, env);
       if (req.method === 'POST'  && path === '/api/state/trim')  return handleStateTrim(req, env);
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/state/arquivo') return handleStateArquivo(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       if (req.method === 'POST'  && path === '/api/pedido/novo') return handlePedidoNovo(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
