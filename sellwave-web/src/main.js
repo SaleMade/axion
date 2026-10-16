@@ -1532,6 +1532,10 @@ ipcMain.handle('swp:recarregar-ativo', () => {
 ipcMain.handle('swp:pedido-novo', async (_e, { lead }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
   if (!lead || typeof lead !== 'object') return { ok: false, erro: 'Pedido vazio.' }
+  // NO PREVIEW NAO SE CADASTRA PEDIDO. A dash ja barra isso no createOrder, com a mesma frase, e o
+  // motivo e o mesmo: a LEITURA responde como a outra pessoa, mas a GRAVACAO acontece como voce.
+  // Cadastrar olhando a tela dela e gravando no seu nome e o jeito de criar pedido no dono errado.
+  if (comoId) return { ok: false, erro: 'Você está vendo como outra pessoa. Volte a ser você para cadastrar.' }
   try {
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/pedido/novo', {
       method: 'POST', headers: cabecalhos(), body: JSON.stringify({ lead }), signal: AbortSignal.timeout(30000),

@@ -7736,6 +7736,18 @@ async function handlePedidoNovo(req, env) {
   const lead = body && body.lead;
   if (!lead || typeof lead !== 'object' || Array.isArray(lead) || lead.id == null || lead.__como) return err('Pedido inválido', 400);
   if (JSON.stringify(lead).length > 60000) return err('Pedido grande demais', 400);
+
+  // PEDIDO SEM DONO NAO EXISTE (16/10/2026). `lead.at` e quem fica com a venda: e dele a comissao,
+  // e por ele que o Demonstrativo, a Analise de Pedidos e a Chegada de leads contam. Quem monta o
+  // pedido na dash preenche (`at: f.at || who`), mas quem chamar esta rota de outro lugar - o
+  // painel do SellWave Web, por exemplo - nao tem como saber, e nao DEVE saber: deixar a tela
+  // escolher dono de venda e pedir pra alguem escolher errado.
+  //
+  // Entao o servidor carimba quando vier vazio, com quem esta autenticado, que e a unica fonte que
+  // nao da pra mentir. Veio preenchido, respeita: o diretor cadastra no nome do vendedor pelo
+  // formulario, e quem barra abuso ai e o `_stateProtegido` logo abaixo, pelo cargo.
+  if (lead.at == null || String(lead.at).trim() === '') lead.at = String(u.id);
+
   const idStr = String(lead.id);
   for (let tent = 0; tent < 6; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
