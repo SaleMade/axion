@@ -14,6 +14,9 @@ const modalCorpo = $('modal-corpo')
 let estado = { numeros: [], proxies: {}, abertos: [], travaProxy: true, exigirBrasil: false, temToken: false, direcao: false }
 let ativo = ''
 const carregando = new Set()
+// Numeros cujo motor do WhatsApp nao carregou. Eles continuam abrindo e conversando, mas NAO batem
+// sinal de vida: em 3 minutos a roleta para de mandar lead pra eles. Isso tem que estar na cara.
+const semMotor = new Set()
 const falhou = new Map()
 const mexendo = new Set()      // números com a chave da roleta em trânsito
 let filtro = ''
@@ -109,6 +112,7 @@ function linha(n) {
   const cls = ['num']
   if (nk === ativo) cls.push('ativo')
   if (carregando.has(nk)) cls.push('carregando')
+  if (semMotor.has(nk)) cls.push('sem-motor')
 
   // A bolinha usa a cor do status do chip, a mesma que o diretor escolheu na Contingência. Vem
   // pronta do servidor, então trocar a cor lá muda aqui sem mexer em código.
@@ -117,6 +121,11 @@ function linha(n) {
 
   // O ícone do WhatsApp diz o que importa pro vendedor: esta sessão está aberta aqui?
   const zap = '<span class="zap' + (aberto ? '' : ' off') + '" title="' + (aberto ? 'Aberto nesta máquina' : 'Fechado') + '">' + ZAP + '</span>'
+  const alerta = semMotor.has(nk)
+    ? '<span class="alerta" title="O WhatsApp não carregou o motor aqui. Este número não está recebendo lead novo. Feche e abra de novo.">'
+      + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">'
+      + '<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></span>'
+    : ''
   const leads = Number(n.leads_hoje) || 0
   const teto = Number(n.lim_dia) || 0
   const conta = leads || teto ? (leads + (teto ? '/' + teto : '') + ' hoje') : (n.status || '')
@@ -141,7 +150,7 @@ function linha(n) {
   return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="' + esc(n.status || '') + '">'
     + '<span class="sinal"' + estiloSinal + '></span>'
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + zap + esc(conta) + '</span></span>'
+    + '<span class="sub">' + zap + alerta + esc(conta) + '</span></span>'
     + fecha + px + chave + '</button>'
 }
 
@@ -232,7 +241,16 @@ async function abrir(numero) {
   palco.innerHTML = '<div class="vazio"><h2>Abrindo ' + esc(bonito(cheio(nk))) + '</h2><p id="passo">Preparando a sessão...</p></div>'
   const r = await window.sw.abrir(numero)
   carregando.delete(nk)
-  if (!r.ok) return telaErro(nk, r.erro || 'Falhou.')
+  // A MESMA GUARDA DO OUVINTE sw:erro, QUE AQUI FALTAVA.
+  //
+  // O vendedor clica em A (proxy ruim, preflight de 20 s), cansa, clica em B e comeca a conversar.
+  // Vinte segundos depois a promessa de A volta com erro e `telaErro` chamava `esconder()`: a tela
+  // do B era arrancada e o palco mostrava "Nao abriu" do A. O B continuava aberto e capturando, so
+  // tinha sumido da tela, e ele nao tinha como saber.
+  if (!r.ok) {
+    if (ativo !== nk) { falhou.set(nk, r.erro || 'Falhou.'); desenhaLista(); return }
+    return telaErro(nk, r.erro || 'Falhou.')
+  }
   await recarregaEstado()
   // O cartao "Abrindo..." SO SAI quando a view ja esta por cima, senao fica um retangulo vazio na
   // tela por segundos enquanto o WhatsApp carrega.
@@ -402,6 +420,13 @@ modal.onclick = (e) => { if (e.target === modal) fechaModal() }
 document.onkeydown = (e) => { if (e.key === 'Escape') fechaModal() }
 
 window.sw.ao('sw:status', (d) => { const p = $('passo'); if (p && d) p.textContent = d.texto })
+// POR ONDE O NUMERO SAIU. O main ja mandava e ninguem escutava: a informacao mais util do preflight
+// (IP, pais e cidade do proxy daquele chip) morria no caminho.
+window.sw.ao('sw:saida', (d) => {
+  const p = $('passo')
+  if (!p || !d || !d.ip) return
+  p.textContent = 'Saindo por ' + d.ip + (d.pais ? ' · ' + d.pais : '') + (d.cidade ? ' · ' + d.cidade : '')
+})
 window.sw.ao('sw:erro', (d) => {
   if (!d || !d.nk) return
   // Só troca a tela se for o número que está na frente: um número escondido falhando não pode
@@ -421,6 +446,19 @@ window.sw.ao('sw:fila', (d) => {
 window.sw.ao('sw:hibernou', async (d) => {
   await recarregaEstado()
   if (d && d.nk === ativo) { ativo = ''; telaVazia() }
+})
+// FECHAR PELO PAINEL TAMBEM TEM QUE CHEGAR AQUI. O main avisava e ninguem escutava: `estado.abertos`
+// ficava desatualizado, `ativo` continuava apontando pro numero fechado e o proximo clique nele
+// entrava pelo atalho de "ja esta aberto" - nada abria e a tela ficava preta.
+window.sw.ao('sw:fechado', async (d) => {
+  semMotor.delete((d && d.nk) || '')
+  await recarregaEstado()
+  if (d && d.nk === ativo) { ativo = ''; telaVazia() }
+})
+window.sw.ao('sw:semMotor', (d) => {
+  if (!d || !d.nk) return
+  if (d.ok) semMotor.delete(d.nk); else semMotor.add(d.nk)
+  desenhaLista()
 })
 
 // Fechar o número que está aberto: Ctrl+W é o que todo mundo espera num navegador.

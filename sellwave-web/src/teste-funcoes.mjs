@@ -1,0 +1,122 @@
+// TESTE DAS CONTAS QUE DECIDEM DINHEIRO E BAN.
+//
+// Roda em Node puro (sem Electron, sem janela, sem rede):
+//   node src/teste-funcoes.mjs
+//
+// Por que existe: o autoteste do Electron prova que a tela abre e que o WhatsApp carrega, mas NAO
+// prova que a pausa do passo e a marca de "mensagem velha" estao certas. As duas ja estiveram
+// erradas, e as duas erram CALADAS:
+//   - a pausa somava `delay` + `sim`, e funil com `sim` preenchido saia todo no mesmo segundo
+//     (varias mensagens de uma vez num chip novo e o jeito mais rapido de derrubar numero);
+//   - `velha` saia do relogio do PC do vendedor, e Windows 40 minutos adiantado marcava TODA
+//     mensagem como velha, o que no servidor significa nenhuma venda registrada.
+//
+// O teste le o codigo de verdade e executa a funcao de verdade: nao ha copia pra envelhecer.
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const AQUI = path.dirname(fileURLToPath(import.meta.url))
+const leia = (rel) => fs.readFileSync(path.join(AQUI, rel), 'utf8')
+
+let falhas = 0
+function vale(nome, condicao, detalhe) {
+  const ok = !!condicao
+  if (!ok) falhas++
+  console.log('  ' + (ok ? 'OK    ' : 'FALHOU') + '  ' + nome + (detalhe ? '  ->  ' + detalhe : ''))
+}
+
+// Recorta uma funcao pelo nome, do `function nome(` ate a chave que fecha.
+function recorta(fonte, assinatura) {
+  const i = fonte.indexOf(assinatura)
+  if (i < 0) throw new Error('nao achei: ' + assinatura)
+  let nivel = 0
+  for (let j = fonte.indexOf('{', i); j < fonte.length; j++) {
+    if (fonte[j] === '{') nivel++
+    else if (fonte[j] === '}') { nivel--; if (!nivel) return fonte.slice(i, j + 1) }
+  }
+  throw new Error('nao fechou: ' + assinatura)
+}
+
+console.log('\n=== contas do SellWave Web ===\n')
+
+// ── 1) A PAUSA DO PASSO (painel-ui.js). Uma so, nunca a soma.
+{
+  const fonte = leia('ui/painel-ui.js')
+  const pausaDoPasso = eval('(' + recorta(fonte, 'function pausaDoPasso(p)') + ')')
+  vale('passo so com delay usa o delay', pausaDoPasso({ delay: 7 }) === 7, String(pausaDoPasso({ delay: 7 })))
+  vale('passo so com sim usa o sim', pausaDoPasso({ sim: 5 }) === 5, String(pausaDoPasso({ sim: 5 })))
+  vale('com os dois, NAO soma (vale o sim)', pausaDoPasso({ sim: 10, delay: 10 }) === 10, String(pausaDoPasso({ sim: 10, delay: 10 })))
+  vale('passo vazio nao pausa', pausaDoPasso({}) === 0 && pausaDoPasso(null) === 0)
+  vale('numero negativo vira zero', pausaDoPasso({ delay: -5 }) === 0)
+  vale('texto no campo nao vira NaN', pausaDoPasso({ delay: 'abc' }) === 0)
+}
+
+// ── 2) A MARCA DE MENSAGEM VELHA (main.js), com o relogio corrigido pelo servidor.
+{
+  const fonte = leia('main.js')
+  const linha = fonte.split('\n').find((l) => l.startsWith('const ehVelha ='))
+  if (!linha) throw new Error('nao achei ehVelha')
+  let desvioRelogio = 0
+  const agoraCerto = () => Date.now() + desvioRelogio
+  const ehVelha = eval('(' + linha.replace('const ehVelha =', '') .replace(/;?\s*$/, '') + ')')
+  const agora = Math.floor(Date.now() / 1000)
+
+  vale('mensagem de agora nao e velha', ehVelha(agora) === 0)
+  vale('mensagem de 2 horas e velha', ehVelha(agora - 7200) === 1)
+  vale('sem hora nenhuma nao e velha', ehVelha(0) === 0 && ehVelha(undefined) === 0)
+
+  // O cenario que quebrava: relogio do PC 40 minutos ADIANTADO.
+  desvioRelogio = -40 * 60 * 1000   // o servidor esta 40 min ATRAS do PC: o desvio corrige pra tras
+  vale('relogio 40 min adiantado NAO marca mensagem nova como velha', ehVelha(agora - 40 * 60) === 0,
+    'desvio ' + (desvioRelogio / 60000) + ' min')
+  vale('mesmo com o relogio torto, mensagem de ontem continua velha', ehVelha(agora - 86400) === 1)
+  desvioRelogio = 0
+}
+
+// ── 3) O ARQUIVO DA FILA NUNCA LEVA OS BYTES DO AUDIO.
+{
+  const fonte = leia('main.js')
+  const corpo = recorta(fonte, 'function gravaFilaAgora()')
+  vale('gravaFilaAgora apaga o mediaB64 antes de escrever',
+    /delete copia\.mediaB64/.test(corpo) && /delete copia\.mediaMime/.test(corpo))
+  vale('gravaFilaAgora continua sincrona (o before-quit nao espera promessa)',
+    /fs\.writeFileSync/.test(corpo) && !/await/.test(corpo))
+
+  const ipc = fonte.slice(fonte.indexOf("ipcMain.on('swp:captura'"))
+  vale('a fila tem teto em BYTES, nao so em eventos', /TETO_FILA_BYTES/.test(ipc))
+  vale('o teto larga o ANEXO antes de largar a mensagem', /delete ev\.mediaB64/.test(ipc))
+}
+
+// ── 4) O AGENTE NAO BAIXA MIDIA DE HISTORICO, E MANDA A MENSAGEM ANTES DO ANEXO.
+{
+  const fonte = leia('ui/agente.js')
+  vale('historico de mais de 6 horas nao baixa midia', /var antiga = ts && \(Date\.now\(\) \/ 1000 - ts\) > 21600/.test(fonte))
+  vale('a condicao do download olha o antiga', /!deMim && !antiga/.test(fonte))
+  const trecho = fonte.slice(fonte.indexOf('if (/^(image|audio|sticker)$/i.test(tipo)'))
+  const iManda = trecho.indexOf('manda(ev)')
+  const iBaixa = trecho.indexOf('baixaMidia(msg)')
+  vale('a mensagem vai ANTES do download (nao se perde se a pagina recarregar)',
+    iManda >= 0 && iBaixa >= 0 && iManda < iBaixa)
+}
+
+// ── 5) FORMATACAO DO BALAO: marcacao vira estilo e texto do lead sai ESCAPADO.
+{
+  const fonte = leia('ui/painel-ui.js')
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const MARCAS = { '*': 'neg', _: 'ita', '~': 'ris' }
+  const podeAbrir = (t, i) => i === 0 || /[\s(]/.test(t[i - 1])
+  const podeFechar = (t, i) => i === t.length - 1 || /[\s.,!?:;)]/.test(t[i + 1])
+  void MARCAS; void podeAbrir; void podeFechar; void esc
+  const formatado = eval('(' + recorta(fonte, 'function formatado(txt)') + ')')
+  vale('negrito vira estilo', formatado('*oi*') === '<span class="neg">oi</span>')
+  vale('asterisco de conta nao vira marcacao', formatado('2*3 reais') === '2*3 reais')
+  vale('html do lead sai escapado', formatado('<script>x</script>').indexOf('<script') < 0,
+    formatado('<script>x</script>'))
+  vale('aspas do lead saem escapadas', formatado('ele disse "oi"').indexOf('&quot;') >= 0)
+}
+
+console.log('')
+if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
+console.log('todas as contas conferem.')

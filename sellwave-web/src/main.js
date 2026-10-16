@@ -204,21 +204,25 @@ function proxyDoNumero(nk) {
 // Proxy errado (ou de fora do Brasil) num numero +55 e pior que proxy nenhum, entao quem cadastra e
 // a direcao, em Ferramentas > SellWave Web. A copia local existe so pra o app continuar abrindo se
 // a dash estiver fora do ar na hora. A senha nao vem na listagem: so nesta chamada, por numero.
+// Devolve { px, rede } - `rede` diz que NAO deu pra perguntar. Sem essa distincao, dash fora do ar
+// virava a frase "Este numero nao tem proxy cadastrado. Cadastre na dash", mandando o vendedor
+// cadastrar o que ja esta cadastrado, numa dash que ele nao alcanca.
 async function puxaProxyDaDash(nk) {
-  if (!config.token || !nk) return null
+  if (!config.token || !nk) return { px: null, rede: false }
   const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/proxy?nk=' + encodeURIComponent(nk)
   try {
-    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token } })
-    if (!r.ok) return null
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(15000) })
+    ajustaRelogio(r)
+    if (!r.ok) return { px: null, rede: true }
     const d = await r.json()
     const px = d && d.proxy
     config.proxies = config.proxies || {}
     if (px && px.host) config.proxies[nk] = px
     else delete config.proxies[nk]
     gravarConfig()
-    return px && px.host ? px : null
+    return { px: px && px.host ? px : null, rede: false }
   } catch (_) {
-    return null   // dash fora do ar: segue com a copia local, se houver
+    return { px: null, rede: true }   // dash fora do ar: segue com a copia local, se houver
   }
 }
 
@@ -424,7 +428,18 @@ async function abreNumero(numero) {
   const nk = numKey(numero)
   if (!nk) return { ok: false, erro: 'Numero invalido.' }
 
+  // CLICAR NUM NUMERO JA ABERTO CONTA COMO PEDIDO NOVO.
+  //
+  // `pedidoAtual` so subia no caminho lento. Entao: o vendedor clica no (15), que esta frio e leva
+  // oito segundos; cansa de esperar e clica no (19), que ja estava aberto e aparece na hora. Como o
+  // contador nao mudou, quando o (15) termina ele se acha o pedido vigente e sobe POR CIMA do (19).
+  // O vendedor passa a conversar numa tela que nao e a que a barra marca.
+  //
+  // O `abrindo.has(nk)` NAO incrementa de proposito: ele e o mesmo numero clicado duas vezes, e
+  // subir o contador ali faria a abertura em voo se achar velha e terminar escondida - o numero que
+  // ele pediu nunca apareceria.
   if (abertos.has(nk)) {
+    pedidoAtual++
     mostra(nk)
     return { ok: true, jaAberto: true }
   }
@@ -439,9 +454,10 @@ async function abreNumero(numero) {
 async function abreDeVerdade(nk, numero, meu) {
 
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
-  await puxaProxyDaDash(nk)
+  const busca = await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
   if (config.travaProxy && !px) {
+    if (busca.rede) return { ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número. Tente de novo em um minuto.' }
     return { ok: false, erro: 'Este número não tem proxy cadastrado, e a trava está ligada. Cadastre o proxy em Ferramentas > SellWave Web, na dash.' }
   }
 
@@ -522,6 +538,10 @@ async function abreDeVerdade(nk, numero, meu) {
 }
 
 function mostra(nk) {
+  // NUMERO FECHADO NAO VIRA ATIVO. Sem esta guarda, mostra() de um nk que nao esta em `abertos`
+  // escondia TODAS as views e ainda gravava ativoAgora com um numero que nao existe: a tela ficava
+  // preta, o painel passava a falar de um numero fechado e o Fechar do painel nao achava nada.
+  if (!abertos.has(nk)) { avisaCasca('sw:ativo', { nk: ativoAgora }); return }
   const area = areaConteudo()
   for (const [chave, s] of abertos) {
     if (chave === nk) {
@@ -558,8 +578,14 @@ function escondeTodos() {
 function hibernaSePrecisar() {
   const teto = Math.max(1, Number(config.maxAbertos) || 6)
   if (abertos.size <= teto) return
+  // O NUMERO QUE ESTA DISPARANDO TAMBEM NAO PODE SER FECHADO.
+  //
+  // Ele acabou de sair da tela (o vendedor trocou pra atender outro lead), logo e justamente o de
+  // ultimoUso mais velho: a hibernacao fechava ele no meio do funil e o painel dizia "o numero foi
+  // fechado, o funil parou aqui". Metade do funil ia pro lead e a outra metade nao, por causa de
+  // uma decisao de memoria.
   const candidatos = [...abertos.values()]
-    .filter((s) => s.nk !== ativoAgora)
+    .filter((s) => s.nk !== ativoAgora && s.nk !== disparandoNk)
     .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
   while (abertos.size > teto && candidatos.length) {
     const s = candidatos.shift()
@@ -569,9 +595,25 @@ function hibernaSePrecisar() {
   }
 }
 
+// GRAVA A SESSAO NO DISCO AGORA, sem esperar o Chromium achar que e hora.
+//
+// O pareamento do WhatsApp Web mora em IndexedDB, e o Chromium grava quando quer: num fechamento
+// a forca (gerenciador de tarefas, queda de luz, travamento) o que estava so na memoria SOME, e o
+// numero volta pedindo QR. O Bruno pediu em letra maiuscula que sessao ficasse salva, entao nao da
+// pra confiar no momento escolhido pelo navegador: a gente manda gravar ao fechar, ao hibernar e
+// ao sair. E barato e so acontece nessas tres horas.
+function salvaSessao(particao) {
+  try {
+    const ses = session.fromPartition(particao)
+    ses.flushStorageData()
+    if (ses.cookies && ses.cookies.flushStore) ses.cookies.flushStore().catch(() => {})
+  } catch (_) { /* ok */ }
+}
+
 function fechaNumero(nk) {
   const s = abertos.get(nk)
   if (!s) return
+  salvaSessao(particaoDe(nk))
   try { janela.contentView.removeChildView(s.view) } catch (_) { /* ok */ }
   try { s.view.webContents.close() } catch (_) { /* ok */ }
   abertos.delete(nk)
@@ -644,27 +686,104 @@ async function injetaPainel(s) {
 // que e a MESMA que ja alimenta o inbox, a atribuicao e o pixel. Reusar em vez de criar um segundo
 // caminho evita ter duas verdades sobre a mesma conversa.
 // A FILA SOBREVIVE A FECHAR O APP. Ela so existia em memoria: fechar o programa (ou um
-// travamento) perdia tudo que ainda nao tinha subido, calado. Ela e pequena - texto de mensagem.
+// travamento) perdia tudo que ainda nao tinha subido, calado.
+//
+// ELA DEIXOU DE SER PEQUENA, e isso mudou duas regras.
+//
+// Quando o audio do lead passou a viajar junto (o cliente manda o endereco por audio), cada evento
+// virou ate ~6,7 MB de base64. O teto da fila era de 5000 EVENTOS, o que em bytes nao quer dizer
+// nada, e o arquivo era reescrito INTEIRO, de forma SINCRONA, a cada 10 segundos. Com a dash fora
+// do ar e a fila cheia de audio, isso congelava o processo principal (e com ele o painel, o funil
+// em andamento e o botao Parar) por centenas de milissegundos a cada ciclo; no extremo, o
+// JSON.stringify estourava o limite de string do V8 e o arquivo nunca mais era escrito, ou seja a
+// fila que existe pra sobreviver ao fechamento parava de existir justo no dia em que era precisa.
+//
+// Duas travas, as duas simples de proposito:
+//   1. teto da fila em BYTES. Estourou, o anexo do evento MAIS ANTIGO e jogado fora e a mensagem
+//      fica: sem o anexo a bolha ainda aparece no inbox e o lead ainda e criado (conferido no
+//      worker: mediaB64 e opcional). Perder o audio e ruim; perder a mensagem e pior.
+//   2. o ARQUIVO nunca guarda os bytes. Fechar o app com anexo pendente perde o anexo, nao a
+//      mensagem - e em troca a gravacao sincrona volta a ser barata e o estouro do V8 some.
 const ARQ_FILA = () => path.join(app.getPath('userData'), 'captura-pendente.json')
+const TETO_FILA_BYTES = 40 * 1024 * 1024
 const filaCaptura = []
 let drenando = false
 let filaSuja = false
+const pesoDe = (ev) => (ev && ev.mediaB64 ? String(ev.mediaB64).length : 0) + 400
+function pesoDaFila() {
+  let n = 0
+  for (const ev of filaCaptura) n += pesoDe(ev)
+  return n
+}
 function gravaFila() {
   if (!filaSuja) return
   gravaFilaAgora()
 }
 function gravaFilaAgora() {
   filaSuja = false
-  try { fs.writeFileSync(ARQ_FILA(), JSON.stringify(filaCaptura.slice(0, 5000)), 'utf8') } catch (_) { /* ok */ }
+  // SINCRONO DE PROPOSITO: o before-quit nao espera promessa, entao gravacao assincrona na saida
+  // perde justamente o que a fila em disco existe pra salvar. Sem os bytes, o custo e irrelevante.
+  try {
+    const semBytes = filaCaptura.slice(0, 5000).map((ev) => {
+      if (!ev || !ev.mediaB64) return ev
+      const copia = { ...ev }
+      delete copia.mediaB64
+      delete copia.mediaMime
+      return copia
+    })
+    fs.writeFileSync(ARQ_FILA(), JSON.stringify(semBytes), 'utf8')
+  } catch (_) { /* ok */ }
 }
 function leFila() {
   try {
     const v = JSON.parse(fs.readFileSync(ARQ_FILA(), 'utf8'))
-    if (Array.isArray(v) && v.length) { filaCaptura.push(...v); console.log('[captura] ' + v.length + ' mensagens esperando do uso anterior') }
+    if (Array.isArray(v) && v.length) {
+      filaCaptura.push(...v)
+      console.log('[captura] ' + v.length + ' mensagens esperando do uso anterior')
+      // A BARRA TEM QUE MOSTRAR ISSO. O contador so era escrito quando chegava mensagem nova:
+      // abrir o app com 200 pendentes do dia anterior parecia fila zerada.
+      avisaCasca('sw:fila', { n: filaCaptura.length })
+    }
   } catch (_) { /* primeiro uso */ }
 }
 setInterval(gravaFila, 10000)
-app.on('before-quit', gravaFila)
+app.on('before-quit', () => {
+  gravaFila()
+  // Antes de morrer, manda gravar TODAS as sessoes abertas. Sem isto, fechar o app com seis
+  // numeros abertos podia perder o pareamento dos ultimos que o Chromium ainda nao tinha gravado.
+  for (const nk of abertos.keys()) salvaSessao(particaoDe(nk))
+})
+// O RELOGIO QUE VALE E O DO SERVIDOR.
+//
+// `velha` (mensagem de mais de 30 minutos) decide no worker se a atribuicao e reescrita e se um
+// "Pedido Concluido" vira venda. Ele saia do `Date.now()` do PC do vendedor: Windows sem servico
+// de hora, maquina virtual ou bateria da placa fraca adiantam o relogio em dezenas de minutos, e
+// com 40 minutos de adianto TODA mensagem recebida chegava marcada velha. Resultado silencioso:
+// wa_attrib nunca gravado (a resposta sai pelo chip errado) e NENHUMA venda registrada.
+//
+// Calcular no servidor tambem nao serve: a fila pode ficar a noite inteira esperando a dash voltar,
+// e ai a mensagem de ontem chegaria "velha" hoje e as vendas da noite seriam todas descartadas.
+// Entao o carimbo continua acontecendo na CAPTURA, so que com o relogio corrigido.
+let desvioRelogio = 0
+// Toda resposta HTTP traz o cabecalho `Date` com a hora do servidor. Nao precisa de rota nova nem
+// de campo novo: qualquer conversa com a dash ja corrige o relogio, com precisao de um segundo -
+// de sobra pra uma regra de trinta minutos.
+function ajustaRelogio(resp) {
+  try {
+    const h = resp && resp.headers && resp.headers.get('date')
+    if (!h) return
+    const t = Date.parse(h)
+    if (!Number.isFinite(t)) return
+    const novo = t - Date.now()
+    if (Math.abs(novo - desvioRelogio) > 60000) {
+      console.log('[relogio] o PC esta ' + Math.round(novo / 1000) + 's fora da hora do servidor; corrigindo')
+    }
+    desvioRelogio = novo
+  } catch (_) { /* ok */ }
+}
+const agoraCerto = () => Date.now() + desvioRelogio
+const ehVelha = (ts) => (Number(ts) > 0 && (agoraCerto() / 1000 - Number(ts)) > 1800 ? 1 : 0)
+
 async function drenaCaptura() {
   if (drenando || !filaCaptura.length) return
   // A TRAVA VEM ANTES DE QUALQUER ESPERA. Com ela depois do await do roteiro, duas drenagens
@@ -703,11 +822,17 @@ async function drenaLotes() {
     gravaFilaAgora()
     let aceitos = null
     try {
+      // PRAZO LONGO DE PROPOSITO. O lote vai ate 6 MB de base64 e o AbortSignal e relogio de
+      // parede, nao inatividade: 60 s abortaria um envio legitimo de vendedor com subida de 512
+      // kbps, que cairia no catch, daria break e tentaria o MESMO lote pra sempre. 240 s cobre 6 MB
+      // em ~200 kbps e ainda assim solta uma conexao meia-aberta, que era o buraco original.
       const resp = await fetch(alvo, {
         method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
         body: JSON.stringify({ events: lote }),
+        signal: AbortSignal.timeout(240000),
       })
+      ajustaRelogio(resp)
       if (resp.status === 401 || resp.status === 403) {
         console.error('[captura] sessao vencida: a fila fica guardada ate entrar de novo')
         avisaCasca('sw:fila', { n: filaCaptura.length, erro: 'entre de novo na dash' })
@@ -750,31 +875,51 @@ setInterval(drenaCaptura, 15000)
 async function bateSinal() {
   if (!config.token || !abertos.size) return
   const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/heartbeat'
-  for (const s of abertos.values()) {
-    if (!s.view || s.view.webContents.isDestroyed()) continue
-    let e = null
-    try { e = await s.view.webContents.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
-    // SO BATE SINAL COM APARELHO PAREADO DE VERDADE.
-    //
-    // Duas guardas, e as duas sao necessarias. Sem `e.eu` nao existe numero pra reportar: o antigo
-    // plano B de usar o numero do SLOT carimbava a linha com um numero que ninguem conectou, e a
-    // sessao na tela do QR entrava na roleta. E sem `autenticado` o sinal diria "vivo" so porque a
-    // biblioteca carregou - medido: na tela do QR, motor e envia ja sao true.
-    //
-    // Nao bater sinal tambem e importante: a linha de sc_heartbeat tem o numero como chave e e
-    // COMPARTILHADA com o heartbeat do Sale Chat. Mandar "nao vivo" daqui tiraria da roleta um
-    // numero que esta pareado la.
-    if (!e || !e.eu || !e.autenticado) continue
-    try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
-        // `auth` e campo NOVO de proposito: o worker exige ele e trata ausencia como "nao vivo".
-        // Assim, uma copia velha do app instalada por ai nao consegue mais marcar numero como vivo.
-        body: JSON.stringify({ numero: e.eu, auth: true, motor: !!e.motor }),
-      })
-    } catch (_) { /* sem rede o sinal expira sozinho, que e o certo */ }
+  // EM PARALELO, E COM PRAZO. Era um laco sequencial sem prazo nenhum: bastava UM numero com a
+  // conexao pendurada pra que os outros cinco nunca batessem sinal, e em tres minutos eles saiam
+  // da roleta em silencio.
+  await Promise.allSettled([...abertos.values()].map((s) => sinalDeUm(s, url)))
+}
+
+async function sinalDeUm(s, url) {
+  if (!s.view || s.view.webContents.isDestroyed()) return
+  let e = null
+  try { e = await s.view.webContents.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
+  // SO BATE SINAL COM APARELHO PAREADO DE VERDADE.
+  //
+  // Duas guardas, e as duas sao necessarias. Sem `e.eu` nao existe numero pra reportar: o antigo
+  // plano B de usar o numero do SLOT carimbava a linha com um numero que ninguem conectou, e a
+  // sessao na tela do QR entrava na roleta. E sem `autenticado` o sinal diria "vivo" so porque a
+  // biblioteca carregou - medido: na tela do QR, motor e envia ja sao true.
+  //
+  // Nao bater sinal tambem e importante: a linha de sc_heartbeat tem o numero como chave e e
+  // COMPARTILHADA com o heartbeat do Sale Chat. Mandar "nao vivo" daqui tiraria da roleta um
+  // numero que esta pareado la.
+  // SEM MOTOR, O NUMERO SOME DA ROLETA EM SILENCIO. Isso nao pode passar calado: `autenticado`
+  // depende do WA-JS, entao motor que nao carregou faz um numero PAREADO parar de bater sinal.
+  // Falhar fechado continua certo (lead pago indo pra ninguem e pior), mas tem que aparecer.
+  if (e && !e.motor) {
+    if (!s.avisouMotor) {
+      s.avisouMotor = true
+      console.error('[sinal] ' + s.nk + ' sem o motor do WhatsApp: nao bate sinal e sai da roleta em 3 min')
+      avisaCasca('sw:semMotor', { nk: s.nk })
+    }
+  } else if (s.avisouMotor && e && e.motor) {
+    s.avisouMotor = false
+    avisaCasca('sw:semMotor', { nk: s.nk, ok: true })
   }
+  if (!e || !e.eu || !e.autenticado) return
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      // `auth` e campo NOVO de proposito: o worker exige ele e trata ausencia como "nao vivo".
+      // Assim, uma copia velha do app instalada por ai nao consegue mais marcar numero como vivo.
+      body: JSON.stringify({ numero: e.eu, auth: true, motor: !!e.motor }),
+      signal: AbortSignal.timeout(15000),
+    })
+    ajustaRelogio(r)
+  } catch (_) { /* sem rede o sinal expira sozinho, que e o certo */ }
 }
 setInterval(bateSinal, 60000)
 
@@ -785,7 +930,8 @@ async function buscaNumeros() {
   if (!config.token) return { ok: false, erro: 'Falta entrar com o token da dash.' }
   const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/numeros'
   try {
-    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token } })
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(20000) })
+    ajustaRelogio(r)
     if (!r.ok) return { ok: false, erro: 'A dash respondeu ' + r.status }
     const d = await r.json()
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
@@ -863,9 +1009,12 @@ ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true
 // pelo proprio lado que ela deveria conter. Quem cadastra e a direcao, em Ferramentas > SellWave
 // Web, e o app so LE.
 ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
-  await puxaProxyDaDash(nk)
+  const busca = await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
-  if (!px) return { ok: false, erro: 'Sem proxy cadastrado pra este número. Cadastre na dash.' }
+  if (!px) {
+    if (busca.rede) return { ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número.' }
+    return { ok: false, erro: 'Sem proxy cadastrado pra este número. Cadastre na dash.' }
+  }
   // PARTICAO DESCARTAVEL: testar na particao viva aplicaria o proxy numa sessao ja aberta.
   const teste = 'persist:sw-teste-' + nk
   await aplicaProxy(session.fromPartition(teste), px, teste)
@@ -924,7 +1073,7 @@ function viewAtiva() {
   return s.view.webContents
 }
 
-const ESTADO_VAZIO = { motor: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
+const ESTADO_VAZIO = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '', grupo: 0 }
 
 ipcMain.handle('swp:estado-wa', async () => {
   const wc = viewAtiva()
@@ -968,12 +1117,27 @@ async function dataUriDe(url) {
   const tipo = r.headers.get('content-type') || 'application/octet-stream'
   // SO CACHEIA O QUE PASSOU. Guardar um resultado ruim grudava o erro na sessao inteira.
   const uri = 'data:' + tipo + ';base64,' + buf.toString('base64')
-  if (cacheMidia.size > 120) cacheMidia.clear()   // teto simples: o roteiro tem ~34 midias
+  // TETO EM BYTES, nao so em contagem. 120 itens de ate 32 MB dariam quase 4 GB de dataUri vivo
+  // na memoria do processo principal - e um roteiro com video de oferta chega perto disso.
   cacheMidia.set(url, uri)
+  let pesoCache = 0
+  for (const v of cacheMidia.values()) pesoCache += v.length
+  if (cacheMidia.size > 120 || pesoCache > 120 * 1024 * 1024) {
+    cacheMidia.clear()
+    cacheMidia.set(url, uri)   // o que acabou de ser pedido fica: e o que vai ser usado agora
+  }
   return uri
 }
 
 // "DIGITANDO..." NA CONVERSA, sem bloquear ninguem. Quem conta o tempo e o painel.
+// QUEM ESTA DISPARANDO AGORA. O painel avisa ao entrar e ao sair do funil, e a hibernacao usa isso
+// pra nao fechar a sessao no meio do disparo.
+let disparandoNk = ''
+ipcMain.handle('swp:disparo', (_e, { nk, ligado }) => {
+  disparandoNk = ligado ? String(nk || '') : ''
+  return { ok: true }
+})
+
 ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
   const alvo = String(nk || '') ? abertos.get(String(nk)) : null
   const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
@@ -1032,23 +1196,51 @@ ipcMain.handle('swp:recarregar-ativo', () => {
   return { ok: true }
 })
 
+// "NAO ACHEI O LEAD" E "NAO FALEI COM A DASH" SAO COISAS DIFERENTES.
+//
+// Os dois devolviam {ok:true, achou:false}, e o painel escrevia "sem pedido na dash". Com a
+// internet oscilando, um cliente com tres pedidos aparecia como lead novo e o vendedor repetia a
+// oferta de entrada. Pior: o painel guarda o ultimo telefone consultado e nao tentava de novo,
+// entao a linha continuava mentindo depois que a dash voltava.
 ipcMain.handle('swp:lead', async (_e, { phone }) => {
   const fone = String(phone || '').replace(/\D/g, '')
-  if (!config.token || fone.length < 8) return { ok: true, achou: false }
+  if (fone.length < 8) return { ok: true, achou: false }
+  if (!config.token) return { ok: false, erro: 'entre de novo na dash' }
   try {
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/lead?phone=' + encodeURIComponent(fone),
-      { headers: { Authorization: 'Bearer ' + config.token } })
-    if (!r.ok) return { ok: true, achou: false }
+      { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(15000) })
+    ajustaRelogio(r)
+    if (r.status === 401 || r.status === 403) return { ok: false, erro: 'entre de novo na dash' }
+    if (!r.ok) return { ok: false, erro: 'a dash respondeu ' + r.status }
     return await r.json()
-  } catch (_) { return { ok: true, achou: false } }
+  } catch (_) { return { ok: false, erro: 'não deu pra falar com a dash' } }
 })
 
 ipcMain.on('swp:captura', (_e, dados) => {
   const evs = (dados && Array.isArray(dados.eventos)) ? dados.eventos : []
   if (!evs.length) return
-  // Teto de seguranca: se a dash ficar fora do ar por muito tempo, segura as ultimas 5 mil e
-  // descarta as mais velhas, em vez de estourar a memoria do vendedor.
-  for (const ev of evs) filaCaptura.push(ev)
+  for (const ev of evs) {
+    // `velha` E CARIMBADO AQUI, com o relogio corrigido pelo servidor. Ver desvioRelogio.
+    if (ev && typeof ev === 'object') ev.velha = ehVelha(ev.ts)
+    filaCaptura.push(ev)
+  }
+  // TETO EM BYTES, nao em eventos. Primeiro larga os ANEXOS mais antigos (a mensagem fica), e so
+  // se ainda assim nao couber e que evento inteiro e descartado.
+  let peso = pesoDaFila()
+  if (peso > TETO_FILA_BYTES) {
+    let semAnexo = 0
+    for (const ev of filaCaptura) {
+      if (peso <= TETO_FILA_BYTES) break
+      if (!ev || !ev.mediaB64) continue
+      peso -= String(ev.mediaB64).length
+      delete ev.mediaB64
+      delete ev.mediaMime
+      semAnexo++
+    }
+    if (semAnexo) console.error('[captura] fila cheia: ' + semAnexo + ' anexo(s) antigo(s) descartado(s), as mensagens ficaram')
+  }
+  // Teto de seguranca final: segura as ultimas 5 mil e descarta as mais velhas, em vez de estourar
+  // a memoria do vendedor.
   if (filaCaptura.length > 5000) {
     const perdidas = filaCaptura.length - 5000
     filaCaptura.splice(0, perdidas)

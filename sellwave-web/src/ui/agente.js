@@ -63,9 +63,24 @@
       return melhor
     } catch (_) { return null }
   }
+  // ONDE A CONVERSA ABERTA MORA NA TELA. Varios seletores de proposito: apoiar o painel inteiro
+  // num `#main` so transforma uma renomeacao da Meta em "Abra uma conversa" com a conversa aberta.
+  var ONDE_CONVERSA = ['#main', '[data-testid="conversation-panel-messages"]', '[data-testid="conversation-panel-body"]', '#app div[role="application"]']
+  function painelDaConversa() {
+    for (var i = 0; i < ONDE_CONVERSA.length; i++) {
+      try { var el = document.querySelector(ONDE_CONVERSA[i]); if (el) return el } catch (_) { /* seletor invalido num build antigo */ }
+    }
+    return null
+  }
+
   function conversaAberta() {
-    var main = document.querySelector('#main')
-    var dom = jidDoDom(main || document)
+    var main = painelDaConversa()
+    // O VOTO DO DOM SO VALE DENTRO DA CONVERSA ABERTA.
+    //
+    // Varrendo o documento inteiro, uma busca de mensagens (sem conversa aberta) elege o chat do
+    // resultado da busca: o painel mostrava o lead dele e LIBERAVA o disparo. Um funil de cinco
+    // passos ia pra quem o vendedor so pesquisou.
+    var dom = main ? jidDoDom(main) : null
     var interno = null
     try { interno = (window.WPP.chat.getActiveChat() || null) } catch (_) { /* ok */ }
     var idInterno = interno && interno.id && (interno.id._serialized || String(interno.id))
@@ -80,8 +95,13 @@
     else if (idInterno && main) escolhido = idInterno
     if (!escolhido) return null
     // Grupo, status e newsletter não recebem disparo: a mesma regra da captura.
-    return ehPessoa(escolhido) ? escolhido : null
+    if (ehPessoa(escolhido)) { ultimoRecusado = ''; return escolhido }
+    // GUARDA O MOTIVO. Sem isso o painel escrevia "Abra uma conversa" com o grupo aberto na tela e
+    // todos os botões cinzas: o vendedor conclui que o painel quebrou, não que existe uma regra.
+    ultimoRecusado = escolhido
+    return null
   }
+  var ultimoRecusado = ''
   function nomeDaConversa() {
     try {
       var h = document.querySelector('#main header [title]')
@@ -186,6 +206,8 @@
       lid: tel.isLid ? 1 : 0,
       nome: nomeDaConversa(),
       eu: numeroDoAparelho(),
+      // POR QUE NAO HA CONVERSA: o painel precisa dizer "grupo" em vez de "abra uma conversa".
+      grupo: (!chatId && ultimoRecusado) ? 1 : 0,
       capturadas: window.__swVistasN || 0,
     }
   }
@@ -273,6 +295,9 @@
       // nenhum: o notebook fechado por uma hora perdia tudo que chegou no meio. Quem decide o que
       // fazer com mensagem velha é o servidor, que tem contexto e deduplicação.
       var velha = ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0
+      // `antiga` e so pro download. Nao confundir com `velha`, que e a marca de 30 minutos que o
+      // servidor usa pra nao reescrever atribuicao nem criar venda.
+      var antiga = ts && (Date.now() / 1000 - ts) > 21600 ? 1 : 0
       var ev = {
         msgId: id,
         selfNumber: numeroDoAparelho(),
@@ -294,10 +319,31 @@
       // Limites copiados do painel que já roda em produção: só o leve (áudio, foto, figurinha),
       // teto de 5 MB (base64 pesa no lote) e prazo de 20s. Vídeo e documento NÃO baixam.
       // E o evento vai mesmo que o download falhe: nunca perder a mensagem por causa do anexo.
-      if (/^(image|audio|sticker)$/i.test(tipo) && !deMim) {
+      // A MENSAGEM VAI NA HORA. O ANEXO VAI DEPOIS, NUMA SEGUNDA PASSADA.
+      //
+      // Antes o `manda` morava DENTRO do .then do download: entre marcar a mensagem como vista e o
+      // anexo chegar passavam ate 20 segundos, e nesse intervalo o evento nao existia em lugar
+      // nenhum duravel. Se a pagina recarregasse ali no meio (o proprio painel tem Recarregar, o
+      // WhatsApp Web se atualiza sozinho, a hibernacao fecha a view no setimo numero), o audio do
+      // ENDERECO sumia inteiro: nao virava bolha, nao virava lead. Agora vai duas vezes, e a
+      // ingestao aguenta: o INSERT em wa_messages e OR IGNORE por msg_id e logo abaixo existe um
+      // UPDATE ... SET media_url justamente pro anexo que chega atrasado.
+      //
+      // E NAO BAIXA HISTORICO. Ao reconectar, o WhatsApp reemite a conversa (ja foi medido aqui:
+      // 855 mensagens em 11 minutos num numero). Cada audio desses sairia pelo CDN do WhatsApp POR
+      // DENTRO da pagina, ou seja pelo proxy pago daquela particao, que e cobrado por GB, pra virar
+      // uma bolha que o vendedor ja tem na tela do lado. O corte e de SEIS HORAS e nao de 30
+      // minutos de proposito: o notebook fechado por uma hora precisa trazer o audio do endereco
+      // que chegou no meio (e essa a razao do `velha` existir e ir marcado em vez de descartado).
+      if (/^(image|audio|sticker)$/i.test(tipo) && !deMim && !antiga) {
+        manda(ev)
         baixaMidia(msg).then(function (m) {
-          if (m) { ev.mediaB64 = m.b64; ev.mediaMime = m.mime }
-          manda(ev)
+          if (!m) return
+          var comAnexo = {}
+          for (var k in ev) if (Object.prototype.hasOwnProperty.call(ev, k)) comAnexo[k] = ev[k]
+          comAnexo.mediaB64 = m.b64
+          comAnexo.mediaMime = m.mime
+          manda(comAnexo)
         })
       } else manda(ev)
     } catch (_) { /* captura nunca pode derrubar a página do vendedor */ }

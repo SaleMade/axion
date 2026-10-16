@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "teste": "node src/teste-funcoes.mjs",
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64"
   },

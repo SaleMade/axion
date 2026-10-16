@@ -37,6 +37,13 @@ let ocupado = false
 let disparando = ''
 let pararPedido = false
 let ultimoFone = ''
+let alvoFone = ''        // de quem e o disparo em andamento (o painel e um so pra todos os numeros)
+let alvoNome = ''
+let alvoNkAtual = ''
+// So carimba quando o painel JA TROCOU de numero. Com o vendedor parado no mesmo numero, dizer
+// "para Fulano" em todo passo e ruido; depois de trocar, nao dizer e mentira.
+const paraQuem = () => (alvoNkAtual && estadoWa.nk && alvoNkAtual !== estadoWa.nk && (alvoNome || alvoFone))
+  ? ' para ' + (alvoNome || alvoFone) : ''
 let estadoWa = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
 
 try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
@@ -343,9 +350,17 @@ async function roda(lista, marca) {
   // pra quem ele mandou, não pra quem está na tela agora.
   const alvo = estadoWa.chatId
   const alvoNk = estadoWa.nk || ''
+  // DE QUEM E O DISPARO. O painel e um so pra todos os numeros: sem carimbar, o vendedor trocava
+  // de numero no meio do funil, via o lead NOVO no topo, o rodape dizendo "enviando 3 de 5" e todos
+  // os botoes cinzas - e lia como "estou disparando pro numero errado e travou".
+  alvoFone = estadoWa.phone ? formata(estadoWa.phone) : ''
+  alvoNome = estadoWa.nome || ''
+  alvoNkAtual = alvoNk
   ocupado = true
   disparando = marca
   pararPedido = false
+  // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil.
+  try { window.swp.disparo(alvoNk, true) } catch (_) { /* ok */ }
   desenha()
   $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
 
@@ -364,16 +379,17 @@ async function roda(lista, marca) {
       const audio = it.kind === 'audio'
       // O rodape diz a VERDADE do momento. Dizer "enviando" durante a pausa fazia o vendedor achar
       // que tinha travado, porque nada aparecia na conversa por dez segundos.
-      rodape((audio ? 'gravando' : 'digitando') + de, pct)
+      rodape((audio ? 'gravando' : 'digitando') + de + paraQuem(), pct)
       await window.swp.indica(alvoNk, alvo, audio ? 'audio' : 'texto', pausa)
       const fim = Date.now() + pausa * 1000
       while (Date.now() < fim && !pararPedido) await new Promise((r) => setTimeout(r, 200))
     }
     if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
-    rodape(lista.length > 1 ? 'enviando' + de : 'enviando...', pct)
+    rodape((lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem() + (lista.length > 1 ? '' : '...'), pct)
     const r = await window.swp.manda(alvoNk, alvo, it)
     if (!r || !r.ok) {
-      ocupado = false; disparando = ''; $('parar').style.display = 'none'
+      ocupado = false; disparando = ''; alvoNkAtual = ''; $('parar').style.display = 'none'
+      try { window.swp.disparo(alvoNk, false) } catch (_) { /* ok */ }
       const feitos = i
       rodape(lista.length > 1
         ? 'parou no item ' + (i + 1) + ' de ' + lista.length + (feitos ? ', os ' + feitos + ' primeiros já foram' : '') + ': ' + humano((r && r.erro) || 'sem resposta')
@@ -384,8 +400,10 @@ async function roda(lista, marca) {
   }
   ocupado = false
   disparando = ''
+  alvoNkAtual = ''
+  try { window.swp.disparo(alvoNk, false) } catch (_) { /* ok */ }
   $('parar').style.display = 'none'
-  if (!pararPedido) rodape('enviado')
+  if (!pararPedido) rodape('enviado' + (alvoNome || alvoFone ? ' para ' + (alvoNome || alvoFone) : ''))
   desenha()
   setTimeout(() => { if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
 }
@@ -407,9 +425,15 @@ const formata = (d) => {
 async function atualizaLead() {
   const fone = estadoWa.phone
   if (!fone) {
-    if (ultimoFone !== '') {
-      ultimoFone = ''
-      $('lead').innerHTML = '<div class="nm">Abra uma conversa</div><div class="ln">o painel segue quem está na tela</div>'
+    // GRUPO NAO E "NENHUMA CONVERSA". Com o grupo da equipe aberto, o painel escrevia "Abra uma
+    // conversa" com uma conversa na tela e todo botao cinza: a leitura natural e que o painel
+    // quebrou, nao que existe uma regra. A regra continua: disparo nao vai pra grupo.
+    const chave = estadoWa.grupo ? 'grupo' : ''
+    if (ultimoFone !== chave) {
+      ultimoFone = chave
+      $('lead').innerHTML = estadoWa.grupo
+        ? '<div class="nm">Conversa de grupo</div><div class="ln">o painel não dispara em grupo</div>'
+        : '<div class="nm">Abra uma conversa</div><div class="ln">o painel segue quem está na tela</div>'
     }
     return
   }
@@ -417,8 +441,24 @@ async function atualizaLead() {
   ultimoFone = fone
   const cabecalho = esc(estadoWa.nome || formata(fone))
   $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">procurando na dash...</div>'
+  // LID NAO RESOLVIDO: os digitos nao sao telefone nenhum. Procurar lead com eles sempre devolve
+  // vazio, e a tela diria "sem pedido na dash" pra um cliente que pode ter tres pedidos.
+  if (estadoWa.lid) {
+    $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div>'
+      + '<div class="ln">conversa sem número visível, não dá pra procurar o pedido</div>'
+    return
+  }
   const d = await window.swp.lead(fone)
   if (estadoWa.phone !== fone) return    // trocou de conversa no meio da busca
+  // NAO FALEI COM A DASH e diferente de NAO ACHEI. Dizer "sem pedido" quando a dash caiu faz o
+  // vendedor atender como lead novo um cliente que tem tres pedidos. E solta o `ultimoFone` pra
+  // tentar de novo no proximo pulso, senao a linha mente ate ele trocar de conversa e voltar.
+  if (d && d.ok === false) {
+    ultimoFone = ''
+    $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone))
+      + ' · ' + esc(humano(d.erro || 'não deu pra falar com a dash')) + '</div>'
+    return
+  }
   if (!d || !d.achou) {
     $('lead').innerHTML = '<div class="nm">' + cabecalho + '</div><div class="ln">' + esc(formata(fone)) + ' · sem pedido na dash</div>'
     return
@@ -450,6 +490,9 @@ async function pulso() {
   } else { av.style.display = 'none' }
 
   if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
+  // FUNIL NOUTRO NUMERO. Sem esta linha, trocar de numero no meio do funil deixava todos os botoes
+  // cinzas sem nenhuma explicacao: o vendedor le como painel travado.
+  else if (alvoNkAtual && estadoWa.nk && alvoNkAtual !== estadoWa.nk) $('rod').title = 'O funil está rodando em outro número'
   // Só redesenha quando o botão de enviar muda de estado: redesenhar a cada pulso apagaria a
   // seleção de texto e piscaria a lista.
   const agora = podeEnviar()
