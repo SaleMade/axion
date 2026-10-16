@@ -317,3 +317,33 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   (direcao e vendedor), os dois Ajustes e a previa do funil.
   **Falta o Bruno:** parear um numero e testar a ligacao de voz com a trava ligada (spike 1), e dizer
   em qual maquina o app vai rodar (decisao da secao 7).
+
+- **16/10/2026, manha** — **ATUALIZAR SEM REINSTALAR (primeira entrega) E O INCIDENTE DO PROXY.**
+  O **agente** (o pedaço que fala com a página do WhatsApp por dentro, e o que quebra quando a Meta
+  muda) passou a vir do servidor por `GET /api/swweb/agente.js`, com a cópia do instalador como
+  piso e **quatro portas** antes de entrar: tamanho, assinatura, sintaxe por `vm.Script` sem
+  executar, e — depois de injetar — as três funções de pé; falhando, a cópia servida é reprovada e
+  o piso entra **na mesma sessão**, sem reiniciar. Conserto de agente chega **recarregando o
+  número**. O que **nunca** vem do servidor: `main.js` e os três preloads, que são a fronteira de
+  confiança. Pro resto, **aviso de versão** (`GET /api/swweb/versao` público, `POST /api/swweb/app`
+  só da direção) e um cartão na barra que abre o instalador.
+  **INCIDENTE, e o conserto vale mais que a entrega:** o Bruno passou a manhã sem conseguir
+  cadastrar proxy nenhum. Duas causas somadas, as duas minhas. (1) `api()` da dash manda o `body`
+  direto pro `fetch`, e `fetch` **não serializa objeto**: as duas chamadas da tela (proxy e travas)
+  mandavam objeto cru, viravam a letra `[object Object]`, o worker estourava no `req.json()` e
+  respondia "Body inválido". O cadastro **nunca funcionou pela dash**, desde que a tela nasceu — por
+  isso `swweb_proxies` não existia no `app_config`. Achado pela conversa paralela lendo o bundle no
+  ar. (2) A varredura tinha tirado o formulário de proxy do **app** por causa do vendedor, e eu
+  tirei de todo mundo: o diretor ficava sem caminho justamente na hora em que descobre que falta
+  proxy. Hoje o `api()` serializa objeto simples sozinho (Blob, FormData e string passam intactos) e
+  o formulário voltou no app **só pra direção** — quem segura o vendedor é o 403 do servidor, não
+  esconder campo. A senha não desce mais pro app: campo vazio ao salvar **mantém** a atual.
+  **ISOLAMENTO CASA x AFILIADO:** a lista de chips mostrava a vendedora do afiliado pro Bruno. Rota
+  nova nasceu sem corte por mundo, exatamente o que a memória avisa. Medido antes de mexer: **não
+  havia lead indo pro lugar errado** (ela só está nas pressels do afiliado). Agora a porta abre pros
+  dois e **quem corta é o mundo**; trava e proxy viraram chaves por mundo, pelo padrão do
+  `dc_api_key`. Conferido ao vivo com sessão de teste de 10 minutos, só GET, apagada no fim.
+  **No ar:** app **1.1.1** (111.348.654 bytes), worker, dash e demo do commit `a88ca3c`, carimbo
+  `16/10 11:23` lido com query. `npm run teste` em **40 conferências**, autoteste em **21 de 21**.
+  **Falta o Bruno:** cadastrar o proxy, parear (de preferência três números, pra fechar a medição de
+  memória junto) e testar a ligação de voz com a trava ligada.
