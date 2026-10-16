@@ -159,6 +159,10 @@ function corDoContador(n) {
 // A LINHA DA BARRA ENCOLHIDA. So o que o Bruno chamou de "algo que seja relevante": em que estado
 // o numero esta (a cor, ou a posicao na fila), QUAL numero e (os 4 ultimos digitos, que e como a
 // equipe se refere a eles) e quantos leads entraram hoje. O resto esta a um clique de distancia.
+// Ligado na roleta e, no modo limite, na vez. No modo roleta simples todos os ligados dividem os
+// leads, entao ligado ja e "recebendo".
+const recebendoAgora = (n) => !!(n && n.roleta && (!n.fila || n.fila.st === 'vez'))
+
 function linhaFina(n) {
   const nk = numKey(n.numero)
   const emFila = n.dist === 'limite' && n.fila && n.fila.pos
@@ -170,7 +174,7 @@ function linhaFina(n) {
   const quatro = cheio(nk).replace(/\D/g, '').slice(-4)
   const leads = Number(n.leads_hoje) || 0
   const teto = Number(n.lim_dia) || 0
-  return '<button class="fino' + (nk === ativo ? ' ativo' : '') + '" data-nk="' + nk + '"'
+  return '<button class="fino' + (recebendoAgora(n) ? ' recebendo' : '') + (nk === ativo ? ' ativo' : '') + '" data-nk="' + nk + '"'
     + ' title="' + esc(bonito(cheio(nk))) + (n.dono ? ' · ' + esc(n.dono) : '') + ' · ' + esc(fraseEstado(n)) + '">'
     + sinal
     + '<span class="d">' + quatro + '</span>'
@@ -182,6 +186,9 @@ function linha(n) {
   const nk = numKey(n.numero)
   const aberto = estado.abertos.includes(nk)
   const cls = ['num']
+  // RECEBENDO AGORA = ligado na roleta E, no modo limite, sendo a vez dele. Sem a segunda parte,
+  // os tres numeros do vendedor ficariam destacados ao mesmo tempo e o destaque nao diria nada.
+  if (recebendoAgora(n)) cls.push('recebendo')
   if (nk === ativo) cls.push('ativo')
   if (carregando.has(nk)) cls.push('carregando')
   if (semMotor.has(nk)) cls.push('sem-motor')

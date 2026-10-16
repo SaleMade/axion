@@ -200,6 +200,37 @@ app.whenReady().then(async () => {
   conta('o telefone do formulario continua o de origem', congelado.wa === '(19) 99598-3293', congelado.wa)
   const rascSozinho = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").length)'))
   conta('e grava rascunho sozinho ao trocar de conversa', rascSozinho >= 1, String(rascSozinho))
+
+  // ── O BOTAO DE TROCAR DE CLIENTE (16/10/2026) ───────────────────────────────────────────────
+  // O congelamento protege o pedido, mas avisar sem dar saida deixa o vendedor parado. Pedido do
+  // Bruno: "um botaozinho ali, tipo Trocar para novo cliente, e isso ficasse um pouco mais
+  // destacado, pra que o meu vendedor nao confunda e acabe subindo um pedido pra um cliente que ja
+  // saiu".
+  const aviso = await js('(() => { const b = document.getElementById("pd-troca"); const bl = document.querySelector(".dono-ped");'
+    + ' return { botao: !!b, texto: b ? b.textContent.trim() : "", destaque: !!(bl && bl.classList.contains("trocou")) } })()')
+  conta('a conversa trocada ganha botao de trocar de cliente',
+    aviso.botao === true && /Outro Cliente/.test(aviso.texto), JSON.stringify(aviso))
+  conta('e o bloco inteiro se destaca, nao so um rotulo de canto', aviso.destaque === true, JSON.stringify(aviso))
+
+  await clica('#pd-troca')
+  await espera(700)
+  const dps = await js('({ dono: (document.querySelector(".dono-ped .q")||{}).textContent || "",'
+    + ' aviso: !!document.querySelector(".dono-ped .a"), botao: !!document.getElementById("pd-troca"),'
+    + ' wa: (document.querySelector("[data-k=wa]")||{}).value || "",'
+    + ' cidade: (document.querySelector("[data-k=cidade]")||{}).value || "",'
+    + ' msg: (document.querySelector(".aviso.bom")||{}).textContent || "" })')
+  conta('depois de trocar, o pedido e do cliente novo', /Outro Cliente/.test(dps.dono), JSON.stringify(dps))
+  conta('o aviso e o botao somem, porque nao ha mais o que trocar',
+    dps.aviso === false && dps.botao === false, JSON.stringify(dps))
+  conta('o telefone passa a ser o do cliente novo', dps.wa === '(11) 98888-7777', dps.wa)
+  // ISTO E O QUE EVITA O PEDIDO ERRADO: endereco, CPF e tratamento sao daquela pessoa. Levar junto
+  // seria trocar um pedido errado por outro.
+  conta('os campos do cliente anterior NAO vao junto', dps.cidade === '', dps.cidade)
+  conta('e avisa que o anterior virou rascunho', /rascunho/i.test(dps.msg), dps.msg)
+  const ultR = JSON.parse(await js('JSON.stringify(((window.__ver()).filter(c => c.nome === "rascunhoSalvar").slice(-1)[0]||{}).args||[])'))
+  conta('o rascunho guardado e do cliente ANTERIOR, nao do novo',
+    String(ultR[1] || '') === '5519995983293', JSON.stringify(ultR[1]))
+
   await clica('#pd-voltar')
   await espera(300)
 
@@ -315,8 +346,21 @@ app.whenReady().then(async () => {
   conta('mostra o contador do dia', dentro.c === '70/70,32/70,0/70', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
 
+  const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
+    + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
+    + ' qual: [...document.querySelectorAll(".fino.recebendo .d")].map(e => e.textContent).join(",") } })()')
+  conta('encolhida, o destaque de "recebendo agora" tambem aparece', destFino.n === 1 && destFino.qual === '3293', JSON.stringify(destFino))
+
   await js2('document.getElementById("encolhe").click()')
   await espera(600)
+  // O DESTAQUE na barra larga, que e onde ele olha no dia a dia. So UM dos tres: os outros estao
+  // no limite e desligado. Destacar todos os ligados nao diria nada.
+  const dest = await js2('(() => { const r = [...document.querySelectorAll(".num")].map(e => e.className);'
+    + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
+    + ' qual: [...document.querySelectorAll(".num.recebendo .fone")].map(e => e.textContent.trim()).join(",") } })()')
+  conta('so UM numero fica destacado como recebendo agora', dest.total === 3 && dest.n === 1, JSON.stringify(dest))
+  conta('e e o que esta na vez da fila', /99598-3293/.test(dest.qual), dest.qual)
+
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
   conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 2, JSON.stringify(voltou))
 
