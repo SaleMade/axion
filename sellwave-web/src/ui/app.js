@@ -305,14 +305,24 @@ function janelaAjustes() {
   modalCorpo.innerHTML = html
   abreModal()
   if (estado.direcao) {
-    $('sw1').onclick = async () => {
-      const r = await window.sw.trava({ travaProxy: !estado.travaProxy })
-      estado.travaProxy = r.travaProxy; desenhaTrava(); janelaAjustes()
+    // A trava mora no SERVIDOR: o app pede e só acredita no que voltar. Se o servidor recusar
+    // (não é direção, sem rede), a chave volta pro lugar e a tela diz por quê.
+    const mexeTrava = async (patch) => {
+      const r = await window.sw.trava(patch)
+      estado.travaProxy = r.travaProxy
+      estado.exigirBrasil = r.exigirBrasil
+      desenhaTrava()
+      janelaAjustes()
+      if (!r.ok) {
+        const el = document.createElement('div')
+        el.className = 'aviso erro'
+        el.style.display = 'block'
+        el.textContent = r.erro || 'Não salvou'
+        modalCorpo.insertBefore(el, modalCorpo.querySelector('.acoes'))
+      }
     }
-    $('sw2').onclick = async () => {
-      const r = await window.sw.trava({ exigirBrasil: !estado.exigirBrasil })
-      estado.exigirBrasil = r.exigirBrasil; desenhaTrava(); janelaAjustes()
-    }
+    $('sw1').onclick = () => mexeTrava({ travaProxy: !estado.travaProxy })
+    $('sw2').onclick = () => mexeTrava({ exigirBrasil: !estado.exigirBrasil })
   }
   $('sw3').onclick = async () => {
     const r = await window.sw.painel(!(estado.painelLigado !== false))

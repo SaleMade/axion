@@ -497,11 +497,19 @@ async function abreDeVerdade(nk, numero, meu) {
   janela.contentView.addChildView(view)
   view.setBounds(areaConteudo())
   view.webContents.loadURL(WA_URL)
-  // SO VAI PRA TELA SE AINDA FOR O QUE ELE QUER. Se ele clicou noutro numero enquanto este abria,
-  // a sessao fica pronta escondida e a casca so é avisada.
-  if (!meu || meu === pedidoAtual) mostra(nk)
-  else avisaCasca('sw:aberto', { nk })
-  return { ok: true, naTela: !meu || meu === pedidoAtual }
+  // SO VAI PRA TELA SE AINDA FOR O QUE ELE QUER.
+  //
+  // E PRECISA ESCONDER DE VERDADE: WebContentsView nasce VISIVEL. So deixar de chamar mostra()
+  // nao bastava - a view do numero lento entrava por cima do numero que o vendedor escolheu
+  // depois, e ele ficava conversando numa tela que nao era a que a barra mostrava marcada.
+  const aindaQuero = !meu || meu === pedidoAtual
+  if (aindaQuero) mostra(nk)
+  else {
+    view.setVisible(false)
+    if (ativoAgora) mostra(ativoAgora)     // reempilha o que ele escolheu
+    avisaCasca('sw:aberto', { nk })
+  }
+  return { ok: true, naTela: aindaQuero }
 }
 
 function mostra(nk) {
@@ -650,67 +658,78 @@ setInterval(gravaFila, 10000)
 app.on('before-quit', gravaFila)
 async function drenaCaptura() {
   if (drenando || !filaCaptura.length) return
-  const r = await pegaRoteiro(false)
-  // A captura vai pela rota AUTENTICADA, com o Bearer do proprio usuario. O token de ingestao nao
-  // desce mais pro app (ver worker: quem o tivesse podia inventar venda).
-  const alvo = (r && r.captura) || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/captura')
-  if (!config.token) return
+  // A TRAVA VEM ANTES DE QUALQUER ESPERA. Com ela depois do await do roteiro, duas drenagens
+  // entravam juntas no boot (quando o roteiro ainda nao esta em cache e a busca demora de verdade):
+  // as duas montavam o mesmo lote e a fila era cortada duas vezes.
   drenando = true
   try {
-    while (filaCaptura.length) {
-      // NÃO TIRA DA FILA ANTES DA CONFIRMAÇÃO. Antes o lote saía da fila no `splice` e só existia
-      // em memória: fechar o app (ou um travamento) no meio do envio perdia aquelas mensagens, sem
-      // erro nenhum. Agora a fila só encolhe pelo que o servidor confirmou no ack, e reenviar é
-      // seguro porque a ingestão deduplica por id.
-      const lote = filaCaptura.slice(0, 50)
-      gravaFilaAgora()
-      let aceitos = null
-      try {
-        const resp = await fetch(alvo, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
-          body: JSON.stringify({ events: lote }),
-        })
-        if (resp.status === 401 || resp.status === 403) {
-          console.error('[captura] sessao vencida: a fila fica guardada ate entrar de novo')
-          avisaCasca('sw:fila', { n: filaCaptura.length, erro: 'entre de novo na dash' })
-          break
-        }
-        if (!resp.ok) { console.error('[captura] ingestao respondeu ' + resp.status); break }
-        const d = await resp.json().catch(() => null)
-        aceitos = d && Array.isArray(d.ack) ? new Set(d.ack.map(String)) : null
-        const barrados = Number(d && d.barrados) || 0
-        if (barrados) console.error('[captura] o servidor recusou ' + barrados + ' evento(s) deste lote')
-      } catch (e) {
-        console.error('[captura] nao enviou: ' + ((e && e.message) || e))
-        break
-      }
-      // Sem ack detalhado (lote todo aceito ou todo barrado), tira o lote inteiro: o servidor
-      // respondeu 200, e segurar pra sempre o que ele nunca vai aceitar enche a fila.
-      const antes = filaCaptura.length
-      if (aceitos && aceitos.size) {
-        for (let i = filaCaptura.length - 1; i >= 0; i--) {
-          const id = String(filaCaptura[i] && filaCaptura[i].msgId)
-          if (aceitos.has(id)) filaCaptura.splice(i, 1)
-        }
-        // O que ficou do lote e nao voltou no ack sai mesmo assim: senao o mesmo evento recusado
-        // bloquearia a fila inteira pra sempre.
-        for (const ev of lote) {
-          const i = filaCaptura.indexOf(ev)
-          if (i >= 0) filaCaptura.splice(i, 1)
-        }
-      } else {
-        filaCaptura.splice(0, lote.length)
-      }
-      if (filaCaptura.length === antes) break   // nada saiu: para em vez de girar
-      filaSuja = true
-    }
+    await drenaLotes()
   } finally {
     drenando = false
     gravaFila()
     avisaCasca('sw:fila', { n: filaCaptura.length })
   }
 }
+
+async function drenaLotes() {
+  const r = await pegaRoteiro(false)
+  // A captura vai pela rota AUTENTICADA, com o Bearer do proprio usuario. O token de ingestao nao
+  // desce mais pro app (ver worker: quem o tivesse podia inventar venda).
+  const alvo = (r && r.captura) || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/captura')
+  if (!config.token) return
+  while (filaCaptura.length) {
+    // NAO TIRA DA FILA ANTES DA CONFIRMACAO. Antes o lote saia da fila no splice e so existia em
+    // memoria: fechar o app no meio do envio perdia aquelas mensagens, sem erro nenhum. Agora a
+    // fila so encolhe depois da resposta, e reenviar e seguro porque a ingestao deduplica por id.
+    // LOTE POR TAMANHO, NAO SO POR CONTAGEM. Audio e foto do lead viajam em base64: 50 eventos com
+    // anexo passariam de 300 MB num POST so, e o Worker derruba a requisicao sem explicar.
+    const lote = []
+    let peso = 0
+    for (const ev of filaCaptura) {
+      const tam = ev && ev.mediaB64 ? String(ev.mediaB64).length : 400
+      if (lote.length && (peso + tam > 6 * 1024 * 1024 || lote.length >= 50)) break
+      lote.push(ev)
+      peso += tam
+    }
+    gravaFilaAgora()
+    let aceitos = null
+    try {
+      const resp = await fetch(alvo, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+        body: JSON.stringify({ events: lote }),
+      })
+      if (resp.status === 401 || resp.status === 403) {
+        console.error('[captura] sessao vencida: a fila fica guardada ate entrar de novo')
+        avisaCasca('sw:fila', { n: filaCaptura.length, erro: 'entre de novo na dash' })
+        break
+      }
+      if (!resp.ok) { console.error('[captura] ingestao respondeu ' + resp.status); break }
+      const d = await resp.json().catch(() => null)
+      aceitos = d && Array.isArray(d.ack) ? new Set(d.ack.map(String)) : null
+      const barrados = Number(d && d.barrados) || 0
+      if (barrados) console.error('[captura] o servidor recusou ' + barrados + ' evento(s) deste lote')
+    } catch (e) {
+      console.error('[captura] nao enviou: ' + ((e && e.message) || e))
+      break
+    }
+    // REMOVE POR IDENTIDADE, NUNCA POR POSICAO. Entre montar o lote e chegar a resposta, o agente
+    // pode ter empurrado mensagem nova pra fila; cortar os 50 primeiros por posicao jogaria fora o
+    // que nunca foi enviado.
+    const antes = filaCaptura.length
+    const doLote = new Set(lote)
+    for (let i = filaCaptura.length - 1; i >= 0; i--) {
+      if (doLote.has(filaCaptura[i])) filaCaptura.splice(i, 1)
+    }
+    if (aceitos && aceitos.size && lote.length) {
+      const naoVoltou = lote.filter((ev) => !aceitos.has(String(ev && ev.msgId))).length
+      if (naoVoltou) console.error('[captura] ' + naoVoltou + ' evento(s) do lote nao voltaram no ack')
+    }
+    if (filaCaptura.length === antes) break   // nada saiu: para em vez de girar
+    filaSuja = true
+  }
+}
+
 setInterval(drenaCaptura, 15000)
 
 // SINAL DE VIDA DOS NUMEROS ABERTOS.
@@ -726,13 +745,24 @@ async function bateSinal() {
     if (!s.view || s.view.webContents.isDestroyed()) continue
     let e = null
     try { e = await s.view.webContents.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
-    const numero = (e && e.eu) || s.numero
-    if (!numero) continue
+    // SO BATE SINAL COM APARELHO PAREADO DE VERDADE.
+    //
+    // Duas guardas, e as duas sao necessarias. Sem `e.eu` nao existe numero pra reportar: o antigo
+    // plano B de usar o numero do SLOT carimbava a linha com um numero que ninguem conectou, e a
+    // sessao na tela do QR entrava na roleta. E sem `autenticado` o sinal diria "vivo" so porque a
+    // biblioteca carregou - medido: na tela do QR, motor e envia ja sao true.
+    //
+    // Nao bater sinal tambem e importante: a linha de sc_heartbeat tem o numero como chave e e
+    // COMPARTILHADA com o heartbeat do Sale Chat. Mandar "nao vivo" daqui tiraria da roleta um
+    // numero que esta pareado la.
+    if (!e || !e.eu || !e.autenticado) continue
     try {
       await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
-        body: JSON.stringify({ numero, motor: !!(e && e.motor) }),
+        // `auth` e campo NOVO de proposito: o worker exige ele e trata ausencia como "nao vivo".
+        // Assim, uma copia velha do app instalada por ai nao consegue mais marcar numero como vivo.
+        body: JSON.stringify({ numero: e.eu, auth: true, motor: !!e.motor }),
       })
     } catch (_) { /* sem rede o sinal expira sozinho, que e o certo */ }
   }
@@ -835,10 +865,35 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   return r
 })
 
-ipcMain.handle('sw:trava', (_e, { travaProxy, exigirBrasil }) => {
-  if (typeof travaProxy === 'boolean') config.travaProxy = travaProxy
-  if (typeof exigirBrasil === 'boolean') config.exigirBrasil = exigirBrasil
-  gravarConfig()
+// AS TRAVAS MORAM NO SERVIDOR, e so a direcao mexe.
+//
+// Gravar so no arquivo local dava duas fontes de verdade que se contradiziam: a barra dizia
+// "desligada", o app abria o numero sem proxy, e na proxima lista o servidor mandava "ligada" de
+// volta - sem ninguem entender por que. Agora o app PEDE, e so acredita no que o servidor confirmar.
+ipcMain.handle('sw:trava', async (_e, { travaProxy, exigirBrasil }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo.', travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
+  const corpo = {}
+  if (typeof travaProxy === 'boolean') corpo.travaProxy = travaProxy
+  if (typeof exigirBrasil === 'boolean') corpo.exigirBrasil = exigirBrasil
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      body: JSON.stringify(corpo),
+    })
+    const d = await r.json().catch(() => null)
+    if (!r.ok) {
+      return { ok: false, erro: (d && (d.error || d.erro)) || (r.status === 403 ? 'Só a direção mexe nas travas.' : 'A dash respondeu ' + r.status),
+        travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
+    }
+    if (d && d.config) {
+      config.travaProxy = d.config.travaProxy !== false
+      config.exigirBrasil = !!d.config.exigirBrasil
+      gravarConfig()
+    }
+  } catch (_) {
+    return { ok: false, erro: 'Não deu pra falar com a dash.', travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
+  }
   return { ok: true, travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
 })
 
@@ -890,12 +945,19 @@ ipcMain.handle('swp:estado-wa', async () => {
 // passa por CSP nem por CORS: ele baixa, vira dataUri e manda pronto junto do item.
 // Cacheado porque o mesmo audio e usado o dia inteiro, em todos os leads.
 const cacheMidia = new Map()
+const TETO_MIDIA = 32 * 1024 * 1024   // 32 MB: acima disso o WhatsApp recusa de qualquer jeito
 async function dataUriDe(url) {
   if (cacheMidia.has(url)) return cacheMidia.get(url)
-  const r = await fetch(url)
-  if (!r.ok) throw new Error('a midia respondeu ' + r.status)
+  // PRAZO E TETO. Sem prazo, o fetch do Node fica pendurado por ate 5 minutos quando a rede ou o
+  // R2 engasgam: o funil trava no meio, o botao Parar nao resolve (ele so e olhado ENTRE itens) e
+  // o vendedor fica olhando pra tela sem saber o que houve.
+  const r = await fetch(url, { signal: AbortSignal.timeout(25000) })
+  if (!r.ok) throw new Error('o arquivo respondeu ' + r.status)
   const buf = Buffer.from(await r.arrayBuffer())
+  if (!buf.length) throw new Error('o arquivo veio vazio')
+  if (buf.length > TETO_MIDIA) throw new Error('o arquivo tem ' + Math.round(buf.length / 1048576) + ' MB, grande demais')
   const tipo = r.headers.get('content-type') || 'application/octet-stream'
+  // SO CACHEIA O QUE PASSOU. Guardar um resultado ruim grudava o erro na sessao inteira.
   const uri = 'data:' + tipo + ';base64,' + buf.toString('base64')
   if (cacheMidia.size > 120) cacheMidia.clear()   // teto simples: o roteiro tem ~34 midias
   cacheMidia.set(url, uri)

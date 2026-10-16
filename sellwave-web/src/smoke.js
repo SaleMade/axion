@@ -137,6 +137,13 @@ async function rodar(ctx) {
       conta('o motor do WhatsApp (WA-JS) carregou', !!p.wpp, p.wppErro || (p.wpp ? 'window.WPP presente' : ''))
       conta('o agente instalou na pagina', !!p.agente, p.painelErro || (p.agente ? '__swEstado e __swManda presentes' : ''))
       conta('o agente responde o estado', !!p.estado, p.estado ? JSON.stringify(p.estado).slice(0, 70) : 'sem resposta')
+      // O TESTE QUE IMPEDE LEAD PAGO IR PRA NINGUEM. Na tela do QR o motor ja responde true, mas
+      // ninguem pareou aparelho nenhum: se `autenticado` vier true aqui, o sinal de vida vai dizer
+      // que o numero esta de pe e a roleta vai entregar lead pra uma sessao sem dono.
+      conta('na tela do QR o agente NAO se diz autenticado',
+        !!(p.estado && p.estado.motor) && !(p.estado && p.estado.autenticado),
+        p.estado ? ('motor=' + p.estado.motor + ' autenticado=' + p.estado.autenticado) : '')
+      conta('sem aparelho pareado o numero vem vazio', !(p.estado && p.estado.eu), (p.estado && p.estado.eu) || '(vazio)')
     }
   }
 

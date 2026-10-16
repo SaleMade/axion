@@ -17,7 +17,11 @@
   window.__sw_agente = true
 
   var MARCA = '__sellwave__'
+  // SO CONVERSA DE PESSOA. Lista de PERMITIDOS, usada tanto pra achar a conversa quanto pra
+  // capturar e pra ENVIAR. Antes ela so valia na captura: com um grupo aberto na tela, o painel
+  // liberava o botao e um funil inteiro ia parar dentro do grupo.
   var JID = /^\d{5,}@(c\.us|s\.whatsapp\.net|lid)$/i
+  var ehPessoa = function (id) { return JID.test(String(id || '')) }
   var soDigitos = function (j) { return String(j || '').replace(/@.*/, '').replace(/\D/g, '') }
 
   function podeEnviar() {
@@ -25,6 +29,18 @@
   }
   function motorVivo() {
     try { var W = window.WPP; return !!(podeEnviar() && W.whatsapp && W.whatsapp.ChatStore) } catch (_) { return false }
+  }
+
+  // AUTENTICADO E OUTRA COISA, E E ESTA QUE IMPORTA.
+  //
+  // `motorVivo` diz que a BIBLIOTECA carregou. Medido: na tela do QR, sem nenhum aparelho pareado,
+  // motorVivo ja e true, podeEnviar ja e true e ate WPP.isReady e true. Quem diz a verdade e so o
+  // isAuthenticated.
+  // Isso ja derrubou lead nesta casa uma vez, no outro caminho: o comentario em AXION/sc-inject.js
+  // diz, com todas as letras, "WhatsApp deslogado ainda tem WPP.on, entao mandava 1 mesmo
+  // deslogado, e o servidor achava o numero vivo e mandava lead pra ninguem".
+  function autenticado() {
+    try { return !!(window.WPP && window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()) } catch (_) { return false }
   }
 
   // A CONVERSA ABERTA NA TELA É A VERDADE (portado do painel que já roda em produção). O caminho
@@ -48,12 +64,23 @@
     } catch (_) { return null }
   }
   function conversaAberta() {
-    var dom = jidDoDom(document.querySelector('#main') || document)
+    var main = document.querySelector('#main')
+    var dom = jidDoDom(main || document)
     var interno = null
     try { interno = (window.WPP.chat.getActiveChat() || null) } catch (_) { /* ok */ }
     var idInterno = interno && interno.id && (interno.id._serialized || String(interno.id))
-    if (dom && idInterno && dom !== idInterno) return dom   // discordaram: manda pro que está ABERTO
-    return idInterno || dom || null
+    var escolhido = null
+    if (dom && idInterno && dom !== idInterno) escolhido = dom        // discordaram: vale o que está ABERTO
+    else if (dom) escolhido = dom
+    // SEM VOTO DO DOM, O INTERNO SO VALE COM CONVERSA ABERTA NA TELA.
+    //
+    // A flag .active do WhatsApp fica GRUDADA num chat velho: com a conversa fechada (Esc), o
+    // getActiveChat continuava apontando pro último lead e o painel liberava o disparo. O funil ia
+    // pra quem ele tinha acabado de deixar.
+    else if (idInterno && main) escolhido = idInterno
+    if (!escolhido) return null
+    // Grupo, status e newsletter não recebem disparo: a mesma regra da captura.
+    return ehPessoa(escolhido) ? escolhido : null
   }
   function nomeDaConversa() {
     try {
@@ -61,12 +88,24 @@
       return h ? (h.getAttribute('title') || h.textContent || '') : ''
     } catch (_) { return '' }
   }
+  // QUATRO TENTATIVAS, as mesmas do painel que ja roda em producao. Com duas so, o numero voltava
+  // vazio em alguns builds - e numero vazio agora significa "nao mando sinal de vida", ou seja um
+  // numero pareado sairia da roleta em silencio. A folga aqui protege contra isso.
   function numeroDoAparelho() {
-    try {
-      var w = window.WPP.whatsapp.UserPrefs.getMaybeMeUser()
-      return soDigitos(w && (w._serialized || w.user))
-    } catch (_) { /* ok */ }
-    try { return soDigitos(window.WPP.conn.getMyUserId()) } catch (_) { return '' }
+    var tentativas = [
+      function () { return window.WPP.conn.getMyUserId() },
+      function () { return window.WPP.whatsapp.UserPrefs.getMaybeMeUser() },
+      function () { return window.WPP.conn.me },
+      function () { return window.WPP.conn.wid },
+    ]
+    for (var i = 0; i < tentativas.length; i++) {
+      try {
+        var w = tentativas[i]()
+        var d = soDigitos(w && (w._serialized || w.user || w))
+        if (d.length >= 10) return d
+      } catch (_) { /* tenta a proxima */ }
+    }
+    return ''
   }
 
   // ───────────────────────────────────────────────────────────── envio
@@ -86,6 +125,8 @@
   window.__swManda = function (chatId, item) {
     var W = window.WPP
     if (!chatId) return Promise.reject(new Error('nenhuma conversa aberta'))
+    // TRAVA FINAL DO ENVIO. Mesmo que algo mais acima erre, nada sai pra grupo ou lista.
+    if (!ehPessoa(chatId)) return Promise.reject(new Error('essa conversa não é de uma pessoa'))
     if (!podeEnviar()) return Promise.reject(new Error('o motor do WhatsApp não está pronto'))
     if (item.tipo === 'texto') {
       var ms = Math.max(0, Number(item.sim || 0)) * 1000
@@ -110,13 +151,32 @@
   }
 
   // O que o painel pergunta a cada pulso.
+  // Telefone DE VERDADE da conversa aberta, pro painel procurar o lead certo. Em conversa por LID
+  // os digitos do id NAO sao telefone: sem resolver, o painel pedia lead de um numero inexistente e
+  // mostrava "sem pedido na dash" pra um cliente que tem pedido.
+  var cacheLid = {}
+  function telefoneDaConversa(chatId) {
+    if (!chatId) return { digits: '', isLid: false }
+    var p = partes(chatId)
+    if (p.digits && !p.isLid) return { digits: p.digits, isLid: false }
+    if (cacheLid[chatId]) return cacheLid[chatId]
+    var r = telefoneReal({ from: chatId, to: chatId }, false)
+    if (r && r.digits && !r.isLid) cacheLid[chatId] = r
+    return r || { digits: p.digits, isLid: true }
+  }
+
   window.__swEstado = function () {
     var chatId = conversaAberta()
+    var tel = telefoneDaConversa(chatId)
     return {
       motor: motorVivo(),
+      // `autenticado` e o que vale pra dizer que o numero esta de pe. `motor` fica como
+      // diagnostico de injecao.
+      autenticado: autenticado(),
       envia: podeEnviar(),
       chatId: chatId || '',
-      phone: soDigitos(chatId),
+      phone: tel.digits || '',
+      lid: tel.isLid ? 1 : 0,
       nome: nomeDaConversa(),
       eu: numeroDoAparelho(),
       capturadas: window.__swVistasN || 0,
@@ -129,16 +189,21 @@
   var vistas = {}
   window.__swVistasN = 0
 
-  // SÓ CONVERSA DE PESSOA. Lista de PERMITIDOS, não de proibidos: filtrar só @g.us deixava passar
-  // status@broadcast, newsletter e lista de transmissão, que viravam conversa no inbox do CRM e
-  // lead fantasma na roleta.
-  var SO_PESSOA = /^\d{5,}@(c\.us|s\.whatsapp\.net|lid)$/i
-
   function partes(wid) {
     try {
-      var s = (wid && (wid._serialized || (wid.id && wid.id._serialized))) || (typeof wid === 'string' ? wid : '')
-      if (!s) return { digits: '', isLid: false, ser: '' }
-      return { digits: String(s).replace(/@.*/, '').replace(/\D/g, ''), isLid: /@lid$/i.test(s), ser: String(s) }
+      // RESERVA DE toString. O WhatsApp as vezes entrega um Wid sem `_serialized`, so com
+      // user/server e um toString. Sem a reserva, a mensagem saia DESCARTADA em silencio no dia em
+      // que eles mudassem o formato - e e o tipo de mudanca que eles fazem sem avisar.
+      var s = (wid && (wid._serialized || (wid.id && wid.id._serialized)))
+        || (typeof wid === 'string' ? wid : '')
+        || (wid && wid.toString && String(wid.toString()))
+        || ''
+      s = String(s)
+      if (!s || s === '[object Object]') return { digits: '', isLid: false, ser: '' }
+      // Tira o sufixo do aparelho (":12" em 5511999@c.us:12), senao o JID nao casa com a lista.
+      s = s.replace(/:(\d+)@/, '@')
+      var servidor = (wid && wid.server) || (s.split('@')[1] || '')
+      return { digits: s.replace(/@.*/, '').replace(/\D/g, ''), isLid: /lid/i.test(String(servidor)), ser: s }
     } catch (_) { return { digits: '', isLid: false, ser: '' } }
   }
 
@@ -181,7 +246,7 @@
       if (!msg) return
       var deMim = !!(msg.fromMe || (msg.id && msg.id.fromMe))
       var p = partes(deMim ? msg.to : msg.from)
-      if (!p.ser || !SO_PESSOA.test(p.ser)) return            // grupo, status, newsletter: não é lead
+      if (!p.ser || !ehPessoa(p.ser)) return                  // grupo, status, newsletter: não é lead
       var pr = telefoneReal(msg, deMim)
       if (!pr.digits) return
       if (pr.digits === numeroDoAparelho()) return            // conversa comigo mesmo
@@ -201,21 +266,68 @@
       // nenhum: o notebook fechado por uma hora perdia tudo que chegou no meio. Quem decide o que
       // fazer com mensagem velha é o servidor, que tem contexto e deduplicação.
       var velha = ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0
-      window.postMessage({
-        alvo: MARCA, canal: 'swp:captura', dados: { eventos: [{
-          msgId: id,
-          selfNumber: numeroDoAparelho(),
-          phone: pr.digits,
-          lid: pr.isLid ? 1 : 0,
-          velha: velha,
-          fromMe: deMim,
-          type: tipo,
-          body: (ehMidia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),
-          pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
-          ts: ts,
-        }] },
-      }, '*')
+      var ev = {
+        msgId: id,
+        selfNumber: numeroDoAparelho(),
+        phone: pr.digits,
+        lid: pr.isLid ? 1 : 0,
+        velha: velha,
+        fromMe: deMim,
+        type: tipo,
+        body: (ehMidia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),
+        pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
+        ts: ts,
+      }
+      // ÁUDIO E FOTO DO LEAD VÃO COM OS BYTES.
+      //
+      // Nesta operação o cliente manda o endereço de entrega POR ÁUDIO: sem os bytes, a bolha no
+      // inbox vira um rótulo vazio e o vendedor tem que abrir o WhatsApp pra ouvir. Quem baixa é o
+      // próprio WhatsApp (WPP.chat.downloadMedia faz a decifragem), então a CSP não entra nisso.
+      //
+      // Limites copiados do painel que já roda em produção: só o leve (áudio, foto, figurinha),
+      // teto de 5 MB (base64 pesa no lote) e prazo de 20s. Vídeo e documento NÃO baixam.
+      // E o evento vai mesmo que o download falhe: nunca perder a mensagem por causa do anexo.
+      if (/^(image|audio|sticker)$/i.test(tipo) && !deMim) {
+        baixaMidia(msg).then(function (m) {
+          if (m) { ev.mediaB64 = m.b64; ev.mediaMime = m.mime }
+          manda(ev)
+        })
+      } else manda(ev)
     } catch (_) { /* captura nunca pode derrubar a página do vendedor */ }
+  }
+
+  function manda(ev) {
+    window.postMessage({ alvo: MARCA, canal: 'swp:captura', dados: { eventos: [ev] } }, '*')
+  }
+
+  function baixaMidia(msg) {
+    return new Promise(function (ok) {
+      try {
+        var W = window.WPP
+        if (!(W && W.chat && W.chat.downloadMedia)) return ok(null)
+        var id = (msg && msg.id && (msg.id._serialized || msg.id)) || msg
+        var pronto = false
+        var prazo = setTimeout(function () { if (!pronto) { pronto = true; ok(null) } }, 20000)
+        Promise.resolve(W.chat.downloadMedia(id)).then(function (blob) {
+          if (pronto) return
+          pronto = true
+          clearTimeout(prazo)
+          if (!blob || !blob.size || blob.size > 5 * 1024 * 1024) return ok(null)
+          var mime = blob.type || (msg && msg.mimetype) || ''
+          var fr = new FileReader()
+          fr.onloadend = function () {
+            try {
+              var t = String(fr.result || '')
+              var i = t.indexOf(',')
+              var b64 = i >= 0 ? t.slice(i + 1) : ''
+              ok(b64 ? { b64: b64, mime: mime } : null)
+            } catch (_) { ok(null) }
+          }
+          fr.onerror = function () { ok(null) }
+          fr.readAsDataURL(blob)
+        }).catch(function () { if (!pronto) { pronto = true; clearTimeout(prazo); ok(null) } })
+      } catch (_) { ok(null) }
+    })
   }
 
   var ligado = null

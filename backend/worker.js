@@ -10253,10 +10253,17 @@ async function handleSwWeb(req, env, path) {
     // da conversa. Quem resolve isso e o resolveOwner, igual faz o heartbeat do Sale Chat.
     const dono = await resolveOwner(env, num);
     if (!dono || !dono.at_id) return json({ ok: true, semDono: true });
-    // SO MARCA VIVO QUANDO O WHATSAPP ESTA AUTENTICADO. Numero deslogado que continua batendo
-    // sinal nao pode receber lead - e exatamente a mesma regra do heartbeat do Sale Chat, e ela
-    // existe porque uma vez a roleta seguiu mandando lead pra um numero que tinha caido.
-    const vivo = (b && b.motor) ? 1 : 0;
+    // SO MARCA VIVO QUANDO O WHATSAPP ESTA AUTENTICADO, e quem diz isso e o campo `auth`.
+    //
+    // NAO ACEITA `motor` (16/10/2026, segunda varredura). O app antigo mandava `motor`, que so quer
+    // dizer que a BIBLIOTECA carregou: medido na tela do QR, sem nenhum aparelho pareado, o motor
+    // ja responde true. Com isso, abrir um numero e nao ler o QR marcava ele como vivo e a roleta
+    // entregava lead pago pra ninguem - o mesmo incidente que o Sale Chat ja teve e consertou.
+    //
+    // FECHA NA AUSENCIA, de proposito: copia velha do app instalada por ai nao manda `auth`, e sem
+    // ele o numero simplesmente nao e marcado como vivo. Errar pra "nao recebe" e muito mais barato
+    // que errar pra "recebe e ninguem atende".
+    const vivo = (b && b.auth === true) ? 1 : 0;
     try {
       await _scEnsureTables(env);
       await env.DB.prepare(
@@ -13701,7 +13708,13 @@ async function handleSalechatIngest(req, env, token) {
             // inbox mas NAO virava lead, e o codigo de desconto dela ia pro lixo - o lead ficava
             // sem click id e a venda saia sem atribuicao.
             await _waLeadCapture(env, inst, phone, String(e?.body || ''), selfNumber, String(e?.type || ''), Number(e?.ts) || 0, 1800);   // selfNumber = número REAL que atendeu
-            await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
+            // MENSAGEM VELHA NAO REESCREVE A ATRIBUICAO (16/10/2026, segunda varredura). Ao
+            // reconectar, o WhatsApp reemite o historico: uma mensagem de ontem, que o app agora
+            // manda marcada com `velha`, carimbava a conversa pro numero antigo e roubava o lead
+            // de quem esta atendendo hoje. Mensagem velha vira bolha no inbox e para por ai.
+            if (!e?.velha) {
+              await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
+            }
           }
         } catch (_) {}
       }

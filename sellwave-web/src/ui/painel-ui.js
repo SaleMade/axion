@@ -36,7 +36,7 @@ let ocupado = false
 let disparando = ''
 let pararPedido = false
 let ultimoFone = ''
-let estadoWa = { motor: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
+let estadoWa = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
 
 try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
 const guardaFavs = () => { try { localStorage.setItem('sw_favs', JSON.stringify(favoritos)) } catch { /* sem armazenamento o favorito vale só nesta sessão */ } }
@@ -306,7 +306,7 @@ async function roda(lista, marca) {
   $('parar').style.display = 'none'
   if (!pararPedido) rodape('enviado')
   desenha()
-  setTimeout(() => { if (!ocupado) rodape(estadoWa.motor ? 'pronto' : 'esperando o WhatsApp') }, 2500)
+  setTimeout(() => { if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
 }
 
 $('parar').onclick = () => { pararPedido = true }
@@ -355,7 +355,9 @@ let ultimaTentativa = 0
 async function pulso() {
   const e = await window.swp.estado()
   if (e) estadoWa = e
-  $('pt').className = 'pt' + (estadoWa.motor ? '' : ' off')
+  // O pontinho verde so acende com o WhatsApp PAREADO. Antes acendia na tela do QR, porque so
+  // olhava se a biblioteca tinha carregado.
+  $('pt').className = 'pt' + (estadoWa.autenticado ? '' : ' off')
   $('meu').textContent = estadoWa.eu ? formata(estadoWa.eu) : ''
 
   // NÚMERO TROCADO: o QR deste slot foi lido por outro aparelho. Grita, porque dali pra frente a
@@ -366,7 +368,7 @@ async function pulso() {
     av.style.display = 'block'
   } else { av.style.display = 'none' }
 
-  if (!ocupado) rodape(estadoWa.motor ? 'pronto' : 'esperando o WhatsApp carregar')
+  if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
   // Só redesenha quando o botão de enviar muda de estado: redesenhar a cada pulso apagaria a
   // seleção de texto e piscaria a lista.
   const agora = podeEnviar()
