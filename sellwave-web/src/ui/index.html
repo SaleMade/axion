@@ -122,6 +122,16 @@
   .versao-nova b { font-weight: 650; }
   .versao-nova[hidden] { display: none; }
 
+  /* Campos da janelinha de proxy. Mesmo desenho dos campos da dash: rotulo pequeno em cima,
+     caixa escura, foco verde. */
+  .campo { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; min-width: 0; }
+  .campo label { font-size: 11px; color: var(--apagado); }
+  .campo input { width: 100%; padding: 8px 10px; font-size: 12.5px; color: var(--texto);
+    border: 1px solid var(--linha); border-radius: 8px; background: rgba(255, 255, 255, .03); outline: none; }
+  .campo input:focus { border-color: rgba(36, 194, 120, .55); }
+  .campo-par { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .campo-par .campo-curto { max-width: 110px; }
+
   /* ─────────────── area de conteudo ─────────────── */
   main { flex: 1; height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px; }
   .cartao {

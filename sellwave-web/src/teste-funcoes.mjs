@@ -152,6 +152,25 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('sw:estado NAO manda config.proxies cru', !/proxies: config\.proxies/.test(bloco))
 }
 
+// ── 9) COLAR O PROXY DE UMA LINHA SO. O Bruno cola do painel do Decodo; errar aqui faz o
+//    numero sair pelo lugar errado, ou nao sair.
+{
+  const fonte = leia('ui/app.js')
+  const separaProxy = eval('(' + recorta(fonte, 'function separaProxy(txt)') + ')')
+  const d = separaProxy('isp.decodo.com:10001:sp6ekfnce5:1ZyltWnn5st_9KnrK7')
+  vale('formato host:porta:usuario:senha', d && d.host === 'isp.decodo.com' && d.porta === '10001'
+    && d.usuario === 'sp6ekfnce5' && d.senha === '1ZyltWnn5st_9KnrK7', JSON.stringify(d))
+  const u = separaProxy('http://user:pa:ss@proxy.com:8080')
+  vale('formato de URL com senha contendo dois-pontos', u && u.host === 'proxy.com' && u.porta === '8080'
+    && u.usuario === 'user' && u.senha === 'pa:ss', JSON.stringify(u))
+  const sp = separaProxy('isp.decodo.com:10001')
+  vale('so host e porta, sem credencial', sp && sp.host === 'isp.decodo.com' && sp.porta === '10001' && !sp.usuario)
+  const ds = separaProxy('host:10001:user:se:nha:com:dois')
+  vale('senha com dois-pontos nao e cortada', ds && ds.senha === 'se:nha:com:dois', ds && ds.senha)
+  vale('texto solto nao vira proxy', separaProxy('nada') === null && separaProxy('') === null && separaProxy(null) === null)
+  vale('porta que nao e numero nao passa', separaProxy('host:abc:u:s') === null)
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

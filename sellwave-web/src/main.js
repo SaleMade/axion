@@ -1152,6 +1152,41 @@ ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true
 // trocar por um proxy dele (ou pelo IP da casa dele) com o botao direito: a trava era contornada
 // pelo proprio lado que ela deveria conter. Quem cadastra e a direcao, em Ferramentas > SellWave
 // Web, e o app so LE.
+// CADASTRAR PROXY PELO PROPRIO APP, e so a direcao.
+//
+// Isto esteve de fora por um tempo e foi erro meu. A revisao de 16/10 tirou o cadastro do app com
+// um motivo certo - o VENDEDOR nao pode trocar o proxy pelo dele e furar a trava - mas eu apaguei
+// a tela pra todo mundo, inclusive pra quem cadastra. Resultado medido no mesmo dia: o Bruno ficou
+// preso na tela "Nao abriu / cadastre na dash" sem conseguir cadastrar nada, porque e no app que
+// ele esta quando descobre que falta proxy.
+//
+// Quem segura o vendedor NAO e esconder o formulario, e o servidor: o POST /api/swweb/proxy recusa
+// com 403 quem nao manda na operacao, e recusa chip de outro mundo. A tela aqui so mostra o que o
+// servidor ja deixaria fazer.
+ipcMain.handle('sw:proxy-salvar', async (_e, { nk, host, porta, usuario, senha }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const chave = numKey(nk)
+  if (!chave) return { ok: false, erro: 'Número inválido.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/proxy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      body: JSON.stringify({ nk: chave, host: String(host || ''), porta: Number(porta) || 0, usuario: String(usuario || ''), senha: String(senha || '') }),
+      signal: AbortSignal.timeout(20000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) {
+      return { ok: false, erro: (d && (d.error || d.erro)) || (r.status === 403 ? 'Só a direção cadastra proxy.' : 'A dash respondeu ' + r.status) }
+    }
+    // Busca de volta pra copia local ficar igual ao servidor na hora, sem esperar o proximo ciclo.
+    await puxaProxyDaDash(chave)
+    return { ok: true, apagou: !String(host || '').trim() }
+  } catch (_) {
+    return { ok: false, erro: 'Não deu pra falar com a dash.' }
+  }
+})
+
 ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   const busca = await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)

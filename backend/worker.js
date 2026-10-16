@@ -10549,7 +10549,23 @@ async function handleSwWeb(req, env, path) {
     }
     const host = String((b && b.host) || '').trim();
     if (!host) delete proxies[nk];
-    else proxies[nk] = { host, porta: Number(b.porta) || 0, usuario: String(b.usuario || ''), senha: String(b.senha || '') };
+    else {
+      // CAMPO VAZIO MANTEM O QUE JA ESTA SALVO, a mesma regra do dc_api_key na tela de Integracoes.
+      //
+      // Existe por causa de quem cadastra pelo APP: a senha do proxy nao viaja mais pra tela de la
+      // (o sw:estado manda so host, porta e "tem senha"), entao o formulario abre com usuario e
+      // senha em branco. Sem esta regra, mexer na porta de um proxy ja cadastrado apagaria a senha
+      // dele em silencio e o numero pararia de abrir no dia seguinte.
+      const antes = proxies[nk] || {};
+      const usuario = String((b && b.usuario) || '');
+      const senha = String((b && b.senha) || '');
+      proxies[nk] = {
+        host,
+        porta: Number(b.porta) || 0,
+        usuario: usuario || String(antes.usuario || ''),
+        senha: senha || String(antes.senha || ''),
+      };
+    }
     await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
   }

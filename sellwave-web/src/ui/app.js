@@ -280,31 +280,106 @@ async function viraRoleta(nk) {
   await recarregaEstado()
 }
 
+// SEPARA UM PROXY COLADO DE UMA LINHA SO. O Bruno cola do painel do Decodo, que entrega no
+// formato host:porta:usuario:senha. Digitar campo a campo quatro vezes por numero, em 90 numeros,
+// e onde a paciencia acaba. Aceita tambem http://usuario:senha@host:porta.
+function separaProxy(txt) {
+  const t = String(txt || '').trim()
+  if (!t) return null
+  try {
+    if (/^\w+:\/\//.test(t)) {
+      const u = new URL(t)
+      if (!u.hostname) return null
+      return { host: u.hostname, porta: u.port || '', usuario: decodeURIComponent(u.username || ''), senha: decodeURIComponent(u.password || '') }
+    }
+  } catch (_) { /* nao era URL: tenta o formato de dois pontos */ }
+  const p = t.split(':')
+  if (p.length < 2) return null
+  const host = p[0].trim()
+  const porta = String(p[1] || '').replace(/\D/g, '')
+  if (!host || !porta) return null
+  return { host, porta, usuario: (p[2] || '').trim(), senha: p.slice(3).join(':').trim() }
+}
+
 function janelaProxy(numero) {
   if (!estado.direcao) return
   const nk = numKey(numero)
   const px = (estado.proxies && estado.proxies[nk]) || null
+  // O FORMULARIO FICA AQUI, e nao so na dash.
+  //
+  // Esconder o cadastro do app foi erro meu: o motivo (vendedor nao troca o proprio proxy e fura a
+  // trava) e certo, mas quem decide isso e o SERVIDOR, que recusa com 403 quem nao manda. Tirando
+  // a tela de todo mundo, sobrou o diretor preso em "cadastre na dash" justamente na hora em que
+  // ele descobre que falta proxy. Agora ele cadastra aqui, e o vendedor continua sem poder.
   modalCorpo.innerHTML = ''
     + '<h2>Proxy de ' + esc(bonito(cheio(nk))) + '</h2>'
-    + (px
-      ? '<p>Saindo por <b>' + esc(px.host + ':' + px.porta) + '</b>.</p>'
-      : '<p>Este número ainda não tem proxy. Cadastre em Ferramentas &gt; SellWave Web, na dash.</p>')
+    + '<p>' + (px ? 'Saindo por <b>' + esc(px.host + ':' + px.porta) + '</b>.' : 'Este número ainda não tem proxy.')
+    + ' Só HTTP: o Chromium não autentica SOCKS com senha.</p>'
+    + '<div class="campo"><label for="px-colar">Colar de uma vez</label>'
+    + '<input id="px-colar" placeholder="isp.exemplo.com:10001:usuario:senha" autocomplete="off" spellcheck="false" /></div>'
+    + '<div class="campo-par">'
+    + '<div class="campo"><label for="px-host">Endereço</label><input id="px-host" value="' + esc(px ? px.host : '') + '" autocomplete="off" spellcheck="false" /></div>'
+    + '<div class="campo campo-curto"><label for="px-porta">Porta</label><input id="px-porta" value="' + esc(px ? px.porta : '') + '" inputmode="numeric" autocomplete="off" /></div>'
+    + '</div>'
+    + '<div class="campo-par">'
+    + '<div class="campo"><label for="px-user">Usuário</label><input id="px-user" autocomplete="off" spellcheck="false" /></div>'
+    + '<div class="campo"><label for="px-senha">Senha</label><input id="px-senha" type="password" autocomplete="off"'
+    + (px && px.temSenha ? ' placeholder="deixe em branco pra manter"' : '') + ' /></div>'
+    + '</div>'
     + '<div class="aviso" id="p-av"></div>'
     + '<div class="acoes">'
+    + (px ? '<button class="secundario" id="p-remover">Remover</button>' : '')
     + (px ? '<button class="secundario" id="p-testar">Testar saída</button>' : '')
-    + '<button class="principal" style="margin:0" id="p-fechar">Fechar</button></div>'
+    + '<button class="principal" style="margin:0" id="p-salvar">Salvar</button>'
+    + '<button class="secundario" id="p-fechar">Fechar</button></div>'
   abreModal()
+
+  $('px-colar').oninput = (e) => {
+    const p = separaProxy(e.target.value)
+    if (!p) return
+    $('px-host').value = p.host
+    $('px-porta').value = p.porta
+    if (p.usuario) $('px-user').value = p.usuario
+    if (p.senha) $('px-senha').value = p.senha
+  }
+
+  const aviso = (txt, ok) => {
+    const av = $('p-av')
+    av.className = 'aviso ' + (ok ? 'ok' : 'erro')
+    av.style.display = 'block'
+    av.textContent = txt
+  }
+
+  const salvar = async (apagar) => {
+    const b = $('p-salvar'), br = $('p-remover')
+    const host = apagar ? '' : String($('px-host').value || '').trim()
+    if (!apagar && (!host || !String($('px-porta').value || '').trim())) return aviso('Falta o endereço ou a porta.')
+    if (b) { b.disabled = true; b.textContent = 'Salvando...' }
+    if (br) br.disabled = true
+    const r = await window.sw.salvarProxy({
+      nk, host,
+      porta: $('px-porta').value, usuario: $('px-user').value, senha: $('px-senha').value,
+    })
+    if (b) { b.disabled = false; b.textContent = 'Salvar' }
+    if (br) br.disabled = false
+    if (!r || !r.ok) return aviso((r && r.erro) || 'Não salvou')
+    await recarregaEstado()
+    if (apagar) { fechaModal(); return }
+    aviso('Proxy salvo. Agora abra o número.', true)
+  }
+
+  $('p-salvar').onclick = () => salvar(false)
+  const rem = $('p-remover')
+  if (rem) rem.onclick = () => salvar(true)
   $('p-fechar').onclick = fechaModal
   const testar = $('p-testar')
   if (testar) testar.onclick = async () => {
     testar.disabled = true; testar.textContent = 'Testando...'
     const r = await window.sw.testarProxy(nk)
     testar.disabled = false; testar.textContent = 'Testar saída'
-    const av = $('p-av')
-    av.className = 'aviso ' + (r.ok ? 'ok' : 'erro')
-    av.textContent = r.ok
+    aviso(r.ok
       ? 'Saiu por ' + r.ip + (r.pais ? ' · ' + r.pais : '') + (r.cidade ? ' · ' + r.cidade : '')
-      : r.erro
+      : r.erro, !!r.ok)
   }
 }
 

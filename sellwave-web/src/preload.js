@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('sw', {
   teto: (maxAbertos) => chamar('sw:teto', { maxAbertos }),
   abrirLog: () => chamar('sw:abrirLog'),
   abrirInstalador: () => chamar('sw:abrirInstalador'),
+  salvarProxy: (d) => chamar('sw:proxy-salvar', d),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {

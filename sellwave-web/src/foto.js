@@ -102,6 +102,13 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 400))
     await salva(ctx.casca, '3-lista-vendedor', pasta)
 
+    // a janelinha de PROXY da direcao: e por onde o Bruno cadastra sem sair do app
+    await ctx.casca.webContents.executeJavaScript(monta(true))
+    await ctx.casca.webContents.executeJavaScript("janelaProxy('(15) 97407-6200'); 'ok'")
+    await new Promise((r) => setTimeout(r, 400))
+    await salva(ctx.casca, '6-proxy-direcao', pasta)
+    await ctx.casca.webContents.executeJavaScript('fechaModal(); "ok"')
+
     // os Ajustes do VENDEDOR: tem que sobrar so o que e da maquina dele
     await ctx.casca.webContents.executeJavaScript('janelaAjustes(); "ok"')
     await new Promise((r) => setTimeout(r, 400))
@@ -145,13 +152,13 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 700))
     await v.webContents.executeJavaScript("aberto='item:m3'; desenha(); 'ok'")
     await new Promise((r) => setTimeout(r, 400))
-    await salva(v, '6-painel', pasta)
+    await salva(v, '7-painel', pasta)
 
     // 7) a aba FUNIS com a previa de um funil aberta: e onde se ve a pausa de cada passo, que e
     //    justamente o numero que estava errado (somava espera + digitando).
     await v.webContents.executeJavaScript("aba='funis'; aberto='funil:s1'; for (const b of document.querySelectorAll('.aba')) b.classList.toggle('on', b.dataset.aba==='funis'); desenha(); 'ok'")
     await new Promise((r) => setTimeout(r, 500))
-    await salva(v, '7-painel-funis', pasta)
+    await salva(v, '8-painel-funis', pasta)
   } catch (e) { console.error('  nao fotografei o painel: ' + ((e && e.message) || e)) }
 
 
