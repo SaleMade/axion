@@ -90,15 +90,34 @@ function desenhaLista() {
   }
   let html = ''
   for (const [dono, itens] of grupos) {
-    itens.sort((a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0))
-    const ligados = itens.filter((x) => x.roleta).length
-    // ENCOLHIDA NAO TEM CABECALHO DE VENDEDOR: em 56px o nome nao cabe e um risco separando grupos
-    // sem dizer de quem sao e so ruido. O dono fica no passe de mouse de cada numero.
-    if (!barraFina) {
-      html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
-        + '<span class="qtd">' + ligados + '/' + itens.length + '</span></div>'
+    // O AQUECIMENTO TEM AREA PROPRIA (16/10/2026). Antes o numero em aquecimento ficava solto no
+    // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
+    // ali, ele so esta simplesmente jogado ali". Agora tem cabecalho proprio, na cor do aquecimento
+    // (a mesma ambar da Contingencia), pra o vendedor entender que aqueles numeros sao outra coisa.
+    const aquecendo = itens.filter((x) => String(x.st || '') === EM_AQUECIMENTO)
+    const normais = itens.filter((x) => String(x.st || '') !== EM_AQUECIMENTO)
+    const ordena = (a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
+    normais.sort(ordena)
+    aquecendo.sort(ordena)
+
+    // ENCOLHIDA NAO TEM CABECALHO: em 56px o nome nao cabe e um risco separando grupos sem dizer de
+    // quem sao e so ruido. O dono fica no passe de mouse de cada numero.
+    if (normais.length) {
+      if (!barraFina) {
+        html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
+          + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
+      }
+      html += normais.map(barraFina ? linhaFina : linha).join('')
     }
-    html += itens.map(barraFina ? linhaFina : linha).join('')
+    if (aquecendo.length) {
+      if (!barraFina) {
+        const leads = aquecendo.reduce((t, x) => t + (Number(x.leads_hoje) || 0), 0)
+        html += '<div class="vend aquec"><span>Aquecimento</span><span class="risco"></span>'
+          + '<span class="qtd" title="Leads que chegaram hoje nos números em aquecimento">'
+          + leads + (leads === 1 ? ' lead' : ' leads') + '</span></div>'
+      }
+      html += aquecendo.map(barraFina ? linhaFina : linha).join('')
+    }
   }
   lista.innerHTML = html
 
@@ -114,6 +133,9 @@ function desenhaLista() {
   }
   for (const b of lista.querySelectorAll('.sw')) {
     b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
+  }
+  for (const b of lista.querySelectorAll('.sw-off')) {
+    b.onclick = (e) => { e.stopPropagation() }     // nao e interruptor: e um selo, so explica
   }
   for (const b of lista.querySelectorAll('.fecha')) {
     b.onclick = (e) => { e.stopPropagation(); fechar(b.dataset.fecha) }
@@ -162,6 +184,17 @@ function corDoContador(n) {
 // Ligado na roleta e, no modo limite, na vez. No modo roleta simples todos os ligados dividem os
 // leads, entao ligado ja e "recebendo".
 const recebendoAgora = (n) => !!(n && n.roleta && (!n.fila || n.fila.st === 'vez'))
+
+// SO DOIS ESTADOS RECEBEM LEAD (16/10/2026, regra do Bruno): "Em uso" na Contingencia, ou
+// "Em aquecimento". Palavras dele: "outros numeros que estejam em outros estados, como por exemplo
+// ativo, em analise e tudo mais, eu nao quero que apareca aquele interruptor. Quero que sempre
+// deixe ele desligado".
+//
+// Quem DECIDE continua sendo o servidor - a lista ja vem com `roleta` falso pra esses. Isto aqui e
+// a tela parando de OFERECER o que nao tem efeito: interruptor que nao liga nada e pior que
+// interruptor nenhum, porque o vendedor clica, nada acontece e ele acha que o app travou.
+const EM_AQUECIMENTO = 'aquecimento'
+const podeReceber = (n) => !!n && (n.em_uso === true || String(n.st || '') === EM_AQUECIMENTO)
 
 function linhaFina(n) {
   const nk = numKey(n.numero)
@@ -236,9 +269,16 @@ function linha(n) {
       + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>'
     : ''
 
-  const chave = '<span class="sw' + (n.roleta ? ' on' : '') + (mexendo.has(nk) ? ' ocupado' : '')
-    + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
-    + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
+  // O INTERRUPTOR SO EXISTE PRA QUEM PODE RECEBER. Em outro estado ele nao ligaria nada (o servidor
+  // recusa), e um botao que nao faz nada e pior que botao nenhum. No lugar dele vai um selo
+  // apagado, que diz POR QUE nao da - sem o selo, o numero apareceria sem nada no canto e a leitura
+  // seria "a tela nao carregou direito".
+  const chave = podeReceber(n)
+    ? '<span class="sw' + (n.roleta ? ' on' : '') + (mexendo.has(nk) ? ' ocupado' : '')
+      + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
+      + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
+    : '<span class="sw-off" title="Só recebe lead quem está Em uso ou Em aquecimento na Contingência'
+      + (n.status ? '. Este está como ' + esc(n.status) : '') + '">—</span>'
 
   return '<button class="' + cls.join(' ') + '" data-numero="' + esc(n.numero) + '" title="'
     + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + (n.status ? ' · ' + n.status : '')) + '">'

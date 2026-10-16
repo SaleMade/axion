@@ -375,6 +375,19 @@ app.whenReady().then(async () => {
   const temBt = await js2('!!document.getElementById("encolhe") && !!document.getElementById("fresta")')
   conta('a casca tem o botao de encolher e a abinha de voltar', temBt)
 
+  // ── AQUECIMENTO tem area propria, e o interruptor so existe pra quem pode receber ──────────
+  const sec = await js2('(() => ({'
+    + ' cabecalhos: [...document.querySelectorAll(".vend span:first-child")].map(e => e.textContent.trim()),'
+    + ' aquecCor: (() => { const h = document.querySelector(".vend.aquec"); return h ? getComputedStyle(h).color : "" })(),'
+    + ' aquecQtd: (document.querySelector(".vend.aquec .qtd")||{}).textContent || "",'
+    + ' chaves: document.querySelectorAll(".num .sw").length,'
+    + ' selos: document.querySelectorAll(".num .sw-off").length }))()')
+  conta('o aquecimento ganha cabecalho proprio', sec.cabecalhos.includes('Aquecimento'), JSON.stringify(sec.cabecalhos))
+  conta('na cor do aquecimento, nao na cinza dos vendedores', sec.aquecCor === 'rgb(245, 158, 11)', sec.aquecCor)
+  conta('e diz quantos leads chegaram hoje', /3 leads/.test(sec.aquecQtd), sec.aquecQtd)
+  // 3 em uso + 1 em aquecimento = 4 interruptores; o "Em analise" fica com o selo
+  conta('interruptor so pra quem pode receber', sec.chaves === 4 && sec.selos === 1, JSON.stringify(sec))
+
   const largaAntes = await js2('document.querySelector("aside").getBoundingClientRect().width')
   conta('a barra comeca larga', Math.round(largaAntes) === 268, String(largaAntes))
 
@@ -385,15 +398,18 @@ app.whenReady().then(async () => {
   conta('e avisa o processo principal, que e quem move a view', JSON.stringify(fina.pediu) === '[true]', JSON.stringify(fina.pediu))
 
   const dentro = await js2('({ fino: document.querySelectorAll(".fino").length, d: [...document.querySelectorAll(".fino .d")].map(e => e.textContent).join(","), c: [...document.querySelectorAll(".fino .c")].map(e => e.textContent).join(","), vend: document.querySelectorAll(".vend").length, busca: getComputedStyle(document.querySelector(".busca")).display })')
-  conta('encolhida, mostra um numero por linha', dentro.fino === 3, JSON.stringify(dentro.fino))
-  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,0653', dentro.d)
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0/70', dentro.c)
+  conta('encolhida, mostra um numero por linha', dentro.fino === 5, JSON.stringify(dentro.fino))
+  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,8551,0653', dentro.d)
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,3/5,0/70', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
 
   const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
     + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
     + ' qual: [...document.querySelectorAll(".fino.recebendo .d")].map(e => e.textContent).join(",") } })()')
-  conta('encolhida, o destaque de "recebendo agora" tambem aparece', destFino.n === 1 && destFino.qual === '3293', JSON.stringify(destFino))
+  // DOIS destacados, e esta certo: o estabelecido da vez e o em aquecimento, que recebe em
+  // paralelo (entra na FRENTE da fila com teto pequeno). Se um dia so um aparecer aqui, ou o
+  // aquecimento saiu da roleta ou a fila voltou a ser serial entre os dois, e os dois sao bug.
+  conta('encolhida, o destaque de "recebendo agora" tambem aparece', destFino.n === 2 && destFino.qual === '3293,8551', JSON.stringify(destFino))
 
   await js2('document.getElementById("encolhe").click()')
   await espera(600)
@@ -402,11 +418,11 @@ app.whenReady().then(async () => {
   const dest = await js2('(() => { const r = [...document.querySelectorAll(".num")].map(e => e.className);'
     + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
     + ' qual: [...document.querySelectorAll(".num.recebendo .fone")].map(e => e.textContent.trim()).join(",") } })()')
-  conta('so UM numero fica destacado como recebendo agora', dest.total === 3 && dest.n === 1, JSON.stringify(dest))
-  conta('e e o que esta na vez da fila', /99598-3293/.test(dest.qual), dest.qual)
+  conta('so quem esta na vez fica destacado', dest.total === 5 && dest.n === 2, JSON.stringify(dest))
+  conta('e sao o estabelecido da vez e o em aquecimento', /99598-3293/.test(dest.qual) && /97406-8551/.test(dest.qual), dest.qual)
 
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
-  conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 2, JSON.stringify(voltou))
+  conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 3, JSON.stringify(voltou))
 
   // A ABINHA so aparece com o painel escondido, e e o unico caminho de volta fora de Ajustes.
   const escondida = await js2('getComputedStyle(document.getElementById("fresta")).display')

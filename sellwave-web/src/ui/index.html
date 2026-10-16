@@ -110,6 +110,16 @@
     display: flex; align-items: center; gap: 7px; padding: 12px 8px 6px;
     font-size: 10.5px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--apagado);
   }
+  /* AQUECIMENTO TEM AREA PROPRIA, na cor que o resto do sistema ja usa pra isso (a mesma ambar da
+     Contingencia). Antes o numero em aquecimento ficava solto no fim da lista do vendedor, sem nada
+     dizendo o que era: "aquele numero ali, ele so esta simplesmente jogado ali". */
+  .vend.aquec { color: #f59e0b; }
+  .vend.aquec .risco { background: rgba(245, 158, 11, .28); }
+  .vend.aquec .qtd { background: rgba(245, 158, 11, .14); color: #f59e0b; }
+  /* No lugar do interruptor de quem nao pode receber. Selo apagado, nao botao: nao ha o que clicar. */
+  .sw-off { display: grid; place-items: center; width: 38px; height: 21px; flex: 0 0 38px;
+    border-radius: 9999px; border: 1px dashed var(--linha); color: rgba(148, 163, 184, .45);
+    font-size: 11px; line-height: 1; cursor: default; }
   .vend .risco { flex: 1; height: 1px; background: var(--linha); }
   .vend .qtd { font-variant-numeric: tabular-nums; opacity: .8; letter-spacing: 0; }
 
