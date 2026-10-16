@@ -1007,6 +1007,9 @@ async function roda(lista, marca, rotulo = '') {
     catch (_) { /* a faixa some, o disparo continua */ }
   }
   avisa(0)
+  // Zera a bandeirinha de parar da pagina: um Parar de um funil anterior cancelaria o primeiro item
+  // deste sem ninguem entender por que.
+  try { window.swp.parar(alvoNk, false) } catch (_) { /* ok */ }
   desenha()
   $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
 
@@ -1021,18 +1024,17 @@ async function roda(lista, marca, rotulo = '') {
     //
     // O TETO DE 120 SEGUNDOS e o mesmo do _dorme no worker. Um passo com pausa absurda (dedo
     // escorregado no cadastro) travava o funil sem nada na tela explicando o que estava havendo.
+    // A PAUSA NAO ACONTECE MAIS AQUI (16/10/2026). Ela vive DENTRO da pagina, grudada no envio,
+    // porque la ela e uma cadeia so: indicador, espera e envio na mesma promessa, do jeito que o
+    // sc-panel faz ha meses. Antes eram tres saltos entre processos, e cada salto e uma chance de a
+    // barra de escrever estar em outro estado na hora do envio.
+    //
+    // ESPERAR TAMBEM AQUI SOMARIA: passo de 8s viraria 16s. E a terceira vez que essa soma aparece
+    // hoje, por tres caminhos diferentes, e por isso existe um teste amarrando que o painel NAO
+    // espera. Quem conta o tempo e a pagina; aqui so se diz o que esta acontecendo.
     const pausa = Math.min(120, Math.max(0, Number(it.pausa) || 0))
-    if (pausa > 0) {
-      const audio = it.kind === 'audio'
-      // O rodape diz a VERDADE do momento. Dizer "enviando" durante a pausa fazia o vendedor achar
-      // que tinha travado, porque nada aparecia na conversa por dez segundos.
-      rodape((audio ? 'gravando' : 'digitando') + de + paraQuem(), pct)
-      await window.swp.indica(alvoNk, alvo, audio ? 'audio' : 'texto', pausa)
-      const fim = Date.now() + pausa * 1000
-      while (Date.now() < fim && !pararPedido) await new Promise((r) => setTimeout(r, 200))
-    }
-    if (pararPedido) { rodape('parado em ' + (i + 1) + ' de ' + lista.length); break }
-    rodape((lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem() + (lista.length > 1 ? '' : '...'), pct)
+    if (pausa > 0) rodape(((it.kind === 'audio') ? 'gravando' : 'digitando') + de + paraQuem(), pct)
+    else rodape((lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem() + (lista.length > 1 ? '' : '...'), pct)
     const r = await window.swp.manda(alvoNk, alvo, it)
     if (!r || !r.ok) {
       ocupado = false; disparando = ''; alvoNkAtual = ''; $('parar').style.display = 'none'
@@ -1055,7 +1057,13 @@ async function roda(lista, marca, rotulo = '') {
   setTimeout(() => { if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
 }
 
-$('parar').onclick = () => { pararPedido = true }
+// O PARAR AGORA TEM DOIS LADOS: a bandeirinha que a espera DENTRO da pagina confere a cada 400ms,
+// e o laco daqui, que decide se vai pro proximo item. Sem o primeiro, clicar Parar no meio de uma
+// pausa de 60s so teria efeito quando ela acabasse.
+$('parar').onclick = () => {
+  pararPedido = true
+  try { window.swp.parar(alvoNkAtual || estadoWa.nk || '', true) } catch (_) { /* o laco para do mesmo jeito */ }
+}
 $('fechar').onclick = () => window.swp.fechar()
 $('recarregar').onclick = () => { rodape('recarregando...'); window.swp.recarregar() }
 $('esconder').onclick = () => window.swp.esconder()

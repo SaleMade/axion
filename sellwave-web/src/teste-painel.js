@@ -229,6 +229,24 @@ app.whenReady().then(async () => {
   conta('mostra por qual numero esta saindo', /97401-5754/.test(pil.l2), pil.l2)
   conta('tem a rodinha girando no cabecalho e na linha', pil.roda === 2, String(pil.roda))
 
+  // ── O PAINEL NAO ESPERA A PAUSA: quem espera e a pagina ────────────────────────────────────
+  // A soma de pausa ja voltou TRES vezes hoje, por tres caminhos diferentes (o painel dormindo e o
+  // agente dormindo; o retorno do indicador so vindo no fim; e agora a pagina esperando junto com o
+  // painel). Com um passo de 3s, se o painel esperasse, o primeiro envio sairia depois de 3s.
+  await clica('[data-aba=funis]')
+  await espera(250)
+  const t0 = Date.now()
+  await clica('[data-funil=s1]')
+  await espera(900)
+  const envios = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "manda").map(c => c.t))'))
+  conta('o painel NAO espera a pausa: ela acontece dentro da pagina',
+    envios.length >= 1 && (envios[0] - t0) < 900, 'primeiro envio em ' + (envios.length ? (envios[0] - t0) + 'ms' : 'nenhum'))
+  const itemMandado = JSON.parse(await js('JSON.stringify(((window.__ver()).find(c => c.nome === "manda") || {}).args || [])'))
+  conta('e a pausa do passo viaja junto com o item, pra pagina esperar', (itemMandado[2] || {}).pausa === 3, JSON.stringify((itemMandado[2] || {}).pausa))
+  const zerou = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "parar").map(c => c.args[1]))'))
+  conta('o funil zera a bandeirinha de parar antes de comecar', zerou[0] === false, JSON.stringify(zerou))
+  await espera(900)
+
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'
     + ' return { classe: e.className, borda: s.borderTopWidth, cor: s.color } })()')

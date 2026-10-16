@@ -12,10 +12,15 @@ const ESTADO = {
 }
 
 contextBridge.exposeInMainWorld('swp', {
-  roteiro: reg('roteiro', { ok: true, messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!' }], sequences: [], media: [], mediaBase: '' }),
+  roteiro: reg('roteiro', { ok: true,
+    messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!' }, { id: 'm2', label: 'Tudo bem?', text: 'Tudo bem?' }],
+    // Um funil com pausa DE VERDADE: e com ele que o teste prova que o painel nao espera.
+    sequences: [{ id: 's1', label: 'Boas-vindas', items: [{ id: 'm1', sim: 3 }, { id: 'm2', sim: 3 }] }],
+    media: [], mediaBase: '' }),
   lead: reg('lead', { ok: true, achou: true, nome: 'Cliente de Teste', cidade: 'Campinas', uf: 'SP', produto: 'Produto A - 3 Meses', etapa: 'A Enviar', pedidos: 1 }),
   estado: reg('estado', ESTADO),
-  manda: reg('manda', { ok: true }),
+  manda: (nk, chatId, item) => { chamadas.push({ nome: 'manda', args: [nk, chatId, item], t: Date.now() }); return Promise.resolve({ ok: true }) },
+  parar: (nk, parar) => { chamadas.push({ nome: 'parar', args: [nk, parar] }); return Promise.resolve({ ok: true }) },
   indica: reg('indica', { ok: true }),
   disparo: reg('disparo', { ok: true }),
   disparos: reg('disparos', { ok: true, itens: [

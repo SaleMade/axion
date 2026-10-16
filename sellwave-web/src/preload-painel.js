@@ -8,7 +8,10 @@ contextBridge.exposeInMainWorld('swp', {
   lead: (phone) => ipcRenderer.invoke('swp:lead', { phone }),
   estado: () => ipcRenderer.invoke('swp:estado-wa'),
   manda: (nk, chatId, item) => ipcRenderer.invoke('swp:manda', { nk, chatId, item }),
-  indica: (nk, chatId, kind, seg) => ipcRenderer.invoke('swp:indica', { nk, chatId, kind, seg }),
+  // A PAUSA ACONTECE DENTRO DA PAGINA, grudada no envio (igual ao sc-panel, que e a versao que
+  // funciona ha meses). Por isso nao ha mais indicador separado aqui: indicador, espera e envio sao
+  // uma cadeia so la dentro. O que sobra deste lado e a bandeirinha de PARAR, que a espera confere.
+  parar: (nk, parar) => ipcRenderer.invoke('swp:parar', { nk, parar }),
   // O QUE ESTA SAINDO, com nome e passo. Sem os campos extras o registro do processo principal
   // nascia com o rotulo padrao e a faixa do painel dizia literalmente "funil" no lugar do nome.
   disparo: (nk, ligado, info) => ipcRenderer.invoke('swp:disparo', { nk, ligado, ...(info || {}) }),
