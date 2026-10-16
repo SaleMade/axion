@@ -1408,13 +1408,50 @@ async function dataUriDe(url) {
 }
 
 // "DIGITANDO..." NA CONVERSA, sem bloquear ninguem. Quem conta o tempo e o painel.
-// QUEM ESTA DISPARANDO AGORA. O painel avisa ao entrar e ao sair do funil, e a hibernacao usa isso
-// pra nao fechar a sessao no meio do disparo.
+// O QUE ESTA SAINDO AGORA, POR NUMERO.
+//
+// O main.js nao sabe nada de funil: quem sabe e o painel, que avisa ao entrar e ao sair. Aqui e so
+// o REGISTRO - e e por isso que ele mora aqui e nao la: a hibernacao por memoria precisa saber pra
+// nao fechar a sessao no meio do disparo, e a aba de Pedidos precisa mostrar o que esta saindo nos
+// OUTROS numeros, que o painel da vez nao tem como saber sozinho.
+//
+// LIMITE DE HOJE, e vale escrito: o painel e UMA janela so pra todos os numeros e trava em
+// `ocupado` enquanto um funil roda, entao na pratica esta lista tem 0 ou 1 item. Ela ja nasce como
+// LISTA de proposito - no dia em que o painel rodar funil por numero, nada aqui muda.
+const disparos = new Map()   // nk -> { funil, passo, total, alvo, inicio }
 let disparandoNk = ''
-ipcMain.handle('swp:disparo', (_e, { nk, ligado }) => {
-  disparandoNk = ligado ? String(nk || '') : ''
+
+function avisaPainel(canal, dados) {
+  try { if (painel && !painel.webContents.isDestroyed()) painel.webContents.send(canal, dados) } catch (_) { /* ok */ }
+}
+
+ipcMain.handle('swp:disparo', (_e, d) => {
+  const nk = String((d && d.nk) || '')
+  if (d && d.ligado) {
+    disparos.set(nk, {
+      funil: String((d && d.funil) || ''),
+      passo: Number(d && d.passo) || 0,
+      total: Number(d && d.total) || 0,
+      alvo: String((d && d.alvo) || ''),
+      inicio: Number(d && d.inicio) || Date.now(),
+    })
+    disparandoNk = nk
+  } else {
+    disparos.delete(nk)
+    if (disparandoNk === nk) disparandoNk = ''
+  }
+  avisaPainel('swp:disparos-mudou', { n: disparos.size })
   return { ok: true }
 })
+
+// O nome e o dono saem da lista que a dash ja mandou: o painel nao precisa saber de cadastro.
+ipcMain.handle('swp:disparos', () => ({
+  ok: true,
+  itens: [...disparos].map(([nk, d]) => {
+    const n = (config.numeros || []).find((x) => x && numKey(x.numero) === nk) || {}
+    return { nk, numero: n.numero || '', dono: n.dono || '', ...d }
+  }),
+}))
 
 ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
   const alvo = String(nk || '') ? abertos.get(String(nk)) : null
