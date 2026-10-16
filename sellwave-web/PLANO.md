@@ -348,6 +348,29 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   **Falta o Bruno:** cadastrar o proxy, parear (de preferência três números, pra fechar a medição de
   memória junto) e testar a ligação de voz com a trava ligada.
 
+- **16/10/2026, noite — a fila aceita VÁRIOS, e o alvo passou a ser lido no clique (1.12.0).**
+  Ele testou a 1.11.0 e o áudio saiu: *"finalmente funcionou perfeitamente"*. Mas a fila só servia
+  pra metade do que ele queria: *"quando eu disparei um aqui pra um lead, você bloqueou os funis pra
+  mim disparar pra outro, então eu não consegui disparar pra outros leads e deixar na fila do
+  empilhamento"*. **Medido: o botão nunca esteve desabilitado** — o clique enfileirava. O que
+  bloqueou foi o DESENHO: enquanto aquele funil estivesse na fila, o play virava rodinha, e ninguém
+  clica num botão que parece ocupado. No inbox o item do menu de funil **nunca gira nem desabilita**
+  (`chat.jsx`, `dispararFunil`); quem mostra o que está saindo é a `PilhaEnvios`, e o clique
+  responde com um toast dizendo a posição. Agora é igual: play sempre, e o rodapé diz *"Na fila ·
+  3º da pilha"*, com as palavras do `avisoDisparo` de lá.
+  **E o teste achou um bug de verdade, que ninguém tinha visto:** o alvo congelado vinha do último
+  pulso, que só relê a conversa a cada 1,5s. Clicando 150ms depois de trocar de lead — que é
+  exatamente como ele trabalha, clica no lead e dispara —, **o funil inteiro saía pro lead
+  anterior**, com o nome do novo na pilha mentindo que era o certo. Agora o alvo é perguntado ao
+  processo principal na hora do clique. No inbox isso não existe porque o alvo vem da LINHA clicada
+  (`c.phone`), nunca de um "lead ativo" guardado.
+  A ordem dos cliques é garantida por senha tirada ANTES da espera (dois cliques rápidos podiam
+  voltar trocados e a fila sairia na ordem das respostas). Ele foi explícito: *"se eu disparar pro
+  lead 1, pro lead 2, pro lead 3, a sequência vai ser lead 1, lead 2, lead 3"*.
+  **No ar:** app **1.12.0** (111.385.662 bytes, conferido no ar por content-length). Três suítes:
+  **50** contas em Node, **64** de painel e casca (3 novas: botão não gira, alvo é o do clique,
+  três leads na ordem), **21 de 21** do autoteste, e o pacote **9 de 9** byte a byte.
+
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
 Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,
@@ -367,6 +390,7 @@ aqui?"*, a resposta começa no inbox, não numa ideia nova.
 | Como ENVIAR (pausa, indicador, Parar) | `AXION/sc-panel.js` — o encadeamento por volta da linha 1770 |
 | Como mostrar itens e funis | `axion-produtor/src/pages/apps/chat.jsx`, o `SalePanel` |
 | Como mostrar o que está saindo | o mesmo arquivo, `PilhaEnvios` no modo integrado |
+| O que o botão faz quando já tem funil na fila | `chat.jsx`, `dispararFunil` + `avisoDisparo`: não gira, não desabilita, avisa a posição |
 | Formatação do balão, favoritos, chips | `SalePanel` + `_formatado` |
 
 **A FILA É PEDIDO EXPLÍCITO DELE.** Disparar o funil pro lead A, trocar pro B, disparar de novo, e

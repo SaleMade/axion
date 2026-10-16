@@ -269,7 +269,7 @@ function cartaoItem(x, k) {
     + '<button class="item-lbl" data-abre="item:' + esc(x.id) + '">' + esc(x.label) + '</button>'
     + '<button class="estrela' + (fav ? ' on' : '') + '" data-fav="' + esc(x.id) + '" title="Favorito">' + IC_ESTRELA(fav) + '</button>'
     + '<button class="enviar" data-envia="' + esc(x.id) + '" title="Enviar"' + (podeEnviar() ? '' : ' disabled') + '>'
-    + (naFila(x.id) ? IC_GIRA : IC_PLAY) + '</button>'
+    + IC_PLAY + '</button>'
     + '</div>' + prev + '</div>'
 }
 
@@ -307,7 +307,7 @@ function desenhaFunis() {
         + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id)
         + '<span class="passos">' + (s.items || []).length + ' passos</span></button>'
         + '<button class="enviar" data-funil="' + esc(s.id) + '" title="Disparar funil"' + (podeEnviar() ? '' : ' disabled') + '>'
-        + (naFila(s.id) ? IC_GIRA : IC_PLAY) + '</button>'
+        + IC_PLAY + '</button>'
         + '</div>' + prev + '</div>'
     }
   })
@@ -1033,24 +1033,66 @@ let fila = []
 let jobSeq = 0
 let consumindo = false
 
-const naFila = (marca) => fila.some((j) => j.marca === marca)
+// O BOTAO DO CATALOGO NAO MOSTRA MAIS RODINHA (16/10/2026, segunda rodada da fila). Ele mostrava
+// enquanto aquele funil estivesse na fila, e o Bruno leu isso como proibicao: "voce bloqueou os
+// funis pra mim disparar pra outro, entao eu nao consegui disparar pra outros leads e deixar na
+// fila do empilhamento". O botao NUNCA esteve desabilitado - medido, o clique enfileirava -, mas
+// trocar o play por uma rodinha tira justamente o sinal de "da pra clicar", e ninguem clica num
+// botao que parece ocupado.
+//
+// E E ASSIM NO INBOX, que e o padrao que ele mandou seguir: no chat.jsx o item do menu de funil
+// nunca desabilita nem gira; quem mostra o que esta saindo e a PilhaEnvios, e o aviso do clique vai
+// pro toast. Rodinha e informacao de PILHA, nao de botao.
 
-function enfileira(lista, marca, rotulo) {
-  if (!estadoWa.chatId) { rodape('abra uma conversa primeiro'); return }
-  if (!estadoWa.envia) { rodape('o motor do WhatsApp não está pronto'); return }
-  fila.push({
-    id: ++jobSeq,
+// O ALVO E LIDO NA HORA DO CLIQUE, NAO DO ULTIMO PULSO. Isto e correcao de bug de verdade, nao
+// enfeite: o painel so relia a conversa aberta a cada 1,5s, e o Bruno trabalha clicando no lead e
+// disparando em seguida. MEDIDO no teste do painel: clicando 120ms depois de trocar de conversa, os
+// tres disparos saiam congelados no lead ANTERIOR - o funil inteiro ia pra quem nao pediu, com o
+// nome certo na pilha mentindo que era o novo. Uma ida ao processo principal custa milissegundos.
+//
+// No inbox isso nao existe porque o alvo vem da LINHA clicada (`c.phone` no dispararFunil), nunca
+// de um "lead ativo" guardado. Aqui a conversa e a que esta na tela, entao o jeito de ter a mesma
+// garantia e perguntar na hora.
+async function enfileira(lista, marca, rotulo) {
+  // A SENHA DA FILA E TIRADA AGORA, antes de qualquer espera. Ele foi claro sobre a ordem: "se eu
+  // disparar pro lead 1, pro lead 2, pro lead 3, a sequencia vai ser lead 1, lead 2, lead 3". Como
+  // a leitura do alvo abaixo e assincrona, dois cliques rapidos poderiam voltar trocados e a fila
+  // sairia na ordem das RESPOSTAS, nao na dos cliques. O numero resolve isso: quem clicou primeiro
+  // entra primeiro, independente de quem responder antes.
+  const id = ++jobSeq
+  let e = null
+  try { e = await window.swp.estado() } catch (_) { /* cai no cache abaixo */ }
+  // Sem resposta, vale o ultimo pulso: melhor enfileirar com o que se sabe do que recusar o clique.
+  const at = (e && e.chatId) ? e : estadoWa
+  if (e) estadoWa = e
+  if (!at.chatId) { rodape('abra uma conversa primeiro'); return }
+  if (!at.envia) { rodape('o motor do WhatsApp não está pronto'); return }
+  const job = {
+    id,
     marca,
     rotulo: rotulo || 'funil',
     lista,
-    alvo: estadoWa.chatId,
-    nk: estadoWa.nk || '',
-    nome: estadoWa.nome || '',
-    fone: estadoWa.phone || '',
+    alvo: at.chatId,
+    nk: at.nk || '',
+    nome: at.nome || '',
+    fone: at.phone || '',
     passo: 0,
     rodando: false,
-  })
-  if (fila.length > 1) rodape(fila.length - 1 + (fila.length === 2 ? ' na fila' : ' na fila'))
+  }
+  // Entra na posicao da senha. Nunca na frente de quem ja esta saindo: `fila[0]` rodando e o que a
+  // pilha mostra como "enviando agora" e o que o consumidor esta esperando terminar.
+  const i = fila.findIndex((j) => !j.rodando && j.id > id)
+  if (i < 0) fila.push(job)
+  else fila.splice(i, 0, job)
+  // O AVISO E O DO INBOX, palavra por palavra do avisoDisparo do chat.jsx. O comentario de la diz
+  // por que ele existe: "o vendedor precisa saber que a mensagem NAO saiu ainda, senao ele clica de
+  // novo achando que falhou". Aqui ele vale dobrado, porque foi exatamente o que aconteceu.
+  //
+  // `avisoAte` zerado de proposito: um erro de 10s de outro lead nao pode engolir a confirmacao de
+  // um clique que o vendedor acabou de dar.
+  avisoAte = 0
+  const pos = fila.findIndex((j) => j.id === id) + 1
+  if (pos > 1) rodape('Na fila · ' + (pos > 2 ? pos + 'º da pilha' : 'sai quando o atual terminar'))
   desenha()
   consome()
 }

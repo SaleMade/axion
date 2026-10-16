@@ -218,31 +218,62 @@ app.whenReady().then(async () => {
   conta('o rascunho guarda o TIPO junto, senao reabrir perde o passo', ult[2] && ult[2].__tipo === 'entrega', String(ult[2] && ult[2].__tipo))
   conta('o rascunho guarda de quem e o pedido', !!(ult[2] && ult[2].__lead && ult[2].__lead.phone), JSON.stringify(ult[2] && ult[2].__lead))
 
-  // ── A FILA: dois disparos para leads diferentes, um atras do outro ─────────────────────────
+  // ── A FILA: varios disparos para leads diferentes, um atras do outro ──────────────────────
   await clica('[data-aba=funis]')
   await espera(250)
   await clica('[data-funil=s1]')
   await espera(250)
-  // troca de conversa e dispara de novo: o segundo tem que ENTRAR NA FILA, nao ser recusado
+  // O BOTAO NAO PODE VIRAR RODINHA ENQUANTO AQUELE FUNIL ESTA NA FILA (16/10/2026). Ele nunca
+  // esteve desabilitado, mas a rodinha fez o Bruno entender que estava proibido de disparar pro
+  // proximo lead - "voce bloqueou os funis pra mim disparar pra outro". No inbox o item do menu de
+  // funil nunca gira nem desabilita; quem mostra o que esta saindo e a pilha.
+  const bt = await js('(() => { const b = document.querySelector("[data-funil=s1]");'
+    + ' return { desabilitado: b.disabled, girando: !!b.querySelector(".girando") } })()')
+  conta('com um funil na fila, o botao continua convidando a disparar',
+    bt.desabilitado === false && bt.girando === false, JSON.stringify(bt))
+
+  // TROCA DE CONVERSA E DISPARA NA HORA, sem esperar o pulso de 1,5s - que e como ele trabalha:
+  // clica no lead e dispara em seguida. Antes, o alvo vinha do ultimo pulso, entao o funil inteiro
+  // saia pro lead ANTERIOR com o nome do novo na pilha. 150ms e menos de um decimo do pulso.
   await js('(() => { window.__trocaConversa("5562961529830", "Segundo Cliente") })()')
-  await espera(1800)
+  await espera(150)
   await clica('[data-funil=s1]')
   await espera(300)
   const pil = await js('({ cab: (document.querySelector(".saindo .cab .t")||{}).textContent || "", linhas: document.querySelectorAll(".saindo .item-env").length, l1: [...document.querySelectorAll(".saindo .l1")].map(e => e.textContent.trim()), l2: [...document.querySelectorAll(".saindo .l2")].map(e => e.textContent.trim()), rodando: document.querySelectorAll(".saindo .item-env .roda").length, esperando: document.querySelectorAll(".saindo .item-env .pt-fila").length })')
   conta('o segundo disparo ENTRA NA FILA em vez de ser recusado', pil.linhas === 2, JSON.stringify(pil.linhas))
   conta('o cabecalho conta os dois, no plural certo', /Enviando funis · 2/.test(pil.cab), pil.cab)
-  conta('cada um guarda o SEU lead, congelado no clique',
+  conta('o alvo e o da conversa DO CLIQUE, nao a do ultimo pulso',
     (pil.l1[0] || '') !== (pil.l1[1] || '') && /Segundo Cliente/.test(pil.l1[1] || ''), JSON.stringify(pil.l1))
   conta('um roda e o outro espera a vez', pil.rodando === 1 && pil.esperando === 1, JSON.stringify(pil))
   conta('quem espera diz que esta na fila', /Na fila/.test(pil.l2[1] || ''), JSON.stringify(pil.l2))
   const seloFunis = await js('({ txt: $("selo-funis").textContent, escondido: $("selo-funis").hidden })')
   conta('o selo da aba conta os funis da fila', seloFunis.txt === '2' && seloFunis.escondido === false, JSON.stringify(seloFunis))
 
+  // TERCEIRO LEAD, de novo na hora. Tres e o numero que ele deu no pedido: "disparo pro lead 1, pro
+  // lead 2, pro lead 3, e a sequencia que chega e lead 1, lead 2, lead 3".
+  await js('(() => { window.__trocaConversa("5511988887777", "Terceiro Cliente") })()')
+  await espera(150)
+  await clica('[data-funil=s1]')
+  await espera(300)
+  const tres = await js('({ linhas: document.querySelectorAll(".saindo .item-env").length,'
+    + ' l1: [...document.querySelectorAll(".saindo .l1")].map(e => e.textContent.trim()),'
+    + ' rod: (document.getElementById("rod")||{}).textContent || "" })')
+  conta('o terceiro tambem entra, a fila nao tem teto de dois', tres.linhas === 3, JSON.stringify(tres.linhas))
+  // Os tres sao leads DIFERENTES, cada um na posicao do seu clique. O primeiro e quem estava aberto
+  // quando o teste chegou aqui (os testes de pedido ja tinham trocado de conversa), entao o que se
+  // confere e a ORDEM: segundo clique na posicao 2, terceiro na 3, e nenhum repetido.
+  conta('a ordem da pilha e a ordem dos cliques',
+    /Segundo Cliente/.test(tres.l1[1] || '') && /Terceiro Cliente/.test(tres.l1[2] || '')
+    && new Set(tres.l1).size === 3, JSON.stringify(tres.l1))
+  // O aviso e o mesmo do inbox (avisoDisparo do chat.jsx): sem ele o vendedor clica de novo
+  // achando que falhou, que foi exatamente o que aconteceu aqui.
+  conta('o rodape diz a posicao na fila, como o inbox', /Na fila/.test(tres.rod), tres.rod)
+
   // tirar da fila quem ainda nao saiu
   const tirou = await js('(() => { const bs = document.querySelectorAll(".saindo .item-env [data-tirafila]");'
     + ' if (bs.length < 2) return -1; bs[bs.length - 1].click();'
     + ' return document.querySelectorAll(".saindo .item-env").length })()')
-  conta('da pra tirar da fila quem ainda nao saiu', tirou === 1, String(tirou))
+  conta('da pra tirar da fila quem ainda nao saiu', tirou === 2, String(tirou))
 
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'
