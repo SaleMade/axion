@@ -6236,10 +6236,36 @@ async function handleAceitarLead(req, env, leadId) {
         const _mAt = await _mundoDoAtOuNull(env, lead.at);
         if (_mAt) irmao.afl = _mAt;
       }
-      const puxa = ['nome', 'cpf', 'wa', 'email', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'obs', 'mod', 'pgto', 'agend', 'link'];
+      // `transp` e `raw` entraram em 16/10/2026 (auditoria). O `transp` decide retirada nos Correios
+      // x entrega no endereco, e o proprio orders.js avisa que "a escolha MUDA o prazo que ele
+      // promete ao cliente, entao nao pode se perder"; o `raw` e a mensagem "Pedido Concluido" que
+      // o Cadastro de Pedidos mostra como o que o cliente recebeu - sem ela a tela fica em branco,
+      // que foi o conserto de 14/08 sendo desfeito pela fusao.
+      const puxa = ['nome', 'cpf', 'wa', 'email', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'obs', 'mod', 'pgto', 'agend', 'link', 'transp', 'raw'];
       for (const k of puxa) if ((irmao[k] == null || irmao[k] === '') && lead[k] != null && lead[k] !== '') irmao[k] = lead[k];
       if (!Number(irmao.vl) && Number(lead.vl)) irmao.vl = Number(lead.vl);
       if (!Number(irmao.com_pct) && Number(lead.com_pct)) irmao.com_pct = Number(lead.com_pct);
+      // O COMPROVANTE DO COD VAI JUNTO, E ISSO E PROVA, NAO ENFEITE (16/10/2026, auditoria).
+      //
+      // No pagamento na entrega o video do cliente confirmando a compra e OBRIGATORIO no cadastro,
+      // no app e na dash. A fusao nao copiava nenhum dos tres campos do anexo e logo abaixo apaga o
+      // card com um splice: o pedido que sobrava ficava com o comprovante antigo, ou com nenhum
+      // quando o card que sobrou nasceu da plataforma. Numa contestacao de "nao autorizei essa
+      // compra" nao havia prova nenhuma, e o arquivo continuava orfao no R2 sem nada apontando pra
+      // ele. Junta as duas listas (sem repetir url) e preenche o primeiro quando o irmao esta vazio.
+      const _comps = [...(Array.isArray(irmao.comprovantes) ? irmao.comprovantes : []),
+        ...(Array.isArray(lead.comprovantes) ? lead.comprovantes : [])];
+      const _vistos = new Set();
+      const _todosComp = _comps.filter((x) => {
+        const u2 = String((x && x.url) || '');
+        if (!u2 || _vistos.has(u2)) return false;
+        _vistos.add(u2); return true;
+      });
+      if (_todosComp.length) irmao.comprovantes = _todosComp;
+      if (!String(irmao.comprovante_url || '') && _todosComp.length) {
+        irmao.comprovante_url = String(_todosComp[0].url || '');
+        irmao.comprovante_mime = String(_todosComp[0].mime || '');
+      }
       if (Array.isArray(lead.tags) && lead.tags.length) irmao.tags = [...new Set([...(Array.isArray(irmao.tags) ? irmao.tags : []), ...lead.tags])];
       if (Array.isArray(lead.comments) && lead.comments.length) irmao.comments = [...(Array.isArray(irmao.comments) ? irmao.comments : []), ...lead.comments];
       if (!Array.isArray(irmao.hist)) irmao.hist = [];
@@ -21781,7 +21807,17 @@ async function handlePresselDiag(req, env){
     const _todos = [];
     for(const s of sellers) for(const n of (s.nums||[])) _todos.push({ at:s.at, num:n.num, lim:n.lim, livre:n.livre, dist:n.dist, ordem:n.ordem, idx:n.idx });
     const _fila = _aplicaFilaLimite(_todos, _lhD, _hojeD);
-    const numeros = (_fila.ficam.length ? _fila.ficam : _todos).map((n) => ({ at:n.at, num:n.num }));
+    // QUANDO NINGUEM PODE RECEBER, A LISTA DE QUEM RECEBE E VAZIA (16/10/2026, auditoria).
+    //
+    // O `|| _todos` publicava a lista COMPLETA no campo que a tela le como "quem esta recebendo
+    // agora". Com todos no teto o _presselBalancedPick devolve null desde 12/10 (o log diz
+    // "ROLETA_TODOS_NO_LIMITE ... sem numero ate a meia-noite"), ou seja a pressel abre SEM numero
+    // e cada clique pago se perde - mas a Chegada de leads pintava a pilha de VERDE, listava
+    // "Entregando lead para: ..." no passe de mouse e escrevia "recebendo agora" em cada linha.
+    // A tela afirmava o contrario do que o worker faz, no estado em que isso custa dinheiro.
+    // O motivo continua viajando em `todosNoLimite`, `noLimite` e `motivo`, que e onde a tela
+    // explica o que aconteceu.
+    const numeros = (_fila.ficam.length ? _fila.ficam : []).map((n) => ({ at:n.at, num:n.num }));
     const noLimite = _fila.bateram.map((n) => ({ at:n.at, num:n.num, leads:_lhD[_k8d(n.num)] || 0, lim:Number(n.lim) || 0 }));
     const todosNoLimite = _todos.length > 0 && !_fila.ficam.length;
     // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
@@ -21829,7 +21865,14 @@ async function handlePresselDiag(req, env){
   // porque estranhou o painel. Aqui o mesmo calculo vai pra tela, com o numero de visitas que ele
   // comeu em silencio, pra virar aviso em vez de descoberta por acaso.
   let mudos = {};
-  try { mudos = await _numerosMudos(env); } catch (_) { }
+  // COPIA, NUNCA A REFERENCIA (16/10/2026, auditoria). O `_numerosMudos` devolve o PROPRIO objeto
+  // que fica guardado em `_mudoCache` por 5 minutos, e o recorte por mundo logo abaixo faz `delete`
+  // nas chaves. Mexendo no objeto original, ABRIR A TELA DE PRESSELS apagava do cache os numeros
+  // mudos do outro mundo - e e esse mesmo cache que o _presselBalancedPick usa pra TIRAR numero
+  // mudo da roleta. Ou seja: o afiliado abria a tela dele e, pelos 5 minutos seguintes, um numero
+  // calado da casa voltava a receber clique pago. Tela que muda distribuicao e a pior categoria:
+  // nada no caminho do lead mudou, e mesmo assim o comportamento mudou.
+  try { mudos = { ...(await _numerosMudos(env)) }; } catch (_) { }
   // O ALARME DE NUMERO MUDO E POR OPERACAO (12/09/2026). A conta e global (visita sem mensagem, de
   // qualquer numero), e o numero do Tharyky, com 41 visitas da pressel do Giovane, virava alerta na
   // tela de Pressels do Bruno - que nao tem o que fazer com numero que nao e dele. Mesma regra do
