@@ -7229,6 +7229,28 @@ async function handleChipSave(req, env) {
     for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
     if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
     if ('dia' in patch) chip.dia = Number(patch.dia) || chip.dia;
+    // CORRECAO MANUAL DO DIA DE AQUECIMENTO (16/10/2026). A tela manda `warm_dias` SO quando o
+    // Bruno digita, pra corrigir numero que chegou meio aquecido de outro lugar ou que precisa
+    // recomecar. Campo vazio nao vem no patch, entao editar o chip por outro motivo nao atropela
+    // nada.
+    //
+    // E ELE VIRA `warm_start` AQUI, nao fica guardado como numero. O motivo e que numero parado
+    // CONGELA o dia: se ele digita 5 hoje e a gente guardasse 5, o chip ficaria no dia 5 pra
+    // sempre, e a rampa nunca andaria. Guardando a DATA DE INICIO equivalente (hoje menos 4 dias
+    // pro dia 5), amanha ele esta no dia 6 sozinho, e continua existindo UMA fonte de verdade do
+    // dia - que e o que impede a tela e a roleta de discordarem.
+    if ('warm_dias' in patch) {
+      const d = Math.floor(Number(patch.warm_dias) || 0);
+      if (d > 0) {
+        const ms = Date.now() - 3 * 3600 * 1000 - (Math.min(d, 9999) - 1) * 86400000;
+        chip.warm_start = new Date(ms).toISOString().slice(0, 10);
+      }
+      // 0 ou vazio = "volta a contar do comeco de hoje", que e o que ele espera de limpar o campo.
+      else if (patch.warm_dias === 0 || patch.warm_dias === '0') {
+        chip.warm_start = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      }
+      delete chip.warm_dias;   // nao guarda o numero: quem responde o dia e sempre o warm_start
+    }
     if ('dia_uso' in patch) chip.dia_uso = (patch.dia_uso === null || patch.dia_uso === '') ? null : Number(patch.dia_uso);
     if ('api' in patch) chip.api = !!patch.api;
     // LIMITE DE LEAD POR DIA (13/09/2026, ver _numNoLimite): 0/vazio tira o limite.

@@ -111,6 +111,24 @@ vale('sem warm_start cai no campo `dia` e nunca em 0',
 vale('warm_start podre nao vira dia gigante (teto alto por acidente)',
   api._diaDoAquecimento({ warm_start: 'ontem' }) === 1);
 
+// ── 4b) A CORRECAO MANUAL do dia vira warm_start, e por isso continua ANDANDO ────────────────
+// A tela manda `warm_dias` so quando o Bruno digita. Se o worker guardasse o NUMERO, o chip ficaria
+// congelado naquele dia pra sempre e a rampa nunca andaria. Guardando a data de inicio equivalente,
+// amanha ele esta no dia seguinte sozinho - e continua existindo UMA fonte de verdade do dia.
+{
+  const corpo = src.slice(src.indexOf("if ('warm_dias' in patch)"), src.indexOf("if ('api' in patch)"));
+  vale('a correcao manual grava warm_start, nao o numero',
+    /chip\.warm_start = /.test(corpo) && /delete chip\.warm_dias/.test(corpo));
+  // ida e volta: o que ele digita tem que ser o que a roleta le
+  const converte = (d) => new Date(Date.now() - 3 * 3600 * 1000 - (Math.min(d, 9999) - 1) * 86400000).toISOString().slice(0, 10);
+  for (const d of [1, 5, 7, 16, 30]) {
+    const lido = api._diaDoAquecimento({ warm_start: converte(d) });
+    vale('digitar dia ' + d + ' faz a roleta ler dia ' + d, lido === d, String(lido));
+  }
+  vale('digitar dia 7 cai no teto de 20, nao no de 5',
+    api.limiteDoAquecimento(api._diaDoAquecimento({ warm_start: converte(7) })) === 20);
+}
+
 // ── 5) O QUE ELE LEVA PRA ROLETA ──────────────────────────────────────────────────────────────
 const n1 = api._numDoAquecimento({ st: 'aquecimento', at: 'u1', warm_start: diaBR(0) });
 vale('entra em modo LIMITE (reusa a regra que existe, sem sinal novo)', n1.dist === 'limite', n1.dist);
