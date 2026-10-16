@@ -347,3 +347,41 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   `16/10 11:23` lido com query. `npm run teste` em **40 conferências**, autoteste em **21 de 21**.
   **Falta o Bruno:** cadastrar o proxy, parear (de preferência três números, pra fechar a medição de
   memória junto) e testar a ligação de voz com a trava ligada.
+
+## 11. COMO PUBLICAR O APP (decorar: o passo 3 nasceu de um app que não abria)
+
+```
+cd AXION/sellwave-web
+npm run teste                                    # 40 conferências das contas que decidem dinheiro
+env -u ELECTRON_RUN_AS_NODE npx electron src/teste-painel.js    # 27 do painel
+env -u ELECTRON_RUN_AS_NODE SW_SMOKE=1 SW_SMOKE_WA=1 npx electron .   # 21, com o WhatsApp de verdade
+env -u ELECTRON_RUN_AS_NODE npx electron-builder --win --x64 --config.directories.output=dist-pub
+npm run confere-pacote                           # 3) A GUARDA. Sem ela, não suba.
+npx wrangler r2 object put "salechat-media/sellwave-web/instalador.exe" --file "dist-pub/SellWave Web Setup <v>.exe" --content-type "application/octet-stream" --remote
+# e carimbar a versão publicada: POST /api/swweb/app { versao, bytes, notas } como diretor
+```
+
+**POR QUE O PASSO 3 EXISTE (incidente 16/10/2026).** A 1.3.1 foi publicada com o `app.asar`
+**corrompido**: os NOVE arquivos com o tamanho certo e o conteúdo de OUTRO arquivo — o
+`preload-wa.js` com o conteúdo do `preload-painel.js`, o `preload-painel.js` com o do `main.js`, o
+`index.html` começando em binário. O Bruno abriu e levou `SyntaxError: Invalid or unexpected token`
+em `app.asar/src/main.js`. O mesmo commit reempacotado saiu perfeito, então foi **aquela rodada de
+build**, não o código.
+
+`node --check` no FONTE não prova nada sobre o que foi EMPACOTADO: entre os dois existe um
+empacotador, e é ele que pode gravar offset errado ou pegar arquivo no meio de uma escrita. A guarda
+(`src/confere-pacote.cjs`) abre o `.asar` direto, sem Electron e sem biblioteca, compara cada
+arquivo **byte a byte** com o disco e roda `vm.Script` em cada `.js`. São 3 segundos.
+
+Duas regras que saíram junto:
+
+- **Build de publicação sai em `dist-pub`**, separado do `dist`. Duas conversas rodando
+  `electron-builder` no mesmo diretório ao mesmo tempo é, por si só, jeito de corromper pacote.
+- **Conferir o artefato que está NO AR, não o que está no disco.** Dá pra baixar o instalador
+  publicado, extrair com `7z e <exe> -o<pasta> "$PLUGINSDIR/app-64.7z"` e de novo
+  `7z e app-64.7z -o<pasta> "resources/app.asar"`, e rodar a guarda nele. Foi assim que a 1.3.2 foi
+  confirmada: mesmo md5 do que eu havia conferido antes de subir.
+
+**ARMADILHA DO AMBIENTE:** estas sessões têm `ELECTRON_RUN_AS_NODE=1` setada. Com ela, o Electron
+vira Node e **sai com código 0 sem log nenhum** — parece "não abriu" e não é. Todo comando de
+Electron aqui vai com `env -u ELECTRON_RUN_AS_NODE`.
