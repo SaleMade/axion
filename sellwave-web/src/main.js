@@ -920,7 +920,7 @@ app.whenReady().then(() => {
       try {
         const motor = await pegaMotor()
         if (motor) await wc.executeJavaScript(motor, true)
-        await wc.executeJavaScript(fs.readFileSync(CAMINHO_PAINEL, 'utf8'), true)
+        await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
         await new Promise((r) => setTimeout(r, 1500))
       } catch (e) { console.error('[foto] injecao falhou: ' + ((e && e.message) || e)) }
     }

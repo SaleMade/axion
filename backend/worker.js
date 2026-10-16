@@ -10227,7 +10227,9 @@ async function handleSwWeb(req, env, path) {
       return {
         numero: String(c.num),
         nk,
-        dono: donos[String(c.at || '')] || (c.at ? String(c.at) : ''),
+        // Sem nome na tabela de usuarios, manda VAZIO em vez do id: a barra lateral ja escreve
+        // 'sem dono', e id tecnico na tela de um vendedor leigo so confunde.
+        dono: donos[String(c.at || '')] || '',
         status: nomeSt[String(c.wa_st || '')] || '',
         cor: corSt[String(c.wa_st || '')] || '',
         em_uso: !!c.em_uso,
