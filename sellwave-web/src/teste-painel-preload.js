@@ -12,6 +12,9 @@ const ESTADO = {
   eu: '5515974060653', nk: '95983293', trocado: '', lid: 0, grupo: false,
 }
 
+// Quantas das proximas chamadas de pedidoNovo devem falhar (ver o stub abaixo).
+let falharPedido = 0
+
 contextBridge.exposeInMainWorld('swp', {
   roteiro: reg('roteiro', { ok: true,
     messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!' }, { id: 'm2', label: 'Tudo bem?', text: 'Tudo bem?' }],
@@ -40,7 +43,14 @@ contextBridge.exposeInMainWorld('swp', {
     { key: 'k6', label: 'Produto A - 6 Meses', price: 697, prod: 'Produto A' },
   ] }),
   comprovante: reg('comprovante', { ok: true, url: 'https://r2.exemplo/comprovante/print.jpg', mime: 'image/jpeg' }),
-  pedidoNovo: reg('pedidoNovo', { ok: true, id: 123, ja: false }),
+  // PODE FALHAR SOB COMANDO. A rede caindo no meio do cadastro e o caso que fazia o app criar
+  // DOIS cards do mesmo pedido, e um stub que so responde ok nunca encosta nesse caminho - e a
+  // mesma licao do preload que respondia ok pra tudo e escondeu o rascunho quebrado por semanas.
+  pedidoNovo: (o) => {
+    chamadas.push({ nome: 'pedidoNovo', args: [o] })
+    if (falharPedido > 0) { falharPedido -= 1; return Promise.reject(new Error('fetch failed')) }
+    return Promise.resolve({ ok: true, id: 123, ja: false })
+  },
   rascunhos: reg('rascunhos', { ok: true, rascunhos: [
     { id: 7, phone: '5519995983293', dados: { nome: 'Maria Teste', trat: 'Produto A - 2 Meses', vl: '297,00', cidade: 'Campinas' }, criado: 1, mexido: 2 },
   ] }),
@@ -70,3 +80,5 @@ contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamada
 contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome) => {
   ESTADO.phone = phone; ESTADO.chatId = phone + '@c.us'; ESTADO.nome = nome
 })
+// Pro teste simular a rede caindo no cadastro.
+contextBridge.exposeInMainWorld('__falhaPedido', (n) => { falharPedido = Number(n) || 0 })

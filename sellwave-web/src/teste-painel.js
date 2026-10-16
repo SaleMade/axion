@@ -119,6 +119,26 @@ app.whenReady().then(async () => {
   const total = await js('(document.querySelector(".total .v")||{}).textContent || ""')
   conta('o total acompanha o tratamento escolhido', /397,00/.test(total), total)
 
+  // ── a conferencia do app tem que ser a MESMA do Aceitar ────────────────────────────────────
+  // Nome de uma palavra e telefone cortado passavam daqui e so eram recusados DEPOIS, no Aceitar do
+  // Bruno, com o cliente ja esperando - e o vendedor nem ficava sabendo que o pedido parou.
+  await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("nome","Maria"); })()')
+  await clica('#pd-ok')
+  await espera(250)
+  const soUmNome = await js('({ txt: (document.querySelector(".aviso.ruim")||{}).textContent || "", mandou: (window.__ver()).filter(c => c.nome === "pedidoNovo").length })')
+  conta('nome de uma palavra so e barrado AQUI, nao no Aceitar',
+    /sobrenome/i.test(soUmNome.txt) && soUmNome.mandou === 0, JSON.stringify(soUmNome))
+
+  await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("nome","Cliente de Teste"); s("wa","(19) 9959"); })()')
+  await clica('#pd-ok')
+  await espera(250)
+  const telCurto = await js('({ txt: (document.querySelector(".aviso.ruim")||{}).textContent || "", mandou: (window.__ver()).filter(c => c.nome === "pedidoNovo").length })')
+  conta('telefone incompleto tambem e barrado aqui',
+    /WhatsApp incompleto/i.test(telCurto.txt) && telCurto.mandou === 0, JSON.stringify(telCurto))
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "(19) 99598-3293"; e.dispatchEvent(new Event("input")) })()')
+
   // ── cadastrar sem comprovante, no COD, e barrado ───────────────────────────────────────────
   await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
     + ' s("cpf","52998224725"); s("cep","13000000"); s("end","Rua A"); s("num","10");'
@@ -138,9 +158,24 @@ app.whenReady().then(async () => {
   const temAnexo = await js('({ n: document.querySelectorAll(".anexo.tem").length, nome: (document.querySelector(".anexo.tem .nm")||{}).textContent || "" })')
   conta('o anexo sobe na hora e aparece na lista', temAnexo.n === 1 && /print\.jpg/.test(temAnexo.nome), JSON.stringify(temAnexo))
 
+  // ── a rede cai no meio do cadastro: a segunda tentativa tem que ser O MESMO pedido ─────────
+  // O anti-duplicata do servidor casa por `id`. Com o id sorteado a cada clique, o vendedor que
+  // tentava de novo depois de um erro de rede criava DOIS cards - dois pedidos na PayLog, duas
+  // cobrancas, dois frascos despachados, e nenhum aviso.
+  await js('window.__falhaPedido(1)')
+  await clica('#pd-ok')
+  await espera(400)
+  const caiu = await js('({ txt: (document.querySelector(".aviso.ruim")||{}).textContent || "" })')
+  conta('erro de rede aparece na tela sem dizer que falta campo',
+    /dash|rede|internet/i.test(caiu.txt) && !/Falta preencher/.test(caiu.txt), JSON.stringify(caiu))
+
   await clica('#pd-ok')
   await espera(500)
   const lista = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0]))'))
+  conta('a tentativa que falhou e a seguinte sao o MESMO pedido',
+    lista.length === 2 && lista[0].id === lista[1].id && lista[0].external_id === lista[1].external_id,
+    JSON.stringify(lista.map((x) => x && x.id)))
+  lista.splice(0, 1)   // daqui pra baixo o que vale e o envio que DEU certo
   conta('com tudo certo, o pedido vai pro servidor', lista.length === 1, String(lista.length))
   const o = lista[0] || {}
   conta('o objeto tem o formato do Novo Pedido da dash',
@@ -172,7 +207,10 @@ app.whenReady().then(async () => {
   await clica('#pd-ok')
   await espera(500)
   const nAnt = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].mod))'))
-  conta('pagamento antecipado passa sem comprovante', nAnt.length === 2 && nAnt[1] === 'antecipado', JSON.stringify(nAnt))
+  // Pelo ULTIMO, nao pelo indice: a lista inclui a tentativa que a rede derrubou la em cima, e
+  // contar posicao faz esta conferencia quebrar toda vez que alguem acrescenta um envio antes.
+  conta('pagamento antecipado passa sem comprovante',
+    nAnt[nAnt.length - 1] === 'antecipado' && nAnt.filter((x) => x === 'antecipado').length === 1, JSON.stringify(nAnt))
 
   // ── ABRIR E SAIR SEM MEXER NAO CRIA RASCUNHO ───────────────────────────────────────────────
   // O nome e o telefone entram sozinhos da conversa. Se eles contassem como "conteudo", toda

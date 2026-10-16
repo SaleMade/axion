@@ -473,6 +473,18 @@ function confere(f) {
   if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF não confere')
   if (String(f.uf || '').trim() && !UFS.includes(String(f.uf).toUpperCase())) faltam.push('UF inválida')
   if (String(f.cep || '').trim() && dig(f.cep).length !== 8) faltam.push('CEP precisa de 8 dígitos')
+  // AS MESMAS DUAS REGRAS DO ACEITAR (problemasPaylog no despacho-paylog.js). Sem elas, o vendedor
+  // fechava a venda, cadastrava, lia "Pedido cadastrado" e o pedido so era recusado DEPOIS, no
+  // Aceitar do Bruno, com o cliente ja esperando. Barrar aqui custa 10 segundos de digitacao;
+  // barrar la custa um pedido parado na fila e um vendedor que nao sabe que parou.
+  //
+  // Nome: a PayLog exige nome e sobrenome. "Maria" sozinho e recusado.
+  const _nome = String(f.nome || '').trim().replace(/\s+/g, ' ')
+  if (_nome && _nome.split(' ').filter((x) => x.length > 1).length < 2) faltam.push('Nome e sobrenome do cliente')
+  // Telefone: 10 ou 11 digitos depois de tirar o 55. Numero cortado passava daqui direto.
+  let _tel = dig(f.wa)
+  if (_tel.length >= 12 && _tel.startsWith('55')) _tel = _tel.slice(2)
+  if (String(f.wa || '').trim() && (_tel.length < 10 || _tel.length > 11)) faltam.push('WhatsApp incompleto (DDD + número)')
   // COMPROVANTE SO E OBRIGATORIO NO PAGAMENTO NA ENTREGA, a mesma regra da dash (novo-pedido.jsx):
   // no antecipado o dinheiro ja entrou e nao ha o que comprovar.
   if (pedTipo === 'entrega' && !anexos.length) faltam.push('Comprovante (imagem, vídeo ou áudio)')
@@ -523,8 +535,18 @@ function textoTermo(o) {
   ].join(NL)
 }
 
+// O ID DO PEDIDO NASCE UMA VEZ E SOBREVIVE A TENTATIVA QUE FALHOU (16/10/2026, auditoria).
+//
+// O `montaPedido` sorteava `Date.now()` a cada chamada, entao cada clique em Cadastrar criava um id
+// NOVO - e o anti-duplicata do servidor casa por id. Com a rede engasgando (4G, 52x do Cloudflare,
+// ou o tempo limite de 30s estourando numa gravacao que JA tinha sido feita), o vendedor via "nao
+// deu pra falar com a dash" com o formulario intacto, clicava de novo e o resultado eram DOIS cards
+// do mesmo pedido - dois pedidos na PayLog, duas cobrancas, dois frascos despachados.
+// Agora o id e o mesmo enquanto o formulario for o mesmo: a segunda tentativa cai no `ja: true` do
+// servidor e o vendedor le "Esse pedido ja estava cadastrado".
+let pedIdFixo = 0
 function montaPedido(f) {
-  const id = Date.now()
+  const id = pedIdFixo || Date.now()
   const of = ofertaDe(f.tratKey) || {}
   const o = {
     id, external_id: 'MAN-' + id, orig: 'Manual',
@@ -615,7 +637,13 @@ function desenhaPedidos() {
   // PASSO 2: o formulário.
   h += '<div class="form">'
   if (pedErros.length) {
-    h += '<div class="aviso ruim">Falta preencher:<ul>'
+    // O TITULO DA CAIXA TEM QUE DIZER A VERDADE (16/10/2026, auditoria). Era sempre "Falta
+    // preencher:", inclusive pra erro de rede e pra a trava de dono - o vendedor lia "Falta
+    // preencher: nao deu pra falar com a dash" e ia cacar campo vazio em vez de tentar de novo.
+    // Pior na trava mais importante do app ("Este pedido e de Fulano"), que vira um pedido de
+    // confirmacao e nao um campo faltando.
+    const _soCampos = pedErros.every((x) => !/n[aã]o deu|servidor|dash|rede|internet|Este pedido é de|PayLog/i.test(String(x)))
+    h += '<div class="aviso ruim">' + (_soCampos ? 'Falta preencher:' : 'Confira antes de cadastrar:') + '<ul>'
       + pedErros.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
   }
   h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">'
@@ -788,6 +816,7 @@ function ligaPedidos(corpo) {
       const r = rascunhos.find((x) => String(x.id) === String(b.dataset.abre))
       if (!r) return
       ped = { ...(r.dados || {}) }
+      pedIdFixo = 0                       // rascunho reaberto e outra tentativa
       pedTipo = String(ped.__tipo || 'entrega')
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
@@ -852,7 +881,7 @@ function ligaPedidos(corpo) {
   // comecar um pedido novo: "clico em Voltar (...) aquele vai ficar salvo como rascunho".
   liga('pd-voltar', async () => {
     await rascunhoSozinho()
-    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = ''; pedErros = []
+    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0
     preenchePed()
     guardaNascimento()
     desenha()
@@ -974,6 +1003,9 @@ async function cadastraPedido() {
     desenha()
     return
   }
+  // O id so nasce AQUI, no primeiro clique: assim ele nao fica preso a um formulario que o
+  // vendedor ainda esta montando, e a segunda tentativa reusa o mesmo.
+  if (!pedIdFixo) pedIdFixo = Date.now()
   pedSalvando = 'cadastro'; pedErros = []; pedFeito = ''; desenha()
   try {
     const r = await window.swp.pedidoNovo(montaPedido(ped))
@@ -990,7 +1022,7 @@ async function cadastraPedido() {
       // pedLead, que ja era o novo. Era exatamente o que ele descreveu temer: "subir um pedido pra
       // um cliente que ja saiu". `preenchePed` so escreve em campo vazio, entao o `ped = {}` sozinho
       // nao resolvia: o dono tinha que cair junto.
-      ped = {}; rascId = ''; anexos = []; pedTipo = ''; pedLead = null
+      ped = {}; rascId = ''; anexos = []; pedTipo = ''; pedLead = null; pedIdFixo = 0
       preenchePed()
       guardaNascimento()
       await pegaRascunhos()
@@ -1050,7 +1082,7 @@ async function trocaDeLead() {
     if (e) estadoWa = e
     if (!at.phone) { rodape('abra a conversa do cliente primeiro'); return }
     pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: nomeDeVerdade(at.nome) }
-    ped = {}; anexos = []; rascId = ''; pedErros = []
+    ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0
     preenchePed()
     guardaNascimento()
     pedFeito = tinha ? 'O pedido anterior ficou guardado em rascunho.' : ''
