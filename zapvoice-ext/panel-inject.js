@@ -824,7 +824,7 @@
         run: function (j) {
           j.sub = 'Enviandoâ€¦'; renderSending();
           return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
-            status(r.ok ? ('Agendado enviado -> ' + (j.chatName || '')) : ('Falha no agendado -> ' + (j.chatName || '') + ': ' + (r.err || '')), r.ok ? 'ok' : 'err');
+            status(r.ok ? ('Agendado enviado -> ' + (j.chatName || '')) : ('Falha no agendado -> ' + (j.chatName || '') + ': ' + falhaTxt(r.err)), r.ok ? 'ok' : 'err');
           });
         },
       });
@@ -1679,6 +1679,21 @@
   }
 
   function status(m, k) { if (els.status) { els.status.textContent = m; els.status.className = k || ''; } }
+  // FALHA EM PORTUGUES, COM O QUE FAZER (16/10/2026). O cobrador recebeu "Cannot read properties of
+  // undefined (reading 'prepRawMedia')" e nao tinha como saber o que era nem o que fazer. Esse
+  // formato (propriedade de undefined, "is not a function", modulo nao encontrado) e o motor (WA-JS)
+  // quebrando porque o WhatsApp mudou por dentro: aconteceu em 24/07 e em 15/10. A saida e sempre a
+  // mesma: fechar e abrir o Sale Chat, que baixa o motor novo do servidor; ate la, o WhatsApp normal.
+  // O erro cru continua no fim, entre colchetes, pra quem for consertar.
+  function motivoFalha(err) {
+    var e = String(err || '');
+    if (/Cannot read propert|is not a function|of undefined|of null|Module .*not found|prepRawMedia|webpack/i.test(e)) {
+      return 'O WhatsApp atualizou e o Sale Chat não conseguiu mandar isso. Feche o Sale Chat e abra de novo. Se continuar, mande pelo WhatsApp normal e mande print desta linha pro Bruno.';
+    }
+    if (/demorou demais|timeout/i.test(e)) return 'O WhatsApp demorou pra responder. Olhe na conversa se chegou antes de mandar de novo.';
+    return e || 'erro sem descrição';
+  }
+  function falhaTxt(err) { var e = String(err || ''); var m = motivoFalha(e); return m === e ? m : m + ' [' + e + ']'; }
   // Banner "Envios": pilha do que esta sendo enviado AGORA. Cada linha = um job (item/funil ->
   // lead) com seu progresso e um Pausar proprio. Ao pausar, a linha mostra "Parando..." na hora
   // (feedback claro) e some quando o envio para de fato. Some tudo quando nao ha job ativo.
@@ -1801,7 +1816,7 @@
         j.sub = (it.kind === 'text' ? (simulate ? 'Digitandoâ€¦' : 'Enviandoâ€¦') : it.kind === 'audio' ? (simulate ? 'Gravandoâ€¦' : 'Enviandoâ€¦') : ('Enviando ' + kindLbl.toLowerCase() + 'â€¦'));
         renderSending();
         return sendItemAsync(it, j.chatId, { stopFn: function () { return j.stop; } }).then(function (r) {
-          status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + (r.err || '') + ' [' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
+          status(r.cancelled ? ('Cancelado (' + who + ')') : (r.ok ? ('Enviado -> ' + who) : ('Falha -> ' + who + ': ' + motivoFalha(r.err) + ' [' + (r.err || '') + ' | ' + engineDiag() + ']')), (r.ok && !r.cancelled) ? 'ok' : 'err');
         });
       },
     });
@@ -1832,7 +1847,7 @@
         return new Promise(function (done) {
           var stopFn = function () { return job.stop; };
           function finish(how, err) {
-            status(how === 'ok' ? ('Funil enviado (' + steps.length + ') -> ' + who) : how === 'parado' ? ('Funil parado -> ' + who) : ('Falha no funil -> ' + who + (err ? ': ' + err : '')), how === 'ok' ? 'ok' : 'err');
+            status(how === 'ok' ? ('Funil enviado (' + steps.length + ') -> ' + who) : how === 'parado' ? ('Funil parado -> ' + who) : ('Falha no funil -> ' + who + (err ? ': ' + falhaTxt(err) : '')), how === 'ok' ? 'ok' : 'err');
             done();
           }
           var i = 0;
