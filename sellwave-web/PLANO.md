@@ -130,29 +130,34 @@ SW_SMOKE=1 SW_SMOKE_WA=1 npx electron . # + abre o WhatsApp Web de verdade e pro
 Aviso de ambiente: se `ELECTRON_RUN_AS_NODE=1` estiver setado no shell, o Electron roda como Node e
 nada funciona. Use `env -u ELECTRON_RUN_AS_NODE`.
 
-### Fase 2 — Painel
-- [ ] Painel injetado dentro de cada sessão
-- [ ] Dados do lead vindos da dash (nome, pedido, histórico)
-- [ ] Respostas rápidas
-- [ ] Botões de funil (reaproveitar `Sale Chat Atendimento/panel-inject.js`)
+### Fase 2 — Painel — **FEITA em 16/10/2026**
+- [x] Painel em **janela própria**, ao lado (não injetado na página: aí o layout do WhatsApp teria que ser empurrado por CSS, que depende do DOM deles, e o CSS deles poderia quebrar o nosso)
+- [x] Agente injetado na página só com o que precisa estar lá: motor, conversa aberta, envio e captura
+- [x] Dados do lead vindos da dash, com escopo por cargo e **sem CPF**
+- [x] Respostas rápidas, funis e áudios, agrupados, com busca
+- [x] Simulação de digitando e gravando antes de mandar
+- [x] Alvo travado no clique (trocar de conversa no meio não desvia o funil)
+- [x] Botão Parar no meio do funil
 
-### Fase 3 — Captura de volta
-- [ ] Mensagens recebidas e enviadas voltam para o worker
-- [ ] **Idempotência**: nada entra duas vezes (já houve incidente de 357 duplicadas em setembro,
-      memória `inbox-datacrazy-poll-vs-sync`)
-- [ ] Carimbo da instância correto (ver memória `canal-real-whatsapp-instance-mente`)
+### Fase 3 — Captura de volta — **FEITA em 16/10/2026**
+- [x] Mensagens recebidas E enviadas voltam para o worker
+- [x] **Idempotência** por id de mensagem, no agente e na ingestão
+- [x] Rota própria `POST /api/swweb/captura`, autenticada: o token de ingestão **não desce mais pro app**
+- [x] Fila em disco: fechar o app não perde o que ainda não subiu
+- [x] Contador de pendência na barra lateral
 
-### Fase 4 — Tela na dash
-- [ ] Ferramentas > Sellwave Web
-- [ ] Download do instalador
-- [ ] Lista de números, quem está usando, conectado ou não
-- [ ] Cadastro de proxy por número
-- [ ] Interruptor da trava
+### Fase 4 — Tela na dash — **FEITA em 15/10/2026**
+- [x] Ferramentas > Sellwave Web
+- [x] Download do instalador (do R2, pelo worker)
+- [x] Lista de números com dono e status colorido pela cor do cadastro
+- [x] Cadastro de proxy por número, com colar de uma linha só
+- [x] Interruptores das duas travas
 
-### Fase 5 — Acabamento
-- [ ] Atualização automática do app
-- [ ] Reconexão e recuperação de sessão
-- [ ] Log local para diagnóstico
+### Fase 5 — Acabamento — **FEITA em 16/10/2026**
+- [x] Log local em `%APPDATA%/sellwave-web.log`, com botão Abrir registro
+- [x] Hibernação por teto de sessões abertas (memória), configurável
+- [x] Segredos cifrados no disco com o DPAPI do Windows
+- [ ] Atualização automática: por ora o instalador novo é baixado pela dash
 
 ---
 
@@ -223,6 +228,30 @@ Recomendação registrada: começar no A, migrar para B se o buraco de captura i
 
 ---
 
+## 9b. Os 8 furos que a revisão adversarial achou (16/10/2026)
+
+Um agente revisou o código inteiro procurando bug de verdade. Achou 20, 8 graves. **Todos os graves
+foram consertados**, e cada conserto está comentado no código com o motivo. Ficam aqui para ninguém
+reintroduzir:
+
+| # | O furo | O conserto |
+|---|---|---|
+| 1 | A ponte do preload repassava **qualquer** canal IPC pra página do WhatsApp. Um script lá dentro desligava a trava de proxy, trocava o proxy e lia as senhas | Lista fechada de canais (só `swp:captura`) e `ev.source !== window` |
+| 2 | O vendedor abria o número com o proxy da direção, passava no preflight e **depois trocava por um proxy dele** | O app não cadastra mais proxy, só lê e testa. Teste roda em partição descartável |
+| 3 | A mídia era baixada com `fetch` **dentro da página**, e a CSP do WhatsApp bloqueia nossos domínios | Quem baixa é o processo principal, que manda o dataUri pronto |
+| 4 | A view do preflight não tinha referência: o coletor de lixo destruía no meio do teste | Guardada num Set, e `close()` em vez de `destroy()` |
+| 5 | Dois cliques no mesmo número criavam **duas sessões na mesma partição** | Trava `abrindo` |
+| 6 | `GET /api/swweb/lead` não tinha escopo por cargo: dava pra varrer telefone e ler pedido de outro, **com CPF** | Escopo por cargo e o CPF saiu da resposta |
+| 7 | `GET /api/swweb/roteiro` entregava o **token de ingestão** pra qualquer login. Com ele dava pra inventar venda (comissão e pixel) | O token não sai mais. Captura por rota autenticada, com o servidor carimbando de quem é |
+| 8 | Com um número aberto, a janelinha de proxy e de ajustes abria **atrás** das views | Esconde as views enquanto a janelinha está na tela |
+
+Consertados também: exigir IP do Brasil falhava **aberta** quando não sabia o país; erro de rede
+mandava o vendedor pra tela de login; `did-fail-load` de um subframe arrancava da tela o número em
+uso; token e senha de proxy ficavam em texto puro no `%APPDATA%` (agora DPAPI); `sandbox: false` na
+view que roda a página da Meta; a chave de 10 dígitos era formatada como telefone e sumia com o nono
+dígito; permissão de mídia liberava **câmera** junto com microfone; faltava o par `will-navigate` do
+`setWindowOpenHandler`; e a fila de captura só existia em memória.
+
 ## 10. Diário do projeto
 
 Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verificou**.
@@ -238,3 +267,10 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   números com token, trava de deploy saída 0, smoke das 25 telas.
   **Falta o Bruno:** dizer se os proxies dele são HTTP ou SOCKS (ver A3/A10), parear um número e
   testar a ligação de voz com a trava ligada (spike número 1).
+- **16/10/2026** — **PROJETO INTEIRO NO AR (fases 2 a 5).** Painel de venda em janela própria, com
+  respostas rápidas, funis e áudios do Sale Chat; captura voltando pela rota autenticada; log,
+  hibernação por memória e segredos cifrados. **O proxy do Bruno foi testado de verdade e funciona
+  como HTTP**: `isp.decodo.com:10001`, saiu por 104.165.109.158, São Paulo, Brasil. Autoteste em
+  **21 conferências, 21 passando**, incluindo abrir o WhatsApp Web, carregar o motor, instalar o
+  agente e confirmar que proxy morto **não** vira conexão direta. Revisão adversárial achou 20
+  problemas e os 8 graves foram consertados (seção 9b).

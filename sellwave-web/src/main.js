@@ -7,7 +7,7 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 
@@ -29,7 +29,8 @@ app.userAgentFallback = UA_LIMPO
 
 const WA_URL = 'https://web.whatsapp.com'
 const WA_ORIGEM = 'https://web.whatsapp.com'
-const LARGURA_BARRA = 268              // barra lateral da casca
+const LARGURA_BARRA = 268              // barra lateral da casca (lista de numeros)
+const LARGURA_PAINEL = 316             // painel de venda, na direita
 const ALTURA_TOPO = 0                  // a casca desenha o topo dentro da propria barra
 
 // Permissoes que a pagina do WhatsApp realmente pede (capturadas no handler em 15/10):
@@ -43,6 +44,25 @@ const PERMISSOES_OK = new Set(['media', 'persistent-storage', 'notifications', '
 // 2) Configuracao local (token da dash, proxies por numero, trava)
 
 const ARQ_CONFIG = () => path.join(app.getPath('userData'), 'sellwave-web.json')
+const ARQ_LOG = () => path.join(app.getPath('userData'), 'sellwave-web.log')
+
+// LOG EM ARQUIVO. Sem isto, quando o app falha na maquina do vendedor nao sobra nada pra olhar:
+// ele nao abre o console e nao sabe descrever o erro. O arquivo fica em %APPDATA%, e o botao
+// "Abrir registro" na barra lateral abre a pasta.
+// Corta em 2 MB pra nao crescer pra sempre no computador dele.
+function anota(txt) {
+  const linha = new Date().toISOString().slice(0, 19).replace('T', ' ') + '  ' + String(txt) + '\n'
+  try {
+    const f = ARQ_LOG()
+    try { if (fs.statSync(f).size > 2 * 1024 * 1024) fs.renameSync(f, f + '.old') } catch (_) { /* primeiro uso */ }
+    fs.appendFileSync(f, linha, 'utf8')
+  } catch (_) { /* log que quebra o app e pior que log nenhum */ }
+}
+// Tudo que ja ia pro console passa a ir junto pro arquivo.
+for (const nivel of ['log', 'warn', 'error']) {
+  const orig = console[nivel].bind(console)
+  console[nivel] = (...a) => { orig(...a); anota((nivel === 'log' ? '' : nivel.toUpperCase() + ': ') + a.map(String).join(' ')) }
+}
 
 const CONFIG_PADRAO = {
   token: '',
@@ -51,6 +71,8 @@ const CONFIG_PADRAO = {
   exigirBrasil: false,     // segunda trava, opcional: so abre se o IP for BR
   proxies: {},             // { "<numkey>": { host, porta, usuario, senha } }
   numeros: [],             // cache da ultima lista vinda da dash
+  maxAbertos: 6,           // teto de sessoes abertas ao mesmo tempo (ver hibernacao)
+  nome: '',                // nome de quem entrou, so pra barra lateral
 }
 
 let config = { ...CONFIG_PADRAO }
@@ -59,16 +81,44 @@ function lerConfig() {
   try {
     const txt = fs.readFileSync(ARQ_CONFIG(), 'utf8')
     config = { ...CONFIG_PADRAO, ...JSON.parse(txt) }
+    config.token = decifra(config.token)
+    for (const p of Object.values(config.proxies || {})) { if (p) p.senha = decifra(p.senha) }
   } catch (_) {
     config = { ...CONFIG_PADRAO }
   }
   return config
 }
 
+// SEGREDO NAO VAI EM TEXTO PURO (16/10/2026, revisao adversarial).
+//
+// O token da dash e as senhas de proxy ficavam legiveis em %APPDATA%. Qualquer um com acesso ao
+// perfil do Windows do vendedor, ou um ladrao de credencial comum, saia com uma sessao valida da
+// dash e com o proxy pago da operacao. O safeStorage usa o DPAPI do proprio Windows, entao o
+// arquivo so se abre naquele usuario, naquela maquina.
+// Sem DPAPI disponivel, o segredo simplesmente NAO e gravado: pedir a senha de novo e melhor que
+// deixar ela em texto puro.
+const MARCA_CIFRA = 'enc:v1:'
+function cifra(txt) {
+  if (!txt) return ''
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return ''
+    return MARCA_CIFRA + safeStorage.encryptString(String(txt)).toString('base64')
+  } catch (_) { return '' }
+}
+function decifra(txt) {
+  const v = String(txt || '')
+  if (!v.startsWith(MARCA_CIFRA)) return v   // config antiga, em texto puro: migra ao gravar
+  try { return safeStorage.decryptString(Buffer.from(v.slice(MARCA_CIFRA.length), 'base64')) } catch (_) { return '' }
+}
+
 function gravarConfig() {
   try {
+    const guardar = { ...config, token: cifra(config.token), proxies: {} }
+    for (const [k, p] of Object.entries(config.proxies || {})) {
+      guardar.proxies[k] = { ...p, senha: cifra(p && p.senha) }
+    }
     fs.mkdirSync(path.dirname(ARQ_CONFIG()), { recursive: true })
-    fs.writeFileSync(ARQ_CONFIG(), JSON.stringify(config, null, 2), 'utf8')
+    fs.writeFileSync(ARQ_CONFIG(), JSON.stringify(guardar, null, 2), 'utf8')
   } catch (e) {
     console.error('[config] nao gravou:', e && e.message)
   }
@@ -106,6 +156,23 @@ const particaoDe = (nk) => 'persist:sw-' + nk
 // ERR_PROXY_CONNECTION_FAILED e o Chromium NAO sai pelo IP real.
 
 const credenciais = new Map()   // "host:porta" -> { usuario, senha }
+
+// ROTEIRO (respostas rapidas, funis, audios) e as credenciais de captura. Vem da dash uma vez e
+// fica aqui: o painel de cada numero pede por IPC, entao N sessoes abertas = 1 busca, nao N.
+let roteiro = null
+let roteiroEm = 0
+async function pegaRoteiro(forcar) {
+  if (!forcar && roteiro && (Date.now() - roteiroEm) < 600000) return roteiro
+  if (!config.token) return null
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/roteiro',
+      { headers: { Authorization: 'Bearer ' + config.token } })
+    if (!r.ok) return roteiro
+    const d = await r.json()
+    if (d && d.ok) { roteiro = d; roteiroEm = Date.now() }
+  } catch (_) { /* fica com o que tinha: roteiro velho e melhor que painel vazio */ }
+  return roteiro
+}
 
 function proxyDoNumero(nk) {
   const p = config.proxies && config.proxies[nk]
@@ -165,18 +232,24 @@ app.on('login', (event, _wc, _det, authInfo, callback) => {
 // PREFLIGHT: confere, ANTES de carregar o WhatsApp, que a sessao realmente sai pelo proxy.
 // Roda num WebContents escondido com a MESMA particao, porque e o unico jeito de a autenticacao
 // do proxy funcionar. Devolve { ok, ip, pais, erro }.
+// Views do preflight: sem guardar a referencia, o coletor de lixo destroi a view no meio do teste
+// e o executeJavaScript morre com "Object has been destroyed" (medido).
+const viewsDoTeste = new Set()
+
 function testaSaida(particao) {
   return new Promise((resolve) => {
     const view = new WebContentsView({
       webPreferences: { partition: particao, sandbox: true, javascript: true, images: false },
     })
+    viewsDoTeste.add(view)
     const wc = view.webContents
     let respondeu = false
     const acabou = (r) => {
       if (respondeu) return
       respondeu = true
       clearTimeout(relogio)
-      try { wc.destroy() } catch (_) { /* ok */ }
+      try { if (!wc.isDestroyed()) wc.close() } catch (_) { /* ok */ }
+      viewsDoTeste.delete(view)
       resolve(r)
     }
     const relogio = setTimeout(() => acabou({ ok: false, erro: 'O proxy nao respondeu em 20 segundos.' }), 20000)
@@ -221,6 +294,15 @@ app.on('web-contents-created', (_e, wc) => {
     if (/^https?:/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
+  // O PAR DO DE CIMA. Sem isto, um link com target proprio navega a sessao PRA FORA do WhatsApp:
+  // a view vira um navegador comum, ainda com o proxy e a sessao do numero. Link externo vai pro
+  // navegador do sistema; a sessao so anda dentro do WhatsApp.
+  wc.on('will-navigate', (ev, url) => {
+    const u = String(url || '')
+    if (u.startsWith(WA_URL) || u.startsWith('file://') || u === 'about:blank') return
+    ev.preventDefault()
+    if (/^https?:/i.test(u)) shell.openExternal(u)
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -228,12 +310,29 @@ app.on('web-contents-created', (_e, wc) => {
 
 let janela = null
 let casca = null
+let painel = null   // a view do painel de venda, uma so pra todos os numeros
 const abertos = new Map()   // nk -> { view, nk, numero, carregado, ultimoUso }
+let ativoAgora = ''         // qual numero esta na tela (a hibernacao nunca fecha este)
+
+// TRES COLUNAS: barra de numeros | WhatsApp | painel de venda.
+//
+// O painel e uma VIEW PROPRIA, nao um pedaco injetado na pagina. Se fosse injetado, pra ele nao
+// cobrir a conversa a gente teria que encolher o layout do WhatsApp por CSS - que depende do DOM
+// deles e quebra quando eles mudam - e o CSS deles poderia quebrar o nosso. Separado, cada um cuida
+// do seu espaco e nenhum estraga o outro.
+function temPainel() { return !!ativoAgora && abertos.has(ativoAgora) }
 
 function areaConteudo() {
   if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
   const b = janela.getContentBounds()
-  return { x: LARGURA_BARRA, y: ALTURA_TOPO, width: Math.max(0, b.width - LARGURA_BARRA), height: Math.max(0, b.height - ALTURA_TOPO) }
+  const reserva = temPainel() ? LARGURA_PAINEL : 0
+  return { x: LARGURA_BARRA, y: ALTURA_TOPO, width: Math.max(0, b.width - LARGURA_BARRA - reserva), height: Math.max(0, b.height - ALTURA_TOPO) }
+}
+
+function areaPainel() {
+  if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
+  const b = janela.getContentBounds()
+  return { x: Math.max(0, b.width - LARGURA_PAINEL), y: 0, width: LARGURA_PAINEL, height: b.height }
 }
 
 function reposiciona() {
@@ -242,6 +341,11 @@ function reposiciona() {
   if (casca) casca.setBounds({ x: 0, y: 0, width: b.width, height: b.height })
   const area = areaConteudo()
   for (const s of abertos.values()) s.view.setBounds(area)
+  if (painel) {
+    const liga = temPainel()
+    painel.setVisible(liga)
+    if (liga) { painel.setBounds(areaPainel()); janela.contentView.addChildView(painel) }
+  }
 }
 
 function avisaCasca(canal, dados) {
@@ -254,7 +358,11 @@ function preparaSessao(nk) {
   ses.setPermissionRequestHandler((wc, permissao, callback, detalhes) => {
     const origem = (detalhes && detalhes.requestingUrl) || (wc && wc.getURL && wc.getURL()) || ''
     const daCasa = String(origem).startsWith(WA_ORIGEM)
-    callback(!!daCasa && PERMISSOES_OK.has(permissao))
+    // MICROFONE SIM, CAMERA NAO. O vendedor manda audio e liga por voz; video nunca foi pedido, e
+    // liberar camera numa tela que fica aberta o dia inteiro e risco sem contrapartida.
+    const tipos = (detalhes && detalhes.mediaTypes) || []
+    const soAudio = permissao !== 'media' || !tipos.includes('video')
+    callback(!!daCasa && PERMISSOES_OK.has(permissao) && soAudio)
   })
   ses.setPermissionCheckHandler((_wc, permissao, origem) => {
     return String(origem || '').startsWith(WA_ORIGEM) && PERMISSOES_OK.has(permissao)
@@ -264,6 +372,11 @@ function preparaSessao(nk) {
 
 // Abre (ou traz pra frente) a sessao de um numero. Faz o preflight do proxy ANTES de carregar o
 // WhatsApp: se a trava estiver ligada e o proxy nao responder, a pagina nao chega a ser pedida.
+// Quem ja esta no meio da abertura. Sem isto, dois cliques no mesmo numero (coisa que vendedor
+// leigo faz direto, ainda mais com a lista redesenhando embaixo do dedo) criam DUAS views na MESMA
+// particao, e o WhatsApp Web entra em conflito de sessao.
+const abrindo = new Set()
+
 async function abreNumero(numero) {
   const nk = numKey(numero)
   if (!nk) return { ok: false, erro: 'Numero invalido.' }
@@ -272,6 +385,14 @@ async function abreNumero(numero) {
     mostra(nk)
     return { ok: true, jaAberto: true }
   }
+  if (abrindo.has(nk)) return { ok: true, jaAberto: true }
+  abrindo.add(nk)
+  try {
+    return await abreDeVerdade(nk, numero)
+  } finally { abrindo.delete(nk) }
+}
+
+async function abreDeVerdade(nk, numero) {
 
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
   await puxaProxyDaDash(nk)
@@ -291,18 +412,29 @@ async function abreNumero(numero) {
       await aplicaProxy(ses, null)
       return { ok: false, erro: 'O proxy nao respondeu: ' + teste.erro }
     }
-    if (config.exigirBrasil && teste.pais && teste.pais !== 'BR') {
+    // FECHA quando NAO SABE o pais, nao so quando sabe que e outro. Antes, resposta sem countryCode
+    // passava - e o teste e http em texto claro, entao o proprio dono do proxy podia forjar.
+    if (config.exigirBrasil && teste.pais !== 'BR') {
       await aplicaProxy(ses, null)
-      return { ok: false, erro: 'O proxy saiu por ' + teste.pais + ', e a exigencia de IP brasileiro esta ligada.' }
+      return { ok: false, erro: teste.pais
+        ? 'O proxy saiu por ' + teste.pais + ', e a exigência de IP brasileiro está ligada.'
+        : 'Não deu pra confirmar que o IP é do Brasil, e a exigência está ligada.' }
     }
     avisaCasca('sw:saida', { nk, ip: teste.ip, pais: teste.pais, cidade: teste.cidade, provedor: teste.provedor })
   }
+
+  // Baixa o motor ANTES de criar a view: o preload pede ele de forma sincrona no inicio do
+  // documento, e se nao estiver em maos ali, a injecao cai pro caminho tardio.
+  await pegaMotor()
 
   const view = new WebContentsView({
     webPreferences: {
       partition: particaoDe(nk),
       preload: path.join(__dirname, 'preload-wa.js'),
-      sandbox: false,
+      // SANDBOX LIGADO: esta view roda a pagina da Meta e um motor de 500 KB baixado da rede. O
+      // preload so usa contextBridge, ipcRenderer e webFrame, que funcionam com sandbox, entao
+      // desligar nao compraria nada e tiraria a caixa de areia do sistema operacional.
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: true,
@@ -315,9 +447,13 @@ async function abreNumero(numero) {
   view.webContents.on('did-finish-load', () => {
     s.carregado = true
     avisaCasca('sw:aberto', { nk })
+    injetaPainel(s)
   })
-  view.webContents.on('did-fail-load', (_e, code, desc, url) => {
+  view.webContents.on('did-fail-load', (_e, code, desc, url, ehPrincipal) => {
     if (code === -3) return                       // navegacao abortada, normal
+    // SO O QUADRO PRINCIPAL. Um subframe do proprio WhatsApp falhando nao e o numero caindo, e
+    // avisar a casca fazia a tela do numero que o vendedor estava usando sumir.
+    if (ehPrincipal === false) return
     if (url && !String(url).startsWith(WA_URL)) return
     avisaCasca('sw:erro', { nk, erro: desc + ' (' + code + ')' })
   })
@@ -341,12 +477,40 @@ function mostra(nk) {
       s.view.setVisible(false)
     }
   }
+  ativoAgora = nk
   avisaCasca('sw:ativo', { nk })
+  reposiciona()
+  hibernaSePrecisar()
 }
 
 function escondeTodos() {
   for (const s of abertos.values()) s.view.setVisible(false)
+  ativoAgora = ''
   avisaCasca('sw:ativo', { nk: '' })
+  reposiciona()
+}
+
+// HIBERNACAO. O Chromium NUNCA compartilha processo entre particoes diferentes, entao cada numero
+// aberto e um navegador inteiro: foi medido ~430 MB so na tela de QR, e 600 MB a 2 GB logado com
+// conversa. Sem teto, o vendedor abre oito numeros e a maquina dele morre.
+//
+// Quando passa do teto, fecha o que esta parado ha mais tempo (e nunca o que esta na tela). A
+// sessao fica no disco, entao reabrir e so recarregar: NAO pede QR de novo.
+//
+// O PRECO, e e honesto dizer: numero hibernado para de capturar mensagem enquanto estiver fechado.
+// Por isso o teto e configuravel e o padrao e 6, nao 2.
+function hibernaSePrecisar() {
+  const teto = Math.max(1, Number(config.maxAbertos) || 6)
+  if (abertos.size <= teto) return
+  const candidatos = [...abertos.values()]
+    .filter((s) => s.nk !== ativoAgora)
+    .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
+  while (abertos.size > teto && candidatos.length) {
+    const s = candidatos.shift()
+    console.log('[memoria] hibernando ' + s.nk + ' (teto de ' + teto + ' sessoes abertas)')
+    fechaNumero(s.nk)
+    avisaCasca('sw:hibernou', { nk: s.nk })
+  }
 }
 
 function fechaNumero(nk) {
@@ -355,8 +519,123 @@ function fechaNumero(nk) {
   try { janela.contentView.removeChildView(s.view) } catch (_) { /* ok */ }
   try { s.view.webContents.close() } catch (_) { /* ok */ }
   abertos.delete(nk)
+  if (ativoAgora === nk) ativoAgora = ''
   avisaCasca('sw:fechado', { nk })
+  reposiciona()
 }
+
+// INJECAO DO MOTOR E DO PAINEL.
+//
+// POR QUE executeJavaScript E NAO <script>: a pagina do WhatsApp tem CSP apertada e barra script
+// externo e inline. O executeJavaScript roda no mundo PRINCIPAL e nao passa pela CSP, entao a gente
+// nao precisa arrancar o cabecalho de seguranca da pagina - que seria piorar a seguranca do
+// vendedor pra ganhar conveniencia.
+//
+// ORDEM IMPORTA: primeiro o motor (WA-JS), depois o painel. O painel espera o window.WPP ficar
+// pronto sozinho, entao nao trava se o motor demorar.
+const CAMINHO_AGENTE = path.join(__dirname, 'ui', 'agente.js')
+let motorCache = ''
+async function pegaMotor() {
+  if (motorCache) return motorCache
+  const r = await pegaRoteiro(false)
+  const url = (r && r.motor) || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/motor.js')
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) throw new Error('motor respondeu ' + resp.status)
+    const txt = await resp.text()
+    // O motor tem ~500 KB. Resposta curta demais e pagina de erro disfarcada de script.
+    if (txt.length < 100000) throw new Error('motor veio pela metade (' + txt.length + ' bytes)')
+    motorCache = txt
+    return txt
+  } catch (e) {
+    console.error('[painel] nao baixei o motor:', e && e.message)
+    return ''
+  }
+}
+// O PRELOAD PEDE O CODIGO DE FORMA SINCRONA e injeta no inicio do documento, que e o momento certo
+// pro WA-JS: ele precisa estar la antes dos scripts do WhatsApp engancharem. O caminho pelo
+// did-finish-load continua existindo como rede de seguranca (se o motor ainda nao tinha sido
+// baixado na hora em que a pagina comecou).
+ipcMain.on('sw:codigo', (e) => {
+  let agente = ''
+  try { agente = fs.readFileSync(CAMINHO_AGENTE, 'utf8') } catch (_) { /* ok */ }
+  e.returnValue = { motor: motorCache || '', agente }
+})
+
+async function injetaPainel(s) {
+  if (!s || !s.view || s.view.webContents.isDestroyed()) return
+  const wc = s.view.webContents
+  try {
+    const jaTem = await wc.executeJavaScript('typeof window.__swEstado === "function"').catch(() => false)
+    if (jaTem) return                      // o preload ja injetou no inicio do documento
+    const motor = await pegaMotor()
+    if (motor) await wc.executeJavaScript(motor, true).catch((e) => console.error('[painel] motor nao rodou:', e && e.message))
+    await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
+    console.log('[painel] agente instalado (tardio) em ' + s.nk)
+  } catch (e) {
+    console.error('[painel] falhou em ' + s.nk + ': ' + ((e && e.message) || e))
+  }
+}
+
+// FILA DE CAPTURA. O painel manda lotes; aqui eles viram POST pra rota de ingestao do Sale Chat,
+// que e a MESMA que ja alimenta o inbox, a atribuicao e o pixel. Reusar em vez de criar um segundo
+// caminho evita ter duas verdades sobre a mesma conversa.
+// A FILA SOBREVIVE A FECHAR O APP. Ela so existia em memoria: fechar o programa (ou um
+// travamento) perdia tudo que ainda nao tinha subido, calado. Ela e pequena - texto de mensagem.
+const ARQ_FILA = () => path.join(app.getPath('userData'), 'captura-pendente.json')
+const filaCaptura = []
+let drenando = false
+let filaSuja = false
+function gravaFila() {
+  if (!filaSuja) return
+  filaSuja = false
+  try { fs.writeFileSync(ARQ_FILA(), JSON.stringify(filaCaptura.slice(0, 5000)), 'utf8') } catch (_) { /* ok */ }
+}
+function leFila() {
+  try {
+    const v = JSON.parse(fs.readFileSync(ARQ_FILA(), 'utf8'))
+    if (Array.isArray(v) && v.length) { filaCaptura.push(...v); console.log('[captura] ' + v.length + ' mensagens esperando do uso anterior') }
+  } catch (_) { /* primeiro uso */ }
+}
+setInterval(gravaFila, 10000)
+app.on('before-quit', gravaFila)
+async function drenaCaptura() {
+  if (drenando || !filaCaptura.length) return
+  const r = await pegaRoteiro(false)
+  // A captura vai pela rota AUTENTICADA, com o Bearer do proprio usuario. O token de ingestao nao
+  // desce mais pro app (ver worker: quem o tivesse podia inventar venda).
+  const alvo = (r && r.captura) || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/captura')
+  if (!config.token) return
+  drenando = true
+  try {
+    while (filaCaptura.length) {
+      const lote = filaCaptura.splice(0, 50)
+      try {
+        const resp = await fetch(alvo, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+          body: JSON.stringify({ events: lote }),
+        })
+        if (!resp.ok) {
+          // Devolve pra fila e para: melhor segurar do que perder conversa.
+          filaCaptura.unshift(...lote)
+          console.error('[captura] ingestao respondeu ' + resp.status)
+          break
+        }
+      } catch (e) {
+        filaCaptura.unshift(...lote)
+        console.error('[captura] nao enviou: ' + ((e && e.message) || e))
+        break
+      }
+      filaSuja = true
+    }
+  } finally {
+    drenando = false
+    gravaFila()
+    avisaCasca('sw:fila', { n: filaCaptura.length })
+  }
+}
+setInterval(drenaCaptura, 15000)
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // 7) Conversa com a dash
@@ -385,48 +664,69 @@ async function buscaNumeros() {
 // 8) IPC
 
 ipcMain.handle('sw:estado', () => ({
-  token: config.token ? '***' : '',
   temToken: !!config.token,
+  nome: config.nome || '',
   apiBase: config.apiBase,
   travaProxy: config.travaProxy,
   exigirBrasil: config.exigirBrasil,
   numeros: config.numeros,
   proxies: config.proxies,
+  maxAbertos: Number(config.maxAbertos) || 6,
   abertos: [...abertos.keys()],
   versao: app.getVersion(),
   chromium: process.versions.chrome,
 }))
 
-ipcMain.handle('sw:entrar', async (_e, { token, apiBase }) => {
-  config.token = String(token || '').trim()
-  if (apiBase) config.apiBase = String(apiBase).trim()
+// ENTRAR COM USUARIO E SENHA, nao com token (16/10/2026, pedido do Bruno: "eu vou passar isso pros
+// meus vendedores, eles sao bem leigos, como e que eles vao entender o que e token da dash e
+// endereco da API"). O app troca login e senha por token no MESMO /auth/login da dash, e guarda o
+// token aqui dentro. O endereco da API saiu da tela: e sempre o nosso worker.
+ipcMain.handle('sw:entrar', async (_e, { login, senha }) => {
+  const usuario = String(login || '').trim()
+  if (!usuario || !senha) return { ok: false, erro: 'Preencha usuário e senha.' }
+  const url = String(config.apiBase).replace(/\/+$/, '') + '/auth/login'
+  let d = null
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ login: usuario, password: String(senha) }),
+    })
+    d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || (r.status === 401 ? 'Usuário ou senha errados.' : 'A dash respondeu ' + r.status) }
+  } catch (e) {
+    return { ok: false, erro: 'Não deu pra falar com a dash. Confira a internet.' }
+  }
+  const tk = d && (d.token || (d.user && d.user.token))
+  if (!tk) return { ok: false, erro: 'A dash não devolveu o acesso. Avise a direção.' }
+  config.token = String(tk)
+  config.nome = (d.user && (d.user.name || d.user.login)) || usuario
   gravarConfig()
   return buscaNumeros()
 })
 
-ipcMain.handle('sw:sair', () => { config.token = ''; gravarConfig(); return { ok: true } })
+ipcMain.handle('sw:sair', () => { config.token = ''; config.nome = ''; gravarConfig(); return { ok: true } })
 ipcMain.handle('sw:numeros', () => buscaNumeros())
 ipcMain.handle('sw:abrir', (_e, { numero }) => abreNumero(numero))
 ipcMain.handle('sw:mostrar', (_e, { nk }) => { mostra(nk); return { ok: true } })
 ipcMain.handle('sw:esconder', () => { escondeTodos(); return { ok: true } })
 ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true } })
 
-ipcMain.handle('sw:proxy-salvar', (_e, { nk, host, porta, usuario, senha }) => {
-  if (!nk) return { ok: false, erro: 'Falta o numero.' }
-  config.proxies = config.proxies || {}
-  if (!host) delete config.proxies[nk]
-  else config.proxies[nk] = { host: String(host).trim(), porta: Number(porta) || 0, usuario: usuario || '', senha: senha || '' }
-  gravarConfig()
-  return { ok: true }
-})
-
+// O APP NAO CADASTRA PROXY (16/10/2026, revisao adversarial).
+//
+// Antes o vendedor podia abrir o numero com o proxy da direcao, passar no preflight, e DEPOIS
+// trocar por um proxy dele (ou pelo IP da casa dele) com o botao direito: a trava era contornada
+// pelo proprio lado que ela deveria conter. Quem cadastra e a direcao, em Ferramentas > Sellwave
+// Web, e o app so LE.
 ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
+  await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
-  if (!px) return { ok: false, erro: 'Sem proxy cadastrado pra este numero.' }
-  const ses = preparaSessao(nk)
-  await aplicaProxy(ses, px)
-  const r = await testaSaida(particaoDe(nk))
-  if (!abertos.has(nk)) await aplicaProxy(ses, null)   // nao deixa sessao parada com proxy ligado
+  if (!px) return { ok: false, erro: 'Sem proxy cadastrado pra este número. Cadastre na dash.' }
+  // PARTICAO DESCARTAVEL: testar na particao viva aplicaria o proxy numa sessao ja aberta.
+  const teste = 'persist:sw-teste-' + nk
+  await aplicaProxy(session.fromPartition(teste), px)
+  const r = await testaSaida(teste)
+  await aplicaProxy(session.fromPartition(teste), null)
   return r
 })
 
@@ -436,6 +736,119 @@ ipcMain.handle('sw:trava', (_e, { travaProxy, exigirBrasil }) => {
   gravarConfig()
   return { ok: true, travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
 })
+
+// ── IPC DO PAINEL (vem de dentro da pagina do WhatsApp, pela ponte do preload-wa.js)
+ipcMain.handle('swp:roteiro', async () => {
+  const r = await pegaRoteiro(false)
+  if (!r) return { ok: false }
+  // O TOKEN DE INGESTAO NAO DESCE PRO PAINEL. Ele roda no mesmo mundo da pagina do WhatsApp; se
+  // vazar dali, da pra injetar venda falsa (comissao e pixel). A captura sobe por IPC e quem
+  // posta e o processo principal.
+  return { ok: true, messages: r.messages, sequences: r.sequences, media: r.media, mediaBase: r.mediaBase }
+})
+
+// O painel pergunta o estado e manda item pela view do numero que esta na tela. Quem executa de
+// verdade e o agente, dentro da pagina: aqui so se faz a travessia.
+function viewAtiva() {
+  const s = ativoAgora && abertos.get(ativoAgora)
+  if (!s || !s.view || s.view.webContents.isDestroyed()) return null
+  return s.view.webContents
+}
+
+const ESTADO_VAZIO = { motor: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
+
+ipcMain.handle('swp:estado-wa', async () => {
+  const wc = viewAtiva()
+  if (!wc) return { ...ESTADO_VAZIO }
+  let e
+  try { e = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
+  if (!e) return { ...ESTADO_VAZIO }
+  // O NUMERO PAREADO E O MESMO DO SLOT? (16/10/2026, revisao adversarial.)
+  // Se o vendedor ler o QR do slot (15) 97407-6200 com OUTRO aparelho, a barra continua dizendo
+  // (15), o proxy usado continua sendo o do (15) e a captura sai carimbada com o numero de verdade.
+  // A dash e o app passam a discordar do que esta acontecendo, em silencio. Melhor gritar.
+  const esperado = ativoAgora
+  const real = numKey(e.eu || '')
+  e.trocado = (real && esperado && real !== esperado) ? real : ''
+  if (e.trocado) console.error('[slot] ' + esperado + ' esta pareado com ' + real)
+  return e
+})
+
+// A MIDIA E BAIXADA AQUI, NAO NA PAGINA.
+//
+// A CSP do web.whatsapp.com tem connect-src que nao inclui os nossos dominios, entao um fetch pra
+// /api/salechat/media/... de dentro da pagina e bloqueado pelo navegador. O processo principal nao
+// passa por CSP nem por CORS: ele baixa, vira dataUri e manda pronto junto do item.
+// Cacheado porque o mesmo audio e usado o dia inteiro, em todos os leads.
+const cacheMidia = new Map()
+async function dataUriDe(url) {
+  if (cacheMidia.has(url)) return cacheMidia.get(url)
+  const r = await fetch(url)
+  if (!r.ok) throw new Error('a midia respondeu ' + r.status)
+  const buf = Buffer.from(await r.arrayBuffer())
+  const tipo = r.headers.get('content-type') || 'application/octet-stream'
+  const uri = 'data:' + tipo + ';base64,' + buf.toString('base64')
+  if (cacheMidia.size > 120) cacheMidia.clear()   // teto simples: o roteiro tem ~34 midias
+  cacheMidia.set(url, uri)
+  return uri
+}
+
+ipcMain.handle('swp:manda', async (_e, { chatId, item }) => {
+  const wc = viewAtiva()
+  if (!wc) return { ok: false, erro: 'nenhum numero aberto' }
+  const pedaco = { ...(item || {}) }
+  if (pedaco.tipo === 'midia') {
+    if (!pedaco.url) return { ok: false, erro: 'esse item nao tem arquivo' }
+    try { pedaco.dataUri = await dataUriDe(pedaco.url) }
+    catch (e) { return { ok: false, erro: 'nao baixei a midia: ' + ((e && e.message) || e) } }
+    delete pedaco.url
+  }
+  try {
+    const r = await wc.executeJavaScript(
+      'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', true
+    )
+    return { ok: !!r }
+  } catch (e) {
+    return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
+  }
+})
+
+ipcMain.handle('swp:lead', async (_e, { phone }) => {
+  const fone = String(phone || '').replace(/\D/g, '')
+  if (!config.token || fone.length < 8) return { ok: true, achou: false }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/lead?phone=' + encodeURIComponent(fone),
+      { headers: { Authorization: 'Bearer ' + config.token } })
+    if (!r.ok) return { ok: true, achou: false }
+    return await r.json()
+  } catch (_) { return { ok: true, achou: false } }
+})
+
+ipcMain.on('swp:captura', (_e, dados) => {
+  const evs = (dados && Array.isArray(dados.eventos)) ? dados.eventos : []
+  if (!evs.length) return
+  // Teto de seguranca: se a dash ficar fora do ar por muito tempo, segura as ultimas 5 mil e
+  // descarta as mais velhas, em vez de estourar a memoria do vendedor.
+  for (const ev of evs) filaCaptura.push(ev)
+  if (filaCaptura.length > 5000) {
+    const perdidas = filaCaptura.length - 5000
+    filaCaptura.splice(0, perdidas)
+    console.error('[captura] fila cheia: ' + perdidas + ' mensagem(ns) antiga(s) descartada(s)')
+  }
+  filaSuja = true
+  avisaCasca('sw:fila', { n: filaCaptura.length })
+  if (filaCaptura.length >= 50) drenaCaptura()
+})
+
+ipcMain.handle('sw:teto', (_e, { maxAbertos }) => {
+  const n = Math.max(1, Math.min(20, Number(maxAbertos) || 6))
+  config.maxAbertos = n
+  gravarConfig()
+  hibernaSePrecisar()
+  return { ok: true, maxAbertos: n }
+})
+
+ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } catch (_) { /* ok */ } return { ok: true } })
 
 ipcMain.handle('sw:recarregar', (_e, { nk }) => {
   const s = abertos.get(nk)
@@ -448,6 +861,7 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 
 app.whenReady().then(() => {
   lerConfig()
+  leFila()
 
   // A sessao PADRAO tambem vai pro buraco negro. Assim, qualquer parte do app que esqueca de usar
   // a particao certa FALHA em vez de vazar o IP real da maquina.
@@ -475,6 +889,22 @@ app.whenReady().then(() => {
   session.fromPartition('persist:sw-casca').setProxy({ mode: 'direct' })
   janela.contentView.addChildView(casca)
   casca.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'))
+
+  // O PAINEL DE VENDA. Uma view so, reaproveitada por todos os numeros: ela nao guarda estado do
+  // WhatsApp, so pergunta pro numero que esta na tela. Fica escondida ate ter numero aberto.
+  painel = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-painel.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: 'persist:sw-painel',
+    },
+  })
+  session.fromPartition('persist:sw-painel').setProxy({ mode: 'direct' })
+  painel.setVisible(false)
+  janela.contentView.addChildView(painel)
+  painel.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))
+
   reposiciona()
 
   janela.on('resize', reposiciona)
@@ -484,8 +914,42 @@ app.whenReady().then(() => {
 
   // AUTOTESTE (SW_SMOKE=1). Nao entra no app empacotado: so roda quando a variavel esta setada.
   // Existe porque as armadilhas deste projeto falham EM SILENCIO (ver src/smoke.js).
+  // FOTO DAS TELAS (SW_FOTO=1), pra conferir o visual sem abrir na mao.
+  if (process.env.SW_FOTO === '1') {
+    const injeta = async (wc) => {
+      try {
+        const motor = await pegaMotor()
+        if (motor) await wc.executeJavaScript(motor, true)
+        await wc.executeJavaScript(fs.readFileSync(CAMINHO_PAINEL, 'utf8'), true)
+        await new Promise((r) => setTimeout(r, 1500))
+      } catch (e) { console.error('[foto] injecao falhou: ' + ((e && e.message) || e)) }
+    }
+    casca.webContents.once('did-finish-load', () => {
+      setTimeout(() => require('./foto').rodar({ casca, injeta }), 1200)
+    })
+  }
+
   if (process.env.SW_SMOKE === '1') {
-    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '' }
+    // As duas funcoes do caminho REAL do proxy vao junto, pro autoteste exercitar o mesmo
+    // codigo que o app usa (incluindo a autenticacao pelo evento app.on('login')).
+    // `injeta` deixa o autoteste exercitar o MESMO caminho de injecao que o app usa de verdade.
+    const injeta = async (wc) => {
+      const out = { wpp: false, agente: false, estado: null, wppErro: '', painelErro: '' }
+      try {
+        const motor = await pegaMotor()
+        if (!motor) { out.wppErro = 'nao baixei o motor'; return out }
+        await wc.executeJavaScript(motor, true)
+        out.wpp = !!(await wc.executeJavaScript('typeof window.WPP !== "undefined"'))
+      } catch (e) { out.wppErro = String((e && e.message) || e).slice(0, 110) }
+      try {
+        await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
+        await new Promise((r) => setTimeout(r, 1200))
+        out.agente = !!(await wc.executeJavaScript('typeof window.__swEstado === "function" && typeof window.__swManda === "function"'))
+        out.estado = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null')
+      } catch (e) { out.painelErro = String((e && e.message) || e).slice(0, 110) }
+      return out
+    }
+    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', aplicaProxy, testaSaida, particaoDe, injeta }
     casca.webContents.once('did-finish-load', async () => {
       ctx.cascaOk = true
       try {

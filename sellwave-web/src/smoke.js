@@ -41,7 +41,8 @@ function abreWhatsapp() {
       if (pronto) return
       pronto = true
       clearTimeout(relogio)
-      try { wc.destroy() } catch (_) { /* ok */ }
+      // NAO destroi a view aqui: o teste do painel injeta nela logo depois. Quem derruba tudo e o
+      // app.exit no fim do autoteste.
       resolve(r)
     }
     const relogio = setTimeout(async () => {
@@ -63,7 +64,7 @@ function abreWhatsapp() {
           return fim({ carregou: true, bloqueado: false, temQr: false, ws: viuWs, erro: 'nao deu pra ler a pagina: ' + (e && e.message) })
         }
       }
-      return fim({ carregou: true, bloqueado: !!o.bloqueado, temQr: !!(o.qr || o.temRef), qr: o.qr, titulo: o.titulo, ws: viuWs })
+      return fim({ carregou: true, bloqueado: !!o.bloqueado, temQr: !!(o.qr || o.temRef), qr: o.qr, titulo: o.titulo, ws: viuWs, wc: wc })
     })
     const leitura = `(() => {
           const t = (document.body && document.body.innerText) || ''
@@ -129,6 +130,32 @@ async function rodar(ctx) {
     conta('NAO caiu na tela de navegador nao suportado', !r.bloqueado, r.bloqueado ? 'apareceu o aviso de Chrome desatualizado' : '')
     conta('o QR apareceu', r.temQr, r.temQr ? ('canvas ' + r.qr) : 'sem canvas de QR')
     conta('o websocket do WhatsApp abriu', r.ws, r.ws ? 'wss conectado' : 'nenhum wss://web.whatsapp.com visto')
+    // O PAINEL: injeta motor + painel na MESMA pagina e confere que os dois subiram.
+    if (r.carregou && ctx.injeta) {
+      const p = await ctx.injeta(r.wc)
+      conta('o motor do WhatsApp (WA-JS) carregou', !!p.wpp, p.wppErro || (p.wpp ? 'window.WPP presente' : ''))
+      conta('o agente instalou na pagina', !!p.agente, p.painelErro || (p.agente ? '__swEstado e __swManda presentes' : ''))
+      conta('o agente responde o estado', !!p.estado, p.estado ? JSON.stringify(p.estado).slice(0, 70) : 'sem resposta')
+    }
+  }
+
+  // 8) O PROXY DE VERDADE. Roda com:
+  //      SW_SMOKE=1 SW_SMOKE_PROXY="host:porta:usuario:senha" npx electron .
+  //    Exercita o MESMO caminho do app: aplica na particao, autentica pelo evento app.on('login')
+  //    e le o IP de saida num WebContents (nao em ses.fetch, que nao autentica em proxy).
+  if (process.env.SW_SMOKE_PROXY && ctx.aplicaProxy) {
+    const p = String(process.env.SW_SMOKE_PROXY).split(':')
+    const px = { host: p[0], porta: Number(p[1]), usuario: p[2] || '', senha: p.slice(3).join(':') }
+    const part = 'persist:sw-teste-proxy'
+    await ctx.aplicaProxy(session.fromPartition(part), px)
+    const r = await ctx.testaSaida(part)
+    conta('o proxy responde e autentica', !!r.ok, r.ok ? (r.ip + ' · ' + r.pais + ' · ' + (r.cidade || '')) : r.erro)
+    conta('o IP de saida e do Brasil', r.ok && r.pais === 'BR', r.pais || '')
+    // E a trava: com o proxy errado, a sessao NAO pode cair pra conexao direta.
+    await ctx.aplicaProxy(session.fromPartition(part), { host: '127.0.0.1', porta: 9, usuario: '', senha: '' })
+    const ruim = await ctx.testaSaida(part)
+    conta('proxy morto NAO vira conexao direta', !ruim.ok, ruim.ok ? ('VAZOU por ' + ruim.ip) : (ruim.erro || '').slice(0, 60))
+    await ctx.aplicaProxy(session.fromPartition(part), null)
   }
 
   const falhas = resultados.filter((r) => !r.passou)

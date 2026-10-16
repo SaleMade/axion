@@ -77,12 +77,16 @@
   .num.carregando .sinal { background: var(--ambar); animation: pulsa 1.1s ease-in-out infinite; }
   .num.falhou .sinal { background: var(--vermelho); }
   @keyframes pulsa { 50% { opacity: .35; } }
-  .num .corpo { min-width: 0; flex: 1; }
+  /* O corpo EMPILHA numero e subtitulo. Sem o flex-direction eles sao dois <span> inline e saem
+     colados na mesma linha ("(15) 97407-6200Guilherme . Em Uso"). */
+  .num .corpo { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
   .num .fone { font-size: 12.5px; font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .num .sub { font-size: 10.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .num .px { flex: 0 0 auto; color: var(--apagado); display: flex; opacity: .75; }
+  .num .px { flex: 0 0 auto; color: var(--apagado); display: flex; opacity: .75; margin-left: 2px; }
   .num .px.sem { color: var(--ambar); opacity: 1; }
 
+  .fila-aviso { padding: 0 14px 6px; font-size: 10.5px; color: var(--ambar); }
+  .fila-aviso:empty { display: none; }
   .rodape { border-top: 1px solid var(--linha); padding: 8px; display: flex; gap: 6px; }
   .rodape button {
     flex: 1; padding: 7px; border-radius: 8px; font-size: 11.5px; color: var(--apagado);
@@ -161,6 +165,7 @@
     </div>
 
     <div class="lista" id="lista"></div>
+    <div id="fila" class="fila-aviso"></div>
 
     <div class="rodape">
       <button id="atualizar">

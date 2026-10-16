@@ -10049,6 +10049,20 @@ async function handleSwWeb(req, env, path) {
   // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
   // instalador publico, sem segredo nenhum dentro (token, proxy e numero vem depois, por API
   // autenticada). Nao coloque nada sensivel neste caminho.
+  // GET /api/swweb/motor.js - a biblioteca que fala com o WhatsApp Web por dentro (WA-JS 4.4.2).
+  // Fica no NOSSO R2 e nao no worker antigo pra ter uma base de URL so e pra gente controlar a
+  // atualizacao: quando o WhatsApp muda e o motor para de funcionar, troca-se o objeto no R2 e todo
+  // mundo pega a versao nova sem reinstalar o app.
+  // Publica pelo mesmo motivo do instalador: e um <script> carregado pela pagina do WhatsApp.
+  if (req.method === 'GET' && path === '/api/swweb/motor.js') {
+    if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
+    const obj = await env.MEDIA.get('sellwave-web/motor.js');
+    if (!obj) return err('Motor nao publicado.', 404);
+    return new Response(obj.body, {
+      headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=1800' },
+    });
+  }
+
   if (req.method === 'GET' && path === '/api/swweb/instalador') {
     if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
     const obj = await env.MEDIA.get('sellwave-web/instalador.exe');
@@ -10070,6 +10084,119 @@ async function handleSwWeb(req, env, path) {
   const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[SWWEB_CFG], {}) };
   const proxies = _swwebLerJson(lidas[SWWEB_PROXIES], {});
 
+  // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
+  // respostas rapidas, funis, audios, e as credenciais de captura.
+  //
+  // REUSA O SALE CHAT DE PROPOSITO. O roteiro de venda ja e editado na dash (Sale Chat), ja tem
+  // versao publicada, ja tem midia no R2 e ja tem rota de ingestao. Criar um segundo roteiro so
+  // pro app novo daria duas fontes de verdade e o vendedor acabaria com dois scripts diferentes.
+  if (req.method === 'GET' && path === '/api/swweb/roteiro') {
+    let sc = {};
+    try {
+      const row = await env.DB.prepare(
+        "SELECT json_extract(data, '$.salechatPub') pub, json_extract(data, '$.salechat') draft FROM dashboard_state WHERE id = 1"
+      ).first();
+      let pub = null, draft = null;
+      try { pub = row && row.pub ? JSON.parse(row.pub) : null; } catch (_) { pub = null; }
+      try { draft = row && row.draft ? JSON.parse(row.draft) : null; } catch (_) { draft = null; }
+      sc = pub || draft || {};
+    } catch (_) { sc = {}; }
+
+    // IDENTIDADE DA CAPTURA. O Sale Chat "aprende" de quem ele e pelo numero; aqui a gente JA SABE,
+    // porque o vendedor entrou com usuario e senha. Install fixo por usuario = atribuicao estavel
+    // mesmo que ele troque de numero no meio do dia.
+    const installId = 'swweb:' + String(u.id);
+    try {
+      await _scEnsureTables(env);
+      await env.DB.prepare(
+        "INSERT INTO sc_install (install_id, at_id, num_last, first_seen, last_seen) VALUES (?,?,'',strftime('%s','now'),strftime('%s','now'))" +
+        " ON CONFLICT(install_id) DO UPDATE SET at_id=excluded.at_id, last_seen=excluded.last_seen"
+      ).bind(installId, String(u.id)).run();
+    } catch (_) { /* sem install a ingestao cai no dono do numero, que e o plano B */ }
+
+    const origem = new URL(req.url).origin;
+    return json({
+      ok: true,
+      messages: Array.isArray(sc.messages) ? sc.messages : [],
+      sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
+      media: Array.isArray(sc.media) ? sc.media : [],
+      mediaBase: origem + '/api/salechat/media/',
+      // O TOKEN DE INGESTAO NAO SAI DAQUI (16/10/2026, revisao adversarial).
+      //
+      // Ele e GLOBAL e a rota /api/salechat/ingest/<token> so confere o token: quem o tivesse podia
+      // postar evento 'fromMe' com "Pedido Concluido" e inventar venda - comissao pro vendedor e
+      // CompletePayment no pixel, envenenando a campanha. Um vendedor teria o token em texto puro
+      // no %APPDATA% dele.
+      // Agora a captura vai por POST /api/swweb/captura, autenticada com o Bearer do proprio
+      // usuario, e e o SERVIDOR que carimba de quem e o lote.
+      captura: origem + '/api/swweb/captura',
+      motor: origem + '/api/swweb/motor.js',
+      updated_at: sc.updated_at || 0,
+    });
+  }
+
+  // POST /api/swweb/captura - as mensagens que o app capturou.
+  //
+  // E a porta AUTENTICADA pra mesma ingestao do Sale Chat. A diferenca que importa: o installId e
+  // carimbado aqui, a partir de QUEM ESTA LOGADO, e nao vem no corpo. Assim um vendedor nao
+  // consegue postar lote em nome de outro, nem inventar venda com um token roubado.
+  if (req.method === 'POST' && path === '/api/swweb/captura') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const eventos = Array.isArray(b && b.events) ? b.events : [];
+    if (!eventos.length) return json({ ok: true, ack: [] });
+    // Teto por lote: o app manda de 50 em 50.
+    if (eventos.length > 200) return err('Lote grande demais', 413);
+    const installId = 'swweb:' + String(u.id);
+    try {
+      await _scEnsureTables(env);
+      await env.DB.prepare(
+        "INSERT INTO sc_install (install_id, at_id, num_last, first_seen, last_seen) VALUES (?,?,'',strftime('%s','now'),strftime('%s','now'))" +
+        " ON CONFLICT(install_id) DO UPDATE SET at_id=excluded.at_id, last_seen=excluded.last_seen"
+      ).bind(installId, String(u.id)).run();
+    } catch (_) { /* o plano B da ingestao e o dono do numero */ }
+    // Reusa o caminho ja testado da ingestao do Sale Chat, com o token resolvido NO SERVIDOR.
+    const token = await _scIngestToken(env);
+    if (!token) return err('Ingestão não configurada', 503);
+    const req2 = new Request(new URL(req.url).origin + '/api/salechat/ingest/' + token, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ installId, events: eventos }),
+    });
+    return handleSalechatIngest(req2, env, token);
+  }
+
+  // GET /api/swweb/lead?phone=... - quem e a pessoa do outro lado, pro painel mostrar.
+  // So o essencial: nome, ultimo pedido e em que etapa ele esta. Nada de historico, que a conversa
+  // ja esta na tela do lado.
+  if (req.method === 'GET' && path === '/api/swweb/lead') {
+    const fone = String(new URL(req.url).searchParams.get('phone') || '').replace(/\D/g, '');
+    if (fone.length < 8) return json({ ok: true, achou: false });
+    const k8 = fone.slice(-8);
+    const data = await _getDashData(env);
+    const leads = Array.isArray(data && data.leads) ? data.leads : [];
+    // CASA PELOS 8 ULTIMOS DIGITOS, nunca pelo telefone inteiro: o pedido guarda o que o vendedor
+    // digitou (com o nono digito) e o WhatsApp entrega sem ele. E a mesma regra do _ttFireSale.
+    // ESCOPO POR CARGO (16/10/2026, revisao adversarial). Sem isto, um vendedor com o proprio
+    // token varria telefones nesta rota e lia o pedido de QUALQUER outro, com CPF e endereco.
+    // Diretor ve todos; vendedor so os dele.
+    const tudoL = isDirector(u);
+    const meus = leads.filter((l) => l
+      && String(l.wa || '').replace(/\D/g, '').slice(-8) === k8
+      && (tudoL || String(l.at || '') === String(u.id)));
+    if (!meus.length) return json({ ok: true, achou: false, phone: fone });
+    meus.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
+    const l = meus[0];
+    // CPF NAO VAI. O painel mostra nome, produto, cidade e etapa; CPF nao ajuda a vender e vira
+    // dado pessoal viajando pra uma tela que fica aberta o dia inteiro.
+    return json({
+      ok: true, achou: true, phone: fone,
+      nome: l.nome || '', cidade: l.cidade || '', uf: l.uf || '',
+      produto: l.trat || l.prod || '', valor: Number(l.vl) || 0, etapa: l.col || '',
+      pago: String(l.spg || ''), rastreio: l.track || '', data: l.data || '',
+      pedidos: meus.length,
+    });
+  }
+
   // GET /api/swweb/numeros — a lista que a barra lateral do app mostra.
   if (req.method === 'GET' && path === '/api/swweb/numeros') {
     const data = await _getDashData(env);
@@ -10081,9 +10208,14 @@ async function handleSwWeb(req, env, path) {
       for (const x of ((r && r.results) || [])) donos[String(x.id)] = x.name || x.id;
     } catch (_) { /* sem nome a tela mostra o id */ }
     // Nome do status (Em Uso, Restrito, Banido...) pra barra lateral nao mentir sobre o chip.
-    const nomeSt = {};
+    // Nome E COR do status. A cor e a que o Bruno escolheu na Contingencia: mandando ela daqui, o
+    // app e a tela ficam sempre iguais ao cadastro, e trocar a cor de um status nao vira tarefa de
+    // programador (pedido dele em 16/10: "os chips coloridos, restrito vermelho, ativo azul").
+    const nomeSt = {}, corSt = {};
     for (const st of (Array.isArray(data && data.wa_statuses) ? data.wa_statuses : [])) {
-      if (st && st.id) nomeSt[String(st.id)] = st.label || st.nome || st.name || '';
+      if (!st || !st.id) continue;
+      nomeSt[String(st.id)] = st.label || st.nome || st.name || '';
+      corSt[String(st.id)] = st.cor || st.color || '';
     }
     // ESCOPO POR CARGO: diretor/socio/produtor ve todos; vendedor ve SO os dele. E a mesma regra do
     // resto da dash (ver src/lib/roles.js), e aqui ela importa mais, porque numero e credencial.
@@ -10097,12 +10229,13 @@ async function handleSwWeb(req, env, path) {
         nk,
         dono: donos[String(c.at || '')] || (c.at ? String(c.at) : ''),
         status: nomeSt[String(c.wa_st || '')] || '',
+        cor: corSt[String(c.wa_st || '')] || '',
         em_uso: !!c.em_uso,
         // NUNCA devolve a senha do proxy pra lista: so se ha proxy e qual o endereco.
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
       };
     });
-    return json({ ok: true, numeros, config: cfg });
+    return json({ ok: true, numeros, config: cfg, direcao: isDirector(u) });
   }
 
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder

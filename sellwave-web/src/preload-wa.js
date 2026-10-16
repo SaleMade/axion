@@ -1,27 +1,56 @@
 // Preload injetado DENTRO de cada sessao de WhatsApp Web.
 //
-// FASE 1: so marca presenca e expoe o minimo. O painel (dados do lead, respostas rapidas, botoes
-// de funil) e a captura de mensagem entram nas fases 2 e 3, e vao reaproveitar a camada window.WPP
-// que o Sale Chat ja usa (ver "Sale Chat Atendimento/panel-inject.js").
+// ELE NAO E O PAINEL. O painel roda no mundo PRINCIPAL da pagina (precisa enxergar o window.WPP do
+// WhatsApp); este arquivo roda no mundo ISOLADO e serve de PONTE entre os dois.
 //
-// POR QUE AQUI E NAO POR CDP: no Electron o preload roda no contexto certo, com contextIsolation
-// ligado, sem precisar abrir porta de debug. O inject.js do Sale Chat so existia porque ele se
-// pendurava no app do WhatsApp da Microsoft Store por fora.
+// POR QUE A PONTE EXISTE: com contextIsolation ligado (e tem que ficar ligado), o preload nao
+// alcanca o window da pagina. A passagem oficial entre os dois mundos e o window.postMessage: os
+// dois lados compartilham o mesmo objeto de eventos, entao o que o painel posta chega aqui.
+//
+// POR QUE O PAINEL NAO E INJETADO POR <script>: a pagina do WhatsApp tem CSP apertada e barra
+// script externo e inline. O processo principal injeta com webContents.executeJavaScript, que roda
+// no mundo principal e NAO passa pela CSP. Assim a gente nao precisa arrancar o cabecalho de
+// seguranca da pagina, que seria piorar a seguranca pra ganhar conveniencia.
 
-const { contextBridge } = require('electron')
+const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
-contextBridge.exposeInMainWorld('sellwave', {
-  versao: '1.0.0',
-  fase: 1,
+// INJECAO NO INICIO DO DOCUMENTO.
+//
+// webFrame.executeJavaScript chamado do preload roda no MUNDO PRINCIPAL da pagina (confirmado no
+// fonte do Electron: ele passa kMainWorldId) e nao passa pela CSP. E o preload roda ANTES dos
+// scripts do WhatsApp, que e o momento certo pro WA-JS enganchar.
+//
+// sendSync de proposito: pedir de forma assincrona perderia a janela do document-start, e aqui a
+// espera e por um arquivo que o processo principal ja tem na memoria.
+try {
+  const { motor, agente } = ipcRenderer.sendSync('sw:codigo') || {}
+  if (motor) webFrame.executeJavaScript(motor)
+  if (agente) webFrame.executeJavaScript(agente)
+} catch (e) {
+  // Falhou aqui, o processo principal injeta de novo no did-finish-load. Pior caso: o motor
+  // engancha tarde e o painel fica em "esperando o WhatsApp" por alguns segundos.
+  console.error('[sellwave] injecao de inicio falhou:', e && e.message)
+}
+
+const MARCA = '__sellwave__'
+
+// LISTA FECHADA DE CANAIS, e so este. (16/10/2026, revisao adversarial.)
+//
+// ESTE LISTENER OUVE O MUNDO PRINCIPAL DA PAGINA DO WHATSAPP. Qualquer codigo que rode la - o motor
+// de 500 KB, um iframe que a pagina embuta, um XSS no WhatsApp Web - consegue postar mensagem pra
+// ca. Sem lista fechada, bastava mandar { canal: 'sw:trava' } pra DESLIGAR a trava de proxy, ou
+// { canal: 'sw:proxy-salvar' } pra trocar o proxy, ou ler as senhas pelo 'sw:estado'.
+// So a captura passa, e ela e de mao unica (send, nunca invoke).
+const CANAIS_DA_PAGINA = new Set(['swp:captura'])
+
+window.addEventListener('message', (ev) => {
+  // So mensagem da PROPRIA janela: iframe aninhado nao fala por aqui.
+  if (ev.source !== window) return
+  const d = ev && ev.data
+  if (!d || d.alvo !== MARCA || !d.canal) return
+  if (!CANAIS_DA_PAGINA.has(d.canal)) return
+  ipcRenderer.send(d.canal, d.dados || {})
 })
 
-// Sinal simples pra casca saber que a pagina subiu de verdade (e nao a tela de navegador
-// desatualizado). Se este texto aparecer, o User-Agent voltou a ser barrado: ver ANEXO-TECNICO A2.
-window.addEventListener('DOMContentLoaded', () => {
-  try {
-    const txt = String(document.body && document.body.innerText || '')
-    if (/Google Chrome 100|navegador|browser/i.test(txt) && /Chrome/i.test(txt) && txt.length < 2000) {
-      console.warn('[sellwave] possivel tela de navegador nao suportado. Conferir o userAgentFallback.')
-    }
-  } catch (_) { /* ok */ }
-})
+// Marca de presenca, util no console pra saber se o preload subiu.
+contextBridge.exposeInMainWorld('sellwaveInfo', { versao: '1.0.0', fase: 3 })

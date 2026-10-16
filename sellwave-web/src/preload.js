@@ -7,7 +7,7 @@ const chamar = (canal, dados) => ipcRenderer.invoke(canal, dados || {})
 
 contextBridge.exposeInMainWorld('sw', {
   estado: () => chamar('sw:estado'),
-  entrar: (token, apiBase) => chamar('sw:entrar', { token, apiBase }),
+  entrar: (login, senha) => chamar('sw:entrar', { login, senha }),
   sair: () => chamar('sw:sair'),
   numeros: () => chamar('sw:numeros'),
   abrir: (numero) => chamar('sw:abrir', { numero }),
@@ -15,13 +15,14 @@ contextBridge.exposeInMainWorld('sw', {
   esconder: () => chamar('sw:esconder'),
   fechar: (nk) => chamar('sw:fechar', { nk }),
   recarregar: (nk) => chamar('sw:recarregar', { nk }),
-  salvarProxy: (p) => chamar('sw:proxy-salvar', p),
   testarProxy: (nk) => chamar('sw:proxy-testar', { nk }),
   trava: (v) => chamar('sw:trava', v),
+  teto: (maxAbertos) => chamar('sw:teto', { maxAbertos }),
+  abrirLog: () => chamar('sw:abrirLog'),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)
