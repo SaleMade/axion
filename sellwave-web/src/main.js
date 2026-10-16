@@ -349,19 +349,36 @@ function testaSaida(particao) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// 5) WebRTC: a unica politica que NAO vaza o IP real.
+// 5) WebRTC: o UDP SAI DIRETO, de proposito, e isso e uma troca consciente.
 //
-// 'disable_non_proxied_udp' desliga UDP, STUN e TURN-UDP e deixa so TCP, que sai pelo proxy da
-// particao. E API de webContents (nao de session), entao tem que ser aplicada em TODO webContents,
-// inclusive nos que o proprio site cria.
-// Valor com typo cai em 'default' EM SILENCIO: a chamada funciona lindamente e o IP vaza. Por isso
-// a gente le de volta e grita.
+// ATE 16/10/2026 AQUI ERA 'disable_non_proxied_udp', que e a unica politica que nao deixa o IP real
+// aparecer. O preco dela foi MEDIDO numa ligacao de verdade do Bruno: 6 conexoes TCP, todas pelo
+// proxy, ZERO UDP, e o WhatsApp dizendo "Sua rede Wi-Fi nao permite fazer ligacoes". Ou seja a
+// chamada TOCA dos dois lados (a sinalizacao passa por TCP, pelo proxy) e o audio NUNCA monta.
+//
+// E nao ha jeito de ter os dois. O Chromium nao manda UDP por proxy nenhum - nem SOCKS5, que na
+// documentacao dele so relaia TCP, e que aqui ainda esbarra em nao autenticar com senha (ANEXO A3).
+// O AdsPower "funciona" porque NAO bloqueia UDP: ele troca o IP que a PAGINA enxerga e deixa o
+// pacote sair direto. Tanto que tem um "Disabled UDP" separado, que faz o que a nossa trava fazia,
+// com o mesmo efeito de derrubar a ligacao. A escolha e a mesma nos dois produtos.
+//
+// O BRUNO ESCOLHEU A LIGACAO, em 16/10/2026, depois de ouvir isso: "nao precisa de interruptor nem
+// nada disso, pode deixar essa funcao como padrao".
+//
+// O QUE MUDA E O QUE NAO MUDA, e isso precisa estar certo aqui porque ele mesmo entendeu diferente
+// ("vai ter que tirar ele da proxy"): NAO vai. Navegacao, mensagem, midia e a sinalizacao da
+// chamada continuam saindo pelo proxy daquela particao, por TCP. SO os pacotes de audio passam a
+// sair direto, e e so neles que o IP publico da maquina aparece.
+//
+// 'default_public_interface_only' e nao 'default': as duas deixam a ligacao funcionar, mas a
+// `default` entrega junto a topologia da rede local (os IPs das interfaces internas). Perder o IP
+// publico na ligacao e inevitavel pra ela existir; entregar o resto nao compra nada.
 app.on('web-contents-created', (_e, wc) => {
   try {
-    wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
+    wc.setWebRTCIPHandlingPolicy('default_public_interface_only')
     const lido = wc.getWebRTCIPHandlingPolicy && wc.getWebRTCIPHandlingPolicy()
-    if (lido && lido !== 'disable_non_proxied_udp') {
-      console.error('[webrtc] POLITICA NAO APLICOU, esta em "' + lido + '". O IP real pode vazar.')
+    if (lido && lido !== 'default_public_interface_only') {
+      console.error('[webrtc] POLITICA NAO APLICOU, esta em "' + lido + '".')
     }
   } catch (e) {
     console.error('[webrtc] falhou:', e && e.message)
@@ -1266,6 +1283,14 @@ async function buscaNumeros() {
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // APROVEITA A VOLTA PRA BUSCAR O ROTEIRO TAMBEM (16/10/2026, pergunta do Bruno: "quando eu mexo
+    // no Sale Chat, queria que atualizasse aqui").
+    //
+    // Esta leitura acontece a cada 20s e ao a janela ganhar foco, que e exatamente o momento em que
+    // ele volta da dash depois de mexer no roteiro. Sem isso o painel so pegava a mudanca quando o
+    // cache de 10 minutos vencesse, e "mexi la e nao mudou aqui" parece quebrado mesmo nao estando.
+    // Dois minutos de folga pra o alt-tab repetido nao virar leitura em rajada.
+    if (Date.now() - roteiroEm > 120000) pegaRoteiro(true).catch(() => {})
     // A LISTA DE QUEM DA PRA VER so e remontada fora do preview. Dentro dele a resposta traz so os
     // numeros de uma pessoa, e guardar isso apagaria as outras opcoes do seletor.
     if (!comoId) {

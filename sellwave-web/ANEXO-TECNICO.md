@@ -204,3 +204,37 @@ a mesma cara da certa.
 **E mesmo com um TURN vivo não fecharia.** Provar que o Chromium consegue relay por TCP através do
 proxy não prova que a **Meta** oferece esse caminho. Só sai com uma chamada de verdade, num número
 pareado, com a trava ligada. **Depende do Bruno, e não há substituto.**
+
+## A12. A ligação de voz: medida, e a troca que o Bruno escolheu (16/10/2026)
+
+**SPIKE 1 FECHADO.** Medido numa ligação de verdade, no número pareado dele: **6 conexões TCP,
+todas pelo proxy, ZERO UDP**, e o WhatsApp dizendo *"Sua rede Wi-Fi não permite fazer ligações"*.
+A chamada **toca dos dois lados** — a sinalização passa por TCP, pelo proxy — e o **áudio nunca
+monta**.
+
+**Não há como ter os dois.** O Chromium não manda UDP por proxy nenhum. SOCKS5 não resolve: a
+documentação do próprio Chromium diz que ali ele só relaia TCP, e aqui ainda esbarraria em não
+autenticar com senha (A3).
+
+**Por que "funciona no AdsPower":** ele **não bloqueia UDP**. O modo Replace troca o IP que a
+*página* enxerga e deixa o pacote sair direto. Tanto que o AdsPower tem um *"Disabled UDP"*
+separado, que faz exatamente o que a nossa trava fazia, com o mesmo efeito de derrubar a ligação.
+A escolha é a mesma nos dois produtos; o AdsPower só escolhe o outro lado sem dizer com todas as
+letras.
+
+**A decisão do Bruno, com o custo na mesa:** *"não precisa de interruptor nem nada disso, pode
+deixar essa função como padrão"*. A política virou `default_public_interface_only` em todo número.
+
+**O que muda e o que NÃO muda** (ele mesmo entendeu diferente, achou que teria que tirar o proxy):
+navegação, mensagem, mídia e a **sinalização da chamada** continuam saindo pelo proxy daquela
+partição, por TCP. **Só os pacotes de áudio** passam a sair direto, e é só neles que o IP público da
+máquina aparece.
+
+`default_public_interface_only` e não `default`: as duas deixam a ligação funcionar, mas a `default`
+entrega junto a topologia da rede local. Perder o IP público na ligação é inevitável pra ela
+existir; entregar o resto não compra nada.
+
+**O que fica em aberto, e é honesto dizer:** ninguém sabe se o WhatsApp correlaciona o IP visto numa
+chamada com a identidade da conta. Se correlacionar, dois números que fizerem ligação da mesma
+máquina ficam ligados pelo IP de áudio, mesmo com proxies diferentes no resto. Isso **não foi
+medido** e não dá pra medir do lado de fora.

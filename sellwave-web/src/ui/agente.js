@@ -102,10 +102,35 @@
     return null
   }
   var ultimoRecusado = ''
+  // O NOME VEM DO MOTOR, NAO DO DESENHO DA TELA (16/10/2026).
+  //
+  // Lendo `#main header [title]` o painel mostrava "Dados do perfil" no lugar do nome do cliente:
+  // com a gaveta de contato aberta, o primeiro elemento com `title` dentro do cabecalho deixa de
+  // ser o nome e passa a ser o titulo da gaveta. O Bruno viu isso na aba Pedidos, onde o nome entra
+  // no cadastro - ou seja o erro ia parar DENTRO do pedido, nao so na tela.
+  //
+  // Quem sabe o nome e o WhatsApp, nao o HTML dele: pergunta ao contato pelo motor e so cai no DOM
+  // se o motor nao souber. E recusa os rotulos conhecidos da propria interface, que e o jeito de
+  // nao trocar um nome errado por outro no dia em que a Meta mexer no desenho.
+  var NAO_E_NOME = /^(dados do perfil|informacoes do contato|informa..es do contato|perfil|contact info|profile details)$/i
   function nomeDaConversa() {
+    var chatId = ''
+    try { chatId = conversaAberta() || '' } catch (_) { chatId = '' }
+    try {
+      var W = window.WPP
+      var c = chatId && W && W.contact && W.contact.get ? W.contact.get(chatId) : null
+      var n = c && (c.name || c.pushname || c.verifiedName || (c.attributes && (c.attributes.name || c.attributes.pushname)))
+      if (n && String(n).trim() && !NAO_E_NOME.test(String(n).trim())) return String(n).trim()
+    } catch (_) { /* sem motor, o DOM resolve */ }
+    try {
+      var ch = chatId && window.WPP && window.WPP.chat && window.WPP.chat.get ? window.WPP.chat.get(chatId) : null
+      var t = ch && (ch.formattedTitle || (ch.contact && (ch.contact.name || ch.contact.pushname)))
+      if (t && String(t).trim() && !NAO_E_NOME.test(String(t).trim())) return String(t).trim()
+    } catch (_) { /* ok */ }
     try {
       var h = document.querySelector('#main header [title]')
-      return h ? (h.getAttribute('title') || h.textContent || '') : ''
+      var d = h ? String(h.getAttribute('title') || h.textContent || '').trim() : ''
+      return NAO_E_NOME.test(d) ? '' : d
     } catch (_) { return '' }
   }
   // QUATRO TENTATIVAS, as mesmas do painel que ja roda em producao. Com duas so, o numero voltava

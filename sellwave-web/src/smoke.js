@@ -114,7 +114,10 @@ async function rodar(ctx) {
   // 5) WebRTC: a unica politica que nao vaza. Typo cai em 'default' EM SILENCIO.
   const view = new WebContentsView({ webPreferences: { partition: 'persist:sw-teste-smoke' } })
   const pol = view.webContents.getWebRTCIPHandlingPolicy()
-  conta('politica de WebRTC nao vaza o IP', pol === 'disable_non_proxied_udp', pol)
+  // A CONFERENCIA MUDOU DE LADO EM 16/10/2026, junto com a decisao do Bruno de ter ligacao de voz.
+  // Ela continua existindo porque o valor ainda importa: `default` entregaria a topologia da rede
+  // local junto, e um typo cai em silencio no padrao do Chromium.
+  conta('politica de WebRTC permite ligacao sem expor a rede local', pol === 'default_public_interface_only', pol)
   try { view.webContents.destroy() } catch (_) { /* ok */ }
 
   // 6) A casca sobe de verdade (HTML e JS sem erro de carregamento).
