@@ -88,6 +88,7 @@ const podeEnviar = () => !!(estadoWa.envia && estadoWa.chatId && !ocupado)
 // ───────────────────────────────────────────────────────────── desenho
 
 async function pegaDisparos() {
+  if (window.__swFoto) return          // idem: a faixa "saindo agora" da foto e montada pelo exemplo
   try {
     const r = await window.swp.disparos()
     saindo = (r && r.ok && Array.isArray(r.itens)) ? r.itens : []
@@ -483,6 +484,7 @@ function montaPedido(f) {
 // ─── rascunhos ───
 
 async function pegaRascunhos() {
+  if (window.__swFoto) return          // o exemplo da foto ja traz a lista que ela quer retratar
   try {
     const r = await window.swp.rascunhos('')
     rascunhos = (r && r.ok && Array.isArray(r.rascunhos)) ? r.rascunhos : []
@@ -874,6 +876,11 @@ function ligaBotaoCadastro() {
 let podiaEnviar = false
 let ultimaTentativa = 0
 async function pulso() {
+  // MODO FOTO: nao rele nada (16/10/2026). O foto.js injeta um estado de exemplo pra retratar o
+  // painel cheio, e o pulso de 1,5s trocava ele pelo estado real antes da foto sair. O apelido
+  // __swPulso ja existia pra parar o intervalo, mas parar o intervalo nao basta: a aba Pedidos
+  // tambem redesenha na troca de conversa e a pilha redesenha quando o processo principal avisa.
+  if (window.__swFoto) return
   const e = await window.swp.estado()
   if (e) estadoWa = e
   // O pontinho verde so acende com o WhatsApp PAREADO. Antes acendia na tela do QR, porque so

@@ -492,6 +492,13 @@ function abreModal() {
 // ───────────────────────────────────────────────────────────── início
 
 async function recarregaEstado() {
+  // MODO FOTO: a tela NAO rele (16/10/2026). O `foto.js` injeta um estado de exemplo pra retratar a
+  // lista cheia, e esta funcao trocava ele pelos numeros reais no meio da sessao - as fotos 2, 3 e
+  // 3b sairam com dado de producao em vez do exemplo. Nao adianta so parar o intervalo: aqui chegam
+  // tambem o ouvinte de `focus`, o `visibilitychange` e as chamadas de dentro do viraRoleta, do
+  // fechar e dos avisos sw:aberto/sw:fechado/sw:hibernou. Sair cedo AQUI cobre todos de uma vez,
+  // porque todos passam por esta porta.
+  if (window.__swFoto) return
   estado = await window.sw.estado()
   $('versao').textContent = estado.como
     ? (((estado.vendedores || []).find((x) => x.id === estado.como) || {}).nome || 'vendedor')
