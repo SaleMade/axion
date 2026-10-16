@@ -7225,6 +7225,10 @@ async function handleChipSave(req, env) {
     // 'proxy' = o endereco da proxy que esse numero usa (host:porta:usuario:senha, do jeito que o
     // provedor entrega). E anotacao operacional: fica guardada junto do chip pra o Bruno achar rapido
     // quando for reconectar o aparelho. O worker NAO usa esse valor pra sair pra internet.
+    // ESTAVA EM AQUECIMENTO ANTES DESTE PATCH? Tem que ser lido AGORA, antes de o patch mexer no
+    // `st` e no `wa_st` logo abaixo - depois nao da mais pra saber se foi uma ENTRADA.
+    const _ehAquecId = (wid) => !!wid && (String(wid) === 'aquecimento' || _papelId(wid) === 'aquecimento');
+    const _eraAquec = chip.st === 'aquecimento' || _ehAquecId(chip.wa_st);
     const STR = ['num', 'at', 'mod', 'op', 'rec', 'wa_st', 'wa_st2', 'note', 'st', 'warm_start', 'restab_start', 'proxy'];
     for (const k of STR) if (k in patch) chip[k] = String(patch[k] == null ? '' : patch[k]);
     if ('idx' in patch) chip.idx = Number(patch.idx) || chip.idx;
@@ -7275,6 +7279,22 @@ async function handleChipSave(req, env) {
     if ('wa_st' in patch && !('restab_start' in patch)) {
       if (_isRestabId(chip.wa_st)) { if (!chip.restab_start) chip.restab_start = new Date().toISOString().split('T')[0]; }
       else chip.restab_start = '';
+    }
+    // TIMER DO AQUECIMENTO, mesmo desenho do Restabelecido acima e pela mesma razao: o relogio tem
+    // que comecar quando ele POE o numero em aquecimento, nao antes.
+    //
+    // MEDIDO em 16/10/2026, no estado de producao: o (15) 97406-8551 carregava
+    // `warm_start: '2026-06-08'` parado do cadastro antigo. No instante em que ele marcou a tag
+    // "Em Aquecimento", a rampa leu DIA 131 e deu teto de 50 leads/dia - ou seja o numero que ele
+    // queria aquecer DEVAGAR entraria recebendo o maximo, que e o contrario exato da feature, e
+    // sem nada na tela denunciando. A tela chegaria a escrever "dia 131".
+    //
+    // SAIR TAMBEM LIMPA, como no Restabelecido: numero que virou producao e depois volta pro pool
+    // um dia tem que recomecar a rampa, nao continuar de onde parou.
+    if (('wa_st' in patch || 'st' in patch) && !('warm_start' in patch) && !('warm_dias' in patch)) {
+      const _agoraAquec = chip.st === 'aquecimento' || _ehAquecId(chip.wa_st);
+      if (_agoraAquec) { if (!_eraAquec) chip.warm_start = _brDay(); }
+      else if (_eraAquec) chip.warm_start = '';
     }
     // saneamento (autocura da antiga): chip sem atendente nunca carrega "em uso" nem "reserva"
     if (!String(chip.at || '').trim()) { chip.em_uso = false; chip.bkp = false; }
@@ -10437,12 +10457,18 @@ function _swwebKey(n) { return _waNumKey(n); }
 const _swwebK8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
 // Chip APTO a receber lead, pela mesma regra do _resolvePresselNumbers: so "Em uso", e fora de
 // aquecimento, banido e restrito.
-function _swwebApto(c, nomeSt) {
+function _swwebApto(c, nomeSt, ids) {
   if (!c) return false;
   if (c.st === 'banido') return false;
   // O CHIP EM AQUECIMENTO ABRE NO APP (16/10/2026). Ele recebe lead agora, e quem aquece e o
   // atendimento: barrar ele aqui seria mandar lead pra um numero que o vendedor nao consegue abrir.
-  if (!_chipAquecendo(c) && (!c.em_uso || c.st === 'aquecimento')) return false;
+  //
+  // E "EM USO" VEM DO PAPEL DA TAG, nao da flag crua (16/10/2026, noite). O (15) 97407-6200 esta Em
+  // Uso pela TAG e com `em_uso: false` no campo; lendo so a flag, o app dizia que ele nao estava
+  // apto e o vendedor ficou SEM ACESSO a um numero de PRODUCAO. A roleta ja fazia certo desde
+  // sempre (o isEmUso do _resolvePresselSellers olha os dois); quem divergia era o app.
+  const aquecendo = _chipAquecendo(c, ids && ids.aquec);
+  if (!aquecendo && (!_chipEmUso(c, ids && ids.emUso) || c.st === 'aquecimento')) return false;
   const wa = String((nomeSt && nomeSt[String(c.wa_st || '')]) || '').toLowerCase();
   return wa !== 'restrito' && wa !== 'banido';
 }
@@ -10879,6 +10905,8 @@ async function handleSwWeb(req, env, path) {
     // Nome E COR do status. A cor e a que o Bruno escolheu na Contingencia: mandando ela daqui, o
     // app e a tela ficam sempre iguais ao cadastro, e trocar a cor de um status nao vira tarefa de
     // programador (pedido dele em 16/10: "os chips coloridos, restrito vermelho, ativo azul").
+    // OS PAPEIS DAS TAGS, pra decidir "em uso" e "aquecendo" do mesmo jeito que a roleta decide.
+    const _ids = { emUso: _emUsoIdsDe(data), aquec: _aquecIdsDe(data) };
     const nomeSt = {}, corSt = {};
     for (const st of (Array.isArray(data && data.wa_statuses) ? data.wa_statuses : [])) {
       if (!st || !st.id) continue;
@@ -10992,16 +11020,25 @@ async function handleSwWeb(req, env, path) {
         // `teto` e a cota do DIA INTEIRO (verdade as 6h e as 23h); `agora` e quanto ja liberou
         // nesta hora, e vem DAQUI de proposito: calcular no navegador usaria o fuso do cliente e
         // as duas telas passariam a discordar.
-        aquec: _chipAquecendo(c) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
+        aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
+        // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
+        //
+        // A tela refazia estas duas contas com os campos crus (`c.st`, `c.em_uso`) e errava nos
+        // dois - porque o Bruno marca pela TAG, que e o seletor que esta na cara dele. Regra de
+        // negocio recalculada no cliente vira uma segunda verdade, e quando as duas discordam quem
+        // paga e ele: um numero de producao ficou inacessivel por causa disso.
+        // Quem decide quem recebe lead e o worker; o app e a dash desenham o que vier aqui.
+        apto: _swwebApto(c, nomeSt, _ids),
+        aquecendo: _chipAquecendo(c, _ids.aquec),
         // RECEBENDO LEAD AGORA? Duas coisas, e as duas tem que ser verdade:
         //  1) o chip esta apto (Em uso, OU em aquecimento com dono; nunca banido nem restrito) - e
         //     a mesma regra do _resolvePresselNumbers;
         //  2) o INTERRUPTOR esta ligado nas pressels (v.off[nk]) - e a chave que o POST
         //     /api/pressel/num vira, e e ela que o vendedor mexe aqui.
         // Ler so o em_uso mentiria: numero apto mas desligado aparecia como ligado.
-        roleta: _swwebApto(c, nomeSt) && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
+        roleta: _swwebApto(c, nomeSt, _ids) && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
         // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
@@ -20290,7 +20327,25 @@ function _foraIdsDe(data){
   }); }catch(_){}
   return ids;
 }
-function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
+// Ids dos status cujo PAPEL e aquecimento (16/10/2026, bug na tela do Bruno).
+//
+// MEDIDO no estado: o (15) 97406-8551 tem `st: 'ativo'` e `wa_st: 'st_mpalmegl'`, que e a tag
+// "Em Aquecimento". Ou seja ele marcou pelo SELETOR DE STATUS da Contingencia, que grava a TAG, e
+// nao o campo `st`. Com a regra lendo so `c.st`, o numero dele nao entrava na rampa e nao aparecia
+// como aquecendo em lugar nenhum - palavras dele, "nao tem nada dizendo que ele esta em
+// aquecimento, esta bugado ali".
+//
+// E a memoria ja avisava, com todas as letras: regra nova em qualquer lugar que decida roleta por
+// tag usa o PAPEL, nunca o campo cru nem o label. O _emUsoIdsDe e o _foraIdsDe existem exatamente
+// por isso; faltava o irmao deles.
+function _aquecIdsDe(data){
+  const ids=new Set(['aquecimento']);
+  try{ (Array.isArray(data && data.wa_statuses)?data.wa_statuses:[]).forEach(s=>{
+    if(s && s.id && _papelSt(s)==='aquecimento') ids.add(String(s.id));
+  }); }catch(_){}
+  return ids;
+}
+function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
   const out=[];
   const _fora = foraIds || new Set(['restrito','banido']);
   const okWa=(c)=>!_fora.has(String((c&&c.wa_st)||'').toLowerCase());
@@ -20320,7 +20375,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
       // AQUECIMENTO ENTRA (16/10/2026) e NAO precisa estar "Em uso": "Em uso" e o cargo do numero
       // de producao, e o chip em aquecimento por definicao nao esta la ainda. O que ele precisa e
       // de DONO - quem atende e quem aquece.
-      if (!_chipAquecendo(c) && (c.st === 'aquecimento' || !isEmUso(c))) continue;
+      if (!_chipAquecendo(c, aquecIds) && (c.st === 'aquecimento' || !isEmUso(c))) continue;
       if (!c.num || !okWa(c)) continue;
       jaTem.add(String(c.at));
       _vs.push({ at: c.at });   // sem off: todos os números "Em uso" dele entram ligados
@@ -20335,7 +20390,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
     // c.at obrigatório: sem isso, String(null)==='null' casaria vendedor órfão com
     // os chips da coluna "Disponíveis" (número fora de uso recebendo lead sem aparecer na tela).
     const mine=chips.filter(c=>c.at && String(c.at)===String(v.at) && c.st!=='banido'
-      && (c.st!=='aquecimento' || _chipAquecendo(c)));
+      && (c.st!=='aquecimento' || _chipAquecendo(c, aquecIds)));
     if(!mine.length) continue;
     const instP='ax_'+String(v.at), instB='ax_'+String(v.at)+'_b';
     // PRINCIPAL = SÓ o chip explicitamente "Em uso". NÃO cai mais no 1º número da coluna.
@@ -20356,7 +20411,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds){
     // continua sendo quando ele desliga o número.
     const nksTodos = [];
     for(const c of mine){
-      const aquec = _chipAquecendo(c) ? _numDoAquecimento(c) : null;
+      const aquec = _chipAquecendo(c, aquecIds) ? _numDoAquecimento(c) : null;
       // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
       if((!aquec && !isEmUso(c)) || !c.num || !okWa(c)) continue;
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
@@ -20544,8 +20599,23 @@ function _diaDoAquecimento(c) {
 // ~10419). Como funcao ela e icada e nao existe janela morta; como const, bastaria alguem chamar
 // no caminho de boot pra dar ReferenceError e a dash abrir em branco - foi exatamente isso que
 // aconteceu com o WA_STATUSES_DEFAULT (memoria roleta-pressel-gotchas item 4).
-function _chipAquecendo(c) {
-  return !!(c && c.st === 'aquecimento' && c.at && !/^ccol_/i.test(String(c.at)));
+function _chipAquecendo(c, aquecIds) {
+  if (!c || !c.at || /^ccol_/i.test(String(c.at))) return false;
+  // DOIS CAMINHOS, porque existem dois jeitos de ele marcar: o campo `st` (a coluna da
+  // Contingencia) e a TAG de status (o seletor "Status WhatsApp" do editor de chip). O seletor e o
+  // caminho natural, porque e o que esta na cara dele - e foi por ele que o 8551 foi marcado.
+  if (c.st === 'aquecimento') return true;
+  return !!(aquecIds && aquecIds.has(String(c.wa_st || '')));
+}
+// "Em uso" pela mesma logica: a flag OU a tag. O 6200 esta Em Uso pela TAG (wa_st = st_mpafmypw) e
+// com `em_uso: false` no campo - entao quem olhasse so a flag diria que ele nao esta em uso, e foi
+// o que deixou o numero INACESSIVEL no app. A roleta ja fazia certo (ver o isEmUso do
+// _resolvePresselSellers); quem estava errado era o app.
+function _chipEmUso(c, emUsoIds) {
+  if (!c) return false;
+  if (c.em_uso === true || c.em_uso === 1) return true;
+  const w = String(c.wa_st || '');
+  return w === 'em_uso' || !!(emUsoIds && emUsoIds.has(w));
 }
 // O que o chip em aquecimento leva pra roleta: modo limite, teto da rampa acumulado pela hora, e a
 // VEZ NA FRENTE dos estabelecidos. A vez na frente e metade da feature: a fila do modo limite e por
@@ -21219,9 +21289,10 @@ function _meusNumerosRoleta(data, uid) {
   const okWa = (c) => !foraIds.has(String((c && c.wa_st) || '').toLowerCase());
   // O em aquecimento entra aqui tambem: ele recebe lead, entao tem que aparecer pro vendedor com
   // o interruptor dele. Numero que recebe e nao aparece na tela foi o incidente de 16/08.
+  const aquecIds = _aquecIdsDe(data);
   return (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && String(c.at || '') === String(uid)
     && c.num && c.st !== 'banido' && okWa(c)
-    && (_chipAquecendo(c) || (c.st !== 'aquecimento' && isEmUso(c))));
+    && (_chipAquecendo(c, aquecIds) || (c.st !== 'aquecimento' && isEmUso(c))));
 }
 // GET /api/pressel/meus -> { hoje, numeros:[...], pressels:[{id,nome,status,off:{nk:true}}], leadsHoje }
 async function handlePresselMeus(req, env) {
@@ -21262,7 +21333,7 @@ async function handlePresselMeus(req, env) {
     const chipsAll = Array.isArray(data.chips) ? data.chips : [];
     for (const p of (Array.isArray(data.pressels) ? data.pressels : [])) {
       if (!p || !conta(p.id) || (p.status && p.status !== 'ativa') || !_chipsDaPressel(p, meus).length) continue;
-      const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds);
+      const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
       const todos = [];
       for (const s of sellers) for (const n of (s.nums || [])) todos.push({ at: s.at, num: n.num, lim: n.lim, livre: n.livre, dist: n.dist, ordem: n.ordem, idx: n.idx });
       const f = _aplicaFilaLimite(todos, lh, hoje);
@@ -21593,7 +21664,7 @@ async function handlePresselDiag(req, env){
   let _semNumD = {};
   try { _semNumD = await _presselCliquesSemNumero(env); } catch (_) { _semNumD = {}; }
   const out = pressels.map((p)=>{
-    const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds);
+    const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
     const _todos = [];
     for(const s of sellers) for(const n of (s.nums||[])) _todos.push({ at:s.at, num:n.num, lim:n.lim, livre:n.livre, dist:n.dist, ordem:n.ordem, idx:n.idx });
     const _fila = _aplicaFilaLimite(_todos, _lhD, _hojeD);
@@ -21607,7 +21678,7 @@ async function handlePresselDiag(req, env){
       // POR QUE ninguem recebe; se ele usar regra diferente, mente justamente no dia em que precisa
       // avisar (memoria roleta-pressel-gotchas, nota de 16/08).
       const usaveis = chips.filter(c=>c && c.at && c.st!=='banido' && c.num && okWa(c)
-        && (_chipAquecendo(c) || (c.st!=='aquecimento' && isEmUso(c))));
+        && (_chipAquecendo(c, _aquecIdsDe(data)) || (c.st!=='aquecimento' && isEmUso(c))));
       const offMap = {};
       for(const v of (Array.isArray(p.vendedores)?p.vendedores:[])){
         if(!v || !v.at) continue;
@@ -24240,7 +24311,7 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // (que é truthy!) e _servConnOk reprova TODO número → a pressel serve offline e não entra lead.
   const liveSet = liveSetInicial;   // ja veio no Promise.all la de cima (nao chamar de novo: sao 3 consultas)
   const emUsoIds = _emUsoIdsDe(data);
-  const sellers=_resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, _foraIdsDe(data));
+  const sellers=_resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, _foraIdsDe(data), _aquecIdsDe(data));
   // A PÁGINA SEMPRE ABRE quando a pressel está ativa. Ela é o destino do anúncio: derrubar tudo
   // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
   // visitante recebia "Indisponível no momento". Sem número, a oferta continua na tela e só o

@@ -40,7 +40,7 @@ const blocoFila = src.slice(iFila, iFim);
 
 const api = new Function(blocoRampa + blocoFila + `
   return { RAMPA_AQUECIMENTO, TETO_AQUECIDO, limiteDoAquecimento, DIA_ACUM,
-           _tetoAcumulado, _diaDoAquecimento, _chipAquecendo, _numDoAquecimento,
+           _tetoAcumulado, _diaDoAquecimento, _chipAquecendo, _chipEmUso, _numDoAquecimento,
            _numNoLimite, _aplicaFilaLimite };`)();
 
 console.log('\nTESTE DO AQUECIMENTO NA ROLETA\n');
@@ -96,6 +96,31 @@ vale('aquecimento numa COLUNA (ccol_) fica fora, como o resto da roleta',
   api._chipAquecendo({ st: 'aquecimento', at: 'ccol_4' }) === false);
 vale('banido nunca entra', api._chipAquecendo({ st: 'banido', at: 'u1' }) === false);
 vale('numero de producao nao e aquecimento', api._chipAquecendo({ st: 'ativo', at: 'u1' }) === false);
+
+// ── 3b) O PAPEL DA TAG MANDA, NAO O CAMPO CRU ─────────────────────────────
+// TRES BUGS NA TELA DELE em 16/10 sairam daqui, e a memoria ja avisava: regra que decide roleta por
+// tag usa o PAPEL, nunca o campo cru. MEDIDO no estado dele, nao suposto:
+//   (15) 97406-8551 -> st: ativo,      wa_st: st_mpalmegl (tag "Em Aquecimento")
+//   (15) 97407-6200 -> em_uso: false,  wa_st: st_mpafmypw (tag "Em Uso")
+// Ou seja ele marca pelo SELETOR DE STATUS do editor de chip, que grava a TAG. Lendo so o campo, o
+// 8551 nao entrava na rampa e o 6200 - numero de PRODUCAO - ficou inacessivel no app.
+{
+  const aquecIds = new Set(['aquecimento', 'st_mpalmegl']);
+  const emUsoIds = new Set(['em_uso', 'st_mpafmypw']);
+  const c8551 = { num: '(15) 97406-8551', at: 'atendente_vra3lh', st: 'ativo', em_uso: false, wa_st: 'st_mpalmegl' };
+  const c6200 = { num: '(15) 97407-6200', at: 'atendente_vra3lh', st: 'ativo', em_uso: false, wa_st: 'st_mpafmypw' };
+  vale('o 8551 (tag Em Aquecimento, st ativo) E aquecimento', api._chipAquecendo(c8551, aquecIds) === true);
+  vale('e SEM o set ele nao seria - que era exatamente o bug', api._chipAquecendo(c8551) === false);
+  vale('o 6200 (tag Em Uso, em_uso false) ESTA em uso', api._chipEmUso(c6200, emUsoIds) === true);
+  vale('e o 6200 nao e confundido com aquecimento', api._chipAquecendo(c6200, aquecIds) === false);
+  vale('a flag crua continua valendo quando existe',
+    api._chipEmUso({ em_uso: true }, emUsoIds) === true && api._chipEmUso({ em_uso: 1 }) === true);
+  vale('tag desconhecida nao vira em uso', api._chipEmUso({ wa_st: 'st_qualquer' }, emUsoIds) === false);
+  vale('o campo st continua valendo pra quem marca pela coluna',
+    api._chipAquecendo({ st: 'aquecimento', at: 'u1' }, aquecIds) === true);
+  vale('chip em aquecimento pela tag mas SEM dono continua fora',
+    api._chipAquecendo({ st: 'ativo', at: '', wa_st: 'st_mpalmegl' }, aquecIds) === false);
+}
 
 // ── 4) O DIA SAI DO warm_start ────────────────────────────────────────────────────────────────
 const diaBR = (d) => {
@@ -199,8 +224,18 @@ vale('o diag enxerga o aquecimento igual a roleta',
   /_chipAquecendo\(c\)[\s\S]{0,80}isEmUso\(c\)/.test(src.slice(src.indexOf('const usaveis = chips.filter'))) ||
   src.slice(src.indexOf('const usaveis = chips.filter'), src.indexOf('const usaveis = chips.filter') + 300).includes('_chipAquecendo'));
 // A TDZ que ja derrubou a dash uma vez.
+// NINGUEM PODE CHAMAR _chipAquecendo SEM O SET DE TAGS: sem ele a funcao so olha o campo cru e
+// o bug dos tres volta. Esta guarda existe porque esquecer UM chamador falha em SILENCIO - o
+// numero simplesmente nao aquece, e ninguem recebe erro nenhum.
+{
+  const chamadas = (src.match(/_chipAquecendo\([^)]*\)/g) || [])
+    .filter((t) => !t.startsWith('_chipAquecendo(c, aquecIds'));
+  const soUmArg = chamadas.filter((t) => t.indexOf(',') < 0 && !/_chipAquecendo\(c, /.test(t));
+  vale('nenhum chamador de _chipAquecendo esquece o set de tags',
+    soUmArg.length === 0, soUmArg.join(' | ') || 'nenhuma chamada de um argumento so');
+}
 vale('_chipAquecendo e funcao icada, nao const (ela e usada 10 mil linhas acima)',
-  /function _chipAquecendo\(c\)/.test(src) && !/const _chipAquecendo/.test(src));
+  /function _chipAquecendo\(/.test(src) && !/const _chipAquecendo/.test(src));
 
 console.log('');
 if (falhas.length) {
