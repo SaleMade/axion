@@ -18,3 +18,7 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Sellwave Web: build e instalador nao vao pro git (o .exe tem 111 MB, mora no R2)
+sellwave-web/dist/
+sellwave-web/build.log
