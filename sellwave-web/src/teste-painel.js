@@ -386,7 +386,15 @@ app.whenReady().then(async () => {
   conta('na cor do aquecimento, nao na cinza dos vendedores', sec.aquecCor === 'rgb(245, 158, 11)', sec.aquecCor)
   conta('e diz quantos leads chegaram hoje', /3 leads/.test(sec.aquecQtd), sec.aquecQtd)
   // 3 em uso + 1 em aquecimento = 4 interruptores; o "Em analise" fica com o selo
-  conta('interruptor so pra quem pode receber', sec.chaves === 4 && sec.selos === 1, JSON.stringify(sec))
+  // 3 em uso + 1 em aquecimento = 4 interruptores; "Em analise" e "Restrito" ficam com o selo
+  conta('interruptor so pra quem pode receber', sec.chaves === 4 && sec.selos === 2, JSON.stringify(sec))
+  // O SERVIDOR VENCE O CAMPO CRU: numero com em_uso true e apto false NAO ganha interruptor. Sem
+  // esta conferencia, trocar o ternario por um OU devolveria o interruptor pra numero restrito, e
+  // isso e mentira de tela no lado perigoso - o vendedor acharia que esta recebendo e nao esta.
+  const reprovado = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /77003344|7700-3344/.test(e.textContent.replace(/\D/g, "")) || /7700-3344/.test(e.textContent));'
+    + ' return l ? { temChave: !!l.querySelector(".sw"), temSelo: !!l.querySelector(".sw-off") } : null })()')
+  conta('servidor reprovou vence o em_uso parado no campo',
+    reprovado && reprovado.temChave === false && reprovado.temSelo === true, JSON.stringify(reprovado))
 
   const largaAntes = await js2('document.querySelector("aside").getBoundingClientRect().width')
   conta('a barra comeca larga', Math.round(largaAntes) === 268, String(largaAntes))
@@ -398,9 +406,9 @@ app.whenReady().then(async () => {
   conta('e avisa o processo principal, que e quem move a view', JSON.stringify(fina.pediu) === '[true]', JSON.stringify(fina.pediu))
 
   const dentro = await js2('({ fino: document.querySelectorAll(".fino").length, d: [...document.querySelectorAll(".fino .d")].map(e => e.textContent).join(","), c: [...document.querySelectorAll(".fino .c")].map(e => e.textContent).join(","), vend: document.querySelectorAll(".vend").length, busca: getComputedStyle(document.querySelector(".busca")).display })')
-  conta('encolhida, mostra um numero por linha', dentro.fino === 5, JSON.stringify(dentro.fino))
-  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,8551,0653', dentro.d)
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,3/5,0/70', dentro.c)
+  conta('encolhida, mostra um numero por linha', dentro.fino === 6, JSON.stringify(dentro.fino))
+  conta('mostra os 4 ultimos digitos', dentro.d === '2248,3293,1122,3344,8551,0653', dentro.d)
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,3/5,0/70', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
 
   const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
@@ -418,7 +426,7 @@ app.whenReady().then(async () => {
   const dest = await js2('(() => { const r = [...document.querySelectorAll(".num")].map(e => e.className);'
     + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'
     + ' qual: [...document.querySelectorAll(".num.recebendo .fone")].map(e => e.textContent.trim()).join(",") } })()')
-  conta('so quem esta na vez fica destacado', dest.total === 5 && dest.n === 2, JSON.stringify(dest))
+  conta('so quem esta na vez fica destacado', dest.total === 6 && dest.n === 2, JSON.stringify(dest))
   conta('e sao o estabelecido da vez e o em aquecimento', /99598-3293/.test(dest.qual) && /97406-8551/.test(dest.qual), dest.qual)
 
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')

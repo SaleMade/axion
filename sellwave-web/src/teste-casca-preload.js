@@ -17,7 +17,10 @@ const ESTADO = () => ({
     // em aquecimento: area propria e interruptor liberado
     { numero: '5515974068551', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 5, cor: '', st: 'aquecimento', aquec: { dia: 1, teto: 5, agora: 2 } },
     // estado que NAO recebe: sem interruptor
-    { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, status: 'Em análise' },
+    { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise' },
+    // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e
+    // ninguem limpou o campo). Quem manda e o `apto`: o interruptor NAO pode aparecer.
+    { numero: '5515977003344', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: true, apto: false, status: 'Restrito' },
   ],
   vendedores: [],
 })
