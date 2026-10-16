@@ -10047,12 +10047,32 @@ function _swwebLerJson(txt, padrao) {
   try { const o = JSON.parse(txt || ''); return (o && typeof o === 'object') ? o : padrao; } catch (_) { return padrao; }
 }
 
-// Quem pode usar: a casa (afiliado tem o mundo dele e numero dele; nao entra por aqui).
+// QUEM PODE USAR: a casa E a operacao do afiliado - cada uma vendo SO o mundo dela.
+//
+// Antes o afiliado era barrado na porta. Isso resolvia pela metade: ele nao entrava, mas os chips
+// do VENDEDOR dele continuavam aparecendo na lista do Bruno, porque a lista nao cortava por mundo.
+// O Bruno viu em 16/10: "esse vendedor nao e meu, e vendedor do meu afiliado, nao faz sentido ele
+// aparecer na minha plataforma de controle de chips; deixa pra ele ver os dele".
+//
+// Agora a porta abre pros dois e QUEM CORTA E O MUNDO, que e a regra da casa desde 12/09
+// (ver memoria isolamento-casa-afiliado): nada da casa aparece pro afiliado, nada do afiliado
+// polui a dash da casa fora da area de Afiliados.
+//
+// Afiliado SEM vinculo continua de fora: cadastro pela metade, e a metade que falta e justamente
+// a que diz o que e dele. Na duvida, nada - e a mesma regra do `afiliadoSemVinculo`.
 function _swwebPodeUsar(u) {
   if (!u) return false;
-  if (String(u.afiliado_id || '').trim()) return false;
+  if (afiliadoSemVinculo(u)) return false;
   return true;
 }
+
+// O MUNDO DE QUEM ESTA PEDINDO: '' e a casa, 'afl_xxx' e a operacao de um afiliado.
+const _swwebMundo = (u) => String(aflDe(u) || '').trim();
+
+// QUEM MANDA NA OPERACAO que esta pedindo. Na casa e o diretor; dentro do mundo de um afiliado e
+// ele proprio, que e o diretor da operacao dele (ver ehDonoDoMundo). Usar SEMPRE depois do corte
+// por mundo, nunca no lugar dele.
+const _swwebManda = (u) => (_swwebMundo(u) ? ehDonoDoMundo(u) : isDirector(u));
 
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
@@ -10090,9 +10110,20 @@ async function handleSwWeb(req, env, path) {
   if (!u) return err('Não autenticado', 401);
   if (!_swwebPodeUsar(u)) return err('Sem acesso', 403);
 
-  const lidas = await _readConfigMuitas(env, [SWWEB_CFG, SWWEB_PROXIES]);
-  const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[SWWEB_CFG], {}) };
-  const proxies = _swwebLerJson(lidas[SWWEB_PROXIES], {});
+  // TRAVA E PROXY SAO POR MUNDO, pelo mesmo padrao do dc_api_key: a casa grava em `swweb_cfg` e o
+  // afiliado em `swweb_cfg__afl_xxx`. Sem isso o afiliado herdaria a trava de proxy da casa e,
+  // sem proxy cadastrado no mundo dele, nao conseguiria abrir numero nenhum - e pior, o Bruno
+  // enxergaria o proxy (com senha) de um chip que nao e dele.
+  //
+  // A chave da casa continua sendo a MESMA de antes (`_cfgNome` com mundo vazio nao poe sufixo),
+  // entao nada do que ja esta gravado precisa ser migrado.
+  const mundo = _swwebMundo(u);
+  const K_CFG = _cfgNome(SWWEB_CFG, mundo);
+  const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
+  const manda = _swwebManda(u);
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES]);
+  const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[K_CFG], {}) };
+  const proxies = _swwebLerJson(lidas[K_PROXIES], {});
 
   // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
   // respostas rapidas, funis, audios, e as credenciais de captura.
@@ -10173,15 +10204,27 @@ async function handleSwWeb(req, env, path) {
 
     // TRAVA 1: o numero que diz ter recebido a mensagem tem que ser CHIP DESTE USUARIO.
     // Sem isso, da pra dizer "o lead escreveu pro numero do fulano" e assinar embaixo.
+    //
+    // QUEM MANDA NA OPERACAO passa com chip de qualquer pessoa DO MUNDO DELE, nunca de outro:
+    // antes o diretor da casa passava com chip de qualquer um, afiliado incluido, e carimbava a
+    // conversa de outra operacao como se fosse dele.
     let meusNums = null;
-    if (!isDirector(u)) {
-      try {
-        const _d = await _getDashData(env);
-        meusNums = new Set((Array.isArray(_d && _d.chips) ? _d.chips : [])
+    try {
+      const _d = await _getDashData(env);
+      const _chips = Array.isArray(_d && _d.chips) ? _d.chips : [];
+      if (manda) {
+        const _rs = await env.DB.prepare("SELECT id, COALESCE(afiliado_id,'') afl FROM users WHERE COALESCE(archived,0)=0").all();
+        const _mundoDe = {};
+        for (const x of ((_rs && _rs.results) || [])) _mundoDe[String(x.id)] = String(x.afl || '').trim();
+        meusNums = new Set(_chips
+          .filter((c) => c && c.num && (_mundoDe[String(c.at || '')] || '') === mundo)
+          .map((c) => _k8(c.num)));
+      } else {
+        meusNums = new Set(_chips
           .filter((c) => c && c.num && String(c.at || '') === String(u.id))
           .map((c) => _k8(c.num)));
-      } catch (_) { meusNums = new Set(); }
-    }
+      }
+    } catch (_) { meusNums = new Set(); }
 
     // TRAVA 2: venda so vale se aquele telefone JA TINHA escrito pra aquele numero ANTES deste
     // lote. Senao a conferencia seria circular: bastava mandar um "recebido" forjado no mesmo lote
@@ -10299,9 +10342,13 @@ async function handleSwWeb(req, env, path) {
     // ESCOPO POR CARGO (16/10/2026, revisao adversarial). Sem isto, um vendedor com o proprio
     // token varria telefones nesta rota e lia o pedido de QUALQUER outro, com CPF e endereco.
     // Diretor ve todos; vendedor so os dele.
-    const tudoL = isDirector(u);
+    const tudoL = manda;
+    // E O PEDIDO TEM QUE SER DO MESMO MUNDO. Na casa, pedido de afiliado traz `afl` preenchido
+    // (medido: 128 pedidos, todos com afl_3d767329); no mundo do afiliado, so os dele. Sem este
+    // corte, o painel da casa mostraria o pedido do cliente do afiliado - com nome, cidade e etapa.
     const meus = leads.filter((l) => l
       && String(l.wa || '').replace(/\D/g, '').slice(-8) === k8
+      && String(l.afl || '') === mundo
       && (tudoL || String(l.at || '') === String(u.id)));
     if (!meus.length) return json({ ok: true, achou: false, phone: fone });
     meus.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
@@ -10322,10 +10369,14 @@ async function handleSwWeb(req, env, path) {
     const data = await _getDashData(env);
     const chips = Array.isArray(data && data.chips) ? data.chips : [];
     // Nome do dono de cada chip, numa ida so.
-    const donos = {};
+    // Nome E MUNDO de cada dono, na mesma ida: o mundo e o que separa a casa do afiliado.
+    const donos = {}, mundoDoDono = {};
     try {
-      const r = await env.DB.prepare('SELECT id, name FROM users WHERE COALESCE(archived,0)=0').all();
-      for (const x of ((r && r.results) || [])) donos[String(x.id)] = x.name || x.id;
+      const r = await env.DB.prepare("SELECT id, name, COALESCE(afiliado_id,'') afl FROM users WHERE COALESCE(archived,0)=0").all();
+      for (const x of ((r && r.results) || [])) {
+        donos[String(x.id)] = x.name || x.id;
+        mundoDoDono[String(x.id)] = String(x.afl || '').trim();
+      }
     } catch (_) { /* sem nome a tela mostra o id */ }
     // Nome do status (Em Uso, Restrito, Banido...) pra barra lateral nao mentir sobre o chip.
     // Nome E COR do status. A cor e a que o Bruno escolheu na Contingencia: mandando ela daqui, o
@@ -10339,7 +10390,7 @@ async function handleSwWeb(req, env, path) {
     }
     // ESCOPO POR CARGO: diretor/socio/produtor ve todos; vendedor ve SO os dele. E a mesma regra do
     // resto da dash (ver src/lib/roles.js), e aqui ela importa mais, porque numero e credencial.
-    const tudo = isDirector(u);
+    const tudo = manda;
     // NUMERO SEM DONO NAO APARECE (16/10/2026, pedido do Bruno: "os numeros que nao estao atribuidos
     // a nenhum vendedor nem precisam aparecer").
     //
@@ -10347,7 +10398,15 @@ async function handleSwWeb(req, env, path) {
     // cadastro (ccol_1, ccol_2...), que nao e usuario nenhum. Medido em 16/10: de 91 chips, 77
     // apontavam pra ccol_1 ou ccol_2, que nao existem na tabela de usuarios. Por isso o filtro e
     // "o dono existe na lista de usuarios", e nao so "tem alguma coisa escrita no campo".
+    // O CORTE POR MUNDO VEM ANTES DO CORTE POR CARGO, e os dois precisam existir.
+    //
+    // Sem ele, o diretor da casa via os 5 chips da Tháriky, que e vendedora do afiliado Giovane:
+    // numero que ele nao controla, com interruptor de roleta que mexeria na pressel DO AFILIADO.
+    // Medido em 16/10: os leads dela NAO eram da casa (ela so esta nas pressels Presell 02/03/04 e
+    // Pressel 01, nenhuma das cinco "- Tiktok" da casa), entao nao houve lead indo pro lugar
+    // errado - era so a lista mostrando o que nao devia.
     const meus = chips.filter((c) => c && c.num && donos[String(c.at || '')]
+      && mundoDoDono[String(c.at || '')] === mundo
       && (tudo || String(c.at || '') === String(u.id)));
     // QUAIS NUMEROS ESTAO DESLIGADOS NA ROLETA. O interruptor mora em pressel.vendedores[].off, e
     // desde 13/10 ele vale pra TODAS as pressels da operacao: basta um `off` em qualquer uma pra o
@@ -10403,7 +10462,7 @@ async function handleSwWeb(req, env, path) {
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
       };
     });
-    return json({ ok: true, numeros, config: cfg, direcao: isDirector(u) });
+    return json({ ok: true, numeros, config: cfg, direcao: manda });
   }
 
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder
@@ -10411,10 +10470,19 @@ async function handleSwWeb(req, env, path) {
   if (req.method === 'GET' && path === '/api/swweb/proxy') {
     const nk = _swwebKey(new URL(req.url).searchParams.get('nk') || '');
     if (!nk) return err('Falta o número');
-    if (!isDirector(u)) {
+    // SENHA DE PROXY NAO ATRAVESSA MUNDO. O mapa `proxies` ja e o do mundo de quem pediu, entao
+    // um chip de outra operacao simplesmente nao tem entrada aqui; esta conferencia e a segunda
+    // camada, pra quando a dona da operacao pedir um numero que nao e dela.
+    {
       const data = await _getDashData(env);
-      const meu = (Array.isArray(data && data.chips) ? data.chips : []).some((c) => c && _swwebKey(c.num) === nk && String(c.at || '') === String(u.id));
-      if (!meu) return err('Este número não é seu', 403);
+      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
+      const dono = String((chip && chip.at) || '');
+      if (!dono) return err('Este número não é seu', 403);
+      if (!manda && dono !== String(u.id)) return err('Este número não é seu', 403);
+      if (manda) {
+        const mDono = await _mundoDoAt(env, dono);
+        if (String(mDono || '') !== mundo) return err('Este número não é da sua operação', 403);
+      }
     }
     const px = proxies[nk] || null;
     return json({ ok: true, nk, proxy: px });
@@ -10423,25 +10491,34 @@ async function handleSwWeb(req, env, path) {
   // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
   // (ou de fora do Brasil) e pior que proxy nenhum, entao nao e escolha de vendedor.
   if (req.method === 'POST' && path === '/api/swweb/proxy') {
-    if (!isDirector(u)) return err('Só a direção cadastra proxy', 403);
+    if (!manda) return err('Só a direção cadastra proxy', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
     const nk = _swwebKey(b && b.nk);
     if (!nk) return err('Falta o número');
+    // E SO EM CHIP DA PROPRIA OPERACAO. Cadastrar proxy no chip do outro mundo seria mandar o
+    // numero dele sair pela nossa saida, sem ele saber.
+    {
+      const data = await _getDashData(env);
+      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
+      const dono = String((chip && chip.at) || '');
+      const mDono = dono ? String((await _mundoDoAt(env, dono)) || '') : '';
+      if (dono && mDono !== mundo) return err('Este número não é da sua operação', 403);
+    }
     const host = String((b && b.host) || '').trim();
     if (!host) delete proxies[nk];
     else proxies[nk] = { host, porta: Number(b.porta) || 0, usuario: String(b.usuario || ''), senha: String(b.senha || '') };
-    await _writeConfig(env, SWWEB_PROXIES, JSON.stringify(proxies));
+    await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
   }
 
   // POST /api/swweb/config — as travas. Valem pra TODA maquina que abrir o app, por isso ficam
   // aqui e nao no disco do vendedor: senao cada um desligaria a sua.
   if (req.method === 'POST' && path === '/api/swweb/config') {
-    if (!isDirector(u)) return err('Só a direção mexe nas travas', 403);
+    if (!manda) return err('Só a direção mexe nas travas', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
     if (typeof (b && b.travaProxy) === 'boolean') cfg.travaProxy = b.travaProxy;
     if (typeof (b && b.exigirBrasil) === 'boolean') cfg.exigirBrasil = b.exigirBrasil;
-    await _writeConfig(env, SWWEB_CFG, JSON.stringify(cfg));
+    await _writeConfig(env, K_CFG, JSON.stringify(cfg));
     return json({ ok: true, config: cfg });
   }
 
