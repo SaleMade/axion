@@ -236,7 +236,7 @@ function telaVazia() {
     + '<div class="vazio"><div class="icone">'
     + '<svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 21l2.1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/></svg>'
     + '</div><h2>Escolha um número</h2>'
-    + '<p>Cada número abre numa sessão própria. A chave do lado liga e desliga a chegada de lead.</p></div>'
+    + '<p>A chave do lado liga e desliga a chegada de lead.</p></div>'
   desenhaLista()
 }
 
@@ -302,8 +302,7 @@ function telaAbrir(nk) {
         + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
         + 'Quando a outra pessoa fechar, este botão libera sozinho.</div>'
         + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
-      : '<p class="dica">A sessão deste número fica guardada aqui. Abrir não pede QR de novo.</p>'
-        + '<button class="principal" id="ab-abrir" style="margin-top:4px">Abrir WhatsApp</button>')
+      : '<button class="principal" id="ab-abrir" style="margin-top:14px">Abrir WhatsApp</button>')
     + '</div>'
   const b = $('ab-abrir')
   if (b) b.onclick = () => abrirDeVerdade(nk)
@@ -399,15 +398,13 @@ function separaProxy(txt) {
 
 function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
-  let html = '<h2>Ajustes</h2>'
+  let html = '<h2>Ajustes<span class="ver">v' + esc(estado.versao || '') + '</span></h2>'
   if (estado.direcao) {
     html += '<p>As travas são da operação. O teto é só desta máquina.</p>'
       + '<div class="chave"><div class="txt"><b>Exigir proxy</b><span>Sem proxy cadastrado e respondendo, o número não abre.</span></div>'
       + '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + estado.travaProxy + '"></button></div>'
       + '<div class="chave"><div class="txt"><b>Exigir IP do Brasil</b><span>Proxy de fora num número +55 é pior que proxy nenhum.</span></div>'
       + '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + estado.exigirBrasil + '"></button></div>'
-  } else {
-    html += '<p>Ajustes desta máquina.</p>'
   }
   // VER COMO UM DOS VENDEDORES (16/10/2026, pedido do Bruno: "quero ver como seria a visualizacao
   // dele, pra acompanhar o dia a dia e ver se ele esta convertendo certinho").
@@ -578,7 +575,7 @@ async function sincroniza() {
   if (!estado.temToken || document.hidden) return
   try { await window.sw.numeros(); await recarregaEstado() } catch (_) { /* a proxima tentativa resolve */ }
 }
-setInterval(sincroniza, 20000)
+window.__swSync = setInterval(sincroniza, 20000)
 // Voltar pra janela e o momento em que a pessoa MAIS repara que algo mudou noutro lugar.
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sincroniza() })
 // E AO GANHAR FOCO, que e o que de fato acontece aqui: o SellWave Web e uma JANELA, e alternar

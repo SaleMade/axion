@@ -70,6 +70,7 @@ async function rodar(ctx) {
   // que ele nunca vai ver. A regra e do Bruno: "para meus vendedores nao quero que nem apareca nada
   // de proxy".
   const monta = (direcao) => `(() => {
+      clearInterval(window.__swSync)   // congela: senao a sincronia troca o exemplo pelos numeros reais
       estado.temToken = true
       estado.nome = 'Guilherme'
       estado.maxAbertos = 6
