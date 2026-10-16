@@ -348,6 +348,36 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   **Falta o Bruno:** cadastrar o proxy, parear (de preferência três números, pra fechar a medição de
   memória junto) e testar a ligação de voz com a trava ligada.
 
+## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
+
+Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,
+eu quero que você se inspire no que está funcionando hoje, que é o inbox de WhatsApp. Tudo lá está
+100%. Caso queira fazer alguma melhoria, dá uma olhadinha lá, porque **lá é o padrão que a gente
+quer seguir**"*.
+
+Isso não é só fonte de consulta quando algo quebra: é o **desenho de referência**. Vale pro
+comportamento (fila, pausa, indicador, o que a tela mostra enquanto sai) e pra aparência (a pilha
+de envios, os rótulos, as cores de estado). Quando a pergunta for *"como isso deveria funcionar
+aqui?"*, a resposta começa no inbox, não numa ideia nova.
+
+**Onde olhar, por assunto:**
+
+| Pergunta | Onde a resposta já existe |
+|---|---|
+| Como ENVIAR (pausa, indicador, Parar) | `AXION/sc-panel.js` — o encadeamento por volta da linha 1770 |
+| Como mostrar itens e funis | `axion-produtor/src/pages/apps/chat.jsx`, o `SalePanel` |
+| Como mostrar o que está saindo | o mesmo arquivo, `PilhaEnvios` no modo integrado |
+| Formatação do balão, favoritos, chips | `SalePanel` + `_formatado` |
+
+**A FILA É PEDIDO EXPLÍCITO DELE.** Disparar o funil pro lead A, trocar pro B, disparar de novo, e
+os dois saem **um após o outro**, cada um respeitando o próprio tempo. Nunca em paralelo — ele foi
+direto: um por vez *"não atrapalha, é inclusive o certo"*. Isso encerra a ideia de tornar o disparo
+reentrante: o que falta é uma **fila com um consumidor só**, não concorrência.
+
+**O custo de ignorar isso já foi medido:** uma tarde inteira reescrevendo o envio de funil, com dois
+diagnósticos errados implementados, enquanto a versão que funciona estava no mesmo repositório.
+Ver a memória `sc-panel-e-a-versao-que-funciona`.
+
 ## 11. COMO PUBLICAR O APP (decorar: o passo 3 nasceu de um app que não abria)
 
 ```
