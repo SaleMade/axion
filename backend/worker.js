@@ -10090,6 +10090,28 @@ const _swwebManda = (u) => (_swwebMundo(u) ? ehDonoDoMundo(u) : isDirector(u));
 // O DONO DO ALUGUEL E A MAQUINA, nao a pessoa: o Bruno pareia os numeros do time no PC dele e
 // depois o vendedor usa no PC dele. Sao duas maquinas e as duas sao "dele" no sentido de login, e
 // e exatamente o cruzamento que a trava existe pra impedir.
+// RASCUNHO DE PEDIDO DO APP (16/10/2026, pedido do Bruno: o vendedor cadastra o pedido pelo
+// proprio aplicativo e, se nao concluir, "ficaria em algum lugar ali no rascunho").
+//
+// TABELA PROPRIA, E NAO O BLOB DO ESTADO, por dois motivos medidos nesta casa: chave nova de topo
+// no estado some quando outra tela regrava (ver memoria chave-nova-no-blob-some), e o blob tem teto
+// (estado-blob-teto-1mb). Rascunho muda a cada tecla e e por vendedor: brigaria com o CAS do estado
+// o dia inteiro, a troco de nada.
+//
+// O QUE ELE NAO E: pedido. Rascunho nao vira card, nao conta em metrica e nao vai pra PayLog. Quem
+// cria o card continua sendo o POST /api/pedido/novo, e quem cria na PayLog continua sendo o
+// Aceitar das Aceitacoes - com o anti-dobro por CPF e a conferencia dupla que ja existem la. A API
+// da PayLog nao tem idempotencia, entao pedido em dobro la nao tem desfazer barato: nenhum caminho
+// novo pula esse portao.
+async function _swwebRascunhoTabela(env) {
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS swweb_rascunho (id TEXT PRIMARY KEY, user_id TEXT, phone TEXT, dados TEXT, criado INTEGER, mexido INTEGER)'
+    ).run();
+  } catch (_) { /* ja existe */ }
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS ix_swweb_rasc_user ON swweb_rascunho (user_id, mexido DESC)').run(); } catch (_) { /* ok */ }
+}
+
 const SWWEB_USO_SEG = 120;      // quanto tempo o aluguel vale sem renovar
 async function _swwebUsoTabela(env) {
   try {
@@ -10651,6 +10673,54 @@ async function handleSwWeb(req, env, path) {
     }
     await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
+  }
+
+  // GET /api/swweb/rascunhos — os rascunhos DESTA pessoa, do mais mexido pro mais velho.
+  //
+  // Sempre so os dela, inclusive pra direcao: rascunho e trabalho pela metade de alguem, nao e
+  // dado da operacao. O diretor que quiser ver o que o vendedor esta fazendo usa o "ver como".
+  if (req.method === 'GET' && path === '/api/swweb/rascunhos') {
+    await _swwebRascunhoTabela(env);
+    const fone = String(new URL(req.url).searchParams.get('phone') || '').replace(/\D/g, '');
+    try {
+      const r = fone.length >= 8
+        ? await env.DB.prepare('SELECT id, phone, dados, criado, mexido FROM swweb_rascunho WHERE user_id=? AND substr(phone,-8)=? ORDER BY mexido DESC LIMIT 20')
+          .bind(String(u.id), fone.slice(-8)).all()
+        : await env.DB.prepare('SELECT id, phone, dados, criado, mexido FROM swweb_rascunho WHERE user_id=? ORDER BY mexido DESC LIMIT 40')
+          .bind(String(u.id)).all();
+      const lista = ((r && r.results) || []).map((x) => ({
+        id: String(x.id), phone: String(x.phone || ''),
+        dados: _swwebLerJson(x.dados, {}), criado: Number(x.criado) || 0, mexido: Number(x.mexido) || 0,
+      }));
+      return json({ ok: true, rascunhos: lista });
+    } catch (_) { return json({ ok: true, rascunhos: [] }); }
+  }
+
+  // POST /api/swweb/rascunho — grava ou apaga um rascunho. { id, phone, dados } ou { id, apagar }
+  if (req.method === 'POST' && path === '/api/swweb/rascunho') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 48);
+    if (!id) return err('Falta o id do rascunho');
+    await _swwebRascunhoTabela(env);
+    const agoraR = Math.floor(Date.now() / 1000);
+    // APAGAR SO O PROPRIO, sempre com o user_id na clausula: id adivinhado nao apaga o dos outros.
+    if (b && b.apagar) {
+      try { await env.DB.prepare('DELETE FROM swweb_rascunho WHERE id=? AND user_id=?').bind(id, String(u.id)).run(); } catch (_) { /* ok */ }
+      return json({ ok: true, apagou: true });
+    }
+    const dados = JSON.stringify((b && b.dados) || {});
+    // TETO POR RASCUNHO. Formulario de pedido cabe folgado em 20 KB; acima disso e alguem colando
+    // coisa que nao e pedido, e a tabela e lida inteira na tela do vendedor.
+    if (dados.length > 20000) return err('Rascunho grande demais');
+    const fone = String((b && b.phone) || '').replace(/\D/g, '').slice(0, 20);
+    try {
+      await env.DB.prepare(
+        'INSERT INTO swweb_rascunho (id, user_id, phone, dados, criado, mexido) VALUES (?,?,?,?,?,?) ' +
+        'ON CONFLICT(id) DO UPDATE SET phone=excluded.phone, dados=excluded.dados, mexido=excluded.mexido ' +
+        'WHERE swweb_rascunho.user_id = excluded.user_id'
+      ).bind(id, String(u.id), fone, dados, agoraR, agoraR).run();
+    } catch (_) { return err('Não consegui guardar o rascunho agora.', 503); }
+    return json({ ok: true, id });
   }
 
   // POST /api/swweb/uso — pega, renova ou solta o numero. { nk, soltar? }

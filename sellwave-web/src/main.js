@@ -1480,6 +1480,67 @@ ipcMain.handle('swp:recarregar-ativo', () => {
 // internet oscilando, um cliente com tres pedidos aparecia como lead novo e o vendedor repetia a
 // oferta de entrada. Pior: o painel guarda o ultimo telefone consultado e nao tentava de novo,
 // entao a linha continuava mentindo depois que a dash voltava.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// PEDIDO PELO PROPRIO APP (16/10/2026, pedido do Bruno: o vendedor cadastra o pedido do cliente que
+// esta na conversa, e o que nao terminar fica em rascunho).
+//
+// O APP NAO INVENTA CAMINHO NOVO. O cadastro usa a MESMA rota que o Novo Pedido da dash usa
+// (POST /api/pedido/novo): o pedido vira CARD e cai em Aceitacoes, e quem cria de verdade na PayLog
+// continua sendo o botao Aceitar. Isso nao e detalhe de arquitetura, e dinheiro: o Aceitar tem
+// anti-dobro por CPF, conferencia dupla e trava de aceite, e a API da PayLog NAO tem idempotencia -
+// pedido em dobro la nao tem desfazer barato. Qualquer atalho daqui pulava os tres portoes.
+//
+// Quem recorta por cargo e o servidor (`_stateProtegido` devolve 403 "Seu cargo nao cadastra
+// pedido"), entao nao ha regra de permissao escrita aqui pra envelhecer.
+ipcMain.handle('swp:pedido-novo', async (_e, { lead }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  if (!lead || typeof lead !== 'object') return { ok: false, erro: 'Pedido vazio.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/pedido/novo', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ lead }), signal: AbortSignal.timeout(30000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    return { ok: true, id: d && d.id, ja: !!(d && d.ja) }
+  } catch (_) { return { ok: false, erro: 'não deu pra falar com a dash' } }
+})
+
+// RASCUNHO: guardado no SERVIDOR, nao no disco desta maquina.
+//
+// O de hoje na dash vive no localStorage e o proprio arquivo avisa que "some se trocar de maquina".
+// Aqui isso seria pior: o vendedor comeca o pedido no app e termina na dash, ou troca de PC, e o
+// trabalho sumiria sem aviso. Fica numa tabela propria (nunca no blob do estado, que tem teto e
+// perde chave nova quando outra tela regrava).
+ipcMain.handle('swp:rascunhos', async (_e, { phone }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.', rascunhos: [] }
+  try {
+    const q = String(phone || '').replace(/\D/g, '')
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/rascunhos'
+      + (q.length >= 8 ? '?phone=' + encodeURIComponent(q) : '') + (comoId ? (q.length >= 8 ? '&' : '?') + 'como=' + encodeURIComponent(comoId) : ''),
+      { headers: cabecalhos(), signal: AbortSignal.timeout(15000) })
+    ajustaRelogio(r)
+    if (!r.ok) return { ok: false, erro: 'a dash respondeu ' + r.status, rascunhos: [] }
+    const d = await r.json()
+    return { ok: true, rascunhos: (d && d.rascunhos) || [] }
+  } catch (_) { return { ok: false, erro: 'não deu pra falar com a dash', rascunhos: [] } }
+})
+
+ipcMain.handle('swp:rascunho-salvar', async (_e, { id, phone, dados, apagar }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/rascunho', {
+      method: 'POST', headers: cabecalhos(),
+      body: JSON.stringify(apagar ? { id, apagar: true } : { id, phone, dados }),
+      signal: AbortSignal.timeout(15000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    return { ok: true, id: (d && d.id) || id }
+  } catch (_) { return { ok: false, erro: 'não deu pra falar com a dash' } }
+})
+
 ipcMain.handle('swp:lead', async (_e, { phone }) => {
   const fone = String(phone || '').replace(/\D/g, '')
   if (fone.length < 8) return { ok: true, achou: false }
