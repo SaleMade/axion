@@ -252,6 +252,34 @@ view que roda a página da Meta; a chave de 10 dígitos era formatada como telef
 dígito; permissão de mídia liberava **câmera** junto com microfone; faltava o par `will-navigate` do
 `setWindowOpenHandler`; e a fila de captura só existia em memória.
 
+## 9c. A terceira varredura (16/10/2026) e o que ela ensinou
+
+A segunda rodada de consertos **criou** um problema novo (o sinal de vida dizia que o numero estava
+pareado na tela do QR). Por isso houve uma terceira: 26 achados, **16 confirmados** por revisor
+cetico, todos consertados. A licao que fica: consertar sem varrer de novo e apostar.
+
+Os cinco que doiam no bolso:
+
+| O furo | Por que doia | O conserto |
+|---|---|---|
+| A fila de captura contava **eventos**, nao bytes, e gravava o audio em base64 no arquivo, de forma **sincrona**, a cada 10 s | Com a dash fora do ar, isso congela o processo principal (painel, funil e botao Parar juntos) e no extremo estoura o limite de string do V8 dentro de um `catch` mudo: a fila que existe pra sobreviver ao fechamento deixa de existir | Teto em **bytes**; larga o **anexo** do mais antigo antes de largar a **mensagem**; o arquivo nunca guarda os bytes |
+| O download de midia nao olhava a idade | Reconexao reemite a conversa (855 mensagens em 11 min, ja medido): cada audio saia pelo **proxy pago**, cobrado por GB, pra virar bolha que o vendedor ja tem do lado | Corta em **6 horas** (nao 30 min: notebook fechado por uma hora ainda precisa trazer o audio do endereco) |
+| A mensagem so era mandada **depois** do download | Ate 20 s em que o evento nao existia em lugar nenhum duravel. Recarregar a pagina ali perdia o audio do endereco **e o lead junto** | Mensagem **na hora**, anexo numa segunda passada (a ingestao tem `INSERT OR IGNORE` e `UPDATE media_url`) |
+| `velha` saia do **relogio do PC do vendedor** | Windows 40 min adiantado marcava TODA mensagem como velha, e velha no servidor significa `wa_attrib` nao gravado e **nenhuma venda registrada**, em silencio | O carimbo continua na captura (a fila pode esperar a noite inteira), com o relogio corrigido pelo cabecalho `Date` de qualquer resposta da dash |
+| A **pausa do passo somava** `delay` + `sim` | Era a reclamacao do Bruno de 18/08/2026 voltando por outro caminho. Pior: funil com `sim` preenchido e `delay` zerado saia **todo no mesmo segundo**, varias mensagens num chip novo | Uma pausa so (`sim` se preenchido, senao `delay`), em fatias de 200 ms pro Parar responder, com "digitando..." ligado |
+
+Consertados tambem: prazo em todo `fetch` (240 s no POST da captura, que sobe ate 6 MB); sinal de
+vida em paralelo; motor ausente agora **aparece** na barra (ele faz o numero sair da roleta em
+silencio); erro de numero escondido nao arranca da tela o numero em uso; `mostra()` nao elege numero
+fechado e a casca ouve `sw:fechado`; a hibernacao nao fecha quem esta disparando; "nao falei com a
+dash" deixou de virar "sem pedido na dash" e "proxy nao cadastrado"; grupo aberto **diz grupo**; o
+rodape carimba de quem e o funil; LID nao resolvido nao procura lead com digitos que nao sao
+telefone; cache de midia com teto em bytes.
+
+**Teste novo:** `npm run teste` (`src/teste-funcoes.mjs`), 22 conferencias em Node puro das contas
+que decidem dinheiro e ban. Ele **le o codigo de verdade e executa a funcao de verdade**, entao nao
+ha copia pra envelhecer. Rode antes de publicar, junto com o autoteste.
+
 ## 10. Diário do projeto
 
 Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verificou**.
@@ -274,3 +302,18 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   **21 conferências, 21 passando**, incluindo abrir o WhatsApp Web, carregar o motor, instalar o
   agente e confirmar que proxy morto **não** vira conexão direta. Revisão adversárial achou 20
   problemas e os 8 graves foram consertados (seção 9b).
+- **16/10/2026, madrugada** — **TERCEIRA VARREDURA FECHADA E TUDO NO AR.** Os 16 achados
+  confirmados estao consertados (secao 9c), com destaque pra pausa do passo, que estava somando, e
+  pro `velha` que saia do relogio do PC do vendedor. O painel ficou **igual ao inbox de verdade**:
+  comparei com o `SalePanel` do `chat.jsx` e corrigi tres divergencias (o selo da aba Funis contava
+  o catalogo, Favoritos era aba em vez do filtro de estrela, e a previa mostrava `*assim*` cru).
+  A lista ganhou o **x pra fechar** o numero, que o Bruno pediu e so existia no painel e no Ctrl+W.
+  A pasta de dados foi **fixada** em `%APPDATA%/sellwave-web` e a sessao passa a ser gravada no disco
+  ao fechar, ao hibernar e ao sair: renomear o produto ou fechar a forca nao apaga mais pareamento.
+  **Conferido no ar:** instalador 200 com 111.343.297 bytes, motor 200 com 503.710 bytes,
+  `/api/swweb/numeros` 401 sem token; worker `axion-api` versao 1b9fca4a; dash em produção e demo do
+  commit `52f9e7f`, carimbo `16/10 02:50` lido de sellwave.com.br com query. Autoteste **21 de 21**
+  com o WhatsApp Web de verdade e `npm run teste` **22 de 22**. Modo foto agora retrata as duas caras
+  (direcao e vendedor), os dois Ajustes e a previa do funil.
+  **Falta o Bruno:** parear um numero e testar a ligacao de voz com a trava ligada (spike 1), e dizer
+  em qual maquina o app vai rodar (decisao da secao 7).
