@@ -730,6 +730,7 @@ function ligaPedidos(corpo) {
       pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: estadoWa.nome || '' }
       pedErros = []; pedFeito = ''
       preenchePed()
+      guardaNascimento()
       if (!ofertas.length) pegaOfertas()
       desenha()
     }
@@ -759,6 +760,7 @@ function ligaPedidos(corpo) {
       // de origem - senao o congelamento valeria so ate a primeira interrupcao.
       pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: String(ped.nome || '') }
       delete ped.__tipo; delete ped.__anexos; delete ped.__lead
+      guardaNascimento()
       rascId = Number(r.id) || 0
       pedErros = []; pedFeito = ''
       if (!ofertas.length) pegaOfertas()
@@ -804,6 +806,7 @@ function ligaPedidos(corpo) {
     await rascunhoSozinho()
     pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = 0; pedErros = []
     preenchePed()
+    guardaNascimento()
     desenha()
   })
   liga('pd-rasc', salvaRascunho)
@@ -843,11 +846,24 @@ async function subirAnexos(arquivos) {
 // So grava se houver algo ALEM do que entrou sozinho - nome e telefone vem preenchidos da conversa,
 // entao rascunho com so os dois e um rascunho vazio, e encheria a lista de lixo.
 let gravandoSozinho = false
-function temConteudo() {
-  const sobra = { ...ped }
-  delete sobra.nome; delete sobra.wa
-  return Object.values(sobra).some((v) => String(v || '').trim()) || anexos.length > 0
-}
+// COMO ELE NASCEU, pra saber se o vendedor mexeu em alguma coisa.
+//
+// A primeira versao disto era uma LISTA DE EXCECAO ("ignore nome e wa porque entram sozinhos da
+// conversa"). Lista de excecao envelhece: no dia em que o preenchimento automatico crescer - cidade
+// pelo DDD, por exemplo - alguem esquece de somar o campo novo e volta a gravar rascunho vazio, e
+// o defeito aparece semanas depois como lixo na lista do vendedor.
+//
+// Guardando a FOTO do formulario no instante em que ele nasceu, o criterio deixa de ser "quais
+// campos nao contam" e passa a ser a pergunta que de fato interessa: mudou alguma coisa? O
+// preenchimento automatico pode crescer a vontade, porque o que ele escrever entra na foto junto.
+//
+// A foto e tirada DEPOIS do preenchimento automatico, e compara o valor ja aparado: mascara de CPF
+// e de CEP so rodam quando a pessoa digita, mas comparar texto cru deixaria uma diferenca de espaco
+// virar "mexeu".
+let nasceuAssim = ''
+const fotoDoForm = () => JSON.stringify(Object.keys(ped).sort().map((k) => k + '=' + String(ped[k] == null ? '' : ped[k]).trim()))
+const guardaNascimento = () => { nasceuAssim = fotoDoForm() }
+function temConteudo() { return fotoDoForm() !== nasceuAssim || anexos.length > 0 }
 async function rascunhoSozinho() {
   if (gravandoSozinho || pedSalvando || !pedTipo || !temConteudo()) return
   gravandoSozinho = true
@@ -890,6 +906,7 @@ async function cadastraPedido() {
       if (rascId) { try { await window.swp.rascunhoApagar(rascId) } catch (_) { /* some sozinho depois */ } }
       ped = {}; rascId = 0; anexos = []; pedTipo = ''
       preenchePed()
+      guardaNascimento()
       await pegaRascunhos()
     } else {
       pedErros = [humano((r && r.erro) || 'não deu pra cadastrar')]

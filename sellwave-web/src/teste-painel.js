@@ -174,6 +174,19 @@ app.whenReady().then(async () => {
   const nAnt = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].mod))'))
   conta('pagamento antecipado passa sem comprovante', nAnt.length === 2 && nAnt[1] === 'antecipado', JSON.stringify(nAnt))
 
+  // ── ABRIR E SAIR SEM MEXER NAO CRIA RASCUNHO ───────────────────────────────────────────────
+  // O nome e o telefone entram sozinhos da conversa. Se eles contassem como "conteudo", toda
+  // passada pela aba viraria um rascunho vazio na lista do vendedor.
+  const antesVazio = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").length)'))
+  await clica('[data-tipo=entrega]')
+  await espera(300)
+  await clica('[data-aba=itens]')
+  await espera(400)
+  const depoisVazio = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").length)'))
+  conta('abrir e sair sem digitar nada NAO cria rascunho', depoisVazio === antesVazio, antesVazio + ' -> ' + depoisVazio)
+  await clica('[data-aba=pedidos]')
+  await espera(300)
+
   // ── O LEAD FICA CONGELADO quando a conversa muda no meio ───────────────────────────────────
   await clica('[data-tipo=entrega]')
   await espera(350)
