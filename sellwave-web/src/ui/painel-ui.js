@@ -294,9 +294,13 @@ const urlMidia = (chave) => 'swmedia://arq/' + encodeURIComponent(String(chave |
 // viravam todos o mesmo balao de texto escrito "[imagem] Formula" - o vendedor nao tinha como
 // conferir o que ia disparar antes de disparar, que e exatamente pra isso que a previa existe.
 //
-// O DOCUMENTO NAO ABRE AQUI DENTRO de proposito: PDF dentro do painel precisaria de visualizador
-// embutido e de mais um furo na CSP, pra uma coisa que o vendedor olha uma vez. Ele mostra o nome e
-// abre no programa do Windows, que ja sabe ler PDF.
+// O DOCUMENTO ABRE AQUI DENTRO (17/10/2026). A versao anterior mandava pro navegador do Windows e
+// ele foi direto ao ponto: "fica apenas um link pra eu ver esse documento no navegador, mas eu
+// gostaria de ver pelo proprio aplicativo". Mandar pra fora tambem tirava o foco da janela no meio
+// do atendimento e abria num navegador logado com outra conta.
+// Agora sao dois niveis, como na foto e no video: a PREVIA mostra o documento na propria coluna, e
+// o clique abre GRANDE numa janela do app. O leitor e o do proprio Chromium (plugins: true no
+// painel e na janela), sem biblioteca nova.
 function corpoDaPrevia(x) {
   const legenda = String(x.caption || '').trim()
   const rodape = '<span class="prev-hora">agora</span>'
@@ -311,9 +315,16 @@ function corpoDaPrevia(x) {
     return '<div class="prev-balao midia audio"><audio class="prev-aud" src="' + esc(urlMidia(x.key)) + '" controls preload="metadata"></audio>' + cap + rodape + '</div>'
   }
   if (x.tipo === 'document') {
+    // O iframe mostra o documento; a faixa de cima abre grande. `tabindex=-1` e `pointer-events`
+    // desligado no iframe pra o scroll da coluna nao ser engolido pelo visualizador de PDF - quem
+    // quer ler de verdade clica e abre a janela.
     return '<div class="prev-balao midia doc">'
-      + '<button class="prev-doc" data-abredoc="' + esc(x.key) + '" title="Abrir no computador">'
-      + svg(TIPOS.document.ic) + '<span>' + esc(x.label) + '</span></button>' + cap + rodape + '</div>'
+      + '<button class="prev-doc" data-abredoc="' + esc(x.key) + '" data-doctitulo="' + esc(x.label) + '" title="Abrir no aplicativo">'
+      + svg(TIPOS.document.ic) + '<span>' + esc(x.label) + '</span>'
+      + svg('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>')
+      + '</button>'
+      + '<div class="prev-pdf"><iframe src="' + esc(urlMidia(x.key)) + '#toolbar=0&navpanes=0" tabindex="-1" title="' + esc(x.label) + '"></iframe></div>'
+      + cap + rodape + '</div>'
   }
   return '<div class="prev-balao">' + formatado(x.texto || '') + rodape + '</div>'
 }
@@ -410,7 +421,12 @@ function ligaItens(corpo) {
   // visualizador e mais um furo na CSP, pra uma coisa que o vendedor olha uma vez.
   for (const b of corpo.querySelectorAll('[data-abredoc]')) {
     b.onclick = async () => {
-      try { await window.swp.abrirMidia(b.dataset.abredoc) }
+      try {
+        const r = await window.swp.abrirMidia(b.dataset.abredoc, b.dataset.doctitulo || 'Documento')
+        // Se o leitor embutido falhar, o processo principal abre no navegador e avisa aqui: melhor
+        // dizer que saiu do app do que o vendedor procurar a janela que nao existe.
+        if (r && r.fora) rodape('abri no navegador: o leitor do app não deu conta deste arquivo')
+      }
       catch (_) { rodape('não consegui abrir o arquivo', null, true) }
     }
   }

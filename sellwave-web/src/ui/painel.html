@@ -6,7 +6,7 @@
      mostra a foto e o video de verdade, em vez de um balao escrito "[imagem] Formula". A pagina
      continua SEM poder falar com a rede - nao ha connect-src, nao ha http: em lugar nenhum - e
      continua com default-src 'none'. Ela so pede ao app, que busca e devolve. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: swmedia:; media-src swmedia:; font-src 'self' data:;" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: swmedia:; media-src swmedia:; frame-src swmedia:; font-src 'self' data:;" />
 <title>Painel</title>
 <link rel="stylesheet" href="fonte/mulish.css" />
 <style>
@@ -180,6 +180,14 @@
   .prev-doc span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     text-decoration: underline; text-underline-offset: 2px; }
   .prev-doc:hover span { color: #fff; }
+  /* A seta de "abrir grande" fica apagada ate o mouse chegar: ela e convite, nao aviso. */
+  .prev-doc > svg:last-child { width: 13px; height: 13px; flex: 0 0 13px; color: rgba(233,237,239,.35); }
+  .prev-doc:hover > svg:last-child { color: #fff; }
+  /* A PREVIA DO PDF. Altura fixa: o documento e pra RECONHECER na coluna, nao pra ler - ler e na
+     janela grande. Sem o pointer-events desligado, o visualizador de PDF come o scroll da coluna e
+     o vendedor fica preso dentro do documento ao rolar a lista de itens. */
+  .prev-pdf { margin-top: 7px; border-radius: 7px; overflow: hidden; background: #fff; height: 190px; }
+  .prev-pdf iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; }
   .prev-cap { margin-top: 4px; padding: 0 3px; }
 
   .funil { border: 1px solid var(--linha); border-radius: 10px; margin-bottom: 6px; }

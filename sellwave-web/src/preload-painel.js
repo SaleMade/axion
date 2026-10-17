@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('swp', {
   comprovante: (nome, mime, bytes, lead) => ipcRenderer.invoke('swp:comprovante', { nome, mime, bytes, lead }),
   // Abre o documento no programa do Windows. So a CHAVE viaja: a pagina nunca ve o endereco da
   // API, e quem monta a URL e o processo principal.
-  abrirMidia: (chave) => ipcRenderer.invoke('swp:abrir-midia', { chave }),
+  abrirMidia: (chave, titulo) => ipcRenderer.invoke('swp:abrir-midia', { chave, titulo }),
   // Busca de CEP. Mora no processo principal porque a pagina nao pode falar com a rede, e
   // porque assim o cache vale pros N numeros abertos em vez de um por janela.
   cep: (cep) => ipcRenderer.invoke('swp:cep', { cep }),

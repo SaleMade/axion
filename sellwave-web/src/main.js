@@ -1908,12 +1908,56 @@ ipcMain.handle('swp:cep', async (_e, { cep }) => {
 // ABRE O DOCUMENTO NO PROGRAMA DO WINDOWS. A pagina manda so a CHAVE; quem monta o endereco e
 // aqui, e a mesma conferencia do protocolo swmedia vale: chave que nao e de midia nao abre nada.
 // Sem ela, um `shell.openExternal` com texto vindo da pagina abriria qualquer coisa.
-ipcMain.handle('swp:abrir-midia', async (_e, { chave }) => {
+// ABRE O DOCUMENTO DENTRO DO APP (17/10/2026). Antes ia pro navegador por `shell.openExternal`,
+// e ele foi direto ao ponto: "gostaria de ver pelo proprio aplicativo". Mandar pro navegador tambem
+// tirava o documento da sessao do painel - abria no Chrome do Windows, logado com outra conta, com
+// a janela do app perdendo o foco no meio do atendimento.
+//
+// A janela e FILHA da janela do app e usa a particao do painel, que e onde o `swmedia://` existe e
+// onde a saida e direta. O visualizador e o do proprio Chromium (ver `plugins: true` no painel).
+let janelaDoc = null
+ipcMain.handle('swp:abrir-midia', async (_e, { chave, titulo }) => {
   const k = String(chave || '')
   if (!/^m\/[A-Za-z0-9._-]+$/.test(k)) return { ok: false, erro: 'chave inválida' }
-  const base = (roteiro && roteiro.mediaBase) || (String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media/')
-  try { await shell.openExternal(base + k); return { ok: true } }
-  catch (e) { anota('[midia] nao abri ' + k + ': ' + (e && e.message)); return { ok: false, erro: String((e && e.message) || 'não abriu') } }
+  const url = 'swmedia://arq/' + encodeURIComponent(k)
+  try {
+    // UMA JANELA SO, reaproveitada: abrir o mesmo certificado cinco vezes nao pode virar cinco
+    // janelas empilhadas em cima do WhatsApp.
+    if (janelaDoc && !janelaDoc.isDestroyed()) {
+      janelaDoc.setTitle(String(titulo || 'Documento'))
+      await janelaDoc.webContents.loadURL(url)
+      janelaDoc.show(); janelaDoc.focus()
+      return { ok: true }
+    }
+    const { BrowserWindow } = require('electron')
+    janelaDoc = new BrowserWindow({
+      width: 900, height: 860, parent: janela || undefined,
+      title: String(titulo || 'Documento'),
+      backgroundColor: '#0b0e14',
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition: 'persist:sw-painel',   // onde o swmedia existe
+        plugins: true,                    // leitor de PDF do Chromium
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    })
+    janelaDoc.on('closed', () => { janelaDoc = null })
+    // Nada de navegar pra fora daqui: a janela existe pra UM arquivo nosso.
+    janelaDoc.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    janelaDoc.webContents.on('will-navigate', (ev, alvo) => { if (!String(alvo).startsWith('swmedia://')) ev.preventDefault() })
+    await janelaDoc.webContents.loadURL(url)
+    return { ok: true }
+  } catch (e) {
+    anota('[midia] nao abri ' + k + ': ' + (e && e.message))
+    // RESERVA: se o leitor embutido falhar, melhor abrir no navegador do que nao abrir nada.
+    try {
+      const base = (roteiro && roteiro.mediaBase) || (String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media/')
+      await shell.openExternal(base + k)
+      return { ok: true, fora: true }
+    } catch (_) { return { ok: false, erro: String((e && e.message) || 'não abriu') } }
+  }
 })
 
 ipcMain.handle('swp:comprovante', async (_e, { nome, mime, bytes, lead }) => {
@@ -2111,7 +2155,12 @@ app.whenReady().then(() => {
         const cab = {}
         const range = req.headers.get('range')
         if (range) cab.range = range            // sem isto o video nao deixa arrastar a barra
-        return await net.fetch(base + chave, { headers: cab, session: sesPainel })
+        // `sesPainel.fetch`, NAO `net.fetch`: o net.fetch nao aceita sessao (a assinatura dele so
+        // tem `bypassCustomProtocolHandlers`) e sai SEMPRE pela padrao, que e o buraco negro. Passar
+        // { session } pra ele nao da erro, so e ignorado em silencio - foi assim que a primeira
+        // metade deste conserto pareceu funcionar e nao funcionou.
+        // bypass ligado: a busca e https e nao pode reentrar no proprio handler.
+        return await sesPainel.fetch(base + chave, { headers: cab, bypassCustomProtocolHandlers: true })
       } catch (e) {
         anota('[midia] ' + (e && e.message))
         return new Response('', { status: 502 })
@@ -2168,6 +2217,11 @@ app.whenReady().then(() => {
       preload: path.join(__dirname, 'preload-painel.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // LIGA O VISUALIZADOR DE PDF do proprio Chromium (17/10/2026, pedido do Bruno: "o documento
+      // nao abre, fica so um link pra ver no navegador, eu gostaria de ver pelo proprio
+      // aplicativo"). Sem isto, PDF em iframe vira download em vez de pagina.
+      // Nao e NPAPI nem Flash: no Chromium de hoje `plugins` liga o leitor de PDF e mais nada.
+      plugins: true,
       partition: 'persist:sw-painel',
     },
   })
