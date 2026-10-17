@@ -54,6 +54,14 @@ async function rodar(ctx) {
   conta('nasceu uma janela de verdade, visivel',
     d.win && !d.win.isDestroyed() && d.win.isVisible() === true,
     'visivel=' + (d.win && d.win.isVisible()))
+  // ELA SE IDENTIFICA E VAI PRO CANTO. O teste PRECISA de janela visivel (escondida nao desenha, e
+  // o que esta sendo conferido e quem desenha onde), mas ela abre na tela de quem estiver
+  // trabalhando. Dizer no titulo que e teste custa uma linha e evita o susto.
+  try {
+    d.win.setTitle('TESTE do SellWave Web · pode ignorar, fecha sozinha')
+    d.win.setBounds({ x: 24, y: 24, width: 960, height: 640 })
+    await espera(250)
+  } catch (_) { /* se o sistema recusar, o teste segue */ }
   // A VIEW MUDOU DE MAE: tem que ter saido da principal e entrado na nova.
   const naPrincipal = janela.contentView.children.includes(view)
   const naNova = d.win.contentView.children.includes(view)
@@ -144,3 +152,24 @@ function fim(ctx, NK, view) {
 }
 
 module.exports = { rodar }
+
+// RODAR ESTE ARQUIVO DIRETO NAO FUNCIONA, E ANTES FALHAVA CALADO. Ele e MODULO: quem o carrega e o
+// main.js quando SW_JANELA=1. Chamado como `electron src/teste-destaque.js`, o Electron subia sem
+// janela nenhuma e ficava PENDURADO - aconteceu duas vezes em 17/10, uma delas por dez minutos com
+// processo vivo na maquina do Bruno. A linha "Uso:" do cabecalho existia e nao foi lida, entao o
+// aviso passa a estar onde ninguem escapa: na cara, e saindo na hora.
+// A DETECCAO E PELO argv, nao pelo `require.main`: no processo principal do Electron o
+// `require.main` NAO aponta pra este arquivo mesmo quando ele e o ponto de entrada, entao a guarda
+// escrita assim nao disparava e o processo continuava pendurado - medido aqui, com o mesmo sintoma
+// que se queria evitar.
+const souOPontoDeEntrada = process.argv.slice(1).some((a) => String(a).replace(/\\/g, '/').endsWith('src/teste-destaque.js'))
+if (souOPontoDeEntrada) {
+  console.log('')
+  console.log('Este arquivo e um MODULO, nao um teste solto: quem roda ele e o app.')
+  console.log('Rode assim:')
+  console.log('')
+  console.log('  npm run teste-destaque')
+  console.log('  (ou, na mao:  SW_JANELA=1 npx electron .)')
+  console.log('')
+  try { require('electron').app.exit(2) } catch (_) { process.exit(2) }
+}
