@@ -33,20 +33,33 @@ let tipoFiltro = ''          // '' = todos
 let favoritos = {}
 let fechadas = {}            // seções recolhidas, por tipo
 let aberto = ''              // prévia aberta: 'item:<id>' ou 'funil:<id>'
-let ocupado = false
-let pararPedido = false
 let ultimoFone = ''
-let alvoFone = ''        // de quem e o disparo em andamento (o painel e um so pra todos os numeros)
-let alvoNome = ''
-let alvoNkAtual = ''
-// So carimba quando o painel JA TROCOU de numero. Com o vendedor parado no mesmo numero, dizer
-// "para Fulano" em todo passo e ruido; depois de trocar, nao dizer e mentira.
-const paraQuem = () => (alvoNkAtual && estadoWa.nk && alvoNkAtual !== estadoWa.nk && (alvoNome || alvoFone))
-  ? ' para ' + (alvoNome || alvoFone) : ''
+// QUEM ESTA DISPARANDO AGORA sai da FILA, nao de um global. Eram tres variaveis de modulo
+// (`ocupado`, `alvoNkAtual`, `alvoNome`/`alvoFone`) e elas so faziam sentido enquanto o app inteiro
+// rodava UM funil por vez. Com um consumidor por numero, "o disparo em andamento" nao existe mais
+// no singular: existe um por numero.
+// A FILA FICA DECLARADA AQUI EM CIMA, antes de qualquer funcao que a leia. Ela morava junto do
+// consumidor, la embaixo, e as funcoes acima sao `const` - ou seja, nao sobem. Foi a terceira vez
+// que ordem de declaracao mordeu este projeto; `node --check` nao pega, quem pega e abrir a tela.
+let fila = []
+const rodandoAgora = () => fila.filter((j) => j.rodando)
+const rodandoNoNk = (nk) => fila.find((j) => j.rodando && String(j.nk || '') === String(nk || '')) || null
+const ocupadoAqui = () => !!rodandoNoNk(estadoWa.nk)
+// So carimba quando o disparo e de OUTRO numero. Com o vendedor parado no mesmo numero, dizer
+// "para Fulano" em todo passo e ruido; com ele noutro numero, nao dizer e mentira.
+const paraQuem = (job) => (job && job.nk && estadoWa.nk && job.nk !== estadoWa.nk && (job.nome || job.fone))
+  ? ' para ' + (job.nome || formata(job.fone)) : ''
+// O RODAPE E UM SO E OS DISPAROS SAO VARIOS. Quem escreve nele e o disparo do numero que esta NA
+// TELA; os outros aparecem na pilha, que mostra um por linha. Sem esta regra, dois funis em
+// paralelo brigam pela mesma linha de texto e o vendedor le o progresso de um achando que e do
+// outro. ERRO e excecao: erro de qualquer numero aparece, com o nome de quem era, porque perder um
+// funil calado e pior que uma linha fora de lugar.
+const dizDoJob = (job, txt, pct, segura) => { if (!job.nk || !estadoWa.nk || job.nk === estadoWa.nk) rodape(txt, pct, segura) }
 let estadoWa = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '' }
 // O QUE ESTA SAINDO NOS NUMEROS ABERTOS (a "pilha de disparos" que o Bruno perguntou se ja existia;
-// nao existia). Hoje da 0 ou 1 porque o painel roda UM funil por vez no app inteiro - a trava
-// `ocupado`. Fica como lista de proposito: no dia em que o disparo for por numero, a tela ja serve.
+// nao existia). Ela nasceu como LISTA de proposito, prevendo o dia em que o disparo fosse por
+// numero - e esse dia chegou em 17/10/2026: agora da mesmo mais de um ao mesmo tempo, um por
+// numero aberto, e cada linha e um funil diferente saindo por um chip diferente.
 
 
 try { favoritos = JSON.parse(localStorage.getItem('sw_favs') || '{}') } catch { favoritos = {} }
@@ -126,7 +139,9 @@ function ligaFaixa(corpo) {
       const j = fila.find((x) => x.id === id)
       if (!j) return
       if (j.rodando) {
-        pararPedido = true
+        // SO ESTE. Era uma bandeirinha global: com dois funis em paralelo, clicar no X de um
+        // pararia os dois, e o segundo morreria sem ninguem ter pedido.
+        j.parar = true
         try { window.swp.parar(j.nk, true) } catch (_) { /* o laco para do mesmo jeito */ }
       } else {
         fila = fila.filter((x) => x.id !== id)
@@ -1482,7 +1497,9 @@ function ligaPedidos(corpo) {
       const j = fila.find((x) => x.id === id)
       if (!j) return
       if (j.rodando) {
-        pararPedido = true
+        // SO ESTE. Era uma bandeirinha global: com dois funis em paralelo, clicar no X de um
+        // pararia os dois, e o segundo morreria sem ninguem ter pedido.
+        j.parar = true
         try { window.swp.parar(j.nk, true) } catch (_) { /* o laco para do mesmo jeito */ }
       } else {
         fila = fila.filter((x) => x.id !== id)
@@ -1941,9 +1958,7 @@ function disparaFunil(id) {
 //
 // Cada job carrega o alvo CONGELADO do clique. Trocar de conversa pra disparar o proximo nao mexe
 // no que ja esta na fila: quem entrou pro Fulano continua indo pro Fulano.
-let fila = []
 let jobSeq = 0
-let consumindo = false
 
 // O BOTAO DO CATALOGO NAO MOSTRA MAIS RODINHA (16/10/2026, segunda rodada da fila). Ele mostrava
 // enquanto aquele funil estivesse na fila, e o Bruno leu isso como proibicao: "voce bloqueou os
@@ -2009,32 +2024,52 @@ async function enfileira(lista, marca, rotulo) {
   consome()
 }
 
-async function consome() {
-  if (consumindo) return
-  consumindo = true
-  while (fila.length) {
-    const job = fila[0]
-    job.rodando = true
-    pararPedido = false
-    desenha()
-    await rodaJob(job)
-    // SAI DA FILA DEPOIS DE RODAR, nunca antes: enquanto ele esta na posicao 0 e `rodando`, a pilha
-    // mostra ele como o que esta saindo agora. Tirar antes faria sumir da tela no meio do envio.
-    fila = fila.filter((j) => j.id !== job.id)
-    desenha()
+const consumindoNk = new Set()
+
+function consome() {
+  // UM CONSUMIDOR POR NUMERO. Acorda um pra cada numero que tem trabalho e ainda nao tem quem
+  // consuma. Dois numeros disparam ao mesmo tempo; dois disparos do MESMO numero nunca, senao as
+  // mensagens de dois funis se intercalam na mesma conversa.
+  for (const job of fila) {
+    const nk = String(job.nk || '')
+    if (consumindoNk.has(nk)) continue
+    consumindoNk.add(nk)
+    consomeNk(nk)
   }
-  consumindo = false
-  ocupado = false
-  alvoNkAtual = ''
-  setTimeout(() => { if (!fila.length) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
+}
+
+async function consomeNk(nk) {
+  try {
+    for (;;) {
+      // SEMPRE O PRIMEIRO DAQUELE NUMERO: a fila esta ordenada por senha, entao isto preserva a
+      // ordem dos cliques dentro do numero, que e a regra dele.
+      const job = fila.find((j) => String(j.nk || '') === nk && !j.rodando)
+      if (!job) break
+      job.rodando = true
+      job.parar = false
+      desenha()
+      // JOB QUE ESTOURA NAO PODE FICAR NA FILA. Sem este try, um erro inesperado dentro do rodaJob
+      // deixaria o job marcado como `rodando` pra sempre: linha presa na pilha com a rodinha
+      // girando, e o numero travado porque o consumidor morreu antes de tirar ele dali.
+      try { await rodaJob(job) }
+      catch (e) { rodape('o funil parou: ' + humano((e && e.message) || e), null, true) }
+      // SAI DA FILA DEPOIS DE RODAR, nunca antes: enquanto ele esta `rodando`, a pilha mostra ele
+      // como o que esta saindo agora. Tirar antes faria sumir da tela no meio do envio.
+      fila = fila.filter((j) => j.id !== job.id)
+      desenha()
+    }
+  } finally {
+    // SOLTA O NUMERO MESMO SE O JOB ESTOUROU. Sem o finally, um erro inesperado deixaria o numero
+    // marcado como ocupado pra sempre e nenhum funil dele sairia mais, sem erro na tela.
+    consumindoNk.delete(nk)
+    if (!fila.length) {
+      setTimeout(() => { if (!fila.length) rodape(estadoWa.autenticado ? 'pronto' : 'leia o QR no celular') }, 2500)
+    }
+  }
 }
 
 async function rodaJob(job) {
   const lista = job.lista
-  alvoFone = job.fone ? formata(job.fone) : ''
-  alvoNome = job.nome || ''
-  alvoNkAtual = job.nk
-  ocupado = true
   // A hibernacao por memoria nao pode fechar quem esta disparando no meio do funil. O mesmo aviso
   // carimba o que esta saindo, pra quem olhar o processo principal ver nome e passo e nao o padrao.
   const avisa = (passo) => {
@@ -2045,10 +2080,10 @@ async function rodaJob(job) {
   // Zera a bandeirinha de parar da pagina: um Parar do job anterior cancelaria o primeiro item
   // deste sem ninguem entender por que.
   try { window.swp.parar(job.nk, false) } catch (_) { /* ok */ }
-  $('parar').style.display = lista.length > 1 ? 'inline' : 'none'
+  mostraParar()
 
   for (let i = 0; i < lista.length; i++) {
-    if (pararPedido) { rodape('parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
+    if (job.parar) { dizDoJob(job, 'parado no item ' + (i + 1) + ' de ' + lista.length, null, true); break }
     const it = lista[i]
     const de = lista.length > 1 ? ' ' + (i + 1) + ' de ' + lista.length : ''
     job.passo = i + 1
@@ -2060,15 +2095,17 @@ async function rodaJob(job) {
     // Esperar dos dois lados SOMA - passo de 8s vira 16s -, e essa soma ja voltou tres vezes por
     // caminhos diferentes. Ha um teste cronometrando o primeiro envio por causa disso.
     const pausa = Math.min(120, Math.max(0, Number(it.pausa) || 0))
-    if (pausa > 0) rodape(((it.kind === 'audio') ? 'gravando' : 'digitando') + de + paraQuem(), pct)
-    else rodape((lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem() + (lista.length > 1 ? '' : '...'), pct)
+    if (pausa > 0) dizDoJob(job, ((it.kind === 'audio') ? 'gravando' : 'digitando') + de + paraQuem(job), pct)
+    else dizDoJob(job, (lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem(job) + (lista.length > 1 ? '' : '...'), pct)
     const r = await window.swp.manda(job.nk, job.alvo, it)
     if (!r || !r.ok) {
       try { window.swp.disparo(job.nk, false) } catch (_) { /* ok */ }
-      $('parar').style.display = 'none'
+      mostraParar()
       const feitos = i
       // O ERRO FICA NA TELA e a fila SEGUE. Parar a fila inteira porque um lead deu erro faria o
       // vendedor perder os outros disparos que ele ja tinha mandado enfileirar.
+      // ERRO APARECE SEMPRE, venha de qual numero vier, com o nome de quem era: funil que morre
+      // calado num numero que nao esta na tela e venda perdida sem ninguem saber.
       rodape((lista.length > 1
         ? 'parou no item ' + (i + 1) + ' de ' + lista.length + (feitos ? ', os ' + feitos + ' primeiros já foram' : '')
         : 'não enviou') + (job.nome ? ' para ' + job.nome : '') + ': ' + humano((r && r.erro) || 'sem resposta'), null, true)
@@ -2076,16 +2113,27 @@ async function rodaJob(job) {
     }
   }
   try { window.swp.disparo(job.nk, false) } catch (_) { /* ok */ }
-  $('parar').style.display = 'none'
-  if (!pararPedido) rodape('enviado' + (job.nome || alvoFone ? ' para ' + (job.nome || alvoFone) : ''))
+  mostraParar()
+  if (!job.parar) dizDoJob(job, 'enviado' + (job.nome || job.fone ? ' para ' + (job.nome || formata(job.fone)) : ''))
+}
+
+// O LINK "PARAR" E DO NUMERO QUE ESTA NA TELA. Ele era um so pro app inteiro porque so havia um
+// disparo por vez; com varios, parar o funil de um numero olhando para outro seria parar o errado.
+// Entao ele aparece quando o numero da tela tem funil de mais de um item rodando, e some fora disso.
+function mostraParar() {
+  const j = rodandoNoNk(estadoWa.nk)
+  const el = $('parar')
+  if (el) el.style.display = (j && j.lista && j.lista.length > 1) ? 'inline' : 'none'
 }
 
 // O PARAR AGORA TEM DOIS LADOS: a bandeirinha que a espera DENTRO da pagina confere a cada 400ms,
 // e o laco daqui, que decide se vai pro proximo item. Sem o primeiro, clicar Parar no meio de uma
 // pausa de 60s so teria efeito quando ela acabasse.
 $('parar').onclick = () => {
-  pararPedido = true
-  try { window.swp.parar(alvoNkAtual || estadoWa.nk || '', true) } catch (_) { /* o laco para do mesmo jeito */ }
+  const j = rodandoNoNk(estadoWa.nk)
+  if (!j) return
+  j.parar = true
+  try { window.swp.parar(j.nk || estadoWa.nk || '', true) } catch (_) { /* o laco para do mesmo jeito */ }
 }
 $('fechar').onclick = () => window.swp.fechar()
 $('recarregar').onclick = () => { rodape('recarregando...'); window.swp.recarregar() }
@@ -2194,10 +2242,16 @@ async function pulso() {
     av.style.display = 'block'
   } else { av.style.display = 'none' }
 
-  if (!ocupado) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
+  // OCUPADO E DO NUMERO DA TELA, nao do app: com um consumidor por numero, o painel pode estar
+  // livre aqui e disparando em dois outros numeros ao mesmo tempo.
+  if (!ocupadoAqui()) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
   // FUNIL NOUTRO NUMERO. Sem esta linha, trocar de numero no meio do funil deixava todos os botoes
   // cinzas sem nenhuma explicacao: o vendedor le como painel travado.
-  else if (alvoNkAtual && estadoWa.nk && alvoNkAtual !== estadoWa.nk) $('rod').title = 'O funil está rodando em outro número'
+  const noutros = rodandoAgora().filter((j) => j.nk && estadoWa.nk && j.nk !== estadoWa.nk)
+  if (noutros.length) $('rod').title = noutros.length > 1
+    ? 'Tem funil rodando em outros ' + noutros.length + ' números'
+    : 'O funil está rodando em outro número'
+  mostraParar()
   // Só redesenha quando o botão de enviar muda de estado: redesenhar a cada pulso apagaria a
   // seleção de texto e piscaria a lista.
   const agora = podeEnviar()

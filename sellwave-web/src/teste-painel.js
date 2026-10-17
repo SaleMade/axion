@@ -924,6 +924,91 @@ app.whenReady().then(async () => {
 
 
 
+  // ══ DOIS NUMEROS DISPARAM AO MESMO TEMPO ════════════════════════════
+  //
+  // A PERGUNTA DO BRUNO, 17/10/2026: "vou imaginar que estou disparando funis num numero, troco pra
+  // outro e mando um funil pra outro lead. Quero saber se vao ser disparados simultaneamente. O
+  // correto e que sim: cada WhatsApp tem a sua lista de disparos e a sua individualidade."
+  //
+  // NAO ERAM. Era uma fila com UM consumidor pro app inteiro, entao o funil do numero B so comecava
+  // depois que TODOS os de A terminassem. O envio em si sempre esteve certo (cada job carrega o nk
+  // e o main.js roteia pra view daquele numero); o defeito era a espera.
+  //
+  // COMO ESTE TESTE PROVA: o duble do `manda` demora 1,2s DE PROPOSITO e carimba a hora de cada
+  // chamada. Com fila unica, o primeiro `manda` do numero B so apareceria depois do ultimo de A.
+  // Com fila por numero, os dois primeiros saem quase juntos. A conferencia e na DISTANCIA entre
+  // eles, nao em "aconteceu": contar chamada nao distingue paralelo de rapido.
+  await js('(() => { fila = []; window.__ver().length = 0; "ok" })()').catch(() => {})
+  await espera(200)
+  // numero A, dois leads
+  await js('(() => { window.__trocaConversa("5511911111111", "Lead A1", "11111111") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(120)
+  // numero B, outro WhatsApp: o vendedor trocou de numero na coluna da esquerda
+  await js('(() => { window.__trocaConversa("5511922222222", "Lead B1", "22222222") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(900)
+
+  const paralelo = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "manda").map(c => ({ nk: String(c.args[0] || ""), t: c.t })))'))
+  const pA = paralelo.find((x) => x.nk === '11111111')
+  const pB = paralelo.find((x) => x.nk === '22222222')
+  conta('os dois numeros comecam a disparar, nao so o primeiro',
+    !!pA && !!pB, JSON.stringify(paralelo.map((x) => x.nk)))
+  // 1,2s e a duracao de UM envio do duble. Se o B esperasse o A, a distancia seria >= 1200ms.
+  const dist = (pA && pB) ? Math.abs(pB.t - pA.t) : -1
+  conta('e o segundo nao espera o primeiro terminar (distancia bem menor que um envio)',
+    dist >= 0 && dist < 900, dist + 'ms entre o 1o envio de cada numero')
+
+  // E OS DOIS APARECEM NA PILHA AO MESMO TEMPO, cada um com o seu nome: a pilha nasceu como lista
+  // justamente prevendo este dia, e agora ela mostra mesmo mais de um rodando.
+  const pilhaDupla = await js('(() => { const l = [...document.querySelectorAll(".saindo .item-env")];'
+    + ' return { linhas: l.length, rodando: document.querySelectorAll(".saindo .item-env .roda").length } })()')
+  conta('a pilha mostra os dois rodando ao mesmo tempo',
+    pilhaDupla.rodando >= 2, JSON.stringify(pilhaDupla))
+
+  // DENTRO DO MESMO NUMERO CONTINUA UM POR VEZ. Dois funis a mesma conversa em paralelo
+  // intercalariam as mensagens no meio do atendimento, que e pior que esperar.
+  await js('(() => { fila = []; window.__ver().length = 0; "ok" })()').catch(() => {})
+  await espera(1400)
+  await js('(() => { window.__trocaConversa("5511933333333", "Lead C1", "33333333") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(100)
+  await js('(() => { window.__trocaConversa("5511944444444", "Lead C2", "33333333") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(500)
+  const mesmoNk = await js('(() => ({ rodando: document.querySelectorAll(".saindo .item-env .roda").length,'
+    + ' esperando: document.querySelectorAll(".saindo .item-env .pt-fila").length }))()')
+  conta('dois disparos do MESMO numero continuam um por vez, nunca intercalados',
+    mesmoNk.rodando === 1 && mesmoNk.esperando >= 1, JSON.stringify(mesmoNk))
+
+  // PARAR UM NAO PARA O OUTRO. A bandeirinha era global: clicar no X de um funil derrubava o outro
+  // sem ninguem ter pedido.
+  await js('(() => { fila = []; window.__ver().length = 0; "ok" })()').catch(() => {})
+  await espera(1400)
+  await js('(() => { window.__trocaConversa("5511955555555", "Lead D", "55555555") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(120)
+  await js('(() => { window.__trocaConversa("5511966666666", "Lead E", "66666666") })()')
+  await espera(200)
+  await clica('[data-funil=s1]')
+  await espera(400)
+  const antesParar = await js('document.querySelectorAll(".saindo .item-env .roda").length')
+  await js('(() => { const b = document.querySelector(".saindo .item-env [data-tirafila]"); if (b) b.click() })()')
+  await espera(300)
+  const depoisParar = await js('(() => ({ rodando: document.querySelectorAll(".saindo .item-env .roda").length,'
+    + ' parou: (window.__ver()).filter(c => c.nome === "parar" && c.args[1] === true).map(c => String(c.args[0])) }))()')
+  conta('parar o funil de um numero nao para o do outro',
+    antesParar >= 2 && depoisParar.parou.length === 1, JSON.stringify({ antesParar, ...depoisParar }))
+  await js('(() => { fila = []; "ok" })()').catch(() => {})
+  await espera(1400)
+  await js('(() => { window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293") })()')
+  await espera(300)
+
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'
     + ' return { classe: e.className, borda: s.borderTopWidth, cor: s.color } })()')

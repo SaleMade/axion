@@ -117,8 +117,12 @@ contextBridge.exposeInMainWorld('swp', {
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
 // Pro teste simular o vendedor clicando noutra conversa enquanto o formulario esta aberto.
-contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome) => {
+contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome, nk) => {
   ESTADO.phone = phone; ESTADO.chatId = phone + '@c.us'; ESTADO.nome = nome
+  // O NUMERO (nk) tambem troca sob comando desde 17/10. Sem isso nao da pra testar o que o Bruno
+  // perguntou: dois WhatsApps DIFERENTES disparando ao mesmo tempo. Com um nk so, os dois jobs
+  // caem no mesmo consumidor e o teste provaria o contrario do que interessa.
+  if (nk) ESTADO.nk = String(nk)
 })
 // Pro teste simular a rede caindo no cadastro.
 contextBridge.exposeInMainWorld('__falhaPedido', (n) => { falharPedido = Number(n) || 0 })
