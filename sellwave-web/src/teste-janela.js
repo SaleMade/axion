@@ -87,6 +87,15 @@ async function rodar() {
   // `>=` e a conta certa porque e ela que distingue o que o teste quer provar: recarregar ZERA o
   // `__batidas` (e apaga o `__marca`), entao contador que nao andou pra tras e a prova de que o
   // documento e o mesmo. Uma batida a mais nao e sintoma de nada.
+  // E O `>=` NAO E FOLGA, E A CONFERENCIA CERTA. A primeira versao exigia `===`, ou seja que o
+  // relogio NAO andasse nada - e o congelamento de timer em janela escondida nao e instantaneo,
+  // entao numa maquina ocupada uma batida escapa durante a mudanca. Medido pela sessao ac: 14 de 15
+  // numa rodada, 15 de 15 em duas seguidas, com o MESMO codigo. Era corrida, nao regressao, e ela
+  // quase culpou o proprio diff por causa disso.
+  //
+  // O que o teste quer provar e que a pagina nao RECARREGOU, e recarregar ZERA o `__batidas` e
+  // apaga o `__marca`. Entao contador que nao andou pra tras e a prova; exigir que ele nao ande e
+  // exigir uma coisa que este ambiente nao garante.
   const relogio = await v.webContents.executeJavaScript('typeof window.__t')
   conta('o relogio de dentro da pagina sobrevive a mudanca (o objeto, nao a contagem)',
     relogio === 'number' && d.batidas >= batidasAntes, relogio + ', batidas ' + batidasAntes + ' -> ' + d.batidas)
