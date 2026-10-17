@@ -674,6 +674,15 @@ app.whenReady().then(async () => {
   // O QUE ELE DISSE QUE GOSTOU FICA: a caneta ambar e o nome ou numero na primeira linha.
   conta('a canetinha ambar continua', !!cartaoRasc && /^rgb\(255, 185, 0\)/.test(cartaoRasc.corIc), cartaoRasc && cartaoRasc.corIc)
   conta('e o nome ou numero continua na primeira linha', !!cartaoRasc && cartaoRasc.t1.trim().length > 0, cartaoRasc && cartaoRasc.t1)
+  // E TUDO ISSO TEM QUE CABER NO PAINEL, que e estreito (300 e poucos pixels). Icone, duas linhas
+  // de texto, botao e lixeira numa faixa so: se passar, o que sai e a lixeira, que e justo o que
+  // ele pediu pra ter.
+  const coube = await js('(() => { const c = document.querySelector(".rasc"); if (!c) return null;'
+    + ' const r = c.getBoundingClientRect(); const l = c.querySelector(".lixo").getBoundingClientRect();'
+    + ' return { larg: Math.round(r.width), fimLixo: Math.round(l.right), dentro: l.right <= r.right + 1,'
+    + ' umaFaixa: Math.round(r.height) < 60 } })()')
+  conta('o cartao inteiro cabe na largura do painel, com a lixeira dentro',
+    !!coube && coube.dentro && coube.umaFaixa, JSON.stringify(coube))
 
   // APAGAR NAO ESPERA O SERVIDOR. Ele sentiu e estava certo: antes era uma gravacao E uma listagem
   // inteira, as duas com a tela parada. Com o duble demorando 700ms, o cartao tem que sumir ANTES.
