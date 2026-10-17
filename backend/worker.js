@@ -10700,6 +10700,11 @@ const SWWEB_BANCO = 'swweb_proxy_banco';
 // Contingencia > Proxies, do lado do seletor que resolve melhor (escolher outra proxy).
 const SWWEB_EXCECOES = 'swweb_excecoes';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
+// OS CELULARES DO LDPLAYER (a central de celulares do PC do Bruno): { "<numkey>": { px_id, aplicado_em } }.
+// Quem grava e o proxy.mjs do "Sale base de Numeros/ldplayer", ao aplicar a proxy no celular, e o excluir
+// tira a entrada do numero. NOME CRU DE PROPOSITO, sem _cfgNome: o painel grava assim, e a central so existe
+// na casa. Passar pelo _cfgNome procuraria "ldplayer_celulares__<mundo>" no afiliado e voltaria vazio calado.
+const LDPLAYER_CELULARES = 'ldplayer_celulares';
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
 // vendedor, entao mudar a regra aqui faz todo numero pedir QR de novo. Nao mexa.
@@ -10984,7 +10989,8 @@ async function handleSwWeb(req, env, path) {
   const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
   const K_EXC = _cfgNome(SWWEB_EXCECOES, mundo);
   const manda = _swwebManda(u);
-  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC]);
+  // a lista dos celulares do LDPlayer vai na MESMA ida ao banco, e so na casa (ver LDPLAYER_CELULARES)
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC, ...(mundo ? [] : [LDPLAYER_CELULARES])]);
   // AS DUAS TRAVAS NAO DESLIGAM MAIS (17/10/2026, pedido do Bruno junto com o banco de proxies).
   //
   // Elas eram interruptores globais, e o problema de interruptor nao e desligar, e RELIGAR: quem
@@ -11658,7 +11664,17 @@ async function handleSwWeb(req, env, path) {
       ate: Number((e && e.ate) || 0),
       por: String((e && e.nome) || ''),
     })).sort((a, b) => a.ate - b.ate);
-    return json({ ok: true, banco: lista, soltas: semBanco, repetidas, repetidasEndereco, config: cfg, garante, liberados });
+    // QUAIS NUMEROS JA TEM CELULAR NO LDPLAYER, e com qual proxy do banco ele foi montado (17/10/2026,
+    // botao "Criar celular" da gaveta). So a casa tem a central; no afiliado vai vazio e `casa` falso, e a
+    // gaveta nem mostra o botao. px = id da proxy do banco que o celular recebeu: diferente da proxy que o
+    // numero tem hoje na dash = o celular ficou com a proxy velha (a tela avisa).
+    const celulares = {};
+    if (!mundo) {
+      for (const [nk, c] of Object.entries(_swwebLerJson(lidas[LDPLAYER_CELULARES], {}))) {
+        if (/^\d{10}$/.test(nk) && c && typeof c === 'object') celulares[nk] = { px: String(c.px_id || ''), em: Number(c.aplicado_em || 0) };
+      }
+    }
+    return json({ ok: true, banco: lista, soltas: semBanco, repetidas, repetidasEndereco, config: cfg, garante, liberados, celulares, casa: !mundo });
   }
 
   // POST /api/swweb/proxy-banco — cria, edita ou apaga uma proxy DO BANCO.
