@@ -11104,7 +11104,18 @@ async function handleSwWeb(req, env, path) {
       // O `lim` e o ACUMULADO DA HORA (aquec.lim), nao o teto do dia: e com ele que o
       // _aplicaFilaLimite decide a vez, igual na distribuicao de verdade.
       const emFila = chips
-        .filter((c) => c && c.num && (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec)))
+        // NUMERO DESLIGADO NAO PEGA A VEZ EM LUGAR NENHUM (16/10/2026, revisao adversarial).
+        //
+        // O _resolvePresselSellers, que e quem distribui de verdade, pula o chip desligado antes de
+        // montar a fila (`if(off && off[nk]) continue`). Esta conta nao pulava, e o buraco ficou
+        // VISIVEL quando o aquecimento passou a entrar aqui com ordem -1: um chip em aquecimento
+        // DESLIGADO entrava na frente, nao tinha batido teto nenhum (0 de 5), levava a vez, e todos
+        // os numeros de producao do vendedor viravam "espera a vez". A barra lateral ficava sem
+        // NENHUM numero verde, com o que de fato recebe escrito "na fila" e o desligado na posicao 1.
+        // O `desligados` ja estava montado 20 linhas acima e so nao era consultado.
+        .filter((c) => c && c.num
+          && (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec))
+          && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)))
         .map((c, i) => {
           const aq = _chipAquecendo(c, _ids.aquec) ? _numDoAquecimento(c) : null;
           return {
