@@ -9386,7 +9386,7 @@ function _botCfgPadrao() {
       ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Resumo do dia', ordenar: 'pedidos',
       mostrar: { detalhe_pedidos: true, valor: false, leads: true, conversao: true, pagos_antigos: true, meta: true, geral: true, aguardando: true, ontem: false, destaque: false, so_com_pedido: false },
       sem_pedido: '', rodape: '',
-      rotulos: { ...BOT_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_pedidos: [], midias: [],
+      rotulos: { ...BOT_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_pedidos: [], midias: [], faixas: [],
     },
     semanal: { ativo: false, dia: 0, hora: '20:30', midias: [] },
     metas: { semanal: {} },
@@ -9411,6 +9411,8 @@ function _botMidias(v) {
   return (Array.isArray(v) ? v : []).map((m) => (m && BOT_MIDIA_RE.test(String(m.key || ''))) ? { key: String(m.key), tipo: _botMidiaTipo(m.key), nome: _botTexto300(m.nome, 80).trim() } : null)
     .filter((m) => m && !vistos.has(m.key) && vistos.add(m.key)).slice(0, 5);
 }
+// A faixa do dia: a MAIOR que o total alcancou e que tem imagem (null = vale a lista padrao).
+const _botFaixaDoDia = (rel, total) => ((rel && Array.isArray(rel.faixas)) ? rel.faixas : []).filter((f) => f && f.n <= (Number(total) || 0) && Array.isArray(f.midias) && f.midias.length).sort((a, b) => b.n - a.n)[0] || null;
 const _botMidia1 = (m) => (m && BOT_MIDIA_RE.test(String(m.key || ''))) ? { key: String(m.key), tipo: _botMidiaTipo(m.key) } : null;
 // Frase e imagem andam juntas: as duas listas sao limpas no mesmo passo (frase vazia e repetida saem,
 // e a imagem dela junto), senao a imagem escorrega pra frase de baixo.
@@ -9492,6 +9494,12 @@ function _botNormaliza(raw, base) {
   for (const k of Object.keys(BOT_ROTULOS_PADRAO)) o.relatorio.rotulos[k] = _botTexto300((k in rot) ? rot[k] : brot[k], 40).trim() || BOT_ROTULOS_PADRAO[k];
   if (o.relatorio.rotulos.aguardando === BOT_AGUARDANDO_VELHO) o.relatorio.rotulos.aguardando = BOT_ROTULOS_PADRAO.aguardando;
   o.relatorio.midias = _botMidias('midias' in rel ? rel.midias : brel.midias);
+  {
+    const fx = Array.isArray(rel.faixas) ? rel.faixas : (Array.isArray(brel.faixas) ? brel.faixas : []);
+    const vistosF = new Set();
+    o.relatorio.faixas = fx.map((f) => ({ n: Math.floor(Number(f && f.n) || 0), midias: _botMidias(f && f.midias) }))
+      .filter((f) => f.n > 0 && f.n <= 9999 && !vistosF.has(f.n) && vistosF.add(f.n)).sort((a, c) => a.n - c.n).slice(0, 10);
+  }
   const sem = (r.semanal && typeof r.semanal === 'object') ? r.semanal : {};
   const bsem = b.semanal || o.semanal;
   o.semanal.ativo = 'ativo' in sem ? !!sem.ativo : !!bsem.ativo;
@@ -10132,7 +10140,9 @@ async function _botDisparar(env, cfg, row, tipo, diaResumo, para, dia) {
   if (!para && g.id && (tipo === 'semanal' ? g.semanal !== false : g.diario !== false)) {
     // IMAGEM OU VIDEO DO RESUMO (17/10/2026): sorteada da lista; texto que nao cabe na legenda (1000)
     // sai logo depois, como mensagem propria (a fila do PC respeita a ordem).
-    const midia = await _botSorteiaMidia(env, tipo === 'semanal' ? 'semanal' : 'resumo', tipo === 'semanal' ? (cfg.semanal && cfg.semanal.midias) : cfg.relatorio.midias);
+    // No diario, a faixa de vendas do dia manda (17/10/2026): bateu 20, a imagem dos 20; bateu 30, a dos 30.
+    const faixa = tipo === 'semanal' ? null : _botFaixaDoDia(cfg.relatorio, dados && dados.geral && dados.geral.pedidos);
+    const midia = await _botSorteiaMidia(env, tipo === 'semanal' ? 'semanal' : (faixa ? 'resumo_' + faixa.n : 'resumo'), tipo === 'semanal' ? (cfg.semanal && cfg.semanal.midias) : (faixa ? faixa.midias : cfg.relatorio.midias));
     if (midia && texto.length > 1000) {
       await _botEntregarGrupo(env, cfg, '', tipo, dia || diaResumo, midia);
       resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, dia || diaResumo));
