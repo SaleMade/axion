@@ -457,9 +457,43 @@ app.on('web-contents-created', (_e, wc) => {
 
 let janela = null
 let casca = null
-let painel = null   // a view do painel de venda, uma so pra todos os numeros
+let painel = null   // a view do painel de venda da janela PRINCIPAL
 const abertos = new Map()   // nk -> { view, nk, numero, carregado, ultimoUso }
-let ativoAgora = ''         // qual numero esta na tela (a hibernacao nunca fecha este)
+let ativoAgora = ''         // qual numero esta na tela DA PRINCIPAL (a hibernacao nunca fecha este)
+
+// ─── JANELAS DESTACADAS (17/10/2026, pedido do Bruno) ────────────────────────────────────────
+//
+// "No AdsPower, quando voce clica em abrir outra instancia, ele abre OUTRO navegador: na tela dele
+// ficam dois navegadores funcionando ao mesmo tempo. No SellWave Web nao funciona assim: toda vez
+// que eu clico em outra instancia, ele TROCA o meu navegador de um WhatsApp para outro."
+//
+// A VIEW SE MUDA DE JANELA, NAO SE DUPLICA. A mesma WebContentsView sai da janela principal e entra
+// numa BaseWindow nova; o documento continua o mesmo, o WhatsApp nao recarrega e o funil que estiver
+// no meio de um disparo nao sente nada. Duas views na MESMA particao seriam conflito de sessao no
+// WhatsApp Web, que e o que o Set `abrindo` ja evita desde 16/10.
+//
+// SEM `parent: janela`: no Windows, janela filha fica SEMPRE na frente da mae e minimiza junto com
+// ela. Isso mataria o pedido, que e justamente poder por um WhatsApp em cada monitor.
+//
+// SEM BARRA DE NUMEROS LA DENTRO: a lista e a torre de controle e e uma so, igual ao AdsPower (o
+// launcher tem a lista; cada navegador aberto e so um navegador).
+const destacados = new Map()   // nk -> { nk, win, painel }
+
+// DE QUAL NUMERO E O PAINEL QUE PERGUNTOU. E a peca central do desenho e o unico lugar que decide:
+// todo handler do painel passa por aqui em vez de ler `ativoAgora`.
+//
+// O BUG QUE ISTO IMPEDE: o painel pergunta "qual conversa esta aberta" tres vezes (no pulso de
+// 1,5s, no clique do funil e no clique do lead). Com dois paineis lendo o mesmo global, o painel da
+// janela destacada mostraria a conversa, o nome e o telefone do numero da janela PRINCIPAL - e o
+// funil disparado la sairia pelo chip errado, pro lead errado, com a atribuicao da venda junto.
+function nkDoPainel(wc) {
+  for (const d of destacados.values()) {
+    if (d.painel && !d.painel.webContents.isDestroyed() && d.painel.webContents === wc) return d.nk
+  }
+  return ativoAgora
+}
+// A JANELA DONA de um numero: a destacada dele, ou a principal.
+const janelaDe = (nk) => { const d = destacados.get(nk); return d ? d.win : janela }
 
 // TRES COLUNAS: barra de numeros | WhatsApp | painel de venda.
 //
@@ -472,30 +506,57 @@ let ativoAgora = ''         // qual numero esta na tela (a hibernacao nunca fech
 let painelLigado = true
 function temPainel() { return painelLigado && !!ativoAgora && abertos.has(ativoAgora) }
 
-// A largura da barra AGORA, que depende de ela estar encolhida ou nao.
-const larguraBarra = () => (config.barraEncolhida ? LARGURA_BARRA_MIN : LARGURA_BARRA)
+// A largura da barra AGORA, que depende de ela estar encolhida ou nao. A janela DESTACADA nao tem
+// barra: la o WhatsApp comeca na borda.
+const larguraBarra = (d) => (d ? 0 : (config.barraEncolhida ? LARGURA_BARRA_MIN : LARGURA_BARRA))
 
-function areaConteudo() {
-  if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
-  const b = janela.getContentBounds()
+// `d` = o registro da janela destacada, ou nada pra janela principal. As tres funcoes abaixo eram
+// de uma janela so: com duas, jogar a geometria da principal numa view que mora na outra fazia ela
+// desenhar deslocada, com a largura da barra de vazio na esquerda.
+function areaConteudo(d) {
+  const win = d ? d.win : janela
+  if (!win || win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 }
+  const b = win.getContentBounds()
   // Painel escondido NAO devolve a largura inteira: deixa a fresta da abinha de voltar.
-  const reserva = temPainel() ? LARGURA_PAINEL : FRESTA_PAINEL
-  const esq = larguraBarra()
-  return { x: esq, y: ALTURA_TOPO, width: Math.max(0, b.width - esq - reserva), height: Math.max(0, b.height - ALTURA_TOPO) }
+  const reserva = (d ? painelLigado : temPainel()) ? LARGURA_PAINEL : FRESTA_PAINEL
+  const esq = larguraBarra(d)
+  const topo = d ? 0 : ALTURA_TOPO
+  return { x: esq, y: topo, width: Math.max(0, b.width - esq - reserva), height: Math.max(0, b.height - topo) }
 }
 
-function areaPainel() {
-  if (!janela) return { x: 0, y: 0, width: 0, height: 0 }
-  const b = janela.getContentBounds()
+function areaPainel(d) {
+  const win = d ? d.win : janela
+  if (!win || win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 }
+  const b = win.getContentBounds()
   return { x: Math.max(0, b.width - LARGURA_PAINEL), y: 0, width: LARGURA_PAINEL, height: b.height }
 }
 
-function reposiciona() {
-  if (!janela) return
+function reposiciona(d) {
+  // SEM ARGUMENTO, REPOSICIONA TUDO. Os chamadores de antes (o resize, o liga/desliga do painel, o
+  // encolher da barra) nao precisam saber que existem duas janelas.
+  if (d === undefined) {
+    reposicionaPrincipal()
+    for (const x of destacados.values()) reposiciona(x)
+    return
+  }
+  if (!d) { reposicionaPrincipal(); return }
+  if (!d.win || d.win.isDestroyed()) return
+  const s = abertos.get(d.nk)
+  if (s && !s.view.webContents.isDestroyed()) s.view.setBounds(areaConteudo(d))
+  if (d.painel && !d.painel.webContents.isDestroyed()) {
+    d.painel.setVisible(painelLigado)
+    if (painelLigado) { d.painel.setBounds(areaPainel(d)); d.win.contentView.addChildView(d.painel) }
+  }
+}
+
+function reposicionaPrincipal() {
+  if (!janela || janela.isDestroyed()) return
   const b = janela.getContentBounds()
   if (casca) casca.setBounds({ x: 0, y: 0, width: b.width, height: b.height })
   const area = areaConteudo()
-  for (const s of abertos.values()) s.view.setBounds(area)
+  // SO AS VIEWS DESTA JANELA. Jogar a geometria da principal na view destacada deixava ela cortada
+  // e deslocada dentro da outra janela.
+  for (const s of abertos.values()) { if (!destacados.has(s.nk)) s.view.setBounds(area) }
   if (painel) {
     const liga = temPainel()
     painel.setVisible(liga)
@@ -710,8 +771,20 @@ function mostra(nk) {
   // escondia TODAS as views e ainda gravava ativoAgora com um numero que nao existe: a tela ficava
   // preta, o painel passava a falar de um numero fechado e o Fechar do painel nao achava nada.
   if (!abertos.has(nk)) { avisaCasca('sw:ativo', { nk: ativoAgora }); return }
+  // NUMERO DESTACADO NAO VEM PRA CA: ele mora na janela dele. Trazer a view de volta aqui a
+  // arrancaria de dentro da outra janela, que ficaria em branco - o vendedor teria duas janelas e
+  // um WhatsApp so. Clicar nele FOCA a janela dele, que e o que ele quer dizer com o clique.
+  const d = destacados.get(nk)
+  if (d) {
+    if (d.win && !d.win.isDestroyed()) { d.win.show(); d.win.focus() }
+    const s = abertos.get(nk)
+    if (s) s.ultimoUso = Date.now()
+    avisaCasca('sw:ativo', { nk: ativoAgora })
+    return
+  }
   const area = areaConteudo()
   for (const [chave, s] of abertos) {
+    if (destacados.has(chave)) continue      // mora noutra janela: nao e irmao desta
     if (chave === nk) {
       s.ultimoUso = Date.now()
       s.view.setVisible(true)
@@ -728,7 +801,7 @@ function mostra(nk) {
 }
 
 function escondeTodos() {
-  for (const s of abertos.values()) s.view.setVisible(false)
+  for (const s of abertos.values()) { if (!destacados.has(s.nk)) s.view.setVisible(false) }
   ativoAgora = ''
   avisaCasca('sw:ativo', { nk: '' })
   reposiciona()
@@ -744,7 +817,9 @@ function escondeTodos() {
 // O PRECO, e e honesto dizer: numero hibernado para de capturar mensagem enquanto estiver fechado.
 // Por isso o teto e configuravel e o padrao e 6, nao 2.
 function hibernaSePrecisar() {
-  const teto = Math.max(1, Number(config.maxAbertos) || 6)
+  // O PISO SOBE COM AS JANELAS: com duas janelas abertas e teto 1, a hibernacao fecharia sem parar
+  // o que o vendedor acabou de abrir.
+  const teto = Math.max(1 + destacados.size, Number(config.maxAbertos) || 6)
   if (abertos.size <= teto) return
   // O NUMERO QUE ESTA DISPARANDO TAMBEM NAO PODE SER FECHADO.
   //
@@ -752,8 +827,10 @@ function hibernaSePrecisar() {
   // ultimoUso mais velho: a hibernacao fechava ele no meio do funil e o painel dizia "o numero foi
   // fechado, o funil parou aqui". Metade do funil ia pro lead e a outra metade nao, por causa de
   // uma decisao de memoria.
+  // NA TELA DE QUALQUER JANELA, e com disparo vivo em QUALQUER numero.
+  const naTela = new Set([ativoAgora, ...destacados.keys()].filter(Boolean))
   const candidatos = [...abertos.values()]
-    .filter((s) => s.nk !== ativoAgora && s.nk !== disparandoNk)
+    .filter((s) => !naTela.has(s.nk) && !disparos.has(s.nk))
     .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
   while (abertos.size > teto && candidatos.length) {
     const s = candidatos.shift()
@@ -781,6 +858,13 @@ function salvaSessao(particao) {
 function fechaNumero(nk) {
   const s = abertos.get(nk)
   if (!s) return
+  // SE ELE ESTAVA DESTACADO, a janela dele vai junto: janela com o WhatsApp fechado seria uma
+  // janela preta sem saida. O `devolve` tira a view de la antes de ela ser destruida.
+  if (destacados.has(nk)) {
+    const d = destacados.get(nk)
+    devolve(nk)
+    try { if (d.win && !d.win.isDestroyed()) d.win.destroy() } catch (_) { /* ok */ }
+  }
   soltaUso(nk)
   salvaSessao(particaoDe(nk))
   try { janela.contentView.removeChildView(s.view) } catch (_) { /* ok */ }
@@ -1386,6 +1470,9 @@ ipcMain.handle('sw:estado', () => ({
   painelLigado: painelLigado,
   barraEncolhida: !!config.barraEncolhida,
   abertos: [...abertos.keys()],
+  // QUAIS ESTAO EM JANELA PROPRIA. A barra precisa disto pra dizer "está na outra janela" em vez de
+  // tentar trazer a view de volta: trazer arrancaria ela de la e a outra janela ficaria em branco.
+  destacados: [...destacados.keys()],
   versao: app.getVersion(),
   // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
   versaoPublicada,
@@ -1438,6 +1525,115 @@ ipcMain.handle('sw:sair', async () => {
 ipcMain.handle('sw:numeros', () => buscaNumeros())
 ipcMain.handle('sw:abrir', (_e, { numero }) => abreNumero(numero))
 ipcMain.handle('sw:mostrar', (_e, { nk }) => { mostra(nk); return { ok: true } })
+
+// O TELEFONE NO TITULO DA JANELA. Gemeo do `bonito` do app.js, escrito aqui porque o processo
+// principal nao compartilha codigo com a pagina - e porque usar o nome de la daria ReferenceError,
+// que `node --check` nao pega e so aparece quando alguem clica no botao.
+function telefoneBonito(n) {
+  const d = String(n || '').replace(/\D/g, '').replace(/^55/, '')
+  if (d.length === 11) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7)
+  if (d.length === 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6)
+  return String(n || '')
+}
+
+// ─── DESTACAR: o numero sai pra uma janela propria ───────────────────────────────────────────
+//
+// A MESMA view muda de mae. Medido pelo levantamento antes de escrever isto: mudar uma
+// WebContentsView de BaseWindow mantem o mesmo processo de renderizacao, o mesmo documento, o
+// setInterval sem pular e a conexao sem furo - uma navegacao e uma carga do inicio ao fim. Ou seja
+// o WhatsApp NAO recarrega e o funil que estiver no meio de um disparo nao sente nada.
+function destaca(nk) {
+  const s = abertos.get(nk)
+  if (!s || s.view.webContents.isDestroyed()) return { ok: false, erro: 'esse número não está aberto' }
+  const ja = destacados.get(nk)
+  if (ja) {
+    // IDEMPOTENTE: destacar duas vezes so traz a janela pra frente. Criar uma segunda view na mesma
+    // particao seria conflito de sessao no WhatsApp Web.
+    if (ja.win && !ja.win.isDestroyed()) { ja.win.show(); ja.win.focus() }
+    return { ok: true, ja: true }
+  }
+
+  const num = (config.numeros || []).find((x) => x && numKey(x.numero) === nk) || {}
+  const b = janela && !janela.isDestroyed() ? janela.getContentBounds() : { width: 1200, height: 860 }
+  const win = new BaseWindow({
+    width: Math.max(912, Math.min(1280, b.width - 120)),
+    height: Math.max(600, b.height - 40),
+    // O PISO E OUTRO AQUI. O 1180 da principal e barra + WhatsApp + painel; sem barra, o piso e o
+    // painel (316) mais o que o WhatsApp precisa pra nao cortar a tela de entrar da Meta (596).
+    minWidth: 912,
+    minHeight: 600,
+    backgroundColor: '#0b0e14',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
+    title: 'SellWave Web · ' + (num.numero ? telefoneBonito(num.numero) : nk),
+    // SEM `parent`: no Windows, janela filha fica SEMPRE na frente da mae e minimiza junto. Isso
+    // mataria o pedido, que e poder deixar um WhatsApp em cada monitor.
+  })
+
+  const d = { nk, win, painel: null }
+  destacados.set(nk, d)
+
+  // A VIEW MUDA DE MAE. Tirar da antiga antes de por na nova, e mandar aparecer DE PROPOSITO: a
+  // visibilidade cola na view, e ela estaria escondida se o vendedor tivesse trocado de numero.
+  try { janela.contentView.removeChildView(s.view) } catch (_) { /* ja pode ter saido */ }
+  win.contentView.addChildView(s.view)
+  s.view.setVisible(true)
+  s.ultimoUso = Date.now()
+  if (ativoAgora === nk) ativoAgora = ''
+
+  // O PAINEL DELA, na MESMA particao do outro: e o que faz o `swmedia`, os favoritos e o roteiro
+  // funcionarem sem nenhum caminho novo.
+  d.painel = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-painel.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      plugins: true,
+      partition: 'persist:sw-painel',
+    },
+  })
+  win.contentView.addChildView(d.painel)
+  d.painel.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))
+
+  win.on('resize', () => reposiciona(d))
+  // FECHAR A JANELA DEVOLVE O NUMERO, NAO O MATA. No `close` os filhos ainda estao vivos e
+  // alcancaveis; depois disso nao estariam.
+  win.on('close', () => devolve(nk))
+  reposiciona(d)
+  win.show()
+  avisaCasca('sw:destacado', { nk })
+  return { ok: true }
+}
+
+// DEVOLVE O NUMERO PRA JANELA PRINCIPAL. Chamado ao fechar a janela destacada e tambem quando o
+// numero e fechado de vez.
+function devolve(nk) {
+  const d = destacados.get(nk)
+  if (!d) return { ok: true }
+  destacados.delete(nk)
+  const s = abertos.get(nk)
+  if (s && !s.view.webContents.isDestroyed()) {
+    try { d.win.contentView.removeChildView(s.view) } catch (_) { /* a janela pode estar indo embora */ }
+    if (janela && !janela.isDestroyed()) {
+      janela.contentView.addChildView(s.view)
+      // ESCONDIDA DE PROPOSITO: a visibilidade cola na view, e ela voltaria aparecendo POR CIMA do
+      // numero que estiver na principal. Quem decide o que aparece la e o `mostra`.
+      s.view.setVisible(false)
+      s.view.setBounds(areaConteudo())
+    }
+  }
+  try { if (d.painel && !d.painel.webContents.isDestroyed()) d.painel.webContents.close() } catch (_) { /* ok */ }
+  d.painel = null
+  avisaCasca('sw:devolvido', { nk })
+  reposicionaPrincipal()
+  return { ok: true }
+}
+
+ipcMain.handle('sw:destacar', (_e, { numero, nk }) => destaca(String(nk || numKey(numero || ''))))
+ipcMain.handle('sw:devolver', (_e, { nk }) => {
+  const d = destacados.get(String(nk || ''))
+  if (d && d.win && !d.win.isDestroyed()) { d.win.close(); return { ok: true } }   // o close chama devolve
+  return devolve(String(nk || ''))
+})
 ipcMain.handle('sw:esconder', () => { escondeTodos(); return { ok: true } })
 ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true } })
 
@@ -1576,10 +1772,14 @@ function viewAtiva() {
 
 const ESTADO_VAZIO = { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', trocado: '', grupo: 0 }
 
-ipcMain.handle('swp:estado-wa', async () => {
-  const wc = viewAtiva()
+ipcMain.handle('swp:estado-wa', async (ev) => {
+  // DE QUEM E ESTE PAINEL. Era `viewAtiva()` + `ativoAgora`, ou seja a resposta vinha do numero que
+  // esta na tela da PRINCIPAL - com dois paineis, o da janela destacada mostraria a conversa, o
+  // nome e o telefone do numero errado, e o funil disparado la sairia pelo chip errado.
+  const nkAtual = nkDoPainel(ev && ev.sender)
+  const sa = nkAtual && abertos.get(nkAtual)
+  const wc = sa && sa.view && !sa.view.webContents.isDestroyed() ? sa.view.webContents : null
   if (!wc) return { ...ESTADO_VAZIO }
-  const nkAtual = ativoAgora
   let e
   try { e = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
   if (!e) return { ...ESTADO_VAZIO }
@@ -1587,7 +1787,7 @@ ipcMain.handle('swp:estado-wa', async () => {
   // Se o vendedor ler o QR do slot (15) 97407-6200 com OUTRO aparelho, a barra continua dizendo
   // (15), o proxy usado continua sendo o do (15) e a captura sai carimbada com o numero de verdade.
   // A dash e o app passam a discordar do que esta acontecendo, em silencio. Melhor gritar.
-  const esperado = ativoAgora
+  const esperado = nkAtual
   const real = numKey(e.eu || '')
   // MANDA O NUMERO CHEIO, nao a chave de 10 digitos: a chave formatada como telefone perde o nono
   // digito e mostra um numero que nao existe.
@@ -1663,23 +1863,43 @@ const disparos = new Map()   // nk -> { funil, passo, total, alvo, inicio }
 let disparandoNk = ''
 
 function avisaPainel(canal, dados) {
+  // TODOS OS PAINEIS, nao so o da principal: a pilha de disparos da janela destacada tambem precisa
+  // saber o que esta saindo nos outros numeros.
   try { if (painel && !painel.webContents.isDestroyed()) painel.webContents.send(canal, dados) } catch (_) { /* ok */ }
+  for (const d of destacados.values()) {
+    try { if (d.painel && !d.painel.webContents.isDestroyed()) d.painel.webContents.send(canal, dados) } catch (_) { /* ok */ }
+  }
 }
 
-ipcMain.handle('swp:disparo', (_e, d) => {
+ipcMain.handle('swp:disparo', (e, d) => {
   const nk = String((d && d.nk) || '')
+  const quem = e && e.sender ? e.sender.id : 0
   if (d && d.ligado) {
+    // UM DONO POR NUMERO. Se outro painel ja esta disparando neste nk, este NAO entra: o laco de
+    // la recebe a recusa e para antes do primeiro item, em vez de intercalar mensagens na conversa
+    // que o outro esta conduzindo. Mesmo painel reentrando no mesmo nk (o passo seguinte do mesmo
+    // funil) passa, que e o caso normal.
+    const dono = disparos.get(nk)
+    if (dono && dono.quem && dono.quem !== quem) {
+      return { ok: false, erro: 'esse número já está disparando na outra janela' }
+    }
     disparos.set(nk, {
       funil: String((d && d.funil) || ''),
       passo: Number(d && d.passo) || 0,
       total: Number(d && d.total) || 0,
       alvo: String((d && d.alvo) || ''),
       inicio: Number(d && d.inicio) || Date.now(),
+      quem,
     })
     disparandoNk = nk
   } else {
-    disparos.delete(nk)
-    if (disparandoNk === nk) disparandoNk = ''
+    // SO O DONO SOLTA. Sem isto, o painel que foi recusado derrubaria o arrendamento do outro ao
+    // terminar o proprio job, e a protecao da hibernacao cairia junto no meio do funil alheio.
+    const dono = disparos.get(nk)
+    if (!dono || !dono.quem || dono.quem === quem) {
+      disparos.delete(nk)
+      if (disparandoNk === nk) disparandoNk = ''
+    }
   }
   avisaPainel('swp:disparos-mudou', { n: disparos.size })
   return { ok: true }
@@ -1690,7 +1910,8 @@ ipcMain.handle('swp:disparos', () => ({
   ok: true,
   itens: [...disparos].map(([nk, d]) => {
     const n = (config.numeros || []).find((x) => x && numKey(x.numero) === nk) || {}
-    return { nk, numero: n.numero || '', dono: n.dono || '', ...d }
+    const { quem, ...resto } = d          // `quem` e id de renderer: nao sai daqui
+    return { nk, numero: n.numero || '', dono: n.dono || '', ...resto }
   }),
 }))
 
@@ -1767,13 +1988,15 @@ ipcMain.handle('swp:painel', (_e, { ligado }) => {
   return { ok: true, ligado: painelLigado }
 })
 
-ipcMain.handle('swp:fechar-ativo', () => {
-  if (ativoAgora) fechaNumero(ativoAgora)
+ipcMain.handle('swp:fechar-ativo', (ev) => {
+  const nk = nkDoPainel(ev && ev.sender)
+  if (nk) fechaNumero(nk)        // se estiver destacado, o fechaNumero derruba a janela junto
   return { ok: true }
 })
-ipcMain.handle('swp:recarregar-ativo', () => {
-  const wc = viewAtiva()
-  if (wc) wc.reload()
+ipcMain.handle('swp:recarregar-ativo', (ev) => {
+  const nk = nkDoPainel(ev && ev.sender)
+  const s = nk && abertos.get(nk)
+  if (s && !s.view.webContents.isDestroyed()) s.view.webContents.reload()
   return { ok: true }
 })
 

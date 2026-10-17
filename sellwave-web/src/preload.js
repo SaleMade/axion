@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('sw', {
   mostrar: (nk) => chamar('sw:mostrar', { nk }),
   esconder: () => chamar('sw:esconder'),
   fechar: (nk) => chamar('sw:fechar', { nk }),
+  // O numero em JANELA PROPRIA (17/10/2026): destacar tira da janela principal, devolver traz.
+  destacar: (numero, nk) => chamar('sw:destacar', { numero, nk }),
+  devolver: (nk) => chamar('sw:devolver', { nk }),
   recarregar: (nk) => chamar('sw:recarregar', { nk }),
   testarProxy: (nk) => chamar('sw:proxy-testar', { nk }),
   trava: (v) => chamar('sw:trava', v),
@@ -29,7 +32,7 @@ contextBridge.exposeInMainWorld('sw', {
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)

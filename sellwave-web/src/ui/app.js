@@ -46,6 +46,11 @@ function bonito(n) {
   return String(n || '')
 }
 
+// A SETINHA PRA FORA, que substitui o icone do WhatsApp na linha do numero que esta em janela
+// propria: o mesmo desenho do botao que destacou, pra ligar as duas coisas na cabeca de quem usa.
+const SETA_FORA = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>'
+
 // O foguinho do aquecimento (lucide `flame`). Icone, nunca emoji: emoji muda de desenho em cada
 // maquina e nao herda a cor do texto.
 const FOGO = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -303,7 +308,12 @@ function linha(n) {
     ? '<span class="pos" style="--pc:' + corEstado + '">' + n.fila.pos + '</span>'
     : '<span class="sinal"' + (corChip ? ' style="background:' + corChip + '"' : '') + '></span>'
 
-  const zap = '<span class="zap' + (aberto ? '' : ' off') + '" title="' + (aberto ? 'Aberto nesta máquina' : 'Fechado') + '">' + ZAP + '</span>'
+  // JANELA PROPRIA: a linha diz onde o numero esta. Sem isso o vendedor clica nele esperando ver a
+  // conversa aqui, a janela de la ganha o foco e ele nao entende por que a tela "nao mudou".
+  const foraDaqui = (estado.destacados || []).includes(nk)
+  const zap = '<span class="zap' + (aberto ? '' : ' off') + (foraDaqui ? ' fora' : '') + '" title="'
+    + (foraDaqui ? 'Está numa janela própria. Clique pra trazer ela pra frente.' : (aberto ? 'Aberto nesta máquina' : 'Fechado'))
+    + '">' + (foraDaqui ? SETA_FORA : ZAP) + '</span>'
   // O DIA DO AQUECIMENTO NA PROPRIA LINHA (16/10/2026, pedido do Bruno: "do lado esquerdo do icone
   // de WhatsApp, o dia em que aquele numero esta de aquecimento - vai ter um foguinho, o dia e o
   // numero do ladinho").
@@ -471,6 +481,8 @@ function telaAbrir(nk) {
   window.sw.esconder()
   ativo = nk
   const ocupado = n.uso && !n.uso.meu ? n.uso : null
+  const destacado = (estado.destacados || []).includes(nk)
+  const jaAberto = (estado.abertos || []).includes(nk)
   palco.innerHTML = ''
     + '<div class="abrir">'
     + '<span class="zapg' + (ocupado ? ' trancado' : '') + '">'
@@ -484,10 +496,36 @@ function telaAbrir(nk) {
         + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
         + 'Quando a outra pessoa fechar, este botão libera sozinho.</div>'
         + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
-      : '<button class="principal" id="ab-abrir" style="margin-top:14px">Abrir WhatsApp</button>')
+      : '<div class="abrir-acoes">'
+        + '<button class="principal" id="ab-abrir">' + (jaAberto ? 'Ver aqui' : 'Abrir WhatsApp') + '</button>'
+        // A SETINHA PRA FORA. Mesma altura e mesmo verde do botao do lado, so quadrado.
+        + '<button class="quadrado" id="ab-destacar" title="' + (destacado
+          ? 'Já está numa janela própria. Clique pra trazer ela pra frente.'
+          : 'Abrir este WhatsApp numa janela própria, pra trabalhar dois ao mesmo tempo') + '">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M14 4h6v6"/><path d="M20 4 11 13"/>'
+        + '<path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>'
+        + '</button></div>'
+        + (destacado ? '<p class="dica">Este número está numa janela própria.</p>' : ''))
     + '</div>'
   const b = $('ab-abrir')
-  if (b) b.onclick = () => abrirDeVerdade(nk)
+  if (b) b.onclick = () => (jaAberto ? abrir(n.numero) : abrirDeVerdade(nk))
+  const dst = $('ab-destacar')
+  if (dst) {
+    dst.onclick = async () => {
+      // ABRE ANTES, SE PRECISAR. Destacar um numero que ainda nao esta aberto nao faria nada: a
+      // view que muda de janela e a que ja existe.
+      if (!estado.abertos.includes(nk)) {
+        dst.disabled = true
+        await abrirDeVerdade(nk)
+        dst.disabled = false
+        if (!estado.abertos.includes(nk)) return    // nao abriu: a propria tela ja disse por que
+      }
+      await window.sw.destacar(n.numero, nk)
+      await recarregaEstado()
+      telaVazia()
+    }
+  }
   desenhaLista()
 }
 
@@ -982,6 +1020,14 @@ window.sw.ao('sw:fechado', async (d) => {
   await recarregaEstado()
   if (d && d.nk === ativo) { ativo = ''; telaVazia() }
 })
+// O NUMERO FOI PRA UMA JANELA PROPRIA, OU VOLTOU. A barra precisa saber: a linha dele passa a
+// dizer que ele esta noutra janela, e clicar nela foca aquela janela em vez de tentar trazer a view
+// de volta (trazer arrancaria ela de la e a outra janela ficaria em branco).
+window.sw.ao('sw:destacado', async (d) => {
+  await recarregaEstado()
+  if (d && d.nk === ativo) { ativo = ''; telaVazia() }
+})
+window.sw.ao('sw:devolvido', async () => { await recarregaEstado() })
 window.sw.ao('sw:versao', (d) => avisaVersao(d))
 // Agente novo baixado: vale ao recarregar a pagina do numero, que e o botao que ja existe no
 // painel. Sem fechar o app.

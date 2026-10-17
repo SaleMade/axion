@@ -13,7 +13,8 @@
     "build": "electron-builder --win --x64",
     "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js",
     "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js",
-    "icone": "node --check src/icone.js && electron src/icone.js"
+    "icone": "node --check src/icone.js && electron src/icone.js",
+    "teste-janela": "node --check src/teste-janela.js && electron src/teste-janela.js"
   },
   "devDependencies": {
     "electron": "44.7.2",

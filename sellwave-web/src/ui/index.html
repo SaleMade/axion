@@ -168,6 +168,9 @@
     border: 1px solid rgba(245, 158, 11, .3); }
   .num .sub .aq svg { flex: 0 0 10px; }
   .num .sub .zap.off { color: #4b5566; }
+  /* JANELA PROPRIA: a setinha no lugar do icone do WhatsApp, em verde cheio, pra dizer "ele esta
+     vivo, so nao esta nesta janela". */
+  .num .sub .zap.fora { color: var(--verde); }
   .num .sub .alerta { color: var(--ambar); display: inline-flex; }
   .num .sub .trancado { color: #f0506a; display: inline-flex; }
 
@@ -297,6 +300,15 @@
   .abrir .de { font-size: 13px; color: var(--apagado); }
   .abrir .dica { font-size: 12px; color: var(--apagado); max-width: 320px; margin: 8px 0 10px; }
   .abrir .principal { min-width: 180px; }
+  /* O BOTAO DA SETINHA, do lado do Abrir WhatsApp (17/10/2026): "um botaozinho do lado, com a
+     setinha mirando para a parte superior direita, destacadinho tambem, mais ou menos do mesmo
+     tamanho, quadrado e verdinho". Mesma cor e mesma altura do vizinho, so quadrado. */
+  .abrir-acoes { display: flex; align-items: stretch; gap: 8px; margin-top: 14px; }
+  .quadrado { width: 42px; border-radius: 9px; background: var(--verde); color: #04120b;
+    display: grid; place-items: center; flex: 0 0 42px; }
+  .quadrado svg { width: 18px; height: 18px; }
+  .quadrado:hover { filter: brightness(1.07); }
+  .quadrado:disabled { opacity: .5; cursor: default; }
 
   .vazio .icone { color: #2c3443; margin-bottom: 14px; display: flex; justify-content: center; }
   .vazio h2 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
