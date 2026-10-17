@@ -15144,8 +15144,10 @@ async function resolveApiNumber(env, opts = {}) {
 }
 
 // O at_id e de uma PESSOA ativa? (chip numa coluna da Contingencia tem at = 'ccol_*', que nao e gente).
-// Cache de 5 min por isolate. Banco fora do ar: responde sim, pra nao trocar o dono por causa de uma
-// leitura falha (e o mesmo dono que o heartbeat ja usa).
+// Cache de 5 min por isolate. QUAL LADO, DE PROPOSITO: coluna ('ccol_*') e vazio NUNCA passam, nem com o
+// banco fora, porque isso se decide sem banco. So o id com cara de usuario depende da consulta, e com
+// o banco fora ele PASSA: errar pro lado de manter o dono do numero (o mesmo que o heartbeat usa) e mais
+// barato que jogar o lead pro login de quem abriu por causa de uma leitura que falhou.
 const _usuarioAtivoCache = new Map();
 async function _ehUsuarioAtivo(env, atId) {
   const k = String(atId || '');
