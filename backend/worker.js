@@ -5868,7 +5868,12 @@ function _plPedidoDoLead(l) {
   const reais = (n) => Number(n || 0).toFixed(2).replace('.', ',');
   const problemas = [];
   const nome = String((l && l.nome) || '').trim().replace(/\s+/g, ' ');
-  if (nome.split(' ').filter((x) => x.length > 1).length < 2) problemas.push('Nome incompleto');
+  // A MENSAGEM TEM QUE DIZER O QUE FAZER (16/10/2026): a rodada de aceite acontece de madrugada,
+  // e card recusado as 4h fica parado ate alguem abrir a tela. "Nome incompleto" manda procurar;
+  // com o valor que chegou, da pra consertar sem abrir o cadastro.
+  if (nome.split(' ').filter((x) => x.length > 1).length < 2) {
+    problemas.push('Nome incompleto: a plataforma exige nome e sobrenome' + (nome ? ' (veio "' + nome + '")' : ' (veio vazio)'));
+  }
   const cpf = dig(l && l.cpf);
   if (!_cpfValido(cpf)) problemas.push('CPF inválido');
   let tel = dig(l && l.wa);
