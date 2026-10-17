@@ -387,9 +387,24 @@
         try { var so = msg.senderObj || msg.sender; push(so && (so.id || (so.attributes && so.attributes.id))); push(so && so.phoneNumber) } catch (_) { /* ok */ }
         try { push(msg.author) } catch (_) { /* ok */ }
       }
-      try { var c = W && W.contact && W.contact.get ? W.contact.get(p.ser) : null; if (c) { push(c.id || (c.attributes && c.attributes.id)); push(c.phoneNumber || (c.attributes && c.attributes.phoneNumber)) } } catch (_) { /* ok */ }
+      // O CONTATO VEM DO ContactStore, QUE E SINCRONO. O `W.contact.get` e async (medido no motor:
+      // `t.get=async function(e){...return o.ContactStore.get(t)}`), entao chamar sem await
+      // devolvia uma Promise e `promise.phoneNumber` era sempre undefined - o candidato que mais
+      // deveria resolver nunca entrava na lista. Esta funcao e sincrona de proposito (ela roda
+      // dentro do handler de mensagem nova), entao quem serve aqui e o Store.
+      try {
+        var CS = W && W.whatsapp && W.whatsapp.ContactStore
+        var c = CS && CS.get ? CS.get(p.ser) : null
+        if (c) { push(c.id || (c.attributes && c.attributes.id)); push(c.phoneNumber || (c.attributes && c.attributes.phoneNumber)) }
+      } catch (_) { /* ok */ }
       try { var ch = W && W.chat && W.chat.get ? W.chat.get(p.ser) : null; var cc = ch && ch.contact; if (cc) { push(cc.id || (cc.attributes && cc.attributes.id)); push(cc.phoneNumber || (cc.attributes && cc.attributes.phoneNumber)) } } catch (_) { /* ok */ }
-      try { var LU = W && W.whatsapp && (W.whatsapp.LidUtils || W.whatsapp.functions); if (LU && LU.getPhoneNumberForLid) push(LU.getPhoneNumberForLid(wid)) } catch (_) { /* ok */ }
+      // O CACHE DE LID DO PROPRIO MOTOR. E o que o WhatsApp usa internamente pra achar o telefone
+      // de um @lid, e devolve sincrono. Trocou a linha do `LidUtils.getPhoneNumberForLid`, que o
+      // motor NAO TEM (zero ocorrencias no arquivo de producao) e era codigo morto.
+      try {
+        var LC = W && W.whatsapp && W.whatsapp.lidPnCache
+        if (LC && LC.getPhoneNumber) push(LC.getPhoneNumber(wid))
+      } catch (_) { /* ok */ }
       for (var i = 0; i < cands.length; i++) {
         var cp = partes(cands[i])
         if (cp.digits && !cp.isLid && cp.digits !== meu) return { digits: cp.digits, isLid: false }
@@ -398,11 +413,39 @@
           if (ds.length >= 12 && ds !== meu) return { digits: ds, isLid: false }
         }
       }
+      // A VARREDURA FINAL, que e o que de fato resolve na pratica e faltava aqui: procura um campo
+      // QUALQUER do objeto da mensagem que tenha <digitos>@c.us e nao seja o meu proprio numero.
+      // Copiada do sc-panel.js, que e a versao que roda em producao ha meses - regra do Bruno de
+      // 16/10: quando o sc-panel ja resolveu, o caminho e copiar, nao reinventar.
+      try {
+        var achado = ''
+        Object.keys(msg).forEach(function (k) {
+          try {
+            var v = msg[k]
+            var txt = (v && (v._serialized || (v.id && v.id._serialized))) || (typeof v === 'string' ? v : '')
+            var dg = String(txt).match(/(\d{10,15})@c\.us/)
+            if (dg && dg[1] !== meu && !achado) achado = dg[1]
+          } catch (_) { /* campo estranho: segue */ }
+        })
+        if (achado) return { digits: achado, isLid: false }
+      } catch (_) { /* ok */ }
       return { digits: p.digits, isLid: true }   // não resolveu: marca lid e o worker decide
     } catch (_) { return { digits: '', isLid: false } }
   }
 
-  function capturar(msg) {
+  // Quanto a cifrada espera pela versao legivel, em milissegundos.
+  //
+  // O NUMERO E CONSERVADOR E ESTA SENDO MEDIDO: toda vez que a legivel chega, o agente guarda o
+  // tempo real em `window.__swCifraMs` (e o maior ja visto em `__swCifraMsMax`). Quem for ajustar
+  // isto olha esses dois na maquina do vendedor em vez de chutar de novo. Esperar demais so atrasa
+  // a bolha no inbox; esperar de menos manda o lead sem o codigo, que e o defeito que isto conserta.
+  var ESPERA_CIFRA = 6000
+  var segurados = {}
+  window.__swCifraMs = 0
+  window.__swCifraMsMax = 0
+  window.__swCifraSoltas = 0
+
+  function capturar(msg, solta) {
     try {
       if (!msg) return
       var deMim = !!(msg.fromMe || (msg.id && msg.id.fromMe))
@@ -414,6 +457,34 @@
       var ts = Number(msg.t || msg.timestamp || 0)
       var id = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || ''
       if (!id) id = 'sw_' + (ts || Date.now()) + '_' + pr.digits + '_' + deMim
+
+      // A CIFRADA ESPERA A LEGIVEL (ver o bloco acima). `solta` e a propria espera estourando.
+      var tipoCru = String(msg.type || 'chat').toLowerCase()
+      if (tipoCru === 'ciphertext' && !solta) {
+        if (!segurados[id] && !vistas[id]) {
+          segurados[id] = {
+            msg: msg,
+            em: Date.now(),
+            t: setTimeout(function () {
+              var g = segurados[id]
+              delete segurados[id]
+              if (!g || vistas[id]) return
+              window.__swCifraSoltas++
+              capturar(g.msg, true)       // a legivel nao veio: manda a cifrada mesmo
+            }, ESPERA_CIFRA),
+          }
+        }
+        return
+      }
+      // A LEGIVEL CHEGOU: cancela a espera da cifrada de mesmo id e guarda quanto tempo levou.
+      if (segurados[id]) {
+        var gasto = Date.now() - segurados[id].em
+        window.__swCifraMs = gasto
+        if (gasto > window.__swCifraMsMax) window.__swCifraMsMax = gasto
+        try { clearTimeout(segurados[id].t) } catch (_) { /* ok */ }
+        delete segurados[id]
+      }
+
       if (vistas[id]) return
       vistas[id] = 1
       window.__swVistasN++

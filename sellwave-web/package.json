@@ -15,6 +15,7 @@
     "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js",
     "icone": "node --check src/icone.js && electron src/icone.js",
     "teste-janela": "node --check src/teste-janela.js && electron src/teste-janela.js",
+    "teste-captura": "node --check src/teste-captura.js && electron src/teste-captura.js",
     "teste-destaque": "node --check src/teste-destaque.js && electron ."
   },
   "devDependencies": {
