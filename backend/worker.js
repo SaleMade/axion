@@ -10571,6 +10571,16 @@ const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario,
 // Entao: o banco e a fonte de verdade pra EDITAR, e a atribuicao carrega a copia resolvida mais o
 // `id` de quem a gerou. Editar no banco reescreve as copias (ver _swwebBancoAplica).
 const SWWEB_BANCO = 'swweb_proxy_banco';
+// EXCECAO POR NUMERO, COM HORA PRA MORRER. { "<numkey>": { ate, por, nome } }
+//
+// Ela existe pra substituir o interruptor global "Exigir proxy", e a diferenca entre os dois e a
+// unica coisa que importa aqui: INTERRUPTOR FICA LIGADO. Alguem desliga as 23h pra destravar um
+// numero, resolve o problema, e ninguem lembra de religar - o proximo numero sem proxy vaza e a
+// tela nao mente nem avisa, so esta desligada. A excecao vence sozinha.
+//
+// Ela e POR NUMERO porque o caso real e por numero: "a proxy do 6200 caiu e eu preciso atender
+// agora". Soltar a trava da operacao inteira pra resolver um numero e o que a gente esta tirando.
+const SWWEB_EXCECOES = 'swweb_excecoes';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
@@ -10793,14 +10803,20 @@ async function handleSwWeb(req, env, path) {
     const txt = await _readConfig(env, SWWEB_APP);
     const d = _swwebLerJson(txt, {});
     const origem = new URL(req.url).origin;
-    return new Response(JSON.stringify({
+    // PELO `json()`, NAO POR UM Response NA MAO. Esta rota montava a resposta sozinha e, com ela,
+    // perdia os cabecalhos de CORS que o helper poe - entao o NAVEGADOR nunca conseguiu ler esta
+    // resposta. A tela de Ferramentas > SellWave Web pedia a versao e o browser bloqueava: a
+    // etiqueta da versao simplesmente nunca aparecia, desde que a tela existe (achado em 17/10,
+    // quando a tela passou a DIZER que nao conseguiu ler em vez de ficar calada). O `curl` nunca
+    // viu o problema porque curl ignora CORS - ler pelo terminal nao prova que a pagina le.
+    return json({
       ok: true,
       versao: String(d.versao || ''),
       bytes: Number(d.bytes) || 0,
       publicada_em: Number(d.publicada_em) || 0,
       notas: String(d.notas || ''),
       url: origem + '/api/swweb/instalador',
-    }), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+    });
   }
 
   if (req.method === 'GET' && path === '/api/swweb/instalador') {
@@ -10836,11 +10852,20 @@ async function handleSwWeb(req, env, path) {
   const K_CFG = _cfgNome(SWWEB_CFG, mundo);
   const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
   const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
+  const K_EXC = _cfgNome(SWWEB_EXCECOES, mundo);
   const manda = _swwebManda(u);
-  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO]);
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC]);
   const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[K_CFG], {}) };
   const proxies = _swwebLerJson(lidas[K_PROXIES], {});
   const banco = _swwebLerJson(lidas[K_BANCO], {});
+  // SO AS VIVAS. Excecao vencida nao e excecao, e lixo que confunde quem le a tela - e deixar
+  // vencida no mapa seria o jeito de ela voltar a valer por engano num conserto futuro.
+  const agoraExc = Math.floor(Date.now() / 1000);
+  const excecoes = {};
+  {
+    const cru = _swwebLerJson(lidas[K_EXC], {});
+    for (const [nk, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) > agoraExc) excecoes[nk] = e;
+  }
 
   // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
   // respostas rapidas, funis, audios, e as credenciais de captura.
@@ -11246,6 +11271,8 @@ async function handleSwWeb(req, env, path) {
         aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
+        // Liberado a abrir sem proxy ate quando, se estiver.
+        excecao: excecoes[nk] ? { ate: excecoes[nk].ate, por: String(excecoes[nk].nome || '') } : null,
         // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
         //
         // A tela refazia estas duas contas com os campos crus (`c.st`, `c.em_uso`) e errava nos
@@ -11307,7 +11334,10 @@ async function handleSwWeb(req, env, path) {
       }
     }
     const px = proxies[nk] || null;
-    return json({ ok: true, nk, proxy: px });
+    // A EXCECAO VIAJA JUNTO DO PROXY porque e o app que decide abrir, e ele ja pergunta isto aqui
+    // antes de cada abertura. Mandar em rota separada daria duas idas e uma janela entre elas.
+    const exc = excecoes[nk] || null;
+    return json({ ok: true, nk, proxy: px, excecao: exc ? { ate: exc.ate, por: exc.nome || '' } : null });
   }
 
   // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
@@ -11532,6 +11562,31 @@ async function handleSwWeb(req, env, path) {
     }
     if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, id: novoId, atualizou: mexeu });
+  }
+
+  // POST /api/swweb/proxy-excecao — libera UM numero a abrir sem proxy, por um tempo que acaba.
+  // { nk, horas }  |  { nk, horas: 0 } pra cancelar agora.
+  //
+  // So a direcao: abrir sem proxy e o vendedor saindo pelo IP da casa dele, com o chip. Nao e
+  // escolha de quem atende, e e justamente por isso que ela precisa ser FACIL pra quem manda - se
+  // a saida de emergencia for dificil, alguem desliga a trava inteira e nunca mais religa.
+  if (req.method === 'POST' && path === '/api/swweb/proxy-excecao') {
+    if (!manda) return err('Só a direção libera número sem proxy', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    if (!nk) return err('Falta o número');
+    const horas = Math.max(0, Math.min(24, Number((b && b.horas) || 0)));
+    const cru = _swwebLerJson(lidas[K_EXC], {});
+    if (!horas) { delete cru[nk]; }
+    else {
+      // TETO DE 24 HORAS, e nao e burocracia: excecao de uma semana e um interruptor com outro
+      // nome. O caso real dura o tempo de trocar a proxy.
+      cru[nk] = { ate: agoraExc + Math.round(horas * 3600), por: String(u.id), nome: String(u.name || u.login || '') };
+    }
+    // Limpa as vencidas de passagem: o mapa nao precisa de faxina propria.
+    for (const [k, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) <= agoraExc) delete cru[k];
+    await _writeConfig(env, K_EXC, JSON.stringify(cru));
+    return json({ ok: true, nk, ate: horas ? cru[nk].ate : 0 });
   }
 
   // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
