@@ -21478,6 +21478,7 @@ async function _presselBalancedPick(env, id, sellers){
   //     pagos em 11/09.
   //     NUNCA ESVAZIA A ROLETA: se todos estiverem mudos, segue como estava. Preferir um numero
   //     duvidoso a nenhum, porque sem numero a pagina vira botao morto e o clique ja foi pago.
+  let _mudosFora = [];   // os que a guarda do mudo tirou: voltam se o teto zerar a lista (ver 2c)
   if(avail.length>1){
     try{
       const mudos = await _numerosMudos(env);
@@ -21488,6 +21489,7 @@ async function _presselBalancedPick(env, id, sellers){
       // pra saber se o numero morreu. Quem vigia e o interruptor.
       const vivos = avail.filter(u => u.roleta || !mudos[k8(u.num)]);
       if(vivos.length && vivos.length < avail.length){
+        _mudosFora = avail.filter(u => !vivos.includes(u));
         for(const u of avail) if(mudos[k8(u.num)]) console.log('ROLETA_MUDO_FORA num=' + k8(u.num) + ' visitas=' + mudos[k8(u.num)] + ' sem_mensagem_em_30min');
         avail = vivos;
       }
@@ -21508,7 +21510,17 @@ async function _presselBalancedPick(env, id, sellers){
   if(avail.some(u => u.dist === 'limite')){
     try{
       const lh = await _leadsNovosHojePorNumero(env, dayStart);
-      const r = _aplicaFilaLimite(avail, lh, _brDay());
+      let r = _aplicaFilaLimite(avail, lh, _brDay());
+      // MUDO + TETO NAO PODEM ESVAZIAR A ROLETA JUNTOS (17/10/2026, 364 cliques sem numero): se o teto
+      // zerou a lista e a guarda do mudo tinha tirado alguem, ele volta e a fila e refeita com ele.
+      if(!r.ficam.length && _mudosFora.length){
+        const r2 = _aplicaFilaLimite(avail.concat(_mudosFora), lh, _brDay());
+        if(r2.ficam.length){
+          console.log('ROLETA_MUDO_VOLTA pressel=' + id + ' num=' + r2.ficam.map(u => k8(u.num)).join(',') + ' (o resto bateu o teto)');
+          avail = avail.concat(_mudosFora);
+          r = r2;
+        }
+      }
       if(r.ficam.length){
         _foraLimite = r.bateram.concat(r.esperam);
         for(const u of r.bateram) console.log('ROLETA_LIMITE num=' + k8(u.num) + ' leads=' + (lh[k8(u.num)]||0) + ' limite=' + u.lim);
