@@ -9255,7 +9255,14 @@ const BOT_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos. Agora
 // O NOME DE CADA LINHA DO RESUMO (13/10/2026): o socio quis reescrever as linhas ("tirar esse
 // negocio de pedidos pagos no dia, ou reformular"). Cada linha tem o nome padrao abaixo e pode ser
 // renomeada na tela; liga e desliga continua no relatorio.mostrar.
-const BOT_ROTULOS_PADRAO = { pedidos: 'Pedidos', leads: 'Leads', conversao: 'Conversão', pagos_antigos: 'Pagos hoje (pedidos anteriores)', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', aguardando: 'Aguardando aceite' };
+const BOT_ROTULOS_PADRAO = { pedidos: 'Pedidos', valor: 'Vendido', leads: 'Leads', conversao: 'Conversão', pagos_antigos: 'Pagos hoje (pedidos anteriores)', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', aguardando: 'Pedidos esperando aprovação', destaque: 'Destaque do dia' };
+// "Aguardando aceite" ninguem entendia (17/10/2026): sao os pedidos lancados na mao que a direcao ainda
+// nao aprovou. Quem ficou com o nome antigo gravado (era o padrao) passa pro novo.
+const BOT_AGUARDANDO_VELHO = 'Aguardando aceite';
+const BOT_ORDENAR = ['pedidos', 'nome', 'valor', 'leads'];
+// R$ 1.234,56 (sem depender de Intl no worker).
+const _botBRL = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; const [i, d] = v.toFixed(2).split('.'); return 'R$ ' + i.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + d; };
+const _botValorLead = (l) => (Number(l && l.valor_neg) > 0 ? Number(l.valor_neg) : Number(l && l.vl)) || 0;
 // INCENTIVO (13/10/2026): o time passou X horas sem venda dentro do horario, o bot manda uma frase
 // sorteada no grupo ("E ai, rapaziada?"). A lista nasce com estas e o socio troca do jeito dele.
 const BOT_INCENTIVO_PADRAO = [
@@ -9306,11 +9313,11 @@ function _botCfgPadrao() {
     pessoas: [],
     relatorio: {
       ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Resumo do dia', ordenar: 'pedidos',
-      mostrar: { detalhe_pedidos: true, leads: true, conversao: true, pagos_antigos: true, meta: true, geral: true, aguardando: true, ontem: false },
+      mostrar: { detalhe_pedidos: true, valor: false, leads: true, conversao: true, pagos_antigos: true, meta: true, geral: true, aguardando: true, ontem: false, destaque: false, so_com_pedido: false },
       sem_pedido: '', rodape: '',
-      rotulos: { ...BOT_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_pedidos: [],
+      rotulos: { ...BOT_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_pedidos: [], midias: [],
     },
-    semanal: { ativo: false, dia: 0, hora: '20:30' },
+    semanal: { ativo: false, dia: 0, hora: '20:30', midias: [] },
     metas: { semanal: {} },
     marcos: { ativo: true, para: 'todos', lista: BOT_MARCOS_PADRAO.map((m) => ({ ...m, frases: [m.frase] })) },
     meta_batida: { ativo: true, para: 'todos', frase: BOT_META_FRASE_PADRAO, frases: [BOT_META_FRASE_PADRAO] },
@@ -9388,7 +9395,7 @@ function _botNormaliza(raw, base) {
   const dias = Array.isArray(rel.dias) ? rel.dias : (Array.isArray(brel.dias) ? brel.dias : o.relatorio.dias);
   o.relatorio.dias = [...new Set(dias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
   o.relatorio.titulo = _botTexto300('titulo' in rel ? rel.titulo : brel.titulo, 60).trim() || 'Resumo do dia';
-  o.relatorio.ordenar = ['pedidos', 'nome'].includes(rel.ordenar) ? rel.ordenar : (['pedidos', 'nome'].includes(brel.ordenar) ? brel.ordenar : 'pedidos');
+  o.relatorio.ordenar = BOT_ORDENAR.includes(rel.ordenar) ? rel.ordenar : (BOT_ORDENAR.includes(brel.ordenar) ? brel.ordenar : 'pedidos');
   const mos = (rel.mostrar && typeof rel.mostrar === 'object') ? rel.mostrar : {};
   const bmos = (brel.mostrar && typeof brel.mostrar === 'object') ? brel.mostrar : {};
   for (const k of Object.keys(o.relatorio.mostrar)) o.relatorio.mostrar[k] = (k in mos) ? !!mos[k] : ((k in bmos) ? !!bmos[k] : o.relatorio.mostrar[k]);
@@ -9412,12 +9419,15 @@ function _botNormaliza(raw, base) {
   const brot = (brel.rotulos && typeof brel.rotulos === 'object') ? brel.rotulos : {};
   o.relatorio.rotulos = {};
   for (const k of Object.keys(BOT_ROTULOS_PADRAO)) o.relatorio.rotulos[k] = _botTexto300((k in rot) ? rot[k] : brot[k], 40).trim() || BOT_ROTULOS_PADRAO[k];
+  if (o.relatorio.rotulos.aguardando === BOT_AGUARDANDO_VELHO) o.relatorio.rotulos.aguardando = BOT_ROTULOS_PADRAO.aguardando;
+  o.relatorio.midias = _botMidias('midias' in rel ? rel.midias : brel.midias);
   const sem = (r.semanal && typeof r.semanal === 'object') ? r.semanal : {};
   const bsem = b.semanal || o.semanal;
   o.semanal.ativo = 'ativo' in sem ? !!sem.ativo : !!bsem.ativo;
   const diaOk = (v) => v !== '' && v !== null && v !== undefined && Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 6;
   o.semanal.dia = diaOk(sem.dia) ? Number(sem.dia) : (diaOk(bsem.dia) ? Number(bsem.dia) : 0);
   o.semanal.hora = _botHoraOk(sem.hora) ? sem.hora : (_botHoraOk(bsem.hora) ? bsem.hora : '20:30');
+  o.semanal.midias = _botMidias('midias' in sem ? sem.midias : bsem.midias);
   const metas = (r.metas && typeof r.metas === 'object' && r.metas.semanal && typeof r.metas.semanal === 'object') ? r.metas.semanal : ((b.metas && b.metas.semanal) || {});
   o.metas.semanal = {};
   for (const k of Object.keys(metas)) { const n = Math.floor(Number(metas[k]) || 0); if (n > 0 && n <= 9999) o.metas.semanal[String(k).slice(0, 60)] = n; }
@@ -9661,7 +9671,7 @@ async function _botEquipe(env) {
   const r = await env.DB.prepare("SELECT id, name, role FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') ORDER BY CASE lower(role) WHEN 'atendente' THEN 0 WHEN 'cobrador' THEN 1 WHEN 'diretor' THEN 2 WHEN 'socio' THEN 3 ELSE 4 END, name").all().catch(() => null);
   return ((r && r.results) || []).map((u) => ({ id: String(u.id), nome: String(u.name || u.id), role: String(u.role || '').toLowerCase() }));
 }
-const _botZero = () => ({ pedidos: 0, entrega: 0, antecipados: 0, futuras: 0, leads: 0, conversao: 0, pagos: 0, pagos_antigos: 0, aguardando: 0 });
+const _botZero = () => ({ pedidos: 0, valor: 0, entrega: 0, antecipados: 0, futuras: 0, leads: 0, conversao: 0, pagos: 0, pagos_antigos: 0, aguardando: 0 });
 // OS NUMEROS DO PERIODO, por vendedor e o geral. `tipo` 'diario' (o dia) ou 'semanal' (a semana que
 // contem o dia; na segunda-feira, a semana que acabou de fechar). `fresco` = ler o blob sem cache
 // (o tick dos marcos precisa do estado da mesma versao que ele carimba).
@@ -9697,6 +9707,7 @@ async function _botDados(env, dia, cfg, tipo, fresco) {
     const futura = _botVendaFutura(l);
     if (noPer) {
       v.pedidos++; geral.pedidos++;
+      const _vl = _botValorLead(l); v.valor += _vl; geral.valor += _vl;
       if (futura) { v.futuras++; geral.futuras++; }
       else if (String(l.mod || '') === 'antecipado') { v.antecipados++; geral.antecipados++; }
       else { v.entrega++; geral.entrega++; }
@@ -9760,17 +9771,29 @@ function _botTextoRelatorio(cfg, dados, esc) {
   const quando = semanal ? (_botDataBR(dados.semana.inicio) + ' a ' + _botDataBR(dados.semana.fim)) : (_botDataBR(dados.dia) + ' (' + _botDiaSemana(dados.dia) + ')');
   L.push('*' + titulo + ' · ' + quando + '*');
   if (e.abertura) L.push(_botFrase(e.abertura, { data: _botDataBR(dados.dia) }));
-  const vs = dados.vendedores.slice();
+  let vs = dados.vendedores.slice();
   if (r.ordenar === 'nome') vs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'valor') vs.sort((a, b) => (b.valor - a.valor) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'leads') vs.sort((a, b) => (b.leads - a.leads) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
   else vs.sort((a, b) => (b.pedidos - a.pedidos) || (b.leads - a.leads) || a.nome.localeCompare(b.nome, 'pt-BR'));
   if (!vs.length) { L.push(''); L.push('Nenhum vendedor ativo no cadastro.'); return L.join('\n'); }
   const ninguem = vs.every((v) => v.pedidos === 0);
+  // DESTAQUE: quem fez mais pedidos no periodo (empate: todos). So aparece se alguem vendeu.
+  if (m.destaque && !ninguem) {
+    const top = Math.max(...vs.map((v) => v.pedidos));
+    const quem = vs.filter((v) => v.pedidos === top).map((v) => v.nome);
+    const rotD = semanal && rot.destaque === BOT_ROTULOS_PADRAO.destaque ? 'Destaque da semana' : rot.destaque;
+    L.push(''); L.push('*' + rotD + ':* ' + quem.join(' e ') + ' (' + _botPlural(top, 'pedido', 'pedidos') + ')');
+  }
   if (ninguem && e.sem_pedido) { L.push(''); L.push(e.sem_pedido); }
+  // SO QUEM VENDEU: quem ficou em zero sai da lista (o bloco Geral continua contando todo mundo).
+  if (m.so_com_pedido) vs = vs.filter((v) => v.pedidos > 0);
   const rotPagos = semanal && rot.pagos_antigos === BOT_ROTULOS_PADRAO.pagos_antigos ? 'Pagos na semana (pedidos anteriores)' : rot.pagos_antigos;
   const linhas = (v) => {
     const out = [];
     const partes = m.detalhe_pedidos !== false && v.pedidos ? _botPartesPedido(v) : '';
     out.push(rot.pedidos + ': ' + v.pedidos + (partes ? ' (' + partes + ')' : ''));
+    if (m.valor) out.push(rot.valor + ': ' + _botBRL(v.valor));
     if (m.leads !== false) out.push(rot.leads + ': ' + v.leads + (m.conversao !== false && v.leads ? ' · ' + rot.conversao + ': ' + v.conversao + '%' : ''));
     if (m.pagos_antigos !== false) out.push(rotPagos + ': ' + v.pagos_antigos);
     return out;
@@ -9782,7 +9805,7 @@ function _botTextoRelatorio(cfg, dados, esc) {
     if (m.meta !== false && v.meta > 0) L.push(rot.meta + ': ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' · faltam ' + v.faltam : ' · meta batida'));
     if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(v.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(v.ontem.leads, 'lead', 'leads'));
   });
-  if (m.geral !== false && vs.length > 1) {
+  if (m.geral !== false && (vs.length > 1 || (m.so_com_pedido && dados.vendedores.length > 1))) {
     const g = dados.geral;
     L.push('');
     L.push('*' + rot.geral + '*');
@@ -10035,7 +10058,15 @@ async function _botDisparar(env, cfg, row, tipo, diaResumo, para, dia) {
   const resultados = [];
   // O grupo vai primeiro (e onde o time le) e so no disparo completo: `para` e reenvio pra pessoas certas.
   const g = cfg.grupo || {};
-  if (!para && g.id && (tipo === 'semanal' ? g.semanal !== false : g.diario !== false)) resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, dia || diaResumo));
+  if (!para && g.id && (tipo === 'semanal' ? g.semanal !== false : g.diario !== false)) {
+    // IMAGEM OU VIDEO DO RESUMO (17/10/2026): sorteada da lista; texto que nao cabe na legenda (1000)
+    // sai logo depois, como mensagem propria (a fila do PC respeita a ordem).
+    const midia = await _botSorteiaMidia(env, tipo === 'semanal' ? 'semanal' : 'resumo', tipo === 'semanal' ? (cfg.semanal && cfg.semanal.midias) : cfg.relatorio.midias);
+    if (midia && texto.length > 1000) {
+      await _botEntregarGrupo(env, cfg, '', tipo, dia || diaResumo, midia);
+      resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, dia || diaResumo));
+    } else resultados.push(await _botEntregarGrupo(env, cfg, texto, tipo, dia || diaResumo, midia));
+  }
   resultados.push(...(await _botEnviarLista(env, cfg, row, _botAlvosDe(cfg, para), texto, tipo, dia || diaResumo)));
   return { texto, dados, resultados };
 }
@@ -12079,16 +12110,27 @@ async function handleBotCfgVersoes(req, env) {
   }
   return err('Rota desconhecida', 404);
 }
+let _botPreviaCache = null;   // os numeros do dia (60s): a previa ao vivo pede a cada pausa de digitacao
 async function handleBotWaPreview(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!_botPodeUsar(u)) return err('Sem permissão', 403);
   const url = new URL(req.url);
-  const cfg = await _botCfgLer(env, true);   // sem cache: a previa e a da config que acabou de ser salva
-  const tipo = url.searchParams.get('tipo') === 'semanal' ? 'semanal' : 'diario';
+  const salvo = await _botCfgLer(env, true);   // sem cache: a previa e a da config que acabou de ser salva
+  // PREVIA DO QUE ESTA NA TELA (17/10/2026): POST { tipo, rascunho: { relatorio, semanal, metas } } monta o
+  // texto com o rascunho por cima do salvo, sem gravar nada. As frases sorteadas viram a PRIMEIRA de cada
+  // lista, senao o texto mudaria a cada tecla.
+  let rascunho = null, tipoB = '';
+  if (req.method === 'POST') { try { const b = await req.json(); rascunho = (b && b.rascunho && typeof b.rascunho === 'object') ? b.rascunho : null; tipoB = String((b && b.tipo) || ''); } catch (_) {} }
+  const cfg = rascunho ? _botNormaliza({ relatorio: rascunho.relatorio, semanal: rascunho.semanal, metas: rascunho.metas }, salvo) : salvo;
+  const tipo = (url.searchParams.get('tipo') || tipoB) === 'semanal' ? 'semanal' : 'diario';
   const dia = _botDiaOk(url.searchParams.get('dia')) ? url.searchParams.get('dia') : (tipo === 'diario' ? _botDiaDoResumo(cfg, _brDay()) : _brDay());
-  const dados = await _botDados(env, dia, cfg, tipo);
-  return json({ ok: true, texto: _botTextoRelatorio(cfg, dados), dados });
+  const ch = dia + '|' + tipo + '|' + JSON.stringify(cfg.metas || {});
+  let dados = (_botPreviaCache && _botPreviaCache.ch === ch && Date.now() - _botPreviaCache.t < 60000) ? _botPreviaCache.dados : null;
+  if (!dados) { dados = await _botDados(env, dia, cfg, tipo); _botPreviaCache = { ch, t: Date.now(), dados }; }
+  const r0 = cfg.relatorio;
+  const esc = rascunho ? { abertura: (r0.aberturas || [])[0] || '', rodape: (r0.rodapes || [])[0] || r0.rodape || '', sem_pedido: (r0.sem_pedidos || [])[0] || r0.sem_pedido || '' } : undefined;
+  return json({ ok: true, texto: _botTextoRelatorio(cfg, dados, esc), dados });
 }
 async function handleBotEnviar(req, env) {
   const u = await authUser(req, env);
@@ -27461,7 +27503,7 @@ export default {
       if (path.startsWith('/api/swweb/')) return handleSwWeb(req, env, path);
       // BOT DE WHATSAPP DO TIME (12/10/2026): resumo diario, metas e comemoracoes. Ver o bloco do bot.
       if (path === '/api/bot/config' && (req.method === 'GET' || req.method === 'POST')) return handleBotConfig(req, env);
-      if (req.method === 'GET'    && path === '/api/bot/preview')  return handleBotWaPreview(req, env);
+      if (path === '/api/bot/preview' && (req.method === 'GET' || req.method === 'POST')) return handleBotWaPreview(req, env);   // POST = previa do rascunho, nao grava
       if (req.method === 'POST'   && path === '/api/bot/enviar')   return handleBotEnviar(req, env);
       if (req.method === 'GET'    && path === '/api/bot/log')      return handleBotLog(req, env);
       if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
