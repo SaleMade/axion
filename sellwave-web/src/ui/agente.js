@@ -135,7 +135,12 @@
   // onde o WhatsApp escreve "online", "digitando...", "gravando audio..." e "visto por ultimo hoje
   // as 14:02". Tudo isso tem letra, entao passaria por qualquer filtro de telefone e viraria nome
   // de cliente dentro do pedido. E a mesma familia do incidente do "Dados do perfil".
-  var PRESENCA = /^(online|offline|digitando|gravando( [aá]udio)?|typing|recording|visto por [uú]ltimo\b.*|[uú]ltima vez\b.*|last seen\b.*|aqui para.*|clique aqui.*|click here.*)[.…]*$/i
+  // 16/10: "clique/toque para ..." inteiro entrou. O Bruno viu "clique para mostrar os dados do
+  // contato" dentro do campo NOME do pedido: frase legitima em portugues, com letra, que passou
+  // pelo filtro de telefone E pelo de letra. O campo do pedido deixou de usar o titulo por causa
+  // disso; isto aqui e pra o CABECALHO do painel tambem nao mostrar a interface como se fosse
+  // o nome do cliente.
+  var PRESENCA = /^(online|offline|digitando|gravando( [aá]udio)?|typing|recording|visto por [uú]ltimo\b.*|[uú]ltima vez\b.*|last seen\b.*|aqui para.*|(clique|toque|tap|click)\s+(aqui|para|to)\b.*)[.…]*$/i
 
   // SO TELEFONE TAMBEM NAO E NOME. O minimo de 6 caracteres evita jogar fora apelido curto e
   // legitimo feito de digito (um "2112" e nome ruim, mas e nome).

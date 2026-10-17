@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('swp', {
   // O arquivo vai em bytes crus, sem base64: um video de 9 MB viraria 12 e passaria duas vezes pela
   // memoria. `bytes` e o Uint8Array que a pagina leu do arquivo.
   comprovante: (nome, mime, bytes, lead) => ipcRenderer.invoke('swp:comprovante', { nome, mime, bytes, lead }),
+  // Abre o documento no programa do Windows. So a CHAVE viaja: a pagina nunca ve o endereco da
+  // API, e quem monta a URL e o processo principal.
+  abrirMidia: (chave) => ipcRenderer.invoke('swp:abrir-midia', { chave }),
   // PILHA DE DISPAROS: o que esta saindo nos numeros abertos. Hoje da 0 ou 1 (o painel roda um
   // funil por vez), mas a lista ja vem como lista pro dia em que isso mudar.
   disparos: () => ipcRenderer.invoke('swp:disparos'),

@@ -20,7 +20,16 @@ contextBridge.exposeInMainWorld('swp', {
     messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!' }, { id: 'm2', label: 'Tudo bem?', text: 'Tudo bem?' }],
     // Um funil com pausa DE VERDADE: e com ele que o teste prova que o painel nao espera.
     sequences: [{ id: 's1', label: 'Boas-vindas', items: [{ id: 'm1', sim: 3 }, { id: 'm2', sim: 3 }] }],
-    media: [], mediaBase: '' }),
+    // MIDIA DE VERDADE NO STUB (16/10/2026). Com a lista vazia, a previa de imagem, video,
+    // audio e documento nao era exercitada por teste nenhum - e foi exatamente ali que o Bruno
+    // achou o defeito: os quatro desenhavam o MESMO balao de texto, escrito "[imagem] Formula".
+    media: [
+      { id: 'i1', kind: 'image', label: 'Formula', caption: 'olha a formula', key: 'm/aaa111.png', grp: '' },
+      { id: 'v1', kind: 'video', label: 'Prova: Sr Jose', caption: 'Sr Jose, 1 semana', key: 'm/bbb222.mp4', grp: '' },
+      { id: 'a1', kind: 'audio', label: 'H - 02 Explicacao', caption: '', key: 'm/ccc333.ogg', grp: '' },
+      { id: 'd1', kind: 'document', label: 'Certificado Anvisa', caption: '', key: 'm/ddd444.pdf', grp: '' },
+    ],
+    mediaBase: 'https://exemplo/api/salechat/media/' }),
   lead: reg('lead', { ok: true, achou: true, nome: 'Cliente de Teste', cidade: 'Campinas', uf: 'SP', produto: 'Produto A - 3 Meses', etapa: 'A Enviar', pedidos: 1 }),
   estado: reg('estado', ESTADO),
   // DEMORA DE PROPOSITO. Na vida real a pausa do passo acontece DENTRO desta chamada (a pagina
@@ -43,6 +52,7 @@ contextBridge.exposeInMainWorld('swp', {
     { key: 'k6', label: 'Produto A - 6 Meses', price: 697, prod: 'Produto A' },
   ] }),
   comprovante: reg('comprovante', { ok: true, url: 'https://r2.exemplo/comprovante/print.jpg', mime: 'image/jpeg' }),
+  abrirMidia: reg('abrirMidia', { ok: true }),
   // PODE FALHAR SOB COMANDO. A rede caindo no meio do cadastro e o caso que fazia o app criar
   // DOIS cards do mesmo pedido, e um stub que so responde ok nunca encosta nesse caminho - e a
   // mesma licao do preload que respondia ok pra tudo e escondeu o rascunho quebrado por semanas.

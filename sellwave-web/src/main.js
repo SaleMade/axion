@@ -7,7 +7,32 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net } = require('electron')
+
+// ─── A MIDIA DA PREVIA (16/10/2026) ──────────────────────────────────────────────────────────
+//
+// O painel roda com CSP fechada (`default-src 'none'`), e a previa de um item de midia so
+// conseguia desenhar o rotulo: "[imagem] Formula" num balao de texto, igual pra foto, video e
+// documento. O Bruno: "quando eu cliquei no video deveria aparecer o video, parece apenas uma
+// mensagem".
+//
+// POR QUE NAO E SO AFROUXAR A CSP: a origem da API e configuravel (a dash do afiliado aponta pra
+// outro worker), e CSP em <meta> nao interpola - ficaria uma origem chumbada que quebra no dia em
+// que alguem trocar o apiBase. E `default-src 'none'` e trava de proposito: o painel nao fala com
+// a rede, ponto.
+//
+// POR QUE NAO E DATA URL POR IPC: os videos do funil tem 37 MB. Em base64 viram ~49 MB atravessando
+// o IPC a cada clique, e o painel congela. Medido em 16/10 no acervo real: imagem 581 KB, audio
+// 469 KB, video 37 MB.
+//
+// Entao: um esquema proprio. `swmedia://arq/<chave>` e resolvido AQUI, no processo principal, que
+// busca no mesmo endereco publico que o envio ja usa. A pagina continua sem poder falar com a rede;
+// ela so pede ao app. E o Range passa junto, entao o video abre na hora e deixa arrastar a barra em
+// vez de baixar os 37 MB antes do primeiro quadro.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'swmedia',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+}])
 const path = require('node:path')
 const fs = require('node:fs')
 
@@ -1772,6 +1797,17 @@ ipcMain.handle('swp:tratamentos', async () => {
 // OS BYTES SOBEM DAQUI, nao da tela: o processo principal nao passa por CSP nem por CORS, e o
 // arquivo vai DIRETO pro corpo da requisicao - sem base64, que incharia um video de 9 MB pra 12 e
 // ainda passaria duas vezes pela memoria.
+// ABRE O DOCUMENTO NO PROGRAMA DO WINDOWS. A pagina manda so a CHAVE; quem monta o endereco e
+// aqui, e a mesma conferencia do protocolo swmedia vale: chave que nao e de midia nao abre nada.
+// Sem ela, um `shell.openExternal` com texto vindo da pagina abriria qualquer coisa.
+ipcMain.handle('swp:abrir-midia', async (_e, { chave }) => {
+  const k = String(chave || '')
+  if (!/^m\/[A-Za-z0-9._-]+$/.test(k)) return { ok: false, erro: 'chave inválida' }
+  const base = (roteiro && roteiro.mediaBase) || (String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media/')
+  try { await shell.openExternal(base + k); return { ok: true } }
+  catch (e) { anota('[midia] nao abri ' + k + ': ' + (e && e.message)); return { ok: false, erro: String((e && e.message) || 'não abriu') } }
+})
+
 ipcMain.handle('swp:comprovante', async (_e, { nome, mime, bytes, lead }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
   const tipo = String(mime || '').split(';')[0].trim().toLowerCase()
@@ -1938,6 +1974,28 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 
 app.whenReady().then(() => {
   lerConfig()
+
+  // Resolve swmedia://arq/<chave> buscando no mesmo endereco publico que o envio usa. O `net.fetch`
+  // do Electron sai pela sessao padrao, que esta no buraco negro de proxy - e isso esta certo: a
+  // midia e NOSSA, nao e trafego do numero do cliente, e nao pode sair pelo proxy dele.
+  try {
+    protocol.handle('swmedia', async (req) => {
+      try {
+        const u = new URL(req.url)
+        const chave = decodeURIComponent(u.pathname.replace(/^\//, ''))
+        // So chave de midia. Sem esta linha, qualquer caminho vira um proxy aberto pra API inteira.
+        if (!chave || !/^m\/[A-Za-z0-9._-]+$/.test(chave)) return new Response('', { status: 404 })
+        const base = (roteiro && roteiro.mediaBase) || (String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media/')
+        const cab = {}
+        const range = req.headers.get('range')
+        if (range) cab.range = range            // sem isto o video nao deixa arrastar a barra
+        return await net.fetch(base + chave, { headers: cab })
+      } catch (e) {
+        anota('[midia] ' + (e && e.message))
+        return new Response('', { status: 502 })
+      }
+    })
+  } catch (e) { anota('[midia] nao registrei o swmedia: ' + (e && e.message)) }
   painelLigado = config.painelLigado !== false
   leFila()
 

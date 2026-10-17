@@ -254,14 +254,45 @@ function formatado(txt) {
   return saida
 }
 
+// O ENDERECO DA MIDIA PRA PREVIA. O processo principal resolve `swmedia://arq/<chave>` buscando no
+// mesmo lugar de onde o envio puxa (ver main.js). A pagina nao fala com a rede: ela so pede ao app.
+const urlMidia = (chave) => 'swmedia://arq/' + encodeURIComponent(String(chave || ''))
+
+// A PREVIA MOSTRA A MIDIA, NAO O ROTULO DELA (16/10/2026, pedido do Bruno: "quando eu cliquei no
+// video deveria aparecer o video, parece apenas uma mensagem"). Antes, foto, video e documento
+// viravam todos o mesmo balao de texto escrito "[imagem] Formula" - o vendedor nao tinha como
+// conferir o que ia disparar antes de disparar, que e exatamente pra isso que a previa existe.
+//
+// O DOCUMENTO NAO ABRE AQUI DENTRO de proposito: PDF dentro do painel precisaria de visualizador
+// embutido e de mais um furo na CSP, pra uma coisa que o vendedor olha uma vez. Ele mostra o nome e
+// abre no programa do Windows, que ja sabe ler PDF.
+function corpoDaPrevia(x) {
+  const legenda = String(x.caption || '').trim()
+  const rodape = '<span class="prev-hora">agora</span>'
+  const cap = legenda ? '<div class="prev-cap">' + formatado(legenda) + '</div>' : ''
+  if (x.tipo === 'image') {
+    return '<div class="prev-balao midia"><img class="prev-img" src="' + esc(urlMidia(x.key)) + '" alt="' + esc(x.label) + '">' + cap + rodape + '</div>'
+  }
+  if (x.tipo === 'video') {
+    return '<div class="prev-balao midia"><video class="prev-vid" src="' + esc(urlMidia(x.key)) + '" controls preload="metadata"></video>' + cap + rodape + '</div>'
+  }
+  if (x.tipo === 'audio') {
+    return '<div class="prev-balao midia audio"><audio class="prev-aud" src="' + esc(urlMidia(x.key)) + '" controls preload="metadata"></audio>' + cap + rodape + '</div>'
+  }
+  if (x.tipo === 'document') {
+    return '<div class="prev-balao midia doc">'
+      + '<button class="prev-doc" data-abredoc="' + esc(x.key) + '" title="Abrir no computador">'
+      + svg(TIPOS.document.ic) + '<span>' + esc(x.label) + '</span></button>' + cap + rodape + '</div>'
+  }
+  return '<div class="prev-balao">' + formatado(x.texto || '') + rodape + '</div>'
+}
+
 function cartaoItem(x, k) {
   const ab = aberto === 'item:' + x.id
   const fav = !!favoritos[x.id]
   let prev = ''
   if (ab) {
-    const corpo = x.tipo === 'text' ? (x.texto || '') : (x.caption || ('[' + TIPOS[x.tipo].rotulo.slice(0, -1).toLowerCase() + '] ' + x.label))
-    prev = '<div class="prev"><div class="prev-bandeja"><div class="prev-balao">' + formatado(corpo)
-      + '<span class="prev-hora">agora</span></div></div></div>'
+    prev = '<div class="prev"><div class="prev-bandeja">' + corpoDaPrevia(x) + '</div></div>'
   }
   return '<div class="item" style="--kc:' + k.cor + '">'
     + '<div class="item-linha">'
@@ -344,6 +375,14 @@ function ligaItens(corpo) {
     guardaFavs(); desenha()
   }
   for (const b of corpo.querySelectorAll('[data-envia]')) b.onclick = () => disparaItem(b.dataset.envia)
+  // O documento abre no programa do Windows, nao dentro do painel: PDF embutido pediria
+  // visualizador e mais um furo na CSP, pra uma coisa que o vendedor olha uma vez.
+  for (const b of corpo.querySelectorAll('[data-abredoc]')) {
+    b.onclick = async () => {
+      try { await window.swp.abrirMidia(b.dataset.abredoc) }
+      catch (_) { rodape('não consegui abrir o arquivo', null, true) }
+    }
+  }
 }
 function ligaFunis(corpo) {
   for (const b of corpo.querySelectorAll('[data-abre]')) b.onclick = () => { aberto = aberto === b.dataset.abre ? '' : b.dataset.abre; desenha() }
@@ -789,7 +828,7 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tipo]')) {
     b.onclick = () => {
       pedTipo = b.dataset.tipo
-      pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: nomeDeVerdade(estadoWa.nome) }
+      pedLead = { chatId: estadoWa.chatId || '', phone: estadoWa.phone || '', nome: '' }
       pedErros = []; pedFeito = ''
       preenchePed()
       guardaNascimento()
@@ -821,7 +860,9 @@ function ligaPedidos(corpo) {
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
       // de origem - senao o congelamento valeria so ate a primeira interrupcao.
-      pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: nomeDeVerdade(ped.nome) }
+      // Aqui o nome vem do que o VENDEDOR digitou no rascunho, nao do titulo da conversa: esse e
+      // o unico nome em que da pra confiar, e e o que o pedido vai levar.
+      pedLead = ped.__lead || { chatId: '', phone: r.phone || '', nome: String(ped.nome || '') }
       delete ped.__tipo; delete ped.__anexos; delete ped.__lead
       guardaNascimento()
       rascId = String(r.id || '')
@@ -1034,24 +1075,19 @@ async function cadastraPedido() {
   } finally { pedSalvando = ''; desenha() }
 }
 
-// NOME QUE E SO O TELEFONE NAO E NOME (16/10/2026, pedido do Bruno: "continua aparecendo ali na
-// area do nome o numero desse lead, ao inves de aparecer o nome dele. Caso nao seja possivel pegar
-// o nome, deixe em branco").
+// O TITULO DA CONVERSA NAO E NOME DE CLIENTE, e por isso ele nao preenche mais nada (16/10/2026).
 //
-// O `estadoWa.nome` e o TITULO DA CONVERSA no WhatsApp, e pra quem nao esta na agenda do celular
-// esse titulo E o telefone ("+55 96 9100-5541"). O formulario copiava isso pro campo NOME e o
-// pedido ia pra Five com o telefone no lugar do nome do cliente - que depois vira etiqueta de
-// entrega, cobranca e comissao.
+// Aqui morava o `nomeDeVerdade`, que tentava separar nome de lixo. A historia de um dia:
+//   1. o campo NOME vinha com o TELEFONE, porque pra quem nao esta na agenda o titulo da conversa
+//      E o telefone. Filtrei o que parecia telefone.
+//   2. veio "clique para mostrar os dados do contato", que e a propria interface do WhatsApp. Tem
+//      letra, e portugues legitimo, e passou pelos dois filtros.
+// O agente tem um bloqueio parecido do lado dele (NAO_E_NOME, PRESENCA) e tambem nao pegou essa.
 //
-// O TESTE E "TEM LETRA?", nao "parece telefone": qualquer formatacao do numero (com +55, com
-// parenteses, com ponto, so digitos) cai fora por nao ter nenhuma letra, e nome em alfabeto que
-// nao seja o nosso continua passando, porque \p{L} e letra em qualquer escrita. O `~` que o
-// WhatsApp poe antes do nome de perfil de quem nao e contato sai junto: e marca, nao nome.
-const nomeDeVerdade = (txt) => {
-  const t = String(txt == null ? '' : txt).replace(/^~\s*/, '').trim()
-  return /\p{L}/u.test(t) ? t : ''
-}
-
+// E uma lista de bloqueio correndo atras do texto de uma interface que muda quando quiserem. A
+// decisao do Bruno fecha isso pela raiz: o campo nasce VAZIO e o vendedor digita. Campo vazio custa
+// uma digitacao; campo com lixo custa o nome errado na etiqueta, na cobranca e na nota - e so
+// aparece quando o produto ja saiu.
 // O que já se sabe do cliente entra sozinho: o número vem da conversa aberta e o nome vem do que o
 // WhatsApp mostra. É a prévia dos dados do cliente que o Bruno pediu.
 let fonePreenchido = ''
@@ -1081,7 +1117,7 @@ async function trocaDeLead() {
     const at = (e && e.chatId) ? e : estadoWa
     if (e) estadoWa = e
     if (!at.phone) { rodape('abra a conversa do cliente primeiro'); return }
-    pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: nomeDeVerdade(at.nome) }
+    pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: '' }
     ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0
     preenchePed()
     guardaNascimento()
@@ -1096,10 +1132,18 @@ function preenchePed() {
   const fone = de.phone || ''
   if (!fone) return
   if (!ped.wa) ped.wa = formata(fone)
-  // Filtra de novo aqui de proposito: `preenchePed` tambem roda com o `estadoWa` cru quando ainda
-  // nao ha dono congelado, e e esse caminho que enchia o campo com o telefone.
-  const nome = nomeDeVerdade(de.nome)
-  if (!ped.nome && nome) ped.nome = nome
+  // O CAMPO NOME NASCE VAZIO, SEMPRE (16/10/2026, decisao do Bruno: "deixa o nome em branco, deixa
+  // apenas o numero ali aparecendo").
+  //
+  // O que a gente tinha pra preencher era o TITULO DA CONVERSA do WhatsApp, e ele nao e o nome do
+  // cliente: pra quem nao esta na agenda ele e o telefone, e quando a tela esta num estado
+  // intermediario ele e a propria interface ("clique para mostrar os dados do contato"). Eu tentei
+  // filtrar - primeiro o que parecia telefone, depois o que nao tinha letra - e o segundo caso
+  // passou pelos dois, porque e uma frase legitima em portugues.
+  //
+  // Nenhum filtro resolve isso, porque a fonte nao sabe responder a pergunta: o titulo da conversa
+  // NAO E um campo de nome. Campo vazio custa o vendedor digitar o nome; campo com lixo custa o
+  // pedido sair com o nome errado na etiqueta, na cobranca e na nota - e so aparece la na frente.
 }
 
 function humano(txt) {

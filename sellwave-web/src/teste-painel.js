@@ -69,6 +69,59 @@ app.whenReady().then(async () => {
   const abas = await js('[...document.querySelectorAll(".aba")].map(b => b.dataset.aba).join(",")')
   conta('as tres abas existem', abas === 'itens,funis,pedidos', abas)
 
+  // ══ A PREVIA MOSTRA A MIDIA, NAO O ROTULO DELA ════════════════════════════════════════════
+  //
+  // Achado do Bruno em 16/10: clicar num video, numa foto ou num documento abria sempre o MESMO
+  // balao de texto, escrito "[imagem] Formula". A previa existe pra ele conferir o que vai
+  // disparar ANTES de disparar; mostrando so o rotulo, ela nao servia pra nada.
+  //
+  // A midia vem por `swmedia://`, um esquema que o processo principal resolve (ver main.js). O
+  // teste confere o ENDERECO e o ELEMENTO, que e o que a pagina controla - buscar o arquivo de
+  // verdade e trabalho do processo principal e nao roda aqui.
+  const previa = async (id) => {
+    await clica('[data-abre="item:' + id + '"]')
+    await espera(220)
+    return js('(() => { const b = document.querySelector(".prev-balao"); if (!b) return null;'
+      + ' const m = b.querySelector("img,video,audio");'
+      + ' return { classe: b.className, tag: m ? m.tagName.toLowerCase() : "",'
+      + ' src: m ? m.getAttribute("src") : "", controles: m ? m.hasAttribute("controls") : false,'
+      + ' doc: !!b.querySelector("[data-abredoc]"), docTxt: (b.querySelector("[data-abredoc] span")||{}).textContent || "",'
+      + ' cap: (b.querySelector(".prev-cap")||{}).textContent || "", txt: b.textContent } })()')
+  }
+
+  const pImg = await previa('i1')
+  conta('a previa da imagem desenha um <img>', pImg && pImg.tag === 'img', JSON.stringify(pImg))
+  conta('apontando pro esquema que o app resolve', pImg && pImg.src === 'swmedia://arq/m%2Faaa111.png', pImg && pImg.src)
+  conta('e a legenda vem junto, embaixo da imagem', pImg && /olha a formula/.test(pImg.cap), pImg && pImg.cap)
+  conta('e NAO escreve mais "[imagem] ..." no lugar da foto', pImg && !/\[imagem\]/.test(pImg.txt), pImg && pImg.txt.slice(0, 60))
+
+  const pVid = await previa('v1')
+  conta('a previa do video desenha um <video>', pVid && pVid.tag === 'video', JSON.stringify(pVid))
+  conta('com controles, pra ele dar play e arrastar', pVid && pVid.controles === true)
+  conta('no endereco do esquema proprio', pVid && pVid.src === 'swmedia://arq/m%2Fbbb222.mp4', pVid && pVid.src)
+
+  const pAud = await previa('a1')
+  conta('o audio continua tocavel', pAud && pAud.tag === 'audio' && pAud.controles === true, JSON.stringify(pAud))
+
+  // O DOCUMENTO NAO ABRE DENTRO DO PAINEL de proposito: PDF embutido pediria visualizador e mais um
+  // furo na CSP. Ele mostra o nome e abre no programa do Windows.
+  const pDoc = await previa('d1')
+  conta('o documento mostra o nome num botao', pDoc && pDoc.doc === true && /Certificado Anvisa/.test(pDoc.docTxt), JSON.stringify(pDoc))
+  await js('(() => { const b = document.querySelector("[data-abredoc]"); if (b) b.click() })()')
+  await espera(220)
+  const abriu = await js('JSON.stringify((window.__ver()).filter(c => c.nome === "abrirMidia").map(c => c.args[0]))')
+  conta('e clicar nele manda o app abrir o arquivo', /ddd444\.pdf/.test(abriu), abriu)
+
+  // A CSP TEM QUE DEIXAR, E SO ELE. Se alguem apertar a politica de novo, a midia volta a nao
+  // aparecer - e o sintoma (balao de texto no lugar da foto) nao parece um problema de CSP.
+  const csp = await js('(document.querySelector("meta[http-equiv=\'Content-Security-Policy\']")||{}).content || ""')
+  conta('a CSP aceita swmedia em img e media', /img-src[^;]*swmedia:/.test(csp) && /media-src[^;]*swmedia:/.test(csp), csp)
+  conta('e continua sem deixar a pagina falar com a rede',
+    /default-src 'none'/.test(csp) && !/connect-src/.test(csp) && !/https?:/.test(csp), csp)
+
+  await clica('[data-abre="item:d1"]')   // fecha a previa antes de seguir
+  await espera(200)
+
   const selo = await js('({ escondido: $("selo-pedidos").hidden, txt: $("selo-pedidos").textContent })')
   conta('o selo conta os rascunhos do servidor', selo.escondido === false && selo.txt === '1', JSON.stringify(selo))
 
@@ -97,7 +150,7 @@ app.whenReady().then(async () => {
   const cores = await js('[...document.querySelectorAll("#corpo .bloco")].map(b => b.style.getPropertyValue("--bc")).join(",")')
   conta('cada bloco tem a sua cor, nao cinza', cores === '#3b82f6,#f59e0b,#00a884', cores)
   const sub = await js('(() => { const c = document.querySelector(".dono-ped"); return c ? c.textContent.trim() : "" })()')
-  conta('o formulario diz de quem e o pedido', /Cliente de Teste/.test(sub), sub)
+  conta('o formulario diz de quem e o pedido', /99598-3293/.test(sub), sub)
 
   const campos = await js('[...document.querySelectorAll("#corpo [data-k]")].map(e => e.dataset.k).join(",")')
   const ESPERADOS = ['cpf', 'nome', 'wa', 'cep', 'end', 'num', 'bairro', 'comp', 'cidade', 'uf', 'obs']
@@ -105,7 +158,14 @@ app.whenReady().then(async () => {
 
   const pre = await js('({ wa: document.querySelector("[data-k=wa]").value, nome: document.querySelector("[data-k=nome]").value })')
   conta('o numero da conversa entra sozinho', pre.wa === '(19) 99598-3293', pre.wa)
-  conta('o nome do cliente entra sozinho', pre.nome === 'Cliente de Teste', pre.nome)
+  // O CAMPO NOME NASCE VAZIO, E ISSO E A REGRA (16/10/2026, decisao do Bruno). O que a gente tinha
+  // pra preencher era o TITULO DA CONVERSA, que nao e nome: pra quem nao esta na agenda ele e o
+  // telefone, e num estado intermediario e a propria interface ("clique para mostrar os dados do
+  // contato"). Os dois casos chegaram no pedido dele. Vazio custa uma digitacao; lixo custa o nome
+  // errado na etiqueta e na cobranca.
+  conta('o campo nome nasce VAZIO, nunca com o titulo da conversa', pre.nome === '', JSON.stringify(pre.nome))
+  // E o vendedor digita, que e o fluxo de verdade daqui pra frente.
+  await js('(() => { const e = document.querySelector("[data-k=nome]"); e.value = "Cliente de Teste"; e.dispatchEvent(new Event("input")) })()')
 
   // ── tratamento vem de LISTA, nunca digitado ────────────────────────────────────────────────
   const opts = await js('[...document.querySelectorAll("[data-op=trat]")].map(o => o.textContent).join(" | ")')
@@ -199,6 +259,7 @@ app.whenReady().then(async () => {
   await clica('[data-tipo=antecipado]')
   await espera(350)
   await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("nome","Cliente de Teste");'
     + ' s("cpf","52998224725"); s("cep","13000000"); s("end","Rua A"); s("num","10");'
     + ' s("bairro","Centro"); s("cidade","Campinas"); s("uf","SP"); })()')
   await espera(200)
@@ -233,7 +294,7 @@ app.whenReady().then(async () => {
   await js('(() => { window.__trocaConversa("5511988887777", "Outro Cliente") })()')
   await espera(2200)
   const congelado = await js('({ dono: (document.querySelector(".dono-ped .q")||{}).textContent || "", aviso: !!document.querySelector(".dono-ped .a"), wa: (document.querySelector("[data-k=wa]")||{}).value || "" })')
-  conta('trocar de conversa NAO muda o dono do pedido', /Cliente de Teste/.test(congelado.dono), JSON.stringify(congelado))
+  conta('trocar de conversa NAO muda o dono do pedido', /99598-3293/.test(congelado.dono), JSON.stringify(congelado))
   conta('e avisa que a conversa mudou', congelado.aviso === true, JSON.stringify(congelado))
   conta('o telefone do formulario continua o de origem', congelado.wa === '(19) 99598-3293', congelado.wa)
   const rascSozinho = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "rascunhoSalvar").length)'))
@@ -257,7 +318,7 @@ app.whenReady().then(async () => {
     + ' wa: (document.querySelector("[data-k=wa]")||{}).value || "",'
     + ' cidade: (document.querySelector("[data-k=cidade]")||{}).value || "",'
     + ' msg: (document.querySelector(".aviso.bom")||{}).textContent || "" })')
-  conta('depois de trocar, o pedido e do cliente novo', /Outro Cliente/.test(dps.dono), JSON.stringify(dps))
+  conta('depois de trocar, o pedido e do cliente novo', /98888-7777/.test(dps.dono), JSON.stringify(dps))
   conta('o aviso e o botao somem, porque nao ha mais o que trocar',
     dps.aviso === false && dps.botao === false, JSON.stringify(dps))
   conta('o telefone passa a ser o do cliente novo', dps.wa === '(11) 98888-7777', dps.wa)
@@ -283,6 +344,7 @@ app.whenReady().then(async () => {
   // que o meu vendedor nao confunda e acabe subindo um pedido pra um cliente que ja saiu".
   await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); if (!e) return;'
     + ' e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("nome","Outro Cliente");'
     + ' s("cpf","52998224725"); s("cep","13000000"); s("end","Rua A"); s("num","10");'
     + ' s("bairro","Centro"); s("cidade","Campinas"); s("uf","sp"); })()')
   await js('(() => { const o = [...document.querySelectorAll("[data-op=trat]")].find(e => /3 Meses/.test(e.textContent)); if (o) o.click() })()')
@@ -302,7 +364,10 @@ app.whenReady().then(async () => {
     + ' n: (window.__ver()).filter(c => c.nome === "pedidoNovo").length })')
   conta('com a conversa trocada, o primeiro Cadastrar NAO manda',
     conf1.n === antesConf, JSON.stringify(conf1.n) + ' vs ' + antesConf)
-  conta('e o aviso diz de QUEM e o pedido', /Outro Cliente/.test(conf1.txt), conf1.txt.slice(0, 120))
+  // O DONO AQUI JA E O CLIENTE NOVO: a troca de lead aconteceu la em cima, entao o pedido e do
+  // 8888-7777 e a tela esta em outra conversa. E o telefone que identifica, nao o nome - o titulo
+  // da conversa deixou de ser usado como nome em 16/10.
+  conta('e o aviso diz de QUEM e o pedido', /98888-7777/.test(conf1.txt), conf1.txt.slice(0, 120))
   await clica('#pd-ok')
   await espera(600)
   const conf2 = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].wa))'))

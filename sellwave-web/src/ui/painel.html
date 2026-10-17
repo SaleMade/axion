@@ -2,7 +2,11 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" />
+<!-- `swmedia:` e o esquema que o processo principal resolve (ver main.js): e por ele que a previa
+     mostra a foto e o video de verdade, em vez de um balao escrito "[imagem] Formula". A pagina
+     continua SEM poder falar com a rede - nao ha connect-src, nao ha http: em lugar nenhum - e
+     continua com default-src 'none'. Ela so pede ao app, que busca e devolve. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: swmedia:; media-src swmedia:; font-src 'self' data:;" />
 <title>Painel</title>
 <link rel="stylesheet" href="fonte/mulish.css" />
 <style>
@@ -160,6 +164,23 @@
   .prev-balao .mono { font-family: Consolas, "Courier New", monospace; font-size: .92em; }
   .prev-hora { display: block; margin-top: 2px; text-align: right; font-size: 10px; color: rgba(233,237,239,.6); }
 
+  /* A MIDIA DENTRO DO BALAO. Mesma largura do balao do WhatsApp e o conteudo manda na altura; o
+     teto de 300px existe pra uma foto em pe nao empurrar a lista inteira pra fora da tela. */
+  .prev-balao.midia { max-width: 92%; padding: 4px 4px 3px; }
+  .prev-balao.midia.audio, .prev-balao.midia.doc { padding: 7px 8px 4px; min-width: 230px; }
+  .prev-img, .prev-vid { display: block; width: 100%; max-height: 300px; border-radius: 7px;
+    object-fit: contain; background: #000; }
+  .prev-vid { max-height: 320px; }
+  .prev-aud { display: block; width: 100%; height: 34px; }
+  /* O documento nao abre aqui dentro: mostra o nome e abre no programa do Windows. */
+  .prev-doc { display: flex; align-items: center; gap: 8px; width: 100%; padding: 2px 0;
+    background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .prev-doc svg { width: 18px; height: 18px; flex: 0 0 18px; color: #f0810f; }
+  .prev-doc span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-decoration: underline; text-underline-offset: 2px; }
+  .prev-doc:hover span { color: #fff; }
+  .prev-cap { margin-top: 4px; padding: 0 3px; }
+
   .funil { border: 1px solid var(--linha); border-radius: 10px; margin-bottom: 6px; }
   .funil-linha { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
   .funil-ic { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0;
@@ -225,8 +246,11 @@
   .selo-tipo.ent { background: rgba(0, 168, 132, .16); color: var(--verde); }
   .selo-tipo.ant { background: rgba(59, 130, 246, .16); color: #60a5fa; }
 
+  /* O TOTAL E UM BLOCO CHEIO, nao um campo: ele precisa de mais respiro que o espaco padrao entre
+     campos (8px), senao o rotulo do campo seguinte encosta na borda dele e os dois viram um so
+     bloco. Pedido do Bruno em 16/10: "observacoes esta muito grudado no bloquinho do total". */
   .total { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-    margin-top: 8px; padding: 9px 11px; border-radius: 11px;
+    margin-top: 10px; margin-bottom: 16px; padding: 9px 11px; border-radius: 11px;
     background: rgba(0, 168, 132, .1); border: 1px solid rgba(0, 168, 132, .25); }
   .total .r { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--verde); }
   .total .v { font-size: 17px; font-weight: 800; color: var(--verde); font-variant-numeric: tabular-nums; }
