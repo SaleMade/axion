@@ -14928,6 +14928,15 @@ async function _scEnsureTables(env) {
     // da atribuição (wa_number_owner), que é re-semeada/soft-deleted todo cron. Join por num_key.
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_api_numbers (phone_number_id TEXT PRIMARY KEY, display_phone TEXT, num_key TEXT, waba_id TEXT, at_id TEXT, quality TEXT, name_status TEXT, verified INTEGER DEFAULT 0, updated_at INTEGER, created_at INTEGER)').run();
     try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN token TEXT').run(); } catch (_) {}   // token da Meta do PRÓPRIO número (vem do Datacrazy /instances) — envio usa ele, não o wa_api_token
+    // O ESTADO DA CONTA NA META, que NAO E a qualidade (17/10/2026). `quality` e qualidade de
+    // MENSAGERIA (GREEN/YELLOW/RED); `status` e a conta (CONNECTED / BANNED / RESTRICTED /
+    // DISCONNECTED). Numero BANIDO continua GREEN - medido nos 25 numeros da casa em 17/10: oito
+    // estavam BANNED na Meta e os oito com quality GREEN aqui. Ver _syncWaQuality e _presselLiveSet.
+    try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN status TEXT').run(); } catch (_) {}
+    // CLOUD_API ou ON_PREMISE. Serve pra saber quando um numero SAI da coexistencia (ele deixa de
+    // ser CLOUD_API ou some da WABA), que e o que acontece quando ele passa pro SellWave Web.
+    try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN platform TEXT').run(); } catch (_) {}
+    try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN status_em INTEGER').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_key ON wa_api_numbers(num_key)').run(); } catch (_) {}
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_api_at ON wa_api_numbers(at_id)').run(); } catch (_) {}
     // Funil automático rodando numa conversa (envia os áudios um a um; para quando o lead responde).
@@ -15193,9 +15202,18 @@ async function _waApiUpsert(env, o) {
        updated_at=excluded.updated_at`
   ).bind(pnid, disp || null, disp ? _waNumKey(disp) : null, (o.waba_id || null), (o.at_id != null && o.at_id !== '' ? String(o.at_id) : null), (o.quality || null), (o.name_status || null), (o.verified ? 1 : 0)).run();
 }
-// Consulta a qualidade de cada número oficial no Meta e grava em wa_api_numbers.quality.
+// Consulta a qualidade E O ESTADO de cada número oficial no Meta.
 // Roda no passo 'manutencao' volta===1 (junto com o sync de instâncias): a cada ~80min a grade
 // da Contingência mostra as cores verdes/amarelas/vermelhas sem nenhum clique manual.
+//
+// O `status` ENTROU EM 17/10/2026, E ELE E O QUE FALTAVA FAZER ANOS. Esta funcao pedia so
+// `quality_rating`, e `quality_rating` NAO MUDA QUANDO O NUMERO E BANIDO: e qualidade de
+// mensageria, nao estado da conta. MEDIDO nos 25 numeros da casa em 17/10, perguntando a Graph um
+// por um: OITO estavam `status: BANNED` e os oito com `quality_rating: GREEN`. O sync tinha rodado
+// as 19:56 do mesmo dia, ou seja o dado nao era velho - era o CAMPO ERRADO.
+// A consequencia estava no log da area `roleta-numero-morto-recebendo` desde 25/08: "o unico filtro
+// de saude nunca dispara, numero oficial morto NUNCA sai sozinho". O `status` vem de graca na mesma
+// chamada, e agora o `_presselLiveSet` usa ele.
 async function _syncWaQuality(env) {
   const rows = await env.DB.prepare('SELECT phone_number_id, token FROM wa_api_numbers').all();
   if (!rows || !rows.results || !rows.results.length) return;
@@ -15204,12 +15222,23 @@ async function _syncWaQuality(env) {
     if (!pnid) continue;
     try {
       // Numero da Dualhook so le pela chave dele (15/10/2026); os outros seguem como sempre.
-      const r = await _graph(env, '/' + pnid + '?fields=quality_rating', _ehChaveDualhook(row.token) ? { token: row.token } : {});
+      const r = await _graph(env, '/' + pnid + '?fields=quality_rating,status,platform_type', _ehChaveDualhook(row.token) ? { token: row.token } : {});
+      // GRAPH QUE NAO RESPONDE NAO MUDA NADA. Numero sumido da WABA, token vencido, 400, 404, rede:
+      // tudo isso cai aqui e a linha fica como estava. Tratar "nao sei" como "banido" tiraria numero
+      // bom da roleta por causa de um erro de rede, que e o oposto do que este conserto existe pra
+      // fazer. O dado velho continua, e quem olha o `status_em` sabe de quando ele e.
       if (!r.ok || !r.data) continue;
       const q = String(r.data.quality_rating || '').toUpperCase();
-      if (!q || q === 'UNKNOWN') continue;
-      await env.DB.prepare("UPDATE wa_api_numbers SET quality=?, updated_at=strftime('%s','now') WHERE phone_number_id=?")
-        .bind(q, pnid).run();
+      const st = String(r.data.status || '').toUpperCase();
+      const pf = String(r.data.platform_type || '').toUpperCase();
+      // Cada campo so sobrescreve quando veio preenchido, pelo mesmo motivo do COALESCE do upsert.
+      const sets = [], vals = [];
+      if (q && q !== 'UNKNOWN') { sets.push('quality=?'); vals.push(q); }
+      if (st) { sets.push('status=?', "status_em=strftime('%s','now')"); vals.push(st); }
+      if (pf) { sets.push('platform=?'); vals.push(pf); }
+      if (!sets.length) continue;
+      await env.DB.prepare("UPDATE wa_api_numbers SET " + sets.join(', ') + ", updated_at=strftime('%s','now') WHERE phone_number_id=?")
+        .bind(...vals, pnid).run();
     } catch (_) {}
   }
 }
@@ -21077,7 +21106,7 @@ async function _presselLiveSet(env){
       const _lote = await env.DB.batch([
         env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')"),
         env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1"),
-        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')"),
+        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') <> 'BANNED'"),
       ]);
       cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true;
     } catch (_) {
@@ -21090,9 +21119,22 @@ async function _presselLiveSet(env){
       (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
     }catch(_){}
     // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
-    // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat. Descarta qualidade RED.
+    // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat.
+    //
+    // "SEMPRE VIVO" TINHA UMA EXCECAO QUE NINGUEM VIA: numero BANIDO. Ate 17/10/2026 o unico filtro
+    // aqui era `quality<>'RED'`, e quality e qualidade de MENSAGERIA, que nao muda com o banimento.
+    // Medido no dia, perguntando a Graph um por um: oito dos 25 numeros estavam `status: BANNED` e
+    // os oito apareciam GREEN pra este SELECT. Resultado: numero banido continuava no liveSet, e
+    // como ele converte ZERO, o desempate do `_presselBalancedPick` (menos lead hoje) o escolhia
+    // PRIMEIRO. Numero pior recebia mais clique pago. Isso esta escrito no log da area
+    // `roleta-numero-morto-recebendo` desde 25/08/2026 e so agora tem como ser resolvido.
+    //
+    // SO `BANNED` TIRA, e de proposito:
+    //   - `RESTRICTED` continua recebendo mensagem (o limite e de ENVIO), entao tirar seria exagero;
+    //   - `COALESCE(status,'')` mantem o fail-open: status nulo, vazio ou desconhecido CONTINUA
+    //     entrando. Se a Graph nao responder, ninguem sai da roleta por causa disso.
     try{
-      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED')").all();
+      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') <> 'BANNED'").all();
       // Chave POR NÚMERO, igual à da tela de conexão: com a chave só do vendedor, o segundo número
       // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
       // exatamente ax_<at>_<8 dígitos>).
