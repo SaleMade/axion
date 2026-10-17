@@ -91,6 +91,10 @@ async function rodar() {
     dep.length === 1 && /Código de desconto/.test(String(dep[0].body || '')), dep.length ? String(dep[0].body) : '(nada)')
   conta('e o tempo de espera foi medido, nao chutado',
     (await js('window.__swCifraMs')) > 0, 'ms=' + (await js('window.__swCifraMs')))
+  // E O TEMPO VIAJA NO PROPRIO EVENTO. Sem isso, medir a espera na maquina do vendedor exigiria
+  // pedir pra ele abrir o DevTools da view do numero - que e o tipo de pedido que nao acontece.
+  conta('e o tempo viaja DENTRO do evento, pra dar pra medir sem abrir o console',
+    dep.length === 1 && Number(dep[0].cifraMs) > 0, dep.length ? 'cifraMs=' + dep[0].cifraMs : '(nada)')
 
   // 3) a legivel NUNCA vem: a cifrada sai mesmo assim. Cair no FIFO e ruim; perder e pior.
   await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({

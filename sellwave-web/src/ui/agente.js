@@ -444,6 +444,11 @@
   window.__swCifraMs = 0
   window.__swCifraMsMax = 0
   window.__swCifraSoltas = 0
+  // QUANTO CADA MENSAGEM ESPEROU, por id. Vai DENTRO do evento (campo `cifraMs`), e nao so numa
+  // variavel do console: assim o numero chega junto com a mensagem que ele mediu, sem ninguem
+  // precisar abrir o DevTools na maquina do vendedor pra ler. E e o numero que decide se a espera
+  // de 6s esta certa, curta ou desperdicio.
+  var esperou = {}
 
   function capturar(msg, solta) {
     try {
@@ -480,6 +485,7 @@
       if (segurados[id]) {
         var gasto = Date.now() - segurados[id].em
         window.__swCifraMs = gasto
+        esperou[id] = gasto
         if (gasto > window.__swCifraMsMax) window.__swCifraMsMax = gasto
         try { clearTimeout(segurados[id].t) } catch (_) { /* ok */ }
         delete segurados[id]
@@ -512,7 +518,13 @@
         body: (ehMidia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),
         pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
         ts: ts,
+        // QUANTO ESTA MENSAGEM ESPEROU pela versao legivel (0 = nao foi segurada), e quantas
+        // cifradas ja sairam sem a legivel chegar. Viaja no evento de proposito: e o jeito de medir
+        // a espera na maquina do vendedor sem pedir pra ele abrir o console.
+        cifraMs: esperou[id] || 0,
+        cifraSoltas: window.__swCifraSoltas || 0,
       }
+      delete esperou[id]
       // ÁUDIO E FOTO DO LEAD VÃO COM OS BYTES.
       //
       // Nesta operação o cliente manda o endereço de entrega POR ÁUDIO: sem os bytes, a bolha no
