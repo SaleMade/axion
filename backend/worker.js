@@ -15263,6 +15263,11 @@ async function handleSalechatIngest(req, env, token) {
           }
         } catch (_) {}
       }
+      // QUANTO A CIFRADA ESPEROU PELA LEGIVEL (17/10/2026, agente do SellWave Web 21c0a38). O app segura
+      // a mensagem que chega cifrada ate a versao legivel (a que tem o codigo) e manda quanto esperou
+      // (cifraMs) e quantas ja sairam sem a legivel (cifraSoltas). So loga quando houve espera: e o
+      // dado pra acertar o prazo da espera, que hoje e um chute conservador de 6 s.
+      if (Number(e?.cifraMs) > 0 || Number(e?.cifraSoltas) > 0) console.log('SWWEB_CIFRA ms=' + (Number(e?.cifraMs) || 0) + ' soltas=' + (Number(e?.cifraSoltas) || 0) + ' tipo=' + String(e?.type || '') + ' num=' + selfNumber.slice(-4));
       if (msgId) ack.push(msgId);
     } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
   }
