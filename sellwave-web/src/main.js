@@ -600,6 +600,8 @@ async function abreDeVerdade(nk, numero, meu) {
         : 'Não deu pra confirmar que o IP é do Brasil, e a exigência está ligada.' }
     }
     avisaCasca('sw:saida', { nk, ip: teste.ip, pais: teste.pais, cidade: teste.cidade, provedor: teste.provedor })
+    // Sem await: abrir o numero nao espera a dash. Se nao chegar, a proxima abertura conta.
+    contaPais(nk, teste.pais)
   }
 
   // Baixa o motor ANTES de criar a view: o preload pede ele de forma sincrona no inicio do
@@ -1469,6 +1471,30 @@ ipcMain.handle('sw:proxy-salvar', async (_e, { nk, host, porta, usuario, senha }
   }
 })
 
+// CONTA PRA DASH POR ONDE A PROXY SAIU (17/10/2026, banco de proxies).
+//
+// QUEM MEDE E QUEM USA, e por isso o deposito nasce aqui: o worker roda na borda da Cloudflare e
+// sairia pela rede DELA, nao pela do vendedor - testar de la nao diria nada sobre a proxy deste PC.
+// O app ja faz esse teste de verdade (testaSaida) toda vez que abre um numero e toda vez que o
+// Bruno aperta Testar; isto so manda o resultado.
+//
+// POR QUE IMPORTA: sem deposito, a proxy fica pra sempre como "nunca testada" na tela do banco - e
+// "nunca testada" numa lista onde o resto esta verde e exatamente a linha que o olho pula. A proxy
+// recem cadastrada e a mais provavel de estar errada, e e a que mais precisa aparecer.
+//
+// NAO SEGURA NADA e nao avisa erro: e informacao de tela. Falhou, a proxima abertura tenta.
+async function contaPais(nk, pais) {
+  if (!config.token || !nk) return
+  try {
+    await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/proxy-visto', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      body: JSON.stringify({ nk: String(nk), pais: String(pais || '') }),
+      signal: AbortSignal.timeout(10000),
+    })
+  } catch (_) { /* informacao de tela: a proxima abertura conta de novo */ }
+}
+
 ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   const busca = await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
@@ -1481,6 +1507,9 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   await aplicaProxy(session.fromPartition(teste), px, teste)
   const r = await testaSaida(teste)
   await aplicaProxy(session.fromPartition(teste), null, teste)
+  // Testar na mao e o caminho mais rapido pra proxy nova sair de "nunca testada": ele cadastra,
+  // aperta Testar, e a lista do banco ja mostra o pais.
+  if (r && r.ok) contaPais(nk, r.pais)
   return r
 })
 

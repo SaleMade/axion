@@ -11313,7 +11313,13 @@ async function handleSwWeb(req, env, path) {
       if (id && banco[id]) (usoPorId[id] = usoPorId[id] || []).push(nk);
       // Atribuicao que nao veio do banco (cadastrada antes dele, ou pelo app). A tela mostra como
       // "solta" e oferece adotar: sem isso, proxy que ja esta em uso ficaria invisivel no banco.
-      else semBanco.push({ nk, host: String((px && px.host) || ''), porta: Number((px && px.porta) || 0), numero: (donoDe[nk] || {}).num || '', at: (donoDe[nk] || {}).at || '' });
+      else semBanco.push({
+        nk, host: String((px && px.host) || ''), porta: Number((px && px.porta) || 0),
+        numero: (donoDe[nk] || {}).num || '', at: (donoDe[nk] || {}).at || '',
+        // Solta nao tem onde guardar medicao (o /proxy-visto grava no banco), entao e sempre
+        // 'nunca'. Fica explicito pelo mesmo motivo: celula vazia mente.
+        estado: 'nunca',
+      });
     }
 
     const lista = Object.entries(banco).map(([id, p]) => ({
@@ -11329,6 +11335,19 @@ async function handleSwWeb(req, env, path) {
       // verde/amarelo em vez de obrigar um sim/nao pra operacao inteira.
       pais: String((p && p.pais) || ''),
       visto: Number((p && p.visto) || 0),
+      // "NUNCA TESTADA" E UM ESTADO, NAO UM CAMPO VAZIO (17/10/2026, achado da sessao 2d).
+      //
+      // Quem mede e o APP, no instante em que abre o numero. Entao proxy recem cadastrada, ou
+      // atribuida a um numero que ninguem abriu hoje, nao tem medicao nenhuma. Se a lista mostrasse
+      // so o pais quando existe, o caso SEM medicao apareceria como celula vazia - e vazia, numa
+      // lista onde o resto esta verde, le-se como "ainda nao carregou", nao como "nunca foi
+      // testada". E e justamente a proxy nova, recem cadastrada, a mais provavel de estar errada.
+      //
+      // Entao o servidor decide o estado e a tela so pinta. Tres valores, nunca vazio:
+      //   nunca  = ninguem abriu numero com ela ainda
+      //   br     = a ultima saida foi do Brasil
+      //   fora   = a ultima saida foi de outro pais (pior que proxy nenhuma num numero +55)
+      estado: !Number((p && p.visto) || 0) ? 'nunca' : (String((p && p.pais) || '') === 'BR' ? 'br' : 'fora'),
       // DESATUALIZADA = o banco mudou e a copia resolvida de algum numero ficou pra tras.
       //
       // A copia existe porque dois programas leem `swweb_proxies` sem saber do banco. O preco e
@@ -11435,6 +11454,56 @@ async function handleSwWeb(req, env, path) {
     }
     if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, id: novoId, atualizou: mexeu });
+  }
+
+  // POST /api/swweb/proxy-adotar — puxa pro banco as proxies que ja estao em uso e nao tem dono.
+  //
+  // POR QUE ISTO EXISTE: o banco nasceu depois das proxies. Quando ele estreou havia 6 numeros com
+  // proxy cadastrada e NENHUMA entrada no banco - ou seja, a tela nova abriria vazia e o Bruno
+  // teria que redigitar host, porta, usuario e senha de cinco proxies que ja estao funcionando,
+  // com a senha que ele talvez nem tenha mais a mao. Migracao que exige redigitar nao e migracao,
+  // e recomeco.
+  //
+  // Agrupa por host:porta, porque e isso que define uma proxy. Dois numeros na mesma porta viram
+  // UMA entrada usada por dois - que e, inclusive, o jeito de ele finalmente VER isso.
+  //
+  // NAO E DESTRUTIVO: as atribuicoes continuam com os mesmos host/porta/usuario/senha, so ganham
+  // o `id` e o carimbo. Se ele apagar a entrada do banco depois, elas voltam a aparecer como
+  // soltas - nenhum numero deixa de ter proxy por causa daqui.
+  if (req.method === 'POST' && path === '/api/swweb/proxy-adotar') {
+    if (!manda) return err('Só a direção mexe no banco de proxies', 403);
+    const agoraAd = Math.floor(Date.now() / 1000);
+    const porEndereco = {};
+    for (const [nk, px] of Object.entries(proxies)) {
+      if (String((px && px.id) || '')) continue;                 // ja tem dono no banco
+      const host = String((px && px.host) || '').trim();
+      if (!host) continue;
+      const porta = Number((px && px.porta) || 0);
+      const ch = host + ':' + porta;
+      (porEndereco[ch] = porEndereco[ch] || []).push(nk);
+    }
+    const criadas = [];
+    for (const [ch, nks] of Object.entries(porEndereco)) {
+      const base = proxies[nks[0]] || {};
+      // Se ja existe no banco uma entrada com o mesmo host:porta, reaproveita em vez de duplicar.
+      let id = Object.keys(banco).find((k) => String(banco[k].host || '') + ':' + Number(banco[k].porta || 0) === ch);
+      if (!id) {
+        id = 'px' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36) + criadas.length;
+        banco[id] = {
+          // Apelido provisorio com a PORTA, que e o que distingue as dele (isp.decodo.com:10001,
+          // 10002...). Ele renomeia depois; o que nao pode e nascer sem nome nenhum.
+          apelido: String(base.host || '') + ' · ' + Number(base.porta || 0),
+          host: String(base.host || ''), porta: Number(base.porta || 0),
+          usuario: String(base.usuario || ''), senha: String(base.senha || ''),
+          criado: agoraAd, mexido: agoraAd, pais: '', visto: 0,
+        };
+        criadas.push({ id, endereco: ch, numeros: nks.length });
+      }
+      for (const nk of nks) proxies[nk] = { ...proxies[nk], id, ver: Number(banco[id].mexido) || agoraAd };
+    }
+    if (criadas.length) await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+    if (Object.keys(porEndereco).length) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
+    return json({ ok: true, criadas, adotadas: Object.values(porEndereco).reduce((a, b) => a + b.length, 0) });
   }
 
   // POST /api/swweb/proxy-atribuir — liga uma proxy DO BANCO a um numero (ou tira).
