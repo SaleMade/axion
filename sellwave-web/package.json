@@ -11,7 +11,8 @@
     "confere-pacote": "node src/confere-pacote.cjs dist-pub/win-unpacked/resources/app.asar",
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64",
-    "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js"
+    "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js",
+    "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js"
   },
   "devDependencies": {
     "electron": "44.7.2",

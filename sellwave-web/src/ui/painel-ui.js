@@ -511,6 +511,24 @@ const mascTel = (v) => {
   return '(' + ddd + ') ' + resto.slice(0, corte) + '-' + resto.slice(corte)
 }
 const telValido = (v) => { const d = dig(v); return d.length === 11 && d[2] === '9' && Number(d.slice(0, 2)) >= 11 }
+
+// O 9 QUE FALTA DEPOIS DO DDD (17/10/2026, pedido do Bruno): "faltou um digito no numero do celular,
+// esse digito que falta sempre e o 9, que vai depois do DDD; esses numeros que vem sem esse digito,
+// eu gostaria que voce ja adicionasse essa correcaozinha".
+//
+// Celular brasileiro tem 11 digitos desde 2016, mas numero de 10 ainda chega: contato salvo ha anos,
+// jid antigo do WhatsApp, planilha velha. Sem o 9 a transportadora nao entrega e a cobranca nao acha
+// o cliente - e o vendedor descobre dias depois.
+//
+// SO EM CELULAR. Na numeracao antiga o assinante de celular comecava em 6, 7, 8 ou 9; 2 a 5 e
+// telefone fixo, e enfiar um 9 num fixo INVENTA um numero que nao existe. Fixo passa intacto e a
+// conferencia reclama, que e o certo: quem resolve e o vendedor, nao o chute.
+const com9 = (v) => {
+  let d = dig(v)
+  if (d.length >= 12 && d.startsWith('55')) d = d.slice(2)
+  if (d.length !== 10 || !'6789'.includes(d[2])) return v
+  return mascTel(d.slice(0, 2) + '9' + d.slice(2))
+}
 const telErro = (v) => {
   const d = dig(v)
   if (!d.length) return ''
@@ -578,6 +596,20 @@ function previsaoEntrega(uf, cep, transporte) {
 }
 const dd2 = (n) => String(n).padStart(2, '0')
 
+// CEARA: A TRANSPORTADORA NAO ATENDE O ESTADO. Gemea da dash (novo-pedido.jsx, o efeito da linha
+// 236 e o bloco da 639), regra do Bruno de 14/10/2026.
+//
+// La o padrao e Correios NO ENDERECO e o botao Transportadora fica travado; os dois Correios valem.
+// Quem JA escolheu retirada nao e mexido - a regra antiga prendia o Ceara em retirada e atropelava a
+// escolha que o vendedor tinha acabado de fazer.
+const semTransportadoraCE = (uf) => String(uf || '').trim().toUpperCase() === 'CE'
+const transpEfetivoDe = (uf, transp) => {
+  const ce = semTransportadoraCE(uf)
+  const atual = String(transp || '').trim() || (ce ? 'correios' : TRANSPORTE_PADRAO)
+  return (ce && atual === 'five') ? 'correios' : atual
+}
+const transpEfetivo = () => transpEfetivoDe(ped.uf, ped.transp)
+
 // `m` = a mascara que entra a cada tecla. `trava` = campo que a busca de CEP preenche e bloqueia
 // quando ela traz o valor (o cadeado aparece no rotulo, igual a dash).
 const CAMPOS_PED = {
@@ -606,6 +638,10 @@ let pedFeito = ''        // mensagem verde depois de cadastrar
 let ofertas = []         // o catálogo de tratamentos, do servidor
 let ofertasEstado = ''   // '' | 'carregando' | 'ok' | 'erro'
 let anexos = []          // comprovantes já no R2: { nome, url, mime }
+// NOME DO ARQUIVO QUE ESTA SUBINDO AGORA. Na dash a linha do arquivo aparece no instante em que ele
+// e escolhido; aqui ela so aparecia DEPOIS da subida, e durante o envio a lista ficava vazia - o
+// unico sinal era um botao escrito "enviando...", sem nome, sem tamanho e sem como cancelar.
+let subindo = ''
 // A BUSCA DE CEP, e as duas guardas que a dash aprendeu na pratica (06/10/2026):
 //  1. RESPOSTA ATRASADA NAO MANDA. O vendedor digita um CEP, ve que errou e digita outro antes do
 //     primeiro responder; sem guarda, a resposta do CEP VELHO sobrescreve o endereco do novo e o
@@ -615,6 +651,16 @@ let anexos = []          // comprovantes já no R2: { nome, url, mime }
 let cepEmVoo = ''        // qual CEP esta valendo agora
 let cepBuscando = false
 let cepRuim = false      // todas as bases disseram que nao existe
+// BUSCA QUE NAO RESPONDEU e coisa DIFERENTE de CEP que nao existe, e as duas davam na mesma (nada):
+// sem internet, sem proxy ou com as tres bases fora do ar, o campo girava e depois voltava pro normal
+// sem dizer nada - o vendedor esperava um endereco que nunca vinha em vez de digitar na mao. Agora a
+// tela AVISA e oferece "tentar de novo".
+let cepFalhou = false
+// E "AS BASES NAO TEM ESTE ENDERECO" e uma TERCEIRA coisa, que nao e erro de ninguem: CEP terminado
+// em 000 e o CEP geral da cidade e nenhuma das tres bases tem endereco pra ele (medido em 17/10).
+// Mandar "tentar de novo" aqui seria mentir - tentar mil vezes da no mesmo. O recado certo e: digite
+// na mao. Dizer "CEP invalido" seria pior ainda: o CEP existe, e o pedido ia parar por nada.
+let cepSemBase = false
 let cepTravados = {}     // { end: true, bairro: true, ... } - veio da busca, nao se digita
 // VENDA FUTURA: so no pagamento na entrega, igual a dash.
 let vendaFutura = false
@@ -657,18 +703,33 @@ const emDinheiro = (n) => Number(n || 0).toLocaleString('pt-BR', { minimumFracti
 // Meses" sao a MESMA oferta (a Five renomeou e mudou so o espaco) e casar por nome duplica o kit.
 const ofertaDe = (k) => ofertas.find((o) => String(o.key) === String(k)) || null
 
+// DO MAIS BARATO PRO MAIS CARO, a ordem da dash. Sem isto a mesma lista aparecia em ordem diferente
+// nas duas telas, e o vendedor que decorou a posicao na dash clicava no vizinho aqui.
+const ofertasEmOrdem = () => [...ofertas].sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0))
+
+// O ENDERECO SO E OBRIGATORIO NO PAGAMENTO NA ENTREGA, a mesma regra da dash
+// (novo-pedido.jsx:380-381, onde as duas travas sao `if (tipo === 'entrega' && ...)`).
+// O arquivo ja fazia esse escopo pro comprovante e deixou o endereco de fora por engano.
+const DO_ENDERECO = ['cep', 'end', 'num', 'bairro', 'comp', 'cidade', 'uf']
+
 function confere(f) {
   const faltam = []
+  const soEntrega = pedTipo === 'entrega'
   for (const [k, c] of Object.entries(CAMPOS_PED)) {
+    if (!soEntrega && DO_ENDERECO.includes(k)) continue
     if (c.req && !String(f[k] || '').trim()) faltam.push(c.r)
   }
   if (!ofertaDe(f.tratKey)) faltam.push('Tratamento')
+  // VALOR ZERO PARA AQUI, igual a dash (novo-pedido.jsx:383). Acontece de verdade: o worker monta a
+  // lista com `price: Number(...) || 0`, e kit cadastrado sem preco vem com zero. Sem esta linha o
+  // pedido entrava como R$ 0,00 e so aparecia na conferencia do Bruno, ou pior, no financeiro.
+  else if (!(Number((ofertaDe(f.tratKey) || {}).price) > 0)) faltam.push('Defina o valor do pedido')
   if (String(f.cpf || '').trim() && dig(f.cpf).length < 11) faltam.push('CPF incompleto, precisa dos 11 dígitos')
   else if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF inválido, confira os números')
   // O CELULAR PRECISA DO 9, e e aqui que isso para - nao no Aceitar, com o cliente esperando. Foi
   // assim que um pedido entrou sem o 9 em 19/08/2026.
   if (String(f.wa || '').trim() && !telValido(f.wa)) faltam.push(telErro(f.wa) || 'WhatsApp precisa de DDD + 9 + 8 dígitos')
-  if (cepRuim) faltam.push('CEP não encontrado, corrija antes de continuar')
+  if (cepRuim && soEntrega) faltam.push('CEP não encontrado, corrija antes de continuar')
   if (vendaFutura && !dataFutura) faltam.push('Escolha a data da venda futura')
   if (String(f.uf || '').trim() && !UFS.includes(String(f.uf).toUpperCase())) faltam.push('UF inválida')
   if (String(f.cep || '').trim() && dig(f.cep).length !== 8) faltam.push('CEP precisa de 8 dígitos')
@@ -683,7 +744,11 @@ function confere(f) {
   // Telefone: 10 ou 11 digitos depois de tirar o 55. Numero cortado passava daqui direto.
   let _tel = dig(f.wa)
   if (_tel.length >= 12 && _tel.startsWith('55')) _tel = _tel.slice(2)
-  if (String(f.wa || '').trim() && (_tel.length < 10 || _tel.length > 11)) faltam.push('WhatsApp incompleto (DDD + número)')
+  // SO SE O telErro ACIMA NAO FALOU NADA: os dois cobram a mesma coisa, e o quadro listava duas
+  // linhas pro mesmo telefone. A dash lista uma (novo-pedido.jsx:406). Esta continua existindo
+  // porque e a regra do Aceitar (problemasPaylog), que aceita 10 digitos - e o dia que o telValido
+  // mudar, ela segue barrando o que a PayLog recusa.
+  if (String(f.wa || '').trim() && !telErro(f.wa) && (_tel.length < 10 || _tel.length > 11)) faltam.push('WhatsApp incompleto (DDD + número)')
   // COMPROVANTE SO E OBRIGATORIO NO PAGAMENTO NA ENTREGA, a mesma regra da dash (novo-pedido.jsx):
   // no antecipado o dinheiro ja entrou e nao ha o que comprovar.
   if (pedTipo === 'entrega' && !anexos.length) faltam.push('Comprovante (imagem, vídeo ou áudio)')
@@ -710,7 +775,11 @@ function textoPedido(o) {
     '📍Cidade e Estado: ' + cidUf,
     '📍Complemento: ' + (o.comp || ''),
     '📍CEP: ' + mascCep(o.cep || ''),
-    '📲 : ' + formata(o.wa || ''), '',
+    // mascTel, NAO formata: o `formata` tira qualquer 55 do inicio, entao cliente de DDD 55 (Santa
+    // Maria, Uruguaiana, Bage) recebia o telefone sem formato nenhum - e o mesmo texto fica gravado
+    // no lead.raw, que a dash mostra como "a mensagem enviada ao lead". O mascTel so tira o 55
+    // quando ele e DDI (12 digitos ou mais), que e a regra do maskTel da dash.
+    '📲 : ' + mascTel(o.wa || ''), '',
     'Tratamento Referente: ' + (o.trat || o.prod || ''),
     'Valor do Pedido: R$ ' + emDinheiro(o.vl),
     'Forma de Pagamento após a Entrega',
@@ -723,14 +792,21 @@ function textoPedido(o) {
 // O TERMO, igual ao textoTermo do orders.js. Vai ANTES do pedido concluído: o cliente confirma e
 // só então o vendedor manda o resto.
 function textoTermo(o) {
-  const produto = String(o.prod || '').trim()
+  // O NOSSO NOME COMO PADRAO, igual ao orders.js:444. O motivo esta no comentario de la: em
+  // 21/09/2026 um vendedor copiou o termo com o produto antigo e o Bruno mandou fixar o nosso. Sem
+  // o padrao, termo copiado antes de escolher o tratamento dizia "a compra do produto," e pronto.
+  const produto = String(o.prod || '').trim() || 'Glico Six'
   return [
     'Declaração de Confirmação de Compra',
-    'Eu, ' + (o.nome || 'o cliente') + ', portador do CPF n ' + mascCpf(o.cpf) + ', confirmo a compra do produto'
-      + (produto ? ' ' + produto : '') + ', comprometendo-me a realizar o pagamento no ato do recebimento, conforme as condições acordadas.',
+    'Eu, ' + (o.nome || 'o cliente') + ', portador do CPF n ' + mascCpf(o.cpf) + ', confirmo a compra do produto '
+      + produto + ', comprometendo-me a realizar o pagamento no ato do recebimento, conforme as condições acordadas.',
     '', 'Advertência',
     'Em caso de inadimplemento, estou ciente de que será aplicada uma multa de 10% sobre o valor do produto, juros de 1% ao mês, correção monetária com base no IGPM-FGV, e honorários advocatícios no percentual de 20% sobre o montante devido.',
     '', 'Data: ' + ddmm() + '/' + new Date().getFullYear(),
+    // A PERGUNTA E A ULTIMA LINHA, com os asteriscos do negrito do WhatsApp. Pedido do Bruno em
+    // 16/09/2026 (esta no orders.js:454-457): "ele precisa enxergar isso facil". Faltava aqui, e o
+    // vendedor que cadastrava pelo app mandava o termo sem pedir confirmacao nenhuma.
+    '', 'Você confirma os termos acima e o envio, *SIM* ou *NÃO*?',
   ].join(NL)
 }
 
@@ -749,8 +825,12 @@ function montaPedido(f) {
   const of = ofertaDe(f.tratKey) || {}
   const o = {
     id, external_id: 'MAN-' + id, orig: 'Manual',
-    nome: String(f.nome || '').trim(), cpf: dig(f.cpf), wa: dig(f.wa), email: '',
-    cep: dig(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(), comp: String(f.comp || '').trim(),
+    // MASCARADO, como a dash grava (buildOrder le o formulario, e o formulario da dash guarda
+    // mascarado). Aqui ia com `dig()`, e o pedido do app saia diferente de todos os outros na fila:
+    // Aceitacoes mostra `l.cep` direto ("CEP: 88501000") e o modal do CRM mostra os tres crus,
+    // inclusive nos botoes de copiar. Quem le a fila nao tem como saber que aquele veio do app.
+    nome: String(f.nome || '').trim(), cpf: mascCpf(f.cpf), wa: mascTel(f.wa), email: '',
+    cep: mascCep(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(), comp: String(f.comp || '').trim(),
     bairro: String(f.bairro || '').trim(), cidade: String(f.cidade || '').trim(), uf: String(f.uf || '').toUpperCase().trim(),
     // PRODUTO E VALOR SAEM DO CATALOGO, nunca do que foi digitado. Preço à mão diverge do catálogo
     // e contamina receita, comissão e margem sem ninguém ver de onde veio (decisão de 14/08/2026).
@@ -760,7 +840,11 @@ function montaPedido(f) {
     pgto: '', spg: 'Pendente',
     // TRANSPORTE E PRAZO: a escolha muda o prazo que o vendedor prometeu ao cliente, entao ela nao
     // pode se perder no caminho. Vazio = transportadora, que e o padrao da casa.
-    transp: String(f.transp || '').trim(),
+    // A EFETIVA, nao a que esta no campo: pedido pro Ceara em que o vendedor nunca encostou nos
+    // botoes tinha `transp` vazio, e vazio quer dizer "transportadora" - a tela mostrava Correios e
+    // o pedido saia como Transportadora, num estado que ela nao atende. Vazio continua querendo
+    // dizer padrao, pra nao mudar o significado do campo em pedido nenhum.
+    transp: (() => { const t = transpEfetivoDe(f.uf, f.transp); return t === TRANSPORTE_PADRAO ? '' : t })(),
     mod: pedTipo === 'antecipado' ? 'antecipado' : 'entrega',
     // O DONO É DECIDIDO NO SERVIDOR, pelo login (handlePedidoNovo carimba o `at`). Mandar daqui
     // deixaria o painel escolhendo de quem é a venda.
@@ -777,7 +861,10 @@ function montaPedido(f) {
     five_status: 'pendente_despacho',
     comprovante_url: (anexos[0] && anexos[0].url) || '',
     comprovante_mime: (anexos[0] && anexos[0].mime) || '',
-    comprovantes: anexos.map((a) => ({ url: a.url, mime: a.mime })),
+    // O NOME VAI JUNTO: ele existe aqui do lado e era descartado na montagem. O modal do CRM mostra
+    // o nome em cima de cada anexo quando o pedido tem mais de um (projects-kanban.jsx), e e o que
+    // deixa separar o print do termo do video do comprovante.
+    comprovantes: anexos.map((a) => ({ url: a.url, mime: a.mime, nome: a.nome })),
   }
   o.raw = textoPedido(o)
   return o
@@ -881,7 +968,10 @@ function desenhaPedidos() {
   }
 
   for (const b of BLOCOS_PED) {
-    h += '<div class="bloco" style="--bc:' + b.bc + '"><h3>' + svg(b.ic) + esc(b.t) + '</h3>'
+    // O TITULO MUDA COM O TIPO, como na dash (novo-pedido.jsx:678): no antecipado nao ha anexo
+    // nenhum, entao prometer "e Anexo" no titulo era prometer um campo que nem aparece.
+    const tit = (b.t === 'Tratamento e Anexo' && pedTipo !== 'entrega') ? 'Tratamento' : b.t
+    h += '<div class="bloco" style="--bc:' + b.bc + '"><h3>' + svg(b.ic) + esc(tit) + '</h3>'
     for (const linha of b.linhas) {
       if (linha[0] === 'trat') { h += campoTratamento(); continue }
       const par = PARES[linha[0]]
@@ -890,17 +980,21 @@ function desenhaPedidos() {
     }
     if (b.t === 'Dados do Cliente') h += blocoVendaFutura()
     if (b.t === 'Endereço') h += blocoPrazo()
-    if (b.t === 'Tratamento e Anexo') h += campoAnexo()
+    if (b.t === 'Tratamento e Anexo' && pedTipo === 'entrega') h += campoAnexo()
     h += '</div>'
   }
 
+  // SO O CADASTRAR ESPERA O ANEXO. Copiar envio, Copiar termo e Rascunho nao dependem dele - e e
+  // exatamente enquanto o video de 9 MB sobe que o vendedor manda o termo pro cliente. Na dash os
+  // dois Copiar nao olham o upload e o Cadastrar olha so o proprio envio (novo-pedido.jsx:743-752).
   const trabalhando = !!pedSalvando
+  const noCadastro = pedSalvando === 'cadastro' || pedSalvando === 'rascunho'
   h += '<div class="acoes" style="grid-template-columns:1fr 1fr">'
-    + '<button class="bt sec" id="pd-copia-dados"' + (trabalhando ? ' disabled' : '') + '>Copiar envio</button>'
-    + '<button class="bt sec" id="pd-copia-termo"' + (trabalhando ? ' disabled' : '') + '>Copiar termo</button>'
+    + '<button class="bt sec" id="pd-copia-dados"' + (noCadastro ? ' disabled' : '') + '>Copiar envio</button>'
+    + '<button class="bt sec" id="pd-copia-termo"' + (noCadastro ? ' disabled' : '') + '>Copiar termo</button>'
     + '</div>'
   h += '<div class="acoes">'
-    + '<button class="bt sec" id="pd-rasc"' + (trabalhando ? ' disabled' : '') + '>'
+    + '<button class="bt sec" id="pd-rasc"' + (noCadastro ? ' disabled' : '') + '>'
     + (pedSalvando === 'rascunho' ? IC_GIRA : IC_SALVAR) + 'Rascunho</button>'
     + '<button class="bt pri" id="pd-ok"' + (trabalhando ? ' disabled' : '') + '>'
     + (pedSalvando === 'cadastro' ? IC_GIRA : IC_CHECK)
@@ -931,6 +1025,7 @@ function listaRascunhos() {
 // O CADEADO NO ROTULO significa "isto veio da busca do CEP". Igual a dash: o campo fica travado
 // enquanto o CEP for o mesmo, e solta sozinho quando ele muda - assim ninguem corrige a rua na mao
 // e ve a correcao sumir na proxima tecla do CEP.
+const IC_AVISO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 8.5v4M12 16.5h.01"/><circle cx="12" cy="12" r="9"/></svg>'
 const IC_CADEADO = '<svg class="cad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
 
 function campoPed(k) {
@@ -957,11 +1052,25 @@ function campoPed(k) {
   // O sinal do CEP fica DENTRO do campo, a direita: girando enquanto busca, check quando achou.
   const sinal = k !== 'cep' ? ''
     : cepBuscando ? '<span class="cep-sinal gira">' + IC_GIRA + '</span>'
-      : (dig(bruto).length === 8 && !cepRuim && Object.keys(cepTravados).length) ? '<span class="cep-sinal ok">' + IC_CHECK + '</span>'
-        : ''
+      : (cepFalhou || cepSemBase) ? '<span class="cep-sinal aviso">' + IC_AVISO + '</span>'
+        : (dig(bruto).length === 8 && !cepRuim && Object.keys(cepTravados).length) ? '<span class="cep-sinal ok">' + IC_CHECK + '</span>'
+          : ''
+  // A DICA DIZ O MOTIVO NA HORA, igual a dash: o campo ja ficava vermelho no 11o digito do CPF e na
+  // segunda letra da UF, mas a frase que explica so saia no quadro vermelho depois do Cadastrar.
+  // Campo vermelho sem motivo faz o vendedor conferir o numero certo tres vezes.
   const dica = k === 'wa' && telErro(bruto) ? '<span class="dica-campo">' + esc(telErro(bruto)) + '</span>'
-    : k === 'cep' && cepRuim ? '<span class="dica-campo">CEP não encontrado, confira os números</span>'
-      : ''
+    : k === 'cpf' && dig(bruto).length === 11 && !cpfValido(bruto) ? '<span class="dica-campo">CPF inválido, confira os números</span>'
+      : k === 'uf' && bruto.trim().length === 2 && !UFS.includes(bruto.trim().toUpperCase()) ? '<span class="dica-campo">UF inválida</span>'
+    : k === 'cep' && cepRuim ? '<span class="dica-campo">CEP não encontrado, confira os números · <button class="cep-again" id="pd-cepagain">tentar de novo</button></span>'
+      : k === 'cep' && cepFalhou ? '<span class="dica-campo aviso">Não deu pra consultar o CEP agora. Digite o endereço na mão ou <button class="cep-again" id="pd-cepagain">tentar de novo</button></span>'
+        : k === 'cep' && cepSemBase ? '<span class="dica-campo aviso">As bases não têm o endereço deste CEP. Digite rua, bairro e cidade na mão.</span>'
+        // ACHOU MAS NAO TROUXE A RUA: e o CEP geral da cidade, e a dash diz isso em ambar
+        // (novo-pedido.jsx:616-618). Aqui o CEP ganhava visto verde com a rua em branco, e o
+        // vendedor concluia que o app quebrou em vez de digitar a rua, que e o que falta.
+        : k === 'cep' && !cepRuim && !cepFalhou && Object.keys(cepTravados).length && !cepTravados.end
+          ? '<span class="dica-campo aviso">CEP geral da cidade, complete a rua'
+            + (cepTravados.bairro ? '' : ' e o bairro') + '</span>'
+          : ''
   return '<div class="' + (erro ? 'erro' : '') + (sinal ? ' com-sinal' : '') + '">'
     + '<label>' + esc(c.r) + (travado ? IC_CADEADO : '') + '</label>'
     + dentro + sinal + dica + '</div>'
@@ -1022,7 +1131,9 @@ function calendario() {
 // A escolha MUDA O PRAZO que o vendedor promete ao cliente na hora, por isso ela mora colada na
 // previsao e nao escondida num seletor. `transp` vazio = transportadora, que e o padrao da casa.
 function blocoPrazo() {
-  const p = previsaoEntrega(ped.uf, ped.cep, ped.transp || TRANSPORTE_PADRAO)
+  const ce = semTransportadoraCE(ped.uf)
+  const efetivo = transpEfetivo()
+  const p = previsaoEntrega(ped.uf, ped.cep, efetivo)
   if (!p) return ''
   let h = '<div class="prazo"><div class="prazo-l">'
     + svg('<path d="M10 17h4V5H2v12h3"/><path d="M20 17h2v-3.3a4 4 0 0 0-1.2-2.8L19 9h-5v8h2"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>')
@@ -1030,10 +1141,15 @@ function blocoPrazo() {
     + '<div class="prazo-s">até ' + esc(p.ate) + ', se postar hoje · estimativa pra ' + esc(p.uf) + '</div>'
     + '<div class="prazo-ops">'
   for (const t of TRANSPORTES) {
-    const on = (ped.transp || TRANSPORTE_PADRAO) === t.id
-    h += '<button class="prazo-op' + (on ? ' on' : '') + '" data-transp="' + t.id + '" title="' + esc(t.desc) + '">' + esc(t.nome) + '</button>'
+    const on = efetivo === t.id
+    const travado = ce && t.id === 'five'
+    h += '<button class="prazo-op' + (on ? ' on' : '') + (travado ? ' travado' : '') + '" data-transp="' + t.id + '"'
+      + (travado ? ' disabled' : '')
+      + ' title="' + esc(travado ? 'Ceará: a transportadora não atende o estado' : t.desc) + '">' + esc(t.nome) + '</button>'
   }
-  return h + '</div></div>'
+  h += '</div>'
+  if (ce) h += '<div class="prazo-ce">No Ceará a transportadora não atende: vai pelos Correios, no endereço ou retirada na agência.</div>'
+  return h + '</div>'
 }
 
 // SO TRATAMENTO CADASTRADO, sem digitar livre, e o total e leitura. O vendedor nao escolhe preco.
@@ -1065,9 +1181,11 @@ function mudouCep(valor) {
   if (n === cepUltimo) return
   cepUltimo = n
   cepEmVoo = ''
-  const tinhaErro = cepRuim
+  const tinhaErro = cepRuim || cepFalhou || cepSemBase
   const tinhaTrava = Object.keys(cepTravados).length > 0
   cepRuim = false
+  cepFalhou = false
+  cepSemBase = false
   for (const k of Object.keys(cepTravados)) if (cepTravados[k]) ped[k] = ''
   cepTravados = {}
   if (n.length === 8) { buscaCepNoApp(n); return }
@@ -1083,10 +1201,20 @@ async function buscaCepNoApp(n) {
   desenha()
   let r = null
   try { r = await window.swp.cep(n) } catch (_) { r = null }
-  // RESPOSTA ATRASADA NAO MANDA: o vendedor ja pode ter digitado outro CEP.
-  if (cepEmVoo !== n) return
+  // RESPOSTA ATRASADA NAO MANDA: o vendedor ja pode ter digitado outro CEP. Mas a RODINHA para de
+  // girar: se ninguem mais esta buscando, o campo nao pode ficar carregando pra sempre - era o que
+  // acontecia quando ele digitava os 8, via que errou e apagava antes de a resposta chegar.
+  if (cepEmVoo !== n) {
+    if (!cepEmVoo && cepBuscando) { cepBuscando = false; desenha() }
+    return
+  }
   cepBuscando = false
   cepRuim = !!(r && r.invalido)
+  // NEM ACHOU NEM DISSE QUE NAO EXISTE = a consulta falhou (sem internet, bases fora, tempo
+  // esgotado). Nao travar nada e avisar e o certo: o vendedor digita o endereco na mao e segue.
+  const respondeu = !!(r && r.ok !== false && (r.respondeu || r.achou || r.invalido))
+  cepFalhou = !cepRuim && !respondeu
+  cepSemBase = !cepRuim && respondeu && !(r && r.achou)
   if (r && r.achou && r.dados) {
     const d = r.dados
     for (const [k, v] of [['end', d.end], ['bairro', d.bairro], ['cidade', d.cidade], ['uf', d.uf]]) {
@@ -1098,7 +1226,9 @@ async function buscaCepNoApp(n) {
   // vendedor cacava o campo com o mouse em todo pedido.
   if (r && r.achou) {
     setTimeout(() => {
-      try { const el = document.querySelector('[data-k=num]'); if (el) { el.focus(); el.select() } }
+      // SEM `select()`: a dash so foca (novo-pedido.jsx:341). Selecionar o conteudo fazia a tecla
+      // seguinte APAGAR o numero que o vendedor tinha adiantado antes da busca responder.
+      try { const el = document.querySelector('[data-k=num]'); if (el) el.focus() }
       catch (_) { /* sem foco, tudo bem */ }
     }, 40)
   }
@@ -1106,7 +1236,7 @@ async function buscaCepNoApp(n) {
 
 // Zera a busca de CEP junto com o formulario: trava velha num endereco novo e o jeito de mandar o
 // pacote pro lugar errado.
-function zeraCep() { cepEmVoo = ''; cepUltimo = ''; cepBuscando = false; cepRuim = false; cepTravados = {} }
+function zeraCep() { cepEmVoo = ''; cepUltimo = ''; cepBuscando = false; cepRuim = false; cepFalhou = false; cepSemBase = false; cepTravados = {} }
 
 function campoTratamento() {
   const erro = pedErros.length && !ofertaDe(ped.tratKey) ? ' erro' : ''
@@ -1114,7 +1244,7 @@ function campoTratamento() {
   let dentro
   if (ofertasEstado === 'ok') {
     dentro = listaPropria('trat', of ? of.label : '', 'Selecione',
-      ofertas.map((o) => ({ v: o.key, r: o.label, p: 'R$ ' + emDinheiro(o.price), on: String(ped.tratKey || '') === String(o.key) })))
+      ofertasEmOrdem().map((o) => ({ v: o.key, r: o.label, p: 'R$ ' + emDinheiro(o.price), on: String(ped.tratKey || '') === String(o.key) })))
   } else if (ofertasEstado === 'erro') {
     dentro = listaPropria('trat', '', 'não deu pra buscar', [], true)
       + '<button class="bt sec" id="pd-retrat" style="height:28px;margin-top:6px;font-size:11px;width:100%">Tentar de novo</button>'
@@ -1154,12 +1284,42 @@ function campoAnexo() {
       + '<span class="nm">' + esc(a.nome) + '</span>'
       + '<button class="x" data-tiraanexo="' + esc(a.url) + '" title="Tirar">' + IC_X + '</button></div>'
   }
+  if (subindo) {
+    h += '<div class="anexo subindo" style="margin-bottom:6px">' + IC_GIRA
+      + '<span class="nm">' + esc(subindo) + '</span>'
+      + '<span class="st">enviando</span></div>'
+  }
   h += '<button class="anexo' + (falta ? '' : '') + '" id="pd-anexar"' + (pedSalvando ? ' disabled' : '') + '>'
     + (pedSalvando === 'anexo' ? IC_GIRA : IC_CLIPE)
     + '<span class="nm">' + (pedSalvando === 'anexo' ? 'enviando...' : (anexos.length ? 'Adicionar outro' : 'Clique para adicionar')) + '</span></button>'
     + '<input type="file" id="pd-arquivo" accept="image/*,video/*,audio/*" multiple hidden />'
   return h + '</div>'
 }
+
+// CTRL+V EM QUALQUER LUGAR, igual a dash (novo-pedido.jsx:305-317, que registra no DOCUMENTO).
+//
+// REGISTRADO UMA VEZ, FORA DO ligaPedidos: aquele roda a cada `desenha()`, e o ouvinte morava no
+// #corpo - que perde o foco em todo clique de botao, e cujo innerHTML e trocado inteiro a cada
+// redesenho. Resultado: o Ctrl+V so colava se o cursor estivesse dentro de um campo de texto.
+//
+// A GUARDA E O ESTADO, nao o elemento: so cola quando a aba de pedidos esta aberta com um pedido em
+// edicao. Fora disso, Ctrl+V volta a ser Ctrl+V.
+document.addEventListener('paste', (e) => {
+  if (aba !== 'pedidos' || !pedTipo) return
+  try {
+    const itens = [...((e.clipboardData && e.clipboardData.items) || [])]
+    const imgs = itens.filter((x) => x && x.kind === 'file' && /^image\//.test(x.type || ''))
+      .map((x) => x.getAsFile()).filter(Boolean)
+    if (!imgs.length) return                // texto colado segue normal
+    e.preventDefault()
+    // DIZ O QUE ENTROU, nao o que foi tentado: a mensagem saia sempre, inclusive quando o arquivo
+    // era descartado por ter outra subida em andamento ou quando o upload falhava.
+    subirAnexos(imgs, true).then((n) => {
+      if (!n) return                        // o erro aparece no aviso vermelho, com o motivo
+      rodape(n > 1 ? n + ' imagens coladas' : 'print colado no comprovante')
+    })
+  } catch (_) { /* colagem estranha: deixa o padrao */ }
+})
 
 function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-tipo]')) {
@@ -1183,16 +1343,31 @@ function ligaPedidos(corpo) {
       if (k === 'uf') { v = v.toUpperCase(); el.value = v }
       const antes = ped[k]
       ped[k] = v
+      rascunhoDepois()
       if (k === 'cep') { mudouCep(v); return }
       // UF na mao tambem mexe no prazo, e o telefone e o CPF pintam o campo enquanto digita.
       if (k === 'uf' || k === 'wa' || k === 'cpf') { if (String(antes || '') !== v) desenhaSePreciso(k, v) }
       if (k === 'tratKey') desenha()      // o Total acompanha
     }
     if (el.tagName === 'SELECT') el.onchange = el.oninput
+    // SAIU DO CAMPO DO WHATSAPP: completa o 9 que falta. Nao da pra fazer isso a cada tecla - 10
+    // digitos e um estado NORMAL de quem esta digitando um numero de 11, e um 9 entrando no meio
+    // empurraria o que ele acabou de digitar.
+    if (el.dataset.k === 'wa') {
+      el.onblur = () => {
+        const antes = String(ped.wa || '')
+        const depois = com9(antes)
+        if (depois === antes) return
+        ped.wa = depois
+        el.value = depois
+        rodape('completei o 9 que faltava no celular')
+        desenha()
+      }
+    }
   }
   // OS CLIQUES DOS BLOCOS NOVOS.
   for (const b of corpo.querySelectorAll('[data-transp]')) {
-    b.onclick = () => { ped.transp = b.dataset.transp; desenha() }
+    b.onclick = () => { if (b.disabled) return; ped.transp = b.dataset.transp; rascunhoDepois(); desenha() }
   }
   const vf = corpo.querySelector('#pd-vf')
   if (vf) vf.onclick = () => { vendaFutura = !vendaFutura; if (!vendaFutura) { dataFutura = ''; calAberto = false }; desenha() }
@@ -1210,13 +1385,21 @@ function ligaPedidos(corpo) {
       const r = rascunhos.find((x) => String(x.id) === String(b.dataset.abre))
       if (!r) return
       ped = { ...(r.dados || {}) }
-      pedIdFixo = 0                       // rascunho reaberto e outra tentativa
+      // O ID DO PEDIDO VOLTA COM O RASCUNHO, em vez de nascer de novo. Era `pedIdFixo = 0` aqui, e
+      // isso transformava toda reabertura numa tentativa NOVA pro servidor: a segunda tentativa do
+      // MESMO pedido criava o segundo card. Zerar so no cadastro que deu certo (ou na troca de
+      // cliente, que ai e outro pedido mesmo) e o que a dash faz.
+      pedIdFixo = Number(ped.__pedId) || 0
       // O QUE O RASCUNHO GUARDOU VOLTA JUNTO: sem isto, reabrir um rascunho de venda futura perdia
       // a data e o pedido entrava na fila de hoje.
       zeraCep()
+      // E AS TRAVAS DO CEP VOLTAM COM CADEADO, como na dash (que nao mexe no `doCep` ao reabrir).
+      // O `cepUltimo` volta junto pra uma tecla a mais no campo do CEP nao refazer a busca inteira.
+      cepTravados = (ped.__cepTrava && typeof ped.__cepTrava === 'object') ? { ...ped.__cepTrava } : {}
+      cepUltimo = dig(ped.cep)
       vendaFutura = !!ped.__vf
       dataFutura = String(ped.__vfData || '')
-      delete ped.__vf; delete ped.__vfData
+      delete ped.__vf; delete ped.__vfData; delete ped.__pedId; delete ped.__cepTrava
       pedTipo = String(ped.__tipo || 'entrega')
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
@@ -1270,7 +1453,7 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-op]')) {
     b.onclick = (ev) => {
       ev.stopPropagation()
-      if (b.dataset.op === 'trat') ped.tratKey = b.dataset.v
+      if (b.dataset.op === 'trat') { ped.tratKey = b.dataset.v; rascunhoDepois() }
       desenha()
     }
   }
@@ -1292,6 +1475,16 @@ function ligaPedidos(corpo) {
   liga('pd-rasc', salvaRascunho)
   liga('pd-ok', cadastraPedido)
   liga('pd-retrat', () => { ofertasEstado = ''; pegaOfertas(); desenha() })
+  // TENTAR DE NOVO A BUSCA DE CEP. Botao que so existe quando a consulta falhou: internet que caiu
+  // por dois segundos nao pode obrigar o vendedor a reapagar e redigitar os oito digitos.
+  liga('pd-cepagain', () => {
+    const n = dig(ped.cep)
+    if (n.length !== 8) return
+    cepFalhou = false
+    cepSemBase = false
+    cepRuim = false
+    buscaCepNoApp(n)
+  })
   // UM CLIQUE COLA O PRINT; sem print na area de transferencia, abre a pasta. DOIS CLIQUES abrem a
   // pasta sempre - e a saida pra quem quer escolher o arquivo mesmo tendo print copiado.
   const btAnexo = $('pd-anexar')
@@ -1308,19 +1501,6 @@ function ligaPedidos(corpo) {
   }
   liga('pd-copia-dados', () => copia(textoPedido(montaPedido(ped)), 'Dados de envio copiados'))
   liga('pd-copia-termo', () => copia(textoTermo(montaPedido(ped)), 'Termo copiado'))
-  // CTRL+V EM QUALQUER LUGAR DO FORMULARIO, que e como a dash faz (novo-pedido.jsx). O evento ja
-  // traz o arquivo, entao este caminho nao pede permissao nenhuma.
-  corpo.onpaste = (e) => {
-    try {
-      const itens = [...((e.clipboardData && e.clipboardData.items) || [])]
-      const imgs = itens.filter((x) => x && x.kind === 'file' && /^image\//.test(x.type || ''))
-        .map((x) => x.getAsFile()).filter(Boolean)
-      if (!imgs.length) return                // texto colado segue normal
-      e.preventDefault()
-      subirAnexos(imgs).then(() => rodape(imgs.length > 1 ? imgs.length + ' imagens coladas' : 'print colado no comprovante'))
-    } catch (_) { /* colagem estranha: deixa o padrao */ }
-  }
-
   const inp = $('pd-arquivo')
   if (inp) inp.onchange = () => subirAnexos([...(inp.files || [])])
 }
@@ -1335,17 +1515,48 @@ function copia(txt, aviso) {
 // olhando "Salvando..." parado achando que travou.
 // SOBE BYTES CRUS. O print da area de transferencia nao e um File - ele vem do processo principal
 // como bytes -, entao o caminho do upload precisa aceitar os dois.
-async function subirBytes(nome, mime, bytes) {
-  if (pedSalvando) return false
-  pedSalvando = 'anexo'; desenha()
-  let bom = false
-  try {
-    const r = await window.swp.comprovante(nome, mime, bytes, '')
-    if (r && r.ok && r.url) { anexos.push({ nome, url: r.url, mime: r.mime || mime }); bom = true }
-    else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
-  } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
-  pedSalvando = ''; desenha()
-  return bom
+// A FILA DOS ANEXOS. Quem chega no meio de outra subida ESPERA a vez, em vez de voltar calado.
+//
+// O BUG QUE ISTO CONSERTA: as duas funcoes de subir comecavam com `if (pedSalvando) return`, e o
+// caso real e comum - o vendedor anexa o video do comprovante e, enquanto ele sobe, da Ctrl+V pra
+// colar o print do termo. O print era DESCARTADO em silencio e o rodape dizia "print colado no
+// comprovante", porque a mensagem saia do `.then` sem olhar o resultado. Ele nao tinha como saber:
+// a conferencia passa, porque ja existe um anexo. O pedido ia sem o print.
+// O NOME DO PRINT, gemeo do nomeDePrint do copiar.js da dash. O Chrome chama TODO print colado de
+// "image.png", e o caminho do clique mandava "print.png" fixo: dois prints no mesmo pedido ficavam
+// com o mesmo nome e nao dava pra separar o do termo do da confirmacao no modal do CRM.
+function nomeDePrint(mime) {
+  const ext = String(mime || 'image/png').split('/')[1].replace('jpeg', 'jpg').replace('svg+xml', 'svg')
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return 'print-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+    + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.' + ext
+}
+
+let filaAnexo = Promise.resolve()
+function naFila(fn) {
+  const minha = filaAnexo.then(fn, fn)
+  filaAnexo = minha.then(() => {}, () => {})
+  return minha
+}
+
+// SOBE BYTES CRUS. O print da area de transferencia nao e um File - ele vem do processo principal
+// como bytes -, entao o caminho do upload precisa aceitar os dois.
+function subirBytes(nome, mime, bytes) {
+  return naFila(async () => {
+    if (pedSalvando && pedSalvando !== 'anexo') return false
+    subindo = nome
+    pedSalvando = 'anexo'; desenha()
+    let bom = false
+    try {
+      const r = await window.swp.comprovante(nome, mime, bytes, '')
+      if (r && r.ok && r.url) { anexos.push({ nome, url: r.url, mime: r.mime || mime }); bom = true }
+      else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
+    } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
+    subindo = ''
+    pedSalvando = ''; desenha()
+    return bom
+  })
 }
 
 // COLAR O PRINT (17/10/2026, pedido do Bruno): "toda vez que a pessoa da um clique, ele ja cola o
@@ -1361,26 +1572,35 @@ async function colarPrint(semPrintAbrePasta) {
   let r = null
   try { r = await window.swp.colaPrint() } catch (_) { r = null }
   if (r && r.ok && r.bytes) {
-    const ok = await subirBytes(r.nome || 'print.png', r.mime || 'image/png', r.bytes)
-    if (ok) rodape('print colado no comprovante')
+    const ok = await subirBytes(nomeDePrint(r.mime || 'image/png'), r.mime || 'image/png', r.bytes)
+    rodape(ok ? 'print colado no comprovante' : 'não deu pra colar o print')
     return true
   }
   if (semPrintAbrePasta) { const i = $('pd-arquivo'); if (i) i.click() }
   return false
 }
 
-async function subirAnexos(arquivos) {
-  if (!arquivos.length || pedSalvando) return
-  pedSalvando = 'anexo'; desenha()
-  for (const f of arquivos) {
-    try {
-      const bytes = new Uint8Array(await f.arrayBuffer())
-      const r = await window.swp.comprovante(f.name || 'comprovante', f.type || '', bytes, '')
-      if (r && r.ok && r.url) anexos.push({ nome: f.name || 'comprovante', url: r.url, mime: r.mime || f.type || '' })
-      else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
-    } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
-  }
-  pedSalvando = ''; desenha()
+// `renomeia` = o arquivo veio de um Ctrl+V e precisa de nome com data e hora (ver nomeDePrint).
+function subirAnexos(arquivos, renomeia) {
+  if (!arquivos.length) return Promise.resolve(0)
+  return naFila(async () => {
+    if (pedSalvando && pedSalvando !== 'anexo') return 0
+    let entraram = 0
+    pedSalvando = 'anexo'; desenha()
+    for (const f of arquivos) {
+      const nome = renomeia ? nomeDePrint(f.type) : (f.name || 'comprovante')
+      subindo = nome; desenha()
+      try {
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const r = await window.swp.comprovante(nome, f.type || '', bytes, '')
+        if (r && r.ok && r.url) { anexos.push({ nome, url: r.url, mime: r.mime || f.type || '' }); entraram += 1 }
+        else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
+      } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
+    }
+    subindo = ''
+    pedSalvando = ''; desenha()
+    return entraram
+  })
 }
 
 // GRAVA SOZINHO AO SAIR (16/10, pedido dele: "rascunho gravado sozinho ao trocar de aba ou de
@@ -1411,13 +1631,27 @@ function temConteudo() { return fotoDoForm() !== nasceuAssim || anexos.length > 
 // funcao VOLTAR NA HORA sem gravar nada se ja houvesse uma salvando. Pro pulso tanto faz, mas o
 // botao de trocar de cliente faz `await rascunhoSozinho()` e limpa a tela logo depois: cair nesse
 // desistir silencioso jogaria fora o que o vendedor digitou. Agora quem chega no meio ESPERA.
+// GRAVA SOZINHO 1,5s DEPOIS DA ULTIMA TECLA. Antes so gravava nas SAIDAS (trocar de aba, de
+// conversa, de cliente ou de tipo) e no botao Rascunho, e isso deixava de fora justamente o caso em
+// que o rascunho serve pra algo: o app fechar, o Windows reiniciar ou a tela recarregar no meio do
+// cadastro. O que ele digitou nos ultimos minutos simplesmente nao existia.
+//
+// 1,5s e nao a cada tecla: o `rascunhoSozinho` fala com o servidor, e ele digita rapido. A trava de
+// concorrencia e o critario de conteudo ja estao lá dentro, entao isto nao cria rascunho vazio nem
+// duas gravacoes empilhadas.
+let marcaRasc = null
+function rascunhoDepois() {
+  if (marcaRasc) clearTimeout(marcaRasc)
+  marcaRasc = setTimeout(() => { marcaRasc = null; rascunhoSozinho() }, 1500)
+}
+
 let gravandoAgora = null
 function rascunhoSozinho() {
   if (gravandoAgora) return gravandoAgora
   if (pedSalvando || !pedTipo || !temConteudo()) return Promise.resolve(false)
   gravandoAgora = (async () => {
     try {
-      const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura }
+      const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura, __pedId: pedIdFixo, __cepTrava: cepTravados }
       // O id vai como esta: vazio significa "ainda nao existe", e quem cunha e o servidor.
       const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || '', dados)
       if (r && r.ok && r.id) rascId = String(r.id)
@@ -1436,7 +1670,7 @@ async function salvaRascunho() {
   try {
     // O tipo e os anexos viajam DENTRO do rascunho: sem eles, reabrir cairia no passo do tipo com os
     // campos preenchidos e o comprovante perdido.
-    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura }
+    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura, __pedId: pedIdFixo, __cepTrava: cepTravados }
     const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || estadoWa.phone || '', dados)
     // RECUSA DO SERVIDOR TAMBEM E ERRO. O `catch` so pega exceção; um `ok:false` passava calado e o
     // vendedor clicava em Rascunho sem ver confirmação NEM erro. Foi assim que o rascunho ficou
@@ -1456,6 +1690,15 @@ async function salvaRascunho() {
 let confirmouOutro = false
 async function cadastraPedido() {
   if (pedSalvando) return
+  // O 9 ENTRA ANTES DA CONFERENCIA, nunca depois. Recusar o cadastro com "faltam 1 numero" quando da
+  // pra consertar sozinho e mandar o vendedor digitar o que a gente ja sabe: celular brasileiro tem
+  // o 9 depois do DDD. Este e o ponto que GARANTE a correcao - o `onblur` do campo e so o atalho pra
+  // ele ver na hora, e a tela nem sempre perde o foco antes do clique em Cadastrar.
+  //
+  // FIXO NAO E MEXIDO (ver `com9`) e continua recusado, que e o certo: telefone de casa nao recebe
+  // WhatsApp, e inventar um 9 ali criaria um numero que nao existe.
+  const wa9 = com9(ped.wa)
+  if (wa9 !== String(ped.wa || '')) { ped.wa = wa9; rodape('completei o 9 que faltava no celular') }
   const faltam = confere(ped)
   if (faltam.length) { pedErros = faltam; pedFeito = ''; desenha(); return }
   const outro = pedLead && estadoWa.phone && estadoWa.phone !== pedLead.phone
@@ -1550,11 +1793,25 @@ async function trocaDeLead() {
   } finally { trocandoLead = false }
 }
 
+// O TELEFONE QUE O APP PREENCHEU SOZINHO (ver dentro do preenchePed). Guardado pra dar pra saber
+// se o que esta no campo foi escolha do vendedor ou so o automatico de um cliente que ja saiu.
+let pedWaAuto = ''
 function preenchePed() {
   const de = pedLead || estadoWa
   const fone = de.phone || ''
   if (!fone) return
-  if (!ped.wa) ped.wa = formata(fone)
+  // O 9 ENTRA AQUI, na origem: o numero vem do WhatsApp, que e justamente onde ele chega faltando.
+  const auto = com9(formata(fone))
+  // E O NUMERO SEGUE O DONO. Antes era `if (!ped.wa)`, ou seja so escrevia em campo vazio: trocando
+  // de conversa com o formulario fechado e abrindo o pedido do cliente NOVO, o campo vinha com o
+  // telefone do cliente ANTERIOR, com o nome certo na linha de cima. O pedido entrava em Aceitacoes
+  // com o contato de outra pessoa: cobranca ligando pro cliente errado, casamento venda x lead no
+  // lead errado, etiqueta com telefone de terceiro. E o vendedor confiava, porque foi o app que
+  // preencheu.
+  //
+  // SO SOBRESCREVE O QUE ELE MESMO ESCREVEU: se o vendedor digitou o numero na mao (porque o cliente
+  // pediu pra mandar pra outro telefone, que acontece), aquilo fica.
+  if (!ped.wa || ped.wa === pedWaAuto) { ped.wa = auto; pedWaAuto = auto }
   // O CAMPO NOME NASCE VAZIO, SEMPRE (16/10/2026, decisao do Bruno: "deixa o nome em branco, deixa
   // apenas o numero ali aparecendo").
   //

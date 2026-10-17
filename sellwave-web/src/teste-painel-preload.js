@@ -55,14 +55,22 @@ contextBridge.exposeInMainWorld('swp', {
   abrirMidia: reg('abrirMidia', { ok: true }),
   // A area de transferencia com um print dentro, pro teste do clique que cola.
   colaPrint: reg('colaPrint', { ok: true, bytes: new Uint8Array([137, 80, 78, 71]), mime: 'image/png', nome: 'print.png' }),
-  // A BUSCA DE CEP responde como a de verdade: o 88504411 e o CEP real que o Bruno usou no print
-  // (Rua Curitiba, Santa Helena, Lages/SC), e o 12345678 e um que nenhuma base acha.
+  // A BUSCA DE CEP responde COMO A DE VERDADE, nos quatro casos que existem de verdade - e o
+  // `respondeu` vai em todos porque e ele que a tela usa pra escolher o recado (ver main.js).
+  // Os CEPs sao reais, conferidos contra as bases em 17/10/2026:
+  //   88504-411 Rua Curitiba, Santa Helena, Lages/SC (o do print do Bruno)
+  //   60175-045 Rua Pereira de Miranda, Papicu, Fortaleza/CE (pra regra do Ceara)
+  //   01000-000 existe e NENHUMA das tres bases tem endereco (CEP geral de cidade)
+  //   12345678 nenhuma base acha  ·  99000-000 a consulta nao responde (sem internet/proxy)
   cep: (cep) => {
     chamadas.push({ nome: 'cep', args: [cep] })
     const c = String((cep && cep.cep) || cep || '').replace(/\D/g, '')
-    if (c === '88504411') return Promise.resolve({ ok: true, achou: true, invalido: false, completo: true, dados: { end: 'Rua Curitiba', bairro: 'Santa Helena', cidade: 'Lages', uf: 'SC' } })
-    if (c === '12345678') return Promise.resolve({ ok: true, achou: false, invalido: true, completo: false, dados: null })
-    return Promise.resolve({ ok: true, achou: false, invalido: false, completo: false, dados: null })
+    if (c === '88504411') return Promise.resolve({ ok: true, achou: true, invalido: false, completo: true, respondeu: true, dados: { end: 'Rua Curitiba', bairro: 'Santa Helena', cidade: 'Lages', uf: 'SC' } })
+    if (c === '60175045') return Promise.resolve({ ok: true, achou: true, invalido: false, completo: true, respondeu: true, dados: { end: 'Rua Pereira de Miranda', bairro: 'Papicu', cidade: 'Fortaleza', uf: 'CE' } })
+    if (c === '12345678') return Promise.resolve({ ok: true, achou: false, invalido: true, completo: false, respondeu: true, dados: null })
+    if (c === '01000000') return Promise.resolve({ ok: true, achou: false, invalido: false, completo: false, respondeu: true, dados: null })
+    if (c === '99000000') return Promise.resolve({ ok: false, achou: false, invalido: false, completo: false, respondeu: false, dados: null })
+    return Promise.resolve({ ok: true, achou: false, invalido: false, completo: false, respondeu: true, dados: null })
   },
   // PODE FALHAR SOB COMANDO. A rede caindo no meio do cadastro e o caso que fazia o app criar
   // DOIS cards do mesmo pedido, e um stub que so responde ok nunca encosta nesse caminho - e a

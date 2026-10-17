@@ -277,8 +277,14 @@
   .cep-sinal svg { width: 14px; height: 14px; }
   .cep-sinal.ok { color: var(--verde); }
   .cep-sinal.gira { color: var(--apagado); }
+  /* BUSCA QUE NAO RESPONDEU: ambar, nao vermelho. Vermelho quer dizer "voce errou"; aqui quem errou
+     foi a consulta, e o endereco digitado na mao continua valendo. */
+  .cep-sinal.aviso { color: var(--ambar); }
   /* A dica embaixo do campo: diz o que falta, em vez de so pintar de vermelho. */
   .dica-campo { display: block; margin-top: 3px; font-size: 10px; line-height: 13px; color: #f0506a; }
+  .dica-campo.aviso { color: var(--ambar); }
+  .cep-again { background: none; border: 0; padding: 0; font: inherit; color: var(--azul);
+    text-decoration: underline; cursor: pointer; }
 
   /* ── VENDA FUTURA ───────────────────────────────────────────────────────────────────────
      Mesmo ambar da dash: e um estado do pedido, nao um campo a mais. */
@@ -335,6 +341,15 @@
     background: none; color: var(--apagado); font: inherit; font-size: 11px; cursor: pointer; }
   .prazo-op:hover { border-color: rgba(134, 150, 160, .35); color: var(--texto); }
   .prazo-op.on { background: rgba(0,188,242,.16); border-color: rgba(0,188,242,.45); color: #53bdeb; font-weight: 650; }
+  /* CEARA: a transportadora nao atende, e o botao diz isso em vez de desaparecer - opcao que some
+     deixa o vendedor achando que a tela quebrou; riscada, ele entende que existe e nao serve ali. */
+  .prazo-op.travado { opacity: .4; cursor: not-allowed; text-decoration: line-through; }
+  .prazo-op.travado:hover { border-color: var(--borda); color: var(--apagado); }
+  .prazo-ce { margin-top: 6px; font-size: 10.5px; line-height: 14px; color: var(--apagado); }
+  /* O ARQUIVO APARECE JA SUBINDO, com o nome. Antes a lista ficava vazia durante o envio e o unico
+     sinal era um botao escrito "enviando...", sem dizer o que estava indo. */
+  .anexo.subindo { opacity: .75; }
+  .anexo.subindo .st { margin-left: auto; font-size: 10px; color: var(--apagado); }
 
   .anexo { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px;
     border: 1px dashed var(--borda); border-radius: 11px; color: var(--apagado);

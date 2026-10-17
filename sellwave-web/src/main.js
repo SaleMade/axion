@@ -1822,8 +1822,23 @@ const _cepNota = (d) => {
   if (d.end || d.bairro) return 2
   return 1
 }
+// O `fetch` AQUI E O DO NODE, DE PROPOSITO, e trocar por `net.fetch` quebra a busca inteira.
+//
+// O BUG QUE ISTO CONSERTA (17/10/2026): o Bruno digitava os oito digitos e o campo ficava girando
+// pra sempre, sem endereco e sem erro. O `net.fetch` do Electron sai pela SESSAO PADRAO, e a sessao
+// padrao deste app esta num buraco negro de proxy DE PROPOSITO (nenhuma pagina fala com a rede sem
+// passar pelo proxy do numero), entao as tres bases de CEP morriam em ERR_PROXY e as tres viravam
+// `falhou` - resultado identico ao de um CEP que ninguem respondeu, e a tela nao tinha o que dizer.
+//
+// O `fetch` global vem do undici do Node e nao passa por sessao nenhuma, que e o que se quer aqui:
+// consultar CEP e assunto do APP, nao do numero do vendedor. As outras dez chamadas de rede deste
+// arquivo ja usavam ele; esta era a unica fora do padrao.
+//
+// ARMADILHA IRMA, pra nao cair de novo: passar `{ session }` pro `net.fetch` NAO DA ERRO - a
+// assinatura dele so tem `bypassCustomProtocolHandlers` e o campo e ignorado em silencio. Quem
+// respeita sessao e `ses.fetch` (foi assim que a previa de midia foi consertada no mesmo dia).
 async function _cepBusca(url, ms = 7000) {
-  const r = await net.fetch(url, { signal: AbortSignal.timeout(ms) })
+  const r = await fetch(url, { signal: AbortSignal.timeout(ms) })
   return r
 }
 const _cepFontes = [
@@ -1854,12 +1869,12 @@ const _cepFontes = [
 ]
 async function buscaCep(cep) {
   const c = String(cep || '').replace(/\D/g, '')
-  if (c.length !== 8) return { achou: false, invalido: false, dados: null, completo: false }
+  if (c.length !== 8) return { achou: false, invalido: false, dados: null, completo: false, respondeu: false }
   if (_cepCache.has(c)) return _cepCache.get(c)
   // CEP DO BRASIL COMECA EM 01000-000. Prefixo 00 nao existe, entao 00000-000 e digitacao e nao o
   // CEP geral de uma cidade - sem esta linha a regra do 000 abaixo o daria por valido.
   if (c.slice(0, 2) === '00') {
-    const ruim = { achou: false, invalido: true, dados: null, completo: false }
+    const ruim = { achou: false, invalido: true, dados: null, completo: false, respondeu: true }
     _cepCache.set(c, ruim)
     return ruim
   }
@@ -1868,22 +1883,57 @@ async function buscaCep(cep) {
   // voltou preenchido, um por um, nunca o formato do CEP.
   const geral = c.endsWith('000')
   let melhor = null, naoAchou = 0, responderam = 0
-  const resultados = await Promise.all(_cepFontes.map((f) => f(c).catch(() => ({ falhou: true }))))
-  for (const r of resultados) {
-    if (!r || r.falhou) continue
-    responderam += 1
-    if (r.naoAchou) { naoAchou += 1; continue }
-    if (_cepNota(r) > _cepNota(melhor)) melhor = r
-  }
+
+  // CORRIDA, NAO Promise.all - identica a da dash (cep.js:102-119).
+  //
+  // O QUE O Promise.all CUSTAVA: ele so devolve quando as TRES acabam, entao quem mandava no tempo
+  // era a ViaCEP, a mais lenta e a menos completa (medido na dash: BrasilAPI 128ms, OpenCEP 180ms,
+  // ViaCEP 472ms). Se ela pendurasse, o campo girava os 7 segundos inteiros COM O ENDERECO CERTO JA
+  // NA MEMORIA. Resposta completa encerra: esperar as outras pra chegar na mesma coisa e so espera.
+  await new Promise((pronto) => {
+    let faltam = _cepFontes.length
+    let acabou = false
+    const fim = () => { if (!acabou) { acabou = true; pronto() } }
+    for (const fonte of _cepFontes) {
+      fonte(c)
+        .then((r) => {
+          if (!r || r.falhou) return
+          responderam += 1
+          if (r.naoAchou) { naoAchou += 1; return }
+          if (_cepNota(r) > _cepNota(melhor)) melhor = r
+          if (_cepNota(melhor) === 3) fim()
+        })
+        .catch(() => { /* fonte fora do ar: as outras seguem */ })
+        .finally(() => { if (--faltam === 0) fim() })
+    }
+  })
+
   const saida = {
     achou: !!melhor,
-    invalido: !melhor && !geral && responderam > 0 && naoAchou === responderam,
+    // DUAS FONTES PRECISAM DIZER QUE NAO EXISTE, a regra da dash (cep.js:123-125). A regra antiga
+    // daqui era "todas as que responderam disseram que nao", e com UMA respondendo (as outras duas
+    // fora do ar) isso dava CEP INVALIDO: um 404 solto de uma base ruim barrava o pedido de um
+    // cliente de verdade, e o vendedor nao tinha como cadastrar.
+    invalido: !melhor && !geral && naoAchou >= 2,
     dados: melhor,
     completo: _cepNota(melhor) === 3,
+    // ALGUMA BASE RESPONDEU? Sem este campo, "as bases disseram que nao tem" e "ninguem respondeu"
+    // chegavam na tela como a mesma coisa (achou: false, invalido: false), e a tela so podia chutar
+    // um dos dois recados. Medido em 17/10/2026: NENHUMA das tres bases conhece CEP terminado em
+    // 000, nem 01000-000 nem 13000-000, entao esse caso acontece todo dia e nao e falha de rede.
+    respondeu: responderam > 0,
   }
-  if (saida.achou || saida.invalido) _cepCache.set(c, saida)
+  // SO GUARDA O QUE DEU CERTO, tambem igual a dash (cep.js:126-131). Guardar a recusa junto
+  // PRENDIA o pedido: o "tentar de novo" relia o cache e devolvia na hora a MESMA recusa, ou seja o
+  // botao de tentar de novo nao tentava de novo. Recusa quase sempre e rede de terceiro oscilando,
+  // que e exatamente o caso em que repetir resolve. (O prefixo 00 acima continua em cache: aquele e
+  // decidido sem sair da maquina e nao muda nunca.)
+  if (saida.achou) _cepCache.set(c, saida)
   return saida
 }
+// FIM DA BUSCA DE CEP. Esta linha e MARCA DE TESTE: o src/teste-cep.js recorta o bloco daqui pra
+// cima e roda o codigo de verdade contra as bases. Nao apague.
+// ─── fim-busca-cep ───────────────────────────────────────────────────────────────────────────
 // O PRINT DA AREA DE TRANSFERENCIA (17/10/2026, pedido do Bruno). Depois que o cliente aceita o
 // termo, o vendedor da um print e ele fica na area de transferencia; anexar sem salvar arquivo no PC
 // e o caminho mais curto, e e o que a dash ja faz com Ctrl+V.

@@ -19,7 +19,7 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
   process.exit(2)
 }
 
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, session } = require('electron')
 const path = require('path')
 
 // PASTA DE DADOS SEPARADA. O app fixa a pasta em %APPDATA%/sellwave-web, que e onde moram as
@@ -42,6 +42,19 @@ setTimeout(() => { console.log('ESTOUROU O TEMPO (90s). Ultimo ponto: ' + ponto)
 process.on('unhandledRejection', (e) => { console.log('PROMESSA SOLTA em ' + ponto + ': ' + (e && e.message)); app.exit(1) })
 
 app.whenReady().then(async () => {
+  // O ESQUEMA swmedia PRECISA DE DONO AQUI, mesmo que devolva 404.
+  //
+  // O QUE ACONTECIA (17/10/2026, achado pela sessao e0): o teste carrega o painel.html numa janela
+  // escondida na sessao PADRAO, e o app de verdade registra o `swmedia://` na `persist:sw-painel`.
+  // Sem dono na padrao, a previa de documento - que e um `<iframe src="swmedia://...">`, ou seja uma
+  // NAVEGACAO, nao um carregamento de imagem - era entregue pro Windows, e o Windows abria o dialogo
+  // "Obter um aplicativo para abrir este 'swmedia' link" NA TELA DO BRUNO, com a janela do teste
+  // escondida. Img, video e audio falham calados; o iframe e o unico que escapa pro sistema.
+  //
+  // 404 e de proposito: o teste da previa de documento confere papel e tinta no elemento (ver
+  // teste-midia, que roda na particao de verdade). Aqui so e preciso que o esquema tenha dono.
+  session.defaultSession.protocol.handle('swmedia', () => new Response('', { status: 404 }))
+
   const win = new BrowserWindow({
     show: false, width: 300, height: 1000,
     webPreferences: { preload: PRELOAD, sandbox: false, contextIsolation: true },
@@ -294,8 +307,112 @@ app.whenReady().then(async () => {
     + ' limpou: (document.querySelector("[data-k=end]")||{}).value || "" })')
   conta('CEP que nenhuma base acha avisa no campo', /não encontrado/.test(ruim.dica), JSON.stringify(ruim))
   conta('e o endereco do CEP anterior e apagado, nao fica embaixo do CEP novo', ruim.limpou === '', JSON.stringify(ruim))
+  // CEP QUE AS BASES NAO TEM ENDERECO: tem que dizer OUTRA coisa. CEP terminado em 000 e o geral da
+  // cidade e NENHUMA das tres bases tem endereco pra ele (medido em 17/10/2026), entao isto acontece
+  // todo dia: chamar de invalido pararia o pedido por nada, e oferecer "tentar de novo" seria mentir.
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "01000000"; e.dispatchEvent(new Event("input")); })()')
+  await espera(450)
+  const semBase = await js('({ dica: (document.querySelector(".dica-campo")||{}).textContent || "",'
+    + ' aviso: !!document.querySelector(".cep-sinal.aviso"), again: !!document.querySelector("#pd-cepagain"),'
+    + ' travou: !!(document.querySelector("[data-k=end]")||{}).hasAttribute && document.querySelector("[data-k=end]").hasAttribute("readonly") })')
+  conta('CEP sem endereco nas bases manda digitar na mao', /bases não têm o endereço/.test(semBase.dica), JSON.stringify(semBase))
+  conta('com aviso ambar, nao com vermelho de erro', semBase.aviso === true, JSON.stringify(semBase))
+  conta('sem oferecer "tentar de novo", que nao resolveria', semBase.again === false, JSON.stringify(semBase))
+  conta('e sem travar campo nenhum: ele precisa digitar os quatro', semBase.travou === false, JSON.stringify(semBase))
+
+  // CONSULTA QUE NAO RESPONDEU: a terceira situacao, e a unica em que "tentar de novo" faz sentido.
+  //
+  // O BUG QUE ISTO PRENDE (17/10/2026): a busca saia por `net.fetch`, que usa a sessao padrao do
+  // Electron - e a sessao padrao deste app esta num buraco negro de proxy de proposito. As tres
+  // bases morriam em ERR_PROXY, e a tela nao dizia NADA: o Bruno digitava os oito digitos e ficava
+  // olhando um campo girando. Ver tambem o teste-cep, que roda o codigo de verdade contra as bases.
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "99000000"; e.dispatchEvent(new Event("input")); })()')
+  await espera(450)
+  const falhou = await js('({ dica: (document.querySelector(".dica-campo")||{}).textContent || "",'
+    + ' aviso: !!document.querySelector(".cep-sinal.aviso"), again: !!document.querySelector("#pd-cepagain"),'
+    + ' girando: !!document.querySelector(".cep-sinal.gira") })')
+  conta('consulta que nao respondeu AVISA, em vez de girar pra sempre',
+    /Não deu pra consultar/.test(falhou.dica) && falhou.girando === false, JSON.stringify(falhou))
+  conta('e oferece tentar de novo', falhou.again === true, JSON.stringify(falhou))
+  await clica('#pd-cepagain')
+  await espera(400)
+  const tentou = await js('(window.__ver()).filter(c => c.nome === "cep" && String(c.args[0]).replace(/\\D/g,"") === "99000000").length')
+  conta('o tentar de novo consulta de novo, sem redigitar o CEP', tentou >= 2, String(tentou))
+
+  // ── A REGRA DO CEARA ─────────────────────────────────────────────────
+  // A TRANSPORTADORA NAO ATENDE O CEARA (regra do Bruno de 14/10/2026, ja na dash). Lembrete dele em
+  // 17/10: "pedidos para o Ceara tem uma regrinha, eu nao vou falar aqui, mas tem uma regra la que
+  // voce tem que ver". La o padrao e Correios no endereco e o botao da transportadora fica travado.
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "60175045"; e.dispatchEvent(new Event("input")); })()')
+  await espera(500)
+  const ce = await js('(() => { const p = document.querySelector(".prazo"); if (!p) return null;'
+    + ' const b = (id) => p.querySelector("[data-transp=" + id + "]");'
+    + ' return { uf: (document.querySelector("[data-k=uf]")||{}).value || "",'
+    + ' on: (p.querySelector("[data-transp].on")||{}).dataset.transp || "",'
+    + ' fiveTravada: !!(b("five") && b("five").disabled && b("five").classList.contains("travado")),'
+    + ' correiosLivre: !!(b("correios") && !b("correios").disabled),'
+    + ' retiradaLivre: !!(b("correios_retirada") && !b("correios_retirada").disabled),'
+    + ' nota: (p.querySelector(".prazo-ce")||{}).textContent || "",'
+    + ' txt: p.textContent.replace(/\\s+/g, " ").trim() } })()')
+  conta('CEP do Ceara preenche UF=CE', ce && ce.uf === 'CE', JSON.stringify(ce))
+  conta('no Ceara a transportadora fica travada e riscada', ce && ce.fiveTravada === true, JSON.stringify(ce))
+  conta('e o padrao passa a ser Correios no endereco', ce && ce.on === 'correios', JSON.stringify(ce))
+  conta('os dois Correios continuam valendo', ce && ce.correiosLivre && ce.retiradaLivre, JSON.stringify(ce))
+  conta('e a tela explica por que', ce && /transportadora não atende/.test(ce.nota), ce && ce.nota)
+  // 7 dias da tabela + 2 dos Correios no endereco = 9. Se o prazo mostrasse 7, estaria usando a
+  // transportadora travada pra calcular e prometendo ao cliente um prazo que ninguem vai cumprir.
+  conta('o prazo do Ceara e calculado pelos Correios, nao pela transportadora travada',
+    ce && /Chega em 9 dias úteis/.test(ce.txt), ce && ce.txt.slice(0, 70))
+  // CLICAR NA TRAVADA NAO FAZ NADA: botao desabilitado que ainda muda o estado e pior que botao
+  // nenhum, porque a tela passa a mostrar uma coisa e o pedido sai com outra.
+  await js('(() => { const b = document.querySelector("[data-transp=five]"); if (b) b.click() })()')
+  await espera(250)
+  const aindaCorreios = await js('(document.querySelector("[data-transp].on")||{}).dataset.transp || ""')
+  conta('clicar na transportadora travada nao muda nada', aindaCorreios === 'correios', aindaCorreios)
+
   await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "88504411"; e.dispatchEvent(new Event("input")); })()')
   await espera(450)
+  const foraCE = await js('(() => { const b = document.querySelector("[data-transp=five]");'
+    + ' return { uf: (document.querySelector("[data-k=uf]")||{}).value || "", livre: !!(b && !b.disabled),'
+    + ' nota: !!document.querySelector(".prazo-ce") } })()')
+  conta('fora do Ceara a transportadora volta a valer', foraCE.uf === 'SC' && foraCE.livre === true && foraCE.nota === false, JSON.stringify(foraCE))
+
+  // ── O 9 QUE FALTA DEPOIS DO DDD ──────────────────────────────────────
+  // Pedido do Bruno em 17/10/2026: "faltou um digito no numero do celular, esse digito que falta
+  // sempre e o 9, que vai depois do DDD; esses numeros que vem sem esse digito, eu gostaria que voce
+  // ja adicionasse essa correcaozinha". Numero de 10 digitos ainda chega de contato antigo e de jid
+  // velho do WhatsApp; sem o 9 a transportadora nao entrega e a cobranca nao acha o cliente.
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "1999598329"; e.dispatchEvent(new Event("input")); })()')
+  await espera(250)
+  const antesBlur = await js('({ v: (document.querySelector("[data-k=wa]")||{}).value || "",'
+    + ' dica: (document.querySelector(".dica-campo")||{}).textContent || "" })')
+  conta('enquanto digita, 10 digitos NAO ganham o 9 (empurraria o que ele esta digitando)',
+    antesBlur.v === '(19) 9959-8329', JSON.stringify(antesBlur))
+  // SAIU DO CAMPO: o 9 entra. O EVENTO AQUI E DISPARADO NA MAO, de proposito, e isto e uma limitacao
+  // do teste que vale escrita: em janela com `show: false` o Chromium muda o `activeElement` quando
+  // se chama `focus()`/`blur()` mas NAO dispara os eventos de foco (medido em 17/10/2026 - o handler
+  // existia, o foco saia, e o `blur` nunca chegava). Mostrar a janela so pra isso abriria uma janela
+  // na tela do Bruno no meio do teste, que e justamente o que a gente acabou de parar de fazer.
+  //
+  // Entao este trecho prova o HANDLER, e a garantia de verdade esta na hora de cadastrar (logo
+  // abaixo, no pedido que vai pro servidor), que o teste clica de verdade.
+  const temHandler = await js('typeof (document.querySelector("[data-k=wa]")||{}).onblur === "function"')
+  conta('o campo do WhatsApp tem o conserto do 9 ligado na saida', temHandler === true, String(temHandler))
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.dispatchEvent(new FocusEvent("blur")) })()')
+  await espera(300)
+  const depoisBlur = await js('({ v: (document.querySelector("[data-k=wa]")||{}).value || "",'
+    + ' erro: !!document.querySelector(".form .erro [data-k=wa]") })')
+  conta('ao sair do campo, o 9 entra depois do DDD', depoisBlur.v === '(19) 99959-8329', JSON.stringify(depoisBlur))
+  conta('e o campo para de reclamar', depoisBlur.erro === false, JSON.stringify(depoisBlur))
+
+  // TELEFONE FIXO NAO GANHA 9: 2 a 5 no inicio do assinante e fixo, e enfiar um 9 ali INVENTA um
+  // numero que nao existe. O certo e o campo reclamar e o vendedor resolver.
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "1932415566"; e.dispatchEvent(new Event("input")); e.focus(); e.blur() })()')
+  await espera(300)
+  const fixo = await js('(document.querySelector("[data-k=wa]")||{}).value || ""')
+  conta('telefone fixo nao ganha 9 inventado', fixo === '(19) 3241-5566', fixo)
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "19995983293"; e.dispatchEvent(new Event("input")); })()')
+  await espera(250)
 
   // ── VENDA FUTURA ───────────────────────────────────────────────────────────────────────────
   await clica('#pd-vf')
@@ -330,9 +447,18 @@ app.whenReady().then(async () => {
   await clica('#pd-ok')
   await espera(250)
   const telCurto = await js('({ txt: (document.querySelector(".aviso.ruim")||{}).textContent || "", mandou: (window.__ver()).filter(c => c.nome === "pedidoNovo").length })')
+  // UM MOTIVO SO PRO MESMO TELEFONE (17/10/2026). O quadro listava duas linhas pro mesmo problema -
+  // "Faltam 5 numeros: celular tem DDD + 9 + 8 digitos" e "WhatsApp incompleto (DDD + numero)" - e a
+  // dash lista uma. A segunda continua no codigo, pro caso de o telValido afrouxar, mas so fala
+  // quando a primeira nao falou.
   conta('telefone incompleto tambem e barrado aqui',
-    /WhatsApp incompleto/i.test(telCurto.txt) && telCurto.mandou === 0, JSON.stringify(telCurto))
-  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "(19) 99598-3293"; e.dispatchEvent(new Event("input")) })()')
+    /Faltam 5 n/i.test(telCurto.txt) && telCurto.mandou === 0, JSON.stringify(telCurto))
+  conta('e com um motivo so, nao dois pro mesmo telefone',
+    !/WhatsApp incompleto/i.test(telCurto.txt), JSON.stringify(telCurto.txt))
+  // ENTRA COM 10 DIGITOS DE PROPOSITO: daqui pra frente o teste cadastra de verdade, e e no clique
+  // em Cadastrar que o 9 tem que entrar sozinho em vez de o pedido ser recusado. E o caso do Bruno:
+  // o numero vem do WhatsApp sem o 9 e ele nao tem por que digitar o que a gente sabe.
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "1999598329"; e.dispatchEvent(new Event("input")) })()')
 
   // ── cadastrar sem comprovante, no COD, e barrado ───────────────────────────────────────────
   await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
@@ -374,7 +500,11 @@ app.whenReady().then(async () => {
     + ' pediu: (window.__ver()).filter(c => c.nome === "colaPrint").length,'
     + ' nomes: [...document.querySelectorAll(".anexo.tem .nm")].map(e => e.textContent).join(",") })')
   conta('um clique no comprovante cola o print da area de transferencia',
-    colou.pediu >= 1 && colou.n === antesAnexos + 1 && /print\.png/.test(colou.nomes), JSON.stringify(colou))
+    colou.pediu >= 1 && colou.n === antesAnexos + 1
+    // NOME COM DATA E HORA, igual ao nomeDePrint da dash: o Chrome chama todo print de "image.png" e
+    // o caminho do clique mandava "print.png" fixo, entao dois prints no mesmo pedido ficavam
+    // indistinguiveis no modal do CRM.
+    && /print-\d{8}-\d{6}\.png/.test(colou.nomes), JSON.stringify(colou))
   // O print COLADO fica: dois comprovantes no mesmo pedido e caso normal, e tirar um deles aqui
   // tiraria os dois - o stub devolve a MESMA url pra todo upload, e o botao de tirar casa por url.
 
@@ -394,7 +524,16 @@ app.whenReady().then(async () => {
   // O PRECO SAI DO CATALOGO: e a regra que o campo livre de ontem quebrava.
   conta('produto e valor saem do CATALOGO, nao do que foi digitado',
     o.vl === 397 && o.trat === 'Produto A - 3 Meses', JSON.stringify({ vl: o.vl, trat: o.trat }))
-  conta('o CPF e o telefone vao so com digitos', o.cpf === '52998224725' && o.wa === '19995983293', o.cpf + ' / ' + o.wa)
+  // MASCARADO, como a dash grava (17/10/2026). Ia com digitos crus, e o pedido do app aparecia
+  // diferente de todos os outros na fila do Bruno: "CEP: 88501000" em Aceitacoes e CPF, telefone e
+  // CEP crus no modal do CRM, inclusive nos botoes de copiar daquela tela.
+  conta('CPF, telefone e CEP vao MASCARADOS, igual aos da dash',
+    o.cpf === '529.982.247-25' && /^\(\d\d\) \d{5}-\d{4}$/.test(String(o.wa || '')) && o.cep === '13000-000',
+    o.cpf + ' / ' + o.wa + ' / ' + o.cep)
+  // E ESTA E A GARANTIA DO 9: o formulario entrou com 10 digitos (1999598329) e o pedido saiu com 11.
+  // Sem isso o pedido era RECUSADO na conferencia e o vendedor tinha que digitar o 9 na mao - ou pior,
+  // passava sem o 9 e a transportadora nao entregava.
+  conta('o 9 que faltava entra no pedido que vai pro servidor', o.wa === '(19) 99959-8329', String(o.wa))
   conta('a UF vai em maiuscula', o.uf === 'SP', o.uf)
   // DOIS comprovantes: o arquivo escolhido e o print colado logo acima. Levar os dois e o certo -
   // o pedido pode ter mais de um, e o `comprovante_url` continua apontando pro primeiro, que e o
@@ -425,6 +564,49 @@ app.whenReady().then(async () => {
   // contar posicao faz esta conferencia quebrar toda vez que alguem acrescenta um envio antes.
   conta('pagamento antecipado passa sem comprovante',
     nAnt[nAnt.length - 1] === 'antecipado' && nAnt.filter((x) => x === 'antecipado').length === 1, JSON.stringify(nAnt))
+
+  // -- PEDIDO PRO CEARA SAI PELOS CORREIOS, nao "no padrao da casa" -------------------------
+  //
+  // O FURO QUE ISTO FECHA: `transp` vazio quer dizer "transportadora", e o vendedor que nunca
+  // encosta nos botoes deixa o campo vazio. No Ceara a tela MOSTRAVA Correios (porque o padrao de la
+  // e Correios) e o pedido saia vazio, ou seja, lido como Transportadora - num estado que ela nao
+  // atende. Tela dizendo uma coisa e pedido dizendo outra e o jeito de descobrir dias depois.
+  await clica('[data-tipo=antecipado]')
+  await espera(350)
+  await js('(() => { const s = (k,v) => { const e = document.querySelector("[data-k="+k+"]"); e.value = v; e.dispatchEvent(new Event("input")) };'
+    + ' s("nome","Cliente do Ceara"); s("cpf","52998224725"); s("cep","60175045"); s("num","10"); })()')
+  await espera(600)
+  await clica('[data-op=trat][data-v=k3]')
+  await espera(300)
+  const antesCE = await js('(() => { const b = document.querySelector("[data-transp=five]");'
+    + ' return { uf: (document.querySelector("[data-k=uf]")||{}).value || "", travada: !!(b && b.disabled) } })()')
+  conta('o CEP do Ceara chega pelo caminho de verdade e trava a transportadora',
+    antesCE.uf === 'CE' && antesCE.travada === true, JSON.stringify(antesCE))
+  await clica('#pd-ok')
+  await espera(600)
+  const ceEnv = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0]).slice(-1))'))[0] || {}
+  conta('pedido pro Ceara vai gravado como correios, sem o vendedor clicar em nada',
+    ceEnv.transp === 'correios' && ceEnv.uf === 'CE', JSON.stringify({ uf: ceEnv.uf, transp: ceEnv.transp, nome: ceEnv.nome }))
+
+  // ── O RASCUNHO GRAVA SOZINHO ENQUANTO ELE DIGITA ───────────────────────────────────────────
+  //
+  // Antes o rascunho so era gravado nas SAIDAS (trocar de aba, de conversa, de cliente ou de tipo) e
+  // no botao Rascunho. Isso deixava de fora o unico caso em que o rascunho existe pra servir: o app
+  // fechar, o Windows reiniciar ou a tela recarregar no meio do cadastro. A dash grava 1s depois da
+  // ultima tecla; aqui e 1,5s, porque cada gravacao fala com o servidor.
+  await clica('[data-tipo=entrega]')
+  await espera(350)
+  const antesSozinho = Number(await js('(window.__ver()).filter(c => c.nome === "rascunhoSalvar").length'))
+  await js('(() => { const e = document.querySelector("[data-k=nome]"); e.value = "Cliente Que Digita"; e.dispatchEvent(new Event("input")) })()')
+  await espera(600)
+  const noMeio = Number(await js('(window.__ver()).filter(c => c.nome === "rascunhoSalvar").length'))
+  conta('nao grava a cada tecla (600ms depois ainda nao gravou)', noMeio === antesSozinho, antesSozinho + ' -> ' + noMeio)
+  await espera(1600)
+  const depoisSozinho = Number(await js('(window.__ver()).filter(c => c.nome === "rascunhoSalvar").length'))
+  conta('mas grava sozinho 1,5s depois da ultima tecla, sem ele sair de lugar nenhum',
+    depoisSozinho === antesSozinho + 1, antesSozinho + ' -> ' + depoisSozinho)
+  await clica('#pd-voltar')
+  await espera(400)
 
   // ── ABRIR E SAIR SEM MEXER NAO CRIA RASCUNHO ───────────────────────────────────────────────
   // O nome e o telefone entram sozinhos da conversa. Se eles contassem como "conteudo", toda
@@ -464,6 +646,13 @@ app.whenReady().then(async () => {
     aviso.botao === true && /Outro Cliente/.test(aviso.texto), JSON.stringify(aviso))
   conta('e o bloco inteiro se destaca, nao so um rotulo de canto', aviso.destaque === true, JSON.stringify(aviso))
 
+  // DAQUI PRA BAIXO, SO OS SAVES DESTE TRECHO. A conferencia do id (logo abaixo) olhava o log
+  // INTEIRO e exigia "o primeiro sem id, todos os seguintes com id" - e isso so era verdade por
+  // acidente do roteiro. Comecar um rascunho NOVO zera o id de proposito (e o que o Trocar, o
+  // Voltar e o cadastro que deu certo fazem), entao um id vazio no meio do log e comportamento
+  // certo, nao defeito. Quando a gravacao automatica entrou, o log ganhou um save a mais e a
+  // conferencia acusou um bug que nao existia.
+  const rascAntesTroca = Number(await js('(window.__ver()).filter(c => c.nome === "rascunhoSalvar").length'))
   await clica('#pd-troca')
   await espera(700)
   const dps = await js('({ dono: (document.querySelector(".dono-ped .q")||{}).textContent || "",'
@@ -487,10 +676,23 @@ app.whenReady().then(async () => {
   // de novo e nasce UMA LINHA NOVA por troca de conversa - a lista de rascunhos do vendedor vira
   // lixo. O defeito irmao deste (o worker recusando id vazio) ficou escondido por semanas porque o
   // preload falso respondia ok pra tudo.
+  // A CONFERENCIA E "EXISTE REUSO", nao uma sequencia fixa de ids.
+  //
+  // A versao antiga exigia "o primeiro sem id, todos os seguintes com id", e isso era verdade por
+  // acidente do roteiro: comecar um rascunho NOVO zera o id de proposito (e o que o Trocar, o Voltar
+  // e o cadastro que deu certo fazem), entao id vazio no meio do log e comportamento CERTO. Quando a
+  // gravacao automatica entrou, o log ganhou um save e a conferencia acusou um bug que nao existia -
+  // e escopar no trecho do Trocar tambem nao servia, porque ali o save e do rascunho ANTIGO, que ja
+  // tinha id. O que importa e o defeito de verdade: o painel guarda o id que o servidor devolveu e
+  // manda ele na gravacao seguinte do MESMO rascunho, em vez de abrir uma linha nova a cada vez.
   const primeiroSemId = (chamR[0] || [])[0] === ''
-  const depoisComId = chamR.length < 2 || chamR.slice(1).every((c) => c[0] !== '')
-  conta('o 1o save vai sem id e os seguintes reusam o que o servidor deu',
-    primeiroSemId && depoisComId, JSON.stringify(chamR.map((c) => c[0])))
+  const reusou = chamR.some((c, i) => i > 0 && c[0] && chamR[i - 1][0] === '' && chamR[i - 1][1] === c[1])
+  conta('o 1o save vai sem id, e a gravacao seguinte do mesmo rascunho reusa o que o servidor deu',
+    primeiroSemId && reusou, JSON.stringify(chamR.map((c) => c[0])))
+  // E NINGUEM INVENTA ID: todo id que sai do painel e um que o servidor devolveu (o duble cunha
+  // 99000N). Id inventado era o outro lado do mesmo defeito - o worker recusava e o rascunho sumia.
+  const idsInventados = chamR.filter((c) => c[0] && !/^99000\d+$/.test(c[0])).map((c) => c[0])
+  conta('e nenhum id sai do painel sem ter vindo do servidor', idsInventados.length === 0, JSON.stringify(idsInventados))
 
   // ── CADASTRAR COM A CONVERSA TROCADA PEDE CONFIRMACAO ──────────────────────────
   // A faixa ambar e o botao avisam; esta e a ultima trava, e e o que ele pediu em palavras: "pra
@@ -525,11 +727,11 @@ app.whenReady().then(async () => {
   await espera(600)
   const conf2 = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0].wa))'))
   conta('o segundo clique confirma e manda', conf2.length === antesConf + 1, String(conf2.length))
-  // O `wa` vai so com digitos e sem o 55 (montaPedido usa dig()), entao o que se confere e que e o
+  // O `wa` vai MASCARADO e sem o 55 (montaPedido usa mascTel), entao o que se confere e que e o
   // numero do dono congelado e NAO o da conversa que estava na tela na hora do clique.
   const ultWa = String(conf2[conf2.length - 1] || '')
   conta('e o pedido sai com o telefone do dono CONGELADO, nao o da tela',
-    ultWa === '11988887777' && !/2197000/.test(ultWa), ultWa)
+    ultWa === '(11) 98888-7777' && !/2197000/.test(ultWa), ultWa)
 
   await clica('#pd-voltar')
   await espera(300)
@@ -584,7 +786,17 @@ app.whenReady().then(async () => {
   // lead 2, pro lead 3, e a sequencia que chega e lead 1, lead 2, lead 3".
   await js('(() => { window.__trocaConversa("5511988887777", "Terceiro Cliente") })()')
   await espera(150)
-  await clica('[data-funil=s1]')
+  // O RODAPE E LIDO NO MESMO TURNO DO CLIQUE, e isto nao e detalhe de estilo.
+  //
+  // O aviso "Na fila" e escrito UMA VEZ, dentro do proprio clique (painel-ui.js, o `if (pos > 1)
+  // rodape(...)`), e o laco de disparo sobrescreve o rodape com "digitando 2 de 2" no instante
+  // seguinte. Ler 300ms depois e apostar numa corrida: falhava em uma de cada tres rodadas, e
+  // alargar a espera piorou. Clicar e ler na mesma expressao e deterministico, porque o `rodape`
+  // roda sincrono dentro do handler.
+  const rodFila = await js('(() => { const b = document.querySelector("[data-funil=s1]");'
+    + ' if (!b) return "(sem botao)"; b.click();'
+    + ' return (document.getElementById("rod")||{}).textContent || "" })()')
+  conta('o rodape diz a posicao na fila, como o inbox', /Na fila/.test(rodFila), rodFila)
   await espera(300)
   const tres = await js('({ linhas: document.querySelectorAll(".saindo .item-env").length,'
     + ' l1: [...document.querySelectorAll(".saindo .l1")].map(e => e.textContent.trim()),'
@@ -602,18 +814,23 @@ app.whenReady().then(async () => {
   // ESPERA O RODAPE EM VEZ DE FOTOGRAFAR UM INSTANTE. O rodape alterna entre o estado do envio que
   // esta correndo ("digitando 2 de 2") e o da fila, e ler uma vez no meio de um envio de 1,2s dava
   // falha intermitente - teste que falha as vezes vira teste que ninguem olha.
-  let rodFila = tres.rod
-  for (let i = 0; i < 12 && !/Na fila/.test(rodFila); i++) {
-    await espera(250)
-    rodFila = await js('(document.getElementById("rod")||{}).textContent || ""')
-  }
-  conta('o rodape diz a posicao na fila, como o inbox', /Na fila/.test(rodFila), rodFila)
-
-  // tirar da fila quem ainda nao saiu
+  // A ORDEM AQUI IMPORTA, e e por isso que estas duas conferencias foram reescritas em 17/10/2026:
+  // A FILA ANDA SOZINHA ENQUANTO O TESTE ROLA. Cada envio do duble demora 1,2s de proposito, entao
+  // tudo que o teste gasta esperando come a fila que ele ia conferir depois. A versao antiga
+  // esperava ate 3s pelo rodape e SO DEPOIS tentava tirar alguem da fila - quando chegava la, nem
+  // sempre havia dois pra tirar. Falhou em uma de cada tres rodadas, e alargar a espera piorou
+  // (duas de tres), porque o problema nunca foi a janela: era gastar tempo antes de medir.
+  //
+  // Agora: tira da fila PRIMEIRO, agora que a gente sabe que ela tem tres, e conta RELATIVO.
   const tirou = await js('(() => { const bs = document.querySelectorAll(".saindo .item-env [data-tirafila]");'
-    + ' if (bs.length < 2) return -1; bs[bs.length - 1].click();'
-    + ' return document.querySelectorAll(".saindo .item-env").length })()')
-  conta('da pra tirar da fila quem ainda nao saiu', tirou === 2, String(tirou))
+    + ' if (bs.length < 2) return { erro: "menos de 2 na fila" };'
+    + ' const antes = document.querySelectorAll(".saindo .item-env").length;'
+    + ' bs[bs.length - 1].click();'
+    + ' return { antes, depois: document.querySelectorAll(".saindo .item-env").length } })()')
+  conta('da pra tirar da fila quem ainda nao saiu',
+    !!tirou && tirou.depois === tirou.antes - 1, JSON.stringify(tirou))
+
+
 
   // ── o X de fechar o numero fica aparente ───────────────────────────────────────────────────
   const x = await js('(() => { const e = document.getElementById("fechar"); const s = getComputedStyle(e);'
