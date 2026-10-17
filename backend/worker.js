@@ -10592,6 +10592,18 @@ const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
 // vendedor, entao mudar a regra aqui faz todo numero pedir QR de novo. Nao mexa.
 function _swwebKey(n) { return _waNumKey(n); }
+// A CHAVE QUE VEIO DE FORA, OU VAZIO (17/10/2026, achado da sessao f5).
+//
+// `_waNumKey` devolve o que recebeu quando sobra menos de 10 digitos - nao da pra inventar um DDD.
+// Entao mandar os 8 finais aqui NAO da erro: grava numa chave de 8 que numero nenhum tem, e o app,
+// que pergunta pela chave de 10, nunca ve a proxy nem a liberacao. Tudo "funciona" e nada vale.
+// ACONTECEU DUAS VEZES NO MESMO DIA: eu atribui 11 proxies pelos ultimos 10 digitos de manha, e a
+// gaveta mandava os 8 finais no atribuir e no liberar. As duas vezes so apareceram porque alguem
+// olhou a tela e estranhou o numero - nenhuma rota reclamou.
+// Chave valida tem EXATAMENTE 10 digitos (DDD + 8 finais). Recusar na porta mata a classe: errar
+// a chave passa a ser um 400 na cara de quem chamou, e nao um dado morto no D1.
+function _swwebKeyExata(n) { const k = _waNumKey(n); return /^\d{10}$/.test(k) ? k : ''; }
+const _ERRO_NK = 'Número inválido: a chave precisa ser DDD + 8 últimos dígitos';
 // Os 8 finais, que e a chave que o interruptor da roleta usa (pressel.vendedores[].off).
 const _swwebK8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
 // Chip APTO a receber lead, pela mesma regra do _resolvePresselNumbers: so "Em uso", e fora de
@@ -11338,8 +11350,8 @@ async function handleSwWeb(req, env, path) {
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder
   // usar. Separado da lista de proposito: senha nao viaja em listagem.
   if (req.method === 'GET' && path === '/api/swweb/proxy') {
-    const nk = _swwebKey(new URL(req.url).searchParams.get('nk') || '');
-    if (!nk) return err('Falta o número');
+    const nk = _swwebKeyExata(new URL(req.url).searchParams.get('nk') || '');
+    if (!nk) return err(_ERRO_NK);
     // SENHA DE PROXY NAO ATRAVESSA MUNDO. O mapa `proxies` ja e o do mundo de quem pediu, entao
     // um chip de outra operacao simplesmente nao tem entrada aqui; esta conferencia e a segunda
     // camada, pra quando a dona da operacao pedir um numero que nao e dela.
@@ -11366,8 +11378,8 @@ async function handleSwWeb(req, env, path) {
   if (req.method === 'POST' && path === '/api/swweb/proxy') {
     if (!manda) return err('Só a direção cadastra proxy', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
-    if (!nk) return err('Falta o número');
+    const nk = _swwebKeyExata(b && b.nk);
+    if (!nk) return err(_ERRO_NK);
     // E SO EM CHIP DA PROPRIA OPERACAO. Cadastrar proxy no chip do outro mundo seria mandar o
     // numero dele sair pela nossa saida, sem ele saber.
     {
@@ -11408,7 +11420,7 @@ async function handleSwWeb(req, env, path) {
   // "saiu por BR ha 10 minutos" em vez de obrigar um interruptor global de "exigir Brasil".
   if (req.method === 'POST' && path === '/api/swweb/proxy-visto') {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
+    const nk = _swwebKeyExata(b && b.nk);
     const px = nk ? proxies[nk] : null;
     const id = String((px && px.id) || '');
     if (!id || !banco[id]) return json({ ok: true, anotou: false });   // proxy solta: nada a anotar
@@ -11602,8 +11614,8 @@ async function handleSwWeb(req, env, path) {
   if (req.method === 'POST' && path === '/api/swweb/proxy-excecao') {
     if (!manda) return err('Só a direção libera número sem proxy', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
-    if (!nk) return err('Falta o número');
+    const nk = _swwebKeyExata(b && b.nk);
+    if (!nk) return err(_ERRO_NK);
     const horas = Math.max(0, Math.min(24, Number((b && b.horas) || 0)));
     const cru = _swwebLerJson(lidas[K_EXC], {});
     if (!horas) { delete cru[nk]; }
@@ -11713,8 +11725,8 @@ async function handleSwWeb(req, env, path) {
   if (req.method === 'POST' && path === '/api/swweb/proxy-atribuir') {
     if (!manda) return err('Só a direção atribui proxy', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
-    if (!nk) return err('Falta o número');
+    const nk = _swwebKeyExata(b && b.nk);
+    if (!nk) return err(_ERRO_NK);
     const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
     // O MESMO GATE DE MUNDO do POST /proxy: proxy no chip de outra operacao seria mandar o numero
     // dela sair pela nossa saida, sem ela saber.
@@ -11883,8 +11895,8 @@ async function handleSwWeb(req, env, path) {
   // resposta de negocio, e o app precisa do NOME de quem esta pra mostrar na tela.
   if (req.method === 'POST' && path === '/api/swweb/uso') {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
-    if (!nk) return err('Falta o número');
+    const nk = _swwebKeyExata(b && b.nk);
+    if (!nk) return err(_ERRO_NK);
     if (!maquina) return err('Falta identificar a máquina');
     await _swwebUsoTabela(env);
     const agoraU = Math.floor(Date.now() / 1000);
