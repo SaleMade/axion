@@ -10555,7 +10555,18 @@ async function _botConfereNumero(env, pnid) {
 // POR QUE O PREFIXO E /api/swweb/ E NAO /api/wa/swweb/: o bloco de /api/wa/ tem gate de afiliado e
 // o /five tem catch-all, e subpath novo ali dentro ja foi engolido antes. Prefixo proprio evita.
 const SWWEB_CFG = 'swweb_cfg';          // { travaProxy, exigirBrasil }
-const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario, senha } }
+const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario, senha, id? } }
+// O BANCO DE PROXIES (17/10/2026, pedido do Bruno: "quero cadastrar a proxy UMA vez, na
+// Contingencia, e so escolher nos numeros"). { "<id>": { apelido, host, porta, usuario, senha, criado } }
+//
+// POR QUE DOIS ARMAZENS E NAO UM. O `swweb_proxies` continua sendo o mapa de ATRIBUICAO, com os
+// dados RESOLVIDOS dentro. Nao e duplicacao por preguica: ele ja e lido por dois programas que nao
+// sabem do banco - o Sellwave Web (que abre o numero) e o painel dos numeros do LDPlayer, que le
+// `swweb_proxies` direto do D1. Trocar o formato quebraria os dois no mesmo instante, e um deles
+// roda na maquina do Bruno, longe de qualquer deploy nosso.
+// Entao: o banco e a fonte de verdade pra EDITAR, e a atribuicao carrega a copia resolvida mais o
+// `id` de quem a gerou. Editar no banco reescreve as copias (ver _swwebBancoAplica).
+const SWWEB_BANCO = 'swweb_proxy_banco';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
@@ -10751,10 +10762,12 @@ async function handleSwWeb(req, env, path) {
   const mundo = _swwebMundo(u);
   const K_CFG = _cfgNome(SWWEB_CFG, mundo);
   const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
+  const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
   const manda = _swwebManda(u);
-  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES]);
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO]);
   const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[K_CFG], {}) };
   const proxies = _swwebLerJson(lidas[K_PROXIES], {});
+  const banco = _swwebLerJson(lidas[K_BANCO], {});
 
   // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
   // respostas rapidas, funis, audios, e as credenciais de captura.
@@ -11261,6 +11274,200 @@ async function handleSwWeb(req, env, path) {
     }
     await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, nk, apagou: !host });
+  }
+
+  // POST /api/swweb/proxy-visto — o app conta por onde a proxy saiu de verdade.
+  //
+  // QUEM MEDE E QUEM USA. O worker nao tem como testar a proxy: ele roda na borda da Cloudflare e
+  // sairia pela rede DELA, nao pela do vendedor. Quem ja faz esse teste e o app, no instante em que
+  // abre o numero (testaSaida). Aqui ele so deposita o resultado, pra lista do banco poder mostrar
+  // "saiu por BR ha 10 minutos" em vez de obrigar um interruptor global de "exigir Brasil".
+  if (req.method === 'POST' && path === '/api/swweb/proxy-visto') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    const px = nk ? proxies[nk] : null;
+    const id = String((px && px.id) || '');
+    if (!id || !banco[id]) return json({ ok: true, anotou: false });   // proxy solta: nada a anotar
+    const pais = String((b && b.pais) || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    banco[id] = { ...banco[id], pais, visto: Math.floor(Date.now() / 1000) };
+    await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+    return json({ ok: true, anotou: true, id, pais });
+  }
+
+  // ══ O BANCO DE PROXIES ═══════════════════════════════════════════════════════════════════════
+  //
+  // GET /api/swweb/proxies — o banco inteiro, com quem usa cada uma. SEM SENHA: esta e listagem, e
+  // a regra da casa e que senha de proxy so sai na rota de UM numero, pro app que vai usar.
+  if (req.method === 'GET' && path === '/api/swweb/proxies') {
+    if (!manda) return err('Só a direção vê o banco de proxies', 403);
+    const data = await _getDashData(env);
+    const chips = Array.isArray(data && data.chips) ? data.chips : [];
+    // De quem e cada numero, pra tela poder escrever "usada por (15) 99250-3977, do Guilherme".
+    const donoDe = {};
+    for (const c of chips) { const k = _swwebKey(c && c.num); if (k) donoDe[k] = { num: String(c.num || ''), at: String(c.at || '') }; }
+
+    const usoPorId = {};
+    const semBanco = [];
+    for (const [nk, px] of Object.entries(proxies)) {
+      const id = String((px && px.id) || '');
+      if (id && banco[id]) (usoPorId[id] = usoPorId[id] || []).push(nk);
+      // Atribuicao que nao veio do banco (cadastrada antes dele, ou pelo app). A tela mostra como
+      // "solta" e oferece adotar: sem isso, proxy que ja esta em uso ficaria invisivel no banco.
+      else semBanco.push({ nk, host: String((px && px.host) || ''), porta: Number((px && px.porta) || 0), numero: (donoDe[nk] || {}).num || '', at: (donoDe[nk] || {}).at || '' });
+    }
+
+    const lista = Object.entries(banco).map(([id, p]) => ({
+      id,
+      apelido: String((p && p.apelido) || ''),
+      host: String((p && p.host) || ''),
+      porta: Number((p && p.porta) || 0),
+      usuario: String((p && p.usuario) || ''),
+      temSenha: !!(p && p.senha),
+      criado: Number((p && p.criado) || 0),
+      // O PAIS E PROPRIEDADE DA PROXY, NAO INTERRUPTOR GLOBAL. Quem confere e quem abre o numero
+      // (o app testa a saida de verdade); aqui fica o ULTIMO pais visto, pra lista poder mostrar
+      // verde/amarelo em vez de obrigar um sim/nao pra operacao inteira.
+      pais: String((p && p.pais) || ''),
+      visto: Number((p && p.visto) || 0),
+      // DESATUALIZADA = o banco mudou e a copia resolvida de algum numero ficou pra tras.
+      //
+      // A copia existe porque dois programas leem `swweb_proxies` sem saber do banco. O preco e
+      // que editar tem que reescrever N atribuicoes, e reescrita que falha PELA METADE deixaria o
+      // numero saindo pelo IP velho com a tela mostrando o novo - tela dizendo uma coisa e dado
+      // dizendo outra, que e a familia de bug que mais custou caro aqui. Entao em vez de confiar
+      // que a reescrita deu certo, a copia carrega o carimbo e a diferenca vira uma linha amarela.
+      usadaPor: (usoPorId[id] || []).map((nk) => ({
+        nk,
+        numero: (donoDe[nk] || {}).num || '',
+        at: (donoDe[nk] || {}).at || '',
+        desatualizada: Number(((proxies[nk] || {}).ver) || 0) !== Number((p && p.mexido) || 0),
+      })),
+    })).sort((a, b) => (a.apelido || a.host).localeCompare(b.apelido || b.host) || a.porta - b.porta);
+
+    // PROXY DIVIDIDA POR DOIS NUMEROS E O UNICO ERRO QUE ESTA TELA PRECISA GRITAR.
+    //
+    // O app inteiro existe pra que a Meta nao ligue um chip no outro. Dois WhatsApps saindo pelo
+    // MESMO IP e exatamente a ligacao que a proxy deveria cortar - e e um erro silencioso, porque
+    // tudo funciona: os dois abrem, os dois mandam, e a correlacao acontece do lado de la.
+    // MEDIDO EM 17/10, antes do banco existir: dos 6 numeros com proxy, DOIS estavam na mesma
+    // porta 10001. Ninguem tinha como ver isso, porque a unica tela era "um numero por vez".
+    const repetidas = lista.filter((p) => p.usadaPor.length > 1)
+      .map((p) => ({ id: p.id, apelido: p.apelido, host: p.host, porta: p.porta, numeros: p.usadaPor.map((x) => x.numero || x.nk) }));
+    // O mesmo erro pode existir FORA do banco (duas atribuicoes soltas no mesmo host:porta).
+    const porEndereco = {};
+    for (const [nk, px] of Object.entries(proxies)) {
+      const ch = String((px && px.host) || '') + ':' + Number((px && px.porta) || 0);
+      (porEndereco[ch] = porEndereco[ch] || []).push((donoDe[nk] || {}).num || nk);
+    }
+    const repetidasEndereco = Object.entries(porEndereco).filter(([, ns]) => ns.length > 1)
+      .map(([ch, ns]) => ({ endereco: ch, numeros: ns }));
+
+    // O QUE ESTA TELA PODE PROMETER, e isto vai na resposta de proposito pra tela nao inventar.
+    //
+    // O banco de proxies REDUZ correlacao, nao fecha. Dois caminhos medidos saem FORA do proxy do
+    // numero, e os dois sao decisao consciente, nao defeito:
+    //   - a LIGACAO DE VOZ (desde 16/10): o Chromium nao manda UDP por proxy nenhum, entao o audio
+    //     sai direto. Ver a memoria ligacao-voz-x-ip-por-numero. O Bruno escolheu ter a ligacao.
+    //   - o LINK EXTERNO clicado na conversa: abre no navegador do Windows, fora de toda sessao.
+    //     Ver o comentario grande no main.js do Sellwave Web, que explica a troca.
+    // Entao a tela diz o que a proxy GARANTE - o trafego do WhatsApp Web daquele numero - e nao
+    // "isolado". Pintar tudo de verde seria mentir em dois caminhos que a gente conhece pelo nome.
+    const garante = {
+      cobre: 'o tráfego do WhatsApp Web deste número',
+      naoCobre: ['a ligação de voz (o áudio sai direto, decisão de 16/10)',
+        'link aberto da conversa (abre no navegador do Windows)'],
+    };
+    return json({ ok: true, banco: lista, soltas: semBanco, repetidas, repetidasEndereco, config: cfg, garante });
+  }
+
+  // POST /api/swweb/proxy-banco — cria, edita ou apaga uma proxy DO BANCO.
+  // { id?, apelido, host, porta, usuario, senha }  |  { id, apagar: true }
+  if (req.method === 'POST' && path === '/api/swweb/proxy-banco') {
+    if (!manda) return err('Só a direção mexe no banco de proxies', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+
+    if (b && b.apagar) {
+      if (!id || !banco[id]) return err('Proxy não encontrada', 404);
+      // APAGAR PROXY EM USO E RECUSADO, com os numeros na resposta. A alternativa seria desatribuir
+      // sozinho, e ai o numero abriria SEM proxy no dia seguinte - que e o vazamento que o app
+      // inteiro existe pra evitar. Melhor a tela pedir pra ele tirar dos numeros primeiro.
+      const emUso = Object.entries(proxies).filter(([, px]) => String((px && px.id) || '') === id).map(([nk]) => nk);
+      if (emUso.length) return json({ ok: false, erro: 'Esta proxy está em uso', numeros: emUso }, 409);
+      delete banco[id];
+      await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+      return json({ ok: true, apagou: true, id });
+    }
+
+    const host = String((b && b.host) || '').trim();
+    if (!host) return err('Falta o endereço da proxy');
+    const porta = Math.floor(Number(b && b.porta) || 0);
+    if (porta <= 0 || porta > 65535) return err('Porta inválida');
+    const antes = (id && banco[id]) || {};
+    // CAMPO VAZIO MANTEM O QUE JA ESTA SALVO, a mesma regra do POST /proxy e do dc_api_key: a
+    // listagem nao devolve senha, entao o formulario de edicao abre com ela em branco.
+    const usuario = String((b && b.usuario) || '') || String(antes.usuario || '');
+    const senha = String((b && b.senha) || '') || String(antes.senha || '');
+    const novoId = id || ('px' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36));
+    const agoraPx = Math.floor(Date.now() / 1000);
+    banco[novoId] = {
+      apelido: String((b && b.apelido) || antes.apelido || '').slice(0, 60),
+      host, porta, usuario, senha,
+      criado: Number(antes.criado) || agoraPx,
+      // `mexido` e o carimbo que as copias comparam. Muda a cada gravacao, inclusive quando so o
+      // apelido muda - de proposito: carimbo que so muda "quando importa" exige alguem decidir o
+      // que importa, e e ai que ele deixa de bater.
+      mexido: agoraPx,
+      // O pais sobrevive a edicao: quem mede e quem abre o numero, nao esta rota.
+      pais: String(antes.pais || ''),
+      visto: Number(antes.visto) || 0,
+    };
+    await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+
+    // EDITAR NO BANCO REESCREVE QUEM APONTA PRA ELA. Sem isto, a copia resolvida no
+    // `swweb_proxies` ficaria velha e o numero continuaria saindo pela porta antiga - com a tela
+    // mostrando a nova. Tela que mente sobre por onde o chip sai e pior que proxy errada.
+    let mexeu = 0;
+    for (const [nk, px] of Object.entries(proxies)) {
+      if (String((px && px.id) || '') !== novoId) continue;
+      proxies[nk] = { host, porta, usuario, senha, id: novoId, ver: agoraPx };
+      mexeu += 1;
+    }
+    if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
+    return json({ ok: true, id: novoId, atualizou: mexeu });
+  }
+
+  // POST /api/swweb/proxy-atribuir — liga uma proxy DO BANCO a um numero (ou tira).
+  // { nk, id }  |  { nk, id: '' } pra tirar.
+  if (req.method === 'POST' && path === '/api/swweb/proxy-atribuir') {
+    if (!manda) return err('Só a direção atribui proxy', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    if (!nk) return err('Falta o número');
+    const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+    // O MESMO GATE DE MUNDO do POST /proxy: proxy no chip de outra operacao seria mandar o numero
+    // dela sair pela nossa saida, sem ela saber.
+    {
+      const data = await _getDashData(env);
+      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
+      const dono = String((chip && chip.at) || '');
+      const mDono = dono ? String((await _mundoDoAt(env, dono)) || '') : '';
+      if (dono && mDono !== mundo) return err('Este número não é da sua operação', 403);
+    }
+    if (!id) { delete proxies[nk]; await _writeConfig(env, K_PROXIES, JSON.stringify(proxies)); return json({ ok: true, nk, apagou: true }); }
+    const p = banco[id];
+    if (!p) return err('Proxy não encontrada no banco', 404);
+    // Guarda a copia RESOLVIDA mais o id: e o que faz o Sellwave Web e o painel dos numeros
+    // continuarem lendo o mesmo formato de sempre, sem saber que existe banco.
+    proxies[nk] = {
+      host: String(p.host || ''), porta: Number(p.porta) || 0,
+      usuario: String(p.usuario || ''), senha: String(p.senha || ''),
+      id, ver: Number(p.mexido) || 0,
+    };
+    await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
+    // Avisa se esta proxy passou a servir mais de um numero - quem chamou decide o que fazer.
+    const quantos = Object.values(proxies).filter((x) => String((x && x.id) || '') === id).length;
+    return json({ ok: true, nk, id, numerosNestaProxy: quantos });
   }
 
   // GET /api/swweb/tratamentos — a lista de tratamento que o app pode oferecer, com o PREÇO.
