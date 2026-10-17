@@ -2748,6 +2748,63 @@ const _COL_CANON = {
   'Roubo': 'Roubos',
 };
 const _colCanon = (c) => _COL_CANON[String(c || '')] || String(c || '');
+// ══ A DECISAO DA EQUIPE E A ULTIMA PALAVRA (17/10/2026, regra do Bruno) ══════════════════════════
+//
+// "Se a gente marcou como pago e a plataforma esta falando que esse pedido foi furtado, a resposta que
+// vale e a nossa. A gente sabe se o cliente pagou ou nao: as vezes pagou por fora." O caso que trouxe a
+// regra: em 16 e 17/10 a PayLog mandou 'furtado' pra 13 pedidos JA PAGOS (entregues; 4 com o pagamento
+// confirmado na propria PayLog) e o webhook levou os 13 de Pagos pra Roubos. O perfil do vendedor
+// contava 181 vendas pagas e a coluna Pagos do Kanban mostrava 173 - o Guilherme achou que era bug.
+//
+// A regra de 17/09 era "chegou atualizacao nova da plataforma, ela passa por cima do arrasto manual".
+// Ela continua valendo pras ETAPAS DE ENTREGA (a enviar, enviado, rota, retirada, cobranca): se a
+// plataforma nao pudesse mais mover um card arrastado a mao, ele ficaria parado no meio da esteira pra
+// sempre. O que muda e a DECISAO FINAL, que e da equipe:
+//   - pedido pago que esta em Pagos nao sai de la;
+//   - pedido pago nao vai pra coluna de perda (roubo, frustrado, devolvido, cancelado);
+//   - pedido que a equipe ENCERROU a mao (colocou numa coluna de perda) fica onde ela pos.
+// O que a plataforma disse continua guardado em `col_plat` e no historico do card; so a coluna fica.
+// Estorno de pagamento (REFUND/CHARGEBACK na cobranca) NAO passa por aqui: e dinheiro voltando, e
+// continua tirando o Pago (bloco do CHARGE_UPDATED).
+// Devolve o motivo quando a plataforma NAO pode mover o card; '' quando pode.
+// colunas de cobranca: pedido entregue esperando pagamento (o pago sai delas pra Pagos)
+const _COLS_COBRANCA_PAGO = ['Cobrança', 'Entregue', 'Entregues', 'Inadimplência', 'Inadimplências'];
+function _seguraDecisaoDaEquipe(lead, basePlat, alvo) {
+  const col = String((lead && lead.col) || '');
+  if (!col || _colCanon(col) === _colCanon(alvo)) return '';   // mesma coluna com outro nome: nao muda nada
+  const pago = _ehPago(lead);
+  if (pago && _colCanon(col) === 'Pago') return 'pedido pago fica em Pagos';
+  if (pago && FIVE_COL_FIM.includes(String(alvo || ''))) return 'pedido pago nao vai pra perda';
+  if (FIVE_COL_FIM.includes(col) && col !== String(basePlat || '')) return 'encerrado pela equipe';
+  return '';
+}
+// PRA ONDE O CARD VOLTA no reparo unico (_reparoDecisaoEquipe). '' = fica onde esta.
+//  A) o ULTIMO movimento do card foi a plataforma passando por cima de uma decisao final da equipe;
+//  B) pedido pago parado numa coluna de perda pra onde a PLATAFORMA levou (3 dos 13 de 16-17/10 nao
+//     tinham a nota de "passou por cima": o Pago deles tinha vindo da propria PayLog);
+//  C) pedido pago parado numa coluna de cobranca (pago registrado sem coluna).
+function _destinoDoReparo(l) {
+  if (!l) return '';
+  const h = Array.isArray(l.hist) ? l.hist : [];
+  const col = String(l.col || '');
+  const daPlataforma = (w) => w === 'five' || w === 'paylog';
+  const u = h[h.length - 1];
+  if (u && daPlataforma(u.who) && /passou por cima da mudanca manual/.test(String(u.note || ''))) {
+    const de = String(u.from || '');
+    if (de && _colCanon(de) !== _colCanon(col)) {
+      if (_ehPago(l) && _colCanon(de) === 'Pago') return de;
+      if (FIVE_COL_FIM.includes(de)) return de;
+    }
+  }
+  // C) pago parado numa coluna de cobranca (pago registrado sem coluna, antes da regra acima)
+  if (String(l.spg || '') === 'Pago' && _COLS_COBRANCA_PAGO.includes(col)) return 'Pagos';
+  if (String(l.spg || '') === 'Pago' && FIVE_COL_FIM.includes(col)) {
+    let entrou = null;
+    for (let i = h.length - 1; i >= 0; i--) { if (h[i] && String(h[i].to || '') === col) { entrou = h[i]; break; } }
+    if (entrou && daPlataforma(entrou.who)) return (entrou.from && _colCanon(entrou.from) === 'Pago') ? String(entrou.from) : 'Pagos';
+  }
+  return '';
+}
 // VENDA CANCELADA NAO E VENDA (21/09/2026, pedido do Bruno: "se ele fez 7 no dia e uma cancelou, fez
 // 6"). Quando um pedido cai numa destas colunas, a venda detectada pela frase "Pedido Concluido"
 // (wa_sales) e marcada `cancelado=1`, e todo contador de venda (Chegada de leads, anuncios, inbox)
@@ -3305,7 +3362,12 @@ async function _fiveUpsertLead(env, p, ctx) {
       if (!jaAcabou && (tgt > cur || _shipMudou || FIVE_COL_FIM.includes(targetCol))) {
         lead.col_plat = targetCol;
         const _alvoCol = (targetCol === 'Cobrança' && String(lead.spg || '') === 'Pago') ? 'Pago' : targetCol;
-        if (_alvoCol !== lead.col) {
+        // A DECISAO DA EQUIPE E A ULTIMA PALAVRA (17/10/2026): ver _seguraDecisaoDaEquipe. O col_plat
+        // acima ja guardou o que a plataforma disse; a coluna fica, e o historico conta o porque.
+        const _segura = _seguraDecisaoDaEquipe(lead, _basePlat, _alvoCol);
+        if (_segura && _alvoCol !== lead.col) {
+          if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: 'five', time: nowISO, note: 'a plataforma disse ' + targetCol + '; o card fica em ' + lead.col + ' (' + _segura + ')' });
+        } else if (_alvoCol !== lead.col) {
           const from = lead.col;
           const _manual = String(from || '') !== _basePlat;
           const _eraPagoCol = _ehPago({ spg: lead.spg, col: from });
@@ -6559,6 +6621,15 @@ async function handleUpdateLead(req, env, leadId) {
       }
     }
     _carimbaPagoTs(lead, _eraPagoEd, 0);   // marcou/desmarcou pago na mao: a data e a de agora
+    // PAGO REGISTRADO SEM COLUNA (17/10/2026). O app do celular (e a ficha de pagamentos) marca o
+    // pedido pago mandando so `spg`/`pagamentos`, sem `col`: o card ficava em Cobranca e o cobrador
+    // ligaria cobrando quem ja pagou (caso da Lucinda: paga, entregue, parada em Cobranca). E a mesma
+    // regra do webhook (COD pago sai da Cobranca) e do botao "Ja pagou" do Kanban (vai pra Pagos).
+    if (!('col' in patch) && !_eraPagoEd && _ehPago(lead) && _COLS_COBRANCA_PAGO.includes(String(lead.col || ''))) {
+      if (!Array.isArray(lead.hist)) lead.hist = [];
+      lead.hist.push({ from: lead.col, to: 'Pagos', who: 'kanban:' + String(u.id), time: now14(), note: 'pago registrado: saiu da cobranca' });
+      lead.col = 'Pagos';
+    }
     // O pedido acabou de virar Pago neste patch? Limpa o retorno de cobranca (a agenda e fila de
     // cobranca; pago = feito). So na transicao, e so quando o patch NAO mexeu no agend de proposito.
     if (!('agend' in patch)) {
@@ -27023,6 +27094,41 @@ async function _cronDominios(env) {
     await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
   }
 }
+// REPARO UNICO (17/10/2026): devolve pro lugar o que a plataforma tirou da decisao da equipe antes da
+// regra existir (ver _destinoDoReparo). Roda uma vez so: grava `reparo_decisao_equipe` no app_config.
+// Depois disso o webhook ja nao deixa acontecer de novo, entao nao ha o que repetir.
+async function _reparoDecisaoEquipe(env) {
+  if (await _readConfig(env, 'reparo_decisao_equipe')) return { feito: true };
+  for (let tent = 0; tent < 4; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return { n: 0 };
+    let data; try { data = JSON.parse(row.data); } catch (_) { return { n: 0 }; }
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const nowISO = new Date().toISOString();
+    const voltaram = [];
+    for (const l of leads) {
+      const destino = _destinoDoReparo(l);
+      if (!destino) continue;
+      const de = String(l.col || '');
+      l.col = destino;
+      if (Array.isArray(l.hist)) l.hist.push({ from: de || '—', to: destino, who: 'regra', time: nowISO, note: 'a decisao da equipe vale: voltou pra ' + destino + ' (a plataforma tinha levado pra ' + de + ')' });
+      voltaram.push(l);
+    }
+    const marca = String(Math.floor(Date.now() / 1000));
+    if (!voltaram.length) { await _writeConfig(env, 'reparo_decisao_equipe', marca); return { n: 0 }; }
+    const r = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'reparo:decisao-equipe', row.version).run();
+    if (r && r.meta && r.meta.changes > 0) {
+      // venda cancelada/descancelada no contador de vendas (wa_sales) segue a coluna, como no webhook
+      for (const l of voltaram) { try { await _waSalesMarcaCancelada(env, l, leads); } catch (_) {} }
+      await _writeConfig(env, 'reparo_decisao_equipe', marca);
+      console.error('[reparo] decisao da equipe: ' + voltaram.length + ' pedido(s): ' + voltaram.map((l) => String(l.five_id || l.id) + '->' + l.col).join(', '));
+      return { n: voltaram.length, ids: voltaram.map((l) => String(l.five_id || l.id)) };
+    }
+    await new Promise((res) => setTimeout(res, 20 * (tent + 1)));   // outra escrita ganhou: rele e refaz
+  }
+  return { n: 0, conflito: true };
+}
 async function _cronEnxugarLeads(env) {
   for (let tent = 0; tent < 4; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
@@ -27297,6 +27403,8 @@ export default {
         // sai na primeira linha sem tocar em rede nenhuma; quando ha, o afiliado esta esperando a
         // campanha subir e 5 minutos ja e bastante espera. Ver _cronDominios.
         try { await _cronDominios(env); } catch (e) { console.error('[cron] dominios falhou: ' + String((e && e.message) || e)); }
+        // reparo unico da decisao da equipe (17/10/2026); depois da primeira vez e so uma leitura de config
+        try { await _reparoDecisaoEquipe(env); } catch (e) { console.error('[cron] reparo decisao falhou: ' + String((e && e.message) || e)); }
         // Arquivo de leads: desligado sai na primeira linha (uma leitura de config); ligado, move ate
         // `lote` pedidos encerrados por batida de manutencao (de 5 em 5 minutos).
         try { const _ra = await _arqCron(env); if (_ra && _ra.n) console.error('[arquivo] ' + _ra.n + ' pedido(s) arquivado(s), restam ' + (_ra.restam || 0)); } catch (e) { console.error('[cron] arquivo de leads falhou: ' + String((e && e.message) || e)); }
