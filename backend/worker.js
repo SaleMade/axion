@@ -1,4 +1,8 @@
-﻿// ══════════════════════════════════════════════════════════════
+﻿// TESTAR PROXY PELO SERVIDOR precisa de socket TCP, e o Workers so da isso por este modulo.
+// Ele e nativo da plataforma (nao precisa de nodejs_compat) e so funciona em worker de MODULO,
+// que e o que este arquivo e (ver o export default la embaixo).
+import { connect } from 'cloudflare:sockets';
+// ══════════════════════════════════════════════════════════════
 // AXION — Cloudflare Worker (API multi-usuário)
 //
 // Endpoints:
@@ -10592,6 +10596,75 @@ function _swwebApto(c, nomeSt, ids) {
   return wa !== 'restrito' && wa !== 'banido';
 }
 
+// FALA COM A PROXY POR SOCKET e pergunta a ela quem ela e.
+//
+// Monta um pedido HTTP de PROXY na mao: a diferenca pro pedido normal e que a primeira linha leva a
+// URL INTEIRA (GET http://alvo/caminho HTTP/1.1) em vez do caminho. E assim que proxy HTTP sabe pra
+// onde encaminhar, e e por isso que da pra fazer isto sem TLS e sem CONNECT.
+async function _testaProxyTcp(p) {
+  const host = String((p && p.host) || '').trim();
+  const porta = Number((p && p.porta) || 0);
+  if (!host || !porta) return { ok: false, erro: 'proxy sem endereço' };
+  const ALVO = 'http://ip-api.com/json/?fields=status,query,countryCode,city,isp';
+  const CRLF = String.fromCharCode(13) + String.fromCharCode(10);
+  let sock = null;
+  try {
+    sock = connect({ hostname: host, port: porta });
+    const cab = [
+      'GET ' + ALVO + ' HTTP/1.1',
+      'Host: ip-api.com',
+      'User-Agent: SellWave/1.0',
+      'Accept: application/json',
+      'Connection: close',
+    ];
+    // btoa e o que existe no Workers; usuario e senha da Decodo sao ASCII.
+    if (p.usuario || p.senha) cab.push('Proxy-Authorization: Basic ' + btoa(String(p.usuario || '') + ':' + String(p.senha || '')));
+    const w = sock.writable.getWriter();
+    await w.write(new TextEncoder().encode(cab.join(CRLF) + CRLF + CRLF));
+    w.releaseLock();
+
+    // LE COM PRAZO. Sem isto, proxy que aceita a conexao e nao responde (o caso mais comum de proxy
+    // vencida) deixaria a requisicao pendurada ate o limite da plataforma.
+    const leitor = sock.readable.getReader();
+    const pedacos = [];
+    let total = 0;
+    const prazo = new Promise((ok) => setTimeout(() => ok('tempo'), 15000));
+    while (total < 65536) {
+      const q = await Promise.race([leitor.read(), prazo]);
+      if (q === 'tempo') return { ok: false, erro: 'a proxy não respondeu em 15 segundos' };
+      if (q.done) break;
+      pedacos.push(q.value); total += q.value.length;
+    }
+    const buf = new Uint8Array(total);
+    let i = 0;
+    for (const c of pedacos) { buf.set(c, i); i += c.length; }
+    const texto = new TextDecoder().decode(buf);
+
+    const fimLinha = texto.indexOf(CRLF);
+    const linha1 = fimLinha > 0 ? texto.slice(0, fimLinha) : texto.slice(0, 40);
+    if (/ 407/.test(linha1)) return { ok: false, erro: 'a proxy recusou o usuário ou a senha' };
+    if (!/^HTTP\/1\.[01] 2\d\d/.test(linha1)) return { ok: false, erro: 'a proxy respondeu: ' + (linha1 || 'nada') };
+    const corte = texto.indexOf(CRLF + CRLF);
+    let corpo = corte >= 0 ? texto.slice(corte + 4) : '';
+    // Resposta em pedacos (chunked) vem com o tamanho em hexadecimal antes do JSON.
+    const chave = corpo.indexOf('{');
+    const fim = corpo.lastIndexOf('}');
+    if (chave < 0 || fim < chave) return { ok: false, erro: 'a proxy respondeu algo que não é JSON' };
+    corpo = corpo.slice(chave, fim + 1);
+    let d; try { d = JSON.parse(corpo); } catch (_) { return { ok: false, erro: 'não entendi a resposta da proxy' }; }
+    if (!d || d.status !== 'success' || !d.query) return { ok: false, erro: 'a proxy respondeu sem o IP' };
+    return { ok: true, ip: String(d.query), pais: String(d.countryCode || ''), cidade: String(d.city || ''), provedor: String(d.isp || '') };
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    // Mensagem de socket nao diz nada pra ele; traduz os casos que acontecem de verdade.
+    if (/refused|ECONNREFUSED/i.test(m)) return { ok: false, erro: 'a proxy recusou a conexão (endereço ou porta errados)' };
+    if (/timed? ?out|ETIMEDOUT/i.test(m)) return { ok: false, erro: 'a proxy não respondeu' };
+    return { ok: false, erro: 'não consegui falar com a proxy' };
+  } finally {
+    try { if (sock) await sock.close(); } catch (_) { /* ok */ }
+  }
+}
+
 function _swwebLerJson(txt, padrao) {
   try { const o = JSON.parse(txt || ''); return (o && typeof o === 'object') ? o : padrao; } catch (_) { return padrao; }
 }
@@ -11335,6 +11408,11 @@ async function handleSwWeb(req, env, path) {
       // verde/amarelo em vez de obrigar um sim/nao pra operacao inteira.
       pais: String((p && p.pais) || ''),
       visto: Number((p && p.visto) || 0),
+      // O que o ultimo teste viu, pra tela poder mostrar o IP e a cidade sem adivinhar.
+      ip: String((p && p.ip) || ''),
+      cidade: String((p && p.cidade) || ''),
+      falhou: String((p && p.falhou) || ''),
+      falhouEm: Number((p && p.falhouEm) || 0),
       // "NUNCA TESTADA" E UM ESTADO, NAO UM CAMPO VAZIO (17/10/2026, achado da sessao 2d).
       //
       // Quem mede e o APP, no instante em que abre o numero. Entao proxy recem cadastrada, ou
@@ -11454,6 +11532,46 @@ async function handleSwWeb(req, env, path) {
     }
     if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, id: novoId, atualizou: mexeu });
+  }
+
+  // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
+  //
+  // O BOTAO QUE FALTAVA (17/10/2026). A lista mostrava "nunca testada" e ele perguntou, com razao:
+  // "como e que eu testo? Nao tem nenhum local pra eu testar". Ate aqui a unica medicao vinha do
+  // app, quando o vendedor ABRIA o numero - ou seja, proxy recem cadastrada ficava em "nunca" ate
+  // alguem usar, e era justamente a mais provavel de estar errada.
+  //
+  // POR QUE DAQUI E NAO DO NAVEGADOR DELE: a pagina nao consegue falar por uma proxy arbitraria com
+  // usuario e senha, isso nao existe no navegador. E por que nao do app: o app so esta aberto
+  // quando alguem esta atendendo. O worker consegue porque o Workers da socket TCP.
+  //
+  // O QUE ESTE TESTE PROVA E O QUE NAO PROVA, e a diferenca importa: prova que a proxy ESTA DE PE,
+  // que a senha confere e por qual IP e pais ela sai. NAO prova que a maquina do vendedor alcanca a
+  // proxy - a rota de rede dele e outra. Quem prova isso e o app ao abrir o numero, e ele continua
+  // depositando por /proxy-visto.
+  if (req.method === 'POST' && path === '/api/swweb/proxy-testar') {
+    if (!manda) return err('Só a direção testa proxy', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const id = String((b && b.id) || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+    const p = banco[id];
+    if (!p) return err('Proxy não encontrada no banco', 404);
+
+    const r = await _testaProxyTcp(p);
+    if (!r.ok) {
+      // FALHA NAO APAGA A ULTIMA MEDICAO BOA, e marca a hora da tentativa: "funcionava as 9h e
+      // parou as 14h" e informacao; sobrescrever com vazio joga fora o unico historico que existe.
+      banco[id] = { ...banco[id], falhou: r.erro, falhouEm: Math.floor(Date.now() / 1000) };
+      await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+      return json({ ok: false, erro: r.erro });
+    }
+    banco[id] = {
+      ...banco[id],
+      pais: String(r.pais || ''), visto: Math.floor(Date.now() / 1000),
+      ip: String(r.ip || ''), cidade: String(r.cidade || ''), provedor: String(r.provedor || ''),
+      falhou: '', falhouEm: 0,
+    };
+    await _writeConfig(env, K_BANCO, JSON.stringify(banco));
+    return json({ ok: true, ip: r.ip, pais: r.pais, cidade: r.cidade, provedor: r.provedor });
   }
 
   // POST /api/swweb/proxy-adotar — puxa pro banco as proxies que ja estao em uso e nao tem dono.
