@@ -408,7 +408,27 @@ app.on('web-contents-created', (_e, wc) => {
   } catch (e) {
     console.error('[webrtc] falhou:', e && e.message)
   }
-  // Link externo abre no navegador do sistema, nunca dentro de uma sessao de numero.
+  // LINK EXTERNO ABRE NO NAVEGADOR DO SISTEMA, E ISSO E UMA TROCA, NAO UM DESCUIDO (17/10/2026).
+  //
+  // O QUE SE GANHA: o site aberto fica FORA da particao do numero. Se ele navegasse ali dentro, a
+  // view viraria um navegador comum ainda carregando a sessao do WhatsApp daquele chip - e uma
+  // pagina hostil no mesmo compartimento e o caminho curto pra roubar a sessao. E o fingerprint
+  // daquela particao, que existe pra parecer um aparelho so, passaria a ser visto por qualquer site
+  // que o vendedor abrir.
+  //
+  // O QUE SE PERDE, e e justo registrar: o navegador do Windows NAO passa pelo proxy daquele
+  // numero. Quem receber o clique ve o IP de casa do Bruno, nao o do chip. Num app cuja razao de
+  // existir e nao correlacionar numeros, isso soa contraditorio - mas o modelo de ameaca aqui e a
+  // META correlacionar chips, e um site de terceiro vendo o IP residencial nao ajuda nisso. O que
+  // ajudaria seria o contrario: expor a sessao do chip.
+  //
+  // SE UM DIA ISSO INCOMODAR, o meio-termo existe e e o que as ferramentas de multi-conta fazem:
+  // abrir numa janela com particao PROPRIA (nao a do numero) e o proxy DAQUELE chip. Da os dois
+  // lados, e custa uma sessao por chip. Nao foi feito porque ninguem pediu e porque o risco medido
+  // e baixo - nao porque a opcao nao exista.
+  //
+  // O QUE NAO SE MEXE: so http e https vao pro navegador. Esquema desconhecido entregue ao Windows
+  // e abrir porta.
   wc.setWindowOpenHandler(({ url }) => {
     // So http e https vao pro navegador do sistema. Outros esquemas (ms-..., file:, javascript:)
     // sao recusados sem abrir nada: entregar esquema desconhecido pro Windows e abrir porta.

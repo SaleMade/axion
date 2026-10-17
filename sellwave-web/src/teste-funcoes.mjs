@@ -271,6 +271,31 @@ console.log('\n=== contas do SellWave Web ===\n')
     monta({ formattedTitle: '' }, 'visto por ultimo hoje as 14:02') === '')
 }
 
+// ── 10c) NENHUMA CHAMADA DE REDE DO APP PODE SAIR PELA SESSAO PADRAO.
+//    Dois bugs da MESMA familia morderam o Bruno em duas semanas, e nenhum dos dois deu erro
+//    visivel: a previa de midia (que nao carregava nada, 17/10) e a busca de CEP (que girava pra
+//    sempre, pedida quatro vezes). Nos dois, `net.fetch` saia pela sessao PADRAO, que esta num
+//    buraco negro de proxy DE PROPOSITO (socks5://127.0.0.1:1, pra nada vazar por engano) - entao
+//    a chamada morria em ERR_PROXY, que e indistinguivel de "ninguem respondeu".
+//
+//    NO PROCESSO PRINCIPAL EXISTEM DOIS CAMINHOS CERTOS: o `fetch` global do Node, que nao passa
+//    por sessao nenhuma, e `ses.fetch(...)` numa sessao que saia direto (a do painel esta em
+//    'direct'). `net.fetch` nao e nenhum dos dois.
+//
+//    E A ARMADILHA QUE FAZ ISSO CUSTAR CARO: passar { session } pro `net.fetch` NAO DA ERRO. A
+//    assinatura dele so tem bypassCustomProtocolHandlers, entao o campo e ignorado em silencio e o
+//    sintoma aparece tres camadas depois, numa midia que nao carrega.
+{
+  const fonte = leia('main.js')
+  const linhas = fonte.split(String.fromCharCode(10))
+  const semComentario = linhas.filter((l) => !/^\s*(\/\/|\*)/.test(l)).join(String.fromCharCode(10))
+  const usos = (semComentario.match(/net\.fetch\(/g) || []).length
+  vale('o processo principal nao usa net.fetch em lugar nenhum', usos === 0, usos + ' uso(s)')
+  vale('a midia busca pela sessao do painel, que sai direto', /sesPainel\.fetch\(/.test(semComentario))
+  vale('e o handler do swmedia mora na sessao do painel, nao na padrao',
+    /sesPainel\.protocol\.handle\(/.test(semComentario))
+}
+
 // ── 11) A URL DE DADOS DA MIDIA. Este custou o dia: todo funil com audio morria no primeiro
 //    passo com `invalid_data_url`, porque o R2 devolve "audio/ogg; codecs=opus" e o espaco
 //    invalida a URL. O teste usa os tipos REAIS que a nossa midia tem.
