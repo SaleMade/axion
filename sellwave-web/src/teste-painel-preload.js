@@ -14,6 +14,12 @@ const ESTADO = {
 
 // Quantas das proximas chamadas de pedidoNovo devem falhar (ver o stub abaixo).
 let falharPedido = 0
+// O APAGAR DO RASCUNHO PODE RECUSAR SOB COMANDO. Desde 17/10 a tela tira o cartao ANTES de o
+// servidor responder (pra devolver o clique na hora), entao o caminho que precisa de teste e
+// justamente o da recusa: o cartao tem que VOLTAR.
+let falharApagar = 0
+// E PODE DEMORAR. Sem demora, "sumiu antes da resposta" e indistinguivel de "sumiu depois dela".
+let demoraApagar = 0
 
 contextBridge.exposeInMainWorld('swp', {
   roteiro: reg('roteiro', { ok: true,
@@ -97,7 +103,12 @@ contextBridge.exposeInMainWorld('swp', {
     if (!id) { rascSeq += 1; return Promise.resolve({ ok: true, id: '99000' + rascSeq }) }
     return Promise.resolve({ ok: true, id: String(id) })
   },
-  rascunhoApagar: reg('rascunhoApagar', { ok: true }),
+  rascunhoApagar: (id) => {
+    chamadas.push({ nome: 'rascunhoApagar', args: [id] })
+    const resposta = falharApagar > 0 ? (falharApagar -= 1, { ok: false, erro: 'servidor recusou' }) : { ok: true }
+    if (demoraApagar > 0) return new Promise((r) => setTimeout(() => r(resposta), demoraApagar))
+    return Promise.resolve(resposta)
+  },
   fechar: reg('fechar', { ok: true }),
   recarregar: reg('recarregar', { ok: true }),
   esconder: reg('esconder', { ok: true }),
@@ -111,3 +122,5 @@ contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome) => {
 })
 // Pro teste simular a rede caindo no cadastro.
 contextBridge.exposeInMainWorld('__falhaPedido', (n) => { falharPedido = Number(n) || 0 })
+contextBridge.exposeInMainWorld('__falhaApagar', (n) => { falharApagar = Number(n) || 0 })
+contextBridge.exposeInMainWorld('__demoraApagar', (ms) => { demoraApagar = Number(ms) || 0 })

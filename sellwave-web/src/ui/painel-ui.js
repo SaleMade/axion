@@ -460,6 +460,9 @@ let avisoAte = 0
 const IC_SALVAR = svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>')
 const IC_CHECK = svg('<path d="M20 6 9 17l-5-5"/>')
 const IC_X = svg('<path d="M18 6 6 18M6 6l12 12"/>')
+// A LIXEIRA da dash (o Trash2 do lucide), que e o desenho que ele reconhece: o X generico nao dizia
+// que aquilo APAGA.
+const IC_LIXO = svg('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>')
 const IC_RASC = svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>')
 const IC_CLIPE = svg('<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.9-2.9l8.5-8.5"/>')
 const IC_NOTA = svg('<path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/>')
@@ -478,7 +481,10 @@ const BLOCOS_PED = [
   {
     t: 'Endereço', bc: '#f59e0b',
     ic: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
-    linhas: [['cep'], ['end', 'num'], ['bairro', 'comp'], ['cidade', 'uf']],
+    // CIDADE SOBE PRO LADO DO BAIRRO e COMPLEMENTO DESCE pro espaco largo da linha da UF: o
+    // complemento e o campo que mais recebe texto ("na esquina atras da igreja, perto do salao de
+    // beleza") e a cidade e quase sempre uma palavra so.
+    linhas: [['cep'], ['end', 'num'], ['bairro', 'cidade'], ['comp', 'uf']],
   },
   {
     t: 'Tratamento e Anexo', bc: '#00a884',
@@ -536,6 +542,18 @@ const telErro = (v) => {
   if (d[2] !== '9') return 'Falta o 9 depois do DDD'
   if (Number(d.slice(0, 2)) < 11) return 'DDD inválido'
   return ''
+}
+
+// A CAIXA QUE CRESCE. `height: auto` antes de ler o `scrollHeight`, senao ele devolve a altura
+// atual e a caixa nunca DIMINUI quando o vendedor apaga texto. O teto esta no CSS (max-height), e
+// passando dele a propria caixa rola.
+function ajustaAltura(el) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+function ajustaTodasAlturas(onde) {
+  for (const el of (onde || document).querySelectorAll('textarea.cresce')) ajustaAltura(el)
 }
 
 // APLICA A MASCARA SEM PERDER O CURSOR. Conta quantos DIGITOS existiam antes do cursor, remonta o
@@ -620,12 +638,16 @@ const CAMPOS_PED = {
   end: { r: 'Rua', req: true, ph: 'Rua', trava: true },
   num: { r: 'Número', req: true, ph: 'Nº' },
   bairro: { r: 'Bairro', req: true, ph: 'Bairro', trava: true },
-  comp: { r: 'Complemento', ph: 'Compl.' },
+  // CAIXA QUE CRESCE enquanto ele digita, ate um teto: "conforme o meu vendedor vai digitando
+  // bastante coisa, esse quadrado vai ficando um pouquinho maior verticalmente, pra que ele veja
+  // todo o complemento que esta adicionando". Uma linha quando esta vazio, pra nao roubar espaco
+  // do formulario de quem nao usa o campo.
+  comp: { r: 'Complemento', ph: 'Ponto de referência, bloco, apto...', area: true, cresce: true },
   cidade: { r: 'Cidade', req: true, ph: 'Cidade', trava: true },
   uf: { r: 'UF', req: true, ph: 'UF', max: 2, trava: true },
   obs: { r: 'Observações (opcional)', area: true, ph: 'Ex: Vai pagar dia 5, desconto de R$50...' },
 }
-const PARES = { end: 'num', bairro: 'comp', cidade: 'uf' }
+const PARES = { end: 'num', bairro: 'cidade', comp: 'uf' }
 const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
 
 let ped = {}             // o que está digitado agora
@@ -830,7 +852,10 @@ function montaPedido(f) {
     // Aceitacoes mostra `l.cep` direto ("CEP: 88501000") e o modal do CRM mostra os tres crus,
     // inclusive nos botoes de copiar. Quem le a fila nao tem como saber que aquele veio do app.
     nome: String(f.nome || '').trim(), cpf: mascCpf(f.cpf), wa: mascTel(f.wa), email: '',
-    cep: mascCep(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(), comp: String(f.comp || '').trim(),
+    // O COMPLEMENTO VAI NUMA LINHA SO. A caixa cresce na tela, mas quebra de linha gravada no
+    // pedido vira etiqueta torta na transportadora e buraco no texto de envio.
+    cep: mascCep(f.cep), end: String(f.end || '').trim(), num: String(f.num || '').trim(),
+    comp: String(f.comp || '').replace(/\s+/g, ' ').trim(),
     bairro: String(f.bairro || '').trim(), cidade: String(f.cidade || '').trim(), uf: String(f.uf || '').toUpperCase().trim(),
     // PRODUTO E VALOR SAEM DO CATALOGO, nunca do que foi digitado. Preço à mão diverge do catálogo
     // e contamina receita, comissão e margem sem ninguém ver de onde veio (decisão de 14/08/2026).
@@ -1016,7 +1041,8 @@ function listaRascunhos() {
       + '<div class="t1">' + esc(rotuloRasc(r)) + '</div>'
       + '<div class="t2">' + esc(detalheRasc(r)) + '</div>'
       + '</button>'
-      + '<button class="x" data-apaga="' + esc(r.id) + '" title="Apagar rascunho">' + IC_X + '</button>'
+      + '<button class="segue" data-abre="' + esc(r.id) + '">' + IC_RASC + '<span>Continuar</span></button>'
+      + '<button class="lixo" data-apaga="' + esc(r.id) + '" title="Apagar rascunho">' + IC_LIXO + '</button>'
       + '</div>'
   }
   return h
@@ -1044,7 +1070,7 @@ function campoPed(k) {
   const travado = !!(c.trava && cepTravados[k])
   const v = esc(bruto)
   const dentro = c.area
-    ? '<textarea data-k="' + k + '" placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
+    ? '<textarea data-k="' + k + '"' + (c.cresce ? ' class="cresce" rows="1"' : '') + ' placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
     : '<input data-k="' + k + '" value="' + v + '" placeholder="' + esc(c.ph || '') + '"'
       + (c.max ? ' maxlength="' + c.max + '"' : '')
       + (c.num ? ' inputmode="numeric"' : '')
@@ -1347,9 +1373,15 @@ function ligaPedidos(corpo) {
       if (k === 'cep') { mudouCep(v); return }
       // UF na mao tambem mexe no prazo, e o telefone e o CPF pintam o campo enquanto digita.
       if (k === 'uf' || k === 'wa' || k === 'cpf') { if (String(antes || '') !== v) desenhaSePreciso(k, v) }
+      if (c.cresce) ajustaAltura(el)
       if (k === 'tratKey') desenha()      // o Total acompanha
     }
     if (el.tagName === 'SELECT') el.onchange = el.oninput
+    // ENTER NO COMPLEMENTO NAO QUEBRA LINHA. Ele e caixa de texto so pra CRESCER; quebra de linha
+    // no meio de um endereco vira etiqueta torta na transportadora e some do texto de envio.
+    if (el.dataset.k === 'comp') {
+      el.onkeydown = (ev) => { if (ev.key === 'Enter') ev.preventDefault() }
+    }
     // SAIU DO CAMPO DO WHATSAPP: completa o 9 que falta. Nao da pra fazer isso a cada tecla - 10
     // digitos e um estado NORMAL de quem esta digitando um numero de 11, e um 9 entrando no meio
     // empurraria o que ele acabou de digitar.
@@ -1365,6 +1397,10 @@ function ligaPedidos(corpo) {
       }
     }
   }
+  // A caixa que cresce nasce do tamanho do que ja tem dentro: o `desenha()` troca o innerHTML e
+  // sem isto o complemento de tres linhas voltava espremido em uma, com o resto escondido.
+  ajustaTodasAlturas(corpo)
+
   // OS CLIQUES DOS BLOCOS NOVOS.
   for (const b of corpo.querySelectorAll('[data-transp]')) {
     b.onclick = () => { if (b.disabled) return; ped.transp = b.dataset.transp; rascunhoDepois(); desenha() }
@@ -1418,10 +1454,23 @@ function ligaPedidos(corpo) {
   for (const b of corpo.querySelectorAll('[data-apaga]')) {
     b.onclick = async () => {
       const id = b.dataset.apaga
-      try { await window.swp.rascunhoApagar(id) } catch (_) { /* some da lista no próximo pulso */ }
+      // SOME DA TELA NA HORA. O cartao e so a leitura de uma lista que o servidor guarda: tirar
+      // daqui e mandar apagar depois da o mesmo resultado e devolve o clique na hora.
+      const antes = rascunhos
+      rascunhos = rascunhos.filter((x) => String(x.id) !== String(id))
       if (String(rascId) === String(id)) rascId = ''
-      await pegaRascunhos()
       desenha()
+      let ok = false
+      try { const r = await window.swp.rascunhoApagar(id); ok = !!(r && r.ok !== false) } catch (_) { ok = false }
+      if (!ok) {
+        // SE O SERVIDOR RECUSOU, O CARTAO VOLTA. Sumir da tela e continuar no servidor seria o
+        // vendedor achar que apagou e o rascunho reaparecer no proximo pulso, sem explicacao.
+        rascunhos = antes
+        pedErros = ['Não deu pra apagar o rascunho agora. Ele continua aí.']
+        desenha()
+        return
+      }
+      pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
     }
   }
   for (const b of corpo.querySelectorAll('[data-tiraanexo]')) {
@@ -1655,8 +1704,7 @@ function rascunhoSozinho() {
       // O id vai como esta: vazio significa "ainda nao existe", e quem cunha e o servidor.
       const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || '', dados)
       if (r && r.ok && r.id) rascId = String(r.id)
-      await pegaRascunhos()
-      if (aba === 'pedidos') desenha()
+      pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
       return !!(r && r.ok)
     } catch (_) { return false }   // fica na tela do mesmo jeito; a proxima saida tenta de novo
     finally { gravandoAgora = null }
@@ -1677,7 +1725,10 @@ async function salvaRascunho() {
     // quebrado sem ninguém perceber.
     if (r && r.ok) { rascId = String(r.id || rascId); pedFeito = 'Rascunho guardado.' }
     else pedErros = [humano((r && r.erro) || 'não deu pra guardar o rascunho')]
-    await pegaRascunhos()
+    // A LISTA SE REFAZ POR TRAS. Esperar a listagem aqui era uma segunda ida ao servidor com a tela
+    // parada, e o que ele sentiu foi justamente isso: "na hora de criar um rascunho ele e um
+    // pouquinho lento". O aviso verde ja sai no `finally`.
+    pegaRascunhos().then(() => { if (aba === 'pedidos') desenha() })
   } catch (_) {
     pedErros = ['Não deu pra guardar o rascunho agora. O que você digitou continua na tela.']
   } finally { pedSalvando = ''; desenha() }

@@ -12,7 +12,8 @@
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64",
     "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js",
-    "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js"
+    "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js",
+    "icone": "node --check src/icone.js && electron src/icone.js"
   },
   "devDependencies": {
     "electron": "44.7.2",
@@ -26,6 +27,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -38,7 +40,11 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "shortcutName": "SellWave Web"
     }
   }
 }

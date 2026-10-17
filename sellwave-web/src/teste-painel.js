@@ -284,6 +284,40 @@ app.whenReady().then(async () => {
   conta('o numero continua livre, que e o que falta digitar', dep.numLivre === true)
   conta('e o cursor vai pro numero sozinho', dep.foco === 'num', dep.foco)
 
+  // ── ONDE CADA CAMPO DO ENDERECO FICA ────────────────────────────────────
+  //
+  // Pedido do Bruno em 17/10/2026, depois de usar: "geralmente o pessoal coloca um complemento
+  // grande, por exemplo: na esquina atras da igreja, perto do salao de beleza. E um complemento
+  // grande e aquele espacinho e muito pequeno. No lugar do complemento coloca a cidade, e no lugar
+  // da cidade o complemento". O complemento estava na metade de uma linha dividida e a cidade no
+  // espaco largo: os dois trocados, porque a cidade quase sempre e uma palavra so.
+  const ordemEnd = await js('[...document.querySelectorAll(".bloco [data-k]")].map(e => e.dataset.k).join(",")')
+  conta('o complemento desce pro espaco largo e a cidade sobe pro lado do bairro',
+    /cep,end,num,bairro,cidade,comp,uf/.test(ordemEnd), ordemEnd)
+  const larguras = await js('(() => { const w = (k) => Math.round(document.querySelector("[data-k=" + k + "]").getBoundingClientRect().width);'
+    + ' return { comp: w("comp"), cidade: w("cidade"), uf: w("uf") } })()')
+  conta('e o complemento fica mais largo que a cidade, que e o ponto do pedido',
+    larguras.comp > larguras.cidade && larguras.uf < larguras.cidade, JSON.stringify(larguras))
+
+  // A CAIXA DO COMPLEMENTO CRESCE COM O TEXTO e volta a encolher quando ele apaga.
+  const alturas = await js('(() => { const e = document.querySelector("[data-k=comp]");'
+    + ' const h = () => Math.round(e.getBoundingClientRect().height);'
+    + ' const vazia = h();'
+    + ' e.value = "Na esquina atras da igreja matriz, perto do salao de beleza da dona Cida, portao verde"; e.dispatchEvent(new Event("input"));'
+    + ' const cheia = h();'
+    + ' e.value = "Ap 12"; e.dispatchEvent(new Event("input"));'
+    + ' const curta = h();'
+    + ' return { vazia, cheia, curta, eTextarea: e.tagName === "TEXTAREA" } })()')
+  conta('o complemento e caixa de texto, nao campo de uma linha', alturas.eTextarea === true, JSON.stringify(alturas))
+  conta('ela cresce conforme ele digita', alturas.cheia > alturas.vazia + 8, JSON.stringify(alturas))
+  conta('e volta a encolher quando ele apaga', alturas.curta <= alturas.vazia + 2, JSON.stringify(alturas))
+
+  // ENTER NAO QUEBRA LINHA: endereco com quebra vira etiqueta torta na transportadora.
+  const semQuebra = await js('(() => { const e = document.querySelector("[data-k=comp]");'
+    + ' const ev = new KeyboardEvent("keydown", { key: "Enter", cancelable: true });'
+    + ' const foiBarrado = !e.dispatchEvent(ev); return foiBarrado })()')
+  conta('Enter no complemento nao quebra linha', semQuebra === true, String(semQuebra))
+
   // ── O PRAZO E AS TRES FORMAS DE MANDAR ─────────────────────────────────────────────────────
   const prazo = await js('(() => { const p = document.querySelector(".prazo"); if (!p) return null;'
     + ' return { txt: p.textContent.replace(/\\s+/g, " ").trim(),'
@@ -620,6 +654,55 @@ app.whenReady().then(async () => {
   conta('abrir e sair sem digitar nada NAO cria rascunho', depoisVazio === antesVazio, antesVazio + ' -> ' + depoisVazio)
   await clica('[data-aba=pedidos]')
   await espera(300)
+
+  // ── O CARTAO DO RASCUNHO, E A VELOCIDADE DE APAGAR ───────────────────────
+  //
+  // Pedido do Bruno em 17/10/2026: "gostaria que eles ficassem um pouco mais parecidos com os
+  // rascunhos da area de cadastro de pedidos. Eles tem ali uma lixeirinha vermelha e um botaozinho
+  // liso escrito Continuar. A unica coisa que eu gostei dessas coisas novas e o icone de canetinha
+  // em amarelo, que ficou bem legal, e com o numero ou o nome da pessoa".
+  const cartaoRasc = await js('(() => { const c = document.querySelector(".rasc"); if (!c) return null;'
+    + ' const lixo = c.querySelector(".lixo"); const segue = c.querySelector(".segue");'
+    + ' const ic = c.querySelector(".ic");'
+    + ' return { temSegue: !!segue, txtSegue: segue ? segue.textContent.trim() : "",'
+    + ' corLixo: lixo ? getComputedStyle(lixo).color : "", corIc: ic ? getComputedStyle(ic).color : "",'
+    + ' t1: (c.querySelector(".t1")||{}).textContent || "" } })()')
+  conta('o rascunho ganha o botao liso "Continuar", como na dash',
+    !!cartaoRasc && cartaoRasc.temSegue && /Continuar/.test(cartaoRasc.txtSegue), JSON.stringify(cartao))
+  // VERMELHO DE VERDADE, nao cinza: era um X apagado que nao dizia que aquilo apaga.
+  conta('e a lixeira e vermelha', !!cartaoRasc && /^rgb\(240, 80, 106\)/.test(cartaoRasc.corLixo), cartaoRasc && cartaoRasc.corLixo)
+  // O QUE ELE DISSE QUE GOSTOU FICA: a caneta ambar e o nome ou numero na primeira linha.
+  conta('a canetinha ambar continua', !!cartaoRasc && /^rgb\(255, 185, 0\)/.test(cartaoRasc.corIc), cartaoRasc && cartaoRasc.corIc)
+  conta('e o nome ou numero continua na primeira linha', !!cartaoRasc && cartaoRasc.t1.trim().length > 0, cartaoRasc && cartaoRasc.t1)
+
+  // APAGAR NAO ESPERA O SERVIDOR. Ele sentiu e estava certo: antes era uma gravacao E uma listagem
+  // inteira, as duas com a tela parada. Com o duble demorando 700ms, o cartao tem que sumir ANTES.
+  await js('window.__demoraApagar(700); "ok"')
+  const antesApagar = await js('document.querySelectorAll(".rasc").length')
+  await js('(() => { const b = document.querySelector(".rasc .lixo"); if (b) b.click() })()')
+  await espera(150)
+  const logoApos = await js('document.querySelectorAll(".rasc").length')
+  conta('o cartao some na hora do clique, sem esperar o servidor',
+    logoApos === antesApagar - 1, antesApagar + ' -> ' + logoApos + ' em 150ms')
+  await espera(900)
+
+  // MAS SE O SERVIDOR RECUSAR, O CARTAO VOLTA. Sumir da tela e continuar no servidor seria ele
+  // achar que apagou e o rascunho reaparecer sozinho no proximo pulso, sem explicacao.
+  await js('window.__demoraApagar(0); window.__falhaApagar(1); "ok"')
+  await js('(() => { pegaRascunhos() })()').catch(() => {})
+  await espera(400)
+  const temDeNovo = await js('document.querySelectorAll(".rasc").length')
+  if (temDeNovo > 0) {
+    await js('(() => { const b = document.querySelector(".rasc .lixo"); if (b) b.click() })()')
+    await espera(500)
+    const voltou = await js('({ n: document.querySelectorAll(".rasc").length,'
+      + ' aviso: (document.querySelector(".aviso.ruim")||{}).textContent || "" })')
+    conta('servidor recusando o apagar devolve o cartao e avisa',
+      voltou.n === temDeNovo && /continua a/i.test(voltou.aviso), JSON.stringify(voltou))
+  } else {
+    conta('servidor recusando o apagar devolve o cartao e avisa', false, 'nao sobrou rascunho pra testar')
+  }
+  await js('window.__falhaApagar(0); "ok"')
 
   // ── O LEAD FICA CONGELADO quando a conversa muda no meio ───────────────────────────────────
   await clica('[data-tipo=entrega]')
