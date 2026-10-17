@@ -10571,6 +10571,22 @@ const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario,
 // Entao: o banco e a fonte de verdade pra EDITAR, e a atribuicao carrega a copia resolvida mais o
 // `id` de quem a gerou. Editar no banco reescreve as copias (ver _swwebBancoAplica).
 const SWWEB_BANCO = 'swweb_proxy_banco';
+// LIBERACAO POR NUMERO, COM HORA PRA MORRER. { "<numkey>": { ate, por, nome } }
+//
+// Pedido do Bruno em 17/10, depois de ele mesmo ter mandado tirar os interruptores: "pra nao ter
+// esses problemas de liberacao por numero da proxy, coloca uma configuracaozinha ali, em algum
+// lugarzinho mais escondido. Essa opcao e pra a gente liberar. No padrao, eu quero que tudo
+// realmente so funcione com a proxy."
+//
+// TRES PROPRIEDADES, e cada uma responde a um jeito de isso dar errado:
+//  1) POR NUMERO, nunca global. O caso real e por numero ("a proxy do 6200 caiu e eu preciso
+//     atender agora"); soltar a operacao inteira pra resolver um numero foi o que a gente tirou.
+//  2) VENCE SOZINHA, no maximo 24h. O problema de interruptor nao e desligar, e RELIGAR: quem
+//     desliga as 23h resolve o numero e nao religa. Isto nao precisa que alguem lembre.
+//  3) PADRAO E VAZIO. Mapa sem chave = ninguem liberado, que e o "no padrao" da fala dele.
+// Quem concede e so a direcao, e o controle NAO fica no caminho de quem atende: mora na
+// Contingencia > Proxies, do lado do seletor que resolve melhor (escolher outra proxy).
+const SWWEB_EXCECOES = 'swweb_excecoes';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
@@ -10842,8 +10858,9 @@ async function handleSwWeb(req, env, path) {
   const K_CFG = _cfgNome(SWWEB_CFG, mundo);
   const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
   const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
+  const K_EXC = _cfgNome(SWWEB_EXCECOES, mundo);
   const manda = _swwebManda(u);
-  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO]);
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC]);
   // AS DUAS TRAVAS NAO DESLIGAM MAIS (17/10/2026, pedido do Bruno junto com o banco de proxies).
   //
   // Elas eram interruptores globais, e o problema de interruptor nao e desligar, e RELIGAR: quem
@@ -10857,6 +10874,14 @@ async function handleSwWeb(req, env, path) {
   const cfg = { ..._swwebLerJson(lidas[K_CFG], {}), travaProxy: true, exigirBrasil: true };
   const proxies = _swwebLerJson(lidas[K_PROXIES], {});
   const banco = _swwebLerJson(lidas[K_BANCO], {});
+  // SO AS VIVAS. Liberacao vencida nao e liberacao, e lixo que confunde quem le a tela - e deixar
+  // vencida no mapa seria o jeito de ela voltar a valer por engano num conserto futuro.
+  const agoraExc = Math.floor(Date.now() / 1000);
+  const excecoes = {};
+  {
+    const cru = _swwebLerJson(lidas[K_EXC], {});
+    for (const [nk, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) > agoraExc) excecoes[nk] = e;
+  }
 
   // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
   // respostas rapidas, funis, audios, e as credenciais de captura.
@@ -11006,10 +11031,15 @@ async function handleSwWeb(req, env, path) {
     // Reusa o caminho ja testado da ingestao do Sale Chat, com o token resolvido NO SERVIDOR.
     const token = await _scIngestToken(env);
     if (!token) return err('Ingestão não configurada', 503);
+    // O DONO E O DO NUMERO, NAO O DO LOGIN (17/10/2026, furo 4 da captura). Quem abre o numero no app
+    // nem sempre e quem vende nele: a direcao abre o numero do vendedor pra parear, cobrir folga ou
+    // olhar. Com o login de dono, o lead, o wa_attrib, a venda e a ponte CPF->vendedor iam pra quem
+    // abriu (aconteceu no ..0653). O heartbeat desta mesma rota ja resolve pelo numero; a captura
+    // agora tambem. O login so vale quando o numero nao tem dono na Contingencia.
     const req2 = new Request(new URL(req.url).origin + '/api/salechat/ingest/' + token, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ installId, events: limpos }),
+      body: JSON.stringify({ installId, donoPorNumero: true, events: limpos }),
     });
     return handleSalechatIngest(req2, env, token);
   }
@@ -11262,6 +11292,8 @@ async function handleSwWeb(req, env, path) {
         aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
+        // Liberado a abrir sem proxy ate quando, se estiver.
+        excecao: excecoes[nk] ? { ate: excecoes[nk].ate, por: String(excecoes[nk].nome || '') } : null,
         // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
         //
         // A tela refazia estas duas contas com os campos crus (`c.st`, `c.em_uso`) e errava nos
@@ -11323,7 +11355,10 @@ async function handleSwWeb(req, env, path) {
       }
     }
     const px = proxies[nk] || null;
-    return json({ ok: true, nk, proxy: px });
+    // A LIBERACAO VIAJA JUNTO DO PROXY porque e o app que decide abrir, e ele ja pergunta isto aqui
+    // antes de cada abertura. Mandar em rota separada daria duas idas e uma janela entre elas.
+    const exc = excecoes[nk] || null;
+    return json({ ok: true, nk, proxy: px, excecao: exc ? { ate: exc.ate, por: exc.nome || '' } : null });
   }
 
   // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
@@ -11490,7 +11525,16 @@ async function handleSwWeb(req, env, path) {
       naoCobre: ['a ligação de voz (o áudio sai direto, decisão de 16/10)',
         'link aberto da conversa (abre no navegador do Windows)'],
     };
-    return json({ ok: true, banco: lista, soltas: semBanco, repetidas, repetidasEndereco, config: cfg, garante });
+    // QUEM ESTA LIBERADO A ABRIR SEM PROXY, com o nome e o prazo. Vai junto porque e nesta tela
+    // que se concede e se tira - mandar em rota separada daria uma tela que concede e nao mostra.
+    const liberados = Object.entries(excecoes).map(([nk, e]) => ({
+      nk,
+      numero: (donoDe[nk] || {}).num || '',
+      at: (donoDe[nk] || {}).at || '',
+      ate: Number((e && e.ate) || 0),
+      por: String((e && e.nome) || ''),
+    })).sort((a, b) => a.ate - b.ate);
+    return json({ ok: true, banco: lista, soltas: semBanco, repetidas, repetidasEndereco, config: cfg, garante, liberados });
   }
 
   // POST /api/swweb/proxy-banco — cria, edita ou apaga uma proxy DO BANCO.
@@ -11548,6 +11592,30 @@ async function handleSwWeb(req, env, path) {
     }
     if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, id: novoId, atualizou: mexeu });
+  }
+
+  // POST /api/swweb/proxy-excecao — libera UM numero a abrir sem proxy, por um tempo que acaba.
+  // { nk, horas }  |  { nk, horas: 0 } pra cancelar agora.
+  //
+  // So a direcao: abrir sem proxy e o vendedor saindo pelo IP da casa dele, com o chip na mao. Nao
+  // e escolha de quem atende.
+  if (req.method === 'POST' && path === '/api/swweb/proxy-excecao') {
+    if (!manda) return err('Só a direção libera número sem proxy', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKey(b && b.nk);
+    if (!nk) return err('Falta o número');
+    const horas = Math.max(0, Math.min(24, Number((b && b.horas) || 0)));
+    const cru = _swwebLerJson(lidas[K_EXC], {});
+    if (!horas) { delete cru[nk]; }
+    else {
+      // TETO DE 24 HORAS, e nao e burocracia: liberacao de uma semana e um interruptor com outro
+      // nome. O caso real dura o tempo de trocar a proxy.
+      cru[nk] = { ate: agoraExc + Math.round(horas * 3600), por: String(u.id), nome: String(u.name || u.login || '') };
+    }
+    // Limpa as vencidas de passagem: o mapa nao precisa de faxina propria.
+    for (const [k, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) <= agoraExc) delete cru[k];
+    await _writeConfig(env, K_EXC, JSON.stringify(cru));
+    return json({ ok: true, nk, ate: horas ? cru[nk].ate : 0 });
   }
 
   // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
@@ -15075,6 +15143,20 @@ async function resolveApiNumber(env, opts = {}) {
   return null;
 }
 
+// O at_id e de uma PESSOA ativa? (chip numa coluna da Contingencia tem at = 'ccol_*', que nao e gente).
+// Cache de 5 min por isolate. Banco fora do ar: responde sim, pra nao trocar o dono por causa de uma
+// leitura falha (e o mesmo dono que o heartbeat ja usa).
+const _usuarioAtivoCache = new Map();
+async function _ehUsuarioAtivo(env, atId) {
+  const k = String(atId || '');
+  if (!k || /^ccol_/.test(k)) return false;
+  const c = _usuarioAtivoCache.get(k);
+  if (c && Date.now() - c.t < 300000) return c.v;
+  let v = true;
+  try { v = !!(await env.DB.prepare('SELECT 1 x FROM users WHERE id = ? AND COALESCE(archived,0) = 0').bind(k).first()); } catch (_) { v = true; }
+  _usuarioAtivoCache.set(k, { v, t: Date.now() });
+  return v;
+}
 // POST /api/salechat/ingest/<token> — recebe um LOTE de eventos capturados pelo Sale Chat.
 // FASE 0: grava só na auditoria crua e devolve o ack (msg_id aceitos) pro injetor drenar a fila.
 async function handleSalechatIngest(req, env, token) {
@@ -15087,6 +15169,8 @@ async function handleSalechatIngest(req, env, token) {
   const ack = [];
   const ownerCache = {};
   const installId = String(body?.installId || '').trim();   // identidade do Sale Chat do vendedor
+  // SellWave Web: o dono do NUMERO vem antes da instalacao (que la e o login de quem abriu o app).
+  const donoPorNumero = body?.donoPorNumero === true;
   const src = await _waCaptureSource(env);   // 'sc' = computar aqui (lead/venda/pixel); 'evo' = só auditar
   const salesOut = [];   // vendas registradas neste lote (pro Sale Chat confirmar pro vendedor)
   for (const e of events) {
@@ -15095,10 +15179,25 @@ async function handleSalechatIngest(req, env, token) {
       const selfNumber = String(e?.selfNumber || '').replace(/\D/g, '');
       const phone = String(e?.phone || '').replace(/\D/g, '');
       let atId = null, ownInst = '';   // dono resolvido no SERVIDOR (null = quarentena)
+      // SELLWAVE WEB (donoPorNumero): o dono do NUMERO na Contingencia primeiro; a instalacao (o login)
+      // so na falta dele. Ver a rota /api/swweb/captura.
+      if (donoPorNumero && selfNumber) {
+        if (!(selfNumber in ownerCache)) {
+          let ow = await resolveOwner(env, selfNumber);
+          // SO VALE DONO QUE E GENTE. Chip parado numa COLUNA da Contingencia tem at = 'ccol_*' (77 de
+          // 91 chips em 17/10) e o wa_number_owner guarda isso como dono; usuario arquivado tambem nao
+          // vende. Nesses casos fica o login de quem abriu, com log, em vez de um dono que nao existe.
+          if (ow && ow.at_id && !(await _ehUsuarioAtivo(env, ow.at_id))) ow = null;
+          ownerCache[selfNumber] = ow;
+          if (!ow) console.log('SWWEB_DONO_LOGIN num=' + selfNumber.slice(-8) + ' install=' + installId);
+        }
+        const ow = ownerCache[selfNumber];
+        if (ow) { atId = ow.at_id; ownInst = ow.instance || ''; }
+      }
       // PRIORIDADE 1: o dono do SALE CHAT (identidade da máquina, estável). Trocar de número, o chip
       // ser banido ou ficar sem atendente na Contingência não desatribui mais nada — a venda continua
       // sendo de quem atendeu. PRIORIDADE 2 (fallback): o dono do número, como era antes.
-      if (installId) {
+      if (!atId && installId) {
         if (!(installId in ownerCache)) { ownerCache[installId] = await resolveInstall(env, installId, selfNumber); }
         const oi = ownerCache[installId];
         if (oi) { atId = oi.at_id; ownInst = oi.instance || ''; }
@@ -15154,7 +15253,9 @@ async function handleSalechatIngest(req, env, token) {
             // reconectar, o WhatsApp reemite o historico: uma mensagem de ontem, que o app agora
             // manda marcada com `velha`, carimbava a conversa pro numero antigo e roubava o lead
             // de quem esta atendendo hoje. Mensagem velha vira bolha no inbox e para por ai.
-            if (!e?.velha) {
+            // Nem evento de PROTOCOLO (e2e_notification, notification_template...): nao e mensagem
+            // de gente e nao pode mudar de quem e a conversa (17/10/2026, revisao da captura).
+            if (!e?.velha && !_WA_NAO_MSG.has(String(e?.type || ''))) {
               await env.DB.prepare("INSERT INTO wa_attrib (phone, instance, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(phone) DO UPDATE SET instance=excluded.instance, updated_at=excluded.updated_at").bind(phone, inst).run();
             }
           }
@@ -21286,7 +21387,17 @@ async function _numerosMudos(env) {
 // distribui o numero e nao espera captura. So 'sc' (Sale Chat) e o chip de API oficial exigem
 // conexao viva. 'evo' antigo, gravado antes da troca, e tratado como roleta - senao os chips que
 // ficaram marcados assim sumiriam da distribuicao.
-function _modoRoleta(c){ return !!c && !c.api && c.conn !== 'sc'; }
+//
+// CHIP DA CASA SEM API EXIGE O SELLWAVE WEB ABERTO (17/10/2026, pedido do Bruno: "a captura pode
+// acontecer so com o WhatsApp aberto, contanto que funcione"). O /api/chip/save nunca gravou `conn`,
+// entao o "Sale Chat" da tela era decorativo e TODO chip sem API caia aqui: pulava a conexao e o
+// mudo. Como a roleta equilibra por lead, numero que ninguem captura fica com 0 e leva o trafego
+// inteiro - em 16/10 o ..0653, aberto no SellWave Web, levou 111 cliques pagos e 0 lead. Agora o
+// chip da casa sem API so recebe com o app aberto e autenticado (heartbeat dos ultimos 3 min, que o
+// _presselLiveSet ja junta) e passa pela guarda de mudo. Distribuir sem captura continua valendo pro
+// chip de AFILIADO (`afl`), que usa a pressel so pra distribuir. Raio medido no D1 em 17/10: dos 9
+// chips da casa em uso, 8 sao de API e nao mudam; o unico sem API era o ..0653.
+function _modoRoleta(c){ return !!c && !c.api && c.conn !== 'sc' && !!c.afl; }
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
 // Contador em MEMÓRIA dos últimos envios por número. A gravação do clique (tt_pending) leva alguns
 // instantes pra aparecer na LEITURA, e numa rajada isso deixava passar bem mais que o teto antes de

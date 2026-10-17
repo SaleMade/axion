@@ -300,18 +300,37 @@ async function puxaProxyDaDash(nk) {
     if (px && px.host) config.proxies[nk] = px
     else delete config.proxies[nk]
     gravarConfig()
-    return { px: px && px.host ? px : null, rede: false }
+    // A LIBERACAO VEM JUNTO, e NAO fica gravada no disco de proposito: ela tem hora pra morrer, e
+    // copia local de coisa que vence e o jeito de ela sobreviver a propria validade. Se a dash
+    // estiver fora do ar, nao existe liberacao - e fechar e o lado certo de errar.
+    const exc = d && d.excecao;
+    return { px: px && px.host ? px : null, rede: false, excecao: (exc && Number(exc.ate) > Math.floor(agoraCerto() / 1000)) ? exc : null }
   } catch (_) {
     return { px: null, rede: true }   // dash fora do ar: segue com a copia local, se houver
   }
 }
 
-async function aplicaProxy(ses, px, particao) {
+// O QUARTO ARGUMENTO EXISTE PORQUE "SEM PROXY" SAO DUAS COISAS DIFERENTES, e confundir as duas
+// quebra calado. Sem ele, `px` nulo tinha um unico significado (buraco negro), e o numero liberado
+// pela direcao abriria e NAO CONECTARIA EM NADA: a tela diria "abrindo sem proxy, liberado por
+// Bruno" e o WhatsApp ficaria rodando pra sempre, que e pior que recusar.
+//   px == null, direto FALSO  -> BURACO NEGRO. E o padrao, e o fail-closed: se alguma parte do
+//                                codigo esquecer de travar, a requisicao FALHA em vez de vazar.
+//   px == null, direto VERDADE -> SAI PELO IP DESTA MAQUINA, de propria vontade da direcao, e com
+//                                a barra avisando enquanto durar.
+// O argumento e explicito de proposito: quem le a chamada ve a intencao, em vez de ela estar
+// escondida num nulo que significa duas coisas.
+async function aplicaProxy(ses, px, particao, direto) {
   if (particao) {
     if (px && px.usuario) credenciais.set(particao, px)
     else credenciais.delete(particao)
   }
   if (!px) {
+    if (direto) {
+      await ses.setProxy({ mode: 'direct' })
+      await ses.closeAllConnections()
+      return
+    }
     // Sem proxy: deixa a sessao num buraco negro em vez de "direct". Assim, se alguma parte do
     // codigo esquecer de travar, a requisicao FALHA em vez de vazar o IP real.
     await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'socks5://127.0.0.1:1' })
@@ -654,15 +673,26 @@ async function abreDeVerdade(nk, numero, meu) {
   // A frase do erro diz PRA ONDE IR, e nao so que recusou: a proxy se escolhe num seletor do banco,
   // na Contingencia, e e um clique. Antes a saida pra proxy caida era desligar a trava da operacao
   // inteira, e o custo disso nao era desligar, era RELIGAR - ninguem religa.
-  if (!px) {
+  if (!px && !busca.excecao) {
     if (busca.rede) return { ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número. Tente de novo em um minuto.' }
     return { ok: false, erro: 'Este número não tem proxy. Escolha uma em Contingência > Proxies, na dash.' }
   }
+  if (!px && busca.excecao) {
+    // AVISA SEMPRE, E COM A HORA: numero aberto sem proxy e uma excecao, e excecao silenciosa vira
+    // regra. A barra mostra isto enquanto ele estiver aberto, pro vendedor saber em que pe esta.
+    const falta = Math.max(1, Math.round((Number(busca.excecao.ate) - agoraCerto() / 1000) / 60))
+    avisaCasca('sw:status', { nk, texto: 'Abrindo SEM PROXY, liberado por ' + (busca.excecao.por || 'direção') + '. Volta a exigir em ' + falta + ' min.' })
+  }
 
   const ses = preparaSessao(nk)
-  await aplicaProxy(ses, px, particaoDe(nk))
+  // `!!busca.excecao` e a unica coisa que autoriza sair pelo IP da maquina. Sem proxy e sem
+  // liberacao a funcao ja voltou la em cima, entao aqui o nulo com liberacao e intencional.
+  await aplicaProxy(ses, px, particaoDe(nk), !!busca.excecao)
 
-  if (TRAVA_PROXY) {   // `px` aqui e sempre verdade: sem proxy a funcao ja voltou la em cima
+  // O PREFLIGHT SO RODA SE HOUVER PROXY. Com numero liberado, `px` e null e nao ha o que conferir:
+  // a sessao sai pelo IP da maquina de propria vontade da direcao, e quem avisa isso e a linha de
+  // cima. Testar o buraco negro aqui daria "o proxy nao respondeu" e fecharia a liberacao.
+  if (TRAVA_PROXY && px) {
     avisaCasca('sw:status', { nk, texto: 'Conferindo o proxy...' })
     const teste = await testaSaida(particaoDe(nk))
     if (!teste.ok) {

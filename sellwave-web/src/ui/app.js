@@ -71,8 +71,24 @@ function desenhaTrava() {
   // O que ela conta agora e o unico problema que sobrou NESTE assunto e que a pessoa pode resolver:
   // tem numero que NAO VAI ABRIR porque esta sem proxy. Isso e trabalho pendente dela (escolher uma
   // proxy do banco, na Contingencia), e antes so aparecia quando o vendedor tentava abrir e falhava.
+  // DUAS COISAS PODEM PEDIR ATENCAO, E A ORDEM NAO E ARBITRARIA: numero LIBERADO e risco
+  // correndo agora (ele esta saindo pelo IP desta casa, com hora pra acabar); numero SEM PROXY e
+  // trabalho pendente (nao abre, ninguem se expoe). Risco correndo vem primeiro.
+  const agora = Math.floor(Date.now() / 1000)
+  const soltos = (estado.numeros || []).filter((n) => n.excecao && Number(n.excecao.ate) > agora)
+  if (soltos.length) {
+    el.hidden = false
+    el.className = 'trava solta'
+    // O MENOR PRAZO MANDA: e o que volta a exigir primeiro, e o que decide quando olhar de novo.
+    const falta = Math.max(1, Math.round((Math.min(...soltos.map((n) => Number(n.excecao.ate))) - agora) / 60))
+    const quem = soltos.length === 1 ? bonito(cheio(numKey(soltos[0].numero))) : soltos.length + ' números'
+    $('trava-txt').innerHTML = '<b>' + esc(quem) + ' sem proxy</b> · volta a exigir em ' + falta + ' min'
+    return
+  }
   // SO PRA DIRECAO, como era antes: e trabalho dela, e o vendedor nao tem como resolver. Pro
   // vendedor a recusa aparece na tela do proprio numero, com a frase que diz o que fazer.
+  // (A linha de cima nao tem esse corte de proposito: numero liberado APARECE pro vendedor, porque
+  // e ele que esta com o chip na mao e tem que saber que esta sem proxy.)
   const sem = estado.direcao ? (estado.numeros || []).filter((n) => !n.proxy) : []
   if (!sem.length) { el.hidden = true; return }
   el.hidden = false
@@ -709,17 +725,23 @@ function janelaAjustes() {
   // alguem, e foi por nao estar escrito em lugar nenhum que isto virou interruptor.
   if (estado.direcao) {
     const sem = (estado.numeros || []).filter((n) => !n.proxy).length
+    const soltos = (estado.numeros || []).filter((n) => n.excecao && Number(n.excecao.ate) > Math.floor(Date.now() / 1000)).length
     html += '<div class="aj-sec">Da operação · vale pra todos</div>'
       + ajItem('on', AJ_IC.escudoOn,
         'Proxy obrigatória, e do Brasil',
         'Sem proxy respondendo, o número não abre. Proxy de fora num +55 é pior que proxy nenhum.',
         '<span class="aj-fixo">sempre</span>')
-      + ajItem(sem ? 'alerta' : '', AJ_IC.globoOn,
-        'Onde se escolhe a proxy',
-        sem
-          ? sem + (sem === 1 ? ' número está' : ' números estão') + ' sem proxy e não abre. Na dash: Contingência > Proxies.'
-          : 'Todos os números têm proxy. Na dash: Contingência > Proxies.',
-        '<span class="aj-fixo">' + (sem ? sem + ' sem' : 'na dash') + '</span>')
+      // A SEGUNDA LINHA MOSTRA, NAO CONCEDE. O controle de liberar mora na Contingencia > Proxies,
+      // do lado do seletor que resolve melhor - pedido do Bruno: "coloca uma configuracaozinha ali,
+      // em algum lugarzinho mais escondido". Aqui ela seria a primeira coisa que alguem lembra.
+      + ajItem((soltos || sem) ? 'alerta' : '', soltos ? AJ_IC.escudoOff : AJ_IC.globoOn,
+        soltos ? 'Número liberado sem proxy' : 'Onde se escolhe a proxy',
+        soltos
+          ? soltos + (soltos === 1 ? ' número está saindo' : ' números estão saindo') + ' pelo IP desta máquina, por tempo contado. Quem tira é a direção, na dash.'
+          : (sem
+            ? sem + (sem === 1 ? ' número está' : ' números estão') + ' sem proxy e não abre. Na dash: Contingência > Proxies.'
+            : 'Todos os números têm proxy. Na dash: Contingência > Proxies.'),
+        '<span class="aj-fixo">' + (soltos ? soltos + ' livre' : (sem ? sem + ' sem' : 'na dash')) + '</span>')
   }
 
   // ── SÓ NESTE COMPUTADOR ─────────────────────────────────────────────────────────────────
