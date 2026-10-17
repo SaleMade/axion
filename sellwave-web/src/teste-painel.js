@@ -223,6 +223,38 @@ app.whenReady().then(async () => {
   await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "19995983293"; e.dispatchEvent(new Event("input")); })()')
   await espera(150)
 
+  // ── O CURSOR NAO PODE SAIR DO CAMPO ────────────────────────────────────────────────────────
+  //
+  // O BUG QUE ISTO PRENDE (17/10/2026): "toda vez que eu digitava um digito, ele me cortava e nao
+  // me deixava digitar o proximo; eu tinha que clicar no campo de novo". Todo desenha() troca o
+  // innerHTML inteiro e mata o elemento que tinha o foco. No CEP isso era fatal: ele nunca chegava
+  // nos oito digitos, entao a busca nunca disparava - e o sintoma que ele viu foi "nao puxa o
+  // endereco", que e o DEPOIS do defeito, nao o defeito.
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = ""; e.dispatchEvent(new Event("input")); e.focus(); })()')
+  await espera(150)
+  const focoPorDigito = []
+  for (const c of '88504411') {
+    await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = e.value + ' + JSON.stringify(c) + '; e.dispatchEvent(new Event("input")); })()')
+    await espera(90)
+    focoPorDigito.push(await js('((document.activeElement||{}).dataset||{}).k || "-"'))
+  }
+  // Os SETE primeiros ficam no CEP; o OITAVO leva o cursor pro numero de proposito, porque a busca
+  // disparou e o numero e o proximo campo que sobra pra ele digitar (igual a dash e a Five).
+  conta('o cursor fica no CEP a cada digito, sem precisar clicar de novo',
+    focoPorDigito.slice(0, 7).every((k) => k === 'cep'), JSON.stringify(focoPorDigito))
+  conta('e so no oitavo ele vai pro numero, porque a busca ja preencheu o resto',
+    focoPorDigito[7] === 'num', JSON.stringify(focoPorDigito))
+  await espera(500)
+  const depoisDeDigitar = await js('(document.querySelector("[data-k=end]")||{}).value || ""')
+  conta('e por isso a busca dispara e preenche o endereco', depoisDeDigitar === 'Rua Curitiba', depoisDeDigitar)
+
+  // CEP PELA METADE NAO CHUTA ESTADO: ele digitou "2" e a tela prometia "estimativa pra RJ".
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "2"; e.dispatchEvent(new Event("input")); })()')
+  await espera(300)
+  conta('com o CEP pela metade, o prazo nao aparece chutando estado',
+    (await js('!document.querySelector(".prazo")')) === true,
+    await js('(document.querySelector(".prazo")||{}).textContent || "(sem prazo)"'))
+
   // ── A BUSCA DE CEP ─────────────────────────────────────────────────────────────────────────
   await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "88504411"; e.dispatchEvent(new Event("input")); })()')
   await espera(500)
@@ -332,6 +364,20 @@ app.whenReady().then(async () => {
   conta('erro de rede aparece na tela sem dizer que falta campo',
     /dash|rede|internet/i.test(caiu.txt) && !/Falta preencher/.test(caiu.txt), JSON.stringify(caiu))
 
+  // ── COLAR O PRINT ──────────────────────────────────────────────────────────────────────────
+  // "Toda vez que a pessoa da um clique, ele ja cola o print que estava na area de transferencia;
+  // caso clique duas vezes, abre a pastinha." Um clique = colar; dois = escolher arquivo.
+  const antesAnexos = await js('document.querySelectorAll(".anexo.tem").length')
+  await clica('#pd-anexar')
+  await espera(700)
+  const colou = await js('({ n: document.querySelectorAll(".anexo.tem").length,'
+    + ' pediu: (window.__ver()).filter(c => c.nome === "colaPrint").length,'
+    + ' nomes: [...document.querySelectorAll(".anexo.tem .nm")].map(e => e.textContent).join(",") })')
+  conta('um clique no comprovante cola o print da area de transferencia',
+    colou.pediu >= 1 && colou.n === antesAnexos + 1 && /print\.png/.test(colou.nomes), JSON.stringify(colou))
+  // O print COLADO fica: dois comprovantes no mesmo pedido e caso normal, e tirar um deles aqui
+  // tiraria os dois - o stub devolve a MESMA url pra todo upload, e o botao de tirar casa por url.
+
   await clica('#pd-ok')
   await espera(500)
   const lista = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "pedidoNovo").map(c => c.args[0]))'))
@@ -350,7 +396,11 @@ app.whenReady().then(async () => {
     o.vl === 397 && o.trat === 'Produto A - 3 Meses', JSON.stringify({ vl: o.vl, trat: o.trat }))
   conta('o CPF e o telefone vao so com digitos', o.cpf === '52998224725' && o.wa === '19995983293', o.cpf + ' / ' + o.wa)
   conta('a UF vai em maiuscula', o.uf === 'SP', o.uf)
-  conta('o comprovante vai junto', /^https?:/.test(String(o.comprovante_url || '')) && (o.comprovantes || []).length === 1, String(o.comprovante_url))
+  // DOIS comprovantes: o arquivo escolhido e o print colado logo acima. Levar os dois e o certo -
+  // o pedido pode ter mais de um, e o `comprovante_url` continua apontando pro primeiro, que e o
+  // que as telas antigas leem.
+  conta('o comprovante vai junto', /^https?:/.test(String(o.comprovante_url || '')) && (o.comprovantes || []).length === 2,
+    String(o.comprovante_url) + ' · ' + (o.comprovantes || []).length)
   conta('a mensagem do cliente fica gravada no pedido', /Pedido Conclu/.test(String(o.raw || '')) && /397,00/.test(String(o.raw || '')), String(o.raw || '').slice(0, 40))
   conta('o painel NAO decide de quem e a venda', o.at === undefined, String(o.at))
   conta('a comissao nasce vazia, nao inventada', o.com_pct === '', JSON.stringify(o.com_pct))

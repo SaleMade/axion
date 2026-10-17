@@ -7,7 +7,7 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard } = require('electron')
 
 // ─── A MIDIA DA PREVIA (16/10/2026) ──────────────────────────────────────────────────────────
 //
@@ -1884,6 +1884,22 @@ async function buscaCep(cep) {
   if (saida.achou || saida.invalido) _cepCache.set(c, saida)
   return saida
 }
+// O PRINT DA AREA DE TRANSFERENCIA (17/10/2026, pedido do Bruno). Depois que o cliente aceita o
+// termo, o vendedor da um print e ele fica na area de transferencia; anexar sem salvar arquivo no PC
+// e o caminho mais curto, e e o que a dash ja faz com Ctrl+V.
+//
+// LIDO AQUI E NAO NA PAGINA: o painel roda em file://, onde o `navigator.clipboard.read()` depende
+// de permissao e falha calado. O `clipboard` do Electron le direto, sem pedir nada a ninguem.
+ipcMain.handle('swp:cola-print', async () => {
+  try {
+    const img = clipboard.readImage()
+    if (!img || img.isEmpty()) return { ok: false, vazio: true }
+    const png = img.toPNG()
+    if (!png || !png.length) return { ok: false, vazio: true }
+    return { ok: true, bytes: new Uint8Array(png), mime: 'image/png', nome: 'print.png' }
+  } catch (e) { anota('[colar] ' + (e && e.message)); return { ok: false, erro: String((e && e.message) || 'não li a área de transferência') } }
+})
+
 ipcMain.handle('swp:cep', async (_e, { cep }) => {
   try { return { ok: true, ...(await buscaCep(cep)) } }
   catch (e) { anota('[cep] ' + (e && e.message)); return { ok: false, achou: false, invalido: false, dados: null } }
@@ -2067,11 +2083,25 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 app.whenReady().then(() => {
   lerConfig()
 
-  // Resolve swmedia://arq/<chave> buscando no mesmo endereco publico que o envio usa. O `net.fetch`
-  // do Electron sai pela sessao padrao, que esta no buraco negro de proxy - e isso esta certo: a
+  // Resolve swmedia://arq/<chave> buscando no mesmo endereco publico que o envio usa.
+  //
+  // NA SESSAO DO PAINEL, E ISSO E O CONSERTO (17/10/2026). A versao anterior registrava com
+  // `protocol.handle(...)` do modulo, que vale pra SESSAO PADRAO - e o painel nao roda nela, roda
+  // em `persist:sw-painel`. Resultado: o pedido `swmedia://` do painel nao achava handler nenhum e
+  // morria antes de chegar aqui. O vendedor via a foto quebrada, o audio em 0:00 e o video preto, e
+  // nada aparecia no log, porque este bloco nunca executava.
+  //
+  // O TESTE QUE NAO PEGOU ensina mais que o bug: o handler foi provado chamando ele direto, com a
+  // midia de verdade, e passou - imagem 200, video 206, audio 200. So que o que estava quebrado nao
+  // era o handler, era quem chega nele. Teste de midia tem que RENDERIZAR na particao de verdade.
+  //
+  // E O `fetch` TAMBEM E DAQUI, pela mesma razao: `net.fetch` sai pela sessao padrao, que esta no
+  // buraco negro de proxy de proposito (socks5://127.0.0.1:1, pra nada vazar por engano). Buscar
+  // por ali nunca chegaria na API. A sessao do painel esta em `direct`, que e o certo pra ela: a
   // midia e NOSSA, nao e trafego do numero do cliente, e nao pode sair pelo proxy dele.
   try {
-    protocol.handle('swmedia', async (req) => {
+    const sesPainel = session.fromPartition('persist:sw-painel')
+    sesPainel.protocol.handle('swmedia', async (req) => {
       try {
         const u = new URL(req.url)
         const chave = decodeURIComponent(u.pathname.replace(/^\//, ''))
@@ -2081,7 +2111,7 @@ app.whenReady().then(() => {
         const cab = {}
         const range = req.headers.get('range')
         if (range) cab.range = range            // sem isto o video nao deixa arrastar a barra
-        return await net.fetch(base + chave, { headers: cab })
+        return await net.fetch(base + chave, { headers: cab, session: sesPainel })
       } catch (e) {
         anota('[midia] ' + (e && e.message))
         return new Response('', { status: 502 })

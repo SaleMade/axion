@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('swp', {
   // Busca de CEP. Mora no processo principal porque a pagina nao pode falar com a rede, e
   // porque assim o cache vale pros N numeros abertos em vez de um por janela.
   cep: (cep) => ipcRenderer.invoke('swp:cep', { cep }),
+  // O print que esta na area de transferencia, lido pelo processo principal (ver main.js).
+  colaPrint: () => ipcRenderer.invoke('swp:cola-print'),
   // PILHA DE DISPAROS: o que esta saindo nos numeros abertos. Hoje da 0 ou 1 (o painel roda um
   // funil por vez), mas a lista ja vem como lista pro dia em que isso mudar.
   disparos: () => ipcRenderer.invoke('swp:disparos'),

@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('swp', {
   ] }),
   comprovante: reg('comprovante', { ok: true, url: 'https://r2.exemplo/comprovante/print.jpg', mime: 'image/jpeg' }),
   abrirMidia: reg('abrirMidia', { ok: true }),
+  // A area de transferencia com um print dentro, pro teste do clique que cola.
+  colaPrint: reg('colaPrint', { ok: true, bytes: new Uint8Array([137, 80, 78, 71]), mime: 'image/png', nome: 'print.png' }),
   // A BUSCA DE CEP responde como a de verdade: o 88504411 e o CEP real que o Bruno usou no print
   // (Rua Curitiba, Santa Helena, Lages/SC), e o 12345678 e um que nenhuma base acha.
   cep: (cep) => {

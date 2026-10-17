@@ -158,7 +158,36 @@ function desenhaChips() {
   for (const b of el.querySelectorAll('.chip')) b.onclick = () => { tipoFiltro = b.dataset.t; desenha() }
 }
 
+// QUEM ESTAVA SENDO DIGITADO ANTES DE REDESENHAR, pra devolver o cursor depois.
+//
+// O BUG QUE ISTO CONSERTA (17/10/2026, o Bruno digitando o CEP): "toda vez que eu digitava um
+// digito, ele me cortava e nao me deixava digitar o proximo; eu tinha que clicar no campo de novo".
+// Todo `desenha()` troca o innerHTML inteiro, e o elemento que tinha o foco deixa de existir - o
+// cursor some e a tecla seguinte cai no vazio. Com o CEP isso era fatal: ele nunca chegava nos oito
+// digitos, entao a busca nunca disparava, e o sintoma virava "nao puxa o endereco".
+//
+// Guardar e devolver aqui resolve pra TODO campo, e nao so pro CEP: qualquer coisa que redesenhe
+// enquanto alguem digita (a UF completando, o CPF ficando valido, o pulso) passa por este mesmo
+// ponto. Consertar so o CEP deixaria os outros esperando a proxima vez.
+function guardaFoco() {
+  try {
+    const el = document.activeElement
+    if (!el || !el.dataset || !el.dataset.k) return null
+    return { k: el.dataset.k, ini: el.selectionStart, fim: el.selectionEnd }
+  } catch (_) { return null }
+}
+function voltaFoco(f) {
+  if (!f) return
+  try {
+    const el = document.querySelector('[data-k=' + f.k + ']')
+    if (!el) return
+    el.focus()
+    if (f.ini != null) el.setSelectionRange(f.ini, f.fim == null ? f.ini : f.fim)
+  } catch (_) { /* campo saiu da tela: nao ha pra onde voltar */ }
+}
+
 function desenha() {
+  const _foco = guardaFoco()
   desenhaChips()
   const corpo = $('corpo')
   // O SELO CONTA SO O QUE ESTA SAINDO AGORA, nunca o tamanho do catalogo.
@@ -178,9 +207,10 @@ function desenha() {
     corpo.innerHTML = desenhaSaindo() + desenhaFunis()
     ligaFunis(corpo)
     ligaFaixa(corpo)
+    voltaFoco(_foco)
     return
   }
-  if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); return }
+  if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); voltaFoco(_foco); return }
 
   const itens = visiveis()
   if (!itens.length) {
@@ -209,6 +239,7 @@ function desenha() {
     })
   }
   corpo.innerHTML = html
+  voltaFoco(_foco)
   ligaItens(corpo)
 }
 
@@ -506,8 +537,11 @@ const CEP_UF = [[0, 'SP'], [1, 'SP'], [2, 'RJ'], [3, 'MG'], [4, 'BA'], [5, 'PE']
 const ufDoEndereco = (uf, cep) => {
   const u = String(uf || '').toUpperCase().trim()
   if (DIAS_UF[u]) return u
+  // O PRIMEIRO DIGITO SO VALE COM O CEP INTEIRO. Com o CEP pela metade ele chutava um estado a cada
+  // tecla - o Bruno digitou "2" e a tela prometeu "4 dias uteis, estimativa pra RJ". Prazo errado
+  // aqui vira prazo errado prometido ao cliente no WhatsApp.
   const d = dig(cep)
-  if (!d.length) return null
+  if (d.length !== 8) return null
   const par = CEP_UF.find(([n]) => n === Number(d[0]))
   return par ? par[1] : null
 }
@@ -1015,11 +1049,16 @@ function mudouCep(valor) {
   if (n === cepUltimo) return
   cepUltimo = n
   cepEmVoo = ''
+  const tinhaErro = cepRuim
+  const tinhaTrava = Object.keys(cepTravados).length > 0
   cepRuim = false
   for (const k of Object.keys(cepTravados)) if (cepTravados[k]) ped[k] = ''
   cepTravados = {}
-  if (n.length === 8) buscaCepNoApp(n)
-  else desenha()
+  if (n.length === 8) { buscaCepNoApp(n); return }
+  // SO REDESENHA QUANDO ALGO NA TELA MUDA: o endereco travado que precisa sumir, ou o vermelho do
+  // CEP errado que precisa sair. Digitar o segundo digito de um CEP nao muda nada visivel, e
+  // redesenhar a toa era o que tirava o cursor do campo a cada tecla.
+  if (tinhaTrava || tinhaErro) desenha()
 }
 
 async function buscaCepNoApp(n) {
@@ -1237,9 +1276,35 @@ function ligaPedidos(corpo) {
   liga('pd-rasc', salvaRascunho)
   liga('pd-ok', cadastraPedido)
   liga('pd-retrat', () => { ofertasEstado = ''; pegaOfertas(); desenha() })
-  liga('pd-anexar', () => { const i = $('pd-arquivo'); if (i) i.click() })
+  // UM CLIQUE COLA O PRINT; sem print na area de transferencia, abre a pasta. DOIS CLIQUES abrem a
+  // pasta sempre - e a saida pra quem quer escolher o arquivo mesmo tendo print copiado.
+  const btAnexo = $('pd-anexar')
+  if (btAnexo) {
+    let tempo = null
+    btAnexo.onclick = () => {
+      if (tempo) return                       // o segundo clique do duplo nao faz nada sozinho
+      tempo = setTimeout(() => { tempo = null; colarPrint(true) }, 230)
+    }
+    btAnexo.ondblclick = () => {
+      if (tempo) { clearTimeout(tempo); tempo = null }
+      const i = $('pd-arquivo'); if (i) i.click()
+    }
+  }
   liga('pd-copia-dados', () => copia(textoPedido(montaPedido(ped)), 'Dados de envio copiados'))
   liga('pd-copia-termo', () => copia(textoTermo(montaPedido(ped)), 'Termo copiado'))
+  // CTRL+V EM QUALQUER LUGAR DO FORMULARIO, que e como a dash faz (novo-pedido.jsx). O evento ja
+  // traz o arquivo, entao este caminho nao pede permissao nenhuma.
+  corpo.onpaste = (e) => {
+    try {
+      const itens = [...((e.clipboardData && e.clipboardData.items) || [])]
+      const imgs = itens.filter((x) => x && x.kind === 'file' && /^image\//.test(x.type || ''))
+        .map((x) => x.getAsFile()).filter(Boolean)
+      if (!imgs.length) return                // texto colado segue normal
+      e.preventDefault()
+      subirAnexos(imgs).then(() => rodape(imgs.length > 1 ? imgs.length + ' imagens coladas' : 'print colado no comprovante'))
+    } catch (_) { /* colagem estranha: deixa o padrao */ }
+  }
+
   const inp = $('pd-arquivo')
   if (inp) inp.onchange = () => subirAnexos([...(inp.files || [])])
 }
@@ -1252,6 +1317,42 @@ function copia(txt, aviso) {
 // O ARQUIVO SOBE NA HORA DE ANEXAR, não no clique de cadastrar. É a mesma escolha da dash, e o
 // motivo está na memória: vídeo de 3 a 9 MB em 60% dos pedidos, e subir só no fim deixa o vendedor
 // olhando "Salvando..." parado achando que travou.
+// SOBE BYTES CRUS. O print da area de transferencia nao e um File - ele vem do processo principal
+// como bytes -, entao o caminho do upload precisa aceitar os dois.
+async function subirBytes(nome, mime, bytes) {
+  if (pedSalvando) return false
+  pedSalvando = 'anexo'; desenha()
+  let bom = false
+  try {
+    const r = await window.swp.comprovante(nome, mime, bytes, '')
+    if (r && r.ok && r.url) { anexos.push({ nome, url: r.url, mime: r.mime || mime }); bom = true }
+    else pedErros = [humano((r && r.erro) || 'não deu pra subir o anexo')]
+  } catch (e) { pedErros = [humano((e && e.message) || 'não deu pra subir o anexo')] }
+  pedSalvando = ''; desenha()
+  return bom
+}
+
+// COLAR O PRINT (17/10/2026, pedido do Bruno): "toda vez que a pessoa da um clique, ele ja cola o
+// print que estava na area de transferencia; caso clique duas vezes, abre a pastinha".
+//
+// Depois que o cliente aceita o termo o vendedor da um print, e ele fica na area de transferencia.
+// Anexar sem salvar arquivo no PC e o caminho mais curto. Na dash isso e o Ctrl+V, que tambem
+// funciona aqui - os dois caminhos existem porque sao duas maos diferentes fazendo a mesma coisa.
+//
+// CLIQUE SEM PRINT ABRE A PASTA, em vez de nao fazer nada: botao que as vezes nao responde e pior
+// que botao que faz sempre a mesma coisa.
+async function colarPrint(semPrintAbrePasta) {
+  let r = null
+  try { r = await window.swp.colaPrint() } catch (_) { r = null }
+  if (r && r.ok && r.bytes) {
+    const ok = await subirBytes(r.nome || 'print.png', r.mime || 'image/png', r.bytes)
+    if (ok) rodape('print colado no comprovante')
+    return true
+  }
+  if (semPrintAbrePasta) { const i = $('pd-arquivo'); if (i) i.click() }
+  return false
+}
+
 async function subirAnexos(arquivos) {
   if (!arquivos.length || pedSalvando) return
   pedSalvando = 'anexo'; desenha()
