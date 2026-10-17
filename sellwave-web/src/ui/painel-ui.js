@@ -439,17 +439,108 @@ const BLOCOS_PED = [
     linhas: [['trat'], ['obs']],
   },
 ]
+// AS MASCARAS SAO AS DA DASH (16/10/2026, pedido do Bruno: "conforme eu vou digitando, ele vai
+// colocando na numeracao correta"). Gemeas do maskCPF/maskTel/maskCEP do axion-produtor/src/lib/
+// orders.js - mexeu num, mexe no outro.
+//
+// Antes elas so entravam com o campo COMPLETO, porque mascarar no meio empurrava o cursor pro fim e
+// a pessoa perdia a conta do que digitou. O conserto nao era adiar a mascara, era CONTAR OS DIGITOS
+// antes do cursor e devolver ele pro mesmo lugar depois (ver `comMascara` logo abaixo). Com isso a
+// mascara pode entrar a cada tecla, que e o que ele queria, e apagar no meio tambem funciona.
+const mascCpf = (v) => dig(v).slice(0, 11)
+  .replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2')
+const mascCep = (v) => dig(v).slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
+// CELULAR BRASILEIRO TEM 11 DIGITOS: DDD + 9 + 8. A mascara desenha o que existe; quem COBRA o 9 e
+// a conferencia (telValido/telErro), que pinta o campo. Numero antigo de 8 digitos continua saindo
+// certo - "(92) 8804-3235", nao "(92) 88043-235".
+const mascTel = (v) => {
+  let d = dig(v)
+  if (d.length >= 12 && d.startsWith('55')) d = d.slice(2)
+  d = d.slice(0, 11)
+  if (d.length <= 2) return d.length ? '(' + d : d
+  const ddd = d.slice(0, 2), resto = d.slice(2)
+  const corte = resto.length > 8 ? 5 : 4
+  if (resto.length <= corte) return '(' + ddd + ') ' + resto
+  return '(' + ddd + ') ' + resto.slice(0, corte) + '-' + resto.slice(corte)
+}
+const telValido = (v) => { const d = dig(v); return d.length === 11 && d[2] === '9' && Number(d.slice(0, 2)) >= 11 }
+const telErro = (v) => {
+  const d = dig(v)
+  if (!d.length) return ''
+  if (d.length < 11) return 'Faltam ' + (11 - d.length) + (11 - d.length === 1 ? ' número' : ' números') + ': celular tem DDD + 9 + 8 dígitos'
+  if (d[2] !== '9') return 'Falta o 9 depois do DDD'
+  if (Number(d.slice(0, 2)) < 11) return 'DDD inválido'
+  return ''
+}
+
+// APLICA A MASCARA SEM PERDER O CURSOR. Conta quantos DIGITOS existiam antes do cursor, remonta o
+// texto e recoloca o cursor depois da mesma quantidade de digitos. E por isso que da pra mascarar a
+// cada tecla: contando digito, e nao caractere, pontuacao que entra ou sai no meio nao desloca nada.
+function comMascara(el, fn) {
+  const antes = String(el.value || '')
+  const pos = el.selectionStart == null ? antes.length : el.selectionStart
+  const digAntes = antes.slice(0, pos).replace(/\D/g, '').length
+  const novo = fn(antes)
+  if (novo === antes) return novo
+  el.value = novo
+  let i = 0, vistos = 0
+  while (i < novo.length && vistos < digAntes) { if (/\d/.test(novo[i])) vistos += 1; i += 1 }
+  try { el.setSelectionRange(i, i) } catch (_) { /* campo sem selecao, tudo bem */ }
+  return novo
+}
+
+// ── PRAZO DE ENTREGA ────────────────────────────────────────────────────────────────────────
+// Gemeo do axion-produtor/src/lib/prazo-entrega.js. Numero por UF, da tabela da transportadora.
+const DIAS_UF = {
+  AC: 8, AL: 5, AP: 8, AM: 11, BA: 5, CE: 7, DF: 5, ES: 3, GO: 4,
+  MA: 6, MT: 5, MS: 4, MG: 3, PA: 6, PB: 6, PR: 4, PE: 7, PI: 5,
+  RJ: 4, RN: 6, RS: 4, RO: 7, RR: 11, SC: 4, SP: 3, SE: 6, TO: 5,
+}
+const TRANSPORTES = [
+  { id: 'five', nome: 'Transportadora', desc: 'entrega no endereço', oficial: true },
+  { id: 'correios', nome: 'Correios', desc: 'entrega no endereço', oficial: false },
+  { id: 'correios_retirada', nome: 'Correios · retirada', desc: 'cliente busca na agência', oficial: false },
+]
+const TRANSPORTE_PADRAO = 'five'
+const CEP_UF = [[0, 'SP'], [1, 'SP'], [2, 'RJ'], [3, 'MG'], [4, 'BA'], [5, 'PE'], [6, 'CE'], [7, 'DF'], [8, 'PR'], [9, 'RS']]
+const ufDoEndereco = (uf, cep) => {
+  const u = String(uf || '').toUpperCase().trim()
+  if (DIAS_UF[u]) return u
+  const d = dig(cep)
+  if (!d.length) return null
+  const par = CEP_UF.find(([n]) => n === Number(d[0]))
+  return par ? par[1] : null
+}
+const somaUteis = (dias) => {
+  const d = new Date()
+  let faltam = dias
+  while (faltam > 0) { d.setDate(d.getDate() + 1); const s = d.getDay(); if (s !== 0 && s !== 6) faltam -= 1 }
+  return d
+}
+function previsaoEntrega(uf, cep, transporte) {
+  const u = ufDoEndereco(uf, cep)
+  if (!u) return null
+  const t = TRANSPORTES.find((x) => x.id === (transporte || TRANSPORTE_PADRAO)) || TRANSPORTES[0]
+  const base = DIAS_UF[u]
+  const dias = t.id === 'correios_retirada' ? base + 1 : t.id === 'correios' ? base + 2 : base
+  const d = somaUteis(dias)
+  return { uf: u, dias, ate: dd2(d.getDate()) + '/' + dd2(d.getMonth() + 1), oficial: t.oficial, transporte: t }
+}
+const dd2 = (n) => String(n).padStart(2, '0')
+
+// `m` = a mascara que entra a cada tecla. `trava` = campo que a busca de CEP preenche e bloqueia
+// quando ela traz o valor (o cadeado aparece no rotulo, igual a dash).
 const CAMPOS_PED = {
-  cpf: { r: 'CPF', req: true, ph: '000.000.000-00' },
+  cpf: { r: 'CPF', req: true, ph: '000.000.000-00', m: mascCpf, num: true },
   nome: { r: 'Nome', req: true, ph: 'Nome do cliente' },
-  wa: { r: 'WhatsApp', req: true, ph: '(00) 90000-0000' },
-  cep: { r: 'CEP', req: true, ph: '00000-000' },
-  end: { r: 'Rua', req: true, ph: 'Rua' },
+  wa: { r: 'WhatsApp', req: true, ph: '(00) 90000-0000', m: mascTel, num: true },
+  cep: { r: 'CEP', req: true, ph: '00000-000', m: mascCep, num: true },
+  end: { r: 'Rua', req: true, ph: 'Rua', trava: true },
   num: { r: 'Número', req: true, ph: 'Nº' },
-  bairro: { r: 'Bairro', req: true, ph: 'Bairro' },
+  bairro: { r: 'Bairro', req: true, ph: 'Bairro', trava: true },
   comp: { r: 'Complemento', ph: 'Compl.' },
-  cidade: { r: 'Cidade', req: true, ph: 'Cidade' },
-  uf: { r: 'UF', req: true, ph: 'UF', max: 2 },
+  cidade: { r: 'Cidade', req: true, ph: 'Cidade', trava: true },
+  uf: { r: 'UF', req: true, ph: 'UF', max: 2, trava: true },
   obs: { r: 'Observações (opcional)', area: true, ph: 'Ex: Vai pagar dia 5, desconto de R$50...' },
 }
 const PARES = { end: 'num', bairro: 'comp', cidade: 'uf' }
@@ -465,6 +556,21 @@ let pedFeito = ''        // mensagem verde depois de cadastrar
 let ofertas = []         // o catálogo de tratamentos, do servidor
 let ofertasEstado = ''   // '' | 'carregando' | 'ok' | 'erro'
 let anexos = []          // comprovantes já no R2: { nome, url, mime }
+// A BUSCA DE CEP, e as duas guardas que a dash aprendeu na pratica (06/10/2026):
+//  1. RESPOSTA ATRASADA NAO MANDA. O vendedor digita um CEP, ve que errou e digita outro antes do
+//     primeiro responder; sem guarda, a resposta do CEP VELHO sobrescreve o endereco do novo e o
+//     pacote sai pro lugar errado, com a tela mostrando o CEP certo e o endereco errado.
+//  2. TRAVA SO O QUE VEIO. Campo que a base nao tem fica livre pra digitar - o CEP geral de cidade
+//     costuma trazer bairro e cidade sem a rua.
+let cepEmVoo = ''        // qual CEP esta valendo agora
+let cepBuscando = false
+let cepRuim = false      // todas as bases disseram que nao existe
+let cepTravados = {}     // { end: true, bairro: true, ... } - veio da busca, nao se digita
+// VENDA FUTURA: so no pagamento na entrega, igual a dash.
+let vendaFutura = false
+let dataFutura = ''      // 'AAAA-MM-DD'
+let calAberto = false
+let calMes = ''          // 'AAAA-MM' que o calendario esta mostrando
 // DE QUEM E O PEDIDO: congelado no instante em que o formulario abriu, e NAO muda mais.
 //
 // Regra do Bruno em 16/10: "caso eu esteja na metade do processo de criar aquele pedido para aquele
@@ -478,8 +584,6 @@ let anexos = []          // comprovantes já no R2: { nome, url, mime }
 let pedLead = null       // { chatId, phone, nome }
 
 const dig = (v) => String(v == null ? '' : v).replace(/\D/g, '')
-const mascCpf = (v) => { const c = dig(v).slice(0, 11); return c.length === 11 ? c.slice(0, 3) + '.' + c.slice(3, 6) + '.' + c.slice(6, 9) + '-' + c.slice(9) : c }
-const mascCep = (v) => { const c = dig(v).slice(0, 8); return c.length === 8 ? c.slice(0, 5) + '-' + c.slice(5) : c }
 
 // CPF de verdade, com os dois dígitos. A mesma conta do despacho-paylog.js: CPF errado só aparece
 // quando a PayLog recusa, e aí o pedido já está na fila do Bruno.
@@ -509,7 +613,13 @@ function confere(f) {
     if (c.req && !String(f[k] || '').trim()) faltam.push(c.r)
   }
   if (!ofertaDe(f.tratKey)) faltam.push('Tratamento')
-  if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF não confere')
+  if (String(f.cpf || '').trim() && dig(f.cpf).length < 11) faltam.push('CPF incompleto, precisa dos 11 dígitos')
+  else if (String(f.cpf || '').trim() && !cpfValido(f.cpf)) faltam.push('CPF inválido, confira os números')
+  // O CELULAR PRECISA DO 9, e e aqui que isso para - nao no Aceitar, com o cliente esperando. Foi
+  // assim que um pedido entrou sem o 9 em 19/08/2026.
+  if (String(f.wa || '').trim() && !telValido(f.wa)) faltam.push(telErro(f.wa) || 'WhatsApp precisa de DDD + 9 + 8 dígitos')
+  if (cepRuim) faltam.push('CEP não encontrado, corrija antes de continuar')
+  if (vendaFutura && !dataFutura) faltam.push('Escolha a data da venda futura')
   if (String(f.uf || '').trim() && !UFS.includes(String(f.uf).toUpperCase())) faltam.push('UF inválida')
   if (String(f.cep || '').trim() && dig(f.cep).length !== 8) faltam.push('CEP precisa de 8 dígitos')
   // AS MESMAS DUAS REGRAS DO ACEITAR (problemasPaylog no despacho-paylog.js). Sem elas, o vendedor
@@ -598,11 +708,19 @@ function montaPedido(f) {
     // VAZIO fica VAZIO: sem taxa no pedido, a dash usa a do vendedor.
     com_pct: '',
     pgto: '', spg: 'Pendente',
-    transp: '', mod: pedTipo === 'antecipado' ? 'antecipado' : 'entrega',
+    // TRANSPORTE E PRAZO: a escolha muda o prazo que o vendedor prometeu ao cliente, entao ela nao
+    // pode se perder no caminho. Vazio = transportadora, que e o padrao da casa.
+    transp: String(f.transp || '').trim(),
+    mod: pedTipo === 'antecipado' ? 'antecipado' : 'entrega',
     // O DONO É DECIDIDO NO SERVIDOR, pelo login (handlePedidoNovo carimba o `at`). Mandar daqui
     // deixaria o painel escolhendo de quem é a venda.
     col: 'A Enviar', obs: String(f.obs || '').trim(),
-    tags: [], fu: null, agend: '', track: '', link: '',
+    // VENDA FUTURA vira a etiqueta E o agendamento: e o `agend` que diz a cobranca quando voltar.
+    // Sem ele o pedido entra na fila de hoje e o cliente e cobrado antes do combinado.
+    tags: (pedTipo === 'entrega' && vendaFutura && dataFutura) ? ['venda-futura'] : [],
+    fu: null,
+    agend: (pedTipo === 'entrega' && vendaFutura && dataFutura) ? dataFutura + 'T12:00' : '',
+    track: '', link: '',
     data: ddmm(),
     hist: [{ from: '—', to: 'A Enviar', who: 'Sellwave Web', time: ddmm() + ' ' + hhmm() }],
     comments: [],
@@ -720,6 +838,8 @@ function desenhaPedidos() {
       h += '<div class="cx' + (par ? ' par' : '') + (par === 'uf' ? ' uf' : '') + '">'
         + campoPed(linha[0]) + (par ? campoPed(par) : '') + '</div>'
     }
+    if (b.t === 'Dados do Cliente') h += blocoVendaFutura()
+    if (b.t === 'Endereço') h += blocoPrazo()
     if (b.t === 'Tratamento e Anexo') h += campoAnexo()
     h += '</div>'
   }
@@ -758,19 +878,181 @@ function listaRascunhos() {
   return h
 }
 
+// O CADEADO NO ROTULO significa "isto veio da busca do CEP". Igual a dash: o campo fica travado
+// enquanto o CEP for o mesmo, e solta sozinho quando ele muda - assim ninguem corrige a rua na mao
+// e ve a correcao sumir na proxima tecla do CEP.
+const IC_CADEADO = '<svg class="cad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+
 function campoPed(k) {
   const c = CAMPOS_PED[k]
   if (!c) return ''
-  const erro = pedErros.length && c.req && !String(ped[k] || '').trim() ? ' erro' : ''
-  const v = esc(ped[k] == null ? '' : ped[k])
+  const bruto = String(ped[k] == null ? '' : ped[k])
+  // ERRO DE FORMATO, nao so campo vazio: CPF que nao fecha os dois digitos e telefone sem o 9
+  // pintam o campo na hora, em vez de so na recusa do Aceitar.
+  let erro = pedErros.length && c.req && !bruto.trim()
+  if (!erro && bruto.trim()) {
+    if (k === 'cpf' && dig(bruto).length === 11 && !cpfValido(bruto)) erro = true
+    if (k === 'wa' && dig(bruto).length >= 11 && !telValido(bruto)) erro = true
+    if (k === 'uf' && bruto.length === 2 && !UFS.includes(bruto.toUpperCase())) erro = true
+  }
+  if (k === 'cep' && cepRuim) erro = true
+  const travado = !!(c.trava && cepTravados[k])
+  const v = esc(bruto)
   const dentro = c.area
     ? '<textarea data-k="' + k + '" placeholder="' + esc(c.ph || '') + '" spellcheck="false">' + v + '</textarea>'
     : '<input data-k="' + k + '" value="' + v + '" placeholder="' + esc(c.ph || '') + '"'
-      + (c.max ? ' maxlength="' + c.max + '"' : '') + ' spellcheck="false" />'
-  return '<div class="' + (erro ? 'erro' : '') + '"><label>' + esc(c.r) + '</label>' + dentro + '</div>'
+      + (c.max ? ' maxlength="' + c.max + '"' : '')
+      + (c.num ? ' inputmode="numeric"' : '')
+      + (travado ? ' readonly' : '') + ' spellcheck="false" />'
+  // O sinal do CEP fica DENTRO do campo, a direita: girando enquanto busca, check quando achou.
+  const sinal = k !== 'cep' ? ''
+    : cepBuscando ? '<span class="cep-sinal gira">' + IC_GIRA + '</span>'
+      : (dig(bruto).length === 8 && !cepRuim && Object.keys(cepTravados).length) ? '<span class="cep-sinal ok">' + IC_CHECK + '</span>'
+        : ''
+  const dica = k === 'wa' && telErro(bruto) ? '<span class="dica-campo">' + esc(telErro(bruto)) + '</span>'
+    : k === 'cep' && cepRuim ? '<span class="dica-campo">CEP não encontrado, confira os números</span>'
+      : ''
+  return '<div class="' + (erro ? 'erro' : '') + (sinal ? ' com-sinal' : '') + '">'
+    + '<label>' + esc(c.r) + (travado ? IC_CADEADO : '') + '</label>'
+    + dentro + sinal + dica + '</div>'
+}
+
+// ── VENDA FUTURA, so no pagamento na entrega (igual a dash) ─────────────────────────────────
+// O cliente combina de pagar num dia la na frente. A data vira o `agend` do pedido, que e o que a
+// cobranca usa pra saber quando voltar - sem ela, o pedido entra na fila de hoje.
+function blocoVendaFutura() {
+  if (pedTipo !== 'entrega') return ''
+  let h = '<div class="vf' + (vendaFutura ? ' on' : '') + '">'
+    + '<button class="vf-topo" id="pd-vf">'
+    + '<span class="cxk' + (vendaFutura ? ' on' : '') + '">' + (vendaFutura ? IC_CHECK : '') + '</span>'
+    + svg('<path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="18" rx="2"/>')
+    + '<span>Venda Futura</span></button>'
+  if (vendaFutura) {
+    h += '<label class="vf-lbl">Data prevista do pagamento (máx 20 dias)</label>'
+      + '<button class="vf-data' + (pedErros.length && !dataFutura ? ' erro' : '') + '" id="pd-cal">'
+      + svg('<path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="18" rx="2"/>')
+      + '<span>' + (dataFutura ? esc(dataFutura.split('-').reverse().join('/')) : 'Escolher data') + '</span></button>'
+    if (calAberto) h += calendario()
+  }
+  return h + '</div>'
+}
+
+// CALENDARIO PROPRIO, pelo mesmo motivo do seletor de tratamento: o <input type=date> do Windows
+// abre um calendario desenhado pelo SISTEMA, branco, que ignora o tema da pagina - num painel
+// escuro vira uma mancha. A janela util e de hoje ate 20 dias, que e a regra da dash.
+const DIAS_SEM = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S']
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+const iso = (d) => d.getFullYear() + '-' + dd2(d.getMonth() + 1) + '-' + dd2(d.getDate())
+function calendario() {
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0)
+  const limite = new Date(hoje); limite.setDate(limite.getDate() + 20)
+  const ref = calMes ? new Date(Number(calMes.slice(0, 4)), Number(calMes.slice(5, 7)) - 1, 1) : new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  const primeiro = new Date(ref.getFullYear(), ref.getMonth(), 1)
+  const ultimo = new Date(ref.getFullYear(), ref.getMonth() + 1, 0)
+  const podeVoltar = ref > new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  const podeIr = new Date(ref.getFullYear(), ref.getMonth() + 1, 1) <= limite
+  let h = '<div class="cal">'
+    + '<div class="cal-topo">'
+    + '<button class="cal-nav" id="cal-ant"' + (podeVoltar ? '' : ' disabled') + '>' + svg('<path d="m15 18-6-6 6-6"/>') + '</button>'
+    + '<span>' + MESES[ref.getMonth()] + ' ' + ref.getFullYear() + '</span>'
+    + '<button class="cal-nav" id="cal-prox"' + (podeIr ? '' : ' disabled') + '>' + svg('<path d="m9 18 6-6-6-6"/>') + '</button>'
+    + '</div><div class="cal-grade">'
+  for (const d of DIAS_SEM) h += '<span class="cal-ds">' + d + '</span>'
+  for (let i = 0; i < primeiro.getDay(); i++) h += '<span></span>'
+  for (let dia = 1; dia <= ultimo.getDate(); dia++) {
+    const d = new Date(ref.getFullYear(), ref.getMonth(), dia)
+    const k = iso(d)
+    const fora = d < hoje || d > limite
+    h += '<button class="cal-dia' + (k === dataFutura ? ' on' : '') + '" data-dia="' + k + '"' + (fora ? ' disabled' : '') + '>' + dia + '</button>'
+  }
+  return h + '</div></div>'
+}
+
+// ── O PRAZO E O JEITO DE MANDAR ─────────────────────────────────────────────────────────────
+// A escolha MUDA O PRAZO que o vendedor promete ao cliente na hora, por isso ela mora colada na
+// previsao e nao escondida num seletor. `transp` vazio = transportadora, que e o padrao da casa.
+function blocoPrazo() {
+  const p = previsaoEntrega(ped.uf, ped.cep, ped.transp || TRANSPORTE_PADRAO)
+  if (!p) return ''
+  let h = '<div class="prazo"><div class="prazo-l">'
+    + svg('<path d="M10 17h4V5H2v12h3"/><path d="M20 17h2v-3.3a4 4 0 0 0-1.2-2.8L19 9h-5v8h2"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>')
+    + '<span>Chega em <b>' + p.dias + (p.dias === 1 ? ' dia útil' : ' dias úteis') + '</b></span></div>'
+    + '<div class="prazo-s">até ' + esc(p.ate) + ', se postar hoje · estimativa pra ' + esc(p.uf) + '</div>'
+    + '<div class="prazo-ops">'
+  for (const t of TRANSPORTES) {
+    const on = (ped.transp || TRANSPORTE_PADRAO) === t.id
+    h += '<button class="prazo-op' + (on ? ' on' : '') + '" data-transp="' + t.id + '" title="' + esc(t.desc) + '">' + esc(t.nome) + '</button>'
+  }
+  return h + '</div></div>'
 }
 
 // SO TRATAMENTO CADASTRADO, sem digitar livre, e o total e leitura. O vendedor nao escolhe preco.
+// REDESENHAR A CADA TECLA SERIA PERDER O CURSOR. So redesenha quando o que apareceria MUDA: o
+// campo acabou de ficar valido ou invalido, ou a UF completou e o prazo pode aparecer.
+function desenhaSePreciso(k, v) {
+  if (k === 'uf') { if (String(v).length === 2 || String(v).length === 0) desenha(); return }
+  const d = dig(v)
+  if (k === 'cpf' && (d.length === 11 || d.length === 10)) desenha()
+  if (k === 'wa' && (d.length === 11 || d.length === 10)) desenha()
+}
+
+function mesVizinho(passo) {
+  const hoje = new Date()
+  const base = calMes ? new Date(Number(calMes.slice(0, 4)), Number(calMes.slice(5, 7)) - 1, 1) : new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  base.setMonth(base.getMonth() + passo)
+  return base.getFullYear() + '-' + dd2(base.getMonth() + 1)
+}
+
+// MEXEU NO CEP: solta as travas e apaga o que a busca anterior tinha preenchido. Sem isso o
+// endereco do CEP velho fica na tela embaixo do CEP novo e o pacote sai pro lugar errado.
+//
+// E TECLA QUE NAO MUDA O CEP NAO REFAZ NADA: com os 8 digitos ja preenchidos, qualquer tecla a mais
+// passa pela mascara sem mudar o valor, e sem esta guarda o endereco era limpo e preenchido de novo
+// a cada tecla, piscando na cara de quem esta digitando.
+let cepUltimo = ''
+function mudouCep(valor) {
+  const n = dig(valor)
+  if (n === cepUltimo) return
+  cepUltimo = n
+  cepEmVoo = ''
+  cepRuim = false
+  for (const k of Object.keys(cepTravados)) if (cepTravados[k]) ped[k] = ''
+  cepTravados = {}
+  if (n.length === 8) buscaCepNoApp(n)
+  else desenha()
+}
+
+async function buscaCepNoApp(n) {
+  cepEmVoo = n
+  cepBuscando = true
+  desenha()
+  let r = null
+  try { r = await window.swp.cep(n) } catch (_) { r = null }
+  // RESPOSTA ATRASADA NAO MANDA: o vendedor ja pode ter digitado outro CEP.
+  if (cepEmVoo !== n) return
+  cepBuscando = false
+  cepRuim = !!(r && r.invalido)
+  if (r && r.achou && r.dados) {
+    const d = r.dados
+    for (const [k, v] of [['end', d.end], ['bairro', d.bairro], ['cidade', d.cidade], ['uf', d.uf]]) {
+      if (v) { ped[k] = v; cepTravados[k] = true }
+    }
+  }
+  desenha()
+  // O PROXIMO CAMPO E O NUMERO: o cursor vai pra la sozinho, como na Five e na dash. Sem isso o
+  // vendedor cacava o campo com o mouse em todo pedido.
+  if (r && r.achou) {
+    setTimeout(() => {
+      try { const el = document.querySelector('[data-k=num]'); if (el) { el.focus(); el.select() } }
+      catch (_) { /* sem foco, tudo bem */ }
+    }, 40)
+  }
+}
+
+// Zera a busca de CEP junto com o formulario: trava velha num endereco novo e o jeito de mandar o
+// pacote pro lugar errado.
+function zeraCep() { cepEmVoo = ''; cepUltimo = ''; cepBuscando = false; cepRuim = false; cepTravados = {} }
+
 function campoTratamento() {
   const erro = pedErros.length && !ofertaDe(ped.tratKey) ? ' erro' : ''
   const of = ofertaDe(ped.tratKey)
@@ -839,16 +1121,34 @@ function ligaPedidos(corpo) {
   for (const el of corpo.querySelectorAll('[data-k]')) {
     el.oninput = () => {
       const k = el.dataset.k
-      let v = el.value
-      // A máscara entra só com o campo COMPLETO: mascarar no meio empurra o cursor e a pessoa
-      // perde a conta do que digitou.
-      if (k === 'cpf' && dig(v).length === 11) { v = mascCpf(v); el.value = v }
-      if (k === 'cep' && dig(v).length === 8) { v = mascCep(v); el.value = v }
+      const c = CAMPOS_PED[k] || {}
+      // A MASCARA ENTRA A CADA TECLA e o cursor fica onde estava (ver `comMascara`). Antes ela so
+      // entrava com o campo completo, porque empurrava o cursor pro fim.
+      let v = c.m ? comMascara(el, c.m) : el.value
       if (k === 'uf') { v = v.toUpperCase(); el.value = v }
+      const antes = ped[k]
       ped[k] = v
+      if (k === 'cep') { mudouCep(v); return }
+      // UF na mao tambem mexe no prazo, e o telefone e o CPF pintam o campo enquanto digita.
+      if (k === 'uf' || k === 'wa' || k === 'cpf') { if (String(antes || '') !== v) desenhaSePreciso(k, v) }
       if (k === 'tratKey') desenha()      // o Total acompanha
     }
     if (el.tagName === 'SELECT') el.onchange = el.oninput
+  }
+  // OS CLIQUES DOS BLOCOS NOVOS.
+  for (const b of corpo.querySelectorAll('[data-transp]')) {
+    b.onclick = () => { ped.transp = b.dataset.transp; desenha() }
+  }
+  const vf = corpo.querySelector('#pd-vf')
+  if (vf) vf.onclick = () => { vendaFutura = !vendaFutura; if (!vendaFutura) { dataFutura = ''; calAberto = false }; desenha() }
+  const cal = corpo.querySelector('#pd-cal')
+  if (cal) cal.onclick = () => { calAberto = !calAberto; desenha() }
+  const calA = corpo.querySelector('#cal-ant')
+  if (calA) calA.onclick = () => { calMes = mesVizinho(-1); desenha() }
+  const calP = corpo.querySelector('#cal-prox')
+  if (calP) calP.onclick = () => { calMes = mesVizinho(1); desenha() }
+  for (const d of corpo.querySelectorAll('[data-dia]')) {
+    d.onclick = () => { dataFutura = d.dataset.dia; calAberto = false; desenha() }
   }
   for (const b of corpo.querySelectorAll('[data-abre]')) {
     b.onclick = () => {
@@ -856,6 +1156,12 @@ function ligaPedidos(corpo) {
       if (!r) return
       ped = { ...(r.dados || {}) }
       pedIdFixo = 0                       // rascunho reaberto e outra tentativa
+      // O QUE O RASCUNHO GUARDOU VOLTA JUNTO: sem isto, reabrir um rascunho de venda futura perdia
+      // a data e o pedido entrava na fila de hoje.
+      zeraCep()
+      vendaFutura = !!ped.__vf
+      dataFutura = String(ped.__vfData || '')
+      delete ped.__vf; delete ped.__vfData
       pedTipo = String(ped.__tipo || 'entrega')
       anexos = Array.isArray(ped.__anexos) ? ped.__anexos : []
       // O DONO VOLTA COM ELE. Rascunho reaberto numa conversa diferente continua sendo do cliente
@@ -922,7 +1228,7 @@ function ligaPedidos(corpo) {
   // comecar um pedido novo: "clico em Voltar (...) aquele vai ficar salvo como rascunho".
   liga('pd-voltar', async () => {
     await rascunhoSozinho()
-    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0
+    pedTipo = ''; pedLead = null; ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0; zeraCep(); vendaFutura = false; dataFutura = ''; calAberto = false
     preenchePed()
     guardaNascimento()
     desenha()
@@ -994,7 +1300,7 @@ function rascunhoSozinho() {
   if (pedSalvando || !pedTipo || !temConteudo()) return Promise.resolve(false)
   gravandoAgora = (async () => {
     try {
-      const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
+      const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura }
       // O id vai como esta: vazio significa "ainda nao existe", e quem cunha e o servidor.
       const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || '', dados)
       if (r && r.ok && r.id) rascId = String(r.id)
@@ -1013,7 +1319,7 @@ async function salvaRascunho() {
   try {
     // O tipo e os anexos viajam DENTRO do rascunho: sem eles, reabrir cairia no passo do tipo com os
     // campos preenchidos e o comprovante perdido.
-    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead }
+    const dados = { ...ped, __tipo: pedTipo, __anexos: anexos, __lead: pedLead, __vf: vendaFutura, __vfData: dataFutura }
     const r = await window.swp.rascunhoSalvar(rascId || '', (pedLead && pedLead.phone) || estadoWa.phone || '', dados)
     // RECUSA DO SERVIDOR TAMBEM E ERRO. O `catch` so pega exceção; um `ok:false` passava calado e o
     // vendedor clicava em Rascunho sem ver confirmação NEM erro. Foi assim que o rascunho ficou
@@ -1063,7 +1369,7 @@ async function cadastraPedido() {
       // pedLead, que ja era o novo. Era exatamente o que ele descreveu temer: "subir um pedido pra
       // um cliente que ja saiu". `preenchePed` so escreve em campo vazio, entao o `ped = {}` sozinho
       // nao resolvia: o dono tinha que cair junto.
-      ped = {}; rascId = ''; anexos = []; pedTipo = ''; pedLead = null; pedIdFixo = 0
+      ped = {}; rascId = ''; anexos = []; pedTipo = ''; pedLead = null; pedIdFixo = 0; zeraCep(); vendaFutura = false; dataFutura = ''; calAberto = false
       preenchePed()
       guardaNascimento()
       await pegaRascunhos()
@@ -1118,7 +1424,7 @@ async function trocaDeLead() {
     if (e) estadoWa = e
     if (!at.phone) { rodape('abra a conversa do cliente primeiro'); return }
     pedLead = { chatId: at.chatId || '', phone: at.phone || '', nome: '' }
-    ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0
+    ped = {}; anexos = []; rascId = ''; pedErros = []; pedIdFixo = 0; zeraCep(); vendaFutura = false; dataFutura = ''; calAberto = false
     preenchePed()
     guardaNascimento()
     pedFeito = tinha ? 'O pedido anterior ficou guardado em rascunho.' : ''

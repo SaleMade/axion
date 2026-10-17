@@ -32,6 +32,7 @@
     --balao: #005c4b;          /* balão de saída */
     --roxo: #ad46ff;           /* funil */
     --ambar: #ffb900;
+    --azul: #53bdeb;           /* o mesmo azul de link do WhatsApp */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -256,6 +257,76 @@
   .total .v { font-size: 17px; font-weight: 800; color: var(--verde); font-variant-numeric: tabular-nums; }
   .total.vazio { background: var(--fraco); border-color: var(--borda); }
   .total.vazio .r, .total.vazio .v { color: var(--apagado); }
+
+  /* ── O QUE VEIO DA BUSCA DE CEP ─────────────────────────────────────────────────────────
+     Cadeado no rotulo e campo so de leitura: o endereco que a base trouxe nao se corrige na mao,
+     porque a proxima tecla no CEP apagaria a correcao. Mexeu no CEP, tudo solta. */
+  .form label .cad { width: 10px; height: 10px; margin-left: 4px; vertical-align: -1px; opacity: .55; }
+  .form input[readonly] { background: rgba(255,255,255,.03); color: var(--apagado); cursor: default; }
+  /* O sinal da busca fica DENTRO do campo, a direita. */
+  .form .com-sinal { position: relative; }
+  .cep-sinal { position: absolute; right: 9px; top: 50%; transform: translateY(2px); display: inline-flex; }
+  .cep-sinal svg { width: 14px; height: 14px; }
+  .cep-sinal.ok { color: var(--verde); }
+  .cep-sinal.gira { color: var(--apagado); }
+  /* A dica embaixo do campo: diz o que falta, em vez de so pintar de vermelho. */
+  .dica-campo { display: block; margin-top: 3px; font-size: 10px; line-height: 13px; color: #f0506a; }
+
+  /* ── VENDA FUTURA ───────────────────────────────────────────────────────────────────────
+     Mesmo ambar da dash: e um estado do pedido, nao um campo a mais. */
+  .vf { margin-top: 8px; padding: 9px 11px; border-radius: 11px; border: 1px solid var(--borda); }
+  .vf.on { border-color: rgba(245,158,11,.4); background: rgba(245,158,11,.07); }
+  .vf-topo { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
+    background: none; border: 0; color: var(--texto); font: inherit; font-weight: 650; cursor: pointer; text-align: left; }
+  .vf-topo svg { width: 14px; height: 14px; color: #f59e0b; }
+  .vf.on .vf-topo { color: #f59e0b; }
+  .cxk { display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 16px;
+    border-radius: 5px; border: 1.5px solid rgba(134, 150, 160, .35); }
+  .cxk.on { background: #f59e0b; border-color: #f59e0b; color: #1a1205; }
+  .cxk svg { width: 11px; height: 11px; stroke-width: 3; }
+  .vf-lbl { display: block; margin: 9px 0 3px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--apagado); }
+  .vf-data { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 10px;
+    border-radius: 9px; border: 1px solid var(--borda); background: var(--fraco); color: var(--texto);
+    font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+  .vf-data svg { width: 14px; height: 14px; color: #f59e0b; flex: 0 0 14px; }
+  .vf-data:hover { border-color: rgba(134, 150, 160, .35); }
+  .vf-data.erro { border-color: #f0506a; }
+
+  /* O CALENDARIO E PROPRIO pelo mesmo motivo do seletor de tratamento: o do Windows e desenhado
+     pelo sistema, sai branco e ignora o tema. */
+  .cal { margin-top: 8px; padding: 9px; border-radius: 10px; border: 1px solid var(--borda); background: var(--fraco); }
+  .cal-topo { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px;
+    font-size: 11.5px; font-weight: 700; text-transform: capitalize; }
+  .cal-nav { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px;
+    border: 0; background: none; color: var(--apagado); cursor: pointer; }
+  .cal-nav:hover:not(:disabled) { background: rgba(255,255,255,.06); color: var(--texto); }
+  .cal-nav:disabled { opacity: .25; cursor: default; }
+  .cal-nav svg { width: 14px; height: 14px; }
+  .cal-grade { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .cal-ds { display: grid; place-items: center; height: 20px; font-size: 9.5px; font-weight: 700;
+    color: var(--apagado); }
+  .cal-dia { display: grid; place-items: center; height: 28px; border-radius: 7px; border: 0;
+    background: none; color: var(--texto); font: inherit; font-size: 12px; cursor: pointer;
+    font-variant-numeric: tabular-nums; }
+  .cal-dia:hover:not(:disabled) { background: rgba(245,158,11,.15); }
+  .cal-dia:disabled { opacity: .2; cursor: default; }
+  .cal-dia.on { background: #f59e0b; color: #1a1205; font-weight: 800; }
+
+  /* ── PRAZO E JEITO DE MANDAR ────────────────────────────────────────────────────────────
+     A escolha MUDA O PRAZO que o vendedor promete ao cliente, por isso ela fica colada na
+     previsao em vez de escondida num seletor. */
+  .prazo { margin-top: 8px; padding: 9px 11px; border-radius: 11px;
+    border: 1px solid var(--borda); background: var(--fraco); }
+  .prazo-l { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+  .prazo-l svg { width: 15px; height: 15px; color: #53bdeb; flex: 0 0 15px; }
+  .prazo-l b { font-weight: 800; }
+  .prazo-s { margin-top: 2px; font-size: 10.5px; line-height: 14px; color: var(--apagado); }
+  .prazo-ops { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .prazo-op { padding: 4px 9px; border-radius: 999px; border: 1px solid var(--borda);
+    background: none; color: var(--apagado); font: inherit; font-size: 11px; cursor: pointer; }
+  .prazo-op:hover { border-color: rgba(134, 150, 160, .35); color: var(--texto); }
+  .prazo-op.on { background: rgba(0,188,242,.16); border-color: rgba(0,188,242,.45); color: #53bdeb; font-weight: 650; }
 
   .anexo { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px;
     border: 1px dashed var(--borda); border-radius: 11px; color: var(--apagado);

@@ -53,6 +53,15 @@ contextBridge.exposeInMainWorld('swp', {
   ] }),
   comprovante: reg('comprovante', { ok: true, url: 'https://r2.exemplo/comprovante/print.jpg', mime: 'image/jpeg' }),
   abrirMidia: reg('abrirMidia', { ok: true }),
+  // A BUSCA DE CEP responde como a de verdade: o 88504411 e o CEP real que o Bruno usou no print
+  // (Rua Curitiba, Santa Helena, Lages/SC), e o 12345678 e um que nenhuma base acha.
+  cep: (cep) => {
+    chamadas.push({ nome: 'cep', args: [cep] })
+    const c = String((cep && cep.cep) || cep || '').replace(/\D/g, '')
+    if (c === '88504411') return Promise.resolve({ ok: true, achou: true, invalido: false, completo: true, dados: { end: 'Rua Curitiba', bairro: 'Santa Helena', cidade: 'Lages', uf: 'SC' } })
+    if (c === '12345678') return Promise.resolve({ ok: true, achou: false, invalido: true, completo: false, dados: null })
+    return Promise.resolve({ ok: true, achou: false, invalido: false, completo: false, dados: null })
+  },
   // PODE FALHAR SOB COMANDO. A rede caindo no meio do cadastro e o caso que fazia o app criar
   // DOIS cards do mesmo pedido, e um stub que so responde ok nunca encosta nesse caminho - e a
   // mesma licao do preload que respondia ok pra tudo e escondeu o rascunho quebrado por semanas.

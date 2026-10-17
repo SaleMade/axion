@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('swp', {
   // Abre o documento no programa do Windows. So a CHAVE viaja: a pagina nunca ve o endereco da
   // API, e quem monta a URL e o processo principal.
   abrirMidia: (chave) => ipcRenderer.invoke('swp:abrir-midia', { chave }),
+  // Busca de CEP. Mora no processo principal porque a pagina nao pode falar com a rede, e
+  // porque assim o cache vale pros N numeros abertos em vez de um por janela.
+  cep: (cep) => ipcRenderer.invoke('swp:cep', { cep }),
   // PILHA DE DISPAROS: o que esta saindo nos numeros abertos. Hoje da 0 ou 1 (o painel roda um
   // funil por vez), mas a lista ja vem como lista pro dia em que isso mudar.
   disparos: () => ipcRenderer.invoke('swp:disparos'),

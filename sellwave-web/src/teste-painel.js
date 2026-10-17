@@ -179,6 +179,109 @@ app.whenReady().then(async () => {
   const total = await js('(document.querySelector(".total .v")||{}).textContent || ""')
   conta('o total acompanha o tratamento escolhido', /397,00/.test(total), total)
 
+  // ══ PARIDADE COM O NOVO PEDIDO DA DASH (16/10/2026) ═══════════════════════════════════════
+  //
+  // Pedido dele: "todas as funcionalidades que a gente tem hoje na area de novo pedido da dash
+  // funcionem la no aplicativo tambem, porque nao esta funcionando corretamente". Eram quatro
+  // coisas: mascara enquanto digita, busca de CEP preenchendo o endereco, prazo de entrega com as
+  // tres formas de mandar, e venda futura com calendario.
+
+  // ── MASCARA A CADA TECLA, nao so com o campo completo ──────────────────────────────────────
+  const digitando = async (k, texto) => {
+    await js('(() => { const e = document.querySelector("[data-k=" + ' + JSON.stringify(JSON.stringify(k)) + ' + "]"); e.value = ""; })()')
+    const saida = []
+    for (const c of texto) {
+      await js('(() => { const e = document.querySelector("[data-k=' + k + ']"); e.value = e.value + ' + JSON.stringify(c) + '; e.dispatchEvent(new Event("input")); })()')
+      saida.push(await js('document.querySelector("[data-k=' + k + ']").value'))
+    }
+    return saida
+  }
+  const cpfPassos = await digitando('cpf', '52998224725')
+  conta('o CPF vai se formatando enquanto digita',
+    cpfPassos[2] === '529' && cpfPassos[3] === '529.9' && cpfPassos[8] === '529.982.247' && cpfPassos[10] === '529.982.247-25',
+    JSON.stringify([cpfPassos[2], cpfPassos[3], cpfPassos[8], cpfPassos[10]]))
+  const telPassos = await digitando('wa', '19995983293')
+  // OS PASSOS SAO OS DA DASH, conferidos contra o maskTel dela digito a digito. O corte muda com o
+  // tamanho de proposito: com 8 digitos depois do DDD ele desenha "(19) 9959-8329", que e como um
+  // numero ANTIGO sem o 9 tem que aparecer; so no nono digito vira "(19) 99598-3293".
+  conta('o WhatsApp tambem, com DDD e o 9',
+    telPassos[1] === '(19' && telPassos[6] === '(19) 9959-8' && telPassos[10] === '(19) 99598-3293',
+    JSON.stringify([telPassos[1], telPassos[6], telPassos[10]]))
+  // APAGAR NO MEIO nao pode embaralhar: e o caso que fazia a mascara ser adiada ate o fim.
+  // APAGAR NO MEIO nao pode embaralhar. Com 10 digitos o desenho volta pro corte de 8 (de novo:
+  // igual a dash), entao o esperado e "(19) 9959-8329" e NAO o texto cru que ficou no campo.
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "(19) 99598-329"; e.dispatchEvent(new Event("input")); })()')
+  conta('apagar um digito nao embaralha o resto',
+    (await js('document.querySelector("[data-k=wa]").value')) === '(19) 9959-8329',
+    await js('document.querySelector("[data-k=wa]").value'))
+
+  // TELEFONE SEM O 9 avisa na hora, em vez de so na recusa do Aceitar.
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "1933334444"; e.dispatchEvent(new Event("input")); })()')
+  await espera(200)
+  const semNove = await js('({ dica: (document.querySelector(".dica-campo")||{}).textContent || "" })')
+  conta('celular sem o 9 avisa no proprio campo', /9 depois do DDD|Faltam/.test(semNove.dica), JSON.stringify(semNove))
+  await js('(() => { const e = document.querySelector("[data-k=wa]"); e.value = "19995983293"; e.dispatchEvent(new Event("input")); })()')
+  await espera(150)
+
+  // ── A BUSCA DE CEP ─────────────────────────────────────────────────────────────────────────
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "88504411"; e.dispatchEvent(new Event("input")); })()')
+  await espera(500)
+  const dep = await js('(() => { const v = (k) => (document.querySelector("[data-k=" + k + "]")||{}).value || "";'
+    + ' const tr = (k) => { const e = document.querySelector("[data-k=" + k + "]"); return !!(e && e.hasAttribute("readonly")) };'
+    + ' return { end: v("end"), bairro: v("bairro"), cidade: v("cidade"), uf: v("uf"), cep: v("cep"),'
+    + ' travou: tr("end") && tr("bairro") && tr("cidade") && tr("uf"), numLivre: !tr("num"),'
+    + ' foco: (document.activeElement||{}).dataset ? (document.activeElement.dataset.k || "") : "",'
+    + ' cadeados: document.querySelectorAll(".form label .cad").length } })()')
+  conta('o CEP de 8 digitos preenche rua, bairro, cidade e UF',
+    dep.end === 'Rua Curitiba' && dep.bairro === 'Santa Helena' && dep.cidade === 'Lages' && dep.uf === 'SC', JSON.stringify(dep))
+  conta('e mascara o proprio CEP', dep.cep === '88504-411', dep.cep)
+  conta('o que veio da busca fica travado, com cadeado', dep.travou === true && dep.cadeados >= 4, JSON.stringify(dep))
+  conta('o numero continua livre, que e o que falta digitar', dep.numLivre === true)
+  conta('e o cursor vai pro numero sozinho', dep.foco === 'num', dep.foco)
+
+  // ── O PRAZO E AS TRES FORMAS DE MANDAR ─────────────────────────────────────────────────────
+  const prazo = await js('(() => { const p = document.querySelector(".prazo"); if (!p) return null;'
+    + ' return { txt: p.textContent.replace(/\\s+/g, " ").trim(),'
+    + ' ops: [...p.querySelectorAll("[data-transp]")].map(b => b.dataset.transp).join(","),'
+    + ' on: (p.querySelector("[data-transp].on")||{}).dataset.transp } })()')
+  conta('aparece o prazo de entrega pra UF do endereco', prazo && /Chega em 4 dias úteis/.test(prazo.txt), prazo && prazo.txt)
+  conta('com as tres formas de mandar', prazo && prazo.ops === 'five,correios,correios_retirada', prazo && prazo.ops)
+  conta('e a transportadora vem marcada por padrao', prazo && prazo.on === 'five', prazo && prazo.on)
+  // Correios no endereco sao 2 dias a mais; a retirada, 1. Trocar MUDA o prazo que ele promete.
+  await clica('[data-transp=correios]')
+  await espera(250)
+  const prazo2 = await js('(document.querySelector(".prazo")||{}).textContent || ""')
+  conta('trocar pra Correios muda o prazo na hora', /Chega em 6 dias úteis/.test(prazo2.replace(/\s+/g, ' ')), prazo2.replace(/\s+/g, ' ').slice(0, 60))
+  await clica('[data-transp=five]')
+  await espera(200)
+
+  // CEP QUE NAO EXISTE avisa e nao deixa cadastrar.
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "12345678"; e.dispatchEvent(new Event("input")); })()')
+  await espera(450)
+  const ruim = await js('({ dica: (document.querySelector(".dica-campo")||{}).textContent || "",'
+    + ' limpou: (document.querySelector("[data-k=end]")||{}).value || "" })')
+  conta('CEP que nenhuma base acha avisa no campo', /não encontrado/.test(ruim.dica), JSON.stringify(ruim))
+  conta('e o endereco do CEP anterior e apagado, nao fica embaixo do CEP novo', ruim.limpou === '', JSON.stringify(ruim))
+  await js('(() => { const e = document.querySelector("[data-k=cep]"); e.value = "88504411"; e.dispatchEvent(new Event("input")); })()')
+  await espera(450)
+
+  // ── VENDA FUTURA ───────────────────────────────────────────────────────────────────────────
+  await clica('#pd-vf')
+  await espera(220)
+  await clica('#pd-cal')
+  await espera(220)
+  const cal = await js('(() => { const c = document.querySelector(".cal"); if (!c) return null;'
+    + ' const dias = [...c.querySelectorAll("[data-dia]")];'
+    + ' return { n: dias.length, livres: dias.filter(d => !d.disabled).length,'
+    + ' primeiroLivre: (dias.find(d => !d.disabled)||{}).dataset.dia || "" } })()')
+  conta('a venda futura abre um calendario proprio, no tema do painel', !!cal && cal.n > 27, JSON.stringify(cal))
+  // A JANELA E DE 20 DIAS, a regra da dash: o resto do mes fica apagado.
+  conta('e so deixa escolher dentro da janela de 20 dias', cal && cal.livres > 0 && cal.livres <= 21, JSON.stringify(cal))
+  await js('(() => { const d = [...document.querySelectorAll("[data-dia]")].find(x => !x.disabled); if (d) d.click() })()')
+  await espera(250)
+  const escolhido = await js('({ txt: (document.querySelector(".vf-data")||{}).textContent || "", fechou: !document.querySelector(".cal") })')
+  conta('escolher o dia fecha o calendario e mostra a data', /\d\d\/\d\d\/\d{4}/.test(escolhido.txt) && escolhido.fechou === true, JSON.stringify(escolhido))
+
   // ── a conferencia do app tem que ser a MESMA do Aceitar ────────────────────────────────────
   // Nome de uma palavra e telefone cortado passavam daqui e so eram recusados DEPOIS, no Aceitar do
   // Bruno, com o cliente ja esperando - e o vendedor nem ficava sabendo que o pedido parou.
@@ -445,7 +548,16 @@ app.whenReady().then(async () => {
     && new Set(tres.l1).size === 3, JSON.stringify(tres.l1))
   // O aviso e o mesmo do inbox (avisoDisparo do chat.jsx): sem ele o vendedor clica de novo
   // achando que falhou, que foi exatamente o que aconteceu aqui.
-  conta('o rodape diz a posicao na fila, como o inbox', /Na fila/.test(tres.rod), tres.rod)
+  //
+  // ESPERA O RODAPE EM VEZ DE FOTOGRAFAR UM INSTANTE. O rodape alterna entre o estado do envio que
+  // esta correndo ("digitando 2 de 2") e o da fila, e ler uma vez no meio de um envio de 1,2s dava
+  // falha intermitente - teste que falha as vezes vira teste que ninguem olha.
+  let rodFila = tres.rod
+  for (let i = 0; i < 12 && !/Na fila/.test(rodFila); i++) {
+    await espera(250)
+    rodFila = await js('(document.getElementById("rod")||{}).textContent || ""')
+  }
+  conta('o rodape diz a posicao na fila, como o inbox', /Na fila/.test(rodFila), rodFila)
 
   // tirar da fila quem ainda nao saiu
   const tirou = await js('(() => { const bs = document.querySelectorAll(".saindo .item-env [data-tirafila]");'

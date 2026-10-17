@@ -1797,6 +1797,98 @@ ipcMain.handle('swp:tratamentos', async () => {
 // OS BYTES SOBEM DAQUI, nao da tela: o processo principal nao passa por CSP nem por CORS, e o
 // arquivo vai DIRETO pro corpo da requisicao - sem base64, que incharia um video de 9 MB pra 12 e
 // ainda passaria duas vezes pela memoria.
+// ─── BUSCA DE CEP (16/10/2026) ───────────────────────────────────────────────────────────────
+//
+// GEMEO do axion-produtor/src/lib/cep.js: mexeu num, mexe no outro. Esta aqui, no processo
+// principal, porque a pagina do painel roda com `default-src 'none'` e nao pode falar com a rede -
+// e porque assim o cache vale pros N numeros abertos, em vez de um por janela.
+//
+// TRES FONTES EM PARALELO, e sao tres por medicao, nao por chute (06/10/2026, na dash):
+//   BrasilAPI 128ms (agrega Correios, a mais completa) · OpenCEP 180ms · ViaCEP 472ms (a menos).
+// O caso que decidiu: o CEP 99999-999 existe de verdade e a ViaCEP responde "erro" nele. Sozinha,
+// ela reprovaria um pedido bom.
+//
+// FONTE FORA DO AR NUNCA VIRA "CEP INVALIDO": so e invalido quando TODAS as que responderam
+// disseram que nao existe. Nao da pra reprovar o pedido de um cliente porque a internet de
+// terceiro caiu.
+const _cepCache = new Map()
+const _cepLimpa = (r) => ({
+  end: String(r.end || '').trim(), bairro: String(r.bairro || '').trim(),
+  cidade: String(r.cidade || '').trim(), uf: String(r.uf || '').trim().toUpperCase().slice(0, 2),
+})
+const _cepNota = (d) => {
+  if (!d || !d.cidade) return 0
+  if (d.end && d.bairro) return 3
+  if (d.end || d.bairro) return 2
+  return 1
+}
+async function _cepBusca(url, ms = 7000) {
+  const r = await net.fetch(url, { signal: AbortSignal.timeout(ms) })
+  return r
+}
+const _cepFontes = [
+  async (c) => {
+    const r = await _cepBusca('https://brasilapi.com.br/api/cep/v2/' + c)
+    if (r.status === 404) return { naoAchou: true }
+    if (!r.ok) return { falhou: true }
+    const d = await r.json()
+    // Quando as bases internas dela falham, ela responde 200 com um objeto de ERRO.
+    if (d && d.name === 'CepPromiseError') return { naoAchou: true }
+    return _cepLimpa({ end: d.street, bairro: d.neighborhood, cidade: d.city, uf: d.state })
+  },
+  async (c) => {
+    const r = await _cepBusca('https://opencep.com/v1/' + c)
+    if (r.status === 404) return { naoAchou: true }
+    if (!r.ok) return { falhou: true }
+    const d = await r.json()
+    if (d && d.error) return { naoAchou: true }
+    return _cepLimpa({ end: d.logradouro, bairro: d.bairro, cidade: d.localidade, uf: d.uf })
+  },
+  async (c) => {
+    const r = await _cepBusca('https://viacep.com.br/ws/' + c + '/json/')
+    if (!r.ok) return { falhou: true }
+    const d = await r.json()
+    if (d.erro) return { naoAchou: true }
+    return _cepLimpa({ end: d.logradouro, bairro: d.bairro, cidade: d.localidade, uf: d.uf })
+  },
+]
+async function buscaCep(cep) {
+  const c = String(cep || '').replace(/\D/g, '')
+  if (c.length !== 8) return { achou: false, invalido: false, dados: null, completo: false }
+  if (_cepCache.has(c)) return _cepCache.get(c)
+  // CEP DO BRASIL COMECA EM 01000-000. Prefixo 00 nao existe, entao 00000-000 e digitacao e nao o
+  // CEP geral de uma cidade - sem esta linha a regra do 000 abaixo o daria por valido.
+  if (c.slice(0, 2) === '00') {
+    const ruim = { achou: false, invalido: true, dados: null, completo: false }
+    _cepCache.set(c, ruim)
+    return ruim
+  }
+  // CEP TERMINADO EM 000 e o CEP geral da cidade: SEMPRE considerado real. O que vem dele varia
+  // (um traz rua, outro so bairro e cidade), entao quem decide o que travar na tela e o campo que
+  // voltou preenchido, um por um, nunca o formato do CEP.
+  const geral = c.endsWith('000')
+  let melhor = null, naoAchou = 0, responderam = 0
+  const resultados = await Promise.all(_cepFontes.map((f) => f(c).catch(() => ({ falhou: true }))))
+  for (const r of resultados) {
+    if (!r || r.falhou) continue
+    responderam += 1
+    if (r.naoAchou) { naoAchou += 1; continue }
+    if (_cepNota(r) > _cepNota(melhor)) melhor = r
+  }
+  const saida = {
+    achou: !!melhor,
+    invalido: !melhor && !geral && responderam > 0 && naoAchou === responderam,
+    dados: melhor,
+    completo: _cepNota(melhor) === 3,
+  }
+  if (saida.achou || saida.invalido) _cepCache.set(c, saida)
+  return saida
+}
+ipcMain.handle('swp:cep', async (_e, { cep }) => {
+  try { return { ok: true, ...(await buscaCep(cep)) } }
+  catch (e) { anota('[cep] ' + (e && e.message)); return { ok: false, achou: false, invalido: false, dados: null } }
+})
+
 // ABRE O DOCUMENTO NO PROGRAMA DO WINDOWS. A pagina manda so a CHAVE; quem monta o endereco e
 // aqui, e a mesma conferencia do protocolo swmedia vale: chave que nao e de midia nao abre nada.
 // Sem ela, um `shell.openExternal` com texto vindo da pagina abriria qualquer coisa.
