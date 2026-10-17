@@ -10571,16 +10571,6 @@ const SWWEB_PROXIES = 'swweb_proxies';  // { "<numkey>": { host, porta, usuario,
 // Entao: o banco e a fonte de verdade pra EDITAR, e a atribuicao carrega a copia resolvida mais o
 // `id` de quem a gerou. Editar no banco reescreve as copias (ver _swwebBancoAplica).
 const SWWEB_BANCO = 'swweb_proxy_banco';
-// EXCECAO POR NUMERO, COM HORA PRA MORRER. { "<numkey>": { ate, por, nome } }
-//
-// Ela existe pra substituir o interruptor global "Exigir proxy", e a diferenca entre os dois e a
-// unica coisa que importa aqui: INTERRUPTOR FICA LIGADO. Alguem desliga as 23h pra destravar um
-// numero, resolve o problema, e ninguem lembra de religar - o proximo numero sem proxy vaza e a
-// tela nao mente nem avisa, so esta desligada. A excecao vence sozinha.
-//
-// Ela e POR NUMERO porque o caso real e por numero: "a proxy do 6200 caiu e eu preciso atender
-// agora". Soltar a trava da operacao inteira pra resolver um numero e o que a gente esta tirando.
-const SWWEB_EXCECOES = 'swweb_excecoes';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
 
 // Mesma chave do _waNumKey: DDD + 8 ultimos digitos. Ela vira o nome da PARTICAO no disco do
@@ -10852,20 +10842,21 @@ async function handleSwWeb(req, env, path) {
   const K_CFG = _cfgNome(SWWEB_CFG, mundo);
   const K_PROXIES = _cfgNome(SWWEB_PROXIES, mundo);
   const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
-  const K_EXC = _cfgNome(SWWEB_EXCECOES, mundo);
   const manda = _swwebManda(u);
-  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC]);
-  const cfg = { travaProxy: true, exigirBrasil: false, ..._swwebLerJson(lidas[K_CFG], {}) };
+  const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO]);
+  // AS DUAS TRAVAS NAO DESLIGAM MAIS (17/10/2026, pedido do Bruno junto com o banco de proxies).
+  //
+  // Elas eram interruptores globais, e o problema de interruptor nao e desligar, e RELIGAR: quem
+  // desliga as 23h pra resolver UM numero sem proxy nao religa, e dai todo numero sem proxy passa a
+  // vazar pelo IP da casa com a tela sem dizer nada.
+  // E PRA PROXY QUE CAIU, O QUE SE FAZ? Escolhe outra do banco, na Contingencia, que e um clique
+  // desde 17/10. Era isso que faltava quando o interruptor foi inventado.
+  // Elas estavam as DUAS LIGADAS em producao quando isto mudou, entao fixar nao altera nada hoje -
+  // so tira o jeito de alguem desligar amanha e esquecer. O valor guardado e ignorado de proposito:
+  // se um dia alguem gravar false na mao, o app continua exigindo.
+  const cfg = { ..._swwebLerJson(lidas[K_CFG], {}), travaProxy: true, exigirBrasil: true };
   const proxies = _swwebLerJson(lidas[K_PROXIES], {});
   const banco = _swwebLerJson(lidas[K_BANCO], {});
-  // SO AS VIVAS. Excecao vencida nao e excecao, e lixo que confunde quem le a tela - e deixar
-  // vencida no mapa seria o jeito de ela voltar a valer por engano num conserto futuro.
-  const agoraExc = Math.floor(Date.now() / 1000);
-  const excecoes = {};
-  {
-    const cru = _swwebLerJson(lidas[K_EXC], {});
-    for (const [nk, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) > agoraExc) excecoes[nk] = e;
-  }
 
   // GET /api/swweb/roteiro - tudo que o PAINEL dentro do WhatsApp precisa pra funcionar:
   // respostas rapidas, funis, audios, e as credenciais de captura.
@@ -11271,8 +11262,6 @@ async function handleSwWeb(req, env, path) {
         aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
-        // Liberado a abrir sem proxy ate quando, se estiver.
-        excecao: excecoes[nk] ? { ate: excecoes[nk].ate, por: String(excecoes[nk].nome || '') } : null,
         // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
         //
         // A tela refazia estas duas contas com os campos crus (`c.st`, `c.em_uso`) e errava nos
@@ -11334,10 +11323,7 @@ async function handleSwWeb(req, env, path) {
       }
     }
     const px = proxies[nk] || null;
-    // A EXCECAO VIAJA JUNTO DO PROXY porque e o app que decide abrir, e ele ja pergunta isto aqui
-    // antes de cada abertura. Mandar em rota separada daria duas idas e uma janela entre elas.
-    const exc = excecoes[nk] || null;
-    return json({ ok: true, nk, proxy: px, excecao: exc ? { ate: exc.ate, por: exc.nome || '' } : null });
+    return json({ ok: true, nk, proxy: px });
   }
 
   // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
@@ -11562,31 +11548,6 @@ async function handleSwWeb(req, env, path) {
     }
     if (mexeu) await _writeConfig(env, K_PROXIES, JSON.stringify(proxies));
     return json({ ok: true, id: novoId, atualizou: mexeu });
-  }
-
-  // POST /api/swweb/proxy-excecao — libera UM numero a abrir sem proxy, por um tempo que acaba.
-  // { nk, horas }  |  { nk, horas: 0 } pra cancelar agora.
-  //
-  // So a direcao: abrir sem proxy e o vendedor saindo pelo IP da casa dele, com o chip. Nao e
-  // escolha de quem atende, e e justamente por isso que ela precisa ser FACIL pra quem manda - se
-  // a saida de emergencia for dificil, alguem desliga a trava inteira e nunca mais religa.
-  if (req.method === 'POST' && path === '/api/swweb/proxy-excecao') {
-    if (!manda) return err('Só a direção libera número sem proxy', 403);
-    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const nk = _swwebKey(b && b.nk);
-    if (!nk) return err('Falta o número');
-    const horas = Math.max(0, Math.min(24, Number((b && b.horas) || 0)));
-    const cru = _swwebLerJson(lidas[K_EXC], {});
-    if (!horas) { delete cru[nk]; }
-    else {
-      // TETO DE 24 HORAS, e nao e burocracia: excecao de uma semana e um interruptor com outro
-      // nome. O caso real dura o tempo de trocar a proxy.
-      cru[nk] = { ate: agoraExc + Math.round(horas * 3600), por: String(u.id), nome: String(u.name || u.login || '') };
-    }
-    // Limpa as vencidas de passagem: o mapa nao precisa de faxina propria.
-    for (const [k, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) <= agoraExc) delete cru[k];
-    await _writeConfig(env, K_EXC, JSON.stringify(cru));
-    return json({ ok: true, nk, ate: horas ? cru[nk].ate : 0 });
   }
 
   // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
@@ -11911,14 +11872,18 @@ async function handleSwWeb(req, env, path) {
     return json({ ok: true, app: novo });
   }
 
-  // POST /api/swweb/config — as travas. Valem pra TODA maquina que abrir o app, por isso ficam
-  // aqui e nao no disco do vendedor: senao cada um desligaria a sua.
+  // POST /api/swweb/config — a rota CONTINUA, e RECUSA desligar.
+  //
+  // Nao foi apagada porque app instalado nao se atualiza sozinho: a v1.18.0 esta na maquina do
+  // Bruno com os dois interruptores na tela. Rota apagada daria 404 e um "não deu pra falar com a
+  // dash" generico; recusando com a frase certa, quem clicar descobre onde foi o botao.
   if (req.method === 'POST' && path === '/api/swweb/config') {
     if (!manda) return err('Só a direção mexe nas travas', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    if (typeof (b && b.travaProxy) === 'boolean') cfg.travaProxy = b.travaProxy;
-    if (typeof (b && b.exigirBrasil) === 'boolean') cfg.exigirBrasil = b.exigirBrasil;
-    await _writeConfig(env, K_CFG, JSON.stringify(cfg));
+    if ((b && b.travaProxy) === false) return err('A exigência de proxy não desliga mais: é regra. Se a proxy de um número caiu, escolha outra em Contingência > Proxies.', 409);
+    if ((b && b.exigirBrasil) === false) return err('Exigir IP do Brasil não desliga mais: proxy de fora num número +55 é pior que proxy nenhum.', 409);
+    // Ligar de novo e sempre permitido, e e o que uma versao velha manda quando ja estava ligado:
+    // responde ok sem gravar nada, porque nao ha nada pra gravar.
     return json({ ok: true, config: cfg });
   }
 

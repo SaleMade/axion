@@ -8,13 +8,12 @@ let painelLigado = true
 // AS TRAVAS E O TETO RESPONDEM DE VERDADE desde 17/10: a tela dos Ajustes passou a pintar o estado
 // (trava desligada fica ambar), e stub que devolve sempre a mesma coisa nunca deixaria o teste ver
 // a troca de cor. O mesmo vale pro teto, que agora tem botoes de mais e menos.
-let travaProxy = true
-let exigirBrasil = true
 let maxAbertos = 6
 
 const ESTADO = () => ({
   temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
-  direcao: true, travaProxy, exigirBrasil, maxAbertos,
+  // Os dois campos vem SEMPRE TRUE, como o main.js real manda desde que viraram constante.
+  direcao: true, travaProxy: true, exigirBrasil: true, maxAbertos,
   abertos: ['1574060653'], barraEncolhida, painelLigado,
   numeros: [
     { numero: '5511966632248', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
@@ -51,12 +50,8 @@ contextBridge.exposeInMainWorld('sw', {
   sair: () => { chamadas.push({ nome: 'sair' }); return Promise.resolve({ ok: true }) },
   verComo: () => Promise.resolve({ ok: true }),
   proxy: () => Promise.resolve({ ok: true }),
-  trava: (patch) => {
-    chamadas.push({ nome: 'trava', args: [patch] })
-    if (patch && 'travaProxy' in patch) travaProxy = !!patch.travaProxy
-    if (patch && 'exigirBrasil' in patch) exigirBrasil = !!patch.exigirBrasil
-    return Promise.resolve({ ok: true, travaProxy, exigirBrasil })
-  },
+  // O `trava` SAIU DO DUBLE junto com a ponte de verdade (17/10/2026): duble que oferece o que o
+  // preload real nao tem faz o teste "nao existe jeito de desligar" passar por sorte do lado errado.
   abrirLog: () => Promise.resolve({ ok: true }),
   abrirInstalador: () => Promise.resolve({ ok: true }),
   // Os que a casca chama e o teste nao exercita direto. Faltar UM aqui quebra a tela inteira com

@@ -1195,20 +1195,48 @@ app.whenReady().then(async () => {
   // "Colocar alguns icones, pra que a gente bata o olho e ja entenda."
   conta('e cada linha tem icone', aj.comIcone === aj.itens && aj.itens >= 5, aj.comIcone + ' icones em ' + aj.itens + ' linhas')
 
-  // O ESTADO NA COR: trava desligada nao e "preferencia desligada", e risco em aberto, e tem que
-  // puxar o olho. Ligada fica verde; desligada, ambar.
-  const antesCor = await js2('(() => { const i = document.getElementById("sw1").closest(".aj-item");'
-    + ' return { classe: i.className, cor: getComputedStyle(i.querySelector(".ic")).color } })()')
-  conta('trava ligada aparece em verde', /\bon\b/.test(antesCor.classe) && /^rgb\(36, 194, 120\)/.test(antesCor.cor), JSON.stringify(antesCor))
-  await js2('(() => { document.getElementById("sw1").click() })()')
-  await espera(350)
-  const depoisCor = await js2('(() => { const i = document.getElementById("sw1").closest(".aj-item");'
-    + ' return { classe: i.className, cor: getComputedStyle(i.querySelector(".ic")).color,'
-    + ' cortado: i.querySelectorAll(".ic svg path").length } })()')
-  conta('e desligada vira ambar, nao um cinza qualquer',
-    /alerta/.test(depoisCor.classe) && /^rgb\(245, 165, 36\)/.test(depoisCor.cor), JSON.stringify(depoisCor))
-  await js2('(() => { document.getElementById("sw1").click() })()')
-  await espera(350)
+  // A REGRA DE PROXY NAO TEM INTERRUPTOR (17/10/2026). Palavras do Bruno: "eu quero que todos os
+  // numeros, por padrao, exijam proxy e, sim, por padrao, todos eles tem que ter o IP do Brasil.
+  // NAO TEM COMO DESATIVAR ISSO AQUI."
+  //
+  // ESTE TESTE SUBSTITUI o que media os dois interruptores (`sw1`/`sw2`) ligando e desligando. Ele
+  // mede DUAS coisas que o teste antigo nao podia medir, porque antes havia o que clicar:
+  //   1) a linha continua na tela, dizendo a regra, com um selo fixo onde era a chave - regra que
+  //      ninguem enuncia vira surpresa no dia em que ela barra alguem;
+  //   2) NAO EXISTE NADA PRA CLICAR ali. E esta e a parte que importa: um `role="switch"` que
+  //      sobrasse por descuido seria um jeito escondido de desligar a regra, e `node --check` nao
+  //      pega isso.
+  const regra = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' const itens = [...c.querySelectorAll(".aj-item")];'
+    + ' const i = itens.find(x => /obrigat/i.test(x.textContent));'
+    + ' const sec = [...c.querySelectorAll(".aj-sec")].find(x => /opera/i.test(x.textContent));'
+    + ' const bloco = []; let n = sec && sec.nextElementSibling;'
+    + ' while (n && n.classList.contains("aj-item")) { bloco.push(n); n = n.nextElementSibling }'
+    + ' return { achou: !!i, classe: i ? i.className : "",'
+    + ' cor: i ? getComputedStyle(i.querySelector(".ic")).color : "",'
+    + ' selo: i ? (i.querySelector(".aj-fixo") || {}).textContent || "" : "",'
+    + ' linhasDaOperacao: bloco.length,'
+    + ' chavesNaOperacao: bloco.reduce((t, x) => t + x.querySelectorAll(".sw, [role=switch], button").length, 0),'
+    + ' temSw1: !!document.getElementById("sw1"), temSw2: !!document.getElementById("sw2") } })()')
+  conta('a regra de proxy esta escrita na tela, em verde',
+    regra.achou === true && /\bon\b/.test(regra.classe) && /^rgb\(36, 194, 120\)/.test(regra.cor),
+    JSON.stringify(regra))
+  conta('com um selo fixo no lugar da chave, nao um controle',
+    /sempre/i.test(regra.selo), JSON.stringify({ selo: regra.selo }))
+  conta('e NAO existe jeito de desligar: zero chave na secao da operacao',
+    regra.chavesNaOperacao === 0 && regra.temSw1 === false && regra.temSw2 === false,
+    JSON.stringify({ chaves: regra.chavesNaOperacao, sw1: regra.temSw1, sw2: regra.temSw2 }))
+  // A SEGUNDA LINHA DIZ ONDE SE ESCOLHE A PROXY. Sem ela, a tela proibe e nao ensina: a pessoa le
+  // "sem proxy nao abre" e nao tem nenhuma pista de onde resolver.
+  conta('e a secao diz onde se escolhe a proxy',
+    regra.linhasDaOperacao === 2 && /Contingência > Proxies/.test(await js2(
+      '(() => { const c = document.getElementById("modal-corpo"); return c.textContent })()')),
+    JSON.stringify({ linhas: regra.linhasDaOperacao }))
+
+  // O CANO TAMBEM MORREU, e nao so o botao: `window.sw.trava` era o que mandava desligar no
+  // servidor. Ponte aberta sem tela nenhuma usando ela e um jeito escondido de desligar a regra.
+  const semCano = await js2('(() => ({ trava: typeof (window.sw || {}).trava }))()')
+  conta('e a ponte sw.trava nao existe mais no preload', semCano.trava === 'undefined', JSON.stringify(semCano))
 
   // O CARTAO TEM TETO E A LISTA ROLA. Sem isso a versao da direcao, que e a mais alta, passaria da
   // janela e o Fechar ficaria fora da tela justo quando ele mais precisa dele.

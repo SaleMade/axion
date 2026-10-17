@@ -142,11 +142,22 @@ for (const nivel of ['log', 'warn', 'error']) {
   console[nivel] = (...a) => { orig(...a); anota((nivel === 'log' ? '' : nivel.toUpperCase() + ': ') + a.map(String).join(' ')) }
 }
 
+// AS DUAS REGRAS DE PROXY SAO CONSTANTES, nao configuracao (17/10/2026). Palavras do Bruno:
+// "eu quero que todos os numeros, por padrao, exijam proxy e, sim, por padrao, todos eles tem que
+// ter o IP do Brasil. NAO TEM COMO DESATIVAR ISSO AQUI. Ja quero deixar isso como regra."
+//
+// ELAS ERAM CAMPOS DO CONFIG e nao e so cosmetica tirar: o `exigirBrasil` nascia FALSE no disco, e
+// so virava true quando a dash respondia a primeira listagem. A janela era estreita (abrir numero
+// precisa do token e da lista, que vem na mesma resposta), mas um arquivo de configuracao com um
+// default que diz o contrario da regra e exatamente o que alguem le daqui a tres meses e acha que
+// pode mexer. Agora nao existe campo pra desligar: nem no disco, nem na rede, nem na tela.
+// O servidor continua mandando os dois como true no /api/swweb/numeros; o app so nao os LE mais.
+const TRAVA_PROXY = true     // sem proxy respondendo, o numero nao abre
+const EXIGE_BRASIL = true    // proxy de fora num numero +55 e pior que proxy nenhum
+
 const CONFIG_PADRAO = {
   token: '',
   apiBase: 'https://axion-api.axion-dash.workers.dev',
-  travaProxy: true,        // requisito duro do Bruno: sem proxy, nao abre
-  exigirBrasil: false,     // segunda trava, opcional: so abre se o IP for BR
   proxies: {},             // { "<numkey>": { host, porta, usuario, senha } }
   numeros: [],             // cache da ultima lista vinda da dash
   maxAbertos: 6,           // teto de sessoes abertas ao mesmo tempo (ver hibernacao)
@@ -636,15 +647,22 @@ async function abreDeVerdade(nk, numero, meu) {
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
   const busca = await puxaProxyDaDash(nk)
   const px = proxyDoNumero(nk)
-  if (config.travaProxy && !px) {
+  // SEM PROXY NAO ABRE, E NAO TEM INTERRUPTOR (17/10/2026, palavras do Bruno: "eu quero que todos
+  // os numeros, por padrao, exijam proxy e, sim, por padrao, todos eles tem que ter o IP do Brasil.
+  // NAO TEM COMO DESATIVAR ISSO AQUI. Ja quero deixar isso como regra").
+  //
+  // A frase do erro diz PRA ONDE IR, e nao so que recusou: a proxy se escolhe num seletor do banco,
+  // na Contingencia, e e um clique. Antes a saida pra proxy caida era desligar a trava da operacao
+  // inteira, e o custo disso nao era desligar, era RELIGAR - ninguem religa.
+  if (!px) {
     if (busca.rede) return { ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número. Tente de novo em um minuto.' }
-    return { ok: false, erro: 'Este número não tem proxy cadastrado, e a trava está ligada. Cadastre o proxy em Ferramentas > SellWave Web, na dash.' }
+    return { ok: false, erro: 'Este número não tem proxy. Escolha uma em Contingência > Proxies, na dash.' }
   }
 
   const ses = preparaSessao(nk)
   await aplicaProxy(ses, px, particaoDe(nk))
 
-  if (config.travaProxy && px) {
+  if (TRAVA_PROXY) {   // `px` aqui e sempre verdade: sem proxy a funcao ja voltou la em cima
     avisaCasca('sw:status', { nk, texto: 'Conferindo o proxy...' })
     const teste = await testaSaida(particaoDe(nk))
     if (!teste.ok) {
@@ -654,11 +672,13 @@ async function abreDeVerdade(nk, numero, meu) {
     }
     // FECHA quando NAO SABE o pais, nao so quando sabe que e outro. Antes, resposta sem countryCode
     // passava - e o teste e http em texto claro, entao o proprio dono do proxy podia forjar.
-    if (config.exigirBrasil && teste.pais !== 'BR') {
+    if (EXIGE_BRASIL && teste.pais !== 'BR') {
       await aplicaProxy(ses, null, particaoDe(nk))
+      // A FRASE NAO FALA MAIS DE "EXIGENCIA LIGADA": nao ha o que desligar, e mandar a pessoa
+      // procurar um interruptor que nao existe e o pior tipo de mensagem de erro.
       return { ok: false, erro: teste.pais
-        ? 'O proxy saiu por ' + teste.pais + ', e a exigência de IP brasileiro está ligada.'
-        : 'Não deu pra confirmar que o IP é do Brasil, e a exigência está ligada.' }
+        ? 'Este proxy sai por ' + teste.pais + ', e o número só abre com IP do Brasil. Escolha outro em Contingência > Proxies.'
+        : 'Não deu pra confirmar que o IP é do Brasil. Teste este proxy em Contingência > Proxies.' }
     }
     avisaCasca('sw:saida', { nk, ip: teste.ip, pais: teste.pais, cidade: teste.cidade, provedor: teste.provedor })
     // Sem await: abrir o numero nao espera a dash. Se nao chegar, a proxima abertura conta.
@@ -1439,8 +1459,6 @@ async function buscaNumeros() {
       donosConhecidos = [...vistos].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
     }
     if (d && d.config) {
-      if (typeof d.config.travaProxy === 'boolean') config.travaProxy = d.config.travaProxy
-      if (typeof d.config.exigirBrasil === 'boolean') config.exigirBrasil = d.config.exigirBrasil
     }
     gravarConfig()
     return { ok: true, numeros: lista }
@@ -1456,8 +1474,10 @@ ipcMain.handle('sw:estado', () => ({
   temToken: !!config.token,
   nome: config.nome || '',
   apiBase: config.apiBase,
-  travaProxy: config.travaProxy,
-  exigirBrasil: config.exigirBrasil,
+  // A casca ainda recebe os dois, SEMPRE TRUE, porque ela desenha a linha "Proxy obrigatória, e
+  // do Brasil / sempre" nos Ajustes. Vem da constante, nao do disco: o que ela mostra e a regra.
+  travaProxy: TRAVA_PROXY,
+  exigirBrasil: EXIGE_BRASIL,
   numeros: config.numeros,
   // SO O ENDERECO, NUNCA A CREDENCIAL. `config.proxies` guarda usuario e senha decifrados (o
   // lerConfig abre o DPAPI), e a casca so usa host, porta e "tem proxy?" - conferido: app.js le
@@ -1729,37 +1749,12 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   return r
 })
 
-// AS TRAVAS MORAM NO SERVIDOR, e so a direcao mexe.
-//
-// Gravar so no arquivo local dava duas fontes de verdade que se contradiziam: a barra dizia
-// "desligada", o app abria o numero sem proxy, e na proxima lista o servidor mandava "ligada" de
-// volta - sem ninguem entender por que. Agora o app PEDE, e so acredita no que o servidor confirmar.
-ipcMain.handle('sw:trava', async (_e, { travaProxy, exigirBrasil }) => {
-  if (!config.token) return { ok: false, erro: 'Entre de novo.', travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
-  const corpo = {}
-  if (typeof travaProxy === 'boolean') corpo.travaProxy = travaProxy
-  if (typeof exigirBrasil === 'boolean') corpo.exigirBrasil = exigirBrasil
-  try {
-    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/config', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
-      body: JSON.stringify(corpo),
-    })
-    const d = await r.json().catch(() => null)
-    if (!r.ok) {
-      return { ok: false, erro: (d && (d.error || d.erro)) || (r.status === 403 ? 'Só a direção mexe nas travas.' : 'A dash respondeu ' + r.status),
-        travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
-    }
-    if (d && d.config) {
-      config.travaProxy = d.config.travaProxy !== false
-      config.exigirBrasil = !!d.config.exigirBrasil
-      gravarConfig()
-    }
-  } catch (_) {
-    return { ok: false, erro: 'Não deu pra falar com a dash.', travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
-  }
-  return { ok: true, travaProxy: config.travaProxy, exigirBrasil: config.exigirBrasil }
-})
+// O `sw:trava` SAIU (17/10/2026). Ele era o cano que ligava e desligava as duas travas no
+// servidor, e nao existe mais o que ligar: TRAVA_PROXY e EXIGE_BRASIL sao constantes aqui em cima.
+// Deixar o canal aberto sem tela nenhuma chamando ele seria um jeito de desligar a regra que o
+// Bruno acabou de pedir pra ser incondicional - escondido, e por isso pior.
+// O POST /api/swweb/config continua no worker, recusando desligar com uma frase que diz o porque:
+// a v1.18.0 esta instalada e ainda tem os dois interruptores na tela.
 
 // ── IPC DO PAINEL (vem de dentro da pagina do WhatsApp, pela ponte do preload-wa.js)
 ipcMain.handle('swp:roteiro', async () => {

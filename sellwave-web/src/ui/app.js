@@ -11,7 +11,7 @@ const lista = $('lista')
 const modal = $('modal')
 const modalCorpo = $('modal-corpo')
 
-let estado = { numeros: [], proxies: {}, abertos: [], travaProxy: true, exigirBrasil: false, temToken: false, direcao: false }
+let estado = { numeros: [], proxies: {}, abertos: [], temToken: false, direcao: false }
 let ativo = ''
 const carregando = new Set()
 // Numeros cujo motor do WhatsApp nao carregou. Eles continuam abrindo e conversando, mas NAO batem
@@ -64,13 +64,23 @@ function desenhaTrava() {
   // A FAIXA SO FALA QUANDO ALGO PEDE ATENCAO (16/10/2026, pedido do Bruno: "fica so com o
   // essencial, o resto vai pra dentro de Ajustes").
   //
-  // Trava LIGADA e o estado normal: anunciar isso todo dia, no topo, ensina a ignorar a faixa - e
-  // no dia em que ela disser algo util ninguem le. Ligada, some; desligada, aparece em ambar,
-  // porque ai o numero abre sem proxy e sai pelo IP da casa.
-  if (!estado.direcao || estado.travaProxy !== false) { el.hidden = true; return }
+  // O QUE ELA DIZ MUDOU EM 17/10/2026. Antes ela avisava "trava de proxy desligada", e esse
+  // interruptor acabou: proxy virou obrigatoria, sem jeito de desligar. Faixa que fala de um
+  // controle que nao existe mais e pior que faixa nenhuma.
+  //
+  // O que ela conta agora e o unico problema que sobrou NESTE assunto e que a pessoa pode resolver:
+  // tem numero que NAO VAI ABRIR porque esta sem proxy. Isso e trabalho pendente dela (escolher uma
+  // proxy do banco, na Contingencia), e antes so aparecia quando o vendedor tentava abrir e falhava.
+  // SO PRA DIRECAO, como era antes: e trabalho dela, e o vendedor nao tem como resolver. Pro
+  // vendedor a recusa aparece na tela do proprio numero, com a frase que diz o que fazer.
+  const sem = estado.direcao ? (estado.numeros || []).filter((n) => !n.proxy) : []
+  if (!sem.length) { el.hidden = true; return }
   el.hidden = false
   el.className = 'trava solta'
-  $('trava-txt').innerHTML = '<b>Trava de proxy desligada</b> · o número abre sem proxy'
+  const quem = sem.length === 1
+    ? bonito(cheio(numKey(sem[0].numero))) + ' sem proxy'
+    : sem.length + ' números sem proxy'
+  $('trava-txt').innerHTML = '<b>' + esc(quem) + '</b> · não abrem até escolher uma na dash'
 }
 
 // A BARRA ENCOLHIDA E DECISAO GUARDADA, nao estado da sessao: quem gosta dela fina quer ela fina
@@ -688,16 +698,28 @@ function janelaAjustes() {
     + '</div><div class="aj-lista">'
 
   // ── DA OPERAÇÃO: mora no servidor e vale pra equipe inteira ─────────────────────────────
+  //
+  // OS DOIS INTERRUPTORES SAIRAM (17/10/2026, pedido do Bruno junto com o banco de proxies). Eles
+  // ligavam e desligavam "Exigir proxy" e "Exigir IP do Brasil" pra operacao inteira, e o problema
+  // de interruptor nao e desligar, e RELIGAR: quem desliga as 23h pra resolver UM numero sem proxy
+  // nao religa, e dai todo numero sem proxy passa a sair pelo IP da casa sem a tela dizer nada.
+  // As duas regras agora valem SEMPRE, e o que substituiu o interruptor e a liberacao por numero,
+  // que vence sozinha - ela aparece no botao da tela de "Não abriu", que e onde o problema aparece.
+  // A LINHA FICA, SEM CHAVE: regra que ninguem enuncia vira surpresa no dia em que ela barra
+  // alguem, e foi por nao estar escrito em lugar nenhum que isto virou interruptor.
   if (estado.direcao) {
+    const sem = (estado.numeros || []).filter((n) => !n.proxy).length
     html += '<div class="aj-sec">Da operação · vale pra todos</div>'
-      + ajItem(estado.travaProxy ? 'on' : 'alerta',
-        estado.travaProxy ? AJ_IC.escudoOn : AJ_IC.escudoOff,
-        'Exigir proxy', 'Sem proxy cadastrado e respondendo, o número não abre.',
-        '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + !!estado.travaProxy + '"></button>')
-      + ajItem(estado.exigirBrasil ? 'on' : 'alerta',
-        estado.exigirBrasil ? AJ_IC.globoOn : AJ_IC.globoOff,
-        'Exigir IP do Brasil', 'Proxy de fora num número +55 é pior que proxy nenhum.',
-        '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + !!estado.exigirBrasil + '"></button>')
+      + ajItem('on', AJ_IC.escudoOn,
+        'Proxy obrigatória, e do Brasil',
+        'Sem proxy respondendo, o número não abre. Proxy de fora num +55 é pior que proxy nenhum.',
+        '<span class="aj-fixo">sempre</span>')
+      + ajItem(sem ? 'alerta' : '', AJ_IC.globoOn,
+        'Onde se escolhe a proxy',
+        sem
+          ? sem + (sem === 1 ? ' número está' : ' números estão') + ' sem proxy e não abre. Na dash: Contingência > Proxies.'
+          : 'Todos os números têm proxy. Na dash: Contingência > Proxies.',
+        '<span class="aj-fixo">' + (sem ? sem + ' sem' : 'na dash') + '</span>')
   }
 
   // ── SÓ NESTE COMPUTADOR ─────────────────────────────────────────────────────────────────
@@ -762,26 +784,6 @@ function janelaAjustes() {
   modalCorpo.innerHTML = html
   abreModal()
 
-  if (estado.direcao) {
-    // A trava mora no SERVIDOR: o app pede e só acredita no que voltar. Se o servidor recusar
-    // (não é direção, sem rede), a chave volta pro lugar e a tela diz por quê.
-    const mexeTrava = async (patch) => {
-      const r = await window.sw.trava(patch)
-      estado.travaProxy = r.travaProxy
-      estado.exigirBrasil = r.exigirBrasil
-      desenhaTrava()
-      janelaAjustes()
-      if (!r.ok) {
-        const el = document.createElement('div')
-        el.className = 'aviso erro'
-        el.style.display = 'block'
-        el.textContent = r.erro || 'Não salvou'
-        modalCorpo.insertBefore(el, modalCorpo.querySelector('.acoes'))
-      }
-    }
-    $('sw1').onclick = () => mexeTrava({ travaProxy: !estado.travaProxy })
-    $('sw2').onclick = () => mexeTrava({ exigirBrasil: !estado.exigirBrasil })
-  }
   $('sw3').onclick = async () => {
     const r = await window.sw.painel(!(estado.painelLigado !== false))
     estado.painelLigado = r.ligado

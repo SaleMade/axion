@@ -72,15 +72,24 @@ async function rodar() {
     d.marca === 'antes-de-mudar', JSON.stringify(d.marca))
   // O RELOGIO NAO DA PRA MEDIR AQUI, e e honesto dizer por que: o Chromium CONGELA timer de janela
   // escondida, e estas duas sao `show: false` de proposito (teste nao pode piscar janela na tela do
-  // Bruno). Medido: zero batidas antes e zero depois. Entao o que se confere e que o timer CONTINUA
-  // O MESMO OBJETO do mesmo documento, e nao que ele andou.
+  // Bruno). Entao o que se confere e que o timer CONTINUA O MESMO OBJETO do mesmo documento, e nao
+  // que ele andou.
   //
   // Pro funil isso basta, e o motivo e o de cima: o risco nunca foi o timer, foi a pagina
   // RECARREGAR - e recarregar esta descartado pelas duas conferencias vizinhas (o documento
   // intacto e uma navegacao so). A janela de verdade esta visivel nas duas pontas da mudanca.
+  //
+  // A CONTA ERA `=== batidasAntes` E DAVA FALSO ALARME (medido em 17/10: falhou 1 vez em 4 com
+  // "batidas 0 -> 1", nas quatro com o mesmo codigo, so com a maquina mais ou menos ocupada). O
+  // congelamento da janela escondida NAO E INSTANTANEO, entao numa maquina carregada uma batida
+  // escapa durante a mudanca - e exigir que ela NAO ande mede justamente o que o comentario acima
+  // diz que nao da pra medir.
+  // `>=` e a conta certa porque e ela que distingue o que o teste quer provar: recarregar ZERA o
+  // `__batidas` (e apaga o `__marca`), entao contador que nao andou pra tras e a prova de que o
+  // documento e o mesmo. Uma batida a mais nao e sintoma de nada.
   const relogio = await v.webContents.executeJavaScript('typeof window.__t')
   conta('o relogio de dentro da pagina sobrevive a mudanca (o objeto, nao a contagem)',
-    relogio === 'number' && d.batidas === batidasAntes, relogio + ', batidas ' + batidasAntes + ' -> ' + d.batidas)
+    relogio === 'number' && d.batidas >= batidasAntes, relogio + ', batidas ' + batidasAntes + ' -> ' + d.batidas)
   conta('e a pagina NAO recarregou (uma navegacao e uma carga, do inicio ao fim)',
     navegou === 1 && carregou === 1, 'navegacoes ' + navegou + ', cargas ' + carregou)
 

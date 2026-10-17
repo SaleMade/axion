@@ -372,13 +372,22 @@
   .aj-item .txt { flex: 1; min-width: 0; }
   .aj-item .txt b { display: block; font-size: 12.5px; font-weight: 600; }
   .aj-item .txt span { display: block; font-size: 10.5px; line-height: 14px; color: var(--apagado); }
+  /* O VALOR FIXO, onde antes tinha uma chave: "sempre", "na tela", um numero. Ele ocupa o lugar da
+     chave de proposito - a linha continua lendo como as outras, e ficou claro que nao tem o que
+     clicar ali, em vez de a linha parecer um ajuste que perdeu o controle. */
+  .aj-item .aj-fixo { flex: 0 0 auto; padding: 3px 8px; border-radius: 7px; font-size: 10px;
+    font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--apagado);
+    background: rgba(139, 148, 166, .12); border: 1px solid var(--linha); }
+  .aj-item.on .aj-fixo { color: var(--verde); background: rgba(36, 194, 120, .12); border-color: rgba(36, 194, 120, .25); }
+  .aj-item.alerta .aj-fixo { color: var(--ambar); background: rgba(245, 165, 36, .14); border-color: rgba(245, 165, 36, .3); }
   .aj-item .sw { width: 38px; height: 21px; flex: 0 0 38px; }
   .aj-item .sw::after { width: 16px; height: 16px; }
   .aj-item .sw.on::after { transform: translateX(17px); }
 
   /* O ESTADO NA COR, que e o "bate o olho e entende". LIGADO fica verde; DESLIGADO fica cinza.
-     Nas duas travas da operacao, desligado e AMBAR e nao cinza: trava desligada nao e preferencia
-     desligada, e risco em aberto, e tem que puxar o olho. */
+     AMBAR nao e "desligado", e RISCO EM ABERTO, e tem que puxar o olho: hoje quem usa isso e a
+     linha de numero liberado a abrir sem proxy. (Era das duas travas da operacao, que sairam em
+     17/10 quando proxy passou a ser obrigatoria sem interruptor.) */
   .aj-item.on .ic { background: rgba(36, 194, 120, .16); color: var(--verde); }
   .aj-item.on { border-color: rgba(36, 194, 120, .22); }
   .aj-item.alerta .ic { background: rgba(245, 165, 36, .16); color: var(--ambar); }
