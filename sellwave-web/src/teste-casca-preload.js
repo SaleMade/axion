@@ -5,10 +5,16 @@ const { contextBridge, ipcRenderer } = require('electron')   // eslint-disable-l
 const chamadas = []
 let barraEncolhida = false
 let painelLigado = true
+// AS TRAVAS E O TETO RESPONDEM DE VERDADE desde 17/10: a tela dos Ajustes passou a pintar o estado
+// (trava desligada fica ambar), e stub que devolve sempre a mesma coisa nunca deixaria o teste ver
+// a troca de cor. O mesmo vale pro teto, que agora tem botoes de mais e menos.
+let travaProxy = true
+let exigirBrasil = true
+let maxAbertos = 6
 
 const ESTADO = () => ({
   temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
-  direcao: true, travaProxy: true, exigirBrasil: true,
+  direcao: true, travaProxy, exigirBrasil, maxAbertos,
   abertos: ['1574060653'], barraEncolhida, painelLigado,
   numeros: [
     { numero: '5511966632248', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
@@ -40,18 +46,27 @@ contextBridge.exposeInMainWorld('sw', {
   fechar: (n) => { chamadas.push({ nome: 'fechar', args: [n] }); return Promise.resolve({ ok: true }) },
   roleta: (n, l) => { chamadas.push({ nome: 'roleta', args: [n, l] }); return Promise.resolve({ ok: true }) },
   entrar: () => Promise.resolve({ ok: true }),
-  sair: () => Promise.resolve({ ok: true }),
+  sair: () => { chamadas.push({ nome: 'sair' }); return Promise.resolve({ ok: true }) },
   verComo: () => Promise.resolve({ ok: true }),
   proxy: () => Promise.resolve({ ok: true }),
-  trava: () => Promise.resolve({ ok: true }),
+  trava: (patch) => {
+    chamadas.push({ nome: 'trava', args: [patch] })
+    if (patch && 'travaProxy' in patch) travaProxy = !!patch.travaProxy
+    if (patch && 'exigirBrasil' in patch) exigirBrasil = !!patch.exigirBrasil
+    return Promise.resolve({ ok: true, travaProxy, exigirBrasil })
+  },
   abrirLog: () => Promise.resolve({ ok: true }),
   abrirInstalador: () => Promise.resolve({ ok: true }),
   // Os que a casca chama e o teste nao exercita direto. Faltar UM aqui quebra a tela inteira com
   // "x is not a function", que foi o que este teste pegou na primeira rodada.
   numeros: () => Promise.resolve({ ok: true, numeros: ESTADO().numeros }),
-  esconder: () => Promise.resolve({ ok: true }),
-  mostrar: () => Promise.resolve({ ok: true }),
-  teto: () => Promise.resolve({ ok: true }),
+  esconder: () => { chamadas.push({ nome: 'esconder' }); return Promise.resolve({ ok: true }) },
+  mostrar: () => { chamadas.push({ nome: 'mostrar' }); return Promise.resolve({ ok: true }) },
+  teto: (v) => {
+    chamadas.push({ nome: 'teto', args: [v] })
+    maxAbertos = Math.max(1, Math.min(20, Number(v) || 6))
+    return Promise.resolve({ ok: true, maxAbertos })
+  },
   ao: () => {},
 })
 // Ver a nota no teste-painel-preload: array exposto direto nasce congelado.

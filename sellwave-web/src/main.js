@@ -1423,7 +1423,18 @@ ipcMain.handle('sw:entrar', async (_e, { login, senha }) => {
   return buscaNumeros()
 })
 
-ipcMain.handle('sw:sair', () => { config.token = ''; config.nome = ''; gravarConfig(); return { ok: true } })
+ipcMain.handle('sw:sair', async () => {
+  // FECHA OS NUMEROS ANTES DE APAGAR O TOKEN. O `fechaNumero` solta o aluguel de uso no servidor, e
+  // isso so funciona com o token ainda valido: invertendo a ordem, o numero ficaria carimbado como
+  // "em uso por voce" pra equipe inteira ate o aluguel vencer sozinho, e ninguem conseguiria abrir.
+  for (const nk of [...abertos.keys()]) {
+    try { fechaNumero(nk) } catch (_) { /* um que falhe nao pode impedir os outros */ }
+  }
+  config.token = ''
+  config.nome = ''
+  gravarConfig()
+  return { ok: true }
+})
 ipcMain.handle('sw:numeros', () => buscaNumeros())
 ipcMain.handle('sw:abrir', (_e, { numero }) => abreNumero(numero))
 ipcMain.handle('sw:mostrar', (_e, { nk }) => { mostra(nk); return { ok: true } })
@@ -2283,7 +2294,11 @@ app.whenReady().then(() => {
 
   // MODO DE TESTE NAO ABRE JANELA NA TELA (16/10/2026). O autoteste e o modo foto rodam o app de
   // verdade, e cada rodada piscava uma janela no monitor de quem estiver usando o computador.
+  // O ICONE DA JANELA. No app instalado quem manda e o icone do executavel (electron-builder, ver
+  // build/icon.ico e o src/icone.js que gera ele); isto aqui e pro `npm start`, que senao abre com
+  // o atomo do Electron. Caminho relativo ao src/, e se o arquivo nao existir o Electron ignora.
   janela = new BaseWindow({
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     // 1180 = barra (268) + painel (316) + 596 pro WhatsApp. Medido: abaixo disso a tela de entrar
     // da Meta corta na direita e o vendedor nao ve o QR inteiro.
     width: 1440, height: 920, minWidth: 1180, minHeight: 680,

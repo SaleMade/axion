@@ -382,6 +382,9 @@ function linha(n) {
 // ───────────────────────────────────────────────────────────── palco
 
 function telaLogin(erro) {
+  // ESCONDE AS VIEWS ANTES DE DESENHAR. Sem isto o WhatsApp do numero aberto fica POR CIMA desta
+  // tela: o vendedor sai da conta e continua vendo a conversa, achando que o clique nao pegou.
+  try { window.sw.esconder() } catch (_) { /* sem numero aberto nao ha o que esconder */ }
   palco.innerHTML = ''
     + '<div class="cartao">'
     + '<h2>Entrar</h2><p>Use o mesmo usuário e senha da dash.</p>'
@@ -439,10 +442,15 @@ function telaErro(nk, erro) {
     + '<p>' + esc(bonito(cheio(nk))) + '</p>'
     + '<div class="aviso erro" style="display:block">' + esc(humano(erro)) + '</div>'
     + '<div class="acoes">'
-    + (estado.direcao ? '<button class="secundario" id="cfg">Proxy</button>' : '')
+    // O BOTAO PROXY SUMIU, e isso conserta um estouro. A `janelaProxy(nk)` que ele chamava NAO
+    // EXISTE no projeto (uma chamada, zero definicoes): clicar dava ReferenceError, e era a tela
+    // que o proprio comentario do main.js diz que prendeu o Bruno sem conseguir cadastrar proxy.
+    // A funcao se perdeu numa edicao e levou junto o unico chamador do `separaProxy`.
+    //
+    // NAO ESTOU RECRIANDO porque a area de proxy esta saindo daqui: desde 17/10 o banco de proxies
+    // mora na Contingencia, e e de la que o numero passa a receber a dele. Botao que estoura e pior
+    // que botao que nao existe.
     + '<button class="principal" style="margin:0" id="tentar">Tentar de novo</button></div></div>'
-  const cfg = $('cfg')
-  if (cfg) cfg.onclick = () => janelaProxy(nk)
   $('tentar').onclick = () => abrir(nk)
   desenhaLista()
 }
@@ -570,16 +578,108 @@ function separaProxy(txt) {
   return { host, porta, usuario: (p[2] || '').trim(), senha: p.slice(3).join(':').trim() }
 }
 
+// ─────────────────────────────────────────────────────── a janelinha de Ajustes
+//
+// O PEDIDO (Bruno, 17/10/2026): "melhora o visual dessa parte de configuracoes, eu acho bem feio.
+// Colocar alguns icones, colocar umas coisas para que a gente bata o olho e ja entenda, para voce
+// ver que os icones funcionam muito bem."
+//
+// Eram cinco linhas iguais separadas por um fio de 1px: trava da operacao, preview de vendedor e
+// teto de memoria desta maquina, tudo com o mesmo peso e nenhum icone. Pra saber o que estava
+// ligado era preciso LER cada uma.
+//
+// TRES COISAS MUDARAM, e cada uma ataca um problema diferente:
+//  1. AGRUPAR POR ONDE A COISA MORA, que e o unico corte verdadeiro desta tela: o que vale pra
+//     equipe inteira (e mora no servidor), o que e so deste computador, e o que e da conta dele.
+//  2. ICONE EM QUADRADO ARREDONDADO, a linguagem do painel do Sale Chat que ele ja aprovou e
+//     mandou reaplicar na operacao inteira.
+//  3. O ESTADO VIRA COR. Ligado fica verde, desligado fica cinza - e nas duas TRAVAS, desligado
+//     fica AMBAR, porque trava desligada nao e preferencia desligada, e risco em aberto. E isso
+//     que se ve de longe sem ler nada, que foi o pedido dele em palavras.
+
+// Os desenhos. Lucide, escritos na mao, traco 2.2, sem preenchimento. Os que tem DUAS caras mudam
+// com o estado: o escudo ganha um corte quando a trava esta desligada, e e o corte que o olho pega
+// antes de ler qualquer palavra.
+const AJ_IC = {
+  escudoOn: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  escudoOff: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m3 3 18 18"/>',
+  globoOn: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/>',
+  globoOff: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="m3 3 18 18"/>',
+  painel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="M18 9h-1"/><path d="M18 13h-1"/>',
+  janelas: '<rect x="3" y="7" width="12" height="12" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/>',
+  registro: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>',
+  olho: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  porta: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  engrenagem: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.67.75.86.3.17.65.26 1 .26H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
+  seta: '<path d="m9 18 6-6-6-6"/>',
+}
+const ajSvg = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>'
+
+// Um cartao. `tom` e o que pinta o quadradinho: 'on' verde, 'alerta' ambar, 'azul', 'perigo', ou
+// vazio pro cinza neutro.
+const ajItem = (tom, ic, titulo, ajuda, direita, attrs) =>
+  '<div class="aj-item ' + (tom || '') + '"' + (attrs || '') + '>'
+  + '<span class="ic">' + ajSvg(ic) + '</span>'
+  + '<div class="txt"><b>' + esc(titulo) + '</b>' + (ajuda ? '<span>' + esc(ajuda) + '</span>' : '') + '</div>'
+  + (direita || '') + '</div>'
+
+// SAIR ARMADO: depois do primeiro clique o botao muda de cara e espera o segundo. "Com duplo
+// clique, tem que clicar duas vezes para poder realmente confirmar que eu quero sair" (Bruno).
+// E ele DESARMA sozinho em 4 segundos: botao que fica armado pra sempre e o mesmo perigo de antes,
+// so que escondido num lugar onde ninguem olha.
+let sairArmado = false
+let sairRelogio = null
+function desarmaSair() {
+  if (sairRelogio) { clearTimeout(sairRelogio); sairRelogio = null }
+  if (!sairArmado) return
+  sairArmado = false
+  if (modal.classList.contains('on')) janelaAjustes()
+}
+
 function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
-  let html = '<h2>Ajustes<span class="ver">v' + esc(estado.versao || '') + '</span></h2>'
+  const quem = String(estado.nome || '').trim()
+  const cargo = estado.direcao ? 'direção' : 'vendedor'
+
+  // ── o topo: a marca, de quem e esta sessao, e a versao ──────────────────────────────────
+  let html = '<div class="aj-topo">'
+    + '<span class="marca">' + ajSvg(AJ_IC.engrenagem) + '</span>'
+    + '<div><h2>Ajustes</h2>'
+    + '<div class="quem">' + esc(quem ? quem + ' · ' + cargo : cargo) + '</div></div>'
+    + '<span class="ver">v' + esc(estado.versao || '') + '</span>'
+    + '</div><div class="aj-lista">'
+
+  // ── DA OPERAÇÃO: mora no servidor e vale pra equipe inteira ─────────────────────────────
   if (estado.direcao) {
-    html += '<p>As travas são da operação. O teto é só desta máquina.</p>'
-      + '<div class="chave"><div class="txt"><b>Exigir proxy</b><span>Sem proxy cadastrado e respondendo, o número não abre.</span></div>'
-      + '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + estado.travaProxy + '"></button></div>'
-      + '<div class="chave"><div class="txt"><b>Exigir IP do Brasil</b><span>Proxy de fora num número +55 é pior que proxy nenhum.</span></div>'
-      + '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + estado.exigirBrasil + '"></button></div>'
+    html += '<div class="aj-sec">Da operação · vale pra todos</div>'
+      + ajItem(estado.travaProxy ? 'on' : 'alerta',
+        estado.travaProxy ? AJ_IC.escudoOn : AJ_IC.escudoOff,
+        'Exigir proxy', 'Sem proxy cadastrado e respondendo, o número não abre.',
+        '<button class="sw ' + (estado.travaProxy ? 'on' : '') + '" id="sw1" role="switch" aria-checked="' + !!estado.travaProxy + '"></button>')
+      + ajItem(estado.exigirBrasil ? 'on' : 'alerta',
+        estado.exigirBrasil ? AJ_IC.globoOn : AJ_IC.globoOff,
+        'Exigir IP do Brasil', 'Proxy de fora num número +55 é pior que proxy nenhum.',
+        '<button class="sw ' + (estado.exigirBrasil ? 'on' : '') + '" id="sw2" role="switch" aria-checked="' + !!estado.exigirBrasil + '"></button>')
   }
+
+  // ── SÓ NESTE COMPUTADOR ─────────────────────────────────────────────────────────────────
+  const ligado = estado.painelLigado !== false
+  html += '<div class="aj-sec">Só neste computador</div>'
+    + ajItem(ligado ? 'on' : '', AJ_IC.painel,
+      'Painel de venda ao lado', 'As respostas rápidas e os funis, do lado direito do WhatsApp.',
+      '<button class="sw ' + (ligado ? 'on' : '') + '" id="sw3" role="switch" aria-checked="' + ligado + '"></button>')
+    + ajItem('', AJ_IC.janelas,
+      'Números abertos ao mesmo tempo', 'Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.',
+      '<div class="aj-num"><button id="teto-menos" title="Menos um">−</button>'
+      + '<input id="teto" value="' + t + '" inputmode="numeric" />'
+      + '<button id="teto-mais" title="Mais um">+</button></div>')
+    + ajItem('', AJ_IC.registro, 'Abrir registro desta máquina', 'O que o app anotou, pra mandar quando algo der errado.',
+      '<span class="aj-seta">' + ajSvg(AJ_IC.seta) + '</span>',
+      ' id="t-log" role="button" style="cursor:pointer"')
+
+  // ── SUA CONTA ───────────────────────────────────────────────────────────────────────────
+  html += '<div class="aj-sec">Sua conta</div>'
+
   // VER COMO UM DOS VENDEDORES (16/10/2026, pedido do Bruno: "quero ver como seria a visualizacao
   // dele, pra acompanhar o dia a dia e ver se ele esta convertendo certinho").
   //
@@ -589,32 +689,41 @@ function janelaAjustes() {
   // servidor e esta tela some sozinha, que e o certo.
   const vends = (estado.vendedores || []).filter((v) => v && v.id && v.id !== 'dir')
   if (estado.direcao && vends.length) {
-    html += '<div class="chave"><div class="txt"><b>Ver como vendedor</b>'
-      + '<span>A tela fica igualzinha à dele: só os números dele, sem nada de proxy. Leitura apenas.</span></div>'
-      + '<div class="escolha" id="como">'
+    html += ajItem(estado.como ? 'azul' : '', AJ_IC.olho,
+      'Ver como vendedor', 'A tela fica igual à dele: só os números dele, sem nada de proxy. Leitura apenas.',
+      '<div class="escolha" id="como">'
       + '<button type="button" id="como-bt"><span class="v">'
       + esc((vends.find((v) => v.id === estado.como) || {}).nome || 'Eu mesmo') + '</span>'
       + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>'
       + '</button><div class="ops">'
       + '<button type="button" data-como="" class="' + (estado.como ? '' : 'on') + '">Eu mesmo</button>'
       + vends.map((v) => '<button type="button" data-como="' + esc(v.id) + '" class="' + (estado.como === v.id ? 'on' : '') + '">' + esc(v.nome) + '</button>').join('')
-      + '</div></div></div>'
+      + '</div></div>')
   }
   if (estado.como) {
-    html += '<div class="chave"><div class="txt"><b>Você está vendo como outra pessoa</b>'
-      + '<span>Ligar ou desligar número continua acontecendo como você, não como ela.</span></div>'
-      + '<button class="secundario" id="como-sair" style="margin:0">Voltar a ser eu</button></div>'
+    html += ajItem('azul', AJ_IC.olho, 'Você está vendo como outra pessoa',
+      'Ligar ou desligar número continua acontecendo como você, não como ela.',
+      '<button class="secundario" id="como-sair" style="margin:0;padding:6px 10px;border-radius:8px;font-size:11.5px">Voltar a ser eu</button>')
   }
-  html += '<div class="chave"><div class="txt"><b>Painel de venda ao lado</b>'
-    + '<span>As respostas rápidas e os funis, do lado direito do WhatsApp.</span></div>'
-    + '<button class="sw ' + (estado.painelLigado !== false ? 'on' : '') + '" id="sw3" role="switch" aria-checked="' + (estado.painelLigado !== false) + '"></button></div>'
-  html += '<div class="chave"><div class="txt"><b>Números abertos ao mesmo tempo</b>'
-    + '<span>Cada um consome memória. Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.</span></div>'
-    + '<input id="teto" value="' + t + '" inputmode="numeric" style="width:54px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--linha);background:rgba(255,255,255,.03);outline:none" /></div>'
-    + '<div class="acoes"><button class="secundario" id="t-log">Abrir registro</button>'
-    + '<button class="secundario" id="t-fechar">Fechar</button></div>'
+
+  // O SAIR, ultima linha e longe do reflexo: pra chegar nele agora sao tres gestos (abrir Ajustes,
+  // descer e clicar duas vezes) em vez de um clique num botao do tamanho do Ajustes, no rodape.
+  html += '<button class="aj-item perigo' + (sairArmado ? ' armado' : '') + '" id="t-sair">'
+    + '<span class="ic">' + ajSvg(AJ_IC.porta) + '</span>'
+    + '<div class="txt"><b>' + (sairArmado ? 'Clique de novo para sair' : 'Sair da conta') + '</b>'
+    + '<span>' + (sairArmado
+      ? 'Os números abertos vão ser fechados.'
+      : 'Fecha os números abertos e volta pra tela de entrar.') + '</span>'
+    + (sairArmado ? '<div class="aj-conta"><i></i></div>' : '')
+    + '</div></button>'
+
+  html += '</div>'   // fim da lista que rola
+    + '<div class="acoes"><button class="secundario" id="t-fechar">Fechar</button></div>'
+
+  modalCorpo.className = 'cartao aj'
   modalCorpo.innerHTML = html
   abreModal()
+
   if (estado.direcao) {
     // A trava mora no SERVIDOR: o app pede e só acredita no que voltar. Se o servidor recusar
     // (não é direção, sem rede), a chave volta pro lugar e a tela diz por quê.
@@ -640,12 +749,18 @@ function janelaAjustes() {
     estado.painelLigado = r.ligado
     janelaAjustes()
   }
-  $('teto').onchange = async (e) => {
-    const r = await window.sw.teto(e.target.value)
+  const poeTeto = async (v) => {
+    const r = await window.sw.teto(v)
     estado.maxAbertos = r.maxAbertos
-    e.target.value = r.maxAbertos
+    const el = $('teto')
+    if (el) el.value = r.maxAbertos
     await recarregaEstado()
   }
+  $('teto').onchange = (e) => poeTeto(e.target.value)
+  // MAIS E MENOS, porque o campo de digitar sozinho obriga selecionar e apagar pra trocar de 6 pra
+  // 5. O teto anda de um em um; quem quiser pular digita.
+  $('teto-menos').onclick = () => poeTeto(Math.max(1, (Number($('teto').value) || 6) - 1))
+  $('teto-mais').onclick = () => poeTeto(Math.min(20, (Number($('teto').value) || 6) + 1))
   const sel = $('como')
   if (sel) {
     $('como-bt').onclick = (ev) => { ev.stopPropagation(); sel.classList.toggle('aberta') }
@@ -659,15 +774,39 @@ function janelaAjustes() {
       }
     }
   }
-  const sair = $('como-sair')
-  if (sair) sair.onclick = async () => { await window.sw.verComo(''); await recarregaEstado(); janelaAjustes() }
+  const voltarEu = $('como-sair')
+  if (voltarEu) voltarEu.onclick = async () => { await window.sw.verComo(''); await recarregaEstado(); janelaAjustes() }
   $('t-log').onclick = () => window.sw.abrirLog()
+
+  // O SAIR, EM DOIS CLIQUES. O primeiro arma e o segundo executa; sair da janelinha desarma.
+  $('t-sair').onclick = async () => {
+    if (!sairArmado) {
+      sairArmado = true
+      janelaAjustes()
+      sairRelogio = setTimeout(desarmaSair, 4000)
+      return
+    }
+    desarmaSair()
+    // A ORDEM AQUI NAO E ESTILO, E O QUE IMPEDE O WHATSAPP DE FICAR POR CIMA DA TELA DE ENTRAR.
+    // `ativo` zera ANTES porque o `fechaModal` reexibe a view do numero ativo; e a janelinha se
+    // fecha na mao, sem passar por ele, pelo mesmo motivo.
+    ativo = ''
+    await window.sw.sair()
+    modal.classList.remove('on')
+    await recarregaEstado()
+    telaLogin('')
+  }
   $('t-fechar').onclick = fechaModal
 }
 
 // A janelinha é desenhada pela CASCA, que fica ATRÁS da view do número e da do painel. Com um
 // número aberto, ela abria invisível. Então esconder as views enquanto ela estiver na tela.
 function fechaModal() {
+  // SAIR DA JANELINHA DESARMA O SAIR. Senao ele ficaria armado esperando o segundo clique na
+  // proxima vez que ela abrisse - e o segundo clique seria o PRIMEIRO da nova visita, ou seja o
+  // vendedor sairia da conta com um clique so, que e exatamente o acidente que isto evita.
+  sairArmado = false
+  if (sairRelogio) { clearTimeout(sairRelogio); sairRelogio = null }
   modal.classList.remove('on')
   if (ativo) window.sw.mostrar(ativo)
 }
@@ -803,7 +942,6 @@ window.addEventListener('focus', () => {
   ultimoFoco = Date.now()
   sincroniza()
 })
-$('sair').onclick = async () => { await window.sw.sair(); await recarregaEstado(); telaLogin('') }
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenhaLista() }
 modal.onclick = (e) => { if (e.target === modal) fechaModal() }
 document.onkeydown = (e) => { if (e.key === 'Escape') fechaModal() }

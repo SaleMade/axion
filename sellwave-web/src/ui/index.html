@@ -322,6 +322,82 @@
   .chave .sw { width: 38px; height: 21px; flex: 0 0 38px; }
   .chave .sw::after { width: 16px; height: 16px; }
   .chave .sw.on::after { transform: translateX(17px); }
+
+  /* ─────────────── a janelinha de Ajustes ───────────────
+     O CARTAO PRECISA DE TETO. Ele nao tinha max-height nenhum e a versao da direcao ja era a mais
+     alta; com secoes e icones ela passaria da janela e o resto ficaria cortado, sem rolagem e sem
+     sinal de que ha mais coisa embaixo. O teto e por viewport pra acompanhar a janela do vendedor,
+     que pode ser menor que a do Bruno. */
+  .cartao.aj { max-height: calc(100vh - 48px); display: flex; flex-direction: column; padding: 20px 20px 16px; }
+  .aj-topo { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .aj-topo .marca { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+    display: grid; place-items: center; background: rgba(36, 194, 120, .14); color: var(--verde); }
+  .aj-topo .marca svg { width: 18px; height: 18px; }
+  .aj-topo h2 { margin: 0; }
+  .aj-topo .quem { font-size: 11px; color: var(--apagado); }
+  .aj-topo .ver { margin-left: auto; font-size: 10.5px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+
+  /* A LISTA ROLA, o topo e o rodape ficam parados: com a janelinha cheia, o Fechar some da tela
+     justamente quando ele mais precisa dele. */
+  .aj-lista { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+  .aj-sec { margin-top: 14px; font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--apagado); display: flex; align-items: center; gap: 7px; }
+  .aj-sec:first-child { margin-top: 0; }
+  .aj-sec::after { content: ""; flex: 1; height: 1px; background: var(--linha); }
+
+  /* O CARTAO DE CADA AJUSTE, na linguagem do painel do Sale Chat. */
+  .aj-item { display: flex; align-items: center; gap: 10px; margin-top: 7px; padding: 9px 10px;
+    border: 1px solid var(--linha); border-radius: 13px; background: rgba(255, 255, 255, .02);
+    transition: border-color .15s, background .15s; }
+  .aj-item .ic { display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0;
+    border-radius: 9px; background: rgba(139, 148, 166, .14); color: var(--apagado);
+    transition: background .15s, color .15s; }
+  .aj-item .ic svg { width: 17px; height: 17px; }
+  .aj-item .txt { flex: 1; min-width: 0; }
+  .aj-item .txt b { display: block; font-size: 12.5px; font-weight: 600; }
+  .aj-item .txt span { display: block; font-size: 10.5px; line-height: 14px; color: var(--apagado); }
+  .aj-item .sw { width: 38px; height: 21px; flex: 0 0 38px; }
+  .aj-item .sw::after { width: 16px; height: 16px; }
+  .aj-item .sw.on::after { transform: translateX(17px); }
+
+  /* O ESTADO NA COR, que e o "bate o olho e entende". LIGADO fica verde; DESLIGADO fica cinza.
+     Nas duas travas da operacao, desligado e AMBAR e nao cinza: trava desligada nao e preferencia
+     desligada, e risco em aberto, e tem que puxar o olho. */
+  .aj-item.on .ic { background: rgba(36, 194, 120, .16); color: var(--verde); }
+  .aj-item.on { border-color: rgba(36, 194, 120, .22); }
+  .aj-item.alerta .ic { background: rgba(245, 165, 36, .16); color: var(--ambar); }
+  .aj-item.alerta { border-color: rgba(245, 165, 36, .25); background: rgba(245, 165, 36, .04); }
+  .aj-item.azul .ic { background: rgba(14, 165, 233, .16); color: #38bdf8; }
+  .aj-item.perigo .ic { background: rgba(240, 80, 106, .14); color: var(--vermelho); }
+
+  /* O SAIR. Ele e o unico cartao clicavel inteiro, e por isso e o unico com hover. */
+  button.aj-item { width: 100%; text-align: left; }
+  button.aj-item:hover { border-color: rgba(240, 80, 106, .4); background: rgba(240, 80, 106, .07); }
+  /* ARMADO: depois do primeiro clique ele muda de cara e espera o segundo. "Com duplo clique, tem
+     que clicar duas vezes para poder realmente confirmar que eu quero sair" (Bruno). A barrinha
+     mostra o tempo que falta pra ele desarmar sozinho: botao que fica armado pra sempre e o mesmo
+     perigo de antes, so que escondido. */
+  button.aj-item.armado { border-color: var(--vermelho); background: rgba(240, 80, 106, .12); }
+  button.aj-item.armado .txt b { color: #ffb3bf; }
+  .aj-conta { position: relative; height: 2px; margin-top: 7px; border-radius: 2px; background: rgba(240, 80, 106, .2); overflow: hidden; }
+  .aj-conta i { position: absolute; inset: 0; background: var(--vermelho); transform-origin: left center;
+    animation: ajdesarma 4s linear forwards; }
+  @keyframes ajdesarma { from { transform: scaleX(1) } to { transform: scaleX(0) } }
+
+  /* A SETINHA do "Abrir registro" tem classe propria, nao e um `.ic` com o estilo desfeito na mao:
+     reaproveitar a classe do quadradinho obrigava a apagar fundo e tamanho inline, e fazia a linha
+     contar dois icones onde ha um. */
+  .aj-seta { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; color: var(--apagado); }
+  .aj-seta svg { width: 15px; height: 15px; }
+
+  .aj-num { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .aj-num button { width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--linha);
+    color: var(--apagado); display: grid; place-items: center; font-size: 14px; line-height: 1; }
+  .aj-num button:hover { background: rgba(255, 255, 255, .06); color: var(--texto); }
+  .aj-num input { width: 40px; text-align: center; padding: 5px 0; border-radius: 8px;
+    border: 1px solid var(--linha); background: rgba(255, 255, 255, .03); outline: none;
+    font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .aj-item .escolha { min-width: 136px; }
 </style>
 </head>
 <body>
@@ -360,10 +436,6 @@
       <button id="ajustes" title="Ajustes">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.67.75.86.3.17.65.26 1 .26H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
         Ajustes
-      </button>
-      <button id="sair">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
-        Sair
       </button>
     </div>
   </aside>

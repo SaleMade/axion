@@ -1167,6 +1167,96 @@ app.whenReady().then(async () => {
   const pediu = JSON.parse(await js2('JSON.stringify((window.__ver()).filter(c => c.nome === "painel").map(c => c.args[0]))'))
   conta('clicar na abinha manda mostrar o painel de novo', JSON.stringify(pediu) === '[true]', JSON.stringify(pediu))
 
+  // ══ OS AJUSTES E O SAIR ═══════════════════════════════════
+  //
+  // "Por que diabo tem um botao de sair aqui bem grande? Eu cliquei sem querer e acabei saindo.
+  // Gostaria que voce deixasse ele dentro da parte de ajustes. Tambem, com duplo clique, tem que
+  // clicar duas vezes para poder realmente confirmar que eu quero sair." (Bruno, 17/10/2026)
+  const rodapeCasca = await js2('(() => ({ botoes: [...document.querySelectorAll(".rodape button")].map(b => b.id),'
+    + ' temSair: !!document.getElementById("sair") }))()')
+  conta('o Sair nao esta mais no rodape da barra, onde ele clicava sem querer',
+    rodapeCasca.temSair === false && rodapeCasca.botoes.join(',') === 'ajustes', JSON.stringify(rodapeCasca))
+
+  await js2('(() => { document.getElementById("ajustes").click() })()')
+  await espera(350)
+  const aj = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' return { aberto: !!document.querySelector(".fundo-modal.on"),'
+    + ' secoes: [...c.querySelectorAll(".aj-sec")].map(e => e.textContent.trim()),'
+    + ' itens: c.querySelectorAll(".aj-item").length,'
+    + ' comIcone: [...c.querySelectorAll(".aj-item .ic svg")].length,'
+    + ' temSair: !!document.getElementById("t-sair"), temFechar: !!document.getElementById("t-fechar"),'
+    + ' temAjustes: c.textContent.indexOf("Ajustes") >= 0 } })()')
+  conta('a janelinha abre e o Sair mora dentro dela', aj.aberto === true && aj.temSair === true, JSON.stringify(aj))
+  // AGRUPAR POR ONDE A COISA MORA e o unico corte verdadeiro desta tela: o que vale pra equipe
+  // (servidor), o que e so desta maquina, e o que e da conta dele.
+  conta('os ajustes vem em secoes, nao numa lista cinza de linhas iguais',
+    aj.secoes.length === 3 && /opera/i.test(aj.secoes[0]) && /computador/i.test(aj.secoes[1]) && /conta/i.test(aj.secoes[2]),
+    JSON.stringify(aj.secoes))
+  // "Colocar alguns icones, pra que a gente bata o olho e ja entenda."
+  conta('e cada linha tem icone', aj.comIcone === aj.itens && aj.itens >= 5, aj.comIcone + ' icones em ' + aj.itens + ' linhas')
+
+  // O ESTADO NA COR: trava desligada nao e "preferencia desligada", e risco em aberto, e tem que
+  // puxar o olho. Ligada fica verde; desligada, ambar.
+  const antesCor = await js2('(() => { const i = document.getElementById("sw1").closest(".aj-item");'
+    + ' return { classe: i.className, cor: getComputedStyle(i.querySelector(".ic")).color } })()')
+  conta('trava ligada aparece em verde', /\bon\b/.test(antesCor.classe) && /^rgb\(36, 194, 120\)/.test(antesCor.cor), JSON.stringify(antesCor))
+  await js2('(() => { document.getElementById("sw1").click() })()')
+  await espera(350)
+  const depoisCor = await js2('(() => { const i = document.getElementById("sw1").closest(".aj-item");'
+    + ' return { classe: i.className, cor: getComputedStyle(i.querySelector(".ic")).color,'
+    + ' cortado: i.querySelectorAll(".ic svg path").length } })()')
+  conta('e desligada vira ambar, nao um cinza qualquer',
+    /alerta/.test(depoisCor.classe) && /^rgb\(245, 165, 36\)/.test(depoisCor.cor), JSON.stringify(depoisCor))
+  await js2('(() => { document.getElementById("sw1").click() })()')
+  await espera(350)
+
+  // O CARTAO TEM TETO E A LISTA ROLA. Sem isso a versao da direcao, que e a mais alta, passaria da
+  // janela e o Fechar ficaria fora da tela justo quando ele mais precisa dele.
+  const altura = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' const l = c.querySelector(".aj-lista"); const s = getComputedStyle(c);'
+    + ' return { max: s.maxHeight, rola: getComputedStyle(l).overflowY,'
+    + ' cabe: c.getBoundingClientRect().height <= window.innerHeight } })()')
+  conta('a janelinha tem teto de altura e a lista rola por dentro',
+    altura.max !== 'none' && altura.rola === 'auto' && altura.cabe === true, JSON.stringify(altura))
+
+  // UM CLIQUE NAO SAI. Este e o pedido em palavras, e e o que o rodape nao tinha.
+  const saidasAntes = Number(await js2('(window.__ver()).filter(c => c.nome === "sair").length'))
+  await js2('(() => { document.getElementById("t-sair").click() })()')
+  await espera(300)
+  const armado = await js2('(() => { const b = document.getElementById("t-sair");'
+    + ' return { classe: b ? b.className : "", txt: b ? b.textContent : "",'
+    + ' temConta: !!document.querySelector(".aj-conta"),'
+    + ' saiu: (window.__ver()).filter(c => c.nome === "sair").length } })()')
+  conta('o primeiro clique no Sair NAO sai da conta, so arma',
+    armado.saiu === saidasAntes && /armado/.test(armado.classe), JSON.stringify({ classe: armado.classe, saiu: armado.saiu }))
+  conta('e a tela diz que esta esperando o segundo clique',
+    /Clique de novo/.test(armado.txt) && armado.temConta === true, armado.txt.replace(/\s+/g, ' ').slice(0, 70))
+
+  // E SAIR DA JANELINHA DESARMA. Senao o botao ficaria armado esperando o segundo clique na
+  // proxima visita, e esse segundo clique seria o PRIMEIRO dela: um clique so pra sair de novo.
+  await js2('(() => { fechaModal(); document.getElementById("ajustes").click() })()')
+  await espera(350)
+  const desarmou = await js2('(() => { const b = document.getElementById("t-sair");'
+    + ' return { classe: b ? b.className : "", txt: b ? b.textContent : "" } })()')
+  conta('fechar a janelinha desarma o Sair', !/armado/.test(desarmou.classe) && /Sair da conta/.test(desarmou.txt),
+    desarmou.txt.replace(/\s+/g, ' ').slice(0, 60))
+
+  // DOIS CLIQUES SAEM, e a tela de entrar aparece com as views escondidas: o WhatsApp do numero
+  // aberto fica POR CIMA da casca, e telaLogin nao escondia nada - o vendedor saia da conta e
+  // continuava vendo a conversa, achando que o clique nao pegou.
+  await js2('(() => { document.getElementById("t-sair").click() })()')
+  await espera(250)
+  await js2('(() => { document.getElementById("t-sair").click() })()')
+  await espera(500)
+  const saiu = await js2('(() => ({ saiu: (window.__ver()).filter(c => c.nome === "sair").length,'
+    + ' escondeu: (window.__ver()).filter(c => c.nome === "esconder").length,'
+    + ' modalAberto: !!document.querySelector(".fundo-modal.on"),'
+    + ' login: (document.getElementById("palco") || {}).textContent || "" }))()')
+  conta('o segundo clique sai de verdade', saiu.saiu === saidasAntes + 1, JSON.stringify(saiu.saiu))
+  conta('a janelinha fecha sem trazer o WhatsApp de volta por cima', saiu.modalAberto === false, String(saiu.modalAberto))
+  conta('e a tela de entrar aparece com as views escondidas',
+    /Entrar/.test(saiu.login) && saiu.escondeu >= 1, saiu.login.replace(/\s+/g, ' ').slice(0, 50))
+
   conta('nenhum erro de javascript na casca', erros2.length === 0, erros2.join(' | ').slice(0, 200))
   w2.destroy()
 
