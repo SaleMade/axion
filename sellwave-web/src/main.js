@@ -59,7 +59,7 @@ app.userAgentFallback = UA_LIMPO
 // (foi o que aconteceu comigo em 16/10), e a pasta de dados compartilhada punha o teste dentro da
 // sessao pareada dele - mexendo no cache, na fila de captura e na configuracao de quem esta
 // trabalhando. Teste nao pode encostar em producao, nem ser impedido por ela.
-const EH_TESTE = process.env.SW_SMOKE === '1' || process.env.SW_FOTO === '1'
+const EH_TESTE = process.env.SW_SMOKE === '1' || process.env.SW_FOTO === '1' || process.env.SW_JANELA === '1'
 
 // UMA INSTANCIA SO (16/10/2026).
 //
@@ -816,6 +816,19 @@ function escondeTodos() {
 //
 // O PRECO, e e honesto dizer: numero hibernado para de capturar mensagem enquanto estiver fechado.
 // Por isso o teto e configuravel e o padrao e 6, nao 2.
+// QUEM PODE SER HIBERNADO, do mais parado pro menos. Funcao propria pra o teste de ponta a ponta
+// exercitar ESTA regra, e nao uma copia dela: o filtro que protege o numero destacado e invisivel
+// quando esta certo e silencioso quando some - sem ele o app fecha o WhatsApp que o vendedor esta
+// olhando na outra janela.
+function candidatosHibernacao() {
+  // NA TELA DE QUALQUER JANELA, e com disparo vivo em QUALQUER numero.
+  const naTela = new Set([ativoAgora, ...destacados.keys()].filter(Boolean))
+  return [...abertos.values()]
+    .filter((s) => !naTela.has(s.nk) && !disparos.has(s.nk))
+    .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
+    .map((s) => s.nk)
+}
+
 function hibernaSePrecisar() {
   // O PISO SOBE COM AS JANELAS: com duas janelas abertas e teto 1, a hibernacao fecharia sem parar
   // o que o vendedor acabou de abrir.
@@ -827,11 +840,7 @@ function hibernaSePrecisar() {
   // ultimoUso mais velho: a hibernacao fechava ele no meio do funil e o painel dizia "o numero foi
   // fechado, o funil parou aqui". Metade do funil ia pro lead e a outra metade nao, por causa de
   // uma decisao de memoria.
-  // NA TELA DE QUALQUER JANELA, e com disparo vivo em QUALQUER numero.
-  const naTela = new Set([ativoAgora, ...destacados.keys()].filter(Boolean))
-  const candidatos = [...abertos.values()]
-    .filter((s) => !naTela.has(s.nk) && !disparos.has(s.nk))
-    .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
+  const candidatos = candidatosHibernacao().map((nk) => abertos.get(nk)).filter(Boolean)
   while (abertos.size > teto && candidatos.length) {
     const s = candidatos.shift()
     console.log('[memoria] hibernando ' + s.nk + ' (teto de ' + teto + ' sessoes abertas)')
@@ -2588,6 +2597,19 @@ app.whenReady().then(() => {
     }
     casca.webContents.once('did-finish-load', () => {
       setTimeout(() => require('./foto').rodar({ casca, injeta }), 1200)
+    })
+  }
+
+  // TESTE DE PONTA A PONTA DA JANELA PROPRIA (SW_JANELA=1). Roda no app DE VERDADE e so finge a
+  // pagina da view, que carrega HTML local em vez do WhatsApp Web: sem isso o teste precisaria de
+  // chip, proxy e rede, e passaria a medir a internet. Ele ABRE JANELA na tela de proposito -
+  // janela escondida nao desenha, e o que esta sendo conferido e quem desenha onde.
+  if (process.env.SW_JANELA === '1') {
+    casca.webContents.once('did-finish-load', () => {
+      setTimeout(() => require('./teste-destaque').rodar({
+        janela, abertos, destacados, destaca, devolve, mostra, escondeTodos,
+        nkDoPainel, fechaNumero, particaoDe, candidatosHibernacao,
+      }).catch((e) => { console.log('ESTOUROU: ' + ((e && e.stack) || e)); app.exit(1) }), 1200)
     })
   }
 

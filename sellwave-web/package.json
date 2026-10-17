@@ -1,6 +1,6 @@
 {
   "name": "sellwave-web",
-  "version": "1.17.3",
+  "version": "1.18.0",
   "description": "Navegador multi-sessao de WhatsApp Web da SellWave",
   "main": "src/main.js",
   "private": true,
@@ -14,7 +14,8 @@
     "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js",
     "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js",
     "icone": "node --check src/icone.js && electron src/icone.js",
-    "teste-janela": "node --check src/teste-janela.js && electron src/teste-janela.js"
+    "teste-janela": "node --check src/teste-janela.js && electron src/teste-janela.js",
+    "teste-destaque": "node --check src/teste-destaque.js && electron ."
   },
   "devDependencies": {
     "electron": "44.7.2",

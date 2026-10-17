@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('sw', {
   barra: (encolhida) => { chamadas.push({ nome: 'barra', args: [encolhida] }); barraEncolhida = !!encolhida; return Promise.resolve({ ok: true, encolhida: barraEncolhida }) },
   painel: (ligado) => { chamadas.push({ nome: 'painel', args: [ligado] }); painelLigado = ligado !== false; return Promise.resolve({ ok: true, ligado: painelLigado }) },
   abrir: (n) => { chamadas.push({ nome: 'abrir', args: [n] }); return Promise.resolve({ ok: true }) },
+  destacar: (numero, nk) => { chamadas.push({ nome: 'destacar', args: [numero, nk] }); return Promise.resolve({ ok: true }) },
+  devolver: (nk) => { chamadas.push({ nome: 'devolver', args: [nk] }); return Promise.resolve({ ok: true }) },
   fechar: (n) => { chamadas.push({ nome: 'fechar', args: [n] }); return Promise.resolve({ ok: true }) },
   roleta: (n, l) => { chamadas.push({ nome: 'roleta', args: [n, l] }); return Promise.resolve({ ok: true }) },
   entrar: () => Promise.resolve({ ok: true }),

@@ -303,8 +303,12 @@
   /* O BOTAO DA SETINHA, do lado do Abrir WhatsApp (17/10/2026): "um botaozinho do lado, com a
      setinha mirando para a parte superior direita, destacadinho tambem, mais ou menos do mesmo
      tamanho, quadrado e verdinho". Mesma cor e mesma altura do vizinho, so quadrado. */
-  .abrir-acoes { display: flex; align-items: stretch; gap: 8px; margin-top: 14px; }
-  .quadrado { width: 42px; border-radius: 9px; background: var(--verde); color: #04120b;
+  /* ALTURA EXPLICITA NOS DOIS, e nao `stretch`: o botao de texto tem a altura do padding dele e o
+     quadrado teria a do esticamento, entao eles saiam com alturas diferentes e o quadrado nao era
+     quadrado. O 42 vale pros dois aqui dentro; o `.principal` de fora (tela de entrar) nao muda. */
+  .abrir-acoes { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .abrir-acoes .principal { height: 42px; margin-top: 0; padding: 0 18px; }
+  .quadrado { width: 42px; height: 42px; border-radius: 9px; background: var(--verde); color: #04120b;
     display: grid; place-items: center; flex: 0 0 42px; }
   .quadrado svg { width: 18px; height: 18px; }
   .quadrado:hover { filter: brightness(1.07); }

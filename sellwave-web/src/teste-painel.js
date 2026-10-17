@@ -1257,6 +1257,32 @@ app.whenReady().then(async () => {
   conta('e a tela de entrar aparece com as views escondidas',
     /Entrar/.test(saiu.login) && saiu.escondeu >= 1, saiu.login.replace(/\s+/g, ' ').slice(0, 50))
 
+  // ══ O BOTAO DA SETINHA, que abre o numero em JANELA PROPRIA ════════════════════════════
+  //
+  // "Alem do botao de abrir o WhatsApp, tivesse um botaozinho do lado, com a setinha mirando para a
+  // parte superior direita, destacadinho tambem, mais ou menos do mesmo tamanho, quadrado e
+  // verdinho. Ele vai abrir esse WhatsApp em uma janela diferente." (Bruno, 17/10/2026)
+  await js2('(() => { fechaModal(); telaAbrir("1574060653") })()')
+  await espera(350)
+  const btSeta = await js2('(() => { const a = document.getElementById("ab-abrir"); const q = document.getElementById("ab-destacar");'
+    + ' if (!a || !q) return { falta: !a ? "abrir" : "destacar" };'
+    + ' const ra = a.getBoundingClientRect(), rq = q.getBoundingClientRect();'
+    + ' const s = getComputedStyle(q);'
+    + ' return { ha: Math.round(ra.height), hq: Math.round(rq.height), wq: Math.round(rq.width),'
+    + ' alturaIgual: Math.abs(ra.height - rq.height) <= 2, quadrado: Math.abs(rq.width - rq.height) <= 2,'
+    + ' verde: s.backgroundColor, lado: Math.round(rq.left - ra.right),'
+    + ' temSeta: !!q.querySelector("svg") } })()')
+  conta('o botao da setinha existe do lado do Abrir WhatsApp',
+    !btSeta.falta && btSeta.lado >= 0 && btSeta.lado <= 16, JSON.stringify(btSeta))
+  conta('e e quadrado, verde e da mesma altura do vizinho',
+    btSeta.quadrado === true && btSeta.alturaIgual === true && /^rgb\(36, 194, 120\)/.test(btSeta.verde || ''), JSON.stringify(btSeta))
+  conta('com a setinha dentro', btSeta.temSeta === true, String(btSeta.temSeta))
+
+  const destacou = await js2('(async () => { document.getElementById("ab-destacar").click();'
+    + ' await new Promise(r => setTimeout(r, 400));'
+    + ' return (window.__ver()).filter(c => c.nome === "destacar").map(c => String(c.args[1] || "")) })()')
+  conta('clicar nele manda destacar aquele numero', destacou.includes('1574060653'), JSON.stringify(destacou))
+
   conta('nenhum erro de javascript na casca', erros2.length === 0, erros2.join(' | ').slice(0, 200))
   w2.destroy()
 
