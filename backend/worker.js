@@ -17751,6 +17751,49 @@ async function _waTrocaIdDoNumero(env, velho, novo, waba) {
 }
 let _dcSeenOk = false;
 let _dcSeenPodaT = 0;   // ver "PODA UMA VEZ POR HORA" no _dcPoll
+// CELULAR PRINCIPAL QUE FICA 14 DIAS SEM ABRIR DESCONECTA TUDO (17/10/2026, pedido do Bruno: "seria
+// interessante ter algum aviso pra eu entrar"). E regra do WhatsApp: principal 14 dias parado = SellWave Web e
+// bot do grupo desvinculados. O principal mora no LDPlayer do PC dos celulares, e quem mede e o
+// vigia-online.mjs de la (hora do disco da maquina, sem tocar no LDPlayer), que grava app_config
+// ldplayer_online { ts, pc, celulares: [{ nk, nome, ultimo }] }. Aqui: de dia, um push por celular por dia pra
+// direcao da casa a partir de 11 dias; e se o PC ficar 2 dias sem mandar nada, um aviso disso (sem ele nao da
+// pra saber). O trinco e no banco (app_config ld_aviso_<chave> = dia), igual o do pressel sem numero.
+const LD_AVISO_DIAS = 11;
+async function _ldOnlineAviso(env) {
+  const h = _agoraBR().getUTCHours();
+  if (h < 9 || h >= 21) return;   // so de dia: e pra pessoa abrir o celular, nao pra acordar ninguem
+  let est = null;
+  try { est = JSON.parse((await _readConfig(env, 'ldplayer_online')) || 'null'); } catch (_) { est = null; }
+  if (!est || !Array.isArray(est.celulares)) return;   // vigia nunca rodou: nada a dizer
+  const agora = Math.floor(Date.now() / 1000), dia = _brDay();
+  const avisos = [];
+  const semNoticia = agora - (Number(est.ts) || 0);
+  if (semNoticia > 2 * 86400) {
+    avisos.push({ chave: 'pc', title: 'O PC dos celulares não dá notícia', body: 'Faz ' + Math.floor(semNoticia / 86400) + ' dias que ele não conta quando os celulares abriram. Ligue o PC e abra o Painel dos números.' });
+  } else {
+    for (const c of est.celulares) {
+      const ult = Number(c && c.ultimo) || 0;
+      if (!ult) continue;
+      const dias = Math.floor((agora - ult) / 86400);
+      if (dias < LD_AVISO_DIAS) continue;
+      const nome = String((c && c.nome) || (c && c.nk) || 'celular');
+      avisos.push(dias >= 14
+        ? { chave: String(c.nk), title: 'O celular ' + nome + ' passou de 14 dias', body: 'Faz ' + dias + ' dias que ele não abre: o WhatsApp pode ter desconectado o SellWave Web. Abra pelo Painel dos números e confira.' }
+        : { chave: String(c.nk), title: 'Abra o celular ' + nome, body: 'Faz ' + dias + ' dias que ele não abre. Com 14, o WhatsApp desconecta o SellWave Web. Abra pelo Painel dos números.' });
+    }
+  }
+  if (!avisos.length) return;
+  await _ensureConfigTable(env);
+  const r = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all().catch(() => null);
+  const quem = ((r && r.results) || []).map((x) => String(x.id));
+  for (const a of avisos) {
+    const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE app_config.value <> excluded.value")
+      .bind('ld_aviso_' + a.chave, dia, agora).run().catch(() => null);
+    if (!(ins && ins.meta && ins.meta.changes > 0)) continue;   // ja avisou hoje
+    for (const id of quem) await _wpParaPessoa(env, id, { title: a.title, body: a.body, tag: 'ld-aviso-' + a.chave, icon: '/icons/venda-192.png?v=2', url: '/pressels/contingencia' }, 'celulares').catch(() => 0);
+    console.log('LD_AVISO ' + a.chave + ' avisados=' + quem.length);
+  }
+}
 // AGENDA: avisa quem marcou o retorno na hora marcada.
 // O cobrador marcava "retornar 14:30" e ninguém avisava ninguém: data.notifs só tinha saque e
 // mudança de permissão, e nada no servidor olhava os agendamentos. Sem isto a Agenda é um caderno
@@ -27474,6 +27517,7 @@ export default {
         // numero desligado "ate amanha" volta pro lugar dele na roleta (ver _presselVoltaTick)
         try { await _presselVoltaTick(env); } catch (e) { console.error('[cron] volta da roleta falhou: ' + String((e && e.message) || e)); }
         await _agendaTick(env);   // avisa quem marcou retorno pra agora
+        try { await _ldOnlineAviso(env); } catch (e) { console.error('[cron] aviso dos 14 dias falhou: ' + String((e && e.message) || e)); }   // celular do LDPlayer parado (17/10/2026)
         // O PIXEL ANDA JUNTO DA AGENDA porque os dois sao leves e os dois precisam ser frequentes.
         // Evento recusado pelo TikTok (403 em rajada, token trocado) e conversao que a campanha nao
         // recebe: deixar isso pra manutencao, de 80 em 80 minutos, e tarde demais com verba rodando.
