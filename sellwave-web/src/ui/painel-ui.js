@@ -20,6 +20,8 @@ const TIPOS = {
 }
 const svg = (d, cls) => '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>'
 const IC_PLAY = svg('<path d="m6 3 14 9-14 9V3Z"/>')
+// O check miudo do selo "ja enviado" (o IC_CHECK grande nasce la embaixo e e pra botao).
+const IC_CHECK_MINI = svg('<path d="M20 6 9 17l-5-5"/>')
 const IC_GIRA = svg('<path d="M21 12a9 9 0 1 1-6.2-8.6"/>', 'girando')
 const IC_ZAP = svg('<path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/>')
 const IC_SETA = svg('<path d="m6 9 6 6 6-6"/>', 'seta')
@@ -361,6 +363,46 @@ function cartaoItem(x, k) {
     + '</div>' + prev + '</div>'
 }
 
+// FUNIS QUE JA SAIRAM PRA ESTE LEAD (18/10/2026, pedido do Bruno).
+//
+// `funisFone` guarda DE QUEM e a lista. Sem isso, trocar de conversa deixaria as marcas do lead
+// anterior na tela enquanto a leitura nova nao volta - e pra sempre, se ela falhar. A regra e: a
+// lista so vale se o telefone dela for o telefone de agora.
+let funisFeitos = {}        // { '<seq>': { por, ts } }
+let funisFone = ''          // de quem e essa lista
+let funisBuscando = ''      // telefone que esta sendo buscado agora
+// O funil ARMADO pelo primeiro clique. Guarda o ID, nunca um booleano: com um booleano, armar a
+// Etapa 1 e clicar na Etapa 3 dispararia a 3 de primeira, sem confirmacao. Some sozinho em 6 s.
+let funilArmado = ''
+let funilArmadoAte = 0
+
+async function puxaFunisFeitos(fone) {
+  const f = String(fone || '').replace(/\D/g, '')
+  if (!f || f === funisBuscando) return
+  funisBuscando = f
+  let r = null
+  try { r = await window.swp.funisFeitos(f) } catch (_) { r = null }
+  funisBuscando = ''
+  // A resposta pode voltar depois de ele ja ter trocado de conversa: so vale se ainda for a mesma.
+  if (String(estadoWa.phone || '').replace(/\D/g, '') !== f) return
+  if (!r || !r.ok) return                      // erro de rede nao apaga o que ja esta na tela
+  const m = {}
+  for (const x of (r.feitos || [])) if (x && x.seq) m[String(x.seq)] = { por: x.por || '', ts: Number(x.ts) || 0 }
+  funisFeitos = m
+  funisFone = f
+  if (aba === 'funis') desenha()
+}
+// Marca na hora (a tela nao espera o servidor) e carimba no servidor em seguida.
+function marcaFunilFeito(fone, seq) {
+  const f = String(fone || '').replace(/\D/g, '')
+  if (!f || !seq) return
+  if (f === funisFone) { funisFeitos[String(seq)] = { por: '', ts: Math.floor(Date.now() / 1000) }; if (aba === 'funis') desenha() }
+  try { window.swp.funilFeito(f, seq) } catch (_) { /* a proxima leitura pega */ }
+}
+// So marca o que e DESTE lead: a lista sem dono nao vale.
+const funilJaFoi = (id) => !!(funisFeitos[String(id)] && funisFone
+  && funisFone === String(estadoWa.phone || '').replace(/\D/g, ''))
+
 function desenhaFunis() {
   let seqs = roteiro.sequences || []
   if (filtro) seqs = seqs.filter((s) => (String(s.label || '') + ' ' + String(s.grp || '')).toLowerCase().includes(filtro))
@@ -389,12 +431,18 @@ function desenhaFunis() {
           + (s.stopOnReply ? '<div style="margin-top:4px;font-size:10px">Para se o lead responder.</div>' : '')
           + '</div>'
       }
-      html += '<div class="funil">'
+      const jaFoi = funilJaFoi(s.id)
+      const armado = funilArmado === s.id
+      html += '<div class="funil' + (jaFoi ? ' feito' : '') + '">'
         + '<div class="funil-linha">'
         + '<span class="funil-ic">' + IC_ZAP + '</span>'
         + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id)
-        + '<span class="passos">' + (s.items || []).length + ' passos</span></button>'
-        + '<button class="enviar" data-funil="' + esc(s.id) + '" title="Disparar funil"' + (podeEnviar() ? '' : ' disabled') + '>'
+        + '<span class="passos">' + (s.items || []).length + ' passos</span>'
+        + (jaFoi ? '<span class="funil-feito">' + IC_CHECK_MINI + 'já enviado</span>' : '')
+        + '</button>'
+        + '<button class="enviar' + (armado ? ' armado' : '') + '" data-funil="' + esc(s.id) + '"'
+        + ' title="' + (armado ? 'Clique de novo pra enviar de novo' : (jaFoi ? 'Já foi enviado pra este lead. Clique duas vezes pra repetir' : 'Disparar funil')) + '"'
+        + (podeEnviar() ? '' : ' disabled') + '>'
         + IC_PLAY + '</button>'
         + '</div>' + prev + '</div>'
     }
@@ -448,7 +496,23 @@ function ligaItens(corpo) {
 }
 function ligaFunis(corpo) {
   for (const b of corpo.querySelectorAll('[data-abre]')) b.onclick = () => { aberto = aberto === b.dataset.abre ? '' : b.dataset.abre; desenha() }
-  for (const b of corpo.querySelectorAll('[data-funil]')) b.onclick = () => disparaFunil(b.dataset.funil)
+  for (const b of corpo.querySelectorAll('[data-funil]')) b.onclick = () => {
+    const id = b.dataset.funil
+    // DOIS CLIQUES SO PRA REPETIR (18/10/2026). Funil que nunca saiu pra este lead dispara no
+    // primeiro clique, como sempre. O que ja saiu arma e espera a confirmacao, pra ninguem mandar a
+    // mesma Etapa 1 duas vezes sem querer. A arma e por ID e vence em 6 s: com um booleano, armar a
+    // Etapa 1 e clicar na Etapa 3 dispararia a 3 de primeira.
+    if (funilJaFoi(id) && !(funilArmado === id && Date.now() < funilArmadoAte)) {
+      funilArmado = id
+      funilArmadoAte = Date.now() + 6000
+      rodape('esse funil já foi enviado. Clique de novo pra repetir')
+      desenha()
+      setTimeout(() => { if (funilArmado === id && Date.now() >= funilArmadoAte) { funilArmado = ''; if (aba === 'funis') desenha() } }, 6200)
+      return
+    }
+    funilArmado = ''
+    disparaFunil(id)
+  }
 }
 
 // AVISO QUE DURA. O pulso roda a cada 1,5 segundo e reescrevia o rodapé com "pronto": toda
@@ -923,11 +987,17 @@ async function pegaOfertas() {
   if (aba === 'pedidos') desenha()
 }
 
+let ultimaListaRasc = 0
 async function pegaRascunhos() {
   if (window.__swFoto) return          // o exemplo da foto já traz a lista que ela quer retratar
   try {
     const r = await window.swp.rascunhos('')
-    rascunhos = (r && r.ok && Array.isArray(r.rascunhos)) ? r.rascunhos : []
+    // SERVIDOR FORA NAO APAGA A LISTA DA TELA (18/10/2026). Era
+    // `rascunhos = (r && r.ok && ...) ? r.rascunhos : []`, entao um 401, um 500 ou a dash fora do ar
+    // zeravam a lista e o selo da aba. Na tela isso e IDENTICO a "voce nao tem rascunho nenhum", e
+    // foi assim que um rascunho que EXISTE no servidor passou a nao existir pro vendedor.
+    // So troca a lista quando a resposta e boa; no erro, fica o que ja estava.
+    if (r && r.ok && Array.isArray(r.rascunhos)) rascunhos = r.rascunhos
   } catch (_) { /* servidor fora: a aba ainda cadastra, só não lista rascunho */ }
   const selo = $('selo-pedidos')
   if (selo) { selo.hidden = !rascunhos.length; selo.textContent = String(rascunhos.length) }
@@ -946,14 +1016,26 @@ const detalheRasc = (r) => {
 // ─── desenho ───
 
 function desenhaPedidos() {
-  if (estadoWa.grupo) return '<div class="vazio">Conversa de grupo.<br>O cadastro de pedido é por cliente.</div>'
+  // A LISTA DE RASCUNHO SAI ANTES DE QUALQUER RECUSA (18/10/2026).
+  //
+  // Os dois `return` abaixo (conversa de grupo e "sem conversa aberta") devolviam SO o aviso, e e
+  // exatamente nesse estado que o vendedor vai procurar o rascunho: trocar de numero abre o
+  // WhatsApp na LISTA de conversas, e numero pedindo QR nem lista tem, entao `estadoWa.phone` e ''.
+  // MEDIDO EM 18/10: o Bruno gravou TRES rascunhos as 17:30 (estao em swweb_rascunho, com nome, CPF
+  // e endereco), clicou em outros numeros e a aba Pedidos escreveu "Abra a conversa do cliente",
+  // sem lista nenhuma. Palavras dele: "nao gerou rascunho". Gerou: a tela e que nao mostrava.
+  const rasc = rascunhos.length ? '<div class="form" style="margin-top:12px">' + listaRascunhos() + '</div>' : ''
+
+  // Formulario ABERTO nao e do que esta na tela, e do lead congelado: abrir o grupo da equipe no
+  // meio de um pedido nao pode engolir o que ele ja digitou.
+  if (estadoWa.grupo && !pedTipo) return '<div class="vazio">Conversa de grupo.<br>O cadastro de pedido é por cliente.</div>' + rasc
 
   let h = ''
   if (pedFeito) h += '<div class="form"><div class="aviso bom">' + esc(pedFeito) + '</div></div>'
 
   // PASSO 1: o tipo de pagamento, antes de qualquer campo.
   if (!pedTipo) {
-    if (!estadoWa.phone) return h + '<div class="vazio">Abra a conversa do cliente.<br>O pedido nasce com o número dela.</div>'
+    if (!estadoWa.phone) return h + '<div class="vazio">Abra a conversa do cliente.<br>O pedido nasce com o número dela.</div>' + rasc
     h += '<div class="tipo">'
       + '<button class="tipo-cx ent" data-tipo="entrega">'
       + '<span class="ic">' + svg('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M14 9h4l4 4v4a1 1 0 0 1-1 1h-2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>') + '</span>'
@@ -964,8 +1046,7 @@ function desenhaPedidos() {
       + '<span><span class="t1">Pagamento Antecipado</span><span class="t2">Cliente paga antes do envio</span></span>'
       + '</button>'
       + '</div>'
-    if (rascunhos.length) h += '<div class="form">' + listaRascunhos() + '</div>'
-    return h
+    return h + rasc
   }
 
   // PASSO 2: o formulário.
@@ -2111,6 +2192,14 @@ async function rodaJob(job) {
         : 'não enviou') + (job.nome ? ' para ' + job.nome : '') + ': ' + humano((r && r.erro) || 'sem resposta'), null, true)
       return
     }
+    // A MARCA SAI NO PRIMEIRO ITEM QUE REALMENTE FOI, nunca no clique (18/10/2026). Marcar no clique
+    // deixaria apagado um funil que morreu no primeiro passo (numero caiu, proxy fora, midia que o
+    // R2 nao entregou) sem UMA mensagem ter chegado no lead, e ai o vendedor olharia a lista, leria
+    // "ja enviado" e seguiria pro proximo sem ter mandado nada. Com um passo entregue, o lead
+    // recebeu de verdade e a etapa andou.
+    // `job.fone` e o alvo CONGELADO do clique: trocar de conversa no meio do funil nao marca o
+    // lead errado.
+    if (i === 0 && job.marca) marcaFunilFeito(job.fone, job.marca)
   }
   try { window.swp.disparo(job.nk, false) } catch (_) { /* ok */ }
   mostraParar()
@@ -2264,11 +2353,27 @@ async function pulso() {
   // ele nao voltar. Sem formulario aberto, a previa do proximo pedido acompanha a conversa.
   if (estadoWa.phone !== fonePreenchido) {
     fonePreenchido = estadoWa.phone || ''
+    // Trocou de lead: as marcas do anterior saem da tela NA HORA e a lista nova e buscada. Deixar a
+    // antiga aparecendo enquanto a leitura volta faria o vendedor achar que ja mandou o funil.
+    funisFeitos = {}; funisFone = ''; funilArmado = ''
+    if (fonePreenchido) puxaFunisFeitos(fonePreenchido)
     if (pedTipo) { rascunhoSozinho() } else { preenchePed() }
     if (aba === 'pedidos') desenha()
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }
+  // A LISTA DE RASCUNHO TAMBEM SE ATUALIZA SOZINHA (18/10/2026, de 20 em 20 s). Ate aqui ela era
+  // lida UMA vez, no boot do modulo, e cada janela destacada tem o proprio painel: rascunho gravado
+  // numa janela nao aparecia na outra, e painel que subiu antes do login ficava com a lista vazia
+  // pra sempre. So redesenha se a aba estiver aberta e a lista tiver MUDADO, pra nao piscar nem
+  // apagar o que ele esta digitando.
+  if (Date.now() - ultimaListaRasc > 20000) {
+    ultimaListaRasc = Date.now()
+    const antes = rascunhos.map((x) => String(x.id) + ':' + String(x.mexido || '')).join(',')
+    await pegaRascunhos()
+    const depois = rascunhos.map((x) => String(x.id) + ':' + String(x.mexido || '')).join(',')
+    if (antes !== depois && aba === 'pedidos' && !pedTipo) desenha()
+  }
   await atualizaLead()
 }
 

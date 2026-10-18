@@ -199,6 +199,17 @@
     text-align: left; font-size: 13px; color: var(--texto); }
   .funil-lbl .passos { margin-left: 4px; font-size: 11px; color: var(--apagado); }
   .funil-prev { border-top: 1px solid var(--linha); padding: 10px; font-size: 12px; line-height: 16px; color: var(--apagado); }
+  /* FUNIL QUE JA SAIU PRA ESTE LEAD (18/10/2026). Apaga o NOME e o icone, nunca o botao: o
+     `.enviar:disabled` ja e opacity .45 neste painel, entao apagar o botao junto leria como
+     "bloqueado" e o vendedor nao clicaria - e a ideia e o contrario, ele pode repetir, so confirma.
+     O selo verde e quem diz o que aconteceu, porque opacidade sozinha e adivinhacao. */
+  .funil.feito .funil-lbl, .funil.feito .funil-ic { opacity: .5; }
+  .funil-feito { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 5px;
+    border-radius: 5px; font-size: 10px; font-weight: 700; color: #21c77a; background: #0f2a20; }
+  .funil-feito svg { width: 9px; height: 9px; }
+  /* Armado = o primeiro clique. O botao fica ambar e larga o verde, pra ninguem achar que falhou. */
+  .enviar.armado { background: #5a3d00; color: #ffc55a; }
+  .enviar.armado:hover { background: #714d00; }
   .passo { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
   .passo-ic { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0;
     border-radius: 8px; background: color-mix(in srgb, var(--kc) 15%, transparent); color: var(--kc); }

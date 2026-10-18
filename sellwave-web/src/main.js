@@ -656,8 +656,25 @@ async function abreNumero(numero) {
   }
   abrindo.add(nk)
   const meu = ++pedidoAtual
+  // REDE DE SEGURANCA DO ALUGUEL (18/10/2026, auditoria da vespera da virada).
+  //
+  // O `desiste()` la dentro do abreDeVerdade cobre os quatro caminhos que RETORNAM erro, e cobre
+  // bem. O que ele nao cobre e EXCECAO: entre o pedeUso aqui em cima e o `abertos.set` la embaixo
+  // rodam preparaSessao, aplicaProxy, puxaProxyDaDash, pegaMotor, testaSaida e o
+  // `new WebContentsView`, e qualquer um deles pode estourar. A excecao sobe, este `finally` so
+  // tirava do `abrindo`, e o aluguel ficava em `alugados` sendo RENOVADO DE 45 EM 45 SEGUNDOS pelo
+  // turno inteiro. Resultado: o numero fica trancado pra equipe toda, e a tela do dono do problema
+  // diz "Aberto por <ele mesmo>". Nao vence sozinho porque a renovacao e um laco cego.
+  // `soltaUso` e idempotente (tira do Set e manda soltar), e a guarda do `abertos` garante que isto
+  // nunca derruba um numero que ABRIU de verdade.
   try {
-    return await abreDeVerdade(nk, numero, meu)
+    const r = await abreDeVerdade(nk, numero, meu)
+    if ((!r || !r.ok) && !abertos.has(nk)) { try { soltaUso(nk) } catch (_) { /* vence em 2 min */ } }
+    return r
+  } catch (e) {
+    if (!abertos.has(nk)) { try { soltaUso(nk) } catch (_) { /* vence em 2 min */ } }
+    anota('abreNumero estourou em ' + nk + ': ' + ((e && e.stack) || e))
+    return { ok: false, erro: 'Não consegui abrir este número agora. Tente de novo.' }
   } finally { abrindo.delete(nk) }
 }
 
@@ -1633,7 +1650,16 @@ ipcMain.handle('sw:sair', async () => {
   return { ok: true }
 })
 ipcMain.handle('sw:numeros', () => buscaNumeros())
-ipcMain.handle('sw:abrir', (_e, { numero }) => abreNumero(numero))
+// O IPC NAO PODE REJEITAR (18/10/2026). Do outro lado, `abrirDeVerdade` faz carregando.add(nk)
+// antes do await e carregando.delete(nk) DEPOIS dele: promessa rejeitada pula o delete e o numero
+// fica preso em `carregando` ate o vendedor fechar o app - e `abrir()` comeca com
+// `if (carregando.has(nk)) return`, entao o botao para de responder e nada na tela explica.
+ipcMain.handle('sw:abrir', async (_e, { numero }) => {
+  try { return await abreNumero(numero) } catch (e) {
+    anota('sw:abrir estourou: ' + ((e && e.stack) || e))
+    return { ok: false, erro: 'Não consegui abrir este número agora. Tente de novo.' }
+  }
+})
 ipcMain.handle('sw:mostrar', (_e, { nk }) => { mostra(nk); return { ok: true } })
 
 // O TELEFONE NO TITULO DA JANELA. Gemeo do `bonito` do app.js, escrito aqui porque o processo
@@ -2425,12 +2451,41 @@ ipcMain.handle('swp:comprovante', async (_e, { nome, mime, bytes, lead }) => {
   }
 })
 
+// FUNIL JA DISPARADO PRO LEAD (18/10/2026). Leitura e carimbo, os dois por telefone.
+ipcMain.handle('swp:funis-feitos', async (_e, { fone }) => {
+  if (!config.token) return { ok: false, feitos: [] }
+  const q = String(fone || '').replace(/\D/g, '')
+  if (q.length < 8) return { ok: true, feitos: [] }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/funis-feitos?fone=' + encodeURIComponent(q),
+      { headers: cabecalhos(), signal: AbortSignal.timeout(12000) })
+    ajustaRelogio(r)
+    if (!r.ok) return { ok: false, feitos: [] }
+    const d = await r.json()
+    return { ok: true, feitos: (d && d.feitos) || [] }
+  } catch (_) { return { ok: false, feitos: [] } }
+})
+ipcMain.handle('swp:funil-feito', async (_e, { fone, seq }) => {
+  if (!config.token) return { ok: false }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/funil-feito', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ fone, seq }), signal: AbortSignal.timeout(12000),
+    })
+    ajustaRelogio(r)
+    return { ok: r.ok }
+  } catch (_) { return { ok: false } }
+})
+
 ipcMain.handle('swp:rascunhos', async (_e, { phone }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.', rascunhos: [] }
   try {
     const q = String(phone || '').replace(/\D/g, '')
+    // SEM `como` AQUI (18/10/2026). O GET mandava o preview e o POST nao manda (nem poderia): o
+    // rascunho era GRAVADO no diretor e BUSCADO no vendedor, entao quem estivesse em "ver como"
+    // gravava e nunca mais achava. O worker so aceita preview em GET/HEAD, e esta e a unica rota em
+    // que isso vira divergencia de dono. Rascunho e do PROPRIO usuario, sempre.
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/rascunhos'
-      + (q.length >= 8 ? '?phone=' + encodeURIComponent(q) : '') + (comoId ? (q.length >= 8 ? '&' : '?') + 'como=' + encodeURIComponent(comoId) : ''),
+      + (q.length >= 8 ? '?phone=' + encodeURIComponent(q) : ''),
       { headers: cabecalhos(), signal: AbortSignal.timeout(15000) })
     ajustaRelogio(r)
     if (!r.ok) return { ok: false, erro: 'a dash respondeu ' + r.status, rascunhos: [] }

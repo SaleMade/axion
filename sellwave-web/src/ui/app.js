@@ -534,9 +534,13 @@ function seloConn(n) {
   return { tom, txt, ruim: tom === 'ruim' }
 }
 
+// A assinatura do que a telaAbrir esta mostrando, pro recarregaEstado so redesenhar quando mudar.
+let travaDesenhada = ''
 function telaAbrir(nk) {
   const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
   if (!n) return telaVazia()
+  travaDesenhada = [n.uso ? (n.uso.meu ? 'meu' : 'de:' + (n.uso.nome || '?')) : 'livre',
+    (n.conn && n.conn.st) || '-', (estado.destacados || []).includes(nk) ? 'dst' : ''].join('|')
   window.sw.esconder()
   ativo = nk
   const ocupado = n.uso && !n.uso.meu ? n.uso : null
@@ -551,10 +555,19 @@ function telaAbrir(nk) {
     + (n.dono ? '<p class="de">' + esc(n.dono) + '</p>' : '')
     + (() => { const c = seloConn(n); return '<p class="conn ' + c.tom + '">' + esc(c.txt) + '</p>' })()
     + (ocupado
+      // QUANDO E VOCE MESMO EM OUTRO PC, A TELA TEM QUE DIZER ISSO (18/10/2026). A trava e por
+      // MAQUINA, de proposito (o Bruno pareia os numeros no PC dele e o vendedor usa no dele, e e
+      // esse cruzamento que derruba numero). So que a tela mostrava o NOME de quem travou, e quando
+      // era a propria pessoa em outro computador ela lia "Aberto por <ela mesma>" e ia procurar um
+      // colega que nao existe. Aconteceu em 18/10 com o Heynan.
       ? '<div class="aviso erro" style="display:block;max-width:360px;margin:14px auto 0">'
-        + '<b>Aberto por ' + esc(ocupado.nome || 'outra pessoa') + '</b><br>'
-        + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
-        + 'Quando a outra pessoa fechar, este botão libera sozinho.</div>'
+        + (ocupado.mesmaPessoa
+          ? '<b>Você abriu este número em outro computador</b><br>'
+            + 'Feche ele lá e este botão libera sozinho, em até 2 minutos.'
+          : '<b>Aberto por ' + esc(ocupado.nome || 'outra pessoa') + '</b><br>'
+            + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
+            + 'Quando a outra pessoa fechar, este botão libera sozinho, em até 2 minutos.')
+        + '</div>'
         + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
       : '<div class="abrir-acoes">'
         + '<button class="principal" id="ab-abrir">' + (jaAberto ? 'Ver aqui' : 'Abrir WhatsApp') + '</button>'
@@ -612,8 +625,12 @@ async function abrirDeVerdade(nk) {
   ativo = nk
   desenhaLista()
   palco.innerHTML = '<div class="vazio"><h2>Abrindo ' + esc(bonito(cheio(nk))) + '</h2><p id="passo">Preparando a sessão...</p></div>'
-  const r = await window.sw.abrir(numero)
-  carregando.delete(nk)
+  // `finally` e nao linha solta: se a promessa do IPC rejeitar, o delete nao rodava e o numero
+  // ficava preso em `carregando` pro resto da sessao (o `abrir` desiste em cima dele). O main ja
+  // foi ensinado a nunca rejeitar; isto aqui e o cinto do cinto.
+  let r
+  try { r = await window.sw.abrir(numero) } catch (e) { r = { ok: false, erro: (e && e.message) || 'Falhou.' } }
+  finally { carregando.delete(nk) }
   // A MESMA GUARDA DO OUVINTE sw:erro, QUE AQUI FALTAVA.
   //
   // O vendedor clica em A (proxy ruim, preflight de 20 s), cansa, clica em B e comeca a conversar.
@@ -936,6 +953,21 @@ async function recarregaEstado() {
   avisaVersao(estado.precisaBaixar ? estado : null)
   desenhaTrava()
   desenhaLista()
+  // A TELA DO MEIO TAMBEM TEM QUE SE ATUALIZAR (18/10/2026).
+  //
+  // Esta funcao roda a cada 20 s (sincroniza) e redesenhava SO a barra e o cabecalho. Quem estava
+  // parado na tela de um numero trancado via "Em uso" pra sempre - inclusive depois de a trava
+  // vencer -, e a propria mensagem promete "Quando a outra pessoa fechar, este botao libera
+  // sozinho". A promessa era falsa: so clicando em outro numero e voltando.
+  // SO REDESENHA QUANDO MUDA, e nunca por cima de outra tela: numero ABERTO aqui mostra o WhatsApp
+  // (nao a telaAbrir), abertura EM CURSO mostra "Abrindo...", e telaErro/telaVazia zeram o `ativo`.
+  // A assinatura evita trocar o HTML embaixo do dedo de quem esta clicando a cada 20 s.
+  if (ativo && !carregando.has(ativo) && !(estado.abertos || []).includes(ativo)) {
+    const n = (estado.numeros || []).find((x) => numKey(x.numero) === ativo)
+    const assina = n ? [n.uso ? (n.uso.meu ? 'meu' : 'de:' + (n.uso.nome || '?')) : 'livre',
+      (n.conn && n.conn.st) || '-', (estado.destacados || []).includes(ativo) ? 'dst' : ''].join('|') : 'sem'
+    if (assina !== travaDesenhada) { travaDesenhada = assina; telaAbrir(ativo) }
+  }
   return estado
 }
 

@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('swp', {
   // Novo Pedido da dash faz, o card cai em Aceitacoes e quem cria la e o Aceitar, com a conferencia
   // dupla e a trava anti-dobro por CPF. Decisao do Bruno, perguntada e confirmada em 16/10.
   pedidoNovo: (lead) => ipcRenderer.invoke('swp:pedido-novo', { lead }),
+  // Quais funis ja sairam PRA ESTE LEAD, e o carimbo de mais um (18/10/2026).
+  funisFeitos: (fone) => ipcRenderer.invoke('swp:funis-feitos', { fone }),
+  funilFeito: (fone, seq) => ipcRenderer.invoke('swp:funil-feito', { fone, seq }),
   rascunhos: (phone) => ipcRenderer.invoke('swp:rascunhos', { phone }),
   rascunhoSalvar: (id, phone, dados) => ipcRenderer.invoke('swp:rascunho-salvar', { id, phone, dados }),
   rascunhoApagar: (id) => ipcRenderer.invoke('swp:rascunho-salvar', { id, apagar: true }),
