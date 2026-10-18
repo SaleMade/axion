@@ -11487,7 +11487,13 @@ async function handleSwWeb(req, env, path) {
         uso: (() => {
           const u2 = usoDe[nk];
           if (!u2) return null;
-          return { nome: u2.nome, desde: u2.desde, meu: u2.maquina === maquina };
+          // `mesmaPessoa` ENTROU EM 18/10/2026. A trava e por MAQUINA de proposito (o Bruno pareia
+          // os numeros no PC dele e o vendedor usa no dele, e e esse cruzamento que derruba
+          // numero), mas a tela so recebia o NOME de quem travou: quando era a propria pessoa em
+          // outro computador, ela lia "Aberto por <ela mesma>" e ia procurar um colega que nao
+          // existe. Aconteceu com o Heynan hoje. O user_id ja estava lido na linha do usoDe e era
+          // jogado fora aqui.
+          return { nome: u2.nome, desde: u2.desde, meu: u2.maquina === maquina, mesmaPessoa: String(u2.user || '') === String(u.id) };
         })(),
         // NUNCA devolve a senha do proxy pra lista: so se ha proxy e qual o endereco.
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
@@ -11824,6 +11830,44 @@ async function handleSwWeb(req, env, path) {
       try { await _swwebAvisaQueda(env, nk, st, b); } catch (_) {}
     }
     return json({ ok: true, nk, st });
+  }
+
+  // GET /api/swweb/funis-feitos?fone=... — quais funis ja foram disparados PRA ESSE LEAD.
+  // POST /api/swweb/funil-feito { fone, seq } — carimba um.
+  //
+  // POR QUE TABELA NOVA e nao a `wa_funnel_run` que ja existe: aquela tem PRIMARY KEY (phone) e
+  // `ON CONFLICT(phone) DO UPDATE SET seq_id=excluded.seq_id`, ou seja guarda SO O ULTIMO funil -
+  // disparar a Etapa 2 apagaria a memoria da Etapa 1. O Bruno pediu TODOS os ja disparados, no
+  // plural, porque o que ele quer ver e em que etapa o lead esta. Alem disso o app nunca escreve
+  // naquela tabela: quem escreve e o motor de funil da dash.
+  //
+  // A CHAVE E (fone, seq), nao (fone, seq, vendedor): o lead RECEBEU aquele funil, e isso vale pra
+  // quem pegar a conversa depois. Guarda quem mandou so pra tela poder dizer.
+  if (req.method === 'GET' && path === '/api/swweb/funis-feitos') {
+    const fone = String(new URL(req.url).searchParams.get('fone') || '').replace(/\D/g, '');
+    if (fone.length < 8) return json({ ok: true, feitos: [] });
+    await _scEnsureTables(env);
+    try {
+      const r = await env.DB.prepare(
+        'SELECT seq, at_id, nome, ts FROM swweb_funil WHERE substr(fone,-8) = ? ORDER BY ts DESC LIMIT 60'
+      ).bind(fone.slice(-8)).all();
+      return json({ ok: true, feitos: ((r && r.results) || []).map((x) => ({ seq: String(x.seq || ''), por: String(x.nome || ''), ts: Number(x.ts) || 0 })) });
+    } catch (_) { return json({ ok: true, feitos: [] }); }
+  }
+
+  if (req.method === 'POST' && path === '/api/swweb/funil-feito') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const fone = String((b && b.fone) || '').replace(/\D/g, '');
+    const seq = String((b && b.seq) || '').slice(0, 80);
+    if (fone.length < 8 || !seq) return err('Faltou o telefone ou o funil');
+    await _scEnsureTables(env);
+    try {
+      await env.DB.prepare(
+        "INSERT INTO swweb_funil (fone, seq, at_id, nome, ts) VALUES (?,?,?,?,strftime('%s','now')) " +
+        'ON CONFLICT(fone, seq) DO UPDATE SET at_id=excluded.at_id, nome=excluded.nome, ts=excluded.ts'
+      ).bind(fone, seq, String(u.id), String(u.name || u.id)).run();
+    } catch (_) { return json({ ok: false }); }
+    return json({ ok: true });
   }
 
   // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
@@ -15009,6 +15053,11 @@ async function _scEnsureTables(env) {
     // `espontaneo` = a janela estava aberta e o WhatsApp caiu sozinho (nao foi acao de gente).
     // `modo`, `info` e `queda` sao o CRU do WhatsApp, guardados pra calibrar o que e ban de verdade.
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_conn (nk TEXT PRIMARY KEY, st TEXT, espontaneo INTEGER DEFAULT 0, modo TEXT, info TEXT, queda TEXT, por TEXT, ts INTEGER)').run();
+    // QUAL FUNIL JA FOI DISPARADO PRA QUAL LEAD (18/10/2026). Uma linha por (telefone, funil), pra
+    // guardar TODOS e nao so o ultimo - o Bruno quer ver a etapa em que o lead esta, e isso e a
+    // lista inteira. O indice e pelos 8 finais porque e assim que a casa casa telefone.
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_funil (fone TEXT, seq TEXT, at_id TEXT, nome TEXT, ts INTEGER, PRIMARY KEY (fone, seq))').run();
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_swweb_funil_f8 ON swweb_funil (substr(fone,-8))').run(); } catch (_) {}
     // CLOUD_API ou ON_PREMISE. Serve pra saber quando um numero SAI da coexistencia (ele deixa de
     // ser CLOUD_API ou some da WABA), que e o que acontece quando ele passa pro SellWave Web.
     try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN platform TEXT').run(); } catch (_) {}
