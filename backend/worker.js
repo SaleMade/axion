@@ -15287,7 +15287,15 @@ function _instNum8(inst) {
 // Resolve o número OFICIAL de transporte (de onde a mensagem SAI).
 // ORDEM: 1) o número que RECEBEU a conversa  2) o at_id (vendedor)  3) o telefone informado.
 async function resolveApiNumber(env, opts = {}) {
-  const cols = 'phone_number_id, waba_id, at_id, display_phone, verified, token';
+  // `status` ENTROU NO SELECT EM 17/10/2026. Sem ele, o passo 1 aceitava a linha de um numero que
+  // JA SAIU DA WABA so porque `verified` continuava 1, e a resposta do vendedor ia pra um
+  // phone_number_id que a Graph nem acha mais (code 100 / subcode 33). Aconteceu no mesmo dia: o
+  // (15) 99237-1970 migrou pro SellWave Web e o inbox parou de responder naquelas conversas, sem
+  // ninguem entender por que.
+  const cols = 'phone_number_id, waba_id, at_id, display_phone, verified, token, status';
+  // Numero que a Meta diz que esta morto NAO e transporte valido, por mais que `verified` continue
+  // 1: mandar por ele e um POST que a Graph recusa, e o vendedor ve "nao enviado" sem entender.
+  const _morto = (r) => !!r && ['BANNED', 'DISCONNECTED', 'AUSENTE'].includes(String(r.status || ''));
   // Desempate ESTÁVEL. `updated_at` NÃO serve de critério: _dcSyncInstances e _scSeedOwners
   // reescrevem wa_api_numbers inteira a cada rodada do cron (2min) e os números caem no MESMO
   // segundo, então o "mais recente" virava sorteio e o vendedor respondia o mesmo lead por um
@@ -15310,6 +15318,12 @@ async function resolveApiNumber(env, opts = {}) {
     const n8 = _instNum8(inst);
     if (n8) {
       const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE display_phone LIKE ? ${ORD}`).bind('%' + n8).first();
+      // NUMERO MORTO PARA AQUI, E NAO CAI PRO VENDEDOR DE PROPOSITO. Cair pro passo 2 faria a
+      // resposta sair por OUTRO numero, que e o que o comentario acima diz que nao pode: o lead
+      // pergunta num chat e a resposta chega noutro, e a janela de 24h daquele chat nao vale pro
+      // outro. Devolver vazio faz o `_waFunnelSendItem` responder `canal_fora`, que e a verdade:
+      // este numero nao fala mais pela API, e quem responde por ele agora e o SellWave Web.
+      if (_morto(row)) return null;
       if (row && row.verified) return row;
     }
     // 2) número do vendedor (conversa nova, sem histórico ainda).
@@ -15322,11 +15336,13 @@ async function resolveApiNumber(env, opts = {}) {
         const escolhido = st && st.wa_ativo && st.wa_ativo[String(opts.atId)];
         if (escolhido) {
           const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? AND display_phone LIKE ? ${ORD}`).bind(String(opts.atId), '%' + String(escolhido)).first();
-          if (row && row.verified) return row;
+          // Aqui o morto so e PULADO (nao para tudo): e conversa NOVA, nao ha chat preso a ele,
+          // entao deixar o vendedor falar por outro numero dele e melhor que nao falar.
+          if (row && row.verified && !_morto(row)) return row;
         }
       } catch (_) {}
       const row = await env.DB.prepare(`SELECT ${cols} FROM wa_api_numbers WHERE at_id = ? ${ORD}`).bind(String(opts.atId)).first();
-      if (row) return row;
+      if (row && !_morto(row)) return row;
     }
     // 3) telefone explícito
     const num = String(opts.phone || '').replace(/\D/g, '');
@@ -21122,9 +21138,17 @@ function _servConnOk(liveSet, inst, chipNum){
   // wa_conn, o último heartbeat vencia) e só UM número era aprovado por vez — os outros ficavam
   // fora da roleta e o front ainda os desligava sozinho. Aqui o número é a identidade, então casar
   // por número é exato e não cruza vendedor.
+  // O ATALHO NAO VALE PRA NUMERO MORTO (17/10/2026). Ele aprova pelo NUMERO, pulando a fonte
+  // Cloud API do liveSet - que e justamente onde mora o filtro de BANNED/DISCONNECTED/AUSENTE que
+  // entrou hoje. Resultado: no instante em que um numero banido fosse aberto no SellWave Web ou no
+  // Sale Chat, ele passava por aqui e o filtro parava de valer. Nao e hipotese: dos 25 numeros da
+  // casa, OITO estao BANNED na Meta, e a virada de segunda poe todos eles no app.
+  // Sobrava um gate so, o interruptor da roleta - e hoje mesmo um numero banido foi RELIGADO duas
+  // vezes na tela, com clique pago entrando segundos depois.
+  // `_apiMorto` vazio aprova tudo, que e o fail-open de sempre: sem informacao, nao bloqueia.
   for(const [k,cn] of liveSet.entries()){
     if(String(k).indexOf('sc_')!==0) continue;
-    if(cn && _lastDigitsEq(cn, chipNum)) return true;
+    if(cn && _lastDigitsEq(cn, chipNum)) return !_apiMorto.has(_waNumKey(cn));
   }
   // 2) senão procura o número SÓ entre as instâncias DESTE vendedor.
   // Antes varria TODAS: um número aberto na instância de OUTRO vendedor aprovava este chip, e a
@@ -21165,7 +21189,7 @@ async function _presselLiveSet(env){
       const _lote = await env.DB.batch([
         env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')"),
         env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1"),
-        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED')"),
+        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED','AUSENTE')"),
       ]);
       cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true;
     } catch (_) {
@@ -21197,11 +21221,19 @@ async function _presselLiveSet(env){
     //     TIRAR AQUI E SEGURO porque nao tira o numero da operacao: se ele esta vivo no app
     //     (SellWave Web ou celular), ele entra no liveSet pelo OUTRO caminho, o do heartbeat de
     //     3 minutos, que e o caminho certo pra ele agora. Quem decide e a Graph, nao a gente.
+    //   - `AUSENTE` entrou DEPOIS, no mesmo dia, consertando um furo que eu mesma abri de manha.
+    //     Eu tinha escrito que AUSENTE (a Graph dizendo "esse id nao existe") NAO devia tirar da
+    //     roleta, pra leitura ruim nao derrubar numero bom. O raciocinio estava certo e a conta
+    //     estava errada: o `_syncWaQuality` SOBRESCREVE o status, entao o numero que ja estava
+    //     DISCONNECTED virava AUSENTE na batida seguinte do cron e VOLTAVA pra roleta sozinho.
+    //     O problema nao era ele entrar: era ele REENTRAR depois de ja ter saido.
+    //     E se for mesmo token sem permissao, o numero continua entrando pelo heartbeat, igual ao
+    //     DISCONNECTED - o fail-open de verdade mora la, nao aqui.
     //   - `RESTRICTED` continua recebendo mensagem (o limite e de ENVIO), entao tirar seria exagero.
     //   - `COALESCE(status,'')` mantem o fail-open: status nulo, vazio ou desconhecido CONTINUA
     //     entrando. Se a Graph nao responder, ninguem sai da roleta por causa disso.
     try{
-      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED')").all();
+      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED','AUSENTE')").all();
       // Chave POR NÚMERO, igual à da tela de conexão: com a chave só do vendedor, o segundo número
       // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
       // exatamente ax_<at>_<8 dígitos>).
@@ -21209,6 +21241,27 @@ async function _presselLiveSet(env){
     }catch(_){}
     return m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
   }catch(_){ return null; }
+}
+// OS NUMEROS QUE A META DIZ QUE ESTAO MORTOS, por numkey.
+//
+// Existe por causa de um atalho: o `_servConnOk` aprova tambem pela chave `sc_<numero>`, e esse
+// caminho nao passa pela fonte Cloud API do liveSet, onde mora o filtro de banido. Sem este
+// conjunto, bastava o numero banido ser aberto no app pra o filtro deixar de valer.
+// O `_servConnOk` e SINCRONO, entao ele so LE este conjunto; quem carrega e quem monta o liveSet,
+// logo antes. Cache de 60s porque o status so muda quando o cron fala com a Graph (a cada ~80 min)
+// e esta e a estrada do clique pago: reler a cada clique seria consulta a toa no caminho mais
+// quente daqui.
+let _apiMorto = new Set(), _apiMortoEm = 0;
+async function _carregaApiMorto(env) {
+  const agora = Date.now();
+  if (agora - _apiMortoEm < 60000) return _apiMorto;
+  try {
+    const r = await env.DB.prepare("SELECT display_phone FROM wa_api_numbers WHERE COALESCE(status,'') IN ('BANNED','DISCONNECTED','AUSENTE')").all();
+    const nova = new Set();
+    for (const x of ((r && r.results) || [])) if (x && x.display_phone) nova.add(_waNumKey(x.display_phone));
+    _apiMorto = nova; _apiMortoEm = agora;
+  } catch (_) { /* falhou = mantem o conjunto anterior; nunca esvazia por erro de leitura */ }
+  return _apiMorto;
 }
 // PAPEL DA TAG (13/09/2026, gerenciador de tags da Contingencia). Mesma regra do front (PAPEIS em
 // src/lib/chips.js): a tag de sistema guarda `papel` e ele vale mais que o nome; tag sem papel (as
@@ -22288,6 +22341,7 @@ async function handlePresselMeus(req, env) {
   const recebendo = {};
   try {
     const liveSet = await _presselLiveSet(env);
+    await _carregaApiMorto(env);   // o _servConnOk le isto de forma sincrona, entao carrega antes
     const emUsoIds = _emUsoIdsDe(data), foraIds = _foraIdsDe(data);
     const chipsAll = Array.isArray(data.chips) ? data.chips : [];
     for (const p of (Array.isArray(data.pressels) ? data.pressels : [])) {
@@ -22605,6 +22659,7 @@ async function handlePresselDiag(req, env){
   const pressels = (Array.isArray(data.pressels) ? data.pressels : []).filter((p) => p && _contaDiag(p.id));
   const chips = Array.isArray(data.chips) ? data.chips : [];
   const liveSet = await _presselLiveSet(env);
+  await _carregaApiMorto(env);   // idem: o atalho `sc_` do _servConnOk depende deste conjunto
   const emUsoIds = _emUsoIdsDe(data);
   const foraIds = _foraIdsDe(data);
   const isEmUso = (c) => c.em_uso===true || c.em_uso===1 || emUsoIds.has(String(c.wa_st||'')) || String(c.wa_st||'')==='em_uso';
