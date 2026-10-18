@@ -22593,6 +22593,119 @@ async function handlePresselNum(req, env) {
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// DESLIGA SOZINHO O NUMERO QUE A META DIZ QUE ESTA BANIDO (18/10/2026, decisao do Bruno:
+// "quando um numero caia, ou seja, banido, ele desligue a chegada de leads e desligue o
+// interruptor dele").
+//
+// O QUE DISPARA ISTO, E SO ISTO: `wa_api_numbers.status = 'BANNED'`, que vem da Graph, da propria
+// Meta, pelo `_syncWaQuality`. E AFIRMACAO, nao deducao. Numero desconectado, sem sinal, com o app
+// fechado ou com a proxy caida NAO desliga nada - essas sao inferencias, e inferencia errada aqui
+// tira do ar o numero de um vendedor que esta trabalhando. O proprio Bruno pediu pra ser avisado
+// antes de qualquer coisa que pudesse fazer isso.
+//
+// DESLIGA SEMPRE QUE ACHAR LIGADO, E O AVISO E QUE SO SAI UMA VEZ.
+//
+// A primeira versao disto fazia o contrario: desligava uma vez e nunca mais mexia, "pra nao brigar
+// com o interruptor dele". Isso ANULAVA o proposito, e eu so vi porque fui prever o que a funcao
+// faria com o dado de hoje: os oito banidos ja estao desligados, entao ela marcaria todos como
+// resolvidos e NUNCA protegeria o caso real - que e justamente alguem RELIGAR um banido sem saber
+// que esta banido. Foi o que aconteceu em 17/10: o (15) 97401-5754, banido, foi religado na tela
+// DUAS VEZES, e o clique pago voltou a cair nele segundos depois.
+// Entao: se esta banido e ligado, desliga. O que tem trinco e o AVISO, pra nao virar spam.
+// E NUNCA RELIGA SOZINHO, em hipotese nenhuma.
+async function _desligaBanidos(env) {
+  let banidos = [];
+  try {
+    const r = await env.DB.prepare("SELECT num_key, display_phone, at_id FROM wa_api_numbers WHERE COALESCE(status,'') = 'BANNED' AND at_id IS NOT NULL AND at_id <> ''").all();
+    banidos = (r && r.results) || [];
+  } catch (_) { return; }
+  if (!banidos.length) return;
+
+  // Quando foi o ULTIMO AVISO de cada numero. So controla o push; o desligamento em si nao olha
+  // isto. Mora no app_config pra sobreviver ao isolate.
+  const K_JA = 'roleta_banido_off';
+  let ja = {};
+  try { ja = JSON.parse((await _readConfig(env, K_JA)) || '{}') || {}; } catch (_) { ja = {}; }
+
+  const agora = Math.floor(Date.now() / 1000);
+  const feitos = [];
+  for (const b of banidos) {
+    const nk8 = String(b.display_phone || '').replace(/\D/g, '').slice(-8);
+    if (!nk8) continue;
+
+    // Leitura e escrita com gate de versao, igual ao handlePresselNum: outra tela gravando no
+    // mesmo segundo nao pode perder a mexida (e a licao do incidente da aba antiga).
+    let mexeu = false;
+    for (let tent = 0; tent < 3 && !mexeu; tent++) {
+      const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+      if (!row) break;
+      let data; try { data = JSON.parse(row.data); } catch (_) { break; }
+      const chips = Array.isArray(data.chips) ? data.chips : [];
+      const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk8);
+      if (!chip) break;
+      const at = String(chip.at || '');
+      if (!at) break;
+      // SO A CASA. Numero de afiliado e operacao dele, e desligar o numero dos outros por conta
+      // propria nao e nosso papel - o aviso ate pode ir, o interruptor nao.
+      if (String(chip.afl || '')) break;
+
+      const dosVend = chips.filter((c) => c && String(c.at || '') === at && c.num);
+      const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
+      const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
+        .filter((p) => p && _donoDe(p) === _donoDe(chip) && !String(p.afl || ''));
+      if (!alvos.length) break;
+      // JA ESTA DESLIGADO EM TODAS? Entao nao ha o que fazer, e nem gasta gravacao.
+      const estado = _presselEstadoNum(alvos, at, nk8);
+      if (!Object.values(estado).some((x) => x && x.on)) break;   // nada ligado: nada a fazer, e sem aviso
+
+      for (const p of alvos) _presselAplicaNum(p, at, nk8, false, false, numsDoVend);
+      const newVer = (row.version || 0) + 1;
+      const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+        .bind(JSON.stringify(data), newVer, agora, 'banido-off:' + nk8, row.version).run();
+      if (res && res.meta && res.meta.changes > 0) {
+        try { _dashCache = null; } catch (_) {}
+        mexeu = true;
+        ja[nk8] = agora;
+        const pids = alvos.map((p) => p.id).join(',');
+        console.log('ROLETA_BANIDO_OFF num=' + nk8 + ' at=' + at + ' pressels=' + pids);
+        // Fica no MESMO registro das mexidas de gente, com nome proprio: quem abrir o diag amanha
+        // tem que ver que foi o sistema, e nao procurar qual pessoa desligou.
+        try { await _presselNumLog(env, { por: 'sistema', por_nome: 'Sistema (banido na Meta)', at, nk: nk8, acao: 'desliga', pids }); } catch (_) {}
+        feitos.push({ nk8, at, numero: String(chip.num || ''), pids });
+      } else {
+        await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+      }
+    }
+  }
+
+  if (!feitos.length) return;
+  // AVISO PRA DIRECAO DA CASA, no maximo um a cada 12h POR NUMERO. Sem o trinco, religar um banido
+  // tres vezes num dia renderia tres avisos iguais; com ele, o desligamento continua acontecendo
+  // todas as vezes (que e o que protege o clique pago) e o aviso nao vira barulho.
+  const avisar = feitos.filter((f) => !ja[f.nk8] || (agora - Number(ja[f.nk8] || 0)) > 43200);
+  for (const f of avisar) ja[f.nk8] = agora;
+  try { await _writeConfig(env, K_JA, JSON.stringify(ja)); } catch (_) {}
+  if (!avisar.length) return;
+  try {
+    const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+    for (const f of avisar) {
+      // `_fmtFone` do worker e LOCAL de outra funcao (23504), nao da pra usar aqui.
+      const _d = String(f.numero || '').replace(/\D/g, '').replace(/^55/, '');
+      const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(f.numero || '');
+      for (const x of ((us && us.results) || [])) {
+        await _wpParaPessoa(env, String(x.id), {
+          title: 'Numero banido, desliguei da roleta',
+          body: bonito + ' esta banido na Meta. Tirei ele da chegada de leads pra nao receber clique pago. Nao religa sozinho.',
+          tag: 'banido-' + f.nk8,
+          url: '/pressels/contingencia',
+        });
+      }
+    }
+  } catch (_) { /* o desligamento ja aconteceu; aviso que falha nao desfaz isso */ }
+}
+
 // CLIQUE SEM NUMERO HOJE, POR PRESSEL. A pressel sem numero continua gravando a visita em tt_pending,
 // so que com num_key vazio: e o clique pago que caiu no botao morto. Cache de 60s (a consulta anda
 // pelo indice (ts, num_key)).
@@ -27609,6 +27722,9 @@ export default {
         if (volta === 0) await _backupState(env);
         else if (volta === 1) {
           try { await _syncWaQuality(env); } catch (e) { console.error('[cron] syncWaQuality falhou: ' + String((e && e.message) || e)); }
+          // LOGO DEPOIS do sync, de proposito: e ele que descobre o banimento, e descobrir sem agir
+          // deixaria o clique pago indo pro numero morto ate a proxima volta (uns 80 minutos).
+          try { await _desligaBanidos(env); } catch (e) { console.error('[cron] desligaBanidos falhou: ' + String((e && e.message) || e)); }
           await _dcSyncInstances(env);        // token de envio (Meta) de cada numero
           // E os numeros de cada afiliado. Sem isto o numero dele nunca ganha dono e a conversa do
           // cliente dele cairia no inbox da CASA (ver o comentario do donoInicial).
