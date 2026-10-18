@@ -10884,6 +10884,18 @@ async function _swwebUsoTabela(env) {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)'
     ).run();
+    // QUARENTENA DA MAQUINA QUE FOI LIBERADA A FORCA (18/10/2026).
+    //
+    // Nao basta APAGAR o aluguel. O app da versao 1.21.0 tem um vazamento (abertura que estoura
+    // entre o pedeUso e o abertos.set deixa o aluguel em `alugados`) e ele RENOVA de 45 em 45
+    // segundos pelo turno inteiro: apagar a linha so da 45 segundos de alivio e o numero trava de
+    // novo, agora sem ninguem entender por que. Entao a liberacao tambem ANOTA qual maquina foi
+    // tirada, e o pedido dela e recusado por alguns minutos - tempo de a pessoa certa abrir.
+    // E por (nk, maquina) de proposito: quem foi tirado e UMA maquina, e as outras precisam poder
+    // pegar o numero no segundo seguinte. Bloquear todo mundo seria trocar um travamento por outro.
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS swweb_uso_revoga (nk TEXT, maquina TEXT, ate INTEGER, por TEXT, PRIMARY KEY (nk, maquina))'
+    ).run();
   } catch (_) { /* ja existe */ }
 }
 
@@ -12154,11 +12166,54 @@ async function handleSwWeb(req, env, path) {
     }
 
     if (b && b.soltar) {
+      // LIBERAR A FORCA, SO PRA QUEM MANDA NA OPERACAO (18/10/2026). Ate aqui nao existia saida
+      // nenhuma pra numero travado: o DELETE abaixo so apaga o aluguel da PROPRIA maquina, entao
+      // numero preso no nome de quem nao esta mais la ficava inacessivel pra equipe inteira ate o
+      // dono fechar o app. Foi exatamente o que aconteceu com o Heynan em 18/10.
+      //
+      // E O DELETE SOZINHO NAO RESOLVE, e esse e o pulo do gato: o app 1.21.0 tem um vazamento que
+      // renova o aluguel de 45 em 45 segundos pelo turno inteiro. Apagar a linha daria 45 segundos
+      // e o numero travaria de novo. Por isso a liberacao poe a maquina tirada em QUARENTENA por
+      // tres minutos: o pedido dela e recusado com uma frase que diz o que fazer (fechar e abrir o
+      // app, que e justamente o que limpa o vazamento), e nesses tres minutos quem precisa do
+      // numero consegue abrir. As OUTRAS maquinas nao sao afetadas.
+      if (b.forcar) {
+        if (!manda) return err('Só a direção libera número de outra pessoa', 403);
+        let presa = null;
+        try { presa = await env.DB.prepare('SELECT user_id, nome, maquina FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { presa = null; }
+        if (!presa) return json({ ok: true, soltou: false, jaLivre: true });
+        try { await env.DB.prepare('DELETE FROM swweb_uso WHERE nk=?').bind(nk).run(); } catch (_) { return err('Não consegui liberar agora.', 503); }
+        try {
+          await env.DB.prepare(
+            "INSERT INTO swweb_uso_revoga (nk, maquina, ate, por) VALUES (?,?,strftime('%s','now')+180,?) " +
+            'ON CONFLICT(nk, maquina) DO UPDATE SET ate=excluded.ate, por=excluded.por'
+          ).bind(nk, String(presa.maquina || ''), String(u.id)).run();
+        } catch (_) { /* sem a quarentena a liberacao ainda vale, so pode voltar a travar */ }
+        // REGISTRA SEMPRE: liberar o numero de outra pessoa as escuras e pior que o travamento.
+        try {
+          await _presselNumLog(env, {
+            por: String(u.id), por_nome: String(u.name || u.id), at: String(presa.user_id || ''),
+            nk, acao: 'uso_liberado', pids: 'estava com ' + String(presa.nome || presa.user_id || '?'),
+          });
+        } catch (_) { /* o log nao pode impedir a liberacao */ }
+        return json({ ok: true, soltou: true, forcado: true, estava: String(presa.nome || '') });
+      }
       // SO SOLTA O QUE E SEU. Senao uma maquina derruba a outra sem querer, e o cruzamento que a
       // trava existe pra impedir acontece do mesmo jeito.
       try { await env.DB.prepare('DELETE FROM swweb_uso WHERE nk=? AND maquina=?').bind(nk, maquina).run(); } catch (_) { /* ok */ }
       return json({ ok: true, soltou: true });
     }
+
+    // A MAQUINA ESTA EM QUARENTENA? (ver o ramo do `forcar` acima). A consulta e por chave
+    // primaria e so olha a propria maquina, entao nao pesa no caminho de 45 em 45 segundos.
+    // Leitura que falha NAO bloqueia ninguem: quarentena e conveniencia, aluguel e operacao.
+    try {
+      const rev = await env.DB.prepare("SELECT ate FROM swweb_uso_revoga WHERE nk=? AND maquina=? AND ate > strftime('%s','now')").bind(nk, maquina).first();
+      if (rev) {
+        return json({ ok: false, revogado: true, segundos: Math.max(1, Number(rev.ate) - agoraU),
+          erro: 'A direção liberou este número. Feche e abra o SellWave Web para usar ele de novo.' });
+      }
+    } catch (_) { /* sem a tabela, segue o fluxo de sempre */ }
 
     let atual = null;
     try { atual = await env.DB.prepare('SELECT user_id, nome, maquina, desde, ate FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { atual = null; }
