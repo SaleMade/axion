@@ -21332,7 +21332,24 @@ async function _carregaApiMorto(env) {
   const agora = Date.now();
   if (agora - _apiMortoEm < 60000) return _apiMorto;
   try {
-    const r = await env.DB.prepare("SELECT display_phone FROM wa_api_numbers WHERE COALESCE(status,'') IN ('BANNED','DISCONNECTED','AUSENTE')").all();
+    // SO 'BANNED' AQUI (corrigido em 18/10/2026, no mesmo dia em que este conjunto nasceu).
+    //
+    // Este conjunto tem UM uso: o atalho `sc_` do `_servConnOk`, que decide se um numero ABERTO NO
+    // APP (SellWave Web / Sale Chat, ou seja num CELULAR) pode receber lead. Pra essa pergunta, os
+    // tres status NAO sao a mesma coisa:
+    //   BANNED       = a Meta baniu o NUMERO. Ele nao funciona em lugar nenhum, nem no celular. Barra.
+    //   DISCONNECTED = o numero nao esta conectado na Cloud API. E EXATAMENTE o estado de quem foi
+    //                  TIRADO da API pra ir pro celular - que e a migracao que o Bruno esta fazendo.
+    //   AUSENTE      = o phone_number_id sumiu da WABA. O proprio _syncWaQuality diz, com todas as
+    //                  letras, "MARCA, MAS NAO TIRA DA ROLETA POR ISSO", porque o mesmo par de
+    //                  codigos aparece quando o token perde permissao e o numero esta vivo.
+    // Com os tres, o (15) 99237-1970 do Kevin - que o Bruno tirou da coexistencia em 17/10
+    // justamente pra levar pro celular, e que TEM celular criado na central - receberia ZERO lead
+    // no instante em que fosse aberto no app, em silencio. Medido em 18/10: dos 18 numeros que
+    // entravam aqui, 10 nao estao banidos, e dois deles tem dono de verdade.
+    // O filtro irmao do `_presselLiveSet` continua com os tres de proposito: la ele decide se o
+    // numero entra como "sempre vivo pela Cloud API", e um numero fora da API nao esta.
+    const r = await env.DB.prepare("SELECT display_phone FROM wa_api_numbers WHERE COALESCE(status,'') = 'BANNED'").all();
     const nova = new Set();
     for (const x of ((r && r.results) || [])) if (x && x.display_phone) nova.add(_waNumKey(x.display_phone));
     _apiMorto = nova; _apiMortoEm = agora;
