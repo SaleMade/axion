@@ -11634,11 +11634,14 @@ async function handleSwWeb(req, env, path) {
     // O mesmo erro pode existir FORA do banco (duas atribuicoes soltas no mesmo host:porta).
     const porEndereco = {};
     for (const [nk, px] of Object.entries(proxies)) {
-      const ch = String((px && px.host) || '') + ':' + Number((px && px.porta) || 0);
+      // COM A CONTA (18/10/2026): a Decodo tem duas contas nas mesmas portas, e cada conta sai por um IP
+      // (medido: 10003 do sp6ek... = 104.165.117.108, do spryj... = 104.164.65.18). So host:porta acusava
+      // "dividida" o que nao e.
+      const ch = String((px && px.host) || '') + ':' + Number((px && px.porta) || 0) + ':' + String((px && px.usuario) || '');
       (porEndereco[ch] = porEndereco[ch] || []).push((donoDe[nk] || {}).num || nk);
     }
     const repetidasEndereco = Object.entries(porEndereco).filter(([, ns]) => ns.length > 1)
-      .map(([ch, ns]) => ({ endereco: ch, numeros: ns }));
+      .map(([ch, ns]) => ({ endereco: ch.split(':').slice(0, 2).join(':'), numeros: ns }));
 
     // O QUE ESTA TELA PODE PROMETER, e isto vai na resposta de proposito pra tela nao inventar.
     //
@@ -11821,14 +11824,15 @@ async function handleSwWeb(req, env, path) {
       const host = String((px && px.host) || '').trim();
       if (!host) continue;
       const porta = Number((px && px.porta) || 0);
-      const ch = host + ':' + porta;
+      // A CONTA FAZ PARTE DA PROXY (18/10/2026): duas contas Decodo nas mesmas portas saem por IPs diferentes.
+      const ch = host + ':' + porta + ':' + String((px && px.usuario) || '') + ':' + String((px && px.senha) || '');
       (porEndereco[ch] = porEndereco[ch] || []).push(nk);
     }
     const criadas = [];
     for (const [ch, nks] of Object.entries(porEndereco)) {
       const base = proxies[nks[0]] || {};
-      // Se ja existe no banco uma entrada com o mesmo host:porta, reaproveita em vez de duplicar.
-      let id = Object.keys(banco).find((k) => String(banco[k].host || '') + ':' + Number(banco[k].porta || 0) === ch);
+      // Se ja existe no banco a MESMA proxy (endereco e conta), reaproveita em vez de duplicar.
+      let id = Object.keys(banco).find((k) => String(banco[k].host || '') + ':' + Number(banco[k].porta || 0) + ':' + String(banco[k].usuario || '') + ':' + String(banco[k].senha || '') === ch);
       if (!id) {
         id = 'px' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36) + criadas.length;
         banco[id] = {
@@ -11839,7 +11843,7 @@ async function handleSwWeb(req, env, path) {
           usuario: String(base.usuario || ''), senha: String(base.senha || ''),
           criado: agoraAd, mexido: agoraAd, pais: '', visto: 0,
         };
-        criadas.push({ id, endereco: ch, numeros: nks.length });
+        criadas.push({ id, endereco: ch.split(':').slice(0, 2).join(':'), numeros: nks.length });
       }
       for (const nk of nks) proxies[nk] = { ...proxies[nk], id, ver: Number(banco[id].mexido) || agoraAd };
     }
