@@ -11467,10 +11467,10 @@ async function handleSwWeb(req, env, path) {
         // problemas diferentes e o conserto de cada um e outro.
         roleta: _swwebApto(c, nomeSt, _ids)
           && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num))
-          && (_modoRoleta(c) || _servConnOk(liveSet, 'ax_' + String(c.at || ''), c.num)),
+          && _chipVivo(liveSet, c, 'ax_' + String(c.at || '')),
         // `_servConnOk` tem fail-open proprio: sem liveSet nenhum ele aprova, pra uma falha de
         // leitura nao apagar a operacao inteira da tela.
-        vivo: _modoRoleta(c) || _servConnOk(liveSet, 'ax_' + String(c.at || ''), c.num),
+        vivo: _chipVivo(liveSet, c, 'ax_' + String(c.at || '')),
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
         // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
@@ -21251,6 +21251,8 @@ function _lastDigitsEq(a,b){ const na=String(a||'').replace(/\D/g,'').slice(-8),
 // Checa por NÚMERO (não pelo slot da instância): assim, trocar o número de
 // principal↔reserva (ou reconectar noutro slot) NÃO gera falso "não conectado".
 // FAIL-OPEN: sem info nenhuma (Evolution fora / números desconhecidos) não bloqueia.
+// liveSet null = a leitura FALHOU (aprova); Map vazio = leu e ninguem esta vivo (nao aprova). Ver o fim do
+// _presselLiveSet (18/10/2026). Chip da casa sem API nem passa por aqui: ver _chipVivo.
 function _servConnOk(liveSet, inst, chipNum){
   if(!liveSet) return true;                             // sem info → fail-open
   if(!chipNum) return false;
@@ -21293,6 +21295,10 @@ function _servConnOk(liveSet, inst, chipNum){
 // número oficial da Cloud API (esse não cai como WhatsApp Web, entra direto).
 // Saiu de dentro do handler da pressel pra a TELA DE DIAGNÓSTICO poder chamar a MESMA função: com
 // duas cópias da regra, a tela diria "tudo certo" enquanto a roleta não entrega número nenhum.
+// Estados do app (swweb_conn.st) que tiram o numero do liveSet: ver _presselLiveSet. Vem de ui/agente.js do
+// SellWave Web (estadoConn): bloqueado = TOS_BLOCK/SMB_TOS_BLOCK, conflito = CONFLICT, proxy = PROXYBLOCK,
+// versao = DEPRECATED_VERSION.
+const _SWWEB_ST_FORA = "('bloqueado','conflito','proxy','versao')";
 async function _presselLiveSet(env){
   try{
     // A linha 'sc' do wa_conn NÃO expira sozinha: ela fica gravada com o último heartbeat. Sem checar
@@ -21310,21 +21316,46 @@ async function _presselLiveSet(env){
     // sumiam do liveSet. Como o Map nao fica vazio (o wa_conn ainda responde), o fail-open nao
     // salvava: a roleta simplesmente parava de entregar pra esses vendedores.
     let cs = { results: [] }, _hb = null, _api = null, _loteOk = false;
+    // O ESTADO QUE O APP REPORTA TIRA O NUMERO (18/10/2026, auditoria da sessao ac). O app grava em swweb_conn o
+    // estado do WhatsApp de cada numero quando ele MUDA (POST /api/swweb/conexao). Em bloqueio (TOS_BLOCK, o
+    // candidato a ban), conflito (CONFLICT: a sessao abriu em outro lugar e a mensagem cai la), bloqueio de proxy e
+    // versao vencida, o WhatsApp continua "autenticado": o app segue batendo heartbeat e o numero seguia recebendo
+    // clique pago sem capturar nada. Metade dos numeros de trabalho de 19/10 nao e da Cloud API, e pra eles este e o
+    // unico sinal de ban que existe. Fica fora ate o app reportar outro estado. 'caiu' e 'qr' nao entram: neles o
+    // app para de bater sinal sozinho e a janela de 180 s ja tira o numero; 'offline' tambem nao (sem rede nao chega
+    // heartbeat). Leitura que falha nao tira ninguem.
+    let _ruins = new Set();
+    let _okConn = false, _okHb = false, _okApi = false;
     try {
       const _lote = await env.DB.batch([
         env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')"),
         env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1"),
         env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED','AUSENTE')"),
+        // OS BANIDOS NA META, NA MESMA IDA AO BANCO (18/10/2026). O atalho sc_ do _servConnOk e o _vivoNoApp leem o
+        // _apiMorto, mas so as telas o carregavam: o clique pago (handlePresselPublic) montava o liveSet sem ele e,
+        // num isolate novo, rodava com o conjunto VAZIO - numero banido aberto no app passava. Mesmo SELECT do
+        // _carregaApiMorto (so BANNED, ver la por que).
+        env.DB.prepare("SELECT display_phone FROM wa_api_numbers WHERE COALESCE(status,'') = 'BANNED'"),
+        env.DB.prepare("SELECT nk FROM swweb_conn WHERE st IN " + _SWWEB_ST_FORA),
       ]);
-      cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true;
+      cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true; _okConn = true;
+      _ruins = new Set(((_lote[4] && _lote[4].results) || []).map((x) => String((x && x.nk) || '')).filter(Boolean));
+      if (_lote[3]) {
+        const nova = new Set();
+        for (const x of (_lote[3].results || [])) if (x && x.display_phone) nova.add(_waNumKey(x.display_phone));
+        _apiMorto = nova; _apiMortoEm = Date.now();
+      }
     } catch (_) {
-      try { cs = await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all(); } catch (_2) {}
+      try { cs = await env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')").all(); _okConn = true; } catch (_2) {}
+      try { await _carregaApiMorto(env); } catch (_3) {}
+      try { const rr = await env.DB.prepare("SELECT nk FROM swweb_conn WHERE st IN " + _SWWEB_ST_FORA).all(); _ruins = new Set(((rr && rr.results) || []).map((x) => String((x && x.nk) || '')).filter(Boolean)); } catch (_4) {}
     }
-    const m=new Map((cs.results||[]).map(r=>[r.instance, r.number||'']));
+    const m=new Map((cs.results||[]).filter(r=>!(r && r.number && _ruins.has(_waNumKey(r.number)))).map(r=>[r.instance, r.number||'']));
     // heartbeat recente do Sale Chat também vale como número vivo (independe do wa_conn ter sido gravado)
     try{
       const hb = (_loteOk && _hb) ? _hb : await env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1").all();
-      (hb.results||[]).forEach(h=>{ if(h && h.self_number) m.set('sc_'+h.self_number, String(h.self_number)); });
+      (hb.results||[]).forEach(h=>{ if(h && h.self_number && !_ruins.has(_waNumKey(h.self_number))) m.set('sc_'+h.self_number, String(h.self_number)); });
+      _okHb = true;
     }catch(_){}
     // Número OFICIAL (Cloud API) está SEMPRE vivo do lado da Meta (não cai como WhatsApp Web).
     // Entra direto no liveSet pra roleta rotear pra ele, sem depender de heartbeat.
@@ -21363,8 +21394,19 @@ async function _presselLiveSet(env){
       // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
       // exatamente ax_<at>_<8 dígitos>).
       (api.results||[]).forEach(a=>{ if(a && a.at_id && a.display_phone) m.set('ax_'+a.at_id+'_'+String(a.display_phone).replace(/\D/g,'').slice(-8), String(a.display_phone)); });
+      _okApi = true;
     }catch(_){}
-    return m.size ? m : null;   // vazio = não sabemos nada → fail-open (null), NUNCA fail-closed
+    // VAZIO NAO E "NAO SEI" QUANDO AS TRES LEITURAS DERAM CERTO (18/10/2026). O antigo `m.size ? m : null` juntava
+    // duas coisas diferentes: leitura que FALHOU (nao sei quem esta vivo: null, fail-open, ninguem sai da roleta por
+    // erro de banco - isso continua) e leitura que deu certo e nao achou NINGUEM (todos os apps fechados e nenhum
+    // numero de API valido). O segundo caso virava o mesmo null e o _servConnOk aprovava TUDO: depois da migracao pro
+    // app, a noite, com os apps fechados, todo numero Em uso da casa voltava pra roleta, inclusive os em aquecimento
+    // que nunca abriram. Medido em 18/10 com as funcoes reais: 51 de 51 chips da casa aprovados e 9 na roleta real.
+    // Hoje so nao acontecia porque sobravam linhas CONNECTED de API, duas delas de numeros com a tag Morto.
+    // Agora, leu e nao achou ninguem = Map vazio: ninguem vivo, a pressel cai no aviso "sem numero" (push a cada 30
+    // min por pressel), que e a regra do Bruno de 17/10 ("a roleta nao pode mandar clique pra numero fechado").
+    if (m.size) return m;
+    return (_okConn && _okHb && _okApi) ? m : null;
   }catch(_){ return null; }
 }
 // OS NUMEROS QUE A META DIZ QUE ESTAO MORTOS, por numkey.
@@ -21372,8 +21414,9 @@ async function _presselLiveSet(env){
 // Existe por causa de um atalho: o `_servConnOk` aprova tambem pela chave `sc_<numero>`, e esse
 // caminho nao passa pela fonte Cloud API do liveSet, onde mora o filtro de banido. Sem este
 // conjunto, bastava o numero banido ser aberto no app pra o filtro deixar de valer.
-// O `_servConnOk` e SINCRONO, entao ele so LE este conjunto; quem carrega e quem monta o liveSet,
-// logo antes. Cache de 60s porque o status so muda quando o cron fala com a Graph (a cada ~80 min)
+// O `_servConnOk` e SINCRONO, entao ele so LE este conjunto. Quem carrega e o proprio _presselLiveSet, na mesma
+// ida ao banco (18/10/2026: antes so as telas carregavam, e o clique pago rodava com o conjunto vazio num isolate
+// novo); as telas ainda chamam esta funcao, que acerta o cache. Cache de 60s porque o status so muda quando o cron fala com a Graph (a cada ~80 min)
 // e esta e a estrada do clique pago: reler a cada clique seria consulta a toa no caminho mais
 // quente daqui.
 let _apiMorto = new Set(), _apiMortoEm = 0;
@@ -21560,7 +21603,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
       // esta no ar). O controle passa a ser o INTERRUPTOR do numero na pressel, como ele pediu.
       // Sale Chat e API oficial seguem exigindo conexao, como antes.
       const roleta = _modoRoleta(c);
-      if(!roleta && !_servConnOk(liveSet, instP, c.num)) continue;                 // não conectado agora (casa por número)
+      if(!_chipVivo(liveSet, c, instP)) continue;                                  // não conectado agora (casa sem API: só o próprio número aberto no app)
       // O CHIP EM AQUECIMENTO IGNORA o lim_dia/dist/ordem gravados: quem manda neles e a rampa, e
       // o teto muda de hora em hora. Ele tambem NAO respeita `lim_livre` (o "religa por hoje" que o
       // Bruno usa num numero de producao): soltar o teto de um chip de tres dias e exatamente o que
@@ -21875,6 +21918,38 @@ async function _numerosMudos(env) {
 // chip de AFILIADO (`afl`), que usa a pressel so pra distribuir. Raio medido no D1 em 17/10: dos 9
 // chips da casa em uso, 8 sao de API e nao mudam; o unico sem API era o ..0653.
 function _modoRoleta(c){ return !!c && !c.api && c.conn !== 'sc' && !!c.afl; }
+// O CHIP ESTA VIVO PRA RECEBER LEAD? Uma regra so, usada pela roleta, pelo campo roleta/vivo do GET
+// /api/swweb/numeros e pelo motivo da Chegada de leads (copias da regra = a tela mentindo no dia em que mais importa).
+//
+// CHIP DA CASA SEM API SO VALE COM O PROPRIO NUMERO ABERTO NO APP (18/10/2026, furo achado pela sessao 2d; o furo
+// era meu, de 17/10). Quando tirei o chip da casa sem API do _modoRoleta, mandei ele pro _servConnOk GENERICO, e ele
+// aprova pela linha do numero em wa_api_numbers: desmarcar API no chip nao mexe nessa linha, e enquanto o cron nao
+// marca DISCONNECTED (ate ~80 min; sem prazo, se o numero continuar na WABA) ela entra no liveSet como
+// ax_<at>_<8 digitos> e o numero recebe com o app FECHADO. E exatamente a migracao de 19/10: o Bruno desmarca API e
+// abre o numero no app. A regra dele (17/10): "a roleta nao pode mandar clique pra numero fechado".
+// Medido com as funcoes reais e o D1 de 18/10 (scratchpad roleta-conf): os 7 numeros CONNECTED da casa passam pela
+// linha da API; 3 deles estao nas 5 pressels da casa.
+// Pra esse chip so vale a chave sc_<numero> do heartbeat (SellWave Web ou Sale Chat abertos, com o WhatsApp
+// autenticado nos ultimos 3 min), menos numero BANIDO na Meta (_apiMorto, que de proposito tem SO BANNED:
+// DISCONNECTED e o estado normal de quem saiu da API pra ir pro celular, ver _carregaApiMorto).
+// liveSet null (leitura que FALHOU) continua aprovando, o fail-open de sempre. Map vazio (leu e ninguem esta vivo)
+// nao aprova: ver o fim do _presselLiveSet.
+// Chip de API e o Sale Chat de afiliado seguem no _servConnOk; o chip de afiliado sem API (roleta) nao exige
+// conexao, como sempre.
+function _vivoNoApp(liveSet, chipNum){
+  if(!liveSet) return true;
+  if(!chipNum) return false;
+  for(const [k,cn] of liveSet.entries()){
+    if(String(k).indexOf('sc_')!==0) continue;
+    if(cn && _lastDigitsEq(cn, chipNum)) return !_apiMorto.has(_waNumKey(cn));
+  }
+  return false;
+}
+function _chipVivo(liveSet, c, inst){
+  if(_modoRoleta(c)) return true;
+  if(c && !c.api && !c.afl) return _vivoNoApp(liveSet, c.num);
+  return _servConnOk(liveSet, inst, c && c.num);
+}
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
 // Contador em MEMÓRIA dos últimos envios por número. A gravação do clique (tt_pending) leva alguns
 // instantes pra aparecer na LEITURA, e numa rajada isso deixava passar bem mais que o teto antes de
@@ -23031,10 +23106,10 @@ async function handlePresselDiag(req, env){
         return offMap['@'+String(c.at)] || offMap[String(c.at)+':'+nk];
       });
       const ligados = usaveis.filter(c=>!desligados.includes(c));
-      const conectados = ligados.filter(c=>_servConnOk(liveSet, 'ax_'+String(c.at), c.num));
+      const conectados = ligados.filter(c=>_chipVivo(liveSet, c, 'ax_'+String(c.at)));
       if(!usaveis.length) motivo = 'nenhum número está "Em uso" — a roleta só entrega lead pra número marcado assim';
       else if(!ligados.length) motivo = 'os ' + usaveis.length + ' números "Em uso" estão DESLIGADOS nesta pressel (interruptor do vendedor)';
-      else if(!conectados.length) motivo = 'os números estão ligados, mas nenhum aparece conectado agora (WhatsApp caído ou Sale Chat fechado)';
+      else if(!conectados.length) motivo = 'os números estão ligados, mas nenhum aparece conectado agora (o app do número está fechado ou o WhatsApp caiu)';
       else motivo = 'nenhum número disponível no momento';
     }
     // Quem tem janela de entrada ve o numero reduzido no resto da tela; aqui era o unico lugar
