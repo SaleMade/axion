@@ -662,6 +662,11 @@ async function abreNumero(numero) {
 }
 
 async function abreDeVerdade(nk, numero, meu) {
+  // DEVOLVE O ALUGUEL E SAI. Toda saida de erro daqui passa por ela: o aluguel foi pedido antes do
+  // preflight (ver `abreNumero`), e sem devolver, o numero fica trancado no nome de quem tentou
+  // pra todo mundo MENOS pra ele - o `fechaNumero` nao serve aqui porque sai cedo quando o numero
+  // nao esta em `abertos`, e abertura que falhou nunca entrou.
+  const desiste = (resp) => { try { soltaUso(nk) } catch (_) { /* vence sozinho em 2 min */ } return resp }
 
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
   const busca = await puxaProxyDaDash(nk)
@@ -674,8 +679,8 @@ async function abreDeVerdade(nk, numero, meu) {
   // na Contingencia, e e um clique. Antes a saida pra proxy caida era desligar a trava da operacao
   // inteira, e o custo disso nao era desligar, era RELIGAR - ninguem religa.
   if (!px && !busca.excecao) {
-    if (busca.rede) return { ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número. Tente de novo em um minuto.' }
-    return { ok: false, erro: 'Este número não tem proxy. Escolha uma em Contingência > Proxies, na dash.' }
+    if (busca.rede) return desiste({ ok: false, erro: 'Não deu pra falar com a dash pra pegar o proxy deste número. Tente de novo em um minuto.' })
+    return desiste({ ok: false, erro: 'Este número não tem proxy. Escolha uma em Contingência > Proxies, na dash.' })
   }
   if (!px && busca.excecao) {
     // AVISA SEMPRE, E COM A HORA: numero aberto sem proxy e uma excecao, e excecao silenciosa vira
@@ -698,7 +703,7 @@ async function abreDeVerdade(nk, numero, meu) {
     if (!teste.ok) {
       // Fail-closed: deixa a sessao no buraco negro, pra nada escapar depois.
       await aplicaProxy(ses, null, particaoDe(nk))
-      return { ok: false, erro: 'O proxy não respondeu: ' + teste.erro }
+      return desiste({ ok: false, erro: 'O proxy não respondeu: ' + teste.erro })
     }
     // FECHA quando NAO SABE o pais, nao so quando sabe que e outro. Antes, resposta sem countryCode
     // passava - e o teste e http em texto claro, entao o proprio dono do proxy podia forjar.
@@ -706,9 +711,9 @@ async function abreDeVerdade(nk, numero, meu) {
       await aplicaProxy(ses, null, particaoDe(nk))
       // A FRASE NAO FALA MAIS DE "EXIGENCIA LIGADA": nao ha o que desligar, e mandar a pessoa
       // procurar um interruptor que nao existe e o pior tipo de mensagem de erro.
-      return { ok: false, erro: teste.pais
+      return desiste({ ok: false, erro: teste.pais
         ? 'Este proxy sai por ' + teste.pais + ', e o número só abre com IP do Brasil. Escolha outro em Contingência > Proxies.'
-        : 'Não deu pra confirmar que o IP é do Brasil. Teste este proxy em Contingência > Proxies.' }
+        : 'Não deu pra confirmar que o IP é do Brasil. Teste este proxy em Contingência > Proxies.' })
     }
     avisaCasca('sw:saida', { nk, ip: teste.ip, pais: teste.pais, cidade: teste.cidade, provedor: teste.provedor })
     // Sem await: abrir o numero nao espera a dash. Se nao chegar, a proxima abertura conta.

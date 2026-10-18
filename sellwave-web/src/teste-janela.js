@@ -157,6 +157,23 @@ async function rodar() {
   conta('e ela devolve o numero ao fechar, em vez de matar a view',
     /win\.on\('close', \(\) => devolve\(nk\)\)/.test(semComentario))
 
+  // ── O ALUGUEL DO NUMERO VOLTA QUANDO A ABERTURA FALHA ────────────────────────────────────
+  //
+  // Mora aqui porque aqui e onde as guardas do main.js sao recortadas do fonte. O aluguel e pedido
+  // ANTES do preflight (de proposito: nao se sobe uma sessao de 400 MB pra descobrir no fim que o
+  // numero esta com outra maquina), e por isso TODA saida de erro tem que devolver. Sem isso o
+  // numero fica trancado como "Aberto por <quem tentou>" pra todo mundo MENOS pra ele, e so solta
+  // fechando o app - o `fechaNumero` nao resolve, porque sai cedo quando o numero nao esta em
+  // `abertos`, e abertura que falhou nunca entrou.
+  const bloco = semComentario.slice(
+    semComentario.indexOf('async function abreDeVerdade('),
+    semComentario.indexOf('function salvaSessao('),
+  )
+  const crus = (bloco.match(/return \{ ok: false/g) || []).length
+  const comDesiste = (bloco.match(/return desiste\(/g) || []).length
+  conta('toda saida de erro da abertura devolve o aluguel do numero',
+    bloco.length > 200 && crus === 0 && comDesiste >= 4, crus + ' cruas, ' + comDesiste + ' devolvendo')
+
   console.log('\n' + ok + ' de ' + (ok + ruim) + '\n')
   app.exit(ruim ? 1 : 0)
 }
