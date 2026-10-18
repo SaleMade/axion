@@ -15223,10 +15223,26 @@ async function _syncWaQuality(env) {
     try {
       // Numero da Dualhook so le pela chave dele (15/10/2026); os outros seguem como sempre.
       const r = await _graph(env, '/' + pnid + '?fields=quality_rating,status,platform_type', _ehChaveDualhook(row.token) ? { token: row.token } : {});
-      // GRAPH QUE NAO RESPONDE NAO MUDA NADA. Numero sumido da WABA, token vencido, 400, 404, rede:
-      // tudo isso cai aqui e a linha fica como estava. Tratar "nao sei" como "banido" tiraria numero
-      // bom da roleta por causa de um erro de rede, que e o oposto do que este conserto existe pra
-      // fazer. O dado velho continua, e quem olha o `status_em` sabe de quando ele e.
+      // GRAPH QUE NAO RESPONDE NAO MUDA NADA. Token vencido, 500, rede: a linha fica como estava.
+      // Tratar "nao sei" como "banido" tiraria numero bom da roleta por causa de um erro de rede.
+      //
+      // COM UMA EXCECAO QUE A GRAPH DIZ COM NOME E SOBRENOME: `code 100` + `error_subcode 33`
+      // (GraphMethodException, "Object with ID ... does not exist"). E o que ela responde quando o
+      // phone_number_id NAO EXISTE MAIS na WABA - foi exatamente isso em 17/10/2026, quando o Bruno
+      // tirou o (15) 99237-1970 da coexistencia pra levar pro celular. Sem isto, a linha ficaria
+      // para sempre com o ultimo status bom e ninguem saberia que o numero saiu.
+      // MARCA, MAS NAO TIRA DA ROLETA POR ISSO: o mesmo par de codigos tambem aparece quando o
+      // token perde permissao, e ai o numero esta vivo e so a gente ficou cega. Quem tira da roleta
+      // e `BANNED`/`DISCONNECTED`, que sao afirmacoes da Meta sobre o numero, nao sobre a leitura.
+      // AUSENTE serve pra tela dizer "sumiu da API" e pro `status_em` datar quando.
+      if (!r.ok && r.data && r.data.error
+          && Number(r.data.error.code) === 100 && Number(r.data.error.error_subcode) === 33) {
+        try {
+          await env.DB.prepare("UPDATE wa_api_numbers SET status='AUSENTE', status_em=strftime('%s','now'), updated_at=strftime('%s','now') WHERE phone_number_id=? AND COALESCE(status,'') <> 'AUSENTE'")
+            .bind(pnid).run();
+        } catch (_) {}
+        continue;
+      }
       if (!r.ok || !r.data) continue;
       const q = String(r.data.quality_rating || '').toUpperCase();
       const st = String(r.data.status || '').toUpperCase();
@@ -21106,7 +21122,7 @@ async function _presselLiveSet(env){
       const _lote = await env.DB.batch([
         env.DB.prepare("SELECT instance, number FROM wa_conn WHERE updated_at > strftime('%s','now')-180 AND state IN ('open','sc','cloud')"),
         env.DB.prepare("SELECT self_number FROM sc_heartbeat WHERE last_seen > strftime('%s','now')-180 AND wpp_seen=1"),
-        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') <> 'BANNED'"),
+        env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED')"),
       ]);
       cs = _lote[0] || cs; _hb = _lote[1] || null; _api = _lote[2] || null; _loteOk = true;
     } catch (_) {
@@ -21129,12 +21145,20 @@ async function _presselLiveSet(env){
     // PRIMEIRO. Numero pior recebia mais clique pago. Isso esta escrito no log da area
     // `roleta-numero-morto-recebendo` desde 25/08/2026 e so agora tem como ser resolvido.
     //
-    // SO `BANNED` TIRA, e de proposito:
-    //   - `RESTRICTED` continua recebendo mensagem (o limite e de ENVIO), entao tirar seria exagero;
+    // `BANNED` E `DISCONNECTED` TIRAM, e cada um por um motivo:
+    //   - BANNED e conta morta: nunca mais responde.
+    //   - DISCONNECTED entrou em 17/10/2026, quando o Bruno migrou o (15) 99237-1970 da Cloud API
+    //     pro celular do LDPlayer. O numero SAIU da coexistencia e a linha aqui continuou dizendo
+    //     que ele era numero oficial vivo - entao a roleta mandaria clique pago por um caminho que
+    //     nao existe mais, e o lead nao seria capturado por ele.
+    //     TIRAR AQUI E SEGURO porque nao tira o numero da operacao: se ele esta vivo no app
+    //     (SellWave Web ou celular), ele entra no liveSet pelo OUTRO caminho, o do heartbeat de
+    //     3 minutos, que e o caminho certo pra ele agora. Quem decide e a Graph, nao a gente.
+    //   - `RESTRICTED` continua recebendo mensagem (o limite e de ENVIO), entao tirar seria exagero.
     //   - `COALESCE(status,'')` mantem o fail-open: status nulo, vazio ou desconhecido CONTINUA
     //     entrando. Se a Graph nao responder, ninguem sai da roleta por causa disso.
     try{
-      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') <> 'BANNED'").all();
+      const api = (_loteOk && _api) ? _api : await env.DB.prepare("SELECT at_id, display_phone FROM wa_api_numbers WHERE verified=1 AND at_id IS NOT NULL AND (quality IS NULL OR quality<>'RED') AND COALESCE(status,'') NOT IN ('BANNED','DISCONNECTED')").all();
       // Chave POR NÚMERO, igual à da tela de conexão: com a chave só do vendedor, o segundo número
       // oficial dele ficava fora da roleta (o Map guarda um valor por chave, e _servConnOk procura
       // exatamente ax_<at>_<8 dígitos>).
