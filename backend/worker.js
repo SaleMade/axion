@@ -11400,6 +11400,14 @@ async function handleSwWeb(req, env, path) {
       }
     } catch (_) { /* sem fila a tela cai no modo roleta, que e o padrao */ }
 
+    // O estado de conexao de todo mundo, numa ida so.
+    const conns = {};
+    try {
+      const rc = await env.DB.prepare('SELECT nk, st, espontaneo, ts FROM swweb_conn').all();
+      for (const x of ((rc && rc.results) || [])) {
+        if (x && x.nk) conns[String(x.nk)] = { st: String(x.st || ''), esp: !!x.espontaneo, ts: Number(x.ts) || 0 };
+      }
+    } catch (_) { /* tabela nova: sem ela a tela so nao mostra o estado */ }
     const numeros = meus.map((c) => {
       const nk = _swwebKey(c.num);
       const px = proxies[nk] || null;
@@ -11422,6 +11430,9 @@ async function handleSwWeb(req, env, path) {
         aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
+        // O ESTADO DA CONEXAO no SellWave Web, pra tela poder dizer "conectado" ou "caiu" em vez
+        // de so oferecer o botao de abrir. Vem de swweb_conn (ver POST /api/swweb/conexao).
+        conn: conns[nk] || null,
         // Liberado a abrir sem proxy ate quando, se estiver.
         excecao: excecoes[nk] ? { ate: excecoes[nk].ate, por: String(excecoes[nk].nome || '') } : null,
         // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
@@ -11759,6 +11770,40 @@ async function handleSwWeb(req, env, path) {
     for (const [k, e] of Object.entries(cru)) if (Number((e && e.ate) || 0) <= agoraExc) delete cru[k];
     await _writeConfig(env, K_EXC, JSON.stringify(cru));
     return json({ ok: true, nk, ate: horas ? cru[nk].ate : 0 });
+  }
+
+  // POST /api/swweb/conexao — o app conta o estado do WhatsApp daquele numero.
+  // { nk, st, espontaneo, modo, info, queda }
+  //
+  // SO QUANDO MUDA: o app nao repete o mesmo estado a cada minuto.
+  // Qualquer pessoa logada pode reportar o numero que ela abriu; nao e escrita de operacao, e
+  // observacao da maquina dela. O que e sensivel (desligar numero) nao acontece aqui.
+  if (req.method === 'POST' && path === '/api/swweb/conexao') {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const nk = _swwebKeyExata(b && b.nk);
+    if (!nk) return err(_ERRO_NK);
+    const st = String((b && b.st) || '').slice(0, 20);
+    if (!st) return err('Falta o estado');
+    const espontaneo = (b && b.espontaneo) ? 1 : 0;
+    await _scEnsureTables(env);
+    try {
+      await env.DB.prepare(
+        "INSERT INTO swweb_conn (nk, st, espontaneo, modo, info, queda, por, ts) VALUES (?,?,?,?,?,?,?,strftime('%s','now'))" +
+        " ON CONFLICT(nk) DO UPDATE SET st=excluded.st, espontaneo=excluded.espontaneo, modo=excluded.modo," +
+        " info=excluded.info, queda=excluded.queda, por=excluded.por, ts=excluded.ts"
+      ).bind(nk, st, espontaneo, String((b && b.modo) || '').slice(0, 40), String((b && b.info) || '').slice(0, 40),
+             JSON.stringify((b && b.queda) || null).slice(0, 300), String(u.id)).run();
+    } catch (_) { return err('Não consegui gravar', 500); }
+    // LOG CRU, SEMPRE. E daqui que vai sair a resposta de qual sinal um ban de verdade dispara.
+    console.log('SWWEB_CONN nk=' + nk + ' st=' + st + ' esp=' + espontaneo
+      + ' modo=' + String((b && b.modo) || '') + ' queda=' + JSON.stringify((b && b.queda) || null));
+    // AVISA SO NO CASO QUE E ALARME DE VERDADE: caiu ou bloqueou SOZINHO, com a janela aberta.
+    // Fechar o numero, sair do app, conflito e proxy nao avisam - os dois primeiros sao acao de
+    // gente e os dois ultimos tem conserto na mao de quem esta na frente da tela.
+    if (espontaneo && (st === 'caiu' || st === 'bloqueado')) {
+      try { await _swwebAvisaQueda(env, nk, st, b); } catch (_) {}
+    }
+    return json({ ok: true, nk, st });
   }
 
   // POST /api/swweb/proxy-testar — testa a proxy DE VERDADE e grava o resultado.
@@ -14937,6 +14982,13 @@ async function _scEnsureTables(env) {
     // DISCONNECTED). Numero BANIDO continua GREEN - medido nos 25 numeros da casa em 17/10: oito
     // estavam BANNED na Meta e os oito com quality GREEN aqui. Ver _syncWaQuality e _presselLiveSet.
     try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN status TEXT').run(); } catch (_) {}
+    // O ESTADO DA CONEXAO DE CADA NUMERO NO SELLWAVE WEB (18/10/2026). Separado do sc_heartbeat de
+    // proposito: aquele decide quem recebe LEAD e so aceita numero vivo; este guarda tambem o
+    // estado RUIM, que e justamente o que a tela precisa mostrar. Misturar os dois poria numero
+    // caido de volta na roleta.
+    // `espontaneo` = a janela estava aberta e o WhatsApp caiu sozinho (nao foi acao de gente).
+    // `modo`, `info` e `queda` sao o CRU do WhatsApp, guardados pra calibrar o que e ban de verdade.
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_conn (nk TEXT PRIMARY KEY, st TEXT, espontaneo INTEGER DEFAULT 0, modo TEXT, info TEXT, queda TEXT, por TEXT, ts INTEGER)').run();
     // CLOUD_API ou ON_PREMISE. Serve pra saber quando um numero SAI da coexistencia (ele deixa de
     // ser CLOUD_API ou some da WABA), que e o que acontece quando ele passa pro SellWave Web.
     try { await env.DB.prepare('ALTER TABLE wa_api_numbers ADD COLUMN platform TEXT').run(); } catch (_) {}
@@ -22592,6 +22644,45 @@ async function handlePresselNum(req, env) {
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
+// AVISO DE NUMERO QUE CAIU SOZINHO. Um por numero a cada 6 horas: cair, reconectar e cair de
+// novo no mesmo dia e um caso real (proxy instavel), e tres avisos iguais viram barulho.
+// NAO DESLIGA NADA. Queda e INFERENCIA: a causa pode ser ban, mas tambem o vendedor deslogando sem
+// querer, o aparelho principal desvinculando ou a rede caindo. Desligar por inferencia tiraria do
+// ar o numero de quem esta trabalhando, que foi exatamente o risco que o Bruno pediu pra evitar.
+// Quem desliga sozinho e so o `_desligaBanidos`, e so com a Meta AFIRMANDO que esta banido.
+async function _swwebAvisaQueda(env, nk, st, b) {
+  const agora = Math.floor(Date.now() / 1000);
+  const K = 'swweb_queda_aviso';
+  let ja = {};
+  try { ja = JSON.parse((await _readConfig(env, K)) || '{}') || {}; } catch (_) { ja = {}; }
+  if (ja[nk] && (agora - Number(ja[nk] || 0)) < 21600) return;
+  ja[nk] = agora;
+  try { await _writeConfig(env, K, JSON.stringify(ja)); } catch (_) {}
+  // De quem e o numero, pra tela e pro texto.
+  let numero = nk, dono = '';
+  try {
+    const data = await _getDashData(env);
+    const c = (Array.isArray(data && data.chips) ? data.chips : []).find((x) => x && x.num && _waNumKey(x.num) === nk);
+    if (c) { numero = String(c.num || nk); dono = String(c.at || ''); }
+  } catch (_) {}
+  const d = String(numero).replace(/\D/g, '').replace(/^55/, '');
+  const bonito = d.length >= 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4) : String(numero);
+  const texto = st === 'bloqueado'
+    ? bonito + ' foi bloqueado pelo WhatsApp com a janela aberta. Nao desliguei ele da roleta; confira antes.'
+    : bonito + ' desconectou sozinho, sem ninguem fechar. Pode ser queda ou ban: confira o numero.';
+  try {
+    const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+    for (const x of ((us && us.results) || [])) {
+      await _wpParaPessoa(env, String(x.id), {
+        title: st === 'bloqueado' ? 'WhatsApp bloqueou um numero' : 'Numero desconectou sozinho',
+        body: texto,
+        tag: 'swconn-' + nk,
+        url: '/pressels/contingencia',
+      });
+    }
+  } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════

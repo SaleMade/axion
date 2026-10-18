@@ -1261,6 +1261,10 @@ function leFila() {
 }
 setInterval(gravaFila, 10000)
 app.on('before-quit', () => {
+  // FECHAR O APP E ACAO DE GENTE, pra TODO numero aberto. Sem isto, sair do programa no fim do
+  // expediente geraria um alarme de queda por numero aberto, e alarme falso diario mata a
+  // credibilidade do aviso em uma semana.
+  try { for (const nk of abertos.keys()) marcaFechouNaMao(nk) } catch (_) { /* saindo mesmo */ }
   gravaFila()
   // Solta o que esta na mao antes de sair. Nao da pra esperar a resposta (o before-quit nao espera
   // promessa), mas o pedido sai; e se nao sair, o aluguel vence em 2 minutos de qualquer jeito.
@@ -1424,6 +1428,10 @@ async function sinalDeUm(s, url) {
     s.avisouMotor = false
     avisaCasca('sw:semMotor', { nk: s.nk, ok: true })
   }
+  // O ESTADO DA CONEXAO, reportado SEMPRE, inclusive o ruim. Vai num canal proprio, separado do
+  // sinal que alimenta a roleta: misturar os dois poria numero caido de volta na distribuicao, que
+  // e o oposto do que isto serve.
+  try { await reportaConexao(s, e) } catch (_) { /* nunca atrapalha o sinal */ }
   if (!e || !e.eu || !e.autenticado) return
   try {
     const r = await fetch(url, {
@@ -1437,6 +1445,44 @@ async function sinalDeUm(s, url) {
     ajustaRelogio(r)
   } catch (_) { /* sem rede o sinal expira sozinho, que e o certo */ }
 }
+// REPORTA O ESTADO DA CONEXAO quando ele MUDA, nunca a cada minuto: o servidor so precisa saber
+// das viradas, e mandar o mesmo estado 1.440 vezes por dia seria ruido caro.
+//
+// `espontaneo` e o campo que vale: TRUE quer dizer "a janela estava aberta e o WhatsApp caiu
+// sozinho", que e o unico caso que merece alarme. Fechar o numero ou sair do app marca
+// `fechouNaMao` e o estado ruim que vier depois chega com `espontaneo: false`.
+async function reportaConexao(s, e) {
+  if (!config.token || !s || !s.nk) return
+  const c = (e && e.conn) || null
+  const st = String((c && c.st) || (e ? 'naosei' : 'naosei'))
+  if (st === s.connUltimo) return          // nada mudou
+  const antes = s.connUltimo || ''
+  s.connUltimo = st
+  const ruim = (st === 'caiu' || st === 'bloqueado' || st === 'conflito' || st === 'proxy')
+  const espontaneo = ruim && !foiAcaoDeGente(s.nk)
+  // O LOG LOCAL GUARDA O CRU, sempre. E dele que vai sair a resposta de qual sinal um ban de
+  // verdade dispara: hoje ninguem sabe, e e melhor ter o registro do primeiro caso real do que
+  // uma regra inventada agora.
+  anota('[conn] ' + s.nk + ' ' + antes + ' -> ' + st
+    + ' modo=' + String((c && c.modo) || '') + ' info=' + String((c && c.info) || '')
+    + ' queda=' + JSON.stringify((c && c.queda) || null) + ' espontaneo=' + (espontaneo ? 1 : 0))
+  avisaCasca('sw:conexao', { nk: s.nk, st, espontaneo })
+  try {
+    await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/conexao', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      // O NUMERO VAI PELO SLOT (`nk`), nunca pelo que o agente diz: depois do logout o
+      // `numeroDoAparelho()` volta VAZIO, e usar ele como identidade foi um furo ja consertado.
+      body: JSON.stringify({
+        nk: s.nk, st, espontaneo,
+        modo: String((c && c.modo) || ''), info: String((c && c.info) || ''),
+        queda: (c && c.queda) || null,
+      }),
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch (_) { /* sem rede: a proxima virada reporta */ }
+}
+
 setInterval(bateSinal, 60000)
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1694,7 +1740,25 @@ ipcMain.handle('sw:devolver', (_e, { nk }) => {
   return devolve(String(nk || ''))
 })
 ipcMain.handle('sw:esconder', () => { escondeTodos(); return { ok: true } })
-ipcMain.handle('sw:fechar', (_e, { nk }) => { fechaNumero(nk); return { ok: true } })
+// QUEM FECHOU: A PESSOA OU O WHATSAPP? (18/10/2026, a distincao e do Bruno)
+//
+// "quando voce detectar que alguem fechou o WhatsApp ou clicou em fechar na janela, voce sabe que
+// ele nao foi banido. Agora, se (...) a janela esta toda aberta, tudo funcionando, e do nada o
+// WhatsApp caiu, nao foi nenhuma acao que o vendedor tomou."
+//
+// Ele esta certo, e o APP e o unico que sabe separar os dois: ele e quem fecha a janela. O servidor
+// so ve o sinal parar de chegar, e silencio nao distingue nada. Este conjunto guarda os numeros
+// que foram fechados POR ACAO DE GENTE nos ultimos minutos, pra o estado ruim que aparecer logo
+// depois nao virar alarme de queda.
+const fechouNaMao = new Map()   // nk -> quando (ms)
+const FECHOU_VALE = 120000      // 2 min: tempo de sobra pra view morrer e o ultimo sinal passar
+function marcaFechouNaMao(nk) { if (nk) fechouNaMao.set(String(nk), Date.now()) }
+function foiAcaoDeGente(nk) {
+  const t = fechouNaMao.get(String(nk))
+  return !!t && (Date.now() - t) < FECHOU_VALE
+}
+
+ipcMain.handle('sw:fechar', (_e, { nk }) => { marcaFechouNaMao(nk); fechaNumero(nk); return { ok: true } })
 
 // O APP NAO CADASTRA PROXY (16/10/2026, revisao adversarial).
 //

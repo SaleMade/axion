@@ -43,6 +43,45 @@
     try { return !!(window.WPP && window.WPP.conn && window.WPP.conn.isAuthenticated && window.WPP.conn.isAuthenticated()) } catch (_) { return false }
   }
 
+  // ────────────────────────────────────────────────────────────────────────────────────────
+  // O ESTADO DA CONEXAO, pra tela saber se o numero esta de pe (18/10/2026, pedido do Bruno:
+  // "numero conectado ou nao? (...) ou que apareca: numero foi restrito, numero levou ban").
+  //
+  // A IDEIA QUE ORGANIZA ISTO E DELE, e e mais simples que a minha: se foi ACAO DE GENTE (fechou o
+  // WhatsApp, fechou a janela), nao foi ban. Se a janela estava aberta, tudo funcionando, e o
+  // WhatsApp caiu sozinho, ai e evento do WhatsApp. Quem sabe separar os dois e o APP, porque e ele
+  // que fecha a janela - o servidor so ve silencio, e silencio nao distingue nada.
+  // Aqui dentro a gente cuida da metade "o que o WhatsApp fez"; a metade "o que a pessoa fez" e do
+  // main.js.
+  //
+  // `jaAutenticou` e a peca que separa "nunca pareou" de "caiu": sem ela, a tela do QR de um numero
+  // novo e a tela do QR de um numero que acabou de ser desconectado sao identicas.
+  var jaAutenticou = false
+  var ultimaQueda = null   // { modo, motivo, ts } do evento que derrubou, pra calibrar depois
+  function estadoConn() {
+    var modo = '', info = ''
+    try {
+      var d = window.WPP && window.WPP.conn && window.WPP.conn.getStreamData && window.WPP.conn.getStreamData()
+      modo = String((d && d.mode) || '')
+      info = String((d && d.info) || '')
+    } catch (_) { modo = ''; info = '' }
+    var auth = autenticado()
+    if (auth) jaAutenticou = true
+    // A ORDEM IMPORTA: bloqueio e conflito ANTES de offline, senao um pisco de internet esconde
+    // um TOS_BLOCK, que e o sinal mais grave que existe aqui.
+    var st = 'naosei'
+    if (modo === 'TOS_BLOCK' || modo === 'SMB_TOS_BLOCK') st = 'bloqueado'
+    else if (modo === 'CONFLICT') st = 'conflito'
+    else if (modo === 'PROXYBLOCK') st = 'proxy'
+    else if (modo === 'DEPRECATED_VERSION') st = 'versao'
+    else if (modo === 'MAIN' && auth) st = 'pronto'
+    else if (modo === 'SYNCING') st = 'sincronizando'
+    else if (modo === 'OFFLINE') st = 'offline'
+    else if (modo === 'QR') st = jaAutenticou ? 'caiu' : 'qr'
+    else if (modo === '') st = 'naosei'   // o motor ainda nao registrou o Stream: nao e queda
+    return { st: st, modo: modo, info: info, queda: ultimaQueda }
+  }
+
   // A CONVERSA ABERTA NA TELA É A VERDADE (portado do painel que já roda em produção). O caminho
   // interno do WPP lê a flag .active, que num build veio toda apagada e noutro veio GRUDADA num
   // chat velho — e aí o painel aponta pro lead errado, que é o pior desfecho possível.
@@ -332,6 +371,9 @@
       // `autenticado` e o que vale pra dizer que o numero esta de pe. `motor` fica como
       // diagnostico de injecao.
       autenticado: autenticado(),
+      // O ESTADO DA CONEXAO vai junto, no mesmo objeto que o main ja le a cada minuto. Campo novo
+      // nao quebra quem nao conhece: `painel-ui.js` le motor/autenticado/envia e continua igual.
+      conn: estadoConn(),
       envia: podeEnviar(),
       chatId: chatId || '',
       phone: tel.digits || '',
@@ -605,6 +647,22 @@
       if (!W || !W.on || ligado === W) return
       try { if (W.off && ligado) W.off('chat.new_message', capturar) } catch (_) { /* ok */ }
       W.on('chat.new_message', capturar)
+      // OS EVENTOS DE CONEXAO, no mesmo rearme. Eles so gravam em variavel local: NAO postam nada
+      // no canal da pagina, entao a lista de canais do preload-wa continua com um canal so.
+      // GRAVA O MOTIVO CRU, sempre. Ninguem aqui sabe ainda qual sinal um ban de verdade dispara
+      // num aparelho vinculado, e inventar essa regra agora seria escolher entre alarme falso e
+      // silencio justo na hora que importa. Com o cru guardado, o primeiro caso real calibra.
+      try {
+        W.on('conn.logout', function (r) { ultimaQueda = { modo: 'LOGOUT', motivo: String((r && (r.reason || r.code)) || ''), ts: Date.now() } })
+        W.on('conn.require_auth', function () { ultimaQueda = { modo: 'REQUIRE_AUTH', motivo: '', ts: Date.now() } })
+        W.on('conn.logout_reason', function (r) { ultimaQueda = { modo: 'LOGOUT_REASON', motivo: String(r == null ? '' : (r.reason || r.code || r)), ts: Date.now() } })
+        W.on('conn.stream_mode_changed', function (m) {
+          var mo = String((m && (m.mode || m)) || '')
+          if (mo === 'TOS_BLOCK' || mo === 'SMB_TOS_BLOCK' || mo === 'QR' || mo === 'CONFLICT' || mo === 'PROXYBLOCK') {
+            ultimaQueda = { modo: mo, motivo: '', ts: Date.now() }
+          }
+        })
+      } catch (_) { /* motor sem esses eventos: o getStreamData ainda cobre o estado */ }
       ligado = W
       console.log('[sellwave] captura ligada')
     } catch (_) { /* ok */ }

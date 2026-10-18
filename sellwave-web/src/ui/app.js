@@ -501,6 +501,39 @@ function telaErro(nk, erro) {
 // Entao o clique mostra a sessao: o simbolo do WhatsApp, o numero, quem esta com ele se for o caso,
 // e um botao. Abrir de verdade so no botao - e so depois de o servidor confirmar que ninguem mais
 // esta com aquele numero.
+// O ESTADO DA CONEXAO EM PALAVRAS (18/10/2026, pedido do Bruno: "gostaria que aparecesse alguma
+// coisa bem visivel ali falando numero conectado, tudo certinho, so clicar em abrir").
+//
+// A REGRA QUE ORGANIZA ISTO E DELE: acao de gente nao e queda. Fechar o numero ou sair do app
+// marca o fechamento, e o estado ruim que vier depois chega com `esp` falso - por isso "Fechado"
+// e cinza e nao alarme. O que pinta de vermelho e o que caiu SOZINHO, com a janela aberta.
+// `naosei` existe de proposito: numero que nunca foi aberto, ou agente velho sem o campo, nao
+// pode aparecer como "conectado" por omissao. Foi exatamente assim que um numero na tela do QR
+// entrou na roleta uma vez.
+const CONN_TXT = {
+  pronto: ['ok', 'Conectado'],
+  sincronizando: ['ok', 'Sincronizando'],
+  qr: ['', 'Esperando ler o QR'],
+  caiu: ['ruim', 'Desconectou. Abra e leia o QR de novo'],
+  bloqueado: ['ruim', 'O WhatsApp bloqueou este número'],
+  conflito: ['alerta', 'Este WhatsApp abriu em outro lugar'],
+  proxy: ['alerta', 'A proxy deste número foi barrada'],
+  versao: ['alerta', 'Atualize o WhatsApp deste número'],
+  offline: ['alerta', 'Sem internet nesta máquina'],
+  fechado: ['', 'Fechado'],
+  naosei: ['', 'Sem leitura'],
+}
+function seloConn(n) {
+  const aberto = (estado.abertos || []).includes(numKey(n.numero))
+  const c = n.conn || null
+  // ABERTO AQUI? a verdade e a do app, que esta dentro da pagina. Fechado? o que o servidor
+  // guardou da ultima vez, e dito no passado, nunca como se fosse agora.
+  let chave = (c && c.st) || 'naosei'
+  if (!aberto && (chave === 'pronto' || chave === 'sincronizando')) chave = 'fechado'
+  const [tom, txt] = CONN_TXT[chave] || CONN_TXT.naosei
+  return { tom, txt, ruim: tom === 'ruim' }
+}
+
 function telaAbrir(nk) {
   const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
   if (!n) return telaVazia()
@@ -516,6 +549,7 @@ function telaAbrir(nk) {
     + '</span>'
     + '<h2>' + esc(bonito(cheio(nk))) + '</h2>'
     + (n.dono ? '<p class="de">' + esc(n.dono) + '</p>' : '')
+    + (() => { const c = seloConn(n); return '<p class="conn ' + c.tom + '">' + esc(c.txt) + '</p>' })()
     + (ocupado
       ? '<div class="aviso erro" style="display:block;max-width:360px;margin:14px auto 0">'
         + '<b>Aberto por ' + esc(ocupado.nome || 'outra pessoa') + '</b><br>'
@@ -1025,6 +1059,13 @@ window.sw.ao('sw:erro', (d) => {
   desenhaLista()
 })
 window.sw.ao('sw:aberto', async () => { await recarregaEstado() })
+// A CONEXAO MUDOU: redesenha na hora, sem esperar o proximo minuto. Se o numero da tela for o que
+// mudou, a tela de abrir e refeita; senao basta a lista. O `recarregaEstado` traz o campo `conn`
+// atualizado do servidor, que e a mesma fonte que a tela le quando o numero esta fechado.
+window.sw.ao('sw:conexao', async (d) => {
+  await recarregaEstado()
+  if (d && d.nk && ativo === d.nk && !(estado.abertos || []).includes(d.nk)) telaAbrir(d.nk)
+})
 window.sw.ao('sw:fila', (d) => {
   const el = $('fila')
   if (!el) return
