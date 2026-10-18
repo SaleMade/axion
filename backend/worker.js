@@ -11400,6 +11400,17 @@ async function handleSwWeb(req, env, path) {
       }
     } catch (_) { /* sem fila a tela cai no modo roleta, que e o padrao */ }
 
+    // QUEM ESTA VIVO DE VERDADE, pela MESMA fonte que a roleta usa na hora de distribuir.
+    //
+    // Sem isto o campo `roleta` desta rota mentia: ele olhava so a tag e o interruptor, e a roleta
+    // de verdade olha tambem a CONEXAO (`_servConnOk`). Medido em 18/10: a tela dizia "recebendo"
+    // pra DOZE numeros enquanto o liveSet tinha SETE, e os nove chips em aquecimento que entraram
+    // na vespera apareciam recebendo com zero lead em todo o historico - eles nao estavam em
+    // wa_conn, nem no heartbeat, nem em wa_api_numbers.
+    // Eu mesma fui enganada por esse campo hoje e repassei o numero errado adiante, que e o custo
+    // tipico de tela que afirma mais do que sabe.
+    const liveSet = await _presselLiveSet(env);
+    await _carregaApiMorto(env);
     // O estado de conexao de todo mundo, numa ida so.
     const conns = {};
     try {
@@ -11450,7 +11461,16 @@ async function handleSwWeb(req, env, path) {
         //  2) o INTERRUPTOR esta ligado nas pressels (v.off[nk]) - e a chave que o POST
         //     /api/pressel/num vira, e e ela que o vendedor mexe aqui.
         // Ler so o em_uso mentiria: numero apto mas desligado aparecia como ligado.
-        roleta: _swwebApto(c, nomeSt, _ids) && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
+        // TRES COISAS, e as tres tem que ser verdade, que e exatamente o que a roleta exige:
+        // apto (tag), interruptor ligado, e conexao viva. `vivo` vai separado pra tela poder dizer
+        // POR QUE nao recebe, em vez de so mostrar desligado: "desligado" e "sem sinal do app" sao
+        // problemas diferentes e o conserto de cada um e outro.
+        roleta: _swwebApto(c, nomeSt, _ids)
+          && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num))
+          && (_modoRoleta(c) || _servConnOk(liveSet, 'ax_' + String(c.at || ''), c.num)),
+        // `_servConnOk` tem fail-open proprio: sem liveSet nenhum ele aprova, pra uma falha de
+        // leitura nao apagar a operacao inteira da tela.
+        vivo: _modoRoleta(c) || _servConnOk(liveSet, 'ax_' + String(c.at || ''), c.num),
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
         // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
@@ -21444,9 +21464,24 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
     for(const c of mine){
       const aquec = _chipAquecendo(c, aquecIds) ? _numDoAquecimento(c) : null;
       // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
-      if((!aquec && !isEmUso(c)) || !c.num || !okWa(c)) continue;
+      // A ORDEM DESTAS TRES LINHAS E O BUG (18/10/2026, achado por auditoria).
+      //
+      // `nksTodos` existe desde 14/10 pra o placar ser do VENDEDOR e nao dos numeros ligados: o
+      // desempate da roleta e "quem fez menos lead hoje", e sem isto o vendedor que desligou um
+      // numero parecia atrasado e levava o clique dos outros.
+      // So que o `okWa(c)` estava no MESMO `continue`, ANTES do push. Entao marcar um numero como
+      // Banido, Restrito ou Exclusivo no meio do dia APAGA os leads que ele ja fez do placar do
+      // dono, o vendedor despenca na conta e a roleta passa a despejar clique NELE - bem na hora
+      // em que ele acabou de perder um numero.
+      // Medido com o estado de 17/10: tirar o (82) 99121-5713 do placar derruba o Kevin de 207 pra
+      // 134 contra 166 do Guilherme e INVERTE quem recebe, mesmo o Kevin tendo produzido mais.
+      // E nao era hipotese: as tags de Banido dos dois numeros foram marcadas HOJE.
+      // A tag continua tirando o numero da roleta (o `okWa` logo abaixo), que e o certo. O que ela
+      // nao pode e apagar o passado do vendedor.
+      if((!aquec && !isEmUso(c)) || !c.num) continue;
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
       if(nk) nksTodos.push(nk);
+      if(!okWa(c)) continue;                                                       // tag fora (banido, restrito, exclusivo)
       if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
       // MODO ROLETA NAO EXIGE CONEXAO (11/09/2026, pedido do Bruno: "a Evolution a gente nao vai
       // utilizar mais, substitui por uma coleta padrao, como se fosse uma pressel normal").
@@ -22758,7 +22793,15 @@ async function _desligaBanidos(env) {
       if (res && res.meta && res.meta.changes > 0) {
         try { _dashCache = null; } catch (_) {}
         mexeu = true;
-        ja[nk8] = agora;
+        // NAO CARIMBAR AQUI. Este `ja[nk8] = agora` existia e matava o aviso inteiro: o filtro la
+        // embaixo compara `agora - ja[nk8] > 43200`, e com o carimbo feito aqui ele compara `agora`
+        // com `agora`, da sempre falso, `avisar` sai vazio e a funcao retorna ANTES do push.
+        // PROVA DE PRODUCAO: em 18/10 as 11:07 o sistema desligou SEIS numeros banidos (seis linhas
+        // `Sistema (banido na Meta)` no pressel_num_log, e os seis em `roleta_banido_off` com o
+        // MESMO carimbo 1792332452), e nenhum push saiu - a ultima entrega pro diretor foi 17/10
+        // 23:48, com falhas=0, ou seja nem tentativa.
+        // Quem carimba e o laco do `avisar`, DEPOIS de conferir, que e a ordem que o irmao desta
+        // funcao (`_swwebAvisaQueda`) ja fazia certo.
         const pids = alvos.map((p) => p.id).join(',');
         console.log('ROLETA_BANIDO_OFF num=' + nk8 + ' at=' + at + ' pressels=' + pids);
         // Fica no MESMO registro das mexidas de gente, com nome proprio: quem abrir o diag amanha
