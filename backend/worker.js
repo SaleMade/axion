@@ -651,6 +651,38 @@ async function _mundoDaInstOuNull(env, inst) {
   return _mundoDoNumeroOuNull(env, s.replace(/\D/g, '').slice(-8));
 }
 const _mundoDaInst = async (env, inst) => (await _mundoDaInstOuNull(env, inst)) || '';
+// ══ A CONVERSA E DE UMA OPERACAO SO (19/10/2026, pedido do Bruno) ════════════════════════════════
+//
+// "Eu nao quero que nada do meu afiliado apareca pra mim no meu inbox, e nada do meu inbox apareca
+// pro meu afiliado." O caso que trouxe a regra: o mesmo cliente clica no anuncio da casa E no do
+// Giovane (mesmo produto, mesmo publico). O inbox tinha UMA conversa por TELEFONE do cliente: a
+// thread lia todas as mensagens daquele telefone e a linha do wa_chats pulava pra operacao de quem
+// mandou por ultimo. O Guilherme viu os fluxos do Datacrazy do afiliado ("E1 BOAS VINDAS",
+// "E2 EXPLICACAO HOMEM", saindo dos chips do Thariky) dentro da conversa dele no 1970 e achou que o
+// numero mandava funil errado; e o Thariky via as mensagens do Guilherme. Medido: 239 clientes ja
+// falaram com as duas operacoes, 34 so na semana de 13 a 19/10.
+//
+// AGORA CADA OPERACAO TEM A CONVERSA DELA:
+//   - wa_chats: a chave da CASA continua sendo o telefone puro (nada muda pra casa); a do afiliado
+//     e '<telefone>#<afl_x>'. Cliente que fala com as duas tem DUAS linhas, cada uma com o numero,
+//     a previa, a bolinha, a etapa e as tags da propria operacao.
+//   - wa_messages.mundo: cada mensagem nasce com a operacao do numero que mandou ou recebeu
+//     (NULL/'' = casa). Thread, lista, CRM, janela de 24h e funil so leem as do mundo de quem olha.
+// FALHA FECHADA: consulta que esquecer o mundo cai na chave pura, que e da casa. O afiliado nunca
+// recebe linha da casa por esquecimento, e a casa nunca ve a dele (o escopo da lista exige a chave).
+const _chaveConv = (phone, mundo) => { const f = String(phone || '').replace(/\D/g, ''); return mundo ? f + '#' + String(mundo) : f; };
+const _foneDaConv = (k) => String(k || '').split('#')[0];
+// O mundo de quem esta olhando: '' = casa; afiliado sem vinculo ganha um mundo que nao existe (nada).
+const _mundoDeQuem = (u) => (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '__sem__') : '';
+// SQL "a mensagem e deste mundo", com o mundo LITERAL (so [A-Za-z0-9_]; qualquer outra coisa = nada).
+const _msgDoMundoSql = (col, mundo) => {
+  const m = String(mundo || '');
+  if (m && !/^[A-Za-z0-9_]{1,40}$/.test(m)) return '1=0';
+  return 'COALESCE(' + col + ",'') = '" + m + "'";
+};
+// SQL: o telefone puro de uma chave de wa_chats, e o sufixo da chave de um mundo (literal).
+const _foneDaConvSql = (col) => "CASE WHEN instr(" + col + ",'#') > 0 THEN substr(" + col + ",1,instr(" + col + ",'#')-1) ELSE " + col + " END";
+const _sufConvSql = (mundo) => { const m = String(mundo || ''); if (!m) return "''"; return /^[A-Za-z0-9_]{1,40}$/.test(m) ? "'#" + m + "'" : "'#__nada__'"; };
 // Os 8 ultimos digitos de todo numero que e de afiliado (chip com `afl` + numero oficial de gente
 // de afiliado). E o que denuncia o mundo de uma instancia 'ax_ccol_N_<numero>' no SQL. `mundo`
 // restringe a um afiliado; vazio = todos.
@@ -14356,7 +14388,7 @@ async function _podeFalarNaConversa(env, u, phone) {
   const fone = String(phone || '').replace(/\D/g, '');
   if (!fone) return true;
   let chat = null;
-  try { chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(fone).first(); } catch (_) { return true; }
+  try { chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(_chaveConv(fone, _mundoDeQuem(u))).first(); } catch (_) { return true; }
   if (!chat) return true;   // conversa nova: nao ha dono ainda
   const x = String(chat.instance || '');
   return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0;
@@ -14403,7 +14435,8 @@ async function _waCloudSendText(env, atId, number, text, apiNumFixo) {
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   // guarda janela 24h: free-form só dentro de 24h do último inbound do lead
   try {
-    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' ORDER BY ts DESC LIMIT 1").bind(num).first();
+    // a janela e da conversa DESTA operacao: o cliente escrever pro afiliado nao abre a nossa (19/10/2026)
+    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' AND " + _msgDoMundoSql('mundo', await _mundoDoAt(env, atId)) + " ORDER BY ts DESC LIMIT 1").bind(num).first();
     const lastIn = (li && Number(li.ts)) || 0;
     if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) {
       // Erro EXPLÍCITO e com a idade da janela. Hoje as 12 conversas do inbox estão fora das 24h (de
@@ -14647,7 +14680,8 @@ async function _waCloudSendMedia(env, atId, number, opts) {
   if (!apiNum || !apiNum.phone_number_id) return { ok: false, error: 'vendedor sem número oficial', code: 'no_official' };
   if (!apiNum.verified) return { ok: false, error: 'número oficial ainda não registrado', code: 'not_registered' };
   try {
-    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' ORDER BY ts DESC LIMIT 1").bind(num).first();
+    // a janela e da conversa DESTA operacao: o cliente escrever pro afiliado nao abre a nossa (19/10/2026)
+    const li = await env.DB.prepare("SELECT ts FROM wa_messages WHERE phone=? AND direction='in' AND " + _msgDoMundoSql('mundo', await _mundoDoAt(env, atId)) + " ORDER BY ts DESC LIMIT 1").bind(num).first();
     const lastIn = (li && Number(li.ts)) || 0;
     if (lastIn && (Math.floor(Date.now() / 1000) - lastIn) > 86400) return { ok: false, error: 'janela de 24h fechada; use um template', code: 'window_closed' };
   } catch (_) {}
@@ -14832,7 +14866,7 @@ async function _waEnsureTables(env) {
   // roda e o SELECT que usa a coluna nova quebra com a tela VAZIA e sem erro.
   try {
     await env.DB.prepare('SELECT crm_ts FROM wa_chats LIMIT 1').first();
-    await env.DB.prepare('SELECT status_ts FROM wa_messages LIMIT 1').first();
+    await env.DB.prepare('SELECT mundo FROM wa_messages LIMIT 1').first();
     _waTablesOk = true;
     return;
   } catch (_) { /* tabela ou coluna faltando: cai na criacao abaixo */ }
@@ -14851,6 +14885,8 @@ async function _waEnsureTables(env) {
     try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN status TEXT').run(); } catch (_) {}     // sent | delivered | read | failed
     try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN err TEXT').run(); } catch (_) {}        // motivo, quando failed
     try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN status_ts INTEGER').run(); } catch (_) {}
+    // DE QUAL OPERACAO E A MENSAGEM (19/10/2026, ver _chaveConv). NULL/'' = casa.
+    try { await env.DB.prepare('ALTER TABLE wa_messages ADD COLUMN mundo TEXT').run(); } catch (_) {}
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON wa_messages(phone, ts)').run();
     try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_wa_msg_inst_ts ON wa_messages(instance, ts)').run(); } catch (_) {}   // carga recente por instância
     // "quem RECEBEU mensagem na janela", que e a pergunta do _numerosMudos (a roleta pergunta isso em
@@ -14912,6 +14948,10 @@ async function _waLogMsg(env, m) {
     const dir = m.direction === 'out' ? 'out' : 'in';
     const type = m.type || 'text';
     const body = String(m.body == null ? '' : m.body).slice(0, 4000);
+    // A OPERACAO DA MENSAGEM vem do numero (19/10/2026, ver _chaveConv): ela vai pra conversa daquela
+    // operacao e so ela enxerga. Os dedups abaixo tambem ficam dentro da operacao.
+    const mundo = await _mundoDaInst(env, m.instance);
+    const chave = _chaveConv(phone, mundo);
     // SEM msg_id A DEDUPLICACAO NAO EXISTE. O id vira aleatorio, o INSERT OR IGNORE nunca colide e a
     // MESMA mensagem entra de novo por outro caminho. Foi assim que o Bruno viu 4 baloes iguais em
     // 19/08/2026 (webhook do Datacrazy gravando sem id) e uma venda "Pedido Concluido" duplicada
@@ -14932,8 +14972,8 @@ async function _waLogMsg(env, m) {
       if (dir === 'out') {
         try {
           const ja = await env.DB.prepare(
-            "SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND type=? AND COALESCE(body,'')=? AND ts > ? LIMIT 1"
-          ).bind(phone, type, body, ts - 120).first();
+            "SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND type=? AND COALESCE(body,'')=? AND ts > ? AND COALESCE(mundo,'')=? LIMIT 1"
+          ).bind(phone, type, body, ts - 120, mundo).first();
           if (ja) return;   // ja registramos este envio
         } catch (_) {}
       } else {
@@ -14954,8 +14994,8 @@ async function _waLogMsg(env, m) {
     if (dir === 'in' && m.msgId) {
       try {
         const dup = await env.DB.prepare(
-          "SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND type=? AND COALESCE(body,'')=? AND ts=? AND msg_id<>? LIMIT 1"
-        ).bind(phone, type, body, ts, id).first();
+          "SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND type=? AND COALESCE(body,'')=? AND ts=? AND msg_id<>? AND COALESCE(mundo,'')=? LIMIT 1"
+        ).bind(phone, type, body, ts, id, mundo).first();
         if (dup) {
           // Preferir o 'wamid' quando ele chega DEPOIS do 'dc:' (recibo de leitura e citação precisam
           // dele): sobe o id da linha existente pro wamid e completa mídia/instância se faltarem.
@@ -14971,8 +15011,8 @@ async function _waLogMsg(env, m) {
       } catch (_) {}
     }
     const _ins = await env.DB.prepare(
-      'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
-    ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null).run();
+      'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url, mundo) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null, mundo || null).run();
     const _novaLinha = !!(_ins && _ins.meta && Number(_ins.meta.changes) > 0);   // inseriu DE VERDADE (nao era repetida)
     // CORRIDA ENTRE AS DUAS FONTES (03/10/2026). O dedup de cima e "procura, depois insere": quando o
     // webhook direto da Meta ('wamid.') e o Datacrazy ('dc:') chegam NO MESMO INSTANTE, os dois
@@ -14986,8 +15026,8 @@ async function _waLogMsg(env, m) {
       try {
         const ehWamid = String(id).startsWith('wamid');
         const gemeo = await env.DB.prepare(
-          "SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND type=? AND COALESCE(body,'')=? AND ts=? AND msg_id<>? AND ((msg_id LIKE 'wamid%') <> (? = 1)) LIMIT 1"
-        ).bind(phone, type, body, ts, id, ehWamid ? 1 : 0).first();
+          "SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND type=? AND COALESCE(body,'')=? AND ts=? AND msg_id<>? AND ((msg_id LIKE 'wamid%') <> (? = 1)) AND COALESCE(mundo,'')=? LIMIT 1"
+        ).bind(phone, type, body, ts, id, ehWamid ? 1 : 0, mundo).first();
         if (gemeo && !String(gemeo.msg_id).startsWith('in_')) {
           const apagar = ehWamid ? gemeo.msg_id : id;
           await env.DB.prepare('DELETE FROM wa_messages WHERE msg_id=? AND msg_id LIKE ?').bind(apagar, 'dc:%').run();
@@ -15019,7 +15059,7 @@ async function _waLogMsg(env, m) {
          unread = COALESCE(wa_chats.unread, 0),
          updated_at = excluded.updated_at
        WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
-    ).bind(phone, m.instance || '', m.pushName || '', preview, ts, dir, 0).run();
+    ).bind(chave, m.instance || '', m.pushName || '', preview, ts, dir, 0).run();
     // A BOLINHA SOMA FORA DA GUARDA DE RECENCIA (12/10/2026, auditoria item 26/27D). O "+1" morava no
     // DO UPDATE acima, debaixo do WHERE de recencia: quando a NOSSA resposta ja tinha adiantado o
     // last_ts (lead escreve em T, a gente responde em T+10, o sync grava a mensagem dele em T+25), o
@@ -15028,12 +15068,12 @@ async function _waLogMsg(env, m) {
     // inserida DE VERDADE (repetida e gemeo nao contam) e a mensagem tem ate 30 min: o que o sync
     // traz de historico mais velho que isso nao acende (regra registrada pro Bruno).
     if (dir === 'in' && _novaLinha && (Math.floor(Date.now() / 1000) - ts) <= 1800) {
-      try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(phone).run(); } catch (_) {}
+      try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(chave).run(); } catch (_) {}
     }
     // Auto CRM: a 1ª resposta do ATENDENTE (não do bot/auto-reply) tira o lead de "Lead Novo" pra
     // "Em Atendimento". Só sobe de novo/vazio — não mexe nas etapas manuais nem na lixeira.
     if (dir === 'out' && !m.bot) {
-      try { await env.DB.prepare("UPDATE wa_chats SET crm_stage='atendimento', crm_ts=strftime('%s','now'), updated_at=strftime('%s','now') WHERE phone=? AND (crm_stage IS NULL OR crm_stage='' OR crm_stage='novo')").bind(phone).run(); } catch (_) {}
+      try { await env.DB.prepare("UPDATE wa_chats SET crm_stage='atendimento', crm_ts=strftime('%s','now'), updated_at=strftime('%s','now') WHERE phone=? AND (crm_stage IS NULL OR crm_stage='' OR crm_stage='novo')").bind(chave).run(); } catch (_) {}
     }
   } catch (_) {}
 }
@@ -15488,10 +15528,12 @@ async function resolveApiNumber(env, opts = {}) {
     let inst = String(opts.instance || '');
     const conv = String(opts.convPhone || '').replace(/\D/g, '');
     if (!_instNum8(inst) && conv) {
-      const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(conv).first();
+      // a conversa e as mensagens da OPERACAO de quem responde (19/10/2026, ver _chaveConv)
+      const _mR = await _mundoDoAt(env, opts.atId);
+      const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(_chaveConv(conv, _mR)).first();
       inst = (c && c.instance) || '';
       if (!_instNum8(inst)) {
-        const ms = await env.DB.prepare('SELECT instance FROM wa_messages WHERE phone = ? ORDER BY ts DESC LIMIT 30').bind(conv).all();
+        const ms = await env.DB.prepare('SELECT instance FROM wa_messages WHERE phone = ? AND ' + _msgDoMundoSql('mundo', _mR) + ' ORDER BY ts DESC LIMIT 30').bind(conv).all();
         for (const r of ((ms && ms.results) || [])) { if (_instNum8(r.instance)) { inst = String(r.instance); break; } }
       }
     }
@@ -16171,7 +16213,8 @@ async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
       if (Number(r.parar_resp) === 1) {
         const desde = Number(r.iniciado_em) || 0;
         let resp = null;
-        try { resp = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? LIMIT 1").bind(String(r.phone), desde).first(); } catch (_) {}
+        // so resposta NA OPERACAO do funil: o cliente escrever pro afiliado nao para o nosso (19/10/2026)
+        try { resp = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? AND " + _msgDoMundoSql('mundo', await _mundoDoAt(env, r.at_id)) + " LIMIT 1").bind(String(r.phone), desde).first(); } catch (_) {}
         if (resp) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=? AND status='enviando'").bind(now, r.phone).run(); return; }
       }
       // A PAUSA VEM ANTES DO ENVIO, colada nele. Antes ela virava tempo morto depois da mensagem
@@ -16240,7 +16283,7 @@ async function _waFunnelRodaLinha(env, r, now, seqCache, chipCache) {
       while (i2 < items.length && gasto < 100) {
         if (Number(r.parar_resp) === 1) {
           let resp2 = null;
-          try { resp2 = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? LIMIT 1").bind(String(r.phone), Number(r.iniciado_em) || 0).first(); } catch (_) {}
+          try { resp2 = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='in' AND ts > ? AND " + _msgDoMundoSql('mundo', await _mundoDoAt(env, r.at_id)) + " LIMIT 1").bind(String(r.phone), Number(r.iniciado_em) || 0).first(); } catch (_) {}
           if (resp2) { await env.DB.prepare("UPDATE wa_funnel_run SET status='lead_respondeu', updated_at=? WHERE phone=? AND status='enviando'").bind(Math.floor(Date.now() / 1000), r.phone).run(); break; }
         }
         const p2 = items[i2];
@@ -16281,7 +16324,7 @@ async function _waFunnelProximoDaFila(env, atId, now) {
     ).bind(now, now, atId, atId).first();
     if (!up || !up.phone) return null;
     let instAgora = '';
-    try { const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(up.phone).first(); instAgora = String((c && c.instance) || ''); } catch (_) {}
+    try { const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(_chaveConv(up.phone, await _mundoDoAt(env, atId))).first(); instAgora = String((c && c.instance) || ''); } catch (_) {}
     console.log('WA_FUNIL_PILHA_ENCADEOU at=' + atId + ' fone=' + String(up.phone));
     return { ...up, inst_agora: instAgora };
   } catch (_) { return null; }
@@ -16364,6 +16407,10 @@ async function _waFunnelTick(env) {
     // E o ritmo que o cliente sente NAO MUDA: a pausa de cada passo continua igual, dentro da
     // conversa dela. O que deixa de existir e uma conversa esperando a outra terminar.
     await Promise.all((due.results || []).map(async (r) => {
+      // FUNIL DE AFILIADO OLHA A CONVERSA DO MUNDO DELE (19/10/2026, ver _chaveConv). O JOIN acima e
+      // pela chave pura, que e a da casa. Hoje nenhum afiliado dispara funil por aqui; se disparar, o
+      // "numero agora" vem da conversa dele, nunca da nossa.
+      try { const _mF = await _mundoDoAt(env, r.at_id); if (_mF) { const _cF = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(_chaveConv(r.phone, _mF)).first(); r.inst_agora = String((_cF && _cF.instance) || ''); } } catch (_) {}
       let _st = await _waFunnelRodaLinha(env, r, now, seqCache, chipCache);
       // A PILHA DO VENDEDOR ANDA SEM O MINUTO MORTO (12/10/2026, auditoria item 27). Quando um funil
       // termina (done, error, lead respondeu, migrou), o proximo da fila DELE so saia na batida
@@ -16575,12 +16622,14 @@ async function handleWAFunnel(req, env) {
     // de qualquer telefone, inclusive de conversa da outra operacao. Mesma regra do /api/wa/messages:
     // o mundo da conversa (wa_chats.instance) tem que ser o de quem pede; senao, run:null.
     try {
-      const _ch = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(phone).first();
+      const _ch = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(_chaveConv(phone, _mundoDeQuem(u))).first();
       const _mConv = _ch ? await _mundoDaInst(env, _ch.instance) : '';
       const _mEu = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '\u0000') : '';
       if (_mConv !== _mEu) return json({ ok: true, run: null });
     } catch (_) {}
-    const r = await env.DB.prepare('SELECT phone, seq_id, idx, items, status FROM wa_funnel_run WHERE phone=?').bind(phone).first();
+    const r = await env.DB.prepare('SELECT phone, seq_id, idx, items, status, at_id FROM wa_funnel_run WHERE phone=?').bind(phone).first();
+    // o funil e de UMA operacao (a de quem disparou): a outra nao ve que ele existe (19/10/2026)
+    if (r && (await _mundoDoAt(env, r.at_id)) !== _mundoDeQuem(u)) return json({ ok: true, run: null });
     let total = 0; try { total = JSON.parse((r && r.items) || '[]').length; } catch (_) {}
     return json({ ok: true, run: r ? { phone: r.phone, seq_id: r.seq_id, idx: r.idx, status: r.status, total } : null });
   }
@@ -16639,7 +16688,9 @@ async function _waFunnelAuto(env, atId, phone) {
     const jaTem = await env.DB.prepare('SELECT phone FROM wa_funnel_run WHERE phone=?').bind(phone).first();
     if (jaTem) return;
     // primeira mensagem da conversa? conta o que existe de ENTRADA
-    const n = await env.DB.prepare("SELECT COUNT(*) c FROM wa_messages WHERE phone=? AND direction='in'").bind(phone).first();
+    // conta so a entrada NA CASA (o funil automatico e so da casa): ter falado com o afiliado antes nao
+    // faz o primeiro "oi" pra nos deixar de ser o primeiro (19/10/2026, ver _chaveConv)
+    const n = await env.DB.prepare("SELECT COUNT(*) c FROM wa_messages WHERE phone=? AND direction='in' AND COALESCE(mundo,'')=''").bind(phone).first();
     if (Number((n && n.c) || 0) > 1) return;
     const esperar = Math.max(0, Math.min(60, Number(cfg.delay_s) || 1));
     if (esperar > 0) await new Promise((r) => setTimeout(r, esperar * 1000));
@@ -16704,7 +16755,8 @@ async function _waFunnelIniciar(env, atId, phone, seqId, opts) {
   // re-carimbada no meio (o lead escrevendo pro outro numero do mesmo vendedor).
   let instConv = '';
   try {
-    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(phone).first();
+    // o numero da conversa NA OPERACAO de quem dispara (19/10/2026, ver _chaveConv)
+    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone=?').bind(_chaveConv(phone, await _mundoDoAt(env, atId))).first();
     instConv = String((c && c.instance) || '');
   } catch (_) {}
   const _pin = instConv ? await _apiNumFromInstance(env, instConv) : null;
@@ -16735,7 +16787,7 @@ async function _waFunnelIniciar(env, atId, phone, seqId, opts) {
   ).bind(phone, atId, info.seq.id, JSON.stringify(info.items), naFila ? 0 : 1, now, st, now, info.pararResp ? 1 : 0, now, instConv || '').run();
   // Depois do primeiro passo SAIR: funil que falhou no disparo nao mexe no CRM. Quem entrou na fila
   // tambem move: a etapa diz o que foi DISPARADO, e a fila so atrasa a saida.
-  await _crmEtapaPeloFunil(env, phone, info.seq);
+  await _crmEtapaPeloFunil(env, _chaveConv(phone, await _mundoDoAt(env, atId)), info.seq);   // o card da operacao do funil
   return { ok: true, sent: naFila ? 0 : 1, total: info.items.length, status: st, ...(naFila ? { fila: posicao + 1 } : {}) };
 }
 
@@ -17339,7 +17391,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
          unread=COALESCE(wa_chats.unread,0),
          updated_at=strftime('%s','now')
        WHERE excluded.last_ts > COALESCE(wa_chats.last_ts, 0)`
-    ).bind(phone, inst, nome, txt, ts, dir, 0).run().catch(() => {});
+    ).bind(_chaveConv(phone, mundo), inst, nome, txt, ts, dir, 0).run().catch(() => {});   // a conversa DESTA operacao (19/10/2026, ver _chaveConv)
     // (12/10/2026, item 26/27D) o +1 da bolinha saiu daqui: ele soma por MENSAGEM nova do lead, no
     // laco do historico logo abaixo, fora da guarda de recencia - ver o comentario la.
     nChats++;
@@ -17388,8 +17440,8 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
           // mensagem; a linha vazia que ja existir sai, e o anexo (se vier) vira reserva de midia.
           const _vazia = (tipo === 'text' && !corpo);
           const _gm = _vazia
-            ? await env.DB.prepare("SELECT msg_id, media_url FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando).first()
-            : await env.DB.prepare("SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND type=? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando, tipo, corpo).first();
+            ? await env.DB.prepare("SELECT msg_id, media_url FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND msg_id LIKE 'wamid%' AND COALESCE(mundo,'')=? LIMIT 1").bind(phone, quando, mundo || '').first()
+            : await env.DB.prepare("SELECT msg_id FROM wa_messages WHERE phone=? AND direction='in' AND ts=? AND type=? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' AND COALESCE(mundo,'')=? LIMIT 1").bind(phone, quando, tipo, corpo, mundo || '').first();
           if (_gm) {
             if (_vazia) {
               try { await env.DB.prepare("DELETE FROM wa_messages WHERE msg_id=? AND type='text' AND COALESCE(body,'')=''").bind('dc:' + id).run(); } catch (_) {}
@@ -17404,7 +17456,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
         // dobro. Texto igual, mesma conversa, ate 3 min antes do deles = eco; fica marcado em dc_seen.
         // Audio e midia nunca passam por aqui (o corpo e vazio).
         try {
-          const _eco = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND ts >= ? AND ts <= ? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' LIMIT 1").bind(phone, quando - 180, quando + 30, corpo).first();
+          const _eco = await env.DB.prepare("SELECT 1 FROM wa_messages WHERE phone=? AND direction='out' AND ts >= ? AND ts <= ? AND COALESCE(body,'')=? AND msg_id LIKE 'wamid%' AND COALESCE(mundo,'')=? LIMIT 1").bind(phone, quando - 180, quando + 30, corpo, mundo || '').first();
           if (_eco) { try { await env.DB.prepare('INSERT OR IGNORE INTO dc_seen (msg_id, ts) VALUES (?, ?)').bind('eco:' + id, _agoraSync).run(); } catch (_) {} continue; }
         } catch (_) {}
       }
@@ -17416,8 +17468,8 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
       // da midia (linha gravada sem anexo, ou ainda na URL deles) e um UPDATE a parte, que nunca
       // sobrescreve midia que ja foi pro R2 (key nao comeca com http).
       const ins = await env.DB.prepare(
-        'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url) VALUES (?,?,?,?,?,?,?,?,?)'
-      ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, anexo ? anexo.url : null).run().catch(() => null);
+        'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url, mundo) VALUES (?,?,?,?,?,?,?,?,?,?)'
+      ).bind('dc:' + id, phone, inst, m?.received ? 'in' : 'out', tipo, corpo, nome, quando, anexo ? anexo.url : null, mundo || null).run().catch(() => null);
       const nova = !!(ins && ins.meta && ins.meta.changes);
       let consertada = false;
       if (!nova && anexo && anexo.url) {
@@ -17430,7 +17482,7 @@ async function _dcSyncInbox(env, limiteConversas = 40, limiteMsgs = 40, mundo, t
       // +1 por CONVERSA no upsert la em cima, debaixo da guarda de recencia - a mesma armadilha do
       // _waLogMsg: a nossa resposta adiantava o last_ts e o lead entrava sem acender.
       if (nova && m?.received && (_agoraSync - quando) <= 1800) {
-        try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(phone).run(); } catch (_) {}
+        try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(_chaveConv(phone, mundo)).run(); } catch (_) {}
       }
       // So a mensagem NOVA (ou a recem-consertada) baixa o arquivo: 1 download por midia. Teto por
       // rodada pra nao estourar o tempo do cron; o que passar do teto continua com a URL do Datacrazy
@@ -18973,7 +19025,9 @@ async function handleWAChats(req, env) {
   // quatro campos sai por telefone pelo idx_wa_msg_phone(phone, ts), que ja existia.
   // Medido depois: 2.293 a 2.554 linhas e 11 a 17ms, com as 300 linhas x 8 campos identicas.
   // ATENCAO: o WHERE e o LIMIT ficam DENTRO do `base`; jogar eles pra fora desfaz a correcao.
-  let sql = `WITH base AS (SELECT c.phone, c.instance, c.name, c.last_text, c.last_ts, c.last_dir,
+  // so as mensagens da operacao de quem olha (19/10/2026, ver _chaveConv); a chave sai como telefone
+  const _mcL = _msgDoMundoSql('mundo', _mundoDeQuem(u));
+  let sql = `WITH base AS (SELECT ${_foneDaConvSql('c.phone')} AS phone, c.instance, c.name, c.last_text, c.last_ts, c.last_dir,
                                   c.unread, c.assigned_to, c.crm_stage, c.tags, c.crm_ts
                            FROM wa_chats c`;
   const where = [], binds = [];
@@ -19015,10 +19069,10 @@ async function handleWAChats(req, env) {
                     b.last_ts, b.last_dir, b.unread, b.assigned_to, b.crm_stage, b.tags, b.crm_ts,
                     b.ult_in, b.ult_out, b.chegou
              FROM (SELECT base.*,
-                          (SELECT MAX(ts) FROM wa_messages WHERE phone = base.phone AND direction='in') AS ult_in,
-                          (SELECT MAX(ts) FROM wa_messages WHERE phone = base.phone AND direction='out' AND status IS NULL) AS ult_out,
-                          (SELECT MIN(ts) FROM wa_messages WHERE phone = base.phone AND direction='in') AS chegou,
-                          (SELECT type FROM wa_messages WHERE phone = base.phone ORDER BY ts DESC LIMIT 1) AS tipo
+                          (SELECT MAX(ts) FROM wa_messages WHERE phone = base.phone AND direction='in' AND ${_mcL}) AS ult_in,
+                          (SELECT MAX(ts) FROM wa_messages WHERE phone = base.phone AND direction='out' AND status IS NULL AND ${_mcL}) AS ult_out,
+                          (SELECT MIN(ts) FROM wa_messages WHERE phone = base.phone AND direction='in' AND ${_mcL}) AS chegou,
+                          (SELECT type FROM wa_messages WHERE phone = base.phone AND ${_mcL} ORDER BY ts DESC LIMIT 1) AS tipo
                    FROM base) b
              ORDER BY b.last_ts DESC`;
   const rows = await env.DB.prepare(sql).bind(...binds).all();
@@ -19119,6 +19173,11 @@ function _waAssinaChats(linhas, q) {
 // duas copias da regra divergiriam na primeira mudanca, e a divergencia aqui e vazamento de conversa.
 async function _waChatsEscopo(env, u) {
   const where = [], binds = [];
+  // A CHAVE DA CONVERSA E DO MUNDO DE QUEM OLHA (19/10/2026, ver _chaveConv). Vem antes de tudo e
+  // vale pra todo cargo: a casa so le chave pura, o afiliado so a com o sufixo dele.
+  const _mEsc = _mundoDeQuem(u);
+  if (_mEsc) { where.push('substr(c.phone, ?) = ?'); binds.push(-(_mEsc.length + 1), '#' + _mEsc); }
+  else where.push("instr(c.phone, '#') = 0");
   // Escopo por vendedor: quem não é diretor só vê as próprias conversas (a instância dele).
   // Compara por PREFIXO: com a instância por número (ax_<at>_<8díg>) a igualdade exata deixava o
   // vendedor com o Atendimento VAZIO. substr em vez de LIKE porque '_' é curinga no LIKE.
@@ -19262,11 +19321,12 @@ async function handleWACrm(req, env) {
   // e as quatro subconsultas rodam so nos cards que vao pra tela; o `chegou` continua no primeiro
   // passo porque o `entrou` depende dele, mas so pra quem esta em 'novo' sem crm_ts (1.106 de 5.539).
   // Medido em producao: 164,9ms -> 59,6ms, com os mesmos 755 cards.
+  const _mcC = _msgDoMundoSql('mundo', _mundoDeQuem(u));   // 19/10/2026, ver _chaveConv
   const sql = `WITH base AS (
-      SELECT c.phone, c.instance, c.name, c.last_text,
+      SELECT ${_foneDaConvSql('c.phone')} AS phone, c.instance, c.name, c.last_text,
              c.last_ts, c.last_dir, c.unread, c.assigned_to,
              COALESCE(NULLIF(c.crm_stage,''),'novo') AS crm_stage, c.tags, c.crm_ts,
-             COALESCE(c.crm_ts, CASE WHEN COALESCE(NULLIF(c.crm_stage,''),'novo')='novo' THEN (SELECT MIN(ts) FROM wa_messages WHERE phone = c.phone AND direction='in') END, c.updated_at, c.last_ts) AS entrou
+             COALESCE(c.crm_ts, CASE WHEN COALESCE(NULLIF(c.crm_stage,''),'novo')='novo' THEN (SELECT MIN(ts) FROM wa_messages WHERE phone = ${_foneDaConvSql('c.phone')} AND direction='in' AND ${_mcC}) END, c.updated_at, c.last_ts) AS entrou
         FROM wa_chats c
        WHERE ${onde.join(' AND ')}
     ), cortado AS (
@@ -19285,10 +19345,10 @@ async function handleWACrm(req, env) {
            x.ult_in, x.ult_out, x.chegou, x.entrou, x.rn, x.total
       FROM (
         SELECT t.*,
-               (SELECT MAX(ts) FROM wa_messages WHERE phone = t.phone AND direction='in') AS ult_in,
-               (SELECT MAX(ts) FROM wa_messages WHERE phone = t.phone AND direction='out' AND status IS NULL) AS ult_out,
-               (SELECT MIN(ts) FROM wa_messages WHERE phone = t.phone AND direction='in') AS chegou,
-               (SELECT type FROM wa_messages WHERE phone = t.phone ORDER BY ts DESC LIMIT 1) AS tipo
+               (SELECT MAX(ts) FROM wa_messages WHERE phone = t.phone AND direction='in' AND ${_mcC}) AS ult_in,
+               (SELECT MAX(ts) FROM wa_messages WHERE phone = t.phone AND direction='out' AND status IS NULL AND ${_mcC}) AS ult_out,
+               (SELECT MIN(ts) FROM wa_messages WHERE phone = t.phone AND direction='in' AND ${_mcC}) AS chegou,
+               (SELECT type FROM wa_messages WHERE phone = t.phone AND ${_mcC} ORDER BY ts DESC LIMIT 1) AS tipo
           FROM cortado t
       ) x
      ORDER BY x.last_ts DESC`;
@@ -19320,7 +19380,10 @@ async function handleWAMessages(req, env) {
   const phone = String(url.searchParams.get('phone') || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   const limit = Math.min(500, Number(url.searchParams.get('limit')) || 200);
-  const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to, crm_stage FROM wa_chats WHERE phone = ?').bind(phone).first();
+  // A CONVERSA DA OPERACAO DE QUEM ABRE (19/10/2026, ver _chaveConv): a linha e as mensagens.
+  const _mVe = _mundoDeQuem(u);
+  const chat = await env.DB.prepare('SELECT phone, instance, name, unread, assigned_to, crm_stage FROM wa_chats WHERE phone = ?').bind(_chaveConv(phone, _mVe)).first();
+  if (chat) chat.phone = phone;   // a chave do afiliado ('<fone>#afl_x') nao sai daqui
   // A CONVERSA TEM QUE SER DA MESMA OPERACAO DE QUEM ABRE (12/09/2026). A lista ja cortava por
   // mundo, mas a thread nao: quem soubesse o telefone abria direto. Na pratica o cobrador de um
   // afiliado lia a conversa de cliente DA CASA que tivesse fechado venda (a regra do cobrador olha
@@ -19345,7 +19408,7 @@ async function handleWAMessages(req, env) {
   // AS MAIS NOVAS, NA ORDEM (12/10/2026). Era ORDER BY ts ASC LIMIT: passando do limite, a conversa
   // mostrava as MAIS ANTIGAS e cortava justo as ultimas (2 de 12.398 conversas, a maior com 651).
   const rows = await env.DB.prepare(
-    'SELECT * FROM (SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url, status, err FROM wa_messages WHERE phone = ? ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC'
+    'SELECT * FROM (SELECT msg_id, phone, instance, direction, type, body, push_name, ts, media_url, status, err FROM wa_messages WHERE phone = ? AND ' + _msgDoMundoSql('mundo', _mVe) + ' ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC'
   ).bind(phone, limit).all();
   // MESMA IDEIA DA LISTA (19/09/2026): a conversa aberta rele de 3 em 3 segundos e quase sempre esta
   // igual. Assinatura bate, resposta curta - o que muda de verdade (mensagem nova, entregue, lida)
@@ -19378,7 +19441,7 @@ async function handleWALead(req, env) {
   // mesma guarda que o handleWAMessages ganhou em 12/09 e que aqui faltava). 404, e nao 403, pra
   // nao confirmar que o telefone existe. O pedido devolvido mais abaixo ja era podado por mundo,
   // entao isto nao muda o que sai: fecha o degrau de "existe ou nao existe".
-  const _chatL = await env.DB.prepare('SELECT instance, crm_stage FROM wa_chats WHERE phone = ?').bind(phone).first();
+  const _chatL = await env.DB.prepare('SELECT instance, crm_stage FROM wa_chats WHERE phone = ?').bind(_chaveConv(phone, _mundoDeQuem(u))).first();
   if (_chatL) {
     const _mCv = await _mundoDaInst(env, _chatL.instance);
     const _mEu0 = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '__sem__') : '';
@@ -19421,10 +19484,11 @@ async function handleWAChatRead(req, env) {
   // deveria responder, entao vale a mesma regra de dono das irmas.
   const _idsR = await _idsQuePossoVer(env, u);
   if (_idsR !== null && !_ehCobrador(u)) {
-    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const c = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(_chaveConv(phone, _mundoDeQuem(u))).first();
     if (c && !_instEhDe(c.instance, _idsR)) return err('Conversa não encontrada', 404);
   }
-  await env.DB.prepare('UPDATE wa_chats SET unread = 0 WHERE phone = ?').bind(phone).run();
+  // so a conversa da operacao de quem leu (19/10/2026, ver _chaveConv)
+  await env.DB.prepare('UPDATE wa_chats SET unread = 0 WHERE phone = ?').bind(_chaveConv(phone, _mundoDeQuem(u))).run();
   return json({ ok: true });
 }
 // POST /api/wa/chat/assign { phone, user_id|null } → distribui a conversa pro vendedor
@@ -19436,13 +19500,14 @@ async function handleWAChatAssign(req, env) {
   const phone = String(body?.phone || '').replace(/\D/g, '');
   if (!phone) return err('phone obrigatório');
   const assigned = body?.user_id == null || body.user_id === '' ? null : String(body.user_id);
+  const _kA = _chaveConv(phone, _mundoDeQuem(u));   // a conversa da operacao de quem mexe (19/10/2026)
   // QUEM PODE PASSAR CONVERSA PRA QUEM. Sem isto, qualquer login (ate um afiliado) reatribuia
   // QUALQUER conversa pra QUALQUER pessoa - e como a venda segue o dono da conversa, era comissao
   // trocando de mao com uma chamada. Diretor remaneja a vontade; o resto so puxa pra si mesmo, e so
   // conversa que esta sem dono ou que ja e dele.
   if (!isDirector(u)) {
     if (assigned !== null && assigned !== String(u.id)) return err('Voce so pode puxar a conversa pra voce', 403);
-    const dono = await env.DB.prepare('SELECT assigned_to, instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const dono = await env.DB.prepare('SELECT assigned_to, instance FROM wa_chats WHERE phone = ?').bind(_kA).first();
     const atual = dono && dono.assigned_to != null ? String(dono.assigned_to) : '';
     if (atual && atual !== String(u.id)) return err('Essa conversa e de outro vendedor. So um diretor passa.', 403);
     // CONVERSA SEM DONO TAMBEM TEM MUNDO (auditoria 24/08/2026). A checagem acima so barra conversa
@@ -19451,7 +19516,7 @@ async function handleWAChatAssign(req, env) {
     const _idsA = await _idsQuePossoVer(env, u);
     if (_idsA !== null && dono && !_instEhDe(dono.instance, _idsA)) return err('Conversa não encontrada', 404);
   }
-  await env.DB.prepare("UPDATE wa_chats SET assigned_to = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(assigned, phone).run();
+  await env.DB.prepare("UPDATE wa_chats SET assigned_to = ?, updated_at = strftime('%s','now') WHERE phone = ?").bind(assigned, _kA).run();
   return json({ ok: true });
 }
 // POST /api/wa/chat/stage { phone, stage } → move a conversa numa etapa do CRM do Atendimento
@@ -19468,14 +19533,15 @@ async function handleWAChatStage(req, env) {
   // Cobrador NAO move card: a area dele e de leitura. Mover mudaria a etapa do vendedor.
   if (_ehCobrador(u)) return err('Sua área do inbox é só pra consulta', 403);
   // Escopo por vendedor: só mexe em conversa da própria instância.
+  const _kE = _chaveConv(phone, _mundoDeQuem(u));   // a conversa da operacao de quem mexe (19/10/2026)
   if (!isDirector(u)) {
-    const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(phone).first();
+    const chat = await env.DB.prepare('SELECT instance FROM wa_chats WHERE phone = ?').bind(_kE).first();
     // prefixo: cobre ax_<at>, ax_<at>_b (legado) e ax_<at>_<8díg> (instância por número)
     const _meu = (i) => { const x = String(i || ''); return x === 'ax_' + u.id || x.indexOf('ax_' + u.id + '_') === 0; };
     if (!chat || !_meu(chat.instance)) return err('Sem acesso a essa conversa', 403);
   }
   // crm_ts so anda quando a etapa MUDA: arrastar pra mesma coluna nao pode "refazer" a data.
-  await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage = ?1, updated_at = strftime('%s','now') WHERE phone = ?2").bind(stage, phone).run();
+  await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage = ?1, updated_at = strftime('%s','now') WHERE phone = ?2").bind(stage, _kE).run();
   return json({ ok: true });
 }
 // Pedaco de SET que carimba a entrada na etapa ?1 so se ela for diferente da atual (tem que vir
@@ -19565,7 +19631,8 @@ async function handleWAChatTag(req, env) {
   const tag = String(body?.tag || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
   const on = body?.on !== false;
   if (!phone || !tag) return err('phone e tag obrigatórios');
-  const chat = await env.DB.prepare('SELECT instance, tags FROM wa_chats WHERE phone = ?').bind(phone).first();
+  const _kT = _chaveConv(phone, _mundoDeQuem(u));   // a conversa da operacao de quem mexe (19/10/2026)
+  const chat = await env.DB.prepare('SELECT instance, tags FROM wa_chats WHERE phone = ?').bind(_kT).first();
   if (!chat) return err('Conversa não encontrada', 404);
   const _ids = await _idsQuePossoVer(env, u);
   if (_ids !== null && !_instEhDe(chat.instance, _ids)) return err('Conversa não encontrada', 404);
@@ -19582,8 +19649,8 @@ async function handleWAChatTag(req, env) {
     `UPDATE wa_chats SET tags = (SELECT json_group_array(value) FROM (
        SELECT value FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value <> ?1
        UNION ALL SELECT ?1 WHERE ?2 = 1)) WHERE phone = ?3`
-  ).bind(tag, on ? 1 : 0, phone).run();
-  const depois = await env.DB.prepare('SELECT tags FROM wa_chats WHERE phone = ?').bind(phone).first();
+  ).bind(tag, on ? 1 : 0, _kT).run();
+  const depois = await env.DB.prepare('SELECT tags FROM wa_chats WHERE phone = ?').bind(_kT).first();
   let tags = [];
   try { tags = JSON.parse((depois && depois.tags) || '[]'); } catch (_) { tags = []; }
   return json({ ok: true, tags: Array.isArray(tags) ? tags : [] });
@@ -19612,7 +19679,8 @@ async function _waDetectSale(env, instance, data) {
   const phone = String(key.remoteJidAlt || key.remoteJid || '').split('@')[0].replace(/\D/g, '');
   if (!phone) return { sale: false };
   // Auto CRM: venda fechada -> card do Atendimento vai automatico pra "Fechou" (override de qualquer etapa).
-  try { await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage=?1, updated_at=strftime('%s','now') WHERE phone=?2").bind('fechou', phone).run(); } catch (_) {}
+  // o card da OPERACAO que vendeu (o numero que mandou o "Pedido Concluido"), nunca o da outra (19/10/2026)
+  try { await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage=?1, updated_at=strftime('%s','now') WHERE phone=?2").bind('fechou', _chaveConv(phone, await _mundoDaInst(env, instance))).run(); } catch (_) {}
   const name = ((text.match(/Nome:\s*([^\n📍📲⭐]+)/i) || [])[1] || '').trim();
   const valM = text.match(/Valor do Pedido:\s*R\$?\s*([\d.,]+)/i);
   const value = valM ? Number(valM[1].replace(/\./g, '').replace(',', '.')) : 0;
@@ -21093,7 +21161,7 @@ async function handleWASaleAdd(req, env) {
     await env.DB.prepare("INSERT INTO wa_sales (phone, instance, name, value, ts, msg_id, raw) VALUES (?,?,?,?,strftime('%s','now'),?,?)")
       .bind(phone || '', instance, name || 'Cliente', value, msgId, text.slice(0, 2000)).run();
     // Auto CRM: garante o card na coluna "Fechou" (o vendedor pode ter registrado direto, sem arrastar).
-    try { if (phone) await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage=?1, updated_at=strftime('%s','now') WHERE phone=?2").bind('fechou', phone).run(); } catch (_) {}
+    try { if (phone) await env.DB.prepare("UPDATE wa_chats SET " + _CRM_TS + ", crm_stage=?1, updated_at=strftime('%s','now') WHERE phone=?2").bind('fechou', _chaveConv(phone, await _mundoDaInst(env, instance))).run(); } catch (_) {}
     // Venda lançada na mão TAMBÉM dispara o pixel. O Diretor só lança quando a captura falhou, e sem
     // isso a BM nunca recebia o crédito dessa venda — foi o que aconteceu com 6 vendas num único dia.
     // _ttFireSale busca a origem em wa_lead; se não achar, deduz a pressel dominante do vendedor.
@@ -24326,7 +24394,7 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
       const _cS=await _corteMundoSql(env, _uAtual, { inst: 'instance' });
       const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<?"+_cL+" ORDER BY ts ASC").bind(dstart,dend).all(); leads=(r.results||[]).filter(l=>!_foraDoMundo(baseAt(l.inst)));
       try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0"+_cS).bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
-      try{ const nr=await env.DB.prepare("SELECT c.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?"+_cL+") l ON l.phone=c.phone WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
+      try{ const nr=await env.DB.prepare("SELECT l.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?"+_cL+") l ON c.phone = l.phone || "+_sufConvSql(_mundoDeQuem(_uAtual))+" WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
     }catch(_){}
     const isSale=ph=>!!(ph&&saleSet.has(ph));
     const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
@@ -24812,7 +24880,8 @@ async function handleTtJornada(req, env) {
     // linha de lead so nasceu agora": o wa_lead e por telefone com INSERT OR IGNORE, entao
     // quem conversou dias atras SEM atribuicao nao tinha linha, e no dia em que a mensagem
     // finalmente casa a linha nasce com a data de HOJE. Na tela isso vira um lead novo que nao e.
-    const pri_ = await emLotes("SELECT phone, MIN(ts) pri FROM wa_messages WHERE direction='in' AND phone IN (?IN?) GROUP BY phone", fones);
+    const _mJ = _mundoDeQuem(u);   // a conversa da operacao de quem olha (19/10/2026, ver _chaveConv)
+    const pri_ = await emLotes("SELECT phone, MIN(ts) pri FROM wa_messages WHERE direction='in' AND " + _msgDoMundoSql('mundo', _mJ) + " AND phone IN (?IN?) GROUP BY phone", fones);
     const priPorFone = {}; for (const x of pri_) priPorFone[String(x.phone)] = Number(x.pri) || 0;
     // QUEM COMPROU. Duas fontes porque nenhuma sozinha cobre tudo: a wa_sales e a venda que o
     // vendedor fechou no WhatsApp, e o evento de etapa 'venda' cobre a que veio do pedido
@@ -24821,8 +24890,8 @@ async function handleTtJornada(req, env) {
     const comprou = new Set(vend_.map((x) => String(x.phone)));
     // Nome do lead vem do inbox. Telefone continua mascarado; o nome ajuda a achar a pessoa sem
     // precisar do numero inteiro na tela.
-    const nomes_ = await emLotes('SELECT phone, name FROM wa_chats WHERE phone IN (?IN?)', fones);
-    const nomePorFone = {}; for (const n of nomes_) nomePorFone[String(n.phone)] = String(n.name || '');
+    const nomes_ = await emLotes('SELECT phone, name FROM wa_chats WHERE phone IN (?IN?)', _mJ ? fones.map((f) => String(f) + '#' + _mJ) : fones);
+    const nomePorFone = {}; for (const n of nomes_) nomePorFone[_foneDaConv(n.phone)] = String(n.name || '');
     // Nome do vendedor e da pressel: a tela filtra por eles, e filtrar por 'atendente_iqq91p' ou
     // por 'pressel 1' nao e coisa que alguem faz olhando. Uma consulta so pra tabela inteira, que
     // e pequena.
@@ -25640,7 +25709,7 @@ async function handlePresselsTotalPage(req, env){
         try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
         // NOME do lead: o WhatsApp manda o nome do perfil na captura (wa_chats.name). Puxa só pros
         // telefones do dia (JOIN, sem estourar limite de parâmetro) pra mostrar ao lado do número.
-        try{ const nr=await env.DB.prepare("SELECT c.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON l.phone=c.phone WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
+        try{ const nr=await env.DB.prepare("SELECT l.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON c.phone = l.phone || "+_sufConvSql(_mundoPag)+" WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
       }catch(_){}
       const isSale=ph=>!!(ph&&saleSet.has(ph));
       // Sem separação novo/antigo. A classificação por "clique no número hoje" não é confiável
