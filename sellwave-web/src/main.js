@@ -2476,6 +2476,29 @@ ipcMain.handle('swp:funil-feito', async (_e, { fone, seq }) => {
   } catch (_) { return { ok: false } }
 })
 
+// A CONVERSA ABERTA PASSA A CONTAR COMO LIDA NA DASH (19/10/2026, item 5 da lista do Bruno).
+//
+// O vendedor le a mensagem AQUI DENTRO, no WhatsApp de verdade, e a dash nunca ficava sabendo: o app
+// nao chamava /api/wa/chat/read em lugar nenhum do projeto, e o `wa_chats.unread` so crescia. Medido
+// em producao em 19/10/2026, antes deste conserto: 3.487 conversas com nao lida pendente, 10.037
+// somadas, a pior com 245 e 400 paradas assim ha mais de um mes. Com esse numero, o filtro
+// "Nao lidas" da dash vira ruido e o contador do topo mente.
+//
+// Silencioso de proposito: contador atrasado e incomodo, erro na cara do vendedor no meio do
+// atendimento e pior. Quem decide se pode marcar e o worker, que confere o dono da conversa.
+ipcMain.handle('swp:marcar-lida', async (_e, { phone }) => {
+  if (!config.token) return { ok: false }
+  const f = String(phone || '').replace(/\D/g, '')
+  if (!f) return { ok: false }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/wa/chat/read', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ phone: f }), signal: AbortSignal.timeout(12000),
+    })
+    ajustaRelogio(r)
+    return { ok: r.ok }
+  } catch (_) { return { ok: false } }
+})
+
 ipcMain.handle('swp:rascunhos', async (_e, { phone }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.', rascunhos: [] }
   try {

@@ -2308,6 +2308,34 @@ function ligaBotaoCadastro() { /* o bloco do lead não tem mais botão; ver bota
 
 // ───────────────────────────────────────────────────────────── ciclo
 
+// A CONVERSA ABERTA CONTA COMO LIDA NA DASH (19/10/2026, item 5 da lista do Bruno).
+//
+// O vendedor le a mensagem aqui dentro e a dash nunca ficava sabendo, porque o app nao chamava
+// /api/wa/chat/read em lugar nenhum: o `unread` so crescia. Medido em producao antes do conserto:
+// 3.487 conversas pendentes, 10.037 nao lidas somadas, a pior com 245.
+//
+// DUAS CAUTELAS, e as duas tem motivo:
+// 1) So marca depois que a conversa fica de pe por um pulso. Passar o olho pela lista abre varias
+//    conversas por segundo; marcar todas apagaria o aviso de quem AINDA precisa de resposta, que e
+//    justamente a informacao que o filtro existe pra dar.
+// 2) Reforça de 60 em 60 s enquanto a mesma conversa segue aberta, porque mensagem nova chegando na
+//    conversa ABERTA volta a somar no contador e o vendedor esta lendo ela na hora.
+// Grupo fica de fora: o contador da dash e por cliente, e o grupo da equipe nao e atendimento.
+let lidaFone = ''
+let lidaDesde = 0
+let lidaEm = 0
+function marcaLida() {
+  const f = String(estadoWa.phone || '').replace(/\D/g, '')
+  if (!f || estadoWa.grupo || !estadoWa.autenticado) { lidaFone = ''; return }
+  const agora = Date.now()
+  // conversa nova na tela: so anota a hora, pra confirmar no pulso seguinte que ela ficou
+  if (f !== lidaFone) { lidaFone = f; lidaDesde = agora; lidaEm = 0; return }
+  if (agora - lidaDesde < 1400) return
+  if (lidaEm && agora - lidaEm < 60000) return
+  lidaEm = agora
+  try { window.swp.marcarLida(f) } catch (_) { /* a dash fica com o contador velho; nada quebra aqui */ }
+}
+
 let podiaEnviar = false
 let ultimaTentativa = 0
 async function pulso() {
@@ -2322,6 +2350,7 @@ async function pulso() {
   // olhava se a biblioteca tinha carregado.
   $('pt').className = 'pt' + (estadoWa.autenticado ? '' : ' off')
   $('meu').textContent = estadoWa.eu ? formata(estadoWa.eu) : ''
+  marcaLida()
 
   // NÚMERO TROCADO: o QR deste slot foi lido por outro aparelho. Grita, porque dali pra frente a
   // dash e o app discordam do que está acontecendo.

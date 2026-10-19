@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('swp', {
   // Quais funis ja sairam PRA ESTE LEAD, e o carimbo de mais um (18/10/2026).
   funisFeitos: (fone) => ipcRenderer.invoke('swp:funis-feitos', { fone }),
   funilFeito: (fone, seq) => ipcRenderer.invoke('swp:funil-feito', { fone, seq }),
+  // "Ja li esta conversa", pra dash parar de contar como nao lida (19/10/2026). Ver marcaLida no
+  // painel-ui.js: quem le a mensagem e o vendedor, aqui dentro, e a dash nunca ficava sabendo.
+  marcarLida: (phone) => ipcRenderer.invoke('swp:marcar-lida', { phone }),
   rascunhos: (phone) => ipcRenderer.invoke('swp:rascunhos', { phone }),
   rascunhoSalvar: (id, phone, dados) => ipcRenderer.invoke('swp:rascunho-salvar', { id, phone, dados }),
   rascunhoApagar: (id) => ipcRenderer.invoke('swp:rascunho-salvar', { id, apagar: true }),

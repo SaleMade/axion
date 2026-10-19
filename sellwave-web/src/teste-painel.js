@@ -1015,6 +1015,58 @@ app.whenReady().then(async () => {
   conta('o X de fechar numero se destaca dos outros icones',
     /sair/.test(x.classe) && x.borda !== '0px', JSON.stringify(x))
 
+  // ══ "JA LI ESTA CONVERSA" ═══════════════════════════════════════════════════════════════════
+  //
+  // O vendedor le a mensagem AQUI DENTRO, no WhatsApp de verdade, e a dash nunca ficava sabendo: o
+  // app nao chamava /api/wa/chat/read em lugar nenhum do projeto e o `wa_chats.unread` so crescia.
+  // Medido em producao em 19/10/2026, antes deste conserto: 3.487 conversas com nao lida pendente,
+  // 10.037 somadas, a pior com 245 e 400 paradas assim ha mais de um mes.
+  //
+  // O QUE ESTES TESTES PROVAM E O QUANDO, NAO O SE. Marcar cedo demais e pior que nao marcar:
+  // passar o olho pela lista abre varias conversas por segundo, e marcar todas apagaria o aviso de
+  // quem AINDA espera resposta, que e justamente a informacao que o filtro existe pra dar.
+  ponto = 'ja li esta conversa'
+  const lidas = () => js('(window.__ver()).filter(c => c.nome === "marcarLida").map(c => String(c.args[0]))')
+
+  // PASSAR O OLHO NAO E LER. Tres conversas, cada uma menos de um pulso na tela: e o que acontece
+  // quando o vendedor desce a lista procurando alguem. Nenhuma das tres pode ser marcada.
+  // (Medir "ainda nao marcou" por relogio nao funciona aqui: o pulso e de 1,5 s e uma janela curta
+  // as vezes ja contem dois. O que importa nao e o cronometro, e o comportamento.)
+  await js('window.__trocaConversa("5511900000001", "Passando A")')
+  await espera(320)
+  await js('window.__trocaConversa("5511900000002", "Passando B")')
+  await espera(320)
+  await js('window.__trocaConversa("5511900000003", "Passando C")')
+  await espera(320)
+  await js('window.__trocaConversa("5511988887777", "Ze da Silva")')
+  await espera(3200)
+  const vistas = await lidas()
+  conta('conversa so passada de olho NAO conta como lida',
+    !vistas.some((f) => f.indexOf('551190000000') === 0), JSON.stringify(vistas))
+
+  conta('mas a que ficou aberta, marca', vistas.includes('5511988887777'), JSON.stringify(vistas))
+
+  const quantas = (await lidas()).length
+  await espera(3200)
+  conta('e NAO fica remarcando a cada pulso', (await lidas()).length === quantas, 'eram ' + quantas)
+
+  await js('window.__grupo(true); window.__trocaConversa("120363000000000000", "Equipe")')
+  await espera(3200)
+  const comGrupo = await lidas()
+  conta('grupo NAO e marcado como lido', !comGrupo.some((f) => f.indexOf('1203630000') === 0), JSON.stringify(comGrupo))
+  await js('window.__grupo(false)')
+
+  await js('window.__autenticado(false); window.__trocaConversa("5511955554444", "Sem pareamento")')
+  await espera(3200)
+  conta('numero desconectado NAO marca nada', !(await lidas()).includes('5511955554444'), JSON.stringify(await lidas()))
+
+  await js('window.__autenticado(true)')
+  await espera(3400)
+  conta('pareado de novo, a conversa na tela volta a ser marcada', (await lidas()).includes('5511955554444'), JSON.stringify(await lidas()))
+
+  await js('window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293")')
+  await espera(300)
+
   conta('nenhum erro de javascript na tela', erros.length === 0, erros.join(' | ').slice(0, 200))
 
   // ══ A CASCA (barra lateral): encolher e voltar ═════════════════════════════════════════════

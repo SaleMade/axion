@@ -112,6 +112,9 @@ contextBridge.exposeInMainWorld('swp', {
   fechar: reg('fechar', { ok: true }),
   recarregar: reg('recarregar', { ok: true }),
   esconder: reg('esconder', { ok: true }),
+  // "Ja li esta conversa" (19/10/2026). O teste confere QUANDO ela e chamada, que e o que importa:
+  // marcar cedo demais apaga o aviso de quem ainda espera resposta.
+  marcarLida: reg('marcarLida', { ok: true }),
 })
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.
@@ -124,6 +127,9 @@ contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome, nk) => {
   // caem no mesmo consumidor e o teste provaria o contrario do que interessa.
   if (nk) ESTADO.nk = String(nk)
 })
+// Pro teste do "ja li esta conversa": grupo e desconectado sao os dois casos que NAO podem marcar.
+contextBridge.exposeInMainWorld('__grupo', (on) => { ESTADO.grupo = !!on })
+contextBridge.exposeInMainWorld('__autenticado', (on) => { ESTADO.autenticado = !!on })
 // Pro teste simular a rede caindo no cadastro.
 contextBridge.exposeInMainWorld('__falhaPedido', (n) => { falharPedido = Number(n) || 0 })
 contextBridge.exposeInMainWorld('__falhaApagar', (n) => { falharApagar = Number(n) || 0 })
