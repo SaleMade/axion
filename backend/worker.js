@@ -26936,11 +26936,13 @@ function _wpComissaoVendedor(valor, lead, dono, pctDoAfiliado) {
     const taxa = Number(lead && lead.com_pct) > 0 ? Number(lead.com_pct) : taxaCadastro;
     return { taxa: taxa, comissao: (Number(valor) || 0) * taxa / 100 };
   }
-  // Time de afiliado: a taxa e SEMPRE a do cadastro dele, e a base e a comissao do afiliado.
-  const pAfl = Number(pctDoAfiliado) > 0 ? Number(pctDoAfiliado) : (Number(lead && lead.com_pct) || 0);
-  const base = pAfl > 0 ? (Number(valor) || 0) * pAfl / 100 : 0;
+  // Time de afiliado: a taxa e SEMPRE a do cadastro dele (a congelada no pedido e a do afiliado), e a
+  // base e a VENDA, como na casa. Ate 19/10/2026 a base era a comissao do afiliado ("comissao da
+  // comissao"); o afiliado pediu e o Bruno aprovou: "ele ganha 10% sobre o valor da venda, nao da
+  // nossa comissao". Mesma regra do baseComissao da dash. `pctDoAfiliado` fica na assinatura pra nao
+  // mexer nos tres chamadores.
   const taxa = taxaCadastro;
-  return { taxa: taxa, comissao: base * taxa / 100 };
+  return { taxa: taxa, comissao: (Number(valor) || 0) * taxa / 100 };
 }
 // O TEXTO DO AVISO, num lugar so. A varredura real e o botao de simular venda chamam ESTA funcao:
 // se cada um montasse o seu, o teste mostraria uma coisa e a venda de verdade outra, e o teste
