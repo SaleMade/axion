@@ -85,12 +85,12 @@ async function rodar(ctx) {
       estado.direcao = ${direcao ? 'true' : 'false'}
       estado.vendedores = [{ id: 'a1', nome: 'Guilherme' }, { id: 'a2', nome: 'Kevin Marques' }, { id: 'a3', nome: 'Murilo' }]
       estado.numeros = [
-        { numero: '(15) 97407-6200', nk: '1574076200', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 23, proxy: { host: 'isp.decodo.com', porta: 10001 } },
-        { numero: '(19) 99598-3293', nk: '1995983293', at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 41, proxy: { host: 'isp.decodo.com', porta: 10002 } },
-        { numero: '(47) 99740-5847', nk: '4799740584', at: 'a2', dono: 'Kevin Marques', status: 'Ativo', cor: '#4487c5', roleta: true,  lim_dia: 50, leads_hoje: 8,  proxy: { host: 'isp.decodo.com', porta: 10003 } },
-        { numero: '(54) 98108-9151', nk: '5498108915', at: 'a2', dono: 'Kevin Marques', status: 'Restrito', cor: '#ecf755', roleta: false, lim_dia: 30, leads_hoje: 30, proxy: null },
+        { numero: '(15) 97407-6200', nk: '1574076200', idx: 46, at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 23, proxy: { host: 'isp.decodo.com', porta: 10001 } },
+        { numero: '(19) 99598-3293', nk: '1995983293', idx: 48, at: 'a1', dono: 'Guilherme', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 41, proxy: { host: 'isp.decodo.com', porta: 10002 } },
+        { numero: '(47) 99740-5847', nk: '4799740584', idx: 49, at: 'a2', dono: 'Kevin Marques', status: 'Ativo', cor: '#4487c5', roleta: true,  lim_dia: 50, leads_hoje: 8,  proxy: { host: 'isp.decodo.com', porta: 10003 } },
+        { numero: '(54) 98108-9151', nk: '5498108915', idx: 21, at: 'a2', dono: 'Kevin Marques', status: 'Restrito', cor: '#ecf755', roleta: false, lim_dia: 30, leads_hoje: 30, proxy: null },
         { numero: '(71) 99275-9887', nk: '7199275988', at: 'a3', dono: 'Murilo', status: 'Banido', cor: '#cc1919', roleta: false, lim_dia: 0,  leads_hoje: 0,  proxy: null },
-        { numero: '(82) 99121-5713', nk: '8299121571', at: 'a3', dono: 'Murilo', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 12, proxy: { host: 'isp.decodo.com', porta: 10004 } },
+        { numero: '(82) 99121-5713', nk: '8299121571', idx: 44, at: 'a3', dono: 'Murilo', status: 'Em Uso', cor: '#29db64', roleta: true,  lim_dia: 70, leads_hoje: 12, proxy: { host: 'isp.decodo.com', porta: 10004 } },
       ]
       estado.abertos = ['1574076200']
       ativo = '1574076200'

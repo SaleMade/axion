@@ -353,6 +353,10 @@ function linha(n) {
     ? '<span class="aq" title="Dia ' + dia + ' do aquecimento. O teto de leads sobe conforme os dias passam: 5 até o dia 3, 10 até o 6, 20 até o 9, 35 até o 15, e 50 do 16 em diante.">'
       + FOGO + 'dia ' + dia + '</span>'
     : ''
+  // O NUMERO DO CHIP NA CONTINGENCIA (19/10/2026, pedido do Bruno: "eu me baseio muito na numeracao deles,
+  // como no aplicativo de celulares"). Pequeno e verde, colado no icone do WhatsApp, o mesmo selo da central.
+  const nChip = Number(n.idx) || 0
+  const idx = nChip ? '<span class="idx" title="Número ' + nChip + ' na Contingência">' + nChip + '</span>' : ''
   // CADEADO: outra MAQUINA esta com este numero aberto agora. Nao e erro nem bloqueio permanente -
   // e o aviso de que abrir ali criaria o cruzamento que derruba chip.
   const trancado = n.uso && !n.uso.meu
@@ -412,7 +416,7 @@ function linha(n) {
     + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + explicaAquec + (n.status ? ' · ' + n.status : '')) + '">'
     + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + fogo + zap + trancado + alerta + conta + '</span></span>'
+    + '<span class="sub">' + fogo + idx + zap + trancado + alerta + conta + '</span></span>'
     + fecha + chave + '</button>'
 }
 // ───────────────────────────────────────────────────────────── palco
