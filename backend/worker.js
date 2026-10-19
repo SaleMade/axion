@@ -11470,6 +11470,9 @@ async function handleSwWeb(req, env, path) {
       return {
         numero: String(c.num),
         nk,
+        // O NUMERO DO CHIP NA CONTINGENCIA (19/10/2026, pedido do Bruno: "eu me baseio muito na numeracao
+        // deles, como no aplicativo de celulares"). O app mostra do lado do icone do WhatsApp.
+        idx: Number(c.idx) || 0,
         at: String(c.at || ''),
         // Sem nome na tabela de usuarios, manda VAZIO em vez do id: a barra lateral ja escreve
         // 'sem dono', e id tecnico na tela de um vendedor leigo so confunde.
