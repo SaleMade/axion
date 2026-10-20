@@ -44,7 +44,7 @@ sq.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run
 sq.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run(TK_OUT, 'vend_outro', exp)
 const NK = '1599999999'
 // O numero esta desligado ATE A MEIA-NOITE numa pressel: e o caso do interruptor laranja do app.
-const estado = { chips: [{ id: 1, num: '(15) 99999-9999', at: 'vend_kevin', st: 'ativo', wa_st: '', em_uso: true }], pressels: [{ id: 'p1', vendedores: [{ at: 'vend_kevin', off: { '99999999': true }, volta: { '99999999': '2026-10-21' } }] }], leads: [] }
+const estado = { chips: [{ id: 1, num: '(15) 99999-9999', at: 'vend_kevin', st: 'ativo', wa_st: '', em_uso: true, dist: 'limite', lim_dia: 70, lim_ordem: 1 }], pressels: [{ id: 'p1', vendedores: [{ at: 'vend_kevin', off: { '99999999': true }, volta: { '99999999': '2026-10-21' } }] }], leads: [] }
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado))
 
 const worker = (await import(pathToFileURL(bundle).href)).default
@@ -152,6 +152,7 @@ const n0 = (r.numeros || []).find((x) => x.nk === NK)
 t(n0 && n0.nuvem && n0.nuvem.ver === 3 && n0.nuvem.nome === 'Kevin', 'campo nuvem com a versao e quem salvou', JSON.stringify(n0 && n0.nuvem) + ' http ' + r.http)
 t(n0 && n0.uso && n0.uso.meu === true, 'e o aluguel aparece como DESTA maquina (uso.meu)', JSON.stringify(n0 && n0.uso))
 t(n0 && n0.ligado === false && n0.volta === '2026-10-21' && n0.roleta === false, 'o interruptor vem no campo ligado, com o dia em que volta', JSON.stringify(n0 && { ligado: n0.ligado, volta: n0.volta, roleta: n0.roleta, vivo: n0.vivo }))
+t(n0 && n0.fila && n0.fila.pos === 1 && n0.fila.st === 'off', 'desligado guarda a posicao na fila, com o estado off', JSON.stringify(n0 && n0.fila))
 
 console.log('\n── 9) os cookies exportados vao junto (SellWave/) ──')
 const E = Buffer.from('[{"name":"wa_ul"}]')

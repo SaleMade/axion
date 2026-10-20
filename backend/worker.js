@@ -11593,8 +11593,7 @@ async function handleSwWeb(req, env, path) {
         // NENHUM numero verde, com o que de fato recebe escrito "na fila" e o desligado na posicao 1.
         // O `desligados` ja estava montado 20 linhas acima e so nao era consultado.
         .filter((c) => c && c.num
-          && (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec))
-          && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)))
+          && (String(c.dist || '') === 'limite' || _chipAquecendo(c, _ids.aquec)))
         .map((c, i) => {
           const aq = _chipAquecendo(c, _ids.aquec) ? _numDoAquecimento(c) : null;
           return {
@@ -11602,15 +11601,19 @@ async function handleSwWeb(req, env, path) {
             lim: aq ? aq.lim : (Number(c.lim_dia) || 0),
             livre: aq ? '' : String(c.lim_livre || ''),
             ordem: aq ? aq.ordem : (Number(c.lim_ordem) || 999), idx: i,
+            off: desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
           };
         });
       if (emFila.length) {
-        const r = _aplicaFilaLimite(emFila, lh, _brDay());
+        // O DESLIGADO GUARDA O LUGAR NA NUMERACAO, mas nao pega a vez (19/10/2026, pedido do Bruno:
+        // "gostaria que ficasse sempre o numero", e a Chegada de leads da dash ja numera assim, com o
+        // estado 'off'). Quem decide a vez continua vendo so os ligados, pelo motivo do comentario acima.
+        const r = _aplicaFilaLimite(emFila.filter((u) => !u.off), lh, _brDay());
         // A POSICAO E DENTRO DA FILA DO VENDEDOR, nao da lista toda: o vendedor ve "1, 2, 3" dele.
         const posDe = {};
         for (const u of emFila.slice().sort((a, b) => (a.ordem - b.ordem) || (a.idx - b.idx))) {
           posDe[u.at] = (posDe[u.at] || 0) + 1;
-          filaDe[_swwebK8(u.num)] = { pos: posDe[u.at], st: 'espera' };
+          filaDe[_swwebK8(u.num)] = { pos: posDe[u.at], st: u.off ? 'off' : 'espera' };
         }
         for (const u of r.ficam) if (filaDe[_swwebK8(u.num)]) filaDe[_swwebK8(u.num)].st = 'vez';
         for (const u of r.bateram) if (filaDe[_swwebK8(u.num)]) filaDe[_swwebK8(u.num)].st = 'bateu';
