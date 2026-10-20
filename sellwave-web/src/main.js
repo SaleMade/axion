@@ -1017,9 +1017,8 @@ function fechaNumero(nk) {
 //
 // O QUE VAI: as pastas IndexedDB e Local Storage da particao, que e onde o WhatsApp Web guarda o
 // pareamento (as chaves do aparelho vinculado). E o mesmo recorte que o RemoteAuth do
-// whatsapp-web.js usa pra levar sessao de um servidor pro outro. Cookie NAO vai: no Windows ele e
-// cifrado com uma chave do DPAPI daquela maquina, nao abriria em outra, e o WhatsApp Web nao
-// depende dele pra continuar conectado. Cache, Service Worker e GPU ficam: sao refeitos sozinhos.
+// whatsapp-web.js usa pra levar sessao de um servidor pro outro. Os cookies vao a parte, exportados
+// pelo Electron (ver cookiesDaParticao). Cache, Service Worker e GPU ficam: sao refeitos sozinhos.
 //
 // COMO VAI: cada arquivo cifrado com AES-256-GCM (chave do numero, guardada no servidor) e mandado
 // pelo hash do conteudo. O LevelDB nao reescreve um .ldb depois de pronto, entao fechar de novo so
@@ -1097,10 +1096,11 @@ function decifraArquivo(chave, enc) {
 // OS COOKIES VAO JUNTO (19/10/2026, pedido do Bruno com o print do AdsPower, que exporta o JSON de
 // cookies de cada perfil: wa_csrf, wa_lang_pref, wa_ul...).
 //
-// O arquivo de cookies do disco NAO serve: no Windows o valor e cifrado com uma chave do DPAPI daquela
-// maquina e nao abre em outra. O Electron entrega os cookies ja abertos pelo `session.cookies.get`,
-// entao eles viajam como um JSON (cifrado como o resto, em SellWave/cookies.json) e voltam pelo
-// `cookies.set` na particao nova, antes de o WhatsApp carregar. Medido no teste de ponta a ponta: o
+// POR QUE NAO COPIAR O ARQUIVO Network/Cookies: ele e um SQLite que o Chromium segura aberto e reescreve
+// quando quer, e o formato (com ou sem cifra - neste build, conferido em 19/10, os valores estao em
+// texto) e detalhe interno do Chromium que muda entre versoes. O `session.cookies.get` entrega o que
+// vale, do jeito que vale, com qualquer formato; eles viajam como um JSON (cifrado como o resto, em
+// SellWave/cookies.json) e voltam pelo `cookies.set` na particao nova, antes de o WhatsApp carregar. Medido no teste de ponta a ponta: o
 // numero abre conectado mesmo SEM eles; vao pra outra maquina ficar igual a esta.
 const ARQ_COOKIES = 'SellWave/cookies.json'
 async function cookiesDaParticao(particao) {
@@ -1126,7 +1126,8 @@ async function poeCookies(particao, lista) {
         name: c.name, value: String(c.value || ''), path: c.path || '/',
         ...(c.hostOnly ? {} : { domain: c.domain }),
         secure: !!c.secure, httpOnly: !!c.httpOnly,
-        ...(c.sameSite && c.sameSite !== 'unspecified' ? { sameSite: c.sameSite } : {}),
+        // SEMPRE, inclusive 'unspecified': omitido, o `cookies.set` grava 'lax' e o cookie volta diferente.
+        sameSite: ['unspecified', 'no_restriction', 'lax', 'strict'].includes(c.sameSite) ? c.sameSite : 'unspecified',
         ...(c.expirationDate ? { expirationDate: c.expirationDate } : {}),
       })
       postos++
@@ -1358,6 +1359,13 @@ async function estaConectado(wc, nk, estrito) { return conectadoDe(await lerCone
 // O RESTO DO FECHAMENTO, fora da tela.
 async function despedida(nk, s) {
   const wc = s && s.view && s.view.webContents
+  // O NUMERO FOI PRA OUTRA MAQUINA (ver perdeuONumero): so fecha. Subir daqui passaria uma copia
+  // atrasada por cima da certa, e soltar o aluguel nao e nosso - e de quem esta com ele agora.
+  if (s && s.semDespedida) {
+    salvaSessao(particaoDe(nk))
+    try { if (wc && !wc.isDestroyed()) wc.close() } catch (_) { /* ok */ }
+    return
+  }
   let conectado = false
   if (wc && !wc.isDestroyed()) conectado = await estaConectado(wc, nk)
   salvaSessao(particaoDe(nk))
@@ -1591,6 +1599,9 @@ async function pedeUso(nk) {
     const d = await r.json().catch(() => null)
     if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
     if (d && d.ok) { alugados.add(nk); return { ok: true } }
+    // A DIRECAO LIBEROU A FORCA (quarentena desta maquina): nao e "outra pessoa", e a frase do
+    // servidor diz o que fazer.
+    if (d && d.revogado) return { ok: false, revogado: true, erro: d.erro || d.error || 'A direção liberou este número.' }
     return { ok: false, ocupado: (d && d.ocupado) || { nome: 'outra pessoa' } }
   } catch (_) {
     // SEM RESPOSTA, NAO ABRE. Abrir "no escuro" e justamente o cruzamento que a trava evita, e o
@@ -1618,10 +1629,44 @@ async function soltaUso(nk) {
 }
 // A renovacao confere DUAS vezes: ao montar o laco e na hora de mandar. Entre uma e outra cabe um
 // fechamento inteiro.
-setInterval(() => {
+//
+// E A RESPOSTA DA RENOVACAO E LIDA (19/10/2026, revisao da sessao na nuvem). Ela era jogada fora: se
+// o aluguel se perdia (esta maquina ficou mais de 2 min sem falar com a dash e outra pegou o numero,
+// ou a direcao liberou a forca), o WhatsApp continuava aberto AQUI e abria LA tambem - o mesmo
+// aparelho vinculado em dois computadores, que e o que a trava existe pra impedir, e com a sessao na
+// nuvem pior ainda: as duas copias das chaves passam a andar separadas. Agora resposta "esta com
+// outra maquina" ou "liberado pela direcao" fecha o numero aqui na hora, sem subir nada pra nuvem
+// (quem tem a versao certa e a outra maquina). Falha de REDE nao fecha: sem dash ninguem pega o
+// aluguel, e soluco de internet nao pode derrubar o numero de quem esta vendendo; o que vale e a
+// primeira resposta de verdade depois que a rede volta.
+const falhasRenova = new Map()
+function perdeuONumero(nk, r) {
+  alugados.delete(nk)
+  falhasRenova.delete(nk)
+  const s = abertos.get(nk)
+  const quem = (r && r.ocupado && r.ocupado.nome) || ''
+  anota('[uso] ' + nk + ' perdeu o aluguel (' + (r && r.revogado ? 'liberado pela direcao' : 'com ' + (quem || 'outra maquina')) + '): fecha aqui')
+  if (!s) return
+  s.semDespedida = true
+  marcaFechouNaMao(nk)
+  fechaNumero(nk)
+  avisaCasca('sw:erro', {
+    nk,
+    erro: r && r.revogado
+      ? (r.erro || 'A direção liberou este número, e ele foi fechado aqui.')
+      : 'Este número foi aberto em outro computador' + (quem ? ' (' + quem + ')' : '') + ' e foi fechado aqui, pra não ficar o mesmo WhatsApp nos dois.',
+  })
+}
+setInterval(async () => {
   for (const nk of [...alugados]) {
     if (!alugados.has(nk) || soltandoAgora.has(nk)) continue
-    pedeUso(nk)
+    const r = await pedeUso(nk)
+    if (!alugados.has(nk) || soltandoAgora.has(nk)) continue   // fechou enquanto perguntava
+    if (r && r.ok) { falhasRenova.delete(nk); continue }
+    if (r && (r.ocupado || r.revogado)) { perdeuONumero(nk, r); continue }
+    const f = (falhasRenova.get(nk) || 0) + 1
+    falhasRenova.set(nk, f)
+    if (f === 3) anota('[uso] ' + nk + ' sem renovar o aluguel ha ~2 min (' + ((r && r.erro) || 'sem resposta') + '); continua aberto e confere na volta da rede')
   }
 }, 45000)
 
