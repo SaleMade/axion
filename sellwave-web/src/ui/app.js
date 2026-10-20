@@ -321,7 +321,7 @@ function linhaFina(n) {
   const quatro = cheio(nk).replace(/\D/g, '').slice(-4)
   const leads = Number(n.leads_hoje) || 0
   const teto = tetoDe(n)
-  return '<button class="fino' + (recebendoAgora(n) ? ' recebendo' : '') + (nk === ativo ? ' ativo' : '') + '" data-nk="' + nk + '"'
+  return '<button class="fino' + (recebendoAgora(n) ? ' recebendo' : '') + (nk === ativo ? ' ativo' : '') + (carregando.has(nk) ? ' carregando' : '') + '" data-nk="' + nk + '"'
     + ' title="' + esc(bonito(cheio(nk))) + (n.dono ? ' · ' + esc(n.dono) : '') + ' · ' + esc(fraseEstado(n)) + '">'
     + sinal
     + '<span class="d">' + quatro + '</span>'

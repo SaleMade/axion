@@ -153,7 +153,9 @@
   .num.ativo { background: rgba(255, 255, 255, .07); }
   .num.ativo::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2.5px; border-radius: 3px; background: var(--verde); }
   .num .sinal { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: #39415266; }
-  .num.carregando .sinal { animation: pulsa 1.1s ease-in-out infinite; }
+  /* ABRINDO: pisca o que estiver no lugar do estado, a POSICAO na fila ou a bolinha (19/10/2026, pedido do
+     Bruno: o numero da sequencia pisca no lugar da bolinha, pra nao parecer outra coisa). */
+  .num.carregando .sinal, .num.carregando .pos, .fino.carregando .sinal, .fino.carregando .pos { animation: pulsa 1.1s ease-in-out infinite; }
   @keyframes pulsa { 50% { opacity: .3; } }
   .num .corpo { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
   .num .fone { font-size: 12.5px; font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
