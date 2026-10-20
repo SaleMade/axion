@@ -10988,7 +10988,8 @@ function _swwebManifestoLimpo(m) {
   const vistos = new Set();
   for (const e of m) {
     const p = String((e && e.p) || '');
-    if (!/^(IndexedDB|Local Storage)\/[A-Za-z0-9 ._\-\/]{1,300}$/.test(p)) return null;
+    // SellWave/ = o que o app guarda junto e nao e pasta do Chromium (os cookies exportados, 19/10/2026).
+    if (!/^(IndexedDB|Local Storage|SellWave)\/[A-Za-z0-9 ._\-\/]{1,300}$/.test(p)) return null;
     if (p.split('/').some((x) => x === '' || x === '.' || x === '..')) return null;
     if (vistos.has(p)) return null;
     vistos.add(p);

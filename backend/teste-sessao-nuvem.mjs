@@ -92,7 +92,7 @@ r = await pede('POST', '/api/swweb/sessao/fim', { token: TK_DIR, maquina: MAQ_BR
 t(r.ok === true && r.ver === 1, 'com tudo la a versao 1 fecha', JSON.stringify(r))
 r = await pede('POST', '/api/swweb/sessao/fim', { token: TK_DIR, maquina: MAQ_BRUNO, corpo: { nk: NK, base: 0, manifesto: man1 } })
 t(r.http === 409 && r.conflito === true && r.ver === 1, 'uma copia velha (base 0) chegando depois e recusada', JSON.stringify(r))
-for (const p of ['../../Windows/x', 'IndexedDB/../../x', '/IndexedDB/x', 'Cache/x', 'IndexedDB//x', 'IndexedDB/a\\b']) {
+for (const p of ['../../Windows/x', 'IndexedDB/../../x', '/IndexedDB/x', 'Cache/x', 'IndexedDB//x', 'IndexedDB/a\\b', 'SellWave/../x']) {
   r = await pede('POST', '/api/swweb/sessao/fim', { token: TK_DIR, maquina: MAQ_BRUNO, corpo: { nk: NK, base: 1, manifesto: [{ p, h: h(A), n: 1, k: 1 }] } })
   t(r.http === 400, 'caminho hostil recusado: ' + p, 'http ' + r.http + ' ' + JSON.stringify(r))
 }
@@ -150,6 +150,12 @@ r = await pede('GET', '/api/swweb/numeros', { token: TK_VEN, maquina: MAQ_KEVIN 
 const n0 = (r.numeros || []).find((x) => x.nk === NK)
 t(n0 && n0.nuvem && n0.nuvem.ver === 3 && n0.nuvem.nome === 'Kevin', 'campo nuvem com a versao e quem salvou', JSON.stringify(n0 && n0.nuvem) + ' http ' + r.http)
 t(n0 && n0.uso && n0.uso.meu === true, 'e o aluguel aparece como DESTA maquina (uso.meu)', JSON.stringify(n0 && n0.uso))
+
+console.log('\n── 9) os cookies exportados vao junto (SellWave/) ──')
+const E = Buffer.from('[{"name":"wa_ul"}]')
+await pede('PUT', '/api/swweb/sessao/obj?nk=' + NK + '&h=' + h(E) + '&i=0', { token: TK_VEN, maquina: MAQ_KEVIN, bin: E })
+r = await pede('POST', '/api/swweb/sessao/fim', { token: TK_VEN, maquina: MAQ_KEVIN, corpo: { nk: NK, base: 3, manifesto: [{ p: 'SellWave/cookies.json', h: h(E), n: E.length, k: 1 }, man1[1]] } })
+t(r.ok && r.ver === 4, 'manifesto com SellWave/cookies.json aceito', JSON.stringify(r))
 
 console.log('\n' + ok + ' de ' + (ok + mau) + '\n')
 process.exit(mau ? 1 : 0)
