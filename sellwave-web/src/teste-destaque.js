@@ -69,6 +69,20 @@ async function rodar(ctx) {
     naPrincipal === false && naNova === true, 'principal=' + naPrincipal + ' nova=' + naNova)
   conta('e ela esta aparecendo la (a visibilidade cola na view, entao alguem tem que mandar)',
     view.getVisible() === true, 'visivel=' + view.getVisible())
+  // MINIMIZAR E VOLTAR (19/10/2026, o Guilherme: "quando eu saio da janela e volto, ta demorando pra
+  // carregar novamente"). Minimizada, o Windows manda um resize com a janela de tamanho zero; se a
+  // view guarda esse tamanho e ninguem refaz a conta na volta, ela fica preta ate outro resize.
+  const larguraAntes = view.getBounds().width
+  d.win.minimize()
+  await espera(700)
+  conta('minimizada, a view nao fica com tamanho zero guardado',
+    view.getBounds().width === larguraAntes, 'largura ' + view.getBounds().width + ' (antes ' + larguraAntes + ')')
+  d.win.restore()
+  await espera(700)
+  const bV = view.getBounds()
+  const bP = d.painel ? d.painel.getBounds() : { width: 0 }
+  conta('e ao voltar o WhatsApp e o painel estao no tamanho certo, na hora',
+    bV.width > 300 && bV.height > 300 && bP.width > 200, JSON.stringify({ zap: bV, painel: bP }))
   // O DOCUMENTO SOBREVIVEU: e a prova de que o WhatsApp nao recarregaria.
   const vivo = await view.webContents.executeJavaScript('(document.getElementById("t")||{}).textContent || ""')
   conta('o documento continua o mesmo depois da mudanca', vivo === 'numero de teste', vivo)

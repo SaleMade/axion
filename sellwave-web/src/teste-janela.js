@@ -174,6 +174,16 @@ async function rodar() {
   conta('toda saida de erro da abertura devolve o aluguel do numero',
     bloco.length > 200 && crus === 0 && comDesiste >= 4, crus + ' cruas, ' + comDesiste + ' devolvendo')
 
+  // ── SAIR DA JANELA E VOLTAR NAO DEMORA (19/10/2026) ──────────────────────────────────────
+  // As tres chaves do Chromium que impedem a pagina de ir pro fundo, e o redesenho na volta nas DUAS
+  // janelas. Se uma sumir, o vendedor volta a ver a janela preta por segundos ao voltar pra ela.
+  const chaves = ['disable-renderer-backgrounding', 'disable-backgrounding-occluded-windows', 'CalculateNativeWinOcclusion']
+  conta('o app nao deixa o Chromium jogar a pagina pro fundo',
+    chaves.every((k) => semComentario.indexOf(k) >= 0 && semComentario.indexOf(k) < semComentario.indexOf('app.whenReady()')),
+    chaves.filter((k) => semComentario.indexOf(k) < 0).join(', ') || 'ordem')
+  conta('e redesenha na volta, na principal e na destacada',
+    /janela\.on\(ev, \(\) => acordaJanela\(null\)\)/.test(semComentario) && /win\.on\(ev, \(\) => acordaJanela\(d\)\)/.test(semComentario))
+
   console.log('\n' + ok + ' de ' + (ok + ruim) + '\n')
   app.exit(ruim ? 1 : 0)
 }

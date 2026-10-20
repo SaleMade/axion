@@ -52,6 +52,17 @@ const UA_LIMPO =
   'Chrome/' + process.versions.chrome + ' Safari/537.36'
 app.userAgentFallback = UA_LIMPO
 
+// SAIR DA JANELA E VOLTAR NAO PODE DEMORAR (19/10/2026, o Guilherme no primeiro teste: "quando eu
+// saio da janela e volto, ta demorando pra carregar novamente"). Janela minimizada ou coberta, o
+// Chromium joga o processo da pagina pra prioridade baixa e para de desenhar; na volta o WhatsApp
+// (pesado, com centenas de conversas) leva segundos pra se refazer, com a janela preta no meio. O
+// `backgroundThrottling: false` da view so segura os relogios da pagina, nao a prioridade do
+// processo nem o calculo de "esta coberta". Num app que fica o dia inteiro aberto pra atender, o
+// certo e ele nunca ir pro fundo. O preco e um pouco mais de CPU com a janela minimizada.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
 // MODO DE TESTE: autoteste e modo foto.
 //
 // Os dois rodam o app DE VERDADE, e isso criou dois choques com o uso real no mesmo computador:
@@ -600,6 +611,20 @@ function reposiciona(d) {
     d.painel.setVisible(painelLigado)
     if (painelLigado) { d.painel.setBounds(areaPainel(d)); d.win.contentView.addChildView(d.painel) }
   }
+}
+
+// A JANELA VOLTOU (restaurada, mostrada, maximizada): refaz a geometria e manda cada view se
+// redesenhar. Medido em 19/10 que o tamanho guardado sobrevive ao minimizar; o que faltava era a
+// pagina voltar a produzir quadro - o `invalidate` pede um quadro novo agora, em vez de esperar o
+// WhatsApp mudar alguma coisa na tela.
+function acordaJanela(d) {
+  try {
+    reposiciona(d || null)
+    const views = d
+      ? [abertos.get(d.nk) && abertos.get(d.nk).view, d.painel]
+      : [casca, painel, ...[...abertos.values()].filter((s) => !destacados.has(s.nk)).map((s) => s.view)]
+    for (const v of views) { try { if (v && !v.webContents.isDestroyed()) v.webContents.invalidate() } catch (_) { /* ok */ } }
+  } catch (_) { /* redesenhar e conforto, nao pode derrubar nada */ }
 }
 
 function reposicionaPrincipal() {
@@ -2326,6 +2351,8 @@ function destaca(nk) {
   d.painel.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))
 
   win.on('resize', () => reposiciona(d))
+  // NA VOLTA DA JANELA, REDESENHA NA HORA (ver acordaJanela).
+  for (const ev of ['restore', 'show', 'maximize', 'unmaximize']) win.on(ev, () => acordaJanela(d))
   // FECHAR A JANELA DEVOLVE O NUMERO, NAO O MATA. No `close` os filhos ainda estao vivos e
   // alcancaveis; depois disso nao estariam.
   win.on('close', () => devolve(nk))
@@ -3352,6 +3379,7 @@ app.whenReady().then(() => {
   reposiciona()
 
   janela.on('resize', reposiciona)
+  for (const ev of ['restore', 'show', 'maximize', 'unmaximize']) janela.on(ev, () => acordaJanela(null))
   janela.on('closed', () => { janela = null })
   // FECHAR NO X ESPERA A NUVEM (ver saiGuardando). Em teste nao: o autoteste fecha o app sozinho.
   janela.on('close', (e) => {
