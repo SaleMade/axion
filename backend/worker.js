@@ -22812,7 +22812,22 @@ function _presselOffline(){
 // Elementos da pressel (compat: monta de img+cta se ainda não tiver elementos)
 // GET /p/:pid/img/:hash  → a imagem da pressel como arquivo, cacheavel pra sempre.
 // Publica de proposito: a pressel inteira e publica, e a URL so existe pra quem recebeu a pagina.
-async function handlePresselImg(env, pid, hash, num) {
+async function handlePresselImg(env, pid, hash, num, ctx, req) {
+  // CACHE DA BORDA PRIMEIRO (20/10/2026, ver _pimgChave): o endereco e pelo hash do conteudo, entao o
+  // que esta guardado e exatamente esta imagem. Achou, sai daqui sem ler estado nem R2.
+  const _base = req ? req.url : '';
+  const _borda = _cacheDaBorda();
+  const _chave = _base ? _pimgChave(_base, 'img', encodeURIComponent(String(pid)) + '/' + encodeURIComponent(String(num || '-')) + '/' + encodeURIComponent(String(hash))) : null;
+  if (_borda && _chave) { try { const hit = await _borda.match(_chave); if (hit) return hit; } catch (_) {} }
+  // Guarda a resposta e o tamanho lido dos bytes, sem segurar quem pediu.
+  const _guarda = (bytes, tipo) => {
+    const r = new Response(bytes, { headers: { 'content-type': tipo || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable', 'access-control-allow-origin': '*' } });
+    try {
+      if (_borda && _chave) { const p = _borda.put(_chave, r.clone()).catch(() => {}); if (ctx && ctx.waitUntil) ctx.waitUntil(p); }
+      if (_base) _pimgDimsGuarda(String(hash), _dimsDaImagem(bytes instanceof Uint8Array ? bytes : null), ctx, _base);
+    } catch (_) {}
+    return r;
+  };
   const data = await _getDashData(env).catch(() => null);
   const p = _acharPressel((data && data.pressels) || [], pid, num);
   if (!p) return new Response('nao achei', { status: 404 });
@@ -22825,11 +22840,7 @@ async function handlePresselImg(env, pid, hash, num) {
   if (cands.some((src) => src === 'r2img:' + String(hash)) && env.MEDIA) {
     try {
       const obj = await env.MEDIA.get('pimg/' + String(hash));
-      if (obj) return new Response(obj.body, { headers: {
-        'content-type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'image/jpeg',
-        'cache-control': 'public, max-age=31536000, immutable',
-        'access-control-allow-origin': '*',
-      } });
+      if (obj) return _guarda(new Uint8Array(await obj.arrayBuffer()), (obj.httpMetadata && obj.httpMetadata.contentType) || 'image/jpeg');
     } catch (_) {}
     return new Response('imagem nao encontrada', { status: 404 });
   }
@@ -22843,13 +22854,7 @@ async function handlePresselImg(env, pid, hash, num) {
     corpo = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) corpo[i] = bin.charCodeAt(i);
   } else corpo = decodeURIComponent(m[3]);
-  return new Response(corpo, {
-    headers: {
-      'content-type': m[1] || 'image/jpeg',
-      'cache-control': 'public, max-age=31536000, immutable',
-      'access-control-allow-origin': '*',
-    },
-  });
+  return _guarda(corpo, m[1] || 'image/jpeg');
 }
 
 function _presselElsServer(p){
@@ -22901,8 +22906,111 @@ async function _externalizarPresselImgs(env, elementos){
   }
   return out;
 }
-function _elPublicHtml(e, wa, pid){
-  if(e.type==='imagem') return e.src?`<img src="${_escHtml(_presselImgSrc(pid, e.src))}" alt="" fetchpriority="high">`:'';
+// ══ A IMAGEM DA PRESSEL SAI DO CACHE DA BORDA, E COM O TAMANHO NA TAG (20/10/2026) ══════════════════
+//
+// O Bruno trouxe o PageSpeed da pressel: Core Web Vitals reprovado (LCP 2,8s e CLS 0,19 no campo; 3,1s
+// e 0,177 no laboratorio). Medido antes de mexer, da internet do Brasil: o HTML sai em 0,4 a 0,7s, mas a
+// IMAGEM, que e o maior elemento da tela (o LCP), levava de 1,3 a 2,0s pra comecar a chegar, e ela tem
+// so 58 KB. Cada pedido dela lia o estado inteiro e o R2 de novo. O endereco e pelo hash do conteudo
+// (/p/<id>/img/<hash>): o mesmo endereco e sempre a mesma imagem, entao ela pode morar no cache da
+// Cloudflare (caches.default) e sair dali nos pedidos seguintes, sem estado e sem R2.
+// O PULO (CLS): o <img> ia sem width/height. O navegador desenhava o botao no topo e empurrava ele pra
+// baixo quando a imagem chegava (e o segundo quadro da tira do PageSpeed: so o botao). As dimensoes saem
+// dos proprios bytes da imagem e ficam guardadas no mesmo cache; com elas o espaco da imagem ja nasce
+// reservado. Imagem que ainda nao teve o tamanho lido sai como antes, e o tamanho e lido em segundo plano
+// pro proximo visitante. Tudo aqui e best-effort: se o cache falhar, a pagina e a imagem saem como antes.
+// A chave do cache usa o PROPRIO dominio da pressel (o cache da borda e separado por zona): /__pimg/...
+const _pimgChave = (base, tipo, resto) => { try { return new Request(new URL('/__pimg/' + tipo + '/' + resto, base).toString()); } catch (_) { return null; } };
+const _pimgDimsMem = new Map();
+const _cacheDaBorda = () => { try { return (typeof caches !== 'undefined' && caches.default) ? caches.default : null; } catch (_) { return null; } };
+// Largura e altura lidas do cabecalho da imagem (JPEG, PNG, WebP e GIF). null = nao deu pra ler.
+function _dimsDaImagem(b) {
+  try {
+    if (!b || b.length < 24) return null;
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
+      const w = (b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19]) >>> 0, h = (b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23]) >>> 0;
+      return w > 0 && h > 0 ? { w, h } : null;
+    }
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) { const w = b[6] | b[7] << 8, h = b[8] | b[9] << 8; return w > 0 && h > 0 ? { w, h } : null; }
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+      const tipo = String.fromCharCode(b[12], b[13], b[14], b[15]);
+      if (tipo === 'VP8X') { const w = 1 + (b[24] | b[25] << 8 | b[26] << 16), h = 1 + (b[27] | b[28] << 8 | b[29] << 16); return { w, h }; }
+      if (tipo === 'VP8 ') { const w = (b[26] | b[27] << 8) & 0x3fff, h = (b[28] | b[29] << 8) & 0x3fff; return w > 0 && h > 0 ? { w, h } : null; }
+      if (tipo === 'VP8L') { const x = b[21] | b[22] << 8 | b[23] << 16 | b[24] << 24; return { w: (x & 0x3fff) + 1, h: ((x >> 14) & 0x3fff) + 1 }; }
+      return null;
+    }
+    if (b[0] === 0xFF && b[1] === 0xD8) {
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xFF) { i++; continue; }
+        const m = b[i + 1];
+        if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+        const len = b[i + 2] << 8 | b[i + 3];
+        if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+          const h = b[i + 5] << 8 | b[i + 6], w = b[i + 7] << 8 | b[i + 8];
+          return w > 0 && h > 0 ? { w, h } : null;
+        }
+        if (len < 2) return null;
+        i += 2 + len;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+// O hash da imagem de um elemento (o mesmo do endereco /p/<id>/img/<hash>). '' = imagem externa.
+const _hashDaImgSrc = (src) => { const t = String(src || ''); return t.startsWith('r2img:') ? t.slice(6) : (t.startsWith('data:') ? _fotoHash(t) : ''); };
+function _pimgDimsGuarda(hash, dims, ctx, base) {
+  if (!hash || !dims) return;
+  _pimgDimsMem.set(hash, dims);
+  const c = _cacheDaBorda(), k = _pimgChave(base, 'dims', hash);
+  if (!c || !k) return;
+  const p = c.put(k, new Response(JSON.stringify(dims), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=2592000' } })).catch(() => {});
+  if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+}
+async function _pimgDims(hash, base) {
+  if (!hash) return null;
+  if (_pimgDimsMem.has(hash)) return _pimgDimsMem.get(hash);
+  const c = _cacheDaBorda(), k = _pimgChave(base, 'dims', hash);
+  if (!c || !k) return null;
+  try {
+    const r = await c.match(k);
+    if (r) { const d = await r.json(); if (d && d.w > 0 && d.h > 0) { _pimgDimsMem.set(hash, d); return d; } }
+  } catch (_) {}
+  return null;
+}
+// O tamanho de cada imagem da pagina, pra tag ja nascer com ele. O que ainda nao se sabe e lido em
+// segundo plano (R2: so o comeco do arquivo) e fica pro proximo visitante; a pagina nao espera.
+async function _presselImgDimsMapa(env, ctx, els, base) {
+  const mapa = {};
+  for (const e of (els || [])) {
+    if (!e || e.type !== 'imagem' || !e.src) continue;
+    const src = String(e.src), hash = _hashDaImgSrc(src);
+    if (!hash) continue;
+    let d = await _pimgDims(hash, base);
+    if (!d && src.startsWith('data:')) {
+      try {
+        const mm = src.match(/^data:[^;,]+;base64,(.*)$/s);
+        if (mm) { const bin = atob(mm[1].slice(0, 87384)); const b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); d = _dimsDaImagem(b); if (d) _pimgDimsGuarda(hash, d, ctx, base); }
+      } catch (_) {}
+    }
+    if (!d && src.startsWith('r2img:') && env && env.MEDIA && ctx && ctx.waitUntil) {
+      ctx.waitUntil((async () => {
+        const obj = await env.MEDIA.get('pimg/' + hash, { range: { offset: 0, length: 65536 } });
+        if (!obj) return;
+        const dd = _dimsDaImagem(new Uint8Array(await obj.arrayBuffer()));
+        if (dd) _pimgDimsGuarda(hash, dd, ctx, base);
+      })().catch(() => {}));
+    }
+    if (d) mapa[hash] = d;
+  }
+  return mapa;
+}
+function _elPublicHtml(e, wa, pid, dims){
+  if(e.type==='imagem'){
+    if(!e.src) return '';
+    const d = dims && dims[_hashDaImgSrc(e.src)];
+    return `<img src="${_escHtml(_presselImgSrc(pid, e.src))}" alt="" fetchpriority="high"${d ? ` width="${Number(d.w)}" height="${Number(d.h)}"` : ''}>`;
+  }
   if(e.type==='texto') return `<div style="padding:14px;font-size:${Number(e.size)||16}px;text-align:${_escHtml(e.align||'center')};color:${_escHtml(e.color||'#111')};line-height:1.4">${_escHtml(e.text||'')}</div>`;
   if(e.type==='botao') return `<div style="padding:14px"><a href="${_escHtml(wa)}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:${_escHtml(e.bg||'#22c55e')};color:${_escHtml(e.color||'#fff')};border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>${_escHtml(e.label||'FALAR NO WHATSAPP')}</span></a></div>`;
   if(e.type==='html') return e.html||'';
@@ -26572,7 +26680,7 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // de quem ja configurou.
   const _gtmView = !_gtmId ? '' : `try{dataLayer.push({event:'pressel_view',pressel_id:${JSON.stringify(String(id))},ttclid:_ttc})}catch(e){}`;
   const _gtmClick = !_gtmId ? '' : `try{dataLayer.push({event:'pressel_click',pressel_id:${JSON.stringify(String(id))},ttclid:_ttc})}catch(e){}`;
-  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${p.pixel_tt ? '<link rel="preconnect" href="https://analytics.tiktok.com" crossorigin><link rel="dns-prefetch" href="https://analytics.tiktok.com">' : ''}${_gtm}${_ttPixel(p)}${_fbPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style></head>`;
+  const head=`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${_escHtml(p.nome||'')}</title>${p.pixel_tt ? '<link rel="preconnect" href="https://analytics.tiktok.com" crossorigin><link rel="dns-prefetch" href="https://analytics.tiktok.com">' : ''}${_gtm}${_ttPixel(p)}${_fbPixel(p)}<style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;height:auto;display:block}</style></head>`;
   // go() abre o WhatsApp por NAVEGAÇÃO direta (deep link primeiro, wa.me de fallback): preenche o
   // texto/código de verdade.
   //
@@ -26709,17 +26817,18 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
     + `})();}`;
   const script=`<script>var _ttc=(function(){try{var a=new URLSearchParams(location.search).getAll('ttclid');for(var i=0;i<a.length;i++){var t=String(a[i]||'').trim();if(t&&!(t.length<=40&&/^_*[A-Z0-9_.]+_*$/.test(t)))return t}}catch(e){}return''})();var IS_TT=!!_ttc;var _pv=new URLSearchParams(location.search).get('preview')==='1';var _dev=new URLSearchParams(location.search).get('dev')==='1';var PRONTO=(_pv||_dev||${p.pixel_tt ? 'false' : 'true'});var _fila=null;function _liberar(){if(PRONTO)return;PRONTO=true;var f=_fila;_fila=null;if(f)f();}if(!_pv&&!_dev){${_jsView}${_gtmView}}var _tk=false;function track(){if(_tk)return;_tk=true;try{navigator.sendBeacon('/pc/${id}?ttclid='+encodeURIComponent(_ttc)+'&code='+encodeURIComponent(${JSON.stringify(String(leadCode || ''))}))}catch(e){}${_jsClick}${_gtmClick}}var _foi=false;function _web(){if(document.hidden)return;try{location.href=${waJson}}catch(e){}}function go(){if(!${waJson})return;if(!PRONTO){_fila=go;return;}track();${_jsFbClick}_foi=true;var _ir=function(){try{location.href=${waAppJson}}catch(e){}setTimeout(_web,350);setTimeout(_web,1400);setTimeout(_web,3500);};setTimeout(_ir,220);}var _volta=false;document.addEventListener('visibilitychange',function(){if(_foi&&!_volta&&!document.hidden){_volta=true;setTimeout(_web,400)}});if(!_pv&&!_dev){setTimeout(go,${secs*1000});}${_jsCookie}${_jsDev}</script>`;
   const els=_presselElsServer(p);
-  let body=els.map(e=>_elPublicHtml(e, wa, id)).join('');
+  const _dimsImg = await _presselImgDimsMapa(env, ctx, els, req.url).catch(() => ({}));   // CLS: ver _pimgChave
+  let body=els.map(e=>_elPublicHtml(e, wa, id, _dimsImg)).join('');
   if(p.fullclick){
     soltar();
-    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><div class="wrap">${body}</div>${script}</body></html>`);
+    return _presselHtml(`${head}<body onclick="go()" style="cursor:pointer"><main class="wrap">${body}</main>${script}</body></html>`);
   }
   // Garante um botão de WhatsApp se o usuário não adicionou nenhum
   if(!els.some(e=>e.type==='botao')){
     body+=`<div style="padding:14px"><a href="${_escHtml(wa||'#')}" onclick="event.preventDefault();event.stopPropagation();go()" style="display:flex;align-items:center;justify-content:center;gap:10px;background:#22c55e;color:#fff;border-radius:14px;padding:16px 18px;font-weight:800;font-size:19px;text-transform:uppercase;letter-spacing:.3px;text-decoration:none;box-shadow:0 4px 0 rgba(0,0,0,.18),0 7px 14px rgba(0,0,0,.13)"><svg viewBox="0 0 32 32" width="24" height="24" style="flex-shrink:0" fill="currentColor"><path d="M16.04 4C9.4 4 4 9.4 4 16.04c0 2.12.55 4.18 1.6 6L4 28l6.13-1.6a12 12 0 0 0 5.9 1.5c6.63 0 12.03-5.4 12.03-12.04C28.06 9.4 22.67 4 16.04 4Zm0 21.9a9.9 9.9 0 0 1-5.06-1.38l-.36-.22-3.64.96.97-3.55-.24-.37a9.86 9.86 0 1 1 8.33 4.56Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.49 0 1.47 1.08 2.89 1.23 3.09.15.2 2.12 3.24 5.13 4.54.72.31 1.27.5 1.71.64.72.23 1.37.2 1.89.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.19-.57-.34Z"/></svg><span>FALAR NO WHATSAPP</span></a></div>`;
   }
   soltar();
-  return _presselHtml(`${head}<body><div class="wrap">${body}</div>${script}</body></html>`);
+  return _presselHtml(`${head}<body><main class="wrap">${body}</main>${script}</body></html>`);
 }
 
 // PÁGINAS DE TESTE /v/<n> (30/08/2026, pedido do Bruno). Cópia do VISUAL da pressel 1, mas com número
@@ -26754,7 +26863,7 @@ async function handleTesteRedirect(req, env, n, ctx) {
   // Pixel do TikTok no NAVEGADOR (mesmo id da pressel real). Só nas páginas de teste /v/.
   // page() = "caiu" (PageView); o track('ClickButton') no go() = "disparou/foi pro WhatsApp".
   const _ttSnip = `<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie","holdConsent","revokeConsent","grantConsent"];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.instance=function(t){for(var e=ttq._i[t]||[],n=0;n<ttq.methods.length;n++)ttq.setAndDefer(e,ttq.methods[n]);return e};ttq.load=function(e,n){var r="https://analytics.tiktok.com/i18n/pixel/events.js",o=n&&n.partner;ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=r,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};n=document.createElement("script");n.type="text/javascript",n.async=!0,n.src=r+"?sdkid="+e+"&lib="+t;e=document.getElementsByTagName("script")[0];e.parentNode.insertBefore(n,e)};ttq.load('${_TESTE_PIXEL}');ttq.page()}(window,document,'ttq');</script>`;
-  const head = `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${_escHtml(p.nome || 'GlicoSix')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;display:block}</style>${_ttSnip}</head>`;
+  const head = `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${_escHtml(p.nome || 'GlicoSix')}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:${bg};font-family:system-ui,-apple-system,Arial,sans-serif;min-height:100vh}.wrap{max-width:480px;margin:0 auto}img{width:100%;height:auto;display:block}</style>${_ttSnip}</head>`;
   // Redirect ROBUSTO igual ao da pressel (deep link primeiro, wa.me de rede, respeita voltar), mas SEM
   // pixel/beacon/track. Não existe valor que desligue: até ?t=0 manda na hora.
   const script = `<script>var wa=${waJson},waApp=${waAppJson},_foi=false;function _web(){if(document.hidden)return;try{location.href=wa}catch(e){}}function go(){if(!wa||_foi)return;_foi=true;try{ttq.track('ClickButton')}catch(e){}try{location.href=waApp}catch(e){}setTimeout(_web,350);setTimeout(_web,1400);setTimeout(_web,3500);}document.addEventListener('visibilitychange',function(){if(_foi&&!document.hidden){setTimeout(_web,400)}});setTimeout(go,${secs * 1000});</script>`;
@@ -29032,7 +29141,7 @@ export default {
       // A imagem da pressel como arquivo separado (ver _presselImgSrc). Tem que vir ANTES da rota da
       // pagina, senao /p/1/img/xxx nao casa com nenhuma das duas.
       const presselImgMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)(?:\/([a-zA-Z0-9_-]+))?\/img\/([a-zA-Z0-9]+)$/);
-      if (req.method === 'GET' && presselImgMatch) return handlePresselImg(env, presselImgMatch[1], presselImgMatch[3], presselImgMatch[2]);
+      if (req.method === 'GET' && presselImgMatch) return handlePresselImg(env, presselImgMatch[1], presselImgMatch[3], presselImgMatch[2], ctx, req);
       const presselMatch = path.match(/^\/p\/([a-zA-Z0-9_-]+)$/);
       if (req.method === 'GET' && presselMatch) return handlePresselPublic(req, env, presselMatch[1], ctx);
       // /w/<id> = so o roteamento da /p/<id>, sem pagina: escolhe o numero na roleta, gera o codigo,
