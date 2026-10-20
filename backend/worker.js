@@ -24797,7 +24797,7 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
       return { name, leads:lc, comp, rev, pct: lc>0?Math.round(comp/lc*100):null, buyers: buyers.map(b=>({ phone: full?b.phone:'', phoneFmt: full?fmtNum(b.phone):mask(b.phone), value:Number(b.value)||0, ts:Number(b.ts||0), name:b.name||'' })) };
     });
   } else {
-    let leads=[]; let saleSet=new Set(); const nameByPhone={};
+    let leads=[]; let saleSet=new Set(); const saleK8=new Set(); const nameByPhone={};
     const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
     try{
       // SO O MUNDO DE QUEM PEDE (21/09/2026). Foi aqui que o Bruno viu os leads do vendedor do
@@ -24807,10 +24807,27 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
       const _cL=await _corteMundoSql(env, _uAtual, { pid: 'pid', inst: 'inst' });
       const _cS=await _corteMundoSql(env, _uAtual, { inst: 'instance' });
       const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<?"+_cL+" ORDER BY ts ASC").bind(dstart,dend).all(); leads=(r.results||[]).filter(l=>!_foraDoMundo(baseAt(l.inst)));
-      try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0"+_cS).bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
+      try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0"+_cS).bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p){ saleSet.add(p); saleK8.add(p.slice(-8)); } }); }catch(_){}
+      // os PEDIDOS CADASTRADOS do dia em diante, do mundo de quem olha (ver o comentario do saleK8)
+      try{ for(const l of (Array.isArray(data.leads)?data.leads:[])){
+        if(!l) continue;
+        if(String(l.afl||'')!==_meuMundoChip) continue;
+        if(_COLS_VENDA_CANCELADA.includes(String(l.col||''))) continue;
+        const q=Number(l.ts)>0?Number(l.ts):Math.floor((Number(l.id)||0)/1000);
+        if(!(q>=dstart)) continue;
+        const k=String(l.wa||'').replace(/\D/g,'').slice(-8);
+        if(k.length===8) saleK8.add(k);
+      } }catch(_){}
       try{ const nr=await env.DB.prepare("SELECT l.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?"+_cL+") l ON c.phone = l.phone || "+_sufConvSql(_mundoDeQuem(_uAtual))+" WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
     }catch(_){}
-    const isSale=ph=>!!(ph&&saleSet.has(ph));
+    // VIROU VENDA = TEM PEDIDO CADASTRADO (20/10/2026). O verde do numero e a coluna de vendas desta
+    // aba saiam SO da wa_sales (a frase "Pedido Concluido" do WhatsApp), e por isso discordavam do
+    // cartao de Metricas, que conta o pedido cadastrado: 15 dos 156 pedidos dos ultimos 8 dias nao
+    // tem linha na wa_sales (quase 10%), e esses compradores apareciam como se nao tivessem comprado.
+    // Agora o conjunto junta as DUAS marcas, e o casamento e pelos 8 ultimos digitos, que e o que o
+    // resto do sistema usa (telefone cadastrado a mao sai com e sem o 9o digito; comparar o numero
+    // inteiro e o que fazia o lead nao casar com o proprio pedido).
+    const isSale=ph=>{ const d=String(ph||'').replace(/\D/g,''); if(!d) return false; return saleSet.has(d)||saleK8.has(d.slice(-8)); };
     const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
     const byAt={}; leads.forEach(l=>{ const at=baseAt(l.inst); (byAt[at]=byAt[at]||[]).push(l); });
     const _dv=(at)=>(byAt[at]||[]).reduce((s,l)=>s+(isSale(String(l.phone||'').replace(/\D/g,''))?1:0),0);
@@ -26114,7 +26131,7 @@ async function handlePresselsTotalPage(req, env){
     } else {
       // ── VISÃO DIÁRIA (padrão) ──
       let leads=[];
-      let saleSet=new Set();
+      let saleSet=new Set(); const saleK8=new Set();   // ver o comentario do isSale, logo abaixo
       const nameByPhone={};   // telefone (só dígitos) -> nome do perfil do WhatsApp
       const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
       try{
@@ -26125,12 +26142,29 @@ async function handlePresselsTotalPage(req, env){
         const r=await env.DB.prepare("SELECT phone, inst, num, pid, src, ts FROM wa_lead WHERE ts>=? AND ts<? ORDER BY ts ASC").bind(dstart,dend).all();
         leads=r.results||[];
         // telefones que VIRARAM venda (do dia em diante) → pra pintar o número de verde
-        try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p) saleSet.add(p); }); }catch(_){}
+        try{ const sr=await env.DB.prepare("SELECT DISTINCT phone FROM wa_sales WHERE ts>=? AND COALESCE(cancelado,0)=0").bind(dstart).all(); (sr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p){ saleSet.add(p); saleK8.add(p.slice(-8)); } }); }catch(_){}
+        // e os PEDIDOS CADASTRADOS, mesma regra do JSON (um pedido sem a frase no WhatsApp tambem e venda)
+        try{ for(const l of (Array.isArray(data.leads)?data.leads:[])){
+          if(!l) continue;
+          if(String(l.afl||'')!==String(_mundoPag||'')) continue;
+          if(_COLS_VENDA_CANCELADA.includes(String(l.col||''))) continue;
+          const q=Number(l.ts)>0?Number(l.ts):Math.floor((Number(l.id)||0)/1000);
+          if(!(q>=dstart)) continue;
+          const k=String(l.wa||'').replace(/\D/g,'').slice(-8);
+          if(k.length===8) saleK8.add(k);
+        } }catch(_){}
         // NOME do lead: o WhatsApp manda o nome do perfil na captura (wa_chats.name). Puxa só pros
         // telefones do dia (JOIN, sem estourar limite de parâmetro) pra mostrar ao lado do número.
         try{ const nr=await env.DB.prepare("SELECT l.phone, c.name FROM wa_chats c JOIN (SELECT DISTINCT phone FROM wa_lead WHERE ts>=? AND ts<?) l ON c.phone = l.phone || "+_sufConvSql(_mundoPag)+" WHERE c.name IS NOT NULL AND c.name<>''").bind(dstart,dend).all(); (nr.results||[]).forEach(x=>{ const p=String(x.phone||'').replace(/\D/g,''); if(p&&x.name) nameByPhone[p]=String(x.name); }); }catch(_){}
       }catch(_){}
-      const isSale=ph=>!!(ph&&saleSet.has(ph));
+      // VIROU VENDA = TEM PEDIDO CADASTRADO (20/10/2026). O verde do numero e a coluna de vendas desta
+      // aba saiam SO da wa_sales (a frase "Pedido Concluido" do WhatsApp), e por isso discordavam do
+      // cartao de Metricas, que conta o pedido cadastrado: 15 dos 156 pedidos dos ultimos 8 dias nao
+      // tem linha na wa_sales (quase 10%), e esses compradores apareciam como se nao tivessem comprado.
+      // Agora o conjunto junta as DUAS marcas, e o casamento e pelos 8 ultimos digitos, que e o que o
+      // resto do sistema usa (telefone cadastrado a mao sai com e sem o 9o digito; comparar o numero
+      // inteiro e o que fazia o lead nao casar com o proprio pedido).
+      const isSale=ph=>{ const d=String(ph||'').replace(/\D/g,''); if(!d) return false; return saleSet.has(d)||saleK8.has(d.slice(-8)); };
       // Sem separação novo/antigo. A classificação por "clique no número hoje" não é confiável
       // quando um vendedor roda DOIS números conectados ao mesmo tempo (ou troca o em_uso no meio do
       // dia): o clique fica gravado no número que estava ativo na hora, mas a mensagem chega no
