@@ -11388,6 +11388,11 @@ async function handleSwWeb(req, env, path) {
     // DESCARTA COM 200, DE PROPOSITO. O app devolve o lote pra fila quando a resposta nao e ok, e
     // reenviaria pra sempre o que o servidor nunca vai aceitar.
     if (barrados) console.log('SWWEB_CAPTURA_BARRADOS por=' + String(u.id) + ' n=' + barrados + ' de=' + eventos.length);
+    // QUANTO A VARREDURA DAS NAO LIDAS SALVOU (20/10/2026): mensagem que o evento do motor nao trouxe
+    // (numero em segundo plano) e que o agente achou olhando as conversas nao lidas. E a medida de
+    // quanto a captura estava perdendo antes dela.
+    const _varr = limpos.filter((e) => e && e.via === 'varredura' && !e.fromMe);
+    if (_varr.length) console.log('SWWEB_VARREDURA n=' + _varr.length + ' de=' + limpos.length + ' por=' + String(u.id) + ' nums=' + [...new Set(_varr.map((e) => _k8(e.selfNumber).slice(-4)))].join(','));
     if (!limpos.length) return json({ ok: true, ack: [], barrados });
 
     try {
