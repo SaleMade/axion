@@ -7,7 +7,7 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard, powerMonitor } = require('electron')
 
 // ─── A MIDIA DA PREVIA (16/10/2026) ──────────────────────────────────────────────────────────
 //
@@ -1075,7 +1075,7 @@ function temSessaoNoDisco(dir) {
 // sai escrito.
 function caminhoSeguro(dir, rel) {
   const r = String(rel || '')
-  if (!/^(IndexedDB|Local Storage)\/[A-Za-z0-9 ._\-/]{1,300}$/.test(r)) return ''
+  if (!/^(IndexedDB|Local Storage|SellWave)\/[A-Za-z0-9 ._\-/]{1,300}$/.test(r)) return ''
   if (r.split('/').some((x) => x === '' || x === '.' || x === '..')) return ''
   const abs = path.resolve(dir, ...r.split('/'))
   return abs.startsWith(path.resolve(dir) + path.sep) ? abs : ''
@@ -1092,6 +1092,48 @@ function decifraArquivo(chave, enc) {
   const d = crypto.createDecipheriv('aes-256-gcm', chave, enc.subarray(0, 12))
   d.setAuthTag(enc.subarray(enc.length - 16))
   return Buffer.concat([d.update(enc.subarray(12, enc.length - 16)), d.final()])
+}
+
+// OS COOKIES VAO JUNTO (19/10/2026, pedido do Bruno com o print do AdsPower, que exporta o JSON de
+// cookies de cada perfil: wa_csrf, wa_lang_pref, wa_ul...).
+//
+// O arquivo de cookies do disco NAO serve: no Windows o valor e cifrado com uma chave do DPAPI daquela
+// maquina e nao abre em outra. O Electron entrega os cookies ja abertos pelo `session.cookies.get`,
+// entao eles viajam como um JSON (cifrado como o resto, em SellWave/cookies.json) e voltam pelo
+// `cookies.set` na particao nova, antes de o WhatsApp carregar. Medido no teste de ponta a ponta: o
+// numero abre conectado mesmo SEM eles; vao pra outra maquina ficar igual a esta.
+const ARQ_COOKIES = 'SellWave/cookies.json'
+async function cookiesDaParticao(particao) {
+  try {
+    const lista = await session.fromPartition(particao).cookies.get({})
+    return lista.map((c) => ({
+      name: c.name, value: c.value, domain: c.domain, hostOnly: !!c.hostOnly, path: c.path || '/',
+      secure: !!c.secure, httpOnly: !!c.httpOnly, sameSite: c.sameSite || 'unspecified',
+      ...(c.session || !c.expirationDate ? {} : { expirationDate: c.expirationDate }),
+    }))
+  } catch (e) { anota('[nuvem] nao li os cookies: ' + ((e && e.message) || e)); return [] }
+}
+async function poeCookies(particao, lista) {
+  const ses = session.fromPartition(particao)
+  const agora = Date.now() / 1000
+  let postos = 0
+  for (const c of (Array.isArray(lista) ? lista : [])) {
+    if (!c || !c.name || !c.domain || (c.expirationDate && c.expirationDate < agora)) continue
+    const host = String(c.domain).replace(/^\./, '')
+    try {
+      await ses.cookies.set({
+        url: (c.secure ? 'https://' : 'http://') + host + (c.path || '/'),
+        name: c.name, value: String(c.value || ''), path: c.path || '/',
+        ...(c.hostOnly ? {} : { domain: c.domain }),
+        secure: !!c.secure, httpOnly: !!c.httpOnly,
+        ...(c.sameSite && c.sameSite !== 'unspecified' ? { sameSite: c.sameSite } : {}),
+        ...(c.expirationDate ? { expirationDate: c.expirationDate } : {}),
+      })
+      postos++
+    } catch (_) { /* um cookie recusado nao impede os outros */ }
+  }
+  try { await ses.cookies.flushStore() } catch (_) { /* ok */ }
+  return postos
 }
 
 // N de cada vez, e o primeiro erro para os outros (o que ja estava no ar termina, mas nada novo sai).
@@ -1158,20 +1200,24 @@ async function enviaSessao(nk) {
   const laNaNuvem = new Set((Array.isArray(meta.manifesto) ? meta.manifesto : []).map((e) => e && (e.h + ':' + e.k)))
   const manifesto = []
   const subir = new Map()
-  for (const a of arquivosDaSessao(dir)) {
-    let buf
-    try { buf = fs.readFileSync(a.abs) } catch (e) { if (e && e.code === 'ENOENT') continue; throw e }
+  const itens = arquivosDaSessao(dir)
+  // Os cookies entram como um arquivo a mais, que so existe na memoria (ver cookiesDaParticao).
+  const ck = await cookiesDaParticao(particaoDe(nk))
+  if (ck.length) itens.push({ rel: ARQ_COOKIES, buf: Buffer.from(JSON.stringify(ck)) })
+  for (const a of itens) {
+    let buf = a.buf
+    if (!buf) { try { buf = fs.readFileSync(a.abs) } catch (e) { if (e && e.code === 'ENOENT') continue; throw e } }
     const h = hashDe(buf)
     const k = pedacosDe(buf.length)
     manifesto.push({ p: a.rel, h, n: buf.length, k })
-    if (!laNaNuvem.has(h + ':' + k) && !subir.has(h)) subir.set(h, { abs: a.abs, h, n: buf.length, k })
+    if (!laNaNuvem.has(h + ':' + k) && !subir.has(h)) subir.set(h, { abs: a.abs, buf: a.buf, h, n: buf.length, k })
   }
   if (!manifesto.length) return { ok: false, pulou: 'sem arquivos' }
   const total = [...subir.values()].reduce((t, x) => t + x.n, 0)
   let feito = 0
   marcaNuvem(nk, 'enviando', 'Salvando na nuvem' + (total ? ' (' + mb(total) + ')' : '') + '...')
   await emParalelo([...subir.values()], 3, async (x) => {
-    const buf = fs.readFileSync(x.abs)
+    const buf = x.buf || fs.readFileSync(x.abs)
     // O ARQUIVO MUDOU ENTRE A LEITURA E O ENVIO: alguma coisa ainda esta escrevendo na sessao, e uma
     // copia feita assim pode nao abrir. Melhor nao mandar esta vez do que mandar quebrada.
     if (hashDe(buf) !== x.h) throw new Error('a sessão mudou no meio do envio')
@@ -1270,7 +1316,17 @@ async function trazDaNuvem(nk) {
   avisaCasca('sw:status', { nk, texto: 'Baixando a sessão salva deste número...' })
   try {
     await baixaSessao(nk, meta)
-    anota('[nuvem] ' + nk + ' baixou a versao ' + ver + ' (' + meta.arquivos + ' arquivos, ' + mb(Number(meta.bytes) || 0) + ', salva por ' + (meta.nome || '?') + ')')
+    // OS COOKIES QUE VIERAM JUNTO entram na particao nova antes de o WhatsApp carregar, e o JSON sai
+    // do disco: o lugar deles e o banco de cookies do Chromium, cifrado por esta maquina.
+    let postos = 0
+    const arqCk = path.join(pastaDaParticao(nk, geracaoDe(nk)), ...ARQ_COOKIES.split('/'))
+    try {
+      if (fs.existsSync(arqCk)) {
+        postos = await poeCookies(particaoDe(nk), JSON.parse(fs.readFileSync(arqCk, 'utf8')))
+        fs.rmSync(path.dirname(arqCk), { recursive: true, force: true })
+      }
+    } catch (e) { anota('[nuvem] ' + nk + ' cookies da nuvem nao entraram: ' + ((e && e.message) || e)) }
+    anota('[nuvem] ' + nk + ' baixou a versao ' + ver + ' (' + meta.arquivos + ' arquivos, ' + mb(Number(meta.bytes) || 0) + ', ' + postos + ' cookies, salva por ' + (meta.nome || '?') + ')')
     marcaNuvem(nk, 'salvo', 'Sessão da nuvem aberta aqui')
     return { ok: true, baixou: true }
   } catch (e) {
@@ -1385,7 +1441,11 @@ async function sobeAsAntigas() {
       // ALGUEM CLICOU NELE NO MEIO: o numero e dele agora, a passada nao fecha.
       if (!emFundo.has(nk)) continue
       if (!conectado) {
-        anota('[nuvem] passada: ' + nk + ' nao esta conectado (tela do QR?), fecha sem salvar')
+        // NAO E "NAO SALVA": o motor nao confirmou (medido em 19/10: escondido e com a tela do PC
+        // apagada, tres numeros pareados ficaram sem estado ate o fim do prazo e abriram normais
+        // depois, na tela). Quem decide e o fechamento, pelo pareamento gravado no disco; numero que
+        // nunca pareou nao tem esse registro e fecha sem mandar nada.
+        anota('[nuvem] passada: ' + nk + ' o motor nao confirmou a conexao; o fechamento decide pelo disco')
         nuvemEstado.delete(nk)
         avisaCasca('sw:nuvem', { nk, st: '', txt: '' })
       } else await espera(4000)   // mais um respiro pro WhatsApp gravar o que baixou ao conectar
@@ -3250,6 +3310,25 @@ app.whenReady().then(() => {
     e.preventDefault()
     saiGuardando().catch(() => { try { app.exit(0) } catch (_) { /* ok */ } })
   })
+  // DESLIGAR O WINDOWS COM NUMERO ABERTO (19/10/2026, pedido do Bruno: "contramedidas pra nao perder
+  // sessao"). O Windows pergunta antes de encerrar a sessao; segurar aqui faz ele mostrar "o SellWave
+  // Web esta impedindo o desligamento" enquanto a nuvem recebe, e o app sai sozinho quando termina.
+  // Quem clicar em "Desligar mesmo assim" ganha: queda de luz e desligar a forca nao tem como salvar.
+  janela.on('query-session-end', (e) => {
+    if (saindoDeVez || EH_TESTE || !config.token || !(abertos.size || despedidas.size)) return
+    e.preventDefault()
+    anota('[nuvem] o Windows vai encerrar: salvando ' + (abertos.size + despedidas.size) + ' numero(s) antes')
+    saiGuardando().catch(() => { try { app.exit(0) } catch (_) { /* ok */ } })
+  })
+  // TAMPA FECHANDO (suspensao). Nao da tempo de subir nada - a rede cai em segundos -, mas da pra
+  // garantir que o disco desta maquina tem tudo: ao voltar, o numero continua de onde parou, e ao
+  // fechar ele sobe normalmente.
+  try {
+    powerMonitor.on('suspend', () => {
+      anota('[nuvem] o computador vai suspender: gravando ' + abertos.size + ' sessao(oes) no disco')
+      for (const nk of abertos.keys()) salvaSessao(particaoDe(nk))
+    })
+  } catch (_) { /* sem powerMonitor o app funciona igual */ }
 
   if (process.argv.includes('--dev')) casca.webContents.openDevTools({ mode: 'detach' })
 
