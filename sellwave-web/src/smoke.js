@@ -64,7 +64,7 @@ function abreWhatsapp() {
           return fim({ carregou: true, bloqueado: false, temQr: false, ws: viuWs, erro: 'nao deu pra ler a pagina: ' + (e && e.message) })
         }
       }
-      return fim({ carregou: true, bloqueado: !!o.bloqueado, temQr: !!(o.qr || o.temRef), qr: o.qr, titulo: o.titulo, ws: viuWs, wc: wc })
+      return fim({ carregou: true, bloqueado: !!o.bloqueado, temQr: !!(o.qr || o.temRef), qr: o.qr, titulo: o.titulo, ws: viuWs, wc: wc, temApp: !!o.temApp })
     })
     const leitura = `(() => {
           const t = (document.body && document.body.innerText) || ''
@@ -74,6 +74,8 @@ function abreWhatsapp() {
             bloqueado: /Google Chrome 100|atualize o Chrome|update (to )?(the )?latest/i.test(t),
             qr: c ? (c.width + 'x' + c.height) : '',
             temRef: !!document.querySelector('[data-ref]'),
+            // a mesma conta da vigia da tela branca do main.js (JS_TEM_TELA): o #app tem que ter desenho
+            temApp: (function(){var a=document.getElementById('app');return !!(a&&a.children.length&&(document.visibilityState==='hidden'||a.getBoundingClientRect().height>0))})(),
           })
         })()`
     wc.loadURL(UA_WA)
@@ -133,6 +135,7 @@ async function rodar(ctx) {
     conta('o WhatsApp Web carregou', r.carregou, r.erro || r.titulo || '')
     conta('NAO caiu na tela de navegador nao suportado', !r.bloqueado, r.bloqueado ? 'apareceu o aviso de Chrome desatualizado' : '')
     conta('o QR apareceu', r.temQr, r.temQr ? ('canvas ' + r.qr) : 'sem canvas de QR')
+    conta('a vigia da tela branca enxerga a tela do WhatsApp (#app desenhado)', r.temApp === true, String(r.temApp))
     conta('o websocket do WhatsApp abriu', r.ws, r.ws ? 'wss conectado' : 'nenhum wss://web.whatsapp.com visto')
     // O PAINEL: injeta motor + painel na MESMA pagina e confere que os dois subiram.
     if (r.carregou && ctx.injeta) {

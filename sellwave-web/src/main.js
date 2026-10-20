@@ -891,6 +891,13 @@ async function abreDeVerdade(nk, numero, meu) {
   view.webContents.once('did-finish-load', () => clearTimeout(relogioCarga))
   view.webContents.once('destroyed', () => clearTimeout(relogioCarga))
 
+  // A VIGIA DA TELA BRANCA comeca em toda navegacao de verdade da pagina (a primeira, o recarregar do
+  // painel e as que o proprio WhatsApp faz). Ver vigiaBranco.
+  view.webContents.on('did-start-navigation', (e, url, noLugar, principal) => {
+    const ehPrincipal = (e && typeof e.isMainFrame === 'boolean') ? e.isMainFrame : !!principal
+    const mesmoDoc = (e && typeof e.isSameDocument === 'boolean') ? e.isSameDocument : !!noLugar
+    if (ehPrincipal && !mesmoDoc) vigiaBranco(s)
+  })
   view.webContents.loadURL(WA_URL)
   // SO VAI PRA TELA SE AINDA FOR O QUE ELE QUER.
   //
@@ -1397,6 +1404,57 @@ function conectadoDe(r, nk, estrito) {
 }
 async function estaConectado(wc, nk, estrito) { return conectadoDe(await lerConexao(wc), nk, estrito) }
 
+// O WHATSAPP EM BRANCO SE CONSERTA SOZINHO (20/10/2026, Bruno: "diversas vezes, quando eu entro em um
+// dos numeros, o WhatsApp abre totalmente branco; preciso fechar e abrir de novo").
+//
+// Branco = a pagina do WhatsApp sem nada desenhado dentro do #app: nem a tela de abertura com a
+// barrinha, nem o QR, nem as conversas. Acontece quando um pedido fica preso no caminho da proxy (cada
+// conexao por ela leva 1 a 2 s pra abrir, medido em 20/10, e uma que trava segura a pagina inteira) ou
+// quando o Service Worker do WhatsApp fica num estado ruim. Fechar e abrir resolvia porque refaz as
+// conexoes - entao o app faz isso sozinho, em degraus, e para no terceiro pra nao virar recarga sem fim:
+//   1o branco (25 s): recarrega a pagina;
+//   2o branco: apaga SO o Service Worker e o cache do WhatsApp (o login mora no IndexedDB e no Local
+//      Storage, que ficam) e recarrega sem cache;
+//   3o: fecha e abre o numero, que era o que resolvia na mao (no maximo uma vez a cada 10 min).
+// Qualquer tela de verdade zera a contagem.
+const reabertoBranco = new Map()   // nk -> quando o app fechou e abriu sozinho por tela branca
+// Escondida (numero aberto em segundo plano) a pagina pode nao ter altura de layout: ali basta o #app ter
+// filho, senao a vigia recarregaria sem parar um numero que esta certo e so nao esta na tela.
+const JS_TEM_TELA = '(function(){var a=document.getElementById("app");return !!(a&&a.children.length&&(document.visibilityState==="hidden"||a.getBoundingClientRect().height>0))})()'
+function vigiaBranco(s, tempo) {
+  if (!s || !s.view) return
+  const gen = (s.vigiaGen = (Number(s.vigiaGen) || 0) + 1)
+  const wc = s.view.webContents
+  setTimeout(async () => {
+    if (gen !== s.vigiaGen || wc.isDestroyed() || abertos.get(s.nk) !== s) return
+    let tem = false
+    try { tem = !!(await Promise.race([wc.executeJavaScript(JS_TEM_TELA), espera(3000).then(() => null)])) } catch (_) { tem = false }
+    if (gen !== s.vigiaGen || wc.isDestroyed()) return
+    if (tem) { s.brancos = 0; return }
+    s.brancos = (Number(s.brancos) || 0) + 1
+    if (s.brancos === 1) {
+      anota('[branco] ' + s.nk + ' sem nada na tela em ' + Math.round((tempo || 25000) / 1000) + ' s: recarregando')
+      try { wc.reload() } catch (_) { /* ok */ }
+    } else if (s.brancos === 2) {
+      anota('[branco] ' + s.nk + ' branco de novo: limpando o Service Worker e o cache do WhatsApp (o login fica) e recarregando')
+      try { await session.fromPartition(particaoDe(s.nk)).clearStorageData({ storages: ['serviceworkers', 'cachestorage'] }) } catch (e) { anota('[branco] limpeza falhou: ' + ((e && e.message) || e)) }
+      try { if (!wc.isDestroyed()) wc.reloadIgnoringCache() } catch (_) { /* ok */ }
+    } else if (s.brancos === 3) {
+      // O QUE O BRUNO FAZIA NA MAO: fecha e abre o numero (sessao nova do Chromium, proxy conferida de
+      // novo). Uma vez a cada 10 min por numero, senao proxy morta viraria abre-e-fecha sem fim.
+      const ult = reabertoBranco.get(s.nk) || 0
+      if (Date.now() - ult < 600000) { anota('[branco] ' + s.nk + ' continua branco; ja reabri ha pouco, paro aqui'); return }
+      reabertoBranco.set(s.nk, Date.now())
+      anota('[branco] ' + s.nk + ' continua branco depois de duas recargas: fechando e abrindo de novo')
+      const naTela = ativoAgora === s.nk
+      const numero = s.numero
+      fechaNumero(s.nk)
+      try { await despedidas.get(s.nk) } catch (_) { /* ok */ }
+      abreNumero(numero, { fundo: !naTela }).catch((e) => anota('[branco] reabrir falhou: ' + ((e && e.message) || e)))
+    }
+  }, tempo || 25000)
+}
+
 // O RESTO DO FECHAMENTO, fora da tela.
 async function despedida(nk, s) {
   const wc = s && s.view && s.view.webContents
@@ -1753,7 +1811,16 @@ setInterval(async () => {
   for (const nk of [...alugados]) {
     if (!alugados.has(nk) || soltandoAgora.has(nk)) continue
     const r = await pedeUso(nk)
-    if (!alugados.has(nk) || soltandoAgora.has(nk)) continue   // fechou enquanto perguntava
+    // FECHOU ENQUANTO A RENOVACAO VOAVA (20/10/2026, pego no teste de ponta a ponta): o pedido saiu
+    // antes do fechamento, chegou no servidor DEPOIS do soltar e recriou o aluguel - e o `pedeUso`,
+    // com o ok, pos o numero de volta em `alugados`, entao a renovacao seguia sozinha pra sempre e o
+    // numero fechado aparecia "Aberto por" ele pra equipe inteira. Numero que nao esta mais aberto,
+    // abrindo nem se despedindo nao e mais nosso: solta de novo.
+    if (soltandoAgora.has(nk) || (!abertos.has(nk) && !abrindo.has(nk) && !despedidas.has(nk))) {
+      alugados.delete(nk)
+      if (r && r.ok) soltaUso(nk)
+      continue
+    }
     if (r && r.ok) { falhasRenova.delete(nk); continue }
     if (r && (r.ocupado || r.revogado)) { perdeuONumero(nk, r); continue }
     const f = (falhasRenova.get(nk) || 0) + 1
@@ -3505,7 +3572,7 @@ app.whenReady().then(() => {
     casca.webContents.once('did-finish-load', () => {
       setTimeout(() => require('./teste-destaque').rodar({
         janela, abertos, destacados, destaca, devolve, mostra, escondeTodos,
-        nkDoPainel, fechaNumero, particaoDe, candidatosHibernacao,
+        nkDoPainel, fechaNumero, particaoDe, candidatosHibernacao, vigiaBranco,
       }).catch((e) => { console.log('ESTOUROU: ' + ((e && e.stack) || e)); app.exit(1) }), 1200)
     })
   }

@@ -155,6 +155,35 @@ async function rodar(ctx) {
     !!win2 && win2.isDestroyed() === true, 'destruida=' + (win2 && win2.isDestroyed()))
   conta('e o numero saiu de abertos', abertos.has(NK) === false, String(abertos.has(NK)))
 
+  // ── A TELA BRANCA SE CONSERTA SOZINHA (20/10/2026) ───────────────────────────────────────
+  // Uma pagina com o #app vazio (o branco que o Bruno via) e a vigia com prazo curto: no 1o degrau ela
+  // recarrega, no 2o limpa o Service Worker e recarrega sem cache. E com tela de verdade, nao mexe.
+  if (ctx.vigiaBranco) {
+    const NK2 = '11900000002'
+    const vb = new WebContentsView({ webPreferences: { partition: particaoDe(NK2), contextIsolation: true } })
+    janela.contentView.addChildView(vb)
+    let cargas = 0
+    vb.webContents.on('did-start-navigation', (e) => { if (!e || e.isMainFrame !== false) cargas++ })
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="app"></div>')
+    const s2 = { view: vb, nk: NK2, numero: '55' + NK2, carregado: true, ultimoUso: Date.now() }
+    abertos.set(NK2, s2)
+    const antes = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(1200)
+    conta('#app vazio: a vigia recarrega a pagina sozinha', cargas > antes && s2.brancos === 1, 'cargas ' + antes + '->' + cargas + ' brancos=' + s2.brancos)
+    const antes2 = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(1500)
+    conta('branco de novo: segundo degrau (limpa o Service Worker e recarrega sem cache)', cargas > antes2 && s2.brancos === 2, 'cargas ' + antes2 + '->' + cargas + ' brancos=' + s2.brancos)
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="app"><div style="height:50px">WhatsApp</div></div>')
+    const antes3 = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(1000)
+    conta('com tela de verdade, nao mexe e zera a contagem', cargas === antes3 && s2.brancos === 0, 'cargas ' + antes3 + '->' + cargas + ' brancos=' + s2.brancos)
+    abertos.delete(NK2)
+    try { vb.webContents.close() } catch (_) { /* ok */ }
+  }
+
   fim(ctx, NK, view)
 }
 
