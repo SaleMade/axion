@@ -1226,8 +1226,31 @@ app.whenReady().then(async () => {
   // clicar duas vezes para poder realmente confirmar que eu quero sair." (Bruno, 17/10/2026)
   const rodapeCasca = await js2('(() => ({ botoes: [...document.querySelectorAll(".rodape button")].map(b => b.id),'
     + ' temSair: !!document.getElementById("sair") }))()')
-  conta('o Sair nao esta mais no rodape da barra, onde ele clicava sem querer',
-    rodapeCasca.temSair === false && rodapeCasca.botoes.join(',') === 'ajustes', JSON.stringify(rodapeCasca))
+  // 19/10/2026: o rodape ganhou o "Atualizar" (pedido do Bruno); o Sair continua fora dele.
+  conta('o Sair nao esta mais no rodape da barra, onde ele clicava sem querer (la so Atualizar e Ajustes)',
+    rodapeCasca.temSair === false && rodapeCasca.botoes.join(',') === 'atualizar,ajustes', JSON.stringify(rodapeCasca))
+  // O ATUALIZAR (19/10/2026, pedido do Bruno: "pra ver se algum numero novo chegou"): busca na dash e redesenha
+  const antesAt = await js2('window.__ver().length')
+  await js2('(() => { document.getElementById("atualizar").click() })()')
+  await espera(500)
+  const depoisAt = await js2('window.__ver().slice(' + antesAt + ').map((c) => c.nome)')
+  const btAt = await js2('(() => { const b = document.getElementById("atualizar"); return { desligado: b.disabled, girando: b.classList.contains("girando"), texto: b.textContent.trim() } })()')
+  conta('o Atualizar busca a lista na dash e redesenha, e volta a ficar clicavel',
+    depoisAt.includes('numeros') && depoisAt.lastIndexOf('estado') > depoisAt.indexOf('numeros') && !btAt.desligado && !btAt.girando && btAt.texto === 'Atualizar',
+    JSON.stringify({ depoisAt, btAt }))
+  // O ESTADO GRANDE DO NUMERO (19/10/2026, pedido do Bruno): frase curta, cor e a linha do que fazer
+  const estadoDe = (st, aberto) => js2('(() => { const n = estado.numeros[0]; const nk = numKey(n.numero); n.conn = ' + (st ? '{ st: "' + st + '" }' : 'null')
+    + '; estado.abertos = ' + (aberto ? '[nk]' : '[]') + '; telaAbrir(nk); const e = document.querySelector(".abrir .estado"); const d = document.querySelector(".abrir .estado-det");'
+    + ' return { txt: e ? e.textContent.trim() : null, cls: e ? e.className : "", det: d ? d.textContent.trim() : "" } })()')
+  const eOk = await estadoDe('pronto', true), eFe = await estadoDe('pronto', false), eQr = await estadoDe('qr', false)
+  const eCa = await estadoDe('caiu', false), eBa = await estadoDe('bloqueado', false), eNa = await estadoDe('', false)
+  conta('estado: aberto e pronto = "Conectado" verde', eOk.txt === 'Conectado' && /\bok\b/.test(eOk.cls) && /recebendo/.test(eOk.det), JSON.stringify(eOk))
+  conta('estado: fechado com o ultimo pronto = "Fechado, mas conectado"', eFe.txt === 'Fechado, mas conectado' && /\bfechado\b/.test(eFe.cls), JSON.stringify(eFe))
+  conta('estado: QR = "Desconectado" amarelo, com o que fazer', eQr.txt === 'Desconectado' && /\balerta\b/.test(eQr.cls) && /QR/.test(eQr.det), JSON.stringify(eQr))
+  conta('estado: caiu = "Caiu" vermelho', eCa.txt === 'Caiu' && /\bruim\b/.test(eCa.cls), JSON.stringify(eCa))
+  conta('estado: bloqueado = "Banido" vermelho', eBa.txt === 'Banido' && /\bruim\b/.test(eBa.cls), JSON.stringify(eBa))
+  conta('estado: sem leitura = "Sem informacao", nunca "Conectado"', eNa.txt === 'Sem informação' && !/\bok\b/.test(eNa.cls), JSON.stringify(eNa))
+  await js2('(async () => { await recarregaEstado(); telaVazia(); return 1 })()')
 
   await js2('(() => { document.getElementById("ajustes").click() })()')
   await espera(350)

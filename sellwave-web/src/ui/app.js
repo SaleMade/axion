@@ -529,18 +529,22 @@ function telaErro(nk, erro) {
 // `naosei` existe de proposito: numero que nunca foi aberto, ou agente velho sem o campo, nao
 // pode aparecer como "conectado" por omissao. Foi exatamente assim que um numero na tela do QR
 // entrou na roleta uma vez.
+// GRANDE E EM PALAVRAS (19/10/2026, pedido do Bruno: "frasezinhas bem curtas, porem destacadas, pra eu entender
+// rapidamente se aquele numero esta ativo ou nao" - conectado, banido, caiu, desconectado, ou so fechado mas ainda
+// conectado). [tom, titulo curto, o que fazer]. "Sem leitura" e "Esperando ler o QR" nao diziam nada pra quem bate o
+// olho: viraram "Sem informacao" e "Desconectado", cada um com a linha do que fazer.
 const CONN_TXT = {
-  pronto: ['ok', 'Conectado'],
-  sincronizando: ['ok', 'Sincronizando'],
-  qr: ['', 'Esperando ler o QR'],
-  caiu: ['ruim', 'Desconectou. Abra e leia o QR de novo'],
-  bloqueado: ['ruim', 'O WhatsApp bloqueou este número'],
-  conflito: ['alerta', 'Este WhatsApp abriu em outro lugar'],
-  proxy: ['alerta', 'A proxy deste número foi barrada'],
-  versao: ['alerta', 'Atualize o WhatsApp deste número'],
-  offline: ['alerta', 'Sem internet nesta máquina'],
-  fechado: ['', 'Fechado'],
-  naosei: ['', 'Sem leitura'],
+  pronto: ['ok', 'Conectado', 'Funcionando e recebendo mensagens.'],
+  sincronizando: ['ok', 'Conectado', 'Carregando as conversas.'],
+  fechado: ['fechado', 'Fechado, mas conectado', 'Da última vez estava funcionando. Abra pra voltar a receber lead.'],
+  qr: ['alerta', 'Desconectado', 'Falta conectar: abra e leia o QR com o celular.'],
+  caiu: ['ruim', 'Caiu', 'O WhatsApp desconectou sozinho. Abra e leia o QR de novo.'],
+  bloqueado: ['ruim', 'Banido', 'O WhatsApp bloqueou este número.'],
+  conflito: ['alerta', 'Aberto em outro lugar', 'Este WhatsApp abriu em outro computador ou navegador.'],
+  proxy: ['alerta', 'Proxy barrada', 'A proxy deste número foi bloqueada. Troque a proxy.'],
+  versao: ['alerta', 'Precisa atualizar', 'Atualize o WhatsApp deste número.'],
+  offline: ['alerta', 'Sem internet', 'Este computador está sem internet.'],
+  naosei: ['neutro', 'Sem informação', 'Ainda não foi aberto neste app. Abra pra conferir.'],
 }
 function seloConn(n) {
   const aberto = (estado.abertos || []).includes(numKey(n.numero))
@@ -549,8 +553,8 @@ function seloConn(n) {
   // guardou da ultima vez, e dito no passado, nunca como se fosse agora.
   let chave = (c && c.st) || 'naosei'
   if (!aberto && (chave === 'pronto' || chave === 'sincronizando')) chave = 'fechado'
-  const [tom, txt] = CONN_TXT[chave] || CONN_TXT.naosei
-  return { tom, txt, ruim: tom === 'ruim' }
+  const [tom, txt, det] = CONN_TXT[chave] || CONN_TXT.naosei
+  return { tom, txt, det, ruim: tom === 'ruim' }
 }
 
 // A assinatura do que a telaAbrir esta mostrando, pro recarregaEstado so redesenhar quando mudar.
@@ -572,7 +576,7 @@ function telaAbrir(nk) {
     + '</span>'
     + '<h2>' + esc(bonito(cheio(nk))) + '</h2>'
     + (n.dono ? '<p class="de">' + esc(n.dono) + '</p>' : '')
-    + (() => { const c = seloConn(n); return '<p class="conn ' + c.tom + '">' + esc(c.txt) + '</p>' })()
+    + (() => { const c = seloConn(n); return '<div class="estado ' + c.tom + '" role="status"><span class="pt"></span>' + esc(c.txt) + '</div><p class="estado-det">' + esc(c.det) + '</p>' })()
     + (ocupado
       // QUANDO E VOCE MESMO EM OUTRO PC, A TELA TEM QUE DIZER ISSO (18/10/2026). A trava e por
       // MAQUINA, de proposito (o Bruno pareia os numeros no PC dele e o vendedor usa no dele, e e
@@ -1064,6 +1068,17 @@ $('fresta').onclick = async () => {
 
 $('trava').onclick = janelaAjustes
 $('ajustes').onclick = janelaAjustes
+// ATUALIZAR A LISTA NA HORA (19/10/2026, pedido do Bruno: "um botaozinho simples de atualizar, pra ver se algum
+// numero novo chegou"). A lista ja se rele sozinha; o botao so nao deixa esperar. Busca na dash (sw:numeros) e
+// redesenha; clique repetido enquanto busca nao dispara outra busca.
+$('atualizar').onclick = async () => {
+  const b = $('atualizar')
+  if (b.disabled) return
+  b.disabled = true; b.classList.add('girando')
+  try { await window.sw.numeros() } catch (_) { /* a releitura mostra o que tiver */ }
+  try { await recarregaEstado() } catch (_) { /* idem */ }
+  b.disabled = false; b.classList.remove('girando')
+}
 // SINCRONIA NOS DOIS SENTIDOS, SEM BOTAO (16/10/2026, pedido do Bruno). Ligar ou desligar um
 // numero na Chegada de leads da dash passa a refletir aqui sozinho, e o contrario tambem - as duas
 // telas leem a MESMA fonte, entao basta reler.

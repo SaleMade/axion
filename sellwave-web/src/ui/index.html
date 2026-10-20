@@ -225,6 +225,10 @@
     display: flex; align-items: center; justify-content: center; gap: 6px;
   }
   .rodape button:hover { background: rgba(255, 255, 255, .05); color: var(--texto); }
+  .rodape button:disabled { opacity: .6; cursor: default; }
+  .rodape button.girando svg { animation: swgira .8s linear infinite; }
+  @keyframes swgira { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .rodape button.girando svg { animation: none; } }
   .fila-aviso { padding: 0 14px 6px; font-size: 10.5px; color: var(--ambar); }
   .fila-aviso:empty { display: none; }
   .versao-nova { display: flex; align-items: center; gap: 7px; width: calc(100% - 20px); margin: 0 10px 8px;
@@ -316,6 +320,20 @@
   .abrir .conn.ok { color: var(--verde); }
   .abrir .conn.alerta { color: var(--ambar); }
   .abrir .conn.ruim { color: var(--vermelho); }
+  /* O ESTADO GRANDE (19/10/2026, pedido do Bruno: bater o olho e saber se o numero esta ativo). Pilula com a cor do
+     estado + uma linha do que fazer. Fechado mas conectado e neutro com o ponto verde apagado: nao e alarme. */
+  .abrir .estado { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 15px;
+    border-radius: 999px; font-size: 15px; font-weight: 700; border: 1px solid rgba(139, 148, 166, .25);
+    background: rgba(139, 148, 166, .1); color: var(--texto); }
+  .abrir .estado .pt { width: 9px; height: 9px; border-radius: 50%; background: var(--apagado); flex: none; }
+  .abrir .estado.ok { background: var(--verde-fraco); border-color: rgba(36, 194, 120, .32); color: var(--verde); }
+  .abrir .estado.ok .pt { background: var(--verde); box-shadow: 0 0 0 3px rgba(36, 194, 120, .2); }
+  .abrir .estado.fechado .pt { background: var(--verde); opacity: .55; }
+  .abrir .estado.alerta { background: rgba(245, 165, 36, .12); border-color: rgba(245, 165, 36, .32); color: var(--ambar); }
+  .abrir .estado.alerta .pt { background: var(--ambar); }
+  .abrir .estado.ruim { background: rgba(240, 80, 106, .12); border-color: rgba(240, 80, 106, .34); color: var(--vermelho); }
+  .abrir .estado.ruim .pt { background: var(--vermelho); }
+  .abrir .estado-det { font-size: 12.5px; color: var(--apagado); max-width: 420px; margin-top: 2px; }
   .abrir .principal { min-width: 180px; }
   /* O BOTAO DA SETINHA, do lado do Abrir WhatsApp (17/10/2026): "um botaozinho do lado, com a
      setinha mirando para a parte superior direita, destacadinho tambem, mais ou menos do mesmo
@@ -475,6 +493,11 @@
     <div id="preview" class="preview" hidden></div>
 
     <div class="rodape">
+      <!-- ATUALIZAR (19/10/2026, pedido do Bruno): busca a lista na dash agora, pra ver numero novo sem esperar -->
+      <button id="atualizar" title="Atualizar a lista de números">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+        Atualizar
+      </button>
       <button id="ajustes" title="Ajustes">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.67.75.86.3.17.65.26 1 .26H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
         Ajustes

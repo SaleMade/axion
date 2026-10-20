@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld('sw', {
   abrirInstalador: () => Promise.resolve({ ok: true }),
   // Os que a casca chama e o teste nao exercita direto. Faltar UM aqui quebra a tela inteira com
   // "x is not a function", que foi o que este teste pegou na primeira rodada.
-  numeros: () => Promise.resolve({ ok: true, numeros: ESTADO().numeros }),
+  numeros: () => { chamadas.push({ nome: 'numeros' }); return Promise.resolve({ ok: true, numeros: ESTADO().numeros }) },
   esconder: () => { chamadas.push({ nome: 'esconder' }); return Promise.resolve({ ok: true }) },
   mostrar: () => { chamadas.push({ nome: 'mostrar' }); return Promise.resolve({ ok: true }) },
   teto: (v) => {

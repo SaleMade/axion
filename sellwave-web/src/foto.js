@@ -121,6 +121,18 @@ async function rodar(ctx) {
     await new Promise((r) => setTimeout(r, 400))
     await salva(ctx.casca, '3c-abrir-ocupado', pasta)
     await ctx.casca.webContents.executeJavaScript("delete estado.numeros.find(n => n.nk === '1995983293').uso; desenhaLista(); 'ok'")
+    // O ESTADO GRANDE DE CADA NUMERO (19/10/2026, pedido do Bruno): uma foto por estado, pra conferir cor e frase
+    const ESTADOS_FOTO = [['pronto', true, '3d-estado-conectado'], ['pronto', false, '3e-estado-fechado'],
+      ['qr', false, '3f-estado-desconectado'], ['caiu', false, '3g-estado-caiu'], ['bloqueado', false, '3h-estado-banido'],
+      ['', false, '3i-estado-sem-informacao']]
+    for (const [st, aberto, nome] of ESTADOS_FOTO) {
+      const js = "(() => { const n = estado.numeros.find((x) => x.nk === '1995983293'); n.conn = " + (st ? "{ st: '" + st + "' }" : 'null')
+        + '; estado.abertos = ' + (aberto ? "['1995983293']" : '[]') + "; telaAbrir('1995983293'); return 'ok' })()"
+      await ctx.casca.webContents.executeJavaScript(js)
+      await new Promise((r) => setTimeout(r, 300))
+      await salva(ctx.casca, nome, pasta)
+    }
+    await ctx.casca.webContents.executeJavaScript("(() => { delete estado.numeros.find((x) => x.nk === '1995983293').conn; estado.abertos = ['1574076200']; return 'ok' })()")
 
     // os Ajustes do VENDEDOR: tem que sobrar so o que e da maquina dele
     await ctx.casca.webContents.executeJavaScript('janelaAjustes(); "ok"')
