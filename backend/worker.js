@@ -10931,6 +10931,172 @@ async function _swwebUsoTabela(env) {
   } catch (_) { /* ja existe */ }
 }
 
+// ─── A SESSAO DO NUMERO NA NUVEM (19/10/2026, pedido do Bruno) ──────────────────────────────────
+//
+// O Bruno pareia os numeros do time no PC dele e o vendedor trabalha no PC do vendedor. Ate aqui a
+// sessao do WhatsApp morava SO no disco de quem pareou (particao persist:sw-<nk> em %APPDATA%), e no
+// outro computador o numero pedia QR de novo - com o celular principal do LDPlayer na casa do Bruno.
+// Palavras dele: "toda vez que eu fechar o WhatsApp, ele salve todos os cookies, todas as
+// informacoes, para que quando o meu vendedor abrir na maquina dele e clicar nesse mesmo telefone,
+// ele consiga abrir o WhatsApp e comecar a vender".
+//
+// COMO FUNCIONA: o app manda, ao fechar o numero, os arquivos da sessao (IndexedDB e Local Storage
+// da particao, que e onde o WhatsApp Web guarda o pareamento) CIFRADOS com AES-GCM; ao abrir em
+// outra maquina, baixa a versao mais nova antes de carregar. Cada arquivo vira um objeto pelo hash
+// do conteudo, entao fechar de novo so manda o que mudou (os .ldb do LevelDB nao mudam depois de
+// escritos).
+//
+// AS TRES TRAVAS, e por que cada uma existe:
+//  1) SO QUEM ESTA COM O ALUGUEL DO NUMERO (swweb_uso, da mesma maquina e da mesma pessoa) le ou
+//     grava. O aluguel ja passou pelo escopo do POST /api/swweb/uso (dono, mundo, direcao), entao
+//     isto herda tudo aquilo sem reler o estado inteiro a cada pedaco. E e a sessao inteira do
+//     WhatsApp: quem tem os arquivos tem o numero.
+//  2) A VERSAO SO ANDA DE UM EM UM (ver=base). Quem fechou por ultimo e quem tem o estado certo; uma
+//     copia velha chegando atrasada (fila de reenvio, rede que voltou) e recusada em vez de passar
+//     por cima da nova.
+//  3) A CHAVE da cifra fica AQUI, nao no app nem no R2: o bucket e o mesmo da midia publica, e o
+//     prefixo swweb-sessao/ esta barrado na rota publica, mas se um dia vazar a chave nao vai junto.
+const SWWEB_SESSAO_PREFIXO = 'swweb-sessao/';
+const SWWEB_SESSAO_PARTE_MAX = 40 * 1024 * 1024;
+async function _swwebSessaoTabela(env) {
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS swweb_sessao (nk TEXT PRIMARY KEY, ver INTEGER NOT NULL DEFAULT 0, chave TEXT, manifesto TEXT, ant TEXT, bytes INTEGER, arquivos INTEGER, maquina TEXT, user_id TEXT, nome TEXT, ts INTEGER)'
+    ).run();
+  } catch (_) { /* ja existe */ }
+}
+async function _swwebSessaoNaMao(env, nk, u, maquina) {
+  if (!maquina) return false;
+  try {
+    const r = await env.DB.prepare('SELECT user_id, maquina, ate FROM swweb_uso WHERE nk=?').bind(nk).first();
+    return !!(r && String(r.maquina || '') === maquina && String(r.user_id || '') === String(u.id)
+      && Number(r.ate) > Math.floor(Date.now() / 1000));
+  } catch (_) { return false; }
+}
+function _swwebSessaoChaveNova() {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  let t = '';
+  for (const x of b) t += String.fromCharCode(x);
+  return btoa(t);
+}
+// O MANIFESTO E LIDO COMO ENTRADA HOSTIL: os caminhos viram arquivo no disco do vendedor. So as duas
+// pastas da sessao, sem `..`, sem barra no comeco e sem caractere estranho.
+function _swwebManifestoLimpo(m) {
+  if (!Array.isArray(m) || m.length > 20000) return null;
+  const out = [];
+  const vistos = new Set();
+  for (const e of m) {
+    const p = String((e && e.p) || '');
+    if (!/^(IndexedDB|Local Storage)\/[A-Za-z0-9 ._\-\/]{1,300}$/.test(p)) return null;
+    if (p.split('/').some((x) => x === '' || x === '.' || x === '..')) return null;
+    if (vistos.has(p)) return null;
+    vistos.add(p);
+    const h = String((e && e.h) || '');
+    const n = Number(e && e.n);
+    const k = Number(e && e.k);
+    if (!/^[0-9a-f]{64}$/.test(h) || !Number.isInteger(n) || n < 0 || !Number.isInteger(k) || k < 1 || k > 200) return null;
+    out.push({ p, h, n, k });
+  }
+  return out;
+}
+async function _swwebSessaoObjetos(env, nk) {
+  const tem = new Set();
+  let cursor;
+  for (let i = 0; i < 60; i++) {
+    const l = await env.MEDIA.list({ prefix: SWWEB_SESSAO_PREFIXO + nk + '/o/', cursor, limit: 1000 });
+    for (const o of (l.objects || [])) tem.add(o.key);
+    if (!l.truncated) break;
+    cursor = l.cursor;
+  }
+  return tem;
+}
+async function _swwebSessao(req, env, path, u, maquina) {
+  if (!env.MEDIA) return err('Armazenamento não configurado', 503);
+  await _swwebSessaoTabela(env);
+  const qs = new URL(req.url).searchParams;
+  let corpo = null;
+  if (req.method === 'POST') { try { corpo = await req.json(); } catch (_) { return err('Body inválido'); } }
+  const nk = _swwebKeyExata((corpo && corpo.nk) || qs.get('nk'));
+  if (!nk) return err(_ERRO_NK);
+  if (!(await _swwebSessaoNaMao(env, nk, u, maquina))) {
+    return err('Abra o número neste computador antes de mexer na sessão dele.', 409);
+  }
+  const chaveObj = (h, i) => SWWEB_SESSAO_PREFIXO + nk + '/o/' + h + '.' + i;
+
+  // GET /api/swweb/sessao?nk= - qual versao esta na nuvem, a lista de arquivos e a chave da cifra.
+  if (req.method === 'GET' && path === '/api/swweb/sessao') {
+    try {
+      await env.DB.prepare('INSERT OR IGNORE INTO swweb_sessao (nk, ver, chave) VALUES (?, 0, ?)').bind(nk, _swwebSessaoChaveNova()).run();
+      const r = await env.DB.prepare('SELECT ver, chave, manifesto, bytes, arquivos, nome, ts FROM swweb_sessao WHERE nk=?').bind(nk).first();
+      if (!r || !r.chave) return err('Não consegui preparar a sessão deste número.', 503);
+      let man = [];
+      try { man = JSON.parse(r.manifesto || '[]'); } catch (_) { man = []; }
+      return json({ ok: true, ver: Number(r.ver) || 0, chave: String(r.chave), manifesto: Array.isArray(man) ? man : [],
+        bytes: Number(r.bytes) || 0, arquivos: Number(r.arquivos) || 0, nome: String(r.nome || ''), ts: Number(r.ts) || 0 });
+    } catch (e) { return err('Não consegui ler a sessão: ' + String((e && e.message) || e), 503); }
+  }
+
+  // GET|PUT /api/swweb/sessao/obj?nk=&h=&i= - um pedaco de um arquivo, ja cifrado pelo app.
+  if (path === '/api/swweb/sessao/obj' && (req.method === 'GET' || req.method === 'PUT')) {
+    const h = String(qs.get('h') || '');
+    const i = Number(qs.get('i'));
+    if (!/^[0-9a-f]{64}$/.test(h) || !Number.isInteger(i) || i < 0 || i >= 200) return err('Pedaço inválido');
+    const key = chaveObj(h, i);
+    if (req.method === 'GET') {
+      const obj = await _r2Get(env, key);
+      if (!obj) return err('Pedaço não encontrado', 404);
+      return new Response(obj.body, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(obj.size), 'cache-control': 'no-store' } });
+    }
+    const declarado = Number(req.headers.get('content-length') || 0);
+    if (!declarado || declarado > SWWEB_SESSAO_PARTE_MAX) return err('Pedaço sem tamanho ou grande demais', 413);
+    try {
+      // O MESMO CONTEUDO JA ESTA LA: nao manda de novo (o nome e o hash do arquivo aberto).
+      const ja = await env.MEDIA.head(key);
+      if (ja) { try { await req.body.cancel(); } catch (_) { /* ok */ } return json({ ok: true, ja: true }); }
+      await env.MEDIA.put(key, req.body, { httpMetadata: { contentType: 'application/octet-stream' } });
+    } catch (e) { return err('Não consegui guardar: ' + String((e && e.message) || e), 502); }
+    return json({ ok: true });
+  }
+
+  // POST /api/swweb/sessao/fim { nk, base, manifesto } - fecha a versao nova.
+  if (req.method === 'POST' && path === '/api/swweb/sessao/fim') {
+    const man = _swwebManifestoLimpo(corpo && corpo.manifesto);
+    if (!man || !man.length) return err('Lista de arquivos inválida');
+    const base = Number(corpo && corpo.base);
+    if (!Number.isInteger(base) || base < 0) return err('Versão de base inválida');
+    // TODO PEDACO TEM QUE ESTAR LA antes de a versao valer: versao apontando pra arquivo que nao
+    // subiu e sessao quebrada no computador do vendedor.
+    let tem;
+    try { tem = await _swwebSessaoObjetos(env, nk); } catch (e) { return err('Não consegui conferir os arquivos: ' + String((e && e.message) || e), 503); }
+    const faltam = [];
+    for (const e of man) for (let i = 0; i < e.k; i++) if (!tem.has(chaveObj(e.h, i))) faltam.push(e.h + '.' + i);
+    if (faltam.length) return json({ ok: false, error: 'Faltam ' + faltam.length + ' pedaços', faltam: faltam.slice(0, 50) }, 409);
+    const atual = await env.DB.prepare('SELECT ver, manifesto FROM swweb_sessao WHERE nk=?').bind(nk).first();
+    if (!atual) return err('Sessão não preparada', 409);
+    if (Number(atual.ver) !== base) return json({ ok: false, conflito: true, ver: Number(atual.ver) || 0, error: 'Outra máquina salvou uma versão mais nova deste número.' }, 409);
+    const bytes = man.reduce((t, e) => t + e.n, 0);
+    const agoraS = Math.floor(Date.now() / 1000);
+    const r = await env.DB.prepare(
+      'UPDATE swweb_sessao SET ver=ver+1, ant=manifesto, manifesto=?, bytes=?, arquivos=?, maquina=?, user_id=?, nome=?, ts=? WHERE nk=? AND ver=?'
+    ).bind(JSON.stringify(man), bytes, man.length, maquina, String(u.id), String(u.name || u.id), agoraS, nk, base).run();
+    if (!(r && r.meta && r.meta.changes > 0)) return json({ ok: false, conflito: true, error: 'Outra máquina salvou uma versão mais nova deste número.' }, 409);
+    // LIMPEZA: fica a versao nova e a anterior (a anterior e a volta, se a nova vier ruim). O resto e
+    // pedaco de versao velha ou de envio que perdeu a corrida.
+    try {
+      let antes = [];
+      try { antes = JSON.parse(atual.manifesto || '[]'); } catch (_) { antes = []; }
+      const fica = new Set();
+      for (const e of [...man, ...(Array.isArray(antes) ? antes : [])]) for (let i = 0; i < (Number(e && e.k) || 1); i++) fica.add(chaveObj(String(e.h), i));
+      const sai = [...tem].filter((k) => !fica.has(k));
+      for (let i = 0; i < sai.length; i += 1000) await env.MEDIA.delete(sai.slice(i, i + 1000));
+    } catch (e) { console.error('[swweb sessao] limpeza falhou ' + nk + ': ' + String((e && e.message) || e)); }
+    console.log('SWWEB_SESSAO ' + nk + ' v' + (base + 1) + ' ' + man.length + ' arquivos ' + bytes + ' bytes por ' + String(u.id));
+    return json({ ok: true, ver: base + 1 });
+  }
+  return err('Rota não encontrada', 404);
+}
+
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
   // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
@@ -11033,6 +11199,9 @@ async function handleSwWeb(req, env, path) {
   const K_BANCO = _cfgNome(SWWEB_BANCO, mundo);
   const K_EXC = _cfgNome(SWWEB_EXCECOES, mundo);
   const manda = _swwebManda(u);
+  // A SESSAO NA NUVEM vem antes da leitura de configuracao abaixo: o app pede um pedaco por arquivo, e
+  // reler proxy, banco e trava a cada pedaco seria trabalho jogado fora (o escopo vem do aluguel).
+  if (path === '/api/swweb/sessao' || path.startsWith('/api/swweb/sessao/')) return _swwebSessao(req, env, path, u, maquina);
   // a lista dos celulares do LDPlayer vai na MESMA ida ao banco, e so na casa (ver LDPLAYER_CELULARES)
   const lidas = await _readConfigMuitas(env, [K_CFG, K_PROXIES, K_BANCO, K_EXC, ...(mundo ? [] : [LDPLAYER_CELULARES])]);
   // AS DUAS TRAVAS NAO DESLIGAM MAIS (17/10/2026, pedido do Bruno junto com o banco de proxies).
@@ -11456,6 +11625,14 @@ async function handleSwWeb(req, env, path) {
     const liveSet = await _presselLiveSet(env);
     await _carregaApiMorto(env);
     // O estado de conexao de todo mundo, numa ida so.
+    // QUAIS NUMEROS TEM A SESSAO NA NUVEM (19/10/2026), pro app mostrar a nuvenzinha na linha: e o que
+    // diz pro Bruno que o vendedor vai abrir o numero ja conectado, sem QR.
+    const nuvemDe = {};
+    try {
+      await _swwebSessaoTabela(env);
+      const rn = await env.DB.prepare('SELECT nk, ver, ts, nome FROM swweb_sessao WHERE ver > 0').all();
+      for (const x of ((rn && rn.results) || [])) nuvemDe[String(x.nk)] = { ver: Number(x.ver) || 0, ts: Number(x.ts) || 0, nome: String(x.nome || '') };
+    } catch (_) { /* sem a tabela a linha so nao mostra a nuvem */ }
     const conns = {};
     try {
       const rc = await env.DB.prepare('SELECT nk, st, espontaneo, ts FROM swweb_conn').all();
@@ -11491,6 +11668,8 @@ async function handleSwWeb(req, env, path) {
         // O ESTADO DA CONEXAO no SellWave Web, pra tela poder dizer "conectado" ou "caiu" em vez
         // de so oferecer o botao de abrir. Vem de swweb_conn (ver POST /api/swweb/conexao).
         conn: conns[nk] || null,
+        // A sessao deste numero esta salva na nuvem? { ver, ts, nome } de quem salvou por ultimo.
+        nuvem: nuvemDe[nk] || null,
         // Liberado a abrir sem proxy ate quando, se estiver.
         excecao: excecoes[nk] ? { ate: excecoes[nk].ate, por: String(excecoes[nk].nome || '') } : null,
         // OS DOIS BOOLEANOS JA DECIDIDOS, e e o conserto que mata a CLASSE do bug, nao um caso.
@@ -18896,6 +19075,9 @@ async function handleSaleChatMediaGet(req, env, key) {
   // ContaSimples e os 42 chips. A chave e previsivel (backups/state-<ts>-v<versao>.json).
   // Backup nao e midia: nao sai por aqui, ponto.
   if (String(key || '').startsWith(BACKUP_PREFIX) || String(key || '').startsWith('backups/')) return err('Mídia não encontrada', 404);
+  // A SESSAO DO WHATSAPP DOS NUMEROS (19/10/2026) tambem mora neste bucket e tambem NAO e midia: e o
+  // pareamento inteiro do numero. Cifrada, mas nem cifrada sai por uma rota sem login.
+  if (String(key || '').startsWith(SWWEB_SESSAO_PREFIXO)) return err('Mídia não encontrada', 404);
   // COMPROVANTE SO COM LINK ASSINADO E NO PRAZO (item 37; ver o bloco logo acima).
   const _ehComprovante = String(key || '').startsWith('comprovante/');
   if (_ehComprovante) {
