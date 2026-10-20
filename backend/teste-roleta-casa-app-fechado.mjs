@@ -1,4 +1,17 @@
-// ROLETA: CHIP DA CASA SEM API SO RECEBE COM O PROPRIO NUMERO ABERTO NO APP (18/10/2026, antes da migracao de 19/10).
+// ROLETA: QUEM MANDA NO CHIP DA CASA E O INTERRUPTOR DA PRESSEL (regra de 20/10/2026).
+//
+// ATENCAO, A REGRA DESTE ARQUIVO JA FOI O CONTRARIO. Entre 18/10 e 20/10 chip da casa so recebia com
+// o proprio numero ABERTO no app, por pedido do Bruno em 17/10 ("a roleta nao pode mandar clique pra
+// numero fechado"). Em 20/10 ele desfez, com o motivo do negocio: vendedor que sai pro almoco e fecha
+// o app fazia os leads caírem todos no colega, e ele prefere achar os leads esperando quando voltar.
+// NAO "conserte" isto de volta sem falar com ele: o nome do arquivo e historico, a regra e a de cima.
+//
+// O que tornou seguro desfazer: mensagem que chega com o app fechado nao se perde, porque o
+// _waLeadCapture aceita mensagem atrasada de ate 24 h com codigo de desconto nao reivindicado
+// (ver teste-lead-atrasado.mjs). O custo aceito por ele: numero fechado acumula conversa sem
+// resposta, e tempo de resposta derruba conversao.
+//
+// HISTORICO DOS TRES FUROS que criaram a regra antiga (valem como medicao, nao como regra):
 //
 // Tres furos, conferidos com as funcoes reais e o D1 real antes do conserto:
 //  1) o chip da casa sem API passava pelo _servConnOk GENERICO, que aprova pela linha do numero em wa_api_numbers com
@@ -65,57 +78,50 @@ const liveSet = (pares) => new Map(pares);
 const chipCasa = { num: '15' + '9' + MIGRADO.slice(2), at: 'guilherme', wa_st: 'em_uso' };   // (15) 99242-8200, sem api, sem afl
 const k8 = (n) => String(n).replace(/\D/g, '').slice(-8);
 
-console.log('ROLETA: CHIP DA CASA SEM API (O QUE O BRUNO MIGRA DA API PRO APP)\n');
+console.log('ROLETA: QUEM MANDA NO CHIP DA CASA E O INTERRUPTOR DA PRESSEL\n');
 {
-  const ls = liveSet([['ax_guilherme_' + k8(MIGRADO), '55' + MIGRADO], ['ax_guilherme_' + k8(GUI), '55' + GUI]]);
-  conta('app FECHADO + linha antiga em wa_api_numbers -> NAO recebe', F._chipVivo(ls, chipCasa, 'ax_guilherme') === false);
-  conta('(o _servConnOk generico aprovaria: e o furo)', F._servConnOk(ls, 'ax_guilherme', chipCasa.num) === true);
-}
-{
-  // DEFESA: hoje nenhum escritor grava wa_conn 'ax_<at>' sem numero (conferido em 18/10), mas se um dia gravar, o
-  // fail-open do slot nao pode aprovar numero fechado
-  const ls = liveSet([['ax_guilherme', ''], ['ax_outro_' + k8(OUTRO), '55' + OUTRO]]);
-  conta('(defesa) slot ax_<at> vivo sem numero nao aprova numero fechado', F._chipVivo(ls, chipCasa, 'ax_guilherme') === false);
-}
-{
-  const ls = liveSet([['sc_55' + MIGRADO, '55' + MIGRADO]]);
-  conta('app ABERTO (sc_<numero>) -> recebe', F._chipVivo(ls, chipCasa, 'ax_guilherme') === true);
-}
-{
-  apiMorto.add('15' + MIGRADO.slice(-8));
-  const ls = liveSet([['sc_55' + MIGRADO, '55' + MIGRADO]]);
-  conta('app ABERTO mas BANIDO na Meta -> NAO recebe', F._chipVivo(ls, chipCasa, 'ax_guilherme') === false);
-  apiMorto.clear();
-}
-{
-  const ls = liveSet([['sc_55' + GUI, '55' + GUI]]);
-  conta('outro numero do vendedor aberto no app -> este NAO recebe', F._chipVivo(ls, chipCasa, 'ax_guilherme') === false);
-}
-conta('liveSet nulo (a LEITURA FALHOU) -> continua recebendo (fail-open)', F._chipVivo(null, chipCasa, 'ax_guilherme') === true);
-conta('liveSet vazio (LEU e ninguem esta vivo) -> NAO recebe', F._chipVivo(new Map(), chipCasa, 'ax_guilherme') === false);
-conta('chip sem numero -> nao recebe', F._chipVivo(liveSet([['sc_x', '1']]), { at: 'guilherme' }, 'ax_guilherme') === false);
-
-console.log('\nO QUE NAO MUDA\n');
-{
-  const chipApi = { num: '55' + GUI, at: 'guilherme', api: true, wa_st: 'em_uso' };
-  const ls = liveSet([['ax_guilherme_' + k8(GUI), '55' + GUI]]);
-  // MUDOU EM 20/10/2026, decisao do Bruno: "a API oficial a gente nao vai usar mais; independente do
-  // numero estar ou nao com API, quero que mande pra aquele numero". A marca `api` parou de pesar e
-  // TODO chip da casa passou a ser julgado igual, pelo app aberto NELE.
+  // A REGRA VIROU EM 20/10/2026, A PEDIDO DO BRUNO. Ate hoje de manha chip da casa so recebia com o
+  // proprio numero ABERTO no app (regra dele mesmo, de 17/10: "a roleta nao pode mandar clique pra
+  // numero fechado"). Ele desfez com o motivo do negocio: "meus vendedores as vezes saem para almoco
+  // e deixam um fechado. Quando retornarem, quero que ja tenham os leads ali. Isso tambem e ruim
+  // porque um fecha e o outro recebe muitos leads, e fica esse desparelhamento. Se um numero esta
+  // ativo na Pressel, e porque ele vai receber. So se ele ficar desativado e que para."
   //
-  // A linha da API sozinha NAO vale mais, e isso nao e detalhe: aceitar ela de novo reabre o furo 1
-  // la de cima (desmarcar API nao mexe na linha do numero, o cron leva ate ~80 min pra marcar
-  // DISCONNECTED, e nessa janela a roleta mandaria clique pago pra numero FECHADO). A regra de
-  // 17/10 continua de pe e e mais antiga que a decisao de hoje: nao se manda lead pra numero
-  // fechado. O que caiu hoje foi o requisito de API, nao o de estar aberto.
-  conta('chip de API com a linha viva mas o app FECHADO -> NAO recebe mais (a API deixou de ser requisito)', F._chipVivo(ls, chipApi, 'ax_guilherme') === false);
-  // O CASO QUE MOTIVOU A MUDANCA (20/10/2026, 13h): o (47) 99740-5847 do Kevin e o (11) 96663-2248 do
-  // Guilherme estavam DISCONNECTED na Meta e ABERTOS e funcionando no app, e a roleta pulava os dois
-  // em silencio. Como sao o PRIMEIRO da fila dos seus vendedores, o modo Limite passava a vez com
-  // eles em 4/50 e 19/50, e os leads desabavam no segundo numero (35 dos 67 do Kevin foram pro 1859).
-  conta('chip de API com a linha CAIDA mas o app ABERTO -> recebe (era o caso do 5847 e do 2248)',
-    F._chipVivo(liveSet([['sc_55' + GUI, '55' + GUI]]), chipApi, 'ax_guilherme') === true);
-  conta('chip de API sem linha nem app continua fora (como hoje)', F._chipVivo(liveSet([['ax_outro_' + k8(OUTRO), '55' + OUTRO]]), chipApi, 'ax_guilherme') === false);
+  // O QUE TORNA ISSO SEGURO: mensagem que chega com o app fechado NAO se perde. O _waLeadCapture
+  // aceita mensagem atrasada de ate 24 h com codigo de desconto de clique nao reivindicado (ver
+  // teste-lead-atrasado.mjs), entao o lead e capturado quando o vendedor reabre o app.
+  const ls = liveSet([['ax_guilherme_' + k8(MIGRADO), '55' + MIGRADO], ['ax_guilherme_' + k8(GUI), '55' + GUI]]);
+  conta('app FECHADO -> RECEBE (o vendedor acha os leads quando voltar do almoco)', F._chipVivo(ls, chipCasa, 'ax_guilherme') === true);
+  conta('app ABERTO -> recebe', F._chipVivo(liveSet([['sc_55' + MIGRADO, '55' + MIGRADO]]), chipCasa, 'ax_guilherme') === true);
+  conta('ninguem vivo no mundo inteiro -> recebe do mesmo jeito', F._chipVivo(new Map(), chipCasa, 'ax_guilherme') === true);
+  conta('a leitura de conexao falhou (null) -> recebe', F._chipVivo(null, chipCasa, 'ax_guilherme') === true);
+  conta('so OUTRO numero do vendedor aberto -> este recebe assim mesmo', F._chipVivo(liveSet([['sc_55' + GUI, '55' + GUI]]), chipCasa, 'ax_guilherme') === true);
+}
+{
+  // O UNICO "NAO" QUE SOBROU, e e o que ele pediu pra manter: banido na Meta. Dos 25 numeros da casa,
+  // oito estao BANNED. Agora nao ha mais nenhum outro filtro embaixo, entao esta checagem e a ultima
+  // linha de defesa: clique pago indo pra numero banido e dinheiro no lixo.
+  apiMorto.add('15' + MIGRADO.slice(-8));
+  conta('BANIDO na Meta -> NAO recebe, nem com o app aberto', F._chipVivo(liveSet([['sc_55' + MIGRADO, '55' + MIGRADO]]), chipCasa, 'ax_guilherme') === false);
+  conta('BANIDO na Meta -> NAO recebe com o app fechado', F._chipVivo(new Map(), chipCasa, 'ax_guilherme') === false);
+  apiMorto.clear();
+  conta('tirado da lista de banidos, volta a receber', F._chipVivo(new Map(), chipCasa, 'ax_guilherme') === true);
+}
+conta('chip SEM numero -> nao recebe (nao ha pra onde mandar)', F._chipVivo(liveSet([['sc_x', '1']]), { at: 'guilherme' }, 'ax_guilherme') === false);
+
+console.log('\nA MARCA `api` NAO PESA MAIS (20/10/2026)\n');
+{
+  // Decisao do mesmo dia, horas antes: "a API oficial a gente nao vai usar mais; independente do
+  // numero estar ou nao com API, quero que mande pra aquele numero". Era o caso do (47) 99740-5847 do
+  // Kevin e do (11) 96663-2248 do Guilherme: DISCONNECTED na Meta, abertos e funcionando no app, e a
+  // roleta pulava os dois calada. Como sao o PRIMEIRO da fila, o modo Limite passava a vez com eles
+  // em 4/50 e 19/50 e os leads desabavam no segundo numero (35 dos 67 do Kevin foram pro 1859).
+  const chipApi = { num: '55' + GUI, at: 'guilherme', api: true, wa_st: 'em_uso' };
+  conta('chip de API com a linha CAIDA -> recebe (era o caso do 5847 e do 2248)', F._chipVivo(new Map(), chipApi, 'ax_guilherme') === true);
+  conta('chip de API com a linha viva -> recebe', F._chipVivo(liveSet([['ax_guilherme_' + k8(GUI), '55' + GUI]]), chipApi, 'ax_guilherme') === true);
+  apiMorto.add('15' + k8(GUI));
+  conta('chip de API BANIDO -> nao recebe', F._chipVivo(new Map(), { ...chipApi, num: '5515' + k8(GUI) }, 'ax_guilherme') === false);
+  apiMorto.clear();
 }
 {
   const chipAfl = { num: '55' + AFL, at: 'vend_afl', afl: 'afl_3d767329', wa_st: 'em_uso' };
@@ -125,24 +131,21 @@ console.log('\nO QUE NAO MUDA\n');
   conta('chip de afiliado no Sale Chat continua no _servConnOk (heartbeat dele aprova)', F._chipVivo(liveSet([['sc_55' + AFL, '55' + AFL]]), chipAflSc, 'ax_vend_afl') === true);
 }
 
-console.log('\nA ROLETA DE VERDADE (_resolvePresselSellers) COM O APP FECHADO E ABERTO\n');
+console.log('\nA ROLETA DE VERDADE (_resolvePresselSellers)\n');
 {
   const p = { id: 'p1', vendedores: [{ at: 'guilherme' }] };
   const chips = [{ ...chipCasa }, { num: '55' + GUI, at: 'guilherme', api: true, wa_st: 'em_uso' }];
   const fora = new Set(['restrito', 'banido']);
-  const fechado = liveSet([['ax_guilherme_' + k8(MIGRADO), '55' + MIGRADO], ['ax_guilherme_' + k8(GUI), '55' + GUI]]);
-  const numsF = ((F._resolvePresselSellers(p, chips, fechado, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num));
-  // 20/10/2026: com a API fora da conta, app fechado e app fechado pros dois. Antes o de API passava.
-  conta('app fechado: a roleta nao entrega NENHUM dos dois (nem o de API)', numsF.length === 0, JSON.stringify(numsF));
-  const aberto = new Map([...fechado, ['sc_55' + MIGRADO, '55' + MIGRADO]]);
-  const numsA = ((F._resolvePresselSellers(p, chips, aberto, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num)).sort();
-  // so o MIGRADO foi aberto no app; o de API segue fechado, entao segue fora. Quem decide e o app.
-  conta('app aberto so no migrado: a roleta entrega so ele', JSON.stringify(numsA) === JSON.stringify([k8(MIGRADO)]), JSON.stringify(numsA));
-  const doisAbertos = new Map([...aberto, ['sc_55' + GUI, '55' + GUI]]);
-  const numsD = ((F._resolvePresselSellers(p, chips, doisAbertos, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num)).sort();
-  conta('os dois abertos no app: a roleta entrega os dois', JSON.stringify(numsD) === JSON.stringify([k8(GUI), k8(MIGRADO)].sort()), JSON.stringify(numsD));
-  const sZ = F._resolvePresselSellers(p, [{ ...chipCasa }], fechado, new Set(), fora, new Set());
-  conta('so o migrado, app fechado: o vendedor sai da roleta (a pressel cai no aviso "sem numero")', sZ.length === 0, JSON.stringify(sZ));
+  const numsF = ((F._resolvePresselSellers(p, chips, new Map(), new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num));
+  conta('com tudo fechado a roleta entrega o numero do vendedor assim mesmo', numsF.length >= 1, JSON.stringify(numsF));
+  const sZ = F._resolvePresselSellers(p, [{ ...chipCasa }], new Map(), new Set(), fora, new Set());
+  conta('vendedor com um numero so, fechado: continua na roleta (antes ele saia)', sZ.length === 1, JSON.stringify(sZ.length));
+  // O INTERRUPTOR E O QUE SOBROU MANDANDO. Palavras dele: "so se ele ficar desativado e que para".
+  // Ele mora no VENDEDOR da pressel (v.off), indexado pelos 8 ultimos digitos, nao e parametro da
+  // funcao: errei isso na primeira versao deste teste e ele acusou, que e o trabalho dele.
+  const pOff = { id: 'p1', vendedores: [{ at: 'guilherme', off: { [k8(MIGRADO)]: true } }] };
+  const comOff = ((F._resolvePresselSellers(pOff, [{ ...chipCasa }], new Map(), new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num));
+  conta('numero DESLIGADO na pressel sai da roleta (o interruptor e quem manda agora)', comOff.length === 0, JSON.stringify(comOff));
 }
 
 console.log('\nO _presselLiveSet DE VERDADE, COM UM BANCO DE MENTIRA\n');
@@ -172,7 +175,9 @@ function bancoFalso({ conn = [], hb = [], api = [], banidos = [], estados = [], 
   const env = bancoFalso();
   const ls = await F._presselLiveSet(env);
   conta('leu tudo e nao tem ninguem vivo -> Map VAZIO (nao null)', ls instanceof Map && ls.size === 0, String(ls));
-  conta('... e com ele o numero da casa fechado NAO recebe', F._chipVivo(ls, chipCasa, 'ax_guilherme') === false);
+  // 20/10/2026: o liveSet continua sendo montado certo (e o que a linha de cima prova, e ele ainda
+  // decide pelo chip de AFILIADO com API), mas o chip da CASA nao o consulta mais.
+  conta('... e o numero da casa fechado RECEBE assim mesmo (regra de 20/10)', F._chipVivo(ls, chipCasa, 'ax_guilherme') === true);
 }
 {
   const env = bancoFalso({ quebra: true });
@@ -190,7 +195,13 @@ function bancoFalso({ conn = [], hb = [], api = [], banidos = [], estados = [], 
   const hbM = [{ self_number: '55' + MIGRADO }];
   const ruim = await F._presselLiveSet(bancoFalso({ hb: hbM, conn: [{ instance: 'ax_guilherme', number: '55' + MIGRADO }], estados: [{ nk: '15' + MIGRADO.slice(-8) }] }));
   conta('app reporta bloqueado/conflito: o numero sai do liveSet (heartbeat e wa_conn)', !!ruim && ![...ruim.values()].some((v) => k8(v) === k8(MIGRADO)), JSON.stringify([...ruim]));
-  conta('... e NAO recebe', F._chipVivo(ruim, chipCasa, 'ax_guilherme') === false);
+  // ATENCAO, PONTO EM ABERTO COM O BRUNO (20/10/2026): o app reportar `bloqueado` quer dizer que o
+  // WhatsApp derrubou aquele numero, e clique pago indo pra la e dinheiro no lixo. Ate hoje isso
+  // tirava o numero da roleta pelo liveSet; com a regra nova o chip da casa nao olha mais o liveSet,
+  // entao ele passa a receber. O unico 'nao' que sobrou e o BANIDO NA META (_apiMorto), que e outra
+  // fonte. Perguntei a ele se quer que `bloqueado` do app tambem valha como banido; enquanto nao
+  // responder, fica como ele pediu: so o interruptor manda.
+  conta('... e RECEBE assim mesmo (so o interruptor manda; ver o comentario acima)', F._chipVivo(ruim, chipCasa, 'ax_guilherme') === true);
   const bom = await F._presselLiveSet(bancoFalso({ hb: hbM }));
   conta('sem estado ruim, o mesmo heartbeat deixa receber', F._chipVivo(bom, chipCasa, 'ax_guilherme') === true);
   conta('os estados que tiram sao bloqueado, conflito, proxy e versao (nao caiu, qr nem offline)', /\('bloqueado','conflito','proxy','versao'\)/.test(constFora), constFora);

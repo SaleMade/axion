@@ -22352,28 +22352,32 @@ function _vivoNoApp(liveSet, chipNum){
 // foram pro (17) 99701-1859. O Bruno leu isso como "o limite nao esta sendo respeitado", e nao era o
 // limite: era o numero 1 invisivel.
 //
-// AGORA TODO CHIP DA CASA E JULGADO IGUAL: pelo app aberto NELE. A marca `api` deixou de pesar.
+// QUEM MANDA NO CHIP DA CASA E O INTERRUPTOR DA PRESSEL, MAIS NADA (20/10/2026). Nem a marca `api`,
+// nem o app estar aberto. Ligado na pressel recebe; desligado nao recebe; banido nunca.
 //
-// NAO e "aprova pelos dois caminhos", e eu cheguei a escrever assim e estava errado. Aceitar tambem a
-// linha da API traria de volta o furo 1 do teste-roleta-casa-app-fechado.mjs: desmarcar API no chip
-// nao mexe na linha do numero em wa_api_numbers, e o cron leva ate ~80 min pra marcar DISCONNECTED,
-// entao nessa janela a roleta mandaria clique pago pra numero FECHADO e o lead se perderia. A regra
-// do Bruno de 17/10 continua valendo e e mais antiga que a decisao de hoje: "a roleta nao pode mandar
-// clique pra numero fechado". Hoje ele tirou o REQUISITO de API, nao o requisito de estar aberto.
+// ISTO DESFAZ, A PEDIDO DELE, A REGRA DE 17/10 ("a roleta nao pode mandar clique pra numero
+// fechado"). Eu a defendi hoje de manha e ele respondeu com o motivo do negocio, que vale mais:
+// "meus vendedores as vezes saem para almoco e deixam um fechado. Quando retornarem, quero que ja
+// tenham os leads ali. Isso tambem e ruim porque um fecha e o outro recebe muitos leads, e fica esse
+// desparelhamento. Se um numero esta ativo na Pressel, e porque ele vai receber. So se ele ficar
+// desativado e que para."
 //
-// Efeito pratico, e o Bruno sabe: numero que ninguem abriu no app para de receber, mesmo com a API
-// oficial de pe. E o modelo que ele escolheu ("quero o SellWave Web 100%") e o app ja abre sozinho os
-// numeros do vendedor quando ele entra.
+// O QUE TORNA ISSO SEGURO, e por isso eu conferi antes de mexer: a mensagem que chega com o app
+// fechado NAO se perde. O `_waLeadCapture` aceita mensagem atrasada de ate 24 h quando ela traz um
+// codigo de desconto de clique ainda nao reivindicado (entrou em 20/10 de madrugada, com o
+// teste-lead-atrasado.mjs). Entao o lead e capturado quando o vendedor reabre o app. O que se perde
+// e so o caso antigo de sempre: quem escreve SEM o codigo e cujo clique ja passou de 24 h.
 //
-// BANIDO CONTINUA FORA, com a checagem EXPLICITA aqui em cima em vez de confiar no filtro de dentro
-// de cada caminho: ele foi explicito hoje ("tem numeros que foram banidos, ai beleza, pode marcar
-// como banido") e dos 25 numeros da casa oito estao BANNED na Meta.
+// O CUSTO, que ele aceitou de olhos abertos: numero fechado acumula conversa sem ninguem respondendo,
+// e tempo de resposta derruba conversao. O emparelhamento entre vendedores vale mais pra ele.
+//
+// BANIDO CONTINUA FORA. Ele foi explicito ("tem numeros que foram banidos, ai beleza, pode marcar
+// como banido") e dos 25 numeros da casa oito estao BANNED na Meta. A checagem fica aqui, explicita,
+// porque agora nao sobrou nenhum outro filtro embaixo pra pegar.
 function _chipVivo(liveSet, c, inst){
   if(_modoRoleta(c)) return true;
-  if(c && !c.afl){
-    if(c.num && _apiMorto.has(_waNumKey(c.num))) return false;
-    return _vivoNoApp(liveSet, c.num);
-  }
+  // chip SEM numero continua fora: nao ha pra onde mandar, e o `_resolvePresselSellers` ja o descarta.
+  if(c && !c.afl) return !!c.num && !_apiMorto.has(_waNumKey(c.num));
   return _servConnOk(liveSet, inst, c && c.num);
 }
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;
