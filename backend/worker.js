@@ -12048,9 +12048,25 @@ async function handleSwWeb(req, env, path) {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
     const nk = _swwebKeyExata(b && b.nk);
     if (!nk) return err(_ERRO_NK);
-    const st = String((b && b.st) || '').slice(0, 20);
+    let st = String((b && b.st) || '').slice(0, 20);
     if (!st) return err('Falta o estado');
-    const espontaneo = (b && b.espontaneo) ? 1 : 0;
+    let espontaneo = (b && b.espontaneo) ? 1 : 0;
+    // O WHATSAPP DISSE POR QUE DESLOGOU (20/10/2026, primeiro dia do time no SellWave Web). O 1970 do
+    // Kevin chegou as 10:09 com queda {modo:'LOGOUT_REASON', motivo:'account_locked'} - a conta foi
+    // BLOQUEADA pelo WhatsApp -, mas o app reportou o estado como 'sincronizando' e depois 'qr' (a
+    // pagina recarrega ao deslogar e esquece que ja estava conectada), e o aviso de queda nunca saiu.
+    // Motivo e AFIRMACAO do WhatsApp, nao inferencia: bloqueio vira 'bloqueado' (que tira o numero da
+    // roleta pelo swweb_conn) com aviso pra direcao; qualquer outro motivo de logout avisa como queda.
+    // SO A QUEDA RECENTE e so com o numero ainda fora: o app manda a ULTIMA queda junto de todo estado
+    // seguinte, e um numero reconectado (pronto) com o motivo de ontem nao pode virar bloqueado.
+    const _q = (b && b.queda && typeof b.queda === 'object') ? b.queda : null;
+    const _qRecente = _q && Math.abs(Date.now() - Number(_q.ts || 0)) < 600000;
+    if (_q && _qRecente && st !== 'pronto' && String(_q.modo || '') === 'LOGOUT_REASON') {
+      const _mot = String(_q.motivo || '');
+      if (/lock|ban|block|suspen/i.test(_mot)) st = 'bloqueado';
+      else if (st !== 'bloqueado') st = 'caiu';
+      espontaneo = 1;
+    }
     await _scEnsureTables(env);
     try {
       await env.DB.prepare(
@@ -23279,9 +23295,10 @@ async function _swwebAvisaQueda(env, nk, st, b) {
   } catch (_) {}
   const d = String(numero).replace(/\D/g, '').replace(/^55/, '');
   const bonito = d.length >= 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4) : String(numero);
+  const _motivo = (b && b.queda && b.queda.modo === 'LOGOUT_REASON' && b.queda.motivo) ? ' (motivo do WhatsApp: ' + String(b.queda.motivo).slice(0, 40) + ')' : '';
   const texto = st === 'bloqueado'
-    ? bonito + ' foi bloqueado pelo WhatsApp com a janela aberta. Nao desliguei ele da roleta; confira antes.'
-    : bonito + ' desconectou sozinho, sem ninguem fechar. Pode ser queda ou ban: confira o numero.';
+    ? bonito + ' foi bloqueado pelo WhatsApp' + _motivo + '. Ele saiu da roleta sozinho; confira o celular dele.'
+    : bonito + ' desconectou sozinho, sem ninguem fechar' + _motivo + '. Pode ser queda ou ban: confira o numero.';
   try {
     const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
     for (const x of ((us && us.results) || [])) {
