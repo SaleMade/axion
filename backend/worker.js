@@ -22077,7 +22077,9 @@ function _tetoAcumulado(teto, hora) {
   return Math.max(1, Math.ceil(t * DIA_ACUM[h] / 1000));
 }
 
-// O DIA DE AQUECIMENTO. Sai do `warm_start` do chip (YYYY-MM-DD), em dias de CALENDARIO.
+// O DIA DE AQUECIMENTO. Sai do `warm_start` do chip (YYYY-MM-DD), em dias de CALENDARIO - mas desde
+// 19/10/2026 o cron empurra o `warm_start` em dia sem lead, entao o que sai daqui e dia COM ATENDIMENTO
+// (ver _aquecDiaComLead). O texto abaixo e de antes e explica por que o caminho foi esse.
 //
 // FICOU COMBINADO COM A OUTRA SESSAO medir por DIA COM ATENDIMENTO, e continua sendo o certo: chip
 // parado nove dias nao aqueceu nove dias. Nao entrou AGORA por dois motivos concretos, e fica como
@@ -22940,6 +22942,91 @@ function _limpaMarcasDesligado(v, nk) {
   for (const mk of ['auto_off', 'volta']) {
     if (v[mk] && typeof v[mk] === 'object') { delete v[mk][nk]; if (!Object.keys(v[mk]).length) delete v[mk]; }
     else if (mk in v) delete v[mk];
+  }
+}
+// O DIA DE AQUECIMENTO SO ANDA EM DIA COM LEAD (19/10/2026). O Heynan viu "varios numeros na area de
+// aquecimento que ja foram para o dia 2 sendo que eles nem foram aquecidos": o dia contava CALENDARIO
+// desde o `warm_start`, e numero sem ninguem com ele aberto (0 de 5, "sem app aberto") subia de dia
+// igual. O comentario do _diaDoAquecimento ja dizia que o certo era dia COM ATENDIMENTO e deixava
+// como proximo passo.
+//
+// COMO, SEM TOCAR NO CAMINHO QUENTE: o dia continua saindo do `warm_start` nos tres lugares (worker,
+// dash, app), e quem muda e o `warm_start`. Uma vez por dia, logo depois da meia-noite, o numero em
+// aquecimento que NAO recebeu nenhum lead ontem tem o `warm_start` empurrado um dia pra frente: o dia
+// de hoje fica igual ao de ontem. Uma gravacao no estado por dia, pro lote todo, e nenhuma consulta
+// nova por visita de pressel. Lead = linha nova no wa_lead daquele numero no dia (sem a 'deduzido',
+// que e venda de ligacao e nao conversa chegando) - o mesmo placar do 0/5 da tela.
+//
+// NA PRIMEIRA VEZ ele corrige o passado: o dia passa a ser 1 + os dias que JA tiveram lead desde o
+// `warm_start`. Trincos em app_config: aquec_dia_retro (uma vez so) e aquec_dia_ajuste (o dia).
+function _diaMais(d, n) { return new Date(Date.parse(String(d) + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10); }
+async function _aquecDiaComLead(env) {
+  const hoje = _brDay();
+  let retroFeito = false;
+  try { retroFeito = String((await _readConfig(env, 'aquec_dia_retro')) || '') !== ''; } catch (_) { retroFeito = false; }
+  if (retroFeito) {
+    let ja = '';
+    try { ja = String((await _readConfig(env, 'aquec_dia_ajuste')) || ''); } catch (_) { ja = ''; }
+    if (ja === hoje) return;
+  }
+  const atual = await _getDashData(env);
+  const idsAq = _aquecIdsDe(atual);
+  const k8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
+  const alvos = (Array.isArray(atual && atual.chips) ? atual.chips : [])
+    .filter((c) => _chipAquecendo(c, idsAq) && /^\d{4}-\d{2}-\d{2}$/.test(String(c.warm_start || '').slice(0, 10)) && k8(c.num).length === 8);
+  const marca = async (k, v) => {
+    await _ensureConfigTable(env);
+    await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, strftime('%s','now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").bind(k, v).run();
+  };
+  if (!alvos.length) { if (!retroFeito) await marca('aquec_dia_retro', hoje); await marca('aquec_dia_ajuste', hoje); return; }
+  // OS DIAS COM LEAD de cada numero, em horario de Brasilia, de antes de hoje.
+  const hojeIni = Math.floor(Date.parse(hoje + 'T00:00:00-03:00') / 1000);
+  const desde = retroFeito ? _diaMais(hoje, -1)
+    : alvos.map((c) => String(c.warm_start).slice(0, 10)).sort()[0];
+  const desdeIni = Math.floor(Date.parse(desde + 'T00:00:00-03:00') / 1000);
+  const diasDe = {};
+  const r = await env.DB.prepare(
+    "SELECT substr(replace(num,'+',''),-8) AS k8, date(ts - 10800, 'unixepoch') AS d FROM wa_lead"
+    + " WHERE ts >= ? AND ts < ? AND num IS NOT NULL AND num <> '' AND COALESCE(src,'') <> 'deduzido' GROUP BY k8, d"
+  ).bind(desdeIni, hojeIni).all();
+  for (const x of ((r && r.results) || [])) { const k = String(x.k8 || ''); if (!k) continue; (diasDe[k] = diasDe[k] || new Set()).add(String(x.d)); }
+  // O warm_start novo de cada numero, ou nada se ele ja esta certo.
+  const novoWs = (c) => {
+    const ws = String(c.warm_start).slice(0, 10);
+    if (ws >= hoje) return '';                    // comecou hoje: nao ha dia passado pra julgar
+    const dias = diasDe[k8(c.num)] || new Set();
+    if (!retroFeito) {
+      const comLead = [...dias].filter((d) => d >= ws && d < hoje).length;
+      const certo = _diaMais(hoje, -comLead);       // dia de hoje = 1 + dias que tiveram lead
+      return certo !== ws ? certo : '';
+    }
+    const ontem = _diaMais(hoje, -1);
+    return dias.has(ontem) ? '' : _diaMais(ws, 1);  // ontem sem lead: o dia nao anda
+  };
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return; }
+    const ids2 = _aquecIdsDe(data);
+    const feitos = [];
+    for (const c of (Array.isArray(data.chips) ? data.chips : [])) {
+      if (!_chipAquecendo(c, ids2) || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.warm_start || '').slice(0, 10)) || k8(c.num).length !== 8) continue;
+      const nv = novoWs(c);
+      if (!nv) continue;
+      feitos.push(k8(c.num) + ' ' + String(c.warm_start).slice(0, 10) + '->' + nv);
+      c.warm_start = nv;
+    }
+    if (feitos.length) {
+      const newVer = (row.version || 0) + 1;
+      const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+        .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'aquec-dia', row.version).run();
+      if (!(res && res.meta && res.meta.changes > 0)) { await new Promise((rr) => setTimeout(rr, 15 * (tent + 1))); continue; }
+      try { _dashCache = null; } catch (_) {}
+      console.log('AQUEC_DIA ' + (retroFeito ? 'noite' : 'retro') + ' ' + feitos.join(', '));
+    }
+    if (!retroFeito) await marca('aquec_dia_retro', hoje);
+    await marca('aquec_dia_ajuste', hoje);
+    return;
   }
 }
 // O cron religa o numero cujo v.volta chegou. Mexe SO no v.off (igual o interruptor) e so quando ha
@@ -28297,6 +28384,7 @@ export default {
       } else if (passo === 'agenda') {
         // numero desligado "ate amanha" volta pro lugar dele na roleta (ver _presselVoltaTick)
         try { await _presselVoltaTick(env); } catch (e) { console.error('[cron] volta da roleta falhou: ' + String((e && e.message) || e)); }
+        try { await _aquecDiaComLead(env); } catch (e) { console.error('[cron] dia do aquecimento falhou: ' + String((e && e.message) || e)); }   // so anda em dia com lead (19/10/2026)
         await _agendaTick(env);   // avisa quem marcou retorno pra agora
         try { await _ldOnlineAviso(env); } catch (e) { console.error('[cron] aviso dos 14 dias falhou: ' + String((e && e.message) || e)); }   // celular do LDPlayer parado (17/10/2026)
         // O PIXEL ANDA JUNTO DA AGENDA porque os dois sao leves e os dois precisam ser frequentes.
