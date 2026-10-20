@@ -21962,7 +21962,20 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
     // TODOS os números "Em uso" do vendedor, LIGADOS OU NÃO. Não escolhe quem recebe: serve pro
     // PLACAR (ver a nota do `cv` no _presselBalancedPick). Lead que já entrou é do vendedor, e
     // continua sendo quando ele desliga o número.
+    //
+    // TODO CHIP DO VENDEDOR COM NUMERO, QUALQUER STATUS (20/10/2026). O conserto de 18/10 (abaixo)
+    // salvou o lead do numero que ganhou TAG de Banido, mas o push continuou DEPOIS do "Em uso" e o
+    // `mine` la de cima ja tira o chip com st 'banido'. Quando a Meta bane, o numero perde o "Em uso"
+    // e o placar perde ele do mesmo jeito. Medido hoje: a Meta baniu o 1970 (10:26) e o 4144 (10:50)
+    // do Kevin, os 27 leads deles sairam da conta dele, a roleta leu o Kevin como atrasado e as 11h
+    // mandou 253 cliques pra ele e 0 pro Guilherme, com o placar real 34 x 33. Fechou 133 x 105.
+    // Lead que entrou hoje e do vendedor; o status do numero agora so diz quem RECEBE daqui pra frente.
     const nksTodos = [];
+    for(const c of chips){
+      if(!c || !c.at || String(c.at)!==String(v.at) || !c.num) continue;
+      const nk = String(c.num).replace(/\D/g,'').slice(-8);
+      if(nk && !nksTodos.includes(nk)) nksTodos.push(nk);
+    }
     for(const c of mine){
       const aquec = _chipAquecendo(c, aquecIds) ? _numDoAquecimento(c) : null;
       // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
@@ -21982,8 +21995,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
       // nao pode e apagar o passado do vendedor.
       if((!aquec && !isEmUso(c)) || !c.num) continue;
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
-      if(nk) nksTodos.push(nk);
-      if(!okWa(c)) continue;                                                       // tag fora (banido, restrito, exclusivo)
+      if(!okWa(c)) continue;                                                      // tag fora (banido, restrito, exclusivo)
       if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
       // MODO ROLETA NAO EXIGE CONEXAO (11/09/2026, pedido do Bruno: "a Evolution a gente nao vai
       // utilizar mais, substitui por uma coleta padrao, como se fosse uma pressel normal").
