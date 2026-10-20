@@ -1112,6 +1112,12 @@ app.whenReady().then(async () => {
   // o "recebe agora"), vira na hora e nao desvira com leitura velha; recusa volta e diz por que.
   const chaveDe = (nk) => js2('(() => { const b = document.querySelector(".num .sw[data-nk=\'' + nk + '\']"); const l = b && b.closest(".num");'
     + ' return b ? { cls: b.className, aria: b.getAttribute("aria-checked"), tit: b.title, rot: l ? l.textContent : "" } : null })()')
+  // ── NAO LIDAS DO NUMERO QUE NAO ESTA NA TELA (20/10/2026) ─────────────────────────────────
+  const nl = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97406-0653/.test(e.textContent)); const b = l && l.querySelector(".nl"); return b ? { txt: b.textContent, tit: b.title } : null })()')
+  conta('numero aberto fora da tela mostra quantas conversas esperam', nl && nl.txt === '3' && /3 conversas/.test(nl.tit), JSON.stringify(nl))
+  const nlFechado = await js2('[...document.querySelectorAll(".num")].filter(e => !/97406-0653/.test(e.textContent) && e.querySelector(".nl")).length')
+  conta('e numero fechado nao mostra contador nenhum', nlFechado === 0, String(nlFechado))
+
   let ch = await chaveDe('1166632248')
   conta('ligado e no limite do dia: chave LARANJA', ch && /\bpausa\b/.test(ch.cls) && !/\bon\b/.test(ch.cls) && /meia-noite/.test(ch.tit), JSON.stringify(ch))
   ch = await chaveDe('1995983293')

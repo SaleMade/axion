@@ -48,7 +48,13 @@ const WPP_FALSO = `
       lidPnCache: { getPhoneNumber: function () { return null } },
       UserPrefs: { getMaybeMeUser: function () { return { user: '5515974060653', _serialized: '5515974060653@c.us' } } },
     },
-    chat: { get: function () { return null } },
+    // A VARREDURA DAS NAO LIDAS (20/10/2026) le daqui: o teste poe conversas e mensagens que o evento
+    // NUNCA disparou, que e o caso do numero aberto em segundo plano.
+    chat: {
+      get: function () { return null },
+      list: async function (o) { return (window.__naoLidas || []).map(function (c) { return { id: { _serialized: c.id }, isGroup: !!c.grupo, unreadCount: c.msgs.length } }) },
+      getMessages: async function (id) { var c = (window.__naoLidas || []).find(function (x) { return x.id === id }); return c ? c.msgs : [] },
+    },
     contact: { get: async function () { return null } },
   }
   window.__dispara = function (msg) { (ouvintes['chat.new_message'] || []).forEach(function (f) { f(msg) }) }
@@ -70,6 +76,7 @@ async function rodar() {
   const js = (c) => j.webContents.executeJavaScript(c, true)
 
   await js(WPP_FALSO)
+  await js('window.__swVarreduraMs = 700; "ok"')   // a varredura de verdade e de 20 s; aqui, rapida
   await js(fs.readFileSync(path.join(__dirname, 'ui', 'agente.js'), 'utf8'))
   await espera(2500)   // o agente liga a captura num intervalo de 2s
   conta('o agente liga a captura sozinho', (await js('typeof window.__swVistasN')) === 'number')
@@ -137,6 +144,25 @@ async function rodar() {
   const eu = JSON.parse(await js('JSON.stringify(window.__enviados)'))
   conta('o proprio numero do aparelho nunca vira o telefone do lead',
     eu.every((x) => x.phone !== '5515974060653'), JSON.stringify(eu.map((x) => x.phone)))
+
+  console.log('\nA VARREDURA DAS NAO LIDAS (numero em segundo plano)')
+  const agoraS = Math.floor(Date.now() / 1000)
+  const m = (id, extra) => msgBase(Object.assign({ id: { id: id, _serialized: 'false_5511955554444@c.us_' + id, fromMe: false }, from: '5511955554444@c.us' }, extra || {}))
+  await js('window.__enviados = []; window.__naoLidas = ' + JSON.stringify([
+    { id: '5511955554444@c.us', msgs: [m('V1', { body: 'Olá! Código de desconto "ABC123"!', t: agoraS - 60 }), m('V2', { body: 'mensagem de ontem', t: agoraS - 86400 })] },
+    { id: '120363000000000000@g.us', grupo: true, msgs: [m('V3', { body: 'grupo', from: '120363000000000000@g.us' })] },
+  ]) + '; "ok"')
+  await espera(1600)
+  const vr = JSON.parse(await js('JSON.stringify(window.__enviados)'))
+  conta('mensagem que o evento nao trouxe sai pela varredura, com o codigo',
+    vr.length === 1 && /ABC123/.test(String(vr[0].body)) && vr[0].via === 'varredura', JSON.stringify(vr.map((x) => [x.msgId, x.via])))
+  conta('a de ontem e a do grupo ficam de fora', vr.every((x) => x.msgId !== 'V2' && x.msgId !== 'V3'))
+  await espera(1600)
+  conta('e a varredura seguinte nao manda a mesma de novo', (await js('window.__enviados.length')) === 1, 'enviados=' + (await js('window.__enviados.length')))
+  await js('window.__dispara(' + JSON.stringify(m('V1', { body: 'Olá! Código de desconto "ABC123"!', t: agoraS - 60 })) + '); "ok"')
+  await espera(300)
+  conta('nem o evento atrasado da mesma mensagem', (await js('window.__enviados.length')) === 1)
+  conta('o estado conta as conversas nao lidas (fora grupo) pra lista do app', (await js('window.__swEstado().naoLidas')) === 1, String(await js('window.__swEstado().naoLidas')))
 
   try { j.destroy() } catch (_) { /* ok */ }
   console.log('\n' + ok + ' de ' + (ok + ruim) + '\n')

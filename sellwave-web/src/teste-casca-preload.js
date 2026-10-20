@@ -15,6 +15,8 @@ const ESTADO = () => ({
   // Os dois campos vem SEMPRE TRUE, como o main.js real manda desde que viraram constante.
   direcao: true, travaProxy: true, exigirBrasil: true, maxAbertos,
   abertos: ['1574060653'], barraEncolhida, painelLigado,
+  // o numero aberto (e fora da tela) tem 3 conversas esperando: a lista mostra o contador (20/10/2026)
+  naoLidas: { '1574060653': 3 },
   numeros: [
     { numero: '5511966632248', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },

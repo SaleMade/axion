@@ -1466,7 +1466,28 @@ async function despedida(nk, s) {
     return
   }
   let conectado = false
-  if (wc && !wc.isDestroyed()) conectado = await estaConectado(wc, nk)
+  if (wc && !wc.isDestroyed()) {
+    // NUMERO PAREADO AGORA E AINDA SINCRONIZANDO NAO SOBE (20/10/2026, o 8847 da Barbara). O Bruno
+    // pareou o 8847 as 01:02 e fechou 40 s depois, no meio da primeira sincronizacao: a copia subiu
+    // e, aberta no PC dela de manha, o WhatsApp pediu pra conectar de novo (REQUIRE_AUTH). Numero
+    // que ainda nao ficou "pronto" nesta abertura espera ate 2 min a sincronizacao acabar antes de
+    // ser copiado; se nao acabar, fica sem subir - melhor a nuvem sem copia do que com uma quebrada.
+    let r = await lerConexao(wc)
+    if (r && r.st === 'sincronizando' && !s.jaPronto) {
+      marcaNuvem(nk, 'enviando', 'Esperando o WhatsApp terminar de sincronizar pra salvar...')
+      const ate = Date.now() + 120000
+      while (Date.now() < ate && r && r.st === 'sincronizando' && !wc.isDestroyed()) {
+        await espera(3000)
+        r = wc.isDestroyed() ? null : await lerConexao(wc)
+      }
+      if (!r || r.st !== 'pronto') {
+        anota('[nuvem] ' + nk + ' fechado no meio da primeira sincronizacao: nao subo uma copia pela metade')
+        marcaNuvem(nk, 'erro', 'Fechou antes de terminar de sincronizar: abra de novo e espere ficar pronto pra salvar')
+        r = null
+      }
+    }
+    conectado = conectadoDe(r, nk, false)
+  }
   salvaSessao(particaoDe(nk))
   try { if (wc && !wc.isDestroyed()) wc.close() } catch (_) { /* ok */ }
   if (conectado && config.token) {
@@ -2195,6 +2216,8 @@ async function sinalDeUm(s, url) {
   // sinal que alimenta a roleta: misturar os dois poria numero caido de volta na distribuicao, que
   // e o oposto do que isto serve.
   try { await reportaConexao(s, e) } catch (_) { /* nunca atrapalha o sinal */ }
+  // AS NAO LIDAS deste numero, pra lista do app mostrar do lado dele (o agente conta na varredura).
+  if (e && typeof e.naoLidas === 'number') s.naoLidas = e.naoLidas
   if (!e || !e.eu || !e.autenticado) return
   try {
     const r = await fetch(url, {
@@ -2221,6 +2244,7 @@ async function reportaConexao(s, e) {
   if (st === s.connUltimo) return          // nada mudou
   const antes = s.connUltimo || ''
   s.connUltimo = st
+  if (st === 'pronto') s.jaPronto = true   // ja ficou de pe nesta abertura (ver despedida)
   const ruim = (st === 'caiu' || st === 'bloqueado' || st === 'conflito' || st === 'proxy')
   const espontaneo = ruim && !foiAcaoDeGente(s.nk)
   // O LOG LOCAL GUARDA O CRU, sempre. E dele que vai sair a resposta de qual sinal um ban de
@@ -2356,6 +2380,8 @@ ipcMain.handle('sw:estado', () => ({
   // O que a nuvem esta fazendo com cada numero AGORA (enviando, baixando, salvo, erro). O que ja esta
   // salvo de antes vem do servidor, no campo `nuvem` de cada numero.
   nuvem: Object.fromEntries(nuvemEstado),
+  // Conversas com mensagem nao lida em cada numero ABERTO (o agente conta, o sinal de minuto traz).
+  naoLidas: Object.fromEntries([...abertos.values()].map((x) => [x.nk, Number(x.naoLidas) || 0])),
   versao: app.getVersion(),
   // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
   versaoPublicada,
@@ -3593,6 +3619,8 @@ app.whenReady().then(() => {
         await wc.executeJavaScript(fs.readFileSync(CAMINHO_AGENTE, 'utf8'), true)
         await new Promise((r) => setTimeout(r, 1200))
         out.agente = !!(await wc.executeJavaScript('typeof window.__swEstado === "function" && typeof window.__swManda === "function" && typeof window.__swIndica === "function"'))
+        // a varredura das nao lidas (agente.js) usa estas duas do motor: sem elas ela fica muda
+        out.varredura = !!(await wc.executeJavaScript('!!(window.WPP && window.WPP.chat && typeof window.WPP.chat.list === "function" && typeof window.WPP.chat.getMessages === "function")'))
         out.estado = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null')
       } catch (e) { out.painelErro = String((e && e.message) || e).slice(0, 110) }
       return out

@@ -383,6 +383,10 @@
       // POR QUE NAO HA CONVERSA: o painel precisa dizer "grupo" em vez de "abra uma conversa".
       grupo: (!chatId && ultimoRecusado) ? 1 : 0,
       capturadas: window.__swVistasN || 0,
+      // Conversas com mensagem nao lida (contada pela varredura): e o que a lista do app mostra do
+      // lado do numero, pra quem esta noutro numero saber que tem gente esperando aqui.
+      naoLidas: window.__swNaoLidas || 0,
+      varridas: window.__swVarridas || 0,
     }
   }
 
@@ -551,6 +555,8 @@
       var antiga = ts && (Date.now() / 1000 - ts) > 21600 ? 1 : 0
       var ev = {
         msgId: id,
+        // Por onde chegou: vazio = evento do motor; 'varredura' = a rede de seguranca das nao lidas.
+        via: String((msg && msg.__swVia) || ''),
         selfNumber: numeroDoAparelho(),
         phone: pr.digits,
         lid: pr.isLid ? 1 : 0,
@@ -639,6 +645,52 @@
       } catch (_) { ok(null) }
     })
   }
+
+  // A VARREDURA DAS NAO LIDAS (20/10/2026, primeiro dia do time no SellWave Web). Medido em
+  // producao: o numero aberto em SEGUNDO PLANO (o que o vendedor nao esta olhando) nao capturou
+  // nada. O 3293 do Guilherme ficou aberto das 07:54 em diante e o app viu 0 das 75 mensagens que o
+  // Datacrazy viu no mesmo numero; o 5847 do Kevin levou 110 cliques sem uma mensagem capturada. Os
+  // numeros da frente capturaram normal. O evento `chat.new_message` simplesmente nao veio pra quem
+  // estava escondido, e sem o Datacrazy esses leads ficam sem rastreio.
+  //
+  // Entao, de 20 em 20 s, alem do evento, o agente olha as conversas com mensagem NAO LIDA e manda o
+  // que e recente (30 min) e ainda nao foi visto. A deduplicacao por id (`vistas`) faz o evento e a
+  // varredura nunca mandarem a mesma mensagem duas vezes. O que veio por aqui sai marcado `via`, pra
+  // medir quanto o evento estava perdendo.
+  var VARRE_MS = Number(window.__swVarreduraMs) || 20000
+  window.__swNaoLidas = 0
+  window.__swVarridas = 0
+  function varreNaoLidas() {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) return
+      var agoraS = Date.now() / 1000
+      Promise.resolve(W.chat.list({ onlyWithUnreadMessage: true })).then(function (chats) {
+        chats = Array.isArray(chats) ? chats : []
+        window.__swNaoLidas = chats.filter(function (c) { return c && !c.isGroup }).length
+        chats.slice(0, 25).forEach(function (c) {
+          try {
+            if (!c || c.isGroup) return
+            var id = c.id && (c.id._serialized || c.id)
+            if (!id) return
+            var n = Math.min(20, Math.max(3, Number(c.unreadCount) || 3))
+            Promise.resolve(W.chat.getMessages(id, { count: n })).then(function (msgs) {
+              (Array.isArray(msgs) ? msgs : []).forEach(function (m) {
+                var t = Number(m && (m.t || m.timestamp)) || 0
+                if (!t || agoraS - t > 1800) return
+                var mid = (m.id && (m.id.id || (m.id._serialized ? String(m.id._serialized).split('_').pop() : ''))) || ''
+                if (!mid || vistas[mid] || segurados[mid]) return
+                window.__swVarridas++
+                m.__swVia = 'varredura'
+                capturar(m)
+              })
+            }).catch(function () { /* uma conversa que falha nao para as outras */ })
+          } catch (_) { /* ok */ }
+        })
+      }).catch(function () { /* motor sem a lista: o evento continua valendo */ })
+    } catch (_) { /* a varredura nunca pode derrubar a pagina */ }
+  }
+  setInterval(varreNaoLidas, VARRE_MS)
 
   var ligado = null
   setInterval(function () {

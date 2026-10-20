@@ -392,6 +392,13 @@ function linha(n) {
   const nuvem = nvCls
     ? '<span class="nv ' + nvCls + '" title="' + esc(nvTit) + '">' + NUVEM + '</span>'
     : ''
+  // GENTE ESPERANDO NESTE NUMERO (20/10/2026). Com os numeros abertos em segundo plano, o vendedor
+  // conversa num e os leads dos outros chegam sem ninguem ver. O contador e o das conversas com
+  // mensagem nao lida, contado no proprio WhatsApp do numero; no numero da tela ele nao aparece.
+  const nl = aberto && nk !== ativo ? (Number((estado.naoLidas || {})[nk]) || 0) : 0
+  const naoLidas = nl
+    ? '<span class="nl" title="' + nl + (nl === 1 ? ' conversa com mensagem não lida' : ' conversas com mensagem não lida') + ' neste número">' + (nl > 99 ? '99+' : nl) + '</span>'
+    : ''
   const alerta = semMotor.has(nk)
     ? '<span class="alerta" title="O WhatsApp não carregou o motor aqui. Este número não está recebendo lead novo. Feche e abra de novo.">'
       + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">'
@@ -462,7 +469,7 @@ function linha(n) {
     + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + explicaAquec + (n.status ? ' · ' + n.status : '')) + '">'
     + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + fogo + idx + zap + nuvem + trancado + alerta + conta + '</span></span>'
+    + '<span class="sub">' + fogo + idx + zap + naoLidas + nuvem + trancado + alerta + conta + '</span></span>'
     + fecha + chave + '</button>'
 }
 // ───────────────────────────────────────────────────────────── palco

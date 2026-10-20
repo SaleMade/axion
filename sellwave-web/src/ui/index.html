@@ -181,6 +181,9 @@
   .num .sub .alerta { color: var(--ambar); display: inline-flex; }
   .num .sub .trancado { color: #f0506a; display: inline-flex; }
   /* A SESSAO NA NUVEM (19/10/2026): verde salva, pulsando enquanto sobe ou desce, vermelha se falhou. */
+  /* NAO LIDAS do numero que nao esta na tela: a bolinha verde do proprio WhatsApp, pequena. */
+  .num .sub .nl { display: inline-grid; place-items: center; flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 99px; background: var(--verde); color: #04140b; font-size: 9.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
   .num .sub .nv { display: inline-flex; flex: 0 0 auto; }
   .num .sub .nv.ok { color: var(--verde); opacity: .85; }
   .num .sub .nv.ocupado { color: var(--verde); animation: pulsa 1.1s ease-in-out infinite; }
