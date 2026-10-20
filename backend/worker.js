@@ -20770,7 +20770,20 @@ async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgT
     // a métrica do gestor de tráfego. Mensagem com mais de 15min de idade é histórico, não lead.
     const _ts = Number(msgTs) || 0;
     const _teto = Number(maxIdade) > 0 ? Number(maxIdade) : 900;
-    if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > _teto) return;
+    if (_ts > 0 && (Math.floor(Date.now() / 1000) - _ts) > _teto) {
+      // O CODIGO EXATO VENCE A IDADE (20/10/2026, SellWave Web sem o Datacrazy). Com o app como unica
+      // captura, o lead que escreve com o numero FECHADO (PC desligou, app caiu) so e visto quando o
+      // numero abre de novo, e ai a mensagem chega com horas de idade: era descartada aqui, e o lead
+      // ficava sem rastreio e sem InitiateCheckout. O que esta guarda evita (o historico inteiro
+      // virando "lead novo" ao reconectar) nao tem codigo de desconto NAO REIVINDICADO de um clique de
+      // ontem pra hoje - entao, com esse codigo, a mensagem e o lead de verdade, so que atrasado.
+      const _idade = Math.floor(Date.now() / 1000) - _ts;
+      const _cm = _idade <= 86400 ? String(body || '').match(/desconto[^A-Za-z0-9]{0,4}([A-Za-z0-9]{4,12})/i) : null;
+      let _pend = null;
+      if (_cm) { try { _pend = await env.DB.prepare('SELECT id FROM tt_pending WHERE code = ? AND COALESCE(claimed,0) = 0 AND ts > ? LIMIT 1').bind(_cm[1], Math.floor(Date.now() / 1000) - 86400).first(); } catch (_) { _pend = null; } }
+      if (!_pend) return;
+      console.log('LEAD_ATRASADO idade=' + _idade + 's code=' + _cm[1] + ' num=' + String(selfNum || '').slice(-4));
+    }
     if (await _botEhDoBot(env, instance, phone, selfNum)) return;   // bot do time (12/10/2026): resposta ao bot nao e lead
     if (!_leadTablesOk) {   // DDL uma vez por isolate (era causa do 1102 no lote de captura)
       await env.DB.prepare('CREATE TABLE IF NOT EXISTS wa_lead (phone TEXT PRIMARY KEY, pid TEXT, ttclid TEXT, ts INTEGER)').run();
