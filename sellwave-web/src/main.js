@@ -1313,6 +1313,22 @@ async function baixaSessao(nk, meta) {
     try { fs.rmSync(dirNovo, { recursive: true, force: true }) } catch (_) { /* fica pro lixo */ }
     throw e
   }
+  // O CACHE DO WHATSAPP VEM JUNTO DA PASTA VELHA (20/10/2026, "o WhatsApp esta demorando muito pra
+  // carregar"). Particao nova nasce sem cache, sem Service Worker e sem codigo compilado, entao o
+  // WhatsApp baixava o aplicativo inteiro de novo pela proxy (medido: 1 a 2 s so pra abrir cada
+  // conexao, 5 a 13 Mbit/s). Isso nao e sessao - e o mesmo site pra qualquer numero -, entao copiar
+  // do disco desta maquina e seguro. So quando a pasta velha esta PARADA: com a particao viva neste
+  // app (o Chromium segura o LevelDB dela), a copia pegaria arquivo no meio de uma gravacao.
+  try {
+    let viva = false
+    try { fs.readFileSync(path.join(dirVelho, 'Local Storage', 'leveldb', 'LOCK')) } catch (e) { viva = !!(e && e.code === 'EBUSY') }
+    if (!viva && fs.existsSync(dirVelho)) {
+      for (const p of ['Cache', 'Code Cache', 'Service Worker']) {
+        const de = path.join(dirVelho, p)
+        if (fs.existsSync(de)) fs.cpSync(de, path.join(dirNovo, p), { recursive: true, force: false, errorOnExist: false, filter: (src) => path.basename(src) !== 'LOCK' })
+      }
+    }
+  } catch (e) { anota('[nuvem] ' + nk + ' nao copiou o cache do WhatsApp (abre igual, so mais devagar): ' + ((e && e.message) || e)) }
   config.sessoes = config.sessoes || {}
   config.sessoes[nk] = { ver: Number(meta.ver) || 0, gen: genNova, em: Date.now() }
   if (fs.existsSync(dirVelho)) config.lixo = [...(Array.isArray(config.lixo) ? config.lixo : []), { nome: path.basename(dirVelho), em: Date.now() }]
@@ -1425,6 +1441,57 @@ async function despedida(nk, s) {
 // espera o WhatsApp dizer que esta conectado e fecha, e o fechamento normal manda. Numero na tela do
 // QR fecha sem mandar nada (ver despedida). Abrir de verdade e o unico jeito de saber se a sessao
 // presta: os .ldb do LevelDB sao comprimidos, e procurar "conectado" no arquivo e adivinhar.
+// OS NUMEROS DO VENDEDOR ABREM SOZINHOS AO INICIAR (20/10/2026, pedido do Bruno: "eu quero que o
+// SellWave Web esteja 100%").
+//
+// Sem o Datacrazy, numero da casa so recebe lead com o app ABERTO nele (a roleta exige o sinal do
+// app, ver roleta-casa-sem-api): o vendedor que abre so o numero em que esta conversando deixa os
+// outros fora da fila o dia inteiro, sem saber. E cada WhatsApp leva de 30 s a mais de 1 min pra
+// carregar pela proxy na primeira abertura do dia - medido em 20/10 no PC do Bruno, com tres
+// numeros abrindo juntos e travando os tres.
+//
+// Entao, ao entrar, o app abre ESCONDIDO, UM DE CADA VEZ, cada numero do vendedor que pode receber
+// (Em uso ou aquecimento, interruptor ligado) e que tem sessao salva (aqui ou na nuvem) - numero que
+// pediria QR nao adianta abrir escondido. Clicar nele depois so traz pra frente, ja carregado.
+// So pra VENDEDOR: a direcao ve os numeros da operacao inteira e abriria todos.
+let abriuAoIniciar = false
+function quaisAbrirAoIniciar(lista) {
+  return (Array.isArray(lista) ? lista : []).filter((n) => {
+    if (!n || !n.numero) return false
+    if (n.apto === false || n.ligado === false) return false
+    if (n.uso && !n.uso.meu) return false                       // esta com outra maquina
+    const nk = numKey(n.numero)
+    if (!nk || abertos.has(nk) || abrindo.has(nk) || despedidas.has(nk)) return false
+    const naNuvem = !!(n.nuvem && Number(n.nuvem.ver) > 0)
+    return naNuvem || temSessaoNoDisco(pastaDaParticao(nk, geracaoDe(nk)))
+  })
+}
+async function esperaCarregar(nk, ms) {
+  const ate = Date.now() + ms
+  while (Date.now() < ate) {
+    const s = abertos.get(nk)
+    if (!s || s.carregado) return
+    await espera(500)
+  }
+}
+async function abreOsMeusAoIniciar() {
+  if (abriuAoIniciar || !config.token || EH_TESTE || config.direcao || comoId) return
+  abriuAoIniciar = true
+  const fila = quaisAbrirAoIniciar(config.numeros)
+  if (!fila.length) return
+  anota('[inicio] abrindo ' + fila.length + ' numero(s) do vendedor em segundo plano')
+  for (const n of fila) {
+    const nk = numKey(n.numero)
+    if (abertos.has(nk) || abrindo.has(nk)) continue           // ele clicou nesse enquanto o anterior abria
+    const teto = Math.max(1 + destacados.size, Number(config.maxAbertos) || 6)
+    if (abertos.size + 1 > teto) break                         // sem folga: nao fecha o de ninguem
+    const r = await abreNumero(n.numero, { fundo: true }).catch((e) => ({ ok: false, erro: String((e && e.message) || e) }))
+    if (!r || !r.ok) { anota('[inicio] ' + nk + ' nao abriu: ' + ((r && r.erro) || '?')); continue }
+    // UM DE CADA VEZ: as proxies sao lentas e quatro WhatsApps carregando juntos travam os quatro.
+    await esperaCarregar(nk, 40000)
+  }
+}
+
 let passadaRodando = false
 let ultimaPassada = 0
 async function sobeAsAntigas() {
@@ -2155,6 +2222,10 @@ async function buscaNumeros() {
     if (!comoId && Date.now() - ultimaPassada > 30 * 60000) {
       ultimaPassada = Date.now()
       setTimeout(() => { sobeAsAntigas().catch((e) => anota('[nuvem] passada estourou: ' + ((e && e.stack) || e))) }, 15000)
+    }
+    // OS NUMEROS DO VENDEDOR, uma vez por execucao (ver abreOsMeusAoIniciar).
+    if (!abriuAoIniciar && !comoId && !config.direcao) {
+      setTimeout(() => { abreOsMeusAoIniciar().catch((e) => anota('[inicio] estourou: ' + ((e && e.stack) || e))) }, 3000)
     }
     // APROVEITA A VOLTA PRA BUSCAR O ROTEIRO TAMBEM (16/10/2026, pergunta do Bruno: "quando eu mexo
     // no Sale Chat, queria que atualizasse aqui").
