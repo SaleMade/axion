@@ -22413,10 +22413,62 @@ function _pickRecent(k, win){ if(!k) return 0; const t=Math.floor(Date.now()/100
 // empate. Receber muita mensagem também não bane: a própria Meta documenta isso ("receiving many
 // messages at once will not result in an account ban"); o que bane é ENVIO em massa.
 // ═══════════════════════════════════════════════════════════════════════════════════════════
-let _cliqueCache = null, _cliqueT = 0, _cliqueKey = 0;   // ver _cliqueDiaCache
-async function _presselBalancedPick(env, id, sellers){
+let _cliqueCache = null, _cliqueT = 0, _cliqueKey = 0;   // ver _cliqueDiaPorNumero
+// CLIQUE DO DIA POR NUMERO, com o cache de 15 s por isolate. Era uma funcao de dentro da roleta; saiu
+// pra poder ser disparada junto com a leitura do estado (ver _roletaAdianta). Mesma consulta, mesmo cache.
+async function _cliqueDiaPorNumero(env, dayStart) {
+  const _ag = Date.now();
+  if (_cliqueCache && _cliqueKey === dayStart && (_ag - _cliqueT) < 15000) return _cliqueCache;
+  let _r;
+  try {
+    _r = await env.DB.prepare(
+      `SELECT num_key, COUNT(*) AS dia
+         FROM tt_pending INDEXED BY idx_ttp_ts_num
+        WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
+        GROUP BY num_key`
+    ).bind(dayStart).all();
+  } catch (e) {
+    if (/no such index/i.test(String((e && e.message) || e))) {
+      try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ts_num ON tt_pending(ts, num_key)').run(); } catch (_) {}
+    }
+    _r = await env.DB.prepare(
+      `SELECT num_key, COUNT(*) AS dia
+         FROM tt_pending
+        WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
+        GROUP BY num_key`
+    ).bind(dayStart).all();
+  }
+  _cliqueCache = _r; _cliqueT = _ag; _cliqueKey = dayStart;
+  return _r;
+}
+// AS LEITURAS DA ROLETA SAEM JUNTAS, NO COMECO DA PAGINA (20/10/2026). O Bruno trouxe o PageSpeed da
+// pressel reprovado e liberou mexer aqui ("nao chega mais de 300 leads no dia"). Medido no servidor,
+// com trafego real: a /p/<id> levava 634 ms no meio e 2,3 s nos 10% piores, com 18 ms de CPU. O resto
+// era espera do banco EM FILA: estado + conexoes, depois numeros mudos, depois lead por numero, depois
+// clique do dia, depois o codigo do ttclid, e so entao a gravacao da visita. As quatro leituras do
+// meio NAO dependem da pressel nem do vendedor (sao contagens do dia, por numero), entao saem agora
+// junto com o estado e a conexao; a roleta so le o resultado. A regra de escolha NAO mudou: sao as
+// mesmas funcoes, com os mesmos caches por isolate (mudos 5 min, lead 30 s, clique 15 s). O que muda e
+// so a ORDEM em que as idas ao banco acontecem. Cada promessa ganha um .catch vazio de lado pra nao
+// virar "erro nao tratado" quando a pagina sai antes de usar (pressel offline, um numero so); quem
+// usa da `await` nela dentro do mesmo try de antes e recebe o mesmo erro, entao a queda segue igual.
+function _roletaAdianta(env, dayStart) {
+  const _lado = (p) => { try { p.catch(() => {}); } catch (_) {} return p; };
+  const leadsHoje = _lado(_leadsHojePorNumero(env, dayStart));
+  return {
+    dayStart,
+    mudos: _lado(_numerosMudos(env)),
+    leadsHoje,
+    // os "novos" saem do MESMO cache do lead do dia: depois que ele chegou, nao e outra ida ao banco
+    leadsNovos: _lado(leadsHoje.then(() => _leadsNovosHojePorNumero(env, dayStart))),
+    clique: _lado(_cliqueDiaPorNumero(env, dayStart)),
+  };
+}
+async function _presselBalancedPick(env, id, sellers, pre){
   const now=Math.floor(Date.now()/1000);
   const dayStart=Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000);
+  // leituras adiantadas pela pagina (ver _roletaAdianta); so valem se forem do mesmo dia
+  const _pre = (pre && pre.dayStart === dayStart) ? pre : null;
   const k8=n=>String(n||'').replace(/\D/g,'').slice(-8);
 
   // 1) Candidatos: TODO número ligado (principal e complementar valem igual).
@@ -22444,7 +22496,7 @@ async function _presselBalancedPick(env, id, sellers){
   let _mudosFora = [];   // os que a guarda do mudo tirou: voltam se o teto zerar a lista (ver 2c)
   if(avail.length>1){
     try{
-      const mudos = await _numerosMudos(env);
+      const mudos = await ((_pre && _pre.mudos) || _numerosMudos(env));
       // NUMERO EM MODO ROLETA NAO ENTRA NESTA CONTA (11/09/2026). A regra mede mensagem RECEBIDA pelo
       // numero, e numero de roleta nao tem captura nenhuma: pra dash ele e sempre mudo, por
       // definicao. Sem esta excecao, MUDO_VISITAS visitas depois ele seria expulso da roleta - o
@@ -22472,7 +22524,7 @@ async function _presselBalancedPick(env, id, sellers){
   let _foraLimite = [];
   if(avail.some(u => u.dist === 'limite')){
     try{
-      const lh = await _leadsNovosHojePorNumero(env, dayStart);
+      const lh = await ((_pre && _pre.leadsNovos) || _leadsNovosHojePorNumero(env, dayStart));
       let r = _aplicaFilaLimite(avail, lh, _brDay());
       // MUDO + TETO NAO PODEM ESVAZIAR A ROLETA JUNTOS (17/10/2026, 364 cliques sem numero): se o teto
       // zerou a lista e a guarda do mudo tinha tirado alguem, ele volta e a fila e refeita com ele.
@@ -22517,41 +22569,10 @@ async function _presselBalancedPick(env, id, sellers){
     // A REDE: se o indice ainda nao existir (banco que nao rodou o init), o INDEXED BY da erro de
     // 'no such index' - ai cai na consulta antiga, que e correta, so mais cara, e tenta criar o
     // indice pra proxima vez. A roleta nunca fica sem placar por causa disto.
-    const _cliqueDia = async () => {
-      try {
-        return await env.DB.prepare(
-          `SELECT num_key, COUNT(*) AS dia
-             FROM tt_pending INDEXED BY idx_ttp_ts_num
-            WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
-            GROUP BY num_key`
-        ).bind(dayStart).all();
-      } catch (e) {
-        if (/no such index/i.test(String((e && e.message) || e))) {
-          try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_ttp_ts_num ON tt_pending(ts, num_key)').run(); } catch (_) {}
-        }
-        return await env.DB.prepare(
-          `SELECT num_key, COUNT(*) AS dia
-             FROM tt_pending
-            WHERE ts >= ? AND num_key IS NOT NULL AND num_key<>''
-            GROUP BY num_key`
-        ).bind(dayStart).all();
-      }
-    };
-    // 15 SEGUNDOS DE CACHE (14/10/2026). Esta contagem le TODA visita do dia (22 mil linhas as 16h de
-    // 14/10) e rodava a cada clique de anuncio: 211 milhoes de linhas lidas em 24h, 58 por cento de
-    // tudo que o banco leu. O clique e so o desempate (quem manda e o lead, que ja vinha de um cache de
-    // 30s), e o que esta instancia acabou de mandar entra pelo _pickRecent logo abaixo, entao a
-    // distribuicao continua a mesma.
-    const _cliqueDiaCache = async () => {
-      const _ag = Date.now();
-      if (_cliqueCache && _cliqueKey === dayStart && (_ag - _cliqueT) < 15000) return _cliqueCache;
-      const _r = await _cliqueDia();
-      _cliqueCache = _r; _cliqueT = _ag; _cliqueKey = dayStart;
-      return _r;
-    };
+    // clique do dia e lead do dia: os dois ja podem ter saido junto com o estado (ver _roletaAdianta)
     const [r, lh] = await Promise.all([
-      _cliqueDiaCache(),
-      _leadsHojePorNumero(env, dayStart),
+      (_pre && _pre.clique) || _cliqueDiaPorNumero(env, dayStart),
+      (_pre && _pre.leadsHoje) || _leadsHojePorNumero(env, dayStart),
     ]);
     (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return; hoje[k]=Number(x.dia)||0; });
     conv=lh||{};
@@ -26419,6 +26440,15 @@ async function _presselEnsure(env){
   }catch(_){ /* nao trava a pagina: se o esquema falhar, o proximo acesso tenta de novo */ }
 }
 
+// O ttclid desta visita (a busca, ou o cookie do nosso dominio), igual ao que o handlePresselPublic
+// calcula mais abaixo. So serve pra adiantar a leitura do codigo: la embaixo ele confere se bateu.
+function _ttclidDaRequisicao(req) {
+  try {
+    const m = String(req.headers.get('cookie') || '').match(/(?:^|;\s*)ttclid=([^;]+)/);
+    const ck = m ? _ttclidLimpo(decodeURIComponent(m[1]).slice(0, 400)) : '';
+    return _ttclidDaBusca(new URL(req.url).searchParams) || ck;
+  } catch (_) { return ''; }
+}
 async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // CONTADOR NAO SEGURA A PAGINA. Cada gravacao no D1 custa ~200ms de rede, e o caminho do clique
   // pago fazia sete delas em fila (visita, clique pendente, views, roleta) antes de mandar o HTML.
@@ -26436,6 +26466,12 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   depois(_presselEnsure(env));
   // AS DUAS LEITURAS DE ABERTURA VAO JUNTAS. Sao independentes (uma le o blob, a outra a conexao dos
   // numeros) e estavam em fila, custando uma ida a mais em todo clique.
+  // AS LEITURAS DA ROLETA E O CODIGO DO TTCLID VAO JUNTO (20/10/2026, ver _roletaAdianta): nenhuma
+  // depende da pressel, entao nao precisam esperar o estado chegar.
+  const _roletaPre = _roletaAdianta(env, Math.floor(new Date(_brDay()+'T00:00:00-03:00').getTime()/1000));
+  const _ttcCedo = _ttclidDaRequisicao(req);
+  const _exCedo = _ttcCedo ? env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(_ttcCedo).first() : null;
+  if (_exCedo) _exCedo.catch(() => {});
   const [data, liveSetInicial] = await Promise.all([
     _getDashData(env),   // cacheado: era parseado (1.3MB) a cada clique de anúncio
     _presselLiveSet(env),
@@ -26459,7 +26495,7 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
   // visitante recebia "Indisponível no momento". Sem número, a oferta continua na tela e só o
   // botão do WhatsApp fica inerte (não leva a lugar nenhum) até alguém conectar.
-  const pick = sellers.length ? await _presselBalancedPick(env, id, sellers) : null;
+  const pick = sellers.length ? await _presselBalancedPick(env, id, sellers, _roletaPre) : null;
   // `?dev=1` NAO E VISITA. O painel de disparo manual abre a pressel de verdade, entao sem esta
   // trava cada conferida entraria como acesso e como linha de tt_pending: a conversao da pressel
   // (lead / acesso) cairia por causa do proprio teste, que e o numero que o Bruno usa pra decidir
@@ -26543,7 +26579,8 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // perde-se só o pixel — a PRESSEL continua rastreada. A 1ª letra do código é a pressel.
   try{  // gera/reusa um CÓDIGO por clique (vai no texto do WhatsApp p/ atribuição EXATA); dedup por ttclid
     // (esquema garantido no _presselEnsure, no comeco do handler)
-    const ex = ttclid ? await env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first() : null;
+    // a mesma leitura de sempre; se o ttclid e o mesmo do comeco, ela ja saiu la (ver _roletaAdianta)
+    const ex = ttclid ? await ((_exCedo && ttclid === _ttcCedo) ? _exCedo : env.DB.prepare('SELECT code FROM tt_pending WHERE ttclid=? LIMIT 1').bind(ttclid).first()) : null;
     if(ex){ leadCode = ex.code || ''; }
     else {
       leadCode = _genLeadCode(id);

@@ -35,6 +35,7 @@ const roda = new AsyncFunction('avail', 'mudosFake', 'lhFake', `
   const _leadsNovosHojePorNumero = async () => lhFake;
   const _brDay = () => '2026-10-17';
   const env = {}, dayStart = 0, id = 12;
+  const _pre = null;   // a pagina adianta as leituras (_roletaAdianta); aqui o teste passa as falsas direto
   const console = { log() {} };
   ${helpers}
   ${bloco}
