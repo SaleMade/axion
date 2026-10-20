@@ -11526,6 +11526,7 @@ async function handleSwWeb(req, env, path) {
     // dentro das entradas do dir e de outro atendente). Olhando so os 8 digitos, um orfao alheio
     // marcaria como desligado um numero que esta ligado.
     const desligados = new Set();
+    const voltaDe = {};   // 'at:k8' -> 'AAAA-MM-DD' de quem foi desligado so ate a meia-noite
     const marca = (at, k8) => desligados.add(String(at) + ':' + String(k8));
     for (const p of (Array.isArray(data && data.pressels) ? data.pressels : [])) {
       for (const v of (Array.isArray(p && p.vendedores) ? p.vendedores : [])) {
@@ -11535,6 +11536,8 @@ async function handleSwWeb(req, env, path) {
           for (const c of chips) if (String(c.at || '') === String(v.at)) marca(v.at, _swwebK8(c.num));
         }
         for (const k of Object.keys(v.off || {})) if (v.off[k]) marca(v.at, k);
+        // DESLIGADO SO ATE A MEIA-NOITE (o relogio da Chegada de leads): o app pinta laranja, igual a dash.
+        for (const k of Object.keys(v.off || {})) if (v.off[k] && v.volta && v.volta[k]) voltaDe[String(v.at) + ':' + String(k)] = String(v.volta[k]);
       }
     }
     // LEAD DE HOJE POR NUMERO: e o mesmo placar que a roleta usa pra respeitar o teto. O vendedor
@@ -11698,6 +11701,13 @@ async function handleSwWeb(req, env, path) {
         // `_servConnOk` tem fail-open proprio: sem liveSet nenhum ele aprova, pra uma falha de
         // leitura nao apagar a operacao inteira da tela.
         vivo: _chipVivo(liveSet, c, 'ax_' + String(c.at || '')),
+        // A POSICAO DO INTERRUPTOR, sozinha (19/10/2026). O `roleta` acima e "recebe agora" e inclui a
+        // conexao: com o app fechado ele e falso mesmo ligado, e a chave do app que desenhava ele
+        // voltava pra desligado sozinha depois do clique ("clico pra ligar e ele nao liga"). A chave
+        // desenha ESTE campo, que e o que a pessoa escolheu; o porque de nao receber vai no rotulo.
+        ligado: !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num)),
+        // Desligado so ate a meia-noite: o dia em que o cron religa. Vazio = desligado de vez (ou ligado).
+        volta: voltaDe[String(c.at || '') + ':' + _swwebK8(c.num)] || '',
         lim_dia: Number(c.lim_dia) || 0,
         leads_hoje: Number(lh[k8]) || 0,
         // 'limite' = este numero esta numa fila; '' = roleta normal, sem teto.
