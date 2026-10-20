@@ -55,6 +55,8 @@ const SETA_FORA = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" s
 // maquina e nao herda a cor do texto.
 const FOGO = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
   + '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>'
+// A nuvem da sessao salva (lucide cloud), do tamanho do icone do WhatsApp.
+const NUVEM = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>'
 const ZAP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.1-.2 0-.4.1-.5l.5-.6.2-.4v-.4l-.7-1.7c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2c0 1.3.9 2.5 1 2.7.2.2 1.9 2.9 4.6 4 .6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.2.2-.6.2-1 .1-1.1l-.3-.2Z"/></svg>'
 
 // ───────────────────────────────────────────────────────────── barra lateral
@@ -364,6 +366,19 @@ function linha(n) {
       + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">'
       + '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>'
     : ''
+  // A NUVEM (19/10/2026): a sessao deste numero esta salva e abre ja conectada em qualquer computador.
+  // Verde = salva; pulsando = subindo ou descendo agora; vermelha = a ultima tentativa falhou. Sem
+  // sessao salva nao aparece nada, pra lista nao virar um painel de icones.
+  const nv = (estado.nuvem || {})[nk]
+  const salva = n.nuvem && Number(n.nuvem.ver) > 0
+  const nvCls = nv && (nv.st === 'enviando' || nv.st === 'baixando') ? 'ocupado' : (nv && nv.st === 'erro' ? 'erro' : (salva || (nv && nv.st === 'salvo') ? 'ok' : ''))
+  const nvTit = nvCls === 'ok'
+    ? 'Sessão salva na nuvem' + (salva && n.nuvem.ts ? ' em ' + new Date(n.nuvem.ts * 1000).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '')
+      + (salva && n.nuvem.nome ? ' por ' + n.nuvem.nome : '') + '. Abre já conectado em qualquer computador.'
+    : String((nv && nv.txt) || '')
+  const nuvem = nvCls
+    ? '<span class="nv ' + nvCls + '" title="' + esc(nvTit) + '">' + NUVEM + '</span>'
+    : ''
   const alerta = semMotor.has(nk)
     ? '<span class="alerta" title="O WhatsApp não carregou o motor aqui. Este número não está recebendo lead novo. Feche e abra de novo.">'
       + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">'
@@ -416,7 +431,7 @@ function linha(n) {
     + esc(bonito(n.numero) + ' · ' + fraseEstado(n) + explicaAquec + (n.status ? ' · ' + n.status : '')) + '">'
     + sinal
     + '<span class="corpo"><span class="fone">' + esc(bonito(n.numero)) + '</span>'
-    + '<span class="sub">' + fogo + idx + zap + trancado + alerta + conta + '</span></span>'
+    + '<span class="sub">' + fogo + idx + zap + nuvem + trancado + alerta + conta + '</span></span>'
     + fecha + chave + '</button>'
 }
 // ───────────────────────────────────────────────────────────── palco
@@ -1130,6 +1145,19 @@ window.sw.ao('sw:destacado', async (d) => {
 })
 window.sw.ao('sw:devolvido', async () => { await recarregaEstado() })
 window.sw.ao('sw:versao', (d) => avisaVersao(d))
+// A NUVEM DA SESSAO MUDOU (subindo, descendo, salva, falhou): so a lista muda, e o estado vem do main.
+window.sw.ao('sw:nuvem', async () => { await recarregaEstado() })
+// FECHANDO O APP: os numeros ja sairam da tela e a sessao de cada um esta subindo. Sem este aviso o
+// X parece nao funcionar, e a pessoa fecha pelo gerenciador de tarefas - que e o que perde a sessao.
+window.sw.ao('sw:saindo', (d) => {
+  const n = Number(d && d.n) || 0
+  modalCorpo.innerHTML = '<div class="aj-topo"><span class="marca">' + NUVEM.replace(/width="11" height="11"/, 'width="18" height="18"') + '</span>'
+    + '<div><h2>Salvando na nuvem</h2><div class="quem">' + (n === 1 ? '1 número' : n + ' números') + '</div></div></div>'
+    + '<p class="saindo-txt">Guardando a sessão de cada número pra ele abrir já conectado em qualquer computador. O app fecha sozinho quando terminar.</p>'
+  modal.classList.add('on')
+  modal.onclick = null
+  document.onkeydown = null
+})
 // Agente novo baixado: vale ao recarregar a pagina do numero, que e o botao que ja existe no
 // painel. Sem fechar o app.
 window.sw.ao('sw:agente', () => {

@@ -60,6 +60,11 @@ app.userAgentFallback = UA_LIMPO
 // sessao pareada dele - mexendo no cache, na fila de captura e na configuracao de quem esta
 // trabalhando. Teste nao pode encostar em producao, nem ser impedido por ela.
 const EH_TESTE = process.env.SW_SMOKE === '1' || process.env.SW_FOTO === '1' || process.env.SW_JANELA === '1'
+// OUTRO COMPUTADOR NA MESMA MAQUINA (19/10/2026, teste da sessao na nuvem): SW_DADOS=<pasta> roda uma
+// segunda copia do app DE VERDADE, com outra pasta de dados - outra maquina pra trava de uso, outro
+// disco de sessao. E o jeito de provar "pareei aqui, abre la" sem um segundo PC. Nao e modo de teste:
+// faz tudo que o app faz, so nao briga com a copia instalada pela trava de instancia unica.
+const DADOS_A_PARTE = /^sellwave-web-[a-z0-9-]{1,30}$/.test(String(process.env.SW_DADOS || '')) ? String(process.env.SW_DADOS) : ''
 
 // UMA INSTANCIA SO (16/10/2026).
 //
@@ -67,7 +72,7 @@ const EH_TESTE = process.env.SW_SMOKE === '1' || process.env.SW_FOTO === '1' || 
 // configuracao e - o que morde primeiro - a trava de uso. Uma fecha o numero e manda soltar
 // enquanto a outra renova o aluguel, e o numero fica "aberto por voce mesmo" por dois minutos. Foi
 // o que o Bruno viu. Abrir duas vezes agora so traz a janela que ja existe pra frente.
-if (!EH_TESTE) {
+if (!EH_TESTE && !DADOS_A_PARTE) {
   if (!app.requestSingleInstanceLock()) {
     app.quit()
   } else {
@@ -85,7 +90,7 @@ if (!EH_TESTE) {
 // renomear o produto deixa de ser perigoso e o app em dev usa exatamente a mesma pasta do instalado.
 // Tem que vir antes de qualquer `session.fromPartition`, senao o disco ja foi escolhido.
 // Em teste a pasta e OUTRA, de proposito: ela e apagavel e nao tem nada de ninguem dentro.
-try { app.setPath('userData', path.join(app.getPath('appData'), EH_TESTE ? 'sellwave-web-teste' : 'sellwave-web')) } catch (_) { /* ok */ }
+try { app.setPath('userData', path.join(app.getPath('appData'), EH_TESTE ? 'sellwave-web-teste' : (DADOS_A_PARTE || 'sellwave-web'))) } catch (_) { /* ok */ }
 
 const WA_URL = 'https://web.whatsapp.com'
 const WA_ORIGEM = 'https://web.whatsapp.com'
@@ -164,6 +169,8 @@ const CONFIG_PADRAO = {
   painelLigado: true,      // o painel de venda aparece ao lado do WhatsApp?
   nome: '',                // nome de quem entrou, so pra barra lateral
   direcao: false,          // quem entrou e da direcao? quem decide e o servidor, nao o app
+  sessoes: {},             // { "<numkey>": { ver, gen, em } } - de que versao da nuvem veio a sessao daqui
+  lixo: [],                // [{ nome, em }] pastas de particao antigas, apagadas no boot seguinte
 }
 
 let config = { ...CONFIG_PADRAO }
@@ -229,7 +236,23 @@ function numKey(numero) {
   return d.slice(0, 2) + d.slice(-8)
 }
 
-const particaoDe = (nk) => 'persist:sw-' + nk
+// A PARTICAO TEM GERACAO (19/10/2026, sessao na nuvem).
+//
+// Trazer a sessao que outra maquina salvou nao pode ser escrever POR CIMA da pasta de hoje: se o
+// numero ja foi aberto nesta execucao do app, o Chromium segura aquela particao viva ate o app
+// fechar (o Local Storage fica com o LevelDB aberto), e trocar os arquivos embaixo dele corrompe a
+// sessao. Entao a versao baixada vai pra uma pasta NOVA (sw-<nk>-<geracao>) e a particao passa a
+// ser ela; a velha fica pra ser apagada no proximo boot. Numero que nunca baixou nada continua na
+// pasta de sempre (sem geracao), entao nenhuma sessao pareada antes disto muda de lugar.
+function geracaoDe(nk) {
+  const s = config.sessoes && config.sessoes[nk]
+  return (s && /^[a-z0-9]{1,16}$/.test(String(s.gen || ''))) ? String(s.gen) : ''
+}
+const particaoDe = (nk) => 'persist:sw-' + nk + (geracaoDe(nk) ? '-' + geracaoDe(nk) : '')
+// Onde o Electron poe a particao no disco: Partitions/<nome em minusculas> dentro da pasta de dados.
+function pastaDaParticao(nk, gen) {
+  return path.join(app.getPath('userData'), 'Partitions', ('sw-' + nk + (gen ? '-' + gen : '')).toLowerCase())
+}
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // 4) Proxy
@@ -626,9 +649,14 @@ const abrindo = new Set()
 // terminava por ultimo, roubando a tela de quem ele clicou depois.
 let pedidoAtual = 0
 
-async function abreNumero(numero) {
+async function abreNumero(numero, opcoes) {
   const nk = numKey(numero)
   if (!nk) return { ok: false, erro: 'Numero invalido.' }
+  // `fundo` e a passada que sobe pra nuvem as sessoes pareadas antes da 1.25.0 (ver sobeAsAntigas):
+  // abre escondido, sem roubar a tela. Clique de gente no mesmo numero tira ele do fundo, e ai a
+  // passada nao fecha mais um numero que alguem esta usando.
+  const fundo = !!(opcoes && opcoes.fundo)
+  if (!fundo) emFundo.delete(nk)
 
   // CLICAR NUM NUMERO JA ABERTO CONTA COMO PEDIDO NOVO.
   //
@@ -646,6 +674,14 @@ async function abreNumero(numero) {
     return { ok: true, jaAberto: true }
   }
   if (abrindo.has(nk)) return { ok: true, jaAberto: true }
+  // O FECHAMENTO DESTE NUMERO AINDA ESTA SALVANDO NA NUVEM: espera terminar. Abrir no meio leria a
+  // versao de antes do fechamento e, pior, o fim do fechamento soltaria o aluguel do numero aberto.
+  const saindo = despedidas.get(nk)
+  if (saindo) {
+    avisaCasca('sw:status', { nk, texto: 'Terminando de salvar este número na nuvem...' })
+    try { await saindo } catch (_) { /* o fechamento ja registrou o que deu errado */ }
+    if (abertos.has(nk) || abrindo.has(nk)) return { ok: true, jaAberto: true }
+  }
   // A TRAVA VEM ANTES DE QUALQUER COISA PESADA: antes do proxy, antes de subir a sessao. Se o
   // numero esta com outra maquina, nem comeca.
   const uso = await pedeUso(nk)
@@ -655,7 +691,10 @@ async function abreNumero(numero) {
       : { ok: false, erro: uso.erro || 'Não consegui reservar este número.' }
   }
   abrindo.add(nk)
-  const meu = ++pedidoAtual
+  if (fundo) emFundo.add(nk)
+  // O FUNDO NAO MEXE NO PEDIDO ATUAL: ele nao e pedido de ninguem, e subir o contador faria a
+  // abertura que o vendedor clicou se achar velha e terminar escondida.
+  const meu = fundo ? -1 : ++pedidoAtual
   // REDE DE SEGURANCA DO ALUGUEL (18/10/2026, auditoria da vespera da virada).
   //
   // O `desiste()` la dentro do abreDeVerdade cobre os quatro caminhos que RETORNAM erro, e cobre
@@ -684,6 +723,11 @@ async function abreDeVerdade(nk, numero, meu) {
   // pra todo mundo MENOS pra ele - o `fechaNumero` nao serve aqui porque sai cedo quando o numero
   // nao esta em `abertos`, e abertura que falhou nunca entrou.
   const desiste = (resp) => { try { soltaUso(nk) } catch (_) { /* vence sozinho em 2 min */ } return resp }
+
+  // A SESSAO DA NUVEM VEM ANTES DE TUDO (19/10/2026): ela pode trocar a particao (ver geracaoDe), e
+  // o proxy, o preflight e a view abaixo tem que nascer ja na particao certa.
+  const nuvem = await trazDaNuvem(nk)
+  if (!nuvem.ok) return desiste({ ok: false, erro: nuvem.erro })
 
   avisaCasca('sw:status', { nk, texto: 'Buscando o proxy na dash...' })
   const busca = await puxaProxyDaDash(nk)
@@ -946,14 +990,432 @@ function fechaNumero(nk) {
     devolve(nk)
     try { if (d.win && !d.win.isDestroyed()) d.win.destroy() } catch (_) { /* ok */ }
   }
-  soltaUso(nk)
-  salvaSessao(particaoDe(nk))
+  // SAI DA TELA NA HORA, e o resto (conferir se esta conectado, gravar, mandar pra nuvem, soltar o
+  // aluguel) segue na `despedida`. Quem chama isto (hibernacao, Fechar, sair) conta com o numero
+  // fora de `abertos` quando a funcao volta.
   try { janela.contentView.removeChildView(s.view) } catch (_) { /* ok */ }
-  try { s.view.webContents.close() } catch (_) { /* ok */ }
   abertos.delete(nk)
+  emFundo.delete(nk)
   if (ativoAgora === nk) ativoAgora = ''
   avisaCasca('sw:fechado', { nk })
   reposiciona()
+  const p = despedida(nk, s)
+    .catch((e) => anota('[nuvem] fechamento de ' + nk + ' estourou: ' + ((e && e.stack) || e)))
+    .finally(() => { if (despedidas.get(nk) === p) despedidas.delete(nk) })
+  despedidas.set(nk, p)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// A SESSAO DO NUMERO NA NUVEM (19/10/2026, pedido do Bruno).
+//
+// Ate aqui a sessao do WhatsApp morava SO no disco de quem pareou. O Bruno pareia os numeros do
+// time no PC dele, com os celulares principais no LDPlayer de la, e o vendedor trabalha no PC do
+// vendedor: la o numero pedia QR de novo, e o celular que le o QR estava na casa do Bruno. Palavras
+// dele: "toda vez que eu fechar o WhatsApp, ele salve todos os cookies, todas as informacoes, para
+// que quando o meu vendedor abrir na maquina dele e clicar nesse mesmo telefone, ele consiga abrir o
+// WhatsApp e comecar a vender".
+//
+// O QUE VAI: as pastas IndexedDB e Local Storage da particao, que e onde o WhatsApp Web guarda o
+// pareamento (as chaves do aparelho vinculado). E o mesmo recorte que o RemoteAuth do
+// whatsapp-web.js usa pra levar sessao de um servidor pro outro. Cookie NAO vai: no Windows ele e
+// cifrado com uma chave do DPAPI daquela maquina, nao abriria em outra, e o WhatsApp Web nao
+// depende dele pra continuar conectado. Cache, Service Worker e GPU ficam: sao refeitos sozinhos.
+//
+// COMO VAI: cada arquivo cifrado com AES-256-GCM (chave do numero, guardada no servidor) e mandado
+// pelo hash do conteudo. O LevelDB nao reescreve um .ldb depois de pronto, entao fechar de novo so
+// manda o que mudou - em geral o .log e o MANIFEST, uns poucos MB.
+//
+// QUANDO VAI: ao fechar o numero (Fechar, hibernacao, sair, fechar o app), e SO se ele estava
+// conectado. Mandar a tela do QR por cima de uma sessao boa apagaria o pareamento pra todo mundo.
+// O aluguel do numero fica preso ate o envio terminar: assim ninguem abre no outro computador a
+// versao de antes do fechamento.
+//
+// QUANDO VOLTA: ao abrir, se a nuvem tem versao mais nova que a daqui, baixa ANTES de carregar o
+// WhatsApp (ver trazDaNuvem e geracaoDe).
+const crypto = require('node:crypto')
+const PASTAS_DA_SESSAO = ['IndexedDB', 'Local Storage']
+// LOCK e trava do proprio LevelDB (o Chromium segura ele aberto); LOG e diario de texto.
+const FORA_DA_SESSAO = new Set(['LOCK', 'LOG', 'LOG.old'])
+const PEDACO = 32 * 1024 * 1024
+const despedidas = new Map()     // nk -> fechamento em curso (conferir, gravar, mandar, soltar)
+const emFundo = new Set()        // numeros abertos escondidos pela passada de sobeAsAntigas
+const nuvemEstado = new Map()    // nk -> { st: enviando|baixando|salvo|erro, txt, ts }
+const espera = (ms) => new Promise((r) => setTimeout(r, ms))
+const baseApi = () => String(config.apiBase).replace(/\/+$/, '')
+const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace('.', ',') + ' MB'
+const hashDe = (buf) => crypto.createHash('sha256').update(buf).digest('hex')
+const pedacosDe = (n) => Math.max(1, Math.ceil((n + 28) / PEDACO))   // 28 = iv (12) + etiqueta (16)
+
+function marcaNuvem(nk, st, txt) {
+  nuvemEstado.set(nk, { st, txt: String(txt || ''), ts: Date.now() })
+  avisaCasca('sw:nuvem', { nk, st, txt: String(txt || '') })
+}
+
+// Os arquivos da sessao, com o caminho relativo em barra normal (e o que vai no manifesto).
+function arquivosDaSessao(dir) {
+  const out = []
+  const anda = (rel) => {
+    let itens
+    try { itens = fs.readdirSync(path.join(dir, ...rel.split('/')), { withFileTypes: true }) } catch (_) { return }
+    for (const it of itens) {
+      const r = rel + '/' + it.name
+      if (it.isDirectory()) anda(r)
+      else if (it.isFile() && !FORA_DA_SESSAO.has(it.name)) out.push({ rel: r, abs: path.join(dir, ...r.split('/')) })
+    }
+  }
+  for (const raiz of PASTAS_DA_SESSAO) anda(raiz)
+  return out
+}
+// TEM SESSAO DO WHATSAPP NESTA PASTA? A base de dados do WhatsApp Web e o que diz.
+function temSessaoNoDisco(dir) {
+  try { return fs.existsSync(path.join(dir, 'IndexedDB', 'https_web.whatsapp.com_0.indexeddb.leveldb', 'CURRENT')) } catch (_) { return false }
+}
+// O CAMINHO QUE VEM DO SERVIDOR VIRA ARQUIVO NO DISCO DO VENDEDOR: so dentro da particao nova, so nas
+// duas pastas da sessao. O worker ja confere, e aqui confere de novo, porque e daqui que o arquivo
+// sai escrito.
+function caminhoSeguro(dir, rel) {
+  const r = String(rel || '')
+  if (!/^(IndexedDB|Local Storage)\/[A-Za-z0-9 ._\-/]{1,300}$/.test(r)) return ''
+  if (r.split('/').some((x) => x === '' || x === '.' || x === '..')) return ''
+  const abs = path.resolve(dir, ...r.split('/'))
+  return abs.startsWith(path.resolve(dir) + path.sep) ? abs : ''
+}
+
+function cifraArquivo(chave, buf) {
+  const iv = crypto.randomBytes(12)
+  const c = crypto.createCipheriv('aes-256-gcm', chave, iv)
+  const corpo = Buffer.concat([c.update(buf), c.final()])
+  return Buffer.concat([iv, corpo, c.getAuthTag()])
+}
+function decifraArquivo(chave, enc) {
+  if (enc.length < 28) throw new Error('pedaço curto demais')
+  const d = crypto.createDecipheriv('aes-256-gcm', chave, enc.subarray(0, 12))
+  d.setAuthTag(enc.subarray(enc.length - 16))
+  return Buffer.concat([d.update(enc.subarray(12, enc.length - 16)), d.final()])
+}
+
+// N de cada vez, e o primeiro erro para os outros (o que ja estava no ar termina, mas nada novo sai).
+async function emParalelo(itens, n, fn) {
+  let i = 0
+  let falha = null
+  const corre = async () => {
+    while (!falha && i < itens.length) {
+      const k = i++
+      try { await fn(itens[k], k) } catch (e) { falha = falha || e }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(n, itens.length) }, corre))
+  if (falha) throw falha
+}
+
+async function sessaoMeta(nk) {
+  const r = await fetch(baseApi() + '/api/swweb/sessao?nk=' + encodeURIComponent(nk), { headers: cabecalhos(), signal: AbortSignal.timeout(20000) })
+  ajustaRelogio(r)
+  const d = await r.json().catch(() => null)
+  if (!r.ok || !d || !d.ok) {
+    const e = new Error((d && (d.error || d.erro)) || ('a dash respondeu ' + r.status))
+    e.status = r.status
+    throw e
+  }
+  return d
+}
+
+// UM PEDACO, com tres tentativas. Erro 4xx nao repete: e recusa, nao rede.
+async function pedaco(metodo, nk, h, i, corpo) {
+  const url = baseApi() + '/api/swweb/sessao/obj?nk=' + encodeURIComponent(nk) + '&h=' + h + '&i=' + i
+  let ultimo = null
+  for (let t = 0; t < 3; t++) {
+    if (t) await espera(800 * t)
+    let r
+    try {
+      r = await fetch(url, {
+        method: metodo,
+        headers: { Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId(), ...(corpo ? { 'content-type': 'application/octet-stream' } : {}) },
+        body: corpo || undefined,
+        signal: AbortSignal.timeout(180000),
+      })
+      if (r.ok) return metodo === 'GET' ? Buffer.from(await r.arrayBuffer()) : true
+    } catch (e) { ultimo = e; continue }   // rede: tenta de novo
+    const d = await r.json().catch(() => null)
+    ultimo = new Error((d && (d.error || d.erro)) || ('a dash respondeu ' + r.status))
+    if (r.status < 500 && r.status !== 429) throw ultimo
+  }
+  throw ultimo || new Error('sem resposta da dash')
+}
+
+// MANDA A SESSAO DAQUI PRA NUVEM. Precisa estar com o aluguel do numero (o servidor confere).
+async function enviaSessao(nk) {
+  const dir = pastaDaParticao(nk, geracaoDe(nk))
+  if (!temSessaoNoDisco(dir)) return { ok: false, pulou: 'sem sessão no disco' }
+  const meta = await sessaoMeta(nk)
+  const local = (config.sessoes && config.sessoes[nk]) || {}
+  const base = Number(local.ver) || 0
+  // A NUVEM ESTA NA FRENTE DESTA COPIA: alguem salvou depois da versao que esta aqui. Mandar daqui
+  // seria voltar o numero no tempo; o servidor recusaria de qualquer jeito.
+  if (Number(meta.ver) !== base) return { ok: false, conflito: true, ver: Number(meta.ver) || 0 }
+  const chave = Buffer.from(String(meta.chave || ''), 'base64')
+  if (chave.length !== 32) throw new Error('a chave da sessão veio errada')
+  const laNaNuvem = new Set((Array.isArray(meta.manifesto) ? meta.manifesto : []).map((e) => e && (e.h + ':' + e.k)))
+  const manifesto = []
+  const subir = new Map()
+  for (const a of arquivosDaSessao(dir)) {
+    let buf
+    try { buf = fs.readFileSync(a.abs) } catch (e) { if (e && e.code === 'ENOENT') continue; throw e }
+    const h = hashDe(buf)
+    const k = pedacosDe(buf.length)
+    manifesto.push({ p: a.rel, h, n: buf.length, k })
+    if (!laNaNuvem.has(h + ':' + k) && !subir.has(h)) subir.set(h, { abs: a.abs, h, n: buf.length, k })
+  }
+  if (!manifesto.length) return { ok: false, pulou: 'sem arquivos' }
+  const total = [...subir.values()].reduce((t, x) => t + x.n, 0)
+  let feito = 0
+  marcaNuvem(nk, 'enviando', 'Salvando na nuvem' + (total ? ' (' + mb(total) + ')' : '') + '...')
+  await emParalelo([...subir.values()], 3, async (x) => {
+    const buf = fs.readFileSync(x.abs)
+    // O ARQUIVO MUDOU ENTRE A LEITURA E O ENVIO: alguma coisa ainda esta escrevendo na sessao, e uma
+    // copia feita assim pode nao abrir. Melhor nao mandar esta vez do que mandar quebrada.
+    if (hashDe(buf) !== x.h) throw new Error('a sessão mudou no meio do envio')
+    const enc = cifraArquivo(chave, buf)
+    for (let i = 0; i < x.k; i++) await pedaco('PUT', nk, x.h, i, enc.subarray(i * PEDACO, (i + 1) * PEDACO))
+    feito += x.n
+    if (total > 4 * 1048576) marcaNuvem(nk, 'enviando', 'Salvando na nuvem ' + mb(feito) + ' de ' + mb(total))
+  })
+  const r = await fetch(baseApi() + '/api/swweb/sessao/fim', {
+    method: 'POST', headers: cabecalhos(), body: JSON.stringify({ nk, base, manifesto }), signal: AbortSignal.timeout(60000),
+  })
+  ajustaRelogio(r)
+  const d = await r.json().catch(() => null)
+  if (d && d.conflito) return { ok: false, conflito: true, ver: Number(d.ver) || 0 }
+  if (!r.ok || !d || !d.ok) throw new Error((d && (d.error || d.erro)) || ('a dash respondeu ' + r.status))
+  config.sessoes = config.sessoes || {}
+  config.sessoes[nk] = { ...local, ver: Number(d.ver) || base + 1, gen: geracaoDe(nk), em: Date.now() }
+  gravarConfig()
+  return { ok: true, ver: Number(d.ver) || base + 1, bytes: manifesto.reduce((t, e) => t + e.n, 0), mandou: total }
+}
+
+// BAIXA A VERSAO DA NUVEM PRA UMA PASTA NOVA e vira a particao do numero pra ela.
+async function baixaSessao(nk, meta) {
+  const chave = Buffer.from(String(meta.chave || ''), 'base64')
+  if (chave.length !== 32) throw new Error('a chave da sessão veio errada')
+  const lista = Array.isArray(meta.manifesto) ? meta.manifesto : []
+  const genVelha = geracaoDe(nk)
+  const dirVelho = pastaDaParticao(nk, genVelha)
+  let genNova = Date.now().toString(36)
+  while (fs.existsSync(pastaDaParticao(nk, genNova))) genNova = (Date.now() + Math.floor(Math.random() * 1e6)).toString(36)
+  const dirNovo = pastaDaParticao(nk, genNova)
+  // O QUE JA ESTA AQUI NAO DESCE DE NOVO: arquivo igual (mesmo hash) na pasta de hoje e copiado do
+  // disco. E o caso de quem so ficou uma versao atras.
+  const precisa = new Set(lista.map((e) => String(e && e.h)))
+  const temAqui = new Map()
+  for (const a of arquivosDaSessao(dirVelho)) {
+    try { const b = fs.readFileSync(a.abs); const h = hashDe(b); if (precisa.has(h) && !temAqui.has(h)) temAqui.set(h, a.abs) } catch (_) { /* fica pra baixar */ }
+  }
+  const total = lista.filter((e) => !temAqui.has(e.h)).reduce((t, e) => t + (Number(e.n) || 0), 0)
+  let feito = 0
+  marcaNuvem(nk, 'baixando', 'Baixando a sessão salva' + (total ? ' (' + mb(total) + ')' : '') + '...')
+  try {
+    fs.mkdirSync(dirNovo, { recursive: true })
+    await emParalelo(lista, 3, async (e) => {
+      const destino = caminhoSeguro(dirNovo, e && e.p)
+      const k = Number(e && e.k) || 0
+      if (!destino || !/^[0-9a-f]{64}$/.test(String(e && e.h)) || k < 1 || k > 200) throw new Error('a lista de arquivos da nuvem veio estranha')
+      fs.mkdirSync(path.dirname(destino), { recursive: true })
+      let buf = null
+      if (temAqui.has(e.h)) {
+        try { buf = fs.readFileSync(temAqui.get(e.h)); if (hashDe(buf) !== e.h) buf = null } catch (_) { buf = null }
+      }
+      if (!buf) {
+        const partes = []
+        for (let i = 0; i < k; i++) partes.push(await pedaco('GET', nk, e.h, i))
+        buf = decifraArquivo(chave, Buffer.concat(partes))
+        if (hashDe(buf) !== e.h) throw new Error('um arquivo da sessão veio diferente do que foi salvo')
+        feito += buf.length
+        if (total > 4 * 1048576) {
+          marcaNuvem(nk, 'baixando', 'Baixando a sessão salva ' + mb(feito) + ' de ' + mb(total))
+          avisaCasca('sw:status', { nk, texto: 'Baixando a sessão salva deste número: ' + mb(feito) + ' de ' + mb(total) })
+        }
+      }
+      fs.writeFileSync(destino, buf)
+    })
+  } catch (e) {
+    try { fs.rmSync(dirNovo, { recursive: true, force: true }) } catch (_) { /* fica pro lixo */ }
+    throw e
+  }
+  config.sessoes = config.sessoes || {}
+  config.sessoes[nk] = { ver: Number(meta.ver) || 0, gen: genNova, em: Date.now() }
+  if (fs.existsSync(dirVelho)) config.lixo = [...(Array.isArray(config.lixo) ? config.lixo : []), { nome: path.basename(dirVelho), em: Date.now() }]
+  gravarConfig()
+}
+
+// ANTES DE ABRIR: a nuvem tem versao mais nova que a daqui? Entao baixa.
+//
+// SE A DASH NAO RESPONDER SOBRE A SESSAO, ABRE COM A DAQUI. O aluguel acabou de passar (a dash
+// estava de pe um segundo atras), entao isso e soluco, e travar o numero do vendedor por causa da
+// nuvem seria trocar "pode estar uma versao atras" por "nao trabalha". Ja se a dash RESPONDEU que ha
+// versao nova e o download falhou, nao abre: abrir a velha por cima de uma nova e o caso que
+// desconecta.
+async function trazDaNuvem(nk) {
+  if (!config.token) return { ok: true }
+  let meta
+  try { meta = await sessaoMeta(nk) } catch (e) {
+    anota('[nuvem] ' + nk + ' sem resposta sobre a sessao, abre com a daqui: ' + ((e && e.message) || e))
+    return { ok: true, semNuvem: true }
+  }
+  const local = (config.sessoes && config.sessoes[nk]) || {}
+  const ver = Number(meta.ver) || 0
+  if (!(ver > (Number(local.ver) || 0)) || !Array.isArray(meta.manifesto) || !meta.manifesto.length) {
+    if (ver) marcaNuvem(nk, 'salvo', 'Sessão salva na nuvem')
+    return { ok: true }
+  }
+  avisaCasca('sw:status', { nk, texto: 'Baixando a sessão salva deste número...' })
+  try {
+    await baixaSessao(nk, meta)
+    anota('[nuvem] ' + nk + ' baixou a versao ' + ver + ' (' + meta.arquivos + ' arquivos, ' + mb(Number(meta.bytes) || 0) + ', salva por ' + (meta.nome || '?') + ')')
+    marcaNuvem(nk, 'salvo', 'Sessão da nuvem aberta aqui')
+    return { ok: true, baixou: true }
+  } catch (e) {
+    anota('[nuvem] ' + nk + ' nao baixou a versao ' + ver + ': ' + ((e && e.stack) || e))
+    marcaNuvem(nk, 'erro', 'Não baixou a sessão da nuvem')
+    return { ok: false, erro: 'Não consegui baixar a sessão salva deste número (' + String((e && e.message) || e) + '). Tente de novo.' }
+  }
+}
+
+// ESTA CONECTADO? Quem diz e o motor (isAuthenticated). Sem o motor de pe, o `last-wid-md` do
+// Local Storage, que o WhatsApp Web so grava depois de parear. Pareado com OUTRO aparelho (o slot diz
+// um numero e o WhatsApp outro) nao conta: aquela sessao nao e deste numero.
+const JS_CONECTADO = '(function(){try{var e=window.__swEstado?window.__swEstado():null;'
+  + 'return {auth:!!(e&&e.autenticado),eu:String((e&&e.eu)||""),wid:!!localStorage.getItem("last-wid-md")}}catch(_){return null}})()'
+async function estaConectado(wc, nk) {
+  let r = null
+  try { r = await Promise.race([wc.executeJavaScript(JS_CONECTADO), espera(3000).then(() => null)]) } catch (_) { r = null }
+  if (!r) return false
+  if (r.eu && numKey(r.eu) && numKey(r.eu) !== nk) return false
+  return !!(r.auth || r.wid)
+}
+
+// O RESTO DO FECHAMENTO, fora da tela.
+async function despedida(nk, s) {
+  const wc = s && s.view && s.view.webContents
+  let conectado = false
+  if (wc && !wc.isDestroyed()) conectado = await estaConectado(wc, nk)
+  salvaSessao(particaoDe(nk))
+  try { if (wc && !wc.isDestroyed()) wc.close() } catch (_) { /* ok */ }
+  if (conectado && config.token) {
+    marcaNuvem(nk, 'enviando', 'Salvando na nuvem...')
+    // O Chromium termina de gravar e fecha a base do IndexedDB uns instantes depois de a pagina sair.
+    await espera(2500)
+    try {
+      const r = await enviaSessao(nk)
+      if (r.ok) {
+        anota('[nuvem] ' + nk + ' salvou a versao ' + r.ver + ' (' + mb(r.bytes) + ', mandou ' + mb(r.mandou) + ')')
+        marcaNuvem(nk, 'salvo', 'Sessão salva na nuvem')
+      } else if (r.conflito) {
+        anota('[nuvem] ' + nk + ' nao salvou: a nuvem ja tem a versao ' + r.ver + ', mais nova que a daqui')
+        marcaNuvem(nk, 'erro', 'Outro computador salvou uma versão mais nova deste número')
+      } else anota('[nuvem] ' + nk + ' nao salvou: ' + r.pulou)
+    } catch (e) {
+      anota('[nuvem] ' + nk + ' falhou ao salvar: ' + ((e && e.stack) || e))
+      marcaNuvem(nk, 'erro', 'Não salvou na nuvem: ' + String((e && e.message) || e))
+    }
+  }
+  // O ALUGUEL SO SOLTA DEPOIS DO ENVIO, e nunca de um numero que ja foi reaberto aqui no meio tempo.
+  if (!abertos.has(nk) && !abrindo.has(nk)) await soltaUso(nk)
+}
+
+// AS SESSOES PAREADAS ANTES DA 1.25.0 SOBEM SOZINHAS (19/10/2026).
+//
+// O Bruno pareou os numeros do time na 1.24.0, que nao mandava nada pra nuvem, e o vendedor abre
+// amanha. Sem isto, cada sessao so subiria quando alguem abrisse e fechasse aquele numero aqui. A
+// passada abre ESCONDIDO, um de cada vez, cada numero que tem sessao no disco e nenhuma na nuvem;
+// espera o WhatsApp dizer que esta conectado e fecha, e o fechamento normal manda. Numero na tela do
+// QR fecha sem mandar nada (ver despedida). Abrir de verdade e o unico jeito de saber se a sessao
+// presta: os .ldb do LevelDB sao comprimidos, e procurar "conectado" no arquivo e adivinhar.
+let passadaRodando = false
+let ultimaPassada = 0
+async function sobeAsAntigas() {
+  if (passadaRodando || !config.token || EH_TESTE) return
+  passadaRodando = true
+  try {
+    const lista = Array.isArray(config.numeros) ? config.numeros : []
+    for (const n of lista) {
+      const nk = numKey(n && n.numero)
+      if (!nk || abertos.has(nk) || abrindo.has(nk) || despedidas.has(nk)) continue
+      if (n.nuvem && Number(n.nuvem.ver) > 0) continue                     // a nuvem ja tem
+      if (n.uso && !n.uso.meu) continue                                   // esta com outra maquina
+      const local = (config.sessoes && config.sessoes[nk]) || {}
+      if (Number(local.ver) > 0) continue                                 // ja subiu daqui
+      if (local.tentou && Date.now() - Number(local.tentou) < 12 * 3600000) continue
+      if (!temSessaoNoDisco(pastaDaParticao(nk, geracaoDe(nk)))) continue
+      // SO COM FOLGA NA MEMORIA: abrir mais um com o teto cheio faria a hibernacao fechar o numero
+      // de alguem.
+      const teto = Math.max(1 + destacados.size, Number(config.maxAbertos) || 6)
+      if (abertos.size + 1 >= teto) break
+      config.sessoes = config.sessoes || {}
+      config.sessoes[nk] = { ...local, tentou: Date.now() }
+      gravarConfig()
+      anota('[nuvem] passada: abrindo ' + nk + ' escondido pra subir a sessao')
+      marcaNuvem(nk, 'enviando', 'Preparando pra salvar na nuvem...')
+      const r = await abreNumero(n.numero, { fundo: true }).catch((e) => ({ ok: false, erro: String((e && e.message) || e) }))
+      if (!r || !r.ok || r.jaAberto) {
+        anota('[nuvem] passada: ' + nk + ' nao abriu: ' + ((r && r.erro) || 'ja estava aberto'))
+        nuvemEstado.delete(nk)
+        avisaCasca('sw:nuvem', { nk, st: '', txt: '' })
+        continue
+      }
+      // ATE 90 s PRA CONECTAR. O WhatsApp de uma conta grande leva uns 20 s pra ficar de pe.
+      let conectado = false
+      for (let t = 0; t < 30 && emFundo.has(nk); t++) {
+        await espera(3000)
+        const s = abertos.get(nk)
+        if (!s || !s.view || s.view.webContents.isDestroyed()) break
+        if (await estaConectado(s.view.webContents, nk)) { conectado = true; break }
+      }
+      // ALGUEM CLICOU NELE NO MEIO: o numero e dele agora, a passada nao fecha.
+      if (!emFundo.has(nk)) continue
+      if (!conectado) {
+        anota('[nuvem] passada: ' + nk + ' nao esta conectado (tela do QR?), fecha sem salvar')
+        nuvemEstado.delete(nk)
+        avisaCasca('sw:nuvem', { nk, st: '', txt: '' })
+      } else await espera(4000)   // mais um respiro pro WhatsApp gravar o que baixou ao conectar
+      fechaNumero(nk)
+      try { await despedidas.get(nk) } catch (_) { /* ja anotado */ }
+    }
+  } finally { passadaRodando = false }
+}
+
+// APAGA AS PASTAS DE PARTICAO QUE FICARAM PRA TRAS, dois dias depois de trocadas. Roda no boot, antes
+// de qualquer sessao subir, porque e o unico momento em que o Chromium nao segura nenhuma delas.
+function limpaParticoesVelhas() {
+  const lista = Array.isArray(config.lixo) ? config.lixo : []
+  if (!lista.length) return
+  const emUso = new Set(Object.keys(config.sessoes || {}).map((nk) => path.basename(pastaDaParticao(nk, geracaoDe(nk)))))
+  const fica = []
+  for (const x of lista) {
+    const nome = String((x && x.nome) || '')
+    if (!/^sw-\d{10}(-[a-z0-9]{1,16})?$/.test(nome) || emUso.has(nome)) continue
+    if (Date.now() - (Number(x.em) || 0) < 2 * 86400000) { fica.push(x); continue }
+    try { fs.rmSync(path.join(app.getPath('userData'), 'Partitions', nome), { recursive: true, force: true }) } catch (_) { fica.push(x) }
+  }
+  config.lixo = fica
+  gravarConfig()
+}
+
+// FECHAR O APP ESPERA A NUVEM. Sem isto o X fechava tudo no mesmo instante e o que estava aberto
+// nunca subia: justamente o caso do Bruno, que pareia os numeros e fecha o app.
+let saindoDeVez = false
+async function saiGuardando() {
+  saindoDeVez = true
+  const n = abertos.size + despedidas.size
+  avisaCasca('sw:saindo', { n })
+  for (const nk of [...abertos.keys()]) {
+    marcaFechouNaMao(nk)
+    try { fechaNumero(nk) } catch (_) { /* um que falhe nao segura os outros */ }
+  }
+  // TRES MINUTOS NO MAXIMO: a primeira subida de uma conta grande demora, mas o app nao pode ficar
+  // preso pra sempre por causa de uma rede ruim.
+  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(180000)])
+  try { if (janela && !janela.isDestroyed()) janela.destroy() } catch (_) { /* ok */ }
+  app.quit()
 }
 
 // INJECAO DO MOTOR E DO PAINEL.
@@ -1036,6 +1498,9 @@ const cabecalhos = () => ({
   'content-type': 'application/json',
   Authorization: 'Bearer ' + config.token,
   'x-sw-maquina': maquinaId(),
+  // A VERSAO (19/10/2026): o servidor nao deixa app sem ela abrir numero que esta salvo na nuvem,
+  // porque o app velho abriria a copia velha do disco por cima da nova.
+  'x-sw-versao': app.getVersion(),
 })
 
 // TRAVA DE USO: PEDE, RENOVA E SOLTA.
@@ -1534,13 +1999,21 @@ async function buscaNumeros() {
   if (!config.token) return { ok: false, erro: 'Falta entrar com o token da dash.' }
   const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/numeros' + comoNaUrl()
   try {
-    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(20000) })
+    // COM A MAQUINA NO CABECALHO (19/10/2026): sem ele o servidor nao tem como dizer que o aluguel e
+    // DESTA maquina, e o `uso.meu` vinha sempre falso.
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId() }, signal: AbortSignal.timeout(20000) })
     ajustaRelogio(r)
     if (!r.ok) return { ok: false, erro: 'A dash respondeu ' + r.status }
     const d = await r.json()
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // A PASSADA QUE SOBE AS SESSOES ANTIGAS sai depois da lista chegar (ela precisa do campo `nuvem`
+    // de cada numero), no maximo de meia em meia hora.
+    if (!comoId && Date.now() - ultimaPassada > 30 * 60000) {
+      ultimaPassada = Date.now()
+      setTimeout(() => { sobeAsAntigas().catch((e) => anota('[nuvem] passada estourou: ' + ((e && e.stack) || e))) }, 15000)
+    }
     // APROVEITA A VOLTA PRA BUSCAR O ROTEIRO TAMBEM (16/10/2026, pergunta do Bruno: "quando eu mexo
     // no Sale Chat, queria que atualizasse aqui").
     //
@@ -1600,6 +2073,9 @@ ipcMain.handle('sw:estado', () => ({
   // QUAIS ESTAO EM JANELA PROPRIA. A barra precisa disto pra dizer "está na outra janela" em vez de
   // tentar trazer a view de volta: trazer arrancaria ela de la e a outra janela ficaria em branco.
   destacados: [...destacados.keys()],
+  // O que a nuvem esta fazendo com cada numero AGORA (enviando, baixando, salvo, erro). O que ja esta
+  // salvo de antes vem do servidor, no campo `nuvem` de cada numero.
+  nuvem: Object.fromEntries(nuvemEstado),
   versao: app.getVersion(),
   // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
   versaoPublicada,
@@ -1644,6 +2120,8 @@ ipcMain.handle('sw:sair', async () => {
   for (const nk of [...abertos.keys()]) {
     try { fechaNumero(nk) } catch (_) { /* um que falhe nao pode impedir os outros */ }
   }
+  // E ESPERA A NUVEM: o envio da sessao e o soltar do aluguel precisam do token que vai sumir abaixo.
+  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(180000)])
   config.token = ''
   config.nome = ''
   gravarConfig()
@@ -2640,6 +3118,8 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 
 app.whenReady().then(() => {
   lerConfig()
+  // Antes de qualquer sessao subir: e o unico momento em que nenhuma particao esta presa.
+  try { limpaParticoesVelhas() } catch (e) { anota('[nuvem] limpeza das particoes velhas falhou: ' + ((e && e.message) || e)) }
 
   // Resolve swmedia://arq/<chave> buscando no mesmo endereco publico que o envio usa.
   //
@@ -2752,6 +3232,12 @@ app.whenReady().then(() => {
 
   janela.on('resize', reposiciona)
   janela.on('closed', () => { janela = null })
+  // FECHAR NO X ESPERA A NUVEM (ver saiGuardando). Em teste nao: o autoteste fecha o app sozinho.
+  janela.on('close', (e) => {
+    if (saindoDeVez || EH_TESTE || !config.token || !(abertos.size || despedidas.size)) return
+    e.preventDefault()
+    saiGuardando().catch(() => { try { app.exit(0) } catch (_) { /* ok */ } })
+  })
 
   if (process.argv.includes('--dev')) casca.webContents.openDevTools({ mode: 'detach' })
 
