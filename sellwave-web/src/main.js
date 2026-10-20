@@ -1283,14 +1283,18 @@ async function trazDaNuvem(nk) {
 // ESTA CONECTADO? Quem diz e o motor (isAuthenticated). Sem o motor de pe, o `last-wid-md` do
 // Local Storage, que o WhatsApp Web so grava depois de parear. Pareado com OUTRO aparelho (o slot diz
 // um numero e o WhatsApp outro) nao conta: aquela sessao nao e deste numero.
+// `estrito` (a passada de sobeAsAntigas) so aceita o motor dizendo que esta autenticado: la ninguem
+// esta olhando, e o `last-wid-md` sobra no disco de numero que foi desconectado pelo celular ate o
+// WhatsApp carregar e limpar. No Fechar de gente o numero acabou de ser usado, e o plano B vale.
 const JS_CONECTADO = '(function(){try{var e=window.__swEstado?window.__swEstado():null;'
-  + 'return {auth:!!(e&&e.autenticado),eu:String((e&&e.eu)||""),wid:!!localStorage.getItem("last-wid-md")}}catch(_){return null}})()'
-async function estaConectado(wc, nk) {
+  + 'return {auth:!!(e&&e.autenticado),eu:String((e&&e.eu)||""),st:String((e&&e.conn&&e.conn.st)||""),wid:!!localStorage.getItem("last-wid-md")}}catch(_){return null}})()'
+async function estaConectado(wc, nk, estrito) {
   let r = null
   try { r = await Promise.race([wc.executeJavaScript(JS_CONECTADO), espera(3000).then(() => null)]) } catch (_) { r = null }
   if (!r) return false
   if (r.eu && numKey(r.eu) && numKey(r.eu) !== nk) return false
-  return !!(r.auth || r.wid)
+  if (r.st === 'qr' || r.st === 'caiu' || r.st === 'bloqueado') return false
+  return estrito ? !!r.auth : !!(r.auth || r.wid)
 }
 
 // O RESTO DO FECHAMENTO, fora da tela.
@@ -1368,7 +1372,7 @@ async function sobeAsAntigas() {
         await espera(3000)
         const s = abertos.get(nk)
         if (!s || !s.view || s.view.webContents.isDestroyed()) break
-        if (await estaConectado(s.view.webContents, nk)) { conectado = true; break }
+        if (await estaConectado(s.view.webContents, nk, true)) { conectado = true; break }
       }
       // ALGUEM CLICOU NELE NO MEIO: o numero e dele agora, a passada nao fecha.
       if (!emFundo.has(nk)) continue
