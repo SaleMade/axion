@@ -22340,9 +22340,40 @@ function _vivoNoApp(liveSet, chipNum){
   }
   return false;
 }
+// A API OFICIAL DEIXOU DE SER REQUISITO (20/10/2026, decisao do Bruno: "a API oficial a gente nao vai
+// usar mais; independente do numero estar ou nao com API, quero que mande pra aquele numero. Vai ter
+// alguns ainda na API em coexistencia, porem vao ser tratados como qualquer outro numero").
+//
+// O QUE ESTAVA ACONTECENDO, medido em 20/10 as 13h: chip marcado `api` era julgado SO pela linha da
+// Cloud API, nunca pelo app. O (47) 99740-5847 do Kevin e o (11) 96663-2248 do Guilherme estavam
+// DISCONNECTED na Meta e ABERTOS e funcionando no SellWave Web, e a roleta pulava os dois em silencio.
+// Como ambos sao o PRIMEIRO da fila dos seus vendedores, o modo Limite passava a vez sem eles terem
+// chegado perto do teto (4/50 e 19/50) e os leads desabavam no segundo numero: 35 dos 67 do Kevin
+// foram pro (17) 99701-1859. O Bruno leu isso como "o limite nao esta sendo respeitado", e nao era o
+// limite: era o numero 1 invisivel.
+//
+// AGORA TODO CHIP DA CASA E JULGADO IGUAL: pelo app aberto NELE. A marca `api` deixou de pesar.
+//
+// NAO e "aprova pelos dois caminhos", e eu cheguei a escrever assim e estava errado. Aceitar tambem a
+// linha da API traria de volta o furo 1 do teste-roleta-casa-app-fechado.mjs: desmarcar API no chip
+// nao mexe na linha do numero em wa_api_numbers, e o cron leva ate ~80 min pra marcar DISCONNECTED,
+// entao nessa janela a roleta mandaria clique pago pra numero FECHADO e o lead se perderia. A regra
+// do Bruno de 17/10 continua valendo e e mais antiga que a decisao de hoje: "a roleta nao pode mandar
+// clique pra numero fechado". Hoje ele tirou o REQUISITO de API, nao o requisito de estar aberto.
+//
+// Efeito pratico, e o Bruno sabe: numero que ninguem abriu no app para de receber, mesmo com a API
+// oficial de pe. E o modelo que ele escolheu ("quero o SellWave Web 100%") e o app ja abre sozinho os
+// numeros do vendedor quando ele entra.
+//
+// BANIDO CONTINUA FORA, com a checagem EXPLICITA aqui em cima em vez de confiar no filtro de dentro
+// de cada caminho: ele foi explicito hoje ("tem numeros que foram banidos, ai beleza, pode marcar
+// como banido") e dos 25 numeros da casa oito estao BANNED na Meta.
 function _chipVivo(liveSet, c, inst){
   if(_modoRoleta(c)) return true;
-  if(c && !c.api && !c.afl) return _vivoNoApp(liveSet, c.num);
+  if(c && !c.afl){
+    if(c.num && _apiMorto.has(_waNumKey(c.num))) return false;
+    return _vivoNoApp(liveSet, c.num);
+  }
   return _servConnOk(liveSet, inst, c && c.num);
 }
 const PACE_WIN=900, BURST_WIN=600, BURST_CAP=10, WARMUP_MIN=30, WARM_MIN_CAP=3;

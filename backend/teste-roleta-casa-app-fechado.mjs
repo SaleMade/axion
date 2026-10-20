@@ -99,7 +99,22 @@ console.log('\nO QUE NAO MUDA\n');
 {
   const chipApi = { num: '55' + GUI, at: 'guilherme', api: true, wa_st: 'em_uso' };
   const ls = liveSet([['ax_guilherme_' + k8(GUI), '55' + GUI]]);
-  conta('chip de API oficial continua vivo pela linha da API', F._chipVivo(ls, chipApi, 'ax_guilherme') === true);
+  // MUDOU EM 20/10/2026, decisao do Bruno: "a API oficial a gente nao vai usar mais; independente do
+  // numero estar ou nao com API, quero que mande pra aquele numero". A marca `api` parou de pesar e
+  // TODO chip da casa passou a ser julgado igual, pelo app aberto NELE.
+  //
+  // A linha da API sozinha NAO vale mais, e isso nao e detalhe: aceitar ela de novo reabre o furo 1
+  // la de cima (desmarcar API nao mexe na linha do numero, o cron leva ate ~80 min pra marcar
+  // DISCONNECTED, e nessa janela a roleta mandaria clique pago pra numero FECHADO). A regra de
+  // 17/10 continua de pe e e mais antiga que a decisao de hoje: nao se manda lead pra numero
+  // fechado. O que caiu hoje foi o requisito de API, nao o de estar aberto.
+  conta('chip de API com a linha viva mas o app FECHADO -> NAO recebe mais (a API deixou de ser requisito)', F._chipVivo(ls, chipApi, 'ax_guilherme') === false);
+  // O CASO QUE MOTIVOU A MUDANCA (20/10/2026, 13h): o (47) 99740-5847 do Kevin e o (11) 96663-2248 do
+  // Guilherme estavam DISCONNECTED na Meta e ABERTOS e funcionando no app, e a roleta pulava os dois
+  // em silencio. Como sao o PRIMEIRO da fila dos seus vendedores, o modo Limite passava a vez com
+  // eles em 4/50 e 19/50, e os leads desabavam no segundo numero (35 dos 67 do Kevin foram pro 1859).
+  conta('chip de API com a linha CAIDA mas o app ABERTO -> recebe (era o caso do 5847 e do 2248)',
+    F._chipVivo(liveSet([['sc_55' + GUI, '55' + GUI]]), chipApi, 'ax_guilherme') === true);
   conta('chip de API sem linha nem app continua fora (como hoje)', F._chipVivo(liveSet([['ax_outro_' + k8(OUTRO), '55' + OUTRO]]), chipApi, 'ax_guilherme') === false);
 }
 {
@@ -117,10 +132,15 @@ console.log('\nA ROLETA DE VERDADE (_resolvePresselSellers) COM O APP FECHADO E 
   const fora = new Set(['restrito', 'banido']);
   const fechado = liveSet([['ax_guilherme_' + k8(MIGRADO), '55' + MIGRADO], ['ax_guilherme_' + k8(GUI), '55' + GUI]]);
   const numsF = ((F._resolvePresselSellers(p, chips, fechado, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num));
-  conta('app fechado: a roleta entrega so o numero de API, nunca o migrado', numsF.length === 1 && numsF[0] === k8(GUI), JSON.stringify(numsF));
+  // 20/10/2026: com a API fora da conta, app fechado e app fechado pros dois. Antes o de API passava.
+  conta('app fechado: a roleta nao entrega NENHUM dos dois (nem o de API)', numsF.length === 0, JSON.stringify(numsF));
   const aberto = new Map([...fechado, ['sc_55' + MIGRADO, '55' + MIGRADO]]);
   const numsA = ((F._resolvePresselSellers(p, chips, aberto, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num)).sort();
-  conta('app aberto: o migrado volta pra roleta junto com o de API', JSON.stringify(numsA) === JSON.stringify([k8(GUI), k8(MIGRADO)].sort()), JSON.stringify(numsA));
+  // so o MIGRADO foi aberto no app; o de API segue fechado, entao segue fora. Quem decide e o app.
+  conta('app aberto so no migrado: a roleta entrega so ele', JSON.stringify(numsA) === JSON.stringify([k8(MIGRADO)]), JSON.stringify(numsA));
+  const doisAbertos = new Map([...aberto, ['sc_55' + GUI, '55' + GUI]]);
+  const numsD = ((F._resolvePresselSellers(p, chips, doisAbertos, new Set(), fora, new Set())[0] || {}).nums || []).map((n) => k8(n.num)).sort();
+  conta('os dois abertos no app: a roleta entrega os dois', JSON.stringify(numsD) === JSON.stringify([k8(GUI), k8(MIGRADO)].sort()), JSON.stringify(numsD));
   const sZ = F._resolvePresselSellers(p, [{ ...chipCasa }], fechado, new Set(), fora, new Set());
   conta('so o migrado, app fechado: o vendedor sai da roleta (a pressel cai no aviso "sem numero")', sZ.length === 0, JSON.stringify(sZ));
 }
