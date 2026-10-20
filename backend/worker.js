@@ -4388,6 +4388,21 @@ function _linkCheckoutDoLead(data, lead) {
 
 // Pedidos que vieram POR AFILIADO. Alimenta o Kanban e a tela de logistica do acordeao. So pedido
 // com comissao de afiliado entra aqui - e o que faz dele "pedido de afiliado" e nao pedido nosso.
+// COMISSAO DE AFILIADO QUE A PLATAFORMA REALMENTE PAGOU NESTE PEDIDO.
+// Mesma regra do `comissaoDeAfiliados` do front (src/lib/five-metrics.js) e do _fiveUpsertOrder: a
+// Payt manda a linha como type AFFILIATION e SEM affiliateId, entao reconhece por TIPO. Exigir o id
+// zerava tudo. 0 = este pedido nao tem rateio de afiliado gravado.
+function _aflComissaoReal(o) {
+  let lista = (o && o.commissions) || null;
+  if (typeof lista === 'string') { try { lista = JSON.parse(lista); } catch (_) { lista = null; } }
+  if (!Array.isArray(lista)) return 0;
+  let soma = 0;
+  for (const c of lista) {
+    if (!c || !/affiliat|afiliad/i.test(String(c.type || ''))) continue;
+    soma += Number(c.amount) || 0;
+  }
+  return soma > 0 ? soma : 0;
+}
 async function handleAfiliadoPedidos(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Nao autenticado', 401);
@@ -4432,7 +4447,7 @@ async function handleAfiliadoPedidos(req, env) {
       ' product_name, offer_id, offer_title, offer_price, offer_qty, charge_status, charge_amount, charge_method,' +
       ' charge_paid_ts, charge_updated_at,' +
       ' shipping_status, shipping_code, shipping_core_id, shipping_platform, last_status,' +
-      ' created_at, updated_at, devolucao_id' +
+      ' created_at, updated_at, devolucao_id, commissions' +
       ' FROM five_orders WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC').bind(JSON.stringify(ids)).all()).results) || [];
     const pedidos = rows.map((o) => {
       const meta = metaPorOrder.get(String(o.order_id)) || {};
@@ -4443,9 +4458,19 @@ async function handleAfiliadoPedidos(req, env) {
         affiliate_id: afl,
         afiliado_nome: (afl && nomePorAfl[afl]) || afl || '—',
         pct: pct,
-        // Comissao ESTIMADA (pct combinado sobre o pago). A Five nao manda a comissao do afiliado por
-        // order, entao aqui e estimativa - a logistica nem usa, mas mantem o contrato do endpoint.
-        comissao: pago ? (Number(o.charge_amount) || 0) * (pct / 100) : 0,
+        // A COMISSAO REAL VEM NA PROPRIA LINHA DO PEDIDO (20/10/2026).
+        //
+        // Isto era estimativa (`pago x pct combinado`) com o comentario "a Five nao manda a comissao
+        // do afiliado por order". A TABELA `five_commissions` de fato nunca enche (ela exige
+        // `affiliateId`, que a Five nao manda), mas o pedido guarda o rateio inteiro em
+        // `five_orders.commissions`, e lá está a linha `AFFILIATION` com o valor exato - a mesma que
+        // o `comissaoDeAfiliados` do front já lê no Financeiro. Medido: 61 de 61 pedidos pagos do
+        // Giovane tem a linha. A estimativa somava R$ 21.041,51 contra R$ 20.980,33 reais; no total e
+        // pouco, mas um pedido sozinho saia R$ 67,61 errado, e a tela de Afiliados calcula o lucro do
+        // Bruno com este numero (`receita - comissao - producao - taxas`), entao o erro ia pro lucro.
+        // Fica com a ESTIMATIVA so quando nao ha linha de afiliacao no pedido (pedido antigo, ou
+        // rateio que nao veio), pra nenhuma linha zerar por falta de dado.
+        comissao: pago ? (_aflComissaoReal(o) || ((Number(o.charge_amount) || 0) * (pct / 100))) : 0,
       });
     });
     return json({ pedidos });
@@ -25847,7 +25872,9 @@ async function handlePresselsTotalPage(req, env){
   const kq=full?('k='+encodeURIComponent(kParam)):'';   // preserva o token na navegação interna (data/abas)
   const _pq=new URL(req.url).searchParams.get('per')||''; const per=(_pq==='mes')?'mes':'dia';   // Leads: visão diária (default) ou mensal
   // Pula a agregação pesada de métricas quando a aba é Pedidos/Leads (elas não usam) — deixa a troca de aba MUITO mais rápida.
-  const M = view==='metricas' ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
+  // A aba Pedidos tambem passou a precisar da varredura (20/10/2026): a lista sai do `vendasLista`
+  // dela, igual a dash, pra pagina e dash nao mostrarem contagens diferentes do mesmo dia.
+  const M = (view==='metricas' || view==='vendas') ? await _presselDayMetrics(env, day) : { vc:{}, contatos:{}, contatosVI:{}, vendas:{}, valor:{}, vendasVI:{}, vendasInst:{} };
   let nameMap={}; const _aflDeAtPag={};   // id -> mundo (afiliado_id), pra _linhaOk cortar vendedor de outra operacao
   // O NOME VEM DE users e nao passava pelo recorte: com sessao de afiliado, "Guilherme" e "Murilo"
   // continuavam na tabela por vendedor mesmo com as pressels ja filtradas. Agora, quando ha recorte
@@ -25956,16 +25983,19 @@ async function handlePresselsTotalPage(req, env){
   const toggleBtn=`<div style="margin-left:auto;display:inline-flex;gap:2px;background:#141c2b;border:1px solid #2b6cb0;border-radius:10px;padding:3px">${_seg('Métricas','metricas')}${full?(_seg('Pedidos','vendas')+_seg('Leads','leads')):''}</div>`;
   let ordersHtml='';
   if(view==='vendas'){
-    let orders=[];
-    try{
-      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
-      const r=await env.DB.prepare("SELECT s.name, s.phone phone, s.instance, s.value, s.ts, l.pid pid, l.src src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND COALESCE(s.cancelado,0)=0 ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
-      orders=r.results||[];
-    }catch(_){}
-    const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });   // pid -> nome da pressel
+    // PEDIDO CADASTRADO, A MESMA FONTE DOS CARTOES (20/10/2026). Esta lista era uma consulta propria
+    // na wa_sales (a frase "Pedido Concluido" do WhatsApp) e sem corte por mundo nenhum: ela mostrava
+    // a venda do afiliado na pagina da casa e, depois do conserto da dash, mostrava uma contagem
+    // DIFERENTE da dash pro mesmo dia. Agora sai do `vendasLista` da varredura, com o mesmo
+    // `_linhaOk` que corta a tabela por vendedor desta pagina.
+    let orders=(Array.isArray(M.vendasLista)?M.vendasLista:[]).filter(x=>_linhaOk(x))
+      .sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0)).slice(0,300)
+      .map(x=>({ instance:'ax_'+String(x.at||''), name:x.nome, value:Number(x.val)||0, ts:Number(x.ts)||0, pid:String(x.pid||''), src:String(x.src||''), phone:waNumber(x.wa) }));
+    const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });   // pid -> nome da pressel (SO as desta operacao)
     const pad=n=>String(n).padStart(2,'0');
     const totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
-    const nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length, nS=orders.length-nP;
+    const _temPressel=(o)=>{ const pid=String((o&&o.pid)||'').trim(); return !!(pid && _pnm[pid]); };   // sem nome = pressel de outro mundo (nao vaza)
+    const nP=orders.filter(_temPressel).length, nS=orders.length-nP;
     // WhatsApp pro cobrador falar com quem converteu (antes do pedido chegar). Numero completo +
     // link SO no modo desbloqueado (full = diretor logado via ?k). Na versao publica que o Bruno
     // manda pro gestor de trafego (sem token) NAO aparece — protege a carteira de leads.
@@ -25977,8 +26007,8 @@ async function handlePresselsTotalPage(req, env){
       const seller=nameMap[at]||o.instance||'—';
       const bt=new Date((Number(o.ts||0)-10800)*1000);
       const hora=isNaN(bt)?'':`${pad(bt.getUTCDate())}/${pad(bt.getUTCMonth()+1)} ${pad(bt.getUTCHours())}:${pad(bt.getUTCMinutes())}`;
-      const attr=!!(o.pid&&String(o.pid).trim()!=='');
-      const pnome=attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'';
+      const attr=_temPressel(o);
+      const pnome=attr?_pnm[String(o.pid)]:'';
       const aprox=o.src==='fifo'?' <span style="opacity:.7;font-weight:500">(aprox)</span>':'';
       const tag=attr?`<span style="font-size:10px;font-weight:700;color:#34d399;background:rgba(52,211,153,.14);padding:2px 8px;border-radius:20px">${_escHtml(pnome)}${aprox}</span>`:`<span style="font-size:10px;font-weight:700;color:#8b9bb4;background:#1a2436;padding:2px 8px;border-radius:20px">sem rastreio</span>`;
       const val=Number(o.value)||0;
@@ -26155,7 +26185,7 @@ async function handlePresselsTotalPage(req, env){
   const cpData=full?`<script>var _CP=${JSON.stringify(cpBlocks).replace(/</g,'\\u003c')};function cpSeller(i,b){try{navigator.clipboard.writeText(_CP[i]||'');var o=b.textContent;b.textContent='Copiado!';setTimeout(function(){b.textContent=o},1400);}catch(e){}}</script>`:'';
     leadsHtml=`${perToggle}${bodyHtml}${cpData}`;
   }
-  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos confirmados ("Pedido Concluído") do dia. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel.':view==='leads'?'Leads do dia (1º contato de cada número), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = virou venda.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
+  return _presselHtml(`<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${isToday?'<meta http-equiv="refresh" content="30">':''}<title>Métricas — Todas as Pressels</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1220;color:#e6edf6;font-family:system-ui,-apple-system,Arial,sans-serif;padding:24px}.wrap{max-width:920px;margin:0 auto}h1{font-size:22px;margin-bottom:4px}table{width:100%;border-collapse:collapse}th{font-weight:600}.shell{display:flex;gap:20px;align-items:flex-start;justify-content:center;max-width:1580px;margin:0 auto}.shell>.wrap{flex:0 1 920px;min-width:0;margin:0}.side-sp{flex:0 100 300px;min-width:0}.side{flex:0 0 300px;position:sticky;top:24px}@media(max-width:1120px){.shell{flex-wrap:wrap}.side-sp{display:none}.side{flex:1 1 100%;position:static;order:-1}}</style></head><body><div class="shell">${_sideHtml?`<div class="side-sp"></div>`:''}<div class="wrap"><h1>Métricas — Todas as Pressels</h1><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px"><input type="date" value="${day}" max="${today}" onchange="if(this.value)location.href='?day='+this.value+'${view!=='metricas'?('&view='+view):''}${kq?('&'+kq):''}${(view==='leads'&&per==='mes')?'&per=mes':''}'" style="background:#141c2b;border:1px solid #233047;color:#e6edf6;border-radius:8px;padding:5px 9px;font-size:12.5px;font-family:inherit;color-scheme:dark;cursor:pointer">${isToday?'<span style="color:#6b7a93;font-size:12px">atualiza sozinho a cada 30s</span>':`<a href="?${[view!=='metricas'?('view='+view):'',kq,(view==='leads'&&per==='mes')?'per=mes':''].filter(Boolean).join('&')}" style="color:#7aa2ff;font-size:12.5px;text-decoration:none">← voltar pra hoje</a>`}${toggleBtn}</div>${view==='vendas'?ordersHtml:(view==='leads'?leadsHtml:(totalSec+presselSecs))}<p style="color:#6b7a93;font-size:11.5px;margin-top:16px;line-height:1.5">${view==='vendas'?'Pedidos cadastrados no dia, a mesma fonte dos cartões de Métricas. A etiqueta verde mostra de qual pressel o pedido veio; "(aprox)" = casado pelo clique recente no número (o lead apagou o código). "sem rastreio" = não deu pra atribuir a nenhuma pressel desta operação.':view==='leads'?'Leads do dia (1º contato de cada número), separados por atendente e pelo número que recebeu. A divisória por número separa, por ex., o número da manhã do que entrou depois. Verde = virou venda.':'Números reais do dia selecionado. Chegaram e Foram pro WhatsApp contam só tráfego do TikTok (ttclid). Iniciaram contato e Vendas vêm do WhatsApp.'}</p></div>${_sideHtml?`<aside class="side">${_sideHtml}</aside>`:''}</div></body></html>`);
 }
 // ── AS TABELAS DA PRESSEL SO SAO PREPARADAS UMA VEZ ──────────────────────────
 //

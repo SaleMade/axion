@@ -134,6 +134,39 @@ ok(/_foraDoMundo\(String\(o\.at/.test(aba), 'o corte por mundo da aba nao e mais
 ok(/_presselNaConta\(_uAtual, data\)/.test(aba), 'saiu a mascara da pressel de outro mundo: o nome dela vaza');
 ok(/const pid=_pidVis\(o\)/.test(aba), 'a linha nao passa mais pela mascara de pressel');
 
-const TOTAL = 22;
+// ── 3. a PAGINA HTML (/pressels-total) tem que usar a mesma fonte ─────────────────────────────
+// Ela tinha uma consulta propria na wa_sales, SEM corte por mundo: mostrava a venda do afiliado na
+// pagina da casa e, depois do conserto da dash, uma contagem diferente da dash pro mesmo dia.
+const iPag = src.indexOf('async function handlePresselsTotalPage(req, env){')
+const fPag = src.indexOf("\nasync function ", iPag + 10)
+if (iPag < 0) { console.error('NAO ACHEI handlePresselsTotalPage no worker.js'); process.exit(1) }
+const pag = src.slice(iPag, fPag > 0 ? fPag : src.length)
+// SO o bloco da aba Pedidos. O resto da pagina ainda consulta a wa_sales de proposito, pra pintar de
+// verde o lead que comprou (saleSet) - aquilo e marcacao, nao contagem de pedido.
+const iPagV = pag.indexOf("  if(view==='vendas'){")
+const fPagV = pag.indexOf("  let leadsHtml='';", iPagV)
+if (iPagV < 0 || fPagV < 0) { console.error('NAO ACHEI o bloco da aba Pedidos na pagina'); process.exit(1) }
+const pagV = pag.slice(iPagV, fPagV)
+ok(!/FROM wa_sales/.test(pagV), 'a aba Pedidos da pagina /pressels-total voltou a ler a wa_sales')
+ok(/M\.vendasLista/.test(pag), 'a pagina nao usa mais o vendasLista da varredura')
+ok(/view==='metricas' \|\| view==='vendas'/.test(pag), 'a pagina nao calcula a varredura na aba Pedidos: a lista sai vazia')
+ok(/_linhaOk\(x\)/.test(pag), 'a lista da pagina perdeu o corte por mundo (_linhaOk)')
+ok(/const _temPressel=/.test(pag), 'a pagina nao mascara mais a pressel de outro mundo')
+ok(!/_pnm\[String\(o\.pid\)\]\|\|\('Pressel '\+o\.pid\)/.test(pag), 'voltou o fallback que vaza o numero da pressel do afiliado')
+
+// ── 4. comissao do afiliado por pedido vem da linha AFFILIATION, nao de estimativa ───────────
+const iAfl = src.indexOf('async function handleAfiliadoPedidos(req, env) {')
+const fAfl = src.indexOf('\nasync function ', iAfl + 10)
+const afl = src.slice(iAfl, fAfl > 0 ? fAfl : src.length)
+ok(/_aflComissaoReal\(o\)/.test(afl), 'a comissao do pedido do afiliado voltou a ser so estimativa')
+ok(/' created_at, updated_at, devolucao_id, commissions'/.test(afl), 'a consulta nao traz mais a coluna commissions: a comissao real nao chega')
+const iFn = src.indexOf('function _aflComissaoReal(o) {')
+ok(iFn > 0, 'nao achei a _aflComissaoReal')
+if (iFn > 0) {
+  const fn = src.slice(iFn, iFn + 700)
+  ok(/affiliat\|afiliad/.test(fn), 'a _aflComissaoReal nao reconhece mais a linha por TIPO (exigir affiliateId zera tudo)')
+}
+
+const TOTAL = 31;
 if (falhas.length) { console.error('FALHOU (' + falhas.length + '/' + TOTAL + '):\n- ' + falhas.join('\n- ')); process.exit(1); }
 console.log('teste-aba-pedidos: ' + TOTAL + '/' + TOTAL + ' ok');
