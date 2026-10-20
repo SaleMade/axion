@@ -9484,6 +9484,29 @@ function _botParesFrases(frases, fm, max) {
   });
   return { frases: out.slice(0, max || 60), frases_midia: outM.slice(0, max || 60) };
 }
+// FRASES POR VENDEDOR (20/10/2026, pedido do socio do Bruno). A comemoracao vale pra todo vendedor que
+// bate o marco; agora cada marco (e a meta da semana) pode ter frases SO de um vendedor, pra sair no
+// grupo uma mensagem feita pra ele. Forma: { <id do vendedor>: { frases, frases_midia } }. Vendedor sem
+// frase propria (ou que nao esta aqui) recebe as de todos, como sempre foi.
+function _botPorVendedor(v) {
+  const out = {};
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const id of Object.keys(v).slice(0, 60)) {
+    if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(id)) continue;
+    const x = v[id] || {};
+    const pr = _botParesFrases(x.frases, x.frases_midia, 30);
+    if (pr.frases.length) out[id] = pr;
+  }
+  return out;
+}
+// As frases que valem pra ESTE vendedor neste marco/meta: as dele, se tiver; senao as de todos. `chave`
+// separa o rodizio do sorteio (as dele nao gastam a vez das de todos, e vice-versa).
+function _botFrasesDe(item, vid, chaveBase) {
+  const pv = item && item.por_vendedor && vid ? item.por_vendedor[String(vid)] : null;
+  if (pv && Array.isArray(pv.frases) && pv.frases.length) return { frases: pv.frases, fmidia: pv.frases_midia || [], chave: chaveBase + '_' + String(vid), propria: true };
+  const fr = item && Array.isArray(item.frases) && item.frases.length ? item.frases : [item && item.frase].filter(Boolean);
+  return { frases: fr, fmidia: (item && item.frases_midia) || [], chave: chaveBase, propria: false };
+}
 // Sorteia a frase e devolve a imagem DELA (ou, sem imagem, uma da lista antiga `midias`).
 async function _botSorteiaComMidia(env, chave, frases, fmidia, midias) {
   const frase = await _botSorteia(env, chave, frases);
@@ -9576,7 +9599,7 @@ function _botNormaliza(raw, base) {
   o.marcos.lista = lista.map((m) => {
     const temLista = !!(m && Array.isArray(m.frases) && m.frases.length);
     const pr = _botParesFrases(temLista ? m.frases : [m && m.frase], temLista ? m.frases_midia : null);
-    return { n: Math.floor(Number(m && m.n) || 0), frases: pr.frases, frase: pr.frases[0] || '', frases_midia: pr.frases_midia, midias: _botMidias(m && m.midias) };
+    return { n: Math.floor(Number(m && m.n) || 0), frases: pr.frases, frase: pr.frases[0] || '', frases_midia: pr.frases_midia, midias: _botMidias(m && m.midias), por_vendedor: _botPorVendedor(m && m.por_vendedor) };
   }).filter((m) => m.n > 0 && m.n <= 999 && m.frases.length && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
   const mb = (r.meta_batida && typeof r.meta_batida === 'object') ? r.meta_batida : {};
   const bmb = b.meta_batida || o.meta_batida;
@@ -9591,6 +9614,7 @@ function _botNormaliza(raw, base) {
     o.meta_batida.frase = o.meta_batida.frases[0];
   }
   o.meta_batida.midias = _botMidias('midias' in mb ? mb.midias : bmb.midias);
+  o.meta_batida.por_vendedor = _botPorVendedor('por_vendedor' in mb ? mb.por_vendedor : bmb.por_vendedor);
   const inc = (r.incentivo && typeof r.incentivo === 'object') ? r.incentivo : {};
   const binc = b.incentivo || o.incentivo;
   o.incentivo.ativo = 'ativo' in inc ? !!inc.ativo : !!binc.ativo;
@@ -10252,10 +10276,11 @@ async function _botMarcosTick(env, cfg, row, dia) {
     if (cfg.marcos.ativo && cfg.marcos.lista.length) {
       const max = Number(feito[v.id]) || 0;
       const novos = cfg.marcos.lista.filter((m) => m.n > max && m.n <= v.pedidos);
-      for (const m of novos) envios.push({ v, frases: m.frases && m.frases.length ? m.frases : [m.frase], fmidia: m.frases_midia || [], midias: m.midias || [], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } });
+      for (const m of novos) { const fv = _botFrasesDe(m, v.id, 'marco_' + m.n); envios.push({ v, frases: fv.frases, fmidia: fv.fmidia, chave: fv.chave, midias: m.midias || [], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } }); }
     }
     if (cfg.meta_batida.ativo && v.meta > 0 && v.semana >= v.meta && !feitoS[v.id]) {
-      envios.push({ v, frases: cfg.meta_batida.frases && cfg.meta_batida.frases.length ? cfg.meta_batida.frases : [cfg.meta_batida.frase], fmidia: cfg.meta_batida.frases_midia || [], midias: cfg.meta_batida.midias || [], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
+      const fv = _botFrasesDe(cfg.meta_batida, v.id, 'meta');
+      envios.push({ v, frases: fv.frases, fmidia: fv.fmidia, chave: fv.chave, midias: cfg.meta_batida.midias || [], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
     }
   }
   _botVerVista = ver;
@@ -10264,7 +10289,7 @@ async function _botMarcosTick(env, cfg, row, dia) {
   let mudouM = false, mudouS = false;
   const consome = (e) => { e.marca(); if (e.tipo === 'meta') mudouS = true; else mudouM = true; };
   for (const e of envios) {
-    const esc = await _botSorteiaComMidia(env, e.tipo === 'meta' ? 'meta' : 'marco_' + e.n, e.frases, e.fmidia, e.midias);
+    const esc = await _botSorteiaComMidia(env, e.chave || (e.tipo === 'meta' ? 'meta' : 'marco_' + e.n), e.frases, e.fmidia, e.midias);
     e.texto = _botFrase(esc.frase, { nome: e.v.nome, n: e.n, pedidos: e.v.pedidos, leads: e.v.leads, meta: e.v.meta, faltam: e.v.faltam, data: _botDataBR(dia) });
     e.midia = esc.midia;
   }
@@ -12717,7 +12742,8 @@ async function handleBotEnviar(req, env) {
     const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
     const dados = await _botDados(env, hoje, cfg, 'diario');
     const vd = dados.vendedores.find((x) => x.id === v.id) || { pedidos: m.n, leads: 0, meta: 0, faltam: 0 };
-    const esc = await _botSorteiaComMidia(env, 'marco_' + m.n, m.frases && m.frases.length ? m.frases : [m.frase], m.frases_midia, m.midias);
+    const fv = _botFrasesDe(m, v.id, 'marco_' + m.n);   // as do vendedor, se ele tiver
+    const esc = await _botSorteiaComMidia(env, fv.chave, fv.frases, fv.fmidia, m.midias);
     texto = _botFrase(esc.frase, { nome: v.nome, n: m.n, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
     midia = esc.midia;
   }
@@ -12726,7 +12752,8 @@ async function handleBotEnviar(req, env) {
     const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
     const dados = await _botDados(env, hoje, cfg, 'diario');
     const vd = dados.vendedores.find((x) => x.id === v.id) || { semana: 0, meta: 0, pedidos: 0, leads: 0, faltam: 0 };
-    const esc = await _botSorteiaComMidia(env, 'meta', cfg.meta_batida.frases, cfg.meta_batida.frases_midia, cfg.meta_batida.midias);
+    const fv = _botFrasesDe(cfg.meta_batida, v.id, 'meta');   // as do vendedor, se ele tiver
+    const esc = await _botSorteiaComMidia(env, fv.chave, fv.frases, fv.fmidia, cfg.meta_batida.midias);
     texto = _botFrase(esc.frase, { nome: v.nome, n: vd.meta || vd.semana, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: 0, data: _botDataBR(hoje) });
     midia = esc.midia;
   }
