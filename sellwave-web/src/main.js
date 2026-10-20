@@ -1288,14 +1288,16 @@ async function trazDaNuvem(nk) {
 // WhatsApp carregar e limpar. No Fechar de gente o numero acabou de ser usado, e o plano B vale.
 const JS_CONECTADO = '(function(){try{var e=window.__swEstado?window.__swEstado():null;'
   + 'return {auth:!!(e&&e.autenticado),eu:String((e&&e.eu)||""),st:String((e&&e.conn&&e.conn.st)||""),wid:!!localStorage.getItem("last-wid-md")}}catch(_){return null}})()'
-async function estaConectado(wc, nk, estrito) {
-  let r = null
-  try { r = await Promise.race([wc.executeJavaScript(JS_CONECTADO), espera(3000).then(() => null)]) } catch (_) { r = null }
+async function lerConexao(wc) {
+  try { return await Promise.race([wc.executeJavaScript(JS_CONECTADO), espera(3000).then(() => null)]) } catch (_) { return null }
+}
+function conectadoDe(r, nk, estrito) {
   if (!r) return false
   if (r.eu && numKey(r.eu) && numKey(r.eu) !== nk) return false
   if (r.st === 'qr' || r.st === 'caiu' || r.st === 'bloqueado') return false
   return estrito ? !!r.auth : !!(r.auth || r.wid)
 }
+async function estaConectado(wc, nk, estrito) { return conectadoDe(await lerConexao(wc), nk, estrito) }
 
 // O RESTO DO FECHAMENTO, fora da tela.
 async function despedida(nk, s) {
@@ -1367,12 +1369,18 @@ async function sobeAsAntigas() {
         continue
       }
       // ATE 90 s PRA CONECTAR. O WhatsApp de uma conta grande leva uns 20 s pra ficar de pe.
+      // A TELA DO QR FIRME POR NOVE SEGUNDOS ENCERRA A ESPERA: numero que nunca pareou nesta maquina
+      // nao tem o que salvar, e esperar os 90 s em cada um faria a passada levar meia hora.
       let conectado = false
+      let qrSeguido = 0
       for (let t = 0; t < 30 && emFundo.has(nk); t++) {
         await espera(3000)
         const s = abertos.get(nk)
         if (!s || !s.view || s.view.webContents.isDestroyed()) break
-        if (await estaConectado(s.view.webContents, nk, true)) { conectado = true; break }
+        const r = await lerConexao(s.view.webContents)
+        if (conectadoDe(r, nk, true)) { conectado = true; break }
+        qrSeguido = (r && (r.st === 'qr' || r.st === 'caiu')) ? qrSeguido + 1 : 0
+        if (qrSeguido >= 3) break
       }
       // ALGUEM CLICOU NELE NO MEIO: o numero e dele agora, a passada nao fecha.
       if (!emFundo.has(nk)) continue
