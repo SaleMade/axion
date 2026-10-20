@@ -23681,7 +23681,9 @@ async function handlePresselStats(req, env){
 // NÃO pelo vendedor (que é compartilhado entre pressels — senão o mesmo contato conta em todas).
 async function _presselDayMetrics(env, day){
   const start = Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), end = start + 86400;
-  const m = { vc:{}, contatos:{}, contatosVI:{}, contatosVN:{}, vendas:{}, valor:{}, vendasVI:{}, vendasVN:{}, vendasInst:{} };
+  // `vendasLista` = as MESMAS vendas que os contadores acima contaram, uma linha cada, pra a aba
+  // Pedidos sair daqui em vez de uma segunda fonte. Ver o comentario grande dentro do laco.
+  const m = { vc:{}, contatos:{}, contatosVI:{}, contatosVN:{}, vendas:{}, valor:{}, vendasVI:{}, vendasVN:{}, vendasInst:{}, vendasLista:[] };
   // As 5 consultas são INDEPENDENTES — roda em PARALELO (1 ida ao banco no lugar de 5). Tabelas já existem
   // em produção; se faltar (DB novo) o .catch devolve vazio (zeros) sem quebrar.
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r=>r.results||[]).catch(()=>[]);
@@ -23751,6 +23753,7 @@ async function _presselDayMetrics(env, day){
       // da wa_sales pra nao duplicar entre as duas fontes; como a wa_sales nao conta mais, semear
       // aqui passaria a ESCONDER pedido cadastrado que tambem teve a frase no WhatsApp.
       const jaTem = new Set();
+      const jaNaLista = new Set();   // dedup da lista (ver o bloco dentro do laco)
       // SO OS TELEFONES DOS PEDIDOS DO DIA (12/10/2026, auditoria item 31), em lotes de 100 (teto de
       // parametros do D1). Mesmo recorte de data e de telefone do laco logo abaixo.
       const _tels = [];
@@ -23758,7 +23761,7 @@ async function _presselDayMetrics(env, day){
       let vinc = [];
       for (let i = 0; i < _tels.length; i += 100) {
         const lote = _tels.slice(i, i + 100);
-        vinc = vinc.concat(await q("SELECT phone, pid, inst, COALESCE(num,'') num FROM wa_lead WHERE pid IS NOT NULL AND pid<>'' AND substr(phone, -8) IN (" + lote.map(() => '?').join(',') + ')', ...lote));
+        vinc = vinc.concat(await q("SELECT phone, pid, inst, COALESCE(num,'') num, COALESCE(src,'') src FROM wa_lead WHERE pid IS NOT NULL AND pid<>'' AND substr(phone, -8) IN (" + lote.map(() => '?').join(',') + ')', ...lote));
       }
       const porTel = {};
       vinc.forEach(r => { const k = String(r.phone || '').replace(/\D/g, '').slice(-8); if (k) porTel[k] = r; });
@@ -23771,6 +23774,43 @@ async function _presselDayMetrics(env, day){
         const tel = String((l && l.wa) || '').replace(/\D/g, '').slice(-8);
         if (!tel || jaTem.has(tel)) continue;
         const v = porTel[tel];
+        // ── A ABA PEDIDOS SAI DAQUI, DA MESMA VARREDURA QUE CONTA (20/10/2026) ──────────
+        //
+        // Ela lia a wa_sales (a frase "Pedido Concluido" capturada no WhatsApp) enquanto TODO o
+        // resto desta tela le o pedido CADASTRADO. Duas fontes pro mesmo fato na mesma tela, e elas
+        // discordavam de tres jeitos, todos medidos em producao:
+        //  - pedido cadastrado SEM a frase no WhatsApp nao aparecia na lista: em 19/10 a Barbara
+        //    cadastrou 2 e a aba dela mostrou ZERO, com o cartao dizendo 2;
+        //  - a frase com o telefone em outro formato virava uma linha a mais, sem pedido atras
+        //    (27 em dois meses) - e a mesma venda que ja estava na lista com o outro numero;
+        //  - venda fechada por ligacao, que nunca tem frase, nao tinha onde aparecer.
+        // A regra do Bruno de 28/08/2026 ja era "vale o que esta no Cadastro de Pedidos, uma fonte
+        // so" - ela valia pros cartoes e nao tinha chegado na lista.
+        //
+        // POR QUE AQUI DENTRO e nao numa funcao propria: a lista precisa ser exatamente o conjunto
+        // que o contador contou. Reconstruir a mesma selecao em outro lugar (janela do dia, coluna
+        // cancelada, dedup por telefone, vendedor = quem cadastrou) e o que fazia os dois numeros
+        // divergirem. Saindo do mesmo laco, "7 no cartao e 6 na lista" nao tem como acontecer.
+        //
+        // A linha entra MESMO SEM LEAD de pressel (`!v`): o pedido existe, a origem e que falta, e
+        // a tela ja tem o rotulo "sem rastreio" pra isso. Quem conta venda de pressel continua
+        // exigindo o lead, logo abaixo.
+        if (!jaNaLista.has(tel)) {
+          const _instL = String((v && v.inst) || '');
+          const _atL = String((l && l.at) || '') || _atFromInst(_instL);
+          if (_atL) {
+            jaNaLista.add(tel);
+            m.vendasLista.push({
+              at: _atL,
+              nome: String((l && l.nome) || ''),
+              wa: String((l && l.wa) || ''),
+              val: Number((l && (l.valor_neg || l.vl)) || 0),
+              ts: quando,
+              pid: v ? String(v.pid || '') : '',
+              src: v ? String(v.src || '') : '',
+            });
+          }
+        }
         if (!v) continue;                       // sem pressel conhecida: nao da pra atribuir
         jaTem.add(tel);
         const pid = String(v.pid);
@@ -24635,19 +24675,35 @@ async function _presselsTotalData(env, day, view, per, full, _uAtual, _host, fai
       } catch (_) { out.cpa = null; }
     }
   } else if(view==='vendas'){
+    // ABA PEDIDOS = PEDIDO CADASTRADO, A MESMA FONTE DOS CARTOES (20/10/2026).
+    //
+    // Antes ela era uma consulta propria na wa_sales (a frase "Pedido Concluido" do WhatsApp) com um
+    // LEFT JOIN no wa_lead pra descobrir a pressel. Isso dava duas fontes na mesma tela e o Bruno
+    // recebeu a conta errada do vendedor: em 19/10 o cartao do Guilherme marcou 7 e esta lista 6.
+    // A lista agora vem do `vendasLista` do _presselDayMetrics, que e literalmente o conjunto que os
+    // cartoes contaram - o detalhe de cada defeito esta no comentario de la.
+    //
+    // DUAS COISAS QUE NAO PODEM SAIR:
+    //  - o corte por mundo e pelo DONO DA VENDA (`_foraDoMundo(at)`, que le users.afiliado_id), nao
+    //    pela pressel do lead. Era isso que sumia com a venda da casa cujo lead entrou por pressel
+    //    de afiliado (9 vendas, R$ 4.473 em dois meses): o pedido e nosso, so a origem e que e de
+    //    fora. O inverso tambem vale pro afiliado.
+    //  - a pressel que nao e de quem olha sai MASCARADA, nao filtrada: a linha fica como "sem
+    //    rastreio" e o nome da pressel do outro mundo nao aparece. Sem a mascara o `_pnm[pid]` cai
+    //    no fallback 'Pressel <id>' e a casa leria 'Pressel 7', que e do afiliado.
     let orders=[];
     try{
-      const dstart=Math.floor(new Date(day+'T00:00:00-03:00').getTime()/1000), dend=dstart+86400;
-      // SO O MUNDO DE QUEM PEDE (21/09/2026). Esta consulta saia sem corte nenhum: a aba Pedidos da
-      // casa listava a venda do afiliado com nome do cliente, telefone inteiro e o vendedor dele.
-      const _cV=await _corteMundoSql(env, _uAtual, { pid: 'l.pid', inst: 's.instance' });
-      const r=await env.DB.prepare("SELECT s.name, s.phone phone, s.instance, s.value, s.ts, l.pid pid, l.src src FROM wa_sales s LEFT JOIN wa_lead l ON l.phone=s.phone WHERE s.ts>=? AND s.ts<? AND COALESCE(s.cancelado,0)=0"+_cV+" ORDER BY s.ts DESC LIMIT 300").bind(dstart,dend).all();
-      orders=(r.results||[]).filter(o=>!_foraDoMundo(baseAt(o.instance)));
+      const Mv=await _presselDayMetrics(env, day);
+      orders=(Mv && Array.isArray(Mv.vendasLista) ? Mv.vendasLista : []).filter(o=>o && !_foraDoMundo(String(o.at||'')));
+      orders.sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0));
+      if(orders.length>300) orders=orders.slice(0,300);
     }catch(_){}
     const _pnm={}; pressels.forEach(pp=>{ _pnm[String(pp.id)]=pp.nome||('Pressel '+pp.id); });
-    out.totV=orders.reduce((a,o)=>a+(Number(o.value)||0),0);
-    out.nP=orders.filter(o=>o.pid&&String(o.pid).trim()!=='').length; out.nS=orders.length-out.nP; out.count=orders.length;
-    out.orders=orders.map(o=>{ const at=baseAt(o.instance); const attr=!!(o.pid&&String(o.pid).trim()!==''); const ph=String(o.phone||'').replace(/\D/g,''); return { at, name:o.name||'Cliente', seller:nameMap[at]||o.instance||'—', value:Number(o.value)||0, ts:Number(o.ts||0), attr, pnome:attr?(_pnm[String(o.pid)]||('Pressel '+o.pid)):'', aprox:o.src==='fifo', phone: full?ph:'', phoneFmt: full?fmtNum(ph):mask(ph) }; });
+    const _naConta=_presselNaConta(_uAtual, data);
+    const _pidVis=(o)=>{ const pid=String((o&&o.pid)||'').trim(); return (pid && _naConta(pid)) ? pid : ''; };
+    out.totV=orders.reduce((a,o)=>a+(Number(o.val)||0),0);
+    out.nP=orders.filter(o=>_pidVis(o)!=='').length; out.nS=orders.length-out.nP; out.count=orders.length;
+    out.orders=orders.map(o=>{ const at=String(o.at||'?'); const pid=_pidVis(o); const attr=pid!==''; const ph=waNumber(o.wa); return { at, name:o.nome||'Cliente', seller:nameMap[at]||(full?_nomeCell(at):'Vendedor'), value:Number(o.val)||0, ts:Number(o.ts||0), attr, pnome:attr?(_pnm[pid]||('Pressel '+pid)):'', aprox:o.src==='fifo', phone: full?ph:'', phoneFmt: full?fmtNum(ph):mask(ph) }; });
   } else if(view==='leads' && per==='mes'){
     const dP=day.split('-'); const mY=+dP[0], mM=+dP[1];
     const monthStart=Math.floor(new Date(dP[0]+'-'+dP[1]+'-01T00:00:00-03:00').getTime()/1000);
