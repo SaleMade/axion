@@ -12435,6 +12435,18 @@ async function handleSwWeb(req, env, path) {
     if (vivo && String(atual.maquina || '') !== maquina) {
       return json({ ok: false, ocupado: { nome: atual.nome || 'outra pessoa', desde: Number(atual.desde) || 0 } });
     }
+    // NUMERO COM A SESSAO NA NUVEM NAO ABRE EM APP VELHO (19/10/2026). O app de antes da 1.25.0 nao
+    // baixa a versao da nuvem: abriria a copia velha do disco dele, e duas copias do MESMO aparelho
+    // vinculado andando separadas e o jeito de o WhatsApp desconectar o numero. O app novo manda a
+    // versao no cabecalho; sem ela, so renova o que ja estava aberto nesta maquina (barrar a renovacao
+    // deixaria o aluguel vencer com o numero aberto, e outra maquina entraria por cima).
+    if (!String(req.headers.get('x-sw-versao') || '') && !(vivo && String(atual.maquina || '') === maquina)) {
+      let naNuvem = null;
+      try { naNuvem = await env.DB.prepare('SELECT ver FROM swweb_sessao WHERE nk=?').bind(nk).first(); } catch (_) { naNuvem = null; }
+      if (naNuvem && Number(naNuvem.ver) > 0) {
+        return err('Este número está salvo na nuvem e só abre no SellWave Web 1.25.0 ou mais novo. Feche o app, baixe a versão nova e abra de novo.', 409);
+      }
+    }
     const desde = vivo ? (Number(atual.desde) || agoraU) : agoraU;
     try {
       await env.DB.prepare(

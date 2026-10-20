@@ -49,8 +49,8 @@ sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(J
 const worker = (await import(pathToFileURL(bundle).href)).default
 const env = { DB, MEDIA }
 const ctx = { waitUntil: () => {} }
-const pede = async (metodo, rota, { token, maquina, corpo, bin } = {}) => {
-  const h = { authorization: 'Bearer ' + token, 'x-sw-maquina': maquina || '' }
+const pede = async (metodo, rota, { token, maquina, corpo, bin, velho } = {}) => {
+  const h = { authorization: 'Bearer ' + token, 'x-sw-maquina': maquina || '', ...(velho ? {} : { 'x-sw-versao': '1.25.0' }) }
   let body
   if (bin) { body = bin; h['content-type'] = 'application/octet-stream'; h['content-length'] = String(bin.length) }
   else if (corpo) { body = JSON.stringify(corpo); h['content-type'] = 'application/json' }
@@ -61,7 +61,7 @@ const pede = async (metodo, rota, { token, maquina, corpo, bin } = {}) => {
   try { j = await r.json() } catch (_) {}
   return { http: r.status, ...j }
 }
-const uso = (token, maquina, soltar) => pede('POST', '/api/swweb/uso', { token, maquina, corpo: { nk: NK, soltar: !!soltar } })
+const uso = (token, maquina, soltar, velho) => pede('POST', '/api/swweb/uso', { token, maquina, velho, corpo: { nk: NK, soltar: !!soltar } })
 const h = (b) => createHash('sha256').update(b).digest('hex')
 
 let ok = 0, mau = 0
@@ -129,6 +129,15 @@ await pede('PUT', '/api/swweb/sessao/obj?nk=' + NK + '&h=' + h(D) + '&i=0', { to
 r = await pede('POST', '/api/swweb/sessao/fim', { token: TK_VEN, maquina: MAQ_KEVIN, corpo: { nk: NK, base: 2, manifesto: [{ p: 'IndexedDB/x/000007.log', h: h(D), n: 9, k: 1 }, man1[1]] } })
 t(r.ok && r.ver === 3, 'versao 3', JSON.stringify(r))
 t(!r2.has(chaveObj(A)) && r2.has(chaveObj(B)) && r2.has(chaveObj(C)) && r2.has(chaveObj(D)), 'agora o A (de duas versoes atras) saiu e o resto ficou', JSON.stringify([...r2.keys()]))
+
+console.log('\n── 6b) app velho (sem a versao no cabecalho) nao abre numero salvo na nuvem ──')
+await uso(TK_VEN, MAQ_KEVIN, true)
+r = await uso(TK_VEN, 'mvelho0000000009', false, true)
+t(r.http === 409 && /1\.25\.0/.test(r.error || ''), 'app velho e recusado com a frase de atualizar', 'http ' + r.http + ' ' + JSON.stringify(r.error || r))
+r = await uso(TK_VEN, MAQ_KEVIN)
+t(r.ok === true, 'o app novo pega normalmente', JSON.stringify(r))
+r = await uso(TK_VEN, MAQ_KEVIN, false, true)
+t(r.ok === true, 'e a RENOVACAO de quem ja estava com ele nesta maquina passa (nao derruba numero aberto)', JSON.stringify(r))
 
 console.log('\n── 7) a rota publica de midia nao entrega sessao ──')
 for (const rota of ['/api/salechat/media/' + chaveObj(D), '/api/arquivo/' + encodeURIComponent(chaveObj(D))]) {
