@@ -687,7 +687,7 @@ async function abreNumero(numero, opcoes) {
   const uso = await pedeUso(nk)
   if (!uso.ok) {
     return uso.ocupado
-      ? { ok: false, ocupado: uso.ocupado, erro: 'Este número está aberto por ' + (uso.ocupado.nome || 'outra pessoa') + '. Dois computadores no mesmo WhatsApp é o que mais derruba número.' }
+      ? { ok: false, ocupado: uso.ocupado, erro: 'Este número está aberto por ' + (uso.ocupado.nome || 'outra pessoa') + '.' }
       : { ok: false, erro: uso.erro || 'Não consegui reservar este número.' }
   }
   abrindo.add(nk)
@@ -3149,7 +3149,11 @@ ipcMain.handle('sw:roleta', async (_e, { nk, on }) => {
     })
     const d = await r.json().catch(() => null)
     if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('A dash respondeu ' + r.status) }
-    n.roleta = !!on
+    // O INTERRUPTOR e o que mudou; o `roleta` (recebe agora) depende tambem da conexao e quem decide e
+    // a proxima leitura. Ligar apaga o "desligado ate a meia-noite", igual o servidor.
+    n.ligado = !!on
+    if (on) n.volta = ''
+    else n.roleta = false
     gravarConfig()
     // Puxa a lista de novo pra pegar o estado de verdade (e o placar de leads).
     buscaNumeros().catch(() => {})

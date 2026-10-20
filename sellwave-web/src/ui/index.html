@@ -217,7 +217,13 @@
   .sw.on { background: var(--verde); }
   .sw::after { content: ""; position: absolute; top: 2.5px; left: 2.5px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: transform .15s; }
   .sw.on::after { transform: translateX(14px); }
-  .sw.ocupado { opacity: .5; }
+  /* LARANJA = fora agora, mas volta sozinho a meia-noite (as mesmas tres cores da Chegada de leads). */
+  .sw.pausa { background: #f59e0b; }
+  .sw.pausa::after { background: #fff7e6; }
+  /* SALVANDO: a chave ja esta na posicao nova e a bolinha pulsa ate a dash confirmar. Apagar a chave
+     inteira (como era) fazia a pessoa achar que o clique nao tinha pegado. */
+  .sw.ocupado::after { animation: pulsa .9s ease-in-out infinite; }
+  .sw.erro { box-shadow: 0 0 0 2px #f0506a; }
 
   .rodape { border-top: 1px solid var(--linha); padding: 8px; display: flex; gap: 6px; }
   .rodape button {

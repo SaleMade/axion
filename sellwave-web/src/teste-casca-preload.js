@@ -18,7 +18,9 @@ const ESTADO = () => ({
   numeros: [
     { numero: '5511966632248', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
-    { numero: '5515974060653', dono: 'Heynan Dantas', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    // LIGADO E SEM APP ABERTO (19/10/2026): o interruptor esta ligado (`ligado`), mas ninguem tem o numero aberto,
+    // entao `roleta` (recebe agora) e falso. A chave tem que aparecer LIGADA.
+    { numero: '5515974060653', dono: 'Heynan Dantas', roleta: false, ligado: true, vivo: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // em aquecimento: area propria e interruptor liberado
     // lim_dia ZERO de proposito: o teto de quem aquece vem da RAMPA (`aquec.teto`), nao do campo do
     // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
@@ -45,7 +47,8 @@ contextBridge.exposeInMainWorld('sw', {
   destacar: (numero, nk) => { chamadas.push({ nome: 'destacar', args: [numero, nk] }); return Promise.resolve({ ok: true }) },
   devolver: (nk) => { chamadas.push({ nome: 'devolver', args: [nk] }); return Promise.resolve({ ok: true }) },
   fechar: (n) => { chamadas.push({ nome: 'fechar', args: [n] }); return Promise.resolve({ ok: true }) },
-  roleta: (n, l) => { chamadas.push({ nome: 'roleta', args: [n, l] }); return Promise.resolve({ ok: true }) },
+  // O 5566 RECUSA de proposito: e o caso em que a chave tem que voltar e dizer por que.
+  roleta: (n, l) => { chamadas.push({ nome: 'roleta', args: [n, l] }); return new Promise((r) => setTimeout(() => r(n === '1577005566' ? { ok: false, erro: 'recusado no teste' } : { ok: true }), 300)) },
   entrar: () => Promise.resolve({ ok: true }),
   sair: () => { chamadas.push({ nome: 'sair' }); return Promise.resolve({ ok: true }) },
   verComo: () => Promise.resolve({ ok: true }),

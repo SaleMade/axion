@@ -19,6 +19,8 @@ const carregando = new Set()
 const semMotor = new Set()
 const falhou = new Map()
 const mexendo = new Set()      // números com a chave da roleta em trânsito
+const confirmados = new Map()  // nk -> { on, ate }: o que a pessoa clicou, valendo ate o servidor confirmar (ver viraRoleta)
+const erroChave = new Map()    // nk -> frase: a dash recusou o clique (a chave pisca vermelha 4 s)
 let filtro = ''
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
@@ -125,7 +127,17 @@ function desenhaLista() {
     if (!grupos.has(k)) grupos.set(k, [])
     grupos.get(k).push(n)
   }
-  const ordena = (a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
+  // NA ORDEM DA FILA (19/10/2026, pedido do Bruno: a lista do Guilherme saia "2, 3, 4, 1" porque
+  // quem recebia subia; ele quer "1, 2, 3, 4", a mesma sequencia da Chegada de leads). Quem tem
+  // posicao na fila vai pela posicao; quem esta fora dela (desligado, ou roleta sem fila) vem depois,
+  // com quem esta recebendo na frente, como antes.
+  const ordena = (a, b) => {
+    const pa = Number(a.fila && a.fila.pos) || 0
+    const pb = Number(b.fila && b.fila.pos) || 0
+    if (pa && pb) return pa - pb
+    if (pa || pb) return pa ? -1 : 1
+    return (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)
+  }
 
   // NA BARRA ENCOLHIDA O AQUECIMENTO VAI TODO PRO FIM, DEPOIS DE UMA BARRINHA LARANJA (16/10/2026).
   //
@@ -222,7 +234,8 @@ const FILA_ROTULO = { vez: 'recebendo', espera: 'na fila', bateu: 'no limite' }
 // A frase inteira, do jeito que esta na dash. Vai no title: em 268px nao cabe na linha, e cortar
 // pela metade seria pior que esconder.
 function fraseEstado(n) {
-  if (!n.roleta) return 'desligado'
+  if (!ligadoDe(n)) return n.volta ? 'desligado até a meia-noite' : 'desligado'
+  if (!n.roleta) return 'ligado, mas nenhum computador está com ele aberto'
   if (n.dist !== 'limite' || !n.fila) return 'distribuindo'
   if (n.fila.st === 'vez') return 'recebendo agora'
   // EM QUEM AQUECE, "bateu" NAO E LIMITE ESTOURADO: a cota da rampa abre ao longo do dia, entao ele
@@ -391,7 +404,10 @@ function linha(n) {
   const teto = tetoDe(n)
   // O rotulo curto do contador. Em quem aquece, "no limite" viraria mentira curta (ver fraseEstado):
   // "no ritmo" cabe no mesmo espaco e diz a verdade; a frase inteira fica no passe de mouse.
-  const rot = !n.roleta ? 'desligado'
+  // LIGADO E SEM RECEBER e outra coisa que desligado: o interruptor esta certo, o que falta e alguem
+  // com o numero aberto (sem app aberto o numero da casa nao recebe, ver roleta-casa-sem-api).
+  const rot = !ligadoDe(n) ? (n.volta ? 'até 0h' : 'desligado')
+    : !n.roleta ? 'sem app aberto'
     : n.livre_hoje ? 'liberado'
       : (n.dist === 'limite' && n.fila
         ? ((n.fila.st === 'bateu' && aquecendo(n)) ? 'no ritmo' : (FILA_ROTULO[n.fila.st] || ''))
@@ -413,10 +429,25 @@ function linha(n) {
   // recusa), e um botao que nao faz nada e pior que botao nenhum. No lugar dele vai um selo
   // apagado, que diz POR QUE nao da - sem o selo, o numero apareceria sem nada no canto e a leitura
   // seria "a tela nao carregou direito".
+  // A CHAVE DESENHA O INTERRUPTOR, NAO O "RECEBENDO" (19/10/2026, pedido do Bruno: "clico pra ligar e
+  // ele nao liga"). As tres cores sao as da Chegada de leads:
+  //   verde   = ligado
+  //   laranja = fora agora, mas volta sozinho a meia-noite (bateu o limite, ou desligado ate 0h)
+  //   cinza   = desligado, so volta se alguem ligar
+  // Clique: ligado (verde ou laranja do limite) desliga; desligado (cinza ou laranja do 0h) liga.
+  const lig = ligadoDe(n)
+  const limiteHoje = lig && n.dist === 'limite' && n.fila && n.fila.st === 'bateu' && !aquecendo(n)
+  const ate0h = !lig && !!n.volta
   const chave = podeReceber(n)
-    ? '<span class="sw' + (n.roleta ? ' on' : '') + (mexendo.has(nk) ? ' ocupado' : '')
-      + '" data-nk="' + nk + '" role="switch" aria-checked="' + !!n.roleta + '"'
-      + ' title="' + (n.roleta ? 'Recebendo lead. Clique pra parar.' : 'Fora da roleta. Clique pra voltar a receber.') + '"></span>'
+    ? '<span class="sw' + (lig && !limiteHoje ? ' on' : '') + (limiteHoje || ate0h ? ' pausa' : '')
+      + (mexendo.has(nk) ? ' ocupado' : '') + (erroChave.has(nk) ? ' erro' : '')
+      + '" data-nk="' + nk + '" role="switch" aria-checked="' + lig + '"'
+      + ' title="' + esc(erroChave.has(nk) ? 'Não salvou: ' + erroChave.get(nk)
+        : mexendo.has(nk) ? 'Salvando...'
+          : limiteHoje ? 'Ligado, mas bateu o limite de hoje: volta sozinho à meia-noite. Clique pra desligar.'
+            : ate0h ? 'Desligado até a meia-noite: volta sozinho. Clique pra ligar agora.'
+              : lig ? (n.roleta ? 'Ligado e recebendo lead. Clique pra desligar.' : 'Ligado, mas nenhum computador está com este número aberto agora. Clique pra desligar.')
+                : 'Desligado. Clique pra ligar.') + '"></span>'
     : '<span class="sw-off" title="Só recebe lead quem está Em uso ou Em aquecimento na Contingência'
       + (n.status ? '. Este está como ' + esc(n.status) : '') + '">—</span>'
 
@@ -588,7 +619,6 @@ function telaAbrir(nk) {
           ? '<b>Você abriu este número em outro computador</b><br>'
             + 'Feche ele lá e este botão libera sozinho, em até 2 minutos.'
           : '<b>Aberto por ' + esc(ocupado.nome || 'outra pessoa') + '</b><br>'
-            + 'O mesmo WhatsApp em dois computadores é o que mais derruba número. '
             + 'Quando a outra pessoa fechar, este botão libera sozinho, em até 2 minutos.')
         + '</div>'
         + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
@@ -681,17 +711,45 @@ async function fechar(nk) {
 
 // LIGA E DESLIGA A CHEGADA DE LEAD naquele número. É a mesma chave da Contingência: muda o chip,
 // e a roleta passa a pular (ou a incluir) o número na escolha seguinte.
+// A CHAVE VIRA NA HORA E FICA (19/10/2026, pedido do Bruno: "eu clico, ele liga, fica pensando,
+// pensando, e depois desliga sozinho ou mantem ligado; nesse meio-termo eu achei que nao ligou").
+//
+// Os dois defeitos que davam isso: a chave desenhava o "recebendo agora" (que inclui a conexao, e
+// com o app fechado e falso mesmo ligado), e a releitura de 20 s que tinha saido ANTES do clique
+// chegava depois dele com o estado velho e desvirava a chave. Agora a chave desenha o interruptor
+// (`ligado`), o clique fica valendo por cima de qualquer leitura velha ate o servidor concordar, e so
+// volta atras se a dash RECUSAR - e ai diz por que.
+function ligadoDe(n) {
+  const nk = numKey(n && n.numero)
+  const doServidor = (n && n.ligado != null) ? !!n.ligado : !!(n && n.roleta)
+  const c = confirmados.get(nk)
+  if (c) {
+    if (Date.now() > c.ate || (!mexendo.has(nk) && doServidor === c.on)) confirmados.delete(nk)
+    else return c.on
+  }
+  return doServidor
+}
 async function viraRoleta(nk) {
   if (mexendo.has(nk)) return
   const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
   if (!n) return
+  const quer = !ligadoDe(n)
+  erroChave.delete(nk)
   mexendo.add(nk)
-  const antes = n.roleta
-  n.roleta = !antes            // otimista: a chave vira na hora
+  confirmados.set(nk, { on: quer, ate: Date.now() + 60000 })
   desenhaLista()
-  const r = await window.sw.roleta(nk, !antes)
+  let r = null
+  try { r = await window.sw.roleta(nk, quer) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
   mexendo.delete(nk)
-  if (!r || !r.ok) { n.roleta = antes; desenhaLista(); return }
+  if (!r || !r.ok) {
+    confirmados.delete(nk)
+    erroChave.set(nk, (r && r.erro) || 'a dash não respondeu')
+    desenhaLista()
+    setTimeout(() => { erroChave.delete(nk); desenhaLista() }, 4000)
+    return
+  }
+  // 30 s de folga pra a leitura do servidor alcancar o clique: ate la, o clique vence.
+  confirmados.set(nk, { on: quer, ate: Date.now() + 30000 })
   await recarregaEstado()
 }
 

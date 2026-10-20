@@ -1107,6 +1107,35 @@ app.whenReady().then(async () => {
   conta('servidor reprovou vence o em_uso parado no campo',
     reprovado && reprovado.temChave === false && reprovado.temSelo === true, JSON.stringify(reprovado))
 
+  // ── O INTERRUPTOR (19/10/2026, pedido do Bruno: "clico pra ligar e ele nao liga, fica pensando e
+  // depois desliga sozinho"). Tres cores como na Chegada de leads, a chave desenha o INTERRUPTOR (nao
+  // o "recebe agora"), vira na hora e nao desvira com leitura velha; recusa volta e diz por que.
+  const chaveDe = (nk) => js2('(() => { const b = document.querySelector(".num .sw[data-nk=\'' + nk + '\']"); const l = b && b.closest(".num");'
+    + ' return b ? { cls: b.className, aria: b.getAttribute("aria-checked"), tit: b.title, rot: l ? l.textContent : "" } : null })()')
+  let ch = await chaveDe('1166632248')
+  conta('ligado e no limite do dia: chave LARANJA', ch && /\bpausa\b/.test(ch.cls) && !/\bon\b/.test(ch.cls) && /meia-noite/.test(ch.tit), JSON.stringify(ch))
+  ch = await chaveDe('1995983293')
+  conta('ligado e recebendo: chave VERDE', ch && /\bon\b/.test(ch.cls) && !/\bpausa\b/.test(ch.cls), JSON.stringify(ch))
+  ch = await chaveDe('1574060653')
+  conta('ligado sem app aberto: a chave fica LIGADA e o rotulo diz o porque', ch && /\bon\b/.test(ch.cls) && ch.aria === 'true' && /sem app aberto/.test(ch.rot) && /nenhum computador/.test(ch.tit), JSON.stringify(ch))
+  await js2('document.querySelector(".num .sw[data-nk=\'1574060653\']").click()')
+  await espera(60)
+  ch = await chaveDe('1574060653')
+  conta('o clique vira a chave NA HORA (antes da dash responder) e ela pulsa', ch && !/\bon\b/.test(ch.cls) && /\bocupado\b/.test(ch.cls) && ch.aria === 'false', JSON.stringify(ch))
+  await espera(700)
+  ch = await chaveDe('1574060653')
+  const pediuChave = (await js2('window.__ver()')).filter((c) => c.nome === 'roleta').map((c) => c.args)
+  conta('mandou desligar o numero certo', JSON.stringify(pediuChave[pediuChave.length - 1]) === JSON.stringify(['1574060653', false]), JSON.stringify(pediuChave))
+  conta('e depois da resposta continua desligada, mesmo a releitura trazendo o estado de antes', ch && !/\bon\b/.test(ch.cls) && !/\bocupado\b/.test(ch.cls) && ch.aria === 'false', JSON.stringify(ch))
+  await js2('recarregaEstado()')
+  await espera(150)
+  ch = await chaveDe('1574060653')
+  conta('nem a sincronia de 20 s desvira o clique', ch && ch.aria === 'false', JSON.stringify(ch))
+  await js2('document.querySelector(".num .sw[data-nk=\'1577005566\']").click()')
+  await espera(700)
+  ch = await chaveDe('1577005566')
+  conta('a dash recusou: a chave volta pro que era e diz o motivo', ch && ch.aria === 'true' && /\berro\b/.test(ch.cls) && /recusado no teste/.test(ch.tit), JSON.stringify(ch))
+
   const largaAntes = await js2('document.querySelector("aside").getBoundingClientRect().width')
   conta('a barra comeca larga', Math.round(largaAntes) === 268, String(largaAntes))
 
@@ -1124,7 +1153,8 @@ app.whenReady().then(async () => {
     + ' const aq = (n) => n.aquecendo === true || n.aquec != null || String(n.st || "") === "aquecimento";'
     + ' const donos = []; for (const n of ns) if (!donos.includes(n.dono)) donos.push(n.dono);'
     + ' const porDono = (f) => donos.flatMap(d => ns.filter(n => n.dono === d && f(n))'
-    + '   .sort((a, b) => (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0)));'
+    + '   .sort((a, b) => { const pa = Number(a.fila && a.fila.pos) || 0, pb = Number(b.fila && b.fila.pos) || 0;'
+    + '     if (pa && pb) return pa - pb; if (pa || pb) return pa ? -1 : 1; return (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0) }));'
     + ' const q = [...porDono(n => !aq(n)), ...porDono(aq)];'
     + ' return { n: ns.length, digitos: q.map(x => x.numero.slice(-4)).join(","),'
     + ' naAquec: porDono(aq).map(x => x.numero.slice(-4)).join(",") } })()')
@@ -1160,7 +1190,9 @@ app.whenReady().then(async () => {
   conta('na cor do aquecimento', risco && /245, 158, 11/.test(risco.cor), risco && risco.cor)
 
   await js2('document.getElementById("encolhe").click()')
-  await espera(600)
+  // 1,2 s e nao 600 ms: a largura volta numa transicao, e com a maquina ocupada (o teste roda com
+  // outros Electron abertos) ela passou dos 600 ms em 19/10 e o teste mediu a barra no meio do caminho.
+  await espera(1200)
   // O DESTAQUE na barra larga, que e onde ele olha no dia a dia. So UM dos tres: os outros estao
   // no limite e desligado. Destacar todos os ligados nao diria nada.
   const dest = await js2('(() => { const r = [...document.querySelectorAll(".num")].map(e => e.className);'
