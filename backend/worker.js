@@ -23610,6 +23610,97 @@ async function _roletaDesligaNum(env, nk8, o) {
   return null;
 }
 
+// O APP DO VENDEDOR PAROU DE REGISTRAR AS CONVERSAS (21/10/2026, a Barbara).
+//
+// O CASO: o computador da Barbara parou de mandar mensagem pra dash as 11:38 de 20/10 e ninguem viu
+// por mais de 24 h. Ela atendia normal (abria conversa, mandava funil), os leads chegavam pra ela, e
+// a dash mostrava 0: nem contagem, nem evento pro TikTok, e o placar da roleta lendo ela como
+// "sem resposta". O aviso de numero mudo existia, mas ele diz "o lead nao fala", nao "o app parou".
+//
+// A PROVA QUE NAO DEPENDE DE ADIVINHAR: o funil. Quando o vendedor dispara um funil pelo app, o
+// proprio app grava em swweb_funil (POST /api/swweb/funil-feito) e manda a mensagem pelo WhatsApp
+// dele, e essa mensagem de saida tem que voltar pela captura em wa_messages. Funil enviado sem
+// nenhuma saida registrada pro mesmo telefone e o app falando que mandou e a captura nao vendo. Medido
+// em 21/10: Barbara 41 funis e 0 saidas registradas; Guilherme 272 de 272; Kevin 190 de 206 (o resto
+// e numero que caiu no meio). Numero restrito nao confunde: a saida e do vendedor, nao do lead.
+//
+// REGRA: nos funis de 10 a 40 min atras, por vendedor, 3 ou mais e NENHUM com saida registrada (de 2
+// min antes a 10 min depois) -> avisa o vendedor e a direcao, no maximo um aviso a cada 3 h por
+// vendedor. Nao desliga nada: os leads estao chegando no WhatsApp dele, so nao estao sendo contados.
+let _capParadaIdx = false;
+async function _alarmeCapturaParada(env) {
+  const agora = Math.floor(Date.now() / 1000);
+  if (!_capParadaIdx) {
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_swweb_funil_ts ON swweb_funil (ts)').run(); } catch (_) {}
+    _capParadaIdx = true;
+  }
+  let funis = [];
+  try {
+    const r = await env.DB.prepare('SELECT fone, at_id, nome, ts FROM swweb_funil WHERE ts >= ? AND ts <= ?').bind(agora - 2400, agora - 600).all();
+    funis = (r && r.results) || [];
+  } catch (_) { return; }   // tabela ainda nao existe: nenhum funil saiu pelo app
+  if (!funis.length) return;
+  let saidas = [];
+  try {
+    const r = await env.DB.prepare("SELECT phone, ts FROM wa_messages WHERE direction = 'out' AND ts >= ?").bind(agora - 2400 - 120).all();
+    saidas = (r && r.results) || [];
+  } catch (_) { return; }
+  const porFone = {};
+  for (const m of saidas) { const k = String(m.phone || '').replace(/\D/g, '').slice(-8); if (k) (porFone[k] = porFone[k] || []).push(Number(m.ts) || 0); }
+  const porVend = {};
+  for (const f of funis) {
+    const at = String(f.at_id || '');
+    if (!at) continue;
+    const k = String(f.fone || '').replace(/\D/g, '').slice(-8);
+    const t = Number(f.ts) || 0;
+    const viu = (porFone[k] || []).some((x) => x >= t - 120 && x <= t + 600);
+    const o = (porVend[at] = porVend[at] || { n: 0, viu: 0, nome: String(f.nome || at) });
+    o.n += 1;
+    if (viu) o.viu += 1;
+  }
+  const parados = Object.entries(porVend).filter(([, o]) => o.n >= 3 && o.viu === 0);
+  // DUAS CONFERENCIAS SEGUIDAS ANTES DE AVISAR. Repassando a regra nos dados de 20 e 21/10, ela teria
+  // disparado uma vez so pro Guilherme (16:05 de 20/10, 15 funis numa rajada) e na volta seguinte ja
+  // estava limpo: piscada, nao app parado. Com a segunda conferencia (4 min ou mais depois da
+  // primeira) a piscada some e a Barbara continua aparecendo desde 12:30 de 20/10.
+  const KV = 'swweb_captura_parada_vista';
+  let vista = {};
+  try { vista = JSON.parse((await _readConfig(env, KV)) || '{}') || {}; } catch (_) { vista = {}; }
+  const novaVista = {};
+  for (const [at] of parados) novaVista[at] = Number(vista[at]) || agora;
+  if (JSON.stringify(novaVista) !== JSON.stringify(vista)) { try { await _writeConfig(env, KV, JSON.stringify(novaVista)); } catch (_) {} }
+  const firmes = parados.filter(([at]) => agora - novaVista[at] >= 240);
+  if (!firmes.length) return;
+  const K = 'swweb_captura_parada';
+  let ja = {};
+  try { ja = JSON.parse((await _readConfig(env, K)) || '{}') || {}; } catch (_) { ja = {}; }
+  const avisar = firmes.filter(([at]) => !ja[at] || (agora - Number(ja[at] || 0)) > 10800);
+  for (const [at, o] of firmes) console.log('CAPTURA_PARADA at=' + at + ' funis=' + o.n + ' com_saida=0' + (avisar.some(([a]) => a === at) ? ' avisa' : ''));
+  if (!avisar.length) return;
+  for (const [at] of avisar) ja[at] = agora;
+  try { await _writeConfig(env, K, JSON.stringify(ja)); } catch (_) {}
+  let direcao = [];
+  try {
+    const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+    direcao = ((us && us.results) || []).map((x) => String(x.id));
+  } catch (_) {}
+  for (const [at, o] of avisar) {
+    const nome = String(o.nome || 'o vendedor').split(' ')[0];
+    const ids = new Set(direcao.concat([at]));
+    for (const id of ids) {
+      try {
+        await _wpParaPessoa(env, id, {
+          title: id === at ? 'Seu SellWave Web parou de registrar' : 'SellWave Web de ' + nome + ' parou de registrar',
+          body: (id === at ? 'Voce' : nome) + ' mandou ' + o.n + ' funis pelo app e nenhuma mensagem foi registrada na dash. Os leads chegam no WhatsApp, mas nao entram na contagem nem no TikTok. '
+            + (id === at ? 'Feche o SellWave Web e abra de novo.' : 'Peca pra fechar o SellWave Web e abrir de novo.'),
+          tag: 'captura-parada-' + at,
+          url: '/pressels',
+        });
+      } catch (_) { /* aviso que falha nao para os outros */ }
+    }
+  }
+}
+
 // MARCA O NUMERO COMO BLOQUEADO NA CONTINGENCIA (21/10/2026, pedido do Bruno: "quando um numero for
 // bloqueado, voce atualizasse tambem automaticamente la na area de contingencia o status dele para
 // bloqueado. Mas isso apenas em casos em que ele realmente foi bloqueado").
@@ -29032,6 +29123,8 @@ export default {
         // Arquivo de leads: desligado sai na primeira linha (uma leitura de config); ligado, move ate
         // `lote` pedidos encerrados por batida de manutencao (de 5 em 5 minutos).
         try { const _ra = await _arqCron(env); if (_ra && _ra.n) console.error('[arquivo] ' + _ra.n + ' pedido(s) arquivado(s), restam ' + (_ra.restam || 0)); } catch (e) { console.error('[cron] arquivo de leads falhou: ' + String((e && e.message) || e)); }
+        // O APP QUE PAROU DE REGISTRAR (21/10/2026): de 5 em 5 minutos, duas consultas por indice. Ver _alarmeCapturaParada.
+        try { await _alarmeCapturaParada(env); } catch (e) { console.error('[cron] alarme captura parada falhou: ' + String((e && e.message) || e)); }
         // Gira entre quatro tarefas lentas: cada uma cai a cada 80 minutos, que e de sobra pro que
         // elas fazem. Backup e guardado por dentro (1x/hora e so se a versao mudou).
         const volta = Math.floor(minuto / RODIZIO.length) % 4;
