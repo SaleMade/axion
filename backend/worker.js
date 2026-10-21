@@ -22098,18 +22098,29 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
 // número do mesmo vendedor. Medido em 22/07: claimed dava 90/53/33/11/1 enquanto o lead real era
 // 97/45/25/13/1. wa_lead bate exatamente com o que a dash mostra (143 x 38, total 181).
 // Cache de 30s por isolate: o placar anda ~1 lead a cada 3min, então não precisa ler a cada clique.
-let _leadDiaCache=null, _leadDiaT=0, _leadDiaKey=0, _leadNovoCache=null;
+let _leadDiaCache=null, _leadDiaT=0, _leadDiaKey=0, _leadNovoCache=null, _leadAtCache=null, _leadSemInstCache=null;
 async function _leadsHojePorNumero(env, dayStart){
   const agora=Date.now();
   if(_leadDiaCache && _leadDiaKey===dayStart && (agora-_leadDiaT)<30000) return _leadDiaCache;
-  const out={}, novos={};
+  const out={}, novos={}, porAt={}, semInst={};
   try{
+    // O `inst` entrou no GROUP BY (21/10/2026) pra sair daqui tambem o LEAD POR VENDEDOR. Ele e o
+    // dono NA HORA em que o lead chegou (ax_<at>_<8digitos>), e e a unica fonte que nao muda quando
+    // o numero troca de mao depois. Mesmas linhas lidas: so muda como elas sao agrupadas.
     const r=await env.DB.prepare(
-      "SELECT substr(replace(num,'+',''),-8) AS nk, COUNT(*) AS n, SUM(CASE WHEN COALESCE(src,'')<>'deduzido' THEN 1 ELSE 0 END) AS nv FROM wa_lead WHERE ts >= ? AND num IS NOT NULL AND num<>'' GROUP BY nk"
+      "SELECT substr(replace(num,'+',''),-8) AS nk, COALESCE(inst,'') AS inst, COUNT(*) AS n, SUM(CASE WHEN COALESCE(src,'')<>'deduzido' THEN 1 ELSE 0 END) AS nv FROM wa_lead WHERE ts >= ? AND num IS NOT NULL AND num<>'' GROUP BY nk, inst"
     ).bind(dayStart).all();
-    (r.results||[]).forEach(x=>{ const k=String(x.nk||''); if(k){ out[k]=Number(x.n)||0; novos[k]=Number(x.nv)||0; } });
+    (r.results||[]).forEach(x=>{
+      const k=String(x.nk||''); if(!k) return;
+      const n=Number(x.n)||0;
+      out[k]=(out[k]||0)+n; novos[k]=(novos[k]||0)+(Number(x.nv)||0);
+      const inst=String(x.inst||'');
+      if(!inst){ semInst[k]=(semInst[k]||0)+n; return; }
+      const at=_atFromInst(inst);
+      if(at) porAt[at]=(porAt[at]||0)+n;
+    });
   }catch(_){ return _leadDiaCache || {}; }   // erro de leitura não pode zerar o placar
-  _leadDiaCache=out; _leadNovoCache=novos; _leadDiaT=agora; _leadDiaKey=dayStart;
+  _leadDiaCache=out; _leadNovoCache=novos; _leadAtCache=porAt; _leadSemInstCache=semInst; _leadDiaT=agora; _leadDiaKey=dayStart;
   return out;
 }
 // LEAD NOVO DE HOJE POR NUMERO - o que o LIMITE do modo fila conta (13/09/2026, pedido do Bruno: "so
@@ -22122,6 +22133,13 @@ async function _leadsHojePorNumero(env, dayStart){
 async function _leadsNovosHojePorNumero(env, dayStart){
   await _leadsHojePorNumero(env, dayStart);
   return _leadNovoCache || {};
+}
+// LEAD DE HOJE POR VENDEDOR, PELO DONO DA HORA (21/10/2026). Devolve { at: total } somando pela
+// INSTANCIA gravada no lead, e o `semInst` com o que nao tem instancia pra quem precisar do antigo.
+// Mesma varredura e mesmo cache do placar por numero: nao custa consulta nenhuma a mais.
+async function _leadsHojePorAt(env, dayStart){
+  await _leadsHojePorNumero(env, dayStart);
+  return { porAt: _leadAtCache || {}, semInst: _leadSemInstCache || {} };
 }
 // LIMITE DE LEAD POR DIA, POR NUMERO (13/09/2026, pedido do Bruno: "nossos numeros estao sendo banidos
 // sempre que um numero recebe mais ou menos 100 leads num dia"). SO VALE NO MODO LIMITE (chip.dist,
@@ -22608,6 +22626,7 @@ async function _presselBalancedPick(env, id, sellers, pre){
   //    desempate; quem manda no placar é o lead.
   const hoje={};
   let conv={};
+  let leadAt={}, leadSemInst={};
   try{
     // A CONSULTA MAIS CARA DO BANCO, E RODA A CADA VISITA DA PRESSEL (11/09/2026).
     //
@@ -22631,6 +22650,8 @@ async function _presselBalancedPick(env, id, sellers, pre){
     ]);
     (r.results||[]).forEach(x=>{ const k=String(x.num_key||''); if(!k) return; hoje[k]=Number(x.dia)||0; });
     conv=lh||{};
+    const _pa = await _leadsHojePorAt(env, dayStart);   // mesmo cache da linha de cima
+    leadAt = (_pa && _pa.porAt) || {}; leadSemInst = (_pa && _pa.semInst) || {};
   }catch(_){}
   // _pickRecent = o que esta instância acabou de mandar e o banco ainda não enxerga (leitura atrasa
   // alguns segundos; sem isso, uma rajada de cliques ia toda pro mesmo número).
@@ -22682,16 +22703,32 @@ async function _presselBalancedPick(env, id, sellers, pre){
   // ligado, numero no teto e numero desligado. Lead que entrou hoje e do vendedor, ponto; o que o
   // interruptor controla e quem RECEBE daqui pra frente, nao o historico do dia.
   //
-  // `nksTodos` vem do _resolvePresselSellers com todos os numeros "Em uso" do vendedor, ligados ou
-  // nao. Sem ele (numeros sem dono, que nao passam por aquele caminho) cai no comportamento
-  // antigo, que pra esse caso e o certo: so o que esta na roleta mais o que saiu pelo teto.
+  // ══ O PLACAR SEGUE A INSTANCIA DO LEAD, NAO OS CHIPS DE AGORA (21/10/2026) ═══════════════
+  //
+  // TERCEIRA PORTA DO MESMO BUG. 14/10 consertou o interruptor, 18/10 a TAG (banido/restrito) e
+  // 20/10 o "Em uso" que a Meta tira ao banir. Faltava a quarta mao: quando o chip MUDA DE DONO -
+  // tipico do numero banido que e arrastado pra uma coluna da Contingencia - ele deixa de ser do
+  // vendedor, e o `nksTodos` (que le os chips de AGORA) perde os leads que aquele numero ja tinha
+  // feito pra ele HOJE.
+  //
+  // MEDIDO EM 21/10: o (15) 97407-6200 era do Guilherme, fez 72 leads ate as 11:37 e foi pra coluna
+  // `ccol_6` depois do ban. As 14h o placar dele caiu de 130 pra 57 contra 127 do Kevin, e a roleta
+  // despejou: 14h deu 33 x 3 e 15h deu 59 x 25. O dia fechou 222 x 161 - e o Bruno viu isso na tela
+  // como "desbalanceamento". O numero tambem leva leads de brinde pro dono novo: os 6 leads que o
+  // (15) 99187-2193 fez pelo Kevin de manha passaram a contar pro Guilherme quando o chip mudou.
+  //
+  // A FONTE CERTA e a INSTANCIA gravada no lead (`ax_<at>_<8digitos>`): ela guarda de quem o numero
+  // era NA HORA. Nao muda depois, cobre as quatro maos de uma vez e divide direito o numero que
+  // trocou de dono no meio do dia. Lead sem instancia (nao da pra saber de quem foi) continua pelo
+  // dono ATUAL do numero, que e o comportamento antigo - hoje isso e zero lead, mas a perna fica.
   for(const sv of sellers){
     const k=String(sv.at); if(!porAt[k]) continue;
+    porAt[k].cv = Number(leadAt[k]||0);
     const lista = (Array.isArray(sv.nksTodos) && sv.nksTodos.length)
       ? sv.nksTodos
       : porAt[k].nums.map(a=>k8(a.num)).concat(_foraLimite.filter(u=>String(u.at)===k).map(u=>k8(u.num)));
     const vistos = new Set();
-    for(const nk of lista){ if(nk && !vistos.has(nk)){ vistos.add(nk); porAt[k].cv += (conv[nk]||0); } }
+    for(const nk of lista){ if(nk && !vistos.has(nk)){ vistos.add(nk); porAt[k].cv += (leadSemInst[nk]||0); } }
   }
   // SEM teto de compensação. Existia uma trava de 3x aqui, tirada a pedido do Diretor: na operação
   // real um número ou está restrito (converte pior, mas funciona) ou está banido — e banido sai
