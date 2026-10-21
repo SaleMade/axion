@@ -71,6 +71,7 @@ sq.exec('CREATE TABLE swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, m
 sq.exec('CREATE TABLE swweb_conn (nk TEXT PRIMARY KEY, st TEXT, espontaneo INTEGER DEFAULT 0, modo TEXT, info TEXT, queda TEXT, por TEXT, ts INTEGER)');
 sq.exec('CREATE TABLE users (id TEXT PRIMARY KEY, role TEXT, archived INTEGER, afiliado_id TEXT)');
 sq.exec('CREATE TABLE wa_api_numbers (num_key TEXT, display_phone TEXT, at_id TEXT, status TEXT)');
+sq.exec('CREATE TABLE sc_heartbeat (self_number TEXT PRIMARY KEY, at_id TEXT, instance TEXT, wpp_seen INTEGER, last_seen INTEGER, meta TEXT)');
 sq.exec("INSERT INTO users VALUES ('dir','diretor',0,NULL),('kevin','vendedor',0,NULL),('gui','vendedor',0,NULL)");
 
 const config = new Map();
@@ -203,6 +204,30 @@ estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda')
   anda(200); await F._desligaCaidos(env);
   conta('offline, conflito, proxy, sincronizando, naosei e fechado nao marcam', r.every((x) => x === null) && ligadoEm(K2, 'kevin', 1), JSON.stringify(r));
   solta(nk);
+}
+
+{
+  // O 3697 DA BARBARA EM 21/10: janela aberta desde ONTEM, o aluguel venceu e voltou hoje (`desde`
+  // novo) e o PRONTO ficou pra tras. Quem prova que estava conectado nesta abertura e a batida.
+  const nk = nkApp(K2);
+  aluga(nk, 'kevin', AGORA, AGORA + 120); anda(20); await reporta(nk, 'pronto', 'kevin');
+  anda(86400); aluga(nk, 'kevin', AGORA, AGORA + 120);   // aluguel novo, mesma janela
+  const bate = () => sq.prepare("INSERT INTO sc_heartbeat VALUES (?, 'kevin', 'ax_kevin', 1, ?, 'swweb') ON CONFLICT(self_number) DO UPDATE SET last_seen=excluded.last_seen, meta=excluded.meta").run('55' + nk, AGORA);
+  const d1 = AGORA;
+  anda(60); bate(); anda(60); bate(); anda(30); aluga(nk, 'kevin', d1, AGORA + 120);   // renovado, o desde fica
+  const m = await reporta(nk, 'qr', 'kevin');
+  anda(95); await F._desligaCaidos(env);
+  conta('janela antiga com batida autenticada neste aluguel: a queda desliga', m === 'caiu' && !ligadoEm(K2, 'kevin', 1), String(m));
+  sq.exec('DELETE FROM swweb_queda'); solta(nk); estadoInicial(); sq.exec('DELETE FROM pressel_num_log'); pushes.length = 0;
+  // batida so de ANTES do aluguel (abertura anterior): nao prova nada
+  aluga(nk, 'kevin', AGORA + 10, AGORA + 130); anda(20);
+  const m2 = await reporta(nk, 'qr', 'kevin');
+  conta('batida so da abertura anterior nao marca', m2 === null, String(m2));
+  // batida de outra fonte (Sale Chat) tambem nao
+  sq.exec("UPDATE sc_heartbeat SET last_seen = " + (AGORA + 5) + ", meta = 'sc'");
+  const m3 = await reporta(nk, 'qr', 'kevin');
+  conta('batida que nao e do SellWave Web nao marca', m3 === null, String(m3));
+  sq.exec('DELETE FROM sc_heartbeat'); solta(nk);
 }
 
 console.log('\nBLOQUEIO, AFILIADO E BATIDAS SOBREPOSTAS\n');

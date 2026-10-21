@@ -23656,8 +23656,20 @@ async function _swwebMarcaQueda(env, nk, st, u, b) {
   if (!uso || String(uso.user_id || '') !== quem || Number(uso.ate || 0) <= agora) return null;
   const row = await env.DB.prepare('SELECT pronto_ts, pronto_por, em, feito FROM swweb_queda WHERE nk=?').bind(nk).first();
   if (row && (Number(row.em || 0) > 0 || Number(row.feito || 0) === 1)) return null;   // ja marcada (ou ja desligada nesta queda)
-  const prontoAqui = !!row && Number(row.pronto_ts || 0) > 0 && Number(row.pronto_ts || 0) >= Number(uso.desde || 0)
+  let prontoAqui = !!row && Number(row.pronto_ts || 0) > 0 && Number(row.pronto_ts || 0) >= Number(uso.desde || 0)
     && String(row.pronto_por || '') === quem;
+  // OU UMA BATIDA AUTENTICADA DESTE ALUGUEL. O app so reporta o estado quando ele MUDA, e uma janela
+  // aberta ha mais de um dia nao repete o PRONTO: o 3697 da Barbara estava aberto desde 20/10 11:42,
+  // o aluguel venceu e voltou as 11:58 de 21/10 (`desde` novo) e o ultimo PRONTO ficou pra tras. O
+  // heartbeat do app (POST /api/swweb/heartbeat) so sai com o WhatsApp autenticado, a cada minuto;
+  // batida depois do `desde` prova que o numero estava conectado nesta abertura.
+  if (!prontoAqui && !bloqueio) {
+    try {
+      const hb = await env.DB.prepare("SELECT MAX(last_seen) AS ult FROM sc_heartbeat WHERE substr(self_number,-8) = ? AND meta = 'swweb' AND wpp_seen = 1")
+        .bind(nk.slice(-8)).first();
+      prontoAqui = !!hb && Number(hb.ult || 0) >= Number(uso.desde || 0);
+    } catch (_) { /* sem a tabela: fica so a prova pelo PRONTO */ }
+  }
   if (!bloqueio && !prontoAqui) return null;
   const q = (b && b.queda && typeof b.queda === 'object') ? b.queda : null;
   const doWa = q && String(q.modo || '') === 'LOGOUT_REASON' && q.motivo ? String(q.motivo).slice(0, 40) : '';
