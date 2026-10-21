@@ -23597,6 +23597,58 @@ async function _roletaDesligaNum(env, nk8, o) {
   return null;
 }
 
+// MARCA O NUMERO COMO BLOQUEADO NA CONTINGENCIA (21/10/2026, pedido do Bruno: "quando um numero for
+// bloqueado, voce atualizasse tambem automaticamente la na area de contingencia o status dele para
+// bloqueado. Mas isso apenas em casos em que ele realmente foi bloqueado").
+//
+// "REALMENTE" = quem bloqueou disse que bloqueou: a Meta (`wa_api_numbers.status = 'BANNED'`, no
+// _desligaBanidos) ou o proprio WhatsApp no app (st 'bloqueado': tela TOS_BLOCK ou LOGOUT_REASON
+// lock/ban, no _desligaCaidos). Numero que so CAIU (pediu o QR de novo) NAO e marcado: desconectar
+// nao e bloqueio, e o cartao dele mentiria.
+//
+// QUAL STATUS: o primeiro seletor do cartao (`wa_st`). A lista dele nao tem "Bloqueado", tem
+// "Banido" (papel banido, o vermelho que ele mesmo usa: 1970, 4144 e 8847 estao assim). Se um dia
+// existir um status chamado Bloqueado, vale ele; senao o de papel banido. Sem nenhum dos dois, nao
+// inventa status: nao faz nada.
+//
+// FAZ O QUE O SELETOR DA TELA FAZ (setStatus do contingencia.jsx + handleChipSave): sai do "Em uso",
+// zera o restab_start, e aquecimento volta pra ativo com o relogio zerado. NAO muda de coluna nem de
+// dono, e NAO mexe na segunda marcacao (wa_st2): isso e decisao dele. Numero de afiliado fica de fora.
+//
+// Devolve { mudou: true, ... } se marcou agora, { mudou: false } se nao havia o que fazer (ja estava,
+// sem chip, afiliado, sem status), ou null se nao conseguiu gravar (conflito de versao).
+async function _contMarcaBloqueado(env, nk8) {
+  const agora = Math.floor(Date.now() / 1000);
+  const _sem = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (let tent = 0; tent < 3; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return { mudou: false };
+    let data; try { data = JSON.parse(row.data); } catch (_) { return { mudou: false }; }
+    const sts = Array.isArray(data.wa_statuses) ? data.wa_statuses : [];
+    const alvo = sts.find((x) => x && x.id && /bloquead/i.test(_sem(x.label))) || sts.find((x) => x && x.id && _papelSt(x) === 'banido');
+    if (!alvo) return { mudou: false };
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk8);
+    if (!chip || String(chip.afl || '')) return { mudou: false };
+    if (String(chip.wa_st || '') === String(alvo.id)) return { mudou: false };
+    const deSt = sts.find((x) => x && String(x.id) === String(chip.wa_st || ''));
+    const antes = deSt ? String(deSt.label || deSt.id) : String(chip.wa_st || '');
+    chip.wa_st = String(alvo.id);
+    chip.em_uso = false;
+    chip.restab_start = '';
+    if (chip.st === 'aquecimento' || (deSt && _papelSt(deSt) === 'aquecimento')) { if (chip.st === 'aquecimento') chip.st = 'ativo'; chip.warm_start = ''; }
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, agora, 'cont-bloqueado:' + nk8, row.version).run();
+    if (res && res.meta && res.meta.changes > 0) {
+      try { _dashCache = null; } catch (_) {}
+      console.log('CONT_BLOQUEADO num=' + nk8 + ' de=' + antes + ' para=' + String(alvo.label || alvo.id));
+      return { mudou: true, nk8, numero: String(chip.num || ''), at: String(chip.at || ''), status: String(alvo.label || alvo.id), antes };
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 // DESLIGA SOZINHO O NUMERO QUE CAIU NO WHATSAPP (21/10/2026, pedido do Bruno: "quando o numero cair,
 // se voce conseguir provar 100% de certeza de que ele caiu, eu quero que voce desative tambem
@@ -23706,21 +23758,27 @@ async function _desligaCaidos(env) {
       por_nome: bloq ? 'Sistema (bloqueado no WhatsApp)' : 'Sistema (caiu no WhatsApp)',
       marca: 'caiu-off:', rotulo: 'ROLETA_CAIU_OFF',
     });
-    if (!f) continue;
+    // BLOQUEIO TAMBEM VIRA STATUS NA CONTINGENCIA (ver _contMarcaBloqueado). So o bloqueio: queda nao.
+    const t = bloq ? await _contMarcaBloqueado(env, nk.slice(-8)) : null;
+    const marcou = t && t.mudou ? t.status : '';
+    if (!f && !marcou) continue;
     // AVISO: direcao da casa e o dono do numero. A MESMA tag do aviso de queda (swconn-<nk>), de
     // proposito: este substitui aquele no celular, em vez de empilhar dois.
-    const _d = String(f.numero || '').replace(/\D/g, '').replace(/^55/, '');
-    const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(f.numero || nk);
+    const numero = (f && f.numero) || (t && t.numero) || '';
+    const dono = (f && f.at) || (t && t.at) || '';
+    const _d = String(numero).replace(/\D/g, '').replace(/^55/, '');
+    const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(numero || nk);
     const porque = bloq ? 'foi bloqueado pelo WhatsApp' : 'desconectou no WhatsApp (pediu o QR de novo, sem ninguem fechar)';
-    const body = bonito + ' ' + porque + (doWa ? ' (motivo: ' + doWa + ')' : '')
-      + '. Tirei ele da chegada de leads pra nao receber clique pago. Quando conectar de novo, e so religar o interruptor.';
+    const fiz = [f ? 'tirei ele da chegada de leads pra nao receber clique pago' : '', marcou ? 'marquei como ' + marcou + ' na Contingencia' : ''].filter(Boolean).join(' e ');
+    const body = bonito + ' ' + porque + (doWa ? ' (motivo: ' + doWa + ')' : '') + '. ' + fiz.charAt(0).toUpperCase() + fiz.slice(1) + '.'
+      + (bloq ? '' : ' Quando conectar de novo, e so religar o interruptor.');
     try {
       const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
       const ids = new Set(((us && us.results) || []).map((u) => String(u.id)));
-      if (f.at && !/^ccol_/i.test(f.at)) ids.add(String(f.at));
+      if (dono && !/^ccol_/i.test(dono)) ids.add(String(dono));
       for (const id of ids) {
         await _wpParaPessoa(env, id, {
-          title: bloq ? 'WhatsApp bloqueou, desliguei da roleta' : 'Numero caiu, desliguei da roleta',
+          title: bloq ? 'WhatsApp bloqueou um numero' : 'Numero caiu, desliguei da roleta',
           body, tag: 'swconn-' + nk, url: '/pressels',
         });
       }
@@ -23755,7 +23813,19 @@ async function _desligaBanidos(env) {
     const r = await env.DB.prepare("SELECT num_key, display_phone, at_id FROM wa_api_numbers WHERE COALESCE(status,'') = 'BANNED' AND at_id IS NOT NULL AND at_id <> ''").all();
     banidos = (r && r.results) || [];
   } catch (_) { return; }
-  if (!banidos.length) return;
+
+  // A MARCA NA CONTINGENCIA E UMA VEZ POR BAN (ver _contMarcaBloqueado). O desligamento abaixo repete
+  // toda vez de proposito (protege o clique pago de quem religa sem saber); o STATUS nao pode repetir:
+  // se ele trocar o cartao na mao com a Meta ainda dizendo BANNED (o 8847 seguia BANNED na Meta em
+  // 21/10 depois de desbanido), o sistema nao briga com ele. A trava rearma quando a Meta para de
+  // dizer BANNED. Mora no app_config pra sobreviver ao isolate.
+  const K_MARCA = 'cont_bloqueado_meta';
+  let marcados = {};
+  try { marcados = JSON.parse((await _readConfig(env, K_MARCA)) || '{}') || {}; } catch (_) { marcados = {}; }
+  const banidosNk = new Set(banidos.map((b) => String(b.display_phone || '').replace(/\D/g, '').slice(-8)).filter(Boolean));
+  let mexeuMarca = false;
+  for (const k of Object.keys(marcados)) if (!banidosNk.has(k)) { delete marcados[k]; mexeuMarca = true; }
+  if (!banidos.length) { if (mexeuMarca) { try { await _writeConfig(env, K_MARCA, JSON.stringify(marcados)); } catch (_) {} } return; }
 
   // Quando foi o ULTIMO AVISO de cada numero. So controla o push; o desligamento em si nao olha
   // isto. Mora no app_config pra sobreviver ao isolate.
@@ -23775,8 +23845,20 @@ async function _desligaBanidos(env) {
     // `Sistema (banido na Meta)` no pressel_num_log, e os seis em `roleta_banido_off` com o MESMO
     // carimbo 1792332452), e nenhum push saiu. Quem carimba e o laco do `avisar`, DEPOIS de conferir.
     const f = await _roletaDesligaNum(env, nk8, { por_nome: 'Sistema (banido na Meta)', marca: 'banido-off:', rotulo: 'ROLETA_BANIDO_OFF' });
-    if (f) feitos.push(f);
+    let marcou = '';
+    if (!marcados[nk8]) {
+      const t = await _contMarcaBloqueado(env, nk8);
+      // null = conflito de versao: tenta de novo na proxima volta. O resto (marcou, ja estava, sem
+      // chip) trava ate o proximo ban.
+      if (t) { marcados[nk8] = agora; mexeuMarca = true; }
+      if (t && t.mudou) {
+        marcou = t.status;
+        if (!f) feitos.push({ nk8, at: t.at, numero: t.numero, pids: '', marcou });
+      }
+    }
+    if (f) feitos.push({ ...f, marcou });
   }
+  if (mexeuMarca) { try { await _writeConfig(env, K_MARCA, JSON.stringify(marcados)); } catch (_) {} }
 
   if (!feitos.length) return;
   // AVISO PRA DIRECAO DA CASA, no maximo um a cada 12h POR NUMERO. Sem o trinco, religar um banido
@@ -23793,9 +23875,11 @@ async function _desligaBanidos(env) {
       const _d = String(f.numero || '').replace(/\D/g, '').replace(/^55/, '');
       const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(f.numero || '');
       for (const x of ((us && us.results) || [])) {
+        const desligou = !!f.pids;
+        const fiz = [desligou ? 'tirei ele da chegada de leads pra nao receber clique pago' : '', f.marcou ? 'marquei como ' + f.marcou + ' na Contingencia' : ''].filter(Boolean).join(' e ');
         await _wpParaPessoa(env, String(x.id), {
-          title: 'Numero banido, desliguei da roleta',
-          body: bonito + ' esta banido na Meta. Tirei ele da chegada de leads pra nao receber clique pago. Nao religa sozinho.',
+          title: desligou ? 'Numero banido, desliguei da roleta' : 'Numero banido na Meta',
+          body: bonito + ' esta banido na Meta. ' + fiz.charAt(0).toUpperCase() + fiz.slice(1) + '.' + (desligou ? ' Nao religa sozinho.' : ''),
           tag: 'banido-' + f.nk8,
           url: '/pressels/contingencia',
         });

@@ -41,9 +41,10 @@ const conta = (nome, certo, detalhe) => {
 };
 
 const nomes = ['_roletaDesligaNum', '_swwebQuedaTabela', '_swwebMarcaQueda', '_desligaCaidos', '_desligaBanidos',
-  '_presselAplicaNum', '_presselEstadoNum', '_presselNumLogEnsure', '_presselNumLog', '_limpaMarcasDesligado', '_amanhaBR'];
+  '_presselAplicaNum', '_presselEstadoNum', '_presselNumLogEnsure', '_presselNumLog', '_limpaMarcasDesligado', '_amanhaBR',
+  '_contMarcaBloqueado', '_papelSt', '_papelPeloNomeSt'];
 const blocos = nomes.map((n) => [n, funcao(n)]);
-const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = '].map((c) => [c, linha(c)]);
+const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
 conta('o worker tem as funcoes da queda e do desligamento', !faltando.length, 'faltando: ' + faltando.join(', '));
 if (faltando.length) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados'); process.exit(1); }
@@ -79,7 +80,7 @@ const pushes = [];
 const fabrica = new Function('env_', '_readConfig', '_writeConfig', '_wpParaPessoa',
   'let _dashCache = null; let _pnlOk = false; let _swQuedaOk = false;\n'
   + consts.map(([, l]) => l).join('\n') + '\n' + blocos.map(([, b]) => b).join('\n')
-  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum };');
+  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum, _contMarcaBloqueado };');
 const F = fabrica(env,
   async (_e, k) => (config.has(k) ? config.get(k) : null),
   async (_e, k, v) => { config.set(k, v); },
@@ -89,15 +90,25 @@ const F = fabrica(env,
 const K1 = '5515991872193', K2 = '5515991879743', G1 = '5515974076200', AF = '5511999990000';
 const nkApp = (n) => String(n).replace(/\D/g, '').replace(/^55/, '').replace(/^(\d\d)9(\d{8})$/, '$1$2');   // como o app manda (DDD + 8)
 const k8 = (n) => String(n).replace(/\D/g, '').slice(-8);
-function estadoInicial() {
+// a lista de status igual a dele em 21/10 (ids e papeis de verdade)
+const EM_USO = 'st_mpafmypw', BANIDO = 'st_mpah411p', AQUEC = 'st_mpalmegl', REESTAB = 'st_mtyrsx0n', SEMQ = 'st_mulu46p2_9';
+const STATUS = [
+  { id: EM_USO, label: 'Em Uso', papel: 'em_uso' }, { id: 'st_mpafn8em', label: 'Ativo', papel: 'ativo' },
+  { id: 'st_mpafn8zm', label: 'Restrito', papel: 'restrito' }, { id: BANIDO, label: 'Banido', papel: 'banido' },
+  { id: AQUEC, label: 'Em Aquecimento', papel: 'aquecimento' }, { id: REESTAB, label: 'Reestabelecido', papel: 'restabelecido' },
+  { id: SEMQ, label: 'Sem quedas' },
+];
+function estadoInicial(extra) {
   const data = {
+    wa_statuses: STATUS,
     chips: [
-      { num: K1, at: 'kevin', wa_st: 'em_uso' },
-      { num: K2, at: 'kevin', wa_st: 'em_uso' },
-      { num: G1, at: 'gui', wa_st: 'em_uso' },
-      { num: AF, at: 'kevin', afl: 'aflX', wa_st: 'em_uso' },
+      { num: K1, at: 'kevin', st: 'ativo', wa_st: EM_USO, wa_st2: SEMQ, em_uso: true },
+      { num: K2, at: 'kevin', st: 'ativo', wa_st: EM_USO, wa_st2: SEMQ, em_uso: true },
+      { num: G1, at: 'gui', st: 'ativo', wa_st: EM_USO, wa_st2: REESTAB, em_uso: true, restab_start: '2026-10-01' },
+      { num: AF, at: 'kevin', afl: 'aflX', st: 'ativo', wa_st: EM_USO, em_uso: true },
     ],
     pressels: [{ id: 1, vendedores: [] }, { id: 12, vendedores: [] }, { id: 99, afl: 'aflX', vendedores: [] }],
+    ...(extra || {}),
   };
   sq.exec('DELETE FROM dashboard_state');
   sq.prepare('INSERT INTO dashboard_state VALUES (1, ?, 1, 0, ?)').run(JSON.stringify(data), 'teste');
@@ -109,6 +120,11 @@ const ligadoEm = (num, at, pid) => {
   return !(v.ativo === false || (v.off && v.off[k8(num)]));
 };
 const log = () => sq.prepare("SELECT por_nome, nk, acao FROM pressel_num_log ORDER BY id").all();
+const chipDe = (num) => estado().chips.find((c) => k8(c.num) === k8(num));
+const poeStatus = (num, wa_st, em_uso) => {
+  const d = estado(); const c = d.chips.find((x) => k8(x.num) === k8(num)); c.wa_st = wa_st; c.em_uso = em_uso;
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+};
 const aluga = (nk, user, desde, ate) => sq.prepare('INSERT INTO swweb_uso VALUES (?,?,?,?,?,?) ON CONFLICT(nk) DO UPDATE SET user_id=excluded.user_id, desde=excluded.desde, ate=excluded.ate').run(nk, user, user, 'maq-' + user, desde, ate);
 const solta = (nk) => sq.prepare('DELETE FROM swweb_uso WHERE nk=?').run(nk);
 // o que o POST /api/swweb/conexao faz: grava o estado e chama a marca
@@ -243,13 +259,66 @@ estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda')
   conta('e desliga com "Sistema (bloqueado no WhatsApp)"', !ligadoEm(G1, 'gui', 1) && log().length === 1 && log()[0].por_nome === 'Sistema (bloqueado no WhatsApp)', JSON.stringify(log()));
   conta('tres batidas ao mesmo tempo: um desligamento e um aviso por pessoa', pushes.length === 2, String(pushes.length));
   conta('o aviso traz o motivo do WhatsApp', /account_locked/.test(pushes[0].body), pushes[0].body);
+  // A CONTINGENCIA (pedido do Bruno em 21/10): bloqueio de verdade vira o status Banido no cartao
+  const c = chipDe(G1);
+  conta('bloqueado no WhatsApp: o cartao vira Banido na Contingencia', c.wa_st === BANIDO, c.wa_st);
+  conta('e sai do Em uso, como o seletor da tela faz', c.em_uso === false, String(c.em_uso));
+  conta('o restab_start zera (o handleChipSave faz igual)', c.restab_start === '', String(c.restab_start));
+  conta('a segunda marcacao, a coluna e o dono nao mudam', c.wa_st2 === REESTAB && c.at === 'gui', JSON.stringify({ wa_st2: c.wa_st2, at: c.at }));
+  conta('o aviso conta que marcou', /marquei como Banido na Contingencia/.test(pushes[0].body), pushes[0].body);
+  conta('o aviso nao tem travessao', !/[–—]/.test(pushes[0].body + pushes[0].title));
   solta(nk);
+}
+{
+  // so CAIU (pediu QR): desliga da roleta, mas o cartao NAO vira Banido
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda'); pushes.length = 0;
+  const nk = nkApp(K1);
+  aluga(nk, 'kevin', AGORA, AGORA + 120); anda(20); await reporta(nk, 'pronto', 'kevin');
+  anda(60); await reporta(nk, 'qr', 'kevin'); anda(95); await F._desligaCaidos(env);
+  const c = chipDe(K1);
+  conta('numero que so caiu sai da roleta mas o cartao continua Em Uso', !ligadoEm(K1, 'kevin', 1) && c.wa_st === EM_USO && c.em_uso === true, JSON.stringify({ wa_st: c.wa_st, em_uso: c.em_uso }));
+  conta('e o aviso nao fala em Contingencia', pushes.length > 0 && !/Contingencia/.test(pushes[0].body), pushes[0] && pushes[0].body);
+  solta(nk);
+}
+{
+  // bloqueado com o interruptor JA desligado na mao: nao desliga de novo, mas marca e avisa
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda'); pushes.length = 0;
+  const d = estado(); for (const p of d.pressels) if (!p.afl) p.vendedores = [{ at: 'kevin', off: { [k8(K2)]: true } }];
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+  const nk = nkApp(K2);
+  aluga(nk, 'kevin', AGORA, AGORA + 120); anda(10); await reporta(nk, 'bloqueado', 'kevin'); anda(95); await F._desligaCaidos(env);
+  conta('ja desligado: nada no registro do interruptor, mas o cartao vira Banido', !log().length && chipDe(K2).wa_st === BANIDO, JSON.stringify(log()));
+  conta('e o aviso diz so que marcou', pushes.length > 0 && /^.+ foi bloqueado pelo WhatsApp\. Marquei como Banido na Contingencia\.$/.test(pushes[0].body), pushes[0] && pushes[0].body);
+  solta(nk);
+}
+{
+  // numero em aquecimento bloqueado: o campo volta pra ativo e o relogio zera (igual a tela)
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda'); pushes.length = 0;
+  const d = estado(); const c0 = d.chips.find((x) => k8(x.num) === k8(K2)); Object.assign(c0, { st: 'aquecimento', wa_st: AQUEC, em_uso: false, warm_start: '2026-10-15' });
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+  const r = await F._contMarcaBloqueado(env, k8(K2));
+  const c = chipDe(K2);
+  conta('aquecimento bloqueado: Banido, campo ativo e relogio zerado', r && r.mudou && c.wa_st === BANIDO && c.st === 'ativo' && c.warm_start === '', JSON.stringify({ wa_st: c.wa_st, st: c.st, warm: c.warm_start }));
+  const r2 = await F._contMarcaBloqueado(env, k8(K2));
+  conta('marcar de novo um ja Banido nao grava nada', r2 && r2.mudou === false, JSON.stringify(r2));
+  const rA = await F._contMarcaBloqueado(env, k8(AF));
+  conta('numero de afiliado nao e marcado', rA && rA.mudou === false && chipDe(AF).wa_st === EM_USO, JSON.stringify(rA));
+}
+{
+  // se ele criar um status chamado Bloqueado, vale ele
+  estadoInicial({ wa_statuses: STATUS.concat([{ id: 'st_bloq', label: 'Bloqueado' }]) });
+  const r = await F._contMarcaBloqueado(env, k8(K1));
+  conta('com um status "Bloqueado" na lista, e ele que vai pro cartao', r && r.mudou && chipDe(K1).wa_st === 'st_bloq' && r.status === 'Bloqueado', JSON.stringify(r));
+  // e sem Banido nem Bloqueado, nao inventa
+  estadoInicial({ wa_statuses: STATUS.filter((x) => x.id !== BANIDO) });
+  const r2 = await F._contMarcaBloqueado(env, k8(K1));
+  conta('sem status de banido na lista, nao inventa nenhum', r2 && r2.mudou === false && chipDe(K1).wa_st === EM_USO, JSON.stringify(r2));
 }
 {
   const nk = nkApp(AF);
   aluga(nk, 'kevin', AGORA, AGORA + 120); anda(20); await reporta(nk, 'pronto', 'kevin');
-  anda(60); await reporta(nk, 'qr', 'kevin'); anda(95); const antes = pushes.length; await F._desligaCaidos(env);
-  conta('numero de afiliado nao e desligado pelo sistema', ligadoEm(AF, 'kevin', 99) && pushes.length === antes && log().length === 1, JSON.stringify(log()));
+  anda(60); await reporta(nk, 'qr', 'kevin'); anda(95); const antes = pushes.length, logAntes = log().length; await F._desligaCaidos(env);
+  conta('numero de afiliado nao e desligado pelo sistema', ligadoEm(AF, 'kevin', 99) && pushes.length === antes && log().length === logAntes, JSON.stringify(log()));
   solta(nk);
 }
 
@@ -268,6 +337,27 @@ estadoInicial(); sq.exec('DELETE FROM pressel_num_log'); pushes.length = 0; conf
   sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
   await F._desligaBanidos(env);
   conta('banido religado na mao: desliga de novo (e o aviso segura 12 h)', !ligadoEm(G1, 'gui', 1) && log().length === 2 && pushes.length === 1, JSON.stringify(log()));
+  // A CONTINGENCIA: banido na Meta vira Banido no cartao, UMA vez por ban
+  conta('banido na Meta: o cartao vira Banido e sai do Em uso', chipDe(G1).wa_st === BANIDO && chipDe(G1).em_uso === false, JSON.stringify(chipDe(G1)));
+  conta('o aviso diz que desligou e que marcou', /Tirei ele da chegada de leads pra nao receber clique pago e marquei como Banido na Contingencia\. Nao religa sozinho\./.test(pushes[0].body), pushes[0].body);
+  poeStatus(G1, REESTAB, false);   // ele troca o cartao na mao, com a Meta ainda dizendo BANNED
+  await F._desligaBanidos(env);
+  conta('trocado na mao com a Meta ainda BANNED: o sistema nao briga com o cartao', chipDe(G1).wa_st === REESTAB, chipDe(G1).wa_st);
+  sq.exec("UPDATE wa_api_numbers SET status='CONNECTED'"); await F._desligaBanidos(env);
+  conta('a Meta parou de dizer BANNED: a trava rearma', !JSON.parse(config.get('cont_bloqueado_meta') || '{}')[k8(G1)], config.get('cont_bloqueado_meta'));
+  poeStatus(G1, EM_USO, true);
+  sq.exec("UPDATE wa_api_numbers SET status='BANNED'"); await F._desligaBanidos(env);
+  conta('banido de novo: marca de novo', chipDe(G1).wa_st === BANIDO, chipDe(G1).wa_st);
+}
+{
+  // ja desligado e ainda Em Uso no cartao (o 6200 do Guilherme em 21/10): so marca, e avisa isso
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM wa_api_numbers'); pushes.length = 0; config.clear();
+  const d = estado(); for (const p of d.pressels) if (!p.afl) p.vendedores = [{ at: 'gui', off: { [k8(G1)]: true } }];
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+  sq.prepare("INSERT INTO wa_api_numbers VALUES (?,?,?,?)").run('74076200', '+' + G1, 'gui', 'BANNED');
+  await F._desligaBanidos(env);
+  conta('o 6200: ja desligado, o cartao vira Banido', chipDe(G1).wa_st === BANIDO && !log().length, JSON.stringify(log()));
+  conta('e o aviso diz so que marcou', pushes.length === 1 && /esta banido na Meta\. Marquei como Banido na Contingencia\.$/.test(pushes[0].body) && pushes[0].title === 'Numero banido na Meta', JSON.stringify(pushes[0]));
 }
 
 console.log('\nAS LIGACOES NO WORKER\n');
