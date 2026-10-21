@@ -11547,8 +11547,10 @@ async function handleSwWeb(req, env, path) {
     // OS PAPEIS DAS TAGS, pra decidir "em uso" e "aquecendo" do mesmo jeito que a roleta decide.
     const _ids = { emUso: _emUsoIdsDe(data), aquec: _aquecIdsDe(data) };
     const nomeSt = {}, corSt = {};
+    const banIds = new Set();   // ids dos status de papel banido (ver o filtro no fim desta rota)
     for (const st of (Array.isArray(data && data.wa_statuses) ? data.wa_statuses : [])) {
       if (!st || !st.id) continue;
+      if (_papelSt(st) === 'banido') banIds.add(String(st.id));
       nomeSt[String(st.id)] = st.label || st.nome || st.name || '';
       corSt[String(st.id)] = st.cor || st.color || '';
     }
@@ -11718,6 +11720,7 @@ async function handleSwWeb(req, env, path) {
         dono: donos[String(c.at || '')] || '',
         status: nomeSt[String(c.wa_st || '')] || '',
         cor: corSt[String(c.wa_st || '')] || '',
+        banido: c.st === 'banido' || banIds.has(String(c.wa_st || '')),
         em_uso: !!c.em_uso,
         // EM AQUECIMENTO? O app desenha esses numa secao propria, com o dia visivel - porque com
         // rampa o mesmo rotulo "aquecendo" cobriria um numero que recebe 5 e um que recebe 50.
@@ -11794,7 +11797,17 @@ async function handleSwWeb(req, env, path) {
         proxy: px ? { host: px.host || '', porta: Number(px.porta) || 0, temSenha: !!(px.usuario || px.senha) } : null,
       };
     });
-    return json({ ok: true, numeros, config: cfg, direcao: manda });
+    // BANIDO SOME DA LISTA (21/10/2026, pedido do Bruno: "ja coloquei que alguns numeros deles estao
+    // banidos. Esses numeros deveriam sumir, so que nao estao sumindo"). A Chegada de leads ja tirava
+    // (ela so desenha o que esta Em uso); o app listava todo chip do vendedor, e o Guilherme aparecia
+    // com 4 numeros e o Kevin com 5 quando cada um tinha 3 de pe.
+    // Banido = o primeiro seletor do cartao com papel banido, ou o campo antigo st 'banido'. Outros
+    // status (Restrito, Ativo, Em analise) CONTINUAM na lista sem interruptor: numero restrito ainda
+    // recebe mensagem e tem conversa pra responder; banido nao abre mais.
+    // A UNICA EXCECAO e o banido ABERTO NESTA MAQUINA agora: ele fica ate o vendedor fechar, senao a
+    // janela continuaria aberta sem um item na lista pra clicar e fechar. Fechou, sumiu.
+    const visiveis = numeros.filter((n) => !n.banido || (n.uso && n.uso.meu));
+    return json({ ok: true, numeros: visiveis, config: cfg, direcao: manda });
   }
 
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder
