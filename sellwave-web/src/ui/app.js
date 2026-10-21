@@ -1074,6 +1074,74 @@ function avisaVersao(d) {
     + '. Clique pra baixar, instale por cima.</span>'
   el.title = 'As conversas e os números pareados continuam salvos'
   el.onclick = () => window.sw.abrirInstalador()
+  // `entrada` so vem na PRIMEIRA checagem desta abertura do app (quem decide e o main.js, que
+  // sobrevive ao recarregamento desta pagina). Nas checagens de 6 em 6 horas ele nao vem, e ai
+  // sobra so a faixinha - de proposito, pra nao abrir modal em cima de quem esta atendendo.
+  if (d && d.entrada) janelaVersao(nova, d.atual || estado.versao, d.notas)
+}
+
+// POP-UP DE ATUALIZACAO (21/10/2026, pedido do Bruno).
+//
+// POR QUE A FAIXINHA NAO BASTOU: ela existe desde a 1.1.0, mora no rodape da barra e some da vista
+// em um dia. Em 21/10 a Barbara estava na 1.25.7, cinco versoes atras, com a captura parada desde o
+// dia anterior - 449 cliques pagos e 139 conversas que nunca entraram na dash. Ninguem viu a faixa.
+//
+// AS REGRAS, todas do Bruno: aparece na ENTRADA (nunca no meio do atendimento), ocupa a tela, diz o
+// que mudou e tem uma saida clara. Clicar fora NAO fecha - tem que escolher um dos dois botoes,
+// senao o pop-up grande vira a mesma faixinha que ninguem le.
+function janelaVersao(nova, atual, notas) {
+  const ICO = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    + 'stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+    + '<path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>'
+  const corpo = String(notas || '').trim()
+  modalCorpo.className = 'cartao'
+  modalCorpo.style.maxWidth = '470px'   // mais largo que o padrao; o sai() devolve
+  modalCorpo.innerHTML = '<div style="text-align:center;padding:4px 6px 2px">'
+    + '<div style="width:64px;height:64px;margin:0 auto 16px;border-radius:20px;background:rgba(36,194,120,.14);'
+    + 'display:flex;align-items:center;justify-content:center;color:var(--verde)">' + ICO + '</div>'
+    + '<h2 style="font-size:22px;margin:0 0 8px;font-weight:700">Atualização disponível</h2>'
+    + '<div style="font-size:14px;opacity:.72;margin-bottom:' + (corpo ? '16px' : '20px') + '">Você está na <b>'
+    + esc(atual || '') + '</b> · a atual é a <b>' + esc(nova) + '</b></div>'
+    + (corpo
+      ? '<div style="text-align:left;background:rgba(255,255,255,.04);border-radius:12px;padding:12px 14px;margin-bottom:18px">'
+        + '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.55;margin-bottom:5px">O que mudou</div>'
+        + '<div style="font-size:13.5px;line-height:1.5">' + esc(corpo) + '</div></div>'
+      : '')
+    + '<p style="font-size:13.5px;line-height:1.55;opacity:.85;margin:0 0 20px">Instale antes de começar a atender. '
+    + 'É por cima da que já está aqui, leva menos de um minuto, e as conversas e os números pareados continuam salvos.</p>'
+    + '<button id="ver-baixar" style="width:100%;padding:13px;border:0;border-radius:12px;background:var(--verde);'
+    + 'color:#04070c;font-size:15px;font-weight:700;cursor:pointer">Baixar e instalar</button>'
+    + '<button id="ver-depois" style="width:100%;margin-top:10px;padding:9px;border:0;border-radius:10px;'
+    + 'background:transparent;color:inherit;opacity:.55;font-size:13px;cursor:pointer">Agora não</button>'
+    + '</div>'
+  modal.classList.add('on')
+  modal.onclick = null
+  // OS BOTOES PRIMEIRO, O `esconder` DEPOIS, E ELE DENTRO DE UM try. O pop-up tira o fechar-
+  // clicando-fora, entao a unica saida sao os dois botoes: se qualquer linha antes deles estourar,
+  // o vendedor fica preso numa tela que nao fecha. Foi o que o teste de tela pegou.
+  const sai = () => {
+    modal.onclick = fechaPorFora
+    modalCorpo.style.maxWidth = ''
+    fechaModal()
+  }
+  const dep = $('ver-depois')
+  if (dep) dep.onclick = sai
+  const bx = $('ver-baixar')
+  if (bx) {
+    bx.onclick = () => {
+      try { window.sw.abrirInstalador() } catch (_) { /* o botao da faixa continua valendo */ }
+      // A TELA TEM QUE DIZER O QUE FAZER DEPOIS. O download abre no navegador e o app continua
+      // aberto: sem esta troca a pessoa clica, nao ve nada acontecer e fecha achando que falhou.
+      bx.textContent = 'Download aberto no navegador'
+      bx.disabled = true
+      bx.style.opacity = '.6'
+      bx.style.cursor = 'default'
+      if (dep) { dep.textContent = 'Fechar'; dep.style.opacity = '.85' }
+      const p = modalCorpo.querySelector('p')
+      if (p) p.innerHTML = 'Quando o download terminar, <b>feche o app</b> e rode o instalador. Ele instala por cima e seus números continuam pareados.'
+    }
+  }
+  try { window.sw.esconder() } catch (_) { /* a tela ja esta coberta pelo fundo do modal */ }
 }
 
 // A TELA TEM QUE DIZER QUE E PREVIEW. Sem isto, o Bruno entra no "ver como", some metade da tela
@@ -1170,7 +1238,10 @@ window.addEventListener('focus', () => {
   sincroniza()
 })
 $('busca').oninput = (e) => { filtro = String(e.target.value || '').toLowerCase().trim(); desenhaLista() }
-modal.onclick = (e) => { if (e.target === modal) fechaModal() }
+// Com nome porque o pop-up de atualizacao TIRA o fechar-clicando-fora enquanto esta aberto e
+// precisa repor depois (ver janelaVersao).
+const fechaPorFora = (e) => { if (e.target === modal) fechaModal() }
+modal.onclick = fechaPorFora
 document.onkeydown = (e) => { if (e.key === 'Escape') fechaModal() }
 
 window.sw.ao('sw:status', (d) => { const p = $('passo'); if (p && d) p.textContent = d.texto })

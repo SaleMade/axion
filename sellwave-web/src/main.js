@@ -1770,6 +1770,25 @@ const CAMINHO_AGENTE = path.join(__dirname, 'ui', 'agente.js')
 // velho na tela de quem achava que era o atual.
 let versaoPublicada = ''
 let urlInstalador = ''
+// O POP-UP GRANDE E SO NA ENTRADA (21/10/2026, pedido do Bruno: "quando eles forem trabalhar, na
+// primeira vez que entrarem no aplicativo, se tiver atualizacao nova, que apareca um pop-up bem
+// grande (...) depois que ja comecaram a usar, nao, pra nao interromper o trabalho deles").
+//
+// AS DUAS TRAVAS MORAM AQUI, NO PROCESSO PRINCIPAL, E NAO NA CASCA. A pagina da casca recarrega
+// sozinha quando a vigia de tela branca age, e qualquer marca que morasse nela voltaria do zero -
+// o pop-up reapareceria no meio do atendimento, que e exatamente o que ele nao quer.
+//   1) uma vez por ABERTURA do app;
+//   2) so nos primeiros minutos de app no ar. Se a primeira checagem falhar por rede, a seguinte
+//      (6 h depois) ja nao vira pop-up, vira a faixinha - ninguem leva modal no meio da tarde.
+const APP_SUBIU_EM = Date.now()
+const POPUP_VERSAO_JANELA_MS = 10 * 60 * 1000
+let popupVersaoFeito = false
+// Funcao com nome pra dar pra TESTAR a regra sem subir o app (teste-versao-popup.mjs recorta daqui).
+function podeAbrirPopupVersao(agora) {
+  if (popupVersaoFeito) return false                                   // ja apareceu nesta abertura
+  if ((agora - APP_SUBIU_EM) >= POPUP_VERSAO_JANELA_MS) return false   // o app ja esta em uso
+  return true
+}
 // Compara 1.2.3 numero a numero. Comparar como texto diz que "1.10.0" e menor que "1.9.0".
 function versaoMenor(a, b) {
   const pa = String(a || '').split('.').map((x) => Number(x) || 0)
@@ -1790,8 +1809,13 @@ async function confereVersao() {
     versaoPublicada = String((d && d.versao) || '')
     urlInstalador = String((d && d.url) || '')
     if (versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada)) {
-      anota('[versao] este app e ' + app.getVersion() + ' e a publicada e ' + versaoPublicada)
-      avisaCasca('sw:versao', { atual: app.getVersion(), publicada: versaoPublicada, url: urlInstalador })
+      // `entrada` = pode abrir o pop-up grande. Ver as duas travas la em cima.
+      const entrada = podeAbrirPopupVersao(Date.now())
+      if (entrada) popupVersaoFeito = true
+      anota('[versao] este app e ' + app.getVersion() + ' e a publicada e ' + versaoPublicada + (entrada ? ' (pop-up de entrada)' : ' (so a faixa)'))
+      // As `notas` sao o que mudou na versao nova: sem elas o pop-up pede pra atualizar sem dizer
+      // por que, e a resposta natural de quem esta atendendo e fechar.
+      avisaCasca('sw:versao', { atual: app.getVersion(), publicada: versaoPublicada, url: urlInstalador, notas: String((d && d.notas) || ''), entrada })
     }
   } catch (_) { /* sem rede: o aviso espera, o app funciona */ }
 }
