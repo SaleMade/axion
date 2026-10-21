@@ -12131,6 +12131,9 @@ async function handleSwWeb(req, env, path) {
       ).bind(nk, st, espontaneo, String((b && b.modo) || '').slice(0, 40), String((b && b.info) || '').slice(0, 40),
              JSON.stringify((b && b.queda) || null).slice(0, 300), String(u.id)).run();
     } catch (_) { return err('Não consegui gravar', 500); }
+    // QUEDA CERTA VIRA INTERRUPTOR DESLIGADO (21/10/2026): marca aqui, o cron confirma em 90 s e
+    // desliga. Ver o comentario do _desligaCaidos. Falhar aqui nunca atrapalha o registro do estado.
+    try { await _swwebMarcaQueda(env, nk, st, u, b); } catch (e) { console.error('[swweb] marca queda falhou: ' + String((e && e.message) || e)); }
     // LOG CRU, SEMPRE. E daqui que vai sair a resposta de qual sinal um ban de verdade dispara.
     console.log('SWWEB_CONN nk=' + nk + ' st=' + st + ' esp=' + espontaneo
       + ' modo=' + String((b && b.modo) || '') + ' queda=' + JSON.stringify((b && b.queda) || null));
@@ -23507,10 +23510,9 @@ async function handlePresselNum(req, env) {
 
 // AVISO DE NUMERO QUE CAIU SOZINHO. Um por numero a cada 6 horas: cair, reconectar e cair de
 // novo no mesmo dia e um caso real (proxy instavel), e tres avisos iguais viram barulho.
-// NAO DESLIGA NADA. Queda e INFERENCIA: a causa pode ser ban, mas tambem o vendedor deslogando sem
-// querer, o aparelho principal desvinculando ou a rede caindo. Desligar por inferencia tiraria do
-// ar o numero de quem esta trabalhando, que foi exatamente o risco que o Bruno pediu pra evitar.
-// Quem desliga sozinho e so o `_desligaBanidos`, e so com a Meta AFIRMANDO que esta banido.
+// ESTE AVISO NAO DESLIGA NADA. Quem desliga e o `_desligaCaidos` (21/10/2026), 90 s depois e so com
+// prova (ver o comentario dele), e o `_desligaBanidos`, com a Meta afirmando que esta banido. O aviso
+// dele usa a mesma tag deste e o substitui no celular.
 async function _swwebAvisaQueda(env, nk, st, b) {
   const agora = Math.floor(Date.now() / 1000);
   const K = 'swweb_queda_aviso';
@@ -23530,8 +23532,8 @@ async function _swwebAvisaQueda(env, nk, st, b) {
   const bonito = d.length >= 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4) : String(numero);
   const _motivo = (b && b.queda && b.queda.modo === 'LOGOUT_REASON' && b.queda.motivo) ? ' (motivo do WhatsApp: ' + String(b.queda.motivo).slice(0, 40) + ')' : '';
   const texto = st === 'bloqueado'
-    ? bonito + ' foi bloqueado pelo WhatsApp' + _motivo + '. Ele saiu da roleta sozinho; confira o celular dele.'
-    : bonito + ' desconectou sozinho, sem ninguem fechar' + _motivo + '. Pode ser queda ou ban: confira o numero.';
+    ? bonito + ' foi bloqueado pelo WhatsApp' + _motivo + '. Se nao voltar em 2 minutos, eu desligo ele da roleta; confira o celular dele.'
+    : bonito + ' desconectou sozinho, sem ninguem fechar' + _motivo + '. Se nao voltar em 2 minutos, eu desligo ele da roleta.';
   try {
     const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
     for (const x of ((us && us.results) || [])) {
@@ -23543,6 +23545,175 @@ async function _swwebAvisaQueda(env, nk, st, b) {
       });
     }
   } catch (_) {}
+}
+
+// DESLIGA UM NUMERO DA CASA EM TODAS AS PRESSELS DA OPERACAO DELE, COMO O SISTEMA. E o que o
+// interruptor da tela faz (handlePresselNum), so que sem pessoa: quem pede e o _desligaBanidos (a
+// Meta disse que esta banido) e o _desligaCaidos (o WhatsApp derrubou a sessao). Devolve
+// { nk8, at, numero, pids } se desligou agora, ou null se nao havia o que fazer.
+//
+// Leitura e escrita com gate de versao, igual ao handlePresselNum: outra tela gravando no mesmo
+// segundo nao pode perder a mexida (e a licao do incidente da aba antiga).
+// NUNCA RELIGA. Quem religa e gente, pelo interruptor.
+async function _roletaDesligaNum(env, nk8, o) {
+  const agora = Math.floor(Date.now() / 1000);
+  for (let tent = 0; tent < 3; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return null;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return null; }
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk8);
+    if (!chip) return null;
+    const at = String(chip.at || '');
+    if (!at) return null;
+    // SO A CASA. Numero de afiliado e operacao dele, e desligar o numero dos outros por conta
+    // propria nao e nosso papel - o aviso ate pode ir, o interruptor nao.
+    if (String(chip.afl || '')) return null;
+
+    const dosVend = chips.filter((c) => c && String(c.at || '') === at && c.num);
+    const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
+    const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
+      .filter((p) => p && _donoDe(p) === _donoDe(chip) && !String(p.afl || ''));
+    if (!alvos.length) return null;
+    // JA ESTA DESLIGADO EM TODAS? Entao nao ha o que fazer, e nem gasta gravacao.
+    const estado = _presselEstadoNum(alvos, at, nk8);
+    if (!Object.values(estado).some((x) => x && x.on)) return null;
+
+    for (const p of alvos) _presselAplicaNum(p, at, nk8, false, false, numsDoVend);
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, agora, String(o.marca || 'sistema-off:') + nk8, row.version).run();
+    if (res && res.meta && res.meta.changes > 0) {
+      try { _dashCache = null; } catch (_) {}
+      const pids = alvos.map((p) => p.id).join(',');
+      console.log(String(o.rotulo || 'ROLETA_SISTEMA_OFF') + ' num=' + nk8 + ' at=' + at + ' pressels=' + pids);
+      // Fica no MESMO registro das mexidas de gente, com nome proprio: quem passar o mouse no
+      // interruptor ve "desligado por Sistema (...)", e nao procura qual pessoa desligou.
+      try { await _presselNumLog(env, { por: 'sistema', por_nome: String(o.por_nome || 'Sistema'), at, nk: nk8, acao: 'desliga', pids }); } catch (_) {}
+      return { nk8, at, numero: String(chip.num || ''), pids };
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// DESLIGA SOZINHO O NUMERO QUE CAIU NO WHATSAPP (21/10/2026, pedido do Bruno: "quando o numero cair,
+// se voce conseguir provar 100% de certeza de que ele caiu, eu quero que voce desative tambem
+// automaticamente. Claro, o meu vendedor pode ligar de novo").
+//
+// POR QUE AGORA E NAO ANTES: ate 20/10 o estado ruim que o app reporta tirava o numero da roleta
+// pelo liveSet. Naquele dia a regra virou (quem manda no chip da casa e o interruptor, ver
+// teste-roleta-casa-app-fechado.mjs) e o numero caido passou a receber clique pago ate alguem
+// desligar na mao. Medido em 21/10: o (15) 99187-2193 do Kevin caiu as 08:36 e so saiu as 08:53,
+// quando ele desligou; o 6200 do Guilherme caiu no app as 11:37 e a Meta so disse BANNED as 11:48.
+//
+// O QUE CONTA COMO PROVA, e so isto:
+//  1) o WhatsApp BLOQUEOU (st 'bloqueado': tela TOS_BLOCK, ou LOGOUT_REASON com lock/ban/block);
+//  2) o numero ficou PRONTO nesta mesma abertura e o WhatsApp pediu QR de novo (st 'qr' ou 'caiu'),
+//     sem ninguem fechar. "Nesta mesma abertura" e o aluguel do numero (swweb_uso): o PRONTO tem que
+//     ser posterior ao `desde` do aluguel que ainda vale, e da mesma pessoa que reporta a queda.
+//     Fechar e abrir de novo cria aluguel novo, entao QR ao abrir (copia que nao serviu, numero
+//     novo) NAO conta: ai nao da pra saber se caiu ou se nunca conectou.
+// O que NAO conta, porque e inferencia: app fechado, sem internet, proxy caida, conflito (aberto em
+// outro lugar), numero mudo e o DISCONNECTED da Cloud API (o 5847 e o 2248 estavam DISCONNECTED na
+// Meta e funcionando no app em 20/10).
+//
+// ESPERA 90 SEGUNDOS antes de desligar: se no meio o numero voltar a PRONTO, a marca some e nada
+// acontece. No historico de 16 a 21/10 nao ha nenhuma volta sozinha de QR pra PRONTO sem alguem
+// ler o QR, mas o custo da espera sao uns 6 cliques e ela tira da conta qualquer piscada.
+// DESLIGA UMA VEZ POR QUEDA. Se o vendedor religar com o numero ainda caido, o sistema nao briga
+// com ele (e o que o Bruno pediu); a marca so rearma quando o numero fica PRONTO de novo.
+let _swQuedaOk = false;
+const SWWEB_QUEDA_CONFIRMA = 90;
+async function _swwebQuedaTabela(env) {
+  if (_swQuedaOk) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_queda (nk TEXT PRIMARY KEY, pronto_ts INTEGER, pronto_por TEXT, em INTEGER, motivo TEXT, por TEXT, feito INTEGER DEFAULT 0)').run();
+  _swQuedaOk = true;
+}
+
+// Chamado pelo POST /api/swweb/conexao depois de gravar o estado. Devolve 'caiu' ou 'bloqueado'
+// quando marcou uma queda certa agora, ou null.
+async function _swwebMarcaQueda(env, nk, st, u, b) {
+  await _swwebQuedaTabela(env);
+  const agora = Math.floor(Date.now() / 1000);
+  const quem = String((u && u.id) || '');
+  if (!nk || !quem) return null;
+  if (st === 'pronto') {
+    // PRONTO REARMA: guarda quando e quem, e apaga a queda pendente (voltou antes dos 90 s).
+    await env.DB.prepare(
+      'INSERT INTO swweb_queda (nk, pronto_ts, pronto_por, em, motivo, por, feito) VALUES (?,?,?,NULL,NULL,NULL,0) ' +
+      'ON CONFLICT(nk) DO UPDATE SET pronto_ts=excluded.pronto_ts, pronto_por=excluded.pronto_por, em=NULL, motivo=NULL, por=NULL, feito=0'
+    ).bind(nk, agora, quem).run();
+    return null;
+  }
+  const bloqueio = st === 'bloqueado';
+  if (!bloqueio && st !== 'qr' && st !== 'caiu') return null;
+  // Quem reporta tem que estar com o aluguel do numero, valendo agora. Qualquer pessoa logada pode
+  // chamar esta rota; so quem esta com o numero aberto fala por ele.
+  let uso = null;
+  try { uso = await env.DB.prepare('SELECT user_id, desde, ate FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { uso = null; }
+  if (!uso || String(uso.user_id || '') !== quem || Number(uso.ate || 0) <= agora) return null;
+  const row = await env.DB.prepare('SELECT pronto_ts, pronto_por, em, feito FROM swweb_queda WHERE nk=?').bind(nk).first();
+  if (row && (Number(row.em || 0) > 0 || Number(row.feito || 0) === 1)) return null;   // ja marcada (ou ja desligada nesta queda)
+  const prontoAqui = !!row && Number(row.pronto_ts || 0) > 0 && Number(row.pronto_ts || 0) >= Number(uso.desde || 0)
+    && String(row.pronto_por || '') === quem;
+  if (!bloqueio && !prontoAqui) return null;
+  const q = (b && b.queda && typeof b.queda === 'object') ? b.queda : null;
+  const doWa = q && String(q.modo || '') === 'LOGOUT_REASON' && q.motivo ? String(q.motivo).slice(0, 40) : '';
+  const motivo = (bloqueio ? 'bloqueado' : 'caiu') + (doWa ? ':' + doWa : '');
+  await env.DB.prepare(
+    'INSERT INTO swweb_queda (nk, pronto_ts, pronto_por, em, motivo, por, feito) VALUES (?,NULL,NULL,?,?,?,0) ' +
+    'ON CONFLICT(nk) DO UPDATE SET em=excluded.em, motivo=excluded.motivo, por=excluded.por, feito=0'
+  ).bind(nk, agora, motivo, quem).run();
+  console.log('SWWEB_QUEDA_CERTA nk=' + nk + ' st=' + st + ' motivo=' + motivo + ' por=' + quem
+    + ' pronto=' + (row ? Number(row.pronto_ts || 0) : 0) + ' desde=' + Number(uso.desde || 0));
+  return bloqueio ? 'bloqueado' : 'caiu';
+}
+
+// Toda batida do cron: a queda marcada ha mais de 90 s, com o numero AINDA fora, desliga.
+async function _desligaCaidos(env) {
+  const agora = Math.floor(Date.now() / 1000);
+  let pend = [];
+  try {
+    const r = await env.DB.prepare(
+      'SELECT q.nk AS nk, q.em AS em, q.motivo AS motivo, c.st AS st FROM swweb_queda q LEFT JOIN swweb_conn c ON c.nk = q.nk ' +
+      'WHERE q.feito = 0 AND q.em IS NOT NULL AND q.em <= ?'
+    ).bind(agora - SWWEB_QUEDA_CONFIRMA).all();
+    pend = (r && r.results) || [];
+  } catch (_) { return; }   // tabela ainda nao existe: nenhuma queda foi marcada
+  for (const x of pend) {
+    const nk = String(x.nk || '');
+    // RESERVA: duas batidas sobrepostas nao desligam nem avisam duas vezes.
+    const res = await env.DB.prepare('UPDATE swweb_queda SET feito = 1 WHERE nk = ? AND feito = 0 AND em = ?').bind(nk, x.em).run();
+    if (!(res && res.meta && res.meta.changes > 0)) continue;
+    if (String(x.st || '') === 'pronto') continue;   // voltou: o PRONTO ja devia ter limpado a marca
+    const bloq = String(x.motivo || '').startsWith('bloqueado');
+    const doWa = String(x.motivo || '').split(':').slice(1).join(':');
+    const f = await _roletaDesligaNum(env, nk.slice(-8), {
+      por_nome: bloq ? 'Sistema (bloqueado no WhatsApp)' : 'Sistema (caiu no WhatsApp)',
+      marca: 'caiu-off:', rotulo: 'ROLETA_CAIU_OFF',
+    });
+    if (!f) continue;
+    // AVISO: direcao da casa e o dono do numero. A MESMA tag do aviso de queda (swconn-<nk>), de
+    // proposito: este substitui aquele no celular, em vez de empilhar dois.
+    const _d = String(f.numero || '').replace(/\D/g, '').replace(/^55/, '');
+    const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(f.numero || nk);
+    const porque = bloq ? 'foi bloqueado pelo WhatsApp' : 'desconectou no WhatsApp (pediu o QR de novo, sem ninguem fechar)';
+    const body = bonito + ' ' + porque + (doWa ? ' (motivo: ' + doWa + ')' : '')
+      + '. Tirei ele da chegada de leads pra nao receber clique pago. Quando conectar de novo, e so religar o interruptor.';
+    try {
+      const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+      const ids = new Set(((us && us.results) || []).map((u) => String(u.id)));
+      if (f.at && !/^ccol_/i.test(f.at)) ids.add(String(f.at));
+      for (const id of ids) {
+        await _wpParaPessoa(env, id, {
+          title: bloq ? 'WhatsApp bloqueou, desliguei da roleta' : 'Numero caiu, desliguei da roleta',
+          body, tag: 'swconn-' + nk, url: '/pressels',
+        });
+      }
+    } catch (_) { /* o desligamento ja aconteceu; aviso que falha nao desfaz isso */ }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════
@@ -23585,58 +23756,14 @@ async function _desligaBanidos(env) {
   for (const b of banidos) {
     const nk8 = String(b.display_phone || '').replace(/\D/g, '').slice(-8);
     if (!nk8) continue;
-
-    // Leitura e escrita com gate de versao, igual ao handlePresselNum: outra tela gravando no
-    // mesmo segundo nao pode perder a mexida (e a licao do incidente da aba antiga).
-    let mexeu = false;
-    for (let tent = 0; tent < 3 && !mexeu; tent++) {
-      const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-      if (!row) break;
-      let data; try { data = JSON.parse(row.data); } catch (_) { break; }
-      const chips = Array.isArray(data.chips) ? data.chips : [];
-      const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk8);
-      if (!chip) break;
-      const at = String(chip.at || '');
-      if (!at) break;
-      // SO A CASA. Numero de afiliado e operacao dele, e desligar o numero dos outros por conta
-      // propria nao e nosso papel - o aviso ate pode ir, o interruptor nao.
-      if (String(chip.afl || '')) break;
-
-      const dosVend = chips.filter((c) => c && String(c.at || '') === at && c.num);
-      const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
-      const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
-        .filter((p) => p && _donoDe(p) === _donoDe(chip) && !String(p.afl || ''));
-      if (!alvos.length) break;
-      // JA ESTA DESLIGADO EM TODAS? Entao nao ha o que fazer, e nem gasta gravacao.
-      const estado = _presselEstadoNum(alvos, at, nk8);
-      if (!Object.values(estado).some((x) => x && x.on)) break;   // nada ligado: nada a fazer, e sem aviso
-
-      for (const p of alvos) _presselAplicaNum(p, at, nk8, false, false, numsDoVend);
-      const newVer = (row.version || 0) + 1;
-      const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-        .bind(JSON.stringify(data), newVer, agora, 'banido-off:' + nk8, row.version).run();
-      if (res && res.meta && res.meta.changes > 0) {
-        try { _dashCache = null; } catch (_) {}
-        mexeu = true;
-        // NAO CARIMBAR AQUI. Este `ja[nk8] = agora` existia e matava o aviso inteiro: o filtro la
-        // embaixo compara `agora - ja[nk8] > 43200`, e com o carimbo feito aqui ele compara `agora`
-        // com `agora`, da sempre falso, `avisar` sai vazio e a funcao retorna ANTES do push.
-        // PROVA DE PRODUCAO: em 18/10 as 11:07 o sistema desligou SEIS numeros banidos (seis linhas
-        // `Sistema (banido na Meta)` no pressel_num_log, e os seis em `roleta_banido_off` com o
-        // MESMO carimbo 1792332452), e nenhum push saiu - a ultima entrega pro diretor foi 17/10
-        // 23:48, com falhas=0, ou seja nem tentativa.
-        // Quem carimba e o laco do `avisar`, DEPOIS de conferir, que e a ordem que o irmao desta
-        // funcao (`_swwebAvisaQueda`) ja fazia certo.
-        const pids = alvos.map((p) => p.id).join(',');
-        console.log('ROLETA_BANIDO_OFF num=' + nk8 + ' at=' + at + ' pressels=' + pids);
-        // Fica no MESMO registro das mexidas de gente, com nome proprio: quem abrir o diag amanha
-        // tem que ver que foi o sistema, e nao procurar qual pessoa desligou.
-        try { await _presselNumLog(env, { por: 'sistema', por_nome: 'Sistema (banido na Meta)', at, nk: nk8, acao: 'desliga', pids }); } catch (_) {}
-        feitos.push({ nk8, at, numero: String(chip.num || ''), pids });
-      } else {
-        await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
-      }
-    }
+    // NAO CARIMBAR o `ja` aqui. Isto existia dentro do laco de gravacao e matava o aviso inteiro: o
+    // filtro la embaixo compara `agora - ja[nk8] > 43200`, e com o carimbo feito aqui ele compara
+    // `agora` com `agora`, da sempre falso, `avisar` sai vazio e a funcao retorna ANTES do push.
+    // PROVA DE PRODUCAO: em 18/10 as 11:07 o sistema desligou SEIS numeros banidos (seis linhas
+    // `Sistema (banido na Meta)` no pressel_num_log, e os seis em `roleta_banido_off` com o MESMO
+    // carimbo 1792332452), e nenhum push saiu. Quem carimba e o laco do `avisar`, DEPOIS de conferir.
+    const f = await _roletaDesligaNum(env, nk8, { por_nome: 'Sistema (banido na Meta)', marca: 'banido-off:', rotulo: 'ROLETA_BANIDO_OFF' });
+    if (f) feitos.push(f);
   }
 
   if (!feitos.length) return;
@@ -28596,6 +28723,11 @@ export default {
     // Ver a memoria funil-passo-repetido-reserva.
     let _erroFunil = '';
     try { await _waFunnelTick(env); } catch (e) { _erroFunil = 'funil: ' + String((e && e.message) || e).slice(0, 90); console.error('[cron] funil falhou: ' + String((e && e.stack) || e)); }
+    // NUMERO QUE CAIU NO WHATSAPP SAI DA ROLETA (21/10/2026). Toda batida e antes da trava, porque
+    // cada minuto de atraso e clique pago num numero que ninguem atende; sem queda marcada e uma
+    // consulta numa tabela de poucas linhas. A reserva por UPDATE condicional (feito=0 AND em=?)
+    // impede duas batidas sobrepostas de agir duas vezes. Ver _desligaCaidos.
+    try { await _desligaCaidos(env); } catch (e) { console.error('[cron] desligaCaidos falhou: ' + String((e && e.message) || e)); }
     // O SYNC VEM DEPOIS DO FUNIL, DE PROPOSITO (28/09/2026). Os dois rodam antes da trava, mas o
     // funil tem CLIENTE esperando do outro lado - cada segundo aqui e a mensagem dele atrasando.
     // O sync atrasa o que o vendedor LE, que e ruim mas nao e o lead desistindo.
