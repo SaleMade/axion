@@ -2331,9 +2331,17 @@ async function handleDevolucoesPlataforma(req, env) {
   await _plVoltaEnsure(env);
   let refeitos = null;
   if (new URL(req.url).searchParams.get('refazer') === '1' && isDirector(_real)) refeitos = await _plVoltaRefaz(env);
-  const r = await env.DB.prepare("SELECT order_id, inicio_ts, ult_ts, ult_desc, ult_local, origem, chegou_ts, devolvido_ts FROM pl_volta WHERE COALESCE(mundo,'') = ? ORDER BY inicio_ts DESC LIMIT 1000")
-    .bind(_afl ? String(_afl) : '').all();
-  return json(refeitos === null ? { voltas: (r && r.results) || [] } : { voltas: (r && r.results) || [], refeitos });
+  // O pedido do afiliado vendido na conta da casa entra pela porta da CASA (mundo ''): pro afiliado,
+  // vale o que e dele pelo card (lead.afl, o mesmo mapa do /api/five/orders) ou pela porta dele.
+  // A casa recebe tudo o que entrou pela porta dela; a tela so usa o que casa com os pedidos que ja tem.
+  const r = await env.DB.prepare('SELECT order_id, mundo, inicio_ts, ult_ts, ult_desc, ult_local, origem, chegou_ts, devolvido_ts FROM pl_volta ORDER BY inicio_ts DESC LIMIT 2000').all();
+  let voltas = (r && r.results) || [];
+  if (_afl) {
+    const mapa = await _pedidosDeAfiliado(env);
+    voltas = voltas.filter((v) => String(v.mundo || '') === String(_afl) || mapa.get(String(v.order_id)) === String(_afl));
+  } else voltas = voltas.filter((v) => !String(v.mundo || ''));
+  voltas = voltas.map(({ mundo, ...v }) => v);
+  return json(refeitos === null ? { voltas } : { voltas, refeitos });
 }
 
 // DE QUEM E ESTA PORTA (11/09/2026). `/paylog` e a da casa; `/paylog/afl_xxx` e a daquele

@@ -33,8 +33,8 @@ sq.prepare('INSERT INTO dashboard_state (id, data, version, updated_at, updated_
 sq.prepare("INSERT INTO app_config (key, value, updated_at) VALUES ('pl_ingest', 'full', 0)").run();
 const agoraS = Math.floor(Date.now() / 1000);
 const tok = (id) => createHmac('sha256', 'sessao').update(id).digest('hex');   // a sessao e 64 hex
-for (const [id, role] of [['dir', 'diretor'], ['at_vend', 'atendente'], ['gestor1', 'gestor']]) {
-  sq.prepare('INSERT INTO users (id, login, pwd_hash, name, role) VALUES (?,?,?,?,?)').run(id, id, 'x', id, role);
+for (const [id, role, afl] of [['dir', 'diretor'], ['at_vend', 'atendente'], ['gestor1', 'gestor'], ['afl_user', 'afiliado', 'afl_teste1'], ['afl_outro', 'afiliado', 'afl_teste2']]) {
+  sq.prepare('INSERT INTO users (id, login, pwd_hash, name, role, afiliado_id) VALUES (?,?,?,?,?,?)').run(id, id, 'x', id, role, afl || null);
   sq.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)').run(tok(id), id, agoraS, agoraS + 3600);
 }
 const env = { DB, PAYLOG_SECRET: 'seg-after', PAYLOG2_SECRET: 'seg-normal' };
@@ -152,6 +152,16 @@ r = await le('/api/devolucoes/plataforma', 'dir');
 const linha = r.j && r.j.voltas && r.j.voltas.find((x) => x.order_id === 'PL-' + CODE);
 ok('diretor le a volta do pedido', !!linha && linha.chegou_ts === s('2026-10-19T17:31:26-03:00') && linha.ult_local === 'Indaiatuba/SP');
 ok('a resposta nao leva dado do cliente', !!linha && !JSON.stringify(r.j).includes('Cliente Volta') && !JSON.stringify(r.j).includes('11122233344'));
+
+// 7b) o afiliado ve a volta do pedido DELE (o card tem lead.afl), mesmo tendo entrado pela porta da casa
+const est = JSON.parse(sq.prepare('SELECT data FROM dashboard_state WHERE id = 1').get().data);
+for (const l of est.leads) if (l.five_id === 'PL-' + CODE) l.afl = 'afl_teste1';
+sq.prepare('UPDATE dashboard_state SET data = ?, version = version + 1 WHERE id = 1').run(JSON.stringify(est));
+r = await le('/api/devolucoes/plataforma', 'afl_user');
+ok('afiliado ve so a volta do pedido dele', r.status === 200 && r.j.voltas.length === 1 && r.j.voltas[0].order_id === 'PL-' + CODE, r.status + ' ' + JSON.stringify((r.j && r.j.voltas || []).map((x) => x.order_id)));
+r = await le('/api/devolucoes/plataforma', 'afl_outro');
+ok('outro afiliado nao ve', r.status === 200 && r.j.voltas.length === 0, JSON.stringify(r.j));
+ok('a resposta nao diz de que porta veio', !JSON.stringify(r.j).includes('mundo'));
 
 // 8) refazer pelo log
 sq.exec('DELETE FROM pl_volta');
