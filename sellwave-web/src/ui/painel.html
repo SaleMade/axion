@@ -510,6 +510,12 @@
     border-radius: 7px; color: rgba(134, 150, 160, .55); }
   .saindo .item-env .x:hover { background: rgba(240, 80, 106, .16); color: #f0506a; }
   .saindo .item-env .x svg { width: 13px; height: 13px; }
+  /* tres a vista e o resto rola aqui dentro (ver ajustaPilha no painel-ui.js); a rolagem nao vaza
+     pra lista de funis embaixo quando chega no fim */
+  .saindo .lista-env { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #6a7282 transparent; }
+  .saindo .lista-env::-webkit-scrollbar { width: 6px; }
+  .saindo .lista-env::-webkit-scrollbar-track { background: transparent; }
+  .saindo .lista-env::-webkit-scrollbar-thumb { background: #6a7282; border-radius: 3px; }
   .saindo .dono { margin-top: 1px; font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: .04em; color: rgba(134, 150, 160, .7); }
 

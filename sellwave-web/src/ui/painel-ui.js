@@ -113,6 +113,10 @@ function desenhaSaindo() {
   let h = '<div class="saindo">'
     + '<div class="cab">' + (rodando ? '<span class="roda"></span>' : '<span class="pt-fila"></span>')
     + '<span class="t">Enviando ' + (n > 1 ? 'funis' : 'funil') + ' · ' + n + '</span></div>'
+    // NO MAXIMO TRES A VISTA, O RESTO ROLA AQUI DENTRO (21/10/2026, pedido do Bruno: "o funil fica
+    // empilhando um em cima do outro, a fila vai ficando enorme e vai jogando todos os funis la pra
+    // baixo"). A altura de tres linhas e medida no desenho (ver `ajustaPilha`), nao chutada no CSS.
+    + '<div class="lista-env">'
   for (const j of fila) {
     const total = j.lista.length
     const passo = Math.max(1, Math.min(total, j.passo || 1))
@@ -130,7 +134,29 @@ function desenhaSaindo() {
       + '<button class="x" data-tirafila="' + j.id + '" title="' + (j.rodando ? 'Parar este' : 'Tirar da fila') + '">' + IC_X + '</button>'
       + '</div>'
   }
-  return h + '</div>'
+  return h + '</div></div>'
+}
+
+// A PILHA ROLA SEM PULAR. Todo `desenha()` troca o innerHTML inteiro (a cada passo que sai), entao
+// sem guardar a posicao a rolagem voltava pro topo no meio do gesto do vendedor. `antes` e o
+// scrollTop lido ANTES do desenho; aqui ele volta, e a altura vira a de exatamente tres linhas.
+const PILHA_A_VISTA = 3
+function pilhaRolada(corpo) {
+  const le = corpo && corpo.querySelector('.saindo .lista-env')
+  return le ? le.scrollTop : 0
+}
+function ajustaPilha(corpo, antes) {
+  const le = corpo && corpo.querySelector('.saindo .lista-env')
+  if (!le) return
+  const its = le.querySelectorAll('.item-env')
+  if (its.length > PILHA_A_VISTA) {
+    le.style.maxHeight = Math.round(its[PILHA_A_VISTA].getBoundingClientRect().top - its[0].getBoundingClientRect().top) + 'px'
+    le.classList.add('rola')
+  } else {
+    le.style.maxHeight = ''
+    le.classList.remove('rola')
+  }
+  if (antes) le.scrollTop = antes
 }
 
 // O x da faixa existe nas duas abas que a desenham, entao o clique mora numa funcao so.
@@ -221,7 +247,9 @@ function desenha() {
   selo.textContent = String(nFunis)
 
   if (aba === 'funis') {
+    const rolada = pilhaRolada(corpo)
     corpo.innerHTML = desenhaSaindo() + desenhaFunis()
+    ajustaPilha(corpo, rolada)
     ligaFunis(corpo)
     ligaFaixa(corpo)
     voltaFoco(_foco)

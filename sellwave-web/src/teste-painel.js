@@ -922,6 +922,30 @@ app.whenReady().then(async () => {
   conta('da pra tirar da fila quem ainda nao saiu',
     !!tirou && tirou.depois === tirou.antes - 1, JSON.stringify(tirou))
 
+  // ── A PILHA MOSTRA NO MAXIMO TRES E ROLA POR DENTRO (21/10/2026) ──────────────────────────
+  // Pedido do Bruno: "deixasse ele com no maximo tres aparecendo; quando tiver mais, fica rolavel
+  // dentro daquela janelinha, e nao atrapalha na hora que eles vao mandar os funis deles".
+  // Os jobs sao de mentira e ja `rodando`, num numero sem consumidor: ninguem tenta envia-los.
+  const pilhaRola = await js('(() => { fila = Array.from({ length: 7 }, (_, i) => ({ id: 900000 + i, marca: "s1", rotulo: "Funil " + (i + 1), lista: [1, 2], alvo: "x", nk: "99999999", nome: "Lead " + (i + 1), fone: "", passo: 1, rodando: true }));'
+    + ' desenha(); const le = document.querySelector(".saindo .lista-env"); const its = le ? [...le.querySelectorAll(".item-env")] : [];'
+    + ' const funis = document.querySelector("[data-funil=s1]");'
+    + ' return { tem: !!le, n: its.length, alto: le ? le.clientHeight : 0, total: le ? le.scrollHeight : 0,'
+    + ' tres: its.length >= 4 ? Math.round(its[3].getBoundingClientRect().top - its[0].getBoundingClientRect().top) : 0,'
+    + ' rola: le ? getComputedStyle(le).overflowY : "", cab: (document.querySelector(".saindo .cab .t") || {}).textContent || "",'
+    + ' funisTop: funis ? Math.round(funis.getBoundingClientRect().top) : -1, pilhaBaixo: Math.round(document.querySelector(".saindo").getBoundingClientRect().bottom) } })()')
+  conta('com 7 na fila, a pilha mostra 3 linhas e o resto rola dentro dela',
+    pilhaRola.tem && pilhaRola.n === 7 && pilhaRola.tres > 0 && Math.abs(pilhaRola.alto - pilhaRola.tres) <= 2
+    && pilhaRola.total > pilhaRola.alto + 40 && /auto|scroll/.test(pilhaRola.rola), JSON.stringify(pilhaRola))
+  conta('o cabecalho continua contando todos', /Enviando funis · 7/.test(pilhaRola.cab), pilhaRola.cab)
+  conta('e a lista de funis comeca logo abaixo das tres, nao la embaixo', pilhaRola.funisTop > 0 && pilhaRola.funisTop - pilhaRola.pilhaBaixo < 60, JSON.stringify({ funisTop: pilhaRola.funisTop, pilhaBaixo: pilhaRola.pilhaBaixo }))
+  const posRola = await js('(() => { const le = document.querySelector(".saindo .lista-env"); le.scrollTop = 60; desenha();'
+    + ' const l2 = document.querySelector(".saindo .lista-env"); return l2 ? l2.scrollTop : -1 })()')
+  conta('rolar a pilha e a tela redesenhar nao joga de volta pro topo', posRola >= 55, String(posRola))
+  const doisNaFila = await js('(() => { fila = fila.slice(0, 2); desenha(); const le = document.querySelector(".saindo .lista-env");'
+    + ' return { alto: le.clientHeight, total: le.scrollHeight, max: le.style.maxHeight } })()')
+  conta('com 2 na fila, a pilha fica do tamanho natural, sem rolagem', doisNaFila.total <= doisNaFila.alto + 1 && !doisNaFila.max, JSON.stringify(doisNaFila))
+  await js('(() => { fila = []; desenha(); "ok" })()')
+
 
 
   // ══ DOIS NUMEROS DISPARAM AO MESMO TEMPO ════════════════════════════
