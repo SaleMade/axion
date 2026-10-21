@@ -833,6 +833,7 @@ async function abreDeVerdade(nk, numero, meu) {
   const s = { view, nk, numero, carregado: false, ultimoUso: Date.now() }
   abertos.set(nk, s)
   particaoDoWc.set(view.webContents.id, particaoDe(nk))
+  vigiaPareamento(s)
 
   view.webContents.on('did-finish-load', () => {
     s.carregado = true
@@ -1404,6 +1405,64 @@ function conectadoDe(r, nk, estrito) {
 }
 async function estaConectado(wc, nk, estrito) { return conectadoDe(await lerConexao(wc), nk, estrito) }
 
+// PAREAMENTO NOVO SO VAI PRA NUVEM DEPOIS DE 3 MINUTOS CONECTADO (21/10/2026, pergunta do Bruno: "o
+// WhatsApp esta detectando que ele mudou de maquina?").
+//
+// MEDIDO NOS LOGS DE 19 A 21/10, todas as copias que subiram e o que aconteceu com elas na maquina
+// seguinte: os numeros copiados de 20 a 40 SEGUNDOS depois de ler o QR caíram ao abrir em outro PC
+// (9743: 24 s, abriu no Kevin ja pedindo QR; 2193: 22 s, abriu no Guilherme e caiu 2 min depois;
+// 8847: uns 40 s, REQUIRE_AUTH na Barbara). Os copiados com 87 s ou mais abriram e seguiram de pe
+// (3450, 1859, 4144, 2248, 5847, 3697), atravessando quatro maquinas em tres cidades. Ou seja, NAO
+// e a troca de maquina: e a copia sair antes de o WhatsApp terminar de montar o aparelho vinculado
+// (as chaves que o celular manda logo depois do QR). O "pronto" chega antes disso acabar.
+//
+// O relogio comeca no primeiro PRONTO depois de um QR NESTA abertura (numero restaurado ja conectado
+// nao espera nada: ele ja passou por isso). Os primeiros 10 minutos de cada abertura sao lidos de 4
+// em 4 s, porque a batida do sinal e de minuto em minuto e um QR lido entre duas batidas passaria
+// sem ser visto; depois disso a batida cobre uma queda e um QR novo no meio do expediente.
+const PAREAMENTO_MIN_MS = 180000
+function notaPareamento(s, st) {
+  if (!s) return
+  if (st === 'qr' || st === 'caiu') { s.viuQr = true; s.pareouEm = 0; return }
+  if (st === 'pronto' && s.viuQr && !s.pareouEm) {
+    s.pareouEm = Date.now()
+    anota('[nuvem] ' + s.nk + ' pareado agora: so sobe pra nuvem depois de ' + Math.round(PAREAMENTO_MIN_MS / 60000) + ' min conectado')
+  }
+}
+// Chamada na despedida, com a janela ja fora da tela: devolve a leitura de conexao com que a despedida
+// segue (null = nao sobe). Numero que nao foi pareado nesta abertura passa direto.
+async function esperaPareamentoAssentar(s, nk, wc, r) {
+  if (r) notaPareamento(s, r.st)
+  if (!r || !s.viuQr || !conectadoDe(r, nk, false)) return r
+  if (!s.pareouEm) s.pareouEm = Date.now()
+  const ate = s.pareouEm + PAREAMENTO_MIN_MS
+  if (Date.now() < ate) anota('[nuvem] ' + nk + ' pareado ha ' + Math.round((Date.now() - s.pareouEm) / 1000) + ' s: espero ' + Math.round((ate - Date.now()) / 1000) + ' s antes de copiar')
+  while (Date.now() < ate && !wc.isDestroyed()) {
+    marcaNuvem(nk, 'enviando', 'Terminando o pareamento: salva na nuvem em ' + Math.ceil((ate - Date.now()) / 1000) + ' s')
+    await espera(Math.min(5000, Math.max(200, ate - Date.now())))
+    r = wc.isDestroyed() ? null : await lerConexao(wc)
+    if (!conectadoDe(r, nk, false)) break
+  }
+  if (!conectadoDe(r, nk, false)) {
+    anota('[nuvem] ' + nk + ' desconectou durante a espera do pareamento: nao subo')
+    marcaNuvem(nk, 'erro', 'O WhatsApp desconectou antes de terminar o pareamento: abra e leia o QR de novo')
+    return null
+  }
+  return r
+}
+function vigiaPareamento(s) {
+  const fim = Date.now() + 10 * 60000
+  const t = setInterval(async () => {
+    const wc = s && s.view && s.view.webContents
+    if (!wc || wc.isDestroyed() || abertos.get(s.nk) !== s || Date.now() > fim) { clearInterval(t); return }
+    const r = await lerConexao(wc)
+    if (!r) return
+    notaPareamento(s, r.st)
+    // Restaurado ja conectado, sem QR: nao ha pareamento pra vigiar nesta abertura.
+    if (!s.viuQr && r.auth && r.st === 'pronto') clearInterval(t)
+  }, 4000)
+}
+
 // O WHATSAPP EM BRANCO SE CONSERTA SOZINHO (20/10/2026, Bruno: "diversas vezes, quando eu entro em um
 // dos numeros, o WhatsApp abre totalmente branco; preciso fechar e abrir de novo").
 //
@@ -1486,6 +1545,10 @@ async function despedida(nk, s) {
         r = null
       }
     }
+    // PAREAMENTO NOVO ESPERA OS 3 MINUTOS (ver PAREAMENTO_MIN_MS). A janela ja saiu da tela; a pagina
+    // continua viva por tras, terminando de receber as chaves, e o aluguel segue com esta maquina, entao
+    // ninguem abre o numero no meio. Se o WhatsApp desconectar durante a espera, nao sobe nada.
+    r = await esperaPareamentoAssentar(s, nk, wc, r)
     conectado = conectadoDe(r, nk, false)
   }
   salvaSessao(particaoDe(nk))
@@ -1662,9 +1725,10 @@ async function saiGuardando() {
     marcaFechouNaMao(nk)
     try { fechaNumero(nk) } catch (_) { /* um que falhe nao segura os outros */ }
   }
-  // TRES MINUTOS NO MAXIMO: a primeira subida de uma conta grande demora, mas o app nao pode ficar
-  // preso pra sempre por causa de uma rede ruim.
-  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(180000)])
+  // CINCO MINUTOS NO MAXIMO: a primeira subida de uma conta grande demora, e um numero pareado agora
+  // ainda espera os 3 minutos do PAREAMENTO_MIN_MS antes de subir (21/10/2026). Mas o app nao pode
+  // ficar preso pra sempre por causa de uma rede ruim.
+  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(300000)])
   try { if (janela && !janela.isDestroyed()) janela.destroy() } catch (_) { /* ok */ }
   app.quit()
 }
@@ -2245,6 +2309,7 @@ async function reportaConexao(s, e) {
   const antes = s.connUltimo || ''
   s.connUltimo = st
   if (st === 'pronto') s.jaPronto = true   // ja ficou de pe nesta abertura (ver despedida)
+  notaPareamento(s, st)                    // QR lido no meio do expediente tambem conta (ver PAREAMENTO_MIN_MS)
   const ruim = (st === 'caiu' || st === 'bloqueado' || st === 'conflito' || st === 'proxy')
   const espontaneo = ruim && !foiAcaoDeGente(s.nk)
   // O LOG LOCAL GUARDA O CRU, sempre. E dele que vai sair a resposta de qual sinal um ban de
@@ -2427,7 +2492,8 @@ ipcMain.handle('sw:sair', async () => {
     try { fechaNumero(nk) } catch (_) { /* um que falhe nao pode impedir os outros */ }
   }
   // E ESPERA A NUVEM: o envio da sessao e o soltar do aluguel precisam do token que vai sumir abaixo.
-  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(180000)])
+  // Cinco minutos pelo mesmo motivo do saiGuardando (pareamento novo espera 3 antes de subir).
+  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(300000)])
   config.token = ''
   config.nome = ''
   gravarConfig()

@@ -314,6 +314,81 @@ console.log('\n=== contas do SellWave Web ===\n')
   }
 }
 
+// ── 12) PAREAMENTO NOVO SO VAI PRA NUVEM DEPOIS DE 3 MINUTOS CONECTADO (21/10/2026). Medido: copia
+//    feita 20 a 40 s depois do QR caiu na maquina seguinte (9743, 2193, 8847); com 87 s ou mais,
+//    abriu e seguiu de pe. As funcoes de verdade, com um relogio e uma pagina de mentira.
+{
+  const fonte = leia('main.js')
+  const constante = fonte.split('\n').find((l) => l.startsWith('const PAREAMENTO_MIN_MS ='))
+  const codigo = [constante, recorta(fonte, 'function numKey(numero)'), recorta(fonte, 'function conectadoDe(r, nk, estrito)'),
+    recorta(fonte, 'function notaPareamento(s, st)'), recorta(fonte, 'async function esperaPareamentoAssentar(s, nk, wc, r)')].join('\n')
+  let agora = 1792600000000
+  const anotado = [], nuvem = []
+  let roteiro = []   // o que a pagina responde a cada leitura
+  const F = new Function('Date', 'anota', 'marcaNuvem', 'espera', 'lerConexao',
+    codigo + '\nreturn { notaPareamento, esperaPareamentoAssentar, PAREAMENTO_MIN_MS }')(
+    { now: () => agora },
+    (t) => anotado.push(t),
+    (nk, st, txt) => nuvem.push(st + ':' + txt),
+    async (ms) => { agora += ms },
+    async () => (roteiro.length > 1 ? roteiro.shift() : roteiro[0]))
+  const wc = { isDestroyed: () => false }
+  const NK = '1591872193'
+  const pronto = { st: 'pronto', auth: true, eu: '5515991872193', wid: true }
+
+  vale('o minimo e de 3 minutos', F.PAREAMENTO_MIN_MS === 180000, String(F.PAREAMENTO_MIN_MS))
+
+  // o 2193 de 21/10: QR, leu, PRONTO, e fechou 22 s depois
+  let s = { nk: NK }
+  F.notaPareamento(s, 'qr'); F.notaPareamento(s, 'pronto')
+  const t0 = agora
+  agora += 22000
+  roteiro = [pronto]
+  let r = await F.esperaPareamentoAssentar(s, NK, wc, pronto)
+  vale('fechou 22 s depois do QR: espera ate completar 3 min conectado', r && agora - t0 >= 180000, Math.round((agora - t0) / 1000) + ' s')
+  vale('e a nuvem pisca "terminando o pareamento" enquanto espera', nuvem.some((x) => /^enviando:Terminando o pareamento/.test(x)), nuvem[0])
+
+  // desconectou no meio da espera: nao sobe
+  s = { nk: NK }; nuvem.length = 0
+  F.notaPareamento(s, 'qr'); F.notaPareamento(s, 'pronto')
+  roteiro = [pronto, pronto, { st: 'qr', auth: false, eu: '', wid: false }]
+  r = await F.esperaPareamentoAssentar(s, NK, wc, pronto)
+  vale('caiu durante a espera: devolve null (nao sobe copia)', r === null, JSON.stringify(r))
+  vale('e avisa que precisa ler o QR de novo', nuvem.some((x) => /^erro:.*QR de novo/.test(x)), nuvem.slice(-1)[0])
+
+  // restaurado ja conectado (sem QR nesta abertura): passa direto, sem esperar
+  s = { nk: NK }; nuvem.length = 0
+  F.notaPareamento(s, 'pronto')
+  const t1 = agora
+  r = await F.esperaPareamentoAssentar(s, NK, wc, pronto)
+  vale('numero que ja abriu conectado nao espera nada', r === pronto && agora === t1 && !nuvem.length)
+
+  // pareado ha 4 minutos: ja passou do minimo
+  s = { nk: NK }
+  F.notaPareamento(s, 'qr'); F.notaPareamento(s, 'pronto')
+  agora += 240000
+  const t2 = agora
+  r = await F.esperaPareamentoAssentar(s, NK, wc, pronto)
+  vale('pareado ha 4 min: sobe na hora', r === pronto && agora === t2)
+
+  // fechou tao rapido que nenhuma leitura viu o PRONTO: o relogio comeca no fechamento
+  s = { nk: NK }
+  F.notaPareamento(s, 'qr')
+  const t3 = agora
+  roteiro = [pronto]
+  r = await F.esperaPareamentoAssentar(s, NK, wc, pronto)
+  vale('QR visto e PRONTO so no fechamento: espera os 3 min inteiros', r && agora - t3 >= 180000, Math.round((agora - t3) / 1000) + ' s')
+
+  // caiu e foi pareado de novo no meio do expediente: o relogio recomeca
+  s = { nk: NK }
+  F.notaPareamento(s, 'pronto'); F.notaPareamento(s, 'caiu'); F.notaPareamento(s, 'pronto')
+  vale('QR lido de novo no meio do dia conta como pareamento novo', s.viuQr === true && s.pareouEm === agora)
+
+  vale('a despedida chama a espera antes de decidir se sobe',
+    /r = await esperaPareamentoAssentar\(s, nk, wc, r\)\n\s*conectado = conectadoDe\(r, nk, false\)/.test(fonte))
+  vale('toda abertura liga o vigia do pareamento', /abertos\.set\(nk, s\)\n[^\n]*\n\s*vigiaPareamento\(s\)/.test(fonte))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')
