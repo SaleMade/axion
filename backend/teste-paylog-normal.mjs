@@ -32,6 +32,7 @@ const partes = [
   pega('function _plEhV2(p, cab)', '\n}\n'),
   pega('function _plEhLegado(p)', '\n}\n'),
   pega('const _plSlugOferta', ';\n'),
+  pega('const _plNaVolta = (o) =>', '\n};'),
   pega('function _pl2ParaPl1(p)', '\n}\n'),
 ];
 const { _plToFive, _fiveColFor, _pl2ParaPl1, _plEhV2, _plEhLegado } = new Function(partes.join('\n') +
@@ -132,6 +133,26 @@ const ap = casa(base('shipment.in_transit', (p) => { comRastreio(p); p.order.pla
 ok(ap.t.afterpay && ap.q.orderId === 'PL-ORDAF35VJ', 'codigo ORD do AfterPayLog', ap.q.orderId);
 ok(ap.q.product.offer.price === 297, 'quantidade 2 (frascos) NAO multiplica o valor', ap.q.product.offer.price);
 ok(ap.q.product.offer.id === 'eeaf8612-1393-42db-a3b8-e28470ee0946', 'na casa casa com o kit de 2 meses');
+
+console.log('');
+console.log('=== 4b) a VOLTA do pedido (order.status "Ao Remetente", 21/10/2026) ===');
+// Como chegou o ORDQLWP2C: depois do shipment.returning, cada movimento da volta vem como
+// shipment.in_transit com o status do PEDIDO em "Ao Remetente" (code 20).
+const naVolta = (ev, mexe) => base(ev, (p) => { comRastreio(p); p.order.status = { code: 20, label: 'Ao Remetente' }; p.event_label = rotulos[ev] || 'x'; if (mexe) mexe(p); });
+const v1 = fora(naVolta('shipment.in_transit'));
+ok(v1.t.p1.event === 'ao_remetente' && _fiveColFor(v1.q) === 'Devolvido', 'em transito NA VOLTA continua devolucao (nao volta pra Enviado)', v1.t.p1.event + ' ' + _fiveColFor(v1.q));
+ok(v1.q.shipping.shippingStatus === 'RETURNING_TO_ORIGIN', 'o envio segue RETURNING_TO_ORIGIN', v1.q.shipping.shippingStatus);
+ok(/^Ao Remetente · /.test(v1.q.eventStatus), 'o status diz que e da volta', v1.q.eventStatus);
+const v2 = fora(naVolta('shipment.out_for_delivery'));
+ok(v2.t.p1.event === 'ao_remetente', 'saiu pra entrega NA VOLTA tambem', v2.t.p1.event);
+const v3 = fora(naVolta('shipment.delivered'));
+ok(v3.t.p1.event === 'devolvido' && v3.q.shipping.shippingStatus === 'RETURNED' && _fiveColFor(v3.q) === 'Devolvido', 'entregue NA VOLTA = devolvido (nao vai pra Cobranca)', v3.t.p1.event + ' ' + _fiveColFor(v3.q));
+const v4 = fora(naVolta('shipment.delivery_proof', (p) => { p.shipment.delivery_proof = { image_url: 'https://cdn.paylog.cash/f.webp', signature_url: null, received_by: null, signatory: 'galpao' }; }));
+ok(v4.t.p1 === null, 'comprovante da entrega no remetente nao vira foto de entrega do cliente');
+const v5 = fora(naVolta('shipment.returning'));
+ok(v5.t.p1.event === 'ao_remetente', 'o returning segue ao_remetente');
+const ida = fora(base('shipment.in_transit', (p) => { comRastreio(p); p.order.status = { code: 7, label: 'Enviado' }; }));
+ok(ida.t.p1.event === 'em_transito' && _fiveColFor(ida.q) === 'Enviado', 'em transito na IDA nao muda', ida.t.p1.event);
 
 // ── 5) TODO evento real que a casa recebeu, se os arquivos vierem ────────────────────
 const [arqV2, arqV1] = process.argv.slice(2);

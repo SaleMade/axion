@@ -2040,9 +2040,28 @@ const _plSlugOferta = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g
 //   do item e a de frascos do pacote ("2 Meses (2 Frascos)" vem com quantidade 2 e valor 29700, que e
 //   o preco do kit, R$297). Multiplicar dobraria a venda.
 //   HORA: a do evento na transportadora (occurred_at) quando ha; senao a do payload.
+// O PEDIDO ESTA VOLTANDO? (21/10/2026) A PayLog normal muda o status do PEDIDO pra "Ao Remetente"
+// (code 20) quando a entrega falha, e dai em diante manda cada movimento da transportadora na volta
+// com o MESMO evento da ida (shipment.in_transit). Conferido no ORDQLWP2C: 1 shipment.returning e 9
+// in_transit depois, todos com order.status "Ao Remetente", de Mage/RJ ate Indaiatuba/SP.
+const _plNaVolta = (o) => {
+  const st = (o && o.status) || {};
+  return Number(st.code) === 20 || /remetente/i.test(String(st.label || ''));
+};
 function _pl2ParaPl1(p) {
   const o = (p && p.order) || {};
-  const slug = _PL2_EVENTOS[String((p && p.event) || '')] || '';
+  let slug = _PL2_EVENTOS[String((p && p.event) || '')] || '';
+  // A VOLTA NAO E IDA (21/10/2026). Sem isto, o primeiro "em transito" da volta levava o pedido de
+  // volta pra Em Transito (o RETURNING_TO_ORIGIN sumia e a devolucao saia da tela), e o "entregue"
+  // da volta - a encomenda entregue de volta pra quem mandou - ia pra Cobranca, e o cobrador ligava
+  // cobrando quem recusou o pacote. Na volta: movimento = ao_remetente, entregue = devolvido, e o
+  // comprovante de entrega (que e do galpao, nao do cliente) nao vira foto de entrega no card.
+  const _volta = _plNaVolta(o);
+  if (_volta) {
+    if (slug === 'em_transito' || slug === 'rota_entrega' || slug === 'postado') slug = 'ao_remetente';
+    else if (slug === 'entregue') slug = 'devolvido';
+    else if (slug === 'proof_of_delivery') slug = '';
+  }
   const tx = String(o.codigo_transacao || '').trim();
   const afterpay = /after\s*pay/i.test(String(o.plataforma || '')) && /^ORD[A-Z0-9]+$/i.test(tx);
   const code = afterpay ? tx.toUpperCase() : ((o.pedido_id != null && o.pedido_id !== '') ? String(o.pedido_id) : '');
@@ -2062,7 +2081,7 @@ function _pl2ParaPl1(p) {
     code,
     p1: {
       event: slug,
-      event_status: String((p && p.event_label) || slug) + (mot ? ': ' + mot : ''),
+      event_status: (_volta ? 'Ao Remetente · ' : '') + String((p && p.event_label) || slug) + (mot ? ': ' + mot : ''),
       event_timestamp: sh.occurred_at || (p && p.event_timestamp) || null,
       idempotency_key: (p && p.idempotency_key) || '',
       order: {
@@ -2155,8 +2174,13 @@ async function _pl2Receber(env, metodo, subpath, busca, cab, raw, p, mundoPl, ct
   } catch (e) { console.log('PAYLOG2 falhou ao guardar: ' + String((e && e.message) || e)); }
   if (legado) { console.log('PAYLOG2 webhook v1 legado ignorado (sem assinatura)'); return; }
   if (teste) { console.log('PAYLOG2 teste do painel recebido, assinatura ' + (ok ? 'ok' : 'NAO confere')); return; }
+  // A VOLTA DO PEDIDO (21/10/2026): anotada de todo evento assinado, ANTES da trava do AfterPayLog
+  // logo abaixo, porque o AfterPayLog so avisa o comeco da volta (ao_remetente) e mais nada.
+  if (ok && t.code) { try { await _plVoltaAnota(env, p, t.code, mundoPl); } catch (e) { console.log('PAYLOG2 volta nao anotada: ' + String((e && e.message) || e)); } }
   if (!t.p1) { console.log('PAYLOG2 evento sem ingestao: ' + String((p && p.event) || '')); return; }
-  if (t.afterpay && (await _plV1Vivo(env, mundoPl))) return;   // o webhook do AfterPayLog ja traz este pedido
+  // O "devolvido" passa mesmo com o AfterPayLog vivo: ele nao tem evento pra chegada da devolucao, e
+  // sem este a devolucao ficava pra sempre "voltando" (21/10/2026).
+  if (t.afterpay && t.p1.event !== 'devolvido' && (await _plV1Vivo(env, mundoPl))) return;   // o webhook do AfterPayLog ja traz este pedido
   await _plIngerir(env, t.p1, mundoPl, ok, ctx, 'PAYLOG2');
 }
 
@@ -2210,6 +2234,126 @@ async function _plIngerir(env, p, mundoPl, ok, ctx, rot) {
   } catch (_) {}
 }
 
+// ══ A VOLTA DO PEDIDO NA PAYLOG (21/10/2026, pedido do Bruno) ═════════════════════════════════════
+// "Como e que a gente tem um controle das devolucoes dos pedidos da PayLog?" A PayLog NAO tem area de
+// devolucao como a Five (ficha com numero, autor, quantidade devolvida e descartada, status de
+// analise): no painel e no codigo dele so existe o status do pedido e o rastreio. O que ela manda
+// sobre devolucao:
+//   AfterPayLog (v1):    'ao_remetente' (falhou e esta voltando) e 'frustrado' (pacote devolvido). So.
+//                        Depois do ao_remetente fica muda: nao avisa quando a encomenda chega.
+//   PayLog normal (v2):  'shipment.returning' (Em Devolucao), cada movimento da volta como
+//                        shipment.in_transit com order.status "Ao Remetente" (com cidade), e
+//                        'shipment.returned' (Devolvido) quando ela da a volta por encerrada.
+// Os pedidos da casa nascem no AfterPayLog, e o v2 deles fica so no log (_plV1Vivo). Entao a volta
+// so existia no log, que se apaga em 21 dias. Esta tabela guarda o RESUMO da volta de cada pedido
+// (quando comecou, onde esta, quando chegou de volta na cidade de onde saiu) e a tela de Devolucoes
+// le por GET /api/devolucoes/plataforma.
+let _plVoltaOk = false;
+async function _plVoltaEnsure(env) {
+  if (_plVoltaOk) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS pl_volta (
+    order_id TEXT PRIMARY KEY, mundo TEXT, inicio_ts INTEGER, ult_ts INTEGER, ult_desc TEXT,
+    ult_local TEXT, origem TEXT, chegou_ts INTEGER, devolvido_ts INTEGER, atualizado INTEGER)`).run();
+  _plVoltaOk = true;
+}
+// De onde a encomenda saiu: a cidade do "Objeto Postado" dela (o v2 manda em shipment.location). Sem
+// ele no log, a cidade de onde a PayLog mais posta (todas as 169 postagens de 07 a 21/10 sairam de
+// Indaiatuba/SP, o galpao deles).
+async function _plVoltaOrigem(env, code) {
+  const loc = "CASE WHEN json_valid(body) THEN json_extract(body,'$.shipment.location') END";
+  try {
+    const r = await env.DB.prepare('SELECT ' + loc + " loc FROM paylog2_debug WHERE event = 'shipment.posted' AND (order_code = ? OR (json_valid(body) AND (json_extract(body,'$.order.codigo_transacao') = ? OR CAST(json_extract(body,'$.order.pedido_id') AS TEXT) = ?))) ORDER BY id LIMIT 1").bind(code, code, code).first();
+    if (r && r.loc) return String(r.loc);
+    const g = await env.DB.prepare('SELECT ' + loc + " loc, COUNT(*) n FROM paylog2_debug WHERE event = 'shipment.posted' GROUP BY 1 ORDER BY n DESC LIMIT 1").first();
+    return (g && g.loc) ? String(g.loc) : '';
+  } catch (_) { return ''; }
+}
+// Anota um evento v2 na volta do pedido, se ele for da volta. Idempotente: reenvio ou reprocessamento
+// do mesmo evento nao muda nada (a hora e a do evento, nao a de chegada).
+async function _plVoltaAnota(env, p, code, mundo) {
+  const o = (p && p.order) || {}, sh = (p && p.shipment) || {};
+  const ev = String((p && p.event) || '');
+  if (!code || !(_plNaVolta(o) || ev === 'shipment.returning' || ev === 'shipment.returned')) return false;
+  const ms = Date.parse(sh.occurred_at || (p && p.event_timestamp) || '');
+  const ts = Math.floor((isNaN(ms) ? Date.now() : ms) / 1000);
+  const tsr = (sh.tracking_status && sh.tracking_status.label) || '';
+  const desc = String(sh.description || tsr || (p && p.event_label) || ev).slice(0, 120);
+  const local = String(sh.location || '').slice(0, 80);
+  await _plVoltaEnsure(env);
+  const oid = 'PL-' + String(code);
+  const atual = await env.DB.prepare('SELECT origem FROM pl_volta WHERE order_id = ?').bind(oid).first();
+  const origem = (atual && atual.origem) || (await _plVoltaOrigem(env, String(code)));
+  // CHEGOU = um movimento da volta na cidade de onde a encomenda saiu. Medido no ORDQLWP2C: "Chegada
+  // na Unidade" em Indaiatuba/SP em 19/10, seis dias depois do "Em Devolucao" em Mage/RJ.
+  const chegou = (origem && local && _semAcento(local) === _semAcento(origem)) ? ts : null;
+  // DEVOLVIDO = a PayLog encerrou a volta (shipment.returned) ou a encomenda foi entregue de volta.
+  const devolvido = (ev === 'shipment.returned' || ev === 'shipment.delivered') ? ts : null;
+  await env.DB.prepare(`INSERT INTO pl_volta (order_id, mundo, inicio_ts, ult_ts, ult_desc, ult_local, origem, chegou_ts, devolvido_ts, atualizado)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(order_id) DO UPDATE SET
+      inicio_ts = MIN(pl_volta.inicio_ts, excluded.inicio_ts),
+      ult_desc = CASE WHEN excluded.ult_ts >= pl_volta.ult_ts THEN excluded.ult_desc ELSE pl_volta.ult_desc END,
+      ult_local = CASE WHEN excluded.ult_ts >= pl_volta.ult_ts THEN excluded.ult_local ELSE pl_volta.ult_local END,
+      ult_ts = MAX(pl_volta.ult_ts, excluded.ult_ts),
+      origem = COALESCE(pl_volta.origem, excluded.origem),
+      chegou_ts = CASE WHEN pl_volta.chegou_ts IS NULL THEN excluded.chegou_ts WHEN excluded.chegou_ts IS NULL THEN pl_volta.chegou_ts ELSE MIN(pl_volta.chegou_ts, excluded.chegou_ts) END,
+      devolvido_ts = CASE WHEN pl_volta.devolvido_ts IS NULL THEN excluded.devolvido_ts WHEN excluded.devolvido_ts IS NULL THEN pl_volta.devolvido_ts ELSE MIN(pl_volta.devolvido_ts, excluded.devolvido_ts) END,
+      atualizado = excluded.atualizado`)
+    .bind(oid, String(mundo || ''), ts, ts, desc, local, origem || null, chegou, devolvido, Math.floor(Date.now() / 1000)).run();
+  return true;
+}
+// Refaz a tabela a partir do log v2 (o que ainda esta nos 21 dias dele). E o que encheu a tabela na
+// primeira vez; depois serve pra conferir.
+async function _plVoltaRefaz(env) {
+  await _pl2Ensure(env);
+  const r = await env.DB.prepare("SELECT subpath, body FROM paylog2_debug WHERE verified = 1 AND (event IN ('shipment.returning','shipment.returned') OR body LIKE '%Ao Remetente%') ORDER BY id").all();
+  let n = 0;
+  for (const x of ((r && r.results) || [])) {
+    let p = null; try { p = JSON.parse(x.body); } catch (_) { continue; }
+    if (!_plEhV2(p, {})) continue;
+    const t = _pl2ParaPl1(p);
+    const mundo = await _plMundoDaPorta(env, x.subpath);
+    if (await _plVoltaAnota(env, p, t.code, mundo)) n++;
+  }
+  return n;
+}
+// GET /api/devolucoes/plataforma - a volta de cada pedido da PayLog, pra tela de Devolucoes. Le quem
+// le os pedidos (mesma regra do /api/five/orders): a casa ve a casa; o afiliado, so a porta dele.
+// ?refazer=1 (so diretor) reprocessa o log antes de responder.
+async function handleDevolucoesPlataforma(req, env) {
+  const _real = await authUser(req, env);
+  if (!_real) return err('Não autenticado', 401);
+  const u = await _usuarioDeConexao(req, env, _real);
+  const _afl = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? aflDe(u) : null;
+  const _souAfl = isAfiliado(u) || afiliadoSemVinculo(u) || (noMundoAfiliado(u) && !isDirector(u));
+  if (!_gestorLe(u) && !_souAfl) return err('Sem permissão', 403);
+  if (_souAfl && !_afl) return json({ voltas: [] });
+  await _plVoltaEnsure(env);
+  let refeitos = null;
+  if (new URL(req.url).searchParams.get('refazer') === '1' && isDirector(_real)) refeitos = await _plVoltaRefaz(env);
+  const r = await env.DB.prepare("SELECT order_id, inicio_ts, ult_ts, ult_desc, ult_local, origem, chegou_ts, devolvido_ts FROM pl_volta WHERE COALESCE(mundo,'') = ? ORDER BY inicio_ts DESC LIMIT 1000")
+    .bind(_afl ? String(_afl) : '').all();
+  return json(refeitos === null ? { voltas: (r && r.results) || [] } : { voltas: (r && r.results) || [], refeitos });
+}
+
+// DE QUEM E ESTA PORTA (11/09/2026). `/paylog` e a da casa; `/paylog/afl_xxx` e a daquele
+// afiliado. O dono sai do ENDERECO, e nao de dentro do payload, porque e o endereco que a pessoa
+// cola no painel da PayLog - e porque a assinatura precisa ser conferida com o segredo DELE, o
+// que exige saber quem e antes de olhar o corpo.
+//
+// Sufixo que nao seja um afiliado de verdade cai na casa, que e o comportamento de antes: os
+// subpaths que ja existiam (`/paylog/teste`, por exemplo) continuam funcionando igual.
+async function _plMundoDaPorta(env, subpath) {
+  const sp = String(subpath || '').replace(/^\/+|\/+$/g, '');
+  if (!sp || !/^afl_[A-Za-z0-9_-]+$/.test(sp)) return '';
+  try {
+    const r = await env.DB.prepare('SELECT 1 x FROM five_affiliates WHERE affiliate_id=?').bind(sp).first();
+    if (r) return sp;
+    const r2 = await env.DB.prepare("SELECT 1 x FROM users WHERE role='afiliado' AND afiliado_id=? LIMIT 1").bind(sp).first();
+    return r2 ? sp : '';
+  } catch (_) { return ''; }
+}
+
 async function handlePaylogCapture(req, env, subpath, ctx) {
   // RESPONDER RAPIDO E O REQUISITO, NAO UMA GENTILEZA. A PayLog tem timeout de 30s e PAUSA o
   // webhook sozinha depois de 3 falhas seguidas (imediata, +10s, +60s), com e-mail. Um pico de
@@ -2221,23 +2365,8 @@ async function handlePaylogCapture(req, env, subpath, ctx) {
   const cab = {};
   try { for (const [k, v] of req.headers.entries()) cab[k] = v; } catch (_) {}
   const u = new URL(req.url);
-  // DE QUEM E ESTA PORTA (11/09/2026). `/paylog` e a da casa; `/paylog/afl_xxx` e a daquele
-  // afiliado. O dono sai do ENDERECO, e nao de dentro do payload, porque e o endereco que a pessoa
-  // cola no painel da PayLog - e porque a assinatura precisa ser conferida com o segredo DELE, o
-  // que exige saber quem e antes de olhar o corpo.
-  //
-  // Sufixo que nao seja um afiliado de verdade cai na casa, que e o comportamento de antes: os
-  // subpaths que ja existiam (`/paylog/teste`, por exemplo) continuam funcionando igual.
-  const mundoPl = await (async () => {
-    const sp = String(subpath || '').replace(/^\/+|\/+$/g, '');
-    if (!sp || !/^afl_[A-Za-z0-9_-]+$/.test(sp)) return '';
-    try {
-      const r = await env.DB.prepare('SELECT 1 x FROM five_affiliates WHERE affiliate_id=?').bind(sp).first();
-      if (r) return sp;
-      const r2 = await env.DB.prepare("SELECT 1 x FROM users WHERE role='afiliado' AND afiliado_id=? LIMIT 1").bind(sp).first();
-      return r2 ? sp : '';
-    } catch (_) { return ''; }
-  })();
+  // De quem e esta porta: ver _plMundoDaPorta.
+  const mundoPl = await _plMundoDaPorta(env, subpath);
 
   const guardar = (async () => {
     let p = null; try { p = JSON.parse(raw); } catch (_) { p = null; }
@@ -29346,6 +29475,7 @@ export default {
       // /paylog de proposito, pra ninguem confundir as duas portas no futuro.
       if (req.method === 'GET' && path === '/api/paylog2/debug') return handlePaylog2Debug(req, env);
       if (req.method === 'GET' && path === '/api/paylog2/estoque') return handlePaylog2Estoque(req, env);
+      if (req.method === 'GET' && path === '/api/devolucoes/plataforma') return handleDevolucoesPlataforma(req, env);
       const pl2Match = path.match(/^\/paylog2(?:\/(.*))?$/);
       if (pl2Match) return handlePaylog2Capture(req, env, pl2Match[1] || '', ctx);
       const plMatch = path.match(/^\/paylog(?:\/(.*))?$/);
