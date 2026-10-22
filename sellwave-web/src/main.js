@@ -2993,6 +2993,52 @@ function comTetoNode(wc, chave, codigo, tetoMs) {
 function soltaEnviosDe(chave) {
   for (const f of [...(mandasNoAr.get(String(chave || '')) || [])]) { try { f() } catch (_) { /* ok */ } }
 }
+// O NUMERO QUE PAROU DE REGISTRAR SE CONSERTA SOZINHO (22/10/2026, a Barbara).
+//
+// O CASO: as 11:41 de 20/10 o (31) 97362-3697 reabriu no PC da Barbara e, dali ate ela fechar o app
+// as 14:13 do dia seguinte, NENHUMA mensagem saiu da maquina dela pra dash. A pagina estava viva: ela
+// mandou 41 funis num dia (o envio funcionava), recebia lead e o sinal de vida batia. So o aviso de
+// "mensagem nova" do WhatsApp tinha parado de chegar no app. Quando o Bruno abriu o mesmo numero no PC
+// dele em 22/10, a captura voltou na hora - entao nao era o numero nem o servidor, era aquela pagina.
+//
+// A PROVA E O PROPRIO ENVIO: toda mensagem que o painel manda volta pela captura como "saiu de mim".
+// Envio que deu certo e nao voltou em 90 s, DUAS VEZES SEGUIDAS, e a pagina surda. Ai o app recarrega
+// a pagina daquele numero (o login fica, e o que recarregar refaz e o ouvinte), no maximo uma vez a
+// cada 30 min e nunca com um funil no meio, e avisa na barra. O relogio do envio comeca ANTES do
+// envio porque o WhatsApp pode avisar a mensagem nova antes de o envio terminar.
+const CAPTURA_ESPERA_MS = 90000
+const capturaVistaEm = new Map()      // nk -> ultima captura que chegou da pagina daquele numero
+const capturaFaltou = new Map()       // nk -> envios seguidos que nao voltaram
+const recarregouSurdaEm = new Map()   // nk -> quando o app recarregou por isso
+function nkDaPagina(wcId) {
+  for (const [nk, s] of abertos) { try { if (s.view.webContents.id === wcId) return nk } catch (_) { /* ok */ } }
+  return ''
+}
+function confereCaptura(nk, desde) {
+  if (!nk) return
+  if ((capturaVistaEm.get(nk) || 0) >= desde) { capturaFaltou.delete(nk); return }
+  const n = (capturaFaltou.get(nk) || 0) + 1
+  capturaFaltou.set(nk, n)
+  anota('[captura] ' + nk + ' mandou e a mensagem nao voltou na captura (' + n + ' seguida' + (n > 1 ? 's' : '') + ')')
+  if (n < 2) return
+  const s = abertos.get(nk)
+  const wc = s && s.view && s.view.webContents
+  if (!wc || wc.isDestroyed()) return
+  if (mandasNoAr.has(nk)) return   // funil no meio: a conferencia do proximo envio decide
+  if (Date.now() - (recarregouSurdaEm.get(nk) || 0) < 30 * 60000) return
+  recarregouSurdaEm.set(nk, Date.now())
+  capturaFaltou.delete(nk)
+  anota('[captura] ' + nk + ' parou de registrar as conversas: recarrego a pagina')
+  try { wc.reload() } catch (_) { /* ok */ }
+  const d = cheioDe(nk)
+  avisaCasca('sw:aviso', { nk, texto: (d ? d + ' ' : 'Um número ') + 'parou de registrar as conversas na dash e foi recarregado sozinho.' })
+}
+const cheioDe = (nk) => {
+  const n = (config.numeros || []).find((x) => numKey(x.numero) === String(nk))
+  const d = String((n && n.numero) || '').replace(/\D/g, '').replace(/^55/, '')
+  return d.length >= 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4) : ''
+}
+
 ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
   // O ENVIO VAI PRA VIEW DAQUELE NUMERO, nao pra "a que esta na tela".
   //
@@ -3010,8 +3056,10 @@ ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
     delete pedaco.url
   }
   try {
+    const antes = Date.now()
     const r = await comTetoNode(wc, String(nk || ''),
       'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', tetoDoItem(pedaco))
+    if (r && nk) setTimeout(() => confereCaptura(String(nk), antes), CAPTURA_ESPERA_MS)   // ver CAPTURA_ESPERA_MS
     return { ok: !!r }
   } catch (e) {
     return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
@@ -3469,6 +3517,8 @@ ipcMain.handle('swp:lead', async (_e, { phone }) => {
 ipcMain.on('swp:captura', (_e, dados) => {
   const evs = (dados && Array.isArray(dados.eventos)) ? dados.eventos : []
   if (!evs.length) return
+  // A pagina daquele numero esta ouvindo (ver CAPTURA_ESPERA_MS).
+  try { const nkCap = nkDaPagina(_e.sender.id); if (nkCap) capturaVistaEm.set(nkCap, Date.now()) } catch (_) { /* ok */ }
   for (const ev of evs) {
     // `velha` E CARIMBADO AQUI, com o relogio corrigido pelo servidor. Ver desvioRelogio.
     if (ev && typeof ev === 'object') ev.velha = ehVelha(ev.ts)

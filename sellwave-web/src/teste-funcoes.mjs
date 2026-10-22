@@ -435,6 +435,50 @@ console.log('\n=== contas do SellWave Web ===\n')
     /comTetoNode\(wc, String\(nk \|\| ''\),\s*\n?\s*'window\.__swManda\(/.test(fonte) && /tetoDoItem\(pedaco\)/.test(fonte) && /if \(parar\) soltaEnviosDe\(nk\)/.test(fonte))
 }
 
+// ── 14) A PAGINA QUE PAROU DE REGISTRAR SE CONSERTA SOZINHA (22/10/2026, a Barbara). Envio que deu
+//    certo e nao voltou na captura em 90 s, duas vezes seguidas, recarrega a pagina daquele numero.
+{
+  const fonte = leia('main.js')
+  const codigo = [recorta(fonte, 'function nkDaPagina(wcId)'), recorta(fonte, 'function confereCaptura(nk, desde)')].join('\n')
+  let agora = 1792640000000
+  const anotado = [], avisos = []
+  let recargas = 0
+  const wc = { id: 7, isDestroyed: () => false, reload: () => { recargas++ } }
+  const abertos = new Map([['3173623697', { view: { webContents: wc } }]])
+  const mandasNoAr = new Map()
+  const capturaVistaEm = new Map(), capturaFaltou = new Map(), recarregouSurdaEm = new Map()
+  const F = new Function('Date', 'anota', 'avisaCasca', 'abertos', 'mandasNoAr', 'capturaVistaEm', 'capturaFaltou', 'recarregouSurdaEm', 'cheioDe',
+    codigo + '\nreturn { nkDaPagina, confereCaptura }')(
+    { now: () => agora }, (t) => anotado.push(t), (c, d) => avisos.push(d), abertos, mandasNoAr,
+    capturaVistaEm, capturaFaltou, recarregouSurdaEm, () => '(31) 97362-3697')
+  const NK = '3173623697'
+
+  vale('a captura acha de qual numero veio pela pagina', F.nkDaPagina(7) === NK && F.nkDaPagina(99) === '')
+  let t = agora; capturaVistaEm.set(NK, agora + 500)
+  F.confereCaptura(NK, t)
+  vale('envio que voltou na captura: nada a fazer', recargas === 0 && !capturaFaltou.size)
+  agora += 100000; t = agora
+  F.confereCaptura(NK, t)
+  vale('um envio que nao voltou: so anota, nao recarrega', recargas === 0 && capturaFaltou.get(NK) === 1, JSON.stringify([...capturaFaltou]))
+  agora += 100000; t = agora
+  F.confereCaptura(NK, t)
+  vale('o segundo seguido: recarrega a pagina daquele numero', recargas === 1)
+  vale('e avisa na barra com o numero', avisos.length === 1 && /\(31\) 97362-3697 parou de registrar/.test(avisos[0].texto), JSON.stringify(avisos[0]))
+  agora += 100000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora)
+  vale('surda de novo logo depois: nao recarrega mais de uma vez em 30 min', recargas === 1, String(recargas))
+  mandasNoAr.set(NK, new Set([() => {}]))
+  agora += 31 * 60000; F.confereCaptura(NK, agora)
+  vale('com um funil no meio, espera ele acabar', recargas === 1, String(recargas))
+  mandasNoAr.clear(); agora += 100000; F.confereCaptura(NK, agora)
+  vale('sem funil no meio e passada a meia hora: recarrega de novo', recargas === 2, String(recargas))
+  capturaVistaEm.set(NK, agora + 10); agora += 100000; F.confereCaptura(NK, agora - 100000)
+  vale('voltou a registrar: zera a contagem', !capturaFaltou.has(NK))
+  vale('o envio do painel liga a conferencia e o relogio comeca antes do envio',
+    /const antes = Date\.now\(\)\n\s*const r = await comTetoNode\([\s\S]{0,260}?if \(r && nk\) setTimeout\(\(\) => confereCaptura\(String\(nk\), antes\), CAPTURA_ESPERA_MS\)/.test(fonte))
+  vale('a captura marca a pagina que esta ouvindo', /const nkCap = nkDaPagina\(_e\.sender\.id\); if \(nkCap\) capturaVistaEm\.set\(nkCap, Date\.now\(\)\)/.test(fonte))
+  vale('o aviso passa pelo preload da barra', /'sw:aviso'\]/.test(leia('preload.js')))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

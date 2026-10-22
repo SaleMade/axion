@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('sw', {
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)

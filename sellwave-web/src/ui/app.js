@@ -1268,10 +1268,12 @@ window.sw.ao('sw:conexao', async (d) => {
   await recarregaEstado()
   if (d && d.nk && ativo === d.nk && !(estado.abertos || []).includes(d.nk)) telaAbrir(d.nk)
 })
+let avisoBarraAte = 0   // um aviso do app (sw:aviso) na mesma linha nao some com a fila zerando
 window.sw.ao('sw:fila', (d) => {
   const el = $('fila')
   if (!el) return
   const n = (d && Number(d.n)) || 0
+  if (!n && Date.now() < avisoBarraAte) return
   el.textContent = n ? (n + ' mensagens na fila') : ''
   el.title = n ? 'Capturadas, ainda não subiram para a dash' : ''
 })
@@ -1317,6 +1319,14 @@ window.sw.ao('sw:agente', () => {
     el.textContent = 'Motor de conversa atualizado. Recarregue o número pra usar o novo.'
     setTimeout(() => { if (el.textContent.startsWith('Motor de conversa')) el.textContent = '' }, 20000)
   }
+})
+// AVISO DE UM NUMERO QUE O APP CONSERTOU SOZINHO (ver confereCaptura no main): 30 s na barra.
+window.sw.ao('sw:aviso', (d) => {
+  const el = $('fila')
+  if (!el || !d || !d.texto) return
+  el.textContent = String(d.texto)
+  avisoBarraAte = Date.now() + 30000
+  setTimeout(() => { if (el.textContent === String(d.texto)) el.textContent = '' }, 30000)
 })
 window.sw.ao('sw:semMotor', (d) => {
   if (!d || !d.nk) return
