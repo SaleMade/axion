@@ -460,17 +460,25 @@ console.log('\n=== contas do SellWave Web ===\n')
   agora += 100000; t = agora
   F.confereCaptura(NK, t)
   vale('um envio que nao voltou: so anota, nao recarrega', recargas === 0 && capturaFaltou.get(NK) === 1, JSON.stringify([...capturaFaltou]))
-  agora += 100000; t = agora
-  F.confereCaptura(NK, t)
-  vale('o segundo seguido: recarrega a pagina daquele numero', recargas === 1)
+  agora += 100000; F.confereCaptura(NK, agora)
+  vale('o segundo seguido ainda nao recarrega (sao tres)', recargas === 0 && capturaFaltou.get(NK) === 2)
+  // o vendedor esta mexendo neste numero: no terceiro, so avisa
+  abertos.get(NK).mexeuEm = agora + 50000
+  agora += 100000; F.confereCaptura(NK, agora)
+  vale('o terceiro com o vendedor mexendo no numero: NAO recarrega, so avisa', recargas === 0 && avisos.length === 1 && /Quando puder, clique em Atualizar/.test(avisos[0].texto), JSON.stringify(avisos))
+  // passada a meia hora e o vendedor parado: recarrega
+  abertos.get(NK).mexeuEm = 0; avisos.length = 0
+  agora += 31 * 60000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora)
+  vale('tres seguidas e ninguem mexendo: recarrega a pagina daquele numero', recargas === 1)
   vale('e avisa na barra com o numero', avisos.length === 1 && /\(31\) 97362-3697 parou de registrar/.test(avisos[0].texto), JSON.stringify(avisos[0]))
-  agora += 100000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora)
+  agora += 100000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora); agora += 100000; F.confereCaptura(NK, agora)
   vale('surda de novo logo depois: nao recarrega mais de uma vez em 30 min', recargas === 1, String(recargas))
   mandasNoAr.set(NK, new Set([() => {}]))
   agora += 31 * 60000; F.confereCaptura(NK, agora)
   vale('com um funil no meio, espera ele acabar', recargas === 1, String(recargas))
   mandasNoAr.clear(); agora += 100000; F.confereCaptura(NK, agora)
   vale('sem funil no meio e passada a meia hora: recarrega de novo', recargas === 2, String(recargas))
+  vale('toda pagina de numero guarda quando o vendedor mexeu nela', /before-input-event', \(\) => \{ s\.mexeuEm = Date\.now\(\) \}/.test(fonte))
   capturaVistaEm.set(NK, agora + 10); agora += 100000; F.confereCaptura(NK, agora - 100000)
   vale('voltou a registrar: zera a contagem', !capturaFaltou.has(NK))
   vale('o envio do painel liga a conferencia e o relogio comeca antes do envio',

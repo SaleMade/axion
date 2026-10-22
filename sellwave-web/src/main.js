@@ -835,6 +835,9 @@ async function abreDeVerdade(nk, numero, meu) {
   particaoDoWc.set(view.webContents.id, particaoDe(nk))
   vigiaPareamento(s)
 
+  // A ULTIMA VEZ QUE O VENDEDOR MEXEU NESTE NUMERO (teclado ou mouse). O conserto da pagina surda
+  // (confereCaptura) nunca recarrega o numero que a pessoa esta usando agora.
+  view.webContents.on('before-input-event', () => { s.mexeuEm = Date.now() })
   view.webContents.on('did-finish-load', () => {
     s.carregado = true
     avisaCasca('sw:aberto', { nk })
@@ -3002,10 +3005,16 @@ function soltaEnviosDe(chave) {
 // dele em 22/10, a captura voltou na hora - entao nao era o numero nem o servidor, era aquela pagina.
 //
 // A PROVA E O PROPRIO ENVIO: toda mensagem que o painel manda volta pela captura como "saiu de mim".
-// Envio que deu certo e nao voltou em 90 s, DUAS VEZES SEGUIDAS, e a pagina surda. Ai o app recarrega
+// Envio que deu certo e nao voltou em 90 s, TRES VEZES SEGUIDAS, e a pagina surda. Ai o app recarrega
 // a pagina daquele numero (o login fica, e o que recarregar refaz e o ouvinte), no maximo uma vez a
 // cada 30 min e nunca com um funil no meio, e avisa na barra. O relogio do envio comeca ANTES do
 // envio porque o WhatsApp pode avisar a mensagem nova antes de o envio terminar.
+//
+// OS CUIDADOS, porque recarregar sozinho por engano e pior que nao recarregar (o Bruno, 22/10: "pode
+// dar um puta problema, entao cuidado"): (1) tres seguidas e nao duas; (2) o numero que o vendedor
+// esta USANDO (mexeu nele, teclado ou mouse, nos ultimos 2 min) NUNCA recarrega: so ganha o aviso pra
+// ele mesmo atualizar quando puder, porque recarregar no meio de uma digitacao apaga o que ele escrevia;
+// (3) cada recarga e cada aviso ficam no log com o motivo, pra conferir se a regra esta acertando.
 const CAPTURA_ESPERA_MS = 90000
 const capturaVistaEm = new Map()      // nk -> ultima captura que chegou da pagina daquele numero
 const capturaFaltou = new Map()       // nk -> envios seguidos que nao voltaram
@@ -3020,7 +3029,7 @@ function confereCaptura(nk, desde) {
   const n = (capturaFaltou.get(nk) || 0) + 1
   capturaFaltou.set(nk, n)
   anota('[captura] ' + nk + ' mandou e a mensagem nao voltou na captura (' + n + ' seguida' + (n > 1 ? 's' : '') + ')')
-  if (n < 2) return
+  if (n < 3) return
   const s = abertos.get(nk)
   const wc = s && s.view && s.view.webContents
   if (!wc || wc.isDestroyed()) return
@@ -3028,10 +3037,15 @@ function confereCaptura(nk, desde) {
   if (Date.now() - (recarregouSurdaEm.get(nk) || 0) < 30 * 60000) return
   recarregouSurdaEm.set(nk, Date.now())
   capturaFaltou.delete(nk)
+  const d0 = cheioDe(nk)
+  if (Date.now() - (s.mexeuEm || 0) < 120000) {
+    anota('[captura] ' + nk + ' parou de registrar, mas o vendedor esta mexendo nele: so aviso, nao recarrego')
+    avisaCasca('sw:aviso', { nk, texto: (d0 ? d0 + ' ' : 'Um número ') + 'parou de registrar as conversas na dash. Quando puder, clique em Atualizar no painel dele.' })
+    return
+  }
   anota('[captura] ' + nk + ' parou de registrar as conversas: recarrego a pagina')
   try { wc.reload() } catch (_) { /* ok */ }
-  const d = cheioDe(nk)
-  avisaCasca('sw:aviso', { nk, texto: (d ? d + ' ' : 'Um número ') + 'parou de registrar as conversas na dash e foi recarregado sozinho.' })
+  avisaCasca('sw:aviso', { nk, texto: (d0 ? d0 + ' ' : 'Um número ') + 'parou de registrar as conversas na dash e foi recarregado sozinho.' })
 }
 const cheioDe = (nk) => {
   const n = (config.numeros || []).find((x) => numKey(x.numero) === String(nk))
