@@ -389,6 +389,52 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('toda abertura liga o vigia do pareamento', /abertos\.set\(nk, s\)\n[^\n]*\n\s*vigiaPareamento\(s\)/.test(fonte))
 }
 
+// ── 13) O ENVIO DO FUNIL TEM TETO DO LADO DO NODE (22/10/2026). O funil do 8066 do Guilherme girou
+//    4 h em "Enviando passo 1 de 5": a pagina congelou em segundo plano, o prazo DELA nao disparou e o
+//    main esperava pra sempre. Aqui a pagina congelada e uma promessa que nunca volta.
+{
+  const fonte = leia('main.js')
+  const codigo = ['const mandasNoAr = new Map()', recorta(fonte, 'function comTetoNode(wc, chave, codigo, tetoMs)'),
+    recorta(fonte, 'function soltaEnviosDe(chave)'), recorta(fonte, 'function tetoDoItem(it)')].join('\n')
+  const F = new Function(codigo + '\nreturn { comTetoNode, soltaEnviosDe, mandasNoAr, tetoDoItem }')()
+  const congelada = { executeJavaScript: () => new Promise(() => {}) }
+  const viva = { executeJavaScript: async () => true }
+  const quebra = { executeJavaScript: async () => { throw new Error('a pagina disse que nao') } }
+
+  // TETO POR ITEM: cobre pausa (ate 120 s) + envio, e e sempre MAIOR que o prazo da pagina daquele
+  // passo, pra pagina viva cair no erro bom do comPrazo e so a congelada chegar no teto do Node.
+  vale('video com pausa longa nao e cortado (pior caso legitimo 300 s, teto >= 330 s)',
+    F.tetoDoItem({ tipo: 'midia', kind: 'video', pausa: 120 }) >= 330000, String(F.tetoDoItem({ tipo: 'midia', kind: 'video', pausa: 120 })))
+  vale('o teto do item passa do prazo da pagina dele (audio 120 s, texto 60 s)',
+    F.tetoDoItem({ tipo: 'midia', kind: 'audio', pausa: 10 }) > 120000 && F.tetoDoItem({ tipo: 'texto', pausa: 0 }) > 60000)
+  vale('texto curto sem pausa nao espera o pior caso do video (teto justo)',
+    F.tetoDoItem({ tipo: 'texto', pausa: 0 }) < F.tetoDoItem({ tipo: 'midia', kind: 'video', pausa: 120 }))
+  let erro = ''
+  const t0 = Date.now()
+  try { await F.comTetoNode(congelada, '80668066', 'x', 60) } catch (e) { erro = e.message }
+  vale('pagina congelada: o envio desiste sozinho no teto, nao fica preso',
+    /não respondeu a tempo/.test(erro) && Date.now() - t0 < 1000, erro)
+  vale('e nao sobra nada pendurado do envio que desistiu', !F.mandasNoAr.size, String(F.mandasNoAr.size))
+
+  erro = ''
+  const p = F.comTetoNode(congelada, '80668066', 'x', 60000).catch((e) => { erro = e.message })
+  F.soltaEnviosDe('11112222')
+  await new Promise((r) => setTimeout(r, 20))
+  vale('o Parar de OUTRO numero nao solta este', erro === '', erro)
+  const t1 = Date.now()
+  F.soltaEnviosDe('80668066')
+  await p
+  vale('o Parar solta na hora o envio preso daquele numero', /você parou este funil/.test(erro) && Date.now() - t1 < 200, erro)
+  vale('e limpa a porta do Parar', !F.mandasNoAr.size, String(F.mandasNoAr.size))
+
+  vale('pagina viva: o envio volta normal', (await F.comTetoNode(viva, '80668066', 'x', 60)) === true)
+  erro = ''
+  try { await F.comTetoNode(quebra, '80668066', 'x', 60) } catch (e) { erro = e.message }
+  vale('pagina que responde erro: o erro dela e que aparece', erro === 'a pagina disse que nao', erro)
+  vale('o swp:manda usa o teto POR ITEM e o swp:parar solta o envio',
+    /comTetoNode\(wc, String\(nk \|\| ''\),\s*\n?\s*'window\.__swManda\(/.test(fonte) && /tetoDoItem\(pedaco\)/.test(fonte) && /if \(parar\) soltaEnviosDe\(nk\)/.test(fonte))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

@@ -2924,10 +2924,14 @@ ipcMain.handle('swp:disparos', () => ({
 // que roda em producao), entao o botao Parar precisa alcancar la: ele liga uma bandeirinha que o
 // `esperaOuPara` confere a cada 400ms.
 ipcMain.handle('swp:parar', async (_e, { nk, parar }) => {
+  // SOLTA PRIMEIRO O ENVIO QUE ESTA ESPERANDO ESTE NUMERO (ver comTetoNode): com a pagina congelada,
+  // a bandeirinha abaixo so seria lida quando ela acordasse, e o vendedor ficava olhando a rodinha.
+  if (parar) soltaEnviosDe(nk)
   const alvo = String(nk || '') ? abertos.get(String(nk)) : null
   const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
   if (!wc) return { ok: false }
-  try { await wc.executeJavaScript('window.__swParar = ' + (parar ? 'true' : 'false') + '; true') } catch (_) { /* ok */ }
+  // com teto: pagina congelada nao pode prender quem chamou
+  try { await Promise.race([wc.executeJavaScript('window.__swParar = ' + (parar ? 'true' : 'false') + '; true'), espera(3000)]) } catch (_) { /* ok */ }
   return { ok: true }
 })
 
@@ -2949,6 +2953,46 @@ ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
   } catch (_) { return { ok: false } }
 })
 
+// O ENVIO TEM TETO DO LADO DO NODE (22/10/2026, achado da sessao f5 / sale-made-inc-34, pedido do
+// Bruno; teto POR ITEM apontado pelas sessoes do app sale-made-inc-67 e -33). O passo ja tinha prazo
+// (o comPrazo do agente.js), mas ele roda DENTRO da pagina do WhatsApp: com o numero em segundo plano a
+// pagina pode congelar, o setTimeout dela nao dispara, o __swManda nunca volta e este await ficava
+// preso pra sempre. Caso real: o funil do 8066 do Guilherme girou 4 h em "Enviando passo 1 de 5" e o
+// Parar nao cancelava, porque o laco do painel estava parado esperando esta resposta. O processo do
+// Node nao congela: o teto POR ITEM (tetoDoItem) e sempre maior que o prazo da pagina pra aquele passo,
+// entao pagina VIVA responde com o erro dela (o bom), e pagina CONGELADA cai aqui e o funil para limpo.
+// O PARAR TAMBEM CHEGA AQUI: ele solta na hora o envio que esta esperando aquele numero (ver swp:parar).
+//
+// POR ITEM, nao um numero fixo: a espera (pausa, ate 120 s) e o envio acontecem DENTRO do mesmo
+// __swManda, entao o teto cobre os dois. O pior caso LEGITIMO e pausa 120 s + video 180 s = 300 s; um
+// teto fixo de 135 s cortava envio bom (todo video, e audio/texto com pausa longa, que e o coracao do
+// funil). +30 s de folga pra pagina recem-descongelada recusar sozinha com o erro do comPrazo.
+function tetoDoItem(it) {
+  const pausaMs = Math.max(0, Math.min(120, Number(it && it.pausa) || 0)) * 1000
+  const envioMs = (it && it.kind === 'video') ? 180000 : (it && it.tipo === 'texto') ? 60000 : 120000
+  return pausaMs + envioMs + 30000
+}
+const mandasNoAr = new Map()   // nk -> Set de funcoes que soltam o envio em curso
+// Roda `codigo` na pagina com teto do Node e com a porta do Parar aberta pra aquele numero.
+function comTetoNode(wc, chave, codigo, tetoMs) {
+  let solta = null, relogio = null
+  return Promise.race([
+    wc.executeJavaScript(codigo, true),
+    new Promise((_, x) => { relogio = setTimeout(() => x(new Error('o número não respondeu a tempo (ficou em segundo plano?). Traga ele pra frente e dispare de novo')), tetoMs) }),
+    new Promise((_, x) => {
+      solta = () => x(new Error('você parou este funil'))
+      if (!mandasNoAr.has(chave)) mandasNoAr.set(chave, new Set())
+      mandasNoAr.get(chave).add(solta)
+    }),
+  ]).finally(() => {
+    clearTimeout(relogio)
+    const vivos = mandasNoAr.get(chave)
+    if (vivos) { vivos.delete(solta); if (!vivos.size) mandasNoAr.delete(chave) }
+  })
+}
+function soltaEnviosDe(chave) {
+  for (const f of [...(mandasNoAr.get(String(chave || '')) || [])]) { try { f() } catch (_) { /* ok */ } }
+}
 ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
   // O ENVIO VAI PRA VIEW DAQUELE NUMERO, nao pra "a que esta na tela".
   //
@@ -2966,9 +3010,8 @@ ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
     delete pedaco.url
   }
   try {
-    const r = await wc.executeJavaScript(
-      'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', true
-    )
+    const r = await comTetoNode(wc, String(nk || ''),
+      'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', tetoDoItem(pedaco))
     return { ok: !!r }
   } catch (e) {
     return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
