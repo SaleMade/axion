@@ -23946,12 +23946,15 @@ async function _alarmeNumeroMudo(env) {
       ja[nk] = agora; mudouJa = true;
       for (const id of new Set((daCasa ? direcao : []).concat(dono ? [dono] : []))) {
         try {
+          // CURTO E DIRETO (23/10/2026, pedido do Bruno: "mais leves e mais diretas ao ponto").
+          // O texto longo explicava o mecanismo; quem le no celular precisa de QUAL numero e O QUE
+          // fazer. O resto ja esta na tela de Pressels, que e pra onde a notificacao leva.
           await _wpParaPessoa(env, id, {
-            title: id === dono ? 'O numero ' + fim + ' parou de registrar' : 'Numero parado' + (nome ? ' de ' + nome : '') + ': ' + fim,
-            body: 'Ele recebeu clique pago e nao registrou NENHUMA mensagem. Saiu da roleta pra nao queimar mais clique, e so volta quando registrar de novo. '
-              + (id === dono ? 'Feche e abra este numero no SellWave Web.' : 'Peca pra fechar e abrir esse numero no SellWave Web.'),
+            title: (id === dono ? fim : (nome ? nome + ': ' : '') + fim) + ' parou de receber',
+            body: 'Tirei ele da roleta. ' + (id === dono ? 'Feche e abra esse numero no SellWave Web.' : 'Peca pra fechar e abrir no SellWave Web.'),
             tag: 'num-mudo-' + nk,
             url: '/pressels',
+            aviso: true,
           });
         } catch (_) { /* aviso que falha nao para os outros */ }
       }
@@ -24022,11 +24025,11 @@ async function _alarmeCapturaParada(env) {
     for (const id of ids) {
       try {
         await _wpParaPessoa(env, id, {
-          title: id === at ? 'Seu SellWave Web parou de registrar' : 'SellWave Web de ' + nome + ' parou de registrar',
-          body: (id === at ? 'Voce' : nome) + ' mandou ' + o.n + ' funis pelo app e nenhuma mensagem foi registrada na dash. Os leads chegam no WhatsApp, mas nao entram na contagem nem no TikTok. '
-            + (id === at ? 'Feche o SellWave Web e abra de novo.' : 'Peca pra fechar o SellWave Web e abrir de novo.'),
+          title: (id === at ? 'Seu app' : 'App de ' + nome) + ' parou de registrar',
+          body: o.n + ' funis e nenhuma mensagem marcada. ' + (id === at ? 'Feche e abra o SellWave Web.' : 'Peca pra fechar e abrir o SellWave Web.'),
           tag: 'captura-parada-' + at,
           url: '/pressels',
+          aviso: true,
         });
       } catch (_) { /* aviso que falha nao para os outros */ }
     }
@@ -27983,7 +27986,18 @@ const _wpTopico = (bruto) => ('v' + String(bruto || '').replace(/[^A-Za-z0-9_-]/
 // ESTA TABELA ESPELHA O TOQUES DE src/pages/app/som.js. Mexeu la, mexa aqui: um toque novo sem
 // linha aqui cai no canal padrao e toca o som errado, calado, sem erro nenhum.
 const _FCM_RAW = { caixa: 'venda', som2: 'venda_2' };
-const _fcmCanal = (toque, mudo) => (mudo ? 'vendas_mudo' : 'vendas_' + (_FCM_RAW[String(toque || '')] || 'venda'));
+// PROBLEMA NAO TOCA SOM DE VENDA (23/10/2026, pedido do Bruno: "quando for esse tipo de problema,
+// quero que use o proprio som do sistema; quando for venda, ai sim os sons personalizados").
+//
+// O som e do CANAL e canal e imutavel depois de criado, entao a unica forma de mudar o som e mandar
+// pra OUTRO canal. `avisos` nasce sem `sound`, ou seja toca o som padrao do aparelho.
+//
+// SE O APARELHO AINDA NAO TEM esse canal (app antigo), o Android joga a notificacao no canal padrao
+// do manifesto - que tambem toca o som do sistema. Ou seja: os dois caminhos dao o que ele pediu, e
+// o app novo so deixa o aviso com nome proprio na lista de notificacoes do Android.
+//
+// Quem desligou "Tocar som" continua no canal mudo, aviso ou venda: a escolha da pessoa vem antes.
+const _fcmCanal = (toque, mudo, aviso) => (mudo ? 'vendas_mudo' : (aviso ? 'avisos' : 'vendas_' + (_FCM_RAW[String(toque || '')] || 'venda')));
 
 // A conta de servico do Firebase. Procura no segredo primeiro (que e onde ela deve morar) e cai pro
 // app_config, pra dar pra ligar sem publicar o worker de novo.
@@ -28045,7 +28059,7 @@ async function _fcmEnviar(env, insc, payload) {
   if (!acesso) return { ok: false, codigo: 0, motivo: 'sem token de acesso do Google' };
   const token = String(insc.endpoint || '').slice(4);
   if (!token) return { ok: false, codigo: 0, motivo: 'token do aparelho vazio' };
-  const canal = _fcmCanal(insc.toque, !!payload.silent);
+  const canal = _fcmCanal(insc.toque, !!payload.silent, !!payload.aviso);
   const msg = {
     message: {
       token: token,
