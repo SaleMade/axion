@@ -567,6 +567,41 @@ console.log('\n=== contas do SellWave Web ===\n')
     /versaoMenor\(app\.getVersion\(\), versaoPublicada\) && !atualizaSozinho\(\)/.test(fonte))
 }
 
+// ── 17) O CRM DO ATENDIMENTO (23/10/2026, pedido do Bruno). A faixa no pe da area do WhatsApp e o
+//    quadro que abre por cima dela. Aqui: a geometria (a view sobe a altura da faixa so na janela
+//    principal, e sai da tela com o quadro aberto) e a fiacao que nao pode sumir.
+{
+  const fonte = leia('main.js')
+  const area = recorta(fonte, 'function areaConteudo(d, semCrm)')
+  const monta = new Function('crm', 'painel', area.replace('function areaConteudo', 'return function areaConteudo')
+    .replace(/^/, 'const ALTURA_FAIXA_CRM = 34; const ALTURA_TOPO = 0; const LARGURA_PAINEL = 316; const FRESTA_PAINEL = 22;'
+      + ' const janela = { isDestroyed: () => false, getContentBounds: () => ({ width: 1600, height: 900 }) };'
+      + ' const larguraBarra = (d) => (d ? 0 : 268); const temPainel = () => painel; const painelLigado = true; let crmAberto = crm;'))
+  const fechado = monta(false, true), aberto = monta(true, true)
+  const destacada = { win: { isDestroyed: () => false, getContentBounds: () => ({ width: 1200, height: 800 }) } }
+  vale('a view do WhatsApp termina em cima da faixa do CRM (34 px)', JSON.stringify(fechado()) === JSON.stringify({ x: 268, y: 0, width: 1016, height: 866 }), JSON.stringify(fechado()))
+  vale('com o quadro aberto ela sai da tela inteira, com o MESMO tamanho (o WhatsApp nao se redesenha)',
+    aberto().y + aberto().height < 0 && aberto().height === 866 && aberto().width === 1016, JSON.stringify(aberto()))
+  vale('a casca recebe a area de verdade mesmo com o quadro aberto', JSON.stringify(aberto(null, true)) === JSON.stringify(fechado()), JSON.stringify(aberto(null, true)))
+  vale('a janela destacada nao tem faixa nem quadro', JSON.stringify(aberto(destacada)) === JSON.stringify({ x: 0, y: 0, width: 884, height: 800 }), JSON.stringify(aberto(destacada)))
+  vale('quem posiciona view passa pela areaConteudo (abrir numero com o quadro aberto respeita)', !/setBounds\(\{ x: larguraBarra/.test(fonte))
+  vale('clicar num numero da lista fecha o quadro', /ipcMain\.handle\('sw:abrir', async \(_e, \{ numero \}\) => \{\n\s*defineCrm\(false\)/.test(fonte)
+    && /ipcMain\.handle\('sw:mostrar', \(_e, \{ nk \}\) => \{ defineCrm\(false\); mostra\(nk\)/.test(fonte))
+  vale('o quadro le o mesmo CRM da dash e grava a etapa pela mesma rota', /'\/api\/wa\/crm\?de='/.test(fonte) && /'\/api\/wa\/chat\/stage'/.test(fonte))
+  vale('abrir ou reler o quadro roda a colheita (no maximo 1 vez por minuto)', /function garanteMarcacao\(\) \{\n\s*if \(Date\.now\(\) - crmColheuEm < 60000\) return/.test(fonte)
+    && /if \(aberto\) garanteMarcacao\(\)/.test(fonte))
+  vale('a conversa pedida com o numero fechado abre quando ele ficar pronto', /if \(st === 'pronto'\) crmAbrePendente\(s\)/.test(fonte))
+  vale('a conversa do card e achada pelos 8 digitos do numero na instancia', /String\(instancia \|\| ''\)\.match\(\/_\(\\d\{8\}\)\$\/\)/.test(fonte))
+  const ini = recorta(fonte, 'function inicioDoPeriodo(periodo)')
+  const per = new Function('agoraCerto', ini + '\nreturn inicioDoPeriodo')(() => Date.parse('2026-10-23T15:30:00-03:00'))
+  vale('Hoje comeca a meia-noite de Brasilia', per('hoje') === Date.parse('2026-10-23T00:00:00-03:00') / 1000, String(per('hoje')))
+  vale('7 dias e hoje mais os 6 anteriores', per('7d') === Date.parse('2026-10-17T00:00:00-03:00') / 1000, String(per('7d')))
+  vale('Este mes comeca no dia 1', per('mes') === Date.parse('2026-10-01T00:00:00-03:00') / 1000, String(per('mes')))
+  const pre = leia('preload.js')
+  vale('o preload da barra deixa passar a area e a marcacao', /'sw:area'/.test(pre) && /'sw:marcacao'/.test(pre))
+  vale('a pagina da barra carrega o crm.js', /<script src="crm\.js"><\/script>/.test(leia('ui/index.html')))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

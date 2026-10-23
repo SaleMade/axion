@@ -1155,6 +1155,98 @@ app.whenReady().then(async () => {
   conta('buscando um numero, o placar sai da frente', await js2('!document.querySelector(".lista .equipe")'))
   await js2('(() => { const i = document.querySelector(".busca input"); i.value = ""; i.dispatchEvent(new Event("input")) })()')
   await espera(200)
+
+  // ── O CRM DO ATENDIMENTO (23/10/2026, pedido do Bruno: "o mesmo CRM do inbox, sempre la embaixo") ──
+  await espera(400)
+  const fx = await js2('(() => { const c = document.getElementById("crm"); const r = c.getBoundingClientRect();'
+    + ' return { visivel: !c.hidden && r.height > 0, x: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height), baixo: Math.round(window.innerHeight - r.bottom),'
+    + '   aberto: c.classList.contains("on"), mini: [...document.querySelectorAll("#crm-mini span")].map(s => s.title + ":" + s.querySelector("strong").textContent),'
+    + '   marca: document.getElementById("crm-marca").textContent.trim() } })()')
+  conta('a faixa do CRM aparece no pe da area do WhatsApp (x e largura que o main mandou)', fx.visivel && fx.x === 268 && fx.w === 640 && fx.h === 34 && fx.baixo === 0 && !fx.aberto, JSON.stringify(fx))
+  conta('com a contagem das seis etapas (o total do periodo, nao so o que veio na tela)',
+    fx.mini.join('|') === 'Lead Novo:2|Em Atendimento:1.234|Qualificado:1|Aguardando dados:0|Fechou:1|Perdido:0', JSON.stringify(fx.mini))
+  const rotulos = await js2('(() => { const m = document.getElementById("crm-mini"); return { cabe: m.scrollWidth <= m.clientWidth + 1, nomes: [...m.querySelectorAll("em")].map(e => e.style.display === "none" ? "" : e.textContent) } })()')
+  conta('area estreita: os nomes encolhem (ou somem) em vez de cortar no meio', rotulos.cabe, JSON.stringify(rotulos))
+  conta('e diz que a marcacao foi conferida', /Tudo marcado/.test(fx.marca), fx.marca)
+  // rolar o mouse pra baixo em cima da faixa abre
+  await js2('document.getElementById("crm-faixa").dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }))')
+  await espera(400)
+  let q = await js2('(() => { const c = document.getElementById("crm"); const r = c.getBoundingClientRect();'
+    + ' return { aberto: c.classList.contains("on"), topo: c.offsetTop, h: c.offsetHeight,'
+    + '   cols: [...document.querySelectorAll(".crm-col")].map(x => x.dataset.etapa + ":" + x.querySelectorAll(".crm-card").length + ":" + x.querySelector(".crm-col-cab span").textContent),'
+    + '   pe: (document.querySelector(".crm-col[data-etapa=atendimento] .crm-pe") || {}).textContent || "",'
+    + '   pedidoBt: document.querySelectorAll(".crm-col[data-etapa=fechou] .ped").length,'
+    + '   nl: (document.querySelector(".crm-card[data-fone=\'5516982508480\'] .nl") || {}).textContent || "",'
+    + '   semNome: (document.querySelector(".crm-card[data-fone=\'554598094898\'] .nm b") || {}).textContent || "",'
+    + '   audio: (document.querySelector(".crm-card[data-fone=\'5516982508480\'] .ul") || {}).textContent || "" } })()')
+  conta('rolar o mouse pra baixo na faixa abre o quadro na area inteira', q.aberto && q.topo === 0 && q.h > 500, JSON.stringify(q))
+  conta('e avisa o main (que tira o WhatsApp da frente)', JSON.stringify((await js2('window.__ver()')).filter((c) => c.nome === 'crmAbrir').map((c) => c.args[0])) === '[true]')
+  conta('as seis colunas, na ordem da dash, com cada card na sua etapa',
+    q.cols.join(',') === 'novo:2:2,atendimento:1:1.234,qualificado:1:1,sem_resposta:0:0,fechou:1:1,perdido:0:0', JSON.stringify(q.cols))
+  conta('etapa maior que o limite diz quantos estao na tela', /Mostrando os 1 mais recentes de 1\.234/.test(q.pe), q.pe)
+  conta('o card de Fechou tem o Ver Pedido Concluido', q.pedidoBt === 1, String(q.pedidoBt))
+  conta('nao lidas, telefone no lugar do nome que falta e "Audio" no lugar de [ptt]', q.nl === '2' && q.semNome === '(45) 9809-4898' && q.audio === 'Áudio', JSON.stringify(q))
+  // ARRASTAR PRA OUTRA ETAPA: move na hora e grava
+  const arrasta = (fone, etapa) => js2('(() => { const c = document.querySelector(".crm-card[data-fone=\'' + fone + '\']"); const col = document.querySelector(".crm-col[data-etapa=\'' + etapa + '\']");'
+    + ' const dt = new DataTransfer(); c.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));'
+    + ' col.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));'
+    + ' col.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt })); return "ok" })()')
+  await arrasta('558481093434', 'qualificado')
+  await espera(60)
+  q = await js2('[...document.querySelectorAll(".crm-col[data-etapa=qualificado] .crm-card")].map(x => x.dataset.fone)')
+  conta('arrastou pra Qualificado: o card muda de coluna na hora', q.includes('558481093434'), JSON.stringify(q))
+  await espera(300)
+  conta('e grava a etapa nova na dash', JSON.stringify((await js2('window.__ver()')).filter((c) => c.nome === 'crmEtapa').map((c) => c.args)) === '[["558481093434","qualificado"]]')
+  await arrasta('554598094898', 'perdido')
+  await espera(400)
+  q = await js2('({ novo: [...document.querySelectorAll(".crm-col[data-etapa=novo] .crm-card")].map(x => x.dataset.fone), aviso: document.getElementById("crm-aviso").hidden ? "" : document.getElementById("crm-aviso").textContent })')
+  conta('a dash recusou: o card volta pra onde estava e diz o motivo', q.novo.includes('554598094898') && /Sem acesso a essa conversa/.test(q.aviso), JSON.stringify(q))
+  // VER PEDIDO CONCLUIDO
+  await js2('document.querySelector(".crm-col[data-etapa=fechou] .ped").click()')
+  await espera(200)
+  q = await js2('({ aberto: !document.getElementById("crm-pedido").hidden, txt: document.getElementById("crm-pedido-corpo").textContent, pediu: (window.__ver()).filter(c => c.nome === "crmPedido").map(c => c.args[0]), conversa: (window.__ver()).filter(c => c.nome === "crmConversa").length })')
+  conta('Ver Pedido Concluido mostra o texto do pedido', q.aberto && /Nome: Maria do Carmo/.test(q.txt) && /R\$\s?297/.test(q.txt) && JSON.stringify(q.pediu) === '["5511950238615"]', JSON.stringify(q))
+  conta('e o clique no botao nao abre a conversa por baixo', q.conversa === 0, String(q.conversa))
+  await js2('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))')
+  await espera(100)
+  q = await js2('({ pedido: document.getElementById("crm-pedido").hidden, crm: document.getElementById("crm").classList.contains("on") })')
+  conta('o primeiro Esc fecha o pedido e deixa o quadro aberto', q.pedido === true && q.crm === true, JSON.stringify(q))
+  // TROCAR O PERIODO rele o quadro daquele periodo
+  await js2('document.querySelector("#crm-per button[data-p=\'hoje\']").click()')
+  await espera(300)
+  q = (await js2('window.__ver()')).filter((c) => c.nome === 'crmDados').map((c) => c.args)
+  const primeiraHoje = q.find((x) => x[0] === 'hoje')
+  conta('Hoje pede o quadro de hoje, sem a assinatura do periodo anterior', !!primeiraHoje && primeiraHoje[1] === '', JSON.stringify(q.slice(-2)))
+  // CLICAR NO CARD abre a conversa: numero aberto aqui fecha o quadro; numero fechado abre pela lista
+  await js2('document.querySelector(".crm-card[data-fone=\'5516982508480\']").click()')
+  await espera(250)
+  q = await js2('({ crm: document.getElementById("crm").classList.contains("on"), pediu: (window.__ver()).filter(c => c.nome === "crmConversa").map(c => c.args) })')
+  conta('clicar no card pede a conversa daquele telefone, no numero em que ele chegou', JSON.stringify(q.pediu) === '[["5516982508480","ax_atendente_vra3lh_92503977"]]', JSON.stringify(q.pediu))
+  conta('e o quadro sai da frente', q.crm === false, JSON.stringify(q))
+  await js2('window.__swCrm.abre()')
+  await espera(300)
+  const abrirAntes = (await js2('window.__ver()')).filter((c) => c.nome === 'abrir').length
+  await js2('document.querySelector(".crm-card[data-fone=\'554598094898\']").click()')
+  await espera(400)
+  q = await js2('({ crm: document.getElementById("crm").classList.contains("on"), abrirBt: !!document.getElementById("ab-abrir"), palco: document.getElementById("palco").textContent.replace(/\s+/g, " ").slice(0, 80) })')
+  conta('numero fechado: a casca mostra a tela de abrir dele, a mesma do clique na lista', q.crm === false && q.abrirBt && /97700-1122/.test(q.palco), JSON.stringify(q))
+  conta('(e nao abre sozinho por cima da trava de "em uso")', (await js2('window.__ver()')).filter((c) => c.nome === 'abrir').length === abrirAntes)
+  // O MAIN FECHOU (clique num numero da lista): a tela acompanha
+  await js2('(() => { window.__swCrm.abre(); return "ok" })()')
+  await espera(200)
+  await js2('window.__avisaCasca("sw:area", { x: 56, width: 900, faixa: 34, aberto: false })')
+  await espera(100)
+  q = await js2('(() => { const c = document.getElementById("crm"); const r = c.getBoundingClientRect(); return { aberto: c.classList.contains("on"), x: Math.round(r.left), w: Math.round(r.width) } })()')
+  conta('o main fechou e mudou a area (barra encolhida): a faixa acompanha', q.aberto === false && q.x === 56 && q.w === 900, JSON.stringify(q))
+  await js2('window.__avisaCasca("sw:area", { x: 268, width: 640, faixa: 34, aberto: false })')
+  await js2('window.__avisaCasca("sw:marcacao", { prontos: 2, em: Date.now(), faltavam: 3, numeros: 2 })')
+  await espera(150)
+  q = await js2('document.getElementById("crm-marca").textContent.trim()')
+  conta('a colheita achou mensagem faltando: a faixa diz quantas marcou', /Marcou agora 3 mensagens que faltavam/.test(q), q)
+  conta('e o quadro rele na hora (o lead ja esta na dash)', (await js2('window.__ver()')).filter((c) => c.nome === 'crmDados').slice(-1)[0].args[1] === '')
+  await js2('window.__avisaCasca("sw:marcacao", { prontos: 0, em: 0, faltavam: 0, numeros: 0 })')
+  await espera(100)
+  conta('sem numero conectado a faixa nao promete marcacao nenhuma', (await js2('document.getElementById("crm-marca").textContent.trim()')) === '')
   // O SERVIDOR VENCE O CAMPO CRU: numero com em_uso true e apto false NAO ganha interruptor. Sem
   // esta conferencia, trocar o ternario por um OU devolveria o interruptor pra numero restrito, e
   // isso e mentira de tela no lado perigoso - o vendedor acharia que esta recebendo e nao esta.

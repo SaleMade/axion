@@ -121,6 +121,11 @@ const LARGURA_BARRA_MIN = 56           // encolhida: so o ponto de estado, os ul
 const LARGURA_PAINEL = 316             // painel de venda, na direita
 const FRESTA_PAINEL = 22               // painel escondido: o tanto que sobra pra abinha de voltar
 const ALTURA_TOPO = 0                  // a casca desenha o topo dentro da propria barra
+// A FAIXA DO CRM DO ATENDIMENTO, no pe da area do WhatsApp da janela principal (23/10/2026, ver
+// O CRM DO ATENDIMENTO). A view do WhatsApp termina em cima dela, entao ela aparece sempre, em
+// qualquer numero e qualquer conversa.
+const ALTURA_FAIXA_CRM = 34
+let crmAberto = false
 
 // Permissoes que a pagina do WhatsApp realmente pede (capturadas no handler em 15/10):
 // 'media' (com mediaTypes ['audio'], que e o microfone pra audio e ligacao) e 'persistent-storage'.
@@ -579,7 +584,7 @@ const larguraBarra = (d) => (d ? 0 : (config.barraEncolhida ? LARGURA_BARRA_MIN 
 // `d` = o registro da janela destacada, ou nada pra janela principal. As tres funcoes abaixo eram
 // de uma janela so: com duas, jogar a geometria da principal numa view que mora na outra fazia ela
 // desenhar deslocada, com a largura da barra de vazio na esquerda.
-function areaConteudo(d) {
+function areaConteudo(d, semCrm) {
   const win = d ? d.win : janela
   if (!win || win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 }
   const b = win.getContentBounds()
@@ -587,7 +592,16 @@ function areaConteudo(d) {
   const reserva = (d ? painelLigado : temPainel()) ? LARGURA_PAINEL : FRESTA_PAINEL
   const esq = larguraBarra(d)
   const topo = d ? 0 : ALTURA_TOPO
-  return { x: esq, y: topo, width: Math.max(0, b.width - esq - reserva), height: Math.max(0, b.height - topo) }
+  const r = { x: esq, y: topo, width: Math.max(0, b.width - esq - reserva), height: Math.max(0, b.height - topo) }
+  if (d) return r
+  // SO NA JANELA PRINCIPAL: a view sobe a altura da faixa do CRM, e com o CRM aberto sai da area
+  // visivel inteira (pra cima, com o mesmo tamanho). Sair da tela e nao `setVisible(false)` de
+  // proposito: o WhatsApp nao muda de tamanho nem se acha escondido, e a captura do numero que esta
+  // na frente continua do mesmo jeito. Quem posiciona view sempre passa por aqui, entao abrir um
+  // numero com o CRM aberto tambem respeita.
+  r.height = Math.max(0, r.height - ALTURA_FAIXA_CRM)
+  if (crmAberto && !semCrm) r.y = -(r.height + 60)
+  return r
 }
 
 function areaPainel(d) {
@@ -642,6 +656,19 @@ function reposicionaPrincipal() {
     painel.setVisible(liga)
     if (liga) { painel.setBounds(areaPainel()); janela.contentView.addChildView(painel) }
   }
+  avisaArea()
+}
+
+// ONDE A CASCA DESENHA O CRM: a mesma faixa horizontal do WhatsApp (entre a barra e o painel), que
+// muda com a barra encolhida e com o painel escondido. So avisa quando muda.
+let areaAvisada = ''
+function avisaArea() {
+  const a = areaConteudo(null, true)
+  const g = { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto }
+  const j = JSON.stringify(g)
+  if (j === areaAvisada) return
+  areaAvisada = j
+  avisaCasca('sw:area', g)
 }
 
 function avisaCasca(canal, dados) {
@@ -2444,6 +2471,9 @@ let colhendo = false
 async function colheTodos() {
   if (colhendo || !config.token || comoId) return
   colhendo = true
+  // O QUE ESTA VOLTA CONFERIU, pra faixa do CRM dizer (ver O CRM DO ATENDIMENTO): quantos numeros
+  // responderam e quantas mensagens faltavam na dash.
+  const marca = { em: 0, faltavam: 0, numeros: 0 }
   try {
     for (const [nk, s] of [...abertos]) {
       const wc = s && s.view && s.view.webContents
@@ -2455,13 +2485,17 @@ async function colheTodos() {
       ultimaColheita.set(nk, agoraS); entreguesSujo = true
       saude.colheuEm = Date.now()
       const falta = faltamNaDash(evs, Date.now())
+      marca.numeros += 1; marca.faltavam += falta.length
       if (!falta.length) continue
       anota('[colheita] ' + nk + ': ' + falta.length + ' mensagem(ns) que nao estavam na dash (de ' + evs.length + ' lidas desde ' + new Date(desde * 1000).toISOString().slice(11, 16) + ' UTC)')
       await mandaColheita(falta)
     }
   } catch (e) {
     anota('[colheita] estourou: ' + ((e && e.stack) || e))
-  } finally { colhendo = false }
+  } finally {
+    colhendo = false
+    if (marca.numeros) { marca.em = Date.now(); saude.marcacao = marca; avisaCasca('sw:marcacao', estadoMarcacao()) }
+  }
 }
 setInterval(() => { colheTodos().catch(() => {}) }, 120000)
 // A CONVERSA DO FUNIL, uma vez por lead a cada 15 min (o funil tem varios passos; basta o primeiro).
@@ -2481,6 +2515,165 @@ async function colheConversa(nk, chatId) {
   anota('[colheita] funil em ' + nk + ': ' + falta.length + ' mensagem(ns) do lead que nao estavam na dash')
   await mandaColheita(falta)
 }
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// O CRM DO ATENDIMENTO (23/10/2026, pedido do Bruno: os vendedores gostavam do CRM do inbox da dash
+// e querem o mesmo aqui, "sempre disponivel quando eles rolassem para baixo, mesmo que troquem de
+// conversa").
+//
+// ONDE: uma faixa fixa no pe da area do WhatsApp da janela principal (ALTURA_FAIXA_CRM), desenhada
+// pela casca. Clicar nela, ou rolar o mouse pra baixo em cima dela, abre o quadro na area inteira do
+// WhatsApp; a view sai da tela (ver areaConteudo) e volta quando fecha. A faixa e da casca, nao do
+// numero: trocar de conversa ou de numero nao mexe nela.
+//
+// O MESMO CRM DA DASH: os cards e as etapas saem do /api/wa/crm (o mesmo corte por cargo do inbox) e
+// arrastar grava pelo /api/wa/chat/stage. Nada novo no servidor, entao a dash e o app nunca discordam.
+//
+// E A MARCACAO: abrir ou reler o quadro tambem roda a colheita na hora (no maximo uma vez por
+// minuto). E o que faz o CRM cumprir o que o Bruno pediu dele, "o SellWave Web vai conseguir
+// registrar todos os leads que chegaram": a colheita manda pra dash a mensagem que o caminho normal
+// perdeu, e o lead aparece no quadro na volta seguinte. A faixa diz quando ela conferiu.
+function defineCrm(v) {
+  v = !!v
+  if (crmAberto === v) return
+  crmAberto = v
+  reposicionaPrincipal()
+  // O FOCO VAI JUNTO: com o quadro aberto, o teclado nao pode continuar escrevendo na conversa que
+  // saiu da tela (e o Esc do quadro tem que chegar na casca).
+  try {
+    if (v && casca) casca.webContents.focus()
+    else {
+      const s = ativoAgora && !destacados.has(ativoAgora) ? abertos.get(ativoAgora) : null
+      if (s && !s.view.webContents.isDestroyed()) s.view.webContents.focus()
+    }
+  } catch (_) { /* foco e conforto */ }
+  avisaArea()
+}
+
+// O comeco de cada periodo do quadro, no horario de Brasilia (o mesmo da dash).
+function inicioDoPeriodo(periodo) {
+  const agora = new Date(agoraCerto() - 3 * 3600000)   // o relogio de Brasilia lido como UTC
+  const meiaNoite = Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate()) + 3 * 3600000
+  if (periodo === 'hoje') return Math.floor(meiaNoite / 1000)
+  if (periodo === '7d') return Math.floor((meiaNoite - 6 * 86400000) / 1000)
+  return Math.floor((Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), 1) + 3 * 3600000) / 1000)   // 'mes'
+}
+const diaBr = (s) => new Date(s * 1000 - 3 * 3600000).toISOString().slice(0, 10)
+
+let crmColheuEm = 0
+function garanteMarcacao() {
+  if (Date.now() - crmColheuEm < 60000) return
+  crmColheuEm = Date.now()
+  colheTodos().catch(() => {})
+}
+function estadoMarcacao() {
+  const m = saude.marcacao || null
+  const prontos = [...abertos.values()].filter((s) => s && s.connUltimo === 'pronto').length
+  return { prontos, em: (m && m.em) || 0, faltavam: (m && m.faltavam) || 0, numeros: (m && m.numeros) || 0 }
+}
+
+const authCrm = () => ({ Authorization: 'Bearer ' + config.token })
+const comoQs = () => (comoId ? '&como=' + encodeURIComponent(comoId) : '')
+const respostaRuim = (r) => (r.status === 401 || r.status === 403) ? 'Entre de novo na dash.' : 'A dash respondeu ' + r.status + '.'
+
+ipcMain.handle('sw:crm-abrir', (_e, { aberto }) => {
+  if (aberto && !config.token) return { ok: false }
+  defineCrm(!!aberto)
+  if (aberto) garanteMarcacao()
+  return { ok: true, aberto: crmAberto }
+})
+
+ipcMain.handle('sw:crm-dados', async (_e, { periodo, sig }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const de = inicioDoPeriodo(String(periodo || 'mes'))
+  if (crmAberto) garanteMarcacao()
+  try {
+    const r = await fetch(baseApi() + '/api/wa/crm?de=' + de + '&ate=0' + (sig ? '&sig=' + encodeURIComponent(sig) : '') + comoQs(),
+      { headers: authCrm(), signal: AbortSignal.timeout(20000) })
+    ajustaRelogio(r)
+    if (!r.ok) return { ok: false, erro: respostaRuim(r), marcacao: estadoMarcacao() }
+    const d = await r.json()
+    return { ...(d || {}), de, marcacao: estadoMarcacao() }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.', marcacao: estadoMarcacao() } }
+})
+
+ipcMain.handle('sw:crm-etapa', async (_e, { fone, etapa }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  try {
+    const r = await fetch(baseApi() + '/api/wa/chat/stage', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ phone: String(fone || ''), stage: String(etapa || '') }), signal: AbortSignal.timeout(15000),
+    })
+    ajustaRelogio(r)
+    if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || '' } catch (_) { /* ok */ } return { ok: false, erro: m || respostaRuim(r) } }
+    return { ok: true }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
+
+// O "PEDIDO CONCLUIDO" do card em Fechou: so quando ele clica (a lista de vendas traz o texto inteiro
+// de cada pedido, e nao tem por que viajar a cada releitura do quadro). 60 dias, como a dash: o card
+// entra em Fechou pela data em que fechou, e o pedido pode ser de antes do comeco do periodo.
+let crmVendas = { chave: '', em: 0, lista: [] }
+ipcMain.handle('sw:crm-pedido', async (_e, { fone }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const agoraS = Math.floor(agoraCerto() / 1000)
+  const chave = String(comoId)
+  try {
+    if (crmVendas.chave !== chave || Date.now() - crmVendas.em > 120000) {
+      const r = await fetch(baseApi() + '/api/wa/sales?from=' + diaBr(agoraS - 60 * 86400) + '&to=' + diaBr(agoraS),
+        { headers: authCrm(), signal: AbortSignal.timeout(20000) })
+      ajustaRelogio(r)
+      if (!r.ok) return { ok: false, erro: respostaRuim(r) }
+      const d = await r.json()
+      const lista = Array.isArray(d && d.sales) ? d.sales : (Array.isArray(d) ? d : [])
+      crmVendas = { chave, em: Date.now(), lista }
+    }
+    const k8 = String(fone || '').replace(/\D/g, '').slice(-8)
+    const venda = crmVendas.lista.filter((v) => String((v && v.phone) || '').replace(/\D/g, '').slice(-8) === k8)
+      .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))[0] || null
+    return { ok: true, venda: venda ? { raw: String(venda.raw || ''), valor: Number(venda.value) || 0, ts: Number(venda.ts) || 0, nome: String(venda.name || '') } : null }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
+
+// ABRIR A CONVERSA DO CARD no numero em que o lead chegou. A instancia da conversa termina nos 8
+// digitos do numero (ax_<at>_<8 digitos>), que e como a casa casa telefone.
+//  - numero aberto aqui: vai pra ele (ou pra janela dele, se estiver destacado) e abre a conversa;
+//  - numero fechado: a casca abre ele pelo caminho de sempre (o mesmo do clique na lista, com a
+//    trava de "em uso" e tudo) e a conversa abre sozinha quando o WhatsApp dele ficar pronto.
+let crmPendente = null   // { k8, fone, ate }
+async function abreConversaNa(nk, fone) {
+  const s = abertos.get(nk)
+  const wc = s && s.view && s.view.webContents
+  if (!wc || wc.isDestroyed()) return false
+  if (s.connUltimo !== 'pronto') { crmPendente = { k8: nk.slice(-8), fone, ate: Date.now() + 120000 }; return false }
+  const r = await perguntaPagina(wc, 'window.__swAbreConversa ? window.__swAbreConversa(' + JSON.stringify(String(fone)) + ') : null', 15000)
+  try { wc.focus() } catch (_) { /* ok */ }
+  return !!(r && r.ok)
+}
+function crmAbrePendente(s) {
+  const p = crmPendente
+  if (!p || !s || !s.nk || s.nk.slice(-8) !== p.k8) return
+  crmPendente = null
+  if (Date.now() > p.ate) return
+  // O WhatsApp diz "pronto" antes de terminar de montar a lista de conversas: um respiro antes.
+  setTimeout(() => { abreConversaNa(s.nk, p.fone).catch(() => {}) }, 2500)
+}
+ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia }) => {
+  const k8 = (String(instancia || '').match(/_(\d{8})$/) || [])[1] || ''
+  if (!k8) return { ok: false, erro: 'Não sei em qual número essa conversa chegou.' }
+  const nk = [...abertos.keys()].find((k) => k.slice(-8) === k8)
+  if (nk) {
+    defineCrm(false)
+    mostra(nk)                      // destacado: foca a janela dele
+    const abriu = await abreConversaNa(nk, fone)
+    return { ok: true, nk, abriu }
+  }
+  const n = (config.numeros || []).find((x) => x && numKey(x.numero).slice(-8) === k8)
+  if (!n) return { ok: false, erro: 'Esse lead chegou num número que não está na sua lista.' }
+  crmPendente = { k8, fone: String(fone), ate: Date.now() + 300000 }
+  defineCrm(false)
+  return { ok: true, fechado: true, numero: n.numero }
+})
 
 // SINAL DE VIDA DOS NUMEROS ABERTOS.
 //
@@ -2557,6 +2750,7 @@ async function reportaConexao(s, e) {
   const antes = s.connUltimo || ''
   s.connUltimo = st
   if (st === 'pronto') s.jaPronto = true   // ja ficou de pe nesta abertura (ver despedida)
+  if (st === 'pronto') crmAbrePendente(s)  // o card do CRM pediu esta conversa antes do numero abrir
   notaPareamento(s, st)                    // QR lido no meio do expediente tambem conta (ver PAREAMENTO_MIN_MS)
   const ruim = (st === 'caiu' || st === 'bloqueado' || st === 'conflito' || st === 'proxy')
   const espontaneo = ruim && !foiAcaoDeGente(s.nk)
@@ -2698,6 +2892,9 @@ ipcMain.handle('sw:estado', () => ({
   numeros: config.numeros,
   equipe: config.equipe || [],
   fotos: Object.fromEntries(fotosCache),
+  // onde a casca desenha o CRM (o mesmo que o aviso sw:area manda quando muda) e o que a colheita conferiu
+  crm: (() => { const a = areaConteudo(null, true); return { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto } })(),
+  marcacao: estadoMarcacao(),
   // SO O ENDERECO, NUNCA A CREDENCIAL. `config.proxies` guarda usuario e senha decifrados (o
   // lerConfig abre o DPAPI), e a casca so usa host, porta e "tem proxy?" - conferido: app.js le
   // px.host, px.porta e a existencia, mais nada. Mandar a senha inteira pra um renderer era
@@ -2784,12 +2981,13 @@ ipcMain.handle('sw:numeros', () => buscaNumeros())
 // fica preso em `carregando` ate o vendedor fechar o app - e `abrir()` comeca com
 // `if (carregando.has(nk)) return`, entao o botao para de responder e nada na tela explica.
 ipcMain.handle('sw:abrir', async (_e, { numero }) => {
+  defineCrm(false)   // clicou num numero da lista: quer o WhatsApp, nao o quadro
   try { return await abreNumero(numero) } catch (e) {
     anota('sw:abrir estourou: ' + ((e && e.stack) || e))
     return { ok: false, erro: 'Não consegui abrir este número agora. Tente de novo.' }
   }
 })
-ipcMain.handle('sw:mostrar', (_e, { nk }) => { mostra(nk); return { ok: true } })
+ipcMain.handle('sw:mostrar', (_e, { nk }) => { defineCrm(false); mostra(nk); return { ok: true } })
 
 // O TELEFONE NO TITULO DA JANELA. Gemeo do `bonito` do app.js, escrito aqui porque o processo
 // principal nao compartilha codigo com a pagina - e porque usar o nome de la daria ReferenceError,

@@ -199,6 +199,21 @@ async function rodar() {
     + ' window.__g1 = window.WPP.chat.getMessages; window.WPP.chat.getMessages = async function (id) { return id === "177000111222333@lid" ? window.__msgsLid : [] }; return "ok" })()')
   const recLid = JSON.parse(await js('window.__swColheRecentes(' + (agoraS - 86400) + ', 80, 300).then(function (r) { return JSON.stringify(r) })'))
   conta('a colheita traz o lead novo que chegou como @lid, mesmo atras de 90 conversas velhas', recLid.some((x) => x.msgId === 'L1' && /LID555/.test(x.body)), JSON.stringify(recLid.map((x) => x.msgId)))
+  // ABRIR A CONVERSA DO CARD DO CRM (23/10/2026): acha a conversa que ja existe pelos 8 digitos,
+  // inclusive a que chegou como @lid; sem achar, abre pelo telefone.
+  {
+    const ab = await js('(async () => { window.__abriu = []; window.WPP.chat.openChatBottom = async function (id) { window.__abriu.push(String(id)); return true };'
+      + ' const lc0 = window.WPP.whatsapp.lidPnCache; window.WPP.whatsapp.lidPnCache = { getPhoneNumber: function (w) { return String((w && w._serialized) || w) === "177000111222333@lid" ? { _serialized: "5516982508480@c.us" } : null } };'
+      + ' const a = await window.__swAbreConversa("5516982508480");'
+      + ' const b = await window.__swAbreConversa("11910000005");'
+      + ' const c = await window.__swAbreConversa("21987654321");'
+      + ' window.WPP.whatsapp.lidPnCache = lc0;'
+      + ' return JSON.stringify({ a, b, c, abriu: window.__abriu }) })()')
+    const r = JSON.parse(ab)
+    conta('o card do CRM abre a conversa do lead que chegou como @lid (casando o telefone)', r.a.ok && r.a.achou && r.abriu[0] === '177000111222333@lid', JSON.stringify(r))
+    conta('conversa @c.us que ja existe abre ela mesma', r.b.ok && r.b.achou && r.abriu[1] === '5511910000005@c.us', JSON.stringify(r))
+    conta('sem conversa nenhuma, abre pelo telefone com o 55 na frente', r.c.ok && !r.c.achou && r.abriu[2] === '5521987654321@c.us', JSON.stringify(r))
+  }
   await js('window.WPP.chat.list = window.__l1; window.WPP.chat.getMessages = window.__g1; "ok"')
   const um = JSON.parse(await js('window.__swColhe("5511933332222@c.us", 25).then(function (r) { return JSON.stringify(r) })'))
   conta('a colheita de UMA conversa (a do funil) traz o lead com o codigo', um.some((x) => x.msgId === 'C1' && x.via === 'colheita-funil') && !um.some((x) => x.msgId === 'C3'), JSON.stringify(um.map((x) => x.msgId)))
@@ -271,6 +286,8 @@ async function rodar() {
       abertos: new Map([['1574060653', { view: { webContents: j.webContents }, connUltimo: 'pronto' }]]),
       filaCaptura: [], entregues: new Map([['C2', Date.now()]]), ultimaColheita: new Map(), saude: { colhidas: 0, colheuEm: 0 },
       config: { token: 't', apiBase: 'https://api' }, anota: () => {}, ajustaRelogio: () => {}, ehVelha: () => 0,
+      // a colheita conta o que conferiu e avisa a faixa do CRM (23/10/2026)
+      avisos: [], avisaCasca: (c, d) => { ambiente.avisos.push([c, d]) }, estadoMarcacao: () => ({ ...(ambiente.saude.marcacao || {}) }),
       espera: (ms) => new Promise((r) => setTimeout(r, ms)), agoraCerto: () => Date.now(),
       fetch: async (url, o) => { const evs = JSON.parse(o.body).events; posts.push(evs); return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ack: evs.map((e) => e.msgId) }) } },
     }
@@ -286,6 +303,8 @@ async function rodar() {
     conta('o main pergunta a pagina e manda pra dash o que faltava (conversa ja lida)', foi.includes('C1') && /XYZ789/.test((posts.flat().find((e) => e.msgId === 'C1') || {}).body || ''), JSON.stringify(foi))
     conta('e NAO manda de novo o que o servidor ja tinha confirmado', !foi.includes('C2'), JSON.stringify(foi))
     conta('a janela da proxima colheita anda', ambiente.ultimaColheita.get('1574060653') > 0)
+    const av = ambiente.avisos.filter((x) => x[0] === 'sw:marcacao').map((x) => x[1])
+    conta('e conta pra faixa do CRM o que conferiu (1 numero, quantas faltavam)', av.length === 1 && av[0].numeros === 1 && av[0].faltavam === foi.length && av[0].em > 0, JSON.stringify(av))
     posts.length = 0
     await F.colheTodos()
     conta('a colheita seguinte nao manda nada que ja foi', posts.length === 0, JSON.stringify(posts))

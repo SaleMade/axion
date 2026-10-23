@@ -14,6 +14,21 @@ let maxAbertos = 6
 const URL_FOTO_GUI = 'https://axion-api.axion-dash.workers.dev/api/users/foto/a1/h1'
 let fotos = {}
 const ouvintes = {}
+// O CRM DO ATENDIMENTO (23/10/2026): o quadro que o /api/wa/crm devolveria. Um card por etapa e dois
+// em Lead Novo; Em Atendimento passa do limite (1.234 no total, 1 na tela) pra conferir o rodape.
+const agoraS = Math.floor(Date.now() / 1000)
+const CRM = {
+  ok: true, sig: 's1', lim: 200,
+  totais: { novo: 2, atendimento: 1234, qualificado: 1, fechou: 1 },
+  cards: [
+    { phone: '5516982508480', instance: 'ax_atendente_vra3lh_92503977', name: 'Zélia Souza', last_text: '[ptt]', last_ts: agoraS - 300, unread: 2, crm_stage: 'novo' },
+    { phone: '554598094898', instance: 'ax_atendente_vra3lh_77001122', name: '', last_text: 'Quero saber o preço', last_ts: agoraS - 600, unread: 0, crm_stage: 'novo' },
+    { phone: '558481093434', instance: 'ax_atendente_vra3lh_66632248', name: 'Joana Lima', last_text: 'Oi', last_ts: agoraS - 900, unread: 0, crm_stage: 'atendimento' },
+    { phone: '553398306226', instance: 'ax_atendente_vra3lh_95983293', name: 'Cleuza Helena', last_text: 'ok', last_ts: agoraS - 1200, unread: 0, crm_stage: 'qualificado' },
+    { phone: '5511950238615', instance: 'ax_atendente_vra3lh_95983293', name: 'Maria do Carmo', last_text: 'Segue o contato', last_ts: agoraS - 1500, unread: 0, crm_stage: 'fechou' },
+  ],
+}
+let MARCACAO = { prontos: 1, em: Date.now(), faltavam: 0, numeros: 1 }
 
 const ESTADO = () => ({
   temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
@@ -23,6 +38,8 @@ const ESTADO = () => ({
   // o numero aberto (e fora da tela) tem 3 conversas esperando: a lista mostra o contador (20/10/2026)
   naoLidas: { '1574060653': 3 },
   fotos,
+  crm: { x: 268, width: 640, faixa: 34, aberto: false },
+  marcacao: MARCACAO,
   // o placar de hoje: Guilherme tem foto, o Heynan nao (sai a sigla), e quem esta logado e o Heynan
   equipe: [
     { id: 'a1', nome: 'Guilherme Souza', foto: URL_FOTO_GUI, sigla: 'GS', cor: '#24c278', leads: 112, eu: false },
@@ -81,7 +98,16 @@ contextBridge.exposeInMainWorld('sw', {
     return Promise.resolve({ ok: true, maxAbertos })
   },
   ao: (canal, fn) => { (ouvintes[canal] = ouvintes[canal] || []).push(fn) },
+  crmAbrir: (aberto) => { chamadas.push({ nome: 'crmAbrir', args: [aberto] }); return Promise.resolve({ ok: true, aberto }) },
+  crmDados: (periodo, sig) => { chamadas.push({ nome: 'crmDados', args: [periodo, sig] }); return Promise.resolve(sig === CRM.sig ? { ok: true, igual: true, sig, marcacao: MARCACAO } : { ...JSON.parse(JSON.stringify(CRM)), marcacao: MARCACAO }) },
+  // O 4898 RECUSA de proposito: e o caso em que o card tem que voltar pra onde estava.
+  crmEtapa: (fone, etapa) => { chamadas.push({ nome: 'crmEtapa', args: [fone, etapa] }); return new Promise((r) => setTimeout(() => r(fone === '554598094898' ? { ok: false, erro: 'Sem acesso a essa conversa' } : { ok: true }), 120)) },
+  // O numero do 4898 (77001122) esta FECHADO nesta maquina: o main manda a casca abrir ele.
+  crmConversa: (fone, instancia) => { chamadas.push({ nome: 'crmConversa', args: [fone, instancia] }); return Promise.resolve(/77001122$/.test(instancia) ? { ok: true, fechado: true, numero: '5515977001122' } : { ok: true, nk: '1992503977', abriu: true }) },
+  crmPedido: (fone) => { chamadas.push({ nome: 'crmPedido', args: [fone] }); return Promise.resolve({ ok: true, venda: { raw: ['Pedido Concluído', 'Nome: Maria do Carmo', 'CPF: 123'].join(String.fromCharCode(10)), valor: 297, ts: agoraS - 1500, nome: 'Maria do Carmo' } }) },
 })
+// O main avisando a casca (sw:area, sw:marcacao...), como o webContents.send faria.
+contextBridge.exposeInMainWorld('__avisaCasca', (canal, dados) => { if (canal === 'sw:marcacao') MARCACAO = dados; for (const fn of ouvintes[canal] || []) fn(dados) })
 // O main terminou de baixar as fotos: grava no estado e avisa a barra, como o main.js faz.
 contextBridge.exposeInMainWorld('__fotosChegaram', () => {
   fotos = { [URL_FOTO_GUI]: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }

@@ -387,7 +387,86 @@
   .aviso.ok { display: block; background: var(--verde-fraco); border: 1px solid rgba(36, 194, 120, .3); color: #8ff0bd; }
 
   /* ─────────────── janelinha ─────────────── */
-  .fundo-modal { position: fixed; inset: 0; background: rgba(4, 6, 10, .72); display: none; align-items: center; justify-content: center; padding: 24px; }
+  /* ─────────────── CRM DO ATENDIMENTO (23/10/2026) ───────────────
+     Mora na faixa da area do WhatsApp (entre a barra e o painel): x e largura vem do main.js pelo
+     aviso sw:area, porque e ele que posiciona a view. Fechado, so a faixa de 34 px no pe (a altura
+     ALTURA_FAIXA_CRM do main.js); aberto, a area inteira. As cores das etapas sao as do CRM da dash. */
+  .crm { position: fixed; left: var(--crm-x, 268px); width: var(--crm-w, calc(100vw - 590px)); bottom: 0;
+    height: var(--crm-faixa, 34px); z-index: 30; display: flex; flex-direction: column; background: var(--barra);
+    border-top: 1px solid var(--linha); }
+  .crm[hidden] { display: none; }
+  .crm.on { top: 0; height: auto; border-top: 0; background: var(--fundo); animation: crm-sobe .16s ease-out; }
+  @keyframes crm-sobe { from { transform: translateY(24px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .crm.on { animation: none; } }
+  .crm-faixa { flex: 0 0 var(--crm-faixa, 34px); display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    cursor: pointer; color: var(--apagado); font-size: 12px; min-width: 0; }
+  .crm-faixa:hover { background: rgba(255, 255, 255, .03); color: var(--texto); }
+  .crm-faixa:focus-visible { outline: 2px solid rgba(36, 194, 120, .5); outline-offset: -2px; }
+  .crm-faixa > b { color: var(--texto); font-weight: 650; white-space: nowrap; }
+  .crm-faixa svg { flex: 0 0 auto; }
+  .crm.on .crm-faixa { display: none; }
+  .crm-mini { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
+  .crm-mini span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .crm-mini i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+  .crm-mini em { font-style: normal; color: var(--apagado); }
+  .crm-mini strong { color: var(--texto); font-weight: 650; }
+  .crm-marca { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; color: var(--apagado); }
+  .crm-marca.ok { color: #24c278; }
+  .crm-marca.foi { color: var(--ambar); }
+  .crm-quadro { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .crm.on .crm-quadro { display: flex; }
+  .crm-topo { display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; min-width: 0; }
+  .crm-topo h3 { font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .crm-per { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--linha); border-radius: 9px; }
+  .crm-per button { padding: 3px 9px; border-radius: 7px; font-size: 11.5px; color: var(--apagado); }
+  .crm-per button.on { background: var(--verde-fraco); color: #24c278; font-weight: 600; }
+  .crm-per button:hover:not(.on) { color: var(--texto); }
+  .crm-volta { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 9px;
+    border: 1px solid var(--linha); color: var(--apagado); font-size: 12px; white-space: nowrap; }
+  .crm-volta:hover { color: var(--texto); background: rgba(255, 255, 255, .05); }
+  .crm-colunas { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 0 12px 12px; overflow-x: auto; }
+  .crm-col { flex: 1 1 0; min-width: 158px; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-top: 3px solid var(--c);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--c) 23%, transparent) 0%, color-mix(in srgb, var(--c) 9%, transparent) 200px, color-mix(in srgb, var(--c) 7%, transparent) 100%); }
+  .crm-col.alvo { box-shadow: 0 0 0 2px rgba(36, 194, 120, .5); }
+  .crm-col-cab { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-bottom: 1px solid color-mix(in srgb, var(--c) 23%, transparent);
+    background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .crm-col-cab i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+  .crm-col-cab b { font-size: 12px; font-weight: 700; color: var(--c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crm-col-cab span { margin-left: auto; padding: 0 6px; border-radius: 99px; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--c); }
+  .crm-cards { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .crm-cards::-webkit-scrollbar { width: 6px; }
+  .crm-cards::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .09); border-radius: 6px; }
+  .crm-colunas::-webkit-scrollbar { height: 8px; }
+  .crm-colunas::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .09); border-radius: 8px; }
+  .crm-vazio { border: 1px dashed rgba(255, 255, 255, .12); border-radius: 9px; padding: 14px 8px; text-align: center; font-size: 11px; color: rgba(139, 148, 166, .75); }
+  .crm-pe { text-align: center; font-size: 10.5px; color: var(--apagado); padding: 2px 4px 4px; }
+  .crm-card { flex: 0 0 auto; background: var(--card); border: 1px solid color-mix(in srgb, var(--c) 50%, transparent); border-radius: 10px; padding: 9px 10px; cursor: pointer;
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--c) 12%, transparent); }
+  .crm-card:hover { border-color: var(--c); }
+  .crm-card.arrastando { opacity: .45; }
+  .crm-card .l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .crm-av { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 650; }
+  .crm-card .nm { min-width: 0; flex: 1; }
+  .crm-card .nm b { display: block; font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crm-card .nm small { display: block; font-size: 11px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crm-card .nl { flex: 0 0 auto; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; background: #10b981; color: #fff; font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
+  .crm-card .ul { margin-top: 6px; font-size: 11.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crm-card .l3 { margin-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; color: var(--apagado); }
+  .crm-card .l3 span { display: inline-flex; align-items: center; gap: 4px; color: #4fa3f7; }
+  .crm-card .ped { margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px; border-radius: 8px; white-space: nowrap; overflow: hidden;
+    font-size: 11px; font-weight: 700; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); background: color-mix(in srgb, var(--c) 8%, transparent); }
+  .crm-card .ped:hover { filter: brightness(1.15); }
+  .crm-aviso { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 8px 14px; border-radius: 10px; background: #1d2330;
+    border: 1px solid var(--linha); font-size: 12px; color: var(--texto); box-shadow: 0 8px 24px rgba(0, 0, 0, .4); max-width: 80%; z-index: 2; }
+  .crm-aviso[hidden] { display: none; }
+  .crm-pedido { position: absolute; inset: 0; background: rgba(4, 6, 10, .6); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 3; }
+  .crm-pedido[hidden] { display: none; }
+  .crm-pedido .cartao { max-width: 460px; }
+  .crm-pedido pre { max-height: 52vh; overflow: auto; white-space: pre-wrap; font: 11.5px/1.55 "Segoe UI", system-ui, sans-serif; color: var(--apagado);
+    background: rgba(255, 255, 255, .03); border: 1px solid var(--linha); border-radius: 9px; padding: 10px; margin: 10px 0 0; user-select: text; }
+  .fundo-modal { position: fixed; inset: 0; z-index: 40; background: rgba(4, 6, 10, .72); display: none; align-items: center; justify-content: center; padding: 24px; }
   .fundo-modal.on { display: flex; }
   .linha2 { display: grid; grid-template-columns: 1fr 96px; gap: 10px; }
   .acoes { display: flex; gap: 8px; margin-top: 16px; }
@@ -540,10 +619,39 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
   </button>
 
+  <!-- O CRM DO ATENDIMENTO (23/10/2026): a faixa fica no pe da area do WhatsApp e abre o quadro. -->
+  <section class="crm" id="crm" hidden>
+    <div class="crm-faixa" id="crm-faixa" role="button" tabindex="0" title="Abrir o CRM do Atendimento">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <b>CRM do Atendimento</b>
+      <span class="crm-mini" id="crm-mini"></span>
+      <span class="crm-marca" id="crm-marca"></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m18 15-6-6-6 6"/></svg>
+    </div>
+    <div class="crm-quadro" id="crm-quadro">
+      <div class="crm-topo" id="crm-topo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#24c278" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <h3>CRM do Atendimento</h3>
+        <div class="crm-per" id="crm-per">
+          <button data-p="hoje">Hoje</button><button data-p="7d">7 dias</button><button data-p="mes">Este mês</button>
+        </div>
+        <span class="crm-marca" id="crm-marca2"></span>
+        <button class="crm-volta" id="crm-volta" title="Voltar pro WhatsApp (Esc)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          WhatsApp
+        </button>
+      </div>
+      <div class="crm-colunas" id="crm-colunas"></div>
+    </div>
+    <div class="crm-aviso" id="crm-aviso" hidden></div>
+    <div class="crm-pedido" id="crm-pedido" hidden><div class="cartao" id="crm-pedido-corpo"></div></div>
+  </section>
+
   <div class="fundo-modal" id="modal">
     <div class="cartao" id="modal-corpo"></div>
   </div>
 
   <script src="app.js"></script>
+  <script src="crm.js"></script>
 </body>
 </html>

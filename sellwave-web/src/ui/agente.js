@@ -865,6 +865,45 @@
     } catch (_) { return Promise.resolve([]) }
   }
 
+  // ABRIR A CONVERSA DE UM TELEFONE (23/10/2026, o card do CRM do Atendimento). Primeiro procura a
+  // conversa que ja existe, casando pelos 8 ultimos digitos (o mesmo que a casa usa: aguenta o 9 a
+  // mais ou a menos) e resolvendo o telefone de quem chegou como @lid. Sem achar, pede ao motor pelo
+  // telefone: o `openChatBottom` acha a conversa mais recente daquele contato ou abre uma nova.
+  function telefoneDoChat(c, id) {
+    var p = partes(id)
+    if (!p.isLid) return p.digits
+    var W = window.WPP, cands = []
+    try { var LC = W && W.whatsapp && W.whatsapp.lidPnCache; if (LC && LC.getPhoneNumber) cands.push(LC.getPhoneNumber(c.id || id)) } catch (_) { /* ok */ }
+    try { var cc = c.contact; if (cc) cands.push(cc.phoneNumber || (cc.attributes && cc.attributes.phoneNumber)) } catch (_) { /* ok */ }
+    try { var CS = W && W.whatsapp && W.whatsapp.ContactStore; var k = CS && CS.get ? CS.get(id) : null; if (k) cands.push(k.phoneNumber || (k.attributes && k.attributes.phoneNumber)) } catch (_) { /* ok */ }
+    for (var i = 0; i < cands.length; i++) {
+      var q = partes(cands[i])
+      if (q.digits && !q.isLid) return q.digits
+    }
+    return ''
+  }
+  window.__swAbreConversa = function (fone) {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.openChatBottom !== 'function' || !autenticado()) return Promise.resolve({ ok: false, erro: 'o WhatsApp ainda esta carregando' })
+      var d = String(fone || '').replace(/\D/g, '')
+      if (d.length < 10) return Promise.resolve({ ok: false, erro: 'telefone invalido' })
+      if (d.length <= 11) d = '55' + d
+      var k8 = d.slice(-8)
+      return Promise.resolve(typeof W.chat.list === 'function' ? W.chat.list({}) : []).then(function (chats) {
+        var alvo = ''
+        ;(Array.isArray(chats) ? chats : []).some(function (c) {
+          var id = c && c.id && (c.id._serialized || String(c.id))
+          if (!id || c.isGroup || !ehPessoa(id)) return false
+          var dig = String(telefoneDoChat(c, id) || '')
+          if (dig && dig.slice(-8) === k8) { alvo = id; return true }
+          return false
+        })
+        return Promise.resolve(W.chat.openChatBottom(alvo || (d + '@c.us'))).then(function () { return { ok: true, achou: !!alvo } })
+      }).catch(function (e) { return { ok: false, erro: String((e && e.message) || e).slice(0, 120) } })
+    } catch (e) { return Promise.resolve({ ok: false, erro: String((e && e.message) || e).slice(0, 120) }) }
+  }
+
   var ligado = null
   setInterval(function () {
     try {

@@ -28,10 +28,17 @@ contextBridge.exposeInMainWorld('sw', {
   verComo: (id) => chamar('sw:como', { id }),
   soltarUso: (nk) => chamar('sw:uso-soltar', { nk }),
   barra: (encolhida) => chamar('sw:barra', { encolhida }),
+  // O CRM DO ATENDIMENTO (23/10/2026): abrir/fechar o quadro, ler, mover de etapa, abrir a conversa
+  // do card e ver o Pedido Concluido. Tudo vai pela dash, com o login de quem esta no app.
+  crmAbrir: (aberto) => chamar('sw:crm-abrir', { aberto }),
+  crmDados: (periodo, sig) => chamar('sw:crm-dados', { periodo, sig }),
+  crmEtapa: (fone, etapa) => chamar('sw:crm-etapa', { fone, etapa }),
+  crmConversa: (fone, instancia) => chamar('sw:crm-conversa', { fone, instancia }),
+  crmPedido: (fone) => chamar('sw:crm-pedido', { fone }),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos', 'sw:area', 'sw:marcacao']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)
