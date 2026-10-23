@@ -17,6 +17,73 @@
   window.__sw_agente = true
 
   var MARCA = '__sellwave__'
+
+  // O SOM DE MENSAGEM NOVA FICA MUDO; A LIGACAO CONTINUA TOCANDO (23/10/2026, pedido do Bruno: "fica
+  // toda hora mandando notificacao de mensagem recem recebida (...) eu baixo o volume no minimo, porem
+  // ai eu nao consigo escutar as ligacoes").
+  //
+  // POR QUE TOCAVA TANTO: cada numero aberto e um WhatsApp inteiro, e os que estao por tras (o
+  // vendedor olha um, os outros seguem abertos recebendo lead) tocam o "plim" de cada mensagem que
+  // chega neles. Com cinco numeros, o barulho nao para, mesmo com a conversa da tela quieta. A
+  // notificacao do Windows ja estava desligada desde 16/10; o que sobrou e o som da propria pagina.
+  //
+  // COMO SEPARA SEM SABER O NOME DO ARQUIVO (o WhatsApp troca o nome a cada versao): o "plim" e um
+  // som CURTO que toca uma vez; o toque de ligacao repete (`loop`) ou e longo, e o audio da chamada em
+  // si vem de um fluxo ao vivo (`srcObject`). So o primeiro fica mudo. O elemento e silenciado, nao
+  // impedido: a pagina segue igual, so sem som. E se o WhatsApp reusar o mesmo elemento pra tocar uma
+  // ligacao depois, o som volta antes de tocar. `window.__swSomMensagem = true` liga o plim de novo.
+  // O QUE O VENDEDOR MANDA TOCAR NUNCA FICA MUDO: audio de lead (vem de `blob:`) e qualquer som que
+  // toca logo depois de um clique (`navigator.userActivation`). Um "sim" de 2 s do cliente tem que sair.
+  ;(function () {
+    try {
+      if (window.__swSomInstalado) return
+      window.__swSomInstalado = true
+      window.__swSonsCalados = 0
+      // LIGACAO ENTRANDO: nada fica mudo por 90 s, qualquer que seja o jeito que o WhatsApp toca o toque
+      // (o motor avisa `call.incoming_call`, ver o rearme dos eventos la embaixo).
+      var calar = function () { return window.__swSomMensagem !== true && Date.now() > (window.__swLigandoAte || 0) }
+      var curto = function (d) { return isFinite(d) && d > 0 && d < 4 }
+      var foiClique = function () { try { return !!(navigator.userActivation && navigator.userActivation.isActive) } catch (_) { return false } }
+      var conta = function () { window.__swSonsCalados++ }
+      var P = window.HTMLMediaElement && window.HTMLMediaElement.prototype
+      if (P && P.play) {
+        var play0 = P.play
+        P.play = function () {
+          try {
+            var el = this
+            var ehAudio = (typeof HTMLAudioElement === 'undefined') || (el instanceof HTMLAudioElement)
+            var doLead = /^blob:/i.test(String(el.currentSrc || el.src || ''))
+            if (ehAudio && !el.srcObject && !doLead && !foiClique()) {
+              if (!calar() || el.loop || (isFinite(el.duration) && el.duration >= 4)) {
+                if (el.__swCalou) { el.muted = false; el.__swCalou = false }   // ligacao: o som volta
+              } else if (curto(el.duration)) {
+                el.muted = true; el.__swCalou = true; conta()
+              } else {
+                // ainda sem a duracao (o arquivo nem carregou): cala agora e decide quando souber
+                el.muted = true; el.__swCalou = true
+                var decide = function () {
+                  el.removeEventListener('loadedmetadata', decide)
+                  if (el.loop || !curto(el.duration)) { el.muted = false; el.__swCalou = false } else conta()
+                }
+                el.addEventListener('loadedmetadata', decide)
+              }
+            }
+          } catch (_) { /* o som nunca pode quebrar a pagina */ }
+          return play0.apply(this, arguments)
+        }
+      }
+      // O MESMO PRA QUEM TOCA PELO Web Audio: buffer curto que nao repete e o plim.
+      var S = window.AudioBufferSourceNode && window.AudioBufferSourceNode.prototype
+      if (S && S.start) {
+        var start0 = S.start
+        S.start = function () {
+          try { if (calar() && !foiClique() && !this.loop && this.buffer && curto(this.buffer.duration)) { conta(); return } } catch (_) { /* ok */ }
+          return start0.apply(this, arguments)
+        }
+      }
+    } catch (_) { /* ok */ }
+  })()
+
   // SO CONVERSA DE PESSOA. Lista de PERMITIDOS, usada tanto pra achar a conversa quanto pra
   // capturar e pra ENVIAR. Antes ela so valia na captura: com um grupo aberto na tela, o painel
   // liberava o botao e um funil inteiro ia parar dentro do grupo.
@@ -802,6 +869,11 @@
       try {
         W.on('conn.logout', function (r) { ultimaQueda = { modo: 'LOGOUT', motivo: String((r && (r.reason || r.code)) || ''), ts: Date.now() } })
         W.on('conn.require_auth', function () { ultimaQueda = { modo: 'REQUIRE_AUTH', motivo: '', ts: Date.now() } })
+        // ligacao entrando: o som de tudo volta por 90 s (ver O SOM DE MENSAGEM NOVA FICA MUDO)
+        W.on('call.incoming_call', function () {
+          window.__swLigandoAte = Date.now() + 90000
+          try { document.querySelectorAll('audio').forEach(function (a) { if (a.__swCalou) { a.muted = false; a.__swCalou = false } }) } catch (_) { /* ok */ }
+        })
         W.on('conn.logout_reason', function (r) { ultimaQueda = { modo: 'LOGOUT_REASON', motivo: String(r == null ? '' : (r.reason || r.code || r)), ts: Date.now() } })
         W.on('conn.stream_mode_changed', function (m) {
           var mo = String((m && (m.mode || m)) || '')

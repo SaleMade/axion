@@ -1434,6 +1434,26 @@ function notaPareamento(s, st) {
     anota('[nuvem] ' + s.nk + ' pareado agora: so sobe pra nuvem depois de ' + Math.round(PAREAMENTO_MIN_MS / 60000) + ' min conectado')
   }
 }
+// A BARRA E O PAINEL NAO TEM ZOOM (23/10/2026, o Guilherme). Ele segurou Ctrl e girou o mouse (ou
+// Ctrl e menos) achando que diminuia o WhatsApp, mas o foco estava na barra: o Chromium diminuiu a
+// BARRA, que ficou pequena e longe do WhatsApp. E o zoom fica GRAVADO na pasta do app por endereco,
+// por isso reinstalar nao resolveu. Aqui o zoom da barra e do painel fica preso em 100%: o atalho e
+// ignorado, qualquer mudanca volta na hora, e ao carregar a pagina volta pra 100% - o que ja conserta
+// quem ficou com a barra pequena, na primeira abertura desta versao.
+// O ZOOM DO WHATSAPP CONTINUA LIVRE (cada numero guarda o seu): e la que o vendedor quer mexer.
+function travaZoom(wc) {
+  if (!wc) return
+  const volta = () => { try { if (!wc.isDestroyed() && Math.abs(wc.getZoomFactor() - 1) > 0.001) wc.setZoomFactor(1) } catch (_) { /* ok */ } }
+  try { wc.setVisualZoomLevelLimits(1, 1) } catch (_) { /* ok */ }
+  wc.on('did-finish-load', volta)
+  wc.on('zoom-changed', () => setTimeout(volta, 0))
+  wc.on('before-input-event', (e, input) => {
+    if (!input || input.type !== 'keyDown' || !(input.control || input.meta)) return
+    if (['-', '=', '+', '0', '_'].includes(String(input.key))) { e.preventDefault(); volta() }
+  })
+  volta()
+}
+
 // Chamada na despedida, com a janela ja fora da tela: devolve a leitura de conexao com que a despedida
 // segue (null = nao sobe). Numero que nao foi pareado nesta abertura passa direto.
 async function esperaPareamentoAssentar(s, nk, wc, r) {
@@ -2417,7 +2437,7 @@ async function mandaColheita(evs) {
   return foram
 }
 const perguntaPagina = (wc, codigo, teto) => Promise.race([
-  wc.executeJavaScript(codigo, true),
+  wc.executeJavaScript(codigo, false),   // sem gesto: ler a pagina nao e clique (e o "clique" destravaria o plim, ver agente.js)
   espera(teto).then(() => null),
 ]).catch(() => null)
 let colhendo = false
@@ -2805,6 +2825,7 @@ function destaca(nk) {
       partition: 'persist:sw-painel',
     },
   })
+  travaZoom(d.painel.webContents)
   win.contentView.addChildView(d.painel)
   d.painel.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))
 
@@ -3920,6 +3941,7 @@ app.whenReady().then(() => {
     },
   })
   session.fromPartition('persist:sw-casca').setProxy({ mode: 'direct' })
+  travaZoom(casca.webContents)
   janela.contentView.addChildView(casca)
   casca.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'))
 
@@ -3939,6 +3961,7 @@ app.whenReady().then(() => {
     },
   })
   session.fromPartition('persist:sw-painel').setProxy({ mode: 'direct' })
+  travaZoom(painel.webContents)
   painel.setVisible(false)
   janela.contentView.addChildView(painel)
   painel.webContents.loadFile(path.join(__dirname, 'ui', 'painel.html'))

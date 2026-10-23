@@ -196,6 +196,53 @@ async function rodar() {
   conta('e funciona mesmo com a mensagem ja marcada como vista pelo evento',
     JSON.parse(await js('window.__swColhe("5511955554444@c.us", 25).then(function (r) { return JSON.stringify(r.map(function (x) { return x.msgId })) })')).includes('V1'))
 
+  console.log('\nO SOM DE MENSAGEM NOVA MUDO, A LIGACAO TOCANDO (23/10/2026)')
+  {
+    // WAV de verdade, gerado aqui: 0,3 s (o "plim") e 5 s (um toque longo). 8 kHz, 8 bits, mono.
+    const wav = (seg) => {
+      const n = Math.round(8000 * seg), b = Buffer.alloc(44 + n)
+      b.write('RIFF', 0); b.writeUInt32LE(36 + n, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22)
+      b.writeUInt32LE(8000, 24); b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write('data', 36); b.writeUInt32LE(n, 40)
+      for (let i = 0; i < n; i++) b[44 + i] = 128 + Math.round(40 * Math.sin(i / 6))
+      return 'data:audio/wav;base64,' + b.toString('base64')
+    }
+    const curto = wav(0.3), longo = wav(5)
+    // SEM gesto do usuario (o segundo argumento false): e assim que o WhatsApp toca o plim
+    const semClique = (c) => j.webContents.executeJavaScript(c, false)
+    const toca = async (src, extra) => {
+      await semClique('(() => { window.__a = new Audio(' + JSON.stringify(src) + '); ' + (extra || '') + ' window.__a.play().catch(function () {}); return "ok" })()')
+      await espera(700)
+      return semClique('({ mudo: window.__a.muted, calados: window.__swSonsCalados })')
+    }
+    // A ATIVACAO DE UM "CLIQUE" DURA ~5 s: os passos de cima rodaram como gesto do usuario (o `js` do
+    // teste passa userGesture), entao espera ela vencer antes de medir o som sem clique.
+    await espera(6000)
+    let r = await toca(curto)
+    conta('o plim de mensagem nova (som curto, sem clique) toca MUDO', r.mudo === true && r.calados >= 1, JSON.stringify(r))
+    r = await toca(curto, 'window.__a.loop = true;')
+    conta('som que repete (toque de ligacao) toca com som', r.mudo === false, JSON.stringify(r))
+    r = await toca(longo)
+    conta('som longo toca com som (decide quando sabe a duracao)', r.mudo === false, JSON.stringify(r))
+    r = JSON.parse(await semClique('(async () => { const bl = await (await fetch(' + JSON.stringify(curto) + ')).blob(); window.__a = new Audio(URL.createObjectURL(bl)); window.__a.play().catch(function () {}); await new Promise(function (ok) { setTimeout(ok, 500) }); return JSON.stringify({ mudo: window.__a.muted }) })()'))
+    conta('audio do lead (blob:), mesmo curto, toca com som', r.mudo === false, JSON.stringify(r))
+    await j.webContents.executeJavaScript('(() => { window.__a = new Audio(' + JSON.stringify(curto) + '); window.__a.play().catch(function () {}); return "ok" })()', true)
+    await espera(500)
+    conta('som que toca logo depois de um clique sai com som', (await semClique('window.__a.muted')) === false)
+    await espera(6000)   // o clique acima venceu
+    r = await toca(curto)
+    conta('passado o clique, o plim volta a ficar mudo', r.mudo === true, JSON.stringify(r))
+    // a ligacao entrando: e o que o ouvinte de call.incoming_call faz
+    await semClique('(() => { window.__swLigandoAte = Date.now() + 90000; return "ok" })()')
+    r = await toca(curto)
+    conta('com ligacao entrando, nem o som curto fica mudo', r.mudo === false, JSON.stringify(r))
+    await semClique('(() => { window.__swLigandoAte = 0; window.__swSomMensagem = true; return "ok" })()')
+    r = await toca(curto)
+    conta('com o plim ligado de volta (__swSomMensagem), toca com som', r.mudo === false, JSON.stringify(r))
+    await semClique('(() => { window.__swSomMensagem = false; return "ok" })()')
+    const fonteAg = fs.readFileSync(path.join(__dirname, 'ui', 'agente.js'), 'utf8')
+    conta('o agente escuta a ligacao entrando no motor', /W\.on\('call\.incoming_call'/.test(fonteAg))
+  }
+
   console.log('\nA COLHEITA DE PONTA A PONTA (o main de verdade perguntando a pagina de verdade)')
   // As funcoes do main.js recortadas do arquivo, rodando AQUI, no processo principal do Electron, e
   // perguntando a esta pagina pelo executeJavaScript - o mesmo caminho do app. So o servidor e falso.
