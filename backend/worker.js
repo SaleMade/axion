@@ -23851,6 +23851,64 @@ async function _roletaDesligaNum(env, nk8, o) {
 // min antes a 10 min depois) -> avisa o vendedor e a direcao, no maximo um aviso a cada 3 h por
 // vendedor. Nao desliga nada: os leads estao chegando no WhatsApp dele, so nao estao sendo contados.
 let _capParadaIdx = false;
+// ALARME POR NUMERO: ESTE CHIP PAROU DE REGISTRAR (23/10/2026).
+//
+// O `_alarmeCapturaParada` logo abaixo olha o VENDEDOR: ele so dispara quando NENHUM funil daquela
+// pessoa teve saida. Vendedor com tres numeros em que so UM morre nunca chega la - e com 3 ou 4
+// numeros por pessoa esse e o caso comum. Foi o que aconteceu em 23/10: o (11) 97251-8066 do
+// Guilherme estava mudo desde as 22:46 da vespera, comeu 97 cliques pagos no dia, e o alarme do
+// vendedor nunca tocou porque o 3293 dele continuava registrando normal.
+//
+// A FONTE AQUI E OUTRA, e e barata: o conjunto `roleta_mudo_preso`, que a propria roleta mantem
+// (numero que recebeu 20 visitas sem UMA mensagem). Quem decide ja decidiu; aqui so se avisa.
+// Trinco de 6 h por numero, pra nao repetir enquanto o vendedor nao conserta, e o numero sai do
+// trinco quando volta a capturar - assim a proxima queda avisa de novo.
+async function _alarmeNumeroMudo(env) {
+  let presos = {};
+  try { presos = JSON.parse((await _readConfig(env, 'roleta_mudo_preso')) || '{}') || {}; } catch (_) { return; }
+  let ja = {};
+  try { ja = JSON.parse((await _readConfig(env, 'roleta_mudo_avisado')) || '{}') || {}; } catch (_) { ja = {}; }
+  const agora = Math.floor(Date.now() / 1000);
+  // Numero que voltou sai do trinco: a proxima queda dele tem que avisar de novo.
+  let mudouJa = false;
+  for (const k of Object.keys(ja)) if (!presos[k]) { delete ja[k]; mudouJa = true; }
+  const novos = Object.keys(presos).filter((k) => !ja[k] || (agora - Number(ja[k] || 0)) > 21600);
+  if (novos.length) {
+    const data = await _getDashData(env).catch(() => ({}));
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    let nomePorId = {};
+    try {
+      const us = await env.DB.prepare('SELECT id, name FROM users').all();
+      for (const u of ((us && us.results) || [])) nomePorId[String(u.id)] = String(u.name || '');
+    } catch (_) {}
+    let direcao = [];
+    try {
+      const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
+      direcao = ((us && us.results) || []).map((x) => String(x.id));
+    } catch (_) {}
+    for (const nk of novos) {
+      const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
+      // Numero sem dono (coluna da Contingencia, chip apagado) nao tem pra quem avisar: so a direcao.
+      const dono = chip && chip.at && !/^ccol_/i.test(String(chip.at)) ? String(chip.at) : '';
+      const nome = (dono && nomePorId[dono]) ? String(nomePorId[dono]).split(' ')[0] : '';
+      const fim = chip && chip.num ? String(chip.num) : ('...' + nk.slice(-4));
+      ja[nk] = agora; mudouJa = true;
+      for (const id of new Set(direcao.concat(dono ? [dono] : []))) {
+        try {
+          await _wpParaPessoa(env, id, {
+            title: id === dono ? 'O numero ' + fim + ' parou de registrar' : 'Numero parado' + (nome ? ' de ' + nome : '') + ': ' + fim,
+            body: 'Ele recebeu clique pago e nao registrou NENHUMA mensagem. Saiu da roleta pra nao queimar mais clique, e so volta quando registrar de novo. '
+              + (id === dono ? 'Feche e abra este numero no SellWave Web.' : 'Peca pra fechar e abrir esse numero no SellWave Web.'),
+            tag: 'num-mudo-' + nk,
+            url: '/pressels',
+          });
+        } catch (_) { /* aviso que falha nao para os outros */ }
+      }
+      console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)'));
+    }
+  }
+  if (mudouJa) { try { await _writeConfig(env, 'roleta_mudo_avisado', JSON.stringify(ja)); } catch (_) {} }
+}
 async function _alarmeCapturaParada(env) {
   const agora = Math.floor(Date.now() / 1000);
   if (!_capParadaIdx) {
@@ -29348,6 +29406,7 @@ export default {
         try { const _ra = await _arqCron(env); if (_ra && _ra.n) console.error('[arquivo] ' + _ra.n + ' pedido(s) arquivado(s), restam ' + (_ra.restam || 0)); } catch (e) { console.error('[cron] arquivo de leads falhou: ' + String((e && e.message) || e)); }
         // O APP QUE PAROU DE REGISTRAR (21/10/2026): de 5 em 5 minutos, duas consultas por indice. Ver _alarmeCapturaParada.
         try { await _alarmeCapturaParada(env); } catch (e) { console.error('[cron] alarme captura parada falhou: ' + String((e && e.message) || e)); }
+        try { await _alarmeNumeroMudo(env); } catch (e) { console.error('[cron] alarme numero mudo falhou: ' + String((e && e.message) || e)); }
         // Gira entre quatro tarefas lentas: cada uma cai a cada 80 minutos, que e de sobra pro que
         // elas fazem. Backup e guardado por dentro (1x/hora e so se a versao mudou).
         const volta = Math.floor(minuto / RODIZIO.length) % 4;
