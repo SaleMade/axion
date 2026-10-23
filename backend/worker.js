@@ -11555,6 +11555,14 @@ async function handleSwWeb(req, env, path) {
     // quanto a captura estava perdendo antes dela.
     const _varr = limpos.filter((e) => e && e.via === 'varredura' && !e.fromMe);
     if (_varr.length) console.log('SWWEB_VARREDURA n=' + _varr.length + ' de=' + limpos.length + ' por=' + String(u.id) + ' nums=' + [...new Set(_varr.map((e) => _k8(e.selfNumber).slice(-4)))].join(','));
+    // QUANTO A COLHEITA SALVOU (23/10/2026, app 1.25.16): mensagem que o app achou PERGUNTANDO a pagina
+    // e que o servidor nunca tinha confirmado. 'colheita' = a volta de 2 em 2 min; 'colheita-funil' =
+    // a conversa do lead no disparo do funil. Separado por direcao: entrada e lead, saida e o que o
+    // vendedor mandou.
+    const _colh = limpos.filter((e) => e && /^colheita/.test(String(e.via || '')));
+    if (_colh.length) console.log('SWWEB_COLHEITA n=' + _colh.length + ' entrada=' + _colh.filter((e) => !e.fromMe).length
+      + ' funil=' + _colh.filter((e) => e.via === 'colheita-funil').length + ' por=' + String(u.id)
+      + ' nums=' + [...new Set(_colh.map((e) => _k8(e.selfNumber).slice(-4)))].join(','));
     if (!limpos.length) return json({ ok: true, ack: [], barrados });
 
     try {
@@ -11590,6 +11598,21 @@ async function handleSwWeb(req, env, path) {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
     const num = String((b && b.numero) || '').replace(/\D/g, '');
     if (num.length < 10) return json({ ok: true, ignorado: true });
+    // A SAUDE DA CAPTURA DO APP (23/10/2026, app 1.25.16): o tamanho da fila, quando ela drenou pela
+    // ultima vez e o ultimo erro. So vai pro log quando ha algo de errado - e a resposta que faltou no
+    // caso do Guilherme, cujo app parou de mandar captura com o sinal de vida batendo normal.
+    try {
+      const sd = (b && b.saude && typeof b.saude === 'object') ? b.saude : null;
+      if (sd) {
+        const fila = Number(sd.fila) || 0;
+        const drenouHa = sd.drenouEm ? Math.round((Date.now() - Number(sd.drenouEm)) / 1000) : -1;
+        if (fila > 30 || sd.erro || (fila > 0 && drenouHa > 600)) {
+          console.log('SWWEB_SAUDE num=' + num.slice(-8) + ' por=' + String(u.id) + ' fila=' + fila + ' drenou_ha=' + drenouHa + 's'
+            + ' erro=' + String(sd.erro || '').slice(0, 80) + ' colhidas=' + (Number(sd.colhidas) || 0)
+            + ' colheu_ha=' + (sd.colheuEm ? Math.round((Date.now() - Number(sd.colheuEm)) / 1000) + 's' : '-'));
+        }
+      }
+    } catch (_) { /* log que quebra o sinal de vida e pior que log nenhum */ }
     // O DONO E O DO NUMERO, nao o do login. Dois logins podem abrir o mesmo chip (a direcao
     // olhando o numero de um vendedor), e carimbar o wa_conn com quem esta olhando trocaria o dono
     // da conversa. Quem resolve isso e o resolveOwner, igual faz o heartbeat do Sale Chat.
