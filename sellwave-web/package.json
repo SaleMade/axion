@@ -1,6 +1,6 @@
 {
   "name": "sellwave-web",
-  "version": "1.25.16",
+  "version": "1.25.17",
   "description": "Navegador multi-sessao de WhatsApp Web da SellWave",
   "main": "src/main.js",
   "private": true,
@@ -45,6 +45,15 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "shortcutName": "SellWave Web"
-    }
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://axion-api.axion-dash.workers.dev/api/swweb/atualizacao"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }

@@ -546,6 +546,24 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o registro do que foi confirmado carrega na abertura', /leFila\(\)\n\s*carregaEntregues\(\)/.test(fonte))
 }
 
+// ── 16) A ATUALIZACAO SOZINHA (23/10/2026, pedido do Bruno). O app baixa a versao nova em segundo
+//    plano e instala quando o vendedor fecha. Aqui: a fiacao e as travas que nao podem sumir.
+{
+  const fonte = leia('main.js')
+  const pkg = JSON.parse(leia('../package.json'))
+  const pub = (pkg.build && pkg.build.publish && pkg.build.publish[0]) || {}
+  vale('o feed e o do worker, generico', pub.provider === 'generic' && pub.url === 'https://axion-api.axion-dash.workers.dev/api/swweb/atualizacao', JSON.stringify(pub))
+  vale('o electron-updater vai no pacote, com versao fixa', /^\d+\.\d+\.\d+$/.test(String((pkg.dependencies || {})['electron-updater'] || '')), JSON.stringify(pkg.dependencies))
+  const liga = recorta(fonte, 'function ligaAtualizador()')
+  vale('so liga no app instalado (nunca em teste, foto ou segunda copia)', /if \(!app\.isPackaged \|\| EH_TESTE \|\| DADOS_A_PARTE\) return/.test(liga))
+  vale('baixa sozinho e instala quando o app fecha', /autoDownload = true/.test(liga) && /autoInstallOnAppQuit = true/.test(liga))
+  vale('nunca volta pra versao mais velha', /allowDowngrade = false/.test(liga))
+  vale('e NUNCA reinicia o app no meio do trabalho', !/quitAndInstall/.test(fonte))
+  vale('o app liga o atualizador ao subir', /ligaAtualizador\(\)\n\s*setTimeout\(\(\) => \{ confereVersao\(\); atualizaAgente\(\) \}, 3000\)/.test(fonte))
+  vale('o aviso de baixar na mao so aparece se a atualizacao sozinha nao der conta',
+    /versaoMenor\(app\.getVersion\(\), versaoPublicada\) && !atualizaSozinho\(\)/.test(fonte))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

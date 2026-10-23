@@ -1804,6 +1804,48 @@ function versaoMenor(a, b) {
   }
   return false
 }
+// A ATUALIZACAO SOZINHA (23/10/2026, pedido do Bruno: "que essas atualizacoes entrem direto, sem eles
+// precisarem ficar baixando o aplicativo toda vez"). E o electron-updater lendo o feed do worker
+// (/api/swweb/atualizacao/latest.yml, ver build.publish no package.json):
+//   - confere 1 min depois de abrir e de 2 em 2 horas;
+//   - versao nova BAIXA SOZINHA, em segundo plano, e confere o sha512 do latest.yml antes de aceitar;
+//   - INSTALA QUANDO O VENDEDOR FECHAR o app (autoInstallOnAppQuit), em silencio. Nunca reinicia o
+//     app no meio do trabalho: e a regra do Bruno de 21/10 pro aviso de versao ("depois que ja
+//     comecaram a usar, nao, pra nao interromper o trabalho deles"). A versao nova entra na proxima
+//     vez que ele abrir, sem baixar nada nem clicar em nada.
+// Download inteiro, sem o diferencial por pedacos: o worker serve o arquivo inteiro e assim nao ha
+// um segundo jeito de baixar pra dar errado. Sao ~110 MB por versao, em segundo plano.
+// So no app instalado: rodando do codigo (teste, foto, segunda copia) nao tem o app-update.yml.
+let atualizador = null
+let atualizadorFalhouEm = 0
+let atualizacaoBaixada = ''
+function ligaAtualizador() {
+  if (!app.isPackaged || EH_TESTE || DADOS_A_PARTE) return
+  try { atualizador = require('electron-updater').autoUpdater } catch (e) { anota('[atualiza] sem o modulo: ' + ((e && e.message) || e)); return }
+  atualizador.autoDownload = true
+  atualizador.autoInstallOnAppQuit = true
+  atualizador.allowDowngrade = false
+  atualizador.disableDifferentialDownload = true
+  atualizador.logger = {
+    info: (m) => anota('[atualiza] ' + String(m).slice(0, 300)),
+    warn: (m) => anota('[atualiza] aviso: ' + String(m).slice(0, 300)),
+    error: (m) => anota('[atualiza] erro: ' + String(m).slice(0, 300)),
+    debug: () => {},
+  }
+  atualizador.on('error', (e) => { atualizadorFalhouEm = Date.now(); anota('[atualiza] falhou: ' + String((e && e.message) || e).slice(0, 300)) })
+  atualizador.on('update-downloaded', (info) => {
+    atualizacaoBaixada = String((info && info.version) || '')
+    anota('[atualiza] ' + atualizacaoBaixada + ' baixada: instala quando o app fechar')
+    avisaCasca('sw:aviso', { texto: 'Versão ' + atualizacaoBaixada + ' baixada. Ela entra sozinha quando você fechar o app.' })
+  })
+  const confere = () => { try { atualizador.checkForUpdates().catch((e) => { atualizadorFalhouEm = Date.now(); anota('[atualiza] nao conferiu: ' + String((e && e.message) || e).slice(0, 200)) }) } catch (_) { /* ok */ } }
+  setTimeout(confere, 60000)
+  setInterval(confere, 2 * 3600000)
+}
+// O aviso de baixar na mao so aparece se a atualizacao sozinha NAO estiver dando conta: app sem o
+// atualizador, ou o atualizador falhou nas ultimas 6 horas.
+const atualizaSozinho = () => !!atualizador && (Date.now() - atualizadorFalhouEm) > 6 * 3600000
+
 async function confereVersao() {
   try {
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/versao',
@@ -1813,7 +1855,7 @@ async function confereVersao() {
     const d = await r.json()
     versaoPublicada = String((d && d.versao) || '')
     urlInstalador = String((d && d.url) || '')
-    if (versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada)) {
+    if (versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada) && !atualizaSozinho()) {
       // `entrada` = pode abrir o pop-up grande. Ver as duas travas la em cima.
       const entrada = podeAbrirPopupVersao(Date.now())
       if (entrada) popupVersaoFeito = true
@@ -3839,6 +3881,7 @@ app.whenReady().then(() => {
   // EM SEGUNDO PLANO, SEMPRE. Nenhuma das duas segura o boot: sem internet o app abre igual, com a
   // copia do instalador e sem aviso de versao. Esperar rede pra abrir seria trocar "painel da
   // semana passada" por "o app nao abre", que e pior.
+  ligaAtualizador()
   setTimeout(() => { confereVersao(); atualizaAgente() }, 3000)
   setInterval(() => { confereVersao(); atualizaAgente() }, 6 * 60 * 60 * 1000)
 
