@@ -22567,6 +22567,17 @@ let _mudoCache = null, _mudoT = 0;
 // cache de 5 minutos da propria guarda; escrita so quando o conjunto MUDA.
 const MUDO_PRESO_KEY = 'roleta_mudo_preso';
 let _mudoPreso = null;
+// A CARENCIA DA VISITA RECENTE (23/10/2026). Visita dos ultimos 10 minutos ainda nao conta contra o
+// numero: o lead leva minutos pra mandar a primeira mensagem, e ela leva mais alguns pra chegar na
+// dash. Sem isso, numero recem ligado num pico de trafego era preso antes da primeira resposta ter
+// tempo de chegar - foi o (15) 99250-3977 do Guilherme, ligado as 14:50 e preso as 14:55 com 20
+// cliques e as mensagens a caminho. Simulado nos 3 dias de 21 a 23/10: de 68 prisoes, 38 eram de
+// numero que recebeu mensagem ate 15 min depois; com a carencia e a prova nas duas direcoes, 31 e 8
+// (o que sobra e quase todo de afiliado, com taxa de resposta muito mais baixa).
+const MUDO_CARENCIA = 600;
+// Quando o numero e solto por ter sido REABERTO ou RELIGADO, a contagem dele recomeca dali.
+const MUDO_RECOMECO_KEY = 'roleta_mudo_recomeco';
+let _mudoLidos = null;   // o que a ultima volta leu do conjunto e das provas (passa da consulta pro bloco do preso)
 // A JANELA INTEIRA, e nao so quem ficou mudo (24/09/2026). O alarme de tela precisa saber a taxa
 // de resposta REAL da operacao pra decidir se o silencio de um numero e estranho ou esperado; sem
 // isto ele teria que fazer a consulta de novo, e esta e a consulta cara. Guardada aqui do lado do
@@ -22580,25 +22591,40 @@ async function _numerosMudos(env) {
   // pra responder - e pagina de anuncio lenta e clique pago perdido. O que ela mede (numero que
   // recebeu visita e nao recebeu NENHUMA mensagem numa janela de 30 minutos) nao muda em 5 minutos.
   if (_mudoCache && (agora - _mudoT) < 300000) return _mudoCache;
-  const desde = Math.floor(agora / 1000) - MUDO_JANELA;
-  const out = {}, _tab = {};
+  const agoraS = Math.floor(agora / 1000);
+  const desde = agoraS - MUDO_JANELA;
+  const out = {}, _tab = {}, porMin = {}, prova = {};
   try {
-    // Uma consulta so: visitas por numero na janela, com as mensagens recebidas do mesmo numero ao
-    // lado. A instancia termina nos 8 digitos (ax_<at>_<8digitos>), que e exatamente o num_key.
-    // O INDEXED BY obriga a metade da tt_pending a andar pela faixa do indice (ts, num_key) em vez de
-    // varrer a tabela inteira: sem ele o SQLite escolhia o scan e lia as 27 mil linhas todas as vezes
-    // (mesmo remedio que o _cliqueDia ja usa). Se o indice sumir, a consulta FALHA em vez de ficar
-    // lenta - e o catch abaixo devolve o cache anterior, que e o comportamento seguro.
-    const r = await env.DB.prepare(
-      "SELECT v.num_key nk, v.visitas, COALESCE(m.n,0) msgs FROM" +
-      " (SELECT num_key, COUNT(*) visitas FROM tt_pending INDEXED BY idx_ttp_ts_num WHERE ts>=? AND num_key IS NOT NULL AND num_key<>'' GROUP BY num_key) v" +
-      " LEFT JOIN (SELECT substr(instance,-8) k, COUNT(*) n FROM wa_messages WHERE direction='in' AND ts>=? GROUP BY 1) m" +
-      " ON m.k = v.num_key"
-    ).bind(desde, desde).all();
-    for (const x of (r.results || [])) {
+    // DUAS CONSULTAS, e a de visita vem POR MINUTO (23/10/2026). A carencia e o recomeco (ver
+    // MUDO_CARENCIA e MUDO_RECOMECO_KEY) precisam saber QUANDO cada visita chegou, nao so quantas
+    // foram; por minuto sao no maximo 30 linhas por numero.
+    // O INDEXED BY obriga a tt_pending a andar pela faixa do indice (ts, num_key) em vez de varrer a
+    // tabela inteira: sem ele o SQLite escolhia o scan e lia as 27 mil linhas todas as vezes (mesmo
+    // remedio que o _cliqueDia ja usa). Se o indice sumir, a consulta FALHA em vez de ficar lenta - e
+    // o catch abaixo devolve o cache anterior, que e o comportamento seguro.
+    // A MENSAGEM CONTA NAS DUAS DIRECOES: mensagem que o vendedor mandou e foi registrada prova que a
+    // captura daquele numero esta viva tanto quanto a do lead. `msgs` continua sendo so a ENTRADA,
+    // porque a tela de Pressels calcula a taxa de resposta da operacao com ele.
+    // TUDO NUMA IDA SO, em paralelo: esta volta acontece no caminho da visita paga, e cada ida ao
+    // banco em fila era tempo de pagina do anuncio. As tres ultimas (o conjunto preso e as provas de
+    // reaberto e religado) tem a falha propria: falhar nelas nao pode derrubar a contagem.
+    const _24h = agoraS - 86400;
+    const [rv, rm, rCfg, rConn, rLiga] = await Promise.all([
+      env.DB.prepare("SELECT num_key nk, (ts/60)*60 b, COUNT(*) n FROM tt_pending INDEXED BY idx_ttp_ts_num WHERE ts>=? AND num_key IS NOT NULL AND num_key<>'' GROUP BY 1,2").bind(desde).all(),
+      env.DB.prepare("SELECT substr(instance,-8) k, SUM(CASE WHEN direction='in' THEN 1 ELSE 0 END) ent, COUNT(*) n FROM wa_messages WHERE ts>=? GROUP BY 1").bind(desde).all(),
+      env.DB.prepare('SELECT key, value FROM app_config WHERE key IN (?, ?)').bind(MUDO_PRESO_KEY, MUDO_RECOMECO_KEY).all().catch(() => null),
+      env.DB.prepare("SELECT nk, ts FROM swweb_conn WHERE st='pronto' AND ts > ?").bind(_24h).all().catch(() => null),
+      env.DB.prepare("SELECT nk, MAX(ts) ts FROM pressel_num_log WHERE acao='liga' AND por<>'sistema' AND ts > ? GROUP BY nk").bind(_24h).all().catch(() => null),
+    ]);
+    _mudoLidos = { rCfg, rConn, rLiga };
+    for (const x of ((rm && rm.results) || [])) prova[String(x.k || '')] = { ent: Number(x.ent) || 0, todas: Number(x.n) || 0 };
+    for (const x of ((rv && rv.results) || [])) {
       const k = String(x.nk || ''); if (!k) continue;
-      _tab[k] = { visitas: Number(x.visitas) || 0, msgs: Number(x.msgs) || 0 };
-      if ((Number(x.visitas) || 0) >= MUDO_VISITAS && (Number(x.msgs) || 0) === 0) out[k] = Number(x.visitas) || 0;
+      (porMin[k] = porMin[k] || []).push([Number(x.b) || 0, Number(x.n) || 0]);
+    }
+    for (const k of Object.keys(porMin)) {
+      const p = prova[k] || { ent: 0, todas: 0 };
+      _tab[k] = { visitas: porMin[k].reduce((t, x) => t + x[1], 0), msgs: p.ent, todas: p.todas };
     }
     _mudoTabela = _tab;
   } catch (e) {
@@ -22615,31 +22641,75 @@ async function _numerosMudos(env) {
   }
   // ── O CONJUNTO PRESO (ver o comentario em MUDO_PRESO_KEY) ──────────────────────────────────
   try {
-    if (_mudoPreso === null) {
-      let g = {};
-      try { g = JSON.parse((await _readConfig(env, MUDO_PRESO_KEY)) || '{}') || {}; } catch (_) { g = {}; }
-      _mudoPreso = g;
-    }
-    const antes = JSON.stringify(_mudoPreso);
-    // SOLTA com prova: o numero registrou mensagem ENTRANDO na janela. E a unica coisa que diz que a
-    // captura dele voltou - visita nao diz nada, porque visita e justamente o que ele estava comendo.
-    for (const k of Object.keys(_mudoPreso)) {
-      if (_tab[k] && (Number(_tab[k].msgs) || 0) > 0) {
-        console.log('ROLETA_MUDO_SOLTO num=' + k + ' msgs=' + _tab[k].msgs + ' preso_desde=' + _mudoPreso[k]);
-        delete _mudoPreso[k];
+    // LIDO DO BANCO A CADA VOLTA, nao so na primeira (23/10/2026). Cada isolate guardava a propria
+    // copia desde que nasceu e gravava ela inteira por cima da dos outros: um isolate que nunca tinha
+    // visto o numero voltar regravava ele como preso, e o aviso saia de novo. Com a leitura fresca,
+    // cada volta parte do que esta gravado e so muda o que ela mesma provou.
+    // LEITURA QUE FALHA NAO VIRA "NINGUEM PRESO": o _readConfig devolve null no erro, e isso
+    // soltaria todos de uma vez e ainda regravaria o conjunto vazio por cima. Aqui a falha fica com a
+    // copia da memoria e esta volta nao grava nada.
+    const { rCfg, rConn, rLiga } = _mudoLidos || {};
+    let preso = null, recomeco = {}, leu = false;
+    if (rCfg) {
+      preso = {};
+      for (const x of (rCfg.results || [])) {
+        let v = {}; try { v = JSON.parse(x.value || '{}') || {}; } catch (_) { v = {}; }
+        if (x.key === MUDO_PRESO_KEY) preso = v; else recomeco = v;
+      }
+      leu = true;
+    } else preso = { ...(_mudoPreso || {}) };
+    const antesP = JSON.stringify(preso), antesR = JSON.stringify(recomeco);
+    const temProva = (k) => !!(prova[k] && prova[k].todas > 0);
+
+    // SOLTA COM PROVA. Tres provas, e todas dizem que o numero voltou a valer:
+    //  1) mensagem registrada daquele numero na janela (entrando ou saindo);
+    //  2) o app conectou o numero de novo DEPOIS de ele ser preso (fechou e abriu, ou a pagina
+    //     recarregou). E o que o aviso manda o vendedor fazer, e sem esta prova o numero calado nao
+    //     tinha como voltar: fora da roleta ele nao recebe lead, sem lead nao chega mensagem;
+    //  3) gente religou o interruptor dele depois disso ("quem religa e gente").
+    // Nas provas 2 e 3 a contagem RECOMECA dali: as visitas de antes ficam na janela por 30 min e
+    // prenderiam ele de novo na volta seguinte.
+    const ks = Object.keys(preso);
+    if (ks.length) {
+      // Sem a tabela (ou com a leitura falhando), sem aquela prova: o numero so continua preso.
+      const reabriu = {}, religou = {};
+      for (const x of ((rConn && rConn.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) reabriu[k] = Math.max(reabriu[k] || 0, Number(x.ts) || 0); }
+      for (const x of ((rLiga && rLiga.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) religou[k] = Math.max(religou[k] || 0, Number(x.ts) || 0); }
+      for (const k of ks) {
+        const desdeK = Number(preso[k]) || 0;
+        let motivo = '', em = 0;
+        if (temProva(k)) motivo = 'mensagem';
+        else if ((reabriu[k] || 0) > desdeK) { motivo = 'reaberto'; em = reabriu[k]; }
+        else if ((religou[k] || 0) > desdeK) { motivo = 'religado'; em = religou[k]; }
+        if (!motivo) continue;
+        delete preso[k];
+        if (em) recomeco[k] = em;
+        console.log('ROLETA_MUDO_SOLTO num=' + k + ' por=' + motivo + ' msgs=' + ((prova[k] && prova[k].todas) || 0) + ' preso_desde=' + desdeK);
       }
     }
-    // PRENDE quem a janela acabou de pegar.
-    for (const k of Object.keys(out)) {
-      if (!_mudoPreso[k]) {
-        _mudoPreso[k] = Math.floor(agora / 1000);
-        console.log('ROLETA_MUDO_PRESO num=' + k + ' visitas=' + out[k] + ' sem UMA mensagem na janela');
+    // PRENDE quem a janela pegou: MUDO_VISITAS visitas com mais de MUDO_CARENCIA de idade (contadas
+    // depois do ultimo recomeco) e nenhuma mensagem do numero na janela inteira.
+    const ate = agoraS - MUDO_CARENCIA;
+    for (const k of Object.keys(porMin)) {
+      if (preso[k] || temProva(k)) continue;
+      const ini = Math.max(desde, Number(recomeco[k]) || 0);
+      let v = 0;
+      for (const [b, n] of porMin[k]) if (b >= ini && b + 60 <= ate) v += n;
+      if (v >= MUDO_VISITAS) {
+        preso[k] = agoraS;
+        console.log('ROLETA_MUDO_PRESO num=' + k + ' visitas=' + v + ' sem UMA mensagem na janela');
       }
     }
-    // Os presos continuam fora da roleta mesmo sem visita nova na janela: sem trafego nao ha prova.
-    for (const k of Object.keys(_mudoPreso)) if (!out[k]) out[k] = (_tab[k] && _tab[k].visitas) || 0;
-    if (JSON.stringify(_mudoPreso) !== antes) {
-      try { await _writeConfig(env, MUDO_PRESO_KEY, JSON.stringify(_mudoPreso)); } catch (_) { /* tenta na proxima */ }
+    // Recomeco que ja saiu da janela nao muda mais conta nenhuma.
+    for (const k of Object.keys(recomeco)) if ((Number(recomeco[k]) || 0) < desde) delete recomeco[k];
+    // Os presos ficam fora da roleta mesmo sem visita nova: sem trafego nao ha prova.
+    for (const k of Object.keys(preso)) out[k] = (_tab[k] && _tab[k].visitas) || 0;
+    _mudoPreso = preso;
+    if (leu && JSON.stringify(preso) !== antesP) {
+      try { await _writeConfig(env, MUDO_PRESO_KEY, JSON.stringify(preso)); } catch (_) { /* tenta na proxima */ }
+    }
+    if (leu && JSON.stringify(recomeco) !== antesR) {
+      try { await _writeConfig(env, MUDO_RECOMECO_KEY, JSON.stringify(recomeco)); } catch (_) { /* idem */ }
     }
   } catch (e) { console.error('[roleta] preso falhou: ' + String((e && e.message) || e)); }
   _mudoCache = out; _mudoT = agora;
@@ -23951,19 +24021,48 @@ let _capParadaIdx = false;
 //
 // A FONTE AQUI E OUTRA, e e barata: o conjunto `roleta_mudo_preso`, que a propria roleta mantem
 // (numero que recebeu 20 visitas sem UMA mensagem). Quem decide ja decidiu; aqui so se avisa.
-// Trinco de 6 h por numero, pra nao repetir enquanto o vendedor nao conserta, e o numero sai do
-// trinco quando volta a capturar - assim a proxima queda avisa de novo.
+//
+// O AVISO DIZ O QUE ACONTECEU DE VERDADE, E SO QUANDO DURA (23/10/2026, pedido do Bruno: "esses
+// alertas estao meio perdidos (...) os numeros estao todos corretos").
+//
+// O que estava errado, medido no dia: o (15) 99250-3977 do Guilherme foi ligado as 14:50, tomou 20
+// cliques em 5 minutos, foi preso as 14:55 e avisado as 14:56 como "parou de receber". As mensagens
+// dos leads estavam no WhatsApp desde o primeiro minuto; elas so chegaram na dash as 14:57, quando ele
+// disparou o funil. O Guilherme olhou o numero, viu tudo normal e com razao achou que o aviso era bug.
+// O numero nunca parou de receber: o que falha e a MARCACAO (o app nao manda a mensagem pra dash), ou
+// o numero estar ligado sem ninguem com ele aberto.
+//
+// AGORA:
+//  - so avisa quem continua preso depois de MUDO_AVISO_VENDEDOR. O que se resolve sozinho em minutos
+//    (o caso do 3977) nunca vira notificacao;
+//  - a frase diz o que e: "nao esta marcando os leads" quando alguem esta com o numero aberto, e "esta
+//    fechado no SellWave Web" quando ninguem esta. E diz o que fazer, que agora resolve de verdade:
+//    fechar e abrir (ou abrir) solta o numero na hora (ver as provas no _numerosMudos);
+//  - a direcao so recebe se o problema passar de MUDO_AVISO_DIRECAO sem conserto. O vendedor resolve
+//    sozinho na maioria das vezes, e aviso que ninguem precisa ler ensina a ignorar o que importa;
+//  - o trinco e de 6 h desde o aviso, mesmo que o numero volte e caia de novo no meio. Numero que
+//    pisca (preso, solto, preso) avisava a cada volta.
+const MUDO_AVISO_VENDEDOR = 600;    // 10 min preso
+const MUDO_AVISO_DIRECAO = 2400;    // 40 min preso
 async function _alarmeNumeroMudo(env) {
   let presos = {};
   try { presos = JSON.parse((await _readConfig(env, 'roleta_mudo_preso')) || '{}') || {}; } catch (_) { return; }
   let ja = {};
   try { ja = JSON.parse((await _readConfig(env, 'roleta_mudo_avisado')) || '{}') || {}; } catch (_) { ja = {}; }
   const agora = Math.floor(Date.now() / 1000);
-  // Numero que voltou sai do trinco: a proxima queda dele tem que avisar de novo.
+  // Formato antigo ({ nk: ts }) vira { v: ts, d: ts }: quem ja foi avisado nao e avisado de novo.
   let mudouJa = false;
-  for (const k of Object.keys(ja)) if (!presos[k]) { delete ja[k]; mudouJa = true; }
-  const novos = Object.keys(presos).filter((k) => !ja[k] || (agora - Number(ja[k] || 0)) > 21600);
-  if (novos.length) {
+  for (const k of Object.keys(ja)) {
+    if (typeof ja[k] === 'number') { ja[k] = { v: ja[k], d: ja[k] }; mudouJa = true; }
+    const ult = Math.max(Number((ja[k] && ja[k].v) || 0), Number((ja[k] && ja[k].d) || 0));
+    if (agora - ult > 21600) { delete ja[k]; mudouJa = true; }
+  }
+  const pend = Object.keys(presos).filter((k) => {
+    const ha = agora - (Number(presos[k]) || agora);
+    const j = ja[k] || {};
+    return (ha >= MUDO_AVISO_VENDEDOR && !j.v) || (ha >= MUDO_AVISO_DIRECAO && !j.d);
+  });
+  if (pend.length) {
     const data = await _getDashData(env).catch(() => ({}));
     const chips = Array.isArray(data.chips) ? data.chips : [];
     let nomePorId = {};
@@ -23976,7 +24075,13 @@ async function _alarmeNumeroMudo(env) {
       const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
       direcao = ((us && us.results) || []).map((x) => String(x.id));
     } catch (_) {}
-    for (const nk of novos) {
+    // QUEM ESTA COM O NUMERO ABERTO AGORA: o aluguel do SellWave Web que ainda vale.
+    let aberto = {};
+    try {
+      const r = await env.DB.prepare('SELECT nk, ate FROM swweb_uso WHERE ate > ?').bind(agora).all();
+      for (const x of ((r && r.results) || [])) aberto[String(x.nk || '').slice(-8)] = true;
+    } catch (_) { aberto = null; }   // sem saber, fala como aberto (a frase de "nao esta marcando")
+    for (const nk of pend) {
       const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
       // Numero sem dono (coluna da Contingencia, chip apagado) nao tem pra quem avisar: so a direcao.
       const dono = chip && chip.at && !/^ccol_/i.test(String(chip.at)) ? String(chip.at) : '';
@@ -23986,22 +24091,32 @@ async function _alarmeNumeroMudo(env) {
       const daCasa = !(chip && String(chip.afl || ''));
       const nome = (dono && nomePorId[dono]) ? String(nomePorId[dono]).split(' ')[0] : '';
       const fim = chip && chip.num ? String(chip.num) : ('...' + nk.slice(-4));
-      ja[nk] = agora; mudouJa = true;
-      for (const id of new Set((daCasa ? direcao : []).concat(dono ? [dono] : []))) {
+      const fechado = !!aberto && !aberto[nk];
+      const ha = agora - (Number(presos[nk]) || agora);
+      const j = ja[nk] = ja[nk] || {};
+      const quem = [];
+      if (dono && !j.v && ha >= MUDO_AVISO_VENDEDOR) { quem.push(dono); j.v = agora; }
+      // Sem dono, a direcao e a unica que pode agir: recebe ja no primeiro prazo.
+      const prazoDir = dono ? MUDO_AVISO_DIRECAO : MUDO_AVISO_VENDEDOR;
+      if (daCasa && !j.d && ha >= prazoDir) { for (const id of direcao) if (id !== dono) quem.push(id); j.d = agora; }
+      // Numero de afiliado nunca chega na direcao da casa: a parte dela ja nasce travada, senao ele
+      // voltaria pra esta lista (e pra uma gravacao) a cada 5 min. Sem dono tambem nao ha vendedor.
+      if (!daCasa) j.d = j.d || agora;
+      if (!dono) j.v = j.v || agora;
+      mudouJa = true;
+      for (const id of quem) {
+        const ehDono = id === dono;
+        const titulo = (ehDono ? '' : (nome ? nome + ': ' : '')) + fim + (fechado ? ' está fechado no SellWave Web' : ' não está marcando os leads');
+        const corpo = fechado
+          ? (ehDono ? 'Ele estava recebendo leads sem ninguém com ele aberto, então saiu da roleta. Abra ele no SellWave Web e ele volta sozinho.'
+                    : 'Ninguém está com ele aberto, então ele está fora da roleta até alguém abrir.')
+          : (ehDono ? 'Os leads desse número não estão chegando na dash, então ele saiu da roleta. Feche e abra ele no SellWave Web e ele volta sozinho.'
+                    : 'Faz ' + Math.round(ha / 60) + ' min que os leads desse número não chegam na dash. Ele está fora da roleta até ' + (nome || 'o vendedor') + ' fechar e abrir no SellWave Web.');
         try {
-          // CURTO E DIRETO (23/10/2026, pedido do Bruno: "mais leves e mais diretas ao ponto").
-          // O texto longo explicava o mecanismo; quem le no celular precisa de QUAL numero e O QUE
-          // fazer. O resto ja esta na tela de Pressels, que e pra onde a notificacao leva.
-          await _wpParaPessoa(env, id, {
-            title: (id === dono ? fim : (nome ? nome + ': ' : '') + fim) + ' parou de receber',
-            body: 'Tirei ele da roleta. ' + (id === dono ? 'Feche e abra esse numero no SellWave Web.' : 'Peca pra fechar e abrir no SellWave Web.'),
-            tag: 'num-mudo-' + nk,
-            url: '/pressels',
-            aviso: true,
-          });
+          await _wpParaPessoa(env, id, { title: titulo, body: corpo, tag: 'num-mudo-' + nk, url: '/pressels', aviso: true });
         } catch (_) { /* aviso que falha nao para os outros */ }
       }
-      console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)') + (daCasa ? '' : ' (afiliado: direcao nao avisada)'));
+      if (quem.length) console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)') + ' para=' + quem.join(',') + ' preso_ha=' + ha + 's' + (fechado ? ' fechado' : '') + (daCasa ? '' : ' (afiliado: direcao nao avisada)'));
     }
   }
   if (mudouJa) { try { await _writeConfig(env, 'roleta_mudo_avisado', JSON.stringify(ja)); } catch (_) {} }

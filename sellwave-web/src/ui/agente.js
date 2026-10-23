@@ -830,8 +830,19 @@
       if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) return Promise.resolve([])
       var desde = Number(desdeS) || 0
       var lim = Math.min(500, Math.max(1, Number(maxEv) || 300))
-      return Promise.resolve(W.chat.list({ onlyUsers: true, count: Math.min(150, Math.max(1, Number(maxChats) || 80)) })).then(function (chats) {
-        chats = (Array.isArray(chats) ? chats : []).filter(function (c) { return c && !c.isGroup && Number(c.t || 0) >= desde })
+      // A LISTA INTEIRA, E O FILTRO E NOSSO (23/10/2026). Com `onlyUsers` e `count` quem escolhia as
+      // conversas era o motor: `onlyUsers` fica so com quem e `isUser`, e o lead novo chega cada vez
+      // mais como @lid; `count` corta pelas primeiras da lista, que nao e garantido serem as mais
+      // recentes. Medido no dia: a colheita de 2 em 2 min nao trouxe nada desde as 11:03, enquanto a
+      // do funil achava a primeira mensagem do lead faltando em quase todo disparo. Aqui fica toda
+      // conversa de PESSOA (o mesmo JID da captura: c.us e lid) que mexeu desde `desde`, da mais
+      // recente pra mais antiga, ate `maxChats`.
+      var teto = Math.min(150, Math.max(1, Number(maxChats) || 80))
+      return Promise.resolve(W.chat.list({})).then(function (chats) {
+        chats = (Array.isArray(chats) ? chats : []).filter(function (c) {
+          var cid = c && c.id && (c.id._serialized || c.id)
+          return c && !c.isGroup && ehPessoa(cid) && Number(c.t || 0) >= desde
+        }).sort(function (a, b) { return Number(b.t || 0) - Number(a.t || 0) }).slice(0, teto)
         var out = []
         var i = 0
         function proxima() {

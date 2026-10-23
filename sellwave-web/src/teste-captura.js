@@ -189,6 +189,17 @@ async function rodar() {
   conta('aviso de criptografia, cifrada, mensagem antiga, conversa parada e grupo ficam de fora', !/C3|C4|C5|D1|G1/.test(ids), ids)
   conta('as colhidas vao marcadas, pra medir quanto a colheita salvou', rec.every((x) => x.via === 'colheita'))
   conta('a colheita NAO manda nada sozinha (quem decide e o main)', (await js('window.__enviados.length')) === 0, 'enviados=' + (await js('window.__enviados.length')))
+  // O LEAD NOVO EM @lid, ATRAS DE 90 CONVERSAS VELHAS (23/10/2026). A lista daqui imita o motor: com
+  // `onlyUsers` fica so quem e @c.us (o `isUser`) e `count` corta pelas primeiras da lista, na ordem
+  // em que estao. Era o que fazia a colheita de 2 em 2 min nao trazer o lead novo nunca.
+  await js('(() => { window.__l1 = window.WPP.chat.list; const velhas = []; for (let i = 0; i < 90; i++) velhas.push({ id: { _serialized: "55119100000" + String(i).padStart(2, "0") + "@c.us" }, t: ' + (agoraS - 2 * 86400) + ', isGroup: false });'
+    + ' const lid = { id: { _serialized: "177000111222333@lid" }, t: ' + (agoraS - 90) + ', isGroup: false };'
+    + ' window.__msgsLid = [' + JSON.stringify(c('L1', { id: { id: 'L1', _serialized: 'false_177000111222333@lid_L1', fromMe: false }, from: '177000111222333@lid', body: 'Olá! Código de desconto "LID555"', t: agoraS - 90 })) + '];'
+    + ' window.WPP.chat.list = async function (o) { let r = velhas.concat([lid]); if (o && o.onlyUsers) r = r.filter(function (x) { return /@c\\.us$/.test(x.id._serialized) }); if (o && o.count) r = r.slice(0, o.count); return r };'
+    + ' window.__g1 = window.WPP.chat.getMessages; window.WPP.chat.getMessages = async function (id) { return id === "177000111222333@lid" ? window.__msgsLid : [] }; return "ok" })()')
+  const recLid = JSON.parse(await js('window.__swColheRecentes(' + (agoraS - 86400) + ', 80, 300).then(function (r) { return JSON.stringify(r) })'))
+  conta('a colheita traz o lead novo que chegou como @lid, mesmo atras de 90 conversas velhas', recLid.some((x) => x.msgId === 'L1' && /LID555/.test(x.body)), JSON.stringify(recLid.map((x) => x.msgId)))
+  await js('window.WPP.chat.list = window.__l1; window.WPP.chat.getMessages = window.__g1; "ok"')
   const um = JSON.parse(await js('window.__swColhe("5511933332222@c.us", 25).then(function (r) { return JSON.stringify(r) })'))
   conta('a colheita de UMA conversa (a do funil) traz o lead com o codigo', um.some((x) => x.msgId === 'C1' && x.via === 'colheita-funil') && !um.some((x) => x.msgId === 'C3'), JSON.stringify(um.map((x) => x.msgId)))
   // a V1 ja saiu pela varredura la em cima (esta em `vistas`): a colheita tem que trazer assim mesmo
