@@ -9,6 +9,11 @@ let painelLigado = true
 // (trava desligada fica ambar), e stub que devolve sempre a mesma coisa nunca deixaria o teste ver
 // a troca de cor. O mesmo vale pro teto, que agora tem botoes de mais e menos.
 let maxAbertos = 6
+// AS FOTOS DA EQUIPE (23/10/2026): comecam VAZIAS, como no app de verdade (o main baixa depois da
+// lista chegar e avisa por 'sw:fotos'). O teste chama __fotosChegaram e confere que a barra redesenha.
+const URL_FOTO_GUI = 'https://axion-api.axion-dash.workers.dev/api/users/foto/a1/h1'
+let fotos = {}
+const ouvintes = {}
 
 const ESTADO = () => ({
   temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
@@ -17,12 +22,18 @@ const ESTADO = () => ({
   abertos: ['1574060653'], barraEncolhida, painelLigado,
   // o numero aberto (e fora da tela) tem 3 conversas esperando: a lista mostra o contador (20/10/2026)
   naoLidas: { '1574060653': 3 },
+  fotos,
+  // o placar de hoje: Guilherme tem foto, o Heynan nao (sai a sigla), e quem esta logado e o Heynan
+  equipe: [
+    { id: 'a1', nome: 'Guilherme Souza', foto: URL_FOTO_GUI, sigla: 'GS', cor: '#24c278', leads: 112, eu: false },
+    { id: 'a2', nome: 'Heynan Dantas', foto: '', sigla: 'HD', cor: '#7c3aed', leads: 0, eu: true },
+  ],
   numeros: [
-    { numero: '5511966632248', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    { numero: '5511966632248', dono: 'Guilherme', foto: URL_FOTO_GUI, sigla: 'GS', corDono: '#24c278', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // LIGADO E SEM APP ABERTO (19/10/2026): o interruptor esta ligado (`ligado`), mas ninguem tem o numero aberto,
     // entao `roleta` (recebe agora) e falso. A chave tem que aparecer LIGADA.
-    { numero: '5515974060653', dono: 'Heynan Dantas', roleta: false, ligado: true, vivo: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    { numero: '5515974060653', dono: 'Heynan Dantas', foto: '', sigla: 'HD', corDono: '#7c3aed', roleta: false, ligado: true, vivo: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // em aquecimento: area propria e interruptor liberado
     // lim_dia ZERO de proposito: o teto de quem aquece vem da RAMPA (`aquec.teto`), nao do campo do
     // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
@@ -69,7 +80,12 @@ contextBridge.exposeInMainWorld('sw', {
     maxAbertos = Math.max(1, Math.min(20, Number(v) || 6))
     return Promise.resolve({ ok: true, maxAbertos })
   },
-  ao: () => {},
+  ao: (canal, fn) => { (ouvintes[canal] = ouvintes[canal] || []).push(fn) },
+})
+// O main terminou de baixar as fotos: grava no estado e avisa a barra, como o main.js faz.
+contextBridge.exposeInMainWorld('__fotosChegaram', () => {
+  fotos = { [URL_FOTO_GUI]: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }
+  for (const fn of ouvintes['sw:fotos'] || []) fn({})
 })
 // Ver a nota no teste-painel-preload: array exposto direto nasce congelado.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))

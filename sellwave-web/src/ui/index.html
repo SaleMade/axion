@@ -127,6 +127,24 @@
     border-radius: 9999px; border: 1px dashed var(--linha); color: rgba(148, 163, 184, .45);
     font-size: 11px; line-height: 1; cursor: default; }
   .vend .risco { flex: 1; height: 1px; background: var(--linha); }
+  /* A FOTO DE QUEM ATENDE (23/10/2026): redonda, do lado do nome. Sem foto, a sigla na cor da pessoa. */
+  .av { font-style: normal; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--avc, #64748b) 22%, transparent); color: var(--avc, #64748b);
+    font-size: 8.5px; font-weight: 750; letter-spacing: 0; text-transform: uppercase; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08); }
+  .av[data-ini]::before { content: attr(data-ini); }
+  .av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .vend .vnome { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+  .av.grande { width: 28px; height: 28px; font-size: 10.5px; }
+  /* O PLACAR DE HOJE DA EQUIPE, no topo da lista: foto, primeiro nome e quantos leads chegaram. */
+  .equipe { margin: 4px 0 2px; padding: 7px 6px 6px; border: 1px solid var(--linha); border-radius: 10px; background: rgba(255, 255, 255, .02); }
+  .eq-tit { font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--apagado); margin: 0 0 7px 2px; }
+  .eq-lista { display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); gap: 4px; }
+  .eq { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 2px 4px; border-radius: 8px; min-width: 0; }
+  .eq.eu { background: rgba(36, 194, 120, .10); box-shadow: inset 0 0 0 1px rgba(36, 194, 120, .35); }
+  .eq-n { font-size: 10.5px; color: var(--apagado); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eq b { font-size: 13.5px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1; }
+  .eq.eu b { color: #24c278; }
+  body.fina .equipe { display: none; }
   .vend .qtd { font-variant-numeric: tabular-nums; opacity: .8; letter-spacing: 0; }
 
   .num {

@@ -7,7 +7,7 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard, powerMonitor } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard, powerMonitor, nativeImage } = require('electron')
 
 // ─── A MIDIA DA PREVIA (16/10/2026) ──────────────────────────────────────────────────────────
 //
@@ -2608,6 +2608,31 @@ ipcMain.handle('sw:como', async (_e, { id }) => {
   return { ok: true, como: comoId, numeros: (r && r.numeros) || [] }
 })
 
+// AS FOTOS DE QUEM ATENDE (23/10/2026, pedido do Bruno: "a fotinha deles, redondinha, do lado do
+// nome"). Elas moram na dash; a barra e uma pagina local com CSP que so aceita imagem `data:`, e
+// assim deve continuar. Entao o main baixa cada foto UMA vez, reduz pra 64 px e entrega pronta - a
+// original chega a 190 KB, e a barra pede o estado varias vezes por minuto. Nao vai pro disco: e
+// refeito a cada abertura. Foto que falhou tenta de novo na proxima leitura da lista.
+const fotosCache = new Map()   // endereco -> data:image/png 64 px
+const fotosBuscando = new Set()
+async function trazFotos(urls) {
+  let novas = 0
+  for (const u of [...new Set((urls || []).filter(Boolean).map(String))]) {
+    if (fotosCache.has(u) || fotosBuscando.has(u) || !/^https:\/\//i.test(u)) continue
+    fotosBuscando.add(u)
+    try {
+      const r = await fetch(u, { signal: AbortSignal.timeout(15000) })
+      if (!r.ok) continue
+      const img = nativeImage.createFromBuffer(Buffer.from(await r.arrayBuffer()))
+      if (img.isEmpty()) continue
+      const t = img.getSize()
+      fotosCache.set(u, (t.width >= t.height ? img.resize({ height: 64, quality: 'good' }) : img.resize({ width: 64, quality: 'good' })).toDataURL())
+      novas += 1
+    } catch (_) { /* tenta de novo na proxima leitura */ } finally { fotosBuscando.delete(u) }
+  }
+  return novas
+}
+
 async function buscaNumeros() {
   if (!config.token) return { ok: false, erro: 'Falta entrar com o token da dash.' }
   const url = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/numeros' + comoNaUrl()
@@ -2621,6 +2646,10 @@ async function buscaNumeros() {
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // A EQUIPE E AS FOTOS (ver trazFotos). As fotos descem em segundo plano: a lista nao espera.
+    config.equipe = Array.isArray(d && d.equipe) ? d.equipe : []
+    trazFotos([...lista.map((n) => n && n.foto), ...config.equipe.map((e) => e && e.foto)])
+      .then((novas) => { if (novas) avisaCasca('sw:fotos', {}) }).catch(() => {})
     // A PASSADA QUE SOBE AS SESSOES ANTIGAS sai depois da lista chegar (ela precisa do campo `nuvem`
     // de cada numero), no maximo de meia em meia hora.
     if (!comoId && Date.now() - ultimaPassada > 30 * 60000) {
@@ -2667,6 +2696,8 @@ ipcMain.handle('sw:estado', () => ({
   travaProxy: TRAVA_PROXY,
   exigirBrasil: EXIGE_BRASIL,
   numeros: config.numeros,
+  equipe: config.equipe || [],
+  fotos: Object.fromEntries(fotosCache),
   // SO O ENDERECO, NUNCA A CREDENCIAL. `config.proxies` guarda usuario e senha decifrados (o
   // lerConfig abre o DPAPI), e a casca so usa host, porta e "tem proxy?" - conferido: app.js le
   // px.host, px.porta e a existencia, mais nada. Mandar a senha inteira pra um renderer era

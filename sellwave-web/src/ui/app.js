@@ -167,7 +167,11 @@ function desenhaLista() {
     return
   }
 
-  let html = ''
+  // O PLACAR DE HOJE DA EQUIPE, no topo (23/10/2026, pedido do Bruno: "uma fotinha dos outros
+  // vendedores com a quantidade de leads que chegaram pra ele no total, so pra ele ter nocao").
+  // Vem pronto do servidor (`equipe`): a mesma conta do placar da roleta. Sem filtro de busca: e o
+  // retrato do time, nao parte da lista.
+  let html = filtro ? '' : placarEquipe()
   for (const [dono, itens] of grupos) {
     // O AQUECIMENTO TEM AREA PROPRIA (16/10/2026). Antes o numero em aquecimento ficava solto no
     // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
@@ -177,7 +181,8 @@ function desenhaLista() {
     const normais = itens.filter((x) => !aquecendo(x)).sort(ordena)
 
     if (normais.length) {
-      html += '<div class="vend"><span>' + esc(dono) + '</span><span class="risco"></span>'
+      const d0 = itens[0] || {}
+      html += '<div class="vend"><span class="vnome">' + avatar(d0.foto, d0.sigla, d0.corDono, dono) + esc(dono) + '</span><span class="risco"></span>'
         + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
       html += normais.map(linha).join('')
     }
@@ -191,6 +196,27 @@ function desenhaLista() {
   }
   lista.innerHTML = html
   ligaCliques()
+}
+
+// A FOTO REDONDA DE QUEM ATENDE (23/10/2026). A imagem chega pronta do main, ja reduzida (`estado.fotos`,
+// por endereco); sem foto, a sigla na cor da pessoa, igual a dash. A sigla sai pelo CSS (data-ini), nao
+// como texto: assim o texto do cabecalho continua sendo so o nome.
+function avatar(foto, sigla, cor, nome, cls) {
+  const img = foto && estado.fotos ? estado.fotos[foto] : ''
+  const c = /^#[0-9a-f]{3,8}$/i.test(String(cor || '')) ? cor : '#64748b'
+  const ini = String(sigla || String(nome || '?').split(/\s+/).map((p) => p[0] || '').join('').slice(0, 2)).toUpperCase()
+  return '<i class="av' + (cls ? ' ' + cls : '') + '" style="--avc:' + c + '"' + (img ? '' : ' data-ini="' + esc(ini) + '"') + '>'
+    + (img ? '<img src="' + esc(img) + '" alt="">' : '') + '</i>'
+}
+function placarEquipe() {
+  const eq = Array.isArray(estado.equipe) ? estado.equipe : []
+  if (eq.length < 2) return ''
+  return '<div class="equipe"><div class="eq-tit">Leads de hoje</div><div class="eq-lista">'
+    + eq.map((e) => '<div class="eq' + (e.eu ? ' eu' : '') + '" title="' + esc(e.nome) + ': ' + (Number(e.leads) || 0) + (Number(e.leads) === 1 ? ' lead hoje' : ' leads hoje') + '">'
+      + avatar(e.foto, e.sigla, e.cor, e.nome, 'grande')
+      + '<span class="eq-n">' + esc(String(e.nome || '').split(/\s+/)[0]) + '</span>'
+      + '<b>' + (Number(e.leads) || 0) + '</b></div>').join('')
+    + '</div></div>'
 }
 
 // Os cliques das linhas, num lugar so porque a lista e desenhada por DOIS caminhos (encolhida e
@@ -1328,6 +1354,8 @@ window.sw.ao('sw:aviso', (d) => {
   avisoBarraAte = Date.now() + 30000
   setTimeout(() => { if (el.textContent === String(d.texto)) el.textContent = '' }, 30000)
 })
+// AS FOTOS CHEGARAM (o main acabou de baixar): redesenha pra elas aparecerem.
+window.sw.ao('sw:fotos', async () => { await recarregaEstado() })
 window.sw.ao('sw:semMotor', (d) => {
   if (!d || !d.nk) return
   if (d.ok) semMotor.delete(d.nk); else semMotor.add(d.nk)

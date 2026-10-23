@@ -1123,6 +1123,38 @@ app.whenReady().then(async () => {
   // 3 em uso + 1 em aquecimento = 4 interruptores; o "Em analise" fica com o selo
   // 3 em uso + 1 em aquecimento = 4 interruptores; "Em analise" e "Restrito" ficam com o selo
   conta('interruptor so pra quem pode receber', sec.chaves === 5 && sec.selos === 2, JSON.stringify(sec))
+
+  // ── A FOTO DO VENDEDOR E O PLACAR DE HOJE (23/10/2026, pedido do Bruno) ───────────────────────
+  const avs = () => js2('(() => { const h = [...document.querySelectorAll(".vend")].filter(e => !e.classList.contains("aquec"));'
+    + ' return h.map(e => { const a = e.querySelector(".av"); const cs = a ? getComputedStyle(a) : null;'
+    + '   return { nome: e.querySelector("span").textContent.trim(), img: a && a.querySelector("img") ? a.querySelector("img").src.slice(0, 14) : "",'
+    + '     ini: a ? a.getAttribute("data-ini") || "" : "", larg: a ? Math.round(a.getBoundingClientRect().width) : 0, raio: cs ? cs.borderRadius : "",'
+    + '     antesDoNome: !!(a && e.querySelector("span").firstChild === a) } }) })()')
+  let cab = await avs()
+  conta('cada cabecalho de vendedor tem a bolinha antes do nome', cab.length === 2 && cab.every(c => c.antesDoNome && c.larg === 20), JSON.stringify(cab))
+  conta('redonda', cab.every(c => c.raio === '50%'), JSON.stringify(cab.map(c => c.raio)))
+  conta('o texto do cabecalho continua sendo so o nome (a sigla nao vira texto)', cab.map(c => c.nome).join(',') === 'Guilherme,Heynan Dantas', JSON.stringify(cab.map(c => c.nome)))
+  conta('antes de a foto chegar, a sigla na cor da pessoa', cab[0] && cab[0].img === '' && cab[0].ini === 'GS' && cab[1].ini === 'HD', JSON.stringify(cab))
+  let eq = await js2('(() => { const b = document.querySelector(".lista .equipe"); if (!b) return null;'
+    + ' return { tit: b.querySelector(".eq-tit").textContent, primeiro: b === document.querySelector(".lista").firstElementChild,'
+    + '   itens: [...b.querySelectorAll(".eq")].map(e => ({ n: e.querySelector(".eq-n").textContent, q: e.querySelector("b").textContent, eu: e.classList.contains("eu"),'
+    + '     img: !!e.querySelector(".av img"), ini: (e.querySelector(".av") || {}).getAttribute ? e.querySelector(".av").getAttribute("data-ini") : "", larg: Math.round(e.querySelector(".av").getBoundingClientRect().width) })) } })()')
+  conta('o placar de hoje aparece no topo da lista', eq && eq.primeiro && eq.tit === 'Leads de hoje', JSON.stringify(eq))
+  conta('com o primeiro nome e o total de cada vendedor', eq && eq.itens.map(i => i.n + '=' + i.q).join(',') === 'Guilherme=112,Heynan=0', JSON.stringify(eq && eq.itens))
+  conta('quem esta logado fica marcado', eq && eq.itens.filter(i => i.eu).map(i => i.n).join(',') === 'Heynan', JSON.stringify(eq && eq.itens))
+  conta('e a bolinha do placar e maior que a do cabecalho', eq && eq.itens.every(i => i.larg === 28), JSON.stringify(eq && eq.itens))
+  await js2('window.__fotosChegaram()')
+  await espera(300)
+  cab = await avs()
+  conta('a foto chegou: a barra redesenha sozinha e mostra a foto', cab[0] && cab[0].img === 'data:image/png' && cab[0].ini === '', JSON.stringify(cab[0]))
+  conta('quem nao tem foto continua com a sigla', cab[1] && cab[1].img === '' && cab[1].ini === 'HD', JSON.stringify(cab[1]))
+  eq = await js2('[...document.querySelectorAll(".lista .equipe .eq")].map(e => !!e.querySelector(".av img"))')
+  conta('e no placar tambem', JSON.stringify(eq) === '[true,false]', JSON.stringify(eq))
+  await js2('(() => { const i = document.querySelector(".busca input"); i.value = "2248"; i.dispatchEvent(new Event("input")) })()')
+  await espera(200)
+  conta('buscando um numero, o placar sai da frente', await js2('!document.querySelector(".lista .equipe")'))
+  await js2('(() => { const i = document.querySelector(".busca input"); i.value = ""; i.dispatchEvent(new Event("input")) })()')
+  await espera(200)
   // O SERVIDOR VENCE O CAMPO CRU: numero com em_uso true e apto false NAO ganha interruptor. Sem
   // esta conferencia, trocar o ternario por um OU devolveria o interruptor pra numero restrito, e
   // isso e mentira de tela no lado perigoso - o vendedor acharia que esta recebendo e nao esta.
@@ -1171,6 +1203,9 @@ app.whenReady().then(async () => {
 
   await js2('document.getElementById("encolhe").click()')
   await espera(600)
+  // A LARGURA TEM TRANSICAO (.14s), e janela escondida anima devagar quando a maquina esta ocupada:
+  // uma rodada em tres media 268 com a classe ja posta. Espera assentar ate 3 s antes de medir.
+  for (let k = 0; k < 15 && Math.round(await js2('document.querySelector("aside").getBoundingClientRect().width')) !== 56; k++) await espera(200)
   const fina = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), classe: document.body.className, pediu: (window.__ver()).filter(c => c.nome === "barra").map(c => c.args[0]) })')
   conta('clicar encolhe a barra pra 56px', fina.larg === 56, JSON.stringify(fina))
   conta('e avisa o processo principal, que e quem move a view', JSON.stringify(fina.pediu) === '[true]', JSON.stringify(fina.pediu))
@@ -1194,6 +1229,7 @@ app.whenReady().then(async () => {
   // O '3/5' do 8551 PROVA que o teto sai da rampa: o `lim_dia` dele no stub e zero.
   conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,3/5,7/20', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
+  conta('e o placar de hoje (em 56px nao cabe)', await js2('!document.querySelector(".equipe")'))
 
   const destFino = await js2('(() => { const r = [...document.querySelectorAll(".fino")].map(e => e.className);'
     + ' return { total: r.length, n: r.filter(c => /recebendo/.test(c)).length,'

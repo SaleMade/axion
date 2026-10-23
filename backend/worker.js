@@ -8567,6 +8567,23 @@ async function handlePedidoNovo(req, env) {
 // Agora a lista devolve uma URL no lugar do data URI. Como o front sempre usa o campo dentro de um
 // <img src>, nada muda pra ele; e a imagem passa a ser um arquivo de verdade, com cache de 1 ano.
 // O hash do conteudo vai NA URL: trocou a foto, muda a URL, e o cache velho nao atrapalha.
+// FOTO, SIGLA E COR DE CADA PESSOA, pra barra do SellWave Web (23/10/2026). A coluna `photo` guarda a
+// imagem inteira (ate 190 KB cada): ler ela a cada 20 s de cada app pesaria o banco a toa, entao a
+// lista de enderecos fica 5 min na memoria do isolate. O endereco ja leva o hash da foto, entao foto
+// trocada vira endereco novo assim que o cache vence.
+let _swFotosCache = null, _swFotosEm = 0;
+async function _swwebFotosEquipe(req, env) {
+  if (_swFotosCache && Date.now() - _swFotosEm < 300000) return _swFotosCache;
+  const out = {};
+  try {
+    const r = await env.DB.prepare('SELECT id, photo, abbr, color FROM users WHERE COALESCE(archived,0)=0').all();
+    for (const x of ((r && r.results) || [])) {
+      out[String(x.id)] = { foto: _fotoUrl(req, x.id, x.photo) || '', sigla: String(x.abbr || '').slice(0, 3), cor: String(x.color || '') };
+    }
+    _swFotosCache = out; _swFotosEm = Date.now();
+  } catch (_) { return _swFotosCache || out; }
+  return out;
+}
 function _fotoHash(txt) {
   // hash curto e estavel (FNV-1a). Nao precisa ser cripto: so serve pra invalidar cache.
   let h = 2166136261;
@@ -11991,7 +12008,33 @@ async function handleSwWeb(req, env, path) {
     // A UNICA EXCECAO e o banido ABERTO NESTA MAQUINA agora: ele fica ate o vendedor fechar, senao a
     // janela continuaria aberta sem um item na lista pra clicar e fechar. Fechou, sumiu.
     const visiveis = numeros.filter((n) => !n.banido || (n.uso && n.uso.meu));
-    return json({ ok: true, numeros: visiveis, config: cfg, direcao: manda });
+    // A FOTO DE QUEM ATENDE E O PLACAR DE HOJE DA EQUIPE (23/10/2026, pedido do Bruno: "a fotinha
+    // deles, redondinha, do lado do nome" e, pros vendedores, "uma fotinha dos outros vendedores com a
+    // quantidade de leads que chegaram pra ele no total, so pra ele ter nocao").
+    // A equipe e de quem tem numero RECEBENDO (apto ou aquecendo) no mesmo mundo, vista igual por todo
+    // mundo dele - inclusive o vendedor, que no resto da lista so ve os numeros dele. Os leads somam
+    // TODOS os numeros da pessoa hoje, inclusive o que saiu do ar no meio do dia: e a mesma conta do
+    // placar da roleta (nksTodos), entao a barra e a roleta nunca discordam de quem recebeu quanto.
+    const fotos = await _swwebFotosEquipe(req, env);
+    for (const n of visiveis) { const f = fotos[String(n.at || '')]; n.foto = (f && f.foto) || ''; n.sigla = (f && f.sigla) || ''; n.corDono = (f && f.cor) || ''; }
+    const equipe = [];
+    try {
+      const porDono = {};
+      for (const c of chips) {
+        const at = String((c && c.at) || '');
+        if (!c || !c.num || !donos[at] || mundoDoDono[at] !== mundo) continue;
+        const o = (porDono[at] = porDono[at] || { at, nome: donos[at], leads: 0, recebe: false });
+        o.leads += Number(lh[_swwebK8(c.num)]) || 0;
+        if (_swwebApto(c, nomeSt, _ids) || _chipAquecendo(c, _ids.aquec)) o.recebe = true;
+      }
+      for (const o of Object.values(porDono)) {
+        if (!o.recebe) continue;
+        const f = fotos[o.at] || {};
+        equipe.push({ at: o.at, nome: o.nome, foto: f.foto || '', sigla: f.sigla || '', cor: f.cor || '', leads: o.leads, eu: o.at === String(u.id) });
+      }
+      equipe.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+    } catch (_) { /* sem equipe a barra so nao mostra o placar */ }
+    return json({ ok: true, numeros: visiveis, equipe, config: cfg, direcao: manda });
   }
 
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder

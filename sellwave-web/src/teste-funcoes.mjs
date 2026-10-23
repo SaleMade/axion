@@ -484,7 +484,10 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o envio do painel liga a conferencia e o relogio comeca antes do envio',
     /const antes = Date\.now\(\)\n\s*const r = await comTetoNode\([\s\S]{0,260}?if \(r && nk\) setTimeout\(\(\) => confereCaptura\(String\(nk\), antes\), CAPTURA_ESPERA_MS\)/.test(fonte))
   vale('a captura marca a pagina que esta ouvindo', /const nkCap = nkDaPagina\(_e\.sender\.id\); if \(nkCap\) capturaVistaEm\.set\(nkCap, Date\.now\(\)\)/.test(fonte))
-  vale('o aviso passa pelo preload da barra', /'sw:aviso'\]/.test(leia('preload.js')))
+  // pela LISTA de canais permitidos, nao pela posicao: canal novo no fim (sw:fotos, 23/10) nao pode quebrar isto
+  const permitidosBarra = (leia('preload.js').match(/const permitidos = \[([^\]]*)\]/) || [])[1] || ''
+  vale('o aviso passa pelo preload da barra', /'sw:aviso'/.test(permitidosBarra))
+  vale('e o aviso de que as fotos da equipe chegaram tambem', /'sw:fotos'/.test(permitidosBarra))
 }
 
 // ── 15) A COLHEITA (23/10/2026): o app pergunta a pagina e manda direto o que o servidor nunca
