@@ -12782,6 +12782,15 @@ async function handleSwWeb(req, env, path) {
         'ON CONFLICT(nk) DO UPDATE SET user_id=excluded.user_id, nome=excluded.nome, maquina=excluded.maquina, desde=excluded.desde, ate=excluded.ate'
       ).bind(nk, String(u.id), String(u.name || u.id), maquina, desde, agoraU + SWWEB_USO_SEG).run();
     } catch (e) { return err('Não consegui reservar o número agora.', 503); }
+    // A VERSAO DO APP DE QUEM ESTA COM O NUMERO (23/10/2026). Ate aqui o `x-sw-versao` chegava e nao
+    // ficava em lugar nenhum: pra responder "o Kevin esta atualizado?" a unica saida era perguntar pro
+    // Bruno. Agora: SELECT nome, maquina, versao FROM swweb_uso. Gravacao a parte, depois do aluguel:
+    // coluna que falhe nao pode derrubar a reserva do numero. App antes da 1.25.0 nao manda: 'antiga'.
+    try {
+      if (!_usoVersaoOk) { try { await env.DB.prepare('ALTER TABLE swweb_uso ADD COLUMN versao TEXT').run(); } catch (_) {} _usoVersaoOk = true; }
+      const _v = String(req.headers.get('x-sw-versao') || '').replace(/[^0-9.]/g, '').slice(0, 20) || 'antiga';
+      await env.DB.prepare("UPDATE swweb_uso SET versao=? WHERE nk=? AND COALESCE(versao,'')<>?").bind(_v, nk, _v).run();
+    } catch (_) { /* so registro */ }
     return json({ ok: true, ate: agoraU + SWWEB_USO_SEG });
   }
 
@@ -22577,7 +22586,8 @@ let _mudoPreso = null;
 const MUDO_CARENCIA = 600;
 // Quando o numero e solto por ter sido REABERTO ou RELIGADO, a contagem dele recomeca dali.
 const MUDO_RECOMECO_KEY = 'roleta_mudo_recomeco';
-let _mudoLidos = null;   // o que a ultima volta leu do conjunto e das provas (passa da consulta pro bloco do preso)
+let _mudoLidos = null;
+let _usoVersaoOk = false;   // a coluna versao do swweb_uso (ver o aluguel do numero)   // o que a ultima volta leu do conjunto e das provas (passa da consulta pro bloco do preso)
 // A JANELA INTEIRA, e nao so quem ficou mudo (24/09/2026). O alarme de tela precisa saber a taxa
 // de resposta REAL da operacao pra decidir se o silencio de um numero e estranho ou esperado; sem
 // isto ele teria que fazer a consulta de novo, e esta e a consulta cara. Guardada aqui do lado do
@@ -22661,31 +22671,29 @@ async function _numerosMudos(env) {
     const antesP = JSON.stringify(preso), antesR = JSON.stringify(recomeco);
     const temProva = (k) => !!(prova[k] && prova[k].todas > 0);
 
-    // SOLTA COM PROVA. Tres provas, e todas dizem que o numero voltou a valer:
-    //  1) mensagem registrada daquele numero na janela (entrando ou saindo);
-    //  2) o app conectou o numero de novo DEPOIS de ele ser preso (fechou e abriu, ou a pagina
-    //     recarregou). E o que o aviso manda o vendedor fazer, e sem esta prova o numero calado nao
-    //     tinha como voltar: fora da roleta ele nao recebe lead, sem lead nao chega mensagem;
-    //  3) gente religou o interruptor dele depois disso ("quem religa e gente").
-    // Nas provas 2 e 3 a contagem RECOMECA dali: as visitas de antes ficam na janela por 30 min e
-    // prenderiam ele de novo na volta seguinte.
-    const ks = Object.keys(preso);
-    if (ks.length) {
-      // Sem a tabela (ou com a leitura falhando), sem aquela prova: o numero so continua preso.
-      const reabriu = {}, religou = {};
-      for (const x of ((rConn && rConn.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) reabriu[k] = Math.max(reabriu[k] || 0, Number(x.ts) || 0); }
-      for (const x of ((rLiga && rLiga.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) religou[k] = Math.max(religou[k] || 0, Number(x.ts) || 0); }
-      for (const k of ks) {
-        const desdeK = Number(preso[k]) || 0;
-        let motivo = '', em = 0;
-        if (temProva(k)) motivo = 'mensagem';
-        else if ((reabriu[k] || 0) > desdeK) { motivo = 'reaberto'; em = reabriu[k]; }
-        else if ((religou[k] || 0) > desdeK) { motivo = 'religado'; em = religou[k]; }
-        if (!motivo) continue;
-        delete preso[k];
-        if (em) recomeco[k] = em;
-        console.log('ROLETA_MUDO_SOLTO num=' + k + ' por=' + motivo + ' msgs=' + ((prova[k] && prova[k].todas) || 0) + ' preso_desde=' + desdeK);
-      }
+    // SOLTA SO COM MENSAGEM REGISTRADA daquele numero na janela (entrando ou saindo). E a unica coisa
+    // que prova que a captura dele voltou.
+    //
+    // REABRIR NAO E PROVA (23/10/2026, revisto no mesmo dia, medido pela sessao 67): na primeira versao
+    // o numero preso era solto quando o app conectava ele de novo, e o 97011859 e o 74060653 do Kevin
+    // voltaram pra roleta as 16:11 e comeram clique sem registrar nada - o app dele conectava normal e a
+    // captura continuava morta (331 cliques e zero lead desde as 14:38). Conectar so prova que alguem
+    // clicou. O numero que funciona prova sozinho: as conversas que ele ja tem respondem, ou o vendedor
+    // manda qualquer mensagem, e a primeira que chegar na dash solta.
+    //
+    // O QUE REABRIR E RELIGAR FAZEM: recomecam a CONTAGEM (MUDO_RECOMECO_KEY), pra visita de antes nao
+    // contar contra o numero que acabou de ser consertado. Vale pro numero que ainda nao foi preso.
+    const reabriu = {}, religou = {};
+    for (const x of ((rConn && rConn.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) reabriu[k] = Math.max(reabriu[k] || 0, Number(x.ts) || 0); }
+    for (const x of ((rLiga && rLiga.results) || [])) { const k = String(x.nk || '').slice(-8); if (k) religou[k] = Math.max(religou[k] || 0, Number(x.ts) || 0); }
+    for (const k of new Set([...Object.keys(reabriu), ...Object.keys(religou)])) {
+      const em = Math.max(reabriu[k] || 0, religou[k] || 0);
+      if (em >= desde && em > (Number(recomeco[k]) || 0)) recomeco[k] = em;
+    }
+    for (const k of Object.keys(preso)) {
+      if (!temProva(k)) continue;
+      console.log('ROLETA_MUDO_SOLTO num=' + k + ' por=mensagem msgs=' + prova[k].todas + ' preso_desde=' + preso[k]);
+      delete preso[k];
     }
     // PRENDE quem a janela pegou: MUDO_VISITAS visitas com mais de MUDO_CARENCIA de idade (contadas
     // depois do ultimo recomeco) e nenhuma mensagem do numero na janela inteira.
@@ -24037,7 +24045,8 @@ let _capParadaIdx = false;
 //    (o caso do 3977) nunca vira notificacao;
 //  - a frase diz o que e: "nao esta marcando os leads" quando alguem esta com o numero aberto, e "esta
 //    fechado no SellWave Web" quando ninguem esta. E diz o que fazer, que agora resolve de verdade:
-//    fechar e abrir (ou abrir) solta o numero na hora (ver as provas no _numerosMudos);
+//    fechar e abrir (ou abrir), e ele volta sozinho na primeira mensagem que chegar na dash (reabrir
+//    nao solta: so a mensagem prova que a captura voltou, ver o _numerosMudos);
 //  - a direcao so recebe se o problema passar de MUDO_AVISO_DIRECAO sem conserto. O vendedor resolve
 //    sozinho na maioria das vezes, e aviso que ninguem precisa ler ensina a ignorar o que importa;
 //  - o trinco e de 6 h desde o aviso, mesmo que o numero volte e caia de novo no meio. Numero que
@@ -24108,9 +24117,9 @@ async function _alarmeNumeroMudo(env) {
         const ehDono = id === dono;
         const titulo = (ehDono ? '' : (nome ? nome + ': ' : '')) + fim + (fechado ? ' está fechado no SellWave Web' : ' não está marcando os leads');
         const corpo = fechado
-          ? (ehDono ? 'Ele estava recebendo leads sem ninguém com ele aberto, então saiu da roleta. Abra ele no SellWave Web e ele volta sozinho.'
+          ? (ehDono ? 'Ele estava recebendo leads sem ninguém com ele aberto, então saiu da roleta. Abra ele no SellWave Web: ele volta sozinho quando a primeira mensagem dele chegar na dash.'
                     : 'Ninguém está com ele aberto, então ele está fora da roleta até alguém abrir.')
-          : (ehDono ? 'Os leads desse número não estão chegando na dash, então ele saiu da roleta. Feche e abra ele no SellWave Web e ele volta sozinho.'
+          : (ehDono ? 'Os leads desse número não estão chegando na dash, então ele saiu da roleta. Feche e abra ele no SellWave Web: ele volta sozinho quando a primeira mensagem dele chegar na dash.'
                     : 'Faz ' + Math.round(ha / 60) + ' min que os leads desse número não chegam na dash. Ele está fora da roleta até ' + (nome || 'o vendedor') + ' fechar e abrir no SellWave Web.');
         try {
           await _wpParaPessoa(env, id, { title: titulo, body: corpo, tag: 'num-mudo-' + nk, url: '/pressels', aviso: true });

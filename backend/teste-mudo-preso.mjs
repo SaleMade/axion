@@ -115,7 +115,7 @@ const presoGravado = (m) => JSON.parse(m.cfg()['roleta_mudo_preso'] || '{}');
   ok(r['72518066'] === undefined && presoGravado(m)['72518066'] === undefined, 'uma mensagem solta o numero e ele some do app_config');
 }
 
-// ── 5. REABERTO no app: solta na hora, e as visitas de antes nao prendem de novo ──────────────
+// ── 5. REABERTO NAO SOLTA (o Kevin em 23/10: conectou normal e a captura seguia morta) ─────────
 {
   const m = monta();
   await m.mudos(fazEnv(m, { visitas: varias('74060653', 60, 29, 11) }));
@@ -124,30 +124,30 @@ const presoGravado = (m) => JSON.parse(m.cfg()['roleta_mudo_preso'] || '{}');
   m.reset();
   const reaberto = [{ nk: '1574060653', st: 'pronto', ts: desdeP + 30 }];
   let r = await m.mudos(fazEnv(m, { visitas: varias('74060653', 60, 29, 11), conn: reaberto }));
-  ok(r['74060653'] === undefined, 'o vendedor fechou e abriu (conectou de novo depois de preso): volta pra roleta');
-  ok(JSON.parse(m.cfg()['roleta_mudo_recomeco'] || '{}')['74060653'] === desdeP + 30, 'e a contagem dele recomeca dali (gravado pra todos os isolates)');
+  ok(r['74060653'] !== undefined, 'o app conectou o numero de novo depois de preso: CONTINUA fora (conectar nao prova captura)');
   m.reset();
-  r = await m.mudos(fazEnv(m, { visitas: varias('74060653', 60, 29, 11), conn: reaberto }));
-  ok(r['74060653'] === undefined, 'na volta seguinte as 60 visitas de ANTES nao prendem de novo');
-  // conectou ANTES de ser preso nao e prova
-  const m2 = monta();
-  await m2.mudos(fazEnv(m2, { visitas: varias('74060653', 60, 29, 11) }));
-  m2.reset();
-  r = await m2.mudos(fazEnv(m2, { visitas: varias('74060653', 60, 29, 11), conn: [{ nk: '1574060653', st: 'pronto', ts: presoGravado(m2)['74060653'] - 100 }] }));
-  ok(r['74060653'] !== undefined, 'conexao de ANTES da prisao nao solta');
+  r = await m.mudos(fazEnv(m, { visitas: V('74060653', 3), conn: reaberto, msgs: [{ k: '74060653', d: 'out' }] }));
+  ok(r['74060653'] === undefined, 'a primeira mensagem registrada depois disso solta');
 }
 
-// ── 6. RELIGADO por gente: solta; religado pelo sistema, nao ─────────────────────────────────
+// ── 6. REABRIR E RELIGAR RECOMECAM A CONTAGEM de quem ainda nao foi preso ─────────────────────
 {
   const m = monta();
-  await m.mudos(fazEnv(m, { visitas: varias('92373996', 30, 28, 11) }));
-  const d = presoGravado(m)['92373996'];
-  m.reset();
-  let r = await m.mudos(fazEnv(m, { visitas: varias('92373996', 30, 28, 11), liga: [{ nk: '92373996', ts: d + 5, por: 'sistema' }] }));
-  ok(r['92373996'] !== undefined, '"liga" do proprio sistema nao conta como prova');
-  m.reset();
-  r = await m.mudos(fazEnv(m, { visitas: varias('92373996', 30, 28, 11), liga: [{ nk: '92373996', ts: d + 5, por: 'atendente_vra3lh' }] }));
-  ok(r['92373996'] === undefined, 'o vendedor religou o interruptor depois de preso: volta pra roleta');
+  // 30 visitas de 28 a 11 min atras sem mensagem prenderiam; o app reconectou ha 15 min
+  const r = await m.mudos(fazEnv(m, { visitas: varias('92373996', 30, 28, 11), conn: [{ nk: '1592373996', st: 'pronto', ts: agoraS() - 15 * 60 }] }));
+  ok(r['92373996'] === undefined, 'reconectou ha 15 min: as visitas de antes nao contam (so 10 delas sao de depois)');
+  ok(JSON.parse(m.cfg()['roleta_mudo_recomeco'] || '{}')['92373996'] > 0, 'e o recomeco fica gravado pra todos os isolates');
+  const m2 = monta();
+  const r2 = await m2.mudos(fazEnv(m2, { visitas: varias('92373996', 30, 28, 11), liga: [{ nk: '92373996', ts: agoraS() - 15 * 60, por: 'sistema' }] }));
+  ok(r2['92373996'] !== undefined, '"liga" do proprio sistema nao recomeca nada');
+  const m3 = monta();
+  const r3 = await m3.mudos(fazEnv(m3, { visitas: varias('92373996', 30, 28, 11), liga: [{ nk: '92373996', ts: agoraS() - 15 * 60, por: 'atendente_vra3lh' }] }));
+  ok(r3['92373996'] === undefined, 'gente religou ha 15 min: a contagem recomeca dali');
+  // religar um numero JA PRESO nao solta
+  m3.cfg()['roleta_mudo_preso'] = JSON.stringify({ 92373996: agoraS() - 3600 });
+  m3.reset();
+  const r4 = await m3.mudos(fazEnv(m3, { visitas: varias('92373996', 30, 28, 11), liga: [{ nk: '92373996', ts: agoraS() - 60, por: 'atendente_vra3lh' }] }));
+  ok(r4['92373996'] !== undefined, 'religar um numero ja preso nao solta: so a mensagem')
 }
 
 // ── 7. ISOLATES: o conjunto vem do banco a cada volta ─────────────────────────────────────────
@@ -157,7 +157,7 @@ const presoGravado = (m) => JSON.parse(m.cfg()['roleta_mudo_preso'] || '{}');
   m.esqueceMemoria();                       // outro isolate: memoria zerada, app_config igual
   let r = await m.mudos(fazEnv(m, { visitas: V('72518066', 1) }));
   ok(r['72518066'] !== undefined, 'isolate novo le o preso do app_config e NAO devolve o numero pra roleta');
-  // outro isolate soltou (reaberto) e gravou: este, que ainda tinha o numero na memoria, obedece
+  // outro isolate soltou (chegou mensagem) e gravou: este, que ainda tinha o numero na memoria, obedece
   m.cfg()['roleta_mudo_preso'] = '{}';
   m.cfg()['roleta_mudo_recomeco'] = JSON.stringify({ 72518066: agoraS() - 60 });
   m.reset();

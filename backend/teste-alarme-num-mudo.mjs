@@ -72,7 +72,7 @@ const preso = (o) => ({ roleta_mudo_preso: JSON.stringify(o) });
   ok(m.avisos.length === 1 && m.avisos[0].id === 'atendente_vra3lh', 'aos 15 min avisa so o dono (deu: ' + m.avisos.map((a) => a.id).join(',') + ')');
   const a = m.avisos[0] || {};
   ok(/97251-8066 não está marcando os leads/.test(a.title), 'diz QUAL numero e que ele nao esta marcando: ' + a.title);
-  ok(/Feche e abra/.test(a.body) && /volta sozinho/.test(a.body), 'e o que fazer: ' + a.body);
+  ok(/Feche e abra/.test(a.body) && /volta sozinho quando a primeira mensagem dele chegar na dash/.test(a.body), 'e o que fazer, sem prometer volta na hora: ' + a.body);
   ok(a.tag === 'num-mudo-72518066', 'a etiqueta e por numero');
   await m.roda(m.env);
   ok(m.avisos.length === 1, 'na volta seguinte do cron nao repete');
