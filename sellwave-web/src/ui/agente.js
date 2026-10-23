@@ -692,6 +692,101 @@
   }
   setInterval(varreNaoLidas, VARRE_MS)
 
+  // A COLHEITA (23/10/2026, pedido do Bruno: "me garanta que a marcacao vai funcionar, nao importa o
+  // meio"). Ate aqui a captura so ESPERAVA: o aviso `chat.new_message` do motor e a varredura das nao
+  // lidas, as duas saindo por `postMessage` -> preload -> main. Quando esse caminho cala, a pagina
+  // continua mandando e recebendo e nada chega na dash: foi a Barbara em 20-21/10 (26 h surda) e o
+  // app inteiro do Guilherme em 23/10, das 08:35 em diante, com funil saindo e sinal de vida batendo.
+  //
+  // Aqui o app PERGUNTA. O main chama estas duas funcoes por `executeJavaScript` e recebe a resposta
+  // no retorno, sem evento, sem `postMessage` e sem preload no meio. Elas so LEEM: montam o mesmo
+  // evento que a captura monta (mesmos campos, `via` diferente) e quem decide o que ainda nao foi pra
+  // dash e o main, pelo registro do que o servidor confirmou. Nao marcam `vistas`: a colheita e
+  // justamente pra achar o que o caminho normal achou que mandou e nao chegou.
+  //
+  // Ficam de fora o que nao e mensagem (aviso de criptografia, modelo de notificacao) e a cifrada,
+  // que nao tem texto nem codigo de desconto: a legivel vem na colheita seguinte.
+  var NAO_E_MSG = /^(e2e_notification|notification_template|notification|gp2|protocol|revoked|call_log|ciphertext|broadcast_notification)$/i
+  function eventoDe(msg, via) {
+    try {
+      if (!msg) return null
+      var tipoBruto = String(msg.type || 'chat')
+      if (NAO_E_MSG.test(tipoBruto)) return null
+      var deMim = !!(msg.fromMe || (msg.id && msg.id.fromMe))
+      var p = partes(deMim ? msg.to : msg.from)
+      if (!p.ser || !ehPessoa(p.ser)) return null
+      var pr = telefoneReal(msg, deMim)
+      if (!pr.digits) return null
+      var eu = numeroDoAparelho()
+      if (pr.digits === eu) return null
+      var ts = Number(msg.t || msg.timestamp || 0)
+      // SEM ID NAO VAI: e o id que deixa o servidor e o main jogarem fora a repetida.
+      var id = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || ''
+      if (!id) return null
+      var tipo = { chat: 'text', ptt: 'audio', voice: 'audio' }[tipoBruto.toLowerCase()] || tipoBruto
+      var ehMidia = /^(image|audio|video|document|sticker)$/i.test(tipo)
+      return {
+        msgId: id,
+        via: via || 'colheita',
+        selfNumber: eu,
+        phone: pr.digits,
+        lid: pr.isLid ? 1 : 0,
+        velha: ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0,
+        fromMe: deMim,
+        type: tipo,
+        body: (ehMidia ? String(msg.caption || '') : String(msg.body || msg.caption || '')).slice(0, 2000),
+        pushName: String((msg.sender && (msg.sender.pushname || msg.sender.name)) || msg.notifyName || ''),
+        ts: ts,
+        cifraMs: 0,
+        cifraSoltas: window.__swCifraSoltas || 0,
+      }
+    } catch (_) { return null }
+  }
+  // UMA CONVERSA: as ultimas `n` mensagens. E o que o funil chama ao sair pra um lead (ideia do Bruno:
+  // quem dispara a Etapa 1 acabou de receber o lead, e a primeira mensagem dele e a que tem o codigo).
+  window.__swColhe = function (chatId, n) {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.getMessages !== 'function' || !autenticado()) return Promise.resolve([])
+      return Promise.resolve(W.chat.getMessages(chatId, { count: Math.min(50, Math.max(1, Number(n) || 20)) })).then(function (msgs) {
+        var out = []
+        ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) { var ev = eventoDe(m, 'colheita-funil'); if (ev) out.push(ev) })
+        return out
+      }).catch(function () { return [] })
+    } catch (_) { return Promise.resolve([]) }
+  }
+  // AS CONVERSAS QUE MEXERAM DESDE `desdeS`: as ultimas 15 mensagens de cada, so as de `desdeS` pra
+  // frente. Uma conversa por vez, de proposito: 80 getMessages juntos pesariam a pagina do vendedor.
+  window.__swColheRecentes = function (desdeS, maxChats, maxEv) {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) return Promise.resolve([])
+      var desde = Number(desdeS) || 0
+      var lim = Math.min(500, Math.max(1, Number(maxEv) || 300))
+      return Promise.resolve(W.chat.list({ onlyUsers: true, count: Math.min(150, Math.max(1, Number(maxChats) || 80)) })).then(function (chats) {
+        chats = (Array.isArray(chats) ? chats : []).filter(function (c) { return c && !c.isGroup && Number(c.t || 0) >= desde })
+        var out = []
+        var i = 0
+        function proxima() {
+          if (i >= chats.length || out.length >= lim) return Promise.resolve(out)
+          var c = chats[i++]
+          var id = c.id && (c.id._serialized || c.id)
+          if (!id) return proxima()
+          return Promise.resolve(W.chat.getMessages(id, { count: 15 })).then(function (msgs) {
+            ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) {
+              if (out.length >= lim) return
+              var t = Number(m && (m.t || m.timestamp)) || 0
+              if (t < desde) return
+              var ev = eventoDe(m, 'colheita')
+              if (ev) out.push(ev)
+            })
+          }).catch(function () { /* uma conversa que falha nao para as outras */ }).then(proxima)
+        }
+        return proxima()
+      }).catch(function () { return [] })
+    } catch (_) { return Promise.resolve([]) }
+  }
+
   var ligado = null
   setInterval(function () {
     try {

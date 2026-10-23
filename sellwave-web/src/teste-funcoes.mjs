@@ -487,6 +487,65 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o aviso passa pelo preload da barra', /'sw:aviso'\]/.test(leia('preload.js')))
 }
 
+// ── 15) A COLHEITA (23/10/2026): o app pergunta a pagina e manda direto o que o servidor nunca
+//    confirmou. O caso: o app inteiro do Guilherme parou de mandar captura as 08:35 com funil saindo.
+{
+  const fonte = leia('main.js')
+  const codigo = [recorta(fonte, 'function marcaEntregues(ids)'), recorta(fonte, 'function faltamNaDash(evs, agora)'),
+    recorta(fonte, 'function janelaDaColheita(nk, agoraS)'), recorta(fonte, 'async function mandaColheita(evs)')].join('\n')
+  const filaCaptura = []
+  const entregues = new Map(), ultimaColheita = new Map()
+  const saude = { colhidas: 0 }
+  const anotado = []
+  let respostas = []   // o que o "servidor" responde a cada POST
+  const posts = []
+  const fetchFalso = async (url, o) => {
+    posts.push(JSON.parse(o.body).events.map((e) => e.msgId))
+    const r = respostas.shift() || { ok: true, ack: null }
+    if (r.erro) throw new Error(r.erro)
+    return { ok: r.ok !== false, status: r.ok === false ? 500 : 200, headers: { get: () => null }, json: async () => ({ ack: r.ack }) }
+  }
+  const mk = (jaTinha) => new Function('filaCaptura', 'entregues', 'ultimaColheita', 'saude', 'anota', 'config', 'fetch', 'ajustaRelogio', 'ehVelha', 'jaTinhaRegistro',
+    'let entreguesSujo = false; let filaSuja = false;\n' + codigo + '\nreturn { marcaEntregues, faltamNaDash, janelaDaColheita, mandaColheita }')(
+    filaCaptura, entregues, ultimaColheita, saude, (t) => anotado.push(t), { token: 'x', apiBase: 'https://api' }, fetchFalso, () => {}, () => 0, jaTinha)
+  const F = mk(true)
+  const agora = 1792700000000
+  const ev = (id, extra) => Object.assign({ msgId: id, phone: '5511933332222', ts: Math.floor(agora / 1000) - 60, body: 'oi' }, extra || {})
+
+  entregues.set('JA', agora - 1000)
+  filaCaptura.push({ msgId: 'FILA_NOVA', __em: agora - 60000 }, { msgId: 'FILA_PRESA', __em: agora - 6 * 60000 })
+  const falta = F.faltamNaDash([ev('JA'), ev('NOVA'), ev('NOVA'), ev('FILA_NOVA'), ev('FILA_PRESA'), ev('')], agora).map((e) => e.msgId)
+  vale('a colheita manda so o que o servidor nunca confirmou', !falta.includes('JA') && falta.includes('NOVA'), JSON.stringify(falta))
+  vale('sem repetir a mesma mensagem duas vezes', falta.filter((x) => x === 'NOVA').length === 1, JSON.stringify(falta))
+  vale('o que entrou na fila agora e da fila; o que esta preso nela ha mais de 5 min, a colheita manda', !falta.includes('FILA_NOVA') && falta.includes('FILA_PRESA'), JSON.stringify(falta))
+  vale('e evento sem id fica de fora', !falta.includes(''))
+
+  const agoraS = Math.floor(agora / 1000)
+  vale('primeira vez nesta maquina: a colheita olha so a ultima hora', mk(false).janelaDaColheita('NK', agoraS) === agoraS - 3600)
+  vale('maquina com registro, numero sem colheita ainda: ultimas 6 h', F.janelaDaColheita('NK', agoraS) === agoraS - 6 * 3600)
+  ultimaColheita.set('NK', agoraS - 300)
+  vale('depois: desde a ultima colheita, com 10 min de folga', F.janelaDaColheita('NK', agoraS) === agoraS - 300 - 600)
+  ultimaColheita.set('NK', agoraS - 3 * 86400)
+  vale('app fechado ha dias: no maximo 24 h pra tras (o que o servidor aceita de lead atrasado)', F.janelaDaColheita('NK', agoraS) === agoraS - 86400)
+
+  const muitos = Array.from({ length: 85 }, (_, i) => ev('M' + i))
+  respostas = [{ ok: true, ack: muitos.slice(0, 40).map((e) => e.msgId) }, { ok: true, ack: null }, { erro: 'sem rede' }]
+  const foram = await F.mandaColheita(muitos)
+  vale('manda direto, em lotes de 40', posts.length === 3 && posts[0].length === 40 && posts[2].length === 5, JSON.stringify(posts.map((x) => x.length)))
+  vale('o que o servidor confirmou fica registrado (com ack e sem ack)', entregues.has('M0') && entregues.has('M79') && !entregues.has('M80'))
+  vale('o lote que falhou NAO se perde: vai pra fila de sempre, marcado com a hora', filaCaptura.some((e) => e.msgId === 'M84' && e.__em > 0) && foram === 80, String(foram))
+  respostas = [{ erro: 'de novo' }]
+  await F.mandaColheita([ev('M84')])
+  vale('e nao entra duplicado na fila se falhar de novo', filaCaptura.filter((e) => e.msgId === 'M84').length === 1)
+
+  vale('a drenagem da fila registra o que o servidor confirmou', /marcaEntregues\(aceitos \? \[\.\.\.aceitos\] : lote\.map\(\(ev\) => ev && ev\.msgId\)\)/.test(fonte))
+  vale('o envio do funil colhe a conversa daquele lead', /if \(r && nk && chatId\) setTimeout\(\(\) => \{ colheConversa\(String\(nk\), String\(chatId\)\)/.test(fonte))
+  vale('a colheita roda de 2 em 2 minutos', /setInterval\(\(\) => \{ colheTodos\(\)\.catch\(\(\) => \{\}\) \}, 120000\)/.test(fonte))
+  vale('o sinal de vida leva a saude da captura', /auth: true, motor: !!e\.motor, saude: saudeDaCaptura\(\)/.test(fonte))
+  vale('o roteiro (que a drenagem espera) tem teto', /'\/api\/swweb\/roteiro',\n\s*\{ headers: \{ Authorization: 'Bearer ' \+ config\.token \}, signal: AbortSignal\.timeout\(20000\) \}/.test(fonte))
+  vale('o registro do que foi confirmado carrega na abertura', /leFila\(\)\n\s*carregaEntregues\(\)/.test(fonte))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

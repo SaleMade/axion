@@ -164,6 +164,85 @@ async function rodar() {
   conta('nem o evento atrasado da mesma mensagem', (await js('window.__enviados.length')) === 1)
   conta('o estado conta as conversas nao lidas (fora grupo) pra lista do app', (await js('window.__swEstado().naoLidas')) === 1, String(await js('window.__swEstado().naoLidas')))
 
+  console.log('\nA COLHEITA (o app pergunta a pagina, 23/10/2026)')
+  // A conversa do lead JA LIDA (a varredura das nao lidas nao ve) e uma enviada por mim: e o caso da
+  // Barbara, que lia tudo e nada chegava na dash.
+  const c = (id, extra) => msgBase(Object.assign({ id: { id: id, _serialized: 'false_5511933332222@c.us_' + id, fromMe: false }, from: '5511933332222@c.us' }, extra || {}))
+  await js('window.__enviados = []; window.__naoLidas = ' + JSON.stringify([
+    { id: '5511933332222@c.us', t: agoraS - 120, msgs: [
+      c('C1', { body: 'Olá! Gostaria de saber mais. Código de desconto "XYZ789"', t: agoraS - 600 }),
+      c('C2', { id: { id: 'C2', _serialized: 'true_5511933332222@c.us_C2', fromMe: true }, fromMe: true, from: '5515974060653@c.us', to: '5511933332222@c.us', body: 'Oi! Tudo bem?', t: agoraS - 500 }),
+      c('C3', { type: 'e2e_notification', body: '', t: agoraS - 700 }),
+      c('C4', { type: 'ciphertext', body: '', t: agoraS - 400 }),
+      c('C5', { body: 'de dois dias atras', t: agoraS - 2 * 86400 }),
+    ] },
+    { id: '5511922221111@c.us', t: agoraS - 3 * 86400, msgs: [c('D1', { from: '5511922221111@c.us', body: 'conversa parada', t: agoraS - 3 * 86400 })] },
+    { id: '120363000000000001@g.us', grupo: true, t: agoraS - 60, msgs: [c('G1', { from: '120363000000000001@g.us', body: 'grupo' })] },
+  ]).replace(/"grupo":true/g, '"grupo":true,"isGroup":true') + '; window.__naoLidas.forEach(function (x) { x.t = x.t }); "ok"')
+  // o duble da lista nao passa o `t` adiante; a colheita precisa dele (e o que o WhatsApp de verdade tem)
+  await js('(() => { const l0 = window.WPP.chat.list; window.WPP.chat.list = async function (o) { const r = await l0(o); r.forEach(function (x, i) { x.t = (window.__naoLidas[i] || {}).t; x.isGroup = !!(window.__naoLidas[i] || {}).grupo }); return r }; return "ok" })()')
+  const rec = JSON.parse(await js('window.__swColheRecentes(' + (agoraS - 86400) + ', 80, 300).then(function (r) { return JSON.stringify(r) })'))
+  const ids = rec.map((x) => x.msgId).sort().join(',')
+  conta('a colheita traz a conversa JA LIDA e a mensagem que eu mandei', ids === 'C1,C2', ids)
+  conta('com o codigo de desconto e o telefone do lead', rec.some((x) => x.msgId === 'C1' && /XYZ789/.test(x.body) && x.phone === '5511933332222' && x.fromMe === false), JSON.stringify(rec[0]))
+  conta('a minha vai como "saiu de mim", pro telefone do lead', rec.some((x) => x.msgId === 'C2' && x.fromMe === true && x.phone === '5511933332222'), JSON.stringify(rec.find((x) => x.msgId === 'C2')))
+  conta('aviso de criptografia, cifrada, mensagem antiga, conversa parada e grupo ficam de fora', !/C3|C4|C5|D1|G1/.test(ids), ids)
+  conta('as colhidas vao marcadas, pra medir quanto a colheita salvou', rec.every((x) => x.via === 'colheita'))
+  conta('a colheita NAO manda nada sozinha (quem decide e o main)', (await js('window.__enviados.length')) === 0, 'enviados=' + (await js('window.__enviados.length')))
+  const um = JSON.parse(await js('window.__swColhe("5511933332222@c.us", 25).then(function (r) { return JSON.stringify(r) })'))
+  conta('a colheita de UMA conversa (a do funil) traz o lead com o codigo', um.some((x) => x.msgId === 'C1' && x.via === 'colheita-funil') && !um.some((x) => x.msgId === 'C3'), JSON.stringify(um.map((x) => x.msgId)))
+  // a V1 ja saiu pela varredura la em cima (esta em `vistas`): a colheita tem que trazer assim mesmo
+  await js('window.__naoLidas.push({ id: "5511955554444@c.us", t: ' + (agoraS - 60) + ', msgs: [' + JSON.stringify(m('V1', { body: 'Olá! Código de desconto "ABC123"!', t: agoraS - 60 })) + '] }); "ok"')
+  conta('e funciona mesmo com a mensagem ja marcada como vista pelo evento',
+    JSON.parse(await js('window.__swColhe("5511955554444@c.us", 25).then(function (r) { return JSON.stringify(r.map(function (x) { return x.msgId })) })')).includes('V1'))
+
+  console.log('\nA COLHEITA DE PONTA A PONTA (o main de verdade perguntando a pagina de verdade)')
+  // As funcoes do main.js recortadas do arquivo, rodando AQUI, no processo principal do Electron, e
+  // perguntando a esta pagina pelo executeJavaScript - o mesmo caminho do app. So o servidor e falso.
+  {
+    const fonte = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8')
+    const recorta = (assin) => {
+      const i = fonte.indexOf(assin); if (i < 0) throw new Error('nao achei ' + assin)
+      let n = 0
+      for (let k = fonte.indexOf('{', i); k < fonte.length; k++) { if (fonte[k] === '{') n++; else if (fonte[k] === '}') { n--; if (!n) return fonte.slice(i, k + 1) } }
+      throw new Error('nao fechou ' + assin)
+    }
+    const linha = (ini) => fonte.split('\n').find((l) => l.startsWith(ini))
+    const posts = []
+    const ambiente = {
+      abertos: new Map([['1574060653', { view: { webContents: j.webContents }, connUltimo: 'pronto' }]]),
+      filaCaptura: [], entregues: new Map([['C2', Date.now()]]), ultimaColheita: new Map(), saude: { colhidas: 0, colheuEm: 0 },
+      config: { token: 't', apiBase: 'https://api' }, anota: () => {}, ajustaRelogio: () => {}, ehVelha: () => 0,
+      espera: (ms) => new Promise((r) => setTimeout(r, ms)), agoraCerto: () => Date.now(),
+      fetch: async (url, o) => { const evs = JSON.parse(o.body).events; posts.push(evs); return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ack: evs.map((e) => e.msgId) }) } },
+    }
+    const nomes = Object.keys(ambiente)
+    const F = new Function(...nomes, 'let entreguesSujo = false, filaSuja = false, jaTinhaRegistro = true, comoId = "";\n'
+      + [linha('const perguntaPagina = (wc, codigo, teto) =>') ? fonte.slice(fonte.indexOf('const perguntaPagina = (wc, codigo, teto) =>'), fonte.indexOf('let colhendo = false')) : '',
+        'let colhendo = false', recorta('function marcaEntregues(ids)'), recorta('function faltamNaDash(evs, agora)'),
+        recorta('function janelaDaColheita(nk, agoraS)'), recorta('async function mandaColheita(evs)'), recorta('async function colheTodos()'),
+        'const colheuConversa = new Map()', recorta('async function colheConversa(nk, chatId)')].join('\n')
+      + '\nreturn { colheTodos, colheConversa }')(...nomes.map((n) => ambiente[n]))
+    await F.colheTodos()
+    const foi = posts.flat().map((e) => e.msgId).sort()
+    conta('o main pergunta a pagina e manda pra dash o que faltava (conversa ja lida)', foi.includes('C1') && /XYZ789/.test((posts.flat().find((e) => e.msgId === 'C1') || {}).body || ''), JSON.stringify(foi))
+    conta('e NAO manda de novo o que o servidor ja tinha confirmado', !foi.includes('C2'), JSON.stringify(foi))
+    conta('a janela da proxima colheita anda', ambiente.ultimaColheita.get('1574060653') > 0)
+    posts.length = 0
+    await F.colheTodos()
+    conta('a colheita seguinte nao manda nada que ja foi', posts.length === 0, JSON.stringify(posts))
+    ambiente.entregues.clear(); posts.length = 0
+    await F.colheConversa('1574060653', '5511933332222@c.us')
+    conta('o disparo do funil manda a conversa daquele lead', posts.flat().some((e) => e.msgId === 'C1' && e.via === 'colheita-funil'), JSON.stringify(posts.flat().map((e) => e.msgId)))
+    posts.length = 0
+    await F.colheConversa('1574060653', '5511933332222@c.us')
+    conta('e o mesmo lead nao e colhido de novo em 15 min', posts.length === 0)
+    // pagina sem o agente novo: a colheita nao quebra e nao anda a janela
+    ambiente.abertos.set('9999', { view: { webContents: { isDestroyed: () => false, executeJavaScript: async () => null } }, connUltimo: 'pronto' })
+    await F.colheTodos()
+    conta('pagina com o agente antigo (sem colheita): nada quebra e a janela nao anda', !ambiente.ultimaColheita.has('9999'))
+  }
+
   try { j.destroy() } catch (_) { /* ok */ }
   console.log('\n' + ok + ' de ' + (ok + ruim) + '\n')
   app.exit(ruim ? 1 : 0)

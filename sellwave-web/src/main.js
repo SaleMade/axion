@@ -299,8 +299,10 @@ async function pegaRoteiro(forcar) {
   if (!forcar && roteiro && (Date.now() - roteiroEm) < 600000) return roteiro
   if (!config.token) return null
   try {
+    // COM TETO (23/10/2026): a drenagem da captura espera por esta funcao, e um pedido preso aqui
+    // seguraria a fila inteira de todos os numeros.
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/roteiro',
-      { headers: { Authorization: 'Bearer ' + config.token } })
+      { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(20000) })
     if (!r.ok) return roteiro
     const d = await r.json()
     if (d && d.ok) { roteiro = d; roteiroEm = Date.now() }
@@ -2233,13 +2235,17 @@ async function drenaLotes() {
         avisaCasca('sw:fila', { n: filaCaptura.length, erro: 'entre de novo na dash' })
         break
       }
-      if (!resp.ok) { console.error('[captura] ingestao respondeu ' + resp.status); break }
+      if (!resp.ok) { console.error('[captura] ingestao respondeu ' + resp.status); saude.erro = 'ingestao ' + resp.status; saude.erroEm = Date.now(); break }
       const d = await resp.json().catch(() => null)
       aceitos = d && Array.isArray(d.ack) ? new Set(d.ack.map(String)) : null
+      // O QUE O SERVIDOR CONFIRMOU fica registrado (ver COLHEITA): sem ack, vale o lote inteiro.
+      marcaEntregues(aceitos ? [...aceitos] : lote.map((ev) => ev && ev.msgId))
+      saude.drenouEm = Date.now()
       const barrados = Number(d && d.barrados) || 0
       if (barrados) console.error('[captura] o servidor recusou ' + barrados + ' evento(s) deste lote')
     } catch (e) {
       console.error('[captura] nao enviou: ' + ((e && e.message) || e))
+      saude.erro = String((e && e.message) || e).slice(0, 80); saude.erroEm = Date.now()
       break
     }
     // REMOVE POR IDENTIDADE, NUNCA POR POSICAO. Entre montar o lote e chegar a resposta, o agente
@@ -2260,6 +2266,159 @@ async function drenaLotes() {
 }
 
 setInterval(drenaCaptura, 15000)
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// A COLHEITA (23/10/2026, pedido do Bruno: "me garanta que a marcacao vai funcionar, nao importa o
+// meio"). Ver o comentario do __swColheRecentes no agente.js.
+//
+// O QUE FALHOU, medido: a Barbara (20-21/10, 26 h) e o app INTEIRO do Guilherme (23/10, das 08:35 em
+// diante, todos os numeros) pararam de mandar captura com a pagina viva - funil saindo, sinal de vida
+// batendo. A captura so esperava o aviso da pagina; quando o aviso cala, ninguem perguntava.
+//
+// AGORA O APP PERGUNTA, de dois jeitos, e manda DIRETO pro servidor (fora da fila) o que ele nunca
+// confirmou:
+//   1) de 2 em 2 minutos, em cada numero aberto e conectado: as conversas que mexeram desde a ultima
+//      colheita daquele numero (com 10 min de folga). Na primeira colheita de um numero vale o que
+//      ficou gravado da ultima vez, ate 24 h pra tras - e o que o servidor aceita de lead atrasado.
+//   2) no disparo do funil, a conversa daquele lead (ideia do Bruno: quem dispara a Etapa 1 acabou
+//      de receber o lead, e a primeira mensagem dele e a que tem o codigo de desconto).
+// QUEM DECIDE O QUE FALTA e o registro do que o SERVIDOR CONFIRMOU (o `ack` da ingestao), guardado em
+// disco e nao o que a pagina diz que mandou: e justamente quando a pagina acha que mandou e nao
+// chegou que isto precisa agir. Mensagem que esta na fila ha menos de 5 min ainda e da fila; presa ha
+// mais que isso, a colheita manda de novo (o servidor joga fora a repetida pelo id).
+// NUNCA TRAVA O APP: cada pergunta tem teto, e pagina que nao responde fica pra proxima volta com a
+// mesma janela.
+const ARQ_ENTREGUES = () => path.join(app.getPath('userData'), 'captura-entregue.json')
+const entregues = new Map()      // msgId -> quando o servidor confirmou (ms)
+const ultimaColheita = new Map() // nk -> inicio (s) da ultima colheita que a pagina respondeu
+let entreguesSujo = false
+let jaTinhaRegistro = false
+const saude = { drenouEm: 0, erro: '', erroEm: 0, colhidas: 0, colheuEm: 0 }
+function carregaEntregues() {
+  try {
+    const v = JSON.parse(fs.readFileSync(ARQ_ENTREGUES(), 'utf8'))
+    const corte = Date.now() - 26 * 3600000
+    for (const [id, t] of (Array.isArray(v && v.ids) ? v.ids : [])) if (Number(t) > corte) entregues.set(String(id), Number(t))
+    for (const [nk, t] of Object.entries((v && v.colheita) || {})) ultimaColheita.set(String(nk), Number(t) || 0)
+    jaTinhaRegistro = true
+  } catch (_) { /* primeiro uso: a primeira colheita olha so a ultima hora */ }
+}
+function gravaEntregues() {
+  if (!entreguesSujo) return
+  entreguesSujo = false
+  try {
+    const corte = Date.now() - 26 * 3600000
+    for (const [id, t] of entregues) if (t < corte) entregues.delete(id)
+    const tmp = ARQ_ENTREGUES() + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify({ ids: [...entregues], colheita: Object.fromEntries(ultimaColheita) }), 'utf8')
+    fs.renameSync(tmp, ARQ_ENTREGUES())
+  } catch (_) { /* proxima volta */ }
+}
+setInterval(gravaEntregues, 30000)
+function marcaEntregues(ids) {
+  const t = Date.now()
+  for (const id of ids || []) if (id) { entregues.set(String(id), t); entreguesSujo = true }
+}
+function saudeDaCaptura() {
+  return { fila: filaCaptura.length, drenouEm: saude.drenouEm, erro: saude.erroEm > Date.now() - 600000 ? saude.erro : '',
+    colhidas: saude.colhidas, colheuEm: saude.colheuEm, entregues: entregues.size }
+}
+// O que a colheita trouxe e o servidor ainda nao confirmou. Na fila ha pouco tempo = ainda e da fila.
+function faltamNaDash(evs, agora) {
+  const naFila = new Map()
+  for (const ev of filaCaptura) if (ev && ev.msgId) naFila.set(String(ev.msgId), Number(ev.__em) || 0)
+  const vistos = new Set()
+  return (evs || []).filter((ev) => {
+    if (!ev || !ev.msgId) return false
+    const id = String(ev.msgId)
+    if (vistos.has(id) || entregues.has(id)) return false
+    vistos.add(id)
+    const em = naFila.get(id)
+    return em === undefined || (agora - em) > 5 * 60000
+  })
+}
+// A janela da colheita de um numero: desde a ultima (com folga), no maximo 24 h; sem registro
+// nenhum (primeira vez nesta maquina), so a ultima hora - senao o primeiro dia mandaria de novo tudo
+// o que ja esta na dash.
+function janelaDaColheita(nk, agoraS) {
+  const ult = ultimaColheita.get(nk)
+  if (ult) return Math.max(agoraS - 86400, ult - 600)
+  return agoraS - (jaTinhaRegistro ? 6 * 3600 : 3600)
+}
+async function mandaColheita(evs) {
+  if (!evs.length || !config.token) return 0
+  const alvo = String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/captura'
+  let foram = 0
+  for (let i = 0; i < evs.length; i += 40) {
+    const lote = evs.slice(i, i + 40).map((ev) => ({ ...ev, velha: ehVelha(ev.ts) }))
+    try {
+      const resp = await fetch(alvo, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+        body: JSON.stringify({ events: lote }),
+        signal: AbortSignal.timeout(60000),
+      })
+      ajustaRelogio(resp)
+      if (!resp.ok) throw new Error('ingestao ' + resp.status)
+      const d = await resp.json().catch(() => null)
+      marcaEntregues(d && Array.isArray(d.ack) ? d.ack : lote.map((ev) => ev.msgId))
+      foram += lote.length
+    } catch (e) {
+      // NAO SE PERDE: vai pra fila de sempre, que tenta de novo e fica gravada em disco.
+      anota('[colheita] nao mandou direto (' + ((e && e.message) || e) + '): ' + lote.length + ' vao pra fila')
+      const naFila = new Set(filaCaptura.map((x) => x && String(x.msgId)))
+      for (const ev of lote) if (!naFila.has(String(ev.msgId))) filaCaptura.push({ ...ev, __em: Date.now() })
+      filaSuja = true
+    }
+  }
+  saude.colhidas += foram
+  return foram
+}
+const perguntaPagina = (wc, codigo, teto) => Promise.race([
+  wc.executeJavaScript(codigo, true),
+  espera(teto).then(() => null),
+]).catch(() => null)
+let colhendo = false
+async function colheTodos() {
+  if (colhendo || !config.token || comoId) return
+  colhendo = true
+  try {
+    for (const [nk, s] of [...abertos]) {
+      const wc = s && s.view && s.view.webContents
+      if (!wc || wc.isDestroyed() || s.connUltimo !== 'pronto') continue
+      const agoraS = Math.floor(agoraCerto() / 1000)
+      const desde = janelaDaColheita(nk, agoraS)
+      const evs = await perguntaPagina(wc, 'window.__swColheRecentes ? window.__swColheRecentes(' + desde + ', 80, 400) : null', 25000)
+      if (!Array.isArray(evs)) continue   // pagina sem a funcao ou que nao respondeu: mesma janela na proxima
+      ultimaColheita.set(nk, agoraS); entreguesSujo = true
+      saude.colheuEm = Date.now()
+      const falta = faltamNaDash(evs, Date.now())
+      if (!falta.length) continue
+      anota('[colheita] ' + nk + ': ' + falta.length + ' mensagem(ns) que nao estavam na dash (de ' + evs.length + ' lidas desde ' + new Date(desde * 1000).toISOString().slice(11, 16) + ' UTC)')
+      await mandaColheita(falta)
+    }
+  } catch (e) {
+    anota('[colheita] estourou: ' + ((e && e.stack) || e))
+  } finally { colhendo = false }
+}
+setInterval(() => { colheTodos().catch(() => {}) }, 120000)
+// A CONVERSA DO FUNIL, uma vez por lead a cada 15 min (o funil tem varios passos; basta o primeiro).
+const colheuConversa = new Map()   // nk|chatId -> ms
+async function colheConversa(nk, chatId) {
+  const k = String(nk) + '|' + String(chatId)
+  if (Date.now() - (colheuConversa.get(k) || 0) < 15 * 60000) return
+  colheuConversa.set(k, Date.now())
+  if (colheuConversa.size > 2000) { for (const [x, t] of colheuConversa) if (Date.now() - t > 15 * 60000) colheuConversa.delete(x) }
+  const s = abertos.get(String(nk))
+  const wc = s && s.view && s.view.webContents
+  if (!wc || wc.isDestroyed()) return
+  const evs = await perguntaPagina(wc, 'window.__swColhe ? window.__swColhe(' + JSON.stringify(String(chatId)) + ', 25) : null', 15000)
+  if (!Array.isArray(evs)) return
+  const falta = faltamNaDash(evs, Date.now())
+  if (!falta.length) return
+  anota('[colheita] funil em ' + nk + ': ' + falta.length + ' mensagem(ns) do lead que nao estavam na dash')
+  await mandaColheita(falta)
+}
 
 // SINAL DE VIDA DOS NUMEROS ABERTOS.
 //
@@ -2316,7 +2475,7 @@ async function sinalDeUm(s, url) {
       headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
       // `auth` e campo NOVO de proposito: o worker exige ele e trata ausencia como "nao vivo".
       // Assim, uma copia velha do app instalada por ai nao consegue mais marcar numero como vivo.
-      body: JSON.stringify({ numero: e.eu, auth: true, motor: !!e.motor }),
+      body: JSON.stringify({ numero: e.eu, auth: true, motor: !!e.motor, saude: saudeDaCaptura() }),
       signal: AbortSignal.timeout(15000),
     })
     ajustaRelogio(r)
@@ -3074,6 +3233,9 @@ ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
     const r = await comTetoNode(wc, String(nk || ''),
       'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', tetoDoItem(pedaco))
     if (r && nk) setTimeout(() => confereCaptura(String(nk), antes), CAPTURA_ESPERA_MS)   // ver CAPTURA_ESPERA_MS
+    // A CONVERSA DO LEAD VAI PRA DASH NO DISPARO DO FUNIL (ver COLHEITA). Depois do envio e sem
+    // esperar: o funil nao pode ficar mais lento por causa disto.
+    if (r && nk && chatId) setTimeout(() => { colheConversa(String(nk), String(chatId)).catch(() => {}) }, 1500)
     return { ok: !!r }
   } catch (e) {
     return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
@@ -3535,7 +3697,7 @@ ipcMain.on('swp:captura', (_e, dados) => {
   try { const nkCap = nkDaPagina(_e.sender.id); if (nkCap) capturaVistaEm.set(nkCap, Date.now()) } catch (_) { /* ok */ }
   for (const ev of evs) {
     // `velha` E CARIMBADO AQUI, com o relogio corrigido pelo servidor. Ver desvioRelogio.
-    if (ev && typeof ev === 'object') ev.velha = ehVelha(ev.ts)
+    if (ev && typeof ev === 'object') { ev.velha = ehVelha(ev.ts); if (!ev.__em) ev.__em = Date.now() }
     filaCaptura.push(ev)
   }
   // TETO EM BYTES, nao em eventos. Primeiro larga os ANEXOS mais antigos (a mensagem fica), e so
@@ -3672,6 +3834,7 @@ app.whenReady().then(() => {
   } catch (e) { anota('[midia] nao registrei o swmedia: ' + (e && e.message)) }
   painelLigado = config.painelLigado !== false
   leFila()
+  carregaEntregues()
 
   // EM SEGUNDO PLANO, SEMPRE. Nenhuma das duas segura o boot: sem internet o app abre igual, com a
   // copia do instalador e sem aviso de versao. Esperar rede pra abrir seria trocar "painel da
