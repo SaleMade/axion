@@ -447,6 +447,20 @@ npm run confere-pacote                           # 3) A GUARDA. Sem ela, não su
 npx wrangler r2 object put "salechat-media/sellwave-web/instalador.exe" --file "dist-pub/SellWave Web Setup <v>.exe" --content-type "application/octet-stream" --remote
 # e carimbar a versão publicada: POST /api/swweb/app { versao, bytes, notas } como diretor
 
+# 3b) A ATUALIZACAO SOZINHA (desde a 1.25.17, 23/10/2026): o app instalado le o feed e se atualiza
+#     sozinho quando o vendedor fecha. SEM ESTE PASSO A VERSAO NAO CHEGA EM NINGUEM que ja esta na
+#     1.25.17 ou mais nova. Os tres arquivos que o build deixa na pasta de saida, com o nome EXATO do
+#     latest.yml (tem espaco). Suba o .exe e o .blockmap ANTES e o latest.yml POR ULTIMO: o latest.yml
+#     e o que anuncia a versao, e anunciar antes de o arquivo existir da erro na maquina de todo mundo.
+npx wrangler r2 object put "salechat-media/sellwave-web/atualizacao/SellWave Web Setup <v>.exe" --file "dist-pub/SellWave Web Setup <v>.exe" --content-type application/octet-stream --remote
+npx wrangler r2 object put "salechat-media/sellwave-web/atualizacao/SellWave Web Setup <v>.exe.blockmap" --file "dist-pub/SellWave Web Setup <v>.exe.blockmap" --content-type application/octet-stream --remote
+npx wrangler r2 object put "salechat-media/sellwave-web/atualizacao/latest.yml" --file "dist-pub/latest.yml" --content-type text/yaml --remote
+# confira: curl ".../api/swweb/atualizacao/latest.yml?v=$RANDOM" mostra a versao nova, e o sha512 do
+# .exe servido bate com o do latest.yml. Cada versao publicada tem numero NOVO (nunca republicar por
+# baixo): quem ja instalou aquele numero nao seria avisado de novo.
+# Com mais de uma conversa mexendo no app, builde em pasta propria (dist-pub-<n>) e confira o NOME do
+# .exe gerado antes de subir: o build le o package.json da arvore NA HORA.
+
 # 4) SE MEXEU NO src/ui/agente.js, PUBLIQUE A CÓPIA SERVIDA TAMBÉM:
 npx wrangler r2 object put "salechat-media/sellwave-web/agente.js" --file "src/ui/agente.js" --content-type "application/javascript; charset=utf-8" --remote
 # confira com query e compare o tamanho com o do disco:
