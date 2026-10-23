@@ -22459,6 +22459,24 @@ const MUDO_JANELA = 1800;    // 30 minutos
 // falso positivo e raro e se cura sozinho, e cada acerto economiza 20 cliques pagos.
 const MUDO_VISITAS = 20;     // visitas sem UMA mensagem pra considerar mudo
 let _mudoCache = null, _mudoT = 0;
+// ── NUMERO MUDO FICA PRESO ATE PROVAR QUE VOLTOU (23/10/2026) ────────────────────────────────
+//
+// A guarda de mudo media uma JANELA de 30 minutos: 20 visitas sem nenhuma mensagem e o numero sai
+// da roleta. So que ela esquecia tudo a cada janela, entao um numero morto era RETESTADO de meia em
+// meia hora, e cada teste custava 20 cliques pagos. Medido em 23/10: o (11) 97251-8066 do Guilherme
+// estava com a captura parada desde as 22:46 da vespera e mesmo assim comeu 97 cliques pagos no dia,
+// porque e o primeiro da fila dele e voltava pra roleta a cada janela nova.
+//
+// Agora quem e pego mudo fica PRESO, e so sai quando o proprio numero registrar mensagem entrando.
+// A prova tem que ser dele: enquanto nao chegar UMA mensagem, ele nao volta a receber clique pago.
+// Isso nao conserta a captura (quem captura e o app na maquina do vendedor), mas para a sangria, que
+// e o que estava custando dinheiro em silencio.
+//
+// MORA NO app_config, nao so na memoria: o worker tem varios isolates e cada um comecaria com o
+// conjunto vazio, ou seja o numero morto voltaria a receber a cada isolate novo. Leitura junto do
+// cache de 5 minutos da propria guarda; escrita so quando o conjunto MUDA.
+const MUDO_PRESO_KEY = 'roleta_mudo_preso';
+let _mudoPreso = null;
 // A JANELA INTEIRA, e nao so quem ficou mudo (24/09/2026). O alarme de tela precisa saber a taxa
 // de resposta REAL da operacao pra decidir se o silencio de um numero e estranho ou esperado; sem
 // isto ele teria que fazer a consulta de novo, e esta e a consulta cara. Guardada aqui do lado do
@@ -22505,9 +22523,40 @@ async function _numerosMudos(env) {
     _mudoT = agora;
     return _mudoCache || {};
   }
+  // ── O CONJUNTO PRESO (ver o comentario em MUDO_PRESO_KEY) ──────────────────────────────────
+  try {
+    if (_mudoPreso === null) {
+      let g = {};
+      try { g = JSON.parse((await _readConfig(env, MUDO_PRESO_KEY)) || '{}') || {}; } catch (_) { g = {}; }
+      _mudoPreso = g;
+    }
+    const antes = JSON.stringify(_mudoPreso);
+    // SOLTA com prova: o numero registrou mensagem ENTRANDO na janela. E a unica coisa que diz que a
+    // captura dele voltou - visita nao diz nada, porque visita e justamente o que ele estava comendo.
+    for (const k of Object.keys(_mudoPreso)) {
+      if (_tab[k] && (Number(_tab[k].msgs) || 0) > 0) {
+        console.log('ROLETA_MUDO_SOLTO num=' + k + ' msgs=' + _tab[k].msgs + ' preso_desde=' + _mudoPreso[k]);
+        delete _mudoPreso[k];
+      }
+    }
+    // PRENDE quem a janela acabou de pegar.
+    for (const k of Object.keys(out)) {
+      if (!_mudoPreso[k]) {
+        _mudoPreso[k] = Math.floor(agora / 1000);
+        console.log('ROLETA_MUDO_PRESO num=' + k + ' visitas=' + out[k] + ' sem UMA mensagem na janela');
+      }
+    }
+    // Os presos continuam fora da roleta mesmo sem visita nova na janela: sem trafego nao ha prova.
+    for (const k of Object.keys(_mudoPreso)) if (!out[k]) out[k] = (_tab[k] && _tab[k].visitas) || 0;
+    if (JSON.stringify(_mudoPreso) !== antes) {
+      try { await _writeConfig(env, MUDO_PRESO_KEY, JSON.stringify(_mudoPreso)); } catch (_) { /* tenta na proxima */ }
+    }
+  } catch (e) { console.error('[roleta] preso falhou: ' + String((e && e.message) || e)); }
   _mudoCache = out; _mudoT = agora;
   return out;
 }
+// Quais numeros estao presos agora, pra tela poder DIZER isso em vez de "na fila" (23/10/2026).
+function _mudoPresoAgora() { return _mudoPreso || {}; }
 // MODO DE CAPTURA DO CHIP (chip.conn). A Evolution saiu em 11/09/2026 e o padrao virou ROLETA:
 // distribui o numero e nao espera captura. So 'sc' (Sale Chat) e o chip de API oficial exigem
 // conexao viva. 'evo' antigo, gravado antes da troca, e tratado como roleta - senao os chips que
