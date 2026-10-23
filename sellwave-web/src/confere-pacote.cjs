@@ -32,7 +32,7 @@ let ruim = 0
 // devDependencies nem bloco de build), entao comparar com o disco acusaria falso todo dia.
 const ALVOS = [
   ['src', 'main.js'], ['src', 'preload.js'], ['src', 'preload-wa.js'], ['src', 'preload-painel.js'],
-  ['src', 'ui', 'app.js'], ['src', 'ui', 'painel-ui.js'], ['src', 'ui', 'agente.js'],
+  ['src', 'ui', 'app.js'], ['src', 'ui', 'painel-ui.js'], ['src', 'ui', 'agente.js'], ['src', 'ui', 'crm.js'],
   ['src', 'ui', 'index.html'], ['src', 'ui', 'painel.html'],
 ]
 for (const alvo of ALVOS) {
