@@ -33,7 +33,7 @@ const monta = () => {
     + 'const _writeConfig = async (env, k, v) => { _cfg[k] = v; _gravou += 1; };\n'
     + trecho
     + '\nreturn { mudos: _numerosMudos, reset: () => { _mudoT = 0; }, cfg: () => _cfg, gravou: () => _gravou,'
-    + ' esqueceMemoria: () => { _mudoPreso = null; _mudoT = 0; }, tabela: () => _mudoTabela };';
+    + ' esqueceMemoria: () => { _mudoPreso = null; _mudoT = 0; }, tabela: () => _mudoTabela, envelheLeve: () => { _mudoLeveT = 0; } };';
   return new Function(mod)();
 };
 
@@ -62,15 +62,23 @@ const fazEnv = (m, { visitas = [], msgs = [], conn = [], liga = [], falhaCfg = f
           if (falhaCfg) throw new Error('D1 fora');
           return { results: Object.entries(m.cfg()).map(([key, value]) => ({ key, value })) };
         }
+        if (/FROM app_config WHERE key = \?/.test(sql)) return null;
         if (/FROM swweb_conn/.test(sql)) return { results: conn.filter((c) => c.ts > args[0]) };
         if (/FROM pressel_num_log/.test(sql)) return { results: liga.filter((c) => c.ts > args[0] && c.por !== 'sistema') };
         return { results: [] };
       };
-      return { bind: (...a) => ({ all: () => resp(...a), run: async () => ({}) }), all: () => resp(), run: async () => ({}) };
+      const umaLinha = async (...a) => {
+        if (falhaCfg) throw new Error('D1 fora');
+        contaLeve.n += 1;
+        const v = m.cfg()[a[0]];
+        return v == null ? null : { value: v };
+      };
+      return { bind: (...a) => ({ all: () => resp(...a), first: () => umaLinha(...a), run: async () => ({}) }), all: () => resp(), run: async () => ({}) };
     },
   },
 });
 const presoGravado = (m) => JSON.parse(m.cfg()['roleta_mudo_preso'] || '{}');
+const contaLeve = { n: 0 };
 
 // ── 1. o mudo de verdade: visitas velhas, nenhuma mensagem ─────────────────────────────────────
 {
@@ -163,6 +171,31 @@ const presoGravado = (m) => JSON.parse(m.cfg()['roleta_mudo_preso'] || '{}');
   m.reset();
   r = await m.mudos(fazEnv(m, { visitas: varias('72518066', 42, 28, 11) }));
   ok(r['72518066'] === undefined && presoGravado(m)['72518066'] === undefined, 'o que outro isolate soltou nao volta preso por memoria velha');
+}
+
+// ── 7b. O PRESO DE OUTRO ISOLATE VALE EM 30 s, sem refazer a conta pesada ───────────────────────
+{
+  const m = monta();
+  let pesadas = 0
+  const env = fazEnv(m, { visitas: varias('74060653', 15, 28, 11) })
+  const prep = env.DB.prepare
+  env.DB.prepare = (sql) => { if (/FROM tt_pending/.test(sql)) pesadas += 1; return prep(sql) }
+  let r = await m.mudos(env)
+  ok(r['74060653'] === undefined && pesadas === 1, '(montagem) 15 visitas nao prendem, e a conta pesada rodou uma vez')
+  // outro isolate prendeu e gravou
+  m.cfg()['roleta_mudo_preso'] = JSON.stringify({ 74060653: agoraS() })
+  r = await m.mudos(env)
+  ok(r['74060653'] === undefined, 'nos primeiros 30 s este isolate ainda usa o que tinha')
+  m.envelheLeve()
+  const antes = contaLeve.n
+  r = await m.mudos(env)
+  ok(r['74060653'] !== undefined, 'passados 30 s ele rele SO a linha do conjunto e o numero sai da roleta aqui tambem')
+  ok(pesadas === 1 && contaLeve.n === antes + 1, 'sem refazer a conta pesada (uma leitura de uma linha)')
+  // e o solto por outro isolate volta do mesmo jeito
+  m.cfg()['roleta_mudo_preso'] = '{}'
+  m.envelheLeve()
+  r = await m.mudos(env)
+  ok(r['74060653'] === undefined, 'e o que outro isolate soltou volta pra roleta em 30 s')
 }
 
 // ── 8. banco fora: nao solta ninguem e nao grava por cima ─────────────────────────────────────

@@ -22587,6 +22587,7 @@ const MUDO_CARENCIA = 600;
 // Quando o numero e solto por ter sido REABERTO ou RELIGADO, a contagem dele recomeca dali.
 const MUDO_RECOMECO_KEY = 'roleta_mudo_recomeco';
 let _mudoLidos = null;
+let _mudoLeveT = 0;      // a ultima releitura so do conjunto preso (ver o comeco do _numerosMudos)
 let _usoVersaoOk = false;   // a coluna versao do swweb_uso (ver o aluguel do numero)   // o que a ultima volta leu do conjunto e das provas (passa da consulta pro bloco do preso)
 // A JANELA INTEIRA, e nao so quem ficou mudo (24/09/2026). O alarme de tela precisa saber a taxa
 // de resposta REAL da operacao pra decidir se o silencio de um numero e estranho ou esperado; sem
@@ -22600,7 +22601,26 @@ async function _numerosMudos(env) {
   // execucao. Com a verba do TikTok rodando, a pagina do anuncio estava levando de 21 a 25 SEGUNDOS
   // pra responder - e pagina de anuncio lenta e clique pago perdido. O que ela mede (numero que
   // recebeu visita e nao recebeu NENHUMA mensagem numa janela de 30 minutos) nao muda em 5 minutos.
-  if (_mudoCache && (agora - _mudoT) < 300000) return _mudoCache;
+  if (_mudoCache && (agora - _mudoT) < 300000) {
+    // O PRESO DOS OUTROS ISOLATES CHEGA EM 30 s, NAO EM 5 MIN (23/10/2026, medido pela sessao 67): o
+    // 74060653 foi preso as 16:26:17 e ainda levou 29 cliques ate 16:30, mandados pelos isolates que
+    // estavam com a conta velha guardada. A conta pesada continua de 5 em 5 min; de 30 em 30 s so a
+    // linha do conjunto preso e relida (uma linha, por chave), e quem entrou ou saiu dela vale ja.
+    if (agora - _mudoLeveT < 30000) return _mudoCache;
+    _mudoLeveT = agora;
+    try {
+      const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(MUDO_PRESO_KEY).first();
+      let g = {};
+      try { g = JSON.parse((row && row.value) || '{}') || {}; } catch (_) { g = null; }
+      if (g) {
+        const novo = {};
+        for (const k of Object.keys(g)) novo[k] = (_mudoTabela[k] && _mudoTabela[k].visitas) || 0;
+        _mudoPreso = g; _mudoCache = novo;
+      }
+    } catch (_) { /* leitura falhou: fica a conta guardada */ }
+    return _mudoCache;
+  }
+  _mudoLeveT = agora;
   const agoraS = Math.floor(agora / 1000);
   const desde = agoraS - MUDO_JANELA;
   const out = {}, _tab = {}, porMin = {}, prova = {};
