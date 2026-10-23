@@ -11365,6 +11365,30 @@ async function handleSwWeb(req, env, path) {
     });
   }
 
+  // A ATUALIZACAO SOZINHA DO APP (23/10/2026, pedido do Bruno: "que as atualizacoes entrem direto,
+  // sem eles precisarem ficar baixando o aplicativo toda vez"). E o "feed generico" do electron-updater:
+  // o app pede o `latest.yml` (versao, nome do arquivo e o sha512 dele) e, se for mais novo, baixa o
+  // instalador daqui mesmo e instala quando o vendedor fechar o app. Publico de proposito, como o
+  // /api/swweb/instalador: quem pede e o atualizador, que nao manda o token da dash. O que protege o
+  // vendedor e o sha512 do latest.yml, que o app confere antes de rodar o arquivo.
+  // So nomes simples (letra, numero, ponto, traco, sublinhado): nada de caminho nem de pasta.
+  if (req.method === 'GET' && path.startsWith('/api/swweb/atualizacao/')) {
+    if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
+    const arq = decodeURIComponent(path.slice('/api/swweb/atualizacao/'.length));
+    if (!/^[A-Za-z0-9._ -]{1,120}$/.test(arq) || arq.includes('..')) return err('Arquivo invalido', 400);
+    const obj = await env.MEDIA.get('sellwave-web/atualizacao/' + arq);
+    if (!obj) return err('Nao publicado', 404);
+    const ehYml = /\.ya?ml$/i.test(arq);
+    return new Response(obj.body, {
+      headers: {
+        'content-type': ehYml ? 'text/yaml; charset=utf-8' : 'application/octet-stream',
+        'content-length': String(obj.size),
+        // o latest.yml muda a cada versao; o instalador de uma versao nunca muda
+        'cache-control': ehYml ? 'no-cache' : 'public, max-age=86400',
+      },
+    });
+  }
+
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!_swwebPodeUsar(u)) return err('Sem acesso', 403);
@@ -23913,10 +23937,14 @@ async function _alarmeNumeroMudo(env) {
       const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
       // Numero sem dono (coluna da Contingencia, chip apagado) nao tem pra quem avisar: so a direcao.
       const dono = chip && chip.at && !/^ccol_/i.test(String(chip.at)) ? String(chip.at) : '';
+      // NUMERO DE AFILIADO NAO ACORDA A DIRECAO DA CASA (regra do isolamento). O dono dele continua
+      // sendo avisado - e o numero DELE que parou -, mas o Bruno nao responde por chip do Giovane, e
+      // aviso que nao e da sua operacao vira ruido que ensina a ignorar o aviso que importa.
+      const daCasa = !(chip && String(chip.afl || ''));
       const nome = (dono && nomePorId[dono]) ? String(nomePorId[dono]).split(' ')[0] : '';
       const fim = chip && chip.num ? String(chip.num) : ('...' + nk.slice(-4));
       ja[nk] = agora; mudouJa = true;
-      for (const id of new Set(direcao.concat(dono ? [dono] : []))) {
+      for (const id of new Set((daCasa ? direcao : []).concat(dono ? [dono] : []))) {
         try {
           await _wpParaPessoa(env, id, {
             title: id === dono ? 'O numero ' + fim + ' parou de registrar' : 'Numero parado' + (nome ? ' de ' + nome : '') + ': ' + fim,
@@ -23927,7 +23955,7 @@ async function _alarmeNumeroMudo(env) {
           });
         } catch (_) { /* aviso que falha nao para os outros */ }
       }
-      console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)'));
+      console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)') + (daCasa ? '' : ' (afiliado: direcao nao avisada)'));
     }
   }
   if (mudouJa) { try { await _writeConfig(env, 'roleta_mudo_avisado', JSON.stringify(ja)); } catch (_) {} }

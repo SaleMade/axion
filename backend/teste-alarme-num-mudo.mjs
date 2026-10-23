@@ -41,6 +41,7 @@ const CHIPS = [
   { num: '(11) 97251-8066', at: 'atendente_vra3lh' },
   { num: '(19) 99598-3293', at: 'atendente_vra3lh' },
   { num: '(15) 97400-9352', at: 'ccol_6' },
+  { num: '(54) 98108-9176', at: 'atendente_awpftn', afl: 'afl_3d767329' },
 ];
 const USERS = [{ id: 'dir', name: 'Heynan Dantas', role: 'diretor' }, { id: 'atendente_vra3lh', name: 'Guilherme', role: 'atendente' }];
 
@@ -78,6 +79,16 @@ const USERS = [{ id: 'dir', name: 'Heynan Dantas', role: 'diretor' }, { id: 'ate
   const m = monta({ roleta_mudo_preso: JSON.stringify({ 74009352: 1 }) }, CHIPS, USERS);
   await m.roda(m.env);
   ok(m.avisos.length === 1 && m.avisos[0].id === 'dir', 'numero de coluna avisa so a direcao');
+}
+
+// ── 3b. numero de AFILIADO avisa so o dono dele, nunca a direcao da casa ─────────────────────
+// Regra do isolamento: o Bruno nao responde por chip do Giovane, e aviso que nao e da operacao dele
+// vira ruido que ensina a ignorar o aviso que importa.
+{
+  const m = monta({ roleta_mudo_preso: JSON.stringify({ 81089176: 1 }) }, CHIPS, USERS);
+  await m.roda(m.env);
+  const ids = m.avisos.map((a) => a.id);
+  ok(ids.length === 1 && ids[0] === 'atendente_awpftn', 'numero de afiliado avisa so o dono (deu: ' + ids.join(',') + ')');
 }
 
 // ── 4. conjunto vazio nao faz nada ────────────────────────────────────────────────────────────
