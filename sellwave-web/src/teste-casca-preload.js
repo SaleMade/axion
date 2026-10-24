@@ -106,7 +106,10 @@ contextBridge.exposeInMainWorld('sw', {
   // O 4898 RECUSA de proposito: e o caso em que o card tem que voltar pra onde estava.
   crmEtapa: (fone, etapa) => { chamadas.push({ nome: 'crmEtapa', args: [fone, etapa] }); return new Promise((r) => setTimeout(() => r(fone === '554598094898' ? { ok: false, erro: 'Sem acesso a essa conversa' } : { ok: true }), 120)) },
   // O numero do 4898 (77001122) esta FECHADO nesta maquina: o main manda a casca abrir ele.
-  crmConversa: (fone, instancia) => { chamadas.push({ nome: 'crmConversa', args: [fone, instancia] }); return Promise.resolve(/77001122$/.test(instancia) ? { ok: true, fechado: true, numero: '5515977001122' } : { ok: true, nk: '1992503977', abriu: true }) },
+  // O 66632248 (da Joana) "foi banido": o main responde semNumero e a casca oferece os outros numeros.
+  // A Cleuza (95983293, numero "Restrito" e fechado aqui): o main pergunta antes de abrir o de origem.
+  crmConversa: (fone, instancia, nk, origem) => { chamadas.push({ nome: 'crmConversa', args: nk ? [fone, instancia, nk] : origem ? [fone, instancia, '', true] : [fone, instancia] }); return Promise.resolve(nk ? { ok: true, nk, abriu: true } : (/95983293$/.test(instancia) && !origem) ? { ok: false, semNumero: true, origem: '5519995983293', erro: 'O número em que esse lead chegou está restrito. Escolha por qual número chamar.' } : /66632248$/.test(instancia) ? { ok: false, semNumero: true, erro: 'O número em que esse lead chegou foi banido. Escolha por qual número chamar.' } : /77001122$/.test(instancia) ? { ok: true, fechado: true, numero: '5515977001122' } : { ok: true, nk: '1992503977', abriu: true }) },
+  copiar: (texto) => { chamadas.push({ nome: 'copiar', args: [texto] }); return Promise.resolve({ ok: true }) },
   crmPedido: (fone) => { chamadas.push({ nome: 'crmPedido', args: [fone] }); return Promise.resolve({ ok: true, venda: { raw: ['Pedido Concluído', 'Nome: Maria do Carmo', 'CPF: 123'].join(String.fromCharCode(10)), valor: 297, ts: agoraS - 1500, nome: 'Maria do Carmo' } }) },
 })
 // O main avisando a casca (sw:area, sw:marcacao...), como o webContents.send faria.

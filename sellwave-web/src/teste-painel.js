@@ -1247,6 +1247,52 @@ app.whenReady().then(async () => {
   await js2('window.__avisaCasca("sw:marcacao", { prontos: 0, em: 0, faltavam: 0, numeros: 0 })')
   await espera(100)
   conta('sem numero conectado a faixa nao promete marcacao nenhuma', (await js2('document.getElementById("crm-marca").textContent.trim()')) === '')
+
+  // ── O TELEFONE INTEIRO, COPIAR E CHAMAR POR OUTRO NUMERO (24/10/2026, pedido do Bruno: o numero
+  // de origem foi banido e o CRM "comia" o telefone do lead) ─────────────────────────────────────
+  await js2('window.__swCrm.abre()')
+  await espera(300)
+  let ot = await js2('(() => { const b = document.querySelector(".crm-card[data-fone=\'5516982508480\'] .fone"); const r = b.getBoundingClientRect(); const p = b.closest(".crm-card").getBoundingClientRect(); return { txt: b.textContent.trim(), cabe: r.right <= p.right - 4 && b.scrollWidth <= b.clientWidth + 1, larg: Math.round(p.width) } })()')
+  conta('o telefone aparece inteiro e formatado, sem cortar', ot.txt === '(16) 98250-8480' && ot.cabe, JSON.stringify(ot))
+  await js2('document.querySelector(".crm-card[data-fone=\'5516982508480\'] .fone").click()')
+  await espera(150)
+  ot = await js2('({ copiou: (window.__ver()).filter(c => c.nome === "copiar").map(c => c.args[0]), conversa: (window.__ver()).filter(c => c.nome === "crmConversa").length, aberto: document.getElementById("crm").classList.contains("on"), txt: document.querySelector(".crm-card[data-fone=\'5516982508480\'] .fone").textContent.trim() })')
+  const conversasAntes = ot.conversa
+  conta('clicar no telefone copia ele com o +55 (e nao abre a conversa)', JSON.stringify(ot.copiou) === '["+5516982508480"]' && ot.aberto && /Copiado/.test(ot.txt), JSON.stringify(ot))
+  await js2('document.querySelector(".crm-card[data-fone=\'5516982508480\'] .outro").click()')
+  await espera(150)
+  ot = await js2('(() => { const m = document.getElementById("crm-menu"); return { aberto: !m.hidden, tit: m.querySelector(".tit").textContent, nums: [...m.querySelectorAll("button[data-nk]")].map(b => b.dataset.nk), copia: !!m.querySelector("button[data-copiar]") } })()')
+  conta('"Outro numero" lista os numeros abertos aqui e o copiar', ot.aberto && /Chamar Zélia Souza por/.test(ot.tit) && JSON.stringify(ot.nums) === '["1574060653"]' && ot.copia, JSON.stringify(ot))
+  await js2('document.querySelector("#crm-menu button[data-nk]").click()')
+  await espera(200)
+  ot = (await js2('window.__ver()')).filter((c) => c.nome === 'crmConversa').map((c) => c.args)
+  conta('escolher o numero abre a conversa daquele lead nele', JSON.stringify(ot[ot.length - 1]) === '["5516982508480","ax_atendente_vra3lh_92503977","1574060653"]' && ot.length === conversasAntes + 1, JSON.stringify(ot.slice(-1)))
+  // numero de origem banido: o clique no card ja oferece os outros
+  await js2('window.__swCrm.abre()')
+  await espera(300)
+  await js2('document.querySelector(".crm-card[data-fone=\'558481093434\']").click()')
+  await espera(250)
+  ot = await js2('(() => { const m = document.getElementById("crm-menu"); return { aberto: !m.hidden, tit: m.querySelector(".tit") ? m.querySelector(".tit").textContent : "", crm: document.getElementById("crm").classList.contains("on") } })()')
+  conta('numero de origem banido: o clique no card mostra o porque e os numeros pra chamar', ot.aberto && /foi banido/.test(ot.tit) && ot.crm, JSON.stringify(ot))
+  await js2('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))')
+  await espera(80)
+  ot = await js2('({ menu: document.getElementById("crm-menu").hidden, crm: document.getElementById("crm").classList.contains("on") })')
+  conta('o Esc fecha o menu primeiro e deixa o quadro aberto', ot.menu === true && ot.crm === true, JSON.stringify(ot))
+  // numero de origem RESTRITO e fechado aqui: o menu oferece abrir nele mesmo assim
+  await js2('window.__swCrm.abre()')
+  await espera(300)
+  await js2('document.querySelector(".crm-card[data-fone=\'553398306226\']").click()')
+  await espera(250)
+  ot = await js2('(() => { const m = document.getElementById("crm-menu"); const b = m.querySelector("button[data-origem]"); return { aberto: !m.hidden, tit: (m.querySelector(".tit") || {}).textContent || "", origem: b ? b.textContent : "" } })()')
+  conta('numero de origem restrito: o menu diz o porque e oferece abrir nele mesmo assim', ot.aberto && /está restrito/.test(ot.tit) && /Abrir no número de origem/.test(ot.origem) && /99598-3293/.test(ot.origem), JSON.stringify(ot))
+  await js2('document.querySelector("#crm-menu button[data-origem]").click()')
+  await espera(200)
+  ot = (await js2('window.__ver()')).filter((c) => c.nome === 'crmConversa').map((c) => c.args)
+  conta('e escolher isso abre no de origem, sem perguntar de novo', JSON.stringify(ot[ot.length - 1]) === '["553398306226","ax_atendente_vra3lh_95983293","",true]', JSON.stringify(ot.slice(-1)))
+  await js2('window.__swCrm.fecha()')
+  await espera(150)
+  await js2('window.__swCrm.fecha()')
+  await espera(150)
   // O SERVIDOR VENCE O CAMPO CRU: numero com em_uso true e apto false NAO ganha interruptor. Sem
   // esta conferencia, trocar o ternario por um OU devolveria o interruptor pra numero restrito, e
   // isso e mentira de tela no lado perigoso - o vendedor acharia que esta recebendo e nao esta.

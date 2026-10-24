@@ -35,7 +35,8 @@ contextBridge.exposeInMainWorld('sw', {
   crmAbrir: (aberto) => chamar('sw:crm-abrir', { aberto }),
   crmDados: (periodo, sig) => chamar('sw:crm-dados', { periodo, sig }),
   crmEtapa: (fone, etapa) => chamar('sw:crm-etapa', { fone, etapa }),
-  crmConversa: (fone, instancia) => chamar('sw:crm-conversa', { fone, instancia }),
+  crmConversa: (fone, instancia, nk, origem) => chamar('sw:crm-conversa', { fone, instancia, nk, origem }),
+  copiar: (texto) => chamar('sw:copiar', { texto }),
   crmPedido: (fone) => chamar('sw:crm-pedido', { fone }),
 
   // avisos vindos do processo principal

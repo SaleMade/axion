@@ -23,6 +23,8 @@
   const ICO_MSG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>'
   const ICO_DOC = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg>'
   const ICO_OK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+  const ICO_COPIA = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>'
+  const ICO_TROCA = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4"/><path d="M3 7h18"/><path d="M7 21l-4-4 4-4"/><path d="M21 17H3"/></svg>'
   const ICO_PESSOA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>'
 
   const pega = (id) => document.getElementById(id)
@@ -30,7 +32,7 @@
   if (!caixa) return
   const faixa = pega('crm-faixa'), mini = pega('crm-mini'), marca = pega('crm-marca'), marca2 = pega('crm-marca2')
   const topo = pega('crm-topo'), colunas = pega('crm-colunas'), aviso = pega('crm-aviso')
-  const pedido = pega('crm-pedido'), pedidoCorpo = pega('crm-pedido-corpo')
+  const pedido = pega('crm-pedido'), pedidoCorpo = pega('crm-pedido-corpo'), menu = pega('crm-menu')
   const escH = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
   let aberto = false
@@ -84,7 +86,7 @@
   function desenhaAberto(v) {
     aberto = !!v
     caixa.classList.toggle('on', aberto)
-    if (!aberto) { pedido.hidden = true; aviso.hidden = true }
+    if (!aberto) { pedido.hidden = true; aviso.hidden = true; menu.hidden = true }
     if (aberto) { desenha(); desenhaPeriodo() }
   }
   async function abre() {
@@ -109,6 +111,7 @@
     const m = document.getElementById('modal')
     if (m && m.classList.contains('on')) return
     if (!pedido.hidden) { pedido.hidden = true; return }
+    if (!menu.hidden) { fechaMenu(); return }
     fecha()
   })
   for (const b of pega('crm-per').querySelectorAll('button')) {
@@ -240,12 +243,16 @@
     const ini = iniciais(nome)
     const nl = Number(c.unread) || 0
     const ul = resumo(c.last_text)
-    return '<div class="crm-card" draggable="true" data-fone="' + escH(fone) + '" data-inst="' + escH(c.instance || '') + '" style="--c:' + e.cor + '">'
+    return '<div class="crm-card" draggable="true" data-fone="' + escH(fone) + '" data-inst="' + escH(c.instance || '') + '" data-nome="' + escH(nome) + '"'
+      + ' title="Clique pra abrir a conversa. Botão direito: chamar por outro número ou copiar o telefone." style="--c:' + e.cor + '">'
       + '<div class="l1"><span class="crm-av" style="background:' + corDe(fone) + '">' + (ini ? escH(ini) : ICO_PESSOA) + '</span>'
-      + '<div class="nm"><b>' + escH(nome) + '</b><small>+' + escH(fone) + '</small></div>'
+      + '<div class="nm"><b>' + escH(nome) + '</b></div>'
       + (nl > 0 ? '<span class="nl">' + (nl > 9 ? '9+' : nl) + '</span>' : '') + '</div>'
+      // O TELEFONE INTEIRO, NA LINHA DELE, E O CLIQUE COPIA (24/10/2026): do lado do avatar ele era
+      // cortado em "+5531886998...", e com o numero de origem banido o vendedor nao tinha como chamar o lead.
+      + '<button class="fone" data-copiar="+' + escH(fone) + '" title="Copiar +' + escH(fone) + '">' + escH(foneBonito(fone)) + ICO_COPIA + '</button>'
       + (ul ? '<div class="ul">' + escH(ul) + '</div>' : '')
-      + '<div class="l3"><span>' + ICO_MSG + ' Abrir conversa</span><time>' + escH(hora(c.last_ts)) + '</time></div>'
+      + '<div class="l3"><span>' + ICO_MSG + ' Abrir conversa</span><em><time>' + escH(hora(c.last_ts)) + '</time><button class="outro" title="Chamar esse lead por outro número aberto aqui">' + ICO_TROCA + '</button></em></div>'
       + (e.id === 'fechou' ? '<button class="ped" data-ped="' + escH(fone) + '">' + ICO_DOC + ' Ver Pedido Concluído</button>' : '')
       + '</div>'
   }
@@ -277,9 +284,70 @@
   colunas.addEventListener('click', (ev) => {
     const ped = ev.target.closest('.ped')
     if (ped) { ev.stopPropagation(); abrePedido(ped.dataset.ped); return }
+    const cp = ev.target.closest('.fone')
+    if (cp) { ev.stopPropagation(); copia(cp); return }
     const c = ev.target.closest('.crm-card')
-    if (c) abreConversa(c.dataset.fone, c.dataset.inst)
+    if (!c) return
+    if (ev.target.closest('.outro')) { ev.stopPropagation(); abreMenu(c, ''); return }
+    abreConversa(c.dataset.fone, c.dataset.inst, c)
   })
+
+  async function copia(el) {
+    let r = null
+    try { r = await window.sw.copiar(el.dataset.copiar) } catch (_) { r = null }
+    if (!r || !r.ok) { avisa('Não consegui copiar. O número é ' + el.dataset.copiar); return }
+    const antes = el.innerHTML
+    el.classList.add('copiou')
+    el.innerHTML = 'Copiado ' + ICO_OK
+    setTimeout(() => { el.classList.remove('copiou'); el.innerHTML = antes }, 1500)
+  }
+
+  // CHAMAR POR OUTRO NUMERO (24/10/2026). Lista os numeros abertos aqui; o escolhido abre a conversa
+  // daquele telefone (a que ja existe ou uma nova). Tambem abre sozinho quando o numero de origem foi
+  // banido ou saiu da lista (o main responde `semNumero`), com o porque em cima.
+  let menuDe = null
+  function abreMenu(cardEl, porque, origem) {
+    menuDe = { fone: cardEl.dataset.fone, inst: cardEl.dataset.inst, nome: cardEl.dataset.nome || '' }
+    const abertos = (typeof estado !== 'undefined' && estado && Array.isArray(estado.abertos)) ? estado.abertos : []
+    const nums = (typeof estado !== 'undefined' && estado && Array.isArray(estado.numeros)) ? estado.numeros : []
+    const k8 = (String(menuDe.inst).match(/_(\d{8})$/) || [])[1] || ''
+    const nomeNum = (nk) => { const n = nums.find((x) => String(x.numero || '').replace(/\D/g, '').slice(-8) === String(nk).slice(-8)); return (n && n.dono) || '' }
+    let html = '<div class="tit">' + escH(porque || ('Chamar ' + (menuDe.nome || 'esse lead') + ' por:')) + '</div>'
+    const lista = abertos.filter((nk) => String(nk).slice(-8) !== k8)
+    if (lista.length) {
+      html += lista.map((nk) => '<button data-nk="' + escH(nk) + '">' + ICO_MSG + ' ' + escH(foneBonito(nk)) + '<small>' + escH(nomeNum(nk)) + '</small></button>').join('')
+    } else {
+      html += '<div class="vazio">Nenhum outro número aberto aqui. Abra um na lista e tente de novo.</div>'
+    }
+    html += '<hr><button data-copiar="+' + escH(menuDe.fone) + '">' + ICO_COPIA + ' Copiar o número<small>' + escH(foneBonito(menuDe.fone)) + '</small></button>'
+    if (origem) html += '<button data-origem="1">' + ICO_MSG + ' Abrir no número de origem<small>' + escH(foneBonito(origem)) + '</small></button>'
+    menu.innerHTML = html
+    menu.hidden = false
+    // perto do card, sem sair da area do CRM
+    const rc = cardEl.getBoundingClientRect(), rb = caixa.getBoundingClientRect()
+    const larg = menu.offsetWidth || 240, alt = menu.offsetHeight || 160
+    let x = rc.left - rb.left, y = rc.bottom - rb.top + 4
+    if (x + larg > rb.width - 8) x = Math.max(8, rb.width - larg - 8)
+    if (y + alt > rb.height - 8) y = Math.max(8, rc.top - rb.top - alt - 4)
+    menu.style.left = x + 'px'; menu.style.top = y + 'px'
+  }
+  function fechaMenu() { menu.hidden = true; menuDe = null }
+  menu.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button')
+    if (!b || !menuDe) return
+    const de = menuDe
+    if (b.dataset.copiar) { fechaMenu(); try { await window.sw.copiar(b.dataset.copiar) } catch (_) { /* ok */ } avisa('Número copiado: ' + b.dataset.copiar); return }
+    if (b.dataset.nk) { fechaMenu(); abreConversa(de.fone, de.inst, null, b.dataset.nk) }
+    if (b.dataset.origem) { fechaMenu(); abreConversa(de.fone, de.inst, null, '', true) }
+  })
+  // BOTAO DIREITO NO CARD: o mesmo menu (o CRM da dash tambem abre as opcoes no botao direito)
+  colunas.addEventListener('contextmenu', (ev) => {
+    const c = ev.target.closest && ev.target.closest('.crm-card')
+    if (!c) return
+    ev.preventDefault()
+    abreMenu(c, '')
+  })
+  document.addEventListener('mousedown', (ev) => { if (!menu.hidden && !menu.contains(ev.target) && !ev.target.closest('.outro')) fechaMenu() })
   colunas.addEventListener('dragstart', (ev) => {
     const c = ev.target.closest && ev.target.closest('.crm-card')
     if (!c) return
@@ -328,9 +396,10 @@
     avisa('Não salvou: ' + ((r && r.erro) || 'a dash não respondeu') + '. O card voltou pra onde estava.')
   }
 
-  async function abreConversa(fone, inst) {
+  async function abreConversa(fone, inst, cardEl, nk, naOrigem) {
     let r = null
-    try { r = await window.sw.crmConversa(fone, inst) } catch (_) { r = null }
+    try { r = await window.sw.crmConversa(fone, inst, nk || '', !!naOrigem) } catch (_) { r = null }
+    if (r && r.semNumero && cardEl) { abreMenu(cardEl, r.erro || 'Escolha por qual número chamar.', r.origem || ''); return }
     if (!r || !r.ok) { avisa((r && r.erro) || 'Não consegui abrir essa conversa agora.'); return }
     desenhaAberto(false)
     // NUMERO FECHADO: abre pelo caminho de sempre da lista (com a trava de "em uso"); a conversa

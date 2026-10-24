@@ -2658,9 +2658,24 @@ function crmAbrePendente(s) {
   // O WhatsApp diz "pronto" antes de terminar de montar a lista de conversas: um respiro antes.
   setTimeout(() => { abreConversaNa(s.nk, p.fone).catch(() => {}) }, 2500)
 }
-ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia }) => {
+ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia, nk: escolhido, origem: naOrigem }) => {
+  // CHAMAR POR OUTRO NUMERO (24/10/2026, pedido do Bruno: o numero em que o lead chegou foi banido, e
+  // o vendedor nao tinha como chamar o lead por outro). O vendedor escolhe um numero ABERTO aqui e a
+  // conversa abre nele: o motor acha a conversa que ja existe ou comeca uma nova com aquele telefone.
+  if (escolhido) {
+    const nkE = numKey(escolhido)
+    if (!abertos.has(nkE)) return { ok: false, erro: 'Esse número não está aberto aqui. Abra ele na lista primeiro.' }
+    defineCrm(false)
+    mostra(nkE)
+    const abriu = await abreConversaNa(nkE, fone)
+    return { ok: true, nk: nkE, abriu }
+  }
   const k8 = (String(instancia || '').match(/_(\d{8})$/) || [])[1] || ''
-  if (!k8) return { ok: false, erro: 'Não sei em qual número essa conversa chegou.' }
+  if (!k8) return { ok: false, semNumero: true, erro: 'Não sei em qual número essa conversa chegou. Escolha por qual chamar.' }
+  const n = (config.numeros || []).find((x) => x && numKey(x.numero).slice(-8) === k8)
+  // O NUMERO DE ORIGEM SAIU (banido some da lista; ou nunca foi desta pessoa): em vez de erro, a casca
+  // oferece os numeros abertos aqui pra chamar o lead por outro.
+  if (!n || n.banido) return { ok: false, semNumero: true, erro: 'O número em que esse lead chegou ' + (n ? 'foi banido' : 'não está mais na sua lista') + '. Escolha por qual número chamar.' }
   const nk = [...abertos.keys()].find((k) => k.slice(-8) === k8)
   if (nk) {
     defineCrm(false)
@@ -2668,8 +2683,12 @@ ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia }) => {
     const abriu = await abreConversaNa(nk, fone)
     return { ok: true, nk, abriu }
   }
-  const n = (config.numeros || []).find((x) => x && numKey(x.numero).slice(-8) === k8)
-  if (!n) return { ok: false, erro: 'Esse lead chegou num número que não está na sua lista.' }
+  // FECHADO E FORA DE USO (Restrito, Em analise): antes de abrir ele, pergunta. O vendedor pode chamar
+  // por outro numero ou abrir o de origem mesmo assim.
+  if (n.apto === false && !naOrigem) {
+    return { ok: false, semNumero: true, origem: n.numero,
+      erro: 'O número em que esse lead chegou está ' + String(n.status || 'fora de uso').toLowerCase() + '. Escolha por qual número chamar.' }
+  }
   crmPendente = { k8, fone: String(fone), ate: Date.now() + 300000 }
   defineCrm(false)
   return { ok: true, fechado: true, numero: n.numero }
@@ -4063,6 +4082,11 @@ ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } 
 // de progresso nova pra manter e nenhuma vantagem. O navegador ja sabe fazer isso, e a rota e
 // publica de proposito (um <a href> nao manda Authorization).
 ipcMain.handle('sw:uso-soltar', async (_e, { nk }) => { await soltaUso(numKey(nk)); return { ok: true } })
+// COPIAR (24/10/2026): o telefone do lead no CRM. Pelo processo principal, que nao depende de a casca
+// estar em foco nem da permissao de area de transferencia da pagina.
+ipcMain.handle('sw:copiar', (_e, { texto }) => {
+  try { clipboard.writeText(String(texto || '').slice(0, 200)); return { ok: true } } catch (_) { return { ok: false } }
+})
 // FECHAR NO COMPUTADOR DE QUEM ESTA COM O NUMERO (24/10/2026, pedido do Bruno: "eu sou o responsavel
 // por reconectar o WhatsApp, entao eu tenho que ter essa autonomia"). E o mesmo "liberar a forca" que a
 // tela Ferramentas > SellWave Web da dash ja faz (soltar + forcar no /api/swweb/uso, so a direcao): o

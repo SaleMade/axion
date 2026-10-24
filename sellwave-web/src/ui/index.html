@@ -435,7 +435,7 @@
     border: 1px solid var(--linha); color: var(--apagado); font-size: 12px; white-space: nowrap; }
   .crm-volta:hover { color: var(--texto); background: rgba(255, 255, 255, .05); }
   .crm-colunas { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 0 12px 12px; overflow-x: auto; }
-  .crm-col { flex: 1 1 0; min-width: 158px; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px;
+  .crm-col { flex: 1 1 0; min-width: 172px; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-top: 3px solid var(--c);
     background: linear-gradient(180deg, color-mix(in srgb, var(--c) 23%, transparent) 0%, color-mix(in srgb, var(--c) 9%, transparent) 200px, color-mix(in srgb, var(--c) 7%, transparent) 100%); }
   .crm-col.alvo { box-shadow: 0 0 0 2px rgba(36, 194, 120, .5); }
@@ -461,6 +461,27 @@
   .crm-card .nm { min-width: 0; flex: 1; }
   .crm-card .nm b { display: block; font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .crm-card .nm small { display: block; font-size: 11px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* O TELEFONE INTEIRO E COPIAVEL (24/10/2026): era "+5531886998..." cortado, e com o numero de origem
+     banido o vendedor nao tinha como chamar o lead. Formatado curto pra caber, e o clique copia. */
+  .crm-card .fone { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 5px 0 0 -3px; font-size: 11.5px; color: var(--apagado);
+    white-space: nowrap; font-variant-numeric: tabular-nums; border-radius: 5px; padding: 1px 3px; }
+  .crm-card .fone:hover { color: var(--texto); background: rgba(255, 255, 255, .06); }
+  .crm-card .fone.copiou { color: #24c278; }
+  .crm-card .l3 { gap: 6px; }
+  .crm-card .l3 > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crm-card .l3 em { flex: 0 0 auto; font-style: normal; display: inline-flex; align-items: center; gap: 6px; }
+  .crm-card .l3 .outro { display: inline-flex; align-items: center; color: var(--apagado); border-radius: 6px; padding: 3px 5px; margin: -3px -5px -3px 0; }
+  .crm-card .l3 .outro svg { width: 13px; height: 13px; }
+  .crm-card .l3 .outro:hover { color: var(--texto); background: rgba(255, 255, 255, .06); }
+  .crm-menu { position: absolute; z-index: 4; min-width: 230px; max-width: 300px; background: #1d2330; border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); padding: 6px; }
+  .crm-menu[hidden] { display: none; }
+  .crm-menu .tit { font-size: 11.5px; color: var(--apagado); padding: 4px 8px 6px; line-height: 1.4; }
+  .crm-menu button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; font-size: 12.5px; text-align: left; }
+  .crm-menu button:hover { background: rgba(255, 255, 255, .06); }
+  .crm-menu button small { margin-left: auto; color: var(--apagado); font-size: 11px; }
+  .crm-menu hr { border: 0; border-top: 1px solid var(--linha); margin: 4px 2px; }
+  .crm-menu .vazio { font-size: 12px; color: var(--apagado); padding: 4px 8px 6px; }
   .crm-card .nl { flex: 0 0 auto; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; background: #10b981; color: #fff; font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
   .crm-card .ul { margin-top: 6px; font-size: 11.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .crm-card .l3 { margin-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; color: var(--apagado); }
@@ -654,6 +675,7 @@
       <div class="crm-colunas" id="crm-colunas"></div>
     </div>
     <div class="crm-aviso" id="crm-aviso" hidden></div>
+    <div class="crm-menu" id="crm-menu" hidden></div>
     <div class="crm-pedido" id="crm-pedido" hidden><div class="cartao" id="crm-pedido-corpo"></div></div>
   </section>
 
