@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('sw', {
   salvarProxy: (d) => chamar('sw:proxy-salvar', d),
   verComo: (id) => chamar('sw:como', { id }),
   soltarUso: (nk) => chamar('sw:uso-soltar', { nk }),
+  // so a direcao: fecha o numero no computador de quem esta com ele (24/10/2026)
+  usoForcar: (nk) => chamar('sw:uso-forcar', { nk }),
   barra: (encolhida) => chamar('sw:barra', { encolhida }),
   // O CRM DO ATENDIMENTO (23/10/2026): abrir/fechar o quadro, ler, mover de etapa, abrir a conversa
   // do card e ver o Pedido Concluido. Tudo vai pela dash, com o login de quem esta no app.

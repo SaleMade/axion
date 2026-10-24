@@ -4063,6 +4063,28 @@ ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } 
 // de progresso nova pra manter e nenhuma vantagem. O navegador ja sabe fazer isso, e a rota e
 // publica de proposito (um <a href> nao manda Authorization).
 ipcMain.handle('sw:uso-soltar', async (_e, { nk }) => { await soltaUso(numKey(nk)); return { ok: true } })
+// FECHAR NO COMPUTADOR DE QUEM ESTA COM O NUMERO (24/10/2026, pedido do Bruno: "eu sou o responsavel
+// por reconectar o WhatsApp, entao eu tenho que ter essa autonomia"). E o mesmo "liberar a forca" que a
+// tela Ferramentas > SellWave Web da dash ja faz (soltar + forcar no /api/swweb/uso, so a direcao): o
+// servidor apaga o aluguel e poe a maquina dele em quarentena por 3 min, e o app dele fecha o numero
+// na renovacao seguinte (ate 45 s, ver perdeuONumero). A casca espera esse tempo antes de abrir aqui,
+// pra nao ficar o mesmo WhatsApp aberto em dois computadores.
+ipcMain.handle('sw:uso-forcar', async (_e, { nk }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  if (!config.direcao || comoId) return { ok: false, erro: 'Só a direção fecha número no computador de outra pessoa.' }
+  const chave = numKey(nk)
+  if (!chave) return { ok: false, erro: 'Número inválido.' }
+  try {
+    const r = await fetch(baseApi() + '/api/swweb/uso', {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify({ nk: chave, soltar: true, forcar: true }), signal: AbortSignal.timeout(15000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('A dash respondeu ' + r.status + '.') }
+    anota('[uso] ' + chave + ' fechado a forca no computador de ' + ((d && d.estava) || '?') + ' pela direcao')
+    return { ok: true, soltou: !!(d && d.soltou), jaLivre: !!(d && d.jaLivre), estava: String((d && d.estava) || '') }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
 
 ipcMain.handle('sw:abrirInstalador', () => {
   const url = urlInstalador || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/instalador')

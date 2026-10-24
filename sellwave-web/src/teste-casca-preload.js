@@ -14,6 +14,8 @@ let maxAbertos = 6
 const URL_FOTO_GUI = 'https://axion-api.axion-dash.workers.dev/api/users/foto/a1/h1'
 let fotos = {}
 const ouvintes = {}
+// O ALUGUEL DE OUTRA PESSOA (24/10/2026): o teste do "Fechar no computador de" poe e tira
+const usoExtra = {}
 // O CRM DO ATENDIMENTO (23/10/2026): o quadro que o /api/wa/crm devolveria. Um card por etapa e dois
 // em Lead Novo; Em Atendimento passa do limite (1.234 no total, 1 na tela) pra conferir o rodape.
 const agoraS = Math.floor(Date.now() / 1000)
@@ -56,7 +58,7 @@ const ESTADO = () => ({
     // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
     { numero: '5515974068551', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2 } },
     // estado que NAO recebe: sem interruptor
-    { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise' },
+    { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise', ...(usoExtra['5515977001122'] ? { uso: usoExtra['5515977001122'] } : {}) },
     // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e
     // ninguem limpou o campo). Quem manda e o `apto`: o interruptor NAO pode aparecer.
     { numero: '5515977003344', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: true, apto: false, status: 'Restrito' },
@@ -98,6 +100,7 @@ contextBridge.exposeInMainWorld('sw', {
     return Promise.resolve({ ok: true, maxAbertos })
   },
   ao: (canal, fn) => { (ouvintes[canal] = ouvintes[canal] || []).push(fn) },
+  usoForcar: (nk) => { chamadas.push({ nome: 'usoForcar', args: [nk] }); delete usoExtra['5515977001122']; return Promise.resolve({ ok: true, soltou: true, forcado: true, estava: 'Guilherme' }) },
   crmAbrir: (aberto) => { chamadas.push({ nome: 'crmAbrir', args: [aberto] }); return Promise.resolve({ ok: true, aberto }) },
   crmDados: (periodo, sig) => { chamadas.push({ nome: 'crmDados', args: [periodo, sig] }); return Promise.resolve(sig === CRM.sig ? { ok: true, igual: true, sig, marcacao: MARCACAO } : { ...JSON.parse(JSON.stringify(CRM)), marcacao: MARCACAO }) },
   // O 4898 RECUSA de proposito: e o caso em que o card tem que voltar pra onde estava.
@@ -107,6 +110,7 @@ contextBridge.exposeInMainWorld('sw', {
   crmPedido: (fone) => { chamadas.push({ nome: 'crmPedido', args: [fone] }); return Promise.resolve({ ok: true, venda: { raw: ['Pedido Concluído', 'Nome: Maria do Carmo', 'CPF: 123'].join(String.fromCharCode(10)), valor: 297, ts: agoraS - 1500, nome: 'Maria do Carmo' } }) },
 })
 // O main avisando a casca (sw:area, sw:marcacao...), como o webContents.send faria.
+contextBridge.exposeInMainWorld('__poeUso', (numero, uso) => { if (uso) usoExtra[numero] = uso; else delete usoExtra[numero] })
 contextBridge.exposeInMainWorld('__avisaCasca', (canal, dados) => { if (canal === 'sw:marcacao') MARCACAO = dados; for (const fn of ouvintes[canal] || []) fn(dados) })
 // O main terminou de baixar as fotos: grava no estado e avisa a barra, como o main.js faz.
 contextBridge.exposeInMainWorld('__fotosChegaram', () => {

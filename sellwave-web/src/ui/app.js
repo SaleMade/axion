@@ -623,9 +623,76 @@ function seloConn(n) {
 
 // A assinatura do que a telaAbrir esta mostrando, pro recarregaEstado so redesenhar quando mudar.
 let travaDesenhada = ''
+// FECHAR NO COMPUTADOR DE OUTRA PESSOA (24/10/2026, so a direcao). Numero -> quando pediu. Enquanto
+// o app de la nao solta (ate 45 s), a tela mostra a contagem e abre aqui sozinha no fim.
+const forcados = new Map()
+const forcadoDe = new Map()
+const ESPERA_FORCAR_MS = 55000
+let forcarArmado = ''
+let forcarRelogio = 0
+function telaForcando(nk, n) {
+  const falta = Math.max(0, Math.ceil((ESPERA_FORCAR_MS - (Date.now() - forcados.get(nk))) / 1000))
+  const quem = forcadoDe.get(nk)
+  palco.innerHTML = '<div class="abrir">'
+    + '<span class="zapg trancado"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>'
+    + '<h2>' + esc(bonito(cheio(nk))) + '</h2>'
+    + (n && n.dono ? '<p class="de">' + esc(n.dono) + '</p>' : '')
+    + '<div class="estado alerta" role="status"><span class="pt"></span>Fechando no computador ' + esc(quem ? 'de ' + quem : 'da outra pessoa') + '</div>'
+    + '<p class="espera" id="ab-espera">O WhatsApp abre aqui em <b>' + falta + ' s</b>, quando o app de lá soltar o número.</p>'
+    + '</div>'
+}
+async function forcarFechar(nk, nome) {
+  const rotulo = nome ? 'no computador de ' + nome : 'no outro computador'
+  if (forcarArmado !== nk) {
+    forcarArmado = nk
+    const b = $('ab-forcar')
+    if (b) { b.classList.add('armado'); b.textContent = 'Clique de novo pra fechar ' + rotulo }
+    setTimeout(() => {
+      if (forcarArmado !== nk) return
+      forcarArmado = ''
+      const x = $('ab-forcar')
+      if (x) { x.classList.remove('armado'); x.textContent = 'Fechar ' + rotulo }
+    }, 4000)
+    return
+  }
+  forcarArmado = ''
+  const b = $('ab-forcar')
+  if (b) { b.disabled = true; b.textContent = 'Fechando...' }
+  let r = null
+  try { r = await window.sw.usoForcar(nk) } catch (_) { r = null }
+  if (!r || !r.ok) {
+    if (b) { b.disabled = false; b.classList.remove('armado'); b.textContent = (r && r.erro) || 'Não consegui fechar agora. Tente de novo.' }
+    return
+  }
+  forcados.set(nk, Date.now())
+  forcadoDe.set(nk, r.estava || nome || '')
+  clearInterval(forcarRelogio)
+  forcarRelogio = setInterval(() => {
+    if (!forcados.has(nk)) { clearInterval(forcarRelogio); return }
+    if (Date.now() - forcados.get(nk) >= ESPERA_FORCAR_MS) {
+      clearInterval(forcarRelogio)
+      forcados.delete(nk)
+      // so abre se ele continua nesta tela: se clicou em outro numero no meio, nao rouba a tela dele
+      if (ativo === nk) abrirDeVerdade(nk)
+      return
+    }
+    if (ativo === nk) telaForcando(nk, (estado.numeros || []).find((x) => numKey(x.numero) === nk))
+  }, 1000)
+  if (ativo === nk) telaForcando(nk, (estado.numeros || []).find((x) => numKey(x.numero) === nk))
+}
+
 function telaAbrir(nk) {
   const n = (estado.numeros || []).find((x) => numKey(x.numero) === nk)
   if (!n) return telaVazia()
+  // FECHANDO LA: a releitura de 20 s redesenha esta tela (o aluguel ja sumiu e ela mostraria "Abrir
+  // WhatsApp"); o vendedor abriria antes do app de la soltar. Enquanto conta, a tela e a da contagem.
+  if (forcados.has(nk) && Date.now() - forcados.get(nk) < ESPERA_FORCAR_MS) {
+    window.sw.esconder()
+    ativo = nk
+    telaForcando(nk, n)
+    desenhaLista()
+    return
+  }
   travaDesenhada = [n.uso ? (n.uso.meu ? 'meu' : 'de:' + (n.uso.nome || '?')) : 'livre',
     (n.conn && n.conn.st) || '-', (estado.destacados || []).includes(nk) ? 'dst' : ''].join('|')
   window.sw.esconder()
@@ -655,6 +722,12 @@ function telaAbrir(nk) {
             + 'Quando a outra pessoa fechar, este botão libera sozinho, em até 2 minutos.')
         + '</div>'
         + '<button class="principal" disabled style="margin-top:14px">Em uso</button>'
+        // SO A DIRECAO (fora do "ver como"): fecha la e abre aqui (24/10/2026).
+        + (estado.direcao && !estado.como
+          ? '<button class="forcar" id="ab-forcar" title="Fecha este número no computador de quem está com ele. O WhatsApp abre aqui em seguida.">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+            + 'Fechar ' + (ocupado.mesmaPessoa ? 'no outro computador' : 'no computador de ' + esc(ocupado.nome || 'outra pessoa')) + '</button>'
+          : '')
       : '<div class="abrir-acoes">'
         + '<button class="principal" id="ab-abrir">' + (jaAberto ? 'Ver aqui' : 'Abrir WhatsApp') + '</button>'
         // A SETINHA PRA FORA. Mesma altura e mesmo verde do botao do lado, so quadrado.
@@ -669,6 +742,8 @@ function telaAbrir(nk) {
     + '</div>'
   const b = $('ab-abrir')
   if (b) b.onclick = () => (jaAberto ? abrir(n.numero) : abrirDeVerdade(nk))
+  const fx = $('ab-forcar')
+  if (fx) fx.onclick = () => forcarFechar(nk, ocupado && !ocupado.mesmaPessoa ? (ocupado.nome || '') : '')
   const dst = $('ab-destacar')
   if (dst) {
     dst.onclick = async () => {
