@@ -38,13 +38,17 @@ for (const nome of ['_alarmeNumeroMudo', '_alarmeCapturaParada']) {
   ok(/aviso: true/.test(b), nome + ' manda marcado como aviso');
   const corpos = [...b.matchAll(/body: ([^\n]+)/g)].map((m) => m[1]);
   ok(corpos.length > 0, nome + ' tem corpo de mensagem');
-  // o texto longo tinha mais de 200 caracteres de literal; o curto cabe numa olhada
-  for (const c of corpos) ok(c.length < 190, nome + ': o corpo ficou curto (' + c.length + ' caracteres de codigo)');
 }
 
+// O QUE O AVISO PRECISA DIZER, nao as palavras exatas. O texto foi reescrito depois (a versao de
+// agora separa "fechado no SellWave Web" de "nao esta marcando os leads" e diz ha quanto tempo, o
+// que e melhor que o meu original). A guarda fica no sentido: qual numero, que ele saiu da roleta e
+// o que fazer - era tudo isso que o paragrafo antigo enterrava.
 const bNum = bloco('_alarmeNumeroMudo');
-ok(/parou de receber/.test(bNum), 'o titulo diz que o numero parou de receber');
-ok(/Tirei ele da roleta/.test(bNum), 'e o corpo diz o que foi feito: tirei da roleta');
+ok(/const titulo = /.test(bNum), 'o aviso monta um titulo proprio');
+ok(/fim \+/.test(bNum) || /\+ fim/.test(bNum), 'e o titulo carrega o NUMERO');
+ok(/fora da roleta|saiu da roleta/.test(bNum), 'o corpo diz que o numero saiu da roleta');
+ok(/SellWave Web/.test(bNum), 'e diz o que fazer: mexer no SellWave Web');
 
 // ── o app cria o canal de aviso SEM som proprio ──────────────────────────────────────────────
 const i = nativo.indexOf("id: 'avisos'");

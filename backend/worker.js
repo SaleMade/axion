@@ -7996,13 +7996,23 @@ async function handleGastoEstorno(req, env) {
 async function handleSaqueUpdate(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
-  if (!isDirector(u)) return err('Apenas o Financeiro pode processar saques', 403);
+  // O AFILIADO PAGA O PROPRIO TIME (23/10/2026, pedido do Bruno: a vendedora do Giovane pediu saque
+  // e ele nao tinha como registrar o pagamento). Ate aqui esta rota era so do diretor da casa, e o
+  // afiliado ficava com o pedido parado na mao sem tela pra resolver.
+  //
+  // O RECORTE E O MESMO DO RESTO DA DASH: ele e dono do mundo DELE, entao processa saque de quem
+  // tem `users.afiliado_id` igual ao mundo dele, e de mais ninguem. Quem confere e o servidor, logo
+  // abaixo, depois de achar o saque - a tela so decide se mostra o botao.
+  const _chefeDoMundo = (() => { try { return isAfiliado(u) && !afiliadoSemVinculo(u); } catch (_) { return false; } })();
+  const _meuMundo = _chefeDoMundo ? String(aflDe(u) || '') : '';
+  if (!isDirector(u) && !(_chefeDoMundo && _meuMundo)) return err('Apenas o Financeiro pode processar saques', 403);
   const body = await req.json().catch(() => ({}));
   const id = body && body.id;
   const status = String((body && body.status) || '').toLowerCase();
   if (id == null) return err('id obrigatório');
   if (!['pago', 'recusado', 'aprovado', 'pendente'].includes(status)) return err('status inválido');
   const nowSec = Math.floor(Date.now() / 1000);
+  let mundoSaque = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
@@ -8010,6 +8020,17 @@ async function handleSaqueUpdate(req, env) {
     const arr = Array.isArray(data.saques) ? data.saques : [];
     const s = arr.find((x) => String(x.id) === String(id));
     if (!s) return err('Saque não encontrado', 404);
+    // DE QUE MUNDO E ESTE SAQUE: vazio = casa, 'afl_x' = time daquele afiliado. Resolvido uma vez e
+    // reusado nas voltas do CAS.
+    if (mundoSaque === null) {
+      try {
+        const _ru = await env.DB.prepare("SELECT COALESCE(afiliado_id,'') afl FROM users WHERE id = ?").bind(String(s.user_id || '')).first();
+        mundoSaque = String((_ru && _ru.afl) || '');
+      } catch (_) { mundoSaque = ''; }
+    }
+    // Afiliado so mexe no time dele; e saque de afiliado o diretor da casa tambem processa (ele
+    // continua podendo resolver tudo, que e como as outras telas da casa funcionam).
+    if (!isDirector(u) && String(mundoSaque || '') !== _meuMundo) return err('Este saque não é da sua equipe', 403);
     s.status = status;
     if (status === 'pago') {
       s.pago_em = nowSec; s.pago_por = String(u.id);
@@ -8017,7 +8038,9 @@ async function handleSaqueUpdate(req, env) {
       if (!Array.isArray(data.payouts)) data.payouts = [];
       if (!data.payouts.some((p) => String(p.saque_id) === String(s.id))) {
         const pid = data.payouts.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0) + 1;
-        data.payouts.unshift({ id: pid, saque_id: s.id, user_id: s.user_id, nome: s.nome, valor: s.valor, kind: 'saque', ts: nowSec, por: String(u.id) });
+        // `afl` carimba de quem e o repasse. Sem ele, o pagamento que o afiliado faz pro vendedor
+        // DELE entraria no livro da casa como se fosse dinheiro do Bruno.
+        data.payouts.unshift({ id: pid, saque_id: s.id, user_id: s.user_id, nome: s.nome, valor: s.valor, kind: 'saque', ts: nowSec, por: String(u.id), afl: String(mundoSaque || '') });
       }
       // O DINHEIRO PRECISA APARECER NO CAIXA (22/09/2026). Ate aqui, marcar como pago so gravava a
       // linha do `payouts` acima - e NENHUMA tela da dash le essa chave (ela so aparece no rotulo da
@@ -8035,8 +8058,13 @@ async function handleSaqueUpdate(req, env) {
       // caro. `pagamento_equipe` e o unico tipo que o custo fixo le como pago, e e exatamente o que
       // o Bruno lancava a mao ate hoje. Se um dia a comissao interna entrar no funil por
       // competencia, E ESTE TIPO que muda.
+      // A SAIDA DE CAIXA E SO DA CASA (23/10/2026). `data.lancamentos` alimenta o Caixa, o extrato e
+      // o DRE do BRUNO, e nao tem recorte por mundo. O afiliado paga o vendedor dele com o dinheiro
+      // dele: lancar aqui faria o saque da equipe do Giovane virar despesa do Bruno e derrubar o
+      // lucro dele por um dinheiro que nunca saiu da conta dele. O repasse fica registrado no
+      // `payouts`, carimbado com o mundo, que e onde ele pertence.
       if (!Array.isArray(data.lancamentos)) data.lancamentos = [];
-      if (!data.lancamentos.some((l) => l && String(l.saque_id) === String(s.id))) {
+      if (!mundoSaque && !data.lancamentos.some((l) => l && String(l.saque_id) === String(s.id))) {
         data.lancamentos.unshift({
           id: 'lc_saque' + s.id,
           // -3h: `dt` e data de Brasilia, nao UTC. Sem isso, pagamento feito depois das 21h nasce com
