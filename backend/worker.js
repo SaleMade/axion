@@ -24137,10 +24137,17 @@ let _capParadaIdx = false;
 // AGORA:
 //  - so avisa quem continua preso depois de MUDO_AVISO_VENDEDOR. O que se resolve sozinho em minutos
 //    (o caso do 3977) nunca vira notificacao;
-//  - a frase diz o que e: "nao esta marcando os leads" quando alguem esta com o numero aberto, e "esta
-//    fechado no SellWave Web" quando ninguem esta. E diz o que fazer, que agora resolve de verdade:
-//    fechar e abrir (ou abrir), e ele volta sozinho na primeira mensagem que chegar na dash (reabrir
-//    nao solta: so a mensagem prova que a captura voltou, ver o _numerosMudos);
+//  - a frase diz o que e: "nao esta marcando os leads". E diz o que fazer: fechar e abrir, e ele volta
+//    sozinho na primeira mensagem que chegar na dash (reabrir nao solta: so a mensagem prova que a
+//    captura voltou, ver o _numerosMudos);
+//  - NUMERO QUE NINGUEM ESTA COM ABERTO NAO AVISA NINGUEM (24/10/2026, pedido do Bruno: "recebi
+//    diversas mensagens hoje a noite de que a Barbara e outros vendedores nao estavam com o SellWave Web
+//    aberto (...) eles estao dormindo (...) nao faz sentido"). Foram 14 avisos "esta fechado" entre
+//    23/10 18h e 24/10 9h, o mesmo numero de novo a cada 6 h. Fechado fora do expediente e o normal: a
+//    roleta ja tira ele (nao recebe clique sem captura), e avisar so ensina a ignorar. O aviso e so pra
+//    quem ESTA com o numero aberto e ele nao marca, que e defeito de verdade. E o tempo conta de quando
+//    a pessoa abriu (o aluguel), nao de quando ele foi preso: quem abre de manha um numero preso de
+//    madrugada tem 10 min antes do aviso, igual a todo mundo;
 //  - a direcao so recebe se o problema passar de MUDO_AVISO_DIRECAO sem conserto. O vendedor resolve
 //    sozinho na maioria das vezes, e aviso que ninguem precisa ler ensina a ignorar o que importa;
 //  - o trinco e de 6 h desde o aviso, mesmo que o numero volte e caia de novo no meio. Numero que
@@ -24160,8 +24167,19 @@ async function _alarmeNumeroMudo(env) {
     const ult = Math.max(Number((ja[k] && ja[k].v) || 0), Number((ja[k] && ja[k].d) || 0));
     if (agora - ult > 21600) { delete ja[k]; mudouJa = true; }
   }
+  // QUEM ESTA COM O NUMERO ABERTO AGORA: o aluguel do SellWave Web que ainda vale, e desde quando.
+  // So consulta com alguem preso; sem saber (leitura falhou), nao avisa: na duvida, silencio.
+  let aberto = {};
+  if (Object.keys(presos).length) {
+    try {
+      const r = await env.DB.prepare('SELECT nk, desde, ate FROM swweb_uso WHERE ate > ?').bind(agora).all();
+      for (const x of ((r && r.results) || [])) aberto[String(x.nk || '').slice(-8)] = Number(x.desde) || agora;
+    } catch (_) { aberto = {}; }
+  }
+  const haDe = (k) => agora - Math.max(Number(presos[k]) || agora, Number(aberto[k]) || 0);
   const pend = Object.keys(presos).filter((k) => {
-    const ha = agora - (Number(presos[k]) || agora);
+    if (!aberto[k]) return false;
+    const ha = haDe(k);
     const j = ja[k] || {};
     return (ha >= MUDO_AVISO_VENDEDOR && !j.v) || (ha >= MUDO_AVISO_DIRECAO && !j.d);
   });
@@ -24178,12 +24196,6 @@ async function _alarmeNumeroMudo(env) {
       const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
       direcao = ((us && us.results) || []).map((x) => String(x.id));
     } catch (_) {}
-    // QUEM ESTA COM O NUMERO ABERTO AGORA: o aluguel do SellWave Web que ainda vale.
-    let aberto = {};
-    try {
-      const r = await env.DB.prepare('SELECT nk, ate FROM swweb_uso WHERE ate > ?').bind(agora).all();
-      for (const x of ((r && r.results) || [])) aberto[String(x.nk || '').slice(-8)] = true;
-    } catch (_) { aberto = null; }   // sem saber, fala como aberto (a frase de "nao esta marcando")
     for (const nk of pend) {
       const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
       // Numero sem dono (coluna da Contingencia, chip apagado) nao tem pra quem avisar: so a direcao.
@@ -24194,8 +24206,7 @@ async function _alarmeNumeroMudo(env) {
       const daCasa = !(chip && String(chip.afl || ''));
       const nome = (dono && nomePorId[dono]) ? String(nomePorId[dono]).split(' ')[0] : '';
       const fim = chip && chip.num ? String(chip.num) : ('...' + nk.slice(-4));
-      const fechado = !!aberto && !aberto[nk];
-      const ha = agora - (Number(presos[nk]) || agora);
+      const ha = haDe(nk);
       const j = ja[nk] = ja[nk] || {};
       const quem = [];
       if (dono && !j.v && ha >= MUDO_AVISO_VENDEDOR) { quem.push(dono); j.v = agora; }
@@ -24209,17 +24220,15 @@ async function _alarmeNumeroMudo(env) {
       mudouJa = true;
       for (const id of quem) {
         const ehDono = id === dono;
-        const titulo = (ehDono ? '' : (nome ? nome + ': ' : '')) + fim + (fechado ? ' está fechado no SellWave Web' : ' não está marcando os leads');
-        const corpo = fechado
-          ? (ehDono ? 'Ele estava recebendo leads sem ninguém com ele aberto, então saiu da roleta. Abra ele no SellWave Web: ele volta sozinho quando a primeira mensagem dele chegar na dash.'
-                    : 'Ninguém está com ele aberto, então ele está fora da roleta até alguém abrir.')
-          : (ehDono ? 'Os leads desse número não estão chegando na dash, então ele saiu da roleta. Feche e abra ele no SellWave Web: ele volta sozinho quando a primeira mensagem dele chegar na dash.'
-                    : 'Faz ' + Math.round(ha / 60) + ' min que os leads desse número não chegam na dash. Ele está fora da roleta até ' + (nome || 'o vendedor') + ' fechar e abrir no SellWave Web.');
+        const titulo = (ehDono ? '' : (nome ? nome + ': ' : '')) + fim + ' não está marcando os leads';
+        const corpo = ehDono
+          ? 'Os leads desse número não estão chegando na dash, então ele saiu da roleta. Feche e abra ele no SellWave Web: ele volta sozinho quando a primeira mensagem dele chegar na dash.'
+          : 'Faz ' + Math.round(ha / 60) + ' min que ele está aberto e os leads não chegam na dash. Ele está fora da roleta até ' + (nome || 'o vendedor') + ' fechar e abrir no SellWave Web.';
         try {
           await _wpParaPessoa(env, id, { title: titulo, body: corpo, tag: 'num-mudo-' + nk, url: '/pressels', aviso: true });
         } catch (_) { /* aviso que falha nao para os outros */ }
       }
-      if (quem.length) console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)') + ' para=' + quem.join(',') + ' preso_ha=' + ha + 's' + (fechado ? ' fechado' : '') + (daCasa ? '' : ' (afiliado: direcao nao avisada)'));
+      if (quem.length) console.log('ALARME_NUM_MUDO num=' + nk + ' dono=' + (dono || '(sem dono)') + ' para=' + quem.join(',') + ' preso_ha=' + ha + 's' + (daCasa ? '' : ' (afiliado: direcao nao avisada)'));
     }
   }
   if (mudouJa) { try { await _writeConfig(env, 'roleta_mudo_avisado', JSON.stringify(ja)); } catch (_) {} }
@@ -24317,31 +24326,47 @@ async function _alarmeCapturaParada(env) {
 //
 // Devolve { mudou: true, ... } se marcou agora, { mudou: false } se nao havia o que fazer (ja estava,
 // sem chip, afiliado, sem status), ou null se nao conseguiu gravar (conflito de versao).
-async function _contMarcaBloqueado(env, nk8) {
+// RESTRITO (24/10/2026, pedido do Bruno: "toda vez que o numero for desconectado ou for restrito,
+// eu gostaria que, la na area de contingencia, o numero saia do status de 'em uso' e seja marcado como
+// 'restrito'"). A mesma funcao com o tipo 'restrito': vale pra QUEDA certa (o _desligaCaidos: pronto
+// e depois QR na mesma abertura). Faz o que o seletor da tela faz quando ele mesmo escolhe Restrito
+// (setStatus do contingencia.jsx): sai do Em uso, aquecimento vira ativo, e o relogio do aquecimento e
+// o restab_start ficam como estao - restrito e passageiro, ele reconecta e volta o status na mao.
+// NUNCA rebaixa um Banido pra Restrito.
+async function _contMarcaBloqueado(env, nk8) { return _contMarcaStatus(env, nk8, 'banido'); }
+async function _contMarcaStatus(env, nk8, tipo) {
   const agora = Math.floor(Date.now() / 1000);
   const _sem = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const restrito = tipo === 'restrito';
   for (let tent = 0; tent < 3; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return { mudou: false };
     let data; try { data = JSON.parse(row.data); } catch (_) { return { mudou: false }; }
     const sts = Array.isArray(data.wa_statuses) ? data.wa_statuses : [];
-    const alvo = sts.find((x) => x && x.id && /bloquead/i.test(_sem(x.label))) || sts.find((x) => x && x.id && _papelSt(x) === 'banido');
+    const alvo = restrito
+      ? (sts.find((x) => x && x.id && _papelSt(x) === 'restrito') || sts.find((x) => x && x.id && /restrit/i.test(_sem(x.label))))
+      : (sts.find((x) => x && x.id && /bloquead/i.test(_sem(x.label))) || sts.find((x) => x && x.id && _papelSt(x) === 'banido'));
     if (!alvo) return { mudou: false };
     const chips = Array.isArray(data.chips) ? data.chips : [];
     const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk8);
     if (!chip || String(chip.afl || '')) return { mudou: false };
     if (String(chip.wa_st || '') === String(alvo.id)) return { mudou: false };
     const deSt = sts.find((x) => x && String(x.id) === String(chip.wa_st || ''));
+    if (restrito && deSt && _papelSt(deSt) === 'banido') return { mudou: false };
     const antes = deSt ? String(deSt.label || deSt.id) : String(chip.wa_st || '');
     chip.wa_st = String(alvo.id);
     chip.em_uso = false;
-    chip.restab_start = '';
-    if (chip.st === 'aquecimento' || (deSt && _papelSt(deSt) === 'aquecimento')) { if (chip.st === 'aquecimento') chip.st = 'ativo'; chip.warm_start = ''; }
+    if (restrito) {
+      if (chip.st === 'aquecimento') chip.st = 'ativo';
+    } else {
+      chip.restab_start = '';
+      if (chip.st === 'aquecimento' || (deSt && _papelSt(deSt) === 'aquecimento')) { if (chip.st === 'aquecimento') chip.st = 'ativo'; chip.warm_start = ''; }
+    }
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), (row.version || 0) + 1, agora, 'cont-bloqueado:' + nk8, row.version).run();
+      .bind(JSON.stringify(data), (row.version || 0) + 1, agora, (restrito ? 'cont-restrito:' : 'cont-bloqueado:') + nk8, row.version).run();
     if (res && res.meta && res.meta.changes > 0) {
       try { _dashCache = null; } catch (_) {}
-      console.log('CONT_BLOQUEADO num=' + nk8 + ' de=' + antes + ' para=' + String(alvo.label || alvo.id));
+      console.log((restrito ? 'CONT_RESTRITO' : 'CONT_BLOQUEADO') + ' num=' + nk8 + ' de=' + antes + ' para=' + String(alvo.label || alvo.id));
       return { mudou: true, nk8, numero: String(chip.num || ''), at: String(chip.at || ''), status: String(alvo.label || alvo.id), antes };
     }
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
@@ -24458,8 +24483,9 @@ async function _desligaCaidos(env) {
       por_nome: bloq ? 'Sistema (bloqueado no WhatsApp)' : 'Sistema (caiu no WhatsApp)',
       marca: 'caiu-off:', rotulo: 'ROLETA_CAIU_OFF',
     });
-    // BLOQUEIO TAMBEM VIRA STATUS NA CONTINGENCIA (ver _contMarcaBloqueado). So o bloqueio: queda nao.
-    const t = bloq ? await _contMarcaBloqueado(env, nk.slice(-8)) : null;
+    // VIRA STATUS NA CONTINGENCIA (ver _contMarcaStatus): bloqueio vira Banido; queda certa vira
+    // Restrito (24/10/2026, pedido do Bruno) e sai do Em uso.
+    const t = await _contMarcaStatus(env, nk.slice(-8), bloq ? 'banido' : 'restrito');
     const marcou = t && t.mudou ? t.status : '';
     if (!f && !marcou) continue;
     // AVISO: direcao da casa e o dono do numero. A MESMA tag do aviso de queda (swconn-<nk>), de
@@ -24471,7 +24497,7 @@ async function _desligaCaidos(env) {
     const porque = bloq ? 'foi bloqueado pelo WhatsApp' : 'desconectou no WhatsApp (pediu o QR de novo, sem ninguem fechar)';
     const fiz = [f ? 'tirei ele da chegada de leads pra nao receber clique pago' : '', marcou ? 'marquei como ' + marcou + ' na Contingencia' : ''].filter(Boolean).join(' e ');
     const body = bonito + ' ' + porque + (doWa ? ' (motivo: ' + doWa + ')' : '') + '. ' + fiz.charAt(0).toUpperCase() + fiz.slice(1) + '.'
-      + (bloq ? '' : ' Quando conectar de novo, e so religar o interruptor.');
+      + (bloq ? '' : ' Quando conectar de novo, volte o status dele na Contingencia e religue o interruptor.');
     try {
       const us = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all();
       const ids = new Set(((us && us.results) || []).map((u) => String(u.id)));

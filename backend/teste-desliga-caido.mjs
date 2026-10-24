@@ -42,7 +42,7 @@ const conta = (nome, certo, detalhe) => {
 
 const nomes = ['_roletaDesligaNum', '_swwebQuedaTabela', '_swwebMarcaQueda', '_desligaCaidos', '_desligaBanidos',
   '_presselAplicaNum', '_presselEstadoNum', '_presselNumLogEnsure', '_presselNumLog', '_limpaMarcasDesligado', '_amanhaBR',
-  '_contMarcaBloqueado', '_papelSt', '_papelPeloNomeSt'];
+  '_contMarcaBloqueado', '_contMarcaStatus', '_papelSt', '_papelPeloNomeSt'];
 const blocos = nomes.map((n) => [n, funcao(n)]);
 const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
@@ -80,7 +80,7 @@ const pushes = [];
 const fabrica = new Function('env_', '_readConfig', '_writeConfig', '_wpParaPessoa',
   'let _dashCache = null; let _pnlOk = false; let _swQuedaOk = false;\n'
   + consts.map(([, l]) => l).join('\n') + '\n' + blocos.map(([, b]) => b).join('\n')
-  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum, _contMarcaBloqueado };');
+  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum, _contMarcaBloqueado, _contMarcaStatus };');
 const F = fabrica(env,
   async (_e, k) => (config.has(k) ? config.get(k) : null),
   async (_e, k, v) => { config.set(k, v); },
@@ -155,7 +155,7 @@ estadoInicial();
   const ids = pushes.map((p) => p.id).sort().join(',');
   conta('avisa a direcao e o dono do numero', ids === 'dir,kevin', ids);
   conta('com a mesma tag do aviso de queda (substitui no celular)', pushes.every((p) => p.tag === 'swconn-' + nk), JSON.stringify(pushes.map((p) => p.tag)));
-  conta('o texto diz o numero e que e so religar', /\(15\) 99187-2193/.test(pushes[0].body) && /religar o interruptor/.test(pushes[0].body), pushes[0].body);
+  conta('o texto diz o numero, que virou Restrito e o que fazer quando conectar', /\(15\) 99187-2193/.test(pushes[0].body) && /marquei como Restrito na Contingencia/.test(pushes[0].body) && /volte o status dele na Contingencia e religue o interruptor/.test(pushes[0].body), pushes[0].body);
   conta('o texto nao tem travessao', !/[–—]/.test(pushes[0].body + pushes[0].title));
   pushes.length = 0;
   anda(60); await F._desligaCaidos(env);
@@ -270,15 +270,32 @@ estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda')
   solta(nk);
 }
 {
-  // so CAIU (pediu QR): desliga da roleta, mas o cartao NAO vira Banido
+  // so CAIU (pediu QR): desliga da roleta e o cartao vira RESTRITO (24/10/2026, pedido do Bruno: "toda
+  // vez que o numero for desconectado ou for restrito (...) saia do status de em uso e seja marcado como
+  // restrito"). Nunca Banido: desconectar nao e bloqueio.
   estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda'); pushes.length = 0;
   const nk = nkApp(K1);
   aluga(nk, 'kevin', AGORA, AGORA + 120); anda(20); await reporta(nk, 'pronto', 'kevin');
   anda(60); await reporta(nk, 'qr', 'kevin'); anda(95); await F._desligaCaidos(env);
   const c = chipDe(K1);
-  conta('numero que so caiu sai da roleta mas o cartao continua Em Uso', !ligadoEm(K1, 'kevin', 1) && c.wa_st === EM_USO && c.em_uso === true, JSON.stringify({ wa_st: c.wa_st, em_uso: c.em_uso }));
-  conta('e o aviso nao fala em Contingencia', pushes.length > 0 && !/Contingencia/.test(pushes[0].body), pushes[0] && pushes[0].body);
+  conta('numero que caiu sai da roleta e o cartao vira Restrito, fora do Em uso', !ligadoEm(K1, 'kevin', 1) && c.wa_st === 'st_mpafn8zm' && c.em_uso === false, JSON.stringify({ wa_st: c.wa_st, em_uso: c.em_uso }));
+  conta('a segunda marcacao (Sem quedas) e decisao dele: fica', c.wa_st2 === SEMQ, c.wa_st2);
   solta(nk);
+}
+{
+  // aquecimento que cai: Restrito, campo ativo, e o relogio do aquecimento FICA (restrito e passageiro)
+  estadoInicial(); pushes.length = 0;
+  const d = estado(); const c0 = d.chips.find((x) => k8(x.num) === k8(K2)); c0.st = 'aquecimento'; c0.wa_st = AQUEC; c0.warm_start = '2026-10-20'; c0.em_uso = false;
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+  const r = await F._contMarcaStatus(env, k8(K2), 'restrito');
+  const c = chipDe(K2);
+  conta('aquecimento que caiu: Restrito, campo ativo e o relogio do aquecimento fica', r && r.mudou && c.wa_st === 'st_mpafn8zm' && c.st === 'ativo' && c.warm_start === '2026-10-20', JSON.stringify({ wa_st: c.wa_st, st: c.st, warm: c.warm_start }));
+  // Banido nao vira Restrito
+  poeStatus(K1, BANIDO, false);
+  const r2 = await F._contMarcaStatus(env, k8(K1), 'restrito');
+  conta('um Banido nunca e rebaixado pra Restrito', r2 && r2.mudou === false && chipDe(K1).wa_st === BANIDO, JSON.stringify(r2))
+  const r3 = await F._contMarcaStatus(env, k8(AF), 'restrito');
+  conta('numero de afiliado fica de fora do Restrito tambem', r3 && r3.mudou === false && chipDe(AF).wa_st === EM_USO, JSON.stringify(r3))
 }
 {
   // bloqueado com o interruptor JA desligado na mao: nao desliga de novo, mas marca e avisa

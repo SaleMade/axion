@@ -55,7 +55,9 @@ const CHIPS = [
   { num: '(54) 98108-9176', at: 'atendente_awpftn', afl: 'afl_3d767329' },
 ];
 const USERS = [{ id: 'dir', name: 'Heynan Dantas', role: 'diretor' }, { id: 'atendente_vra3lh', name: 'Guilherme Souza', role: 'atendente' }];
-const ABERTO_8066 = [{ nk: '1172518066', ate: agora() + 120 }];
+// aberto ha 3 h nesta maquina (o aluguel: desde quando e ate quando vale)
+const ABERTO_8066 = [{ nk: '1172518066', desde: agora() - 3 * 3600, ate: agora() + 120 }];
+const aberto = (nk, haSeg) => [{ nk, desde: agora() - haSeg, ate: agora() + 120 }];
 const preso = (o) => ({ roleta_mudo_preso: JSON.stringify(o) });
 
 // ── 1. O CASO DO 3977: preso ha 1 minuto nao avisa ninguem ───────────────────────────────────
@@ -78,12 +80,20 @@ const preso = (o) => ({ roleta_mudo_preso: JSON.stringify(o) });
   ok(m.avisos.length === 1, 'na volta seguinte do cron nao repete');
 }
 
-// ── 3. preso ha 15 min, ninguem com ele aberto: "esta fechado" ───────────────────────────────
+// ── 3. NINGUEM COM ELE ABERTO NAO AVISA NINGUEM (24/10/2026: 14 avisos "esta fechado" de madrugada) ──
 {
-  const m = monta(preso({ 72518066: agora() - 900 }), CHIPS, USERS, [{ nk: '1172518066', ate: agora() - 30 }]);
+  const m = monta(preso({ 72518066: agora() - 5 * 3600 }), CHIPS, USERS, [{ nk: '1172518066', desde: agora() - 9 * 3600, ate: agora() - 30 }]);
   await m.roda(m.env);
-  const a = m.avisos[0] || {};
-  ok(/está fechado no SellWave Web/.test(a.title) && /Abra ele/.test(a.body), 'aluguel vencido = ninguem com ele aberto: ' + a.title + ' / ' + a.body);
+  ok(m.avisos.length === 0, 'aluguel vencido (vendedor dormindo, app fechado): ninguem e avisado, nem a direcao');
+  await m.roda(m.env);
+  ok(m.avisos.length === 0 && !(JSON.parse(m.cfg().roleta_mudo_avisado || '{}')['72518066']), 'e nao entra no trinco: se ele abrir e nao marcar, o aviso ainda sai')
+  // de manha ele abre: o relogio conta da abertura, nao da prisao
+  const m2 = monta(preso({ 72518066: agora() - 5 * 3600 }), CHIPS, USERS, aberto('1172518066', 300));
+  await m2.roda(m2.env);
+  ok(m2.avisos.length === 0, 'preso de madrugada e aberto ha 5 min: ainda nao avisa (10 min contados da abertura)');
+  const m3 = monta(preso({ 72518066: agora() - 5 * 3600 }), CHIPS, USERS, aberto('1172518066', 900));
+  await m3.roda(m3.env);
+  ok(m3.avisos.map((a) => a.id).join(',') === 'atendente_vra3lh', 'aberto ha 15 min e sem marcar: so o vendedor (a direcao so com 40 min de aberto)');
 }
 
 // ── 4. a direcao so aos 40 min, e uma vez ─────────────────────────────────────────────────────
@@ -102,11 +112,11 @@ const preso = (o) => ({ roleta_mudo_preso: JSON.stringify(o) });
   ok(m.avisos.length === 2, 'e ninguem recebe de novo na volta seguinte');
 }
 
-// ── 5. preso faz horas e nunca avisado (deploy no meio): os dois de uma vez ──────────────────
+// ── 5. aberto faz horas, preso faz horas e nunca avisado (deploy no meio): os dois de uma vez ──
 {
   const m = monta(preso({ 72518066: agora() - 5 * 3600 }), CHIPS, USERS, ABERTO_8066);
   await m.roda(m.env);
-  ok(m.avisos.map((a) => a.id).sort().join(',') === 'atendente_vra3lh,dir', 'preso ha 5 h sem aviso: dono e direcao');
+  ok(m.avisos.map((a) => a.id).sort().join(',') === 'atendente_vra3lh,dir', 'aberto ha 3 h e preso ha 5 h sem aviso: dono e direcao');
 }
 
 // ── 6. PISCA (solto e preso de novo): nao avisa de novo dentro de 6 h ─────────────────────────
@@ -135,14 +145,14 @@ const preso = (o) => ({ roleta_mudo_preso: JSON.stringify(o) });
 
 // ── 8. numero sem dono (coluna da Contingencia): so a direcao, no primeiro prazo ─────────────
 {
-  const m = monta(preso({ 74009352: agora() - 900 }), CHIPS, USERS, []);
+  const m = monta(preso({ 74009352: agora() - 900 }), CHIPS, USERS, aberto('1574009352', 3600));
   await m.roda(m.env);
-  ok(m.avisos.length === 1 && m.avisos[0].id === 'dir', 'numero de coluna avisa a direcao aos 15 min');
+  ok(m.avisos.length === 1 && m.avisos[0].id === 'dir', 'numero de coluna aberto e sem marcar avisa a direcao aos 15 min');
 }
 
 // ── 9. numero de AFILIADO: so o dono dele, nunca a direcao, e sem gravar a cada volta ─────────
 {
-  const m = monta(preso({ 81089176: agora() - 5 * 3600 }), CHIPS, USERS, []);
+  const m = monta(preso({ 81089176: agora() - 5 * 3600 }), CHIPS, USERS, aberto('5481089176', 3600));
   await m.roda(m.env);
   ok(m.avisos.length === 1 && m.avisos[0].id === 'atendente_awpftn', 'numero de afiliado avisa so o dono (deu: ' + m.avisos.map((a) => a.id).join(',') + ')');
   const g = m.grav();
