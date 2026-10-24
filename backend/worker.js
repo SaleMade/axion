@@ -12857,6 +12857,52 @@ async function handleSwWeb(req, env, path) {
   return err('Rota não encontrada', 404);
 }
 
+// PODIO + CORRIDA DA META por vendedor (24/10/2026, pedido do Bruno: liberar pros vendedores no app).
+// O app do vendedor so carrega o escopo DELE; o admin monta o podio no cliente (escopo do mundo da
+// casa), mas o vendedor precisa deste endpoint pra ver o time inteiro. So LEITURA, nada muda.
+// Reproduz EXATAMENTE as regras do podio do admin (podio-mes.jsx) pra os dois numeros baterem:
+//   pedido  = lead nao-cancelado criado no periodo (INCLUSIVE o ainda-nao-aceito; pedido de hoje conta)
+//   pago    = _botPago (= pagoLead do front: spg/col Pago OU parcelas quitando a ficha)
+//   frust.  = coluna de perda definitiva (Frustrados/Roubos/Devolvido com Reverso/Retornado); Cancelado
+//             fica de fora (nao virou venda, nao e calote).
+// A semana e SEMPRE a corrente (a corrida da meta), independente do periodo do filtro.
+// Afiliado nao entra: o podio e do time da CASA; o mundo do afiliado e outra operacao e nao pode vazar.
+const _PODIO_FRUSTRADO = new Set(['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado']);
+// Mesma normalizacao do colDe do front (COL_ALIAS): so estes dois aliases caem em coluna de perda.
+const _podioCol = (l) => { const c = String((l && l.col) || ''); return c === 'Frustrado' ? 'Frustrados' : c === 'Devolvido' ? 'Devolvido com Reverso' : c; };
+async function handlePodio(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (String(u.afiliado_id || '').trim() || isAfiliado(u)) return err('Pódio é do time da casa', 403);
+  const url = new URL(req.url);
+  const start = Number(url.searchParams.get('start')) || 0;   // ms; 0 = desde sempre
+  const end = Number(url.searchParams.get('end')) || 0;       // ms; 0 = ate agora
+  const st = await _getDashData(env);
+  const leads = Array.isArray(st && st.leads) ? st.leads : [];
+  const cfg = await _botCfgLer(env);
+  const metas = (cfg && cfg.metas && cfg.metas.semanal) || {};
+  const vendedores = await _botVendedores(env);               // so atendente ativo da casa [{id,nome}]
+  const sem = _botSemanaDe(_brDay());                         // semana corrente (segunda a domingo)
+  const semIni = sem.iniTs * 1000, semFim = sem.fimTs * 1000;
+  const por = {};
+  for (const v of vendedores) por[String(v.id)] = { pedidos: 0, semana: 0, pagas: 0, frustrados: 0 };
+  for (const l of leads) {
+    if (!l || l.afl) continue;                                // mundo do afiliado fora
+    const v = por[String(l.at || '')];
+    if (!v) continue;                                         // so vendedor ativo da casa
+    if (_botCancelado(l)) continue;                           // cancelado nunca foi pedido
+    const criado = _botCriadoMs(l);
+    if (!criado) continue;
+    if (criado >= semIni && criado < semFim) v.semana++;
+    const noPer = (!start || criado >= start) && (!end || criado < end);
+    if (!noPer) continue;
+    v.pedidos++;
+    if (_botPago(l)) v.pagas++;
+    else if (_PODIO_FRUSTRADO.has(_podioCol(l))) v.frustrados++;
+  }
+  return json({ ok: true, vendedores: por, metas });
+}
+
 async function handleBotConfig(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -29893,6 +29939,7 @@ export default {
       // quais numeros ele pode abrir, com qual proxy, e se as travas estao ligadas.
       if (path.startsWith('/api/swweb/')) return handleSwWeb(req, env, path);
       // BOT DE WHATSAPP DO TIME (12/10/2026): resumo diario, metas e comemoracoes. Ver o bloco do bot.
+      if (req.method === 'GET' && path === '/api/podio') return handlePodio(req, env);
       if (path === '/api/bot/config' && (req.method === 'GET' || req.method === 'POST')) return handleBotConfig(req, env);
       if (path === '/api/bot/preview' && (req.method === 'GET' || req.method === 'POST')) return handleBotWaPreview(req, env);   // POST = previa do rascunho, nao grava
       if (req.method === 'POST'   && path === '/api/bot/enviar')   return handleBotEnviar(req, env);
