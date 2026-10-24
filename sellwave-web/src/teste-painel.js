@@ -1122,10 +1122,26 @@ app.whenReady().then(async () => {
   conta('e diz quantos leads chegaram hoje', /10 leads/.test(sec.aquecQtd), sec.aquecQtd)
   // 3 em uso + 1 em aquecimento = 4 interruptores; o "Em analise" fica com o selo
   // 3 em uso + 1 em aquecimento = 4 interruptores; "Em analise" e "Restrito" ficam com o selo
-  conta('interruptor so pra quem pode receber', sec.chaves === 5 && sec.selos === 2, JSON.stringify(sec))
+  // +2 selos: os dois de "Disponiveis" tambem nao recebem lead ate alguem marcar Em uso.
+  conta('interruptor so pra quem pode receber', sec.chaves === 5 && sec.selos === 4, JSON.stringify(sec))
+
+  // ── A PRATELEIRA "DISPONIVEIS" (24/10/2026, pedido do Bruno) ──────────────────────────────────
+  // "preciso conectar esses numeros para que, ai sim, eu atribua a um dos meus vendedores".
+  const pra = await js2('(() => { const h = [...document.querySelectorAll(".vend")];'
+    + ' const d = document.querySelector(".vend.disp");'
+    + ' return { titulos: h.map(e => e.querySelector("span").textContent.trim()),'
+    + '   ultimo: h.length ? h[h.length - 1].classList.contains("disp") : false,'
+    + '   cor: d ? getComputedStyle(d).color : "", qtd: d ? d.querySelector(".qtd").textContent : "",'
+    + '   semFoto: d ? !d.querySelector(".av") : false } })()')
+  conta('os numeros sem dono ganham o grupo "Disponiveis"', pra.titulos.includes('Disponíveis'), JSON.stringify(pra.titulos))
+  conta('no FIM da barra, mesmo tendo chegado primeiro na lista', pra.ultimo, JSON.stringify(pra.titulos))
+  conta('no verde da coluna da Contingencia', pra.cor === 'rgb(16, 185, 129)', pra.cor)
+  conta('sem foto: a prateleira nao e de ninguem', pra.semFoto)
+  conta('e conta quantos FALTAM CONECTAR, nao "recebendo/total"', pra.qtd === '1 a conectar', pra.qtd)
 
   // ── A FOTO DO VENDEDOR E O PLACAR DE HOJE (23/10/2026, pedido do Bruno) ───────────────────────
-  const avs = () => js2('(() => { const h = [...document.querySelectorAll(".vend")].filter(e => !e.classList.contains("aquec"));'
+  // `.disp` fora junto com `.aquec`: nenhum dos dois e cabecalho de vendedor, e so vendedor tem foto.
+  const avs = () => js2('(() => { const h = [...document.querySelectorAll(".vend")].filter(e => !e.classList.contains("aquec") && !e.classList.contains("disp"));'
     + ' return h.map(e => { const a = e.querySelector(".av"); const cs = a ? getComputedStyle(a) : null;'
     + '   return { nome: e.querySelector("span").textContent.trim(), img: a && a.querySelector("img") ? a.querySelector("img").src.slice(0, 14) : "",'
     + '     ini: a ? a.getAttribute("data-ini") || "" : "", larg: a ? Math.round(a.getBoundingClientRect().width) : 0, raio: cs ? cs.borderRadius : "",'
@@ -1389,6 +1405,9 @@ app.whenReady().then(async () => {
   const esperado = await js2('(() => { const ns = window.__stub().numeros;'
     + ' const aq = (n) => n.aquecendo === true || n.aquec != null || String(n.st || "") === "aquecimento";'
     + ' const donos = []; for (const n of ns) if (!donos.includes(n.dono)) donos.push(n.dono);'
+    // A PRATELEIRA VAI PRO FIM, aqui tambem: numero sem dono (dono vazio) nao e lista de trabalho de
+    // ninguem. Na barra fina nao ha cabecalho nenhum, entao o que separa e so a ordem.
+    + ' const iD = donos.indexOf(""); if (iD >= 0) { donos.splice(iD, 1); donos.push("") }'
     + ' const porDono = (f) => donos.flatMap(d => ns.filter(n => n.dono === d && f(n))'
     + '   .sort((a, b) => { const pa = Number(a.fila && a.fila.pos) || 0, pb = Number(b.fila && b.fila.pos) || 0;'
     + '     if (pa && pb) return pa - pb; if (pa || pb) return pa ? -1 : 1; return (b.roleta ? 1 : 0) - (a.roleta ? 1 : 0) }));'
@@ -1399,7 +1418,8 @@ app.whenReady().then(async () => {
   conta('encolhida, mostra um numero por linha', dentro.fino === esperado.n, dentro.fino + ' de ' + esperado.n)
   conta('mostra os 4 ultimos digitos', dentro.d === esperado.digitos, dentro.d + '   esperado ' + esperado.digitos)
   // O '3/5' do 8551 PROVA que o teto sai da rampa: o `lim_dia` dele no stub e zero.
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,3/5,7/20', dentro.c)
+  // Os dois '0' antes do aquecimento sao os de "Disponiveis": sem dono, sem teto e sem lead.
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,0,0,3/5,7/20', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
   conta('e o placar de hoje (em 56px nao cabe)', await js2('!document.querySelector(".equipe")'))
 
@@ -1474,7 +1494,8 @@ app.whenReady().then(async () => {
   conta('e so o que aquece ganha o selo', semSelo === 2, String(semSelo))
 
   const voltou = await js2('({ larg: Math.round(document.querySelector("aside").getBoundingClientRect().width), vend: document.querySelectorAll(".vend").length })')
-  conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 3, JSON.stringify(voltou))
+  // 4 cabecalhos: Guilherme, Aquecimento, Heynan e a prateleira "Disponiveis".
+  conta('clicar de novo devolve a barra larga', voltou.larg === 268 && voltou.vend === 4, JSON.stringify(voltou))
 
   // A ABINHA so aparece com o painel escondido, e e o unico caminho de volta fora de Ajustes.
   const escondida = await js2('getComputedStyle(document.getElementById("fresta")).display')
