@@ -11800,9 +11800,41 @@ async function handleSwWeb(req, env, path) {
     // Medido em 16/10: os leads dela NAO eram da casa (ela so esta nas pressels Presell 02/03/04 e
     // Pressel 01, nenhuma das cinco "- Tiktok" da casa), entao nao houve lead indo pro lugar
     // errado - era so a lista mostrando o que nao devia.
-    const meus = chips.filter((c) => c && c.num && donos[String(c.at || '')]
+    const comDono = chips.filter((c) => c && c.num && donos[String(c.at || '')]
       && mundoDoDono[String(c.at || '')] === mundo
       && (tudo || String(c.at || '') === String(u.id)));
+    // E OS DE "DISPONIVEIS" TAMBEM, SO PRA QUEM MANDA (24/10/2026, pedido do Bruno: "preciso
+    // conectar esses numeros para que, ai sim, eu atribua a um dos meus vendedores").
+    //
+    // Isto abre uma excecao no paragrafo acima de propria vontade dele. Nao e o mesmo pedido de
+    // 16/10 ao contrario: la a lista era a do VENDEDOR, e numero sem dono so fazia volume na tela
+    // dele. Aqui o caminho e da DIRECAO, e e o contrario: ele poe varios numeros em Disponiveis,
+    // conecta todos de uma vez e so depois escolhe de quem e cada um. Sem isto ele tem que atribuir
+    // primeiro, conectar, e depois devolver o numero pra Disponiveis.
+    //
+    // SO PRA QUEM MANDA. Numero sem dono nao e trabalho de vendedor, e numero e credencial: a
+    // propria Contingencia so mostra a coluna "Disponiveis" pro diretor (ver contingencia.jsx,
+    // `director`). Vendedor continua vendo so os dele.
+    //
+    // O MESMO RECORTE DA COLUNA (contingencia.jsx, `disp` = chipUsavel(c) && !c.at):
+    //  - sem dono DE VERDADE: `at` vazio. Chip em coluna do cadastro tem at='ccol_1', que nao e
+    //    usuario nenhum mas tambem nao esta disponivel - ele mora na coluna dele, igual na tela.
+    //  - FORA do aquecimento: quem aquece sem dono e a "sala de espera" da Contingencia, que tem
+    //    pool proprio la. Deixar aqui poria o mesmo numero em dois montes.
+    //    E NAO DA PRA USAR O _chipAquecendo AQUI: ele devolve FALSO pra chip sem dono DE PROPOSITO
+    //    (a rampa so existe pra numero com dono, ver a memoria aquecimento-por-lead-rampa), e e
+    //    justamente o sem dono que esta sendo separado. A regra certa e a da coluna, que olha so o
+    //    status: emAquecimento() em src/lib/chips.js. Quem pegou isto foi o teste.
+    //  - banido NAO precisa ser filtrado aqui: o filtro `visiveis`, no fim desta rota, ja tira.
+    //
+    // O MUNDO SAI DO PROPRIO CHIP (`c.afl`), nao do dono: sem dono nao ha de quem herdar. E a mesma
+    // leitura que o resto do worker faz de chip (ver _stateProtegido e /api/chip/save).
+    const disp = tudo
+      ? chips.filter((c) => c && c.num && !String(c.at || '')
+        && String(c.afl || '') === mundo
+        && !(String(c.st || '') === 'aquecimento' || _ids.aquec.has(String(c.wa_st || ''))))
+      : [];
+    const meus = disp.length ? comDono.concat(disp) : comDono;
     // QUAIS NUMEROS ESTAO DESLIGADOS NA ROLETA. O interruptor mora em pressel.vendedores[].off, e
     // desde 13/10 ele vale pra TODAS as pressels da operacao: basta um `off` em qualquer uma pra o
     // numero estar fora (foi o incidente de cinco copias divergindo sem ninguem ver).

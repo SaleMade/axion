@@ -123,10 +123,13 @@ function desenhaLista() {
   // que estão recebendo lead sobem.
   const grupos = new Map()
   for (const n of nums) {
-    const k = n.dono || 'Sem vendedor'
+    const k = n.dono || DISPONIVEIS
     if (!grupos.has(k)) grupos.set(k, [])
     grupos.get(k).push(n)
   }
+  // DISPONIVEIS VAI PRO FIM (24/10/2026). Numero sem dono nao e a lista de trabalho de ninguem: e a
+  // prateleira de onde ele tira. No meio dos vendedores viraria so mais um nome.
+  if (grupos.has(DISPONIVEIS)) { const d = grupos.get(DISPONIVEIS); grupos.delete(DISPONIVEIS); grupos.set(DISPONIVEIS, d) }
   // NA ORDEM DA FILA (19/10/2026, pedido do Bruno: a lista do Guilherme saia "2, 3, 4, 1" porque
   // quem recebia subia; ele quer "1, 2, 3, 4", a mesma sequencia da Chegada de leads). Quem tem
   // posicao na fila vai pela posicao; quem esta fora dela (desligado, ou roleta sem fila) vem depois,
@@ -182,8 +185,21 @@ function desenhaLista() {
 
     if (normais.length) {
       const d0 = itens[0] || {}
-      html += '<div class="vend"><span class="vnome">' + avatar(d0.foto, d0.sigla, d0.corDono, dono) + esc(dono) + '</span><span class="risco"></span>'
-        + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
+      // A PRATELEIRA TEM CABECALHO PROPRIO, verde como a coluna da Contingencia, sem foto (nao e de
+      // ninguem) e contando o que FALTA CONECTAR, que e o trabalho que ele vem fazer aqui. O
+      // "recebendo/total" dos vendedores nao diria nada: numero sem dono nao recebe lead nenhum, e
+      // o proprio selo no lugar do interruptor ja explica isso linha por linha.
+      if (dono === DISPONIVEIS) {
+        const faltam = normais.filter(faltaConectar).length
+        html += '<div class="vend disp"><span>' + esc(DISPONIVEIS) + '</span><span class="risco"></span>'
+          + '<span class="qtd" title="' + (faltam
+            ? 'Abra cada um e leia o QR. Depois é só atribuir o número a um vendedor na Contingência.'
+            : 'Todos conectados. Já dá pra atribuir a um vendedor na Contingência.')
+          + '">' + (faltam ? faltam + ' a conectar' : 'conectados') + '</span></div>'
+      } else {
+        html += '<div class="vend"><span class="vnome">' + avatar(d0.foto, d0.sigla, d0.corDono, dono) + esc(dono) + '</span><span class="risco"></span>'
+          + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
+      }
       html += normais.map(linha).join('')
     }
     if (emAquec.length) {
@@ -335,6 +351,17 @@ const aquecendo = (n) => !!n && (n.aquecendo === true || n.aquec != null || Stri
 // Os criterios crus ficam como RESERVA pra worker mais velho, que nao manda `apto` - e so nesse
 // caso. Quando o servidor opina, e ele quem decide.
 const podeReceber = (n) => !!n && (n.apto != null ? n.apto === true : (n.em_uso === true || aquecendo(n)))
+// A PRATELEIRA: os numeros da coluna "Disponiveis" da Contingencia, sem dono ainda (24/10/2026,
+// pedido do Bruno). Ele conecta eles aqui e SO DEPOIS atribui a um vendedor. Mesmo nome da coluna
+// de proposito: sao a mesma coisa, e dois nomes pro mesmo monte de numero criam duvida sobre se e.
+const DISPONIVEIS = 'Disponíveis'
+// FALTA CONECTAR? Conectado de verdade e ter sessao funcionando: "Conectado" ou "Fechado, mas
+// conectado" (ver CONN_TXT). Desconectado, caiu, banido e sem informacao sao todos "ainda precisa do
+// QR", que e exatamente o trabalho que ele vem fazer nesta prateleira.
+const faltaConectar = (n) => {
+  const c = (n && n.conn && n.conn.st) || ''
+  return c !== 'pronto' && c !== 'sincronizando' && c !== 'fechado'
+}
 
 function linhaFina(n) {
   const nk = numKey(n.numero)
