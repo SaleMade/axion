@@ -42,9 +42,9 @@ const conta = (nome, certo, detalhe) => {
 
 const nomes = ['_roletaDesligaNum', '_swwebQuedaTabela', '_swwebMarcaQueda', '_desligaCaidos', '_desligaBanidos',
   '_presselAplicaNum', '_presselEstadoNum', '_presselNumLogEnsure', '_presselNumLog', '_limpaMarcasDesligado', '_amanhaBR',
-  '_contMarcaBloqueado', '_contMarcaStatus', '_papelSt', '_papelPeloNomeSt'];
+  '_contMarcaBloqueado', '_contMarcaStatus', '_papelSt', '_papelPeloNomeSt', '_ehVendedorDaCasa'];
 const blocos = nomes.map((n) => [n, funcao(n)]);
-const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = '].map((c) => [c, linha(c)]);
+const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = ', 'const _vendCache = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
 conta('o worker tem as funcoes da queda e do desligamento', !faltando.length, 'faltando: ' + faltando.join(', '));
 if (faltando.length) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados'); process.exit(1); }
@@ -80,7 +80,7 @@ const pushes = [];
 const fabrica = new Function('env_', '_readConfig', '_writeConfig', '_wpParaPessoa',
   'let _dashCache = null; let _pnlOk = false; let _swQuedaOk = false;\n'
   + consts.map(([, l]) => l).join('\n') + '\n' + blocos.map(([, b]) => b).join('\n')
-  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum, _contMarcaBloqueado, _contMarcaStatus };');
+  + '\nreturn { _swwebMarcaQueda, _desligaCaidos, _desligaBanidos, _roletaDesligaNum, _contMarcaBloqueado, _contMarcaStatus, _ehVendedorDaCasa };');
 const F = fabrica(env,
   async (_e, k) => (config.has(k) ? config.get(k) : null),
   async (_e, k, v) => { config.set(k, v); },
@@ -88,6 +88,10 @@ const F = fabrica(env,
 
 // a operacao: dois numeros do Kevin, um do Guilherme e um de afiliado; duas pressels da casa e uma do afiliado
 const K1 = '5515991872193', K2 = '5515991879743', G1 = '5515974076200', AF = '5511999990000';
+// O CASO DO PRINT (25/10/2026): numero estacionado numa COLUNA do cadastro, sem vendedor atras.
+// Os oito numeros com BANNED na producao naquele dia eram todos assim, e o aviso acordava o Bruno
+// as 00:07 pra dizer que um numero parado continuava parado.
+const PARADO = '5515981430517';
 const nkApp = (n) => String(n).replace(/\D/g, '').replace(/^55/, '').replace(/^(\d\d)9(\d{8})$/, '$1$2');   // como o app manda (DDD + 8)
 const k8 = (n) => String(n).replace(/\D/g, '').slice(-8);
 // a lista de status igual a dele em 21/10 (ids e papeis de verdade)
@@ -106,6 +110,7 @@ function estadoInicial(extra) {
       { num: K2, at: 'kevin', st: 'ativo', wa_st: EM_USO, wa_st2: SEMQ, em_uso: true },
       { num: G1, at: 'gui', st: 'ativo', wa_st: EM_USO, wa_st2: REESTAB, em_uso: true, restab_start: '2026-10-01' },
       { num: AF, at: 'kevin', afl: 'aflX', st: 'ativo', wa_st: EM_USO, em_uso: true },
+      { num: PARADO, at: 'ccol_1', st: 'ativo', wa_st: 'st_mpafn8zm', wa_st2: SEMQ, em_uso: false },
     ],
     pressels: [{ id: 1, vendedores: [] }, { id: 12, vendedores: [] }, { id: 99, afl: 'aflX', vendedores: [] }],
     ...(extra || {}),
@@ -375,6 +380,54 @@ estadoInicial(); sq.exec('DELETE FROM pressel_num_log'); pushes.length = 0; conf
   await F._desligaBanidos(env);
   conta('o 6200: ja desligado, o cartao vira Banido', chipDe(G1).wa_st === BANIDO && !log().length, JSON.stringify(log()));
   conta('e o aviso diz so que marcou', pushes.length === 1 && /esta banido na Meta\. Marquei como Banido na Contingencia\.$/.test(pushes[0].body) && pushes[0].title === 'Numero banido na Meta', JSON.stringify(pushes[0]));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// NUMERO PARADO NAO ACORDA NINGUEM (25/10/2026, pedido do Bruno: "so quero receber esse tipo de
+// notificacao quando realmente o numero for banido, quando cair o numero de um vendedor").
+//
+// O PARADO esta numa COLUNA do cadastro (at = ccol_1), que e onde ele estaciona numero fora de uso.
+// Coluna nao e pessoa: nao tem fila, nao recebe lead e nao ha ninguem pra avisar. Os OITO numeros
+// com BANNED na producao em 25/10 eram todos assim, e o aviso chegava as 00:07 da madrugada.
+console.log('\nNUMERO PARADO NAO ACORDA NINGUEM\n');
+{
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM wa_api_numbers'); pushes.length = 0; config.clear();
+  sq.prepare('INSERT INTO wa_api_numbers VALUES (?,?,?,?)').run('81430517', '+' + PARADO, 'ccol_1', 'BANNED');
+  await F._desligaBanidos(env);
+  conta('banido numa coluna do cadastro: nenhum aviso', pushes.length === 0, JSON.stringify(pushes.map((p) => p.title)));
+  conta('e nem mexe no interruptor (coluna nao esta em fila nenhuma)', !log().length, JSON.stringify(log()));
+}
+{
+  // E O DE VENDEDOR CONTINUA AVISANDO: a regra nova nao pode ter calado o caso que importa.
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM wa_api_numbers'); pushes.length = 0; config.clear();
+  sq.prepare('INSERT INTO wa_api_numbers VALUES (?,?,?,?)').run('74076200', '+' + G1, 'gui', 'BANNED');
+  await F._desligaBanidos(env);
+  conta('banido de vendedor: o aviso sai', pushes.length > 0 && /banido/i.test(pushes[0].title), JSON.stringify(pushes.map((p) => p.title)));
+  conta('e esse aviso NAO toca som de venda', pushes.every((p) => p.aviso === true), JSON.stringify(pushes.map((p) => [p.title, p.aviso])));
+}
+{
+  // A QUEDA SEGUE A MESMA REGRA. O numero da coluna cai no WhatsApp: desliga e marca (sao verdade),
+  // mas ninguem e acordado por isso.
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda; DELETE FROM wa_api_numbers'); pushes.length = 0; config.clear();
+  const nkP = nkApp(PARADO);
+  aluga(nkP, 'dir', AGORA - 300, AGORA + 300);
+  await reporta(nkP, 'pronto', 'dir');
+  anda(60); await reporta(nkP, 'qr', 'dir');
+  anda(120); await F._desligaCaidos(env);
+  conta('queda de numero de coluna: nenhum aviso', pushes.length === 0, JSON.stringify(pushes.map((p) => p.title)));
+  solta(nkP);
+}
+{
+  // E a queda de um numero de VENDEDOR continua avisando, agora sem som de venda.
+  estadoInicial(); sq.exec('DELETE FROM pressel_num_log; DELETE FROM swweb_queda; DELETE FROM wa_api_numbers'); pushes.length = 0; config.clear();
+  const nkK = nkApp(K1);
+  aluga(nkK, 'kevin', AGORA - 300, AGORA + 300);
+  await reporta(nkK, 'pronto', 'kevin');
+  anda(60); await reporta(nkK, 'qr', 'kevin');
+  anda(120); await F._desligaCaidos(env);
+  conta('queda de numero de vendedor: o aviso sai', pushes.length > 0, JSON.stringify(pushes.map((p) => p.title)));
+  conta('e tambem sem som de venda', pushes.every((p) => p.aviso === true), JSON.stringify(pushes.map((p) => [p.title, p.aviso])));
+  solta(nkK);
 }
 
 console.log('\nAS LIGACOES NO WORKER\n');

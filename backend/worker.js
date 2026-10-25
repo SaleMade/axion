@@ -10300,7 +10300,7 @@ async function _botEntregar(env, cfg, row, pessoa, texto, tipo, dia, janelas) {
   }
   if (cfg.canais.push && pessoa.id) {
     try {
-      const n = await _wpParaPessoa(env, pessoa.id, { title: tipo === 'relatorio' || tipo === 'semanal' ? (cfg.relatorio.titulo || 'Resumo do dia') : 'Equipe SellWave', body: String(texto).replace(/\*/g, '').slice(0, 220), tag: 'bot-' + tipo, icon: '/icons/venda-192.png?v=2', url: '/ferramentas/bot' }, 'bot', null);
+      const n = await _wpParaPessoa(env, pessoa.id, { aviso: true, title: tipo === 'relatorio' || tipo === 'semanal' ? (cfg.relatorio.titulo || 'Resumo do dia') : 'Equipe SellWave', body: String(texto).replace(/\*/g, '').slice(0, 220), tag: 'bot-' + tipo, icon: '/icons/venda-192.png?v=2', url: '/ferramentas/bot' }, 'bot', null);
       if (n > 0 && !feito) { out.status = 'enviado'; out.via = 'push'; feito = true; }
       else if (n > 0) out.via = out.via + '+push';
     } catch (_) {}
@@ -18703,7 +18703,7 @@ async function _ldOnlineAviso(env) {
     const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE app_config.value <> excluded.value")
       .bind('ld_aviso_' + a.chave, dia, agora).run().catch(() => null);
     if (!(ins && ins.meta && ins.meta.changes > 0)) continue;   // ja avisou hoje
-    for (const id of quem) await _wpParaPessoa(env, id, { title: a.title, body: a.body, tag: 'ld-aviso-' + a.chave, icon: '/icons/venda-192.png?v=2', url: '/pressels/contingencia' }, 'celulares').catch(() => 0);
+    for (const id of quem) await _wpParaPessoa(env, id, { title: a.title, body: a.body, aviso: true, tag: 'ld-aviso-' + a.chave, icon: '/icons/venda-192.png?v=2', url: '/pressels/contingencia' }, 'celulares').catch(() => 0);
     console.log('LD_AVISO ' + a.chave + ' avisados=' + quem.length);
   }
 }
@@ -24098,6 +24098,7 @@ async function _swwebAvisaQueda(env, nk, st, b) {
         body: texto,
         tag: 'swconn-' + nk,
         url: '/pressels/contingencia',
+        aviso: true,   // problema nao toca som de venda (ver _fcmCanal)
       });
     }
   } catch (_) {}
@@ -24111,6 +24112,31 @@ async function _swwebAvisaQueda(env, nk, st, b) {
 // Leitura e escrita com gate de versao, igual ao handlePresselNum: outra tela gravando no mesmo
 // segundo nao pode perder a mexida (e a licao do incidente da aba antiga).
 // NUNCA RELIGA. Quem religa e gente, pelo interruptor.
+// O NUMERO E DE UM VENDEDOR DE VERDADE? (25/10/2026) Pessoa viva na equipe DA CASA.
+//
+// Tres coisas passam por `chip.at` e so uma e vendedor: o id de um usuario, o id de uma COLUNA do
+// cadastro (ccol_1, ccol_7...), e vazio. Coluna e onde o Bruno estaciona numero fora de uso, entao
+// avisar que um numero de coluna caiu e acordar ele pra dizer que um numero parado continua parado.
+//
+// Falha ABERTA de proposito: se a leitura do banco der errado, o aviso sai. Calar um aviso de
+// verdade por causa de um erro de rede e pior que um aviso a mais.
+const _vendCache = new Map();
+async function _ehVendedorDaCasa(env, at) {
+  const id = String(at || '');
+  if (!id || /^ccol_/i.test(id)) return false;
+  const c = _vendCache.get(id);
+  if (c && (Date.now() - c.t) < 60000) return c.v;
+  let v = true;
+  try {
+    const r = await env.DB.prepare(
+      "SELECT 1 AS x FROM users WHERE id=? AND COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='')"
+    ).bind(id).first();
+    v = !!r;
+  } catch (_) { v = true; }
+  _vendCache.set(id, { v, t: Date.now() });
+  return v;
+}
+
 async function _roletaDesligaNum(env, nk8, o) {
   const agora = Math.floor(Date.now() / 1000);
   for (let tent = 0; tent < 3; tent++) {
@@ -24122,6 +24148,10 @@ async function _roletaDesligaNum(env, nk8, o) {
     if (!chip) return null;
     const at = String(chip.at || '');
     if (!at) return null;
+    // COLUNA DO CADASTRO NAO E VENDEDOR (25/10/2026). O numero estacionado numa coluna nao esta em
+    // fila nenhuma e a roleta nunca manda lead pra ele; gravar `off` no nome de uma coluna so suja o
+    // estado e faz esta funcao devolver "desliguei alguma coisa", que e o que disparava o aviso.
+    if (/^ccol_/i.test(at)) return null;
     // SO A CASA. Numero de afiliado e operacao dele, e desligar o numero dos outros por conta
     // propria nao e nosso papel - o aviso ate pode ir, o interruptor nao.
     if (String(chip.afl || '')) return null;
@@ -24550,6 +24580,9 @@ async function _desligaCaidos(env) {
     // proposito: este substitui aquele no celular, em vez de empilhar dois.
     const numero = (f && f.numero) || (t && t.numero) || '';
     const dono = (f && f.at) || (t && t.at) || '';
+    // MESMA REGRA DO BANIDO: numero que nao e de vendedor nao acorda ninguem (ver _ehVendedorDaCasa).
+    // O desligamento e o status na Contingencia ja aconteceram acima e continuam valendo.
+    if (!(await _ehVendedorDaCasa(env, dono))) continue;
     const _d = String(numero).replace(/\D/g, '').replace(/^55/, '');
     const bonito = _d.length >= 10 ? '(' + _d.slice(0, 2) + ') ' + _d.slice(2, -4) + '-' + _d.slice(-4) : String(numero || nk);
     const porque = bloq ? 'foi bloqueado pelo WhatsApp' : 'desconectou no WhatsApp (pediu o QR de novo, sem ninguem fechar)';
@@ -24564,6 +24597,7 @@ async function _desligaCaidos(env) {
         await _wpParaPessoa(env, id, {
           title: bloq ? 'WhatsApp bloqueou um numero' : 'Numero caiu, desliguei da roleta',
           body, tag: 'swconn-' + nk, url: '/pressels',
+          aviso: true,   // problema nao toca som de venda (ver _fcmCanal)
         });
       }
     } catch (_) { /* o desligamento ja aconteceu; aviso que falha nao desfaz isso */ }
@@ -24648,7 +24682,12 @@ async function _desligaBanidos(env) {
   // AVISO PRA DIRECAO DA CASA, no maximo um a cada 12h POR NUMERO. Sem o trinco, religar um banido
   // tres vezes num dia renderia tres avisos iguais; com ele, o desligamento continua acontecendo
   // todas as vezes (que e o que protege o clique pago) e o aviso nao vira barulho.
-  const avisar = feitos.filter((f) => !ja[f.nk8] || (agora - Number(ja[f.nk8] || 0)) > 43200);
+  // E SO PRO NUMERO DE UM VENDEDOR (25/10/2026, pedido do Bruno; ver _ehVendedorDaCasa). O
+  // desligamento e a marca na Contingencia continuam valendo pra todos: eles sao verdade e nao
+  // acordam ninguem. O que para aqui e o barulho no celular dele as 00:07 por numero parado.
+  const deVend = [];
+  for (const f of feitos) if (await _ehVendedorDaCasa(env, f.at)) deVend.push(f);
+  const avisar = deVend.filter((f) => !ja[f.nk8] || (agora - Number(ja[f.nk8] || 0)) > 43200);
   for (const f of avisar) ja[f.nk8] = agora;
   try { await _writeConfig(env, K_JA, JSON.stringify(ja)); } catch (_) {}
   if (!avisar.length) return;
@@ -24666,6 +24705,7 @@ async function _desligaBanidos(env) {
           body: bonito + ' esta banido na Meta. ' + fiz.charAt(0).toUpperCase() + fiz.slice(1) + '.' + (desligou ? ' Nao religa sozinho.' : ''),
           tag: 'banido-' + f.nk8,
           url: '/pressels/contingencia',
+          aviso: true,   // problema nao toca som de venda (ver _fcmCanal)
         });
       }
     }
@@ -24717,6 +24757,7 @@ async function _presselSemNumeroAvisa(env, p, noTeto) {
         tag: (noTeto ? 'pressel-teto-' : 'pressel-sem-num-') + pid,
         icon: '/icons/venda-192.png?v=2',
         url: '/pressels/config',
+        aviso: true,   // pressel sem numero e problema, nao venda
       }, 'pressel').catch(() => 0);
     }
     console.log('PRESSEL_SEM_NUMERO pid=' + pid + (noTeto ? ' teto' : '') + ' avisados=' + (((r && r.results) || []).length));
@@ -28779,6 +28820,7 @@ async function _wpAvisarHoraDeCobrar(env, itens, st) {
           tag,
           icon: '/icons/venda-192.png?v=2',
           url: '/app/agenda',
+          aviso: true,   // lembrete de tarefa, nao venda
         }, tag);
       }
     }
@@ -28870,6 +28912,7 @@ async function _wpAvisarEtapa(env, itens, st) {
           title: e.titulo,
           body: e.corpo + ' ' + it.nome + (it.valor > 0 ? ' · ' + _wpBRL(it.valor) : ''),
           tag: chave, icon: '/icons/venda-192.png?v=2', url: '/app/agenda',
+          aviso: true,   // compromisso da agenda, nao venda
         }, chave);
       }
     }
