@@ -116,5 +116,52 @@ t(!doDir.some((n) => String(n.numero).includes('90000-0007')), 'a casa NAO ve o 
 const doGio = await pede(TK.gio, 'mgio00000000003')
 t(fins(doGio) === '0007', 'o afiliado ve o disponivel DELE, e so ele', fins(doGio))
 
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+// E DA PRA ABRIR? (24/10/2026) Listar nao basta: foi aqui que quebrou na mao dele. As rotas de
+// abrir presumiam dono, entao o aluguel respondia 404 "Numero nao encontrado" e o proxy 403 "Este
+// numero nao e seu" - num numero que a propria lista tinha acabado de oferecer.
+const abrir = async (tk, maq, numero) => {
+  const r = await worker.fetch(new Request('https://x/api/swweb/uso', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + tk, 'content-type': 'application/json', 'x-sw-maquina': maq, 'x-sw-versao': '1.25.24' },
+    body: JSON.stringify({ nk: String(numero).replace(/\D/g, '') }),
+  }), env, ctx)
+  return { st: r.status, j: await r.json() }
+}
+const proxyDe = async (tk, maq, numero) => {
+  const r = await worker.fetch(new Request('https://x/api/swweb/proxy?nk=' + String(numero).replace(/\D/g, ''), {
+    headers: { authorization: 'Bearer ' + tk, 'x-sw-maquina': maq, 'x-sw-versao': '1.25.24' },
+  }), env, ctx)
+  return { st: r.status, j: await r.json() }
+}
+
+const MAQ_DIR = 'mbruno0000000001', MAQ_K = 'mkevin0000000002', MAQ_G = 'mgio00000000003'
+
+let a = await abrir(TK.dir, MAQ_DIR, '(15) 97400-8709')
+t(a.st === 200 && a.j.ok === true, 'a direcao ABRE um numero de Disponiveis', a.st + ' ' + JSON.stringify(a.j).slice(0, 120))
+
+a = await proxyDe(TK.dir, MAQ_DIR, '(15) 97400-8709')
+t(a.st === 200 && a.j.ok === true, 'e pega o proxy dele (o app nao abre sem)', a.st + ' ' + JSON.stringify(a.j).slice(0, 120))
+
+a = await abrir(TK.kevin, MAQ_K, '(15) 99250-3977')
+t(a.st === 403 && /ainda n\u00e3o tem dono|ainda não tem dono/.test(JSON.stringify(a.j)),
+  'o vendedor NAO abre numero sem dono, e a frase diz o porque', a.st + ' ' + JSON.stringify(a.j))
+
+a = await abrir(TK.dir, MAQ_DIR, '(15) 90000-0007')
+t(a.st === 403 && /opera/.test(JSON.stringify(a.j)),
+  'a casa nao abre o disponivel DO AFILIADO', a.st + ' ' + JSON.stringify(a.j))
+
+a = await abrir(TK.gio, MAQ_G, '(15) 90000-0007')
+t(a.st === 200 && a.j.ok === true, 'e o afiliado abre o dele', a.st + ' ' + JSON.stringify(a.j).slice(0, 120))
+
+a = await abrir(TK.dir, MAQ_DIR, '(11) 91111-2222')
+t(a.st === 404, 'numero que nao existe mesmo continua dando 404', a.st + ' ' + JSON.stringify(a.j))
+
+// E O DONO CONTINUA MANDANDO NO QUE E DELE: a regra nova nao pode ter afrouxado a antiga.
+a = await abrir(TK.kevin, MAQ_K, '(17) 99701-1859')
+t(a.st === 200 && a.j.ok === true, 'o vendedor continua abrindo o numero DELE', a.st + ' ' + JSON.stringify(a.j).slice(0, 120))
+a = await abrir(TK.gio, MAQ_G, '(17) 99701-1859')
+t(a.st === 403, 'e ninguem de fora abre o numero da casa', a.st + ' ' + JSON.stringify(a.j))
+
 console.log('\n' + ok + ' certos, ' + mau + ' errados')
 process.exit(mau ? 1 : 0)

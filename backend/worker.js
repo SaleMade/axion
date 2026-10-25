@@ -11105,6 +11105,38 @@ const _swwebMundo = (u) => String(aflDe(u) || '').trim();
 // por mundo, nunca no lugar dele.
 const _swwebManda = (u) => (_swwebMundo(u) ? ehDonoDoMundo(u) : isDirector(u));
 
+// PODE MEXER NESTE NUMERO? (24/10/2026) Uma regra so pras rotas que ABREM ou CONFIGURAM um numero.
+// Devolve null quando pode, ou a resposta de erro pronta.
+//
+// Existiam QUATRO copias quase iguais disto, e cada uma errava de um jeito quando o chip NAO TINHA
+// DONO. Isso nao incomodava ninguem enquanto numero sem dono nao aparecia no app; desde que a coluna
+// "Disponiveis" passou a aparecer (ver /api/swweb/numeros, pedido do Bruno), ele PRECISA ser aberto
+// pra ser conectado - e esse e justamente o ponto do pedido. O que acontecia:
+//   POST /api/swweb/uso    confundia "sem dono" com "nao existe" e devolvia 404 "Numero nao
+//                          encontrado". O Bruno clicava num numero que a propria lista acabara de
+//                          oferecer e lia "Nao abriu" na cara dele.
+//   GET  /api/swweb/proxy  devolvia 403 "Este numero nao e seu" - de quem, se nao e de ninguem?
+//   POST /api/swweb/proxy  e /proxy-atribuir nao conferiam NADA sem dono: o corte de mundo so
+//                          rodava quando havia dono, entao chip sem dono de outra operacao passava.
+//
+// SEM DONO NAO HA DE QUEM HERDAR O MUNDO, entao o corte sai do `afl` do PROPRIO chip, igual na
+// lista. Era por ai que dava pra furar o isolamento casa x afiliado.
+async function _swwebPodeNoNumero(env, nk, u, manda, mundo) {
+  const data = await _getDashData(env);
+  const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
+  // "Nao encontrado" fica reservado pro que REALMENTE nao esta na base: e a unica resposta aqui que
+  // manda a pessoa procurar o numero no cadastro em vez de procurar permissao.
+  if (!chip) return err('Número não encontrado', 404);
+  const dono = String(chip.at || '');
+  if (!dono) {
+    if (!manda) return err('Este número ainda não tem dono', 403);
+    return String(chip.afl || '') === mundo ? null : err('Este número não é da sua operação', 403);
+  }
+  if (!manda) return dono === String(u.id) ? null : err('Este número não é seu', 403);
+  const mDono = String((await _mundoDoAt(env, dono)) || '');
+  return mDono === mundo ? null : err('Este número não é da sua operação', 403);
+}
+
 // TRAVA DE USO: O MESMO NUMERO NAO ABRE EM DUAS MAQUINAS (16/10/2026, pedido do Bruno).
 //
 // Palavras dele: "imagina o mesmo WhatsApp abrir em dois computadores ao mesmo tempo, o WhatsApp ia
@@ -12105,17 +12137,7 @@ async function handleSwWeb(req, env, path) {
     // SENHA DE PROXY NAO ATRAVESSA MUNDO. O mapa `proxies` ja e o do mundo de quem pediu, entao
     // um chip de outra operacao simplesmente nao tem entrada aqui; esta conferencia e a segunda
     // camada, pra quando a dona da operacao pedir um numero que nao e dela.
-    {
-      const data = await _getDashData(env);
-      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
-      const dono = String((chip && chip.at) || '');
-      if (!dono) return err('Este número não é seu', 403);
-      if (!manda && dono !== String(u.id)) return err('Este número não é seu', 403);
-      if (manda) {
-        const mDono = await _mundoDoAt(env, dono);
-        if (String(mDono || '') !== mundo) return err('Este número não é da sua operação', 403);
-      }
-    }
+    { const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo); if (nao) return nao; }
     const px = proxies[nk] || null;
     // A LIBERACAO VIAJA JUNTO DO PROXY porque e o app que decide abrir, e ele ja pergunta isto aqui
     // antes de cada abertura. Mandar em rota separada daria duas idas e uma janela entre elas.
@@ -12131,14 +12153,9 @@ async function handleSwWeb(req, env, path) {
     const nk = _swwebKeyExata(b && b.nk);
     if (!nk) return err(_ERRO_NK);
     // E SO EM CHIP DA PROPRIA OPERACAO. Cadastrar proxy no chip do outro mundo seria mandar o
-    // numero dele sair pela nossa saida, sem ele saber.
-    {
-      const data = await _getDashData(env);
-      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
-      const dono = String((chip && chip.at) || '');
-      const mDono = dono ? String((await _mundoDoAt(env, dono)) || '') : '';
-      if (dono && mDono !== mundo) return err('Este número não é da sua operação', 403);
-    }
+    // numero dele sair pela nossa saida, sem ele saber. (Antes de 24/10 o chip SEM DONO nao passava
+    // por conferencia nenhuma aqui: o corte de mundo so rodava quando havia dono.)
+    { const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo); if (nao) return nao; }
     const host = String((b && b.host) || '').trim();
     if (!host) delete proxies[nk];
     else {
@@ -12586,11 +12603,7 @@ async function handleSwWeb(req, env, path) {
     // O MESMO GATE DE MUNDO do POST /proxy: proxy no chip de outra operacao seria mandar o numero
     // dela sair pela nossa saida, sem ela saber.
     {
-      const data = await _getDashData(env);
-      const chip = (Array.isArray(data && data.chips) ? data.chips : []).find((c) => c && _swwebKey(c.num) === nk);
-      const dono = String((chip && chip.at) || '');
-      const mDono = dono ? String((await _mundoDoAt(env, dono)) || '') : '';
-      if (dono && mDono !== mundo) return err('Este número não é da sua operação', 403);
+      const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo); if (nao) return nao;
     }
     if (!id) { delete proxies[nk]; await _writeConfig(env, K_PROXIES, JSON.stringify(proxies)); return json({ ok: true, nk, apagou: true }); }
     const p = banco[id];
@@ -12757,15 +12770,8 @@ async function handleSwWeb(req, env, path) {
     const agoraU = Math.floor(Date.now() / 1000);
 
     // SO EM NUMERO QUE A PESSOA ALCANCA. Sem isto da pra trancar o numero dos outros de fora.
-    const dataU = await _getDashData(env);
-    const chipU = (Array.isArray(dataU && dataU.chips) ? dataU.chips : []).find((c) => c && _swwebKey(c.num) === nk);
-    const donoU = String((chipU && chipU.at) || '');
-    if (!donoU) return err('Número não encontrado', 404);
-    if (!manda && donoU !== String(u.id)) return err('Este número não é seu', 403);
-    if (manda) {
-      const mDonoU = String((await _mundoDoAt(env, donoU)) || '');
-      if (mDonoU !== mundo) return err('Este número não é da sua operação', 403);
-    }
+    // NUMERO SEM DONO PASSA (24/10/2026): e pra conectar ele que o aluguel existe. Ver a funcao.
+    { const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo); if (nao) return nao; }
 
     if (b && b.soltar) {
       // LIBERAR A FORCA, SO PRA QUEM MANDA NA OPERACAO (18/10/2026). Ate aqui nao existia saida
