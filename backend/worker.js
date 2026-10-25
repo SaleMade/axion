@@ -11892,10 +11892,13 @@ async function handleSwWeb(req, env, path) {
     }
     // LEAD DE HOJE POR NUMERO: e o mesmo placar que a roleta usa pra respeitar o teto. O vendedor
     // ve quantos ja chegaram no numero dele sem precisar abrir a dash.
-    let lh = {};
+    let lh = {}, leadPorAt = {};
     try {
       const dia = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
       lh = (await _leadsHojePorNumero(env, dia)) || {};
+      // E O MESMO DIA POR VENDEDOR, pelo DONO DA HORA (ver o placar da equipe la embaixo). Mesma
+      // varredura e mesmo cache do de cima: nao custa consulta nenhuma a mais.
+      leadPorAt = ((await _leadsHojePorAt(env, dia)) || {}).porAt || {};
     } catch (_) { lh = {}; }
     // A FILA DO MODO LIMITE, pro app mostrar o MESMO que a Chegada de leads mostra.
     //
@@ -12111,18 +12114,35 @@ async function handleSwWeb(req, env, path) {
     for (const n of visiveis) { const f = fotos[String(n.at || '')]; n.foto = (f && f.foto) || ''; n.sigla = (f && f.sigla) || ''; n.corDono = (f && f.cor) || ''; }
     const equipe = [];
     try {
+      // QUEM APARECE no placar: quem tem numero RECEBENDO agora no mesmo mundo. Isso nao mudou.
       const porDono = {};
       for (const c of chips) {
         const at = String((c && c.at) || '');
         if (!c || !c.num || !donos[at] || mundoDoDono[at] !== mundo) continue;
-        const o = (porDono[at] = porDono[at] || { at, nome: donos[at], leads: 0, recebe: false });
-        o.leads += Number(lh[_swwebK8(c.num)]) || 0;
+        const o = (porDono[at] = porDono[at] || { at, nome: donos[at], recebe: false });
         if (_swwebApto(c, nomeSt, _ids) || _chipAquecendo(c, _ids.aquec)) o.recebe = true;
       }
+      // QUANTOS LEADS CADA UM TEVE: pelo DONO DA HORA, nao pelo dono de agora (24/10/2026).
+      //
+      // Isto somava `lh[nk]` nos chips que a pessoa tem NESTE MOMENTO. Resultado: tirar um numero da
+      // coluna do vendedor (mandar pra Disponiveis, pra outra coluna, ou apagar) APAGAVA do placar
+      // os leads que aquele numero ja tinha recebido no dia. O Bruno viu assim: "para o Guilherme
+      // parece que chegou apenas 119, sendo que chegou muito mais", e acertou a causa sozinho.
+      //
+      // MEDIDO no dia 24/10, 712 leads no total: Guilherme 119 no placar contra 397 de verdade,
+      // Kevin 277 contra 286, Barbara 1 contra 19. 309 leads nao apareciam pra NINGUEM - 188 em
+      // numero que ficou sem dono e 121 em numero que saiu do cadastro.
+      //
+      // `_leadsHojePorAt` soma pela INSTANCIA gravada no proprio lead (ax_<at>_<8dig>), que e o dono
+      // na hora em que ele chegou: e a unica fonte que nao se move quando o numero troca de mao
+      // depois. A roleta ja balanceia por ela desde 21/10; faltava o placar.
+      //
+      // Lead SEM instancia (`semInst`) fica de fora, e e o certo: nao da pra saber de quem foi, e
+      // chutar no dono atual do numero e exatamente o erro que estava aqui.
       for (const o of Object.values(porDono)) {
         if (!o.recebe) continue;
         const f = fotos[o.at] || {};
-        equipe.push({ at: o.at, nome: o.nome, foto: f.foto || '', sigla: f.sigla || '', cor: f.cor || '', leads: o.leads, eu: o.at === String(u.id) });
+        equipe.push({ at: o.at, nome: o.nome, foto: f.foto || '', sigla: f.sigla || '', cor: f.cor || '', leads: Number(leadPorAt[o.at]) || 0, eu: o.at === String(u.id) });
       }
       equipe.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
     } catch (_) { /* sem equipe a barra so nao mostra o placar */ }
