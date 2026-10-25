@@ -276,6 +276,14 @@ const FILA_ROTULO = { vez: 'recebendo', espera: 'na fila', bateu: 'no limite' }
 // A frase inteira, do jeito que esta na dash. Vai no title: em 268px nao cabe na linha, e cortar
 // pela metade seria pior que esconder.
 function fraseEstado(n) {
+  // NA PRATELEIRA A FRASE E OUTRA (24/10/2026). Numero sem dono nao esta em roleta nenhuma, e o
+  // `ligado` dele e verdade vazia (quer dizer so "nao ha interruptor desligado pra ele"), entao
+  // todas as frases abaixo descreveriam uma fila em que ele nao esta. O que importa ali e so se ele
+  // ja esta conectado, que e o trabalho que ele vem fazer na prateleira.
+  if (!n.dono) {
+    const c = seloConn(n)
+    return 'sem dono ainda · ' + String(c.txt || '').toLowerCase()
+  }
   if (!ligadoDe(n)) return n.volta ? 'desligado até a meia-noite' : 'desligado'
   if (!n.roleta) return 'ligado, mas nenhum computador está com ele aberto'
   if (n.dist !== 'limite' || !n.fila) return 'distribuindo'
@@ -365,7 +373,11 @@ const faltaConectar = (n) => {
 
 function linhaFina(n) {
   const nk = numKey(n.numero)
-  const emFila = n.dist === 'limite' && n.fila && n.fila.pos
+  // Mesma regra da linha larga: sem dono nao ha posicao de fila nem teto pra mostrar. Em 56px nao
+  // cabe palavra nenhuma, entao a prateleira fica so com o ponto e os quatro digitos; o estado
+  // inteiro continua no passe de mouse, que e o mesmo `fraseEstado` da outra barra.
+  const prateleira = !n.dono
+  const emFila = !prateleira && n.dist === 'limite' && n.fila && n.fila.pos
   const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
   const corEstado = corDoContador(n)
   const sinal = emFila
@@ -378,7 +390,7 @@ function linhaFina(n) {
     + ' title="' + esc(bonito(cheio(nk))) + (n.dono ? ' · ' + esc(n.dono) : '') + ' · ' + esc(fraseEstado(n)) + '">'
     + sinal
     + '<span class="d">' + quatro + '</span>'
-    + '<span class="c" style="color:' + corEstado + '">' + leads + (teto ? '/' + teto : '') + '</span>'
+    + '<span class="c" style="color:' + corEstado + '">' + (prateleira ? '' : leads + (teto ? '/' + teto : '')) + '</span>'
     + '</button>'
 }
 
@@ -393,9 +405,15 @@ function linha(n) {
   if (carregando.has(nk)) cls.push('carregando')
   if (semMotor.has(nk)) cls.push('sem-motor')
 
+  // NA PRATELEIRA A LINHA DIZ MENOS (24/10/2026, pedido do Bruno). Numero sem dono nao esta em fila
+  // e nao tem teto: "preciso apenas saber se eles estao conectados ou nao". E nao e so limpeza - a
+  // posicao e o teto saiam de `dist` e `lim_dia`, que SOBRARAM de quando o numero teve dono, entao
+  // a tela mostrava resto de cadastro como se fosse estado de agora ("13/70 sem app aberto" num
+  // numero que nao esta em fila nenhuma).
+  const prateleira = !n.dono
   // NA FILA, A BOLINHA VIRA A POSICAO. E a mesma troca da dash: no modo Limite o que importa nao e
   // "esta de pe?", e "e a vez de quem?". Fora da fila, continua o ponto com a cor do cadastro.
-  const emFila = n.dist === 'limite' && n.fila && n.fila.pos
+  const emFila = !prateleira && n.dist === 'limite' && n.fila && n.fila.pos
   const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
   const corEstado = corDoContador(n)
   const sinal = emFila
@@ -473,11 +491,20 @@ function linha(n) {
         ? ((n.fila.st === 'bateu' && aquecendo(n)) ? 'no ritmo' : (FILA_ROTULO[n.fila.st] || ''))
         : 'recebendo')
   const pct = teto ? Math.min(100, Math.round((leads / teto) * 100)) : 0
-  const conta = teto
-    ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + '/' + teto
-      + (rot ? ' <i>' + rot + '</i>' : '')
-      + '<b style="width:' + pct + '%"></b></span>'
-    : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
+  // Na prateleira, no lugar do contador vai a UNICA coisa que ele precisa saber ali. Duas palavras,
+  // pela MESMA conta do cabecalho do grupo (`faltaConectar`): se as duas discordassem, o cabecalho
+  // diria "2 a conectar" e as linhas diriam outra coisa, e nenhuma das duas serviria. A frase
+  // inteira (o que e e o que fazer) continua no passe de mouse, vinda do seloConn.
+  const sc = prateleira ? seloConn(n) : null
+  const falta = prateleira && faltaConectar(n)
+  const conta = prateleira
+    ? '<span class="cnt" style="--cc:' + (falta ? '#f59e0b' : 'var(--verde)') + '" title="'
+      + esc(sc.txt + '. ' + sc.det) + '">' + (falta ? 'falta conectar' : 'conectado') + '</span>'
+    : teto
+      ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + '/' + teto
+        + (rot ? ' <i>' + rot + '</i>' : '')
+        + '<b style="width:' + pct + '%"></b></span>'
+      : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
 
   // Fechar so faz sentido no que esta aberto. A sessao fica no disco: fechar NAO pede QR depois.
   const fecha = aberto

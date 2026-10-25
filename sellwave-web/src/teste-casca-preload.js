@@ -51,7 +51,10 @@ const ESTADO = () => ({
     // OS DE "DISPONIVEIS" (24/10/2026): sem dono ainda, a prateleira de onde ele tira numero. Vem
     // PRIMEIRO de proposito - o grupo nasce no topo pela ordem de insercao e o codigo tem que mandar
     // ele pro fim. Um ja esta conectado e o outro nao, pro cabecalho ter o que contar.
-    { numero: '5515974008709', dono: '', idx: 12, roleta: false, apto: false, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', status: 'Disponível', conn: { st: 'pronto', ts: 0 } },
+    // AS SOBRAS DE QUANDO ELE TEVE DONO (dist, fila, lim_dia, leads_hoje) ficam aqui DE PROPOSITO:
+    // sao elas que faziam a linha mostrar a posicao "1" e "13/70 sem app aberto" num numero que nao
+    // esta em fila nenhuma. A tela tem que IGNORAR tudo isso quando o numero nao tem dono.
+    { numero: '5515974008709', dono: '', idx: 12, roleta: false, apto: false, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 13, lim_dia: 70, cor: '', st: 'ativo', status: 'Disponível', conn: { st: 'pronto', ts: 0 } },
     { numero: '5515992503977', dono: '', idx: 32, roleta: false, apto: false, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', status: 'Disponível', conn: null },
     { numero: '5511966632248', dono: 'Guilherme', foto: URL_FOTO_GUI, sigla: 'GS', corDono: '#24c278', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },

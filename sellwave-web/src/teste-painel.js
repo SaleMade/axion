@@ -1139,6 +1139,22 @@ app.whenReady().then(async () => {
   conta('sem foto: a prateleira nao e de ninguem', pra.semFoto)
   conta('e conta quantos FALTAM CONECTAR, nao "recebendo/total"', pra.qtd === '1 a conectar', pra.qtd)
 
+  // A LINHA DA PRATELEIRA DIZ MENOS (24/10/2026): "esses numeros nao precisam estar na contagem de
+  // recebimento de leads (...) nao precisam ter aquele numero ao lado esquerdo ali, 1 e 2 (...)
+  // preciso apenas saber se eles estao conectados ou nao". O 8709 do stub carrega as sobras de
+  // quando teve dono (fila pos 1, 13/70): se a tela voltar a le-las, isto acusa.
+  const lin = await js2('(() => { const h = document.querySelector(".vend.disp"); const out = [];'
+    + ' let e = h ? h.nextElementSibling : null;'
+    + ' while (e && e.classList.contains("num")) { out.push({ pos: !!e.querySelector(".pos"),'
+    + '   ponto: !!e.querySelector(".sinal"), cnt: (e.querySelector(".cnt") || {}).textContent || "",'
+    + '   titulo: e.getAttribute("title") || "" }); e = e.nextElementSibling } return out })()')
+  conta('a prateleira tem as duas linhas', lin.length === 2, JSON.stringify(lin))
+  conta('sem a bolinha de POSICAO: eles nao estao em fila nenhuma', lin.every(x => !x.pos && x.ponto), JSON.stringify(lin))
+  conta('e sem contador de lead: nenhum "x/y" na linha', lin.every(x => !x.cnt.includes('/')), JSON.stringify(lin.map(x => x.cnt)))
+  conta('no lugar dele, so se esta conectado ou nao',
+    lin.map(x => x.cnt).join('|') === 'conectado|falta conectar', JSON.stringify(lin.map(x => x.cnt)))
+  conta('e o passe de mouse nao fala de fila, fala de dono', lin.every(x => /sem dono ainda/.test(x.titulo)), JSON.stringify(lin.map(x => x.titulo)))
+
   // ── A FOTO DO VENDEDOR E O PLACAR DE HOJE (23/10/2026, pedido do Bruno) ───────────────────────
   // `.disp` fora junto com `.aquec`: nenhum dos dois e cabecalho de vendedor, e so vendedor tem foto.
   const avs = () => js2('(() => { const h = [...document.querySelectorAll(".vend")].filter(e => !e.classList.contains("aquec") && !e.classList.contains("disp"));'
@@ -1418,8 +1434,9 @@ app.whenReady().then(async () => {
   conta('encolhida, mostra um numero por linha', dentro.fino === esperado.n, dentro.fino + ' de ' + esperado.n)
   conta('mostra os 4 ultimos digitos', dentro.d === esperado.digitos, dentro.d + '   esperado ' + esperado.digitos)
   // O '3/5' do 8551 PROVA que o teto sai da rampa: o `lim_dia` dele no stub e zero.
-  // Os dois '0' antes do aquecimento sao os de "Disponiveis": sem dono, sem teto e sem lead.
-  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,0,0,3/5,7/20', dentro.c)
+  // Os dois VAZIOS antes do aquecimento sao os de "Disponiveis": sem dono nao ha teto nem lead pra
+  // contar, e em 56px nao cabe palavra. O estado inteiro deles fica no passe de mouse.
+  conta('mostra o contador do dia', dentro.c === '70/70,32/70,0,0,0/70,,,3/5,7/20', dentro.c)
   conta('esconde a busca e o cabecalho de vendedor', dentro.vend === 0 && dentro.busca === 'none', JSON.stringify(dentro))
   conta('e o placar de hoje (em 56px nao cabe)', await js2('!document.querySelector(".equipe")'))
 
