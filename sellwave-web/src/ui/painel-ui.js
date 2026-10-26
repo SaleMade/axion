@@ -449,12 +449,19 @@ function desenhaFunis() {
         prev = '<div class="funil-prev">' + (passos.length ? passos.map((p, j) => {
           const info = infoDoPasso(p.id || p)
           const k = TIPOS[info.tipo]
+          // O QUE A PREVIA MOSTRA (26/10/2026): a pausa do audio nao esta mais no roteiro, e metade
+          // da duracao do arquivo, e so a pagina sabe disso na hora de mandar. Entao a previa diz a
+          // REGRA em vez de um numero que ela nao tem - mostrar "pausa 3s" num audio que vai esperar
+          // 92 s e pior que nao mostrar nada.
           const pausa = pausaDoPasso(p)
+          const respiro = info.tipo === 'audio' ? 'metade do áudio'
+            : info.tipo === 'text' ? (pausa > 0 ? 'pausa ' + pausa + 's' : 'sem pausa')
+              : 'sem pausa'
           return '<div class="passo" style="--kc:' + k.cor + '">'
             + '<span class="passo-ic">' + svg(k.ic) + '</span>'
             + '<span class="passo-n">' + (j + 1) + '</span>'
             + '<span class="passo-lbl">' + esc(info.label) + '</span>'
-            + '<span class="passo-pausa">' + (pausa > 0 ? 'pausa ' + pausa + 's' : 'sem pausa') + '</span></div>'
+            + '<span class="passo-pausa">' + respiro + '</span></div>'
         }).join('') : 'Funil sem passos.')
           + (s.stopOnReply ? '<div style="margin-top:4px;font-size:10px">Para se o lead responder.</div>' : '')
           + '</div>'
@@ -2068,6 +2075,8 @@ function disparaFunil(id) {
 // Cada job carrega o alvo CONGELADO do clique. Trocar de conversa pra disparar o proximo nao mexe
 // no que ja esta na fila: quem entrou pro Fulano continua indo pro Fulano.
 let jobSeq = 0
+// O RESPIRO ENTRE UM FUNIL E O PROXIMO, no mesmo numero (26/10/2026). Dez segundos, numero dele.
+const ENTRE_FUNIS_MS = 10000
 
 // O BOTAO DO CATALOGO NAO MOSTRA MAIS RODINHA (16/10/2026, segunda rodada da fila). Ele mostrava
 // enquanto aquele funil estivesse na fila, e o Bruno leu isso como proibicao: "voce bloqueou os
@@ -2166,6 +2175,16 @@ async function consomeNk(nk) {
       // como o que esta saindo agora. Tirar antes faria sumir da tela no meio do envio.
       fila = fila.filter((j) => j.id !== job.id)
       desenha()
+      // RESPIRO ENTRE FUNIS (26/10/2026, regra do Bruno: "sempre que eu terminar de mandar um funil
+      // completo para um lead e for enviar outro, ou tiver outro funil na fila, eu quero que espere
+      // ali pelo menos 10 segundos"). Isto nunca existiu, nem aqui nem no inbox: os dois emendavam
+      // um job no outro, e enfileirar 5-6 leads virava um fluxo continuo de mensagens no mesmo chip.
+      // SO ENTRE JOBS DO MESMO NUMERO, que e onde a fila existe. Numeros diferentes continuam
+      // saindo ao mesmo tempo, um consumidor por numero (a regra de 17/10, que nao muda).
+      if (fila.some((j) => String(j.nk || '') === nk && !j.rodando)) {
+        rodape('respiro de ' + Math.round(ENTRE_FUNIS_MS / 1000) + 's antes do próximo funil')
+        await new Promise((r) => setTimeout(r, ENTRE_FUNIS_MS))
+      }
     }
   } finally {
     // SOLTA O NUMERO MESMO SE O JOB ESTOUROU. Sem o finally, um erro inesperado deixaria o numero

@@ -371,6 +371,43 @@
   // o proprio envio, colado na espera.
   window.__swIndica = function () { return Promise.resolve(true) }
 
+  // QUANTO DURA ESTE AUDIO (26/10/2026). Nao esta no roteiro: e lido do proprio arquivo, aqui, que e
+  // onde ele existe. Teto de 4 s pra leitura do metadado: audio que nao diz a duracao nao pode
+  // segurar o funil, entao cai no valor que veio do painel.
+  function duracaoDoAudio(dataUri) {
+    return new Promise(function (ok) {
+      try {
+        var a = new Audio()
+        var fim = function (v) { try { a.src = '' } catch (_) { /* ok */ } ok(v) }
+        var t = setTimeout(function () { fim(0) }, 4000)
+        a.preload = 'metadata'
+        a.onloadedmetadata = function () { clearTimeout(t); fim(isFinite(a.duration) && a.duration > 0 ? a.duration : 0) }
+        a.onerror = function () { clearTimeout(t); fim(0) }
+        a.src = dataUri
+      } catch (_) { ok(0) }
+    })
+  }
+
+  // O RESPIRO DE CADA TIPO (26/10/2026, regra do Bruno). Tres regras, e so elas:
+  //   AUDIO  -> metade da duracao do proprio audio, com "gravando..." ligado. E o tempo que um
+  //             humano levaria pra gravar, e e o que ele pediu: "audio de 10 segundos, espero 5".
+  //             Audio que nao diz a duracao cai no que veio do painel (o passo do roteiro).
+  //   IMAGEM, VIDEO, DOCUMENTO -> ZERO. "Eu quero que eles sejam enviados de uma vez so, voce nao
+  //             precisa ter tempo." Eles ja levam tempo proprio subindo o arquivo.
+  //   TEXTO  -> o que esta no passo do roteiro, que e onde ele ajusta o "digitando...".
+  // O teto de 120 s continua valendo pros tres (ver o clamp abaixo): e o mesmo que o tetoDoItem do
+  // processo principal usa pra decidir quando desistir de um envio.
+  function respiroDoItem(item, dataUri) {
+    var k = String(item.kind || '')
+    if (item.tipo === 'texto') return Promise.resolve(Number(item.pausa) || 0)
+    if (k === 'audio') {
+      return duracaoDoAudio(dataUri).then(function (seg) {
+        return seg > 0 ? seg / 2 : (Number(item.pausa) || 0)
+      })
+    }
+    return Promise.resolve(0)
+  }
+
   // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
   window.__swManda = function (chatId, item) {
     var W = window.WPP
@@ -378,41 +415,46 @@
     // TRAVA FINAL DO ENVIO. Mesmo que algo mais acima erre, nada sai pra grupo ou lista.
     if (!ehPessoa(chatId)) return Promise.reject(new Error('essa conversa não é de uma pessoa'))
     if (!podeEnviar()) return Promise.reject(new Error('o motor do WhatsApp não está pronto'))
-    // A PAUSA DO PASSO E DAQUI PRA BAIXO. Vem em `item.pausa`, em segundos, ja resolvida pelo
-    // painel (vale `sim` se preenchido, senao `delay`, nunca a soma).
-    var pausaMs = Math.max(0, Math.min(120, Number(item.pausa) || 0)) * 1000
+    // A PAUSA DO PASSO E DAQUI PRA BAIXO, e quem decide quanto e o `respiroDoItem` (26/10/2026):
+    // audio espera metade da propria duracao, imagem/video/documento nao esperam, texto usa o que
+    // veio do passo do roteiro. Ela virou PROMESSA porque ler a duracao do audio e assincrono.
     window.__swParar = false
-
-    if (item.tipo === 'texto') {
-      var pre = Promise.resolve()
-      if (pausaMs) { try { pre = comPrazo(W.chat.markIsComposing(chatId, pausaMs + 300), 8000, 'digitando') } catch (_) { /* ok */ } }
-      return pre.catch(function () {})
-        .then(function () { return esperaOuPara(pausaMs) })
-        .then(function (parou) {
-          if (parou) return false
-          return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
-        })
-    }
     var dataUri = item.dataUri
-    if (!dataUri) return Promise.reject(new Error('mídia não veio junto'))
-    return Promise.resolve().then(function () {
-      if (item.kind === 'audio') {
-        var preA = Promise.resolve()
-        if (pausaMs) { try { preA = comPrazo(W.chat.markIsRecording(chatId, pausaMs + 300), 8000, 'gravando') } catch (_) { /* ok */ } }
-        return preA.catch(function () {})
+    if (item.tipo !== 'texto' && !dataUri) return Promise.reject(new Error('mídia não veio junto'))
+    return respiroDoItem(item, dataUri).then(function (seg) {
+      // O TETO DE 120 s CONTINUA, e agora ele importa de verdade: o audio mais longo do roteiro tem
+      // 186 s, e metade dele (93 s) passa raspando. Audio de mais de 4 minutos para no teto.
+      var pausaMs = Math.max(0, Math.min(120, Number(seg) || 0)) * 1000
+
+      if (item.tipo === 'texto') {
+        var pre = Promise.resolve()
+        if (pausaMs) { try { pre = comPrazo(W.chat.markIsComposing(chatId, pausaMs + 300), 8000, 'digitando') } catch (_) { /* ok */ } }
+        return pre.catch(function () {})
           .then(function () { return esperaOuPara(pausaMs) })
           .then(function (parou) {
             if (parou) return false
-            return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
+            return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
           })
       }
-      return esperaOuPara(pausaMs).then(function (parou) {
-        if (parou) return false
-        if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
-        if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')
-        return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
-      })
-    }).then(function () { return true })
+      return Promise.resolve().then(function () {
+        if (item.kind === 'audio') {
+          var preA = Promise.resolve()
+          if (pausaMs) { try { preA = comPrazo(W.chat.markIsRecording(chatId, pausaMs + 300), 8000, 'gravando') } catch (_) { /* ok */ } }
+          return preA.catch(function () {})
+            .then(function () { return esperaOuPara(pausaMs) })
+            .then(function (parou) {
+              if (parou) return false
+              return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
+            })
+        }
+        return esperaOuPara(pausaMs).then(function (parou) {
+          if (parou) return false
+          if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
+          if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')
+          return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
+        })
+      }).then(function () { return true })
+    })
   }
 
   // O que o painel pergunta a cada pulso.

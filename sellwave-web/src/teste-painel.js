@@ -38,7 +38,10 @@ const conta = (nome, certo, detalhe) => {
 }
 
 let ponto = 'antes do whenReady'
-setTimeout(() => { console.log('ESTOUROU O TEMPO (90s). Ultimo ponto: ' + ponto); app.exit(1) }, 90000)
+// O TETO SUBIU PRA 120s EM 26/10/2026: o teste do respiro entre funis espera 14 segundos de
+// relogio de proposito (ele CRONOMETRA a pausa de 10s, nao le o codigo). Sem subir o teto, o
+// suite inteiro morria no meio e os testes seguintes nem rodavam.
+setTimeout(() => { console.log('ESTOUROU O TEMPO (120s). Ultimo ponto: ' + ponto); app.exit(1) }, 120000)
 process.on('unhandledRejection', (e) => { console.log('PROMESSA SOLTA em ' + ponto + ': ' + (e && e.message)); app.exit(1) })
 
 app.whenReady().then(async () => {
@@ -1008,6 +1011,27 @@ app.whenReady().then(async () => {
     + ' esperando: document.querySelectorAll(".saindo .item-env .pt-fila").length }))()')
   conta('dois disparos do MESMO numero continuam um por vez, nunca intercalados',
     mesmoNk.rodando === 1 && mesmoNk.esperando >= 1, JSON.stringify(mesmoNk))
+
+  // ══ E ENTRE UM FUNIL E O PROXIMO TEM 10 SEGUNDOS DE RESPIRO ═════════════════════
+  //
+  // Regra do Bruno, 26/10/2026: "sempre que eu terminar de mandar um funil completo para um lead e
+  // for enviar outro, ou tiver outro funil na fila, eu quero que espere ali pelo menos 10 segundos".
+  // Isto nunca existiu, nem aqui nem no inbox: os dois emendavam um job no outro, e foi assim que o
+  // socio dele botou 5-6 leads na fila e viu "mandando quase sem delay nenhum".
+  //
+  // MEDE O TEMPO, nao o desenho do codigo: o duble do `manda` carimba a hora de cada chamada, entao
+  // a distancia entre o ULTIMO envio do primeiro funil e o PRIMEIRO do segundo e a resposta. O
+  // funil do stub tem 2 passos de 1,2s, entao o segundo job so pode comecar ~11s depois.
+  await espera(14000);
+  const seq = JSON.parse(await js('JSON.stringify((window.__ver()).filter(c => c.nome === "manda").map(c => ({ alvo: String((c.args[1] || "")).slice(0, 13), t: c.t })))'));
+  const doC1 = seq.filter((x) => x.alvo.indexOf('5511933333333') === 0);
+  const doC2 = seq.filter((x) => x.alvo.indexOf('5511944444444') === 0);
+  conta('os dois funis sairam inteiros', doC1.length === 2 && doC2.length === 2,
+    JSON.stringify(seq.map((x) => x.alvo)));
+  const respiro = (doC1.length && doC2.length) ? (doC2[0].t - doC1[doC1.length - 1].t) : -1;
+  // 11s = os 10s do respiro + o 1,2s que o ultimo envio do primeiro funil ainda levou pra voltar.
+  conta('e o segundo so comeca 10s depois que o primeiro acabou',
+    respiro >= 11000, respiro + 'ms entre o fim de um funil e o inicio do outro')
 
   // PARAR UM NAO PARA O OUTRO. A bandeirinha era global: clicar no X de um funil derrubava o outro
   // sem ninguem ter pedido.
