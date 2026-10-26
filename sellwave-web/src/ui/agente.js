@@ -618,8 +618,18 @@
       var id = (msg.id && (msg.id.id || (msg.id._serialized ? String(msg.id._serialized).split('_').pop() : ''))) || ''
       if (!id) id = 'sw_' + (ts || Date.now()) + '_' + pr.digits + '_' + deMim
 
-      // A CIFRADA ESPERA A LEGIVEL (ver o bloco acima). `solta` e a propria espera estourando.
+      // AVISO DE PROTOCOLO NAO E MENSAGEM (26/10/2026). Medido: 460 linhas num dia so, entre
+      // e2e_notification (a pessoa reinstalou o WhatsApp e trocou a chave), notification_template e
+      // companhia. A COLHEITA ja descartava isso (ver NAO_E_MSG); a captura normal nao, entao o
+      // mesmo evento virava mensagem recebida por um caminho e lixo por outro.
+      //
+      // E NAO E SO SUJEIRA: o alarme de numero mudo usa "teve alguma mensagem?" como prova de que a
+      // captura daquele numero esta viva. Um numero que so capturava ruido de protocolo parecia
+      // vivo pra ele - ou seja, o ruido escondia exatamente o caso que o alarme existe pra achar.
+      // O `ciphertext` fica de FORA desta lista: ele tem tratamento proprio logo abaixo (espera a
+      // versao legivel chegar), e descartar aqui perderia a mensagem de verdade.
       var tipoCru = String(msg.type || 'chat').toLowerCase()
+      if (tipoCru !== 'ciphertext' && NAO_E_MSG.test(tipoCru)) return
       if (tipoCru === 'ciphertext' && !solta) {
         if (!segurados[id] && !vistas[id]) {
           segurados[id] = {

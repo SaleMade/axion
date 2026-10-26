@@ -1,6 +1,6 @@
 {
   "name": "sellwave-web",
-  "version": "1.25.27",
+  "version": "1.25.28",
   "description": "Navegador multi-sessao de WhatsApp Web da SellWave",
   "main": "src/main.js",
   "private": true,

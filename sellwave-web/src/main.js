@@ -2477,7 +2477,15 @@ async function colheTodos() {
   try {
     for (const [nk, s] of [...abertos]) {
       const wc = s && s.view && s.view.webContents
-      if (!wc || wc.isDestroyed() || s.connUltimo !== 'pronto') continue
+      // NAO PULA MAIS POR CAUSA DO ULTIMO ESTADO DE CONEXAO (26/10/2026). Este `continue` tinha
+      // `s.connUltimo !== 'pronto'` junto, e era uma porta que so fechava: bastava a pagina reportar
+      // 'qr' ou 'caiu' UMA vez pra aquele numero nunca mais ser colhido, mesmo voltando a funcionar.
+      // Foi o que aconteceu com o (15) 99797-3450 hoje: conn virou 'qr' as 09:18 e a captura dele
+      // morreu ali, com cliques continuando a chegar. A colheita e justamente a rede pra quando o
+      // caminho normal cala - condicionar ela ao caminho normal estar bem anula o proposito.
+      // Perguntar pra uma pagina que nao pode responder nao custa nada: o `perguntaPagina` ja tem
+      // teto proprio e devolve null, e o laco segue pro numero seguinte.
+      if (!wc || wc.isDestroyed()) continue
       const agoraS = Math.floor(agoraCerto() / 1000)
       const desde = janelaDaColheita(nk, agoraS)
       const evs = await perguntaPagina(wc, 'window.__swColheRecentes ? window.__swColheRecentes(' + desde + ', 80, 400) : null', 25000)

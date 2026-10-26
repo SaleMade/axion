@@ -24956,7 +24956,16 @@ async function handlePresselDiag(req, env){
       for (const k of Object.keys(mexidas)) if (!_meusMx.has(k.slice(k.lastIndexOf(':') + 1))) delete mexidas[k];
     } catch (_) { mexidas = {}; }
   }
-  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k) })) });
+  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k),
+      // CEGO = a dash nao viu NENHUMA mensagem daquele numero na janela, nem a que o proprio
+      // vendedor mandou (26/10/2026). E outro problema que "o lead nao respondeu", e a tela
+      // precisa dizer qual dos dois: num caso o lead e ruim, no outro a dash esta cega e o
+      // vendedor pode estar atendendo normal sem nada chegar aqui. O dado ja existia no
+      // _mudoTabela (`todas`, as duas direcoes) e era jogado fora aqui.
+      // E SO CHAMA DE CEGO SE HOUVE VISITA. Sem clique chegando, silencio nao e defeito: e
+      // fim de expediente. Sem esta parte, as 20h a tela acusaria oito numeros cegos sem nada
+      // estar errado, e alarme que grita a toa e alarme que ninguem le.
+      cego: (mudos[k] > 0) && !((_mudoTabela[k] || {}).todas > 0) })) });
 }
 // GET /api/pressel/stats → views/clicks por pressel (a dash mostra na métrica)
 async function handlePresselStats(req, env){

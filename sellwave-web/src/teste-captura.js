@@ -96,6 +96,29 @@ async function rodar() {
   // ESTE E O PONTO DO CONSERTO INTEIRO: o codigo de desconto e o que amarra o lead ao clique pago.
   conta('e ela leva o "Código de desconto", que a deduplicacao jogava fora',
     dep.length === 1 && /Código de desconto/.test(String(dep[0].body || '')), dep.length ? String(dep[0].body) : '(nada)')
+
+  // ── AVISO DE PROTOCOLO NAO E MENSAGEM (26/10/2026) ──────────────────────────────────────────
+  //
+  // MEDIDO na producao: 460 linhas num dia so, entre e2e_notification (a pessoa reinstalou o
+  // WhatsApp e trocou a chave) e notification_template. A COLHEITA ja descartava; a captura normal
+  // nao, entao o mesmo evento virava mensagem recebida por um caminho e lixo por outro.
+  //
+  // E NAO E SO SUJEIRA: o alarme de numero mudo usa "teve alguma mensagem?" como prova de que a
+  // captura daquele numero esta viva. Numero que so capturava ruido parecia vivo pra ele - ou seja,
+  // o ruido escondia exatamente o caso que o alarme existe pra achar. Foi o dia do (17) 99701-1859,
+  // com 699 cliques e zero mensagem de verdade.
+  console.log('\nAVISO DE PROTOCOLO NAO E MENSAGEM')
+  for (const t of ['e2e_notification', 'notification_template', 'revoked', 'call_log', 'protocol']) {
+    await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: t, body: '', id: { id: 'RUIDO_' + t, fromMe: false } })) + '); "ok"')
+    await espera(250)
+    conta(t + ' nao vira mensagem', (await js('window.__enviados.length')) === 0,
+      'enviados=' + (await js('window.__enviados.length')))
+  }
+  // E A DE GENTE CONTINUA PASSANDO: o filtro nao pode ter levado mensagem junto.
+  await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: 'chat', body: 'tenho interesse', id: { id: 'DEPOIS_DO_FILTRO', fromMe: false } })) + '); "ok"')
+  await espera(400)
+  conta('e a mensagem de gente continua passando depois do filtro',
+    (await js('window.__enviados.length')) === 1, 'enviados=' + (await js('window.__enviados.length')))
   conta('e o tempo de espera foi medido, nao chutado',
     (await js('window.__swCifraMs')) > 0, 'ms=' + (await js('window.__swCifraMs')))
   // E O TEMPO VIAJA NO PROPRIO EVENTO. Sem isso, medir a espera na maquina do vendedor exigiria
