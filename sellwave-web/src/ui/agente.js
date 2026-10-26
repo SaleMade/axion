@@ -774,9 +774,31 @@
       var W = window.WPP
       if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) return
       var agoraS = Date.now() / 1000
-      Promise.resolve(W.chat.list({ onlyWithUnreadMessage: true })).then(function (chats) {
-        chats = Array.isArray(chats) ? chats : []
-        window.__swNaoLidas = chats.filter(function (c) { return c && !c.isGroup }).length
+      // DUAS LISTAS, E A SEGUNDA E O CONSERTO DE 26/10/2026. So as NAO LIDAS deixava de fora
+      // justamente a conversa que o vendedor esta atendendo: ele abre, le na hora, e ela nunca
+      // aparece como nao lida. Pra esses numeros sobrava so a colheita de 2 min, e por isso o
+      // contador deles atrasava 2 a 10 minutos enquanto o de um numero parado atrasava 13 s.
+      // A deduplicacao por id (`vistas`) ja existia: juntar as listas nao manda nada duas vezes.
+      Promise.all([
+        Promise.resolve(W.chat.list({ onlyWithUnreadMessage: true })).catch(function () { return [] }),
+        Promise.resolve(W.chat.list({ count: 15 })).catch(function () { return [] }),
+      ]).then(function (listas) {
+        var naoLidas = Array.isArray(listas[0]) ? listas[0] : []
+        // O contador da tela continua sendo SO as nao lidas: ele responde "quanta gente esta
+        // esperando", e conversa ja lida nao esta esperando ninguem.
+        window.__swNaoLidas = naoLidas.filter(function (c) { return c && !c.isGroup }).length
+        var jaVi = {}
+        var chats = []
+        for (var li = 0; li < listas.length; li++) {
+          var l = Array.isArray(listas[li]) ? listas[li] : []
+          for (var ci = 0; ci < l.length; ci++) {
+            var cc = l[ci]
+            var cid = cc && cc.id && (cc.id._serialized || cc.id)
+            if (!cid || jaVi[cid]) continue
+            jaVi[cid] = 1
+            chats.push(cc)
+          }
+        }
         chats.slice(0, 25).forEach(function (c) {
           try {
             if (!c || c.isGroup) return
