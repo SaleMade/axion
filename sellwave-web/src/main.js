@@ -3363,9 +3363,11 @@ async function dataUriDe(url) {
 // nao fechar a sessao no meio do disparo, e a aba de Pedidos precisa mostrar o que esta saindo nos
 // OUTROS numeros, que o painel da vez nao tem como saber sozinho.
 //
-// LIMITE DE HOJE, e vale escrito: o painel e UMA janela so pra todos os numeros e trava em
-// `ocupado` enquanto um funil roda, entao na pratica esta lista tem 0 ou 1 item. Ela ja nasce como
-// LISTA de proposito - no dia em que o painel rodar funil por numero, nada aqui muda.
+// ELA TEM MAIS DE UM ITEM DE VERDADE (corrigido em 27/10). O comentario antigo dizia que na pratica
+// a lista tinha 0 ou 1, porque o painel travava em `ocupado` enquanto um funil rodava. Desde 17/10
+// cada numero tem consumidor proprio e a janela destacada tem painel dela, entao dois numeros
+// disparam ao mesmo tempo. Quem for decidir "posso mexer nesta pagina?" tem que perguntar
+// `disparos.has(nk)` - nunca comparar com `disparandoNk`, que e so o ultimo que comecou.
 const disparos = new Map()   // nk -> { funil, passo, total, alvo, inicio }
 let disparandoNk = ''
 
@@ -3470,7 +3472,15 @@ ipcMain.handle('swp:indica', async (_e, { nk, chatId, kind, seg }) => {
 // teto fixo de 135 s cortava envio bom (todo video, e audio/texto com pausa longa, que e o coracao do
 // funil). +30 s de folga pra pagina recem-descongelada recusar sozinha com o erro do comPrazo.
 function tetoDoItem(it) {
-  const pausaMs = Math.max(0, Math.min(120, Number(it && it.pausa) || 0)) * 1000
+  // AUDIO ESPERA METADE DA PROPRIA DURACAO, NAO A PAUSA DO ROTEIRO (apontado pela sessao Sell 02 em
+  // 27/10). Desde 26/10 quem decide a espera e o `respiroDoItem` do agente, com teto de 120 s: o
+  // audio de 186 s do roteiro espera 93 s, enquanto `it.pausa` continua dizendo 3 a 5 s. O teto
+  // saia em ~155 s contra 93 s de espera MAIS o upload, sobrando ~1 min pro arquivo subir pela
+  // proxy compartilhada (7 Mbps divididos por 3 a 4 numeros). Estourando, o main diz "o numero nao
+  // respondeu a tempo" com a pagina AINDA enviando - erro na cara do vendedor e risco de repetir.
+  // Agora o audio conta o teto cheio da espera, que e o mesmo que o agente usa.
+  const esperaS = (it && it.kind === 'audio') ? 120 : Math.min(120, Number(it && it.pausa) || 0)
+  const pausaMs = Math.max(0, esperaS) * 1000
   const envioMs = (it && it.kind === 'video') ? 180000 : (it && it.tipo === 'texto') ? 60000 : 120000
   return pausaMs + envioMs + 30000
 }
@@ -3613,13 +3623,19 @@ ipcMain.handle('swp:fechar-ativo', (ev) => {
 // QUEM ESTA DISPARANDO FICA DE FORA. Recarregar a pagina no meio de um funil cortaria o disparo
 // pela metade, e mensagem do funil pela metade e pior que funil lento. Ele entra na proxima volta,
 // e a casca avisa quantos ficaram.
+//
+// E A CONTA E PELO `disparos`, NAO PELO `disparandoNk` (apontado pela sessao Sell 02 em 27/10). O
+// `disparandoNk` guarda UM numero, o ultimo que comecou: com dois numeros disparando em paralelo -
+// que acontece desde 17/10, cada numero com consumidor proprio - o botao recarregaria o outro no
+// meio do funil, exatamente o que este comentario promete que nao acontece. A hibernacao por
+// memoria ja usa `disparos.has` pelo mesmo motivo.
 ipcMain.handle('sw:recarregar-todos', () => {
   let feitos = 0
   let noFunil = 0
   for (const [nk, s] of [...abertos]) {
     const wc = s && s.view && s.view.webContents
     if (!wc || wc.isDestroyed()) continue
-    if (nk === disparandoNk) { noFunil += 1; continue }
+    if (disparos.has(nk)) { noFunil += 1; continue }
     try { wc.reload(); feitos += 1 } catch (_) { /* um numero que falha nao para os outros */ }
   }
   anota('[agente] recarreguei ' + feitos + ' numero(s) pro motor novo valer'

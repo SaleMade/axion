@@ -601,19 +601,30 @@
   // chegasse depois (o aparelho reenvia, as vezes meia hora depois) morria aqui dentro e a conversa
   // ficava vazia na dash pra sempre. Estes ids ficam com a porta ABERTA pra exatamente uma passada
   // da versao legivel, que promove a linha la no servidor.
-  // O valor e QUANDO ela foi solta: enquanto a espera corre, a varredura rele tudo (a legivel chega
-  // com a hora ORIGINAL e nao mexe o `t` da conversa, entao o atalho de "so o que mexeu" nao a
-  // acharia). Passados 45 min a espera acaba e o modo leve volta: cifrada que nao foi decifrada ate
-  // la nao vai ser, e nao pode deixar a varredura pesada ligada pra sempre.
+  // O valor e { em, chat }: QUANDO ela foi solta e EM QUAL CONVERSA. A conversa importa porque a
+  // legivel chega com a hora ORIGINAL e NAO mexe o `t` do chat, entao o atalho de "so releio o que
+  // mexeu" nunca a acharia - aquela conversa precisa ser relida mesmo parada.
+  //
+  // E E SO AQUELA CONVERSA (corrigido em 27/10, apontado pela sessao Sell 02). Antes isto era um
+  // sim/nao pra pagina inteira e punha a varredura de volta no modo pesado - 25 getMessages de 20
+  // em 20 s - por 45 minutos a cada cifrada. Como cifrada cai justamente nos numeros que ja estao
+  // sofrendo (hoje o 97011859 teve 5 entre 09:58 e 11:34), o conserto do custo se desfazia logo nos
+  // piores numeros do dia.
+  //
+  // Passados 45 min a espera acaba: cifrada que nao foi decifrada ate la nao vai ser.
   var cifradasSoltas = {}
   var ESPERA_LEGIVEL = 45 * 60000
-  function temCifradaEsperando() {
+  // As conversas com cifrada esperando agora. Vazio na imensa maioria das voltas.
+  function conversasEsperando() {
     var agora = Date.now()
+    var out = null
     for (var k in cifradasSoltas) {
-      if (agora - cifradasSoltas[k] < ESPERA_LEGIVEL) return true
-      if (agora - cifradasSoltas[k] > 6 * 3600000) delete cifradasSoltas[k]
+      var e = cifradasSoltas[k]
+      if (!e) continue
+      if (agora - e.em < ESPERA_LEGIVEL) { if (!out) out = {}; if (e.chat) out[e.chat] = 1 }
+      else if (agora - e.em > 6 * 3600000) delete cifradasSoltas[k]
     }
-    return false
+    return out
   }
   window.__swCifraMs = 0
   window.__swCifraMsMax = 0
@@ -660,7 +671,8 @@
               if (!g || vistas[id]) return
               window.__swCifraSoltas++
               capturar(g.msg, true)       // a legivel nao veio: manda a cifrada mesmo
-              cifradasSoltas[id] = Date.now()   // ...e deixa passar a legivel se ela chegar depois
+              // ...e deixa passar a legivel se ela chegar depois, relendo SO esta conversa
+              cifradasSoltas[id] = { em: Date.now(), chat: (g.msg && partes(g.msg.fromMe || (g.msg.id && g.msg.id.fromMe) ? g.msg.to : g.msg.from).ser) || '' }
             }, ESPERA_CIFRA),
           }
         }
@@ -853,8 +865,9 @@
         // a mesma linha que o envio do funil e a sinalizacao da ligacao. Era o app ficar lento com a
         // internet do vendedor boa, que foi a queixa de 27/10.
         // Conversa cujo `t` nao mudou nao tem mensagem nova pra achar. A unica coisa que muda sem
-        // mexer o `t` e a cifrada virando legivel, e pra isso existe o `releTudo`.
-        var releTudo = temCifradaEsperando()
+        // mexer o `t` e a cifrada virando legivel - e por isso APENAS a conversa dela escapa do
+        // atalho, nao a pagina inteira (ver `conversasEsperando`).
+        var esperando = conversasEsperando()
         var leu = 0
         chats.slice(0, 25).forEach(function (c) {
           try {
@@ -862,7 +875,7 @@
             var id = c.id && (c.id._serialized || c.id)
             if (!id) return
             var tc = Number(c.t || 0)
-            if (!releTudo && tc > 0 && leuAte[id] === tc) return
+            if (!(esperando && esperando[id]) && tc > 0 && leuAte[id] === tc) return
             if (tc > 0) leuAte[id] = tc
             leu++
             var n = Math.min(20, Math.max(3, Number(c.unreadCount) || 3))
@@ -985,18 +998,28 @@
       // conversa de PESSOA (o mesmo JID da captura: c.us e lid) que mexeu desde `desde`, da mais
       // recente pra mais antiga, ate `maxChats`.
       var teto = Math.min(150, Math.max(1, Number(maxChats) || 80))
-      // A VOLTA COMPLETA. Nas outras, conversa que nao mexeu desde a ultima colheita e pulada - e o
-      // mesmo alivio da varredura, e aqui pesa mais porque sao ate 80 conversas por numero. Mas a
-      // colheita e a REDE DE SEGURANCA: se ela so olhasse o que mudou, deixaria de cobrir
-      // justamente a leitura que falhou calada, que e a razao de ela existir. Entao ela varre tudo
-      // em dois casos:
-      //   - de 5 em 5 voltas (10 min), sempre;
-      //   - e SEMPRE que a janela vier larga, que e o sinal de que estamos atrasados neste numero:
-      //     primeira colheita dele nesta maquina (6 h pra tras) ou a volta anterior nao respondeu e
-      //     a janela nao andou. Pular pelo `t` ai seria o oposto do que se quer.
+      // CONVERSA QUE MEXEU SEMPRE, E UM QUINTO DAS PARADAS A CADA VOLTA, RODANDO.
+      //
+      // `getMessages` NAO e leitura local: quando a mensagem pedida nao esta carregada, o WA-JS manda
+      // o WhatsApp BUSCAR, e essa busca vai pelo MESMO WebSocket que leva o envio da mensagem, o
+      // download da midia e a sinalizacao da ligacao - e o WhatsApp Web serializa os comandos desse
+      // socket. Cada leitura minha DISPUTA com o que o vendedor esta tentando fazer. Foi isso que ele
+      // viu em 27/10: mensagem parada no relogio, audio do lead so carregando e ligacao que nao
+      // completa, tudo ao mesmo tempo, com a internet boa. A proxy foi medida e inocentada (16
+      // downloads simultaneos, 16 completos).
+      //
+      // Por isso a revisita e FATIA e nao PICO: uma volta completa relia ate 80 conversas x 15
+      // mensagens de uma vez, por numero, e num vendedor com 6 numeros abertos isso e um pico de
+      // milhares de buscas pelo socket. Um quinto a cada volta cobre todo mundo nos MESMOS 10
+      // minutos, sem o pico.
+      //
+      // A varredura inteira so volta num caso: JANELA LARGA. Ela e o sinal de que estamos atrasados
+      // neste numero (primeira colheita dele nesta maquina, ou a volta anterior nao respondeu e a
+      // janela nao andou), e ai pular pelo `t` seria o oposto do que se quer.
       colheVolta += 1
       var agoraSeg = Date.now() / 1000
-      var completa = (colheVolta % 5) === 1 || (agoraSeg - desde) > 3600
+      var completa = (agoraSeg - desde) > 3600
+      var fatia = colheVolta % 5
       var leu = 0
       var pulou = 0
       return Promise.resolve(W.chat.list({})).then(function (chats) {
@@ -1012,12 +1035,16 @@
           var id = c.id && (c.id._serialized || c.id)
           if (!id) return proxima()
           var tc = Number(c.t || 0)
-          if (!completa && tc > 0 && colhido[id] === tc) { pulou += 1; return proxima() }
+          // Parada E fora da fatia desta volta: fica pra uma das proximas quatro.
+          if (!completa && tc > 0 && colhido[id] === tc && ((i - 1) % 5) !== fatia) { pulou += 1; return proxima() }
           leu += 1
           return Promise.resolve(W.chat.getMessages(id, { count: 15 })).then(function (msgs) {
-            // A MARCA SO VALE SE A LEITURA DEVOLVEU ALGUMA COISA. Conversa que falhou ou voltou
-            // vazia nao fica marcada como lida: ela volta na proxima colheita, sem esperar os 20 min.
-            if (tc > 0 && Array.isArray(msgs) && msgs.length) colhido[id] = tc
+            // A MARCA SO VALE QUANDO A LEITURA DEU CERTO, e e por isso que ela mora AQUI dentro do
+            // `then`: conversa que falha cai no `catch` logo abaixo, nao marca, e volta na proxima
+            // colheita sem esperar a vez dela na rotacao.
+            // (Exigir que ela tivesse DEVOLVIDO linhas era errado: conversa sem nada na janela
+            // nunca ficava marcada e era relida a cada 2 min pra sempre - o teste pegou.)
+            if (tc > 0) colhido[id] = tc
             ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) {
               if (out.length >= lim) return
               var t = Number(m && (m.t || m.timestamp)) || 0

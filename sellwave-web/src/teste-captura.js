@@ -265,6 +265,43 @@ async function rodar() {
   await js('window.__swColheRecentes(' + (agoraS - 6 * 3600) + ', 80, 300).then(function () { return "ok" })')
   const w3 = JSON.parse(await js('JSON.stringify({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta })'))
   conta('janela larga (atrasado naquele numero) volta a varrer tudo', w3.completa === 1 && w3.pulou === 0, JSON.stringify(w3))
+
+  // ── A REVISITA E FATIA, NAO PICO, E NAO PODE DEIXAR BURACO ──────────────────────────────────
+  //
+  // `getMessages` nao e leitura local: quando a mensagem nao esta carregada, o WA-JS manda o
+  // WhatsApp BUSCAR, e a busca vai pelo MESMO WebSocket do envio, do download de midia e da
+  // sinalizacao da ligacao. Uma volta COMPLETA (80 conversas x 15 mensagens, por numero) e um pico
+  // de buscas que deixa o envio do vendedor parado no relogio - foi o que ele viu em 27/10.
+  // Entao a revisita e um quinto por volta, rodando. As duas metades precisam de guarda: sem pico
+  // (nenhuma volta le tudo) e sem buraco (em 5 voltas todo mundo foi revisitado), porque rede de
+  // seguranca que deixa de cobrir uma parte EM SILENCIO e o pior defeito possivel aqui.
+  await js(`(() => {
+    window.__guardaList = window.WPP.chat.list
+    window.__guardaGet = window.WPP.chat.getMessages
+    const t = Math.floor(Date.now() / 1000) - 120
+    const dez = []
+    for (let i = 0; i < 10; i++) dez.push({ id: { _serialized: '55119300000' + String(i).padStart(2, '0') + '@c.us' }, t: t, isGroup: false })
+    window.__lidas = []
+    window.WPP.chat.list = async () => dez
+    window.WPP.chat.getMessages = async (id) => { window.__lidas.push(String(id)); return [] }
+    return 'ok'
+  })()`)
+  await espera(600)   // deixa as leituras do bloco anterior pousarem antes de contar as nossas
+  const voltas = []
+  for (let v = 0; v < 6; v += 1) {
+    await js("window.__lidas = []; window.__swColheRecentes(" + (agoraS - 300) + ", 80, 300).then(function () { return 'ok' })")
+    await espera(450)   // as leituras da volta anterior precisam ter terminado antes de contar
+    voltas.push(JSON.parse(await js('JSON.stringify(window.__lidas)')))
+  }
+  // A primeira volta deste bloco ainda nao conhece nenhuma das 10, entao le todas: e o certo.
+  conta('a primeira volta num numero novo le todas', voltas[0].length === 10, 'leu=' + voltas[0].length)
+  const depois = voltas.slice(1)
+  conta('nenhuma volta seguinte le tudo de novo (era o pico)',
+    depois.every((v) => v.length < 10), JSON.stringify(depois.map((v) => v.length)))
+  const cobertas = new Set(depois.flat())
+  conta('mas em 5 voltas todas foram revisitadas (sem buraco na rede)',
+    cobertas.size === 10, cobertas.size + ' de 10')
+  await js('(() => { window.WPP.chat.list = window.__guardaList; window.WPP.chat.getMessages = window.__guardaGet; return "ok" })()')
   // O LEAD NOVO EM @lid, ATRAS DE 90 CONVERSAS VELHAS (23/10/2026). A lista daqui imita o motor: com
   // `onlyUsers` fica so quem e @c.us (o `isUser`) e `count` corta pelas primeiras da lista, na ordem
   // em que estao. Era o que fazia a colheita de 2 em 2 min nao trazer o lead novo nunca.
