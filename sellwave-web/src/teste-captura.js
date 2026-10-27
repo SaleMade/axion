@@ -241,6 +241,30 @@ async function rodar() {
   conta('aviso de criptografia, cifrada, mensagem antiga, conversa parada e grupo ficam de fora', !/C3|C4|C5|D1|G1/.test(ids), ids)
   conta('as colhidas vao marcadas, pra medir quanto a colheita salvou', rec.every((x) => x.via === 'colheita'))
   conta('a colheita NAO manda nada sozinha (quem decide e o main)', (await js('window.__enviados.length')) === 0, 'enviados=' + (await js('window.__enviados.length')))
+
+  // ── A COLHEITA NAO PODE CUSTAR O QUE CUSTAVA (27/10/2026) ───────────────────────────────────
+  //
+  // Ela e `chat.list({})` na loja INTEIRA mais ate 80 `getMessages`, de 2 em 2 min, por numero - e
+  // em 26/10 eu tirei o `connUltimo !== 'pronto'` do laco, entao passou a rodar em TODO numero
+  // aberto. Cada conexao nova sai pela proxy daquele numero, que custa 1,1 s de aperto de mao
+  // contra 0,12 s direto e entrega 7,2 Mbps divididos por 3 ou 4 numeros (medido em 27/10).
+  // Agora ela pula a conversa que nao mexeu desde a ultima volta.
+  const w1 = JSON.parse(await js('JSON.stringify({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta })'))
+  conta('a primeira volta varre tudo e anota o que leu', w1.leu > 0 && w1.completa === 1, JSON.stringify(w1))
+
+  // Mesma janela de novo, nada mexeu: tem que pular. A volta 2 nao e completa (as completas sao a
+  // cada 5), entao o que manda e o `t` de cada conversa.
+  await js('window.__swColheRecentes(' + (agoraS - 600) + ', 80, 300).then(function () { return "ok" })')
+  const w2 = JSON.parse(await js('JSON.stringify({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta })'))
+  conta('a volta seguinte pula a conversa que nao mexeu', w2.completa === 0 && w2.pulou > 0 && w2.leu < w1.leu, JSON.stringify(w2))
+
+  // E JANELA LARGA MANDA VARRER TUDO: janela larga e o sinal de que estamos atrasados naquele
+  // numero (primeira colheita nesta maquina, ou a volta anterior nao respondeu e a janela nao
+  // andou). Pular pelo `t` ai seria o oposto do que se quer, e foi isso que o teste de ponta a
+  // ponta pegou quando a regra nasceu sem esta parte.
+  await js('window.__swColheRecentes(' + (agoraS - 6 * 3600) + ', 80, 300).then(function () { return "ok" })')
+  const w3 = JSON.parse(await js('JSON.stringify({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta })'))
+  conta('janela larga (atrasado naquele numero) volta a varrer tudo', w3.completa === 1 && w3.pulou === 0, JSON.stringify(w3))
   // O LEAD NOVO EM @lid, ATRAS DE 90 CONVERSAS VELHAS (23/10/2026). A lista daqui imita o motor: com
   // `onlyUsers` fica so quem e @c.us (o `isUser`) e `count` corta pelas primeiras da lista, na ordem
   // em que estao. Era o que fazia a colheita de 2 em 2 min nao trazer o lead novo nunca.

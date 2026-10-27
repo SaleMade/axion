@@ -805,9 +805,14 @@
   // o que cair fora e relido uma vez e volta pro mapa.
   var leuAte = {}
   function podaLeuAte() {
-    var ks = Object.keys(leuAte)
+    poda(leuAte)
+    poda(colhido)
+  }
+  function poda(mapa) {
+    if (!mapa) return
+    var ks = Object.keys(mapa)
     if (ks.length <= 2000) return
-    for (var i = 0; i < ks.length - 1500; i++) delete leuAte[ks[i]]
+    for (var i = 0; i < ks.length - 1500; i++) delete mapa[ks[i]]
   }
   window.__swNaoLidas = 0
   window.__swVarridas = 0
@@ -962,6 +967,10 @@
   }
   // AS CONVERSAS QUE MEXERAM DESDE `desdeS`: as ultimas 15 mensagens de cada, so as de `desdeS` pra
   // frente. Uma conversa por vez, de proposito: 80 getMessages juntos pesariam a pagina do vendedor.
+  // CONVERSA -> `t` da ultima colheita que leu ela, e o contador de voltas. Ver a volta COMPLETA
+  // logo abaixo: de 10 em 10 (20 min) a colheita ignora este mapa e le a janela inteira.
+  var colhido = {}
+  var colheVolta = 0
   window.__swColheRecentes = function (desdeS, maxChats, maxEv) {
     try {
       var W = window.WPP
@@ -976,6 +985,20 @@
       // conversa de PESSOA (o mesmo JID da captura: c.us e lid) que mexeu desde `desde`, da mais
       // recente pra mais antiga, ate `maxChats`.
       var teto = Math.min(150, Math.max(1, Number(maxChats) || 80))
+      // A VOLTA COMPLETA. Nas outras, conversa que nao mexeu desde a ultima colheita e pulada - e o
+      // mesmo alivio da varredura, e aqui pesa mais porque sao ate 80 conversas por numero. Mas a
+      // colheita e a REDE DE SEGURANCA: se ela so olhasse o que mudou, deixaria de cobrir
+      // justamente a leitura que falhou calada, que e a razao de ela existir. Entao ela varre tudo
+      // em dois casos:
+      //   - de 5 em 5 voltas (10 min), sempre;
+      //   - e SEMPRE que a janela vier larga, que e o sinal de que estamos atrasados neste numero:
+      //     primeira colheita dele nesta maquina (6 h pra tras) ou a volta anterior nao respondeu e
+      //     a janela nao andou. Pular pelo `t` ai seria o oposto do que se quer.
+      colheVolta += 1
+      var agoraSeg = Date.now() / 1000
+      var completa = (colheVolta % 5) === 1 || (agoraSeg - desde) > 3600
+      var leu = 0
+      var pulou = 0
       return Promise.resolve(W.chat.list({})).then(function (chats) {
         chats = (Array.isArray(chats) ? chats : []).filter(function (c) {
           var cid = c && c.id && (c.id._serialized || c.id)
@@ -988,7 +1011,13 @@
           var c = chats[i++]
           var id = c.id && (c.id._serialized || c.id)
           if (!id) return proxima()
+          var tc = Number(c.t || 0)
+          if (!completa && tc > 0 && colhido[id] === tc) { pulou += 1; return proxima() }
+          leu += 1
           return Promise.resolve(W.chat.getMessages(id, { count: 15 })).then(function (msgs) {
+            // A MARCA SO VALE SE A LEITURA DEVOLVEU ALGUMA COISA. Conversa que falhou ou voltou
+            // vazia nao fica marcada como lida: ela volta na proxima colheita, sem esperar os 20 min.
+            if (tc > 0 && Array.isArray(msgs) && msgs.length) colhido[id] = tc
             ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) {
               if (out.length >= lim) return
               var t = Number(m && (m.t || m.timestamp)) || 0
@@ -998,7 +1027,15 @@
             })
           }).catch(function () { /* uma conversa que falha nao para as outras */ }).then(proxima)
         }
-        return proxima()
+        return proxima().then(function (r) {
+          // QUANTO ESTA VOLTA CUSTOU. Viaja no proprio retorno (o main escreve no log do app), pra
+          // "o app esta pesado" deixar de ser impressao. Em regime `leu` fica perto de zero fora da
+          // volta completa.
+          window.__swColheLeu = leu
+          window.__swColhePulou = pulou
+          window.__swColheCompleta = completa ? 1 : 0
+          return r
+        })
       }).catch(function () { return [] })
     } catch (_) { return Promise.resolve([]) }
   }
