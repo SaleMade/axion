@@ -466,10 +466,14 @@
       var pausaMs = Math.max(0, Math.min(120, Number(seg) || 0)) * 1000
 
       if (item.tipo === 'texto') {
-        var pre = Promise.resolve()
-        if (pausaMs) { try { pre = comPrazo(W.chat.markIsComposing(chatId, pausaMs + 300), 8000, 'digitando') } catch (_) { /* ok */ } }
-        return pre.catch(function () {})
-          .then(function () { return esperaOuPara(pausaMs) })
+        // O "digitando..." CORRE JUNTO COM A ESPERA, nao antes dela. Ligar o indicador e uma ida e
+        // volta ao servidor pela proxy daquele numero (~1,1 s so de aperto de mao), e esperar ela
+        // terminar pra so entao comecar a contar a pausa fazia a espera real ser "ligar o
+        // indicador" MAIS os 10 ou 20 s da regra. MEDIDO em 27/10 no 9124: 30 s entre o audio de
+        // 186 s e o texto seguinte, contra os 20 s que a regra manda. A duracao que a gente passa
+        // pra ele ja e a da pausa, entao ele apaga sozinho na hora certa.
+        if (pausaMs) { try { comPrazo(W.chat.markIsComposing(chatId, pausaMs + 300), 8000, 'digitando').catch(function () {}) } catch (_) { /* ok */ } }
+        return esperaOuPara(pausaMs)
           .then(function (parou) {
             if (parou) return false
             return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
@@ -477,10 +481,9 @@
       }
       return Promise.resolve().then(function () {
         if (item.kind === 'audio') {
-          var preA = Promise.resolve()
-          if (pausaMs) { try { preA = comPrazo(W.chat.markIsRecording(chatId, pausaMs + 300), 8000, 'gravando') } catch (_) { /* ok */ } }
-          return preA.catch(function () {})
-            .then(function () { return esperaOuPara(pausaMs) })
+          // Mesma coisa do "digitando": o "gravando..." corre junto com a espera, nao antes dela.
+          if (pausaMs) { try { comPrazo(W.chat.markIsRecording(chatId, pausaMs + 300), 8000, 'gravando').catch(function () {}) } catch (_) { /* ok */ } }
+          return esperaOuPara(pausaMs)
             .then(function (parou) {
               if (parou) return false
               return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'audio', isPtt: true }), 120000, 'áudio')
