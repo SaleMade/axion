@@ -6021,6 +6021,16 @@ function _congelaColPlat(lead, colAntes) {
   if (lead.col_plat != null && lead.col_plat !== '') return;
   lead.col_plat = String(colAntes || '');
 }
+// ESPERA CURTA E COM JITTER ENTRE TENTATIVAS DE CAS do estado, nas escritas HUMANAS do Kanban
+// (arrastar card, marcar pago). ANTES: as tentativas (handleMoveLead/handleUpdateLead) disparavam
+// 6 vezes seguidas, SEM pausa, em ~1-2s - e PERDIAM a corrida de versao pra RAJADA de escrita do
+// cron (captura de lead do inbox e funil gravam o blob varias vezes por tique, de minuto em minuto).
+// O vendedor arrastava um card bem no meio da rajada e levava "Conflito ao salvar. Tente de novo."
+// (27/10/2026, reportado pelo time; estado em 1,37 MB, cada tentativa le+grava o blob inteiro, por
+// isso tambem ficava lento). Espalhar as tentativas por ~2-3s faz a escrita humana cair num intervalo
+// quieto entre as escritas do cron e vencer. So nas duas rotas humanas: a captura/sync (sensivel, ja
+// com reserva propria) nao e tocada. attempt 0 ~ 60-140ms ... cresce ate ~600ms.
+const _casEspera = (attempt) => new Promise((r) => setTimeout(r, 60 + attempt * 60 + Math.floor(Math.random() * 80)));
 // Move UM lead de coluna (kanban) de forma cirúrgica: lê o estado, troca só o
 // campo `col` daquele lead e regrava. NÃO recebe o blob do cliente (evita o
 // incidente de sobrescrita da aba antiga). Só diretor.
@@ -6039,7 +6049,7 @@ async function handleMoveLead(req, env, leadId) {
   // cliente desiste, e nao pode despachar). So 'Cancelado', so o dono, so !aceito - o resto do guard
   // (dono/aceito) fica no laco, que e onde o lead e conhecido.
   if (!_dir && !_afl && String(col) !== 'Cancelado') return err('Sem permissão', 403);
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
     let data;
@@ -6073,6 +6083,7 @@ async function handleMoveLead(req, env, leadId) {
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
     if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, from, to: col });
+    if (attempt < 9) await _casEspera(attempt);   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
@@ -6627,7 +6638,7 @@ async function handleUpdateLead(req, env, leadId) {
   // Quem marcou (conf_por) e carimbado logo abaixo pelo SERVIDOR, nunca pelo navegador.
   const SCALAR = ['nome', 'cpf', 'wa', 'email', 'orig', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'mod', 'pgto', 'track', 'link', 'obs', 'transp', 'comprovante_url', 'comprovante_mime', 'entrega_url', 'entrega_mime', 'track_core', 'transp_nome', 'conf', 'conf_st'];
   const now14 = () => `${todayBR()} ${nowTimeBR()}`;   // em BRT, como o resto do historico (21/09/2026)
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
     let data;
@@ -6864,6 +6875,7 @@ async function handleUpdateLead(req, env, leadId) {
       // `negados` só aparece quando existe: chamador antigo continua vendo { ok, version }.
       return negados.length ? json({ ok: true, version: newVer, negados }) : json({ ok: true, version: newVer });
     }
+    if (attempt < 9) await _casEspera(attempt);   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
