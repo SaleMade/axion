@@ -23073,9 +23073,14 @@ async function _presselBalancedPick(env, id, sellers, pre){
   //     NUNCA ESVAZIA A ROLETA: se todos estiverem mudos, segue como estava. Preferir um numero
   //     duvidoso a nenhum, porque sem numero a pagina vira botao morto e o clique ja foi pago.
   let _mudosFora = [];   // os que a guarda do mudo tirou: voltam se o teto zerar a lista (ver 2c)
+  // O MAPA DE CEGOS VALE TAMBEM NA ESCOLHA LA EMBAIXO (27/10/2026, ver a ordenacao dos numeros do
+  // vendedor). Ele era local deste bloco; agora e lido uma vez e usado nos dois lugares, que e a
+  // mesma leitura e o mesmo cache.
+  let _mudos = {};
   if(avail.length>1){
     try{
       const mudos = await ((_pre && _pre.mudos) || _numerosMudos(env));
+      _mudos = mudos || {};
       // NUMERO EM MODO ROLETA NAO ENTRA NESTA CONTA (11/09/2026). A regra mede mensagem RECEBIDA pelo
       // numero, e numero de roleta nao tem captura nenhuma: pra dash ele e sempre mudo, por
       // definicao. Sem esta excecao, MUDO_VISITAS visitas depois ele seria expulso da roleta - o
@@ -23251,7 +23256,25 @@ async function _presselBalancedPick(env, id, sellers, pre){
   // Dentro do vendedor, vale a MESMA régua: o número dele que fez menos LEAD hoje recebe agora
   // (empate → o que recebeu menos clique). É a "escadinha": quem roda 40 num número e 10 no outro
   // passa a alimentar o de 10 até emparelhar, sem parar de receber em nenhum dos dois.
-  escAt.nums.sort((a,b)=>((conv[k8(a.num)]||0)-(conv[k8(b.num)]||0)) || (cargaDia(a)-cargaDia(b)));
+  // CEGO POR ULTIMO, E ESTA E A LINHA QUE IMPEDE A CEGUEIRA DE SE AUTO-ALIMENTAR (27/10/2026).
+  //
+  // A regua acima e "menos lead hoje recebe agora", e ela presume que o contador diz a verdade.
+  // Numero que nao esta sendo capturado marca ZERO lead faca o que fizer, entao ele parece o mais
+  // atrasado do grupo e leva TODO o clique novo - quanto menos registra, mais recebe. Em 26/10 o
+  // (17) 99701-1859 levou 375 cliques numa hora e 205 na seguinte, 580 dos 699 do dia, sem capturar
+  // uma mensagem.
+  //
+  // POR QUE NAO BASTAVA A GUARDA DO MUDO (2b, la em cima): ela TIRA da roleta, e por isso tem o
+  // freio de nunca esvaziar a lista. Quando varios numeros estao cegos ao mesmo tempo, que e o caso
+  // grave, ela desiste inteira e o balanceador volta a despejar no pior deles. Esta regra nao tira
+  // ninguem: so ordena. Havendo um numero vivo, ele recebe; estando todos cegos, a ordem entre eles
+  // nao muda e ninguem fica sem numero.
+  //
+  // E E O QUE PROTEGE QUEM ESTA AQUECENDO: um numero de 1 ou 2 dias de rampa, se ficar cego, marca
+  // 0 lead, o teto do dia nunca dispara e o dia inteiro cai nele - exatamente o risco que o Bruno
+  // levantou em 27/10.
+  const _ceg = (u) => (_mudos[k8(u.num)] ? 1 : 0);
+  escAt.nums.sort((a,b)=>(_ceg(a)-_ceg(b)) || ((conv[k8(a.num)]||0)-(conv[k8(b.num)]||0)) || (cargaDia(a)-cargaDia(b)));
   const escolhido=escAt.nums[0];
   try{ _pickBump(k8(escolhido.num)); }catch(_){}
   return escolhido;
