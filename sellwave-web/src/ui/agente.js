@@ -378,7 +378,9 @@
     return new Promise(function (ok) {
       try {
         var a = new Audio()
-        var fim = function (v) { try { a.src = '' } catch (_) { /* ok */ } ok(v) }
+        // DESCARREGA SEM PEDIR NADA. `a.src = ''` faz o elemento tentar carregar a URL da PAGINA,
+        // e esse pedido sai pela proxy daquele numero - um round-trip a toa em cada audio do funil.
+        var fim = function (v) { try { a.removeAttribute('src'); a.load() } catch (_) { /* ok */ } ok(v) }
         var t = setTimeout(function () { fim(0) }, 4000)
         a.preload = 'metadata'
         a.onloadedmetadata = function () { clearTimeout(t); fim(isFinite(a.duration) && a.duration > 0 ? a.duration : 0) }
@@ -1016,12 +1018,20 @@
       // A varredura inteira so volta num caso: JANELA LARGA. Ela e o sinal de que estamos atrasados
       // neste numero (primeira colheita dele nesta maquina, ou a volta anterior nao respondeu e a
       // janela nao andou), e ai pular pelo `t` seria o oposto do que se quer.
+      // TETO DE LEITURA POR VOLTA. Ler e BUSCAR no servidor quando a mensagem nao esta na loja
+      // local, e o caso mais frio de todos e o numero aberto nesta maquina depois de dias: a sessao
+      // acabou de descer da nuvem e NADA esta em cache. Medido no PC do Bruno em 27/10: primeira
+      // colheita do 8709 trouxe "251 mensagens que nao estavam na dash (de 260 lidas)", e 11 min
+      // depois o audio do funil travou no upload. Entao a volta le no maximo 16 conversas, das mais
+      // recentes pras mais antigas; o que sobrar volta na proxima (nao fica marcado).
+      var TETO_LER = 16
       colheVolta += 1
       var agoraSeg = Date.now() / 1000
       var completa = (agoraSeg - desde) > 3600
       var fatia = colheVolta % 5
       var leu = 0
       var pulou = 0
+      var faltou = 0
       return Promise.resolve(W.chat.list({})).then(function (chats) {
         chats = (Array.isArray(chats) ? chats : []).filter(function (c) {
           var cid = c && c.id && (c.id._serialized || c.id)
@@ -1031,6 +1041,8 @@
         var i = 0
         function proxima() {
           if (i >= chats.length || out.length >= lim) return Promise.resolve(out)
+          // Bateu o teto: para aqui e AVISA que faltou, pra janela nao andar (ver `faltou`).
+          if (leu >= TETO_LER) { faltou = 1; return Promise.resolve(out) }
           var c = chats[i++]
           var id = c.id && (c.id._serialized || c.id)
           if (!id) return proxima()
@@ -1061,6 +1073,10 @@
           window.__swColheLeu = leu
           window.__swColhePulou = pulou
           window.__swColheCompleta = completa ? 1 : 0
+          // A JANELA SO ANDA QUANDO A VOLTA COBRIU TUDO. Sem isto o teto viraria PERDA: o main
+          // carimbaria a hora do mesmo jeito, a janela encolheria pra ~12 min na volta seguinte e as
+          // conversas que ficaram pra tras sumiriam da janela pra sempre.
+          window.__swColheFaltou = faltou
           return r
         })
       }).catch(function () { return [] })

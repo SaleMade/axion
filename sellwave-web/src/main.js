@@ -2499,19 +2499,21 @@ async function colheTodos() {
       const agoraS = Math.floor(agoraCerto() / 1000)
       const desde = janelaDaColheita(nk, agoraS)
       const evs = await perguntaPagina(wc, 'window.__swColheRecentes ? window.__swColheRecentes(' + desde + ', 80, 400) : null', 25000)
-      // QUANTO A VOLTA CUSTOU NA PAGINA DELE (27/10/2026). Em 26/10 eu deixei as duas voltas da
-      // captura mais pesadas e o vendedor sentiu como "WhatsApp lento, funil demorando, ligacao que
-      // nao completa" - e nao havia um numero em lugar nenhum pra confirmar ou desmentir. Agora ha,
-      // e no log que o proprio vendedor consegue abrir.
-      try {
-        const g = await perguntaPagina(wc, '({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta })', 3000)
-        if (g && (Number(g.leu) || Number(g.pulou))) {
-          anota('[colheita] ' + nk + ': li ' + Number(g.leu) + ' conversa(s), pulei ' + Number(g.pulou)
-            + ' que nao mexeram' + (Number(g.completa) ? ' (volta completa)' : ''))
-        }
-      } catch (_) { /* so registro */ }
       if (!Array.isArray(evs)) continue   // pagina sem a funcao ou que nao respondeu: mesma janela na proxima
-      ultimaColheita.set(nk, agoraS); entreguesSujo = true
+      // QUANTO A VOLTA CUSTOU E SE ELA COBRIU TUDO (27/10/2026). Em 26/10 eu deixei as duas voltas
+      // da captura mais pesadas e o vendedor sentiu como "WhatsApp lento, funil demorando, ligacao
+      // que nao completa" - e nao havia um numero em lugar nenhum pra confirmar ou desmentir.
+      const carga = await perguntaPagina(wc, '({ leu: window.__swColheLeu, pulou: window.__swColhePulou, completa: window.__swColheCompleta, faltou: window.__swColheFaltou })', 3000)
+      // A JANELA SO ANDA QUANDO COBRIU TUDO. A pagina le no maximo 16 conversas por volta (ler e
+      // BUSCAR no servidor quando a mensagem nao esta em cache, e numero recem-aberto nesta maquina
+      // nao tem nada em cache). Carimbar a hora com conversa por ler encolheria a janela na volta
+      // seguinte e as que ficaram pra tras sumiriam pra sempre.
+      if (!(carga && Number(carga.faltou))) { ultimaColheita.set(nk, agoraS); entreguesSujo = true }
+      if (carga && (Number(carga.leu) || Number(carga.pulou))) {
+        anota('[colheita] ' + nk + ': li ' + Number(carga.leu) + ' conversa(s), pulei ' + Number(carga.pulou)
+          + ' que nao mexeram' + (Number(carga.completa) ? ' (volta completa)' : '')
+          + (Number(carga.faltou) ? '; bati o teto, o resto vem na proxima e a janela nao andou' : ''))
+      }
       saude.colheuEm = Date.now()
       const falta = faltamNaDash(evs, Date.now())
       marca.numeros += 1; marca.faltavam += falta.length

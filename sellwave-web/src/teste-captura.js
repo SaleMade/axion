@@ -301,6 +301,47 @@ async function rodar() {
   const cobertas = new Set(depois.flat())
   conta('mas em 5 voltas todas foram revisitadas (sem buraco na rede)',
     cobertas.size === 10, cobertas.size + ' de 10')
+  // ── O TETO POR VOLTA, E A JANELA QUE SO ANDA QUANDO COBRIU TUDO ────────────────────────────
+  //
+  // Ler e BUSCAR no servidor quando a mensagem nao esta na loja local, e o caso mais frio e o numero
+  // aberto nesta maquina depois de dias: a sessao desce da nuvem e NADA esta em cache. Medido no PC
+  // do Bruno em 27/10: a primeira colheita do 8709 trouxe "251 mensagens que nao estavam na dash
+  // (de 260 lidas)" e 11 min depois o audio do funil travou no upload.
+  await js(`(() => {
+    const t = Math.floor(Date.now() / 1000) - 120
+    const muitas = []
+    for (let i = 0; i < 60; i++) muitas.push({ id: { _serialized: '55119400000' + String(i).padStart(2, '0') + '@c.us' }, t: t - i, isGroup: false })
+    window.__lidas = []
+    window.WPP.chat.list = async () => muitas
+    window.WPP.chat.getMessages = async (id) => { window.__lidas.push(String(id)); return [] }
+    return 'ok'
+  })()`)
+  await espera(300)
+  await js("window.__lidas = []; window.__swColheRecentes(" + (agoraS - 300) + ", 80, 300).then(function () { return 'ok' })")
+  await espera(600)
+  const teto1 = JSON.parse(await js('JSON.stringify({ lidas: window.__lidas.length, leu: window.__swColheLeu, faltou: window.__swColheFaltou })'))
+  conta('a volta para no teto em vez de ler as 60 conversas de uma vez',
+    teto1.lidas === 16 && teto1.leu === 16, JSON.stringify(teto1))
+  // ESTA E A METADE QUE MATA SE FALTAR: sem o aviso, o main carimbaria a janela, ela encolheria na
+  // volta seguinte e as 44 que ficaram pra tras sumiriam da janela pra sempre.
+  conta('e AVISA que faltou, pra janela nao andar e o resto nao sumir', teto1.faltou === 1, JSON.stringify(teto1))
+
+  // A volta seguinte continua de onde parou: as 16 ja lidas estao marcadas, entao vem as proximas.
+  await js("window.__lidas = []; window.__swColheRecentes(" + (agoraS - 300) + ", 80, 300).then(function () { return 'ok' })")
+  await espera(600)
+  const teto2 = JSON.parse(await js('JSON.stringify({ lidas: window.__lidas, leu: window.__swColheLeu })'))
+  // A maioria tem que ser NOVA (indice 16 pra frente). Nao exijo zero repetida de proposito: a
+  // rotacao revisita um quinto das ja lidas por volta, e isso e a rede de seguranca funcionando.
+  const idx = (x) => Number(String(x).replace('@c.us', '').slice(-2))
+  const novas = teto2.lidas.filter((x) => idx(x) >= 16).length
+  conta('a volta seguinte continua de onde parou, em vez de recomecar do zero',
+    teto2.leu === 16 && novas >= 10, JSON.stringify({ leu: teto2.leu, novas, indices: teto2.lidas.map(idx) }))
+
+  // E o main tem a regra escrita: so carimba a janela quando nao faltou.
+  const fonteMain = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8')
+  conta('o main so anda a janela quando a volta cobriu tudo',
+    /if \(!\(carga && Number\(carga\.faltou\)\)\) \{ ultimaColheita\.set/.test(fonteMain))
+
   await js('(() => { window.WPP.chat.list = window.__guardaList; window.WPP.chat.getMessages = window.__guardaGet; return "ok" })()')
   // O LEAD NOVO EM @lid, ATRAS DE 90 CONVERSAS VELHAS (23/10/2026). A lista daqui imita o motor: com
   // `onlyUsers` fica so quem e @c.us (o `isUser`) e `count` corta pelas primeiras da lista, na ordem
