@@ -2083,8 +2083,19 @@ async function atualizaAgente() {
     const tmp = ARQ_AGENTE_BAIXADO() + '.tmp'
     fs.writeFileSync(tmp, txt, 'utf8')
     fs.renameSync(tmp, ARQ_AGENTE_BAIXADO())
-    anota('[agente] versao nova baixada (' + txt.length + ' bytes); vale ao recarregar o numero')
-    avisaCasca('sw:agente', { novo: true })
+    // QUANTOS NUMEROS FICARAM PRA TRAS. Todo numero ABERTO neste instante esta rodando o motor
+    // anterior, porque o motor entra na pagina no momento em que ela carrega; numero que abrir
+    // depois daqui ja nasce com o novo. Se nao ha nenhum aberto, nao ha o que recarregar - e a
+    // casca nao mostra pop-up nenhum (visto no PC do Bruno em 27/10: o motor desceu as 13:40:54
+    // com o app recem-aberto e sem numero, o pop-up subiu e o log registrou "recarreguei 0").
+    let precisam = 0
+    for (const [, st] of abertos) {
+      const w = st && st.view && st.view.webContents
+      if (w && !w.isDestroyed()) precisam += 1
+    }
+    anota('[agente] versao nova baixada (' + txt.length + ' bytes); '
+      + (precisam ? precisam + ' numero(s) aberto(s) ficaram no motor anterior' : 'nenhum numero aberto, nada a recarregar'))
+    avisaCasca('sw:agente', { novo: true, precisam })
   } catch (e) {
     console.error('[agente] nao atualizei: ' + ((e && e.message) || e))
   } finally { buscandoAgente = false }
@@ -3481,7 +3492,9 @@ function tetoDoItem(it) {
   // proxy compartilhada (7 Mbps divididos por 3 a 4 numeros). Estourando, o main diz "o numero nao
   // respondeu a tempo" com a pagina AINDA enviando - erro na cara do vendedor e risco de repetir.
   // Agora o audio conta o teto cheio da espera, que e o mesmo que o agente usa.
-  const esperaS = (it && it.kind === 'audio') ? 120 : Math.min(120, Number(it && it.pausa) || 0)
+  // 30 s cobre a maior espera possivel da regra de 27/10 (teto de 20 s) com folga. Antes eram 120,
+  // porque a regra de 26/10 esperava metade da duracao do audio e o roteiro tem audio de 186 s.
+  const esperaS = (it && it.kind === 'audio') ? 30 : Math.min(120, Number(it && it.pausa) || 0)
   const pausaMs = Math.max(0, esperaS) * 1000
   const envioMs = (it && it.kind === 'video') ? 180000 : (it && it.tipo === 'texto') ? 60000 : 120000
   return pausaMs + envioMs + 30000

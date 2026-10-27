@@ -390,24 +390,53 @@
     })
   }
 
-  // O RESPIRO DE CADA TIPO (26/10/2026, regra do Bruno). Tres regras, e so elas:
-  //   AUDIO  -> metade da duracao do proprio audio, com "gravando..." ligado. E o tempo que um
-  //             humano levaria pra gravar, e e o que ele pediu: "audio de 10 segundos, espero 5".
-  //             Audio que nao diz a duracao cai no que veio do painel (o passo do roteiro).
-  //   IMAGEM, VIDEO, DOCUMENTO -> ZERO. "Eu quero que eles sejam enviados de uma vez so, voce nao
-  //             precisa ter tempo." Eles ja levam tempo proprio subindo o arquivo.
-  //   TEXTO  -> o que esta no passo do roteiro, que e onde ele ajusta o "digitando...".
-  // O teto de 120 s continua valendo pros tres (ver o clamp abaixo): e o mesmo que o tetoDoItem do
-  // processo principal usa pra decidir quando desistir de um envio.
-  function respiroDoItem(item, dataUri) {
+  // O RESPIRO DE CADA ITEM (27/10/2026, segunda regra do Bruno; a primeira, de 26/10, era "metade
+  // da duracao do audio que vai sair" e ele mesmo derrubou: "sem condicoes").
+  //
+  // MEDIDO no que fez ele derrubar: no "M - Etapa 3" o primeiro item e um audio de 174 s, entao a
+  // regra velha segurava 87 SEGUNDOS de "gravando..." antes de o lead receber qualquer coisa.
+  //
+  //   PRIMEIRO ITEM DO FUNIL ............. 0 s. Sai no clique: "quando eu clicar no funil, ele ja
+  //                                        manda o primeiro audio sem ficar esperando".
+  //   IMAGEM / VIDEO / DOCUMENTO ......... 0 s. Regra dele de 26/10, que fica de pe: "enviados de
+  //                                        uma vez so". O upload ja leva 6 a 9 s por conta propria.
+  //   AUDIO / TEXTO, do segundo em diante  10 s de base, com o indicador ligado.
+  //   ANTERIOR FOI AUDIO LONGO ........... soma tempo pro lead OUVIR: 1 s a cada 6 s acima de 40,
+  //                                        teto de 20 s no total. 42 s -> 10; 60 s -> 14; 186 s -> 20.
+  //
+  // A conta olha pro audio ANTERIOR e nao pro proximo, e essa e a diferenca que importa: o que o
+  // lead precisa e de tempo pra ouvir o que acabou de chegar. Olhando pro proximo, a regra velha
+  // castigava justamente a abertura do funil, que e quando a pressa importa.
+  var RESPIRO_BASE = 10
+  var RESPIRO_TETO = 20
+  function respiroDoItem(item, ant, ehPrimeiro) {
+    if (ehPrimeiro) return Promise.resolve(0)
     var k = String(item.kind || '')
-    if (item.tipo === 'texto') return Promise.resolve(Number(item.pausa) || 0)
-    if (k === 'audio') {
-      return duracaoDoAudio(dataUri).then(function (seg) {
-        return seg > 0 ? seg / 2 : (Number(item.pausa) || 0)
-      })
+    if (k === 'image' || k === 'video' || k === 'document') return Promise.resolve(0)
+    var seg = RESPIRO_BASE
+    if (ant && ant.kind === 'audio' && Number(ant.dur) > 40) {
+      seg = Math.min(RESPIRO_TETO, RESPIRO_BASE + Math.ceil((Number(ant.dur) - 40) / 6))
     }
-    return Promise.resolve(0)
+    return Promise.resolve(seg)
+  }
+
+  // QUANDO O ULTIMO ITEM DE CADA CONVERSA TERMINOU. E assim que o agente sabe se o item que chegou
+  // e COMECO DE FUNIL, sem precisar de build novo do app: dentro do funil o proximo item entra 0 a
+  // 2 s depois do anterior terminar, e entre um funil e o proximo da mesma fila existem os 10 s do
+  // ENTRE_FUNIS_MS. A janela tem que ficar ENTRE os dois - esticar ela pra 10 s ou mais faria o
+  // funil seguinte da fila esperar, que e justamente o que o conserto evita.
+  // O ULTIMO ITEM DE CADA CONVERSA: o que era e quando terminou. Guarda a duracao do audio porque a
+  // espera do item SEGUINTE depende dela (tempo pro lead ouvir).
+  var fimDoItem = {}
+  var JANELA_FUNIL = 8000
+  function ehComecoDeFunil(chatId) {
+    var a = fimDoItem[chatId]
+    return !(a && (Date.now() - a.em) < JANELA_FUNIL)
+  }
+  function marcaFimDoItem(chatId, kind, dur) {
+    fimDoItem[chatId] = { em: Date.now(), kind: String(kind || ''), dur: Number(dur) || 0 }
+    var ks = Object.keys(fimDoItem)
+    if (ks.length > 500) { for (var i = 0; i < ks.length - 300; i++) delete fimDoItem[ks[i]] }
   }
 
   // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
@@ -423,9 +452,17 @@
     window.__swParar = false
     var dataUri = item.dataUri
     if (item.tipo !== 'texto' && !dataUri) return Promise.reject(new Error('mídia não veio junto'))
-    return respiroDoItem(item, dataUri).then(function (seg) {
-      // O TETO DE 120 s CONTINUA, e agora ele importa de verdade: o audio mais longo do roteiro tem
-      // 186 s, e metade dele (93 s) passa raspando. Audio de mais de 4 minutos para no teto.
+    var ehPrimeiro = ehComecoDeFunil(chatId)
+    var ant = fimDoItem[chatId]
+    // A DURACAO DESTE AUDIO e medida agora pra ficar guardada: quem precisa dela e o item SEGUINTE,
+    // pra dar tempo do lead ouvir este aqui. A leitura e local (decodifica o proprio dataUri), nao
+    // sai pela rede, e tem teto proprio de 4 s la dentro.
+    var medindo = (String(item.kind || '') === 'audio' && dataUri) ? duracaoDoAudio(dataUri) : Promise.resolve(0)
+    return (medindo.then(function (durDeste) {
+      item.__dur = durDeste
+      return respiroDoItem(item, ant, ehPrimeiro)
+    }).then(function (seg) {
+      // O clamp continua, agora com folga de sobra: a regra nova nunca passa de 20 s.
       var pausaMs = Math.max(0, Math.min(120, Number(seg) || 0)) * 1000
 
       if (item.tipo === 'texto') {
@@ -456,7 +493,10 @@
           return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
         })
       }).then(function () { return true })
-    })
+    // O FIM E MARCADO DE QUALQUER JEITO, inclusive quando o envio falha: o item seguinte do mesmo
+    // funil continua sendo "o seguinte", e nao um comeco de funil que dispensaria o respiro.
+    })).then(function (r) { marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); return r },
+      function (e) { marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); throw e })
   }
 
   // O que o painel pergunta a cada pulso.

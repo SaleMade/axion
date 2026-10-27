@@ -2075,8 +2075,12 @@ function disparaFunil(id) {
 // Cada job carrega o alvo CONGELADO do clique. Trocar de conversa pra disparar o proximo nao mexe
 // no que ja esta na fila: quem entrou pro Fulano continua indo pro Fulano.
 let jobSeq = 0
-// O RESPIRO ENTRE UM FUNIL E O PROXIMO, no mesmo numero (26/10/2026). Dez segundos, numero dele.
-const ENTRE_FUNIS_MS = 10000
+// O RESPIRO ENTRE UM FUNIL E O PROXIMO, no mesmo numero. Eram 10 s (26/10); viraram 15 s em
+// 27/10, numero dele: "uns 15 segundos entre funis".
+// ELE PRECISA SER MAIOR QUE A JANELA_FUNIL do agente (8 s), que e como o agente sabe que um item e
+// comeco de funil e por isso sai na hora. Encurtar isto pra menos de 8 s faria o primeiro item do
+// funil seguinte voltar a esperar.
+const ENTRE_FUNIS_MS = 15000
 
 // O BOTAO DO CATALOGO NAO MOSTRA MAIS RODINHA (16/10/2026, segunda rodada da fila). Ele mostrava
 // enquanto aquele funil estivesse na fila, e o Bruno leu isso como proibicao: "voce bloqueou os

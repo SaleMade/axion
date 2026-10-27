@@ -154,6 +154,26 @@ app.whenReady().then(async () => {
   conta('mas volta quando a espera passa',
     (await js("document.getElementById('modal').classList.contains('on')")) === true)
 
+  // ── SEM NUMERO ABERTO, O POP-UP NAO SOBE (27/10/2026) ───────────────────────────────────────
+  // No PC do Bruno o motor novo desceu as 13:40:54 com o app recem-aberto e sem numero nenhum: o
+  // pop-up subiu e o log registrou "recarreguei 0 numero(s)". Pop-up sem o que resolver ensina a
+  // fechar pop-up sem ler.
+  // fecha o que o caso anterior deixou aberto, senao o teste mede a janela errada
+  await js("document.getElementById('motor-depois').click()"); await espera(200)
+  await js('motorAdiado = 0; ""')
+  await js('janelaMotor(0); ""'); await espera(250)
+  conta('com zero numeros abertos o pop-up NAO sobe',
+    (await js("document.getElementById('modal').classList.contains('on')")) === false)
+  await js('janelaMotor(2); ""'); await espera(250)
+  conta('com numero aberto ele sobe normal',
+    (await js("document.getElementById('modal').classList.contains('on')")) === true)
+  await js("document.getElementById('motor-depois').click()"); await espera(200)
+  // main mais velho que nao manda o campo: continua avisando, porque deixar de avisar quem precisa
+  // e o pior dos dois erros.
+  await js('motorAdiado = 0; janelaMotor(); ""'); await espera(250)
+  conta('main velho que nao manda a conta continua avisando',
+    (await js("document.getElementById('modal').classList.contains('on')")) === true)
+
   console.log('\n  ' + ok + ' ok, ' + ruim + ' ruim')
   app.exit(ruim ? 1 : 0)
 })

@@ -1474,13 +1474,17 @@ window.sw.ao('sw:saindo', (d) => {
 // lento, porque o app dele seguia rodando o motor velho que ja estava na memoria.
 //
 // A faixa continua, pra quem fechar o pop-up.
-window.sw.ao('sw:agente', () => {
+window.sw.ao('sw:agente', (d) => {
+  // SEM NUMERO ABERTO NAO HA O QUE CONSERTAR. O numero que abrir daqui pra frente ja nasce com o
+  // motor novo. Avisar assim mesmo ensina o vendedor a fechar pop-up sem ler, e ai o dia em que ele
+  // PRECISA ser lido ele nao vai ser.
+  if (d && Number(d.precisam) === 0) return
   const el = $('fila')
   if (el && !el.textContent) {
     el.textContent = 'Motor de conversa atualizado. Recarregue o número pra usar o novo.'
     setTimeout(() => { if (el.textContent.startsWith('Motor de conversa')) el.textContent = '' }, 20000)
   }
-  janelaMotor()
+  janelaMotor(d && d.precisam)
 })
 
 // O POP-UP DO MOTOR. Mesmas regras do pop-up de versao (ocupa a tela, so sai pelos botoes), com uma
@@ -1488,7 +1492,10 @@ window.sw.ao('sw:agente', () => {
 // Quem escolher "Agora nao" ve de novo em 15 minutos: o app continua rodando o motor velho ate
 // recarregar, e esse e exatamente o estado que esta custando lead.
 let motorAdiado = 0
-function janelaMotor() {
+function janelaMotor(precisam) {
+  // `precisam` ausente (main mais velho que nao manda o campo) continua mostrando: o pior dos dois
+  // erros e deixar de avisar quem precisa.
+  if (Number(precisam) === 0) return
   if (Date.now() < motorAdiado) return
   const ICO = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     + 'stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>'
