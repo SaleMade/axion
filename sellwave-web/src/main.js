@@ -3594,6 +3594,28 @@ ipcMain.handle('swp:fechar-ativo', (ev) => {
   if (nk) fechaNumero(nk)        // se estiver destacado, o fechaNumero derruba a janela junto
   return { ok: true }
 })
+// RECARREGAR TODOS OS NUMEROS (27/10/2026, pedido do Bruno). O motor de conversa novo so vale
+// quando a pagina do numero recarrega, e esperar o vendedor fechar o app pode levar o dia inteiro -
+// em 27/10 o agente leve foi publicado as 11:19 e as 11:26 o funil ainda estava lento na maquina
+// dele, rodando o agente velho que ja estava na memoria.
+//
+// QUEM ESTA DISPARANDO FICA DE FORA. Recarregar a pagina no meio de um funil cortaria o disparo
+// pela metade, e mensagem do funil pela metade e pior que funil lento. Ele entra na proxima volta,
+// e a casca avisa quantos ficaram.
+ipcMain.handle('sw:recarregar-todos', () => {
+  let feitos = 0
+  let noFunil = 0
+  for (const [nk, s] of [...abertos]) {
+    const wc = s && s.view && s.view.webContents
+    if (!wc || wc.isDestroyed()) continue
+    if (nk === disparandoNk) { noFunil += 1; continue }
+    try { wc.reload(); feitos += 1 } catch (_) { /* um numero que falha nao para os outros */ }
+  }
+  anota('[agente] recarreguei ' + feitos + ' numero(s) pro motor novo valer'
+    + (noFunil ? '; ' + noFunil + ' no meio do funil ficaram pra depois' : ''))
+  return { ok: true, feitos, noFunil }
+})
+
 ipcMain.handle('swp:recarregar-ativo', (ev) => {
   const nk = nkDoPainel(ev && ev.sender)
   const s = nk && abertos.get(nk)

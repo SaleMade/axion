@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('sw', {
   destacar: (numero, nk) => chamar('sw:destacar', { numero, nk }),
   devolver: (nk) => chamar('sw:devolver', { nk }),
   recarregar: (nk) => chamar('sw:recarregar', { nk }),
+  // todos de uma vez, pro motor de conversa novo passar a valer sem fechar o app (27/10/2026)
+  recarregarTodos: () => chamar('sw:recarregar-todos'),
   testarProxy: (nk) => chamar('sw:proxy-testar', { nk }),
   roleta: (nk, on) => chamar('sw:roleta', { nk, on }),
   painel: (ligado) => chamar('swp:painel', { ligado }),

@@ -1466,15 +1466,84 @@ window.sw.ao('sw:saindo', (d) => {
   modal.onclick = null
   document.onkeydown = null
 })
-// Agente novo baixado: vale ao recarregar a pagina do numero, que e o botao que ja existe no
-// painel. Sem fechar o app.
+// MOTOR DE CONVERSA NOVO: POP-UP, NAO LINHA NA BARRA (27/10/2026, pedido do Bruno).
+//
+// O conserto do motor e servido pelo servidor e o app baixa sozinho, mas ele SO VALE quando a
+// pagina do numero recarrega. Ate aqui o aviso era uma linha na barra por 20 segundos, e ninguem
+// le: em 27/10 o motor leve foi publicado as 11:19 e as 11:26 o vendedor ainda estava com o funil
+// lento, porque o app dele seguia rodando o motor velho que ja estava na memoria.
+//
+// A faixa continua, pra quem fechar o pop-up.
 window.sw.ao('sw:agente', () => {
   const el = $('fila')
   if (el && !el.textContent) {
     el.textContent = 'Motor de conversa atualizado. Recarregue o número pra usar o novo.'
     setTimeout(() => { if (el.textContent.startsWith('Motor de conversa')) el.textContent = '' }, 20000)
   }
+  janelaMotor()
 })
+
+// O POP-UP DO MOTOR. Mesmas regras do pop-up de versao (ocupa a tela, so sai pelos botoes), com uma
+// diferenca que importa: aqui nao ha o que baixar nem instalar, entao o botao RESOLVE na hora.
+// Quem escolher "Agora nao" ve de novo em 15 minutos: o app continua rodando o motor velho ate
+// recarregar, e esse e exatamente o estado que esta custando lead.
+let motorAdiado = 0
+function janelaMotor() {
+  if (Date.now() < motorAdiado) return
+  const ICO = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    + 'stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>'
+    + '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>'
+  modalCorpo.className = 'cartao'
+  modalCorpo.style.maxWidth = '470px'
+  modalCorpo.innerHTML = '<div style="text-align:center;padding:4px 6px 2px">'
+    + '<div style="width:64px;height:64px;margin:0 auto 16px;border-radius:20px;background:rgba(36,194,120,.14);'
+    + 'display:flex;align-items:center;justify-content:center;color:var(--verde)">' + ICO + '</div>'
+    + '<h2 style="font-size:22px;margin:0 0 8px;font-weight:700">Correção pronta pra entrar</h2>'
+    + '<div style="font-size:14px;opacity:.72;margin-bottom:16px">Ela só passa a valer quando os números recarregam</div>'
+    + '<p id="motor-txt" style="font-size:13.5px;line-height:1.55;opacity:.85;margin:0 0 20px">Cada número some da tela por '
+    + 'alguns segundos e volta conectado, sem pedir QR. Se algum estiver disparando um funil agora, ele fica pra depois.</p>'
+    + '<button id="motor-ok" style="width:100%;padding:13px;border:0;border-radius:12px;background:var(--verde);'
+    + 'color:#04070c;font-size:15px;font-weight:700;cursor:pointer">Recarregar os números agora</button>'
+    + '<button id="motor-depois" style="width:100%;margin-top:10px;padding:9px;border:0;border-radius:10px;'
+    + 'background:transparent;color:inherit;opacity:.55;font-size:13px;cursor:pointer">Agora não</button>'
+    + '</div>'
+  modal.classList.add('on')
+  modal.onclick = null
+  // Os botoes antes do `esconder`, pelo mesmo motivo do pop-up de versao: o pop-up tira o fechar-
+  // clicando-fora, entao se qualquer linha antes deles estourar o vendedor fica preso.
+  const sai = () => {
+    modal.onclick = fechaPorFora
+    modalCorpo.style.maxWidth = ''
+    fechaModal()
+  }
+  const dep = $('motor-depois')
+  if (dep) {
+    dep.onclick = () => { motorAdiado = Date.now() + 15 * 60000; sai() }
+  }
+  const ok = $('motor-ok')
+  if (ok) {
+    ok.onclick = async () => {
+      ok.disabled = true
+      ok.style.opacity = '.6'
+      ok.style.cursor = 'default'
+      ok.textContent = 'Recarregando...'
+      let r = null
+      try { r = await window.sw.recarregarTodos() } catch (_) { r = null }
+      const txt = $('motor-txt')
+      if (txt) {
+        txt.innerHTML = r && r.feitos
+          ? '<b>' + r.feitos + (r.feitos === 1 ? ' número recarregado.' : ' números recarregados.') + '</b> '
+            + 'Eles voltam sozinhos em alguns segundos.'
+            + (r.noFunil ? ' ' + r.noFunil + (r.noFunil === 1 ? ' estava' : ' estavam')
+              + ' disparando um funil e ' + (r.noFunil === 1 ? 'fica' : 'ficam') + ' pra depois.' : '')
+          : 'Não consegui recarregar daqui. Use o botão de recarregar no painel de cada número.'
+      }
+      ok.textContent = 'Pronto'
+      if (dep) { dep.textContent = 'Fechar'; dep.style.opacity = '.85'; dep.onclick = sai }
+    }
+  }
+  try { window.sw.esconder() } catch (_) { /* a tela ja esta coberta pelo fundo do modal */ }
+}
 // AVISO DE UM NUMERO QUE O APP CONSERTOU SOZINHO (ver confereCaptura no main): 30 s na barra.
 window.sw.ao('sw:aviso', (d) => {
   const el = $('fila')
