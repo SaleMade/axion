@@ -47,19 +47,23 @@ if (!corpo) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
 // O WhatsApp de mentira: duas conversas. Uma NAO LIDA (o lead que ninguem abriu ainda) e uma JA
 // LIDA e recente (o lead que o vendedor esta atendendo agora). Antes do conserto, so a primeira
 // chegava na varredura.
-function roda({ comRecentes, vistas, cifradasSoltas, tipoAtendendo, idadeAtendendo }) {
+function roda({ comRecentes, vistas, cifradasSoltas, tipoAtendendo, idadeAtendendo, leuAte, tAtendendo }) {
   const agoraS = Math.floor(Date.now() / 1000)
   const msgs = {
     'naolida@c.us': [{ id: { id: 'MSG_NAOLIDA' }, t: agoraS - 30, type: 'chat', body: 'oi, quero saber' }],
     'atendendo@c.us': [{ id: { id: 'MSG_ATENDENDO' }, t: agoraS - (Number(idadeAtendendo) || 30), type: tipoAtendendo || 'chat', body: 'me explica melhor' }],
   }
-  const naoLida = { id: { _serialized: 'naolida@c.us' }, isGroup: false, unreadCount: 1 }
-  const atendendo = { id: { _serialized: 'atendendo@c.us' }, isGroup: false, unreadCount: 0 }
+  const naoLida = { id: { _serialized: 'naolida@c.us' }, isGroup: false, unreadCount: 1, t: agoraS - 30 }
+  const atendendo = { id: { _serialized: 'atendendo@c.us' }, isGroup: false, unreadCount: 0, t: Number(tAtendendo) || agoraS - 30 }
   const pedidos = []
   const capturadas = []
   const ctx = {
     Promise, setTimeout, clearTimeout, Number, Math, Array, String, Date, Boolean,
     vistas: vistas || {}, segurados: {}, cifradasSoltas: cifradasSoltas || {},
+    // o mapa que faz a varredura parar de reler conversa parada, e a espera da cifrada, que e a
+    // unica coisa capaz de mudar uma conversa SEM mexer o `t` dela
+    leuAte: leuAte || {},
+    temCifradaEsperando: () => Object.keys(cifradasSoltas || {}).length > 0,
     NAO_E_MSG: /^(e2e_notification|notification_template|notification|gp2|protocol|revoked|call_log|ciphertext|broadcast_notification)$/i,
     autenticado: () => true,
     capturar: (m) => capturadas.push(m.id.id),
@@ -148,6 +152,39 @@ function roda({ comRecentes, vistas, cifradasSoltas, tipoAtendendo, idadeAtenden
   await new Promise((ok2) => setTimeout(ok2, 60))
   conta('mensagem velha que nao saiu cifrada continua barrada pelo corte de 30 min',
     !r7.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r7.capturadas))
+
+  // ── E A VARREDURA NAO PODE CUSTAR O QUE CUSTAVA (27/10/2026) ──────────────────────────────────
+  // Ate 26/10 ela chamava getMessages nas 25 conversas A CADA 20 SEGUNDOS, paradas ou nao, porque a
+  // lista das recentes vem sempre cheia. getMessages numa conversa que nao esta carregada faz o
+  // WhatsApp BUSCAR, e a busca sai pela proxy do numero - a mesma linha do envio do funil e da
+  // sinalizacao da ligacao. MEDIDO em 27/10, mesma faixa de horario: Kevin 992 s -> 1645 s e
+  // Guilherme 1052 s -> 2151 s ate a primeira resposta, enquanto o unico vendedor que NAO usa o app
+  // ficou em 35 s -> 37 s.
+  const lido = {}
+  const r8 = roda({ comRecentes: true, leuAte: lido })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('a primeira volta le as conversas e anota ate onde leu',
+    r8.capturadas.length === 2 && Object.keys(lido).length === 2, JSON.stringify([r8.capturadas, Object.keys(lido)]))
+
+  // Segunda volta, nada mexeu: nao pode reler NADA. E o conserto.
+  const r9 = roda({ comRecentes: true, leuAte: lido })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('a volta seguinte NAO rele conversa parada, que era o custo de 20 em 20 s',
+    r9.ctx.window.__swVarreLeu === 0, 'releu=' + r9.ctx.window.__swVarreLeu)
+
+  // Mas conversa que MEXEU volta a ser lida, senao o conserto quebraria a captura.
+  // "Mexeu" e o `t` DA CONVERSA andar, que e o que o WhatsApp faz quando chega mensagem nova nela.
+  const r10 = roda({ comRecentes: true, leuAte: lido, tAtendendo: Math.floor(Date.now() / 1000) })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('e conversa que MEXEU e relida na hora',
+    r10.capturadas.includes('MSG_ATENDENDO') && r10.ctx.window.__swVarreLeu === 1,
+    JSON.stringify([r10.capturadas, r10.ctx.window.__swVarreLeu]))
+
+  // E com cifrada esperando, rele tudo: a legivel chega com a hora ORIGINAL e NAO mexe o `t`.
+  const r11 = roda({ comRecentes: true, leuAte: lido, cifradasSoltas: { QUALQUER: Date.now() } })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('com cifrada esperando, volta a reler tudo (a legivel nao mexe o t da conversa)',
+    r11.ctx.window.__swVarreLeu === 2, 'releu=' + r11.ctx.window.__swVarreLeu)
 
   console.log('\n' + ok + ' certos, ' + falhas.length + ' errados')
   process.exit(falhas.length ? 1 : 0)

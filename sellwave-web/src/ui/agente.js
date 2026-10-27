@@ -601,7 +601,20 @@
   // chegasse depois (o aparelho reenvia, as vezes meia hora depois) morria aqui dentro e a conversa
   // ficava vazia na dash pra sempre. Estes ids ficam com a porta ABERTA pra exatamente uma passada
   // da versao legivel, que promove a linha la no servidor.
+  // O valor e QUANDO ela foi solta: enquanto a espera corre, a varredura rele tudo (a legivel chega
+  // com a hora ORIGINAL e nao mexe o `t` da conversa, entao o atalho de "so o que mexeu" nao a
+  // acharia). Passados 45 min a espera acaba e o modo leve volta: cifrada que nao foi decifrada ate
+  // la nao vai ser, e nao pode deixar a varredura pesada ligada pra sempre.
   var cifradasSoltas = {}
+  var ESPERA_LEGIVEL = 45 * 60000
+  function temCifradaEsperando() {
+    var agora = Date.now()
+    for (var k in cifradasSoltas) {
+      if (agora - cifradasSoltas[k] < ESPERA_LEGIVEL) return true
+      if (agora - cifradasSoltas[k] > 6 * 3600000) delete cifradasSoltas[k]
+    }
+    return false
+  }
   window.__swCifraMs = 0
   window.__swCifraMsMax = 0
   window.__swCifraSoltas = 0
@@ -647,7 +660,7 @@
               if (!g || vistas[id]) return
               window.__swCifraSoltas++
               capturar(g.msg, true)       // a legivel nao veio: manda a cifrada mesmo
-              cifradasSoltas[id] = 1      // ...e deixa passar a legivel se ela chegar depois
+              cifradasSoltas[id] = Date.now()   // ...e deixa passar a legivel se ela chegar depois
             }, ESPERA_CIFRA),
           }
         }
@@ -787,6 +800,15 @@
   // varredura nunca mandarem a mesma mensagem duas vezes. O que veio por aqui sai marcado `via`, pra
   // medir quanto o evento estava perdendo.
   var VARRE_MS = Number(window.__swVarreduraMs) || 20000
+  // CONVERSA -> `t` da ultima vez que a gente releu ela. E o que faz a varredura parar de reler
+  // conversa parada. Podado em 2000 pra nao crescer sem fim num numero com milhares de conversas:
+  // o que cair fora e relido uma vez e volta pro mapa.
+  var leuAte = {}
+  function podaLeuAte() {
+    var ks = Object.keys(leuAte)
+    if (ks.length <= 2000) return
+    for (var i = 0; i < ks.length - 1500; i++) delete leuAte[ks[i]]
+  }
   window.__swNaoLidas = 0
   window.__swVarridas = 0
   function varreNaoLidas() {
@@ -819,11 +841,25 @@
             chats.push(cc)
           }
         }
+        // SO RELE A CONVERSA QUE MEXEU (27/10/2026). Ate aqui a varredura chamava `getMessages` nas
+        // 25 conversas A CADA 20 SEGUNDOS, por numero, parada ou nao - e a lista das recentes vem
+        // sempre cheia, entao isso nunca descansava. `getMessages` numa conversa cuja mensagem nao
+        // esta carregada faz o WhatsApp BUSCAR, e a busca sai pela proxy daquele numero, disputando
+        // a mesma linha que o envio do funil e a sinalizacao da ligacao. Era o app ficar lento com a
+        // internet do vendedor boa, que foi a queixa de 27/10.
+        // Conversa cujo `t` nao mudou nao tem mensagem nova pra achar. A unica coisa que muda sem
+        // mexer o `t` e a cifrada virando legivel, e pra isso existe o `releTudo`.
+        var releTudo = temCifradaEsperando()
+        var leu = 0
         chats.slice(0, 25).forEach(function (c) {
           try {
             if (!c || c.isGroup) return
             var id = c.id && (c.id._serialized || c.id)
             if (!id) return
+            var tc = Number(c.t || 0)
+            if (!releTudo && tc > 0 && leuAte[id] === tc) return
+            if (tc > 0) leuAte[id] = tc
+            leu++
             var n = Math.min(20, Math.max(3, Number(c.unreadCount) || 3))
             Promise.resolve(W.chat.getMessages(id, { count: n })).then(function (msgs) {
               (Array.isArray(msgs) ? msgs : []).forEach(function (m) {
@@ -850,10 +886,16 @@
             }).catch(function () { /* uma conversa que falha nao para as outras */ })
           } catch (_) { /* ok */ }
         })
+        // QUANTO ESTA VOLTA CUSTOU, pra isto nunca mais ser discutido por impressao. `__swVarreLeu`
+        // e quantas conversas foram relidas agora; em regime tem que ficar perto de zero.
+        window.__swVarreLeu = leu
+        window.__swVarreLeuTotal = (window.__swVarreLeuTotal || 0) + leu
+        window.__swVarreVoltas = (window.__swVarreVoltas || 0) + 1
       }).catch(function () { /* motor sem a lista: o evento continua valendo */ })
     } catch (_) { /* a varredura nunca pode derrubar a pagina */ }
   }
   setInterval(varreNaoLidas, VARRE_MS)
+  setInterval(podaLeuAte, 10 * 60000)
 
   // A COLHEITA (23/10/2026, pedido do Bruno: "me garanta que a marcacao vai funcionar, nao importa o
   // meio"). Ate aqui a captura so ESPERAVA: o aviso `chat.new_message` do motor e a varredura das nao
