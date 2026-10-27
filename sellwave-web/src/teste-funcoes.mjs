@@ -498,6 +498,9 @@ console.log('\n=== contas do SellWave Web ===\n')
     recorta(fonte, 'function janelaDaColheita(nk, agoraS)'), recorta(fonte, 'async function mandaColheita(evs)')].join('\n')
   const filaCaptura = []
   const entregues = new Map(), ultimaColheita = new Map()
+  // os ids que o servidor confirmou com o corpo CIFRADO (27/10/2026): a colheita pode trazer a
+  // versao legivel deles de novo, e so deles.
+  const cifradas = new Set()
   const saude = { colhidas: 0 }
   const anotado = []
   let respostas = []   // o que o "servidor" responde a cada POST
@@ -508,9 +511,9 @@ console.log('\n=== contas do SellWave Web ===\n')
     if (r.erro) throw new Error(r.erro)
     return { ok: r.ok !== false, status: r.ok === false ? 500 : 200, headers: { get: () => null }, json: async () => ({ ack: r.ack }) }
   }
-  const mk = (jaTinha) => new Function('filaCaptura', 'entregues', 'ultimaColheita', 'saude', 'anota', 'config', 'fetch', 'ajustaRelogio', 'ehVelha', 'jaTinhaRegistro',
+  const mk = (jaTinha) => new Function('filaCaptura', 'entregues', 'cifradas', 'ultimaColheita', 'saude', 'anota', 'config', 'fetch', 'ajustaRelogio', 'ehVelha', 'jaTinhaRegistro',
     'let entreguesSujo = false; let filaSuja = false;\n' + codigo + '\nreturn { marcaEntregues, faltamNaDash, janelaDaColheita, mandaColheita }')(
-    filaCaptura, entregues, ultimaColheita, saude, (t) => anotado.push(t), { token: 'x', apiBase: 'https://api' }, fetchFalso, () => {}, () => 0, jaTinha)
+    filaCaptura, entregues, cifradas, ultimaColheita, saude, (t) => anotado.push(t), { token: 'x', apiBase: 'https://api' }, fetchFalso, () => {}, () => 0, jaTinha)
   const F = mk(true)
   const agora = 1792700000000
   const ev = (id, extra) => Object.assign({ msgId: id, phone: '5511933332222', ts: Math.floor(agora / 1000) - 60, body: 'oi' }, extra || {})
@@ -522,6 +525,15 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('sem repetir a mesma mensagem duas vezes', falta.filter((x) => x === 'NOVA').length === 1, JSON.stringify(falta))
   vale('o que entrou na fila agora e da fila; o que esta preso nela ha mais de 5 min, a colheita manda', !falta.includes('FILA_NOVA') && falta.includes('FILA_PRESA'), JSON.stringify(falta))
   vale('e evento sem id fica de fora', !falta.includes(''))
+  // A CIFRADA QUE VIROU LEGIVEL (27/10/2026). O WhatsApp Web entrega como 'ciphertext' vazia a
+  // mensagem que nao conseguiu decifrar - "Aguardando mensagem. Abra o WhatsApp no seu celular" na
+  // tela do vendedor - e o aparelho reenvia a legivel depois, com o MESMO id. A colheita e quem
+  // rele a conversa inteira, e era a unica que podia achar essa legivel; estava proibida.
+  entregues.set('CIFRA', agora - 1000); cifradas.add('CIFRA')
+  const dep = F.faltamNaDash([ev('CIFRA', { type: 'text', body: 'Codigo de desconto Au3fte' })], agora).map((e) => e.msgId)
+  vale('a legivel do id entregue CIFRADO volta, e e isso que enche a conversa vazia', dep.includes('CIFRA'), JSON.stringify(dep))
+  const dep2 = F.faltamNaDash([ev('CIFRA', { type: 'ciphertext', body: '' })], agora).map((e) => e.msgId)
+  vale('e a mesma cifrada nao volta: repetir balao vazio nao conserta nada', !dep2.includes('CIFRA'), JSON.stringify(dep2))
 
   const agoraS = Math.floor(agora / 1000)
   vale('primeira vez nesta maquina: a colheita olha so a ultima hora', mk(false).janelaDaColheita('NK', agoraS) === agoraS - 3600)
