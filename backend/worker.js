@@ -15679,6 +15679,24 @@ async function _waLogMsg(env, m) {
       'INSERT OR IGNORE INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, media_url, mundo) VALUES (?,?,?,?,?,?,?,?,?,?)'
     ).bind(id, phone, m.instance || '', dir, type, body, m.pushName || '', ts, m.media_url || null, mundo || null).run();
     const _novaLinha = !!(_ins && _ins.meta && Number(_ins.meta.changes) > 0);   // inseriu DE VERDADE (nao era repetida)
+    // A CIFRADA QUE DEPOIS VIRA LEGIVEL (27/10/2026). O WhatsApp Web entrega como 'ciphertext', de
+    // corpo vazio, a mensagem que ele recebeu mas nao conseguiu decifrar - e a "Aguardando mensagem.
+    // Abra o WhatsApp no seu celular" que o vendedor ve na lista. O aparelho reenvia depois, e a
+    // versao legivel chega com O MESMO msg_id: o INSERT OR IGNORE acima jogava o texto fora e a
+    // linha ficava vazia PRA SEMPRE, mesmo o WhatsApp ja tendo decifrado na tela do vendedor.
+    // MEDIDO: 70 linhas assim no banco, 43 telefones com a conversa vazia na dash, 12 sem lead
+    // nenhum; 7 delas num unico numero entre 09:41 e 09:52 de 27/10, com 58 cliques pagos na hora.
+    // So promove NESTE sentido - mensagem de verdade nunca vira outra coisa - e so quando o tipo
+    // novo e mensagem de gente, senao um aviso de protocolo atrasado apagaria o texto.
+    let _promoveu = false;
+    if (!_novaLinha && dir === 'in' && type !== 'ciphertext' && !_WA_NAO_MSG.has(String(type).toLowerCase())) {
+      try {
+        const _up = await env.DB.prepare(
+          "UPDATE wa_messages SET type=?, body=?, push_name=CASE WHEN COALESCE(push_name,'')='' THEN ? ELSE push_name END, media_url=COALESCE(?, media_url) WHERE msg_id=? AND type='ciphertext'"
+        ).bind(type, body, m.pushName || '', m.media_url || null, id).run();
+        _promoveu = !!(_up && _up.meta && Number(_up.meta.changes) > 0);
+      } catch (_) {}
+    }
     // CORRIDA ENTRE AS DUAS FONTES (03/10/2026). O dedup de cima e "procura, depois insere": quando o
     // webhook direto da Meta ('wamid.') e o Datacrazy ('dc:') chegam NO MESMO INSTANTE, os dois
     // procuram, nenhum acha, e os dois inserem - balao em dobro. Passou a acontecer em escala no
@@ -15734,6 +15752,16 @@ async function _waLogMsg(env, m) {
     // traz de historico mais velho que isso nao acende (regra registrada pro Bruno).
     if (dir === 'in' && _novaLinha && (Math.floor(Date.now() / 1000) - ts) <= 1800) {
       try { await env.DB.prepare('UPDATE wa_chats SET unread = COALESCE(unread, 0) + 1 WHERE phone = ?').bind(chave).run(); } catch (_) {}
+    }
+    // E O RESUMO DA CONVERSA SAI DE "[ciphertext]". O upsert acima nao faz isso sozinho: ele so
+    // escreve quando o ts e MAIOR que o que ja esta la, e a legivel tem o MESMO ts da cifrada.
+    // A bolinha NAO soma de novo: quem acendeu a conversa foi a cifrada, e e a mesma mensagem.
+    if (_promoveu) {
+      try {
+        await env.DB.prepare(
+          "UPDATE wa_chats SET last_text=?, updated_at=strftime('%s','now') WHERE phone=? AND COALESCE(last_ts,0) <= ? AND COALESCE(last_text,'')='[ciphertext]'"
+        ).bind(preview, chave, ts).run();
+      } catch (_) {}
     }
     // Auto CRM: a 1ª resposta do ATENDENTE (não do bot/auto-reply) tira o lead de "Lead Novo" pra
     // "Em Atendimento". Só sobe de novo/vazio — não mexe nas etapas manuais nem na lixeira.

@@ -2379,6 +2379,12 @@ setInterval(drenaCaptura, 15000)
 // mesma janela.
 const ARQ_ENTREGUES = () => path.join(app.getPath('userData'), 'captura-entregue.json')
 const entregues = new Map()      // msgId -> quando o servidor confirmou (ms)
+// OS QUE FORAM ENTREGUES CIFRADOS (27/10/2026): o WhatsApp Web nao conseguiu decifrar na hora
+// ("Aguardando mensagem. Abra o WhatsApp no seu celular") e a gente mandou a cifrada pra nao perder
+// o lead. Quando o aparelho reenvia e a versao legivel aparece, ela tem o MESMO msg_id e a colheita
+// pulava ela por ja estar em `entregues` - a conversa ficava vazia na dash pra sempre. Estes ids
+// passam uma segunda vez, so com tipo de mensagem de verdade.
+const cifradas = new Set()       // msgId que o servidor confirmou com corpo cifrado
 const ultimaColheita = new Map() // nk -> inicio (s) da ultima colheita que a pagina respondeu
 let entreguesSujo = false
 let jaTinhaRegistro = false
@@ -2389,6 +2395,7 @@ function carregaEntregues() {
     const corte = Date.now() - 26 * 3600000
     for (const [id, t] of (Array.isArray(v && v.ids) ? v.ids : [])) if (Number(t) > corte) entregues.set(String(id), Number(t))
     for (const [nk, t] of Object.entries((v && v.colheita) || {})) ultimaColheita.set(String(nk), Number(t) || 0)
+    for (const id of (Array.isArray(v && v.cifradas) ? v.cifradas : [])) if (entregues.has(String(id))) cifradas.add(String(id))
     jaTinhaRegistro = true
   } catch (_) { /* primeiro uso: a primeira colheita olha so a ultima hora */ }
 }
@@ -2397,9 +2404,9 @@ function gravaEntregues() {
   entreguesSujo = false
   try {
     const corte = Date.now() - 26 * 3600000
-    for (const [id, t] of entregues) if (t < corte) entregues.delete(id)
+    for (const [id, t] of entregues) if (t < corte) { entregues.delete(id); cifradas.delete(id) }
     const tmp = ARQ_ENTREGUES() + '.tmp'
-    fs.writeFileSync(tmp, JSON.stringify({ ids: [...entregues], colheita: Object.fromEntries(ultimaColheita) }), 'utf8')
+    fs.writeFileSync(tmp, JSON.stringify({ ids: [...entregues], colheita: Object.fromEntries(ultimaColheita), cifradas: [...cifradas] }), 'utf8')
     fs.renameSync(tmp, ARQ_ENTREGUES())
   } catch (_) { /* proxima volta */ }
 }
@@ -2420,7 +2427,10 @@ function faltamNaDash(evs, agora) {
   return (evs || []).filter((ev) => {
     if (!ev || !ev.msgId) return false
     const id = String(ev.msgId)
-    if (vistos.has(id) || entregues.has(id)) return false
+    if (vistos.has(id)) return false
+    // A UNICA REPETICAO QUE VALE A PENA: o id ja entregue, mas que foi entregue CIFRADO e agora tem
+    // versao legivel. O servidor reconhece o msg_id e promove a linha, nao cria balao em dobro.
+    if (entregues.has(id) && !(cifradas.has(id) && ev.type && ev.type !== 'ciphertext')) return false
     vistos.add(id)
     const em = naFila.get(id)
     return em === undefined || (agora - em) > 5 * 60000
@@ -4017,6 +4027,9 @@ ipcMain.on('swp:captura', (_e, dados) => {
   for (const ev of evs) {
     // `velha` E CARIMBADO AQUI, com o relogio corrigido pelo servidor. Ver desvioRelogio.
     if (ev && typeof ev === 'object') { ev.velha = ehVelha(ev.ts); if (!ev.__em) ev.__em = Date.now() }
+    // ANOTA QUEM SAIU CIFRADO pra colheita poder trazer a versao legivel depois (ver `cifradas`).
+    if (ev && ev.msgId && ev.type === 'ciphertext') { cifradas.add(String(ev.msgId)); entreguesSujo = true }
+    if (ev && ev.msgId && ev.type && ev.type !== 'ciphertext') cifradas.delete(String(ev.msgId))
     filaCaptura.push(ev)
   }
   // TETO EM BYTES, nao em eventos. Primeiro larga os ANEXOS mais antigos (a mensagem fica), e so

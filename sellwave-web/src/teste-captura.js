@@ -138,6 +138,35 @@ async function rodar() {
   conta('e sai sozinha quando a legivel nao vem: perder a mensagem seria pior',
     soltas.length === 1 && (await js('window.__swCifraSoltas')) >= 1, 'enviados=' + soltas.length)
 
+  // 4) E A LEGIVEL CHEGA DEPOIS DISSO, que e o caso de 27/10 e o que o vendedor viu na tela.
+  //
+  // O WhatsApp Web entrega como 'ciphertext' vazia a mensagem que ele recebeu mas NAO conseguiu
+  // decifrar: e a "Aguardando mensagem. Abra o WhatsApp no seu celular" da lista de conversas. O
+  // aparelho reenvia a legivel depois, as vezes meia hora depois, com O MESMO id - e o agente ja
+  // tinha marcado esse id como visto, entao jogava ela fora. A conversa ficava VAZIA na dash pra
+  // sempre, mesmo o WhatsApp ja tendo decifrado na tela do vendedor.
+  // MEDIDO: 7 de 7 mensagens recebidas no (15) 97400-8709 entre 09:41 e 09:52 de 27/10, hora em que
+  // o numero levou 58 cliques pagos; no banco inteiro, 43 telefones so tem essa linha vazia.
+  const legivelTarde = JSON.stringify(msgBase({
+    id: { id: 'MSG2', _serialized: 'false_5511999998888@c.us_MSG2', fromMe: false },
+    type: 'chat', body: 'Olá! Gostaria de saber mais. Código de desconto Au3fte',
+  }))
+  await js('window.__enviados = []; window.__dispara(' + legivelTarde + '); "ok"')
+  await espera(500)
+  const tarde = JSON.parse(await js('JSON.stringify(window.__enviados)'))
+  conta('a legivel que chega DEPOIS da cifrada solta ainda passa',
+    tarde.length === 1, 'enviados=' + tarde.length)
+  conta('e ela leva o texto, que e o que o vendedor precisa ler na dash',
+    tarde.length === 1 && /Código de desconto/.test(String(tarde[0].body || '')), tarde.length ? String(tarde[0].body) : '(nada)')
+  conta('e vai com o MESMO id, pro servidor promover a linha em vez de criar balao repetido',
+    tarde.length === 1 && String(tarde[0].msgId) === 'MSG2', tarde.length ? String(tarde[0].msgId) : '(nada)')
+  // A PORTA FECHA DEPOIS DE UMA PASSADA. Sem isto, cada releitura da conversa mandaria a mesma
+  // mensagem de novo - e balao repetido no inbox foi defeito de verdade em 19/08 e em 12/09.
+  await js('window.__enviados = []; window.__dispara(' + legivelTarde + '); "ok"')
+  await espera(400)
+  conta('e a porta fecha: a MESMA legivel nao passa duas vezes',
+    (await js('window.__enviados.length')) === 0, 'enviados=' + (await js('window.__enviados.length')))
+
   console.log('\nO TELEFONE POR TRAS DO LID')
   // Conversa por @lid: o identificador NAO e telefone. Sem resolver, o evento sai com lid:1 e o
   // worker PULA TUDO - a mensagem nao vira lead, nao vira bolha e nao casa com o pedido.
@@ -308,6 +337,9 @@ async function rodar() {
     const ambiente = {
       abertos: new Map([['1574060653', { view: { webContents: j.webContents }, connUltimo: 'pronto' }]]),
       filaCaptura: [], entregues: new Map([['C2', Date.now()]]), ultimaColheita: new Map(), saude: { colhidas: 0, colheuEm: 0 },
+      // os ids que o servidor confirmou com o corpo CIFRADO (27/10/2026): a colheita pode trazer a
+      // versao legivel deles de novo, e so deles.
+      cifradas: new Set(),
       config: { token: 't', apiBase: 'https://api' }, anota: () => {}, ajustaRelogio: () => {}, ehVelha: () => 0,
       // a colheita conta o que conferiu e avisa a faixa do CRM (23/10/2026)
       avisos: [], avisaCasca: (c, d) => { ambiente.avisos.push([c, d]) }, estadoMarcacao: () => ({ ...(ambiente.saude.marcacao || {}) }),
@@ -331,6 +363,31 @@ async function rodar() {
     posts.length = 0
     await F.colheTodos()
     conta('a colheita seguinte nao manda nada que ja foi', posts.length === 0, JSON.stringify(posts))
+    // A CIFRADA QUE VIROU LEGIVEL, DE PONTA A PONTA (27/10/2026). O id ja foi pra dash, mas foi
+    // CIFRADO: o WhatsApp Web nao conseguiu decifrar e mostrou "Aguardando mensagem. Abra o WhatsApp
+    // no seu celular". Quando o aparelho reenvia e a legivel aparece, quem tem como achar ela e a
+    // colheita, que rele a conversa inteira - e era justamente ela que estava proibida de trazer o
+    // id de novo. MEDIDO em 27/10: 7 de 7 mensagens recebidas no (15) 97400-8709 entre 09:41 e
+    // 09:52 ficaram assim, com 58 cliques pagos naquela hora.
+    //
+    // E AQUI APARECE O LIMITE DA COLHEITA, que vale registrar: a janela dela e pela HORA DA
+    // MENSAGEM, e a legivel chega com a hora ORIGINAL (a de quando o lead escreveu). Mensagem de
+    // mais de ~10 min ja cai fora da janela curta (ultima colheita menos 10 min de folga). Quem
+    // cobre esse caso no dia a dia e a VARREDURA: ela rele as conversas NAO LIDAS de 20 em 20 s por
+    // ate 30 min, e a conversa cifrada fica nao lida exatamente porque o vendedor nao leu nada
+    // nela. A colheita e a segunda rede, pra quando a mensagem ainda esta dentro da janela - e e
+    // isso que o caso abaixo prova, zerando a janela.
+    ambiente.ultimaColheita.clear()
+    ambiente.cifradas.add('C1'); posts.length = 0
+    await F.colheTodos()
+    const voltou = posts.flat()
+    conta('a colheita traz de volta a legivel do id que foi entregue CIFRADO',
+      voltou.some((e) => e.msgId === 'C1'), JSON.stringify(voltou.map((e) => e.msgId)))
+    conta('e ela volta COM o codigo de desconto, que e o que amarra o lead ao clique pago',
+      /XYZ789/.test(String((voltou.find((e) => e.msgId === 'C1') || {}).body || '')),
+      JSON.stringify((voltou.find((e) => e.msgId === 'C1') || {}).body || '(nada)'))
+    conta('e so ela: os outros ids ja confirmados continuam fora',
+      !voltou.some((e) => e.msgId === 'C2'), JSON.stringify(voltou.map((e) => e.msgId)))
     ambiente.entregues.clear(); posts.length = 0
     await F.colheConversa('1574060653', '5511933332222@c.us')
     conta('o disparo do funil manda a conversa daquele lead', posts.flat().some((e) => e.msgId === 'C1' && e.via === 'colheita-funil'), JSON.stringify(posts.flat().map((e) => e.msgId)))

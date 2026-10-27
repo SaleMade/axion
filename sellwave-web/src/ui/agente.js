@@ -596,6 +596,12 @@
   // a bolha no inbox; esperar de menos manda o lead sem o codigo, que e o defeito que isto conserta.
   var ESPERA_CIFRA = 6000
   var segurados = {}
+  // OS IDS QUE SAIRAM CIFRADOS (27/10/2026). Quando a espera acaba sem a versao legivel, a gente
+  // manda a cifrada mesmo pra nao perder o lead - e marcava o id como visto, entao a legivel que
+  // chegasse depois (o aparelho reenvia, as vezes meia hora depois) morria aqui dentro e a conversa
+  // ficava vazia na dash pra sempre. Estes ids ficam com a porta ABERTA pra exatamente uma passada
+  // da versao legivel, que promove a linha la no servidor.
+  var cifradasSoltas = {}
   window.__swCifraMs = 0
   window.__swCifraMsMax = 0
   window.__swCifraSoltas = 0
@@ -641,6 +647,7 @@
               if (!g || vistas[id]) return
               window.__swCifraSoltas++
               capturar(g.msg, true)       // a legivel nao veio: manda a cifrada mesmo
+              cifradasSoltas[id] = 1      // ...e deixa passar a legivel se ela chegar depois
             }, ESPERA_CIFRA),
           }
         }
@@ -656,7 +663,10 @@
         delete segurados[id]
       }
 
-      if (vistas[id]) return
+      // A CIFRADA JA FOI, MAS A LEGIVEL AINDA PRECISA IR. E a unica excecao ao "ja vi este id": o
+      // servidor reconhece o mesmo msg_id e promove a linha, em vez de criar balao repetido.
+      if (vistas[id] && !(cifradasSoltas[id] && tipoCru !== 'ciphertext')) return
+      delete cifradasSoltas[id]
       vistas[id] = 1
       window.__swVistasN++
       var tipoBruto = String(msg.type || 'chat')
@@ -818,9 +828,21 @@
             Promise.resolve(W.chat.getMessages(id, { count: n })).then(function (msgs) {
               (Array.isArray(msgs) ? msgs : []).forEach(function (m) {
                 var t = Number(m && (m.t || m.timestamp)) || 0
-                if (!t || agoraS - t > 1800) return
+                if (!t) return
                 var mid = (m.id && (m.id.id || (m.id._serialized ? String(m.id._serialized).split('_').pop() : ''))) || ''
-                if (!mid || vistas[mid] || segurados[mid]) return
+                if (!mid || segurados[mid]) return
+                // A LEGIVEL DE UMA CIFRADA SOLTA NAO TEM PRAZO. O corte de 30 min existe pra nao
+                // despejar historico quando um numero reconecta, mas a legivel chega com a HORA
+                // ORIGINAL (a de quando o lead escreveu) e o aparelho pode levar meia hora pra
+                // reenviar: o corte jogaria fora exatamente a mensagem que a gente esta esperando.
+                // A excecao vale SO pros ids que nos mesmos mandamos cifrados.
+                var cifradaSolta = !!cifradasSoltas[mid]
+                if (!cifradaSolta && agoraS - t > 1800) return
+                // Id ja visto so volta quando ele saiu CIFRADO e agora tem versao legivel. A
+                // varredura e quem costuma achar isso primeiro, porque ela rele as conversas NAO
+                // LIDAS de 20 em 20 s - e a conversa cifrada fica nao lida justamente porque o
+                // vendedor nao conseguiu ler nada nela.
+                if (vistas[mid] && !(cifradaSolta && !NAO_E_MSG.test(String(m.type || 'chat')))) return
                 window.__swVarridas++
                 m.__swVia = 'varredura'
                 capturar(m)

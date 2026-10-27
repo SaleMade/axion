@@ -47,11 +47,11 @@ if (!corpo) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
 // O WhatsApp de mentira: duas conversas. Uma NAO LIDA (o lead que ninguem abriu ainda) e uma JA
 // LIDA e recente (o lead que o vendedor esta atendendo agora). Antes do conserto, so a primeira
 // chegava na varredura.
-function roda({ comRecentes }) {
+function roda({ comRecentes, vistas, cifradasSoltas, tipoAtendendo, idadeAtendendo }) {
   const agoraS = Math.floor(Date.now() / 1000)
   const msgs = {
     'naolida@c.us': [{ id: { id: 'MSG_NAOLIDA' }, t: agoraS - 30, type: 'chat', body: 'oi, quero saber' }],
-    'atendendo@c.us': [{ id: { id: 'MSG_ATENDENDO' }, t: agoraS - 30, type: 'chat', body: 'me explica melhor' }],
+    'atendendo@c.us': [{ id: { id: 'MSG_ATENDENDO' }, t: agoraS - (Number(idadeAtendendo) || 30), type: tipoAtendendo || 'chat', body: 'me explica melhor' }],
   }
   const naoLida = { id: { _serialized: 'naolida@c.us' }, isGroup: false, unreadCount: 1 }
   const atendendo = { id: { _serialized: 'atendendo@c.us' }, isGroup: false, unreadCount: 0 }
@@ -59,7 +59,8 @@ function roda({ comRecentes }) {
   const capturadas = []
   const ctx = {
     Promise, setTimeout, clearTimeout, Number, Math, Array, String, Date, Boolean,
-    vistas: {}, segurados: {},
+    vistas: vistas || {}, segurados: {}, cifradasSoltas: cifradasSoltas || {},
+    NAO_E_MSG: /^(e2e_notification|notification_template|notification|gp2|protocol|revoked|call_log|ciphertext|broadcast_notification)$/i,
     autenticado: () => true,
     capturar: (m) => capturadas.push(m.id.id),
     window: {
@@ -106,6 +107,47 @@ function roda({ comRecentes }) {
   await new Promise((ok2) => setTimeout(ok2, 60))
   conta('motor que nao devolve as recentes continua capturando as nao lidas',
     r2.capturadas.includes('MSG_NAOLIDA'), JSON.stringify(r2.capturadas))
+
+  // ── A CIFRADA QUE VIRA LEGIVEL (27/10/2026) ───────────────────────────────────────────────────
+  // Quando o WhatsApp Web nao consegue decifrar, ele mostra "Aguardando mensagem. Abra o WhatsApp
+  // no seu celular" e o agente, depois de esperar, manda a cifrada mesmo pra nao perder o lead.
+  // O aparelho reenvia a legivel depois, com O MESMO id - e a varredura, que rele a conversa de 20
+  // em 20 s, e quem costuma achar ela primeiro. Com o id ja em `vistas` ela era descartada e a
+  // conversa ficava vazia na dash pra sempre.
+  const r3 = roda({ comRecentes: true, vistas: { MSG_ATENDENDO: 1 }, cifradasSoltas: { MSG_ATENDENDO: 1 } })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('a varredura traz de volta a legivel do id que saiu CIFRADO',
+    r3.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r3.capturadas))
+
+  // E SO ESSA EXCECAO: id ja visto que nao saiu cifrado continua fora, senao a varredura mandaria
+  // a conversa inteira de novo a cada 20 s.
+  const r4 = roda({ comRecentes: true, vistas: { MSG_ATENDENDO: 1 }, cifradasSoltas: {} })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('id ja visto que NAO saiu cifrado continua sendo pulado',
+    !r4.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r4.capturadas))
+
+  // E se a conversa continua cifrada na releitura, nao ha o que trazer: mandar a mesma cifrada de
+  // novo so repetiria o balao vazio.
+  const r5 = roda({ comRecentes: true, vistas: { MSG_ATENDENDO: 1 }, cifradasSoltas: { MSG_ATENDENDO: 1 }, tipoAtendendo: 'ciphertext' })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('e continuando cifrada na releitura, nao manda de novo',
+    !r5.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r5.capturadas))
+
+  // O CORTE DE 30 MIN NAO VALE PRA ELA. A legivel chega com a hora ORIGINAL (a de quando o lead
+  // escreveu) e o aparelho pode demorar: no print de 27/10 as conversas ficaram em "Aguardando
+  // mensagem" das 09:41 ate depois das 10:19. Pelo corte de sempre, a legivel chegaria e seria
+  // jogada fora de novo, bem no caso que isto existe pra consertar.
+  const r6 = roda({ comRecentes: true, vistas: { MSG_ATENDENDO: 1 }, cifradasSoltas: { MSG_ATENDENDO: 1 }, idadeAtendendo: 3600 })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('a legivel de uma cifrada solta passa mesmo com mais de 30 min',
+    r6.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r6.capturadas))
+
+  // E SO PRA ELA: mensagem velha qualquer continua barrada, senao um numero reconectando despeja a
+  // conversa inteira na dash como se fosse lead de hoje.
+  const r7 = roda({ comRecentes: true, idadeAtendendo: 3600 })
+  await new Promise((ok2) => setTimeout(ok2, 60))
+  conta('mensagem velha que nao saiu cifrada continua barrada pelo corte de 30 min',
+    !r7.capturadas.includes('MSG_ATENDENDO'), JSON.stringify(r7.capturadas))
 
   console.log('\n' + ok + ' certos, ' + falhas.length + ' errados')
   process.exit(falhas.length ? 1 : 0)
