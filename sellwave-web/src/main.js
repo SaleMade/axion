@@ -4154,6 +4154,40 @@ ipcMain.handle('sw:roleta', async (_e, { nk, on }) => {
   }
 })
 
+// O TETO DE LEADS DO DIA daquele numero (28/10/2026, pedido do Bruno: "eu gostaria que fosse
+// possivel mexer dentro do SellWave Web, clicando ali no limite"). Antes so dava pela area de
+// Pressels da dash, e so pra ele.
+//
+// Vai pela rota PROPRIA (POST /api/chip/limite) e nao pelo /api/chip/save, que e do diretor e
+// aceita qualquer campo do chip: a rota nova mexe em UM campo, e e por isso que o VENDEDOR pode
+// chamar ela. Quem confere de quem e o numero continua sendo o servidor, pelo `at` do chip no
+// banco - o que o app manda aqui e so QUAL numero.
+ipcMain.handle('sw:limite', async (_e, { nk, lim }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo.' }
+  const n = (config.numeros || []).find((x) => numKey(x.numero) === String(nk))
+  if (!n) return { ok: false, erro: 'Número não encontrado na lista.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/chip/limite', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
+      body: JSON.stringify({ num: n.numero, lim: Math.max(0, Number(lim) || 0) }),
+    })
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('A dash respondeu ' + r.status) }
+    // O VALOR QUE VALE E O QUE O SERVIDOR DEVOLVEU, nao o que a tela pediu: ele corta no teto de
+    // 100, e guardar aqui o 150 que a pessoa digitou faria a linha mostrar 150 ate a proxima
+    // leitura e depois "voltar sozinha" pra 100, que se le como clique que nao pegou.
+    const salvo = Math.max(0, Number(d && d.lim) || 0)
+    n.lim_dia = salvo
+    gravarConfig()
+    // Puxa a lista de novo pra pegar a fila refeita (mudar um teto muda a vez dos outros).
+    buscaNumeros().catch(() => {})
+    return { ok: true, lim: salvo }
+  } catch (e) {
+    return { ok: false, erro: 'Não deu pra falar com a dash.' }
+  }
+})
+
 ipcMain.handle('sw:teto', (_e, { maxAbertos }) => {
   const n = Math.max(1, Math.min(20, Number(maxAbertos) || 6))
   config.maxAbertos = n

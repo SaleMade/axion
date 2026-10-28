@@ -228,6 +228,13 @@
   .num .cnt i { font-style: normal; font-weight: 600; opacity: .85; }
   .num .cnt b { position: absolute; left: 0; bottom: 0; height: 2px;
     background: color-mix(in srgb, var(--cc) 40%, transparent); }
+  /* O CONTADOR QUE ABRE O LIMITE (28/10/2026). Ele ja existia como selo; agora, quando da pra
+     mexer, tem que PARECER que da - senao a funcao existe e ninguem acha. A borda acende no passe
+     de mouse em vez de ficar acesa sempre: a linha ja tem bolinha, foguinho, nuvem e interruptor, e
+     mais uma coisa gritando o tempo todo vira ruido. */
+  .num .cnt.edita { cursor: pointer; }
+  .num .cnt.edita:hover { background: color-mix(in srgb, var(--cc) 16%, transparent);
+    border-color: color-mix(in srgb, var(--cc) 75%, transparent); }
   /* FECHAR O NAVEGADOR DAQUELE NUMERO, na propria linha.
      Pedido do Bruno em 16/10: "gostaria que tivesse um botao de abrir e fechar o navegador". Abrir
      ja era o clique na linha; fechar so existia no X do painel e no Ctrl+W - e quem desliga o
@@ -252,6 +259,57 @@
      inteira (como era) fazia a pessoa achar que o clique nao tinha pegado. */
   .sw.ocupado::after { animation: pulsa .9s ease-in-out infinite; }
   .sw.erro { box-shadow: 0 0 0 2px #f0506a; }
+
+  /* A JANELINHA DO LIMITE DE LEADS (28/10/2026, pedido do Bruno). Mesmo desenho da pilula da
+     Chegada de leads da dash: cabecalho, placar de hoje, campo com mais e menos, os atalhos e o pe.
+     Estreita de proposito (300px): e uma decisao de um numero so, nao um formulario. */
+  .lim-cartao { max-width: 300px; padding: 0; overflow: hidden; }
+  .lim-topo { display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+    border-bottom: 1px solid var(--linha); background: var(--verde-fraco); }
+  .lim-topo .ic { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px;
+    border-radius: 9px; background: rgba(36, 194, 120, .16); color: var(--verde); }
+  .lim-topo b { display: block; font-size: 13px; font-weight: 650; }
+  .lim-topo span span, .lim-topo > div > span { display: block; margin-top: 2px; font-size: 11px;
+    color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .lim-topo i { font-style: normal; padding: 1px 5px; border-radius: 5px; font-size: 10px;
+    font-weight: 700; color: var(--verde); background: rgba(36, 194, 120, .14); }
+  .lim-hoje { display: flex; align-items: baseline; justify-content: space-between;
+    padding: 14px 16px 6px; font-size: 11.5px; color: var(--apagado); }
+  .lim-hoje b { color: var(--texto); font-weight: 700; }
+  .lim-hoje span:last-child { font-variant-numeric: tabular-nums; }
+  .lim-barra { height: 5px; margin: 0 16px; border-radius: 99px; overflow: hidden;
+    background: rgba(255, 255, 255, .07); }
+  .lim-barra i { display: block; height: 100%; border-radius: 99px; background: var(--verde);
+    transition: width .15s; }
+  .lim-barra i.cheio { background: var(--ambar); }
+  .lim-campo { display: flex; align-items: center; gap: 8px; padding: 14px 16px 0; }
+  .lim-campo button { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 9px;
+    border: 1px solid var(--linha); color: var(--apagado); font-size: 17px; line-height: 1;
+    display: grid; place-items: center; transition: background .12s, color .12s; }
+  .lim-campo button:hover { background: rgba(255, 255, 255, .07); color: var(--texto); }
+  .lim-campo input { flex: 1; min-width: 0; height: 36px; border-radius: 9px; text-align: center;
+    border: 1px solid var(--linha); background: rgba(255, 255, 255, .03); color: var(--texto);
+    font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; outline: none; }
+  .lim-campo input:focus { border-color: var(--verde); }
+  .lim-atalhos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 16px 0; }
+  .lim-atalhos button { padding: 6px 0; border-radius: 8px; border: 1px solid var(--linha);
+    color: var(--apagado); font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+    transition: background .12s, color .12s, border-color .12s; }
+  .lim-atalhos button:hover { background: rgba(255, 255, 255, .07); color: var(--texto); }
+  .lim-atalhos button.sel { border-color: var(--verde); color: var(--verde); background: var(--verde-fraco); }
+  /* O ERRO FICA NA JANELA, nao num aviso que some: o servidor recusa por motivo (numero em
+     aquecimento, numero que nao e seu) e a pessoa precisa LER o motivo pra saber o que fazer. */
+  .lim-erro { margin: 10px 16px 0; padding: 7px 9px; border-radius: 8px; font-size: 11px;
+    line-height: 1.45; color: #ffb4b4; background: rgba(240, 80, 106, .12);
+    border: 1px solid rgba(240, 80, 106, .3); }
+  .lim-erro[hidden] { display: none; }
+  .lim-pe { display: flex; gap: 8px; padding: 14px 16px 16px; }
+  .lim-pe button { flex: 1; padding: 9px 0; border-radius: 9px; font-size: 12.5px; font-weight: 650;
+    transition: background .12s, opacity .12s; }
+  .lim-pe .fraco { color: var(--apagado); border: 1px solid var(--linha); }
+  .lim-pe .fraco:hover { background: rgba(255, 255, 255, .07); color: var(--texto); }
+  .lim-pe .forte { background: var(--verde); color: #04140b; }
+  .lim-pe .forte:hover { filter: brightness(1.07); }
 
   .rodape { border-top: 1px solid var(--linha); padding: 8px; display: flex; gap: 6px; }
   .rodape button {

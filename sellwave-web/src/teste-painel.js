@@ -1175,6 +1175,93 @@ app.whenReady().then(async () => {
     + ' while (e && e.classList.contains("num")) { out.push({ pos: !!e.querySelector(".pos"),'
     + '   ponto: !!e.querySelector(".sinal"), cnt: (e.querySelector(".cnt") || {}).textContent || "",'
     + '   titulo: e.getAttribute("title") || "" }); e = e.nextElementSibling } return out })()')
+  // ── O LIMITE DE LEADS SE EDITA AQUI DENTRO (28/10/2026, pedido do Bruno) ──────────────────────
+  // "eu gostaria que fosse possivel mexer dentro do SellWave Web, clicando ali no limite (...) e
+  // tambem que os meus vendedores conseguissem fazer a edicao do limite".
+  const ed = await js2('(() => { const out = {};'
+    + ' for (const e of document.querySelectorAll(".num")) {'
+    + '   const f = String(e.dataset.numero || "").replace(/\\D/g, "").slice(-4);'
+    + '   const c = e.querySelector(".cnt");'
+    + '   out[f] = { edita: !!(c && c.classList.contains("edita")), txt: c ? c.textContent : "" } }'
+    + ' return out })()')
+  conta('o contador do numero em fila abre o limite', !!(ed['3293'] && ed['3293'].edita), JSON.stringify(ed['3293']))
+  conta('inclusive o que ja bateu o teto (e onde ele mais vai querer mexer)',
+    !!(ed['2248'] && ed['2248'].edita), JSON.stringify(ed['2248']))
+  // Quem aquece tem o teto da RAMPA: clicar ali nao mudaria nada e o servidor recusa. A dash mostra
+  // o campo travado nesses pelo mesmo motivo.
+  conta('quem AQUECE nao abre: o teto dele e da rampa, nao deste campo',
+    !!(ed['8551'] && !ed['8551'].edita && ed['5566'] && !ed['5566'].edita), JSON.stringify([ed['8551'], ed['5566']]))
+  // A prateleira nao esta em roleta nenhuma e o lim_dia dela e sobra de quando teve dono.
+  conta('e a prateleira "Disponiveis" tambem nao', !!(ed['8709'] && !ed['8709'].edita), JSON.stringify(ed['8709']))
+  // Numero em modo roleta (sem fila) nao tem teto pra mexer.
+  conta('numero fora do modo limite tambem nao abre', !!(ed['0653'] && !ed['0653'].edita), JSON.stringify(ed['0653']))
+
+  // A JANELINHA: o que ela mostra e o que ela manda.
+  await js2('document.querySelector(\'.num[data-numero="5519995983293"] .cnt.edita\').click()')
+  await espera(250)
+  const jan = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' return { aberta: document.getElementById("modal").classList.contains("on"),'
+    + '   titulo: (c.querySelector(".lim-topo b") || {}).textContent || "",'
+    + '   sub: (c.querySelector(".lim-topo > div > span") || {}).textContent || "",'
+    + '   hoje: (c.querySelector(".lim-hoje") || {}).textContent || "",'
+    + '   valor: (c.querySelector("#lim-valor") || {}).value || "",'
+    + '   atalhos: [...c.querySelectorAll(".lim-atalhos button")].map(b => b.textContent),'
+    + '   sel: [...c.querySelectorAll(".lim-atalhos button.sel")].map(b => b.textContent) } })()')
+  conta('a janelinha abre no clique', jan.aberta && /Limite de leads por dia/.test(jan.titulo), JSON.stringify(jan))
+  conta('com o numero e a posicao na fila', /99598-3293/.test(jan.sub) && /2º na fila/.test(jan.sub), jan.sub)
+  conta('e o placar de hoje, como na dash', /32/.test(jan.hoje) && /de 70/.test(jan.hoje), jan.hoje)
+  conta('o campo ja vem com o teto de agora', jan.valor === '70', jan.valor)
+  // O PEDIDO DO BRUNO: 30, 50, 70 e 100, no lugar de 50, 70, 100 e 150.
+  conta('os atalhos sao 30, 50, 70 e 100', jan.atalhos.join(',') === '30,50,70,100', JSON.stringify(jan.atalhos))
+  conta('e o 70 vem marcado, porque e o teto atual', jan.sel.join(',') === '70', JSON.stringify(jan.sel))
+
+  const mais = await js2('(() => { document.getElementById("lim-mais").click();'
+    + ' return document.getElementById("lim-valor").value })()')
+  conta('o mais anda de 5 em 5', mais === '75', mais)
+  const teto = await js2('(() => { const c = document.getElementById("lim-valor"); c.value = "480";'
+    + ' c.dispatchEvent(new Event("input")); document.getElementById("lim-mais").click();'
+    + ' return document.getElementById("lim-valor").value })()')
+  conta('e nao passa de 100, que e o maximo que ele pediu', teto === '100', teto)
+  const at30 = await js2('(() => { document.querySelector(\'.lim-atalhos button[data-at="30"]\').click();'
+    + ' return { v: document.getElementById("lim-valor").value,'
+    + '   sel: [...document.querySelectorAll(".lim-atalhos button.sel")].map(b => b.textContent).join(",") } })()')
+  conta('clicar no atalho de 30 poe 30 e marca ele', at30.v === '30' && at30.sel === '30', JSON.stringify(at30))
+
+  await js2('document.getElementById("lim-ok").click()')
+  await espera(450)
+  const depLim = await js2('(() => ({ pedidos: window.__ver().filter(c => c.nome === "limite"),'
+    + ' aberta: document.getElementById("modal").classList.contains("on"),'
+    + ' cnt: (document.querySelector(\'.num[data-numero="5519995983293"] .cnt\') || {}).textContent || "" }))()')
+  conta('salvar manda o numero e o valor pro main', depLim.pedidos.length === 1
+    && depLim.pedidos[0].args[0] === '1995983293' && depLim.pedidos[0].args[1] === 30, JSON.stringify(depLim.pedidos))
+  conta('e a janelinha fecha', !depLim.aberta, String(depLim.aberta))
+  // O VALOR NOVO VALE NA HORA, sem esperar a releitura. A lista rele de tempos em tempos e a leitura
+  // que saiu ANTES do salvamento chega DEPOIS dele com o valor velho: sem o otimista, o numero
+  // "voltaria sozinho" pro teto antigo, e isso se le como clique que nao pegou.
+  conta('e a linha ja mostra o teto novo, sem esperar a releitura', /32\/30/.test(depLim.cnt), depLim.cnt)
+
+  // O ERRO DO SERVIDOR FICA NA JANELA. Ele recusa por motivo (numero que nao e seu, aquecimento) e
+  // a pessoa precisa LER o motivo: fechar sem dizer nada se le como clique que nao pegou.
+  await js2('document.querySelector(\'.num[data-numero="5511966632248"] .cnt.edita\').click()')
+  await espera(200)
+  await js2('document.getElementById("lim-ok").click()')
+  await espera(450)
+  const erroLim = await js2('(() => { const e = document.getElementById("lim-erro");'
+    + ' return { visivel: !!(e && !e.hidden), txt: e ? e.textContent : "",'
+    + '   aberta: document.getElementById("modal").classList.contains("on"),'
+    + '   botao: (document.getElementById("lim-ok") || {}).textContent || "" } })()')
+  conta('servidor recusou: a janela NAO fecha e mostra o motivo',
+    erroLim.aberta && erroLim.visivel && /não é seu/.test(erroLim.txt), JSON.stringify(erroLim))
+  conta('e o botao volta a dizer Salvar, pra ele poder tentar de novo', erroLim.botao === 'Salvar', erroLim.botao)
+  const naoMudou = await js2('(document.querySelector(\'.num[data-numero="5511966632248"] .cnt\') || {}).textContent || ""')
+  conta('e o teto recusado NAO entra na linha', /70\/70/.test(naoMudou), naoMudou)
+  await js2('document.getElementById("modal").classList.remove("on")')
+  // DESFAZ O OTIMISTA antes de seguir. O teto que este bloco salvou vale 30 s na tela, e os testes
+  // seguintes (a barra encolhida, por exemplo) conferem o contador do stub: sem limpar aqui, eles
+  // falhariam por causa DESTE teste, que e o jeito mais caro de uma suite mentir.
+  await js2('limites.clear(); desenhaLista()')
+  await espera(150)
+
   conta('a prateleira tem as duas linhas', lin.length === 2, JSON.stringify(lin))
   conta('sem a bolinha de POSICAO: eles nao estao em fila nenhuma', lin.every(x => !x.pos && x.ponto), JSON.stringify(lin))
   conta('e sem contador de lead: nenhum "x/y" na linha', lin.every(x => !x.cnt.includes('/')), JSON.stringify(lin.map(x => x.cnt)))

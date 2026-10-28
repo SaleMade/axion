@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('sw', {
   recarregarTodos: () => chamar('sw:recarregar-todos'),
   testarProxy: (nk) => chamar('sw:proxy-testar', { nk }),
   roleta: (nk, on) => chamar('sw:roleta', { nk, on }),
+  // o teto de leads do dia daquele numero; 0 = sem limite (28/10/2026)
+  limite: (nk, lim) => chamar('sw:limite', { nk, lim }),
   painel: (ligado) => chamar('swp:painel', { ligado }),
   teto: (maxAbertos) => chamar('sw:teto', { maxAbertos }),
   abrirLog: () => chamar('sw:abrirLog'),

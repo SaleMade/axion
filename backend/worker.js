@@ -24133,6 +24133,69 @@ async function handlePresselNum(req, env) {
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
+// O TETO DE LEADS DO DIA DE UM NUMERO (28/10/2026). 100 e o maximo, regra do Bruno: "30, 50, 70 e
+// 100, que e o maximo". O teto vale AQUI e nao so nos botoes da tela: botao e sugestao, trava e
+// servidor. O /api/chip/save (do diretor, pela Contingencia) segue com o limite velho de 5000 - la
+// e a tela de cadastro, onde ele manda em tudo.
+const LIM_DIA_TETO = 100;
+// POST /api/chip/limite { num, lim } -> grava chip.lim_dia. lim 0 = sem limite.
+//
+// POR QUE ROTA NOVA E NAO /api/chip/save (pedido do Bruno em 28/10: "gostaria tambem que os meus
+// vendedores conseguissem fazer a edicao do limite (...) eles vao ter mais autonomia no dia a dia").
+// O /api/chip/save e do diretor e aceita QUALQUER campo do chip: dar ele pro vendedor pra mexer num
+// campo entregaria junto o status, o dono, a proxy e a tag. Um campo pedido, o cadastro inteiro
+// liberado. Esta rota mexe em UM campo e so, e e por isso que ela pode ser do vendedor.
+//
+// O GATE E O MESMO DO handlePresselNum, DE PROPOSITO: a direcao em qualquer numero, o vendedor so
+// onde o `at` do CHIP e ele proprio, e o afiliado so dentro do mundo dele. Quem decide e o chip no
+// banco, nunca o que veio no corpo - o corpo so diz QUAL numero.
+async function handleChipLimite(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const body = await req.json().catch(() => ({}));
+  const nk = String((body && body.num) || '').replace(/\D/g, '').slice(-8);
+  if (nk.length < 8) return err('Número obrigatório');
+  const lim = Math.min(LIM_DIA_TETO, Math.max(0, Math.floor(Number(body && body.lim) || 0)));
+  const _daDirecao = _podeMexerPressel(u) && !_roletaResumida(u);
+  const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
+  if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
+    if (!chip) return err('Número não encontrado', 404);
+    // Corte de mundo pelo `afl` do PROPRIO chip, como nas rotas do SellWave Web: sem isso o afiliado
+    // mexeria no teto de numero da casa so sabendo os 8 digitos.
+    if (_meuAfl && String(chip.afl || '') !== _meuAfl) return err('Número não encontrado', 404);
+    const dono = String(chip.at || '').trim();
+    if (!_daDirecao && (!dono || dono !== String(u.id))) return err('Esse número não é seu', 403);
+    // NUMERO SEM VENDEDOR NAO TEM LIMITE PRA MEXER. O da prateleira ("Disponiveis") nao esta em
+    // roleta nenhuma, e o `lim_dia` dele e SOBRA de quando teve dono - foi sobra assim que fez a
+    // linha dele mostrar "13/70" pra um numero que nao recebe nada (conserto de 24/10).
+    if (!dono || /^ccol_/i.test(dono)) return err('Número sem vendedor não tem limite: atribua ele a alguém primeiro', 400);
+    // QUEM AQUECE NAO TEM `lim_dia` QUE VALHA. O teto dele sai da RAMPA, pelo dia de aquecimento, e
+    // o campo do chip costuma estar vazio. Gravar aqui nao mudaria a distribuicao e a tela passaria
+    // a mostrar um numero que o worker ignora. E a mesma razao pela qual a dash deixa esse campo
+    // visivel e travado nesses numeros (ver aquecimento-por-lead-rampa).
+    if (_chipAquecendo(chip, _aquecIdsDe(data))) {
+      return err('Esse número está em aquecimento: quem manda no teto dele é a rampa, não este campo', 400);
+    }
+    if (lim > 0) chip.lim_dia = lim; else delete chip.lim_dia;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip-limite:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) {
+      try { _dashCache = null; } catch (_) {}
+      console.log('CHIP_LIMITE por=' + String(u.id) + ' num=' + nk + ' lim=' + lim + ' dono=' + dono);
+      return json({ ok: true, num: nk, lim, at: dono, ts: Math.floor(Date.now() / 1000) });
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: rele e refaz
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
 // AVISO DE NUMERO QUE CAIU SOZINHO. Um por numero a cada 6 horas: cair, reconectar e cair de
 // novo no mesmo dia e um caso real (proxy instavel), e tres avisos iguais viram barulho.
 // ESTE AVISO NAO DESLIGA NADA. Quem desliga e o `_desligaCaidos` (21/10/2026), 90 s depois e so com
@@ -30045,6 +30108,7 @@ export default {
       if (req.method === 'POST'  && path === '/api/tt/reenviar-evento')      return handleTtReenviarEvento(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/delete') return handlePresselDelete(req, env);
       if (req.method === 'POST'  && path === '/api/chip/save')      return handleChipSave(req, env);
+      if (req.method === 'POST'  && path === '/api/chip/limite')    return handleChipLimite(req, env);
       if (req.method === 'POST'  && path === '/api/chip/ordem')     return handleChipOrdem(req, env);
       if (req.method === 'POST'  && path === '/api/chip/create')    return handleChipCreate(req, env);
       if (req.method === 'POST'  && path === '/api/chip/delete')    return handleChipDelete(req, env);

@@ -21,6 +21,11 @@ const falhou = new Map()
 const mexendo = new Set()      // números com a chave da roleta em trânsito
 const confirmados = new Map()  // nk -> { on, ate }: o que a pessoa clicou, valendo ate o servidor confirmar (ver viraRoleta)
 const erroChave = new Map()    // nk -> frase: a dash recusou o clique (a chave pisca vermelha 4 s)
+// nk -> { lim, ate }: o teto que a pessoa acabou de salvar, valendo ate a leitura do servidor
+// alcancar. Mesmo motivo do `confirmados`: a lista rele de tempos em tempos e a leitura que saiu
+// ANTES do salvamento chega DEPOIS dele com o valor velho - sem isto, o numero "voltaria sozinho"
+// alguns segundos depois de salvo, que se le como clique que nao pegou.
+const limites = new Map()
 let filtro = ''
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
@@ -244,9 +249,12 @@ function ligaCliques() {
 
   for (const el of lista.querySelectorAll('.num')) {
     el.onclick = (e) => {
-      if (e.target.closest('.sw') || e.target.closest('.fecha')) return
+      if (e.target.closest('.sw') || e.target.closest('.fecha') || e.target.closest('.cnt.edita')) return
       abrir(el.dataset.numero)
     }
+  }
+  for (const b of lista.querySelectorAll('.cnt.edita')) {
+    b.onclick = (e) => { e.stopPropagation(); janelaLimite(b.dataset.lim) }
   }
   for (const b of lista.querySelectorAll('.sw')) {
     b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
@@ -305,7 +313,24 @@ function fraseEstado(n) {
 // unica linha da lista sem placar, logo a unica sobre a qual a tela nao dizia nada.
 // `aquec.teto` e a cota do dia inteiro, e vem pronto do servidor de proposito (calcular aqui usaria
 // o fuso do cliente e as duas telas passariam a discordar).
-const tetoDe = (n) => Number((n && n.aquec && n.aquec.teto) || (n && n.lim_dia)) || 0
+const tetoDe = (n) => {
+  // Quem aquece tem o teto da rampa e NAO entra no otimista: ali o campo nem e editavel.
+  if (n && n.aquec && Number(n.aquec.teto)) return Number(n.aquec.teto)
+  const o = limites.get(numKey(n && n.numero))
+  if (o && Date.now() < o.ate) return Number(o.lim) || 0
+  return Number(n && n.lim_dia) || 0
+}
+
+// DA PRA MEXER NO TETO DESTE NUMERO? Tem que bater com o que o servidor aceita (POST
+// /api/chip/limite), senao a tela oferece um campo que vai tomar erro:
+//   - numero SEM DONO (a prateleira "Disponiveis") nao esta em roleta nenhuma, e o `lim_dia` dele e
+//     sobra de quando teve dono;
+//   - quem AQUECE tem o teto decidido pela rampa, nao por este campo (e por isso que a dash mostra
+//     ele travado nesses);
+//   - fora do modo "limite" nao ha fila nem teto pra mexer.
+// Quem pode mexer (a direcao em qualquer um, o vendedor so no dele) nao precisa ser conferido aqui:
+// o vendedor so recebe os numeros DELE nesta lista, e o servidor confere de novo de qualquer jeito.
+const podeMexerLimite = (n) => !!(n && n.at && !aquecendo(n) && n.dist === 'limite')
 
 // Cor do contador, pela regra do spec: quem bateu e ambar; quem esta na vez vira ambar a partir de
 // 80% do teto (o aviso vem ANTES de parar, nao depois); quem espera e cinza.
@@ -497,14 +522,25 @@ function linha(n) {
   // inteira (o que e e o que fazer) continua no passe de mouse, vinda do seloConn.
   const sc = prateleira ? seloConn(n) : null
   const falta = prateleira && faltaConectar(n)
+  const mexeLim = !prateleira && podeMexerLimite(n)
   const conta = prateleira
     ? '<span class="cnt" style="--cc:' + (falta ? '#f59e0b' : 'var(--verde)') + '" title="'
       + esc(sc.txt + '. ' + sc.det) + '">' + (falta ? 'falta conectar' : 'conectado') + '</span>'
     : teto
-      ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + '/' + teto
+      ? '<span class="cnt' + (mexeLim ? ' edita' : '') + '" style="--cc:' + corEstado + '"'
+        + (mexeLim ? ' data-lim="' + nk + '" role="button" title="' + esc(leads + ' de ' + teto
+          + ' leads novos hoje. Clique pra mudar o limite deste número.') + '"' : '')
+        + '>' + leads + '/' + teto
         + (rot ? ' <i>' + rot + '</i>' : '')
         + '<b style="width:' + pct + '%"></b></span>'
-      : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
+      // SEM TETO, MAS NA FILA: a linha tem que continuar clicavel, senao nao existiria lugar nenhum
+      // pra POR um limite num numero que ainda nao tem. E o mesmo que a dash faz (la a pilula diz
+      // "sem limite" e abre a mesma janelinha).
+      : mexeLim
+        ? '<span class="cnt edita" style="--cc:' + corEstado + '" data-lim="' + nk + '" role="button"'
+          + ' title="' + esc('Sem limite: recebe até o fim do dia quando for a vez dele. Clique pra pôr um limite.') + '">'
+          + (leads || 0) + ' <i>sem limite</i></span>'
+        : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
 
   // Fechar so faz sentido no que esta aberto. A sessao fica no disco: fechar NAO pede QR depois.
   const fecha = aberto
@@ -913,6 +949,84 @@ async function viraRoleta(nk) {
   // 30 s de folga pra a leitura do servidor alcancar o clique: ate la, o clique vence.
   confirmados.set(nk, { on: quer, ate: Date.now() + 30000 })
   await recarregaEstado()
+}
+
+// OS ATALHOS DO LIMITE. Eram 50/70/100/150 na dash; o Bruno trocou em 28/10/2026: "em vez dessa
+// sequencia, tivesse opcao de 30, 50, 70 e 100, que e o maximo". O 100 e teto de verdade e o
+// servidor corta nele (LIM_DIA_TETO no worker): botao e sugestao, trava e servidor.
+const LIM_ATALHOS = [30, 50, 70, 100]
+const LIM_TETO = 100
+
+// A JANELINHA DO LIMITE (28/10/2026). Mesmo desenho da pilula da Chegada de leads da dash, porque e
+// o mesmo estado: cabecalho com o numero e a posicao na fila, o placar de hoje com a barra, o campo
+// com mais e menos, os quatro atalhos, "Sem limite" e "Salvar".
+function janelaLimite(nk) {
+  const n = (estado.numeros || []).find((x) => numKey(x.numero) === String(nk))
+  if (!n || !podeMexerLimite(n)) return
+  const leads = Number(n.leads_hoje) || 0
+  let valor = tetoDe(n) || 50
+  const ICO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    + 'stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/>'
+    + '<path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>'
+  modalCorpo.className = 'cartao lim-cartao'
+  const desenha = () => {
+    const pc = valor ? Math.min(100, Math.round((leads / valor) * 100)) : 0
+    modalCorpo.innerHTML = '<div class="lim-topo"><span class="ic">' + ICO + '</span>'
+      + '<div><b>Limite de leads por dia</b>'
+      + '<span>' + esc(bonito(n.numero))
+      + (n.fila && n.fila.pos ? ' · <i>' + n.fila.pos + 'º na fila</i>' : '') + '</span></div></div>'
+      + '<div class="lim-hoje"><span>Hoje</span><span><b>' + leads + '</b>'
+      + (valor ? ' de ' + valor : '') + ' leads</span></div>'
+      + '<div class="lim-barra"><i class="' + (valor && leads >= valor ? 'cheio' : '') + '" style="width:' + pc + '%"></i></div>'
+      + '<div class="lim-campo"><button id="lim-menos" title="Menos 5">−</button>'
+      + '<input id="lim-valor" inputmode="numeric" value="' + valor + '">'
+      + '<button id="lim-mais" title="Mais 5">+</button></div>'
+      + '<div class="lim-atalhos">'
+      + LIM_ATALHOS.map((x) => '<button data-at="' + x + '"' + (valor === x ? ' class="sel"' : '') + '>' + x + '</button>').join('')
+      + '</div>'
+      + '<div class="lim-erro" id="lim-erro" hidden></div>'
+      + '<div class="lim-pe"><button id="lim-zero" class="fraco">Sem limite</button>'
+      + '<button id="lim-ok" class="forte">Salvar</button></div>'
+    const campo = $('lim-valor')
+    const le = () => Math.max(0, Math.min(LIM_TETO, Math.floor(Number(String(campo.value).replace(/\D/g, '')) || 0)))
+    const poe = (v) => { valor = Math.max(0, Math.min(LIM_TETO, Math.floor(Number(v) || 0))); desenha() }
+    $('lim-menos').onclick = () => poe(Math.max(5, le() - 5))
+    $('lim-mais').onclick = () => poe(le() + 5)
+    campo.oninput = () => { valor = le() }
+    campo.onkeydown = (e) => { if (e.key === 'Enter') { valor = le(); salvar(valor) } }
+    for (const b of modalCorpo.querySelectorAll('.lim-atalhos button')) b.onclick = () => poe(b.dataset.at)
+    $('lim-zero').onclick = () => salvar(0)
+    $('lim-ok').onclick = () => { valor = le(); salvar(valor) }
+    campo.focus()
+    campo.select()
+  }
+  const salvar = async (v) => {
+    const ok = $('lim-ok'), zero = $('lim-zero'), er = $('lim-erro')
+    for (const b of [ok, zero]) { if (b) { b.disabled = true; b.style.opacity = '.6' } }
+    if (ok) ok.textContent = 'Salvando...'
+    let r = null
+    try { r = await window.sw.limite(nk, v) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
+    if (!r || !r.ok) {
+      // A JANELA NAO FECHA NO ERRO. Fechar com o valor velho na lista nao diz nada sobre o que
+      // aconteceu, e a pessoa clica de novo achando que o botao falhou.
+      for (const b of [ok, zero]) { if (b) { b.disabled = false; b.style.opacity = '' } }
+      if (ok) ok.textContent = 'Salvar'
+      if (er) { er.textContent = (r && r.erro) || 'a dash não respondeu'; er.hidden = false }
+      return
+    }
+    // 30 s de folga pra a leitura do servidor alcancar o clique: ate la, vale o que foi salvo.
+    limites.set(String(nk), { lim: Number(r.lim) || 0, ate: Date.now() + 30000 })
+    const alvo = (estado.numeros || []).find((x) => numKey(x.numero) === String(nk))
+    if (alvo) alvo.lim_dia = Number(r.lim) || 0
+    modalCorpo.className = 'cartao'
+    fechaModal()
+    desenhaLista()
+    recarregaEstado().catch(() => {})
+  }
+  const sai = () => { modalCorpo.className = 'cartao'; modal.onclick = fechaPorFora; fechaModal() }
+  desenha()
+  abreModal()
+  modal.onclick = (e) => { if (e.target === modal) sai() }
 }
 
 // SEPARA UM PROXY COLADO DE UMA LINHA SO. O Bruno cola do painel do Decodo, que entrega no

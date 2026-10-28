@@ -54,27 +54,27 @@ const ESTADO = () => ({
     // AS SOBRAS DE QUANDO ELE TEVE DONO (dist, fila, lim_dia, leads_hoje) ficam aqui DE PROPOSITO:
     // sao elas que faziam a linha mostrar a posicao "1" e "13/70 sem app aberto" num numero que nao
     // esta em fila nenhuma. A tela tem que IGNORAR tudo isso quando o numero nao tem dono.
-    { numero: '5515974008709', dono: '', idx: 12, roleta: false, apto: false, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 13, lim_dia: 70, cor: '', st: 'ativo', status: 'Disponível', conn: { st: 'pronto', ts: 0 } },
-    { numero: '5515992503977', dono: '', idx: 32, roleta: false, apto: false, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', status: 'Disponível', conn: null },
-    { numero: '5511966632248', dono: 'Guilherme', foto: URL_FOTO_GUI, sigla: 'GS', corDono: '#24c278', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
-    { numero: '5519995983293', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    { numero: '5515974008709', at: '', dono: '', idx: 12, roleta: false, apto: false, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 13, lim_dia: 70, cor: '', st: 'ativo', status: 'Disponível', conn: { st: 'pronto', ts: 0 } },
+    { numero: '5515992503977', at: '', dono: '', idx: 32, roleta: false, apto: false, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', status: 'Disponível', conn: null },
+    { numero: '5511966632248', at: 'a1', dono: 'Guilherme', foto: URL_FOTO_GUI, sigla: 'GS', corDono: '#24c278', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 70, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    { numero: '5519995983293', at: 'a1', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 2, st: 'vez' }, leads_hoje: 32, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // LIGADO E SEM APP ABERTO (19/10/2026): o interruptor esta ligado (`ligado`), mas ninguem tem o numero aberto,
     // entao `roleta` (recebe agora) e falso. A chave tem que aparecer LIGADA.
-    { numero: '5515974060653', dono: 'Heynan Dantas', foto: '', sigla: 'HD', corDono: '#7c3aed', roleta: false, ligado: true, vivo: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
+    { numero: '5515974060653', at: 'a2', dono: 'Heynan Dantas', foto: '', sigla: 'HD', corDono: '#7c3aed', roleta: false, ligado: true, vivo: false, dist: 'roleta', leads_hoje: 0, lim_dia: 70, cor: '', em_uso: true, st: 'ativo' },
     // em aquecimento: area propria e interruptor liberado
     // lim_dia ZERO de proposito: o teto de quem aquece vem da RAMPA (`aquec.teto`), nao do campo do
     // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
-    { numero: '5515974068551', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2 } },
+    { numero: '5515974068551', at: 'a1', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2 } },
     // estado que NAO recebe: sem interruptor
-    { numero: '5515977001122', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise', ...(usoExtra['5515977001122'] ? { uso: usoExtra['5515977001122'] } : {}) },
+    { numero: '5515977001122', at: 'a1', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise', ...(usoExtra['5515977001122'] ? { uso: usoExtra['5515977001122'] } : {}) },
     // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e
     // ninguem limpou o campo). Quem manda e o `apto`: o interruptor NAO pode aparecer.
-    { numero: '5515977003344', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: true, apto: false, status: 'Restrito' },
+    { numero: '5515977003344', at: 'a1', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: true, apto: false, status: 'Restrito' },
     // AQUECENDO E JA PEGOU A COTA DESTA HORA (fila.st 'bateu'). O teto do DIA e 20 e ele tem 7, ou
     // seja nao bateu limite nenhum: a rampa libera a cota aos poucos e ele volta na hora seguinte.
     // E o caso que fazia o app escrever "recebendo" o dia inteiro, antes de o worker passar a
     // carimbar a fila de quem aquece.
-    { numero: '5515977005566', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 7, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 8, teto: 20, agora: 7 } },
+    { numero: '5515977005566', at: 'a1', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'bateu' }, leads_hoje: 7, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 8, teto: 20, agora: 7 } },
   ],
   vendedores: [],
 })
@@ -89,6 +89,15 @@ contextBridge.exposeInMainWorld('sw', {
   fechar: (n) => { chamadas.push({ nome: 'fechar', args: [n] }); return Promise.resolve({ ok: true }) },
   // O 5566 RECUSA de proposito: e o caso em que a chave tem que voltar e dizer por que.
   roleta: (n, l) => { chamadas.push({ nome: 'roleta', args: [n, l] }); return new Promise((r) => setTimeout(() => r(n === '1577005566' ? { ok: false, erro: 'recusado no teste' } : { ok: true }), 300)) },
+  // O TETO DE LEADS (28/10/2026). Devolve o valor JA CORTADO em 100, como o servidor faz: a tela
+  // tem que desenhar o que VOLTOU, nao o que ela pediu. O 2248 recusa de proposito.
+  limite: (nk, lim) => {
+    chamadas.push({ nome: 'limite', args: [nk, lim] })
+    const v = Math.max(0, Math.min(100, Math.floor(Number(lim) || 0)))
+    return new Promise((r) => setTimeout(() => r(nk === '1166632248'
+      ? { ok: false, erro: 'Esse número não é seu' }
+      : { ok: true, lim: v }), 120))
+  },
   entrar: () => Promise.resolve({ ok: true }),
   sair: () => { chamadas.push({ nome: 'sair' }); return Promise.resolve({ ok: true }) },
   verComo: () => Promise.resolve({ ok: true }),
