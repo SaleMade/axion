@@ -14010,7 +14010,7 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
   // Reprocessa com concorrência otimista: se outro write (webhook/dash) gravar no
   // meio, relê o state fresco e reaplica. Antes o write era incondicional e dois
   // webhooks concorrentes se sobrescreviam (lost update / lead sumia).
-  for (let _attempt = 0; _attempt < 6; _attempt++) {
+  for (let _attempt = 0; _attempt < 10; _attempt++) {
   // Quem virou pago NESTA passada (o aviso no aplicativo sai depois da gravacao vencer o CAS).
   // Dentro do laco: tentativa descartada nao pode deixar rastro na que vence.
   const _pagosAgora = [];
@@ -14385,7 +14385,13 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
 
   // Persiste com CAS; se a versão mudou no meio, reprocessa (continue).
   const _ok = await _casState(env, curVer, state, 'payt-webhook');
-  if (!_ok) { if (_attempt < 5) continue; return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409); }
+  // BACKOFF ENTRE TENTATIVAS (28/10/2026): sem a espera, as 6 tentativas disparavam em ~1-2s e o
+  // evento PAGO do PAYT PERDIA a corrida de versao pra rajada de escrita do cron (captura do inbox +
+  // funil). Medido: 2 pagos reais (Jose Francisco afiliado + Maria das Gracas da casa) caidos na MESMA
+  // janela de 77s (28/10 10:33-10:34) ficaram presos em Cobranca, enquanto os de madrugada passaram.
+  // O 409 pede pra PAYT reenviar, mas se ela nao reenvia (ou reenvia na mesma rajada) o pago se perde.
+  // Espalhar por ~2-3s faz a gravacao cair num intervalo quieto e vencer. Mesmo _casEspera do kanban.
+  if (!_ok) { if (_attempt < 9) { await _casEspera(_attempt); continue; } return json({ ok: false, busy: true, error: 'estado ocupado, reenvie' }, 409); }
   // Gravou: agora o aviso no aplicativo, na mesma hora em que a Payt avisa o Bruno. Fora do
   // caminho do ACK (ver _wpDepois): o postback responde na hora e o aviso sai em paralelo.
   if (_calados.length) _wpDepois(ctx, _wpCalar(env, _calados));
