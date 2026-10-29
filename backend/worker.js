@@ -3703,6 +3703,10 @@ async function handleFiveOrders(req, env) {
     const conds = [], binds = [];
     if (startTs) { conds.push('COALESCE(created_at, updated_at) >= ?'); binds.push(Math.floor(startTs / 1000)); }
     if (endTs) { conds.push('COALESCE(created_at, updated_at) <= ?'); binds.push(Math.floor(endTs / 1000)); }
+    // Um pedido so (?id=): o Kanban pede o pedido que acabou de virar pago pra montar a nota fiscal,
+    // sem baixar a lista inteira. Os cortes de escopo abaixo continuam valendo.
+    const _soId = String(url.searchParams.get('id') || '').trim();
+    if (_soId) { conds.push('order_id = ?'); binds.push(_soId); }
     // O corte do afiliado entra como condicao de SQL, nao como filtro depois: assim nem chega a
     // sair do banco pedido que nao e dele.
     // Pedido dele = o da five_commissions (vazia na pratica) OU o ligado a um lead carimbado com o
@@ -3945,7 +3949,11 @@ async function handleNfNotas(req, env) {
   if (!u) return err('Não autenticado', 401);
   if (!isDirector(u)) return err('Apenas a direção', 403);
   await _ensureNfTables(env);
-  const r = await env.DB.prepare('SELECT * FROM nf_notas ORDER BY atualizado_em DESC').all();
+  // ?id= devolve so a nota daquele pedido (o Kanban pergunta antes de oferecer a emissao).
+  const soId = String(new URL(req.url).searchParams.get('id') || '').trim();
+  const r = soId
+    ? await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(soId).all()
+    : await env.DB.prepare('SELECT * FROM nf_notas ORDER BY atualizado_em DESC').all();
   return json({ notas: r.results || [] });
 }
 
@@ -4030,7 +4038,7 @@ async function handleNfEmitir(req, env) {
         }
       }
       const g = await _nfGravar(env, id, campos);
-      resultados.push({ order_id: id, ok: true, status: g.status, numero: g.numero || null });
+      resultados.push({ order_id: id, ok: true, status: g.status, numero: g.numero || null, pdf: g.pdf || null, valor: g.valor || null, motivo: g.motivo || null });
     } catch (e) {
       resultados.push({ order_id: id, ok: false, motivo: String((e && e.message) || e).slice(0, 200) });
     }
