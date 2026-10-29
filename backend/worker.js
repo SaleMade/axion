@@ -6954,6 +6954,76 @@ function _comentarioLimpo(c, u) {
   if (c && c.editado) out.editado = true;
   return out;
 }
+// COMENTARIO NAO PRECISA REESCREVER O BLOB INTEIRO (29/10/2026).
+//
+// Medido na producao com a sessao do proprio cobrador: salvar no pedido levou 8 s, 18 s e 21 s em
+// tres tentativas seguidas, e a do meio voltou 409 - o que ele escreveu se perdeu depois de 18
+// segundos de espera. E a queixa dele inteira: "escrevo, clico, nao aparece, some".
+//
+// A causa nao e o CAS em si, e o TAMANHO do que cada tentativa move: o caminho normal le os 1,37 MB
+// do estado, faz JSON.parse, muda um campo e grava os 1,37 MB de volta. Como a captura do inbox
+// grava o blob UMA VEZ POR MENSAGEM recebida, a versao anda em rajada, e as 10 tentativas (cada uma
+// com o seu round-trip de 1,4 MB) perdem a corrida ate estourar em 409.
+//
+// Aqui o comentario entra por UMA instrucao, com json_set no caminho daquele lead: o SQLite altera o
+// documento por dentro - nada de 1,4 MB na rede, nada de parse no Worker - e a instrucao e atomica.
+// Como ela sobe a `version`, quem estiver no meio de uma gravacao do blob inteiro perde o CAS e
+// retenta: a escrita humana passa na frente em vez de ficar na fila.
+//
+// Devolve `null` quando nao da pra resolver por aqui (lead no arquivo de leads, posicao que mudou
+// tres vezes, banco sem json_each). Nesse caso quem chama segue pelo caminho de sempre, que sabe
+// juntar blob + leads_arquivo. Nunca inventa resposta: ou grava, ou devolve o erro, ou passa a vez.
+async function _comentarioRapido(env, u, leadId, patch) {
+  const alvo = String(leadId);
+  for (let tentativa = 0; tentativa < 3; tentativa++) {
+    let row = null;
+    try {
+      row = await env.DB.prepare(
+        "SELECT j.key AS idx, COALESCE(json_extract(j.value,'$.afl'),'') AS afl,"
+        + " COALESCE(json_extract(j.value,'$.comments'),'[]') AS coments"
+        + " FROM dashboard_state s, json_each(json_extract(s.data,'$.leads')) j"
+        + " WHERE s.id = 1 AND CAST(json_extract(j.value,'$.id') AS TEXT) = ?"
+      ).bind(alvo).first();
+    } catch (_) { return null; }
+    if (!row) return null;
+    // MESMO GATE DE MUNDO do caminho normal. Comentario e campo livre pra quem esta logado, mas
+    // NUNCA de outro mundo: sem isto o afiliado comentaria em pedido da casa.
+    if (afiliadoSemVinculo(u)) return err('Lead não encontrado', 404);
+    if (noMundoAfiliado(u) && String(row.afl || '') !== aflDe(u)) return err('Lead não encontrado', 404);
+    const idx = Number(row.idx);
+    if (!isFinite(idx) || idx < 0 || Math.floor(idx) !== idx) return null;   // indice estranho: nao monto SQL com ele
+    let lista = [];
+    try { lista = JSON.parse(row.coments || '[]'); } catch (_) { lista = []; }
+    if (!Array.isArray(lista)) lista = [];
+    // As MESMAS regras do caminho normal, so que sobre a lista pequena.
+    if (patch.comment_add && typeof patch.comment_add === 'object') {
+      lista.unshift(_comentarioLimpo(patch.comment_add, u));
+      lista = lista.slice(0, 200);
+    }
+    if (patch.comment_set && typeof patch.comment_set === 'object') {
+      const _cs = patch.comment_set;
+      const _i = lista.findIndex((c) => c && String(c.time || '') === String(_cs.time || '') && String(c.who || '') === String(_cs.who || ''));
+      if (_i >= 0) lista[_i] = { ...lista[_i], tx: String(_cs.tx == null ? '' : _cs.tx).slice(0, 4000), editado: true };
+    }
+    if (patch.comment_del && typeof patch.comment_del === 'object') {
+      const _cd = patch.comment_del;
+      lista = lista.filter((c) => !(c && String(c.time || '') === String(_cd.time || '') && String(c.who || '') === String(_cd.who || '')));
+    }
+    const caminho = '$.leads[' + idx + ']';
+    // A guarda do `id` no WHERE e o que protege o indice: entre a leitura e a gravacao a captura
+    // pode inserir um lead no topo e empurrar todo mundo. Se isso acontecer, nada muda e eu refaco.
+    const r = await env.DB.prepare(
+      "UPDATE dashboard_state SET data = json_set(data, '" + caminho + ".comments', json(?)),"
+      + ' version = version + 1, updated_at = ?, updated_by = ?'
+      + " WHERE id = 1 AND CAST(json_extract(data, '" + caminho + ".id') AS TEXT) = ?"
+    ).bind(JSON.stringify(lista), Math.floor(Date.now() / 1000), 'coment:' + String(u.id), alvo).run();
+    if (r && r.meta && r.meta.changes > 0) {
+      const v = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id = 1').first().catch(() => null);
+      return json({ ok: true, version: Number(v && v.version) || 0 });
+    }
+  }
+  return null;
+}
 async function handleUpdateLead(req, env, leadId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -6980,6 +7050,16 @@ async function handleUpdateLead(req, env, leadId) {
   // "confirmou" - o front resolve isso na leitura (ver confSt em aceitacoes.jsx).
   // Quem marcou (conf_por) e carimbado logo abaixo pelo SERVIDOR, nunca pelo navegador.
   const SCALAR = ['nome', 'cpf', 'wa', 'email', 'orig', 'cep', 'end', 'num', 'comp', 'bairro', 'cidade', 'uf', 'prod', 'trat', 'mod', 'pgto', 'track', 'link', 'obs', 'transp', 'comprovante_url', 'comprovante_mime', 'entrega_url', 'entrega_mime', 'track_core', 'transp_nome', 'conf', 'conf_st'];
+  // SO MEXEU EM COMENTARIO? Vai pelo caminho curto (ver _comentarioRapido logo acima). Qualquer
+  // outro campo junto cai no caminho de sempre, que tem os gates de cargo campo a campo.
+  const _soComent = (() => {
+    const ks = Object.keys(patch || {});
+    return ks.length > 0 && ks.every((k) => k === 'comment_add' || k === 'comment_set' || k === 'comment_del');
+  })();
+  if (_soComent) {
+    const _r = await _comentarioRapido(env, u, leadId, patch);
+    if (_r) return _r;
+  }
   const now14 = () => `${todayBR()} ${nowTimeBR()}`;   // em BRT, como o resto do historico (21/09/2026)
   for (let attempt = 0; attempt < 10; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
