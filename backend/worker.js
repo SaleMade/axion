@@ -3756,6 +3756,303 @@ async function handleFiveOrders(req, env) {
   } catch (e) { return json({ orders: [], error: String((e && e.message) || e) }); }
 }
 
+// ══ NOTA FISCAL PELO NOTAZZ (28/10/2026) ═════════════════════════════════════
+//
+// A SellWave virou ME no Simples em 10/2026 e cada venda precisa de uma NF-e (regra do contador:
+// 1 venda = 1 nota, dentro do mes). Quem emite e o Notazz; quem MANDA emitir e a dash, e nao a
+// integracao nativa Payt -> Notazz, por dois motivos: a Payt so ve o cartao (AfterPayLog, Pix na
+// porta e boleto ficam de fora), e ligar as duas emitiria nota em dobro.
+//
+// QUEM DECIDE O QUE VIROU VENDA E A TELA, NAO ESTE ARQUIVO. A regra "foi pago, de quanto e quando"
+// mora no front (recebimentoDoPedido + pagosDeclarados), porque so ele junta o pedido com o card do
+// Kanban. Copiar essa regra aqui criaria uma segunda definicao de PAGO, que e exatamente o erro que
+// a auditoria de 18/10 consertou. Entao a tela manda {order_id, valor, forma} e o servidor so monta
+// a nota com o cliente do five_orders e conversa com o Notazz.
+//
+// Decisoes do Bruno (ver _contabilidade/LEIA-ME.md): nota so do pedido PAGO (frustrado nao gera);
+// afiliado tambem gera, pelo valor cheio; a nota sai do CNPJ de Fortaleza. NCM, CFOP e CSOSN NAO vao
+// no corpo: valem os da empresa no Notazz, que o contador configurou (ele ja troca 6108 -> 5405
+// sozinho quando o cliente e do Ceara, conferido em 28/10).
+//
+// RASCUNHO PRIMEIRO. `transmitir: false` cria a nota no Notazz sem mandar pra Sefaz (TRANSMITIR=0):
+// serve pra conferir antes, e o proprio Notazz ja recusa ali o dado que faltar. Transmitir e um
+// segundo passo, e nota transmitida nunca e criada de novo (NF-e em dobro vira imposto em dobro).
+//
+// A chave fica no secret NOTAZZ_API_KEY, nunca neste arquivo: o repo e publico.
+const NOTAZZ_API = 'https://app.notazz.com/api';
+let _nfTablesOk = false;
+async function _ensureNfTables(env) {
+  if (_nfTablesOk) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS nf_notas (
+    order_id TEXT PRIMARY KEY,
+    notazz_id TEXT,
+    status TEXT,
+    motivo TEXT,
+    numero TEXT,
+    chave TEXT,
+    pdf TEXT,
+    xml TEXT,
+    valor REAL,
+    forma TEXT,
+    transmitida INTEGER DEFAULT 0,
+    emissao TEXT,
+    criado_em INTEGER,
+    atualizado_em INTEGER,
+    por TEXT
+  )`).run();
+  _nfTablesOk = true;
+}
+
+async function _notazz(env, corpo) {
+  if (!env.NOTAZZ_API_KEY) return { statusProcessamento: 'erro', motivo: 'Chave do Notazz nao configurada no servidor' };
+  try {
+    const r = await fetch(NOTAZZ_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...corpo, API_KEY: env.NOTAZZ_API_KEY }),
+    });
+    const t = await r.text();
+    try { return JSON.parse(t); } catch (_) { return { statusProcessamento: 'erro', motivo: 'Resposta ilegivel do Notazz (HTTP ' + r.status + ')' }; }
+  } catch (e) {
+    return { statusProcessamento: 'erro', motivo: 'Notazz nao respondeu: ' + String((e && e.message) || e).slice(0, 120) };
+  }
+}
+const _nfOk = (j) => !!j && String(j.statusProcessamento || '').toLowerCase() === 'sucesso';
+const _nfMotivo = (j) => String((j && (j.motivo || j.motivoStatus || j.mensagem || j.message || j.erro)) || JSON.stringify(j || {})).slice(0, 300);
+const _nfDig = (s) => String(s == null ? '' : s).replace(/\D/g, '');
+// Hora de Brasilia no formato do Notazz (YYYY-mm-dd HH:ii:ss).
+const _nfAgoraBR = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+// Forma de pagamento da NF-e. O pedido pago so no CARD e o COD que o cobrador recebeu na porta, e
+// na porta e Pix; o resto vem do que a plataforma registrou.
+const _NF_FORMA = { pix: '17', credit_card: '03', card: '03', cartao: '03', bank_slip: '15', boleto: '15', billet: '15' };
+const _nfForma = (o, fonte) => (fonte === 'card' ? '17' : (_NF_FORMA[String((o && o.charge_method) || '').toLowerCase()] || '17'));
+
+// Monta o corpo do create/update do Notazz a partir do pedido. Devolve { erro } quando falta dado
+// que a nota exige: melhor parar aqui com o motivo do que gastar chamada pra o Notazz recusar.
+function _nfCorpo(o, valor, forma) {
+  const e = (typeof o.customer_address === 'string' ? safeJson(o.customer_address) : o.customer_address) || {};
+  const doc = _nfDig(o.customer_doc);
+  const rua = String(e.address || e.street || e.logradouro || '').trim();
+  const bairro = String(e.neighborhood || e.district || e.bairro || '').trim();
+  const cidade = String(e.city || e.cidade || '').trim();
+  const uf = String(e.state || e.uf || '').trim().toUpperCase();
+  const cep = _nfDig(e.zipCode || e.zipcode || e.zip_code || e.cep || e.postalCode);
+  const v = Math.round((Number(valor) || Number(o.charge_amount) || Number(o.offer_price) || 0) * 100) / 100;
+  const faltam = [];
+  if (!String(o.customer_name || '').trim()) faltam.push('nome');
+  if (doc.length !== 11 && doc.length !== 14) faltam.push('CPF');
+  if (!rua) faltam.push('rua');
+  if (!bairro) faltam.push('bairro');
+  if (!cidade) faltam.push('cidade');
+  if (!/^[A-Z]{2}$/.test(uf)) faltam.push('UF');
+  if (cep.length !== 8) faltam.push('CEP');
+  if (!(v > 0)) faltam.push('valor');
+  if (faltam.length) return { erro: 'Falta no pedido: ' + faltam.join(', ') };
+  // O kit vai como UM item: "GLICOSIX - 4 MESES", 1 UN, valor cheio. E como o contador validou.
+  const titulo = String(o.offer_title || o.product_name || 'GlicoSix').trim();
+  const cod = titulo.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'PRODUTO';
+  return {
+    valor: v,
+    corpo: {
+      DESTINATION_NAME: String(o.customer_name).trim().slice(0, 60),
+      DESTINATION_TAXID: doc,
+      DESTINATION_TAXTYPE: doc.length === 14 ? 'J' : 'F',
+      DESTINATION_STREET: rua.slice(0, 60),
+      DESTINATION_NUMBER: String(e.number || e.numero || '').trim().slice(0, 60) || 'SN',
+      DESTINATION_COMPLEMENT: String(e.complement || e.complemento || '').trim().slice(0, 60),
+      DESTINATION_DISTRICT: bairro.slice(0, 60),
+      DESTINATION_CITY: cidade,
+      DESTINATION_UF: uf,
+      DESTINATION_ZIPCODE: cep,
+      DESTINATION_PHONE: _nfDig(o.customer_phone).slice(-11),
+      DOCUMENT_BASEVALUE: v.toFixed(2),
+      DOCUMENT_GOAL: '1',
+      DOCUMENT_OPERATION_TYPE: '1',
+      DOCUMENT_NATURE_OPERATION: 'VENDA',
+      DOCUMENT_PAYMENT_FORM: forma,
+      DOCUMENT_PAYMENT_FORM_INDICATOR: '0',
+      DOCUMENT_PRODUCT: {
+        1: {
+          DOCUMENT_PRODUCT_COD: cod,
+          DOCUMENT_PRODUCT_NAME: titulo.toUpperCase().slice(0, 120),
+          DOCUMENT_PRODUCT_QTD: '1',
+          DOCUMENT_PRODUCT_UNITARY_VALUE: v.toFixed(2),
+        },
+      },
+      // Frete por conta da SellWave (quem paga a entrega e a gente), sem cobrar a parte.
+      DOCUMENT_FRETE: { DOCUMENT_FRETE_MOD: '0', DOCUMENT_FRETE_VALUE: '0.00' },
+      EXTERNAL_ID: String(o.order_id),
+      SALE_ID: String(o.order_id),
+      REQUEST_ORIGIN: 'SellWave',
+    },
+  };
+}
+
+// Grava a linha da nota. So o que veio preenchido muda; o resto fica como estava.
+async function _nfGravar(env, orderId, campos) {
+  const agora = Math.floor(Date.now() / 1000);
+  const ant = await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(orderId).first();
+  const n = { ...(ant || { order_id: orderId, criado_em: agora, transmitida: 0 }), ...campos, atualizado_em: agora };
+  await env.DB.prepare(`INSERT OR REPLACE INTO nf_notas
+    (order_id, notazz_id, status, motivo, numero, chave, pdf, xml, valor, forma, transmitida, emissao, criado_em, atualizado_em, por)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+    orderId, n.notazz_id || null, n.status || null, n.motivo || null, n.numero || null, n.chave || null,
+    n.pdf || null, n.xml || null, n.valor == null ? null : Number(n.valor), n.forma || null,
+    n.transmitida ? 1 : 0, n.emissao || null, n.criado_em || agora, agora, n.por || null,
+  ).run();
+  return n;
+}
+
+// O que a consulta do Notazz diz sobre a nota, no formato da linha.
+const _nfDaConsulta = (j) => ({
+  status: String(j.statusNota || '') || null,
+  motivo: String(j.motivoStatus || '') || null,
+  numero: j.numero ? String(j.numero) : null,
+  chave: j.chave ? String(j.chave) : null,
+  pdf: j.pdf ? String(j.pdf) : null,
+  xml: j.xml ? String(j.xml) : null,
+  emissao: j.emissao ? String(j.emissao) : null,
+});
+// Status em que a nota ja existe na Sefaz (ou esta indo): nunca criar outra por cima.
+const _NF_NA_SEFAZ = ['autorizada', 'cancelada', 'denegada', 'processando', 'emitindo', 'aguardando autorizacao', 'aguardando autorização'];
+const _nfNaSefaz = (n) => !!n && (_NF_NA_SEFAZ.includes(String(n.status || '').toLowerCase()) || (n.transmitida && String(n.status || '').toLowerCase() !== 'rejeitada' && String(n.status || '').toLowerCase() !== 'erro'));
+
+// GET /api/nf/notas: as notas que a dash ja mandou pro Notazz (so a direcao).
+async function handleNfNotas(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas a direção', 403);
+  await _ensureNfTables(env);
+  const r = await env.DB.prepare('SELECT * FROM nf_notas ORDER BY atualizado_em DESC').all();
+  return json({ notas: r.results || [] });
+}
+
+// POST /api/nf/emitir { pedidos: [{ order_id, valor, fonte }], transmitir }
+// Ate 10 pedidos por chamada (o Notazz e sincrono e aceita 100 por minuto); a tela manda em lotes.
+async function handleNfEmitir(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas a direção emite nota', 403);
+  const body = await req.json().catch(() => ({}));
+  const pedidos = (Array.isArray(body && body.pedidos) ? body.pedidos : []).slice(0, 10);
+  const transmitir = !!(body && body.transmitir);
+  if (!pedidos.length) return err('Nenhum pedido');
+  await _ensureNfTables(env);
+  const resultados = [];
+  for (const p of pedidos) {
+    const id = String((p && p.order_id) || '').trim();
+    if (!id) continue;
+    try {
+      const o = await env.DB.prepare(`SELECT ${COLS_FIVE_ORDERS} FROM five_orders WHERE order_id = ?`).bind(id).first();
+      if (!o) { resultados.push({ order_id: id, ok: false, motivo: 'Pedido nao encontrado' }); continue; }
+      let n = await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(id).first();
+      if (_nfNaSefaz(n)) { resultados.push({ order_id: id, ok: true, pulou: true, status: n.status, motivo: 'Nota ja enviada' }); continue; }
+      const forma = _nfForma(o, p.fonte);
+      const m = _nfCorpo(o, p.valor, forma);
+      if (m.erro) {
+        await _nfGravar(env, id, { status: 'erro', motivo: m.erro, valor: Number(p.valor) || null, forma, por: String(u.id) });
+        resultados.push({ order_id: id, ok: false, motivo: m.erro });
+        continue;
+      }
+      // Ja existe no Notazz sem a gente saber? (rascunho feito a mao, ou uma chamada que criou la e
+      // caiu antes de gravar aqui.) Adota a nota em vez de criar outra.
+      let notazzId = n && n.notazz_id;
+      if (!notazzId) {
+        const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: '', EXTERNAL_ID: id });
+        if (_nfOk(c) && c.id) {
+          notazzId = String(c.id);
+          n = await _nfGravar(env, id, { notazz_id: notazzId, ..._nfDaConsulta(c) });
+          if (_nfNaSefaz({ status: c.statusNota })) { resultados.push({ order_id: id, ok: true, pulou: true, status: c.statusNota, motivo: 'Nota ja existia no Notazz' }); continue; }
+        }
+      }
+      const corpo = { ...m.corpo, TRANSMITIR: transmitir ? '1' : '0' };
+      if (transmitir) corpo.DOCUMENT_ISSUE_DATE = _nfAgoraBR();
+      const j = notazzId
+        ? await _notazz(env, { METHOD: 'update_nfe_55', DOCUMENT_ID: notazzId, ...corpo })
+        : await _notazz(env, { METHOD: 'create_nfe_55', ...corpo });
+      if (!_nfOk(j)) {
+        const motivo = _nfMotivo(j);
+        await _nfGravar(env, id, { notazz_id: notazzId || null, status: 'erro', motivo, valor: m.valor, forma, por: String(u.id) });
+        resultados.push({ order_id: id, ok: false, motivo });
+        continue;
+      }
+      notazzId = String(j.id || notazzId);
+      let campos = { notazz_id: notazzId, status: 'Pendente', motivo: null, valor: m.valor, forma, transmitida: transmitir ? 1 : 0, por: String(u.id) };
+      if (transmitir) {
+        const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
+        if (_nfOk(c)) campos = { ...campos, ..._nfDaConsulta(c), transmitida: 1 };
+      }
+      const g = await _nfGravar(env, id, campos);
+      resultados.push({ order_id: id, ok: true, status: g.status, numero: g.numero || null });
+    } catch (e) {
+      resultados.push({ order_id: id, ok: false, motivo: String((e && e.message) || e).slice(0, 200) });
+    }
+  }
+  return json({ resultados });
+}
+
+// POST /api/nf/atualizar { ids? }: pergunta ao Notazz como esta cada nota que ainda nao fechou
+// (a Sefaz responde depois da transmissao). Sem ids, pega as transmitidas que nao fecharam.
+async function handleNfAtualizar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas a direção', 403);
+  await _ensureNfTables(env);
+  const body = await req.json().catch(() => ({}));
+  const ids = Array.isArray(body && body.ids) ? body.ids.map(String).slice(0, 25) : null;
+  const linhas = ids && ids.length
+    ? (await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).all()).results || []
+    : (await env.DB.prepare("SELECT * FROM nf_notas WHERE notazz_id IS NOT NULL AND transmitida = 1 AND COALESCE(status,'') NOT IN ('Autorizada','Cancelada','Denegada','Rejeitada') ORDER BY atualizado_em LIMIT 25").all()).results || [];
+  const notas = [];
+  for (const n of linhas) {
+    if (!n.notazz_id) continue;
+    const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: n.notazz_id, EXTERNAL_ID: '' });
+    if (!_nfOk(c)) { notas.push({ ...n, erro_consulta: _nfMotivo(c) }); continue; }
+    notas.push(await _nfGravar(env, n.order_id, _nfDaConsulta(c)));
+  }
+  return json({ notas });
+}
+
+// POST /api/nf/apagar { order_id }: tira um RASCUNHO do Notazz (nota que nunca foi pra Sefaz).
+async function handleNfApagar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas a direção', 403);
+  await _ensureNfTables(env);
+  const body = await req.json().catch(() => ({}));
+  const id = String((body && body.order_id) || '').trim();
+  if (!id) return err('order_id obrigatório');
+  const n = await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(id).first();
+  if (n && _nfNaSefaz(n)) return err('Nota já enviada à Sefaz: só dá pra cancelar', 409);
+  const j = await _notazz(env, { METHOD: 'delete_nfe_55', DOCUMENT_ID: (n && n.notazz_id) || '', EXTERNAL_ID: (n && n.notazz_id) ? '' : id });
+  if (!_nfOk(j) && n && n.notazz_id) return err('Notazz recusou: ' + _nfMotivo(j), 502);
+  await env.DB.prepare('DELETE FROM nf_notas WHERE order_id = ?').bind(id).run();
+  return json({ ok: true });
+}
+
+// POST /api/nf/cancelar { order_id, motivo }: cancela nota AUTORIZADA (a Sefaz aceita ate 24 h
+// depois da autorizacao). O motivo tem que ter 30 caracteres ou mais, regra da Sefaz.
+async function handleNfCancelar(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Apenas a direção', 403);
+  await _ensureNfTables(env);
+  const body = await req.json().catch(() => ({}));
+  const id = String((body && body.order_id) || '').trim();
+  const motivo = String((body && body.motivo) || '').trim();
+  if (!id) return err('order_id obrigatório');
+  if (motivo.length < 30) return err('O motivo precisa de pelo menos 30 caracteres');
+  const n = await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(id).first();
+  if (!n || !n.notazz_id) return err('Nota não encontrada', 404);
+  if (String(n.status || '') !== 'Autorizada') return err('Só nota autorizada pode ser cancelada', 409);
+  const j = await _notazz(env, { METHOD: 'cancel_nfe_55', DOCUMENT_ID: n.notazz_id, REASON: motivo.slice(0, 255) });
+  if (!_nfOk(j)) return err('Notazz recusou: ' + _nfMotivo(j), 502);
+  const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: n.notazz_id, EXTERNAL_ID: '' });
+  const g = await _nfGravar(env, id, _nfOk(c) ? _nfDaConsulta(c) : { status: 'Cancelada' });
+  return json({ ok: true, nota: g });
+}
+
 // Resumo do produtor: totais, comissões a pagar, por status, por afiliado, por produto.
 async function handleFiveSummary(req, env) {
   const _real = await authUser(req, env);
@@ -30146,6 +30443,12 @@ export default {
 
       // Dados do produtor (leitura, só diretor)
       if (req.method === 'GET' && path === '/api/five/orders') return handleFiveOrders(req, env);
+      // Nota fiscal pelo Notazz (28/10/2026), so a direcao.
+      if (req.method === 'GET' && path === '/api/nf/notas') return handleNfNotas(req, env);
+      if (req.method === 'POST' && path === '/api/nf/emitir') return handleNfEmitir(req, env);
+      if (req.method === 'POST' && path === '/api/nf/atualizar') return handleNfAtualizar(req, env);
+      if (req.method === 'POST' && path === '/api/nf/apagar') return handleNfApagar(req, env);
+      if (req.method === 'POST' && path === '/api/nf/cancelar') return handleNfCancelar(req, env);
       if (req.method === 'GET' && path === '/api/five/summary') return handleFiveSummary(req, env);
       if (req.method === 'GET' && path === '/api/five/products') return handleFiveProducts(req, env);
       if (req.method === 'POST' && path === '/api/five/ignorar') return handleFiveIgnorarSoltar(req, env);
