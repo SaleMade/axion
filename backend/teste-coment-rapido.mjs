@@ -30,7 +30,7 @@ ok(/k === 'comment_add' \|\| k === 'comment_set' \|\| k === 'comment_del'/.test(
   'so desvia quando o patch e SO de comentario (campo com gate de cargo nao passa por aqui)');
 
 // ── roda de verdade ───────────────────────────────────────────────────────────────────────────
-const monta = (leads, { mudaIndice = false, semJsonEach = false } = {}) => {
+const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConferencia = false } = {}) => {
   const estado = { leads: JSON.parse(JSON.stringify(leads)) };
   let gravou = null, chamadas = 0;
   const mod = 'const err = (m, c) => ({ __erro: true, status: c || 400, msg: m });\n'
@@ -68,7 +68,16 @@ const monta = (leads, { mudaIndice = false, semJsonEach = false } = {}) => {
             return { meta: { changes: 1 } };
           },
         }),
-        first: async () => (/SELECT version/.test(sql) ? { version: 777 } : null),
+        first: async () => {
+          // a RELEITURA depois de gravar: devolve quantos comentarios aquele lead tem agora
+          if (/json_array_length/.test(sql)) {
+            if (mentirNaConferencia) return { version: 777, n: 999 };
+            const m = sql.match(/\$\.leads\[(\d+)\]/);
+            const l = estado.leads[Number(m[1])];
+            return { version: 777, n: ((l && l.comments) || []).length };
+          }
+          return /SELECT version/.test(sql) ? { version: 777 } : null;
+        },
       }),
     },
   };
@@ -156,6 +165,28 @@ const DO_AFILIADO = { id: 'at_afl', role: 'atendente', afiliado_id: 'afl_x' };
   const m2 = monta(LEADS, { semJsonEach: true });
   const r2 = await m2.fn(m2.env, DIRETOR, '100', { comment_add: { tx: 'x' } });
   ok(r2 === null, 'banco sem json_each tambem devolve null em vez de quebrar');
+}
+
+// ── 8. COMENTARIO QUE CHEGA VAZIO NAO PODE VIRAR "ok" (o caso do Bruno em 29/10) ─────────────
+{
+  const m = monta(LEADS);
+  const r = await m.fn(m.env, DIRETOR, '100', { comment_add: 'isso nao e um comentario' });
+  ok(r && r.__erro && r.status === 400, 'comentario que nao e objeto vira ERRO, nao ok silencioso (deu: ' + JSON.stringify(r) + ')');
+  ok(m.estado.leads[0].comments.length === 1, 'e nada foi gravado por cima');
+}
+
+// ── 9. GRAVOU MAS NAO CONFERE: passa a vez em vez de mentir ──────────────────────────────────
+{
+  const m = monta(LEADS, { mentirNaConferencia: true });
+  const r = await m.fn(m.env, DIRETOR, '100', { comment_add: { tx: 'novo' } });
+  ok(r === null, 'se a releitura nao bate, devolve null pro caminho de sempre em vez de dizer que salvou');
+}
+
+// ── 10. o ok agora diz QUANTOS comentarios ficaram ───────────────────────────────────────────
+{
+  const m = monta(LEADS);
+  const r = await m.fn(m.env, DIRETOR, '100', { comment_add: { tx: 'mais um' } });
+  ok(r && r.__ok && r.corpo.comentarios === 2, 'a resposta diz quantos comentarios o pedido tem agora');
 }
 
 console.log('');

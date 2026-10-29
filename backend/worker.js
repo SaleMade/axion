@@ -6995,10 +6995,12 @@ async function _comentarioRapido(env, u, leadId, patch) {
     let lista = [];
     try { lista = JSON.parse(row.coments || '[]'); } catch (_) { lista = []; }
     if (!Array.isArray(lista)) lista = [];
+    let adicionou = false;
     // As MESMAS regras do caminho normal, so que sobre a lista pequena.
     if (patch.comment_add && typeof patch.comment_add === 'object') {
       lista.unshift(_comentarioLimpo(patch.comment_add, u));
-      lista = lista.slice(0, 200);
+      lista = lista.slice(0, 200);   // no teto a lista NAO cresce: quem prova que entrou e o `adicionou`
+      adicionou = true;
     }
     if (patch.comment_set && typeof patch.comment_set === 'object') {
       const _cs = patch.comment_set;
@@ -7009,6 +7011,20 @@ async function _comentarioRapido(env, u, leadId, patch) {
       const _cd = patch.comment_del;
       lista = lista.filter((c) => !(c && String(c.time || '') === String(_cd.time || '') && String(c.who || '') === String(_cd.who || '')));
     }
+    // O QUE ENTROU TEM QUE SER UM COMENTARIO DE VERDADE (29/10/2026, segunda rodada). O Bruno
+    // escreveu dois comentarios, fechou e reabriu o pedido: "sem comentarios". O estado tinha a
+    // marca da gravacao dele (version nova, updated_by `coment:socio_x4dy6d`) e NENHUM comentario
+    // novo em lugar nenhum - nem no blob, nem no arquivo. Ou seja: a instrucao rodou, gravou a
+    // lista SEM NADA DENTRO e devolveu ok. A tela nao tinha como saber, entao mostrava salvo.
+    //
+    // Duas travas, porque o jeito como isso aconteceu continua sem explicacao e eu nao vou apostar
+    // numa teoria: (a) operacao que deveria crescer a lista e nao cresceu vira ERRO, nao ok;
+    // (b) depois de gravar, releio e confiro - se o comentario nao estiver la, devolvo null e deixo
+    // o caminho de sempre tentar, em vez de mentir que salvou.
+    if (patch.comment_add && !adicionou) {
+      console.log('COMENT_VAZIO lead=' + alvo + ' recebeu=' + JSON.stringify(patch.comment_add).slice(0, 120));
+      return err('O comentário chegou vazio no servidor. Nada foi salvo: escreva de novo.', 400);
+    }
     const caminho = '$.leads[' + idx + ']';
     // A guarda do `id` no WHERE e o que protege o indice: entre a leitura e a gravacao a captura
     // pode inserir um lead no topo e empurrar todo mundo. Se isso acontecer, nada muda e eu refaco.
@@ -7018,8 +7034,17 @@ async function _comentarioRapido(env, u, leadId, patch) {
       + " WHERE id = 1 AND CAST(json_extract(data, '" + caminho + ".id') AS TEXT) = ?"
     ).bind(JSON.stringify(lista), Math.floor(Date.now() / 1000), 'coment:' + String(u.id), alvo).run();
     if (r && r.meta && r.meta.changes > 0) {
-      const v = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id = 1').first().catch(() => null);
-      return json({ ok: true, version: Number(v && v.version) || 0 });
+      // RELEIO O QUE GRAVEI. Uma instrucao que diz "mudei 1 linha" nao prova que o comentario entrou:
+      // json_set pode ter escrito uma lista que nao e a que eu montei. Conferir custa uma consulta
+      // pequena e e a diferenca entre "salvou" e "disse que salvou".
+      const conf = await env.DB.prepare(
+        "SELECT version, json_array_length(json_extract(data, '" + caminho + ".comments')) AS n FROM dashboard_state WHERE id = 1"
+      ).first().catch(() => null);
+      if (!conf || Number(conf.n) !== lista.length) {
+        console.log('COMENT_NAO_CONFERE lead=' + alvo + ' esperava=' + lista.length + ' achei=' + (conf ? conf.n : 'nada'));
+        return null;   // deixa o caminho de sempre tentar: melhor lento que perdido
+      }
+      return json({ ok: true, version: Number(conf.version) || 0, comentarios: lista.length });
     }
   }
   return null;
@@ -7277,7 +7302,14 @@ async function handleUpdateLead(req, env, leadId) {
     // lista velha). Agora ela manda so o que fez: comment_add (entra no topo), comment_set {time,
     // who, tx} e comment_del {time, who}, que so mexem na linha com o MESMO carimbo. A lista inteira
     // (chamador antigo) continua aceita, logo acima.
-    if (patch.comment_add && typeof patch.comment_add === 'object') {
+    if (patch.comment_add) {
+      // Mesma trava do caminho curto: comentario que chega sem ser objeto nao pode virar um ok
+      // silencioso. Antes isto era `if (typeof === 'object')` e o resto da funcao seguia como se
+      // nada tivesse acontecido - gravava o estado inteiro de novo e respondia salvo.
+      if (typeof patch.comment_add !== 'object') {
+        console.log('COMENT_VAZIO_LENTO lead=' + String(leadId) + ' recebeu=' + JSON.stringify(patch.comment_add).slice(0, 120));
+        return err('O comentário chegou vazio no servidor. Nada foi salvo: escreva de novo.', 400);
+      }
       if (!Array.isArray(lead.comments)) lead.comments = [];
       lead.comments.unshift(_comentarioLimpo(patch.comment_add, u));
       lead.comments = lead.comments.slice(0, 200);
@@ -8974,6 +9006,66 @@ async function handlePostState(req, env) {
 // SO o pedido e a soma acontece aqui, passando pelas MESMAS regras do POST /api/state
 // (_stateProtegido: dono forcado, nasce sem aceite nem pagamento, mundo do afiliado). O conflito de
 // versao se resolve aqui dentro, sem ida e volta. Reenvio do mesmo id nao duplica.
+// GET /api/pedido/mesmo-cpf?cpf=<11 digitos> - esse CPF ja pediu alguma vez?
+//
+// Pedido do Bruno (29/10/2026): "toda vez que a gente vai salvar um pedido novo, eu e meus afiliados
+// devemos receber uma notificacao caso ja exista algum cliente que fez um pedido antes com a gente".
+// A tela usa isso pra perguntar antes de criar, nao pra barrar.
+//
+// AVISAR, NUNCA JUNTAR NEM BLOQUEAR. CPF igual nao e a mesma pessoa: em 12/10/2026 duas clientes
+// diferentes, de cidades diferentes, tinham o mesmo CPF digitado, o aceite tratou como uma so,
+// fundiu os cards e uma venda de R$ 497 saiu da operacao - a cliente nunca recebeu o produto (ver a
+// memoria cpf-nao-e-identidade). Por isso aqui so devolvo a LISTA, com nome, telefone e cidade, e
+// quem decide e quem esta olhando a tela.
+//
+// Procura nos dois lugares. Pedido encerrado e parado ha 7 dias mora na `leads_arquivo` (memoria
+// arquivo-de-leads), e e justamente la que estao os "ja foi roubado, frustrado ou pago antes" que
+// motivaram o pedido: olhar so o blob responderia "nunca pediu" pra quem pediu mes passado.
+async function handleMesmoCpf(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const cpf = String(new URL(req.url).searchParams.get('cpf') || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return json({ ok: true, cpf: '', achados: [] });
+  // So o mundo de quem pergunta: o afiliado nunca ve pedido da casa, nem o contrario.
+  const mundo = noMundoAfiliado(u) ? String(aflDe(u) || '') : '';
+  if (afiliadoSemVinculo(u)) return json({ ok: true, cpf, achados: [] });
+  // o `replace` encadeado tira pontuacao do CPF gravado (uns vem "000.000.000-00", outros so digito)
+  const soDigito = (col) => "replace(replace(replace(replace(COALESCE(" + col + ",''),'.',''),'-',''),' ',''),'/','')";
+  const achados = [];
+  const poe = (r) => {
+    if (!r) return;
+    if (String(r.afl || '') !== mundo) return;
+    achados.push({
+      id: String(r.id == null ? '' : r.id), nome: String(r.nome || ''), wa: String(r.wa || ''),
+      cidade: String(r.cidade || ''), uf: String(r.uf || ''), col: String(r.col || ''),
+      vl: Number(r.vl) || 0, at: String(r.at || ''), arquivado: !!r.arquivado,
+      ts: Number(r.ts) || Math.floor((Number(r.id) || 0) / 1000) || 0,
+    });
+  };
+  const campos = (v) => "json_extract(" + v + ",'$.id') AS id, json_extract(" + v + ",'$.nome') AS nome,"
+    + " json_extract(" + v + ",'$.wa') AS wa, json_extract(" + v + ",'$.cidade') AS cidade,"
+    + " json_extract(" + v + ",'$.uf') AS uf, json_extract(" + v + ",'$.col') AS col,"
+    + " json_extract(" + v + ",'$.vl') AS vl, json_extract(" + v + ",'$.at') AS at,"
+    + " json_extract(" + v + ",'$.ts') AS ts, COALESCE(json_extract(" + v + ",'$.afl'),'') AS afl";
+  try {
+    const r1 = await env.DB.prepare(
+      'SELECT ' + campos('j.value') + ', 0 AS arquivado'
+      + " FROM dashboard_state s, json_each(json_extract(s.data,'$.leads')) j"
+      + ' WHERE s.id = 1 AND ' + soDigito("json_extract(j.value,'$.cpf')") + ' = ?'
+    ).bind(cpf).all();
+    for (const r of ((r1 && r1.results) || [])) poe(r);
+  } catch (_) { /* sem json_each: devolve o que der */ }
+  try {
+    const r2 = await env.DB.prepare(
+      'SELECT ' + campos('json') + ', 1 AS arquivado'
+      + ' FROM leads_arquivo WHERE ' + soDigito("json_extract(json,'$.cpf')") + ' = ?'
+    ).bind(cpf).all();
+    for (const r of ((r2 && r2.results) || [])) poe(r);
+  } catch (_) { /* arquivo ainda nao existe nesta base */ }
+  // mais novo primeiro, que e o que ajuda a decidir
+  achados.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return json({ ok: true, cpf, achados: achados.slice(0, 20) });
+}
 async function handlePedidoNovo(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -30541,6 +30633,7 @@ export default {
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/state/arquivo') return handleStateArquivo(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       if (req.method === 'POST'  && path === '/api/pedido/novo') return handlePedidoNovo(req, env);
+      if (req.method === 'GET'   && path === '/api/pedido/mesmo-cpf') return handleMesmoCpf(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/domains/detect') return handleDomainsDetect(req, env);
       if (req.method === 'POST'  && path === '/api/tt/reenviar')             return handleTtReenviar(req, env);
