@@ -3849,9 +3849,13 @@ function _nfCorpo(o, valor, forma) {
   if (!(v > 0)) faltam.push('valor');
   if (faltam.length) return { erro: 'Falta no pedido: ' + faltam.join(', ') };
   // O kit vai como UM item: "GLICOSIX - 4 MESES", 1 UN, valor cheio. E como o contador validou.
+  // Codigo curto e estavel por kit (GLICOSIX-4M). Estavel importa: o update do Notazz acha o item
+  // da nota PELO CODIGO, e codigo diferente do que criou o rascunho da "nao encontrado".
   const titulo = String(o.offer_title || o.product_name || 'GlicoSix').trim();
-  const cod = titulo.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'PRODUTO';
+  const meses = (titulo.match(/(\d+)\s*m[eê]s/i) || [])[1];
+  const cod = (/glico\s*six/i.test(titulo) && meses) ? ('GLICOSIX-' + meses + 'M')
+    : (titulo.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'PRODUTO');
   return {
     valor: v,
     corpo: {
@@ -3968,9 +3972,19 @@ async function handleNfEmitir(req, env) {
       }
       const corpo = { ...m.corpo, TRANSMITIR: transmitir ? '1' : '0' };
       if (transmitir) corpo.DOCUMENT_ISSUE_DATE = _nfAgoraBR();
-      const j = notazzId
+      let j = notazzId
         ? await _notazz(env, { METHOD: 'update_nfe_55', DOCUMENT_ID: notazzId, ...corpo })
         : await _notazz(env, { METHOD: 'create_nfe_55', ...corpo });
+      // O update pode recusar um RASCUNHO que nao bate mais com o pedido (o item da nota e achado
+      // pelo codigo do produto; trocou o kit, o codigo muda). Rascunho nunca foi pra Sefaz, entao
+      // apagar e criar de novo e seguro. So com o Notazz confirmando que ainda e Pendente.
+      if (!_nfOk(j) && notazzId) {
+        const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
+        if (_nfOk(c) && String(c.statusNota || '') === 'Pendente') {
+          const d = await _notazz(env, { METHOD: 'delete_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
+          if (_nfOk(d)) { notazzId = null; j = await _notazz(env, { METHOD: 'create_nfe_55', ...corpo }); }
+        }
+      }
       if (!_nfOk(j)) {
         const motivo = _nfMotivo(j);
         await _nfGravar(env, id, { notazz_id: notazzId || null, status: 'erro', motivo, valor: m.valor, forma, por: String(u.id) });
