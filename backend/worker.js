@@ -3931,9 +3931,13 @@ const _nfDaConsulta = (j) => ({
   xml: j.xml ? String(j.xml) : null,
   emissao: j.emissao ? String(j.emissao) : null,
 });
-// Status em que a nota ja existe na Sefaz (ou esta indo): nunca criar outra por cima.
-const _NF_NA_SEFAZ = ['autorizada', 'cancelada', 'denegada', 'processando', 'emitindo', 'aguardando autorizacao', 'aguardando autorização'];
-const _nfNaSefaz = (n) => !!n && (_NF_NA_SEFAZ.includes(String(n.status || '').toLowerCase()) || (n.transmitida && String(n.status || '').toLowerCase() !== 'rejeitada' && String(n.status || '').toLowerCase() !== 'erro'));
+// Status em que a nota ja esta na Sefaz (ou indo): nunca mexer nem criar outra por cima. Os nomes
+// sao os da doc do Notazz: Pendente, AguardandoAutorizacao, Autorizada, Rejeitada,
+// EmProcessoDeCancelamento, Cancelada, EmConflito (+ Denegada, que o webhook cita).
+// Quem decide e o STATUS DO NOTAZZ, nao o nosso "ja mandei": se o envio nao pegou e a nota
+// continua Pendente, mandar de novo e seguro, porque e o MESMO documento (update), nunca outro.
+const _NF_NA_SEFAZ = ['autorizada', 'aguardandoautorizacao', 'emprocessodecancelamento', 'cancelada', 'denegada', 'emconflito'];
+const _nfNaSefaz = (n) => !!n && _NF_NA_SEFAZ.includes(String(n.status || '').toLowerCase().replace(/[^a-z]/g, ''));
 
 // GET /api/nf/notas: as notas que a dash ja mandou pro Notazz (so a direcao).
 async function handleNfNotas(req, env) {
@@ -3991,8 +3995,15 @@ async function handleNfEmitir(req, env) {
       // O update pode recusar um RASCUNHO que nao bate mais com o pedido (o item da nota e achado
       // pelo codigo do produto; trocou o kit, o codigo muda). Rascunho nunca foi pra Sefaz, entao
       // apagar e criar de novo e seguro. So com o Notazz confirmando que ainda e Pendente.
+      // E se o update foi recusado porque a nota JA ESTA na Sefaz (alguem transmitiu pelo painel do
+      // Notazz, ou a nossa linha estava velha), grava o que o Notazz diz em vez de marcar erro.
       if (!_nfOk(j) && notazzId) {
         const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
+        if (_nfOk(c) && _nfNaSefaz({ status: c.statusNota })) {
+          const g = await _nfGravar(env, id, { notazz_id: notazzId, ..._nfDaConsulta(c), transmitida: 1 });
+          resultados.push({ order_id: id, ok: true, pulou: true, status: g.status, numero: g.numero || null, motivo: 'Nota ja estava na Sefaz' });
+          continue;
+        }
         if (_nfOk(c) && String(c.statusNota || '') === 'Pendente') {
           const d = await _notazz(env, { METHOD: 'delete_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
           if (_nfOk(d)) { notazzId = null; j = await _notazz(env, { METHOD: 'create_nfe_55', ...corpo }); }
@@ -4006,9 +4017,17 @@ async function handleNfEmitir(req, env) {
       }
       notazzId = String(j.id || notazzId);
       let campos = { notazz_id: notazzId, status: 'Pendente', motivo: null, valor: m.valor, forma, transmitida: transmitir ? 1 : 0, por: String(u.id) };
+      // A Sefaz responde em segundos: pergunta ate 3 vezes, com 2,5 s entre elas, enquanto a nota
+      // ainda nao fechou. O que nao fechar aqui o botao Atualizar da tela pega depois.
       if (transmitir) {
-        const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
-        if (_nfOk(c)) campos = { ...campos, ..._nfDaConsulta(c), transmitida: 1 };
+        for (let t = 0; t < 3; t++) {
+          if (t) await new Promise((r) => setTimeout(r, 2500));
+          const c = await _notazz(env, { METHOD: 'consult_nfe_55', DOCUMENT_ID: notazzId, EXTERNAL_ID: '' });
+          if (!_nfOk(c)) break;
+          campos = { ...campos, ..._nfDaConsulta(c), transmitida: 1 };
+          const s = String(c.statusNota || '').toLowerCase();
+          if (s !== 'pendente' && s !== 'aguardandoautorizacao') break;
+        }
       }
       const g = await _nfGravar(env, id, campos);
       resultados.push({ order_id: id, ok: true, status: g.status, numero: g.numero || null });
