@@ -2177,11 +2177,26 @@ async function _pl2Receber(env, metodo, subpath, busca, cab, raw, p, mundoPl, ct
   // A VOLTA DO PEDIDO (21/10/2026): anotada de todo evento assinado, ANTES da trava do AfterPayLog
   // logo abaixo, porque o AfterPayLog so avisa o comeco da volta (ao_remetente) e mais nada.
   if (ok && t.code) { try { await _plVoltaAnota(env, p, t.code, mundoPl); } catch (e) { console.log('PAYLOG2 volta nao anotada: ' + String((e && e.message) || e)); } }
+  // O FRETE QUE A PAYLOG COBROU (29/10/2026): vem em todo evento v2 e varia por pedido (de R$ 10 a
+  // R$ 82, media R$ 26,74 nos 411 pedidos de outubro). A dash cobrava os R$ 35,50 do cadastro de
+  // todos. Tambem antes da trava do AfterPayLog: o v1 nao traz frete nenhum.
+  if (ok && t.code) { try { await _plFreteAnota(env, p, t.code); } catch (e) { console.log('PAYLOG2 frete nao anotado: ' + String((e && e.message) || e)); } }
   if (!t.p1) { console.log('PAYLOG2 evento sem ingestao: ' + String((p && p.event) || '')); return; }
   // O "devolvido" passa mesmo com o AfterPayLog vivo: ele nao tem evento pra chegada da devolucao, e
   // sem este a devolucao ficava pra sempre "voltando" (21/10/2026).
   if (t.afterpay && t.p1.event !== 'devolvido' && (await _plV1Vivo(env, mundoPl))) return;   // o webhook do AfterPayLog ja traz este pedido
   await _plIngerir(env, t.p1, mundoPl, ok, ctx, 'PAYLOG2');
+}
+
+// O frete e COTADO de novo quando o pedido entra em separacao (order.preparing): o order.created e o
+// order.blocked trazem a primeira cotacao, que costuma mudar uns centavos. Esses dois so preenchem o
+// que esta vazio; qualquer evento depois dele grava por cima.
+async function _plFreteAnota(env, p, code) {
+  const c = Number(p && p.order && p.order.frete_cents);
+  if (!(c > 0)) return;
+  const ev = String((p && p.event) || '');
+  const so = /^order\.(created|blocked)$/.test(ev) ? ' AND frete_real IS NULL' : '';
+  await env.DB.prepare('UPDATE five_orders SET frete_real = ? WHERE order_id = ?' + so).bind(Math.round(c) / 100, 'PL-' + String(code)).run();
 }
 
 // A INGESTAO DOS DOIS FORMATOS (14/10/2026). Era o miolo do handlePaylogCapture; saiu pra ca sem mudar
@@ -2691,7 +2706,9 @@ async function _ensureFiveTables(env) {
     'origem TEXT', 'updated_at INTEGER', 'slug TEXT']) {
     try { await env.DB.prepare('ALTER TABLE five_affiliates ADD COLUMN ' + col).run(); } catch (_) {}
   }
-  for (const col of ['charge_pago REAL', 'charge_juros REAL', 'fonte TEXT', 'charge_paid_ts INTEGER', 'shipped_ts INTEGER', 'delivered_ts INTEGER']) {
+  // frete_real (29/10/2026): o frete que a PayLog cobrou NESTE pedido (order.frete_cents do webhook v2,
+  // em reais). Nulo = a plataforma nao informou e a dash usa o frete padrao do cadastro.
+  for (const col of ['charge_pago REAL', 'charge_juros REAL', 'fonte TEXT', 'charge_paid_ts INTEGER', 'shipped_ts INTEGER', 'delivered_ts INTEGER', 'frete_real REAL']) {
     try { await env.DB.prepare('ALTER TABLE five_orders ADD COLUMN ' + col).run(); } catch (_) {}
   }
   try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_) {}
@@ -8915,6 +8932,286 @@ async function handleCsCards(req, env) {
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
+// ══ CONTASIMPLES: TODO GASTO DA EMPRESA, PELO SERVIDOR (29/10/2026) ═════════════════════════
+//
+// O Bruno: "qualquer coisa que seja um gasto da empresa hoje e pago pelo Conta Simples". Ate aqui
+// a dash so via o CARTAO, e so enquanto um script no notebook dele rodava: a tarefa do Windows
+// sumiu depois de 12/08 e o cartao parou de entrar sem aviso nenhum. Desde 29/10 a API publica
+// deles tambem traz o extrato da CONTA (PIX, boleto, tarifa) com o centro de custo que ele marca no
+// app, entao o servidor puxa os dois de hora em hora, sem depender de PC ligado.
+//
+// AQUI FICA O EXTRATO CRU, normalizado e sem decisao nenhuma. QUAL LINHA DO RESULTADO cada
+// transacao alimenta (trafego, equipe, despesa, estoque, logistica, interno) e decidido na dash,
+// em lib/conta-simples.js, pelo mapa que o Bruno edita (cs_mapa, logo abaixo). Separar as duas
+// coisas e o que deixa trocar a regra sem reimportar nada.
+//
+// Credencial: secrets CS_API_KEY / CS_API_SECRET do worker (API Publica > Producao no ContaSimples,
+// as mesmas do .env da skill financeiro-axion). O token OAuth dura 30 min; pede um por sincronia.
+const CS_BASE = 'https://api.contasimples.com';
+const CS_UA = 'SellWave-axion-api/1.0';
+// A conta comecou a rodar em junho/2026: antes disso a API devolve zero transacao (medido em 26/07).
+const CS_DESDE = '2026-06-01';
+const CS_LINHAS = ['trafego', 'equipe', 'despesa', 'estoque', 'logistica', 'retirada', 'interno', 'entrada', 'pendente'];
+let _csTabOk = false;
+async function _csEnsure(env) {
+  if (_csTabOk) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS cs_tx (
+    id TEXT PRIMARY KEY, origem TEXT, ts INTEGER, dia TEXT, valor REAL, sentido TEXT,
+    tipo TEXT, tipo_desc TEXT, status TEXT, quem TEXT, descr TEXT, categoria TEXT, centro TEXT,
+    cartao TEXT, resp TEXT, raw TEXT, atualizado INTEGER)`).run();
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_cs_tx_dia ON cs_tx(dia)').run(); } catch (_) {}
+  _csTabOk = true;
+}
+// Dia no fuso de Brasilia (sem horario de verao desde 2019): a transacao das 22h de 31/10 em UTC ja
+// e 01/11, e o lucro de outubro nao pode perder o anuncio da ultima noite.
+const _csDia = (ms) => new Date((Number(ms) || 0) - 3 * 3600000).toISOString().slice(0, 10);
+const _csTxt = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+
+function _csNormCartao(t) {
+  const ts = Date.parse(t && t.transactionDate) || 0;
+  const m = /(\d{4})\s*$/.exec(String((t && t.card && t.card.maskedNumber) || ''));
+  return {
+    id: 'c:' + String(t.id), origem: 'cartao', ts, dia: _csDia(ts),
+    valor: Math.abs(Number(t.amountBrl) || 0),
+    sentido: String(t.operation || '').toUpperCase() === 'CASH_IN' ? 'entrada' : 'saida',
+    tipo: _csTxt(t.type), tipo_desc: '', status: _csTxt(t.status).toUpperCase(),
+    quem: _csTxt(t.merchant), descr: '',
+    categoria: _csTxt(t.category && t.category.name), centro: _csTxt(t.costCenter && t.costCenter.name),
+    cartao: m ? m[1] : '', resp: _csTxt(t.card && t.card.responsibleName),
+  };
+}
+// O extrato da conta NAO tem sinal: o valor vem sempre positivo e quem diz se entrou ou saiu e o
+// tipo. Com subTipo, o sufixo resolve (PIX_IN / PIX_OUT / SECURED_CARD_WITHDRAW_IN...). Sem
+// subTipo (boleto, tarifa, CDI, bloqueio MED), vale a descricao.
+function _csSentidoConta(sub, desc) {
+  const s = String(sub || '').toUpperCase();
+  if (/_IN(_|$)/.test(s)) return 'entrada';
+  if (/_OUT(_|$)/.test(s) || s === 'PAYMENT') return 'saida';
+  const d = String(desc || '');
+  if (/tarifa|\bdeb\b|d[eé]bito|pagamento/i.test(d)) return 'saida';
+  if (/cdi|rentab|recarga|cobran[cç]a|\blib\b|cr[eé]d|receb|resgate|devolu/i.test(d)) return 'entrada';
+  return 'saida';
+}
+function _csNormConta(t) {
+  const ts = Date.parse(t && t.transactionDate) || 0;
+  const tt = (t && t.transactionType) || {};
+  const cat = t && t.category;
+  const sd = _csTxt(t && t.statusDescription).toUpperCase();
+  return {
+    id: 'b:' + String(t.id), origem: 'conta', ts, dia: _csDia(ts),
+    valor: Math.abs(Number(t.brlAmount != null ? t.brlAmount : t.totalTransactionAmount) || 0),
+    sentido: _csSentidoConta(tt.subType, tt.description),
+    tipo: _csTxt(tt.subType || tt.description), tipo_desc: _csTxt(tt.description),
+    status: sd || (Number(t.status) === 2 ? 'PROCESSED' : ''),
+    quem: _csTxt(t.sourceDestinationName), descr: _csTxt(t.description),
+    categoria: _csTxt(cat && typeof cat === 'object' ? (cat.description || cat.name) : cat) || _csTxt(t.customCategory && (t.customCategory.description || t.customCategory.name)),
+    centro: _csTxt(t.costCenter && (t.costCenter.description || t.costCenter.name)),
+    cartao: '', resp: _csTxt(t.user && t.user.email),
+  };
+}
+
+async function _csToken(env) {
+  const key = env && env.CS_API_KEY, sec = env && env.CS_API_SECRET;
+  if (!key || !sec) return { erro: 'sem credencial do ContaSimples no worker' };
+  const r = await _fetchComTeto(CS_BASE + '/oauth/v1/access-token', 15000, {
+    method: 'POST',
+    headers: { Authorization: 'Basic ' + btoa(key + ':' + sec), 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': CS_UA, Accept: 'application/json' },
+    body: 'grant_type=client_credentials',
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || !j.access_token) return { erro: 'token recusado (http ' + r.status + ')' };
+  return { tok: j.access_token };
+}
+async function _csGet(tok, caminho, q) {
+  const qs = q ? '?' + new URLSearchParams(q).toString() : '';
+  const r = await _fetchComTeto(CS_BASE + caminho + qs, 20000, { headers: { Authorization: 'Bearer ' + tok, 'User-Agent': CS_UA, Accept: 'application/json' } });
+  const txt = await r.text();
+  if (!r.ok) throw new Error(caminho + ' http ' + r.status + ' ' + txt.slice(0, 120));
+  return JSON.parse(txt);
+}
+// A API recusa janela larga (HTTP 400): o pedido vai sempre por mes-calendario.
+function _csMeses(ini, fim) {
+  const out = [];
+  let [a, m] = ini.split('-').map(Number);
+  for (let i = 0; i < 40; i++) {
+    const p = a + '-' + String(m).padStart(2, '0');
+    const de = p + '-01' < ini ? ini : p + '-01';
+    const ult = new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
+    const ate = ult > fim ? fim : ult;
+    if (de > fim) break;
+    out.push([de, ate]);
+    m++; if (m > 12) { m = 1; a++; }
+  }
+  return out;
+}
+async function _csPuxaJanela(tok, caminho, ini, fim, limit) {
+  const out = [];
+  let nk = '';
+  for (let pag = 0; pag < 80; pag++) {
+    const q = { startDate: ini, endDate: fim, limit: String(limit) };
+    if (nk) q.nextPageStartKey = nk;
+    const j = await _csGet(tok, caminho, q);
+    for (const t of (j.transactions || [])) out.push(t);
+    nk = j.nextPageStartKey ? String(j.nextPageStartKey) : '';
+    if (!nk) break;
+  }
+  return out;
+}
+async function _csGrava(env, linhas, agora) {
+  const sql = `INSERT INTO cs_tx (id, origem, ts, dia, valor, sentido, tipo, tipo_desc, status, quem, descr, categoria, centro, cartao, resp, raw, atualizado)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET ts=excluded.ts, dia=excluded.dia, valor=excluded.valor, sentido=excluded.sentido,
+      tipo=excluded.tipo, tipo_desc=excluded.tipo_desc, status=excluded.status, quem=excluded.quem, descr=excluded.descr,
+      categoria=excluded.categoria, centro=excluded.centro, cartao=excluded.cartao, resp=excluded.resp, raw=excluded.raw, atualizado=excluded.atualizado`;
+  for (let i = 0; i < linhas.length; i += 40) {
+    await env.DB.batch(linhas.slice(i, i + 40).map(({ n, raw }) => env.DB.prepare(sql).bind(
+      n.id, n.origem, n.ts, n.dia, n.valor, n.sentido, n.tipo, n.tipo_desc, n.status, n.quem, n.descr,
+      n.categoria, n.centro, n.cartao, n.resp, JSON.stringify(raw).slice(0, 8000), agora)));
+  }
+}
+// Le e regrava o estado da sincronia (app_config cs_sync). Nunca guarda token.
+async function _csEstado(env) { try { return JSON.parse((await _readConfig(env, 'cs_sync')) || '{}') || {}; } catch (_) { return {}; } }
+
+// UMA RODADA DE SINCRONIA. Janela padrao: os ultimos 10 dias, de hora em hora; uma vez por dia, os
+// ultimos 45 (cobranca do cartao que estava PENDING e virou PROCESSED ou CANCELED, centro de custo
+// marcado depois no app). Tabela vazia = carga inicial, um mes por rodada desde CS_DESDE, sem
+// esperar a hora cheia. `opts.de/ate` (POST /api/cs/sync do diretor) puxa a janela pedida na hora.
+async function _csSync(env, opts) {
+  opts = opts || {};
+  await _csEnsure(env);
+  const st = await _csEstado(env);
+  const agora = Date.now();
+  const hoje = _csDia(agora);
+  let ini, fim = hoje, novo = { ...st };
+  if (opts.de) {
+    ini = String(opts.de).slice(0, 10); fim = String(opts.ate || hoje).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ini) || !/^\d{4}-\d{2}-\d{2}$/.test(fim) || ini > fim) return { erro: 'periodo invalido' };
+  } else if (!st.bf_ok) {
+    const mes = st.bf || CS_DESDE.slice(0, 7);
+    ini = mes + '-01';
+    const [a, m] = mes.split('-').map(Number);
+    const ult = new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
+    fim = ult > hoje ? hoje : ult;
+    const prox = m === 12 ? (a + 1) + '-01' : a + '-' + String(m + 1).padStart(2, '0');
+    novo.bf = prox;
+    if (prox > hoje.slice(0, 7)) novo.bf_ok = 1;
+  } else {
+    if (!opts.forcar && st.ts && agora - st.ts < 55 * 60000) return { pulou: 'cedo' };
+    if (st.longo !== hoje) { ini = _csDia(agora - 45 * 86400000); novo.longo = hoje; }
+    else ini = _csDia(agora - 10 * 86400000);
+  }
+  if (ini < CS_DESDE) ini = CS_DESDE;
+  const tk = await _csToken(env);
+  if (!tk.tok) {
+    await _writeConfig(env, 'cs_sync', JSON.stringify({ ...st, ts: agora, erro: tk.erro, erro_ts: agora }));
+    return { erro: tk.erro };
+  }
+  let n = 0;
+  try {
+    for (const [de, ate] of _csMeses(ini, fim)) {
+      const cart = (await _csPuxaJanela(tk.tok, '/statements/v1/credit-card', de, ate, 100)).map((t) => ({ n: _csNormCartao(t), raw: t }));
+      const cont = (await _csPuxaJanela(tk.tok, '/statements/v1/banking', de, ate, 50)).map((t) => ({ n: _csNormConta(t), raw: t }));
+      const todas = cart.concat(cont).filter((x) => x.n.ts > 0);
+      await _csGrava(env, todas, agora);
+      n += todas.length;
+      // COBRANCA PENDENTE QUE SUMIU DO EXTRATO. So PENDING, e so depois de a janela inteira ter
+      // vindo sem erro (qualquer pagina com erro sobe excecao antes daqui): transacao processada
+      // nunca some, e marcar por engano tiraria gasto de verdade do lucro.
+      const vistos = new Set(todas.map((x) => x.n.id));
+      const pend = await env.DB.prepare("SELECT id FROM cs_tx WHERE dia >= ? AND dia <= ? AND status = 'PENDING'").bind(de, ate).all();
+      const sumiu = ((pend && pend.results) || []).map((r) => r.id).filter((id) => !vistos.has(id));
+      for (const id of sumiu) await env.DB.prepare("UPDATE cs_tx SET status = 'SUMIU', atualizado = ? WHERE id = ?").bind(agora, id).run();
+    }
+    try {
+      const b = await _csGet(tk.tok, '/accounts/v1/balance');
+      if (b && b.amount != null) { novo.saldo = Number(b.amount) || 0; novo.saldo_ts = agora; }
+    } catch (_) {}
+    novo = { ...novo, ts: agora, ok: agora, n, janela: ini + ' a ' + fim, erro: '' };
+    await _writeConfig(env, 'cs_sync', JSON.stringify(novo));
+    return { ok: true, n, janela: ini + ' a ' + fim };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    await _writeConfig(env, 'cs_sync', JSON.stringify({ ...st, ts: agora, erro: msg, erro_ts: agora }));
+    return { erro: msg };
+  }
+}
+
+// O MAPA DO BRUNO (app_config cs_mapa): centro de custo -> linha, categoria -> linha, e as excecoes
+// por transacao. `vinc` guarda o que ele decidiu sobre um PIX da equipe: virou o lancamento X, ou
+// "ja estava lancado". A chave de centro/categoria chega normalizada da dash (sem acento, minuscula).
+async function _csMapa(env) {
+  try {
+    const m = JSON.parse((await _readConfig(env, 'cs_mapa')) || '{}') || {};
+    return { centros: m.centros || {}, categorias: m.categorias || {}, tx: m.tx || {}, vinc: m.vinc || {} };
+  } catch (_) { return { centros: {}, categorias: {}, tx: {}, vinc: {} }; }
+}
+
+// GET /api/cs/extrato: o extrato inteiro pro diretor; pro gestor de trafego, so o cartao de anuncio
+// (ele mede campanha, nao ve folha nem fornecedor). Afiliado nao ve: o ContaSimples e da casa.
+async function handleCsExtrato(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const dir = isDirector(u);
+  if (!dir && !_gestorLe(u)) return err('Sem permissão', 403);
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return err('Sem permissão', 403);
+  await _csEnsure(env);
+  const rr = await env.DB.prepare('SELECT id, origem, ts, dia, valor, sentido, tipo, tipo_desc, status, quem, descr, categoria, centro, cartao, resp FROM cs_tx ORDER BY ts').all();
+  let tx = (rr && rr.results) || [];
+  const st = await _csEstado(env);
+  const mapa = await _csMapa(env);
+  if (!dir) {
+    // Cartao que tem compra de anuncio leva junto o IOF e o estorno dele (o IOF nao vem com categoria).
+    const ehAds = (t) => /publicidade|anuncio|an[uú]ncio/i.test(String(t.categoria || '')) || /tiktok|facebk|meta ?ads|facebook|google ?ads/i.test(String(t.quem || ''));
+    const cartoesAds = new Set(tx.filter((t) => t.origem === 'cartao' && ehAds(t)).map((t) => t.cartao).filter(Boolean));
+    tx = tx.filter((t) => t.origem === 'cartao' && (ehAds(t) || (cartoesAds.has(t.cartao) && /IOF|REFUND/i.test(String(t.tipo || '')))));
+    return json({ ok: true, escopo: 'trafego', tx, mapa: { centros: mapa.centros, categorias: mapa.categorias, tx: {}, vinc: {} }, sync: { ok: st.ok || 0, erro: st.erro || '' } });
+  }
+  return json({ ok: true, escopo: 'full', tx, mapa, sync: { ok: st.ok || 0, ts: st.ts || 0, erro: st.erro || '', erro_ts: st.erro_ts || 0, janela: st.janela || '', saldo: st.saldo, saldo_ts: st.saldo_ts || 0, carga: st.bf_ok ? 'completa' : (st.bf || CS_DESDE.slice(0, 7)) } });
+}
+
+// POST /api/cs/mapa (so diretor): { tipo: 'centro'|'categoria'|'tx'|'vinc', chave, valor }.
+// valor vazio apaga a regra. Devolve o mapa inteiro.
+async function handleCsMapa(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const b = await req.json().catch(() => ({}));
+  const tipo = String(b.tipo || '');
+  const chave = String(b.chave || '').slice(0, 120);
+  const valor = String(b.valor || '').slice(0, 80);
+  const balde = { centro: 'centros', categoria: 'categorias', tx: 'tx', vinc: 'vinc' }[tipo];
+  if (!balde || !chave) return err('Pedido inválido');
+  if (balde !== 'vinc' && valor && !CS_LINHAS.includes(valor)) return err('Linha desconhecida: ' + valor);
+  const m = await _csMapa(env);
+  if (valor) m[balde][chave] = valor; else delete m[balde][chave];
+  await _writeConfig(env, 'cs_mapa', JSON.stringify(m));
+  return json({ ok: true, mapa: m });
+}
+
+// POST /api/cs/sync (so diretor): puxa agora. Sem corpo = a janela normal, sem esperar a hora;
+// com { de, ate } = aquele periodo (no maximo 3 meses por pedido, pra caber no tempo da requisicao).
+async function handleCsSync(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão', 403);
+  const b = await req.json().catch(() => ({}));
+  if (b && b.de) {
+    const d0 = Date.parse(String(b.de) + 'T12:00:00Z'), d1 = Date.parse(String(b.ate || _csDia(Date.now())) + 'T12:00:00Z');
+    if (!(d1 >= d0) || d1 - d0 > 93 * 86400000) return err('Periodo de no maximo 3 meses');
+  }
+  const r = await _csSync(env, { forcar: true, de: b && b.de, ate: b && b.ate });
+  return json(r, r.erro ? 502 : 200);
+}
+
+// O cron chama isto no passo 'manutencao' (de 5 em 5 minutos); a propria funcao se espaca pra uma
+// rodada por hora, menos durante a carga inicial.
+async function _cronContaSimples(env) {
+  if (!env || !env.CS_API_KEY) return;
+  const r = await _csSync(env, {});
+  if (r && r.erro) console.error('[contasimples] ' + r.erro);
+  else if (r && r.ok) console.log('[contasimples] ' + r.n + ' transacoes, ' + r.janela);
+}
+
 async function handlePostState(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -9560,7 +9857,7 @@ let _waLeadSrcOk = false;                    // o ALTER do /pressels-total.json 
 let _saleDdlOk = false;                      // a DDL do /api/wa/sales ja rodou neste isolate
 // AS COLUNAS DA five_orders, sem `raw` (22/09/2026, ver /api/five/orders). Tiradas do PRAGMA da
 // tabela no banco de producao; coluna nova precisa entrar aqui pra chegar na tela.
-const COLS_FIVE_ORDERS = 'order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty, customer_name, customer_doc, customer_mail, customer_phone, customer_address, charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions, shipping_platform, shipping_code, shipping_status, shipping_core_id, last_event, last_status, created_at, updated_at, estoque_baixado, devolucao_id, charge_pago, charge_juros, fonte, charge_paid_ts, shipped_ts, delivered_ts';
+const COLS_FIVE_ORDERS = 'order_id, project_id, project_name, product_id, product_name, offer_id, offer_title, offer_price, offer_qty, customer_name, customer_doc, customer_mail, customer_phone, customer_address, charge_status, charge_method, charge_amount, charge_code, charge_updated_at, commissions, shipping_platform, shipping_code, shipping_status, shipping_core_id, last_event, last_status, created_at, updated_at, estoque_baixado, devolucao_id, charge_pago, charge_juros, fonte, charge_paid_ts, shipped_ts, delivered_ts, frete_real';
 let _cfgTablesOk = false, _waTablesOk = false, _scTablesOk = false, _saleTablesOk = false, _leadTablesOk = false, _attribTablesOk = false, _cpfTablesOk = false, _fiveTablesOk = false;
 async function _ensureConfigTable(env) {
   if (_cfgTablesOk) return;
@@ -30660,6 +30957,9 @@ export default {
         // sai na primeira linha sem tocar em rede nenhuma; quando ha, o afiliado esta esperando a
         // campanha subir e 5 minutos ja e bastante espera. Ver _cronDominios.
         try { await _cronDominios(env); } catch (e) { console.error('[cron] dominios falhou: ' + String((e && e.message) || e)); }
+        // CONTASIMPLES (29/10/2026): extrato do cartao e da conta, uma rodada por hora (a funcao se
+        // espaca sozinha). Sem a credencial no worker sai na primeira linha. Ver _csSync.
+        try { await _cronContaSimples(env); } catch (e) { console.error('[cron] contasimples falhou: ' + String((e && e.message) || e)); }
         // reparo unico da decisao da equipe (17/10/2026); depois da primeira vez e so uma leitura de config
         try { await _reparoDecisaoEquipe(env); } catch (e) { console.error('[cron] reparo decisao falhou: ' + String((e && e.message) || e)); }
         // Arquivo de leads: desligado sai na primeira linha (uma leitura de config); ligado, move ate
@@ -30810,6 +31110,10 @@ export default {
       const leadUpdMatch = path.match(/^\/api\/lead\/([^/]+)$/);
       if (req.method === 'POST'  && leadUpdMatch)            return handleUpdateLead(req, env, decodeURIComponent(leadUpdMatch[1]));
       if (path === '/api/cs/cards' && (req.method === 'GET' || req.method === 'POST')) return handleCsCards(req, env);
+      // ContaSimples pelo servidor (29/10/2026): extrato, mapa de linhas e sincronia na hora.
+      if (req.method === 'GET' && path === '/api/cs/extrato') return handleCsExtrato(req, env);
+      if (req.method === 'POST' && path === '/api/cs/mapa') return handleCsMapa(req, env);
+      if (req.method === 'POST' && path === '/api/cs/sync') return handleCsSync(req, env);
       if (req.method === 'GET'   && path === '/api/backups') return handleListBackups(req, env);
 
       // Dados do produtor (leitura, só diretor)
