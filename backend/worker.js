@@ -9322,7 +9322,24 @@ async function handleRestoreUser(req, env, userId) {
     "UPDATE users SET archived = 0, archived_at = NULL WHERE id = ?"
   ).bind(userId).run();
   if (!r.meta.changes) return err('Usuário não encontrado', 404);
-  return json({ ok: true, action: 'restored' });
+  // O LOGIN VOLTA JUNTO (29/10/2026). Arquivar grava "<login>_arch_<ts>" pra liberar o nome; reativar
+  // so tirava o arquivado e o login ficava com o sufixo. O Heynan arquivou o Haynan sem querer,
+  // reativou, e ele nao conseguia mais entrar ("Login ou senha invalidos") nem ver o Kanban.
+  // Tira todos os sufixos (ja houve arquivar 2x: "1_arch_x_arch_y"). Se outra pessoa pegou o nome
+  // nesse meio tempo, o login fica como esta e a resposta avisa, em vez de duplicar.
+  let login = null, loginOcupado = false;
+  try {
+    const row = await env.DB.prepare('SELECT login FROM users WHERE id = ?').bind(userId).first();
+    const atual = String((row && row.login) || '');
+    const orig = atual.replace(/(_arch_\d+)+$/, '');
+    login = atual;
+    if (orig && orig !== atual) {
+      const dup = await env.DB.prepare('SELECT id FROM users WHERE lower(login) = ? AND id != ?').bind(orig.toLowerCase(), userId).first();
+      if (dup) loginOcupado = true;
+      else { await env.DB.prepare('UPDATE users SET login = ? WHERE id = ?').bind(orig, userId).run(); login = orig; }
+    }
+  } catch (_) {}
+  return json({ ok: true, action: 'restored', login, login_ocupado: loginOcupado });
 }
 
 // ─── Config armazenada no D1 (API keys configuráveis via UI) ──
