@@ -3829,8 +3829,21 @@ const _nfForma = (o, fonte) => (fonte === 'card' ? '17' : (_NF_FORMA[String((o &
 
 // Monta o corpo do create/update do Notazz a partir do pedido. Devolve { erro } quando falta dado
 // que a nota exige: melhor parar aqui com o motivo do que gastar chamada pra o Notazz recusar.
-function _nfCorpo(o, valor, forma) {
-  const e = (typeof o.customer_address === 'string' ? safeJson(o.customer_address) : o.customer_address) || {};
+// `reserva` = o que o CARD do Kanban sabe do cliente, mandado pela tela. So preenche buraco, nunca
+// passa por cima do pedido: 11 dos 268 pagos de outubro sao da Five e chegaram com o endereco
+// inteiro em null, e o card deles tem rua, numero, bairro, cidade, UF e CEP (medido em 28/10).
+function _nfCorpo(o, valor, forma, reserva) {
+  const r = (reserva && typeof reserva === 'object') ? reserva : {};
+  const re = (r.endereco && typeof r.endereco === 'object') ? r.endereco : {};
+  const ped = (typeof o.customer_address === 'string' ? safeJson(o.customer_address) : o.customer_address) || {};
+  const e = { ...ped };
+  for (const k of ['address', 'number', 'complement', 'neighborhood', 'city', 'state', 'zipCode']) {
+    if (!String(e[k] == null ? '' : e[k]).trim() && re[k] != null) e[k] = re[k];
+  }
+  o = { ...o };
+  if (!String(o.customer_name || '').trim() && r.nome) o.customer_name = r.nome;
+  if (!_nfDig(o.customer_doc) && r.cpf) o.customer_doc = r.cpf;
+  if (!_nfDig(o.customer_phone) && r.fone) o.customer_phone = r.fone;
   const doc = _nfDig(o.customer_doc);
   const rua = String(e.address || e.street || e.logradouro || '').trim();
   const bairro = String(e.neighborhood || e.district || e.bairro || '').trim();
@@ -3932,7 +3945,7 @@ async function handleNfNotas(req, env) {
   return json({ notas: r.results || [] });
 }
 
-// POST /api/nf/emitir { pedidos: [{ order_id, valor, fonte }], transmitir }
+// POST /api/nf/emitir { pedidos: [{ order_id, valor, fonte, reserva? }], transmitir }
 // Ate 10 pedidos por chamada (o Notazz e sincrono e aceita 100 por minuto); a tela manda em lotes.
 async function handleNfEmitir(req, env) {
   const u = await authUser(req, env);
@@ -3953,7 +3966,7 @@ async function handleNfEmitir(req, env) {
       let n = await env.DB.prepare('SELECT * FROM nf_notas WHERE order_id = ?').bind(id).first();
       if (_nfNaSefaz(n)) { resultados.push({ order_id: id, ok: true, pulou: true, status: n.status, motivo: 'Nota ja enviada' }); continue; }
       const forma = _nfForma(o, p.fonte);
-      const m = _nfCorpo(o, p.valor, forma);
+      const m = _nfCorpo(o, p.valor, forma, p.reserva);
       if (m.erro) {
         await _nfGravar(env, id, { status: 'erro', motivo: m.erro, valor: Number(p.valor) || null, forma, por: String(u.id) });
         resultados.push({ order_id: id, ok: false, motivo: m.erro });
