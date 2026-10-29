@@ -5022,7 +5022,10 @@ const STATE_SO_DIRETOR_ESCREVE = STATE_OCULTO.concat(['acl_v2','regras','custos'
 // 03:25 nos backups do R2, ausente do blob dali em diante.
 // REGRA PRA CHAVE NOVA DE TOPO: ou ela entra aqui com endpoint proprio, ou ela entra na lista
 // branca do afiliado. Fora disso ela e apagada por alguem, e so da pra saber quando some.
-const STATE_NUNCA_POR_AQUI = ['chips', 'pressels', 'salechat', 'salechatPub', 'salechatCob', 'salechatCobPub', 'scVend', 'scVendPub', 'team', 'conexoes', 'coment_prontos'];
+// `checkout_plataformas` ENTROU EM 29/10/2026: as URLs de checkout de Pix/Boleto/Cartao que o diretor
+// configura no Kanban (alem do checkout da Payt). Chave nova de topo, protegida aqui pelo mesmo motivo
+// do coment_prontos - senao qualquer tela que regrava o blob a apaga sem querer. So /api/checkout-plat/save escreve.
+const STATE_NUNCA_POR_AQUI = ['chips', 'pressels', 'salechat', 'salechatPub', 'salechatCob', 'salechatCobPub', 'scVend', 'scVendPub', 'team', 'conexoes', 'coment_prontos', 'checkout_plataformas'];
 // O CATALOGO DE UM AFILIADO (o sufixo e o id dele: tags__afl_x, contCols__afl_x...). Mesma regra
 // do STATE_NUNCA_POR_AQUI: so o endpoint proprio escreve (/api/tags/save e /api/cont/save).
 // A lista de bases e fechada de proposito - so estas 5 chaves ganham a copia por afiliado.
@@ -8778,6 +8781,41 @@ async function handleComentProntosSave(req, env) {
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'prontos:' + String(u.id), row.version).run();
     if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, lista: limpa });
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return err('Conflito ao salvar. Tente de novo.', 409);
+}
+
+// POST /api/checkout-plat/save { plataformas: { pix, boleto, cartao } } → grava SO as URLs de checkout
+// das plataformas de pagamento alternativas (Pix/Boleto/Cartao) que o diretor configura no Kanban, pra
+// rotear cada meio pra plataforma mais barata em vez de pagar a taxa/boleto caro da Payt.
+//
+// MESMO desenho do handleComentProntosSave: a chave `checkout_plataformas` esta em STATE_NUNCA_POR_AQUI,
+// entao o navegador manda SO as URLs e a troca e feita aqui, com CAS; e o _stateProtegido devolve a
+// chave do banco em QUALQUER POST generico, entao cadastrar um pedido nunca apaga a config (ver a
+// memoria chave-nova-no-blob-some). E DA CASA (sem sufixo de mundo): o afiliado tem a operacao dele e
+// nem recebe esta chave (nao esta em CHAVES_DO_AFILIADO).
+async function handleCheckoutPlatSave(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissão para configurar as plataformas', 403);
+  const body = await req.json().catch(() => ({}));
+  const p = (body && body.plataformas) || {};
+  // So estes 3 meios, so string, com teto de tamanho (vem do navegador e o blob tem limite de 1 MB).
+  const limpa = {};
+  for (const k of ['pix', 'boleto', 'cartao']) {
+    const v = String(p[k] == null ? '' : p[k]).trim().slice(0, 1000);
+    if (v) limpa[k] = v;
+  }
+  for (let tent = 0; tent < 6; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return err('Estado não encontrado', 404);
+    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    data.checkout_plataformas = limpa;
+    const newVer = (row.version || 0) + 1;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'checkoutplat:' + String(u.id), row.version).run();
+    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, plataformas: limpa });
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
@@ -31083,6 +31121,7 @@ export default {
       if (req.method === 'POST'  && path === '/api/cont/save')      return handleContConfig(req, env);
       if (req.method === 'POST'  && path === '/api/tags/save')      return handleTagsSave(req, env);
       if (req.method === 'POST'  && path === '/api/coment-prontos') return handleComentProntosSave(req, env);
+      if (req.method === 'POST'  && path === '/api/checkout-plat/save') return handleCheckoutPlatSave(req, env);
       if (req.method === 'POST'  && path === '/api/saque/create')   return handleSaqueCreate(req, env);
       if (req.method === 'POST'  && path === '/api/saque/update')   return handleSaqueUpdate(req, env);
       if (req.method === 'POST'  && path === '/api/gasto/estorno')  return handleGastoEstorno(req, env);
