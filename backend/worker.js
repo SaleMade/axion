@@ -7094,6 +7094,10 @@ async function handleUpdateLead(req, env, leadId) {
     if (_r) return _r;
   }
   const now14 = () => `${todayBR()} ${nowTimeBR()}`;   // em BRT, como o resto do historico (21/09/2026)
+  // Quem pode ser dono de cobranca, e com que taxa. Consultado UMA vez, fora do laco de CAS: dentro
+  // dele seriam ate 10 consultas iguais por salvamento. Mapa vazio quando `cob` nem vem no patch.
+  const _cobOk = new Map();
+  if ('cob' in patch) for (const c of await _cobradoresDaCasa(env)) _cobOk.set(String(c.id), Number(c.com_pct) || 0);
   for (let attempt = 0; attempt < 10; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
@@ -7184,7 +7188,9 @@ async function handleUpdateLead(req, env, leadId) {
         })).filter((c) => c.url);
       }
     }
-    nega(dir, 'at', 'com_pct');
+    // `cob` (o cobrador do pedido) entra junto do `at` de proposito: sao o mesmo tipo de campo -
+    // quem fica com o pedido, e quem por isso recebe por ele. Decisao de diretor, nunca do proprio.
+    nega(dir, 'at', 'com_pct', 'cob');
     nega(_podeVl, 'vl');
     nega(canManage, 'spg', 'col');
     // AGENDAR RETORNO E ATENDIMENTO, NAO E DINHEIRO NEM ETAPA (10/09/2026).
@@ -7237,6 +7243,25 @@ async function handleUpdateLead(req, env, leadId) {
       } catch (_) { /* link e conveniencia: nunca pode derrubar a gravacao do pedido */ }
     }
     if (dir) {
+      // TROCAR O COBRADOR DO PEDIDO (29/10/2026). A varredura distribui sozinha; isto aqui e a saida
+      // manual, pra passar um pedido de um cobrador pro outro. Vazio devolve o pedido pra fila sem
+      // dono e a proxima batida redistribui.
+      //
+      // RECARIMBA A PORCENTAGEM se o pedido ja esta pago: sem isso, passar um pedido pago de um
+      // cobrador pro outro moveria o pedido na tela e deixaria o dinheiro com quem nao tem mais ele.
+      if ('cob' in patch) {
+        const _novo = String(patch.cob || '').trim();
+        if (!_novo) { delete lead.cob; delete lead.cob_pct; }
+        else if (_cobOk.has(_novo)) {
+          lead.cob = _novo;
+          delete lead.cob_pct;
+          const _q = Number(lead.pago_ts) || 0;
+          if (_ehPago(lead) && _q >= COB_COMISSAO_DESDE) {
+            const _p = _cobOk.get(_novo) || 0;
+            if (_p) lead.cob_pct = _p;
+          }
+        } else negados.push('cob');
+      }
       if ('at' in patch) lead.at = patch.at;
       // Valor invalido virava 12%, um numero que ninguem combinou. Agora vira VAZIO, e a dash usa
       // a taxa cadastrada do vendedor. String vazia tambem passa: e como o front limpa a taxa.
@@ -30089,6 +30114,104 @@ async function _cronRastreio(env) {
   // CAS perdido nas 4 tentativas: NAO avanca a marca d'agua, entao a proxima batida tenta de novo.
 }
 
+// ══ O DONO DA COBRANCA (29/10/2026, pedido do Bruno) ════════════════════════════════════════════
+//
+// O cobrador deixou de ser so salario fixo e passou a fixo + comissao. Pra isso o pedido precisou de
+// uma coisa que ele NUNCA teve: um dono de cobranca. Ate aqui o lead so tinha `at`, que e o VENDEDOR,
+// e e exatamente por isso que as telas de Cobradores e de Eficiencia mostram a fila inteira com um
+// traco no lugar do numero de cada um. Esta escrito la no `filaCobranca` do front, de 07/09/2026:
+// "se um dia o pedido passar a ter dono de cobranca, este e o lugar de recortar". Agora tem: `lead.cob`.
+//
+// QUEM DISTRIBUI E ESTA VARREDURA, e nao o instante em que o pedido entra na coluna de cobranca.
+// Sao QUINZE lugares diferentes neste arquivo que escrevem `lead.col` (webhook da Five, PayLog, Payt,
+// arrasto, aceite, cron de rastreio...). Pendurar a regra nos quinze e o jeito classico de ela furar
+// em silencio no decimo sexto que alguem criar. Aqui e um lugar so, roda junto da agenda em toda
+// batida, e idempotente, e conserta sozinha o pedido que tenha escapado por qualquer caminho.
+//
+// SEMPRE PRO QUE TEM MENOS PEDIDO EM ABERTO, que e o que o Bruno pediu ("dividir o numero de vendas
+// entre os cobradores"). Isso se equilibra sozinho quando entra gente nova: quem chega com zero
+// recebe os proximos ate emparelhar, sem ninguem rebalancear na mao. Com UM cobrador, vai tudo pra
+// ele e nada muda na pratica - que e a situacao de hoje.
+//
+// SO O MUNDO DA CASA. O pedido de afiliado tem o cobrador DELE, e nele a casa fica com 35% da venda:
+// pagar 3% do valor cheio ali sairia caro pelo que a casa recebe. Se o Bruno quiser incluir, e tirar
+// a peneira do `l.afl` daqui e do congelamento logo abaixo.
+const COB_COMISSAO_DESDE = Date.UTC(2026, 10, 1, 3, 0, 0);   // 01/11/2026 00:00 BRT, em ms
+
+// Pedido que ainda da trabalho de cobranca: nao esta pago e nao morreu numa coluna terminal.
+// E a carga que importa pra dividir - pedido encerrado nao ocupa ninguem.
+const _cobEmAberto = (l) => !_ehPago(l) && !FIVE_COL_FIM.includes(_colCanon(l && l.col));
+
+// Os cobradores ATIVOS da casa, em ordem estavel (o empate sempre cai no mesmo, nao no sorteio).
+async function _cobradoresDaCasa(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, com_pct FROM users WHERE LOWER(role) = 'cobrador' AND (archived IS NULL OR archived = 0) ORDER BY id ASC"
+    ).all();
+    return ((r && r.results) || []).filter((c) => c && c.id);
+  } catch (_) { return []; }   // banco sem a coluna (dash do amigo): sem cobrador, nada a distribuir
+}
+
+async function _cronCobrador(env) {
+  const cobs = await _cobradoresDaCasa(env);
+  if (!cobs.length) return;   // sem cobrador cadastrado nao ha o que dividir
+  const ids = cobs.map((c) => String(c.id));
+  const pctDe = new Map(cobs.map((c) => [String(c.id), Number(c.com_pct) || 0]));
+
+  for (let tent = 0; tent < 4; tent++) {
+    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+    if (!row) return;
+    let data; try { data = JSON.parse(row.data); } catch (_) { return; }
+    if (!Array.isArray(data.leads)) return;
+
+    // A carga de cada um ANTES de distribuir, contando so o que esta em aberto.
+    const carga = new Map(ids.map((i) => [i, 0]));
+    const semDono = [];
+    for (const l of data.leads) {
+      if (!l || l.afl) continue;
+      const dono = String(l.cob || '');
+      if (!dono) { semDono.push(l); continue; }
+      if (carga.has(dono) && _cobEmAberto(l)) carga.set(dono, carga.get(dono) + 1);
+    }
+
+    let mudou = 0;
+    for (const l of semDono) {
+      let alvo = ids[0];
+      for (const i of ids) if (carga.get(i) < carga.get(alvo)) alvo = i;
+      l.cob = alvo;
+      if (_cobEmAberto(l)) carga.set(alvo, carga.get(alvo) + 1);
+      mudou++;
+    }
+
+    // A PORCENTAGEM CONGELA NO PEDIDO, uma vez, no momento em que ele aparece pago.
+    //
+    // Sem isso, o dia em que o Bruno mudar de 3% pra 4% muda tambem o mes passado que ja foi pago -
+    // e foi exatamente esse bug que o Guilherme pegou em 06/10/2026, comissao de dia fechado mudando
+    // sozinha de madrugada. A taxa do vendedor ja congela no pedido (`com_pct`) pelo mesmo motivo.
+    //
+    // Pedido pago ANTES de 01/11/2026 nao recebe carimbo nenhum: outubro fecha no fixo de R$ 1.400,
+    // que e a decisao do Bruno. Como a ausencia do campo ja vale zero na conta do front, nao gasto
+    // bytes do estado escrevendo zero em 341 pedidos antigos (o blob ja esta em 80% do teto).
+    for (const l of data.leads) {
+      if (!l || l.afl || !l.cob) continue;
+      if (l.cob_pct != null) continue;
+      if (!_ehPago(l)) continue;
+      const quando = Number(l.pago_ts) || 0;
+      if (!quando || quando < COB_COMISSAO_DESDE) continue;
+      const pct = pctDe.get(String(l.cob)) || 0;
+      if (!pct) continue;
+      l.cob_pct = pct;
+      mudou++;
+    }
+
+    if (!mudou) return;
+    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+      .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'cron:cobrador', row.version).run();
+    if (res && res.meta && res.meta.changes > 0) { console.log('COB_DISTRIBUI ' + mudou + ' pedido(s)'); return; }
+    await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
+  }
+}
+
 async function _cronPurga(env) {
   // Link curto de checkout com mais de 90 dias (item 35): o pedido ja teve desfecho ha muito.
   try { await env.DB.prepare("DELETE FROM short_links WHERE created_at < (strftime('%s','now') - 7776000) * 1000").run(); } catch (_) {}
@@ -30523,6 +30646,10 @@ export default {
         // quando a Five mandou movimento novo. Poe o selo de entrega no card em minutos, nao no
         // rodizio de 80 em 80 (o Bruno acompanha entrega pelo Kanban durante o dia).
         await _cronRastreio(env);
+        // O DONO DA COBRANCA anda aqui porque e barato (uma leitura de users e, quase sempre, nada a
+        // gravar) e porque o cobrador precisa ver o pedido na fila DELE logo que ele chega, nao no
+        // rodizio de 80 em 80 minutos. Ver _cronCobrador.
+        try { await _cronCobrador(env); } catch (e) { console.error('[cron] dono da cobranca falhou: ' + String((e && e.message) || e)); }
         // Anda junto com o rastreio da Five pelo mesmo motivo: e a batida frequente, e entrega
         // acompanhada pelo Kanban durante o dia nao pode esperar o rodizio de 80 em 80 minutos.
         await _cronPaylog(env);
