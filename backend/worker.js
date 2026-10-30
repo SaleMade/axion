@@ -8362,12 +8362,20 @@ async function handleChipDelete(req, env) {
     const alvo = data.chips.find((c) => String(c.id) === String(id));
     if (!_a || !alvo || String(alvo.afl || '') !== _a) return err('Chip não encontrado', 404);
   }
+  // GUARDA O NUMERO ANTES DE TIRAR DA LISTA: depois do filtro ele nao existe mais, e e ele que diz
+  // de qual proxy este numero tem que sair.
+  const _apagado = data.chips.find((c) => String(c.id) === String(id)) || null;
   data.chips = data.chips.filter((c) => String(c.id) !== String(id));
   if (data.chips.length === before) return err('Chip não encontrado', 404);
   const newVer = (row.version || 0) + 1;
   const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
     .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
-  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer });
+  if (res && res.meta && res.meta.changes > 0) {
+    // So depois de a exclusao PEGAR (o UPDATE pode perder a versao e o laco refazer): soltar a
+    // proxy de um numero que continuou cadastrado seria pior que o problema de hoje.
+    await _swwebSoltaNumero(env, _swwebKey(_apagado && _apagado.num), String((_apagado && _apagado.afl) || ''));
+    return json({ ok: true, version: newVer });
+  }
   await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
@@ -11899,6 +11907,32 @@ function _swwebKeyExata(n) { const k = _waNumKey(n); return /^\d{10}$/.test(k) ?
 const _ERRO_NK = 'Número inválido: a chave precisa ser DDD + 8 últimos dígitos';
 // Os 8 finais, que e a chave que o interruptor da roleta usa (pressel.vendedores[].off).
 const _swwebK8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
+// NUMERO EXCLUIDO SAI DA PROXY JUNTO (30/10/2026, pedido do Bruno: "teve alguns numeros que eu
+// excluir (...) quando eu excluo um numero, ja quero que ele saia da proxy, porque ele foi
+// excluido").
+//
+// A atribuicao de proxy e a liberacao sem proxy NAO moram no blob: sao duas chaves proprias
+// (`swweb_proxies` e `swweb_excecoes`), lidas direto do D1 por dois programas que nem sabem da
+// Contingencia - o SellWave Web e o painel do LDPlayer. Entao apagar o chip deixava a linha dele
+// pendurada no Banco de proxies: contava como numero daquela proxy, e chegou a disparar o aviso
+// de "2 numeros saindo pelo mesmo IP" por causa de um numero que nao existe mais.
+//
+// LIMPEZA NUNCA DERRUBA A EXCLUSAO: o chip ja foi apagado quando isto roda, e falhar aqui nao
+// pode transformar uma exclusao que deu certo em erro na tela. Por isso cada chave vai no seu
+// try, e o que sobrar vira orfao - que o "tirar a proxy" agora consegue limpar.
+async function _swwebSoltaNumero(env, nk, mundo) {
+  if (!/^\d{10}$/.test(String(nk || ''))) return;
+  for (const [chave, rotulo] of [[SWWEB_PROXIES, 'proxy'], [SWWEB_EXCECOES, 'liberacao']]) {
+    const k = _cfgNome(chave, mundo || '');
+    try {
+      const m = _swwebLerJson(await _readConfig(env, k), null);
+      if (!m || !Object.prototype.hasOwnProperty.call(m, nk)) continue;
+      delete m[nk];
+      await _writeConfig(env, k, JSON.stringify(m));
+      console.log('SWWEB_SOLTA ' + rotulo + ' nk=' + nk + (mundo ? ' mundo=' + mundo : ''));
+    } catch (_) { /* a exclusao do numero ja aconteceu: nao morre por causa da faxina */ }
+  }
+}
 // Chip APTO a receber lead, pela mesma regra do _resolvePresselNumbers: so "Em uso", e fora de
 // aquecimento, banido e restrito.
 function _swwebApto(c, nomeSt, ids) {
@@ -13535,7 +13569,18 @@ async function handleSwWeb(req, env, path) {
     // O MESMO GATE DE MUNDO do POST /proxy: proxy no chip de outra operacao seria mandar o numero
     // dela sair pela nossa saida, sem ela saber.
     {
-      const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo); if (nao) return nao;
+      const nao = await _swwebPodeNoNumero(env, nk, u, manda, mundo);
+      // TIRAR A PROXY DE UM NUMERO QUE NAO EXISTE MAIS TEM QUE FUNCIONAR (30/10/2026).
+      //
+      // O Bruno excluiu numeros na Contingencia e a linha deles continuou pendurada na proxy; o
+      // "tirar a proxy" respondia "Número não encontrado", porque este gate procura o chip no
+      // cadastro ANTES de deixar mexer. Ou seja: a unica tela que podia limpar a sujeira era
+      // justamente a que se recusava a limpar.
+      //
+      // A excecao e estreita de proposito: vale so pra TIRAR (`id` vazio) e so no 404, que e o
+      // unico retorno que quer dizer "esse numero nao esta na base". Os 403 continuam de pe -
+      // permissao e outra conversa, e numero de outra operacao nao vira orfao meu.
+      if (nao && !(!id && nao.status === 404)) return nao;
     }
     if (!id) { delete proxies[nk]; await _writeConfig(env, K_PROXIES, JSON.stringify(proxies)); return json({ ok: true, nk, apagou: true }); }
     const p = banco[id];
