@@ -28,6 +28,18 @@ workers_dev = true   # mantem a URL axion-api.axion-dash.workers.dev viva (a das
 # no ar: sem a chave `routes` o wrangler nao mexe no que existe, so para de recriar. Pra conferir a
 # lista de verdade: GET /accounts/<acc>/workers/domains (e a mesma que o cron le).
 
+# ─── Onde o worker roda: PERTO DO BANCO (30/10/2026) ────────────
+# O D1 "axion" mora no leste dos EUA (ENAM) e o worker rodava em Sao Paulo (GRU), perto de quem
+# chama. Cada consulta ao banco atravessava o continente (~130 ms ida e volta) e uma rota faz VARIAS
+# em sequencia: medido de manha, o ping do bot gastava 1 ms de CPU e 438 ms esperando, o
+# /api/swweb/uso 1,35 s, a pressel /p 0,5 s (1,5 s no p90) e o salvar do pedido 1,7 s, que ainda
+# trazia e devolvia o estado inteiro (1,37 MB) pelo oceano. "smart" poe o fetch perto do banco: a
+# viagem longa passa a ser UMA (cliente -> worker) e as consultas ficam locais. So vale pro fetch;
+# o cron nao muda. Pra desfazer: apagar este bloco e publicar. O header cf-placement da resposta diz
+# onde rodou (remote-XXX = foi colocado; local-XXX = rodou na borda).
+[placement]
+mode = "smart"
+
 # ─── Detector de dominios da Cloudflare (area Dominios) ─────────
 # CF_ACCOUNT_ID nao e segredo (id da conta); o CF_API_TOKEN vai como SECRET (wrangler secret put).
 # Cada worker usa a conta/nome DELE: no worker do amigo (wrangler-cg.toml) isto seria a conta dele.

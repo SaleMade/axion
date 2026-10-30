@@ -8434,7 +8434,12 @@ async function handleChipCreate(req, env) {
   if (!Array.isArray(data.chips)) data.chips = [];
   const nextId = Number(data.nextChip) || (data.chips.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0) + 1);
   const hoje = new Date().toISOString().split('T')[0];
-  const maxIdx = data.chips.reduce((m, c) => Math.max(m, Number(c.idx) || 0), 0);
+  // O "AUTO" CONTA SO OS NUMEROS DO MESMO MUNDO (30/10/2026). A tela do Bruno mostrava "Auto (69)",
+  // que e o maior Nº DA CASA + 1, e o servidor contava tambem os chips do afiliado, que usam os 4
+  // ultimos digitos como Nº (chegam a 9887): o numero salvava como 9888. Agora a conta e a mesma da
+  // tela: so os chips com o mesmo dono de mundo (afl) que o chip novo vai ter.
+  const _mundoNovo = isAfiliado(u) ? String(aflDe(u) || '') : '';
+  const maxIdx = data.chips.filter((c) => c && String(c.afl || '') === _mundoNovo).reduce((m, c) => Math.max(m, Number(c.idx) || 0), 0);
   const chip = {
     id: nextId,
     idx: Number(inp.idx) || (maxIdx + 1),
