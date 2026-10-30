@@ -232,7 +232,9 @@
      mexer, tem que PARECER que da - senao a funcao existe e ninguem acha. A borda acende no passe
      de mouse em vez de ficar acesa sempre: a linha ja tem bolinha, foguinho, nuvem e interruptor, e
      mais uma coisa gritando o tempo todo vira ruido. */
-  .num .cnt.edita { cursor: pointer; }
+  /* `user-select` porque agora ele abre no DUPLO clique: sem isto, o segundo clique selecionaria
+     o "32/70" e a linha ficaria com o texto marcado depois de cada abertura. */
+  .num .cnt.edita { cursor: pointer; user-select: none; }
   .num .cnt.edita:hover { background: color-mix(in srgb, var(--cc) 16%, transparent);
     border-color: color-mix(in srgb, var(--cc) 75%, transparent); }
   /* FECHAR O NAVEGADOR DAQUELE NUMERO, na propria linha.

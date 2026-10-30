@@ -1196,8 +1196,10 @@ app.whenReady().then(async () => {
   // Numero em modo roleta (sem fila) nao tem teto pra mexer.
   conta('numero fora do modo limite tambem nao abre', !!(ed['0653'] && !ed['0653'].edita), JSON.stringify(ed['0653']))
 
-  // A JANELINHA: o que ela mostra e o que ela manda.
-  await js2('document.querySelector(\'.num[data-numero="5519995983293"] .cnt.edita\').click()')
+  // A JANELINHA: o que ela mostra e o que ela manda. DOIS cliques, nao um (30/10/2026): o clique
+  // solto no contador passou a abrir o NUMERO, porque o Bruno errava a mira nele querendo entrar.
+  await js2('(() => { const c = document.querySelector(\'.num[data-numero="5519995983293"] .cnt.edita\');'
+    + ' c.click(); c.click() })()')
   await espera(250)
   const jan = await js2('(() => { const c = document.getElementById("modal-corpo");'
     + ' return { aberta: document.getElementById("modal").classList.contains("on"),'
@@ -1207,7 +1209,7 @@ app.whenReady().then(async () => {
     + '   valor: (c.querySelector("#lim-valor") || {}).value || "",'
     + '   atalhos: [...c.querySelectorAll(".lim-atalhos button")].map(b => b.textContent),'
     + '   sel: [...c.querySelectorAll(".lim-atalhos button.sel")].map(b => b.textContent) } })()')
-  conta('a janelinha abre no clique', jan.aberta && /Limite de leads por dia/.test(jan.titulo), JSON.stringify(jan))
+  conta('a janelinha abre no duplo clique', jan.aberta && /Limite de leads por dia/.test(jan.titulo), JSON.stringify(jan))
   conta('com o numero e a posicao na fila', /99598-3293/.test(jan.sub) && /2º na fila/.test(jan.sub), jan.sub)
   conta('e o placar de hoje, como na dash', /32/.test(jan.hoje) && /de 70/.test(jan.hoje), jan.hoje)
   conta('o campo ja vem com o teto de agora', jan.valor === '70', jan.valor)
@@ -1242,7 +1244,8 @@ app.whenReady().then(async () => {
 
   // O ERRO DO SERVIDOR FICA NA JANELA. Ele recusa por motivo (numero que nao e seu, aquecimento) e
   // a pessoa precisa LER o motivo: fechar sem dizer nada se le como clique que nao pegou.
-  await js2('document.querySelector(\'.num[data-numero="5511966632248"] .cnt.edita\').click()')
+  await js2('(() => { const c = document.querySelector(\'.num[data-numero="5511966632248"] .cnt.edita\');'
+    + ' c.click(); c.click() })()')
   await espera(200)
   await js2('document.getElementById("lim-ok").click()')
   await espera(450)
@@ -1261,6 +1264,28 @@ app.whenReady().then(async () => {
   // falhariam por causa DESTE teste, que e o jeito mais caro de uma suite mentir.
   await js2('limites.clear(); desenhaLista()')
   await espera(150)
+
+  // UM CLIQUE SO ABRE O NUMERO, NAO O LIMITE (30/10/2026, pedido do Bruno: "as vezes eu clico no
+  // numero pra entrar e acabo clicando errado nesse botaozinho; aparece a tela de limite e eu nao
+  // queria ter aberto ela"). A pilula tem 10px de altura e fica no caminho de quem so quer entrar
+  // no numero: errar a mira nela e o caso comum, mudar o teto e o caso raro.
+  //
+  // DUAS CONFERENCIAS, e as duas precisam existir: que a janelinha NAO abre (o incomodo dele) e
+  // que o numero ABRE (sem isto, "nao abre a janelinha" passaria com o clique nao fazendo nada,
+  // que e um conserto pior que o problema).
+  await js2('document.querySelector(\'.num[data-numero="5519995983293"] .cnt.edita\').click()')
+  await espera(120)
+  const umSo = await js2('(() => ({ aberta: document.getElementById("modal").classList.contains("on"),'
+    + ' palco: (document.querySelector("#palco .abrir h2") || {}).textContent || "" }))()')
+  conta('um clique so NAO abre a janelinha do limite', !umSo.aberta, JSON.stringify(umSo))
+  await espera(300)
+  const umDep = await js2('(() => ({ aberta: document.getElementById("modal").classList.contains("on"),'
+    + ' palco: (document.querySelector("#palco .abrir h2") || {}).textContent || "" }))()')
+  conta('ele abre o NUMERO, igual ao clique no resto da linha',
+    /99598-3293/.test(umDep.palco) && !umDep.aberta, JSON.stringify(umDep))
+  // Volta pra tela de antes: o teste seguinte le a lista e o palco.
+  await js2('telaVazia(); desenhaLista()')
+  await espera(120)
 
   conta('a prateleira tem as duas linhas', lin.length === 2, JSON.stringify(lin))
   conta('sem a bolinha de POSICAO: eles nao estao em fila nenhuma', lin.every(x => !x.pos && x.ponto), JSON.stringify(lin))

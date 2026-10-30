@@ -26,6 +26,9 @@ const erroChave = new Map()    // nk -> frase: a dash recusou o clique (a chave 
 // ANTES do salvamento chega DEPOIS dele com o valor velho - sem isto, o numero "voltaria sozinho"
 // alguns segundos depois de salvo, que se le como clique que nao pegou.
 const limites = new Map()
+// nk -> temporizador do clique SOLTO no contador. Um clique abre o numero, dois abrem a janelinha
+// do limite (a regra inteira esta no ligaCliques).
+const cliqueLim = new Map()
 let filtro = ''
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
@@ -253,8 +256,33 @@ function ligaCliques() {
       abrir(el.dataset.numero)
     }
   }
+  // O CONTADOR: UM CLIQUE ABRE O NUMERO, DOIS ABREM O LIMITE (30/10/2026, pedido do Bruno: "as
+  // vezes eu clico no numero pra entrar e acabo clicando errado nesse botaozinho, ai aparece a tela
+  // de limite e eu nao queria ter aberto ela").
+  //
+  // A pilula fica DENTRO da linha e tem 10px de altura: errar a mira nela, querendo o numero, e o
+  // caso COMUM, e mudar o teto e o caso raro. Entao o clique solto passou a fazer o que a linha
+  // inteira faz, e so o duplo clique rapido abre a janelinha.
+  //
+  // POR QUE O TEMPORIZADOR E NOSSO, e nao o evento `dblclick`: o `dblclick` do Chromium so avisa
+  // depois de ~500 ms, e nessa conta o numero so abriria meio segundo depois do clique - que se le
+  // como travada, bem na acao mais usada da barra. 280 ms e folgado pra um duplo clique e curto
+  // demais pra parecer demora no clique solto.
+  //
+  // O mapa e de FORA do desenho de proposito: a lista se redesenha sozinha a cada releitura, e um
+  // temporizador guardado no elemento morreria no meio da espera - o segundo clique cairia num
+  // elemento novo, sem temporizador nenhum, e abriria O NUMERO em vez do limite, que e exatamente
+  // o contrario do pedido.
   for (const b of lista.querySelectorAll('.cnt.edita')) {
-    b.onclick = (e) => { e.stopPropagation(); janelaLimite(b.dataset.lim) }
+    const linha = b.closest('.num')
+    const numero = (linha && linha.dataset.numero) || cheio(b.dataset.lim)
+    b.onclick = (e) => {
+      e.stopPropagation()
+      const nk = b.dataset.lim
+      const t = cliqueLim.get(nk)
+      if (t) { clearTimeout(t); cliqueLim.delete(nk); janelaLimite(nk); return }
+      cliqueLim.set(nk, setTimeout(() => { cliqueLim.delete(nk); abrir(numero) }, ESPERA_DUPLO_MS))
+    }
   }
   for (const b of lista.querySelectorAll('.sw')) {
     b.onclick = (e) => { e.stopPropagation(); viraRoleta(b.dataset.nk) }
@@ -529,7 +557,7 @@ function linha(n) {
     : teto
       ? '<span class="cnt' + (mexeLim ? ' edita' : '') + '" style="--cc:' + corEstado + '"'
         + (mexeLim ? ' data-lim="' + nk + '" role="button" title="' + esc(leads + ' de ' + teto
-          + ' leads novos hoje. Clique pra mudar o limite deste número.') + '"' : '')
+          + ' leads novos hoje. Clique pra abrir o número, dois cliques rápidos pra mudar o limite dele.') + '"' : '')
         + '>' + leads + '/' + teto
         + (rot ? ' <i>' + rot + '</i>' : '')
         + '<b style="width:' + pct + '%"></b></span>'
@@ -538,7 +566,7 @@ function linha(n) {
       // "sem limite" e abre a mesma janelinha).
       : mexeLim
         ? '<span class="cnt edita" style="--cc:' + corEstado + '" data-lim="' + nk + '" role="button"'
-          + ' title="' + esc('Sem limite: recebe até o fim do dia quando for a vez dele. Clique pra pôr um limite.') + '">'
+          + ' title="' + esc('Sem limite: recebe até o fim do dia quando for a vez dele. Dois cliques rápidos pra pôr um limite.') + '">'
           + (leads || 0) + ' <i>sem limite</i></span>'
         : (leads ? '<span class="cnt" style="--cc:' + corEstado + '">' + leads + ' hoje</span>' : '')
 
@@ -717,6 +745,10 @@ let travaDesenhada = ''
 // o app de la nao solta (ate 45 s), a tela mostra a contagem e abre aqui sozinha no fim.
 const forcados = new Map()
 const forcadoDe = new Map()
+// Quanto a barra espera, depois de um clique no contador, pra saber se vem um segundo (ver
+// ligaCliques). Mexer aqui mexe em duas coisas ao mesmo tempo: maior, o numero demora a abrir;
+// menor, o duplo clique vira dois cliques soltos e ele abre o numero sem querer.
+const ESPERA_DUPLO_MS = 280
 const ESPERA_FORCAR_MS = 55000
 let forcarArmado = ''
 let forcarRelogio = 0
