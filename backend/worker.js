@@ -3848,6 +3848,23 @@ const _nfAgoraBR = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(0
 const _NF_FORMA = { pix: '17', credit_card: '03', card: '03', cartao: '03', bank_slip: '15', boleto: '15', billet: '15' };
 const _nfForma = (o, fonte) => (fonte === 'card' ? '17' : (_NF_FORMA[String((o && o.charge_method) || '').toLowerCase()] || '17'));
 
+// Grafias vizinhas de uma cidade que o Notazz recusou ("DESTINATION_CITY nao localizada"). A base
+// dele tem nome antigo de alguns municipios: so aceita "Eldorado dos Carajas", que o IBGE e os
+// Correios hoje chamam de "Eldorado do Carajas" (medido em 30/10 com rascunho apagado na hora).
+// So entra depois da recusa, e o Notazz so aceita cidade que existe naquela UF, entao a grafia que
+// passar e a mesma cidade (o codigo do municipio na nota sai da base dele).
+function _nfCidadesVizinhas(cidade) {
+  const s = String(cidade || '').replace(/\s+/g, ' ').trim();
+  const out = [];
+  const add = (x) => { x = String(x).replace(/\s+/g, ' ').trim(); if (x && x !== s && !out.includes(x)) out.push(x); };
+  add(s.replace(/(^|\s)(d[oa])s(?=\s|$)/gi, '$1$2'));      // "dos" -> "do", "das" -> "da"
+  add(s.replace(/(^|\s)(d[oa])(?=\s|$)/gi, (m, a, b) => a + b + (b === b.toUpperCase() ? 'S' : 's'))); // "do" -> "dos"
+  add(s.replace(/-/g, ' '));                               // "Biritiba-Mirim" -> "Biritiba Mirim"
+  add(s.replace(/(^|\s)Moji(?=\s|$)/gi, '$1Mogi'));
+  add(s.replace(/(^|\s)Mogi(?=\s|$)/gi, '$1Moji'));
+  return out.slice(0, 4);
+}
+
 // Monta o corpo do create/update do Notazz a partir do pedido. Devolve { erro } quando falta dado
 // que a nota exige: melhor parar aqui com o motivo do que gastar chamada pra o Notazz recusar.
 // `reserva` = o que o CARD do Kanban sabe do cliente, mandado pela tela. So preenche buraco, nunca
@@ -4014,9 +4031,18 @@ async function handleNfEmitir(req, env) {
       }
       const corpo = { ...m.corpo, TRANSMITIR: transmitir ? '1' : '0' };
       if (transmitir) corpo.DOCUMENT_ISSUE_DATE = _nfAgoraBR();
-      let j = notazzId
-        ? await _notazz(env, { METHOD: 'update_nfe_55', DOCUMENT_ID: notazzId, ...corpo })
-        : await _notazz(env, { METHOD: 'create_nfe_55', ...corpo });
+      const enviar = (c) => (notazzId
+        ? _notazz(env, { METHOD: 'update_nfe_55', DOCUMENT_ID: notazzId, ...c })
+        : _notazz(env, { METHOD: 'create_nfe_55', ...c }));
+      let j = await enviar(corpo);
+      // Cidade fora da base do Notazz: tenta as grafias vizinhas, uma chamada cada. A que passar
+      // fica no corpo, pra o recriar do rascunho logo abaixo usar a mesma.
+      if (!_nfOk(j) && /DESTINATION_CITY/i.test(_nfMotivo(j))) {
+        for (const cid of _nfCidadesVizinhas(corpo.DESTINATION_CITY)) {
+          const j2 = await enviar({ ...corpo, DESTINATION_CITY: cid });
+          if (_nfOk(j2) || !/DESTINATION_CITY/i.test(_nfMotivo(j2))) { j = j2; corpo.DESTINATION_CITY = cid; break; }
+        }
+      }
       // O update pode recusar um RASCUNHO que nao bate mais com o pedido (o item da nota e achado
       // pelo codigo do produto; trocou o kit, o codigo muda). Rascunho nunca foi pra Sefaz, entao
       // apagar e criar de novo e seguro. So com o Notazz confirmando que ainda e Pendente.
