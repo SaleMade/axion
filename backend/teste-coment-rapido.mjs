@@ -14,9 +14,19 @@ const falhas = [];
 const ok = (cond, msg) => { if (!cond) falhas.push(msg); console.log((cond ? '  ok   ' : '  RUIM ') + msg); };
 
 const ini = src.indexOf('async function _comentarioRapido(env, u, leadId, patch) {');
-const fim = src.indexOf('\nasync function handleUpdateLead(', ini);
+// PARA NA ROTA NOVA, nao no handleUpdateLead: a GET /api/lead/<id>/comments (30/10/2026) nasceu
+// entre as duas funcoes, e levar ela no recorte poe no eval um monte de dependencia que este teste
+// nao finge (authUser, leads_arquivo).
+const fim = src.indexOf('\nasync function handleLeadComments(', ini);
 if (ini < 0 || fim < 0) { console.error('NAO ACHEI a _comentarioRapido no worker.js'); process.exit(1); }
 const fonte = src.slice(ini, fim);
+// O REGISTRO VAI JUNTO, DE VERDADE (30/10/2026): o caminho curto chama _comentLogStmt e poe a
+// instrucao no MESMO lote da conferencia. Com um dublê isso nao seria testado - e e justamente o
+// pedaco que pode custar uma ida a mais ao banco na acao mais usada do modal.
+const iniLog = src.indexOf('let _comentLogOk = false;');
+const fimLog = src.indexOf('\n// COMENTARIO NAO PRECISA REESCREVER O BLOB INTEIRO', iniLog);
+if (iniLog < 0 || fimLog < 0) { console.error('NAO ACHEI o _comentLogStmt no worker.js'); process.exit(1); }
+const fonteLog = src.slice(iniLog, fimLog);
 
 // ── guardas de forma: o que nao pode voltar ───────────────────────────────────────────────────
 ok(/json_set\(data, '\$\.leads\[" \+ idx \+ "\]\.comments'|json_set\(data, '" \+ caminho \+ "\.comments'/.test(fonte)
@@ -30,21 +40,42 @@ ok(/k === 'comment_add' \|\| k === 'comment_set' \|\| k === 'comment_del'/.test(
   'so desvia quando o patch e SO de comentario (campo com gate de cargo nao passa por aqui)');
 
 // ── roda de verdade ───────────────────────────────────────────────────────────────────────────
-const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConferencia = false } = {}) => {
+const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConferencia = false, registroQuebra = false } = {}) => {
   const estado = { leads: JSON.parse(JSON.stringify(leads)) };
   let gravou = null, chamadas = 0;
+  const registros = [];   // o que foi pro coment_log
+  let lotes = 0;          // quantas idas ao banco o lote economizou (tem que ser 1 por salvamento)
   const mod = 'const err = (m, c) => ({ __erro: true, status: c || 400, msg: m });\n'
     + 'const json = (o) => ({ __ok: true, corpo: o });\n'
     + 'const afiliadoSemVinculo = (u) => u.role === "afiliado" && !u.afiliado_id;\n'
     + 'const noMundoAfiliado = (u) => !!u.afiliado_id;\n'
     + 'const aflDe = (u) => String(u.afiliado_id || "");\n'
     + 'const _comentarioLimpo = (c, u) => ({ who: String((c && c.who) || u.id), tx: String((c && c.tx) || ""), time: String((c && c.time) || "01/01 00:00") });\n'
-    + fonte + '\nreturn _comentarioRapido;';
+    + fonteLog + '\n' + fonte + '\nreturn _comentarioRapido;';
   const fn = new Function(mod)();
   const env = {
     DB: {
+      batch: async (lista) => {
+        lotes += 1;
+        const out = [];
+        for (const st of (lista || [])) {
+          if (st && st.__coment) { registros.push(st.__b); out.push({ results: [] }); continue; }
+          const row = (st && st.first) ? await st.first() : null;
+          out.push({ results: row ? [row] : [] });
+        }
+        return out;
+      },
       prepare: (sql) => ({
+        __sql: sql,
+        run: async () => {
+          // CREATE TABLE do registro (a primeira gravacao de cada isolate)
+          if (registroQuebra && /coment_log/.test(sql)) throw new Error('sem permissao pra criar tabela');
+          return { meta: { changes: 1 } };
+        },
         bind: (...b) => ({
+          __sql: sql,
+          __b: b,
+          __coment: /INSERT INTO coment_log/.test(sql),
           first: async () => {
             if (semJsonEach) throw new Error('no such function: json_each');
             if (/json_each/.test(sql)) {
@@ -81,7 +112,7 @@ const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConfere
       }),
     },
   };
-  return { fn, env, estado, ver: () => gravou, chamadas: () => chamadas };
+  return { fn, env, estado, ver: () => gravou, chamadas: () => chamadas, registros: () => registros, lotes: () => lotes };
 };
 
 const LEADS = [
@@ -111,6 +142,31 @@ const DO_AFILIADO = { id: 'at_afl', role: 'atendente', afiliado_id: 'afl_x' };
   await m.fn(m.env, DIRETOR, '300', { comment_add: { tx: 'primeiro' } });
   const l = m.estado.leads.find((x) => x.id === '300');
   ok(Array.isArray(l.comments) && l.comments.length === 1, 'lead sem comentario nenhum ganha a lista');
+}
+
+// 2b. O REGISTRO DA GRAVACAO (30/10/2026): uma linha por salvamento, no MESMO lote da conferencia.
+{
+  const m = monta(LEADS);
+  const r = await m.fn(m.env, COBRADOR, '100', { comment_add: { tx: 'novo' } });
+  ok(r && r.__ok, 'salvou');
+  const reg = m.registros();
+  ok(reg.length === 1, 'registrou UMA linha no coment_log (deu: ' + reg.length + ')');
+  // ts, quem, lead, via, depois, nota
+  ok(reg[0] && reg[0][1] === 'atendente_k1s0gl' && String(reg[0][2]) === '100' && reg[0][3] === 'curto',
+    'o registro diz quem, qual pedido e por qual caminho (deu: ' + JSON.stringify(reg[0]) + ')');
+  ok(reg[0] && reg[0][4] === 2, 'o registro guarda com quantos comentarios o pedido FICOU (deu: ' + (reg[0] && reg[0][4]) + ')');
+  ok(m.lotes() === 1, 'UM lote so: o registro nao custa uma ida a mais ao banco (deu: ' + m.lotes() + ')');
+}
+
+// 2c. REGISTRO QUE FALHA NAO DERRUBA A ANOTACAO. Quem escreveu no pedido nao pode receber erro
+// porque a tabela de diagnostico nao deu certo.
+{
+  const m = monta(LEADS, { registroQuebra: true });
+  const r = await m.fn(m.env, COBRADOR, '100', { comment_add: { tx: 'novo' } });
+  ok(r && r.__ok, 'salvou mesmo com o registro quebrado (deu: ' + JSON.stringify(r) + ')');
+  const l = m.estado.leads.find((x) => x.id === '100');
+  ok(l.comments.length === 2 && l.comments[0].tx === 'novo', 'o comentario entrou do mesmo jeito');
+  ok(m.registros().length === 0, 'e nao registrou nada (a tabela nao existe)');
 }
 
 // 3. teto de 200

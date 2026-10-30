@@ -33,7 +33,7 @@ const SESSION_TTL_HOURS = 24 * 30;  // 30 dias de base; com renovação deslizan
 // Abaixo disso o cliente é uma aba velha em cache (lógica de sync antiga que
 // sobrescrevia o estado inteiro). Ele recebe 426 e é forçado a recarregar.
 // Ao subir uma versão que muda o formato do estado, atualize aqui também.
-const MIN_APP_VERSION = '2.79.0';
+const MIN_APP_VERSION = '2.80.0';
 
 // Coleções vigiadas pela guarda anti-apagamento em massa
 const GUARDED_COLLECTIONS = ['leads','vendas','clientes','chips','invest','gastos','entradas','aportes','payouts','produtos','pressels','saques'];
@@ -6982,6 +6982,39 @@ function _comentarioLimpo(c, u) {
   if (c && c.editado) out.editado = true;
   return out;
 }
+// REGISTRO DE QUEM ESCREVEU COMENTARIO (30/10/2026).
+//
+// "O pessoal escreve comentario, sai, volta e nao esta la" nao tinha como ser respondido: o estado
+// guarda a LISTA FINAL, nunca a tentativa. Pra descobrir o que o Bruno perdeu em 29/10 foi preciso
+// deduzir pelo `updated_by` e pela ausencia do texto, e isso so funcionou porque a gravacao dele
+// tinha sido a ULTIMA do dia. Na proxima queixa a resposta sai de uma consulta: uma linha por
+// gravacao, com quem, qual pedido, por qual caminho e com quantos comentarios o pedido FICOU.
+//
+// Nunca derruba a gravacao (try proprio): quem anotou o pedido nao pode receber erro porque o
+// registro falhou. Podada em 5 mil linhas, de vez em quando, pra nao virar tabela infinita.
+let _comentLogOk = false;
+async function _comentLogStmt(env, u, leadId, via, depois, nota) {
+  const real = (env && env.DB && env.DB.__real) || (env && env.DB);
+  if (!real) return null;
+  try {
+    if (!_comentLogOk) {
+      await real.prepare('CREATE TABLE IF NOT EXISTS coment_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, quem TEXT, lead TEXT, via TEXT, depois INTEGER, nota TEXT)').run();
+      _comentLogOk = true;
+    }
+    return real.prepare('INSERT INTO coment_log (ts, quem, lead, via, depois, nota) VALUES (?,?,?,?,?,?)')
+      .bind(Math.floor(Date.now() / 1000), String((u && u.id) || ''), String(leadId), String(via || ''), Number(depois) || 0, nota ? String(nota).slice(0, 120) : null);
+  } catch (_) { return null; }
+}
+async function _comentLog(env, u, leadId, via, depois, nota) {
+  try {
+    const st = await _comentLogStmt(env, u, leadId, via, depois, nota);
+    if (!st) return;
+    await st.run();
+    const real = (env.DB && env.DB.__real) || env.DB;
+    if (Math.random() < 0.02) await real.prepare('DELETE FROM coment_log WHERE id <= (SELECT MAX(id) - 5000 FROM coment_log)').run();
+  } catch (_) { /* registro nao pode atrapalhar quem esta anotando o pedido */ }
+}
+
 // COMENTARIO NAO PRECISA REESCREVER O BLOB INTEIRO (29/10/2026).
 //
 // Medido na producao com a sessao do proprio cobrador: salvar no pedido levou 8 s, 18 s e 21 s em
@@ -7065,9 +7098,18 @@ async function _comentarioRapido(env, u, leadId, patch) {
       // RELEIO O QUE GRAVEI. Uma instrucao que diz "mudei 1 linha" nao prova que o comentario entrou:
       // json_set pode ter escrito uma lista que nao e a que eu montei. Conferir custa uma consulta
       // pequena e e a diferenca entre "salvou" e "disse que salvou".
-      const conf = await env.DB.prepare(
-        "SELECT version, json_array_length(json_extract(data, '" + caminho + ".comments')) AS n FROM dashboard_state WHERE id = 1"
-      ).first().catch(() => null);
+      // O REGISTRO VAI NO MESMO LOTE (30/10/2026, ver _comentLogStmt): a conferencia ja custa uma ida
+      // ao banco, e anotar junto custa zero. Numa ida separada custaria ~200 ms na acao mais usada do
+      // modal, que e exatamente a queixa de lentidao que o cobrador fez.
+      const _logSt = await _comentLogStmt(env, u, alvo, 'curto', lista.length);
+      const _confSql = "SELECT version, json_array_length(json_extract(data, '" + caminho + ".comments')) AS n FROM dashboard_state WHERE id = 1";
+      const conf = await (async () => {
+        try {
+          if (!_logSt) return await env.DB.prepare(_confSql).first();
+          const lote = await env.DB.batch([env.DB.prepare(_confSql), _logSt]);
+          return (lote && lote[0] && lote[0].results && lote[0].results[0]) || null;
+        } catch (_) { return null; }
+      })();
       if (!conf || Number(conf.n) !== lista.length) {
         console.log('COMENT_NAO_CONFERE lead=' + alvo + ' esperava=' + lista.length + ' achei=' + (conf ? conf.n : 'nada'));
         return null;   // deixa o caminho de sempre tentar: melhor lento que perdido
@@ -7076,6 +7118,57 @@ async function _comentarioRapido(env, u, leadId, patch) {
     }
   }
   return null;
+}
+// GET /api/lead/<id>/comments -> { ok, comentarios: [...], n }
+//
+// A TELA TEM QUE PODER CONFERIR NO SERVIDOR (30/10/2026, queixa do time: "escrevo o comentario,
+// saio, volto e nao esta la").
+//
+// O comentario sempre foi gravado certo - medido na producao em 30/10 pelos dois caminhos, com a
+// conta que reclamou: grava e le de volta. O que envelhecia era a LISTA QUE O MODAL MOSTRA, que
+// vinha da copia do estado que o quadro baixou. Em 22/10 a tela parou de reler o estado na propria
+// gravacao (pra nao baixar 1,4 MB por anotacao) e so em 29/10 ela aprendeu a aplicar o comment_add
+// na lista local: quem ficou com um bundle do meio desse caminho salvava no servidor e NUNCA via.
+//
+// Em vez de a tela confiar na copia, ela pergunta. Esta rota e barata de proposito (nao baixa o
+// estado) e olha nos DOIS lugares onde o pedido pode morar: a linha do estado e o arquivo de leads.
+//
+// Escopo: o MESMO gate de mundo da gravacao, e nada mais. Anotar comentario em pedido da casa ja e
+// livre pra quem esta logado aqui (ver o LIVRE do handleUpdateLead) e o /api/state ja manda os
+// pedidos da casa pra qualquer cargo - entao ler a lista nao abre nada que ja nao estivesse aberto.
+// O que nao pode, e continua nao podendo, e atravessar mundo: afiliado nao le pedido da casa.
+async function handleLeadComments(req, env, leadId) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (afiliadoSemVinculo(u)) return err('Lead não encontrado', 404);
+  const alvo = String(leadId);
+  const real = (env.DB && env.DB.__real) || env.DB;
+  let afl = '', bruto = null;
+  try {
+    const row = await real.prepare(
+      "SELECT COALESCE(json_extract(j.value,'$.afl'),'') AS afl,"
+      + " COALESCE(json_extract(j.value,'$.comments'),'[]') AS coments"
+      + " FROM dashboard_state s, json_each(json_extract(s.data,'$.leads')) j"
+      + " WHERE s.id = 1 AND CAST(json_extract(j.value,'$.id') AS TEXT) = ?"
+    ).bind(alvo).first();
+    if (row) { afl = String(row.afl || ''); bruto = row.coments; }
+  } catch (_) { /* tenta no arquivo */ }
+  if (bruto == null) {
+    try {
+      const row = await real.prepare(
+        "SELECT COALESCE(json_extract(json,'$.afl'),'') AS afl,"
+        + " COALESCE(json_extract(json,'$.comments'),'[]') AS coments"
+        + ' FROM leads_arquivo WHERE id = ?'
+      ).bind(alvo).first();
+      if (row) { afl = String(row.afl || ''); bruto = row.coments; }
+    } catch (_) { /* sem tabela = sem arquivo */ }
+  }
+  if (bruto == null) return err('Lead não encontrado', 404);
+  if (noMundoAfiliado(u) && afl !== aflDe(u)) return err('Lead não encontrado', 404);
+  let out = [];
+  try { out = JSON.parse(bruto || '[]'); } catch (_) { out = []; }
+  if (!Array.isArray(out)) out = [];
+  return json({ ok: true, comentarios: out, n: out.length });
 }
 async function handleUpdateLead(req, env, leadId) {
   const u = await authUser(req, env);
@@ -7349,7 +7442,28 @@ async function handleUpdateLead(req, env, leadId) {
       const t = (Array.isArray(data.tags) ? data.tags : []).concat(_tagsDe(data, u));
       lead.tags = t.length ? patch.tags.filter((x) => t.some((y) => y.id === x)) : patch.tags;
     }
-    if (Array.isArray(patch.comments)) lead.comments = patch.comments;
+    // ABA VELHA NAO APAGA COMENTARIO (30/10/2026).
+    //
+    // Ate 12/10 a tela mandava a LISTA INTEIRA em todo salvamento; hoje manda operacao
+    // (comment_add/set/del). So que a lista inteira continuava sendo aceita como SUBSTITUICAO: uma
+    // aba com a copia de ontem salvando o endereco apagava, em silencio, todo comentario escrito
+    // depois dela. E aba presa em bundle velho e justamente o que o cache envenenado deixou por ai.
+    //
+    // Agora a lista que chega SOMA: entra o que ela tem de novo, nada sai. Apagar continua
+    // existindo, pelo `comment_del`, que diz QUAL comentario. E passa pelo _comentarioLimpo, que
+    // antes nao rodava neste caminho: a lista crua do navegador entrava no estado como viesse.
+    if (Array.isArray(patch.comments)) {
+      const _ja = Array.isArray(lead.comments) ? lead.comments : [];
+      const _ch = (c) => String((c && c.who) || '') + '|' + String((c && c.time) || '') + '|' + String((c && c.tx) || '');
+      const _vistos = new Set(_ja.map(_ch));
+      const _novos = [];
+      for (const c of patch.comments) {
+        if (!c || typeof c !== 'object' || _vistos.has(_ch(c))) continue;
+        _vistos.add(_ch(c));
+        _novos.push(_comentarioLimpo(c, u));
+      }
+      if (_novos.length) lead.comments = [..._novos, ..._ja].slice(0, 200);
+    }
     // COMENTARIO COMO OPERACAO (12/10/2026, auditoria item 15). A tela mandava a LISTA inteira em todo
     // salvamento, entao duas abas no mesmo pedido se apagavam (quem salvasse por ultimo levava a
     // lista velha). Agora ela manda so o que fez: comment_add (entra no topo), comment_set {time,
@@ -7380,8 +7494,20 @@ async function handleUpdateLead(req, env, leadId) {
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
     if (res && res.meta && res.meta.changes > 0) {
+      // QUANTOS COMENTARIOS O PEDIDO FICOU TENDO (30/10/2026). O caminho curto ja devolvia isto e
+      // este nao - e este e justamente o caminho do pedido que mora no arquivo de leads. A tela
+      // compara com a lista que ela tem na mao e, se divergir, pergunta a lista ao servidor em vez
+      // de continuar mostrando a copia velha.
+      const _mexeuComent = !!(patch.comment_add || patch.comment_set || patch.comment_del || Array.isArray(patch.comments));
+      const _nComent = Array.isArray(lead.comments) ? lead.comments.length : 0;
+      if (_mexeuComent) await _comentLog(env, u, leadId, 'lento', _nComent);
       // `negados` só aparece quando existe: chamador antigo continua vendo { ok, version }.
-      return negados.length ? json({ ok: true, version: newVer, negados }) : json({ ok: true, version: newVer });
+      return json({
+        ok: true,
+        version: newVer,
+        ...(negados.length ? { negados } : {}),
+        ...(_mexeuComent ? { comentarios: _nComent } : {}),
+      });
     }
     if (attempt < 9) await _casEspera(attempt);   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
   }
@@ -31185,6 +31311,8 @@ export default {
       if (req.method === 'POST'  && leadMoveMatch)           return handleMoveLead(req, env, decodeURIComponent(leadMoveMatch[1]));
       const leadAceiteMatch = path.match(/^\/api\/lead\/([^/]+)\/aceitar$/);
       if (req.method === 'POST'  && leadAceiteMatch)         return handleAceitarLead(req, env, decodeURIComponent(leadAceiteMatch[1]));
+      const leadComentMatch = path.match(/^\/api\/lead\/([^/]+)\/comments$/);
+      if (req.method === 'GET'   && leadComentMatch)         return handleLeadComments(req, env, decodeURIComponent(leadComentMatch[1]));
       const leadAgendMatch = path.match(/^\/api\/lead\/([^/]+)\/agend$/);
       if (req.method === 'POST'  && leadAgendMatch)          return handleSetAgend(req, env, decodeURIComponent(leadAgendMatch[1]));
       // ORDEM IMPORTA: /api/lead/delete casa com o padrao de editar (/api/lead/<id>), que fica
