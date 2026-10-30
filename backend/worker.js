@@ -25257,6 +25257,43 @@ function _presselEstadoNum(pressels, at, nk) {
 }
 // POST /api/pressel/num { at, num, on, volta? } -> liga/desliga o numero do vendedor em TODAS as
 // pressels da operacao dele. Quem pode: quem mexe na roleta (diretor, socio, produtor, afiliado na dele).
+// LER E GRAVAR SO ALGUMAS CHAVES DO ESTADO (30/10/2026). O mesmo desenho do _chipsLe/_chipsGrava pra
+// rota que precisa de mais de uma chave pequena: o interruptor do numero (handlePresselNum) LE os
+// chips (de quem e o numero) e GRAVA as pressels. A trava e o texto de TODAS as chaves lidas: se o
+// chip trocou de dono ou outra pressel mudou no meio, nao pega e a rota rele. Captura de lead,
+// comentario e pagamento no meio nao derrubam mais (antes, a trava era a versao do estado inteiro).
+// So chave de topo com nome simples e valor lista/objeto.
+async function _estadoLe(env, chaves) {
+  if (!chaves.length || !chaves.every((k) => /^[A-Za-z0-9_]+$/.test(k))) return null;
+  const cols = chaves.map((k, i) => "json_extract(data, '$." + k + "') AS c" + i).join(', ');
+  const row = await env.DB.prepare('SELECT version, ' + cols + ' FROM dashboard_state WHERE id = 1').first();
+  if (!row) return null;
+  const txt = {}, data = {};
+  chaves.forEach((k, i) => {
+    const t = row['c' + i];
+    txt[k] = t == null ? null : String(t);
+    let v; try { v = t == null ? undefined : JSON.parse(t); } catch (_) { v = undefined; }
+    data[k] = v;
+  });
+  return { version: Number(row.version) || 0, txt, data };
+}
+// Grava `grava` ({ chave: valor }) por json_set. Devolve a versao nova (>0) ou 0 se alguma chave lida mudou.
+async function _estadoGrava(env, lido, grava, quem) {
+  const ks = Object.keys(grava || {});
+  if (!ks.length || !ks.every((k) => /^[A-Za-z0-9_]+$/.test(k))) return 0;
+  const binds = ks.map((k) => JSON.stringify(grava[k]));
+  binds.push(Math.floor(Date.now() / 1000), String(quem || ''));
+  const conds = [];
+  for (const k of Object.keys(lido.txt)) {
+    if (lido.txt[k] == null) conds.push("json_extract(data, '$." + k + "') IS NULL");
+    else { conds.push("json_extract(data, '$." + k + "') = ?"); binds.push(lido.txt[k]); }
+  }
+  const r = await env.DB.prepare(
+    'UPDATE dashboard_state SET data = json_set(data, ' + ks.map((k) => "'$." + k + "', json(?)").join(', ') + '), version = version + 1, updated_at = ?, updated_by = ?'
+    + ' WHERE id = 1 AND ' + conds.join(' AND ') + ' RETURNING version'
+  ).bind(...binds).first();
+  return r ? (Number(r.version) || 1) : 0;
+}
 async function handlePresselNum(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -25280,9 +25317,9 @@ async function handlePresselNum(req, env) {
   const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
   if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
   for (let tent = 0; tent < 6; tent++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado não encontrado', 404);
-    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const _lido = await _estadoLe(env, ['chips', 'pressels']);   // so chips e pressels, nao o estado inteiro (ver _estadoLe)
+    if (!_lido) return err('Estado não encontrado', 404);
+    const data = _lido.data;
     const chips = Array.isArray(data.chips) ? data.chips : [];
     const dosVend = chips.filter((c) => c && String(c.at || '') === at && c.num);
     const chip = dosVend.find((c) => String(c.num).replace(/\D/g, '').slice(-8) === nk);
@@ -25294,10 +25331,8 @@ async function handlePresselNum(req, env) {
     if (!alvos.length) return err('Nenhuma pressel dessa operação', 404);
     const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
     for (const p of alvos) _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend);
-    const newVer = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'pressel-num:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) {
+    const newVer = await _estadoGrava(env, _lido, { pressels: data.pressels }, 'pressel-num:' + String(u.id));
+    if (newVer) {
       try { _dashCache = null; } catch (_) {}
       const pids = alvos.map((p) => p.id).join(',');
       console.log('PRESSEL_NUM por=' + String(u.id) + ' at=' + at + ' num=' + nk + ' on=' + (ligar ? 1 : 0) + (ateAmanha ? ' ate_amanha' : '') + ' pressels=' + pids);
@@ -25336,9 +25371,9 @@ async function handleChipLimite(req, env) {
   const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
   if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
   for (let tent = 0; tent < 6; tent++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado não encontrado', 404);
-    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
+    const _lido = await _chipsLe(env);   // so chips e tags (ver _chipsLe)
+    if (!_lido) return err('Estado não encontrado', 404);
+    const data = _lido.data;
     const chips = Array.isArray(data.chips) ? data.chips : [];
     const chip = chips.find((c) => c && c.num && String(c.num).replace(/\D/g, '').slice(-8) === nk);
     if (!chip) return err('Número não encontrado', 404);
@@ -25359,10 +25394,8 @@ async function handleChipLimite(req, env) {
       return err('Esse número está em aquecimento: quem manda no teto dele é a rampa, não este campo', 400);
     }
     if (lim > 0) chip.lim_dia = lim; else delete chip.lim_dia;
-    const newVer = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip-limite:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) {
+    const newVer = await _chipsGrava(env, _lido, chips, 'chip-limite:' + String(u.id));
+    if (newVer) {
       try { _dashCache = null; } catch (_) {}
       console.log('CHIP_LIMITE por=' + String(u.id) + ' num=' + nk + ' lim=' + lim + ' dono=' + dono);
       return json({ ok: true, num: nk, lim, at: dono, ts: Math.floor(Date.now() / 1000) });
