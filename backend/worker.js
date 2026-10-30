@@ -8210,6 +8210,52 @@ async function handleMeuNumero(req, env) {
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
+// AS ROTAS DE CHIP SO MEXEM NA LISTA DE CHIPS, E AGORA SO ELA VIAJA (30/10/2026).
+//
+// O Bruno: "a dash esta muito lenta pra salvar, cadastrar chip, mover numero". Medido na producao:
+// mover UM chip levava 3,7 s no servidor, 387 ms deles de CPU. As quatro rotas de chip (salvar,
+// cadastrar, ordem da fila, excluir) liam o estado INTEIRO (1,38 MB, 888 pedidos junto com os do
+// arquivo), mexiam em data.chips (30 KB) e regravavam tudo. O D1 mora no leste dos EUA e o worker
+// roda em Sao Paulo: era 1,4 MB atravessando o continente na ida e de novo na volta, e qualquer
+// gravacao do cron no meio (captura de mensagem grava o estado) derrubava a tentativa e refazia tudo.
+//
+// Agora a leitura puxa so chips, tags e o contador de id, por json_extract, e a gravacao troca so
+// '$.chips' por json_set DENTRO do banco - o mesmo desenho do _comentarioRapido. A trava de
+// concorrencia deixou de ser a versao do estado inteiro e passou a ser A PROPRIA LISTA DE CHIPS: o
+// UPDATE so pega se ninguem mexeu em chip nenhum desde a leitura. Captura de lead, pagamento ou
+// comentario no meio nao derrubam mais a gravacao do chip; outra gravacao de chip derruba, e a rota
+// rele e refaz, como antes. A versao continua subindo (+1), entao quem grava o estado inteiro com
+// "AND version=?" perde a corrida e rele, ja com o chip novo dentro.
+//
+// Fora do envelope do arquivo de leads de proposito: os SQL abaixo nao sao os dois formatos que o
+// _arqTipoSql intercepta, e chip nao mora no arquivo.
+const _CHIPS_LE_SQL = "SELECT version, json_extract(data, '$.chips') AS chips, json_extract(data, '$.wa_statuses') AS sts, json_extract(data, '$.nextChip') AS nx FROM dashboard_state WHERE id = 1";
+async function _chipsLe(env) {
+  const row = await env.DB.prepare(_CHIPS_LE_SQL).first();
+  if (!row) return null;
+  const pj = (t, pad) => { if (t == null) return pad; try { return JSON.parse(t); } catch (_) { return pad; } };
+  const chips = pj(row.chips, null);
+  const sts = pj(row.sts, []);
+  return {
+    version: Number(row.version) || 0,
+    chipsTxt: row.chips == null ? null : String(row.chips),
+    data: { chips: Array.isArray(chips) ? chips : null, wa_statuses: Array.isArray(sts) ? sts : [], nextChip: row.nx },
+  };
+}
+// Devolve a versao nova (>0) se gravou; 0 se outra gravacao de chip passou na frente (rele e refaz).
+async function _chipsGrava(env, lido, chipsNovos, quem, extra) {
+  const pares = ["'$.chips', json(?)"];
+  const binds = [JSON.stringify(chipsNovos)];
+  if (extra && extra.nextChip != null) { pares.push("'$.nextChip', ?"); binds.push(Number(extra.nextChip)); }
+  const cond = lido.chipsTxt == null ? "json_extract(data, '$.chips') IS NULL" : "json_extract(data, '$.chips') = ?";
+  binds.push(Math.floor(Date.now() / 1000), String(quem || ''));
+  if (lido.chipsTxt != null) binds.push(lido.chipsTxt);
+  const r = await env.DB.prepare(
+    'UPDATE dashboard_state SET data = json_set(data, ' + pares.join(', ') + '), version = version + 1, updated_at = ?, updated_by = ?'
+    + ' WHERE id = 1 AND ' + cond + ' RETURNING version'
+  ).bind(...binds).first();
+  return r ? (Number(r.version) || 1) : 0;
+}
 async function handleChipSave(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -8224,9 +8270,9 @@ async function handleChipSave(req, env) {
   // ainda dizia que salvou. E o jeito de um numero que ele tirou da roleta voltar a receber sozinho.
   // Se a versao mudou no meio, refaz do estado novo em vez de sobrescrever o trabalho do outro.
   for (let tent = 0; tent < 6; tent++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado não encontrado', 404);
-    let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    const _lido = await _chipsLe(env);   // SO a lista de chips e as tags, nao o estado inteiro (ver _chipsLe)
+    if (!_lido) return err('Estado não encontrado', 404);
+    const data = _lido.data;
     if (!Array.isArray(data.chips)) return err('Sem chips', 404);
     const chip = data.chips.find((c) => String(c.id) === String(id));
     if (!chip) return err('Chip não encontrado', 404);
@@ -8342,10 +8388,8 @@ async function handleChipSave(req, env) {
         chip.lim_ordem = Math.min(_ult + 1, 99);
       } else delete chip.lim_ordem;
     }
-    const newVer = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) {
+    const newVer = await _chipsGrava(env, _lido, data.chips, 'chip:' + String(u.id));
+    if (newVer) {
       // O DONO NOVO CHEGA NA HORA NAS TABELAS, NAO NO PROXIMO CRON (28/09/2026).
       //
       // Quem liga numero -> vendedor e o _scSeedOwners, e ele so roda no passo 'conexao' do cron.
@@ -8395,10 +8439,9 @@ async function handleChipOrdem(req, env) {
   const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
   if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
   for (let tent = 0; tent < 6; tent++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado não encontrado', 404);
-    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado inválido', 500); }
-    const chips = Array.isArray(data.chips) ? data.chips : [];
+    const _lido = await _chipsLe(env);   // so a lista de chips (ver _chipsLe)
+    if (!_lido) return err('Estado não encontrado', 404);
+    const chips = Array.isArray(_lido.data.chips) ? _lido.data.chips : [];
     let mexeu = 0;
     ids.forEach((id, i) => {
       const c = chips.find((x) => x && String(x.id) === id);
@@ -8406,10 +8449,8 @@ async function handleChipOrdem(req, env) {
       if (Number(c.lim_ordem) !== i + 1) { c.lim_ordem = i + 1; mexeu++; }
     });
     if (!mexeu) return json({ ok: true, mudou: 0 });
-    const newVer = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip-ordem:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, mudou: mexeu, version: newVer });
+    const newVer = await _chipsGrava(env, _lido, chips, 'chip-ordem:' + String(u.id));
+    if (newVer) return json({ ok: true, mudou: mexeu, version: newVer });
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
@@ -8428,9 +8469,9 @@ async function handleChipCreate(req, env) {
   // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
   // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
   for (let tent = 0; tent < 6; tent++) {
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const _lido = await _chipsLe(env);   // so chips + contador de id (ver _chipsLe)
+  if (!_lido) return err('Estado não encontrado', 404);
+  const data = _lido.data;
   if (!Array.isArray(data.chips)) data.chips = [];
   const nextId = Number(data.nextChip) || (data.chips.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0) + 1);
   const hoje = new Date().toISOString().split('T')[0];
@@ -8459,11 +8500,8 @@ async function handleChipCreate(req, env) {
     chip.afl = _a;
   }
   data.chips.unshift(chip);
-  data.nextChip = nextId + 1;
-  const newVer = (row.version || 0) + 1;
-  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
-  if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, chip });
+  const newVer = await _chipsGrava(env, _lido, data.chips, 'chip:' + String(u.id), { nextChip: nextId + 1 });
+  if (newVer) return json({ ok: true, version: newVer, chip });
   await new Promise((r) => setTimeout(r, 12 * (tent + 1)));   // outra gravacao passou na frente: espera, rele e refaz
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
@@ -8482,9 +8520,9 @@ async function handleChipDelete(req, env) {
   // novo, pago, baixa de estoque) sumia em silencio e a versao repetia o numero dele. Agora rele, refaz
   // e grava conferindo a versao, igual a handleTagsSave. O corpo do laco ficou sem reindentar de proposito.
   for (let tent = 0; tent < 6; tent++) {
-  const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-  if (!row) return err('Estado não encontrado', 404);
-  let data; try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+  const _lido = await _chipsLe(env);   // so a lista de chips (ver _chipsLe)
+  if (!_lido) return err('Estado não encontrado', 404);
+  const data = _lido.data;
   if (!Array.isArray(data.chips)) return err('Sem chips', 404);
   const before = data.chips.length;
   // Idem pro numero: o afiliado so apaga o dele.
@@ -8498,10 +8536,8 @@ async function handleChipDelete(req, env) {
   const _apagado = data.chips.find((c) => String(c.id) === String(id)) || null;
   data.chips = data.chips.filter((c) => String(c.id) !== String(id));
   if (data.chips.length === before) return err('Chip não encontrado', 404);
-  const newVer = (row.version || 0) + 1;
-  const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-    .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'chip:' + String(u.id), row.version).run();
-  if (res && res.meta && res.meta.changes > 0) {
+  const newVer = await _chipsGrava(env, _lido, data.chips, 'chip:' + String(u.id));
+  if (newVer) {
     // So depois de a exclusao PEGAR (o UPDATE pode perder a versao e o laco refazer): soltar a
     // proxy de um numero que continuou cadastrado seria pior que o problema de hoje.
     await _swwebSoltaNumero(env, _swwebKey(_apagado && _apagado.num), String((_apagado && _apagado.afl) || ''));
