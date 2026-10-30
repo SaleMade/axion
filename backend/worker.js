@@ -7170,6 +7170,55 @@ async function handleLeadComments(req, env, leadId) {
   if (!Array.isArray(out)) out = [];
   return json({ ok: true, comentarios: out, n: out.length });
 }
+// O SALVAR DO PEDIDO LE E GRAVA SO AQUELE PEDIDO (30/10/2026). Mesmo desenho do _comentarioRapido
+// e das rotas de chip (_chipsLe): o Bruno reclamou que "salvar qualquer coisa" na dash demora, e
+// o POST /api/lead/:id levava 1,7 s no meio do dia (p90 2,7 s, pico de 18 s) porque lia o estado
+// inteiro (1,38 MB + o arquivo de leads), mexia num pedido e regravava tudo - com a trava na versao
+// do estado inteiro, que o cron muda varias vezes por minuto.
+//
+// O caminho curto le, por json_each, SO o pedido (e as duas coisas que a rota consulta: regras.kits
+// e o catalogo de tags do mundo de quem salva) e grava por json_set em '$.leads[i]'. A trava passa a
+// ser O PROPRIO PEDIDO: o UPDATE so pega se o texto daquele indice ainda e o que foi lido. Se a
+// captura inseriu um pedido no topo (o indice andou) ou alguem mexeu NESTE pedido, nao pega e a rota
+// rele. Pedido que mora no arquivo (nao esta na linha) devolve null e vai pelo caminho de sempre.
+//
+// QUEM CONTINUA NO CAMINHO LONGO: patch com `col`. Trocar de coluna chama _waSalesMarcaCancelada,
+// que olha TODOS os pedidos (outro pedido vivo com o mesmo telefone segura a venda) - com so um
+// pedido na mao, ela concluiria errado.
+async function _leadRapidoLe(env, leadId, u) {
+  const sfx = _sufMundoAfl(u);
+  const chTags = sfx ? 'tags' + sfx : 'tags';
+  if (!/^[A-Za-z0-9_]+$/.test(chTags)) return null;   // nao monto caminho JSON com chave estranha
+  let row = null;
+  try {
+    row = await env.DB.prepare(
+      "SELECT j.key AS idx, j.value AS lead, json_extract(s.data, '$.regras') AS regras,"
+      + " json_extract(s.data, '$.tags') AS tags, json_extract(s.data, ?) AS tagsM"
+      + " FROM dashboard_state s, json_each(json_extract(s.data, '$.leads')) j"
+      + " WHERE s.id = 1 AND CAST(json_extract(j.value, '$.id') AS TEXT) = ?"
+    ).bind('$.' + chTags, String(leadId)).first();
+  } catch (_) { return null; }
+  if (!row || row.lead == null) return null;
+  const idx = Number(row.idx);
+  if (!isFinite(idx) || idx < 0 || Math.floor(idx) !== idx) return null;
+  const pj = (t, pad) => { if (t == null) return pad; try { return JSON.parse(t); } catch (_) { return pad; } };
+  const lead = pj(row.lead, null);
+  if (!lead || typeof lead !== 'object' || String(lead.id) !== String(leadId)) return null;
+  const data = { leads: [lead], regras: pj(row.regras, {}) || {}, tags: pj(row.tags, []) };
+  if (sfx) data[chTags] = pj(row.tagsM, []);
+  return { idx, leadTxt: String(row.lead), data };
+}
+// Devolve a versao nova (>0) se gravou; 0 se o pedido mudou ou andou de indice (a rota rele).
+async function _leadRapidoGrava(env, lido, lead, quem) {
+  const caminho = '$.leads[' + lido.idx + ']';
+  try {
+    const r = await env.DB.prepare(
+      'UPDATE dashboard_state SET data = json_set(data, ?, json(?)), version = version + 1, updated_at = ?, updated_by = ?'
+      + ' WHERE id = 1 AND json_extract(data, ?) = ? RETURNING version'
+    ).bind(caminho, JSON.stringify(lead), Math.floor(Date.now() / 1000), String(quem || ''), caminho, lido.leadTxt).first();
+    return r ? (Number(r.version) || 1) : 0;
+  } catch (e) { console.error('[lead rapido] ' + String((e && e.message) || e)); return 0; }
+}
 async function handleUpdateLead(req, env, leadId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -7211,11 +7260,21 @@ async function handleUpdateLead(req, env, leadId) {
   // dele seriam ate 10 consultas iguais por salvamento. Mapa vazio quando `cob` nem vem no patch.
   const _cobOk = new Map();
   if ('cob' in patch) for (const c of await _cobradoresDaCasa(env)) _cobOk.set(String(c.id), Number(c.com_pct) || 0);
+  // Caminho curto (ver _leadRapidoLe): so sem troca de coluna. Se o pedido nao esta na linha (mora no
+  // arquivo), desliga na primeira tentativa e o resto do laco vai pelo estado inteiro.
+  let _tentaRapido = !('col' in patch);
+  let _errosRapido = 0;   // 3 recusas seguidas no caminho curto = volta pro de sempre (nunca vira "Conflito" por causa dele)
   for (let attempt = 0; attempt < 10; attempt++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado não encontrado', 404);
+    const _rap = _tentaRapido ? await _leadRapidoLe(env, leadId, u) : null;
+    if (_tentaRapido && !_rap) _tentaRapido = false;
+    let row = null;
     let data;
-    try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    if (_rap) data = _rap.data;
+    else {
+      row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
+      if (!row) return err('Estado não encontrado', 404);
+      try { data = JSON.parse(row.data); } catch (e) { return err('Estado inválido', 500); }
+    }
     const leads = Array.isArray(data.leads) ? data.leads : [];
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
@@ -7490,10 +7549,15 @@ async function handleUpdateLead(req, env, leadId) {
       const _cd = patch.comment_del;
       lead.comments = lead.comments.filter((c) => !(c && String(c.time || '') === String(_cd.time || '') && String(c.who || '') === String(_cd.who || '')));
     }
-    const newVer = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) {
+    let newVer = 0;
+    if (_rap) { newVer = await _leadRapidoGrava(env, _rap, lead, 'kanban:' + String(u.id)); if (!newVer && ++_errosRapido >= 3) _tentaRapido = false; }
+    else {
+      const _v = (row.version || 0) + 1;
+      const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
+        .bind(JSON.stringify(data), _v, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
+      if (res && res.meta && res.meta.changes > 0) newVer = _v;
+    }
+    if (newVer) {
       // QUANTOS COMENTARIOS O PEDIDO FICOU TENDO (30/10/2026). O caminho curto ja devolvia isto e
       // este nao - e este e justamente o caminho do pedido que mora no arquivo de leads. A tela
       // compara com a lista que ela tem na mao e, se divergir, pergunta a lista ao servidor em vez
