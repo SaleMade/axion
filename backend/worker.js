@@ -4839,9 +4839,28 @@ async function handleAfiliadoPagamentos(req, env) {
 // checkout" e cola os dois. Quando ele cadastra um pedido daquele kit, o lead ja nasce com o link
 // certo, e e esse link que aparece no card - o mesmo que ele configurou aqui.
 //
-// Onde mora: data.afl_checkout = { <affiliate_id>: { <id do kit>: { antecipado, entrega } } }.
+// Onde mora: data.afl_checkout = { <affiliate_id>: { <id do kit>: { link } }, _casa: { <kit>: { link, link_af } } }.
 // Endpoint proprio, e nao o POST /api/state generico, pelo mesmo motivo das outras chaves com dono:
 // assim o afiliado escreve SO o galho dele e nunca reescreve o mapa inteiro.
+//
+// UM LINK POR KIT, E O DOS AFILIADOS SEPARADO (30/10/2026). O Bruno trocou a Payt pela conta do
+// CNPJ e deixou de ter um checkout pra antecipado e outro pra entrega: "nao faz diferenca se o
+// cliente quer pagar na entrega ou no antecipado, vai ser sempre o mesmo checkout". No lugar, cada kit
+// virou DOIS produtos na Payt: o da casa ("1 Meses - GlicoSix") e o dos afiliados ("1 Meses -
+// GlicoSix AF"). Entao o galho `_casa` guarda `link` (pedido da casa) e `link_af` (pedido de
+// afiliado), e o galho de um afiliado guarda so `link`, o dele, que vence o AF quando existir.
+// `antecipado`/`entrega` sao o formato antigo: continuam valendo ate o kit ganhar o link novo, e
+// somem do kit na primeira gravacao do link novo.
+// O afiliado enxerga do mapa: o galho DELE e, da casa, so o link AF de cada kit (nunca o da casa).
+function _checkoutDoAfiliado(todos, meu) {
+  const out = {};
+  if (meu && todos && todos[meu] && typeof todos[meu] === 'object') out[meu] = todos[meu];
+  const casa = (todos && todos._casa && typeof todos._casa === 'object') ? todos._casa : {};
+  const af = {};
+  for (const [k, v] of Object.entries(casa)) if (v && v.link_af) af[k] = { link_af: String(v.link_af) };
+  if (Object.keys(af).length) out._casa = af;
+  return out;
+}
 async function handleAfiliadoCheckout(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Nao autenticado', 401);
@@ -4852,8 +4871,8 @@ async function handleAfiliadoCheckout(req, env) {
   if (req.method === 'GET') {
     const data = await _getDashData(env).catch(() => ({}));
     const todos = (data && data.afl_checkout) || {};
-    // O afiliado le so o galho dele; o diretor pode pedir o de um especifico ou o mapa inteiro.
-    if (meu) return json({ ok: true, checkout: { [meu]: todos[meu] || {} } });
+    // O afiliado le so o galho dele (e o AF da casa); o diretor pode pedir um especifico ou o mapa inteiro.
+    if (meu) return json({ ok: true, checkout: _checkoutDoAfiliado(todos, meu) });
     const q = String(new URL(req.url).searchParams.get('afiliado') || '').trim();
     return json({ ok: true, checkout: q ? { [q]: todos[q] || {} } : todos });
   }
@@ -4872,33 +4891,54 @@ async function handleAfiliadoCheckout(req, env) {
     if (!/^https?:\/\//i.test(t)) return null;
     return t.slice(0, 600);
   };
-  const ant = limpaUrl(b.antecipado);
-  const ent = limpaUrl(b.entrega);
-  if (ant === null || ent === null) return err('O link precisa comecar com http:// ou https://');
+  const tem = (k) => Object.prototype.hasOwnProperty.call(b, k);
+  // `undefined` = nao mexe neste campo. Aba com a tela antiga ainda manda antecipado/entrega: vira o link unico.
+  let link;
+  if (tem('link')) link = limpaUrl(b.link);
+  else if (tem('antecipado') || tem('entrega')) {
+    const a = limpaUrl(b.antecipado), e = limpaUrl(b.entrega);
+    link = (a === null || e === null) ? null : (a || e);
+  }
+  // O link dos afiliados e da CASA: so o galho `_casa` guarda, e quem grava la e so o diretor.
+  const linkAf = (alvo === '_casa' && tem('link_af')) ? limpaUrl(b.link_af) : undefined;
+  if (link === null || linkAf === null) return err('O link precisa comecar com http:// ou https://');
+  if (link === undefined && linkAf === undefined) return err('Nada pra salvar');
 
-  for (let tent = 0; tent < 6; tent++) {
-    const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
-    if (!row) return err('Estado nao encontrado', 404);
-    let data; try { data = JSON.parse(row.data); } catch (_) { return err('Estado invalido', 500); }
-    if (!data.afl_checkout || typeof data.afl_checkout !== 'object') data.afl_checkout = {};
-    if (!data.afl_checkout[alvo] || typeof data.afl_checkout[alvo] !== 'object') data.afl_checkout[alvo] = {};
-    if (!ant && !ent) delete data.afl_checkout[alvo][kit];
-    else data.afl_checkout[alvo][kit] = { antecipado: ant, entrega: ent };
-    const nv = (row.version || 0) + 1;
-    const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
-      .bind(JSON.stringify(data), nv, Math.floor(Date.now() / 1000), 'checkout:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: nv });
+  // Le e grava SO o afl_checkout (o estado inteiro e 1,4 MB; ver _estadoLe).
+  for (let tent = 0; tent < 8; tent++) {
+    const lido = await _estadoLe(env, ['afl_checkout']);
+    if (!lido) return err('Estado nao encontrado', 404);
+    const ok = (x) => x && typeof x === 'object' && !Array.isArray(x);
+    const mapa = ok(lido.data.afl_checkout) ? lido.data.afl_checkout : {};
+    const galho = ok(mapa[alvo]) ? { ...mapa[alvo] } : {};
+    const cfg = ok(galho[kit]) ? { ...galho[kit] } : {};
+    if (link !== undefined) {
+      delete cfg.antecipado; delete cfg.entrega;
+      if (link) cfg.link = link; else delete cfg.link;
+    }
+    if (linkAf !== undefined) { if (linkAf) cfg.link_af = linkAf; else delete cfg.link_af; }
+    if (Object.values(cfg).some((v) => v)) galho[kit] = cfg; else delete galho[kit];
+    const novo = { ...mapa, [alvo]: galho };
+    const v = await _estadoGrava(env, lido, { afl_checkout: novo }, 'checkout:' + String(u.id));
+    if (v) return json({ ok: true, version: v, kit: galho[kit] || null });
+    if (tent < 7) await _casEspera(tent);
   }
   return err('Conflito ao salvar. Tente de novo.', 409);
 }
 
-// Qual link vale pra este lead: o do afiliado dele, no kit e na modalidade do pedido.
-// Sem configuracao, devolve '' e o card cai no checkout padrao da Five, como sempre foi.
+// Qual link vale pra este pedido de AFILIADO: o link dele no kit > o link dos afiliados da casa
+// (produto AF) > o formato antigo do galho dele, pela modalidade. Pedido da casa devolve '' (a tela
+// monta o link da casa na hora; so o do afiliado nasce gravado no pedido).
+// Sem configuracao, devolve '' e o card cai no checkout da plataforma, como sempre foi.
+// Mesma regra do linkDoKit do front (src/lib/orders.js).
 function _linkCheckoutDoLead(data, lead) {
   try {
     const afl = String((lead && lead.afl) || '');
     if (!afl) return '';
-    const mapa = ((data && data.afl_checkout) || {})[afl] || {};
+    const todos = (data && data.afl_checkout) || {};
+    const mapa = todos[afl] || {};
+    const casa = todos._casa || {};
+    const temCfg = (id) => !!(mapa[id] || (casa[id] && casa[id].link_af));
     const kits = ((data && data.regras) || {}).kits || [];
     // Casa o kit pelo id da oferta ou pelo nome do tratamento, normalizado (a Five manda
     // "GlicoSix - 4 Meses" sem espaco e o cadastro tem "Glico Six - 4 Meses").
@@ -4907,11 +4947,13 @@ function _linkCheckoutDoLead(data, lead) {
     let chave = null;
     for (const k of kits) {
       const id = String(k.offer_id || k.id || '');
-      if (id && mapa[id] && (norm(k.nome) === alvo || norm(k.id) === norm(lead && lead.offer_id))) { chave = id; break; }
+      if (id && temCfg(id) && (norm(k.nome) === alvo || norm(k.id) === norm(lead && lead.offer_id))) { chave = id; break; }
     }
-    if (!chave) for (const id of Object.keys(mapa)) { if (norm(id) === alvo) { chave = id; break; } }
+    if (!chave) for (const id of Object.keys(mapa).concat(Object.keys(casa))) { if (temCfg(id) && norm(id) === alvo) { chave = id; break; } }
     if (!chave) return '';
     const cfg = mapa[chave] || {};
+    if (cfg.link) return String(cfg.link);
+    if (casa[chave] && casa[chave].link_af) return String(casa[chave].link_af);
     const ant = String((lead && lead.mod) || '').toLowerCase() === 'antecipado';
     return String((ant ? cfg.antecipado : cfg.entrega) || cfg.entrega || cfg.antecipado || '');
   } catch (_) { return ''; }
@@ -5330,9 +5372,11 @@ async function _stateVisivel(u, data, env) {
       // nao atendeu, pago no Pix), sem numero e sem nome de cliente.
       'coment_prontos',
     ]);
-    // ...mas so o galho DELE do mapa de checkout (o mapa tem um galho por afiliado).
+    // ...mas so o galho DELE do mapa de checkout (o mapa tem um galho por afiliado), mais o link
+    // dos afiliados de cada kit da casa (produto AF, 30/10/2026): e ele que o pedido dele abre
+    // quando ele nao colou link proprio. O link da casa nunca sai daqui.
     if (d.afl_checkout && typeof d.afl_checkout === 'object') {
-      d.afl_checkout = meuAfl && d.afl_checkout[meuAfl] ? { [meuAfl]: d.afl_checkout[meuAfl] } : {};
+      d.afl_checkout = _checkoutDoAfiliado(d.afl_checkout, meuAfl);
     }
     for (const k of Object.keys(d)) if (!CHAVES_DO_AFILIADO.has(k)) delete d[k];
     // CONTINGENCIA DELE. Se ja tem as proprias, leva as dele; se ainda nao mexeu, leva uma COPIA
