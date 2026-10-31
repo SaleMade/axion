@@ -14148,6 +14148,22 @@ async function handleSwWeb(req, env, path) {
     return json({ ok: true, ate: agoraU + SWWEB_USO_SEG });
   }
 
+  // POST /api/swweb/fechando — o app avisa que esta FECHANDO (X, Windows desligando, sair da conta).
+  //
+  // FECHOU O APP, DESLIGA TODOS OS INTERRUPTORES DA PESSOA (31/10/2026, ver _desligaAppFechado). O
+  // cron ja pega isso pelos alugueis, mas o app espera a nuvem antes de soltar os alugueis (ate 5
+  // min) e nesse meio tempo os numeros seguiriam recebendo. Os alugueis DESTA maquina nao contam
+  // (ela esta saindo); outra maquina da mesma pessoa aberta segura tudo ligado.
+  if (req.method === 'POST' && path === '/api/swweb/fechando') {
+    if (mundo) return json({ ok: true, desligou: 0 });   // afiliado: a operacao e dele
+    if (!maquina) return err('Falta identificar a máquina');
+    await _swwebUsoTabela(env);
+    const feitos = await _swwebDesligaDonos(env, [String(u.id)], {
+      exceto: maquina, por_nome: 'Sistema (fechou o SellWave Web)', marca: 'app-fechou:', rotulo: 'ROLETA_APP_FECHOU_OFF',
+    });
+    return json({ ok: true, desligou: feitos.length, numeros: feitos.map((f) => f.nk) });
+  }
+
   // POST /api/swweb/app — carimba qual build esta no R2. Roda junto com o upload do instalador.
   // So a direcao da casa: o aviso de versao e do app inteiro, nao de um mundo.
   if (req.method === 'POST' && path === '/api/swweb/app') {
@@ -14171,8 +14187,21 @@ async function handleSwWeb(req, env, path) {
   // Bruno com os dois interruptores na tela. Rota apagada daria 404 e um "não deu pra falar com a
   // dash" generico; recusando com a frase certa, quem clicar descobre onde foi o botao.
   if (req.method === 'POST' && path === '/api/swweb/config') {
-    if (!manda) return err('Só a direção mexe nas travas', 403);
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    // NUMEROS ABERTOS AO MESMO TEMPO, DA OPERACAO (31/10/2026). Era ajuste SO DAQUELE computador
+    // (config.maxAbertos no disco do app): o Bruno pos 8 no PC dele e o vendedor seguiu no padrao 6,
+    // "nao consegue abrir mais de 7". Agora a direcao grava aqui, no swweb_cfg do mundo, e todo app
+    // le no /api/swweb/numeros (campo config.maxAbertos). De 1 a 20, o mesmo corte do app.
+    if (b && b.maxAbertos != null) {
+      if (!manda) return err('Quem define quantos números ficam abertos é a direção', 403);
+      const n = Math.floor(Number(b.maxAbertos));
+      if (!(n >= 1)) return err('Número inválido');
+      const salvo = { ..._swwebLerJson(lidas[K_CFG], {}), maxAbertos: Math.min(20, n) };
+      try { await _writeConfig(env, K_CFG, JSON.stringify(salvo)); } catch (_) { return err('Não consegui salvar agora.', 503); }
+      cfg.maxAbertos = salvo.maxAbertos;
+      return json({ ok: true, config: cfg, maxAbertos: salvo.maxAbertos });
+    }
+    if (!manda) return err('Só a direção mexe nas travas', 403);
     if ((b && b.travaProxy) === false) return err('A exigência de proxy não desliga mais: é regra. Se a proxy de um número caiu, escolha outra em Contingência > Proxies.', 409);
     if ((b && b.exigirBrasil) === false) return err('Exigir IP do Brasil não desliga mais: proxy de fora num número +55 é pior que proxy nenhum.', 409);
     // Ligar de novo e sempre permitido, e e o que uma versao velha manda quando ja estava ligado:
@@ -25392,6 +25421,11 @@ async function handlePresselMeuNumero(req, env) {
     const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
       .filter((p) => p && conta(p.id) && _donoDe(p) === _donoDe(chip) && (!pid || String(p.id) === pid));
     if (!alvos.length) return err('Pressel não encontrada', 404);
+    // LIGAR COM O APP FECHADO NAO PEGA (31/10/2026, ver _desligaAppFechado).
+    if (ligar && tent === 0 && !String(chip.afl || '')) {
+      const nao = await _swwebRecusaLigar(env, meu, true);
+      if (nao) return err(nao, 409);
+    }
     for (const p of alvos) {
       if (!Array.isArray(p.vendedores)) p.vendedores = [];
       let v = p.vendedores.find((x) => x && String(x.at) === meu);
@@ -25561,6 +25595,12 @@ async function handlePresselNum(req, env) {
     const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
       .filter((p) => p && _donoDe(p) === _donoDe(chip) && (_meuAfl ? String(p.afl || '') === _meuAfl : conta(p.id)));
     if (!alvos.length) return err('Nenhuma pressel dessa operação', 404);
+    // LIGAR COM O APP DO DONO FECHADO NAO PEGA (31/10/2026, ver _desligaAppFechado). Recusa aqui, com
+    // a frase, em vez de ligar e ver o cron desligar um minuto depois. So na casa e so na 1a volta.
+    if (ligar && tent === 0 && !String(chip.afl || '')) {
+      const nao = await _swwebRecusaLigar(env, at, _souEu);
+      if (nao) return err(nao, 409);
+    }
     const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
     for (const p of alvos) _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend);
     const newVer = await _estadoGrava(env, _lido, { pressels: data.pressels }, 'pressel-num:' + String(u.id));
@@ -25754,6 +25794,166 @@ async function _roletaDesligaNum(env, nk8, o) {
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// FECHOU O SELLWAVE WEB, PAROU DE RECEBER LEAD (31/10/2026, pedido do Bruno).
+//
+// Palavras dele: "sempre que alguem fechasse o aplicativo, ele tambem parasse de receber leads. Ou
+// seja, todos os interruptores fossem desligados para ele. Quando ele acessasse novamente o
+// aplicativo, ele teria que ligar novamente (...) para que a gente nunca mande leads para alguem
+// que nao esta com o SellWave Web aberto".
+//
+// ISTO MUDA, DE PROPOSITO, UMA DECISAO ANTIGA. O comentario do _desligaBanidos diz que "app fechado"
+// nao desliga nada, porque era inferencia e tirava do ar quem estava trabalhando. Agora e regra
+// dele, e o que segura o lado ruim e COMO se decide que fechou:
+//
+// QUEM ESTA COM O APP ABERTO = quem tem ALUGUEL VIVO no swweb_uso. O app renova de 45 em 45 s cada
+// numero aberto, com validade de 2 min (SWWEB_USO_SEG). E a mesma prova que ja diz "aberto por
+// fulano" pra equipe inteira, e vale pra qualquer versao do app desde 19/10.
+//  - Fechou pelo X ou saiu da conta: o app SOLTA os alugueis (apaga a linha) e, desde a 1.25.38,
+//    avisa na hora (POST /api/swweb/fechando). Desliga no minuto, ou na hora com o app novo.
+//  - Caiu sem fechar (travou, acabou a luz, tampa fechada, internet caiu): a linha fica e vence.
+//    So conta como fechado APP_FECHADO_FOLGA depois de vencer, ou seja ~5 min sem renovar.
+//    Internet que pisca um minuto nao derruba ninguem.
+//  - Numero HIBERNADO (o app fecha o mais parado quando passa do teto) solta o aluguel DELE, mas a
+//    pessoa segue com outros abertos: continua "com o app aberto". A regra e por PESSOA, nao por
+//    numero - numero fechado num app aberto segue recebendo (regra de 20/10: o lead e capturado
+//    quando ele abre).
+//
+// NUNCA RELIGA. Quem liga e gente, depois de abrir o app. E LIGAR COM O APP FECHADO E RECUSADO
+// (handlePresselNum e handlePresselMeuNumero) com a frase dizendo por que: sem isso a chave ligava
+// e este cron desligava de novo um minuto depois, que se le como clique que nao pegou.
+//
+// SO A CASA. Numero de afiliado e operacao dele (mesma regra do _roletaDesligaNum).
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+const APP_FECHADO_FOLGA = 180;
+// Quem, desta lista, esta com o SellWave Web aberto agora. Devolve um Set de ids, ou NULL se a
+// leitura falhou: quem chama trata null como "nao sei" e nao desliga ninguem (tirar do ar quem esta
+// trabalhando por causa de um erro de rede e pior que esperar o minuto seguinte). `exceto` ignora os
+// alugueis de UMA maquina: a que esta avisando que vai fechar, cujos alugueis ainda estao vivos.
+async function _swwebAppAbertos(env, ids, exceto) {
+  const lista = [...new Set((ids || []).map((x) => String(x || '')).filter(Boolean))];
+  if (!lista.length) return new Set();
+  try {
+    const r = await env.DB.prepare(
+      'SELECT user_id, maquina, MAX(ate) AS ate FROM swweb_uso WHERE user_id IN (SELECT value FROM json_each(?)) GROUP BY user_id, maquina'
+    ).bind(JSON.stringify(lista)).all();
+    const corte = Math.floor(Date.now() / 1000) - APP_FECHADO_FOLGA;
+    const abertos = new Set();
+    for (const x of ((r && r.results) || [])) {
+      if (exceto && String(x.maquina || '') === String(exceto)) continue;
+      if (Number(x.ate) > corte) abertos.add(String(x.user_id));
+    }
+    return abertos;
+  } catch (_) { return null; }
+}
+// OS NUMEROS DA CASA QUE AINDA RECEBERIAM LEAD, por dono: Map at -> [nk8].
+//
+// "Ligado" e o que a roleta le: em alguma pressel da casa, o vendedor nao esta desligado inteiro
+// (v.ativo false) nem tem o numero em v.off. E AUSENTE CONTA COMO LIGADO quando o chip esta apto (Em
+// uso ou aquecendo), que e a regra do _resolvePresselSellers; chip parado e ausente nao recebe nada,
+// entao nao entra (gravaria `off` a toa num numero que ninguem usa).
+// O "desligado so ate a meia-noite" (v.volta) tambem entra: senao o cron da meia-noite religaria o
+// numero de quem esta com o app fechado, e ele receberia lead sem ter ligado.
+function _swwebLigadosPorDono(data) {
+  const out = new Map();
+  const casa = (Array.isArray(data && data.pressels) ? data.pressels : []).filter((p) => p && !String(p.afl || ''));
+  if (!casa.length) return out;
+  const ids = { emUso: _emUsoIdsDe(data), aquec: _aquecIdsDe(data) };
+  const nomeSt = {};
+  for (const st of (Array.isArray(data && data.wa_statuses) ? data.wa_statuses : [])) {
+    if (st && st.id) nomeSt[String(st.id)] = st.label || st.nome || st.name || '';
+  }
+  for (const c of (Array.isArray(data && data.chips) ? data.chips : [])) {
+    if (!c || !c.num || String(c.afl || '')) continue;
+    const at = String(c.at || '').trim();
+    if (!at || /^ccol_/i.test(at)) continue;
+    const nk = _swwebK8(c.num);
+    if (nk.length !== 8) continue;
+    let apto = null, pega = false;
+    for (const p of casa) {
+      const v = (Array.isArray(p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === at);
+      if (v && v.volta && typeof v.volta === 'object' && v.volta[nk]) { pega = true; break; }
+      if (v) { if (v.ativo !== false && !(v.off && v.off[nk])) { pega = true; break; } continue; }
+      if (apto === null) apto = _swwebApto(c, nomeSt, ids);
+      if (apto) { pega = true; break; }
+    }
+    if (!pega) continue;
+    if (!out.has(at)) out.set(at, []);
+    out.get(at).push(nk);
+  }
+  return out;
+}
+// DESLIGA TODOS OS NUMEROS DA CASA DESTES DONOS, NUMA GRAVACAO SO, como o sistema. Le e grava so
+// chips, pressels e status (ver _estadoLe): captura, comentario e pagamento no meio nao derrubam.
+//
+// CONFERE O APP DE NOVO DEPOIS DE LER O ESTADO, e e o que impede o pior caso: a pessoa abre o app e
+// liga a chave entre a leitura do cron e a gravacao. Se ela abriu, sai da lista; se ela ligou depois
+// da leitura, a trava das chaves lidas recusa a gravacao e a volta seguinte ja ve o app aberto.
+// Devolve [{ at, nk, pids }] do que desligou agora.
+async function _swwebDesligaDonos(env, ats, o) {
+  const quer = [...new Set((ats || []).map((x) => String(x || '')).filter(Boolean))];
+  if (!quer.length) return [];
+  for (let tent = 0; tent < 6; tent++) {
+    const lido = await _estadoLe(env, ['chips', 'pressels', 'wa_statuses']);
+    if (!lido) return [];
+    const abertos = await _swwebAppAbertos(env, quer, o && o.exceto);
+    if (!abertos) return [];
+    const data = lido.data;
+    const mapa = _swwebLigadosPorDono(data);
+    const casa = (Array.isArray(data.pressels) ? data.pressels : []).filter((p) => p && !String(p.afl || ''));
+    const pids = casa.map((p) => p.id).join(',');
+    const feitos = [];
+    for (const at of quer) {
+      if (abertos.has(at)) continue;
+      const nks = mapa.get(at);
+      if (!nks || !nks.length) continue;
+      const todos = (Array.isArray(data.chips) ? data.chips : []).filter((c) => c && c.num && String(c.at || '') === at).map((c) => _swwebK8(c.num));
+      for (const nk of nks) {
+        for (const p of casa) _presselAplicaNum(p, at, nk, false, false, todos);
+        feitos.push({ at, nk, pids });
+      }
+    }
+    if (!feitos.length) return [];
+    const ver = await _estadoGrava(env, lido, { pressels: data.pressels }, String((o && o.marca) || 'app-fechado:') + [...new Set(feitos.map((f) => f.at))].join(','));
+    if (ver) {
+      try { _dashCache = null; } catch (_) {}
+      console.log(String((o && o.rotulo) || 'ROLETA_APP_FECHADO_OFF') + ' ' + feitos.map((f) => f.at + ':' + f.nk).join(' '));
+      // No MESMO registro das mexidas de gente: quem passar o mouse no interruptor da dash ve
+      // "desligado por Sistema (SellWave Web fechado)" e nao procura qual pessoa desligou.
+      for (const f of feitos) {
+        try { await _presselNumLog(env, { por: 'sistema', por_nome: String((o && o.por_nome) || 'Sistema (SellWave Web fechado)'), at: f.at, nk: f.nk, acao: 'desliga', pids: f.pids }); } catch (_) {}
+      }
+      return feitos;
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return [];
+}
+// A BATIDA DO CRON: quem tem numero da casa ligado e nao esta com o app aberto perde todos.
+// Sem ninguem ligado custa uma olhada no estado em cache; com, uma consulta numa tabela de poucas
+// linhas (um aluguel por numero aberto).
+async function _desligaAppFechado(env) {
+  let data = null;
+  try { data = await _getDashData(env); } catch (_) { return; }
+  const ligados = _swwebLigadosPorDono(data);
+  if (!ligados.size) return;
+  const abertos = await _swwebAppAbertos(env, [...ligados.keys()]);
+  if (!abertos) return;
+  const fechados = [...ligados.keys()].filter((at) => !abertos.has(at));
+  if (!fechados.length) return;
+  await _swwebDesligaDonos(env, fechados, { por_nome: 'Sistema (SellWave Web fechado)', marca: 'app-fechado:', rotulo: 'ROLETA_APP_FECHADO_OFF' });
+}
+// LIGAR COM O APP FECHADO: a frase da recusa. `souEu` = quem clicou e o dono do numero.
+async function _swwebRecusaLigar(env, at, souEu) {
+  if (!at || /^ccol_/i.test(String(at))) return null;
+  const abertos = await _swwebAppAbertos(env, [at]);
+  if (!abertos || abertos.has(String(at))) return null;   // leitura que falha nao trava o clique
+  if (souEu) return 'Abra o SellWave Web pra ligar: com o app fechado o número não recebe lead.';
+  let nome = '';
+  try { const r = await env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(String(at)).first(); nome = String((r && r.name) || '').trim().split(/\s+/)[0]; } catch (_) { nome = ''; }
+  return (nome || 'O dono do número') + ' está com o SellWave Web fechado. O número só liga com o app dele aberto.';
 }
 
 // O APP DO VENDEDOR PAROU DE REGISTRAR AS CONVERSAS (21/10/2026, a Barbara).
@@ -26187,6 +26387,8 @@ async function _desligaCaidos(env) {
 // fechado ou com a proxy caida NAO desliga nada - essas sao inferencias, e inferencia errada aqui
 // tira do ar o numero de um vendedor que esta trabalhando. O proprio Bruno pediu pra ser avisado
 // antes de qualquer coisa que pudesse fazer isso.
+// (31/10/2026: o APP FECHADO passou a desligar, a pedido dele, por outro caminho e com prova pelo
+// aluguel - ver _desligaAppFechado. Esta funcao continua so com o BANNED da Meta.)
 //
 // DESLIGA SEMPRE QUE ACHAR LIGADO, E O AVISO E QUE SO SAI UMA VEZ.
 //
@@ -31360,6 +31562,10 @@ export default {
     // consulta numa tabela de poucas linhas. A reserva por UPDATE condicional (feito=0 AND em=?)
     // impede duas batidas sobrepostas de agir duas vezes. Ver _desligaCaidos.
     try { await _desligaCaidos(env); } catch (e) { console.error('[cron] desligaCaidos falhou: ' + String((e && e.message) || e)); }
+    // FECHOU O SELLWAVE WEB, DESLIGA (31/10/2026). Toda batida e antes da trava, pelo mesmo motivo do
+    // de cima: cada minuto de atraso e clique pago num numero que ninguem esta olhando. Ver
+    // _desligaAppFechado.
+    try { await _desligaAppFechado(env); } catch (e) { console.error('[cron] desligaAppFechado falhou: ' + String((e && e.message) || e)); }
     // O SYNC VEM DEPOIS DO FUNIL, DE PROPOSITO (28/09/2026). Os dois rodam antes da trava, mas o
     // funil tem CLIENTE esperando do outro lado - cada segundo aqui e a mensagem dele atrasando.
     // O sync atrasa o que o vendedor LE, que e ruim mas nao e o lead desistindo.
