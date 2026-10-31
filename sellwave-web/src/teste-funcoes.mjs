@@ -617,6 +617,54 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('a pagina da barra carrega o crm.js', /<script src="crm\.js"><\/script>/.test(leia('ui/index.html')))
 }
 
+// ══ FECHOU O APP, DESLIGA OS INTERRUPTORES; TETO DE ABERTOS DA OPERACAO (31/10/2026) ══════════
+//
+// "Sempre que alguem fechasse o aplicativo, ele tambem parasse de receber leads (...) quando ele
+// acessasse novamente o aplicativo, ele teria que ligar novamente" (Bruno). O worker ja desliga
+// pelo aluguel vencido; o aviso do app e o que faz valer NA HORA, sem esperar a nuvem.
+{
+  console.log('\nfechou o app / teto de abertos da operacao')
+  const fonte = leia('main.js')
+  const corpo = recorta(fonte, 'function avisaFechando(por)')
+  const pedidos = []
+  const monta = (token) => new Function('config', 'EH_TESTE', 'anota', 'maquinaId', 'fetch',
+    'let avisouFechando = null\n' + corpo + '\nreturn { avisaFechando, zera: () => { avisouFechando = null } }')(
+    { token, apiBase: 'https://x.dev/' }, false, () => {}, () => 'maq-1',
+    (url, op) => { pedidos.push({ url, op }); return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, desligou: 3 }) }) })
+  const F = monta('tk-1')
+  await F.avisaFechando('fechou o app')
+  const p0 = pedidos[0] || { op: { headers: {} } }
+  vale('o aviso vai pro POST /api/swweb/fechando', pedidos.length === 1 && p0.url === 'https://x.dev/api/swweb/fechando' && p0.op.method === 'POST', JSON.stringify(pedidos.map((x) => x.url)))
+  vale('com o token e com a maquina (o servidor ignora os alugueis DESTA maquina)',
+    p0.op.headers.Authorization === 'Bearer tk-1' && p0.op.headers['x-sw-maquina'] === 'maq-1', JSON.stringify(p0.op.headers))
+  await F.avisaFechando('fechou o app')
+  vale('uma vez so por login: o X e o before-quit nao mandam dois', pedidos.length === 1, String(pedidos.length))
+  F.zera(); await F.avisaFechando('saiu da conta')
+  vale('depois de entrar de novo, o proximo fechamento avisa de novo', pedidos.length === 2, String(pedidos.length))
+  pedidos.length = 0
+  await monta('').avisaFechando('fechou o app')
+  vale('sem token nao manda nada', pedidos.length === 0, String(pedidos.length))
+  const sai = recorta(fonte, 'async function saiGuardando()')
+  vale('fechar pelo X avisa ANTES de fechar os numeros (o lead para de chegar agora, nao em 5 min)',
+    sai.indexOf("avisaFechando('fechou o app')") > 0 && sai.indexOf("avisaFechando('fechou o app')") < sai.indexOf('fechaNumero(nk)'))
+  vale('e o fechamento espera o aviso junto com a nuvem', /Promise\.allSettled\(\[\.\.\.despedidas\.values\(\), aviso\]\)/.test(sai))
+  const iSair = fonte.indexOf("ipcMain.handle('sw:sair'")
+  const trechoSair = fonte.slice(iSair, fonte.indexOf("config.token = ''", iSair))
+  vale('sair da conta avisa antes de fechar os numeros e de apagar o token',
+    trechoSair.indexOf("avisaFechando('saiu da conta')") > 0 && trechoSair.indexOf("avisaFechando('saiu da conta')") < trechoSair.indexOf('fechaNumero(nk)'))
+  const iQuit = fonte.indexOf("app.on('before-quit'")
+  vale('o before-quit tambem avisa (X sem numero aberto nao passa pelo saiGuardando)',
+    iQuit > 0 && /avisaFechando\('fechou o app'\)/.test(fonte.slice(iQuit, iQuit + 900)))
+  vale('entrar de novo rearma o aviso', /avisouFechando = null[^\n]*login novo/.test(fonte))
+  // O TETO: o servidor manda e vence o do disco; a tela da direcao grava no servidor, nao aqui.
+  vale('a lista traz o teto da operacao e ele vence o do disco', /const op = Math\.floor\(Number\(d\.config\.maxAbertos\) \|\| 0\)/.test(fonte) && /config\.maxAbertos = op/.test(fonte))
+  const iTeto = fonte.indexOf("ipcMain.handle('sw:teto'")
+  const trechoTeto = fonte.slice(iTeto, iTeto + 1600)
+  vale('so a direcao muda o teto', /if \(!config\.direcao\) return \{ ok: false/.test(trechoTeto))
+  vale('e muda NO SERVIDOR, gravando aqui so o que ele confirmou',
+    trechoTeto.indexOf("/api/swweb/config") > 0 && trechoTeto.indexOf('/api/swweb/config') < trechoTeto.indexOf('config.maxAbertos = Math.max'))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

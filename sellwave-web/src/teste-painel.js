@@ -1738,7 +1738,10 @@ app.whenReady().then(async () => {
     + ' cor: i ? getComputedStyle(i.querySelector(".ic")).color : "",'
     + ' selo: i ? (i.querySelector(".aj-fixo") || {}).textContent || "" : "",'
     + ' linhasDaOperacao: bloco.length,'
-    + ' chavesNaOperacao: bloco.reduce((t, x) => t + x.querySelectorAll(".sw, [role=switch], button").length, 0),'
+    // O MAIS E MENOS do teto de numeros abertos (31/10/2026) moram nesta secao e nao sao chave: so
+    // eles ficam de fora da conta. Qualquer outro botao aqui seria um jeito escondido de mexer na regra.
+    + ' chavesNaOperacao: bloco.reduce((t, x) => t + x.querySelectorAll(".sw, [role=switch]").length'
+    + ' + [...x.querySelectorAll("button")].filter(b => !b.closest(".aj-num")).length, 0),'
     + ' temSw1: !!document.getElementById("sw1"), temSw2: !!document.getElementById("sw2") } })()')
   conta('a regra de proxy esta escrita na tela, em verde',
     regra.achou === true && /\bon\b/.test(regra.classe) && /^rgb\(36, 194, 120\)/.test(regra.cor),
@@ -1750,8 +1753,8 @@ app.whenReady().then(async () => {
     JSON.stringify({ chaves: regra.chavesNaOperacao, sw1: regra.temSw1, sw2: regra.temSw2 }))
   // A SEGUNDA LINHA DIZ ONDE SE ESCOLHE A PROXY. Sem ela, a tela proibe e nao ensina: a pessoa le
   // "sem proxy nao abre" e nao tem nenhuma pista de onde resolver.
-  conta('e a secao diz onde se escolhe a proxy',
-    regra.linhasDaOperacao === 2 && /Contingência > Proxies/.test(await js2(
+  conta('e a secao diz onde se escolhe a proxy (e, desde 31/10, quantos numeros ficam abertos)',
+    regra.linhasDaOperacao === 3 && /Contingência > Proxies/.test(await js2(
       '(() => { const c = document.getElementById("modal-corpo"); return c.textContent })()')),
     JSON.stringify({ linhas: regra.linhasDaOperacao }))
 
@@ -1768,6 +1771,52 @@ app.whenReady().then(async () => {
     + ' cabe: c.getBoundingClientRect().height <= window.innerHeight } })()')
   conta('a janelinha tem teto de altura e a lista rola por dentro',
     altura.max !== 'none' && altura.rola === 'auto' && altura.cabe === true, JSON.stringify(altura))
+
+  // ══ NUMEROS ABERTOS AO MESMO TEMPO E DA OPERACAO (31/10/2026) ═════════════════════════
+  //
+  // "O meu vendedor falou que ele nao consegue abrir mais de 7 instancias ao mesmo tempo, sendo que
+  // eu coloquei ali o numero de abertas ao mesmo tempo para pelo menos 8" (Bruno). O ajuste era SO
+  // DAQUELE computador: o 8 dele valia no PC dele. Agora a direcao muda e vale pra equipe inteira.
+  const tetoDir = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' const sec = [...c.querySelectorAll(".aj-sec")];'
+    + ' const op = sec.find(x => /opera/i.test(x.textContent)), pc = sec.find(x => /computador/i.test(x.textContent));'
+    + ' const blocoDe = (s) => { const b = []; let n = s && s.nextElementSibling;'
+    + ' while (n && n.classList.contains("aj-item")) { b.push(n); n = n.nextElementSibling } return b };'
+    + ' const it = document.getElementById("aj-teto");'
+    + ' return { naOperacao: !!it && blocoDe(op).includes(it), noPc: blocoDe(pc).some(x => /abertos ao mesmo tempo/i.test(x.textContent)),'
+    + ' texto: it ? it.textContent : "", valor: (document.getElementById("teto") || {}).value } })()')
+  conta('na direcao, "Numeros abertos ao mesmo tempo" mora na secao DA OPERACAO, nao na do computador',
+    tetoDir.naOperacao === true && tetoDir.noPc === false, JSON.stringify(tetoDir))
+  conta('e a linha diz que vale em todos os computadores', /todos os computadores/.test(tetoDir.texto), tetoDir.texto)
+  const antesTeto = Number(tetoDir.valor)
+  await js2('(() => { document.getElementById("teto-mais").click() })()')
+  await espera(250)
+  const depoisMais = await js2('(() => ({ v: document.getElementById("teto").value,'
+    + ' ch: (window.__ver()).filter(c => c.nome === "teto").map(c => c.args[0]) }))()')
+  conta('o mais pede o proximo numero e o campo mostra o que ficou gravado',
+    Number(depoisMais.v) === antesTeto + 1 && depoisMais.ch[depoisMais.ch.length - 1] === antesTeto + 1, JSON.stringify(depoisMais))
+  // A DASH NAO GRAVOU (o duble recusa o 13): o campo nao pode ficar mostrando um teto que os outros
+  // computadores nao tem.
+  await js2('(() => { const c = document.getElementById("teto"); c.value = "13"; c.dispatchEvent(new Event("change")) })()')
+  await espera(250)
+  const recusou = await js2('(() => { const it = document.getElementById("aj-teto");'
+    + ' return { v: document.getElementById("teto").value, cls: it.className, txt: it.textContent } })()')
+  conta('recusado: o campo volta pro que vale e a linha diz que nao salvou',
+    Number(recusou.v) === antesTeto + 1 && /alerta/.test(recusou.cls) && /Não salvou/.test(recusou.txt), JSON.stringify(recusou))
+  // O VENDEDOR VE O NUMERO QUE VALE, sem botao: controle que nao muda nada e pior que nenhum.
+  await js2('(async () => { window.__poeDirecao(false); fechaModal(); await recarregaEstado(); document.getElementById("ajustes").click() })()')
+  await espera(350)
+  const tetoVend = await js2('(() => { const c = document.getElementById("modal-corpo");'
+    + ' const it = [...c.querySelectorAll(".aj-item")].find(x => /abertos ao mesmo tempo/i.test(x.textContent));'
+    + ' return { achou: !!it, controles: it ? it.querySelectorAll("button, input").length : -1,'
+    + ' fixo: ((it && it.querySelector(".aj-fixo")) || {}).textContent || "",'
+    + ' secoes: [...c.querySelectorAll(".aj-sec")].map(e => e.textContent.trim()), proxy: /obrigat/i.test(c.textContent) } })()')
+  conta('no vendedor o numero aparece sem botao, com o valor da direcao',
+    tetoVend.achou === true && tetoVend.controles === 0 && Number(tetoVend.fixo) === antesTeto + 1, JSON.stringify(tetoVend))
+  conta('numa secao que diz que quem define e a direcao (e sem a linha de proxy, que e so dela)',
+    /dire/i.test(tetoVend.secoes[0] || '') && tetoVend.proxy === false, JSON.stringify(tetoVend.secoes))
+  await js2('(async () => { window.__poeDirecao(true); fechaModal(); await recarregaEstado(); document.getElementById("ajustes").click() })()')
+  await espera(350)
 
   // UM CLIQUE NAO SAI. Este e o pedido em palavras, e e o que o rodape nao tinha.
   const saidasAntes = Number(await js2('(window.__ver()).filter(c => c.nome === "sair").length'))

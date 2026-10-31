@@ -1184,17 +1184,29 @@ function janelaAjustes() {
         '<span class="aj-fixo">' + (soltos ? soltos + ' livre' : (sem ? sem + ' sem' : 'na dash')) + '</span>')
   }
 
+  // NUMEROS ABERTOS AO MESMO TEMPO E DA OPERACAO (31/10/2026). Era "Só neste computador": o Bruno
+  // pos 8 no PC dele e o vendedor seguiu no padrao 6 da maquina dele ("nao consegue abrir mais de
+  // 7"). Agora a direcao muda aqui, o servidor guarda, e todo app da equipe le na lista. Quem nao e
+  // da direcao ve o numero que vale, SEM botao: controle que nao muda nada e pior que nenhum.
+  if (estado.direcao) {
+    html += ajItem('', AJ_IC.janelas,
+      'Números abertos ao mesmo tempo', 'Vale em todos os computadores da equipe. Passando disso, o mais parado fecha sozinho e volta sem pedir QR.',
+      '<div class="aj-num"><button id="teto-menos" title="Menos um">−</button>'
+      + '<input id="teto" value="' + t + '" inputmode="numeric" />'
+      + '<button id="teto-mais" title="Mais um">+</button></div>', ' id="aj-teto"')
+  } else {
+    html += '<div class="aj-sec">Da operação · a direção define</div>'
+      + ajItem('', AJ_IC.janelas,
+        'Números abertos ao mesmo tempo', 'Passando disso, o mais parado fecha sozinho e volta sem pedir QR.',
+        '<span class="aj-fixo" id="teto-fixo">' + t + '</span>')
+  }
+
   // ── SÓ NESTE COMPUTADOR ─────────────────────────────────────────────────────────────────
   const ligado = estado.painelLigado !== false
   html += '<div class="aj-sec">Só neste computador</div>'
     + ajItem(ligado ? 'on' : '', AJ_IC.painel,
       'Painel de venda ao lado', 'As respostas rápidas e os funis, do lado direito do WhatsApp.',
       '<button class="sw ' + (ligado ? 'on' : '') + '" id="sw3" role="switch" aria-checked="' + ligado + '"></button>')
-    + ajItem('', AJ_IC.janelas,
-      'Números abertos ao mesmo tempo', 'Passando do teto, o mais parado fecha sozinho e volta sem pedir QR.',
-      '<div class="aj-num"><button id="teto-menos" title="Menos um">−</button>'
-      + '<input id="teto" value="' + t + '" inputmode="numeric" />'
-      + '<button id="teto-mais" title="Mais um">+</button></div>')
     + ajItem('', AJ_IC.registro, 'Abrir registro desta máquina', 'O que o app anotou, pra mandar quando algo der errado.',
       '<span class="aj-seta">' + ajSvg(AJ_IC.seta) + '</span>',
       ' id="t-log" role="button" style="cursor:pointer"')
@@ -1251,18 +1263,31 @@ function janelaAjustes() {
     estado.painelLigado = r.ligado
     janelaAjustes()
   }
+  // O TETO VAI PRO SERVIDOR (ver acima), entao ele pode recusar ou nao responder: nesse caso o campo
+  // volta pro valor que vale e a linha diz por que, em vez de mostrar um numero que nao foi gravado.
   const poeTeto = async (v) => {
-    const r = await window.sw.teto(v)
-    estado.maxAbertos = r.maxAbertos
+    let r = null
+    try { r = await window.sw.teto(v) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
+    if (r && Number(r.maxAbertos)) estado.maxAbertos = Number(r.maxAbertos)
     const el = $('teto')
-    if (el) el.value = r.maxAbertos
+    if (el) el.value = Number(estado.maxAbertos) || 6
+    const it = $('aj-teto')
+    const ajuda = it && it.querySelector('.txt span')
+    if (it && ajuda) {
+      it.classList.toggle('alerta', !(r && r.ok))
+      ajuda.textContent = r && r.ok
+        ? 'Vale em todos os computadores da equipe. Passando disso, o mais parado fecha sozinho e volta sem pedir QR.'
+        : 'Não salvou: ' + ((r && r.erro) || 'a dash não respondeu')
+    }
     await recarregaEstado()
   }
-  $('teto').onchange = (e) => poeTeto(e.target.value)
-  // MAIS E MENOS, porque o campo de digitar sozinho obriga selecionar e apagar pra trocar de 6 pra
-  // 5. O teto anda de um em um; quem quiser pular digita.
-  $('teto-menos').onclick = () => poeTeto(Math.max(1, (Number($('teto').value) || 6) - 1))
-  $('teto-mais').onclick = () => poeTeto(Math.min(20, (Number($('teto').value) || 6) + 1))
+  if ($('teto')) {
+    $('teto').onchange = (e) => poeTeto(e.target.value)
+    // MAIS E MENOS, porque o campo de digitar sozinho obriga selecionar e apagar pra trocar de 6 pra
+    // 5. O teto anda de um em um; quem quiser pular digita.
+    $('teto-menos').onclick = () => poeTeto(Math.max(1, (Number($('teto').value) || 6) - 1))
+    $('teto-mais').onclick = () => poeTeto(Math.min(20, (Number($('teto').value) || 6) + 1))
+  }
   const sel = $('como')
   if (sel) {
     $('como-bt').onclick = (ev) => { ev.stopPropagation(); sel.classList.toggle('aberta') }

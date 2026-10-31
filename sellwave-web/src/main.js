@@ -1769,8 +1769,39 @@ function limpaParticoesVelhas() {
 // FECHAR O APP ESPERA A NUVEM. Sem isto o X fechava tudo no mesmo instante e o que estava aberto
 // nunca subia: justamente o caso do Bruno, que pareia os numeros e fecha o app.
 let saindoDeVez = false
+
+// FECHOU O APP, PARA DE RECEBER LEAD (31/10/2026, pedido do Bruno: "sempre que alguem fechasse o
+// aplicativo, ele tambem parasse de receber leads (...) quando ele acessasse novamente o aplicativo,
+// ele teria que ligar novamente"). A dash desliga TODOS os interruptores da pessoa logada.
+//
+// O worker ja faz isso sozinho quando os alugueis somem (o cron olha o swweb_uso), entao este aviso
+// nao e a unica trava: e o que faz valer NA HORA. Sem ele o fechamento espera a nuvem (ate 5 min)
+// com os alugueis vivos, e nesse meio tempo os numeros seguiriam recebendo clique pago.
+// Uma vez por login: sair da conta e entrar de novo rearma (ver sw:entrar).
+let avisouFechando = null
+function avisaFechando(por) {
+  if (avisouFechando) return avisouFechando
+  if (!config.token || EH_TESTE) return Promise.resolve()
+  anota('[roleta] ' + por + ': pedindo pra dash desligar os interruptores')
+  avisouFechando = fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/fechando', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId() },
+    body: JSON.stringify({ por }),
+    signal: AbortSignal.timeout(8000),
+  }).then(async (r) => {
+    const d = await r.json().catch(() => null)
+    anota('[roleta] dash respondeu ' + r.status + ': ' + ((d && d.desligou) || 0) + ' interruptor(es) desligado(s)')
+  }).catch((e) => {
+    anota('[roleta] o aviso nao chegou (' + ((e && e.message) || e) + '); a dash desliga sozinha quando os alugueis vencerem')
+  })
+  return avisouFechando
+}
+
 async function saiGuardando() {
   saindoDeVez = true
+  // PRIMEIRO O AVISO, antes de fechar qualquer numero: ele usa o token, e o que interessa e o lead
+  // parar de chegar agora, nao daqui a cinco minutos.
+  const aviso = avisaFechando('fechou o app')
   const n = abertos.size + despedidas.size
   avisaCasca('sw:saindo', { n })
   for (const nk of [...abertos.keys()]) {
@@ -1780,7 +1811,7 @@ async function saiGuardando() {
   // CINCO MINUTOS NO MAXIMO: a primeira subida de uma conta grande demora, e um numero pareado agora
   // ainda espera os 3 minutos do PAREAMENTO_MIN_MS antes de subir (21/10/2026). Mas o app nao pode
   // ficar preso pra sempre por causa de uma rede ruim.
-  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(300000)])
+  await Promise.race([Promise.allSettled([...despedidas.values(), aviso]), espera(300000)])
   try { if (janela && !janela.isDestroyed()) janela.destroy() } catch (_) { /* ok */ }
   app.quit()
 }
@@ -2242,6 +2273,9 @@ app.on('before-quit', () => {
   // expediente geraria um alarme de queda por numero aberto, e alarme falso diario mata a
   // credibilidade do aviso em uma semana.
   try { for (const nk of abertos.keys()) marcaFechouNaMao(nk) } catch (_) { /* saindo mesmo */ }
+  // O AVISO DE FECHAMENTO tambem sai daqui (ver avisaFechando): sem numero aberto o X nao passa pelo
+  // saiGuardando. O before-quit nao espera promessa; se nao chegar, a dash desliga pelo aluguel.
+  try { avisaFechando('fechou o app') } catch (_) { /* saindo mesmo */ }
   gravaFila()
   // Solta o que esta na mao antes de sair. Nao da pra esperar a resposta (o before-quit nao espera
   // promessa), mas o pedido sai; e se nao sair, o aluguel vence em 2 minutos de qualquer jeito.
@@ -2930,7 +2964,18 @@ async function buscaNumeros() {
       for (const n of lista) if (n && n.at && n.dono) vistos.set(String(n.at), String(n.dono))
       donosConhecidos = [...vistos].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
     }
+    // NUMEROS ABERTOS AO MESMO TEMPO VEM DA DIRECAO (31/10/2026). Era so do disco desta maquina: o
+    // Bruno pos 8 no PC dele e os vendedores seguiram no padrao 6, cada um no seu. Agora o servidor
+    // manda o da operacao e ele vence o do disco; sem valor la (nunca gravado), fica o daqui.
+    // Abaixou com mais numeros abertos que o novo teto: a hibernacao fecha os mais parados, nunca o
+    // que esta na tela nem o que esta disparando funil (ver candidatosHibernacao).
     if (d && d.config) {
+      const op = Math.floor(Number(d.config.maxAbertos) || 0)
+      if (op >= 1 && op <= 20 && op !== (Number(config.maxAbertos) || 0)) {
+        anota('[memoria] teto da operacao: ' + (Number(config.maxAbertos) || 6) + ' -> ' + op + ' numeros abertos')
+        config.maxAbertos = op
+        setTimeout(() => { try { hibernaSePrecisar() } catch (_) { /* a proxima abertura confere */ } }, 0)
+      }
     }
     gravarConfig()
     return { ok: true, numeros: lista }
@@ -3017,11 +3062,15 @@ ipcMain.handle('sw:entrar', async (_e, { login, senha }) => {
   if (!tk) return { ok: false, erro: 'A dash não devolveu o acesso. Avise a direção.' }
   config.token = String(tk)
   config.nome = (d.user && (d.user.name || d.user.login)) || usuario
+  avisouFechando = null   // login novo: o proximo fechamento avisa de novo (ver avisaFechando)
   gravarConfig()
   return buscaNumeros()
 })
 
 ipcMain.handle('sw:sair', async () => {
+  // SAIR DA CONTA E FECHAR O APP PRA ESTA REGRA (31/10/2026, ver avisaFechando): os interruptores
+  // da pessoa desligam. Antes de fechar os numeros e de apagar o token, que o aviso precisa.
+  const aviso = avisaFechando('saiu da conta')
   // FECHA OS NUMEROS ANTES DE APAGAR O TOKEN. O `fechaNumero` solta o aluguel de uso no servidor, e
   // isso so funciona com o token ainda valido: invertendo a ordem, o numero ficaria carimbado como
   // "em uso por voce" pra equipe inteira ate o aluguel vencer sozinho, e ninguem conseguiria abrir.
@@ -3030,7 +3079,7 @@ ipcMain.handle('sw:sair', async () => {
   }
   // E ESPERA A NUVEM: o envio da sessao e o soltar do aluguel precisam do token que vai sumir abaixo.
   // Cinco minutos pelo mesmo motivo do saiGuardando (pareamento novo espera 3 antes de subir).
-  await Promise.race([Promise.allSettled([...despedidas.values()]), espera(300000)])
+  await Promise.race([Promise.allSettled([...despedidas.values(), aviso]), espera(300000)])
   config.token = ''
   config.nome = ''
   gravarConfig()
@@ -4188,12 +4237,31 @@ ipcMain.handle('sw:limite', async (_e, { nk, lim }) => {
   }
 })
 
-ipcMain.handle('sw:teto', (_e, { maxAbertos }) => {
+// NUMEROS ABERTOS AO MESMO TEMPO (31/10/2026): da OPERACAO, nao desta maquina. Quem muda e a
+// direcao, e o valor vai pro servidor (POST /api/swweb/config) e chega em todo app da equipe na
+// leitura seguinte da lista. So grava aqui o que o servidor confirmou: guardar o pedido antes faria
+// esta tela mostrar um teto que os outros computadores nao tem.
+ipcMain.handle('sw:teto', async (_e, { maxAbertos }) => {
+  const atual = Number(config.maxAbertos) || 6
+  if (!config.direcao) return { ok: false, erro: 'Quem define é a direção.', maxAbertos: atual }
+  if (!config.token) return { ok: false, erro: 'Entre de novo.', maxAbertos: atual }
   const n = Math.max(1, Math.min(20, Number(maxAbertos) || 6))
-  config.maxAbertos = n
-  gravarConfig()
-  hibernaSePrecisar()
-  return { ok: true, maxAbertos: n }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId() },
+      body: JSON.stringify({ maxAbertos: n }),
+      signal: AbortSignal.timeout(15000),
+    })
+    const d = await r.json().catch(() => null)
+    if (!r.ok || !d || !d.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('A dash respondeu ' + r.status), maxAbertos: atual }
+    config.maxAbertos = Math.max(1, Math.min(20, Number(d.maxAbertos) || n))
+    gravarConfig()
+    hibernaSePrecisar()
+    return { ok: true, maxAbertos: config.maxAbertos }
+  } catch (e) {
+    return { ok: false, erro: 'Não deu pra falar com a dash.', maxAbertos: atual }
+  }
 })
 
 ipcMain.handle('sw:abrirLog', () => { try { shell.showItemInFolder(ARQ_LOG()) } catch (_) { /* ok */ } return { ok: true } })

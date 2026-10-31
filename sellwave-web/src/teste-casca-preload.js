@@ -9,6 +9,9 @@ let painelLigado = true
 // (trava desligada fica ambar), e stub que devolve sempre a mesma coisa nunca deixaria o teste ver
 // a troca de cor. O mesmo vale pro teto, que agora tem botoes de mais e menos.
 let maxAbertos = 6
+// QUEM ESTA LOGADO E DA DIRECAO? (31/10/2026) O teto de numeros abertos virou ajuste da OPERACAO: a
+// direcao muda, o vendedor so ve. O teste troca pra vendedor com __poeDirecao(false) e volta.
+let direcao = true
 // AS FOTOS DA EQUIPE (23/10/2026): comecam VAZIAS, como no app de verdade (o main baixa depois da
 // lista chegar e avisa por 'sw:fotos'). O teste chama __fotosChegaram e confere que a barra redesenha.
 const URL_FOTO_GUI = 'https://axion-api.axion-dash.workers.dev/api/users/foto/a1/h1'
@@ -35,7 +38,7 @@ let MARCACAO = { prontos: 1, em: Date.now(), faltavam: 0, numeros: 1 }
 const ESTADO = () => ({
   temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
   // Os dois campos vem SEMPRE TRUE, como o main.js real manda desde que viraram constante.
-  direcao: true, travaProxy: true, exigirBrasil: true, maxAbertos,
+  direcao, travaProxy: true, exigirBrasil: true, maxAbertos,
   abertos: ['1574060653'], barraEncolhida, painelLigado,
   // o numero aberto (e fora da tela) tem 3 conversas esperando: a lista mostra o contador (20/10/2026)
   naoLidas: { '1574060653': 3 },
@@ -111,8 +114,13 @@ contextBridge.exposeInMainWorld('sw', {
   numeros: () => { chamadas.push({ nome: 'numeros' }); return Promise.resolve({ ok: true, numeros: ESTADO().numeros }) },
   esconder: () => { chamadas.push({ nome: 'esconder' }); return Promise.resolve({ ok: true }) },
   mostrar: () => { chamadas.push({ nome: 'mostrar' }); return Promise.resolve({ ok: true }) },
+  // O main de verdade manda pro servidor e so grava o que ele confirmou; vendedor e recusado ali.
+  // O 13 RECUSA de proposito: e o caso em que a dash nao gravou e a tela tem que voltar pro valor
+  // que vale, dizendo por que.
   teto: (v) => {
     chamadas.push({ nome: 'teto', args: [v] })
+    if (!direcao) return Promise.resolve({ ok: false, erro: 'Quem define é a direção.', maxAbertos })
+    if (Number(v) === 13) return Promise.resolve({ ok: false, erro: 'A dash respondeu 503', maxAbertos })
     maxAbertos = Math.max(1, Math.min(20, Number(v) || 6))
     return Promise.resolve({ ok: true, maxAbertos })
   },
@@ -137,6 +145,7 @@ contextBridge.exposeInMainWorld('__fotosChegaram', () => {
   fotos = { [URL_FOTO_GUI]: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' }
   for (const fn of ouvintes['sw:fotos'] || []) fn({})
 })
+contextBridge.exposeInMainWorld('__poeDirecao', (v) => { direcao = !!v })
 // Ver a nota no teste-painel-preload: array exposto direto nasce congelado.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
 // Pra o teste poder simular o que o processo principal devolveria depois de esconder o painel.
