@@ -13208,7 +13208,17 @@ async function handleSwWeb(req, env, path) {
         // O DESLIGADO GUARDA O LUGAR NA NUMERACAO, mas nao pega a vez (19/10/2026, pedido do Bruno:
         // "gostaria que ficasse sempre o numero", e a Chegada de leads da dash ja numera assim, com o
         // estado 'off'). Quem decide a vez continua vendo so os ligados, pelo motivo do comentario acima.
-        const r = _aplicaFilaLimite(emFila.filter((u) => !u.off), lh, _brDay());
+        // A RESERVA DO AQUECIMENTO (31/10/2026): a mesma conta da roleta, senao a barra do app diria
+        // "recebendo" num chip que a roleta segurou porque tem gente a caminho.
+        let lhFila = lh;
+        try {
+          const aqL = _aqListaDosChips(chips, _ids.aquec);
+          if (aqL.length) {
+            const dia0 = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
+            lhFila = _aqPlacar(lh, aqL, await _aqReservaLe(env, aqL.map((x) => x.nk), dia0), Math.floor(Date.now() / 1000)).placar;
+          }
+        } catch (_) { lhFila = lh; }
+        const r = _aplicaFilaLimite(emFila.filter((u) => !u.off), lhFila, _brDay());
         // A POSICAO E DENTRO DA FILA DO VENDEDOR, nao da lista toda: o vendedor ve "1, 2, 3" dele.
         const posDe = {};
         for (const u of emFila.slice().sort((a, b) => (a.ordem - b.ordem) || (a.idx - b.idx))) {
@@ -23717,7 +23727,7 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
       // Bruno usa num numero de producao): soltar o teto de um chip de tres dias e exatamente o que
       // a rampa existe pra impedir.
       nums.push(aquec
-        ? {num:c.num, inst:instP, roleta, lim:aquec.lim, livre:'', dist:'limite', ordem:aquec.ordem, idx:Number(c.idx)||0, aquec:aquec.dia}
+        ? {num:c.num, inst:instP, roleta, lim:aquec.lim, livre:'', dist:'limite', ordem:aquec.ordem, idx:Number(c.idx)||0, aquec:aquec.dia, teto:aquec.teto, api:!!c.api}
         : {num:c.num, inst:instP, roleta, lim:Number(c.lim_dia)||0, livre:String(c.lim_livre||''), dist:(c.dist==='limite'?'limite':''), ordem:Number(c.lim_ordem)||0, idx:Number(c.idx)||0});
     }
     if(!nums.length) continue;                                                      // nenhum número ligado/conectado → fora da roleta
@@ -23930,6 +23940,119 @@ function _numDoAquecimento(c) {
   const dia = _diaDoAquecimento(c);
   const teto = limiteDoAquecimento(dia);
   return { dia, teto, lim: _tetoAcumulado(teto, _horaBR()), dist: 'limite', ordem: -1 };
+}
+
+// ══ RESERVA DO AQUECIMENTO (31/10/2026, pedido do Bruno) ══════════════════════════════════════
+//
+// O TETO DO AQUECIMENTO CONTAVA SO LEAD JA MARCADO, e lead leva minutos pra ser marcado. Nesse meio
+// tempo o chip, que e o primeiro da fila do vendedor, levava TODA visita. Os dois casos que ele viu:
+//   - 31/10, APP FECHADO: o Kevin so abriu o (49) 98893-1497 e o 98894-8922 as 08:19. Das 07:16 as
+//     08:06 eles levaram 37 e 35 visitas com o placar parado em 0; ao abrir, a colheita marcou 10
+//     leads em 30 s e o 1497 fechou o dia em 11 de 5.
+//   - 30/10, APP ABERTO: o (49) 98890-8842 do Guilherme levou 70 visitas entre 14:23 e 14:42 e fechou
+//     em 6 de 5. Os outros quatro chips do dia levaram rajadas de 19 a 43 visitas em 20 minutos.
+//
+// A REGRA: visita de hoje mandada pro chip em aquecimento que ainda nao virou lead OCUPA uma vaga do
+// teto, ate dar pra afirmar que ela nao vira mais. Nunca ha mais gente a caminho do que vaga aberta:
+// se todas virarem conversa, o chip fecha exatamente no teto.
+//
+// QUANDO A VISITA SOLTA A VAGA: 20 min depois, e SO se a captura do numero estava viva depois desses
+// 20 min (o heartbeat do app). Fechado no app nao solta nada, porque nao da pra saber se a pessoa
+// escreveu: e o caso do dia 31. Ele continua recebendo, mas so o que cabe no teto, e os leads estao
+// la quando o vendedor abre (o que o Bruno pediu em 20/10 pro horario de almoco continua valendo).
+//   MEDIDO EM 31/10 (7 dias, 1.678 leads com visita casada): 81% escrevem ate 5 min depois do
+//   clique e 87% ate 20 min; com o app aberto a marcacao leva 0,3 min na mediana.
+// A ULTIMA VAGA DO DIA segura 60 min: e a cauda (quem escreve meia hora depois) que fazia o 5 virar 6.
+// Simulado com os atrasos reais e conversao de 13% (a dos chips em 30/10): o teto de 5 passava em 33%
+// dos dias com o app aberto e em 97% com o app abrindo 08:19; com a reserva, 2%, e nunca por mais de
+// 1. O preco: o chip entrega 4,5 em media em vez de 5.
+// NOS 2 MIN DEPOIS DE ABRIR O APP nenhuma visita solta: a colheita ainda esta marcando o que chegou com
+// ele fechado (em 31/10 levou de 38 a 65 s).
+// Chip da API oficial (`api`) nao depende do app pra receber mensagem (vem pelo webhook): vale so a
+// janela.
+// O LEAD DO PLACAR SAI FRESCO AQUI, nao do cache de 30 s: a visita deixa de ocupar vaga no instante em
+// que o lead e marcado, e com o placar atrasado a vaga ficaria livre duas vezes por ate 30 s.
+const AQ_RESERVA_JANELA = 1200;
+const AQ_RESERVA_ULTIMA = 3600;
+const AQ_RESERVA_CARENCIA = 120;
+// Ate que hora (unix) a captura do numero estava viva. 0 = nao da pra afirmar nada.
+function _aqVivoAte(x, agora) {
+  if (x && x.api) return agora;
+  const uso = x && x.uso;
+  if (uso && Number(uso.ate) > agora && agora - (Number(uso.desde) || 0) < AQ_RESERVA_CARENCIA) return 0;
+  return Number(x && x.hb) || 0;
+}
+// Quantas visitas ainda ocupam vaga. `visitas` = hora das visitas de hoje que nenhum lead reivindicou.
+function _aqReservaConta(visitas, leads, teto, vivoAte, agora) {
+  const janela = (Number(teto) > 0 && (Number(leads) || 0) >= Number(teto) - 1) ? AQ_RESERVA_ULTIMA : AQ_RESERVA_JANELA;
+  let n = 0;
+  for (const ts of (visitas || [])) {
+    const t = Number(ts) || 0;
+    if (!((agora - t >= janela) && (Number(vivoAte) || 0) >= t + janela)) n++;
+  }
+  return n;
+}
+// O que a roleta, o diag e o app comparam com o teto do chip em aquecimento: lead de hoje (o maior
+// entre o cache e a leitura fresca) mais as vagas ocupadas. Os outros numeros ficam como estavam.
+// lista = [{ nk, teto, api }].
+function _aqPlacar(lh, lista, lido, agora) {
+  const placar = Object.assign({}, lh || {}), res = {};
+  if (!lido) return { placar, res };
+  for (const x of (lista || [])) {
+    const nk = String((x && x.nk) || '');
+    if (!nk || Object.prototype.hasOwnProperty.call(res, nk)) continue;
+    const leads = Math.max(Number(placar[nk]) || 0, Number(lido.leads && lido.leads[nk]) || 0);
+    const vivoAte = _aqVivoAte({ api: !!x.api, hb: lido.hb && lido.hb[nk], uso: lido.uso && lido.uso[nk] }, agora);
+    const n = _aqReservaConta((lido.visitas && lido.visitas[nk]) || [], leads, x.teto, vivoAte, agora);
+    res[nk] = n;
+    placar[nk] = leads + n;
+  }
+  return { placar, res };
+}
+// AS QUATRO LEITURAS NUMA IDA SO, so pros chips em aquecimento (de 2 a 10 numeros). A de visita anda
+// pelo indice (num_key, claimed, ts) e le so as visitas nao reivindicadas daquele numero hoje.
+// Falhou o lote, tenta uma por uma; sem a de visita nao ha reserva (o chamador segue so com o lead).
+let _aqNksVistos = [];   // os chips em aquecimento da ultima escolha: a pagina ja dispara a leitura no comeco
+function _aqNksLembra(nks) {
+  const k = (nks || []).map(String).filter((x) => /^\d{8}$/.test(x)).sort();
+  if (k.join(',') !== _aqNksVistos.join(',')) _aqNksVistos = k.slice(0, 40);
+}
+async function _aqReservaLe(env, nks, dayStart) {
+  const lista = [...new Set((nks || []).map(String).filter((k) => /^\d{8}$/.test(k)))].slice(0, 40);
+  const out = { nks: lista, visitas: {}, leads: {}, hb: {}, uso: {} };
+  if (!lista.length) return out;
+  const marcas = lista.map(() => '?').join(',');
+  const agora = Math.floor(Date.now() / 1000);
+  const sqlVis = (dica) => `SELECT num_key nk, ts FROM tt_pending ${dica} WHERE num_key IN (${marcas}) AND claimed=0 AND ts>=?`;
+  const consultas = [
+    () => env.DB.prepare(sqlVis('INDEXED BY idx_ttp_numkey')).bind(...lista, dayStart),
+    () => env.DB.prepare(`SELECT substr(replace(num,'+',''),-8) nk, COUNT(*) n FROM wa_lead WHERE ts>=? AND COALESCE(src,'')<>'deduzido' AND substr(replace(num,'+',''),-8) IN (${marcas}) GROUP BY 1`).bind(dayStart, ...lista),
+    () => env.DB.prepare(`SELECT substr(self_number,-8) nk, MAX(last_seen) t FROM sc_heartbeat WHERE wpp_seen=1 AND substr(self_number,-8) IN (${marcas}) GROUP BY 1`).bind(...lista),
+    () => env.DB.prepare(`SELECT substr(nk,-8) nk, desde, ate FROM swweb_uso WHERE substr(nk,-8) IN (${marcas}) AND ate > ?`).bind(...lista, agora),
+  ];
+  let r = null;
+  try { r = await env.DB.batch(consultas.map((f) => f())); }
+  catch (_) {
+    r = [];
+    // sem o indice (banco novo) a consulta de visita e a mesma, so mais cara
+    try { r[0] = await consultas[0]().all(); } catch (_1) { r[0] = await env.DB.prepare(sqlVis('')).bind(...lista, dayStart).all(); }
+    for (let i = 1; i < consultas.length; i++) { try { r[i] = await consultas[i]().all(); } catch (_2) { r[i] = { results: [] }; } }
+  }
+  for (const x of ((r[0] && r[0].results) || [])) (out.visitas[String(x.nk)] = out.visitas[String(x.nk)] || []).push(Number(x.ts) || 0);
+  for (const x of ((r[1] && r[1].results) || [])) out.leads[String(x.nk)] = Number(x.n) || 0;
+  for (const x of ((r[2] && r[2].results) || [])) out.hb[String(x.nk)] = Number(x.t) || 0;
+  for (const x of ((r[3] && r[3].results) || [])) out.uso[String(x.nk)] = { desde: Number(x.desde) || 0, ate: Number(x.ate) || 0 };
+  return out;
+}
+// Os chips em aquecimento de uma lista de chips, no formato que o _aqPlacar quer.
+function _aqListaDosChips(chips, aquecIds) {
+  const out = [];
+  for (const c of (chips || [])) {
+    if (!c || !c.num || !_chipAquecendo(c, aquecIds)) continue;
+    const nk = String(c.num).replace(/\D/g, '').slice(-8);
+    if (nk) out.push({ nk, teto: _numDoAquecimento(c).teto, api: !!c.api });
+  }
+  return out;
 }
 
 function _numNoLimite(n, lh, hoje){
@@ -24333,6 +24456,10 @@ function _roletaAdianta(env, dayStart) {
     // os "novos" saem do MESMO cache do lead do dia: depois que ele chegou, nao e outra ida ao banco
     leadsNovos: _lado(leadsHoje.then(() => _leadsNovosHojePorNumero(env, dayStart))),
     clique: _lado(_cliqueDiaPorNumero(env, dayStart)),
+    // A RESERVA DO AQUECIMENTO tambem sai aqui, pelos chips que a ultima escolha desta instancia viu.
+    // Se a lista mudou (chip novo), a roleta le de novo so pra ela. Sem cache: e a leitura que segura
+    // o teto, e ela precisa ver a visita que acabou de ser gravada por outra instancia.
+    aqRes: _aqNksVistos.length ? _lado(_aqReservaLe(env, _aqNksVistos, dayStart)) : null,
   };
 }
 async function _presselBalancedPick(env, id, sellers, pre){
@@ -24345,7 +24472,7 @@ async function _presselBalancedPick(env, id, sellers, pre){
   // 1) Candidatos: TODO número ligado (principal e complementar valem igual).
   let avail=[];
   for(const s of sellers){
-    for(const n of (s.nums||[])) avail.push({num:n.num, at:s.at, inst:n.inst, roleta:!!n.roleta, lim:Number(n.lim)||0, livre:String(n.livre||''), dist:n.dist||'', ordem:Number(n.ordem)||0, idx:Number(n.idx)||0});
+    for(const n of (s.nums||[])) avail.push({num:n.num, at:s.at, inst:n.inst, roleta:!!n.roleta, lim:Number(n.lim)||0, livre:String(n.livre||''), dist:n.dist||'', ordem:Number(n.ordem)||0, idx:Number(n.idx)||0, aquec:Number(n.aquec)||0, teto:Number(n.teto)||0, api:!!n.api});
   }
   if(!avail.length) return null;
 
@@ -24400,7 +24527,27 @@ async function _presselBalancedPick(env, id, sellers, pre){
   let _foraLimite = [];
   if(avail.some(u => u.dist === 'limite')){
     try{
-      const lh = await ((_pre && _pre.leadsNovos) || _leadsNovosHojePorNumero(env, dayStart));
+      let lh = await ((_pre && _pre.leadsNovos) || _leadsNovosHojePorNumero(env, dayStart));
+      // RESERVA DO AQUECIMENTO (31/10/2026, ver _aqReservaConta): o chip que aquece compara com o teto
+      // o lead de hoje MAIS a visita que ainda pode virar lead. Falhou a leitura, segue so com o lead
+      // (que e o comportamento de antes): a roleta nunca para por causa disto.
+      let _aqRes = {};
+      const _aqLista = avail.concat(_mudosFora).filter(u => u.aquec).map(u => ({ nk: k8(u.num), teto: u.teto, api: u.api }));
+      if(_aqLista.length){
+        try{
+          const nks = [...new Set(_aqLista.map(x => x.nk))];
+          _aqNksLembra(nks);
+          let lido = null;
+          if(_pre && _pre.aqRes){ try{ const p0 = await _pre.aqRes; if(p0 && nks.every(k => p0.nks.includes(k))) lido = p0; }catch(_){ } }
+          if(!lido) lido = await _aqReservaLe(env, nks, dayStart);
+          // SEM somar o _pickLog aqui: a visita e gravada ANTES da resposta, entao a escolha anterior
+          // ja esta no banco quando esta leitura sai, e somar contava a mesma visita duas vezes (o teste
+          // de rota pegou: o chip levava 1 quando cabiam 2). Sobra so a corrida de duas visitas no
+          // mesmo meio segundo, que o teto aceita.
+          const pl = _aqPlacar(lh, _aqLista, lido, now);
+          lh = pl.placar; _aqRes = pl.res;
+        }catch(e){ console.log('AQUEC_RESERVA_FALHOU ' + String((e && e.message) || e).slice(0, 120)); }
+      }
       let r = _aplicaFilaLimite(avail, lh, _brDay());
       // MUDO + TETO NAO PODEM ESVAZIAR A ROLETA JUNTOS (17/10/2026, 364 cliques sem numero): se o teto
       // zerou a lista e a guarda do mudo tinha tirado alguem, ele volta e a fila e refeita com ele.
@@ -24414,7 +24561,7 @@ async function _presselBalancedPick(env, id, sellers, pre){
       }
       if(r.ficam.length){
         _foraLimite = r.bateram.concat(r.esperam);
-        for(const u of r.bateram) console.log('ROLETA_LIMITE num=' + k8(u.num) + ' leads=' + (lh[k8(u.num)]||0) + ' limite=' + u.lim);
+        for(const u of r.bateram) console.log('ROLETA_LIMITE num=' + k8(u.num) + ' leads=' + (lh[k8(u.num)]||0) + ' limite=' + u.lim + (_aqRes[k8(u.num)] ? ' (aquecimento: ' + _aqRes[k8(u.num)] + ' a caminho)' : ''));
         avail = r.ficam;
       } else {
         console.log('ROLETA_TODOS_NO_LIMITE pressel=' + id + ' numeros=' + avail.length + ' -> sem numero ate a meia-noite');
@@ -25040,6 +25187,21 @@ async function handlePresselMeus(req, env) {
       aquec: aq ? { dia: aq.dia, teto: aq.teto, agora: aq.lim } : null,
       idx: Number(c.idx) || 0 };
   });
+  // A RESERVA DO AQUECIMENTO (31/10/2026, ver _aqReservaConta): a mesma conta da roleta, pra tela do
+  // vendedor nao dizer "recebendo" num chip segurado porque tem gente a caminho.
+  let lhFila = lh;
+  const aquecReserva = {};
+  try {
+    const aqL = _aqListaDosChips(meus, _aquecMeus);
+    if (aqL.length) {
+      const pl = _aqPlacar(lh, aqL, await _aqReservaLe(env, aqL.map((x) => x.nk), Math.floor(new Date(hoje + 'T00:00:00-03:00').getTime() / 1000)), Math.floor(Date.now() / 1000));
+      lhFila = pl.placar;
+      for (const k of Object.keys(pl.res)) {
+        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, (Number(pl.placar[k]) || 0) - (Number(pl.res[k]) || 0));
+        if (pl.res[k]) aquecReserva[k] = pl.res[k];
+      }
+    }
+  } catch (_) { lhFila = lh; }
   // ONDE ESTA RECEBENDO AGORA (13/10/2026): a mesma conta do diagnostico (roleta + fila do Limite),
   // pra tela do vendedor dizer a verdade em vez de "ligado em alguma pressel".
   const recebendo = {};
@@ -25053,13 +25215,13 @@ async function handlePresselMeus(req, env) {
       const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
       const todos = [];
       for (const s of sellers) for (const n of (s.nums || [])) todos.push({ at: s.at, num: n.num, lim: n.lim, livre: n.livre, dist: n.dist, ordem: n.ordem, idx: n.idx });
-      const f = _aplicaFilaLimite(todos, lh, hoje);
+      const f = _aplicaFilaLimite(todos, lhFila, hoje);
       for (const n of f.ficam) if (String(n.at) === meu) { const k = k8(n.num); (recebendo[k] = recebendo[k] || []).push(p.id); }
     }
   } catch (_) {}
   let mexidas = {};
   try { const m = await _presselMexidas(env); for (const k of Object.keys(m)) if (k.indexOf(meu + ':') === 0) mexidas[k.slice(meu.length + 1)] = m[k]; } catch (_) {}
-  return json({ ok: true, hoje, numeros, pressels, leadsHoje, recebendo, mexidas });
+  return json({ ok: true, hoje, numeros, pressels, leadsHoje, aquecReserva, recebendo, mexidas });
 }
 // MARCAS DO NUMERO DESLIGADO NA ROLETA (15/09/2026). A fila do modo Limite do Guilherme pulou o 2
 // ((15) 99237-1970): ele saiu da roleta em 14/09 14:16, quando tinha caido da API, voltou 14:25 e
@@ -26205,6 +26367,17 @@ async function handlePresselDiag(req, env){
   const _diaIni = Math.floor(new Date(_hojeD + 'T00:00:00-03:00').getTime() / 1000);
   let _lhD = {};
   try { _lhD = await _leadsNovosHojePorNumero(env, _diaIni); } catch (_) { _lhD = {}; }
+  // A RESERVA DO AQUECIMENTO ENTRA NA MESMA CONTA (31/10/2026): sem ela a tela diria "recebendo" num
+  // chip que a roleta segurou porque tem gente a caminho. `_lhFila` e so pra decidir a vez; o placar
+  // que aparece na tela continua sendo o lead (`_lhD`).
+  let _lhFila = _lhD, _aqResD = {};
+  try {
+    const _aqL = _aqListaDosChips(chips, _aquecIdsDe(data));
+    if (_aqL.length) {
+      const pl = _aqPlacar(_lhD, _aqL, await _aqReservaLe(env, _aqL.map((x) => x.nk), _diaIni), Math.floor(Date.now() / 1000));
+      _lhFila = pl.placar; _aqResD = pl.res;
+    }
+  } catch (_) { _lhFila = _lhD; _aqResD = {}; }
   const _k8d = (n) => String(n || '').replace(/\D/g, '').slice(-8);
   // Gestor de trafego: numero cortado e NADA de limite (ver _roletaResumida). O `numeros` continua
   // indo, cortado: "Entregando lead para" e o que diz a ele que a pressel esta viva.
@@ -26216,7 +26389,7 @@ async function handlePresselDiag(req, env){
     const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
     const _todos = [];
     for(const s of sellers) for(const n of (s.nums||[])) _todos.push({ at:s.at, num:n.num, lim:n.lim, livre:n.livre, dist:n.dist, ordem:n.ordem, idx:n.idx });
-    const _fila = _aplicaFilaLimite(_todos, _lhD, _hojeD);
+    const _fila = _aplicaFilaLimite(_todos, _lhFila, _hojeD);
     // QUANDO NINGUEM PODE RECEBER, A LISTA DE QUEM RECEBE E VAZIA (16/10/2026, auditoria).
     //
     // O `|| _todos` publicava a lista COMPLETA no campo que a tela le como "quem esta recebendo
@@ -26228,7 +26401,7 @@ async function handlePresselDiag(req, env){
     // O motivo continua viajando em `todosNoLimite`, `noLimite` e `motivo`, que e onde a tela
     // explica o que aconteceu.
     const numeros = (_fila.ficam.length ? _fila.ficam : []).map((n) => ({ at:n.at, num:n.num }));
-    const noLimite = _fila.bateram.map((n) => ({ at:n.at, num:n.num, leads:_lhD[_k8d(n.num)] || 0, lim:Number(n.lim) || 0 }));
+    const noLimite = _fila.bateram.map((n) => ({ at:n.at, num:n.num, leads:_lhD[_k8d(n.num)] || 0, lim:Number(n.lim) || 0, caminho:_aqResD[_k8d(n.num)] || 0 }));
     const todosNoLimite = _todos.length > 0 && !_fila.ficam.length;
     // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
     let motivo = '';
@@ -26334,11 +26507,18 @@ async function handlePresselDiag(req, env){
   // Placar de leads de HOJE por numero, pro "32/70" do limite na tela. So os numeros desta operacao
   // (mesma regra do alarme de numero mudo acima) e nada pra quem ve numero reduzido.
   let leadsHoje = {};
+  const aquecReserva = {};
   try {
     if (!_acessoReduzido(u)) {
       const _mMundo2 = (noMundoAfiliado(u) || afiliadoSemVinculo(u)) ? String(aflDe(u) || '\u0000') : '';
       const _meus2 = new Set(chips.filter((c) => c && String(c.afl || '') === _mMundo2).map((c) => _k8d(c.num)).filter(Boolean));
       for (const k of Object.keys(_lhD)) if (_meus2.has(k)) leadsHoje[k] = _lhD[k];
+      // chip em aquecimento: o lead lido na hora (o _lhD e o cache de 30 s) e as vagas ocupadas por
+      // quem ja clicou e ainda nao chegou, pra tela explicar por que o chip esta segurado
+      for (const k of Object.keys(_aqResD)) if (_meus2.has(k)) {
+        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, (Number(_lhFila[k]) || 0) - (Number(_aqResD[k]) || 0));
+        if (_aqResD[k]) aquecReserva[k] = _aqResD[k];
+      }
     }
   } catch (_) { leadsHoje = {}; }
   // Gestor de trafego nao recebe a lista de numeros mudos: e alarme de perda com quantidade
@@ -26367,7 +26547,7 @@ async function handlePresselDiag(req, env){
       for (const k of Object.keys(mexidas)) if (!_meusMx.has(k.slice(k.lastIndexOf(':') + 1))) delete mexidas[k];
     } catch (_) { mexidas = {}; }
   }
-  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k),
+  return json({ ok:true, pressels: out, leadsHoje: _resumido ? {} : leadsHoje, aquecReserva: _resumido ? {} : aquecReserva, hoje: _hojeD, mexidas, mudos: _resumido ? [] : Object.keys(mudos).map((k)=>({ num: _cortaNum ? _num4(k) : k, visitas: mudos[k], saiu: _saiuMesmo(k),
       // CEGO = a dash nao viu NENHUMA mensagem daquele numero na janela, nem a que o proprio
       // vendedor mandou (26/10/2026). E outro problema que "o lead nao respondeu", e a tela
       // precisa dizer qual dos dois: num caso o lead e ruim, no outro a dash esta cega e o
