@@ -90,14 +90,14 @@ const DB = {
 const env = { DB };
 sq.exec('CREATE TABLE dashboard_state (id INTEGER PRIMARY KEY, data TEXT, version INTEGER, updated_at INTEGER, updated_by TEXT)');
 sq.exec('CREATE TABLE swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)');
-sq.exec('CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)');
-sq.exec("INSERT INTO users VALUES ('kevin','Kevin Marques'),('gui','Guilherme')");
+sq.exec('CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)');
+sq.exec("INSERT INTO users VALUES ('kevin','Kevin Marques','atendente'),('gui','Guilherme','atendente'),('hay','Haynan','cobrador')");
 
 const fabrica = new Function('_getDashData', '_brDay', '_chipAquecendo', '_numDoAquecimento', '_chipsDaPressel',
   'let _dashCache = null; let _apiMorto = new Set(); let _apiMortoEm = 0;\n'
   + consts.map(([, l]) => l).join('\n') + '\n' + blocos.map(([, b]) => b).join('\n')
   + '\nreturn { _swwebLigadosPorDono, _swwebDesligaDonos, _desligaAppFechado, _plantaoDonos, _plantaoLimpa,'
-  + ' _resolvePresselSellers, _presselAplicaNum, _limpaMarcasDesligado, _emUsoIdsDe, _foraIdsDe, _aquecIdsDe };');
+  + ' _resolvePresselSellers, _presselAplicaNum, _limpaMarcasDesligado, _emUsoIdsDe, _foraIdsDe, _aquecIdsDe, _cobIds, _chipDeCobranca };');
 
 // chip em aquecimento = tem warm_start ou a tag de aquecimento; o teto da rampa nao importa aqui
 const aquecIdsGlobal = new Set(['aquecimento', 'st_aquec']);
@@ -115,7 +115,7 @@ const F = fabrica(
 // de ban, e um em aquecimento. Duas pressels da casa e uma de afiliado.
 const K1 = '5515991872193', K2 = '5515991879743';
 const G1 = '5515974076200', G_RISCO = '5515992503977', G_AQ = '5549988931497';
-const AF = '5511999990000';
+const AF = '5511999990000', COB = '5521988887777';
 const k8 = (n) => String(n).replace(/\D/g, '').slice(-8);
 const nkApp = (n) => String(n).replace(/\D/g, '').replace(/^55/, '').replace(/^(\d\d)9(\d{8})$/, '$1$2');
 const EM_USO = 'st_emuso', AQUEC = 'st_aquec';
@@ -131,6 +131,9 @@ const CHIPS = [
   { num: G_RISCO, at: 'gui', st: 'ativo', wa_st: EM_USO, em_uso: true },
   { num: G_AQ, at: 'gui', st: 'ativo', wa_st: AQUEC, warm_start: '2026-10-29' },
   { num: AF, at: 'kevin', afl: 'aflX', st: 'ativo', wa_st: EM_USO, em_uso: true },
+  // O NUMERO DO COBRADOR (corte da Sell 02, 31/10/2026): fica na operacao e esta "Em uso", mas
+  // nunca entra na roleta - nem na primeira passada, nem no plantao. Ver a secao 11.
+  { num: COB, at: 'hay', st: 'ativo', wa_st: EM_USO, em_uso: true },
 ];
 function monta(vend) {
   const data = {
@@ -157,9 +160,14 @@ const appOffDe = (pid, at) => Object.keys(vend(pid, at).app_off || {});
 const offDe = (pid, at) => Object.keys(vend(pid, at).off || {});
 
 // a roleta de verdade, com a pressel do estado. `plantao` = true pede a segunda passada.
+// O CORTE DE COBRANCA ENTRA AQUI DE PROPOSITO. Na producao ele mora no `_chipsDaPressel`, por onde
+// passam os TRES chamadores do _resolvePresselSellers (roleta, /api/swweb/numeros e Chegada de
+// leads), e a segunda passada do plantao usa a MESMA lista de chips da primeira. O teste chama a
+// funcao DE VERDADE (`_chipDeCobranca`) em vez de reescrever o filtro, senao ele provaria a copia.
 const roleta = (pid, plantao) => {
   const d = estado();
-  return F._resolvePresselSellers(pressel(pid), d.chips.filter((c) => !c.afl), new Map(), F._emUsoIdsDe(d),
+  const chips = d.chips.filter((c) => !c.afl && !F._chipDeCobranca(c));
+  return F._resolvePresselSellers(pressel(pid), chips, new Map(), F._emUsoIdsDe(d),
     F._foraIdsDe(d), aquecIdsGlobal, plantao);
 };
 const numerosDa = (pid, plantao) => roleta(pid, plantao).flatMap((s) => (s.nums || []).map((n) => k8(n.num))).sort();
@@ -303,6 +311,20 @@ const normaliza = fonte.slice(fonte.indexOf('if (Array.isArray(patch.vendedores)
 conta('o normalizador do patch carrega app_off junto', /for \(const mk of \['auto_off', 'volta', 'app_off'\]\)/.test(normaliza.slice(0, 2000)));
 conta('e o _limpaMarcasDesligado apaga as tres',
   /for \(const mk of \['auto_off', 'volta', 'app_off'\]\)/.test(funcao('_limpaMarcasDesligado')));
+
+console.log('\n11. O NUMERO DO COBRADOR NUNCA FAZ PLANTAO');
+// A mesa de cobranca nao recebe comprador novo: se o numero do Haynan virasse o plantao da
+// madrugada, quem clicasse no anuncio as 3h cairia na COBRANCA em vez de num vendedor. Seria ao
+// contrario do funil e nao daria erro em lugar nenhum.
+monta([...OPERACAO(), { at: 'hay', ativo: true }]);
+await F._cobIds(env);   // carrega o _cobIdsMem do banco (a propria funcao do worker)
+conta('o worker reconhece o chip do cobrador', F._chipDeCobranca({ at: 'hay', num: COB })
+  && !F._chipDeCobranca({ at: 'gui', num: G1 }));
+await F._desligaAppFechado(env);
+const comCob = numerosDa(1, true);
+conta('o numero do cobrador NAO esta no plantao', !comCob.includes(k8(COB)), comCob.join());
+conta('e o plantao continua achando o numero do vendedor', comCob.includes(k8(G1)), comCob.join());
+conta('nem na primeira passada ele aparece', !numerosDa(1, false).includes(k8(COB)));
 
 console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
 if (falhas.length) { console.log('\nFALHOU:'); for (const f of falhas) console.log('  - ' + f); process.exit(1); }
