@@ -2,7 +2,7 @@
 // contra um D1 de mentira (node:sqlite em memoria). Nao toca em producao.
 // Uso: node teste-libera-uso.mjs <bundle>/worker.js
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 const [bundle] = process.argv.slice(2)
@@ -34,7 +34,16 @@ const NK = '1599999999'
 const estado = { chips: [{ id: 1, num: '(15) 99999-9999', at: 'vend_kevin', st: 'ativo', wa_st: '', em_uso: true }], pressels: [], leads: [] }
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado))
 
-const mod = await import(pathToFileURL(bundle).href)
+// O IMPORT `cloudflare:sockets` NAO CARREGA NO NODE (31/10/2026). O node so resolve file, data e
+// node, entao `import(bundle)` morria com ERR_UNSUPPORTED_ESM_URL_SCHEME e o teste inteiro nao
+// rodava - falha que parece "teste quebrado" e nao "falta um stub". Mesma reescrita dos outros
+// testes de rota: troca o import por uma classe vazia numa copia do bundle.
+const _fonteB = readFileSync(bundle, 'utf8').replace(/^import\s*\{([^}]*)\}\s*from\s*['"]cloudflare:[^'"]+['"];?/gm,
+  (m, nn) => nn.split(',').map((x) => x.trim()).filter(Boolean)
+    .map((x) => { const [a, b] = x.split(/\s+as\s+/); return 'const ' + (b || a) + ' = class {};' }).join(' '))
+const _copiaB = bundle.replace(/\.js$/, '') + '-libera-uso.mjs'
+writeFileSync(_copiaB, _fonteB)
+const mod = await import(pathToFileURL(_copiaB).href)
 const worker = mod.default
 const env = { DB, MEDIA: null }
 const ctx = { waitUntil: () => {} }

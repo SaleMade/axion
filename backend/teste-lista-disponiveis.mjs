@@ -18,7 +18,7 @@
 //   npx wrangler deploy --dry-run --outdir <dir>
 //   node teste-lista-disponiveis.mjs <dir>/worker.js
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 const [bundle] = process.argv.slice(2)
@@ -79,7 +79,16 @@ const estado = {
 }
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado))
 
-const worker = (await import(pathToFileURL(bundle).href)).default
+// O IMPORT `cloudflare:sockets` NAO CARREGA NO NODE (31/10/2026). O node so resolve file, data e
+// node, entao `import(bundle)` morria com ERR_UNSUPPORTED_ESM_URL_SCHEME e o teste inteiro nao
+// rodava - falha que parece "teste quebrado" e nao "falta um stub". Mesma reescrita dos outros
+// testes de rota: troca o import por uma classe vazia numa copia do bundle.
+const _fonteB = readFileSync(bundle, 'utf8').replace(/^import\s*\{([^}]*)\}\s*from\s*['"]cloudflare:[^'"]+['"];?/gm,
+  (m, nn) => nn.split(',').map((x) => x.trim()).filter(Boolean)
+    .map((x) => { const [a, b] = x.split(/\s+as\s+/); return 'const ' + (b || a) + ' = class {};' }).join(' '))
+const _copiaB = bundle.replace(/\.js$/, '') + '-lista-disponiveis.mjs'
+writeFileSync(_copiaB, _fonteB)
+const worker = (await import(pathToFileURL(_copiaB).href)).default
 const env = { DB }, ctx = { waitUntil: () => {} }
 const pede = async (tk, maq) => {
   const r = await worker.fetch(new Request('https://x/api/swweb/numeros', {

@@ -43,6 +43,9 @@ const conta = (nome, certo, detalhe) => {
 };
 
 const nomes = ['_swwebAppAbertos', '_swwebLigadosPorDono', '_swwebDesligaDonos', '_desligaAppFechado', '_swwebRecusaLigar',
+  // o plantao da madrugada (31/10/2026) e chamado de dentro do _desligaAppFechado: sem recortar as
+  // duas, o teste quebra com ReferenceError e parece que a regra do app fechado parou de valer
+  '_plantaoDonos', '_plantaoLimpa',
   '_estadoLe', '_estadoGrava', '_presselAplicaNum', '_limpaMarcasDesligado', '_amanhaBR', '_presselNumLogEnsure', '_presselNumLog',
   '_emUsoIdsDe', '_aquecIdsDe', '_papelSt', '_papelPeloNomeSt', '_swwebApto', '_chipAquecendo', '_chipEmUso'];
 const blocos = nomes.map((n) => [n, funcao(n)]);

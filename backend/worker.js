@@ -8201,10 +8201,13 @@ async function handlePresselSave(req, env) {
           const off = {}; for (const k in v.off) { const nk = String(k).replace(/\D/g, '').slice(-8); if (nk && v.off[k]) off[nk] = true; }
           if (Object.keys(off).length) o.off = off;
         }
-        // As marcas do desligado (auto_off e volta) passam junto, senao a tela que salva o array
-        // inteiro apagaria o "volta a meia-noite" sem ninguem pedir. So pra numero que segue desligado.
+        // As marcas do desligado (auto_off, volta e app_off) passam junto, senao a tela que salva o
+        // array inteiro apagaria o "volta a meia-noite" sem ninguem pedir. So pra numero que segue
+        // desligado. O `app_off` ESTA NESTA LISTA de proposito (31/10/2026): sem ele, salvar a
+        // pressel em qualquer tela apagaria a marca do plantao em silencio e a madrugada seguinte
+        // voltaria a perder lead - defeito que ninguem ligaria a um clique de "salvar".
         if (o.off) {
-          for (const mk of ['auto_off', 'volta']) {
+          for (const mk of ['auto_off', 'volta', 'app_off']) {
             if (!(v && v[mk] && typeof v[mk] === 'object')) continue;
             const m = {};
             for (const k in v[mk]) {
@@ -23640,8 +23643,11 @@ function _aquecIdsDe(data){
   }); }catch(_){}
   return ids;
 }
-function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
+function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds, plantao){
   const out=[];
+  // SEGUNDA PASSADA = PLANTAO. `plantao === true` e o pedido ("se nao achar ninguem, tenta o
+  // plantao"); a chamada que ela faz a si mesma no fim manda a string, e e ela que solta o app_off.
+  const soltaAppOff = plantao === 'plantao';
   const _fora = foraIds || new Set(['restrito','banido']);
   const okWa=(c)=>!_fora.has(String((c&&c.wa_st)||'').toLowerCase());
   // "Em uso" igual o frontend enxerga: flag em_uso (true OU 1 — o JSON grava dos dois
@@ -23700,6 +23706,8 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
     // Sem principal/reserva/swap. Regra de ouro mantida: SÓ "Em uso" recebe, sem fallback pro mine[0].
     // Todos vão pra MESMA instância ax_<at> (a atribuição casa por NÚMERO, não pela instância).
     const off = (v.off && typeof v.off === 'object') ? v.off : null;               // números DESLIGADOS (chave = últimos 8 dígitos)
+    // PLANTAO: quais desses foram desligados pelo app do dono fechando (ver _limpaMarcasDesligado).
+    const appOff = (soltaAppOff && v.app_off && typeof v.app_off === 'object') ? v.app_off : null;
     const nums = [];
     // TODOS os números "Em uso" do vendedor, LIGADOS OU NÃO. Não escolhe quem recebe: serve pro
     // PLACAR (ver a nota do `cv` no _presselBalancedPick). Lead que já entrou é do vendedor, e
@@ -23720,6 +23728,9 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
     }
     for(const c of mine){
       const aquec = _chipAquecendo(c, aquecIds) ? _numDoAquecimento(c) : null;
+      // NUMERO EM AQUECIMENTO NAO FAZ PLANTAO: a rampa existe pra impedir despejo num chip novo, e
+      // de madrugada nao ha ninguem pra atender o que cair nele. Plantao e numero de producao.
+      if(soltaAppOff && aquec) continue;
       // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
       // A ORDEM DESTAS TRES LINHAS E O BUG (18/10/2026, achado por auditoria).
       //
@@ -23738,7 +23749,10 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
       if((!aquec && !isEmUso(c)) || !c.num) continue;
       const nk = String(c.num).replace(/\D/g,'').slice(-8);
       if(!okWa(c)) continue;                                                      // tag fora (banido, restrito, exclusivo)
-      if(off && off[nk]) continue;                                                 // interruptor DESSE número desligado
+      // O INTERRUPTOR MANDA, MENOS NO PLANTAO DA MADRUGADA (31/10/2026). `soltaAppOff` so vem
+      // ligado na segunda passada, e ela so roda quando a primeira nao achou NINGUEM; mesmo ali, so
+      // volta o numero cuja unica razao de estar off e o dono ter fechado o SellWave Web.
+      if(off && off[nk] && !(appOff && appOff[nk])) continue;                       // interruptor DESSE número desligado
       // MODO ROLETA NAO EXIGE CONEXAO (11/09/2026, pedido do Bruno: "a Evolution a gente nao vai
       // utilizar mais, substitui por uma coleta padrao, como se fosse uma pressel normal").
       // O modo de captura do chip (chip.conn) era so rotulo de tela - este laco nunca o lia. Quem
@@ -23789,7 +23803,29 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds){
       if(nums.length) out.push({at:'', nums});
     }
   }catch(_){}
-  return out;
+  if(out.length || plantao !== true) return out;
+  // ─── PLANTAO DA MADRUGADA (31/10/2026, pedido do Bruno) ──────────────────────────────────────
+  //
+  // O CASO: desde 31/10 fechar o SellWave Web desliga todos os interruptores da pessoa (regra dele,
+  // ver _desligaAppFechado). De madrugada ninguem esta com o app aberto, entao TODO numero fica off
+  // e a pressel abre SEM NUMERO: o clique pago some. Palavras dele: "as vezes acaba caindo algum
+  // lead de madrugada (...) gostaria que a pressel sempre mandasse para algum numero que esta em
+  // algum dos vendedores, caso todos eles estejam com o SellWave Web fechado".
+  //
+  // POR QUE DA PRA MANDAR PRO NUMERO FECHADO: desde 20/10 o chip da casa nao precisa do app aberto
+  // pro `_chipVivo` (so nao pode estar BANNED na Meta). O lead cai no WhatsApp do vendedor e a
+  // captura o pega quando ele reabre, que e o que o teste-lead-atrasado.mjs guarda. A pergunta foi
+  // feita ao Bruno em 18/10 e ficou sem resposta ate hoje (memoria roleta-casa-sem-api-app-aberto).
+  //
+  // E SO ULTIMO RECURSO, e por isso mora DEPOIS do `out.length`: a passada de cima e a de sempre,
+  // com o interruptor mandando. Aqui voltam apenas os numeros marcados `app_off`, ou seja os que
+  // estao desligados SO porque o dono fechou o app. Numero que GENTE desligou (risco de ban,
+  // exclusivo, "ate amanha") nunca volta, e numero em aquecimento tambem nao (a rampa existe pra
+  // isso). Quem recebe por plantao vem marcado `plantao: true`, pra tela nao dizer que o
+  // interruptor esta ligado quando ele nao esta.
+  const pl = _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds, 'plantao');
+  for(const s of pl){ s.plantao = true; for(const x of (s.nums || [])) x.plantao = true; }
+  return pl;
 }
 // LEADS DE HOJE POR NÚMERO — fonte de verdade do placar da roleta.
 // Tem que vir de wa_lead, não do `claimed` de tt_pending. `claimed` conta CLIQUE reivindicado, e o
@@ -25234,6 +25270,7 @@ async function handlePresselMeus(req, env) {
   // ONDE ESTA RECEBENDO AGORA (13/10/2026): a mesma conta do diagnostico (roleta + fila do Limite),
   // pra tela do vendedor dizer a verdade em vez de "ligado em alguma pressel".
   const recebendo = {};
+  const plantao = {};   // numero recebendo DESLIGADO, por nao ter ninguem com o app aberto
   try {
     const liveSet = await _presselLiveSet(env);
     await _carregaApiMorto(env);   // o _servConnOk le isto de forma sincrona, entao carrega antes
@@ -25241,16 +25278,16 @@ async function handlePresselMeus(req, env) {
     const chipsAll = Array.isArray(data.chips) ? data.chips : [];
     for (const p of (Array.isArray(data.pressels) ? data.pressels : [])) {
       if (!p || !conta(p.id) || (p.status && p.status !== 'ativa') || !_chipsDaPressel(p, meus).length) continue;
-      const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
+      const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chipsAll), liveSet, emUsoIds, foraIds, _aquecIdsDe(data), true);
       const todos = [];
-      for (const s of sellers) for (const n of (s.nums || [])) todos.push({ at: s.at, num: n.num, lim: n.lim, livre: n.livre, dist: n.dist, ordem: n.ordem, idx: n.idx });
+      for (const s of sellers) for (const n of (s.nums || [])) todos.push({ at: s.at, num: n.num, lim: n.lim, livre: n.livre, dist: n.dist, ordem: n.ordem, idx: n.idx, plantao: !!n.plantao });
       const f = _aplicaFilaLimite(todos, lhFila, hoje);
-      for (const n of f.ficam) if (String(n.at) === meu) { const k = k8(n.num); (recebendo[k] = recebendo[k] || []).push(p.id); }
+      for (const n of f.ficam) if (String(n.at) === meu) { const k = k8(n.num); (recebendo[k] = recebendo[k] || []).push(p.id); if (n.plantao) plantao[k] = true; }
     }
   } catch (_) {}
   let mexidas = {};
   try { const m = await _presselMexidas(env); for (const k of Object.keys(m)) if (k.indexOf(meu + ':') === 0) mexidas[k.slice(meu.length + 1)] = m[k]; } catch (_) {}
-  return json({ ok: true, hoje, numeros, pressels, leadsHoje, aquecReserva, recebendo, mexidas });
+  return json({ ok: true, hoje, numeros, pressels, leadsHoje, aquecReserva, recebendo, plantao, mexidas });
 }
 // MARCAS DO NUMERO DESLIGADO NA ROLETA (15/09/2026). A fila do modo Limite do Guilherme pulou o 2
 // ((15) 99237-1970): ele saiu da roleta em 14/09 14:16, quando tinha caido da API, voltou 14:25 e
@@ -25260,7 +25297,15 @@ async function handlePresselMeus(req, env) {
 //                                 caiu). So a propria trava religa sozinha, quando ele voltar.
 //   v.volta[nk]    = 'AAAA-MM-DD' o cron religa nesse dia (_presselVoltaTick), logo depois da
 //                                 meia-noite. E o "hoje fica fora, amanha volta pro lugar dele".
-// Qualquer clique de gente no interruptor apaga as duas: quem liga ou desliga na mao e quem decide.
+//   v.app_off[nk]  = true         quem desligou foi o SellWave Web do dono FECHANDO (31/10/2026,
+//                                 _desligaAppFechado). E a marca do PLANTAO DA MADRUGADA: com
+//                                 NINGUEM pra receber, a roleta volta a admitir so estes - ver
+//                                 _resolvePresselSellers. Existe porque o off do sistema e
+//                                 indistinguivel do off de gente (os dois gravam off[nk] = true) e
+//                                 um plantao cego religaria o numero que o Bruno desligou de
+//                                 proposito. Numero parado por gente ate amanha (v.volta) NAO
+//                                 ganha a marca, mesmo quando o cron o desliga por app fechado.
+// Qualquer clique de gente no interruptor apaga as tres: quem liga ou desliga na mao e quem decide.
 // O DIA SEGUINTE, no fuso de Brasilia. Quem decide a data e o SERVIDOR: a tela so pede "desliga ate
 // amanha" e o relogio do navegador dela nao entra na conta.
 function _amanhaBR() {
@@ -25269,7 +25314,7 @@ function _amanhaBR() {
 }
 function _limpaMarcasDesligado(v, nk) {
   if (!v) return;
-  for (const mk of ['auto_off', 'volta']) {
+  for (const mk of ['auto_off', 'volta', 'app_off']) {
     if (v[mk] && typeof v[mk] === 'object') { delete v[mk][nk]; if (!Object.keys(v[mk]).length) delete v[mk]; }
     else if (mk in v) delete v[mk];
   }
@@ -25911,7 +25956,20 @@ async function _swwebDesligaDonos(env, ats, o) {
       if (!nks || !nks.length) continue;
       const todos = (Array.isArray(data.chips) ? data.chips : []).filter((c) => c && c.num && String(c.at || '') === at).map((c) => _swwebK8(c.num));
       for (const nk of nks) {
-        for (const p of casa) _presselAplicaNum(p, at, nk, false, false, todos);
+        for (const p of casa) {
+          // A MARCA DO PLANTAO, POR PRESSEL (31/10/2026). Antes de desligar, olha como o numero
+          // estava NESTA pressel: se gente ja o tinha desligado (off, vendedor inteiro off, ou
+          // "desligado ate amanha" em v.volta, que e o caso que traz o numero pra ca sem estar
+          // ligado), a decisao e dela e o numero NAO entra no plantao. O _presselAplicaNum apaga as
+          // marcas do desligado, entao a nossa so pode ser gravada DEPOIS dele.
+          const _vA = (Array.isArray(p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === at);
+          const _deGente = !!(_vA && (_vA.ativo === false || (_vA.off && _vA.off[nk]) || (_vA.volta && _vA.volta[nk])));
+          _presselAplicaNum(p, at, nk, false, false, todos);
+          if (!_deGente) {
+            const _v = (Array.isArray(p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === at);
+            if (_v) { const _m = (_v.app_off && typeof _v.app_off === 'object') ? _v.app_off : {}; _m[nk] = true; _v.app_off = _m; }
+          }
+        }
         feitos.push({ at, nk, pids });
       }
     }
@@ -25931,16 +25989,65 @@ async function _swwebDesligaDonos(env, ats, o) {
   }
   return [];
 }
+// QUEM TEM MARCA DE PLANTAO no estado: Set de donos com algum v.app_off gravado.
+function _plantaoDonos(data) {
+  const out = new Set();
+  for (const p of (Array.isArray(data && data.pressels) ? data.pressels : [])) {
+    if (!p || String(p.afl || '')) continue;
+    for (const v of (Array.isArray(p.vendedores) ? p.vendedores : [])) {
+      if (!v || !v.at) continue;
+      if (v.app_off && typeof v.app_off === 'object' && Object.keys(v.app_off).length) out.add(String(v.at));
+    }
+  }
+  return out;
+}
+// APAGA A MARCA DE PLANTAO destes donos (nao mexe no interruptor: o numero segue desligado, so para
+// de valer como ultimo recurso da roleta). Usa a mesma trava de chaves do _swwebDesligaDonos.
+async function _plantaoLimpa(env, ats) {
+  const quer = new Set((ats || []).map((x) => String(x || '')).filter(Boolean));
+  if (!quer.size) return 0;
+  for (let tent = 0; tent < 4; tent++) {
+    const lido = await _estadoLe(env, ['pressels']);
+    if (!lido) return 0;
+    const pressels = Array.isArray(lido.data.pressels) ? lido.data.pressels : [];
+    let mexeu = 0;
+    for (const p of pressels) {
+      if (!p || String(p.afl || '')) continue;
+      for (const v of (Array.isArray(p.vendedores) ? p.vendedores : [])) {
+        if (!v || !v.at || !quer.has(String(v.at))) continue;
+        if (v.app_off && typeof v.app_off === 'object' && Object.keys(v.app_off).length) { delete v.app_off; mexeu++; }
+      }
+    }
+    if (!mexeu) return 0;
+    const ver = await _estadoGrava(env, lido, { pressels }, 'plantao-fim:' + [...quer].join(','));
+    if (ver) {
+      try { _dashCache = null; } catch (_) {}
+      console.log('ROLETA_PLANTAO_FIM ' + [...quer].join(' '));
+      return mexeu;
+    }
+    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
+  }
+  return 0;
+}
 // A BATIDA DO CRON: quem tem numero da casa ligado e nao esta com o app aberto perde todos.
 // Sem ninguem ligado custa uma olhada no estado em cache; com, uma consulta numa tabela de poucas
 // linhas (um aluguel por numero aberto).
+//
+// E A VOLTA DO PLANTAO (31/10/2026): quem ABRIU o app perde a marca `app_off`. Sem isto, a roleta
+// seguiria mandando lead pro numero de gente acordada que ainda NAO ligou a chave - e a regra do
+// Bruno e que, ao voltar, ela tem que ligar. O plantao e so pra quando NAO HA ninguem aberto.
+// Os dois lados saem da MESMA consulta de alugueis, entao a batida nao ficou mais caro.
 async function _desligaAppFechado(env) {
   let data = null;
   try { data = await _getDashData(env); } catch (_) { return; }
   const ligados = _swwebLigadosPorDono(data);
-  if (!ligados.size) return;
-  const abertos = await _swwebAppAbertos(env, [...ligados.keys()]);
+  const marcados = _plantaoDonos(data);
+  const quem = [...new Set([...ligados.keys(), ...marcados])];
+  if (!quem.length) return;
+  const abertos = await _swwebAppAbertos(env, quem);
   if (!abertos) return;
+  const voltou = [...marcados].filter((at) => abertos.has(at));
+  if (voltou.length) { try { await _plantaoLimpa(env, voltou); } catch (e) { console.error('[cron] plantaoLimpa falhou: ' + String((e && e.message) || e)); } }
   const fechados = [...ligados.keys()].filter((at) => !abertos.has(at));
   if (!fechados.length) return;
   await _swwebDesligaDonos(env, fechados, { por_nome: 'Sistema (SellWave Web fechado)', marca: 'app-fechado:', rotulo: 'ROLETA_APP_FECHADO_OFF' });
@@ -26588,9 +26695,9 @@ async function handlePresselDiag(req, env){
   let _semNumD = {};
   try { _semNumD = await _presselCliquesSemNumero(env); } catch (_) { _semNumD = {}; }
   const out = pressels.map((p)=>{
-    const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds, _aquecIdsDe(data));
+    const sellers = _resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, foraIds, _aquecIdsDe(data), true);
     const _todos = [];
-    for(const s of sellers) for(const n of (s.nums||[])) _todos.push({ at:s.at, num:n.num, lim:n.lim, livre:n.livre, dist:n.dist, ordem:n.ordem, idx:n.idx });
+    for(const s of sellers) for(const n of (s.nums||[])) _todos.push({ at:s.at, num:n.num, lim:n.lim, livre:n.livre, dist:n.dist, ordem:n.ordem, idx:n.idx, plantao:!!n.plantao });
     const _fila = _aplicaFilaLimite(_todos, _lhFila, _hojeD);
     // QUANDO NINGUEM PODE RECEBER, A LISTA DE QUEM RECEBE E VAZIA (16/10/2026, auditoria).
     //
@@ -26605,6 +26712,10 @@ async function handlePresselDiag(req, env){
     const numeros = (_fila.ficam.length ? _fila.ficam : []).map((n) => ({ at:n.at, num:n.num }));
     const noLimite = _fila.bateram.map((n) => ({ at:n.at, num:n.num, leads:_lhD[_k8d(n.num)] || 0, lim:Number(n.lim) || 0, caminho:_aqResD[_k8d(n.num)] || 0 }));
     const todosNoLimite = _todos.length > 0 && !_fila.ficam.length;
+    // PLANTAO: a pressel esta entregando pra numero que esta DESLIGADO, porque ninguem esta com o
+    // SellWave Web aberto. Sem dizer isso, a tela mostra o interruptor off e "Entregando lead para"
+    // ao mesmo tempo, e quem olhar vai abrir bug (foi o que aconteceu com o aviso do numero mudo).
+    const _plantao = _fila.ficam.some((x) => x && x.plantao);
     // Motivo: repete os MESMOS testes da roleta, um por vez, pra dizer em qual deles todo mundo caiu.
     let motivo = '';
     if(!numeros.length){
@@ -26642,6 +26753,7 @@ async function handlePresselDiag(req, env){
       numeros: _cortaNum ? numeros.map((n) => ({ ...n, num: _num4(n && n.num) })) : numeros,
       noLimite: _resumido ? [] : (_acessoReduzido(u) ? noLimite.map((n) => ({ ...n, num: _num4(n && n.num) })) : noLimite),
       todosNoLimite: _resumido ? false : todosNoLimite,
+      plantao: _plantao,
       // o motivo detalhado diz quem esta desligado/caido - estado que a linha resumida esconde
       motivo: _resumido ? (motivo ? 'nenhum número disponível pra receber agora' : '') : motivo };
   });
@@ -29379,7 +29491,11 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   // (que é truthy!) e _servConnOk reprova TODO número → a pressel serve offline e não entra lead.
   const liveSet = liveSetInicial;   // ja veio no Promise.all la de cima (nao chamar de novo: sao 3 consultas)
   const emUsoIds = _emUsoIdsDe(data);
-  const sellers=_resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, _foraIdsDe(data), _aquecIdsDe(data));
+  const sellers=_resolvePresselSellers(p, _chipsDaPressel(p, chips), liveSet, emUsoIds, _foraIdsDe(data), _aquecIdsDe(data), true);
+  // O PLANTAO NO LOG, pra dar pra provar depois quem recebeu de madrugada e por que.
+  if (sellers.length && sellers[0] && sellers[0].plantao) {
+    try { console.log('ROLETA_PLANTAO ' + id + ' ' + sellers.map((s) => s.at + ':' + (s.nums || []).map((x) => _swwebK8(x.num)).join('/')).join(' ')); } catch (_) {}
+  }
   // A PÁGINA SEMPRE ABRE quando a pressel está ativa. Ela é o destino do anúncio: derrubar tudo
   // porque nenhum número está conectado é o pior cenário possível — o clique já foi PAGO e o
   // visitante recebia "Indisponível no momento". Sem número, a oferta continua na tela e só o
