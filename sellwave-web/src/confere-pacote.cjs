@@ -34,6 +34,8 @@ const ALVOS = [
   ['src', 'main.js'], ['src', 'preload.js'], ['src', 'preload-wa.js'], ['src', 'preload-painel.js'],
   ['src', 'ui', 'app.js'], ['src', 'ui', 'painel-ui.js'], ['src', 'ui', 'agente.js'], ['src', 'ui', 'crm.js'],
   ['src', 'ui', 'index.html'], ['src', 'ui', 'painel.html'],
+  // a versao de cobrador (31/10/2026): sem eles o modo cobranca abre sem agenda, quadro nem ficha
+  ['src', 'ui', 'cob-comum.js'], ['src', 'ui', 'cobranca.js'],
 ]
 for (const alvo of ALVOS) {
   const no = acha(json, alvo)
