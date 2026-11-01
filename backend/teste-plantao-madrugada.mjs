@@ -55,7 +55,7 @@ const conta = (nome, certo, detalhe) => {
   else { falhas.push(nome); console.log('  ERRO  ' + nome + (detalhe ? '   -> ' + detalhe : '')); }
 };
 
-const nomes = [
+const nomes = ['_cobIds', 
   '_swwebAppAbertos', '_swwebLigadosPorDono', '_swwebDesligaDonos', '_desligaAppFechado',
   '_plantaoDonos', '_plantaoLimpa',
   '_estadoLe', '_estadoGrava', '_presselAplicaNum', '_limpaMarcasDesligado', '_amanhaBR',
@@ -64,7 +64,7 @@ const nomes = [
   '_resolvePresselSellers', '_chipVivo', '_modoRoleta', '_servConnOk', '_lastDigitsEq', '_waNumKey',
 ];
 const blocos = nomes.map((n) => [n, funcao(n)]);
-const consts = ['const _swwebK8 = ', 'const _PAPEIS_ST = ', 'const APP_FECHADO_FOLGA = '].map((c) => [c, linha(c)]);
+const consts = ['let _cobIdsMem = ', 'const _ehIdDeCobrador = ', 'const _chipDeCobranca = ', 'const _swwebK8 = ', 'const _PAPEIS_ST = ', 'const APP_FECHADO_FOLGA = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
 conta('o worker tem as funcoes do plantao', !faltando.length, 'faltando: ' + faltando.join(', '));
 if (faltando.length) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados'); process.exit(1); }

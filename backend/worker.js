@@ -853,9 +853,39 @@ function _presselNaConta(u, data) {
   return (pid) => !deles.has(String(pid));
 }
 
+// NUMERO DE COBRANCA NAO E NUMERO DE VENDA (31/10/2026, versao de cobrador do SellWave Web).
+//
+// O worker decide roleta, captura e atribuicao pelo DONO do chip (`c.at`) e pela tag, nunca pelo
+// cargo do dono. Ate aqui todo dono de chip era vendedor, entao isso bastava. Com o cobrador
+// abrindo os numeros DELE no app, um chip do Haynan marcado "Em uso" entraria na roleta (o
+// "ausente = ligado" do _resolvePresselSellers pega qualquer dono da casa) e receberia clique pago;
+// e a conversa de cobranca com um cliente antigo passaria o lead, a atribuicao do telefone e ate a
+// ponte do CPF pro cobrador - e a recompra desse cliente nasceria com ele de vendedor.
+//
+// A REGRA: chip cujo dono tem cargo `cobrador` e NUMERO DE COBRANCA. Nunca entra em pressel (o
+// filtro mora no _chipsDaPressel, por onde passam os tres chamadores do _resolvePresselSellers,
+// inclusive a passada do plantao), o sistema nunca grava interruptor no nome dele, e a captura grava
+// a mensagem (historico do cliente) sem lead, venda, atribuicao nem tomar a conversa do vendedor.
+//
+// O conjunto vem do banco e fica 60 s em memoria. Quem decide algo com ele tem que chamar
+// `await _cobIds(env)` antes: o _chipDeCobranca e sincrono (a roleta e sincrona) e le a memoria.
+// Leitura que falha mantem o ultimo conjunto lido; sem nenhum lido, vale vazio (ninguem e cobrador),
+// que e o comportamento de antes desta regra.
+let _cobIdsMem = null, _cobIdsEm = 0;
+async function _cobIds(env) {
+  if (_cobIdsMem && Date.now() - _cobIdsEm < 60000) return _cobIdsMem;
+  try {
+    const r = await env.DB.prepare("SELECT id FROM users WHERE LOWER(COALESCE(role,'')) = 'cobrador'").all();
+    _cobIdsMem = new Set(((r && r.results) || []).map((x) => String(x.id)));
+    _cobIdsEm = Date.now();
+  } catch (_) { if (!_cobIdsMem) return new Set(); }
+  return _cobIdsMem;
+}
+const _ehIdDeCobrador = (at) => !!(at && _cobIdsMem && _cobIdsMem.has(String(at)));
+const _chipDeCobranca = (c) => !!(c && _ehIdDeCobrador(c.at));
 const _chipsDaPressel = (p, chips) => {
   const dono = _donoDe(p);
-  return (chips || []).filter((c) => _donoDe(c) === dono);
+  return (chips || []).filter((c) => _donoDe(c) === dono && !_chipDeCobranca(c));
 };
 
 // Limpa sessões expiradas (oportunístico)
@@ -12612,6 +12642,315 @@ async function _swwebSessao(req, env, path, u, maquina) {
   return err('Rota não encontrada', 404);
 }
 
+// ══ A COBRANCA NO SELLWAVE WEB (31/10/2026, pedido do Bruno: "uma versao do aplicativo do SellWave
+// Web tambem para cobradores", com os numeros dele, os funis de cobranca, o KANBAN de pedidos e uma
+// AGENDA de quem cobrar). ══════════════════════════════════════════════════════════════════════
+//
+// O app nao baixa o /api/state (1,4 MB, e com a regra do arquivo de leads e preciso juntar as duas
+// metades). Ele pede ESTA lista: uma linha curta por pedido, com o que o card e a agenda mostram
+// JA DECIDIDO aqui. As regras sao as da dash, portadas linha a linha de lib/crm-leads.js,
+// lib/pagamentos.js, lib/orders.js e lib/rastreio.js (a fonte continua sendo la; mudou la, muda
+// aqui). Tres diferencas, todas de proposito:
+//  - o FUSO: a dash roda no navegador em Brasilia e le "DD/MM HH:MM" como hora local; o worker roda
+//    em UTC, entao toda data sem fuso ganha as 3 horas aqui (_COB_BRT). `agend` vai CRU: quem le e o
+//    app, na maquina do cobrador, igual o app de celular faz.
+//  - o PERIODO: a coluna Pagos e as de perda so trazem o que entrou nelas nos ultimos 30 dias. O
+//    quadro do app nao tem o filtro de periodo do cabecalho da dash, e sem corte a lista traria a
+//    historia inteira da operacao a cada releitura.
+//  - GRAVAR NAO PASSA POR AQUI: o app usa as rotas que a dash ja usa (/api/lead/:id com patch,
+//    /api/lead/:id/comments), com o token do proprio cobrador. O handleUpdateLead ja decide o que o
+//    cobrador pode mudar (canManage), entao nao nasce uma segunda regra de permissao.
+const _COB_BRT = 3 * 3600000;
+const _COB_MIN = Date.UTC(2020, 0, 1);
+const _COB_COLS = [
+  { id: 'A Enviar', lbl: 'A enviar', cor: '#94a3b8' },
+  { id: 'Preparando', lbl: 'Preparando', cor: '#a855f7' },
+  { id: 'Enviados', lbl: 'Enviado', cor: '#06b6d4' },
+  { id: 'Saiu para Entrega', lbl: 'Saiu para Entrega', cor: '#818cf8' },
+  { id: 'Entregues', lbl: 'Cobrança', cor: '#fbbf24' },
+  { id: 'Retirar nos Correios', lbl: 'Retirar nos Correios', cor: '#a3e635' },
+  { id: 'Requer Atenção', lbl: 'Requer Atenção', cor: '#f43f5e' },
+  { id: 'Pagos', lbl: 'Pagos', cor: '#10b981' },
+];
+const _COB_PERDA = [
+  { id: 'Frustrados', lbl: 'Frustrados', cor: '#ef4444' },
+  { id: 'Roubos', lbl: 'Roubos', cor: '#b91c1c' },
+  { id: 'Devolvido com Reverso', lbl: 'Devolvido', cor: '#fb923c' },
+  { id: 'Retornado', lbl: 'Retornado', cor: '#a855f7' },
+  { id: 'Cancelado sem Custo', lbl: 'Cancelado', cor: '#64748b' },
+];
+const _COB_ALIAS = {
+  'Reportado': 'A Enviar', 'Reportados': 'A Enviar',
+  'Enviado': 'Enviados', 'Enviada': 'Enviados',
+  'Rota de Entrega': 'Saiu para Entrega', 'Saiu pra Entrega': 'Saiu para Entrega',
+  'Retirada': 'Retirar nos Correios',
+  'Atenção': 'Requer Atenção', 'Não Entregue': 'Requer Atenção', 'Nao Entregue': 'Requer Atenção',
+  'Entregue': 'Entregues', 'Cobrança': 'Entregues', 'Inadimplência': 'Entregues', 'Inadimplências': 'Entregues',
+  'Pago': 'Pagos', 'Frustrado': 'Frustrados', 'Devolvido': 'Devolvido com Reverso', 'Cancelado': 'Cancelado sem Custo',
+};
+const _COB_TERMINAIS = new Set(['Pagos', ..._COB_PERDA.map((c) => c.id)]);
+const _COB_CONHECIDAS = new Set([..._COB_COLS.map((c) => c.id), ..._COB_PERDA.map((c) => c.id)]);
+const _cobTxt = (v) => (v == null ? '' : String(v));
+const _cobColId = (col) => _COB_ALIAS[_cobTxt(col)] || _cobTxt(col);
+// O MESMO `num` da dash (crm-leads.js): Number cru, objeto pelo campo de preco. Valor em texto com
+// virgula vale 0 la e vale 0 aqui; as duas telas precisam dizer o mesmo numero.
+const _cobNum = (v) => { if (v && typeof v === 'object') return Number(v.price ?? v.value ?? v.valor ?? v.vl ?? v.amount ?? 0) || 0; const n = Number(v); return isNaN(n) ? 0 : n; };
+const _cobValorCobrar = (l) => { const v = _cobNum(l && l.valor_neg); return v > 0 ? v : _cobNum(l && l.vl); };
+const _cobPagoReg = (l) => (Array.isArray(l && l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + _cobNum(p && p.valor), 0);
+const _cobPago = (l) => !!(l && (l.spg === 'Pago' || l.col === 'Pago' || l.col === 'Pagos' || (_cobPagoReg(l) > 0 && _cobPagoReg(l) + 0.005 >= _cobValorCobrar(l))));
+const _cobTotalPago = (l) => { const t = _cobPagoReg(l); if (t > 0) return t; return _cobPago(l) ? _cobValorCobrar(l) : 0; };
+const _cobSaldo = (l) => Math.max(0, _cobValorCobrar(l) - _cobTotalPago(l));
+const _cobAnoBr = () => new Date(Date.now() - _COB_BRT).getUTCFullYear();
+// "DD/MM[/AAAA] [HH:MM]" em hora de Brasilia (o formato do historico e dos comentarios), ou ms.
+const _cobTs = (v) => {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v >= _COB_MIN ? v : 0;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{2})\/(\d{2})(?:\/(\d{4}))?(?:[ T](\d{2}):(\d{2}))?/);
+  let t;
+  if (m) {
+    const em = (ano) => Date.UTC(ano, +m[2] - 1, +m[1], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0) + _COB_BRT;
+    t = em(m[3] ? +m[3] : _cobAnoBr());
+    // 'DD/MM' sem ano e sempre PASSADO: em janeiro, '28/12' e do ano anterior
+    if (!m[3] && t > Date.now() + 86400000) t = em(_cobAnoBr() - 1);
+  } else t = Date.parse(s);
+  return (!isNaN(t) && t >= _COB_MIN) ? t : 0;
+};
+const _cobDataDoCard = (v) => {
+  const m = String(v == null ? '' : v).match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (!m) return 0;
+  const agora = new Date(Date.now() - _COB_BRT);
+  let ano = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : agora.getUTCFullYear();
+  if (!m[3] && Number(m[2]) > agora.getUTCMonth() + 1) ano -= 1;
+  const t = Date.UTC(ano, Number(m[2]) - 1, Number(m[1])) + _COB_BRT;
+  return isFinite(t) ? t : 0;
+};
+const _cobCriadoTs = (l) => { const t = Number(l && l.ts) || 0; if (t > 1e12) return t; if (t > 1e9) return t * 1000; const id = Number(l && l.id) || 0; return id > 1e12 ? id : _cobDataDoCard(l && l.data); };
+const _cobPagoTs = (l) => {
+  const pt = Number(l && l.pago_ts) || 0;
+  if (pt >= _COB_MIN) return pt;
+  const pgs = Array.isArray(l && l.pagamentos) ? l.pagamentos : [];
+  for (let i = pgs.length - 1; i >= 0; i--) { const p = pgs[i]; const t = _cobTs(p && (p.ts != null ? (Number(p.ts) < 1e12 ? Number(p.ts) * 1000 : Number(p.ts)) : p.data)); if (t) return t; }
+  let ht = 0;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) if (/^(Pago|Pagos)$/.test(_cobTxt(h && h.to))) { const t = _cobTs(h && h.time); if (t) ht = t; }
+  return ht;
+};
+// Quando o card ENTROU na coluna em que esta (o ultimo que entrou fica em cima, como no Kanban).
+const _cobEntrouNaCol = (l, colId) => {
+  let t0 = 0;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) {
+    const para = _cobColId(h && h.to), de = _cobColId(h && h.from);
+    if (para === colId && de !== colId) { const t = _cobTs(h && h.time); if (t) t0 = t; }
+  }
+  if (t0) return t0;
+  if (colId === 'Pagos') return _cobPagoTs(l) || _cobCriadoTs(l);
+  if (colId === 'Entregues') { const s = Number(l && l.ship_ts) || 0; return (s > 1e12 ? s : s * 1000) || _cobCriadoTs(l); }
+  return _cobCriadoTs(l);
+};
+const _cobDataBr = (ms) => { const d = new Date(ms - _COB_BRT); const p2 = (n) => String(n).padStart(2, '0'); return p2(d.getUTCDate()) + '/' + p2(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(); };
+const _COB_ENTREGA_LBL = { 'Entregues': 'Entregue em', 'Retirar nos Correios': 'Retirada' };
+function _cobEntregaInfo(l) {
+  const hist = Array.isArray(l && l.hist) ? l.hist : [];
+  if (!hist.length) return null;
+  if (!['Entregues', 'Retirar nos Correios', 'Pagos'].includes(_cobColId(l && l.col))) return null;
+  let ev = null;
+  for (const h of hist) { const c = _cobColId(h && h.to); const t = _cobTs(h && h.time); if (_COB_ENTREGA_LBL[c] && t) ev = { c, t }; }
+  if (!ev) return null;
+  const h0 = hist.map((h) => _cobTs(h && h.time)).filter(Boolean).sort((a, b) => a - b)[0] || 0;
+  const cr = _cobCriadoTs(l);
+  const ini = [h0, cr].filter(Boolean).sort((a, b) => a - b)[0] || 0;
+  const dias = ini && ev.t > ini ? Math.round((ev.t - ini) / 86400000) : null;
+  return { label: _COB_ENTREGA_LBL[ev.c], data: _cobDataBr(ev.t), dias: dias == null ? '' : (dias === 1 ? '1 dia' : dias + ' dias') };
+}
+// O SELO DE ENTREGA, na mesma ordem da dash: quem CONTEM o outro vem antes (NOT_DELIVERED contem
+// DELIVERED; IN_TRANSIT_TO_DELIVERY contem IN_TRANSIT).
+const _COB_SELO = [
+  ['NOT_DELIVERED', 'Não entregue', '#f43f5e'], ['UNCOMPLETED_ADDRESS', 'Endereço incompleto', '#f43f5e'],
+  ['RETURNING_TO_ORIGIN', 'Voltando pro remetente', '#fb923c'], ['READY_FOR_PICKUP', 'Pronto p/ retirada', '#a855f7'],
+  ['ATTENTION_DELAYED', 'Atrasado', '#f59e0b'], ['PL_FRUSTRADO', 'Frustrado', '#ef4444'], ['PL_ROUBADO', 'Furtado', '#b91c1c'],
+  ['IN_TRANSIT_TO_DELIVERY', 'Rota de entrega', '#10b981'], ['OUT_FOR_DELIVERY', 'Rota de entrega', '#10b981'],
+  ['DELIVERED', 'Entregue', '#10b981'], ['IN_TRANSIT', 'Em trânsito', '#f59e0b'], ['REGISTERED', 'Preparando', '#a16207'],
+  ['IM_PREPARING', 'Preparando', '#a16207'], ['SENDED', 'Postado', '#f59e0b'],
+];
+function _cobSelo(l) {
+  const s = String((l && l.ship) || '').toUpperCase();
+  if (!s) return null;
+  if (_COB_PERDA.some((c) => c.id === _cobColId(l && l.col))) return null;
+  const hit = _COB_SELO.find(([k]) => s.includes(k));
+  if (!hit) return null;
+  const t = Number(l && l.ship_ts) || 0;
+  return { label: hit[1], cor: hit[2], quando: t > 0 ? _cobDataBr(t > 1e12 ? t : t * 1000) : '' };
+}
+// Passou pela fila de cobranca em algum momento (o mesmo teste do _wpEraCobranca e do app).
+const _cobVeioDaCobranca = (l) => {
+  if (!l) return false;
+  if (/cobran|entregue|retirar|inadimpl/i.test(_cobTxt(l.col_plat))) return true;
+  return (Array.isArray(l.hist) ? l.hist : []).some((e) => /cobran|entregue|retirar|inadimpl/i.test(_cobTxt(e && e.from) + ' ' + _cobTxt(e && e.to)));
+};
+const _cobManualNaoAceito = (l) => _cobTxt(l && l.orig) === 'Manual' && !(l && l.aceito) && (_cobTxt(l && l.col) === 'A Enviar' || _cobTxt(l && l.col) === 'Reportado');
+
+// ── os links do pedido (lib/orders.js e lib/rastreio.js) ──
+const _cobDig = (s) => String(s || '').replace(/\D/g, '');
+const _cobSemDDI = (v) => { const d = _cobDig(v); return (d.length >= 12 && d.startsWith('55')) ? d.slice(2) : d; };
+const _COB_CK_PARAMS = [
+  ['full_name', (l) => l.nome], ['email', (l) => l.email], ['phone', (l) => _cobSemDDI(l.wa)], ['document', (l) => _cobDig(l.cpf)],
+  ['zipcode', (l) => _cobDig(l.cep)], ['street', (l) => l.end], ['number_address', (l) => l.num], ['complement', (l) => l.comp],
+  ['neighborhood', (l) => l.bairro], ['city', (l) => l.cidade],
+  ['payment', (l) => { const p = String((l && l.pgto) || '').toLowerCase(); if (p.includes('pix')) return 'pix'; if (p.includes('boleto') || p.includes('billet')) return 'billet'; return ''; }],
+  ['utm_content', (l) => (l && l.id ? 'ped' + String(l.id) : '')],
+];
+function _cobCheckoutPreenchido(l) {
+  const base = String((l && l.link) || '');
+  if (!base) return '';
+  const q = new URLSearchParams();
+  for (const [k, fn] of _COB_CK_PARAMS) { const v = String(fn(l) || '').trim(); if (v) q.set(k, v); }
+  const s = q.toString();
+  return s ? base + (base.includes('?') ? '&' : '?') + s : base;
+}
+const _cobNormKit = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+function _cobLinkDoKit(l, aflCk, kits) {
+  if (!l) return '';
+  const todos = (aflCk && typeof aflCk === 'object') ? aflCk : {};
+  const afl = String(l.afl || '');
+  const casa = todos._casa || {};
+  const mapa = (afl ? todos[afl] : casa) || {};
+  const temCfg = (id) => !!(mapa[id] || (afl && casa[id] && casa[id].link_af));
+  const alvo = _cobNormKit(l.trat || l.prod);
+  let chave = null;
+  for (const k of (Array.isArray(kits) ? kits : [])) {
+    const id = String((k && (k.offer_id || k.id)) || '');
+    if (id && temCfg(id) && (_cobNormKit(k.nome) === alvo || _cobNormKit(id) === _cobNormKit(l.offer_id))) { chave = id; break; }
+  }
+  if (!chave) for (const id of Object.keys(mapa).concat(afl ? Object.keys(casa) : [])) { if (temCfg(id) && _cobNormKit(id) === alvo) { chave = id; break; } }
+  if (!chave) return '';
+  const cfg = mapa[chave] || {};
+  if (cfg.link) return String(cfg.link);
+  if (afl && casa[chave] && casa[chave].link_af) return String(casa[chave].link_af);
+  const ant = String(l.mod || '').toLowerCase() === 'antecipado';
+  return String((ant ? cfg.antecipado : cfg.entrega) || cfg.antecipado || cfg.entrega || '');
+}
+const _cobComParam = (url, k, v) => { try { const u = new URL(url); u.searchParams.set(k, v); return u.toString(); } catch (_) { return url + (url.includes('?') ? '&' : '?') + k + '=' + encodeURIComponent(v); } };
+function _cobCheckout(l, data) {
+  if (!l) return '';
+  if (l.link) return _cobCheckoutPreenchido(l);
+  const base = _cobLinkDoKit(l, data && data.afl_checkout, data && data.regras && data.regras.kits);
+  if (base) {
+    const url = _cobCheckoutPreenchido({ ...l, link: base });
+    const fid = String(l.five_id || '').trim();
+    return fid ? _cobComParam(url, 'utm_id', fid.startsWith('PL-') ? fid.slice(3) : fid) : url;
+  }
+  if (l.checkout_url) return String(l.checkout_url);
+  if (String(l.fonte || '') === 'paylog') return '';
+  const oid = String(l.five_id || l.order_id || '').trim();
+  return oid ? 'https://app.fivedelivery.com.br/checkout/011/' + encodeURIComponent(oid) : '';
+}
+const _COB_PLACE = {
+  nome: (l) => l.nome, cpf: (l) => _cobDig(l.cpf), telefone: (l) => _cobSemDDI(l.wa), email: (l) => l.email, cep: (l) => _cobDig(l.cep),
+  rua: (l) => l.end, numero: (l) => l.num, complemento: (l) => l.comp, bairro: (l) => l.bairro, cidade: (l) => l.cidade,
+  uf: (l) => String(l.uf || '').toUpperCase(), valor: (l) => (Number(l.vl) > 0 ? Number(l.vl).toFixed(2) : ''),
+  produto: (l) => l.trat || l.prod, pedido: (l) => (l.id != null ? String(l.id) : ''),
+};
+function _cobUrlPlataforma(tpl, l) {
+  if (!tpl || !l) return '';
+  let out = String(tpl);
+  for (const [k, fn] of Object.entries(_COB_PLACE)) { if (out.includes('{' + k + '}')) out = out.split('{' + k + '}').join(encodeURIComponent(String(fn(l) || ''))); }
+  return out;
+}
+const _cobEhCorreios = (c) => /^[A-Z]{2}\d{9}[A-Z]{2}$/i.test(String(c || '').trim());
+const _cobDaFive = (l) => { if (!l || String(l.fonte || '') === 'paylog') return false; const id = String(l.five_id || ''); return !!id && !id.startsWith('PL-'); };
+function _cobRastreio(l) {
+  const c = String((l && l.track) || '').trim();
+  if (!c) return '';
+  if (_cobDaFive(l)) {
+    if (_cobEhCorreios(c)) return 'https://rastreamento.correios.com.br/app/index.php?objetos=' + encodeURIComponent(c);
+    return 'https://rastreio.fivedelivery.codgital.site/' + encodeURIComponent(String(l.five_slug || '').trim() || 'glico-six') + '/pedido/' + encodeURIComponent(c);
+  }
+  return 'https://glico-six.rastreio.vip/rastreio?codigo=' + encodeURIComponent(c);
+}
+const _COB_NOME_TRANSP = { correios: 'Correios', jt_express: 'J&T Express', jt: 'J&T Express', ez: 'J&T Express' };
+function _cobTransp(l) {
+  if (!l) return '';
+  if (_cobEhCorreios(l.track)) return 'Correios';
+  const t = String(l.transp_nome || '').trim();
+  if (t && _COB_NOME_TRANSP[t.toLowerCase()]) return _COB_NOME_TRANSP[t.toLowerCase()];
+  if (/^\d{12,}$/.test(String(l.track || '').trim())) return 'J&T Express';
+  if (t && !/^transportadora$/i.test(t)) return t;
+  return _cobDaFive(l) ? 'Five' : 'PayLog';
+}
+
+// A LINHA DO PEDIDO no quadro e na agenda do app. So o que o card e a agenda mostram.
+function _cobLinha(l, nomes, tagMap) {
+  const col = _cobColId(l.col);
+  const tags = (Array.isArray(l.tags) ? l.tags : []).map((id) => tagMap[String(id)]).filter(Boolean);
+  return {
+    id: String(l.id),
+    nome: String(l.nome || '').trim() || 'Sem nome',
+    wa: _cobDig(l.wa),
+    cidade: String(l.cidade || '').trim(), uf: String(l.uf || '').trim().toUpperCase(),
+    prod: String(l.trat || l.prod || '').trim(),
+    vl: _cobNum(l.vl), valor: _cobValorCobrar(l), saldo: _cobSaldo(l), pago: _cobPago(l),
+    pagoTs: _cobPago(l) ? _cobPagoTs(l) : 0,
+    col, colBruta: _cobTxt(l.col), spg: _cobTxt(l.spg), mod: String(l.mod || '').toLowerCase() === 'antecipado' ? 'antecipado' : 'entrega',
+    agend: _cobTxt(l.agend),
+    selo: _cobSelo(l), entrega: _cobEntregaInfo(l),
+    entrou: _cobEntrouNaCol(l, col), criado: _cobCriadoTs(l),
+    at: _cobTxt(l.at), atNome: nomes[_cobTxt(l.at)] || '', cob: _cobTxt(l.cob), cobNome: nomes[_cobTxt(l.cob)] || '',
+    track: _cobTxt(l.track).trim(), transp: _cobTransp(l),
+    tags, ncom: Array.isArray(l.comments) ? l.comments.length : 0,
+    vc: _cobVeioDaCobranca(l),
+  };
+}
+// O DETALHE: a linha mais o que so a ficha precisa (endereco, links, historico recente).
+function _cobDetalhe(l, data, nomes, tagMap) {
+  const plat = (data && data.checkout_plataformas && typeof data.checkout_plataformas === 'object') ? data.checkout_plataformas : {};
+  return {
+    ..._cobLinha(l, nomes, tagMap),
+    data: _cobTxt(l.data), pgto: _cobTxt(l.pgto), obs: _cobTxt(l.obs),
+    cep: _cobTxt(l.cep), end: _cobTxt(l.end), num: _cobTxt(l.num), comp: _cobTxt(l.comp), bairro: _cobTxt(l.bairro),
+    links: {
+      checkout: _cobCheckout(l, data),
+      pix: plat.pix ? _cobUrlPlataforma(plat.pix, l) : '',
+      boleto: plat.boleto ? _cobUrlPlataforma(plat.boleto, l) : '',
+      cartao: plat.cartao ? _cobUrlPlataforma(plat.cartao, l) : '',
+      rastreio: _cobRastreio(l),
+    },
+    hist: (Array.isArray(l.hist) ? l.hist : []).slice(-12).map((h) => ({ de: _cobTxt(h && h.from), para: _cobTxt(h && h.to), quando: _cobTxt(h && h.time), quem: nomes[_cobTxt(h && h.who)] || _cobTxt(h && h.who), nota: _cobTxt(h && h.note) })),
+  };
+}
+// Os pedidos que o quadro do app mostra: o mundo de quem pede, sem card manual nao aceito, so
+// coluna conhecida, e terminal (Pagos e perda) so se entrou nela nos ultimos 30 dias.
+function _cobPedidosDoMundo(data, mundo) {
+  const corte = Date.now() - 30 * 86400000;
+  return (Array.isArray(data && data.leads) ? data.leads : []).filter((l) => {
+    if (!l || l.id == null || String(l.afl || '') !== mundo || _cobManualNaoAceito(l)) return false;
+    const col = _cobColId(l.col);
+    if (!_COB_CONHECIDAS.has(col)) return false;
+    if (_COB_TERMINAIS.has(col) && _cobEntrouNaCol(l, col) < corte) return false;
+    return true;
+  });
+}
+const _COB_PRONTOS = [
+  'Cliente não atendeu, vou tentar de novo mais tarde',
+  'Falei com o cliente, pediu para ligar mais tarde',
+  'Cliente confirmou o endereço',
+  'Cliente pediu para remarcar a entrega',
+  'Dificuldade no pagamento, resolvendo',
+  'Aguardando resposta do cliente',
+];
+// Assinatura curta da lista (o app manda de volta e, sem mudanca, a resposta vem vazia).
+const _cobAssina = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + s.length.toString(36); };
+async function _cobNomes(env) {
+  const out = {};
+  try { const r = await env.DB.prepare('SELECT id, name FROM users').all(); for (const x of ((r && r.results) || [])) out[String(x.id)] = String(x.name || ''); } catch (_) { /* sem nome a tela mostra so o pedido */ }
+  return out;
+}
+const _cobTagMap = (data, mundo) => {
+  const lista = (data && (mundo ? data['tags__' + mundo] : data.tags)) || [];
+  const m = {};
+  for (const t of (Array.isArray(lista) ? lista : [])) if (t && t.id) m[String(t.id)] = { nome: String(t.name || t.id), cor: String(t.color || '#64748b') };
+  return m;
+};
+
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
   // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
@@ -12773,9 +13112,16 @@ async function handleSwWeb(req, env, path) {
   // pro app novo daria duas fontes de verdade e o vendedor acabaria com dois scripts diferentes.
   if (req.method === 'GET' && path === '/api/swweb/roteiro') {
     let sc = {};
+    // O COBRADOR LE O ROTEIRO DE COBRANCA (31/10/2026, versao de cobrador do app). E o mesmo que o
+    // Sale Chat dele na dash ja abre (handleSaleChatMine semeia de salechatCobPub pra cobrador): as
+    // mensagens de rastreio e postado, os audios e os funis de cobranca, nunca o script de venda.
+    // Afiliado continua no modelo da casa daqui como antes (nao mexi no mundo dele).
+    const perfil = _ehCobrador(u) ? 'cob' : 'vend';
     try {
       const row = await env.DB.prepare(
-        "SELECT json_extract(data, '$.salechatPub') pub, json_extract(data, '$.salechat') draft FROM dashboard_state WHERE id = 1"
+        perfil === 'cob'
+          ? "SELECT json_extract(data, '$.salechatCobPub') pub, json_extract(data, '$.salechatCob') draft FROM dashboard_state WHERE id = 1"
+          : "SELECT json_extract(data, '$.salechatPub') pub, json_extract(data, '$.salechat') draft FROM dashboard_state WHERE id = 1"
       ).first();
       let pub = null, draft = null;
       try { pub = row && row.pub ? JSON.parse(row.pub) : null; } catch (_) { pub = null; }
@@ -12788,6 +13134,7 @@ async function handleSwWeb(req, env, path) {
     // mesmo que ele troque de numero no meio do dia.
     const installId = 'swweb:' + String(u.id);
     try {
+      if (u._comoDe) throw new Error('ver como: so leitura');   // o preview da direcao nao grava identidade
       await _scEnsureTables(env);
       await env.DB.prepare(
         "INSERT INTO sc_install (install_id, at_id, num_last, first_seen, last_seen) VALUES (?,?,'',strftime('%s','now'),strftime('%s','now'))" +
@@ -12813,6 +13160,7 @@ async function handleSwWeb(req, env, path) {
       captura: origem + '/api/swweb/captura',
       motor: origem + '/api/swweb/motor.js',
       updated_at: sc.updated_at || 0,
+      perfil,
     });
   }
 
@@ -13015,7 +13363,10 @@ async function handleSwWeb(req, env, path) {
     // ESCOPO POR CARGO (16/10/2026, revisao adversarial). Sem isto, um vendedor com o proprio
     // token varria telefones nesta rota e lia o pedido de QUALQUER outro, com CPF e endereco.
     // Diretor ve todos; vendedor so os dele.
-    const tudoL = manda;
+    // O COBRADOR VE O PEDIDO DE TODOS (31/10/2026): ele nunca e o `at` (cobra o que o vendedor
+    // vendeu), e o /api/state ja entrega a base inteira da casa pra ele. Sem isto o painel dele dizia
+    // "sem pedido na dash" pra todo cliente.
+    const tudoL = manda || _ehCobrador(u);
     // E O PEDIDO TEM QUE SER DO MESMO MUNDO. Na casa, pedido de afiliado traz `afl` preenchido
     // (medido: 128 pedidos, todos com afl_3d767329); no mundo do afiliado, so os dele. Sem este
     // corte, o painel da casa mostraria o pedido do cliente do afiliado - com nome, cidade e etapa.
@@ -13033,14 +13384,60 @@ async function handleSwWeb(req, env, path) {
       nome: l.nome || '', cidade: l.cidade || '', uf: l.uf || '',
       produto: l.trat || l.prod || '', valor: Number(l.vl) || 0, etapa: l.col || '',
       pago: String(l.spg || ''), rastreio: l.track || '', data: l.data || '',
-      pedidos: meus.length,
+      pedidos: meus.length, id: String(l.id == null ? '' : l.id),
     });
   }
+
+  // GET /api/swweb/cobranca?sig= — O QUADRO E A AGENDA DO COBRADOR no app (31/10/2026, ver
+  // _cobLinha). Quem le: o cobrador e a direcao (o "ver como" dela cai aqui como o cobrador). Os
+  // pedidos sao os do MUNDO de quem pede, todos, igual o /api/state entrega pro cobrador: o recorte
+  // "so os meus" (lead.cob) e do app, que tem o botao pra ver todos.
+  if (req.method === 'GET' && path === '/api/swweb/cobranca') {
+    if (!manda && !_ehCobrador(u)) return err('O quadro de cobrança é da direção e dos cobradores.', 403);
+    // SEM CACHE: o cobrador marca pago e o quadro rele em seguida; a copia de 8 s mostraria o card
+    // ainda em Cobranca, que se le como clique que nao pegou. (A versao e perguntada ao banco e o
+    // texto so e relido quando ela mudou, ver _dashRawAtual.)
+    const data = await _getDashData(env, 0);
+    const nomes = await _cobNomes(env);
+    const tagMap = _cobTagMap(data, mundo);
+    const pedidos = _cobPedidosDoMundo(data, mundo).map((l) => _cobLinha(l, nomes, tagMap));
+    const prontos = Array.isArray(data && data.coment_prontos)
+      ? data.coment_prontos.map((x) => String(x || '').trim()).filter(Boolean)
+      : _COB_PRONTOS;
+    const corpo = JSON.stringify({ pedidos, prontos, cols: _COB_COLS, perda: _COB_PERDA });
+    const sig = _cobAssina(corpo);
+    const pediu = String(new URL(req.url).searchParams.get('sig') || '');
+    if (pediu && pediu === sig) return json({ ok: true, igual: true, sig, agora: Date.now() });
+    return json({ ok: true, sig, agora: Date.now(), eu: String(u.id), cargo: String(u.role || '').toLowerCase(), pedidos, prontos, cols: _COB_COLS, perda: _COB_PERDA });
+  }
+
+  // GET /api/swweb/cobranca/pedido?id= ou ?phone= — A FICHA DO PEDIDO: a linha do quadro mais
+  // endereco, os links (checkout, Pix, boleto, cartao, rastreio) e o historico recente. `phone` e
+  // o que o painel ao lado do WhatsApp usa: os pedidos daquele cliente, o mais novo primeiro.
+  if (req.method === 'GET' && path === '/api/swweb/cobranca/pedido') {
+    if (!manda && !_ehCobrador(u)) return err('A ficha de cobrança é da direção e dos cobradores.', 403);
+    const sp = new URL(req.url).searchParams;
+    const id = String(sp.get('id') || '').trim();
+    const k8 = String(sp.get('phone') || '').replace(/\D/g, '').slice(-8);
+    if (!id && k8.length < 8) return err('Falta o pedido');
+    const data = await _getDashData(env, 0);
+    const leads = (Array.isArray(data && data.leads) ? data.leads : []).filter((l) => l && String(l.afl || '') === mundo);
+    const achados = id
+      ? leads.filter((l) => String(l.id) === id)
+      : leads.filter((l) => _cobDig(l.wa).slice(-8) === k8 && !_cobManualNaoAceito(l));
+    if (!achados.length) return json({ ok: true, pedidos: [] });
+    achados.sort((a, b) => (_cobCriadoTs(b) || 0) - (_cobCriadoTs(a) || 0));
+    const nomes = await _cobNomes(env);
+    const tagMap = _cobTagMap(data, mundo);
+    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)) });
+  }
+
 
   // GET /api/swweb/numeros — a lista que a barra lateral do app mostra.
   if (req.method === 'GET' && path === '/api/swweb/numeros') {
     const data = await _getDashData(env);
     const chips = Array.isArray(data && data.chips) ? data.chips : [];
+    await _cobIds(env);   // numero de cobrador: sem roleta e fora do placar (ver _cobIds)
     // Nome do dono de cada chip, numa ida so.
     // Nome E MUNDO de cada dono, na mesma ida: o mundo e o que separa a casa do afiliado.
     const donos = {}, mundoDoDono = {};
@@ -13312,9 +13709,12 @@ async function handleSwWeb(req, env, path) {
         // apto (tag), interruptor ligado, e conexao viva. `vivo` vai separado pra tela poder dizer
         // POR QUE nao recebe, em vez de so mostrar desligado: "desligado" e "sem sinal do app" sao
         // problemas diferentes e o conserto de cada um e outro.
-        roleta: _swwebApto(c, nomeSt, _ids)
+        roleta: !_chipDeCobranca(c) && _swwebApto(c, nomeSt, _ids)
           && !desligados.has(String(c.at || '') + ':' + _swwebK8(c.num))
           && _chipVivo(liveSet, c, 'ax_' + String(c.at || '')),
+        // NUMERO DE COBRANCA (31/10/2026, ver _cobIds): o dono e cobrador. Nao tem interruptor nem
+        // contador de lead, e o app nao desenha nenhum dos dois nele.
+        cobranca: _chipDeCobranca(c),
         // `_servConnOk` tem fail-open proprio: sem liveSet nenhum ele aprova, pra uma falha de
         // leitura nao apagar a operacao inteira da tela.
         vivo: _chipVivo(liveSet, c, 'ax_' + String(c.at || '')),
@@ -13379,6 +13779,7 @@ async function handleSwWeb(req, env, path) {
       for (const c of chips) {
         const at = String((c && c.at) || '');
         if (!c || !c.num || !donos[at] || mundoDoDono[at] !== mundo) continue;
+        if (_ehIdDeCobrador(at)) continue;   // cobrador nao recebe lead: fora do placar (ver _cobIds)
         const o = (porDono[at] = porDono[at] || { at, nome: donos[at], recebe: false });
         if (_swwebApto(c, nomeSt, _ids) || _chipAquecendo(c, _ids.aquec)) o.recebe = true;
       }
@@ -13406,7 +13807,19 @@ async function handleSwWeb(req, env, path) {
       }
       equipe.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
     } catch (_) { /* sem equipe a barra so nao mostra o placar */ }
-    return json({ ok: true, numeros: visiveis, equipe, config: cfg, direcao: manda });
+    // O CARGO DE QUEM PEDIU (31/10/2026, versao de cobrador). E o que poe o app no modo cobranca. Vem
+    // daqui, e nao do login, pra o "ver como" da direcao (GET com ?como=) virar cobrador junto.
+    const cargo = String((u && u.role) || '').toLowerCase();
+    // QUEM A DIRECAO PODE "VER COMO" ALEM DOS DONOS DE NUMERO: os cobradores do mundo. Cobrador sem
+    // numero nenhum (o caso de hoje) nao aparecia na lista, e a direcao nao tinha como ver a versao dele.
+    let cobradores = [];
+    if (manda) {
+      try {
+        const rc = await env.DB.prepare("SELECT id, name, COALESCE(afiliado_id,'') afl FROM users WHERE LOWER(COALESCE(role,''))='cobrador' AND COALESCE(archived,0)=0").all();
+        cobradores = ((rc && rc.results) || []).filter((x) => String(x.afl || '').trim() === mundo).map((x) => ({ id: String(x.id), nome: String(x.name || x.id) }));
+      } catch (_) { cobradores = []; }
+    }
+    return json({ ok: true, numeros: visiveis, equipe: cargo === 'cobrador' ? [] : equipe, config: cfg, direcao: manda, cargo, cobradores });
   }
 
   // GET /api/swweb/proxy?nk=... — devolve o proxy COMPLETO (com senha) de UM numero, pro app poder
@@ -14159,6 +14572,7 @@ async function handleSwWeb(req, env, path) {
   // (ela esta saindo); outra maquina da mesma pessoa aberta segura tudo ligado.
   if (req.method === 'POST' && path === '/api/swweb/fechando') {
     if (mundo) return json({ ok: true, desligou: 0 });   // afiliado: a operacao e dele
+    if (_ehCobrador(u)) return json({ ok: true, desligou: 0 });   // cobrador nao tem interruptor (ver _cobIds)
     if (!maquina) return err('Falta identificar a máquina');
     await _swwebUsoTabela(env);
     const feitos = await _swwebDesligaDonos(env, [String(u.id)], {
@@ -15184,6 +15598,9 @@ function extractCpf(text) {
 async function saveCpfAttrib(env, cpf, instance, name, phone) {
   const c = norm(cpf);
   if (c.length !== 11) return;
+  // NUMERO DE COBRANCA NUNCA VIRA DONO DO CPF (31/10/2026, ver _cobIds): a ponte decide de quem e o
+  // proximo pedido desse cliente, e cobrador nao vende.
+  if ((await _cobIds(env)).has(String(_instToAt(instance) || ''))) return;
   try {
     if (!_cpfTablesOk) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS cpf_attrib (cpf TEXT PRIMARY KEY, at_id TEXT, instance TEXT, name TEXT, phone TEXT, updated_at INTEGER)').run(); _cpfTablesOk = true; }
     await env.DB.prepare(
@@ -15201,6 +15618,7 @@ async function resolveAtByCpf(env, cpf) {
   try {
     const row = await env.DB.prepare('SELECT at_id FROM cpf_attrib WHERE cpf = ?').bind(c).first();
     const at = row && row.at_id ? String(row.at_id).trim() : '';
+    if (at && (await _cobIds(env)).has(at)) return null;   // cobrador nao vende (ver _cobIds)
     return at || null;
   } catch (_) { return null; }
 }
@@ -15217,6 +15635,7 @@ async function resolveAtByPhone(env, phone) {
     let row = await env.DB.prepare("SELECT instance FROM wa_attrib WHERE phone LIKE ? ORDER BY rowid DESC LIMIT 1").bind(like).first();
     if (!row) row = await env.DB.prepare("SELECT inst AS instance FROM wa_lead WHERE phone LIKE ? ORDER BY ts DESC LIMIT 1").bind(like).first();
     const at = _instToAt(row && row.instance ? String(row.instance) : '');
+    if (at && (await _cobIds(env)).has(String(at))) return null;   // cobrador nao vende (ver _cobIds)
     return at || null;
   } catch (_) { return null; }
 }
@@ -17026,6 +17445,10 @@ async function _waLogMsg(env, m) {
     }
     // Preenche a mídia depois (download assíncrono da Cloud API grava o media_url pós-INSERT).
     if (m.media_url) { try { await env.DB.prepare('UPDATE wa_messages SET media_url=? WHERE msg_id=?').bind(m.media_url, id).run(); } catch (_) {} }
+    // CONVERSA DE COBRANCA (31/10/2026, ver _cobIds): fica so no historico. A linha da conversa
+    // (wa_chats) e do vendedor: "quem recebeu manda no carimbo" passaria ela pro numero do cobrador
+    // e ela sumiria do inbox do vendedor, alem de acender bolinha e mexer na etapa do CRM dele.
+    if (m.cobranca) return;
     const preview = type === 'text' ? body : ('[' + type + ']');
     await env.DB.prepare(
       `INSERT INTO wa_chats (phone, instance, name, last_text, last_ts, last_dir, unread, updated_at)
@@ -17653,6 +18076,25 @@ async function handleSalechatIngest(req, env, token) {
         // isso TODO lead do 2º número era carimbado com o número do principal nas métricas, e o
         // casamento do ttclid (tt_pending por instância) falhava justamente pros leads do complementar.
         const inst = _instComNumero(atId, selfNumber, ownInst);   // sem o numero, a resposta sai pelo outro chip (131047)
+        // CONVERSA DE COBRANCA (31/10/2026, ver _cobIds). O numero e de um cobrador, e quem esta do
+        // outro lado e cliente que JA comprou. A mensagem vira historico do cliente (wa_messages) e
+        // para ai: sem venda ("pedido confirmado" do cobrador nao e venda nova e moveria a ponte do
+        // CPF pra ele), sem lead (o wa_lead do cliente migraria pro numero dele), sem wa_attrib (a
+        // recompra nasceria com o cobrador de vendedor) e sem tomar a conversa do inbox do vendedor.
+        if ((await _cobIds(env)).has(String(atId))) {
+          try {
+            let mediaUrl = '';
+            if (e?.mediaB64) { try { mediaUrl = await _scStoreMedia(env, e.mediaB64, e.mediaMime); } catch (_) {} }
+            await _waLogMsg(env, {
+              phone, instance: inst, direction: e?.fromMe ? 'out' : 'in',
+              type: String(e?.type || 'text'), body: String(e?.body || ''),
+              pushName: String(e?.pushName || ''), ts: Number(e?.ts) || now, msgId: msgId || null,
+              media_url: mediaUrl || null, cobranca: true,
+            });
+          } catch (_) {}
+          if (msgId) ack.push(msgId);
+          continue;
+        }
         // Espelha no histórico (wa_messages/wa_chats). É daqui que saem o RITMO da roleta e o TETO
         // de rajada anti-ban; sem isso o balanceador ficava cego (nenhuma linha) e não conseguia
         // respeitar o limite por número. Também alimenta a caixa de entrada do CRM.
@@ -21669,6 +22111,9 @@ async function _waDetectSale(env, instance, data) {
   // um "finalizado" solto no meio da conversa nao virar venda.
   const _txtV = text.toLowerCase();
   if (!text || !_vendaFormaNova(_txtV, 'detector')) return { sale: false };
+  // COBRADOR NAO VENDE (31/10/2026, ver _cobIds): "pedido confirmado" no numero de cobranca e o
+  // resumo de um pedido que ja existe, nao venda nova.
+  if ((await _cobIds(env)).has(String(_instToAt(instance) || ''))) return { sale: false };
   const key = data?.key || {};
   const jid = String(key.remoteJid || '');
   if (!jid || jid.indexOf('@g.us') >= 0) return { sale: false };   // ignora grupo (senão "Pedido Conclu" em grupo vira venda fantasma)
@@ -22547,6 +22992,10 @@ const _WA_NAO_MSG = new Set(['e2e_notification', 'notification_template', 'proto
 // sempre, que é o que protege do despejo de histórico quando um número reconecta.
 async function _waLeadCapture(env, instance, phone, body, selfNum, msgType, msgTs, maxIdade) {
   try {
+    // NUMERO DE COBRANCA NAO CAPTURA LEAD (31/10/2026, ver _cobIds). Quem fala com ele ja e cliente;
+    // capturar aqui moveria o wa_lead do cliente pro numero do cobrador. A rota do app ja pula isto;
+    // a guarda fica aqui tambem pros caminhos de API (Cloud, Datacrazy) que chamam direto.
+    if ((await _cobIds(env)).has(String(_instToAt(instance) || ''))) return;
     // GUARDA 1 — evento de PROTOCOLO não é mensagem de lead.
     // O Sale Chat encaminha tudo que o WhatsApp Web emite, e ~94% do volume é ruído de protocolo:
     // 'ciphertext' (mensagem ainda não decifrada, chega ANTES da versão legível), 'e2e_notification'
@@ -25203,8 +25652,9 @@ function _meusNumerosRoleta(data, uid) {
   // O em aquecimento entra aqui tambem: ele recebe lead, entao tem que aparecer pro vendedor com
   // o interruptor dele. Numero que recebe e nao aparece na tela foi o incidente de 16/08.
   const aquecIds = _aquecIdsDe(data);
+  // Numero de cobranca nunca e roleta de ninguem (ver _cobIds; quem chama faz `await _cobIds(env)`).
   return (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && String(c.at || '') === String(uid)
-    && c.num && c.st !== 'banido' && okWa(c)
+    && c.num && c.st !== 'banido' && okWa(c) && !_chipDeCobranca(c)
     && (_chipAquecendo(c, aquecIds) || (c.st !== 'aquecimento' && isEmUso(c))));
 }
 // GET /api/pressel/meus -> { hoje, numeros:[...], pressels:[{id,nome,status,off:{nk:true}}], leadsHoje }
@@ -25213,6 +25663,7 @@ async function handlePresselMeus(req, env) {
   if (!u) return err('Não autenticado', 401);
   const data = await _getDashData(env, 0);
   const meu = String(u.id);
+  await _cobIds(env);   // numero de cobrador nao aparece como roleta dele (_chipsDaPressel)
   const meus = _meusNumerosRoleta(data, meu);
   const k8 = (n) => String(n || '').replace(/\D/g, '').slice(-8);
   const conta = _presselNaConta(u, data);
@@ -25455,6 +25906,9 @@ async function handlePresselMeuNumero(req, env) {
   const pid = body && body.pid != null && body.pid !== '' ? String(body.pid) : '';
   if (nk.length < 8) return err('Número inválido');
   const meu = String(u.id);
+  // NUMERO DE COBRANCA (31/10/2026): o cobrador nao tem roleta. Diz isso em vez de "nao esta na sua
+  // roleta", que soaria como numero perdido.
+  if ((await _cobIds(env)).has(meu) && ligar) return err('Número de cobrança não recebe lead da pressel.', 409);
   for (let tent = 0; tent < 6; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
@@ -25640,6 +26094,11 @@ async function handlePresselNum(req, env) {
     const alvos = (Array.isArray(data.pressels) ? data.pressels : [])
       .filter((p) => p && _donoDe(p) === _donoDe(chip) && (_meuAfl ? String(p.afl || '') === _meuAfl : conta(p.id)));
     if (!alvos.length) return err('Nenhuma pressel dessa operação', 404);
+    // NUMERO DE COBRANCA NAO LIGA (31/10/2026, ver _cobIds): a roleta ja nao manda lead pra ele, e
+    // gravar a chave ligada so poria o cobrador na lista de vendedores da pressel.
+    if (ligar && tent === 0 && (await _cobIds(env)).has(String(at))) {
+      return err('Esse número é de cobrança: ele não recebe lead da pressel.', 409);
+    }
     // LIGAR COM O APP DO DONO FECHADO NAO PEGA (31/10/2026, ver _desligaAppFechado). Recusa aqui, com
     // a frase, em vez de ligar e ver o cron desligar um minuto depois. So na casa e so na 1a volta.
     if (ligar && tent === 0 && !String(chip.afl || '')) {
@@ -25806,6 +26265,9 @@ async function _roletaDesligaNum(env, nk8, o) {
     if (!chip) return null;
     const at = String(chip.at || '');
     if (!at) return null;
+    // NUMERO DE COBRANCA (31/10/2026, ver _cobIds): nao esta em pressel nenhuma, e gravar `off` no
+    // nome do cobrador so o poria na lista de vendedores. A tag (Restrito/Banido) continua com quem chama.
+    if ((await _cobIds(env)).has(at)) return null;
     // COLUNA DO CADASTRO NAO E VENDEDOR (25/10/2026). O numero estacionado numa coluna nao esta em
     // fila nenhuma e a roleta nunca manda lead pra ele; gravar `off` no nome de uma coluna so suja o
     // estado e faz esta funcao devolver "desliguei alguma coisa", que e o que disparava o aviso.
@@ -25914,6 +26376,10 @@ function _swwebLigadosPorDono(data) {
     if (!c || !c.num || String(c.afl || '')) continue;
     const at = String(c.at || '').trim();
     if (!at || /^ccol_/i.test(at)) continue;
+    // COBRADOR NAO TEM INTERRUPTOR (31/10/2026, ver _cobIds): sem isto o cron de app fechado gravava
+    // uma entrada dele em toda pressel da casa, e o plantao a marca app_off que o devolvia a roleta.
+    // Quem chama tem que ter feito `await _cobIds(env)`.
+    if (_ehIdDeCobrador(at)) continue;
     const nk = _swwebK8(c.num);
     if (nk.length !== 8) continue;
     let apto = null, pega = false;
@@ -25940,6 +26406,7 @@ function _swwebLigadosPorDono(data) {
 async function _swwebDesligaDonos(env, ats, o) {
   const quer = [...new Set((ats || []).map((x) => String(x || '')).filter(Boolean))];
   if (!quer.length) return [];
+  await _cobIds(env);   // o mapa do _swwebLigadosPorDono pula chip de cobrador (sem entrada nem app_off)
   for (let tent = 0; tent < 6; tent++) {
     const lido = await _estadoLe(env, ['chips', 'pressels', 'wa_statuses']);
     if (!lido) return [];
@@ -26040,6 +26507,7 @@ async function _plantaoLimpa(env, ats) {
 async function _desligaAppFechado(env) {
   let data = null;
   try { data = await _getDashData(env); } catch (_) { return; }
+  await _cobIds(env);   // o _swwebLigadosPorDono pula chip de cobrador pela memoria
   const ligados = _swwebLigadosPorDono(data);
   const marcados = _plantaoDonos(data);
   const quem = [...new Set([...ligados.keys(), ...marcados])];
@@ -26654,6 +27122,7 @@ async function _presselSemNumeroAvisa(env, p, noTeto) {
 // pro MESMO código que a roleta usa e mostra o número real — e, quando não tem, o motivo.
 async function handlePresselDiag(req, env){
   const u = await authUser(req, env);
+  await _cobIds(env);   // a tela mostra a mesma roleta que o clique (numero de cobrador fora, ver _cobIds)
   if (!u) return err('Não autenticado', 401);
   // SEM CACHE (maxAge 0). O diagnóstico é lido logo depois de ligar/desligar um número, e o cache de
   // 8s do estado devolvia a resposta ANTERIOR: o Bruno desligou o número e a faixa continuou verde.
@@ -29476,6 +29945,7 @@ async function handlePresselPublic(req, env, id, ctx, soRedirect){
   const [data, liveSetInicial] = await Promise.all([
     _getDashData(env),   // cacheado: era parseado (1.3MB) a cada clique de anúncio
     _presselLiveSet(env),
+    _cobIds(env),        // numero de cobrador fora da roleta (_chipsDaPressel); 60 s em memoria
   ]);
   const pressels=Array.isArray(data.pressels)?data.pressels:[];
   const chips=Array.isArray(data.chips)?data.chips:[];

@@ -42,14 +42,14 @@ const conta = (nome, certo, detalhe) => {
   else { falhas.push(nome); console.log('  ERRO  ' + nome + (detalhe ? '   -> ' + detalhe : '')); }
 };
 
-const nomes = ['_swwebAppAbertos', '_swwebLigadosPorDono', '_swwebDesligaDonos', '_desligaAppFechado', '_swwebRecusaLigar',
+const nomes = ['_cobIds', '_swwebAppAbertos', '_swwebLigadosPorDono', '_swwebDesligaDonos', '_desligaAppFechado', '_swwebRecusaLigar',
   // o plantao da madrugada (31/10/2026) e chamado de dentro do _desligaAppFechado: sem recortar as
   // duas, o teste quebra com ReferenceError e parece que a regra do app fechado parou de valer
   '_plantaoDonos', '_plantaoLimpa',
   '_estadoLe', '_estadoGrava', '_presselAplicaNum', '_limpaMarcasDesligado', '_amanhaBR', '_presselNumLogEnsure', '_presselNumLog',
   '_emUsoIdsDe', '_aquecIdsDe', '_papelSt', '_papelPeloNomeSt', '_swwebApto', '_chipAquecendo', '_chipEmUso'];
 const blocos = nomes.map((n) => [n, funcao(n)]);
-const consts = ['const _swwebK8 = ', 'const _PAPEIS_ST = ', 'const APP_FECHADO_FOLGA = '].map((c) => [c, linha(c)]);
+const consts = ['let _cobIdsMem = ', 'const _ehIdDeCobrador = ', 'const _chipDeCobranca = ', 'const _swwebK8 = ', 'const _PAPEIS_ST = ', 'const APP_FECHADO_FOLGA = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
 conta('o worker tem as funcoes do app fechado', !faltando.length, 'faltando: ' + faltando.join(', '));
 if (faltando.length) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados'); process.exit(1); }
@@ -75,8 +75,8 @@ const DB = {
 const env = { DB };
 sq.exec("CREATE TABLE dashboard_state (id INTEGER PRIMARY KEY, data TEXT, version INTEGER, updated_at INTEGER, updated_by TEXT)");
 sq.exec('CREATE TABLE swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)');
-sq.exec('CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)');
-sq.exec("INSERT INTO users VALUES ('kevin','Kevin Marques'),('gui','Guilherme')");
+sq.exec('CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)');
+sq.exec("INSERT INTO users VALUES ('kevin','Kevin Marques','atendente'),('gui','Guilherme','atendente'),('hay','Haynan','cobrador')");
 
 const fabrica = new Function('_getDashData', '_brDay',
   'let _dashCache = null; let _pnlOk = false;\n'
@@ -88,6 +88,7 @@ const F = fabrica(async () => estado(), () => '2026-10-31');
 // nome do Kevin, um parado numa coluna; duas pressels da casa e uma do afiliado
 const K1 = '5515991872193', K2 = '5515991879743', KAQ = '5549988931497', G1 = '5515974076200', G2 = '5515992503977';
 const AF = '5511999990000', PARADO = '5515981430517', KRESTRITO = '5515981111111';
+const HCOB = '5511988887777';   // numero de COBRADOR (31/10/2026): nunca ganha interruptor
 const k8 = (n) => String(n).replace(/\D/g, '').slice(-8);
 const nkApp = (n) => String(n).replace(/\D/g, '').replace(/^55/, '').replace(/^(\d\d)9(\d{8})$/, '$1$2');
 const EM_USO = 'st_mpafmypw', AQUEC = 'st_mpalmegl', RESTRITO = 'st_mpafn8zm';
@@ -107,6 +108,7 @@ function estadoInicial(vend) {
       { num: G2, at: 'gui', st: 'ativo', wa_st: EM_USO, em_uso: true },
       { num: AF, at: 'kevin', afl: 'aflX', st: 'ativo', wa_st: EM_USO, em_uso: true },
       { num: PARADO, at: 'ccol_1', st: 'ativo', wa_st: EM_USO, em_uso: true },
+      { num: HCOB, at: 'hay', st: 'ativo', wa_st: EM_USO, em_uso: true },
     ],
     pressels: [
       { id: 1, vendedores: JSON.parse(JSON.stringify(vend || [])) },
@@ -256,6 +258,17 @@ aluga(G1, 'gui', vivo());
   conta('a direcao ligando o numero dele: diz quem esta com o app fechado', /^Kevin está com o SellWave Web fechado/.test(String(dir)), dir);
   conta('com o app aberto passa', (await F._swwebRecusaLigar(env, 'gui', true)) === null);
   conta('coluna do cadastro nao e pessoa: nao recusa por isso', (await F._swwebRecusaLigar(env, 'ccol_1', false)) === null);
+}
+
+console.log('\n10) numero de COBRADOR com o app fechado: o cron nao grava nada no nome dele');
+estadoInicial(TODOS_LIGADOS);
+aluga(K1, 'kevin', vivo()); aluga(G1, 'gui', vivo());
+{
+  const v0 = versao();
+  await F._desligaAppFechado(env);
+  const temHay = estado().pressels.some((p) => (p.vendedores || []).some((v) => v && v.at === 'hay'));
+  conta('o Haynan (cobrador, chip Em uso, app fechado) nao ganha entrada nem marca nas pressels', !temHay && versao() === v0, JSON.stringify(estado().pressels[0].vendedores));
+  conta('e nada vai pro registro no nome dele', !log().some((x) => x.at === 'hay'));
 }
 
 console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');

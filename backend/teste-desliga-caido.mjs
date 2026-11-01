@@ -40,11 +40,11 @@ const conta = (nome, certo, detalhe) => {
   else { falhas.push(nome); console.log('  ERRO  ' + nome + (detalhe ? '   -> ' + detalhe : '')); }
 };
 
-const nomes = ['_roletaDesligaNum', '_swwebQuedaTabela', '_swwebMarcaQueda', '_desligaCaidos', '_desligaBanidos',
+const nomes = ['_cobIds', '_roletaDesligaNum', '_swwebQuedaTabela', '_swwebMarcaQueda', '_desligaCaidos', '_desligaBanidos',
   '_presselAplicaNum', '_presselEstadoNum', '_presselNumLogEnsure', '_presselNumLog', '_limpaMarcasDesligado', '_amanhaBR',
   '_contMarcaBloqueado', '_contMarcaStatus', '_papelSt', '_papelPeloNomeSt', '_ehVendedorDaCasa'];
 const blocos = nomes.map((n) => [n, funcao(n)]);
-const consts = ['const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = ', 'const _vendCache = '].map((c) => [c, linha(c)]);
+const consts = ['let _cobIdsMem = ', 'const _ehIdDeCobrador = ', 'const _chipDeCobranca = ', 'const _donoDe = ', 'const SWWEB_QUEDA_CONFIRMA = ', 'const _PAPEIS_ST = ', 'const _vendCache = '].map((c) => [c, linha(c)]);
 const faltando = blocos.filter(([, b]) => !b).map(([n]) => n).concat(consts.filter(([, l]) => !l).map(([c]) => c));
 conta('o worker tem as funcoes da queda e do desligamento', !faltando.length, 'faltando: ' + faltando.join(', '));
 if (faltando.length) { console.log('\n' + ok + ' certos, ' + falhas.length + ' errados'); process.exit(1); }

@@ -53,7 +53,8 @@ const blocoNaoMsg = recorta('const _WA_NAO_MSG = new Set([', '\n// LEAD:');
 
 function montaIngest() {
   const chamadas = { lead: [], attrib: [], log: [], venda: [] };
-  const DONOS = { '5515974060653': { at_id: 'dir', instance: 'ax_dir' }, '5515900005555': { at_id: 'ccol_5', instance: 'ax_ccol_5' } };   // dono do NUMERO na Contingencia (o 2o esta numa COLUNA)
+  // o 3o numero e de COBRADOR (31/10/2026, versao de cobrador do app): ver o bloco no fim.
+  const DONOS = { '5515974060653': { at_id: 'dir', instance: 'ax_dir' }, '5515900005555': { at_id: 'ccol_5', instance: 'ax_ccol_5' }, '5515900007777': { at_id: 'cob_hay', instance: 'ax_cob_hay' } };   // dono do NUMERO na Contingencia (o 2o esta numa COLUNA)
   const INSTALACOES = { 'swweb:socio_x4dy6d': { at_id: 'socio_x4dy6d', instance: 'ax_socio_x4dy6d' }, 'sc_vendedor': { at_id: 'atendente_aaa', instance: 'ax_atendente_aaa' } };
   const env = {
     DB: {
@@ -81,6 +82,7 @@ function montaIngest() {
     _waLeadCapture: async (_env, inst) => { chamadas.lead.push(inst); },
     _ehUsuarioAtivo: async (_env, at) => !/^ccol_/.test(String(at)),
     _scStoreMedia: async () => '',
+    _cobIds: async () => new Set(['cob_hay']),
     json: (obj) => obj,
   };
   const nomes = Object.keys(deps);
@@ -127,6 +129,28 @@ const evLead = { msgId: 'm1', selfNumber: '5515974060653', phone: '5511988887777
   const { chama, chamadas } = montaIngest();
   await chama({ installId: 'swweb:socio_x4dy6d', donoPorNumero: true, events: [{ ...evLead, msgId: 'm4', velha: true }] });
   conta('mensagem velha continua sem gravar wa_attrib', chamadas.attrib.length === 0);
+}
+
+// NUMERO DE COBRANCA (31/10/2026). Cliente antigo falando com o numero do cobrador: a conversa vira
+// historico e mais nada. Sem lead (o wa_lead do cliente migraria), sem venda ("pedido confirmado" do
+// cobrador e o resumo de um pedido que ja existe) e sem wa_attrib (a recompra nasceria dele).
+{
+  const { chama, chamadas } = montaIngest();
+  const evCob = { ...evLead, msgId: 'c1', selfNumber: '5515900007777', body: 'oi, recebi sim' };
+  const evCobVenda = { ...evLead, msgId: 'c2', selfNumber: '5515900007777', fromMe: true, body: 'Pedido confirmado! CPF 123.456.789-09' };
+  const r = await chama({ installId: 'swweb:cob_hay', donoPorNumero: true, events: [evCob, evCobVenda] });
+  conta('cobranca: a mensagem do cliente e a do cobrador ficam no historico', chamadas.log.length === 2 && chamadas.log.every((m) => m.cobranca === true), JSON.stringify(chamadas.log.map((m) => m.cobranca)));
+  conta('cobranca: com a instancia do numero do cobrador', chamadas.log[0] && chamadas.log[0].instance === 'ax_cob_hay_00007777', chamadas.log[0] && chamadas.log[0].instance);
+  conta('cobranca: nao captura lead', chamadas.lead.length === 0, JSON.stringify(chamadas.lead));
+  conta('cobranca: "pedido confirmado" do cobrador nao vira venda', chamadas.venda.length === 0, JSON.stringify(chamadas.venda));
+  conta('cobranca: nao grava wa_attrib', chamadas.attrib.length === 0, JSON.stringify(chamadas.attrib));
+  conta('cobranca: o app recebe o recibo das duas (a fila dele esvazia)', r && Array.isArray(r.ack) && r.ack.length === 2, JSON.stringify(r && r.ack));
+}
+{
+  // e o numero do VENDEDOR aberto no app do cobrador continua como sempre: a guarda e pelo DONO do numero
+  const { chama, chamadas } = montaIngest();
+  await chama({ installId: 'swweb:cob_hay', donoPorNumero: true, events: [{ ...evLead, msgId: 'c3' }] });
+  conta('o numero do dir, mesmo aberto no app do cobrador, segue virando lead do dir', chamadas.lead[0] === 'ax_dir_74060653' && chamadas.log[0] && !chamadas.log[0].cobranca, JSON.stringify(chamadas.lead));
 }
 
 console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
