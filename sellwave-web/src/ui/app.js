@@ -204,6 +204,11 @@ function desenhaLista() {
             ? 'Abra cada um e leia o QR. Depois é só atribuir o número a um vendedor na Contingência.'
             : 'Todos conectados. Já dá pra atribuir a um vendedor na Contingência.')
           + '">' + (faltam ? faltam + ' a conectar' : 'conectados') + '</span></div>'
+      } else if (normais.every(ehCobranca)) {
+        // GRUPO DE COBRANCA: "recebendo/total" seria sempre 0/N. Conta o que esta conectado.
+        const prontos = normais.filter((x) => !faltaConectar(x)).length
+        html += '<div class="vend"><span class="vnome">' + avatar(d0.foto, d0.sigla, d0.corDono, dono) + esc(dono) + '</span><span class="risco"></span>'
+          + '<span class="qtd" title="Números conectados de ' + normais.length + '">' + prontos + '/' + normais.length + ' conectados</span></div>'
       } else {
         html += '<div class="vend"><span class="vnome">' + avatar(d0.foto, d0.sigla, d0.corDono, dono) + esc(dono) + '</span><span class="risco"></span>'
           + '<span class="qtd">' + normais.filter((x) => x.roleta).length + '/' + normais.length + '</span></div>'
@@ -320,6 +325,9 @@ function fraseEstado(n) {
     const c = seloConn(n)
     return 'sem dono ainda · ' + String(c.txt || '').toLowerCase()
   }
+  // NUMERO DE COBRANCA (31/10/2026): o dono e cobrador, o numero nao recebe lead da pressel. O que
+  // importa nele e so se esta conectado.
+  if (ehCobranca(n)) return 'número de cobrança · ' + String(seloConn(n).txt || '').toLowerCase()
   if (!ligadoDe(n)) return n.volta ? 'desligado até a meia-noite' : 'desligado'
   if (!n.roleta) return 'ligado, mas nenhum computador está com ele aberto'
   if (n.dist !== 'limite' || !n.fila) return 'distribuindo'
@@ -416,6 +424,9 @@ const podeReceber = (n) => !!n && (n.apto != null ? n.apto === true : (n.em_uso 
 // pedido do Bruno). Ele conecta eles aqui e SO DEPOIS atribui a um vendedor. Mesmo nome da coluna
 // de proposito: sao a mesma coisa, e dois nomes pro mesmo monte de numero criam duvida sobre se e.
 const DISPONIVEIS = 'Disponíveis'
+// NUMERO DE COBRANCA (31/10/2026, versao de cobrador): o dono e cobrador. Vem decidido do servidor
+// (`cobranca`), e no app do cobrador vale pra lista inteira. Sem interruptor, contador nem fila.
+const ehCobranca = (n) => !!(n && (n.cobranca === true || estado.cobranca))
 // FALTA CONECTAR? Conectado de verdade e ter sessao funcionando: "Conectado" ou "Fechado, mas
 // conectado" (ver CONN_TXT). Desconectado, caiu, banido e sem informacao sao todos "ainda precisa do
 // QR", que e exatamente o trabalho que ele vem fazer nesta prateleira.
@@ -429,7 +440,7 @@ function linhaFina(n) {
   // Mesma regra da linha larga: sem dono nao ha posicao de fila nem teto pra mostrar. Em 56px nao
   // cabe palavra nenhuma, entao a prateleira fica so com o ponto e os quatro digitos; o estado
   // inteiro continua no passe de mouse, que e o mesmo `fraseEstado` da outra barra.
-  const prateleira = !n.dono
+  const prateleira = !n.dono || ehCobranca(n)   // cobranca: so o ponto e os quatro digitos, como a prateleira
   const emFila = !prateleira && n.dist === 'limite' && n.fila && n.fila.pos
   const corChip = /^#[0-9a-f]{3,8}$/i.test(String(n.cor || '')) ? n.cor : ''
   const corEstado = corDoContador(n)
@@ -550,8 +561,12 @@ function linha(n) {
   // inteira (o que e e o que fazer) continua no passe de mouse, vinda do seloConn.
   const sc = prateleira ? seloConn(n) : null
   const falta = prateleira && faltaConectar(n)
-  const mexeLim = !prateleira && podeMexerLimite(n)
-  const conta = prateleira
+  const mexeLim = !prateleira && !ehCobranca(n) && podeMexerLimite(n)
+  const conta = ehCobranca(n)
+    // NUMERO DE COBRANCA: no lugar do contador de lead, o selo. No app do cobrador nem isso (a lista
+    // inteira e de cobranca e o topo ja diz); na lista da direcao ele separa o numero do Haynan dos de venda.
+    ? (estado.cobranca ? '' : '<span class="cobr" title="Número de cobrança: o dono é cobrador, não recebe lead da pressel">cobrança</span>')
+    : prateleira
     ? '<span class="cnt" style="--cc:' + (falta ? '#f59e0b' : 'var(--verde)') + '" title="'
       + esc(sc.txt + '. ' + sc.det) + '">' + (falta ? 'falta conectar' : 'conectado') + '</span>'
     : teto
@@ -589,7 +604,8 @@ function linha(n) {
   const lig = ligadoDe(n)
   const limiteHoje = lig && n.dist === 'limite' && n.fila && n.fila.st === 'bateu' && !aquecendo(n)
   const ate0h = !lig && !!n.volta
-  const chave = podeReceber(n)
+  const chave = ehCobranca(n) ? ''
+    : podeReceber(n)
     ? '<span class="sw' + (lig && !limiteHoje ? ' on' : '') + (limiteHoje || ate0h ? ' pausa' : '')
       + (mexendo.has(nk) ? ' ocupado' : '') + (erroChave.has(nk) ? ' erro' : '')
       + '" data-nk="' + nk + '" role="switch" aria-checked="' + lig + '"'
@@ -650,7 +666,14 @@ function telaVazia() {
     + '<div class="vazio"><div class="icone">'
     + '<svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 21l2.1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/></svg>'
     + '</div><h2>Escolha um número</h2>'
-    + '<p>A chave do lado liga e desliga a chegada de lead.</p></div>'
+    + (estado.cobranca
+      // NO MODO COBRANCA a tela vazia aponta pro trabalho do dia: a agenda.
+      ? '<p>Os pedidos pra cobrar estão na agenda, aqui embaixo.</p>'
+        + '<div class="abrir-acoes" style="justify-content:center"><button class="principal" id="abre-agenda">Abrir agenda</button></div>'
+        + ((estado.numeros || []).length ? '' : '<p style="margin-top:12px">Você ainda não tem número. Peça pra direção pôr um no seu nome na Contingência.</p>')
+      : '<p>A chave do lado liga e desliga a chegada de lead.</p>')
+    + '</div>'
+  { const ab = $('abre-agenda'); if (ab) ab.onclick = () => { if (window.__swCob) window.__swCob.abre('agenda') } }
   desenhaLista()
 }
 
@@ -1143,7 +1166,7 @@ function desarmaSair() {
 function janelaAjustes() {
   const t = Number(estado.maxAbertos) || 6
   const quem = String(estado.nome || '').trim()
-  const cargo = estado.direcao ? 'direção' : 'vendedor'
+  const cargo = estado.direcao ? 'direção' : (estado.cobranca ? 'cobrador' : 'vendedor')
 
   // ── o topo: a marca, de quem e esta sessao, e a versao ──────────────────────────────────
   let html = '<div class="aj-topo">'
@@ -1205,7 +1228,8 @@ function janelaAjustes() {
   const ligado = estado.painelLigado !== false
   html += '<div class="aj-sec">Só neste computador</div>'
     + ajItem(ligado ? 'on' : '', AJ_IC.painel,
-      'Painel de venda ao lado', 'As respostas rápidas e os funis, do lado direito do WhatsApp.',
+      estado.cobranca ? 'Painel de cobrança ao lado' : 'Painel de venda ao lado',
+      estado.cobranca ? 'O pedido do cliente, as respostas rápidas e os funis de cobrança, do lado direito do WhatsApp.' : 'As respostas rápidas e os funis, do lado direito do WhatsApp.',
       '<button class="sw ' + (ligado ? 'on' : '') + '" id="sw3" role="switch" aria-checked="' + ligado + '"></button>')
     + ajItem('', AJ_IC.registro, 'Abrir registro desta máquina', 'O que o app anotou, pra mandar quando algo der errado.',
       '<span class="aj-seta">' + ajSvg(AJ_IC.seta) + '</span>',
@@ -1221,10 +1245,14 @@ function janelaAjustes() {
   // o login dela traria. E a mesma peca do "ver como" da dash e ela so ESTREITA. Por isso o preview
   // aparece so pra quem ja e direcao de verdade - dentro dele `estado.direcao` vem false do
   // servidor e esta tela some sozinha, que e o certo.
-  const vends = (estado.vendedores || []).filter((v) => v && v.id && v.id !== 'dir')
+  // E OS COBRADORES (31/10/2026): a versao de cobrador so se ve entrando como um deles, e o cobrador
+  // sem numero nenhum no nome nao estava entre os donos de numero.
+  const vendsBase = (estado.vendedores || []).filter((v) => v && v.id && v.id !== 'dir')
+  const vends = vendsBase.concat((estado.cobradores || []).filter((c) => c && c.id && !vendsBase.some((v) => v.id === c.id))
+    .map((c) => ({ id: c.id, nome: c.nome + ' (cobrador)' })))
   if (estado.direcao && vends.length) {
     html += ajItem(estado.como ? 'azul' : '', AJ_IC.olho,
-      'Ver como vendedor', 'A tela fica igual à dele: só os números dele, sem nada de proxy. Leitura apenas.',
+      'Ver como vendedor ou cobrador', 'A tela fica igual à da pessoa: só os números dela, sem nada de proxy. Leitura apenas.',
       '<div class="escolha" id="como">'
       + '<button type="button" id="como-bt"><span class="v">'
       + esc((vends.find((v) => v.id === estado.como) || {}).nome || 'Eu mesmo') + '</span>'
@@ -1354,8 +1382,12 @@ async function recarregaEstado() {
   if (window.__swFoto) return
   estado = await window.sw.estado()
   $('versao').textContent = estado.como
-    ? (((estado.vendedores || []).find((x) => x.id === estado.como) || {}).nome || 'vendedor')
+    ? ((([...(estado.vendedores || []), ...(estado.cobradores || [])]).find((x) => x.id === estado.como) || {}).nome || 'vendedor')
     : (estado.nome || ('v' + estado.versao))
+  // O SELO DO MODO COBRANCA (31/10/2026): o cobrador (ou a direcao no preview dele) sabe de cara que
+  // esta na versao de cobranca, e por que nao ha interruptor nem contador de lead na lista.
+  document.body.classList.toggle('cobranca', !!estado.cobranca)
+  { const m = $('modo-cob'); if (m) m.hidden = !estado.cobranca }
   desenhaPreview()
   // As duas classes que mudam o layout da casca. `sem-painel` acende a abinha de voltar, que so
   // existe porque o painel escondido deixa uma fresta de 22px (ver main.js).

@@ -57,7 +57,9 @@
     }
     if (Number(g.faixa) > 0) caixa.style.setProperty('--crm-faixa', Math.round(Number(g.faixa)) + 'px')
     // O MAIN FECHOU (clicou num numero da lista, abriu a conversa de um card): a tela acompanha.
-    if (typeof g.aberto === 'boolean' && g.aberto !== aberto) desenhaAberto(g.aberto)
+    // So quando este quadro e o da vez: no modo cobranca o mesmo aviso abre e fecha o da cobranca, e
+    // este ficaria "aberto" escondido, roubando o Esc da ficha de la.
+    if (typeof g.aberto === 'boolean' && g.aberto !== aberto && (logado() || !g.aberto)) desenhaAberto(g.aberto)
     ajustaMini()
   }
   window.sw.ao('sw:area', aplicaArea)
@@ -68,7 +70,9 @@
     // A colheita mandou o que faltava: o lead ja esta na dash, entao o quadro rele agora.
     if (m && m.faltavam && (!antes || antes.em !== m.em)) { sig = ''; busca() }
   })
-  function logado() { try { return !!(typeof estado !== 'undefined' && estado && estado.temToken) } catch (_) { return false } }
+  // NO MODO COBRANCA ESTE CRM NAO APARECE (31/10/2026): no lugar dele mora o quadro de pedidos e a
+  // agenda do cobrador (cobranca.js), na mesma faixa. Pro cobrador "logado" aqui e falso.
+  function logado() { try { return !!(typeof estado !== 'undefined' && estado && estado.temToken && !estado.cobranca) } catch (_) { return false } }
   function vigia() {
     const ok = logado()
     if (ok && !geometria) { try { aplicaArea(estado.crm) } catch (_) { /* proxima volta */ } }

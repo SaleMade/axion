@@ -42,10 +42,19 @@ contextBridge.exposeInMainWorld('sw', {
   crmConversa: (fone, instancia, nk, origem) => chamar('sw:crm-conversa', { fone, instancia, nk, origem }),
   copiar: (texto) => chamar('sw:copiar', { texto }),
   crmPedido: (fone) => chamar('sw:crm-pedido', { fone }),
+  // A COBRANCA (31/10/2026): o quadro e a agenda do cobrador, a ficha do pedido, gravar pela rota da
+  // dash, o link curto, abrir link no navegador, chamar o cliente por um dos numeros e o lembrete.
+  cobDados: (sig) => chamar('sw:cob-dados', { sig }),
+  cobPedido: (id) => chamar('sw:cob-pedido', { id }),
+  cobSalva: (id, patch) => chamar('sw:cob-salva', { id, patch }),
+  cobCurto: (url, id) => chamar('sw:cob-curto', { url, id }),
+  abrirLink: (url) => chamar('sw:abrir-link', { url }),
+  cobConversa: (fone, nk) => chamar('sw:cob-conversa', { fone, nk }),
+  cobLembrete: (d) => chamar('sw:cob-lembrete', d),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos', 'sw:area', 'sw:marcacao']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos', 'sw:area', 'sw:marcacao', 'sw:modo', 'sw:cob-abrir']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)

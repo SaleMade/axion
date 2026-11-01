@@ -35,8 +35,40 @@ const CRM = {
 }
 let MARCACAO = { prontos: 1, em: Date.now(), faltavam: 0, numeros: 1 }
 
-const ESTADO = () => ({
-  temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '',
+// A VERSAO DE COBRADOR (31/10/2026). `__poeCobranca(true)` vira o app do Haynan: os numeros dele
+// (de cobranca, sem roleta), o cargo e o quadro de pedidos com a agenda. O que o /api/swweb/cobranca
+// devolveria: um atrasado, um de hoje, um de amanha, um sem retorno, um chegando, um pago hoje, e um
+// de OUTRO cobrador (o "so os meus" tem que esconder ele).
+let cobranca = false
+const H = 3600000
+const brAg = (msDaqui) => { const d = new Date(Date.now() + msDaqui); const p = (n) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) }
+const meiaNoite = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() }
+const ped = (o) => ({ vl: 297, valor: 297, saldo: 297, pago: false, pagoTs: 0, spg: 'Pendente', mod: 'entrega', agend: '', selo: null, entrega: null, entrou: Date.now() - H, criado: Date.now() - 5 * 24 * H, at: 'a1', atNome: 'Guilherme', cob: 'hc', cobNome: 'Haynan', track: '', transp: '', tags: [], ncom: 0, vc: true, cidade: 'Campinas', uf: 'SP', prod: 'GlicoSix 3 Meses', ...o })
+const COB_PEDIDOS = [
+  ped({ id: '9001', nome: 'Ana Atrasada', wa: '11911110001', col: 'Entregues', colBruta: 'Cobrança', agend: brAg(-26 * H), selo: { label: 'Entregue', cor: '#10b981', quando: '' } }),
+  ped({ id: '9002', nome: 'Bia Hoje', wa: '11911110002', col: 'Entregues', colBruta: 'Cobrança', agend: brAg(Math.min(meiaNoite() + 24 * H - 60000, Date.now() + 2 * 60000) - Date.now()) }),
+  ped({ id: '9003', nome: 'Caio Amanha', wa: '11911110003', col: 'Retirar nos Correios', colBruta: 'Retirada', agend: brAg(meiaNoite() + 34 * H - Date.now()) }),
+  ped({ id: '9004', nome: 'Davi Sem Data', wa: '11911110004', col: 'Entregues', colBruta: 'Cobrança', saldo: 497, valor: 497, vl: 497 }),
+  ped({ id: '9005', nome: 'Eva Chegando', wa: '11911110005', col: 'Saiu para Entrega', colBruta: 'Rota de Entrega', selo: { label: 'Rota de entrega', cor: '#10b981', quando: '' } }),
+  ped({ id: '9006', nome: 'Fabio Pago', wa: '11911110006', col: 'Pagos', colBruta: 'Pagos', pago: true, spg: 'Pago', pagoTs: Date.now() - 60000, saldo: 0 }),
+  ped({ id: '9007', nome: 'Gil De Outro', wa: '11911110007', col: 'Entregues', colBruta: 'Cobrança', cob: 'outro', cobNome: 'Outra Pessoa' }),
+  ped({ id: '9008', nome: 'Hugo Frustrado', wa: '11911110008', col: 'Frustrados', colBruta: 'Frustrado' }),
+]
+const COB = { ok: true, sig: 'c1', eu: 'hc', cargo: 'cobrador', pedidos: COB_PEDIDOS, prontos: ['Cliente não atendeu, vou tentar de novo mais tarde', 'Aguardando resposta do cliente'] }
+const NUMS_COB = [
+  { numero: '5511988887777', at: 'hc', dono: 'Haynan', roleta: false, ligado: true, cobranca: true, apto: true, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', em_uso: true, st: 'ativo', status: 'Em uso', conn: { st: 'pronto', ts: 0 } },
+  { numero: '5511977776666', at: 'hc', dono: 'Haynan', roleta: false, ligado: true, cobranca: true, apto: true, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', em_uso: true, st: 'ativo', status: 'Em uso', conn: null },
+]
+
+const ESTADO = () => (cobranca ? {
+  temToken: true, nome: 'Haynan', versao: '1.5.0', como: '', cargo: 'cobrador', cobranca: true, cobradores: [],
+  direcao: false, travaProxy: true, exigirBrasil: true, maxAbertos,
+  abertos: [], barraEncolhida, painelLigado, naoLidas: {}, fotos,
+  crm: { x: 268, width: 900, faixa: 34, aberto: false }, marcacao: MARCACAO, equipe: [],
+  numeros: NUMS_COB, vendedores: [],
+} : {
+  temToken: true, nome: 'Bruno Correa', versao: '1.5.0', como: '', cargo: 'socio', cobranca: false,
+  cobradores: [{ id: 'hc', nome: 'Haynan' }],
   // Os dois campos vem SEMPRE TRUE, como o main.js real manda desde que viraram constante.
   direcao, travaProxy: true, exigirBrasil: true, maxAbertos,
   abertos: ['1574060653'], barraEncolhida, painelLigado,
@@ -135,6 +167,20 @@ contextBridge.exposeInMainWorld('sw', {
   // A Cleuza (95983293, numero "Restrito" e fechado aqui): o main pergunta antes de abrir o de origem.
   crmConversa: (fone, instancia, nk, origem) => { chamadas.push({ nome: 'crmConversa', args: nk ? [fone, instancia, nk] : origem ? [fone, instancia, '', true] : [fone, instancia] }); return Promise.resolve(nk ? { ok: true, nk, abriu: true } : (/95983293$/.test(instancia) && !origem) ? { ok: false, semNumero: true, origem: '5519995983293', erro: 'O número em que esse lead chegou está restrito. Escolha por qual número chamar.' } : /66632248$/.test(instancia) ? { ok: false, semNumero: true, erro: 'O número em que esse lead chegou foi banido. Escolha por qual número chamar.' } : /77001122$/.test(instancia) ? { ok: true, fechado: true, numero: '5515977001122' } : { ok: true, nk: '1992503977', abriu: true }) },
   copiar: (texto) => { chamadas.push({ nome: 'copiar', args: [texto] }); return Promise.resolve({ ok: true }) },
+  // A COBRANCA (31/10/2026). O 9002 RECUSA de proposito: e o caso em que o card tem que voltar.
+  cobDados: (sig) => { chamadas.push({ nome: 'cobDados', args: [sig] }); return Promise.resolve(sig === COB.sig ? { ok: true, igual: true, sig } : JSON.parse(JSON.stringify(COB))) },
+  cobPedido: (id) => {
+    chamadas.push({ nome: 'cobPedido', args: [id] })
+    const p = COB_PEDIDOS.find((x) => x.id === String(id))
+    if (!p) return Promise.resolve({ ok: true, pedidos: [] })
+    return Promise.resolve({ ok: true, pedidos: [{ ...JSON.parse(JSON.stringify(p)), data: '27/10', links: { checkout: 'https://checkout.exemplo/k3?x=1', pix: 'https://pix.exemplo/p?ped=' + p.id, boleto: '', cartao: '', rastreio: 'https://glico-six.rastreio.vip/rastreio?codigo=AB1' }, hist: [{ de: 'Enviado', para: 'Entregue', quando: '30/10 10:00', quem: 'Sistema', nota: '' }], comentarios: [{ quem: 'Guilherme', tx: 'cliente pediu pra ligar depois', quando: '30/10 11:00', tipo: '', url: '' }] }] })
+  },
+  cobSalva: (id, patch) => { chamadas.push({ nome: 'cobSalva', args: [id, patch] }); return new Promise((r) => setTimeout(() => r(String(id) === '9002' ? { ok: false, erro: 'O pedido mudou desde que você abriu' } : { ok: true, negados: [] }), 80)) },
+  cobCurto: (url, id) => { chamadas.push({ nome: 'cobCurto', args: [url, id] }); return Promise.resolve({ ok: true, url: 'https://sw.li/abc' }) },
+  abrirLink: (url) => { chamadas.push({ nome: 'abrirLink', args: [url] }); return Promise.resolve({ ok: true }) },
+  // Sem numero escolhido e nenhum conectado: o main pede pra escolher (semNumero). Com numero: abre.
+  cobConversa: (fone, nk) => { chamadas.push({ nome: 'cobConversa', args: [fone, nk] }); return Promise.resolve(nk ? { ok: true, nk, abriu: true } : { ok: false, semNumero: true, erro: 'Nenhum número conectado agora. Escolha por qual chamar.' }) },
+  cobLembrete: (d) => { chamadas.push({ nome: 'cobLembrete', args: [d] }); return Promise.resolve({ ok: true }) },
   crmPedido: (fone) => { chamadas.push({ nome: 'crmPedido', args: [fone] }); return Promise.resolve({ ok: true, venda: { raw: ['Pedido Concluído', 'Nome: Maria do Carmo', 'CPF: 123'].join(String.fromCharCode(10)), valor: 297, ts: agoraS - 1500, nome: 'Maria do Carmo' } }) },
 })
 // O main avisando a casca (sw:area, sw:marcacao...), como o webContents.send faria.
@@ -146,6 +192,7 @@ contextBridge.exposeInMainWorld('__fotosChegaram', () => {
   for (const fn of ouvintes['sw:fotos'] || []) fn({})
 })
 contextBridge.exposeInMainWorld('__poeDirecao', (v) => { direcao = !!v })
+contextBridge.exposeInMainWorld('__poeCobranca', (v) => { cobranca = !!v })
 // Ver a nota no teste-painel-preload: array exposto direto nasce congelado.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
 // Pra o teste poder simular o que o processo principal devolveria depois de esconder o painel.

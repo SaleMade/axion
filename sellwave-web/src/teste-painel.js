@@ -41,7 +41,9 @@ let ponto = 'antes do whenReady'
 // O TETO SUBIU PRA 120s EM 26/10/2026: o teste do respiro entre funis espera 14 segundos de
 // relogio de proposito (ele CRONOMETRA a pausa de 10s, nao le o codigo). Sem subir o teto, o
 // suite inteiro morria no meio e os testes seguintes nem rodavam.
-setTimeout(() => { console.log('ESTOUROU O TEMPO (120s). Ultimo ponto: ' + ponto); app.exit(1) }, 120000)
+// E PRA 180s EM 31/10/2026: a versao de cobrador ganhou dois blocos (painel e casca) e o suite ja
+// passava de 105s sem eles.
+setTimeout(() => { console.log('ESTOUROU O TEMPO (180s). Ultimo ponto: ' + ponto); app.exit(1) }, 180000)
 process.on('unhandledRejection', (e) => { console.log('PROMESSA SOLTA em ' + ponto + ': ' + (e && e.message)); app.exit(1) })
 
 app.whenReady().then(async () => {
@@ -1118,6 +1120,37 @@ app.whenReady().then(async () => {
   await js('window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293")')
   await espera(300)
 
+  // ══ A VERSAO DE COBRADOR NO PAINEL (31/10/2026) ═════════════════════════════════════════════
+  // No app do cobrador a aba Pedidos nao cadastra pedido: vira a FICHA DE COBRANCA do cliente da
+  // conversa, e o link de pagamento sai NA CONVERSA pela mesma fila dos funis.
+  ponto = 'cobranca painel'
+  await js('window.__poeCobranca(true)')
+  await espera(1900)
+  const pc1 = await js('(() => ({ rot: (document.querySelector(".aba[data-aba=pedidos] .aba-rot") || {}).textContent,'
+    + ' aba: (document.querySelector(".aba.on") || {}).dataset ? document.querySelector(".aba.on").dataset.aba : "",'
+    + ' ficha: !!document.querySelector("#corpo .fx"), nome: (document.querySelector("#corpo .fx-nome b") || {}).textContent,'
+    + ' cad: !!document.querySelector("#corpo [data-k=nome]"),'
+    + ' pediu: (window.__ver()).filter(c => c.nome === "cobPedido").map(c => String(c.args[0])) }))()')
+  conta('cobranca: a aba Pedidos vira Cobranca e abre sozinha', pc1.rot === 'Cobrança' && pc1.aba === 'pedidos', JSON.stringify(pc1))
+  conta('cobranca: mostra a ficha do cliente da conversa, nao o cadastro', pc1.ficha && !pc1.cad && pc1.nome === 'Cliente de Teste', JSON.stringify(pc1))
+  conta('cobranca: a ficha e buscada pelo telefone da conversa', pc1.pediu.includes('5519995983293'), JSON.stringify(pc1.pediu))
+  const mandasAntes = await js('(window.__ver()).filter(c => c.nome === "manda").length')
+  await clica('#corpo [data-acao=enviar][data-k=pix]')
+  await espera(3200)
+  const pc2 = await js('(() => { const v = window.__ver(); return { curto: v.filter(c => c.nome === "cobCurto").length,'
+    + ' mandas: v.filter(c => c.nome === "manda").slice(' + mandasAntes + ').map(c => String((c.args[2] || {}).texto || "")) } })()')
+  conta('cobranca: "Enviar" o Pix manda o link curto NA CONVERSA, pela fila', pc2.curto >= 1 && pc2.mandas.some((t) => /Pix: https:\/\/sw\.li\/abc$/.test(t)), JSON.stringify(pc2))
+  await clica('#corpo [data-acao=agend]')
+  await espera(400)
+  const pc3 = await js('(() => { const s = (window.__ver()).filter(c => c.nome === "cobSalva"); const u = s[s.length - 1]; return u ? u.args : null })()')
+  conta('cobranca: o atalho de retorno grava o agend no pedido', !!pc3 && pc3[0] === '7001' && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(String(pc3[1] && pc3[1].agend)), JSON.stringify(pc3))
+  await js('window.__poeCobranca(false)')
+  await espera(1900)
+  const pc4 = await js('(document.querySelector(".aba[data-aba=pedidos] .aba-rot") || {}).textContent')
+  conta('fora do modo cobranca a aba volta a ser Pedidos', pc4 === 'Pedidos', pc4)
+  await js('(() => { const b = document.querySelector(".aba[data-aba=itens]"); if (b) b.click() })()')
+  await espera(200)
+
   conta('nenhum erro de javascript na tela', erros.length === 0, erros.join(' | ').slice(0, 200))
 
   // ══ A CASCA (barra lateral): encolher e voltar ═════════════════════════════════════════════
@@ -1881,6 +1914,112 @@ app.whenReady().then(async () => {
     + ' await new Promise(r => setTimeout(r, 400));'
     + ' return (window.__ver()).filter(c => c.nome === "destacar").map(c => String(c.args[1] || "")) })()')
   conta('clicar nele manda destacar aquele numero', destacou.includes('1574060653'), JSON.stringify(destacou))
+
+  // ══ A VERSAO DE COBRADOR NA CASCA (31/10/2026) ══════════════════════════════════════════════
+  // "o CRM dele vai ser literalmente o nosso Kanban" e "uma visualizacao de agenda: quais ele deve
+  // cobrar, quais sao os atrasados e os que vao chegar mais a frente".
+  ponto = 'cobranca casca'
+  await js2('(async () => { fechaModal(); window.__poeCobranca(true); await recarregaEstado(); telaVazia() })()')
+  await espera(1400)   // o vigia de 1 s do quadro mostra a faixa
+  const cb1 = await js2('(() => ({ cob: !document.getElementById("cob").hidden, crm: !document.getElementById("crm").hidden,'
+    + ' selo: !document.getElementById("modo-cob").hidden, chaves: document.querySelectorAll(".lista .sw").length,'
+    + ' contadores: document.querySelectorAll(".lista .cnt").length, grupo: (document.querySelector(".lista .vend .qtd") || {}).textContent || "",'
+    + ' mini: document.getElementById("cob-mini").textContent, abreAgenda: !!document.getElementById("abre-agenda") }))()')
+  conta('cobranca: a faixa de baixo e a da cobranca, nao o CRM do atendimento', cb1.cob && !cb1.crm, JSON.stringify(cb1))
+  conta('cobranca: o topo diz que e a versao de cobranca', cb1.selo === true)
+  conta('cobranca: numero do cobrador sem interruptor e sem contador de lead', cb1.chaves === 0 && cb1.contadores === 0, JSON.stringify(cb1))
+  conta('cobranca: o grupo conta os conectados, nao "recebendo"', /1\/2 conectados/.test(cb1.grupo), cb1.grupo)
+  conta('cobranca: a faixa conta so os dele (atrasado, hoje, sem retorno, chegando) e o recebido hoje',
+    /Atrasados1/.test(cb1.mini) && /Hoje1/.test(cb1.mini) && /Sem retorno1/.test(cb1.mini) && /Chegando1/.test(cb1.mini) && /297,00/.test(cb1.mini), cb1.mini)
+  conta('cobranca: a tela vazia oferece abrir a agenda', cb1.abreAgenda === true)
+
+  await js2('document.getElementById("abre-agenda").click()')
+  await espera(450)
+  const colsCob = () => js2('(() => ({ on: document.getElementById("cob").classList.contains("on"),'
+    + ' cols: [...document.querySelectorAll("#cob-corpo .crm-col")].map(c => ({ col: c.dataset.col, n: (c.querySelector(".crm-col-cab span") || {}).textContent,'
+    + ' nomes: [...c.querySelectorAll(".cob-card .cob-l1 b")].map(b => b.textContent) })) }))()')
+  const cb2 = await colsCob()
+  const col = (r, id) => (r.cols.find((c) => c.col === id) || { nomes: [] }).nomes.join(',')
+  conta('cobranca: o quadro abre na agenda, tirando o WhatsApp da frente', cb2.on && (await js2('(window.__ver()).some(c => c.nome === "crmAbrir" && c.args[0] === true)')), JSON.stringify(cb2.cols.map((c) => c.col)))
+  conta('agenda: Atrasados, Hoje e Proximos nos lugares certos', col(cb2, 'atrasados') === 'Ana Atrasada' && col(cb2, 'hoje') === 'Bia Hoje' && col(cb2, 'proximos') === 'Caio Amanha', JSON.stringify(cb2.cols))
+  conta('agenda: Sem retorno tem o Davi e NAO o Gil, que e de outro cobrador', col(cb2, 'sem') === 'Davi Sem Data', col(cb2, 'sem'))
+  conta('agenda: Chegando tem quem saiu pra entrega', col(cb2, 'chegando') === 'Eva Chegando', col(cb2, 'chegando'))
+  await js2('(() => { const c = document.getElementById("cob-meus"); c.checked = false; c.dispatchEvent(new Event("change")) })()')
+  await espera(150)
+  conta('agenda: sem o "so os meus", o pedido do outro cobrador aparece', /Gil De Outro/.test(col(await colsCob(), 'sem')))
+  await js2('(() => { const c = document.getElementById("cob-meus"); c.checked = true; c.dispatchEvent(new Event("change")) })()')
+
+  await js2('document.querySelector("#cob-abas [data-a=kanban]").click()')
+  await espera(200)
+  const cb3 = await colsCob()
+  conta('kanban: as colunas da dash, na ordem, mais a perda', cb3.cols.map((c) => c.col).join('|') === 'A Enviar|Preparando|Enviados|Saiu para Entrega|Entregues|Retirar nos Correios|Requer Atenção|Pagos|perda', cb3.cols.map((c) => c.col).join('|'))
+  conta('kanban: Cobranca com os tres dele e Pagos com o Fabio', col(cb3, 'Entregues').split(',').sort().join(',') === 'Ana Atrasada,Bia Hoje,Davi Sem Data' && col(cb3, 'Pagos') === 'Fabio Pago', JSON.stringify(cb3.cols))
+  conta('kanban: a perda fica recolhida, so com a contagem', (cb3.cols.find((c) => c.col === 'perda') || {}).n === '1')
+
+  await js2('document.querySelector(".cob-card[data-id=\'9001\'] .cob-l1").click()')
+  await espera(350)
+  const cb4 = await js2('(() => ({ aberta: !document.getElementById("cob-ficha").hidden, txt: document.getElementById("cob-ficha-corpo").textContent,'
+    + ' pix: !!document.querySelector("#cob-ficha [data-acao=copiar-link][data-k=pix]"), enviar: !!document.querySelector("#cob-ficha [data-acao=enviar]"),'
+    + ' conversa: !!document.querySelector("#cob-ficha [data-acao=conversa]") }))()')
+  conta('ficha: clicar no card abre a ficha com o comentario e os links', cb4.aberta && /cliente pediu pra ligar depois/.test(cb4.txt) && cb4.pix, JSON.stringify(cb4).slice(0, 160))
+  conta('ficha no quadro: abre a conversa, mas nao "envia" (nao ha conversa na tela)', cb4.conversa && !cb4.enviar, JSON.stringify(cb4).slice(-80))
+  const salvas = () => js2('(window.__ver()).filter(c => c.nome === "cobSalva").map(c => c.args)')
+  const nSalvas0 = (await salvas()).length
+  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  await espera(150)
+  const armou = await js2('(document.querySelector("#cob-ficha [data-acao=pago]") || {}).textContent')
+  conta('ficha: "Marcar como pago" pede confirmacao com o valor antes de gravar', /Confirmar/.test(armou) && /297,00/.test(armou) && (await salvas()).length === nSalvas0, armou)
+  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  await espera(450)
+  const pg = (await salvas()).slice(nSalvas0)
+  conta('ficha: confirmado, grava pago + valor + Pagos numa chamada so, com o "antes"',
+    pg.length === 1 && pg[0][0] === '9001' && pg[0][1].spg === 'Pago' && pg[0][1].valor_neg === 297 && pg[0][1].col === 'Pagos' && pg[0][1].antes && pg[0][1].antes.col === 'Cobrança', JSON.stringify(pg))
+  await js2('(() => { const t = document.querySelector("#cob-ficha .fx-com"); t.value = "prometeu pagar sexta"; document.querySelector("#cob-ficha [data-acao=comentar]").click() })()')
+  await espera(450)
+  const cm = (await salvas()).pop()
+  conta('ficha: o comentario vai sem "who" (o servidor carimba quem esta logado)', cm && cm[1].comment_add && cm[1].comment_add.tx === 'prometeu pagar sexta' && !('who' in cm[1].comment_add), JSON.stringify(cm))
+  await js2('document.querySelector("#cob-ficha [data-acao=copiar-link][data-k=pix]").click()')
+  await espera(250)
+  conta('ficha: copiar o Pix copia o link curto', await js2('(window.__ver()).some(c => c.nome === "copiar" && c.args[0] === "https://sw.li/abc")'))
+
+  await js2('window.__swCob.fechaFicha(); document.querySelector(".cob-card[data-id=\'9004\'] .cob-zap").click()')
+  await espera(300)
+  const mn = await js2('(() => { const m = document.getElementById("cob-menu"); return { visivel: !m.hidden, nums: [...m.querySelectorAll("button[data-num]")].map(b => b.dataset.num) } })()')
+  conta('conversa: sem numero conectado, oferece a lista dele pra escolher (contingencia)', mn.visivel && mn.nums.join() === '5511988887777,5511977776666', JSON.stringify(mn))
+  await js2('document.querySelector("#cob-menu button[data-num=\'5511977776666\']").click()')
+  await espera(300)
+  const cv = await js2('(() => ({ ultima: (window.__ver()).filter(c => c.nome === "cobConversa").pop(), on: document.getElementById("cob").classList.contains("on") }))()')
+  conta('conversa: o numero escolhido abre a conversa do cliente e o quadro sai da frente', cv.ultima && cv.ultima.args[0] === '11911110004' && cv.ultima.args[1] === '5511977776666' && !cv.on, JSON.stringify(cv))
+
+  await js2('window.__swCob.abre("kanban")')
+  await espera(300)
+  const nS1 = (await salvas()).length
+  await js2('window.__swCob.move("9004", "Pagos")')
+  await espera(300)
+  conta('kanban: arrastar pra Pagos NAO grava calado, abre a ficha pra confirmar o valor', (await salvas()).length === nS1 && (await js2('window.__swCob.estado().fichaId')) === '9004')
+  await js2('window.__swCob.move("9004", "Requer Atenção")')
+  await espera(300)
+  const mv = (await salvas()).slice(nS1)
+  conta('kanban: arrastar pra outra etapa grava a coluna com o "antes"', mv.length === 1 && mv[0][1].col === 'Requer Atenção' && mv[0][1].antes.col === 'Cobrança', JSON.stringify(mv))
+  await js2('window.__swCob.move("9002", "Requer Atenção")')
+  await espera(400)
+  const volta = await js2('(() => ({ aviso: document.getElementById("cob-aviso").textContent, onde: [...document.querySelectorAll("#cob-corpo .crm-col")].find(c => c.querySelector(".cob-card[data-id=\'9002\']"))?.dataset.col }))()')
+  conta('kanban: a dash recusou, o card volta e a tela diz por que', volta.onde === 'Entregues' && /Não salvou/.test(volta.aviso), JSON.stringify(volta))
+
+  await js2('(async () => { await window.__swCob.fecha(); janelaAjustes() })()')
+  await espera(200)
+  const quemAj = await js2('(document.querySelector("#modal-corpo .quem") || {}).textContent')
+  conta('ajustes: diz que quem esta no app e cobrador', /cobrador/.test(quemAj || ''), quemAj)
+  await js2('fechaModal()')
+  await js2('(async () => { window.__poeCobranca(false); await recarregaEstado(); telaVazia() })()')
+  await espera(1400)
+  const fim = await js2('(() => ({ cob: !document.getElementById("cob").hidden, crm: !document.getElementById("crm").hidden, selo: !document.getElementById("modo-cob").hidden }))()')
+  conta('fora do modo cobranca volta o CRM do atendimento', !fim.cob && fim.crm && !fim.selo, JSON.stringify(fim))
+  await js2('janelaAjustes()')
+  await espera(150)
+  const verComo = await js2('[...document.querySelectorAll("#como .ops button")].map(b => b.textContent)')
+  conta('ajustes da direcao: o "ver como" oferece o cobrador, mesmo sem numero', verComo.some((t) => /Haynan \(cobrador\)/.test(t)), JSON.stringify(verComo))
+  await js2('fechaModal()')
 
   conta('nenhum erro de javascript na casca', erros2.length === 0, erros2.join(' | ').slice(0, 200))
   w2.destroy()

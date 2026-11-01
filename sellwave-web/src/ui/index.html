@@ -562,6 +562,59 @@
   .crm-pedido .cartao { max-width: 460px; }
   .crm-pedido pre { max-height: 52vh; overflow: auto; white-space: pre-wrap; font: 11.5px/1.55 "Segoe UI", system-ui, sans-serif; color: var(--apagado);
     background: rgba(255, 255, 255, .03); border: 1px solid var(--linha); border-radius: 9px; padding: 10px; margin: 10px 0 0; user-select: text; }
+
+  /* ─────────────── A COBRANCA (31/10/2026, versao de cobrador) ───────────────
+     O mesmo lugar e a mesma moldura do CRM do atendimento (.crm): faixa no pe, quadro na area
+     inteira. Por dentro: as abas Agenda e Pedidos (o Kanban), a busca, o "so os meus" e a ficha do
+     pedido numa gaveta a direita. As cores das colunas sao as do Kanban da dash. */
+  .cob .crm-mini span { cursor: pointer; }
+  .cob .crm-mini span:hover em { color: var(--texto); }
+  .cob-busca { position: relative; flex: 1 1 200px; max-width: 320px; min-width: 120px; }
+  .cob-busca input { width: 100%; padding: 6px 10px 6px 28px; border-radius: 8px; border: 1px solid var(--linha); background: rgba(255, 255, 255, .03); outline: none; font-size: 12px; }
+  .cob-busca input:focus { border-color: rgba(36, 194, 120, .45); }
+  .cob-busca svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--apagado); }
+  .cob-meus { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--apagado); white-space: nowrap; cursor: pointer; }
+  .cob-meus input { accent-color: #24c278; }
+  .cob-resumo { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0 14px 10px; font-size: 12px; color: var(--apagado); }
+  .cob-resumo b { color: var(--texto); font-variant-numeric: tabular-nums; }
+  .cob-carrega { margin: auto; text-align: center; color: var(--apagado); font-size: 12.5px; padding: 30px; line-height: 1.6; }
+  .cob-card { cursor: pointer; display: flex; flex-direction: column; gap: 5px; }
+  .cob-card .cob-l1 { display: flex; min-width: 0; }
+  .cob-card .cob-l1 b { flex: 1; min-width: 0; font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-card .cob-v { margin-left: auto; flex: 0 0 auto; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .cob-card .cob-l2 { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 11px; }
+  .cob-card .cob-q { color: #60a5fa; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cob-card .cob-q.atras { color: var(--vermelho); }
+  .cob-card .cob-pago { color: #10b981; font-weight: 700; }
+  .cob-card .cob-l3 { font-size: 11px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-card .cob-l4 { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+  .cob-card .cob-selo { font-size: 10.5px; font-weight: 650; color: var(--s); padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--s) 14%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-card .cob-ap { font-size: 10.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-zap { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 22px; border-radius: 7px; color: #24c278; border: 1px solid rgba(36, 194, 120, .35); background: var(--verde-fraco); }
+  .cob-zap svg { width: 13px; height: 13px; }
+  .cob-zap:hover { filter: brightness(1.2); }
+  .cob-dia { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--apagado); padding: 4px 2px 0; }
+  .cob-perda-bt { margin: 8px 8px 0; padding: 5px; border-radius: 8px; font-size: 11.5px; color: var(--apagado); border: 1px solid var(--linha); }
+  .cob-perda-bt:hover { color: var(--texto); background: rgba(255, 255, 255, .05); }
+  .cob-perda-l { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 8px; font-size: 12px; cursor: pointer; background: rgba(255, 255, 255, .02); }
+  .cob-perda-l i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  .cob-perda-l b { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .cob-ficha { position: absolute; top: 0; right: 0; bottom: 0; width: min(430px, 92%); z-index: 3; display: flex; flex-direction: column;
+    background: #121722; border-left: 1px solid var(--linha); box-shadow: -14px 0 30px rgba(0, 0, 0, .35); animation: cob-gaveta .14s ease-out; }
+  .cob-ficha[hidden] { display: none; }
+  @keyframes cob-gaveta { from { transform: translateX(24px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .cob-ficha { animation: none; } }
+  .cob-ficha-topo { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; font-size: 12px; color: var(--apagado); }
+  .cob-ficha-topo button { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--apagado); }
+  .cob-ficha-topo button:hover { background: rgba(255, 255, 255, .06); color: var(--texto); }
+  .cob-ficha-corpo { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 14px 14px; user-select: text; }
+  .cob-ficha-corpo::-webkit-scrollbar { width: 6px; }
+  .cob-ficha-corpo::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .09); border-radius: 6px; }
+  /* O selo "cobranca" na linha do numero (a direcao ve o numero do cobrador na lista dela) */
+  .num .cobr { font-size: 10px; font-weight: 650; color: #f59e0b; border: 1px solid rgba(245, 158, 11, .35); border-radius: 6px; padding: 0 5px; }
+  .modo-cob { margin: 0 12px 10px; padding: 7px 11px; border-radius: 9px; display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600;
+    color: #fbbf24; border: 1px solid rgba(245, 158, 11, .3); background: rgba(245, 158, 11, .08); }
+  .modo-cob[hidden], body.fina .modo-cob { display: none; }
   .fundo-modal { position: fixed; inset: 0; z-index: 40; background: rgba(4, 6, 10, .72); display: none; align-items: center; justify-content: center; padding: 24px; }
   .fundo-modal.on { display: flex; }
   .linha2 { display: grid; grid-template-columns: 1fr 96px; gap: 10px; }
@@ -673,6 +726,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
       </button>
     </div>
+    <!-- A VERSAO DE COBRADOR (31/10/2026): diz de cara por que nao ha interruptor nem contador de lead. -->
+    <div class="modo-cob" id="modo-cob" hidden title="A agenda e os pedidos pra cobrar ficam na faixa de baixo">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      <span>Versão de cobrança</span>
+    </div>
 
     <button class="trava" id="trava" title="Travas e ajustes" hidden>
       <span class="cadeado">
@@ -744,11 +802,51 @@
     <div class="crm-pedido" id="crm-pedido" hidden><div class="cartao" id="crm-pedido-corpo"></div></div>
   </section>
 
+  <!-- A COBRANCA (31/10/2026, versao de cobrador): no lugar do CRM, a agenda e o quadro de pedidos. -->
+  <section class="crm cob" id="cob" hidden>
+    <div class="crm-faixa" id="cob-faixa" role="button" tabindex="0" title="Abrir a agenda de cobrança">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      <b>Cobrança</b>
+      <span class="crm-mini" id="cob-mini"></span>
+      <span class="crm-marca" id="cob-estado"></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m18 15-6-6-6 6"/></svg>
+    </div>
+    <div class="crm-quadro">
+      <div class="crm-topo" id="cob-topo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#24c278" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        <h3>Cobrança</h3>
+        <div class="crm-per" id="cob-abas"><button data-a="agenda">Agenda</button><button data-a="kanban">Pedidos</button></div>
+        <div class="cob-busca">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="cob-busca" placeholder="Buscar cliente, telefone ou cidade" spellcheck="false" />
+        </div>
+        <label class="cob-meus" title="Os pedidos com você de cobrador e os que ainda não têm cobrador"><input type="checkbox" id="cob-meus" /> Só os meus</label>
+        <span class="crm-marca" id="cob-estado2"></span>
+        <button class="crm-volta" id="cob-volta" title="Voltar pro WhatsApp (Esc)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+          WhatsApp
+        </button>
+      </div>
+      <div class="cob-resumo" id="cob-resumo"></div>
+      <div class="crm-colunas" id="cob-corpo"></div>
+    </div>
+    <aside class="cob-ficha" id="cob-ficha" hidden>
+      <div class="cob-ficha-topo"><span>Pedido</span>
+        <button id="cob-ficha-fecha" title="Fechar a ficha (Esc)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="cob-ficha-corpo" id="cob-ficha-corpo"></div>
+    </aside>
+    <div class="crm-aviso" id="cob-aviso" hidden></div>
+    <div class="crm-menu" id="cob-menu" hidden></div>
+  </section>
+
   <div class="fundo-modal" id="modal">
     <div class="cartao" id="modal-corpo"></div>
   </div>
 
   <script src="app.js"></script>
   <script src="crm.js"></script>
+  <script src="cob-comum.js"></script>
+  <script src="cobranca.js"></script>
 </body>
 </html>

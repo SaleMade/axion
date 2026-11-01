@@ -12915,6 +12915,13 @@ function _cobDetalhe(l, data, nomes, tagMap) {
       rastreio: _cobRastreio(l),
     },
     hist: (Array.isArray(l.hist) ? l.hist : []).slice(-12).map((h) => ({ de: _cobTxt(h && h.from), para: _cobTxt(h && h.to), quando: _cobTxt(h && h.time), quem: nomes[_cobTxt(h && h.who)] || _cobTxt(h && h.who), nota: _cobTxt(h && h.note) })),
+    // OS COMENTARIOS JA COM O NOME DE QUEM ESCREVEU (o mais novo primeiro, como o estado guarda). O app
+    // nao manda `who` ao comentar: o servidor carimba quem esta logado (_comentarioLimpo), e no "ver
+    // como" da direcao isso e a direcao, nunca a pessoa do preview.
+    comentarios: (Array.isArray(l.comments) ? l.comments : []).slice(0, 30).map((c) => ({
+      quem: nomes[_cobTxt(c && c.who)] || _cobTxt(c && c.who), tx: _cobTxt(c && c.tx), quando: _cobTxt(c && c.time),
+      tipo: _cobTxt(c && c.kind), url: _cobTxt(c && c.url),
+    })),
   };
 }
 // Os pedidos que o quadro do app mostra: o mundo de quem pede, sem card manual nao aceito, so
@@ -13425,11 +13432,15 @@ async function handleSwWeb(req, env, path) {
     const achados = id
       ? leads.filter((l) => String(l.id) === id)
       : leads.filter((l) => _cobDig(l.wa).slice(-8) === k8 && !_cobManualNaoAceito(l));
-    if (!achados.length) return json({ ok: true, pedidos: [] });
+    // Os comentarios prontos vao junto: o painel ao lado da conversa so le esta rota.
+    const prontos = Array.isArray(data && data.coment_prontos)
+      ? data.coment_prontos.map((x) => String(x || '').trim()).filter(Boolean)
+      : _COB_PRONTOS;
+    if (!achados.length) return json({ ok: true, pedidos: [], prontos });
     achados.sort((a, b) => (_cobCriadoTs(b) || 0) - (_cobCriadoTs(a) || 0));
     const nomes = await _cobNomes(env);
     const tagMap = _cobTagMap(data, mundo);
-    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)) });
+    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)), prontos });
   }
 
 

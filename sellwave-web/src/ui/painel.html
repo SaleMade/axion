@@ -526,6 +526,12 @@
   footer .barra i { display: block; height: 100%; background: var(--verde); width: 0; transition: width .25s; }
   footer button { color: var(--apagado); font-size: 11px; }
   footer button:hover { color: var(--texto); }
+  /* A FICHA DE COBRANCA (31/10/2026, versao de cobrador): o estilo da ficha vem do cob-comum.js;
+     aqui so a moldura dela dentro do painel e o seletor de pedido do cliente com mais de um. */
+  .cob-ficha-p { padding: 10px 12px 14px; }
+  .cob-outros { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px 0; }
+  .cob-outros button { font: inherit; font-size: 11px; color: var(--apagado); padding: 3px 8px; border-radius: 99px; border: 1px solid var(--borda); background: none; cursor: pointer; }
+  .cob-outros button.on { color: var(--texto); border-color: var(--verde); background: rgba(0, 168, 132, .15); }
 </style>
 </head>
 <body>
@@ -559,7 +565,7 @@
       <span class="selo" id="selo-funis" hidden></span>
     </button>
     <button class="aba" data-aba="pedidos">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg>Pedidos
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg><span class="aba-rot">Pedidos</span>
       <span class="selo" id="selo-pedidos" hidden></span>
     </button>
   </div>
@@ -585,6 +591,7 @@
     <button id="parar" style="display:none">Parar</button>
   </footer>
 
+  <script src="cob-comum.js"></script>
   <script src="painel-ui.js"></script>
 </body>
 </html>

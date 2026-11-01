@@ -29,6 +29,12 @@ const IC_ESTRELA = (cheia) => '<svg viewBox="0 0 24 24" fill="' + (cheia ? 'curr
 
 let roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
 let aba = 'itens'
+// A VERSAO DE COBRADOR (31/10/2026, ver "cobranca" la embaixo). Declarado AQUI EM CIMA porque o
+// desenha() le estes tres e ordem de declaracao ja mordeu este arquivo (ver a fila, logo abaixo).
+const C = window.SWCob
+try { if (C) C.poeEstilo() } catch (_) { /* sem o estilo a ficha so sai sem cor */ }
+let cobModo = false
+let cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: [], em: 0 }
 let soFavs = false        // o mesmo filtro do inbox: estrela ao lado dos chips
 let filtro = ''
 let tipoFiltro = ''          // '' = todos
@@ -255,6 +261,7 @@ function desenha() {
     voltaFoco(_foco)
     return
   }
+  if (aba === 'pedidos' && cobModo) { corpo.innerHTML = desenhaCob(); ligaCob(corpo); return }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); voltaFoco(_foco); return }
 
   const itens = visiveis()
@@ -2357,6 +2364,88 @@ async function atualizaLead() {
 
 function ligaBotaoCadastro() { /* o bloco do lead não tem mais botão; ver botaoCadastro */ }
 
+// ───────────────────────────────────────────────────────────── cobranca
+//
+// A VERSAO DE COBRADOR (31/10/2026). No app do cobrador a aba Pedidos nao cadastra pedido (quem
+// cadastra e o vendedor): ela mostra a FICHA DE COBRANCA do cliente da conversa aberta, a mesma do
+// quadro (cob-comum.js), com o que ele faz durante a conversa: marcar o retorno, marcar pago com o
+// valor, mudar a etapa, anotar o combinado e MANDAR NA CONVERSA o link de pagamento e o rastreio
+// (pela mesma fila dos funis: "digitando..." e um envio por vez, como o inbox).
+// O roteiro tambem e outro: o servidor manda o de cobranca pro cobrador (/api/swweb/roteiro).
+const digitandoNaFicha = () => { const a = document.activeElement; return !!(a && a.closest && a.closest('.fx') && a.matches('input, textarea, select')) }
+function aplicaModo(v) {
+  cobModo = !!v
+  const rot = document.querySelector('.aba[data-aba="pedidos"] .aba-rot')
+  if (rot) rot.textContent = cobModo ? 'Cobrança' : 'Pedidos'
+  const selo = $('selo-pedidos')
+  if (selo && cobModo) selo.hidden = true
+  cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
+  // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
+  roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
+  pegaRoteiro()
+  // Entrando no modo, a ficha e o que ele mais usa durante a conversa: abre nela, venha de que aba vier.
+  if (cobModo) vaiPara('pedidos')
+  else desenha()
+}
+try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else pegaRoteiro() }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
+async function puxaCob(fone, forca) {
+  const f = String(fone || '').replace(/\D/g, '')
+  if (!forca) cob = { ...cob, fone: f, pedidos: [], erro: '', sel: 0 }
+  cob.carregando = !!f
+  cob.em = Date.now()
+  if (aba === 'pedidos' && !forca) desenha()
+  if (!f) return
+  let r = null
+  try { r = await window.swp.cobPedido(f) } catch (_) { r = null }
+  if (cob.fone !== f) return               // trocou de conversa no meio
+  cob.carregando = false
+  if (!r || r.ok === false) { if (!forca) cob.erro = humano((r && r.erro) || 'não deu pra falar com a dash') }
+  else {
+    cob.erro = ''
+    cob.pedidos = Array.isArray(r.pedidos) ? r.pedidos : []
+    if (Array.isArray(r.prontos)) cob.prontos = r.prontos
+    if (cob.sel >= cob.pedidos.length) cob.sel = 0
+  }
+  if (aba === 'pedidos' && !digitandoNaFicha()) desenha()
+}
+function desenhaCob() {
+  const vazio = (t) => '<div class="vazio">' + esc(t) + '</div>'
+  if (!C) return vazio('Atualize o app pra ver a ficha de cobrança.')
+  if (!estadoWa.phone) return vazio(estadoWa.grupo ? 'Conversa de grupo não tem pedido.' : 'Abra a conversa de um cliente pra ver o pedido dele.')
+  if (estadoWa.lid) return vazio('Esta conversa não mostra o telefone, então não dá pra achar o pedido.')
+  if (cob.carregando && !cob.pedidos.length) return vazio('Procurando o pedido na dash...')
+  if (cob.erro && !cob.pedidos.length) return vazio('Não deu pra falar com a dash: ' + cob.erro)
+  if (!cob.pedidos.length) return vazio('Nenhum pedido desse telefone na dash.')
+  const p = cob.pedidos[cob.sel] || cob.pedidos[0]
+  let h = ''
+  // CLIENTE COM MAIS DE UM PEDIDO: escolhe qual (o mais novo vem primeiro).
+  if (cob.pedidos.length > 1) {
+    h += '<div class="cob-outros">' + cob.pedidos.map((x, i) => '<button data-sel="' + i + '" class="' + (i === cob.sel ? 'on' : '') + '">'
+      + esc([x.data, C.brl(x.valor), C.colDef(x.col).lbl].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>'
+  }
+  h += '<div class="cob-ficha-p">' + C.fichaHtml(p, { enviar: true, prontos: cob.prontos }) + '</div>'
+  return h
+}
+function ligaCob(corpo) {
+  for (const b of corpo.querySelectorAll('.cob-outros [data-sel]')) b.onclick = () => { cob.sel = Number(b.dataset.sel) || 0; desenha() }
+  const p = cob.pedidos[cob.sel] || cob.pedidos[0]
+  if (!p || !C) return
+  C.ligaFicha(corpo, p, {
+    salva: (id, patch) => window.swp.cobSalva(id, patch),
+    copiar: (t) => window.swp.copiar(t),
+    abrirLink: (u) => window.swp.abrirLink(u),
+    curto: (u, id) => window.swp.cobCurto(u, id),
+    // MANDA NA CONVERSA pela fila dos funis: o alvo e congelado no clique, igual a qualquer item.
+    enviar: async (texto) => {
+      if (!estadoWa.chatId) return { ok: false, erro: 'Abra a conversa do cliente primeiro.' }
+      if (!estadoWa.envia) return { ok: false, erro: 'O WhatsApp ainda não está pronto pra mandar.' }
+      await enfileira([{ tipo: 'texto', texto: String(texto || ''), pausa: 1 }], 'cob-link', 'link pro cliente')
+      return { ok: true }
+    },
+    recarrega: async () => { await puxaCob(cob.fone, true) },
+  })
+}
+
 // ───────────────────────────────────────────────────────────── ciclo
 
 // A CONVERSA ABERTA CONTA COMO LIDA NA DASH (19/10/2026, item 5 da lista do Bruno).
@@ -2439,6 +2528,13 @@ async function pulso() {
     if (fonePreenchido) puxaFunisFeitos(fonePreenchido)
     if (pedTipo) { rascunhoSozinho() } else { preenchePed() }
     if (aba === 'pedidos') desenha()
+  }
+  // O MODO COBRANCA (31/10/2026): vem em todo estado da conversa. Mudou, troca a aba e o roteiro.
+  if (!!estadoWa.cobranca !== cobModo) aplicaModo(!!estadoWa.cobranca)
+  if (cobModo) {
+    const f = String(estadoWa.phone || '').replace(/\D/g, '')
+    if (f !== cob.fone) puxaCob(f, false)
+    else if (f && aba === 'pedidos' && Date.now() - cob.em > 30000 && !digitandoNaFicha()) puxaCob(f, true)
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }

@@ -115,7 +115,26 @@ contextBridge.exposeInMainWorld('swp', {
   // "Ja li esta conversa" (19/10/2026). O teste confere QUANDO ela e chamada, que e o que importa:
   // marcar cedo demais apaga o aviso de quem ainda espera resposta.
   marcarLida: reg('marcarLida', { ok: true }),
+  // A FICHA DE COBRANCA (31/10/2026, versao de cobrador): o pedido do cliente da conversa.
+  cobPedido: (phone) => {
+    chamadas.push({ nome: 'cobPedido', args: [phone] })
+    return Promise.resolve({ ok: true, prontos: ['Aguardando resposta do cliente'], pedidos: [{
+      id: '7001', nome: 'Cliente de Teste', wa: '19995983293', cidade: 'Campinas', uf: 'SP', prod: 'Produto A - 3 Meses',
+      vl: 397, valor: 397, saldo: 397, pago: false, pagoTs: 0, col: 'Entregues', colBruta: 'Cobrança', spg: 'Pendente', mod: 'entrega',
+      agend: '', selo: { label: 'Entregue', cor: '#10b981', quando: '30/10/2026' }, entrega: { label: 'Entregue em', data: '30/10/2026', dias: '3 dias' },
+      entrou: Date.now(), criado: Date.now(), at: 'a1', atNome: 'Guilherme', cob: 'hc', cobNome: 'Haynan', track: 'AB1', transp: 'Correios', tags: [], ncom: 0, vc: true,
+      data: '27/10', links: { checkout: 'https://checkout.exemplo/k3', pix: 'https://pix.exemplo/p?ped=7001', boleto: '', cartao: '', rastreio: 'https://glico-six.rastreio.vip/rastreio?codigo=AB1' },
+      hist: [], comentarios: [],
+    }] })
+  },
+  cobSalva: (id, patch) => { chamadas.push({ nome: 'cobSalva', args: [id, patch] }); return Promise.resolve({ ok: true, negados: [] }) },
+  cobCurto: reg('cobCurto', { ok: true, url: 'https://sw.li/abc' }),
+  abrirLink: reg('abrirLink', { ok: true }),
+  copiar: reg('copiar', { ok: true }),
+  aoMudarModo: () => {},
 })
+// O app vira o do cobrador (o main manda `cobranca` no estado da conversa).
+contextBridge.exposeInMainWorld('__poeCobranca', (v) => { ESTADO.cobranca = !!v })
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))

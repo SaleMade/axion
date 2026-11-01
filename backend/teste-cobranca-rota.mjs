@@ -198,6 +198,7 @@ vale('link de checkout da Five pelo pedido', /fivedelivery\.com\.br\/checkout\/0
 vale('Pix da plataforma com os dados trocados', String(f.links && f.links.pix) === 'https://pix.exemplo.com/pagar?nome=Maria%20Cobranca&valor=297.00&ped=' + L_COB, f.links && f.links.pix);
 vale('rastreio dos Correios (pedido da Five com codigo AB...BR)', /rastreamento\.correios\.com\.br\/app\/index\.php\?objetos=AB123456789BR/.test(String(f.links && f.links.rastreio)), f.links && f.links.rastreio);
 vale('historico recente com o nome de quem mexeu', Array.isArray(f.hist) && f.hist.length === 2, JSON.stringify(f.hist).slice(0, 80));
+vale('comentarios com o NOME de quem escreveu, e os prontos junto (o painel so le esta rota)', Array.isArray(f.comentarios) && f.comentarios[0] && f.comentarios[0].quem === 'Kevin Marques' && f.comentarios[0].tx === 'oi' && Array.isArray(r.d.prontos) && r.d.prontos.length === 6, JSON.stringify({ c: f.comentarios, p: (r.d.prontos || []).length }));
 r = await chama(TK.hay, '/api/swweb/cobranca/pedido?phone=5541955554444');
 vale('pedido do afiliado nao abre na ficha da casa', r.st === 200 && (r.d.pedidos || []).length === 0, JSON.stringify(r.d).slice(0, 60));
 
@@ -212,6 +213,11 @@ const pR = (r.d.pedidos || []).find((p) => p.id === L_RET) || {};
 const pC2 = (r.d.pedidos || []).find((p) => p.id === L_COB) || {};
 vale('a releitura muda a assinatura e traz o retorno novo', r.d.igual !== true && pR.agend === amanha, JSON.stringify({ igual: r.d.igual, agend: pR.agend }));
 vale('e o pedido pago foi pra Pagos com o valor recebido', pC2.col === 'Pagos' && pC2.pago === true && pC2.valor === 280 && !pC2.agend, JSON.stringify({ col: pC2.col, valor: pC2.valor, agend: pC2.agend }));
+// o comentario do app vai SEM `who`: quem fica e quem esta logado (aqui, o proprio cobrador)
+r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { comment_add: { tx: 'prometeu pagar sexta' } } });
+const fc = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_RET);
+const c0 = ((fc.d.pedidos || [])[0] || {}).comentarios || [];
+vale('comentario sem "who" fica no nome de quem esta logado', r.st === 200 && c0[0] && c0[0].tx === 'prometeu pagar sexta' && c0[0].quem === 'Haynan Souza', JSON.stringify(c0[0]));
 
 _log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram.');
 if (falhas.length) { _log('\nFALHOU:\n- ' + falhas.join('\n- ')); process.exit(1); }

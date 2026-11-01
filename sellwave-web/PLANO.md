@@ -404,6 +404,24 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   **E a LIGAÇÃO DE VOZ foi confirmada por ele:** *"acabei de testar a ligação e funcionou
   perfeitamente"*. Spike 1 fechado dos dois lados. Ver ANEXO A12.
 
+- **31/10/2026, noite — A VERSÃO DE COBRADOR (1.26.0).** Pedido do Bruno: "uma versão do SellWave Web
+  para cobradores", com conexão e contingência dos números, os funis e respostas do Sale Chat de
+  cobrança, "literalmente o nosso Kanban" e uma agenda de quem cobrar. **É o mesmo app**: o modo sai
+  do CARGO que o `/api/swweb/numeros` manda (`cargo`), então o "ver como" da direção vira cobrador
+  junto e o cobrador recebe toda atualização com o vendedor. No modo cobrança: a faixa de baixo vira
+  **Cobrança** (ui/cobranca.js) com as abas Agenda (Atrasados, Hoje, Próximos por dia, Sem retorno,
+  Chegando) e Pedidos (o Kanban da dash, arrastar com as regras de lá: Pagos pede o valor, de Pagos só
+  pra perda); a **ficha do pedido** (ui/cob-comum.js) aparece no quadro e no painel ao lado da conversa
+  (aba Pedidos vira Cobrança), com retorno, marcar pago, etapa, comentário e os links de pagamento e
+  rastreio (no painel o "Enviar" manda o link NA CONVERSA pela fila dos funis); "Abrir conversa" escolhe
+  o número (o último usado com o cliente, o da tela, qualquer conectado que não seja Restrito, ou a
+  lista dele pra escolher); lembrete do Windows na hora do retorno; nada de interruptor, limite ou
+  placar. Servidor: rotas `/api/swweb/cobranca` (quadro) e `/cobranca/pedido` (ficha), roteiro de
+  cobrança pro cobrador, e **número de cobrador nunca é número de venda** (roleta, captura e
+  atribuição, ver `_cobIds` no worker). Gravar vai pelas rotas da dash (`/api/lead/:id`).
+  Testes: painel 355/355, `npm run teste` (+22), smoke WA 23/23, worker `teste-cobranca-rota` 44/44.
+  Fotos: `src/foto-cobranca.js`.
+
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
 Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,

@@ -52,6 +52,16 @@ contextBridge.exposeInMainWorld('swp', {
   aoMudarDisparos: (cb) => {
     ipcRenderer.on('swp:disparos-mudou', (_ev, dados) => { try { cb(Number((dados && dados.n) || 0)) } catch (_) { /* a pagina que se vire */ } })
   },
+  // A FICHA DE COBRANCA do cliente da conversa aberta (31/10/2026, versao de cobrador).
+  cobPedido: (phone) => ipcRenderer.invoke('swp:cob-pedido', { phone }),
+  cobSalva: (id, patch) => ipcRenderer.invoke('swp:cob-salva', { id, patch }),
+  cobCurto: (url, id) => ipcRenderer.invoke('swp:cob-curto', { url, id }),
+  abrirLink: (url) => ipcRenderer.invoke('swp:abrir-link', { url }),
+  copiar: (texto) => ipcRenderer.invoke('swp:copiar', { texto }),
+  // Mudou o modo (entrou o cobrador, ou a direcao entrou no preview dele): o painel rele o roteiro.
+  aoMudarModo: (cb) => {
+    ipcRenderer.on('swp:modo', (_ev, dados) => { try { cb(!!(dados && dados.cobranca)) } catch (_) { /* a pagina que se vire */ } })
+  },
   fechar: () => ipcRenderer.invoke('swp:fechar-ativo'),
   recarregar: () => ipcRenderer.invoke('swp:recarregar-ativo'),
   esconder: () => ipcRenderer.invoke('swp:painel', { ligado: false }),

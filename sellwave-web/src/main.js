@@ -187,6 +187,7 @@ const CONFIG_PADRAO = {
   direcao: false,          // quem entrou e da direcao? quem decide e o servidor, nao o app
   sessoes: {},             // { "<numkey>": { ver, gen, em } } - de que versao da nuvem veio a sessao daqui
   lixo: [],                // [{ nome, em }] pastas de particao antigas, apagadas no boot seguinte
+  cobUltimo: {},           // COBRADOR: { "<8 digitos do cliente>": "<numkey>" } por qual numero falou com ele por ultimo
 }
 
 let config = { ...CONFIG_PADRAO }
@@ -300,13 +301,21 @@ const particaoDoWc = new Map()  // id do webContents -> particao
 // fica aqui: o painel de cada numero pede por IPC, entao N sessoes abertas = 1 busca, nao N.
 let roteiro = null
 let roteiroEm = 0
+// O CARGO DE QUEM ESTA NO APP (31/10/2026, versao de cobrador). Vem do /api/swweb/numeros, e nao do
+// login, pra o "ver como" da direcao virar cobrador junto (a dash responde como a pessoa do preview).
+// Cobrador = modo cobranca: o quadro de pedidos e a agenda no lugar do CRM do atendimento, o roteiro
+// de cobranca no painel, e nada de interruptor, limite ou placar de leads (numero dele nao e de venda).
+let cargoAtual = ''
+let cobradoresConhecidos = []   // [{ id, nome }] os cobradores do mundo, pro "ver como" da direcao
+const modoCobranca = () => cargoAtual === 'cobrador'
 async function pegaRoteiro(forcar) {
   if (!forcar && roteiro && (Date.now() - roteiroEm) < 600000) return roteiro
   if (!config.token) return null
   try {
     // COM TETO (23/10/2026): a drenagem da captura espera por esta funcao, e um pedido preso aqui
     // seguraria a fila inteira de todos os numeros.
-    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/roteiro',
+    // COM O "VER COMO" (31/10/2026): no preview de um cobrador o painel mostra o roteiro de COBRANCA.
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/roteiro' + comoNaUrl(),
       { headers: { Authorization: 'Bearer ' + config.token }, signal: AbortSignal.timeout(20000) })
     if (!r.ok) return roteiro
     const d = await r.json()
@@ -1652,7 +1661,9 @@ let abriuAoIniciar = false
 function quaisAbrirAoIniciar(lista) {
   return (Array.isArray(lista) ? lista : []).filter((n) => {
     if (!n || !n.numero) return false
-    if (n.apto === false || n.ligado === false) return false
+    // O COBRADOR ABRE TODOS OS DELE (31/10/2026): numero de cobranca nao tem roleta, entao "apto" e
+    // "ligado" (que sao da pressel) nao dizem nada sobre ele. Fica de fora so o banido.
+    if (modoCobranca() ? n.banido : (n.apto === false || n.ligado === false)) return false
     if (n.uso && !n.uso.meu) return false                       // esta com outra maquina
     const nk = numKey(n.numero)
     if (!nk || abertos.has(nk) || abrindo.has(nk) || despedidas.has(nk)) return false
@@ -2770,6 +2781,159 @@ ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia, nk: escolhido, o
   return { ok: true, fechado: true, numero: n.numero }
 })
 
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// A COBRANCA (31/10/2026, versao de cobrador: "o nosso Kanban, pra ele visualizar quem ele deve
+// estar cobrando", e uma agenda "dos pedidos que ele deve cobrar, os atrasados e os que vao chegar").
+//
+// O quadro e a agenda moram na casca (ui/cobranca.js), na mesma faixa do pe da area do WhatsApp que
+// o CRM do atendimento usa (e por isso o defineCrm serve aos dois: so um aparece por vez, pelo modo).
+// A ficha do pedido (ui/cob-comum.js) aparece no quadro e no painel ao lado da conversa.
+//
+// LER: /api/swweb/cobranca (a lista, com assinatura pra nao baixar igual) e /api/swweb/cobranca/pedido
+// (a ficha com os links). GRAVAR: /api/lead/:id com patch, a mesma rota da dash. Tudo com o login de
+// quem esta no app; no "ver como" da direcao a LEITURA vem como o cobrador e a GRAVACAO como a direcao.
+const baseCob = () => String(config.apiBase).replace(/\/+$/, '')
+const comoE = () => (comoId ? '&como=' + encodeURIComponent(comoId) : '')
+async function lerCob(caminho) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  try {
+    const r = await fetch(baseCob() + caminho, { headers: authCrm(), signal: AbortSignal.timeout(25000) })
+    ajustaRelogio(r)
+    if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || '' } catch (_) { /* ok */ } return { ok: false, erro: m || respostaRuim(r) } }
+    return await r.json()
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+}
+async function salvaCob(id, patch) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const lid = String(id || '').trim()
+  if (!/^[\w.-]{1,40}$/.test(lid) || !patch || typeof patch !== 'object') return { ok: false, erro: 'Pedido inválido.' }
+  try {
+    const r = await fetch(baseCob() + '/api/lead/' + encodeURIComponent(lid), {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ patch }), signal: AbortSignal.timeout(25000),
+    })
+    ajustaRelogio(r)
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r), mudou: !!(d && d.mudou) }
+    anota('[cobranca] pedido ' + lid + ' gravado: ' + Object.keys(patch).filter((k) => k !== 'antes').join(','))
+    return { ok: true, negados: Array.isArray(d.negados) ? d.negados : [] }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+}
+// O LINK CURTO e o mesmo encurtador da dash. Dominio que ele nao aceita (plataforma de Pix nova, por
+// exemplo) volta 400 e a ficha manda o link inteiro.
+async function curtoCob(url, id) {
+  const u = String(url || '')
+  if (!/^https?:\/\//i.test(u) || !config.token) return { ok: false }
+  try {
+    const r = await fetch(baseCob() + '/api/short', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ url: u, lead_id: String(id || '') }), signal: AbortSignal.timeout(12000),
+    })
+    if (!r.ok) return { ok: false }
+    const d = await r.json()
+    return d && d.short_url ? { ok: true, url: String(d.short_url) } : { ok: false }
+  } catch (_) { return { ok: false } }
+}
+const abreLinkCob = (url) => {
+  const u = String(url || '')
+  // SO http(s): o texto vem de dado de pedido, e `shell.openExternal` abriria qualquer esquema.
+  if (!/^https?:\/\//i.test(u)) return { ok: false }
+  try { shell.openExternal(u) } catch (_) { return { ok: false } }
+  return { ok: true }
+}
+ipcMain.handle('sw:cob-dados', (_e, { sig }) => lerCob('/api/swweb/cobranca?sig=' + encodeURIComponent(String(sig || '')) + comoE()))
+ipcMain.handle('sw:cob-pedido', (_e, { id }) => lerCob('/api/swweb/cobranca/pedido?id=' + encodeURIComponent(String(id || '')) + comoE()))
+ipcMain.handle('sw:cob-salva', (_e, { id, patch }) => salvaCob(id, patch))
+ipcMain.handle('sw:cob-curto', (_e, { url, id }) => curtoCob(url, id))
+ipcMain.handle('sw:abrir-link', (_e, { url }) => abreLinkCob(url))
+ipcMain.handle('swp:cob-pedido', (_e, { phone }) => {
+  const f = String(phone || '').replace(/\D/g, '')
+  if (f.length < 8) return { ok: true, pedidos: [] }
+  return lerCob('/api/swweb/cobranca/pedido?phone=' + encodeURIComponent(f) + comoE())
+})
+ipcMain.handle('swp:cob-salva', (_e, { id, patch }) => salvaCob(id, patch))
+ipcMain.handle('swp:cob-curto', (_e, { url, id }) => curtoCob(url, id))
+ipcMain.handle('swp:abrir-link', (_e, { url }) => abreLinkCob(url))
+ipcMain.handle('swp:copiar', (_e, { texto }) => {
+  const t = String(texto || '')
+  if (!t || t.length > 2000) return { ok: false }
+  try { clipboard.writeText(t); return { ok: true } } catch (_) { return { ok: false } }
+})
+
+// POR QUAL NUMERO CHAMAR O CLIENTE (a contingencia do cobrador: "caso tenha algum problema com algum
+// numero, ele consiga utilizar o outro"). Pedido nao tem instancia (ele nasceu no numero do VENDEDOR),
+// entao a escolha e daqui, nesta ordem:
+//   1) o numero que ele escolheu no menu;
+//   2) o numero pelo qual ele falou com esse cliente da ultima vez, se esta aberto e conectado: o
+//      cliente reconhece o numero e a conversa continua na mesma tela;
+//   3) o numero da tela, se conectado;  4) qualquer aberto e conectado que nao esteja Restrito.
+// Nenhum conectado: a casca mostra a lista dele pra escolher (os fechados abrem e a conversa vem
+// sozinha quando o WhatsApp ficar pronto, o mesmo caminho do CRM).
+const restritoCob = (n) => /restrit/i.test(String((n && n.status) || ''))
+const prontoCob = (nk) => { const s = abertos.get(nk); return !!(s && s.connUltimo === 'pronto') }
+function lembraCob(k8, nk) {
+  if (!k8 || !nk) return
+  const m = (config.cobUltimo && typeof config.cobUltimo === 'object') ? config.cobUltimo : {}
+  delete m[k8]
+  m[k8] = nk
+  const ks = Object.keys(m)
+  for (const k of ks.slice(0, Math.max(0, ks.length - 800))) delete m[k]   // os 800 mais recentes
+  config.cobUltimo = m
+  gravarConfig()
+}
+ipcMain.handle('sw:cob-conversa', async (_e, { fone, nk: escolhido }) => {
+  const f = String(fone || '').replace(/\D/g, '')
+  if (f.length < 10) return { ok: false, erro: 'Esse pedido está sem telefone válido.' }
+  const k8 = f.slice(-8)
+  const meus = (config.numeros || []).filter((n) => n && n.numero && !n.banido)
+  const naTela = async (nk) => {
+    defineCrm(false)
+    mostra(nk)
+    const abriu = await abreConversaNa(nk, f)
+    lembraCob(k8, nk)
+    return { ok: true, nk, abriu }
+  }
+  if (escolhido) {
+    const nkE = numKey(escolhido)
+    if (abertos.has(nkE)) return naTela(nkE)
+    const n = meus.find((x) => numKey(x.numero) === nkE)
+    if (!n) return { ok: false, erro: 'Esse número não está na sua lista.' }
+    crmPendente = { k8: nkE.slice(-8), fone: f, ate: Date.now() + 300000 }
+    defineCrm(false)
+    lembraCob(k8, nkE)
+    return { ok: true, fechado: true, numero: n.numero }
+  }
+  const ehMeu = (nk) => meus.some((n) => numKey(n.numero) === nk)
+  const naoRestrito = (nk) => !restritoCob(meus.find((n) => numKey(n.numero) === nk))
+  const pref = String((config.cobUltimo || {})[k8] || '')
+  if (pref && ehMeu(pref) && abertos.has(pref) && prontoCob(pref) && !destacados.has(pref)) return naTela(pref)
+  if (ativoAgora && abertos.has(ativoAgora) && prontoCob(ativoAgora) && !destacados.has(ativoAgora) && naoRestrito(ativoAgora)) return naTela(ativoAgora)
+  const outro = [...abertos.keys()].find((k) => prontoCob(k) && !destacados.has(k) && naoRestrito(k))
+  if (outro) return naTela(outro)
+  return {
+    ok: false, semNumero: true,
+    erro: meus.length ? 'Nenhum número conectado agora. Escolha por qual chamar.' : 'Você ainda não tem número. Peça pra direção pôr um no seu nome na Contingência.',
+  }
+})
+
+// O LEMBRETE DO RETORNO: a agenda avisa na hora marcada, mesmo com o quadro fechado ou o app atras de
+// outra janela. Clicar no aviso traz o app e abre a ficha daquele pedido.
+let NotificacaoCob = null
+ipcMain.handle('sw:cob-lembrete', (_e, { id, nome, quando }) => {
+  try {
+    if (!NotificacaoCob) NotificacaoCob = require('electron').Notification
+    if (!NotificacaoCob || !NotificacaoCob.isSupported()) return { ok: false }
+    const n = new NotificacaoCob({ title: 'Hora de cobrar: ' + String(nome || 'cliente').slice(0, 60), body: 'Retorno marcado ' + String(quando || '').slice(0, 40) + '. Clique pra abrir o pedido.', silent: false })
+    n.on('click', () => {
+      try { if (janela) { if (janela.isMinimized()) janela.restore(); janela.show(); janela.focus() } } catch (_) { /* ok */ }
+      avisaCasca('sw:cob-abrir', { id: String(id || '') })
+    })
+    n.show()
+    return { ok: true }
+  } catch (_) { return { ok: false } }
+})
+
 // SINAL DE VIDA DOS NUMEROS ABERTOS.
 //
 // A roleta so manda lead pra numero que ela considera vivo, e a linha expira em 3 minutos. Sem
@@ -2935,6 +3099,17 @@ async function buscaNumeros() {
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // O MODO SAI DO CARGO (31/10/2026). Mudou (entrou o cobrador, ou a direcao entrou/saiu do preview
+    // de um): o roteiro do painel e outro, entao ele e relido na hora e as duas telas sao avisadas.
+    const cargoAntes = cargoAtual
+    cargoAtual = String((d && d.cargo) || '').toLowerCase()
+    if (!comoId) cobradoresConhecidos = (Array.isArray(d && d.cobradores) ? d.cobradores : []).filter((c) => c && c.id).map((c) => ({ id: String(c.id), nome: String(c.nome || c.id) }))
+    if (cargoAtual !== cargoAntes) {
+      anota('[modo] ' + (cargoAntes || '-') + ' -> ' + (cargoAtual || '-') + (modoCobranca() ? ' (cobranca)' : ''))
+      roteiro = null; roteiroEm = 0
+      pegaRoteiro(true).then(() => avisaPainel('swp:modo', { cobranca: modoCobranca() })).catch(() => {})
+      avisaCasca('sw:modo', { cobranca: modoCobranca() })
+    }
     // A EQUIPE E AS FOTOS (ver trazFotos). As fotos descem em segundo plano: a lista nao espera.
     config.equipe = Array.isArray(d && d.equipe) ? d.equipe : []
     trazFotos([...lista.map((n) => n && n.foto), ...config.equipe.map((e) => e && e.foto)])
@@ -3018,6 +3193,11 @@ ipcMain.handle('sw:estado', () => ({
   // De quem da pra ver a tela. Sai dos donos dos numeros que a dash mandou na ULTIMA leitura REAL
   // (sem preview), senao entrar no preview de um vendedor apagaria a lista de escolha.
   vendedores: donosConhecidos,
+  // O MODO COBRANCA (31/10/2026): o cargo de quem esta no app (ou de quem a direcao esta vendo), e os
+  // cobradores que a direcao pode "ver como" mesmo sem numero nenhum no nome deles.
+  cargo: cargoAtual,
+  cobranca: modoCobranca(),
+  cobradores: cobradoresConhecidos,
   painelLigado: painelLigado,
   barraEncolhida: !!config.barraEncolhida,
   abertos: [...abertos.keys()],
@@ -3082,6 +3262,8 @@ ipcMain.handle('sw:sair', async () => {
   await Promise.race([Promise.allSettled([...despedidas.values(), aviso]), espera(300000)])
   config.token = ''
   config.nome = ''
+  cargoAtual = ''
+  cobradoresConhecidos = []
   gravarConfig()
   return { ok: true }
 })
@@ -3348,10 +3530,12 @@ ipcMain.handle('swp:estado-wa', async (ev) => {
   const nkAtual = nkDoPainel(ev && ev.sender)
   const sa = nkAtual && abertos.get(nkAtual)
   const wc = sa && sa.view && !sa.view.webContents.isDestroyed() ? sa.view.webContents : null
-  if (!wc) return { ...ESTADO_VAZIO }
+  // `cobranca` vai em toda resposta: e por ela que o painel troca o cadastro de pedido pela ficha de
+  // cobranca e rele o roteiro (31/10/2026, versao de cobrador).
+  if (!wc) return { ...ESTADO_VAZIO, cobranca: modoCobranca() }
   let e
   try { e = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
-  if (!e) return { ...ESTADO_VAZIO }
+  if (!e) return { ...ESTADO_VAZIO, cobranca: modoCobranca() }
   // O NUMERO PAREADO E O MESMO DO SLOT? (16/10/2026, revisao adversarial.)
   // Se o vendedor ler o QR do slot (15) 97407-6200 com OUTRO aparelho, a barra continua dizendo
   // (15), o proxy usado continua sendo o do (15) e a captura sai carimbada com o numero de verdade.
@@ -3363,6 +3547,7 @@ ipcMain.handle('swp:estado-wa', async (ev) => {
   e.trocado = (real && esperado && real !== esperado) ? String(e.eu || '') : ''
   if (e.trocado) console.error('[slot] ' + esperado + ' esta pareado com ' + real)
   e.nk = nkAtual
+  e.cobranca = modoCobranca()
   return e
 })
 
@@ -4314,6 +4499,9 @@ ipcMain.handle('sw:recarregar', (_e, { nk }) => {
 
 app.whenReady().then(() => {
   lerConfig()
+  // O AVISO DO WINDOWS (o lembrete de retorno do cobrador, 31/10/2026) so aparece com a identidade do
+  // app igual a do atalho que o instalador cria, que e o appId do package.json.
+  try { if (process.platform === 'win32') app.setAppUserModelId('br.com.sellwave.web') } catch (_) { /* sem ela o aviso so nao aparece */ }
   // Antes de qualquer sessao subir: e o unico momento em que nenhuma particao esta presa.
   try { limpaParticoesVelhas() } catch (e) { anota('[nuvem] limpeza das particoes velhas falhou: ' + ((e && e.message) || e)) }
 

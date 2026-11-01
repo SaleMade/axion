@@ -557,7 +557,8 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o envio do funil colhe a conversa daquele lead', /if \(r && nk && chatId\) setTimeout\(\(\) => \{ colheConversa\(String\(nk\), String\(chatId\)\)/.test(fonte))
   vale('a colheita roda de 2 em 2 minutos', /setInterval\(\(\) => \{ colheTodos\(\)\.catch\(\(\) => \{\}\) \}, 120000\)/.test(fonte))
   vale('o sinal de vida leva a saude da captura', /auth: true, motor: !!e\.motor, saude: saudeDaCaptura\(\)/.test(fonte))
-  vale('o roteiro (que a drenagem espera) tem teto', /'\/api\/swweb\/roteiro',\n\s*\{ headers: \{ Authorization: 'Bearer ' \+ config\.token \}, signal: AbortSignal\.timeout\(20000\) \}/.test(fonte))
+  // (o `+ comoNaUrl()` entrou em 31/10/2026: no preview de um cobrador o painel le o roteiro de cobranca)
+  vale('o roteiro (que a drenagem espera) tem teto', /'\/api\/swweb\/roteiro'(?: \+ comoNaUrl\(\))?,\n\s*\{ headers: \{ Authorization: 'Bearer ' \+ config\.token \}, signal: AbortSignal\.timeout\(20000\) \}/.test(fonte))
   vale('o registro do que foi confirmado carrega na abertura', /leFila\(\)\n\s*carregaEntregues\(\)/.test(fonte))
 }
 
@@ -663,6 +664,71 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('so a direcao muda o teto', /if \(!config\.direcao\) return \{ ok: false/.test(trechoTeto))
   vale('e muda NO SERVIDOR, gravando aqui so o que ele confirmou',
     trechoTeto.indexOf("/api/swweb/config") > 0 && trechoTeto.indexOf('/api/swweb/config') < trechoTeto.indexOf('config.maxAbertos = Math.max'))
+}
+
+// ══ A VERSAO DE COBRADOR (31/10/2026) ═════════════════════════════════════════════════════════
+// As regras da agenda e da ficha moram no ui/cob-comum.js e decidem o que o cobrador cobra hoje.
+// Aqui elas rodam DE VERDADE (o arquivo e carregado inteiro, com uma janela de mentira), com um
+// relogio fixo: 31/10/2026 15:00 na hora da maquina.
+{
+  console.log('\nA VERSAO DE COBRADOR')
+  const vm = await import('node:vm')
+  const janela = {}
+  const ctx = vm.createContext({ window: janela, document: { getElementById: () => null, createElement: () => ({}), head: { appendChild() {} } }, CSS: { escape: (x) => x } })
+  vm.runInContext(leia('ui/cob-comum.js'), ctx)
+  const C = janela.SWCob
+  vale('o cob-comum.js carrega e expoe as regras', !!(C && C.agenda && C.fichaHtml && C.ligaFicha))
+  const AGORA = new Date(2026, 9, 31, 15, 0, 0).getTime()
+  const p2 = (n) => String(n).padStart(2, '0')
+  const ag = (d, h) => { const x = new Date(2026, 9, 31 + d, h, 0, 0); return x.getFullYear() + '-' + p2(x.getMonth() + 1) + '-' + p2(x.getDate()) + 'T' + p2(x.getHours()) + ':00' }
+  const P = (id, o) => ({ id, nome: id, valor: 100, saldo: 100, pago: false, col: 'Entregues', agend: '', ...o })
+  const lista = [
+    P('ontem', { agend: ag(-1, 10) }),
+    P('hoje_cedo', { agend: ag(0, 9) }),            // ja passou a hora, mas e HOJE: fica em Hoje, nao em atrasado
+    P('hoje_noite', { agend: ag(0, 21) }),
+    P('amanha', { agend: ag(1, 9) }),
+    P('sem_data', { saldo: 50 }), P('sem_data_maior', { saldo: 500 }),
+    P('retirada', { col: 'Retirar nos Correios', agend: ag(-3, 9) }),
+    P('pago_com_retorno', { pago: true, agend: ag(-2, 9) }),     // pago nunca e atrasado
+    P('cancelado', { col: 'Cancelado sem Custo', agend: ag(-5, 9) }),   // fora da fila: nao e trabalho
+    P('na_rua', { col: 'Saiu para Entrega' }), P('enviado', { col: 'Enviados' }),
+    P('a_enviar', { col: 'A Enviar', agend: ag(-1, 9) }),       // retorno em pedido que nem saiu: nao e cobranca
+    P('pago_hoje', { pago: true, col: 'Pagos', vc: true, pagoTs: new Date(2026, 9, 31, 11, 0).getTime(), valor: 297 }),
+    P('pago_ontem', { pago: true, col: 'Pagos', vc: true, pagoTs: new Date(2026, 9, 30, 11, 0).getTime(), valor: 197 }),
+  ]
+  const a = C.agenda(lista, AGORA)
+  const ids = (l) => l.map((x) => x.id).join(',')
+  vale('atrasado = na fila e com retorno de ANTES de hoje (o mais velho primeiro)', ids(a.atrasados) === 'retirada,ontem', ids(a.atrasados))
+  vale('hoje = retorno de hoje, inclusive o de 9h que ja passou', ids(a.hoje) === 'hoje_cedo,hoje_noite', ids(a.hoje))
+  vale('proximos = depois de hoje', ids(a.proximos) === 'amanha', ids(a.proximos))
+  vale('sem retorno = na fila sem data, o maior valor primeiro', ids(a.semRetorno) === 'sem_data_maior,sem_data', ids(a.semRetorno))
+  vale('chegando = enviado e saindo pra entrega, quem esta na rua primeiro', ids(a.chegando) === 'na_rua,enviado', ids(a.chegando))
+  vale('pago, cancelado e pedido que nem saiu NUNCA entram na fila', !/pago_com_retorno|cancelado|a_enviar/.test(ids([...a.atrasados, ...a.hoje, ...a.proximos, ...a.semRetorno])))
+  vale('recebido hoje soma so o que foi pago hoje e passou pela cobranca', a.pagosHoje.length === 1 && a.recebidoHoje === 297, a.recebidoHoje)
+  vale('valor digitado le virgula como decimal e ponto como milhar', C.valorDigitado('1.000,50') === 1000.5 && C.valorDigitado('297,00') === 297 && C.valorDigitado('297.5') === 297.5 && C.valorDigitado('1.500') === 1500 && isNaN(C.valorDigitado('')))
+  const at = C.atalhosRetorno(AGORA)
+  vale('os atalhos de retorno saem na hora da maquina, no formato do agend', at.length === 5 && at.every((x) => /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(x.v)) && at.some((x) => x.rot === 'Amanhã 9h' && x.v === ag(1, 9)), JSON.stringify(at.map((x) => x.v)))
+  vale('depois das 17h nao oferece "Hoje 18h"', !C.atalhosRetorno(new Date(2026, 9, 31, 18, 30).getTime()).some((x) => x.rot === 'Hoje 18h'))
+  const pedido = { ...P('9', { col: 'Pagos', pago: true, pagoTs: AGORA }), wa: '11911110000', links: { pix: 'https://pix', rastreio: 'https://r' }, comentarios: [], hist: [] }
+  const htmlPainel = C.fichaHtml(pedido, { enviar: true })
+  const htmlQuadro = C.fichaHtml({ ...pedido, pago: false, col: 'Entregues' }, { conversa: true })
+  vale('ficha do painel tem "Enviar" (manda na conversa); a do quadro nao, mas abre a conversa',
+    /data-acao="enviar"/.test(htmlPainel) && !/data-acao="enviar"/.test(htmlQuadro) && /data-acao="conversa"/.test(htmlQuadro) && !/data-acao="conversa"/.test(htmlPainel))
+  vale('pedido pago nao oferece "Marcar como pago" e so sai pra perda', !/data-acao="pago"/.test(htmlPainel) && !/value="Enviados"/.test(htmlPainel) && /value="Frustrados"/.test(htmlPainel))
+  vale('pedido em aberto nao oferece Pagos no "mudar etapa" (pago pede o valor)', !/value="Pagos"/.test(htmlQuadro) && /data-acao="pago"/.test(htmlQuadro))
+  vale('o nome do cliente sai escapado (nada de HTML do pedido na tela)', !/<img/.test(C.fichaHtml({ ...pedido, nome: '<img src=x onerror=1>' }, {})))
+
+  const m = leia('main.js')
+  vale('o modo sai do cargo que o /api/swweb/numeros manda', /cargoAtual = String\(\(d && d\.cargo\) \|\| ''\)\.toLowerCase\(\)/.test(m))
+  vale('mudou o modo: o roteiro e relido e as duas telas sao avisadas', /roteiro = null; roteiroEm = 0/.test(m) && /avisaPainel\('swp:modo'/.test(m) && /avisaCasca\('sw:modo'/.test(m))
+  vale('o cobrador abre todos os numeros dele no inicio (so o banido fica)', /modoCobranca\(\) \? n\.banido : \(n\.apto === false \|\| n\.ligado === false\)/.test(m))
+  vale('gravar no pedido vai pela rota da dash (/api/lead/:id com patch)', /'\/api\/lead\/' \+ encodeURIComponent\(lid\)/.test(m) && /body: JSON\.stringify\(\{ patch \}\)/.test(m))
+  vale('abrir link so aceita http(s)', /if \(!\/\^https\?:\\\/\\\/\/i\.test\(u\)\) return \{ ok: false \}/.test(m))
+  const iConv = m.indexOf("ipcMain.handle('sw:cob-conversa'")
+  const conv = m.slice(iConv, iConv + 2600)
+  vale('conversa: o numero da ultima conversa com o cliente vem primeiro, depois o da tela, depois qualquer conectado',
+    conv.indexOf('const pref') > 0 && conv.indexOf('const pref') < conv.indexOf('ativoAgora && abertos.has(ativoAgora)') && conv.indexOf('ativoAgora && abertos.has(ativoAgora)') < conv.indexOf('const outro'))
+  vale('conversa: numero Restrito nao e escolhido sozinho', /naoRestrito\(ativoAgora\)/.test(conv) && /prontoCob\(k\) && !destacados\.has\(k\) && naoRestrito\(k\)/.test(conv))
 }
 
 console.log('')
