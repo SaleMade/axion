@@ -20455,44 +20455,78 @@ let _dcSeenPodaT = 0;   // ver "PODA UMA VEZ POR HORA" no _dcPoll
 // interessante ter algum aviso pra eu entrar"). E regra do WhatsApp: principal 14 dias parado = SellWave Web e
 // bot do grupo desvinculados. O principal mora no LDPlayer do PC dos celulares, e quem mede e o
 // vigia-online.mjs de la (hora do disco da maquina, sem tocar no LDPlayer), que grava app_config
-// ldplayer_online { ts, pc, celulares: [{ nk, nome, ultimo }] }. Aqui: de dia, um push por celular por dia pra
-// direcao da casa a partir de 11 dias; e se o PC ficar 2 dias sem mandar nada, um aviso disso (sem ele nao da
-// pra saber). O trinco e no banco (app_config ld_aviso_<chave> = dia), igual o do pressel sem numero.
+// ldplayer_online { ts, pc, celulares: [{ nk, nome, ultimo }] }. Aqui: push pra direcao da casa a partir de 11
+// dias; e se o PC ficar 2 dias sem mandar nada, um aviso disso (sem ele nao da pra saber).
+//
+// DE 12 EM 12 HORAS ATE ABRIR (02/11/2026). Era um push por celular por dia; o Bruno arrastou o aviso pro lado
+// sem querer e ele so voltaria no dia seguinte, com quatro celulares a meio dia dos 14. Pedido dele: "a cada
+// 12 horas, ela seja disparada de novo caso eu nao entre no celular". Agora e UM aviso com todos os celulares
+// atrasados (sete pushes de 12 em 12 horas vira barulho que se aprende a ignorar), repetido enquanto sobrar
+// celular com 11 dias ou mais: abriu, o vigia conta e ele sai da lista; abriu todos, para. A janela de dia foi
+// de 9-21 pra 8-22 porque, com 9-21, o segundo aviso do dia (12 horas depois do primeiro) caia sempre fora
+// dela. O trinco e um carimbo de hora (app_config ld_lembrete) gravado por UPDATE condicional: duas batidas
+// juntas nao avisam em dobro. A tag e uma so, entao o aviso novo substitui o anterior em vez de empilhar.
 const LD_AVISO_DIAS = 11;
+const LD_AVISO_INTERVALO_S = 12 * 3600 - 5 * 60;   // 12 horas; a folga e o passo da agenda, senao escorrega uma batida por rodada
+const _ldNomeCurto = (nome) => String(nome).split(' - ')[0].trim() || String(nome);   // '53 - 11 97251-8066' -> '53'
+function _ldLembreteTexto(atrasados) {   // atrasados: [{ nome, curto, dias }], do mais atrasado pro menos
+  if (atrasados.length === 1) {
+    const c = atrasados[0];
+    return c.dias >= 14
+      ? { title: 'O celular ' + c.nome + ' passou de 14 dias', body: 'Faz ' + c.dias + ' dias que ele não abre: o WhatsApp pode ter desconectado o SellWave Web. Abra pelo Painel dos números e confira.' }
+      : { title: 'Abra o celular ' + c.nome, body: 'Faz ' + c.dias + ' dias que ele não abre. Com 14, o WhatsApp desconecta o SellWave Web. Abra pelo Painel dos números.' };
+  }
+  const grupos = [];
+  for (const c of atrasados) {
+    const g = grupos[grupos.length - 1];
+    if (g && g.dias === c.dias) g.nomes.push(c.curto); else grupos.push({ dias: c.dias, nomes: [c.curto] });
+  }
+  const lista = (ns) => ns.length === 1 ? ns[0] : ns.slice(0, -1).join(', ') + ' e ' + ns[ns.length - 1];
+  const n = atrasados.length, passou = atrasados.filter((c) => c.dias >= 14).length;
+  return {
+    title: !passou ? 'Abra ' + n + ' celulares'
+      : passou === n ? n + ' celulares passaram de 14 dias'
+      : 'Abra ' + n + ' celulares: ' + passou + (passou === 1 ? ' já passou' : ' já passaram') + ' de 14 dias',
+    body: grupos.map((g) => lista(g.nomes) + ' (' + g.dias + ' dias)').join('; ') + '. '
+      + (passou ? 'Com 14, o WhatsApp pode ter desconectado o SellWave Web.' : 'Com 14, o WhatsApp desconecta o SellWave Web.')
+      + ' Abra pelo Painel dos números.',
+  };
+}
 async function _ldOnlineAviso(env) {
   const h = _agoraBR().getUTCHours();
-  if (h < 9 || h >= 21) return;   // so de dia: e pra pessoa abrir o celular, nao pra acordar ninguem
+  if (h < 8 || h >= 22) return;   // so de dia: e pra pessoa abrir o celular, nao pra acordar ninguem
   let est = null;
   try { est = JSON.parse((await _readConfig(env, 'ldplayer_online')) || 'null'); } catch (_) { est = null; }
   if (!est || !Array.isArray(est.celulares)) return;   // vigia nunca rodou: nada a dizer
-  const agora = Math.floor(Date.now() / 1000), dia = _brDay();
-  const avisos = [];
+  const agora = Math.floor(Date.now() / 1000);
+  let aviso = null;
   const semNoticia = agora - (Number(est.ts) || 0);
   if (semNoticia > 2 * 86400) {
-    avisos.push({ chave: 'pc', title: 'O PC dos celulares não dá notícia', body: 'Faz ' + Math.floor(semNoticia / 86400) + ' dias que ele não conta quando os celulares abriram. Ligue o PC e abra o Painel dos números.' });
+    aviso = { title: 'O PC dos celulares não dá notícia', body: 'Faz ' + Math.floor(semNoticia / 86400) + ' dias que ele não conta quando os celulares abriram. Ligue o PC e abra o Painel dos números.' };
   } else {
+    const atrasados = [];
     for (const c of est.celulares) {
       const ult = Number(c && c.ultimo) || 0;
       if (!ult) continue;
       const dias = Math.floor((agora - ult) / 86400);
       if (dias < LD_AVISO_DIAS) continue;
       const nome = String((c && c.nome) || (c && c.nk) || 'celular');
-      avisos.push(dias >= 14
-        ? { chave: String(c.nk), title: 'O celular ' + nome + ' passou de 14 dias', body: 'Faz ' + dias + ' dias que ele não abre: o WhatsApp pode ter desconectado o SellWave Web. Abra pelo Painel dos números e confira.' }
-        : { chave: String(c.nk), title: 'Abra o celular ' + nome, body: 'Faz ' + dias + ' dias que ele não abre. Com 14, o WhatsApp desconecta o SellWave Web. Abra pelo Painel dos números.' });
+      atrasados.push({ nome, curto: _ldNomeCurto(nome), dias });
+    }
+    if (atrasados.length) {
+      atrasados.sort((a, b) => b.dias - a.dias || a.curto.localeCompare(b.curto, 'pt-BR', { numeric: true }));
+      aviso = _ldLembreteTexto(atrasados);
     }
   }
-  if (!avisos.length) return;
+  if (!aviso) return;
   await _ensureConfigTable(env);
+  const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES ('ld_lembrete', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE CAST(app_config.value AS INTEGER) <= ?")
+    .bind(String(agora), agora, agora - LD_AVISO_INTERVALO_S).run().catch(() => null);
+  if (!(ins && ins.meta && ins.meta.changes > 0)) return;   // avisou faz menos de 12 horas
   const r = await env.DB.prepare("SELECT id FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role) IN ('diretor','socio','produtor')").all().catch(() => null);
   const quem = ((r && r.results) || []).map((x) => String(x.id));
-  for (const a of avisos) {
-    const ins = await env.DB.prepare("INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at WHERE app_config.value <> excluded.value")
-      .bind('ld_aviso_' + a.chave, dia, agora).run().catch(() => null);
-    if (!(ins && ins.meta && ins.meta.changes > 0)) continue;   // ja avisou hoje
-    for (const id of quem) await _wpParaPessoa(env, id, { title: a.title, body: a.body, aviso: true, tag: 'ld-aviso-' + a.chave, icon: '/icons/venda-192.png?v=2', url: '/pressels/contingencia' }, 'celulares').catch(() => 0);
-    console.log('LD_AVISO ' + a.chave + ' avisados=' + quem.length);
-  }
+  for (const id of quem) await _wpParaPessoa(env, id, { title: aviso.title, body: aviso.body, aviso: true, tag: 'ld-aviso', icon: '/icons/venda-192.png?v=2', url: '/pressels/contingencia' }, 'celulares').catch(() => 0);
+  console.log('LD_AVISO ' + aviso.title + ' avisados=' + quem.length);
 }
 // AGENDA: avisa quem marcou o retorno na hora marcada.
 // O cobrador marcava "retornar 14:30" e ninguém avisava ninguém: data.notifs só tinha saque e
