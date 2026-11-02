@@ -20466,6 +20466,23 @@ let _dcSeenPodaT = 0;   // ver "PODA UMA VEZ POR HORA" no _dcPoll
 // de 9-21 pra 8-22 porque, com 9-21, o segundo aviso do dia (12 horas depois do primeiro) caia sempre fora
 // dela. O trinco e um carimbo de hora (app_config ld_lembrete) gravado por UPDATE condicional: duas batidas
 // juntas nao avisam em dobro. A tag e uma so, entao o aviso novo substitui o anterior em vez de empilhar.
+//
+// SO CELULAR COM O WHATSAPP CONECTADO (02/11/2026). O primeiro aviso de 12 em 12 horas cobrou celular em que
+// o Bruno "so criou o celular, mas nunca conectou nenhuma vez o WhatsApp". Pedido dele: "quero que sejam
+// apenas mensagens de numeros ali em que, de fato, o WhatsApp esta conectado. Se o WhatsApp nao estiver
+// conectado ou estiver com restricao, banimento, enfim, nem precisa mandar mensagem, porque dai nao faz
+// sentido". Faz sentido pela propria regra que o aviso defende: os 14 dias so desconectam alguma coisa se
+// houver WhatsApp conectado ali. Dois cortes, de duas fontes diferentes de proposito:
+//  - O CELULAR: `c.wa`, que o vigia passou a mandar, e o mesmo estado do icone do painel
+//    (whatsapp-estado.mjs: so a TELA do app decide). Avisa com 'ativo'; 'nao_ativado', 'sem_app', 'banido' e
+//    nunca conferido ficam de fora. O onus e provar que esta conectado, nao o contrario - o Bruno pediu
+//    "apenas", e numero nunca conferido e numero que ninguem abriu desde 19/10, quando o icone nasceu.
+//  - O NUMERO NA DASH: a tag (Restrito, Banido, Bloqueado) pelo MESMO teste da roleta (_foraIdsDe + st
+//    'banido'), que e onde ele marca restricao e ban. Lido so quando sobrou alguem pra avisar, pra batida
+//    que nao vai avisar ninguem continuar sem tocar no estado.
+// VIGIA VELHO NAO CALA O AVISO: se NENHUM celular vem com o campo `wa`, o PC esta rodando a versao antiga do
+// vigia-online.mjs e o filtro nao tem como ser aplicado - avisa como antes e grita no log. Perder o aviso em
+// silencio por causa de um script desatualizado seria pior que o barulho que ele pediu pra cortar.
 const LD_AVISO_DIAS = 11;
 const LD_AVISO_INTERVALO_S = 12 * 3600 - 5 * 60;   // 12 horas; a folga e o passo da agenda, senao escorrega uma batida por rodada
 const _ldNomeCurto = (nome) => String(nome).split(' - ')[0].trim() || String(nome);   // '53 - 11 97251-8066' -> '53'
@@ -20504,15 +20521,36 @@ async function _ldOnlineAviso(env) {
   if (semNoticia > 2 * 86400) {
     aviso = { title: 'O PC dos celulares não dá notícia', body: 'Faz ' + Math.floor(semNoticia / 86400) + ' dias que ele não conta quando os celulares abriram. Ligue o PC e abra o Painel dos números.' };
   } else {
-    const atrasados = [];
+    const temWa = est.celulares.some((c) => c && Object.prototype.hasOwnProperty.call(c, 'wa'));
+    if (!temWa) console.log('LD_AVISO_SEM_WA o vigia deste PC nao manda o estado do WhatsApp (vigia-online.mjs antigo): avisando sem o filtro');
+    const atrasados = [], calados = [];
     for (const c of est.celulares) {
       const ult = Number(c && c.ultimo) || 0;
       if (!ult) continue;
       const dias = Math.floor((agora - ult) / 86400);
       if (dias < LD_AVISO_DIAS) continue;
       const nome = String((c && c.nome) || (c && c.nk) || 'celular');
-      atrasados.push({ nome, curto: _ldNomeCurto(nome), dias });
+      const wa = String((c && c.wa) || '');
+      if (temWa && wa !== 'ativo') { calados.push(nome + ': ' + (wa || 'nunca conferido')); continue; }
+      // pelo nk, nunca pelo nome: '63 - 15 99187-2193' sem os sinais vira 6315991872193, e o DDD sai 63
+      atrasados.push({ nome, curto: _ldNomeCurto(nome), dias, nk: _waNumKey((c && c.nk) || '') });
     }
+    // A TAG DO NUMERO NA DASH, pelo mesmo teste da roleta. Fica aqui embaixo de proposito: a batida que nao
+    // tem ninguem atrasado nao chega a pedir o estado.
+    if (atrasados.length) {
+      const data = await _getDashData(env, 60000);
+      const chips = Array.isArray(data && data.chips) ? data.chips : [];
+      if (!chips.length) console.log('LD_AVISO_SEM_TAG nao li os chips do estado: avisando sem conferir restricao/ban');
+      const fora = _foraIdsDe(data);
+      for (let i = atrasados.length - 1; i >= 0; i--) {
+        const ch = chips.find((c) => c && c.num && _waNumKey(c.num) === atrasados[i].nk);
+        if (!ch) continue;
+        if (!fora.has(String(ch.wa_st || '').toLowerCase()) && ch.st !== 'banido') continue;
+        calados.push(atrasados[i].nome + ': ' + (ch.st === 'banido' ? 'banido' : 'tag ' + ch.wa_st));
+        atrasados.splice(i, 1);
+      }
+    }
+    if (calados.length) console.log('LD_AVISO_FORA ' + calados.join(' | '));
     if (atrasados.length) {
       atrasados.sort((a, b) => b.dias - a.dias || a.curto.localeCompare(b.curto, 'pt-BR', { numeric: true }));
       aviso = _ldLembreteTexto(atrasados);
