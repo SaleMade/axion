@@ -9804,6 +9804,35 @@ async function handlePedidoNovo(req, env) {
     try { atual = JSON.parse(row.data || '{}'); } catch (_) { return err('Estado ilegível', 500); }
     const leadsAtual = Array.isArray(atual.leads) ? atual.leads : [];
     if (leadsAtual.some((l) => l && String(l.id) === idStr)) return json({ ok: true, id: lead.id, version: row.version, ja: true });
+
+    // O MESMO PEDIDO GRAVADO DUAS VEZES (02/11/2026). A linha acima so pega o REENVIO do mesmo
+    // pedido, pelo id. Seis cliques no Cadastrar mandam seis ids diferentes e passavam todos: foi o
+    // que aconteceu com o pedido da Ines de Fatima, seis cards iguais em 12 ms, e o resumo da noite
+    // anunciou 20 vendas do Kevin num dia de 15. A tela ganhou trava no mesmo dia, mas trava de
+    // navegador nao vale pra aba velha nem pro app do vendedor: o servidor tambem recusa.
+    //
+    // SO O QUE E CLARAMENTE A MESMA GRAVACAO: mesmo vendedor, mesmo cliente (CPF ou os 8 digitos do
+    // telefone), mesmo valor, menos de 2 minutos e - quando os dois tem anexo - o MESMO comprovante.
+    // Duas vendas de verdade pra mesma pessoa no mesmo minuto teriam comprovantes diferentes.
+    // O tempo se mede entre os IDS, nao contra o relogio do servidor: o id nasce do relogio do
+    // navegador que mandou, e o do Kevin anda 2 minutos adiantado - comparar com o servidor erraria
+    // sozinho. Responde como se tivesse gravado, apontando pro pedido que ja esta la: pro vendedor
+    // nao ha nada a corrigir, e um erro aqui so encheria a tela de aviso vermelho.
+    const _digs = (s) => String(s || '').replace(/\D/g, '');
+    const _comp = (l) => String((l && l.comprovante_url) || '');
+    const cpfNovo = _digs(lead.cpf), foneNovo = _digs(lead.wa).slice(-8), vlNovo = Number(lead.vl) || 0;
+    const refMs = Number(lead.id) > 1e12 ? Number(lead.id) : Date.now();
+    const copia = (cpfNovo || foneNovo) ? leadsAtual.find((l) => l
+      && String(l.at || '') === String(lead.at || '')
+      && (Number(l.vl) || 0) === vlNovo
+      && ((cpfNovo && _digs(l.cpf) === cpfNovo) || (foneNovo && _digs(l.wa).slice(-8) === foneNovo))
+      && (!_comp(l) || !_comp(lead) || _comp(l) === _comp(lead))
+      && Math.abs(_botCriadoMs(l) - refMs) < 120000) : null;
+    if (copia) {
+      console.log('PEDIDO_COPIA ' + String(lead.nome || '').slice(0, 40) + ' id ' + lead.id + ' e copia do ' + copia.id
+        + ' (' + Math.round(Math.abs(_botCriadoMs(copia) - refMs) / 1000) + ' s, vendedor ' + String(lead.at || '') + ')');
+      return json({ ok: true, id: copia.id, version: row.version, ja: true, copia: true });
+    }
     // SO OS PEDIDOS saem da regra de cargo. Ela foi escrita pro estado PODADO que a tela manda; com o
     // estado inteiro, a costura do afiliado carimbava o trafego DA CASA como dele (52 registros viraram
     // 124 no teste). Todo o resto fica exatamente como esta no banco.
