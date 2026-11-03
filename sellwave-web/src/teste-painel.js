@@ -1944,6 +1944,15 @@ app.whenReady().then(async () => {
   conta('agenda: Atrasados, Hoje e Proximos nos lugares certos', col(cb2, 'atrasados') === 'Ana Atrasada' && col(cb2, 'hoje') === 'Bia Hoje' && col(cb2, 'proximos') === 'Caio Amanha', JSON.stringify(cb2.cols))
   conta('agenda: Sem retorno tem o Davi e NAO o Gil, que e de outro cobrador', col(cb2, 'sem') === 'Davi Sem Data', col(cb2, 'sem'))
   conta('agenda: Chegando tem quem saiu pra entrega', col(cb2, 'chegando') === 'Eva Chegando', col(cb2, 'chegando'))
+  // A ORDEM QUE O BRUNO PEDIU EM 03/11: a fila do dia, do que ja passou pro que vem mais pra frente.
+  conta('agenda: colunas na ordem Atrasados, Sem retorno, Hoje, Chegando, Proximos', cb2.cols.map((c) => c.col).join('|') === 'atrasados|sem|hoje|chegando|proximos', cb2.cols.map((c) => c.col).join('|'))
+  const miniOrdem = await js2('[...document.querySelectorAll("#cob-mini em")].map(e => e.textContent).join("|")')
+  conta('a faixa de baixo segue a mesma ordem', miniOrdem === 'Atrasados|Sem retorno|Hoje|Chegando|Recebido hoje', miniOrdem)
+  // O QUADRO PISCAVA (03/11): o vigia de 1 s lia a foto do estado, que ainda dizia "fechado", e
+  // fechava o quadro logo depois do clique. A foto aqui continua dizendo fechado de proposito.
+  await espera(1300)
+  const cbFica = await js2('({ on: document.getElementById("cob").classList.contains("on"), foto: estado.crm && estado.crm.aberto })')
+  conta('cobranca: o quadro continua aberto depois do vigia (nao abre e fecha)', cbFica.on === true && cbFica.foto === false, JSON.stringify(cbFica))
   await js2('(() => { const c = document.getElementById("cob-meus"); c.checked = false; c.dispatchEvent(new Event("change")) })()')
   await espera(150)
   conta('agenda: sem o "so os meus", o pedido do outro cobrador aparece', /Gil De Outro/.test(col(await colsCob(), 'sem')))
@@ -1963,6 +1972,8 @@ app.whenReady().then(async () => {
     + ' conversa: !!document.querySelector("#cob-ficha [data-acao=conversa]") }))()')
   conta('ficha: clicar no card abre a ficha com o comentario e os links', cb4.aberta && /cliente pediu pra ligar depois/.test(cb4.txt) && cb4.pix, JSON.stringify(cb4).slice(0, 160))
   conta('ficha no quadro: abre a conversa, mas nao "envia" (nao ha conversa na tela)', cb4.conversa && !cb4.enviar, JSON.stringify(cb4).slice(-80))
+  const secs = await js2('[...document.querySelectorAll("#cob-ficha .fx-caixa")].map(x => x.dataset.sec + ":" + getComputedStyle(x).borderTopStyle + ":" + (getComputedStyle(x).backgroundColor !== "rgba(0, 0, 0, 0)")).join("|")')
+  conta('ficha: Entrega, Retorno e Pagamento em caixas separadas, com borda e fundo', secs === 'entrega:solid:true|retorno:solid:true|pagamento:solid:true', secs)
   const salvas = () => js2('(window.__ver()).filter(c => c.nome === "cobSalva").map(c => c.args)')
   const nSalvas0 = (await salvas()).length
   await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
@@ -1990,6 +2001,12 @@ app.whenReady().then(async () => {
   await espera(300)
   const cv = await js2('(() => ({ ultima: (window.__ver()).filter(c => c.nome === "cobConversa").pop(), on: document.getElementById("cob").classList.contains("on") }))()')
   conta('conversa: o numero escolhido abre a conversa do cliente e o quadro sai da frente', cv.ultima && cv.ultima.args[0] === '11911110004' && cv.ultima.args[1] === '5511977776666' && !cv.on, JSON.stringify(cv))
+  // E NAO VOLTA SOZINHO: uma foto do estado tirada com o quadro aberto reabria ele em cima da
+  // conversa que acabou de abrir.
+  await js2('estado.crm = Object.assign({}, estado.crm, { aberto: true })')
+  await espera(1300)
+  conta('conversa: o quadro nao reabre por cima da conversa', !(await js2('document.getElementById("cob").classList.contains("on")')))
+  await js2('estado.crm = Object.assign({}, estado.crm, { aberto: false })')
 
   await js2('window.__swCob.abre("kanban")')
   await espera(300)

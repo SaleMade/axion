@@ -422,6 +422,17 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   Testes: painel 355/355, `npm run teste` (+22), smoke WA 23/23, worker `teste-cobranca-rota` 44/44.
   Fotos: `src/foto-cobranca.js`.
 
+- **03/11/2026 — AJUSTES DA VERSÃO DE COBRADOR (1.26.1).** Quatro pedidos do Bruno depois de usar.
+  (1) **O quadro piscava**: abria, fechava, a área ficava vazia e ele voltava em 2 a 3 s. O vigia de
+  1 s do `cobranca.js` reaplicava o `estado.crm` inteiro, que é uma FOTO da última leitura: logo
+  depois do clique ela dizia "fechado". O mesmo vigia reabria o quadro por cima da conversa recém
+  aberta. Agora o aberto/fechado só vem do `sw:area` do main ou do clique, e a foto serve uma vez, só
+  pra geometria (o mesmo que o `crm.js` já fazia). (2) **"Abrir conversa" usa o número da tela
+  primeiro** (o que ele escolheu na lista), depois o último que falou com o cliente, depois qualquer
+  conectado. (3) **Agenda na ordem da fila**: Atrasados, Sem retorno, Hoje, Chegando, Próximos (a
+  faixa de baixo também). (4) **Ficha**: Entrega, Retorno e Pagamento em caixas com a cor de cada um.
+  Testes: painel 360/360 (o do quadro que pisca falha com o código antigo), `npm run teste`.
+
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
 Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,

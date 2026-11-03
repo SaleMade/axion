@@ -726,8 +726,8 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('abrir link so aceita http(s)', /if \(!\/\^https\?:\\\/\\\/\/i\.test\(u\)\) return \{ ok: false \}/.test(m))
   const iConv = m.indexOf("ipcMain.handle('sw:cob-conversa'")
   const conv = m.slice(iConv, iConv + 2600)
-  vale('conversa: o numero da ultima conversa com o cliente vem primeiro, depois o da tela, depois qualquer conectado',
-    conv.indexOf('const pref') > 0 && conv.indexOf('const pref') < conv.indexOf('ativoAgora && abertos.has(ativoAgora)') && conv.indexOf('ativoAgora && abertos.has(ativoAgora)') < conv.indexOf('const outro'))
+  vale('conversa: o numero da tela vem primeiro, depois o da ultima conversa com o cliente, depois qualquer conectado',
+    conv.indexOf('ativoAgora && abertos.has(ativoAgora)') > 0 && conv.indexOf('ativoAgora && abertos.has(ativoAgora)') < conv.indexOf('const pref') && conv.indexOf('const pref') < conv.indexOf('const outro'))
   vale('conversa: numero Restrito nao e escolhido sozinho', /naoRestrito\(ativoAgora\)/.test(conv) && /prontoCob\(k\) && !destacados\.has\(k\) && naoRestrito\(k\)/.test(conv))
 }
 

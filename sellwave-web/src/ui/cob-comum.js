@@ -179,12 +179,15 @@
     if (p.entrega) ent.push('<span class="fx-ap">' + esc(p.entrega.label + ' ' + p.entrega.data + (p.entrega.dias ? ' · ' + p.entrega.dias : '')) + '</span>')
     if (p.track) ent.push('<span class="fx-ap">' + esc((p.transp ? p.transp + ' ' : '') + p.track) + '</span>')
     if (ent.length || (p.links && p.links.rastreio)) {
-      h += '<div class="fx-bloco"><div class="fx-tit">' + I.caminhao + 'Entrega</div><div class="fx-wrap">' + ent.join('') + '</div>'
+      h += '<div class="fx-bloco fx-caixa" data-sec="entrega" style="--c:#818cf8"><div class="fx-tit">' + I.caminhao + 'Entrega</div><div class="fx-wrap">' + ent.join('') + '</div>'
       if (p.links && p.links.rastreio) h += linkLinha({ k: 'rastreio', rot: 'Rastreio', frase: 'Segue o link para acompanhar a entrega do seu pedido:' }, p.links.rastreio, ctx)
       h += '</div>'
     }
     // retorno
-    h += '<div class="fx-bloco"><div class="fx-tit">' + I.relogio + 'Retorno'
+    // ENTREGA, RETORNO E PAGAMENTO EM CAIXAS (03/11/2026, pedido do Bruno: "ficasse um pouco mais
+    // destacada (...) mais separados entre eles, pra eu conseguir diferenciar"). Cada uma com a sua cor
+    // de leve no fundo e no titulo; o resto da ficha segue com a linha fina de sempre.
+    h += '<div class="fx-bloco fx-caixa" data-sec="retorno" style="--c:#60a5fa"><div class="fx-tit">' + I.relogio + 'Retorno'
       + (isNaN(ag) ? '<span class="fx-ap">sem retorno marcado</span>' : '<span class="fx-quando' + (atrasado ? ' atrasado' : '') + '">' + esc(quandoTxt(ag, agora)) + (atrasado ? ' · atrasado' : '') + '</span>')
       + '</div><div class="fx-wrap">'
       + atalhosRetorno(agora).map((a) => '<button class="fx-mini" data-acao="agend" data-v="' + a.v + '">' + esc(a.rot) + '</button>').join('')
@@ -193,7 +196,7 @@
       + (p.agend ? '<button class="fx-mini fx-fraco" data-acao="agend" data-v="">Tirar</button>' : '')
       + '</div></div>'
     // pagamento
-    h += '<div class="fx-bloco"><div class="fx-tit">' + I.ok + 'Pagamento</div>'
+    h += '<div class="fx-bloco fx-caixa" data-sec="pagamento" style="--c:#10b981"><div class="fx-tit">' + I.ok + 'Pagamento</div>'
     if (p.pago) {
       h += '<div class="fx-ap">Recebido ' + esc(brl(p.valor)) + (p.pagoTs ? ' em ' + esc(new Date(Number(p.pagoTs)).toLocaleDateString('pt-BR')) : '') + '.</div>'
     } else {
@@ -348,6 +351,11 @@
   .fx-bloco { border-top: 1px solid var(--linha); padding-top: 9px; display: flex; flex-direction: column; gap: 7px; }
   .fx-tit { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--apagado); }
   .fx-tit .fx-ap, .fx-tit .fx-quando { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .fx-caixa { border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-radius: 10px; padding: 9px 10px 10px;
+    background: color-mix(in srgb, var(--c) 7%, transparent); }
+  .fx-caixa + .fx-caixa { margin-top: 2px; }
+  .fx-caixa > .fx-tit { color: var(--c); }
+  .fx-caixa + .fx-bloco:not(.fx-caixa) { margin-top: 4px; }
   .fx-quando { color: #60a5fa; }
   .fx-quando.atrasado { color: #f0506a; }
   .fx-ap { color: var(--apagado); font-size: 11.5px; }

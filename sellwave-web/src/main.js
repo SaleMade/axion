@@ -2906,9 +2906,13 @@ ipcMain.handle('sw:cob-conversa', async (_e, { fone, nk: escolhido }) => {
   }
   const ehMeu = (nk) => meus.some((n) => numKey(n.numero) === nk)
   const naoRestrito = (nk) => !restritoCob(meus.find((n) => numKey(n.numero) === nk))
+  // O NUMERO DA TELA VEM PRIMEIRO (03/11/2026, pedido do Bruno: "o cobrador seleciona um dos
+  // numeros (...) no momento em que ele clicar nesse botaozinho verde, eu quero que ele ja abra a
+  // conversa com esse lead dentro do WhatsApp"). E o numero que ele escolheu na lista pra trabalhar.
+  // O ultimo numero que falou com o cliente so vale quando nao ha numero conectado na tela.
+  if (ativoAgora && abertos.has(ativoAgora) && prontoCob(ativoAgora) && !destacados.has(ativoAgora) && naoRestrito(ativoAgora)) return naTela(ativoAgora)
   const pref = String((config.cobUltimo || {})[k8] || '')
   if (pref && ehMeu(pref) && abertos.has(pref) && prontoCob(pref) && !destacados.has(pref)) return naTela(pref)
-  if (ativoAgora && abertos.has(ativoAgora) && prontoCob(ativoAgora) && !destacados.has(ativoAgora) && naoRestrito(ativoAgora)) return naTela(ativoAgora)
   const outro = [...abertos.keys()].find((k) => prontoCob(k) && !destacados.has(k) && naoRestrito(k))
   if (outro) return naTela(outro)
   return {

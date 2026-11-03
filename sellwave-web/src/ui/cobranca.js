@@ -39,17 +39,27 @@
   let fichaPed = null
   let arrastando = null
   let perdaAberta = false
+  let geometria = false
 
   const modo = () => { try { return !!(typeof estado !== 'undefined' && estado && estado.temToken && estado.cobranca) } catch (_) { return false } }
 
   // ── geometria e visibilidade (a mesma do CRM: x e largura vem do main pelo sw:area) ──────────
-  function aplicaArea(g) {
+  // O QUADRO PISCAVA (03/11/2026, o Bruno: "ele abre e fecha bem rapido (...) acaba saindo do
+  // WhatsApp. Depois de uns 2, 3 segundos ele vai abrir de novo e ai vai permanecer"). O vigia de
+  // 1 s reaplicava o `estado.crm` inteiro, e esse estado e uma FOTO tirada na ultima leitura: logo
+  // depois do clique ela ainda dizia "fechado", entao o quadro fechava na tela enquanto o main ja
+  // tinha tirado o WhatsApp da frente (a area ficava vazia) e so voltava quando a foto renovava. O
+  // mesmo vigia reabria o quadro depois de "Abrir conversa". Agora o aberto/fechado so vem do aviso
+  // do main (sw:area) ou do clique, e a foto serve uma vez, so pra geometria, como no crm.js.
+  function aplicaArea(g, soGeometria) {
     if (!g || typeof g !== 'object') return
     if (Number(g.width) > 0) {
       caixa.style.setProperty('--crm-x', Math.round(Number(g.x) || 0) + 'px')
       caixa.style.setProperty('--crm-w', Math.round(Number(g.width)) + 'px')
+      geometria = true
     }
     if (Number(g.faixa) > 0) caixa.style.setProperty('--crm-faixa', Math.round(Number(g.faixa)) + 'px')
+    if (soGeometria) return
     if (typeof g.aberto === 'boolean' && g.aberto !== aberto && modo()) desenhaAberto(g.aberto)
   }
   window.sw.ao('sw:area', aplicaArea)
@@ -58,7 +68,7 @@
   window.sw.ao('sw:cob-abrir', (d) => { if (d && d.id && modo()) { abre(); abreFicha(String(d.id)) } })
   function vigia() {
     const ok = modo()
-    if (ok) { try { aplicaArea(estado.crm) } catch (_) { /* proxima volta */ } }
+    if (ok && !geometria) { try { aplicaArea(estado.crm, true) } catch (_) { /* proxima volta */ } }
     if (caixa.hidden === ok) {
       caixa.hidden = !ok
       if (ok && !carregou) busca()
@@ -173,8 +183,8 @@
     const ag = C.agenda(visiveis())
     const it = (cor, rot, n, vai, tit) => '<span data-vai="' + vai + '" title="' + esc(tit) + '"><i style="--c:' + cor + '"></i><em>' + esc(rot) + '</em><strong>' + n + '</strong></span>'
     mini.innerHTML = it('#ef4444', 'Atrasados', ag.atrasados.length, 'agenda', 'Retorno marcado que já passou')
-      + it('#3b82f6', 'Hoje', ag.hoje.length, 'agenda', 'Retornos marcados pra hoje')
       + it('#f59e0b', 'Sem retorno', ag.semRetorno.length, 'agenda', 'Na fila de cobrança sem dia marcado')
+      + it('#3b82f6', 'Hoje', ag.hoje.length, 'agenda', 'Retornos marcados pra hoje')
       + it('#818cf8', 'Chegando', ag.chegando.length, 'agenda', 'Enviados e saindo pra entrega')
       + '<span title="Pago hoje, do que passou pela cobrança"><i style="--c:#10b981"></i><em>Recebido hoje</em><strong>' + esc(C.brl(ag.recebidoHoje)) + '</strong></span>'
   }
@@ -233,11 +243,14 @@
       if (k !== dia) { dia = k; prox += '<div class="cob-dia">' + esc(C.rotuloDia(C.quandoAgend(p))) + '</div>' }
       prox += cartao(p)
     }
+    // A ORDEM E A FILA DO DIA (03/11/2026, pedido do Bruno): primeiro o que ja passou (atrasados), o
+    // que nunca teve dia (sem retorno), o de hoje, o que esta chegando e, por ultimo, o que tem dia
+    // marcado mais pra frente.
     corpo.innerHTML = coluna('atrasados', 'Atrasados', '#ef4444', ag.atrasados.length, ag.atrasados.map((p) => cartao(p)).join(''), 'Nenhum retorno atrasado')
-      + coluna('hoje', 'Hoje', '#3b82f6', ag.hoje.length, ag.hoje.map((p) => cartao(p)).join(''), 'Nenhum retorno pra hoje')
-      + coluna('proximos', 'Próximos', '#0ea5e9', ag.proximos.length, prox, 'Nada marcado pros próximos dias')
       + coluna('sem', 'Sem retorno', '#f59e0b', ag.semRetorno.length, ag.semRetorno.map((p) => cartao(p)).join(''), 'Toda a fila tem dia marcado')
+      + coluna('hoje', 'Hoje', '#3b82f6', ag.hoje.length, ag.hoje.map((p) => cartao(p)).join(''), 'Nenhum retorno pra hoje')
       + coluna('chegando', 'Chegando', '#818cf8', ag.chegando.length, ag.chegando.map((p) => cartao(p, { quando: false })).join(''), 'Nada a caminho')
+      + coluna('proximos', 'Próximos', '#0ea5e9', ag.proximos.length, prox, 'Nada marcado pros próximos dias')
   }
 
   function desenhaKanban() {
