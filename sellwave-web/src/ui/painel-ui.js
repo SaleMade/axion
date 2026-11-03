@@ -268,7 +268,7 @@ function desenha() {
   if (!itens.length) {
     corpo.innerHTML = '<div class="vazio">' + (soFavs
       ? 'Nenhum favorito ainda. Toque na estrela de um item.'
-      : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : 'Nada aqui. Cadastre itens no Sale Chat.')) + '</div>'
+      : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : 'Nada aqui. Cadastre na dash, em SellWave Web > Mensagens e funis.')) + '</div>'
     return
   }
 
@@ -441,7 +441,7 @@ const funilJaFoi = (id) => !!(funisFeitos[String(id)] && funisFone
 function desenhaFunis() {
   let seqs = roteiro.sequences || []
   if (filtro) seqs = seqs.filter((s) => (String(s.label || '') + ' ' + String(s.grp || '')).toLowerCase().includes(filtro))
-  if (!seqs.length) return '<div class="vazio">Nenhum funil ainda. Crie no Sale Chat.</div>'
+  if (!seqs.length) return '<div class="vazio">Nenhum funil ainda. Crie na dash, em SellWave Web > Mensagens e funis.</div>'
   const { ordem, g } = porGrupo(seqs)
   const umSo = ordem.length === 1
   let html = ''
