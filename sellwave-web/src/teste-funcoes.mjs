@@ -725,10 +725,55 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('gravar no pedido vai pela rota da dash (/api/lead/:id com patch)', /'\/api\/lead\/' \+ encodeURIComponent\(lid\)/.test(m) && /body: JSON\.stringify\(\{ patch \}\)/.test(m))
   vale('abrir link so aceita http(s)', /if \(!\/\^https\?:\\\/\\\/\/i\.test\(u\)\) return \{ ok: false \}/.test(m))
   const iConv = m.indexOf("ipcMain.handle('sw:cob-conversa'")
-  const conv = m.slice(iConv, iConv + 2600)
-  vale('conversa: o numero da tela vem primeiro, depois o da ultima conversa com o cliente, depois qualquer conectado',
-    conv.indexOf('ativoAgora && abertos.has(ativoAgora)') > 0 && conv.indexOf('ativoAgora && abertos.has(ativoAgora)') < conv.indexOf('const pref') && conv.indexOf('const pref') < conv.indexOf('const outro'))
+  const conv = m.slice(iConv, iConv + 3400)
+  // 03/11/2026, pedido do Bruno: o icone abre o numero em que o cliente JA FALOU com o cobrador; nunca
+  // falou, o numero da tela; depois qualquer conectado.
+  vale('conversa: o numero em que o cliente ja falou vem antes do da tela, e o da tela antes de qualquer outro',
+    conv.indexOf('await vinculadoCob(f, meus)') > 0 && conv.indexOf('await vinculadoCob(f, meus)') < conv.indexOf('ativoAgora && abertos.has(ativoAgora)') && conv.indexOf('ativoAgora && abertos.has(ativoAgora)') < conv.indexOf('const outro'))
   vale('conversa: numero Restrito nao e escolhido sozinho', /naoRestrito\(ativoAgora\)/.test(conv) && /prontoCob\(k\) && !destacados\.has\(k\) && naoRestrito\(k\)/.test(conv))
+  vale('conversa: o vinculado fechado abre (e a conversa vem quando ficar pronto); quebrado cede pro da tela',
+    /if \(!abertos\.has\(nkV\)\) \{\n\s*crmPendente = /.test(conv) && /abertos\.has\(nkV\) && !quebradoCob\(nkV\)/.test(conv))
+  {
+    const fn = new Function(recorta(m, 'function numKey(') + '\n' + recorta(m, 'function numeroVinculadoCob(') + '\nreturn numeroVinculadoCob')()
+    const meus = [{ numero: '(15) 99286-0587' }, { numero: '(11) 92733-5679' }, { numero: '(15) 99198-0514' }]
+    const v = (l) => { const r = fn(l, meus); return r ? r.numero : null }
+    vale('vinculado: o da mensagem mais recente do cliente ganha', v([{ n8: '92860587', ts: 100 }, { n8: '27335679', ts: 300 }, { n8: '91980514', ts: 200 }]) === '(11) 92733-5679')
+    vale('vinculado: numero que nao e dele (ou banido, fora da lista) nao conta', v([{ n8: '11112222', ts: 900 }, { n8: '92860587', ts: 10 }]) === '(15) 99286-0587')
+    vale('vinculado: ninguem falou, ninguem vinculado (o app abre no da tela)', v([]) === null && v([{ n8: '92860587', ts: 0 }]) === null)
+    vale('vinculado: a pagina e o servidor votando no mesmo numero nao atrapalham', v([{ n8: '91980514', ts: 50 }, { n8: '91980514', ts: 70 }, { n8: '92860587', ts: 60 }]) === '(15) 99198-0514')
+  }
+  const ag2 = m.indexOf('async function vinculadoCob(')
+  const vc = m.slice(ag2, ag2 + 1400)
+  vale('vinculado: pergunta a pagina de cada numero dele e o servidor, os dois com prazo curto',
+    /__swConversaCom/.test(vc) && /perguntaPagina\(s\.view\.webContents, [\s\S]{0,140}?, 4000\)/.test(vc) && /\/api\/swweb\/cobranca\/contato\?phone=/.test(vc) && /comoE\(\), 5000\)/.test(vc) && /Promise\.allSettled/.test(vc))
+
+  // ENTRARAM EM CONTATO (03/11/2026): sai da coluna em que estava e vai pra primeira
+  const lc = [
+    P('esperando', { agend: ag(1, 9), contato: AGORA - 600000 }),       // tinha retorno amanha: vai pra contato
+    P('a_caminho', { col: 'Enviados', contato: AGORA - 60000 }),        // chegando tambem
+    P('pago_escreveu', { pago: true, col: 'Pagos', contato: AGORA }),   // pago nao e cobranca
+    P('normal', { agend: ag(1, 10) }),
+  ]
+  const a2 = C.agenda(lc, AGORA)
+  vale('contato: quem escreveu sai de Proximos/Chegando e vai pra coluna, o mais recente primeiro', ids(a2.contato) === 'a_caminho,esperando' && ids(a2.proximos) === 'normal' && !a2.chegando.length, JSON.stringify({ c: ids(a2.contato), p: ids(a2.proximos) }))
+  vale('contato: pedido pago que escreveu nao entra (nao e cobranca)', !a2.contato.some((x) => x.id === 'pago_escreveu'))
+  vale('contato: a fila conta quem esta na cobranca e escreveu', a2.fila === 2, String(a2.fila))
+  vale('contato: "escreveu ha quanto" le minuto, hora e dia', C.haQuanto(AGORA - 20000, AGORA) === 'agora' && C.haQuanto(AGORA - 12 * 60000, AGORA) === 'há 12 min' && C.haQuanto(AGORA - 3 * 3600000, AGORA) === 'há 3 h' && /^ontem \d\d:\d\d$/.test(C.haQuanto(AGORA - 20 * 3600000, AGORA)), C.haQuanto(AGORA - 20 * 3600000, AGORA))
+
+  // O COBRADOR SO LEVA PRA PAGOS OU PRA PERDA (03/11/2026, igual a dash)
+  vale('arrastar: Pagos e as perdas sim', C.podeIrCob('Entregues', 'Pagos') && C.podeIrCob('Enviados', 'Frustrados') && C.podeIrCob('Pagos', 'Cancelado sem Custo'))
+  vale('arrastar: etapa de entrega nao (Preparando -> Enviado, Enviado -> Saiu para Entrega, nada volta pra Cobranca)',
+    !C.podeIrCob('Preparando', 'Enviados') && !C.podeIrCob('Enviados', 'Saiu para Entrega') && !C.podeIrCob('Frustrados', 'Entregues') && !C.podeIrCob('Pagos', 'Entregues') && !C.podeIrCob('Pagos', 'Pagos'))
+  const hEt = C.fichaHtml({ ...pedido, col: 'Entregues', pago: false }, { conversa: true })
+  const opts = (hEt.match(/<select class="fx-etapa">([\s\S]*?)<\/select>/) || [])[1] || ''
+  vale('a ficha so oferece as perdas no "mudar etapa"', /value="Frustrados"/.test(opts) && !/value="Enviados"|value="Preparando"|value="A Enviar"|value="Saiu para Entrega"|value="Pagos"/.test(opts), opts.replace(/<[^>]+>/g, '|').slice(0, 120))
+
+  // TAGS NA FICHA (03/11/2026): as marcadas a mostra, o "+ Tag" com o resto do catalogo
+  const cat = [{ id: 'vip', nome: 'VIP', cor: '#f0f' }, { id: 'promessa', nome: 'Prometeu pagar', cor: '#0af' }]
+  const hT = C.fichaHtml({ ...pedido, tags: [{ id: 'vip', nome: 'VIP', cor: '#f0f' }] }, { conversa: true, tags: cat })
+  vale('tags: a marcada aparece ligada e a outra so no "+ Tag"', /class="fx-tag on" data-acao="tag" data-v="vip"/.test(hT) && /data-acao="tags-abre"/.test(hT) && /<div class="fx-tags-lista" hidden><button class="fx-tag" data-acao="tag" data-v="promessa"/.test(hT))
+  vale('tags: sem catalogo e sem tag, nada aparece (nada de caixa vazia)', !/fx-tags/.test(C.fichaHtml({ ...pedido, tags: [] }, { conversa: true, tags: [] })))
+  vale('tags: o nome da tag sai escapado', !/<img/.test(C.fichaHtml({ ...pedido, tags: [] }, { tags: [{ id: 'x', nome: '<img src=x>', cor: '#000' }] })))
 }
 
 console.log('')

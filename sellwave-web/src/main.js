@@ -2794,10 +2794,10 @@ ipcMain.handle('sw:crm-conversa', async (_e, { fone, instancia, nk: escolhido, o
 // quem esta no app; no "ver como" da direcao a LEITURA vem como o cobrador e a GRAVACAO como a direcao.
 const baseCob = () => String(config.apiBase).replace(/\/+$/, '')
 const comoE = () => (comoId ? '&como=' + encodeURIComponent(comoId) : '')
-async function lerCob(caminho) {
+async function lerCob(caminho, prazoMs) {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
   try {
-    const r = await fetch(baseCob() + caminho, { headers: authCrm(), signal: AbortSignal.timeout(25000) })
+    const r = await fetch(baseCob() + caminho, { headers: authCrm(), signal: AbortSignal.timeout(prazoMs || 25000) })
     ajustaRelogio(r)
     if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || '' } catch (_) { /* ok */ } return { ok: false, erro: m || respostaRuim(r) } }
     return await r.json()
@@ -2865,13 +2865,54 @@ ipcMain.handle('swp:copiar', (_e, { texto }) => {
 // numero, ele consiga utilizar o outro"). Pedido nao tem instancia (ele nasceu no numero do VENDEDOR),
 // entao a escolha e daqui, nesta ordem:
 //   1) o numero que ele escolheu no menu;
-//   2) o numero pelo qual ele falou com esse cliente da ultima vez, se esta aberto e conectado: o
-//      cliente reconhece o numero e a conversa continua na mesma tela;
-//   3) o numero da tela, se conectado;  4) qualquer aberto e conectado que nao esteja Restrito.
+//   2) O NUMERO EM QUE O CLIENTE JA FALOU COM ELE (03/11/2026, pedido do Bruno: "toda vez que um
+//      cobrador clicar ali no iconezinho, ele ja abra o numero que ja esta vinculado para ele, na
+//      conversa daquele lead"). O vendedor passa o contato do cobrador e o cliente escreve num dos
+//      numeros dele: e ali que a conversa continua, aberto ou fechado (fechado abre e a conversa vem
+//      sozinha). Mais de um: o da mensagem mais recente. Ver vinculadoCob;
+//   3) "caso aquele cliente nunca tenha entrado em contato (...) ele vai abrir uma nova conversa com o
+//      numero que ele esta aberto naquele momento": o numero da tela, se conectado;
+//   4) qualquer aberto e conectado que nao esteja Restrito.
 // Nenhum conectado: a casca mostra a lista dele pra escolher (os fechados abrem e a conversa vem
 // sozinha quando o WhatsApp ficar pronto, o mesmo caminho do CRM).
 const restritoCob = (n) => /restrit/i.test(String((n && n.status) || ''))
 const prontoCob = (nk) => { const s = abertos.get(nk); return !!(s && s.connUltimo === 'pronto') }
+// Numero aberto que nao vai responder (caiu, pede QR, proxy fora): o vinculado nesse estado cede pro
+// da tela em vez de deixar a conversa pendurada esperando um WhatsApp que nao volta sozinho.
+const quebradoCob = (nk) => { const s = abertos.get(nk); return !!(s && /^(qr|caiu|bloqueado|conflito|proxy|versao)$/.test(String(s.connUltimo || ''))) }
+// O ESCOLHIDO ENTRE OS VISTOS: `vistos` = [{ n8, ts }] de onde vier (a pagina de cada numero e o
+// servidor), `meus` = os numeros dele que nao estao banidos. Devolve o numero da lista dele, ou null.
+function numeroVinculadoCob(vistos, meus) {
+  const dele = new Map()
+  for (const n of (meus || [])) { const k = numKey(n && n.numero).slice(-8); if (k.length === 8) dele.set(k, n) }
+  let melhor = null, tsM = 0
+  for (const v of (vistos || [])) {
+    const k = String((v && v.n8) || ''), ts = Number(v && v.ts) || 0
+    if (!dele.has(k) || ts <= 0 || ts <= tsM) continue
+    tsM = ts; melhor = dele.get(k)
+  }
+  return melhor
+}
+// AS DUAS FONTES, AO MESMO TEMPO E COM PRAZO CURTO (e um clique esperando):
+//  - a PAGINA de cada numero aberto e conectado (so leitura, ver __swConversaCom no agente): ve a
+//    conversa que o WhatsApp tem, inclusive a de antes do app existir e a que chegou agora;
+//  - o SERVIDOR (/api/swweb/cobranca/contato): ve os numeros FECHADOS e os de outra maquina.
+// Qualquer uma que falhar so deixa de votar.
+async function vinculadoCob(f, meus) {
+  const dele8 = new Set(meus.map((n) => numKey(n.numero).slice(-8)))
+  const vistos = []
+  const daPagina = [...abertos.entries()]
+    .filter(([nk, s]) => dele8.has(nk.slice(-8)) && s.connUltimo === 'pronto' && s.view && !s.view.webContents.isDestroyed())
+    .map(async ([nk, s]) => {
+      const r = await perguntaPagina(s.view.webContents, 'window.__swConversaCom ? window.__swConversaCom(' + JSON.stringify(f) + ') : null', 4000)
+      if (r && r.ok && r.recebeu) vistos.push({ n8: nk.slice(-8), ts: Number(r.ts) || 1 })
+    })
+  const doServidor = lerCob('/api/swweb/cobranca/contato?phone=' + encodeURIComponent(f) + comoE(), 5000).then((r) => {
+    for (const x of ((r && r.ok && Array.isArray(r.numeros)) ? r.numeros : [])) vistos.push({ n8: String(x.n8 || ''), ts: Number(x.ts) || 0 })
+  })
+  await Promise.allSettled([...daPagina, doServidor])
+  return numeroVinculadoCob(vistos, meus)
+}
 function lembraCob(k8, nk) {
   if (!k8 || !nk) return
   const m = (config.cobUltimo && typeof config.cobUltimo === 'object') ? config.cobUltimo : {}
@@ -2904,17 +2945,27 @@ ipcMain.handle('sw:cob-conversa', async (_e, { fone, nk: escolhido }) => {
     lembraCob(k8, nkE)
     return { ok: true, fechado: true, numero: n.numero }
   }
-  const ehMeu = (nk) => meus.some((n) => numKey(n.numero) === nk)
   const naoRestrito = (nk) => !restritoCob(meus.find((n) => numKey(n.numero) === nk))
-  // O NUMERO DA TELA VEM PRIMEIRO (03/11/2026, pedido do Bruno: "o cobrador seleciona um dos
-  // numeros (...) no momento em que ele clicar nesse botaozinho verde, eu quero que ele ja abra a
-  // conversa com esse lead dentro do WhatsApp"). E o numero que ele escolheu na lista pra trabalhar.
-  // O ultimo numero que falou com o cliente so vale quando nao ha numero conectado na tela.
-  if (ativoAgora && abertos.has(ativoAgora) && prontoCob(ativoAgora) && !destacados.has(ativoAgora) && naoRestrito(ativoAgora)) return naTela(ativoAgora)
-  const pref = String((config.cobUltimo || {})[k8] || '')
-  if (pref && ehMeu(pref) && abertos.has(pref) && prontoCob(pref) && !destacados.has(pref)) return naTela(pref)
+  // 2) O NUMERO EM QUE O CLIENTE JA FALOU (ver o comentario de cima). Restrito tambem vale: a conversa
+  // ja existe, e responder quem escreveu e o que o numero restrito ainda faz.
+  const vinc = await vinculadoCob(f, meus)
+  let aviso = ''
+  if (vinc) {
+    const nkV = numKey(vinc.numero)
+    if (abertos.has(nkV) && !quebradoCob(nkV)) return naTela(nkV)
+    if (!abertos.has(nkV)) {
+      crmPendente = { k8: nkV.slice(-8), fone: f, ate: Date.now() + 300000 }
+      defineCrm(false)
+      lembraCob(k8, nkV)
+      return { ok: true, fechado: true, numero: vinc.numero, aviso: 'Abrindo o número em que esse cliente falou com você.' }
+    }
+    aviso = 'Esse cliente falou com você no ' + vinc.numero + ', mas esse número está fora do ar. Abri no número da tela.'
+  }
+  // 3) NUNCA FALOU: o numero da tela (03/11/2026, pedido do Bruno: "o cobrador seleciona um dos numeros
+  // (...) no momento em que ele clicar nesse botaozinho verde, eu quero que ele ja abra a conversa").
+  if (ativoAgora && abertos.has(ativoAgora) && prontoCob(ativoAgora) && !destacados.has(ativoAgora) && naoRestrito(ativoAgora)) return { ...(await naTela(ativoAgora)), aviso }
   const outro = [...abertos.keys()].find((k) => prontoCob(k) && !destacados.has(k) && naoRestrito(k))
-  if (outro) return naTela(outro)
+  if (outro) return { ...(await naTela(outro)), aviso }
   return {
     ok: false, semNumero: true,
     erro: meus.length ? 'Nenhum número conectado agora. Escolha por qual chamar.' : 'Você ainda não tem número. Peça pra direção pôr um no seu nome na Contingência.',

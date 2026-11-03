@@ -1165,6 +1165,52 @@
     } catch (e) { return Promise.resolve({ ok: false, erro: String((e && e.message) || e).slice(0, 120) }) }
   }
 
+  // ESSE CLIENTE JA ESCREVEU PRA ESTE NUMERO? (03/11/2026, versao de cobrador). So LEITURA, nada abre
+  // e nada vai pra rede: o app pergunta a cada numero aberto do cobrador e abre a conversa naquele em
+  // que o cliente falou por ultimo. `ts` (segundos) = a ultima mensagem DO CLIENTE; conversa que so o
+  // cobrador puxou e ficou sem resposta volta `recebeu: false`, porque "o cliente entrou em contato"
+  // e o que o Bruno pediu. Primeiro o `lastReceivedKey` da conversa (memoria); sem ele, as ultimas 30
+  // mensagens que a pagina ja tem.
+  window.__swConversaCom = function (fone) {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.list !== 'function' || !autenticado()) return Promise.resolve({ ok: false })
+      var d = String(fone || '').replace(/\D/g, '')
+      if (d.length < 10) return Promise.resolve({ ok: false })
+      var k8 = d.slice(-8)
+      return Promise.resolve(W.chat.list({})).then(function (chats) {
+        var meus = []
+        ;(Array.isArray(chats) ? chats : []).forEach(function (c) {
+          var id = c && c.id && (c.id._serialized || String(c.id))
+          if (!id || c.isGroup || !ehPessoa(id)) return
+          var dig = String(telefoneDoChat(c, id) || '')
+          if (dig && dig.slice(-8) === k8) meus.push({ c: c, id: id })
+        })
+        if (!meus.length) return { ok: true, achou: false, recebeu: false, ts: 0 }
+        return Promise.all(meus.map(function (x) {
+          var k = x.c.lastReceivedKey
+          if (k && k.fromMe === false) {
+            var m = null
+            try { m = x.c.msgs && x.c.msgs.get ? x.c.msgs.get(k) : null } catch (_) { m = null }
+            return Number((m && m.t) || x.c.t || 0) || 1
+          }
+          if (!(Number(x.c.t) > 0) || typeof W.chat.getMessages !== 'function') return 0
+          return Promise.resolve(W.chat.getMessages(x.id, { count: 30 })).then(function (msgs) {
+            var t = 0
+            ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) {
+              var deMim = !!(m && (m.fromMe || (m.id && m.id.fromMe)))
+              if (m && !deMim && !NAO_E_MSG.test(String(m.type || 'chat')) && Number(m.t) > t) t = Number(m.t)
+            })
+            return t
+          }).catch(function () { return 0 })
+        })).then(function (tss) {
+          var ts = Math.max.apply(null, tss.concat([0]))
+          return { ok: true, achou: true, recebeu: ts > 0, ts: ts }
+        })
+      }).catch(function () { return { ok: false } })
+    } catch (_) { return Promise.resolve({ ok: false }) }
+  }
+
   var ligado = null
   setInterval(function () {
     try {

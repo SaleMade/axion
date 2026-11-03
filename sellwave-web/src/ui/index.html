@@ -599,6 +599,37 @@
   .cob-perda-l { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 8px; font-size: 12px; cursor: pointer; background: rgba(255, 255, 255, .02); }
   .cob-perda-l i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
   .cob-perda-l b { margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* O QUADRO DO COBRADOR COM MENOS COR (03/11/2026, pedido do Bruno: "o tanto de cor que tem nessas
+     colunas (...) esta meio exagerado"). A cor fica so onde ela diz alguma coisa: a bolinha do
+     cabecalho (qual grupo e), o atrasado em vermelho, o pago e o botao da conversa em verde. Coluna,
+     card, etapa e selo de entrega ficam no neutro. So no #cob: o CRM do vendedor segue como esta. */
+  #cob .crm-col { border: 1px solid var(--linha); background: rgba(255, 255, 255, .018); }
+  #cob .crm-col-cab { background: transparent; border-bottom: 1px solid var(--linha); }
+  #cob .crm-col-cab i { width: 8px; height: 8px; }
+  #cob .crm-col-cab b { color: var(--texto); font-weight: 650; }
+  #cob .crm-col-cab span { background: rgba(255, 255, 255, .06); color: var(--apagado); }
+  #cob .crm-card { border-color: var(--linha); box-shadow: none; }
+  #cob .crm-card:hover { border-color: rgba(255, 255, 255, .2); }
+  #cob .cob-card .fx-col { padding: 0; background: none; border: 0; color: var(--apagado); font-weight: 600; gap: 5px; }
+  #cob .cob-card .fx-col::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+  #cob .cob-card .cob-q { color: var(--texto); }
+  #cob .cob-card .cob-q.atras { color: var(--vermelho); }
+  #cob .cob-card .cob-q.msg { color: var(--verde); }
+  #cob .cob-card .cob-selo { padding: 0; background: none; color: var(--apagado); display: inline-flex; align-items: center; gap: 5px; }
+  #cob .cob-card .cob-selo::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--s); flex: 0 0 auto; }
+  #cob .cob-zap { background: transparent; border-color: var(--linha); }
+  #cob .cob-zap:hover { background: var(--verde-fraco); border-color: rgba(36, 194, 120, .35); filter: none; }
+  .cob-card .cob-l4e { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+  .cob-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--apagado); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cob-tag i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+  /* A DIVISORIA DO DIA (03/11/2026): o dia e quantos pedidos, presa no topo enquanto rola. */
+  .cob-grupo { display: flex; flex-direction: column; gap: 8px; }
+  .cob-grupo + .cob-grupo { margin-top: 6px; }
+  .cob-dia-n { position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 0 -8px; padding: 8px 10px 6px;
+    background: #12161f; border-bottom: 1px solid rgba(255, 255, 255, .1); text-transform: none; letter-spacing: 0; }
+  .cob-dia-n b { font-size: 11.5px; font-weight: 700; color: var(--texto); letter-spacing: .02em; }
+  .cob-dia-n span { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .cob-perda-l.alvo, .cob-dia-n.alvo { box-shadow: inset 0 0 0 2px rgba(36, 194, 120, .5); }
   .cob-ficha { position: absolute; top: 0; right: 0; bottom: 0; width: min(430px, 92%); z-index: 3; display: flex; flex-direction: column;
     background: #121722; border-left: 1px solid var(--linha); box-shadow: -14px 0 30px rgba(0, 0, 0, .35); animation: cob-gaveta .14s ease-out; }
   .cob-ficha[hidden] { display: none; }

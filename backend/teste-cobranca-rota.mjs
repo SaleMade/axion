@@ -75,6 +75,7 @@ const estado = {
   chips: [
     { id: 'cK', num: NUM_KEV, at: 'kev', em_uso: true, wa_st: 'st_uso', idx: 2 },
     { id: 'cH', num: NUM_HAY, at: 'hay', em_uso: true, wa_st: 'st_uso', idx: 7 },
+    { id: 'cH2', num: '(11) 97777-6666', at: 'hay', idx: 8 },
   ],
   pressels: [{ id: 1, nome: 'P1', status: 'ativa', vendedores: [] }],
   salechatPub: { messages: [{ id: 'mv', title: 'Fechar pedido', text: 'venda' }], sequences: [], media: [] },
@@ -218,6 +219,78 @@ r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { comment_add: { tx: 'pro
 const fc = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_RET);
 const c0 = ((fc.d.pedidos || [])[0] || {}).comentarios || [];
 vale('comentario sem "who" fica no nome de quem esta logado', r.st === 200 && c0[0] && c0[0].tx === 'prometeu pagar sexta' && c0[0].quem === 'Haynan Souza', JSON.stringify(c0[0]));
+
+_log('\nEM QUAL NUMERO DO COBRADOR O CLIENTE JA FALOU (03/11/2026)\n');
+
+// 9) /api/swweb/cobranca/contato: so mensagem DO CLIENTE, so numero DELE, o mais recente primeiro
+try { sq.exec('ALTER TABLE wa_messages ADD COLUMN mundo TEXT'); } catch (_) {}
+const msg = (id, phone, inst, dir, ts, mundo) => sq.prepare('INSERT INTO wa_messages (msg_id,phone,instance,direction,type,body,ts,mundo) VALUES (?,?,?,?,?,?,?,?)').run(id, phone, inst, dir, 'text', 'x', ts, mundo || null);
+msg('m1', '5531998765432', 'ax_hay_88887777', 'in', agoraS - 3600);           // a cliente escreveu no numero 1 do cobrador
+msg('m2', '5531998765432', 'ax_hay_88887777', 'out', agoraS - 10);            // resposta do cobrador: nao conta como contato
+msg('m3', '553198765432', 'ax_ccol_1_77776666', 'in', agoraS - 600);          // numero 2, sem o nono digito e com o dono antigo
+msg('m4', '5531998765432', 'ax_kev_97973450', 'in', agoraS - 5);              // numero do VENDEDOR: nunca sai pro cobrador
+msg('m5', '5531998765432', 'ax_hay_88887777', 'in', agoraS - 1, 'afl_x');     // outro mundo
+msg('m6', '5521966665555', 'ax_hay_77776666', 'out', agoraS - 100);           // o cobrador chamou e o cliente nunca respondeu
+r = await chama(TK.hay, '/api/swweb/cobranca/contato?phone=31998765432');
+const nums = (r.d.numeros || []).map((x) => x.n8 + '@' + (agoraS - x.ts));
+vale('acha os dois numeros dele em que a cliente escreveu, o mais recente primeiro', r.st === 200 && nums.join(',') === '77776666@600,88887777@3600', r.st + ' ' + nums.join(','));
+vale('o numero do vendedor e a mensagem de outro mundo nao aparecem', !(r.d.numeros || []).some((x) => x.n8 === '97973450') && !nums.some((x) => /@1$/.test(x)), nums.join(','));
+r = await chama(TK.hay, '/api/swweb/cobranca/contato?phone=5521966665555');
+vale('conversa que so o cobrador mandou nao conta (o cliente nunca entrou em contato)', r.st === 200 && (r.d.numeros || []).length === 0, JSON.stringify(r.d));
+r = await chama(TK.hay, '/api/swweb/cobranca/contato?phone=11900001111');
+vale('cliente que nunca falou: lista vazia', r.st === 200 && (r.d.numeros || []).length === 0, JSON.stringify(r.d));
+r = await chama(TK.dir, '/api/swweb/cobranca/contato?phone=5531998765432&como=hay');
+vale('o "ver como" da direcao ve o mesmo que o cobrador', r.st === 200 && (r.d.numeros || []).length === 2 && r.d.numeros[0].n8 === '77776666', JSON.stringify(r.d));
+r = await chama(TK.kev, '/api/swweb/cobranca/contato?phone=5531998765432');
+vale('vendedor nao le (403)', r.st === 403, r.st);
+
+_log('\nA COLUNA "ENTRARAM EM CONTATO" (03/11/2026)\n');
+
+// 10) o cliente escreveu e ninguem respondeu: o pedido vem com `contato`; respondeu ou mexeu, sai
+const doQuadro = async (id) => { const q = await chama(TK.hay, '/api/swweb/cobranca'); return ((q.d.pedidos || []).find((p) => p.id === id)) || {}; };
+msg('m7', '5521966665555', 'ax_hay_77776666', 'in', agoraS - 50);              // a Ana respondeu depois do cobrador (m6 foi -100)
+let pE = await doQuadro(L_ENV);
+vale('cliente que escreveu depois da ultima resposta vem marcado', pE.contato === (agoraS - 50) * 1000, String(pE.contato));
+vale('quem o cobrador ja respondeu nao vem marcado', !(await doQuadro(L_COB)).contato, '');
+r = await chama(TK.hay, '/api/lead/' + L_ENV, { patch: { agend: brAgend(2) } });
+pE = await doQuadro(L_ENV);
+vale('o cobrador marcou retorno: o card sai da coluna', r.st === 200 && !pE.contato, JSON.stringify({ st: r.st, contato: pE.contato }));
+const depoisS = Math.floor(Date.now() / 1000) + 5;
+msg('m8', '5521966665555', 'ax_hay_77776666', 'in', depoisS);
+pE = await doQuadro(L_ENV);
+vale('o cliente escreveu de novo: volta', pE.contato === depoisS * 1000, String(pE.contato));
+msg('m9', '5521966665555', 'ax_hay_88887777', 'out', depoisS + 3);           // respondeu pelo OUTRO numero dele
+pE = await doQuadro(L_ENV);
+vale('respondeu (por qualquer numero dele): sai', !pE.contato, String(pE.contato));
+r = await chama(TK.hay, '/api/lead/' + L_ENV, { patch: { obs: 'so o endereco' } });
+msg('m10', '5521966665555', 'ax_hay_77776666', 'in', depoisS + 9);
+pE = await doQuadro(L_ENV);
+vale('corrigir um campo que nao e de cobranca nao tira o card (nao e mexer na cobranca)', pE.contato === (depoisS + 9) * 1000, String(pE.contato));
+r = await chama(TK.dir, '/api/swweb/cobranca?como=hay');
+vale('o "ver como" da direcao ve a mesma coluna', ((r.d.pedidos || []).find((p) => p.id === L_ENV) || {}).contato === (depoisS + 9) * 1000, '');
+r = await chama(TK.dir, '/api/swweb/cobranca');
+vale('a direcao sem "ver como" nao tem numero de cobranca, entao ninguem vem marcado', !(r.d.pedidos || []).some((p) => p.contato), '');
+
+_log('\nAS TAGS NO APP (03/11/2026)\n');
+r = await chama(TK.hay, '/api/swweb/cobranca');
+vale('o quadro manda o catalogo de tags com id, nome e cor', (r.d.tags || []).length === 1 && r.d.tags[0].id === 'vip' && r.d.tags[0].nome === 'VIP', JSON.stringify(r.d.tags));
+vale('e a tag do pedido vem com o id (a ficha sabe qual esta marcada)', ((r.d.pedidos || []).find((p) => p.id === L_COB) || {}).tags?.[0]?.id === 'vip', '');
+r = await chama(TK.hay, '/api/lead/' + L_ENV, { patch: { tags: ['vip', 'inventada'] } });
+pE = await doQuadro(L_ENV);
+vale('o cobrador marca tag pelo caminho de sempre (e id que nao existe e jogado fora)', r.st === 200 && (pE.tags || []).map((t) => t.id).join(',') === 'vip', JSON.stringify(pE.tags));
+
+_log('\nO COBRADOR SO LEVA PRA PAGOS OU PRA PERDA (03/11/2026)\n');
+const colDe = (id) => (ler().leads.find((l) => String(l.id) === id) || {}).col;
+r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { col: 'Enviados' } });
+vale('cobrador nao leva Retirada pra Enviado (vem recusado e nao grava)', (r.d.negados || []).includes('col') && colDe(L_RET) === 'Retirada', JSON.stringify({ neg: r.d.negados, col: colDe(L_RET) }));
+r = await chama(TK.hay, '/api/lead/' + L_ENV, { patch: { col: 'Saiu para Entrega' } });
+vale('nem Enviado pra Saiu para Entrega', (r.d.negados || []).includes('col') && colDe(L_ENV) === 'Enviado', JSON.stringify({ neg: r.d.negados, col: colDe(L_ENV) }));
+r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { col: 'Retirar nos Correios', obs: 'x' } });
+vale('a mesma coluna com outro nome nao conta como mudanca', !(r.d.negados || []).includes('col'), JSON.stringify(r.d.negados));
+r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { col: 'Frustrados' } });
+vale('pra perda ele leva', r.st === 200 && !(r.d.negados || []).length && colDe(L_RET) === 'Frustrados', JSON.stringify({ neg: r.d.negados, col: colDe(L_RET) }));
+r = await chama(TK.dir, '/api/lead/' + L_ENV, { patch: { col: 'Saiu para Entrega' } });
+vale('a direcao continua movendo pra qualquer etapa', r.st === 200 && colDe(L_ENV) === 'Saiu para Entrega', colDe(L_ENV));
 
 _log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram.');
 if (falhas.length) { _log('\nFALHOU:\n- ' + falhas.join('\n- ')); process.exit(1); }

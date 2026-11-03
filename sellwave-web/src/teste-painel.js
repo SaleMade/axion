@@ -1945,9 +1945,15 @@ app.whenReady().then(async () => {
   conta('agenda: Sem retorno tem o Davi e NAO o Gil, que e de outro cobrador', col(cb2, 'sem') === 'Davi Sem Data', col(cb2, 'sem'))
   conta('agenda: Chegando tem quem saiu pra entrega', col(cb2, 'chegando') === 'Eva Chegando', col(cb2, 'chegando'))
   // A ORDEM QUE O BRUNO PEDIU EM 03/11: a fila do dia, do que ja passou pro que vem mais pra frente.
-  conta('agenda: colunas na ordem Atrasados, Sem retorno, Hoje, Chegando, Proximos', cb2.cols.map((c) => c.col).join('|') === 'atrasados|sem|hoje|chegando|proximos', cb2.cols.map((c) => c.col).join('|'))
+  // E "ENTRARAM EM CONTATO" NA FRENTE DE TUDO (03/11): e cliente esperando resposta agora.
+  conta('agenda: colunas na ordem Entraram em contato, Atrasados, Sem retorno, Hoje, Chegando, Proximos', cb2.cols.map((c) => c.col).join('|') === 'contato|atrasados|sem|hoje|chegando|proximos', cb2.cols.map((c) => c.col).join('|'))
   const miniOrdem = await js2('[...document.querySelectorAll("#cob-mini em")].map(e => e.textContent).join("|")')
-  conta('a faixa de baixo segue a mesma ordem', miniOrdem === 'Atrasados|Sem retorno|Hoje|Chegando|Recebido hoje', miniOrdem)
+  conta('a faixa de baixo segue a mesma ordem', miniOrdem === 'Contato|Atrasados|Sem retorno|Hoje|Chegando|Recebido hoje', miniOrdem)
+  conta('contato: quem escreveu sai de Proximos e vai pra primeira coluna, mesmo sendo de outro cobrador', col(cb2, 'contato') === 'Ivo Escreveu' && col(cb2, 'proximos') === 'Caio Amanha', JSON.stringify({ c: col(cb2, 'contato'), p: col(cb2, 'proximos') }))
+  conta('contato: o card diz ha quanto tempo o cliente escreveu', /escreveu há 5 min/.test(await js2('(document.querySelector(".crm-col[data-col=contato] .cob-q") || {}).textContent')))
+  const divisoria = await js2('[...document.querySelectorAll(".crm-col[data-col=proximos] .cob-dia-n")].map(d => d.textContent).join("|")')
+  conta('proximos: a divisoria do dia diz quantos pedidos', /^Amanhã · \d\d\/\d\d1 pedido$/.test(divisoria), divisoria)
+  conta('proximos: o card so diz a hora (o dia esta na divisoria)', /^\d\d:\d\d$/.test(await js2('(document.querySelector(".crm-col[data-col=proximos] .cob-q") || {}).textContent')))
   // O QUADRO PISCAVA (03/11): o vigia de 1 s lia a foto do estado, que ainda dizia "fechado", e
   // fechava o quadro logo depois do clique. A foto aqui continua dizendo fechado de proposito.
   await espera(1300)
@@ -1962,7 +1968,7 @@ app.whenReady().then(async () => {
   await espera(200)
   const cb3 = await colsCob()
   conta('kanban: as colunas da dash, na ordem, mais a perda', cb3.cols.map((c) => c.col).join('|') === 'A Enviar|Preparando|Enviados|Saiu para Entrega|Entregues|Retirar nos Correios|Requer Atenção|Pagos|perda', cb3.cols.map((c) => c.col).join('|'))
-  conta('kanban: Cobranca com os tres dele e Pagos com o Fabio', col(cb3, 'Entregues').split(',').sort().join(',') === 'Ana Atrasada,Bia Hoje,Davi Sem Data' && col(cb3, 'Pagos') === 'Fabio Pago', JSON.stringify(cb3.cols))
+  conta('kanban: Cobranca com os tres dele, mais o Ivo que escreveu pra ele, e Pagos com o Fabio', col(cb3, 'Entregues').split(',').sort().join(',') === 'Ana Atrasada,Bia Hoje,Davi Sem Data,Ivo Escreveu' && col(cb3, 'Pagos') === 'Fabio Pago', JSON.stringify(cb3.cols))
   conta('kanban: a perda fica recolhida, so com a contagem', (cb3.cols.find((c) => c.col === 'perda') || {}).n === '1')
 
   await js2('document.querySelector(".cob-card[data-id=\'9001\'] .cob-l1").click()')
@@ -2014,11 +2020,17 @@ app.whenReady().then(async () => {
   await js2('window.__swCob.move("9004", "Pagos")')
   await espera(300)
   conta('kanban: arrastar pra Pagos NAO grava calado, abre a ficha pra confirmar o valor', (await salvas()).length === nS1 && (await js2('window.__swCob.estado().fichaId')) === '9004')
+  // O COBRADOR SO LEVA PRA PAGOS OU PRA PERDA (03/11, igual a dash): etapa de entrega e recusada
+  // na tela, sem gravar nada.
   await js2('window.__swCob.move("9004", "Requer Atenção")')
   await espera(300)
+  const recusouEt = await js2('document.getElementById("cob-aviso").textContent')
+  conta('kanban: etapa de entrega nao e destino do cobrador (nao grava e diz por que)', (await salvas()).length === nS1 && /Pagos ou pra uma frustração/.test(recusouEt), recusouEt)
+  await js2('window.__swCob.move("9004", "Frustrados")')
+  await espera(300)
   const mv = (await salvas()).slice(nS1)
-  conta('kanban: arrastar pra outra etapa grava a coluna com o "antes"', mv.length === 1 && mv[0][1].col === 'Requer Atenção' && mv[0][1].antes.col === 'Cobrança', JSON.stringify(mv))
-  await js2('window.__swCob.move("9002", "Requer Atenção")')
+  conta('kanban: arrastar pra uma frustracao grava a coluna com o "antes"', mv.length === 1 && mv[0][1].col === 'Frustrados' && mv[0][1].antes.col === 'Cobrança', JSON.stringify(mv))
+  await js2('window.__swCob.move("9002", "Frustrados")')
   await espera(400)
   const volta = await js2('(() => ({ aviso: document.getElementById("cob-aviso").textContent, onde: [...document.querySelectorAll("#cob-corpo .crm-col")].find(c => c.querySelector(".cob-card[data-id=\'9002\']"))?.dataset.col }))()')
   conta('kanban: a dash recusou, o card volta e a tela diz por que', volta.onde === 'Entregues' && /Não salvou/.test(volta.aviso), JSON.stringify(volta))

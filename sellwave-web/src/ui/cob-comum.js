@@ -40,6 +40,11 @@
   // Sair de Pagos so pra perda (SAIDAS_DE_PAGOS da dash): Pagos e dinheiro que entrou, e tirar dali
   // por engano apaga uma venda da contabilidade sem rastro.
   const SAIDAS_DE_PAGOS = PERDA.map((c) => c.id)
+  // PRA ONDE O COBRADOR LEVA UM PEDIDO (03/11/2026, pedido do Bruno: "que as duas ferramentas estejam
+  // sincronizadas"): so Pagos (pedindo o valor) e as perdas. As etapas de entrega quem move e a
+  // Five/PayLog. A trava de verdade e do servidor (handleUpdateLead); aqui a tela so nao oferece.
+  const DESTINOS_COB = ['Pagos', ...SAIDAS_DE_PAGOS]
+  const podeIrCob = (de, para) => !!para && de !== para && DESTINOS_COB.includes(para) && !(de === 'Pagos' && para === 'Pagos')
 
   // A FILA DE COBRANCA e o que esta CHEGANDO: as mesmas duas listas do app de celular do cobrador
   // (pages/app/cobranca.js). Retirar nos Correios entra na fila por decisao do Bruno (06/10).
@@ -69,17 +74,32 @@
     return DIAS_SEM[d.getDay()] + ' · ' + curto
   }
   const hora = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  // "agora", "há 12 min", "há 3 h", "ontem 18:40", "sexta 09:12"
+  function haQuanto(ms, agora) {
+    agora = agora || Date.now()
+    const min = Math.floor((agora - ms) / 60000)
+    if (min < 1) return 'agora'
+    if (min < 60) return 'há ' + min + ' min'
+    if (diaIni(ms) === diaIni(agora)) return 'há ' + Math.floor(min / 60) + ' h'
+    return rotuloDia(ms, agora).split(' · ')[0].toLowerCase() + ' ' + hora(ms)
+  }
   const quandoTxt = (ms, agora) => (isNaN(ms) ? '' : rotuloDia(ms, agora).split(' · ')[0] + ' ' + hora(ms))
 
   // A AGENDA, na ordem em que ele trabalha: o que venceu, o que e hoje, o que vem, a fila que ninguem
   // marcou e o que esta chegando. A regra de cada grupo e a do app de celular (agendaDoCobrador).
+  // ENTRARAM EM CONTATO (03/11/2026, pedido do Bruno): o cliente escreveu num numero do cobrador e
+  // ninguem respondeu nem mexeu no pedido desde entao (o `contato` vem pronto do servidor). O card sai
+  // da coluna em que estava e vai pra esta, a primeira; respondeu ou mexeu, ele volta pro lugar dele.
+  // So pedido que esta na agenda (na fila ou chegando): pago e perda nao sao cobranca.
+  const emContato = (p) => !!p && Number(p.contato) > 0 && (naFila(p) || aCaminho(p))
   function agenda(pedidos, agora) {
     agora = agora || Date.now()
     const todos = Array.isArray(pedidos) ? pedidos : []
     const hojeIni = diaIni(agora), hojeFim = hojeIni + 86400000
     const atrasados = [], hoje = [], proximos = [], semRetorno = []
+    const contato = todos.filter(emContato).sort((a, b) => Number(b.contato) - Number(a.contato))
     for (const p of todos) {
-      if (!naFila(p)) continue
+      if (!naFila(p) || emContato(p)) continue
       const t = quandoAgend(p)
       if (isNaN(t)) { semRetorno.push(p); continue }
       if (t < hojeIni) atrasados.push(p)
@@ -91,14 +111,14 @@
     semRetorno.sort((a, b) => (Number(b.saldo) || Number(b.valor) || 0) - (Number(a.saldo) || Number(a.valor) || 0))
     // CHEGANDO: o que saiu e ainda nao chegou. Quem ja esta na rua (Saiu para Entrega) vem primeiro:
     // chega hoje, e e o primeiro a virar cobranca.
-    const chegando = todos.filter(aCaminho).sort((a, b) => (a.col === b.col ? (Number(b.entrou) || 0) - (Number(a.entrou) || 0) : (a.col === 'Saiu para Entrega' ? -1 : 1)))
+    const chegando = todos.filter((p) => aCaminho(p) && !emContato(p)).sort((a, b) => (a.col === b.col ? (Number(b.entrou) || 0) - (Number(a.entrou) || 0) : (a.col === 'Saiu para Entrega' ? -1 : 1)))
     // O QUE ENTROU HOJE, pela data do PAGAMENTO, so do que passou pela cobranca (venda de cartao que
     // nasce paga nunca esteve na fila).
     const pagosHoje = todos.filter((p) => p.pago && p.vc && Number(p.pagoTs) >= hojeIni && Number(p.pagoTs) < hojeFim)
     return {
-      atrasados, hoje, proximos, semRetorno, chegando, pagosHoje,
+      contato, atrasados, hoje, proximos, semRetorno, chegando, pagosHoje,
       recebidoHoje: pagosHoje.reduce((s, p) => s + (Number(p.valor) || 0), 0),
-      fila: atrasados.length + hoje.length + proximos.length + semRetorno.length,
+      fila: atrasados.length + hoje.length + proximos.length + semRetorno.length + contato.filter(naFila).length,
     }
   }
 
@@ -168,6 +188,18 @@
     h += '<div class="fx-cab"><div class="fx-nome"><b>' + esc(p.nome) + '</b>' + chip(p.col) + (p.pago ? '<span class="fx-pago">' + I.ok + 'Pago</span>' : '') + '</div>'
       + '<div class="fx-valor">' + esc(brl(p.valor)) + desconto + '</div></div>'
     if (linhaSub.length) h += '<div class="fx-sub">' + esc(linhaSub.join(' · ')) + '</div>'
+    // TAGS (03/11/2026, pedido do Bruno: "a opcao de colocar tags (...) algo bem discreto e simples").
+    // As marcadas ficam a mostra (clicar tira); o "+ Tag" abre as outras do catalogo da dash. Criar
+    // tag nova continua na dash (Gerenciar tags, no topo do Kanban).
+    const marc = Array.isArray(p.tags) ? p.tags.filter((t) => t && t.id) : []
+    const cat = Array.isArray(ctx.tags) ? ctx.tags.filter((t) => t && t.id) : []
+    const resto = cat.filter((t) => !marc.some((m) => m.id === t.id))
+    if (marc.length || cat.length) {
+      const pill = (t, on) => '<button class="fx-tag' + (on ? ' on' : '') + '" data-acao="tag" data-v="' + esc(t.id) + '" style="--c:' + esc(t.cor || '#64748b') + '" title="' + (on ? 'Tirar a tag' : 'Marcar esta tag') + '"><i></i>' + esc(t.nome || t.id) + '</button>'
+      h += '<div class="fx-tags">' + marc.map((t) => pill(t, true)).join('')
+        + (resto.length ? '<button class="fx-tag fx-tag-mais" data-acao="tags-abre" title="Marcar uma tag">+ Tag</button><div class="fx-tags-lista" hidden>' + resto.map((t) => pill(t, false)).join('') + '</div>' : '')
+        + '</div>'
+    }
     // telefone + conversa
     h += '<div class="fx-linha">'
       + '<button class="fx-mini" data-acao="copiar" data-v="+55' + esc(String(p.wa || '').replace(/^55(?=\d{10,11}$)/, '')) + '" title="Copiar o telefone">' + I.copia + esc(foneBonito(p.wa)) + '</button>'
@@ -209,12 +241,12 @@
     }
     h += '</div>'
     // etapa
-    const opcoes = (p.col === 'Pagos' ? PERDA : TODAS.filter((c) => c.id !== 'Pagos'))
-      .filter((c) => c.id !== p.col)
+    // So as perdas: Pagos tem o botao com o valor, e as etapas de entrega sao da Five (DESTINOS_COB).
+    const opcoes = PERDA.filter((c) => c.id !== p.col)
     h += '<div class="fx-bloco"><div class="fx-tit">Etapa</div><div class="fx-wrap"><select class="fx-etapa"><option value="">Mudar para...</option>'
       + opcoes.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.lbl) + '</option>').join('') + '</select>'
       + '<button class="fx-mini" data-acao="etapa">Mover</button></div>'
-      + (p.col === 'Pagos' ? '<div class="fx-ap">Pedido pago só sai para Frustrados, Roubos, Devolvido, Retornado ou Cancelado.</div>' : '')
+      + '<div class="fx-ap">' + (p.col === 'Pagos' ? 'Pedido pago só sai para uma frustração.' : 'As etapas de entrega mudam sozinhas, pela plataforma.') + '</div>'
       + '</div>'
     // comentarios
     const coms = Array.isArray(p.comentarios) ? p.comentarios : []
@@ -272,6 +304,14 @@
       const acao = b.dataset.acao
       if (acao === 'copiar') { const r = await ad.copiar(b.dataset.v); diz(r && r.ok ? 'Telefone copiado.' : 'Não consegui copiar.', !(r && r.ok)); return }
       if (acao === 'conversa') { if (ad.conversa) ad.conversa(p, b); return }
+      if (acao === 'tags-abre') { const l = fx.querySelector('.fx-tags-lista'); if (l) { l.hidden = !l.hidden; b.classList.toggle('on', !l.hidden) } return }
+      if (acao === 'tag') {
+        const id = b.dataset.v
+        const ids = (Array.isArray(p.tags) ? p.tags : []).map((t) => t && t.id).filter(Boolean)
+        const tinha = ids.includes(id)
+        await grava({ tags: tinha ? ids.filter((x) => x !== id) : [...ids, id] }, tinha ? 'Tag tirada.' : 'Tag marcada.')
+        return
+      }
       if (acao === 'agend') {
         const v = b.dataset.v
         await grava({ agend: v }, v ? 'Retorno marcado: ' + quandoTxt(Date.parse(v), Date.now()) + '.' : 'Retorno tirado.')
@@ -300,7 +340,7 @@
       if (acao === 'etapa') {
         const para = String((fx.querySelector('.fx-etapa') || {}).value || '')
         if (!para) { diz('Escolha a etapa.', true); return }
-        if (p.col === 'Pagos' && !SAIDAS_DE_PAGOS.includes(para)) { diz('Pedido pago só sai para uma coluna de perda.', true); return }
+        if (!podeIrCob(p.col, para)) { diz('Por aqui o pedido só vai pra Pagos ou pra uma frustração.', true); return }
         await grava({ col: para, antes: { spg: p.spg || '', col: p.colBruta || '' } }, 'Movido para ' + colDef(para).lbl + '.')
         return
       }
@@ -346,6 +386,15 @@
   .fx-sub { color: var(--apagado); font-size: 11.5px; margin-top: -6px; }
   .fx-col { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; font-weight: 700;
     color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 35%, transparent); white-space: nowrap; }
+  .fx-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: -3px; }
+  .fx-tags-lista { display: contents; }
+  .fx-tags-lista[hidden] { display: none; }
+  .fx-tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border-radius: 99px; font-size: 11px; color: var(--apagado);
+    border: 1px solid var(--linha); background: transparent; cursor: pointer; white-space: nowrap; }
+  .fx-tag i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+  .fx-tag:hover { color: var(--texto); border-color: rgba(255, 255, 255, .18); }
+  .fx-tag.on { color: var(--texto); border-color: color-mix(in srgb, var(--c) 45%, transparent); }
+  .fx-tag-mais { border-style: dashed; }
   .fx-pago { display: inline-flex; align-items: center; gap: 3px; color: #10b981; font-size: 11px; font-weight: 700; }
   .fx-linha, .fx-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .fx-bloco { border-top: 1px solid var(--linha); padding-top: 9px; display: flex; flex-direction: column; gap: 7px; }
@@ -398,8 +447,8 @@
   }
 
   window.SWCob = {
-    esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, COLS_COBRANCA, COLS_A_CAMINHO,
-    naFila, aCaminho, quandoAgend, agenda, rotuloDia, hora, quandoTxt, chaveDia, diaIni,
+    esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, DESTINOS_COB, podeIrCob, COLS_COBRANCA, COLS_A_CAMINHO,
+    naFila, aCaminho, emContato, quandoAgend, agenda, rotuloDia, hora, haQuanto, quandoTxt, chaveDia, diaIni,
     valorDigitado, atalhosRetorno, foneBonito, fichaHtml, ligaFicha, poeEstilo, I,
   }
 })()

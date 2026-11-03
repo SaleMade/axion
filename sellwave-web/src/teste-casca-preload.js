@@ -53,6 +53,9 @@ const COB_PEDIDOS = [
   ped({ id: '9006', nome: 'Fabio Pago', wa: '11911110006', col: 'Pagos', colBruta: 'Pagos', pago: true, spg: 'Pago', pagoTs: Date.now() - 60000, saldo: 0 }),
   ped({ id: '9007', nome: 'Gil De Outro', wa: '11911110007', col: 'Entregues', colBruta: 'Cobrança', cob: 'outro', cobNome: 'Outra Pessoa' }),
   ped({ id: '9008', nome: 'Hugo Frustrado', wa: '11911110008', col: 'Frustrados', colBruta: 'Frustrado' }),
+  // ENTROU EM CONTATO (03/11/2026): tinha retorno amanha e e de OUTRO cobrador, mas escreveu pros
+  // numeros deste. Vai pra primeira coluna, mesmo com o "so os meus" ligado.
+  ped({ id: '9009', nome: 'Ivo Escreveu', wa: '11911110009', col: 'Entregues', colBruta: 'Cobrança', agend: brAg(meiaNoite() + 34 * H - Date.now()), cob: 'outro', cobNome: 'Outra Pessoa', contato: Date.now() - 5 * 60000 }),
 ]
 const COB = { ok: true, sig: 'c1', eu: 'hc', cargo: 'cobrador', pedidos: COB_PEDIDOS, prontos: ['Cliente não atendeu, vou tentar de novo mais tarde', 'Aguardando resposta do cliente'] }
 const NUMS_COB = [

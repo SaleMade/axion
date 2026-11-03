@@ -2404,6 +2404,7 @@ async function puxaCob(fone, forca) {
     cob.erro = ''
     cob.pedidos = Array.isArray(r.pedidos) ? r.pedidos : []
     if (Array.isArray(r.prontos)) cob.prontos = r.prontos
+    if (Array.isArray(r.tags)) cob.tags = r.tags
     if (cob.sel >= cob.pedidos.length) cob.sel = 0
   }
   if (aba === 'pedidos' && !digitandoNaFicha()) desenha()
@@ -2423,7 +2424,7 @@ function desenhaCob() {
     h += '<div class="cob-outros">' + cob.pedidos.map((x, i) => '<button data-sel="' + i + '" class="' + (i === cob.sel ? 'on' : '') + '">'
       + esc([x.data, C.brl(x.valor), C.colDef(x.col).lbl].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>'
   }
-  h += '<div class="cob-ficha-p">' + C.fichaHtml(p, { enviar: true, prontos: cob.prontos }) + '</div>'
+  h += '<div class="cob-ficha-p">' + C.fichaHtml(p, { enviar: true, prontos: cob.prontos, tags: cob.tags }) + '</div>'
   return h
 }
 function ligaCob(corpo) {

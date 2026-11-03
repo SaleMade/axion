@@ -193,5 +193,42 @@ t(doId('L3').cob === undefined, 'o campo saiu do pedido', JSON.stringify(doId('L
 await batida()
 t(!!doId('L3').cob, 'e a proxima batida deu um dono novo pra ele', JSON.stringify(doId('L3').cob))
 
+console.log('\nO CLIENTE ESCREVEU PRO OUTRO COBRADOR: o pedido (e os 3%) vai pra quem ele chamou (03/11/2026)')
+try { sq.exec('ALTER TABLE wa_messages ADD COLUMN mundo TEXT') } catch (_) {}
+const agS = Math.floor(Date.now() / 1000)
+const msg = (id, phone, inst, dir, ts) => sq.prepare('INSERT INTO wa_messages (msg_id,phone,instance,direction,type,body,ts) VALUES (?,?,?,?,?,?,?)').run(id, phone, inst, dir, 'text', 'x', ts)
+{
+  const d = ler()
+  d.chips = [{ id: 'cA', num: '(11) 91111-2222', at: 'cob_haynan' }, { id: 'cB', num: '(11) 93333-4444', at: 'cob_novo' }]
+  d.leads.push(lead('C1', { col: 'Cobrança', wa: '31900000001', cob: 'cob_haynan' }))                    // escreveu pro novo: passa
+  d.leads.push(lead('C2', { col: 'Cobrança', wa: '31900000002', cob: 'cob_novo' }))                      // escreveu pro dono: fica
+  d.leads.push(lead('C3', { col: 'Pagos', spg: 'Pago', pago_ts: DESDE + DIA, wa: '31900000003', cob: 'cob_haynan', cob_pct: 4 }))   // pago: congelado
+  d.leads.push(lead('C4', { col: 'Cobrança', wa: '31900000004', cob: 'cob_haynan', cob_ts: Date.now() }))  // trocado na mao DEPOIS da mensagem
+  d.leads.push(lead('C5', { col: 'Cobrança', wa: '31900000005', cob: 'cob_haynan' }))                    // o novo mandou e o cliente nunca respondeu
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d))
+}
+msg('x1', '5531900000001', 'ax_cob_novo_33334444', 'in', agS - 600)
+msg('x2', '553100000002', 'ax_cob_novo_33334444', 'in', agS - 600)
+msg('x3', '5531900000003', 'ax_cob_novo_33334444', 'in', agS - 600)
+msg('x4', '5531900000004', 'ax_cob_novo_33334444', 'in', agS - 600)
+msg('x5', '5531900000005', 'ax_cob_novo_33334444', 'out', agS - 600)
+await batida()
+t(doId('C1').cob === 'cob_novo' && doId('C1').cob_ts > 0, 'o pedido do Haynan em que o cliente escreveu pro novo passou pro novo', JSON.stringify({ cob: doId('C1').cob, ts: doId('C1').cob_ts }))
+t(doId('C2').cob === 'cob_novo', 'quem escreveu pro proprio dono continua com ele', doId('C2').cob)
+t(doId('C3').cob === 'cob_haynan' && doId('C3').cob_pct === 4, 'pedido PAGO nao muda de dono (a comissao ja congelou)', JSON.stringify({ cob: doId('C3').cob, pct: doId('C3').cob_pct }))
+t(doId('C4').cob === 'cob_haynan', 'troca manual depois da mensagem vale (a conversa velha nao desfaz)', doId('C4').cob)
+t(doId('C5').cob === 'cob_haynan', 'mensagem so do cobrador nao e o cliente chamando', doId('C5').cob)
+{
+  const v = versao()
+  await batida()
+  t(versao() === v, 'rodar de novo nao mexe em nada', v + ' -> ' + versao())
+}
+r = await api(TK.dir, 'C1', { cob: 'cob_haynan' })
+await batida()
+t(doId('C1').cob === 'cob_haynan', 'a direcao devolve pro Haynan e a conversa de antes nao puxa de volta', doId('C1').cob)
+msg('x6', '5531900000001', 'ax_cob_novo_33334444', 'in', Math.floor(Date.now() / 1000) + 5)
+await batida()
+t(doId('C1').cob === 'cob_novo', 'mas se o cliente escrever de novo pro outro, passa de novo', doId('C1').cob)
+
 console.log('\n' + ok + ' de ' + (ok + mau) + ' conferencias passaram')
 process.exit(mau ? 1 : 0)

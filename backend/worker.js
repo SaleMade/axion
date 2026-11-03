@@ -3103,6 +3103,8 @@ const _COL_CANON = {
   'Roubo': 'Roubos',
 };
 const _colCanon = (c) => _COL_CANON[String(c || '')] || String(c || '');
+// Pra onde o COBRADOR pode levar um pedido (03/11/2026, ver handleUpdateLead): Pagos e as perdas.
+const _COB_PODE_IR = new Set(['Pago', 'Frustrados', 'Roubos', 'Devolvido', 'Retornado', 'Cancelado']);
 // ══ A DECISAO DA EQUIPE E A ULTIMA PALAVRA (17/10/2026, regra do Bruno) ══════════════════════════
 //
 // "Se a gente marcou como pago e a plataforma esta falando que esse pedido foi furtado, a resposta que
@@ -7626,6 +7628,7 @@ async function handleUpdateLead(req, env, leadId) {
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
     const fromCol = lead.col;
+    const _cobAntes = JSON.stringify([lead.agend || '', lead.spg || '', lead.col || '', lead.valor_neg == null ? '' : lead.valor_neg, (lead.pagamentos || []).length]);
     // Estado de pagamento ANTES do patch: se ESTE patch marca o pedido como Pago, o retorno de
     // cobranca (agend) e limpo junto (pedido do Bruno, 11/09/2026). Nao mexe se o proprio patch ja
     // traz `agend` (ai quem decidiu a data foi ele).
@@ -7712,6 +7715,13 @@ async function handleUpdateLead(req, env, leadId) {
     nega(dir, 'at', 'com_pct', 'cob');
     nega(_podeVl, 'vl');
     nega(canManage, 'spg', 'col');
+    // O COBRADOR SO LEVA O PEDIDO PRA PAGOS OU PRA PERDA (03/11/2026, pedido do Bruno: "que as duas
+    // ferramentas estejam sincronizadas"). As etapas de entrega (A enviar, Preparando, Enviado, Saiu
+    // pra entrega, Retirada, Cobranca) quem move e a Five/PayLog; cobrador arrastando ali so desmancha
+    // o que a plataforma disse. A trava e AQUI, pra dash, o app de celular e o SellWave Web valerem
+    // igual: as telas so escondem o que este `if` recusa. Mesma coluna (com apelido) nao e mudanca.
+    if (!dir && String(u.role || '').toLowerCase() === 'cobrador' && 'col' in patch && patch.col && !negados.includes('col')
+      && _colCanon(patch.col) !== _colCanon(fromCol) && !_COB_PODE_IR.has(_colCanon(patch.col))) negados.push('col');
     // AGENDAR RETORNO E ATENDIMENTO, NAO E DINHEIRO NEM ETAPA (10/09/2026).
     //
     // Estava na mesma trava do `spg` e do `col`, ou seja so diretor e cobrador. Resultado: o
@@ -7772,6 +7782,9 @@ async function handleUpdateLead(req, env, leadId) {
         const _novo = String(patch.cob || '').trim();
         if (!_novo) { delete lead.cob; delete lead.cob_pct; }
         else if (_cobOk.has(_novo)) {
+          // QUANDO TROCOU DE DONO (03/11/2026): a varredura so passa o pedido pra outro cobrador por
+          // mensagem do cliente MAIS NOVA que isto, senao desfaria a troca manual na batida seguinte.
+          if (String(lead.cob || '') !== _novo) lead.cob_ts = Date.now();
           lead.cob = _novo;
           delete lead.cob_pct;
           const _q = Number(lead.pago_ts) || 0;
@@ -7815,7 +7828,7 @@ async function handleUpdateLead(req, env, leadId) {
         const _ultima = lead.pagamentos.filter((p) => p.conta).slice(-1)[0];
         if (_ultima && !lead.pgto_conta) lead.pgto_conta = _ultima.conta;
       }
-      if ('col' in patch && patch.col) {
+      if ('col' in patch && patch.col && !negados.includes('col')) {
         if (patch.col !== fromCol) {
           if (!Array.isArray(lead.hist)) lead.hist = [];
           lead.hist.push({ from: fromCol || '—', to: patch.col, who: 'kanban:' + String(u.id), time: now14() });
@@ -7848,6 +7861,11 @@ async function handleUpdateLead(req, env, leadId) {
       const t = (Array.isArray(data.tags) ? data.tags : []).concat(_tagsDe(data, u));
       lead.tags = t.length ? patch.tags.filter((x) => t.some((y) => y.id === x)) : patch.tags;
     }
+    // A COBRANCA MEXEU NO PEDIDO (03/11/2026): retorno, pago, etapa ou valor mudaram pela mao de quem
+    // cobra (cobrador ou direcao). E o que tira o card da coluna "Entraram em contato" do app do
+    // cobrador (ver /api/swweb/cobranca). So conta MUDANCA: o formulario inteiro da dash vai em todo
+    // salvar, e corrigir o endereco nao e responder o cliente.
+    if (canManage && _cobAntes !== JSON.stringify([lead.agend || '', lead.spg || '', lead.col || '', lead.valor_neg == null ? '' : lead.valor_neg, (lead.pagamentos || []).length])) lead.cob_mx = Date.now();
     // ABA VELHA NAO APAGA COMENTARIO (30/10/2026).
     //
     // Ate 12/10 a tela mandava a LISTA INTEIRA em todo salvamento; hoje manda operacao
@@ -13234,9 +13252,49 @@ async function _cobNomes(env) {
 const _cobTagMap = (data, mundo) => {
   const lista = (data && (mundo ? data['tags__' + mundo] : data.tags)) || [];
   const m = {};
-  for (const t of (Array.isArray(lista) ? lista : [])) if (t && t.id) m[String(t.id)] = { nome: String(t.name || t.id), cor: String(t.color || '#64748b') };
+  for (const t of (Array.isArray(lista) ? lista : [])) if (t && t.id) m[String(t.id)] = { id: String(t.id), nome: String(t.name || t.id), cor: String(t.color || '#64748b') };
   return m;
 };
+
+// AS INSTANCIAS QUE O WHATSAPP DE UM NUMERO PODE TER GRAVADO NO wa_messages (03/11/2026). A captura
+// grava `ax_<dono>_<8 digitos>` com o dono DA EPOCA, entao o mesmo numero aparece com mais de um
+// prefixo quando troca de dono (e com `ax_ccol_N_` quando esteve numa coluna da Contingencia). A lista
+// fechada vai pelo indice (instance, ts); casar pelo fim do texto varreria a tabela inteira.
+async function _instsDosNumeros(env, data, n8s) {
+  const donos = new Set();
+  try { const r = await env.DB.prepare('SELECT id FROM users').all(); for (const x of ((r && r.results) || [])) donos.add(String(x.id)); } catch (_) { /* sem a lista, so os donos dos chips */ }
+  for (const c of (Array.isArray(data && data.chips) ? data.chips : [])) if (c && c.at) donos.add(String(c.at));
+  const out = [];
+  for (const n8 of n8s) for (const d of donos) out.push('ax_' + d + '_' + n8);
+  return out;
+}
+// QUEM FALOU COM QUEM NOS NUMEROS DE COBRANCA: por cliente (8 ultimos digitos), a ultima mensagem DELE
+// (`in`, e em qual numero) e a ultima resposta nossa (`out`), em segundos. Serve a coluna "Entraram em
+// contato" do app do cobrador e a varredura que passa o pedido pra quem o cliente chamou.
+async function _cobConversas(env, data, n8s, mundo, desdeS) {
+  const out = new Map();
+  if (!n8s.length) return out;
+  const insts = await _instsDosNumeros(env, data, n8s);
+  try {
+    const r = await env.DB.prepare(
+      'SELECT phone, instance, direction, MAX(ts) ts FROM wa_messages WHERE instance IN (SELECT value FROM json_each(?)) AND ts > ? AND '
+      + _msgDoMundoSql('mundo', mundo) + ' GROUP BY phone, instance, direction'
+    ).bind(JSON.stringify(insts), Number(desdeS) || 0).all();
+    for (const x of ((r && r.results) || [])) {
+      const k8 = String(x.phone || '').replace(/\D/g, '').slice(-8);
+      if (k8.length < 8) continue;
+      const o = out.get(k8) || { in: 0, out: 0, n8: '' };
+      const ts = Number(x.ts) || 0;
+      if (x.direction === 'in') { if (ts > o.in) { o.in = ts; o.n8 = _instNum8(x.instance); } }
+      else if (ts > o.out) o.out = ts;
+      out.set(k8, o);
+    }
+  } catch (_) { /* sem a consulta a coluna fica vazia; nada quebra */ }
+  return out;
+}
+const _n8sDoDono = (data, at) => [...new Set((Array.isArray(data && data.chips) ? data.chips : [])
+  .filter((c) => c && c.num && String(c.at || '') === String(at))
+  .map((c) => String(c.num).replace(/\D/g, '').slice(-8)).filter((x) => x.length === 8))];
 
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
@@ -13687,15 +13745,30 @@ async function handleSwWeb(req, env, path) {
     const data = await _getDashData(env, 0);
     const nomes = await _cobNomes(env);
     const tagMap = _cobTagMap(data, mundo);
-    const pedidos = _cobPedidosDoMundo(data, mundo).map((l) => _cobLinha(l, nomes, tagMap));
+    // ENTRARAM EM CONTATO (03/11/2026, pedido do Bruno: o cliente escreveu num numero do cobrador,
+    // o card vai pra uma coluna propria "e o nosso cobrador pode se organizar melhor"). O pedido leva
+    // `contato` (ms da ultima mensagem do cliente) enquanto a mensagem for mais nova que a ultima
+    // resposta dele E que a ultima vez que alguem da cobranca mexeu no pedido (`cob_mx`, carimbado no
+    // handleUpdateLead). Respondeu ou mexeu: sai. O cliente escreveu de novo: volta.
+    // So os numeros DE QUEM PEDE (no "ver como", do cobrador visto).
+    const conv = await _cobConversas(env, data, _n8sDoDono(data, u.id), mundo, Math.floor(Date.now() / 1000) - 30 * 86400);
+    const pedidos = _cobPedidosDoMundo(data, mundo).map((l) => {
+      const p = _cobLinha(l, nomes, tagMap);
+      const c = conv.get(_cobDig(l.wa).slice(-8));
+      if (c && c.in > c.out && c.in * 1000 > (Number(l.cob_mx) || 0)) p.contato = c.in * 1000;
+      return p;
+    });
     const prontos = Array.isArray(data && data.coment_prontos)
       ? data.coment_prontos.map((x) => String(x || '').trim()).filter(Boolean)
       : _COB_PRONTOS;
-    const corpo = JSON.stringify({ pedidos, prontos, cols: _COB_COLS, perda: _COB_PERDA });
+    // O CATALOGO DE TAGS do mundo de quem pede, pra ficha marcar (03/11/2026). Gravar vai pelo
+    // /api/lead/:id com `tags` (ids), o mesmo caminho da dash.
+    const tags = Object.values(tagMap);
+    const corpo = JSON.stringify({ pedidos, prontos, tags, cols: _COB_COLS, perda: _COB_PERDA });
     const sig = _cobAssina(corpo);
     const pediu = String(new URL(req.url).searchParams.get('sig') || '');
     if (pediu && pediu === sig) return json({ ok: true, igual: true, sig, agora: Date.now() });
-    return json({ ok: true, sig, agora: Date.now(), eu: String(u.id), cargo: String(u.role || '').toLowerCase(), pedidos, prontos, cols: _COB_COLS, perda: _COB_PERDA });
+    return json({ ok: true, sig, agora: Date.now(), eu: String(u.id), cargo: String(u.role || '').toLowerCase(), pedidos, prontos, tags, cols: _COB_COLS, perda: _COB_PERDA });
   }
 
   // GET /api/swweb/cobranca/pedido?id= ou ?phone= — A FICHA DO PEDIDO: a linha do quadro mais
@@ -13720,7 +13793,50 @@ async function handleSwWeb(req, env, path) {
     achados.sort((a, b) => (_cobCriadoTs(b) || 0) - (_cobCriadoTs(a) || 0));
     const nomes = await _cobNomes(env);
     const tagMap = _cobTagMap(data, mundo);
-    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)), prontos });
+    // O catalogo de tags vai junto: o painel ao lado da conversa so le esta rota (ver o quadro).
+    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)), prontos, tags: Object.values(tagMap) });
+  }
+
+  // GET /api/swweb/cobranca/contato?phone= — EM QUAL NUMERO DO COBRADOR ESSE CLIENTE JA FALOU
+  // (03/11/2026, pedido do Bruno: "toda vez que um cobrador clicar ali no iconezinho, ele ja abra o
+  // numero que ja esta vinculado para ele, na conversa daquele lead"). O vendedor passa o contato do
+  // cobrador, o cliente escreve num dos numeros dele, e o icone do WhatsApp do card tem que abrir
+  // ESSE numero. Nunca falou: o app abre no numero da tela (a decisao e do app, aqui so o dado).
+  //
+  // SO MENSAGEM DO CLIENTE CONTA (direction 'in'). Conversa que o cobrador puxou e ficou sem resposta
+  // nao e "o cliente entrou em contato", e e o que o Bruno pediu pra separar.
+  // O NUMERO CASA PELOS 8 ULTIMOS DIGITOS DA INSTANCIA, nao pelo dono gravado nela: a conversa e do
+  // WhatsApp daquele numero, e numero que mudou de dono continua com o historico. So os numeros DELE
+  // saem daqui (o cobrador nao fica sabendo por quais numeros de vendedor o cliente passou).
+  if (req.method === 'GET' && path === '/api/swweb/cobranca/contato') {
+    if (!manda && !_ehCobrador(u)) return err('A conversa de cobrança é da direção e dos cobradores.', 403);
+    const fone = String(new URL(req.url).searchParams.get('phone') || '').replace(/\D/g, '');
+    if (fone.length < 10) return json({ ok: true, numeros: [] });
+    const data = await _getDashData(env);
+    const chips = Array.isArray(data && data.chips) ? data.chips : [];
+    const dele = new Set(chips.filter((c) => c && c.num && String(c.at || '') === String(u.id))
+      .map((c) => String(c.num).replace(/\D/g, '').slice(-8)).filter((x) => x.length === 8));
+    if (!dele.size) return json({ ok: true, numeros: [] });
+    // O telefone nas duas formas (com e sem o nono digito): o pedido guarda o que o vendedor digitou
+    // e o WhatsApp entrega o que ele quiser. As duas usam o indice (phone, ts).
+    const fones = [...new Set([fone, ...(_fonesE164(fone.length <= 11 ? '55' + fone : fone).map((x) => x.replace(/\D/g, '')))])].slice(0, 3);
+    let rows = [];
+    try {
+      const r = await env.DB.prepare(
+        "SELECT instance, MAX(ts) ts FROM wa_messages WHERE phone IN (" + fones.map(() => '?').join(',') + ") AND direction='in' AND "
+        + _msgDoMundoSql('mundo', mundo) + ' GROUP BY instance'
+      ).bind(...fones).all();
+      rows = (r && r.results) || [];
+    } catch (_) { rows = []; }
+    const porN8 = new Map();
+    for (const x of rows) {
+      const n8 = _instNum8(x.instance);
+      const ts = Number(x.ts) || 0;
+      if (!dele.has(n8) || ts <= 0) continue;
+      if (ts > (porN8.get(n8) || 0)) porN8.set(n8, ts);
+    }
+    const numeros = [...porN8.entries()].map(([n8, ts]) => ({ n8, ts })).sort((a, b) => b.ts - a.ts);
+    return json({ ok: true, numeros });
   }
 
 
@@ -32202,6 +32318,7 @@ async function _cronCobrador(env) {
   if (!cobs.length) return;   // sem cobrador cadastrado nao ha o que dividir
   const ids = cobs.map((c) => String(c.id));
   const pctDe = new Map(cobs.map((c) => [String(c.id), Number(c.com_pct) || 0]));
+  let conv = null, donoDoN8 = null;   // ver "O PEDIDO E DE QUEM O CLIENTE CHAMOU" (uma consulta por batida)
 
   for (let tent = 0; tent < 4; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
@@ -32226,6 +32343,32 @@ async function _cronCobrador(env) {
       l.cob = alvo;
       if (_cobEmAberto(l)) carga.set(alvo, carga.get(alvo) + 1);
       mudou++;
+    }
+
+    // O PEDIDO E DE QUEM O CLIENTE CHAMOU (03/11/2026, decisao do Bruno: o cliente escreveu pra um
+    // cobrador que nao e o dono da cobranca, o pedido e os 3% passam pra quem ele chamou, porque e
+    // esse quem vai cobrar). So pedido EM ABERTO: o pago ja congelou a taxa no dono de antes. So
+    // mensagem MAIS NOVA que a ultima troca de dono (`cob_ts`): a troca manual da direcao nao e
+    // desfeita pela conversa de antes dela. Com um cobrador so nao ha pra quem passar (e nem consulta).
+    if (ids.length > 1 && conv === null) {
+      donoDoN8 = new Map();
+      for (const c of (Array.isArray(data.chips) ? data.chips : [])) {
+        if (c && c.num && ids.includes(String(c.at || ''))) donoDoN8.set(String(c.num).replace(/\D/g, '').slice(-8), String(c.at));
+      }
+      conv = await _cobConversas(env, data, [...donoDoN8.keys()], '', Math.floor(Date.now() / 1000) - 30 * 86400);
+    }
+    if (conv && conv.size) {
+      for (const l of data.leads) {
+        if (!l || l.afl || !_cobEmAberto(l)) continue;
+        const c = conv.get(_cobDig(l.wa).slice(-8));
+        if (!c || !c.in) continue;
+        const quem = donoDoN8.get(c.n8);
+        if (!quem || quem === String(l.cob || '') || c.in * 1000 <= (Number(l.cob_ts) || 0)) continue;
+        l.cob = quem;
+        l.cob_ts = Date.now();
+        delete l.cob_pct;
+        mudou++;
+      }
     }
 
     // A PORCENTAGEM CONGELA NO PEDIDO, uma vez, no momento em que ele aparece pago.

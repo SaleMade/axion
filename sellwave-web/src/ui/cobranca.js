@@ -135,7 +135,7 @@
       erro = ''
       lidoEm = Date.now()
       if (!r.igual) {
-        dados = { pedidos: Array.isArray(r.pedidos) ? r.pedidos : [], prontos: Array.isArray(r.prontos) ? r.prontos : [], eu: String(r.eu || '') }
+        dados = { pedidos: Array.isArray(r.pedidos) ? r.pedidos : [], prontos: Array.isArray(r.prontos) ? r.prontos : [], tags: Array.isArray(r.tags) ? r.tags : [], eu: String(r.eu || '') }
         sig = String(r.sig || '')
         carregou = true
         if (aberto && !arrastando) desenha()
@@ -168,7 +168,9 @@
   const semAcento = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
   function visiveis() {
     let l = dados.pedidos
-    if (soMeus && dados.eu) l = l.filter((p) => !p.cob || p.cob === dados.eu)
+    // Quem escreveu pra ele aparece mesmo com outro dono: a varredura passa o pedido pra ele em
+    // seguida (03/11/2026, "de quem o cliente chamou"), e sumir da tela ate la seria pior.
+    if (soMeus && dados.eu) l = l.filter((p) => !p.cob || p.cob === dados.eu || Number(p.contato) > 0)
     if (filtro) {
       const q = semAcento(filtro), qd = digitos(filtro)
       l = l.filter((p) => (qd.length >= 3 && String(p.wa || '').includes(qd))
@@ -182,7 +184,8 @@
     if (!carregou) { mini.innerHTML = ''; return }
     const ag = C.agenda(visiveis())
     const it = (cor, rot, n, vai, tit) => '<span data-vai="' + vai + '" title="' + esc(tit) + '"><i style="--c:' + cor + '"></i><em>' + esc(rot) + '</em><strong>' + n + '</strong></span>'
-    mini.innerHTML = it('#ef4444', 'Atrasados', ag.atrasados.length, 'agenda', 'Retorno marcado que já passou')
+    mini.innerHTML = (ag.contato.length ? it('#24c278', 'Contato', ag.contato.length, 'agenda', 'Clientes que escreveram e ainda não tiveram resposta') : '')
+      + it('#ef4444', 'Atrasados', ag.atrasados.length, 'agenda', 'Retorno marcado que já passou')
       + it('#f59e0b', 'Sem retorno', ag.semRetorno.length, 'agenda', 'Na fila de cobrança sem dia marcado')
       + it('#3b82f6', 'Hoje', ag.hoje.length, 'agenda', 'Retornos marcados pra hoje')
       + it('#818cf8', 'Chegando', ag.chegando.length, 'agenda', 'Enviados e saindo pra entrega')
@@ -213,19 +216,24 @@
   function cartao(p, o) {
     o = o || {}
     const ag = C.quandoAgend(p)
-    const quando = o.quando === false ? '' : (!isNaN(ag) ? C.quandoTxt(ag) : '')
-    const atras = C.naFila(p) && !isNaN(ag) && ag < Date.now()
+    // Em "Entraram em contato" a hora que importa e a da mensagem; em "Proximos" o dia ja esta na
+    // divisoria, entao o card so diz a hora.
+    const quando = o.contato ? 'escreveu ' + C.haQuanto(Number(p.contato))
+      : o.quando === false ? '' : (!isNaN(ag) ? (o.soHora ? C.hora(ag) : C.quandoTxt(ag)) : '')
+    const atras = !o.contato && C.naFila(p) && !isNaN(ag) && ag < Date.now()
+    const tags = (Array.isArray(p.tags) ? p.tags : []).slice(0, 2)
     const local = [p.cidade, p.uf].filter(Boolean).join('/')
     return '<div class="crm-card cob-card" data-id="' + esc(p.id) + '"' + (o.arrasta ? ' draggable="true"' : '') + ' style="--c:' + (o.cor || C.colDef(p.col).cor) + '"'
       + ' title="Clique pra ver o pedido. O balão abre a conversa do cliente.">'
       + '<div class="cob-l1"><b title="' + esc(p.nome) + '">' + esc(p.nome) + '</b></div>'
       + '<div class="cob-l2">' + (o.semColuna ? '' : C.chip(p.col))
-      + (quando ? '<span class="cob-q' + (atras ? ' atras' : '') + '">' + esc(quando) + '</span>' : '')
+      + (quando ? '<span class="cob-q' + (atras ? ' atras' : '') + (o.contato ? ' msg' : '') + '">' + esc(quando) + '</span>' : '')
       + (p.pago ? '<span class="cob-pago">pago</span>' : '')
       + '<span class="cob-v">' + esc(C.brl(p.saldo > 0 ? p.saldo : p.valor)) + '</span></div>'
       + '<div class="cob-l3">' + esc([local, p.prod].filter(Boolean).join(' · ')) + '</div>'
       + '<div class="cob-l4">'
-      + (p.selo ? '<span class="cob-selo" style="--s:' + esc(p.selo.cor) + '">' + esc(p.selo.label) + '</span>' : (p.entrega ? '<span class="cob-ap">' + esc(p.entrega.label + ' ' + p.entrega.data) + '</span>' : '<span></span>'))
+      + '<span class="cob-l4e">' + (p.selo ? '<span class="cob-selo" style="--s:' + esc(p.selo.cor) + '">' + esc(p.selo.label) + '</span>' : (p.entrega ? '<span class="cob-ap">' + esc(p.entrega.label + ' ' + p.entrega.data) + '</span>' : ''))
+      + tags.map((t) => '<span class="cob-tag" style="--c:' + esc(t.cor || '#64748b') + '" title="' + esc(t.nome) + '"><i></i>' + esc(t.nome) + '</span>').join('') + '</span>'
       + '<button class="cob-zap" data-conversa="1" title="Abrir a conversa deste cliente">' + C.I.zap + '</button></div>'
       + '</div>'
   }
@@ -233,20 +241,26 @@
   function desenhaAgenda() {
     const ag = C.agenda(visiveis())
     resumo.innerHTML = '<span><b>' + ag.fila + '</b> na fila de cobrança</span>'
-      + '<span><b>' + esc(C.brl([...ag.atrasados, ...ag.hoje, ...ag.proximos, ...ag.semRetorno].reduce((s, p) => s + (Number(p.saldo) || 0), 0))) + '</b> a receber</span>'
+      + '<span><b>' + esc(C.brl([...ag.atrasados, ...ag.hoje, ...ag.proximos, ...ag.semRetorno, ...ag.contato.filter(C.naFila)].reduce((s, p) => s + (Number(p.saldo) || 0), 0))) + '</b> a receber</span>'
       + '<span><b>' + ag.pagosHoje.length + '</b> ' + (ag.pagosHoje.length === 1 ? 'pagou' : 'pagaram') + ' hoje · ' + esc(C.brl(ag.recebidoHoje)) + '</span>'
-    // PROXIMOS POR DIA: "sexta" se planeja, "02/10" nao (o app de celular faz igual).
-    let prox = ''
-    let dia = ''
+    // PROXIMOS POR DIA: "sexta" se planeja, "02/10" nao (o app de celular faz igual). A DIVISORIA
+    // DIZ QUANTOS (03/11/2026, pedido do Bruno: "saber quantos vao chegar amanha, quantos na proxima
+    // quinta"), e fica presa no topo enquanto ele rola os pedidos daquele dia.
+    const porDia = []
     for (const p of ag.proximos) {
       const k = C.chaveDia(C.quandoAgend(p))
-      if (k !== dia) { dia = k; prox += '<div class="cob-dia">' + esc(C.rotuloDia(C.quandoAgend(p))) + '</div>' }
-      prox += cartao(p)
+      const ult = porDia[porDia.length - 1]
+      if (ult && ult.k === k) ult.itens.push(p)
+      else porDia.push({ k, rot: C.rotuloDia(C.quandoAgend(p)), itens: [p] })
     }
+    const prox = porDia.map((d) => '<div class="cob-grupo"><div class="cob-dia cob-dia-n"><b>' + esc(d.rot) + '</b><span>' + d.itens.length + (d.itens.length === 1 ? ' pedido' : ' pedidos') + '</span></div>'
+      + d.itens.map((p) => cartao(p, { soHora: true })).join('') + '</div>').join('')
     // A ORDEM E A FILA DO DIA (03/11/2026, pedido do Bruno): primeiro o que ja passou (atrasados), o
     // que nunca teve dia (sem retorno), o de hoje, o que esta chegando e, por ultimo, o que tem dia
     // marcado mais pra frente.
-    corpo.innerHTML = coluna('atrasados', 'Atrasados', '#ef4444', ag.atrasados.length, ag.atrasados.map((p) => cartao(p)).join(''), 'Nenhum retorno atrasado')
+    // ENTRARAM EM CONTATO VEM ANTES DE TUDO (03/11/2026): e cliente esperando resposta agora.
+    corpo.innerHTML = coluna('contato', 'Entraram em contato', '#24c278', ag.contato.length, ag.contato.map((p) => cartao(p, { contato: true })).join(''), 'Ninguém esperando resposta')
+      + coluna('atrasados', 'Atrasados', '#ef4444', ag.atrasados.length, ag.atrasados.map((p) => cartao(p)).join(''), 'Nenhum retorno atrasado')
       + coluna('sem', 'Sem retorno', '#f59e0b', ag.semRetorno.length, ag.semRetorno.map((p) => cartao(p)).join(''), 'Toda a fila tem dia marcado')
       + coluna('hoje', 'Hoje', '#3b82f6', ag.hoje.length, ag.hoje.map((p) => cartao(p)).join(''), 'Nenhum retorno pra hoje')
       + coluna('chegando', 'Chegando', '#818cf8', ag.chegando.length, ag.chegando.map((p) => cartao(p, { quando: false })).join(''), 'Nada a caminho')
@@ -255,20 +269,20 @@
 
   function desenhaKanban() {
     const l = visiveis()
-    resumo.innerHTML = '<span>Arraste o card pra mudar de etapa. Pago pede o valor recebido.</span>'
+    resumo.innerHTML = '<span>Arraste pra Pagos ou pra uma frustração. Pago pede o valor recebido; as etapas de entrega mudam sozinhas.</span>'
     const porCol = new Map()
     for (const p of l) { if (!porCol.has(p.col)) porCol.set(p.col, []); porCol.get(p.col).push(p) }
     const ordem = (a, b) => (Number(b.entrou) || 0) - (Number(a.entrou) || 0)   // o ultimo que entrou fica em cima
     let html = C.COLS.map((c) => {
       const itens = (porCol.get(c.id) || []).sort(ordem)
-      return coluna(c.id, c.lbl, c.cor, itens.length, itens.map((p) => cartao(p, { arrasta: true, semColuna: true, quando: C.naFila(p) ? undefined : false })).join(''), 'Arraste pedidos pra cá')
+      return coluna(c.id, c.lbl, c.cor, itens.length, itens.map((p) => cartao(p, { arrasta: true, semColuna: true, quando: C.naFila(p) ? undefined : false })).join(''), C.DESTINOS_COB.includes(c.id) ? 'Arraste pedidos pra cá' : 'Nenhum pedido')
     }).join('')
     // A PERDA NUM ACORDEAO, como na dash: fechada ela e so a contagem, pra nao ocupar o quadro todo dia.
     const perda = C.PERDA.map((c) => ({ c, itens: (porCol.get(c.id) || []).sort(ordem) }))
     const nPerda = perda.reduce((s, x) => s + x.itens.length, 0)
     const conteudo = perdaAberta
-      ? perda.map((x) => (x.itens.length ? '<div class="cob-dia">' + esc(x.c.lbl) + ' · ' + x.itens.length + '</div>' + x.itens.map((p) => cartao(p, { arrasta: true, semColuna: true, quando: false })).join('') : '')).join('')
-      : perda.map((x) => '<div class="cob-perda-l" data-perda="1" style="--c:' + x.c.cor + '"><i></i>' + esc(x.c.lbl) + '<b>' + x.itens.length + '</b></div>').join('')
+      ? perda.map((x) => '<div class="cob-dia cob-dia-n" data-solta="' + esc(x.c.id) + '"><b>' + esc(x.c.lbl) + '</b><span>' + x.itens.length + '</span></div>' + x.itens.map((p) => cartao(p, { arrasta: true, semColuna: true, quando: false })).join('')).join('')
+      : perda.map((x) => '<div class="cob-perda-l" data-perda="1" data-solta="' + esc(x.c.id) + '" style="--c:' + x.c.cor + '"><i></i>' + esc(x.c.lbl) + '<b>' + x.itens.length + '</b></div>').join('')
     html += coluna('perda', 'Frustrações', '#ef4444', nPerda, conteudo, '',
       '<button class="cob-perda-bt" data-perda="1">' + (perdaAberta ? 'Recolher' : 'Ver os pedidos') + '</button>')
     corpo.innerHTML = html
@@ -305,27 +319,39 @@
     arrastando = null
     for (const x of corpo.querySelectorAll('.arrastando, .alvo')) x.classList.remove('arrastando', 'alvo')
   })
+  // O ALVO DO ARRASTO: a coluna (Pagos) ou uma linha de frustracao (fechada, cada linha e uma; aberta,
+  // a divisoria de cada uma). So acende e so aceita o que o cobrador pode (C.podeIrCob).
+  const alvoDe = (ev) => {
+    const el = ev.target.closest && (ev.target.closest('[data-solta]') || ev.target.closest('.crm-col'))
+    if (!el) return null
+    const id = el.dataset.solta || el.dataset.col
+    return id && id !== 'perda' ? { el, id } : null
+  }
+  const podeSoltar = (a, alvo) => {
+    const p = a && alvo && dados.pedidos.find((x) => String(x.id) === String(a.id))
+    return !!p && C.podeIrCob(p.col, alvo.id)
+  }
   corpo.addEventListener('dragover', (ev) => {
-    const col = ev.target.closest && ev.target.closest('.crm-col')
-    if (!col || !arrastando || col.dataset.col === 'perda') return
+    const alvo = alvoDe(ev)
+    for (const x of corpo.querySelectorAll('.alvo')) if (!alvo || x !== alvo.el) x.classList.remove('alvo')
+    if (!alvo || !arrastando || !podeSoltar(arrastando, alvo)) return
     ev.preventDefault()
-    for (const x of corpo.querySelectorAll('.crm-col.alvo')) if (x !== col) x.classList.remove('alvo')
-    col.classList.add('alvo')
+    alvo.el.classList.add('alvo')
   })
   corpo.addEventListener('drop', (ev) => {
-    const col = ev.target.closest && ev.target.closest('.crm-col')
+    const alvo = alvoDe(ev)
     const a = arrastando
     arrastando = null
     for (const x of corpo.querySelectorAll('.arrastando, .alvo')) x.classList.remove('arrastando', 'alvo')
-    if (!col || !a || col.dataset.col === 'perda') return
+    if (!alvo || !a || !podeSoltar(a, alvo)) return
     ev.preventDefault()
-    move(a.id, col.dataset.col)
+    move(a.id, alvo.id)
   })
   async function move(id, para) {
     const p = dados.pedidos.find((x) => String(x.id) === String(id))
     if (!p || p.col === para) return
     if (para === 'Pagos') { avisa('Confira o valor recebido e confirme na ficha.'); abreFicha(p.id); return }
-    if (p.col === 'Pagos' && !C.SAIDAS_DE_PAGOS.includes(para)) { avisa('Pedido pago só sai para Frustrados, Roubos, Devolvido, Retornado ou Cancelado.'); return }
+    if (!C.podeIrCob(p.col, para)) { avisa('Por aqui o pedido só vai pra Pagos ou pra uma frustração. As etapas de entrega mudam sozinhas.'); return }
     // MOVE NA HORA e grava depois; a dash recusou, volta e diz por que.
     const antes = { col: p.col, colBruta: p.colBruta, spg: p.spg }
     p.col = para; p.colBruta = para; p.entrou = Date.now()
@@ -358,7 +384,7 @@
     // Releitura em segundo plano nao redesenha no meio do que ele esta digitando.
     if (quieto && fichaCorpo.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return
     fichaPed = det
-    fichaCorpo.innerHTML = C.fichaHtml(det, { conversa: true, prontos: dados.prontos })
+    fichaCorpo.innerHTML = C.fichaHtml(det, { conversa: true, prontos: dados.prontos, tags: dados.tags })
     C.ligaFicha(fichaCorpo, det, {
       salva: (pid, patch) => window.sw.cobSalva(pid, patch),
       copiar: (t) => window.sw.copiar(t),
@@ -382,6 +408,7 @@
     // NUMERO FECHADO: abre pelo caminho de sempre da lista; a conversa abre sozinha quando o
     // WhatsApp dele ficar pronto (crmPendente no main).
     if (r.fechado && r.numero && typeof abrir === 'function') abrir(r.numero)
+    if (r.aviso) avisa(r.aviso)
   }
   // POR QUAL NUMERO: a lista dele inteira, aberto ou fechado (o fechado abre e a conversa vem
   // sozinha). E a contingencia: o numero de sempre caiu, ele chama pelo outro.
