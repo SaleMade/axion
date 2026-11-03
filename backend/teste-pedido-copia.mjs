@@ -51,8 +51,11 @@ function monta(leadsIniciais) {
   return { banco, env };
 }
 const logs = [];
-const fazer = (quem) => new Function('env', 'logs', 'quem', `
+// `restrito` = o mundo de afiliado restrito (03/11/2026). O handlePedidoNovo recusa antes de olhar o
+// corpo; aqui ele e um interruptor pra o teste cobrir os dois lados.
+const fazer = (quem, restrito) => new Function('env', 'logs', 'quem', 'restrito', `
   const authUser = async () => ({ id: quem, user_id: quem, role: 'diretor' });
+  const _restritoAgora = async () => !!restrito;
   const err = (m, s) => ({ erro: m, status: s || 400 });
   const json = (o) => o;
   const _arqLimpaJson = (t) => t;
@@ -61,7 +64,7 @@ const fazer = (quem) => new Function('env', 'logs', 'quem', `
   const _trimBlobData = () => {};
   const console = { log: (s) => logs.push(String(s)) };
   ${CODIGO}
-  return handlePedidoNovo;`)(null, logs, quem);
+  return handlePedidoNovo;`)(null, logs, quem, restrito);
 
 const AGORA = 1793652395000;   // o minuto do incidente
 const pedido = (over) => ({
@@ -154,6 +157,21 @@ const conf = (nome, vale) => { if (vale) { ok++; } else { falhou++; console.log(
   const h = fazer('atendente_6e3cbf');
   const r = await h(req(pedido({ id: AGORA + 300000 })), env);
   conf('meia hora depois cadastra de novo', !r.copia && banco.leads.length === 2);
+}
+
+// ── 10) afiliado restrito nao cadastra (03/11/2026) ───────────────────────────
+// O gate do roteador ja barra a rota; esta e a segunda tranca, onde o pedido nasce.
+{
+  const { banco, env } = monta([]);
+  const h = fazer('afiliado_fdmx9z', true);
+  const r = await h(req(pedido()), env);
+  conf('restrito leva 403 e nada e gravado', r && r.status === 403 && banco.leads.length === 0 && banco.gravacoes === 0);
+}
+{
+  const { banco, env } = monta([]);
+  const h = fazer('atendente_6e3cbf', false);
+  const r = await h(req(pedido()), env);
+  conf('quem nao e restrito cadastra igual', r.ok === true && banco.leads.length === 1);
 }
 
 console.log((falhou ? 'FALHOU' : 'OK') + ': ' + ok + ' de ' + (ok + falhou) + ' conferencias');

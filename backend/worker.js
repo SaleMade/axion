@@ -310,9 +310,28 @@ function randomToken() {
   return [...arr].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// UMA RESOLUCAO POR REQUISICAO (03/11/2026). Quase todo handler chama isto na primeira linha, e
+// desde hoje o roteador tambem chama, antes de escolher o handler (ver _gateRestrito). Sem memoria
+// por requisicao, TODO POST passaria a fazer duas buscas de sessao no D1 em vez de uma - uns 200ms
+// de graca em cada gravacao. A chave e o proprio objeto da requisicao (WeakMap, some com ela), e
+// cada chamada devolve uma COPIA: handler que encoste no objeto nao suja o do vizinho.
+const _authPorReq = new WeakMap();
 async function authUser(req, env) {
-  const u = await _authSessao(req, env);
-  return u ? _verComoNaLeitura(req, env, u) : null;
+  if (_authPorReq.has(req)) { const c = _authPorReq.get(req); return c ? { ...c } : null; }
+  const s = await _authSessao(req, env);
+  const u = s ? await _verComoNaLeitura(req, env, s) : null;
+  // AFILIADO RESTRITO: a propria ficha diz que ele esta restrito, entao a dash desenha o menu certo
+  // no PRIMEIRO render (o /auth/me devolve esta ficha). Sem isto o menu inteiro apareceria por um
+  // instante e os itens sumiriam depois - o pior dos dois mundos, porque da pra clicar.
+  if (u && aflDe(u) && !isDirector(u)) {
+    try {
+      const d = await _aflRestrDesde(env, aflDe(u));
+      u.afl_restr = d;
+      u.afl_restrito = d > 0 && Math.floor(Date.now() / 1000) >= d;
+    } catch (_) { /* sem a marca, segue como estava */ }
+  }
+  _authPorReq.set(req, u);
+  return u ? { ...u } : null;
 }
 // VER COMO OUTRA PESSOA VALE PRA TODA LEITURA (15/09/2026, pedido do Bruno: "quando eu clicar no meu
 // cobrador, quero ver exatamente o que ele ve quando faz login"). Antes o `como` so era lido por umas
@@ -519,6 +538,116 @@ const _antesDoCorte = (valor, corte, anoRef) => {
 const _num4 = (n) => String(n || '').replace(/\D/g, '').slice(-4);
 // Ter janela de entrada e o mesmo que ter acesso reduzido: ve da data pra frente e nao edita nada.
 const _acessoReduzido = (u) => _veDesde(u) > 0;
+
+// ══ AFILIADO RESTRITO: SO ACOMPANHA O QUE JA E DELE (03/11/2026) ════════════════════════════
+//
+// Pedido do Bruno, palavras dele: "quero que voce bloqueie o meu afiliado para subir novos pedidos
+// (...) o login deles vai ser limitado aos pedidos que eles ja fizeram, entao eles vao poder ver o
+// kanban e tudo que tem a ver com os pedidos, mas nao quero que eles cadastrem ou tenham acesso a
+// ferramentas que eu desenvolvi para meus afiliados (...) para que eles nao fiquem fucando na nossa
+// dash, tentando replicar alguma ferramenta, alguma inovacao que a gente fez". E a saida de um
+// afiliado: ele para de vender hoje e continua acompanhando a entrega do que vendeu.
+//
+// A MARCA mora no app_config, uma chave por afiliado: `afl_restr_<afl_id>`, valor
+// {"desde":<epoch s>,"por":<user>,"em":<epoch s>}. Nao e coluna nova de proposito: este mesmo
+// arquivo roda no D1 do Giovane, onde nenhum ALTER nosso passou, e chave de config existe nos dois.
+//
+// `desde` e QUANDO a restricao comeca, e e o que permite marcar hoje e valer so da meia-noite em
+// diante: a hora e conferida a cada pedido, nao na hora de salvar. Sem chave, ninguem e restrito -
+// entao afiliado novo nasce livre e nada muda pra quem ja existe.
+//
+// VALE PRO MUNDO INTEIRO (o afiliado e a equipe dele), porque a chave e do AFILIADO e todo mundo do
+// mundo dele carrega o `afiliado_id`. Restringir so o dono seria pedir pra ele seguir cadastrando
+// pelo login da vendedora.
+const _AFL_RESTR_PREF = 'afl_restr_';
+let _aflRestrMapa = null, _aflRestrLido = 0;
+// Uma consulta por minuto por isolate, e so quando alguem do mundo de um afiliado aparece. Pra casa
+// (que e 99% do trafego) isto nunca e lido.
+async function _aflRestrTodos(env) {
+  if (_aflRestrMapa && (Date.now() - _aflRestrLido) < 60000) return _aflRestrMapa;
+  try {
+    await _ensureConfigTable(env);
+    const r = await env.DB.prepare('SELECT key, value FROM app_config WHERE key LIKE ?').bind(_AFL_RESTR_PREF + '%').all();
+    const mapa = {};
+    for (const x of ((r && r.results) || [])) {
+      const id = String((x && x.key) || '').slice(_AFL_RESTR_PREF.length);
+      if (!id || id.indexOf('_aplicado') >= 0) continue;   // marca de "sessao ja derrubada", nao e restricao
+      let v = null; try { v = JSON.parse(x.value || 'null'); } catch (_) { v = null; }
+      const desde = Number(v && v.desde) || Number(x.value) || 0;   // aceita o numero cru tambem
+      if (desde > 0) mapa[id] = { desde: desde, por: String((v && v.por) || ''), em: Number(v && v.em) || 0 };
+    }
+    _aflRestrMapa = mapa; _aflRestrLido = Date.now();
+    return mapa;
+  } catch (e) {
+    // Banco mudo: vale o que a gente ja sabia, e na primeira leitura da vida vale "ninguem restrito".
+    // Fechar aqui trancaria o afiliado fora dos pedidos dele - que e justamente o que ele CONTINUA
+    // podendo ver - por causa de uma piscada do D1. As duas travas que seguram o essencial
+    // (cadastro de pedido) passam pelo mesmo banco e falhariam junto.
+    console.log('AFL_RESTR leitura falhou: ' + String((e && e.message) || e));
+    return _aflRestrMapa || {};
+  }
+}
+const _aflRestrEsquece = () => { _aflRestrMapa = null; _aflRestrLido = 0; };
+// Quando comeca a restricao deste afiliado (0 = livre). Nao diz se ja comecou.
+async function _aflRestrDesde(env, aflId) {
+  const id = String(aflId || '');
+  if (!id) return 0;
+  const m = await _aflRestrTodos(env);
+  return (m[id] && Number(m[id].desde)) || 0;
+}
+// Esta pessoa esta restrita AGORA? (mundo de afiliado marcado e a hora ja passou)
+async function _restritoAgora(env, u) {
+  try {
+    if (!u || isDirector(u)) return false;
+    if (!(noMundoAfiliado(u) || afiliadoSemVinculo(u))) return false;
+    const desde = await _aflRestrDesde(env, aflDe(u));
+    return desde > 0 && Math.floor(Date.now() / 1000) >= desde;
+  } catch (_) { return false; }
+}
+// O QUE O MUNDO RESTRITO AINDA ALCANCA. Lista BRANCA de proposito, pelo mesmo motivo que a poda do
+// /api/state virou lista branca em 25/08: lista negra so cobre o que alguem lembrou de escrever, e
+// rota nova nasceria aberta. Aqui rota nova nasce fechada pra ele.
+//   /api/state          -> o estado dele (pedidos, colunas, etiquetas); o POST entra, mas sem lead
+//                          novo (ver _stateProtegido)
+//   /api/lead/...       -> abrir, mover, comentar e editar o pedido que JA existe
+//   /api/five/*         -> o pedido na plataforma (Analise de Pedidos, painel dele)
+//   /api/users (GET)    -> o nome de quem aparece no card
+//   /api/arquivo/...    -> o comprovante e a foto da entrega dos pedidos dele
+//   /api/push/*         -> o aviso no celular (o aplicativo dele continua de pe)
+//   /api/tags/save, /api/coment-prontos -> etiqueta e comentario pronto do proprio quadro
+const _RESTR_OK_EXATO = new Set(['/auth/login', '/auth/logout', '/auth/me',
+  '/api/state', '/api/state/pulso', '/api/leads/contagem',
+  '/api/five/orders', '/api/five/summary', '/api/five/products',
+  '/api/afiliados/pedidos', '/api/podio', '/api/tags/save', '/api/coment-prontos']);
+const _RESTR_OK_PREFIXO = ['/api/lead/', '/api/push/', '/api/arquivo/'];
+const _RESTR_OK_GET = new Set(['/api/users', '/api/wa/sales']);
+function _restrLiberado(path, metodo) {
+  const p = String(path || '');
+  if (_RESTR_OK_EXATO.has(p)) return true;
+  if (_RESTR_OK_PREFIXO.some((a) => p.startsWith(a))) return true;
+  const m = String(metodo || 'GET').toUpperCase();
+  if ((m === 'GET' || m === 'HEAD') && _RESTR_OK_GET.has(p)) return true;
+  return false;
+}
+// A TRANCA FICA NO ROTEADOR, antes de qualquer handler: sao 154 endpoints e as ferramentas dele
+// estao espalhadas por dezenas deles (pressel, chip, contingencia, inbox, Sale Chat, funil, bot,
+// SellWave Web, pixel, saque, usuarios). Conferir um por um e garantia de esquecer um.
+// Devolve null quando pode passar, e a resposta de recusa quando nao.
+// 403 seco, sem explicacao: a dash dele simplesmente nao tem mais essas telas. Mesma decisao da
+// janela de entrada (ve_desde) - "nao ha tela nem texto nenhum na dash dizendo que existe corte".
+async function _gateRestrito(req, env, path) {
+  try {
+    const p = String(path || '');
+    if (p.indexOf('/api/') !== 0 && p.indexOf('/auth/') !== 0) return null;   // rota publica nao tem sessao
+    if (_restrLiberado(p, req.method)) return null;                           // caminho liberado: custo zero
+    const auth = req.headers.get('authorization') || '';
+    if (!/^Bearer\s+[a-f0-9]{64}$/i.test(auth)) return null;                  // sem sessao: o handler decide
+    const u = await authUser(req, env);
+    if (!(await _restritoAgora(env, u))) return null;
+    console.log('AFL_RESTRITO barrou ' + String(req.method || '?') + ' ' + p + ' de ' + String((u && u.login) || '?'));
+    return err('Sem permissão', 403);
+  } catch (_) { return null; }   // nunca derrubar a API por causa deste gate
+}
 
 // QUEM PODE MEXER NA PRESSEL E NA ROLETA (só estes handlers, nada mais).
 //
@@ -946,6 +1075,16 @@ async function handleLogin(req, env) {
 
   // Não retorna pwd_hash
   const { pwd_hash, ...safe } = user;
+  // AFILIADO RESTRITO ja entra com o menu certo. O login nao passa pelo authUser (e ele que cria a
+  // sessao), entao a marca e lida aqui tambem - senao a primeira tela depois de entrar seria a dash
+  // inteira, ate o /auth/me chegar.
+  if (safe.afiliado_id) {
+    try {
+      const d = await _aflRestrDesde(env, safe.afiliado_id);
+      safe.afl_restr = d;
+      safe.afl_restrito = d > 0 && Math.floor(Date.now() / 1000) >= d;
+    } catch (_) { /* sem a marca, segue como estava */ }
+  }
   return json({ token, user: safe });
 }
 
@@ -4628,6 +4767,11 @@ async function handleAfiliados(req, env) {
     // daqui - e este e o unico lugar onde a equipe deles aparece pra ele.
     const qEquipes = env.DB.prepare("SELECT afiliado_id, COUNT(*) AS n FROM users WHERE afiliado_id IS NOT NULL AND role <> 'afiliado' AND COALESCE(archived,0)=0 GROUP BY afiliado_id").all();
     const [rLista, rPagos, rLigada, rAcessos, rEquipes] = await Promise.all([qLista, qPagos, qLigada, qAcessos, qEquipes]);
+    // Quem esta com o acesso restrito, e desde quando (03/11/2026). A tela mostra o selo e oferece
+    // liberar; sem isto o Bruno nao teria como saber que marcou nem como desmarcar.
+    let restrPor = {};
+    try { restrPor = await _aflRestrTodos(env); } catch (_) { restrPor = {}; }
+    const _agoraRestr = Math.floor(Date.now() / 1000);
     const equipePor = {};
     for (const r of (rEquipes && rEquipes.results) || []) equipePor[r.afiliado_id] = Number(r.n) || 0;
     const loginPor = {};
@@ -4703,6 +4847,9 @@ async function handleAfiliados(req, env) {
         pagamentos: pg.n,
         login: loginPor[r.id] || null,
         equipe: equipePor[r.id] || 0,
+        // 0 = sem restricao. Com data no futuro, a tela diz "a partir de"; no passado, "restrito".
+        restr_desde: Number((restrPor[r.id] || {}).desde) || 0,
+        restrito: !!(restrPor[r.id] && Number(restrPor[r.id].desde) > 0 && _agoraRestr >= Number(restrPor[r.id].desde)),
         // A PAGAR nunca fica negativo: se ele adiantou mais do que devia, isso e credito e nao
         // "divida negativa". Mostrar -R$ 200 na coluna "a pagar" so confunde na hora de acertar.
         a_pagar: Math.max(0, comissao - pg.pago),
@@ -4798,6 +4945,72 @@ async function handleAfiliadoAcesso(req, env) {
   } catch (e) { return err('Falha ao gerar acesso: ' + String((e && e.message) || e), 500); }
 }
 
+// RESTRINGIR O ACESSO DE UM AFILIADO (03/11/2026, pedido do Bruno). E o degrau que faltava entre
+// "ativo" e "removido": ele perde o cadastro de pedido e as ferramentas, e continua enxergando os
+// pedidos que ja fez. `desde` em epoch de SEGUNDOS diz quando comeca - e por isso que da pra marcar
+// hoje valendo so da meia-noite em diante, que foi o pedido ("hoje e o ultimo dia que eles vao ter
+// acesso; a partir de amanha, nao"). Sem `desde`, libera.
+// O que a restricao faz esta em tres lugares, todos no servidor: _gateRestrito (as rotas),
+// _stateProtegido (pedido novo pelo POST do estado) e _stateVisivel (o que o navegador dele recebe).
+async function handleAfiliadoRestricao(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Nao autenticado', 401);
+  if (!isDirector(u)) return err('Sem permissao', 403);
+  const b = await req.json().catch(() => null);
+  const id = b && _afilTexto(b.id, 80);
+  if (!id) return err('id obrigatorio');
+  await _ensureFiveTables(env);
+  const a = await env.DB.prepare('SELECT name FROM five_affiliates WHERE affiliate_id=?').bind(id).first();
+  if (!a) return err('Afiliado nao encontrado', 404);
+  const agora = Math.floor(Date.now() / 1000);
+  // Segundos, nao milissegundos: a tela manda epoch de segundos. Numero absurdo (ms por engano)
+  // viraria uma data no ano 56000 e a restricao nunca comecaria - por isso o teto.
+  let desde = Math.floor(Number(b.desde) || 0);
+  if (desde > 1e11) desde = Math.floor(desde / 1000);
+  if (b.liberar === true || desde <= 0) {
+    await _writeConfig(env, _AFL_RESTR_PREF + id, '');            // sem valor = apaga a chave
+    await _writeConfig(env, _AFL_RESTR_PREF + id + '_aplicado', '');
+    _aflRestrEsquece();
+    console.log('AFL_RESTR liberado ' + id + ' por ' + String(u.id));
+    return json({ ok: true, desde: 0 });
+  }
+  await _writeConfig(env, _AFL_RESTR_PREF + id, JSON.stringify({ desde: desde, por: String(u.id || ''), em: agora }));
+  _aflRestrEsquece();
+  console.log('AFL_RESTR marcado ' + id + ' desde ' + desde + ' por ' + String(u.id));
+  // Ja valendo? Derruba a sessao aberta na hora, pra dash dele recarregar no formato novo em vez de
+  // ficar com o menu antigo na tela levando 403 em tudo. Marcado pra frente, quem faz isso na hora
+  // certa e o cron (_aflRestrAplica).
+  let caiu = 0;
+  if (desde <= agora) { try { caiu = await _aflRestrAplica(env); } catch (_) { caiu = 0; } }
+  return json({ ok: true, desde: desde, sessoes_derrubadas: caiu });
+}
+
+// A RESTRICAO ENTRANDO EM VIGOR. Quando a hora marcada chega, a sessao aberta do mundo dele cai uma
+// vez - senao a aba que ficou aberta continuaria com o menu antigo desenhado, clicavel, levando 403
+// em cada clique (parece defeito da dash, e o Bruno ia ouvir que "a dash do afiliado quebrou").
+// Derruba UMA vez por restricao: a marca `_aplicado` guarda o `desde` ja tratado, entao mudar a data
+// aplica de novo e a mesma data nao. Chamado pelo cron de minuto em minuto e pelo proprio endpoint.
+async function _aflRestrAplica(env) {
+  const mapa = await _aflRestrTodos(env);
+  const ids = Object.keys(mapa || {});
+  if (!ids.length) return 0;
+  const agora = Math.floor(Date.now() / 1000);
+  let caiu = 0;
+  for (const id of ids) {
+    const desde = Number(mapa[id] && mapa[id].desde) || 0;
+    if (!desde || agora < desde) continue;
+    const marca = String(await _readConfig(env, _AFL_RESTR_PREF + id + '_aplicado') || '');
+    if (marca === String(desde)) continue;
+    try {
+      const r = await env.DB.prepare('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE afiliado_id=?)').bind(id).run();
+      caiu += Number((r && r.meta && r.meta.changes) || 0);
+    } catch (_) { /* sem sessao pra derrubar nao e erro */ }
+    await _writeConfig(env, _AFL_RESTR_PREF + id + '_aplicado', String(desde));
+    console.log('AFL_RESTR em vigor ' + id + ' (' + caiu + ' sessao/oes derrubada/s)');
+  }
+  return caiu;
+}
+
 // Remover. So sai da lista quem NAO tem pedido nem pagamento: apagar um afiliado com comissao
 // lancada deixaria a comissao orfa e o total do mes mudaria sozinho. Nesse caso a saida e pausar.
 async function handleAfiliadoRemover(req, env) {
@@ -4822,6 +5035,9 @@ async function handleAfiliadoRemover(req, env) {
       await env.DB.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE afiliado_id=?)").bind(id).run();
       await env.DB.prepare('DELETE FROM users WHERE afiliado_id=?').bind(id).run();
     } catch (_) {}
+    // A marca de restricao vai junto: afiliado removido com a chave orfa no app_config faria um
+    // cadastro NOVO com o mesmo id nascer restrito sem ninguem entender por que.
+    try { await _writeConfig(env, _AFL_RESTR_PREF + id, ''); await _writeConfig(env, _AFL_RESTR_PREF + id + '_aplicado', ''); _aflRestrEsquece(); } catch (_) {}
     return json({ ok: true });
   } catch (e) { return err('Falha ao remover: ' + String((e && e.message) || e), 500); }
 }
@@ -5502,6 +5718,24 @@ async function _stateVisivel(u, data, env) {
         return { ...l, hist: l.hist.map((h) => { const w = String((h && h.who) || ''); return (w && _ehPessoa(w) && !_meus.has(w)) ? { ...h, who: 'produtor' } : h; }) };
       });
     }
+    // ══ RESTRITO: FICA SO O QUE E PEDIDO (03/11/2026) ════════════════════════
+    //
+    // As telas das ferramentas sairam do menu dele e o gate do roteador barra as rotas, mas o
+    // /api/state continuaria ENTREGANDO a configuracao delas - e o que o navegador recebe da pra ler
+    // no inspetor. O Bruno pediu exatamente o contrario disso: "nao quero que eles fiquem fucando na
+    // nossa dash, tentando replicar alguma ferramenta".
+    //
+    // Sai: pressel e roleta, chip, contingencia, gasto de anuncio, Sale Chat, numero ativo,
+    // automacao de WhatsApp, saque e o link de checkout dele.
+    // FICA, de proposito: os pedidos, as colunas do quadro, as etiquetas, os comentarios prontos,
+    // os status de WhatsApp (sao o rotulo do card), o catalogo de kits (o nome do que foi vendido),
+    // a equipe (nome de quem aparece no card) e a matriz de permissao (e ela que desenha o menu).
+    if (await _restritoAgora(env, u)) {
+      for (const k of ['pressels', 'chips', 'trafego_registros', 'trafego_aloc',
+        'contCols', 'contColColors', 'cont_col_order', 'cont_recarga',
+        'scVend', 'scVendPub', 'wa_ativo', 'wa_automacoes', 'wa_autom_on', 'wa_bot_on',
+        'saques', 'afl_checkout', 'doms_liberados']) delete d[k];
+    }
   }
   // saque e notificacao sao pessoais: cada um ve o seu (e o que e pra todo mundo).
   const meu = String(u && u.id || '');
@@ -5645,6 +5879,19 @@ async function _stateProtegido(env, u, novo, atual) {
       novo.leads = leadsBanco.concat(novosDele);
     } else {
       novo.leads = leadsBanco;
+    }
+    // RESTRITO: NADA DE PEDIDO NOVO POR AQUI (03/11/2026). O POST /api/state e o OUTRO caminho pelo
+    // qual um pedido entra - a tela devolve o blob inteiro com o card novo dentro, e o merge acima
+    // deixa entrar id que ainda nao existe. Barrar so o /api/pedido/novo deixaria a porta dos fundos
+    // aberta pra uma aba antiga ou pro aplicativo. Aqui `leads` volta do banco inteiro: nada entra,
+    // nada sai, e o que ele mexeu no card continua indo pelas rotas de lead (que seguem liberadas).
+    // Pressel, chip, gasto de anuncio, Sale Chat, saque e link de checkout tambem voltam do banco:
+    // as telas sairam do menu dele, e o que nao da pra editar nao da pra apagar sem querer.
+    if (await _restritoAgora(env, u)) {
+      novo.leads = leadsBanco;
+      for (const k of ['pressels', 'chips', 'trafego_registros', 'trafego_aloc', 'scVend', 'scVendPub', 'saques', 'afl_checkout']) {
+        if (Object.prototype.hasOwnProperty.call(atual, k)) novo[k] = atual[k]; else delete novo[k];
+      }
     }
   }
   // A CASA RECEBE O ESTADO SEM O QUE E DE AFILIADO E O BANCO DEVOLVE (21/09/2026). O handleGetState
@@ -9779,6 +10026,10 @@ async function handleMesmoCpf(req, env) {
 async function handlePedidoNovo(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
+  // AFILIADO RESTRITO NAO CADASTRA (03/11/2026). O gate do roteador ja barra esta rota pra ele; esta
+  // linha e a segunda tranca, pelo mesmo motivo que a trava do clique repetido tem duas: e aqui que
+  // o pedido nasce, e quem chamar esta funcao de outro lugar nao passa pelo gate.
+  if (await _restritoAgora(env, u)) return err('Sem permissão', 403);
   let body = null;
   try { body = JSON.parse(_arqLimpaJson(await req.text())); } catch (_) { body = null; }   // link assinado nunca e gravado (item 37)
   const lead = body && body.lead;
@@ -32264,6 +32515,10 @@ export default {
     // de cima: cada minuto de atraso e clique pago num numero que ninguem esta olhando. Ver
     // _desligaAppFechado.
     try { await _desligaAppFechado(env); } catch (e) { console.error('[cron] desligaAppFechado falhou: ' + String((e && e.message) || e)); }
+    // RESTRICAO DE AFILIADO ENTRANDO EM VIGOR (03/11/2026). Toda batida e antes da trava porque e a
+    // hora marcada que manda: marcado pra meia-noite, a sessao aberta dele cai a meia-noite e nao na
+    // vez do rodizio. Sem restricao marcada e uma leitura de config em memoria, nada no banco.
+    try { await _aflRestrAplica(env); } catch (e) { console.error('[cron] aflRestrAplica falhou: ' + String((e && e.message) || e)); }
     // O SYNC VEM DEPOIS DO FUNIL, DE PROPOSITO (28/09/2026). Os dois rodam antes da trava, mas o
     // funil tem CLIENTE esperando do outro lado - cada segundo aqui e a mensagem dele atrasando.
     // O sync atrasa o que o vendedor LE, que e ruim mas nao e o lead desistindo.
@@ -32557,6 +32812,12 @@ export default {
         return json({ name: 'axion-api', ok: true, version: 1 });
       }
 
+      // AFILIADO RESTRITO (03/11/2026): o mundo dele so alcanca os pedidos que ja sao dele. Vem
+      // antes de todo o resto porque e lista BRANCA: endpoint novo nasce fechado pra ele, sem
+      // ninguem precisar lembrar. Caminho liberado nem consulta sessao (ver _gateRestrito).
+      const _barradoRestr = await _gateRestrito(req, env, path);
+      if (_barradoRestr) return _barradoRestr;
+
       // auth
       if (req.method === 'POST'  && path === '/auth/login')  return handleLogin(req, env);
       if (req.method === 'POST'  && path === '/auth/logout') return handleLogout(req, env);
@@ -32647,6 +32908,7 @@ export default {
       if (req.method === 'POST' && path === '/api/afiliados/salvar') return handleAfiliadoSalvar(req, env);
       if (req.method === 'POST' && path === '/api/afiliados/remover') return handleAfiliadoRemover(req, env);
       if (req.method === 'POST' && path === '/api/afiliados/acesso') return handleAfiliadoAcesso(req, env);
+      if (req.method === 'POST' && path === '/api/afiliados/restricao') return handleAfiliadoRestricao(req, env);
       if (['GET', 'POST'].includes(req.method) && path === '/api/afiliados/checkout') return handleAfiliadoCheckout(req, env);
       if (req.method === 'GET' && path === '/api/afiliados/pedidos') return handleAfiliadoPedidos(req, env);
       if (['GET', 'POST', 'DELETE'].includes(req.method) && path === '/api/afiliados/pagamentos') return handleAfiliadoPagamentos(req, env);
