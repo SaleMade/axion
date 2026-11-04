@@ -578,18 +578,39 @@
   .cob-resumo { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0 14px 10px; font-size: 12px; color: var(--apagado); }
   .cob-resumo b { color: var(--texto); font-variant-numeric: tabular-nums; }
   .cob-carrega { margin: auto; text-align: center; color: var(--apagado); font-size: 12.5px; padding: 30px; line-height: 1.6; }
-  .cob-card { cursor: pointer; display: flex; flex-direction: column; gap: 5px; }
-  .cob-card .cob-l1 { display: flex; min-width: 0; }
-  .cob-card .cob-l1 b { flex: 1; min-width: 0; font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cob-card .cob-v { margin-left: auto; flex: 0 0 auto; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .cob-card .cob-l2 { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 11px; }
-  .cob-card .cob-q { color: #60a5fa; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .cob-card .cob-q.atras { color: var(--vermelho); }
-  .cob-card .cob-pago { color: #10b981; font-weight: 700; }
-  .cob-card .cob-l3 { font-size: 11px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cob-card .cob-l4 { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
-  .cob-card .cob-selo { font-size: 10.5px; font-weight: 650; color: var(--s); padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--s) 14%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cob-card .cob-ap { font-size: 10.5px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* O CARD COM A CARA DO KANBAN DA DASH (03/11/2026, pedido do Bruno: "deixar o layout e cores do
+     sellwave web do cobrador mais parecido com o nosso kanban da dash original, as cores e colunas
+     sao mais limpas"). Mesma ordem do card da dash: nome com o icone de pessoa, telefone, data, o
+     valor em verde, a entrega, os selos e, no pe, quem vendeu e a UF. */
+  .cob-card { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+  .cob-card .cob-l1 { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
+  .cob-card .cob-l1 svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 2px; color: var(--apagado); }
+  .cob-card .cob-l1 b { flex: 1; min-width: 0; font-size: 14px; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cob-card .cob-ln { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--apagado); white-space: nowrap; }
+  .cob-card .cob-ln > svg { width: 12.5px; height: 12.5px; flex: 0 0 auto; }
+  .cob-card .cob-ln > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cob-card .cob-q { font-variant-numeric: tabular-nums; }
+  .cob-card .cob-q.marcado { color: var(--texto); font-weight: 600; }
+  .cob-card .cob-q.atras { color: var(--vermelho); font-weight: 600; }
+  .cob-card .cob-q.msg { color: var(--verde); font-weight: 600; }
+  .cob-card .cob-v { font-size: 15px; font-weight: 700; color: #10b981; font-variant-numeric: tabular-nums; }
+  .cob-card .cob-v small { margin-left: 5px; font-size: 11px; font-weight: 500; color: var(--apagado); }
+  .cob-card .cob-ent { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--apagado); }
+  .cob-card .cob-ent svg { width: 12.5px; height: 12.5px; flex: 0 0 auto; margin-top: 1px; }
+  .cob-card .cob-ent b { color: var(--texto); font-weight: 600; }
+  .cob-pills { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+  .cob-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 650;
+    color: var(--s); border: 1px solid color-mix(in srgb, var(--s) 40%, transparent); background: color-mix(in srgb, var(--s) 12%, transparent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-pill svg { width: 11px; height: 11px; flex: 0 0 auto; }
+  .cob-pill.neutro { color: var(--apagado); border-color: var(--linha); background: rgba(255, 255, 255, .04); }
+  .cob-card .cob-pe { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--linha); }
+  .cob-pe .cob-av { width: 21px; height: 21px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
+    font-size: 9px; font-weight: 700; color: var(--apagado); background: rgba(255, 255, 255, .07); }
+  .cob-pe .cob-vend { flex: 1; min-width: 0; font-size: 12px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cob-pe .cob-uf { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; font-size: 12px; color: var(--apagado); }
+  .cob-pe .cob-uf svg { width: 11px; height: 11px; }
   .cob-zap { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 22px; border-radius: 7px; color: #24c278; border: 1px solid rgba(36, 194, 120, .35); background: var(--verde-fraco); }
   .cob-zap svg { width: 13px; height: 13px; }
   .cob-zap:hover { filter: brightness(1.2); }
@@ -599,34 +620,29 @@
   .cob-perda-l { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 8px; font-size: 12px; cursor: pointer; background: rgba(255, 255, 255, .02); }
   .cob-perda-l i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
   .cob-perda-l b { margin-left: auto; font-variant-numeric: tabular-nums; }
-  /* O QUADRO DO COBRADOR COM MENOS COR (03/11/2026, pedido do Bruno: "o tanto de cor que tem nessas
-     colunas (...) esta meio exagerado"). A cor fica so onde ela diz alguma coisa: a bolinha do
-     cabecalho (qual grupo e), o atrasado em vermelho, o pago e o botao da conversa em verde. Coluna,
-     card, etapa e selo de entrega ficam no neutro. So no #cob: o CRM do vendedor segue como esta. */
-  #cob .crm-col { border: 1px solid var(--linha); background: rgba(255, 255, 255, .018); }
-  #cob .crm-col-cab { background: transparent; border-bottom: 1px solid var(--linha); }
-  #cob .crm-col-cab i { width: 8px; height: 8px; }
-  #cob .crm-col-cab b { color: var(--texto); font-weight: 650; }
-  #cob .crm-col-cab span { background: rgba(255, 255, 255, .06); color: var(--apagado); }
-  #cob .crm-card { border-color: var(--linha); box-shadow: none; }
-  #cob .crm-card:hover { border-color: rgba(255, 255, 255, .2); }
-  #cob .cob-card .fx-col { padding: 0; background: none; border: 0; color: var(--apagado); font-weight: 600; gap: 5px; }
-  #cob .cob-card .fx-col::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
-  #cob .cob-card .cob-q { color: var(--texto); }
-  #cob .cob-card .cob-q.atras { color: var(--vermelho); }
-  #cob .cob-card .cob-q.msg { color: var(--verde); }
-  #cob .cob-card .cob-selo { padding: 0; background: none; color: var(--apagado); display: inline-flex; align-items: center; gap: 5px; }
-  #cob .cob-card .cob-selo::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--s); flex: 0 0 auto; }
+  /* A COLUNA DO KANBAN DA DASH: fundo preto, o nome no centro na cor da etapa com a contagem do lado e
+     a fita colorida EMBAIXO do nome. Quem salta do fundo e o card, nao a coluna. So no #cob: o CRM do
+     vendedor segue como esta. */
+  #cob .crm-colunas { gap: 12px; }
+  #cob .crm-col { min-width: 236px; border: 1px solid var(--linha); border-top: 1px solid var(--linha); border-radius: 12px; background: #080b11; }
+  #cob .crm-col-cab { flex-wrap: wrap; justify-content: center; gap: 8px; padding: 10px 12px 0; background: transparent; border-bottom: 0; }
+  #cob .crm-col-cab i { display: none; }
+  #cob .crm-col-cab b { font-size: 13px; font-weight: 650; color: var(--c); }
+  #cob .crm-col-cab span { margin-left: 0; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 650; color: var(--texto); background: transparent; border: 1px solid rgba(255, 255, 255, .12); }
+  #cob .crm-col-cab::after { content: ''; flex: 0 0 100%; height: 6px; margin-top: 0; border-radius: 99px; background: var(--c); }
+  #cob .crm-cards { padding: 10px; gap: 10px; }
+  #cob .crm-card { padding: 11px 12px; border-radius: 9px; background: var(--card); border: 1px solid rgba(255, 255, 255, .08); box-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+  #cob .crm-card:hover { border-color: rgba(36, 194, 120, .4); box-shadow: 0 4px 12px rgba(0, 0, 0, .35); }
+  #cob .crm-vazio { border: 0; padding: 22px 8px; font-size: 12px; }
+  #cob .cob-card .fx-col { padding: 1px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 650; gap: 0;
+    color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); background: color-mix(in srgb, var(--c) 12%, transparent); }
   #cob .cob-zap { background: transparent; border-color: var(--linha); }
   #cob .cob-zap:hover { background: var(--verde-fraco); border-color: rgba(36, 194, 120, .35); filter: none; }
-  .cob-card .cob-l4e { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
-  .cob-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--apagado); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .cob-tag i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
   /* A DIVISORIA DO DIA (03/11/2026): o dia e quantos pedidos, presa no topo enquanto rola. */
   .cob-grupo { display: flex; flex-direction: column; gap: 8px; }
   .cob-grupo + .cob-grupo { margin-top: 6px; }
-  .cob-dia-n { position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 0 -8px; padding: 8px 10px 6px;
-    background: #12161f; border-bottom: 1px solid rgba(255, 255, 255, .1); text-transform: none; letter-spacing: 0; }
+  .cob-dia-n { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 0 -10px; padding: 8px 12px 6px;
+    background: #080b11; border-bottom: 1px solid rgba(255, 255, 255, .1); text-transform: none; letter-spacing: 0; }
   .cob-dia-n b { font-size: 11.5px; font-weight: 700; color: var(--texto); letter-spacing: .02em; }
   .cob-dia-n span { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--apagado); font-variant-numeric: tabular-nums; }
   .cob-perda-l.alvo, .cob-dia-n.alvo { box-shadow: inset 0 0 0 2px rgba(36, 194, 120, .5); }

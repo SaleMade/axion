@@ -213,6 +213,12 @@
     + (extra || '')
     + '<div class="crm-cards">' + (cards || '<div class="crm-vazio">' + esc(vazio) + '</div>') + '</div></div>'
 
+  // O CARD COM A CARA DO KANBAN DA DASH (03/11/2026, pedido do Bruno: "mais parecido com o nosso
+  // kanban da dash original"). Mesma ordem de la: nome, telefone, data, valor em verde, a entrega, os
+  // selos e, no pe, quem vendeu e a UF. A linha do relogio diz o que o cobrador precisa: o retorno
+  // marcado (vermelho se passou), "escreveu ha X" em Entraram em contato, ou a data do pedido.
+  const pad = (n) => String(n).padStart(2, '0')
+  const iniciais = (n) => String(n || '').trim().split(/\s+/).map((x) => x[0] || '').join('').slice(0, 2).toUpperCase() || '?'
   function cartao(p, o) {
     o = o || {}
     const ag = C.quandoAgend(p)
@@ -221,19 +227,32 @@
     const quando = o.contato ? 'escreveu ' + C.haQuanto(Number(p.contato))
       : o.quando === false ? '' : (!isNaN(ag) ? (o.soHora ? C.hora(ag) : C.quandoTxt(ag)) : '')
     const atras = !o.contato && C.naFila(p) && !isNaN(ag) && ag < Date.now()
-    const tags = (Array.isArray(p.tags) ? p.tags : []).slice(0, 2)
-    const local = [p.cidade, p.uf].filter(Boolean).join('/')
+    const cri = Number(p.criado) ? new Date(Number(p.criado)) : null
+    const data = cri && !isNaN(cri) ? pad(cri.getDate()) + '/' + pad(cri.getMonth() + 1) : ''
+    const linhaQ = quando
+      ? '<div class="cob-ln">' + C.I.relogio + '<span class="cob-q ' + (o.contato ? 'msg' : atras ? 'atras' : 'marcado') + '">' + esc(quando) + '</span></div>'
+      : (data ? '<div class="cob-ln">' + C.I.relogio + '<span>' + esc(data) + '</span></div>' : '')
+    const valor = !p.pago && Number(p.saldo) > 0 ? Number(p.saldo) : Number(p.valor)
+    const desconto = Number(p.vl) > Number(p.valor) ? '<small>de ' + esc(C.brl(p.vl)) + '</small>' : ''
+    const ent = p.entrega ? '<div class="cob-ent">' + C.I.caminhao + '<span><b>' + esc(p.entrega.label + ' ' + p.entrega.data) + '</b>' + (p.entrega.dias ? ' · ' + esc(p.entrega.dias) : '') + '</span></div>' : ''
+    const pill = (cor, txt, ic) => '<span class="cob-pill" style="--s:' + esc(cor) + '" title="' + esc(txt) + '">' + (ic || '') + esc(txt) + '</span>'
+    // A etapa so aparece na agenda e so quando NAO e a fila (Cobranca e o normal ali; o que vale avisar
+    // e o pedido que ainda esta na rua ou esperando retirada). No quadro a coluna ja diz.
+    const pills = (o.semColuna || p.col === 'Entregues' ? '' : C.chip(p.col))
+      + (p.selo ? pill(p.selo.cor, p.selo.label, C.I.pacote) : '')
+      + (p.pago ? pill('#10b981', 'Pago') : pill(p.mod === 'antecipado' ? '#10b981' : '#f59e0b', p.mod === 'antecipado' ? 'PG ANTECIPADO' : 'PG ENTREGA'))
+      + (atras ? pill('#f0506a', 'Atrasado') : '')
+      + (Array.isArray(p.tags) ? p.tags : []).slice(0, 3).map((t) => pill(t.cor || '#64748b', t.nome)).join('')
     return '<div class="crm-card cob-card" data-id="' + esc(p.id) + '"' + (o.arrasta ? ' draggable="true"' : '') + ' style="--c:' + (o.cor || C.colDef(p.col).cor) + '"'
       + ' title="Clique pra ver o pedido. O balão abre a conversa do cliente.">'
-      + '<div class="cob-l1"><b title="' + esc(p.nome) + '">' + esc(p.nome) + '</b></div>'
-      + '<div class="cob-l2">' + (o.semColuna ? '' : C.chip(p.col))
-      + (quando ? '<span class="cob-q' + (atras ? ' atras' : '') + (o.contato ? ' msg' : '') + '">' + esc(quando) + '</span>' : '')
-      + (p.pago ? '<span class="cob-pago">pago</span>' : '')
-      + '<span class="cob-v">' + esc(C.brl(p.saldo > 0 ? p.saldo : p.valor)) + '</span></div>'
-      + '<div class="cob-l3">' + esc([local, p.prod].filter(Boolean).join(' · ')) + '</div>'
-      + '<div class="cob-l4">'
-      + '<span class="cob-l4e">' + (p.selo ? '<span class="cob-selo" style="--s:' + esc(p.selo.cor) + '">' + esc(p.selo.label) + '</span>' : (p.entrega ? '<span class="cob-ap">' + esc(p.entrega.label + ' ' + p.entrega.data) + '</span>' : ''))
-      + tags.map((t) => '<span class="cob-tag" style="--c:' + esc(t.cor || '#64748b') + '" title="' + esc(t.nome) + '"><i></i>' + esc(t.nome) + '</span>').join('') + '</span>'
+      + '<div class="cob-l1">' + C.I.pessoa + '<b title="' + esc(p.nome) + '">' + esc(p.nome) + '</b></div>'
+      + (p.wa ? '<div class="cob-ln">' + C.I.fone + '<span>' + esc(C.foneBonito(p.wa)) + '</span></div>' : '')
+      + linhaQ
+      + '<div class="cob-v">' + esc(C.brl(valor)) + desconto + '</div>'
+      + ent
+      + (pills ? '<div class="cob-pills">' + pills + '</div>' : '')
+      + '<div class="cob-pe"><span class="cob-av">' + esc(iniciais(p.atNome)) + '</span><span class="cob-vend">' + esc(p.atNome || 'Sem vendedor') + '</span>'
+      + (p.uf || p.cidade ? '<span class="cob-uf" title="' + esc([p.cidade, p.uf].filter(Boolean).join('/')) + '">' + C.I.pino + esc(p.uf || p.cidade) + '</span>' : '')
       + '<button class="cob-zap" data-conversa="1" title="Abrir a conversa deste cliente">' + C.I.zap + '</button></div>'
       + '</div>'
   }
