@@ -403,15 +403,29 @@
   //   AUDIO / TEXTO, do segundo em diante  10 s de base, com o indicador ligado.
   //   ANTERIOR FOI AUDIO LONGO ........... soma tempo pro lead OUVIR: 1 s a cada 6 s acima de 40,
   //                                        teto de 20 s no total. 42 s -> 10; 60 s -> 14; 186 s -> 20.
+  //   IMAGEM LOGO DEPOIS DE AUDIO ........ 60 s (04/11/2026), ou a duracao do audio se ele for mais
+  //                                        curto. Ver RESPIRO_IMAGEM.
   //
   // A conta olha pro audio ANTERIOR e nao pro proximo, e essa e a diferenca que importa: o que o
   // lead precisa e de tempo pra ouvir o que acabou de chegar. Olhando pro proximo, a regra velha
   // castigava justamente a abertura do funil, que e quando a pressa importa.
   var RESPIRO_BASE = 10
   var RESPIRO_TETO = 20
+  // A IMAGEM DO PRECO ESPERA O LEAD OUVIR (04/11/2026, pedido do Bruno). No "Etapa 4 - Fechamento"
+  // sai o audio do valor (2min26) e a imagem com "R$ 497" chegava junto: o lead via o preco antes
+  // de ouvir a explicacao e desistia ("na hora que elas veem a imagem e veem um preco de 497, nao
+  // era vontade de comprar"). Ele pediu "mais ou menos 1 minuto de tempo para escutar o audio".
+  // So IMAGEM logo depois de AUDIO: os videos de prova social do "Etapa 3" continuam saindo de uma
+  // vez, e audio mais curto que 60 s espera so a propria duracao. Sem "gravando": e silencio de
+  // proposito, o lead esta ouvindo. O Parar continua soltando na hora (esperaOuPara).
+  var RESPIRO_IMAGEM = 60
   function respiroDoItem(item, ant, ehPrimeiro) {
     if (ehPrimeiro) return Promise.resolve(0)
     var k = String(item.kind || '')
+    if (k === 'image' && ant && ant.kind === 'audio') {
+      var ouvir = Number(ant.dur) || 0
+      return Promise.resolve(ouvir > 0 ? Math.min(RESPIRO_IMAGEM, Math.ceil(ouvir)) : RESPIRO_IMAGEM)
+    }
     if (k === 'image' || k === 'video' || k === 'document') return Promise.resolve(0)
     var seg = RESPIRO_BASE
     if (ant && ant.kind === 'audio' && Number(ant.dur) > 40) {

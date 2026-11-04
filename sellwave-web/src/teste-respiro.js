@@ -13,6 +13,7 @@
 //   IMAGEM / VIDEO / DOCUMENTO ......... 0 s (regra dele de 26/10, de pe: "de uma vez so")
 //   AUDIO / TEXTO, do segundo em diante  10 s de base
 //   ANTERIOR FOI AUDIO LONGO ........... +1 s a cada 6 s acima de 40, teto de 20 s no total
+//   IMAGEM LOGO DEPOIS DE AUDIO ........ 60 s, ou a duracao do audio se for menor (04/11/2026)
 //
 // A conta olha pro audio ANTERIOR, nao pro proximo: o que o lead precisa e de tempo pra OUVIR o que
 // acabou de chegar. Era olhar pro proximo que castigava a abertura do funil.
@@ -60,6 +61,7 @@ const CONST = (nome) => {
 }
 const BASE = CONST('RESPIRO_BASE')
 const TETO = CONST('RESPIRO_TETO')
+const IMG = CONST('RESPIRO_IMAGEM')
 conta('o agente declara a base e o teto do respiro', BASE === 10 && TETO === 20, 'base=' + BASE + ' teto=' + TETO)
 
 function montar({ duracao, falha, mudo }) {
@@ -84,7 +86,7 @@ function montar({ duracao, falha, mudo }) {
   const ctx = vm.createContext({ Audio, Promise, setTimeout, clearTimeout, Number, isFinite, String, Math })
   // As constantes vao com os valores RECORTADOS do agente, nao com numeros digitados aqui: se
   // alguem mudar 10 ou 20 la, o teste passa a medir o valor novo em vez de mentir.
-  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + ';\n'
+  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + '; var RESPIRO_IMAGEM = ' + IMG + ';\n'
     + pecas.duracaoDoAudio + '\n' + pecas.respiroDoItem + '\nthis.R = respiroDoItem\nthis.D = duracaoDoAudio', ctx)
   return ctx
 }
@@ -127,10 +129,35 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
 
   // ── MIDIA SAI DE UMA VEZ SO (regra de 26/10, que fica de pe) ────────────────────────────────
   console.log('\nIMAGEM, VIDEO E DOCUMENTO')
-  for (const k of ['image', 'video', 'document']) {
+  for (const k of ['video', 'document']) {
     conta(k + ' nao espera nada, nem depois de audio longo',
       (await R(item(k), audio(186), false)) === 0)
   }
+  conta('imagem depois de texto nao espera nada', (await R(item('image'), { kind: '', dur: 0 }, false)) === 0)
+  conta('imagem depois de outra imagem nao espera nada', (await R(item('image'), { kind: 'image', dur: 0 }, false)) === 0)
+  conta('imagem que abre o funil sai na hora', (await R(item('image'), audio(146), true)) === 0)
+
+  // ── A IMAGEM DO PRECO ESPERA O LEAD OUVIR O AUDIO (04/11/2026) ──────────────────────────────
+  // "Etapa 4 - Fechamento": audio do valor de 2min26 e logo depois a imagem com R$ 497. O Bruno
+  // pediu "mais ou menos 1 minuto de tempo para escutar o audio" antes da imagem.
+  console.log('\nIMAGEM LOGO DEPOIS DE AUDIO')
+  conta('o agente declara a espera da imagem em 60 s', IMG === 60, 'RESPIRO_IMAGEM=' + IMG)
+  conta('depois do audio do valor (146 s) a imagem espera 60 s', (await R(item('image'), audio(146), false)) === 60)
+  conta('audio de 30 s atras: espera so os 30 s dele', (await R(item('image'), audio(30), false)) === 30)
+  conta('audio de 42,3 s arredonda pra cima (43)', (await R(item('image'), audio(42.3), false)) === 43)
+  conta('audio que nao disse a duracao: espera o minuto cheio', (await R(item('image'), audio(0), false)) === 60)
+  conta('video depois do mesmo audio continua sem espera (provas sociais)', (await R(item('video'), audio(146), false)) === 0)
+
+  // O main corta o envio que passa do teto dele ("o numero nao respondeu a tempo"). A imagem nao
+  // tem espera no teto do main (so a pausa do passo), entao os 60 s tem que caber no tempo de envio
+  // dela, com folga pro upload pela proxy. Recortado do main.js, nao digitado aqui.
+  const main = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8').replace(/\r\n/g, '\n')
+  const iT = main.indexOf('function tetoDoItem(')
+  const fT = iT < 0 ? -1 : main.indexOf('\n}\n', iT)
+  const tetoDoItem = fT < 0 ? null : new Function(main.slice(iT, fT + 2) + '\nreturn tetoDoItem')()
+  const tetoImg = tetoDoItem ? tetoDoItem({ tipo: 'midia', kind: 'image', pausa: 0 }) : 0
+  conta('o teto do app pra imagem cabe os 60 s com pelo menos 1 min pro upload',
+    tetoImg >= (IMG + 60) * 1000, 'teto=' + tetoImg + 'ms')
 
   // ── A MEDIDA DA DURACAO, que e o que alimenta a conta acima ─────────────────────────────────
   console.log('\nA DURACAO DO AUDIO (e o que o item SEGUINTE usa)')
