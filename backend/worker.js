@@ -32986,18 +32986,35 @@ async function handleCobRegra(req, env) {
     return json({ ok: true, regra });
   }
   const regra = await _cobRegra(env);
-  let carga = {};
+  let carga = {}, numeros = {};
   try {
     const d = await _getDashData(env, 0);
     const c = _cobContagens(d && d.leads, ids, regra);
     carga = Object.fromEntries(c.carga);
+    // O WHATSAPP QUE O LINK ABRE pra cada cobrador (o mesmo _cobNumeroDe do /acompanhar-pedido).
+    for (const i of ids) numeros[i] = _cobNumeroDe(d && d.chips, i);
   } catch (_) { carga = {}; }
-  return json({ ok: true, regra, cobradores: cobs.map((c) => ({ id: String(c.id) })), carga, link: 'https://sellwave.com.br/entrega' });
+  // OS NOMES VEM DAQUI (04/11/2026): o cartao mudou pra tela de Pressels & Roleta, que nao carrega a
+  // equipe. Vendedor = cargo atendente da casa, ativo: e de quem sai a mensagem com o link.
+  let nomes = {}, vendedores = [];
+  try {
+    const r = await env.DB.prepare("SELECT id, name, role, afiliado_id FROM users WHERE COALESCE(archived,0)=0 AND LOWER(role) IN ('cobrador','atendente') ORDER BY name").all();
+    for (const x of ((r && r.results) || [])) {
+      nomes[String(x.id)] = String(x.name || x.id);
+      if (String(x.role).toLowerCase() === 'atendente' && !x.afiliado_id) vendedores.push({ id: String(x.id), name: String(x.name || x.id) });
+    }
+  } catch (_) { /* sem nomes a tela mostra o id */ }
+  return json({
+    ok: true, regra, carga, numeros, vendedores,
+    cobradores: cobs.map((c) => ({ id: String(c.id), name: nomes[String(c.id)] || String(c.id) })),
+    link: 'https://sellwave.com.br/acompanhar-pedido',
+  });
 }
 
 // ══ O LINK DE ENTREGA (04/11/2026) ═══════════════════════════════════════════════════════════
-// O vendedor manda "https://sellwave.com.br/entrega" na mensagem de agradecimento; o SellWave Web
-// completa com o telefone do cliente na hora de mandar (/entrega/<telefone em base 36>). Quando o
+// O vendedor manda "https://sellwave.com.br/acompanhar-pedido" na mensagem de agradecimento (era
+// /entrega na primeira versao, que continua valendo); o SellWave Web completa com o telefone do
+// cliente na hora de mandar (/acompanhar-pedido/<telefone em base 36>). Quando o
 // cliente clica, este endereco decide o cobrador e devolve o WhatsApp dele:
 //   1. o cliente ja tem pedido em aberto com cobrador -> esse cobrador (o dono de verdade);
 //   2. tem pedido ainda sem cobrador, ou nem pedido ainda -> a regra acima, com o vendedor do
@@ -34099,7 +34116,9 @@ export default {
       if (req.method === 'GET' && shortMatch) return handleShortRedirect(req, env, shortMatch[1]);
       // A regra de distribuicao da cobranca e o link de entrega que o vendedor manda (04/11/2026).
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/cob/regra') return handleCobRegra(req, env);
-      const entregaMatch = path.match(/^\/entrega(?:\/([0-9A-Za-z]{1,16}))?\/?$/);
+      // /acompanhar-pedido e o endereco que vai na mensagem (04/11/2026, o Bruno: "da a entender que o
+      // cliente vai clicar pra acompanhar o pedido"); /entrega fica valendo pra mensagem ja mandada.
+      const entregaMatch = path.match(/^\/(?:acompanhar-pedido|entrega)(?:\/([0-9A-Za-z]{1,16}))?\/?$/);
       if (req.method === 'GET' && entregaMatch) return handleEntregaLink(req, env, entregaMatch[1] || '');
 
       return err('Rota não encontrada', 404);

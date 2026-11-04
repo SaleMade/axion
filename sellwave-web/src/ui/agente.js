@@ -440,17 +440,19 @@
   }
 
   // O LINK DE ENTREGA LEVA O TELEFONE DO CLIENTE (04/11/2026). A mensagem de agradecimento do
-  // vendedor tem "https://sellwave.com.br/entrega"; aqui, na hora de mandar, ele vira
-  // ".../entrega/<telefone em base 36>". Quando o cliente clica, o servidor acha o pedido dele e
+  // vendedor tem "https://sellwave.com.br/acompanhar-pedido" (ou /entrega, o nome da 1a versao);
+  // aqui, na hora de mandar, ele vira ".../acompanhar-pedido/<telefone em base 36>". Quando o
+  // cliente clica, o servidor acha o pedido dele e
   // abre o WhatsApp do cobrador DONO daquele pedido (a regra de distribuicao da dash). Sem o
   // telefone (conversa so por LID) o link vai como esta e o servidor usa a regra geral.
   function linkDeEntrega(texto, chatId) {
     var t = String(texto || '')
-    if (t.indexOf('sellwave.com.br/entrega') < 0) return t
+    if (t.indexOf('sellwave.com.br/entrega') < 0 && t.indexOf('sellwave.com.br/acompanhar-pedido') < 0) return t
     var tel = telefoneDaConversa(chatId)
     var d = (tel && !tel.isLid) ? String(tel.digits || '').replace(/\D/g, '') : ''
     if (d.length < 10 || d.length > 13) return t
-    return t.replace(/https:\/\/sellwave\.com\.br\/entrega(?![\/\w])/g, 'https://sellwave.com.br/entrega/' + Number(d).toString(36))
+    var cod = Number(d).toString(36)
+    return t.replace(/https:\/\/sellwave\.com\.br\/(acompanhar-pedido|entrega)(?![\/\w-])/g, function (_m, rota) { return 'https://sellwave.com.br/' + rota + '/' + cod })
   }
   window.__swLinkDeEntrega = linkDeEntrega   // so pros testes
 

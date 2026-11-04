@@ -793,6 +793,12 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('entrega: mensagem sem o link nao muda', f('Oi, tudo bem?', 'x') === 'Oi, tudo bem?')
   vale('entrega: link que ja tem codigo nao ganha outro', f('https://sellwave.com.br/entrega/abc123', 'x') === 'https://sellwave.com.br/entrega/abc123')
   vale('entrega: o agente usa a funcao no envio de texto', /sendTextMessage\(chatId, linkDeEntrega\(item\.texto/.test(fonte))
+  // O NOME NOVO (04/11/2026, pedido do Bruno: "da a entender que o cliente vai clicar pra acompanhar o pedido")
+  const msg2 = 'Segue o contato:\n\nhttps://sellwave.com.br/acompanhar-pedido'
+  const out2 = f(msg2, 'x')
+  vale('acompanhar-pedido: o link ganha o telefone do cliente', out2.endsWith('https://sellwave.com.br/acompanhar-pedido/' + Number('5511999998888').toString(36)), out2.slice(-50))
+  vale('acompanhar-pedido: com codigo nao ganha outro', f('https://sellwave.com.br/acompanhar-pedido/abc123', 'x') === 'https://sellwave.com.br/acompanhar-pedido/abc123')
+  vale('acompanhar-pedido: conversa por LID manda como esta', mk({ digits: '123456789012345', isLid: true })(msg2, 'x@lid') === msg2)
 }
 
 console.log('')

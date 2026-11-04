@@ -185,5 +185,21 @@ t(r.st === 302 && r.loc.startsWith(WA_HAY), 'numero do Bryan caido: o link abre 
 r = await req('GET', '/entrega/' + b36('5515900000001'))
 t(r.st === 302 && r.loc.startsWith('https://wa.me/551599'), 'sem numero "Em uso", vale qualquer numero ativo dele', r.loc)
 
+console.log('\nO ENDERECO NOVO: /acompanhar-pedido (o /entrega continua valendo)')
+{ const d = ler(); d.chips.forEach((c) => { c.st = 'ativo'; if (c.id === 1 || c.id === 3) c.em_uso = true }); sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d)) }
+await regra({ modo: 'fixo', alvo: 'cob_bryan' })
+r = await req('GET', '/acompanhar-pedido/' + b36('5515900000001'))
+t(r.st === 302 && r.loc.startsWith(WA_HAY), '/acompanhar-pedido com telefone abre o dono do pedido', r.loc)
+r = await req('GET', '/acompanhar-pedido')
+t(r.st === 302 && r.loc.startsWith(WA_BRY), '/acompanhar-pedido sem telefone segue a regra', r.loc)
+r = await req('GET', '/entrega/' + b36('5515900000001'))
+t(r.st === 302 && r.loc.startsWith(WA_HAY), '/entrega (mensagem ja mandada) continua funcionando', r.loc)
+r = await req('GET', '/api/cob/regra', TK.dir)
+const nomes = ((r.j && r.j.cobradores) || []).map((c) => c.name).sort().join(',')
+t(nomes === 'Bryan,Haynan', 'a tela recebe os cobradores com nome', nomes)
+t((r.j.vendedores || []).map((v) => v.name).join(',') === 'Barbara,Guilherme,Kevin', 'e os vendedores da casa', (r.j.vendedores || []).map((v) => v.name).join(','))
+t(r.j.numeros && r.j.numeros.cob_bryan === '5511927335679' && r.j.numeros.cob_haynan === '5515991980514', 'e o WhatsApp que o link abre de cada um', JSON.stringify(r.j.numeros))
+t(r.j.link === 'https://sellwave.com.br/acompanhar-pedido', 'o link mostrado e o novo', r.j.link)
+
 console.log('\n' + ok + ' de ' + (ok + mau) + ' conferencias passaram')
 process.exit(mau ? 1 : 0)
