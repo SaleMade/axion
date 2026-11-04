@@ -7,7 +7,14 @@
 // LEIA ANEXO-TECNICO.md ANTES DE MEXER. Quase toda linha estranha aqui existe por causa de uma
 // armadilha medida em 15/10/2026, e o comentario diz qual.
 
-const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard, powerMonitor, nativeImage } = require('electron')
+const { app, BaseWindow, WebContentsView, session, ipcMain, shell, dialog, safeStorage, protocol, net, clipboard, powerMonitor, nativeImage, Menu, powerSaveBlocker, systemPreferences } = require('electron')
+
+// A VERSAO DE MAC (04/11/2026, pedido do Bruno: o cobrador novo usa MacBook). E o MESMO codigo; o
+// que muda no Mac mora nos trechos com `NO_MAC` e esta explicado em cada um. O pacote sai do runner
+// macOS do GitHub (.github/workflows/sellwave-web-mac.yml), porque o electron-builder so empacota
+// Mac num Mac. Sem conta de desenvolvedor da Apple o app e assinado "ad-hoc": o Mac pede um
+// "Abrir mesmo assim" na primeira vez e NAO se atualiza sozinho (ver ligaAtualizador).
+const NO_MAC = process.platform === 'darwin'
 
 // ─── A MIDIA DA PREVIA (16/10/2026) ──────────────────────────────────────────────────────────
 //
@@ -47,8 +54,12 @@ const fs = require('node:fs')
 // "Chrome/" derruba. A saida e um UA de Chrome puro, montado da versao real do Chromium embarcado
 // (assim ele envelhece sozinho junto com o Electron).
 // Conferido: vale no documento, nos subrecursos E no handshake do wss://web.whatsapp.com/ws/chat.
+// NO MAC O UA DIZ MAC (04/11/2026). A pagina tambem le a plataforma por outros caminhos
+// (navigator.platform, as dicas de cliente do Chromium), e um "Windows" no UA de quem roda num Mac e
+// justamente a incoerencia que denuncia navegador montado. "Intel Mac OS X 10_15_7" e o que o
+// Chrome de verdade manda em QUALQUER Mac, inclusive nos de chip Apple.
 const UA_LIMPO =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Mozilla/5.0 (' + (NO_MAC ? 'Macintosh; Intel Mac OS X 10_15_7' : 'Windows NT 10.0; Win64; x64') + ') AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/' + process.versions.chrome + ' Safari/537.36'
 app.userAgentFallback = UA_LIMPO
 
@@ -694,7 +705,19 @@ function preparaSessao(nk) {
     // liberar camera numa tela que fica aberta o dia inteiro e risco sem contrapartida.
     const tipos = (detalhes && detalhes.mediaTypes) || []
     const soAudio = permissao !== 'media' || !tipos.includes('video')
-    callback(!!daCasa && PERMISSOES_OK.has(permissao) && soAudio)
+    const libera = !!daCasa && PERMISSOES_OK.has(permissao) && soAudio
+    // NO MAC O MICROFONE TAMBEM PASSA PELO SISTEMA: sem a licenca do macOS (Ajustes > Privacidade >
+    // Microfone) o Chromium recebe silencio e o audio sai mudo, sem erro nenhum. Pedir aqui faz o Mac
+    // perguntar uma vez, na primeira gravacao, com o texto do NSMicrophoneUsageDescription.
+    if (NO_MAC && libera && permissao === 'media') {
+      let st = ''
+      try { st = systemPreferences.getMediaAccessStatus('microphone') } catch (_) { st = '' }
+      if (st !== 'granted') {
+        systemPreferences.askForMediaAccess('microphone').then((ok) => callback(!!ok)).catch(() => callback(false))
+        return
+      }
+    }
+    callback(libera)
   })
   ses.setPermissionCheckHandler((_wc, permissao, origem) => {
     return String(origem || '').startsWith(WA_ORIGEM) && PERMISSOES_OK.has(permissao)
@@ -1910,6 +1933,12 @@ let atualizadorFalhouEm = 0
 let atualizacaoBaixada = ''
 function ligaAtualizador() {
   if (!app.isPackaged || EH_TESTE || DADOS_A_PARTE) return
+  // NO MAC NAO TEM ATUALIZACAO SOZINHA (04/11/2026). O electron-updater no Mac instala pelo
+  // Squirrel.Mac, que so aceita a versao nova se ela tiver a MESMA assinatura de desenvolvedor da
+  // Apple da instalada; o nosso app e assinado ad-hoc, entao toda tentativa morreria com erro de
+  // assinatura. Sem o atualizador, o `atualizaSozinho()` da falso e o Mac cai no aviso de sempre
+  // (pop-up na entrada, faixa depois) com o link do .dmg, que e o feed de Mac (ver confereVersao).
+  if (NO_MAC) return
   try { atualizador = require('electron-updater').autoUpdater } catch (e) { anota('[atualiza] sem o modulo: ' + ((e && e.message) || e)); return }
   atualizador.autoDownload = true
   atualizador.autoInstallOnAppQuit = true
@@ -1937,7 +1966,10 @@ const atualizaSozinho = () => !!atualizador && (Date.now() - atualizadorFalhouEm
 
 async function confereVersao() {
   try {
-    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/versao',
+    // O MAC TEM FEED PROPRIO: o pacote dele sai de outro lugar (runner do GitHub) e pode ficar atras
+    // do de Windows. Ler a versao do Windows faria o Mac pedir pra baixar uma versao que nao existe
+    // pra ele, toda vez que abrisse.
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/versao' + (NO_MAC ? '?so=mac' : ''),
       { signal: AbortSignal.timeout(15000) })
     if (!r.ok) return
     ajustaRelogio(r)
@@ -2279,7 +2311,19 @@ function leFila() {
   } catch (_) { /* primeiro uso */ }
 }
 setInterval(gravaFila, 10000)
-app.on('before-quit', () => {
+// NO MAC, Cmd+Q (e "Sair" no Dock, e desligar o Mac) CHEGA NO before-quit PRIMEIRO, antes do X da
+// janela. No Windows a saida sempre comeca pelo X, que segura a janela e sobe as sessoes pra nuvem
+// antes de soltar os alugueis. Se o Mac seguisse direto, o before-quit soltaria os alugueis ANTES da
+// subida, e a nuvem recusa gravar de quem nao esta com o numero: a proxima maquina abriria a copia
+// velha. Entao o Cmd+Q vira o mesmo X, e o X chama app.quit() de novo quando terminar.
+function macSaiPelaJanela(e) {
+  if (!NO_MAC || saindoDeVez || EH_TESTE || !janela || janela.isDestroyed() || !config.token || !(abertos.size || despedidas.size)) return false
+  e.preventDefault()
+  try { janela.close() } catch (_) { /* ok */ }
+  return true
+}
+app.on('before-quit', (e) => {
+  if (macSaiPelaJanela(e)) return
   // FECHAR O APP E ACAO DE GENTE, pra TODO numero aberto. Sem isto, sair do programa no fim do
   // expediente geraria um alarme de queda por numero aberto, e alarme falso diario mata a
   // credibilidade do aviso em uma semana.
@@ -4538,7 +4582,7 @@ ipcMain.handle('sw:uso-forcar', async (_e, { nk }) => {
 })
 
 ipcMain.handle('sw:abrirInstalador', () => {
-  const url = urlInstalador || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/instalador')
+  const url = urlInstalador || (String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/instalador' + (NO_MAC ? '-mac' : ''))
   try { shell.openExternal(url) } catch (_) { /* ok */ }
   return { ok: true }
 })
@@ -4557,6 +4601,44 @@ app.whenReady().then(() => {
   // O AVISO DO WINDOWS (o lembrete de retorno do cobrador, 31/10/2026) so aparece com a identidade do
   // app igual a do atalho que o instalador cria, que e o appId do package.json.
   try { if (process.platform === 'win32') app.setAppUserModelId('br.com.sellwave.web') } catch (_) { /* sem ela o aviso so nao aparece */ }
+  if (NO_MAC) {
+    // O MENU DO MAC (04/11/2026). Sem menu de Editar, Cmd+C e Cmd+V NAO funcionam em app Electron no
+    // Mac: e o menu que da os atalhos. O padrao do Electron resolve isso mas traz o Cmd+W "fechar
+    // janela" (que aqui fecharia o app inteiro, quando no app o Cmd+W fecha o numero ativo), o
+    // recarregar e o zoom. Este tem so o que o cobrador usa.
+    try {
+      Menu.setApplicationMenu(Menu.buildFromTemplate([
+        { label: app.name, submenu: [
+          { role: 'about', label: 'Sobre o SellWave Web' },
+          { type: 'separator' },
+          { role: 'hide', label: 'Ocultar o SellWave Web' },
+          { role: 'hideOthers', label: 'Ocultar os outros' },
+          { role: 'unhide', label: 'Mostrar tudo' },
+          { type: 'separator' },
+          { role: 'quit', label: 'Sair do SellWave Web' },
+        ] },
+        { label: 'Editar', submenu: [
+          { role: 'undo', label: 'Desfazer' },
+          { role: 'redo', label: 'Refazer' },
+          { type: 'separator' },
+          { role: 'cut', label: 'Recortar' },
+          { role: 'copy', label: 'Copiar' },
+          { role: 'paste', label: 'Colar' },
+          { role: 'selectAll', label: 'Selecionar tudo' },
+        ] },
+        { label: 'Janela', submenu: [
+          { role: 'minimize', label: 'Minimizar' },
+          { role: 'zoom', label: 'Ampliar janela' },
+          { type: 'separator' },
+          { role: 'front', label: 'Trazer tudo para a frente' },
+        ] },
+      ]))
+    } catch (_) { /* sem menu proprio fica o padrao do Electron */ }
+    // O MAC COCHILA APP ESCONDIDO ("App Nap"): janela atras de outra ou minimizada passa a ter os
+    // relogios esticados pelo sistema, e e com relogio que a captura, a renovacao do aluguel (45 s) e
+    // a varredura das nao lidas andam. Este pedido tira o app do cochilo; a tela ainda apaga normal.
+    try { powerSaveBlocker.start('prevent-app-suspension') } catch (_) { /* ok */ }
+  }
   // Antes de qualquer sessao subir: e o unico momento em que nenhuma particao esta presa.
   try { limpaParticoesVelhas() } catch (e) { anota('[nuvem] limpeza das particoes velhas falhou: ' + ((e && e.message) || e)) }
 
@@ -4789,7 +4871,14 @@ app.whenReady().then(() => {
   }
 })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+// FECHOU A JANELA, SAIU DO APP, no Mac tambem (04/11/2026). O padrao do Mac e o app ficar vivo no
+// Dock sem janela; aqui isso seria o cobrador achar que fechou e o app seguir com os alugueis e os
+// interruptores ligados. Fechar e fim de expediente nos dois sistemas.
+app.on('window-all-closed', () => app.quit())
+// Clicou no icone do Dock com a janela minimizada ou escondida (Cmd+H): ela volta pra frente.
+app.on('activate', () => {
+  try { if (janela && !janela.isDestroyed()) { if (janela.isMinimized()) janela.restore(); janela.show(); janela.focus() } } catch (_) { /* ok */ }
+})
 
 process.on('uncaughtException', (e) => {
   console.error('[sellwave-web] erro nao tratado:', e)

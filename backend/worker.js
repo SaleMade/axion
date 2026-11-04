@@ -13028,6 +13028,9 @@ const SWWEB_BANCO = 'swweb_proxy_banco';
 // Contingencia > Proxies, do lado do seletor que resolve melhor (escolher outra proxy).
 const SWWEB_EXCECOES = 'swweb_excecoes';
 const SWWEB_APP = 'swweb_app';          // { versao, bytes, publicada_em, notas } - o build que esta no R2
+// O MESMO, DO PACOTE DE MAC (04/11/2026). Feed separado porque o .dmg sai do runner macOS do GitHub
+// e pode ficar atras do .exe: o Mac lendo a versao do Windows pediria pra baixar o que nao existe pra ele.
+const SWWEB_APP_MAC = 'swweb_app_mac';
 // OS CELULARES DO LDPLAYER (a central de celulares do PC do Bruno): { "<numkey>": { px_id, aplicado_em } }.
 // Quem grava e o proxy.mjs do "Sale base de Numeros/ldplayer", ao aplicar a proxy no celular, e o excluir
 // tira a entrada do numero. NOME CRU DE PROPOSITO, sem _cfgNome: o painel grava assim, e a central so existe
@@ -13856,7 +13859,9 @@ async function handleSwWeb(req, env, path) {
   // sempre e ninguem descobre - que e exatamente o que deu o banimento da dash de teste: codigo
   // velho na tela de quem achava que era o atual.
   if (req.method === 'GET' && path === '/api/swweb/versao') {
-    const txt = await _readConfig(env, SWWEB_APP);
+    // ?so=mac: o app de Mac (e o botao de Mac da tela) le o feed dele.
+    const mac = new URL(req.url).searchParams.get('so') === 'mac';
+    const txt = await _readConfig(env, mac ? SWWEB_APP_MAC : SWWEB_APP);
     const d = _swwebLerJson(txt, {});
     const origem = new URL(req.url).origin;
     // PELO `json()`, NAO POR UM Response NA MAO. Esta rota montava a resposta sozinha e, com ela,
@@ -13871,7 +13876,24 @@ async function handleSwWeb(req, env, path) {
       bytes: Number(d.bytes) || 0,
       publicada_em: Number(d.publicada_em) || 0,
       notas: String(d.notas || ''),
-      url: origem + '/api/swweb/instalador',
+      url: origem + '/api/swweb/instalador' + (mac ? '-mac' : ''),
+    });
+  }
+
+  // O INSTALADOR DE MAC (04/11/2026): o .dmg que o runner macOS do GitHub empacota. Publico pelo
+  // mesmo motivo do de Windows (`<a href>` nao manda o token). ?versao=cobrador e ignorado como la:
+  // o app ve o cargo no login.
+  if (req.method === 'GET' && path === '/api/swweb/instalador-mac') {
+    if (!env.MEDIA) return err('Armazenamento nao configurado', 503);
+    const obj = await env.MEDIA.get('sellwave-web/instalador-mac.dmg');
+    if (!obj) return err('A versao de Mac ainda nao foi publicada.', 404);
+    return new Response(obj.body, {
+      headers: {
+        'content-type': 'application/x-apple-diskimage',
+        'content-length': String(obj.size),
+        'content-disposition': 'attachment; filename="SellWave Web.dmg"',
+        'cache-control': 'public, max-age=300',
+      },
     });
   }
 
@@ -15513,8 +15535,10 @@ async function handleSwWeb(req, env, path) {
       publicada_em: Math.floor(Date.now() / 1000),
       notas: String((b && b.notas) || '').slice(0, 400),
     };
-    await _writeConfig(env, SWWEB_APP, JSON.stringify(novo));
-    return json({ ok: true, app: novo });
+    // so:'mac' carimba o feed do Mac (o .dmg); sem ele, o de Windows, como sempre foi.
+    const mac = String((b && b.so) || '') === 'mac';
+    await _writeConfig(env, mac ? SWWEB_APP_MAC : SWWEB_APP, JSON.stringify(novo));
+    return json({ ok: true, app: novo, so: mac ? 'mac' : 'win' });
   }
 
   // POST /api/swweb/config — a rota CONTINUA, e RECUSA desligar.

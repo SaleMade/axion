@@ -1,6 +1,6 @@
 {
   "name": "sellwave-web",
-  "version": "1.26.3",
+  "version": "1.26.4",
   "description": "Navegador multi-sessao de WhatsApp Web da SellWave",
   "main": "src/main.js",
   "private": true,
@@ -11,6 +11,8 @@
     "confere-pacote": "node src/confere-pacote.cjs dist-pub/win-unpacked/resources/app.asar",
     "dev": "electron . --dev",
     "build": "electron-builder --win --x64",
+    "build-mac": "electron-builder --mac --publish never",
+    "icone-mac": "node --check src/icone-mac.js && electron src/icone-mac.js",
     "teste-midia": "node --check src/teste-midia.js && electron src/teste-midia.js",
     "teste-cep": "node --check src/teste-cep.js && electron src/teste-cep.js",
     "icone": "node --check src/icone.js && electron src/icone.js",
@@ -45,6 +47,28 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "shortcutName": "SellWave Web"
+    },
+    "mac": {
+      "icon": "build/icon-mac.png",
+      "category": "public.app-category.business",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "O SellWave Web usa o microfone para gravar audio e fazer ligacoes no WhatsApp."
+      }
+    },
+    "dmg": {
+      "title": "SellWave Web",
+      "artifactName": "SellWave-Web-${version}-mac.${ext}"
     },
     "publish": [
       {

@@ -1,0 +1,96 @@
+# A VERSAO DE MAC DO SELLWAVE WEB (04/11/2026, pedido do Bruno: o cobrador usa MacBook).
+#
+# O electron-builder so empacota app de Mac NUM Mac, e a operacao nao tem um. Este workflow roda no
+# Mac emprestado do GitHub (gratis em repositorio publico), testa o app empacotado la mesmo e entrega
+# o .dmg como artefato. Quem publica e a conversa, do PC do Bruno: baixa o artefato, sobe pro R2 e
+# carimba a versao (PLANO.md secao 11, passo de Mac). Nenhum token da Cloudflare mora aqui.
+#
+# Sem conta de desenvolvedor da Apple o app sai assinado "ad-hoc" (identity "-" no package.json):
+# abre no Mac depois de um "Abrir mesmo assim" em Ajustes > Privacidade e Seguranca, e nao se
+# atualiza sozinho (o Squirrel.Mac exige assinatura da Apple). Ver NO_MAC no src/main.js.
+#
+# Disparo: Actions > SellWave Web Mac > Run workflow, ou POST .../actions/workflows/sellwave-web-mac.yml/dispatches.
+name: SellWave Web Mac
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: sellwave-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sellwave-web/package-lock.json
+
+      - name: Instala
+        run: npm ci
+
+      - name: Contas que decidem dinheiro e ban (Node puro)
+        run: npm run teste
+
+      - name: Empacota (universal, Intel + chip Apple)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac --publish never
+
+      - name: Confere o pacote
+        run: |
+          APP="dist/mac-universal/SellWave Web.app"
+          ls -la dist
+          echo "--- arquiteturas"
+          lipo -archs "$APP/Contents/MacOS/SellWave Web"
+          echo "--- assinatura"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | head -20
+          echo "--- Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist" || true
+          echo "--- o asar e o mesmo codigo do repositorio"
+          node src/confere-pacote.cjs "$APP/Contents/Resources/app.asar"
+          shasum -a 256 "$APP/Contents/Resources/app.asar" | tee asar-mac.sha256
+
+      - name: Autoteste no app EMPACOTADO (chip Apple)
+        run: |
+          set -o pipefail
+          SW_SMOKE=1 SW_SMOKE_WA=1 "dist/mac-universal/SellWave Web.app/Contents/MacOS/SellWave Web" 2>&1 | tee smoke-mac-arm64.log
+
+      - name: Autoteste no app EMPACOTADO (Intel, pelo Rosetta)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          SW_SMOKE=1 SW_SMOKE_WA=1 arch -x86_64 "dist/mac-universal/SellWave Web.app/Contents/MacOS/SellWave Web" 2>&1 | tee smoke-mac-x64.log
+
+      - name: Fotos das telas no Mac
+        continue-on-error: true
+        run: |
+          mkdir -p fotos-mac
+          SW_FOTO=1 "dist/mac-universal/SellWave Web.app/Contents/MacOS/SellWave Web" 2>&1 | tail -20 || true
+          cp -R "$HOME/Library/Application Support/sellwave-web-teste/fotos/." fotos-mac/ 2>/dev/null || true
+          npx electron src/foto-cobranca.js "$PWD/fotos-mac" 2>&1 | tail -10 || true
+          ls -la fotos-mac
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sellwave-web-mac
+          retention-days: 7
+          path: |
+            sellwave-web/dist/*.dmg
+            sellwave-web/asar-mac.sha256
+            sellwave-web/smoke-mac-*.log
+            sellwave-web/fotos-mac/

@@ -92,6 +92,10 @@ async function rodar(ctx) {
   conta('o userAgent nao tem o nome do app', !/Sellwave/i.test(ua))
   const mChrome = ua.match(/Chrome\/(\d+)/)
   conta('o userAgent declara Chrome 100 ou mais', !!mChrome && Number(mChrome[1]) >= 100, mChrome ? ('Chrome/' + mChrome[1]) : 'sem Chrome no UA')
+  // O SISTEMA DO UA E O DA MAQUINA (04/11/2026, versao de Mac): "Windows" no UA de quem roda num Mac
+  // e a incoerencia que denuncia navegador montado (a pagina tambem le navigator.platform).
+  const soDoUa = /Macintosh/.test(ua) ? 'darwin' : /Windows/.test(ua) ? 'win32' : '?'
+  conta('o userAgent diz o sistema desta maquina', soDoUa === process.platform, soDoUa + ' no UA, ' + process.platform + ' na maquina')
 
   // 2) Sessao padrao no buraco negro: qualquer esquecimento FALHA em vez de vazar o IP real.
   const padraoProxy = await session.defaultSession.resolveProxy('https://example.com')
