@@ -58,6 +58,10 @@ args = [a for a in sys.argv[1:]]
 notas = ''
 if '--notas' in args:
     i = args.index('--notas'); notas = args[i + 1]; del args[i:i + 2]
+# --zip <arquivo>: o artefato daquele build ja baixado (sao ~230 MB; baixar de novo leva minutos)
+zip_local = ''
+if '--zip' in args:
+    i = args.index('--zip'); zip_local = args[i + 1]; del args[i:i + 2]
 head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=AQUI, capture_output=True, text=True).stdout.strip()
 
 if args:
@@ -96,8 +100,13 @@ arts = gh('/repos/%s/actions/runs/%d/artifacts' % (REPO, run_id))['artifacts']
 art = [a for a in arts if a['name'] == 'sellwave-web-mac']
 if not art:
     raise SystemExit('PAREI: o build nao tem o artefato sellwave-web-mac')
-zbytes = gh('/repos/%s/actions/artifacts/%d/zip' % (REPO, art[0]['id']), cru=True)
-z = zipfile.ZipFile(io.BytesIO(zbytes))
+if zip_local:
+    # o tamanho tem que bater com o artefato DESTE build: zip de outro build nao passa
+    if os.path.getsize(zip_local) != art[0]['size_in_bytes']:
+        raise SystemExit('PAREI: o --zip tem %d bytes e o artefato do build %d tem %d' % (os.path.getsize(zip_local), run_id, art[0]['size_in_bytes']))
+    z = zipfile.ZipFile(zip_local)
+else:
+    z = zipfile.ZipFile(io.BytesIO(gh('/repos/%s/actions/artifacts/%d/zip' % (REPO, art[0]['id']), cru=True)))
 dmgs = [n for n in z.namelist() if n.endswith('.dmg')]
 if len(dmgs) != 1:
     raise SystemExit('PAREI: esperava 1 .dmg no artefato e veio ' + str(dmgs))
@@ -132,6 +141,7 @@ try:
 finally:
     d1("DELETE FROM sessions WHERE token='%s'" % tok)
     print('sessao temporaria apagada:', d1("SELECT COUNT(*) n FROM sessions WHERE token='%s'" % tok))
-with urllib.request.urlopen(API + '/api/swweb/versao?so=mac&v=' + secrets.token_hex(4), timeout=30) as resp:
+# Com User-Agent: o Cloudflare recusa (403) o "Python-urllib" puro.
+with urllib.request.urlopen(urllib.request.Request(API + '/api/swweb/versao?so=mac&v=' + secrets.token_hex(4), headers={'User-Agent': 'publica-mac'}), timeout=30) as resp:
     print('feed de Mac:', resp.read().decode())
 os.remove(arq)
