@@ -12294,10 +12294,10 @@ const _BOT_COL_ALIAS = {
   'Pago': 'Pagos', 'Frustrado': 'Frustrados', 'Devolvido': 'Devolvido com Reverso', 'Cancelado': 'Cancelado sem Custo',
 };
 const _botColDe = (l) => { const c = String((l && l.col) || ''); return _BOT_COL_ALIAS[c] || c; };
-const _COB_FILA = ['Entregues', 'Retirar nos Correios'];                       // COLS_COBRANCA
-const _COB_NA_RUA = ['Preparando', 'Enviados', 'Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
-const _COB_EM_ABERTO = ['Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
-const _COB_PERDA = ['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado', 'Cancelado sem Custo'];
+const _BOT_COB_FILA = ['Entregues', 'Retirar nos Correios'];                       // COLS_COBRANCA
+const _BOT_COB_NA_RUA = ['Preparando', 'Enviados', 'Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
+const _BOT_COB_EM_ABERTO = ['Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
+const _BOT_COB_PERDA = ['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado', 'Cancelado sem Custo'];
 const _botTotalPago = (l) => {
   const reg = (Array.isArray(l && l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
   if (reg > 0) return reg;
@@ -12307,9 +12307,9 @@ const _botSaldoCob = (l) => Math.max(0, _botValorLead(l) - _botTotalPago(l));
 // A taxa vem SEMPRE congelada no pedido (lead.cob_pct): pedido pago antes de 01/11/2026 nao tem e
 // rende zero, e e assim que o mes fechado nao anda sozinho quando a taxa muda.
 const _botComissaoCob = (l) => _botTotalPago(l) * (Number(l && l.cob_pct) || 0) / 100;
-const _botAbertoCob = (l) => !_botPago(l) && !_COB_PERDA.includes(_botColDe(l));
+const _botAbertoCob = (l) => !_botPago(l) && !_BOT_COB_PERDA.includes(_botColDe(l));
 const _botAtrasadoCob = (l, agora) => {
-  if (!l || _botPago(l) || !_COB_EM_ABERTO.includes(_botColDe(l))) return false;
+  if (!l || _botPago(l) || !_BOT_COB_EM_ABERTO.includes(_botColDe(l))) return false;
   const t = l.agend ? Date.parse(l.agend) : NaN;
   return !isNaN(t) && t < agora;
 };
@@ -12344,12 +12344,12 @@ async function _botDadosCob(env, dia, cfg, tipo, fresco) {
     const c = por[String(l.cob || '')] || null;        // sem dono ainda: conta so no geral
     const col = _botColDe(l);
     const pago = _botPago(l);
-    if (!pago && _COB_FILA.includes(col)) {
+    if (!pago && _BOT_COB_FILA.includes(col)) {
       const s = _botSaldoCob(l);
       geral.em_cobranca++; geral.em_cobranca_vl += s;
       if (c) { c.em_cobranca++; c.em_cobranca_vl += s; }
     }
-    if (_botAbertoCob(l) && _COB_NA_RUA.includes(col)) {
+    if (_botAbertoCob(l) && _BOT_COB_NA_RUA.includes(col)) {
       const s = _botSaldoCob(l);
       geral.a_receber += s;
       if (c) c.a_receber += s;
@@ -12514,7 +12514,7 @@ async function _botUltimoRecebido(env, dia) {
   let ultima = 0, pedidos = 0, valor = 0, fila = 0;
   for (const l of leads) {
     if (!l || l.afl) continue;
-    if (!_botPago(l)) { if (_COB_FILA.includes(_botColDe(l))) fila++; continue; }
+    if (!_botPago(l)) { if (_BOT_COB_FILA.includes(_botColDe(l))) fila++; continue; }
     const t = _botPagoMs(l);
     if (!t || t < ini || t >= fim) continue;
     pedidos++; valor += _botTotalPago(l);
