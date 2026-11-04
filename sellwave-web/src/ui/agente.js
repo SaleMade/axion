@@ -439,6 +439,21 @@
     if (ks.length > 500) { for (var i = 0; i < ks.length - 300; i++) delete fimDoItem[ks[i]] }
   }
 
+  // O LINK DE ENTREGA LEVA O TELEFONE DO CLIENTE (04/11/2026). A mensagem de agradecimento do
+  // vendedor tem "https://sellwave.com.br/entrega"; aqui, na hora de mandar, ele vira
+  // ".../entrega/<telefone em base 36>". Quando o cliente clica, o servidor acha o pedido dele e
+  // abre o WhatsApp do cobrador DONO daquele pedido (a regra de distribuicao da dash). Sem o
+  // telefone (conversa so por LID) o link vai como esta e o servidor usa a regra geral.
+  function linkDeEntrega(texto, chatId) {
+    var t = String(texto || '')
+    if (t.indexOf('sellwave.com.br/entrega') < 0) return t
+    var tel = telefoneDaConversa(chatId)
+    var d = (tel && !tel.isLid) ? String(tel.digits || '').replace(/\D/g, '') : ''
+    if (d.length < 10 || d.length > 13) return t
+    return t.replace(/https:\/\/sellwave\.com\.br\/entrega(?![\/\w])/g, 'https://sellwave.com.br/entrega/' + Number(d).toString(36))
+  }
+  window.__swLinkDeEntrega = linkDeEntrega   // so pros testes
+
   // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
   window.__swManda = function (chatId, item) {
     var W = window.WPP
@@ -476,7 +491,7 @@
         return esperaOuPara(pausaMs)
           .then(function (parou) {
             if (parou) return false
-            return comPrazo(W.chat.sendTextMessage(chatId, item.texto || ''), 60000, 'texto').then(function () { return true })
+            return comPrazo(W.chat.sendTextMessage(chatId, linkDeEntrega(item.texto || '', chatId)), 60000, 'texto').then(function () { return true })
           })
       }
       return Promise.resolve().then(function () {

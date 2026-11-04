@@ -776,6 +776,25 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('tags: o nome da tag sai escapado', !/<img/.test(C.fichaHtml({ ...pedido, tags: [] }, { tags: [{ id: 'x', nome: '<img src=x>', cor: '#000' }] })))
 }
 
+// ── O LINK DE ENTREGA (04/11/2026): a mensagem do vendedor leva "sellwave.com.br/entrega" e o
+//    agente completa com o telefone do cliente, pro servidor abrir o WhatsApp do cobrador DONO do
+//    pedido. A funcao DE VERDADE, tirada do fonte.
+{
+  const fonte = leia('ui/agente.js')
+  const pedaco = fonte.slice(fonte.indexOf('function linkDeEntrega'), fonte.indexOf('window.__swLinkDeEntrega'))
+  const mk = (tel) => new Function('telefoneDaConversa', pedaco + '; return linkDeEntrega')(() => tel)
+  const msg = 'Segue o contato do rapaz que vai acompanhar sua entrega:\n\nhttps://sellwave.com.br/entrega'
+  const f = mk({ digits: '5511999998888', isLid: false })
+  const out = f(msg, '5511999998888@c.us')
+  vale('entrega: o link ganha o telefone do cliente em base 36', out.endsWith('https://sellwave.com.br/entrega/' + Number('5511999998888').toString(36)), out.slice(-40))
+  vale('entrega: o codigo volta pro telefone certo', parseInt(out.split('/entrega/')[1], 36) === 5511999998888)
+  vale('entrega: o resto da mensagem nao muda', out.startsWith('Segue o contato do rapaz que vai acompanhar sua entrega:\n\n'))
+  vale('entrega: conversa por LID manda o link como esta', mk({ digits: '123456789012345', isLid: true })(msg, 'x@lid') === msg)
+  vale('entrega: mensagem sem o link nao muda', f('Oi, tudo bem?', 'x') === 'Oi, tudo bem?')
+  vale('entrega: link que ja tem codigo nao ganha outro', f('https://sellwave.com.br/entrega/abc123', 'x') === 'https://sellwave.com.br/entrega/abc123')
+  vale('entrega: o agente usa a funcao no envio de texto', /sendTextMessage\(chatId, linkDeEntrega\(item\.texto/.test(fonte))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

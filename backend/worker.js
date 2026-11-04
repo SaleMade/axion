@@ -32899,11 +32899,167 @@ async function _cobradoresDaCasa(env) {
   } catch (_) { return []; }   // banco sem a coluna (dash do amigo): sem cobrador, nada a distribuir
 }
 
+// ══ A REGRA DE DISTRIBUICAO DA COBRANCA (04/11/2026) ══════════════════════════════════════════
+// Pedido do Bruno ao contratar o segundo cobrador (Bryan): controlar pra quem vai cada pedido novo
+// ("todos os leads do Guilherme pro cobrador 1, todos do Kevin pro cobrador 2") e, agora, mandar
+// TODOS os novos pro Bryan enquanto o Haynan termina os que ja tem.
+//
+// UMA REGRA SO, LIDA POR DOIS LUGARES: a varredura abaixo (quem fica com o pedido) e o link de
+// entrega que o vendedor manda pro cliente (/entrega, mais abaixo). Era o furo de antes: o pedido
+// novo ia pro Bryan, o link da mensagem do vendedor era o numero fixo do Haynan, o cliente escrevia
+// pra ele e a regra "o pedido e de quem o cliente chamou" devolvia o pedido pro Haynan. Com os dois
+// lendo daqui, o cliente sempre cai no WhatsApp de quem e dono do pedido.
+//
+// Mora no app_config, nao no estado: chave nova de topo no estado e apagada por outra tela (ver a
+// memoria chave-nova-no-blob-some). Sem regra salva vale a de antes ('menos').
+//   menos    = pra quem tem menos pedido em aberto (o comportamento ate 03/11)
+//   fixo     = todos os novos pra `alvo`
+//   vendedor = `porVend[vendedor]`; vendedor sem cobrador escolhido vai pro `alvo`, ou divide igual
+//   igual    = um pra cada: quem recebeu MENOS pedidos desde que a regra foi salva (`desde`)
+// So decide pedido NOVO (sem dono). O que ja tem cobrador fica com ele.
+const COB_REGRA_KEY = 'cob_regra';
+const _COB_MODOS = ['menos', 'fixo', 'vendedor', 'igual'];
+async function _cobRegra(env) {
+  try {
+    const v = await _readConfig(env, COB_REGRA_KEY);
+    const r = v ? JSON.parse(v) : null;
+    if (r && _COB_MODOS.includes(r.modo)) return r;
+  } catch (_) { /* regra ilegivel vale como sem regra */ }
+  return { modo: 'menos' };
+}
+// O cobrador de UM pedido novo. `ids` = cobradores ativos em ordem estavel (o empate cai sempre no
+// mesmo); `carga` = pedidos em aberto de cada um; `novos` = recebidos desde `regra.desde`.
+function _cobEscolhe(regra, l, ids, carga, novos) {
+  if (!ids.length) return '';
+  const ok = (id) => !!id && ids.includes(String(id));
+  const menor = (m) => { let a = ids[0]; for (const i of ids) if ((m.get(i) || 0) < (m.get(a) || 0)) a = i; return a; };
+  const r = regra || {};
+  if (r.modo === 'fixo' && ok(r.alvo)) return String(r.alvo);
+  if (r.modo === 'vendedor') {
+    const v = r.porVend && r.porVend[String((l && l.at) || '')];
+    if (ok(v)) return String(v);
+    return ok(r.alvo) ? String(r.alvo) : menor(novos);
+  }
+  if (r.modo === 'igual') return menor(novos);
+  return menor(carga);
+}
+// As duas contagens que a regra usa, num passe so pelos pedidos da casa.
+function _cobContagens(leads, ids, regra) {
+  const carga = new Map(ids.map((i) => [i, 0])), novos = new Map(ids.map((i) => [i, 0]));
+  const desde = Number(regra && regra.desde) || 0;
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l || l.afl) continue;
+    const dono = String(l.cob || '');
+    if (!carga.has(dono)) continue;
+    if (_cobEmAberto(l)) carga.set(dono, carga.get(dono) + 1);
+    if (_cobCriadoTs(l) >= desde) novos.set(dono, novos.get(dono) + 1);
+  }
+  return { carga, novos };
+}
+
+// GET/POST /api/cob/regra - a tela Cobranca > Cobradores. Le quem e diretor ou cobrador; grava so
+// diretor (e regra da operacao, nao preferencia de ninguem).
+async function handleCobRegra(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const dir = isDirector(u);
+  if (!dir && !_ehCobrador(u)) return err('Sem permissão', 403);
+  const cobs = await _cobradoresDaCasa(env);
+  const ids = cobs.map((c) => String(c.id));
+  if (req.method === 'POST') {
+    if (!dir) return err('Só a direção muda a distribuição', 403);
+    const b = await req.json().catch(() => ({}));
+    const modo = String((b && b.modo) || '');
+    if (!_COB_MODOS.includes(modo)) return err('Modo inválido', 400);
+    const alvo = String((b && b.alvo) || '');
+    if (alvo && !ids.includes(alvo)) return err('Esse cobrador não está ativo', 400);
+    if (modo === 'fixo' && !alvo) return err('Escolha o cobrador', 400);
+    const porVend = {};
+    for (const [v, c] of Object.entries((b && typeof b.porVend === 'object' && b.porVend) || {})) {
+      const vv = String(v || '').slice(0, 60), cc = String(c || '');
+      if (!vv || !cc) continue;
+      if (!ids.includes(cc)) return err('Esse cobrador não está ativo', 400);
+      porVend[vv] = cc;
+    }
+    const regra = { modo, alvo, porVend, desde: Date.now(), por: String(u.name || u.id), em: Date.now() };
+    await _writeConfig(env, COB_REGRA_KEY, JSON.stringify(regra));
+    return json({ ok: true, regra });
+  }
+  const regra = await _cobRegra(env);
+  let carga = {};
+  try {
+    const d = await _getDashData(env, 0);
+    const c = _cobContagens(d && d.leads, ids, regra);
+    carga = Object.fromEntries(c.carga);
+  } catch (_) { carga = {}; }
+  return json({ ok: true, regra, cobradores: cobs.map((c) => ({ id: String(c.id) })), carga, link: 'https://sellwave.com.br/entrega' });
+}
+
+// ══ O LINK DE ENTREGA (04/11/2026) ═══════════════════════════════════════════════════════════
+// O vendedor manda "https://sellwave.com.br/entrega" na mensagem de agradecimento; o SellWave Web
+// completa com o telefone do cliente na hora de mandar (/entrega/<telefone em base 36>). Quando o
+// cliente clica, este endereco decide o cobrador e devolve o WhatsApp dele:
+//   1. o cliente ja tem pedido em aberto com cobrador -> esse cobrador (o dono de verdade);
+//   2. tem pedido ainda sem cobrador, ou nem pedido ainda -> a regra acima, com o vendedor do
+//      pedido ou, sem pedido, o vendedor da conversa (resolveAtByPhone);
+//   3. link sem telefone (versao velha do app) -> a regra sem vendedor.
+// O numero e o "Em uso" do cobrador (depois qualquer um ativo dele). Se o numero dele cair e a
+// direcao trocar o chip, o link que o cliente ja recebeu passa a abrir o numero novo.
+// So leitura: quem grava o dono e a varredura, e a conversa no numero do cobrador confirma.
+const ENTREGA_TEXTO = 'Olá! Quero acompanhar o meu pedido.';
+function _entregaFone(codigo) {
+  const c = String(codigo || '').toLowerCase();
+  if (!/^[0-9a-z]{4,12}$/.test(c)) return '';
+  const n = parseInt(c, 36);
+  const d = Number.isSafeInteger(n) ? String(n) : '';
+  return d.length >= 10 && d.length <= 13 ? d : '';
+}
+function _cobNumeroDe(chips, quem) {
+  const meus = (Array.isArray(chips) ? chips : []).filter((c) => c && String(c.at || '') === String(quem || '') && String(c.st || 'ativo') === 'ativo' && _cobDig(c.num).length >= 10);
+  const c = meus.find((x) => x.em_uso) || meus[0];
+  if (!c) return '';
+  const d = _cobDig(c.num);
+  return d.length <= 11 ? '55' + d : d;
+}
+async function handleEntregaLink(req, env, codigo) {
+  const fone = _entregaFone(codigo);
+  const cobs = await _cobradoresDaCasa(env);
+  const ids = cobs.map((c) => String(c.id));
+  let data = {};
+  try { data = (await _getDashData(env, 0)) || {}; } catch (_) { data = {}; }
+  const regra = await _cobRegra(env);
+  const { carga, novos } = _cobContagens(data.leads, ids, regra);
+  let quem = '', porque = 'regra';
+  if (ids.length) {
+    let lead = null;
+    if (fone) {
+      const k8 = fone.slice(-8);
+      for (const l of (Array.isArray(data.leads) ? data.leads : [])) {
+        if (!l || l.afl || !_cobEmAberto(l) || _cobDig(l.wa).slice(-8) !== k8) continue;
+        if (!lead || _cobCriadoTs(l) > _cobCriadoTs(lead)) lead = l;
+      }
+    }
+    if (lead && ids.includes(String(lead.cob || ''))) { quem = String(lead.cob); porque = 'dono'; }
+    else if (lead) quem = _cobEscolhe(regra, lead, ids, carga, novos);
+    else {
+      const at = fone ? await resolveAtByPhone(env, fone).catch(() => null) : null;
+      quem = _cobEscolhe(regra, { at: at || '' }, ids, carga, novos);
+    }
+  }
+  // O numero de quem a regra escolheu; sem numero ativo dele, o de qualquer outro cobrador.
+  let num = _cobNumeroDe(data.chips, quem);
+  if (!num) for (const i of ids) { num = _cobNumeroDe(data.chips, i); if (num) { porque += '+outro'; break; } }
+  console.log('ENTREGA_LINK ' + (fone ? fone.slice(-4) : '-') + ' -> ' + (quem || '-') + ' (' + porque + ')');
+  if (!num) return new Response('Este link de entrega está sem atendente no momento. Fale com quem te atendeu na compra.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+  return new Response(null, { status: 302, headers: { Location: 'https://wa.me/' + num + '?text=' + encodeURIComponent(ENTREGA_TEXTO), 'cache-control': 'no-store' } });
+}
+
 async function _cronCobrador(env) {
   const cobs = await _cobradoresDaCasa(env);
   if (!cobs.length) return;   // sem cobrador cadastrado nao ha o que dividir
   const ids = cobs.map((c) => String(c.id));
   const pctDe = new Map(cobs.map((c) => [String(c.id), Number(c.com_pct) || 0]));
+  const regra = await _cobRegra(env);   // ver A REGRA DE DISTRIBUICAO DA COBRANCA, logo acima
   let conv = null, donoDoN8 = null;   // ver "O PEDIDO E DE QUEM O CLIENTE CHAMOU" (uma consulta por batida)
 
   for (let tent = 0; tent < 4; tent++) {
@@ -32923,11 +33079,14 @@ async function _cronCobrador(env) {
     }
 
     let mudou = 0;
+    // O PEDIDO NOVO VAI PELA REGRA DA DIRECAO (04/11/2026). Sem regra salva continua o de antes:
+    // pra quem tem menos pedido em aberto (o `carga` acima).
+    const { novos } = _cobContagens(data.leads, ids, regra);
     for (const l of semDono) {
-      let alvo = ids[0];
-      for (const i of ids) if (carga.get(i) < carga.get(alvo)) alvo = i;
+      const alvo = _cobEscolhe(regra, l, ids, carga, novos) || ids[0];
       l.cob = alvo;
       if (_cobEmAberto(l)) carga.set(alvo, carga.get(alvo) + 1);
+      novos.set(alvo, (novos.get(alvo) || 0) + 1);
       mudou++;
     }
 
@@ -33938,6 +34097,10 @@ export default {
       if (req.method === 'POST' && path === '/api/short') return handleShortCreate(req, env);
       const shortMatch = path.match(/^\/(?:r|checkout)\/([A-Za-z0-9_-]+)$/);
       if (req.method === 'GET' && shortMatch) return handleShortRedirect(req, env, shortMatch[1]);
+      // A regra de distribuicao da cobranca e o link de entrega que o vendedor manda (04/11/2026).
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/cob/regra') return handleCobRegra(req, env);
+      const entregaMatch = path.match(/^\/entrega(?:\/([0-9A-Za-z]{1,16}))?\/?$/);
+      if (req.method === 'GET' && entregaMatch) return handleEntregaLink(req, env, entregaMatch[1] || '');
 
       return err('Rota não encontrada', 404);
     } catch (e) {
