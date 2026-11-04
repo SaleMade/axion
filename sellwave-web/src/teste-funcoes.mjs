@@ -801,6 +801,28 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('acompanhar-pedido: conversa por LID manda como esta', mk({ digits: '123456789012345', isLid: true })(msg2, 'x@lid') === msg2)
 }
 
+// ── A BUSCA DO QUADRO DO COBRADOR (04/11/2026) ────────────────────────────────────────────────
+// Audio do Haynan: "a gente bota tudo certinho e ele nao aparece (...) dai tenta puxar o numero
+// dele e tambem nao da". Duas coisas quebravam aqui: telefone era comparado contra a string
+// FORMATADA do pedido, e nome so casava se a pessoa digitasse o pedaco exato.
+{
+  const src = fs.readFileSync(new URL('./ui/cobranca.js', import.meta.url), 'utf8')
+  const ajuda = src.match(new RegExp('const digitos = [^' + String.fromCharCode(92) + 'n]+'))[0]
+    + '\n' + src.match(new RegExp('const semAcento = [^' + String.fromCharCode(92) + 'n]+'))[0]
+  const casa = new Function(ajuda + '\n' + recorta(src, 'function casaBuscaCob(') + '\nreturn casaBuscaCob')()
+  const maria = { nome: 'Maria de Jesus Alves Silva', cidade: 'Fortaleza', uf: 'CE', prod: 'Glico Six', atNome: 'Kevin', wa: '(85) 99281-9003' }
+  const bene = { nome: 'Benedita Goncalves de Souza', cidade: 'Cuiaba', uf: 'MT', prod: 'Glico Six', atNome: 'Guilherme', wa: '(66) 99710-4039' }
+  vale('busca: telefone com a mascara do cadastro casa com os digitos soltos', casa(bene, '997104039') && casa(bene, '99710-4039') && casa(bene, '(66) 99710-4039'))
+  vale('busca: numero completo com DDI casa pelos 8 finais', casa(bene, '5566997104039') && casa(bene, '66 9710-4039'))
+  vale('busca: telefone de outra pessoa nao casa', !casa(maria, '997104039'))
+  vale('busca: dois nomes em qualquer ordem', casa(maria, 'maria silva') && casa(maria, 'silva maria'))
+  vale('busca: acento e caixa nao atrapalham', casa(bene, 'GONCALVES') && casa(maria, 'maria de jesus'))
+  vale('busca: palavra que nao existe derruba', !casa(maria, 'maria pereira'))
+  vale('busca: nome + pedaco do telefone na mesma busca', casa(maria, 'maria 99281'))
+  vale('busca: vazio mostra todo mundo', casa(maria, '') && casa(bene, '   '))
+  vale('busca: letra faltando continua sem achar (nao e por aproximacao)', !casa(bene, 'bendita'))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

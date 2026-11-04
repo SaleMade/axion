@@ -166,16 +166,36 @@
   // Kanban da dash pro cobrador); a busca casa nome, telefone, cidade e produto.
   const digitos = (s) => String(s || '').replace(/\D/g, '')
   const semAcento = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  // A BUSCA DO JEITO QUE A PESSOA PROCURA (04/11/2026, audio do Haynan: "a gente bota tudo certinho
+  // e ele nao aparece (...) dai tenta puxar o numero dele e tambem nao da"). Duas coisas estavam
+  // erradas aqui:
+  //  1. TELEFONE: comparava os digitos do que ele digitou com o `p.wa` CRU, que vem formatado
+  //     ("(66) 99710-4039"). Digitar "997104039" nunca casava, porque a string tem parentese,
+  //     espaco e traco no meio. Agora os dois lados viram so digitos, e o final de 8 tambem casa
+  //     (DDI e o 9o digito deixam de atrapalhar).
+  //  2. DOIS NOMES: era um pedaco de texto so, entao "maria silva" nao achava "Maria de Jesus Alves
+  //     Silva". Agora cada palavra e procurada sozinha e TODAS tem que aparecer.
+  // E a mesma regra da lib/busca-cliente da dash; se mudar de um lado, mude do outro.
+  // Guardada por teste-funcoes.mjs.
+  function casaBuscaCob(p, filtro) {
+    // O `trim` e aqui dentro de proposito: quem chama ja manda cortado, mas uma busca de puro
+    // espaco nao pode esconder a fila inteira.
+    const q = semAcento(String(filtro || '').trim()), qd = digitos(filtro)
+    if (!q) return true
+    const fd = digitos(p && p.wa)
+    const casaFone = (d) => !!fd && (fd.includes(d) || (d.length >= 8 && fd.length >= 8 && fd.slice(-8) === d.slice(-8)))
+    if (qd.length >= 3 && casaFone(qd)) return true
+    const hay = semAcento([p && p.nome, p && p.cidade, p && p.uf, p && p.prod, p && p.atNome].filter(Boolean).join(' '))
+    if (hay.includes(q)) return true
+    const termos = q.split(/\s+/).filter(Boolean)
+    return termos.length > 1 && termos.every((t) => hay.includes(t) || (digitos(t).length >= 3 && casaFone(digitos(t))))
+  }
   function visiveis() {
     let l = dados.pedidos
     // Quem escreveu pra ele aparece mesmo com outro dono: a varredura passa o pedido pra ele em
     // seguida (03/11/2026, "de quem o cliente chamou"), e sumir da tela ate la seria pior.
     if (soMeus && dados.eu) l = l.filter((p) => !p.cob || p.cob === dados.eu || Number(p.contato) > 0)
-    if (filtro) {
-      const q = semAcento(filtro), qd = digitos(filtro)
-      l = l.filter((p) => (qd.length >= 3 && String(p.wa || '').includes(qd))
-        || semAcento(p.nome + ' ' + p.cidade + ' ' + p.uf + ' ' + p.prod + ' ' + p.atNome).includes(q))
-    }
+    if (filtro) l = l.filter((p) => casaBuscaCob(p, filtro))
     return l
   }
 
