@@ -490,6 +490,16 @@ npx wrangler r2 object put "salechat-media/sellwave-web/atualizacao/latest.yml" 
 # Com mais de uma conversa mexendo no app, builde em pasta propria (dist-pub-<n>) e confira o NOME do
 # .exe gerado antes de subir: o build le o package.json da arvore NA HORA.
 
+# 3c) O MAC (desde a 1.26.4, 04/11/2026: o cobrador usa MacBook). O pacote de Mac SO SAI NUM MAC,
+#     entao ele e montado no runner macOS do GitHub (.github/workflows/sellwave-web-mac.yml), que
+#     tambem roda o autoteste no app empacotado. Commite e de push ANTES: o runner builda o main.
+#     Um comando dispara, espera, confere que o build e do mesmo app do git local, sobe o .dmg pro
+#     R2, confere o sha256 do servido e carimba o feed de Mac (swweb_app_mac):
+python publica-mac.py --notas "o que mudou, pro cobrador ler"
+#     O Mac NAO se atualiza sozinho (assinatura ad-hoc, sem conta de desenvolvedor da Apple): quem
+#     tem Mac recebe o aviso de versao nova e baixa de novo. Publicar o Windows sem o Mac deixa o
+#     Mac na versao anterior, sem quebrar nada; publicar os dois do mesmo commit e o certo.
+
 # 4) SE MEXEU NO src/ui/agente.js, PUBLIQUE A CÓPIA SERVIDA TAMBÉM:
 npx wrangler r2 object put "salechat-media/sellwave-web/agente.js" --file "src/ui/agente.js" --content-type "application/javascript; charset=utf-8" --remote
 # confira com query e compare o tamanho com o do disco:
