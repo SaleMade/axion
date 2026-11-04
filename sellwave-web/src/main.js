@@ -381,6 +381,9 @@ async function puxaProxyDaDash(nk) {
 //                                a barra avisando enquanto durar.
 // O argumento e explicito de proposito: quem le a chamada ve a intencao, em vez de ela estar
 // escondida num nulo que significa duas coisas.
+//
+// DEVOLVE SE A REGRA ESTA VALENDO (04/11/2026). Ver confirmaProxy: quem abre o numero so carrega o
+// WhatsApp com `true`.
 async function aplicaProxy(ses, px, particao, direto) {
   if (particao) {
     if (px && px.usuario) credenciais.set(particao, px)
@@ -390,19 +393,41 @@ async function aplicaProxy(ses, px, particao, direto) {
     if (direto) {
       await ses.setProxy({ mode: 'direct' })
       await ses.closeAllConnections()
-      return
+      return confirmaProxy(ses, (r) => /^DIRECT$/i.test(r.trim()))
     }
     // Sem proxy: deixa a sessao num buraco negro em vez de "direct". Assim, se alguma parte do
     // codigo esquecer de travar, a requisicao FALHA em vez de vazar o IP real.
     await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'socks5://127.0.0.1:1' })
     await ses.closeAllConnections()
-    return
+    return confirmaProxy(ses, (r) => /127\.0\.0\.1:1\b/.test(r) && !/DIRECT/i.test(r))
   }
   // Regra UNICA e sem "=": vira PROXY_LIST e vale pra http, https, ws e wss. Com "scheme=" o que
   // ficou de fora sai DIRETO, que e o vazamento classico.
   await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'http://' + px.host + ':' + px.porta })
   // Sem isto o socket velho do pool continua saindo pelo IP anterior por minutos.
   await ses.closeAllConnections()
+  // Comparado em minusculas dos DOIS lados: o Chromium responde "PROXY host:porta".
+  const alvo = ('PROXY ' + px.host + ':' + px.porta).toLowerCase()
+  return confirmaProxy(ses, (r) => r.toLowerCase().includes(alvo) && !/DIRECT/i.test(r))
+}
+
+// A REGRA TEM QUE ESTAR VALENDO ANTES DA PRIMEIRA CARGA (04/11/2026, achado no primeiro autoteste no
+// Mac). O `setProxy` devolve a promessa quando o pedido sai, nao quando o servico de rede passa a
+// usar a regra. No Windows a primeira consulta logo depois ja vinha com a regra nova; no Mac veio
+// DIRECT (a configuracao do sistema, que a particao nova usa ate a nossa chegar), e a consulta
+// seguinte ja vinha certa. Requisicao que saisse nesse intervalo iria pelo IP da maquina: o teste de
+// IP mostraria o IP do cobrador como se fosse o do proxy. Entao a aplicacao so termina quando a
+// propria sessao responde com a regra nova (no Windows isso e a primeira consulta, sem espera).
+// Nao respondeu em 3 s: `false`, e quem abre o numero recusa em vez de carregar no escuro.
+async function confirmaProxy(ses, valendo) {
+  const ate = Date.now() + 3000
+  for (;;) {
+    let r = ''
+    try { r = String(await ses.resolveProxy('https://web.whatsapp.com')) } catch (_) { r = '' }
+    if (valendo(r)) return true
+    if (Date.now() > ate) { console.error('[proxy] a regra nao entrou em 3 s; a sessao responde: ' + r); return false }
+    await new Promise((ok) => setTimeout(ok, 40))
+  }
 }
 
 // Autenticacao do proxy. Vale pra navegacao de verdade (WebContents), que e o caminho que a gente
@@ -839,7 +864,11 @@ async function abreDeVerdade(nk, numero, meu) {
   const ses = preparaSessao(nk)
   // `!!busca.excecao` e a unica coisa que autoriza sair pelo IP da maquina. Sem proxy e sem
   // liberacao a funcao ja voltou la em cima, entao aqui o nulo com liberacao e intencional.
-  await aplicaProxy(ses, px, particaoDe(nk), !!busca.excecao)
+  if (!(await aplicaProxy(ses, px, particaoDe(nk), !!busca.excecao))) {
+    // A regra nao entrou: buraco negro e recusa, em vez de carregar o WhatsApp sem saber por onde sai.
+    await aplicaProxy(ses, null, particaoDe(nk))
+    return desiste({ ok: false, erro: 'O proxy não entrou nesta sessão. Tente abrir de novo.' })
+  }
 
   // O PREFLIGHT SO RODA SE HOUVER PROXY. Com numero liberado, `px` e null e nao ha o que conferir:
   // a sessao sai pelo IP da maquina de propria vontade da direcao, e quem avisa isso e a linha de
@@ -3586,7 +3615,11 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
   }
   // PARTICAO DESCARTAVEL: testar na particao viva aplicaria o proxy numa sessao ja aberta.
   const teste = 'persist:sw-teste-' + nk
-  await aplicaProxy(session.fromPartition(teste), px, teste)
+  // Sem a regra valendo, o teste leria o IP DESTA maquina e diria que e o do proxy.
+  if (!(await aplicaProxy(session.fromPartition(teste), px, teste))) {
+    await aplicaProxy(session.fromPartition(teste), null, teste)
+    return { ok: false, erro: 'O proxy não entrou na sessão de teste. Tente de novo.' }
+  }
   const r = await testaSaida(teste)
   await aplicaProxy(session.fromPartition(teste), null, teste)
   // Testar na mao e o caminho mais rapido pra proxy nova sair de "nunca testada": ele cadastra,

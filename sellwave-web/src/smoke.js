@@ -102,13 +102,54 @@ async function rodar(ctx) {
   conta('a sessao padrao nao sai direto', !/DIRECT/i.test(String(padraoProxy)), String(padraoProxy))
 
   // 3) Particao de numero com proxy aplicado e SEM direct na lista (fail-closed de graca).
+  //    PELO CAMINHO DO APP (`aplicaProxy`), nao por um setProxy solto (04/11/2026): no Mac a primeira
+  //    consulta logo depois do setProxy vinha DIRECT, e e o `aplicaProxy` que espera a regra valer
+  //    antes de devolver. Testar o setProxy cru mediria o Chromium, nao o app.
   const ses = session.fromPartition('persist:sw-teste-smoke')
-  await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'http://127.0.0.1:9' })
+  const valeu = ctx.aplicaProxy
+    ? await ctx.aplicaProxy(ses, { host: '127.0.0.1', porta: 9, usuario: '', senha: '' }, 'persist:sw-teste-smoke')
+    : (await ses.setProxy({ mode: 'fixed_servers', proxyRules: 'http://127.0.0.1:9' }), null)
+  if (ctx.aplicaProxy) conta('o app so segue com a regra do proxy valendo', valeu === true, String(valeu))
+  if (ctx.aplicaProxy) {
+    // proxy por NOME (os da operacao sao assim, ex. isp.decodo.com), com maiuscula de proposito: a
+    // conferencia compara o texto do Chromium, e um erro de caixa ali recusaria TODO numero
+    const sesN = session.fromPartition('persist:sw-teste-smoke-nome')
+    const okN = await ctx.aplicaProxy(sesN, { host: 'Proxy.Exemplo.com.br', porta: 10001, usuario: '', senha: '' }, 'persist:sw-teste-smoke-nome')
+    conta('proxy por nome tambem confirma', okN === true, String(await sesN.resolveProxy(UA_WA)))
+    await ctx.aplicaProxy(sesN, null, 'persist:sw-teste-smoke-nome')
+  }
   const r1 = await ses.resolveProxy(UA_WA)
   conta('proxy por particao aplica no https', /PROXY 127\.0\.0\.1:9/.test(String(r1)), String(r1))
   const r2 = await ses.resolveProxy('wss://web.whatsapp.com/ws/chat')
   conta('o MESMO proxy vale pro websocket', /PROXY 127\.0\.0\.1:9/.test(String(r2)), String(r2))
   conta('nao ha DIRECT de reserva na lista', !/DIRECT/i.test(String(r1)), String(r1))
+
+  // 3b) A PRIMEIRA CARGA SAI PELO PROXY (04/11/2026, achado no primeiro autoteste no Mac). A prova
+  //     de ponta a ponta do item 3: um proxy de mentira aqui dentro anota o que chega, e a carga sai
+  //     logo depois do aplicaProxy, sem espera nenhuma. O endereco nao existe (.invalid): saindo
+  //     direto, a carga morreria no DNS e o proxy de mentira nao veria nada.
+  if (ctx.aplicaProxy) {
+    const http = require('node:http')
+    // so pra registro: o que o setProxy CRU responde na primeira consulta (no Mac veio DIRECT)
+    const sesCru = session.fromPartition('persist:sw-teste-cru-' + Date.now())
+    await sesCru.setProxy({ mode: 'fixed_servers', proxyRules: 'http://127.0.0.1:9' })
+    console.log('  info   setProxy cru, primeira consulta: ' + String(await sesCru.resolveProxy(UA_WA)))
+    const viu = []
+    const srv = http.createServer((req, res) => { viu.push(req.method + ' ' + req.url); res.end('ok') })
+    srv.on('connect', (req, sock) => { viu.push('CONNECT ' + req.url); sock.end('HTTP/1.1 502 Bad Gateway\r\n\r\n') })
+    await new Promise((ok) => srv.listen(0, '127.0.0.1', ok))
+    const part = 'persist:sw-teste-primeira-' + Date.now()
+    const sesP = session.fromPartition(part)
+    await ctx.aplicaProxy(sesP, { host: '127.0.0.1', porta: srv.address().port, usuario: '', senha: '' }, part)
+    const v = new WebContentsView({ webPreferences: { partition: part } })
+    vivas.push(v)
+    await v.webContents.loadURL('http://sw-teste-vazamento.invalid/primeira').catch(() => {})
+    await v.webContents.loadURL('https://sw-teste-vazamento.invalid/segura').catch(() => {})
+    conta('a primeira carga depois de aplicar o proxy sai por ele', viu.some((x) => x.includes('sw-teste-vazamento.invalid/primeira')), viu.join(' | ') || 'o proxy nao viu nada')
+    conta('e o https tambem (CONNECT no proxy)', viu.some((x) => x.startsWith('CONNECT sw-teste-vazamento.invalid:443')), viu.join(' | ') || 'o proxy nao viu nada')
+    try { v.webContents.close() } catch (_) { /* ok */ }
+    srv.close()
+  }
 
   // 4) Credencial dentro do proxyRules tem que ser RECUSADA (medido: a regra e descartada e tudo
   //    morre em ERR_NO_SUPPORTED_PROXIES). O teste existe pra ninguem "consertar" isso um dia.
