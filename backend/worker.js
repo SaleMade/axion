@@ -11196,12 +11196,18 @@ const _botMinutos = (hhmm) => { const m = String(hhmm || '').match(/^(\d{2}):(\d
 // conta a operacao INTEIRA, inclusive o pedido que ainda nao recebeu dono (a varredura da um em ate
 // um minuto), igual aos cartoes do alto daquela tela: por isso Geral pode ser maior que a soma das
 // linhas, e nao e erro.
-const BOT_COB_ROTULOS_PADRAO = { recebido: 'Recebido', pedidos: 'Pedidos recebidos', comissao: 'Comissão', em_cobranca: 'Em cobrança', atrasados: 'Atrasados', a_receber: 'A receber', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', destaque: 'Destaque do dia' };
-const BOT_COB_ORDENAR = ['recebido', 'pedidos', 'em_cobranca', 'atrasados', 'nome'];
+// O FOCO E PEDIDO, NAO DINHEIRO (03/11/2026, segunda rodada). O Bruno viu a primeira mensagem no
+// grupo e pediu: "se focou bastante em questao de valores, e eu gostaria de focar mais nos pedidos e
+// nas cobrancas (...) tambem nao quero mostrar tanto esses valores para os nossos cobradores".
+// Entao o padrao virou: quantas cobrancas ele CONVERTEU no dia (fechou e o cliente pagou), quantas
+// ainda faltam cobrar, quantas estao atrasadas, e UM valor so, o "A receber", que ele aprovou.
+// O valor recebido no dia, o valor da fila e a comissao continuam existindo, desligados.
+const BOT_COB_ROTULOS_PADRAO = { convertidos: 'Convertidos hoje', recebido: 'Recebido', pedidos: 'Pedidos recebidos', comissao: 'Comissão', em_cobranca: 'Faltam cobrar', atrasados: 'Atrasados', a_receber: 'A receber', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', destaque: 'Destaque do dia' };
+const BOT_COB_ORDENAR = ['convertidos', 'recebido', 'pedidos', 'em_cobranca', 'atrasados', 'nome'];
 const BOT_COB_MARCOS_PADRAO = [
-  { n: 5, frase: '{nome} já trouxe {n} pedidos de volta hoje, {valor} no caixa. Tá voando.' },
+  { n: 5, frase: '{nome} já trouxe {n} pedidos de volta hoje. Tá voando.' },
   { n: 10, frase: '{n} cobranças fechadas hoje, {nome}. Isso é de outro nível.' },
-  { n: 15, frase: '{nome} fechou {n} cobranças hoje, {valor}. Dia histórico, parabéns.' },
+  { n: 15, frase: '{nome} fechou {n} cobranças hoje. Dia histórico, parabéns.' },
 ];
 const BOT_COB_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos recebidos. Agora é passar da meta.';
 const BOT_COB_INCENTIVO_PADRAO = [
@@ -11210,7 +11216,7 @@ const BOT_COB_INCENTIVO_PADRAO = [
   'Tem {fila} pedidos esperando cobrança agora. Bora resolver!',
   '{horas} horas sem receber. Um telefonema muda esse placar.',
   'Cliente esquecido não paga sozinho. Bora ligar!',
-  'Hoje já voltaram {valor}. Bora aumentar esse número!',
+  'Hoje já voltaram {pedidos} pedidos. Bora aumentar esse número!',
 ];
 // O bloco inteiro da cobranca. Mora dentro do mesmo `bot_wa` (chave `cobranca`), nao numa chave
 // nova: a config do bot ja tem versao, historico e conferencia de conflito, e duplicar isso pra um
@@ -11220,8 +11226,8 @@ function _botCobPadrao() {
     ativo: false,
     grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true },
     relatorio: {
-      ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Cobrança do dia', ordenar: 'recebido',
-      mostrar: { recebido: true, comissao: false, em_cobranca: true, atrasados: true, a_receber: true, meta: true, geral: true, ontem: false, destaque: false, so_com_recebido: false },
+      ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Cobrança do dia', ordenar: 'convertidos',
+      mostrar: { convertidos: true, recebido: false, comissao: false, em_cobranca: true, em_cobranca_vl: false, atrasados: true, a_receber: true, pendentes: true, meta: true, geral: true, ontem: false, destaque: false, so_com_recebido: false },
       rotulos: { ...BOT_COB_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_recebidos: [], midias: [],
     },
     semanal: { ativo: false, dia: 0, hora: '20:30', midias: [] },
@@ -11468,7 +11474,7 @@ function _botCobNormaliza(raw, base) {
   const dias = Array.isArray(rel.dias) ? rel.dias : (Array.isArray(brel.dias) ? brel.dias : o.relatorio.dias);
   o.relatorio.dias = [...new Set(dias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
   o.relatorio.titulo = _botTexto300('titulo' in rel ? rel.titulo : brel.titulo, 60).trim() || 'Cobrança do dia';
-  o.relatorio.ordenar = BOT_COB_ORDENAR.includes(rel.ordenar) ? rel.ordenar : (BOT_COB_ORDENAR.includes(brel.ordenar) ? brel.ordenar : 'recebido');
+  o.relatorio.ordenar = BOT_COB_ORDENAR.includes(rel.ordenar) ? rel.ordenar : (BOT_COB_ORDENAR.includes(brel.ordenar) ? brel.ordenar : 'convertidos');
   const mos = (rel.mostrar && typeof rel.mostrar === 'object') ? rel.mostrar : {};
   const bmos = (brel.mostrar && typeof brel.mostrar === 'object') ? brel.mostrar : {};
   for (const k of Object.keys(o.relatorio.mostrar)) o.relatorio.mostrar[k] = (k in mos) ? !!mos[k] : ((k in bmos) ? !!bmos[k] : o.relatorio.mostrar[k]);
@@ -11891,8 +11897,8 @@ function _botFrase(frase, vars) {
   const primeiro = nomeCompleto.split(/\s+/)[0] || '';
   // `valor` e `fila` sao da cobranca (03/11/2026): dinheiro recebido ja formatado e quantos pedidos
   // estao na mesa agora. Nas frases do time elas simplesmente nao aparecem.
-  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data, horas: v.horas, valor: v.valor, fila: v.fila };
-  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data|horas|valor|fila)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
+  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data, horas: v.horas, valor: v.valor, fila: v.fila, atrasados: v.atrasados, pendentes: v.pendentes };
+  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data|horas|valor|fila|atrasados|pendentes)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
 }
 
 // ─── Envio ──────────────────────────────────────────────────────────────────────────────
@@ -12317,7 +12323,8 @@ async function _botCobradores(env) {
   const r = await env.DB.prepare("SELECT id, name FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role)='cobrador' ORDER BY name").all().catch(() => null);
   return ((r && r.results) || []).map((u) => ({ id: String(u.id), nome: String(u.name || u.id) }));
 }
-const _botCobZero = () => ({ recebido: 0, pedidos: 0, comissao: 0, em_cobranca: 0, em_cobranca_vl: 0, a_receber: 0, atrasados: 0 });
+// `pendentes` = QUANTOS pedidos formam o "A receber" (o valor sozinho nao diz se sao 3 ou 300).
+const _botCobZero = () => ({ recebido: 0, pedidos: 0, comissao: 0, em_cobranca: 0, em_cobranca_vl: 0, a_receber: 0, pendentes: 0, atrasados: 0 });
 // OS NUMEROS DA COBRANCA no periodo, por cobrador e o geral. Uma passada no blob, sem consulta nova.
 // Recebido, pedidos e comissao seguem a data do PAGAMENTO; em cobranca, a receber e atrasados sao o
 // estado de AGORA (a mesa de trabalho), nao o periodo.
@@ -12351,8 +12358,8 @@ async function _botDadosCob(env, dia, cfg, tipo, fresco) {
     }
     if (_botAbertoCob(l) && _BOT_COB_NA_RUA.includes(col)) {
       const s = _botSaldoCob(l);
-      geral.a_receber += s;
-      if (c) c.a_receber += s;
+      geral.a_receber += s; geral.pendentes++;
+      if (c) { c.a_receber += s; c.pendentes++; }
     }
     if (_botAtrasadoCob(l, agora)) { geral.atrasados++; if (c) c.atrasados++; }
     if (!pago) continue;
@@ -12379,7 +12386,7 @@ function _botTextoCobranca(cfg, dados, esc) {
   const rot = { ...BOT_COB_ROTULOS_PADRAO, ...(r.rotulos || {}) };
   const e = esc || { abertura: _botUmaDe(r.aberturas), rodape: _botUmaDe(r.rodapes), sem_recebido: _botUmaDe(r.sem_recebidos) };
   const semanal = dados.tipo === 'semanal';
-  const vars = { data: _botDataBR(dados.dia), valor: _botBRL(dados.geral.recebido), fila: dados.geral.em_cobranca, pedidos: dados.geral.pedidos };
+  const vars = { data: _botDataBR(dados.dia), valor: _botBRL(dados.geral.recebido), fila: dados.geral.em_cobranca, pedidos: dados.geral.pedidos, atrasados: dados.geral.atrasados, pendentes: dados.geral.pendentes };
   const L = [];
   const titulo = semanal ? 'Cobrança da semana' : (r.titulo || 'Cobrança do dia');
   const quando = semanal ? (_botDataBR(dados.semana.inicio) + ' a ' + _botDataBR(dados.semana.fim)) : (_botDataBR(dados.dia) + ' (' + _botDiaSemana(dados.dia) + ')');
@@ -12387,27 +12394,36 @@ function _botTextoCobranca(cfg, dados, esc) {
   if (e.abertura) L.push(_botFrase(e.abertura, vars));
   let cs = dados.cobradores.slice();
   if (r.ordenar === 'nome') cs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-  else if (r.ordenar === 'pedidos') cs.sort((a, b) => (b.pedidos - a.pedidos) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
-  else if (r.ordenar === 'em_cobranca') cs.sort((a, b) => (b.em_cobranca - a.em_cobranca) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
-  else if (r.ordenar === 'atrasados') cs.sort((a, b) => (b.atrasados - a.atrasados) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
-  else cs.sort((a, b) => (b.recebido - a.recebido) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'recebido') cs.sort((a, b) => (b.recebido - a.recebido) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'em_cobranca') cs.sort((a, b) => (b.em_cobranca - a.em_cobranca) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'atrasados') cs.sort((a, b) => (b.atrasados - a.atrasados) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  // 'convertidos' e o padrao (e 'pedidos' e o nome antigo da mesma coisa): quem converteu mais no
+  // periodo fica em cima. Era 'recebido' ate 03/11/2026, ordenar por dinheiro que nem aparece mais.
+  else cs.sort((a, b) => (b.pedidos - a.pedidos) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
   if (!cs.length) { L.push(''); L.push('Nenhum cobrador ativo no cadastro.'); return L.join('\n'); }
   const ninguem = cs.every((c) => c.pedidos === 0);
   if (m.destaque && !ninguem) {
-    const top = Math.max(...cs.map((c) => c.recebido));
-    const quem = cs.filter((c) => c.recebido === top).map((c) => c.nome);
+    // O destaque e de QUEM CONVERTEU MAIS, nao de quem trouxe mais dinheiro: o pedido grande que
+    // cai sozinho no colo nao vale mais que cinco telefonemas.
+    const top = Math.max(...cs.map((c) => c.pedidos));
+    const quem = cs.filter((c) => c.pedidos === top).map((c) => c.nome);
     const rotD = semanal && rot.destaque === BOT_COB_ROTULOS_PADRAO.destaque ? 'Destaque da semana' : rot.destaque;
-    L.push(''); L.push('*' + rotD + ':* ' + quem.join(' e ') + ' (' + _botBRL(top) + ')');
+    L.push(''); L.push('*' + rotD + ':* ' + quem.join(' e ') + ' (' + _botPlural(top, 'pedido', 'pedidos') + ')');
   }
   if (ninguem && e.sem_recebido) { L.push(''); L.push(_botFrase(e.sem_recebido, vars)); }
   if (m.so_com_recebido) cs = cs.filter((c) => c.pedidos > 0);
+  // A LINHA DE CIMA E A CONVERSAO: quantas cobrancas ele fechou e o cliente REALMENTE pagou. O
+  // valor do dia so entra junto se ele ligar `recebido` (desligado por padrao).
+  const rotConv = semanal && rot.convertidos === BOT_COB_ROTULOS_PADRAO.convertidos ? 'Convertidos na semana' : rot.convertidos;
   const linhas = (c) => {
     const out = [];
-    out.push(rot.recebido + ': ' + _botBRL(c.recebido) + ' (' + _botPlural(c.pedidos, 'pedido', 'pedidos') + ')');
+    const pedidos = _botPlural(c.pedidos, 'pedido', 'pedidos');
+    if (m.convertidos !== false) out.push(rotConv + ': ' + pedidos + (m.recebido ? ' · ' + _botBRL(c.recebido) : ''));
+    else if (m.recebido) out.push(rot.recebido + ': ' + _botBRL(c.recebido) + ' (' + pedidos + ')');
     if (m.comissao) out.push(rot.comissao + ': ' + _botBRL(c.comissao));
-    if (m.em_cobranca !== false) out.push(rot.em_cobranca + ': ' + c.em_cobranca + (c.em_cobranca ? ' (' + _botBRL(c.em_cobranca_vl) + ')' : '') + (m.atrasados !== false && c.atrasados ? ' · ' + rot.atrasados + ': ' + c.atrasados : ''));
+    if (m.em_cobranca !== false) out.push(rot.em_cobranca + ': ' + c.em_cobranca + (m.em_cobranca_vl && c.em_cobranca ? ' (' + _botBRL(c.em_cobranca_vl) + ')' : '') + (m.atrasados !== false && c.atrasados ? ' · ' + rot.atrasados + ': ' + c.atrasados : ''));
     else if (m.atrasados !== false && c.atrasados) out.push(rot.atrasados + ': ' + c.atrasados);
-    if (m.a_receber !== false) out.push(rot.a_receber + ': ' + _botBRL(c.a_receber));
+    if (m.a_receber !== false) out.push(rot.a_receber + ': ' + _botBRL(c.a_receber) + (m.pendentes !== false && c.pendentes ? ' (' + _botPlural(c.pendentes, 'pedido', 'pedidos') + ')' : ''));
     return out;
   };
   cs.forEach((c, i) => {

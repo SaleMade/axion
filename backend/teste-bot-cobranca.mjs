@@ -224,6 +224,8 @@ const MUNDO_NUM = {
   conf(ana.atrasados === 0, 'a Ana nao tem atrasado');
   conf(hay.a_receber === 580, 'a receber do Haynan: so o que esta na rua (o A Enviar e o Frustrados ficam de fora)');
   conf(ana.a_receber === 470, 'a receber da Ana: R$ 350 + R$ 120 do que saiu pra entrega');
+  conf(hay.pendentes === 3 && ana.pendentes === 2, 'pendentes: QUANTOS pedidos formam esse a receber');
+  conf(d.geral.pendentes === 5, 'o geral soma os 5 pendentes da operacao');
   conf(hay.meta === 10 && hay.semana >= hay.pedidos, 'a meta da semana vem da config e a semana conta os pagos da semana');
   conf(ana.meta === 0, 'cobrador sem meta cadastrada fica com meta zero');
 }
@@ -244,14 +246,17 @@ titulo('3. O texto que vai no grupo');
   const d = await api._botDadosCob(env, DIA, cfg, 'diario');
   const t = api._botTextoCobranca(cfg, d);
   conf(t.indexOf('*Cobrança do dia · 03/11/2026 (terça)*') === 0, 'comeca com o titulo e a data');
-  conf(t.includes('*1. Ana Paula*') && t.includes('*2. Haynan*'), 'a ordem padrao e quem trouxe mais dinheiro');
-  conf(t.includes('Recebido: R$ 1.500,00 (2 pedidos)'), 'a linha do recebido mostra valor e quantidade');
+  conf(t.includes('*1. Ana Paula*') && t.includes('*2. Haynan*'), 'a ordem padrao e quem converteu mais (empate desempata pelo valor)');
+  // O PEDIDO DO BRUNO EM 03/11: pedido na frente, dinheiro so no "A receber".
+  conf(t.includes('Convertidos hoje: 2 pedidos'), 'a primeira linha e a conversao do dia, em PEDIDOS');
+  conf(!t.includes('Recebido: R$'), 'o valor recebido no dia NAO sai por padrao');
   conf(t.includes('Comissão: R$ 15,00'), 'a comissao aparece quando marcada');
-  conf(t.includes('Em cobrança: 3 (R$ 580,00) · Atrasados: 1'), 'a mesa e os atrasados na mesma linha');
-  conf(t.includes('A receber: R$ 580,00'), 'a receber na linha de baixo');
+  conf(t.includes('Faltam cobrar: 3 · Atrasados: 1'), 'quantas faltam cobrar e os atrasados na mesma linha');
+  conf(!t.includes('Faltam cobrar: 3 (R$'), 'o valor da fila NAO sai por padrao');
+  conf(t.includes('A receber: R$ 580,00 (3 pedidos)'), 'o unico valor do padrao vem com a quantidade de pedidos');
   conf(t.includes('Meta da semana: '), 'a meta aparece pra quem tem meta');
   conf(t.includes('Ontem: 1 pedido · R$ 400,00'), 'ontem com pedido e valor');
-  conf(t.includes('*Destaque do dia:* Ana Paula'), 'o destaque e de quem mais recebeu');
+  conf(t.includes('*Destaque do dia:* Ana Paula e Haynan (2 pedidos)'), 'o destaque e de quem mais CONVERTEU, em pedidos');
   conf(t.includes('*Geral*'), 'e o bloco geral fecha o resumo');
   conf(t.indexOf('—') < 0, 'sem travessao (regra do Bruno)');
   conf(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(t), 'sem emoji');
@@ -259,13 +264,25 @@ titulo('3. O texto que vai no grupo');
   // Desmarcar some com a linha.
   const cfg2 = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { comissao: false, em_cobranca: false, atrasados: false, a_receber: false, meta: false, geral: false } } } }, cfg);
   const t2 = api._botTextoCobranca(cfg2, d);
-  conf(!t2.includes('Comissão:') && !t2.includes('Em cobrança:') && !t2.includes('A receber:'), 'desmarcou, a linha some');
+  conf(!t2.includes('Comissão:') && !t2.includes('Faltam cobrar:') && !t2.includes('A receber:'), 'desmarcou, a linha some');
   conf(!t2.includes('*Geral*'), 'o geral tambem some quando desmarcado');
-  conf(t2.includes('Recebido: '), 'o recebido continua: e a razao do resumo existir');
+  conf(t2.includes('Convertidos hoje: '), 'a conversao continua: e a razao do resumo existir');
+
+  // QUEM QUISER O DINHEIRO DE VOLTA, LIGA. As tres chaves novas de 03/11.
+  const cfgV = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { recebido: true, em_cobranca_vl: true, pendentes: false } } } }, cfg);
+  const tV = api._botTextoCobranca(cfgV, d);
+  conf(tV.includes('Convertidos hoje: 2 pedidos · R$ 500,00'), 'com o recebido ligado, o valor entra na mesma linha da conversao');
+  conf(tV.includes('Faltam cobrar: 3 (R$ 580,00)'), 'com o valor da fila ligado, ele volta entre parenteses');
+  conf(tV.includes('A receber: R$ 580,00\n') || tV.endsWith('A receber: R$ 580,00'), 'desligando os pendentes, o A receber fica so com o valor');
+
+  // Quem preferir a linha ANTIGA (valor na frente) desliga a conversao e liga o recebido.
+  const cfgA = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { convertidos: false, recebido: true } } } }, cfg);
+  conf(api._botTextoCobranca(cfgA, d).includes('Recebido: R$ 580,00') === false, 'a linha antiga mostra o recebido, nao o saldo');
+  conf(api._botTextoCobranca(cfgA, d).includes('Recebido: R$ 500,00 (2 pedidos)'), 'desligando a conversao e ligando o recebido, volta a linha antiga');
 
   // Rotulo trocado (o socio renomeia as linhas).
-  const cfg3 = api._botNormaliza({ cobranca: { ativo: true, relatorio: { rotulos: { recebido: 'Voltou pro caixa' } } } }, cfg);
-  conf(api._botTextoCobranca(cfg3, d).includes('Voltou pro caixa: '), 'o nome da linha pode ser trocado na tela');
+  const cfg3 = api._botNormaliza({ cobranca: { ativo: true, relatorio: { rotulos: { convertidos: 'Fechou hoje' } } } }, cfg);
+  conf(api._botTextoCobranca(cfg3, d).includes('Fechou hoje: '), 'o nome da linha pode ser trocado na tela');
 
   // Ninguem recebeu: a frase de dia parado.
   const vazio = { dia: DIA, tipo: 'diario', semana: { inicio: '2026-11-02', fim: '2026-11-08' }, geral: { recebido: 0, pedidos: 0, comissao: 0, em_cobranca: 4, em_cobranca_vl: 900, a_receber: 900, atrasados: 2, semana: 0, ontem: { pedidos: 0, recebido: 0 } }, cobradores: [{ id: 'hay', nome: 'Haynan', recebido: 0, pedidos: 0, comissao: 0, em_cobranca: 4, em_cobranca_vl: 900, a_receber: 900, atrasados: 2, semana: 0, meta: 0, faltam: 0, ontem: { pedidos: 0, recebido: 0 } }] };
