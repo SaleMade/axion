@@ -631,7 +631,14 @@ const _RESTR_OK_EXATO = new Set(['/auth/login', '/auth/logout', '/auth/me',
   '/api/afiliados/pedidos', '/api/podio', '/api/tags/save', '/api/coment-prontos',
   '/api/pressel/meus', '/api/pressel/metrics', '/api/pressel/diag', '/api/pressel/stats',
   '/api/pressel/save', '/api/pressel/delete', '/api/pressel/num', '/api/pressel/meu-numero',
-  '/api/chip/save', '/api/chip/create', '/api/chip/delete', '/api/chip/ordem', '/api/chip/limite']);
+  '/api/chip/save', '/api/chip/create', '/api/chip/delete', '/api/chip/ordem', '/api/chip/limite',
+  // A CONTINGENCIA, POR DUAS SEMANAS (04/11/2026, ate 18/11). A Caroline, que toca a operacao com
+  // o Giovane: "eu tinha toda a minha contingencia ali, os historicos dos chip. Tenho os numeros
+  // conectados la, se algum cair eu nao consigo desativar (...) se tu puder so manter essa semana
+  // pra nos fazer a migracao". O Bruno liberou com prazo: "pode liberar a contingencia deles por 2
+  // semanas para eles terem uma margem". QUEM LER ISTO DEPOIS DE 18/11/2026: era pra ter saido,
+  // tire esta rota, a tela do AREAS_RESTRITO e as 4 chaves cont_* de volta pro corte do _stateVisivel.
+  '/api/cont/save']);
 const _RESTR_OK_PREFIXO = ['/api/lead/', '/api/push/', '/api/arquivo/'];
 // `/api/wa/conn` e a bolinha de "conectado" ao lado de cada numero da roleta. So GET, e o handler
 // ja corta pelo mundo de quem pede (_idsQuePossoVer): sem ela a tela fica em "verificando..." pra
@@ -5755,9 +5762,13 @@ async function _stateVisivel(u, data, env) {
     // (o endereco que a pressel dele pode usar). As tres ja chegam aqui recortadas pelo dono -
     // trinta linhas acima o mundo do afiliado so recebe o que tem `afl` igual ao dele -, entao
     // devolver nao mostra pressel nem numero nosso. A Contingencia continua fora: e outra tela.
+    //
+    // A CONTINGENCIA VOLTOU POR DUAS SEMANAS (04/11/2026, ate 18/11). As quatro chaves `cont_*` sao
+    // as colunas, as cores e a recarga do quadro de numeros DELE (vem de `contCols__afl_<id>`, ja
+    // recortadas por mundo la em cima). Prazo dado pelo Bruno pra eles migrarem; depois de 18/11
+    // elas voltam pra lista abaixo.
     if (await _restritoAgora(env, u)) {
       for (const k of ['trafego_registros', 'trafego_aloc',
-        'contCols', 'contColColors', 'cont_col_order', 'cont_recarga',
         'scVend', 'scVendPub', 'wa_ativo', 'wa_automacoes', 'wa_autom_on', 'wa_bot_on',
         'saques', 'afl_checkout']) delete d[k];
     }

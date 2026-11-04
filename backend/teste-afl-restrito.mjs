@@ -160,11 +160,14 @@ const conf = (nome, vale) => { if (vale) { ok++; } else { falhou++; console.log(
     ['GET', '/api/pressel/meus'], ['GET', '/api/pressel/metrics'], ['GET', '/api/pressel/diag'],
     ['POST', '/api/pressel/save'], ['POST', '/api/pressel/delete'], ['POST', '/api/pressel/num'],
     ['POST', '/api/pressel/meu-numero'], ['POST', '/api/chip/save'], ['POST', '/api/chip/create'],
-    ['POST', '/api/chip/ordem'], ['GET', '/api/wa/conn']];
+    ['POST', '/api/chip/ordem'], ['GET', '/api/wa/conn'],
+    // A CONTINGENCIA VOLTOU COM PRAZO (04/11/2026, sai em 18/11): e por ela que ele desliga um
+    // numero que caiu enquanto faz a migracao.
+    ['POST', '/api/cont/save']];
   for (const [m, p] of PASSA) conf('passa ' + m + ' ' + p, f._restrLiberado(p, m) === true);
   const BARRA = [['POST', '/api/pedido/novo'], ['GET', '/api/pedido/mesmo-cpf'],
-    // A Contingencia e o detector de dominios NAO voltaram: sao outras telas.
-    ['POST', '/api/cont/save'], ['POST', '/api/pressel/domains/detect'], ['GET', '/api/wa/chats'],
+    // O detector de dominios NAO voltou: a tela dele nem chama.
+    ['POST', '/api/pressel/domains/detect'], ['GET', '/api/wa/chats'],
     ['GET', '/api/wa/messages'], ['POST', '/api/wa/cloud/send'], ['POST', '/api/wa/conn'],
     ['GET', '/api/wa/instances'], ['GET', '/api/salechat'], ['POST', '/api/salechat/save'],
     ['POST', '/api/users'], ['POST', '/api/saque/create'], ['GET', '/api/swweb/numeros'],
@@ -184,14 +187,15 @@ const conf = (nome, vale) => { if (vale) { ok++; } else { falhou++; console.log(
   conf('restrito nao abre o inbox', await barrado(GIO, 'GET', '/api/wa/chats'));
   conf('restrito nao cadastra pedido', await barrado(GIO, 'POST', '/api/pedido/novo'));
   conf('restrito nao cria usuario', await barrado(GIO, 'POST', '/api/users'));
-  conf('restrito nao mexe na Contingencia', await barrado(GIO, 'POST', '/api/cont/save'));
+  conf('restrito MEXE na Contingencia dele (ate 18/11/2026)', (await barrado(GIO, 'POST', '/api/cont/save')) === false);
+  conf('restrito continua sem o detector de dominios', await barrado(GIO, 'POST', '/api/pressel/domains/detect'));
   conf('restrito MEXE na pressel dele (devolvida em 04/11/2026)', (await barrado(GIO, 'POST', '/api/pressel/save')) === false);
   conf('e nos numeros da roleta dele', (await barrado(GIO, 'POST', '/api/chip/save')) === false);
   conf('a vendedora dele tambem nao', await barrado(VEND_GIO, 'GET', '/api/wa/chats'));
   conf('restrito ABRE o estado', (await barrado(GIO, 'GET', '/api/state')) === false);
   conf('restrito ABRE o pedido dele', (await barrado(GIO, 'POST', '/api/lead/123/move')) === false);
   conf('restrito ABRE o nome do time', (await barrado(GIO, 'GET', '/api/users')) === false);
-  conf('o diretor passa em tudo', (await barrado(DIR, 'POST', '/api/cont/save')) === false);
+  conf('o diretor passa em tudo', (await barrado(DIR, 'POST', '/api/wa/cloud/send')) === false);
   conf('vendedor da casa passa em tudo', (await barrado(VEND_CASA, 'POST', '/api/pedido/novo')) === false);
   conf('rota publica nem consulta sessao', (await barrado(GIO, 'GET', '/pressels-total.json')) === false);
   conf('sem Bearer o gate nao decide nada', (await barrado(GIO, 'GET', '/api/wa/chats', null)) === false);
