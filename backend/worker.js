@@ -8995,7 +8995,15 @@ function _saldoComissao(data, uRow, mundo, pctAfl) {
   const semAcento = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
   let ganho = 0;
   for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
-    if (!l || String(l.at || '') !== meu || !pago(l)) continue;
+    if (!l || !pago(l)) continue;
+    // O COBRADOR TAMBEM SACA (03/11/2026): o painel dele ganhou o "Solicitar saque" do vendedor, e
+    // sem esta linha todo pedido dele nascia marcado "acima do saldo". E a comissaoCobrador do front:
+    // a taxa congelada no pedido (cob_pct, so existe de 01/11 em diante) sobre o que foi pago.
+    if (String(l.cob || '') === meu && !mundo) {
+      const reg = (Array.isArray(l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
+      ganho += (reg > 0 ? reg : _wpValor(l)) * (Number(l.cob_pct) || 0) / 100;
+    }
+    if (String(l.at || '') !== meu) continue;
     if (String(l.afl || '') !== String(mundo || '')) continue;
     ganho += _wpComissaoVendedor(_wpValor(l), l, uRow, pctAfl).comissao;
   }

@@ -230,5 +230,28 @@ msg('x6', '5531900000001', 'ax_cob_novo_33334444', 'in', Math.floor(Date.now() /
 await batida()
 t(doId('C1').cob === 'cob_novo', 'mas se o cliente escrever de novo pro outro, passa de novo', doId('C1').cob)
 
+console.log('\nO COBRADOR SACA A COMISSAO DELE (03/11/2026: o painel dele ganhou o Solicitar saque)')
+{
+  sq.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run('e'.repeat(64), 'cob_haynan', exp)
+  // a mesma conta do front (comissaoCobrador): taxa congelada no pedido sobre o que foi pago
+  const pagoL = (l) => l.spg === 'Pago' || ['Pago', 'Pagos'].includes(l.col)
+  const valorL = (l) => { const r = (l.pagamentos || []).reduce((s, p) => s + (Number(p.valor) || 0), 0); return r > 0 ? r : (Number(l.valor_neg) > 0 ? Number(l.valor_neg) : Number(l.vl) || 0) }
+  const ganho = Math.round(ler().leads.filter((l) => l.cob === 'cob_haynan' && pagoL(l)).reduce((s, l) => s + valorL(l) * (Number(l.cob_pct) || 0) / 100, 0) * 100) / 100
+  const saque = async (valor) => {
+    const r = await worker.fetch(new Request('https://x/api/saque/create', {
+      method: 'POST', headers: { authorization: 'Bearer ' + 'e'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ valor }),
+    }), env, ctx)
+    return r.json().catch(() => ({}))
+  }
+  t(ganho > 0, 'o Haynan tem comissao de novembro pra sacar', String(ganho))
+  let s = await saque(ganho)
+  t(s.ok && s.saque && s.saque.acima_do_saldo === false, 'sacar a comissao inteira NAO marca "acima do saldo"', JSON.stringify(s.saque || s))
+  t(s.saque && Math.abs(Number(s.saque.saldo_servidor) - ganho) < 0.01, 'o saldo que o servidor ve e a comissao dele', String(s.saque && s.saque.saldo_servidor))
+  const d = ler(); (d.saques || []).forEach((x) => { if (x.user_id === 'cob_haynan') x.status = 'recusado' })
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d))
+  s = await saque(ganho + 50)
+  t(s.ok && s.saque && s.saque.acima_do_saldo === true, 'pedir R$ 50 a mais marca "acima do saldo"', JSON.stringify(s.saque || s))
+}
+
 console.log('\n' + ok + ' de ' + (ok + mau) + ' conferencias passaram')
 process.exit(mau ? 1 : 0)
