@@ -11168,6 +11168,70 @@ const _botHoraOk = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(h || ''));
 const _botTexto300 = (v, n) => String(v == null ? '' : v).replace(/\r/g, '').slice(0, n || 300);
 const _botMinutos = (hhmm) => { const m = String(hhmm || '').match(/^(\d{2}):(\d{2})$/); return m ? Number(m[1]) * 60 + Number(m[2]) : -1; };
 
+// ═══ O GRUPO DOS COBRADORES (03/11/2026, pedido do Bruno) ═══════════════════════════════
+// "o bot esta mandando tudo certinho no grupo dos vendedores, agora quero que ele faca o mesmo no
+// grupo dos cobradores (...) coloca uma area para que eu possa configurar o bot para os cobradores".
+//
+// E A MESMA MAQUINA: mesmo WhatsApp Web, mesma fila do PC, mesmo sorteio de frase, mesmo botao
+// Salvar. O que muda e o GRUPO (outro jid) e os NUMEROS: vendedor se mede por pedido que entra,
+// cobrador por dinheiro que volta. Por isso nao da pra reaproveitar o resumo do time trocando so o
+// destino - as linhas sao outras.
+//
+// SO GRUPO, de proposito. Aqui nao existe lista de privado nem template da Meta: o Bruno pediu o
+// grupo, e a janela de 24h da Cloud API e o que mais da trabalho no outro caminho. Mensagem do bot
+// pro cobrador no privado continua saindo pela lista do time, como sempre.
+//
+// AS CONTAS SAO AS DA TELA Cobranca > Cobradores (filaCobranca, em profile-metrics.js), pra o grupo
+// e a dash nunca discordarem:
+//   recebido / pedidos = pedido DELE pago no periodo, pela data do PAGAMENTO (nao a da criacao);
+//   comissao           = o que ele ganhou nesses pagamentos, com a taxa congelada em cada pedido
+//                        (lead.cob_pct; pedido velho nao tem, entao rende zero, e e assim que
+//                        outubro fecha no fixo - ver a memoria comissao-do-cobrador);
+//   em cobranca        = a mesa DE AGORA (Entregues + Retirar nos Correios, nao pago);
+//   a receber          = saldo do que esta na rua;  atrasados = retorno marcado vencido e em aberto.
+// As tres ultimas NAO seguem o periodo, de proposito: sao a fila de trabalho de hoje, e filtrar por
+// um dia esvaziaria a mesa de quem tem pedido atrasado de semanas (mesma decisao da tela).
+//
+// O PEDIDO E DO COBRADOR por `lead.cob`, carimbado pela varredura `_cronCobrador`. O bloco Geral
+// conta a operacao INTEIRA, inclusive o pedido que ainda nao recebeu dono (a varredura da um em ate
+// um minuto), igual aos cartoes do alto daquela tela: por isso Geral pode ser maior que a soma das
+// linhas, e nao e erro.
+const BOT_COB_ROTULOS_PADRAO = { recebido: 'Recebido', pedidos: 'Pedidos recebidos', comissao: 'Comissão', em_cobranca: 'Em cobrança', atrasados: 'Atrasados', a_receber: 'A receber', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', destaque: 'Destaque do dia' };
+const BOT_COB_ORDENAR = ['recebido', 'pedidos', 'em_cobranca', 'atrasados', 'nome'];
+const BOT_COB_MARCOS_PADRAO = [
+  { n: 5, frase: '{nome} já trouxe {n} pedidos de volta hoje, {valor} no caixa. Tá voando.' },
+  { n: 10, frase: '{n} cobranças fechadas hoje, {nome}. Isso é de outro nível.' },
+  { n: 15, frase: '{nome} fechou {n} cobranças hoje, {valor}. Dia histórico, parabéns.' },
+];
+const BOT_COB_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos recebidos. Agora é passar da meta.';
+const BOT_COB_INCENTIVO_PADRAO = [
+  'Faz {horas} horas sem ninguém pagar. Bora pra cima da fila!',
+  'Time de cobrança, {horas} horas sem retorno. Quem puxa o próximo?',
+  'Tem {fila} pedidos esperando cobrança agora. Bora resolver!',
+  '{horas} horas sem receber. Um telefonema muda esse placar.',
+  'Cliente esquecido não paga sozinho. Bora ligar!',
+  'Hoje já voltaram {valor}. Bora aumentar esse número!',
+];
+// O bloco inteiro da cobranca. Mora dentro do mesmo `bot_wa` (chave `cobranca`), nao numa chave
+// nova: a config do bot ja tem versao, historico e conferencia de conflito, e duplicar isso pra um
+// segundo grupo seria duas verdades sobre a mesma ferramenta.
+function _botCobPadrao() {
+  return {
+    ativo: false,
+    grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true },
+    relatorio: {
+      ativo: true, hora: '20:00', dias: [1, 2, 3, 4, 5, 6, 0], titulo: 'Cobrança do dia', ordenar: 'recebido',
+      mostrar: { recebido: true, comissao: false, em_cobranca: true, atrasados: true, a_receber: true, meta: true, geral: true, ontem: false, destaque: false, so_com_recebido: false },
+      rotulos: { ...BOT_COB_ROTULOS_PADRAO }, aberturas: [], rodapes: [], sem_recebidos: [], midias: [],
+    },
+    semanal: { ativo: false, dia: 0, hora: '20:30', midias: [] },
+    metas: { semanal: {} },
+    marcos: { ativo: true, lista: BOT_COB_MARCOS_PADRAO.map((m) => ({ ...m, frases: [m.frase] })) },
+    meta_batida: { ativo: true, frase: BOT_COB_META_FRASE_PADRAO, frases: [BOT_COB_META_FRASE_PADRAO] },
+    incentivo: { ativo: false, horas: 3, de: '09:00', ate: '19:00', dias: [1, 2, 3, 4, 5, 6], max_dia: 3, frases: BOT_COB_INCENTIVO_PADRAO.slice() },
+  };
+}
+
 function _botCfgPadrao() {
   return {
     ativo: false,
@@ -11186,6 +11250,7 @@ function _botCfgPadrao() {
     incentivo: { ativo: false, horas: 2, de: '09:00', ate: '21:00', dias: [1, 2, 3, 4, 5, 6], max_dia: 3, frases: BOT_INCENTIVO_PADRAO.slice() },
     canais: { whatsapp: true, push: false },
     grupo: { id: '', nome: '', diario: true, semanal: true, marcos: true, via: 'pc' },
+    cobranca: _botCobPadrao(),
   };
 }
 // Mescla o que veio (raw) com a base (a config gravada ou o padrao) e valida tipo por tipo. Campo
@@ -11376,6 +11441,97 @@ function _botNormaliza(raw, base) {
   o.grupo.nome = _botTexto300(('nome' in gr) ? gr.nome : bgr.nome, 80).trim();
   for (const k of ['diario', 'semanal', 'marcos']) o.grupo[k] = (k in gr) ? !!gr[k] : ((k in bgr) ? bgr[k] !== false : true);
   o.grupo.via = ['pc', 'evolution'].includes(gr.via) ? gr.via : (['pc', 'evolution'].includes(bgr.via) ? bgr.via : 'pc');
+  o.cobranca = _botCobNormaliza(r.cobranca, b.cobranca);
+  return o;
+}
+// O bloco da cobranca, mesmas regras do de cima: campo desconhecido e ignorado, campo invalido volta
+// pro que estava gravado, nunca lanca. A tela manda `cobranca` inteiro (e uma secao so no Salvar),
+// mas a mescla campo a campo fica aqui do mesmo jeito: versao velha da tela, restaurar e a config de
+// antes do bloco existir passam por aqui e nao podem apagar nada.
+function _botCobNormaliza(raw, base) {
+  const b = (base && typeof base === 'object') ? base : _botCobPadrao();
+  const r = (raw && typeof raw === 'object') ? raw : {};
+  const o = _botCobPadrao();
+  o.ativo = 'ativo' in r ? !!r.ativo : !!b.ativo;
+
+  const gr = (r.grupo && typeof r.grupo === 'object') ? r.grupo : {};
+  const bgr = b.grupo || o.grupo;
+  const gid = ('id' in gr) ? String(gr.id || '').trim() : String(bgr.id || '');
+  o.grupo.id = _botJidGrupoOk(gid) ? gid : '';
+  o.grupo.nome = _botTexto300(('nome' in gr) ? gr.nome : bgr.nome, 80).trim();
+  for (const k of ['diario', 'semanal', 'marcos']) o.grupo[k] = (k in gr) ? !!gr[k] : ((k in bgr) ? bgr[k] !== false : true);
+
+  const rel = (r.relatorio && typeof r.relatorio === 'object') ? r.relatorio : {};
+  const brel = b.relatorio || o.relatorio;
+  o.relatorio.ativo = 'ativo' in rel ? !!rel.ativo : brel.ativo !== false;
+  o.relatorio.hora = _botHoraOk(rel.hora) ? rel.hora : (_botHoraOk(brel.hora) ? brel.hora : '20:00');
+  const dias = Array.isArray(rel.dias) ? rel.dias : (Array.isArray(brel.dias) ? brel.dias : o.relatorio.dias);
+  o.relatorio.dias = [...new Set(dias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
+  o.relatorio.titulo = _botTexto300('titulo' in rel ? rel.titulo : brel.titulo, 60).trim() || 'Cobrança do dia';
+  o.relatorio.ordenar = BOT_COB_ORDENAR.includes(rel.ordenar) ? rel.ordenar : (BOT_COB_ORDENAR.includes(brel.ordenar) ? brel.ordenar : 'recebido');
+  const mos = (rel.mostrar && typeof rel.mostrar === 'object') ? rel.mostrar : {};
+  const bmos = (brel.mostrar && typeof brel.mostrar === 'object') ? brel.mostrar : {};
+  for (const k of Object.keys(o.relatorio.mostrar)) o.relatorio.mostrar[k] = (k in mos) ? !!mos[k] : ((k in bmos) ? !!bmos[k] : o.relatorio.mostrar[k]);
+  const _lst = (k) => ((k in rel) ? _botLista(rel[k]) : (Array.isArray(brel[k]) ? _botLista(brel[k]) : []));
+  o.relatorio.aberturas = _lst('aberturas');
+  o.relatorio.rodapes = _lst('rodapes');
+  o.relatorio.sem_recebidos = _lst('sem_recebidos');
+  const rot = (rel.rotulos && typeof rel.rotulos === 'object') ? rel.rotulos : {};
+  const brot = (brel.rotulos && typeof brel.rotulos === 'object') ? brel.rotulos : {};
+  o.relatorio.rotulos = {};
+  for (const k of Object.keys(BOT_COB_ROTULOS_PADRAO)) o.relatorio.rotulos[k] = _botTexto300((k in rot) ? rot[k] : brot[k], 40).trim() || BOT_COB_ROTULOS_PADRAO[k];
+  o.relatorio.midias = _botMidias('midias' in rel ? rel.midias : brel.midias);
+
+  const sem = (r.semanal && typeof r.semanal === 'object') ? r.semanal : {};
+  const bsem = b.semanal || o.semanal;
+  o.semanal.ativo = 'ativo' in sem ? !!sem.ativo : !!bsem.ativo;
+  const diaOk = (v) => v !== '' && v !== null && v !== undefined && Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 6;
+  o.semanal.dia = diaOk(sem.dia) ? Number(sem.dia) : (diaOk(bsem.dia) ? Number(bsem.dia) : 0);
+  o.semanal.hora = _botHoraOk(sem.hora) ? sem.hora : (_botHoraOk(bsem.hora) ? bsem.hora : '20:30');
+  o.semanal.midias = _botMidias('midias' in sem ? sem.midias : bsem.midias);
+
+  const metas = (r.metas && typeof r.metas === 'object' && r.metas.semanal && typeof r.metas.semanal === 'object') ? r.metas.semanal : ((b.metas && b.metas.semanal) || {});
+  o.metas.semanal = {};
+  for (const k of Object.keys(metas)) { const n = Math.floor(Number(metas[k]) || 0); if (n > 0 && n <= 9999) o.metas.semanal[String(k).slice(0, 60)] = n; }
+
+  const mar = (r.marcos && typeof r.marcos === 'object') ? r.marcos : {};
+  const bmar = b.marcos || o.marcos;
+  o.marcos.ativo = 'ativo' in mar ? !!mar.ativo : bmar.ativo !== false;
+  const lista = Array.isArray(mar.lista) ? mar.lista : (Array.isArray(bmar.lista) ? bmar.lista : o.marcos.lista);
+  const vistosN = new Set();
+  o.marcos.lista = lista.map((m) => {
+    const temLista = !!(m && Array.isArray(m.frases) && m.frases.length);
+    const pr = _botParesFrases(temLista ? m.frases : [m && m.frase], temLista ? m.frases_midia : null);
+    return { n: Math.floor(Number(m && m.n) || 0), frases: pr.frases, frase: pr.frases[0] || '', frases_midia: pr.frases_midia, midias: _botMidias(m && m.midias) };
+  }).filter((m) => m.n > 0 && m.n <= 999 && m.frases.length && !vistosN.has(m.n) && vistosN.add(m.n)).sort((a, c) => a.n - c.n).slice(0, 20);
+
+  const mb = (r.meta_batida && typeof r.meta_batida === 'object') ? r.meta_batida : {};
+  const bmb = b.meta_batida || o.meta_batida;
+  o.meta_batida.ativo = 'ativo' in mb ? !!mb.ativo : bmb.ativo !== false;
+  {
+    const daqui = Array.isArray(mb.frases), daBase = !daqui && Array.isArray(bmb.frases) && bmb.frases.length;
+    const pr = _botParesFrases(daqui ? mb.frases : (daBase ? bmb.frases : [BOT_COB_META_FRASE_PADRAO]), daqui ? mb.frases_midia : (daBase ? bmb.frases_midia : null));
+    o.meta_batida.frases = pr.frases.length ? pr.frases : [BOT_COB_META_FRASE_PADRAO];
+    o.meta_batida.frases_midia = pr.frases.length ? pr.frases_midia : [null];
+    o.meta_batida.frase = o.meta_batida.frases[0];
+  }
+  o.meta_batida.midias = _botMidias('midias' in mb ? mb.midias : bmb.midias);
+
+  const inc = (r.incentivo && typeof r.incentivo === 'object') ? r.incentivo : {};
+  const binc = b.incentivo || o.incentivo;
+  o.incentivo.ativo = 'ativo' in inc ? !!inc.ativo : !!binc.ativo;
+  const _num = (v, bv, min, max, pad) => { const x = Number(v); if (Number.isFinite(x) && x >= min && x <= max) return x; const y = Number(bv); return (Number.isFinite(y) && y >= min && y <= max) ? y : pad; };
+  o.incentivo.horas = _num(inc.horas, binc.horas, 0.5, 12, 3);
+  o.incentivo.max_dia = Math.floor(_num(inc.max_dia, binc.max_dia, 1, 12, 3));
+  o.incentivo.de = _botHoraOk(inc.de) ? inc.de : (_botHoraOk(binc.de) ? binc.de : '09:00');
+  o.incentivo.ate = _botHoraOk(inc.ate) ? inc.ate : (_botHoraOk(binc.ate) ? binc.ate : '19:00');
+  if (_botMinutos(o.incentivo.ate) <= _botMinutos(o.incentivo.de)) { o.incentivo.de = _botHoraOk(binc.de) ? binc.de : '09:00'; o.incentivo.ate = _botHoraOk(binc.ate) ? binc.ate : '19:00'; }
+  const idias = Array.isArray(inc.dias) ? inc.dias : (Array.isArray(binc.dias) ? binc.dias : o.incentivo.dias);
+  o.incentivo.dias = [...new Set(idias.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
+  const ipr = Array.isArray(inc.frases) ? _botParesFrases(inc.frases, inc.frases_midia) : _botParesFrases(binc.frases, binc.frases_midia);
+  o.incentivo.frases = ipr.frases.length ? ipr.frases : BOT_COB_INCENTIVO_PADRAO.slice();
+  o.incentivo.frases_midia = ipr.frases.length ? ipr.frases_midia : o.incentivo.frases.map(() => null);
+  o.incentivo.midias = _botMidias('midias' in inc ? inc.midias : binc.midias);
   return o;
 }
 // `semCache`: o cron e o POST da config leem direto do banco. O cache de 30s por isolate serve so
@@ -11733,8 +11889,10 @@ function _botFrase(frase, vars) {
   const v = vars || {};
   const nomeCompleto = String(v.nome_completo || v.nome || '').trim();
   const primeiro = nomeCompleto.split(/\s+/)[0] || '';
-  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data, horas: v.horas };
-  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data|horas)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
+  // `valor` e `fila` sao da cobranca (03/11/2026): dinheiro recebido ja formatado e quantos pedidos
+  // estao na mesa agora. Nas frases do time elas simplesmente nao aparecem.
+  const mapa = { nome: primeiro, nome_completo: nomeCompleto, n: v.n, pedidos: v.pedidos, leads: v.leads, meta: v.meta, faltam: v.faltam, data: v.data, horas: v.horas, valor: v.valor, fila: v.fila };
+  return String(frase || '').replace(/\{(nome_completo|nome|n|pedidos|leads|meta|faltam|data|horas|valor|fila)\}/g, (_, k) => (mapa[k] == null ? '' : String(mapa[k])));
 }
 
 // ─── Envio ──────────────────────────────────────────────────────────────────────────────
@@ -11977,7 +12135,7 @@ async function _botReserva(env, chave) {
 // Faxina, uma vez por dia (junto do resumo): envios com mais de 90 dias e chaves de dedupe com mais de 30.
 async function _botFaxina(env) {
   try { await env.DB.prepare('DELETE FROM bot_envios WHERE ts < ?').bind(Math.floor(Date.now() / 1000) - 90 * 86400).run(); } catch (_) {}
-  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%' OR key LIKE 'bot_incent_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%' OR key LIKE 'bot_incent_%' OR key LIKE 'bot_cobrel_%' OR key LIKE 'bot_cobsem_%' OR key LIKE 'bot_cobmarcos_%' OR key LIKE 'bot_cobmeta_%' OR key LIKE 'bot_cobincent_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
 }
 // O SLOT DE UM HORARIO MARCADO. Devolve o dia do slot que esta "na hora" agora (hoje, ou ontem se a
 // hora marcada foi perto da meia-noite e a batida caiu depois dela), respeitando o atraso maximo.
@@ -12123,6 +12281,324 @@ async function _botIncentivoTick(env, cfg, row, dia) {
   if (cfg.grupo && cfg.grupo.id) await _botEntregarGrupo(env, cfg, texto, 'incentivo', dia, esc.midia);
   else await _botEnviarLista(env, cfg, row, _botDestinatarios(cfg), texto, 'incentivo', dia);
 }
+// ═══ COBRANCA: os numeros, o texto e os disparos do grupo dos cobradores ════════════════
+// Regras copiadas do front (crm-leads.js / profile-metrics.js / pagamentos.js), igual ao resumo do
+// time logo acima. O apelido da coluna TEM que ser resolvido (colDe): lendo `l.col` cru, o card que
+// passou pelo modal do Kanban (gravado como 'Cobrança', 'Entregue', 'Inadimplência') sumiria da fila
+// e o grupo leria uma mesa menor do que a de verdade.
+const _BOT_COL_ALIAS = {
+  'Reportado': 'A Enviar', 'Reportados': 'A Enviar', 'Enviado': 'Enviados', 'Enviada': 'Enviados',
+  'Rota de Entrega': 'Saiu para Entrega', 'Saiu pra Entrega': 'Saiu para Entrega', 'Retirada': 'Retirar nos Correios',
+  'Atenção': 'Requer Atenção', 'Não Entregue': 'Requer Atenção', 'Nao Entregue': 'Requer Atenção',
+  'Entregue': 'Entregues', 'Cobrança': 'Entregues', 'Inadimplência': 'Entregues', 'Inadimplências': 'Entregues',
+  'Pago': 'Pagos', 'Frustrado': 'Frustrados', 'Devolvido': 'Devolvido com Reverso', 'Cancelado': 'Cancelado sem Custo',
+};
+const _botColDe = (l) => { const c = String((l && l.col) || ''); return _BOT_COL_ALIAS[c] || c; };
+const _COB_FILA = ['Entregues', 'Retirar nos Correios'];                       // COLS_COBRANCA
+const _COB_NA_RUA = ['Preparando', 'Enviados', 'Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
+const _COB_EM_ABERTO = ['Saiu para Entrega', 'Entregues', 'Retirar nos Correios', 'Requer Atenção'];
+const _COB_PERDA = ['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado', 'Cancelado sem Custo'];
+const _botTotalPago = (l) => {
+  const reg = (Array.isArray(l && l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
+  if (reg > 0) return reg;
+  return _botPago(l) ? _botValorLead(l) : 0;
+};
+const _botSaldoCob = (l) => Math.max(0, _botValorLead(l) - _botTotalPago(l));
+// A taxa vem SEMPRE congelada no pedido (lead.cob_pct): pedido pago antes de 01/11/2026 nao tem e
+// rende zero, e e assim que o mes fechado nao anda sozinho quando a taxa muda.
+const _botComissaoCob = (l) => _botTotalPago(l) * (Number(l && l.cob_pct) || 0) / 100;
+const _botAbertoCob = (l) => !_botPago(l) && !_COB_PERDA.includes(_botColDe(l));
+const _botAtrasadoCob = (l, agora) => {
+  if (!l || _botPago(l) || !_COB_EM_ABERTO.includes(_botColDe(l))) return false;
+  const t = l.agend ? Date.parse(l.agend) : NaN;
+  return !isNaN(t) && t < agora;
+};
+async function _botCobradores(env) {
+  const r = await env.DB.prepare("SELECT id, name FROM users WHERE COALESCE(archived,0)=0 AND (afiliado_id IS NULL OR afiliado_id='') AND lower(role)='cobrador' ORDER BY name").all().catch(() => null);
+  return ((r && r.results) || []).map((u) => ({ id: String(u.id), nome: String(u.name || u.id) }));
+}
+const _botCobZero = () => ({ recebido: 0, pedidos: 0, comissao: 0, em_cobranca: 0, em_cobranca_vl: 0, a_receber: 0, atrasados: 0 });
+// OS NUMEROS DA COBRANCA no periodo, por cobrador e o geral. Uma passada no blob, sem consulta nova.
+// Recebido, pedidos e comissao seguem a data do PAGAMENTO; em cobranca, a receber e atrasados sao o
+// estado de AGORA (a mesa de trabalho), nao o periodo.
+async function _botDadosCob(env, dia, cfg, tipo, fresco) {
+  const cob = (cfg && cfg.cobranca) || _botCobPadrao();
+  const st = await _getDashData(env, fresco ? 0 : undefined);
+  const leads = Array.isArray(st && st.leads) ? st.leads : [];
+  const cobradores = await _botCobradores(env);
+  const semanal = tipo === 'semanal';
+  const sem = _botSemanaDe(semanal && _botWd(dia) === 1 ? _botDiaMais(dia, -1) : dia);
+  const ini = semanal ? sem.iniTs * 1000 : _botInicioDia(dia) * 1000;
+  const fim = semanal ? sem.fimTs * 1000 : ini + 86400000;
+  const ontemIni = ini - (fim - ini), ontemFim = ini;
+  const semMeta = _botSemanaDe(dia);
+  const agora = Date.now();
+  const por = {};
+  for (const c of cobradores) {
+    const meta = Number((cob.metas && cob.metas.semanal && cob.metas.semanal[c.id]) || 0);
+    por[c.id] = { id: c.id, nome: c.nome, ..._botCobZero(), semana: 0, meta, faltam: 0, ontem: { pedidos: 0, recebido: 0 } };
+  }
+  const geral = { ..._botCobZero(), semana: 0, ontem: { pedidos: 0, recebido: 0 } };
+  for (const l of leads) {
+    if (!l || l.afl) continue;                         // o mundo do afiliado nao entra
+    const c = por[String(l.cob || '')] || null;        // sem dono ainda: conta so no geral
+    const col = _botColDe(l);
+    const pago = _botPago(l);
+    if (!pago && _COB_FILA.includes(col)) {
+      const s = _botSaldoCob(l);
+      geral.em_cobranca++; geral.em_cobranca_vl += s;
+      if (c) { c.em_cobranca++; c.em_cobranca_vl += s; }
+    }
+    if (_botAbertoCob(l) && _COB_NA_RUA.includes(col)) {
+      const s = _botSaldoCob(l);
+      geral.a_receber += s;
+      if (c) c.a_receber += s;
+    }
+    if (_botAtrasadoCob(l, agora)) { geral.atrasados++; if (c) c.atrasados++; }
+    if (!pago) continue;
+    const pg = _botPagoMs(l);
+    const vl = _botTotalPago(l), cm = _botComissaoCob(l);
+    if (pg >= ini && pg < fim) {
+      geral.pedidos++; geral.recebido += vl; geral.comissao += cm;
+      if (c) { c.pedidos++; c.recebido += vl; c.comissao += cm; }
+    } else if (pg >= ontemIni && pg < ontemFim) {
+      geral.ontem.pedidos++; geral.ontem.recebido += vl;
+      if (c) { c.ontem.pedidos++; c.ontem.recebido += vl; }
+    }
+    if (pg >= semMeta.iniTs * 1000 && pg < semMeta.fimTs * 1000) { geral.semana++; if (c) c.semana++; }
+  }
+  const lista = Object.values(por);
+  for (const c of lista) c.faltam = c.meta > 0 ? Math.max(0, c.meta - c.semana) : 0;
+  return { dia, tipo: semanal ? 'semanal' : 'diario', semana: { inicio: sem.inicio, fim: sem.fim }, cobradores: lista, geral };
+}
+// O TEXTO QUE VAI NO GRUPO DOS COBRADORES. Negrito com asteriscos, sem emoji, sem travessao.
+function _botTextoCobranca(cfg, dados, esc) {
+  const cob = (cfg && cfg.cobranca) || _botCobPadrao();
+  const r = cob.relatorio || _botCobPadrao().relatorio;
+  const m = r.mostrar || {};
+  const rot = { ...BOT_COB_ROTULOS_PADRAO, ...(r.rotulos || {}) };
+  const e = esc || { abertura: _botUmaDe(r.aberturas), rodape: _botUmaDe(r.rodapes), sem_recebido: _botUmaDe(r.sem_recebidos) };
+  const semanal = dados.tipo === 'semanal';
+  const vars = { data: _botDataBR(dados.dia), valor: _botBRL(dados.geral.recebido), fila: dados.geral.em_cobranca, pedidos: dados.geral.pedidos };
+  const L = [];
+  const titulo = semanal ? 'Cobrança da semana' : (r.titulo || 'Cobrança do dia');
+  const quando = semanal ? (_botDataBR(dados.semana.inicio) + ' a ' + _botDataBR(dados.semana.fim)) : (_botDataBR(dados.dia) + ' (' + _botDiaSemana(dados.dia) + ')');
+  L.push('*' + titulo + ' · ' + quando + '*');
+  if (e.abertura) L.push(_botFrase(e.abertura, vars));
+  let cs = dados.cobradores.slice();
+  if (r.ordenar === 'nome') cs.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'pedidos') cs.sort((a, b) => (b.pedidos - a.pedidos) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'em_cobranca') cs.sort((a, b) => (b.em_cobranca - a.em_cobranca) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else if (r.ordenar === 'atrasados') cs.sort((a, b) => (b.atrasados - a.atrasados) || (b.recebido - a.recebido) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  else cs.sort((a, b) => (b.recebido - a.recebido) || (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  if (!cs.length) { L.push(''); L.push('Nenhum cobrador ativo no cadastro.'); return L.join('\n'); }
+  const ninguem = cs.every((c) => c.pedidos === 0);
+  if (m.destaque && !ninguem) {
+    const top = Math.max(...cs.map((c) => c.recebido));
+    const quem = cs.filter((c) => c.recebido === top).map((c) => c.nome);
+    const rotD = semanal && rot.destaque === BOT_COB_ROTULOS_PADRAO.destaque ? 'Destaque da semana' : rot.destaque;
+    L.push(''); L.push('*' + rotD + ':* ' + quem.join(' e ') + ' (' + _botBRL(top) + ')');
+  }
+  if (ninguem && e.sem_recebido) { L.push(''); L.push(_botFrase(e.sem_recebido, vars)); }
+  if (m.so_com_recebido) cs = cs.filter((c) => c.pedidos > 0);
+  const linhas = (c) => {
+    const out = [];
+    out.push(rot.recebido + ': ' + _botBRL(c.recebido) + ' (' + _botPlural(c.pedidos, 'pedido', 'pedidos') + ')');
+    if (m.comissao) out.push(rot.comissao + ': ' + _botBRL(c.comissao));
+    if (m.em_cobranca !== false) out.push(rot.em_cobranca + ': ' + c.em_cobranca + (c.em_cobranca ? ' (' + _botBRL(c.em_cobranca_vl) + ')' : '') + (m.atrasados !== false && c.atrasados ? ' · ' + rot.atrasados + ': ' + c.atrasados : ''));
+    else if (m.atrasados !== false && c.atrasados) out.push(rot.atrasados + ': ' + c.atrasados);
+    if (m.a_receber !== false) out.push(rot.a_receber + ': ' + _botBRL(c.a_receber));
+    return out;
+  };
+  cs.forEach((c, i) => {
+    L.push('');
+    L.push('*' + (r.ordenar === 'nome' ? '' : (i + 1) + '. ') + c.nome + '*');
+    L.push(...linhas(c));
+    if (m.meta !== false && c.meta > 0) L.push(rot.meta + ': ' + c.semana + '/' + c.meta + (c.faltam > 0 ? ' · faltam ' + c.faltam : ' · meta batida'));
+    if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(c.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botBRL(c.ontem.recebido));
+  });
+  // O GERAL conta a operacao inteira, inclusive o pedido que ainda nao recebeu dono: por isso ele
+  // aparece mesmo com um cobrador so (o numero dele e o da casa podem nao ser iguais).
+  if (m.geral !== false) {
+    const g = dados.geral;
+    L.push('');
+    L.push('*' + rot.geral + '*');
+    L.push(...linhas(g));
+    if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(g.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botBRL(g.ontem.recebido));
+  }
+  if (e.rodape) { L.push(''); L.push(_botFrase(e.rodape, vars)); }
+  return L.join('\n');
+}
+// Manda o resumo da cobranca no grupo dos cobradores. So grupo: aqui nao ha lista de privado.
+async function _botDispararCob(env, cfg, tipo, diaResumo, dia) {
+  const cob = cfg.cobranca;
+  const dados = await _botDadosCob(env, diaResumo, cfg, tipo === 'semanal' ? 'semanal' : 'diario');
+  const r0 = cob.relatorio;
+  const esc = {
+    abertura: await _botSorteia(env, 'cob_abertura', r0.aberturas),
+    rodape: await _botSorteia(env, 'cob_rodape', r0.rodapes),
+    sem_recebido: await _botSorteia(env, 'cob_sem_recebido', r0.sem_recebidos),
+  };
+  const texto = _botTextoCobranca(cfg, dados, esc);
+  const resultados = [];
+  const g = cob.grupo || {};
+  const tipoLog = tipo === 'semanal' ? 'cob_semanal' : 'cob_relatorio';
+  if (g.id && (tipo === 'semanal' ? g.semanal !== false : g.diario !== false)) {
+    const midia = await _botSorteiaMidia(env, tipoLog, tipo === 'semanal' ? cob.semanal.midias : r0.midias);
+    if (midia && texto.length > 1000) {
+      await _botEntregarGrupo(env, cfg, '', tipoLog, dia || diaResumo, midia, g);
+      resultados.push(await _botEntregarGrupo(env, cfg, texto, tipoLog, dia || diaResumo, null, g));
+    } else resultados.push(await _botEntregarGrupo(env, cfg, texto, tipoLog, dia || diaResumo, midia, g));
+  }
+  return { texto, dados, resultados };
+}
+// COMEMORACAO DA COBRANCA: o cobrador cruzou um marco de pedidos RECEBIDOS no dia, ou bateu a meta
+// da semana. Mesma mecanica do time (reconta do blob, so dispara o que ainda nao saiu, o maior
+// patamar fica gravado), mas so no grupo: sem grupo nao ha onde comemorar, entao nem roda.
+let _botCobVerVista = -1;
+async function _botCobMarcosTick(env, cfg, dia) {
+  const cob = cfg.cobranca;
+  const g = cob.grupo || {};
+  if (!g.id || g.marcos === false) return;
+  let ver = 0;
+  try { const r = await env.DB.prepare('SELECT version FROM dashboard_state WHERE id=1').first(); ver = Number(r && r.version) || 0; } catch (_) { return; }
+  if (_botCobVerVista < 0) _botCobVerVista = Number(await _readConfig(env, 'bot_cob_ver').catch(() => 0)) || 0;
+  if (ver === _botCobVerVista) return;
+  const dados = await _botDadosCob(env, dia, cfg, 'diario', true);
+  const semana = _botSemanaDe(dia);
+  const chaveM = 'bot_cobmarcos_' + dia, chaveS = 'bot_cobmeta_' + semana.inicio;
+  const lidas = await _readConfigMuitas(env, [chaveM, chaveS]).catch(() => ({}));
+  let feito = {}, feitoS = {};
+  try { feito = JSON.parse(lidas[chaveM] || '{}') || {}; } catch (_) { feito = {}; }
+  try { feitoS = JSON.parse(lidas[chaveS] || '{}') || {}; } catch (_) { feitoS = {}; }
+  const envios = [];
+  for (const c of dados.cobradores) {
+    if (cob.marcos.ativo && cob.marcos.lista.length) {
+      const max = Number(feito[c.id]) || 0;
+      const novos = cob.marcos.lista.filter((m) => m.n > max && m.n <= c.pedidos);
+      for (const m of novos) envios.push({ c, frases: m.frases, fmidia: m.frases_midia, chave: 'cob_marco_' + m.n, midias: m.midias || [], n: m.n, tipo: 'cob_marco', marca: () => { feito[c.id] = Math.max(Number(feito[c.id]) || 0, m.n); } });
+    }
+    if (cob.meta_batida.ativo && c.meta > 0 && c.semana >= c.meta && !feitoS[c.id]) {
+      envios.push({ c, frases: cob.meta_batida.frases, fmidia: cob.meta_batida.frases_midia, chave: 'cob_meta', midias: cob.meta_batida.midias || [], n: c.semana, tipo: 'cob_meta', marca: () => { feitoS[c.id] = 1; } });
+    }
+  }
+  _botCobVerVista = ver;
+  await _writeConfig(env, 'bot_cob_ver', String(ver)).catch(() => {});
+  if (!envios.length) return;
+  let mudouM = false, mudouS = false;
+  for (const e of envios) {
+    const esc = await _botSorteiaComMidia(env, e.chave, e.frases, e.fmidia, e.midias);
+    e.texto = _botFrase(esc.frase, { nome: e.c.nome, n: e.n, pedidos: e.c.pedidos, meta: e.c.meta, faltam: e.c.faltam, valor: _botBRL(e.c.recebido), fila: e.c.em_cobranca, data: _botDataBR(dia) });
+    e.midia = esc.midia;
+  }
+  const semMidia = envios.filter((e) => !e.midia);
+  const entregues = [];
+  if (semMidia.length) {
+    const tipoG = semMidia.some((e) => e.tipo === 'cob_meta') && !semMidia.some((e) => e.tipo === 'cob_marco') ? 'cob_meta' : 'cob_marco';
+    const r = await _botEntregarGrupo(env, cfg, semMidia.map((e) => e.texto).join('\n\n'), tipoG, dia, null, g);
+    if (r.status !== 'erro') entregues.push(...semMidia);
+  }
+  for (const e of envios.filter((x) => x.midia)) {
+    const r = await _botEntregarGrupo(env, cfg, e.texto, e.tipo, dia, e.midia, g);
+    if (r.status !== 'erro') entregues.push(e);
+  }
+  for (const e of entregues) { e.marca(); if (e.tipo === 'cob_meta') mudouS = true; else mudouM = true; }
+  if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
+  if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
+}
+// QUANDO ALGUEM PAGOU PELA ULTIMA VEZ HOJE (s), quanto voltou e quantos pedidos estao na mesa.
+async function _botUltimoRecebido(env, dia) {
+  const st = await _getDashData(env);
+  const leads = Array.isArray(st && st.leads) ? st.leads : [];
+  const ini = _botInicioDia(dia) * 1000, fim = ini + 86400000;
+  let ultima = 0, pedidos = 0, valor = 0, fila = 0;
+  for (const l of leads) {
+    if (!l || l.afl) continue;
+    if (!_botPago(l)) { if (_COB_FILA.includes(_botColDe(l))) fila++; continue; }
+    const t = _botPagoMs(l);
+    if (!t || t < ini || t >= fim) continue;
+    pedidos++; valor += _botTotalPago(l);
+    if (t > ultima) ultima = t;
+  }
+  return { ultima: Math.floor(ultima / 1000), pedidos, valor, fila };
+}
+// INCENTIVO DA COBRANCA: passou `horas` sem ninguem pagar, dentro do horario, manda uma frase no
+// grupo dos cobradores. Mesma trava do incentivo do time (max por dia e reserva atomica).
+async function _botCobIncentivoTick(env, cfg, dia) {
+  const cob = cfg.cobranca;
+  const inc = cob.incentivo;
+  const g = cob.grupo || {};
+  if (!g.id) return;
+  if (!inc || !inc.ativo || !inc.frases.length || !inc.dias.includes(_botWd(dia))) return;
+  const agoraBR = _agoraBR();
+  const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  const de = _botMinutos(inc.de), ate = _botMinutos(inc.ate);
+  if (de < 0 || ate < 0 || minAgora < de || minAgora >= ate) return;
+  const agora = Math.floor(Date.now() / 1000);
+  const comeco = _botInicioDia(dia) + de * 60;
+  let est = {};
+  try { est = JSON.parse((await _readConfig(env, 'bot_cobincent_' + dia)) || '{}') || {}; } catch (_) { est = {}; }
+  const feitos = Number(est.n) || 0;
+  if (feitos >= inc.max_dia) return;
+  if (agora - Math.max(comeco, Number(est.ultimo) || 0) < inc.horas * 3600) return;
+  const { ultima, pedidos, valor, fila } = await _botUltimoRecebido(env, dia);
+  const desde = Math.max(comeco, ultima || 0);
+  if (agora - Math.max(desde, Number(est.ultimo) || 0) < inc.horas * 3600) return;
+  if (!(await _botReserva(env, 'bot_cobincent_' + dia + '_' + (feitos + 1)))) return;
+  const horas = Math.max(1, Math.floor((agora - desde) / 3600));
+  const esc = await _botSorteiaComMidia(env, 'cob_incentivo', inc.frases, inc.frases_midia, inc.midias);
+  const texto = _botFrase(esc.frase, { horas, pedidos, valor: _botBRL(valor), fila, data: _botDataBR(dia) });
+  await _writeConfig(env, 'bot_cobincent_' + dia, JSON.stringify({ n: feitos + 1, ultimo: agora }));
+  await _botEntregarGrupo(env, cfg, texto, 'cob_incentivo', dia, esc.midia, g);
+}
+// O dia que o resumo da cobranca cobre (antes das 06:00 e o dia anterior, igual ao do time).
+const _botCobDiaDoResumo = (cfg, diaSlot) => (_botMinutos(cfg && cfg.cobranca && cfg.cobranca.relatorio && cfg.cobranca.relatorio.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(diaSlot, -1) : diaSlot);
+// O pedaco do tick que e da cobranca. As chaves de dedupe sao PROPRIAS (bot_cobrel_, bot_cobsem_,
+// bot_cobmarcos_, bot_cobmeta_, bot_cobincent_): reaproveitar as do time faria um resumo segurar o
+// outro no mesmo horario.
+async function _botCobTick(env, cfg, dia, minAgora) {
+  const cob = cfg.cobranca;
+  if (!cob || !cob.ativo) return;
+  const r = cob.relatorio;
+  if (r.ativo) {
+    const slot = _botSlot(r.hora, dia, minAgora);
+    if (slot && r.dias.includes(_botWd(slot)) && (await _botReserva(env, 'bot_cobrel_' + slot))) {
+      // A faxina tambem sai daqui: com o resumo do time desligado, ela nunca rodaria.
+      try { await _botDispararCob(env, cfg, 'relatorio', _botCobDiaDoResumo(cfg, slot), slot); await _botFaxina(env); } catch (e) { console.error('[bot] resumo da cobranca falhou: ' + String((e && e.message) || e)); }
+    }
+  }
+  const s = cob.semanal;
+  if (s.ativo) {
+    const slot = _botSlot(s.hora, dia, minAgora);
+    if (slot && _botWd(slot) === s.dia && (await _botReserva(env, 'bot_cobsem_' + slot))) {
+      try { await _botDispararCob(env, cfg, 'semanal', _botMinutos(s.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(slot, -1) : slot, slot); } catch (e) { console.error('[bot] resumo semanal da cobranca falhou: ' + String((e && e.message) || e)); }
+    }
+  }
+  if ((cob.marcos.ativo && cob.marcos.lista.length) || (cob.meta_batida.ativo && Object.keys(cob.metas.semanal || {}).length)) {
+    try { await _botCobMarcosTick(env, cfg, dia); } catch (e) { console.error('[bot] comemoracao da cobranca falhou: ' + String((e && e.message) || e)); }
+  }
+  if (cob.incentivo && cob.incentivo.ativo) {
+    try { await _botCobIncentivoTick(env, cfg, dia); } catch (e) { console.error('[bot] incentivo da cobranca falhou: ' + String((e && e.message) || e)); }
+  }
+}
+// Quando e o proximo resumo da cobranca, em texto, pra tela.
+async function _botCobProximo(env, cfg) {
+  const cob = cfg.cobranca || _botCobPadrao();
+  const r = cob.relatorio;
+  if (!cfg.ativo || !cob.ativo || !r.ativo || !r.dias.length) return 'desligado';
+  const agoraBR = _agoraBR();
+  const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
+  const hoje = _brDay();
+  const jaHoje = !!(await _readConfig(env, 'bot_cobrel_' + hoje).catch(() => null));
+  for (let i = 0; i < 8; i++) {
+    const dia = _botDiaMais(hoje, i);
+    if (!r.dias.includes(_botWd(dia))) continue;
+    if (i === 0 && (jaHoje || minAgora > _botMinutos(r.hora))) continue;
+    const quando = i === 0 ? 'hoje' : (i === 1 ? 'amanhã' : _botDiaSemana(dia) + ' (' + _botDataBR(dia).slice(0, 5) + ')');
+    return quando + ' às ' + r.hora;
+  }
+  return 'desligado';
+}
 // O TICK DO CRON (toda batida, leve): fila de pendentes, resumo diario, resumo semanal, marcos.
 // Roda DEPOIS do poll do Datacrazy na mesma batida, pra enxergar a resposta ao "Ver mensagem"
 // que acabou de chegar. Sem numero com token nada e reservado: quando o token voltar, o resumo
@@ -12132,9 +12608,12 @@ async function _botTick(env) {
   try { await _botOutboxFaxina(env); } catch (_) {}   // a fila do PC recebe item mesmo com o bot desligado: a faxina nao depende do resto
   if (!cfg.ativo) return;
   const dia = _brDay();
-  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length) || (cfg.incentivo && cfg.incentivo.ativo);
+  // A cobranca entra nas duas contas: ela pode estar ligada com o resumo do time inteiro desligado,
+  // e ela e um grupo (ou seja, nao depende do numero oficial com token).
+  const cobOn = !!(cfg.cobranca && cfg.cobranca.ativo && cfg.cobranca.grupo && cfg.cobranca.grupo.id);
+  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length) || (cfg.incentivo && cfg.incentivo.ativo) || cobOn;
   if (!temAlgo) return;
-  const temGrupo = !!(cfg.grupo && cfg.grupo.id);
+  const temGrupo = !!(cfg.grupo && cfg.grupo.id) || cobOn;
   const row = await _botNumeroRow(env, cfg);
   if (!row && cfg.canais.whatsapp !== false && !temGrupo) {
     if (_botSemTokenDia !== dia) { _botSemTokenDia = dia; await _botLog(env, { dia, tipo: 'relatorio', nome: '', fone: '', via: '', status: 'erro', erro: 'O número do bot está sem token de envio. Nada sai até ele voltar (escolha outro número na tela).' }); }
@@ -12163,6 +12642,11 @@ async function _botTick(env) {
   }
   if (cfg.incentivo && cfg.incentivo.ativo) {
     try { await _botIncentivoTick(env, cfg, row, dia); } catch (e) { console.error('[bot] incentivo falhou: ' + String((e && e.message) || e)); }
+  }
+  // O GRUPO DOS COBRADORES (03/11/2026), depois do time: se a batida estourar o tempo, o que ja
+  // existia sai primeiro. Cada um tem chave de dedupe propria, entao um nunca segura o outro.
+  if (cobOn) {
+    try { await _botCobTick(env, cfg, dia, minAgora); } catch (e) { console.error('[bot] cobranca falhou: ' + String((e && e.message) || e)); }
   }
 }
 // Quando e o proximo resumo, em texto, pra tela.
@@ -12429,11 +12913,15 @@ async function _botAgenteAck(env, id, ok, msgId, erro, repetir) {
 // ENTREGA NO GRUPO. via 'pc': entra na fila e o agente pega no proximo ping (o registro de envio e
 // feito no ack, ou no descarte). via 'evolution': manda na hora; servidor fora ou sessao caida vai pra
 // bot_pend e o tick repete por ate 6h.
-async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia) {
-  const g = (cfg && cfg.grupo) || {};
+// `grupo` (03/11/2026) escolhe PRA QUAL grupo vai: sem ele, o do time (cfg.grupo); com ele, o da
+// cobranca. O CAMINHO continua sendo um so (cfg.grupo.via): e o mesmo WhatsApp Web, a mesma fila do
+// PC; ler o `via` do grupo da cobranca faria o segundo grupo cair na Evolution sem ninguem pedir.
+async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia, grupo) {
+  const g = grupo || (cfg && cfg.grupo) || {};
+  const via = ((cfg && cfg.grupo && cfg.grupo.via) === 'evolution') ? 'evolution' : 'pc';
   const out = { fone: String(g.id || ''), nome: 'Grupo: ' + (g.nome || g.id || ''), status: 'erro', via: 'grupo', erro: '', id: '', grupo: true };
   if (!g.id) { out.erro = 'nenhum grupo escolhido'; return out; }
-  if (g.via === 'evolution') {
+  if (via === 'evolution') {
     // A Evolution (desligada desde 12/10) manda so o texto.
     if (!String(texto || '').trim()) { out.erro = 'pela Evolution só vai texto'; return out; }
     const r = await _botEvoTexto(env, g.id, texto);
@@ -15107,6 +15595,12 @@ async function handleBotConfig(req, env) {
     const minAgora = agoraBR.getUTCHours() * 60 + agoraBR.getUTCMinutes();
     const mudouHora = !atual.ativo || atual.relatorio.hora !== cfg.relatorio.hora || !atual.relatorio.ativo;
     if (cfg.ativo && cfg.relatorio.ativo && mudouHora && minAgora > _botMinutos(cfg.relatorio.hora)) await _botReserva(env, 'bot_rel_' + _brDay());
+    // O mesmo pro resumo da cobranca: ligar as 22h nao faz sair o das 20h atrasado.
+    {
+      const ac = atual.cobranca || _botCobPadrao(), cc = cfg.cobranca;
+      const mudouHoraCob = !atual.ativo || !ac.ativo || !ac.relatorio.ativo || ac.relatorio.hora !== cc.relatorio.hora;
+      if (cfg.ativo && cc.ativo && cc.relatorio.ativo && mudouHoraCob && minAgora > _botMinutos(cc.relatorio.hora)) await _botReserva(env, 'bot_cobrel_' + _brDay());
+    }
     const meta = await _botCfgGravar(env, cfg, { id: u.id, nome: u.name || u.id }, baseVer != null ? (Number(lido.meta.ver) || 0) : null);
     if (meta.conflito) { const ag = await _botCfgLerEstrito(env).catch(() => null); return json({ ok: false, error: 'conflito', cfg: ag ? ag.cfg : atual, meta: ag ? ag.meta : lido.meta }, 409); }
     return json({ ok: true, cfg, meta });
@@ -15152,7 +15646,7 @@ async function handleBotConfig(req, env) {
   agente.token = await _botAgenteToken(env);
   const meta = await _botCfgMeta(env);
   return json({ ok: true, cfg, meta, equipe, numeros, agente, evo: { configurado: !!(evo.url && evo.key), host: _botHost(evo.url) }, template: template && !template.erro ? template : null, template_erro: template && template.erro ? template.erro : '',
-    status: { proximo: await _botProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, dia_resumo: _botDiaDoResumo(cfg, _brDay()), ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
+    status: { proximo: await _botProximo(env, cfg), proximo_cob: await _botCobProximo(env, cfg), semana: { inicio: sem.inicio, fim: sem.fim }, dia_resumo: _botDiaDoResumo(cfg, _brDay()), dia_resumo_cob: _botCobDiaDoResumo(cfg, _brDay()), ultimo_relatorio: ultimo, janelas, numero_ok: !!row } });
 }
 // GET /api/bot/config/ver -> { ver, ts, por_nome }: a tela pergunta a cada 10s se outro login salvou.
 // GET /api/bot/config/historico -> as ultimas versoes (sem a config inteira).
@@ -15192,6 +15686,7 @@ async function handleBotCfgVersoes(req, env) {
   return err('Rota desconhecida', 404);
 }
 let _botPreviaCache = null;   // os numeros do dia (60s): a previa ao vivo pede a cada pausa de digitacao
+let _botPreviaCobCache = null;   // o mesmo, pros numeros da cobranca
 async function handleBotWaPreview(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -15203,8 +15698,22 @@ async function handleBotWaPreview(req, env) {
   // lista, senao o texto mudaria a cada tecla.
   let rascunho = null, tipoB = '';
   if (req.method === 'POST') { try { const b = await req.json(); rascunho = (b && b.rascunho && typeof b.rascunho === 'object') ? b.rascunho : null; tipoB = String((b && b.tipo) || ''); } catch (_) {} }
+  // A PREVIA DA COBRANCA (03/11/2026): mesmo endpoint, outro bloco de config e outro texto. Cache
+  // proprio pra nao brigar com a previa do time (os dois `dados` tem formato diferente).
+  const tipoPedido = url.searchParams.get('tipo') || tipoB;
+  if (tipoPedido === 'cob_diario' || tipoPedido === 'cob_semanal') {
+    const cfgC = rascunho ? _botNormaliza({ cobranca: rascunho.cobranca }, salvo) : salvo;
+    const tipoC = tipoPedido === 'cob_semanal' ? 'semanal' : 'diario';
+    const diaC = _botDiaOk(url.searchParams.get('dia')) ? url.searchParams.get('dia') : (tipoC === 'diario' ? _botCobDiaDoResumo(cfgC, _brDay()) : _brDay());
+    const chC = diaC + '|' + tipoC + '|' + JSON.stringify((cfgC.cobranca && cfgC.cobranca.metas) || {});
+    let dadosC = (_botPreviaCobCache && _botPreviaCobCache.ch === chC && Date.now() - _botPreviaCobCache.t < 60000) ? _botPreviaCobCache.dados : null;
+    if (!dadosC) { dadosC = await _botDadosCob(env, diaC, cfgC, tipoC); _botPreviaCobCache = { ch: chC, t: Date.now(), dados: dadosC }; }
+    const rc = cfgC.cobranca.relatorio;
+    const escC = rascunho ? { abertura: (rc.aberturas || [])[0] || '', rodape: (rc.rodapes || [])[0] || '', sem_recebido: (rc.sem_recebidos || [])[0] || '' } : undefined;
+    return json({ ok: true, texto: _botTextoCobranca(cfgC, dadosC, escC), dados: dadosC });
+  }
   const cfg = rascunho ? _botNormaliza({ relatorio: rascunho.relatorio, semanal: rascunho.semanal, metas: rascunho.metas }, salvo) : salvo;
-  const tipo = (url.searchParams.get('tipo') || tipoB) === 'semanal' ? 'semanal' : 'diario';
+  const tipo = tipoPedido === 'semanal' ? 'semanal' : 'diario';
   const dia = _botDiaOk(url.searchParams.get('dia')) ? url.searchParams.get('dia') : (tipo === 'diario' ? _botDiaDoResumo(cfg, _brDay()) : _brDay());
   const ch = dia + '|' + tipo + '|' + JSON.stringify(cfg.metas || {});
   let dados = (_botPreviaCache && _botPreviaCache.ch === ch && Date.now() - _botPreviaCache.t < 60000) ? _botPreviaCache.dados : null;
@@ -15213,15 +15722,64 @@ async function handleBotWaPreview(req, env) {
   const esc = rascunho ? { abertura: (r0.aberturas || [])[0] || '', rodape: (r0.rodapes || [])[0] || r0.rodape || '', sem_pedido: (r0.sem_pedidos || [])[0] || r0.sem_pedido || '' } : undefined;
   return json({ ok: true, texto: _botTextoRelatorio(cfg, dados, esc), dados });
 }
+// "Enviar agora", "Testar" e "Testar frase" da aba Cobradores. Tudo vai pro grupo dos cobradores.
+async function _botEnviarCob(env, cfg, b, tipo, hoje) {
+  const cob = cfg.cobranca || _botCobPadrao();
+  const g = cob.grupo || {};
+  if (!g.id) return err('Escolha e salve o grupo dos cobradores antes');
+  if (tipo === 'cob_relatorio' || tipo === 'cob_semanal') {
+    const t = tipo === 'cob_semanal' ? 'semanal' : 'relatorio';
+    const diaResumo = _botDiaOk(b.dia) ? b.dia : (t === 'relatorio' ? _botCobDiaDoResumo(cfg, hoje) : hoje);
+    // Mandou o resumo de hoje DEPOIS do horario marcado: o automatico de hoje nao sai de novo.
+    // Antes do horario nao segura nada (mesma regra do resumo do time).
+    const _hm = _botMinutos(t === 'relatorio' ? cob.relatorio.hora : cob.semanal.hora);
+    const _agBR = _agoraBR();
+    const _jaChegou = _hm >= 0 && (_agBR.getUTCHours() * 60 + _agBR.getUTCMinutes()) >= _hm && (t === 'relatorio' || _botWd(hoje) === cob.semanal.dia);
+    const _diaEsperado = t === 'relatorio' ? _botCobDiaDoResumo(cfg, hoje) : (_botMinutos(cob.semanal.hora) < BOT_MADRUGADA_MIN ? _botDiaMais(hoje, -1) : hoje);
+    if (_jaChegou && diaResumo === _diaEsperado) await _botReserva(env, (t === 'relatorio' ? 'bot_cobrel_' : 'bot_cobsem_') + hoje);
+    const r = await _botDispararCob(env, cfg, t, diaResumo, hoje);
+    if (!r.resultados.length) return err('O resumo da cobrança está desmarcado em "Vai pro grupo"');
+    return json({ ok: true, resultados: r.resultados, texto: r.texto });
+  }
+  const dados = await _botDadosCob(env, hoje, cfg, 'diario');
+  const vazio = { id: '', nome: 'Cobrador', pedidos: 0, recebido: 0, em_cobranca: 0, meta: 0, faltam: 0, semana: 0 };
+  const c = dados.cobradores.find((x) => x.id === String(b.at || '')) || dados.cobradores[0] || vazio;
+  let texto = BOT_TEXTO_TESTE, midia = null;
+  if (tipo === 'cob_marco') {
+    const n = Math.floor(Number(b.n) || 0);
+    const m = cob.marcos.lista.find((x) => x.n === n) || cob.marcos.lista[0];
+    if (!m) return err('Cadastre uma comemoração antes de testar');
+    const esc = await _botSorteiaComMidia(env, 'cob_marco_' + m.n, m.frases, m.frases_midia, m.midias);
+    texto = _botFrase(esc.frase, { nome: c.nome, n: m.n, pedidos: c.pedidos, meta: c.meta, faltam: c.faltam, valor: _botBRL(c.recebido), fila: c.em_cobranca, data: _botDataBR(hoje) });
+    midia = esc.midia;
+  } else if (tipo === 'cob_meta') {
+    const esc = await _botSorteiaComMidia(env, 'cob_meta', cob.meta_batida.frases, cob.meta_batida.frases_midia, cob.meta_batida.midias);
+    texto = _botFrase(esc.frase, { nome: c.nome, n: c.meta || c.semana, pedidos: c.pedidos, meta: c.meta, faltam: 0, valor: _botBRL(c.recebido), fila: c.em_cobranca, data: _botDataBR(hoje) });
+    midia = esc.midia;
+  } else if (tipo === 'cob_incentivo') {
+    const u = await _botUltimoRecebido(env, hoje);
+    const de = _botMinutos(cob.incentivo.de);
+    const desde = Math.max(_botInicioDia(hoje) + Math.max(0, de) * 60, u.ultima || 0);
+    const horas = Math.max(1, Math.floor((Math.floor(Date.now() / 1000) - desde) / 3600));
+    const esc = await _botSorteiaComMidia(env, 'cob_incentivo', cob.incentivo.frases, cob.incentivo.frases_midia, cob.incentivo.midias);
+    texto = _botFrase(esc.frase, { horas, pedidos: u.pedidos, valor: _botBRL(u.valor), fila: u.fila, data: _botDataBR(hoje) });
+    midia = esc.midia;
+  }
+  const r = await _botEntregarGrupo(env, cfg, texto, tipo, hoje, midia, g);
+  return json({ ok: true, resultados: [r], texto, midia });
+}
 async function handleBotEnviar(req, env) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
   if (!_botPodeUsar(u)) return err('Sem permissão', 403);
   let b; try { b = await req.json(); } catch (_) { b = {}; }
-  const tipo = ['relatorio', 'semanal', 'teste', 'marco', 'meta', 'incentivo'].includes(b.tipo) ? b.tipo : 'teste';
+  const tipo = ['relatorio', 'semanal', 'teste', 'marco', 'meta', 'incentivo', 'cob_relatorio', 'cob_semanal', 'cob_teste', 'cob_marco', 'cob_meta', 'cob_incentivo'].includes(b.tipo) ? b.tipo : 'teste';
   const cfg = await _botCfgLer(env, true);
-  const row = await _botNumeroRow(env, cfg);
   const hoje = _brDay();
+  // COBRANCA (03/11/2026): mesmo endpoint, outro destino. Sai antes da guarda do numero oficial de
+  // proposito: o grupo dos cobradores nao passa pela Cloud API nem pela lista do privado.
+  if (tipo.indexOf('cob_') === 0) return _botEnviarCob(env, cfg, b, tipo, hoje);
+  const row = await _botNumeroRow(env, cfg);
   const temGrupo = !!(cfg.grupo && cfg.grupo.id);
   if (cfg.canais.whatsapp !== false && !row && !temGrupo) return err('Escolha um número do bot com token de envio (ou conecte o grupo) antes de testar');
   const para = Array.isArray(b.para) ? b.para : null;
@@ -15392,11 +15950,15 @@ async function handleBotWa(req, env) {
     return json({ ok: true, host: _botHost(u2), versao });
   }
   if (m === 'POST' && acao === 'enviar') {
-    if (!cfg.grupo || !cfg.grupo.id) return err('Escolha e salve o grupo antes');
+    // `grupo: 'cob'` manda pro grupo dos cobradores (03/11/2026); sem isso, pro do time, como sempre.
+    const cobr = String(b.grupo || '') === 'cob';
+    const g = cobr ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {});
+    if (!g.id) return err(cobr ? 'Escolha e salve o grupo dos cobradores antes' : 'Escolha e salve o grupo antes');
     const midia = _botMidia1(b.midia);
     if (b.midia && !midia) return err('Anexo inválido. Anexe de novo.');
     const texto = _botTexto300(b.texto, 4000).trim() || (midia ? '' : BOT_TEXTO_TESTE);
-    const r = await _botEntregarGrupo(env, cfg, texto, b.tipo === 'teste' ? 'teste' : 'livre', _brDay(), midia);
+    const tipoL = (b.tipo === 'teste' ? 'teste' : 'livre');
+    const r = await _botEntregarGrupo(env, cfg, texto, cobr ? 'cob_' + tipoL : tipoL, _brDay(), midia, g);
     return json({ ok: r.status !== 'erro', resultado: r, error: r.status === 'erro' ? r.erro : '' });
   }
   return err('Rota do bot desconhecida', 404);
