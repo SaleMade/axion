@@ -153,12 +153,19 @@ const conf = (nome, vale) => { if (vale) { ok++; } else { falhou++; console.log(
     ['POST', '/api/lead/123/agend'], ['GET', '/api/five/orders'], ['GET', '/api/five/summary'],
     ['GET', '/api/users'], ['GET', '/api/arquivo/comprovante%2F1%2Fx.mp4'], ['POST', '/api/push/sub'],
     ['GET', '/api/leads/contagem'], ['POST', '/api/tags/save'], ['POST', '/api/coment-prontos'],
-    ['GET', '/api/wa/sales'], ['GET', '/api/podio']];
+    ['GET', '/api/wa/sales'], ['GET', '/api/podio'],
+    // A PRESSEL VOLTOU PRA ELE EM 04/11/2026 (pedido do Bruno). A tela e uma so: a pressel e os
+    // numeros da roleta, por isso /api/chip/ entra junto. O dono continua sendo conferido dentro
+    // de cada handler (_podeMexerPressel, _presselIdsVisiveis, chip do mesmo `afl`).
+    ['GET', '/api/pressel/meus'], ['GET', '/api/pressel/metrics'], ['GET', '/api/pressel/diag'],
+    ['POST', '/api/pressel/save'], ['POST', '/api/pressel/delete'], ['POST', '/api/pressel/num'],
+    ['POST', '/api/pressel/meu-numero'], ['POST', '/api/chip/save'], ['POST', '/api/chip/create'],
+    ['POST', '/api/chip/ordem'], ['GET', '/api/wa/conn']];
   for (const [m, p] of PASSA) conf('passa ' + m + ' ' + p, f._restrLiberado(p, m) === true);
   const BARRA = [['POST', '/api/pedido/novo'], ['GET', '/api/pedido/mesmo-cpf'],
-    ['POST', '/api/pressel/save'], ['POST', '/api/pressel/delete'], ['POST', '/api/chip/save'],
-    ['POST', '/api/chip/create'], ['POST', '/api/cont/save'], ['GET', '/api/wa/chats'],
-    ['GET', '/api/wa/messages'], ['POST', '/api/wa/cloud/send'], ['GET', '/api/wa/conn'],
+    // A Contingencia e o detector de dominios NAO voltaram: sao outras telas.
+    ['POST', '/api/cont/save'], ['POST', '/api/pressel/domains/detect'], ['GET', '/api/wa/chats'],
+    ['GET', '/api/wa/messages'], ['POST', '/api/wa/cloud/send'], ['POST', '/api/wa/conn'],
     ['GET', '/api/wa/instances'], ['GET', '/api/salechat'], ['POST', '/api/salechat/save'],
     ['POST', '/api/users'], ['POST', '/api/saque/create'], ['GET', '/api/swweb/numeros'],
     ['GET', '/api/bot/config'], ['POST', '/api/tt/reenviar'], ['GET', '/api/conexoes'],
@@ -177,12 +184,14 @@ const conf = (nome, vale) => { if (vale) { ok++; } else { falhou++; console.log(
   conf('restrito nao abre o inbox', await barrado(GIO, 'GET', '/api/wa/chats'));
   conf('restrito nao cadastra pedido', await barrado(GIO, 'POST', '/api/pedido/novo'));
   conf('restrito nao cria usuario', await barrado(GIO, 'POST', '/api/users'));
-  conf('restrito nao mexe em pressel', await barrado(GIO, 'POST', '/api/pressel/save'));
+  conf('restrito nao mexe na Contingencia', await barrado(GIO, 'POST', '/api/cont/save'));
+  conf('restrito MEXE na pressel dele (devolvida em 04/11/2026)', (await barrado(GIO, 'POST', '/api/pressel/save')) === false);
+  conf('e nos numeros da roleta dele', (await barrado(GIO, 'POST', '/api/chip/save')) === false);
   conf('a vendedora dele tambem nao', await barrado(VEND_GIO, 'GET', '/api/wa/chats'));
   conf('restrito ABRE o estado', (await barrado(GIO, 'GET', '/api/state')) === false);
   conf('restrito ABRE o pedido dele', (await barrado(GIO, 'POST', '/api/lead/123/move')) === false);
   conf('restrito ABRE o nome do time', (await barrado(GIO, 'GET', '/api/users')) === false);
-  conf('o diretor passa em tudo', (await barrado(DIR, 'POST', '/api/pressel/save')) === false);
+  conf('o diretor passa em tudo', (await barrado(DIR, 'POST', '/api/cont/save')) === false);
   conf('vendedor da casa passa em tudo', (await barrado(VEND_CASA, 'POST', '/api/pedido/novo')) === false);
   conf('rota publica nem consulta sessao', (await barrado(GIO, 'GET', '/pressels-total.json')) === false);
   conf('sem Bearer o gate nao decide nada', (await barrado(GIO, 'GET', '/api/wa/chats', null)) === false);

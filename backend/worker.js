@@ -615,12 +615,28 @@ async function _restritoAgora(env, u) {
 //   /api/arquivo/...    -> o comprovante e a foto da entrega dos pedidos dele
 //   /api/push/*         -> o aviso no celular (o aplicativo dele continua de pe)
 //   /api/tags/save, /api/coment-prontos -> etiqueta e comentario pronto do proprio quadro
+//
+// A PRESSEL VOLTOU (04/11/2026). O Bruno: "quero que se libere para eles, de volta, a area de
+// pre-sells, porque estavam utilizando ali e e importante para eles tambem". Entao as rotas da
+// pressel e do chip entram aqui - sao as duas metades da MESMA tela (a roleta liga numero a
+// pressel, e o botao de criar/ordenar numero mora nela). Nao abre a operacao de ninguem mais:
+// `_podeMexerPressel` deixa o afiliado mexer so no que tem o `afl` dele, `_presselIdsVisiveis` so
+// mostra as dele e o chip de uma pressel tem que ser do mesmo dono.
+// Fica de FORA de proposito: `/api/pressel/domains/detect` (a tela dele nem chama: ver ehAfiliado
+// em pressels.jsx) e `/api/cont/save`, que e a Contingencia, outra tela.
+// UMA A UMA, nunca por prefixo: rota nova sob /api/pressel/ tem que nascer fechada pra ele.
 const _RESTR_OK_EXATO = new Set(['/auth/login', '/auth/logout', '/auth/me',
   '/api/state', '/api/state/pulso', '/api/leads/contagem',
   '/api/five/orders', '/api/five/summary', '/api/five/products',
-  '/api/afiliados/pedidos', '/api/podio', '/api/tags/save', '/api/coment-prontos']);
+  '/api/afiliados/pedidos', '/api/podio', '/api/tags/save', '/api/coment-prontos',
+  '/api/pressel/meus', '/api/pressel/metrics', '/api/pressel/diag', '/api/pressel/stats',
+  '/api/pressel/save', '/api/pressel/delete', '/api/pressel/num', '/api/pressel/meu-numero',
+  '/api/chip/save', '/api/chip/create', '/api/chip/delete', '/api/chip/ordem', '/api/chip/limite']);
 const _RESTR_OK_PREFIXO = ['/api/lead/', '/api/push/', '/api/arquivo/'];
-const _RESTR_OK_GET = new Set(['/api/users', '/api/wa/sales']);
+// `/api/wa/conn` e a bolinha de "conectado" ao lado de cada numero da roleta. So GET, e o handler
+// ja corta pelo mundo de quem pede (_idsQuePossoVer): sem ela a tela fica em "verificando..." pra
+// sempre, que parece defeito.
+const _RESTR_OK_GET = new Set(['/api/users', '/api/wa/sales', '/api/wa/conn']);
 function _restrLiberado(path, metodo) {
   const p = String(path || '');
   if (_RESTR_OK_EXATO.has(p)) return true;
@@ -5727,16 +5743,23 @@ async function _stateVisivel(u, data, env) {
     // no inspetor. O Bruno pediu exatamente o contrario disso: "nao quero que eles fiquem fucando na
     // nossa dash, tentando replicar alguma ferramenta".
     //
-    // Sai: pressel e roleta, chip, contingencia, gasto de anuncio, Sale Chat, numero ativo,
-    // automacao de WhatsApp, saque e o link de checkout dele.
+    // Sai: contingencia, gasto de anuncio, Sale Chat, numero ativo, automacao de WhatsApp, saque e
+    // o link de checkout dele.
     // FICA, de proposito: os pedidos, as colunas do quadro, as etiquetas, os comentarios prontos,
     // os status de WhatsApp (sao o rotulo do card), o catalogo de kits (o nome do que foi vendido),
     // a equipe (nome de quem aparece no card) e a matriz de permissao (e ela que desenha o menu).
+    //
+    // A PRESSEL VOLTOU (04/11/2026, pedido do Bruno: "quero que se libere para eles, de volta, a
+    // area de pre-sells, porque estavam utilizando ali e e importante para eles tambem"). Voltam as
+    // TRES chaves que aquela tela le: `pressels`, `chips` (os numeros da roleta) e `doms_liberados`
+    // (o endereco que a pressel dele pode usar). As tres ja chegam aqui recortadas pelo dono -
+    // trinta linhas acima o mundo do afiliado so recebe o que tem `afl` igual ao dele -, entao
+    // devolver nao mostra pressel nem numero nosso. A Contingencia continua fora: e outra tela.
     if (await _restritoAgora(env, u)) {
-      for (const k of ['pressels', 'chips', 'trafego_registros', 'trafego_aloc',
+      for (const k of ['trafego_registros', 'trafego_aloc',
         'contCols', 'contColColors', 'cont_col_order', 'cont_recarga',
         'scVend', 'scVendPub', 'wa_ativo', 'wa_automacoes', 'wa_autom_on', 'wa_bot_on',
-        'saques', 'afl_checkout', 'doms_liberados']) delete d[k];
+        'saques', 'afl_checkout']) delete d[k];
     }
   }
   // saque e notificacao sao pessoais: cada um ve o seu (e o que e pra todo mundo).
@@ -5887,8 +5910,11 @@ async function _stateProtegido(env, u, novo, atual) {
     // deixa entrar id que ainda nao existe. Barrar so o /api/pedido/novo deixaria a porta dos fundos
     // aberta pra uma aba antiga ou pro aplicativo. Aqui `leads` volta do banco inteiro: nada entra,
     // nada sai, e o que ele mexeu no card continua indo pelas rotas de lead (que seguem liberadas).
-    // Pressel, chip, gasto de anuncio, Sale Chat, saque e link de checkout tambem voltam do banco:
-    // as telas sairam do menu dele, e o que nao da pra editar nao da pra apagar sem querer.
+    // Gasto de anuncio, Sale Chat, saque e link de checkout tambem voltam do banco: as telas sairam
+    // do menu dele, e o que nao da pra editar nao da pra apagar sem querer. Pressel e chip estao na
+    // lista por historico; desde 04/11/2026 a tela deles voltou pra ele, e nem faz diferenca aqui -
+    // as duas chaves ja estao no STATE_NUNCA_POR_AQUI, que vale pra todo cargo. Quem grava pressel
+    // e chip e o endpoint proprio (/api/pressel/save, /api/chip/save), nunca o POST do estado.
     if (await _restritoAgora(env, u)) {
       novo.leads = leadsBanco;
       for (const k of ['pressels', 'chips', 'trafego_registros', 'trafego_aloc', 'scVend', 'scVendPub', 'saques', 'afl_checkout']) {
