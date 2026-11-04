@@ -39,11 +39,26 @@ def token_github():
 TOK = token_github()
 
 
+# O DOWNLOAD DO ARTEFATO NAO PODE LEVAR O TOKEN DO GITHUB (04/11/2026). O /artifacts/<id>/zip
+# responde um 302 pro Azure com a URL JA ASSINADA; o urllib reenvia o cabecalho Authorization no
+# salto e o Azure devolve "401 Server failed to authenticate the request". O build tinha dado certo
+# e a publicacao morria no ultimo passo. Aqui o cabecalho cai no redirecionamento.
+class _SemAuthNoSalto(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        novo = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if novo is not None:
+            novo.remove_header('Authorization')
+        return novo
+
+
+_ABRE = urllib.request.build_opener(_SemAuthNoSalto)
+
+
 def gh(caminho, metodo='GET', corpo=None, cru=False):
     req = urllib.request.Request('https://api.github.com' + caminho, method=metodo,
                                  data=json.dumps(corpo).encode() if corpo is not None else None,
                                  headers={'Authorization': 'Bearer ' + TOK, 'Accept': 'application/vnd.github+json', 'User-Agent': 'publica-mac'})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with _ABRE.open(req, timeout=300) as r:
         b = r.read()
         return b if cru else (json.loads(b) if b else None)
 
