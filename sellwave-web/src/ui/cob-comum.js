@@ -217,6 +217,24 @@
     if (d.length === 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6)
     return d
   }
+  // O TEXTO DO "COPIAR DADOS" (05/11/2026, pedido do Haynan via Bruno: "copiar todos os dados da
+  // pessoa, o nome, tudo certinho"). E o mesmo bloco do "Copiar tudo pra colar na PayLog" das
+  // Aceitacoes da dash (blocoCopia em aceitacoes.jsx): nome, CPF, WhatsApp e e-mail; endereco,
+  // bairro - cidade/UF e CEP; produto, valor a cobrar e forma de pagamento. Linha sem dado some,
+  // bloco vazio some, e os blocos ficam separados por uma linha em branco.
+  const cpfBonito = (c) => { const d = String(c || '').replace(/\D/g, ''); return d.length === 11 ? d.slice(0, 3) + '.' + d.slice(3, 6) + '.' + d.slice(6, 9) + '-' + d.slice(9) : String(c || '').trim() }
+  const cepBonito = (c) => { const d = String(c || '').replace(/\D/g, ''); return d.length === 8 ? d.slice(0, 5) + '-' + d.slice(5) : String(c || '').trim() }
+  function textoDados(p) {
+    p = p || {}
+    const rua = [p.end, p.num].filter(Boolean).join(', ') + (p.comp ? ' - ' + p.comp : '')
+    const bairroCid = [p.bairro, [p.cidade, p.uf].filter(Boolean).join('/')].filter(Boolean).join(' - ')
+    const blocos = [
+      [p.nome, p.cpf && 'CPF: ' + cpfBonito(p.cpf), p.wa && 'WhatsApp: ' + foneBonito(p.wa), p.email && 'E-mail: ' + String(p.email).trim()],
+      [rua, bairroCid, p.cep && 'CEP: ' + cepBonito(p.cep)],
+      [p.prod && 'Produto: ' + p.prod, Number(p.valor) > 0 && 'Valor: ' + brl(p.valor), 'Pagamento: ' + (p.mod === 'antecipado' ? 'Antecipado' : 'Na entrega (COD)')],
+    ]
+    return blocos.map((b) => b.filter(Boolean).join('\n')).filter(Boolean).join('\n\n')
+  }
   const chip = (col) => { const c = colDef(col); return '<span class="fx-col" style="--c:' + c.cor + '">' + esc(c.lbl) + '</span>' }
 
   // ── icones (lucide, em linha: a CSP das duas paginas nao carrega nada de fora) ───────────────
@@ -271,6 +289,9 @@
     // telefone + conversa
     h += '<div class="fx-linha">'
       + '<button class="fx-mini" data-acao="copiar" data-v="+55' + esc(String(p.wa || '').replace(/^55(?=\d{10,11}$)/, '')) + '" title="Copiar o telefone">' + I.copia + esc(foneBonito(p.wa)) + '</button>'
+      // COPIAR DADOS (05/11/2026, pedido do Haynan via Bruno): nome, CPF, WhatsApp, endereco, CEP,
+      // produto, valor e forma de pagamento num bloco so (ver textoDados).
+      + '<button class="fx-mini" data-acao="copiar-dados" title="Copiar nome, CPF, WhatsApp, endereço, CEP, produto e valor">' + I.copia + 'Copiar dados</button>'
       + (ctx.conversa ? '<button class="fx-bt fx-verde" data-acao="conversa" title="Abrir a conversa deste cliente num dos seus números">' + I.zap + 'Abrir conversa</button>' : '')
       + '</div>'
     // entrega
@@ -337,7 +358,9 @@
     return '<div class="fx-link"><span>' + esc(l.rot) + '</span>'
       + (ctx.enviar ? '<button class="fx-mini fx-verde" data-acao="enviar" data-k="' + l.k + '" title="Mandar o link na conversa aberta">' + I.envia + 'Enviar</button>' : '')
       + '<button class="fx-mini" data-acao="copiar-link" data-k="' + l.k + '" title="Copiar o link">' + I.copia + 'Copiar</button>'
-      + '<button class="fx-mini" data-acao="abrir-link" data-k="' + l.k + '" title="Abrir no navegador">' + I.abre + '</button></div>'
+      // Com a palavra "Abrir" (05/11/2026): so o icone passava despercebido, e o cobrador ia na dash
+      // buscar o link do checkout pra abrir no navegador.
+      + '<button class="fx-mini" data-acao="abrir-link" data-k="' + l.k + '" title="Abrir no navegador">' + I.abre + 'Abrir</button></div>'
   }
   const FRASE = { rastreio: 'Segue o link para acompanhar a entrega do seu pedido:' }
   for (const l of LINKS) FRASE[l.k] = l.frase
@@ -371,6 +394,7 @@
       if (!b || !fx.contains(b)) return
       const acao = b.dataset.acao
       if (acao === 'copiar') { const r = await ad.copiar(b.dataset.v); diz(r && r.ok ? 'Telefone copiado.' : 'Não consegui copiar.', !(r && r.ok)); return }
+      if (acao === 'copiar-dados') { const r = await ad.copiar(textoDados(p)); diz(r && r.ok ? 'Dados do cliente copiados.' : 'Não consegui copiar.', !(r && r.ok)); return }
       if (acao === 'conversa') { if (ad.conversa) ad.conversa(p, b); return }
       if (acao === 'tags-abre') { const l = fx.querySelector('.fx-tags-lista'); if (l) { l.hidden = !l.hidden; b.classList.toggle('on', !l.hidden) } return }
       if (acao === 'tag') {
@@ -518,6 +542,6 @@
     esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, DESTINOS_COB, podeIrCob, COLS_COBRANCA, COLS_A_CAMINHO,
     naFila, aCaminho, emContato, quandoAgend, agenda, rotuloDia, hora, haQuanto, quandoTxt, chaveDia, diaIni,
     COR_CAL, calendario, diasDaGrade, mesRotulo, agendNoDia,
-    valorDigitado, atalhosRetorno, foneBonito, fichaHtml, ligaFicha, poeEstilo, I,
+    valorDigitado, atalhosRetorno, foneBonito, textoDados, fichaHtml, ligaFicha, poeEstilo, I,
   }
 })()

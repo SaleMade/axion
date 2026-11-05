@@ -720,6 +720,26 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('pedido em aberto nao oferece Pagos no "mudar etapa" (pago pede o valor)', !/value="Pagos"/.test(htmlQuadro) && /data-acao="pago"/.test(htmlQuadro))
   vale('o nome do cliente sai escapado (nada de HTML do pedido na tela)', !/<img/.test(C.fichaHtml({ ...pedido, nome: '<img src=x onerror=1>' }, {})))
 
+  // COPIAR DADOS E ABRIR O LINK (05/11/2026, pedido do Haynan via Bruno): a ficha ganha o "Copiar
+  // dados" (o mesmo bloco do "Copiar tudo" das Aceitacoes da dash) e o botao de abrir o link no
+  // navegador ganha a palavra "Abrir" (era so um icone e ele nao achou).
+  const joselina = { ...pedido, pago: false, col: 'Entregues', nome: 'Joselina Da Silva', cpf: '65515129768', wa: '22997980020', email: '', end: 'Estrada Carvão', num: '38', comp: '', bairro: 'Parque Aurora', cidade: 'Campos dos Goytacazes', uf: 'RJ', cep: '28026450', prod: 'Glico Six - 4 Meses', valor: 497, mod: 'entrega' }
+  const semNbsp = (s) => String(s).replace(/ /g, ' ')
+  const txt = semNbsp(C.textoDados(joselina))
+  vale('copiar dados: nome, CPF, WhatsApp, endereco, CEP, produto, valor e pagamento, no bloco das Aceitacoes',
+    txt === 'Joselina Da Silva\nCPF: 655.151.297-68\nWhatsApp: (22) 99798-0020\n\nEstrada Carvão, 38\nParque Aurora - Campos dos Goytacazes/RJ\nCEP: 28026-450\n\nProduto: Glico Six - 4 Meses\nValor: R$ 497,00\nPagamento: Na entrega (COD)', JSON.stringify(txt))
+  const txt2 = semNbsp(C.textoDados({ ...joselina, comp: 'Fundos', email: 'j@x.com', mod: 'antecipado', cpf: '', cep: '' }))
+  vale('copiar dados: complemento, e-mail e antecipado entram; sem CPF e sem CEP as linhas somem',
+    txt2 === 'Joselina Da Silva\nWhatsApp: (22) 99798-0020\nE-mail: j@x.com\n\nEstrada Carvão, 38 - Fundos\nParque Aurora - Campos dos Goytacazes/RJ\n\nProduto: Glico Six - 4 Meses\nValor: R$ 497,00\nPagamento: Antecipado', JSON.stringify(txt2))
+  vale('copiar dados: CPF e CEP que ja vem com pontuacao nao ganham pontuacao em dobro', /CPF: 655\.151\.297-68\n/.test(C.textoDados({ ...joselina, cpf: '655.151.297-68', cep: '28026-450' })) && /CEP: 28026-450\n/.test(C.textoDados({ ...joselina, cpf: '655.151.297-68', cep: '28026-450' })))
+  vale('copiar dados: pedido so com nome nao deixa linha vazia', C.textoDados({ nome: 'Fulano' }) === 'Fulano\n\nPagamento: Na entrega (COD)', JSON.stringify(C.textoDados({ nome: 'Fulano' })))
+  const hJ = C.fichaHtml(joselina, { conversa: true })
+  vale('a ficha tem o botao "Copiar dados" no cabecalho, no quadro e no painel',
+    /data-acao="copiar-dados"[^>]*>[^<]*<svg[\s\S]*?<\/svg>Copiar dados<\/button>/.test(hJ) && /data-acao="copiar-dados"/.test(C.fichaHtml(joselina, { enviar: true })))
+  vale('o botao de abrir o link no navegador tem a palavra "Abrir"', /data-acao="abrir-link"[^>]*title="Abrir no navegador">[\s\S]*?<\/svg>Abrir<\/button>/.test(hJ), hJ.slice(hJ.indexOf('abrir-link') - 10, hJ.indexOf('abrir-link') + 260))
+  const fonteCob = leia('ui/cob-comum.js')
+  vale('o clique em Copiar dados copia o bloco pelo adaptador da tela', /acao === 'copiar-dados'[\s\S]{0,80}ad\.copiar\(textoDados\(p\)\)/.test(fonteCob))
+
   const m = leia('main.js')
   vale('o modo sai do cargo que o /api/swweb/numeros manda', /cargoAtual = String\(\(d && d\.cargo\) \|\| ''\)\.toLowerCase\(\)/.test(m))
   vale('mudou o modo: o roteiro e relido e as duas telas sao avisadas', /roteiro = null; roteiroEm = 0/.test(m) && /avisaPainel\('swp:modo'/.test(m) && /avisaCasca\('sw:modo'/.test(m))

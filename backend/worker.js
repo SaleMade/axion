@@ -13874,6 +13874,9 @@ function _cobDetalhe(l, data, nomes, tagMap) {
     ..._cobLinha(l, nomes, tagMap),
     data: _cobTxt(l.data), pgto: _cobTxt(l.pgto), obs: _cobTxt(l.obs),
     cep: _cobTxt(l.cep), end: _cobTxt(l.end), num: _cobTxt(l.num), comp: _cobTxt(l.comp), bairro: _cobTxt(l.bairro),
+    // CPF e e-mail (05/11/2026): o "Copiar dados" da ficha do app monta o mesmo bloco do "Copiar
+    // tudo" das Aceitacoes. O cobrador ja ve o CPF na dash e no link de checkout.
+    cpf: _cobTxt(l.cpf), email: _cobTxt(l.email),
     links: {
       checkout: _cobCheckout(l, data),
       pix: plat.pix ? _cobUrlPlataforma(plat.pix, l) : '',
