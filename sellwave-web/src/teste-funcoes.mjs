@@ -823,6 +823,37 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('busca: letra faltando continua sem achar (nao e por aproximacao)', !casa(bene, 'bendita'))
 }
 
+// ── A TROCA DE COPIA ENTRE COMPUTADORES (05/11/2026) ──────────────────────────────────────────
+// O Bryan usava o mesmo numero em dois computadores. Ao abrir no segundo, o app trazia a copia do
+// primeiro e as conversas feitas no segundo sumiam da tela do WhatsApp, CALADO. Nao da pra juntar
+// as duas copias; da pra avisar. Estas duas contas decidem se o aviso sai, e errar aqui e voltar
+// ao caladinho (ou encher o vendedor de aviso falso todo dia).
+{
+  const fonte = leia('main.js')
+  // A FOLGA SAI DO CODIGO, nao de uma copia aqui: mudar la e nao mudar aqui daria teste verde errado.
+  const linhaFolga = fonte.split('\n').find((l) => l.startsWith('const FOLGA_NAO_SALVO_MS'))
+  const naoSalvo = new Function(linhaFolga + '\n' + recorta(fonte, 'function trabalhoNaoSalvo(') + '\nreturn trabalhoNaoSalvo')()
+  const FOLGA = Number(linhaFolga.split('=')[1])
+  const agora = Date.now()
+  vale('sem copia nesta maquina, nao avisa', naoSalvo(0, agora) === false)
+  vale('copia que nunca foi salva na nuvem AVISA', naoSalvo(agora, 0) === true)
+  vale('mexeu depois de salvar AVISA', naoSalvo(agora, agora - 3600000) === true)
+  vale('salvou depois de mexer nao avisa', naoSalvo(agora - 3600000, agora) === false)
+  vale('a gravacao que vem logo depois do envio nao vira aviso', naoSalvo(agora + FOLGA - 1000, agora) === false)
+  vale('passou da folga, avisa', naoSalvo(agora + FOLGA + 1000, agora) === true)
+
+  const quando = eval('(' + recorta(fonte, 'function quandoFoiSalva(') + ')')
+  const seg = (d) => Math.floor(d.getTime() / 1000)
+  const hoje = new Date(); hoje.setHours(9, 5, 0, 0)
+  const ontem = new Date(hoje.getTime() - 86400000)
+  const velho = new Date(hoje.getTime() - 5 * 86400000)
+  vale('carimbo de hoje sai como hoje', quando(seg(hoje)) === 'hoje às 09:05', quando(seg(hoje)))
+  vale('carimbo de ontem sai como ontem', quando(seg(ontem)) === 'ontem às 09:05', quando(seg(ontem)))
+  vale('mais velho sai com a data', /^em \d\d\/\d\d às 09:05$/.test(quando(seg(velho))), quando(seg(velho)))
+  vale('sem carimbo nao inventa hora', quando(0) === '' && quando(null) === '')
+  vale('o carimbo e em SEGUNDOS, nao em milissegundos', quando(seg(hoje)) !== quando(hoje.getTime()))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

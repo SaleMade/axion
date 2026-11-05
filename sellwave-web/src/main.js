@@ -1195,6 +1195,43 @@ function arquivosDaSessao(dir) {
 function temSessaoNoDisco(dir) {
   try { return fs.existsSync(path.join(dir, 'IndexedDB', 'https_web.whatsapp.com_0.indexeddb.leveldb', 'CURRENT')) } catch (_) { return false }
 }
+
+// A TROCA DE COPIA NAO PODE SER CALADA (05/11/2026, o caso do Bryan).
+//
+// Ele usa o mesmo numero em DOIS computadores. Cada um guarda a propria copia do WhatsApp, e a
+// nuvem leva UMA copia inteira por vez: a do ultimo que fechou o numero. Ao abrir no outro, o app
+// trazia a copia de la e as conversas feitas aqui sumiam da tela do WhatsApp - sem aviso nenhum,
+// entao a equipe inteira achou que era erro do WhatsApp. O WhatsApp nao devolve o que nao esta na
+// copia, e nao da pra juntar as duas: o que da pra fazer e DIZER, na hora, o que esta acontecendo.
+// Quando esta maquina mexeu na sessao pela ultima vez.
+function mexidoDaParticao(dir) {
+  let maior = 0
+  for (const a of arquivosDaSessao(dir)) {
+    try { const t = fs.statSync(a.abs).mtimeMs; if (t > maior) maior = t } catch (_) { /* sumiu no meio, nao conta */ }
+  }
+  return maior
+}
+// A folga existe porque o proprio fechamento ainda grava uns segundos depois de mandar pra nuvem.
+const FOLGA_NAO_SALVO_MS = 180000
+function trabalhoNaoSalvo(mexidoMs, salvoMs) {
+  const m = Number(mexidoMs) || 0
+  if (!m) return false            // nao ha copia nenhuma nesta maquina: nada se perde
+  const s = Number(salvoMs) || 0
+  if (!s) return true             // tem copia aqui e ela NUNCA foi salva na nuvem
+  return m > s + FOLGA_NAO_SALVO_MS
+}
+// "hoje as 00:49", "ontem as 23:10", "em 03/11 as 22:44". O carimbo da nuvem vem em SEGUNDOS.
+function quandoFoiSalva(ts) {
+  const ms = (Number(ts) || 0) * 1000
+  if (!ms) return ''
+  const d = new Date(ms)
+  const hh = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+  const mesmoDia = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  const hoje = new Date()
+  if (mesmoDia(d, hoje)) return 'hoje às ' + hh
+  if (mesmoDia(d, new Date(hoje.getTime() - 86400000))) return 'ontem às ' + hh
+  return 'em ' + String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + ' às ' + hh
+}
 // O CAMINHO QUE VEM DO SERVIDOR VIRA ARQUIVO NO DISCO DO VENDEDOR: so dentro da particao nova, so nas
 // duas pastas da sessao. O worker ja confere, e aqui confere de novo, porque e daqui que o arquivo
 // sai escrito.
@@ -1456,6 +1493,8 @@ async function trazDaNuvem(nk) {
     if (ver) marcaNuvem(nk, 'salvo', 'Sessão salva na nuvem')
     return { ok: true }
   }
+  // O QUE ESTA NESTA MAQUINA VAI SAIR DA FRENTE (ver mexidoDaParticao): mede ANTES de baixar.
+  const perde = trabalhoNaoSalvo(mexidoDaParticao(pastaDaParticao(nk, geracaoDe(nk))), Number(local.em) || 0)
   avisaCasca('sw:status', { nk, texto: 'Baixando a sessão salva deste número...' })
   try {
     await baixaSessao(nk, meta)
@@ -1469,8 +1508,18 @@ async function trazDaNuvem(nk) {
         fs.rmSync(path.dirname(arqCk), { recursive: true, force: true })
       }
     } catch (e) { anota('[nuvem] ' + nk + ' cookies da nuvem nao entraram: ' + ((e && e.message) || e)) }
-    anota('[nuvem] ' + nk + ' baixou a versao ' + ver + ' (' + meta.arquivos + ' arquivos, ' + mb(Number(meta.bytes) || 0) + ', ' + postos + ' cookies, salva por ' + (meta.nome || '?') + ')')
-    marcaNuvem(nk, 'salvo', 'Sessão da nuvem aberta aqui')
+    const quando = quandoFoiSalva(meta.ts)
+    anota('[nuvem] ' + nk + ' baixou a versao ' + ver + ' (' + meta.arquivos + ' arquivos, ' + mb(Number(meta.bytes) || 0) + ', ' + postos + ' cookies, salva ' + (quando || '?') + ' por ' + (meta.nome || '?') + ')')
+    if (perde) {
+      anota('[nuvem] ' + nk + ' a copia que estava AQUI saiu da frente: tinha conversa depois da ultima vez que foi salva')
+      marcaNuvem(nk, 'erro', 'Conversas vieram do outro computador' + (quando ? ' (salvas ' + quando + ')' : ''))
+      avisaCasca('sw:aviso', {
+        nk,
+        texto: 'Este número foi usado em outro computador. As conversas que apareceram aqui são as de lá'
+          + (quando ? ', salvas ' + quando : '') + ', e as que você fez neste computador depois disso não aparecem no WhatsApp. '
+          + 'Elas estão guardadas na dash. Use o número sempre no mesmo computador pra isso não acontecer.',
+      })
+    } else marcaNuvem(nk, 'salvo', 'Sessão da nuvem aberta aqui' + (quando ? ' (salva ' + quando + ')' : ''))
     return { ok: true, baixou: true }
   } catch (e) {
     anota('[nuvem] ' + nk + ' nao baixou a versao ' + ver + ': ' + ((e && e.stack) || e))
@@ -2110,7 +2159,8 @@ function perdeuONumero(nk, r) {
     nk,
     erro: r && r.revogado
       ? (r.erro || 'A direção liberou este número, e ele foi fechado aqui.')
-      : 'Este número foi aberto em outro computador' + (quem ? ' (' + quem + ')' : '') + ' e foi fechado aqui, pra não ficar o mesmo WhatsApp nos dois.',
+      : 'Este número foi aberto em outro computador' + (quem ? ' (' + quem + ')' : '') + ' e foi fechado aqui, pra não ficar o mesmo WhatsApp nos dois. '
+        + 'As conversas que você fez aqui ficam só neste computador: quem abrir lá vê a cópia de lá.',
   })
 }
 setInterval(async () => {
