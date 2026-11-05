@@ -6791,6 +6791,10 @@ const _casEspera = (attempt) => new Promise((r) => setTimeout(r, 60 + attempt * 
 // Move UM lead de coluna (kanban) de forma cirúrgica: lê o estado, troca só o
 // campo `col` daquele lead e regrava. NÃO recebe o blob do cliente (evita o
 // incidente de sobrescrita da aba antiga). Só diretor.
+// O 409 DO TETO (05/11/2026). Um texto so pras duas rotas que podem desistir no laco longo (o arrasto
+// e o salvar do pedido): neutro, porque o /api/lead/:id tambem e o Salvar do modal, o comentario e a
+// troca de cobrador, e o /move tambem e o Cancelar. O Kanban repete sozinho pelo `tente`, nao pelo texto.
+const _TEXTO_409_TETO = 'O quadro estava sendo gravado por outra pessoa ou pelo sistema e a alteração não entrou. Nada mudou: tente de novo.';
 async function handleMoveLead(req, env, leadId) {
   const u = await authUser(req, env);
   if (!u) return err('Não autenticado', 401);
@@ -6806,6 +6810,15 @@ async function handleMoveLead(req, env, leadId) {
   // cliente desiste, e nao pode despachar). So 'Cancelado', so o dono, so !aceito - o resto do guard
   // (dono/aceito) fica no laco, que e onde o lead e conhecido.
   if (!_dir && !_afl && String(col) !== 'Cancelado') return err('Sem permissão', 403);
+  // CAMINHO CURTO PRIMEIRO (05/11/2026, ver _leadMoveRapido): le e grava so o pedido arrastado. Ele
+  // devolve null quando o laco abaixo e quem tem que resolver (cancelamento, pedido do arquivo).
+  const _rap = await _leadMoveRapido(env, u, leadId, col);
+  if (_rap) return _rap;
+  // TETO DE TEMPO NO LACO LONGO (05/11/2026). O arrasto do pedido 1792845282163 ficou 20,5 s preso aqui
+  // (10 tentativas de ler e regravar 1,4 MB, todas perdidas pra rajada do cron) ate responder 409. O
+  // navegador nao tem tempo limite nesse POST: o Bruno esperou os 20 s olhando o card. Agora o laco
+  // desiste aos 6 s e responde um 409 que diz o que aconteceu e que da pra repetir (`tente: true`).
+  const _t0 = Date.now();
   for (let attempt = 0; attempt < 10; attempt++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
     if (!row) return err('Estado não encontrado', 404);
@@ -6831,7 +6844,6 @@ async function handleMoveLead(req, env, leadId) {
     _congelaColPlat(lead, from);
     lead.col = col;
     _carimbaPagoTs(lead, _eraPagoMv, 0);   // arrastou pra Pagos (ou tirou de la): a data e a de agora
-    await _waSalesMarcaCancelada(env, lead, leads);   // venda cancelada sai da contagem (e volta se sair da coluna)
     // Arrastou o card pra Pago -> limpa o retorno de cobranca (mesma regra do webhook e da edicao,
     // 11/09/2026). So na transicao: quem ja estava em Pago/Pagos nao perde um retorno remarcado.
     if (['Pago', 'Pagos'].includes(String(col)) && !['Pago', 'Pagos'].includes(String(from)) && lead.agend) { lead.agend = ''; if (lead.agend_avisado) lead.agend_avisado = ''; }
@@ -6839,10 +6851,17 @@ async function handleMoveLead(req, env, leadId) {
     const newVer = (row.version || 0) + 1;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), newVer, Math.floor(Date.now() / 1000), 'kanban:' + String(u.id), row.version).run();
-    if (res && res.meta && res.meta.changes > 0) return json({ ok: true, version: newVer, from, to: col });
-    if (attempt < 9) await _casEspera(attempt);   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
+    if (res && res.meta && res.meta.changes > 0) {
+      // A MARCA DE VENDA CANCELADA SO DEPOIS DE GRAVAR (05/11/2026, revisao). Ela rodava em toda
+      // tentativa, antes do UPDATE: quando as 10 perdiam, o 409 dizia "nada mudou" com a venda do
+      // telefone ja marcada cancelada no wa_sales (sem trava de versao). Uma vez, e so do que gravou.
+      await _waSalesMarcaCancelada(env, lead, leads);   // venda cancelada sai da contagem (e volta se sair da coluna)
+      return json({ ok: true, version: newVer, from, to: col });
+    }
+    if (attempt < 9 && Date.now() - _t0 < 6000) { await _casEspera(attempt); continue; }   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
+    break;   // 10 tentativas ou 6 s: desiste e explica (ver o teto acima)
   }
-  return err('Conflito ao salvar. Tente de novo.', 409);
+  return json({ ok: false, error: _TEXTO_409_TETO, tente: true, ms: Date.now() - _t0 }, 409);
 }
 
 // ══ O ACEITAR CRIA O PEDIDO NA PAYLOG (01/10/2026) ══════════════════════════════════════════════
@@ -7568,9 +7587,20 @@ async function handleLeadComments(req, env, leadId) {
 // captura inseriu um pedido no topo (o indice andou) ou alguem mexeu NESTE pedido, nao pega e a rota
 // rele. Pedido que mora no arquivo (nao esta na linha) devolve null e vai pelo caminho de sempre.
 //
-// QUEM CONTINUA NO CAMINHO LONGO: patch com `col`. Trocar de coluna chama _waSalesMarcaCancelada,
-// que olha TODOS os pedidos (outro pedido vivo com o mesmo telefone segura a venda) - com so um
-// pedido na mao, ela concluiria errado.
+// QUEM CONTINUA NO CAMINHO LONGO (05/11/2026): patch com `col` pra Cancelado/Cancelado sem Custo, e
+// pedido que mora no arquivo de leads. Entrar em cancelamento chama _waSalesMarcaCancelada, que
+// precisa dos OUTROS pedidos do mesmo telefone (um vivo na janela de 2 dias segura a venda), e so o
+// estado inteiro tem eles. Coluna normal (Frustrados, Pagos, Rota de Entrega...) vai pelo curto: ali
+// o proprio pedido ja conta como vivo e [lead] da o mesmo resultado que a lista inteira (canc = 0).
+// Ate 05/11 TODO patch com `col` ia pelo longo, e era por isso que o arrasto do cobrador e o
+// "Confirmar pagamento" levavam 15 a 20 s em rajada do cron e as vezes 409.
+//
+// O QUE ELE DEVOLVE ALEM DO PEDIDO (05/11/2026): `version` (a versao da linha, pro noop do arrasto
+// responder a versao real, ver _leadMoveRapido) e `afl_checkout` (o mapa de links de checkout por
+// afiliado). Sem o afl_checkout, trocar o kit de um pedido de afiliado pelo caminho curto deixava o
+// link de cobranca velho em silencio: _linkCheckoutDoLead le data.afl_checkout, achava {} e devolvia
+// '', e o bloco "trocou o kit, troca o link" nao rodava. E o caso da Caroline (04/09) de novo, so que
+// pelo caminho curto. O mapa e pequeno (um objeto por afiliado).
 async function _leadRapidoLe(env, leadId, u) {
   const sfx = _sufMundoAfl(u);
   const chTags = sfx ? 'tags' + sfx : 'tags';
@@ -7578,8 +7608,9 @@ async function _leadRapidoLe(env, leadId, u) {
   let row = null;
   try {
     row = await env.DB.prepare(
-      "SELECT j.key AS idx, j.value AS lead, json_extract(s.data, '$.regras') AS regras,"
-      + " json_extract(s.data, '$.tags') AS tags, json_extract(s.data, ?) AS tagsM"
+      "SELECT j.key AS idx, j.value AS lead, s.version AS ver, json_extract(s.data, '$.regras') AS regras,"
+      + " json_extract(s.data, '$.tags') AS tags, json_extract(s.data, ?) AS tagsM,"
+      + " json_extract(s.data, '$.afl_checkout') AS aflck"
       + " FROM dashboard_state s, json_each(json_extract(s.data, '$.leads')) j"
       + " WHERE s.id = 1 AND CAST(json_extract(j.value, '$.id') AS TEXT) = ?"
     ).bind('$.' + chTags, String(leadId)).first();
@@ -7590,9 +7621,9 @@ async function _leadRapidoLe(env, leadId, u) {
   const pj = (t, pad) => { if (t == null) return pad; try { return JSON.parse(t); } catch (_) { return pad; } };
   const lead = pj(row.lead, null);
   if (!lead || typeof lead !== 'object' || String(lead.id) !== String(leadId)) return null;
-  const data = { leads: [lead], regras: pj(row.regras, {}) || {}, tags: pj(row.tags, []) };
+  const data = { leads: [lead], regras: pj(row.regras, {}) || {}, tags: pj(row.tags, []), afl_checkout: pj(row.aflck, {}) || {} };
   if (sfx) data[chTags] = pj(row.tagsM, []);
-  return { idx, leadTxt: String(row.lead), data };
+  return { idx, leadTxt: String(row.lead), data, version: Number(row.ver) || 0 };
 }
 // Devolve a versao nova (>0) se gravou; 0 se o pedido mudou ou andou de indice (a rota rele).
 async function _leadRapidoGrava(env, lido, lead, quem) {
@@ -7604,6 +7635,60 @@ async function _leadRapidoGrava(env, lido, lead, quem) {
     ).bind(caminho, JSON.stringify(lead), Math.floor(Date.now() / 1000), String(quem || ''), caminho, lido.leadTxt).first();
     return r ? (Number(r.version) || 1) : 0;
   } catch (e) { console.error('[lead rapido] ' + String((e && e.message) || e)); return 0; }
+}
+// ARRASTAR O CARD LE E GRAVA SO AQUELE PEDIDO (05/11/2026). Mesmo desenho do _leadRapidoLe e do
+// _leadRapidoGrava, agora pro POST /api/lead/:id/move (o arrasto do diretor e do afiliado no Kanban).
+//
+// O caso real: o arrasto do pedido 1792845282163 (Rota de Entrega -> Frustrados) levou 20,5 s e voltou
+// 409 "Conflito ao salvar". O caminho de sempre (handleMoveLead, logo acima no arquivo) le o estado
+// inteiro (1,4 MB mais o arquivo de leads), mexe num pedido e regrava tudo com a trava na versao do
+// estado inteiro. Sao ate 10 tentativas de 1,3 a 2 s cada, e enquanto o cron e os webhooks gravam o
+// blob em rajada a versao anda mais rapido do que uma tentativa leva: as 10 perdem. No log: 20.569 ms
+// de parede, 1.733 ms de CPU (173 ms por tentativa, quatro passagens sobre 2,8 MB de texto).
+//
+// Aqui a trava e O PROPRIO PEDIDO (json_set em '$.leads[i]' so pega se o texto daquele indice ainda e
+// o que foi lido), entao a versao do estado andando por causa de OUTRO pedido nao derruba o arrasto.
+// A versao sobe assim mesmo (version + 1), de proposito: quem leu o estado inteiro antes e grava depois
+// tem que perder o CAS e reler, senao apagaria o arrasto em silencio.
+//
+// Devolve Response quando resolveu por aqui (gravou, noop ou recusou por gate) e null quando o caminho
+// longo deve seguir. Nunca inventa resposta. QUEM CONTINUA NO LONGO: destino em _COLS_VENDA_CANCELADA
+// (a marca de venda cancelada olha os OUTROS pedidos do mesmo telefone, inclusive os do arquivo; e o
+// unico arrasto que o vendedor pode fazer, entao pra ele nada muda), pedido que mora no arquivo de
+// leads (json_each so ve a linha: tirar um card velho de Pagos ou Frustrados continua lento), 3 recusas
+// seguidas da trava de texto, e qualquer falha da leitura curta.
+async function _leadMoveRapido(env, u, leadId, col) {
+  if (_COLS_VENDA_CANCELADA.includes(String(col))) return null;
+  const _dir = isDirector(u), _afl = noMundoAfiliado(u);
+  for (let tent = 0; tent < 3; tent++) {
+    const lido = await _leadRapidoLe(env, leadId, u);
+    if (!lido) return null;   // pedido no arquivo, indice estranho, banco sem json_each: o longo resolve
+    const lead = lido.data.leads[0];
+    // MESMOS gates e MESMOS textos do handleMoveLead, na mesma ordem.
+    if (_afl && String(lead.afl || '') !== aflDe(u)) return err('Lead não encontrado', 404);
+    if (!_dir && !_afl && (String(lead.at || '') !== String(u.id) || lead.aceito)) {
+      return err(lead.aceito ? 'Esse pedido já foi aceito e não pode ser cancelado por aqui.' : 'Sem permissão', 403);
+    }
+    const from = lead.col;
+    if (from === col) return json({ ok: true, version: lido.version || 0, noop: true });
+    const _eraPagoMv = _ehPago(lead);
+    _congelaColPlat(lead, from);
+    lead.col = col;
+    _carimbaPagoTs(lead, _eraPagoMv, 0);   // arrastou pra Pagos (ou tirou de la): a data e a de agora
+    // Arrastou pra Pago -> limpa o retorno de cobranca, so na transicao (mesma regra do longo).
+    if (['Pago', 'Pagos'].includes(String(col)) && !['Pago', 'Pagos'].includes(String(from)) && lead.agend) { lead.agend = ''; if (lead.agend_avisado) lead.agend_avisado = ''; }
+    if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: new Date().toISOString() });
+    const newVer = await _leadRapidoGrava(env, lido, lead, 'kanban:' + String(u.id));
+    if (newVer) {
+      // SO DEPOIS de gravar, e uma vez so. O longo chamava a cada tentativa, inclusive nas perdidas, e
+      // chamar antes da trava marcaria wa_sales por um estado que nao gravou. Com a coluna nova fora
+      // da lista de cancelamento o proprio pedido conta como vivo: [lead] e a lista inteira dao canc = 0.
+      await _waSalesMarcaCancelada(env, lead, [lead]);
+      return json({ ok: true, version: newVer, from, to: col });
+    }
+    if (tent < 2) await _casEspera(tent);   // o indice andou ou ESTE pedido mudou: rele e aplica por cima
+  }
+  return null;   // 3 recusas seguidas: o caminho longo de hoje resolve
 }
 async function handleUpdateLead(req, env, leadId) {
   const u = await authUser(req, env);
@@ -7646,10 +7731,14 @@ async function handleUpdateLead(req, env, leadId) {
   // dele seriam ate 10 consultas iguais por salvamento. Mapa vazio quando `cob` nem vem no patch.
   const _cobOk = new Map();
   if ('cob' in patch) for (const c of await _cobradoresDaCasa(env)) _cobOk.set(String(c.id), Number(c.com_pct) || 0);
-  // Caminho curto (ver _leadRapidoLe): so sem troca de coluna. Se o pedido nao esta na linha (mora no
-  // arquivo), desliga na primeira tentativa e o resto do laco vai pelo estado inteiro.
-  let _tentaRapido = !('col' in patch);
+  // Caminho curto (ver _leadRapidoLe): sem troca de coluna, ou com troca pra coluna que NAO e de
+  // cancelamento (05/11/2026; antes qualquer `col` ia pelo longo, e o arrasto do cobrador pra
+  // Frustrados/Pagos pagava 10 x 1,4 MB em rajada do cron, como o 1792845282163). Entrar em
+  // Cancelado/Cancelado sem Custo precisa dos outros pedidos do telefone: longo. Se o pedido nao esta
+  // na linha (mora no arquivo), desliga na primeira tentativa e o resto do laco vai pelo estado inteiro.
+  let _tentaRapido = !('col' in patch) || !_COLS_VENDA_CANCELADA.includes(String(patch.col || ''));
   let _errosRapido = 0;   // 3 recusas seguidas no caminho curto = volta pro de sempre (nunca vira "Conflito" por causa dele)
+  const _t0 = Date.now();   // teto de 6 s do laco longo, igual ao handleMoveLead (ver o 409 no fim)
   for (let attempt = 0; attempt < 10; attempt++) {
     const _rap = _tentaRapido ? await _leadRapidoLe(env, leadId, u) : null;
     if (_tentaRapido && !_rap) _tentaRapido = false;
@@ -7665,6 +7754,7 @@ async function handleUpdateLead(req, env, leadId) {
     const lead = leads.find((l) => String(l.id) === String(leadId));
     if (!lead) return err('Lead não encontrado', 404);
     const fromCol = lead.col;
+    let _marcaVenda = false;   // trocou de coluna NESTA tentativa: a marca de venda cancelada sai so depois de gravar (ver abaixo)
     const _cobAntes = JSON.stringify([lead.agend || '', lead.spg || '', lead.col || '', lead.valor_neg == null ? '' : lead.valor_neg, (lead.pagamentos || []).length]);
     // Estado de pagamento ANTES do patch: se ESTE patch marca o pedido como Pago, o retorno de
     // cobranca (agend) e limpo junto (pedido do Bruno, 11/09/2026). Nao mexe se o proprio patch ja
@@ -7872,7 +7962,7 @@ async function handleUpdateLead(req, env, leadId) {
           _congelaColPlat(lead, fromCol);   // mesma regra do arrasto (ver handleMoveLead)
         }
         lead.col = patch.col;
-        await _waSalesMarcaCancelada(env, lead, leads);   // idem ao arrasto: cancelou, a venda sai da contagem
+        _marcaVenda = true;   // idem ao arrasto: cancelou, a venda sai da contagem (gravado abaixo, so se o UPDATE pegar)
       }
     }
     _carimbaPagoTs(lead, _eraPagoEd, 0);   // marcou/desmarcou pago na mao: a data e a de agora
@@ -7960,6 +8050,9 @@ async function handleUpdateLead(req, env, leadId) {
       if (res && res.meta && res.meta.changes > 0) newVer = _v;
     }
     if (newVer) {
+      // A MARCA DE VENDA CANCELADA SO DEPOIS DE GRAVAR (05/11/2026, revisao): rodava dentro do laco,
+      // antes do UPDATE, e um 409 "nada mudou" deixava a venda do telefone marcada cancelada.
+      if (_marcaVenda) await _waSalesMarcaCancelada(env, lead, leads);
       // QUANTOS COMENTARIOS O PEDIDO FICOU TENDO (30/10/2026). O caminho curto ja devolvia isto e
       // este nao - e este e justamente o caminho do pedido que mora no arquivo de leads. A tela
       // compara com a lista que ela tem na mao e, se divergir, pergunta a lista ao servidor em vez
@@ -7975,9 +8068,10 @@ async function handleUpdateLead(req, env, leadId) {
         ...(_mexeuComent ? { comentarios: _nComent } : {}),
       });
     }
-    if (attempt < 9) await _casEspera(attempt);   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
+    if (attempt < 9 && Date.now() - _t0 < 6000) { await _casEspera(attempt); continue; }   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
+    break;   // 10 tentativas ou 6 s (05/11/2026): desiste e explica, em vez de prender o navegador 20 s como no 1792845282163
   }
-  return err('Conflito ao salvar. Tente de novo.', 409);
+  return json({ ok: false, error: _TEXTO_409_TETO, tente: true, ms: Date.now() - _t0 }, 409);
 }
 
 // POST /api/lead/delete { id } → apaga UM pedido de data.leads. SÓ DIRETOR/SÓCIO/PRODUTOR.
@@ -10618,22 +10712,45 @@ let _dashRaw = null, _dashRawV = null, _dashRawMeta = null, _dashRawLido = 0;
 let _dashRawArq = null;   // { n, bytes } dos pedidos que vieram do arquivo de leads nesta leitura (ver ARQUIVO DE LEADS)
 async function _dashRawAtual(env) {
   const agora = Date.now();
+  const _versao = () => env.DB.prepare('SELECT version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
+  // A leitura canonica: baixa o texto, guarda na memoria do isolate e devolve.
+  const _inteiro = async () => {
+    const row = await env.DB.prepare('SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
+    if (!row) return null;
+    _dashRaw = row.data || '{}'; _dashRawV = Number(row.version) || 0; _dashRawLido = agora;
+    _dashRawMeta = { updated_at: row.updated_at, updated_by: row.updated_by };
+    _dashRawArq = row.__arq ? { n: row.__arq.n, bytes: row.__arq.bytes } : null;
+    return { raw: _dashRaw, version: _dashRawV, updated_at: row.updated_at, updated_by: row.updated_by, arq: _dashRawArq };
+  };
   if (_dashRaw != null && _dashRawV != null && (agora - _dashRawLido) < 120000) {
-    try {
-      const v = await env.DB.prepare('SELECT version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
-      if (v && Number(v.version) === _dashRawV) return { raw: _dashRaw, version: _dashRawV, updated_at: v.updated_at, updated_by: v.updated_by, arq: _dashRawArq };
-    } catch (e) {
-      // Banco nao respondeu a pergunta da versao: quem le recebe o ultimo texto que temos (o mesmo que
-      // o _getDashData ja fazia no erro). Quem precisa GRAVAR nao passa por aqui: le com a versao.
-      return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by, arq: _dashRawArq };
+    let v = null, perguntou = false;
+    try { v = await _versao(); perguntou = true; }
+    catch (e) {
+      // Banco nao respondeu a pergunta da versao. Ate 05/11/2026 isto devolvia na hora o ultimo texto
+      // que temos (ate 2 minutos velho) com a versao velha, e isso acontece justamente quando o D1 esta
+      // em rajada: no dia do arrasto do pedido 1792845282163 a tela recebeu o quadro de antes da
+      // gravacao, com a versao andando pra tras, logo depois do toast verde. Antes de desistir:
+      // pergunta a versao de novo uma vez (150 ms) e, se ainda falhar, faz a leitura completa, que e a
+      // canonica. So com as duas falhando quem le recebe a copia velha (o mesmo que o _getDashData ja
+      // fazia no erro). Quem precisa GRAVAR nao passa por aqui: le com a versao.
+      try { await new Promise((r) => setTimeout(r, 150)); v = await _versao(); perguntou = true; }
+      catch (_) { perguntou = false; }
+      if (!perguntou) {
+        try { const r2 = await _inteiro(); if (r2) return r2; } catch (_) { /* as duas falharam: copia velha abaixo */ }
+        return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by, arq: _dashRawArq };
+      }
     }
+    if (v && Number(v.version) === _dashRawV) return { raw: _dashRaw, version: _dashRawV, updated_at: v.updated_at, updated_by: v.updated_by, arq: _dashRawArq };
   }
-  const row = await env.DB.prepare('SELECT data, version, updated_at, updated_by FROM dashboard_state WHERE id = 1').first();
-  if (!row) return null;
-  _dashRaw = row.data || '{}'; _dashRawV = Number(row.version) || 0; _dashRawLido = agora;
-  _dashRawMeta = { updated_at: row.updated_at, updated_by: row.updated_by };
-  _dashRawArq = row.__arq ? { n: row.__arq.n, bytes: row.__arq.bytes } : null;
-  return { raw: _dashRaw, version: _dashRawV, updated_at: row.updated_at, updated_by: row.updated_by, arq: _dashRawArq };
+  // Leitura completa. COM TEXTO NA MEMORIA, falha do banco devolve a copia (ultimo recurso), nunca
+  // excecao (05/11/2026, revisao): o roteador devolve o handleGetState sem await, a rejeicao viraria
+  // 1101 e o Kanban cairia no exemplo. E o caso "a pergunta falhou, a repeticao veio com versao nova
+  // e a leitura completa falhou". Sem copia nenhuma, a excecao sobe como sempre.
+  if (_dashRaw != null && _dashRawV != null) {
+    try { return await _inteiro(); }
+    catch (_) { return { raw: _dashRaw, version: _dashRawV, updated_at: _dashRawMeta && _dashRawMeta.updated_at, updated_by: _dashRawMeta && _dashRawMeta.updated_by, arq: _dashRawArq }; }
+  }
+  return _inteiro();
 }
 async function _getDashData(env, maxAgeMs) {
   const now = Date.now();
@@ -33049,6 +33166,7 @@ async function _cronRastreio(env) {
       // REGISTERED, card parado em 'Enviado'.
       // Nao rebaixa quem ja andou (a Five reenvia SHIPPING_REGISTER) e nao reescreve o que ja bate:
       // reescrita a toa gera versao nova do blob e briga de CAS com o resto da dash a toa.
+      const _selAntes = String(lead.ship || '');   // pra saber, logo abaixo, se o selo mudou NESTA passada
       if (ss && !(lead.ship === ss || (ss === 'REGISTERED' && lead.ship))) {
         lead.ship = ss;
         lead.ship_ts = Number(r.updated_at) || Math.floor(Date.now() / 1000);
@@ -33059,19 +33177,61 @@ async function _cronRastreio(env) {
       // sempre - foi assim que 8 cards travaram. Agora a coluna segue o selo, que e o sinal mais
       // novo que existe. Isso tambem cobre webhook perdido: se o evento nao chegou, a proxima
       // batida ve o five_orders ja atualizado e arruma o card sozinha.
-      // DUAS COISAS ELA NAO TOCA, de proposito:
+      // TRES COISAS ELA NAO TOCA, de proposito:
       //  - coluna terminal (Roubos/Frustrados/Devolvido/Cancelado): e decisao do time, e o time
       //    sabe de coisa que a transportadora nao sabe (o cliente sumiu, o pacote foi roubado).
-      //  - pedido ja pago: DELIVERED mandaria ele pra 'Cobrança' e o cobrador ligaria cobrando
-      //    quem ja pagou. Entregue + pago = 'Pago', a mesma regra do webhook.
+      //  - pedido ja pago que a Five diz entregue: DELIVERED mandaria ele pra 'Cobrança' e o cobrador
+      //    ligaria cobrando quem ja pagou. Entregue + pago = 'Pago', a mesma regra do webhook.
+      //  - A DECISAO DA EQUIPE (05/11/2026, ver _seguraDecisaoDaEquipe): pedido pago nao sai de Pagos
+      //    e nao vai pra perda por causa do selo. A regra de 17/10 vivia so no webhook; este cron nasceu
+      //    antes dela e so tinha a guarda de 'Cobrança'. Caso real: o 1792845282163 foi pago pelo link
+      //    da Payt as 02:03 (card em Pago), o proprio postback subiu o updated_at da five_orders, e na
+      //    batida seguinte o cron viu ship IN_TRANSIT_TO_DELIVERY e devolveu o card pra Rota de Entrega
+      //    SEM uma linha de historico. Todo pedido COD pago pelo link antes do DELIVERED era desfeito
+      //    em ate 5 minutos. Agora o que a plataforma disse fica em col_plat e numa nota do hist, e a
+      //    coluna fica. E TODA troca de coluna feita aqui escreve hist (who 'five'): e o hist que
+      //    alimenta a ordem "ultimo em cima", as datas de perda/entrega e o reparo.
       const _alvo = _COL_DO_SELO[String(lead.ship || '')];
       if (!_alvo) continue;
       const _colAtual = _colCanon(lead.col);
       if (FIVE_COL_FIM.includes(_colAtual)) continue;
+      const _agoraISO = new Date().toISOString();
       if (_colAtual === 'Pago' || String(lead.spg || '') === 'Pago') {
-        if (_alvo === 'Cobrança') continue;
+        if (_alvo === 'Cobrança') {
+          // ENTREGUE E JA PAGO VAI PRA PAGO (05/11/2026), como no webhook. Ate aqui o `continue` era seco
+          // e o pedido pago na rua (spg Pago, card em Rota de Entrega) cuja entrega so chegou pelo
+          // rastreio ficava preso na coluna de entrega pra sempre. Quem JA esta em Pago nao recebe nada:
+          // e o estado final mais comum, e a Five reenvia DELIVERED a toda hora.
+          if (_colAtual !== 'Pago') {
+            if (!Array.isArray(lead.hist)) lead.hist = [];
+            lead.hist.push({ from: lead.col || '—', to: 'Pago', who: 'five', time: _agoraISO, note: 'entregue e ja estava pago: foi pra Pago em vez de Cobrança' });
+            lead.col = 'Pago';
+            lead.col_plat = 'Cobrança';   // o que a plataforma disse, nao o desvio (igual ao webhook)
+            mudou++;
+          }
+          continue;
+        }
       }
-      if (_colAtual === _alvo) continue;
+      if (_colAtual === _colCanon(_alvo)) continue;
+      const _motivo = _seguraDecisaoDaEquipe(lead, lead.col_plat || lead.col, _alvo);
+      if (_motivo) {
+        // A plataforma disse, mas a coluna fica. col_plat guarda o que ela disse (o gate do webhook
+        // parte daqui) e o hist conta o porque. A NOTA SO ENTRA quando ESTA passada mudou alguma
+        // coisa (o selo ou o col_plat): a Five reenvia o mesmo status o tempo todo, e o proprio
+        // webhook, quando processou o evento, ja deixou selo, col_plat e a nota dele. Nota por
+        // reenvio encheria o hist e regravaria o blob inteiro a toa (revisao de 05/11/2026).
+        let _mexeu = false;
+        if (String(lead.col_plat || '') !== _alvo) { lead.col_plat = _alvo; _mexeu = true; }
+        if (_selAntes !== String(lead.ship || '') || _mexeu) {
+          if (!Array.isArray(lead.hist)) lead.hist = [];
+          lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: 'five', time: _agoraISO, note: 'rastreio disse ' + _alvo + '; o card fica em ' + String(lead.col || '') + ' (' + _motivo + ')' });
+          _mexeu = true;
+        }
+        if (_mexeu) mudou++;
+        continue;
+      }
+      if (!Array.isArray(lead.hist)) lead.hist = [];
+      lead.hist.push({ from: lead.col || '—', to: _alvo, who: 'five', time: _agoraISO, note: 'rastreio: ' + String(lead.ship || '') });
       lead.col = _alvo;
       lead.col_plat = _alvo;   // foi a plataforma que disse, entao o gate do webhook parte daqui
       mudou++;

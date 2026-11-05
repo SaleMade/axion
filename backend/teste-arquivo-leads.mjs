@@ -7,7 +7,12 @@ import { criaD1 } from './teste-arquivo-d1.mjs'
 
 const [W, ESTADO] = process.argv.slice(2)
 const dir = path.dirname(W)
-const src = fs.readFileSync(W, 'utf8') + `
+// O bundle importa "cloudflare:sockets" (17/10/2026, proxy testada por socket TCP) e o Node nao resolve
+// esse esquema: o import vira classe vazia, como nos outros testes que carregam o bundle. Sem isto o
+// teste morria em ERR_UNSUPPORTED_ESM_URL_SCHEME antes de conferir qualquer coisa (visto em 05/11/2026).
+const src = fs.readFileSync(W, 'utf8').replace(/^import\s*\{([^}]*)\}\s*from\s*['"]cloudflare:[^'"]+['"];?/gm,
+  (m, nomes) => nomes.split(',').map((x) => x.trim()).filter(Boolean)
+    .map((x) => { const [a, b] = x.split(/\s+as\s+/); return 'const ' + (b || a) + ' = class {};' }).join(' ')) + `
 export { _arqEnvolve, _arqCron, _arqTempo, _arqUltimoMov, _arqPassouDoTeto, _arqGenDe, _arqJunta, _arqTipoSql, handleStateArquivo, handleStateTrim, _cronEnxugarLeads, _trimBlobData, _readConfig, _writeConfig };
 export function __arqZera() { _arqCache = null; _arqVerGen.clear(); _arqVazioAte = 0; _arqTabelaOk = false; }
 export function __arqEspia() { return { cache: _arqCache, verGen: _arqVerGen }; }
