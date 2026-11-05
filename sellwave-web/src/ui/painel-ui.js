@@ -2529,10 +2529,16 @@ const IC_PARA = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" 
 const IC_DENOVO = svg('<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>')
 const IC_LISTA = svg('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>')
 
-const MIDIA_MAX = 60 * 1024 * 1024     // o teto da rota do servidor
-const NOMES_TIPO = { text: 'mensagem', audio: 'áudio', video: 'vídeo', image: 'foto' }
-const TITULO_NOVO = { text: 'Nova mensagem', audio: 'Novo áudio', video: 'Novo vídeo', image: 'Nova foto' }
-const ACEITA = { audio: 'audio/*', video: 'video/mp4,video/quicktime,video/webm', image: 'image/jpeg,image/png' }
+// O TETO E O DO ENVIO, NAO O DA SUBIDA. A rota do servidor aceita 60 MB, mas o app recusa mandar
+// acima de 32 MB (TETO_MIDIA no main.js): um video de 45 MB subia, salvava e morria no disparo.
+const MIDIA_MAX = 32 * 1024 * 1024
+const MIDIA_MAX_MB = 32
+const NOMES_TIPO = { text: 'mensagem', audio: 'áudio', video: 'vídeo', image: 'foto', document: 'documento' }
+const TITULO_NOVO = { text: 'Nova mensagem', audio: 'Novo áudio', video: 'Novo vídeo', image: 'Nova foto', document: 'Novo documento' }
+// DOCUMENTO E SO PDF (05/11/2026). E o que o leitor do app mostra na previa e o que abre igual em
+// qualquer celular; Word ou planilha chegaria no lead como arquivo que ele talvez nem abra.
+const ACEITA = { audio: 'audio/*', video: 'video/mp4,video/quicktime,video/webm', image: 'image/jpeg,image/png', document: 'application/pdf,.pdf' }
+const ehPdf = (f) => !!f && (String(f.type || '').toLowerCase() === 'application/pdf' || (!f.type && /\.pdf$/i.test(String(f.name || ''))))
 const ESPERAS = [{ v: null, t: 'Padrão' }, { v: 0, t: 'Na hora' }, { v: 5, t: '5 s' }, { v: 10, t: '10 s' }, { v: 30, t: '30 s' }, { v: 60, t: '1 min' }, { v: 120, t: '2 min' }]
 
 function rotuloEspera(v) {
@@ -2701,10 +2707,12 @@ const topoEd = (titulo, cor, ic) => '<div class="ed-topo"><button class="ed-volt
 
 function edNovo() {
   let h = '<div class="ed">' + topoEd('Criar', '', '') + '<div class="ed-tipos">'
-  for (const t of ['text', 'audio', 'video', 'image']) {
+  // O quinto (documento) ocupa a linha inteira, deitado: cinco quadrados em duas colunas deixariam
+  // um sozinho com um buraco do lado.
+  for (const t of ['text', 'audio', 'video', 'image', 'document']) {
     const k = TIPOS[t]
-    const nome = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Foto' }[t]
-    h += '<button class="ed-tipo" data-novo="' + t + '" style="--kc:' + k.cor + '"><span class="ic">' + svg(k.ic) + '</span>' + nome + '</button>'
+    const nome = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Foto', document: 'Documento' }[t]
+    h += '<button class="ed-tipo' + (t === 'document' ? ' largo' : '') + '" data-novo="' + t + '" style="--kc:' + k.cor + '"><span class="ic">' + svg(k.ic) + '</span>' + nome + '</button>'
   }
   return h + '</div></div>'
 }
@@ -2726,9 +2734,22 @@ function edItem() {
   const k = TIPOS[e.tipo] || TIPOS.text
   const titulo = e.id ? 'Editar ' + (NOMES_TIPO[e.tipo] || 'item') : (TITULO_NOVO[e.tipo] || 'Novo item')
   let h = '<div class="ed" style="--kc:' + k.cor + '">' + topoEd(titulo, k.cor, svg(k.ic)) + '<div class="form">'
-    + '<div class="cx"><label>Nome</label><input data-k="ed-nome" maxlength="80" placeholder="' + ({ text: 'Ex.: Boas-vindas', audio: 'Ex.: Explicação do produto', video: 'Ex.: Depoimento', image: 'Ex.: Tabela de preços' }[e.tipo] || '') + '" value="' + esc(e.label) + '"></div>'
+    + '<div class="cx"><label>Nome</label><input data-k="ed-nome" maxlength="80" placeholder="' + ({ text: 'Ex.: Boas-vindas', audio: 'Ex.: Explicação do produto', video: 'Ex.: Depoimento', image: 'Ex.: Tabela de preços', document: 'Ex.: Bula do produto' }[e.tipo] || '') + '" value="' + esc(e.label) + '"></div>'
   const fonte = e.arq ? e.arq.url : (e.key ? urlMidia(e.key) : '')
-  if (e.tipo === 'text') {
+  if (e.tipo === 'document') {
+    // O CARTAO DO ARQUIVO, sem leitor embutido: o vendedor ja sabe o que escolheu, e a previa grande
+    // continua na lista (clique no item). O salvo abre na janela do app, igual a previa.
+    if (e.arq || e.key) {
+      const nome = e.arq ? (e.arq.nome || 'documento.pdf') : 'PDF salvo'
+      const info = e.arq ? ('PDF · ' + tamMB(e.arq.tam) + ' MB') : 'toque pra abrir'
+      h += '<' + (e.arq ? 'div' : 'button data-ed="abredoc" title="Abrir"') + ' class="ed-doc"><span class="ic">' + svg(TIPOS.document.ic) + '</span>'
+        + '<span class="t"><b>' + esc(nome) + '</b><span>' + info + '</span></span></' + (e.arq ? 'div' : 'button') + '>'
+        + '<div class="grav-ops" style="margin-top:7px"><button class="grav-op" data-ed="escolhe">' + IC_SOBE + 'Trocar</button></div>'
+    } else {
+      h += '<button class="ed-arq" data-ed="escolhe">' + IC_SOBE + 'Escolher PDF<span class="s">até ' + MIDIA_MAX_MB + ' MB</span></button>'
+    }
+    h += '<div class="cx" style="margin-top:9px"><label>Legenda</label><input data-k="ed-legenda" maxlength="1024" placeholder="opcional" value="' + esc(e.caption) + '"></div>'
+  } else if (e.tipo === 'text') {
     h += '<div class="cx"><label>Mensagem</label><textarea class="msg" data-k="ed-texto" maxlength="4096" placeholder="Escreva a mensagem">' + esc(e.text) + '</textarea></div>'
   } else if (e.tipo === 'audio') {
     h += '<div class="grav">'
@@ -2753,7 +2774,7 @@ function edItem() {
         + '<div class="grav-ops" style="margin-top:7px"><button class="grav-op" data-ed="escolhe">' + IC_SOBE + 'Trocar</button></div>'
     } else {
       h += '<button class="ed-arq" data-ed="escolhe">' + IC_SOBE + (e.tipo === 'image' ? 'Escolher foto' : 'Escolher vídeo')
-        + '<span class="s">até 60 MB</span></button>'
+        + '<span class="s">até ' + MIDIA_MAX_MB + ' MB</span></button>'
     }
     h += '<div class="cx" style="margin-top:9px"><label>Legenda</label><input data-k="ed-legenda" maxlength="1024" placeholder="opcional" value="' + esc(e.caption) + '"></div>'
   }
@@ -2904,12 +2925,16 @@ function ligaEditor(corpo) {
     const f = arq.files && arq.files[0]
     if (!f) return
     e.erro = ''
-    if (f.size > MIDIA_MAX) e.erro = 'Arquivo de ' + tamMB(f.size) + ' MB. O limite é 60 MB.'
+    if (f.size > MIDIA_MAX) e.erro = 'Arquivo de ' + tamMB(f.size) + ' MB. O limite é ' + MIDIA_MAX_MB + ' MB.'
     else if (e.tipo === 'image' && !/^image\/(jpeg|png)$/.test(f.type)) e.erro = 'Use foto JPG ou PNG.'
     else if (e.tipo === 'video' && !/^video\//.test(f.type)) e.erro = 'Esse arquivo não é vídeo.'
     else if (e.tipo === 'audio' && !/^audio\//.test(f.type)) e.erro = 'Esse arquivo não é áudio.'
-    else poeArquivo(e, f, f.type, f.name)
+    else if (e.tipo === 'document' && !ehPdf(f)) e.erro = 'Use um arquivo PDF.'
+    else poeArquivo(e, f, e.tipo === 'document' ? 'application/pdf' : f.type, f.name)
     desenhaEditor()
+  }
+  for (const b of corpo.querySelectorAll('[data-ed="abredoc"]')) b.onclick = async () => {
+    try { await window.swp.abrirMidia(e.key, e.label || 'Documento') } catch (_) { rodape('não consegui abrir o arquivo', null, true) }
   }
   for (const b of corpo.querySelectorAll('[data-ed="salva"]')) b.onclick = () => salvaEditor()
   for (const b of corpo.querySelectorAll('[data-ed="apaga"]')) b.onclick = () => armaOuApaga(e.id, () => { if (editor === e) desenhaEditor() })
@@ -2963,7 +2988,7 @@ async function salvaEditor() {
         try { ogg = await window.SWOgg.paraOgg(blob) } catch (_) { ogg = null }
         if (ogg) { blob = ogg; tipoArq = 'audio/ogg' }
       }
-      if (blob.size > MIDIA_MAX) throw new Error('Arquivo de ' + tamMB(blob.size) + ' MB. O limite é 60 MB.')
+      if (blob.size > MIDIA_MAX) throw new Error('Arquivo de ' + tamMB(blob.size) + ' MB. O limite é ' + MIDIA_MAX_MB + ' MB.')
       rodape('subindo o arquivo...')
       const bytes = new Uint8Array(await blob.arrayBuffer())
       const up = await window.swp.sobeMidia(tipoArq || 'application/octet-stream', bytes)

@@ -594,6 +594,9 @@
   .ed-tipo .ic { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px;
     background: color-mix(in srgb, var(--kc) 18%, transparent); color: var(--kc); }
   .ed-tipo .ic svg { width: 23px; height: 23px; }
+  .ed-tipo.largo { grid-column: 1 / -1; flex-direction: row; justify-content: center; gap: 12px; padding: 12px 8px; }
+  .ed-tipo.largo .ic { width: 40px; height: 40px; border-radius: 13px; }
+  .ed-tipo.largo .ic svg { width: 20px; height: 20px; }
   .ed-sec { display: flex; align-items: center; gap: 6px; margin: 12px 0 6px; font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: .04em; color: var(--apagado); }
   .ed-sec svg { width: 12px; height: 12px; }
@@ -633,6 +636,17 @@
   .ed-arq:hover { background: color-mix(in srgb, var(--kc) 12%, transparent); }
   .ed-arq svg { width: 26px; height: 26px; }
   .ed-arq .s { font-size: 10.5px; font-weight: 600; color: var(--apagado); }
+  /* o documento escolhido: icone, nome do arquivo e tamanho, sem leitor embutido */
+  .ed-doc { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; text-align: left;
+    border: 1px solid color-mix(in srgb, var(--kc) 40%, transparent); border-radius: 13px;
+    background: color-mix(in srgb, var(--kc) 8%, transparent); }
+  button.ed-doc:hover { background: color-mix(in srgb, var(--kc) 14%, transparent); }
+  .ed-doc .ic { display: grid; place-items: center; width: 38px; height: 38px; flex-shrink: 0; border-radius: 11px;
+    background: color-mix(in srgb, var(--kc) 18%, transparent); color: var(--kc); }
+  .ed-doc .ic svg { width: 19px; height: 19px; }
+  .ed-doc .t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ed-doc .t b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ed-doc .t span { font-size: 10.5px; font-weight: 600; color: var(--apagado); }
 
   /* passos do funil: o tempo de espera mora ENTRE dois passos, que e onde ele acontece */
   .ed-passo { display: flex; align-items: center; gap: 7px; padding: 6px 6px 6px 8px; border: 1px solid var(--linha);

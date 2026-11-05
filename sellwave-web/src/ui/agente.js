@@ -478,6 +478,26 @@
   }
   window.__swLinkDeEntrega = linkDeEntrega   // so pros testes
 
+  // O NOME DO DOCUMENTO QUE O LEAD RECEBE e o nome do item, e o WhatsApp manda do jeito que vier:
+  // sem extensao, o cliente via "Bula do produto" sem cara de PDF, e celular antigo nem sabia abrir.
+  // A extensao sai do tipo do proprio arquivo (o dataUri), nao do nome.
+  var EXT_DOC = {
+    'application/pdf': 'pdf', 'application/msword': 'doc', 'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+    'text/plain': 'txt', 'text/csv': 'csv',
+  }
+  function nomeDoDocumento(label, dataUri) {
+    // (a aspa vai escrita como x22 pra o recorte dos testes nao achar que abriu um texto)
+    var nome = String(label || '').replace(/[\\/:*?\x22<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'documento'
+    var m = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+)[;,]/i.exec(String(dataUri || '').slice(0, 160))
+    var ext = m ? EXT_DOC[m[1].toLowerCase()] : ''
+    if (ext && nome.toLowerCase().slice(-(ext.length + 1)) !== '.' + ext) nome += '.' + ext
+    return nome
+  }
+  window.__swNomeDoDocumento = nomeDoDocumento   // so pros testes
+
   // Manda UM item. A PAUSA NÃO ACONTECE AQUI (ver __swIndica): o painel já esperou.
   window.__swManda = function (chatId, item) {
     var W = window.WPP
@@ -532,7 +552,7 @@
           if (parou) return false
           if (item.kind === 'image') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'image', caption: item.caption || '' }), 120000, 'imagem')
           if (item.kind === 'video') return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'video', caption: item.caption || '' }), 180000, 'vídeo')
-          return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: item.label || 'arquivo' }), 120000, 'documento')
+          return comPrazo(W.chat.sendFileMessage(chatId, dataUri, { type: 'document', caption: item.caption || '', filename: nomeDoDocumento(item.label, dataUri) }), 120000, 'documento')
         })
       }).then(function () { return true })
     // O FIM E MARCADO DE QUALQUER JEITO, inclusive quando o envio falha: o item seguinte do mesmo

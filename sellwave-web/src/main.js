@@ -3738,7 +3738,10 @@ ipcMain.handle('swp:ocultar', async (_e, { id, oculto }) => {
 })
 // O ARQUIVO DO ITEM NOVO vai em bytes crus (como o comprovante) pra mesma rota da midia do Sale
 // Chat, que devolve a chave `m/...` que o envio e a previa ja sabem buscar.
-const MIDIA_ITEM_MAX = 60 * 1024 * 1024   // o teto da rota /api/salechat/media
+// O teto e o do ENVIO (TETO_MIDIA, mais abaixo), nao os 60 MB da rota: acima de 32 MB o arquivo
+// subia, salvava e nunca saia no disparo. Numero repetido de proposito: o TETO_MIDIA e declarado
+// depois desta linha e le-lo aqui no carregamento quebraria o app inteiro.
+const MIDIA_ITEM_MAX = 32 * 1024 * 1024
 ipcMain.handle('swp:sobe-midia', async (_e, { mime, bytes }) => {
   const nao = naoNoVerComo(); if (nao) return nao
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
@@ -3746,7 +3749,7 @@ ipcMain.handle('swp:sobe-midia', async (_e, { mime, bytes }) => {
   if (!/^(image|audio|video)\//.test(tipo) && tipo !== 'application/pdf') return { ok: false, erro: 'Esse tipo de arquivo não dá pra mandar.' }
   const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || [])
   if (!buf.length) return { ok: false, erro: 'O arquivo veio vazio.' }
-  if (buf.length > MIDIA_ITEM_MAX) return { ok: false, erro: 'Arquivo de ' + Math.round(buf.length / 1048576) + ' MB. O limite é 60 MB.' }
+  if (buf.length > MIDIA_ITEM_MAX) return { ok: false, erro: 'Arquivo de ' + Math.round(buf.length / 1048576) + ' MB. O limite é 32 MB.' }
   try {
     const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media', {
       method: 'POST',

@@ -209,6 +209,24 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   conta('o respiro entre funis e maior que a janela que o agente usa pra achar o comeco',
     entre > janela, 'entre funis=' + entre + 'ms, janela=' + janela + 'ms')
 
+  // ── O NOME DO DOCUMENTO QUE O LEAD RECEBE (05/11/2026) ──────────────────────────────────────
+  // O WhatsApp manda o nome do jeito que vier: sem a extensao, "Bula do produto" chegava sem cara
+  // de PDF. Recorta a tabela e a funcao do proprio agente.
+  console.log('\nO NOME DO DOCUMENTO')
+  const tabela = (fonte.match(/var EXT_DOC = \{[\s\S]*?\n {2}\}/) || [])[0]
+  const fnNome = funcao('nomeDoDocumento')
+  conta('o agente tem a tabela de extensoes e a funcao do nome', !!tabela && !!fnNome)
+  if (tabela && fnNome) {
+    const N = vm.runInNewContext(tabela + '\n' + fnNome + '\nnomeDoDocumento')
+    const PDF = 'data:application/pdf;base64,JVBERi0='
+    conta('PDF sem extensao ganha ".pdf"', N('Bula do produto', PDF) === 'Bula do produto.pdf', N('Bula do produto', PDF))
+    conta('quem ja tem ".pdf" (qualquer caixa) nao ganha outro', N('Contrato.PDF', PDF) === 'Contrato.PDF', N('Contrato.PDF', PDF))
+    conta('Word ganha ".docx" pelo tipo do arquivo, nao pelo nome', N('Termo', 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,UEs=') === 'Termo.docx')
+    conta('barra, dois pontos e aspas saem do nome', N('a/b: "c"', PDF) === 'a b c.pdf', N('a/b: "c"', PDF))
+    conta('sem nome vira "documento.pdf"', N('', PDF) === 'documento.pdf', N('', PDF))
+    conta('tipo desconhecido fica sem extensao inventada', N('Arquivo', 'data:application/zip;base64,UEs=') === 'Arquivo', N('Arquivo', 'data:application/zip;base64,UEs='))
+  }
+
   console.log('\n' + ok + ' certos, ' + falhas.length + ' errados')
   process.exit(falhas.length ? 1 : 0)
 })()
