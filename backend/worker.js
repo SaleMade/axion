@@ -13899,7 +13899,9 @@ function _cobPedidosDoMundo(data, mundo) {
     if (!l || l.id == null || String(l.afl || '') !== mundo || _cobManualNaoAceito(l)) return false;
     const col = _cobColId(l.col);
     if (!_COB_CONHECIDAS.has(col)) return false;
-    if (_COB_TERMINAIS.has(col) && _cobEntrouNaCol(l, col) < corte) return false;
+    // RETORNO MARCADO EM PEDIDO PAGO E COMPROMISSO, NAO HISTORIA (05/11/2026, o calendario do app
+    // segue o inAgenda da dash): fica fora do corte de 30 dias. Pago sem retorno continua cortado.
+    if (_COB_TERMINAIS.has(col) && _cobEntrouNaCol(l, col) < corte && !(col === 'Pagos' && _cobTxt(l.agend).trim())) return false;
     return true;
   });
 }

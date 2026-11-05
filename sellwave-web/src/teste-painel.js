@@ -2035,6 +2035,87 @@ app.whenReady().then(async () => {
   const volta = await js2('(() => ({ aviso: document.getElementById("cob-aviso").textContent, onde: [...document.querySelectorAll("#cob-corpo .crm-col")].find(c => c.querySelector(".cob-card[data-id=\'9002\']"))?.dataset.col }))()')
   conta('kanban: a dash recusou, o card volta e a tela diz por que', volta.onde === 'Entregues' && /Não salvou/.test(volta.aviso), JSON.stringify(volta))
 
+  // ══ O CALENDARIO DO MES (05/11/2026) ═══════════════════════════════════════════════════════
+  // "um terceiro [quadro], mais ou menos essa visualizacao [a Agenda de retornos da dash], pra eles
+  // saberem que dia do mes tem retorno, quais sao os pedidos, e ter uma nocao".
+  ponto = 'cobranca calendario'
+  await js2('document.querySelector("#cob-abas [data-a=cal]").click()')
+  await espera(300)
+  const hojeK = await js2('window.SWCob.chaveDia(Date.now())')
+  const amanhaK = await js2('window.SWCob.chaveDia(Date.now() + 86400000)')
+  const cal1 = await js2('(() => { const g = document.querySelector("#cob-corpo .cob-cal-grade"); const hoje = g && g.querySelector(".cob-cal-dia.hoje"); return {'
+    + ' aba: window.__swCob.estado().aba, semana: [...document.querySelectorAll("#cob-corpo .cob-cal-sem span")].map(s => s.textContent).join(" "),'
+    + ' celulas: g ? g.querySelectorAll(".cob-cal-dia").length : 0, hojeK: hoje && hoje.dataset.dia, sel: !!hoje && hoje.classList.contains("sel"),'
+    + ' hojeEvs: hoje ? [...hoje.querySelectorAll(".cob-cal-ev")].map(e => e.querySelector("span").textContent + (e.classList.contains("rua") ? "(rua)" : "") + (e.getAttribute("draggable") === "true" ? "*" : "")) : [],'
+    + ' titulo: (document.querySelector("#cob-corpo .cob-cal-nav h4") || {}).textContent, esperado: window.SWCob.mesRotulo(new Date().getFullYear(), new Date().getMonth()),'
+    + ' resumo: document.getElementById("cob-resumo").textContent,'
+    + ' lado: (document.querySelector("#cob-corpo .crm-col[data-col=dia] .crm-col-cab b") || {}).textContent,'
+    + ' grupos: [...document.querySelectorAll("#cob-corpo .crm-col[data-col=dia] .cob-dia-n b")].map(b => b.textContent),'
+    + ' nomes: [...document.querySelectorAll("#cob-corpo .crm-col[data-col=dia] .cob-card .cob-l1 b")].map(b => b.textContent) } })()')
+  conta('calendario: a terceira aba abre o mes de hoje, com as sete colunas da semana', cal1.aba === 'cal' && cal1.semana === 'dom. seg. ter. qua. qui. sex. sáb.' && cal1.celulas % 7 === 0 && cal1.celulas >= 28 && cal1.titulo === cal1.esperado, JSON.stringify(cal1).slice(0, 220))
+  conta('calendario: o dia de hoje esta marcado e e o escolhido ao abrir', cal1.hojeK === hojeK && cal1.sel === true, JSON.stringify({ h: cal1.hojeK, k: hojeK, sel: cal1.sel }))
+  conta('calendario: hoje tem o retorno da Bia (arrastavel) e a Eva chegando (bolinha, sem arrastar)', cal1.hojeEvs.join('|') === 'Bia Hoje*|Eva Chegando(rua)', cal1.hojeEvs.join('|'))
+  conta('calendario: a lista do lado e a de hoje, com Atrasados, Marcados pra hoje e Chegando', /^Hoje · /.test(cal1.lado) && cal1.grupos.join('|') === 'Atrasados|Marcados pra hoje|Chegando' && cal1.nomes.join('|') === 'Ana Atrasada|Bia Hoje|Eva Chegando', JSON.stringify({ l: cal1.lado, g: cal1.grupos, n: cal1.nomes }))
+  conta('calendario: o resumo conta hoje, atrasados, chegando e marcados pra frente', /1 pra atender hoje/.test(cal1.resumo) && /1 atrasados/.test(cal1.resumo) && /1 chegando/.test(cal1.resumo) && /2 marcados pra frente/.test(cal1.resumo), cal1.resumo)
+  // O retorno de amanha pode cair no mes seguinte (fora da grade): ai o teste vira a pagina.
+  const achaCaio = () => js2('(() => { const e = document.querySelector("#cob-corpo .cob-cal-ev[data-id=\'9003\']"); if (!e) return null; return { dia: e.closest(".cob-cal-dia").dataset.dia, hora: e.querySelector("b").textContent, cor: e.style.getPropertyValue("--c") } })()')
+  let caio = await achaCaio()
+  if (!caio) { await js2('document.querySelector("#cob-corpo [data-cal=prox]").click()'); await espera(250); caio = await achaCaio() }
+  conta('calendario: o retorno de amanha esta no dia de amanha, com a hora e a cor de marcado', !!caio && caio.dia === amanhaK && /^\d\d:\d\d$/.test(caio.hora) && caio.cor === '#0ea5e9', JSON.stringify(caio))
+  await js2('document.querySelector("#cob-corpo .cob-cal-ev[data-id=\'9003\']").click()')
+  await espera(400)
+  const calF = await js2('({ ficha: !document.getElementById("cob-ficha").hidden, id: window.__swCob.estado().fichaId, dia: window.__swCob.estado().calDia, lado: (document.querySelector("#cob-corpo .crm-col[data-col=dia] .crm-col-cab b") || {}).textContent, n: document.querySelectorAll("#cob-corpo .crm-col[data-col=dia] .cob-card").length })')
+  conta('calendario: clicar no retorno abre a ficha e a lista do lado vira a daquele dia', calF.ficha && calF.id === '9003' && calF.dia === amanhaK && /^Amanhã · /.test(calF.lado) && calF.n === 2, JSON.stringify(calF))
+  await js2('window.__swCob.fechaFicha()')
+  const nS2 = (await salvas()).length
+  const depoisK = await js2('window.SWCob.chaveDia(Date.now() + 2 * 86400000)')
+  // ARRASTAR DE VERDADE (dragstart, dragover, drop, como no CRM): chamar moveDia direto nao passa
+  // pelos tres ouvintes. O drop sintetico nao obedece a trava do navegador, entao o helper devolve
+  // tambem se o dragover foi aceito (defaultPrevented): e isso que faz o Chromium disparar o drop.
+  const arrastaDia = (id, k) => js2('(() => { const e = document.querySelector("#cob-corpo .cob-cal-ev[data-id=\'' + id + '\']"); const cel = document.querySelector("#cob-corpo .cob-cal-dia[data-dia=\'' + k + '\']"); if (!e || !cel) return { erro: "sem o retorno ou sem a celula na grade" };'
+    + ' const dt = new DataTransfer(); e.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt })); const pegou = e.classList.contains("arrastando");'
+    + ' const over = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }); cel.dispatchEvent(over); const aceitou = over.defaultPrevented; const alvo = cel.classList.contains("alvo");'
+    + ' cel.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt })); e.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt })); return { pegou, aceitou, alvo } })()')
+  const ad = await arrastaDia('9003', depoisK)
+  // dia de destino fora da grade (virada de mes): vai pelo caminho direto, que o drop chama no fim
+  if (ad && ad.erro) await js2('window.__swCob.moveDia("9003", "' + depoisK + '")')
+  await espera(400)
+  const mvd = (await salvas()).slice(nS2)
+  // A HORA E A QUE O RETORNO MOSTRAVA (caio.hora vem do fixture), nao um numero fixo.
+  conta('calendario: arrastar o retorno pra outro dia (dragstart, dragover, drop) remarca na MESMA hora',
+    !!ad && (ad.erro ? true : (ad.pegou && ad.aceitou && ad.alvo)) && mvd.length === 1 && mvd[0][0] === '9003' && mvd[0][1].agend === depoisK + 'T' + caio.hora && Object.keys(mvd[0][1]).join() === 'agend', JSON.stringify({ ad, mvd }))
+  // (a releitura depois de gravar traz o servidor de mentira de volta: o Caio volta pra amanha)
+  await js2('window.__swCob.moveDia("9003", "' + amanhaK + '")')
+  await espera(200)
+  conta('calendario: soltar no dia em que ja esta nao grava nada', (await salvas()).length === nS2 + 1 && (await js2('window.__swCob.estado().calDia')) === depoisK)
+  // O MES CHEIO: tres retornos a mais hoje. A celula mostra dois e "mais +N"; a lista do lado, todos.
+  // Os tres no ULTIMO minuto do dia: a Bia e min(23:59, agora + 2 min), entao ela vem antes por
+  // hora ou, no empate das 23:59, por nome. Com hora fixa menor, a ordem dependia da hora da rodada.
+  await js2('window.__poeCobPedidos([' + [1, 2, 3].map((i) => '{ id: "910' + i + '", nome: "Xavier ' + i + '", wa: "1191111010' + i + '", col: "Entregues", colBruta: "Cobrança", agend: "' + hojeK + 'T23:59" }').join(',') + '])')
+  await js2('document.querySelector("#cob-corpo [data-cal=hoje]").click(); window.__swCob.busca()')
+  await espera(400)
+  const cheio = await js2('(() => { const h = document.querySelector("#cob-corpo .cob-cal-dia.hoje"); return { evs: h ? [...h.querySelectorAll(".cob-cal-ev span")].map(s => s.textContent) : [], mais: (h && h.querySelector(".cob-cal-mais") || {}).textContent, sel: !!h && h.classList.contains("sel"), lado: document.querySelectorAll("#cob-corpo .crm-col[data-col=dia] .cob-card").length, titulo: (document.querySelector("#cob-corpo .cob-cal-nav h4") || {}).textContent } })()')
+  conta('calendario: "Hoje" volta pro mes de agora; o dia cheio mostra dois e "mais +N", e a lista do lado mostra todos', cheio.titulo === cal1.esperado && cheio.sel && cheio.evs.join('|') === 'Bia Hoje|Xavier 1' && cheio.mais === 'mais +3' && cheio.lado === 6, JSON.stringify(cheio))
+  await js2('document.querySelector("#cob-corpo [data-cal=ant]").click()')
+  await espera(200)
+  // (no comeco do mes, hoje aparece na grade do mes anterior como dia DE FORA, apagado: nao conta)
+  const mesAnt = await js2('(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return { t: (document.querySelector("#cob-corpo .cob-cal-nav h4") || {}).textContent, e: window.SWCob.mesRotulo(d.getFullYear(), d.getMonth()), hoje: !!document.querySelector("#cob-corpo .cob-cal-dia.hoje:not(.fora)") } })()')
+  conta('calendario: a seta volta um mes (e o dia de hoje nao e dia desse mes)', mesAnt.t === mesAnt.e && !mesAnt.hoje, JSON.stringify(mesAnt))
+  await js2('window.__poeCobPedidos([]); document.querySelector("#cob-corpo [data-cal=hoje]").click(); window.__swCob.busca()')
+  await espera(400)
+  conta('calendario: tirados os pedidos a mais, hoje volta a ter dois', (await js2('document.querySelectorAll("#cob-corpo .cob-cal-dia.hoje .cob-cal-ev").length')) === 2)
+  // QUEM ESTA CHEGANDO NAO SE ARRASTA (nao e compromisso): o dragstart nem pega
+  const ad2 = await arrastaDia('9005', hojeK)
+  conta('calendario: a bolinha de quem esta chegando nao se arrasta', !!ad2 && !ad2.erro && !ad2.pegou && !ad2.aceitou, JSON.stringify(ad2))
+  // A DASH RECUSOU (o preload recusa o 9002): o retorno volta pro dia e a lista do lado volta junto
+  const nS3 = (await salvas()).length
+  await js2('window.__swCob.moveDia("9002", "' + depoisK + '")')
+  await espera(500)
+  const rec = await js2('(() => { const e = document.querySelector("#cob-corpo .cob-cal-ev[data-id=\'9002\']"); const cel = e && e.closest(".cob-cal-dia"); return { dia: cel ? cel.dataset.dia : null, calDia: window.__swCob.estado().calDia, aviso: document.getElementById("cob-aviso").textContent, lado: (document.querySelector("#cob-corpo .crm-col[data-col=dia] .crm-col-cab b") || {}).textContent } })()')
+  conta('calendario: a dash recusou, o retorno volta pro dia de hoje e a lista do lado tambem', (await salvas()).length === nS3 + 1 && rec.dia === hojeK && rec.calDia === '' && /Não remarcou/.test(rec.aviso) && /^Hoje · /.test(rec.lado), JSON.stringify(rec))
+  await js2('document.querySelector("#cob-abas [data-a=agenda]").click()')
+  await espera(150)
+
   await js2('(async () => { await window.__swCob.fecha(); janelaAjustes() })()')
   await espera(200)
   const quemAj = await js2('(document.querySelector("#modal-corpo .quem") || {}).textContent')

@@ -646,6 +646,55 @@
   .cob-dia-n b { font-size: 11.5px; font-weight: 700; color: var(--texto); letter-spacing: .02em; }
   .cob-dia-n span { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--apagado); font-variant-numeric: tabular-nums; }
   .cob-perda-l.alvo, .cob-dia-n.alvo { box-shadow: inset 0 0 0 2px rgba(36, 194, 120, .5); }
+  .cob-dia-n i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+  /* O CALENDARIO DO MES (05/11/2026): a Agenda de retornos da dash dentro do app. A grade do mes
+     numa moldura igual a da coluna do Kanban; ao lado, a lista do dia escolhido como uma coluna de
+     largura fixa. Hoje tem o anel azul e o numero no circulo (como na dash); o dia escolhido, o anel
+     verde da marca; dia de outro mes fica apagado. */
+  /* Cabe num notebook de 1366 (area de 782 px): grade de 500 + coluna do dia que encolhe ate os 236
+     das outras colunas. Abaixo disso rola pro lado, como a Agenda e o Pedidos ja fazem. */
+  .cob-cal-mes { flex: 1 1 500px; min-width: 500px; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--linha); border-radius: 12px; background: #080b11; }
+  .cob-cal-nav { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px 12px; }
+  .cob-cal-nav button { display: grid; place-items: center; width: 28px; height: 26px; border-radius: 7px; color: var(--apagado); border: 1px solid var(--linha); }
+  .cob-cal-nav button:hover { color: var(--texto); background: rgba(255, 255, 255, .05); }
+  .cob-cal-nav .cob-cal-hoje { width: auto; padding: 0 10px; font-size: 11.5px; font-weight: 600; color: var(--texto); }
+  /* o titulo no centro da faixa, sem depender da largura dos botoes */
+  .cob-cal-nav h4 { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); white-space: nowrap; font-size: 14px; font-weight: 700; pointer-events: none; }
+  .cob-cal-sem { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--linha); }
+  .cob-cal-sem span { padding: 7px 0; text-align: center; font-size: 11.5px; font-weight: 700; color: var(--apagado); border-bottom: 1px solid var(--linha); }
+  /* 102 px e a celula mais cheia (numero + 3 linhas): abaixo disso o circulo do dia achatava */
+  .cob-cal-grade { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(102px, 1fr); }
+  .cob-cal-grade::-webkit-scrollbar { width: 6px; }
+  .cob-cal-grade::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .09); border-radius: 6px; }
+  .cob-cal-dia { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 4px 5px 6px; cursor: pointer; container-type: inline-size;
+    border-right: 1px solid var(--linha); border-bottom: 1px solid var(--linha); border-radius: 6px; }
+  .cob-cal-dia:nth-child(7n) { border-right: 0; }
+  .cob-cal-dia:hover { background: rgba(255, 255, 255, .025); }
+  .cob-cal-dia.fora { opacity: .42; }
+  .cob-cal-dia .n { flex: 0 0 auto; align-self: flex-end; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px;
+    border-radius: 99px; font-size: 12px; font-weight: 600; color: var(--texto); font-variant-numeric: tabular-nums; }
+  .cob-cal-dia.dom .n { color: #60a5fa; }
+  .cob-cal-dia.hoje { background: rgba(59, 130, 246, .12); box-shadow: inset 0 0 0 2px #3b82f6; }
+  .cob-cal-dia.hoje .n { background: #3b82f6; color: #fff; font-weight: 700; box-shadow: 0 2px 6px rgba(59, 130, 246, .5); }
+  .cob-cal-dia.sel { box-shadow: inset 0 0 0 2px rgba(36, 194, 120, .85); }
+  .cob-cal-dia.hoje.sel { box-shadow: inset 0 0 0 2px #3b82f6, inset 0 0 0 4px rgba(36, 194, 120, .7); }
+  .cob-cal-dia.alvo { background: var(--verde-fraco); box-shadow: inset 0 0 0 2px rgba(36, 194, 120, .85); }
+  .cob-cal-ev { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 2px 6px; border-radius: 5px; font-size: 11px; line-height: 15px;
+    color: #fff; background: var(--c); cursor: pointer; }
+  .cob-cal-ev:hover { filter: brightness(1.12); }
+  .cob-cal-ev.arrastando { opacity: .45; }
+  .cob-cal-ev b { flex: 0 0 auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .cob-cal-ev span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* CELULA ESTREITA (notebook, janela de 1440): a hora comia o nome e sobravam duas letras. Fica so o
+     nome; a hora segue no title da pill e nos cards do dia, ao lado. Em monitor largo a hora volta. */
+  @container (max-width: 110px) { .cob-cal-ev b { display: none; } }
+  .cob-cal-ev.rua { background: transparent; color: var(--apagado); padding: 1px 4px; }
+  .cob-cal-ev.rua:hover { color: var(--texto); background: rgba(255, 255, 255, .05); filter: none; }
+  .cob-cal-ev.rua i { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; flex: 0 0 auto; }
+  .cob-cal-mais { align-self: flex-start; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--apagado); }
+  .cob-cal-mais:hover { color: var(--texto); background: rgba(255, 255, 255, .06); }
+  #cob .crm-col[data-col="dia"] { flex: 0 1 280px; min-width: 236px; }
   .cob-ficha { position: absolute; top: 0; right: 0; bottom: 0; width: min(430px, 92%); z-index: 3; display: flex; flex-direction: column;
     background: #121722; border-left: 1px solid var(--linha); box-shadow: -14px 0 30px rgba(0, 0, 0, .35); animation: cob-gaveta .14s ease-out; }
   .cob-ficha[hidden] { display: none; }
@@ -862,7 +911,7 @@
       <div class="crm-topo" id="cob-topo">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#24c278" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
         <h3>Cobrança</h3>
-        <div class="crm-per" id="cob-abas"><button data-a="agenda">Agenda</button><button data-a="kanban">Pedidos</button></div>
+        <div class="crm-per" id="cob-abas"><button data-a="agenda">Agenda</button><button data-a="cal">Calendário</button><button data-a="kanban">Pedidos</button></div>
         <div class="cob-busca">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="cob-busca" placeholder="Buscar cliente, telefone ou cidade" spellcheck="false" />

@@ -26,7 +26,15 @@
   const guarda = (k, v) => { try { localStorage.setItem(k, v) } catch (_) { /* sem armazenamento: so nao lembra */ } }
   const le = (k) => { try { return localStorage.getItem(k) } catch (_) { return null } }
   let aberto = false
-  let aba = le('sw-cob-aba') === 'kanban' ? 'kanban' : 'agenda'
+  // As tres abas: a agenda do dia (colunas), o calendario do mes e o quadro de pedidos (Kanban).
+  let aba = ['kanban', 'cal'].includes(le('sw-cob-aba')) ? le('sw-cob-aba') : 'agenda'
+  // VAZIO = ACOMPANHA O RELOGIO (revisao de 05/11/2026): o cobrador deixa o app aberto de um dia pro
+  // outro, entao "hoje" nao pode virar data fixa na primeira vez que desenha. So vira chave fixa o
+  // que ele escolheu na mao (outro mes, outro dia); hoje escolhido de novo volta a ser vazio.
+  let calMes = null    // { ano, mes } do mes na tela; nulo = o de hoje
+  let calDia = ''      // o dia escolhido no calendario (chave AAAA-MM-DD); vazio = hoje
+  let desenhadoDia = ''         // o "hoje" do ultimo desenho: virou o dia, redesenha mesmo sem dado novo
+  let redesenhaDepois = false   // a releitura chegou no meio de um arrasto: desenha quando ele acabar
   let soMeus = le('sw-cob-meus') !== '0'
   let filtro = ''
   let dados = { pedidos: [], prontos: [], eu: '' }
@@ -138,7 +146,7 @@
         dados = { pedidos: Array.isArray(r.pedidos) ? r.pedidos : [], prontos: Array.isArray(r.prontos) ? r.prontos : [], tags: Array.isArray(r.tags) ? r.tags : [], eu: String(r.eu || '') }
         sig = String(r.sig || '')
         carregou = true
-        if (aberto && !arrastando) desenha()
+        if (aberto) { if (arrastando) redesenhaDepois = true; else desenha() }
         if (fichaId && !ficha.hidden) recarregaFicha(true)
       }
       desenhaMini()
@@ -152,6 +160,9 @@
   let ultima = 0
   setInterval(() => {
     if (!modo() || document.hidden) return
+    // VIROU O DIA com o quadro aberto: atrasado, hoje e amanha mudam de lugar mesmo sem pedido novo
+    // (a releitura so redesenha quando a assinatura muda, e de madrugada ela fica horas igual).
+    if (aberto && carregou && !arrastando && desenhadoDia && desenhadoDia !== C.chaveDia(Date.now())) desenha()
     const passo = aberto ? 30000 : 60000
     if (Date.now() - ultima < passo) return
     ultima = Date.now()
@@ -215,20 +226,30 @@
   // ── o quadro ────────────────────────────────────────────────────────────────────────────────
   function desenha() {
     if (!aberto) return
+    redesenhaDepois = false
+    desenhadoDia = C.chaveDia(Date.now())
+    // A rolagem de cada coluna volta depois do redesenho. A coluna do dia (calendario) so quando ela
+    // continua mostrando o MESMO dia: a lista de hoje rolada ate o fim nao pode abrir o dia 12 rolada.
     const rolagem = {}
-    for (const x of corpo.querySelectorAll('.crm-col')) { const k = x.querySelector('.crm-cards'); if (k) rolagem[x.dataset.col] = k.scrollTop }
+    const chaveCol = (x) => (x.dataset.col === 'dia' ? 'dia@' + (x.dataset.dia || '') : x.dataset.col)
+    for (const x of corpo.querySelectorAll('.crm-col')) { const k = x.querySelector('.crm-cards'); if (k) rolagem[chaveCol(x)] = k.scrollTop }
     const rolagemX = corpo.scrollLeft
+    const gradeAntes = corpo.querySelector('.cob-cal-grade')
+    const rolagemGrade = gradeAntes ? gradeAntes.scrollTop : 0
     if (!carregou) {
       resumo.innerHTML = ''
       corpo.innerHTML = '<div class="cob-carrega">' + esc(erro || 'Carregando os pedidos...') + '</div>'
       return
     }
     if (aba === 'agenda') desenhaAgenda()
+    else if (aba === 'cal') desenhaCalendario()
     else desenhaKanban()
-    for (const x of corpo.querySelectorAll('.crm-col')) { const k = x.querySelector('.crm-cards'); if (k && rolagem[x.dataset.col]) k.scrollTop = rolagem[x.dataset.col] }
+    for (const x of corpo.querySelectorAll('.crm-col')) { const k = x.querySelector('.crm-cards'); if (k && rolagem[chaveCol(x)]) k.scrollTop = rolagem[chaveCol(x)] }
+    const gradeDepois = corpo.querySelector('.cob-cal-grade')
+    if (gradeDepois && rolagemGrade) gradeDepois.scrollTop = rolagemGrade
     corpo.scrollLeft = rolagemX
   }
-  const coluna = (id, rot, cor, n, cards, vazio, extra) => '<div class="crm-col" data-col="' + esc(id) + '" style="--c:' + cor + '">'
+  const coluna = (id, rot, cor, n, cards, vazio, extra, attrs) => '<div class="crm-col" data-col="' + esc(id) + '"' + (attrs || '') + ' style="--c:' + cor + '">'
     + '<div class="crm-col-cab"><i></i><b title="' + esc(rot) + '">' + esc(rot) + '</b><span>' + n + '</span></div>'
     + (extra || '')
     + '<div class="crm-cards">' + (cards || '<div class="crm-vazio">' + esc(vazio) + '</div>') + '</div></div>'
@@ -306,6 +327,97 @@
       + coluna('proximos', 'Próximos', '#0ea5e9', ag.proximos.length, prox, 'Nada marcado pros próximos dias')
   }
 
+  // ── o calendario do mes ─────────────────────────────────────────────────────────────────────
+  // A AGENDA DE RETORNOS DA DASH, dentro do app (05/11/2026, pedido do Bruno: "um terceiro [quadro],
+  // mais ou menos essa visualizacao, pra eles saberem que dia do mes tem retorno, quais sao os
+  // pedidos, e ter uma nocao"). O mes numa grade, cada retorno no dia dele com a cor da urgencia, o
+  // que esta chegando no dia de hoje, e ao lado a lista do dia escolhido (hoje, ao abrir). Clicar no
+  // retorno abre a ficha; arrastar pra outro dia remarca na mesma hora, como na dash. A regra do que
+  // vai em cada dia e a do cob-comum.js (C.calendario), a mesma dos numeros da faixa.
+  const hojeMes = () => { const d = new Date(); return { ano: d.getFullYear(), mes: d.getMonth() } }
+  const TETO_NO_DIA = 3   // como a dash (dayMaxEventRows): tres linhas; passou disso, duas e o "mais +N"
+  function desenhaCalendario() {
+    const cal = C.calendario(visiveis())
+    const mes = calMes || hojeMes()
+    const dia = calDia || cal.hojeK
+    resumo.innerHTML = '<span><b>' + cal.n.hoje + '</b> pra atender hoje</span><span><b>' + cal.n.atrasados + '</b> atrasados</span>'
+      + '<span><b>' + cal.n.chegando + '</b> chegando</span><span><b>' + cal.n.agendados + '</b> marcados pra frente</span>'
+      + '<span>Clique no dia pra ver a lista dele. Arraste um retorno pra outro dia pra remarcar.</span>'
+    const ev = (e) => e.u === 'rua'
+      ? '<div class="cob-cal-ev rua" data-id="' + esc(e.p.id) + '" title="' + esc(e.p.nome + ' · chegando (' + C.colDef(e.p.col).lbl + ')') + '"><i></i><span>' + esc(e.p.nome) + '</span></div>'
+      : '<div class="cob-cal-ev" draggable="true" data-id="' + esc(e.p.id) + '" style="--c:' + C.COR_CAL[e.u] + '" title="' + esc(e.p.nome + ' · ' + C.quandoTxt(e.t) + (e.u === 'atrasado' ? ' · atrasado' : e.u === 'pago' ? ' · pago' : '')) + '"><b>' + esc(C.hora(e.t)) + '</b><span>' + esc(e.p.nome) + '</span></div>'
+    const grade = C.diasDaGrade(mes.ano, mes.mes).map((d) => {
+      const evs = cal.porDia.get(d.k) || []
+      const mostra = evs.length > TETO_NO_DIA ? evs.slice(0, TETO_NO_DIA - 1) : evs
+      const sobra = evs.length - mostra.length
+      return '<div class="cob-cal-dia' + (d.fora ? ' fora' : '') + (d.k === cal.hojeK ? ' hoje' : '') + (d.k === dia ? ' sel' : '') + (d.dom ? ' dom' : '') + '" data-dia="' + d.k + '" title="' + esc(C.rotuloDia(d.ms + 43200000)) + (evs.length ? ' · ' + evs.length + (evs.length === 1 ? ' pedido' : ' pedidos') : '') + '">'
+        + '<span class="n">' + d.dia + '</span>'
+        + mostra.map(ev).join('')
+        + (sobra > 0 ? '<button class="cob-cal-mais" data-mais="' + d.k + '" title="Ver os ' + evs.length + ' pedidos deste dia">mais +' + sobra + '</button>' : '')
+        + '</div>'
+    }).join('')
+    const seta = (d) => '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="' + (d < 0 ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6') + '"/></svg>'
+    const nav = '<div class="cob-cal-nav"><button data-cal="ant" title="Mês anterior">' + seta(-1) + '</button><button data-cal="prox" title="Mês seguinte">' + seta(1) + '</button>'
+      + '<button data-cal="hoje" class="cob-cal-hoje">Hoje</button><h4>' + esc(C.mesRotulo(mes.ano, mes.mes)) + '</h4></div>'
+    const sem = '<div class="cob-cal-sem">' + ['dom.', 'seg.', 'ter.', 'qua.', 'qui.', 'sex.', 'sáb.'].map((s) => '<span>' + s + '</span>').join('') + '</div>'
+    corpo.innerHTML = '<div class="cob-cal-mes">' + nav + sem + '<div class="cob-cal-grade">' + grade + '</div></div>' + ladoDoDia(cal, dia)
+  }
+  // A LISTA DO DIA, ao lado da grade: o mesmo que o dia mostra, em cards. Hoje vem como na dash
+  // (Atrasados, os marcados pra hoje e quem esta chegando); outro dia, so o que esta marcado nele.
+  function ladoDoDia(cal, k) {
+    const evs = cal.porDia.get(k) || []
+    const ms = Date.parse(k + 'T12:00')
+    const cor = k === cal.hojeK ? C.COR_CAL.hoje : k < cal.hojeK ? C.COR_CAL.atrasado : C.COR_CAL.agendado
+    const grupo = (rot, c, itens, op) => itens.length
+      ? '<div class="cob-grupo"><div class="cob-dia cob-dia-n" style="--c:' + c + '"><i></i><b>' + esc(rot) + '</b><span>' + itens.length + (itens.length === 1 ? ' pedido' : ' pedidos') + '</span></div>' + itens.map((e) => cartao(e.p, op)).join('') + '</div>'
+      : ''
+    let cards = ''
+    let n = evs.length
+    if (k === cal.hojeK) {
+      const atras = []
+      for (const [kk, l] of cal.porDia) if (kk < k) for (const e of l) if (e.u === 'atrasado') atras.push(e)
+      atras.sort((a, b) => a.t - b.t)
+      n += atras.length
+      cards = grupo('Atrasados', C.COR_CAL.atrasado, atras, {})
+        + grupo('Marcados pra hoje', C.COR_CAL.hoje, evs.filter((e) => e.u !== 'rua'), { soHora: true })
+        + grupo('Chegando', C.COR_CAL.rua, evs.filter((e) => e.u === 'rua'), { quando: false })
+    } else cards = evs.map((e) => cartao(e.p, { soHora: true })).join('')
+    return coluna('dia', C.rotuloDia(ms), cor, n, cards, k === cal.hojeK ? 'Nada pra hoje' : 'Nada marcado pra este dia', '', ' data-dia="' + esc(k) + '"')
+  }
+  // Hoje escolhido vira VAZIO (acompanha o relogio); outro dia vira chave fixa.
+  const chaveFixa = (k) => (k === C.chaveDia(Date.now()) ? '' : k)
+  function mudaMes(q) {
+    const base = calMes || hojeMes()
+    if (q === 'hoje') { calMes = null; calDia = '' }
+    else if (q === 'ant' || q === 'prox') { const d = new Date(base.ano, base.mes + (q === 'ant' ? -1 : 1), 1); calMes = { ano: d.getFullYear(), mes: d.getMonth() } }
+    desenha()
+  }
+  function escolheDia(k) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(String(k || ''))) return
+    calDia = chaveFixa(k)
+    desenha()
+  }
+  // REMARCAR PELO ARRASTO: move na hora e grava depois; a dash recusou, volta e diz por que.
+  async function moveDia(id, k) {
+    const p = dados.pedidos.find((x) => String(x.id) === String(id))
+    if (!p || !/^\d{4}-\d\d-\d\d$/.test(String(k || ''))) return
+    const antes = p.agend, diaAntes = calDia
+    if (isNaN(C.quandoAgend(p)) || C.chaveDia(C.quandoAgend(p)) === k) return
+    const novo = C.agendNoDia(antes, k)
+    p.agend = novo
+    calDia = chaveFixa(k)
+    desenha(); desenhaMini()
+    let r = null
+    try { r = await window.sw.cobSalva(p.id, { agend: novo }) } catch (_) { r = null }
+    const negou = r && r.ok && Array.isArray(r.negados) && r.negados.length
+    if (r && r.ok && !negou) { avisa('Retorno remarcado: ' + C.quandoTxt(Date.parse(novo)) + '.'); sig = ''; busca(); return }
+    p.agend = antes
+    // a lista do lado volta junto com o retorno (se ele nao clicou em outro dia enquanto gravava)
+    if (calDia === chaveFixa(k)) calDia = diaAntes
+    desenha(); desenhaMini()
+    avisa('Não remarcou: ' + (negou ? 'a dash não deixou mudar o retorno' : (r && r.erro) || 'a dash não respondeu') + '. O retorno voltou pro dia que estava.')
+  }
+
   function desenhaKanban() {
     const l = visiveis()
     resumo.innerHTML = '<span>Arraste pra Pagos ou pra uma frustração. Pago pede o valor recebido; as etapas de entrega mudam sozinhas.</span>'
@@ -330,6 +442,20 @@
   // ── cliques (delegados: o quadro e redesenhado inteiro a cada releitura) ─────────────────────
   corpo.addEventListener('click', (ev) => {
     if (ev.target.closest('[data-perda]')) { perdaAberta = !perdaAberta; desenha(); return }
+    // o calendario: trocar o mes, abrir um retorno (a ficha), escolher um dia
+    const nav = ev.target.closest('[data-cal]')
+    if (nav) { mudaMes(nav.dataset.cal); return }
+    const evCal = ev.target.closest('.cob-cal-ev')
+    if (evCal) {
+      const cel = evCal.closest('.cob-cal-dia')
+      if (cel && cel.dataset.dia !== (calDia || C.chaveDia(Date.now()))) escolheDia(cel.dataset.dia)
+      if (dados.pedidos.some((x) => String(x.id) === evCal.dataset.id)) abreFicha(evCal.dataset.id)
+      return
+    }
+    const mais = ev.target.closest('[data-mais]')
+    if (mais) { escolheDia(mais.dataset.mais); return }
+    const cel = ev.target.closest('.cob-cal-dia')
+    if (cel) { escolheDia(cel.dataset.dia); return }
     const card = ev.target.closest('.cob-card')
     if (!card) return
     const p = dados.pedidos.find((x) => String(x.id) === card.dataset.id)
@@ -348,6 +474,14 @@
   // ARRASTAR NO KANBAN: as regras da dash. Entrar em Pagos pede o valor (abre a ficha com o botao
   // armado em vez de mover calado); sair de Pagos so pra perda.
   corpo.addEventListener('dragstart', (ev) => {
+    // NO CALENDARIO o que se arrasta e o retorno, pra outro dia (quem esta chegando nao tem draggable).
+    const r = aba === 'cal' && ev.target.closest && ev.target.closest('.cob-cal-ev[draggable="true"]')
+    if (r) {
+      arrastando = { id: r.dataset.id, dia: true }
+      r.classList.add('arrastando')
+      try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', r.dataset.id) } catch (_) { /* ok */ }
+      return
+    }
     const c = ev.target.closest && ev.target.closest('.cob-card')
     if (!c || aba !== 'kanban') return
     arrastando = { id: c.dataset.id }
@@ -357,6 +491,8 @@
   corpo.addEventListener('dragend', () => {
     arrastando = null
     for (const x of corpo.querySelectorAll('.arrastando, .alvo')) x.classList.remove('arrastando', 'alvo')
+    // a releitura que chegou no meio do arrasto (desistiu, soltou fora): desenha agora
+    if (redesenhaDepois) desenha()
   })
   // O ALVO DO ARRASTO: a coluna (Pagos) ou uma linha de frustracao (fechada, cada linha e uma; aberta,
   // a divisoria de cada uma). So acende e so aceita o que o cobrador pode (C.podeIrCob).
@@ -370,7 +506,16 @@
     const p = a && alvo && dados.pedidos.find((x) => String(x.id) === String(a.id))
     return !!p && C.podeIrCob(p.col, alvo.id)
   }
+  const celulaDe = (ev) => (ev.target.closest && ev.target.closest('.cob-cal-dia')) || null
   corpo.addEventListener('dragover', (ev) => {
+    if (arrastando && arrastando.dia) {
+      const cel = celulaDe(ev)
+      for (const x of corpo.querySelectorAll('.alvo')) if (x !== cel) x.classList.remove('alvo')
+      if (!cel) return
+      ev.preventDefault()
+      cel.classList.add('alvo')
+      return
+    }
     const alvo = alvoDe(ev)
     for (const x of corpo.querySelectorAll('.alvo')) if (!alvo || x !== alvo.el) x.classList.remove('alvo')
     if (!alvo || !arrastando || !podeSoltar(arrastando, alvo)) return
@@ -378,10 +523,18 @@
     alvo.el.classList.add('alvo')
   })
   corpo.addEventListener('drop', (ev) => {
-    const alvo = alvoDe(ev)
     const a = arrastando
     arrastando = null
+    // o alvo e lido ANTES de qualquer redesenho (o elemento do evento sai da tela no redesenho)
+    const cel = celulaDe(ev), alvo = alvoDe(ev)
     for (const x of corpo.querySelectorAll('.arrastando, .alvo')) x.classList.remove('arrastando', 'alvo')
+    if (redesenhaDepois) desenha()
+    if (a && a.dia) {
+      if (!cel) return
+      ev.preventDefault()
+      moveDia(a.id, cel.dataset.dia)
+      return
+    }
     if (!alvo || !a || !podeSoltar(a, alvo)) return
     ev.preventDefault()
     move(a.id, alvo.id)
@@ -520,7 +673,7 @@
 
   // pro teste e pra quem for depurar na maquina do cobrador
   window.__swCob = {
-    abre, fecha, busca, abreFicha, fechaFicha, move,
-    estado: () => ({ aberto, aba, soMeus, carregou, n: dados.pedidos.length, erro, sig, fichaId, ficha: !ficha.hidden, visiveis: visiveis().length }),
+    abre, fecha, busca, abreFicha, fechaFicha, move, moveDia, escolheDia, mudaMes,
+    estado: () => ({ aberto, aba, soMeus, carregou, n: dados.pedidos.length, erro, sig, fichaId, ficha: !ficha.hidden, visiveis: visiveis().length, calDia, calMes }),
   }
 })()

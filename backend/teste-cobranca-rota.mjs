@@ -70,6 +70,7 @@ const brAgend = (diasDepois) => {
 const NUM_KEV = '(15) 99797-3450', NUM_HAY = '(11) 98888-7777';
 const idMs = (dias) => String(Date.now() - dias * 86400000);
 const L_COB = idMs(5), L_PAGO = idMs(9), L_ENV = idMs(2), L_AFL = idMs(4), L_MANUAL = idMs(1), L_VELHO = idMs(80), L_FRUST = idMs(6), L_RET = idMs(7);
+const L_PAGO_VELHO_RET = idMs(40), L_PAGO_VELHO_SEM = idMs(41);
 const estado = {
   wa_statuses: [{ id: 'st_uso', label: 'Em uso', papel: 'em_uso' }],
   chips: [
@@ -94,6 +95,12 @@ const estado = {
     { id: L_VELHO, nome: 'Cancelado Antigo', wa: '61933332222', vl: 297, col: 'Cancelado', at: 'kev', hist: [{ from: 'A Enviar', to: 'Cancelado', time: '05/08/2026 10:00' }] },
     { id: L_FRUST, nome: 'Frustrado Recente', wa: '71922221111', vl: 297, col: 'Frustrado', at: 'kev', hist: [{ from: 'Saiu para Entrega', to: 'Frustrados', time: brHist(1) }] },
     { id: L_RET, nome: 'Retirada Sem Data', wa: '81911110000', vl: 497, col: 'Retirada', at: 'kev', cob: 'hay', hist: [{ from: 'Enviado', to: 'Retirada', time: brHist(1) }] },
+    // PAGO HA 40 DIAS COM RETORNO MARCADO (05/11/2026): compromisso, nao historia. Entra apesar do
+    // corte de 30 dias (o calendario do app precisa dele, como a dash); o mesmo pago SEM retorno nao.
+    { id: L_PAGO_VELHO_RET, nome: 'Pago Antigo Com Retorno', wa: '91900001111', vl: 197, col: 'Pago', spg: 'Pago', pago_ts: Date.now() - 40 * 86400000, at: 'kev', cob: 'hay',
+      agend: brAgend(2), hist: [{ from: 'Cobrança', to: 'Pagos', time: brHist(40) }] },
+    { id: L_PAGO_VELHO_SEM, nome: 'Pago Antigo Sem Retorno', wa: '91900002222', vl: 197, col: 'Pago', spg: 'Pago', pago_ts: Date.now() - 40 * 86400000, at: 'kev', cob: 'hay',
+      hist: [{ from: 'Cobrança', to: 'Pagos', time: brHist(40) }] },
   ],
 };
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado));
@@ -174,8 +181,8 @@ vale('vendedor nao le o quadro de cobranca (403)', r.st === 403, r.st);
 r = await chama(TK.hay, '/api/swweb/cobranca');
 const ids = (r.d.pedidos || []).map((p) => p.id);
 vale('o quadro responde', r.st === 200 && Array.isArray(r.d.pedidos) && !!r.d.sig, r.st);
-vale('traz a fila, o pago recente, o enviado, o frustrado recente e a retirada', [L_COB, L_PAGO, L_ENV, L_FRUST, L_RET].every((x) => ids.includes(x)), JSON.stringify(ids.length));
-vale('nao traz pedido do afiliado, card manual nao aceito nem cancelado de 80 dias', ![L_AFL, L_MANUAL, L_VELHO].some((x) => ids.includes(x)), '');
+vale('traz a fila, o pago recente, o enviado, o frustrado recente, a retirada e o pago antigo COM retorno marcado', [L_COB, L_PAGO, L_ENV, L_FRUST, L_RET, L_PAGO_VELHO_RET].every((x) => ids.includes(x)), JSON.stringify(ids));
+vale('nao traz pedido do afiliado, card manual nao aceito, cancelado de 80 dias nem pago antigo sem retorno', ![L_AFL, L_MANUAL, L_VELHO, L_PAGO_VELHO_SEM].some((x) => ids.includes(x)), '');
 const pC = (r.d.pedidos || []).find((p) => p.id === L_COB) || {};
 vale('a coluna sai pelo apelido da dash (Cobranca -> Entregues)', pC.col === 'Entregues' && pC.colBruta === 'Cobrança', pC.col);
 vale('valor, vendedor, cobrador e telefone em digitos', pC.valor === 297 && pC.atNome === 'Kevin Marques' && pC.cobNome === 'Haynan Souza' && pC.wa === '31998765432', JSON.stringify({ v: pC.valor, at: pC.atNome, cob: pC.cobNome, wa: pC.wa }));

@@ -55,7 +55,9 @@
   const quandoAgend = (p) => {
     const s = String((p && p.agend) || '').trim()
     if (!s) return NaN
-    const t = Date.parse(s)
+    // SO A DATA ("2026-11-06") e hora LOCAL, meia-noite: Date.parse le data sem hora como UTC e o
+    // retorno cairia no dia anterior, as 21h (revisao de 05/11/2026).
+    const t = Date.parse(/^\d{4}-\d\d-\d\d$/.test(s) ? s + 'T00:00' : s)
     return isNaN(t) ? NaN : t
   }
   const diaIni = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime() }
@@ -121,6 +123,68 @@
       fila: atrasados.length + hoje.length + proximos.length + semRetorno.length + contato.filter(naFila).length,
     }
   }
+
+  // ── O CALENDARIO DO MES (05/11/2026) ─────────────────────────────────────────────────────────
+  // Pedido do Bruno: "um terceiro [quadro], mais ou menos essa visualizacao [a Agenda de retornos
+  // da dash], pra eles saberem mais ou menos que dia do mes tem retorno, quais sao os pedidos, e ter
+  // uma nocao". A regra e a do calendario da dash (pages/apps/calendar.jsx):
+  //  - retorno marcado em pedido NA FILA vai pro dia dele: vermelho se o dia passou, azul se e hoje,
+  //    azul claro se e depois; pedido PAGO com retorno marcado fica verde (foi remarcado de proposito,
+  //    pagou metade por exemplo) e nunca e "atrasado";
+  //  - o que esta CHEGANDO cai no dia de HOJE, discreto (so a bolinha cinza): e o estado de agora,
+  //    nao um compromisso. "Chegando" aqui e o mesmo da faixa e da Agenda (Enviados e Saiu para
+  //    Entrega), pra o numero bater em todo canto do app; a dash so poe quem ja saiu pra entrega.
+  // Quem escreveu (contato) continua no dia marcado: "Entraram em contato" e coluna da Agenda.
+  const COR_CAL = { atrasado: '#ef4444', hoje: '#3b82f6', agendado: '#0ea5e9', pago: '#10b981', rua: '#94a3b8' }
+  function calendario(pedidos, agora) {
+    agora = agora || Date.now()
+    const hojeK = chaveDia(agora)
+    const porDia = new Map()
+    const poe = (k, ev) => { if (!porDia.has(k)) porDia.set(k, []); porDia.get(k).push(ev) }
+    // Os mesmos numeros do cartao "Atender hoje" da dash: hoje e marcados contam o pago tambem (e um
+    // retorno que alguem marcou de proposito); atrasado nunca conta pago.
+    const n = { hoje: 0, atrasados: 0, agendados: 0, chegando: 0 }
+    for (const p of (Array.isArray(pedidos) ? pedidos : [])) {
+      if (!p) continue
+      const t = quandoAgend(p)
+      if (!isNaN(t) && (p.pago || naFila(p))) {
+        const k = chaveDia(t)
+        const u = p.pago ? 'pago' : k < hojeK ? 'atrasado' : k === hojeK ? 'hoje' : 'agendado'
+        if (k === hojeK) n.hoje += 1
+        else if (k > hojeK) n.agendados += 1
+        else if (!p.pago) n.atrasados += 1
+        poe(k, { p, t, u, k })
+      }
+      if (aCaminho(p)) { n.chegando += 1; poe(hojeK, { p, t: NaN, u: 'rua', k: hojeK }) }
+    }
+    // No dia: os retornos pela hora, e por ultimo quem esta chegando (na rua primeiro, como na Agenda).
+    const naRua = (e) => (e.p.col === 'Saiu para Entrega' ? 0 : 1)
+    for (const l of porDia.values()) {
+      l.sort((a, b) => {
+        if ((a.u === 'rua') !== (b.u === 'rua')) return a.u === 'rua' ? 1 : -1
+        if (a.u === 'rua') return naRua(a) - naRua(b) || (Number(b.p.entrou) || 0) - (Number(a.p.entrou) || 0) || String(a.p.nome).localeCompare(String(b.p.nome))
+        return (a.t - b.t) || String(a.p.nome).localeCompare(String(b.p.nome))
+      })
+    }
+    return { porDia, hojeK, n }
+  }
+  // A GRADE DO MES: do domingo da semana do dia 1 ao sabado da semana do ultimo dia (5 ou 6 linhas;
+  // 4 so em fevereiro que comeca no domingo). Dia de outro mes vem marcado `fora`. `mes` e 0 a 11.
+  function diasDaGrade(ano, mes) {
+    const primeiro = new Date(ano, mes, 1)
+    const ultimo = new Date(ano, mes + 1, 0)
+    const total = Math.ceil((primeiro.getDay() + ultimo.getDate()) / 7) * 7
+    const out = []
+    for (let i = 0; i < total; i++) {
+      const d = new Date(ano, mes, 1 - primeiro.getDay() + i)
+      out.push({ k: chaveDia(d.getTime()), dia: d.getDate(), fora: d.getMonth() !== mes, dom: d.getDay() === 0, ms: d.getTime() })
+    }
+    return out
+  }
+  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+  const mesRotulo = (ano, mes) => MESES[mes] + ' de ' + ano
+  // REMARCAR ARRASTANDO: o dia muda e a hora fica (a dash faz igual). Retorno sem hora vai pras 9h.
+  const agendNoDia = (agend, k) => { const s = String(agend || ''); return k + 'T' + (/T\d\d:\d\d/.test(s) ? s.slice(11, 16) : '09:00') }
 
   // ── valores ──────────────────────────────────────────────────────────────────────────────────
   // O parseMoney da dash (lib/pagamentos.js): virgula e o decimal, ponto e o milhar. "1.000,50" e
@@ -453,6 +517,7 @@
   window.SWCob = {
     esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, DESTINOS_COB, podeIrCob, COLS_COBRANCA, COLS_A_CAMINHO,
     naFila, aCaminho, emContato, quandoAgend, agenda, rotuloDia, hora, haQuanto, quandoTxt, chaveDia, diaIni,
+    COR_CAL, calendario, diasDaGrade, mesRotulo, agendNoDia,
     valorDigitado, atalhosRetorno, foneBonito, fichaHtml, ligaFicha, poeEstilo, I,
   }
 })()

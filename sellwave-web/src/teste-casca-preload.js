@@ -58,6 +58,10 @@ const COB_PEDIDOS = [
   ped({ id: '9009', nome: 'Ivo Escreveu', wa: '11911110009', col: 'Entregues', colBruta: 'Cobrança', agend: brAg(meiaNoite() + 34 * H - Date.now()), cob: 'outro', cobNome: 'Outra Pessoa', contato: Date.now() - 5 * 60000 }),
 ]
 const COB = { ok: true, sig: 'c1', eu: 'hc', cargo: 'cobrador', pedidos: COB_PEDIDOS, prontos: ['Cliente não atendeu, vou tentar de novo mais tarde', 'Aguardando resposta do cliente'] }
+// PEDIDOS A MAIS, so pra um teste (o calendario cheio, 05/11/2026): `__poeCobPedidos([...])` poe e
+// muda a assinatura, pra proxima leitura trazer; `__poeCobPedidos([])` tira.
+let COB_EXTRA = []
+const cobAtual = () => ({ ...COB, sig: COB_EXTRA.length ? 'c1+' + COB_EXTRA.length : 'c1', pedidos: [...COB_PEDIDOS, ...COB_EXTRA] })
 const NUMS_COB = [
   { numero: '5511988887777', at: 'hc', dono: 'Haynan', roleta: false, ligado: true, cobranca: true, apto: true, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', em_uso: true, st: 'ativo', status: 'Em uso', conn: { st: 'pronto', ts: 0 } },
   { numero: '5511977776666', at: 'hc', dono: 'Haynan', roleta: false, ligado: true, cobranca: true, apto: true, dist: '', leads_hoje: 0, lim_dia: 0, cor: '', em_uso: true, st: 'ativo', status: 'Em uso', conn: null },
@@ -171,7 +175,7 @@ contextBridge.exposeInMainWorld('sw', {
   crmConversa: (fone, instancia, nk, origem) => { chamadas.push({ nome: 'crmConversa', args: nk ? [fone, instancia, nk] : origem ? [fone, instancia, '', true] : [fone, instancia] }); return Promise.resolve(nk ? { ok: true, nk, abriu: true } : (/95983293$/.test(instancia) && !origem) ? { ok: false, semNumero: true, origem: '5519995983293', erro: 'O número em que esse lead chegou está restrito. Escolha por qual número chamar.' } : /66632248$/.test(instancia) ? { ok: false, semNumero: true, erro: 'O número em que esse lead chegou foi banido. Escolha por qual número chamar.' } : /77001122$/.test(instancia) ? { ok: true, fechado: true, numero: '5515977001122' } : { ok: true, nk: '1992503977', abriu: true }) },
   copiar: (texto) => { chamadas.push({ nome: 'copiar', args: [texto] }); return Promise.resolve({ ok: true }) },
   // A COBRANCA (31/10/2026). O 9002 RECUSA de proposito: e o caso em que o card tem que voltar.
-  cobDados: (sig) => { chamadas.push({ nome: 'cobDados', args: [sig] }); return Promise.resolve(sig === COB.sig ? { ok: true, igual: true, sig } : JSON.parse(JSON.stringify(COB))) },
+  cobDados: (sig) => { chamadas.push({ nome: 'cobDados', args: [sig] }); const c = cobAtual(); return Promise.resolve(sig === c.sig ? { ok: true, igual: true, sig } : JSON.parse(JSON.stringify(c))) },
   cobPedido: (id) => {
     chamadas.push({ nome: 'cobPedido', args: [id] })
     const p = COB_PEDIDOS.find((x) => x.id === String(id))
@@ -196,6 +200,7 @@ contextBridge.exposeInMainWorld('__fotosChegaram', () => {
 })
 contextBridge.exposeInMainWorld('__poeDirecao', (v) => { direcao = !!v })
 contextBridge.exposeInMainWorld('__poeCobranca', (v) => { cobranca = !!v })
+contextBridge.exposeInMainWorld('__poeCobPedidos', (lista) => { COB_EXTRA = Array.isArray(lista) ? lista.map((o) => ped(o)) : [] })
 // Ver a nota no teste-painel-preload: array exposto direto nasce congelado.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))
 // Pra o teste poder simular o que o processo principal devolveria depois de esconder o painel.

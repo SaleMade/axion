@@ -690,6 +690,8 @@ console.log('\n=== contas do SellWave Web ===\n')
     P('sem_data', { saldo: 50 }), P('sem_data_maior', { saldo: 500 }),
     P('retirada', { col: 'Retirar nos Correios', agend: ag(-3, 9) }),
     P('pago_com_retorno', { pago: true, agend: ag(-2, 9) }),     // pago nunca e atrasado
+    P('pago_hoje_marcado', { pago: true, agend: ag(0, 16) }),    // pago com retorno HOJE (regra de 30/08 da dash): so no calendario, verde, conta em hoje
+    P('pago_amanha_marcado', { pago: true, agend: ag(1, 11) }),
     P('cancelado', { col: 'Cancelado sem Custo', agend: ag(-5, 9) }),   // fora da fila: nao e trabalho
     P('na_rua', { col: 'Saiu para Entrega' }), P('enviado', { col: 'Enviados' }),
     P('a_enviar', { col: 'A Enviar', agend: ag(-1, 9) }),       // retorno em pedido que nem saiu: nao e cobranca
@@ -703,7 +705,7 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('proximos = depois de hoje', ids(a.proximos) === 'amanha', ids(a.proximos))
   vale('sem retorno = na fila sem data, o maior valor primeiro', ids(a.semRetorno) === 'sem_data_maior,sem_data', ids(a.semRetorno))
   vale('chegando = enviado e saindo pra entrega, quem esta na rua primeiro', ids(a.chegando) === 'na_rua,enviado', ids(a.chegando))
-  vale('pago, cancelado e pedido que nem saiu NUNCA entram na fila', !/pago_com_retorno|cancelado|a_enviar/.test(ids([...a.atrasados, ...a.hoje, ...a.proximos, ...a.semRetorno])))
+  vale('pago, cancelado e pedido que nem saiu NUNCA entram na fila', !/pago_com_retorno|pago_hoje_marcado|pago_amanha_marcado|cancelado|a_enviar/.test(ids([...a.atrasados, ...a.hoje, ...a.proximos, ...a.semRetorno])))
   vale('recebido hoje soma so o que foi pago hoje e passou pela cobranca', a.pagosHoje.length === 1 && a.recebidoHoje === 297, a.recebidoHoje)
   vale('valor digitado le virgula como decimal e ponto como milhar', C.valorDigitado('1.000,50') === 1000.5 && C.valorDigitado('297,00') === 297 && C.valorDigitado('297.5') === 297.5 && C.valorDigitado('1.500') === 1500 && isNaN(C.valorDigitado('')))
   const at = C.atalhosRetorno(AGORA)
@@ -774,6 +776,31 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('tags: a marcada aparece ligada e a outra so no "+ Tag"', /class="fx-tag on" data-acao="tag" data-v="vip"/.test(hT) && /data-acao="tags-abre"/.test(hT) && /<div class="fx-tags-lista" hidden><button class="fx-tag" data-acao="tag" data-v="promessa"/.test(hT))
   vale('tags: sem catalogo e sem tag, nada aparece (nada de caixa vazia)', !/fx-tags/.test(C.fichaHtml({ ...pedido, tags: [] }, { conversa: true, tags: [] })))
   vale('tags: o nome da tag sai escapado', !/<img/.test(C.fichaHtml({ ...pedido, tags: [] }, { tags: [{ id: 'x', nome: '<img src=x>', cor: '#000' }] })))
+
+  // O CALENDARIO DO MES (05/11/2026): a Agenda de retornos da dash no app. A mesma lista de cima,
+  // com o mesmo relogio fixo (31/10/2026 15:00).
+  const cal = C.calendario(lista, AGORA)
+  const kDia = (d) => C.chaveDia(new Date(2026, 9, 31 + d).getTime())
+  const noDia = (d) => (cal.porDia.get(kDia(d)) || []).map((e) => e.p.id + ':' + e.u).join(',')
+  vale('calendario: cada retorno no dia dele com a urgencia (pago fica verde, no meio pela hora); hoje tem tambem quem esta chegando, por ultimo e na rua primeiro',
+    noDia(-1) === 'ontem:atrasado' && noDia(0) === 'hoje_cedo:hoje,pago_hoje_marcado:pago,hoje_noite:hoje,na_rua:rua,enviado:rua' && noDia(1) === 'amanha:agendado,pago_amanha_marcado:pago' && noDia(-3) === 'retirada:atrasado',
+    JSON.stringify([noDia(-1), noDia(0), noDia(1), noDia(-3)]))
+  vale('calendario: pago com retorno passado fica verde (nunca atrasado); cancelado e pedido que nem saiu ficam fora',
+    noDia(-2) === 'pago_com_retorno:pago' && noDia(-5) === '' && ![...cal.porDia.values()].flat().some((e) => e.p.id === 'a_enviar'), JSON.stringify([noDia(-2), noDia(-5)]))
+  // Os numeros do cartao "Atender hoje" da dash: hoje e marcados contam o pago, atrasado nunca.
+  vale('calendario: os numeros do resumo (hoje e marcados com o pago; atrasados sem; chegando)', cal.n.hoje === 3 && cal.n.atrasados === 2 && cal.n.agendados === 2 && cal.n.chegando === 2, JSON.stringify(cal.n))
+  vale('calendario: o dia de hoje sai da hora da maquina', cal.hojeK === '2026-10-31')
+  vale('retorno so com a data e meia-noite LOCAL (Date.parse leria UTC e cairia no dia anterior, 21h)', C.chaveDia(C.quandoAgend({ agend: '2026-11-06' })) === '2026-11-06' && C.hora(C.quandoAgend({ agend: '2026-11-06' })) === '00:00', C.chaveDia(C.quandoAgend({ agend: '2026-11-06' })))
+  const g = C.diasDaGrade(2026, 10)   // novembro de 2026 comeca num domingo e acaba numa segunda
+  vale('grade: novembro de 2026 vai do domingo 1 ao sabado 5/12, em 5 linhas', g.length === 35 && g[0].k === '2026-11-01' && !g[0].fora && g[34].k === '2026-12-05' && g[34].fora && g[0].dom && !g[1].dom, JSON.stringify([g.length, g[0].k, g[34].k]))
+  const g2 = C.diasDaGrade(2026, 9)   // outubro de 2026 comeca numa quinta
+  vale('grade: outubro de 2026 comeca no domingo 27/9 (de fora) e tem os 31 dias', g2[0].k === '2026-09-27' && g2[0].fora && g2.length === 35 && g2.filter((d) => !d.fora).length === 31, JSON.stringify([g2[0].k, g2.length]))
+  const g3 = C.diasDaGrade(2026, 7)   // agosto de 2026 comeca num sabado: precisa de 6 linhas
+  vale('grade: mes que comeca no sabado precisa de 6 linhas', g3.length === 42 && g3[6].k === '2026-08-01' && g3[41].k === '2026-09-05', JSON.stringify([g3.length, g3[6].k, g3[41].k]))
+  vale('grade: fevereiro de 2026 (comeca no domingo, 28 dias) cabe em 4 linhas', C.diasDaGrade(2026, 1).length === 28)
+  vale('grade: virada de ano (dezembro -> janeiro) nao quebra', C.diasDaGrade(2026, 11)[C.diasDaGrade(2026, 11).length - 1].k === '2027-01-02' && C.diasDaGrade(2027, 0)[0].k === '2026-12-27')
+  vale('remarcar: o dia muda e a hora fica; retorno sem hora vai pras 9h', C.agendNoDia('2026-11-06T10:30', '2026-11-08') === '2026-11-08T10:30' && C.agendNoDia('2026-11-06', '2026-11-08') === '2026-11-08T09:00')
+  vale('o rotulo do mes e em portugues, minusculo, como na dash', C.mesRotulo(2026, 10) === 'novembro de 2026' && C.mesRotulo(2027, 2) === 'março de 2027')
 }
 
 // ── O LINK DE ENTREGA (04/11/2026): a mensagem do vendedor leva "sellwave.com.br/entrega" e o
