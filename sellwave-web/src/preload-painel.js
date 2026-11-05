@@ -4,7 +4,14 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('swp', {
-  roteiro: () => ipcRenderer.invoke('swp:roteiro'),
+  // `forcar` rele do servidor na hora (depois de criar ou apagar um item); sem ele vem a copia de ate
+  // 2 minutos que o processo principal guarda.
+  roteiro: (forcar) => ipcRenderer.invoke('swp:roteiro', { forcar: !!forcar }),
+  // O QUE O VENDEDOR CRIA NO PAINEL (05/11/2026): item, funil, esconder e o arquivo do item.
+  salvaItem: (dados) => ipcRenderer.invoke('swp:item-salvar', { dados }),
+  apagaItem: (id) => ipcRenderer.invoke('swp:item-apagar', { id }),
+  ocultar: (id, oculto) => ipcRenderer.invoke('swp:ocultar', { id, oculto }),
+  sobeMidia: (mime, bytes) => ipcRenderer.invoke('swp:sobe-midia', { mime, bytes }),
   lead: (phone) => ipcRenderer.invoke('swp:lead', { phone }),
   estado: () => ipcRenderer.invoke('swp:estado-wa'),
   manda: (nk, chatId, item) => ipcRenderer.invoke('swp:manda', { nk, chatId, item }),

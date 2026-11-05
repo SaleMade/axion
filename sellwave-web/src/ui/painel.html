@@ -6,7 +6,9 @@
      mostra a foto e o video de verdade, em vez de um balao escrito "[imagem] Formula". A pagina
      continua SEM poder falar com a rede - nao ha connect-src, nao ha http: em lugar nenhum - e
      continua com default-src 'none'. Ela so pede ao app, que busca e devolve. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: swmedia:; media-src swmedia:; frame-src swmedia:; font-src 'self' data:;" />
+<!-- `blob:` (05/11/2026): a previa do arquivo que o vendedor ACABOU de escolher ou gravar pro item
+     novo, antes de subir. E endereco local da propria pagina, nao abre rede nenhuma. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: swmedia: blob:; media-src swmedia: blob:; frame-src swmedia:; font-src 'self' data:;" />
 <title>Painel</title>
 <link rel="stylesheet" href="fonte/mulish.css" />
 <style>
@@ -532,6 +534,132 @@
   .cob-outros { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px 0; }
   .cob-outros button { font: inherit; font-size: 11px; color: var(--apagado); padding: 3px 8px; border-radius: 99px; border: 1px solid var(--borda); background: none; cursor: pointer; }
   .cob-outros button.on { color: var(--texto); border-color: var(--verde); background: rgba(0, 168, 132, .15); }
+
+  /* ═══════════════ CRIAR E ORGANIZAR (05/11/2026) ═══════════════
+     Pedido do Bruno: o vendedor cria mensagem, audio, video e foto, monta funil com o tempo de cada
+     passo e esconde o que nao usa, "tudo de maneira facil, nada cheio de texto, com varios icones".
+     Por isso quase tudo aqui e botao de icone com a cor do TIPO, a mesma paleta da lista. */
+  .busca-linha { display: flex; align-items: center; gap: 6px; }
+  .busca-linha .busca { flex: 1; min-width: 0; }
+  .bt-ic { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0;
+    border: 1px solid var(--borda); border-radius: 10px; color: var(--apagado);
+    transition: background-color .15s, border-color .15s, color .15s; }
+  .bt-ic[hidden] { display: none; }
+  .bt-ic svg { width: 16px; height: 16px; }
+  .bt-ic:hover { background: var(--hover); color: var(--texto); }
+  .bt-ic.novo { color: var(--verde); border-color: rgba(0, 168, 132, .4); background: rgba(0, 168, 132, .08); }
+  .bt-ic.novo:hover { background: rgba(0, 168, 132, .18); color: var(--verde); }
+  .bt-ic.on { color: var(--ambar); border-color: rgba(255, 185, 0, .55); background: rgba(255, 185, 0, .1); }
+
+  /* modo organizar: a faixa ambar diz em que modo a lista esta e tem a saida dela */
+  .org-barra { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; padding: 6px 6px 6px 10px;
+    border-radius: 10px; background: rgba(255, 185, 0, .08); border: 1px solid rgba(255, 185, 0, .3);
+    color: var(--ambar); font-size: 11.5px; font-weight: 700; }
+  .org-barra svg { width: 14px; height: 14px; flex-shrink: 0; }
+  .org-barra .pronto { margin-left: auto; height: 26px; padding: 0 11px; border-radius: 7px;
+    background: var(--ambar); color: #2a1d00; font-size: 11.5px; font-weight: 800; }
+  .org-barra .pronto:hover { background: #ffc933; }
+  .bt-mini { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px; color: var(--apagado);
+    transition: background-color .15s, color .15s; }
+  .bt-mini svg { width: 14px; height: 14px; }
+  .bt-mini:hover { background: var(--hover); color: var(--texto); }
+  .bt-mini.olho.off { color: #f0506a; background: rgba(240, 80, 106, .1); }
+  .bt-mini.lixo:hover { color: #f0506a; background: rgba(240, 80, 106, .14); }
+  .bt-mini.armado { width: auto; padding: 0 8px; background: #f0506a; color: #fff; font-size: 11px; font-weight: 800; }
+  .bt-mini.armado:hover { background: #e03e59; color: #fff; }
+  .item.oculto, .funil.oculto { opacity: .55; border-style: dashed; }
+  .item-lbl .esc, .funil-lbl .esc { display: inline-flex; margin-left: 5px; vertical-align: -2px; color: var(--apagado); }
+  .item-lbl .esc svg, .funil-lbl .esc svg { width: 12px; height: 12px; }
+  .ocultos-link { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 4px;
+    padding: 8px; border-radius: 10px; border: 1px dashed var(--borda); color: var(--apagado); font-size: 11.5px; }
+  .ocultos-link svg { width: 14px; height: 14px; }
+  .ocultos-link:hover { color: var(--texto); border-color: rgba(134, 150, 160, .35); }
+
+  /* o editor ocupa a coluna inteira; a lista volta quando ele fecha */
+  .ed { animation: entraCima .15s ease both; }
+  .ed-topo { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+  .ed-topo b { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ed-topo .ic { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px;
+    background: color-mix(in srgb, var(--kc) 16%, transparent); color: var(--kc); }
+  .ed-topo .ic svg { width: 15px; height: 15px; }
+  .ed-volta { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px;
+    border: 1px solid var(--borda); color: var(--apagado); }
+  .ed-volta:hover { background: var(--hover); color: var(--texto); }
+  .ed-volta svg { width: 15px; height: 15px; }
+  .ed-tipos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ed-tipo { display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 18px 8px 15px; border-radius: 15px;
+    border: 1px solid color-mix(in srgb, var(--kc) 35%, transparent); background: color-mix(in srgb, var(--kc) 7%, transparent);
+    font-size: 12.5px; font-weight: 700; transition: transform .15s, border-color .15s, background-color .15s; }
+  .ed-tipo:hover { transform: translateY(-1px); border-color: var(--kc); background: color-mix(in srgb, var(--kc) 13%, transparent); }
+  .ed-tipo .ic { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px;
+    background: color-mix(in srgb, var(--kc) 18%, transparent); color: var(--kc); }
+  .ed-tipo .ic svg { width: 23px; height: 23px; }
+  .ed-sec { display: flex; align-items: center; gap: 6px; margin: 12px 0 6px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--apagado); }
+  .ed-sec svg { width: 12px; height: 12px; }
+  .ed .form textarea.msg { height: 132px; resize: vertical; min-height: 70px; max-height: 320px; font: inherit; font-size: 13px; line-height: 1.4; }
+  .ed-quem { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .ed-quem button { display: flex; align-items: center; justify-content: center; gap: 6px; height: 38px; border-radius: 10px;
+    border: 1px solid var(--borda); color: var(--apagado); font-size: 12px; font-weight: 700; transition: border-color .15s, background-color .15s, color .15s; }
+  .ed-quem button svg { width: 15px; height: 15px; }
+  .ed-quem button:hover { background: var(--hover); }
+  .ed-quem button.on { border-color: var(--verde); background: rgba(0, 168, 132, .14); color: var(--verde); }
+  .ed .acoes.um { grid-template-columns: 1fr; }
+  .ed .acoes .bt.sec.lixo { color: #f0506a; border-color: rgba(240, 80, 106, .35); }
+  .ed .acoes .bt.sec.lixo.armado { background: #f0506a; color: #fff; border-color: #f0506a; }
+
+  /* o gravador: um botao grande, o tempo, e as duas saidas (gravar de novo / escolher arquivo) */
+  .grav { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 10px 12px; border-radius: 14px;
+    border: 1px solid var(--borda); background: var(--fraco); }
+  .grav-bt { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%;
+    background: rgba(19, 194, 115, .14); color: #13c273; border: 2px solid rgba(19, 194, 115, .45); transition: transform .15s; }
+  .grav-bt:hover { transform: scale(1.04); }
+  .grav-bt svg { width: 26px; height: 26px; }
+  .grav-bt.gravando { background: #f0506a; color: #fff; border-color: #f0506a; animation: pulsa 1.3s ease-in-out infinite; }
+  @keyframes pulsa { 50% { box-shadow: 0 0 0 9px rgba(240, 80, 106, .16); } }
+  .grav-t { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .grav-t.apagado { font-size: 12px; font-weight: 600; color: var(--apagado); }
+  .grav audio { display: block; width: 100%; height: 34px; }
+  .grav-ops { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+  .grav-op { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--borda); color: var(--apagado); font-size: 11.5px; font-weight: 600; }
+  .grav-op:hover { background: var(--hover); color: var(--texto); }
+  .grav-op svg { width: 13px; height: 13px; }
+  .ed-midia { margin-top: 8px; border-radius: 10px; overflow: hidden; background: #000; }
+  .ed-midia img, .ed-midia video { display: block; width: 100%; max-height: 260px; object-fit: contain; }
+  .ed-arq { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; padding: 22px 10px;
+    border: 1.5px dashed color-mix(in srgb, var(--kc) 45%, transparent); border-radius: 14px; color: var(--kc);
+    background: color-mix(in srgb, var(--kc) 6%, transparent); font-size: 12.5px; font-weight: 700; }
+  .ed-arq:hover { background: color-mix(in srgb, var(--kc) 12%, transparent); }
+  .ed-arq svg { width: 26px; height: 26px; }
+  .ed-arq .s { font-size: 10.5px; font-weight: 600; color: var(--apagado); }
+
+  /* passos do funil: o tempo de espera mora ENTRE dois passos, que e onde ele acontece */
+  .ed-passo { display: flex; align-items: center; gap: 7px; padding: 6px 6px 6px 8px; border: 1px solid var(--linha);
+    border-radius: 11px; background: var(--fraco); }
+  .ed-passo .n { width: 14px; flex-shrink: 0; text-align: center; font-size: 10.5px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .ed-passo .ic { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px;
+    background: color-mix(in srgb, var(--kc) 15%, transparent); color: var(--kc); }
+  .ed-passo .ic svg { width: 13px; height: 13px; }
+  .ed-passo .l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+  .ed-passo.sumiu .l { color: #f0506a; text-decoration: line-through; }
+  .ed-passo .bt-mini { width: 22px; height: 24px; }
+  .ed-passo .bt-mini:disabled { opacity: .25; cursor: default; }
+  .ed-espera { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 5px 0; }
+  .esp-bt { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid var(--borda); color: var(--apagado); font-size: 11px; font-weight: 600; }
+  .esp-bt svg { width: 12px; height: 12px; }
+  .esp-bt:hover { color: var(--texto); }
+  .esp-bt.fixo { color: var(--azul); border-color: rgba(83, 189, 235, .45); background: rgba(83, 189, 235, .08); }
+  .esp-ops { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+  .esp-op { height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--borda); color: var(--apagado); font-size: 11px; }
+  .esp-op:hover { color: var(--texto); }
+  .esp-op.on { background: rgba(83, 189, 235, .16); border-color: rgba(83, 189, 235, .5); color: var(--azul); font-weight: 700; }
+  .ed-add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 10px;
+    border-radius: 11px; border: 1px dashed rgba(0, 168, 132, .45); color: var(--verde); font-size: 12.5px; font-weight: 700; }
+  .ed-add:hover { background: rgba(0, 168, 132, .07); }
+  .ed-add svg { width: 15px; height: 15px; }
+  .passo-pausa.fixo { color: var(--azul); }
 </style>
 </head>
 <body>
@@ -571,9 +699,18 @@
   </div>
 
   <div class="cabeca" id="cabeca">
-    <div class="busca">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="busca" placeholder="Buscar item..." spellcheck="false" />
+    <div class="busca-linha">
+      <div class="busca">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="busca" placeholder="Buscar item..." spellcheck="false" />
+      </div>
+      <!-- CRIAR E ORGANIZAR (05/11/2026). Escondidos ate o painel saber que pode (ver podeOrganizar). -->
+      <button class="bt-ic novo" id="novo" title="Criar" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="bt-ic" id="organizar" title="Organizar: esconder, editar e apagar" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      </button>
     </div>
     <div class="linha-chips" id="linha-chips">
       <div class="chips" id="chips"></div>
@@ -592,6 +729,7 @@
   </footer>
 
   <script src="cob-comum.js"></script>
+  <script src="audio-ogg.js"></script>
   <script src="painel-ui.js"></script>
 </body>
 </html>

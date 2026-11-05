@@ -3686,13 +3686,79 @@ ipcMain.handle('sw:proxy-testar', async (_e, { nk }) => {
 // a v1.18.0 esta instalada e ainda tem os dois interruptores na tela.
 
 // ── IPC DO PAINEL (vem de dentro da pagina do WhatsApp, pela ponte do preload-wa.js)
-ipcMain.handle('swp:roteiro', async () => {
-  const r = await pegaRoteiro(false)
+ipcMain.handle('swp:roteiro', async (_e, opts) => {
+  const r = await pegaRoteiro(!!(opts && opts.forcar))
   if (!r) return { ok: false }
   // O TOKEN DE INGESTAO NAO DESCE PRO PAINEL. Ele roda no mesmo mundo da pagina do WhatsApp; se
   // vazar dali, da pra injetar venda falsa (comissao e pixel). A captura sobe por IPC e quem
   // posta e o processo principal.
-  return { ok: true, messages: r.messages, sequences: r.sequences, media: r.media, mediaBase: r.mediaBase }
+  // `ocultos` e `organiza` (05/11/2026): o que esta pessoa escondeu, e se o painel pode criar e
+  // esconder (no "ver como" da direcao, nao: la tudo e so leitura).
+  return { ok: true, messages: r.messages, sequences: r.sequences, media: r.media, mediaBase: r.mediaBase,
+    ocultos: Array.isArray(r.ocultos) ? r.ocultos : [], organiza: !comoId }
+})
+
+// ── O QUE O VENDEDOR CRIA NO PAINEL (05/11/2026, pedido do Bruno) ───────────────────────────────
+// Mensagem, audio, video, foto e funil proprios, e o "esconder". Quem grava e o servidor (tabela
+// swweb_itens, fora do estado); aqui so a travessia, e depois de gravar o roteiro e relido na hora
+// pra o item novo aparecer em todos os paineis abertos desta maquina.
+// NO "VER COMO" NAO GRAVA: o POST sairia com a identidade da direcao, e o item nasceria no nome
+// errado sem ninguem perceber.
+const naoNoVerComo = () => (comoId ? { ok: false, erro: 'No "ver como" o painel é só de leitura.' } : null)
+async function postaPainel(rota, corpo) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + rota, {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify(corpo || {}), signal: AbortSignal.timeout(20000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    return { ok: true, ...(d || {}) }
+  } catch (_) { return { ok: false, erro: 'não deu pra falar com a dash' } }
+}
+ipcMain.handle('swp:item-salvar', async (_e, { dados }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  const r = await postaPainel('/api/swweb/item', dados)
+  if (r.ok) await pegaRoteiro(true)
+  return r
+})
+ipcMain.handle('swp:item-apagar', async (_e, { id }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  const r = await postaPainel('/api/swweb/item/apagar', { id })
+  if (r.ok) await pegaRoteiro(true)
+  return r
+})
+ipcMain.handle('swp:ocultar', async (_e, { id, oculto }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  const r = await postaPainel('/api/swweb/ocultar', { id, oculto: !!oculto })
+  // Guarda na copia do roteiro daqui, sem reler tudo: o proximo painel que pedir ja ve escondido.
+  if (r.ok && roteiro && Array.isArray(r.ocultos)) roteiro.ocultos = r.ocultos
+  return r
+})
+// O ARQUIVO DO ITEM NOVO vai em bytes crus (como o comprovante) pra mesma rota da midia do Sale
+// Chat, que devolve a chave `m/...` que o envio e a previa ja sabem buscar.
+const MIDIA_ITEM_MAX = 60 * 1024 * 1024   // o teto da rota /api/salechat/media
+ipcMain.handle('swp:sobe-midia', async (_e, { mime, bytes }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const tipo = String(mime || '').split(';')[0].trim().toLowerCase()
+  if (!/^(image|audio|video)\//.test(tipo) && tipo !== 'application/pdf') return { ok: false, erro: 'Esse tipo de arquivo não dá pra mandar.' }
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || [])
+  if (!buf.length) return { ok: false, erro: 'O arquivo veio vazio.' }
+  if (buf.length > MIDIA_ITEM_MAX) return { ok: false, erro: 'Arquivo de ' + Math.round(buf.length / 1048576) + ' MB. O limite é 60 MB.' }
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/salechat/media', {
+      method: 'POST',
+      headers: { 'content-type': tipo, Authorization: 'Bearer ' + config.token, 'x-sw-maquina': maquinaId() },
+      body: buf,
+      signal: AbortSignal.timeout(300000),
+    })
+    ajustaRelogio(r)
+    const d = await r.json().catch(() => null)
+    if (!r.ok || !d || !d.key) return { ok: false, erro: (d && (d.error || d.erro)) || ('a dash respondeu ' + r.status) }
+    return { ok: true, key: d.key, mime: d.mime || tipo }
+  } catch (_) { return { ok: false, erro: 'não deu pra subir o arquivo' } }
 })
 
 // O painel pergunta o estado e manda item pela view do numero que esta na tela. Quem executa de
@@ -3910,7 +3976,11 @@ function tetoDoItem(it) {
   // Agora o audio conta o teto cheio da espera, que e o mesmo que o agente usa.
   // 30 s cobre a maior espera possivel da regra de 27/10 (teto de 20 s) com folga. Antes eram 120,
   // porque a regra de 26/10 esperava metade da duracao do audio e o roteiro tem audio de 186 s.
-  const esperaS = (it && it.kind === 'audio') ? 30 : Math.min(120, Number(it && it.pausa) || 0)
+  // O TEMPO QUE O VENDEDOR ESCOLHEU no funil dele (`espera`, 0 a 120 s, 05/11/2026) vence a regra
+  // no agente, entao o teto tem que caber ele tambem.
+  const regra = (it && it.kind === 'audio') ? 30 : Math.min(120, Number(it && it.pausa) || 0)
+  const escolhida = (it && it.espera != null && it.espera !== '') ? Math.min(120, Math.max(0, Number(it.espera) || 0)) : 0
+  const esperaS = Math.max(regra, escolhida)
   const pausaMs = Math.max(0, esperaS) * 1000
   const envioMs = (it && it.kind === 'video') ? 180000 : (it && it.tipo === 'texto') ? 60000 : 120000
   return pausaMs + envioMs + 30000
@@ -4765,6 +4835,25 @@ app.whenReady().then(() => {
       }
     })
   } catch (e) { anota('[midia] nao registrei o swmedia: ' + (e && e.message)) }
+  // O MICROFONE DO PAINEL (05/11/2026): o vendedor grava o audio do item novo ali mesmo. So audio,
+  // nunca camera. O resto continua como sempre foi (sem handler o Electron libera tudo, e o painel
+  // e um arquivo nosso). No Mac o sistema tambem precisa deixar, igual ao do WhatsApp.
+  try {
+    session.fromPartition('persist:sw-painel').setPermissionRequestHandler((_wc, permissao, callback, detalhes) => {
+      if (permissao !== 'media') { callback(true); return }
+      const tipos = (detalhes && detalhes.mediaTypes) || []
+      if (tipos.includes('video')) { callback(false); return }
+      if (NO_MAC) {
+        let st = ''
+        try { st = systemPreferences.getMediaAccessStatus('microphone') } catch (_) { st = '' }
+        if (st !== 'granted') {
+          systemPreferences.askForMediaAccess('microphone').then((ok) => callback(!!ok)).catch(() => callback(false))
+          return
+        }
+      }
+      callback(true)
+    })
+  } catch (e) { anota('[painel] microfone: ' + (e && e.message)) }
   painelLigado = config.painelLigado !== false
   leFila()
   carregaEntregues()

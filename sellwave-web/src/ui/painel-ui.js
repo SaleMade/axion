@@ -41,6 +41,13 @@ let tipoFiltro = ''          // '' = todos
 let favoritos = {}
 let fechadas = {}            // seções recolhidas, por tipo
 let aberto = ''              // prévia aberta: 'item:<id>' ou 'funil:<id>'
+// CRIAR E ORGANIZAR (05/11/2026, ver a secao "criar e organizar" la embaixo). Declarado AQUI EM CIMA
+// pelo mesmo motivo da fila: o desenha() le estes, e `let` nao sobe.
+let ocultos = new Set()      // ids que ESTA pessoa escondeu (item ou funil)
+let organiza = false         // modo organizar: olho, editar, apagar
+let podeOrganizar = false    // o app novo (preload com salvaItem) e fora do "ver como"
+let editor = null            // a tela de criar/editar aberta, ou null
+let armadoApagar = ''        // o primeiro clique na lixeira: 'id', some em 5 s
 let ultimoFone = ''
 // QUEM ESTA DISPARANDO AGORA sai da FILA, nao de um global. Eram tres variaveis de modulo
 // (`ocupado`, `alvoNkAtual`, `alvoNome`/`alvoFone`) e elas so faziam sentido enquanto o app inteiro
@@ -78,19 +85,24 @@ const guardaFavs = () => { try { localStorage.setItem('sw_favs', JSON.stringify(
 // Junta mensagens e mídias num catálogo só, como a aba Itens do inbox.
 function catalogo() {
   const saida = []
-  for (const m of (roteiro.messages || [])) saida.push({ id: m.id, tipo: 'text', label: m.label || m.text || m.id, texto: m.text || '', grp: m.grp || '' })
+  // `sw` (05/11/2026): o item foi criado no painel por alguem da equipe (dono, se pode mexer, so
+  // eu/todos). O oficial, que vem da dash, nao tem.
+  for (const m of (roteiro.messages || [])) saida.push({ id: m.id, tipo: 'text', label: m.label || m.text || m.id, texto: m.text || '', grp: m.grp || '', sw: m.sw || null })
   for (const md of (roteiro.media || [])) {
     // SÓ O QUE O AGENTE SABE MANDAR. O catálogo do Sale Chat guarda tudo que não é mensagem no
     // mesmo lugar, inclusive cartão de contato, que não tem arquivo e não tem envio aqui: clicar
     // nele dava um erro técnico sem explicação. Melhor não aparecer.
     if (!TIPOS[md.kind] || !md.key) continue
-    saida.push({ id: md.id, tipo: md.kind, label: md.label || md.id, caption: md.caption || '', key: md.key, grp: md.grp || '' })
+    saida.push({ id: md.id, tipo: md.kind, label: md.label || md.id, caption: md.caption || '', key: md.key, mime: md.mime || '', grp: md.grp || '', sw: md.sw || null })
   }
   return saida
 }
 
 function visiveis() {
   let itens = catalogo()
+  // ESCONDIDO SAI DA LISTA, NAO DO ROTEIRO: o funil que usa ele continua mandando. No modo organizar
+  // ele aparece apagado, pra dar pra mostrar de novo.
+  if (!organiza) itens = itens.filter((x) => !ocultos.has(x.id))
   if (soFavs) itens = itens.filter((x) => favoritos[x.id])
   if (tipoFiltro) itens = itens.filter((x) => x.tipo === tipoFiltro)
   if (filtro) itens = itens.filter((x) => (x.label + ' ' + (x.texto || '') + ' ' + (x.grp || '')).toLowerCase().includes(filtro))
@@ -190,6 +202,18 @@ function desenhaChips() {
   const linha = $('linha-chips')
   // Busca e chips são do catálogo de itens. Nas outras abas eles não filtram nada, e deixar a busca
   // ali faz o vendedor digitar nela achando que procura pedido.
+  // OS DOIS BOTOES NOVOS (criar e organizar) valem pra Itens e Funis; o editor aberto esconde a
+  // cabeca inteira, porque buscar ali nao faria nada.
+  const nv = $('novo'), og = $('organizar')
+  if (nv && og) {
+    nv.hidden = !podeOrganizar || aba === 'pedidos'
+    og.hidden = !podeOrganizar || aba === 'pedidos'
+    og.classList.toggle('on', organiza)
+    nv.title = aba === 'funis' ? 'Criar funil' : 'Criar item'
+  }
+  const bz = $('busca')
+  if (bz) bz.placeholder = aba === 'funis' ? 'Buscar funil...' : 'Buscar item...'
+  if (editor) { $('cabeca').style.display = 'none'; return }
   if (aba === 'funis' || aba === 'pedidos') { linha.style.display = 'none'; $('cabeca').style.display = aba === 'pedidos' ? 'none' : ''; return }
   $('cabeca').style.display = ''
   linha.style.display = ''
@@ -252,12 +276,22 @@ function desenha() {
   selo.hidden = !nFunis
   selo.textContent = String(nFunis)
 
+  // O EDITOR ABERTO NAO E REDESENHADO POR FORA. O pulso, a fila e a releitura do roteiro chamam o
+  // desenha() o tempo todo; refazer o editor a cada chamada pararia a previa do audio no meio e
+  // apagaria o arquivo escolhido da tela. Quem redesenha o editor e ele mesmo (desenhaEditor).
+  if (editor && (aba === 'itens' || aba === 'funis')) {
+    if (corpo.dataset.ed !== '1') desenhaEditor()
+    return
+  }
+  corpo.dataset.ed = ''
+
   if (aba === 'funis') {
     const rolada = pilhaRolada(corpo)
-    corpo.innerHTML = desenhaSaindo() + desenhaFunis()
+    corpo.innerHTML = desenhaSaindo() + barraOrganiza() + desenhaFunis() + linkOcultos('funis')
     ajustaPilha(corpo, rolada)
     ligaFunis(corpo)
     ligaFaixa(corpo)
+    ligaOrganiza(corpo)
     voltaFoco(_foco)
     return
   }
@@ -266,14 +300,16 @@ function desenha() {
 
   const itens = visiveis()
   if (!itens.length) {
-    corpo.innerHTML = '<div class="vazio">' + (soFavs
+    corpo.innerHTML = barraOrganiza() + '<div class="vazio">' + (soFavs
       ? 'Nenhum favorito ainda. Toque na estrela de um item.'
-      : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : 'Nada aqui. Cadastre na dash, em SellWave Web > Mensagens e funis.')) + '</div>'
+      : (filtro || tipoFiltro ? 'Nenhum item encontrado.' : (podeOrganizar ? 'Nada aqui ainda. Toque no + pra criar.' : 'Nada aqui. Cadastre na dash, em SellWave Web > Mensagens e funis.'))) + '</div>'
+      + linkOcultos('itens')
+    ligaOrganiza(corpo)
     return
   }
 
   // Duas camadas, como no inbox: seção por TIPO e, dentro dela, subgrupo pela divisória do roteiro.
-  let html = ''
+  let html = barraOrganiza()
   for (const t of ['text', 'audio', 'video', 'image', 'document']) {
     const doTipo = itens.filter((x) => x.tipo === t)
     if (!doTipo.length) continue
@@ -290,9 +326,10 @@ function desenha() {
       for (const x of g[nome]) html += cartaoItem(x, k)
     })
   }
-  corpo.innerHTML = html
+  corpo.innerHTML = html + linkOcultos('itens')
   voltaFoco(_foco)
   ligaItens(corpo)
+  ligaOrganiza(corpo)
 }
 
 // FORMATAÇÃO DO WHATSAPP NO BALÃO. O inbox faz isso desde 16/09/2026, por pedido do Bruno: "texto
@@ -388,13 +425,18 @@ function cartaoItem(x, k) {
   if (ab) {
     prev = '<div class="prev"><div class="prev-bandeja">' + corpoDaPrevia(x) + '</div></div>'
   }
-  return '<div class="item" style="--kc:' + k.cor + '">'
+  const oculto = ocultos.has(x.id)
+  // NO MODO ORGANIZAR a estrela e o play dao lugar ao olho (esconder pra mim), e no que eu posso
+  // mexer, ao lapis e a lixeira.
+  const botoes = organiza ? botoesOrganiza(x, 'item')
+    : '<button class="estrela' + (fav ? ' on' : '') + '" data-fav="' + esc(x.id) + '" title="Favorito">' + IC_ESTRELA(fav) + '</button>'
+      + '<button class="enviar" data-envia="' + esc(x.id) + '" title="Enviar"' + (podeEnviar() ? '' : ' disabled') + '>'
+      + IC_PLAY + '</button>'
+  return '<div class="item' + (organiza && oculto ? ' oculto' : '') + '" style="--kc:' + k.cor + '">'
     + '<div class="item-linha">'
     + '<span class="item-ic">' + svg(k.ic) + '</span>'
-    + '<button class="item-lbl" data-abre="item:' + esc(x.id) + '">' + esc(x.label) + '</button>'
-    + '<button class="estrela' + (fav ? ' on' : '') + '" data-fav="' + esc(x.id) + '" title="Favorito">' + IC_ESTRELA(fav) + '</button>'
-    + '<button class="enviar" data-envia="' + esc(x.id) + '" title="Enviar"' + (podeEnviar() ? '' : ' disabled') + '>'
-    + IC_PLAY + '</button>'
+    + '<button class="item-lbl" data-abre="item:' + esc(x.id) + '">' + esc(x.label) + seloEscopo(x) + '</button>'
+    + botoes
     + '</div>' + prev + '</div>'
 }
 
@@ -440,8 +482,9 @@ const funilJaFoi = (id) => !!(funisFeitos[String(id)] && funisFone
 
 function desenhaFunis() {
   let seqs = roteiro.sequences || []
+  if (!organiza) seqs = seqs.filter((s) => !ocultos.has(s.id))
   if (filtro) seqs = seqs.filter((s) => (String(s.label || '') + ' ' + String(s.grp || '')).toLowerCase().includes(filtro))
-  if (!seqs.length) return '<div class="vazio">Nenhum funil ainda. Crie na dash, em SellWave Web > Mensagens e funis.</div>'
+  if (!seqs.length) return '<div class="vazio">' + (podeOrganizar ? 'Nenhum funil aqui. Toque no + pra criar.' : 'Nenhum funil ainda. Crie na dash, em SellWave Web > Mensagens e funis.') + '</div>'
   const { ordem, g } = porGrupo(seqs)
   const umSo = ordem.length === 1
   let html = ''
@@ -456,36 +499,35 @@ function desenhaFunis() {
         prev = '<div class="funil-prev">' + (passos.length ? passos.map((p, j) => {
           const info = infoDoPasso(p.id || p)
           const k = TIPOS[info.tipo]
-          // O QUE A PREVIA MOSTRA (26/10/2026): a pausa do audio nao esta mais no roteiro, e metade
-          // da duracao do arquivo, e so a pagina sabe disso na hora de mandar. Entao a previa diz a
-          // REGRA em vez de um numero que ela nao tem - mostrar "pausa 3s" num audio que vai esperar
-          // 92 s e pior que nao mostrar nada.
-          const pausa = pausaDoPasso(p)
-          const respiro = info.tipo === 'audio' ? 'metade do áudio'
-            : info.tipo === 'text' ? (pausa > 0 ? 'pausa ' + pausa + 's' : 'sem pausa')
-              : 'sem pausa'
+          // O QUE A PREVIA MOSTRA (05/11/2026): so o tempo que o VENDEDOR escolheu no funil dele. O
+          // resto segue a regra do agente (10 s, mais depois de audio longo, 1 min antes da foto que
+          // vem depois de audio), que a previa nao tem como saber - o rotulo antigo ("metade do
+          // audio", "pausa 3s") ja estava errado desde 27/10 e confundia mais do que ajudava.
+          const esp = (j > 0 && p && p.espera != null && p.espera !== '') ? rotuloEspera(p.espera) : ''
           return '<div class="passo" style="--kc:' + k.cor + '">'
             + '<span class="passo-ic">' + svg(k.ic) + '</span>'
             + '<span class="passo-n">' + (j + 1) + '</span>'
             + '<span class="passo-lbl">' + esc(info.label) + '</span>'
-            + '<span class="passo-pausa">' + respiro + '</span></div>'
+            + '<span class="passo-pausa' + (esp ? ' fixo' : '') + '">' + esp + '</span></div>'
         }).join('') : 'Funil sem passos.')
           + (s.stopOnReply ? '<div style="margin-top:4px;font-size:10px">Para se o lead responder.</div>' : '')
           + '</div>'
       }
       const jaFoi = funilJaFoi(s.id)
       const armado = funilArmado === s.id
-      html += '<div class="funil' + (jaFoi ? ' feito' : '') + '">'
+      const fim = organiza ? botoesOrganiza(s, 'funil')
+        : '<button class="enviar' + (armado ? ' armado' : '') + '" data-funil="' + esc(s.id) + '"'
+          + ' title="' + (armado ? 'Clique de novo pra enviar de novo' : (jaFoi ? 'Já foi enviado pra este lead. Clique duas vezes pra repetir' : 'Disparar funil')) + '"'
+          + (podeEnviar() ? '' : ' disabled') + '>'
+          + IC_PLAY + '</button>'
+      html += '<div class="funil' + (jaFoi ? ' feito' : '') + (organiza && ocultos.has(s.id) ? ' oculto' : '') + '">'
         + '<div class="funil-linha">'
         + '<span class="funil-ic">' + IC_ZAP + '</span>'
-        + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id)
+        + '<button class="funil-lbl" data-abre="funil:' + esc(s.id) + '">' + esc(s.label || s.id) + seloEscopo(s)
         + '<span class="passos">' + (s.items || []).length + ' passos</span>'
         + (jaFoi ? '<span class="funil-feito">' + IC_CHECK_MINI + 'já enviado</span>' : '')
         + '</button>'
-        + '<button class="enviar' + (armado ? ' armado' : '') + '" data-funil="' + esc(s.id) + '"'
-        + ' title="' + (armado ? 'Clique de novo pra enviar de novo' : (jaFoi ? 'Já foi enviado pra este lead. Clique duas vezes pra repetir' : 'Disparar funil')) + '"'
-        + (podeEnviar() ? '' : ' disabled') + '>'
-        + IC_PLAY + '</button>'
+        + fim
         + '</div>' + prev + '</div>'
     }
   })
@@ -2063,6 +2105,9 @@ function disparaFunil(id) {
   const lista = []
   for (const p of (s.items || [])) {
     const it = itemParaEnvio(p.id || p, pausaDoPasso(p))
+    // O TEMPO QUE O VENDEDOR ESCOLHEU no funil dele (05/11/2026). So vai quando foi escolhido: sem
+    // ele o agente segue a regra de sempre, que e o que os funis oficiais usam.
+    if (it && p && typeof p === 'object' && p.espera != null && p.espera !== '') it.espera = Math.max(0, Math.min(120, Number(p.espera) || 0))
     if (it) lista.push(it)
   }
   if (!lista.length) { rodape('funil sem passos'); return }
@@ -2233,7 +2278,7 @@ async function rodaJob(job) {
     // cadeia so: indicador, espera e envio na mesma promessa, do jeito que o sc-panel faz ha meses.
     // Esperar dos dois lados SOMA - passo de 8s vira 16s -, e essa soma ja voltou tres vezes por
     // caminhos diferentes. Ha um teste cronometrando o primeiro envio por causa disso.
-    const pausa = Math.min(120, Math.max(0, Number(it.pausa) || 0))
+    const pausa = Math.min(120, Math.max(0, Number(it.espera != null ? it.espera : it.pausa) || 0))
     if (pausa > 0) dizDoJob(job, ((it.kind === 'audio') ? 'gravando' : 'digitando') + de + paraQuem(job), pct)
     else dizDoJob(job, (lista.length > 1 ? 'enviando' + de : 'enviando') + paraQuem(job) + (lista.length > 1 ? '' : '...'), pct)
     const r = await window.swp.manda(job.nk, job.alvo, it)
@@ -2304,6 +2349,8 @@ const botaoCadastro = () => ''
 // aba mexeria, pra as duas entradas não divergirem.
 function vaiPara(nome) {
   if (aba === 'pedidos' && nome !== 'pedidos') rascunhoSozinho()
+  // Trocar de aba fecha o editor e o modo organizar: os dois sao da aba em que nasceram.
+  if (nome !== aba) { fechaEditor(); organiza = false }
   aba = nome
   for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o.dataset.aba === nome)
   aberto = ''
@@ -2382,6 +2429,8 @@ function aplicaModo(v) {
   cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
   // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
   roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
+  assinaturaRoteiro = ''        // a lista foi zerada: a proxima leitura TEM que redesenhar
+  fechaEditor(); organiza = false
   pegaRoteiro()
   // Entrando no modo, a ficha e o que ele mais usa durante a conversa: abre nela, venha de que aba vier.
   if (cobModo) vaiPara('pedidos')
@@ -2447,6 +2496,506 @@ function ligaCob(corpo) {
   })
 }
 
+// ───────────────────────────────────────────────────────────── criar e organizar
+//
+// PEDIDO DO BRUNO (05/11/2026): "eu gostaria que os meus vendedores pudessem personalizar a parte de
+// disparos da maneira que eles acharem melhor": criar mensagem, audio, video e foto, configurar o
+// tempo de espera, esconder o que so se usa dentro de funil, e escolher se o que criou aparece "so
+// para eles ou para todos os outros vendedores". E a regra de desenho: "nada cheio de texto, nada
+// cheio de regras, com varios icones, intuitivo como ja e hoje".
+//
+// COMO FICOU:
+//   +        (ao lado da busca) cria. Em Itens abre os quatro tipos; em Funis abre o funil novo.
+//   lapis    liga o modo ORGANIZAR: cada linha ganha o olho (esconder so pra mim) e, no que a pessoa
+//            pode mexer, o lapis e a lixeira. Funil oficial ganha "copiar" (vira um funil meu).
+//   funil    passos em ordem, e ENTRE dois passos o relogio com o tempo daquele passo: padrao (a
+//            regra de sempre), na hora, 5 s, 10 s, 30 s, 1 min, 2 min.
+// Quem guarda e o servidor (POST /api/swweb/item, /item/apagar, /ocultar), fora do estado da dash.
+// Item escondido sai da LISTA, nao do roteiro: o funil que usa ele continua mandando.
+
+const IC_MAIS = svg('<path d="M12 5v14M5 12h14"/>')
+const IC_LAPIS = svg('<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>')
+const IC_OLHO = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>')
+const IC_OLHO_OFF = svg('<path d="m2 2 20 20"/><path d="M6.7 6.7C3.9 8.4 2 12 2 12s3.6 7 10 7c1.9 0 3.6-.6 5-1.5"/><path d="M10.6 5.1c.5-.1.9-.1 1.4-.1 6.4 0 10 7 10 7s-.7 1.4-2 2.9"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/>')
+const IC_EU = svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>')
+const IC_TODOS = svg('<circle cx="9" cy="8" r="4"/><path d="M1 21a8 8 0 0 1 16 0"/><path d="M16 4.1a4 4 0 0 1 0 7.8"/><path d="M23 21a8 8 0 0 0-5-7.4"/>')
+const IC_VOLTA = svg('<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>')
+const IC_RELOGIO = svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>')
+const IC_COPIA = svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>')
+const IC_CIMA = svg('<path d="m18 15-6-6-6 6"/>')
+const IC_BAIXO = svg('<path d="m6 9 6 6 6-6"/>')
+const IC_SOBE = svg('<path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/>')
+const IC_PARA = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+const IC_DENOVO = svg('<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>')
+const IC_LISTA = svg('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>')
+
+const MIDIA_MAX = 60 * 1024 * 1024     // o teto da rota do servidor
+const NOMES_TIPO = { text: 'mensagem', audio: 'áudio', video: 'vídeo', image: 'foto' }
+const TITULO_NOVO = { text: 'Nova mensagem', audio: 'Novo áudio', video: 'Novo vídeo', image: 'Nova foto' }
+const ACEITA = { audio: 'audio/*', video: 'video/mp4,video/quicktime,video/webm', image: 'image/jpeg,image/png' }
+const ESPERAS = [{ v: null, t: 'Padrão' }, { v: 0, t: 'Na hora' }, { v: 5, t: '5 s' }, { v: 10, t: '10 s' }, { v: 30, t: '30 s' }, { v: 60, t: '1 min' }, { v: 120, t: '2 min' }]
+
+function rotuloEspera(v) {
+  if (v === null || v === undefined || v === '') return 'padrão'
+  const s = Math.max(0, Math.round(Number(v) || 0))
+  if (!s) return 'na hora'
+  if (s < 60) return s + ' s'
+  const m = Math.floor(s / 60), r = s % 60
+  return m + ' min' + (r ? ' ' + r + ' s' : '')
+}
+const mmss = (seg) => { const s = Math.max(0, Math.floor(seg)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') }
+const tamMB = (b) => Math.max(1, Math.round((Number(b) || 0) / 1048576))
+
+// O "todos veem" aparece no que EU criei e mostrei pra equipe. O que veio de colega ja esta no grupo
+// "Da equipe", e o que e so meu ja esta em "Meus itens": selo ali seria repetir.
+function seloEscopo(x) {
+  if (!x || !x.sw || !x.sw.meu || x.sw.escopo !== 'todos') return ''
+  return '<span class="esc" title="Todos da equipe veem">' + IC_TODOS + '</span>'
+}
+
+function botoesOrganiza(x, tipo) {
+  const id = esc(x.id)
+  const oc = ocultos.has(x.id)
+  let h = ''
+  if (tipo === 'funil' && !(x.sw && x.sw.pode)) h += '<button class="bt-mini" data-copia="' + id + '" title="Copiar pra mim">' + IC_COPIA + '</button>'
+  if (x.sw && x.sw.pode) {
+    h += '<button class="bt-mini" data-edita="' + tipo + ':' + id + '" title="Editar">' + IC_LAPIS + '</button>'
+    const arm = armadoApagar === x.id
+    h += '<button class="bt-mini lixo' + (arm ? ' armado' : '') + '" data-apaga="' + id + '" title="' + (arm ? 'Clique de novo pra apagar' : 'Apagar') + '">' + (arm ? 'Apagar?' : IC_LIXO) + '</button>'
+  }
+  h += '<button class="bt-mini olho' + (oc ? ' off' : '') + '" data-olho="' + id + '" title="' + (oc ? 'Mostrar de novo' : 'Esconder da minha lista') + '">' + (oc ? IC_OLHO_OFF : IC_OLHO) + '</button>'
+  return h
+}
+
+function barraOrganiza() {
+  if (!organiza) return ''
+  return '<div class="org-barra">' + IC_OLHO_OFF + '<span>Esconda o que você não usa</span>'
+    + '<button class="pronto" data-org="pronto">Pronto</button></div>'
+}
+
+// Quantos desta aba estao escondidos. Sem este aviso, quem escondeu por engano nao acha mais.
+function linkOcultos(qual) {
+  if (organiza || !podeOrganizar || !ocultos.size) return ''
+  const ids = qual === 'funis' ? (roteiro.sequences || []).map((s) => s.id) : catalogo().map((x) => x.id)
+  const n = ids.filter((id) => ocultos.has(id)).length
+  if (!n) return ''
+  return '<button class="ocultos-link" data-org="abre">' + IC_OLHO_OFF + n + (n > 1 ? ' escondidos' : ' escondido') + '</button>'
+}
+
+function ligaOrganiza(corpo) {
+  for (const b of corpo.querySelectorAll('[data-org]')) b.onclick = () => { organiza = b.dataset.org === 'abre'; armadoApagar = ''; desenha() }
+  for (const b of corpo.querySelectorAll('[data-olho]')) b.onclick = () => alternaOculto(b.dataset.olho)
+  for (const b of corpo.querySelectorAll('[data-edita]')) b.onclick = () => {
+    const [tipo, id] = String(b.dataset.edita).split(/:(.+)/)
+    if (tipo === 'funil') abreFunil((roteiro.sequences || []).find((s) => s.id === id), false)
+    else abreItem(catalogo().find((x) => x.id === id))
+  }
+  for (const b of corpo.querySelectorAll('[data-copia]')) b.onclick = () => abreFunil((roteiro.sequences || []).find((s) => s.id === b.dataset.copia), true)
+  for (const b of corpo.querySelectorAll('[data-apaga]')) b.onclick = () => armaOuApaga(b.dataset.apaga, () => desenha())
+}
+
+async function alternaOculto(id) {
+  const vai = !ocultos.has(id)
+  if (vai) ocultos.add(id); else ocultos.delete(id)
+  desenha()
+  let r = null
+  try { r = await window.swp.ocultar(id, vai) } catch (_) { r = null }
+  if (!r || !r.ok) {
+    if (vai) ocultos.delete(id); else ocultos.add(id)
+    desenha()
+    rodape('não deu pra ' + (vai ? 'esconder' : 'mostrar') + ': ' + humano((r && r.erro) || 'sem resposta'), null, true)
+  }
+}
+
+// APAGAR E COM DOIS CLIQUES, como o funil que ja foi: o primeiro arma (fica vermelho, "Apagar?"),
+// o segundo apaga. Some sozinho em 5 s. Sem janela de confirmacao, que e mais texto pra ler.
+let armadoAte = 0
+async function armaOuApaga(id, redesenha) {
+  if (armadoApagar !== id || Date.now() > armadoAte) {
+    armadoApagar = id
+    armadoAte = Date.now() + 5000
+    redesenha()
+    setTimeout(() => { if (armadoApagar === id && Date.now() >= armadoAte) { armadoApagar = ''; redesenha() } }, 5200)
+    return false
+  }
+  armadoApagar = ''
+  let r = null
+  try { r = await window.swp.apagaItem(id) } catch (_) { r = null }
+  if (!r || !r.ok) { rodape('não apagou: ' + humano((r && r.erro) || 'sem resposta'), null, true); redesenha(); return false }
+  ocultos.delete(id)
+  if (editor && editor.id === id) fechaEditor()
+  await pegaRoteiro(true)
+  desenha()
+  rodape('apagado', null, true)
+  return true
+}
+
+// ── o editor ───────────────────────────────────────────────────────────────────────────────────
+function fechaEditor() {
+  const e = editor
+  editor = null
+  armadoApagar = ''
+  if (!e) return
+  try { if (e._rec && e._rec.state !== 'inactive') e._rec.stop() } catch (_) { /* ok */ }
+  try { if (e._stream) e._stream.getTracks().forEach((t) => t.stop()) } catch (_) { /* ok */ }
+  try { clearInterval(e._relogio) } catch (_) { /* ok */ }
+  try { if (e.arq && e.arq.url) URL.revokeObjectURL(e.arq.url) } catch (_) { /* ok */ }
+  const corpo = $('corpo')
+  if (corpo) corpo.dataset.ed = ''
+}
+
+function abreNovo() {
+  fechaEditor()
+  organiza = false
+  if (aba === 'funis') { abreFunil(null, false); return }
+  editor = { tela: 'novo' }
+  desenhaEditor()
+}
+function abreItem(x) {
+  fechaEditor()
+  editor = x
+    ? { tela: 'item', tipo: x.tipo, id: x.id, label: x.label || '', text: x.texto || '', caption: x.caption || '', key: x.key || '', mime: x.mime || '', escopo: (x.sw && x.sw.escopo) || 'eu', pode: !!(x.sw && x.sw.pode), arq: null, erro: '' }
+    : null
+  desenhaEditor()
+}
+function novoItem(tipo) {
+  editor = { tela: 'item', tipo, id: '', label: '', text: '', caption: '', key: '', mime: '', escopo: 'eu', pode: false, arq: null, erro: '' }
+  desenhaEditor()
+}
+function abreFunil(s, copia) {
+  fechaEditor()
+  organiza = false
+  const passos = s ? (s.items || []).map((p) => {
+    const id = String((p && p.id) || p || '')
+    const e = p && typeof p === 'object' ? p.espera : null
+    return { id, espera: (e === null || e === undefined || e === '') ? null : Number(e) }
+  }).filter((p) => p.id) : []
+  editor = {
+    tela: 'funil',
+    id: s && !copia ? s.id : '',
+    label: s ? (copia ? ('Cópia de ' + (s.label || '')).slice(0, 80) : (s.label || '')) : '',
+    passos,
+    escopo: s && !copia ? ((s.sw && s.sw.escopo) || 'eu') : 'eu',
+    pode: !!(s && !copia && s.sw && s.sw.pode),
+    espAberta: -1, escolhendo: false, buscaPasso: '', erro: '',
+  }
+  desenhaEditor()
+}
+
+function desenhaEditor() {
+  const corpo = $('corpo')
+  if (!editor) { if (corpo) corpo.dataset.ed = ''; desenha(); return }
+  const _foco = guardaFoco()
+  desenhaChips()
+  corpo.dataset.ed = '1'
+  const e = editor
+  corpo.innerHTML = e.tela === 'novo' ? edNovo()
+    : e.tela === 'funil' ? (e.escolhendo ? edEscolhe() : edFunil())
+      : edItem()
+  ligaEditor(corpo)
+  voltaFoco(_foco)
+}
+
+const topoEd = (titulo, cor, ic) => '<div class="ed-topo"><button class="ed-volta" data-ed="volta" title="Voltar">' + IC_VOLTA + '</button>'
+  + (ic ? '<span class="ic" style="--kc:' + cor + '">' + ic + '</span>' : '') + '<b>' + esc(titulo) + '</b></div>'
+
+function edNovo() {
+  let h = '<div class="ed">' + topoEd('Criar', '', '') + '<div class="ed-tipos">'
+  for (const t of ['text', 'audio', 'video', 'image']) {
+    const k = TIPOS[t]
+    const nome = { text: 'Mensagem', audio: 'Áudio', video: 'Vídeo', image: 'Foto' }[t]
+    h += '<button class="ed-tipo" data-novo="' + t + '" style="--kc:' + k.cor + '"><span class="ic">' + svg(k.ic) + '</span>' + nome + '</button>'
+  }
+  return h + '</div></div>'
+}
+
+function quemVe(e) {
+  return '<div class="ed-sec">' + IC_OLHO + 'Quem vê</div><div class="ed-quem">'
+    + '<button data-quem="eu" class="' + (e.escopo !== 'todos' ? 'on' : '') + '">' + IC_EU + 'Só eu</button>'
+    + '<button data-quem="todos" class="' + (e.escopo === 'todos' ? 'on' : '') + '">' + IC_TODOS + 'Todos</button></div>'
+}
+function rodapeEd(e) {
+  return (e.erro ? '<div class="aviso ruim" style="margin-top:10px">' + esc(e.erro) + '</div>' : '')
+    + '<div class="acoes' + (e.id && e.pode ? '' : ' um') + '">'
+    + (e.id && e.pode ? '<button class="bt sec lixo' + (armadoApagar === e.id ? ' armado' : '') + '" data-ed="apaga" title="Apagar">' + IC_LIXO + (armadoApagar === e.id ? 'Apagar?' : '') + '</button>' : '')
+    + '<button class="bt pri" data-ed="salva"' + (e.salvando || e.gravando ? ' disabled' : '') + '>' + (e.salvando ? IC_GIRA + 'Salvando...' : IC_CHECK + 'Salvar') + '</button></div>'
+}
+
+function edItem() {
+  const e = editor
+  const k = TIPOS[e.tipo] || TIPOS.text
+  const titulo = e.id ? 'Editar ' + (NOMES_TIPO[e.tipo] || 'item') : (TITULO_NOVO[e.tipo] || 'Novo item')
+  let h = '<div class="ed" style="--kc:' + k.cor + '">' + topoEd(titulo, k.cor, svg(k.ic)) + '<div class="form">'
+    + '<div class="cx"><label>Nome</label><input data-k="ed-nome" maxlength="80" placeholder="' + ({ text: 'Ex.: Boas-vindas', audio: 'Ex.: Explicação do produto', video: 'Ex.: Depoimento', image: 'Ex.: Tabela de preços' }[e.tipo] || '') + '" value="' + esc(e.label) + '"></div>'
+  const fonte = e.arq ? e.arq.url : (e.key ? urlMidia(e.key) : '')
+  if (e.tipo === 'text') {
+    h += '<div class="cx"><label>Mensagem</label><textarea class="msg" data-k="ed-texto" maxlength="4096" placeholder="Escreva a mensagem">' + esc(e.text) + '</textarea></div>'
+  } else if (e.tipo === 'audio') {
+    h += '<div class="grav">'
+    if (e.gravando) {
+      h += '<button class="grav-bt gravando" data-ed="para" title="Parar">' + IC_PARA + '</button>'
+        + '<span class="grav-t">' + mmss((Date.now() - (e._ini || Date.now())) / 1000) + '</span>'
+    } else if (fonte) {
+      h += '<audio controls preload="metadata" src="' + esc(fonte) + '"></audio>'
+        + '<div class="grav-ops"><button class="grav-op" data-ed="grava">' + svg(TIPOS.audio.ic) + 'Gravar de novo</button>'
+        + '<button class="grav-op" data-ed="escolhe">' + IC_SOBE + 'Trocar arquivo</button></div>'
+    } else {
+      h += '<button class="grav-bt" data-ed="grava" title="Gravar">' + svg(TIPOS.audio.ic) + '</button>'
+        + '<span class="grav-t apagado">Toque pra gravar</span>'
+        + '<div class="grav-ops"><button class="grav-op" data-ed="escolhe">' + IC_SOBE + 'Escolher arquivo</button></div>'
+    }
+    h += '</div>'
+  } else {
+    if (fonte) {
+      h += '<div class="ed-midia">' + (e.tipo === 'image'
+        ? '<img src="' + esc(fonte) + '" alt="">'
+        : '<video src="' + esc(fonte) + '" controls preload="metadata"></video>') + '</div>'
+        + '<div class="grav-ops" style="margin-top:7px"><button class="grav-op" data-ed="escolhe">' + IC_SOBE + 'Trocar</button></div>'
+    } else {
+      h += '<button class="ed-arq" data-ed="escolhe">' + IC_SOBE + (e.tipo === 'image' ? 'Escolher foto' : 'Escolher vídeo')
+        + '<span class="s">até 60 MB</span></button>'
+    }
+    h += '<div class="cx" style="margin-top:9px"><label>Legenda</label><input data-k="ed-legenda" maxlength="1024" placeholder="opcional" value="' + esc(e.caption) + '"></div>'
+  }
+  h += '</div>'
+  if (e.tipo !== 'text') h += '<input type="file" data-ed="arquivo" accept="' + (ACEITA[e.tipo] || '') + '" hidden>'
+  return h + quemVe(e) + rodapeEd(e) + '</div>'
+}
+
+function infoPasso(id) {
+  const m = achaMsg(id)
+  if (m) return { tipo: 'text', label: m.label || m.text || id, ok: true }
+  const md = achaMidia(id)
+  if (md && TIPOS[md.kind]) return { tipo: md.kind, label: md.label || id, ok: true }
+  return { tipo: 'text', label: 'item apagado', ok: false }
+}
+
+function edFunil() {
+  const e = editor
+  let h = '<div class="ed" style="--kc:#ad46ff">' + topoEd(e.id ? 'Editar funil' : 'Novo funil', '#ad46ff', IC_ZAP)
+    + '<div class="form"><div class="cx"><label>Nome</label><input data-k="ed-nome" maxlength="80" placeholder="Ex.: Fechamento rápido" value="' + esc(e.label) + '"></div></div>'
+    + '<div class="ed-sec">' + IC_LISTA + 'Passos</div>'
+  e.passos.forEach((p, i) => {
+    if (i > 0) {
+      const fixo = p.espera !== null && p.espera !== undefined
+      h += '<div class="ed-espera"><button class="esp-bt' + (fixo ? ' fixo' : '') + '" data-esp="' + i + '" title="Quanto espera antes deste passo">'
+        + IC_RELOGIO + rotuloEspera(p.espera) + '</button>'
+      if (e.espAberta === i) {
+        h += '<div class="esp-ops">' + ESPERAS.map((o) => {
+          const on = (o.v === null && !fixo) || (o.v !== null && fixo && Number(p.espera) === o.v)
+          return '<button class="esp-op' + (on ? ' on' : '') + '" data-espv="' + i + ':' + (o.v === null ? '' : o.v) + '">' + o.t + '</button>'
+        }).join('') + '</div>'
+      }
+      h += '</div>'
+    }
+    const inf = infoPasso(p.id)
+    const k = TIPOS[inf.tipo] || TIPOS.text
+    h += '<div class="ed-passo' + (inf.ok ? '' : ' sumiu') + '" style="--kc:' + k.cor + '">'
+      + '<span class="n">' + (i + 1) + '</span><span class="ic">' + svg(k.ic) + '</span>'
+      + '<span class="l">' + esc(inf.label) + '</span>'
+      + '<button class="bt-mini" data-sobe="' + i + '" title="Subir"' + (i === 0 ? ' disabled' : '') + '>' + IC_CIMA + '</button>'
+      + '<button class="bt-mini" data-desce="' + i + '" title="Descer"' + (i === e.passos.length - 1 ? ' disabled' : '') + '>' + IC_BAIXO + '</button>'
+      + '<button class="bt-mini lixo" data-tira="' + i + '" title="Tirar">' + IC_X + '</button></div>'
+  })
+  h += '<button class="ed-add" data-ed="escolher">' + IC_MAIS + 'Adicionar passo</button>'
+  return h + quemVe(e) + rodapeEd(e) + '</div>'
+}
+
+// A LISTA PRA ESCOLHER O PASSO mostra TUDO, inclusive o escondido: esconder e justamente pra o que
+// "a gente so utiliza no funil".
+function edEscolhe() {
+  const e = editor
+  const q = String(e.buscaPasso || '').toLowerCase().trim()
+  let itens = catalogo()
+  if (q) itens = itens.filter((x) => (x.label + ' ' + (x.texto || '') + ' ' + (x.grp || '')).toLowerCase().includes(q))
+  let h = '<div class="ed">' + topoEd('Escolha o passo', '#ad46ff', IC_MAIS)
+    + '<div class="busca" style="margin-bottom:10px">' + svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>')
+    + '<input data-k="ed-busca" placeholder="Buscar item..." spellcheck="false" value="' + esc(e.buscaPasso || '') + '"></div>'
+  if (!itens.length) return h + '<div class="vazio">Nenhum item encontrado.</div></div>'
+  for (const t of ['text', 'audio', 'video', 'image', 'document']) {
+    const doTipo = itens.filter((x) => x.tipo === t)
+    if (!doTipo.length) continue
+    const k = TIPOS[t]
+    h += '<div class="sec" style="--kc:' + k.cor + '">' + svg(k.ic) + '<span>' + k.rotulo + '</span><span class="n">' + doTipo.length + '</span></div>'
+    for (const x of doTipo) {
+      h += '<div class="item" style="--kc:' + k.cor + '"><div class="item-linha">'
+        + '<span class="item-ic">' + svg(k.ic) + '</span>'
+        + '<button class="item-lbl" data-poe="' + esc(x.id) + '">' + esc(x.label) + '</button>'
+        + '<button class="enviar" data-poe="' + esc(x.id) + '" title="Colocar no funil">' + IC_MAIS + '</button>'
+        + '</div></div>'
+    }
+  }
+  return h + '</div>'
+}
+
+function poeArquivo(e, blob, mime, nome) {
+  try { if (e.arq && e.arq.url) URL.revokeObjectURL(e.arq.url) } catch (_) { /* ok */ }
+  e.arq = { blob, mime: String(mime || blob.type || ''), url: URL.createObjectURL(blob), nome: nome || '', tam: blob.size }
+  // Sem nome ainda, o nome do arquivo serve de comeco (sem a extensao).
+  if (!e.label && nome && nome !== 'gravação') e.label = String(nome).replace(/\.[A-Za-z0-9]{2,5}$/, '').slice(0, 80)
+}
+
+async function comecaGravar() {
+  const e = editor
+  if (!e || e.gravando) return
+  e.erro = ''
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    e.erro = 'Este computador não deixa gravar aqui. Escolha um arquivo.'
+    desenhaEditor(); return
+  }
+  let stream = null
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) } catch (_) { stream = null }
+  if (!stream) { e.erro = 'O microfone não abriu. Confira se ele está ligado e liberado.'; if (editor === e) desenhaEditor(); return }
+  if (editor !== e) { stream.getTracks().forEach((t) => t.stop()); return }
+  const tipo = MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : ''
+  let rec = null
+  try { rec = new MediaRecorder(stream, tipo ? { mimeType: tipo } : undefined) } catch (_) { rec = null }
+  if (!rec) { stream.getTracks().forEach((t) => t.stop()); e.erro = 'Não deu pra gravar. Escolha um arquivo.'; desenhaEditor(); return }
+  const pedacos = []
+  rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) pedacos.push(ev.data) }
+  rec.onstop = () => {
+    try { stream.getTracks().forEach((t) => t.stop()) } catch (_) { /* ok */ }
+    clearInterval(e._relogio)
+    e.gravando = false
+    e._rec = null; e._stream = null
+    if (editor !== e) return
+    const blob = new Blob(pedacos, { type: String(rec.mimeType || 'audio/webm').split(';')[0] })
+    if (blob.size) poeArquivo(e, blob, blob.type, 'gravação')
+    desenhaEditor()
+  }
+  e._rec = rec; e._stream = stream; e._ini = Date.now(); e.gravando = true
+  rec.start(250)
+  desenhaEditor()
+  // O RELOGIO MUDA SO O NUMERO, sem redesenhar a tela. Teto de 10 minutos: audio maior que isso no
+  // WhatsApp nao e mensagem, e palestra.
+  e._relogio = setInterval(() => {
+    if (editor !== e || !e.gravando) { clearInterval(e._relogio); return }
+    const el = document.querySelector('.grav-t')
+    if (el) el.textContent = mmss((Date.now() - e._ini) / 1000)
+    if (Date.now() - e._ini > 600000) paraGravar()
+  }, 250)
+}
+function paraGravar() {
+  const e = editor
+  try { if (e && e._rec && e._rec.state !== 'inactive') e._rec.stop() } catch (_) { /* ok */ }
+}
+
+function ligaEditor(corpo) {
+  const e = editor
+  if (!e) return
+  const um = (sel, fn) => { const el = corpo.querySelector(sel); if (el) fn(el) }
+  for (const b of corpo.querySelectorAll('[data-ed="volta"]')) b.onclick = () => {
+    if (e.tela === 'funil' && e.escolhendo) { e.escolhendo = false; desenhaEditor(); return }
+    // Item novo volta pra escolha do tipo (o vendedor pode ter tocado no errado); o resto, pra lista.
+    if (e.tela === 'item' && !e.id) { fechaEditor(); editor = { tela: 'novo' }; desenhaEditor(); return }
+    fechaEditor(); desenha()
+  }
+  for (const b of corpo.querySelectorAll('[data-novo]')) b.onclick = () => novoItem(b.dataset.novo)
+  um('[data-k="ed-nome"]', (i) => { i.oninput = () => { e.label = i.value } })
+  um('[data-k="ed-texto"]', (i) => { i.oninput = () => { e.text = i.value } })
+  um('[data-k="ed-legenda"]', (i) => { i.oninput = () => { e.caption = i.value } })
+  um('[data-k="ed-busca"]', (i) => { i.oninput = () => { e.buscaPasso = i.value; desenhaEditor() } })
+  for (const b of corpo.querySelectorAll('[data-quem]')) b.onclick = () => { e.escopo = b.dataset.quem === 'todos' ? 'todos' : 'eu'; desenhaEditor() }
+  for (const b of corpo.querySelectorAll('[data-ed="grava"]')) b.onclick = () => comecaGravar()
+  for (const b of corpo.querySelectorAll('[data-ed="para"]')) b.onclick = () => paraGravar()
+  const arq = corpo.querySelector('[data-ed="arquivo"]')
+  for (const b of corpo.querySelectorAll('[data-ed="escolhe"]')) b.onclick = () => { if (arq) arq.click() }
+  if (arq) arq.onchange = () => {
+    const f = arq.files && arq.files[0]
+    if (!f) return
+    e.erro = ''
+    if (f.size > MIDIA_MAX) e.erro = 'Arquivo de ' + tamMB(f.size) + ' MB. O limite é 60 MB.'
+    else if (e.tipo === 'image' && !/^image\/(jpeg|png)$/.test(f.type)) e.erro = 'Use foto JPG ou PNG.'
+    else if (e.tipo === 'video' && !/^video\//.test(f.type)) e.erro = 'Esse arquivo não é vídeo.'
+    else if (e.tipo === 'audio' && !/^audio\//.test(f.type)) e.erro = 'Esse arquivo não é áudio.'
+    else poeArquivo(e, f, f.type, f.name)
+    desenhaEditor()
+  }
+  for (const b of corpo.querySelectorAll('[data-ed="salva"]')) b.onclick = () => salvaEditor()
+  for (const b of corpo.querySelectorAll('[data-ed="apaga"]')) b.onclick = () => armaOuApaga(e.id, () => { if (editor === e) desenhaEditor() })
+  // funil
+  for (const b of corpo.querySelectorAll('[data-ed="escolher"]')) b.onclick = () => { e.escolhendo = true; e.buscaPasso = ''; e.espAberta = -1; desenhaEditor() }
+  for (const b of corpo.querySelectorAll('[data-poe]')) b.onclick = () => {
+    e.passos.push({ id: b.dataset.poe, espera: null })
+    e.escolhendo = false
+    e.erro = ''
+    desenhaEditor()
+  }
+  for (const b of corpo.querySelectorAll('[data-esp]')) b.onclick = () => { const i = Number(b.dataset.esp); e.espAberta = e.espAberta === i ? -1 : i; desenhaEditor() }
+  for (const b of corpo.querySelectorAll('[data-espv]')) b.onclick = () => {
+    const [i, v] = String(b.dataset.espv).split(':')
+    const p = e.passos[Number(i)]
+    if (p) p.espera = v === '' ? null : Number(v)
+    e.espAberta = -1
+    desenhaEditor()
+  }
+  const troca = (a, b2) => { const t = e.passos[a]; e.passos[a] = e.passos[b2]; e.passos[b2] = t; e.espAberta = -1; desenhaEditor() }
+  for (const b of corpo.querySelectorAll('[data-sobe]')) b.onclick = () => { const i = Number(b.dataset.sobe); if (i > 0) troca(i, i - 1) }
+  for (const b of corpo.querySelectorAll('[data-desce]')) b.onclick = () => { const i = Number(b.dataset.desce); if (i < e.passos.length - 1) troca(i, i + 1) }
+  for (const b of corpo.querySelectorAll('[data-tira]')) b.onclick = () => { e.passos.splice(Number(b.dataset.tira), 1); e.espAberta = -1; desenhaEditor() }
+}
+
+async function salvaEditor() {
+  const e = editor
+  if (!e || e.salvando || e.gravando) return
+  e.erro = ''
+  if (e.tela === 'funil') {
+    if (!String(e.label || '').trim()) e.erro = 'Dê um nome pro funil.'
+    else if (!e.passos.length) e.erro = 'Coloque pelo menos um passo.'
+  } else if (e.tipo === 'text') {
+    if (!String(e.text || '').trim()) e.erro = 'Escreva a mensagem.'
+  } else if (!e.arq && !e.key) {
+    e.erro = e.tipo === 'audio' ? 'Grave ou escolha um áudio.' : 'Escolha o arquivo.'
+  }
+  if (e.erro) { desenhaEditor(); return }
+  e.salvando = true
+  desenhaEditor()
+  try {
+    let key = e.key || ''
+    let mime = e.mime || ''
+    if (e.tela === 'item' && e.arq) {
+      let blob = e.arq.blob
+      let tipoArq = e.arq.mime || blob.type || ''
+      // AUDIO VAI EM OGG/OPUS, o formato da nota de voz e o de todo audio do roteiro (ver audio-ogg.js).
+      if (e.tipo === 'audio' && window.SWOgg) {
+        rodape('preparando o áudio...')
+        let ogg = null
+        try { ogg = await window.SWOgg.paraOgg(blob) } catch (_) { ogg = null }
+        if (ogg) { blob = ogg; tipoArq = 'audio/ogg' }
+      }
+      if (blob.size > MIDIA_MAX) throw new Error('Arquivo de ' + tamMB(blob.size) + ' MB. O limite é 60 MB.')
+      rodape('subindo o arquivo...')
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      const up = await window.swp.sobeMidia(tipoArq || 'application/octet-stream', bytes)
+      if (!up || !up.ok || !up.key) throw new Error((up && up.erro) || 'não deu pra subir o arquivo')
+      key = up.key
+      mime = up.mime || tipoArq
+    }
+    const dados = e.tela === 'funil'
+      ? { tipo: 'funil', escopo: e.escopo, label: String(e.label || '').trim(), passos: e.passos.map((p) => ({ id: p.id, espera: p.espera === undefined ? null : p.espera })) }
+      : { tipo: e.tipo, escopo: e.escopo, label: String(e.label || '').trim(), text: e.text || '', key, mime, caption: e.caption || '' }
+    if (e.id) dados.id = e.id
+    rodape('salvando...')
+    const r = await window.swp.salvaItem(dados)
+    if (!r || !r.ok) throw new Error((r && r.erro) || 'não deu pra salvar')
+    const eraFunil = e.tela === 'funil'
+    if (editor === e) fechaEditor()
+    await pegaRoteiro(true)
+    desenha()
+    rodape(eraFunil ? 'funil salvo' : 'salvo', null, true)
+  } catch (err) {
+    e.salvando = false
+    e.erro = humano(String((err && err.message) || err))
+    if (editor === e) desenhaEditor()
+    rodape('não salvou', null, true)
+  }
+}
+
+try {
+  $('novo').onclick = () => { if (podeOrganizar) abreNovo() }
+  $('organizar').onclick = () => { if (!podeOrganizar) return; fechaEditor(); organiza = !organiza; armadoApagar = ''; desenha() }
+} catch (_) { /* painel.html velho, sem os dois botoes */ }
+
 // ───────────────────────────────────────────────────────────── ciclo
 
 // A CONVERSA ABERTA CONTA COMO LIDA NA DASH (19/10/2026, item 5 da lista do Bruno).
@@ -2503,7 +3052,8 @@ async function pulso() {
 
   // OCUPADO E DO NUMERO DA TELA, nao do app: com um consumidor por numero, o painel pode estar
   // livre aqui e disparando em dois outros numeros ao mesmo tempo.
-  if (!ocupadoAqui()) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
+  // (O editor aberto tambem segura o rodape: e ali que ele diz "salvando..." e o erro de salvar.)
+  if (!ocupadoAqui() && !(editor && editor.salvando)) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
   // FUNIL NOUTRO NUMERO. Sem esta linha, trocar de numero no meio do funil deixava todos os botoes
   // cinzas sem nenhuma explicacao: o vendedor le como painel travado.
   const noutros = rodandoAgora().filter((j) => j.nk && estadoWa.nk && j.nk !== estadoWa.nk)
@@ -2517,7 +3067,7 @@ async function pulso() {
   // REDESENHAR COM A ABA PEDIDOS ABERTA APAGA O QUE O VENDEDOR ESTÁ DIGITANDO. O formulário guarda
   // o valor em `ped` a cada tecla, mas o redesenho recria os campos e leva junto o cursor e a
   // seleção. Como ali não existe botão de enviar pra habilitar, não há nada a redesenhar mesmo.
-  if (agora !== podiaEnviar) { podiaEnviar = agora; if (aba !== 'pedidos') desenha() }
+  if (agora !== podiaEnviar) { podiaEnviar = agora; if (aba !== 'pedidos' && !editor) desenha() }
   // TROCOU DE CONVERSA. Com o formulario ABERTO, o pedido continua sendo do lead congelado e nada
   // aqui o toca: o que acontece e que o rascunho e gravado sozinho, pra o trabalho nao se perder se
   // ele nao voltar. Sem formulario aberto, a previa do proximo pedido acompanha a conversa.
@@ -2539,6 +3089,10 @@ async function pulso() {
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }
+  // E DE MINUTO EM MINUTO MESMO CHEIO (05/11/2026): o item que um colega criou "pra todos", ou o que
+  // esta pessoa criou noutra janela destacada, aparece sem fechar o app. A copia vem do processo
+  // principal (que rele do servidor de 2 em 2 min), e so redesenha se mudou alguma coisa.
+  else if (!editor && Date.now() - ultimaTentativa > 60000) { ultimaTentativa = Date.now(); pegaRoteiro() }
   // A LISTA DE RASCUNHO TAMBEM SE ATUALIZA SOZINHA (18/10/2026, de 20 em 20 s). Ate aqui ela era
   // lida UMA vez, no boot do modulo, e cada janela destacada tem o proprio painel: rascunho gravado
   // numa janela nao aparecia na outra, e painel que subiu antes do login ficava com a lista vazia
@@ -2562,14 +3116,24 @@ $('fav-filtro').onclick = () => { soFavs = !soFavs; desenha() }
 // haver token ainda: o roteiro volta vazio e, sem tentar de novo, o vendedor ficaria com Respostas
 // e Funis em branco pra sempre, mesmo depois de entrar. Por isso insiste enquanto estiver vazio.
 let buscandoRoteiro = false
-async function pegaRoteiro() {
-  if (buscandoRoteiro) return
+let assinaturaRoteiro = ''
+async function pegaRoteiro(forcar) {
+  if (buscandoRoteiro && !forcar) return
   buscandoRoteiro = true
   try {
-    const r = await window.swp.roteiro()
+    const r = await window.swp.roteiro(!!forcar)
     if (r && r.ok) {
       roteiro = { messages: r.messages || [], sequences: r.sequences || [], media: r.media || [], mediaBase: r.mediaBase || '' }
-      desenha()
+      ocultos = new Set(Array.isArray(r.ocultos) ? r.ocultos.map(String) : [])
+      // SO O APP NOVO CRIA E ESCONDE: o preload precisa ter as quatro funcoes, e no "ver como" da
+      // direcao (organiza: false) a tela e so de leitura.
+      podeOrganizar = r.organiza !== false && typeof window.swp.salvaItem === 'function'
+        && typeof window.swp.ocultar === 'function' && typeof window.swp.sobeMidia === 'function'
+      if (!podeOrganizar) { organiza = false; editor = null }
+      // A RELEITURA DE MINUTO EM MINUTO so redesenha se algo mudou: redesenhar a toa fecha a previa
+      // de audio que o vendedor esta ouvindo.
+      const sig = JSON.stringify([r.messages, r.sequences, r.media, r.ocultos, podeOrganizar])
+      if (sig !== assinaturaRoteiro) { assinaturaRoteiro = sig; desenha() }
     }
   } catch (_) { /* tenta de novo no próximo pulso */ } finally { buscandoRoteiro = false }
 }

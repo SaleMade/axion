@@ -419,8 +419,16 @@
   // vez, e audio mais curto que 60 s espera so a propria duracao. Sem "gravando": e silencio de
   // proposito, o lead esta ouvindo. O Parar continua soltando na hora (esperaOuPara).
   var RESPIRO_IMAGEM = 60
+  // O TEMPO QUE O VENDEDOR ESCOLHEU NO FUNIL DELE (05/11/2026). O funil criado no painel tem, em cada
+  // passo, "automatico" (null: as regras acima) ou um tempo fixo (`espera`, em segundos, 0 a 120). O
+  // tempo escolhido vence as regras, menos no primeiro item: esse continua saindo no clique.
+  // Os funis oficiais nao mandam `espera`, entao seguem exatamente como estavam.
+  var ESPERA_TETO = 120
   function respiroDoItem(item, ant, ehPrimeiro) {
     if (ehPrimeiro) return Promise.resolve(0)
+    if (item.espera !== null && item.espera !== undefined && item.espera !== '' && isFinite(Number(item.espera))) {
+      return Promise.resolve(Math.max(0, Math.min(ESPERA_TETO, Math.round(Number(item.espera)))))
+    }
     var k = String(item.kind || '')
     if (k === 'image' && ant && ant.kind === 'audio') {
       var ouvir = Number(ant.dur) || 0

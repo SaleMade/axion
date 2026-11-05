@@ -13848,6 +13848,102 @@ const _n8sDoDono = (data, at) => [...new Set((Array.isArray(data && data.chips) 
   .filter((c) => c && c.num && String(c.at || '') === String(at))
   .map((c) => String(c.num).replace(/\D/g, '').slice(-8)).filter((x) => x.length === 8))];
 
+// ── O QUE O VENDEDOR CRIA NO PAINEL DO SELLWAVE WEB (05/11/2026, pedido do Bruno) ────────────────
+//
+// "Eu gostaria que os meus vendedores pudessem personalizar a parte de disparos da maneira que eles
+// acharem melhor": mensagem, audio, video e foto proprios, funil proprio com o tempo de espera de
+// cada passo, esconder o que so se usa dentro de funil, e escolher se o que criou e "so pra mim" ou
+// "pra todos".
+//
+// FORA DO ESTADO, DE PROPOSITO. O roteiro oficial mora no blob (salechatPub) e o blob ja passa de
+// 1,3 MB com gravacao inteira disputando versao com o cron. Item de vendedor e escrita frequente e
+// pequena: vai em tabela propria, uma linha por item, e o GET /api/swweb/roteiro junta na leitura.
+// O arquivo (audio, video, foto) vai pro R2 pela mesma rota do Sale Chat (/api/salechat/media).
+//
+// "PRA TODOS" E DA MESMA OPERACAO E DO MESMO CARGO: vendedor da casa ve o da casa, a equipe do
+// afiliado ve a do afiliado (o "mundo", ver _mundoDeQuem), e cobrador ve o de cobrador. Afiliado
+// sem vinculo nao tem equipe: o mundo dele e so dele.
+let _swItensProntas = false;
+async function _swItensTabelas(env) {
+  if (_swItensProntas) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS swweb_itens (id TEXT PRIMARY KEY, dono TEXT NOT NULL, dono_nome TEXT, mundo TEXT NOT NULL DEFAULT '', perfil TEXT NOT NULL DEFAULT 'vend', escopo TEXT NOT NULL DEFAULT 'eu', tipo TEXT NOT NULL, dados TEXT NOT NULL DEFAULT '{}', criado INTEGER, mexido INTEGER, apagado INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS swweb_itens_mp ON swweb_itens(mundo, perfil, apagado)').run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS swweb_prefs (uid TEXT PRIMARY KEY, ocultos TEXT NOT NULL DEFAULT '[]', mexido INTEGER)").run();
+  _swItensProntas = true;
+}
+const _swItensMundo = (u) => {
+  const m = _mundoDeQuem(u);
+  return m === '__sem__' ? '__sem__:' + String(u.id) : m;
+};
+const _swItensPerfil = (u) => (_ehCobrador(u) ? 'cob' : 'vend');
+// Quem mexe num item: o dono, e a direcao da operacao daquele item (o Bruno na casa, o afiliado no
+// mundo dele). Os outros so podem ESCONDER pra si.
+const _swItensPode = (u, row) => {
+  if (!u || !row) return false;
+  if (String(row.dono) === String(u.id)) return true;
+  if (String(row.mundo || '') !== _swItensMundo(u)) return false;
+  return (isDirector(u) && !row.mundo) || (ehDonoDoMundo(u) && !!row.mundo);
+};
+const SWITEM_TIPOS = ['text', 'audio', 'video', 'image', 'document', 'funil'];
+const SWITEM_ID_OK = /^[A-Za-z0-9_.:-]{1,80}$/;
+const SWITEM_KEY_OK = /^m\/[A-Za-z0-9._-]{1,80}$/;
+// Limpa o que veio da tela. Devolve { dados } ou { erro } com a frase que o vendedor le.
+function _swItemLimpo(tipo, b) {
+  const label = String((b && b.label) || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (tipo === 'text') {
+    const text = String((b && b.text) || '').replace(/\r\n/g, '\n').slice(0, 4096);
+    if (!text.trim()) return { erro: 'Escreva a mensagem.' };
+    return { dados: { label: label || text.replace(/\s+/g, ' ').trim().slice(0, 40), text } };
+  }
+  if (tipo === 'funil') {
+    const passos = (Array.isArray(b && b.passos) ? b.passos : []).slice(0, 30)
+      .map((p) => {
+        const id = String((p && p.id) || '');
+        const e = p && p.espera;
+        const espera = (e === null || e === undefined || e === '') ? null : Math.max(0, Math.min(120, Math.round(Number(e) || 0)));
+        return { id, espera };
+      })
+      .filter((p) => SWITEM_ID_OK.test(p.id));
+    if (!passos.length) return { erro: 'Coloque pelo menos um passo no funil.' };
+    if (!label) return { erro: 'Dê um nome pro funil.' };
+    return { dados: { label, passos } };
+  }
+  const key = String((b && b.key) || '');
+  if (!SWITEM_KEY_OK.test(key)) return { erro: 'O arquivo não subiu. Escolha de novo.' };
+  const dados = {
+    label: label || ({ audio: 'Áudio', video: 'Vídeo', image: 'Foto', document: 'Documento' })[tipo],
+    key,
+    mime: String((b && b.mime) || '').slice(0, 80),
+    caption: tipo === 'audio' ? '' : String((b && b.caption) || '').slice(0, 1024),
+  };
+  return { dados };
+}
+// As linhas que entram no roteiro DESTA pessoa: as dela e as "pra todos" da operacao e do cargo dela.
+async function _swItensDoRoteiro(env, u) {
+  const vazio = { messages: [], media: [], sequences: [], ocultos: [] };
+  try {
+    await _swItensTabelas(env);
+    const uid = String(u.id);
+    const [linhas, pref] = await Promise.all([
+      env.DB.prepare("SELECT id, dono, dono_nome, mundo, escopo, tipo, dados FROM swweb_itens WHERE mundo = ? AND perfil = ? AND apagado = 0 AND (dono = ? OR escopo = 'todos') ORDER BY criado LIMIT 1500")
+        .bind(_swItensMundo(u), _swItensPerfil(u), uid).all(),
+      env.DB.prepare('SELECT ocultos FROM swweb_prefs WHERE uid = ?').bind(uid).first(),
+    ]);
+    const out = { messages: [], media: [], sequences: [], ocultos: [] };
+    try { const o = JSON.parse((pref && pref.ocultos) || '[]'); if (Array.isArray(o)) out.ocultos = o.map(String).slice(0, 1000); } catch (_) { /* sem preferencia */ }
+    for (const r of ((linhas && linhas.results) || [])) {
+      let d = {};
+      try { d = JSON.parse(r.dados || '{}') || {}; } catch (_) { continue; }
+      const meu = String(r.dono) === uid;
+      const sw = { meu, pode: _swItensPode(u, r), escopo: r.escopo === 'todos' ? 'todos' : 'eu', de: meu ? '' : String(r.dono_nome || '') };
+      if (r.tipo === 'text') out.messages.push({ id: r.id, label: d.label || '', text: d.text || '', grp: meu ? 'Meus itens' : 'Da equipe', sw });
+      else if (r.tipo === 'funil') out.sequences.push({ id: r.id, label: d.label || '', grp: meu ? 'Meus funis' : 'Da equipe', items: Array.isArray(d.passos) ? d.passos : [], sw });
+      else out.media.push({ id: r.id, kind: r.tipo, label: d.label || '', key: d.key || '', mime: d.mime || '', caption: d.caption || '', grp: meu ? 'Meus itens' : 'Da equipe', sw });
+    }
+    return out;
+  } catch (_) { return vazio; }   // sem a tabela o painel segue com o roteiro oficial
+}
+
 async function handleSwWeb(req, env, path) {
   // O INSTALADOR VEM ANTES DA AUTENTICACAO, de proposito. O link e um <a href> comum no navegador,
   // que nao manda cabecalho de Authorization; exigir token aqui daria 401 no clique. O arquivo e um
@@ -14059,11 +14155,14 @@ async function handleSwWeb(req, env, path) {
     } catch (_) { /* sem install a ingestao cai no dono do numero, que e o plano B */ }
 
     const origem = new URL(req.url).origin;
+    // O QUE A PESSOA CRIOU NO PAINEL vem PRIMEIRO, pra aparecer em cima da lista (ver _swItensDoRoteiro).
+    const proprios = await _swItensDoRoteiro(env, u);
     return json({
       ok: true,
-      messages: Array.isArray(sc.messages) ? sc.messages : [],
-      sequences: Array.isArray(sc.sequences) ? sc.sequences : [],
-      media: Array.isArray(sc.media) ? sc.media : [],
+      messages: proprios.messages.concat(Array.isArray(sc.messages) ? sc.messages : []),
+      sequences: proprios.sequences.concat(Array.isArray(sc.sequences) ? sc.sequences : []),
+      media: proprios.media.concat(Array.isArray(sc.media) ? sc.media : []),
+      ocultos: proprios.ocultos,
       mediaBase: origem + '/api/salechat/media/',
       // O TOKEN DE INGESTAO NAO SAI DAQUI (16/10/2026, revisao adversarial).
       //
@@ -14078,6 +14177,70 @@ async function handleSwWeb(req, env, path) {
       updated_at: sc.updated_at || 0,
       perfil,
     });
+  }
+
+  // POST /api/swweb/item - cria ou muda um item do painel (ver _swItensDoRoteiro).
+  //   { id?, tipo, escopo: 'eu'|'todos', label, text | key+mime+caption | passos:[{id, espera}] }
+  // O mundo e o cargo do item sao os de quem CRIOU e nunca mudam depois: editar nao muda de operacao.
+  if (req.method === 'POST' && path === '/api/swweb/item') {
+    if (u._comoDe) return err('No "ver como" a tela é só de leitura.', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    await _swItensTabelas(env);
+    const agora = Math.floor(Date.now() / 1000);
+    const escopo = b && b.escopo === 'todos' ? 'todos' : 'eu';
+    const id = String((b && b.id) || '');
+    if (id) {
+      const row = await env.DB.prepare('SELECT * FROM swweb_itens WHERE id = ? AND apagado = 0').bind(id).first();
+      if (!row) return err('Esse item não existe mais.', 404);
+      if (!_swItensPode(u, row)) return err('Só quem criou pode mudar esse item.', 403);
+      const lim = _swItemLimpo(row.tipo, b);
+      if (lim.erro) return err(lim.erro);
+      await env.DB.prepare('UPDATE swweb_itens SET dados = ?, escopo = ?, mexido = ? WHERE id = ?')
+        .bind(JSON.stringify(lim.dados), escopo, agora, id).run();
+      return json({ ok: true, id });
+    }
+    const tipo = String((b && b.tipo) || '');
+    if (!SWITEM_TIPOS.includes(tipo)) return err('Tipo de item desconhecido.');
+    const lim = _swItemLimpo(tipo, b);
+    if (lim.erro) return err(lim.erro);
+    const n = await env.DB.prepare('SELECT COUNT(*) n FROM swweb_itens WHERE dono = ? AND apagado = 0').bind(String(u.id)).first();
+    if (Number((n && n.n) || 0) >= 300) return err('Você já tem 300 itens. Apague alguns antes de criar outro.');
+    const novo = 'sw' + agora.toString(36) + Math.random().toString(36).slice(2, 8);
+    await env.DB.prepare('INSERT INTO swweb_itens (id, dono, dono_nome, mundo, perfil, escopo, tipo, dados, criado, mexido, apagado) VALUES (?,?,?,?,?,?,?,?,?,?,0)')
+      .bind(novo, String(u.id), String(u.name || u.id).slice(0, 60), _swItensMundo(u), _swItensPerfil(u), escopo, tipo, JSON.stringify(lim.dados), agora, agora).run();
+    return json({ ok: true, id: novo });
+  }
+
+  // POST /api/swweb/item/apagar - { id }. Some da lista de todo mundo (funil que usava fica sem o passo).
+  if (req.method === 'POST' && path === '/api/swweb/item/apagar') {
+    if (u._comoDe) return err('No "ver como" a tela é só de leitura.', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    await _swItensTabelas(env);
+    const row = await env.DB.prepare('SELECT * FROM swweb_itens WHERE id = ? AND apagado = 0').bind(String((b && b.id) || '')).first();
+    if (!row) return json({ ok: true, ja: true });
+    if (!_swItensPode(u, row)) return err('Só quem criou pode apagar esse item.', 403);
+    await env.DB.prepare('UPDATE swweb_itens SET apagado = 1, mexido = ? WHERE id = ?').bind(Math.floor(Date.now() / 1000), row.id).run();
+    return json({ ok: true });
+  }
+
+  // POST /api/swweb/ocultar - { id, oculto }. ESCONDER E SO PRA SI: vale pra qualquer item ou funil,
+  // inclusive o oficial, e nao mexe na lista de mais ninguem.
+  if (req.method === 'POST' && path === '/api/swweb/ocultar') {
+    if (u._comoDe) return err('No "ver como" a tela é só de leitura.', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const alvo = String((b && b.id) || '');
+    if (!SWITEM_ID_OK.test(alvo)) return err('Item inválido.');
+    await _swItensTabelas(env);
+    const uid = String(u.id);
+    const pref = await env.DB.prepare('SELECT ocultos FROM swweb_prefs WHERE uid = ?').bind(uid).first();
+    let lista = [];
+    try { lista = JSON.parse((pref && pref.ocultos) || '[]'); } catch (_) { lista = []; }
+    lista = (Array.isArray(lista) ? lista.map(String) : []).filter((x) => x !== alvo);
+    if (b && b.oculto) lista.push(alvo);
+    lista = lista.slice(-1000);
+    await env.DB.prepare('INSERT INTO swweb_prefs (uid, ocultos, mexido) VALUES (?,?,?) ON CONFLICT(uid) DO UPDATE SET ocultos = excluded.ocultos, mexido = excluded.mexido')
+      .bind(uid, JSON.stringify(lista), Math.floor(Date.now() / 1000)).run();
+    return json({ ok: true, ocultos: lista });
   }
 
   // POST /api/swweb/captura - as mensagens que o app capturou.

@@ -62,6 +62,7 @@ const CONST = (nome) => {
 const BASE = CONST('RESPIRO_BASE')
 const TETO = CONST('RESPIRO_TETO')
 const IMG = CONST('RESPIRO_IMAGEM')
+const ESPERA_TETO = CONST('ESPERA_TETO')
 conta('o agente declara a base e o teto do respiro', BASE === 10 && TETO === 20, 'base=' + BASE + ' teto=' + TETO)
 
 function montar({ duracao, falha, mudo }) {
@@ -86,7 +87,7 @@ function montar({ duracao, falha, mudo }) {
   const ctx = vm.createContext({ Audio, Promise, setTimeout, clearTimeout, Number, isFinite, String, Math })
   // As constantes vao com os valores RECORTADOS do agente, nao com numeros digitados aqui: se
   // alguem mudar 10 ou 20 la, o teste passa a medir o valor novo em vez de mentir.
-  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + '; var RESPIRO_IMAGEM = ' + IMG + ';\n'
+  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + '; var RESPIRO_IMAGEM = ' + IMG + '; var ESPERA_TETO = ' + ESPERA_TETO + ';\n'
     + pecas.duracaoDoAudio + '\n' + pecas.respiroDoItem + '\nthis.R = respiroDoItem\nthis.D = duracaoDoAudio', ctx)
   return ctx
 }
@@ -148,6 +149,20 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   conta('audio que nao disse a duracao: espera o minuto cheio', (await R(item('image'), audio(0), false)) === 60)
   conta('video depois do mesmo audio continua sem espera (provas sociais)', (await R(item('video'), audio(146), false)) === 0)
 
+  // ── O TEMPO QUE O VENDEDOR ESCOLHEU NO FUNIL DELE (05/11/2026) ──────────────────────────────
+  console.log('\nO TEMPO ESCOLHIDO NO FUNIL DO VENDEDOR')
+  const comEspera = (kind, s) => ({ ...item(kind), espera: s })
+  conta('o agente declara o teto da espera escolhida em 120 s', ESPERA_TETO === 120, 'ESPERA_TETO=' + ESPERA_TETO)
+  conta('texto com 30 s escolhidos espera 30, nao os 10 da regra', (await R(comEspera('texto', 30), { kind: '', dur: 0 }, false)) === 30)
+  conta('audio com 5 s escolhidos espera 5, mesmo depois de audio longo', (await R(comEspera('audio', 5), audio(186), false)) === 5)
+  conta('video com 20 s escolhidos espera 20 (a regra seria 0)', (await R(comEspera('video', 20), audio(30), false)) === 20)
+  conta('imagem com 0 escolhido sai na hora, mesmo depois de audio', (await R(comEspera('image', 0), audio(146), false)) === 0)
+  conta('espera absurda para no teto de 120', (await R(comEspera('texto', 9999), null, false)) === 120)
+  conta('espera negativa vira zero', (await R(comEspera('texto', -5), null, false)) === 0)
+  conta('o primeiro item sai no clique mesmo com tempo escolhido', (await R(comEspera('texto', 30), null, true)) === 0)
+  conta('automatico (null) segue a regra: imagem depois de audio = 60', (await R(comEspera('image', null), audio(146), false)) === 60)
+  conta('espera vazia ("") tambem e automatico', (await R(comEspera('texto', ''), { kind: '', dur: 0 }, false)) === 10)
+
   // O main corta o envio que passa do teto dele ("o numero nao respondeu a tempo"). A imagem nao
   // tem espera no teto do main (so a pausa do passo), entao os 60 s tem que caber no tempo de envio
   // dela, com folga pro upload pela proxy. Recortado do main.js, nao digitado aqui.
@@ -158,6 +173,14 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   const tetoImg = tetoDoItem ? tetoDoItem({ tipo: 'midia', kind: 'image', pausa: 0 }) : 0
   conta('o teto do app pra imagem cabe os 60 s com pelo menos 1 min pro upload',
     tetoImg >= (IMG + 60) * 1000, 'teto=' + tetoImg + 'ms')
+  for (const k of ['texto', 'audio', 'image', 'video']) {
+    const it = { tipo: k === 'texto' ? 'texto' : 'midia', kind: k === 'texto' ? '' : k, pausa: 0, espera: ESPERA_TETO }
+    const sem = { ...it, espera: null }
+    const t1 = tetoDoItem ? tetoDoItem(it) : 0
+    const t0 = tetoDoItem ? tetoDoItem(sem) : 0
+    conta('o teto do app pra ' + k + ' cresce com a espera maxima escolhida (' + ESPERA_TETO + ' s)',
+      t1 - t0 >= (ESPERA_TETO - 30) * 1000 && t1 >= (ESPERA_TETO + 50) * 1000, 'sem=' + t0 + ' com=' + t1)
+  }
 
   // ── A MEDIDA DA DURACAO, que e o que alimenta a conta acima ─────────────────────────────────
   console.log('\nA DURACAO DO AUDIO (e o que o item SEGUINTE usa)')

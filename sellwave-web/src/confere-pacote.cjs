@@ -36,6 +36,8 @@ const ALVOS = [
   ['src', 'ui', 'index.html'], ['src', 'ui', 'painel.html'],
   // a versao de cobrador (31/10/2026): sem eles o modo cobranca abre sem agenda, quadro nem ficha
   ['src', 'ui', 'cob-comum.js'], ['src', 'ui', 'cobranca.js'],
+  // o item novo do painel (05/11/2026): sem ele o audio gravado sai em webm, sem duracao
+  ['src', 'ui', 'audio-ogg.js'],
 ]
 for (const alvo of ALVOS) {
   const no = acha(json, alvo)
