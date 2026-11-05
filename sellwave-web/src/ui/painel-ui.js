@@ -48,6 +48,8 @@ let organiza = false         // modo organizar: olho, editar, apagar
 let podeOrganizar = false    // o app novo (preload com salvaItem) e fora do "ver como"
 let editor = null            // a tela de criar/editar aberta, ou null
 let armadoApagar = ''        // o primeiro clique na lixeira: 'id', some em 5 s
+let gruposOrdem = { itens: [], funis: [] }   // a ordem dos grupos que ESTA pessoa escolheu
+let renomeando = null        // grupo com o nome aberto pra editar: { qual, de, valor }
 let ultimoFone = ''
 // QUEM ESTA DISPARANDO AGORA sai da FILA, nao de um global. Eram tres variaveis de modulo
 // (`ocupado`, `alvoNkAtual`, `alvoNome`/`alvoFone`) e elas so faziam sentido enquanto o app inteiro
@@ -109,10 +111,32 @@ function visiveis() {
   return itens
 }
 
-function porGrupo(lista) {
+function porGrupo(lista, qual) {
   const ordem = [], g = {}
   for (const x of lista) { const k = x.grp || 'Geral'; if (!g[k]) { g[k] = []; ordem.push(k) } g[k].push(x) }
+  if (qual) {
+    const geral = ordemDosGrupos(qual)
+    const pos = (k) => { const i = geral.indexOf(k); return i < 0 ? 9999 : i }
+    ordem.sort((a, b) => pos(a) - pos(b))
+  }
   return { ordem, g }
+}
+
+// A ORDEM DOS GRUPOS (05/11/2026). Sem ela, um item do vendedor no grupo "Follow" puxaria o Follow
+// pro topo (o que ele cria vem antes do oficial na lista). A regra:
+//   1. grupo SO do vendedor e ainda fora da ordem salva: em cima (acabou de criar, e o que ele usa)
+//   2. a ordem que ele salvou ao mexer nas setas
+//   3. o resto dos grupos oficiais, na ordem da dash
+function ordemDosGrupos(qual) {
+  const lista = qual === 'funis' ? (roteiro.sequences || []) : catalogo()
+  // A ordem dos oficiais sai SO dos itens oficiais: o item do vendedor no "Follow" vem antes na
+  // lista e, contado junto, puxaria o Follow pra frente dos outros.
+  const ofi = [], meus = []
+  for (const x of lista) { const k = x.grp || 'Geral'; if (!x.sw && !ofi.includes(k)) ofi.push(k) }
+  for (const x of lista) { const k = x.grp || 'Geral'; if (x.sw && !ofi.includes(k) && !meus.includes(k)) meus.push(k) }
+  const todos = meus.concat(ofi)
+  const salva = (gruposOrdem[qual] || []).filter((k) => todos.includes(k))
+  return meus.filter((k) => !salva.includes(k)).concat(salva, ofi.filter((k) => !salva.includes(k)))
 }
 
 // ENVIAR NAO DEPENDE MAIS DE ESTAR LIVRE. Com fila, clicar durante um disparo e o caminho normal:
@@ -318,11 +342,11 @@ function desenha() {
     html += '<button class="sec' + (fechada ? ' fechada' : '') + '" data-sec="' + t + '" style="--kc:' + k.cor + '">'
       + svg(k.ic) + '<span>' + k.rotulo + '</span><span class="n">' + doTipo.length + '</span>' + IC_SETA + '</button>'
     if (fechada) continue
-    const { ordem, g } = porGrupo(doTipo)
+    const { ordem, g } = porGrupo(doTipo, 'itens')
     const umSo = ordem.length === 1
     ordem.forEach((nome, i) => {
-      if (!umSo) html += '<div class="grp' + (i === 0 ? ' primeiro' : '') + '" style="--ac:' + k.cor + '">'
-        + '<span>' + esc(nome) + '</span><span class="n">' + g[nome].length + '</span></div>'
+      // No organizar o cabecalho aparece ate com um grupo so: e ali que fica o renomear.
+      if (!umSo || organiza) html += cabecaGrupo(nome, g[nome].length, k.cor, i, ordem, 'itens')
       for (const x of g[nome]) html += cartaoItem(x, k)
     })
   }
@@ -485,12 +509,11 @@ function desenhaFunis() {
   if (!organiza) seqs = seqs.filter((s) => !ocultos.has(s.id))
   if (filtro) seqs = seqs.filter((s) => (String(s.label || '') + ' ' + String(s.grp || '')).toLowerCase().includes(filtro))
   if (!seqs.length) return '<div class="vazio">' + (podeOrganizar ? 'Nenhum funil aqui. Toque no + pra criar.' : 'Nenhum funil ainda. Crie na dash, em SellWave Web > Mensagens e funis.') + '</div>'
-  const { ordem, g } = porGrupo(seqs)
+  const { ordem, g } = porGrupo(seqs, 'funis')
   const umSo = ordem.length === 1
   let html = ''
   ordem.forEach((nome, i) => {
-    if (!umSo) html += '<div class="grp' + (i === 0 ? ' primeiro' : '') + '" style="--ac:#8e17f0">'
-      + '<span>' + esc(nome) + '</span><span class="n">' + g[nome].length + '</span></div>'
+    if (!umSo || organiza) html += cabecaGrupo(nome, g[nome].length, '#8e17f0', i, ordem, 'funis')
     for (const s of g[nome]) {
       const ab = aberto === 'funil:' + s.id
       let prev = ''
@@ -2350,7 +2373,7 @@ const botaoCadastro = () => ''
 function vaiPara(nome) {
   if (aba === 'pedidos' && nome !== 'pedidos') rascunhoSozinho()
   // Trocar de aba fecha o editor e o modo organizar: os dois sao da aba em que nasceram.
-  if (nome !== aba) { fechaEditor(); organiza = false }
+  if (nome !== aba) { fechaEditor(); organiza = false; renomeando = null }
   aba = nome
   for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o.dataset.aba === nome)
   aberto = ''
@@ -2528,6 +2551,7 @@ const IC_SOBE = svg('<path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20
 const IC_PARA = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
 const IC_DENOVO = svg('<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>')
 const IC_LISTA = svg('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>')
+const IC_PASTA = svg('<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>')
 
 // O TETO E O DO ENVIO, NAO O DA SUBIDA. A rota do servidor aceita 60 MB, mas o app recusa mandar
 // acima de 32 MB (TETO_MIDIA no main.js): um video de 45 MB subia, salvava e morria no disparo.
@@ -2588,8 +2612,89 @@ function linkOcultos(qual) {
   return '<button class="ocultos-link" data-org="abre">' + IC_OLHO_OFF + n + (n > 1 ? ' escondidos' : ' escondido') + '</button>'
 }
 
+// ── os grupos ──────────────────────────────────────────────────────────────────────────────────
+// O CABECALHO DO GRUPO. No organizar ganha as setas (a ordem e so pra mim, vale ate pro oficial) e,
+// no grupo que e todo meu, o lapis de renomear.
+const podeGrupos = () => podeOrganizar && typeof window.swp.grupoOrdem === 'function'
+function grupoEhMeu(nome, qual) {
+  const lista = (qual === 'funis' ? (roteiro.sequences || []) : catalogo()).filter((x) => (x.grp || 'Geral') === nome)
+  return !!lista.length && lista.every((x) => x.sw && x.sw.pode)
+}
+function cabecaGrupo(nome, n, cor, i, ordem, qual) {
+  const cab = '<div class="grp' + (i === 0 ? ' primeiro' : '') + (organiza ? ' org' : '') + '" style="--ac:' + cor + '">'
+  if (renomeando && renomeando.qual === qual && renomeando.de === nome) {
+    return cab + '<input class="grp-nome" data-k="grp-nome" maxlength="40" spellcheck="false" value="' + esc(renomeando.valor) + '">'
+      + '<button class="bt-mini ok" data-grpok="1" title="Salvar">' + IC_CHECK + '</button>'
+      + '<button class="bt-mini" data-grpx="1" title="Cancelar">' + IC_X + '</button></div>'
+  }
+  let h = cab + '<span>' + esc(nome) + '</span><span class="n">' + n + '</span>'
+  if (organiza && podeGrupos()) {
+    const at = (k, v) => ' data-' + k + '="' + esc(v) + '"'
+    h += '<span class="grp-ops">'
+    if (grupoEhMeu(nome, qual) && typeof window.swp.grupoRenomear === 'function') {
+      h += '<button class="bt-mini" data-grpren="' + esc(nome) + '" data-grpq="' + qual + '" title="Renomear">' + IC_LAPIS + '</button>'
+    }
+    h += '<button class="bt-mini" data-grpmove="sobe"' + at('grp', nome) + at('viz', ordem[i - 1] || '') + ' data-grpq="' + qual + '" title="Subir"' + (i === 0 ? ' disabled' : '') + '>' + IC_CIMA + '</button>'
+      + '<button class="bt-mini" data-grpmove="desce"' + at('grp', nome) + at('viz', ordem[i + 1] || '') + ' data-grpq="' + qual + '" title="Descer"' + (i === ordem.length - 1 ? ' disabled' : '') + '>' + IC_BAIXO + '</button>'
+      + '</span>'
+  }
+  return h + '</div>'
+}
+// Subir troca com o grupo de cima DESTA secao; a ordem salva e a de todos os grupos da aba.
+async function moveGrupo(qual, nome, viz, sobe) {
+  if (!nome || !viz) return
+  const sem = ordemDosGrupos(qual).filter((k) => k !== nome)
+  const j = sem.indexOf(viz)
+  if (j < 0) return
+  sem.splice(sobe ? j : j + 1, 0, nome)
+  const antes = gruposOrdem[qual] || []
+  gruposOrdem = Object.assign({}, gruposOrdem, { [qual]: sem })
+  desenha()
+  let r = null
+  try { r = await window.swp.grupoOrdem(qual, sem) } catch (_) { r = null }
+  if (!r || !r.ok) {
+    gruposOrdem = Object.assign({}, gruposOrdem, { [qual]: antes })
+    desenha()
+    rodape('não mudou a ordem: ' + humano((r && r.erro) || 'sem resposta'), null, true)
+  }
+}
+async function salvaNomeGrupo() {
+  const rn = renomeando
+  if (!rn || rn.salvando) return
+  const para = String(rn.valor || '').replace(/\s+/g, ' ').trim()
+  if (!para || para === rn.de) { renomeando = null; desenha(); return }
+  rn.salvando = true
+  let r = null
+  try { r = await window.swp.grupoRenomear(rn.qual, rn.de, para) } catch (_) { r = null }
+  renomeando = null
+  if (!r || !r.ok) { desenha(); rodape('não renomeou: ' + humano((r && r.erro) || 'sem resposta'), null, true); return }
+  await pegaRoteiro(true)
+  desenha()
+  rodape('grupo renomeado', null, true)
+}
+function ligaGrupos(corpo) {
+  for (const b of corpo.querySelectorAll('[data-grpmove]')) b.onclick = () => moveGrupo(b.dataset.grpq, b.dataset.grp, b.dataset.viz, b.dataset.grpmove === 'sobe')
+  for (const b of corpo.querySelectorAll('[data-grpren]')) b.onclick = () => {
+    renomeando = { qual: b.dataset.grpq, de: b.dataset.grpren, valor: b.dataset.grpren }
+    desenha()
+    const i = corpo.querySelector('[data-k="grp-nome"]')
+    if (i) { i.focus(); i.select() }
+  }
+  const inp = corpo.querySelector('[data-k="grp-nome"]')
+  if (inp) {
+    inp.oninput = () => { if (renomeando) renomeando.valor = inp.value }
+    inp.onkeydown = (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); salvaNomeGrupo() }
+      else if (ev.key === 'Escape') { renomeando = null; desenha() }
+    }
+  }
+  for (const b of corpo.querySelectorAll('[data-grpok]')) b.onclick = () => salvaNomeGrupo()
+  for (const b of corpo.querySelectorAll('[data-grpx]')) b.onclick = () => { renomeando = null; desenha() }
+}
+
 function ligaOrganiza(corpo) {
-  for (const b of corpo.querySelectorAll('[data-org]')) b.onclick = () => { organiza = b.dataset.org === 'abre'; armadoApagar = ''; desenha() }
+  ligaGrupos(corpo)
+  for (const b of corpo.querySelectorAll('[data-org]')) b.onclick = () => { organiza = b.dataset.org === 'abre'; armadoApagar = ''; renomeando = null; desenha() }
   for (const b of corpo.querySelectorAll('[data-olho]')) b.onclick = () => alternaOculto(b.dataset.olho)
   for (const b of corpo.querySelectorAll('[data-edita]')) b.onclick = () => {
     const [tipo, id] = String(b.dataset.edita).split(/:(.+)/)
@@ -2660,12 +2765,12 @@ function abreNovo() {
 function abreItem(x) {
   fechaEditor()
   editor = x
-    ? { tela: 'item', tipo: x.tipo, id: x.id, label: x.label || '', text: x.texto || '', caption: x.caption || '', key: x.key || '', mime: x.mime || '', escopo: (x.sw && x.sw.escopo) || 'eu', pode: !!(x.sw && x.sw.pode), arq: null, erro: '' }
+    ? { tela: 'item', tipo: x.tipo, id: x.id, label: x.label || '', text: x.texto || '', caption: x.caption || '', key: x.key || '', mime: x.mime || '', escopo: (x.sw && x.sw.escopo) || 'eu', pode: !!(x.sw && x.sw.pode), arq: null, erro: '', grp: (x.sw && x.sw.grp) || '' }
     : null
   desenhaEditor()
 }
 function novoItem(tipo) {
-  editor = { tela: 'item', tipo, id: '', label: '', text: '', caption: '', key: '', mime: '', escopo: 'eu', pode: false, arq: null, erro: '' }
+  editor = { tela: 'item', tipo, id: '', label: '', text: '', caption: '', key: '', mime: '', escopo: 'eu', pode: false, arq: null, erro: '', grp: '' }
   desenhaEditor()
 }
 function abreFunil(s, copia) {
@@ -2683,6 +2788,7 @@ function abreFunil(s, copia) {
     passos,
     escopo: s && !copia ? ((s.sw && s.sw.escopo) || 'eu') : 'eu',
     pode: !!(s && !copia && s.sw && s.sw.pode),
+    grp: s && !copia ? ((s.sw && s.sw.grp) || '') : '',
     espAberta: -1, escolhendo: false, buscaPasso: '', erro: '',
   }
   desenhaEditor()
@@ -2715,6 +2821,38 @@ function edNovo() {
     h += '<button class="ed-tipo' + (t === 'document' ? ' largo' : '') + '" data-novo="' + t + '" style="--kc:' + k.cor + '"><span class="ic">' + svg(k.ic) + '</span>' + nome + '</button>'
   }
   return h + '</div></div>'
+}
+
+// EM QUAL GRUPO O ITEM ENTRA (05/11/2026): os grupos que ja existem na aba (os oficiais e os dele),
+// mais o "Novo". Vazio (`e.grp = ''`) e o grupo de sempre, "Meus itens"/"Meus funis".
+const grupoPadrao = (qual) => (qual === 'funis' ? 'Meus funis' : 'Meus itens')
+function escolheGrupo(e, qual) {
+  const padrao = grupoPadrao(qual)
+  const nomes = [padrao].concat(ordemDosGrupos(qual).filter((k) => k !== padrao && k !== 'Da equipe'))
+  if (e.grp && !nomes.includes(e.grp)) nomes.push(e.grp)   // o novo, ainda nao salvo
+  let h = '<div class="ed-sec">' + IC_PASTA + 'Grupo</div><div class="ed-grupos">'
+  for (const k of nomes) {
+    const on = !e.criandoGrp && (k === padrao ? !e.grp : k === e.grp)
+    h += '<button class="ed-grp' + (on ? ' on' : '') + '" data-grpesc="' + esc(k === padrao ? '' : k) + '">' + esc(k) + '</button>'
+  }
+  if (e.criandoGrp) {
+    h += '<span class="ed-grp-novo"><input data-k="ed-grupo" maxlength="40" placeholder="Nome do grupo" spellcheck="false" value="' + esc(e.grpNovo || '') + '">'
+      + '<button class="bt-mini ok" data-grpnovo="ok" title="Criar">' + IC_CHECK + '</button></span>'
+  } else {
+    h += '<button class="ed-grp mais" data-grpnovo="abre">' + IC_MAIS + 'Novo</button>'
+  }
+  return h + '</div>'
+}
+// O nome digitado no "Novo" vira o grupo do item. Se ja existe um com o mesmo nome (sem olhar
+// maiuscula), usa o que existe, pra nao nascer "Follow" e "follow" lado a lado.
+function confirmaGrupoNovo(e, qual) {
+  const nome = String(e.grpNovo || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+  e.criandoGrp = false
+  e.grpNovo = ''
+  if (!nome) return
+  const igual = ordemDosGrupos(qual).find((k) => k.toLowerCase() === nome.toLowerCase())
+  const final = igual || nome
+  e.grp = ['meus itens', 'meus funis', 'da equipe'].includes(final.toLowerCase()) ? '' : final
 }
 
 function quemVe(e) {
@@ -2780,7 +2918,7 @@ function edItem() {
   }
   h += '</div>'
   if (e.tipo !== 'text') h += '<input type="file" data-ed="arquivo" accept="' + (ACEITA[e.tipo] || '') + '" hidden>'
-  return h + quemVe(e) + rodapeEd(e) + '</div>'
+  return h + escolheGrupo(e, 'itens') + quemVe(e) + rodapeEd(e) + '</div>'
 }
 
 function infoPasso(id) {
@@ -2819,7 +2957,7 @@ function edFunil() {
       + '<button class="bt-mini lixo" data-tira="' + i + '" title="Tirar">' + IC_X + '</button></div>'
   })
   h += '<button class="ed-add" data-ed="escolher">' + IC_MAIS + 'Adicionar passo</button>'
-  return h + quemVe(e) + rodapeEd(e) + '</div>'
+  return h + escolheGrupo(e, 'funis') + quemVe(e) + rodapeEd(e) + '</div>'
 }
 
 // A LISTA PRA ESCOLHER O PASSO mostra TUDO, inclusive o escondido: esconder e justamente pra o que
@@ -2917,6 +3055,22 @@ function ligaEditor(corpo) {
   um('[data-k="ed-legenda"]', (i) => { i.oninput = () => { e.caption = i.value } })
   um('[data-k="ed-busca"]', (i) => { i.oninput = () => { e.buscaPasso = i.value; desenhaEditor() } })
   for (const b of corpo.querySelectorAll('[data-quem]')) b.onclick = () => { e.escopo = b.dataset.quem === 'todos' ? 'todos' : 'eu'; desenhaEditor() }
+  // o grupo
+  const qualEd = e.tela === 'funil' ? 'funis' : 'itens'
+  for (const b of corpo.querySelectorAll('[data-grpesc]')) b.onclick = () => { e.grp = b.dataset.grpesc || ''; e.criandoGrp = false; e.grpNovo = ''; desenhaEditor() }
+  for (const b of corpo.querySelectorAll('[data-grpnovo]')) b.onclick = () => {
+    if (b.dataset.grpnovo === 'abre') {
+      e.criandoGrp = true; e.grpNovo = ''; desenhaEditor()
+      const i = corpo.querySelector('[data-k="ed-grupo"]'); if (i) i.focus()
+    } else { confirmaGrupoNovo(e, qualEd); desenhaEditor() }
+  }
+  um('[data-k="ed-grupo"]', (i) => {
+    i.oninput = () => { e.grpNovo = i.value }
+    i.onkeydown = (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); confirmaGrupoNovo(e, qualEd); desenhaEditor() }
+      else if (ev.key === 'Escape') { e.criandoGrp = false; e.grpNovo = ''; desenhaEditor() }
+    }
+  })
   for (const b of corpo.querySelectorAll('[data-ed="grava"]')) b.onclick = () => comecaGravar()
   for (const b of corpo.querySelectorAll('[data-ed="para"]')) b.onclick = () => paraGravar()
   const arq = corpo.querySelector('[data-ed="arquivo"]')
@@ -2964,6 +3118,8 @@ async function salvaEditor() {
   const e = editor
   if (!e || e.salvando || e.gravando) return
   e.erro = ''
+  // Nome de grupo digitado e nao confirmado vale: ninguem lembra de tocar no visto antes de salvar.
+  if (e.criandoGrp) confirmaGrupoNovo(e, e.tela === 'funil' ? 'funis' : 'itens')
   if (e.tela === 'funil') {
     if (!String(e.label || '').trim()) e.erro = 'Dê um nome pro funil.'
     else if (!e.passos.length) e.erro = 'Coloque pelo menos um passo.'
@@ -2997,8 +3153,8 @@ async function salvaEditor() {
       mime = up.mime || tipoArq
     }
     const dados = e.tela === 'funil'
-      ? { tipo: 'funil', escopo: e.escopo, label: String(e.label || '').trim(), passos: e.passos.map((p) => ({ id: p.id, espera: p.espera === undefined ? null : p.espera })) }
-      : { tipo: e.tipo, escopo: e.escopo, label: String(e.label || '').trim(), text: e.text || '', key, mime, caption: e.caption || '' }
+      ? { tipo: 'funil', escopo: e.escopo, label: String(e.label || '').trim(), passos: e.passos.map((p) => ({ id: p.id, espera: p.espera === undefined ? null : p.espera })), grp: e.grp || '' }
+      : { tipo: e.tipo, escopo: e.escopo, label: String(e.label || '').trim(), text: e.text || '', key, mime, caption: e.caption || '', grp: e.grp || '' }
     if (e.id) dados.id = e.id
     rodape('salvando...')
     const r = await window.swp.salvaItem(dados)
@@ -3018,7 +3174,7 @@ async function salvaEditor() {
 
 try {
   $('novo').onclick = () => { if (podeOrganizar) abreNovo() }
-  $('organizar').onclick = () => { if (!podeOrganizar) return; fechaEditor(); organiza = !organiza; armadoApagar = ''; desenha() }
+  $('organizar').onclick = () => { if (!podeOrganizar) return; fechaEditor(); organiza = !organiza; armadoApagar = ''; renomeando = null; desenha() }
 } catch (_) { /* painel.html velho, sem os dois botoes */ }
 
 // ───────────────────────────────────────────────────────────── ciclo
@@ -3150,6 +3306,8 @@ async function pegaRoteiro(forcar) {
     if (r && r.ok) {
       roteiro = { messages: r.messages || [], sequences: r.sequences || [], media: r.media || [], mediaBase: r.mediaBase || '' }
       ocultos = new Set(Array.isArray(r.ocultos) ? r.ocultos.map(String) : [])
+      const go = (r.grupos && typeof r.grupos === 'object') ? r.grupos : {}
+      gruposOrdem = { itens: Array.isArray(go.itens) ? go.itens.map(String) : [], funis: Array.isArray(go.funis) ? go.funis.map(String) : [] }
       // SO O APP NOVO CRIA E ESCONDE: o preload precisa ter as quatro funcoes, e no "ver como" da
       // direcao (organiza: false) a tela e so de leitura.
       podeOrganizar = r.organiza !== false && typeof window.swp.salvaItem === 'function'
@@ -3157,8 +3315,9 @@ async function pegaRoteiro(forcar) {
       if (!podeOrganizar) { organiza = false; editor = null }
       // A RELEITURA DE MINUTO EM MINUTO so redesenha se algo mudou: redesenhar a toa fecha a previa
       // de audio que o vendedor esta ouvindo.
-      const sig = JSON.stringify([r.messages, r.sequences, r.media, r.ocultos, podeOrganizar])
-      if (sig !== assinaturaRoteiro) { assinaturaRoteiro = sig; desenha() }
+      const sig = JSON.stringify([r.messages, r.sequences, r.media, r.ocultos, gruposOrdem, podeOrganizar])
+      // Com um nome de grupo aberto pra editar, a releitura nao redesenha (levaria o que ele digitou).
+      if (sig !== assinaturaRoteiro && !renomeando) { assinaturaRoteiro = sig; desenha() }
     }
   } catch (_) { /* tenta de novo no próximo pulso */ } finally { buscandoRoteiro = false }
 }

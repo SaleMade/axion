@@ -6,7 +6,7 @@ const { contextBridge } = require('electron')
 
 const chamadas = []
 const OFICIAL = {
-  messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!', grp: 'Homem' }, { id: 'm2', label: 'Valores', text: 'Sao R$ 497', grp: 'Homem' }],
+  messages: [{ id: 'm1', label: 'Bom dia', text: 'Bom dia!', grp: 'Homem' }, { id: 'm2', label: 'Valores', text: 'Sao R$ 497', grp: 'Follow' }],
   media: [
     { id: 'a1', kind: 'audio', label: 'H - 02 Explicacao', key: 'm/ccc333.ogg', mime: 'audio/ogg', grp: 'Homem' },
     { id: 'i1', kind: 'image', label: 'Tabela 497', key: 'm/aaa111.png', mime: 'image/png', caption: '', grp: 'Homem' },
@@ -18,16 +18,20 @@ let ocultos = []
 let seq = 0
 let organiza = true
 let falhaSalvar = 0
+let grupos = { itens: [], funis: [] }
+const RESERVADO = ['meus itens', 'meus funis', 'da equipe']
+const limpaGrp = (v) => { const g = String(v || '').replace(/\s+/g, ' ').trim().slice(0, 40); return RESERVADO.includes(g.toLowerCase()) ? '' : g }
 
 function roteiro() {
-  const sw = (x) => ({ meu: true, pode: true, escopo: x.escopo, de: '' })
-  const msgs = meus.filter((x) => x.tipo === 'text').map((x) => ({ id: x.id, label: x.dados.label, text: x.dados.text, grp: 'Meus itens', sw: sw(x) }))
-  const med = meus.filter((x) => !['text', 'funil'].includes(x.tipo)).map((x) => ({ id: x.id, kind: x.tipo, label: x.dados.label, key: x.dados.key, mime: x.dados.mime, caption: x.dados.caption, grp: 'Meus itens', sw: sw(x) }))
-  const seqs = meus.filter((x) => x.tipo === 'funil').map((x) => ({ id: x.id, label: x.dados.label, grp: 'Meus funis', items: x.dados.passos, sw: sw(x) }))
+  const sw = (x) => ({ meu: true, pode: true, escopo: x.escopo, de: '', grp: x.dados.grp || '' })
+  const msgs = meus.filter((x) => x.tipo === 'text').map((x) => ({ id: x.id, label: x.dados.label, text: x.dados.text, grp: x.dados.grp || 'Meus itens', sw: sw(x) }))
+  const med = meus.filter((x) => !['text', 'funil'].includes(x.tipo)).map((x) => ({ id: x.id, kind: x.tipo, label: x.dados.label, key: x.dados.key, mime: x.dados.mime, caption: x.dados.caption, grp: x.dados.grp || 'Meus itens', sw: sw(x) }))
+  const seqs = meus.filter((x) => x.tipo === 'funil').map((x) => ({ id: x.id, label: x.dados.label, grp: x.dados.grp || 'Meus funis', items: x.dados.passos, sw: sw(x) }))
   return {
     ok: true,
     messages: msgs.concat(OFICIAL.messages), media: med.concat(OFICIAL.media), sequences: seqs.concat(OFICIAL.sequences),
     mediaBase: 'https://exemplo/api/salechat/media/', ocultos: ocultos.slice(), organiza,
+    grupos: JSON.parse(JSON.stringify(grupos)),
   }
 }
 
@@ -48,15 +52,34 @@ contextBridge.exposeInMainWorld('swp', {
       const x = meus.find((m) => m.id === d.id)
       if (!x) return Promise.resolve({ ok: false, erro: 'Esse item não existe mais.' })
       x.escopo = d.escopo === 'todos' ? 'todos' : 'eu'
-      x.dados = { ...x.dados, label: d.label || x.dados.label, text: d.text, key: d.key || x.dados.key, mime: d.mime || x.dados.mime, caption: d.caption, passos: d.passos || x.dados.passos }
+      x.dados = { ...x.dados, label: d.label || x.dados.label, text: d.text, key: d.key || x.dados.key, mime: d.mime || x.dados.mime, caption: d.caption, passos: d.passos || x.dados.passos, grp: limpaGrp(d.grp) }
       return Promise.resolve({ ok: true, id: d.id })
     }
     if (d.tipo === 'text' && !String(d.text || '').trim()) return Promise.resolve({ ok: false, erro: 'Escreva a mensagem.' })
     if (!['text', 'funil'].includes(d.tipo) && !/^m\//.test(String(d.key || ''))) return Promise.resolve({ ok: false, erro: 'O arquivo não subiu. Escolha de novo.' })
     seq += 1
     const id = 'swteste' + seq
-    meus.push({ id, tipo: d.tipo, escopo: d.escopo === 'todos' ? 'todos' : 'eu', dados: { label: d.label || d.tipo, text: d.text, key: d.key, mime: d.mime, caption: d.caption, passos: d.passos } })
+    meus.push({ id, tipo: d.tipo, escopo: d.escopo === 'todos' ? 'todos' : 'eu', dados: { label: d.label || d.tipo, text: d.text, key: d.key, mime: d.mime, caption: d.caption, passos: d.passos, grp: limpaGrp(d.grp) } })
     return Promise.resolve({ ok: true, id })
+  },
+  grupoOrdem: (qual, ordem) => {
+    chamadas.push({ nome: 'grupoOrdem', args: [qual, ordem] })
+    grupos[qual] = (ordem || []).map(String)
+    return Promise.resolve({ ok: true, ordem: grupos[qual].slice() })
+  },
+  // Como o servidor: so renomeia grupo que tem item meu e nenhum oficial.
+  grupoRenomear: (qual, de, para) => {
+    chamadas.push({ nome: 'grupoRenomear', args: [qual, de, para] })
+    const daAba = (x) => (qual === 'funis' ? x.tipo === 'funil' : x.tipo !== 'funil')
+    const padrao = qual === 'funis' ? 'Meus funis' : 'Meus itens'
+    const doGrupo = meus.filter((x) => daAba(x) && (x.dados.grp || padrao) === de)
+    const oficial = qual === 'funis' ? OFICIAL.sequences : OFICIAL.messages.concat(OFICIAL.media)
+    if (!doGrupo.length) return Promise.resolve({ ok: false, erro: 'Esse grupo não tem item seu.' })
+    if (oficial.some((x) => x.grp === de)) return Promise.resolve({ ok: false, erro: 'Esse grupo tem item de outra pessoa.' })
+    for (const x of doGrupo) x.dados.grp = limpaGrp(para)
+    const nome = limpaGrp(para) || padrao
+    grupos[qual] = grupos[qual].map((k) => (k === de ? nome : k))
+    return Promise.resolve({ ok: true, n: doGrupo.length, grp: nome })
   },
   apagaItem: (id) => {
     chamadas.push({ nome: 'apagaItem', args: [id] })

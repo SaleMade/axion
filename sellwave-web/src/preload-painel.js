@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('swp', {
   apagaItem: (id) => ipcRenderer.invoke('swp:item-apagar', { id }),
   ocultar: (id, oculto) => ipcRenderer.invoke('swp:ocultar', { id, oculto }),
   sobeMidia: (mime, bytes) => ipcRenderer.invoke('swp:sobe-midia', { mime, bytes }),
+  grupoOrdem: (qual, ordem) => ipcRenderer.invoke('swp:grupo-ordem', { qual, ordem }),
+  grupoRenomear: (qual, de, para) => ipcRenderer.invoke('swp:grupo-renomear', { qual, de, para }),
   lead: (phone) => ipcRenderer.invoke('swp:lead', { phone }),
   estado: () => ipcRenderer.invoke('swp:estado-wa'),
   manda: (nk, chatId, item) => ipcRenderer.invoke('swp:manda', { nk, chatId, item }),

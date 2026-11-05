@@ -13986,6 +13986,9 @@ async function _swItensTabelas(env) {
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS swweb_itens (id TEXT PRIMARY KEY, dono TEXT NOT NULL, dono_nome TEXT, mundo TEXT NOT NULL DEFAULT '', perfil TEXT NOT NULL DEFAULT 'vend', escopo TEXT NOT NULL DEFAULT 'eu', tipo TEXT NOT NULL, dados TEXT NOT NULL DEFAULT '{}', criado INTEGER, mexido INTEGER, apagado INTEGER NOT NULL DEFAULT 0)").run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS swweb_itens_mp ON swweb_itens(mundo, perfil, apagado)').run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS swweb_prefs (uid TEXT PRIMARY KEY, ocultos TEXT NOT NULL DEFAULT '[]', mexido INTEGER)").run();
+  // A ORDEM DOS GRUPOS e de cada pessoa e de cada aba (itens, funis): tabela propria pra nao mexer
+  // na swweb_prefs que ja esta no ar (coluna nova pediria ALTER, que falha na segunda vez).
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS swweb_grupos (uid TEXT NOT NULL, qual TEXT NOT NULL, ordem TEXT NOT NULL DEFAULT '[]', mexido INTEGER, PRIMARY KEY (uid, qual))").run();
   _swItensProntas = true;
 }
 const _swItensMundo = (u) => {
@@ -14004,8 +14007,23 @@ const _swItensPode = (u, row) => {
 const SWITEM_TIPOS = ['text', 'audio', 'video', 'image', 'document', 'funil'];
 const SWITEM_ID_OK = /^[A-Za-z0-9_.:-]{1,80}$/;
 const SWITEM_KEY_OK = /^m\/[A-Za-z0-9._-]{1,80}$/;
+// O GRUPO DO ITEM (05/11/2026, pedido do Bruno: o vendedor escolhe em qual grupo a mensagem entra,
+// "Geral", "Follow", ou cria um novo). Vazio = o grupo de sempre ("Meus itens"/"Meus funis" pra
+// quem criou, "Da equipe" pros outros); por isso esses nomes viram vazio aqui.
+const SWGRP_RESERVADO = ['meus itens', 'meus funis', 'da equipe'];
+const _swGrupoLimpo = (v) => {
+  const g = String(v || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return SWGRP_RESERVADO.includes(g.toLowerCase()) ? '' : g;
+};
+const _swGrupoPadrao = (tipo, meu) => (meu ? (tipo === 'funil' ? 'Meus funis' : 'Meus itens') : 'Da equipe');
 // Limpa o que veio da tela. Devolve { dados } ou { erro } com a frase que o vendedor le.
 function _swItemLimpo(tipo, b) {
+  const r = _swItemLimpoSemGrupo(tipo, b);
+  const grp = _swGrupoLimpo(b && b.grp);
+  if (r.dados && grp) r.dados.grp = grp;
+  return r;
+}
+function _swItemLimpoSemGrupo(tipo, b) {
   const label = String((b && b.label) || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (tipo === 'text') {
     const text = String((b && b.text) || '').replace(/\r\n/g, '\n').slice(0, 4096);
@@ -14037,28 +14055,46 @@ function _swItemLimpo(tipo, b) {
 }
 // As linhas que entram no roteiro DESTA pessoa: as dela e as "pra todos" da operacao e do cargo dela.
 async function _swItensDoRoteiro(env, u) {
-  const vazio = { messages: [], media: [], sequences: [], ocultos: [] };
+  const vazio = { messages: [], media: [], sequences: [], ocultos: [], grupos: { itens: [], funis: [] } };
   try {
     await _swItensTabelas(env);
     const uid = String(u.id);
-    const [linhas, pref] = await Promise.all([
-      env.DB.prepare("SELECT id, dono, dono_nome, mundo, escopo, tipo, dados FROM swweb_itens WHERE mundo = ? AND perfil = ? AND apagado = 0 AND (dono = ? OR escopo = 'todos') ORDER BY criado LIMIT 1500")
-        .bind(_swItensMundo(u), _swItensPerfil(u), uid).all(),
+    const [linhas, pref, ordens] = await Promise.all([
+      _swItensLinhas(env, u),
       env.DB.prepare('SELECT ocultos FROM swweb_prefs WHERE uid = ?').bind(uid).first(),
+      env.DB.prepare('SELECT qual, ordem FROM swweb_grupos WHERE uid = ?').bind(uid).all(),
     ]);
-    const out = { messages: [], media: [], sequences: [], ocultos: [] };
+    const out = { messages: [], media: [], sequences: [], ocultos: [], grupos: { itens: [], funis: [] } };
     try { const o = JSON.parse((pref && pref.ocultos) || '[]'); if (Array.isArray(o)) out.ocultos = o.map(String).slice(0, 1000); } catch (_) { /* sem preferencia */ }
-    for (const r of ((linhas && linhas.results) || [])) {
-      let d = {};
-      try { d = JSON.parse(r.dados || '{}') || {}; } catch (_) { continue; }
+    for (const o of ((ordens && ordens.results) || [])) {
+      if (o.qual !== 'itens' && o.qual !== 'funis') continue;
+      try { const l = JSON.parse(o.ordem || '[]'); if (Array.isArray(l)) out.grupos[o.qual] = l.map(String).slice(0, 200); } catch (_) { /* ordem de sempre */ }
+    }
+    for (const r of linhas) {
+      const d = r._d;
       const meu = String(r.dono) === uid;
-      const sw = { meu, pode: _swItensPode(u, r), escopo: r.escopo === 'todos' ? 'todos' : 'eu', de: meu ? '' : String(r.dono_nome || '') };
-      if (r.tipo === 'text') out.messages.push({ id: r.id, label: d.label || '', text: d.text || '', grp: meu ? 'Meus itens' : 'Da equipe', sw });
-      else if (r.tipo === 'funil') out.sequences.push({ id: r.id, label: d.label || '', grp: meu ? 'Meus funis' : 'Da equipe', items: Array.isArray(d.passos) ? d.passos : [], sw });
-      else out.media.push({ id: r.id, kind: r.tipo, label: d.label || '', key: d.key || '', mime: d.mime || '', caption: d.caption || '', grp: meu ? 'Meus itens' : 'Da equipe', sw });
+      // `sw.grp` e o grupo GRAVADO (vazio = o de sempre); o editor precisa dele pra nao confundir o
+      // "Da equipe" que a direcao ve com um grupo de verdade.
+      const sw = { meu, pode: _swItensPode(u, r), escopo: r.escopo === 'todos' ? 'todos' : 'eu', de: meu ? '' : String(r.dono_nome || ''), grp: d.grp || '' };
+      const grp = d.grp || _swGrupoPadrao(r.tipo, meu);
+      if (r.tipo === 'text') out.messages.push({ id: r.id, label: d.label || '', text: d.text || '', grp, sw });
+      else if (r.tipo === 'funil') out.sequences.push({ id: r.id, label: d.label || '', grp, items: Array.isArray(d.passos) ? d.passos : [], sw });
+      else out.media.push({ id: r.id, kind: r.tipo, label: d.label || '', key: d.key || '', mime: d.mime || '', caption: d.caption || '', grp, sw });
     }
     return out;
   } catch (_) { return vazio; }   // sem a tabela o painel segue com o roteiro oficial
+}
+// As linhas que esta pessoa VE (as dela e as "pra todos" da operacao e do cargo dela), ja com os
+// dados lidos em `_d`. Linha com JSON quebrado fica de fora.
+async function _swItensLinhas(env, u) {
+  const r = await env.DB.prepare("SELECT id, dono, dono_nome, mundo, escopo, tipo, dados FROM swweb_itens WHERE mundo = ? AND perfil = ? AND apagado = 0 AND (dono = ? OR escopo = 'todos') ORDER BY criado LIMIT 1500")
+    .bind(_swItensMundo(u), _swItensPerfil(u), String(u.id)).all();
+  const out = [];
+  for (const x of ((r && r.results) || [])) {
+    try { x._d = JSON.parse(x.dados || '{}') || {}; } catch (_) { continue; }
+    out.push(x);
+  }
+  return out;
 }
 
 async function handleSwWeb(req, env, path) {
@@ -14280,6 +14316,7 @@ async function handleSwWeb(req, env, path) {
       sequences: proprios.sequences.concat(Array.isArray(sc.sequences) ? sc.sequences : []),
       media: proprios.media.concat(Array.isArray(sc.media) ? sc.media : []),
       ocultos: proprios.ocultos,
+      grupos: proprios.grupos,
       mediaBase: origem + '/api/salechat/media/',
       // O TOKEN DE INGESTAO NAO SAI DAQUI (16/10/2026, revisao adversarial).
       //
@@ -14312,6 +14349,11 @@ async function handleSwWeb(req, env, path) {
       if (!_swItensPode(u, row)) return err('Só quem criou pode mudar esse item.', 403);
       const lim = _swItemLimpo(row.tipo, b);
       if (lim.erro) return err(lim.erro);
+      // App de antes dos grupos (1.26.8 ou mais velho) nao manda `grp`: editar por ele nao pode tirar
+      // o item do grupo que alguem escolheu num app novo.
+      if (!(b && Object.prototype.hasOwnProperty.call(b, 'grp'))) {
+        try { const velho = JSON.parse(row.dados || '{}'); if (velho && velho.grp) lim.dados.grp = String(velho.grp); } catch (_) { /* sem grupo */ }
+      }
       await env.DB.prepare('UPDATE swweb_itens SET dados = ?, escopo = ?, mexido = ? WHERE id = ?')
         .bind(JSON.stringify(lim.dados), escopo, agora, id).run();
       return json({ ok: true, id });
@@ -14358,6 +14400,62 @@ async function handleSwWeb(req, env, path) {
     await env.DB.prepare('INSERT INTO swweb_prefs (uid, ocultos, mexido) VALUES (?,?,?) ON CONFLICT(uid) DO UPDATE SET ocultos = excluded.ocultos, mexido = excluded.mexido')
       .bind(uid, JSON.stringify(lista), Math.floor(Date.now() / 1000)).run();
     return json({ ok: true, ocultos: lista });
+  }
+
+  // POST /api/swweb/grupos/ordem - { qual: 'itens'|'funis', ordem: [nomes] }. A ORDEM E SO PRA SI,
+  // como o esconder: vale inclusive pros grupos oficiais e nao muda a lista de ninguem.
+  if (req.method === 'POST' && path === '/api/swweb/grupos/ordem') {
+    if (u._comoDe) return err('No "ver como" a tela é só de leitura.', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const qual = b && b.qual === 'funis' ? 'funis' : (b && b.qual === 'itens' ? 'itens' : '');
+    if (!qual) return err('Aba inválida.');
+    const vistos = new Set();
+    const ordem = [];
+    for (const x of (Array.isArray(b.ordem) ? b.ordem : []).slice(0, 200)) {
+      const g = String(x || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (g && !vistos.has(g)) { vistos.add(g); ordem.push(g); }
+    }
+    await _swItensTabelas(env);
+    await env.DB.prepare('INSERT INTO swweb_grupos (uid, qual, ordem, mexido) VALUES (?,?,?,?) ON CONFLICT(uid, qual) DO UPDATE SET ordem = excluded.ordem, mexido = excluded.mexido')
+      .bind(String(u.id), qual, JSON.stringify(ordem), Math.floor(Date.now() / 1000)).run();
+    return json({ ok: true, ordem });
+  }
+
+  // POST /api/swweb/grupos/renomear - { qual, de, para }. So o grupo que e TODO de quem pede (todos
+  // os itens dele, nessa aba, sao itens que a pessoa pode mexer): grupo oficial ou com item de
+  // colega so se reorganiza, nao se renomeia. Renomear pra um nome que ja existe junta os dois.
+  if (req.method === 'POST' && path === '/api/swweb/grupos/renomear') {
+    if (u._comoDe) return err('No "ver como" a tela é só de leitura.', 403);
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const qual = b && b.qual === 'funis' ? 'funis' : 'itens';
+    const de = String((b && b.de) || '').replace(/\s+/g, ' ').trim();
+    const para = _swGrupoLimpo(b && b.para);
+    const paraBruto = String((b && b.para) || '').replace(/\s+/g, ' ').trim();
+    if (!de) return err('Grupo inválido.');
+    if (!paraBruto) return err('Dê um nome pro grupo.');
+    await _swItensTabelas(env);
+    const uid = String(u.id);
+    const daAba = (r) => (qual === 'funis' ? r.tipo === 'funil' : r.tipo !== 'funil');
+    const doGrupo = (await _swItensLinhas(env, u)).filter((r) => daAba(r) && (r._d.grp || _swGrupoPadrao(r.tipo, String(r.dono) === uid)) === de);
+    if (!doGrupo.length) return err('Esse grupo não tem item seu.', 404);
+    if (doGrupo.some((r) => !_swItensPode(u, r))) return err('Esse grupo tem item de outra pessoa. Dá pra mudar a ordem, mas não o nome.', 403);
+    const agora = Math.floor(Date.now() / 1000);
+    await env.DB.batch(doGrupo.map((r) => {
+      const d = Object.assign({}, r._d);
+      if (para) d.grp = para; else delete d.grp;
+      return env.DB.prepare('UPDATE swweb_itens SET dados = ?, mexido = ? WHERE id = ?').bind(JSON.stringify(d), agora, r.id);
+    }));
+    // A ordem guardada acompanha o nome novo, senao o grupo renomeado pularia de lugar.
+    const nome = para || _swGrupoPadrao(qual === 'funis' ? 'funil' : 'text', true);
+    try {
+      const o = await env.DB.prepare('SELECT ordem FROM swweb_grupos WHERE uid = ? AND qual = ?').bind(uid, qual).first();
+      let l = []; try { l = JSON.parse((o && o.ordem) || '[]'); } catch (_) { l = []; }
+      if (Array.isArray(l) && l.includes(de)) {
+        const nova = []; for (const x of l) { const y = x === de ? nome : x; if (!nova.includes(y)) nova.push(y); }
+        await env.DB.prepare('UPDATE swweb_grupos SET ordem = ?, mexido = ? WHERE uid = ? AND qual = ?').bind(JSON.stringify(nova), agora, uid, qual).run();
+      }
+    } catch (_) { /* a ordem volta a ser a de sempre pra esse grupo; o nome ja mudou */ }
+    return json({ ok: true, n: doGrupo.length, grp: nome });
   }
 
   // POST /api/swweb/captura - as mensagens que o app capturou.

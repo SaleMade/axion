@@ -3694,8 +3694,11 @@ ipcMain.handle('swp:roteiro', async (_e, opts) => {
   // posta e o processo principal.
   // `ocultos` e `organiza` (05/11/2026): o que esta pessoa escondeu, e se o painel pode criar e
   // esconder (no "ver como" da direcao, nao: la tudo e so leitura).
+  // `grupos` (05/11/2026): a ordem dos grupos que esta pessoa escolheu, por aba ({ itens, funis }).
+  const g = (r.grupos && typeof r.grupos === 'object') ? r.grupos : {}
   return { ok: true, messages: r.messages, sequences: r.sequences, media: r.media, mediaBase: r.mediaBase,
-    ocultos: Array.isArray(r.ocultos) ? r.ocultos : [], organiza: !comoId }
+    ocultos: Array.isArray(r.ocultos) ? r.ocultos : [], organiza: !comoId,
+    grupos: { itens: Array.isArray(g.itens) ? g.itens : [], funis: Array.isArray(g.funis) ? g.funis : [] } }
 })
 
 // ── O QUE O VENDEDOR CRIA NO PAINEL (05/11/2026, pedido do Bruno) ───────────────────────────────
@@ -3734,6 +3737,20 @@ ipcMain.handle('swp:ocultar', async (_e, { id, oculto }) => {
   const r = await postaPainel('/api/swweb/ocultar', { id, oculto: !!oculto })
   // Guarda na copia do roteiro daqui, sem reler tudo: o proximo painel que pedir ja ve escondido.
   if (r.ok && roteiro && Array.isArray(r.ocultos)) roteiro.ocultos = r.ocultos
+  return r
+})
+// OS GRUPOS (05/11/2026): a ordem e de cada pessoa; renomear so vale pro grupo que e todo dela.
+ipcMain.handle('swp:grupo-ordem', async (_e, { qual, ordem }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  const q = qual === 'funis' ? 'funis' : 'itens'
+  const r = await postaPainel('/api/swweb/grupos/ordem', { qual: q, ordem: Array.isArray(ordem) ? ordem.slice(0, 200).map(String) : [] })
+  if (r.ok && roteiro && Array.isArray(r.ordem)) roteiro.grupos = Object.assign({}, roteiro.grupos || {}, { [q]: r.ordem })
+  return r
+})
+ipcMain.handle('swp:grupo-renomear', async (_e, { qual, de, para }) => {
+  const nao = naoNoVerComo(); if (nao) return nao
+  const r = await postaPainel('/api/swweb/grupos/renomear', { qual: qual === 'funis' ? 'funis' : 'itens', de: String(de || ''), para: String(para || '') })
+  if (r.ok) await pegaRoteiro(true)
   return r
 })
 // O ARQUIVO DO ITEM NOVO vai em bytes crus (como o comprovante) pra mesma rota da midia do Sale

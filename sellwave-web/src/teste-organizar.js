@@ -287,6 +287,92 @@ app.whenReady().then(async () => {
   const funis2 = await js('[...document.querySelectorAll(".funil-lbl")].map(e => e.firstChild.textContent)')
   conta('funil escondido some da aba Funis', !funis2.includes('Boas-vindas') && /1 escondido/.test(await js('(document.querySelector(".ocultos-link") || {}).textContent || ""')), JSON.stringify(funis2))
 
+  // ── GRUPOS: ESCOLHER, CRIAR, ORDENAR, RENOMEAR ──────────────────────────────────────────────
+  console.log('\nGRUPOS')
+  // { secao: [ [grupo, [itens]] ] } lido da tela, na ordem em que aparece
+  const mapa = () => js(`(() => {
+    const out = {}; let sec = '', grp = ''
+    for (const el of document.getElementById('corpo').children) {
+      if (el.classList.contains('sec')) { sec = el.dataset.sec; out[sec] = []; grp = '' }
+      else if (el.classList.contains('grp')) { grp = (el.querySelector('span') || {}).textContent || (el.querySelector('input') || {}).value || ''; out[sec].push([grp, []]) }
+      else if (el.classList.contains('item') && sec) { if (!out[sec].length) out[sec].push(['', []]); out[sec][out[sec].length - 1][1].push((el.querySelector('.item-lbl') || {}).textContent || '') }
+    }
+    return out })()`)
+  await clica('.aba[data-aba="itens"]'); await espera(120)
+  await clica('#novo'); await espera(100)
+  await clica('[data-novo="text"]'); await espera(100)
+  const chips = await js('[...document.querySelectorAll(".ed-grp")].map(e => e.textContent + (e.classList.contains("on") ? "*" : ""))')
+  conta('o editor mostra os grupos que existem, com "Meus itens" marcado', chips.join('|') === 'Meus itens*|Homem|Follow|Novo', JSON.stringify(chips))
+  await clica('[data-grpesc="Follow"]'); await espera(80)
+  conta('tocar num grupo marca ele', await js('document.querySelector("[data-grpesc=Follow]").classList.contains("on") && !document.querySelector("[data-grpesc=\'\']").classList.contains("on")'))
+  await digita('ed-nome', 'Ainda quer?'); await digita('ed-texto', 'Ainda quer o produto?')
+  await clica('[data-ed="salva"]'); await espera(400)
+  s = await ultima('salvaItem')
+  conta('salvar manda o grupo escolhido', s && s.args[0].grp === 'Follow' && s.args[0].tipo === 'text', JSON.stringify(s && s.args[0]))
+  let mp = await mapa()
+  conta('a mensagem entra no grupo Follow, junto do oficial', JSON.stringify(mp.text) === JSON.stringify([['Homem', ['Bom dia']], ['Follow', ['Ainda quer?', 'Valores']]]), JSON.stringify(mp.text))
+  conta('e o Follow NAO pula pra cima do Homem (a ordem da dash fica)', mp.text[0][0] === 'Homem', JSON.stringify(mp.text.map((x) => x[0])))
+  // grupo novo, digitado e salvo sem tocar no visto
+  await clica('#novo'); await espera(100)
+  await clica('[data-novo="text"]'); await espera(100)
+  await clica('[data-grpnovo="abre"]'); await espera(100)
+  conta('o "Novo" abre o campo do nome ja com o cursor', await js('document.activeElement && document.activeElement.dataset.k === "ed-grupo"'))
+  await digita('ed-grupo', '  Recuperação ')
+  await digita('ed-nome', 'Vamos resolver?')
+  await digita('ed-texto', 'Vamos resolver?')
+  await clica('[data-ed="salva"]'); await espera(400)
+  s = await ultima('salvaItem')
+  conta('o grupo novo vai junto mesmo sem tocar no visto', s && s.args[0].grp === 'Recuperação', JSON.stringify(s && s.args[0]))
+  mp = await mapa()
+  conta('o grupo novo aparece EM CIMA (acabou de criar)', mp.text[0][0] === 'Recuperação' && mp.text[0][1][0] === 'Vamos resolver?', JSON.stringify(mp.text))
+  // mesmo nome com outra caixa nao cria outro
+  await clica('#novo'); await espera(100)
+  await clica('[data-novo="text"]'); await espera(100)
+  await clica('[data-grpnovo="abre"]'); await espera(80)
+  await digita('ed-grupo', 'follow')
+  await js('document.querySelector("[data-k=ed-grupo]").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))'); await espera(100)
+  const chips2 = await js('[...document.querySelectorAll(".ed-grp")].map(e => e.textContent + (e.classList.contains("on") ? "*" : ""))')
+  conta('digitar "follow" usa o Follow que ja existe (sem repetir)', chips2.filter((x) => /follow/i.test(x)).join('|') === 'Follow*', JSON.stringify(chips2))
+  await clica('[data-ed="volta"]'); await espera(80); await clica('[data-ed="volta"]'); await espera(100)
+  // o editar abre com o grupo do item
+  await clica('#organizar'); await espera(120)
+  const idFollow = await js('(() => { const it = [...document.querySelectorAll(".item")].find(i => /Ainda quer\\?/.test(i.textContent)); const b = it && it.querySelector("[data-edita]"); return b ? b.dataset.edita : "" })()')
+  await clica('[data-edita="' + idFollow + '"]'); await espera(120)
+  conta('editar abre com o grupo do item marcado', await js('document.querySelector("[data-grpesc=Follow]").classList.contains("on")'))
+  await clica('[data-ed="volta"]'); await espera(100)
+  // organizar: setas e renomear
+  // so os cabecalhos da secao de Mensagens (Homem tambem existe nas secoes de audio e foto)
+  const cabTxt = await js(`(() => { const out = []; let sec = ''
+    for (const el of document.getElementById('corpo').children) {
+      if (el.classList.contains('sec')) sec = el.dataset.sec
+      else if (sec === 'text' && el.classList.contains('grp') && el.querySelector('.grp-ops')) out.push({ n: el.querySelector('span').textContent, ren: !!el.querySelector('[data-grpren]'), sobe: !el.querySelector('[data-grpmove=sobe]').disabled })
+    }
+    return out })()`)
+  const cab = cabTxt
+  conta('no organizar cada grupo ganha as setas', cabTxt.length === 3, JSON.stringify(cab))
+  conta('so o grupo que e todo meu ganha o lapis (o Follow tem item oficial)', cabTxt.find((c) => c.n === 'Recuperação')?.ren && !cabTxt.find((c) => c.n === 'Follow')?.ren && !cabTxt.find((c) => c.n === 'Homem')?.ren, JSON.stringify(cabTxt))
+  conta('o primeiro grupo nao sobe', cabTxt.find((c) => c.n === 'Recuperação')?.sobe === false, JSON.stringify(cabTxt))
+  await clica('[data-grpmove="sobe"][data-grp="Follow"]'); await espera(200)
+  const go = await ultima('grupoOrdem')
+  conta('subir o Follow grava a ordem com ele antes do Homem', go && go.args[0] === 'itens' && go.args[1].indexOf('Follow') < go.args[1].indexOf('Homem') && go.args[1][0] === 'Recuperação', JSON.stringify(go && go.args))
+  mp = await mapa()
+  conta('e a lista ja mostra na ordem nova', JSON.stringify(mp.text.map((x) => x[0])) === JSON.stringify(['Recuperação', 'Follow', 'Homem']), JSON.stringify(mp.text.map((x) => x[0])))
+  await clica('[data-grpren="Recuperação"]'); await espera(120)
+  conta('o lapis troca o nome por um campo, ja com o cursor', await js('document.activeElement && document.activeElement.dataset.k === "grp-nome" && document.activeElement.value === "Recuperação"'))
+  await digita('grp-nome', 'Resgate')
+  await js('document.querySelector("[data-k=grp-nome]").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))'); await espera(400)
+  const rn = await ultima('grupoRenomear')
+  conta('Enter renomeia o grupo', rn && JSON.stringify(rn.args) === JSON.stringify(['itens', 'Recuperação', 'Resgate']), JSON.stringify(rn && rn.args))
+  mp = await mapa()
+  conta('e o grupo aparece com o nome novo, no mesmo lugar', JSON.stringify(mp.text.map((x) => x[0])) === JSON.stringify(['Resgate', 'Follow', 'Homem']), JSON.stringify(mp.text))
+  await clica('[data-org="pronto"]'); await espera(120)
+  conta('fora do organizar o cabecalho volta a ser so o nome', !(await js('document.querySelector(".grp-ops")')))
+  // o funil tambem escolhe grupo
+  await clica('.aba[data-aba="funis"]'); await espera(120)
+  await clica('#novo'); await espera(120)
+  conta('o funil novo tambem escolhe o grupo, com "Meus funis" marcado', ((await js('[...document.querySelectorAll(".ed-grp.on")].map(e => e.textContent)')) || []).join('|') === 'Meus funis')
+  await clica('[data-ed="volta"]'); await espera(100)
+
   // ── TROCAR DE ABA FECHA O EDITOR ─────────────────────────────────────────────────────────────
   await clica('#novo'); await espera(100)
   await clica('.aba[data-aba="itens"]'); await espera(120)
