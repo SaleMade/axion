@@ -1230,7 +1230,7 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   const { api } = monta({});
   conf(api.BOT_IA_HORA.gemini === 40 && api.BOT_IA_DIA.vend === 300 && api.BOT_IA_DIA.cob === 300 && api.BOT_IA_PESSOA_10MIN === 8, 'limites: 40 por hora por grupo, 300 por dia, 8 por pessoa em 10 min');
   const sys = api._botIaSistema(api._botNormaliza(CFG_RAW, null), 'vend');
-  conf(/ANTES DE ESCREVER, ESCOLHA UM MODO/.test(sys) && /na dúvida, PROBLEMA/.test(sys) && /PROBLEMA: sério e prático/.test(sys), 'o modo por mensagem, com PROBLEMA na frente e serio');
+  conf(/ANTES DE ESCREVER, ESCOLHA UM MODO/.test(sys) && /na dúvida, PROBLEMA/.test(sys) && /PROBLEMA: acolhe primeiro e resolve/.test(sys), 'o modo por mensagem, com PROBLEMA na frente (acolhe e resolve)');
   conf(/soltar a franga/.test(sys) && /Emoji nunca/.test(sys) && /só "krl"/.test(sys), 'proibe a giria de tiozao, emoji e palavrao alem de krl');
   const vend = api.BOT_IA_EXEMPLOS.vend.join('\n'), cob = api.BOT_IA_EXEMPLOS.cob.join('\n');
   conf(!/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(vend + cob) && !/[—–]/.test(vend + cob), 'nenhum exemplo tem emoji nem travessao');
@@ -1300,6 +1300,17 @@ titulo('22. O nome no comeco ou no fim da mensagem e chamar o bot');
   const r3 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'kkkk o barbadinho zoou o Kevin', menciona: true, marcado: false }));
   conf(r3.acao === 'calado' && /Falaram seu nome/.test(m3.chamadas[0].user), 'o nome no meio da frase (falando DELE): a IA decide, e pode calar');
   conf(/agradecimento ou elogio pra você ganha resposta curta e animada/.test(m3.chamadas[0].system), 'elogio e agradecimento pro bot ganham resposta curta');
+}
+
+// ══ 23. NUMERO CAIU: ACOLHER, NAO DESMENTIR (06/11) ════════════════════════════════════
+titulo('23. Numero caiu: acolhe e resolve, nunca desmente quem relatou');
+{
+  const { api } = monta({});
+  const sys = api._botIaSistema(api._botNormaliza(CFG_RAW, null), 'vend');
+  conf(/acolhe primeiro e resolve, sem duvidar de quem relatou/.test(sys) && /NUNCA diga que não aparece queda/.test(sys), 'a regra: acolher e nunca usar a falta de registro de queda pra desmentir');
+  conf(/não perder o bonde/.test(sys) && /no máximo um por mensagem/.test(sys), 'trocadilho de vez em quando, no maximo um');
+  const ex = api.BOT_IA_EXEMPLOS.vend.join('\n');
+  conf(!/ainda não aparece queda/.test(ex) && /relaxa queridão/.test(ex), 'nenhum exemplo desmente a queda; o exemplo de numero caido acolhe');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
