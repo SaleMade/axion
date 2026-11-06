@@ -5,7 +5,7 @@
 // No fim le o agente.mjs como TEXTO e confere que a parte nova esta la (versao, escuta, digitando...).
 //   node teste-entrada.mjs
 import fs from 'node:fs'
-import { conteudoDe, textoDa, contextoDe, quemMandou, meusJidsDe, mencionaBot, respondeBot, citado, idadeS, pacoteDe } from './entrada.mjs'
+import { conteudoDe, textoDa, contextoDe, quemMandou, meusJidsDe, mencionaBot, marcouBot, idsDoBot, respondeBot, citado, idadeS, pacoteDe } from './entrada.mjs'
 
 let ok = 0
 const falhas = []
@@ -117,6 +117,15 @@ conf(mencionaBot(msgDe(texto('barbadinhos')), meus, NOMES) === false, 'palavra c
 conf(mencionaBot(msgDe({ audioMessage: {} }), meus, NOMES) === false, 'audio sem texto: falso')
 conf(mencionaBot(msgDe(texto('oi')), meus, ['', '  ']) === false, 'nomes vazios: falso, sem lancar')
 
+secao('marcouBot e idsDoBot (1.6.1)')
+conf(marcouBot(msgDe(texto('@30662576877805 oi', { mentionedJid: ['111@lid'] })), meus, NOMES) === true, 'marcou pelo LID: marcou de verdade')
+conf(marcouBot(msgDe(texto('@Barbadinho me ajuda')), meus, NOMES) === true, '"@Barbadinho" digitado: marcou')
+conf(marcouBot(msgDe(texto('kkkk o barbadinho zoou o Kevin')), meus, NOMES) === false && mencionaBot(msgDe(texto('kkkk o barbadinho zoou o Kevin')), meus, NOMES) === true, 'so o nome no meio da frase: menciona sim, marcou nao')
+conf(marcouBot(msgDe(texto('oi', { mentionedJid: ['5515997770009@s.whatsapp.net'] })), meus, NOMES) === false, 'marcou outra pessoa: falso')
+conf(marcouBot(msgDe(texto('@barbadinhos')), meus, NOMES) === false, '"@barbadinhos" colado: falso')
+conf(idsDoBot(meus).join(',') === '5515981316483', 'idsDoBot: so digitos de 5 a 20 (o LID de mentira "111" do teste fica fora)')
+conf(idsDoBot(new Set(['5515981316483@s.whatsapp.net', '30662576877805@lid'])).join(',') === '5515981316483,30662576877805' && idsDoBot(undefined).length === 0, 'idsDoBot: numero e LID, so digitos; sem nada, vazio')
+
 secao('respondeBot')
 const meusIds = new Set(['BOT001'])
 conf(respondeBot(msgDe(texto('foi?', { participant: '5515981316483:2@s.whatsapp.net', stanzaId: 'X', quotedMessage: { conversation: 'resumo' } })), meus, meusIds) === true, 'citou mensagem cujo autor e o PN do bot')
@@ -145,7 +154,9 @@ conf(idadeS(msgDe(texto('oi'), { ts: AGORA_S - 121 }), agoraMs) > 120, 'mais de 
 secao('pacoteDe')
 const m = msgDe(texto('o pedido da Maria foi pago?', { stanzaId: 'BOT001', participant: '111@lid', quotedMessage: { conversation: 'Resumo do dia' } }), { key: { id: '3EB0ABC', participant: LID } })
 const p = pacoteDe(m, { numero: '5515981316483', de_jid: LID, de_fone: '5515997770001', de_nome: 'Guilherme', menciona: false, responde: true, citado_de_bot: true })
-conf(Object.keys(p).join(',') === 'numero,jid,msg_id,de_jid,de_fone,de_nome,texto,tipo,menciona,responde,citado,citado_de_bot,ts', 'as 13 chaves do contrato, na ordem')
+conf(Object.keys(p).join(',') === 'numero,jid,msg_id,de_jid,de_fone,de_nome,texto,tipo,menciona,responde,citado,citado_de_bot,ts,marcado,bot_ids', 'as 15 chaves do contrato, na ordem (1.6.1: marcado e bot_ids no fim)')
+const p2 = pacoteDe(m, { marcado: true, bot_ids: ['5515981316483', '30662576877805', 'x', 'y', 'z'] })
+conf(p2.marcado === true && p2.bot_ids.length === 4 && p.marcado === false && Array.isArray(p.bot_ids) && p.bot_ids.length === 0, 'marcado e bot_ids (no maximo 4); sem eles, false e lista vazia')
 conf(p.numero === '5515981316483' && p.jid === GRUPO && p.msg_id === '3EB0ABC', 'numero, jid do grupo e msg_id')
 conf(p.de_jid === LID && p.de_fone === '5515997770001' && p.de_nome === 'Guilherme', 'quem mandou')
 conf(p.texto === 'o pedido da Maria foi pago?' && p.tipo === 'texto', 'texto e tipo')
@@ -158,7 +169,7 @@ conf(pacoteDe(msgDe({ audioMessage: {} }), {}).tipo === 'audio' && pacoteDe(msgD
 secao('agente.mjs (fonte)')
 const fonte = fs.readFileSync(new URL('./agente.mjs', import.meta.url), 'utf8')
 const tem = (s, nome) => conf(fonte.includes(s), 'agente.mjs tem ' + nome)
-tem("const VERSAO = '1.6.0'", 'VERSAO 1.6.0')
+tem("const VERSAO = '1.6.1'", 'VERSAO 1.6.1')
 tem("'messages.upsert'", 'o ouvinte messages.upsert')
 tem('escuta', 'a lista escuta do ping')
 tem("'append'", "aceita type 'append'")

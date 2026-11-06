@@ -27,10 +27,10 @@ import pino from 'pino'
 import QRCode from 'qrcode'
 import qrterm from 'qrcode-terminal'
 import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore, isJidGroup } from '@whiskeysockets/baileys'
-import { textoDa, quemMandou, meusJidsDe, mencionaBot, respondeBot, idadeS, pacoteDe } from './entrada.mjs'
+import { textoDa, quemMandou, meusJidsDe, mencionaBot, marcouBot, idsDoBot, respondeBot, idadeS, pacoteDe } from './entrada.mjs'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.6.0'
+const VERSAO = '1.6.1'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
@@ -426,7 +426,8 @@ async function montarPacote(msg) {
   const quem = await quemMandou(msg, lidParaPn)
   const meusJids = meusJidsDe(s && s.user)
   const responde = respondeBot(msg, meusJids, meusMsgIds)
-  return pacoteDe(msg, { numero, ...quem, menciona: mencionaBot(msg, meusJids, [nome, NOME_BOT]), responde, citado_de_bot: responde })
+  // 1.6.1: `marcado` (marcou de verdade, nao so falou o nome) e `bot_ids` (numero e LID do bot) pro worker.
+  return pacoteDe(msg, { numero, ...quem, menciona: mencionaBot(msg, meusJids, [nome, NOME_BOT]), marcado: marcouBot(msg, meusJids, [nome, NOME_BOT]), bot_ids: idsDoBot(meusJids), responde, citado_de_bot: responde })
 }
 
 // Espera a conexao voltar (ate `ms`, olhando a cada 2 s). true = aberta.

@@ -106,6 +106,26 @@ export function mencionaBot(msg, meusJids, nomeBot) {
   return nomes.some((n) => new RegExp('(^|[^a-z0-9])' + escapaRegex(n) + '(?![a-z0-9])').test(texto))
 }
 
+// MARCOU DE VERDADE (06/11/2026): o bot na lista de marcados, ou "@nome" digitado. O nome solto no meio
+// da frase ("o barbadinho zoou o Kevin") conta pra mencionaBot (o worker deixa a IA decidir), nao aqui.
+export function marcouBot(msg, meusJids, nomeBot) {
+  const ctx = contextoDe(msg)
+  const marcados = ctx && Array.isArray(ctx.mentionedJid) ? ctx.mentionedJid : []
+  for (const j of marcados) {
+    const n = jidNormalizedUser(String(j || ''))
+    if (n && meusJids && meusJids.has(n)) return true
+  }
+  const texto = semAcento(textoDa(msg).texto)
+  if (!texto) return false
+  const nomes = (Array.isArray(nomeBot) ? nomeBot : [nomeBot]).map((n) => semAcento(n).trim()).filter(Boolean)
+  return nomes.some((n) => new RegExp('@' + escapaRegex(n) + '(?![a-z0-9])').test(texto))
+}
+
+// Os digitos do numero e do LID do bot: o worker troca a marcacao "@<isso>" do texto por "@Barbadinho".
+export function idsDoBot(meusJids) {
+  return [...(meusJids || [])].map((j) => String(j).split('@')[0].split(':')[0]).filter((x) => /^\d{5,20}$/.test(x))
+}
+
 // Respondeu (citou) uma mensagem do bot: o autor da citada e o bot, ou o id dela esta entre os que o bot mandou.
 export function respondeBot(msg, meusJids, meusMsgIds) {
   const ctx = contextoDe(msg)
@@ -153,5 +173,7 @@ export function pacoteDe(msg, partes) {
     citado: citado(msg),
     citado_de_bot: !!p.citado_de_bot,
     ts: Number(toNumber(msg && msg.messageTimestamp)) || 0,
+    marcado: !!p.marcado,
+    bot_ids: Array.isArray(p.bot_ids) ? p.bot_ids.map(String).slice(0, 4) : [],
   }
 }
