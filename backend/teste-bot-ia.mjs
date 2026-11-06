@@ -264,7 +264,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -1343,6 +1343,29 @@ titulo('25. A chave so do bot (o credito do Google AI Pro vai so pro bot)');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaChamar(m2.env, 'sys', 'user', {});
   conf(/key=AIza-teste/.test(m2.chamadas[0].url), 'sem a chave do bot, usa a chave geral');
+}
+
+// ══ 26. O MANUAL (06/11) ═══════════════════════════════════════════════════════════════
+titulo('26. O manual: a duvida de uso puxa so os itens que batem');
+{
+  const { api } = monta({});
+  const temas = (txt) => api._botIaManualPara(txt).map((x) => x.t);
+  conf(temas('meu numero caiu, e agora?')[0] === 'Número caiu', '"meu numero caiu": o item do numero caido vem primeiro');
+  conf(temas('posso usar o sellwave web em duas maquinas ao mesmo tempo?').includes('Número aberto em outro computador'), '"posso usar em duas maquinas?": o item do numero aberto em outro computador');
+  conf(temas('como faço pra parar de receber lead pra almocar?').includes('Ligar e desligar o recebimento'), '"parar de receber pra almocar": o item do interruptor');
+  conf(temas('o pedido da maria nao subiu').includes('Pedido não subiu'), '"o pedido nao subiu": o item do pedido que nao subiu');
+  conf(!temas('somente amanha').includes('SellWave Web com defeito'), 'palavra curta so inteira ("som" nao casa com "somente")');
+  conf(temas('bom dia galera').length === 0, 'papo sem duvida: nenhum item');
+  conf(api.BOT_IA_MANUAL.length >= 30 && api.BOT_IA_MANUAL.every((x) => x.t && x.k.length && x.r && !/\d{8,}/.test(x.r) && !/[—–]/.test(x.r)), 'todo item tem tema, palavras e resposta, sem numero longo nem travessao');
+}
+{
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho posso usar o sellwave web em duas maquinas?', menciona: true, marcado: true }));
+  conf(/MANUAL \(como fazer, conferido no sistema/.test(m.chamadas[0].user) && /Cada número abre em um computador só/.test(m.chamadas[0].user) && r.viu.some((v) => /manual:/.test(v)), 'a duvida vai pra IA com o item do manual nos DADOS');
+  conf(/QUEM RESOLVE/.test(m.chamadas[0].system) && /Heynan: campanha e orçamento/.test(m.chamadas[0].system), 'o system leva quem resolve cada assunto');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho como desligo meu numero pra almocar?', menciona: true, marcado: true, de_jid: '5599000000000@s.whatsapp.net', de_fone: '5599000000000', de_nome: 'Fulano' }));
+  conf(/Pessoa não identificada/.test(m2.chamadas[0].user) && /MANUAL/.test(m2.chamadas[0].user), 'pessoa nao identificada tambem recebe o manual (nao tem dado pessoal)');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════

@@ -13853,12 +13853,12 @@ const BOT_IA_SISTEMA = [
   'PROBLEMA: acolhe primeiro e resolve, sem duvidar de quem relatou. Abre com uma reação de quem sentiu junto ("putz", "eita", "vish"; no grupo dos vendedores vale até um "puta merda") e, se a pessoa está desabafando, um "relaxa" ou "calma, queridão"; depois o próximo passo prático. Nada de kkkk nem festa, e nada de "faz parte". Diga "já avisei o Bruno" SÓ se aviso_entregue for true; senão peça pra marcar o Bruno aqui no grupo. Preencha avisar_direcao com um resumo curto.',
   '- Número caiu: acredite em quem falou, o app às vezes demora pra registrar a queda. NUNCA diga que não aparece queda, que o número tá ok ou conectado: isso soa como desmentir. Se os dados mostram que ele ainda recebe lead, diga que ele precisa sair da roleta logo pra não perder lead. O jeito: "puta merda, relaxa queridão! já avisei o Bruno pra ajeitar outro número e você não perder o bonde".',
   '- Pedido que não subiu ou sumiu: diga se ele aparece nos DADOS e em que situação está (aguardando aprovação da direção, a enviar, enviado...). Se não aparece, diga que não achou e peça o nome completo ou o telefone do cliente.',
-  'DADO: a resposta na primeira frase; depois, se couber, um empurrão animado (bora buscar, mete marcha, tá voando, BORA). Dúvida de como usar a dash ou o app: responda só com o que você tem certeza pelos DADOS; o que não sabe, diga que essa você não sabe e peça pra marcar o Bruno.',
+  'DADO: a resposta na primeira frase; depois, se couber, um empurrão animado (bora buscar, mete marcha, tá voando, BORA). Dúvida de como usar a dash, o app ou a operação: responda com o MANUAL que vier nos DADOS, curto e no jeito do grupo (o passo a passo pode passar de 2 frases); se não veio manual pra essa dúvida, diga que essa você não sabe e quem resolve (QUEM RESOLVE).',
   'FESTA: solte a energia do grupo, só quando o placar dos DADOS confirma. Vale "BOOORA", "boaaa", "chama", "segura o homi", "é os guri", "tá voando", vogal esticada, uma expressão curta em CAIXA ALTA, kkkkk e um "krl" (só no grupo dos vendedores). O número da pessoa é a festa: as vendas de hoje, quanto falta pro próximo marco, a meta. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
   'ZOEIRA: 1 ou 2 frases animadas, kkkkk se a pessoa brincou, puxando pro número de quem falou. Xingaram você de brincadeira (bot safado, fdp, vsf, corrompido, ladrão): é carinho do grupo; ria e devolva leve ("me xingou mas tá rindo, eu vi kkkkk", "corrompido não, só animado demais com venda kkkkk"), nunca devolva o xingamento, nunca peça respeito, nunca se diga chateado. Zoeira não é busca: nunca responda "não vi isso nos pedidos". Não explique a piada.',
   '',
   'COMO ESCREVER (o jeito do grupo):',
-  '- 1 ou 2 frases curtas (3 só em problema ou pedido ambíguo), sem título e sem negrito. Lista só no pedido ambíguo.',
+  '- 1 ou 2 frases curtas (3 em problema, pedido ambíguo ou passo a passo do manual), sem título e sem negrito. Lista só no pedido ambíguo.',
   '- Escreve como no zap: vc, pra, tá, hj, tb, msm. Nunca tu, tua, teus. Nunca travessão.',
   '- Nunca abra com "Oi, Fulano!" nem "Olá"; só cumprimente se a pessoa cumprimentou ("fala, Bryan", "bom dia, gurizada"). O nome, se vier, vai no meio ou no fim ("8 hj, Kevin").',
   '- Animação: vogal esticada (boaaa, boraaa, vamooo), CAIXA ALTA numa expressão curta, kkkkk (5 a 8 k), ponto de exclamação. Em FESTA e ZOEIRA, solte; em DADO, um toque; em PROBLEMA, nada disso. Não comece duas respostas seguidas do mesmo jeito.',
@@ -13941,10 +13941,428 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho quantos pedidos eu tenho pra cobrar?" (pessoa não identificada) -> ainda não sei quem é vc aqui, então não consigo abrir pedido nem fila. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)',
   ],
 };
+// O MANUAL (06/11/2026, pedido do Bruno: "se acontecer algum bug, algum pedido nao subiu ou qualquer ajuda que eu
+// teria que falar, quero que ele consiga falar"). As duvidas de uso que o time trouxe no grupo dos vendedores
+// (15/10 a 06/11), respondidas como o sistema funciona hoje e conferidas por dois revisores (codigo e risco).
+// Gerado de scratchpad/bot-vivo/manual_itens.py da conversa 23197806. So entram na mensagem os itens que batem.
+const BOT_IA_MANUAL = [
+ {
+  "t": "Número caiu",
+  "k": [
+   "banid",
+   "bloque",
+   "caindo",
+   "cair",
+   "caiu",
+   "desconect",
+   "pediu qr",
+   "qr code",
+   "queda",
+   "restrit"
+  ],
+  "r": "Desliga o interruptor dele no SellWave Web pra não ir lead pra ele e segue nos outros números. O Bruno ajeita outro: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Queda comprovada o sistema já desliga sozinho e marca o número como Restrito (some o interruptor, fica um tracinho); a volta é com o Bruno."
+ },
+ {
+  "t": "Falar com o lead por outro número",
+  "k": [
+   "card do lead",
+   "continuar a conversa",
+   "falar com ela",
+   "falar com ele",
+   "outro numero",
+   "por outro",
+   "trocar de numero"
+  ],
+  "r": "Dá sim. No CRM do Atendimento (a faixa de baixo do SellWave Web), o card do lead tem o botão de trocar: chama ele por outro número aberto aí. O botão direito no card abre o mesmo menu e tem Copiar o número. Se o número de origem foi banido, saiu da sua lista ou tá fechado como Restrito, esse menu abre sozinho."
+ },
+ {
+  "t": "Lead parou de chegar",
+  "k": [
+   "chega",
+   "chegando",
+   "lead",
+   "leads",
+   "nao chega",
+   "parou de chegar",
+   "pingado",
+   "roleta"
+  ],
+  "r": "Confere se o SellWave Web tá aberto e o interruptor dos seus números verde (laranja = bateu o limite ou parado até a meia-noite, cinza = desligado; tracinho no lugar = número fora de uso, não recebe). A roleta iguala os leads do dia: quem tá na frente espera os outros empatarem. Parou pra todo mundo? Marca o Heynan e o Bruno. Só pra você: marca o Bruno."
+ },
+ {
+  "t": "Ligar e desligar o recebimento",
+  "k": [
+   "almocar",
+   "almoco",
+   "desligar",
+   "desligo",
+   "expediente",
+   "interruptor",
+   "ligar de novo",
+   "parar de receber",
+   "pausa",
+   "pausar",
+   "sair um pouco"
+  ],
+  "r": "No SellWave Web, o interruptor do lado de cada número: verde recebe, cinza não (com a barra encolhida ele some: abre a barra na setinha do topo). Vai sair? Desliga. Voltou? Liga. Fechar o app desliga todos sozinho e, ao abrir, você liga de novo: nada religa sozinho."
+ },
+ {
+  "t": "Limite de leads do número",
+  "k": [
+   "aumenta o limite",
+   "bateu o limite",
+   "laranja",
+   "limite",
+   "teto"
+  ],
+  "r": "Você mesmo muda: dois cliques rápidos no contador do número (o 32/70 na linha dele) abrem o limite: 30, 50, 70 ou 100. Bateu o limite, fica laranja e volta à meia-noite. Chip em aquecimento não deixa mudar: o teto sobe sozinho com os dias. Se os dois cliques não abrem nada, o número não tá no modo limite: fala com o Bruno."
+ },
+ {
+  "t": "Número aberto em outro computador",
+  "k": [
+   "aberto por",
+   "dois computadores",
+   "duas maquinas",
+   "fecha ai meu",
+   "liberado",
+   "notebook",
+   "outra maquina",
+   "outro computador",
+   "outro pc"
+  ],
+  "r": "Cada número abre em um computador só. Se aparece \"Aberto por Fulano\", pede pra ele fechar o número no app dele (o X do lado) e o botão libera sozinho em até 2 minutos. Se foi você em outro PC, fecha lá. O mesmo número aberto em dois computadores derruba o número e some conversa."
+ },
+ {
+  "t": "Atualizar o SellWave Web",
+  "k": [
+   "app velho",
+   "atualiza",
+   "atualizacao",
+   "atualizar",
+   "desatualizado",
+   "reinicie",
+   "versao"
+  ],
+  "r": "No Windows ele se atualiza sozinho: baixa por trás e entra quando você fecha e abre o app (a faixa verde no pé da barra dos números avisa quando tá pronta). Se ela pedir pra baixar: baixa, fecha o app no X, espera ele salvar e roda o instalador. No Mac não é sozinho: baixa de novo em Ferramentas > SellWave Web. Depois liga os interruptores."
+ },
+ {
+  "t": "SellWave Web com defeito",
+  "k": [
+   "bug",
+   "bugou",
+   "erro",
+   "lento",
+   "ligacao",
+   "nao abre",
+   "nao envia",
+   "nao enviando",
+   "nao marca",
+   "nao ta enviando",
+   "som",
+   "trava",
+   "travando",
+   "travou"
+  ],
+  "r": "Primeiro fecha o número no X do lado dele e abre de novo. Não resolveu? Fecha o SellWave Web no X e espera ele terminar de salvar (nunca pelo gerenciador de tarefas), abre, vê se a faixa no pé da barra pede versão nova e liga os interruptores. Continuou? Eu aviso o Bruno daqui (ou marca ele) com o final do número e o que tá acontecendo."
+ },
+ {
+  "t": "Instalar o SellWave Web e o app do celular",
+  "k": [
+   "android",
+   "apk",
+   "baixar",
+   "baixo",
+   "celular",
+   "download",
+   "instalar",
+   "instalo",
+   "iphone",
+   "onde baixa"
+  ],
+  "r": "Computador: na dash, Ferramentas > SellWave Web > Baixar para Windows (pro cobrador o botão é Baixar versão de cobrador) ou Baixar para Mac, e entra com o mesmo login da dash. Celular: abre a dash no navegador com /app/ajustes no endereço e segue Instalar o aplicativo: Android pelo Chrome, iPhone pelo Safari."
+ },
+ {
+  "t": "Funil apagado com \"já enviado\"",
+  "k": [
+   "apagada",
+   "apagado",
+   "etapa",
+   "ja enviado",
+   "repetir funil"
+  ],
+  "r": "É só aviso: o funil fica apagado com \"já enviado\" quando já foi pra esse lead, pra você não repetir sem querer. Quer mandar de novo? Clica duas vezes no botão de enviar dele (o segundo clique em até 6 segundos)."
+ },
+ {
+  "t": "Salvar áudio ou mensagem no funil",
+  "k": [
+   "botao mais",
+   "criar funil",
+   "mensagem pronta",
+   "meu funil",
+   "objecao",
+   "salvar audio",
+   "salvar mensagem"
+  ],
+  "r": "Você mesmo cria: no painel do SellWave Web, o botão + faz mensagem, áudio, vídeo, foto ou PDF, e você escolhe Só eu ou Todos. Dá pra montar funil seu com o tempo de cada passo. Objeção nova sem material? Pede pro Heynan."
+ },
+ {
+  "t": "Cliente quer pagar",
+  "k": [
+   "antecipado",
+   "boleto",
+   "cartao",
+   "link do cartao",
+   "pagar antecipado",
+   "pix",
+   "quer pagar",
+   "reenvia",
+   "venceu"
+  ],
+  "r": "Pedido na entrega: boleto e cartão é com o cobrador do pedido; me fala o nome do cliente que eu digo de quem é a fila e marca ele aqui (não tá no grupo? marca o Heynan). Fechou antecipado? O link do cartão já aparece no pedido em Cadastro de Pedidos (Copiar link). Pix você mesmo manda, a chave CNPJ da Sell Wave com o valor."
+ },
+ {
+  "t": "Chave Pix da empresa",
+  "k": [
+   "alerta de golpe",
+   "chave",
+   "chave pix",
+   "cnpj",
+   "golpe"
+  ],
+  "r": "A chave oficial é o CNPJ da Sell Wave (no Pix aparece Sell Wave no nome), a da mensagem \"Chave Pix CNPJ\" que o Heynan manda aqui. Salva ela no + do painel do SellWave Web como Só eu e manda pro cliente com o valor, o CNPJ numa mensagem separada. Deu alerta de golpe ou o cliente não consegue pagar? Marca o cobrador do pedido ou o Heynan."
+ },
+ {
+  "t": "Comprovante que chegou pro vendedor",
+  "k": [
+   "comprovante",
+   "disse que pagou",
+   "diz que pagou",
+   "ja pagou",
+   "mandou o print"
+  ],
+  "r": "Posta o print aqui marcando o cobrador do pedido e o Heynan. Quem dá baixa é o cobrador, na ficha do pedido: Marcar como pago, ou Pagamento parcial se pagou só uma parte. Me fala o nome do cliente que eu digo de quem é a fila e se já consta pago."
+ },
+ {
+  "t": "Parcelamento",
+  "k": [
+   "carne",
+   "em vezes",
+   "parcela",
+   "parcelado",
+   "parcelar"
+  ],
+  "r": "Parcelado é só no cartão de crédito. Boleto e Pix são à vista e carnê não tem. Sem cartão, oferece um kit menor. Explica antes de fechar: quem acha que dá pra parcelar no boleto vira frustrado."
+ },
+ {
+  "t": "Preço dos kits",
+  "k": [
+   "frasco",
+   "frascos",
+   "kit",
+   "meses de tratamento",
+   "preco",
+   "quanto custa",
+   "tratamento",
+   "valor do kit"
+  ],
+  "r": "1 frasco por mês de tratamento: 1 mês R$ 197, 2 meses R$ 297, 3 meses R$ 397, 4 meses R$ 497, 6 meses R$ 697 e 10 meses R$ 997. No cadastro o valor vem sozinho do kit escolhido."
+ },
+ {
+  "t": "Cliente quer cancelar",
+  "k": [
+   "cancela",
+   "cancelar",
+   "cancelou",
+   "desistir",
+   "desistiu",
+   "familia nao quer",
+   "nao quer mais"
+  ],
+  "r": "Antes tenta reverter: liga, manda depoimento de cliente. Se o pedido ainda espera aprovação, você mesmo cancela em Cadastro de Pedidos, no botão de cancelar do pedido. Já aprovado ou enviado, marca o Heynan: depois de enviado não cancela, o cliente recusa a entrega ou devolve."
+ },
+ {
+  "t": "Cliente pergunta do pedido",
+  "k": [
+   "nao fui eu que vendi",
+   "outro vendedor",
+   "prazo",
+   "quando chega",
+   "quem vendeu",
+   "rastrear",
+   "rastreio",
+   "vai chegar"
+  ],
+  "r": "Me fala o nome do cliente que eu digo em que pé tá (a enviar, enviado, saiu pra entrega). O rastreio fica no detalhe do pedido no Kanban. Pedido de outro vendedor você não vê: depois da venda quem responde é o cobrador, então manda pro cliente a mensagem com o link de acompanhar o pedido, sem passar número na mão."
+ },
+ {
+  "t": "Cliente diz que não recebeu",
+  "k": [
+   "consta entregue",
+   "foto da entrega",
+   "marca entregue",
+   "nao chegou",
+   "nao recebeu",
+   "quem assinou"
+  ],
+  "r": "Abre o pedido no Kanban: em Foto da entrega aparece a foto e quem assinou (\"Recebido por\"), quando a transportadora manda. Passa isso pro cliente e pede pra conferir com vizinho ou parente. Se ele insistir, marca o Heynan, que abre chamado na transportadora."
+ },
+ {
+  "t": "Retirada nos Correios e endereço",
+  "k": [
+   "agencia",
+   "cep",
+   "correios",
+   "endereco",
+   "endereco errado",
+   "retirada",
+   "retirar"
+  ],
+  "r": "Evita retirada: no cadastro deixa Transportadora (só o Ceará vai pelos Correios). Pedido parado pra retirada numa agência fica com o cobrador do pedido. Confere CEP e número antes de cadastrar. Endereço errado em pedido ainda não aprovado, você corrige no lápis do pedido em Cadastro de Pedidos; já aprovado, marca o Heynan."
+ },
+ {
+  "t": "Pedido não subiu",
+  "k": [
+   "cadastrar",
+   "cadastrei",
+   "conflict",
+   "erro ao cadastrar",
+   "nao aparece",
+   "nao subiu",
+   "rascunho",
+   "subiu",
+   "sumiu"
+  ],
+  "r": "Pela dash, depois do Cadastrar o aviso do canto fica em \"Enviando\": não fecha a aba antes de sair \"cadastrado\". Deu erro? Tenta de novo no aviso, nunca cadastra de novo do zero (duplica). Pelo SellWave Web, a aba Pedidos avisa \"Pedido cadastrado\". Subiu, ele aparece no Cadastro de Pedidos e só vai pro Kanban depois que a direção aprova."
+ },
+ {
+  "t": "Termo do cliente",
+  "k": [
+   "aceite",
+   "aceitou o termo",
+   "comprovante do termo",
+   "confirmar o termo",
+   "termo"
+  ],
+  "r": "Pedido na entrega só sobe com o comprovante: print (Ctrl+V cola direto), áudio ou vídeo do cliente aceitando o termo. Vídeo pesado? Grava um de uns 30 s ou manda print. Sumiu e não confirma desde ontem? Não vale ficar em cima; na dúvida, chama o Heynan."
+ },
+ {
+  "t": "Placar ou meta não bate",
+  "k": [
+   "contei",
+   "contou",
+   "ladrao",
+   "meta da semana",
+   "minha meta",
+   "nao bate",
+   "placar"
+  ],
+  "r": "No meu placar, pedido cancelado não conta e pedido esperando aprovação já conta (na dash ele só entra depois de aprovado). A meta da semana vai de segunda 0h a domingo. Conta não bate? Pode ser pedido cadastrado duas vezes: me diz quanto você contou que eu passo pro Bruno conferir."
+ },
+ {
+  "t": "Dash travada ou lenta",
+  "k": [
+   "carregando",
+   "carregar",
+   "comentario",
+   "dash",
+   "f5",
+   "lenta",
+   "nao carrega",
+   "tela branca",
+   "travada"
+  ],
+  "r": "Aperta F5, mas antes olha se não tem pedido \"Enviando\" no canto da tela: espera ele terminar. Aba aberta há muito tempo fica com a tela antiga, e a dash muda várias vezes no dia. Continuou? Marca o Bruno dizendo a tela e o que aconteceu."
+ },
+ {
+  "t": "Cobrador não acha o pedido",
+  "k": [
+   "fila",
+   "minha fila",
+   "nao acho",
+   "nao encontro",
+   "nao ta comigo",
+   "saiu da minha",
+   "sumiu da fila"
+  ],
+  "r": "Cada cobrador vê só a fila dele, e pedido sem dono aparece pra todos. O pedido também muda de fila sozinho: se o cliente escreveu pro WhatsApp de outro cobrador, ele passa pra fila desse cobrador. Me fala o nome que eu digo de quem é. A busca acha por palavra solta do nome ou pelo final do telefone."
+ },
+ {
+  "t": "Link pro cliente acompanhar o pedido",
+  "k": [
+   "acompanhar",
+   "agradecimento",
+   "cobrador antigo",
+   "contato do cobrador",
+   "link",
+   "passar o numero do cobrador"
+  ],
+  "r": "Depois da venda manda o funil Etapa 6 - Agradecimento (H ou M) ou o Contato Cobrador: os dois terminam na mensagem com o link de acompanhar o pedido, que abre o WhatsApp do cobrador dono dele. Não passa número de cobrador na mão. Cliente falando com o cobrador errado: avisa aqui marcando o Heynan."
+ },
+ {
+  "t": "Ficha do pedido (cobrador)",
+  "k": [
+   "baixa",
+   "checkout",
+   "copiar dados",
+   "dar baixa",
+   "marcar como pago",
+   "pagamento parcial",
+   "pagou uma parte",
+   "remarcar",
+   "retorno"
+  ],
+  "r": "Na ficha do pedido: escreve o valor e Marcar como pago (confirma no segundo clique); pagou só uma parte, Pagamento parcial e o pedido fica na fila com o que falta. Retorno: Amanhã, 2, 3, 7, 10 ou 15 dias, às 9h, ou o calendário. Copiar dados e Abrir o link também tão lá."
+ },
+ {
+  "t": "Saque e nota fiscal",
+  "k": [
+   "comissao",
+   "nota",
+   "nota fiscal",
+   "pix pj",
+   "receber minha",
+   "sacar",
+   "saque"
+  ],
+  "r": "Pede o saque no app do celular, em Comissões > Solicitar saque (vai o disponível inteiro), ou na dash em Conta & Perfil > Solicitar saque, onde dá pra pôr o valor exato da nota. Cobrador pede só pela dash. A nota é pra Sell Wave LTDA: os dados tão na mensagem que o Heynan mandou aqui; não achou, marca ele. O Pix é o da PJ."
+ },
+ {
+  "t": "Chip recebendo contato do antigo dono",
+  "k": [
+   "antigo dono",
+   "era de outra pessoa",
+   "ligando direto",
+   "nao para de ligar"
+  ],
+  "r": "Chip que era de outra pessoa recebe contato do antigo dono. Responde uma vez que o número não é mais dela e bloqueia quem insistir. Se isso tá atrapalhando a chegada de lead, marca o Bruno."
+ },
+ {
+  "t": "Lead ruim ou de outro produto",
+  "k": [
+   "curioso",
+   "curiosos",
+   "garrafada",
+   "lead ruim",
+   "outro produto",
+   "qualidade"
+  ],
+  "r": "É normal: de cada 100 que clicam, uns 15 chegam a mandar mensagem, e muito é curioso. O que vale é a venda por conversa. Lead que chega achando que é outro produto vem do criativo: avisa o Heynan com o print."
+ }
+];
+const BOT_IA_QUEM_RESOLVE = "QUEM RESOLVE (quando não dá pra resolver por aqui):\n- Bruno: número caído, banido ou pedindo QR; defeito que continua no app ou na dash; pedido que sumiu; placar que não bate; roleta, limite e números de outra pessoa; quem é quem e o jeito do bot.\n- Heynan: campanha e orçamento; cliente difícil (recusa pagar, ameaça, advogado, reclama do produto); desconto e valor fora da tabela; cancelar pedido aprovado ou enviado; devolução; cliente que diz que não recebeu; comissão, saque, nota e premiação; troca de cobrador; criativo e material de objeção; chave Pix diferente da CNPJ.";
+// Os itens do manual que batem com a mensagem (palavra curta inteira; palavra longa pelo comeco), no maximo 3.
+function _botIaManualPara(texto) {
+  const n = ' ' + _botIaNorm(texto) + ' ';
+  if (n.trim().length < 3) return [];
+  const bate = (k) => (k.length <= 4 ? n.includes(' ' + k + ' ') : n.includes(' ' + k));
+  return BOT_IA_MANUAL.map((it) => ({ it, p: it.k.reduce((s, k) => s + (bate(k) ? (k.includes(' ') ? 2 : 1) : 0), 0) }))
+    .filter((x) => x.p > 0).sort((a, b) => b.p - a.p).slice(0, 3).map((x) => x.it);
+}
 function _botIaSistema(cfg, grupo) {
   const ia = cfg.ia || _botIaPadrao();
   const L = [BOT_IA_SISTEMA, '', 'Jeito de falar neste grupo: ' + (ia.tom[grupo] || (grupo === 'cob' ? BOT_IA_TOM_COB : BOT_IA_TOM_VEND))];
   if (ia.instrucoes) L.push('', 'Instruções da direção (valem acima do jeito de falar):', ia.instrucoes);
+  L.push('', BOT_IA_QUEM_RESOLVE);
   L.push('', 'EXEMPLOS DO JEITO CERTO neste grupo (os nomes de cliente são inventados; copie o jeito, nunca o número):', ...(BOT_IA_EXEMPLOS[grupo] || BOT_IA_EXEMPLOS.vend).map((e) => '- ' + e));
   return L.join('\n');
 }
@@ -14058,6 +14476,11 @@ async function _botIaResponder(env, cfg, b, opts) {
   } else {
     D.push('Pessoa não identificada: NÃO dê dado de pedido nem de número.');
     viu.push('sem identificação');
+  }
+  const manual = _botIaManualPara(textoBusca);
+  if (manual.length) {
+    D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
+    viu.push('manual: ' + manual.map((x) => x.t).join(', '));
   }
   const recentes = o.teste ? [] : await _botIaRecentes(env, b.jid);
   const montaUser = (extra) => [
