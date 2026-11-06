@@ -1310,7 +1310,8 @@ titulo('23. Numero caiu: acolhe e resolve, nunca desmente quem relatou');
   const { api } = monta({});
   const sys = api._botIaSistema(api._botNormaliza(CFG_RAW, null), 'vend');
   conf(/acolhe primeiro e resolve, sem duvidar de quem relatou/.test(sys) && /NUNCA diga que não aparece queda/.test(sys), 'a regra: acolher e nunca usar a falta de registro de queda pra desmentir');
-  conf(/não perder o bonde/.test(sys) && /no máximo um por mensagem/.test(sys), 'trocadilho de vez em quando, no maximo um');
+  conf(/não perder o bonde/.test(sys) && /a maioria das respostas não leva nenhum/.test(sys) && /você já usou um, agora não/.test(sys), 'trocadilho so no momento de impacto, e nunca dois seguidos');
+  conf((api.BOT_IA_EXEMPLOS.vend.join('\n').match(/bonde/g) || []).length === 1, 'so um exemplo com trocadilho (o desabafo do numero caido)');
   const ex = api.BOT_IA_EXEMPLOS.vend.join('\n');
   conf(!/ainda não aparece queda/.test(ex) && /relaxa queridão/.test(ex), 'nenhum exemplo desmente a queda; o exemplo de numero caido acolhe');
 }
