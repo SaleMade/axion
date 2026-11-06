@@ -1655,6 +1655,22 @@ titulo('37. "fechei a 10" com menos no placar: o aviso vai nos dados');
   conf(!/ATENÇÃO:/.test(m3.chamadas[0].user), 'hora e data nao contam como numero dito');
 }
 
+// ══ 38. SEM EMPURRAO DE VENDA EM TODA RESPOSTA (06/11 noite) ═══════════════════════════════
+titulo('38. "bora buscar" so quando o assunto e venda ou cobranca');
+{
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho vc torce pra qual time?', menciona: true, marcado: true }));
+  conf(/ninguém falou de venda nem de cobrança: responda sem empurrão/.test(m.chamadas[0].user), 'pergunta boba: a IA e avisada pra nao empurrar venda');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho quantas vendas eu tenho hj?', menciona: true, marcado: true }));
+  conf(!/ninguém falou de venda/.test(m2.chamadas[0].user), 'pergunta de venda: sem o aviso (o empurrao pode)');
+  const sys = m.chamadas[0].system;
+  conf(/NÃO fecha toda resposta/.test(sys) && /sem puxar pro placar e sem empurrar venda/.test(sys), 'as regras do empurrao no prompt');
+  const ex = m.api.BOT_IA_EXEMPLOS.vend.concat(m.api.BOT_IA_EXEMPLOS.cob);
+  const comBora = ex.filter((e) => /bora (buscar|moer)|mete marcha/.test(e.split('->')[1] || ''));
+  conf(comBora.length <= 4, 'poucos exemplos terminam com empurrao (' + comBora.length + ')');
+}
+
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
 titulo('15. As funcoes de texto');
 {
