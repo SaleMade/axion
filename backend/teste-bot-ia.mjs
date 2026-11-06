@@ -1248,7 +1248,7 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   const vend = api.BOT_IA_EXEMPLOS.vend.join('\n'), cob = api.BOT_IA_EXEMPLOS.cob.join('\n');
   conf(!/[—–]/.test(vend + cob) && /🔥/u.test(vend) && /💰/u.test(cob), 'nenhum exemplo tem travessao; a festa dos dois grupos tem emoji');
   conf(!/\b(desgraçado|as bb|gin|revoada)\b/i.test(vend + cob), 'nenhum exemplo tem a piada das bb nem xingamento pesado');
-  conf(/ouvi dizer que quem não faz no mínimo 5 vendas/.test(vend) && /ISSO AÍ PORRAAAA/.test(cob), 'a zoeira tem mini historinha e a cobranca tem a mesma energia');
+  conf(/contam por aí que o último a bater 5/.test(vend) && /ISSO AÍ PORRAAAA/.test(cob) && /nunca repita uma que já saiu/.test(sys), 'a zoeira tem mini historinha (sempre inventada, sem repetir) e a cobranca tem a mesma energia');
   conf(api.BOT_IA_EXEMPLOS.vend.some((e) => /^"Barbadinho tu é fera"/.test(e)) && api.BOT_IA_EXEMPLOS.cob.some((e) => /^"Barbadinho tu é fera"/.test(e)), 'o elogio pelo nome (sem marcar) tem resposta nos dois grupos');
 }
 {
@@ -1600,6 +1600,17 @@ titulo('34. Festa sem marcar: so palavra forte, so com o placar, uma tentativa a
   conf(r5.acao === 'visto' && m5.chamadas.length === 0, 'com "so quando marcarem" ligado, festa sem marcar nao entra');
   const n = m.api._botIaNormaliza({ tom: { vend: m.api.BOT_IA_TOM_VELHOS[0], cob: m.api.BOT_IA_TOM_VELHOS[1] } });
   conf(/ousado e zoeiro/.test(n.tom.vend) && /Mesma energia do grupo dos vendedores/.test(n.tom.cob), 'o jeito gravado igual ao padrao antigo vira o novo (mais ousado) nos dois grupos');
+}
+
+// ══ 35. ZOEIRA LIMPA COM A BARBARA (06/11 tarde) ═══════════════════════════════════════
+titulo('35. Com a Barbara a zoeira e limpa: vai nos DADOS da mensagem e na provocacao');
+{
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho conta uma piada', menciona: true, marcado: true }));
+  conf(!/zoeira são LIMPAS/.test(m.chamadas[0].user), 'com o Guilherme, nada de linha de zoeira limpa');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho conta uma piada', menciona: true, marcado: true }), { quem: { id: 'atendente_barb', nome: 'Barbara Marin', role: 'atendente', chefe: false, equipe: [] } });
+  conf(/Com Barbara a festa e a zoeira são LIMPAS/.test(m2.chamadas[0].user), 'com a Barbara, a linha de zoeira limpa vai nos dados da mensagem');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
