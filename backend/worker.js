@@ -13230,7 +13230,17 @@ const BOT_IA_TOM_COB = 'Direto, cordial e útil. Curto. Fala de pedido e cobran�
 // A mesma cascata do testador de criativo (medida em 05/10/2026 com a chave do Bruno). 429 passa pro
 // proximo; 400 tambem (um modelo pode recusar o thinkingConfig); 401/403 para, a chave e que esta errada.
 const BOT_IA_MODELOS = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
-const BOT_IA_MODELO_ANTHROPIC = 'claude-haiku-5-5';
+// A IA PRINCIPAL E A CLAUDE (06/11/2026, pedido do Bruno: "quero que ele use a Claude, pra sempre entregar
+// uma resposta bem inteligente"). Opus 5.5: pensa antes de responder (nesse modelo o pensamento e sempre
+// ligado; a profundidade e o `effort`), a saida vem no formato do schema (JSON garantido) e, com
+// `fallbacks: "default"`, se o filtro de seguranca da Claude recusar uma pergunta inocente a propria API
+// refaz noutro modelo. Sem a chave da Anthropic (Configuracoes > IA), ou com a Claude fora, cai no Gemini
+// gratis de antes. Chamada crua (fetch), como o resto deste worker: ele e um arquivo so, sem pacotes npm,
+// publicado por varias conversas; um pacote novo quebraria o deploy de quem nao rodasse npm install.
+const BOT_IA_MODELO_ANTHROPIC = 'claude-opus-5-5';
+const BOT_IA_ANTHROPIC_MS = 20000;   // a Claude pensa antes de responder: teto proprio, dentro dos 25 s
+const BOT_IA_SCHEMA = { type: 'object', properties: { responder: { type: 'boolean' }, texto: { type: 'string' }, avisar_direcao: { type: 'string' }, buscar: { type: 'string' } }, required: ['responder', 'texto', 'avisar_direcao', 'buscar'], additionalProperties: false };
+const BOT_IA_SCHEMA_TEXTO = { type: 'object', properties: { texto: { type: 'string' } }, required: ['texto'], additionalProperties: false };
 const BOT_IA_ORCAMENTO_MS = 25000;     // por mensagem, do primeiro ao ultimo byte da IA
 const BOT_IA_MODELO_MS = 10000;        // por modelo
 const BOT_IA_MAX_MODELOS = 2;
@@ -13291,12 +13301,15 @@ const _botIaGrupoDe = (cfg, jid) => {
   return '';
 };
 const _botIaGrupoCfg = (cfg, g) => (g === 'cob' ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {}));
-// Os grupos que o agente repassa: os dois configurados (quem e quem se preenche mesmo com a resposta desligada).
+// Os grupos que o agente repassa: SO os que estao com "Responder no grupo" ligado (06/11/2026, pedido do
+// Bruno: "nao quero que isso esteja funcionando agora"). Desligado, o bot do PC nem manda a mensagem pra
+// ca: nada e lido nem guardado daquele grupo, e o quem e quem se preenche a partir de quando ligar.
 function _botIaEscuta(cfg) {
   const out = [];
   if (!cfg || !cfg.ativo) return out;
-  if (cfg.grupo && cfg.grupo.id) out.push(String(cfg.grupo.id));
-  if (cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) out.push(String(cfg.cobranca.grupo.id));
+  const ia = cfg.ia || _botIaPadrao();
+  if (ia.responde && ia.responde.vend && cfg.grupo && cfg.grupo.id) out.push(String(cfg.grupo.id));
+  if (ia.responde && ia.responde.cob && cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) out.push(String(cfg.cobranca.grupo.id));
   return out;
 }
 // Texto sem acento, minusculo, um espaco so: e assim que nome e termo se comparam.
@@ -13360,20 +13373,36 @@ async function _botIaChamar(env, system, user, o) {
   if (akey) {
     out.provider = 'anthropic';
     try {
-      const r = await _fetchComTeto('https://api.anthropic.com/v1/messages', Math.min(BOT_IA_MODELO_MS, Math.max(1500, resta())), {
-        method: 'POST', headers: { 'x-api-key': akey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: BOT_IA_MODELO_ANTHROPIC, max_tokens: opts.maxTokens || 1024, temperature: opts.temperatura == null ? 0.8 : opts.temperatura, system, messages: [{ role: 'user', content: user }] }),
+      const r = await _fetchComTeto('https://api.anthropic.com/v1/messages', Math.min(BOT_IA_ANTHROPIC_MS, Math.max(1500, resta())), {
+        method: 'POST',
+        headers: { 'x-api-key': akey, 'anthropic-version': '2026-10-21', 'anthropic-beta': 'server-side-fallback-2026-07-01', 'content-type': 'application/json' },
+        // SEM temperature: a versao 2026-10-21 da API recusa (400). O pensamento conta no max_tokens, por
+        // isso o teto e folgado; a resposta mesmo e curta (o prompt manda ate 350 caracteres).
+        body: JSON.stringify({
+          model: BOT_IA_MODELO_ANTHROPIC, max_tokens: opts.maxTokensClaude || 8000, fallbacks: 'default',
+          system, messages: [{ role: 'user', content: user }],
+          output_config: { effort: opts.effort || 'medium', format: { type: 'json_schema', schema: opts.schema || BOT_IA_SCHEMA } },
+        }),
       });
       if (r.ok) {
         const d = await r.json();
-        const txt = String((d.content && d.content[0] && d.content[0].text) || '');
-        if (txt.trim()) { out.texto = txt; out.modelo = String(d.model || BOT_IA_MODELO_ANTHROPIC); out.ms = Date.now() - t0; return out; }
-        out.tentativas.push('anthropic vazio');
+        const stop = String((d && d.stop_reason) || '');
+        // O pensamento vem antes, em bloco proprio: a resposta e o primeiro bloco de TEXTO.
+        const bloco = (Array.isArray(d && d.content) ? d.content : []).find((b) => b && b.type === 'text');
+        const txt = String((bloco && bloco.text) || '');
+        if (stop === 'refusal') out.tentativas.push('claude recusou' + (d.stop_details && d.stop_details.category ? ' (' + d.stop_details.category + ')' : ''));
+        else if (stop === 'max_tokens') out.tentativas.push('claude bateu no teto de tokens');
+        else if (txt.trim()) {
+          out.texto = txt; out.modelo = String(d.model || BOT_IA_MODELO_ANTHROPIC); out.ms = Date.now() - t0;
+          out.tokens = (Number(d.usage && d.usage.input_tokens) || 0) + (Number(d.usage && d.usage.output_tokens) || 0);
+          return out;
+        } else out.tentativas.push('claude vazio');
       } else {
-        out.tentativas.push('anthropic ' + r.status);
-        if (r.status === 429) { out.quota = true; }
+        const corpoErro = await r.text().catch(() => '');
+        out.tentativas.push('claude ' + r.status + (corpoErro ? ': ' + corpoErro.replace(/\s+/g, ' ').slice(0, 120) : ''));
+        if (r.status === 429) out.quota = true;
       }
-    } catch (e) { out.tentativas.push('anthropic: ' + String((e && e.message) || e).slice(0, 80)); }
+    } catch (e) { out.tentativas.push('claude: ' + String((e && e.message) || e).slice(0, 80)); }
   }
   const gkey = await getAIKey(env, 'gemini');
   if (!gkey) { out.erro = out.tentativas.concat(['sem chave de IA']).join(' | '); out.ms = Date.now() - t0; return out; }
@@ -13823,7 +13852,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   res.contexto = montaUser('').slice(0, 8000);
   let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS });
   res.chamadas = 1;
-  res.modelo = ch.modelo; res.ms = ch.ms;
+  res.modelo = ch.modelo; res.ms = ch.ms; res.tentativas = ch.tentativas || [];
   res.viu = viu;
   if (!ch.texto) {
     if (ch.quota && !o.teste) { await _writeConfig(env, 'bot_ia_quota_ate', String(agora + BOT_IA_QUOTA_PAUSA_S)).catch(() => {}); }
@@ -13951,7 +13980,7 @@ async function _botIaProvocaTick(env, cfg, dia) {
     const lider = dados.vendedores.slice().sort((a, b) => b.pedidos - a.pedidos)[0];
     const system = _botIaSistema(cfg, 'vend', _botIaExemplos(cfg, v.id)) + '\n\nAgora você NÃO está respondendo ninguém: você vai cutucar um vendedor que está parado perto de um marco. Responda só com JSON {"texto": "..."} (uma provocação curta, engraçada, de 1 ou 2 frases, no tom do grupo, citando que faltam ' + faltam + ' pra ' + prox + ', sem número inventado, sem comparar com os outros).';
     const user = 'Vendedor: ' + v.nome + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Último pedido dele há ' + Math.round((agoraMs - ultimo) / 60000) + ' minutos.' + (lider && lider.id !== v.id ? ' Líder do dia: ' + lider.nome + ' com ' + lider.pedidos + ' (só pra você saber; não compare).' : ' Ele é o líder do dia.') + ' Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
-    const ch = await _botIaChamar(env, system, user, { orcamentoMs: 8000, maxModelos: 1, maxTokens: 300, temperatura: 1 });
+    const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 1, maxTokens: 300, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
     let texto = '';
     if (ch.texto) { const j = _botIaJson(ch.texto); const lim = _botIaLimpa(j && j.texto, []); if (lim.texto && !lim.barrou) texto = lim.texto; }
     if (!texto) texto = _botFrase('{nome}, faltam {faltam} pra bater {n}. Vai dar mole agora?', { nome: v.nome, faltam, n: prox });
@@ -17208,7 +17237,7 @@ async function handleBotIaTeste(req, env) {
     await env.DB.prepare('INSERT INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .bind(Math.floor(Date.now() / 1000), _brDay(), grupo, 'teste', 'teste:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8), '', '', (quem.nome || 'Teste') + ' (teste)', quem.id || '', texto, 'teste', _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0).run();
   } catch (_) {}
-  return json({ ok: true, responder: !!r.responder, resposta: r.resposta, motivo: r.motivo, modelo: r.modelo, ms: r.ms, viu: r.viu || [], contexto: r.contexto || '' });
+  return json({ ok: true, responder: !!r.responder, resposta: r.resposta, motivo: r.motivo, modelo: r.modelo, ms: r.ms, viu: r.viu || [], contexto: r.contexto || '', tentativas: r.tentativas || [] });
 }
 async function handleBotLog(req, env) {
   const u = await authUser(req, env);

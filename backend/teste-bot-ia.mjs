@@ -220,7 +220,7 @@ function monta(mundo) {
     const body = init && init.body ? JSON.parse(init.body) : {};
     const anthropic = /api\.anthropic\.com/.test(u);
     const modelo = anthropic ? String(body.model || '') : ((u.match(/models\/([^:]+):/) || [])[1] || '');
-    const ch = { url: u, modelo, anthropic, body,
+    const ch = { url: u, modelo, anthropic, body, headers: (init && init.headers) || {},
       system: anthropic ? String(body.system || '') : String(((body.system_instruction || {}).parts || [{}])[0].text || ''),
       user: anthropic ? String(((body.messages || [{}])[0]).content || '') : String((((body.contents || [{}])[0]).parts || [{}])[0].text || '') };
     chamadas.push(ch);
@@ -228,7 +228,8 @@ function monta(mundo) {
     const spec = (typeof mundo.ia === 'function') ? mundo.ia(ch, i) : (Array.isArray(mundo.ia) ? (mundo.ia[i] || mundo.ia[mundo.ia.length - 1]) : mundo.ia) || { json: { responder: true, texto: 'Fechado.' } };
     if (spec.status && spec.status !== 200) return { ok: false, status: spec.status, json: async () => ({ error: { message: 'erro ' + spec.status } }), text: async () => '' };
     const texto = spec.texto != null ? String(spec.texto) : JSON.stringify(spec.json || {});
-    if (anthropic) return { ok: true, status: 200, json: async () => ({ model: modelo, content: [{ type: 'text', text: texto }] }) };
+    // A Claude devolve o pensamento num bloco antes do texto (vazio por padrao) e o stop_reason.
+    if (anthropic) return { ok: true, status: 200, json: async () => ({ model: modelo, stop_reason: spec.stop || 'end_turn', stop_details: spec.stop_details || null, content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: texto }], usage: { input_tokens: 3000, output_tokens: 400 } }) };
     return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: texto }] }, finishReason: spec.finish || 'STOP' }] }) };
   };
 
@@ -731,10 +732,22 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
 {
   const { r, chamadas } = await pergunta({ anthropic: 'sk-ant-teste', ia: [{ json: { responder: true, texto: 'Pelo Claude.' } }] });
   conf(chamadas.length === 1 && chamadas[0].anthropic && /api\.anthropic\.com\/v1\/messages/.test(chamadas[0].url), 'com chave Anthropic a primeira chamada vai pra api.anthropic.com');
-  conf(typeof chamadas[0].body.system === 'string' && /Barbadinho/.test(chamadas[0].body.system) && chamadas[0].body.model === 'claude-haiku-5-5' && chamadas[0].body.messages[0].role === 'user', 'o body leva `system`, o modelo e a mensagem do usuario');
-  conf(r.acao === 'respondeu' && r.resposta === 'Pelo Claude.', 'e a resposta sai');
-  const cai = await pergunta({ anthropic: 'sk-ant-teste', ia: [{ status: 529 }, JSON_OK] });
-  conf(cai.r.acao === 'respondeu' && cai.chamadas.length === 2 && !cai.chamadas[1].anthropic, 'Anthropic fora: cai pra cascata do Gemini');
+  conf(typeof chamadas[0].body.system === 'string' && /Barbadinho/.test(chamadas[0].body.system) && chamadas[0].body.model === 'claude-opus-5-5' && chamadas[0].body.messages[0].role === 'user', 'o body leva `system`, o modelo (Claude Opus 5.5) e a mensagem do usuario');
+  const b0 = chamadas[0].body, h0 = chamadas[0].headers;
+  conf(r.acao === 'respondeu' && r.resposta === 'Pelo Claude.' && r.modelo === 'claude-opus-5-5', 'le o bloco de TEXTO (o de pensamento vem antes e fica de fora)');
+  conf(b0.output_config && b0.output_config.effort === 'medium' && b0.output_config.format && b0.output_config.format.type === 'json_schema' && b0.output_config.format.schema.additionalProperties === false, 'pede effort medium e a resposta no formato do schema (JSON garantido)');
+  conf(!('temperature' in b0) && !('thinking' in b0), 'sem temperature (a versao nova da API recusa) e sem mexer no pensamento (sempre ligado no Opus 5.5)');
+  conf(b0.fallbacks === 'default' && h0['anthropic-beta'] === 'server-side-fallback-2026-07-01' && h0['anthropic-version'] === '2026-10-21', 'fallbacks "default" com o cabecalho certo e a versao 2026-10-21');
+  conf(b0.max_tokens >= 4000, 'max_tokens folgado (o pensamento conta nele)');
+}
+{
+  // Claude recusou (filtro de seguranca) ou bateu no teto: cai no Gemini, sem silencio.
+  const rec = await pergunta({ anthropic: 'sk-ant-teste', ia: [{ stop: 'refusal', stop_details: { category: 'cyber' }, json: {} }, JSON_OK] });
+  conf(rec.r.acao === 'respondeu' && rec.chamadas.length === 2 && !rec.chamadas[1].anthropic && /gemini/.test(rec.r.modelo), 'recusa da Claude: o Gemini responde');
+  const teto = await pergunta({ anthropic: 'sk-ant-teste', ia: [{ stop: 'max_tokens', texto: '{"responder": tr' }, JSON_OK] });
+  conf(teto.r.acao === 'respondeu' && teto.chamadas.length === 2, 'Claude cortada no teto: o Gemini responde');
+  const caiu = await pergunta({ anthropic: 'sk-ant-teste', ia: [{ status: 529 }, JSON_OK] });
+  conf(caiu.r.acao === 'respondeu' && caiu.chamadas.length === 2 && !caiu.cfgdb.bot_ia_quota_ate && !caiu.chamadas[1].anthropic, 'Claude sobrecarregada (529): cai pra cascata do Gemini, sem pausa');
 }
 
 // ══ 11. A ROTA DO AGENTE ═══════════════════════════════════════════════════════════════
@@ -778,7 +791,10 @@ const AGENTE = (o) => ({ config: { bot_agente_token: TOKEN, bot_agente: JSON.str
   const r = await m.api.handleBotAgente(req('/api/bot/agente/msg', msg({ texto: 'oi', menciona: true })), m.env);
   conf(r._json.ignorar === true && m.chat.length === 0 && m.quem.length === 1 && m.chamadas.length === 0, 'responder desligado no grupo: ignorar, so bot_quem, nenhuma linha em bot_chat');
   const p = await m.api.handleBotAgente(req('/api/bot/agente/ping', { estado: 'open', numero: NUMERO_BOT, nome: 'Barbadinho', versao: '1.6.0' }), m.env);
-  conf(p._json.ok === true && Array.isArray(p._json.escuta) && p._json.escuta.join() === GV + ',' + GC, 'o ping devolve `escuta` com os dois grupos (mesmo com a resposta desligada num deles)');
+  conf(p._json.ok === true && Array.isArray(p._json.escuta) && p._json.escuta.join() === GC, 'o ping so manda escutar o grupo com "Responder no grupo" ligado (o outro nem chega aqui)');
+  const nada = monta({ ...MUNDO, cfg: { ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { vend: false, cob: false } } }, ...AGENTE() });
+  const p2 = await nada.api.handleBotAgente(req('/api/bot/agente/ping', { estado: 'open', numero: NUMERO_BOT, nome: 'Barbadinho', versao: '1.6.0' }), nada.env);
+  conf(Array.isArray(p2._json.escuta) && p2._json.escuta.length === 0, 'tudo desligado: o bot do PC nao repassa nada (nada e lido)');
 }
 
 // ══ 12. A PROVOCACAO PERTO DO MARCO ════════════════════════════════════════════════════
