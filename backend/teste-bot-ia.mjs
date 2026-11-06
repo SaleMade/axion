@@ -677,7 +677,7 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
     const m = monta({ ...MUNDO, ia: [{ json: { responder: false, texto: '' } }] });
     const r2 = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'meu numero caiu', menciona: false }));
     conf(r2.acao === 'calado' && /a IA preferiu/.test(r2.motivo) && !r2.resposta, 'sem marcar (entrou sozinho) e a IA calou: calado de verdade');
-    conf(/Você foi MARCADO nesta mensagem/.test((await pergunta({ ia: [JSON_OK] })).chamadas[0].user) && !/Você foi MARCADO|Falaram seu nome|Responderam uma mensagem sua/.test(m.chamadas[0].user), 'a IA sabe quando foi marcada e quando entrou sozinha');
+    conf(/Te chamaram nesta mensagem/.test((await pergunta({ ia: [JSON_OK] })).chamadas[0].user) && !/Te chamaram nesta mensagem|Falaram seu nome|Responderam uma mensagem sua/.test(m.chamadas[0].user), 'a IA sabe quando foi marcada e quando entrou sozinha');
     conf(/Quando te MARCAM \(@Barbadinho\), responda sempre/.test(m.chamadas[0].system) && /no condicional/.test(m.chamadas[0].system) && /Prometer mudar seu jeito/.test(m.chamadas[0].system), 'as regras: marcado responde sempre; provavel no condicional; nao promete mudar o jeito');
   }
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Liga pra ela no 15 99999 0000.' } }] }));
@@ -1262,7 +1262,7 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   // Falou o nome pra elogiar ("Barbadinho tu e fera"): a linha diz pra responder quando e COM o bot.
   const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'fera é vc com 2 hj kkkkk' } }] });
   const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'Barbadinho tu é fera', menciona: true, marcado: false }));
-  conf(r.acao === 'respondeu' && /se estão falando COM você/.test(m.chamadas[0].user), 'nome no elogio: a IA sabe que e com ela e responde');
+  conf(r.acao === 'respondeu' && /Te chamaram nesta mensagem/.test(m.chamadas[0].user), 'nome no elogio (no comeco da frase): conta como chamar o bot, e ele responde');
 }
 {
   // Cascata: 429 tira o modelo da fila por 3 min (a cota gratis e por modelo).
@@ -1285,6 +1285,21 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho bati 5 hoje, solta um audio comemorando', menciona: true, marcado: true }));
   conf(!/Nenhum pedido encontrado/.test(m2.chamadas[0].user), 'comemoracao com "bati", "audio", "comemorando": nao vira busca de pedido');
+}
+
+// ══ 22. CHAMAR PELO NOME (06/11) ═══════════════════════════════════════════════════════
+titulo('22. O nome no comeco ou no fim da mensagem e chamar o bot');
+{
+  const m = monta({ ...MUNDO, ia: [{ json: { responder: false, texto: '' } }] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'Massa meu querido barbadinho', menciona: true, marcado: false }));
+  conf(r.acao === 'respondeu' && /^tô aqui!/.test(r.resposta) && /Te chamaram nesta mensagem/.test(m.chamadas[0].user), '"Massa meu querido barbadinho" (nome no fim): conta como marcar, nunca fica calado');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: 'Barbadinho voce consegue tirar duvida da dash?', menciona: true, marcado: false }));
+  conf(/Te chamaram nesta mensagem/.test(m2.chamadas[0].user), '"Barbadinho voce consegue..." (nome no comeco): conta como marcar');
+  const m3 = monta({ ...MUNDO, ia: [{ json: { responder: false, texto: '' } }] });
+  const r3 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'kkkk o barbadinho zoou o Kevin', menciona: true, marcado: false }));
+  conf(r3.acao === 'calado' && /Falaram seu nome/.test(m3.chamadas[0].user), 'o nome no meio da frase (falando DELE): a IA decide, e pode calar');
+  conf(/agradecimento ou elogio pra você ganha resposta curta e animada/.test(m3.chamadas[0].system), 'elogio e agradecimento pro bot ganham resposta curta');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════

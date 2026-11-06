@@ -13874,7 +13874,7 @@ const BOT_IA_SISTEMA = [
   '',
   'QUANDO RESPONDER:',
   '- Quando te MARCAM (@Barbadinho), responda sempre (responder = true).',
-  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento pra você ganha no máximo um "tmj"; risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
+  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "kkkkk valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
   '- Sem te chamarem, só entre se for problema que os dados resolvem; papo entre pessoas = responder false. Não responda a mesma coisa duas vezes.',
   '',
   'Responda SOMENTE com JSON, sem nada antes ou depois: {"responder": true ou false, "texto": "a mensagem", "avisar_direcao": "" ou "resumo curto do problema", "buscar": "" ou "nome ou telefone de um pedido que você precisa e não veio"}.',
@@ -13946,7 +13946,10 @@ async function _botIaResponder(env, cfg, b, opts) {
   const textoBusca = texto.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
   // MARCOU de verdade (o bot na lista de marcados ou "@Barbadinho" digitado; o agente 1.6.1 manda
   // `marcado`). Falar o nome no meio da frase ou citar uma mensagem do bot chama, mas a IA decide.
-  const marcado = !!o.teste || ('marcado' in b ? !!b.marcado : !!b.menciona);
+  // CHAMOU PELO NOME (06/11, teste do Bruno: "Massa meu querido barbadinho" ficou calado): o nome no comeco ou
+  // no fim da mensagem e chamar o bot, como marcar; no meio ("o barbadinho zoou o Kevin") e falar dele.
+  const peloNome = !!b.menciona && /(^barbadinho( |$)|(^| )barbadinho$)/.test(_botIaNorm(texto));
+  const marcado = !!o.teste || ('marcado' in b ? !!b.marcado : !!b.menciona) || peloNome;
   const tipo = String(b.tipo || 'texto');
   const agora = Math.floor(Date.now() / 1000);
   // 1. Gatilho
@@ -14045,7 +14048,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
     ...(recentes.length ? ['Últimas mensagens do grupo:', ...recentes, ''] : []),
     ...(b.citado ? ['Mensagem citada: "' + String(b.citado).slice(0, 300) + '"'] : []),
-    ...(marcado ? ['Você foi MARCADO nesta mensagem ("@Barbadinho" é você): responda.']
+    ...(marcado ? ['Te chamaram nesta mensagem (marcando ou pelo nome; "@Barbadinho" é você): responda.']
       : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; se falam DE você pra outra pessoa ou é só risada, responder false.']
         : modo === 'conversa' ? ['Essa pessoa estava conversando com você agora há pouco e escreveu de novo sem marcar: se é com você (pergunta, pedido, oi, elogio, brincadeira com você), responda; se é papo com outra pessoa ou só risada, responder false.']
           : modo === 'chamado' ? ['Responderam uma mensagem sua sem te marcar: responda se for pergunta ou pedido pra você; agradecimento ganha no máximo um "tmj"; risada ou conversa com outra pessoa = responder false.'] : []),
