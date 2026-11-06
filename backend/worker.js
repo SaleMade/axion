@@ -25686,9 +25686,12 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds, 
     }
     for(const c of mine){
       const aquec = _chipAquecendo(c, aquecIds) ? _numDoAquecimento(c) : null;
-      // NUMERO EM AQUECIMENTO NAO FAZ PLANTAO: a rampa existe pra impedir despejo num chip novo, e
-      // de madrugada nao ha ninguem pra atender o que cair nele. Plantao e numero de producao.
-      if(soltaAppOff && aquec) continue;
+      // NUMERO EM AQUECIMENTO FAZ PLANTAO (05/11/2026, pedido do Bruno: "chegam leads na madrugada
+      // (...) eu gostaria que os numeros de aquecimento recebessem esses leads para que a gente
+      // pudesse aquecer eles"). Ate hoje ele ficava fora, pra nao despejar lead em chip novo. Quem
+      // impede o despejo continua sendo a RAMPA, que vale aqui igual de dia (o `aquec.lim` abaixo, e
+      // a reserva na roleta). E ele entra NA FRENTE da fila do vendedor (ordem -1), entao no plantao
+      // o lead vai primeiro pra quem aquece e o numero de producao fica com o que sobrar do teto.
       // "Em uso" segue obrigatorio pro numero de producao; o em aquecimento entra pelo `aquec`.
       // A ORDEM DESTAS TRES LINHAS E O BUG (18/10/2026, achado por auditoria).
       //
@@ -25778,8 +25781,8 @@ function _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds, 
   // E SO ULTIMO RECURSO, e por isso mora DEPOIS do `out.length`: a passada de cima e a de sempre,
   // com o interruptor mandando. Aqui voltam apenas os numeros marcados `app_off`, ou seja os que
   // estao desligados SO porque o dono fechou o app. Numero que GENTE desligou (risco de ban,
-  // exclusivo, "ate amanha") nunca volta, e numero em aquecimento tambem nao (a rampa existe pra
-  // isso). Quem recebe por plantao vem marcado `plantao: true`, pra tela nao dizer que o
+  // exclusivo, "ate amanha") nunca volta. Numero em aquecimento VOLTA desde 05/11/2026, na frente da
+  // fila e dentro da rampa (ver o laco acima). Quem recebe por plantao vem marcado `plantao: true`, pra tela nao dizer que o
   // interruptor esta ligado quando ele nao esta.
   const pl = _resolvePresselSellers(p, chips, liveSet, emUsoIds, foraIds, aquecIds, 'plantao');
   for(const s of pl){ s.plantao = true; for(const x of (s.nums || [])) x.plantao = true; }
@@ -27590,8 +27593,9 @@ async function handlePresselNum(req, env) {
   if (!at || nk.length < 8) return err('Vendedor e número obrigatórios');
   const _meuAfl = isAfiliado(u) ? aflDe(u) : null;
   if (isAfiliado(u) && !_meuAfl) return err('Cadastro de afiliado incompleto', 403);
+  let _plantaoAq = false;   // ver "AQUECIMENTO COM O APP FECHADO" abaixo; vale pras voltas seguintes
   for (let tent = 0; tent < 6; tent++) {
-    const _lido = await _estadoLe(env, ['chips', 'pressels']);   // so chips e pressels, nao o estado inteiro (ver _estadoLe)
+    const _lido = await _estadoLe(env, ['chips', 'pressels', 'wa_statuses']);   // so estas chaves, nao o estado inteiro (ver _estadoLe); as tags dizem quem aquece
     if (!_lido) return err('Estado não encontrado', 404);
     const data = _lido.data;
     const chips = Array.isArray(data.chips) ? data.chips : [];
@@ -27612,17 +27616,31 @@ async function handlePresselNum(req, env) {
     // a frase, em vez de ligar e ver o cron desligar um minuto depois. So na casa e so na 1a volta.
     if (ligar && tent === 0 && !String(chip.afl || '')) {
       const nao = await _swwebRecusaLigar(env, at, _souEu);
-      if (nao) return err(nao, 409);
+      // AQUECIMENTO COM O APP FECHADO VAI PRO PLANTAO (05/11/2026, pedido do Bruno: "quando eu clico
+      // pra ligar um deles, ele desliga e fala que nao salvou (...) eu gostaria que esses numeros de
+      // aquecimento pudessem ligar", pros leads da madrugada). Ligar de verdade nao serve: com o
+      // interruptor ligado o cron de app fechado desliga em 1 min, e enquanto ele estivesse ligado
+      // a roleta nao usaria o plantao (so quando nao ha ninguem), entao o teto dele cheio deixaria a
+      // pressel sem numero. Entao o numero fica DESLIGADO e ganha a mesma marca que o app fechado
+      // da (v.app_off): entra no plantao, na frente da fila e dentro da rampa, e quando o dono abrir
+      // o app a marca some e ele liga como os outros. Numero de producao continua recusado.
+      if (nao && !_chipAquecendo(chip, _aquecIdsDe(data))) return err(nao, 409);
+      if (nao) _plantaoAq = true;
     }
     const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
-    for (const p of alvos) _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend);
+    for (const p of alvos) {
+      if (!_plantaoAq) { _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend); continue; }
+      _presselAplicaNum(p, at, nk, false, false, numsDoVend);   // segue desligado e sem "ate amanha"
+      const v = p.vendedores.find((x) => x && String(x.at) === at);
+      if (v) { const m = (v.app_off && typeof v.app_off === 'object') ? v.app_off : {}; m[nk] = true; v.app_off = m; }
+    }
     const newVer = await _estadoGrava(env, _lido, { pressels: data.pressels }, 'pressel-num:' + String(u.id));
     if (newVer) {
       try { _dashCache = null; } catch (_) {}
       const pids = alvos.map((p) => p.id).join(',');
-      console.log('PRESSEL_NUM por=' + String(u.id) + ' at=' + at + ' num=' + nk + ' on=' + (ligar ? 1 : 0) + (ateAmanha ? ' ate_amanha' : '') + ' pressels=' + pids);
-      await _presselNumLog(env, { por: u.id, por_nome: u.name || u.id, at, nk, acao: ligar ? 'liga' : (ateAmanha ? 'ate_amanha' : 'desliga'), pids });
-      return json({ ok: true, at, num: nk, on: ligar, pressels: alvos.map((p) => p.id), estado: _presselEstadoNum(alvos, at, nk), ts: Math.floor(Date.now() / 1000) });
+      console.log('PRESSEL_NUM por=' + String(u.id) + ' at=' + at + ' num=' + nk + ' on=' + (ligar && !_plantaoAq ? 1 : 0) + (_plantaoAq ? ' plantao' : '') + (ateAmanha ? ' ate_amanha' : '') + ' pressels=' + pids);
+      await _presselNumLog(env, { por: u.id, por_nome: u.name || u.id, at, nk, acao: _plantaoAq ? 'plantao' : ligar ? 'liga' : (ateAmanha ? 'ate_amanha' : 'desliga'), pids });
+      return json({ ok: true, at, num: nk, on: ligar && !_plantaoAq, ...(_plantaoAq ? { plantao: true } : {}), pressels: alvos.map((p) => p.id), estado: _presselEstadoNum(alvos, at, nk), ts: Math.floor(Date.now() / 1000) });
     }
     await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
   }

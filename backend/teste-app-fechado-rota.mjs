@@ -130,6 +130,41 @@ vale('zero e recusado', r.st === 400, r.st);
 r = await chama(TK.dir, '/api/swweb/config', { travaProxy: false }, 'm9');
 vale('desligar a trava de proxy continua recusado (409)', r.st === 409, r.st);
 
+// 6) AQUECIMENTO COM O APP FECHADO VAI PRO PLANTAO (05/11/2026, pedido do Bruno: os leads da
+//    madrugada aquecem o chip). A direcao clica pra ligar o numero em aquecimento do Kevin com o app
+//    dele fechado: em vez do 409, ele fica desligado com a marca do plantao. Producao segue recusada.
+sq.exec('DELETE FROM swweb_uso');   // ninguem com o app aberto
+const AQ = '88931194', AQ_NUM = '(49) 98893-1194';
+{
+  const d = ler();
+  d.chips.push({ id: 'cA', num: AQ_NUM, at: 'kev', st: 'aquecimento', warm_start: new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10), idx: 3 });
+  for (const p of d.pressels) {
+    let v = (p.vendedores || []).find((x) => x.at === 'kev');
+    if (!v) { v = { at: 'kev', ativo: true }; (p.vendedores = p.vendedores || []).push(v); }
+    v.off = { ...(v.off || {}), [AQ]: true };   // desligado de proposito durante o dia (cinza)
+  }
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+}
+const vAq = (pid) => (ler().pressels.find((x) => x.id === pid).vendedores || []).find((x) => x.at === 'kev') || {};
+r = await chama(TK.dir, '/api/pressel/num', { at: 'kev', num: AQ_NUM, on: true });
+vale('a direcao clica pra ligar o numero em aquecimento com o app fechado: 200 de plantao', r.st === 200 && r.d.plantao === true && r.d.on === false, r.st + ' ' + JSON.stringify(r.d).slice(0, 120));
+vale('ele continua DESLIGADO no interruptor nas duas pressels', !!(vAq(1).off && vAq(1).off[AQ]) && !!(vAq(2).off && vAq(2).off[AQ]));
+vale('e ganha a marca do plantao nas duas', !!(vAq(1).app_off && vAq(1).app_off[AQ]) && !!(vAq(2).app_off && vAq(2).app_off[AQ]), JSON.stringify(vAq(1).app_off));
+vale('sem "ate amanha" (quem decide a volta e o dono abrir o app)', !(vAq(1).volta && vAq(1).volta[AQ]));
+{
+  const reg = registro();
+  const ult = reg[reg.length - 1] || {};
+  vale('e fica no registro como plantao, com o nome de quem clicou', ult.acao === 'plantao' && ult.nk === AQ && ult.por_nome === 'Diretor', JSON.stringify(ult));
+}
+r = await chama(TK.dir, '/api/pressel/num', { at: 'kev', num: NUM, on: true });
+vale('o numero de PRODUCAO continua recusado com o app fechado (409)', r.st === 409, r.st + ' ' + (r.d.error || ''));
+r = await chama(TK.kev, '/api/pressel/meu-numero', { num: AQ_NUM, on: true });
+vale('o vendedor pela tela dele na dash continua tendo que abrir o app (409)', r.st === 409, r.st + ' ' + (r.d.error || ''));
+r = await chama(TK.kev, '/api/swweb/uso', { nk: '4988931194' }, 'm1');
+vale('o Kevin abre o app', r.st === 200 && r.d.ok === true, r.st + ' ' + JSON.stringify(r.d).slice(0, 80));
+r = await chama(TK.dir, '/api/pressel/num', { at: 'kev', num: AQ_NUM, on: true });
+vale('com o app do Kevin aberto, o mesmo clique LIGA de verdade (sem plantao)', r.st === 200 && r.d.on === true && !r.d.plantao && !(vAq(1).off && vAq(1).off[AQ]) && !(vAq(1).app_off && vAq(1).app_off[AQ]), r.st + ' ' + JSON.stringify(r.d).slice(0, 120));
+
 _log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram.');
 if (falhas.length) { _log('\nFALHOU:\n- ' + falhas.join('\n- ')); process.exit(1); }
 process.exit(0);

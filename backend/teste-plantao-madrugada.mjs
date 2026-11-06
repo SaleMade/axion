@@ -106,7 +106,7 @@ const F = fabrica(
   async () => estado(),
   () => '2026-10-31',
   (c) => ehAquec(c),
-  (c) => (ehAquec(c) ? { lim: 5, ordem: 1, dia: 2, teto: 5 } : null),
+  (c) => (ehAquec(c) ? { lim: 5, ordem: -1, dia: 2, teto: 5 } : null),   // -1 = na frente da fila, igual o _numDoAquecimento
   (p, chips) => chips,
 );
 
@@ -213,7 +213,16 @@ console.log('\n3. O QUE O PLANTAO PODE E O QUE NAO PODE PEGAR');
 const nums = numerosDa(1, true);
 conta('pega os numeros de producao que estavam ligados', nums.includes(k8(K1)) && nums.includes(k8(K2)) && nums.includes(k8(G1)), nums.join());
 conta('NAO pega o que gente desligou (risco de ban)', !nums.includes(k8(G_RISCO)), nums.join());
-conta('NAO pega numero em aquecimento (a rampa existe pra isso)', !nums.includes(k8(G_AQ)), nums.join());
+// AQUECIMENTO FAZ PLANTAO desde 05/11/2026 (pedido do Bruno: os leads da madrugada aquecem o chip).
+// Ele entra com o teto da rampa e na FRENTE da fila do vendedor, entao pega a vez antes do de producao.
+conta('pega o numero em aquecimento (05/11: os leads da madrugada aquecem o chip)', nums.includes(k8(G_AQ)), nums.join());
+{
+  const gui = roleta(1, true).find((s) => s.at === 'gui') || { nums: [] };
+  const aq = gui.nums.find((n) => k8(n.num) === k8(G_AQ));
+  conta('e ele vem com o teto da rampa, em modo limite', !!aq && aq.lim === 5 && aq.dist === 'limite' && !!aq.aquec, JSON.stringify(aq));
+  const fila = gui.nums.filter((n) => n.dist === 'limite').sort((x, y) => (x.ordem - y.ordem));
+  conta('e na frente da fila do Guilherme no plantao', !!fila.length && k8(fila[0].num) === k8(G_AQ), fila.map((n) => k8(n.num) + ':' + n.ordem).join());
+}
 
 console.log('\n4. COM ALGUEM APTO, O PLANTAO NEM APARECE (ultimo recurso de verdade)');
 monta([{ at: 'kevin', ativo: true, off: { [k8(K2)]: true }, app_off: { [k8(K2)]: true } }, { at: 'gui', ativo: true }]);
@@ -240,8 +249,8 @@ conta('LIGAR na mao apaga a marca', !appOffDe(1, 'kevin').includes(k8(K1)), appO
   sq.prepare('UPDATE dashboard_state SET data=? WHERE id=1').run(JSON.stringify(d));
 }
 conta('DESLIGAR na mao tambem deixa sem marca: a decisao e dela', !appOffDe(1, 'kevin').includes(k8(K1)), appOffDe(1, 'kevin').join());
-conta('e o K1 saiu do plantao, sobrando o K2 e o G1',
-  numerosDa(1, true).join() === [k8(K2), k8(G1)].sort().join(), numerosDa(1, true).join());
+conta('e o K1 saiu do plantao, sobrando o K2, o G1 e o aquecimento do Guilherme',
+  numerosDa(1, true).join() === [k8(K2), k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
 
 console.log('\n6. "DESLIGADO ATE AMANHA" NAO VIRA PLANTAO');
 monta([
@@ -251,8 +260,8 @@ monta([
 await F._desligaAppFechado(env);
 conta('o numero parado ate amanha nao ganhou marca', !appOffDe(1, 'kevin').includes(k8(K1)), appOffDe(1, 'kevin').join());
 conta('e o outro, que estava ligado, ganhou', appOffDe(1, 'kevin').includes(k8(K2)));
-conta('de madrugada sobram o K2 e o G1, nunca o parado ate amanha',
-  numerosDa(1, true).join() === [k8(K2), k8(G1)].sort().join(), numerosDa(1, true).join());
+conta('de madrugada sobram o K2, o G1 e o aquecimento, nunca o parado ate amanha',
+  numerosDa(1, true).join() === [k8(K2), k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
 
 console.log('\n7. POR PRESSEL, NAO POR NUMERO');
 // o K1 esta ligado na pressel 1 e desligado na mao na 12: so a 1 pode usa-lo de plantao
@@ -287,8 +296,8 @@ conta('o Kevin perdeu a marca de plantao', appOffDe(1, 'kevin').length === 0, ap
 conta('mas o numero dele CONTINUA desligado: ele tem que ligar', offDe(1, 'kevin').length === 2, offDe(1, 'kevin').join());
 conta('o Guilherme, ainda fechado, segue em plantao', appOffDe(1, 'gui').includes(k8(G1)));
 conta('gravou (a versao andou)', versao() > vAntes, vAntes + ' -> ' + versao());
-conta('com o Kevin fora do plantao, a madrugada cai no numero do Guilherme',
-  numerosDa(1, true).join() === [k8(G1)].join(), numerosDa(1, true).join());
+conta('com o Kevin fora do plantao, a madrugada cai nos numeros do Guilherme',
+  numerosDa(1, true).join() === [k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
 const v2 = versao();
 await F._desligaAppFechado(env);
 conta('e a batida seguinte nao grava de novo (nao fica rodando a toa)', versao() === v2, v2 + ' -> ' + versao());
