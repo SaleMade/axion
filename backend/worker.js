@@ -13457,19 +13457,23 @@ async function _botIaNumerosDe(env, st, atId, nome) {
   // O papel da tag (banido, restrito, sem WhatsApp): o chip guarda o ID da tag (st_xxxx), nunca o nome.
   const papelDe = (id) => { const t = (Array.isArray(st && st.wa_statuses) ? st.wa_statuses : []).find((x) => x && String(x.id).toLowerCase() === id); return t ? _papelSt(t) : id; };
   const n8s = chips.map((c) => _bot8(c.num)).filter(Boolean);
-  const conn = {}, queda = {}, uso = {};
+  const conn = {}, queda = {}, uso = {}, mudou = {};
+  const agora = Math.floor(Date.now() / 1000);
   try {
     const lista = JSON.stringify(n8s);
     const r = await env.DB.batch([
       env.DB.prepare('SELECT nk, st, ts, queda FROM swweb_conn WHERE substr(nk,-8) IN (SELECT value FROM json_each(?))').bind(lista),
       env.DB.prepare('SELECT nk, em, motivo, feito, pronto_ts FROM swweb_queda WHERE substr(nk,-8) IN (SELECT value FROM json_each(?))').bind(lista),
       env.DB.prepare('SELECT nk, user_id, nome, desde, ate FROM swweb_uso WHERE substr(nk,-8) IN (SELECT value FROM json_each(?))').bind(lista),
+      // QUEM MEXEU NO INTERRUPTOR por ultimo (o vendedor, a direcao ou o sistema quando o app fechou):
+      // e o que responde "por que meu numero parou de receber" sem chute.
+      env.DB.prepare('SELECT nk, acao, por_nome, ts FROM pressel_num_log WHERE at = ? AND ts > ? ORDER BY ts DESC LIMIT 300').bind(String(atId), agora - 7 * 86400),
     ]);
     for (const x of ((r[0] && r[0].results) || [])) conn[String(x.nk).slice(-8)] = x;
     for (const x of ((r[1] && r[1].results) || [])) queda[String(x.nk).slice(-8)] = x;
     for (const x of ((r[2] && r[2].results) || [])) uso[String(x.nk).slice(-8)] = x;
+    for (const x of ((r[3] && r[3].results) || [])) { const k = String(x.nk || '').slice(-8); if (k && !mudou[k]) mudou[k] = x; }
   } catch (_) { /* sem as tabelas, fica so o interruptor e a Contingencia */ }
-  const agora = Math.floor(Date.now() / 1000);
   const pressels = (Array.isArray(st && st.pressels) ? st.pressels : []).filter((p) => p && p.id && String(p.status || 'ativa') !== 'pausada');
   const L = [];
   let recebendo = 0, emUsoN = 0, quedas = 0;
@@ -13503,8 +13507,15 @@ async function _botIaNumerosDe(env, st, atId, nome) {
       if (podeReceber) recebendo++;
       // O que importa primeiro: recebe lead agora ou nao, e por que. O interruptor de numero que nem esta
       // Em uso nao diz nada (a roleta nao entrega pra ele de jeito nenhum).
-      partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou' : 'interruptor desligado')) + ')');
-      if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pDoChip.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas de propósito)' : ''));
+      // app_off = o cron desligou porque o SellWave Web fechou; o numero fica de PLANTAO (recebe de
+      // madrugada se ninguem estiver com o app aberto) e volta sozinho quando o dono abre o app.
+      partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou; fica de plantão pra madrugada e religa quando ele abrir o app' : 'interruptor desligado')) + ')');
+      if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pDoChip.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas)' : ''));
+    }
+    const mx = mudou[nk];
+    if (mx) {
+      const verbo = { desliga: 'desligado', liga: 'ligado', plantao: 'posto de plantão', uso_liberado: 'liberado pra uso', ate_amanha: 'desligado até amanhã', volta: 'religado sozinho' }[String(mx.acao)] || String(mx.acao || 'mexido');
+      partes.push('última mudança no interruptor: ' + verbo + ' por ' + String(mx.por_nome || 'alguém') + ' em ' + _botIaHoraTxt(Number(mx.ts) * 1000));
     }
     const u = uso[nk];
     if (u && Number(u.ate || 0) > agora) partes.push('app aberto por ' + String(u.nome || u.user_id || 'alguém') + ' desde ' + _botIaHHMM(u.desde));
@@ -13593,6 +13604,8 @@ function _botIaPedidoTexto(l, st, nomes, tagMap, completo) {
   const plat = String(l && l.col_plat || '').trim();
   if (!d.pago && plat && _cobColId(plat) !== d.col) sit += ' · plataforma: ' + plat;
   L.push('Situação: ' + sit + '.');
+  // Pedido lancado na mao passa pela aprovacao da direcao ("Pedidos esperando aprovacao" do resumo).
+  if (String((l && l.orig) || '') === 'Manual') L.push('Aprovação da direção: ' + (_cobManualNaoAceito(l) ? 'ainda NÃO aprovado (esperando a direção aceitar)' : 'aprovado') + '.');
   if (!completo) return L.join('\n');
   const pags = Array.isArray(d.pagamentos) ? d.pagamentos : [];
   const jaPago = pags.reduce((s, p) => s + (Number(p.valor) || 0), 0);

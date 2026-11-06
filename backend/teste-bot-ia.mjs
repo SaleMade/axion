@@ -182,6 +182,7 @@ function monta(mundo) {
     if (/FROM swweb_conn WHERE substr\(nk,-8\) IN/.test(sql)) return { results: por8(mundo.conn || [], a[0]), meta: {} };
     if (/FROM swweb_queda WHERE substr\(nk,-8\) IN/.test(sql)) return { results: por8(mundo.queda || [], a[0]), meta: {} };
     if (/FROM swweb_uso WHERE substr\(nk,-8\) IN/.test(sql)) return { results: por8(mundo.uso || [], a[0]), meta: {} };
+    if (/FROM pressel_num_log WHERE at = \?/.test(sql)) return { results: (mundo.numlog || []).filter((x) => x.at === a[0] && Number(x.ts) > Number(a[1])).sort((p, q) => q.ts - p.ts), meta: {} };
     if (/FROM push_subs/.test(sql)) return { results: [{ n: mundo.push ? 1 : 0 }], meta: {} };
     // users: equipe inteira, so vendedores, so cobradores, e o mapa id -> nome
     if (/SELECT id, name, role FROM users/.test(sql)) return { results: users.slice().sort((p, q) => ((ordem[p.role] ?? 4) - (ordem[q.role] ?? 4)) || porNome(p, q)).map((u) => ({ id: u.id, name: u.name, role: u.role })), meta: {} };
@@ -506,10 +507,18 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
 {
   // O SellWave Web fechou: o cron desliga o interruptor e marca app_off. O bot diz o motivo certo.
   const pressels = [{ id: 'p1', vendedores: [{ at: GUI, off: { '88880001': 1 }, app_off: { '88880001': true } }] }];
-  const { api, env, chamadas } = monta({ ...MUNDO, pressels });
+  // O registro do interruptor (pressel_num_log): o mais novo de cada numero diz quem mexeu e quando.
+  const numlog = [
+    { at: GUI, nk: '88880001', acao: 'liga', por_nome: 'Guilherme', ts: agoraS() - 7200 },
+    { at: GUI, nk: '88880001', acao: 'desliga', por_nome: 'Sistema (SellWave Web fechado)', ts: agoraS() - 3600 },
+    { at: KEVIN, nk: '77770001', acao: 'desliga', por_nome: 'Kevin Marques', ts: agoraS() - 60 },
+  ];
+  const { api, env, chamadas } = monta({ ...MUNDO, pressels, numlog });
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
   const user = chamadas[0].user;
-  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, e o motivo e o app, nao queda');
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; fica de plantão pra madrugada e religa quando ele abrir o app\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, o motivo e o app (de plantao), nao queda');
+  conf(/\.\.\.-0001: [^\n]*última mudança no interruptor: desligado por Sistema \(SellWave Web fechado\) em 05\/11 10:00/.test(user), 'quem mexeu no interruptor por ultimo, e quando (o registro mais novo do numero)');
+  conf(!/Kevin Marques em/.test(user), 'o registro de outro vendedor nao entra');
   conf(/0 recebendo lead agora/.test(user), 'e o cabecalho conta zero recebendo');
 }
 {
@@ -523,7 +532,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   const { api, env, chamadas } = monta({ ...MUNDO, pressels });
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
   const user = chamadas[0].user;
-  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; [^)]*\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
 }
 {
   const { api, env, chamadas } = monta(MUNDO);
@@ -641,6 +650,7 @@ titulo('9. O bloco do pedido (nasce de _cobDetalhe, sem CPF, endereco nem coment
   conf(/falta R\$ 147,00 \(já entrou R\$ 50,00 em 1 parcela\)\./.test(t3) && /cobrador: sem dono ainda/.test(t3), 'pagamento parcial: "ja entrou" e o saldo; sem cobrador = "sem dono ainda"');
   conf(/Retorno marcado: nenhum\./.test(t3), 'sem retorno marcado');
   conf(/Situação: aguardando aprovação da direção\./.test(bloco(6)), 'manual nao aceito: aguardando aprovacao');
+  conf(/Aprovação da direção: ainda NÃO aprovado/.test(bloco(6)) && !/Aprovação da direção/.test(bloco(2)), 'pedido manual diz se a direcao ja aprovou; pedido da plataforma nao tem a linha');
   const curto = bloco(2, false);
   conf(/Situação:/.test(curto) && !/Pagamento:/.test(curto) && !/Retorno marcado/.test(curto), 'bloco resumido (candidato ambiguo): so cabecalho e situacao');
   const frust = api._botIaPedidoTexto({ id: 7, nome: 'Perda Total', col: 'Frustrados', ship: 'NOT_DELIVERED', ship_ts: ms('2026-11-02T10:00:00-03:00'), at: GUI, vl: 197, ts: ms('2026-10-28T10:00:00-03:00') }, estado, nomes, {}, true);
