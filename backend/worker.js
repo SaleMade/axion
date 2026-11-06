@@ -13390,7 +13390,9 @@ const BOT_IA_PROVOCA_PARADO_S = 45 * 60;
 const BOT_IA_PROVOCA_MARCO_MIN = 10;
 const BOT_IA_QUOTA_PAUSA_S = 3600;
 const BOT_IA_AVISO_REPETE_S = 1800;
-const BOT_IA_APRESENTACAO = 'chegou reforço! agora eu leio o grupo e respondo quando me marcarem (@Barbadinho): pedido, número e meta. o que eu leio fica guardado só um dia. bora!';
+// A CHEGADA NO GRUPO (sai uma vez quando o bot de IA e ligado no grupo). 06/11/2026, pedido do Bruno: "boas-vindas bem
+// animada, falando o que ele resolve e que a galera pode chamar ele" (a mesma que saiu na estreia, nos dois grupos).
+const BOT_IA_APRESENTACAO = { vend: "🚨 CHEGOU O BARBADINHO, RAPAZIADA! 🚨\nAgora com consciência própria 🧠🔥 e morando aqui no grupo.\n\nMe marca (@Barbadinho) que eu:\n✅ tiro dúvida de pedido, número, meta do mês e de como usar a dash e o app\n🛠️ ajudo quando o número cair ou o pedido não subir\n🍾 comemoro cada venda junto com vcs\n😂 e aguento zoeira (mas devolvo, hein)\n\nBora vender que hoje o placar é nosso! 💰🚀", cob: "🚨 CHEGOU O BARBADINHO, TIME DA COBRANÇA! 🚨\nAgora com consciência própria 🧠🔥 e morando aqui no grupo.\n\nMe marca (@Barbadinho) que eu:\n✅ vejo se o cliente pagou e de quem é a fila, pelo nome ou telefone\n📦 passo o rastreio e a situação do pedido\n🛠️ ajudo quando der problema no app ou na dash\n🍾 comemoro cada pedido que volta\n😂 e aguento zoeira (mas devolvo, hein)\n\nBora buscar esses pagamentos! 💰🔥" };
 const BOT_IA_SEM_TEXTO = 'áudio eu ainda não escuto kkkkk manda por escrito que eu respondo';
 // A resposta reserva quando a IA nao responde (o Google gratis congestiona em horario de pico).
 const BOT_IA_FORA = { problema_avisado: 'putz! anotei aqui e já avisei o Bruno pra olhar', problema: 'putz! marca o Bruno aqui que ele resolve', outro: 'deu ruim do meu lado agora, o Google tá congestionado. manda de novo daqui a pouco que eu respondo' };
@@ -17757,7 +17759,7 @@ async function handleBotConfig(req, env) {
     for (const g of ['vend', 'cob']) {
       const antes = !!(atual.ia && atual.ia.responde && atual.ia.responde[g]);
       if (!antes && cfg.ia && cfg.ia.responde && cfg.ia.responde[g] && _botIaGrupoCfg(cfg, g).id) {
-        try { await _botEntregarGrupo(env, cfg, BOT_IA_APRESENTACAO, g === 'cob' ? 'cob_livre' : 'livre', _brDay(), null, g === 'cob' ? cfg.cobranca.grupo : null); } catch (_) {}
+        try { await _botEntregarGrupo(env, cfg, BOT_IA_APRESENTACAO[g === 'cob' ? 'cob' : 'vend'], g === 'cob' ? 'cob_livre' : 'livre', _brDay(), null, g === 'cob' ? cfg.cobranca.grupo : null); } catch (_) {}
       }
     }
     // GRUPO DE TESTE: ao ligar (ou trocar o grupo, o jeito ou a pessoa), uma linha so no grupo de teste
