@@ -1368,6 +1368,21 @@ titulo('26. O manual: a duvida de uso puxa so os itens que batem');
   conf(/Pessoa não identificada/.test(m2.chamadas[0].user) && /MANUAL/.test(m2.chamadas[0].user), 'pessoa nao identificada tambem recebe o manual (nao tem dado pessoal)');
 }
 
+// ══ 27. TETO DA CHAVE PAGA (06/11) ═════════════════════════════════════════════════════
+titulo('27. O teto do mes da chave paga do bot');
+{
+  const mes = 'bot_ia_pagas_' + DIA.slice(0, 7);
+  const m = monta({ ...MUNDO, chaveBot: 'AIza-do-bot', ia: [JSON_OK] });
+  await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(/key=AIza-do-bot/.test(m.chamadas[0].url) && m.cfgdb[mes] === '1', 'abaixo do teto: usa a chave paga e conta a chamada do mes');
+  const m2 = monta({ ...MUNDO, chaveBot: 'AIza-do-bot', config: { [mes]: '1600' }, ia: [JSON_OK] });
+  const r2 = await m2.api._botIaChamar(m2.env, 'sys', 'user', {});
+  conf(/key=AIza-teste/.test(m2.chamadas[0].url) && m2.cfgdb[mes] === '1600' && r2.tentativas.some((x) => /teto do mês/.test(x)), 'no teto (1.600 ate dezembro): volta pra chave geral (gratis), sem contar mais');
+  const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m3.api._botIaChamar(m3.env, 'sys', 'user', {});
+  conf(!m3.cfgdb[mes], 'sem chave paga: nao conta nada');
+}
+
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
 titulo('15. As funcoes de texto');
 {

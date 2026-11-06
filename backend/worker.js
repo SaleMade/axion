@@ -12407,7 +12407,7 @@ async function _botReserva(env, chave) {
 // Faxina, uma vez por dia (junto do resumo): envios com mais de 90 dias e chaves de dedupe com mais de 30.
 async function _botFaxina(env) {
   try { await env.DB.prepare('DELETE FROM bot_envios WHERE ts < ?').bind(Math.floor(Date.now() / 1000) - 90 * 86400).run(); } catch (_) {}
-  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%' OR key LIKE 'bot_incent_%' OR key LIKE 'bot_cobrel_%' OR key LIKE 'bot_cobsem_%' OR key LIKE 'bot_cobmarcos_%' OR key LIKE 'bot_cobmeta_%' OR key LIKE 'bot_cobincent_%' OR key LIKE 'bot_iaprov_%' OR key LIKE 'bot_chatfax_%' OR key LIKE 'bot_iaav_%' OR key LIKE 'bot_ia_quotaviso_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
+  try { await env.DB.prepare("DELETE FROM app_config WHERE (key LIKE 'bot_rel_%' OR key LIKE 'bot_sem_%' OR key LIKE 'bot_marcos_%' OR key LIKE 'bot_meta_%' OR key LIKE 'bot_incent_%' OR key LIKE 'bot_cobrel_%' OR key LIKE 'bot_cobsem_%' OR key LIKE 'bot_cobmarcos_%' OR key LIKE 'bot_cobmeta_%' OR key LIKE 'bot_cobincent_%' OR key LIKE 'bot_iaprov_%' OR key LIKE 'bot_chatfax_%' OR key LIKE 'bot_iaav_%' OR key LIKE 'bot_ia_quotaviso_%' OR key LIKE 'bot_ia_pagas_%') AND updated_at < strftime('%s','now')-30*86400").run(); } catch (_) {}
 }
 // O SLOT DE UM HORARIO MARCADO. Devolve o dia do slot que esta "na hora" agora (hoje, ou ontem se a
 // hora marcada foi perto da meia-noite e a batida caiu depois dela), respeitando o atraso maximo.
@@ -13290,7 +13290,12 @@ const BOT_IA_HORA_TESTE = 60;           // no grupo de teste (so a direcao escre
 const BOT_IA_CONVERSA_S = 180;          // quem o bot respondeu ha menos disso e escreve de novo sem marcar: conversa
 const BOT_IA_MODELO_1_MS = 7000;        // teto do 1o modelo do Gemini quando ainda tem outro na fila
 const BOT_IA_GEM_FORA_MS = 5 * 60000;   // modelo que deu 503 ou estourou o tempo fica 5 min de fora
-const BOT_IA_GEM_429_MS = 3 * 60000;    // modelo que deu 429 (limite gratis dele) fica 3 min de fora
+const BOT_IA_GEM_429_MS = 3 * 60000;
+// Chamadas por mes com a chave PAGA do bot (o credito de US$ 10 do Google AI Pro). Medido em 06/11: cada resposta
+// leva uns 6 mil tokens de entrada (regras, exemplos, dados, manual) e 200 de saida. No Flash pago isso da uns
+// US$ 0,0053 ate 31/12/2026 (US$ 0,75 entrada e 3,75 saida por milhao) e o dobro a partir de 01/01/2027, quando o
+// Google dobra o preco. O teto deixa o mes perto de US$ 8,50 nos dois casos; o cache do Google ainda barateia.
+const BOT_IA_PAGAS_MES = (dia) => (String(dia || '') < '2027-01' ? 1600 : 800);    // modelo que deu 429 (limite gratis dele) fica 3 min de fora
 // Medido em 06/11/2026 na chave gratis: o 503 "high demand" do Gemini demora uns 10 s pra voltar e
 // comia a resposta inteira (11,4 s numa pergunta). Fica guardado so nesta instancia do worker.
 const _botIaGemFora = new Map();
@@ -13517,7 +13522,14 @@ async function _botIaChamar(env, system, user, o) {
   }
   // A CHAVE DO BOT (06/11/2026): quando a direcao cola uma chave so pro bot (a do credito do Google AI Pro, plano
   // pago), ele usa ela; o resto da dash (testador de criativo, voz, robo) segue na chave geral e nao gasta o credito.
-  const gkey = (await getAIKey(env, 'gemini_bot')) || await getAIKey(env, 'gemini');
+  // TETO DO MES (06/11): a chave do bot e paga (credito de US$ 10/mes do Google AI Pro). Passou de BOT_IA_PAGAS_MES
+  // chamadas no mes, o bot volta sozinho pra chave geral (gratis) e nao cobra no cartao.
+  const mesPago = 'bot_ia_pagas_' + _brDay().slice(0, 7);
+  let gkey = await getAIKey(env, 'gemini_bot');
+  let pagas = 0;
+  if (gkey) { pagas = Number(await _readConfig(env, mesPago).catch(() => 0)) || 0; if (pagas >= BOT_IA_PAGAS_MES(_brDay())) { gkey = null; out.tentativas.push('chave do bot no teto do mês (' + pagas + ')'); } }
+  const pagaUsada = !!gkey;
+  gkey = gkey || await getAIKey(env, 'gemini');
   if (!gkey) { out.erro = out.tentativas.concat(['sem chave de IA']).join(' | '); out.ms = Date.now() - t0; return out; }
   out.provider = out.provider || 'gemini';
   let tentou = 0, quotaTodos = true;
@@ -13553,6 +13565,7 @@ async function _botIaChamar(env, system, user, o) {
       if (c.finishReason && c.finishReason !== 'STOP') { out.tentativas.push(m + ' parou por ' + c.finishReason); continue; }
       if (!txt.trim()) { out.tentativas.push(m + ' vazio'); continue; }
       out.texto = txt; out.modelo = m; out.ms = Date.now() - t0;
+      if (pagaUsada) { out.paga = true; await _writeConfig(env, mesPago, String(pagas + 1)).catch(() => {}); }
       return out;
     } catch (e) { quotaTodos = false; _botIaGemFora.set(m, { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); out.tentativas.push(m + ': ' + String((e && e.message) || e).slice(0, 80)); }
   }
