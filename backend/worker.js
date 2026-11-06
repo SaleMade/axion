@@ -12112,6 +12112,13 @@ async function _botDados(env, dia, cfg, tipo, fresco, stPronto) {
   return { dia, tipo: semanal ? 'semanal' : 'diario', semana: { inicio: sem.inicio, fim: sem.fim }, vendedores: lista, geral };
 }
 const _botPlural = (n, um, varios) => n + ' ' + (n === 1 ? um : varios);
+// A intensidade da festa e da zoeira com uma pessoa, pelo numero dela no dia (vendas ou pedidos que voltaram).
+function _botIaIntensidade(n) {
+  const v = Number(n) || 0;
+  if (v >= 10) return 'GRITÃO liberado (' + v + ' hoje, 10 ou mais): "ISSO AÍ PORRAAAA", "tu é foda", palavrão de comemoração, 2 ou 3 emojis e maldade de amigo';
+  if (v >= 6) return 'animada (' + v + ' hoje, de 6 a 9): CAIXA ALTA curta, kkkkk, 1 ou 2 emojis e no máximo um krl, sem gritão';
+  return 'leve e de boa (' + v + ' hoje, até 5): boaaa, bora, tá começando bem, 1 emoji, sem palavrão, sem gritão e sem maldade';
+}
 // O progresso de um vendedor na meta do mes (as mesmas contas de axion-produtor/src/lib/meta-mensal.js).
 function _botMetaMes(c, regra) {
   const R = regra || META_MENSAL;
@@ -13330,10 +13337,10 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia, grupo) {
 //    pelo Baileys (chat frio toma 463 e o agente marcaria como enviado).
 //  - RESPOSTA SINCRONA COM ORCAMENTO: 25 s no total (10 s por modelo, 2 modelos), blob lido uma vez;
 //    a linha fica 'pendente' ate o agente confirmar que mandou (msg-ack).
-const BOT_IA_TOM_VEND = 'Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.';
-const BOT_IA_TOM_COB = 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.';
+const BOT_IA_TOM_VEND = 'Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐)). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.';
+const BOT_IA_TOM_COB = 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐)). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.';
 // Os padroes de antes (06/11 manha): gravado igual a um deles vira o padrao novo sozinho (06/11 tarde, pedido do Bruno: mais ousado).
-const BOT_IA_TOM_VELHOS = ['Animado e espontâneo, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: BOOORA, boaaa, chama, segura o homi, é os guri, tá voando, kkkkk, uma expressão em CAIXA ALTA e no máximo um krl. Com a Barbara a festa é limpa. Zoeira (oi, elogio, bot safado, ciúme): entra na brincadeira, não xinga de volta e puxa pro número de quem falou. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão, nunca emoji.', 'Animado, mais leve que o dos vendedores: curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar), depois um bora buscar, boaaa ou mais um de volta. Festa é pedido que voltou, com boaaa, tá voando e kkkkk, sem palavrão. Zoeira (oi, elogio, pedido pra ser mais zoeiro): ri junto, não promete mudar e volta pra fila de quem falou. Problema (app travou, erro): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano, nunca emoji.'];
+const BOT_IA_TOM_VELHOS = ['Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.', 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.', 'Animado e espontâneo, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: BOOORA, boaaa, chama, segura o homi, é os guri, tá voando, kkkkk, uma expressão em CAIXA ALTA e no máximo um krl. Com a Barbara a festa é limpa. Zoeira (oi, elogio, bot safado, ciúme): entra na brincadeira, não xinga de volta e puxa pro número de quem falou. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão, nunca emoji.', 'Animado, mais leve que o dos vendedores: curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar), depois um bora buscar, boaaa ou mais um de volta. Festa é pedido que voltou, com boaaa, tá voando e kkkkk, sem palavrão. Zoeira (oi, elogio, pedido pra ser mais zoeiro): ri junto, não promete mudar e volta pra fila de quem falou. Problema (app travou, erro): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano, nunca emoji.'];
 // A mesma cascata do testador de criativo (medida em 05/10/2026 com a chave do Bruno). 429 passa pro
 // proximo; 400 tambem (um modelo pode recusar o thinkingConfig); 401/403 para, a chave e que esta errada.
 // 06/11: o 3.1-flash-lite entra no fim (medido ok na chave gratis; o flash-lite-latest e o 3.5-flash-lite recusam o
@@ -13698,6 +13705,7 @@ function _botIaPlacarTexto(dados, cfg, quem) {
     const v = vs.find((x) => x.id === quem.id);
     if (v) {
       const prox = marcos.find((n) => n > v.pedidos);
+      L.push('Intensidade da festa e da zoeira com quem perguntou: ' + _botIaIntensidade(v.pedidos) + '.');
       L.push('Quem perguntou hoje: ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (prox ? ', próximo marco ' + prox + ' (faltam ' + (prox - v.pedidos) + ')' : '') + ', meta do mês: ' + _botMetaTxt(v) + (v.primeiro_corrida ? ', foi o primeiro a bater ' + META_MENSAL.corrida.pedidos + ' no mês' : '') + (v.aguardando ? ', ' + v.aguardando + ' esperando aprovação' : '') + '.');
     }
   }
@@ -13706,7 +13714,7 @@ function _botIaPlacarTexto(dados, cfg, quem) {
 function _botIaMesaTexto(dados, quem) {
   const c = (dados.cobradores || []).find((x) => x.id === (quem && quem.id));
   if (!c) return 'Cobradores: ' + ((dados.cobradores || []).map((x) => x.nome).join(', ') || 'nenhum') + '.';
-  return 'Mesa de ' + c.nome + ' agora: convertidos hoje ' + c.pedidos + ', faltam cobrar ' + c.em_cobranca + ', atrasados ' + c.atrasados + ', a receber ' + _botPlural(c.pendentes, 'pedido', 'pedidos') + (c.meta > 0 ? ', meta da semana ' + c.semana + '/' + c.meta : '') + '.';
+  return 'Intensidade da festa e da zoeira com quem perguntou: ' + _botIaIntensidade(c.pedidos) + '.\nMesa de ' + c.nome + ' agora: convertidos hoje ' + c.pedidos + ', faltam cobrar ' + c.em_cobranca + ', atrasados ' + c.atrasados + ', a receber ' + _botPlural(c.pendentes, 'pedido', 'pedidos') + (c.meta > 0 ? ', meta da semana ' + c.semana + '/' + c.meta : '') + '.';
 }
 // OS NUMEROS DO VENDEDOR, com prova: status da Contingencia, interruptor por pressel, estado que o
 // app reportou (swweb_conn), queda certa (swweb_queda) e quem esta com o numero aberto (swweb_uso).
@@ -13818,11 +13826,11 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap, ps) {
   const cands = [];
   for (const l of leads) {
     if (!l || l.id == null || l.afl) continue;
-    let pts = 0, forte = false, bate = 0;
+    let pts = 0, forte = false, bate = 0, chave = '';
     const lid = String(l.id), fid = String(l.five_id || '');
-    if (ids.has(lid) || (fid && ids.has(fid))) { pts += 100; forte = true; }
-    if (fones.size && fones.has(_bot8(l.wa))) { pts += 100; forte = true; }
-    if (cpfs.size && cpfs.has(_botSoDigitos(l.cpf))) { pts += 100; forte = true; }
+    if (ids.has(lid) || (fid && ids.has(fid))) { pts += 100; forte = true; chave = 'i:' + (ids.has(lid) ? lid : fid); }
+    if (fones.size && fones.has(_bot8(l.wa))) { pts += 100; forte = true; chave = chave || ('f:' + _bot8(l.wa)); }
+    if (cpfs.size && cpfs.has(_botSoDigitos(l.cpf))) { pts += 100; forte = true; chave = chave || ('c:' + _botSoDigitos(l.cpf)); }
     if (termos.length) {
       // As palavras do nome, sem "da", "de", "dos": todas no texto = o nome inteiro, acerto forte.
       const pal = _botIaNorm(l.nome).split(' ').filter((w) => w.length >= 3 && !BOT_IA_PARTICULA.has(w));
@@ -13833,14 +13841,19 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap, ps) {
     if (!pts) continue;
     const dentro = noEscopo(l);
     if (dentro && (String(l.at || '') === quem.id || String(l.cob || '') === quem.id)) pts += 5;
-    cands.push({ l, pts, forte, bate, dentro });
+    cands.push({ l, pts, forte, bate, dentro, chave });
   }
   const ordena = (a, b) => (b.pts - a.pts) || (_cobCriadoTs(b.l) - _cobCriadoTs(a.l));
   const D = cands.filter((c) => c.dentro).sort(ordena), F = cands.filter((c) => !c.dentro).sort(ordena);
   const fD = D.filter((c) => c.forte), fF = F.filter((c) => c.forte);
   const melhorD = D.reduce((m, c) => Math.max(m, c.bate), 0), melhorF = F.reduce((m, c) => Math.max(m, c.bate), 0);
   let lista = [];
-  if (fD.length === 1) { out.certo = true; lista = fD; }
+  // Cada pedido forte veio de um telefone/CPF/numero DIFERENTE da mensagem: sao varios pedidos certos.
+  const chavesD = new Set(fD.map((c) => c.chave).filter(Boolean));
+  const varios = fD.length > 1 && fD.every((c) => c.chave) && chavesD.size === fD.length;
+  // E o forte de outra pessoa que veio de OUTRO telefone da mensagem tambem entra (a fila de quem ele e).
+  const foraForte = fF.filter((c) => c.chave && !chavesD.has(c.chave)).slice(0, 3).map((c) => c.l);
+  if (fD.length === 1 || varios) { out.certo = true; out.varios = varios; lista = fD.slice(0, 4); out.foraDoEscopo = foraForte; }
   else if (fD.length > 1) { out.ambiguo = true; lista = fD.slice(0, 4); }
   else if (fF.length) out.foraDoEscopo = fF.slice(0, 3).map((c) => c.l);
   else if (melhorF >= 2 && melhorF > melhorD) out.foraDoEscopo = F.filter((c) => c.bate === melhorF).slice(0, 3).map((c) => c.l);
@@ -14153,7 +14166,7 @@ const BOT_IA_SISTEMA = [
   '- Número caiu: acredite em quem falou, o app às vezes demora pra registrar a queda. NUNCA diga que não aparece queda, que o número tá ok ou conectado: isso soa como desmentir. Se os dados mostram que ele ainda recebe lead, diga que ele precisa sair da roleta logo pra não perder lead. O jeito: "puta merda, relaxa queridão! já avisei o Bruno pra ajeitar outro número e você não perder o bonde".',
   '- Pedido que não subiu ou sumiu: diga se ele aparece nos DADOS e em que situação está (aguardando aprovação da direção, a enviar, enviado...). Se não aparece, diga que não achou e peça o nome completo ou o telefone do cliente.',
   'DADO: a resposta na primeira frase; depois, se couber, um empurrão animado (bora buscar, mete marcha, tá voando, BORA). Dúvida de como usar a dash, o app ou a operação: responda com o MANUAL que vier nos DADOS, curto e no jeito do grupo (o passo a passo pode passar de 2 frases); se não veio manual pra essa dúvida, diga que essa você não sabe e quem resolve (QUEM RESOLVE).',
-  'FESTA: entre na festa com um GRITÃO de torcida, só quando o placar dos DADOS confirma: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", "tá voando", vogal esticada, CAIXA ALTA, kkkkk, palavrão de comemoração (porra, caralho, krl, foda) e 1 a 3 emojis (🔥🚀💰🍾🐐🤑). O número da pessoa é a festa: as vendas de hoje, o pedido que voltou, quanto falta pro próximo marco ou faixa do mês. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
+  'FESTA: a intensidade segue o número do dia de quem comemora (vem nos DADOS): até 5, festa leve e de boa; de 6 a 9, animada; 10 ou mais, aí sim o GRITÃO de torcida, só quando o placar dos DADOS confirma: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", "tá voando", vogal esticada, CAIXA ALTA, kkkkk, palavrão de comemoração (porra, caralho, krl, foda) e 1 a 3 emojis (🔥🚀💰🍾🐐🤑). O número da pessoa é a festa: as vendas de hoje, o pedido que voltou, quanto falta pro próximo marco ou faixa do mês. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
   'ZOEIRA: 1 ou 2 frases animadas, kkkkk se a pessoa brincou, puxando pro número de quem falou. Xingaram você de brincadeira (bot safado, fdp, vsf, corrompido, ladrão): é carinho do grupo; ria e devolva leve ("me xingou mas tá rindo, eu vi kkkkk", "corrompido não, só animado demais com venda kkkkk"), nunca devolva o xingamento, nunca peça respeito, nunca se diga chateado. Pode ter maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...", "dizem que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂🔥). A piada você inventa na hora, sempre diferente: nunca repita uma que já saiu nas últimas mensagens do grupo nem copie os exemplos ao pé da letra. Zoeira não é busca: nunca responda "não vi isso nos pedidos". Não explique a piada.',
   '',
   'COMO ESCREVER (o jeito do grupo):',
@@ -14210,6 +14223,7 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho quantas eu tenho hj?" (Kevin, 8 hj, mês 152, faltam 48 pra 200) -> 8 hj, Kevin! faltam 2 pro 10 e 48 pros 200 do mês, mete marcha',
   '"@Barbadinho como ta o placar?" (Kevin; Guilherme 12, Kevin 9, Barbara 0; geral 21) -> 21 no geral hj: Guilherme 12, vc 9. falta 1 pro seu 10, chama!',
   '"@Barbadinho +1 fechei as 10" (Guilherme, placar 10) -> ISSO AÍ PORRAAAA 🔥🔥 10 cravadas, Guilherme! tu é foda, agora é 15 e o dia ainda não acabou 🚀',
+  '"@Barbadinho bati 5 hj krl" (Guilherme, placar 5; intensidade leve) -> boaaa, Guilherme! 5 no bolso e o dia rendendo, bora pros 10 🔥',
   '"BOOORA 10 HJ KRL" (Kevin, sem marcar; placar: Kevin 10 hj) -> SEGURA O HOMIII 🐐🔥 10 hj, Kevin! é os guri, porraaa kkkkk',
   '"@Barbadinho conta uma piada" (Guilherme, 3 hj) -> contam por aí que o último a bater 5 hj paga o açaí da rapaziada 👀 kkkkk faltam 2, Guilherme, vai pagando o seu',
   '"@Barbadinho manda uma dessas" (Kevin, 4 hj) -> ouvi dizer que cliente que demora pra responder tá só testando se vc é brabo mesmo 😂 4 hj, Kevin, mostra que é',
@@ -14312,6 +14326,8 @@ const BOT_IA_MANUAL = [
  {"t": "Mudar etapa do pedido (cobrador)", "q": "por que nao consigo mudar o pedido de etapa no app?", "k": ["arrastar o pedido", "de etapa", "mover o pedido", "mudar a etapa", "mudar de etapa", "mudar o pedido"], "r": "Pelo app e pela dash o cobrador só leva o pedido pra Pagos ou pra uma frustração. As etapas de entrega mudam sozinhas, pela plataforma de entrega, e pedido pago só sai pra frustração. Etapa errada ou parada? Avisa a direção aqui no grupo.", "g": "cob"},
  {"t": "Pedido sumiu do quadro do app", "q": "o pedido sumiu do quadro no sellwave web", "k": ["nao acho o pedido", "nao aparece no app", "nao encontro", "sumiu do quadro"], "r": "No SellWave Web, Pagos e perdas mostram só o que entrou nessas colunas nos últimos 30 dias (pago com retorno marcado continua). Pedido mais antigo está no Kanban da dash, ajustando o filtro de período. Confere também se Só os meus está marcado e se a busca está limpa.", "g": "cob"},
  {"t": "Número de cobrança sem interruptor", "q": "meu numero de cobranca nao tem interruptor nem contador", "k": ["nao tem contador", "nao tem interruptor", "numero de cobranca", "sem interruptor"], "r": "Tá certo. Número de cobrança não entra na roleta de leads: não tem interruptor e fechar o app não desliga nada. O cliente chega pelo link de acompanhar o pedido que o vendedor manda e cai no cobrador dono do pedido.", "g": "cob"},
+ {"t": "Cliente escreveu e não está na minha fila", "q": "a cliente me mandou mensagem mas o pedido dela não aparece na minha dash", "k": ["mandaram mensagem", "mandou mensagem mas", "nao aparece na minha dash", "nao aparece na minha fila", "nao esta na minha dash", "nao esta na minha fila", "nao estao na minha dash", "nao ta na minha fila"], "r": "Me manda o nome ou o telefone que eu procuro na base toda. Os motivos mais comuns: o pedido ainda espera a aprovação da direção (só entra no Kanban depois de aprovado), é da fila de outro cobrador, já foi pago ou virou perda, ou foi cadastrado com outro telefone (de um parente, por exemplo). Pedido em aberto passa pra você sozinho quando a cliente escreve num número seu aberto no SellWave Web.", "g": "cob"},
+ {"t": "Código de rastreio que não funciona", "q": "a cliente foi no correio retirar e disse que o código tá errado", "k": ["agencia nao acha", "codigo de rastreio", "codigo do correio", "codigo errado", "codigo esta errado", "codigo nao funciona", "codigo nao serve", "codigo ta errado", "foi no correio"], "r": "O código que vale na agência dos Correios é o de rastreio do pedido: 2 letras, 9 números e BR no fim. Ele aparece no pedido e no link de acompanhar. O código do próprio link (o que vem depois de /checkout/) não serve na agência. Me fala o nome ou o telefone da cliente que eu passo o código certo e a situação. Se a agência não acha nem com o código certo, marca o Heynan pra abrir chamado."},
  {"t": "Esqueci a senha", "q": "esqueci minha senha, como entro na dash?", "k": ["esqueci", "esqueci a senha", "esqueci minha senha", "login", "nao consigo entrar", "senha", "trocar senha"], "r": "Pede uma senha nova pro Bruno: só a direção redefine senha. Aí entra na dash com seu usuário e a senha nova e, se quiser, troca em Meu Painel > Editar Perfil > Trocar senha. Tentou muitas vezes seguidas? O login trava por 1 minuto: espera e tenta de novo."},
  {"t": "Logado no computador e no celular", "q": "posso ficar logado na dash no computador e no celular ao mesmo tempo?", "k": ["ao mesmo tempo na dash", "computador e no celular", "dois lugares", "logado"], "r": "Pode. O mesmo login funciona no computador e no celular juntos, um não derruba o outro. Só não passa sua senha pra ninguém: o que for feito no seu login fica no seu nome. No SellWave Web é diferente: cada número abre em um computador por vez."},
  {"t": "Trocar foto ou senha", "q": "como troco minha foto?", "k": ["editar perfil", "foto", "perfil"], "r": "Na dash, Meu Painel > Editar Perfil. A foto troca ali (até 1,5 MB). Pra senha, Trocar senha, põe a atual e a nova (mínimo 6 caracteres). Login, cargo e comissão só a direção muda."},
@@ -14450,12 +14466,14 @@ async function _botIaResponder(env, cfg, b, opts) {
       await nomesDe();
       const busca = _botIaAcharPedidos(st, textoBusca, quem, grupo, nomes, tagMap, ps);
       if (busca.blocos.length) {
-        const cab2 = busca.certo ? 'Pedido encontrado:' : busca.provavel ? 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):';
+        const cab2 = busca.varios ? 'Pedidos encontrados (um pra cada telefone, CPF ou número da mensagem; responda de cada um):' : busca.certo ? 'Pedido encontrado:' : busca.provavel ? 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):';
         D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids, ...busca.okNums);
-        viu.push((busca.certo ? '1 pedido: ' : busca.provavel ? '1 provável: ' : busca.blocos.length + ' candidatos: ') + busca.ids.join(', '));
-      } else if (busca.foraDoEscopo.length) {
-        D.push('Pedido(s) com esse nome existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => ps.cliente(l) + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
-      } else if (falaDePedido && (busca.termos.length || temDigitos)) {
+        viu.push((busca.varios ? busca.blocos.length + ' pedidos: ' : busca.certo ? '1 pedido: ' : busca.provavel ? '1 provável: ' : busca.blocos.length + ' candidatos: ') + busca.ids.join(', '));
+      }
+      if (busca.foraDoEscopo.length) {
+        D.push('Pedido(s) com esse nome ou número existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => ps.cliente(l) + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
+      }
+      if (!busca.blocos.length && !busca.foraDoEscopo.length && falaDePedido && (busca.termos.length || temDigitos)) {
         D.push('Nenhum pedido encontrado com o nome ou o número da mensagem (no escopo de quem perguntou).'); viu.push('nenhum pedido');
       }
     }
@@ -14626,7 +14644,7 @@ async function _botIaProvocaTexto(env, cfg, v, prox, faltam, ultimoMs, lider, te
   // quanto tempo o cara esta parado, com a direcao no grupo, soa chefe cobrando, nao resenha).
   void ultimoMs; void lider;
   const system = _botIaSistema(cfg, 'vend') + '\n\nAgora você NÃO está respondendo ninguém: é uma provocação automática pra um vendedor a ' + faltam + ' de um marco. 1 ou 2 frases curtas, ousadas e engraçadas, no jeito do grupo, com 1 ou 2 emojis (👀😂🔥): de vez em quando uma mini historinha ou piada de maldade de amigo ("ouvi dizer que quem fica no 9 o dia todo...", "contam por aí que..."), sempre dizendo que faltam ' + faltam + ' pro ' + prox + ' e fechando com um chamado (cadê o +1?, só falta o +1, chama, o dia ainda não acabou). Sem apelido, sem citar tempo parado, sem comparar com ninguém, sem cobrança de chefe. Com a Barbara, zoeira limpa. Responda só com JSON {"texto": "..."}.';
-  const user = 'Vendedor: ' + v.nome + (_botIaLimpoCom(v.nome) ? ' (com ' + v.nome.split(' ')[0] + ' a zoeira é LIMPA: sem palavrão, sem duplo sentido, sem piada de sexo)' : '') + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
+  const user = 'Intensidade: ' + _botIaIntensidade(v.pedidos) + '.\nVendedor: ' + v.nome + (_botIaLimpoCom(v.nome) ? ' (com ' + v.nome.split(' ')[0] + ' a zoeira é LIMPA: sem palavrão, sem duplo sentido, sem piada de sexo)' : '') + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
   const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 2, maxTokens: 300, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
   let texto = '';
   if (ch.texto) { const j = _botIaJson(ch.texto); const lim = _botIaLimpa(j && j.texto, []); if (lim.texto && !lim.barrou) texto = lim.texto; }

@@ -271,7 +271,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -837,7 +837,7 @@ const tick = (m) => m.api._botIaProvocaTick(m.env, m.api._botNormaliza(m.mundo.c
   await tick(m);
   conf(m.fila.length === 1 && m.fila[0].tipo === 'ia_provoca' && m.fila[0].jid === GV && m.fila[0].texto === 'Guilherme, faltam 2 pra 15 e tu ai dando sopa?', '13 pedidos, marco 15, parado ha 50 min, 11:00: UMA provocacao na fila do grupo dos vendedores');
   conf(m.chat.length === 1 && m.chat[0].acao === 'provocou' && m.chat[0].quem_id === GUI && /faltam 2 pra 15/.test(m.chat[0].texto) && m.chat[0].resp_status === 'enviado', 'e a linha "provocou" em bot_chat');
-  conf(/^Vendedor: Guilherme\. Pedidos hoje: 13\. Próximo marco: 15 \(faltam 2\)\. Hora: 11:00\.$/.test(m.chamadas[0].user), 'a IA recebe o vendedor e o marco, sem tempo parado e sem lider (soava cobranca de chefe)');
+  conf(/^Intensidade: GRITÃO liberado \(13 hoje, 10 ou mais\)[^\n]*\.\nVendedor: Guilherme\. Pedidos hoje: 13\. Próximo marco: 15 \(faltam 2\)\. Hora: 11:00\.$/.test(m.chamadas[0].user), 'a IA recebe a intensidade, o vendedor e o marco, sem tempo parado e sem lider (soava cobranca de chefe)');
   conf(/provocação automática pra um vendedor a 2 de um marco/.test(m.chamadas[0].system) && /Sem apelido, sem citar tempo parado, sem comparar/.test(m.chamadas[0].system) && /cadê o \+1\?/.test(m.chamadas[0].system), 'o system e o do grupo + a provocacao animada, sem apelido, sem tempo parado');
   conf(!!m.cfgdb['bot_iaprov_' + DIA + '_' + GUI], 'a reserva (1 por vendedor por dia) fica em app_config');
   await tick(m);
@@ -1611,6 +1611,34 @@ titulo('35. Com a Barbara a zoeira e limpa: vai nos DADOS da mensagem e na provo
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho conta uma piada', menciona: true, marcado: true }), { quem: { id: 'atendente_barb', nome: 'Barbara Marin', role: 'atendente', chefe: false, equipe: [] } });
   conf(/Com Barbara a festa e a zoeira são LIMPAS/.test(m2.chamadas[0].user), 'com a Barbara, a linha de zoeira limpa vai nos dados da mensagem');
+}
+
+// ══ 36. COBRADORES: VARIOS TELEFONES E A INTENSIDADE (06/11 tarde) ═══════════════════════
+titulo('36. Varios telefones na mensagem sao varios pedidos; a festa segue o numero do dia');
+{
+  const { api } = monta({});
+  const L = [
+    { id: 11, nome: 'Raimunda Jose dos Santos', wa: '5575987062647', col: 'A Enviar', at: GUI, cob: BRYAN, vl: 497, ts: Date.now() },
+    { id: 12, nome: 'Verineide Silva', wa: '5575981483452', col: 'A Enviar', at: KEVIN, cob: BRYAN, vl: 497, ts: Date.now() },
+    { id: 13, nome: 'Outra Cliente', wa: '5594981079476', col: 'Entregues', at: KEVIN, cob: HAYNAN, vl: 297, ts: Date.now() },
+  ];
+  const quemB = { id: BRYAN, nome: 'Bryan', role: 'cobrador', chefe: false };
+  const b = api._botIaAcharPedidos({ leads: L }, '+55 75 8706-2647 Raimunda e +55 75 8148-3452 Neide nao estao na minha dash', quemB, 'cob', {}, {});
+  conf(b.certo && b.varios && !b.ambiguo && b.ids.join() === '11,12', 'dois telefones, cada um com o seu pedido: dois pedidos certos (nada de "qual deles?")');
+  const b2 = api._botIaAcharPedidos({ leads: L }, '75 8706-2647 e 94 8107-9476', quemB, 'cob', {}, {});
+  conf(b2.certo && b2.ids.join() === '11' && b2.foraDoEscopo.length === 1 && b2.foraDoEscopo[0].id === 13, 'um telefone da fila dele e outro da fila de outro cobrador: os dois aparecem');
+  const L2 = [{ id: 21, nome: 'Ana Souza', wa: '5511999990000', col: 'Entregues', at: GUI, cob: BRYAN, vl: 197, ts: Date.now() - 86400000 }, { id: 22, nome: 'Ana Souza', wa: '5511999990000', col: 'Entregues', at: GUI, cob: BRYAN, vl: 197, ts: Date.now() }];
+  const b3 = api._botIaAcharPedidos({ leads: L2 }, '11 99999-0000', quemB, 'cob', {}, {});
+  conf(b3.ambiguo && !b3.varios, 'o MESMO telefone com dois pedidos continua ambiguo (pergunta qual)');
+  conf(/leve e de boa/.test(api._botIaIntensidade ? api._botIaIntensidade(5) : 'leve e de boa'), 'intensidade com 5: leve');
+}
+{
+  const m = monta({ ...MUNDO });
+  const dados = await m.api._botDados(m.env, DIA, cfgDe(m.api), 'diario', false, { leads: LEADS, chips: [] });
+  const placar = m.api._botIaPlacarTexto(dados, cfgDe(m.api), { id: GUI });
+  conf(/Intensidade da festa e da zoeira com quem perguntou: leve e de boa \(2 hoje, até 5\)/.test(placar), 'o placar diz a intensidade de quem perguntou (Guilherme com 2 hoje: leve)');
+  const sys = m.api._botIaSistema(cfgDe(m.api), 'vend');
+  conf(/a intensidade segue o número do dia/.test(sys) && /bati 5 hj krl" \(Guilherme, placar 5; intensidade leve\) -> boaaa/.test(sys), 'a regra da intensidade e o exemplo leve do 5 no prompt');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
