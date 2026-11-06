@@ -677,6 +677,14 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   conf(r.acao === 'calado' && /\(cpf\)/.test(r.motivo), 'CPF na saida: calado');
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'O pedido #1793903844876 da Joselina está pago.' } }] }));
   conf(r.acao === 'respondeu' && /#1793903844876/.test(r.resposta), 'o id do pedido que veio nos dados passa');
+  {
+    // O rastreio do pedido encontrado nao e telefone (medido ao vivo: J&T de 15 digitos calava o bot).
+    const leads = LEADS.map((l) => (l.id === 1793903844876 ? { ...l, track: '888031023495895' } : l));
+    const x = await pergunta({ leads, ia: [{ json: { responder: true, texto: 'Pago. Rastreio J&T 888031023495895.' } }] });
+    conf(x.r.acao === 'respondeu' && /888031023495895/.test(x.r.resposta), 'o codigo de rastreio do pedido encontrado passa pela mascara');
+    const y = await pergunta({ leads, ia: [{ json: { responder: true, texto: 'Rastreio 999999999999999.' } }] });
+    conf(y.r.acao === 'calado' && /telefone/.test(y.r.motivo), 'um numero longo que nao veio nos dados continua barrado');
+  }
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Pagou **sim** \u2014 relaxa' } }] }));
   conf(r.resposta === 'Pagou *sim*, relaxa', '**negrito** vira *negrito* e travessao vira virgula');
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'x'.repeat(2000) } }] }));

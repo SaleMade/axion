@@ -13540,7 +13540,7 @@ async function _botIaNumerosDe(env, st, atId, nome) {
 // pergunta virar uma lista de parecidos da fila de quem perguntou (medido ao vivo em 06/11/2026: "jose
 // tadeu carneiro" e do Haynan, e o Bryan recebia 4 Josés dele).
 function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
-  const out = { blocos: [], ids: [], certo: false, provavel: false, ambiguo: false, termos: [], foraDoEscopo: [] };
+  const out = { blocos: [], ids: [], okNums: [], certo: false, provavel: false, ambiguo: false, termos: [], foraDoEscopo: [] };
   if (!quem || !quem.id) return out;
   const leads = Array.isArray(st && st.leads) ? st.leads : [];
   const txt = String(texto || '');
@@ -13587,7 +13587,12 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
     if (topo.length === 1 && (melhorD >= 2 || D.length === 1)) { out.provavel = true; lista = topo; }
     else { out.ambiguo = true; lista = [...topo, ...D.filter((c) => c.bate !== melhorD)].slice(0, 4); }
   }
-  for (const c of lista) { out.blocos.push(_botIaPedidoTexto(c.l, st, nomes, tagMap, out.certo || out.provavel)); out.ids.push(String(c.l.id)); }
+  for (const c of lista) {
+    out.blocos.push(_botIaPedidoTexto(c.l, st, nomes, tagMap, out.certo || out.provavel)); out.ids.push(String(c.l.id));
+    // O codigo de rastreio e o id da Five desses pedidos podem sair na resposta: nao sao telefone (medido
+    // ao vivo: o rastreio da J&T de 15 digitos fazia a mascara calar o bot).
+    for (const n of [_botSoDigitos(c.l.track), _botSoDigitos(c.l.five_id)]) if (n.length >= 5) out.okNums.push(n);
+  }
   return out;
 }
 // O pedido em texto, a partir de _cobDetalhe (sem CPF, endereco, links e comentarios: a resposta e
@@ -13792,7 +13797,7 @@ async function _botIaResponder(env, cfg, b, opts) {
       const busca = _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap);
       if (busca.blocos.length) {
         const cab2 = busca.certo ? 'Pedido encontrado:' : busca.provavel ? 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):';
-        D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids);
+        D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids, ...busca.okNums);
         viu.push((busca.certo ? '1 pedido: ' : busca.provavel ? '1 provável: ' : busca.blocos.length + ' candidatos: ') + busca.ids.join(', '));
       } else if (busca.foraDoEscopo.length) {
         D.push('Pedido(s) com esse nome existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => String(l.nome || '').trim() + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
@@ -13829,7 +13834,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     await nomesDe();
     const b2 = _botIaAcharPedidos(st, String(j.buscar), quem, grupo, nomes, tagMap);
     const extra = b2.blocos.length ? ((b2.certo ? 'Pedido encontrado (busca por "' + String(j.buscar).slice(0, 60) + '"):' : b2.provavel ? 'Pedido PROVÁVEL (confirme antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é):') + '\n' + b2.blocos.join('\n\n')) : 'Nenhum pedido encontrado para: ' + String(j.buscar).slice(0, 60) + '.';
-    idsOk.push(...b2.ids); viu.push('2a busca: ' + (b2.ids.join(', ') || 'nada'));
+    idsOk.push(...b2.ids, ...b2.okNums); viu.push('2a busca: ' + (b2.ids.join(', ') || 'nada'));
     const ch2 = await _botIaChamar(env, system, montaUser(extra), { orcamentoMs: BOT_IA_ORCAMENTO_MS - (Date.now() - t0), maxModelos: 1 });
     res.chamadas = 2; res.ms = Date.now() - t0;
     if (ch2.texto) { ch = ch2; j = _botIaJson(ch2.texto) || j; res.modelo = ch2.modelo; }
