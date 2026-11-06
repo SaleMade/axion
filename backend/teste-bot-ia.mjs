@@ -68,6 +68,7 @@ const CODIGO = [
   recortaFuncao('_emUsoIdsDe'), recortaFuncao('_foraIdsDe'), recortaFuncao('_aquecIdsDe'),
   recortaFuncao('_chipAquecendo'), recortaFuncao('_chipEmUso'),
   recortaAteFecho('_aiParseJSON'),
+  src.match(/^const _donoDe = .*$/m)[0],
   recortaFuncao('handleBotAgente'), recortaFuncao('handleBotChat'), recortaFuncao('handleBotIaTeste'),
 ].join('\n');
 
@@ -510,6 +511,19 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   const user = chamadas[0].user;
   conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, e o motivo e o app, nao queda');
   conf(/0 recebendo lead agora/.test(user), 'e o cabecalho conta zero recebendo');
+}
+{
+  // Pressel de AFILIADO sem entrada do vendedor da casa nao conta como "ligado" (chip da casa nunca
+  // entra la). Medido ao vivo: 5 da casa desligadas + 5 do afiliado davam "recebendo lead".
+  const pressels = [
+    { id: 'p1', vendedores: [{ at: GUI, off: { '88880001': 1 }, app_off: { '88880001': true } }] },
+    { id: 'pa', afl: 'afl_x', vendedores: [] },
+    { id: 'pb', afl: 'afl_x', vendedores: [] },
+  ];
+  const { api, env, chamadas } = monta({ ...MUNDO, pressels });
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  const user = chamadas[0].user;
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
 }
 {
   const { api, env, chamadas } = monta(MUNDO);

@@ -13484,9 +13484,13 @@ async function _botIaNumerosDe(env, st, atId, nome) {
     else if (_chipEmUso(c, emUso)) status = 'em uso';
     partes.push(status);
     if (status === 'em uso' || status === 'em aquecimento') emUsoN++;
-    // O interruptor em cada pressel (ausente = ligado, como a tela mostra).
+    // O interruptor em cada pressel (ausente = ligado, como a tela mostra). So as pressels do MESMO dono
+    // do chip (a regra do _chipsDaPressel): chip da casa nunca entra em pressel de afiliado, e contar a
+    // pressel do afiliado como "ligado" fazia o bot dizer que o numero recebia lead com o app fechado
+    // (medido ao vivo em 06/11/2026: 5 da casa desligadas + 5 do afiliado "ligadas").
+    const pDoChip = pressels.filter((p) => _donoDe(p) === _donoDe(c));
     let lig = 0, desl = 0, appOff = 0;
-    for (const p of pressels) {
+    for (const p of pDoChip) {
       const v = (Array.isArray(p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === String(atId));
       if (!v) { lig++; continue; }
       if (v.ativo === false) { desl++; continue; }
@@ -13494,13 +13498,13 @@ async function _botIaNumerosDe(env, st, atId, nome) {
       lig++;
     }
     const naRoleta = status === 'em uso' || status === 'em aquecimento';
-    if (pressels.length) {
+    if (pDoChip.length) {
       const podeReceber = naRoleta && lig > 0;
       if (podeReceber) recebendo++;
       // O que importa primeiro: recebe lead agora ou nao, e por que. O interruptor de numero que nem esta
       // Em uso nao diz nada (a roleta nao entrega pra ele de jeito nenhum).
       partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou' : 'interruptor desligado')) + ')');
-      if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pressels.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas de propósito)' : ''));
+      if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pDoChip.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas de propósito)' : ''));
     }
     const u = uso[nk];
     if (u && Number(u.ate || 0) > agora) partes.push('app aberto por ' + String(u.nome || u.user_id || 'alguém') + ' desde ' + _botIaHHMM(u.desde));
