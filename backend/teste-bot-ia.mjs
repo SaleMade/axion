@@ -169,6 +169,7 @@ function monta(mundo) {
     }
     if (/SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && x.acao !== a[2]).sort(desc).slice(0, Number(a[3])), meta: {} };
     if (/SELECT resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && (x.acao === a[2] || x.acao === a[3])).sort(desc).slice(0, 30).map((x) => ({ resposta: x.resposta })), meta: {} };
+    if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND motivo LIKE 'festa%'/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && /^festa/.test(String(x.motivo || '')) && Number(x.ts) > Number(a[1])) ? [{ ok: 1 }] : [], meta: {} };
     if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND de_jid=\?/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && x.de_jid === a[1] && ['respondeu', 'pendente'].includes(x.acao) && Number(x.ts) > Number(a[2])) ? [{ ok: 1 }] : [], meta: {} };
     if (/COUNT\(\*\) AS n FROM bot_chat WHERE acao='provocou'/.test(sql)) return { results: [{ n: chat.filter((x) => x.acao === 'provocou' && x.dia === a[0]).length }], meta: {} };
     if (/SELECT acao, COUNT\(\*\) AS n FROM bot_chat WHERE grupo=\? AND dia=\?/.test(sql)) {
@@ -270,7 +271,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -340,7 +341,7 @@ titulo('1. A config da conversa (cfg.ia)');
   conf(p.responde.vend === false && p.responde.cob === false, 'nasce sem responder em nenhum grupo (ninguem leva resposta sem o Bruno ligar)');
   conf(p.so_marcado.vend === false && p.so_marcado.cob === true, 'vendedores: espontaneo liberado; cobradores: so quando marcarem o bot');
   conf(p.provoca.ativo === false, 'a provocacao perto do marco nasce desligada');
-  conf(/^Animado e espontâneo/.test(p.tom.vend) && /^Animado, mais leve/.test(p.tom.cob) && p.instrucoes === '', 'tons padrao por grupo (o jeito do grupo, 06/11) e instrucoes vazias');
+  conf(/^Animado, ousado e zoeiro/.test(p.tom.vend) && /^Mesma energia do grupo dos vendedores/.test(p.tom.cob) && p.instrucoes === '', 'tons padrao por grupo (06/11 tarde: mais ousado, a cobranca com a mesma energia) e instrucoes vazias');
   const base = api._botNormaliza({ ia: { instrucoes: 'Nunca fale de preco', so_marcado: { vend: true }, tom: { vend: 'Tom X' } } }, null);
   const so = api._botNormaliza({ ia: { responde: { vend: true } } }, base);
   conf(so.ia.responde.vend === true && so.ia.responde.cob === false, 'ligar so o responder do time muda so ele');
@@ -556,8 +557,8 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(system) && /"@Barbadinho a C1 pagou\?" \(pedido encontrado: C1, Londrina\/PR/.test(system) && !/Boa, Fulano, 5 vendas/.test(system), 'no grupo dos cobradores vao os exemplos da cobranca, nunca as frases cruas do marco');
   await api._botIaResponder(env, cfg, pacote({ texto: 'e ai barbadinho', menciona: true }));
   const sys2 = chamadas[1].system;
-  conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(sys2) && /BOOORA krl, 10 cravadas/.test(sys2) && !/Especial Fulano/.test(sys2) && !/a Ivone Cardoso pagou/.test(sys2), 'no vend vao os exemplos dos vendedores (as frases cruas do marco nao entram mais)');
-  conf(/Jeito de falar neste grupo: Animado e espontâneo/.test(sys2), 'tom padrao dos vendedores quando nao foi escrito');
+  conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(sys2) && /ISSO AÍ PORRAAAA 🔥🔥 10 cravadas/.test(sys2) && !/Especial Fulano/.test(sys2) && !/a Ivone Cardoso pagou/.test(sys2), 'no vend vao os exemplos dos vendedores (as frases cruas do marco nao entram mais)');
+  conf(/Jeito de falar neste grupo: Animado, ousado e zoeiro/.test(sys2), 'tom padrao dos vendedores quando nao foi escrito');
 }
 
 // ══ 8. A BUSCA DE PEDIDO ═══════════════════════════════════════════════════════════════
@@ -871,7 +872,7 @@ const tick = (m) => m.api._botIaProvocaTick(m.env, m.api._botNormaliza(m.mundo.c
 {
   const m = monta(mundoProv(13, 50, { ia: [{ status: 429 }] }));
   await tick(m);
-  conf(m.fila.length === 1 && m.fila[0].texto === 'Guilherme, faltam 2 pra bater 15. Vai dar mole agora?', 'IA fora (429): sai a frase reserva com o nome de verdade');
+  conf(m.fila.length === 1 && m.fila[0].texto === 'Guilherme, faltam 2 pro 15 👀 vai deixar escapar agora?', 'IA fora (429): sai a frase reserva com o nome de verdade');
   conf(m.chat.length === 1 && /frase reserva/.test(m.chat[0].motivo) && Number(m.cfgdb.bot_ia_quota_ate) === agoraS() + 3600, 'a linha diz que foi a reserva, e a cota pausa 1 h');
 }
 {
@@ -1057,7 +1058,7 @@ const CFG_TESTE = (t, extra) => ({ ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { 
   conf(r3._status === 400, 'cobrador nao tem provocacao: 400');
   const m3 = monta({ ...mundoProv(0, 5), cfg: CFG_TESTE({ como: 'vend' }), ia: [{ status: 429 }] });
   const r4 = await m3.api.handleBotIaTeste(req('/api/bot/ia/teste', { provoca: true, quem_id: GUI }), m3.env);
-  conf(r4._json.ok && r4._json.resposta === 'Guilherme, faltam 5 pra bater 5. Vai dar mole agora?' && /Pedidos hoje: 0\./.test(m3.chamadas[0].user), 'sem pedido hoje e IA fora: a frase reserva, e a IA soube que ele ainda nao vendeu');
+  conf(r4._json.ok && r4._json.resposta === 'Guilherme, faltam 5 pro 5 👀 vai deixar escapar agora?' && /Pedidos hoje: 0\./.test(m3.chamadas[0].user), 'sem pedido hoje e IA fora: a frase reserva, e a IA soube que ele ainda nao vendeu');
 }
 
 // ══ 17. A CASCATA DO GEMINI ════════════════════════════════════════════════════════════
@@ -1243,17 +1244,17 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   conf(api.BOT_IA_HORA.gemini === 40 && api.BOT_IA_DIA.vend === 300 && api.BOT_IA_DIA.cob === 300 && api.BOT_IA_PESSOA_10MIN === 8, 'limites: 40 por hora por grupo, 300 por dia, 8 por pessoa em 10 min');
   const sys = api._botIaSistema(api._botNormaliza(CFG_RAW, null), 'vend');
   conf(/ANTES DE ESCREVER, ESCOLHA UM MODO/.test(sys) && /na dúvida, PROBLEMA/.test(sys) && /PROBLEMA: acolhe primeiro e resolve/.test(sys), 'o modo por mensagem, com PROBLEMA na frente (acolhe e resolve)');
-  conf(/soltar a franga/.test(sys) && /Emoji nunca/.test(sys) && /só "krl"/.test(sys), 'proibe a giria de tiozao, emoji e palavrao alem de krl');
+  conf(/soltar a franga/.test(sys) && /nenhum no PROBLEMA/.test(sys) && /Palavrão de comemoração vale nos dois grupos/.test(sys) && /GRITÃO de torcida/.test(sys), 'giria de tiozao proibida; emoji na festa e na zoeira (nunca no problema); palavrao de comemoracao nos dois grupos (06/11 tarde)');
   const vend = api.BOT_IA_EXEMPLOS.vend.join('\n'), cob = api.BOT_IA_EXEMPLOS.cob.join('\n');
-  conf(!/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(vend + cob) && !/[—–]/.test(vend + cob), 'nenhum exemplo tem emoji nem travessao');
-  conf(!/\b(porra|caralho|fdp é|desgraçado|as bb|gin|revoada)\b/i.test(vend.replace(/fdp kkkk"/, '') + cob), 'nenhum exemplo tem palavrao pesado nem a piada das bb');
-  conf(!/krl/.test(cob), 'nos exemplos da cobranca nao tem krl');
+  conf(!/[—–]/.test(vend + cob) && /🔥/u.test(vend) && /💰/u.test(cob), 'nenhum exemplo tem travessao; a festa dos dois grupos tem emoji');
+  conf(!/\b(desgraçado|as bb|gin|revoada)\b/i.test(vend + cob), 'nenhum exemplo tem a piada das bb nem xingamento pesado');
+  conf(/ouvi dizer que quem não faz no mínimo 5 vendas/.test(vend) && /ISSO AÍ PORRAAAA/.test(cob), 'a zoeira tem mini historinha e a cobranca tem a mesma energia');
   conf(api.BOT_IA_EXEMPLOS.vend.some((e) => /^"Barbadinho tu é fera"/.test(e)) && api.BOT_IA_EXEMPLOS.cob.some((e) => /^"Barbadinho tu é fera"/.test(e)), 'o elogio pelo nome (sem marcar) tem resposta nos dois grupos');
 }
 {
   // A limpeza da saida tira emoji que escapar.
   const { api } = monta({});
-  conf(api._botIaLimpa('BOOORA 🔥🔥 10 cravadas 🍾', []).texto === 'BOOORA 10 cravadas', 'emoji que escapar sai da resposta');
+  conf(api._botIaLimpa('BOOORA 🔥🔥 10 cravadas 🍾', []).texto === 'BOOORA 🔥🔥 10 cravadas 🍾', 'emoji fica na resposta (06/11 tarde: o Bruno quer emoji na festa)');
 }
 {
   // Conversa: o bot respondeu o Guilherme ha 1 min; ele escreve "ta on ai?" sem marcar: a IA decide.
@@ -1576,6 +1577,29 @@ titulo('33. Revisao da meta do mes: 80% arredondado, frase do Bruno com "semana"
   const pv = n.meta_batida.por_vendedor.v1;
   conf(n.meta_batida.frases[0] === 'Que semana, {nome}!' && n.meta_batida.frases[1].startsWith('BOOORA') && pv.frases[0] === 'Boa {nome}' && pv.frases[1].startsWith('BOOORA'), 'so a frase antiga conhecida troca; a do Bruno com "semana" fica');
   conf(pv.frases_midia[0] && pv.frases_midia[0].key === 'c'.repeat(24) + '.jpg' && n.meta_batida.frases_midia[0] && n.meta_batida.frases_midia[0].key === 'a'.repeat(24) + '.jpg', 'a lista por vendedor mantem a midia da frase que ficou');
+}
+
+// ══ 34. FESTA SEM MARCAR E O JEITO OUSADO (06/11 tarde) ════════════════════════════════
+titulo('34. Festa sem marcar: so palavra forte, so com o placar, uma tentativa a cada 10 min');
+{
+  const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'SEGURA O HOMIII 🐐🔥' } }] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'BOOORA +1 KRL', menciona: false }));
+  conf(r.responder && r.resposta === 'SEGURA O HOMIII 🐐🔥' && r.motivo === 'festa espontânea' && /cara de comemoração/.test(m.chamadas[0].user), 'comemoracao sem marcar: a IA entra (com o placar) e o emoji sai junto');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r2 = await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: 'bora almoçar galera', menciona: false }));
+  conf(r2.acao === 'visto' && m2.chamadas.length === 0, '"bora" sozinho nao e festa: nem chama a IA');
+  const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r3 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'porra, ja pagou?', menciona: false }));
+  conf(r3.acao === 'visto' && m3.chamadas.length === 0, 'pergunta nao e festa');
+  const chat = [linhaChat({ msg_id: 'f1', grupo: 'vend', jid: GV, acao: 'calado', motivo: 'festa: a IA preferiu não responder', ts: agoraS() - 120 })];
+  const m4 = monta({ ...MUNDO, chat, ia: [JSON_OK] });
+  const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'ISSO AÍ PORRAAA fechei', menciona: false }));
+  conf(r4.acao === 'visto' && m4.chamadas.length === 0, 'tentativa de festa ha 2 min no grupo: nao tenta de novo');
+  const m5 = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r5 = await m5.api._botIaResponder(m5.env, cfgDe(m5.api, { ia: { ...CFG_RAW.ia, so_marcado: { vend: true, cob: true } } }), pacote({ texto: 'BOOORA +1 KRL', menciona: false }));
+  conf(r5.acao === 'visto' && m5.chamadas.length === 0, 'com "so quando marcarem" ligado, festa sem marcar nao entra');
+  const n = m.api._botIaNormaliza({ tom: { vend: m.api.BOT_IA_TOM_VELHOS[0], cob: m.api.BOT_IA_TOM_VELHOS[1] } });
+  conf(/ousado e zoeiro/.test(n.tom.vend) && /Mesma energia do grupo dos vendedores/.test(n.tom.cob), 'o jeito gravado igual ao padrao antigo vira o novo (mais ousado) nos dois grupos');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
