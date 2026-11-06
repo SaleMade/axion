@@ -17508,6 +17508,49 @@ async function handleSwWeb(req, env, path) {
 //             fica de fora (nao virou venda, nao e calote).
 // A semana e SEMPRE a corrente (a corrida da meta), independente do periodo do filtro.
 // Afiliado nao entra: o podio e do time da CASA; o mundo do afiliado e outra operacao e nao pode vazar.
+//
+// ══ A META MENSAL DOS VENDEDORES (06/11/2026, regra do Bruno; tomou o lugar da meta da semana) ══
+// ESPELHO de src/lib/meta-mensal.js da dash: mudou la, muda aqui (e o teste de rota confere a conta).
+//   200 pedidos = R$ 800 · 220 = R$ 1.100 · 240 = R$ 1.400 · 260 = R$ 1.800 · 280 = R$ 2.200 (so a
+//   maior faixa vale); pedido de 297/397 conta, mas no fechamento pelo menos 80% dos pedidos tem que
+//   ser de R$ 497+ (valor a cobrar); cancelado sai; entregue e nao pago continua; do dia 1 00:00 ao
+//   ultimo dia 23:59 (Brasilia); o PRIMEIRO a bater 250 no mes ganha +R$ 200.
+// UMA LINHA, de proposito: o teste do bot recorta o modulo do bot e puxa constante de fora por regex.
+const META_MENSAL = { faixas: [{ pedidos: 200, bonus: 800 }, { pedidos: 220, bonus: 1100 }, { pedidos: 240, bonus: 1400 }, { pedidos: 260, bonus: 1800 }, { pedidos: 280, bonus: 2200 }], ticketMin: 497, pctCheios: 80, corrida: { pedidos: 250, bonus: 200 } };
+// O comeco do mes corrente em Brasilia, em ms (UTC-3, sem horario de verao desde 2019).
+function _metaMesIni(agoraMs) { const d = new Date((agoraMs || Date.now()) - 3 * 3600000); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 3, 0, 0); }
+// A CONTAGEM DO MES POR VENDEDOR, pura (recebe os leads, devolve { at: {mes, cheios, marcoTs} }), pra o
+// /api/podio e o bot lerem a MESMA conta. `ids` (opcional) restringe aos vendedores da lista.
+//   mes     = pedidos nao cancelados criados no mes corrente (o mesmo "pedido" do podio: inclusive o
+//             manual ainda nao aceito; mundo do afiliado fora)
+//   cheios  = desses, quantos com valor a cobrar >= ticketMin
+//   marcoTs = quando ele fez o 250o pedido do mes (ms); 0 se ainda nao chegou. O menor entre todos e
+//             quem leva o bonus extra.
+function _metaMesPorVendedor(leads, ids, agoraMs, regra) {
+  const R = regra || META_MENSAL;
+  const ini = _metaMesIni(agoraMs);
+  const quer = ids ? new Set(Array.from(ids).map(String)) : null;
+  const por = {};
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l || l.afl) continue;
+    const at = String(l.at || '');
+    if (!at || (quer && !quer.has(at))) continue;
+    if (_botCancelado(l)) continue;
+    const t = _botCriadoMs(l);
+    if (!t || t < ini) continue;
+    const v = por[at] || (por[at] = { mes: 0, cheios: 0, marcoTs: 0, _ts: [] });
+    v.mes++;
+    if (_botValorLead(l) >= R.ticketMin) v.cheios++;
+    v._ts.push(t);
+  }
+  for (const id of Object.keys(por)) {
+    const v = por[id];
+    v._ts.sort((a, b) => a - b);
+    v.marcoTs = v._ts.length >= R.corrida.pedidos ? v._ts[R.corrida.pedidos - 1] : 0;
+    delete v._ts;
+  }
+  return por;
+}
 const _PODIO_FRUSTRADO = new Set(['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado']);
 // Mesma normalizacao do colDe do front (COL_ALIAS): so estes dois aliases caem em coluna de perda.
 const _podioCol = (l) => { const c = String((l && l.col) || ''); return c === 'Frustrado' ? 'Frustrados' : c === 'Devolvido' ? 'Devolvido com Reverso' : c; };
@@ -17541,7 +17584,11 @@ async function handlePodio(req, env) {
     if (_botPago(l)) v.pagas++;
     else if (_PODIO_FRUSTRADO.has(_podioCol(l))) v.frustrados++;
   }
-  return json({ ok: true, vendedores: por, metas });
+  // A META DO MES (06/11/2026): os tres numeros do mes corrente por vendedor, pra meta mensal por faixa
+  // (ver META_MENSAL acima). Vendedor sem pedido no mes sai zerado, nao ausente: a corrida mostra ele.
+  const doMes = _metaMesPorVendedor(leads, Object.keys(por));
+  for (const id of Object.keys(por)) Object.assign(por[id], { mes: 0, cheios: 0, marcoTs: 0 }, doMes[id] || {});
+  return json({ ok: true, vendedores: por, metas, meta: META_MENSAL });
 }
 
 async function handleBotConfig(req, env) {
