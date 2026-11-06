@@ -13269,7 +13269,7 @@ const BOT_IA_SCHEMA = { type: 'object', properties: { responder: { type: 'boolea
 const BOT_IA_SCHEMA_TEXTO = { type: 'object', properties: { texto: { type: 'string' } }, required: ['texto'], additionalProperties: false };
 const BOT_IA_ORCAMENTO_MS = 25000;     // por mensagem, do primeiro ao ultimo byte da IA
 const BOT_IA_MODELO_MS = 10000;        // por modelo
-const BOT_IA_MAX_MODELOS = 2;
+const BOT_IA_MAX_MODELOS = 3;   // 06/11: tres tentativas (o gratis congestiona; 7 + 7 + 10 s cabem nos 25 s)
 // Subiram em 06/11 (Bruno: "8 por hora e muito pouco, a galera vai conversar muito mais com ele"). O limite
 // gratis do Google e por modelo: a cascata passa pro proximo quando um da 429 (ver _botIaGemFora).
 const BOT_IA_HORA = { gemini: 40, anthropic: 60 };   // chamadas por hora, por grupo
@@ -13296,6 +13296,8 @@ const BOT_IA_QUOTA_PAUSA_S = 3600;
 const BOT_IA_AVISO_REPETE_S = 1800;
 const BOT_IA_APRESENTACAO = 'chegou reforço! agora eu leio o grupo e respondo quando me marcarem (@Barbadinho): pedido, número e meta. o que eu leio fica guardado só um dia. bora!';
 const BOT_IA_SEM_TEXTO = 'áudio eu ainda não escuto kkkkk manda por escrito que eu respondo';
+// A resposta reserva quando a IA nao responde (o Google gratis congestiona em horario de pico).
+const BOT_IA_FORA = { problema_avisado: 'putz! anotei aqui e já avisei o Bruno pra olhar', problema: 'putz! marca o Bruno aqui que ele resolve', outro: 'deu ruim do meu lado agora, o Google tá congestionado. manda de novo daqui a pouco que eu respondo' };
 const BOT_IA_MARCADO = { vend: 'tô aqui! manda: número, meta ou pedido que eu olho pra vc', cob: 'tô aqui! manda o nome do cliente ou o número do pedido que eu olho pra vc' };
 const BOT_IA_NAO_SEI_QUEM = 'ainda não sei quem é vc aqui, então não consigo abrir pedido nem número. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)';
 // Palavra de PROBLEMA: e o unico gatilho espontaneo (sem marcar o bot). '?', 'pedido', 'cliente',
@@ -14066,6 +14068,19 @@ async function _botIaResponder(env, cfg, b, opts) {
   res.viu = viu;
   if (!ch.texto) {
     if (ch.quota && !o.teste) { await _writeConfig(env, 'bot_ia_quota_ate', String(agora + BOT_IA_QUOTA_PAUSA_S)).catch(() => {}); }
+    // A IA FORA (06/11, teste: o Gemini gratis deu 503 nos tres modelos e "caiu meu numero de novo" ficou sem
+    // resposta). Quem marcou ou relatou problema nao fica no vacuo: problema avisa a direcao mesmo sem a IA.
+    const problema = BOT_IA_PROBLEMA_RE.test(textoBusca);
+    if (marcado || problema) {
+      if (problema && !o.teste) {
+        res.alerta = 1;
+        try { await _botIaAvisar(env, grupo, quem, b.de_nome, texto, 'relato de problema (a IA estava fora)', cfg, o.grupoTeste ? (String((cfg.ia && cfg.ia.teste && cfg.ia.teste.por) || '') || '-') : ''); } catch (_) {}
+      }
+      res.resposta = problema ? (pushOk ? BOT_IA_FORA.problema_avisado : BOT_IA_FORA.problema) : BOT_IA_FORA.outro;
+      res.responder = true; res.acao = 'respondeu';
+      res.motivo = ((ch.quota ? 'cota da IA esgotada: ' : 'IA fora: ') + ch.erro).slice(0, 150) + '; saiu a resposta reserva';
+      return res;
+    }
     res.acao = 'erro'; res.motivo = (ch.quota ? 'cota da IA esgotada (pausa de 1 h): ' : 'IA falhou: ') + ch.erro; return res;
   }
   let j = _botIaJson(ch.texto);

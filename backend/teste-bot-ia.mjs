@@ -727,15 +727,17 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   const { r, chamadas } = await pergunta({ ia: [{ status: 429 }, JSON_OK] });
   conf(r.acao === 'respondeu' && chamadas.length === 2 && chamadas[1].modelo === 'gemini-2.5-flash' && r.modelo === 'gemini-2.5-flash', '429 no primeiro modelo: o segundo responde');
   const dois = await pergunta({ ia: [{ status: 429 }, { status: 429 }, JSON_OK] });
-  conf(dois.r.acao === 'erro' && dois.chamadas.length === 2 && /cota da IA esgotada/.test(dois.r.motivo), '429 nos dois modelos tentados: erro (no maximo 2 modelos por mensagem)');
-  conf(Number(dois.cfgdb.bot_ia_quota_ate) === agoraS() + 3600, 'e a pausa de 1 h fica gravada em bot_ia_quota_ate');
+  conf(dois.r.acao === 'respondeu' && dois.chamadas.length === 3, '429 nos dois primeiros: o terceiro modelo responde (3 tentativas por mensagem)');
+  const tres = await pergunta({ ia: [{ status: 429 }] });
+  conf(tres.r.acao === 'respondeu' && tres.chamadas.length === 3 && /cota da IA esgotada/.test(tres.r.motivo) && /manda de novo/.test(tres.r.resposta), '429 nos tres modelos: marcado recebe a resposta reserva (nunca vacuo)');
+  conf(Number(tres.cfgdb.bot_ia_quota_ate) === agoraS() + 3600, 'e a pausa de 1 h fica gravada em bot_ia_quota_ate');
   const max = await pergunta({ ia: [{ finish: 'MAX_TOKENS', json: { responder: true, texto: 'cortado' } }, JSON_OK] });
   conf(max.r.acao === 'respondeu' && max.chamadas.length === 2 && max.r.modelo === 'gemini-2.5-flash', 'finishReason MAX_TOKENS: passa pro proximo modelo');
   conf(!max.cfgdb.bot_ia_quota_ate, '(e nao e cota: nada de pausa)');
   const vazio = await pergunta({ ia: [{ texto: '' }, JSON_OK] });
   conf(vazio.r.acao === 'respondeu' && vazio.chamadas.length === 2, 'texto vazio: passa pro proximo');
   const proibido = await pergunta({ ia: [{ status: 403 }, JSON_OK] });
-  conf(proibido.r.acao === 'erro' && proibido.chamadas.length === 1 && /403/.test(proibido.r.motivo) && !proibido.cfgdb.bot_ia_quota_ate, '403: para na hora (a chave e que esta errada), sem pausa de cota');
+  conf(proibido.r.acao === 'respondeu' && proibido.chamadas.length === 1 && /403/.test(proibido.r.motivo) && /manda de novo/.test(proibido.r.resposta) && !proibido.cfgdb.bot_ia_quota_ate, '403: para na hora (a chave e que esta errada), sem pausa de cota; o marcado recebe a resposta reserva');
   const fora = await pergunta({ ia: [{ status: 503 }, JSON_OK] });
   conf(fora.r.acao === 'respondeu' && fora.chamadas.length === 2, '503: passa pro proximo');
 }
@@ -1055,7 +1057,7 @@ titulo('17. A cascata do Gemini: teto curto no 1o modelo e modelo cheio fica de 
   const M = m.api.BOT_IA_MODELOS;
   const r1 = await m.api._botIaChamar(m.env, 'sys', 'user', {});
   conf(!!r1.texto && m.chamadas.length === 2 && m.chamadas[0].modelo === M[0] && m.chamadas[1].modelo === M[1], '503 no 1o modelo: o 2o responde');
-  conf(m.tetos[0] === 7000 && m.tetos[1] === 10000, 'o 1o modelo tem teto de 7 s (ainda tem outro na fila); o ultimo, 10 s');
+  conf(m.tetos[0] === 7000 && m.tetos[1] === 7000, 'com 3 tentativas por mensagem, o 1o e o 2o modelo tem teto de 7 s (ainda tem outro na fila)');
   const r2 = await m.api._botIaChamar(m.env, 'sys', 'user', {});
   conf(!!r2.texto && m.chamadas.length === 3 && m.chamadas[2].modelo === M[1], 'na chamada seguinte o modelo cheio fica de fora: vai direto no 2o');
   RELOGIO.agora += 6 * 60000;
@@ -1199,10 +1201,10 @@ titulo('20. Segunda revisao: aviso de cota so pra quem marcou, pulouM, provocaca
 {
   // So o 3o modelo (que nem seria tentado) estava fora: 429 nos dois primeiros prova cota acabada.
   const M = monta({}).api.BOT_IA_MODELOS;
-  const m2 = monta({ ...MUNDO, ia: (ch) => (ch.modelo === M[2] ? { status: 503 } : { status: 429 }) });
-  await m2.api._botIaChamar(m2.env, 'sys', 'user', { modelos: [M[2], M[0], M[1]], maxModelos: 2 });   // poe o latest de fora
+  const m2 = monta({ ...MUNDO, ia: (ch) => (ch.modelo === M[3] ? { status: 503 } : { status: 429 }) });
+  await m2.api._botIaChamar(m2.env, 'sys', 'user', { modelos: [M[3], M[0], M[1]], maxModelos: 2 });   // poe o 4o (latest) de fora
   const r = await m2.api._botIaChamar(m2.env, 'sys', 'user', {});
-  conf(r.quota === true, 'o modelo fora era o 3o (fora dos 2 tentados): 429 nos dois tentados pausa a cota como antes');
+  conf(r.quota === true, 'o modelo fora era o 4o (fora dos 3 tentados): 429 nos tentados pausa a cota como antes');
 }
 {
   // Provocacao do tick com o bot do PC fechado: nem IA, nem a vez do dia.
@@ -1311,6 +1313,24 @@ titulo('23. Numero caiu: acolhe e resolve, nunca desmente quem relatou');
   conf(/não perder o bonde/.test(sys) && /no máximo um por mensagem/.test(sys), 'trocadilho de vez em quando, no maximo um');
   const ex = api.BOT_IA_EXEMPLOS.vend.join('\n');
   conf(!/ainda não aparece queda/.test(ex) && /relaxa queridão/.test(ex), 'nenhum exemplo desmente a queda; o exemplo de numero caido acolhe');
+}
+
+// ══ 24. A IA FORA (06/11) ══════════════════════════════════════════════════════════════
+titulo('24. A IA fora: marcado e problema nunca ficam no vacuo');
+{
+  const m = monta({ ...MUNDO, ia: [{ status: 503 }] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'caiu meu numero de novo pqp' }));
+  conf(r.acao === 'respondeu' && /já avisei o Bruno/.test(r.resposta) && m.pushes.length >= 1 && m.chamadas.length === 3, 'problema com a IA fora (503 nos 3 modelos): resposta reserva e aviso a direcao mesmo assim');
+  const m2 = monta({ ...MUNDO, ia: [{ status: 503 }] });
+  const r2 = await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho quantas vendas eu tenho?', menciona: true, marcado: true }));
+  conf(r2.acao === 'respondeu' && /manda de novo daqui a pouco/.test(r2.resposta) && m2.pushes.length === 0, 'marcado com a IA fora: avisa que deu ruim e pede pra mandar de novo (sem aviso a direcao)');
+  const chat = [{ ts: agoraS() - 60, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'cvx', de_jid: '5515999990001@s.whatsapp.net', de_nome: 'Guilherme', quem_id: GUI, texto: 'oi', acao: 'respondeu', resposta: 'fala!', chamadas: 1 }];
+  const m3 = monta({ ...MUNDO, chat, ia: [{ status: 503 }] });
+  const r3 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'e ai, bora?' }));
+  conf(r3.acao === 'erro' && !r3.resposta, 'conversa sem marcar e sem problema com a IA fora: fica quieto (nao enche o grupo)');
+  const m4 = monta({ ...MUNDO, ia: [{ status: 503 }], push: false });
+  const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'meu numero caiu' }));
+  conf(r4.acao === 'respondeu' && /marca o Bruno aqui/.test(r4.resposta), 'sem push possivel: pede pra marcar o Bruno');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
