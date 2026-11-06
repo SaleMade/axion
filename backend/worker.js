@@ -10903,6 +10903,7 @@ async function handleAIConfigGet(req, env) {
 
   const geminiDb = await _readConfig(env, 'ai_gemini_key');
   const anthropicDb = await _readConfig(env, 'ai_anthropic_key');
+  const geminiBotDb = await _readConfig(env, 'ai_gemini_bot_key');
 
   // Mascara a key (mostra primeiros 8 + últimos 4, se for grande o bastante)
   // Pra keys curtas, mostra só prefixo pra evitar exposição/sobreposição
@@ -10923,6 +10924,8 @@ async function handleAIConfigGet(req, env) {
       source: anthropicDb ? 'dashboard' : (env.ANTHROPIC_API_KEY ? 'secret' : null),
       preview: mask(anthropicDb || env.ANTHROPIC_API_KEY),
     },
+    // So o bot do grupo usa (vazia = o bot usa a chave geral).
+    gemini_bot: { configured: !!geminiBotDb, source: geminiBotDb ? 'dashboard' : null, preview: mask(geminiBotDb) },
   });
 }
 
@@ -10943,6 +10946,14 @@ async function handleAIConfigSet(req, env) {
       return err('Key do Gemini parece inválida (deve começar com "AIza")');
     }
     await _writeConfig(env, 'ai_gemini_key', k);
+  }
+  if (body.gemini_bot_key !== undefined) {
+    // Vazio apaga: o bot volta pra chave geral.
+    const k = String(body.gemini_bot_key || '').trim();
+    if (k && !k.startsWith('AIza') && k.length < 30) {
+      return err('Key do Gemini parece inválida (deve começar com "AIza")');
+    }
+    await _writeConfig(env, 'ai_gemini_bot_key', k);
   }
   if (body.anthropic_key !== undefined) {
     const k = String(body.anthropic_key || '').trim();
@@ -10968,7 +10979,7 @@ async function handleAIConfigTest(req, env) {
 
   // Chamada mínima — uma única palavra de resposta
   try {
-    if (provider === 'gemini') {
+    if (provider === 'gemini' || provider === 'gemini_bot') {
       // Tenta cada modelo até um responder OK. Se TODOS derem 429, dá mensagem clara.
       const triedErrors = [];
       for (const model of GEMINI_MODELS) {
@@ -13504,7 +13515,9 @@ async function _botIaChamar(env, system, user, o) {
       }
     } catch (e) { out.tentativas.push('claude: ' + String((e && e.message) || e).slice(0, 80)); }
   }
-  const gkey = await getAIKey(env, 'gemini');
+  // A CHAVE DO BOT (06/11/2026): quando a direcao cola uma chave so pro bot (a do credito do Google AI Pro, plano
+  // pago), ele usa ela; o resto da dash (testador de criativo, voz, robo) segue na chave geral e nao gasta o credito.
+  const gkey = (await getAIKey(env, 'gemini_bot')) || await getAIKey(env, 'gemini');
   if (!gkey) { out.erro = out.tentativas.concat(['sem chave de IA']).join(' | '); out.ms = Date.now() - t0; return out; }
   out.provider = out.provider || 'gemini';
   let tentou = 0, quotaTodos = true;

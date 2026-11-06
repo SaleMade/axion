@@ -255,7 +255,7 @@ function monta(mundo) {
     _atFromInst: () => '',
     _idsDeTodoAfiliado: async () => [],
     _graph: async () => ({ ok: false, status: 0, data: {} }),
-    getAIKey: async (_e, p) => (p === 'gemini' ? 'AIza-teste' : (p === 'anthropic' ? (mundo.anthropic || null) : null)),
+    getAIKey: async (_e, p) => (p === 'gemini' ? 'AIza-teste' : (p === 'gemini_bot' ? (mundo.chaveBot || null) : (p === 'anthropic' ? (mundo.anthropic || null) : null))),
     _wpParaPessoa: async (_e, userId, payload) => { pushes.push({ userId, payload }); return mundo.push ? 1 : 0; },
     authUser: async () => ({ id: 'dir', name: 'Heynan Dantas', role: 'diretor' }),
     isDirector: () => true,
@@ -1332,6 +1332,17 @@ titulo('24. A IA fora: marcado e problema nunca ficam no vacuo');
   const m4 = monta({ ...MUNDO, ia: [{ status: 503 }], push: false });
   const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'meu numero caiu' }));
   conf(r4.acao === 'respondeu' && /marca o Bruno aqui/.test(r4.resposta), 'sem push possivel: pede pra marcar o Bruno');
+}
+
+// ══ 25. A CHAVE DO BOT (06/11) ═════════════════════════════════════════════════════════
+titulo('25. A chave so do bot (o credito do Google AI Pro vai so pro bot)');
+{
+  const m = monta({ ...MUNDO, chaveBot: 'AIza-do-bot', ia: [JSON_OK] });
+  await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(/key=AIza-do-bot/.test(m.chamadas[0].url), 'com a chave do bot colada, o bot chama o Gemini com ela');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaChamar(m2.env, 'sys', 'user', {});
+  conf(/key=AIza-teste/.test(m2.chamadas[0].url), 'sem a chave do bot, usa a chave geral');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
