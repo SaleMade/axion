@@ -13706,7 +13706,7 @@ async function _botIaNumerosDe(env, st, atId, nome) {
 // bate melhor mas e de OUTRA pessoa vai em foraDoEscopo (o bot diz de quem e, sem detalhe), em vez de a
 // pergunta virar uma lista de parecidos da fila de quem perguntou (medido ao vivo em 06/11/2026: "jose
 // tadeu carneiro" e do Haynan, e o Bryan recebia 4 Josés dele).
-function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
+function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap, ps) {
   const out = { blocos: [], ids: [], okNums: [], certo: false, provavel: false, ambiguo: false, termos: [], foraDoEscopo: [] };
   if (!quem || !quem.id) return out;
   const leads = Array.isArray(st && st.leads) ? st.leads : [];
@@ -13756,19 +13756,148 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
     else { out.ambiguo = true; lista = [...topo, ...D.filter((c) => c.bate !== melhorD)].slice(0, 4); }
   }
   for (const c of lista) {
-    out.blocos.push(_botIaPedidoTexto(c.l, st, nomes, tagMap, out.certo || out.provavel)); out.ids.push(String(c.l.id));
+    out.blocos.push(_botIaPedidoTexto(c.l, st, nomes, tagMap, out.certo || out.provavel, ps)); out.ids.push(String(c.l.id));
     // O codigo de rastreio e o id da Five desses pedidos podem sair na resposta: nao sao telefone (medido
     // ao vivo: o rastreio da J&T de 15 digitos fazia a mascara calar o bot).
     for (const n of [_botSoDigitos(c.l.track), _botSoDigitos(c.l.five_id)]) if (n.length >= 5) out.okNums.push(n);
   }
   return out;
 }
+// ─── PRIVACIDADE NA IA (06/11/2026) ───
+// O bot roda no Gemini GRATIS por decisao do Bruno (o plano pago pede um pre-pagamento de R$ 150). Os termos da versao
+// gratis dizem que o Google usa o que chega pra melhorar os produtos dele, que revisores podem ler, e pedem pra nao
+// mandar dado pessoal. Entao o CLIENTE nunca vai pra IA pelo nome: cada um vira um codigo (C1, C2...), o rastreio vira
+// R1 e numero longo digitado (telefone, CPF) chega so com o final. A resposta volta com o nome no lugar do codigo antes
+// de sair no grupo. O nome da EQUIPE continua indo (o bot chama cada um pelo nome). Vale tambem no plano pago: o nome
+// do cliente nao faz falta pra IA.
+const BOT_IA_PS_LIGA = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
+const BOT_IA_PS_ARTIGO = { a: '', o: '', da: 'de ', do: 'de ', na: 'em ', no: 'em ', pela: 'por ', pelo: 'por ' };
+// Nome todo em MAIUSCULA ou todo em minuscula vira "Joselina da Silva"; nome digitado com cuidado fica como esta.
+function _botIaNomeBonito(s) {
+  const t = String(s || '').trim().replace(/\s+/g, ' ');
+  if (!t || (t !== t.toUpperCase() && t !== t.toLowerCase())) return t;
+  return t.toLowerCase().split(' ').map((w, i) => (i > 0 && BOT_IA_PS_LIGA.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+}
+// `leads` = os pedidos do estado (pra achar nome de cliente digitado no grupo); `protegidos` = primeiro nome de quem e da
+// equipe (palavra solta igual a ele nunca vira codigo: "marca o Bruno" fala do Bruno da casa).
+function _botIaPseudo(leads, protegidos) {
+  const porId = new Map(), porTok = new Map(), rastTok = new Map(), rastCod = new Map();
+  const prot = new Set((protegidos || []).map((x) => _botIaNorm(x).split(' ')[0]).filter(Boolean));
+  const palavrasDe = (nome) => _botIaNorm(nome).split(' ').filter((w) => w.length >= 2 && !BOT_IA_PS_LIGA.has(w) && !BOT_IA_PARTICULA.has(w));
+  let idx = null;
+  // Primeiro nome -> clientes com esse primeiro nome (so nome de duas palavras ou mais: um nome so nao identifica).
+  const indice = () => {
+    if (idx) return idx;
+    idx = new Map();
+    for (const l of (Array.isArray(leads) ? leads : [])) {
+      if (!l || l.id == null || l.afl) continue;
+      const pal = palavrasDe(l.nome);
+      if (pal.length < 2) continue;
+      if (!idx.has(pal[0])) idx.set(pal[0], []);
+      idx.get(pal[0]).push({ l, pal });
+    }
+    return idx;
+  };
+  const cliente = (l) => {
+    const id = String(l && l.id);
+    let e = porId.get(id);
+    if (!e) {
+      const nome = _botIaNomeBonito(String((l && l.nome) || '').trim()) || 'esse cliente';
+      e = { tok: 'C' + (porId.size + 1), nome, primeiro: nome.split(' ')[0], pal: palavrasDe(nome) };
+      porId.set(id, e); porTok.set(e.tok, e);
+    }
+    return e.tok;
+  };
+  const rastreio = (cod) => {
+    const c = String(cod || '').trim();
+    if (!c) return '';
+    let t = rastCod.get(c);
+    if (!t) { t = 'R' + (rastCod.size + 1); rastCod.set(c, t); rastTok.set(t, c); }
+    return t;
+  };
+  // O texto que vai pra IA (a mensagem, a citada, as ultimas do grupo).
+  const texto = (s) => {
+    let t = String(s == null ? '' : s);
+    if (!t) return t;
+    // 1. Numero de 8 digitos ou mais (telefone, CPF, id): so o final.
+    t = t.replace(/\+?\d[\d .()\/-]{6,}\d/g, (m) => { const d = m.replace(/\D/g, ''); return d.length >= 8 ? '[número final ' + d.slice(-4) + ']' : m; });
+    // 2. Nome de cliente: palavras seguidas (so espaco entre elas, "da/de/do" no meio) do nome de UM cliente.
+    const ws = [];
+    const re = /[\p{L}\p{N}]+/gu;
+    let m;
+    while ((m = re.exec(t))) ws.push({ i: m.index, f: m.index + m[0].length, n: _botIaNorm(m[0]) });
+    const junto = (a, b) => /^\s+$/.test(t.slice(ws[a].f, ws[b].i));
+    const trocas = [];
+    let k = 0;
+    while (k < ws.length) {
+      const w = ws[k].n;
+      if (w.length < 2 || BOT_IA_PS_LIGA.has(w)) { k++; continue; }
+      // a) cliente que ja tem codigo nesta mensagem
+      let donos = [...porId.values()].filter((e) => e.pal.includes(w));
+      // b) outro cliente da base: o primeiro nome dele seguido de outra palavra do mesmo nome
+      if (!donos.length) {
+        const cands = indice().get(w);
+        if (cands) {
+          let j = k + 1;
+          while (j < ws.length && BOT_IA_PS_LIGA.has(ws[j].n) && junto(j - 1, j)) j++;
+          if (j < ws.length && junto(j - 1, j)) {
+            const c = cands.find((x) => x.pal.indexOf(ws[j].n) > 0);
+            if (c) { cliente(c.l); donos = [porId.get(String(c.l.id))]; }
+          }
+        }
+      }
+      if (!donos.length) { k++; continue; }
+      let fim = k, j = k + 1;
+      while (j < ws.length && junto(j - 1, j)) {
+        if (BOT_IA_PS_LIGA.has(ws[j].n)) { j++; continue; }
+        const resta = donos.filter((e) => e.pal.includes(ws[j].n));
+        if (!resta.length) break;
+        donos = resta; fim = j; j++;
+      }
+      if (fim === k) {
+        // Palavra solta: so o PRIMEIRO nome do cliente vira codigo (sobrenome solto e palavra comum demais),
+        // e nunca o primeiro nome de alguem da equipe.
+        donos = donos.filter((e) => e.pal[0] === w);
+        if (!donos.length || prot.has(w)) { k++; continue; }
+      }
+      trocas.push({ i: ws[k].i, f: ws[fim].f, tok: donos.length === 1 ? donos[0].tok : '[cliente]' });
+      k = fim + 1;
+    }
+    for (let x = trocas.length - 1; x >= 0; x--) t = t.slice(0, trocas[x].i) + trocas[x].tok + t.slice(trocas[x].f);
+    return t;
+  };
+  const TOK = /(?<![\p{L}\p{N}])([CR])(\d{1,2})(?![\p{L}\p{N}])/gu;
+  // A resposta da IA: o nome volta no lugar do codigo (o completo na primeira vez, depois o primeiro nome), sem o
+  // artigo que a IA tenha posto antes (ela nao sabe se e homem ou mulher: "a C1" vira "Joselina", "da C1" vira "de").
+  const restaura = (s) => {
+    const usado = new Map();
+    return String(s == null ? '' : s)
+      .replace(/(^|[^\p{L}\p{N}])(a|o|da|do|na|no|pela|pelo)\s+(C\d{1,2})(?![\p{L}\p{N}])/giu, (m0, pre, art, tok) => {
+        if (!porTok.has(tok)) return m0;
+        let r = BOT_IA_PS_ARTIGO[art.toLowerCase()];
+        if (r && art[0] !== art[0].toLowerCase()) r = r[0].toUpperCase() + r.slice(1);
+        return pre + r + tok;
+      })
+      .replace(TOK, (m0, L, n) => {
+        const tok = L + n;
+        if (L === 'R') return rastTok.get(tok) || m0;
+        const e = porTok.get(tok);
+        if (!e) return m0;
+        const v = (usado.get(tok) || 0) + 1;
+        usado.set(tok, v);
+        return v === 1 ? e.nome : e.primeiro;
+      });
+  };
+  // O que a IA pediu pra buscar ("C2", "a C1 de Itu") volta a ser o nome pra busca.
+  const desfaz = (s) => String(s == null ? '' : s).replace(TOK, (m0, L, n) => (L === 'R' ? (rastTok.get(L + n) || m0) : ((porTok.get(L + n) || {}).nome || m0)));
+  return { cliente, rastreio, texto, restaura, desfaz, tokens: () => porTok.size };
+}
 // O pedido em texto, a partir de _cobDetalhe (sem CPF, endereco, links e comentarios: a resposta e
 // publica). Situacao: pago > perda > coluna + selo da transportadora + o que a plataforma disse.
-function _botIaPedidoTexto(l, st, nomes, tagMap, completo) {
+function _botIaPedidoTexto(l, st, nomes, tagMap, completo, ps) {
   const d = _cobDetalhe(l, st, nomes || {}, tagMap || {});
   const L = [];
-  L.push('#' + d.id + ' ' + d.nome + (d.cidade ? ' (' + d.cidade + (d.uf ? '/' + d.uf : '') + ')' : '') + (d.prod ? ' · ' + d.prod : '') + ' · ' + _botBRL(d.valor) + (d.criado ? ' · cadastrado em ' + _botIaHoraTxt(d.criado).slice(0, 5) : '') + (d.atNome ? ' por ' + d.atNome : '') + ' · cobrador: ' + (d.cobNome || 'sem dono ainda'));
+  L.push('#' + d.id + ' ' + (ps ? ps.cliente(l) : d.nome) + (d.cidade ? ' (' + d.cidade + (d.uf ? '/' + d.uf : '') + ')' : '') + (d.prod ? ' · ' + d.prod : '') + ' · ' + _botBRL(d.valor) + (d.criado ? ' · cadastrado em ' + _botIaHoraTxt(d.criado).slice(0, 5) : '') + (d.atNome ? ' por ' + d.atNome : '') + ' · cobrador: ' + (d.cobNome || 'sem dono ainda'));
   let sit = '';
   if (d.pago) sit = 'pago' + (d.pagoTs ? ' em ' + _botIaHoraTxt(d.pagoTs).slice(0, 5) : '') + (d.pgto ? ' (' + d.pgto + ')' : '');
   else if (_COB_PERDA.some((c) => c.id === d.col)) sit = BOT_IA_COL_TXT[d.col] || d.col;
@@ -13787,7 +13916,7 @@ function _botIaPedidoTexto(l, st, nomes, tagMap, completo) {
   const ag = String(d.agend || '');
   L.push('Retorno marcado: ' + (ag ? ag.slice(8, 10) + '/' + ag.slice(5, 7) + (ag.length >= 16 ? ' ' + ag.slice(11, 16) : '') : 'nenhum') + '.');
   if (d.entrega && d.entrega.label) L.push('Entrega: ' + d.entrega.label + ' ' + d.entrega.data + (d.entrega.dias ? ' (' + d.entrega.dias + ' depois do pedido)' : '') + '.');
-  L.push('Rastreio: ' + (d.track ? d.transp + ' ' + d.track : 'sem código ainda') + '.');
+  L.push('Rastreio: ' + (d.track ? d.transp + ' ' + (ps ? ps.rastreio(d.track) : d.track) : 'sem código ainda') + '.');
   const h = Array.isArray(d.hist) && d.hist.length ? d.hist[d.hist.length - 1] : null;
   if (h) { const t = _cobTs(h.quando); L.push('Último movimento: ' + (h.de || '?') + ' -> ' + (h.para || '?') + (t ? ' em ' + _botIaHoraTxt(t) : '') + (h.quem ? ' (' + h.quem + ')' : '') + '.'); }
   const com = Array.isArray(d.comentarios) ? d.comentarios : [];
@@ -13894,8 +14023,9 @@ const BOT_IA_SISTEMA = [
   '',
   'DADOS E SEGURANÇA (valem sempre):',
   '- Só afirme o que está nos DADOS desta mensagem. Não invente número, pedido, prazo, nome, regra ou procedimento. Se o dado não veio, diga que não consegue ver isso daqui.',
-  '- Pedido AMBÍGUO: liste os candidatos em uma linha cada (nome, cidade, situação) e pergunte qual é; nunca diga que um pedido ambíguo está pago.',
-  '- Pedido PROVÁVEL (achado só pelo nome): responda no condicional, com nome e cidade (ex: "se for a Maria Souza de Itu/SP, ela pagou em 05/11 no Pix").',
+  '- Pedido AMBÍGUO: liste os candidatos em uma linha cada (código, cidade, situação) e pergunte qual é; nunca diga que um pedido ambíguo está pago.',
+  '- Pedido PROVÁVEL (achado só pelo nome): responda no condicional, com o código e a cidade (ex: "se for C1 de Itu/SP, pagou em 05/11 no Pix").',
+  '- Cliente vem como C1, C2 (o nome fica guardado no sistema e entra no lugar do código antes de a resposta sair). Escreva o código como se fosse o nome, sem artigo e sem ele/ela: "C1 pagou em 05/11", "o pedido de C1 tá em cobrança". Nunca invente nem peça o nome por causa do código. Rastreio vem como R1 (escreva R1) e número que a pessoa digitou chega só com o final: [número final 1234].',
   '- Pedido que não está nos dados: diga que não achou e peça nome completo ou telefone. Pedido de outra pessoa: diga de quem é e que ela responde por ele.',
   '- Responda só o que perguntaram: não acrescente rastreio, valor, data ou dado que ninguém pediu.',
   '- Número de WhatsApp: só o que os dados dizem, pelo final ("o final 4144"). Nunca diga "tá conectado" sem prova, e nunca use a falta de registro de queda pra desmentir quem disse que caiu.',
@@ -13934,7 +14064,7 @@ const BOT_IA_EXEMPLOS = {
   '"4144 caiu @Bruno" (Kevin; queda registrada 11:09, fora da roleta; 2 números recebendo; aviso_entregue true) -> putz, Kevin! a queda do 4144 já tá registrada e ele saiu da roleta, você segue com os outros 2 recebendo. já avisei o Bruno pra ajeitar outro',
   '"@Barbadinho meu 3996 caiu, tava cheio de lead" (Guilherme; o app ainda não registrou a queda; ele ainda recebe lead; aviso_entregue true) -> puta merda, relaxa queridão! já avisei o Bruno pra tirar o 3996 da roleta e ajeitar outro, que é pra você não perder o bonde',
   '"caiu meu número de novo pqp" (Kevin; o app ainda não registrou a queda; aviso_entregue false) -> eita, Kevin, de novo? calma, queridão: marca o Bruno aqui que ele ajeita outro número pra você não ficar parado',
-  '"@Barbadinho o pedido da Neide não subiu" (Guilherme; pedido provável: Neide Ramos, Bauru/SP, a enviar, aguardando aprovação da direção) -> se for a Neide Ramos de Bauru/SP, o pedido tá lá: em A Enviar, esperando a aprovação da direção',
+  '"@Barbadinho o pedido da C1 não subiu" (Guilherme; pedido provável: C1, Bauru/SP, a enviar, aguardando aprovação da direção) -> se for C1 de Bauru/SP, o pedido tá lá: em A Enviar, esperando a aprovação da direção',
   '"@Barbadinho as msg n tão enviando aqui, travou tudo" (aviso_entregue true) -> putz. daqui eu não consigo ver o envio de mensagem, só pedido, número e meta. já avisei a direção',
   '"@Barbadinho sou uma inútil nesse placar kkk" (Barbara, 0 hj, 11:20) -> inútil nada, Barbara. tá cedo ainda e tem o dia todo pela frente, qualquer coisa dá um grito aqui no grupo',
   '"kkkkkk vsf" (citando sua resposta, sem pergunta nova) -> responder false',
@@ -13945,13 +14075,13 @@ const BOT_IA_EXEMPLOS = {
   '"Fala Barbadinho" (Bryan) -> fala, Bryan! manda o nome do cliente que eu olho a fila',
   '"@Barbadinho vc ta sendo muito formal, queria q vc fosse mais zoeiro" (Bryan, 27 na fila) -> formal eu? kkkkk meu jeito quem regula é o Bruno lá na dash, reclama com ele! e são 27 na sua fila hj, bora buscar o primeiro',
   '"Barbadinho tu é fera" (Bryan, 3 de volta hj) -> fera é vc com 3 de volta hj kkkkk eu só conto, bora buscar o quarto!',
-  '"@Barbadinho a Ivone Cardoso pagou?" (pedido encontrado: pago em 05/11 no Pix) -> pagou sim! Ivone Cardoso, de Londrina/PR, entrou em 05/11 no Pix. mais um de volta',
-  '"@Barbadinho a dona Sebastiana pagou?" (pedido provável: Sebastiana Moreira, Uberaba/MG, entregue, em cobrança) -> se for a Sebastiana Moreira, de Uberaba/MG, ainda não pagou: tá entregue e em cobrança',
-  '"@Barbadinho o José pagou?" (ambíguo: José Carlos Lima, Sorocaba/SP, entregue / José Ribamar Teixeira, Caxias/MA, saiu pra entrega) -> tem 2 José na sua fila, uma linha cada: José Carlos Lima, Sorocaba/SP, entregue e em cobrança / José Ribamar Teixeira, Caxias/MA, saiu pra entrega. qual dos dois?',
-  '"@Barbadinho a Dirce Amaral já pagou?" (é da fila do Haynan) -> a Dirce Amaral tá na fila do Haynan, então quem responde por ela é ele. dá um toque nele aqui no grupo',
+  '"@Barbadinho a C1 pagou?" (pedido encontrado: C1, Londrina/PR, pago em 05/11 no Pix) -> pagou sim! C1, de Londrina/PR, entrou em 05/11 no Pix. mais um de volta',
+  '"@Barbadinho a dona C1 pagou?" (pedido provável: C1, Uberaba/MG, entregue, em cobrança) -> se for C1, de Uberaba/MG, ainda não pagou: o pedido tá entregue e em cobrança',
+  '"@Barbadinho o [cliente] pagou?" (ambíguo: C1, Sorocaba/SP, entregue / C2, Caxias/MA, saiu pra entrega) -> tem 2 com esse nome na sua fila, um em cada linha: C1, Sorocaba/SP, entregue e em cobrança / C2, Caxias/MA, saiu pra entrega. qual deles?',
+  '"@Barbadinho a C1 já pagou?" (é da fila do Haynan) -> o pedido de C1 tá na fila do Haynan, então quem responde por ele é o Haynan. dá um toque nele aqui no grupo',
   '"@Barbadinho quantos faltam cobrar hj?" (Bryan: 31 na fila, 6 atrasados) -> faltam 31 na sua fila, Bryan, e 6 tão atrasados. bora buscar o próximo!',
   '"@Barbadinho quantos ja cobrei?" (Bryan: 0 de volta hoje, 27 na fila) -> nenhum de volta ainda hj, Bryan. são 27 na fila, bora buscar o primeiro',
-  '"@Barbadinho a Lourdes Pacheco pagou!! 10 hj" (Elias: 10 de volta hoje; Lourdes paga) -> boaaa, Elias! a Lourdes Pacheco tá paga e são 10 de volta hj, tá voando',
+  '"@Barbadinho a C1 pagou!! 10 hj" (Elias: 10 de volta hoje; o pedido de C1 pago) -> boaaa, Elias! C1 pagou e são 10 de volta hj, tá voando',
   '"@Barbadinho bati minha meta, solta um áudio" (Bryan: 2 de volta hoje) -> áudio eu ainda não mando kkkkk aqui eu vejo 2 de volta hj pra vc. quando a meta bater a festa sai sozinha, bora buscar!',
   '"@Barbadinho o SellWave Web travou aqui, n abre a ficha" (aviso_entregue true) -> putz, Bryan. daqui eu não enxergo o app, só a sua fila. já avisei a direção pra olhar',
   '"@Barbadinho quantos pedidos eu tenho pra cobrar?" (pessoa não identificada) -> ainda não sei quem é vc aqui, então não consigo abrir pedido nem fila. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)',
@@ -14122,6 +14252,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   const quem = o.quem || await _botIaQuem(env, cfg, st, b.de_jid, b.de_fone);
   res.quem_id = quem.id || '';
   const equipe = quem.equipe || await _botEquipe(env);
+  const ps = _botIaPseudo(Array.isArray(st && st.leads) ? st.leads : [], equipe.map((u) => String(u.nome || '')));
   const g = _botIaGrupoCfg(cfg, grupo);
   const agoraBR = _agoraBR();
   const dia = _brDay();
@@ -14156,15 +14287,15 @@ async function _botIaResponder(env, cfg, b, opts) {
     const falaDePedido = BOT_IA_PEDIDO_RE.test(textoBusca) || temDigitos;
     if (falaDePedido || grupo === 'cob') {
       await nomesDe();
-      const busca = _botIaAcharPedidos(st, textoBusca, quem, grupo, nomes, tagMap);
+      const busca = _botIaAcharPedidos(st, textoBusca, quem, grupo, nomes, tagMap, ps);
       if (busca.blocos.length) {
         const cab2 = busca.certo ? 'Pedido encontrado:' : busca.provavel ? 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):';
         D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids, ...busca.okNums);
         viu.push((busca.certo ? '1 pedido: ' : busca.provavel ? '1 provável: ' : busca.blocos.length + ' candidatos: ') + busca.ids.join(', '));
       } else if (busca.foraDoEscopo.length) {
-        D.push('Pedido(s) com esse nome existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => String(l.nome || '').trim() + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
+        D.push('Pedido(s) com esse nome existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => ps.cliente(l) + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
       } else if (falaDePedido && (busca.termos.length || temDigitos)) {
-        D.push('Nenhum pedido encontrado para: ' + (busca.termos.join(', ') || 'o número informado') + ' (no escopo de quem perguntou).'); viu.push('nenhum pedido');
+        D.push('Nenhum pedido encontrado com o nome ou o número da mensagem (no escopo de quem perguntou).'); viu.push('nenhum pedido');
       }
     }
   } else {
@@ -14176,17 +14307,17 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
   }
-  const recentes = o.teste ? [] : await _botIaRecentes(env, b.jid);
+  const recentes = (o.teste ? [] : await _botIaRecentes(env, b.jid)).map((x) => ps.texto(x));
   const montaUser = (extra) => [
     ...cab, '',
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
     ...(recentes.length ? ['Últimas mensagens do grupo:', ...recentes, ''] : []),
-    ...(b.citado ? ['Mensagem citada: "' + String(b.citado).slice(0, 300) + '"'] : []),
+    ...(b.citado ? ['Mensagem citada: "' + ps.texto(String(b.citado).slice(0, 300)) + '"'] : []),
     ...(marcado ? ['Te chamaram nesta mensagem (marcando ou pelo nome; "@Barbadinho" é você): responda.']
       : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; se falam DE você pra outra pessoa ou é só risada, responder false.']
         : modo === 'conversa' ? ['Essa pessoa estava conversando com você agora há pouco e escreveu de novo sem marcar: se é com você (pergunta, pedido, oi, elogio, brincadeira com você), responda; se é papo com outra pessoa ou só risada, responder false.']
           : modo === 'chamado' ? ['Responderam uma mensagem sua sem te marcar: responda se for pergunta ou pedido pra você; agradecimento ganha no máximo um "tmj"; risada ou conversa com outra pessoa = responder false.'] : []),
-    'Mensagem de ' + (quem.id ? quem.nome : (b.de_nome || 'alguém')) + ': "' + texto + '"',
+    'Mensagem de ' + (quem.id ? quem.nome : (b.de_nome || 'alguém')) + ': "' + ps.texto(texto) + '"',
   ].join('\n');
   const system = _botIaSistema(cfg, grupo);
   // 5. A IA (ate duas rodadas, dentro do orcamento)
@@ -14216,7 +14347,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   let j = _botIaJson(ch.texto);
   if (j && j.buscar && quem.id && String(j.buscar).trim() && (BOT_IA_ORCAMENTO_MS - (Date.now() - t0)) > 12000) {
     await nomesDe();
-    const b2 = _botIaAcharPedidos(st, String(j.buscar), quem, grupo, nomes, tagMap);
+    const b2 = _botIaAcharPedidos(st, ps.desfaz(String(j.buscar)), quem, grupo, nomes, tagMap, ps);
     const extra = b2.blocos.length ? ((b2.certo ? 'Pedido encontrado (busca por "' + String(j.buscar).slice(0, 60) + '"):' : b2.provavel ? 'Pedido PROVÁVEL (confirme antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é):') + '\n' + b2.blocos.join('\n\n')) : 'Nenhum pedido encontrado para: ' + String(j.buscar).slice(0, 60) + '.';
     idsOk.push(...b2.ids, ...b2.okNums); viu.push('2a busca: ' + (b2.ids.join(', ') || 'nada'));
     const ch2 = await _botIaChamar(env, system, montaUser(extra), { orcamentoMs: BOT_IA_ORCAMENTO_MS - (Date.now() - t0), maxModelos: 1 });
@@ -14225,7 +14356,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   }
   if (!j) { res.acao = 'erro'; res.motivo = 'resposta da IA ilegível'; return res; }
   const quer = j.responder !== false && j.responder !== 'false';
-  const limpo = _botIaLimpa(j.texto, idsOk);
+  const limpo = _botIaLimpa(ps.restaura(j.texto), idsOk);
   if (!quer || !limpo.texto) {
     // Marcado de proposito (ou o Pergunte ao bot) e a IA calou mesmo assim: a resposta padrao do grupo,
     // pra nao parecer que o bot morreu. Resposta a mensagem do bot sem marcar ("valeu") continua calada.
@@ -14235,7 +14366,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   if (limpo.barrou) { res.acao = 'calado'; res.motivo = 'resposta com dado pessoal (' + limpo.barrou + ')'; return res; }
   res.resposta = limpo.texto; res.responder = true; res.acao = 'respondeu';
   // 6. Aviso a direcao
-  const avisar = String(j.avisar_direcao || '').trim();
+  const avisar = ps.restaura(String(j.avisar_direcao || '')).trim();
   if (avisar && !o.teste) {
     res.alerta = 1;
     try { await _botIaAvisar(env, grupo, quem, b.de_nome, texto, avisar, cfg, o.grupoTeste ? (String((cfg.ia && cfg.ia.teste && cfg.ia.teste.por) || '') || '-') : ''); } catch (_) {}

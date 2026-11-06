@@ -264,7 +264,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -547,7 +547,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   conf(!/R\$/.test(user), 'e nenhum R$ (o valor total nao vai pros cobradores)');
   conf(/Jeito de falar neste grupo: Tom da cobranca X/.test(system), 'o system leva o tom DO GRUPO');
   conf(/Instruções da direção[^\n]*\nNunca prometa prazo de entrega\./.test(system), 'e as instrucoes da direcao');
-  conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(system) && /a Ivone Cardoso pagou/.test(system) && !/Boa, Fulano, 5 vendas/.test(system), 'no grupo dos cobradores vao os exemplos da cobranca, nunca as frases cruas do marco');
+  conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(system) && /"@Barbadinho a C1 pagou\?" \(pedido encontrado: C1, Londrina\/PR/.test(system) && !/Boa, Fulano, 5 vendas/.test(system), 'no grupo dos cobradores vao os exemplos da cobranca, nunca as frases cruas do marco');
   await api._botIaResponder(env, cfg, pacote({ texto: 'e ai barbadinho', menciona: true }));
   const sys2 = chamadas[1].system;
   conf(/EXEMPLOS DO JEITO CERTO neste grupo/.test(sys2) && /BOOORA krl, 10 cravadas/.test(sys2) && !/Especial Fulano/.test(sys2) && !/a Ivone Cardoso pagou/.test(sys2), 'no vend vao os exemplos dos vendedores (as frases cruas do marco nao entram mais)');
@@ -632,7 +632,7 @@ titulo('8. A busca de pedido: escopo por cargo e sem chute');
   // O caminho inteiro: o contexto diz de quem e o pedido.
   const m = monta({ ...MUNDO, leads: LEADS.concat(extra) });
   await m.api._botIaResponder(m.env, cfgDe(m.api), { ...pacote({ texto: 'o pedido do carlos pereira foi pago?', menciona: true, jid: GC, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }), grupo: 'cob' });
-  conf(/são de outra pessoa: Carlos Pereira \(fila de Haynan\)/.test(m.chamadas[0].user), 'e o contexto que vai pra IA diz "fila de Haynan"');
+  conf(/são de outra pessoa: C1 \(fila de Haynan\)/.test(m.chamadas[0].user) && !/Carlos Pereira/.test(m.chamadas[0].user), 'e o contexto que vai pra IA diz "fila de Haynan" (o cliente pelo codigo)');
 }
 
 // ══ 9. O BLOCO DO PEDIDO ═══════════════════════════════════════════════════════════════
@@ -713,7 +713,7 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   // `buscar`: a IA pede um pedido que nao veio, o worker busca e chama de novo com ele.
   const { r, chamadas } = await pergunta({ ia: [{ json: { responder: true, texto: 'Deixa eu ver', buscar: 'joselina' } }, { json: { responder: true, texto: 'Achei: pago.' } }] }, 'e aquela cliente, pagou?');
   conf(r.chamadas === 2 && chamadas.length === 2 && r.resposta === 'Achei: pago.', '`buscar` preenchido: segunda chamada, e a resposta e a da segunda');
-  conf(/Pedido PROVÁVEL \(confirme antes de afirmar pagamento\):\n#1793903844876 Joselina Da Silva/.test(chamadas[1].user) && r.viu.some((v) => /2a busca: 1793903844876/.test(v)), 'o pedido achado entra no contexto da segunda rodada');
+  conf(/Pedido PROVÁVEL \(confirme antes de afirmar pagamento\):\n#1793903844876 C\d+ \(Sorocaba\/SP\)/.test(chamadas[1].user) && !/Joselina/.test(chamadas[1].user) && r.viu.some((v) => /2a busca: 1793903844876/.test(v)), 'o pedido achado entra no contexto da segunda rodada');
 }
 {
   // Aviso a direcao = push na dash pra cada diretor/socio, registrado, e 1 por assunto a cada 30 min.
@@ -972,7 +972,7 @@ const CFG_TESTE = (t, extra) => ({ ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { 
   const r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: TG, texto: 'a joselina pagou?', menciona: true, ...BRUNO_WA }));
   conf(r.ok && r.resposta === 'Pagou sim, no Pix em 04/11.', 'no grupo de teste o bot responde mesmo com os grupos de verdade desligados');
   conf(/Quem perguntou: Bryan Amorim \(cobrador\)/.test(m.chamadas[0].user) && /Grupo: Cobradores/.test(m.chamadas[0].user), 'quem escreveu conta como o Bryan, no grupo dos Cobradores');
-  conf(/Joselina/.test(m.chamadas[0].user), 'com o pedido da fila do Bryan no contexto');
+  conf(/#1793903844876 C1 /.test(m.chamadas[0].user) && !/Joselina/.test(m.chamadas[0].user), 'com o pedido da fila do Bryan no contexto (pelo codigo)');
   conf(m.chat.length === 1 && m.chat[0].jid === TG && m.chat[0].grupo === 'cob' && m.chat[0].quem_id === BRYAN && m.chat[0].acao === 'pendente', 'a linha fica com o jid do grupo de teste, como cobradores, no nome do Bryan');
   conf(m.quem.length === 0, 'o quem e quem nao guarda quem escreve no grupo de teste');
   const fora = await m.api._botIaMensagem(m.env, cfg, msg({ jid: GC, texto: 'a joselina pagou?', menciona: true, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }));
@@ -982,7 +982,7 @@ const CFG_TESTE = (t, extra) => ({ ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { 
   // Sem pessoa escolhida: conta como quem ligou o teste (o Bruno, socio: ve a fila inteira).
   const m = monta({ ...MUNDO, cfg: CFG_TESTE({ quem_id: '' }), ia: [JSON_OK] });
   await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: 'o carlos pereira pagou?', menciona: true, ...BRUNO_WA }));
-  conf(/Quem perguntou: Bruno Correa \(sócio, da direção\)/.test(m.chamadas[0].user) && /Carlos Pereira/.test(m.chamadas[0].user), 'sem pessoa escolhida: conta como quem ligou o teste, com a visao da direcao');
+  conf(/Quem perguntou: Bruno Correa \(sócio, da direção\)/.test(m.chamadas[0].user) && /#4 C1 /.test(m.chamadas[0].user) && !/Carlos Pereira/.test(m.chamadas[0].user), 'sem pessoa escolhida: conta como quem ligou o teste, com a visao da direcao');
 }
 {
   // 8 chamadas na ultima hora no grupo de VERDADE dos cobradores nao seguram o de teste, e vice-versa.
@@ -1104,7 +1104,7 @@ titulo('18. A marcacao "@30662576877805" nao e pedido: vira nome antes da busca 
   // Pedido de verdade ao lado da marcacao continua achado.
   const m = monta({ ...MUNDO, cfg: CFG_TESTE(), ia: [JSON_OK] });
   await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: '@30662576877805 o pedido 1793903844876 foi pago?', menciona: true, ...BRUNO_WA }));
-  conf(/Pedido encontrado:/.test(m.chamadas[0].user) && /Joselina/.test(m.chamadas[0].user), 'o id do pedido ao lado da marcacao continua achado');
+  conf(/Pedido encontrado:\n#1793903844876 C1 /.test(m.chamadas[0].user), 'o id do pedido ao lado da marcacao continua achado');
 }
 
 // ══ 19. O QUE A REVISAO DE 06/11 ACHOU ═════════════════════════════════════════════════
@@ -1287,7 +1287,7 @@ titulo('21. Jeito do grupo, limites maiores e a conversa sem marcar');
   // Pedido que nao subiu: "subiu" faz buscar o pedido do vendedor.
   const m = monta({ ...MUNDO, ia: [JSON_OK] });
   await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho o pedido do pedro manual nao subiu', menciona: true, marcado: true }));
-  conf(/Pedro Manual/.test(m.chamadas[0].user) && /aguardando aprovação da direção/.test(m.chamadas[0].user), '"o pedido do pedro manual nao subiu": acha o pedido e diz que espera a aprovacao da direcao');
+  conf(/#6 C1 /.test(m.chamadas[0].user) && !/Pedro Manual|pedro manual/.test(m.chamadas[0].user) && /aguardando aprovação da direção/.test(m.chamadas[0].user), '"o pedido do pedro manual nao subiu": acha o pedido e diz que espera a aprovacao da direcao');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho bati 5 hoje, solta um audio comemorando', menciona: true, marcado: true }));
   conf(!/Nenhum pedido encontrado/.test(m2.chamadas[0].user), 'comemoracao com "bati", "audio", "comemorando": nao vira busca de pedido');
@@ -1388,6 +1388,68 @@ titulo('27. O teto do mes da chave paga do bot');
   const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m3.api._botIaChamar(m3.env, 'sys', 'user', {});
   conf(!m3.cfgdb[mes], 'sem chave paga: nao conta nada');
+}
+
+// ══ 28. PRIVACIDADE NA IA (06/11) ══════════════════════════════════════════════════════
+titulo('28. Privacidade: o nome do cliente nao vai pra IA e volta na resposta');
+{
+  const { api } = monta({});
+  const L = [
+    { id: 1, nome: 'Joselina Da Silva' }, { id: 2, nome: 'JOSE CARLOS LIMA' }, { id: 3, nome: 'José Ribamar Teixeira' },
+    { id: 4, nome: 'Bruno Souza' }, { id: 5, nome: 'Maria das Dores' }, { id: 6, nome: 'Ana Afiliada', afl: 'x' },
+  ];
+  const ps = api._botIaPseudo(L, ['Bruno Correa', 'Guilherme']);
+  conf(ps.cliente(L[0]) === 'C1' && ps.cliente(L[0]) === 'C1' && ps.cliente(L[1]) === 'C2', 'cada cliente ganha um codigo, sempre o mesmo dentro da mensagem');
+  conf(ps.texto('a dona joselina da silva ja pagou?') === 'a dona C1 ja pagou?', 'nome completo digitado (minusculo, com "da") vira o codigo');
+  conf(ps.texto('e a Joselina?') === 'e a C1?', 'primeiro nome solto de cliente com codigo vira o codigo');
+  conf(ps.texto('a silva pagou?') === 'a silva pagou?', 'sobrenome solto nao vira (palavra comum demais)');
+  conf(ps.texto('o jose carlos lima pagou?') === 'o C2 pagou?', 'nome todo em maiuscula na base casa com o digitado');
+  conf(ps.texto('ontem a Maria das Dores mandou o comprovante') === 'ontem a C3 mandou o comprovante', 'cliente da base ainda sem codigo: primeiro nome + sobrenome vira codigo novo');
+  conf(ps.texto('to com dores nas costas') === 'to com dores nas costas', 'palavra do nome que nao e o primeiro, sozinha, fica');
+  conf(ps.texto('marca o Bruno aqui') === 'marca o Bruno aqui' && ps.texto('o Bruno Souza pagou?') === 'o C4 pagou?', 'primeiro nome da equipe solto nunca vira codigo; com o sobrenome do cliente vira');
+  conf(ps.texto('a Ana Afiliada pagou?') === 'a Ana Afiliada pagou?', 'cliente do afiliado nao entra no indice (o mundo do afiliado nao e lido)');
+  conf(ps.texto('liga no 15 98888-7777 ou cpf 123.456.789-01') === 'liga no [número final 7777] ou cpf [número final 8901]', 'telefone e CPF digitados: so o final');
+  conf(ps.texto('o pedido 1234 e o kit de 3') === 'o pedido 1234 e o kit de 3', 'numero curto fica');
+  const ps2 = api._botIaPseudo(L, []);
+  ps2.cliente(L[1]); ps2.cliente(L[2]);
+  conf(ps2.texto('o josé pagou?') === 'o [cliente] pagou?', 'primeiro nome de dois clientes com codigo: [cliente], sem chutar');
+  conf(ps2.texto('o josé ribamar pagou?') === 'o C2 pagou?', 'o segundo nome desempata');
+  const ps3 = api._botIaPseudo(L, []);
+  ps3.cliente(L[0]);
+  conf(ps3.rastreio('AA123456789BR') === 'R1' && ps3.rastreio('AA123456789BR') === 'R1', 'rastreio vira R1');
+  conf(ps3.restaura('C1 pagou em 04/11 no Pix. C1 tá em dia') === 'Joselina Da Silva pagou em 04/11 no Pix. Joselina tá em dia', 'a volta: nome completo na primeira vez, primeiro nome depois');
+  conf(ps3.restaura('a C1 pagou, o pedido da C1 tá pago. Se for a C1 de Itu/SP') === 'Joselina Da Silva pagou, o pedido de Joselina tá pago. Se for Joselina de Itu/SP', 'o artigo que a IA pos some (ela nao sabe se e homem ou mulher)');
+  conf(ps3.restaura('A C1 pagou') === 'Joselina Da Silva pagou' && ps3.restaura('Da C1 nada ainda') === 'De Joselina Da Silva nada ainda', 'artigo em maiuscula no comeco da frase');
+  conf(ps3.restaura('rastreio R1') === 'rastreio AA123456789BR' && ps3.restaura('C9 pagou') === 'C9 pagou' && ps3.restaura('a casa e o carro') === 'a casa e o carro', 'rastreio volta; codigo que nao existe e texto comum ficam como vieram');
+  conf(ps3.desfaz('C1') === 'Joselina Da Silva', 'o que a IA pede pra buscar volta a ser o nome');
+  conf(api._botIaNomeBonito('JOSE CARLOS DA SILVA') === 'Jose Carlos da Silva' && api._botIaNomeBonito('Maria de Lourdes') === 'Maria de Lourdes', 'nome todo em maiuscula fica bonito; o digitado com cuidado fica como esta');
+}
+{
+  const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'pagou sim! a C1 entrou em 04/11 no Pix' } }] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho a joselina da silva ja pagou?', menciona: true, marcado: true }));
+  const u = m.chamadas[0].user;
+  conf(!/joselina/i.test(u) && /#1793903844876 C1 \(Sorocaba\/SP\)/.test(u) && /"@Barbadinho a C1 ja pagou\?"/.test(u), 'na IA so vai o codigo: na pergunta e no pedido');
+  conf(r.resposta === 'pagou sim! Joselina Da Silva entrou em 04/11 no Pix', 'e a resposta volta com o nome no lugar do codigo');
+  conf(/Cliente vem como C1, C2/.test(m.chamadas[0].system), 'o system explica o codigo');
+}
+{
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho o 15 98888-7777 pagou?', menciona: true, marcado: true }));
+  const u = m.chamadas[0].user;
+  conf(/\[número final 7777\]/.test(u) && !/98888/.test(u) && /#1793903844876 C1 /.test(u), 'telefone digitado: acha o pedido pelo numero inteiro, mas na IA vai so o final');
+}
+{
+  const chat = [{ ts: agoraS() - 120, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'pv1', de_jid: '', de_nome: 'Kevin', texto: 'a joselina da silva pagou?', acao: 'respondeu', resposta: 'pagou sim! Joselina Da Silva entrou em 04/11 no Pix', chamadas: 1 }];
+  const m = monta({ ...MUNDO, chat, ia: [JSON_OK] });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho e o rastreio?', menciona: true, marcado: true }));
+  const u = m.chamadas[0].user;
+  conf(/Últimas mensagens do grupo:/.test(u) && !/joselina/i.test(u) && /Barbadinho: pagou sim! C1 entrou em 04\/11/.test(u), 'as ultimas mensagens do grupo (inclusive a resposta do bot) vao sem o nome do cliente');
+}
+{
+  const chat = [{ ts: agoraS() - 120, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'pv2', de_jid: '', de_nome: 'Kevin', texto: 'a joselina da silva pagou?', acao: 'respondeu', resposta: 'pagou sim', chamadas: 1 }];
+  const m = monta({ ...MUNDO, chat, ia: [{ json: { responder: true, texto: 'Deixa eu ver', buscar: 'C1' } }, { json: { responder: true, texto: 'achei: C1 pagou em 04/11' } }] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho e o pedido dela?', menciona: true, marcado: true }));
+  conf(/Kevin: a C1 pagou\?/.test(m.chamadas[0].user) && r.viu.some((v) => /2a busca: 1793903844876/.test(v)) && r.resposta === 'achei: Joselina Da Silva pagou em 04/11', 'a IA pede pra buscar "C1" (que ela viu nas ultimas mensagens): a busca usa o nome de verdade e a resposta volta com ele');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
