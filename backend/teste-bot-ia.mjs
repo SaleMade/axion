@@ -474,9 +474,9 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
     uso: [{ nk: '5515988880002', user_id: GUI, nome: 'Guilherme', desde: agoraS() - 3600, ate: agoraS() + 600 }] });
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
   const user = chamadas[0].user;
-  conf(/Números de Guilherme \(3 cadastrados, 1 em uso, 1 ligados recebendo lead, 1 com queda registrada\):/.test(user), '"meu numero caiu": o cabecalho dos numeros do vendedor, com prova');
-  conf(/\(15\) \.\.\.-0001: em uso · interruptor: ligado em 2 de 2 pressels/.test(user), 'o numero em uso: interruptor ligado em 2 de 2 (a pressel pausada nao conta)');
-  conf(/\.\.\.-0002: parado · interruptor: ligado em 1 de 2 pressels \(1 desligadas de propósito\)/.test(user), 'o numero parado: desligado de proposito numa pressel');
+  conf(/Números de Guilherme \(3 cadastrados, 1 em uso ou aquecimento, 1 recebendo lead agora, 1 com queda registrada\):/.test(user), '"meu numero caiu": o cabecalho dos numeros do vendedor, com prova');
+  conf(/\(15\) \.\.\.-0001: em uso · RECEBENDO lead agora · interruptor: ligado em 2 de 2 pressels/.test(user), 'o numero em uso: recebe lead, interruptor ligado em 2 de 2 (a pressel pausada nao conta)');
+  conf(/\.\.\.-0002: parado · NÃO recebe lead agora \(não está Em uso\) · app aberto/.test(user), 'o numero parado: nao recebe porque nao esta Em uso, e o interruptor dele nem aparece');
   conf(/\.\.\.-0003: banido/.test(user), 'o banido aparece como banido');
   conf(/QUEDA REGISTRADA às 10:55 \(caiu\), já desligado da roleta pelo sistema/.test(user), 'queda registrada em swweb_queda, com hora e o que o sistema fez');
   conf(/\.\.\.-0002: [^\n]*sem queda registrada/.test(user), 'numero sem linha em swweb_queda: "sem queda registrada"');
@@ -501,6 +501,15 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
   const user = chamadas[0].user;
   conf(/\.\.\.-0001: banido/.test(user) && /\.\.\.-0002: restrito \(fora da roleta\)/.test(user), 'banido e restrito pela tag (o papel dela), nao pelo id');
+}
+{
+  // O SellWave Web fechou: o cron desliga o interruptor e marca app_off. O bot diz o motivo certo.
+  const pressels = [{ id: 'p1', vendedores: [{ at: GUI, off: { '88880001': 1 }, app_off: { '88880001': true } }] }];
+  const { api, env, chamadas } = monta({ ...MUNDO, pressels });
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  const user = chamadas[0].user;
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, e o motivo e o app, nao queda');
+  conf(/0 recebendo lead agora/.test(user), 'e o cabecalho conta zero recebendo');
 }
 {
   const { api, env, chamadas } = monta(MUNDO);
@@ -567,6 +576,32 @@ titulo('8. A busca de pedido: escopo por cargo e sem chute');
   const { api, env, estado } = monta({ ...MUNDO, leads: LEADS.concat(muitos) });
   const b = api._botIaAcharPedidos(estado, 'o jose pagou?', { id: GUI, chefe: false }, 'vend', await api._cobNomes(env), {});
   conf(b.ambiguo === true && b.blocos.length === 4 && b.ids.length === 4, 'seis "Jose": ate 4 candidatos');
+}
+{
+  // MEDIDO AO VIVO em 06/11/2026: o pedido certo era da fila do Haynan e o Bryan recebia uma lista de
+  // parecidos da fila dele; e "rosa helena" dava 3 candidatos quando so um tinha as duas palavras.
+  const extra = [
+    { id: 701, nome: 'Carlos Mendes', wa: '5515900000701', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 100, ts: ms('2026-10-20T10:00:00-03:00') },
+    { id: 702, nome: 'Rosa Helena de Souza', wa: '5515900000702', col: 'Pagos', spg: 'Pago', at: KEVIN, cob: BRYAN, vl: 100, pago_ts: ms('2026-11-05T10:00:00-03:00'), ts: ms('2026-10-21T10:00:00-03:00') },
+    { id: 703, nome: 'Raimundo Antero Rosa', wa: '5515900000703', col: 'Enviados', at: KEVIN, cob: BRYAN, vl: 100, ts: ms('2026-10-22T10:00:00-03:00') },
+    { id: 704, nome: 'Cecilia Rosa Ponciano', wa: '5515900000704', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 100, ts: ms('2026-10-23T10:00:00-03:00') },
+  ];
+  const { api, env, estado } = monta({ ...MUNDO, leads: LEADS.concat(extra) });
+  const nomes = await api._cobNomes(env);
+  const quemB = { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador', chefe: false };
+  const busca = (texto) => api._botIaAcharPedidos(estado, texto, quemB, 'cob', nomes, {});
+  let b = busca('o pedido do carlos pereira foi pago?');
+  conf(b.blocos.length === 0 && b.foraDoEscopo.length === 1 && String(b.foraDoEscopo[0].id) === '4', 'nome inteiro na fila de OUTRO cobrador vence o parecido da minha fila: "e da fila de outra pessoa"');
+  b = busca('a dona rosa helena pagou?');
+  conf(b.provavel === true && b.ids.join() === '702', '"rosa helena": o unico com as duas palavras e PROVAVEL (sem lista de Rosas)');
+  b = busca('e a rosa?');
+  conf(b.ambiguo === true && b.ids.length === 3, '"rosa" sozinha: os 3 candidatos');
+  b = busca('quantos pedidos tenho atrasados hoje?');
+  conf(b.termos.length === 0 && b.blocos.length === 0, 'pergunta da mesa ("quantos pedidos tenho atrasados") nao vira busca de nome');
+  // O caminho inteiro: o contexto diz de quem e o pedido.
+  const m = monta({ ...MUNDO, leads: LEADS.concat(extra) });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), { ...pacote({ texto: 'o pedido do carlos pereira foi pago?', menciona: true, jid: GC, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }), grupo: 'cob' });
+  conf(/são de outra pessoa: Carlos Pereira \(fila de Haynan\)/.test(m.chamadas[0].user), 'e o contexto que vai pra IA diz "fila de Haynan"');
 }
 
 // ══ 9. O BLOCO DO PEDIDO ═══════════════════════════════════════════════════════════════

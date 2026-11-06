@@ -13256,7 +13256,9 @@ const BOT_IA_NAO_SEI_QUEM = 'Ainda não sei quem é você aqui. O Bruno precisa 
 const BOT_IA_PROBLEMA_RE = /\b(caiu|cair|caindo|banid[oa]s?|bloque(?:ou|ad[oa]s?|io)|travou|travando|travad[oa]|desconect(?:ou|ad[oa]|a|ando)|n[aã]o consigo|n[aã]o abre|n[aã]o carrega|n[aã]o funciona|erro|bug|deu ruim|parou de funcionar)\b/i;
 const BOT_IA_NUMERO_RE = /\b(n[uú]mero|numero|chip|whats|whatsapp|zap|qr|conect|desconect|caiu|banid|bloque)/i;
 const BOT_IA_PEDIDO_RE = /\b(pedido|cliente|pagou|pago|paga|pagamento|entreg|rastre|devol|retorno|parcela|boleto|pix|cart[aã]o|cobran)/i;
-const BOT_IA_STOP = new Set(('dona seu sr sra senhor senhora cliente clienta pedido pedidos para pra que com sem uma esse essa este esta aquele aquela dela dele dele ela ele foi esta pago paga pagou pagamento entregue entregou entrega entregar rastreio rastrear cade onde quando como qual alguem sabe saber barbadinho bot bora hoje ontem amanha ainda mais menos muito tudo nada coisa gente pessoal galera time numero whats whatsapp zap meu minha teu tua voce vcs voces nois tem tinha ter ser sao estao deu dar vai vou pode podem poder fazer feito sobre mesmo mesma conseguiu consegui chegou chegar obrigado obrigada valeu beleza agora depois antes aqui ali boleto pix cartao parcela devolucao devolvido retorno cobranca cobrar cobrou esse essa isso aquilo tambem então entao porque porquê pois mas nao sim talvez ola oi bom boa dia tarde noite favor consegue poderia pode confere conferir olha olhar ver vendo viu dessa desse daquele daquela qualquer todos todas cada'.split(' ')));
+const BOT_IA_STOP = new Set(('agora ainda ajuda ajudar algo alguem algum alguma algumas alguns amanha andamento antes app aquela aquele aquilo atende atender atendeu atrasada atrasadas atrasado atrasados audio barbadinho beleza blz boa boleto bom bora bot cada cade cancelado cancelar cancelou cartao cedo checkout chega chegar chegaram chegou chip chips clienta cliente clientes cobrado cobrador cobranca cobrar cobrei cobrou codigo coisa com como confere conferir confirma confirmar consegue consegui conseguir conseguiu correios daquela daquele dar dash dei dela delas dele deles depois dessa desse desta deste deu devolucao devolveu devolvido dia dinheiro dona ela elas ele eles entao entrega entregar entregaram entregou entregue entregues enviado enviados enviar enviou equipe era eram essa esse esta estao estava estavam este estou falta faltam faltou favor faz fazer feito fez fila fiz fizeram foi foto frasco frascos frustrado fui galera gente glicosix grupo hoje hora horas isso kit liga ligar ligou liguei link logo mais manda mandar mandei mandou manha mas menos mensagem mensagens mesa mesma mesmo meta metas meu meus minha minhas moca muita muitas muito muitos nada nao nenhum nenhuma nessa nesse nesta neste ninguem nois noite nossa nosso numero numeros obrigada obrigado oi ola olha olhar olhei onde ontem outra outras outro outros paga pagamento pagamentos pagar pagaram pago pagou para parcela parcelas passa passar passei pedido pedidos pela pelas pelo pelos pendente pendentes pessoal pix pode podem poder poderia pois porque posso pouca pouco pra precisa preciso preco previsao pro produto produtos quais qual qualquer quando quanta quantas quanto quantos que quem quer queria quero rapaz rastreamento rastrear rastreio reais responde responder respondeu retirada retirar retorno sabe sabem saber sao sem semana senhor senhora ser sera seu show sim sistema situacao sobre somos sou sra status sua talvez tambem tarde tbm tem temos tenho ter teu teve time tinha tinham toda todas todo todos top transportadora tua tudo uma umas uns vai valeu valor valores vamos vcs venda vendas vendeu vendi vendo ver viu vlw voce voces vou whats whatsapp zap').split(' '));
+// Particulas do nome (Joselina DA Silva, Pedro DOS Santos): nao contam como palavra do nome.
+const BOT_IA_PARTICULA = new Set(['das', 'dos', 'del', 'der', 'van', 'von']);
 // Colunas em palavras, pra IA nao ter que adivinhar o que e 'Entregues'.
 const BOT_IA_COL_TXT = { 'A Enviar': 'a enviar (ainda não despachado)', 'Preparando': 'preparando', 'Enviados': 'enviado', 'Saiu para Entrega': 'saiu para entrega', 'Entregues': 'entregue, em cobrança', 'Retirar nos Correios': 'retirar nos Correios', 'Requer Atenção': 'requer atenção (não entregue)', 'Pagos': 'pago', 'Frustrados': 'frustrado (perda)', 'Roubos': 'roubo (perda)', 'Devolvido com Reverso': 'devolvido (perda)', 'Retornado': 'retornado (perda)', 'Cancelado sem Custo': 'cancelado' };
 const BOT_IA_ROLE_TXT = { atendente: 'vendedor', cobrador: 'cobrador', diretor: 'diretor', socio: 'sócio', produtor: 'produtor', gestor: 'gestor de tráfego', designer: 'designer' };
@@ -13491,10 +13493,14 @@ async function _botIaNumerosDe(env, st, atId, nome) {
       if (v.off && typeof v.off === 'object' && v.off[nk]) { if (v.app_off && typeof v.app_off === 'object' && v.app_off[nk]) appOff++; else desl++; continue; }
       lig++;
     }
+    const naRoleta = status === 'em uso' || status === 'em aquecimento';
     if (pressels.length) {
-      const podeReceber = (status === 'em uso' || status === 'em aquecimento') && lig > 0;
+      const podeReceber = naRoleta && lig > 0;
       if (podeReceber) recebendo++;
-      partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pressels.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl && lig ? ' (' + desl + ' desligadas de propósito)' : ''));
+      // O que importa primeiro: recebe lead agora ou nao, e por que. O interruptor de numero que nem esta
+      // Em uso nao diz nada (a roleta nao entrega pra ele de jeito nenhum).
+      partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou' : 'interruptor desligado')) + ')');
+      if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pressels.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas de propósito)' : ''));
     }
     const u = uso[nk];
     if (u && Number(u.ate || 0) > agora) partes.push('app aberto por ' + String(u.nome || u.user_id || 'alguém') + ' desde ' + _botIaHHMM(u.desde));
@@ -13509,12 +13515,17 @@ async function _botIaNumerosDe(env, st, atId, nome) {
     else partes.push('sem queda registrada');
     L.push('- ' + _botIaFoneBonito(c.num) + ': ' + partes.join(' · '));
   }
-  const cab = 'Números de ' + nome + ' (' + chips.length + ' cadastrados, ' + emUsoN + ' em uso' + (pressels.length ? ', ' + recebendo + ' ligados recebendo lead' : '') + (quedas ? ', ' + quedas + ' com queda registrada' : ', nenhuma queda registrada') + '):';
+  const cab = 'Números de ' + nome + ' (' + chips.length + ' cadastrados, ' + emUsoN + ' em uso ou aquecimento' + (pressels.length ? ', ' + recebendo + ' recebendo lead agora' : '') + (quedas ? ', ' + quedas + ' com queda registrada' : ', nenhuma queda registrada') + '):';
   return cab + '\n' + L.join('\n');
 }
-// BUSCA DE PEDIDO com escopo por cargo e sem chute. Devolve { blocos, ids, certo, ambiguo, termos, foraDoEscopo }.
+// BUSCA DE PEDIDO com escopo por cargo e sem chute. Devolve { blocos, ids, certo, provavel, ambiguo,
+// termos, foraDoEscopo }. certo = UM acerto forte (id, telefone, CPF ou o nome inteiro); provavel = um
+// candidato so que bate com mais palavras do texto que todos os outros; ambiguo = varios. O pedido que
+// bate melhor mas e de OUTRA pessoa vai em foraDoEscopo (o bot diz de quem e, sem detalhe), em vez de a
+// pergunta virar uma lista de parecidos da fila de quem perguntou (medido ao vivo em 06/11/2026: "jose
+// tadeu carneiro" e do Haynan, e o Bryan recebia 4 Josés dele).
 function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
-  const out = { blocos: [], ids: [], certo: false, ambiguo: false, termos: [], foraDoEscopo: [] };
+  const out = { blocos: [], ids: [], certo: false, provavel: false, ambiguo: false, termos: [], foraDoEscopo: [] };
   if (!quem || !quem.id) return out;
   const leads = Array.isArray(st && st.leads) ? st.leads : [];
   const txt = String(texto || '');
@@ -13523,41 +13534,45 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap) {
   const cpfs = new Set(digitos.filter((d) => d.length === 11));
   const ids = new Set(digitos.filter((d) => d.length >= 5));
   const mId = txt.match(/pedido\s*#?\s*(\d{3,})/i); if (mId) ids.add(mId[1]);
-  const termos = _botIaNorm(txt).split(' ').filter((w) => w.length >= 4 && !BOT_IA_STOP.has(w) && !/^\d+$/.test(w));
+  const termos = [...new Set(_botIaNorm(txt).split(' ').filter((w) => w.length >= 3 && !BOT_IA_STOP.has(w) && !BOT_IA_PARTICULA.has(w) && !/^\d+$/.test(w)))];
   out.termos = termos;
   if (!fones.size && !cpfs.size && !ids.size && !termos.length) return out;
   const noEscopo = (l) => quem.chefe || (grupo === 'cob' ? (!l.cob || String(l.cob) === quem.id) : String(l.at || '') === quem.id);
   const cands = [];
   for (const l of leads) {
     if (!l || l.id == null || l.afl) continue;
-    let pts = 0, forte = false;
+    let pts = 0, forte = false, bate = 0;
     const lid = String(l.id), fid = String(l.five_id || '');
     if (ids.has(lid) || (fid && ids.has(fid))) { pts += 100; forte = true; }
     if (fones.size && fones.has(_bot8(l.wa))) { pts += 100; forte = true; }
     if (cpfs.size && cpfs.has(_botSoDigitos(l.cpf))) { pts += 100; forte = true; }
     if (termos.length) {
-      const nome = _botIaNorm(l.nome);
-      const pal = nome.split(' ').filter((w) => w.length >= 3);
-      const bate = pal.filter((w) => termos.includes(w));
-      if (pal.length >= 2 && bate.length === pal.length) { pts += 50; forte = true; }
-      else if (bate.length) pts += 10 * bate.length;
+      // As palavras do nome, sem "da", "de", "dos": todas no texto = o nome inteiro, acerto forte.
+      const pal = _botIaNorm(l.nome).split(' ').filter((w) => w.length >= 3 && !BOT_IA_PARTICULA.has(w));
+      bate = termos.filter((t) => pal.includes(t)).length;
+      if (pal.length >= 2 && pal.every((w) => termos.includes(w))) { pts += 50; forte = true; }
+      else pts += 10 * bate;
     }
     if (!pts) continue;
-    if (!noEscopo(l)) { out.foraDoEscopo.push(l); continue; }
-    if (String(l.at || '') === quem.id || String(l.cob || '') === quem.id) pts += 5;
-    cands.push({ l, pts, forte });
+    const dentro = noEscopo(l);
+    if (dentro && (String(l.at || '') === quem.id || String(l.cob || '') === quem.id)) pts += 5;
+    cands.push({ l, pts, forte, bate, dentro });
   }
-  cands.sort((a, b) => (b.pts - a.pts) || (_cobCriadoTs(b.l) - _cobCriadoTs(a.l)));
-  const top = cands.slice(0, 4);
-  const fortes = cands.filter((c) => c.forte);
-  // certo = UM acerto forte (id, telefone, CPF ou nome completo); provavel = um candidato so, por
-  // parte do nome; ambiguo = varios. Nos dois ultimos a regra do prompt proibe afirmar pagamento.
-  out.certo = fortes.length === 1 && top.length > 0 && top[0].forte;
-  out.provavel = !out.certo && cands.length === 1;
-  out.ambiguo = top.length > 0 && !out.certo && !out.provavel;
-  const lista = out.certo ? [fortes[0]] : top;
+  const ordena = (a, b) => (b.pts - a.pts) || (_cobCriadoTs(b.l) - _cobCriadoTs(a.l));
+  const D = cands.filter((c) => c.dentro).sort(ordena), F = cands.filter((c) => !c.dentro).sort(ordena);
+  const fD = D.filter((c) => c.forte), fF = F.filter((c) => c.forte);
+  const melhorD = D.reduce((m, c) => Math.max(m, c.bate), 0), melhorF = F.reduce((m, c) => Math.max(m, c.bate), 0);
+  let lista = [];
+  if (fD.length === 1) { out.certo = true; lista = fD; }
+  else if (fD.length > 1) { out.ambiguo = true; lista = fD.slice(0, 4); }
+  else if (fF.length) out.foraDoEscopo = fF.slice(0, 3).map((c) => c.l);
+  else if (melhorF >= 2 && melhorF > melhorD) out.foraDoEscopo = F.filter((c) => c.bate === melhorF).slice(0, 3).map((c) => c.l);
+  else if (D.length) {
+    const topo = D.filter((c) => c.bate === melhorD);
+    if (topo.length === 1 && (melhorD >= 2 || D.length === 1)) { out.provavel = true; lista = topo; }
+    else { out.ambiguo = true; lista = [...topo, ...D.filter((c) => c.bate !== melhorD)].slice(0, 4); }
+  }
   for (const c of lista) { out.blocos.push(_botIaPedidoTexto(c.l, st, nomes, tagMap, out.certo || out.provavel)); out.ids.push(String(c.l.id)); }
-  out.foraDoEscopo = out.foraDoEscopo.slice(0, 3);
   return out;
 }
 // O pedido em texto, a partir de _cobDetalhe (sem CPF, endereco, links e comentarios: a resposta e
@@ -13783,6 +13798,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   const system = _botIaSistema(cfg, grupo, grupo === 'vend' && quem.id ? _botIaExemplos(cfg, quem.id) : []);
   // 5. A IA (ate duas rodadas, dentro do orcamento)
   const t0 = Date.now();
+  res.contexto = montaUser('').slice(0, 8000);
   let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS });
   res.chamadas = 1;
   res.modelo = ch.modelo; res.ms = ch.ms;
@@ -17170,7 +17186,7 @@ async function handleBotIaTeste(req, env) {
     await env.DB.prepare('INSERT INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .bind(Math.floor(Date.now() / 1000), _brDay(), grupo, 'teste', 'teste:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8), '', '', (quem.nome || 'Teste') + ' (teste)', quem.id || '', texto, 'teste', _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0).run();
   } catch (_) {}
-  return json({ ok: true, responder: !!r.responder, resposta: r.resposta, motivo: r.motivo, modelo: r.modelo, ms: r.ms, viu: r.viu || [] });
+  return json({ ok: true, responder: !!r.responder, resposta: r.resposta, motivo: r.motivo, modelo: r.modelo, ms: r.ms, viu: r.viu || [], contexto: r.contexto || '' });
 }
 async function handleBotLog(req, env) {
   const u = await authUser(req, env);
