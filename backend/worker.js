@@ -14444,10 +14444,11 @@ async function _botIaResponder(env, cfg, b, opts) {
     ...(quem.id && _botIaLimpoCom(quem.nome) ? ['Com ' + quem.nome.split(' ')[0] + ' a festa e a zoeira são LIMPAS: sem palavrão, sem duplo sentido e sem piada de sexo.'] : []),
   ];
   let nomes = null, tagMap = null;
+  let nHojeQuem = null;   // o numero do dia de quem escreveu (vendas ou pedidos que voltaram), pro aviso do numero dito
   const nomesDe = async () => { if (!nomes) { nomes = await _cobNomes(env); tagMap = _cobTagMap(st, ''); } };
   if (quem.id) {
     if (grupo === 'vend') {
-      try { const dados = await _botDados(env, dia, cfg, 'diario', false, st); D.push(_botIaPlacarTexto(dados, cfg, quem)); viu.push('placar de hoje'); } catch (_) {}
+      try { const dados = await _botDados(env, dia, cfg, 'diario', false, st); D.push(_botIaPlacarTexto(dados, cfg, quem)); viu.push('placar de hoje'); const eu = (dados.vendedores || []).find((x) => x.id === quem.id); if (eu) nHojeQuem = Number(eu.pedidos) || 0; } catch (_) {}
       if (BOT_IA_NUMERO_RE.test(textoBusca) && (quem.role === 'atendente' || quem.chefe)) {
         try {
           const alvo = quem.role === 'atendente' ? quem.id : (equipe.find((u) => u.role === 'atendente' && _botIaNorm(texto).includes(_botIaNorm(u.nome).split(' ')[0])) || {}).id;
@@ -14456,7 +14457,14 @@ async function _botIaResponder(env, cfg, b, opts) {
         } catch (_) {}
       }
     } else {
-      try { const dados = await _botDadosCob(env, dia, cfg, 'diario', false, st); D.push(_botIaMesaTexto(dados, quem)); viu.push('mesa de hoje'); } catch (_) {}
+      try { const dados = await _botDadosCob(env, dia, cfg, 'diario', false, st); D.push(_botIaMesaTexto(dados, quem)); viu.push('mesa de hoje'); const eu = (dados.cobradores || []).find((x) => x.id === quem.id); if (eu) nHojeQuem = Number(eu.pedidos) || 0; } catch (_) {}
+    }
+    {
+      const nDito = Number(((' ' + textoBusca + ' ').match(/[^\d\/:,.+](\d{1,2})(?![\d\/:,.])/) || [])[1]) || 0;
+      if (nHojeQuem != null && nDito > nHojeQuem && BOT_IA_FESTA_RE.test(textoBusca)) {
+        D.push('ATENÇÃO: ' + quem.nome.split(' ')[0] + ' falou em ' + nDito + ', mas o placar de hoje mostra ' + nHojeQuem + '. NÃO comemore o ' + nDito + ': diga o número do placar sem acusar ninguém e que a festa sai sozinha quando entrar na dash.');
+        viu.push('disse ' + nDito + ', placar ' + nHojeQuem);
+      }
     }
     // Pedidos: quando o texto fala de pedido, traz telefone/CPF/id, ou e o grupo dos cobradores (la
     // quase toda pergunta e sobre um pedido). O "nenhum pedido" so entra quando a pessoa pediu um.

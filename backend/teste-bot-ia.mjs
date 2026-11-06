@@ -1641,6 +1641,20 @@ titulo('36. Varios telefones na mensagem sao varios pedidos; a festa segue o num
   conf(/a intensidade segue o número do dia/.test(sys) && /bati 5 hj krl" \(Guilherme, placar 5; intensidade leve\) -> boaaa/.test(sys), 'a regra da intensidade e o exemplo leve do 5 no prompt');
 }
 
+// ══ 37. O NUMERO DITO NA FESTA X O PLACAR (06/11 tarde) ═══════════════════════════════════
+titulo('37. "fechei a 10" com menos no placar: o aviso vai nos dados');
+{
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho fechei a 10 caralho', menciona: true, marcado: true }));
+  conf(/ATENÇÃO: Guilherme falou em 10, mas o placar de hoje mostra 2\. NÃO comemore o 10/.test(m.chamadas[0].user) && r.viu.some((v) => /disse 10, placar 2/.test(v)), 'disse 10 com 2 no placar: a IA e avisada pra nao comemorar o 10');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho bati 2 hj krl', menciona: true, marcado: true }));
+  conf(!/ATENÇÃO:/.test(m2.chamadas[0].user), 'disse o numero certo: sem aviso');
+  const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: '@Barbadinho bati, entrou as 15:30 do dia 06/11', menciona: true, marcado: true }));
+  conf(!/ATENÇÃO:/.test(m3.chamadas[0].user), 'hora e data nao contam como numero dito');
+}
+
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
 titulo('15. As funcoes de texto');
 {
