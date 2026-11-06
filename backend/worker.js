@@ -13408,9 +13408,10 @@ const BOT_IA_FESTA_RE = /(\bbati\b|\bbatemos\b|\bfechei\b|\bfechamos\b|\bvendi\b
 const BOT_IA_FESTA_S = 600;
 // A resposta do bot foi um grito de festa (pra nao repetir o mesmo grito pra mesma pessoa logo em seguida).
 const BOT_IA_GRITO_RE = /(porra|bo{2,}r+a|isso a[ií]|segura o homi|tu [eé] foda|cravad|🍾|🐐)/i;
-// A mensagem fala de venda, cobranca ou do numero do dia: so ai o placar (ou a mesa) entra nos DADOS e o empurrao no fim
-// faz sentido. 06/11 noite: numero solto ("22 na veia"), "convertido" (de religiao, de politica) e "to vendo" nao sao venda.
-const BOT_IA_ASSUNTO_VENDA_RE = /(vend(?!o\b)|pedido|placar|\bmetas?\b|\bmarco|\bmesa\b|cobr|\bfila\b|\bpag(o|os|a|as|ou|ar|aram|amento|amentos|ando)\b|\bpix\b|boleto|\blead|\bbati\b|batemos|fechei|fechamos|cravei|\bconvert(i|eu|emos|eram|idos)\b|cliente|festa|retorno|atrasad|\bquant[oa]s?\b|\bfalt(a|am|ou)\b|ranking|\blider|ganhando|na frente|errad|\+\s*\d|\b\d{1,3}\s*(hj|hoje|pedidos?|vendas?|no dia|no m[eê]s|de volta|na fila)\b|\b(to|tô|tou|estou|fiz|com|mais|são|sao)\s+\d{1,3}\b|\bcomo (eu )?(to|tô|tou|estou)\b|\bcomo (t[aá]|est[aá]) (o |a |minha |meu )?(dia|placar|time|meta|mesa|fila|m[eê]s)\b)/i;
+// A mensagem pergunta ou comemora o NUMERO DO DIA (vendas, placar, meta, fila, quanto falta): so ai o placar (ou a mesa)
+// entra nos DADOS e o empurrao no fim faz sentido. 06/11 noite: numero solto ("22 na veia"), "convertido", "to vendo",
+// e piada com cliente ou pagamento ("pagou mas reclamou kkkk") nao sao; cliente e pedido vao pra busca do pedido.
+const BOT_IA_ASSUNTO_VENDA_RE = /(vend(?!o\b)|placar|\bmetas?\b|\bmarco|\bmesa\b|\bfila\b|\bbati\b|batemos|fechei|fechamos|cravei|festa|atrasad|prioridad|\bquant[oa]s?\b|\bfalt(a|am|ou)\b|ranking|\blider|ganhando|na frente|errad|\+\s*\d|\b\d{1,3}\s*(hj|hoje|pedidos?|vendas?|no dia|no m[eê]s|de volta|na fila)\b|\b(to|tô|tou|estou|fiz|com|mais|são|sao)\s+\d{1,3}\b|\bcomo (eu )?(to|tô|tou|estou)\b|\bcomo (t[aá]|est[aá]) (o |a |minha |meu )?(dia|placar|time|meta|mesa|fila|m[eê]s)\b)/i;
 // Com quem a festa e a zoeira sao LIMPAS (primeiro nome, sem acento): sem palavrao, sem duplo sentido, sem piada de sexo.
 // Esta no prompt tambem, mas o teste ao vivo de 06/11 mostrou o modelo mais simples ignorando: vai nos DADOS da mensagem.
 const BOT_IA_ZOEIRA_LIMPA = ['barbara'];
@@ -13712,7 +13713,7 @@ function _botIaPlacarTexto(dados, cfg, quem) {
     const v = vs.find((x) => x.id === quem.id);
     if (v) {
       const prox = marcos.find((n) => n > v.pedidos);
-      L.push('Intensidade da festa e da zoeira com quem perguntou: ' + _botIaIntensidade(v.pedidos) + '.');
+      L.push('Intensidade se for FESTA ou ZOEIRA com quem perguntou: ' + _botIaIntensidade(v.pedidos) + '. Pergunta de número é DADO: o número direto, sem grito.');
       L.push('Quem perguntou hoje: ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (prox ? ', próximo marco ' + prox + ' (faltam ' + (prox - v.pedidos) + ')' : '') + ', meta do mês: ' + _botMetaTxt(v) + (v.primeiro_corrida ? ', foi o primeiro a bater ' + META_MENSAL.corrida.pedidos + ' no mês' : '') + (v.aguardando ? ', ' + v.aguardando + ' esperando aprovação' : '') + '.');
     }
   }
@@ -13721,7 +13722,7 @@ function _botIaPlacarTexto(dados, cfg, quem) {
 function _botIaMesaTexto(dados, quem) {
   const c = (dados.cobradores || []).find((x) => x.id === (quem && quem.id));
   if (!c) return 'Cobradores: ' + ((dados.cobradores || []).map((x) => x.nome).join(', ') || 'nenhum') + '.';
-  return 'Intensidade da festa e da zoeira com quem perguntou: ' + _botIaIntensidade(c.pedidos) + '.\nMesa de ' + c.nome + ' agora: convertidos hoje ' + c.pedidos + ', faltam cobrar ' + c.em_cobranca + ', atrasados ' + c.atrasados + ', a receber ' + _botPlural(c.pendentes, 'pedido', 'pedidos') + (c.meta > 0 ? ', meta da semana ' + c.semana + '/' + c.meta : '') + '.';
+  return 'Intensidade se for FESTA ou ZOEIRA com quem perguntou: ' + _botIaIntensidade(c.pedidos) + '. Pergunta de número é DADO: o número direto, sem grito.\nMesa de ' + c.nome + ' agora: convertidos hoje ' + c.pedidos + ', faltam cobrar ' + c.em_cobranca + ', atrasados ' + c.atrasados + ', a receber ' + _botPlural(c.pendentes, 'pedido', 'pedidos') + (c.meta > 0 ? ', meta da semana ' + c.semana + '/' + c.meta : '') + '.';
 }
 // OS NUMEROS DO VENDEDOR, com prova: status da Contingencia, interruptor por pressel, estado que o
 // app reportou (swweb_conn), queda certa (swweb_queda) e quem esta com o numero aberto (swweb_uso).
@@ -14110,6 +14111,24 @@ async function _botIaFestaRecente(env, jid) {
     return !!(r && r.ok);
   } catch (_) { return true; }
 }
+// O QUE O BOT JA DISSE no grupo (ultimas 12 h, ate 6 frases diferentes). 06/11 noite: o modelo mais simples copia o exemplo
+// ao pe da letra e repete a mesma piada ("22 na veia, meu querido" pra toda pergunta de politica); vai pro prompt como
+// "nao repita". O texto volta com o nome do cliente: quem chama passa pelo ps.texto.
+async function _botIaJaDisse(env, jid) {
+  if (!jid) return [];
+  try {
+    const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE jid=? AND ts>? AND acao IN (?, ?) ORDER BY id DESC LIMIT 12').bind(String(jid), Math.floor(Date.now() / 1000) - 43200, 'respondeu', 'pendente').all();
+    const vistos = new Set(), out = [];
+    for (const x of ((r && r.results) || [])) {
+      const t = String(x.resposta || '').replace(/\s+/g, ' ').trim();
+      const k = _botIaNorm(t).slice(0, 40);
+      if (!t || vistos.has(k)) continue;
+      vistos.add(k); out.push(t.slice(0, 100));
+      if (out.length >= 6) break;
+    }
+    return out;
+  } catch (_) { return []; }
+}
 // A ULTIMA RESPOSTA do bot pra essa pessoa neste grupo (ate 30 min). Na duvida (banco falhou), nada.
 async function _botIaUltimaPraEle(env, jid, deJid) {
   if (!jid || !deJid) return null;
@@ -14491,7 +14510,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   // fala de venda, cobranca, pedido ou do numero do dia, ou e festa. Na zoeira o modelo nao ve o placar, e o que ele nao
   // ve ele nao cita (so o aviso nao bastou: "vc tem q ser bolsonarista" virou "comemorar os seus 9 pedidos hj").
   const temDigitos = /\d{8,}/.test(textoBusca.replace(/\D/g, ''));
-  const assuntoNumero = modo === 'festa' || temDigitos || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || BOT_IA_PEDIDO_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
+  const assuntoNumero = modo === 'festa' || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
   let nomes = null, tagMap = null;
   let nHojeQuem = null;   // o numero do dia de quem escreveu (vendas ou pedidos que voltaram), pro aviso do numero dito
   const nomesDe = async () => { if (!nomes) { nomes = await _cobNomes(env); tagMap = _cobTagMap(st, ''); } };
@@ -14537,7 +14556,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Pessoa não identificada: NÃO dê dado de pedido nem de número.');
     viu.push('sem identificação');
   }
-  if (quem.id && !assuntoNumero) { D.push('Placar e fila ficaram de fora: nesta mensagem ninguém falou de venda nem de cobrança. Responda só o que falaram, sem número de venda e sem empurrão (nada de bora buscar, bora moer).'); viu.push('sem placar (não é sobre venda)'); }
+  if (quem.id && !assuntoNumero) { D.push('Placar e fila ficaram de fora (a mensagem não pergunta do número do dia): responda só o que falaram, sem citar placar, fila ou meta e sem empurrão de venda (nada de bora buscar, bora moer).'); viu.push('sem placar'); }
   // A ULTIMA RESPOSTA pra essa pessoa (ate 30 min): o nome dela ja saiu? ja teve festa? (06/11 noite: "+1" ganhou o
   // gritao e, um minuto depois, "bati as 10, to liberado pro jiu jitsu" ganhou o MESMO gritao, com o nome de novo.)
   const ultima = await _botIaUltimaPraEle(env, b.jid, b.de_jid);
@@ -14554,10 +14573,12 @@ async function _botIaResponder(env, cfg, b, opts) {
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
   }
   const recentes = (o.teste ? [] : await _botIaRecentes(env, b.jid)).map((x) => ps.texto(x));
+  const jaDisse = (o.teste ? [] : await _botIaJaDisse(env, b.jid)).map((x) => ps.texto(x));
   const montaUser = (extra) => [
     ...cab, '',
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
     ...(recentes.length ? ['Últimas mensagens do grupo:', ...recentes, ''] : []),
+    ...(jaDisse.length ? ['Frases suas que já saíram neste grupo hoje (não repita nenhuma, nem o mesmo começo):', ...jaDisse.map((x) => '- ' + x), ''] : []),
     ...(b.citado ? ['Mensagem citada: "' + ps.texto(String(b.citado).slice(0, 300)) + '"'] : []),
     ...(marcado ? ['Te chamaram nesta mensagem (marcando ou pelo nome; "@Barbadinho" é você): responda.']
       : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; se falam DE você pra outra pessoa ou é só risada, responder false.']

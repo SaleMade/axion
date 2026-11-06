@@ -1637,7 +1637,7 @@ titulo('36. Varios telefones na mensagem sao varios pedidos; a festa segue o num
   const m = monta({ ...MUNDO });
   const dados = await m.api._botDados(m.env, DIA, cfgDe(m.api), 'diario', false, { leads: LEADS, chips: [] });
   const placar = m.api._botIaPlacarTexto(dados, cfgDe(m.api), { id: GUI });
-  conf(/Intensidade da festa e da zoeira com quem perguntou: leve e de boa \(2 hoje, até 5\)/.test(placar), 'o placar diz a intensidade de quem perguntou (Guilherme com 2 hoje: leve)');
+  conf(/Intensidade se for FESTA ou ZOEIRA com quem perguntou: leve e de boa \(2 hoje, até 5\)/.test(placar), 'o placar diz a intensidade de quem perguntou (Guilherme com 2 hoje: leve)');
   const sys = m.api._botIaSistema(cfgDe(m.api), 'vend');
   conf(/a intensidade segue o número do dia/.test(sys) && /bati 5 hj krl" \(Guilherme, placar 5; intensidade leve\) -> boaaa/.test(sys), 'a regra da intensidade e o exemplo leve do 5 no prompt');
 }
@@ -1661,7 +1661,7 @@ titulo('38. "bora buscar" so quando o assunto e venda ou cobranca');
 {
   const m = monta({ ...MUNDO, ia: [JSON_OK] });
   await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho vc torce pra qual time?', menciona: true, marcado: true }));
-  conf(/Placar e fila ficaram de fora: nesta mensagem ninguém falou de venda nem de cobrança/.test(m.chamadas[0].user), 'pergunta boba: a IA e avisada pra nao empurrar venda');
+  conf(/Placar e fila ficaram de fora \(a mensagem não pergunta do número do dia\)/.test(m.chamadas[0].user), 'pergunta boba: a IA e avisada pra nao empurrar venda');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho quantas vendas eu tenho hj?', menciona: true, marcado: true }));
   conf(!/ninguém falou de venda/.test(m2.chamadas[0].user), 'pergunta de venda: sem o aviso (o empurrao pode)');
@@ -1685,8 +1685,8 @@ titulo('39. Zoeira sem placar, sem o nome de quem falou, festa sem repetir e o b
   conf(sv('boaaa, bárbara 🔥', 'Barbara') === 'boaaa 🔥' && sv('fala, GUILHERME kkkkk', 'Guilherme') === 'fala kkkkk', 'acento, caixa, emoji e risada depois do nome');
   conf(sv('ISSO AÍ PORRAAAA 🔥 10 cravadas, Guilherme! tu é foda', 'Guilherme') === 'ISSO AÍ PORRAAAA 🔥 10 cravadas! tu é foda' && sv('boa, Guilhermes!', 'Guilherme') === 'boa, Guilhermes!', 'nome no meio do grito sai; nome maior (outra palavra) fica');
   const re = api.BOT_IA_ASSUNTO_VENDA_RE;
-  const zoeira = ['Barbadinho vai ser convertido em breve, vai hackear as urnas', 'kkkk 22 na veia', 'vc tem q ser bolsonarista igual seus criadores barbadinho', 'Vc é foda', 'to vendo aqui kkk', 'Vc é lula ou bolsonaro barbadinho?', 'como vc ta hj?'];
-  const numero = ['to com 9 ja', 'quantas eu tenho hj?', '+1', 'falta quanto pro 10?', 'a maria pagou?', 'como to hj?', 'como ta minha mesa hoje?', 'bati 5', 'fechei a 10 caralho', '10 hj krl', 'ta errado isso ai porra', 'quem ta ganhando?'];
+  const zoeira = ['Barbadinho vai ser convertido em breve, vai hackear as urnas', 'kkkk 22 na veia', 'vc tem q ser bolsonarista igual seus criadores barbadinho', 'Vc é foda', 'to vendo aqui kkk', 'Vc é lula ou bolsonaro barbadinho?', 'como vc ta hj?', 'esse cliente me fez esperar 2 horas pra fechar, que desgraçado kkkk', 'a cliente pagou mas reclamou pra caramba kkkk', 'o pedido da maria subiu?'];
+  const numero = ['to com 9 ja', 'quantas eu tenho hj?', '+1', 'falta quanto pro 10?', 'como to hj?', 'como ta minha mesa hoje?', 'bati 5', 'fechei a 10 caralho', '10 hj krl', 'ta errado isso ai porra', 'quem ta ganhando?', 'qual pedido eu dou prioridade?', 'quantos faltam cobrar hj?', 'vendi 3 hj'];
   conf(zoeira.every((x) => !re.test(x)), 'zoeira e politica nao sao assunto de venda: ' + zoeira.filter((x) => re.test(x)).join(' | '));
   conf(numero.every((x) => re.test(x)), 'numero do dia, pagamento e pergunta de placar sao: ' + numero.filter((x) => !re.test(x)).join(' | '));
   conf(api.BOT_IA_GRITO_RE.test('ISSO AÍ PORRAAAA 🔥') && api.BOT_IA_GRITO_RE.test('SEGURA O HOMIII 🐐') && !api.BOT_IA_GRITO_RE.test('foda é vc! tamo junto kkkk'), 'o grito de festa e reconhecido; zoeira nao');
@@ -1695,7 +1695,7 @@ titulo('39. Zoeira sem placar, sem o nome de quem falou, festa sem repetir e o b
   // zoeira: o placar nao vai pra IA e o nome de quem falou sai da resposta
   const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'foda é vc, Guilherme! tamo junto kkkk' } }] });
   const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho vc tem q ser bolsonarista igual seus criadores', menciona: true, marcado: true }));
-  conf(!/Placar de hoje/.test(m.chamadas[0].user) && /Placar e fila ficaram de fora/.test(m.chamadas[0].user) && r.viu.includes('sem placar (não é sobre venda)'), 'zoeira: o placar fica de fora dos DADOS');
+  conf(!/Placar de hoje/.test(m.chamadas[0].user) && /Placar e fila ficaram de fora/.test(m.chamadas[0].user) && r.viu.includes('sem placar'), 'zoeira: o placar fica de fora dos DADOS');
   conf(r.resposta === 'foda é vc! tamo junto kkkk' && r.viu.includes('tirou o nome'), 'zoeira: o nome de quem falou sai da resposta');
   // pergunta de numero: o placar vai e o nome pode, uma vez
   const m2 = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'falta 3 pro 5, Guilherme, bora lá!' } }] });
@@ -1732,6 +1732,27 @@ titulo('39. Zoeira sem placar, sem o nome de quem falou, festa sem repetir e o b
   conf(comBruno.length === 0, 'nenhum exemplo empurra pro "Bruno na dash" (so o de apresentar pessoa nova): ' + comBruno.join(' | '));
   const zoeiraComNome = ex.filter((e) => !/^\(provoca/.test(e) && /\((Guilherme|Kevin|Bryan|Bruno)(,| conversando)?[^;:\d]*\) ->/.test(e) && /, (Guilherme|Kevin|Bryan|Bruno)\b/.test(e.split('->')[1] || ''));
   conf(zoeiraComNome.length === 0, 'nenhum exemplo de zoeira chama a pessoa pelo nome: ' + zoeiraComNome.join(' | '));
+}
+
+{
+  // piada com cliente ou pagamento: a busca do pedido continua, o placar e a mesa nao
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), { ...pacote({ texto: '@Barbadinho a joselina da silva pagou mas reclamou pra caramba kkkk', menciona: true, marcado: true, jid: GC, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }), grupo: 'cob' });
+  conf(!/Mesa de/.test(m.chamadas[0].user) && /Pedido encontrado|PROVÁVEL|AMBÍGUO/.test(m.chamadas[0].user), 'piada com cliente: o pedido vai, a mesa nao (' + r.viu.join(', ') + ')');
+  // o que o bot ja disse no grupo vai como "nao repita"
+  const frase = '22 na veia, meu querido 🇧🇷 petista aqui não tem vez kkkkk';
+  const m2 = monta({ ...MUNDO, chat: [linhaChat({ de_jid: '5515999990077@s.whatsapp.net', resposta: frase, ts: agoraS() - 3600 }), linhaChat({ de_jid: '5515999990078@s.whatsapp.net', resposta: frase, ts: agoraS() - 3000 }), linhaChat({ de_jid: '5515999990079@s.whatsapp.net', resposta: 'realmente, odeio pagar imposto kkkkk', ts: agoraS() - 2500 })], ia: [JSON_OK] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho qual seu candidato?', menciona: true, marcado: true }));
+  const u2 = m2.chamadas[0].user;
+  conf(u2.includes('Frases suas que já saíram neste grupo hoje (não repita nenhuma, nem o mesmo começo):\n- realmente, odeio pagar imposto kkkkk\n- ' + frase + '\n') && u2.split('22 na veia, meu querido').length === 2, 'as frases que o bot ja disse vao como "nao repita", a mais nova primeiro e sem repetir a mesma');
+  const m2b = monta({ ...MUNDO, chat: [linhaChat({ resposta: frase, ts: agoraS() - 3600 })], ia: [JSON_OK] });
+  await m2b.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'vend', texto: 'qual seu candidato?', quem_id: GUI }), m2b.env);
+  conf(!/Frases suas que já saíram/.test(m2b.chamadas[0].user), 'no Pergunte ao bot (teste) a lista nao vai');
+  // pergunta de numero: a intensidade nao vira gritao
+  conf(/Intensidade se for FESTA ou ZOEIRA com quem perguntou: [^\n]*Pergunta de número é DADO: o número direto, sem grito\./.test(m2.chamadas[0].user) === false, 'zoeira: nem a linha da intensidade vai (sem placar)');
+  const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: '@Barbadinho quantas eu tenho hj?', menciona: true, marcado: true }));
+  conf(/Pergunta de número é DADO: o número direto, sem grito\./.test(m3.chamadas[0].user), 'pergunta de numero: a intensidade avisa que DADO e sem grito');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
