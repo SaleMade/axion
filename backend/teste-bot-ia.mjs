@@ -485,7 +485,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   conf(/\.\.\.-0002: parado · NÃO recebe lead agora \(não está Em uso\) · app aberto/.test(user), 'o numero parado: nao recebe porque nao esta Em uso, e o interruptor dele nem aparece');
   conf(/\.\.\.-0003: banido/.test(user), 'o banido aparece como banido');
   conf(/QUEDA REGISTRADA às 10:55 \(caiu\), já desligado da roleta pelo sistema/.test(user), 'queda registrada em swweb_queda, com hora e o que o sistema fez');
-  conf(/\.\.\.-0002: [^\n]*sem queda registrada/.test(user), 'numero sem linha em swweb_queda: "sem queda registrada"');
+  conf(/\.\.\.-0002: [^\n]*queda ainda não registrada pelo app/.test(user), 'numero sem linha em swweb_queda: "queda ainda nao registrada pelo app" (o registro atrasa)');
   conf(/app aberto por Guilherme desde 10:00/.test(user), 'swweb_uso com `ate` no futuro: app aberto por ele');
   conf(/último estado reportado pelo app: caiu \(pediu QR\) às 10:55/.test(user) && /o app nunca reportou estado desse número/.test(user), 'swweb_conn: o estado que o app reportou, ou "nunca reportou"');
   conf(!/conectado/i.test(user), 'NUNCA a palavra "conectado" sem o app ter reportado pronto');

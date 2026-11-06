@@ -13679,10 +13679,10 @@ async function _botIaNumerosDe(env, st, atId, nome) {
     } else partes.push('o app nunca reportou estado desse número');
     const q = queda[nk];
     if (q && Number(q.em || 0) > 0) { quedas++; partes.push('QUEDA REGISTRADA às ' + _botIaHHMM(q.em) + ' (' + String(q.motivo || 'caiu') + ')' + (Number(q.feito) === 1 ? ', já desligado da roleta pelo sistema' : ', confirmando (90 s)')); }
-    else partes.push('sem queda registrada');
+    else partes.push('queda ainda não registrada pelo app');
     L.push('- ' + _botIaFoneBonito(c.num) + ': ' + partes.join(' · '));
   }
-  const cab = 'Números de ' + nome + ' (' + chips.length + ' cadastrados, ' + emUsoN + ' em uso ou aquecimento' + (pressels.length ? ', ' + recebendo + ' recebendo lead agora' : '') + (quedas ? ', ' + quedas + ' com queda registrada' : ', nenhuma queda registrada') + '):';
+  const cab = 'Números de ' + nome + ' (' + chips.length + ' cadastrados, ' + emUsoN + ' em uso ou aquecimento' + (pressels.length ? ', ' + recebendo + ' recebendo lead agora' : '') + (quedas ? ', ' + quedas + ' com queda registrada' : ', nenhuma queda registrada ainda pelo app: o registro atrasa, então se a pessoa diz que caiu, acredite nela e nunca diga que não aparece queda') + '):';
   return cab + '\n' + L.join('\n');
 }
 // BUSCA DE PEDIDO com escopo por cargo e sem chute. Devolve { blocos, ids, certo, provavel, ambiguo,
