@@ -71,11 +71,12 @@ const leads = [
   { id: String(noMes(0.30)), ts: noMes(0.30), nome: 'K do afiliado', at: 'kev', afl: 'afl_x', vl: 497, col: 'A Enviar' },
   { id: String(noMes(0.05)), ts: noMes(0.05), nome: 'B cheio', at: 'bar', vl: 497, col: 'Pagos', spg: 'Pago', pago_ts: noMes(0.5) },
 ];
-// A CORRIDA: a Barbara faz 251 pedidos no mes (o 250o no instante marcado); o Kevin fica em 5.
+// A CORRIDA: a Barbara faz 252 pedidos no mes (o "B cheio" de cima e o primeiro, entao o 250o e o
+// i=248 do laco); o Kevin fica em 5.
 let marcoEsperado = 0;
 for (let i = 0; i < 251; i++) {
   const t = noMes(0.40 + 0.50 * (i / 251));
-  if (i === 249) marcoEsperado = t;
+  if (i === 248) marcoEsperado = t;
   leads.push({ id: String(t) + i, ts: t, nome: 'B pedido ' + i, at: 'bar', vl: i % 5 === 0 ? 297 : 497, col: 'Enviados' });
 }
 const estado = { leads, chips: [], pressels: [] };
