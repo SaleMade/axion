@@ -2009,6 +2009,28 @@ function versaoMenor(a, b) {
 let atualizador = null
 let atualizadorFalhouEm = 0
 let atualizacaoBaixada = ''
+// O QUE A ATUALIZACAO SOZINHA ESTA FAZENDO AGORA, PRA FAIXA DA BARRA (06/11/2026, pedido do Bruno:
+// "em vez dessa mensagem para eu baixar, como ele ja baixou e esta baixando em segundo plano,
+// aparecesse ali 'Baixando em segundo plano' e tivesse uma bolinha girando (...) quando estiver tudo
+// pronto, 'Versao nova instalada. Reinicie quando quiser'"). Ate a 1.26.11 a faixa pedia pra baixar
+// na mao SEMPRE que havia versao nova, porque o `precisaBaixar` do estado nao olhava o atualizador:
+// o vendedor via "Clique pra baixar" de uma coisa que ja estava chegando sozinha.
+//   fase ''         nada a mostrar por ela (sem versao nova, ou ainda nao conferiu)
+//   fase 'baixando' achou versao nova e esta baixando: bolinha girando e o quanto ja veio
+//   fase 'pronta'   baixou e conferiu: entra quando o app fechar e abrir de novo
+// Vai pela casca na hora (sw:atualizacao) E junto do estado de 20 em 20 s: a casca recarrega sozinha
+// quando a vigia de tela branca age, e o que ela so tivesse recebido por aviso sumiria.
+let atualizacao = { fase: '', versao: '', pct: 0 }
+let atualizacaoAvisoEm = 0
+// A ultima versao que o FEED da sozinha anunciou (latest.yml). Se ele estiver ATRAS da publicada
+// (carimbaram a versao sem subir o latest.yml), a sozinha nao vai trazer a nova, e a faixa de baixar
+// na mao volta: melhor um clique a mais do que o vendedor preso na versao velha sem saber.
+let versaoDoFeed = ''
+function mudaAtualizacao(fase, versao, pct) {
+  atualizacao = { fase, versao: String(versao || ''), pct: Number(pct) || 0 }
+  atualizacaoAvisoEm = Date.now()
+  avisaCasca('sw:atualizacao', atualizacao)
+}
 function ligaAtualizador() {
   if (!app.isPackaged || EH_TESTE || DADOS_A_PARTE) return
   // NO MAC NAO TEM ATUALIZACAO SOZINHA (04/11/2026). O electron-updater no Mac instala pelo
@@ -2028,11 +2050,45 @@ function ligaAtualizador() {
     error: (m) => anota('[atualiza] erro: ' + String(m).slice(0, 300)),
     debug: () => {},
   }
-  atualizador.on('error', (e) => { atualizadorFalhouEm = Date.now(); anota('[atualiza] falhou: ' + String((e && e.message) || e).slice(0, 300)) })
+  atualizador.on('error', (e) => {
+    atualizadorFalhouEm = Date.now()
+    anota('[atualiza] falhou: ' + String((e && e.message) || e).slice(0, 300))
+    // Falhou BAIXANDO: a faixa sai do "baixando" (que ficaria girando pra sempre) e, como o
+    // atualizaSozinho() passa a dar falso por 6 h, volta a faixa de baixar na mao. Falha numa
+    // checagem DEPOIS de baixar nao apaga o "pronta": o arquivo baixado continua valendo e instala
+    // quando o app fechar.
+    if (atualizacao.fase === 'baixando') mudaAtualizacao('', '', 0)
+  })
+  atualizador.on('update-available', (info) => {
+    const v = String((info && info.version) || '')
+    versaoDoFeed = v
+    // A checagem de 2 em 2 horas acha de novo a versao que ja esta baixada: o electron-updater manda
+    // "update-available" e, logo depois, "update-downloaded" do arquivo que ele guardou. Sem esta
+    // guarda a faixa piscaria de "pronta" pra "baixando" e voltaria.
+    if (atualizacao.fase === 'pronta' && atualizacao.versao === v) return
+    mudaAtualizacao('baixando', v, 0)
+  })
+  atualizador.on('update-not-available', (info) => {
+    versaoDoFeed = String((info && info.version) || '')
+    if (atualizacao.fase === 'baixando') mudaAtualizacao('', '', 0)
+  })
+  atualizador.on('download-progress', (p) => {
+    if (atualizacao.fase !== 'baixando') return
+    // 99 no maximo: 100% e so quando o arquivo passou na conferencia do sha512 (update-downloaded).
+    const pct = Math.max(0, Math.min(99, Math.floor(Number(p && p.percent) || 0)))
+    if (pct === atualizacao.pct) return
+    atualizacao = { ...atualizacao, pct }
+    // Um aviso a cada 2 s no maximo: o electron-updater manda varios por segundo, e o estado de 20 em
+    // 20 s leva o numero de qualquer jeito.
+    if (Date.now() - atualizacaoAvisoEm < 2000) return
+    atualizacaoAvisoEm = Date.now()
+    avisaCasca('sw:atualizacao', atualizacao)
+  })
   atualizador.on('update-downloaded', (info) => {
     atualizacaoBaixada = String((info && info.version) || '')
     anota('[atualiza] ' + atualizacaoBaixada + ' baixada: instala quando o app fechar')
-    avisaCasca('sw:aviso', { texto: 'Versão ' + atualizacaoBaixada + ' baixada. Ela entra sozinha quando você fechar o app.' })
+    // Sem o aviso de 30 s que existia aqui ("Versao X baixada..."): a faixa agora diz isso e fica.
+    mudaAtualizacao('pronta', atualizacaoBaixada, 100)
   })
   const confere = () => { try { atualizador.checkForUpdates().catch((e) => { atualizadorFalhouEm = Date.now(); anota('[atualiza] nao conferiu: ' + String((e && e.message) || e).slice(0, 200)) }) } catch (_) { /* ok */ } }
   setTimeout(confere, 60000)
@@ -2041,6 +2097,14 @@ function ligaAtualizador() {
 // O aviso de baixar na mao so aparece se a atualizacao sozinha NAO estiver dando conta: app sem o
 // atualizador, ou o atualizador falhou nas ultimas 6 horas.
 const atualizaSozinho = () => !!atualizador && (Date.now() - atualizadorFalhouEm) > 6 * 3600000
+// A FAIXA DE BAIXAR NA MAO (o `precisaBaixar` do estado) segue a MESMA regra do aviso acima, mais o
+// feed atrasado. Antes ela olhava so "tem versao nova publicada", e por isso aparecia em cima da
+// sozinha baixando (ver `atualizacao` la em cima). Funcao com nome pra dar pra testar recortada.
+function precisaBaixarNaMao() {
+  if (!versaoPublicada || !versaoMenor(app.getVersion(), versaoPublicada)) return false
+  if (!atualizaSozinho()) return true
+  return !!(versaoDoFeed && versaoMenor(versaoDoFeed, versaoPublicada))
+}
 
 async function confereVersao() {
   try {
@@ -3392,7 +3456,10 @@ ipcMain.handle('sw:estado', () => ({
   versao: app.getVersion(),
   // O que esta publicado agora. Vazio = ainda nao perguntei, ou a dash nao respondeu.
   versaoPublicada,
-  precisaBaixar: !!(versaoPublicada && versaoMenor(app.getVersion(), versaoPublicada)),
+  // So quando a atualizacao sozinha NAO da conta (Mac, falha, feed atrasado). Ver precisaBaixarNaMao.
+  precisaBaixar: precisaBaixarNaMao(),
+  // O que a sozinha esta fazendo (baixando, pronta). A casca desenha isso antes do baixar na mao.
+  atualizacao,
   urlInstalador,
   agenteDeOnde,
   chromium: process.versions.chrome,

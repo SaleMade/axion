@@ -580,6 +580,103 @@ console.log('\n=== contas do SellWave Web ===\n')
     /versaoMenor\(app\.getVersion\(\), versaoPublicada\) && !atualizaSozinho\(\)/.test(fonte))
 }
 
+// ── 16b) A FAIXA DA ATUALIZACAO SOZINHA (06/11/2026, pedido do Bruno: "Baixando em segundo plano"
+//    com bolinha girando, e depois "versao nova, reinicie quando quiser", no lugar do "Clique pra
+//    baixar" que aparecia mesmo com a sozinha baixando por baixo). Roda o ligaAtualizador DE VERDADE,
+//    recortado do main.js, contra um electron-updater de mentira que deixa o teste disparar os eventos.
+{
+  const fonte = leia('main.js')
+  const pedacos = [
+    recorta(fonte, 'function versaoMenor(a, b)'),
+    recorta(fonte, 'function mudaAtualizacao(fase, versao, pct)'),
+    recorta(fonte, 'function ligaAtualizador()'),
+    (fonte.match(/const atualizaSozinho = .*\n/) || [''])[0],
+    recorta(fonte, 'function precisaBaixarNaMao()'),
+  ].join('\n')
+  // O relogio e do teste (anda quando o teste manda), e o app esta na 1.26.11.
+  const relogio = { t: 1793970000000 }
+  const nova = (noMac = false) => new Function('relogio', 'noMac', `
+    const ouvintes = {}, avisos = []
+    const falso = { on: (ev, fn) => { ouvintes[ev] = fn }, checkForUpdates: () => Promise.resolve() }
+    const require = () => ({ autoUpdater: falso })
+    const app = { isPackaged: true, getVersion: () => '1.26.11' }
+    const EH_TESTE = false, DADOS_A_PARTE = false, NO_MAC = noMac
+    const anota = () => {}
+    const avisaCasca = (canal, d) => avisos.push([canal, JSON.parse(JSON.stringify(d))])
+    const setTimeout = () => 0, setInterval = () => 0
+    const Date = { now: () => relogio.t }
+    let atualizador = null, atualizadorFalhouEm = 0, atualizacaoBaixada = ''
+    let atualizacao = { fase: '', versao: '', pct: 0 }, atualizacaoAvisoEm = 0, versaoDoFeed = ''
+    let versaoPublicada = ''
+    ${pedacos}
+    ligaAtualizador()
+    return { ouvintes, avisos, fase: () => atualizacao, naMao: () => precisaBaixarNaMao(), publica: (v) => { versaoPublicada = v } }
+  `)(relogio, noMac)
+
+  // a) o caso do Bruno: versao nova publicada, a sozinha saudavel. NAO pede pra baixar na mao.
+  let u = nova()
+  vale('o atualizador escuta as cinco fases', ['error', 'update-available', 'update-not-available', 'download-progress', 'update-downloaded'].every((ev) => typeof u.ouvintes[ev] === 'function'), Object.keys(u.ouvintes).join(','))
+  u.publica('1.26.12')
+  vale('versao nova com a sozinha saudavel: NAO pede pra baixar na mao (era o "Clique pra baixar" do Bruno)', u.naMao() === false)
+  u.ouvintes['update-available']({ version: '1.26.12' })
+  vale('achou a versao: a faixa vai pra "baixando", com a versao', u.fase().fase === 'baixando' && u.fase().versao === '1.26.12' && u.fase().pct === 0, JSON.stringify(u.fase()))
+  vale('e a casca e avisada na hora', u.avisos.length === 1 && u.avisos[0][0] === 'sw:atualizacao' && u.avisos[0][1].fase === 'baixando', JSON.stringify(u.avisos))
+  relogio.t += 3000
+  u.ouvintes['download-progress']({ percent: 37.6 })
+  vale('o quanto ja veio sobe (37,6% vira 37)', u.fase().pct === 37 && u.avisos.length === 2 && u.avisos[1][1].pct === 37, JSON.stringify(u.avisos[1]))
+  relogio.t += 300
+  u.ouvintes['download-progress']({ percent: 38.2 })
+  vale('mas a casca nao e avisada mais de uma vez a cada 2 s', u.fase().pct === 38 && u.avisos.length === 2, String(u.avisos.length))
+  relogio.t += 3000
+  u.ouvintes['download-progress']({ percent: 100 })
+  vale('100% so depois da conferencia: o progresso para em 99', u.fase().pct === 99, String(u.fase().pct))
+  u.ouvintes['update-downloaded']({ version: '1.26.12' })
+  vale('baixou: a faixa vai pra "pronta"', u.fase().fase === 'pronta' && u.fase().versao === '1.26.12' && u.avisos[u.avisos.length - 1][1].fase === 'pronta', JSON.stringify(u.fase()))
+  const nAvisos = u.avisos.length
+  u.ouvintes['update-available']({ version: '1.26.12' })
+  vale('a checagem de 2 em 2 h que acha a MESMA versao nao faz a faixa piscar pra "baixando"', u.fase().fase === 'pronta' && u.avisos.length === nAvisos, JSON.stringify(u.fase()))
+  u.ouvintes['error'](new Error('rede caiu numa checagem'))
+  vale('erro numa checagem depois de baixar nao apaga o "pronta" (o arquivo instala ao fechar)', u.fase().fase === 'pronta')
+  u.ouvintes['update-available']({ version: '1.26.13' })
+  vale('saiu outra versao depois: volta a baixar, com o numero novo', u.fase().fase === 'baixando' && u.fase().versao === '1.26.13', JSON.stringify(u.fase()))
+
+  // b) falhou baixando: a bolinha nao gira pra sempre e o baixar na mao volta
+  u = nova()
+  u.publica('1.26.12')
+  u.ouvintes['update-available']({ version: '1.26.12' })
+  u.ouvintes['error'](new Error('ERR_CHECKSUM_MISMATCH'))
+  vale('falhou baixando: a faixa sai do "baixando"', u.fase().fase === '', JSON.stringify(u.fase()))
+  vale('e o baixar na mao volta (a sozinha fica 6 h de castigo)', u.naMao() === true)
+
+  // c) o feed atrasado: carimbaram a versao e o latest.yml ainda e o velho
+  u = nova()
+  u.publica('1.26.12')
+  u.ouvintes['update-not-available']({ version: '1.26.11' })
+  vale('feed atras da versao publicada: pede pra baixar na mao', u.naMao() === true)
+  u = nova()
+  u.publica('1.26.12')
+  u.ouvintes['update-available']({ version: '1.26.12' })
+  u.ouvintes['update-not-available']({ version: '1.26.12' })
+  vale('"nao tem" depois de "achou" tira a faixa do "baixando"', u.fase().fase === '', JSON.stringify(u.fase()))
+
+  // d) o Mac nao tem a sozinha: continua no baixar na mao, como sempre
+  u = nova(true)
+  u.publica('1.26.12')
+  vale('no Mac a faixa continua pedindo pra baixar', u.naMao() === true && Object.keys(u.ouvintes).length === 0)
+  u.publica('1.26.11')
+  vale('e sem versao nova nao pede nada', u.naMao() === false)
+
+  // e) a fiacao ate a tela
+  vale('o estado leva o baixar-na-mao pela regra nova e a fase da sozinha',
+    /precisaBaixar: precisaBaixarNaMao\(\),/.test(fonte) && /\n\s+atualizacao,\n/.test(fonte))
+  vale('o canal sw:atualizacao passa pelo preload da barra', /'sw:atualizacao'/.test(leia('preload.js')))
+  const casca = leia('ui/app.js')
+  vale('a casca escuta o sw:atualizacao', /window\.sw\.ao\('sw:atualizacao', \(d\) => \{/.test(casca))
+  vale('a fase da sozinha vence o baixar na mao', /if \(atualizacao && \(atualizacao\.fase === 'baixando' \|\| atualizacao\.fase === 'pronta'\)\) \{ desenhaAtualizacao\(el\); return \}/.test(casca))
+  vale('o estado de 20 em 20 s traz a fase antes de desenhar a faixa', /if \(estado\.atualizacao\) atualizacao = estado\.atualizacao\r?\n\s+avisaVersao\(/.test(casca))
+  vale('baixando e pronta nao tem clique', /el\.classList\.add\('parada'\)\r?\n\s+el\.onclick = null/.test(casca))
+}
+
 // ── 17) O CRM DO ATENDIMENTO (23/10/2026, pedido do Bruno). A faixa no pe da area do WhatsApp e o
 //    quadro que abre por cima dela. Aqui: a geometria (a view sobe a altura da faixa so na janela
 //    principal, e sai da tela com o quadro aberto) e a fiacao que nao pode sumir.

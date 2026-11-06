@@ -12,6 +12,8 @@ const modal = $('modal')
 const modalCorpo = $('modal-corpo')
 
 let estado = { numeros: [], proxies: {}, abertos: [], temToken: false, direcao: false }
+// O que a atualizacao sozinha esta fazendo (baixando, pronta). Ver avisaVersao.
+let atualizacao = { fase: '', versao: '', pct: 0 }
 let ativo = ''
 const carregando = new Set()
 // Numeros cujo motor do WhatsApp nao carregou. Eles continuam abrindo e conversando, mas NAO batem
@@ -1396,6 +1398,7 @@ async function recarregaEstado() {
   document.body.classList.toggle('sem-painel', estado.painelLigado === false)
   $('versao').title = 'SellWave Web v' + estado.versao
     + (estado.agenteDeOnde === 'servidor' ? ' · motor de conversa atualizado' : '')
+  if (estado.atualizacao) atualizacao = estado.atualizacao
   avisaVersao(estado.precisaBaixar ? estado : null)
   desenhaTrava()
   desenhaLista()
@@ -1417,11 +1420,43 @@ async function recarregaEstado() {
   return estado
 }
 
+// A FAIXA DE VERSAO NOVA TEM TRES CARAS (06/11/2026, pedido do Bruno: "em vez dessa mensagem para
+// eu baixar, como ele ja baixou e esta baixando em segundo plano, aparecesse ali 'Baixando em segundo
+// plano' e tivesse uma bolinha girando (...) quando estiver tudo pronto, 'Versao nova instalada.
+// Reinicie quando quiser'"):
+//   1) BAIXANDO: a atualizacao sozinha esta trazendo a versao nova. Bolinha girando e o quanto ja veio.
+//   2) PRONTA: baixou; entra quando o app fechar e abrir de novo.
+//   3) BAIXAR NA MAO: so quando a sozinha nao da conta (Mac, ou ela falhou). E a faixa de antes.
+// As duas primeiras NAO tem clique: nao ha nada pra pessoa fazer, e um botao que nao faz nada e pior
+// que botao nenhum. Quem decide a fase e o main.js (`atualizacao`, que vem no estado e no aviso
+// sw:atualizacao); a fase vence o baixar na mao, porque o arquivo ja baixado instala ao fechar.
+// (a variavel `atualizacao` mora la em cima, junto do `estado`)
+const ICO_PRONTA = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 13px;color:var(--verde)">'
+  + '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>'
+function desenhaAtualizacao(el) {
+  const a = atualizacao
+  el.hidden = false
+  el.classList.add('parada')
+  el.onclick = null
+  if (a.fase === 'baixando') {
+    const pct = Number(a.pct) || 0
+    el.innerHTML = '<span class="gira" aria-hidden="true"></span>'
+      + '<span><b>Baixando em segundo plano</b><br>Versão ' + esc(a.versao) + (pct > 0 ? ' · ' + pct + '%' : '') + '</span>'
+    el.title = 'Pode continuar usando. A versão nova entra quando você fechar e abrir o app.'
+  } else {
+    el.innerHTML = ICO_PRONTA + '<span><b>Versão ' + esc(a.versao) + ' pronta</b><br>Reinicie o app quando quiser.</span>'
+    el.title = 'Feche e abra o SellWave Web pra entrar na versão nova. As conversas e os números pareados continuam salvos.'
+  }
+}
+
 // VERSAO NOVA PUBLICADA. O botao abre o instalador no navegador; a instalacao e por cima e a
 // sessao de cada numero fica salva (a pasta de dados e fixa, ver main.js).
 function avisaVersao(d) {
   const el = $('versao-nova')
   if (!el) return
+  if (atualizacao && (atualizacao.fase === 'baixando' || atualizacao.fase === 'pronta')) { desenhaAtualizacao(el); return }
+  el.classList.remove('parada')
   if (!d || !d.publicada && !d.versaoPublicada) { el.hidden = true; return }
   const nova = d.publicada || d.versaoPublicada
   el.hidden = false
@@ -1656,6 +1691,11 @@ window.sw.ao('sw:destacado', async (d) => {
 })
 window.sw.ao('sw:devolvido', async () => { await recarregaEstado() })
 window.sw.ao('sw:versao', (d) => avisaVersao(d))
+// A ATUALIZACAO SOZINHA MUDOU DE FASE (achou, baixou mais um pedaco, terminou): so a faixa muda.
+window.sw.ao('sw:atualizacao', (d) => {
+  atualizacao = (d && typeof d === 'object') ? d : { fase: '', versao: '', pct: 0 }
+  avisaVersao(estado && estado.precisaBaixar ? estado : null)
+})
 // A NUVEM DA SESSAO MUDOU (subindo, descendo, salva, falhou): so a lista muda, e o estado vem do main.
 window.sw.ao('sw:nuvem', async () => { await recarregaEstado() })
 // FECHANDO O APP: os numeros ja sairam da tela e a sessao de cada um esta subindo. Sem este aviso o

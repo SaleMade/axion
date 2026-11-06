@@ -332,6 +332,12 @@
   .versao-nova:hover { background: rgba(36, 194, 120, .18); }
   .versao-nova b { font-weight: 650; }
   .versao-nova[hidden] { display: none; }
+  /* Baixando ou pronta: a faixa so informa, nao tem clique (ver avisaVersao). */
+  .versao-nova.parada { cursor: default; }
+  .versao-nova.parada:hover { background: var(--verde-fraco); }
+  .versao-nova .gira { flex: 0 0 13px; width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%;
+    border: 2px solid rgba(36, 194, 120, .25); border-top-color: var(--verde); animation: swgira .8s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .versao-nova .gira { animation-duration: 2.4s; } }
   .preview { display: flex; align-items: center; gap: 7px; margin: 0 10px 8px; padding: 7px 10px;
     border-radius: 9px; font-size: 11px; color: #cfe3ff;
     border: 1px solid rgba(14, 165, 233, .35); background: rgba(14, 165, 233, .12); }
