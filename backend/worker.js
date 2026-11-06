@@ -13279,7 +13279,7 @@ const BOT_IA_ANTHROPIC_MS = 20000;   // a Claude pensa antes de responder: teto 
 const BOT_IA_SCHEMA = { type: 'object', properties: { responder: { type: 'boolean' }, texto: { type: 'string' }, avisar_direcao: { type: 'string' }, buscar: { type: 'string' } }, required: ['responder', 'texto', 'avisar_direcao', 'buscar'], additionalProperties: false };
 const BOT_IA_SCHEMA_TEXTO = { type: 'object', properties: { texto: { type: 'string' } }, required: ['texto'], additionalProperties: false };
 const BOT_IA_ORCAMENTO_MS = 25000;     // por mensagem, do primeiro ao ultimo byte da IA
-const BOT_IA_MODELO_MS = 10000;        // por modelo
+const BOT_IA_MODELO_MS = 15000;        // por modelo (o ultimo da fila; medido em 06/11: o flash-lite gratis leva 9 a 12 s a tarde)
 const BOT_IA_MAX_MODELOS = 3;   // 06/11: tres tentativas (o gratis congestiona; 7 + 7 + 10 s cabem nos 25 s)
 // Subiram em 06/11 (Bruno: "8 por hora e muito pouco, a galera vai conversar muito mais com ele"). O limite
 // gratis do Google e por modelo: a cascata passa pro proximo quando um da 429 (ver _botIaGemFora).
@@ -13290,12 +13290,13 @@ const BOT_IA_HORA_TESTE = 60;           // no grupo de teste (so a direcao escre
 const BOT_IA_CONVERSA_S = 180;          // quem o bot respondeu ha menos disso e escreve de novo sem marcar: conversa
 const BOT_IA_MODELO_1_MS = 7000;        // teto do 1o modelo do Gemini quando ainda tem outro na fila
 const BOT_IA_GEM_FORA_MS = 5 * 60000;   // modelo que deu 503 ou estourou o tempo fica 5 min de fora
-const BOT_IA_GEM_429_MS = 3 * 60000;
+const BOT_IA_GEM_429_MS = 3 * 60000;    // modelo que deu 429 (limite gratis dele) fica 3 min de fora
+const BOT_IA_GEM_DIA_MS = 24 * 3600000; // ...ou ate a cota do DIA voltar (o Google diz quando, no retryDelay), no maximo 24 h
 // Chamadas por mes com a chave PAGA do bot (o credito de US$ 10 do Google AI Pro). Medido em 06/11: cada resposta
 // leva uns 6 mil tokens de entrada (regras, exemplos, dados, manual) e 200 de saida. No Flash pago isso da uns
 // US$ 0,0053 ate 31/12/2026 (US$ 0,75 entrada e 3,75 saida por milhao) e o dobro a partir de 01/01/2027, quando o
 // Google dobra o preco. O teto deixa o mes perto de US$ 8,50 nos dois casos; o cache do Google ainda barateia.
-const BOT_IA_PAGAS_MES = (dia) => (String(dia || '') < '2027-01' ? 1600 : 800);    // modelo que deu 429 (limite gratis dele) fica 3 min de fora
+const BOT_IA_PAGAS_MES = (dia) => (String(dia || '') < '2027-01' ? 1600 : 800);
 // Medido em 06/11/2026 na chave gratis: o 503 "high demand" do Gemini demora uns 10 s pra voltar e
 // comia a resposta inteira (11,4 s numa pergunta). Fica guardado so nesta instancia do worker.
 const _botIaGemFora = new Map();
@@ -13558,7 +13559,15 @@ async function _botIaChamar(env, system, user, o) {
       const r = await _fetchComTeto('https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(gkey), Math.min(tetoM, Math.max(1500, resta())), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corpo),
       });
-      if (r.status === 429) { out.tentativas.push(m + ' 429'); _botIaGemFora.set(m, { ate: Date.now() + BOT_IA_GEM_429_MS, q: true }); continue; }
+      if (r.status === 429) {
+        const corpo429 = typeof r.text === 'function' ? await r.text().catch(() => '') : '';
+        const doDia = /PerDay/i.test(corpo429);
+        const seg = Number((String(corpo429).match(/"retryDelay"\s*:\s*"(\d+)s"/) || [])[1]) || 0;
+        const foraMs = doDia ? Math.min(Math.max(seg * 1000, BOT_IA_GEM_429_MS), BOT_IA_GEM_DIA_MS) : BOT_IA_GEM_429_MS;
+        out.tentativas.push(m + ' 429' + (doDia ? ' (cota do dia)' : ''));
+        _botIaGemFora.set(m, { ate: Date.now() + foraMs, q: true });
+        continue;
+      }
       quotaTodos = false;
       if (!r.ok) { out.tentativas.push(m + ' ' + r.status); if (r.status >= 500) _botIaGemFora.set(m, { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); if (r.status === 401 || r.status === 403) break; continue; }
       const d = await r.json();
@@ -14136,7 +14145,7 @@ const BOT_IA_MANUAL = [
  {"t": "Cliente quer pagar", "q": "essa cliente quer fazer o pix, quem manda?", "k": ["antecipado", "boleto", "pix", "quer pagar", "quer passar o cartao", "reenvia", "venceu"], "r": "Pedido na entrega: boleto e cartão é com o cobrador do pedido; me fala o nome do cliente que eu digo de quem é a fila e marca ele aqui (não tá no grupo? marca o Heynan). Fechou antecipado? O link do cartão já aparece no pedido em Cadastro de Pedidos (Copiar link). Pix você mesmo manda, a chave CNPJ da Sell Wave com o valor.", "g": "vend"},
  {"t": "Link de pagamento", "q": "como mando o link de pagamento pro cliente?", "k": ["abrir checkout", "checkout", "link de pagamento", "link do cartao", "link pra pagar"], "r": "Abre o pedido no Kanban: Abrir Checkout ou o copiar ao lado (no SellWave Web do cobrador: ficha, linha Checkout). A página vem preenchida e o cliente escolhe como pagar; pagou ali, vira pago sozinho. Antes da aprovação, só Antecipado e Venda Futura têm link, em Cadastro de Pedidos. Sem link: avisa o Bruno."},
  {"t": "Chave Pix da empresa", "q": "manda a chave pix da empresa", "k": ["alerta de golpe", "chave", "chave pix", "cnpj", "golpe"], "r": "A chave oficial é o CNPJ da Sell Wave (no Pix aparece Sell Wave no nome), a da mensagem \"Chave Pix CNPJ\" que o Heynan manda aqui. Salva ela no + do painel do SellWave Web como Só eu e manda pro cliente com o valor, o CNPJ numa mensagem separada. Deu alerta de golpe ou o cliente não consegue pagar? Marca o cobrador do pedido ou o Heynan."},
- {"t": "Comprovante que chegou pro vendedor", "q": "a cliente me mandou o comprovante, o que eu faco?", "k": ["comprovante", "disse que pagou", "diz que pagou", "ja pagou", "mandou o print"], "r": "Posta o print aqui marcando o cobrador do pedido e o Heynan. Quem dá baixa é o cobrador, na ficha do pedido: Marcar como pago, ou Pagamento parcial se pagou só uma parte. Me fala o nome do cliente que eu digo de quem é a fila e se já consta pago.", "g": "vend"},
+ {"t": "Comprovante que chegou pro vendedor", "q": "a cliente me mandou o comprovante, o que eu faco?", "k": ["comprovante", "disse que pagou", "diz que pagou", "mandou o print"], "r": "Posta o print aqui marcando o cobrador do pedido e o Heynan. Quem dá baixa é o cobrador, na ficha do pedido: Marcar como pago, ou Pagamento parcial se pagou só uma parte. Me fala o nome do cliente que eu digo de quem é a fila e se já consta pago.", "g": "vend"},
  {"t": "Quando o pedido conta como pago", "q": "quando o pedido conta como pago?", "k": ["conta como pago", "quando conta", "quando vira pago", "vira pago"], "r": "Quando o cobrador ou a direção confirma o pagamento com o valor que entrou, quando o cliente paga pelo link do pedido (fica pago sozinho) ou quando a plataforma confirma. Conta no dia em que pagou, não no dia da venda. Se a equipe marcou pago, a plataforma não desfaz; só estorno tira."},
  {"t": "Prazo e rastreio", "q": "quanto tempo o pedido leva pra chegar e onde vejo o rastreio?", "k": ["prazo", "previsao", "quando chega", "quanto tempo", "rastrear", "rastreio", "vai chegar"], "r": "No Novo Pedido, ao digitar o CEP, aparece a previsão em dias úteis pelo estado (é estimativa). Depois que posta, abre o pedido no Kanban: em Código de Rastreio tem o código pra copiar e o link do rastreio, e o card mostra a previsão. No Ceará vai só pelos Correios."},
  {"t": "Contato do cobrador pro cliente", "q": "qual numero eu passo pro cliente acompanhar a entrega?", "k": ["acompanhar", "agradecimento", "cobrador antigo", "contato do cobrador", "passar o numero", "qual numero eu passo"], "r": "Nenhum número fixo. Manda pelo SellWave Web o funil Etapa 6 - Agradecimento (H ou M) ou o Contato Cobrador: os dois terminam na mensagem com o link de acompanhar o pedido, que abre o WhatsApp do cobrador certo daquele cliente. Número escrito à mão leva o cliente pra pessoa errada. Cliente falando com o cobrador errado: avisa aqui marcando o Heynan.", "g": "vend"},

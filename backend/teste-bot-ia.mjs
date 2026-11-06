@@ -229,7 +229,7 @@ function monta(mundo) {
     chamadas.push(ch);
     const i = chamadas.length - 1;
     const spec = (typeof mundo.ia === 'function') ? mundo.ia(ch, i) : (Array.isArray(mundo.ia) ? (mundo.ia[i] || mundo.ia[mundo.ia.length - 1]) : mundo.ia) || { json: { responder: true, texto: 'Fechado.' } };
-    if (spec.status && spec.status !== 200) return { ok: false, status: spec.status, json: async () => ({ error: { message: 'erro ' + spec.status } }), text: async () => '' };
+    if (spec.status && spec.status !== 200) return { ok: false, status: spec.status, json: async () => ({ error: { message: 'erro ' + spec.status } }), text: async () => String(spec.body || '') };
     const texto = spec.texto != null ? String(spec.texto) : JSON.stringify(spec.json || {});
     // A Claude devolve o pensamento num bloco antes do texto (vazio por padrao) e o stop_reason.
     if (anthropic) return { ok: true, status: 200, json: async () => ({ model: modelo, stop_reason: spec.stop || 'end_turn', stop_details: spec.stop_details || null, content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: texto }], usage: { input_tokens: 3000, output_tokens: 400 } }) };
@@ -264,7 +264,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -1069,7 +1069,7 @@ titulo('17. A cascata do Gemini: teto curto no 1o modelo e modelo cheio fica de 
   conf(m.chamadas[3].modelo === M[0], 'passados 5 min ele volta a ser o primeiro');
   const p = monta({ ...MUNDO, ia: [{ status: 503 }] });
   await p.api._botIaChamar(p.env, 'sys', 'user', { maxModelos: 1 });
-  conf(p.tetos[0] === 10000 && p.chamadas.length === 1, 'com um modelo so (a provocacao) o teto e o cheio, 10 s');
+  conf(p.tetos[0] === 15000 && p.chamadas.length === 1, 'com um modelo so (a provocacao) o teto e o cheio, 15 s');
 }
 
 // ══ 18. A MARCACAO NO TEXTO ════════════════════════════════════════════════════════════
@@ -1450,6 +1450,18 @@ titulo('28. Privacidade: o nome do cliente nao vai pra IA e volta na resposta');
   const m = monta({ ...MUNDO, chat, ia: [{ json: { responder: true, texto: 'Deixa eu ver', buscar: 'C1' } }, { json: { responder: true, texto: 'achei: C1 pagou em 04/11' } }] });
   const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho e o pedido dela?', menciona: true, marcado: true }));
   conf(/Kevin: a C1 pagou\?/.test(m.chamadas[0].user) && r.viu.some((v) => /2a busca: 1793903844876/.test(v)) && r.resposta === 'achei: Joselina Da Silva pagou em 04/11', 'a IA pede pra buscar "C1" (que ela viu nas ultimas mensagens): a busca usa o nome de verdade e a resposta volta com ele');
+}
+
+// ══ 29. COTA DO DIA (06/11) ════════════════════════════════════════════════════════════
+titulo('29. 429 da cota do DIA: o modelo fica fora ate a cota voltar');
+{
+  const corpoDia = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] }, { retryDelay: '55971s' }] } });
+  const m = monta({ ...MUNDO, ia: [{ status: 429, body: corpoDia }, { status: 429, body: '{"error":{"code":429}}' }, JSON_OK] });
+  const r = await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(r.texto && r.tentativas[0] === 'gemini-3.5-flash 429 (cota do dia)' && r.tentativas[1] === 'gemini-2.5-flash 429', '429 com PerDay no corpo e marcado como cota do dia; o 429 comum continua comum');
+  const f1 = m.api._botIaGemFora.get('gemini-3.5-flash'), f2 = m.api._botIaGemFora.get('gemini-2.5-flash');
+  conf(f1 && f1.ate - DataFalsa.now() > 15 * 3600000 && f1.ate - DataFalsa.now() <= 24 * 3600000 && f2 && f2.ate - DataFalsa.now() <= 3 * 60000 + 1000, 'cota do dia: fora pelo retryDelay (15 h); 429 comum: 3 min');
+  m.api._botIaGemFora.clear();
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
