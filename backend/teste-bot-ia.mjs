@@ -670,7 +670,14 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   conf(r.acao === 'respondeu' && r.resposta === 'Pagou sim, dia 04/11 no Pix.' && r.chamadas === 1 && r.modelo === 'gemini-3.5-flash', 'JSON normal: respondeu, 1 chamada, primeiro modelo da cascata');
   conf(chamadas[0].body.generationConfig.responseMimeType === 'application/json' && chamadas[0].body.generationConfig.thinkingConfig.thinkingBudget === 0, 'pede JSON e sem pensamento (senao o 2.5 gasta o teto pensando)');
   ({ r } = await pergunta({ ia: [{ json: { responder: false, texto: '' } }] }));
-  conf(r.acao === 'calado' && /a IA preferiu/.test(r.motivo), 'responder:false: calado "a IA preferiu nao responder"');
+  conf(r.acao === 'respondeu' && /^Tô aqui!/.test(r.resposta) && /saiu a resposta padrão/.test(r.motivo), 'MARCADO e a IA calou (responder:false): sai a resposta padrao do grupo, nunca silencio');
+  {
+    const m = monta({ ...MUNDO, ia: [{ json: { responder: false, texto: '' } }] });
+    const r2 = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'meu numero caiu', menciona: false }));
+    conf(r2.acao === 'calado' && /a IA preferiu/.test(r2.motivo) && !r2.resposta, 'sem marcar (entrou sozinho) e a IA calou: calado de verdade');
+    conf(/Você foi chamado nesta mensagem/.test((await pergunta({ ia: [JSON_OK] })).chamadas[0].user) && !/Você foi chamado/.test(m.chamadas[0].user), 'a IA sabe quando foi chamada (marcada) e quando entrou sozinha');
+    conf(/responda SEMPRE/.test(m.chamadas[0].system) && /no condicional/.test(m.chamadas[0].system), 'as regras: marcado responde sempre; provavel no condicional');
+  }
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Liga pra ela no 15 99999 0000.' } }] }));
   conf(r.acao === 'calado' && /dado pessoal \(telefone\)/.test(r.motivo) && r.resposta === '', 'telefone na saida: calado (a resposta e publica)');
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Manda por wa.me/5515999990000' } }] }));
