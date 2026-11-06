@@ -11676,6 +11676,8 @@ function _botNormaliza(raw, base) {
   o.grupo.via = ['pc', 'evolution'].includes(gr.via) ? gr.via : (['pc', 'evolution'].includes(bgr.via) ? bgr.via : 'pc');
   o.cobranca = _botCobNormaliza(r.cobranca, b.cobranca);
   o.ia = _botIaNormaliza(r.ia, b.ia);
+  // O grupo de teste nunca e um dos grupos de verdade (la o bot passaria a responder como o outro grupo).
+  if (o.ia.teste.id && (o.ia.teste.id === o.grupo.id || o.ia.teste.id === String((o.cobranca && o.cobranca.grupo && o.cobranca.grupo.id) || ''))) o.ia.teste.ativo = false;
   return o;
 }
 // O bloco da cobranca, mesmas regras do de cima: campo desconhecido e ignorado, campo invalido volta
@@ -11851,6 +11853,7 @@ async function _botEnsureTables(env) {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, dia TEXT, grupo TEXT, jid TEXT, msg_id TEXT, de_jid TEXT, de_fone TEXT, de_nome TEXT, quem_id TEXT, texto TEXT, acao TEXT, resposta TEXT, motivo TEXT, modelo TEXT, ms INTEGER, chamadas INTEGER DEFAULT 0, alerta INTEGER DEFAULT 0, resp_msg_id TEXT, resp_status TEXT, UNIQUE(grupo, msg_id))').run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_chat_grupo ON bot_chat(grupo, id)').run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_chat_ts ON bot_chat(ts)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_bot_chat_jid ON bot_chat(jid, id)').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS bot_quem (grupo TEXT, de_jid TEXT, fone TEXT, nome TEXT, ultimo_ts INTEGER, n INTEGER DEFAULT 0, PRIMARY KEY (grupo, de_jid))').run();
     _botTablesOk = true;
   } catch (_) {}
@@ -13247,6 +13250,12 @@ const BOT_IA_MAX_MODELOS = 2;
 const BOT_IA_HORA = { gemini: 8, anthropic: 30 };   // chamadas por hora, por grupo
 const BOT_IA_DIA = { vend: 60, cob: 120 };          // chamadas por dia, por grupo
 const BOT_IA_PESSOA_10MIN = 3;
+const BOT_IA_HORA_TESTE = 30;           // no grupo de teste (so a direcao escreve la): chamadas por hora
+const BOT_IA_MODELO_1_MS = 7000;        // teto do 1o modelo do Gemini quando ainda tem outro na fila
+const BOT_IA_GEM_FORA_MS = 5 * 60000;   // modelo que deu 503 ou estourou o tempo fica 5 min de fora
+// Medido em 06/11/2026 na chave gratis: o 503 "high demand" do Gemini demora uns 10 s pra voltar e
+// comia a resposta inteira (11,4 s numa pergunta). Fica guardado so nesta instancia do worker.
+const _botIaGemFora = new Map();
 const BOT_IA_CONTEXTO_MSGS = 8;
 const BOT_IA_VISTO_MAX = 300;
 const BOT_IA_VISTO_VIDA_S = 86400;
@@ -13274,7 +13283,7 @@ const BOT_IA_COL_TXT = { 'A Enviar': 'a enviar (ainda não despachado)', 'Prepar
 const BOT_IA_ROLE_TXT = { atendente: 'vendedor', cobrador: 'cobrador', diretor: 'diretor', socio: 'sócio', produtor: 'produtor', gestor: 'gestor de tráfego', designer: 'designer' };
 
 function _botIaPadrao() {
-  return { responde: { vend: false, cob: false }, so_marcado: { vend: false, cob: true }, provoca: { ativo: false }, tom: { vend: BOT_IA_TOM_VEND, cob: BOT_IA_TOM_COB }, instrucoes: '' };
+  return { responde: { vend: false, cob: false }, so_marcado: { vend: false, cob: true }, provoca: { ativo: false }, tom: { vend: BOT_IA_TOM_VEND, cob: BOT_IA_TOM_COB }, instrucoes: '', teste: { ativo: false, id: '', nome: '', como: 'cob', quem_id: '', por: '' } };
 }
 // Mescla o que veio com a base (a config gravada), campo por campo: invalido volta pra base.
 function _botIaNormaliza(raw, base) {
@@ -13290,14 +13299,39 @@ function _botIaNormaliza(raw, base) {
   }
   o.provoca.ativo = bo(r.provoca, 'ativo', bo(b.provoca, 'ativo', false));
   o.instrucoes = _botTexto300(typeof r.instrucoes === 'string' ? r.instrucoes : (typeof b.instrucoes === 'string' ? b.instrucoes : ''), 2000).trim();
+  // GRUPO DE TESTE (06/11/2026, pedido do Bruno: "tem um grupo que se chama Aa, o bot e eu estamos
+  // nele; faz os testes por la comigo"). Um grupo a parte onde o bot responde COMO SE fosse o grupo
+  // dos vendedores ou dos cobradores, e quem escreve conta como a pessoa escolhida na tela (o Bruno
+  // pergunta no lugar do Bryan ou do Guilherme). Nada mais vai pra la: resumo, comemoracao e
+  // provocacao de verdade continuam so nos grupos reais.
+  const rt = (r.teste && typeof r.teste === 'object') ? r.teste : {};
+  const bt = (b.teste && typeof b.teste === 'object') ? b.teste : {};
+  const campo = (k) => (k in rt ? rt[k] : bt[k]);
+  const tid = String(campo('id') || '').trim();
+  o.teste.id = _botJidGrupoOk(tid) ? tid : '';
+  o.teste.nome = _botTexto300(campo('nome') || '', 80).trim();
+  o.teste.como = campo('como') === 'vend' ? 'vend' : 'cob';
+  o.teste.quem_id = _botTexto300(campo('quem_id') || '', 60).trim();
+  o.teste.por = _botTexto300(campo('por') || '', 60).trim();
+  o.teste.ativo = !!campo('ativo') && !!o.teste.id;
   return o;
 }
 const _botIaJidOk = (v) => /^\d{5,20}@(s\.whatsapp\.net|lid)$/.test(String(v || ''));
+// O grupo de teste ligado e que nao e nenhum dos dois de verdade.
+const _botIaEhTeste = (cfg, jid) => {
+  const t = cfg && cfg.ia && cfg.ia.teste;
+  const j = String(jid || '');
+  if (!t || !t.ativo || !t.id || !j || t.id !== j) return false;
+  if (cfg.grupo && cfg.grupo.id === j) return false;
+  if (cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id === j) return false;
+  return true;
+};
 const _botIaGrupoDe = (cfg, jid) => {
   const j = String(jid || '');
   if (!j) return '';
   if (cfg.grupo && cfg.grupo.id === j) return 'vend';
   if (cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id === j) return 'cob';
+  if (_botIaEhTeste(cfg, j)) return cfg.ia.teste.como === 'vend' ? 'vend' : 'cob';
   return '';
 };
 const _botIaGrupoCfg = (cfg, g) => (g === 'cob' ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {}));
@@ -13310,6 +13344,8 @@ function _botIaEscuta(cfg) {
   const ia = cfg.ia || _botIaPadrao();
   if (ia.responde && ia.responde.vend && cfg.grupo && cfg.grupo.id) out.push(String(cfg.grupo.id));
   if (ia.responde && ia.responde.cob && cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) out.push(String(cfg.cobranca.grupo.id));
+  // O grupo de teste ligado tambem (independe do "Responder no grupo" dos de verdade).
+  if (_botIaEhTeste(cfg, ia.teste && ia.teste.id) && !out.includes(String(ia.teste.id))) out.push(String(ia.teste.id));
   return out;
 }
 // Texto sem acento, minusculo, um espaco so: e assim que nome e termo se comparam.
@@ -13345,19 +13381,23 @@ async function _botIaQuotaAte(env) {
   const v = Number(await _readConfig(env, 'bot_ia_quota_ate').catch(() => 0)) || 0;
   return v > Math.floor(Date.now() / 1000) ? v : 0;
 }
-async function _botIaFreio(env, grupo, deJid, provider) {
+// Conta pelo jid do grupo (06/11/2026): cada grupo de verdade tem o seu, o de teste tem outro e o
+// "Pergunte ao bot" (jid 'teste') nao entra na conta de ninguem.
+async function _botIaFreio(env, grupo, deJid, provider, jid, teste) {
   const agora = Math.floor(Date.now() / 1000);
   const dia = _brDay();
+  const onde = String(jid || '');
   try {
     const r = await env.DB.batch([
-      env.DB.prepare('SELECT COALESCE(SUM(chamadas),0) AS n FROM bot_chat WHERE grupo=? AND ts>? AND chamadas>0').bind(grupo, agora - 3600),
-      env.DB.prepare('SELECT COALESCE(SUM(chamadas),0) AS n FROM bot_chat WHERE grupo=? AND dia=? AND chamadas>0').bind(grupo, dia),
+      env.DB.prepare('SELECT COALESCE(SUM(chamadas),0) AS n FROM bot_chat WHERE jid=? AND ts>? AND chamadas>0').bind(onde, agora - 3600),
+      env.DB.prepare('SELECT COALESCE(SUM(chamadas),0) AS n FROM bot_chat WHERE jid=? AND dia=? AND chamadas>0').bind(onde, dia),
       env.DB.prepare('SELECT COALESCE(SUM(chamadas),0) AS n FROM bot_chat WHERE de_jid=? AND ts>? AND chamadas>0').bind(String(deJid || ''), agora - 600),
     ]);
     const n = (i) => Number(r[i] && r[i].results && r[i].results[0] && r[i].results[0].n) || 0;
-    if (n(0) >= (BOT_IA_HORA[provider] || BOT_IA_HORA.gemini)) return 'limite por hora do grupo';
+    if (n(0) >= (teste ? BOT_IA_HORA_TESTE : (BOT_IA_HORA[provider] || BOT_IA_HORA.gemini))) return 'limite por hora do grupo';
     if (n(1) >= (BOT_IA_DIA[grupo] || 60)) return 'limite do dia do grupo';
-    if (deJid && n(2) >= BOT_IA_PESSOA_10MIN) return 'muitas perguntas da mesma pessoa';
+    // No grupo de teste a direcao pergunta varias seguidas de proposito.
+    if (!teste && deJid && n(2) >= BOT_IA_PESSOA_10MIN) return 'muitas perguntas da mesma pessoa';
   } catch (_) { /* sem conta, sem freio: a cota do Gemini ainda segura */ }
   return '';
 }
@@ -13408,9 +13448,16 @@ async function _botIaChamar(env, system, user, o) {
   if (!gkey) { out.erro = out.tentativas.concat(['sem chave de IA']).join(' | '); out.ms = Date.now() - t0; return out; }
   out.provider = out.provider || 'gemini';
   let tentou = 0, quotaTodos = true;
-  for (const m of (opts.modelos || BOT_IA_MODELOS)) {
-    if (tentou >= (opts.maxModelos || BOT_IA_MAX_MODELOS) || resta() < 1500) break;
+  const maxM = opts.maxModelos || BOT_IA_MAX_MODELOS;
+  const listaM = opts.modelos || BOT_IA_MODELOS;
+  const vivosM = listaM.filter((x) => !((_botIaGemFora.get(x) || 0) > Date.now()));
+  const ordemM = vivosM.length ? vivosM : listaM;
+  for (let k = 0; k < ordemM.length; k++) {
+    const m = ordemM[k];
+    if (tentou >= maxM || resta() < 1500) break;
     tentou++;
+    // Ainda tem outro modelo pra tentar: teto curto, pra sobrar tempo pra ele.
+    const tetoM = (tentou < maxM && k < ordemM.length - 1) ? BOT_IA_MODELO_1_MS : BOT_IA_MODELO_MS;
     const corpo = {
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -13418,12 +13465,12 @@ async function _botIaChamar(env, system, user, o) {
       generationConfig: { temperature: opts.temperatura == null ? 0.8 : opts.temperatura, maxOutputTokens: opts.maxTokens || 1024, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
     };
     try {
-      const r = await _fetchComTeto('https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(gkey), Math.min(BOT_IA_MODELO_MS, Math.max(1500, resta())), {
+      const r = await _fetchComTeto('https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent?key=' + encodeURIComponent(gkey), Math.min(tetoM, Math.max(1500, resta())), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corpo),
       });
       if (r.status === 429) { out.tentativas.push(m + ' 429'); continue; }
       quotaTodos = false;
-      if (!r.ok) { out.tentativas.push(m + ' ' + r.status); if (r.status === 401 || r.status === 403) break; continue; }
+      if (!r.ok) { out.tentativas.push(m + ' ' + r.status); if (r.status >= 500) _botIaGemFora.set(m, Date.now() + BOT_IA_GEM_FORA_MS); if (r.status === 401 || r.status === 403) break; continue; }
       const d = await r.json();
       const c = (d.candidates || [])[0] || {};
       const txt = String((c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text) || '');
@@ -13431,7 +13478,7 @@ async function _botIaChamar(env, system, user, o) {
       if (!txt.trim()) { out.tentativas.push(m + ' vazio'); continue; }
       out.texto = txt; out.modelo = m; out.ms = Date.now() - t0;
       return out;
-    } catch (e) { quotaTodos = false; out.tentativas.push(m + ': ' + String((e && e.message) || e).slice(0, 80)); }
+    } catch (e) { quotaTodos = false; _botIaGemFora.set(m, Date.now() + BOT_IA_GEM_FORA_MS); out.tentativas.push(m + ': ' + String((e && e.message) || e).slice(0, 80)); }
   }
   out.quota = out.quota || (quotaTodos && tentou > 0);
   out.erro = out.tentativas.join(' | ').slice(0, 300) || 'sem modelo disponível';
@@ -13655,9 +13702,9 @@ function _botIaPedidoTexto(l, st, nomes, tagMap, completo) {
   if (com.length) { const t = _cobTs(com[0] && com[0].quando); L.push('Comentários no pedido: ' + com.length + (t ? ', o último em ' + _botIaHoraTxt(t) : '') + ' (o conteúdo fica na dash).'); }
   return L.join('\n');
 }
-async function _botIaRecentes(env, grupo) {
+async function _botIaRecentes(env, jid) {
   try {
-    const r = await env.DB.prepare('SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE grupo=? AND ts>? AND acao<>? ORDER BY id DESC LIMIT ?').bind(grupo, Math.floor(Date.now() / 1000) - 1800, 'provocou', BOT_IA_CONTEXTO_MSGS).all();
+    const r = await env.DB.prepare('SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE jid=? AND ts>? AND acao<>? ORDER BY id DESC LIMIT ?').bind(String(jid || ''), Math.floor(Date.now() / 1000) - 1800, 'provocou', BOT_IA_CONTEXTO_MSGS).all();
     const rows = ((r && r.results) || []).reverse();
     const L = [];
     for (const x of rows) {
@@ -13668,30 +13715,32 @@ async function _botIaRecentes(env, grupo) {
   } catch (_) { return []; }
 }
 // O texto citado e uma resposta do proprio bot? (contra o que ele respondeu nas ultimas 24 h no grupo)
-async function _botIaCitouResposta(env, grupo, citado) {
+async function _botIaCitouResposta(env, jid, citado) {
   const c = String(citado || '').trim();
   if (!c) return false;
   try {
-    const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE grupo=? AND ts>? AND acao IN (?,?) ORDER BY id DESC LIMIT 30').bind(grupo, Math.floor(Date.now() / 1000) - 86400, 'respondeu', 'pendente').all();
+    const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE jid=? AND ts>? AND acao IN (?,?) ORDER BY id DESC LIMIT 30').bind(String(jid || ''), Math.floor(Date.now() / 1000) - 86400, 'respondeu', 'pendente').all();
     return ((r && r.results) || []).some((x) => String(x.resposta || '').trim().slice(0, 120) === c.slice(0, 120));
   } catch (_) { return false; }
 }
 // AVISO A DIRECAO = push na dash (o caminho do aviso de queda), com teto por pessoa/assunto.
-async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg) {
+// `soPara` = grupo de teste: o aviso vai so pra quem ligou o teste, com chave de repeticao propria (um
+// "meu numero caiu" de teste no lugar do Guilherme nao segura o aviso de verdade dele por 30 min).
+async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg, soPara) {
   const equipe = await _botEquipe(env);
-  const chefes = equipe.filter((u) => u.role === 'diretor' || u.role === 'socio');
+  const chefes = equipe.filter((u) => (u.role === 'diretor' || u.role === 'socio') && (!soPara || u.id === soPara));
   if (!chefes.length) return { entregues: 0, nomes: [] };
-  const assunto = (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (BOT_IA_NUMERO_RE.test(texto) ? 'numero' : 'geral');
+  const assunto = (soPara ? 'teste_' : '') + (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (BOT_IA_NUMERO_RE.test(texto) ? 'numero' : 'geral');
   const agora = Math.floor(Date.now() / 1000);
   let ultimo = 0;
   try { ultimo = Number(await _readConfig(env, 'bot_iaav_' + assunto)) || 0; } catch (_) { ultimo = 0; }
   if (agora - ultimo < BOT_IA_AVISO_REPETE_S) return { entregues: 0, nomes: chefes.map((u) => u.nome), repetido: true };
   await _writeConfig(env, 'bot_iaav_' + assunto, String(agora)).catch(() => {});
   const g = _botIaGrupoCfg(cfg, grupo);
-  const body = ((quem && quem.nome) || deNome || 'Alguém') + ' no grupo ' + (g.nome || (grupo === 'cob' ? 'dos cobradores' : 'dos vendedores')) + ': "' + String(texto).replace(/\s+/g, ' ').slice(0, 140) + '"' + (resumo ? ' · ' + String(resumo).slice(0, 100) : '');
+  const body = (soPara ? '[teste] ' : '') + ((quem && quem.nome) || deNome || 'Alguém') + ' no grupo ' + (g.nome || (grupo === 'cob' ? 'dos cobradores' : 'dos vendedores')) + ': "' + String(texto).replace(/\s+/g, ' ').slice(0, 140) + '"' + (resumo ? ' · ' + String(resumo).slice(0, 100) : '');
   let entregues = 0;
   for (const u of chefes) {
-    try { entregues += await _wpParaPessoa(env, u.id, { title: 'Barbadinho: pedido de ajuda no grupo', body, tag: 'bot-ia-' + assunto.replace(/[^a-z0-9]/gi, ''), url: '/ferramentas/bot' + (grupo === 'cob' ? '?aba=cob' : ''), aviso: true }, 'bot', null); } catch (_) {}
+    try { entregues += await _wpParaPessoa(env, u.id, { title: soPara ? 'Barbadinho (teste): pedido de ajuda no grupo' : 'Barbadinho: pedido de ajuda no grupo', body, tag: 'bot-ia-' + assunto.replace(/[^a-z0-9]/gi, ''), url: '/ferramentas/bot' + (grupo === 'cob' ? '?aba=cob' : ''), aviso: true }, 'bot', null); } catch (_) {}
   }
   await _botLog(env, { dia: _brDay(), tipo: 'ia_aviso', nome: chefes.map((u) => u.nome).join(', '), fone: '', via: 'push', status: entregues ? 'enviado' : 'erro', erro: entregues ? '' : 'ninguém da direção com a dash no celular (push)', texto: body });
   return { entregues, nomes: chefes.map((u) => u.nome) };
@@ -13759,7 +13808,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   else if (b.responde) {
     // Citar o resumo ou uma comemoracao so e pergunta se parece pergunta; citar uma RESPOSTA do bot e conversa.
     if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(texto)) modo = 'chamado';
-    else if (await _botIaCitouResposta(env, grupo, b.citado)) modo = 'chamado';
+    else if (await _botIaCitouResposta(env, b.jid, b.citado)) modo = 'chamado';
   }
   if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(texto)) modo = 'espontaneo';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
@@ -13781,7 +13830,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   }
   const akey = o.teste ? null : await getAIKey(env, 'anthropic');
   if (!o.teste) {
-    const freio = await _botIaFreio(env, grupo, b.de_jid, akey ? 'anthropic' : 'gemini');
+    const freio = await _botIaFreio(env, grupo, b.de_jid, akey ? 'anthropic' : 'gemini', b.jid, !!o.grupoTeste);
     if (freio) { res.motivo = freio; return res; }
   }
   // 4. Quem perguntou e o contexto (o blob e lido UMA vez e passado adiante)
@@ -13838,7 +13887,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Pessoa não identificada: NÃO dê dado de pedido nem de número.');
     viu.push('sem identificação');
   }
-  const recentes = o.teste ? [] : await _botIaRecentes(env, grupo);
+  const recentes = o.teste ? [] : await _botIaRecentes(env, b.jid);
   const montaUser = (extra) => [
     ...cab, '',
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
@@ -13878,7 +13927,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   const avisar = String(j.avisar_direcao || '').trim();
   if (avisar && !o.teste) {
     res.alerta = 1;
-    try { await _botIaAvisar(env, grupo, quem, b.de_nome, texto, avisar, cfg); } catch (_) {}
+    try { await _botIaAvisar(env, grupo, quem, b.de_nome, texto, avisar, cfg, o.grupoTeste ? (String((cfg.ia && cfg.ia.teste && cfg.ia.teste.por) || '') || '-') : ''); } catch (_) {}
   } else if (avisar) res.alerta = 1;
   return res;
 }
@@ -13892,12 +13941,14 @@ async function _botIaMensagem(env, cfg, b) {
   const deJid = _botIaJidOk(b.de_jid) ? String(b.de_jid) : '';
   const deFone = _botFone(b.de_fone);
   const deNome = _botTexto300(b.de_nome, 80).trim();
-  // Quem e quem se preenche sempre (so quem/quando, sem texto).
-  try {
+  // Quem e quem se preenche sempre (so quem/quando, sem texto). No grupo de teste nao: la quem escreve
+  // conta como a pessoa escolhida na tela.
+  const grupoTeste = _botIaEhTeste(cfg, b.jid);
+  if (!grupoTeste) try {
     await env.DB.prepare('INSERT INTO bot_quem (grupo, de_jid, fone, nome, ultimo_ts, n) VALUES (?,?,?,?,?,1) ON CONFLICT(grupo, de_jid) DO UPDATE SET fone=CASE WHEN excluded.fone<>\'\' THEN excluded.fone ELSE bot_quem.fone END, nome=excluded.nome, ultimo_ts=excluded.ultimo_ts, n=bot_quem.n+1')
       .bind(grupo, deJid || ('nome:' + _botIaNorm(deNome)), deFone, deNome, agora).run();
   } catch (_) {}
-  if (!ia.responde[grupo]) return { ok: true, ignorar: true };
+  if (!grupoTeste && !ia.responde[grupo]) return { ok: true, ignorar: true };
   const msgId = _botTexto300(b.msg_id, 80).trim();
   if (!msgId) return { ok: true, ignorar: true };
   const ts = Number(b.ts) || agora;
@@ -13910,7 +13961,14 @@ async function _botIaMensagem(env, cfg, b) {
     if (!(ins && ins.meta && ins.meta.changes > 0)) return { ok: true, ignorar: true, motivo: 'repetida' };
     chatId = Number(ins.meta.last_row_id) || 0;
   } catch (e) { return { ok: false, error: 'não consegui gravar a mensagem' }; }
-  const r = await _botIaResponder(env, cfg, { ...b, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome });
+  let quemTeste = null;
+  if (grupoTeste) {
+    // Quem escreve no grupo de teste conta como a pessoa escolhida; sem ninguem escolhido, como quem ligou o teste.
+    const equipe = await _botEquipe(env);
+    const u = equipe.find((e) => e.id === String(ia.teste.quem_id || ia.teste.por || ''));
+    quemTeste = u ? { id: u.id, nome: u.nome, role: u.role, chefe: u.role === 'diretor' || u.role === 'socio', equipe } : { id: '', nome: '', role: '', chefe: false, equipe };
+  }
+  const r = await _botIaResponder(env, cfg, { ...b, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste } : undefined);
   if (r.acao === 'visto') return { ok: true, resposta: '', chat_id: chatId };
   const acao = r.responder ? 'pendente' : r.acao;
   try {
@@ -13936,6 +13994,69 @@ async function _botIaFaxina(env) {
   try { await env.DB.prepare('DELETE FROM bot_chat WHERE ts < ?').bind(agora - BOT_IA_VIDA_S).run(); } catch (_) {}
   try { await env.DB.prepare('DELETE FROM bot_quem WHERE ultimo_ts < ?').bind(agora - 30 * 86400).run(); } catch (_) {}
   try { await env.DB.prepare("UPDATE bot_chat SET acao='erro', resp_status='erro', motivo='não saiu (o agente não confirmou)' WHERE acao='pendente' AND ts < ?").bind(agora - BOT_IA_PENDENTE_S).run(); } catch (_) {}
+}
+
+// ─── GRUPO DE TESTE: a linha que sai no proprio grupo quando ele liga ou muda ───
+function _botIaTesteMudou(antes, depois) {
+  const a = antes || {}, d = depois || {};
+  return !!(d.ativo && d.id && (!a.ativo || a.id !== d.id || a.como !== d.como || a.quem_id !== d.quem_id));
+}
+function _botIaTesteTexto(cfg, equipe) {
+  const ia = cfg.ia || _botIaPadrao();
+  const t = ia.teste || {};
+  const como = t.como === 'vend' ? 'vend' : 'cob';
+  const pessoa = (equipe || []).find((e) => e.id === String(t.quem_id || t.por || ''));
+  return 'Modo de teste ligado. Aqui eu respondo como se fosse o grupo dos ' + (como === 'vend' ? 'Vendedores' : 'Cobradores') + (pessoa ? ', e quem escrever conta como ' + pessoa.nome : '') + '. ' + (ia.so_marcado && ia.so_marcado[como] ? 'Me marca (@Barbadinho) e pergunta.' : 'Me marca (@Barbadinho) e pergunta; problema de número (caiu, travou) eu respondo mesmo sem marcar.');
+}
+
+// ─── O TEXTO DA PROVOCACAO (o tick e o "Ver provocação" da tela usam o mesmo). Sem IA, a frase reserva ───
+async function _botIaProvocaTexto(env, cfg, v, prox, faltam, ultimoMs, lider) {
+  const agoraBR = _agoraBR();
+  const agoraMs = Date.now();
+  const system = _botIaSistema(cfg, 'vend', _botIaExemplos(cfg, v.id)) + '\n\nAgora você NÃO está respondendo ninguém: você vai cutucar um vendedor que está parado perto de um marco. Responda só com JSON {"texto": "..."} (uma provocação curta, engraçada, de 1 ou 2 frases, no tom do grupo, citando que faltam ' + faltam + ' pra ' + prox + ', sem número inventado, sem comparar com os outros).';
+  const user = 'Vendedor: ' + v.nome + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + ').' + (ultimoMs ? ' Último pedido dele há ' + Math.round((agoraMs - ultimoMs) / 60000) + ' minutos.' : ' Ainda sem pedido hoje.') + (lider && lider.id !== v.id && lider.pedidos > 0 ? ' Líder do dia: ' + lider.nome + ' com ' + lider.pedidos + ' (só pra você saber; não compare).' : (v.pedidos > 0 ? ' Ele é o líder do dia.' : '')) + ' Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
+  const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 1, maxTokens: 300, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
+  let texto = '';
+  if (ch.texto) { const j = _botIaJson(ch.texto); const lim = _botIaLimpa(j && j.texto, []); if (lim.texto && !lim.barrou) texto = lim.texto; }
+  const reserva = !texto;
+  if (!texto) texto = _botFrase('{nome}, faltam {faltam} pra bater {n}. Vai dar mole agora?', { nome: v.nome, faltam, n: prox });
+  if (ch.quota) await _writeConfig(env, 'bot_ia_quota_ate', String(Math.floor(agoraMs / 1000) + BOT_IA_QUOTA_PAUSA_S)).catch(() => {});
+  return { texto, reserva, ch };
+}
+
+// "VER PROVOCAÇÃO" (06/11/2026): a provocacao do tick pra um vendedor escolhido, AGORA e sem as
+// condicoes (a 1 ou 2 do marco, parado ha 45 min, horario, uma por dia). Com o grupo de teste ligado
+// como Vendedores ela sai la tambem; nos grupos de verdade, nunca.
+async function _botIaProvocaTeste(env, cfg, vid) {
+  const dia = _brDay();
+  const st = await _getDashData(env);
+  const dados = await _botDados(env, dia, cfg, 'diario', false, st);
+  const vends = Array.isArray(dados && dados.vendedores) ? dados.vendedores : [];
+  const v = vends.find((x) => x.id === String(vid || ''));
+  if (!v) return { ok: false, error: 'Escolha um vendedor pra ver a provocação' };
+  const marcos = (cfg.marcos && Array.isArray(cfg.marcos.lista) ? cfg.marcos.lista : []).map((m) => Number(m.n) || 0).filter((n) => n > 0).sort((a, b) => a - b);
+  const prox = marcos.find((n) => n > v.pedidos);
+  if (!prox) return { ok: false, error: v.nome + ' já passou de todas as comemorações (' + v.pedidos + ' pedidos hoje)' };
+  const ini = _botInicioDia(dia) * 1000;
+  let ultimo = 0;
+  for (const l of (Array.isArray(st && st.leads) ? st.leads : [])) {
+    if (!l || l.afl || String(l.at || '') !== v.id || _botCancelado(l)) continue;
+    const t = _botCriadoMs(l);
+    if (t >= ini && t > ultimo) ultimo = t;
+  }
+  const lider = vends.slice().sort((a, b) => b.pedidos - a.pedidos)[0];
+  const p = await _botIaProvocaTexto(env, cfg, v, prox, prox - v.pedidos, ultimo, lider);
+  const t = (cfg.ia && cfg.ia.teste) || {};
+  let noGrupo = '';
+  if (t.como === 'vend' && _botIaEhTeste(cfg, t.id)) {
+    const r = await _botEntregarGrupo(env, cfg, p.texto, 'ia_provoca', dia, null, { id: t.id, nome: t.nome || 'Grupo de teste' });
+    if (r.status !== 'erro') noGrupo = t.nome || 'grupo de teste';
+  }
+  try {
+    await env.DB.prepare('INSERT INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(Math.floor(Date.now() / 1000), dia, 'vend', 'teste', 'teste-prov:' + Date.now() + ':' + v.id, '', '', 'Barbadinho (teste)', v.id, 'provocação de teste: faltam ' + (prox - v.pedidos) + ' pra ' + prox, 'teste', _botTexto300(p.texto, 1500), p.reserva ? _botTexto300('frase reserva: ' + (p.ch.erro || ''), 200) : '', p.ch.modelo || '', Number(p.ch.ms) || 0, 1, 0).run();
+  } catch (_) {}
+  return { ok: true, responder: true, resposta: p.texto, motivo: p.reserva ? 'a IA não respondeu, saiu a frase reserva' : '', modelo: p.ch.modelo || '', ms: Number(p.ch.ms) || 0, viu: ['placar de hoje: ' + v.pedidos + ' ' + (v.pedidos === 1 ? 'pedido' : 'pedidos') + ', próximo marco ' + prox], contexto: '', tentativas: p.ch.tentativas || [], no_grupo: noGrupo };
 }
 
 // ─── PROVOCACAO PERTO DO MARCO: tick proprio, toda batida, so no grupo dos vendedores ───
@@ -13978,13 +14099,8 @@ async function _botIaProvocaTick(env, cfg, dia) {
     if (!ultimo || agoraMs - ultimo < BOT_IA_PROVOCA_PARADO_S * 1000) continue;
     if (!(await _botReserva(env, 'bot_iaprov_' + dia + '_' + v.id))) continue;
     const lider = dados.vendedores.slice().sort((a, b) => b.pedidos - a.pedidos)[0];
-    const system = _botIaSistema(cfg, 'vend', _botIaExemplos(cfg, v.id)) + '\n\nAgora você NÃO está respondendo ninguém: você vai cutucar um vendedor que está parado perto de um marco. Responda só com JSON {"texto": "..."} (uma provocação curta, engraçada, de 1 ou 2 frases, no tom do grupo, citando que faltam ' + faltam + ' pra ' + prox + ', sem número inventado, sem comparar com os outros).';
-    const user = 'Vendedor: ' + v.nome + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Último pedido dele há ' + Math.round((agoraMs - ultimo) / 60000) + ' minutos.' + (lider && lider.id !== v.id ? ' Líder do dia: ' + lider.nome + ' com ' + lider.pedidos + ' (só pra você saber; não compare).' : ' Ele é o líder do dia.') + ' Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
-    const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 1, maxTokens: 300, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
-    let texto = '';
-    if (ch.texto) { const j = _botIaJson(ch.texto); const lim = _botIaLimpa(j && j.texto, []); if (lim.texto && !lim.barrou) texto = lim.texto; }
-    if (!texto) texto = _botFrase('{nome}, faltam {faltam} pra bater {n}. Vai dar mole agora?', { nome: v.nome, faltam, n: prox });
-    if (ch.quota) await _writeConfig(env, 'bot_ia_quota_ate', String(Math.floor(agoraMs / 1000) + BOT_IA_QUOTA_PAUSA_S)).catch(() => {});
+    const p = await _botIaProvocaTexto(env, cfg, v, prox, faltam, ultimo, lider);
+    const texto = p.texto, ch = p.ch;
     const r = await _botEntregarGrupo(env, cfg, texto, 'ia_provoca', dia);
     try {
       await env.DB.prepare('INSERT INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta, resp_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -16929,6 +17045,8 @@ async function handleBotConfig(req, env) {
     // Outro login salvou depois que esta tela carregou: devolve a versao nova pra tela juntar e conferir.
     if (baseVer != null && lido.existe && baseVer !== (Number(lido.meta.ver) || 0)) return json({ ok: false, error: 'conflito', cfg: atual, meta: lido.meta }, 409);
     const cfg = _botNormaliza(b, atual);
+    // Quem liga o grupo de teste (ou muda ele) e quem recebe o aviso a direcao que o teste gerar.
+    if (cfg.ia && cfg.ia.teste && cfg.ia.teste.ativo && (_botIaTesteMudou(atual.ia && atual.ia.teste, cfg.ia.teste) || !cfg.ia.teste.por)) cfg.ia.teste.por = String(u.id);
     if (b && 'numero' in b) {
       const n = await _botConfereNumero(env, cfg.numero.phone_number_id);
       if (n.erro) return err(n.erro);
@@ -16954,6 +17072,11 @@ async function handleBotConfig(req, env) {
       if (!antes && cfg.ia && cfg.ia.responde && cfg.ia.responde[g] && _botIaGrupoCfg(cfg, g).id) {
         try { await _botEntregarGrupo(env, cfg, BOT_IA_APRESENTACAO, g === 'cob' ? 'cob_livre' : 'livre', _brDay(), null, g === 'cob' ? cfg.cobranca.grupo : null); } catch (_) {}
       }
+    }
+    // GRUPO DE TESTE: ao ligar (ou trocar o grupo, o jeito ou a pessoa), uma linha so no grupo de teste
+    // dizendo como o bot responde ali. Os grupos de verdade nao ficam sabendo do teste.
+    if (_botIaTesteMudou(atual.ia && atual.ia.teste, cfg.ia && cfg.ia.teste) && _botIaEhTeste(cfg, cfg.ia.teste.id)) {
+      try { await _botEntregarGrupo(env, cfg, _botIaTesteTexto(cfg, await _botEquipe(env)), 'livre', _brDay(), null, { id: cfg.ia.teste.id, nome: cfg.ia.teste.nome || 'Grupo de teste' }); } catch (_) {}
     }
     return json({ ok: true, cfg, meta });
   }
@@ -17204,8 +17327,9 @@ async function handleBotChat(req, env) {
   const nomeDe = (id) => { const x = equipe.find((e) => e.id === String(id || '')); return x ? x.nome : ''; };
   let itens = [], pessoas = [];
   try {
-    const r = await env.DB.prepare("SELECT id, ts, grupo, de_nome, quem_id, substr(texto,1,300) AS texto, acao, substr(resposta,1,400) AS resposta, motivo, modelo, ms, alerta, resp_status FROM bot_chat WHERE grupo=? AND acao<>'visto' ORDER BY id DESC LIMIT ?").bind(grupo, lim).all();
-    itens = ((r && r.results) || []).map((x) => ({ ...x, quem_nome: nomeDe(x.quem_id) }));
+    const tId = String((cfg.ia && cfg.ia.teste && cfg.ia.teste.id) || '');
+    const r = await env.DB.prepare("SELECT id, ts, grupo, jid, de_nome, quem_id, substr(texto,1,300) AS texto, acao, substr(resposta,1,400) AS resposta, motivo, modelo, ms, alerta, resp_status FROM bot_chat WHERE grupo=? AND acao<>'visto' ORDER BY id DESC LIMIT ?").bind(grupo, lim).all();
+    itens = ((r && r.results) || []).map((x) => ({ ...x, quem_nome: nomeDe(x.quem_id), no_teste: !!tId && String(x.jid || '') === tId }));
   } catch (_) {}
   try {
     const r = await env.DB.prepare('SELECT grupo, de_jid AS jid, fone, nome, ultimo_ts, n FROM bot_quem WHERE grupo=? AND ultimo_ts>? ORDER BY ultimo_ts DESC LIMIT 60').bind(grupo, Math.floor(Date.now() / 1000) - 30 * 86400).all();
@@ -17225,6 +17349,11 @@ async function handleBotIaTeste(req, env) {
   if (!_botPodeUsar(u)) return err('Sem permissão', 403);
   await _botEnsureTables(env);
   let b = {}; try { b = await req.json(); } catch (_) { b = {}; }
+  // { provoca: true, quem_id }: a provocacao do vendedor, agora (e no grupo de teste, se ligado como Vendedores).
+  if (b.provoca) {
+    const rp = await _botIaProvocaTeste(env, await _botCfgLer(env, true), String(b.quem_id || ''));
+    return rp.ok ? json(rp) : err(rp.error || 'Não consegui montar a provocação');
+  }
   const grupo = b.grupo === 'cob' ? 'cob' : 'vend';
   const texto = _botTexto300(b.texto, 1000).trim();
   if (!texto) return err('Escreva a pergunta');
@@ -17460,8 +17589,8 @@ async function handleBotAgente(req, env) {
         }
       } catch (_) {}
     }
-    // BOT VIVO: os grupos que o agente repassa pra ca (os dois configurados; quem e quem se preenche
-    // mesmo com a resposta desligada).
+    // BOT VIVO: os grupos que o agente repassa pra ca (os de verdade com "Responder no grupo" ligado e o
+    // grupo de teste ligado).
     let escuta = [];
     try { escuta = _botIaEscuta(await _botCfgLer(env)); } catch (_) { escuta = []; }
     return json({ ok: true, cmd, itens, escuta });

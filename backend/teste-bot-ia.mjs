@@ -110,6 +110,7 @@ function monta(mundo) {
   const envios = [];                          // bot_envios: o registro
   const chamadas = [];                        // cada chamada ao Gemini/Anthropic falso
   const pushes = [];                          // _wpParaPessoa
+  const tetos = [];                           // o teto (ms) de cada chamada de IA
   const ordem = { atendente: 0, cobrador: 1, diretor: 2, socio: 3 };
   const porNome = (a, b) => String(a.name).localeCompare(String(b.name));
   const tem = (k) => Object.prototype.hasOwnProperty.call(cfgdb, k);
@@ -159,13 +160,13 @@ function monta(mundo) {
     if (/DELETE FROM bot_chat WHERE ts </.test(sql)) { for (let i = chat.length - 1; i >= 0; i--) if (Number(chat[i].ts) < Number(a[0])) chat.splice(i, 1); return um; }
     if (/SUM\(chamadas\)/.test(sql)) {
       let f;
-      if (/WHERE grupo=\? AND ts>\?/.test(sql)) f = (x) => x.grupo === a[0] && Number(x.ts) > Number(a[1]);
-      else if (/WHERE grupo=\? AND dia=\?/.test(sql)) f = (x) => x.grupo === a[0] && x.dia === a[1];
+      if (/WHERE jid=\? AND ts>\?/.test(sql)) f = (x) => x.jid === a[0] && Number(x.ts) > Number(a[1]);
+      else if (/WHERE jid=\? AND dia=\?/.test(sql)) f = (x) => x.jid === a[0] && x.dia === a[1];
       else f = (x) => x.de_jid === a[0] && Number(x.ts) > Number(a[1]);
       return { results: [{ n: chat.filter((x) => f(x) && Number(x.chamadas) > 0).reduce((s, x) => s + Number(x.chamadas), 0) }], meta: {} };
     }
-    if (/SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat/.test(sql)) return { results: chat.filter((x) => x.grupo === a[0] && Number(x.ts) > Number(a[1]) && x.acao !== a[2]).sort(desc).slice(0, Number(a[3])), meta: {} };
-    if (/SELECT resposta FROM bot_chat/.test(sql)) return { results: chat.filter((x) => x.grupo === a[0] && Number(x.ts) > Number(a[1]) && (x.acao === a[2] || x.acao === a[3])).sort(desc).slice(0, 30).map((x) => ({ resposta: x.resposta })), meta: {} };
+    if (/SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && x.acao !== a[2]).sort(desc).slice(0, Number(a[3])), meta: {} };
+    if (/SELECT resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && (x.acao === a[2] || x.acao === a[3])).sort(desc).slice(0, 30).map((x) => ({ resposta: x.resposta })), meta: {} };
     if (/COUNT\(\*\) AS n FROM bot_chat WHERE acao='provocou'/.test(sql)) return { results: [{ n: chat.filter((x) => x.acao === 'provocou' && x.dia === a[0]).length }], meta: {} };
     if (/FROM bot_chat WHERE grupo=\? AND acao<>'visto'/.test(sql)) return { results: chat.filter((x) => x.grupo === a[0] && x.acao !== 'visto').sort(desc).slice(0, Number(a[1])).map((x) => ({ ...x, texto: String(x.texto || '').slice(0, 300), resposta: String(x.resposta || '').slice(0, 400) })), meta: {} };
     // bot_quem: quem escreve no grupo (upsert por grupo + jid)
@@ -237,7 +238,7 @@ function monta(mundo) {
     Date: DataFalsa,
     console: { log() {}, error() {}, warn() {} },
     fetch: fetchFalso,
-    _fetchComTeto: (url, _ms, init) => fetchFalso(url, init),
+    _fetchComTeto: (url, teto, init) => { tetos.push(teto); return fetchFalso(url, init); },
     AbortSignal,
     crypto,
     _agoraBR: () => new DataFalsa(RELOGIO.agora - 3 * 3600000),
@@ -261,8 +262,8 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botIaExemplos, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS };');
-  return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, estado, mundo };
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botIaExemplos, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste };');
+  return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
 let ok = 0;
@@ -913,6 +914,141 @@ titulo('14. A faxina diaria do bot_chat (visto dura 1 dia, o resto 60)');
   conf(ids.includes('r2') && !ids.includes('r61'), 'respondeu de 2 dias fica; de 61 dias some (vida de 60 dias)');
   conf(m.chat.find((x) => x.msg_id === 'p10').acao === 'erro' && m.chat.find((x) => x.msg_id === 'p1').acao === 'pendente', 'pendente ha 10 min vira erro ("nao saiu"); pendente ha 1 min espera');
   conf(m.quem.length === 1 && m.quem[0].nome === 'novo', 'quem e quem com mais de 30 dias some');
+}
+
+// ══ 16. O GRUPO DE TESTE ═══════════════════════════════════════════════════════════════
+titulo('16. O grupo de teste (o bot responde como um dos grupos, so la)');
+const TG = '120363432063011744@g.us';   // o "Aa" do Bruno (ele e o bot)
+const BRUNO_WA = { de_jid: '5515988889999@s.whatsapp.net', de_fone: '5515988889999', de_nome: 'Bruno' };
+const CFG_TESTE = (t, extra) => ({ ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { vend: false, cob: false }, teste: { ativo: true, id: TG, nome: 'Aa', como: 'cob', quem_id: BRYAN, por: 'socio_x4dy6d', ...(t || {}) } }, ...(extra || {}) });
+{
+  const { api } = monta({});
+  const p = api._botNormaliza({}, null).ia.teste;
+  conf(p.ativo === false && p.id === '' && p.como === 'cob', 'padrao: grupo de teste desligado, sem grupo, como cobradores');
+  const n = api._botNormaliza(CFG_TESTE({ como: 'vend', quem_id: GUI }), null).ia.teste;
+  conf(n.ativo && n.id === TG && n.nome === 'Aa' && n.como === 'vend' && n.quem_id === GUI && n.por === 'socio_x4dy6d', 'liga com grupo, nome, jeito, pessoa e quem ligou');
+  conf(api._botNormaliza(CFG_TESTE({ id: 'lixo' }), null).ia.teste.ativo === false, 'id que nao e de grupo: desliga');
+  conf(api._botNormaliza(CFG_TESTE({ id: GV }), null).ia.teste.ativo === false, 'o grupo de teste nunca e o dos vendedores de verdade: desliga');
+  conf(api._botNormaliza(CFG_TESTE({ id: GC }), null).ia.teste.ativo === false, 'nem o dos cobradores');
+  const base = api._botNormaliza(CFG_TESTE(), null);
+  const soTom = api._botNormaliza({ ia: { tom: { vend: 'outro' } } }, base).ia.teste;
+  conf(soTom.ativo && soTom.id === TG && soTom.quem_id === BRYAN && soTom.por === 'socio_x4dy6d', 'salvar outra parte da conversa nao mexe no grupo de teste');
+  const desl = api._botNormaliza({ ia: { teste: { ativo: false } } }, base).ia.teste;
+  conf(desl.ativo === false && desl.id === TG && desl.quem_id === BRYAN, 'desligar o teste guarda o grupo e a pessoa escolhidos');
+}
+{
+  const { api } = monta({});
+  conf(JSON.stringify(api._botIaEscuta(api._botNormaliza(CFG_TESTE(), null))) === JSON.stringify([TG]), 'escuta: com os grupos de verdade desligados, so o de teste');
+  conf(api._botIaEscuta(api._botNormaliza(CFG_TESTE({ ativo: false }), null)).length === 0, 'teste desligado: escuta vazia');
+  const ambos = api._botIaEscuta(api._botNormaliza({ ...CFG_TESTE(), ia: { ...CFG_TESTE().ia, responde: { vend: true, cob: false } } }, null));
+  conf(ambos.length === 2 && ambos[0] === GV && ambos[1] === TG, 'com o dos vendedores ligado: os dois');
+  const cfg = api._botNormaliza(CFG_TESTE(), null);
+  conf(api._botIaGrupoDe(cfg, TG) === 'cob' && api._botIaGrupoDe(api._botNormaliza(CFG_TESTE({ como: 'vend' }), null), TG) === 'vend', 'a mensagem do grupo de teste e tratada como o grupo escolhido');
+  conf(api._botIaGrupoDe(cfg, GV) === 'vend' && api._botIaGrupoDe(cfg, GC) === 'cob' && api._botIaGrupoDe(cfg, '999@g.us') === '', 'os de verdade continuam os de verdade; outro grupo nao e nada');
+}
+{
+  // O Bruno escreve no Aa marcando o bot: responde como o Bryan, no grupo dos cobradores, com os de verdade desligados.
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), ia: [{ json: { responder: true, texto: 'Pagou sim, no Pix em 04/11.' } }] });
+  const cfg = m.api._botNormaliza(m.mundo.cfg, null);
+  const r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: TG, texto: 'a joselina pagou?', menciona: true, ...BRUNO_WA }));
+  conf(r.ok && r.resposta === 'Pagou sim, no Pix em 04/11.', 'no grupo de teste o bot responde mesmo com os grupos de verdade desligados');
+  conf(/Quem perguntou: Bryan Amorim \(cobrador\)/.test(m.chamadas[0].user) && /Grupo: Cobradores/.test(m.chamadas[0].user), 'quem escreveu conta como o Bryan, no grupo dos Cobradores');
+  conf(/Joselina/.test(m.chamadas[0].user), 'com o pedido da fila do Bryan no contexto');
+  conf(m.chat.length === 1 && m.chat[0].jid === TG && m.chat[0].grupo === 'cob' && m.chat[0].quem_id === BRYAN && m.chat[0].acao === 'pendente', 'a linha fica com o jid do grupo de teste, como cobradores, no nome do Bryan');
+  conf(m.quem.length === 0, 'o quem e quem nao guarda quem escreve no grupo de teste');
+  const fora = await m.api._botIaMensagem(m.env, cfg, msg({ jid: GC, texto: 'a joselina pagou?', menciona: true, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }));
+  conf(fora.ignorar === true && m.chamadas.length === 1, 'no grupo de verdade (desligado) nada muda: ignorado, sem IA');
+}
+{
+  // Sem pessoa escolhida: conta como quem ligou o teste (o Bruno, socio: ve a fila inteira).
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE({ quem_id: '' }), ia: [JSON_OK] });
+  await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: 'o carlos pereira pagou?', menciona: true, ...BRUNO_WA }));
+  conf(/Quem perguntou: Bruno Correa \(sócio, da direção\)/.test(m.chamadas[0].user) && /Carlos Pereira/.test(m.chamadas[0].user), 'sem pessoa escolhida: conta como quem ligou o teste, com a visao da direcao');
+}
+{
+  // 8 chamadas na ultima hora no grupo de VERDADE dos cobradores nao seguram o de teste, e vice-versa.
+  const cheio = Array.from({ length: 8 }, (_, i) => linhaChat({ msg_id: 'g' + i, grupo: 'cob', jid: GC }));
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), chat: cheio, ia: [JSON_OK] });
+  const cfg = m.api._botNormaliza(m.mundo.cfg, null);
+  const r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: TG, texto: 'quantos tenho pra cobrar hoje?', menciona: true, ...BRUNO_WA }));
+  conf(r.resposta === 'Fechado, pode deixar.' && m.chamadas.length === 1, 'grupo de verdade com 8 chamadas na hora: o de teste responde (conta separada)');
+  conf(await m.api._botIaFreio(m.env, 'cob', '', 'gemini', GC, false) === 'limite por hora do grupo' && await m.api._botIaFreio(m.env, 'cob', '', 'gemini', TG, true) === '', 'o freio conta por grupo (jid): o de verdade cheio, o de teste livre');
+  const m2 = monta({ ...MUNDO, cfg: CFG_TESTE(), ia: [JSON_OK] });
+  const cfg2 = m2.api._botNormaliza(m2.mundo.cfg, null);
+  let respondeu = 0;
+  for (let i = 0; i < 5; i++) { const x = await m2.api._botIaMensagem(m2.env, cfg2, msg({ jid: TG, texto: 'pergunta ' + i + ' sobre o pedido?', menciona: true, ...BRUNO_WA })); if (x.resposta) respondeu++; }
+  conf(respondeu === 5, 'no teste a direcao pergunta 5 seguidas e todas respondem (sem o teto de 3 por pessoa)');
+  conf(await m2.api._botIaFreio(m2.env, 'cob', BRUNO_WA.de_jid, 'gemini', GC, false) === 'muitas perguntas da mesma pessoa', 'no grupo de verdade o teto de 3 por pessoa continua');
+}
+{
+  // Problema relatado no teste: o aviso vai so pra quem ligou o teste, marcado como teste.
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE({ como: 'vend', quem_id: GUI }), ia: [{ json: { responder: true, texto: 'Relaxa, vou avisar.', avisar_direcao: 'numero caiu' } }] });
+  const cfg = m.api._botNormaliza(m.mundo.cfg, null);
+  const r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: TG, texto: 'meu numero caiu', ...BRUNO_WA }));
+  conf(r.resposta === 'Relaxa, vou avisar.', 'como Vendedores, "meu numero caiu" sem marcar responde (igual ao grupo de verdade)');
+  conf(/Quem perguntou: Guilherme \(vendedor\)/.test(m.chamadas[0].user) && /Grupo: Vendedores/.test(m.chamadas[0].user), 'e conta como o Guilherme, no grupo dos Vendedores');
+  conf(m.pushes.length === 1 && m.pushes[0].userId === 'socio_x4dy6d' && /^\[teste\] Guilherme/.test(m.pushes[0].payload.body) && /teste/.test(m.pushes[0].payload.title), 'aviso a direcao: so pra quem ligou o teste, marcado [teste]');
+  conf(!m.cfgdb['bot_iaav_' + GUI + ':numero'] && !!m.cfgdb['bot_iaav_teste_' + GUI + ':numero'], 'a repeticao do aviso de teste tem chave propria (nao segura o aviso de verdade do Guilherme)');
+}
+{
+  // As ultimas mensagens que a IA ve sao so as do grupo de teste.
+  const chat = [linhaChat({ msg_id: 'real1', grupo: 'cob', jid: GC, texto: 'conversa do grupo de verdade', resposta: 'resposta real', chamadas: 0 }), linhaChat({ msg_id: 'tst1', grupo: 'cob', jid: TG, texto: 'conversa do teste', resposta: 'resposta teste', chamadas: 0 })];
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), chat, ia: [JSON_OK] });
+  await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: 'e a maria silva?', menciona: true, ...BRUNO_WA }));
+  conf(/conversa do teste/.test(m.chamadas[0].user) && !/conversa do grupo de verdade/.test(m.chamadas[0].user), 'o contexto do grupo de teste nao mistura com o grupo de verdade');
+}
+{
+  // Ultimas conversas na tela: marca o que veio do grupo de teste.
+  const chat = [linhaChat({ msg_id: 'a1', grupo: 'cob', jid: GC }), linhaChat({ msg_id: 'a2', grupo: 'cob', jid: TG })];
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), chat });
+  const j = (await m.api.handleBotChat({ method: 'GET', url: 'https://api.sellwave.com.br/api/bot/chat?grupo=cob', headers: { get: () => null } }, m.env))._json;
+  conf(j.itens.length === 2 && j.itens.find((x) => x.jid === TG).no_teste === true && j.itens.find((x) => x.jid === GC).no_teste === false, 'GET /api/bot/chat: no_teste so nas linhas do grupo de teste');
+}
+{
+  const { api } = monta({});
+  const cfg = api._botNormaliza(CFG_TESTE(), null);
+  const t = api._botIaTesteTexto(cfg, [{ id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador' }]);
+  conf(/grupo dos Cobradores/.test(t) && /conta como Bryan Amorim/.test(t) && /Me marca \(@Barbadinho\) e pergunta\.$/.test(t), 'a linha do teste diz o grupo, a pessoa e que precisa marcar (cobradores)');
+  const tv = api._botIaTesteTexto(api._botNormaliza(CFG_TESTE({ como: 'vend', quem_id: GUI }), null), [{ id: GUI, nome: 'Guilherme', role: 'atendente' }]);
+  conf(/grupo dos Vendedores/.test(tv) && /mesmo sem marcar/.test(tv), 'como vendedores: avisa que problema de numero responde sem marcar');
+  const a = cfg.ia.teste;
+  conf(api._botIaTesteMudou(null, a) && api._botIaTesteMudou({ ...a, ativo: false }, a) && api._botIaTesteMudou({ ...a, como: 'vend' }, a) && api._botIaTesteMudou({ ...a, quem_id: GUI }, a) && api._botIaTesteMudou({ ...a, id: '1@g.us' }, a), 'manda a linha: ligou, trocou o grupo, o jeito ou a pessoa');
+  conf(!api._botIaTesteMudou(a, a) && !api._botIaTesteMudou(a, { ...a, ativo: false }) && !api._botIaTesteMudou(a, { ...a, nome: 'Outro nome' }), 'nao manda: igual, desligou ou so o nome mudou');
+}
+{
+  // "Ver provocação": a provocacao do vendedor escolhido, agora, e no grupo de teste ligado como Vendedores.
+  const m = monta({ ...mundoProv(3, 5), cfg: CFG_TESTE({ como: 'vend', quem_id: GUI }), ia: [{ json: { texto: 'Guilherme, faltam 2 pra 5, bora?' } }] });
+  const r = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { provoca: true, quem_id: GUI }), m.env);
+  conf(r._json.ok && r._json.resposta === 'Guilherme, faltam 2 pra 5, bora?' && r._json.no_grupo === 'Aa', 'devolve a provocacao e manda no grupo de teste');
+  conf(m.fila.length === 1 && m.fila[0].jid === TG && m.fila[0].tipo === 'ia_provoca', 'na fila do bot do PC, pro grupo de teste (nunca pro grupo dos vendedores)');
+  conf(/Pedidos hoje: 3\. Próximo marco: 5 \(faltam 2\)\. Último pedido dele há 5 minutos\./.test(m.chamadas[0].user), 'sem as condicoes do tick: 3 pedidos, marco 5, parado ha so 5 min');
+  conf(m.chat.length === 1 && m.chat[0].acao === 'teste' && m.chat[0].jid === 'teste' && m.chat[0].quem_id === GUI, 'grava como teste (fora da conta do freio dos grupos)');
+  const m2 = monta({ ...mundoProv(3, 5), cfg: CFG_TESTE({ como: 'cob' }), ia: [{ json: { texto: 'x' } }] });
+  const r2 = await m2.api.handleBotIaTeste(req('/api/bot/ia/teste', { provoca: true, quem_id: GUI }), m2.env);
+  conf(r2._json.ok && r2._json.no_grupo === '' && m2.fila.length === 0, 'grupo de teste como Cobradores: a provocacao so aparece na tela');
+  const r3 = await m2.api.handleBotIaTeste(req('/api/bot/ia/teste', { provoca: true, quem_id: BRYAN }), m2.env);
+  conf(r3._status === 400, 'cobrador nao tem provocacao: 400');
+  const m3 = monta({ ...mundoProv(0, 5), cfg: CFG_TESTE({ como: 'vend' }), ia: [{ status: 429 }] });
+  const r4 = await m3.api.handleBotIaTeste(req('/api/bot/ia/teste', { provoca: true, quem_id: GUI }), m3.env);
+  conf(r4._json.ok && r4._json.resposta === 'Guilherme, faltam 5 pra bater 5. Vai dar mole agora?' && /Ainda sem pedido hoje/.test(m3.chamadas[0].user), 'sem pedido hoje e IA fora: a frase reserva, e a IA soube que ele ainda nao vendeu');
+}
+
+// ══ 17. A CASCATA DO GEMINI ════════════════════════════════════════════════════════════
+titulo('17. A cascata do Gemini: teto curto no 1o modelo e modelo cheio fica de fora');
+{
+  const m = monta({ ...MUNDO, ia: (_ch, i) => (i === 0 ? { status: 503 } : JSON_OK) });
+  const M = m.api.BOT_IA_MODELOS;
+  const r1 = await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(!!r1.texto && m.chamadas.length === 2 && m.chamadas[0].modelo === M[0] && m.chamadas[1].modelo === M[1], '503 no 1o modelo: o 2o responde');
+  conf(m.tetos[0] === 7000 && m.tetos[1] === 10000, 'o 1o modelo tem teto de 7 s (ainda tem outro na fila); o ultimo, 10 s');
+  const r2 = await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(!!r2.texto && m.chamadas.length === 3 && m.chamadas[2].modelo === M[1], 'na chamada seguinte o modelo cheio fica de fora: vai direto no 2o');
+  RELOGIO.agora += 6 * 60000;
+  try { await m.api._botIaChamar(m.env, 'sys', 'user', {}); } finally { RELOGIO.agora -= 6 * 60000; }
+  conf(m.chamadas[3].modelo === M[0], 'passados 5 min ele volta a ser o primeiro');
+  const p = monta({ ...MUNDO, ia: [{ status: 503 }] });
+  await p.api._botIaChamar(p.env, 'sys', 'user', { maxModelos: 1 });
+  conf(p.tetos[0] === 10000 && p.chamadas.length === 1, 'com um modelo so (a provocacao) o teto e o cheio, 10 s');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
