@@ -13355,6 +13355,22 @@ const _botIaHoraTxt = (ms) => { const d = new Date(Number(ms) - 3 * 3600000); co
 const _botIaHHMM = (s) => { const d = new Date(Number(s) * 1000 - 3 * 3600000); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
 const _botIaFoneBonito = (num) => { const d = _botSoDigitos(num).replace(/^55/, ''); return d.length >= 10 ? '(' + d.slice(0, 2) + ') ...-' + d.slice(-4) : '...' + d.slice(-4); };
 
+// A MARCACAO NO TEXTO (medido no grupo de teste, 06/11/2026): o WhatsApp manda "@30662576877805" (o
+// numero ou o LID de quem foi marcado). Isso nao e pedido nem telefone, mas a busca achava que era: com
+// "@30662576877805 se prepara que hoje vai ter festa" a IA respondeu "nao vejo nada de 'prepara' nem de
+// 'festa' nos pedidos". Aqui a marcacao vira o primeiro nome de quem esta no quem e quem, "@Barbadinho"
+// (o numero do bot, ou a marcacao desconhecida numa mensagem que marcou o bot) ou "@alguém".
+function _botIaTextoSemMarca(texto, cfg, numeroBot, menciona) {
+  const bot = _botSoDigitos(numeroBot);
+  const pessoas = (cfg && Array.isArray(cfg.pessoas)) ? cfg.pessoas : [];
+  return String(texto == null ? '' : texto).replace(/@(\d{5,20})(?!\d)/g, (m, d) => {
+    if (bot && d === bot) return '@Barbadinho';
+    const p = pessoas.find((x) => x && ((x.jid && String(x.jid).split('@')[0] === d) || (d.length >= 10 && x.fone && _bot8(x.fone) === _bot8(d))));
+    if (p) return '@' + (String(p.nome || '').trim().split(/\s+/)[0] || 'alguém');
+    return menciona ? '@Barbadinho' : '@alguém';
+  });
+}
+
 // ─── Quem e quem: so por jid/telefone contra cfg.pessoas; chip da casa com dono de verdade ───
 async function _botIaQuem(env, cfg, st, deJid, deFone) {
   const equipe = await _botEquipe(env);
@@ -13759,6 +13775,7 @@ const BOT_IA_SISTEMA = [
   '',
   'Como responder:',
   '- Português do Brasil, como mensagem de WhatsApp: curta (até 3 frases, até 350 caracteres), sem título, sem lista, sem markdown além de *negrito*. Nunca use travessão.',
+  '- Não abra toda resposta com saudação ("Oi, Fulano!"): numa conversa que já está rolando, vá direto ao ponto.',
   '- Só afirme o que está nos DADOS desta mensagem. Não invente número, pedido, prazo, nome, regra ou procedimento. Se o dado não veio, diga que não consegue ver isso daqui.',
   '- Pedido marcado como AMBÍGUO: liste os candidatos em uma linha cada (nome, cidade, situação) e pergunte qual é. Nunca diga que um pedido ambíguo está pago.',
   '- Pedido PROVÁVEL (achado só pelo nome): responda já, mas no condicional, com nome e cidade (ex: "Se for a Maria Souza de Itu/SP, ela pagou em 05/11 no Pix.").',
@@ -13803,6 +13820,9 @@ async function _botIaResponder(env, cfg, b, opts) {
   const ia = cfg.ia || _botIaPadrao();
   const res = { acao: 'calado', resposta: '', motivo: '', modelo: '', ms: 0, chamadas: 0, alerta: 0, viu: [], responder: false, quem_id: '' };
   const texto = _botTexto300(b.texto, 1000).trim();
+  // Busca de pedido e detectores olham o texto SEM as marcacoes ("@Barbadinho", "@Guilherme"): nome de
+  // quem foi marcado nao e nome de cliente. O numero do vendedor (pedido da direcao) olha o texto inteiro.
+  const textoBusca = texto.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
   const tipo = String(b.tipo || 'texto');
   const agora = Math.floor(Date.now() / 1000);
   // 1. Gatilho
@@ -13811,10 +13831,10 @@ async function _botIaResponder(env, cfg, b, opts) {
   else if (b.menciona) modo = 'chamado';
   else if (b.responde) {
     // Citar o resumo ou uma comemoracao so e pergunta se parece pergunta; citar uma RESPOSTA do bot e conversa.
-    if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(texto)) modo = 'chamado';
+    if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(textoBusca)) modo = 'chamado';
     else if (await _botIaCitouResposta(env, b.jid, b.citado)) modo = 'chamado';
   }
-  if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(texto)) modo = 'espontaneo';
+  if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(textoBusca)) modo = 'espontaneo';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
   // 2. Sem texto
   if (!texto) {
@@ -13860,7 +13880,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   if (quem.id) {
     if (grupo === 'vend') {
       try { const dados = await _botDados(env, dia, cfg, 'diario', false, st); D.push(_botIaPlacarTexto(dados, cfg, quem)); viu.push('placar de hoje'); } catch (_) {}
-      if (BOT_IA_NUMERO_RE.test(texto) && (quem.role === 'atendente' || quem.chefe)) {
+      if (BOT_IA_NUMERO_RE.test(textoBusca) && (quem.role === 'atendente' || quem.chefe)) {
         try {
           const alvo = quem.role === 'atendente' ? quem.id : (equipe.find((u) => u.role === 'atendente' && _botIaNorm(texto).includes(_botIaNorm(u.nome).split(' ')[0])) || {}).id;
           if (alvo) { const un = (equipe.find((u) => u.id === alvo) || quem).nome; D.push(await _botIaNumerosDe(env, st, alvo, un)); viu.push('números de ' + un); }
@@ -13872,11 +13892,11 @@ async function _botIaResponder(env, cfg, b, opts) {
     }
     // Pedidos: quando o texto fala de pedido, traz telefone/CPF/id, ou e o grupo dos cobradores (la
     // quase toda pergunta e sobre um pedido). O "nenhum pedido" so entra quando a pessoa pediu um.
-    const temDigitos = /\d{8,}/.test(texto.replace(/\D/g, ''));
-    const falaDePedido = BOT_IA_PEDIDO_RE.test(texto) || temDigitos;
+    const temDigitos = /\d{8,}/.test(textoBusca.replace(/\D/g, ''));
+    const falaDePedido = BOT_IA_PEDIDO_RE.test(textoBusca) || temDigitos;
     if (falaDePedido || grupo === 'cob') {
       await nomesDe();
-      const busca = _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap);
+      const busca = _botIaAcharPedidos(st, textoBusca, quem, grupo, nomes, tagMap);
       if (busca.blocos.length) {
         const cab2 = busca.certo ? 'Pedido encontrado:' : busca.provavel ? 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):';
         D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids, ...busca.okNums);
@@ -13897,7 +13917,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
     ...(recentes.length ? ['Últimas mensagens do grupo:', ...recentes, ''] : []),
     ...(b.citado ? ['Mensagem citada: "' + String(b.citado).slice(0, 300) + '"'] : []),
-    ...(modo === 'chamado' ? ['Você foi chamado nesta mensagem (marcado ou respondido). No texto, "@" seguido de número é como o WhatsApp mostra quem foi marcado.'] : []),
+    ...(modo === 'chamado' ? ['Você foi chamado nesta mensagem (marcado ou respondido); "@Barbadinho" é você.'] : []),
     'Mensagem de ' + (quem.id ? quem.nome : (b.de_nome || 'alguém')) + ': "' + texto + '"',
   ].join('\n');
   const system = _botIaSistema(cfg, grupo, grupo === 'vend' && quem.id ? _botIaExemplos(cfg, quem.id) : []);
@@ -13951,6 +13971,7 @@ async function _botIaMensagem(env, cfg, b) {
   const deJid = _botIaJidOk(b.de_jid) ? String(b.de_jid) : '';
   const deFone = _botFone(b.de_fone);
   const deNome = _botTexto300(b.de_nome, 80).trim();
+  const textoMsg = _botIaTextoSemMarca(b.texto, cfg, b.numero, !!b.menciona);
   // Quem e quem se preenche sempre (so quem/quando, sem texto). No grupo de teste nao: la quem escreve
   // conta como a pessoa escolhida na tela.
   const grupoTeste = _botIaEhTeste(cfg, b.jid);
@@ -13967,7 +13988,7 @@ async function _botIaMensagem(env, cfg, b) {
   let chatId = 0;
   try {
     const ins = await env.DB.prepare('INSERT OR IGNORE INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(agora, _brDay(), grupo, String(b.jid), msgId, deJid, deFone, deNome, '', _botTexto300(b.texto, BOT_IA_VISTO_MAX), 'visto', '', '', '', 0, 0, 0).run();
+      .bind(agora, _brDay(), grupo, String(b.jid), msgId, deJid, deFone, deNome, '', _botTexto300(textoMsg, BOT_IA_VISTO_MAX), 'visto', '', '', '', 0, 0, 0).run();
     if (!(ins && ins.meta && ins.meta.changes > 0)) return { ok: true, ignorar: true, motivo: 'repetida' };
     chatId = Number(ins.meta.last_row_id) || 0;
   } catch (e) { return { ok: false, error: 'não consegui gravar a mensagem' }; }
@@ -13978,12 +13999,12 @@ async function _botIaMensagem(env, cfg, b) {
     const u = equipe.find((e) => e.id === String(ia.teste.quem_id || ia.teste.por || ''));
     quemTeste = u ? { id: u.id, nome: u.nome, role: u.role, chefe: u.role === 'diretor' || u.role === 'socio', equipe } : { id: '', nome: '', role: '', chefe: false, equipe };
   }
-  const r = await _botIaResponder(env, cfg, { ...b, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste } : undefined);
+  const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste } : undefined);
   if (r.acao === 'visto') return { ok: true, resposta: '', chat_id: chatId };
   const acao = r.responder ? 'pendente' : r.acao;
   try {
     await env.DB.prepare('UPDATE bot_chat SET quem_id=?, texto=?, acao=?, resposta=?, motivo=?, modelo=?, ms=?, chamadas=?, alerta=? WHERE id=?')
-      .bind(r.quem_id || '', _botTexto300(b.texto, 1000), acao, _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0, chatId).run();
+      .bind(r.quem_id || '', _botTexto300(textoMsg, 1000), acao, _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0, chatId).run();
   } catch (_) {}
   return { ok: true, resposta: r.responder ? r.resposta : '', chat_id: chatId };
 }

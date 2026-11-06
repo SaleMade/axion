@@ -262,7 +262,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botIaExemplos, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botIaExemplos, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -1056,6 +1056,41 @@ titulo('17. A cascata do Gemini: teto curto no 1o modelo e modelo cheio fica de 
   const p = monta({ ...MUNDO, ia: [{ status: 503 }] });
   await p.api._botIaChamar(p.env, 'sys', 'user', { maxModelos: 1 });
   conf(p.tetos[0] === 10000 && p.chamadas.length === 1, 'com um modelo so (a provocacao) o teto e o cheio, 10 s');
+}
+
+// ══ 18. A MARCACAO NO TEXTO ════════════════════════════════════════════════════════════
+titulo('18. A marcacao "@30662576877805" nao e pedido: vira nome antes da busca e da IA');
+{
+  const { api } = monta({});
+  const cfg = api._botNormaliza(CFG_RAW, null);
+  conf(api._botIaTextoSemMarca('@30662576877805 se prepara', cfg, NUMERO_BOT, true) === '@Barbadinho se prepara', 'marcacao desconhecida numa mensagem que marcou o bot: @Barbadinho');
+  conf(api._botIaTextoSemMarca('@' + NUMERO_BOT + ' oi', cfg, NUMERO_BOT, false) === '@Barbadinho oi', 'o numero do bot: @Barbadinho');
+  conf(api._botIaTextoSemMarca('fala com o @111222333444 e o @5515999990001', cfg, NUMERO_BOT, false) === 'fala com o @Bryan e o @Guilherme', 'quem esta no quem e quem: pelo LID ou pelo telefone, primeiro nome');
+  conf(api._botIaTextoSemMarca('o @5599888877776 sumiu', cfg, NUMERO_BOT, false) === 'o @alguém sumiu', 'desconhecido sem marcar o bot: @alguém');
+  conf(api._botIaTextoSemMarca('pedido 1793903844876 e tel 15 99999-0000', cfg, NUMERO_BOT, true) === 'pedido 1793903844876 e tel 15 99999-0000', 'numero sem @ (pedido, telefone) fica como esta');
+}
+{
+  // Medido no Aa: "@30662576877805 se prepara que hoje vai ter festa" virava busca de pedido "prepara, festa".
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), ia: [JSON_OK] });
+  await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: '@30662576877805 se prepara que hoje vai ter festa, manda a boa ai', menciona: true, ...BRUNO_WA }));
+  const u = m.chamadas[0].user;
+  conf(/Mensagem de Bryan Amorim: "@Barbadinho se prepara que hoje vai ter festa/.test(u), 'a IA recebe "@Barbadinho" no lugar do numero');
+  conf(!/Nenhum pedido encontrado/.test(u) && !/PROVÁVEL|AMBÍGUO/.test(u), 'e nenhuma busca de pedido sai da marcacao');
+  conf(/"@Barbadinho" é você/.test(u), 'e sabe que "@Barbadinho" e ele');
+  conf(/^@Barbadinho se prepara/.test(m.chat[0].texto), 'a conversa guardada (e mostrada na tela) fica com @Barbadinho');
+  conf(/Não abra toda resposta com saudação/.test(m.chamadas[0].system), 'e o system pede pra nao abrir toda resposta com "Oi, Fulano!"');
+}
+{
+  // A direcao pergunta do numero de alguem marcando a pessoa: a marcacao vira o nome e o bot acha o vendedor.
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE({ como: 'vend', quem_id: '' }), ia: [JSON_OK] });
+  await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: '@30662576877805 o numero do @5515999990001 caiu?', menciona: true, ...BRUNO_WA }));
+  conf(/Números de Guilherme/.test(m.chamadas[0].user) && /Quem perguntou: Bruno Correa/.test(m.chamadas[0].user), 'a direcao marcando o Guilherme: o bot olha os numeros do Guilherme');
+}
+{
+  // Pedido de verdade ao lado da marcacao continua achado.
+  const m = monta({ ...MUNDO, cfg: CFG_TESTE(), ia: [JSON_OK] });
+  await m.api._botIaMensagem(m.env, m.api._botNormaliza(m.mundo.cfg, null), msg({ jid: TG, texto: '@30662576877805 o pedido 1793903844876 foi pago?', menciona: true, ...BRUNO_WA }));
+  conf(/Pedido encontrado:/.test(m.chamadas[0].user) && /Joselina/.test(m.chamadas[0].user), 'o id do pedido ao lado da marcacao continua achado');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
