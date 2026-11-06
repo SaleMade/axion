@@ -2940,7 +2940,9 @@ async function salvaCob(id, patch) {
     try { d = await r.json() } catch (_) { d = {} }
     if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r), mudou: !!(d && d.mudou) }
     anota('[cobranca] pedido ' + lid + ' gravado: ' + Object.keys(patch).filter((k) => k !== 'antes').join(','))
-    return { ok: true, negados: Array.isArray(d.negados) ? d.negados : [] }
+    // `parcelas` (05/11/2026): quantas parcelas o pedido ficou tendo quando o patch levou pagamento_add.
+    // Servidor que nao conhece a parcela nao manda, e a ficha sabe que ela NAO entrou.
+    return { ok: true, negados: Array.isArray(d.negados) ? d.negados : [], ...(Number.isFinite(Number(d.parcelas)) && d.parcelas != null ? { parcelas: Number(d.parcelas) } : {}) }
   } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
 }
 // O LINK CURTO e o mesmo encurtador da dash. Dominio que ele nao aceita (plataforma de Pix nova, por

@@ -180,9 +180,14 @@ contextBridge.exposeInMainWorld('sw', {
     chamadas.push({ nome: 'cobPedido', args: [id] })
     const p = COB_PEDIDOS.find((x) => x.id === String(id))
     if (!p) return Promise.resolve({ ok: true, pedidos: [] })
-    return Promise.resolve({ ok: true, pedidos: [{ ...JSON.parse(JSON.stringify(p)), data: '27/10', links: { checkout: 'https://checkout.exemplo/k3?x=1', pix: 'https://pix.exemplo/p?ped=' + p.id, boleto: '', cartao: '', rastreio: 'https://glico-six.rastreio.vip/rastreio?codigo=AB1' }, hist: [{ de: 'Enviado', para: 'Entregue', quando: '30/10 10:00', quem: 'Sistema', nota: '' }], comentarios: [{ quem: 'Guilherme', tx: 'cliente pediu pra ligar depois', quando: '30/10 11:00', tipo: '', url: '' }] }] })
+    // O 9004 (Davi, 497) JA PAGOU UMA PARTE (05/11/2026, pagamento parcial): a ficha dele vem com a
+    // parcela e o saldo, como o /api/swweb/cobranca/pedido manda depois de um pagamento_add.
+    const parcial = String(id) === '9004' ? { saldo: 347, spg: 'Parcial', pagamentos: [{ valor: 150, data: '03/11/2026', quem: 'Haynan', obs: 'parcial pelo SellWave Web' }] } : {}
+    return Promise.resolve({ ok: true, pedidos: [{ ...JSON.parse(JSON.stringify(p)), ...parcial, data: '27/10', links: { checkout: 'https://checkout.exemplo/k3?x=1', pix: 'https://pix.exemplo/p?ped=' + p.id, boleto: '', cartao: '', rastreio: 'https://glico-six.rastreio.vip/rastreio?codigo=AB1' }, hist: [{ de: 'Enviado', para: 'Entregue', quando: '30/10 10:00', quem: 'Sistema', nota: '' }], comentarios: [{ quem: 'Guilherme', tx: 'cliente pediu pra ligar depois', quando: '30/10 11:00', tipo: '', url: '' }] }] })
   },
-  cobSalva: (id, patch) => { chamadas.push({ nome: 'cobSalva', args: [id, patch] }); return new Promise((r) => setTimeout(() => r(String(id) === '9002' ? { ok: false, erro: 'O pedido mudou desde que você abriu' } : { ok: true, negados: [] }), 80)) },
+  // O 9002 recusa como o worker recusa (409, `mudou`, a frase ja com ponto). Parcela (pagamento_add)
+  // responde `parcelas`, a prova de que entrou (05/11/2026).
+  cobSalva: (id, patch) => { chamadas.push({ nome: 'cobSalva', args: [id, patch] }); return new Promise((r) => setTimeout(() => r(String(id) === '9002' ? { ok: false, erro: 'O pedido mudou desde que você abriu. Recarregue e tente de novo.', mudou: true } : { ok: true, negados: [], ...(patch && patch.pagamento_add ? { parcelas: 2 } : {}) }), 80)) },
   cobCurto: (url, id) => { chamadas.push({ nome: 'cobCurto', args: [url, id] }); return Promise.resolve({ ok: true, url: 'https://sw.li/abc' }) },
   abrirLink: (url) => { chamadas.push({ nome: 'abrirLink', args: [url] }); return Promise.resolve({ ok: true }) },
   // Sem numero escolhido e nenhum conectado: o main pede pra escolher (semNumero). Com numero: abre.

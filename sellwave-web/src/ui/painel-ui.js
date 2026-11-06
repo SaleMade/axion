@@ -2442,7 +2442,11 @@ function ligaBotaoCadastro() { /* o bloco do lead não tem mais botão; ver bota
 // valor, mudar a etapa, anotar o combinado e MANDAR NA CONVERSA o link de pagamento e o rastreio
 // (pela mesma fila dos funis: "digitando..." e um envio por vez, como o inbox).
 // O roteiro tambem e outro: o servidor manda o de cobranca pro cobrador (/api/swweb/roteiro).
-const digitandoNaFicha = () => { const a = document.activeElement; return !!(a && a.closest && a.closest('.fx') && a.matches('input, textarea, select')) }
+// "Digitando" inclui o calendario aberto, o botao armado e o comentario escrito (fichaOcupada, 05/11/2026).
+const digitandoNaFicha = () => {
+  if (C && C.fichaOcupada) { const fx = document.querySelector('#corpo .fx'); return !!(fx && C.fichaOcupada(fx)) }
+  const a = document.activeElement; return !!(a && a.closest && a.closest('.fx') && a.matches('input, textarea, select'))
+}
 function aplicaModo(v) {
   cobModo = !!v
   const rot = document.querySelector('.aba[data-aba="pedidos"] .aba-rot')
@@ -2460,7 +2464,9 @@ function aplicaModo(v) {
   else desenha()
 }
 try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else pegaRoteiro() }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
-async function puxaCob(fone, forca) {
+// `semGuarda` (05/11/2026): a releitura pedida pela PROPRIA ficha depois de gravar redesenha sempre,
+// como o quadro faz; so a releitura de fundo (30 s, troca de conversa) respeita o que ele esta fazendo.
+async function puxaCob(fone, forca, semGuarda) {
   const f = String(fone || '').replace(/\D/g, '')
   if (!forca) cob = { ...cob, fone: f, pedidos: [], erro: '', sel: 0 }
   cob.carregando = !!f
@@ -2479,7 +2485,7 @@ async function puxaCob(fone, forca) {
     if (Array.isArray(r.tags)) cob.tags = r.tags
     if (cob.sel >= cob.pedidos.length) cob.sel = 0
   }
-  if (aba === 'pedidos' && !digitandoNaFicha()) desenha()
+  if (aba === 'pedidos' && (semGuarda || !digitandoNaFicha())) desenha()
 }
 function desenhaCob() {
   const vazio = (t) => '<div class="vazio">' + esc(t) + '</div>'
@@ -2515,7 +2521,7 @@ function ligaCob(corpo) {
       await enfileira([{ tipo: 'texto', texto: String(texto || ''), pausa: 1 }], 'cob-link', 'link pro cliente')
       return { ok: true }
     },
-    recarrega: async () => { await puxaCob(cob.fone, true) },
+    recarrega: async () => { await puxaCob(cob.fone, true, true) },
   })
 }
 

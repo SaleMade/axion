@@ -447,11 +447,34 @@ const _ehPago = (l) => String((l && l.spg) || '') === 'Pago' || ['Pago', 'Pagos'
 //
 // ESTORNO NAO QUEBRA ISSO: quando o pedido deixa de ser pago, o carimbo e APAGADO logo abaixo.
 // Se ele voltar a ser pago depois, comeca sem data e a nova vale normalmente, mesmo sendo posterior.
-function _carimbaPagoTs(lead, eraPago, tsPlataforma) {
+// A FICHA DE PARCELAS FECHA JUNTO COM O PAGO (05/11/2026, revisao do pagamento parcial do app).
+// O cobrador registra uma parcela de R$ 100 pelo SellWave Web e, dias depois, o pedido vira pago por
+// QUALQUER outro caminho: o "Ja pagou" do Kanban, o arrasto pra Pagos, o Pix do link da Payt, o PAID
+// da Five/PayLog. Esses caminhos so gravam spg/col, e a ficha ficava em [100]: como a dash e o app
+// preferem a soma das parcelas quando ela existe, a receita e a comissao do cobrador saiam por R$ 100
+// num pedido de R$ 497. Aqui, na VIRADA pra pago (nunca em reenvio), entra a parcela do resto (o valor
+// a cobrar menos o que ja estava na ficha), com a data real do pagamento quando a plataforma manda.
+// `opts.semFechar` e pra quem manda a lista inteira junto com o Pago (o "encerrar com desconto" do
+// /app): ali a ficha dele e a verdade, mesmo somando menos que o valor.
+function _fechaFichaAoPagar(lead, quandoMs, who) {
+  const soma = _cobPagoReg(lead);
+  if (!(soma > 0)) return;
+  const alvo = _cobValorCobrar(lead);
+  if (!(alvo > 0) || soma + 0.005 >= alvo) return;
+  const ms = Number(quandoMs) > 1.5e12 ? Number(quandoMs) : Date.now();
+  const d = new Date(ms - 3 * 3600000);
+  lead.pagamentos = (Array.isArray(lead.pagamentos) ? lead.pagamentos : []).concat([{
+    ts: Math.floor(ms / 1000),
+    data: String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear(),
+    valor: Math.round((alvo - soma) * 100) / 100, obs: 'fechou a conta ao marcar pago', who: String(who || 'sistema'),
+  }]).slice(-60);
+}
+function _carimbaPagoTs(lead, eraPago, tsPlataforma, opts) {
   if (!lead) return;
   const agora = _ehPago(lead);
   const real = Number(tsPlataforma) || 0;
   if (!agora) { if (lead.pago_ts) delete lead.pago_ts; if (lead.pago_ts_fonte) delete lead.pago_ts_fonte; return; }
+  if (!eraPago && !(opts && opts.semFechar)) _fechaFichaAoPagar(lead, real, opts && opts.who);
   const atual = Number(lead.pago_ts) || 0;
   const temReal = atual > 1.5e12;
   if (real > 1.5e12) {
@@ -3605,7 +3628,7 @@ async function _fiveUpsertLead(env, p, ctx) {
       }
       // a data REAL do pagamento vem no charge.updatedAt (ISO, ou o formato longo do Node); e ela
       // que vale pro "pago hoje" e pra qualquer conta por periodo, nao a hora em que o lote chegou
-      _carimbaPagoTs(lead, _eraPagoTs, _cs === 'PAID' ? Date.parse(String(charge.updatedAt || '')) : 0);
+      _carimbaPagoTs(lead, _eraPagoTs, _cs === 'PAID' ? Date.parse(String(charge.updatedAt || '')) : 0, { who: 'five' });
       _virouPago = !_eraPagoTs && _ehPago(lead);   // aviso no aplicativo: so na VIRADA, nunca no reenvio
       if (Array.isArray(p.commissions) && p.commissions.length) {
         lead.five_commissions = p.commissions;
@@ -3620,7 +3643,7 @@ async function _fiveUpsertLead(env, p, ctx) {
       const _eraPagoTsCod = _ehPago(lead);
       lead.spg = 'Pago';
       if (charge.paymentMethod) lead.pgto = charge.paymentMethod;
-      _carimbaPagoTs(lead, _eraPagoTsCod, Date.parse(String(charge.updatedAt || '')) || 0);
+      _carimbaPagoTs(lead, _eraPagoTsCod, Date.parse(String(charge.updatedAt || '')) || 0, { who: 'five' });
       if (!_eraPagoTsCod && _ehPago(lead)) {
         _virouPago = true;
         // Card em Cobrança aguardando pagamento COD: move direto pra Pago.
@@ -3752,7 +3775,7 @@ async function _fiveUpsertLead(env, p, ctx) {
           const _manual = String(from || '') !== _basePlat;
           const _eraPagoCol = _ehPago({ spg: lead.spg, col: from });
           lead.col = _alvoCol;
-          _carimbaPagoTs(lead, _eraPagoCol, 0);
+          _carimbaPagoTs(lead, _eraPagoCol, 0, { who: 'five' });
           // NAO PONHA AQUI UM SEGUNDO GATILHO DE AVISO (conferido em 24/09/2026 e descartado).
           // Parece que falta, e nao falta: pra este ramo virar um lead de nao-pago pra pago, o
           // _alvoCol teria que ser 'Pago', e as duas unicas maneiras disso acontecer exigem que o
@@ -6843,7 +6866,7 @@ async function handleMoveLead(req, env, leadId) {
     const _eraPagoMv = _ehPago(lead);
     _congelaColPlat(lead, from);
     lead.col = col;
-    _carimbaPagoTs(lead, _eraPagoMv, 0);   // arrastou pra Pagos (ou tirou de la): a data e a de agora
+    _carimbaPagoTs(lead, _eraPagoMv, 0, { who: String(u.id) });   // arrastou pra Pagos (ou tirou de la): a data e a de agora
     // Arrastou o card pra Pago -> limpa o retorno de cobranca (mesma regra do webhook e da edicao,
     // 11/09/2026). So na transicao: quem ja estava em Pago/Pagos nao perde um retorno remarcado.
     if (['Pago', 'Pagos'].includes(String(col)) && !['Pago', 'Pagos'].includes(String(from)) && lead.agend) { lead.agend = ''; if (lead.agend_avisado) lead.agend_avisado = ''; }
@@ -7674,7 +7697,7 @@ async function _leadMoveRapido(env, u, leadId, col) {
     const _eraPagoMv = _ehPago(lead);
     _congelaColPlat(lead, from);
     lead.col = col;
-    _carimbaPagoTs(lead, _eraPagoMv, 0);   // arrastou pra Pagos (ou tirou de la): a data e a de agora
+    _carimbaPagoTs(lead, _eraPagoMv, 0, { who: String(u.id) });   // arrastou pra Pagos (ou tirou de la): a data e a de agora
     // Arrastou pra Pago -> limpa o retorno de cobranca, so na transicao (mesma regra do longo).
     if (['Pago', 'Pagos'].includes(String(col)) && !['Pago', 'Pagos'].includes(String(from)) && lead.agend) { lead.agend = ''; if (lead.agend_avisado) lead.agend_avisado = ''; }
     if (Array.isArray(lead.hist)) lead.hist.push({ from: from || '—', to: col, who: String(u.id), time: new Date().toISOString() });
@@ -7873,6 +7896,7 @@ async function handleUpdateLead(req, env, leadId) {
     // juntos, e a tela avisa.
     if (negados.includes('spg') && 'valor_neg' in patch && !negados.includes('valor_neg')) negados.push('valor_neg');
     if (!canManage && Array.isArray(patch.pagamentos)) negados.push('pagamentos');
+    nega(canManage, 'pagamento_add');   // parcela e de quem cobra (direcao ou cobrador), como a lista
     if (_podeVl && 'vl' in patch) lead.vl = Number(patch.vl) || 0;   // diretor sempre; dono so com preco do catalogo
     // TROCOU O KIT, TROCA O LINK DE COBRANCA (04/09/2026).
     //
@@ -7947,13 +7971,46 @@ async function handleUpdateLead(req, env, leadId) {
       const _contaOk = (v) => { const n = String(v || '').trim().slice(0, 60); return _contasOk.has(n) ? n : ''; };
       if ('pgto_conta' in patch) lead.pgto_conta = _contaOk(patch.pgto_conta);
       if (Array.isArray(patch.pagamentos)) { // ficha de cobrança: parcelas efetivamente pagas
-        lead.pagamentos = patch.pagamentos.slice(0, 60).map((p) => ({
+        const _recebida = patch.pagamentos.slice(0, 60).map((p) => ({
           ts: Number(p && p.ts) || 0, data: String((p && p.data) || ''), valor: Number(p && p.valor) || 0,
           obs: String((p && p.obs) || ''), who: (p && p.who != null) ? String(p.who) : undefined,
           conta: _contaOk(p && p.conta) || undefined,
         })).filter((p) => p.valor > 0 || p.obs);
+        // A LISTA INTEIRA SOMA, NAO SUBSTITUI (05/11/2026, revisao). O /app do celular manda a lista
+        // montada da copia que a tela tinha ao abrir; se o SellWave Web registrou uma parcela nesse
+        // meio tempo (pagamento_add), a lista velha apagava ela em silencio - a mesma classe do
+        // incidente do comentario de 30/10. Parcela que ja esta no banco e nao veio na lista fica.
+        // Ninguem apaga parcela por este caminho (o Kanban nem manda a lista desde 12/10).
+        const _chaveP = (p) => (Number(p.ts) || 0) + '|' + (Number(p.valor) || 0) + '|' + String(p.data || '') + '|' + String(p.obs || '');
+        const _vieram = new Set(_recebida.map(_chaveP));
+        const _ficam = (Array.isArray(lead.pagamentos) ? lead.pagamentos : []).filter((p) => p && !_vieram.has(_chaveP(p)));
+        lead.pagamentos = _recebida.concat(_ficam).sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0)).slice(-60);
         const _ultima = lead.pagamentos.filter((p) => p.conta).slice(-1)[0];
         if (_ultima && !lead.pgto_conta) lead.pgto_conta = _ultima.conta;
+      }
+      // UMA PARCELA A MAIS (05/11/2026, o "Pagamento parcial" da ficha do SellWave Web). `pagamento_add`
+      // ACRESCENTA na ficha de pagamentos, sem a tela mandar a lista inteira: lista inteira vinda de
+      // uma copia velha apaga a parcela que outro registrou (a licao do comentario, 30/10). Entra com
+      // a data de hoje e quem esta logado; valor zerado nao entra. Se as parcelas ainda nao cobrem o
+      // valor, o pedido vira Parcial (o que o derivarStatus da dash faz) e segue na fila com o saldo.
+      // Quando o patch traz `spg` junto (o "Marcar como pago" com parcela anterior), vale o `spg`.
+      if (patch.pagamento_add && typeof patch.pagamento_add === 'object') {
+        const _pv = Math.round((Number(patch.pagamento_add.valor) || 0) * 100) / 100;
+        if (_pv > 0) {
+          if (!Array.isArray(lead.pagamentos)) lead.pagamentos = [];
+          const _d = _agoraBR();
+          lead.pagamentos.push({
+            ts: Math.floor(Date.now() / 1000),
+            data: String(_d.getUTCDate()).padStart(2, '0') + '/' + String(_d.getUTCMonth() + 1).padStart(2, '0') + '/' + _d.getUTCFullYear(),
+            valor: _pv, obs: String(patch.pagamento_add.obs || '').slice(0, 200), who: String(u.id),
+            conta: _contaOk(patch.pagamento_add.conta) || undefined,
+          });
+          lead.pagamentos = lead.pagamentos.slice(-60);
+          // Sem `spg` no patch, quem decide e a soma (o derivarStatus da dash): cobriu o valor, e Pago
+          // (a transicao abaixo carimba a data, leva pra Pagos e limpa o retorno); senao, Parcial.
+          // Duas parcelas de cobradores diferentes que juntas fecham a conta fechavam o pedido so pro app.
+          if (!('spg' in patch) && String(lead.spg || '') !== 'Pago') lead.spg = _cobPagoReg(lead) + 0.005 >= _cobValorCobrar(lead) ? 'Pago' : 'Parcial';
+        }
       }
       if ('col' in patch && patch.col && !negados.includes('col')) {
         if (patch.col !== fromCol) {
@@ -7965,7 +8022,9 @@ async function handleUpdateLead(req, env, leadId) {
         _marcaVenda = true;   // idem ao arrasto: cancelou, a venda sai da contagem (gravado abaixo, so se o UPDATE pegar)
       }
     }
-    _carimbaPagoTs(lead, _eraPagoEd, 0);   // marcou/desmarcou pago na mao: a data e a de agora
+    // marcou/desmarcou pago na mao: a data e a de agora. Virou pago com parcela na ficha? A parcela do
+    // resto entra em nome de quem marcou (ver _fechaFichaAoPagar); lista inteira junto = ficha e a verdade.
+    _carimbaPagoTs(lead, _eraPagoEd, 0, { who: String(u.id), semFechar: Array.isArray(patch.pagamentos) });
     // PAGO REGISTRADO SEM COLUNA (17/10/2026). O app do celular (e a ficha de pagamentos) marca o
     // pedido pago mandando so `spg`/`pagamentos`, sem `col`: o card ficava em Cobranca e o cobrador
     // ligaria cobrando quem ja pagou (caso da Lucinda: paga, entregue, parada em Cobranca). E a mesma
@@ -8066,6 +8125,9 @@ async function handleUpdateLead(req, env, leadId) {
         version: newVer,
         ...(negados.length ? { negados } : {}),
         ...(_mexeuComent ? { comentarios: _nComent } : {}),
+        // A PROVA DA PARCELA (05/11/2026): quantas parcelas o pedido ficou tendo. Servidor que nao
+        // conhece pagamento_add responde ok sem isto, e a ficha do app sabe que NAO registrou.
+        ...(patch.pagamento_add ? { parcelas: Array.isArray(lead.pagamentos) ? lead.pagamentos.length : 0 } : {}),
       });
     }
     if (attempt < 9 && Date.now() - _t0 < 6000) { await _casEspera(attempt); continue; }   // perdeu a corrida de versao: espera o intervalo quieto e tenta de novo
@@ -13877,6 +13939,11 @@ function _cobDetalhe(l, data, nomes, tagMap) {
     // CPF e e-mail (05/11/2026): o "Copiar dados" da ficha do app monta o mesmo bloco do "Copiar
     // tudo" das Aceitacoes. O cobrador ja ve o CPF na dash e no link de checkout.
     cpf: _cobTxt(l.cpf), email: _cobTxt(l.email),
+    // AS PARCELAS JA RECEBIDAS (05/11/2026, o "Pagamento parcial" da ficha do app): a ficha mostra
+    // o que ja entrou e quem registrou. O que FALTA ja vem no `saldo` da linha.
+    pagamentos: (Array.isArray(l.pagamentos) ? l.pagamentos : []).slice(-12).map((p) => ({
+      valor: _cobNum(p && p.valor), data: _cobTxt(p && p.data), quem: nomes[_cobTxt(p && p.who)] || '', obs: _cobTxt(p && p.obs),
+    })),
     links: {
       checkout: _cobCheckout(l, data),
       pix: plat.pix ? _cobUrlPlataforma(plat.pix, l) : '',
@@ -17284,7 +17351,7 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
     // O "ja era pago" e o do TOPO do bloco (_eraPagoPtIni), lido antes de qualquer escrita. Lido
     // aqui ele ja estaria contaminado: o mapeamento escreve lead.col logo acima e _ehPago tambem
     // considera pago quem esta na coluna 'Pago'/'Pagos'.
-    _carimbaPagoTs(lead, _eraPagoPtIni, _paidAtPayt(data.paid_at));   // pagou pela Payt: a data e a da transacao (21/09/2026)
+    _carimbaPagoTs(lead, _eraPagoPtIni, _paidAtPayt(data.paid_at), { who: 'payt' });   // pagou pela Payt: a data e a da transacao (21/09/2026)
     if (!_eraPagoPtIni && _ehPago(lead)) _pagosAgora.push(lead);   // so na VIRADA: a Payt manda 3 eventos pra mesma venda
     if (mapping?.action === 'tag' && mapping.tag) {
       lead.tags = Array.isArray(lead.tags) ? lead.tags : [];
@@ -17417,7 +17484,7 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
         const _eraPagoLk = _ehPago(_lp);
         _lp.spg = 'Pago';
         _lp.pago_link = Math.floor(Date.now() / 1000);
-        _carimbaPagoTs(_lp, _eraPagoLk, _paidAtPayt(data.paid_at));   // pagou pelo link: a data e a da transacao (21/09/2026)
+        _carimbaPagoTs(_lp, _eraPagoLk, _paidAtPayt(data.paid_at), { who: 'payt' });   // pagou pelo link: a data e a da transacao (21/09/2026)
         // O utm_content NOMEIA o pedido, entao ele vence. O findLead la de cima casa por CPF e
         // devolve o primeiro card do cliente, que e o pedido ANTIGO quando ele ja comprou antes -
         // e ai a mesma cobranca marcaria dois leads e o celular tocaria duas vezes por uma venda.
@@ -17662,7 +17729,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     const _eraPagoPt2 = _ehPago(lead);
     if (mapping?.etapa) lead.col = mapping.etapa;
     if (mapping?.spg) lead.spg = mapping.spg;
-    _carimbaPagoTs(lead, _eraPagoPt2, _paidAtPayt(data.paid_at));
+    _carimbaPagoTs(lead, _eraPagoPt2, _paidAtPayt(data.paid_at), { who: 'payt' });
     if (mapping?.action === 'tag' && mapping.tag) {
       lead.tags = Array.isArray(lead.tags) ? lead.tags : [];
       if (!lead.tags.includes(mapping.tag)) lead.tags.push(mapping.tag);

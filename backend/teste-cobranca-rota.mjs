@@ -70,7 +70,8 @@ const brAgend = (diasDepois) => {
 const NUM_KEV = '(15) 99797-3450', NUM_HAY = '(11) 98888-7777';
 const idMs = (dias) => String(Date.now() - dias * 86400000);
 const L_COB = idMs(5), L_PAGO = idMs(9), L_ENV = idMs(2), L_AFL = idMs(4), L_MANUAL = idMs(1), L_VELHO = idMs(80), L_FRUST = idMs(6), L_RET = idMs(7);
-const L_PAGO_VELHO_RET = idMs(40), L_PAGO_VELHO_SEM = idMs(41);
+const L_PAGO_VELHO_RET = idMs(40), L_PAGO_VELHO_SEM = idMs(41), L_PARC = idMs(8);
+const L_P2 = idMs(10), L_P3 = idMs(11), L_P4 = idMs(12), L_P5 = idMs(13), L_P6 = idMs(14);
 const estado = {
   wa_statuses: [{ id: 'st_uso', label: 'Em uso', papel: 'em_uso' }],
   chips: [
@@ -101,6 +102,16 @@ const estado = {
       agend: brAgend(2), hist: [{ from: 'Cobrança', to: 'Pagos', time: brHist(40) }] },
     { id: L_PAGO_VELHO_SEM, nome: 'Pago Antigo Sem Retorno', wa: '91900002222', vl: 197, col: 'Pago', spg: 'Pago', pago_ts: Date.now() - 40 * 86400000, at: 'kev', cob: 'hay',
       hist: [{ from: 'Cobrança', to: 'Pagos', time: brHist(40) }] },
+    // NA COBRANCA, VAI PAGAR EM PARTES (05/11/2026, o pagamento parcial da ficha do app).
+    { id: L_PARC, nome: 'Paula Parcial', wa: '31977770000', vl: 497, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', agend: brAgend(1),
+      hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
+    // OS CAMINHOS QUE FECHAM O PEDIDO POR FORA DO APP (05/11/2026, revisao): a ficha de parcelas tem
+    // que fechar junto, senao a receita e a comissao saem pelo valor da parcela.
+    { id: L_P2, nome: 'Pedro Kanban', wa: '31977770002', vl: 497, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
+    { id: L_P3, nome: 'Pati Duas Parcelas', wa: '31977770003', vl: 297, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', agend: brAgend(3), hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
+    { id: L_P4, nome: 'Pablo Lista Velha', wa: '31977770004', vl: 297, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
+    { id: L_P5, nome: 'Paulo Arrasto Desconto', wa: '31977770005', vl: 297, valor_neg: 250, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
+    { id: L_P6, nome: 'Pietra Encerrar', wa: '31977770006', vl: 397, col: 'Cobrança', spg: 'Pendente', at: 'kev', cob: 'hay', hist: [{ from: 'Enviado', to: 'Entregue', time: brHist(2) }] },
   ],
 };
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado));
@@ -226,6 +237,68 @@ r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { comment_add: { tx: 'pro
 const fc = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_RET);
 const c0 = ((fc.d.pedidos || [])[0] || {}).comentarios || [];
 vale('comentario sem "who" fica no nome de quem esta logado', r.st === 200 && c0[0] && c0[0].tx === 'prometeu pagar sexta' && c0[0].quem === 'Haynan Souza', JSON.stringify(c0[0]));
+
+_log('\nPAGAMENTO PARCIAL PELA FICHA DO APP (05/11/2026)\n');
+
+// 8b) pagamento_add ACRESCENTA uma parcela: o pedido fica na fila com o saldo; quitar fecha com o total
+r = await chama(TK.kev, '/api/lead/' + L_PARC, { patch: { pagamento_add: { valor: 100 } } });
+let fd = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_PARC);
+let pd = (fd.d.pedidos || [])[0] || {};
+vale('vendedor nao registra parcela (negado, e a ficha segue sem parcela)', r.st === 200 && (r.d.negados || []).includes('pagamento_add') && (pd.pagamentos || []).length === 0, r.st + ' ' + JSON.stringify(r.d).slice(0, 80));
+r = await chama(TK.hay, '/api/lead/' + L_PARC, { patch: { pagamento_add: { valor: 100, obs: 'parcial pelo SellWave Web' }, antes: { spg: 'Pendente', col: 'Cobrança' } } });
+vale('o cobrador registra a parcela pela rota de sempre, com o "antes", e a resposta prova quantas parcelas ficaram', r.st === 200 && r.d.ok && !(r.d.negados || []).length && r.d.parcelas === 1, r.st + ' ' + JSON.stringify(r.d).slice(0, 80));
+fd = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_PARC);
+pd = (fd.d.pedidos || [])[0] || {};
+vale('a ficha traz a parcela com o nome de quem registrou e a data de hoje; o saldo cai (497 - 100), nao e pago, vira Parcial e fica na fila com o retorno',
+  Array.isArray(pd.pagamentos) && pd.pagamentos.length === 1 && pd.pagamentos[0].valor === 100 && pd.pagamentos[0].quem === 'Haynan Souza' && /^\d\d\/\d\d\/\d{4}$/.test(pd.pagamentos[0].data)
+  && pd.saldo === 397 && pd.pago === false && pd.spg === 'Parcial' && pd.col === 'Entregues' && pd.agend === amanha, JSON.stringify({ p: pd.pagamentos, saldo: pd.saldo, pago: pd.pago, spg: pd.spg, col: pd.col, agend: pd.agend }));
+r = await chama(TK.hay, '/api/lead/' + L_PARC, { patch: { pagamento_add: { valor: 0 } } });
+fd = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_PARC);
+vale('parcela zerada nao entra', r.st === 200 && (((fd.d.pedidos || [])[0] || {}).pagamentos || []).length === 1, JSON.stringify(((fd.d.pedidos || [])[0] || {}).pagamentos));
+r = await chama(TK.hay, '/api/lead/' + L_PARC, { patch: { pagamento_add: { valor: 397, obs: 'quitou pelo SellWave Web' }, spg: 'Pago', valor_neg: 497, col: 'Pagos', antes: { spg: 'Pendente', col: 'Cobrança' } } });
+vale('o "antes" velho (a ficha nao recarregou depois da parcela) e recusado com 409', r.st === 409 && r.d.mudou === true && r.d.spg === 'Parcial', r.st + ' ' + JSON.stringify(r.d).slice(0, 100));
+r = await chama(TK.hay, '/api/lead/' + L_PARC, { patch: { pagamento_add: { valor: 397, obs: 'quitou pelo SellWave Web' }, spg: 'Pago', valor_neg: 497, col: 'Pagos', antes: { spg: 'Parcial', col: 'Cobrança' } } });
+vale('o resto entra como parcela junto com o pago e a coluna, numa chamada so', r.st === 200 && r.d.ok && !(r.d.negados || []).length, r.st + ' ' + JSON.stringify(r.d).slice(0, 80));
+fd = await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + L_PARC);
+pd = (fd.d.pedidos || [])[0] || {};
+vale('pago, em Pagos, duas parcelas somando 497, saldo zero e sem retorno (pago limpa a agenda)',
+  pd.pago === true && pd.col === 'Pagos' && pd.spg === 'Pago' && pd.valor === 497 && pd.saldo === 0 && (pd.pagamentos || []).length === 2 && pd.pagamentos.reduce((s, x) => s + x.valor, 0) === 497 && !pd.agend, JSON.stringify({ pago: pd.pago, col: pd.col, valor: pd.valor, saldo: pd.saldo, n: (pd.pagamentos || []).length, agend: pd.agend }));
+
+// 8c) A FICHA FECHA JUNTO COM O PAGO, por qualquer caminho (revisao de 05/11/2026)
+const ficha = async (id) => (((await chama(TK.hay, '/api/swweb/cobranca/pedido?id=' + id)).d.pedidos || [])[0] || {});
+const soma = (p) => (p.pagamentos || []).reduce((s, x) => s + x.valor, 0);
+// (a) parcela pelo app + "Ja pagou" do Kanban da dash (spg, valor_neg e col, sem parcela)
+r = await chama(TK.hay, '/api/lead/' + L_P2, { patch: { pagamento_add: { valor: 100 } } });
+r = await chama(TK.dir, '/api/lead/' + L_P2, { patch: { spg: 'Pago', valor_neg: 497, col: 'Pagos' } });
+pd = await ficha(L_P2);
+vale('parcela de 100 + "Ja pagou" do Kanban: entra a parcela do resto (397) em nome de quem marcou, soma 497, saldo zero',
+  r.st === 200 && pd.pago === true && pd.col === 'Pagos' && (pd.pagamentos || []).length === 2 && soma(pd) === 497 && pd.pagamentos[1].valor === 397 && pd.pagamentos[1].quem === 'Diretor' && pd.saldo === 0, JSON.stringify({ p: pd.pagamentos, saldo: pd.saldo }));
+// (b) duas parcelas que juntas cobrem o valor: o pedido fecha (Pago, Pagos, data do pagamento, retorno limpo)
+r = await chama(TK.hay, '/api/lead/' + L_P3, { patch: { pagamento_add: { valor: 50 } } });
+r = await chama(TK.hay, '/api/lead/' + L_P3, { patch: { pagamento_add: { valor: 247 } } });
+pd = await ficha(L_P3);
+vale('duas parcelas que cobrem o valor (50 + 247 = 297) fecham o pedido: Pago, em Pagos, com data, sem retorno, sem parcela a mais',
+  r.st === 200 && pd.pago === true && pd.spg === 'Pago' && pd.col === 'Pagos' && pd.pagoTs > 0 && !pd.agend && (pd.pagamentos || []).length === 2 && soma(pd) === 297 && pd.saldo === 0, JSON.stringify({ spg: pd.spg, col: pd.col, pagoTs: pd.pagoTs, agend: pd.agend, p: pd.pagamentos }));
+// (c) a lista inteira vinda de uma copia velha (o /app do celular) SOMA, nao apaga a parcela do app
+r = await chama(TK.hay, '/api/lead/' + L_P4, { patch: { pagamento_add: { valor: 100 } } });
+r = await chama(TK.dir, '/api/lead/' + L_P4, { patch: { pagamentos: [{ ts: agoraS - 30, data: '05/11/2026', valor: 50, obs: 'registrado no aplicativo' }] } });
+pd = await ficha(L_P4);
+vale('lista inteira sem a parcela do app (copia velha): a parcela fica, a nova entra, saldo 147 e Parcial',
+  r.st === 200 && (pd.pagamentos || []).length === 2 && soma(pd) === 150 && pd.saldo === 147 && pd.spg === 'Parcial' && pd.pago === false, JSON.stringify({ p: pd.pagamentos, saldo: pd.saldo, spg: pd.spg }));
+r = await chama(TK.dir, '/api/lead/' + L_P4, { patch: { pagamentos: [{ ts: agoraS - 30, data: '05/11/2026', valor: 50, obs: 'registrado no aplicativo' }] } });
+pd = await ficha(L_P4);
+vale('a mesma lista de novo nao duplica nada', (pd.pagamentos || []).length === 2 && soma(pd) === 150, JSON.stringify(pd.pagamentos));
+// (d) parcela + arrasto pra Pagos num pedido com desconto gravado (valor_neg 250): o resto e 150, nao 197
+r = await chama(TK.hay, '/api/lead/' + L_P5, { patch: { pagamento_add: { valor: 100 } } });
+r = await chama(TK.dir, '/api/lead/' + L_P5 + '/move', { col: 'Pagos' });
+pd = await ficha(L_P5);
+vale('parcela de 100 + arrasto pra Pagos com desconto de 250: o resto e 150 (valor negociado), soma 250, pago',
+  r.st === 200 && pd.pago === true && pd.valor === 250 && (pd.pagamentos || []).length === 2 && pd.pagamentos[1].valor === 150 && soma(pd) === 250 && pd.saldo === 0, JSON.stringify({ st: r.st, valor: pd.valor, p: pd.pagamentos, saldo: pd.saldo }));
+// (e) lista inteira junto com o Pago (o "encerrar com desconto" do /app): a ficha dele e a verdade, nada e acrescentado
+r = await chama(TK.dir, '/api/lead/' + L_P6, { patch: { pagamentos: [{ ts: agoraS - 10, data: '05/11/2026', valor: 300, obs: 'encerrado com desconto no aplicativo' }], spg: 'Pago' } });
+pd = await ficha(L_P6);
+vale('lista inteira + Pago (encerrar com desconto): fica so a parcela de 300 num pedido de 397, pago, sem parcela do resto',
+  r.st === 200 && pd.pago === true && (pd.pagamentos || []).length === 1 && soma(pd) === 300, JSON.stringify({ p: pd.pagamentos, pago: pd.pago, saldo: pd.saldo }));
 
 _log('\nEM QUAL NUMERO DO COBRADOR O CLIENTE JA FALOU (03/11/2026)\n');
 

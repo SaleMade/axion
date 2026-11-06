@@ -708,9 +708,34 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('pago, cancelado e pedido que nem saiu NUNCA entram na fila', !/pago_com_retorno|pago_hoje_marcado|pago_amanha_marcado|cancelado|a_enviar/.test(ids([...a.atrasados, ...a.hoje, ...a.proximos, ...a.semRetorno])))
   vale('recebido hoje soma so o que foi pago hoje e passou pela cobranca', a.pagosHoje.length === 1 && a.recebidoHoje === 297, a.recebidoHoje)
   vale('valor digitado le virgula como decimal e ponto como milhar', C.valorDigitado('1.000,50') === 1000.5 && C.valorDigitado('297,00') === 297 && C.valorDigitado('297.5') === 297.5 && C.valorDigitado('1.500') === 1500 && isNaN(C.valorDigitado('')))
+  // OS ATALHOS POR DIA (05/11/2026, o Bruno: "nenhum lead retorna daqui a 1 hora (...) a partir de
+  // 1 dia, 2 dias, 7 dias, 10 dias, algo assim"). AGORA e sabado 31/10 15:00.
   const at = C.atalhosRetorno(AGORA)
-  vale('os atalhos de retorno saem na hora da maquina, no formato do agend', at.length === 5 && at.every((x) => /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(x.v)) && at.some((x) => x.rot === 'Amanhã 9h' && x.v === ag(1, 9)), JSON.stringify(at.map((x) => x.v)))
-  vale('depois das 17h nao oferece "Hoje 18h"', !C.atalhosRetorno(new Date(2026, 9, 31, 18, 30).getTime()).some((x) => x.rot === 'Hoje 18h'))
+  vale('os atalhos de retorno sao por DIA, todos as 9h (amanha, 2, 3, 7, 10 e 15 dias), no formato do agend',
+    at.map((x) => x.rot).join('|') === 'Amanhã|2 dias|3 dias|7 dias|10 dias|15 dias' && at.every((x) => /^\d{4}-\d\d-\d\dT09:00$/.test(x.v)) && at[0].v === ag(1, 9) && at[3].v === ag(7, 9) && at[5].v === ag(15, 9), JSON.stringify(at.map((x) => x.v)))
+  vale('nada de "daqui 1 h" nem "hoje 18h": o atalho mais perto e amanha, em qualquer hora do dia', !at.some((x) => /1 h|Hoje/.test(x.rot)) && at.every((x) => Date.parse(x.v) > AGORA + 12 * 3600000) && C.atalhosRetorno(new Date(2026, 9, 31, 8, 0).getTime())[0].v === ag(1, 9))
+  vale('cada atalho diz o dia por extenso (sai no passar do mouse)', at[0].quando === 'Amanhã · 01/11 às 09:00' && at[3].quando === 'Sábado · 07/11 às 09:00', at[0].quando + ' | ' + at[3].quando)
+  // O CALENDARIO DA FICHA (05/11/2026, "esse calendario esta muito feio (...) deixa no design padrao da
+  // nossa dash"): o estado inicial e a grade. 31/10/2026 e sabado; novembro comeca num domingo.
+  const st = C.calInicial({ agend: '' }, AGORA)
+  vale('calendario da ficha: sem retorno, nasce em amanha as 9h, no mes de amanha', st.dia === '2026-11-01' && st.hh === '09' && st.mm === '00' && st.ano === 2026 && st.mes === 10, JSON.stringify(st))
+  const st2 = C.calInicial({ agend: '2026-11-13T14:35' }, AGORA)
+  vale('com retorno marcado, nasce nele, com hora e minuto exatos', st2.dia === '2026-11-13' && st2.hh === '14' && st2.mm === '35' && st2.mes === 10, JSON.stringify(st2))
+  const st3 = C.calInicial({ agend: '2026-10-20T10:00' }, AGORA)
+  vale('retorno atrasado nao serve de ponto de partida: vai pra amanha as 9h', st3.dia === '2026-11-01' && st3.hh === '09', JSON.stringify(st3))
+  const out = C.calFicha({ ano: 2026, mes: 9, dia: '2026-11-01', hh: '09', mm: '00' }, AGORA)
+  vale('outubro: "Outubro de 2026", D S T Q Q S S, hoje (31) marcado e sem "passado", os 34 dias antes desabilitados, nenhum escolhido na tela',
+    /<b>Outubro de 2026<\/b>/.test(out) && /fx-cal-sem"><span>D<\/span><span>S<\/span><span>T<\/span><span>Q<\/span><span>Q<\/span><span>S<\/span><span>S<\/span><\/div>/.test(out)
+    && /class="fx-cal-d hoje" data-acao="cal-dia" data-v="2026-10-31">31</.test(out) && (out.match(/ disabled>/g) || []).length === 34 && !/fx-cal-d[^"]* sel"/.test(out), out.slice(0, 200))
+  const nov = C.calFicha(st2, AGORA)
+  vale('novembro: o dia escolhido sai no verde, nada desabilitado, 13 horas de 08h a 20h com a 14 marcada, :00/:30, e o pe diz quando',
+    /class="fx-cal-d sel" data-acao="cal-dia" data-v="2026-11-13">13</.test(nov) && !/ disabled>/.test(nov) && (nov.match(/data-acao="cal-hora"/g) || []).length === 13
+    && /class="fx-cal-h sel" data-acao="cal-hora" data-v="14">14h</.test(nov) && /data-acao="cal-min" data-v="30">:30</.test(nov) && /fx-cal-escolhido">Sexta · 13\/11 às 14:35</.test(nov), nov.slice(nov.indexOf('fx-cal-pe'), nov.indexOf('fx-cal-pe') + 80))
+  vale('dezembro entra como "fora" (mes seguinte na mesma grade)', /class="fx-cal-d fora" data-acao="cal-dia" data-v="2026-12-01">1</.test(nov))
+  const raizCom = (cal, armado, com) => ({ querySelector: (s) => s === '.fx-cal' ? { hidden: !cal } : s === '[data-armado="1"]' ? (armado ? {} : null) : s === '.fx-com' ? { value: com || '' } : null, contains: () => false })
+  vale('a ficha esta "ocupada" com o calendario aberto, com o botao armado ou com comentario escrito; senao, livre pra releitura',
+    C.fichaOcupada(raizCom(true)) === true && C.fichaOcupada(raizCom(false, true)) === true && C.fichaOcupada(raizCom(false, false, ' ' + 'combinou sexta')) === true && C.fichaOcupada(raizCom(false, false, '  ')) === false && C.fichaOcupada(null) === false)
+  vale('o que falta e o que ja entrou saem do saldo do servidor', C.faltaDe({ valor: 297, saldo: 147 }) === 147 && C.jaPagoDe({ valor: 297, saldo: 147 }) === 150 && C.faltaDe({ valor: 297 }) === 297 && C.jaPagoDe({ valor: 297 }) === 0 && C.faltaDe({ valor: 297, saldo: 0 }) === 297)
   const pedido = { ...P('9', { col: 'Pagos', pago: true, pagoTs: AGORA }), wa: '11911110000', links: { pix: 'https://pix', rastreio: 'https://r' }, comentarios: [], hist: [] }
   const htmlPainel = C.fichaHtml(pedido, { enviar: true })
   const htmlQuadro = C.fichaHtml({ ...pedido, pago: false, col: 'Entregues' }, { conversa: true })
@@ -718,6 +743,15 @@ console.log('\n=== contas do SellWave Web ===\n')
     /data-acao="enviar"/.test(htmlPainel) && !/data-acao="enviar"/.test(htmlQuadro) && /data-acao="conversa"/.test(htmlQuadro) && !/data-acao="conversa"/.test(htmlPainel))
   vale('pedido pago nao oferece "Marcar como pago" e so sai pra perda', !/data-acao="pago"/.test(htmlPainel) && !/value="Enviados"/.test(htmlPainel) && /value="Frustrados"/.test(htmlPainel))
   vale('pedido em aberto nao oferece Pagos no "mudar etapa" (pago pede o valor)', !/value="Pagos"/.test(htmlQuadro) && /data-acao="pago"/.test(htmlQuadro))
+  // PAGAMENTO PARCIAL E O CAMPO SEM ROTULO (05/11/2026)
+  const nb = (s) => String(s).replace(/ /g, ' ')
+  vale('a ficha nao tem mais o rotulo "Valor recebido" nem o campo nativo de data; o campo do valor diz o que e so pro leitor de tela',
+    !/Valor recebido</.test(htmlQuadro) && !/datetime-local|agend-campo/.test(htmlQuadro) && /aria-label="Valor recebido"/.test(htmlQuadro) && /data-acao="cal-abre"/.test(htmlQuadro) && /class="fx-cal" hidden/.test(htmlQuadro))
+  vale('pedido em aberto oferece "Pagamento parcial"; pago nao', /data-acao="parcial"/.test(htmlQuadro) && !/data-acao="parcial"/.test(htmlPainel))
+  const parcial = nb(C.fichaHtml({ ...pedido, pago: false, col: 'Entregues', valor: 297, saldo: 147, spg: 'Parcial', pagamentos: [{ valor: 150, data: '03/11/2026', quem: 'Haynan', obs: '' }] }, {}))
+  vale('com parcela registrada a ficha diz o que ja entrou e o que falta, lista a parcela, e o campo ja vem com o que falta',
+    /Já pagou <b>R\$ 150,00<\/b> de R\$ 297,00 · faltam <b>R\$ 147,00<\/b>/.test(parcial) && /<span>03\/11\/2026 · R\$ 150,00 · Haynan<\/span>/.test(parcial) && /value="147,00"/.test(parcial), parcial.slice(parcial.indexOf('Já pagou'), parcial.indexOf('Já pagou') + 110))
+  vale('sem parcela a ficha nao fala em "ja pagou" e o campo vem com o valor inteiro', !/Já pagou/.test(htmlQuadro) && /value="100,00"/.test(htmlQuadro))
   vale('o nome do cliente sai escapado (nada de HTML do pedido na tela)', !/<img/.test(C.fichaHtml({ ...pedido, nome: '<img src=x onerror=1>' }, {})))
 
   // COPIAR DADOS E ABRIR O LINK (05/11/2026, pedido do Haynan via Bruno): a ficha ganha o "Copiar

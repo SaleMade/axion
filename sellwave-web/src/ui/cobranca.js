@@ -573,8 +573,9 @@
     if (id !== fichaId || ficha.hidden) return
     const det = r && r.ok && Array.isArray(r.pedidos) ? r.pedidos[0] : null
     if (!det) { if (!quieto) fichaCorpo.innerHTML = '<div class="cob-carrega">' + esc((r && r.erro) || 'Esse pedido não está mais na lista.') + '</div>'; return }
-    // Releitura em segundo plano nao redesenha no meio do que ele esta digitando.
-    if (quieto && fichaCorpo.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return
+    // Releitura em segundo plano nao redesenha no meio do que ele esta fazendo: digitando, com o
+    // calendario aberto, com o "Confirmar" armado ou com comentario escrito (fichaOcupada, 05/11).
+    if (quieto && (C.fichaOcupada ? C.fichaOcupada(fichaCorpo) : (fichaCorpo.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')))) return
     fichaPed = det
     fichaCorpo.innerHTML = C.fichaHtml(det, { conversa: true, prontos: dados.prontos, tags: dados.tags })
     C.ligaFicha(fichaCorpo, det, {

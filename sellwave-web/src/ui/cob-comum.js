@@ -200,16 +200,63 @@
   const valorCampo = (v) => (Number(v) || 0).toFixed(2).replace('.', ',')
   const p2 = (n) => String(n).padStart(2, '0')
   const agendDe = (d) => d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + 'T' + p2(d.getHours()) + ':' + p2(d.getMinutes())
-  // Os atalhos de retorno: a mao do cobrador e "liga de novo daqui a pouco" ou "amanha cedo".
+  // OS ATALHOS DE RETORNO, POR DIA (05/11/2026, o Bruno: "nenhum lead retorna daqui a 1 hora (...)
+  // a partir de 1 dia, 2 dias, 7 dias, 10 dias, algo assim"). Antes era "Daqui 1 h / Hoje 18h /
+  // Amanha 9h / Amanha 14h / Em 2 dias", e os cobradores nao conseguiam usar. Todos as 9h: e quando
+  // o dia de cobranca comeca; hora diferente e no calendario ("Outro dia"). `quando` e o dia por
+  // extenso, pra quem passa o mouse ver em que data cai.
+  const DIAS_ATALHO = [1, 2, 3, 7, 10, 15]
   function atalhosRetorno(agora) {
     const a = new Date(agora || Date.now())
-    const umaHora = new Date(a.getTime() + 3600000); umaHora.setMinutes(Math.ceil(umaHora.getMinutes() / 5) * 5, 0, 0)
-    const dia = (n, h) => { const d = new Date(a); d.setDate(d.getDate() + n); d.setHours(h, 0, 0, 0); return d }
-    const out = [{ rot: 'Daqui 1 h', v: agendDe(umaHora) }]
-    if (a.getHours() < 17) out.push({ rot: 'Hoje 18h', v: agendDe(dia(0, 18)) })
-    out.push({ rot: 'Amanhã 9h', v: agendDe(dia(1, 9)) }, { rot: 'Amanhã 14h', v: agendDe(dia(1, 14)) }, { rot: 'Em 2 dias', v: agendDe(dia(2, 9)) })
-    return out
+    return DIAS_ATALHO.map((n) => {
+      const d = new Date(a); d.setDate(d.getDate() + n); d.setHours(9, 0, 0, 0)
+      return { rot: n === 1 ? 'Amanhã' : n + ' dias', v: agendDe(d), quando: rotuloDia(d.getTime(), a.getTime()) + ' às 09:00' }
+    })
   }
+
+  // ── O CALENDARIO DA FICHA (05/11/2026, o Bruno: "esse calendario esta muito feio. Estiliza ele,
+  // deixa no design padrao da nossa dash") ────────────────────────────────────────────────────
+  // O campo nativo de data e hora do Chromium (branco, com as duas colunas de hora) sai; entra a
+  // grade do mes no desenho do calendario da dash (o do shadcn: mes com setas, D S T Q Q S S, hoje
+  // marcado, dia escolhido no verde) com as horas em chips embaixo. Nasce fechado dentro da caixa
+  // Retorno e abre no "Outro dia". Dia passado nao se escolhe (retorno no passado nasce atrasado).
+  // `st` = { ano, mes (0-11, o mes na tela), dia: 'AAAA-MM-DD', hh, mm }: a tela anda de mes sem
+  // perder o dia escolhido. So HTML e estado; quem liga os cliques e a ligaFicha.
+  const HORAS_FICHA = ['08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20']
+  const SEM_CURTA = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S']
+  function calInicial(p, agora) {
+    agora = agora || Date.now()
+    const ag = quandoAgend(p)
+    // Retorno marcado de hoje em diante e o ponto de partida (hora e minuto exatos, pra remarcar so
+    // o dia sem mexer na hora); atrasado ou sem retorno comeca em amanha as 9h.
+    const vale = !isNaN(ag) && ag >= diaIni(agora)
+    const base = new Date(vale ? ag : agora + 86400000)
+    return { ano: base.getFullYear(), mes: base.getMonth(), dia: chaveDia(base.getTime()), hh: vale ? p2(base.getHours()) : '09', mm: vale ? p2(base.getMinutes()) : '00' }
+  }
+  function calFicha(st, agora) {
+    agora = agora || Date.now()
+    const hojeK = chaveDia(agora)
+    const tit = mesRotulo(st.ano, st.mes)
+    let h = '<div class="fx-cal-nav"><button type="button" class="fx-cal-seta" data-acao="cal-mes" data-v="-1" title="Mês anterior">' + I.esq + '</button>'
+      + '<b>' + esc(tit.charAt(0).toUpperCase() + tit.slice(1)) + '</b>'
+      + '<button type="button" class="fx-cal-seta" data-acao="cal-mes" data-v="1" title="Próximo mês">' + I.dir + '</button></div>'
+    h += '<div class="fx-cal-sem">' + SEM_CURTA.map((s) => '<span>' + s + '</span>').join('') + '</div>'
+    h += '<div class="fx-cal-grade">' + diasDaGrade(st.ano, st.mes).map((c) => {
+      const passado = c.k < hojeK
+      const cls = ['fx-cal-d', c.fora ? 'fora' : '', c.k === hojeK ? 'hoje' : '', c.k === st.dia ? 'sel' : '', passado ? 'passado' : ''].filter(Boolean).join(' ')
+      return '<button type="button" class="' + cls + '" data-acao="cal-dia" data-v="' + c.k + '"' + (passado ? ' disabled' : '') + '>' + c.dia + '</button>'
+    }).join('') + '</div>'
+    h += '<div class="fx-cal-horas">' + HORAS_FICHA.map((x) => '<button type="button" class="fx-cal-h' + (x === st.hh ? ' sel' : '') + '" data-acao="cal-hora" data-v="' + x + '">' + x + 'h</button>').join('')
+      + '<span class="fx-cal-min">' + ['00', '30'].map((x) => '<button type="button" class="fx-cal-h' + (x === st.mm ? ' sel' : '') + '" data-acao="cal-min" data-v="' + x + '">:' + x + '</button>').join('') + '</span></div>'
+    const quando = Date.parse(st.dia + 'T' + st.hh + ':' + st.mm)
+    h += '<div class="fx-cal-pe"><span class="fx-cal-escolhido">' + esc(isNaN(quando) ? 'Escolha o dia' : rotuloDia(quando, agora) + ' às ' + st.hh + ':' + st.mm) + '</span>'
+      + '<button type="button" class="fx-bt fx-verde" data-acao="cal-marca">Marcar</button></div>'
+    return h
+  }
+  // O QUE FALTA RECEBER e o que JA ENTROU (05/11/2026, pagamento parcial). O `saldo` vem pronto do
+  // servidor (valor a cobrar menos as parcelas registradas); sem ele, falta o valor inteiro.
+  const faltaDe = (p) => { const s = Number(p && p.saldo), v = Number(p && p.valor) || 0; return isFinite(s) && s > 0 && s <= v ? s : v }
+  const jaPagoDe = (p) => Math.max(0, (Number(p && p.valor) || 0) - faltaDe(p))
   const foneBonito = (f) => {
     let d = String(f || '').replace(/\D/g, '')
     if (d.length >= 12 && d.startsWith('55')) d = d.slice(2)
@@ -251,6 +298,9 @@
     pino: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.99-5.54 10.19-7.4 11.79a1 1 0 0 1-1.2 0C9.54 20.19 4 14.99 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>',
     pacote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/></svg>',
     balao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    calendario: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>',
+    esq: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+    dir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
   }
 
   // ── A FICHA ──────────────────────────────────────────────────────────────────────────────────
@@ -311,19 +361,31 @@
     h += '<div class="fx-bloco fx-caixa" data-sec="retorno" style="--c:#60a5fa"><div class="fx-tit">' + I.relogio + 'Retorno'
       + (isNaN(ag) ? '<span class="fx-ap">sem retorno marcado</span>' : '<span class="fx-quando' + (atrasado ? ' atrasado' : '') + '">' + esc(quandoTxt(ag, agora)) + (atrasado ? ' · atrasado' : '') + '</span>')
       + '</div><div class="fx-wrap">'
-      + atalhosRetorno(agora).map((a) => '<button class="fx-mini" data-acao="agend" data-v="' + a.v + '">' + esc(a.rot) + '</button>').join('')
-      + '<input class="fx-data" type="datetime-local" value="' + esc(isNaN(ag) ? '' : String(p.agend).slice(0, 16)) + '">'
-      + '<button class="fx-mini" data-acao="agend-campo">Marcar</button>'
+      // Os atalhos por dia (ver atalhosRetorno) e o "Outro dia", que abre o calendario da ficha
+      // (calFicha) logo abaixo, dentro da caixa. O campo nativo de data e hora saiu em 05/11/2026.
+      + atalhosRetorno(agora).map((a) => '<button class="fx-mini" data-acao="agend" data-v="' + a.v + '" title="' + esc(a.quando) + '">' + esc(a.rot) + '</button>').join('')
+      + '<button class="fx-mini fx-cal-bt" data-acao="cal-abre" aria-expanded="false" title="Escolher o dia e a hora no calendário">' + I.calendario + 'Outro dia</button>'
       + (p.agend ? '<button class="fx-mini fx-fraco" data-acao="agend" data-v="">Tirar</button>' : '')
-      + '</div></div>'
+      + '</div><div class="fx-cal" hidden></div></div>'
     // pagamento
     h += '<div class="fx-bloco fx-caixa" data-sec="pagamento" style="--c:#10b981"><div class="fx-tit">' + I.ok + 'Pagamento</div>'
     if (p.pago) {
       h += '<div class="fx-ap">Recebido ' + esc(brl(p.valor)) + (p.pagoTs ? ' em ' + esc(new Date(Number(p.pagoTs)).toLocaleDateString('pt-BR')) : '') + '.</div>'
     } else {
-      const armado = ctx.armado === 'pago'
-      h += '<div class="fx-wrap"><label class="fx-rot">Valor recebido</label><input class="fx-valor-in" inputmode="decimal" value="' + esc(valorCampo(p.valor)) + '">'
-        + '<button class="fx-bt ' + (armado ? 'fx-alerta' : 'fx-verde') + '" data-acao="pago">' + (armado ? 'Confirmar recebimento' : 'Marcar como pago') + '</button></div>'
+      // PAGAMENTO PARCIAL (05/11/2026, o Bruno: "as vezes o lead nao paga todo o valor e fala que daqui
+      // a tantos dias vai pagar o restante"). O que ja entrou e o que falta ficam a mostra, o campo
+      // ja vem com o que FALTA, e o pedido fica na fila ate quitar. O rotulo "Valor recebido" saiu
+      // ("ja e bem obvio pra que serve"): o campo diz isso pro leitor de tela, nao pra tela.
+      const falta = faltaDe(p), jaPago = jaPagoDe(p)
+      const parcelas = Array.isArray(p.pagamentos) ? p.pagamentos.filter((x) => x && Number(x.valor) > 0) : []
+      if (jaPago > 0) {
+        h += '<div class="fx-parcial">Já pagou <b>' + esc(brl(jaPago)) + '</b> de ' + esc(brl(p.valor)) + ' · faltam <b>' + esc(brl(falta)) + '</b>'
+          + (parcelas.length ? '<div class="fx-parcelas">' + parcelas.slice(-6).map((x) => '<span>' + esc([x.data, brl(x.valor), x.quem].filter(Boolean).join(' · ')) + '</span>').join('') + '</div>' : '')
+          + '</div>'
+      }
+      h += '<div class="fx-wrap"><input class="fx-valor-in" inputmode="decimal" value="' + esc(valorCampo(falta)) + '" aria-label="Valor recebido" title="Valor recebido">'
+        + '<button class="fx-bt fx-verde" data-acao="pago">Marcar como pago</button>'
+        + '<button class="fx-bt" data-acao="parcial" title="O cliente pagou só uma parte: registra o valor e o pedido continua na cobrança com o que falta">Pagamento parcial</button></div>'
       const links = LINKS.filter((l) => p.links && p.links[l.k])
       if (links.length) h += links.map((l) => linkLinha(l, p.links[l.k], ctx)).join('')
       else if (p.links) h += '<div class="fx-ap">Sem link de pagamento cadastrado para este pedido.</div>'
@@ -365,6 +427,21 @@
   const FRASE = { rastreio: 'Segue o link para acompanhar a entrega do seu pedido:' }
   for (const l of LINKS) FRASE[l.k] = l.frase
 
+  // A FICHA ESTA NO MEIO DE ALGO? (05/11/2026) As duas telas releem a ficha em segundo plano (o quadro
+  // mudou, ou de 30 em 30 s no painel) e redesenham por cima. Antes so "campo com foco" segurava a
+  // releitura; o calendario aberto, o botao armado ("Confirmar R$ ...") e o comentario escrito e
+  // nao salvo tambem sao trabalho em andamento, e a releitura apagava os tres.
+  function fichaOcupada(raiz) {
+    if (!raiz || !raiz.querySelector) return false
+    const cal = raiz.querySelector('.fx-cal')
+    if (cal && !cal.hidden) return true
+    if (raiz.querySelector('[data-armado="1"]')) return true
+    const com = raiz.querySelector('.fx-com')
+    if (com && String(com.value || '').trim()) return true
+    const a = (typeof document !== 'undefined') ? document.activeElement : null
+    return !!(a && a.matches && raiz.contains && raiz.contains(a) && a.closest('.fx') && a.matches('input, textarea, select'))
+  }
+
   // LIGA OS BOTOES DA FICHA. `ad` e o adaptador da tela que hospeda:
   //   salva(id, patch) -> { ok, erro, negados }   copiar(texto) -> { ok }
   //   abrirLink(url)   curto(url, id) -> { ok, url }   conversa?(p)   enviar?(texto) -> { ok, erro }
@@ -372,23 +449,60 @@
   function ligaFicha(raiz, p, ad, ctx) {
     const fx = raiz.querySelector('.fx[data-id="' + CSS.escape(String(p.id)) + '"]') || raiz.querySelector('.fx')
     if (!fx) return
-    const msg = fx.querySelector('.fx-msg')
-    const diz = (t, erro) => { if (!msg) return; msg.textContent = t; msg.className = 'fx-msg' + (erro ? ' erro' : ''); msg.hidden = !t; clearTimeout(msg.__t); if (t) msg.__t = setTimeout(() => { msg.hidden = true }, 6000) }
+    // A mensagem vai na ficha de AGORA: depois de uma releitura a ficha e outro no (o `fx` daqui
+    // ja saiu da tela), entao quem avisa depois de reler procura o .fx-msg de novo dentro da raiz.
+    const dizEm = (m, t, erro, ms) => { if (!m) return; m.textContent = t; m.className = 'fx-msg' + (erro ? ' erro' : ''); m.hidden = !t; clearTimeout(m.__t); if (t) m.__t = setTimeout(() => { m.hidden = true }, ms || 6000) }
+    const diz = (t, erro) => dizEm(fx.querySelector('.fx-msg'), t, erro)
+    const dizNaNova = (t, erro) => dizEm(raiz.querySelector('.fx-msg'), t, erro, 9000)
     let ocupado = false
+    // DESARMA O QUE A FICHA ARMOU (05/11/2026, revisao): o "Confirmar R$ ..." e o calendario aberto
+    // contam como trabalho em andamento (fichaOcupada) e seguravam a releitura que a propria gravacao
+    // pede no painel: a ficha ficava velha e o clique seguinte levava "o pedido mudou". O botao
+    // volta ao rotulo e a classe de antes (data-rot / data-cls, postos na hora de armar).
+    const desarmaBotoes = () => {
+      for (const b of fx.querySelectorAll('[data-armado="1"]')) { b.dataset.armado = ''; if (b.dataset.rot) b.textContent = b.dataset.rot; if (b.dataset.cls) b.className = b.dataset.cls }
+    }
+    const fechaCal = () => {
+      const cx = fx.querySelector('.fx-cal'); if (cx) cx.hidden = true
+      const ab = fx.querySelector('[data-acao="cal-abre"]'); if (ab) ab.setAttribute('aria-expanded', 'false')
+    }
+    const semPonto = (t) => String(t || '').replace(/\.+\s*$/, '')
     const grava = async (patch, ok) => {
-      if (ocupado) return
+      if (ocupado) return null
       ocupado = true
       fx.classList.add('fx-salvando')
       let r = null
       try { r = await ad.salva(p.id, patch) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
       ocupado = false
       fx.classList.remove('fx-salvando')
-      if (!r || !r.ok) { diz('Não salvou: ' + ((r && r.erro) || 'a dash não respondeu') + '.', true); return }
-      if (Array.isArray(r.negados) && r.negados.length) { diz('A dash não deixou mudar: ' + r.negados.join(', ') + '.', true); return }
+      desarmaBotoes()
+      if (!r || !r.ok) {
+        const t = 'Não salvou: ' + semPonto((r && r.erro) || 'a dash não respondeu') + '.'
+        // "O PEDIDO MUDOU" (409): outra pessoa mexeu no pedido com a ficha aberta. Rele a ficha, pra
+        // ela mostrar o que esta la agora e o proximo clique mandar o `antes` certo; o aviso vai na
+        // ficha relida (a de antes some com a releitura).
+        if (r && r.mudou) { try { await ad.recarrega('') } catch (_) { /* a releitura seguinte acerta */ } dizNaNova(t, true) }
+        else diz(t, true)
+        return r
+      }
+      if (Array.isArray(r.negados) && r.negados.length) { diz('A dash não deixou mudar: ' + r.negados.join(', ') + '.', true); return r }
+      // A PROVA DA PARCELA: o servidor responde quantas parcelas o pedido ficou tendo. Servidor que
+      // ainda nao conhece a parcela responde ok SEM isso, e ai ela NAO entrou: dizer "registrado"
+      // seria mentir (a dash do lado mostraria o saldo cheio).
+      if (patch.pagamento_add && !(Number(r.parcelas) > 0)) {
+        try { await ad.recarrega('') } catch (_) { /* idem */ }
+        dizNaNova((patch.spg === 'Pago' ? 'Marcou pago, mas a parcela não entrou na ficha de pagamentos' : 'A dash não registrou a parcela') + ': o servidor está desatualizado. Avise a direção.', true)
+        return r
+      }
+      if (patch.comment_add) { const ta = fx.querySelector('.fx-com'); if (ta) ta.value = '' }
+      fechaCal()
       diz(ok || 'Salvo.')
       try { await ad.recarrega(ok) } catch (_) { /* a releitura seguinte acerta */ }
+      return r
     }
     const linkDe = (k) => (p.links && p.links[k]) || ''
+    let cal = null   // o estado do calendario da ficha; nasce no primeiro "Outro dia" (calInicial)
+    const redesenhaCal = () => { const cx = fx.querySelector('.fx-cal'); if (cx && cal) cx.innerHTML = calFicha(cal, Date.now()) }
     fx.addEventListener('click', async (ev) => {
       const b = ev.target.closest('[data-acao]')
       if (!b || !fx.contains(b)) return
@@ -409,24 +523,73 @@
         await grava({ agend: v }, v ? 'Retorno marcado: ' + quandoTxt(Date.parse(v), Date.now()) + '.' : 'Retorno tirado.')
         return
       }
-      if (acao === 'agend-campo') {
-        const v = String((fx.querySelector('.fx-data') || {}).value || '').slice(0, 16)
-        if (!v) { diz('Escolha o dia e a hora.', true); return }
+      // O CALENDARIO DA FICHA (05/11/2026): abre fechado, anda de mes, escolhe dia, hora e minuto, e
+      // so grava no "Marcar". Redesenha SO a caixa do calendario (o resto da ficha, com o que ele
+      // digitou, fica como esta).
+      if (acao === 'cal-abre') {
+        const cx = fx.querySelector('.fx-cal')
+        if (!cx) return
+        if (!cx.hidden) { cx.hidden = true; b.setAttribute('aria-expanded', 'false'); return }
+        if (!cal) cal = calInicial(p, Date.now())
+        redesenhaCal(); cx.hidden = false; b.setAttribute('aria-expanded', 'true')
+        return
+      }
+      if (acao === 'cal-mes' || acao === 'cal-dia' || acao === 'cal-hora' || acao === 'cal-min') {
+        if (!cal) cal = calInicial(p, Date.now())
+        if (acao === 'cal-mes') { cal.mes += Number(b.dataset.v) || 0; if (cal.mes < 0) { cal.mes = 11; cal.ano -= 1 } else if (cal.mes > 11) { cal.mes = 0; cal.ano += 1 } }
+        else if (acao === 'cal-dia') { if (b.disabled) return; cal.dia = b.dataset.v }
+        else if (acao === 'cal-hora') cal.hh = b.dataset.v
+        else cal.mm = b.dataset.v
+        redesenhaCal()
+        return
+      }
+      if (acao === 'cal-marca') {
+        const v = cal ? cal.dia + 'T' + cal.hh + ':' + cal.mm : ''
+        if (!v || isNaN(Date.parse(v))) { diz('Escolha o dia e a hora.', true); return }
         await grava({ agend: v }, 'Retorno marcado: ' + quandoTxt(Date.parse(v), Date.now()) + '.')
         return
       }
       if (acao === 'pago') {
         const v = valorDigitado((fx.querySelector('.fx-valor-in') || {}).value)
         if (!(v > 0)) { diz('Escreva o valor que o cliente pagou.', true); return }
-        // DOIS CLIQUES, como tudo que nao tem desfazer simples: o primeiro arma e diz o valor.
+        const jaPago = jaPagoDe(p), falta = faltaDe(p)
+        // DOIS CLIQUES, como tudo que nao tem desfazer simples: o primeiro arma e diz o valor. Com
+        // parcela anterior o botao diz tambem o TOTAL que o pedido vai fechar (o digitado e o resto),
+        // e se o digitado passa do que faltava, avisa antes: pagar a mais e caso real (regra de 23/09,
+        // nao se bloqueia), mas o cobrador acostumado a digitar o total precisa ver a conta.
         if (b.dataset.armado !== '1') {
-          b.dataset.armado = '1'; b.className = 'fx-bt fx-alerta'; b.textContent = 'Confirmar ' + brl(v)
+          b.dataset.rot = 'Marcar como pago'; b.dataset.cls = 'fx-bt fx-verde'
+          b.dataset.armado = '1'; b.className = 'fx-bt fx-alerta'; b.textContent = 'Confirmar ' + brl(v) + (jaPago > 0 ? ' (total ' + brl(jaPago + v) + ')' : '')
+          if (jaPago > 0 && v > falta + 0.005) diz('Faltavam ' + brl(falta) + '. Confirme só se ele pagou ' + brl(v) + ' agora: o pedido fecha com ' + brl(jaPago + v) + ' no total.', true)
           setTimeout(() => { if (b.isConnected && b.dataset.armado === '1') { b.dataset.armado = ''; b.className = 'fx-bt fx-verde'; b.textContent = 'Marcar como pago' } }, 6000)
           return
         }
         // A MESMA CHAMADA DO "JA PAGOU" DA DASH: spg, valor e coluna numa gravacao so, com o `antes`
         // pra recusar se outra pessoa mexeu no pedido desde que a ficha abriu.
-        await grava({ spg: 'Pago', valor_neg: v, col: 'Pagos', antes: { spg: p.spg || '', col: p.colBruta || '' } }, 'Pago: ' + brl(v) + '.')
+        // COM PARCELA ANTERIOR (05/11/2026): o que ele digitou e o RESTO. Entra como parcela (a ficha
+        // de pagamentos fecha a conta) e o valor negociado vira o total que entrou (parcelas + resto):
+        // o resto com desconto fecha o pedido com menos, que e o que um desconto e.
+        const antes = { spg: p.spg || '', col: p.colBruta || '' }
+        const patch = jaPago > 0
+          ? { pagamento_add: { valor: v, obs: 'quitou pelo SellWave Web' }, spg: 'Pago', valor_neg: Math.round((jaPago + v) * 100) / 100, col: 'Pagos', antes }
+          : { spg: 'Pago', valor_neg: v, col: 'Pagos', antes }
+        await grava(patch, 'Pago: ' + brl(jaPago + v) + '.')
+        return
+      }
+      if (acao === 'parcial') {
+        const v = valorDigitado((fx.querySelector('.fx-valor-in') || {}).value)
+        if (!(v > 0)) { diz('Escreva o valor que o cliente pagou.', true); return }
+        const falta = faltaDe(p)
+        if (v + 0.005 >= falta) { diz('Esse valor quita o pedido: use o "Marcar como pago".', true); return }
+        if (b.dataset.armado !== '1') {
+          b.dataset.rot = 'Pagamento parcial'; b.dataset.cls = 'fx-bt'
+          b.dataset.armado = '1'; b.className = 'fx-bt fx-alerta'; b.textContent = 'Confirmar parcial de ' + brl(v)
+          setTimeout(() => { if (b.isConnected && b.dataset.armado === '1') { b.dataset.armado = ''; b.className = 'fx-bt'; b.textContent = 'Pagamento parcial' } }, 6000)
+          return
+        }
+        // So a parcela (pagamento_add, o servidor acrescenta): sem spg e sem coluna, o pedido fica na
+        // fila com o saldo. O `antes` recusa se alguem marcou pago ou moveu enquanto a ficha estava aberta.
+        await grava({ pagamento_add: { valor: v, obs: 'parcial pelo SellWave Web' }, antes: { spg: p.spg || '', col: p.colBruta || '' } }, 'Parcial de ' + brl(v) + ' registrado. Faltam ' + brl(falta - v) + '.')
         return
       }
       if (acao === 'etapa') {
@@ -509,12 +672,40 @@
   .fx-verde:hover { background: color-mix(in srgb, var(--verde) 28%, transparent); }
   .fx-alerta { background: rgba(245, 165, 36, .2); border-color: rgba(245, 165, 36, .55); }
   .fx-fraco { color: var(--apagado); }
-  .fx-data, .fx-valor-in, .fx-etapa, .fx-com { font: inherit; color: var(--texto); background: rgba(255, 255, 255, .04); border: 1px solid var(--linha); border-radius: 8px; padding: 4px 7px; outline: none; }
-  .fx-data:focus, .fx-valor-in:focus, .fx-etapa:focus, .fx-com:focus { border-color: color-mix(in srgb, var(--verde) 60%, transparent); }
+  .fx-valor-in, .fx-etapa, .fx-com { font: inherit; color: var(--texto); background: rgba(255, 255, 255, .04); border: 1px solid var(--linha); border-radius: 8px; padding: 4px 7px; outline: none; }
+  .fx-valor-in:focus, .fx-etapa:focus, .fx-com:focus { border-color: color-mix(in srgb, var(--verde) 60%, transparent); }
   .fx-etapa option { background: #1d2330; }
   .fx-valor-in { width: 92px; font-variant-numeric: tabular-nums; }
-  .fx-data { color-scheme: dark; }
   .fx-rot { font-size: 11px; color: var(--apagado); }
+  /* o calendario da ficha (05/11/2026): o desenho do calendario da dash, dentro da caixa Retorno */
+  .fx-cal-bt svg { width: 12px; height: 12px; }
+  .fx-cal { margin-top: 2px; padding: 8px 8px 9px; border-radius: 10px; border: 1px solid var(--linha); background: rgba(0, 0, 0, .22); }
+  .fx-cal[hidden] { display: none; }
+  .fx-cal-nav { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+  .fx-cal-nav b { font-size: 12.5px; font-weight: 650; color: var(--texto); }
+  .fx-cal-seta { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--apagado); cursor: pointer; padding: 0; }
+  .fx-cal-seta:hover { background: rgba(255, 255, 255, .07); color: var(--texto); }
+  .fx-cal-seta svg { width: 14px; height: 14px; }
+  .fx-cal-sem, .fx-cal-grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
+  .fx-cal-sem span { text-align: center; font-size: 10.5px; font-weight: 600; color: var(--apagado); padding: 2px 0 3px; }
+  .fx-cal-d { height: 28px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--texto); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; }
+  .fx-cal-d:hover:not(:disabled) { background: rgba(255, 255, 255, .08); }
+  .fx-cal-d.fora { color: var(--apagado); opacity: .55; }
+  .fx-cal-d.hoje { background: rgba(255, 255, 255, .09); font-weight: 700; }
+  .fx-cal-d.sel, .fx-cal-h.sel { background: var(--verde); border-color: var(--verde); color: #05070c; font-weight: 700; opacity: 1; }
+  .fx-cal-d.sel:hover, .fx-cal-h.sel:hover { background: var(--verde); }
+  .fx-cal-d:disabled { opacity: .3; cursor: default; }
+  .fx-cal-horas { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--linha); }
+  .fx-cal-h { padding: 3px 7px; border-radius: 7px; border: 1px solid var(--linha); background: rgba(255, 255, 255, .03); color: var(--texto); font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .fx-cal-h:hover { background: rgba(255, 255, 255, .08); }
+  .fx-cal-min { display: inline-flex; gap: 4px; margin-left: auto; padding-left: 6px; border-left: 1px solid var(--linha); }
+  .fx-cal-pe { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  .fx-cal-escolhido { font-size: 12px; font-weight: 650; color: #60a5fa; }
+  /* pagamento parcial (05/11/2026): o que ja entrou e o que falta, com as parcelas */
+  .fx-parcial { font-size: 12px; color: var(--apagado); }
+  .fx-parcial b { color: var(--texto); }
+  .fx-parcelas { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .fx-parcelas span { padding: 1px 7px; border-radius: 6px; font-size: 11px; background: rgba(255, 255, 255, .05); color: var(--apagado); }
   .fx-link { display: flex; align-items: center; gap: 6px; }
   .fx-link > span { min-width: 64px; font-weight: 650; }
   .fx-prontos .fx-mini { white-space: normal; text-align: left; }
@@ -542,6 +733,7 @@
     esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, DESTINOS_COB, podeIrCob, COLS_COBRANCA, COLS_A_CAMINHO,
     naFila, aCaminho, emContato, quandoAgend, agenda, rotuloDia, hora, haQuanto, quandoTxt, chaveDia, diaIni,
     COR_CAL, calendario, diasDaGrade, mesRotulo, agendNoDia,
-    valorDigitado, atalhosRetorno, foneBonito, textoDados, fichaHtml, ligaFicha, poeEstilo, I,
+    valorDigitado, atalhosRetorno, DIAS_ATALHO, HORAS_FICHA, calInicial, calFicha, faltaDe, jaPagoDe,
+    foneBonito, textoDados, fichaHtml, ligaFicha, fichaOcupada, poeEstilo, I,
   }
 })()

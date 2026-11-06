@@ -3,6 +3,8 @@
 const { contextBridge } = require('electron')
 
 const chamadas = []
+// O pedido 7001 da ficha de cobranca do painel, com o que a ficha gravou (ver cobPedido/cobSalva).
+const P7001 = { valor: 397, saldo: 397, pago: false, spg: 'Pendente', agend: '', comentarios: [], pagamentos: [] }
 let rascSeq = 0
 const reg = (nome, valor) => (...args) => { chamadas.push({ nome, args }); return Promise.resolve(valor) }
 
@@ -116,18 +118,30 @@ contextBridge.exposeInMainWorld('swp', {
   // marcar cedo demais apaga o aviso de quem ainda espera resposta.
   marcarLida: reg('marcarLida', { ok: true }),
   // A FICHA DE COBRANCA (31/10/2026, versao de cobrador): o pedido do cliente da conversa.
+  // O 7001 TEM ESTADO (05/11/2026): o que a ficha grava (retorno, parcela, pago, comentario) volta na
+  // leitura seguinte, como o worker faz. E o que prova que a ficha do painel redesenha depois de gravar.
   cobPedido: (phone) => {
     chamadas.push({ nome: 'cobPedido', args: [phone] })
+    const e = P7001
     return Promise.resolve({ ok: true, prontos: ['Aguardando resposta do cliente'], pedidos: [{
       id: '7001', nome: 'Cliente de Teste', wa: '19995983293', cidade: 'Campinas', uf: 'SP', prod: 'Produto A - 3 Meses',
-      vl: 397, valor: 397, saldo: 397, pago: false, pagoTs: 0, col: 'Entregues', colBruta: 'Cobrança', spg: 'Pendente', mod: 'entrega',
-      agend: '', selo: { label: 'Entregue', cor: '#10b981', quando: '30/10/2026' }, entrega: { label: 'Entregue em', data: '30/10/2026', dias: '3 dias' },
-      entrou: Date.now(), criado: Date.now(), at: 'a1', atNome: 'Guilherme', cob: 'hc', cobNome: 'Haynan', track: 'AB1', transp: 'Correios', tags: [], ncom: 0, vc: true,
+      vl: 397, valor: e.valor, saldo: e.saldo, pago: e.pago, pagoTs: e.pago ? Date.now() : 0, col: e.pago ? 'Pagos' : 'Entregues', colBruta: e.pago ? 'Pagos' : 'Cobrança', spg: e.spg, mod: 'entrega',
+      agend: e.agend, selo: { label: 'Entregue', cor: '#10b981', quando: '30/10/2026' }, entrega: { label: 'Entregue em', data: '30/10/2026', dias: '3 dias' },
+      entrou: Date.now(), criado: Date.now(), at: 'a1', atNome: 'Guilherme', cob: 'hc', cobNome: 'Haynan', track: 'AB1', transp: 'Correios', tags: [], ncom: e.comentarios.length, vc: true,
       data: '27/10', links: { checkout: 'https://checkout.exemplo/k3', pix: 'https://pix.exemplo/p?ped=7001', boleto: '', cartao: '', rastreio: 'https://glico-six.rastreio.vip/rastreio?codigo=AB1' },
-      hist: [], comentarios: [],
+      hist: [], comentarios: e.comentarios.slice(), pagamentos: e.pagamentos.slice(),
     }] })
   },
-  cobSalva: (id, patch) => { chamadas.push({ nome: 'cobSalva', args: [id, patch] }); return Promise.resolve({ ok: true, negados: [] }) },
+  cobSalva: (id, patch) => {
+    chamadas.push({ nome: 'cobSalva', args: [id, patch] })
+    const e = P7001, p = patch || {}
+    if (p.antes && (String(p.antes.spg || '') !== e.spg)) return Promise.resolve({ ok: false, erro: 'O pedido mudou desde que você abriu. Recarregue e tente de novo.', mudou: true })
+    if ('agend' in p) e.agend = String(p.agend || '')
+    if (p.comment_add) e.comentarios.unshift({ quem: 'Haynan', tx: String(p.comment_add.tx || ''), quando: '05/11 10:00', tipo: '', url: '' })
+    if (p.pagamento_add) { e.pagamentos.push({ valor: Number(p.pagamento_add.valor) || 0, data: '05/11/2026', quem: 'Haynan', obs: String(p.pagamento_add.obs || '') }); e.saldo = Math.max(0, e.valor - e.pagamentos.reduce((s, x) => s + x.valor, 0)); if (!('spg' in p)) e.spg = e.saldo > 0 ? 'Parcial' : 'Pago' }
+    if (p.spg === 'Pago') { e.spg = 'Pago'; e.pago = true; if (Number(p.valor_neg) > 0) e.valor = Number(p.valor_neg); e.saldo = 0; e.agend = '' }
+    return Promise.resolve({ ok: true, negados: [], ...(p.pagamento_add ? { parcelas: e.pagamentos.length } : {}) })
+  },
   cobCurto: reg('cobCurto', { ok: true, url: 'https://sw.li/abc' }),
   abrirLink: reg('abrirLink', { ok: true }),
   copiar: reg('copiar', { ok: true }),
