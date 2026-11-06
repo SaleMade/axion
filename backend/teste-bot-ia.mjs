@@ -1349,20 +1349,23 @@ titulo('25. A chave so do bot (o credito do Google AI Pro vai so pro bot)');
 titulo('26. O manual: a duvida de uso puxa so os itens que batem');
 {
   const { api } = monta({});
-  const temas = (txt) => api._botIaManualPara(txt).map((x) => x.t);
+  const temas = (txt, g) => api._botIaManualPara(txt, g).map((x) => x.t);
   conf(temas('meu numero caiu, e agora?')[0] === 'Número caiu', '"meu numero caiu": o item do numero caido vem primeiro');
-  conf(temas('posso usar o sellwave web em duas maquinas ao mesmo tempo?').includes('Número aberto em outro computador'), '"posso usar em duas maquinas?": o item do numero aberto em outro computador');
+  conf(temas('posso usar o sellwave web em duas maquinas ao mesmo tempo?')[0] === 'SellWave Web em dois computadores', '"posso usar em duas maquinas?": o item dos dois computadores vem primeiro');
   conf(temas('como faço pra parar de receber lead pra almocar?').includes('Ligar e desligar o recebimento'), '"parar de receber pra almocar": o item do interruptor');
-  conf(temas('o pedido da maria nao subiu').includes('Pedido não subiu'), '"o pedido nao subiu": o item do pedido que nao subiu');
-  conf(!temas('somente amanha').includes('SellWave Web com defeito'), 'palavra curta so inteira ("som" nao casa com "somente")');
+  conf(temas('o pedido da maria nao subiu').includes('Pedido não subiu ou não aparece'), '"o pedido nao subiu": o item do pedido que nao subiu');
+  conf(!temas('o pixel ta disparando').includes('Cliente quer pagar'), 'palavra curta so inteira ("pix" nao casa com "pixel")');
   conf(temas('bom dia galera').length === 0, 'papo sem duvida: nenhum item');
-  conf(api.BOT_IA_MANUAL.length >= 30 && api.BOT_IA_MANUAL.every((x) => x.t && x.k.length && x.r && !/\d{8,}/.test(x.r) && !/[—–]/.test(x.r)), 'todo item tem tema, palavras e resposta, sem numero longo nem travessao');
+  const fora = api.BOT_IA_MANUAL.filter((x) => !temas(x.q, x.g).includes(x.t)).map((x) => x.t);
+  conf(!fora.length, 'a pergunta de exemplo de cada item puxa o proprio item' + (fora.length ? ' (falhou: ' + fora.join(', ') + ')' : ''));
+  conf(temas('o que significa cada linha do resumo?', 'cob')[0] === 'Linhas do resumo da cobrança' && temas('o que significa cada linha do resumo?', 'vend')[0] === 'Linhas do resumo do dia', 'empate: vem antes o item do grupo em que perguntaram');
+  conf(api.BOT_IA_MANUAL.length >= 70 && api.BOT_IA_MANUAL.every((x) => x.t && x.q && x.k.length && x.r && !/\d{8,}/.test(x.r) && !/[—–]/.test(x.r) && !/https?:|www\./i.test(x.r)), 'todo item tem tema, exemplo, palavras e resposta, sem numero longo, travessao nem link');
 }
 {
   const m = monta({ ...MUNDO, ia: [JSON_OK] });
   const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho posso usar o sellwave web em duas maquinas?', menciona: true, marcado: true }));
-  conf(/MANUAL \(como fazer, conferido no sistema/.test(m.chamadas[0].user) && /Cada número abre em um computador só/.test(m.chamadas[0].user) && r.viu.some((v) => /manual:/.test(v)), 'a duvida vai pra IA com o item do manual nos DADOS');
-  conf(/QUEM RESOLVE/.test(m.chamadas[0].system) && /Heynan: campanha e orçamento/.test(m.chamadas[0].system), 'o system leva quem resolve cada assunto');
+  conf(/MANUAL \(como fazer, conferido no sistema/.test(m.chamadas[0].user) && /Pode instalar em quantos computadores quiser/.test(m.chamadas[0].user) && r.viu.some((v) => /manual:/.test(v)), 'a duvida vai pra IA com o item do manual nos DADOS');
+  conf(/QUEM RESOLVE/.test(m.chamadas[0].system) && /Heynan \(comercial\): campanha e orçamento/.test(m.chamadas[0].system), 'o system leva quem resolve cada assunto');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho como desligo meu numero pra almocar?', menciona: true, marcado: true, de_jid: '5599000000000@s.whatsapp.net', de_fone: '5599000000000', de_nome: 'Fulano' }));
   conf(/Pessoa não identificada/.test(m2.chamadas[0].user) && /MANUAL/.test(m2.chamadas[0].user), 'pessoa nao identificada tambem recebe o manual (nao tem dado pessoal)');

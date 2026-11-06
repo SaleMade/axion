@@ -13955,421 +13955,99 @@ const BOT_IA_EXEMPLOS = {
   ],
 };
 // O MANUAL (06/11/2026, pedido do Bruno: "se acontecer algum bug, algum pedido nao subiu ou qualquer ajuda que eu
-// teria que falar, quero que ele consiga falar"). As duvidas de uso que o time trouxe no grupo dos vendedores
-// (15/10 a 06/11), respondidas como o sistema funciona hoje e conferidas por dois revisores (codigo e risco).
-// Gerado de scratchpad/bot-vivo/manual_itens.py da conversa 23197806. So entram na mensagem os itens que batem.
+// teria que falar, quero que ele consiga falar" e "quero que ele conheca melhor a nossa dash e a nossa operacao").
+// Duas fontes: as duvidas que o time trouxe no grupo dos vendedores (15/10 a 06/11) e o levantamento do resto do
+// sistema (app, numeros e roleta, pedido, pagamento, entrega, cobranca, acesso e painel), cada resposta conferida no
+// codigo por revisores. Gerado de scratchpad/bot-vivo/manual_itens.py da conversa 23197806. Cada item: t (tema),
+// q (pergunta de exemplo; o teste confere que ela puxa o proprio item), k (palavras que puxam), r (resposta) e
+// g (item de um grupo so, opcional). So entram na mensagem os itens que batem.
 const BOT_IA_MANUAL = [
- {
-  "t": "Número caiu",
-  "k": [
-   "banid",
-   "bloque",
-   "caindo",
-   "cair",
-   "caiu",
-   "desconect",
-   "pediu qr",
-   "qr code",
-   "queda",
-   "restrit"
-  ],
-  "r": "Desliga o interruptor dele no SellWave Web pra não ir lead pra ele e segue nos outros números. O Bruno ajeita outro: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Queda comprovada o sistema já desliga sozinho e marca o número como Restrito (some o interruptor, fica um tracinho); a volta é com o Bruno."
- },
- {
-  "t": "Falar com o lead por outro número",
-  "k": [
-   "card do lead",
-   "continuar a conversa",
-   "falar com ela",
-   "falar com ele",
-   "outro numero",
-   "por outro",
-   "trocar de numero"
-  ],
-  "r": "Dá sim. No CRM do Atendimento (a faixa de baixo do SellWave Web), o card do lead tem o botão de trocar: chama ele por outro número aberto aí. O botão direito no card abre o mesmo menu e tem Copiar o número. Se o número de origem foi banido, saiu da sua lista ou tá fechado como Restrito, esse menu abre sozinho."
- },
- {
-  "t": "Lead parou de chegar",
-  "k": [
-   "chega",
-   "chegando",
-   "lead",
-   "leads",
-   "nao chega",
-   "parou de chegar",
-   "pingado",
-   "roleta"
-  ],
-  "r": "Confere se o SellWave Web tá aberto e o interruptor dos seus números verde (laranja = bateu o limite ou parado até a meia-noite, cinza = desligado; tracinho no lugar = número fora de uso, não recebe). A roleta iguala os leads do dia: quem tá na frente espera os outros empatarem. Parou pra todo mundo? Marca o Heynan e o Bruno. Só pra você: marca o Bruno."
- },
- {
-  "t": "Ligar e desligar o recebimento",
-  "k": [
-   "almocar",
-   "almoco",
-   "desligar",
-   "desligo",
-   "expediente",
-   "interruptor",
-   "ligar de novo",
-   "parar de receber",
-   "pausa",
-   "pausar",
-   "sair um pouco"
-  ],
-  "r": "No SellWave Web, o interruptor do lado de cada número: verde recebe, cinza não (com a barra encolhida ele some: abre a barra na setinha do topo). Vai sair? Desliga. Voltou? Liga. Fechar o app desliga todos sozinho e, ao abrir, você liga de novo: nada religa sozinho."
- },
- {
-  "t": "Limite de leads do número",
-  "k": [
-   "aumenta o limite",
-   "bateu o limite",
-   "laranja",
-   "limite",
-   "teto"
-  ],
-  "r": "Você mesmo muda: dois cliques rápidos no contador do número (o 32/70 na linha dele) abrem o limite: 30, 50, 70 ou 100. Bateu o limite, fica laranja e volta à meia-noite. Chip em aquecimento não deixa mudar: o teto sobe sozinho com os dias. Se os dois cliques não abrem nada, o número não tá no modo limite: fala com o Bruno."
- },
- {
-  "t": "Número aberto em outro computador",
-  "k": [
-   "aberto por",
-   "dois computadores",
-   "duas maquinas",
-   "fecha ai meu",
-   "liberado",
-   "notebook",
-   "outra maquina",
-   "outro computador",
-   "outro pc"
-  ],
-  "r": "Cada número abre em um computador só. Se aparece \"Aberto por Fulano\", pede pra ele fechar o número no app dele (o X do lado) e o botão libera sozinho em até 2 minutos. Se foi você em outro PC, fecha lá. O mesmo número aberto em dois computadores derruba o número e some conversa."
- },
- {
-  "t": "Atualizar o SellWave Web",
-  "k": [
-   "app velho",
-   "atualiza",
-   "atualizacao",
-   "atualizar",
-   "desatualizado",
-   "reinicie",
-   "versao"
-  ],
-  "r": "No Windows ele se atualiza sozinho: baixa por trás e entra quando você fecha e abre o app (a faixa verde no pé da barra dos números avisa quando tá pronta). Se ela pedir pra baixar: baixa, fecha o app no X, espera ele salvar e roda o instalador. No Mac não é sozinho: baixa de novo em Ferramentas > SellWave Web. Depois liga os interruptores."
- },
- {
-  "t": "SellWave Web com defeito",
-  "k": [
-   "bug",
-   "bugou",
-   "erro",
-   "lento",
-   "ligacao",
-   "nao abre",
-   "nao envia",
-   "nao enviando",
-   "nao marca",
-   "nao ta enviando",
-   "som",
-   "trava",
-   "travando",
-   "travou"
-  ],
-  "r": "Primeiro fecha o número no X do lado dele e abre de novo. Não resolveu? Fecha o SellWave Web no X e espera ele terminar de salvar (nunca pelo gerenciador de tarefas), abre, vê se a faixa no pé da barra pede versão nova e liga os interruptores. Continuou? Eu aviso o Bruno daqui (ou marca ele) com o final do número e o que tá acontecendo."
- },
- {
-  "t": "Instalar o SellWave Web e o app do celular",
-  "k": [
-   "android",
-   "apk",
-   "baixar",
-   "baixo",
-   "celular",
-   "download",
-   "instalar",
-   "instalo",
-   "iphone",
-   "onde baixa"
-  ],
-  "r": "Computador: na dash, Ferramentas > SellWave Web > Baixar para Windows (pro cobrador o botão é Baixar versão de cobrador) ou Baixar para Mac, e entra com o mesmo login da dash. Celular: abre a dash no navegador com /app/ajustes no endereço e segue Instalar o aplicativo: Android pelo Chrome, iPhone pelo Safari."
- },
- {
-  "t": "Funil apagado com \"já enviado\"",
-  "k": [
-   "apagada",
-   "apagado",
-   "etapa",
-   "ja enviado",
-   "repetir funil"
-  ],
-  "r": "É só aviso: o funil fica apagado com \"já enviado\" quando já foi pra esse lead, pra você não repetir sem querer. Quer mandar de novo? Clica duas vezes no botão de enviar dele (o segundo clique em até 6 segundos)."
- },
- {
-  "t": "Salvar áudio ou mensagem no funil",
-  "k": [
-   "botao mais",
-   "criar funil",
-   "mensagem pronta",
-   "meu funil",
-   "objecao",
-   "salvar audio",
-   "salvar mensagem"
-  ],
-  "r": "Você mesmo cria: no painel do SellWave Web, o botão + faz mensagem, áudio, vídeo, foto ou PDF, e você escolhe Só eu ou Todos. Dá pra montar funil seu com o tempo de cada passo. Objeção nova sem material? Pede pro Heynan."
- },
- {
-  "t": "Cliente quer pagar",
-  "k": [
-   "antecipado",
-   "boleto",
-   "cartao",
-   "link do cartao",
-   "pagar antecipado",
-   "pix",
-   "quer pagar",
-   "reenvia",
-   "venceu"
-  ],
-  "r": "Pedido na entrega: boleto e cartão é com o cobrador do pedido; me fala o nome do cliente que eu digo de quem é a fila e marca ele aqui (não tá no grupo? marca o Heynan). Fechou antecipado? O link do cartão já aparece no pedido em Cadastro de Pedidos (Copiar link). Pix você mesmo manda, a chave CNPJ da Sell Wave com o valor."
- },
- {
-  "t": "Chave Pix da empresa",
-  "k": [
-   "alerta de golpe",
-   "chave",
-   "chave pix",
-   "cnpj",
-   "golpe"
-  ],
-  "r": "A chave oficial é o CNPJ da Sell Wave (no Pix aparece Sell Wave no nome), a da mensagem \"Chave Pix CNPJ\" que o Heynan manda aqui. Salva ela no + do painel do SellWave Web como Só eu e manda pro cliente com o valor, o CNPJ numa mensagem separada. Deu alerta de golpe ou o cliente não consegue pagar? Marca o cobrador do pedido ou o Heynan."
- },
- {
-  "t": "Comprovante que chegou pro vendedor",
-  "k": [
-   "comprovante",
-   "disse que pagou",
-   "diz que pagou",
-   "ja pagou",
-   "mandou o print"
-  ],
-  "r": "Posta o print aqui marcando o cobrador do pedido e o Heynan. Quem dá baixa é o cobrador, na ficha do pedido: Marcar como pago, ou Pagamento parcial se pagou só uma parte. Me fala o nome do cliente que eu digo de quem é a fila e se já consta pago."
- },
- {
-  "t": "Parcelamento",
-  "k": [
-   "carne",
-   "em vezes",
-   "parcela",
-   "parcelado",
-   "parcelar"
-  ],
-  "r": "Parcelado é só no cartão de crédito. Boleto e Pix são à vista e carnê não tem. Sem cartão, oferece um kit menor. Explica antes de fechar: quem acha que dá pra parcelar no boleto vira frustrado."
- },
- {
-  "t": "Preço dos kits",
-  "k": [
-   "frasco",
-   "frascos",
-   "kit",
-   "meses de tratamento",
-   "preco",
-   "quanto custa",
-   "tratamento",
-   "valor do kit"
-  ],
-  "r": "1 frasco por mês de tratamento: 1 mês R$ 197, 2 meses R$ 297, 3 meses R$ 397, 4 meses R$ 497, 6 meses R$ 697 e 10 meses R$ 997. No cadastro o valor vem sozinho do kit escolhido."
- },
- {
-  "t": "Cliente quer cancelar",
-  "k": [
-   "cancela",
-   "cancelar",
-   "cancelou",
-   "desistir",
-   "desistiu",
-   "familia nao quer",
-   "nao quer mais"
-  ],
-  "r": "Antes tenta reverter: liga, manda depoimento de cliente. Se o pedido ainda espera aprovação, você mesmo cancela em Cadastro de Pedidos, no botão de cancelar do pedido. Já aprovado ou enviado, marca o Heynan: depois de enviado não cancela, o cliente recusa a entrega ou devolve."
- },
- {
-  "t": "Cliente pergunta do pedido",
-  "k": [
-   "nao fui eu que vendi",
-   "outro vendedor",
-   "prazo",
-   "quando chega",
-   "quem vendeu",
-   "rastrear",
-   "rastreio",
-   "vai chegar"
-  ],
-  "r": "Me fala o nome do cliente que eu digo em que pé tá (a enviar, enviado, saiu pra entrega). O rastreio fica no detalhe do pedido no Kanban. Pedido de outro vendedor você não vê: depois da venda quem responde é o cobrador, então manda pro cliente a mensagem com o link de acompanhar o pedido, sem passar número na mão."
- },
- {
-  "t": "Cliente diz que não recebeu",
-  "k": [
-   "consta entregue",
-   "foto da entrega",
-   "marca entregue",
-   "nao chegou",
-   "nao recebeu",
-   "quem assinou"
-  ],
-  "r": "Abre o pedido no Kanban: em Foto da entrega aparece a foto e quem assinou (\"Recebido por\"), quando a transportadora manda. Passa isso pro cliente e pede pra conferir com vizinho ou parente. Se ele insistir, marca o Heynan, que abre chamado na transportadora."
- },
- {
-  "t": "Retirada nos Correios e endereço",
-  "k": [
-   "agencia",
-   "cep",
-   "correios",
-   "endereco",
-   "endereco errado",
-   "retirada",
-   "retirar"
-  ],
-  "r": "Evita retirada: no cadastro deixa Transportadora (só o Ceará vai pelos Correios). Pedido parado pra retirada numa agência fica com o cobrador do pedido. Confere CEP e número antes de cadastrar. Endereço errado em pedido ainda não aprovado, você corrige no lápis do pedido em Cadastro de Pedidos; já aprovado, marca o Heynan."
- },
- {
-  "t": "Pedido não subiu",
-  "k": [
-   "cadastrar",
-   "cadastrei",
-   "conflict",
-   "erro ao cadastrar",
-   "nao aparece",
-   "nao subiu",
-   "rascunho",
-   "subiu",
-   "sumiu"
-  ],
-  "r": "Pela dash, depois do Cadastrar o aviso do canto fica em \"Enviando\": não fecha a aba antes de sair \"cadastrado\". Deu erro? Tenta de novo no aviso, nunca cadastra de novo do zero (duplica). Pelo SellWave Web, a aba Pedidos avisa \"Pedido cadastrado\". Subiu, ele aparece no Cadastro de Pedidos e só vai pro Kanban depois que a direção aprova."
- },
- {
-  "t": "Termo do cliente",
-  "k": [
-   "aceite",
-   "aceitou o termo",
-   "comprovante do termo",
-   "confirmar o termo",
-   "termo"
-  ],
-  "r": "Pedido na entrega só sobe com o comprovante: print (Ctrl+V cola direto), áudio ou vídeo do cliente aceitando o termo. Vídeo pesado? Grava um de uns 30 s ou manda print. Sumiu e não confirma desde ontem? Não vale ficar em cima; na dúvida, chama o Heynan."
- },
- {
-  "t": "Placar ou meta não bate",
-  "k": [
-   "contei",
-   "contou",
-   "ladrao",
-   "meta da semana",
-   "minha meta",
-   "nao bate",
-   "placar"
-  ],
-  "r": "No meu placar, pedido cancelado não conta e pedido esperando aprovação já conta (na dash ele só entra depois de aprovado). A meta da semana vai de segunda 0h a domingo. Conta não bate? Pode ser pedido cadastrado duas vezes: me diz quanto você contou que eu passo pro Bruno conferir."
- },
- {
-  "t": "Dash travada ou lenta",
-  "k": [
-   "carregando",
-   "carregar",
-   "comentario",
-   "dash",
-   "f5",
-   "lenta",
-   "nao carrega",
-   "tela branca",
-   "travada"
-  ],
-  "r": "Aperta F5, mas antes olha se não tem pedido \"Enviando\" no canto da tela: espera ele terminar. Aba aberta há muito tempo fica com a tela antiga, e a dash muda várias vezes no dia. Continuou? Marca o Bruno dizendo a tela e o que aconteceu."
- },
- {
-  "t": "Cobrador não acha o pedido",
-  "k": [
-   "fila",
-   "minha fila",
-   "nao acho",
-   "nao encontro",
-   "nao ta comigo",
-   "saiu da minha",
-   "sumiu da fila"
-  ],
-  "r": "Cada cobrador vê só a fila dele, e pedido sem dono aparece pra todos. O pedido também muda de fila sozinho: se o cliente escreveu pro WhatsApp de outro cobrador, ele passa pra fila desse cobrador. Me fala o nome que eu digo de quem é. A busca acha por palavra solta do nome ou pelo final do telefone."
- },
- {
-  "t": "Link pro cliente acompanhar o pedido",
-  "k": [
-   "acompanhar",
-   "agradecimento",
-   "cobrador antigo",
-   "contato do cobrador",
-   "link",
-   "passar o numero do cobrador"
-  ],
-  "r": "Depois da venda manda o funil Etapa 6 - Agradecimento (H ou M) ou o Contato Cobrador: os dois terminam na mensagem com o link de acompanhar o pedido, que abre o WhatsApp do cobrador dono dele. Não passa número de cobrador na mão. Cliente falando com o cobrador errado: avisa aqui marcando o Heynan."
- },
- {
-  "t": "Ficha do pedido (cobrador)",
-  "k": [
-   "baixa",
-   "checkout",
-   "copiar dados",
-   "dar baixa",
-   "marcar como pago",
-   "pagamento parcial",
-   "pagou uma parte",
-   "remarcar",
-   "retorno"
-  ],
-  "r": "Na ficha do pedido: escreve o valor e Marcar como pago (confirma no segundo clique); pagou só uma parte, Pagamento parcial e o pedido fica na fila com o que falta. Retorno: Amanhã, 2, 3, 7, 10 ou 15 dias, às 9h, ou o calendário. Copiar dados e Abrir o link também tão lá."
- },
- {
-  "t": "Saque e nota fiscal",
-  "k": [
-   "comissao",
-   "nota",
-   "nota fiscal",
-   "pix pj",
-   "receber minha",
-   "sacar",
-   "saque"
-  ],
-  "r": "Pede o saque no app do celular, em Comissões > Solicitar saque (vai o disponível inteiro), ou na dash em Conta & Perfil > Solicitar saque, onde dá pra pôr o valor exato da nota. Cobrador pede só pela dash. A nota é pra Sell Wave LTDA: os dados tão na mensagem que o Heynan mandou aqui; não achou, marca ele. O Pix é o da PJ."
- },
- {
-  "t": "Chip recebendo contato do antigo dono",
-  "k": [
-   "antigo dono",
-   "era de outra pessoa",
-   "ligando direto",
-   "nao para de ligar"
-  ],
-  "r": "Chip que era de outra pessoa recebe contato do antigo dono. Responde uma vez que o número não é mais dela e bloqueia quem insistir. Se isso tá atrapalhando a chegada de lead, marca o Bruno."
- },
- {
-  "t": "Lead ruim ou de outro produto",
-  "k": [
-   "curioso",
-   "curiosos",
-   "garrafada",
-   "lead ruim",
-   "outro produto",
-   "qualidade"
-  ],
-  "r": "É normal: de cada 100 que clicam, uns 15 chegam a mandar mensagem, e muito é curioso. O que vale é a venda por conversa. Lead que chega achando que é outro produto vem do criativo: avisa o Heynan com o print."
- }
+ {"t": "Instalar o SellWave Web", "q": "onde eu baixo o sellwave web e como entro nele?", "k": ["baixar", "baixo", "como entro", "download", "instalar", "instalo", "login do app", "onde baixa"], "r": "Na dash, Ferramentas > SellWave Web: Baixar para Windows ou Baixar para Mac (o cobrador vê Baixar versão de cobrador, é o mesmo app). Instala e entra com o mesmo usuário e senha da dash. No Mac, na primeira vez: Ajustes do Sistema > Privacidade e Segurança > Abrir Mesmo Assim."},
+ {"t": "SellWave Web em dois computadores", "q": "posso usar o sellwave web em duas maquinas ao mesmo tempo?", "k": ["dois computadores", "dois pcs", "duas maquinas", "mais de um computador", "notebook", "outra maquina", "outro computador", "outro pc"], "r": "Pode instalar em quantos computadores quiser, com o mesmo login. Só que cada número abre em um computador por vez (no outro aparece o cadeado \"Aberto por\"). O ideal é cada número ficar sempre no mesmo computador: trocando, ele abre com a cópia salva no outro e o que foi feito depois some da tela."},
+ {"t": "Número com cadeado \"Aberto por\"", "q": "meu numero ta com cadeado escrito aberto por e nao abre", "k": ["aberto por", "cadeado", "fecha ai meu", "liberado", "nao abre o numero", "ta aberto em"], "r": "Ele está aberto em outro computador. Quando a pessoa fechar lá (o X do lado do número), o botão libera sozinho em até 2 minutos. Se foi você em outro PC, fecha lá. Quem está com ele não está por perto? Chama o Bruno: só a direção fecha no computador de outra pessoa."},
+ {"t": "Sumiram conversas do WhatsApp do app", "q": "sumiram minhas conversas de ontem no whatsapp do app", "k": ["apagou as conversas", "conversas sumiram", "perdi as conversas", "sumiram", "sumiu as conversas", "sumiu conversa"], "r": "O mais comum é o número aberto em dois computadores (vale também quando alguém abre ele pra te ajudar). A cada troca, o WhatsApp abre com a cópia salva no outro e o que foi feito neste depois disso some da tela. Não dá pra juntar, mas a dash guarda tudo (pede pro Bruno). Um número, um computador."},
+ {"t": "Atualizar o SellWave Web", "q": "apareceu aviso de versao nova no app, como atualizo?", "k": ["app velho", "atualiza", "atualizacao", "atualizar", "correcao pronta", "desatualizado", "reinicie", "versao nova"], "r": "No Windows ele se atualiza sozinho: baixa por trás e entra quando você fecha e abre o app (a faixa verde no pé da barra dos números avisa quando tá pronta). Se ela pedir pra baixar: baixa, fecha o app no X, espera salvar e roda o instalador. No Mac não é sozinho: baixa de novo em Ferramentas > SellWave Web. Apareceu \"Correção pronta pra entrar\"? Clica em Recarregar os números agora."},
+ {"t": "SellWave Web com defeito", "q": "as mensagens nao estao enviando no app", "k": ["bug", "bugou", "erro no app", "lento", "ligacao", "nao envia", "nao enviando", "nao esta enviando", "nao estao enviando", "nao marca", "nao ta enviando", "travando", "travou"], "r": "Primeiro fecha o número no X do lado dele e abre de novo (não pede QR). Não resolveu? Fecha o SellWave Web no X e espera ele terminar de salvar (nunca pelo gerenciador de tarefas), abre, vê se a faixa no pé da barra pede versão nova e liga os interruptores. Continuou? Eu aviso o Bruno daqui (ou marca ele) com o final do número e o que tá acontecendo."},
+ {"t": "Tela branca no app", "q": "o app ficou com a tela branca", "k": ["branco", "em branco", "nao carrega o whatsapp", "recarregar o whatsapp", "tela branca"], "r": "Tela branca o app tenta arrumar sozinho em uns 30 segundos. Não voltou: clica em Recarregar o WhatsApp no topo do painel da direita, ou fecha o número no X e abre de novo (não pede QR). Continuou? Ajustes > Abrir registro desta máquina e manda pro Bruno."},
+ {"t": "Número fechou sozinho no app", "q": "um dos meus numeros fechou sozinho no app, e bug?", "k": ["fecha sozinho", "fechando sozinho", "fechou sozinho", "numeros abertos"], "r": "O app tem um limite de números abertos ao mesmo tempo (quem define é a direção; dá pra ver em Ajustes). Passando dele, fecha sozinho o que está parado há mais tempo, nunca o da tela nem o que está mandando funil. Ele continua recebendo lead e volta conectado, sem QR, quando você clicar."},
+ {"t": "Número não abriu (proxy)", "q": "apareceu nao abriu falando de proxy no meu numero", "k": ["nao abriu", "nao deu pra falar com a dash", "proxy"], "r": "Todo número só abre com a proxy dele (a internet própria do número) funcionando e no Brasil, por segurança. Clica em Tentar de novo. Repetiu \"não tem proxy\" ou \"o proxy não respondeu\"? Manda print pro Bruno: só a direção troca proxy. \"Não deu pra falar com a dash\" é internet: tenta em 1 minuto."},
+ {"t": "Criar mensagem, áudio ou funil próprio", "q": "como eu crio minha propria mensagem, audio ou funil no painel?", "k": ["botao mais", "criar", "crio", "funil proprio", "mensagem pronta", "meu funil", "objecao", "salvar audio", "salvar mensagem"], "r": "No painel da direita, o + (Criar): mensagem, áudio (grava ou escolhe), vídeo, foto ou PDF, e escolhe Só eu ou Todos. No funil próprio você monta os passos e o tempo de cada um. O lápis esconde da sua lista, edita ou apaga o que é seu. Os oficiais quem muda é a direção. Objeção nova sem material? Pede pro Heynan."},
+ {"t": "Funil apagado com \"já enviado\"", "q": "a etapa ta apagada com ja enviado, por que?", "k": ["apagada", "apagado", "ja enviado", "mandar de novo o funil", "repetir funil"], "r": "É só aviso: o funil fica apagado com \"já enviado\" quando já foi pra esse lead, pra você não repetir sem querer. Quer mandar de novo? Clica duas vezes no botão de enviar dele (o segundo clique em até 6 segundos)."},
+ {"t": "Falar com o lead por outro número", "q": "o numero caiu no meio da conversa, consigo falar com ele por outro?", "k": ["card do lead", "continuar a conversa", "falar com ele por", "por outro", "por outro numero", "trocar de numero"], "r": "Dá sim. No CRM do Atendimento (a faixa de baixo do SellWave Web), o card do lead tem o botão de trocar: chama ele por outro número aberto aí. O botão direito no card abre o mesmo menu e tem Copiar o número. Se o número de origem foi banido, saiu da sua lista ou tá fechado como Restrito, esse menu abre sozinho."},
+ {"t": "Número caiu", "q": "meu numero caiu, tava cheio de lead", "k": ["banid", "bloque", "caindo", "cair", "caiu", "desconect", "pediu qr", "qr code", "queda"], "r": "Desliga o interruptor dele no SellWave Web pra não ir mais lead pra ele (o sistema também tira sozinho quando confirma a queda) e deixa os outros ligados. O Bruno ajeita outro número: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Número que ficou Restrito perde o interruptor (fica um tracinho); a volta é com o Bruno."},
+ {"t": "Por que os números caem tanto", "q": "por que meus numeros caem tanto? e meu computador?", "k": ["caem tanto", "cai muito", "caindo muito", "por que caem", "por que cai"], "r": "Pelo que foi medido até agora, não tem sido o computador nem o login. O que mais derruba é número novo, ou que já caiu antes, pegando volume de cara e mandando mais mensagem do que recebe. No número novo, responde quem falou e evita mandar várias pra quem não respondeu. Caiu, avisa o Bruno."},
+ {"t": "Lead parou de chegar", "q": "parou de chegar lead pra mim, o que pode ser?", "k": ["lead nenhum", "nao chega lead", "nao estou recebendo", "nao recebo lead", "nao ta chegando", "nao to recebendo", "parou de chegar", "pingado", "sem lead"], "r": "Confere no SellWave Web: app aberto e interruptor verde (laranja = bateu o limite ou parado até a meia-noite, cinza = desligado; tracinho = número fora de uso, não recebe). A roleta iguala os leads do dia: quem tá na frente espera os outros empatarem. Parou pra todo mundo? Marca o Heynan e o Bruno. Só pra você: marca o Bruno.", "g": "vend"},
+ {"t": "Ligar e desligar o recebimento", "q": "como faco pra parar de receber lead pra almocar?", "k": ["almocar", "almoco", "desligar", "desligo", "expediente", "ligar de novo", "parar de receber", "pausa", "pausar", "sair um pouco"], "r": "No SellWave Web, o interruptor do lado de cada número: verde recebe, cinza não (com a barra encolhida ele some: abre a barra na setinha do topo). Vai sair? Desliga. Voltou? Liga. Fechar o app desliga todos sozinho em poucos minutos e, ao abrir, você liga de novo: nada religa sozinho. Pela dash ele só liga com o app aberto.", "g": "vend"},
+ {"t": "Cor do interruptor", "q": "o que quer dizer a cor do interruptor? e esse tracinho?", "k": ["cinza", "cor", "interruptor", "laranja", "tracinho", "verde"], "r": "Verde: ligado e recebendo. Laranja: fora agora, mas volta sozinho à meia-noite (bateu o limite ou foi desligado só até 0h). Cinza: desligado, só volta se alguém ligar. Tracinho: o número não está Em uso nem em aquecimento (ex.: ficou Restrito depois de cair). Voltar pro Em uso é com o Bruno.", "g": "vend"},
+ {"t": "Fechei o app, continuo recebendo?", "q": "se eu fechar o sellwave web eu continuo recebendo lead?", "k": ["app fechado", "continuo recebendo", "fechar o app", "fechei o app", "internet caiu", "internet piscou"], "r": "Não. Fechou o app, em poucos minutos seus interruptores desligam sozinhos e, ao abrir de novo, você liga na mão. Internet piscando rapidinho não desliga, só depois de uns 5 minutos fora. Exceção: de madrugada, sem ninguém do time aberto, entra o plantão.", "g": "vend"},
+ {"t": "Plantão da madrugada", "q": "abri o app de manha e chegou um monte de lead de uma vez", "k": ["acumulou", "de manha", "de uma vez", "madrugada", "plantao", "um monte de lead"], "r": "É o plantão da madrugada: quando ninguém do time está com o app aberto, a roleta continua mandando pros números de quem estava trabalhando, pra não perder o clique pago. As mensagens aparecem quando você abre. Responde esses primeiro, que estão esperando, e liga seus interruptores.", "g": "vend"},
+ {"t": "Outro vendedor recebendo mais", "q": "por que o outro vendedor ta recebendo mais lead que eu?", "k": ["distribuicao", "divide", "dividindo", "mais lead que eu", "menos lead", "recebendo mais"], "r": "A roleta iguala os leads do dia entre os vendedores: quem está atrás recebe até empatar, quem está na frente espera. Se entrou de uma vez o que caiu de madrugada nos seus números, ela compensa mandando pros outros por um tempo. É normal. Só confere se seus interruptores estão verdes.", "g": "vend"},
+ {"t": "Número novo em aquecimento", "q": "meu numero novo quase nao recebe lead, ta com problema?", "k": ["aquecendo", "aquecimento", "chip novo", "numero novo", "quase nao recebe", "recebe pouco"], "r": "É o aquecimento: número novo recebe pouco de propósito e vai subindo, de 5 leads por dia no começo até 50 a partir do dia 16, liberando aos poucos ao longo do dia. Atende normal e pode vender, é o atendimento que aquece. Passar ele pra Em uso é com o Bruno.", "g": "vend"},
+ {"t": "Limite de leads do número", "q": "meu numero bateu o limite, da pra aumentar?", "k": ["aumenta o limite", "aumentar o limite", "bateu o limite", "limite", "teto"], "r": "Bateu o limite, ele fica laranja, volta sozinho à meia-noite e o próximo número da sua fila recebe. Pra mudar: dois cliques rápidos no contador dele no SellWave Web (tipo 32/70), escolhe o teto (30, 50, 70 ou 100, que é o máximo) e Salvar. Em número de aquecimento quem manda é a rampa.", "g": "vend"},
+ {"t": "Número que \"não está marcando os leads\"", "q": "chegou aviso que meu numero nao esta marcando os leads", "k": ["marcando os leads", "nao esta marcando", "nao ta marcando", "numero mudo"], "r": "Quer dizer que as mensagens dos leads desse número não estão chegando na dash, então ele saiu da roleta por segurança. Fecha e abre ele no SellWave Web (se o app pedir atualização, atualiza antes). Ele volta sozinho pra roleta quando a primeira mensagem dele aparecer na dash.", "g": "vend"},
+ {"t": "De quem é o lead", "q": "o cliente clicou de novo e caiu em outro vendedor, de quem e o lead?", "k": ["caiu em outro", "clicou de novo", "de quem e o lead", "lead de quem", "meu lead foi", "roubou meu lead"], "r": "O lead é de quem recebeu: conta pra quem era dono do número na hora que ele chegou, mesmo que o número mude de mão depois. Se o cliente clicar de novo no anúncio e cair em outro vendedor, vale o último clique: dali pra frente conversa e venda são do novo. Caso específico, a direção confere.", "g": "vend"},
+ {"t": "Mexer em número de outra pessoa", "q": "posso ligar o numero de um colega ou pegar um numero novo?", "k": ["numero de colega", "numero do colega", "numero novo pra mim", "ordem da fila", "pegar um numero", "trocar numero"], "r": "Cada um liga e desliga só os próprios números. Número novo, passar número de um vendedor pra outro, colocar Em uso e a ordem da fila são com o Bruno. Número novo costuma chegar em aquecimento, recebendo pouco no começo e subindo sozinho."},
+ {"t": "Qualidade do lead", "q": "ta vindo muito lead que nao responde, e lead ruim?", "k": ["curioso", "curiosos", "garrafada", "lead ruim", "nao responde", "outro produto", "qualidade"], "r": "É do canal: de cada 100 pessoas que clicam no anúncio, umas 15 chegam a mandar mensagem, e parte some depois do primeiro oi. Isso é o normal da operação. O que importa é quanto vende de quem conversa. Lead que chega achando que é outro produto vem do criativo: avisa o Heynan com o print.", "g": "vend"},
+ {"t": "Chip recebendo contato do antigo dono", "q": "tem uma pessoa que nao para de ligar nesse numero", "k": ["antigo dono", "era de outra pessoa", "ligando direto", "nao para de ligar"], "r": "Chip que era de outra pessoa recebe contato do antigo dono. Responde uma vez que o número não é mais dela e bloqueia quem insistir. Se isso tá atrapalhando a chegada de lead, avisa o Bruno."},
+ {"t": "Cadastrar pedido", "q": "como eu cadastro um pedido?", "k": ["cadastrar pedido", "cadastrar um pedido", "cadastro um pedido", "lancar pedido", "novo pedido"], "r": "Na dash: Cadastro de Pedidos > Novo Pedido. No SellWave Web: aba Pedidos do painel, com a conversa do cliente aberta. Escolhe Pagamento na Entrega ou Antecipado, preenche cliente e endereço (o CEP completa o resto), escolhe o tratamento e anexa o comprovante. Os dois vão pra aprovação da direção."},
+ {"t": "Botão Cadastrar não libera", "q": "o botao cadastrar pedido nao libera", "k": ["anexar", "anexo", "botao cadastrar", "cpf invalido", "falta o que", "nao deixa cadastrar", "nao libera"], "r": "Acima do botão aparece o que falta. Os mais comuns: CPF inválido, WhatsApp sem DDD ou sem o 9, endereço incompleto, sem tratamento e, na entrega, o comprovante (foto, vídeo ou áudio; print entra com Ctrl+V). Vídeo pesado a dash diminui sozinha; acima de 95 MB, grava um mais curto ou manda foto."},
+ {"t": "Pedido não subiu ou não aparece", "q": "o pedido nao subiu, nao aparece no kanban", "k": ["cadastrei", "conflict", "erro ao cadastrar", "nao aparece", "nao aparece no kanban", "nao subiu", "subiu", "sumiu o pedido"], "r": "Pela dash, depois do Cadastrar o aviso do canto fica em \"Enviando\": não fecha a aba antes de sair \"cadastrado\". Deu erro? Tenta de novo no aviso, nunca cadastra de novo do zero (duplica). Cadastrado, ele fica em Cadastro de Pedidos (etapa A enviar) esperando a aprovação da direção e só depois entra no Kanban. Já tinha entrado e sumiu? Olha em Frustrações e no filtro de período."},
+ {"t": "CPF já tem pedido", "q": "apareceu um aviso dizendo que o cpf ja tem pedido", "k": ["cpf igual", "cpf ja tem", "cpf repetido", "ja tem pedido"], "r": "É só um aviso, não bloqueia. Confere nome, telefone e cidade do pedido que apareceu: CPF igual nem sempre é a mesma pessoa. Outra pessoa ou compra nova do mesmo cliente? Criar mesmo assim. Se for o mesmo pedido já cadastrado, Cancelar pra não duplicar."},
+ {"t": "Pedido duplicado ou rascunho", "q": "acho que cadastrei o pedido duas vezes", "k": ["duas vezes", "duplicado", "duplicou", "rascunho", "rascunhos"], "r": "Se o mesmo pedido chega de novo em menos de 2 minutos, o sistema ignora a cópia. Confere em Cadastro de Pedidos antes de cadastrar outra vez. Rascunho de pedido já cadastrado some sozinho; se sobrar, apaga na lixeira em Rascunhos. Duplicou mesmo? Avisa o Bruno: só a direção exclui pedido."},
+ {"t": "Corrigir pedido", "q": "errei o pedido, como corrijo?", "k": ["corrigir", "corrijo", "editar o pedido", "endereco errado", "errei", "lapis", "mudar o endereco"], "r": "Antes da aprovação: em Cadastro de Pedidos abre o cliente e usa o lápis pra corrigir (endereço, kit, dados). Depois de aprovado ele já foi pra transportadora: mudar na dash não muda o envio. Aí avisa a direção pra corrigir lá."},
+ {"t": "Cliente quer cancelar", "q": "o cliente desistiu, como cancelo?", "k": ["cancela", "cancelar", "cancelo", "desistir", "desistiu", "devolucao", "devolver", "familia nao quer", "nao quer mais"], "r": "Antes tenta reverter: liga, manda depoimento de cliente. Se o pedido ainda espera aprovação, você mesmo cancela em Cadastro de Pedidos, no botão de cancelar do pedido. Já aprovado ou enviado, marca o Heynan: depois de enviado não cancela, o cliente recusa a entrega ou devolve."},
+ {"t": "Trocar o kit ou desconto", "q": "o cliente quer trocar o kit ou pediu desconto", "k": ["abaixar o valor", "desconto", "fazer mais barato", "mudar o kit", "trocar o kit"], "r": "O valor vem do tratamento e não dá pra digitar. Trocou o kit antes da aprovação: edita o pedido (lápis) e escolhe o novo; valor e link de pagamento acompanham. Depois de aprovado, só com a direção. Desconto combinado vai em Observações e quem recebe registra o que entrou. Limite de desconto: Heynan."},
+ {"t": "Preço dos kits", "q": "quanto custa o kit de 4 meses?", "k": ["frasco", "frascos", "meses de tratamento", "preco", "quanto custa", "tratamento de", "valor do kit"], "r": "1 frasco por mês de tratamento: 1 mês R$ 197, 2 meses R$ 297, 3 meses R$ 397, 4 meses R$ 497, 6 meses R$ 697 e 10 meses R$ 997. No cadastro o valor vem sozinho do tratamento escolhido."},
+ {"t": "Parcelamento", "q": "o cliente quer parcelar no boleto, pode?", "k": ["carne", "em vezes", "parcelado", "parcelamento", "parcelar"], "r": "Parcelado é só no cartão de crédito. Boleto e Pix são à vista e carnê não tem. Sem cartão, oferece um kit menor. Explica antes de fechar: quem acha que dá pra parcelar no boleto vira frustrado."},
+ {"t": "Termo do cliente", "q": "falta so o cliente confirmar o termo", "k": ["aceite", "aceitou o termo", "confirmar o termo", "termo"], "r": "Pedido na entrega só sobe com o comprovante: print (Ctrl+V cola direto), áudio ou vídeo do cliente aceitando o termo. Vídeo pesado? Grava um de uns 30 s ou manda print. Sumiu e não confirma desde ontem? Não vale ficar em cima; na dúvida, chama o Heynan."},
+ {"t": "Cliente quer pagar", "q": "essa cliente quer fazer o pix, quem manda?", "k": ["antecipado", "boleto", "pix", "quer pagar", "quer passar o cartao", "reenvia", "venceu"], "r": "Pedido na entrega: boleto e cartão é com o cobrador do pedido; me fala o nome do cliente que eu digo de quem é a fila e marca ele aqui (não tá no grupo? marca o Heynan). Fechou antecipado? O link do cartão já aparece no pedido em Cadastro de Pedidos (Copiar link). Pix você mesmo manda, a chave CNPJ da Sell Wave com o valor.", "g": "vend"},
+ {"t": "Link de pagamento", "q": "como mando o link de pagamento pro cliente?", "k": ["abrir checkout", "checkout", "link de pagamento", "link do cartao", "link pra pagar"], "r": "Abre o pedido no Kanban: Abrir Checkout ou o copiar ao lado (no SellWave Web do cobrador: ficha, linha Checkout). A página vem preenchida e o cliente escolhe como pagar; pagou ali, vira pago sozinho. Antes da aprovação, só Antecipado e Venda Futura têm link, em Cadastro de Pedidos. Sem link: avisa o Bruno."},
+ {"t": "Chave Pix da empresa", "q": "manda a chave pix da empresa", "k": ["alerta de golpe", "chave", "chave pix", "cnpj", "golpe"], "r": "A chave oficial é o CNPJ da Sell Wave (no Pix aparece Sell Wave no nome), a da mensagem \"Chave Pix CNPJ\" que o Heynan manda aqui. Salva ela no + do painel do SellWave Web como Só eu e manda pro cliente com o valor, o CNPJ numa mensagem separada. Deu alerta de golpe ou o cliente não consegue pagar? Marca o cobrador do pedido ou o Heynan."},
+ {"t": "Comprovante que chegou pro vendedor", "q": "a cliente me mandou o comprovante, o que eu faco?", "k": ["comprovante", "disse que pagou", "diz que pagou", "ja pagou", "mandou o print"], "r": "Posta o print aqui marcando o cobrador do pedido e o Heynan. Quem dá baixa é o cobrador, na ficha do pedido: Marcar como pago, ou Pagamento parcial se pagou só uma parte. Me fala o nome do cliente que eu digo de quem é a fila e se já consta pago.", "g": "vend"},
+ {"t": "Quando o pedido conta como pago", "q": "quando o pedido conta como pago?", "k": ["conta como pago", "quando conta", "quando vira pago", "vira pago"], "r": "Quando o cobrador ou a direção confirma o pagamento com o valor que entrou, quando o cliente paga pelo link do pedido (fica pago sozinho) ou quando a plataforma confirma. Conta no dia em que pagou, não no dia da venda. Se a equipe marcou pago, a plataforma não desfaz; só estorno tira."},
+ {"t": "Prazo e rastreio", "q": "quanto tempo o pedido leva pra chegar e onde vejo o rastreio?", "k": ["prazo", "previsao", "quando chega", "quanto tempo", "rastrear", "rastreio", "vai chegar"], "r": "No Novo Pedido, ao digitar o CEP, aparece a previsão em dias úteis pelo estado (é estimativa). Depois que posta, abre o pedido no Kanban: em Código de Rastreio tem o código pra copiar e o link do rastreio, e o card mostra a previsão. No Ceará vai só pelos Correios."},
+ {"t": "Contato do cobrador pro cliente", "q": "qual numero eu passo pro cliente acompanhar a entrega?", "k": ["acompanhar", "agradecimento", "cobrador antigo", "contato do cobrador", "passar o numero", "qual numero eu passo"], "r": "Nenhum número fixo. Manda pelo SellWave Web o funil Etapa 6 - Agradecimento (H ou M) ou o Contato Cobrador: os dois terminam na mensagem com o link de acompanhar o pedido, que abre o WhatsApp do cobrador certo daquele cliente. Número escrito à mão leva o cliente pra pessoa errada. Cliente falando com o cobrador errado: avisa aqui marcando o Heynan.", "g": "vend"},
+ {"t": "Cliente pergunta do pedido de outro vendedor", "q": "nao fui eu que vendi e nao consigo abrir o pedido dela", "k": ["nao consigo abrir o pedido", "nao fui eu que vendi", "outro vendedor", "quem vendeu"], "r": "Me fala o nome do cliente que eu digo em que pé tá (a enviar, enviado, saiu pra entrega). Pedido de outro vendedor você não vê: depois da venda quem responde é o cobrador, então manda pro cliente a mensagem com o link de acompanhar o pedido, sem passar número na mão.", "g": "vend"},
+ {"t": "Colunas do Kanban", "q": "o que quer dizer cada coluna do kanban?", "k": ["a enviar", "coluna", "colunas", "etapa", "kanban", "preparando", "requer atencao"], "r": "A enviar: aprovado, ainda não saiu. Preparando: etiqueta pronta. Enviado: com a transportadora. Saiu para Entrega: indo pra casa do cliente. Cobrança: recebeu e tem que pagar. Retirar nos Correios: está na agência. Requer Atenção: a entrega falhou. Pagos: pago. Perdas ficam em Frustrações, embaixo."},
+ {"t": "Cliente diz que não recebeu", "q": "o cliente diz que nao recebeu e consta entregue", "k": ["consta entregue", "entrega falhou", "foto da entrega", "marca entregue", "nao chegou", "nao recebeu", "quem assinou"], "r": "Abre o pedido no Kanban: em Foto da entrega aparece a foto e quem assinou (\"Recebido por\"), quando a transportadora manda. Passa isso pro cliente e pede pra conferir com vizinho ou parente. Se ele insistir, marca o Heynan, que abre chamado na transportadora. Requer Atenção é entrega que falhou: liga pro cliente e confirma endereço."},
+ {"t": "Retirada nos Correios", "q": "posso mandar pra retirada que chega mais rapido?", "k": ["agencia", "correios", "retirada", "retirar"], "r": "Evita retirada: no cadastro deixa Transportadora (só o Ceará vai pelos Correios). Pedido parado pra retirada numa agência fica com o cobrador do pedido, que liga pro cliente buscar."},
+ {"t": "Fila do cobrador", "q": "sou cobrador, por que nao vejo todos os pedidos?", "k": ["fila", "minha fila", "nao ta comigo", "nao vejo todos", "saiu da minha", "so os meus", "sumiu da fila"], "r": "Cada cobrador vê a fila dele mais os pedidos ainda sem cobrador, que são divididos em até 1 minuto. Se o cliente escreve num número seu aberto no SellWave Web, o pedido em aberto passa pra você sozinho. No SellWave Web, desmarcar Só os meus mostra a fila toda. Me fala o nome que eu digo de quem é.", "g": "cob"},
+ {"t": "Trocar o cobrador do pedido", "q": "da pra passar um pedido pra outro cobrador?", "k": ["outro cobrador", "passar o pedido", "passar pro", "trocar o cobrador"], "r": "Só a direção troca o cobrador dentro do pedido ou muda a regra de quem recebe os pedidos novos. Fora isso, o pedido em aberto vai sozinho pra quem o cliente chamou, se a conversa foi num número aberto no SellWave Web."},
+ {"t": "Quadro de cobrança no app", "q": "como funciona a cobranca no sellwave web?", "k": ["agenda", "calendario", "cobranca no app", "como funciona a cobranca", "quadro"], "r": "Clica na faixa Cobrança, embaixo do WhatsApp. Agenda: quem te escreveu, atrasados, sem retorno, hoje, chegando e próximos. Calendário: os retornos de cada dia (arrastar muda o dia). Pedidos: o Kanban. Só os meus mostra os seus e os sem cobrador. Na hora do retorno o computador te avisa.", "g": "cob"},
+ {"t": "Marcar como pago e parcial", "q": "como eu marco que o cliente pagou? e se pagou so uma parte?", "k": ["baixa no pedido", "como marco", "dar baixa", "marcar como pago", "marcar pago", "pagamento parcial", "pagou metade", "pagou so uma parte", "pagou uma parte"], "r": "No SellWave Web, na ficha: escreve o valor e Marcar como pago (confirma no segundo clique); pagou só uma parte, Pagamento parcial e o pedido fica na cobrança com o que falta. Na dash: arrasta o card pra Pagos ou abre o pedido em Confirmar pagamento. Põe o que entrou de verdade.", "g": "cob"},
+ {"t": "Retorno e dados na ficha", "q": "como remarco o retorno do cliente?", "k": ["agendar", "copiar dados", "remarcar", "remarco", "retorno"], "r": "Na ficha do pedido: Amanhã, 2, 3, 7, 10 ou 15 dias (às 9h), ou Outro dia no calendário. Copiar dados copia o cadastro; no link, Enviar manda na conversa e Abrir abre no navegador.", "g": "cob"},
+ {"t": "Por qual número chamar o cliente", "q": "por qual numero eu chamo o cliente na cobranca?", "k": ["abrir conversa", "balao", "chamo o cliente", "qual numero"], "r": "Clica no balão do WhatsApp no card (ou em Abrir conversa na ficha): o app abre o número em que o cliente já te escreveu; se nunca escreveu, usa o número que está na tela. Pra escolher outro, botão direito no card. Sem número no seu nome? Pede pro Bruno.", "g": "cob"},
+ {"t": "Mudar etapa do pedido (cobrador)", "q": "por que nao consigo mudar o pedido de etapa no app?", "k": ["arrastar o pedido", "de etapa", "mover o pedido", "mudar a etapa", "mudar de etapa", "mudar o pedido"], "r": "Pelo app e pela dash o cobrador só leva o pedido pra Pagos ou pra uma frustração. As etapas de entrega mudam sozinhas, pela plataforma de entrega, e pedido pago só sai pra frustração. Etapa errada ou parada? Avisa a direção aqui no grupo.", "g": "cob"},
+ {"t": "Pedido sumiu do quadro do app", "q": "o pedido sumiu do quadro no sellwave web", "k": ["nao acho o pedido", "nao aparece no app", "nao encontro", "sumiu do quadro"], "r": "No SellWave Web, Pagos e perdas mostram só o que entrou nessas colunas nos últimos 30 dias (pago com retorno marcado continua). Pedido mais antigo está no Kanban da dash, ajustando o filtro de período. Confere também se Só os meus está marcado e se a busca está limpa.", "g": "cob"},
+ {"t": "Número de cobrança sem interruptor", "q": "meu numero de cobranca nao tem interruptor nem contador", "k": ["nao tem contador", "nao tem interruptor", "numero de cobranca", "sem interruptor"], "r": "Tá certo. Número de cobrança não entra na roleta de leads: não tem interruptor e fechar o app não desliga nada. O cliente chega pelo link de acompanhar o pedido que o vendedor manda e cai no cobrador dono do pedido.", "g": "cob"},
+ {"t": "Esqueci a senha", "q": "esqueci minha senha, como entro na dash?", "k": ["esqueci", "esqueci a senha", "esqueci minha senha", "login", "nao consigo entrar", "senha", "trocar senha"], "r": "Pede uma senha nova pro Bruno: só a direção redefine senha. Aí entra na dash com seu usuário e a senha nova e, se quiser, troca em Meu Painel > Editar Perfil > Trocar senha. Tentou muitas vezes seguidas? O login trava por 1 minuto: espera e tenta de novo."},
+ {"t": "Logado no computador e no celular", "q": "posso ficar logado na dash no computador e no celular ao mesmo tempo?", "k": ["ao mesmo tempo na dash", "computador e no celular", "dois lugares", "logado"], "r": "Pode. O mesmo login funciona no computador e no celular juntos, um não derruba o outro. Só não passa sua senha pra ninguém: o que for feito no seu login fica no seu nome. No SellWave Web é diferente: cada número abre em um computador por vez."},
+ {"t": "Trocar foto ou senha", "q": "como troco minha foto?", "k": ["editar perfil", "foto", "perfil"], "r": "Na dash, Meu Painel > Editar Perfil. A foto troca ali (até 1,5 MB). Pra senha, Trocar senha, põe a atual e a nova (mínimo 6 caracteres). Login, cargo e comissão só a direção muda."},
+ {"t": "O que cada um vê na dash", "q": "por que eu nao vejo os pedidos dos outros vendedores?", "k": ["cada cargo", "dos outros", "nao vejo", "pedidos dos outros", "tela pra mim"], "r": "Na dash cada um vê o que é seu: o vendedor vê os pedidos e clientes dele, e o cobrador vê a fila dele. Financeiro, tráfego e pagamento da equipe são só da direção. O placar de pedidos do time aparece no grupo e no app. Faltou alguma tela pro seu trabalho? Fala com o Bruno."},
+ {"t": "Meu Painel", "q": "onde eu vejo quantas vendas fiz e quanto vou ganhar?", "k": ["meu painel", "minhas vendas", "quantas vendas fiz", "quanto vou ganhar"], "r": "No Meu Painel, a tela que abre quando você entra na dash: pedidos que você fez, vendas pagas, taxa de pagamento, comissão prevista e disponível pra saque, e a lista Meus pedidos. Venda paga conta no dia em que o cliente pagou, não no dia do pedido. No celular: a dash com /app no fim do endereço."},
+ {"t": "Como funciona a comissão", "q": "como funciona a minha comissao? quando ela conta?", "k": ["comissao", "minha comissao", "porcentagem", "quando ganho"], "r": "Você ganha uma porcentagem do valor de cada venda que o cliente pagou. Pedido que ainda não pagou aparece como comissão prevista e só vira ganha quando o cliente paga. A taxa é a do seu cadastro (aparece no Meu Painel) e só a direção muda. Valor e regra: Heynan.", "g": "vend"},
+ {"t": "Saque e nota fiscal", "q": "como eu peco saque da minha comissao?", "k": ["emitir nota", "nota fiscal", "peco saque", "pedir saque", "pix pj", "sacar", "saque", "solicitar saque"], "r": "Na dash: Meu Painel, cartão Disponível para saque, Solicitar saque (dá pra pôr o valor exato da nota); o vendedor também pede pelo celular, aba Comissões (vai o disponível inteiro). A direção aprova e paga, e a decisão chega no sininho. Um pedido aberto por vez. A nota é pra Sell Wave LTDA: os dados tão na mensagem que o Heynan mandou aqui. O Pix é o da PJ."},
+ {"t": "Meta da semana e placar", "q": "onde eu vejo a meta da semana e o placar do time?", "k": ["meta", "meta da semana", "onde vejo a meta", "placar do time", "podio"], "r": "No celular (a dash com /app no fim do endereço), aba Comissões: o Pódio, com o time em ordem de pedidos, e a Meta da semana com a barrinha de cada um. A meta conta seus pedidos de segunda a domingo, menos cancelado, inclusive os esperando aprovação. Quem define a meta é a direção.", "g": "vend"},
+ {"t": "Placar ou meta não bate", "q": "o barbadinho ta ladrao hoje, foi so 15", "k": ["conta errada", "contei", "contou", "ladrao", "nao bate", "placar errado"], "r": "No placar do bot, pedido cancelado não conta e pedido esperando aprovação já conta (na dash ele só entra depois de aprovado). A meta vai de segunda 0h a domingo. Conta não bate? Pode ser pedido cadastrado duas vezes: me diz quanto você contou que eu passo pro Bruno conferir.", "g": "vend"},
+ {"t": "Resumo do dia e comemorações", "q": "que horas o bot manda o resumo e quando ele comemora?", "k": ["comemora", "comemoracao", "festa sai", "que horas", "resumo"], "r": "Resumo do dia: vendedores às 20h, de segunda a sábado; cobradores às 22h, todo dia; domingo ao meio-dia sai o da semana. A festa sai sozinha quando o número aparece na dash: vendedor ao chegar em 5, 10, 15 e 20 pedidos no dia ou bater a meta; cobrador ao chegar em 10, 20 e 25 recebidos no dia."},
+ {"t": "Linhas do resumo do dia", "q": "o que significa cada linha do resumo do dia?", "k": ["conversao", "esperando aprovacao", "linha do resumo", "o que significa", "pagos hoje"], "r": "Pedidos: os que você cadastrou no dia (cancelado não conta). Leads: conversas novas nos seus números. Conversão: quantos % dos leads viraram pedido. Pagos hoje (pedidos anteriores): pedido de outro dia que pagou hoje. Esperando aprovação: pedidos de hoje que a direção ainda não aceitou.", "g": "vend"},
+ {"t": "Linhas do resumo da cobrança", "q": "o que quer dizer faltam cobrar e a receber no resumo?", "k": ["a receber", "atrasados", "convertidos", "faltam cobrar", "linha do resumo", "o que significa"], "r": "Convertidos hoje: pedidos seus que pagaram hoje. Faltam cobrar: o cliente já recebeu (Cobrança ou Retirar nos Correios) e ainda não pagou. Atrasados: pedido em aberto com o retorno marcado já vencido. A receber: tudo que ainda vai ser cobrado, de Preparando até a entrega, e quantos pedidos são. Essas três últimas são o retrato da hora em que o resumo saiu.", "g": "cob"},
+ {"t": "SellWave no celular", "q": "como eu coloco a sellwave no celular?", "k": ["android", "apk", "celular", "iphone", "tela de inicio"], "r": "No celular, abre a dash com /app no fim do endereço e entra com seu login. iPhone: no Safari, Compartilhar e Adicionar à Tela de Início. Android: no Chrome, três pontinhos e Instalar aplicativo (tem também o app Android com som de venda, pede pro Bruno). Pedido e Kanban continuam na dash."},
+ {"t": "Aviso de venda no celular", "q": "o aviso de venda nao chega no meu celular", "k": ["aviso de venda", "nao chega o aviso", "notificacao", "simular venda", "som de venda"], "r": "Confere: app instalado (no iPhone, pelo Safari, na Tela de Início), Avisos de venda ligado (toca na sua foto lá em cima do app) e celular fora do Não Perturbe. Testa no botão Simular venda. No iPhone o aviso às vezes atrasa, é limite da Apple. Não resolveu? Chama o Bruno."},
+ {"t": "Resultado do cobrador", "q": "sou cobrador, onde vejo meu resultado e minha comissao?", "k": ["comissao", "meu financeiro", "meu resultado", "minha comissao", "resultados", "salario"], "r": "Você ganha o fixo mais uma porcentagem do que o cliente pagou nos pedidos que são seus (os da sua fila). Na dash, o Meu Painel mostra sua fila, quem pagou, sua comissão, o que entra se cobrar tudo e o disponível pra saque. No celular, aba Resultados; tocando na sua foto, Meu financeiro mostra o salário e os últimos pagamentos. Valor e regra: Heynan.", "g": "cob"},
+ {"t": "Erro ou tela estranha na dash", "q": "deu erro na tela da dash", "k": ["bug na dash", "comentario", "dash branca", "dash em branco", "dash lenta", "dash travada", "dash travou", "erro na dash", "erro na tela", "f5", "lenta", "nao carrega", "tela estranha"], "r": "Primeiro olha se não tem pedido \"Enviando\" no canto da tela e espera ele terminar; aí atualiza a página (F5 no computador; no celular, fecha e abre o app). Aba aberta há muito tempo fica com a tela antiga. Continuou? Marca o Bruno aqui contando o que você tava fazendo e manda o print da tela pra ele no privado."}
 ];
-const BOT_IA_QUEM_RESOLVE = "QUEM RESOLVE (quando não dá pra resolver por aqui):\n- Bruno: número caído, banido ou pedindo QR; defeito que continua no app ou na dash; pedido que sumiu; placar que não bate; roleta, limite e números de outra pessoa; quem é quem e o jeito do bot.\n- Heynan: campanha e orçamento; cliente difícil (recusa pagar, ameaça, advogado, reclama do produto); desconto e valor fora da tabela; cancelar pedido aprovado ou enviado; devolução; cliente que diz que não recebeu; comissão, saque, nota e premiação; troca de cobrador; criativo e material de objeção; chave Pix diferente da CNPJ.";
+const BOT_IA_QUEM_RESOLVE = "QUEM RESOLVE (quando não dá pra resolver por aqui):\n- Bruno (tecnologia): número caído, banido ou pedindo QR; defeito que continua no app ou na dash; login e senha; pedido que sumiu ou duplicou; placar que não bate; roleta, limite e números de outra pessoa; quem é quem e o jeito do bot.\n- Heynan (comercial): campanha e orçamento; cliente difícil (recusa pagar, ameaça, advogado, reclama do produto); desconto e valor fora da tabela; cancelar pedido aprovado ou enviado; devolução; cliente que diz que não recebeu; comissão, saque, nota e premiação; troca de cobrador; criativo e material de objeção; chave Pix diferente da CNPJ.";
 // Os itens do manual que batem com a mensagem (palavra curta inteira; palavra longa pelo comeco), no maximo 3.
-function _botIaManualPara(texto) {
+// Item de um grupo so perde meio ponto no outro grupo: no empate, vem antes o do grupo em que perguntaram.
+function _botIaManualPara(texto, grupo) {
   const n = ' ' + _botIaNorm(texto) + ' ';
   if (n.trim().length < 3) return [];
   const bate = (k) => (k.length <= 4 ? n.includes(' ' + k + ' ') : n.includes(' ' + k));
   return BOT_IA_MANUAL.map((it) => ({ it, p: it.k.reduce((s, k) => s + (bate(k) ? (k.includes(' ') ? 2 : 1) : 0), 0) }))
-    .filter((x) => x.p > 0).sort((a, b) => b.p - a.p).slice(0, 3).map((x) => x.it);
+    .filter((x) => x.p > 0)
+    .map((x) => ({ it: x.it, p: x.p - (grupo && x.it.g && x.it.g !== grupo ? 0.5 : 0) }))
+    .sort((a, b) => b.p - a.p).slice(0, 3).map((x) => x.it);
 }
 function _botIaSistema(cfg, grupo) {
   const ia = cfg.ia || _botIaPadrao();
@@ -14490,7 +14168,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Pessoa não identificada: NÃO dê dado de pedido nem de número.');
     viu.push('sem identificação');
   }
-  const manual = _botIaManualPara(textoBusca);
+  const manual = _botIaManualPara(textoBusca, grupo);
   if (manual.length) {
     D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
