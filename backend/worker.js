@@ -13538,11 +13538,12 @@ async function _botIaChamar(env, system, user, o) {
   let tentou = 0, quotaTodos = true;
   const maxM = opts.maxModelos || BOT_IA_MAX_MODELOS;
   const listaM = opts.modelos || BOT_IA_MODELOS;
-  const foraAte = (x) => { const f = _botIaGemFora.get(x); return f ? f.ate : 0; };
+  const kx = (x) => x + (pagaUsada ? '|bot' : '|geral');   // cada chave tem a sua cota
+  const foraAte = (x) => { const f = _botIaGemFora.get(kx(x)); return f ? f.ate : 0; };
   const vivosM = listaM.filter((x) => !(foraAte(x) > Date.now()));
   const ordemM = vivosM.length ? vivosM : listaM;
   // Um modelo que SERIA tentado estava cheio ha pouco (fora): 429 dos outros nao prova cota acabada.
-  const pulouM = listaM.slice(0, maxM).some((x) => !ordemM.includes(x) && !(_botIaGemFora.get(x) || {}).q);
+  const pulouM = listaM.slice(0, maxM).some((x) => !ordemM.includes(x) && !(_botIaGemFora.get(kx(x)) || {}).q);
   for (let k = 0; k < ordemM.length; k++) {
     const m = ordemM[k];
     if (tentou >= maxM || resta() < 1500) break;
@@ -13565,11 +13566,11 @@ async function _botIaChamar(env, system, user, o) {
         const seg = Number((String(corpo429).match(/"retryDelay"\s*:\s*"(\d+)s"/) || [])[1]) || 0;
         const foraMs = doDia ? Math.min(Math.max(seg * 1000, BOT_IA_GEM_429_MS), BOT_IA_GEM_DIA_MS) : BOT_IA_GEM_429_MS;
         out.tentativas.push(m + ' 429' + (doDia ? ' (cota do dia)' : ''));
-        _botIaGemFora.set(m, { ate: Date.now() + foraMs, q: true });
+        _botIaGemFora.set(kx(m), { ate: Date.now() + foraMs, q: true });
         continue;
       }
       quotaTodos = false;
-      if (!r.ok) { out.tentativas.push(m + ' ' + r.status); if (r.status >= 500) _botIaGemFora.set(m, { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); if (r.status === 401 || r.status === 403) break; continue; }
+      if (!r.ok) { out.tentativas.push(m + ' ' + r.status); if (r.status >= 500) _botIaGemFora.set(kx(m), { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); if (r.status === 401 || r.status === 403) break; continue; }
       const d = await r.json();
       const c = (d.candidates || [])[0] || {};
       const txt = String((c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text) || '');
@@ -13578,7 +13579,7 @@ async function _botIaChamar(env, system, user, o) {
       out.texto = txt; out.modelo = m; out.ms = Date.now() - t0;
       if (pagaUsada) { out.paga = true; await _writeConfig(env, mesPago, String(pagas + 1)).catch(() => {}); }
       return out;
-    } catch (e) { quotaTodos = false; _botIaGemFora.set(m, { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); out.tentativas.push(m + ': ' + String((e && e.message) || e).slice(0, 80)); }
+    } catch (e) { quotaTodos = false; _botIaGemFora.set(kx(m), { ate: Date.now() + BOT_IA_GEM_FORA_MS, q: false }); out.tentativas.push(m + ': ' + String((e && e.message) || e).slice(0, 80)); }
   }
   out.quota = out.quota || (quotaTodos && tentou > 0 && !pulouM);
   out.erro = out.tentativas.join(' | ').slice(0, 300) || 'sem modelo disponível';
@@ -13597,8 +13598,9 @@ function _botIaLimpa(texto, idsOk) {
   const ok = new Set((idsOk || []).map((x) => String(x)));
   let barrou = '';
   if (/https?:\/\/|www\.|wa\.me|bit\.ly|t\.me|\b[\w-]+\.(com|br|me|ly|net|shop|fun|site|app|io)\b/i.test(t)) barrou = 'link';
-  if (/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/.test(t)) barrou = 'cpf';
-  t.replace(/#?\d[\d .-]{6,}\d/g, (m) => { const d = m.replace(/\D/g, ''); if (d.length >= 8 && !ok.has(d) && !/^#/.test(m)) barrou = barrou || 'telefone'; return m; });
+  const chk = String(texto || '').replace(/[\u00a0\u2007\u202f]/g, ' ').replace(/[\u2010-\u2015\u2212]/g, '-');
+  if (/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/.test(chk)) barrou = 'cpf';
+  chk.replace(/#?\d[\d .-]{6,}\d/g, (m) => { const d = m.replace(/\D/g, ''); if (d.length >= 8 && !ok.has(d) && !/^#/.test(m)) barrou = barrou || 'telefone'; return m; });
   return { texto: t, barrou };
 }
 
@@ -13719,7 +13721,7 @@ function _botIaAcharPedidos(st, texto, quem, grupo, nomes, tagMap, ps) {
   const out = { blocos: [], ids: [], okNums: [], certo: false, provavel: false, ambiguo: false, termos: [], foraDoEscopo: [] };
   if (!quem || !quem.id) return out;
   const leads = Array.isArray(st && st.leads) ? st.leads : [];
-  const txt = String(texto || '');
+  const txt = String(texto || '').replace(/[\u00a0\u2007\u202f]/g, ' ').replace(/[\u2010-\u2015\u2212]/g, '-');
   const digitos = (txt.match(/\d[\d .()-]{6,}\d/g) || []).map((m) => m.replace(/\D/g, ''));
   const fones = new Set(digitos.filter((d) => d.length >= 8 && d.length <= 13).map((d) => d.slice(-8)));
   const cpfs = new Set(digitos.filter((d) => d.length === 11));
@@ -13792,31 +13794,34 @@ function _botIaNomeBonito(s) {
 function _botIaPseudo(leads, protegidos) {
   const porId = new Map(), porTok = new Map(), rastTok = new Map(), rastCod = new Map();
   const prot = new Set((protegidos || []).map((x) => _botIaNorm(x).split(' ')[0]).filter(Boolean));
-  const palavrasDe = (nome) => _botIaNorm(nome).split(' ').filter((w) => w.length >= 2 && !BOT_IA_PS_LIGA.has(w) && !BOT_IA_PARTICULA.has(w));
-  let idx = null;
-  // Primeiro nome -> clientes com esse primeiro nome (so nome de duas palavras ou mais: um nome so nao identifica).
+  const pula = (w) => !w || w.length < 2 || BOT_IA_PS_LIGA.has(w) || BOT_IA_PARTICULA.has(w);
+  const palavrasDe = (nome) => _botIaNorm(nome).split(' ').filter((w) => !pula(w));
+  let idx = null, sobrenomes = null;
+  // Primeiro nome -> clientes com esse primeiro nome (so nome de duas palavras ou mais: um nome so nao identifica),
+  // e o conjunto de todas as outras palavras de nome (pra saber que "souza" depois de "maria" e sobrenome).
   const indice = () => {
     if (idx) return idx;
-    idx = new Map();
+    idx = new Map(); sobrenomes = new Set();
     for (const l of (Array.isArray(leads) ? leads : [])) {
       if (!l || l.id == null || l.afl) continue;
       const pal = palavrasDe(l.nome);
       if (pal.length < 2) continue;
       if (!idx.has(pal[0])) idx.set(pal[0], []);
       idx.get(pal[0]).push({ l, pal });
+      for (const w of pal.slice(1)) sobrenomes.add(w);
     }
     return idx;
   };
-  const cliente = (l) => {
-    const id = String(l && l.id);
-    let e = porId.get(id);
-    if (!e) {
-      const nome = _botIaNomeBonito(String((l && l.nome) || '').trim()) || 'esse cliente';
-      e = { tok: 'C' + (porId.size + 1), nome, primeiro: nome.split(' ')[0], pal: palavrasDe(nome) };
-      porId.set(id, e); porTok.set(e.tok, e);
-    }
-    return e.tok;
+  // Uma entrada por cliente (chave 'p:<id do pedido>') ou por nome digitado que nao fechou em um cliente so
+  // ('t:<palavras>'). Pedido sem nome vira "esse cliente" na volta, mas nao tem palavra pra casar no texto.
+  const novo = (chave, nomeReal) => {
+    const real = _botIaNomeBonito(String(nomeReal || '').trim());
+    const e = { tok: 'C' + (porTok.size + 1), nome: real || 'esse cliente', primeiro: real ? real.split(' ')[0] : 'esse cliente', pal: real ? palavrasDe(real) : [] };
+    porId.set(chave, e); porTok.set(e.tok, e);
+    return e;
   };
+  const entrada = (l) => { const k = 'p:' + String(l && l.id); return porId.get(k) || novo(k, l && l.nome); };
+  const cliente = (l) => entrada(l).tok;
   const rastreio = (cod) => {
     const c = String(cod || '').trim();
     if (!c) return '';
@@ -13824,50 +13829,92 @@ function _botIaPseudo(leads, protegidos) {
     if (!t) { t = 'R' + (rastCod.size + 1); rastCod.set(c, t); rastTok.set(t, c); }
     return t;
   };
+  const LIGA_NOME = new Set(['da', 'de', 'do', 'das', 'dos']);
   // O texto que vai pra IA (a mensagem, a citada, as ultimas do grupo).
   const texto = (s) => {
     let t = String(s == null ? '' : s);
     if (!t) return t;
-    // 1. Numero de 8 digitos ou mais (telefone, CPF, id): so o final.
-    t = t.replace(/\+?\d[\d .()\/-]{6,}\d/g, (m) => { const d = m.replace(/\D/g, ''); return d.length >= 8 ? '[número final ' + d.slice(-4) + ']' : m; });
-    // 2. Nome de cliente: palavras seguidas (so espaco entre elas, "da/de/do" no meio) do nome de UM cliente.
+    // 0. Espaco fixo e traco tipografico viram os comuns (telefone copiado de pagina escapava da mascara).
+    t = t.replace(/[\u00a0\u2007\u202f]/g, ' ').replace(/[\u2010-\u2015\u2212]/g, '-');
+    // 1. E-mail e endereco (logradouro com numero; "o pedido ta na rua" fica).
+    t = t.replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu, '[e-mail]');
+    t = t.replace(/(^|[^\p{L}])(rua|r\.|avenida|av\.?|travessa|tv\.|alameda|al\.|estrada|rodovia|rod\.|praça|praca|largo|quadra|qd\.?)\s+[^\n,;\/]{1,60}?\d{1,5}(?![\d\/])/giu, (m0, pre) => pre + '[endereço]');
+    // 2. Numero (telefone, CPF): so o final. Data com ano e lista de numeros curtos ficam.
+    t = t.replace(/\+?\d[\d .()\/-]{6,}\d/g, (m) => {
+      const d = m.replace(/\D/g, '');
+      if (/\d{3}\.\d{3}\.\d{3}-\d{2}/.test(m)) return '[número final ' + d.slice(-4) + ']';
+      if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(m.trim())) return m;
+      if (d.length < 8 || d.length > 14 || !m.split(/\D+/).some((b) => b.length >= 4)) return m;
+      return '[número final ' + d.slice(-4) + ']';
+    });
+    // 3. Nome de cliente.
     const ws = [];
     const re = /[\p{L}\p{N}]+/gu;
     let m;
-    while ((m = re.exec(t))) ws.push({ i: m.index, f: m.index + m[0].length, n: _botIaNorm(m[0]) });
-    const junto = (a, b) => /^\s+$/.test(t.slice(ws[a].f, ws[b].i));
+    while ((m = re.exec(t))) ws.push({ i: m.index, f: m.index + m[0].length, n: _botIaNorm(m[0]), cap: /^\p{Lu}/u.test(m[0]) });
+    // Duas palavras do mesmo nome: so espaco entre elas, ou apostrofo, hifen ou o ponto da inicial.
+    const junto = (a, b) => ws[b].i > ws[a].f && /^\s*['’.\-]?\s*$/.test(t.slice(ws[a].f, ws[b].i));
+    // Dentro do nome se pula "da/de/do", particula (Del, Van) e inicial ("C." de Kelly C. Moraes, "D'" de D'Arc).
+    const pulaNoNome = (j) => { const n = ws[j].n; return LIGA_NOME.has(n) || BOT_IA_PARTICULA.has(n) || (n.length === 1 && /['’.]/.test(t[ws[j].f] || '')); };
     const trocas = [];
     let k = 0;
     while (k < ws.length) {
       const w = ws[k].n;
-      if (w.length < 2 || BOT_IA_PS_LIGA.has(w)) { k++; continue; }
-      // a) cliente que ja tem codigo nesta mensagem
-      let donos = [...porId.values()].filter((e) => e.pal.includes(w));
-      // b) outro cliente da base: o primeiro nome dele seguido de outra palavra do mesmo nome
-      if (!donos.length) {
-        const cands = indice().get(w);
-        if (cands) {
-          let j = k + 1;
-          while (j < ws.length && BOT_IA_PS_LIGA.has(ws[j].n) && junto(j - 1, j)) j++;
-          if (j < ws.length && junto(j - 1, j)) {
-            const c = cands.find((x) => x.pal.indexOf(ws[j].n) > 0);
-            if (c) { cliente(c.l); donos = [porId.get(String(c.l.id))]; }
-          }
+      if (pula(w)) { k++; continue; }
+      // a) NOME DIGITADO COM SOBRENOME: o primeiro nome e as palavras seguidas que sao nome de cliente da base.
+      const cands = indice().get(w) || [];
+      let fimB = k;
+      const dig = [w];
+      if (cands.length) {
+        let j = k + 1;
+        while (j < ws.length && junto(j - 1, j)) {
+          if (pulaNoNome(j)) { j++; continue; }
+          if (!cands.some((c) => c.pal.includes(ws[j].n))) break;
+          dig.push(ws[j].n); fimB = j; j++;
         }
       }
+      if (dig.length >= 2) {
+        // Um cliente so com todas as palavras; senao o que ja tem codigo nesta mensagem; senao o nome exato; senao
+        // uma entrada com o nome COMO FOI DIGITADO (a volta e a segunda busca usam ele, sem chutar outro cliente).
+        const todos = cands.filter((c) => dig.every((x) => c.pal.includes(x)));
+        const comCod = todos.filter((c) => porId.has('p:' + String(c.l.id)));
+        const exato = todos.filter((c) => c.pal.length === dig.length);
+        const um = todos.length === 1 ? todos[0] : (comCod.length === 1 ? comCod[0] : (exato.length === 1 ? exato[0] : null));
+        const chave = 't:' + dig.join(' ');
+        const e = um ? entrada(um.l) : (porId.get(chave) || novo(chave, t.slice(ws[k].i, ws[fimB].f)));
+        trocas.push({ i: ws[k].i, f: ws[fimB].f, tok: e.tok });
+        k = fimB + 1;
+        continue;
+      }
+      // b) CLIENTE QUE JA TEM CODIGO nesta mensagem (do pedido achado ou de uma linha anterior).
+      let donos = [...porTok.values()].filter((e) => e.pal.includes(w));
       if (!donos.length) { k++; continue; }
       let fim = k, j = k + 1;
       while (j < ws.length && junto(j - 1, j)) {
-        if (BOT_IA_PS_LIGA.has(ws[j].n)) { j++; continue; }
+        if (pulaNoNome(j)) { j++; continue; }
         const resta = donos.filter((e) => e.pal.includes(ws[j].n));
         if (!resta.length) break;
         donos = resta; fim = j; j++;
       }
       if (fim === k) {
-        // Palavra solta: so o PRIMEIRO nome do cliente vira codigo (sobrenome solto e palavra comum demais),
-        // e nunca o primeiro nome de alguem da equipe.
+        // Palavra solta: so o PRIMEIRO nome vira codigo (sobrenome solto e palavra comum demais), e nunca o primeiro
+        // nome de alguem da equipe ("marca o Bruno").
         donos = donos.filter((e) => e.pal[0] === w);
         if (!donos.length || prot.has(w)) { k++; continue; }
+        // Seguido de um sobrenome que nao e dele (Maria Souza com a C1 = Maria Silva): e outra pessoa, vai sem nome.
+        let q = k + 1;
+        while (q < ws.length && junto(q - 1, q) && pulaNoNome(q)) q++;
+        if (q < ws.length && junto(q - 1, q) && !donos.some((e) => e.pal.includes(ws[q].n)) && !pula(ws[q].n) && (ws[q].cap || (indice(), sobrenomes.has(ws[q].n)))) {
+          let fq = q, r = q + 1;
+          while (r < ws.length && junto(r - 1, r)) {
+            if (pulaNoNome(r)) { r++; continue; }
+            if (!(ws[r].cap || sobrenomes.has(ws[r].n))) break;
+            fq = r; r++;
+          }
+          trocas.push({ i: ws[k].i, f: ws[fq].f, tok: '[cliente]' });
+          k = fq + 1;
+          continue;
+        }
       }
       trocas.push({ i: ws[k].i, f: ws[fim].f, tok: donos.length === 1 ? donos[0].tok : '[cliente]' });
       k = fim + 1;
@@ -13875,30 +13922,37 @@ function _botIaPseudo(leads, protegidos) {
     for (let x = trocas.length - 1; x >= 0; x--) t = t.slice(0, trocas[x].i) + trocas[x].tok + t.slice(trocas[x].f);
     return t;
   };
-  const TOK = /(?<![\p{L}\p{N}])([CR])(\d{1,2})(?![\p{L}\p{N}])/gu;
-  // A resposta da IA: o nome volta no lugar do codigo (o completo na primeira vez, depois o primeiro nome), sem o
-  // artigo que a IA tenha posto antes (ela nao sabe se e homem ou mulher: "a C1" vira "Joselina", "da C1" vira "de").
+  const TOK = /(?<![\p{L}\p{N}])([CR])(\d{1,2})(?![\p{L}\p{N}])/giu;
+  // A resposta da IA: o nome volta no lugar do codigo (o completo na primeira vez; depois o primeiro nome, se nenhum
+  // outro cliente da mensagem tem o mesmo), sem o artigo que a IA tenha posto antes (ela nao sabe se e homem ou mulher).
+  // O que a IA tenha copiado das mascaras volta como texto normal.
   const restaura = (s) => {
     const usado = new Map();
     return String(s == null ? '' : s)
       .replace(/(^|[^\p{L}\p{N}])(a|o|da|do|na|no|pela|pelo)\s+(C\d{1,2})(?![\p{L}\p{N}])/giu, (m0, pre, art, tok) => {
-        if (!porTok.has(tok)) return m0;
+        if (!porTok.has(tok.toUpperCase())) return m0;
         let r = BOT_IA_PS_ARTIGO[art.toLowerCase()];
         if (r && art[0] !== art[0].toLowerCase()) r = r[0].toUpperCase() + r.slice(1);
         return pre + r + tok;
       })
       .replace(TOK, (m0, L, n) => {
-        const tok = L + n;
-        if (L === 'R') return rastTok.get(tok) || m0;
+        const tok = L.toUpperCase() + n;
+        if (tok[0] === 'R') return rastTok.get(tok) || m0;
         const e = porTok.get(tok);
         if (!e) return m0;
         const v = (usado.get(tok) || 0) + 1;
         usado.set(tok, v);
-        return v === 1 ? e.nome : e.primeiro;
-      });
+        const p1 = _botIaNorm(e.primeiro);
+        const mesmo = [...porTok.values()].some((x) => x !== e && _botIaNorm(x.primeiro) === p1);
+        return v === 1 || mesmo ? e.nome : e.primeiro;
+      })
+      .replace(/\[cliente\]/gi, 'esse cliente')
+      .replace(/\[número final (\d{4})\]/gi, 'final $1')
+      .replace(/\[e-mail\]/gi, 'e-mail')
+      .replace(/\[endereço\]/gi, 'endereço');
   };
   // O que a IA pediu pra buscar ("C2", "a C1 de Itu") volta a ser o nome pra busca.
-  const desfaz = (s) => String(s == null ? '' : s).replace(TOK, (m0, L, n) => (L === 'R' ? (rastTok.get(L + n) || m0) : ((porTok.get(L + n) || {}).nome || m0)));
+  const desfaz = (s) => String(s == null ? '' : s).replace(TOK, (m0, L, n) => { const tok = L.toUpperCase() + n; return tok[0] === 'R' ? (rastTok.get(tok) || m0) : ((porTok.get(tok) || {}).nome || m0); });
   return { cliente, rastreio, texto, restaura, desfaz, tokens: () => porTok.size };
 }
 // O pedido em texto, a partir de _cobDetalhe (sem CPF, endereco, links e comentarios: a resposta e
@@ -17799,7 +17853,20 @@ async function handleBotChat(req, env) {
       return { ...x, quem_id: p ? p.id : '', quem_nome: p ? (nomeDe(p.id) || p.nome) : '' };
     });
   } catch (_) {}
-  return json({ ok: true, itens, pessoas, quota_ate: await _botIaQuotaAte(env) });
+  // O DIA DO BOT pra aba Bot de IA (06/11/2026): quantas vezes ele respondeu, calou e deu erro HOJE no grupo de
+  // verdade (o grupo de teste fica de fora), e se esta na chave paga do bot ou na gratis.
+  const hoje = { respondeu: 0, calado: 0, erro: 0 };
+  try {
+    const r = await env.DB.prepare("SELECT acao, COUNT(*) AS n FROM bot_chat WHERE grupo=? AND dia=? AND COALESCE(teste,0)=0 AND acao IN ('respondeu','pendente','calado','erro') GROUP BY acao").bind(grupo, _brDay()).all();
+    for (const x of ((r && r.results) || [])) { const k = x.acao === 'pendente' ? 'respondeu' : String(x.acao); hoje[k] = (hoje[k] || 0) + (Number(x.n) || 0); }
+  } catch (_) {}
+  let iaChave = 'gratis';
+  if (await getAIKey(env, 'anthropic').catch(() => null)) iaChave = 'claude';
+  else if (await getAIKey(env, 'gemini_bot').catch(() => null)) {
+    const pagas = Number(await _readConfig(env, 'bot_ia_pagas_' + _brDay().slice(0, 7)).catch(() => 0)) || 0;
+    if (pagas < BOT_IA_PAGAS_MES(_brDay())) iaChave = 'paga';
+  }
+  return json({ ok: true, itens, pessoas, quota_ate: await _botIaQuotaAte(env), hoje, ia_chave: iaChave });
 }
 // POST /api/bot/ia/teste { grupo, texto, quem_id }: o mesmo caminho da resposta, sem freio, sem gravar
 // `visto`, sem mandar nada e sem avisar ninguem. E como a direcao confere o bot antes de ligar.

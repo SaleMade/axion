@@ -170,6 +170,11 @@ function monta(mundo) {
     if (/SELECT resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && (x.acao === a[2] || x.acao === a[3])).sort(desc).slice(0, 30).map((x) => ({ resposta: x.resposta })), meta: {} };
     if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND de_jid=\?/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && x.de_jid === a[1] && ['respondeu', 'pendente'].includes(x.acao) && Number(x.ts) > Number(a[2])) ? [{ ok: 1 }] : [], meta: {} };
     if (/COUNT\(\*\) AS n FROM bot_chat WHERE acao='provocou'/.test(sql)) return { results: [{ n: chat.filter((x) => x.acao === 'provocou' && x.dia === a[0]).length }], meta: {} };
+    if (/SELECT acao, COUNT\(\*\) AS n FROM bot_chat WHERE grupo=\? AND dia=\?/.test(sql)) {
+      const conta = {};
+      for (const x of chat) if (x.grupo === a[0] && x.dia === a[1] && !Number(x.teste) && ['respondeu', 'pendente', 'calado', 'erro'].includes(x.acao)) conta[x.acao] = (conta[x.acao] || 0) + 1;
+      return { results: Object.keys(conta).map((k) => ({ acao: k, n: conta[k] })), meta: {} };
+    }
     if (/FROM bot_chat WHERE grupo=\? AND acao<>'visto'/.test(sql)) return { results: chat.filter((x) => x.grupo === a[0] && x.acao !== 'visto').sort(desc).slice(0, Number(a[1])).map((x) => ({ ...x, texto: String(x.texto || '').slice(0, 300), resposta: String(x.resposta || '').slice(0, 400) })), meta: {} };
     // bot_quem: quem escreve no grupo (upsert por grupo + jid)
     if (/INSERT INTO bot_quem/.test(sql)) {
@@ -1459,9 +1464,79 @@ titulo('29. 429 da cota do DIA: o modelo fica fora ate a cota voltar');
   const m = monta({ ...MUNDO, ia: [{ status: 429, body: corpoDia }, { status: 429, body: '{"error":{"code":429}}' }, JSON_OK] });
   const r = await m.api._botIaChamar(m.env, 'sys', 'user', {});
   conf(r.texto && r.tentativas[0] === 'gemini-3.5-flash 429 (cota do dia)' && r.tentativas[1] === 'gemini-2.5-flash 429', '429 com PerDay no corpo e marcado como cota do dia; o 429 comum continua comum');
-  const f1 = m.api._botIaGemFora.get('gemini-3.5-flash'), f2 = m.api._botIaGemFora.get('gemini-2.5-flash');
+  const f1 = m.api._botIaGemFora.get('gemini-3.5-flash|geral'), f2 = m.api._botIaGemFora.get('gemini-2.5-flash|geral');
   conf(f1 && f1.ate - DataFalsa.now() > 15 * 3600000 && f1.ate - DataFalsa.now() <= 24 * 3600000 && f2 && f2.ate - DataFalsa.now() <= 3 * 60000 + 1000, 'cota do dia: fora pelo retryDelay (15 h); 429 comum: 3 min');
   m.api._botIaGemFora.clear();
+}
+
+// ══ 30. O DIA DO BOT NA ABA BOT DE IA (06/11) ══════════════════════════════════════════
+titulo('30. GET /api/bot/chat traz quantas respostas hoje e se a chave e paga');
+{
+  const chat = [
+    linhaChat({ msg_id: 'h1', grupo: 'vend', jid: GV, acao: 'respondeu' }), linhaChat({ msg_id: 'h2', grupo: 'vend', jid: GV, acao: 'pendente' }),
+    linhaChat({ msg_id: 'h3', grupo: 'vend', jid: GV, acao: 'calado' }), linhaChat({ msg_id: 'h4', grupo: 'vend', jid: TG, acao: 'respondeu', teste: 1 }),
+    linhaChat({ msg_id: 'h5', grupo: 'cob', jid: GC, acao: 'respondeu' }),
+  ];
+  const m = monta({ ...MUNDO, chat, chaveBot: 'AIza-do-bot' });
+  const r = await m.api.handleBotChat({ url: 'https://api.sellwave.com.br/api/bot/chat?grupo=vend', headers: { get: () => 'Bearer x' } }, m.env);
+  const j = r._json || {};
+  conf(j.hoje && j.hoje.respondeu === 2 && j.hoje.calado === 1 && j.ia_chave === 'paga', 'vend: 2 respostas hoje (pendente conta), 1 calado, o teste fica de fora; chave paga');
+  const m2 = monta({ ...MUNDO, chat });
+  const r2 = await m2.api.handleBotChat({ url: 'https://api.sellwave.com.br/api/bot/chat?grupo=cob', headers: { get: () => 'Bearer x' } }, m2.env);
+  conf((r2._json || {}).hoje.respondeu === 1 && (r2._json || {}).ia_chave === 'gratis', 'cob: 1 resposta hoje; sem chave do bot = gratis');
+}
+
+// ══ 31. REVISAO DA PRIVACIDADE (06/11) ═════════════════════════════════════════════════
+titulo('31. Revisao: nome parecido, particula, e-mail, endereco, traco, data, pedido sem nome, volta e chave');
+{
+  const { api } = monta({});
+  const duasMarias = [{ id: 901, nome: 'Maria Aparecida Silva' }, { id: 900, nome: 'Maria Silva Costa' }];
+  const p1 = api._botIaPseudo(duasMarias, []);
+  conf(p1.texto('a Maria Silva disse que paga amanhã') === 'a C1 disse que paga amanhã' && p1.desfaz('C1') === 'Maria Silva', 'nome digitado que bate em dois pedidos: codigo com o nome DIGITADO (sem chutar outra cliente)');
+  const p2 = api._botIaPseudo(duasMarias, []);
+  p2.cliente(duasMarias[1]);
+  conf(p2.texto('a maria silva pagou?') === 'a C1 pagou?', 'nome que bate em dois pedidos, um deles ja com codigo (o achado pela busca): usa o dele');
+  const p3 = api._botIaPseudo([{ id: 1, nome: 'Maria Silva Santos' }, { id: 2, nome: 'Maria Silva' }], []);
+  conf(p3.texto('a maria silva me chamou de novo') === 'a C1 me chamou de novo' && p3.desfaz('C1') === 'Maria Silva', 'com o nome exato na base, fica com ele');
+  const base4 = [{ id: 1, nome: 'Maria Silva' }, { id: 2, nome: 'Maria Souza Lima' }, { id: 3, nome: 'Pedro Souza' }];
+  const p4 = api._botIaPseudo(base4, []);
+  conf(p4.texto('a maria silva e a maria souza lima') === 'a C1 e a C2', 'duas clientes com o mesmo primeiro nome na mesma frase: dois codigos');
+  const p5 = api._botIaPseudo(base4, []);
+  p5.cliente(base4[0]);
+  conf(p5.texto('a Maria Ferreira ligou') === 'a [cliente] ligou' && p5.texto('a maria souza ligou') === 'a C2 ligou', 'primeiro nome igual ao da C1 com outro sobrenome: nao vira a C1');
+  const nomes = [{ id: 11, nome: "Joana D'Arc Ferreira" }, { id: 12, nome: 'Carlos Del Rio' }, { id: 13, nome: 'Ana Van Der Berg' }, { id: 14, nome: 'Ana-Paula Souza' }, { id: 15, nome: 'Kelly C. Moraes' }];
+  const p6 = api._botIaPseudo(nomes, []);
+  conf(p6.texto("a Joana D'Arc Ferreira, o Carlos Del Rio, a Ana Van Der Berg, a Ana-Paula Souza e a Kelly C. Moraes") === 'a C1, o C2, a C3, a C4 e a C5', "D'Arc, Del, Van Der, hifen e inicial: o nome inteiro vira o codigo");
+  const p7 = api._botIaPseudo([], []);
+  conf(p7.texto('pediu boleto no joana.ferreira@gmail.com, mora na rua das Acácias 145') === 'pediu boleto no [e-mail], mora na [endereço]', 'e-mail e endereco com numero viram marcador');
+  conf(p7.texto('o pedido tá na rua desde 05/11') === 'o pedido tá na rua desde 05/11', '"ta na rua" (saiu pra entrega) e data ficam');
+  conf(p7.texto('+55 11 98765 4321 e 11 98765–4321 e 11 98765‑4321') === '[número final 4321] e [número final 4321] e [número final 4321]', 'telefone com espaco fixo, meia-risca e hifen nao separavel: so o final');
+  conf(p7.texto('entregue em 06/11/2026, pedidos 101 102 103') === 'entregue em 06/11/2026, pedidos 101 102 103' && p7.texto('cpf 123.456.789-01') === 'cpf [número final 8901]', 'data com ano e lista de numeros curtos ficam; CPF vira o final');
+  const p8 = api._botIaPseudo([], []);
+  p8.cliente({ id: 9, nome: '' });
+  conf(p8.texto('esse numero da empresa caiu de novo?') === 'esse numero da empresa caiu de novo?' && p8.restaura('C1 pagou') === 'esse cliente pagou', 'pedido sem nome: "esse" do texto nao vira codigo; a volta diz "esse cliente"');
+  const p9 = api._botIaPseudo([{ id: 1, nome: 'Jose Carlos Lima' }, { id: 2, nome: 'Jose Ribamar Teixeira' }], []);
+  p9.cliente({ id: 1, nome: 'Jose Carlos Lima' }); p9.cliente({ id: 2, nome: 'Jose Ribamar Teixeira' });
+  conf(p9.restaura('se for o C1 ja da. é o C1 ou o C2?') === 'se for Jose Carlos Lima ja da. é Jose Carlos Lima ou Jose Ribamar Teixeira?', 'dois codigos com o mesmo primeiro nome: a volta repete o nome completo');
+  conf(p9.restaura('c1 pagou; [cliente] nao; o [número final 7777] caiu; manda no [e-mail]') === 'Jose Carlos Lima pagou; esse cliente nao; o final 7777 caiu; manda no e-mail', 'codigo em minuscula e marcador copiado pela IA voltam como texto normal');
+  const L1 = api._botIaLimpa('liga no 11 98765–4321', []);
+  conf(L1.barrou === 'telefone', 'o filtro da saida pega telefone com meia-risca');
+}
+{
+  const m = monta({ ...MUNDO, chat: [], anthropic: 'sk-ant-x' });
+  const r = await m.api.handleBotChat({ url: 'https://api.sellwave.com.br/api/bot/chat?grupo=vend', headers: { get: () => 'Bearer x' } }, m.env);
+  conf((r._json || {}).ia_chave === 'claude', 'com a chave da Anthropic, a tela diz Claude');
+  const mes = 'bot_ia_pagas_' + DIA.slice(0, 7);
+  const m2 = monta({ ...MUNDO, chat: [], chaveBot: 'AIza-do-bot', config: { [mes]: '1600' } });
+  const r2 = await m2.api.handleBotChat({ url: 'https://api.sellwave.com.br/api/bot/chat?grupo=vend', headers: { get: () => 'Bearer x' } }, m2.env);
+  conf((r2._json || {}).ia_chave === 'gratis', 'chave paga no teto do mes: a tela diz gratis (e o que o bot usa)');
+}
+{
+  // A cota do dia da chave gratis nao tira o modelo da chave paga.
+  const corpoDia = JSON.stringify({ error: { code: 429, details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }, { retryDelay: '50000s' }] } });
+  const m = monta({ ...MUNDO, ia: [{ status: 429, body: corpoDia }, JSON_OK] });
+  await m.api._botIaChamar(m.env, 'sys', 'user', {});
+  conf(!!m.api._botIaGemFora.get('gemini-3.5-flash|geral') && !m.api._botIaGemFora.get('gemini-3.5-flash|bot'), 'a cota do dia fica marcada so na chave em que deu 429');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
