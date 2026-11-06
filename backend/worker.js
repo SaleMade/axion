@@ -28725,7 +28725,9 @@ async function handlePresselDiag(req, env){
     // O INTERRUPTOR COMO ESTA NO BANCO AGORA (13/10/2026): a Chegada de leads no topo da tela le daqui,
     // a cada 15s, e por isso enxerga quem mexeu em outra tela (o vendedor desligando o dele, outra aba).
     const vend = (Array.isArray(p.vendedores) ? p.vendedores : []).filter((v) => v && v.at && String(v.at) !== '__sd')
-      .map((v) => ({ at: String(v.at), ativo: v.ativo !== false, off: (v.off && typeof v.off === 'object') ? v.off : {}, volta: (v.volta && typeof v.volta === 'object') ? v.volta : {} }));
+      // app_off (05/11/2026): a tela pinta de LARANJA o numero que o app fechado desligou, pra nao
+      // confundir com o desligado de proposito. So leitura: quem grava e apaga continua sendo o cron.
+      .map((v) => ({ at: String(v.at), ativo: v.ativo !== false, off: (v.off && typeof v.off === 'object') ? v.off : {}, volta: (v.volta && typeof v.volta === 'object') ? v.volta : {}, app_off: (v.app_off && typeof v.app_off === 'object') ? v.app_off : {} }));
     return { id:p.id, nome:p.nome||'', status:p.status||'ativa', vend,
       semNumero: _semNumD[String(p.id)] || null,
       numeros: _cortaNum ? numeros.map((n) => ({ ...n, num: _num4(n && n.num) })) : numeros,
