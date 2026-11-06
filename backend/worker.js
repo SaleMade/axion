@@ -11364,11 +11364,20 @@ const BOT_MARCOS_PADRAO = [
   { n: 10, frase: '{nome}, {n} vendas hoje. Isso é de outro nível.' },
   { n: 15, frase: '{nome} fechou {n} vendas hoje. Dia histórico, parabéns.' },
 ];
-const BOT_META_FRASE_PADRAO = 'Meta da semana batida, {nome}: {n} pedidos. Agora é passar da meta.';
+// A META DO MES (06/11/2026, regra do Bruno no lugar da meta da semana dos vendedores): comemora cada faixa
+// batida no mes ({n} = os pedidos da faixa) e o primeiro a bater 250 ({n} = 250).
+const BOT_META_FRASE_PADRAO = 'BOOORA {nome}! {n} pedidos no mês, faixa batida. Agora é a próxima.';
+const BOT_CORRIDA_FRASE_PADRAO = '{nome} foi o primeiro a bater {n} pedidos no mês e leva o extra!';
+// As frases da meta da SEMANA que existiam (padrao do worker, o que estava gravado e as sugestoes da tela): trocadas
+// pela do mes ao ler a config. Frase escrita pelo Bruno fica, mesmo com a palavra "semana".
+const BOT_META_FRASES_VELHAS = ['Meta da semana batida, {nome}: {n} pedidos. Agora é passar da meta.', 'Meta da semana batida, {nome}: {n} pedidos',
+  'Meta da semana batida, {nome}: {n} pedidos.', 'Meta da semana batida, {nome}! {n} pedidos. Agora é passar dela.', '{nome} bateu a meta da semana: {n} de {meta}. Bora ultrapassar.',
+  'Meta cumprida, {nome}! E a semana ainda nem acabou.', '{nome} fechou a meta da semana com {n} pedidos. Que fase!', 'Missão da semana cumprida por {nome}: {n} pedidos.',
+  '{n} pedidos e meta batida, {nome}. O que vier agora é lucro.', 'Meta? Batida. {nome} com {n} pedidos na semana.'];
 // O NOME DE CADA LINHA DO RESUMO (13/10/2026): o socio quis reescrever as linhas ("tirar esse
 // negocio de pedidos pagos no dia, ou reformular"). Cada linha tem o nome padrao abaixo e pode ser
 // renomeada na tela; liga e desliga continua no relatorio.mostrar.
-const BOT_ROTULOS_PADRAO = { pedidos: 'Pedidos', valor: 'Vendido', leads: 'Leads', conversao: 'Conversão', pagos_antigos: 'Pagos hoje (pedidos anteriores)', meta: 'Meta da semana', ontem: 'Ontem', geral: 'Geral', aguardando: 'Pedidos esperando aprovação', destaque: 'Destaque do dia' };
+const BOT_ROTULOS_PADRAO = { pedidos: 'Pedidos', valor: 'Vendido', leads: 'Leads', conversao: 'Conversão', pagos_antigos: 'Pagos hoje (pedidos anteriores)', meta: 'Meta do mês', ontem: 'Ontem', geral: 'Geral', aguardando: 'Pedidos esperando aprovação', destaque: 'Destaque do dia' };
 // "Aguardando aceite" ninguem entendia (17/10/2026): sao os pedidos lancados na mao que a direcao ainda
 // nao aprovou. Quem ficou com o nome antigo gravado (era o padrao) passa pro novo.
 const BOT_AGUARDANDO_VELHO = 'Aguardando aceite';
@@ -11632,6 +11641,7 @@ function _botNormaliza(raw, base) {
   o.relatorio.rotulos = {};
   for (const k of Object.keys(BOT_ROTULOS_PADRAO)) o.relatorio.rotulos[k] = _botTexto300((k in rot) ? rot[k] : brot[k], 40).trim() || BOT_ROTULOS_PADRAO[k];
   if (o.relatorio.rotulos.aguardando === BOT_AGUARDANDO_VELHO) o.relatorio.rotulos.aguardando = BOT_ROTULOS_PADRAO.aguardando;
+  if (/^meta da semana$/i.test(o.relatorio.rotulos.meta)) o.relatorio.rotulos.meta = BOT_ROTULOS_PADRAO.meta;
   o.relatorio.midias = _botMidias('midias' in rel ? rel.midias : brel.midias);
   {
     const fx = Array.isArray(rel.faixas) ? rel.faixas : (Array.isArray(brel.faixas) ? brel.faixas : []);
@@ -11674,6 +11684,27 @@ function _botNormaliza(raw, base) {
   }
   o.meta_batida.midias = _botMidias('midias' in mb ? mb.midias : bmb.midias);
   o.meta_batida.por_vendedor = _botPorVendedor('por_vendedor' in mb ? mb.por_vendedor : bmb.por_vendedor);
+  // Frase antiga da meta da SEMANA (o padrao e as sugestoes de antes) vira a frase padrao da meta do mes (06/11/2026).
+  {
+    const daSemana = (f) => BOT_META_FRASES_VELHAS.includes(String(f || '').trim());
+    const troca = (frs) => { const out = (frs || []).map((f) => (daSemana(f) ? BOT_META_FRASE_PADRAO : f)); return out.filter((f, i) => out.indexOf(f) === i); };
+    if (o.meta_batida.frases.some(daSemana)) {
+      const fm = o.meta_batida.frases_midia || [];
+      const novas = troca(o.meta_batida.frases);
+      o.meta_batida.frases_midia = novas.map((f) => { const i = o.meta_batida.frases.findIndex((x) => (daSemana(x) ? BOT_META_FRASE_PADRAO : x) === f); return i >= 0 ? (fm[i] || null) : null; });
+      o.meta_batida.frases = novas;
+      o.meta_batida.frase = novas[0];
+    }
+    for (const vid of Object.keys(o.meta_batida.por_vendedor || {})) {
+      const pv = o.meta_batida.por_vendedor[vid];
+      if (pv && Array.isArray(pv.frases) && pv.frases.some(daSemana)) {
+        const fmV = pv.frases_midia || [];
+        const nv = troca(pv.frases);
+        pv.frases_midia = nv.map((f) => { const i = pv.frases.findIndex((x) => (daSemana(x) ? BOT_META_FRASE_PADRAO : x) === f); return i >= 0 ? (fmV[i] || null) : null; });
+        pv.frases = nv;
+      }
+    }
+  }
   const inc = (r.incentivo && typeof r.incentivo === 'object') ? r.incentivo : {};
   const binc = b.incentivo || o.incentivo;
   o.incentivo.ativo = 'ativo' in inc ? !!inc.ativo : !!binc.ativo;
@@ -12008,11 +12039,10 @@ async function _botDados(env, dia, cfg, tipo, fresco, stPronto) {
   const ini = semanal ? sem.iniTs * 1000 : _botInicioDia(dia) * 1000;
   const fim = semanal ? sem.fimTs * 1000 : ini + 86400000;
   const ontemIni = ini - (fim - ini), ontemFim = ini;   // o periodo anterior do mesmo tamanho
-  const semMeta = _botSemanaDe(dia);                    // a meta e sempre da semana corrente do dia
+  const semMeta = _botSemanaDe(dia);                    // o total da semana (a meta agora e do MES)
   const por = {};
   for (const v of vendedores) {
-    const meta = Number((cfg && cfg.metas && cfg.metas.semanal && cfg.metas.semanal[v.id]) || 0);
-    por[v.id] = { id: v.id, nome: v.nome, ..._botZero(), semana: 0, meta, faltam: 0, ontem: { pedidos: 0, leads: 0 } };
+    por[v.id] = { id: v.id, nome: v.nome, ..._botZero(), semana: 0, meta: 0, faltam: 0, ontem: { pedidos: 0, leads: 0 } };
   }
   const geral = { ..._botZero(), semana: 0, ontem: { pedidos: 0, leads: 0 } };
   for (const l of leads) {
@@ -12064,14 +12094,41 @@ async function _botDados(env, dia, cfg, tipo, fresco, stPronto) {
     }
   } catch (_) {}
   const lista = Object.values(por);
+  // A META DO MES: a mesma conta do /api/podio, do dia 1 ate o fim do dia do resumo. `meta` e `faltam` (as fichas
+  // {meta} e {faltam} das frases) passam a ser a proxima faixa e quanto falta pra ela.
+  const fimDoDia = _botInicioDia(dia) * 1000 + 86400000;
+  const contaMes = _metaMesPorVendedor(leads.filter((l) => l && _botCriadoMs(l) < fimDoDia), Object.keys(por), fimDoDia - 1);
+  let primeiro = null;
   for (const v of lista) {
     v.conversao = v.leads > 0 ? Math.round((v.pedidos / v.leads) * 100) : 0;
-    v.faltam = v.meta > 0 ? Math.max(0, v.meta - v.semana) : 0;
+    Object.assign(v, _botMetaMes(contaMes[v.id]));
+    v.meta = (v.proxima || v.faixa || { pedidos: 0 }).pedidos;
+    v.faltam = v.faltam_mes;
+    v.primeiro_corrida = false;
+    if (v.marcoTs > 0 && (!primeiro || v.marcoTs < primeiro.marcoTs)) primeiro = v;
   }
+  if (primeiro) primeiro.primeiro_corrida = true;
   geral.conversao = geral.leads > 0 ? Math.round((geral.pedidos / geral.leads) * 100) : 0;
   return { dia, tipo: semanal ? 'semanal' : 'diario', semana: { inicio: sem.inicio, fim: sem.fim }, vendedores: lista, geral };
 }
 const _botPlural = (n, um, varios) => n + ' ' + (n === 1 ? um : varios);
+// O progresso de um vendedor na meta do mes (as mesmas contas de axion-produtor/src/lib/meta-mensal.js).
+function _botMetaMes(c, regra) {
+  const R = regra || META_MENSAL;
+  const mes = Number(c && c.mes) || 0;
+  const cheios = Math.min(mes, Number(c && c.cheios) || 0);
+  let faixa = null;
+  for (const f of R.faixas) if (mes >= f.pedidos) faixa = f;
+  const proxima = R.faixas.find((f) => mes < f.pedidos) || null;
+  const ok80 = mes === 0 || cheios * 100 >= R.pctCheios * mes;
+  return { mes, cheios, pct497: mes ? (ok80 ? Math.round((cheios * 100) / mes) : Math.floor((cheios * 100) / mes)) : 0, ok80, faixa, proxima, faltam_mes: proxima ? proxima.pedidos - mes : 0, travado: !!faixa && !ok80, marcoTs: Number(c && c.marcoTs) || 0 };
+}
+// A linha da meta no resumo e no que a IA ve: "152 pedidos, faltam 48 pra 200" (e o 497+ quando esta abaixo).
+function _botMetaTxt(v) {
+  if (!v) return '';
+  return _botPlural(v.mes || 0, 'pedido', 'pedidos') + (v.proxima ? ', faltam ' + v.faltam_mes + ' pra ' + v.proxima.pedidos : (v.faixa ? ', bateu ' + v.faixa.pedidos : ''))
+    + (v.mes && !v.ok80 ? ' (' + META_MENSAL.ticketMin + '+: ' + v.pct497 + '%, precisa ' + META_MENSAL.pctCheios + '%)' : '');
+}
 function _botPartesPedido(v) {
   const p = [];
   if (v.entrega) p.push(v.entrega + ' na entrega');
@@ -12124,7 +12181,7 @@ function _botTextoRelatorio(cfg, dados, esc) {
     L.push('');
     L.push('*' + (r.ordenar === 'nome' ? '' : (i + 1) + '. ') + v.nome + '*');
     L.push(...linhas(v));
-    if (m.meta !== false && v.meta > 0) L.push(rot.meta + ': ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' · faltam ' + v.faltam : ' · meta batida'));
+    if (m.meta !== false && v.mes > 0) L.push(rot.meta + ': ' + _botMetaTxt(v).replace(/, /g, ' · '));
     if (m.ontem && !semanal) L.push(rot.ontem + ': ' + _botPlural(v.ontem.pedidos, 'pedido', 'pedidos') + ' · ' + _botPlural(v.ontem.leads, 'lead', 'leads'));
   });
   if (m.geral !== false && (vs.length > 1 || (m.so_com_pedido && dados.vendedores.length > 1))) {
@@ -12429,12 +12486,17 @@ async function _botMarcosTick(env, cfg, row, dia) {
   if (_botVerVista < 0) _botVerVista = Number(await _readConfig(env, 'bot_ver').catch(() => 0)) || 0;
   if (ver === _botVerVista) return;
   const dados = await _botDados(env, dia, cfg, 'diario', true);
-  const semana = _botSemanaDe(dia);
-  const chaveM = 'bot_marcos_' + dia, chaveS = 'bot_meta_' + semana.inicio;
-  const lidas = await _readConfigMuitas(env, [chaveM, chaveS]).catch(() => ({}));
+  const chaveM = 'bot_marcos_' + dia, chaveS = 'bot_metames_' + String(dia).slice(0, 7);
+  // O que ja foi comemorado: se a leitura falhar, a batida para aqui (a proxima tenta de novo). Cair em "nada foi
+  // comemorado" repetiria no grupo todas as faixas do mes (revisao de 06/11).
+  const lidas = {};
+  try {
+    await _ensureConfigTable(env);
+    const r = await env.DB.prepare('SELECT key, value FROM app_config WHERE key IN (?, ?)').bind(chaveM, chaveS).all();
+    for (const x of ((r && r.results) || [])) lidas[x.key] = x.value;
+  } catch (_) { return; }
   let feito = {}, feitoS = {};
-  try { feito = JSON.parse(lidas[chaveM] || '{}') || {}; } catch (_) { feito = {}; }
-  try { feitoS = JSON.parse(lidas[chaveS] || '{}') || {}; } catch (_) { feitoS = {}; }
+  try { feito = JSON.parse(lidas[chaveM] || '{}') || {}; feitoS = JSON.parse(lidas[chaveS] || '{}') || {}; } catch (_) { return; }
   const envios = [];
   for (const v of dados.vendedores) {
     if (cfg.marcos.ativo && cfg.marcos.lista.length) {
@@ -12442,9 +12504,15 @@ async function _botMarcosTick(env, cfg, row, dia) {
       const novos = cfg.marcos.lista.filter((m) => m.n > max && m.n <= v.pedidos);
       for (const m of novos) { const fv = _botFrasesDe(m, v.id, 'marco_' + m.n); envios.push({ v, frases: fv.frases, fmidia: fv.fmidia, chave: fv.chave, midias: m.midias || [], n: m.n, para: cfg.marcos.para, tipo: 'marco', marca: () => { feito[v.id] = Math.max(Number(feito[v.id]) || 0, m.n); } }); }
     }
-    if (cfg.meta_batida.ativo && v.meta > 0 && v.semana >= v.meta && !feitoS[v.id]) {
+    // A META DO MES: a maior faixa nova (cruzou duas de uma vez, sai uma mensagem so) e, uma vez no mes, o primeiro
+    // a bater 250. O maior patamar avisado de cada um e a corrida ficam em bot_metames_<AAAA-MM>.
+    if (cfg.meta_batida.ativo && v.faixa && !v.travado && v.faixa.pedidos > (Number(feitoS[v.id]) || 0)) {
+      const fx = v.faixa.pedidos;
       const fv = _botFrasesDe(cfg.meta_batida, v.id, 'meta');
-      envios.push({ v, frases: fv.frases, fmidia: fv.fmidia, chave: fv.chave, midias: cfg.meta_batida.midias || [], n: v.semana, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = 1; } });
+      envios.push({ v, frases: fv.frases, fmidia: fv.fmidia, chave: fv.chave, midias: cfg.meta_batida.midias || [], n: fx, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS[v.id] = Math.max(Number(feitoS[v.id]) || 0, fx); } });
+    }
+    if (cfg.meta_batida.ativo && v.primeiro_corrida && !feitoS._corrida) {
+      envios.push({ v, frases: [BOT_CORRIDA_FRASE_PADRAO], fmidia: [null], chave: 'corrida', midias: [], n: META_MENSAL.corrida.pedidos, para: cfg.meta_batida.para, tipo: 'meta', marca: () => { feitoS._corrida = v.id; } });
     }
   }
   _botVerVista = ver;
@@ -12460,6 +12528,7 @@ async function _botMarcosTick(env, cfg, row, dia) {
   // NO GRUPO: todas as comemoracoes da batida numa mensagem so. Entregue (ou na fila) = consumido.
   const g = cfg.grupo || {};
   const noGrupo = !!(g.id && g.marcos !== false);
+  const entreguesNoGrupo = new Set();
   if (noGrupo) {
     // Sem midia: todas numa mensagem so (como sempre). Com midia: cada uma sai sozinha, com a frase de legenda.
     const semMidia = envios.filter((e) => !e.midia);
@@ -12474,7 +12543,7 @@ async function _botMarcosTick(env, cfg, row, dia) {
       if (r.status !== 'erro') entregues.push(e);
     }
     if (entregues.length) {
-      for (const e of entregues) consome(e);
+      for (const e of entregues) { consome(e); entreguesNoGrupo.add(e); }
       // Grava JA: se a batida for cortada no meio do privado, a proxima nao repete no grupo.
       if (mudouM) await _writeConfig(env, chaveM, JSON.stringify(feito)).catch(() => {});
       if (mudouS) await _writeConfig(env, chaveS, JSON.stringify(feitoS)).catch(() => {});
@@ -12488,7 +12557,8 @@ async function _botMarcosTick(env, cfg, row, dia) {
       // Nao ha a quem mandar no privado: marca mesmo assim, senao repete o registro em toda batida.
       // Com o grupo ligado, lista vazia e o normal, nao e erro.
       if (!noGrupo) await _botLog(env, { dia, tipo: e.tipo, nome: e.v.nome, fone: '', via: '', status: 'erro', erro: e.para === 'vendedor' ? 'o vendedor não está na lista de quem recebe (ou está sem telefone)' : 'ninguém na lista de quem recebe', texto: e.texto });
-      consome(e);
+      // Com o grupo ligado, so conta como feita se o grupo recebeu (a fila do grupo falhou = tenta na proxima batida).
+      if (!noGrupo || entreguesNoGrupo.has(e)) consome(e);
       continue;
     }
     for (const p of alvos) {
@@ -12893,7 +12963,7 @@ async function _botTick(env) {
   // A cobranca entra nas duas contas: ela pode estar ligada com o resumo do time inteiro desligado,
   // e ela e um grupo (ou seja, nao depende do numero oficial com token).
   const cobOn = !!(cfg.cobranca && cfg.cobranca.ativo && cfg.cobranca.grupo && cfg.cobranca.grupo.id);
-  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length) || (cfg.incentivo && cfg.incentivo.ativo) || cobOn;
+  const temAlgo = cfg.relatorio.ativo || cfg.semanal.ativo || (cfg.marcos.ativo && cfg.marcos.lista.length) || cfg.meta_batida.ativo || (cfg.incentivo && cfg.incentivo.ativo) || cobOn;
   if (!temAlgo) return;
   const temGrupo = !!(cfg.grupo && cfg.grupo.id) || cobOn;
   const row = await _botNumeroRow(env, cfg);
@@ -12919,7 +12989,7 @@ async function _botTick(env) {
     }
   }
   // Marcos antes do incentivo: se a batida estourar o tempo, a comemoracao (que vale mais) ja saiu.
-  if ((cfg.marcos.ativo && cfg.marcos.lista.length) || (cfg.meta_batida.ativo && Object.keys(cfg.metas.semanal || {}).length)) {
+  if ((cfg.marcos.ativo && cfg.marcos.lista.length) || cfg.meta_batida.ativo) {
     try { await _botMarcosTick(env, cfg, row, dia); } catch (e) { console.error('[bot] marcos falhou: ' + String((e && e.message) || e)); }
   }
   if (cfg.incentivo && cfg.incentivo.ativo) {
@@ -13609,13 +13679,14 @@ function _botIaPlacarTexto(dados, cfg, quem) {
   const L = [];
   const vs = (dados.vendedores || []).slice().sort((a, b) => (b.pedidos - a.pedidos) || a.nome.localeCompare(b.nome, 'pt-BR'));
   const marcos = (cfg.marcos && Array.isArray(cfg.marcos.lista) ? cfg.marcos.lista : []).map((m) => Number(m.n) || 0).filter((n) => n > 0).sort((a, b) => a - b);
-  L.push('Placar de hoje (' + _botDataBR(dados.dia) + '): ' + (vs.length ? vs.map((v) => v.nome + ' ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (v.leads ? ' (' + v.leads + ' leads, ' + v.conversao + '%)' : '') + (v.meta > 0 ? ', semana ' + v.semana + '/' + v.meta : '')).join(' · ') : 'nenhum vendedor ativo') + '. Geral: ' + _botPlural(dados.geral.pedidos, 'pedido', 'pedidos') + '.');
+  L.push('Placar de hoje (' + _botDataBR(dados.dia) + '): ' + (vs.length ? vs.map((v) => v.nome + ' ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (v.leads ? ' (' + v.leads + ' leads, ' + v.conversao + '%)' : '') + (v.mes > 0 ? ', mês ' + v.mes : '')).join(' · ') : 'nenhum vendedor ativo') + '. Geral: ' + _botPlural(dados.geral.pedidos, 'pedido', 'pedidos') + '.');
   if (marcos.length) L.push('Marcos de comemoração do dia: ' + marcos.join(', ') + '.');
+  L.push('Meta do mês (de cada vendedor, conta do dia 1 ao último dia, cancelado não conta): faixas de ' + META_MENSAL.faixas.map((f) => f.pedidos).join(', ') + ' pedidos, vale a maior; no fechamento pelo menos ' + META_MENSAL.pctCheios + '% dos pedidos de ' + META_MENSAL.ticketMin + ' ou mais; o primeiro a bater ' + META_MENSAL.corrida.pedidos + ' no mês leva um extra.');
   if (quem && quem.id) {
     const v = vs.find((x) => x.id === quem.id);
     if (v) {
       const prox = marcos.find((n) => n > v.pedidos);
-      L.push('Quem perguntou hoje: ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (prox ? ', próximo marco ' + prox + ' (faltam ' + (prox - v.pedidos) + ')' : '') + (v.meta > 0 ? ', meta da semana ' + v.semana + '/' + v.meta + (v.faltam > 0 ? ' (faltam ' + v.faltam + ')' : ' (batida)') : '') + (v.aguardando ? ', ' + v.aguardando + ' esperando aprovação' : '') + '.');
+      L.push('Quem perguntou hoje: ' + _botPlural(v.pedidos, 'pedido', 'pedidos') + (prox ? ', próximo marco ' + prox + ' (faltam ' + (prox - v.pedidos) + ')' : '') + ', meta do mês: ' + _botMetaTxt(v) + (v.primeiro_corrida ? ', foi o primeiro a bater ' + META_MENSAL.corrida.pedidos + ' no mês' : '') + (v.aguardando ? ', ' + v.aguardando + ' esperando aprovação' : '') + '.');
     }
   }
   return L.join('\n');
@@ -14112,16 +14183,16 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho como vc ta hj?" (Guilherme, 6 hj, faltam 4 pro 10) -> vivo e contando venda kkkkk vc tá com 6 hj, faltam 4 pro 10, bora buscar!',
   '"Barbadinho tu é fera" (Guilherme, 6 hj) -> fera é vc com 6 hj kkkkk eu só faço o barulho',
   '"@Barbadinho vc é foda, vai ajudar mt a rapaziada" (Kevin, 10 hj) -> foda é vc com 10 no bolso hj, eu só faço o barulho kkkkk',
-  '"Ei @Barbadinho safado, avisa pro tarzan que batemos as 50 semanais" (Guilherme, semana 50/35) -> kkkkk safado é quem bate 50 na semana e ainda quer plateia. tá avisado, tarzan: a meta era 35!',
+  '"Ei @Barbadinho safado, avisa pro tarzan que bati 200 no mês" (Guilherme, mês 200, bateu 200) -> kkkkk safado é quem bate 200 no mês e ainda quer plateia. tá avisado, tarzan: agora é 220!',
   '"@Barbadinho agora sim acertou fdp kkkk" (Guilherme, 5 hj) -> me xingou mas tá rindo, eu vi kkkkk 5 hj, agora chama a 10!',
   '"@Barbadinho vc ta corrompido por baal kkkk" (Kevin, 10 hj) -> corrompido não, só animado demais com venda kkkkk vc tá com 10 hj, a culpa é sua',
   '"@Barbadinho pq o meu n teve vídeo? to com ciúmes" (Guilherme, 10 hj) -> ciúme de bot é nova kkkkk vídeo é com o Bruno lá na dash, reclama com ele. e vc tá a 5 do 15, bate logo!',
-  '"@Barbadinho quantas eu tenho hj?" (Kevin, 8 hj, semana 30/35) -> 8 hj, Kevin! faltam 2 pro 10 e 5 pra fechar a semana, mete marcha',
+  '"@Barbadinho quantas eu tenho hj?" (Kevin, 8 hj, mês 152, faltam 48 pra 200) -> 8 hj, Kevin! faltam 2 pro 10 e 48 pros 200 do mês, mete marcha',
   '"@Barbadinho como ta o placar?" (Kevin; Guilherme 12, Kevin 9, Barbara 0; geral 21) -> 21 no geral hj: Guilherme 12, vc 9. falta 1 pro seu 10, chama!',
   '"@Barbadinho +1 fechei as 10" (Guilherme, placar 10) -> BOOORA krl, 10 cravadas! agora é 15, Guilherme, o dia ainda não acabou',
   '"@Barbadinho se prepara que hoje vai ter festa" (Kevin, 2 hj) -> kkkkk tô pronto! a primeira festa sai na 5 e vc tá a 3 dela, chama',
   '"@Barbadinho bati 10 krl" (Kevin, placar 9) -> aqui no placar ainda tá 9, Kevin. quando a 10 entrar na dash a festa sai sozinha',
-  '"@Barbadinho bati a meta da semana krl" (Guilherme, semana 35/35) -> boaaa, 35 na semana! agora a meta é dobrar a meta kkkkk',
+  '"@Barbadinho bati a meta do mês krl" (Guilherme, mês 220, bateu 220) -> boaaa, 220 no mês! agora é buscar os 240 kkkkk',
   '"@Barbadinho solta um áudio comemorando" (Guilherme, 7 hj) -> áudio eu ainda não mando kkkkk isso é com o Bruno na dash. mas 7 hj tá voando, faltam 3 pro 10!',
   '"@Barbadinho tá ladrão hj, foi só 15 aqui" (Kevin, placar 20, aviso_entregue true) -> aqui no placar tá 20 pra você hoje, Kevin. se a sua conta deu 15, tem coisa errada em algum lugar, já avisei a direção pra conferir',
   '"4144 caiu @Bruno" (Kevin; queda registrada 11:09, fora da roleta; 2 números recebendo; aviso_entregue true) -> putz, Kevin! a queda do 4144 já tá registrada e ele saiu da roleta, você segue com os outros 2 recebendo. já avisei o Bruno pra ajeitar outro',
@@ -14223,10 +14294,10 @@ const BOT_IA_MANUAL = [
  {"t": "Meu Painel", "q": "onde eu vejo quantas vendas fiz e quanto vou ganhar?", "k": ["meu painel", "minhas vendas", "quantas vendas fiz", "quanto vou ganhar"], "r": "No Meu Painel, a tela que abre quando você entra na dash: pedidos que você fez, vendas pagas, taxa de pagamento, comissão prevista e disponível pra saque, e a lista Meus pedidos. Venda paga conta no dia em que o cliente pagou, não no dia do pedido. No celular: a dash com /app no fim do endereço."},
  {"t": "Como funciona a comissão", "q": "como funciona a minha comissao? quando ela conta?", "k": ["comissao", "minha comissao", "porcentagem", "quando ganho"], "r": "Você ganha uma porcentagem do valor de cada venda que o cliente pagou. Pedido que ainda não pagou aparece como comissão prevista e só vira ganha quando o cliente paga. A taxa é a do seu cadastro (aparece no Meu Painel) e só a direção muda. Valor e regra: Heynan.", "g": "vend"},
  {"t": "Saque e nota fiscal", "q": "como eu peco saque da minha comissao?", "k": ["emitir nota", "nota fiscal", "peco saque", "pedir saque", "pix pj", "sacar", "saque", "solicitar saque"], "r": "Na dash: Meu Painel, cartão Disponível para saque, Solicitar saque (dá pra pôr o valor exato da nota); o vendedor também pede pelo celular, aba Comissões (vai o disponível inteiro). A direção aprova e paga, e a decisão chega no sininho. Um pedido aberto por vez. A nota é pra Sell Wave LTDA: os dados tão na mensagem que o Heynan mandou aqui. O Pix é o da PJ."},
- {"t": "Meta da semana e placar", "q": "onde eu vejo a meta da semana e o placar do time?", "k": ["meta", "meta da semana", "onde vejo a meta", "placar do time", "podio"], "r": "No celular (a dash com /app no fim do endereço), aba Comissões: o Pódio, com o time em ordem de pedidos, e a Meta da semana com a barrinha de cada um. A meta conta seus pedidos de segunda a domingo, menos cancelado, inclusive os esperando aprovação. Quem define a meta é a direção.", "g": "vend"},
- {"t": "Placar ou meta não bate", "q": "o barbadinho ta ladrao hoje, foi so 15", "k": ["conta errada", "contei", "contou", "ladrao", "nao bate", "placar errado"], "r": "No placar do bot, pedido cancelado não conta e pedido esperando aprovação já conta (na dash ele só entra depois de aprovado). A meta vai de segunda 0h a domingo. Conta não bate? Pode ser pedido cadastrado duas vezes: me diz quanto você contou que eu passo pro Bruno conferir.", "g": "vend"},
- {"t": "Resumo do dia e comemorações", "q": "que horas o bot manda o resumo e quando ele comemora?", "k": ["comemora", "comemoracao", "festa sai", "que horas", "resumo"], "r": "Resumo do dia: vendedores às 20h, de segunda a sábado; cobradores às 22h, todo dia; domingo ao meio-dia sai o da semana. A festa sai sozinha quando o número aparece na dash: vendedor ao chegar em 5, 10, 15 e 20 pedidos no dia ou bater a meta; cobrador ao chegar em 10, 20 e 25 recebidos no dia."},
- {"t": "Linhas do resumo do dia", "q": "o que significa cada linha do resumo do dia?", "k": ["conversao", "esperando aprovacao", "linha do resumo", "o que significa", "pagos hoje"], "r": "Pedidos: os que você cadastrou no dia (cancelado não conta). Leads: conversas novas nos seus números. Conversão: quantos % dos leads viraram pedido. Pagos hoje (pedidos anteriores): pedido de outro dia que pagou hoje. Esperando aprovação: pedidos de hoje que a direção ainda não aceitou.", "g": "vend"},
+ {"t": "Meta do mês e placar", "q": "como funciona a meta do mês e onde eu vejo?", "k": ["bonus", "como funciona a meta", "faixa", "meta", "meta da semana", "meta do mes", "onde vejo a meta", "placar do time", "podio", "premio"], "r": "A meta agora é do MÊS, de cada vendedor: 200 pedidos = R$ 800, 220 = R$ 1.100, 240 = R$ 1.400, 260 = R$ 1.800 e 280 = R$ 2.200, e vale só a maior. Conta do dia 1 ao último dia, menos cancelado (entregue e não pago continua contando), e no fechamento pelo menos 80% dos pedidos têm que ser de R$ 497 ou mais. O primeiro a bater 250 no mês ganha mais R$ 200. No celular (a dash com /app no fim do endereço), aba Comissões, aparece a barra da sua meta.", "g": "vend"},
+ {"t": "Placar ou meta não bate", "q": "o barbadinho ta ladrao hoje, foi so 15", "k": ["conta errada", "contei", "contou", "ladrao", "nao bate", "placar errado"], "r": "No placar do bot, pedido cancelado não conta e pedido esperando aprovação já conta (na dash ele só entra depois de aprovado). A meta do mês conta do dia 1 ao último dia, pelo dia em que o pedido foi feito. Conta não bate? Pode ser pedido cadastrado duas vezes: me diz quanto você contou que eu passo pro Bruno conferir.", "g": "vend"},
+ {"t": "Resumo do dia e comemorações", "q": "que horas o bot manda o resumo e quando ele comemora?", "k": ["comemora", "comemoracao", "festa sai", "que horas", "resumo"], "r": "Resumo do dia: vendedores às 20h, de segunda a sábado; cobradores às 22h, todo dia; domingo ao meio-dia sai o da semana. A festa sai sozinha quando o número aparece na dash: vendedor ao chegar em 5, 10, 15 e 20 pedidos no dia, a cada faixa da meta do mês (200, 220, 240, 260 e 280) e quando alguém é o primeiro a bater 250 no mês; cobrador ao chegar em 10, 20 e 25 recebidos no dia."},
+ {"t": "Linhas do resumo do dia", "q": "o que significa cada linha do resumo do dia?", "k": ["conversao", "esperando aprovacao", "linha do resumo", "o que significa", "pagos hoje"], "r": "Pedidos: os que você cadastrou no dia (cancelado não conta). Leads: conversas novas nos seus números. Conversão: quantos % dos leads viraram pedido. Pagos hoje (pedidos anteriores): pedido de outro dia que pagou hoje. Esperando aprovação: pedidos de hoje que a direção ainda não aceitou. Meta do mês: seus pedidos no mês e quanto falta pra próxima faixa (com o % de 497 ou mais quando está abaixo de 80%).", "g": "vend"},
  {"t": "Linhas do resumo da cobrança", "q": "o que quer dizer faltam cobrar e a receber no resumo?", "k": ["a receber", "atrasados", "convertidos", "faltam cobrar", "linha do resumo", "o que significa"], "r": "Convertidos hoje: pedidos seus que pagaram hoje. Faltam cobrar: o cliente já recebeu (Cobrança ou Retirar nos Correios) e ainda não pagou. Atrasados: pedido em aberto com o retorno marcado já vencido. A receber: tudo que ainda vai ser cobrado, de Preparando até a entrega, e quantos pedidos são. Essas três últimas são o retrato da hora em que o resumo saiu.", "g": "cob"},
  {"t": "SellWave no celular", "q": "como eu coloco a sellwave no celular?", "k": ["android", "apk", "celular", "iphone", "tela de inicio"], "r": "No celular, abre a dash com /app no fim do endereço e entra com seu login. iPhone: no Safari, Compartilhar e Adicionar à Tela de Início. Android: no Chrome, três pontinhos e Instalar aplicativo (tem também o app Android com som de venda, pede pro Bruno). Pedido e Kanban continuam na dash."},
  {"t": "Aviso de venda no celular", "q": "o aviso de venda nao chega no meu celular", "k": ["aviso de venda", "nao chega o aviso", "notificacao", "simular venda", "som de venda"], "r": "Confere: app instalado (no iPhone, pelo Safari, na Tela de Início), Avisos de venda ligado (toca na sua foto lá em cima do app) e celular fora do Não Perturbe. Testa no botão Simular venda. No iPhone o aviso às vezes atrasa, é limite da Apple. Não resolveu? Chama o Bruno."},
@@ -17850,10 +17921,10 @@ async function handleBotEnviar(req, env) {
     const vendedores = await _botVendedores(env);
     const v = vendedores.find((x) => x.id === String(b.at || '')) || vendedores[0] || { id: '', nome: 'Vendedor' };
     const dados = await _botDados(env, hoje, cfg, 'diario');
-    const vd = dados.vendedores.find((x) => x.id === v.id) || { semana: 0, meta: 0, pedidos: 0, leads: 0, faltam: 0 };
+    const vd = dados.vendedores.find((x) => x.id === v.id) || { meta: 0, pedidos: 0, leads: 0, faltam: 0, faixa: null };
     const fv = _botFrasesDe(cfg.meta_batida, v.id, 'meta');   // as do vendedor, se ele tiver
     const esc = await _botSorteiaComMidia(env, fv.chave, fv.frases, fv.fmidia, cfg.meta_batida.midias);
-    texto = _botFrase(esc.frase, { nome: v.nome, n: vd.meta || vd.semana, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: 0, data: _botDataBR(hoje) });
+    texto = _botFrase(esc.frase, { nome: v.nome, n: (vd.faixa && vd.faixa.pedidos) || META_MENSAL.faixas[0].pedidos, pedidos: vd.pedidos, leads: vd.leads, meta: vd.meta, faltam: vd.faltam, data: _botDataBR(hoje) });
     midia = esc.midia;
   }
   if (tipo === 'incentivo') {

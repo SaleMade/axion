@@ -70,6 +70,7 @@ const CODIGO = [
   recortaAteFecho('_aiParseJSON'),
   src.match(/^const _donoDe = .*$/m)[0],
   recortaFuncao('handleBotAgente'), recortaFuncao('handleBotChat'), recortaFuncao('handleBotIaTeste'),
+  src.match(/^const META_MENSAL = .*$/m)[0], recortaFuncao('_metaMesIni'), recortaFuncao('_metaMesPorVendedor'),
 ].join('\n');
 
 // ── o mundo de mentira ──────────────────────────────────────────────────────────────────
@@ -269,7 +270,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -1537,6 +1538,44 @@ titulo('31. Revisao: nome parecido, particula, e-mail, endereco, traco, data, pe
   const m = monta({ ...MUNDO, ia: [{ status: 429, body: corpoDia }, JSON_OK] });
   await m.api._botIaChamar(m.env, 'sys', 'user', {});
   conf(!!m.api._botIaGemFora.get('gemini-3.5-flash|geral') && !m.api._botIaGemFora.get('gemini-3.5-flash|bot'), 'a cota do dia fica marcada so na chave em que deu 429');
+}
+
+// ══ 32. META DO MES (06/11) ════════════════════════════════════════════════════════════
+titulo('32. A meta do mes no lugar da meta da semana dos vendedores');
+{
+  const { api } = monta({});
+  const m0 = api._botMetaMes({ mes: 152, cheios: 130 });
+  conf(!m0.faixa && m0.proxima.pedidos === 200 && m0.faltam_mes === 48 && m0.ok80 && m0.pct497 === 86, '152 pedidos, 130 de 497+: faltam 48 pra 200, 80% ok');
+  const m1 = api._botMetaMes({ mes: 230, cheios: 150 });
+  conf(m1.faixa.pedidos === 220 && m1.proxima.pedidos === 240 && !m1.ok80 && m1.travado, '230 com 65% de 497+: faixa 220 alcancada mas travada pelos 80%');
+  const m2 = api._botMetaMes({ mes: 290, cheios: 290 });
+  conf(m2.faixa.pedidos === 280 && !m2.proxima && m2.faltam_mes === 0, 'passou de 280: topo, nada falta');
+  conf(api._botMetaTxt(m0) === '152 pedidos, faltam 48 pra 200' && api._botMetaTxt(m1) === '230 pedidos, faltam 10 pra 240 (497+: 65%, precisa 80%)' && api._botMetaTxt(m2) === '290 pedidos, bateu 280', 'o texto da meta: falta, topo e o 497+ so quando esta abaixo');
+  const n = api._botNormaliza({ relatorio: { rotulos: { meta: 'Meta da semana' } }, meta_batida: { frases: ['Meta da semana batida, {nome}: {n} pedidos', 'Boa {nome}!'] } });
+  conf(n.relatorio.rotulos.meta === 'Meta do mês' && n.meta_batida.frases[0] === 'BOOORA {nome}! {n} pedidos no mês, faixa batida. Agora é a próxima.' && n.meta_batida.frases[1] === 'Boa {nome}!', 'config gravada com a meta da semana: rotulo e frase viram os do mes, frase propria fica');
+  const n2 = api._botNormaliza({ relatorio: { rotulos: { meta: 'Meta' } } });
+  conf(n2.relatorio.rotulos.meta === 'Meta', 'rotulo escrito pelo Bruno fica como esta');
+}
+{
+  const m = monta({ ...MUNDO });
+  const dados = await m.api._botDados(m.env, DIA, cfgDe(m.api), 'diario', false, { leads: LEADS, chips: [] });
+  const g = dados.vendedores.find((v) => v.id === GUI);
+  conf(g && g.mes === 4 && g.cheios === 0 && g.proxima.pedidos === 200 && g.faltam === 196 && g.meta === 200, 'Guilherme em novembro: 4 pedidos (Joselina, Pedro manual, 101 e 102), faltam 196 pra 200');
+  const placar = m.api._botIaPlacarTexto(dados, cfgDe(m.api), { id: GUI });
+  conf(/Meta do mês \(de cada vendedor/.test(placar) && /meta do mês: 4 pedidos, faltam 196 pra 200 \(497\+: 0%, precisa 80%\)/.test(placar) && !/semana/.test(placar), 'o que a IA ve: a regra e a meta do mes de quem perguntou, sem semana');
+}
+
+// ══ 33. REVISAO DA META DO MES (06/11) ═════════════════════════════════════════════════
+titulo('33. Revisao da meta do mes: 80% arredondado, frase do Bruno com "semana" e midia');
+{
+  const { api } = monta({});
+  const m = api._botMetaMes({ mes: 252, cheios: 201 });
+  conf(!m.ok80 && m.pct497 === 79 && /497\+: 79%, precisa 80%/.test(api._botMetaTxt(m)), '201 de 252 (79,8%): mostra 79%, nunca "80%, precisa 80%"');
+  const n = api._botNormaliza({ meta_batida: { frases: ['Que semana, {nome}!', 'Meta da semana batida, {nome}: {n} pedidos'], frases_midia: [{ key: 'a'.repeat(24) + '.jpg' }, { key: 'b'.repeat(24) + '.jpg' }],
+    por_vendedor: { v1: { frases: ['Boa {nome}', 'Missão da semana cumprida por {nome}: {n} pedidos.'], frases_midia: [{ key: 'c'.repeat(24) + '.jpg' }, { key: 'd'.repeat(24) + '.png' }] } } } });
+  const pv = n.meta_batida.por_vendedor.v1;
+  conf(n.meta_batida.frases[0] === 'Que semana, {nome}!' && n.meta_batida.frases[1].startsWith('BOOORA') && pv.frases[0] === 'Boa {nome}' && pv.frases[1].startsWith('BOOORA'), 'so a frase antiga conhecida troca; a do Bruno com "semana" fica');
+  conf(pv.frases_midia[0] && pv.frases_midia[0].key === 'c'.repeat(24) + '.jpg' && n.meta_batida.frases_midia[0] && n.meta_batida.frases_midia[0].key === 'a'.repeat(24) + '.jpg', 'a lista por vendedor mantem a midia da frase que ficou');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
