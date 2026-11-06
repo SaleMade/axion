@@ -1653,10 +1653,26 @@ async function _plReconciliar(env, opts) {
       // minuto o dia todo (versao do estado foi de 13.660 em 29/09 a 59.589 em 06/10). O charge_method
       // entra porque o webhook 'concluido' da PayLog nao traz o meio de pagamento: so a API traz, e
       // sem compara-lo o pedido pago pelo webhook nunca mais seria regravado pra receber o meio.
-      const rr = await env.DB.prepare('SELECT order_id, shipping_status, charge_status, shipping_code, charge_method FROM five_orders WHERE order_id IN (' + ids.map(() => '?').join(',') + ')').bind(...ids).all();
+      //
+      // O QUE A ESTEIRA JA VIU TAMBEM CONTA (06/11/2026). A coluna nao guarda tudo o que chega: a trava
+      // de entregue mantem DELIVERED quando a PayLog diz PL_ROUBADO depois da entrega (e a de pago mantem
+      // PAID). Comparando so com a coluna, esses pedidos pareciam mudados em TODA varredura: 120 a 178 por
+      // rodada desde pelo menos 30/10, cada um regravando o estado inteiro, uns 2 minutos de gravacao
+      // seguida de meia em meia hora. Nessa janela o Cadastrar perdia as 6 tentativas e o vendedor via
+      // "nao foi enviado: conflict" (pedido do Goncalino, 06/11 10h49). O `raw` e o ultimo pedido que
+      // passou pela esteira (todo upsert regrava ele): a PayLog dizendo o mesmo que da ultima vez, a
+      // esteira ja fez o que tinha pra fazer. json_valid porque o raw e cortado em 40 mil caracteres, e
+      // json_extract em JSON quebrado derrubaria a consulta inteira (e ai tudo seria regravado).
+      const rr = await env.DB.prepare('SELECT order_id, shipping_status, charge_status, shipping_code, charge_method,'
+        + " CASE WHEN json_valid(raw) THEN upper(json_extract(raw, '$.shipping.shippingStatus')) END AS raw_sh,"
+        + " CASE WHEN json_valid(raw) THEN upper(json_extract(raw, '$.charge.status')) END AS raw_ch,"
+        + " CASE WHEN json_valid(raw) THEN lower(COALESCE(NULLIF(json_extract(raw, '$.charge.paymentMethod'), ''), json_extract(raw, '$.__plMetodo'))) END AS raw_cm"
+        + ' FROM five_orders WHERE order_id IN (' + ids.map(() => '?').join(',') + ')').bind(...ids).all();
       for (const x of ((rr && rr.results) || [])) jaSabe.set(String(x.order_id), x);
     } catch (_) { jaSabe = null; }   // sem a consulta, cai no comportamento de sempre (grava tudo)
   }
+  // Mudou = diferente do que esta guardado E do que a esteira viu da ultima vez (ver a consulta acima).
+  const _plDifere = (v, guardado, visto) => !!v && v !== guardado && v !== visto;
   for (const o of lista) {
     const q = _plApiToFive(o, mundo);
     if (!q) { saida.push({ code: o && o.code, ignorado: 'teste ou sem codigo' }); continue; }
@@ -1678,10 +1694,10 @@ async function _plReconciliar(env, opts) {
       // ao five_orders e ao card uma vez; depois fica igual e a varredura volta a pular o pedido.
       const cmNovo = (q.charge && q.charge.paymentMethod) ? String(q.charge.paymentMethod).toLowerCase() : String(q.__plMetodo || '').toLowerCase();
       const mudou = !atual
-        || (shNovo && shNovo !== String(atual.shipping_status || '').toUpperCase())
-        || (chNovo && chNovo !== String(atual.charge_status || '').toUpperCase())
+        || _plDifere(shNovo, String(atual.shipping_status || '').toUpperCase(), String(atual.raw_sh || ''))
+        || _plDifere(chNovo, String(atual.charge_status || '').toUpperCase(), String(atual.raw_ch || ''))
         || (shCodeNovo && shCodeNovo !== String(atual.shipping_code || ''))
-        || (cmNovo && cmNovo !== String(atual.charge_method || '').toLowerCase());
+        || _plDifere(cmNovo, String(atual.charge_method || '').toLowerCase(), String(atual.raw_cm || ''));
       // PAID QUE SO A VARREDURA VIU (09/10/2026, item 38): sinal de webhook pausado ou perdido na
       // PayLog. Fica no log pra alguem perceber antes de a receita do dia aparecer atrasada.
       if (chNovo === 'PAID' && atual && String(atual.charge_status || '').toUpperCase() !== 'PAID') {
