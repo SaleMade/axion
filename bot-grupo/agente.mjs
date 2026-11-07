@@ -16,6 +16,8 @@
 // vai pro worker (POST /api/bot/agente/msg), que decide se o bot responde e devolve o texto; aqui so se
 // manda no grupo citando a pergunta, com "digitando" antes, e se confirma (msg-ack). Nada e decidido
 // neste PC. Uma pergunta em voo por grupo; pergunta com mais de 2 min fica sem resposta (o bot estava fora).
+// REAGIR (1.7.0): o worker pode devolver so `reacao` (um emoji) no lugar do texto: o bot poe a reacao na mensagem,
+// sem "digitando" e sem citar, e confirma igual (msg-ack). O worker so manda reacao pro bot que se diz 1.7.0 ou mais.
 // Higiene (pra nao banir): UM socket por vez, reconexao com recuo, 440 (outra copia) espera 2 min,
 // nunca religa depois de 401 sem QR novo, markOnlineOnConnect false, identidade fixa, metadados em cache.
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs'
@@ -30,7 +32,7 @@ import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browser
 import { textoDa, quemMandou, meusJidsDe, mencionaBot, marcouBot, idsDoBot, respondeBot, idadeS, pacoteDe } from './entrada.mjs'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.6.1'
+const VERSAO = '1.7.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
@@ -451,7 +453,17 @@ async function mandarResposta(jid, msg, texto) {
   return (m && m.key && m.key.id) || ''
 }
 
-// Pergunta ao worker e manda a resposta. Resposta vazia ou `ignorar` = o bot fica calado.
+// A reacao (1.7.0): o emoji na propria mensagem, depois de 1 a 3 s (gente nao reage em zero segundos). A chave e a da
+// mensagem (com o participant, que e quem escreveu no grupo).
+async function mandarReacao(jid, msg, emoji) {
+  const s = sock
+  await dorme(1000 + Math.floor(Math.random() * 2000))
+  const k = msg.key || {}
+  const m = await s.sendMessage(jid, { react: { text: emoji, key: { remoteJid: k.remoteJid, fromMe: !!k.fromMe, id: k.id, participant: k.participant } } })
+  return (m && m.key && m.key.id) || ''
+}
+
+// Pergunta ao worker e manda a resposta. Resposta vazia (e sem reacao) ou `ignorar` = o bot fica calado.
 async function tratarMensagem(msg, pacote) {
   const jid = pacote.jid
   const curto = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 60)
@@ -473,11 +485,24 @@ async function tratarMensagem(msg, pacote) {
   }
   if (j.ignorar) { log(cabeca + ' -> ignorada (' + (j.motivo ? 'worker: ' + String(j.motivo).slice(0, 60) : 'o worker nao quis') + ')'); return }
   const texto = String(j.resposta || '').trim()
-  if (!texto) { log(cabeca + ' -> calado'); return }
+  const reacao = String(j.reacao || '').trim()
+  if (!texto && !reacao) { log(cabeca + ' -> calado'); return }
   // O worker pode ter demorado: pergunta de mais de 2 min nao se responde mais (ja virou outro assunto).
   if (idadeS(msg, Date.now()) > MSG_IDADE_MAX_S) {
     log(cabeca + ' -> ignorada (passou do tempo)')
     await msgAck({ chat_id: chatId, ok: false, msg_id: '', erro: 'passou do tempo' })
+    return
+  }
+  if (!texto) {
+    try {
+      const idR = await mandarReacao(jid, msg, reacao)
+      log(cabeca + ' -> reagi ' + reacao)
+      await msgAck({ chat_id: chatId, ok: true, msg_id: idR, erro: '' })
+    } catch (e) {
+      const m = String((e && e.message) || e).slice(0, 200)
+      log(cabeca + ' -> ignorada (a reacao falhou: ' + m + ')')
+      await msgAck({ chat_id: chatId, ok: false, msg_id: '', erro: m })
+    }
     return
   }
   let msgId = ''

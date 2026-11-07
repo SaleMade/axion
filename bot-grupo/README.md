@@ -12,6 +12,8 @@ Desde a 1.6.0 ele tambem LE os grupos que o worker mandar escutar (lista `escuta
 mensagem vai pro worker (`/api/bot/agente/msg`), que decide se o bot responde e devolve o texto; o bot
 manda no grupo citando a pergunta, com "digitando" antes, e confirma (`/api/bot/agente/msg-ack`).
 Nada e decidido no PC. Pergunta com mais de 2 minutos (o bot estava fora) fica sem resposta.
+Desde a 1.7.0 o worker tambem pode devolver so uma reacao (`reacao`, um emoji): o bot poe o emoji na mensagem,
+sem "digitando", e confirma igual. Atualizou o agente.mjs: feche o node agente.mjs e rode o bot-grupo-oculto.vbs.
 
 ## Instalar num PC novo
 1. Node 20 ou mais novo instalado (`node -v`).

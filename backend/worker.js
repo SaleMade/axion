@@ -13337,10 +13337,10 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia, grupo) {
 //    pelo Baileys (chat frio toma 463 e o agente marcaria como enviado).
 //  - RESPOSTA SINCRONA COM ORCAMENTO: 25 s no total (10 s por modelo, 2 modelos), blob lido uma vez;
 //    a linha fica 'pendente' ate o agente confirmar que mandou (msg-ack).
-const BOT_IA_TOM_VEND = 'Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐)). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.';
-const BOT_IA_TOM_COB = 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐)). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.';
+const BOT_IA_TOM_VEND = 'Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj, e cada resposta de um tamanho (muitas de 1 a 4 palavras). Festa que o placar confirma, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", com 1 ou 2 emojis 🔥🚀💰🍾🐐). Zoeira com maldade de amigo: pega a palavra de quem falou e devolve com graça, mini historinha de vez em quando ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve. Risada e emoji só de vez em quando, nunca em toda resposta. Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.';
+const BOT_IA_TOM_COB = 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj, e cada resposta de um tamanho. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", com 1 ou 2 emojis 🔥💰🤑🍾🐐). Zoeira com maldade de amigo, pegando a palavra de quem falou. Risada e emoji só de vez em quando. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.';
 // Os padroes de antes (06/11 manha): gravado igual a um deles vira o padrao novo sozinho (06/11 tarde, pedido do Bruno: mais ousado).
-const BOT_IA_TOM_VELHOS = ['Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.', 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.', 'Animado e espontâneo, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: BOOORA, boaaa, chama, segura o homi, é os guri, tá voando, kkkkk, uma expressão em CAIXA ALTA e no máximo um krl. Com a Barbara a festa é limpa. Zoeira (oi, elogio, bot safado, ciúme): entra na brincadeira, não xinga de volta e puxa pro número de quem falou. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão, nunca emoji.', 'Animado, mais leve que o dos vendedores: curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar), depois um bora buscar, boaaa ou mais um de volta. Festa é pedido que voltou, com boaaa, tá voando e kkkkk, sem palavrão. Zoeira (oi, elogio, pedido pra ser mais zoeiro): ri junto, não promete mudar e volta pra fila de quem falou. Problema (app travou, erro): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano, nunca emoji.'];
+const BOT_IA_TOM_VELHOS = ['Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.', 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou: GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.', 'Animado e espontâneo, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma: BOOORA, boaaa, chama, segura o homi, é os guri, tá voando, kkkkk, uma expressão em CAIXA ALTA e no máximo um krl. Com a Barbara a festa é limpa. Zoeira (oi, elogio, bot safado, ciúme): entra na brincadeira, não xinga de volta e puxa pro número de quem falou. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão, nunca emoji.', 'Animado, mais leve que o dos vendedores: curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar), depois um bora buscar, boaaa ou mais um de volta. Festa é pedido que voltou, com boaaa, tá voando e kkkkk, sem palavrão. Zoeira (oi, elogio, pedido pra ser mais zoeiro): ri junto, não promete mudar e volta pra fila de quem falou. Problema (app travou, erro): sério, o que os dados mostram e o próximo passo, sem kkkk. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano, nunca emoji.', 'Animado, ousado e zoeiro, no jeito do Guilherme e do Kevin: curto, vc, pra, tá, hj. Festa que o placar confirma, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri"), kkkkk e 1 a 3 emojis (🔥🚀💰🍾🐐)). Zoeira com maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂). Com a Barbara a festa e a zoeira são limpas. Problema (número caiu, app travou, erro, lead parou, pedido não subiu): sério, acolhe e resolve, sem kkkk e sem emoji. Nunca formal, nunca Oi Fulano, nunca gíria de tiozão.', 'Mesma energia do grupo dos vendedores: animado, ousado e zoeiro, curto, vc, pra, tá, hj. A informação vem primeiro e certa (pagou ou não, de quem é a fila, quanto falta cobrar). Festa é pedido que voltou, com a intensidade do número do dia (até 5, leve e de boa; 10 ou mais, GRITÃO de torcida ("ISSO AÍ PORRAAAA", "tu é foda", "BOOORA"), kkkkk e 1 a 3 emojis (🔥💰🤑🍾🐐)). Zoeira com maldade de amigo e mini historinha. Problema (app travou, erro): sério, sem kkkk e sem emoji. Nunca valor somado, comissão ou total do time. Nunca Oi Fulano.'];
 // A mesma cascata do testador de criativo (medida em 05/10/2026 com a chave do Bruno). 429 passa pro
 // proximo; 400 tambem (um modelo pode recusar o thinkingConfig); 401/403 para, a chave e que esta errada.
 // 06/11: o 3.1-flash-lite entra no fim (medido ok na chave gratis; o flash-lite-latest e o 3.5-flash-lite recusam o
@@ -13355,8 +13355,8 @@ const BOT_IA_MODELOS = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.1-flas
 // publicado por varias conversas; um pacote novo quebraria o deploy de quem nao rodasse npm install.
 const BOT_IA_MODELO_ANTHROPIC = 'claude-opus-5-5';
 const BOT_IA_ANTHROPIC_MS = 20000;   // a Claude pensa antes de responder: teto proprio, dentro dos 25 s
-const BOT_IA_SCHEMA = { type: 'object', properties: { responder: { type: 'boolean' }, texto: { type: 'string' }, avisar_direcao: { type: 'string' }, buscar: { type: 'string' } }, required: ['responder', 'texto', 'avisar_direcao', 'buscar'], additionalProperties: false };
-const BOT_IA_SCHEMA_TEXTO = { type: 'object', properties: { texto: { type: 'string' } }, required: ['texto'], additionalProperties: false };
+const BOT_IA_SCHEMA = { type: 'object', properties: { leitura: { type: 'string' }, responder: { type: 'boolean' }, texto: { type: 'string' }, curta: { type: 'string' }, minima: { type: 'string' }, reacao: { type: 'string' }, melhor: { type: 'string' }, avisar_direcao: { type: 'string' }, buscar: { type: 'string' } }, required: ['leitura', 'responder', 'texto', 'curta', 'minima', 'reacao', 'melhor', 'avisar_direcao', 'buscar'], additionalProperties: false };
+const BOT_IA_SCHEMA_TEXTO = { type: 'object', properties: { texto: { type: 'string' }, outra: { type: 'string' } }, required: ['texto', 'outra'], additionalProperties: false };
 const BOT_IA_ORCAMENTO_MS = 25000;     // por mensagem, do primeiro ao ultimo byte da IA
 const BOT_IA_MODELO_MS = 15000;        // por modelo (o ultimo da fila; medido em 06/11: o flash-lite gratis leva 9 a 12 s a tarde)
 const BOT_IA_MAX_MODELOS = 3;   // 06/11: tres tentativas (o gratis congestiona; 7 + 7 + 10 s cabem nos 25 s)
@@ -13418,6 +13418,9 @@ function _botIaTextoProblema(t) {
 // a IA so entra se o placar confirmar, e no maximo uma tentativa a cada BOT_IA_FESTA_S no grupo.
 const BOT_IA_FESTA_RE = /(\bbati\b|\bbatemos\b|\bfechei\b|\bfechamos\b|\bvendi\b|\bcravei\b|(^|\s)\+1\b|\bporra+\b|\bkrl\b|\bcaralh[oa]+\b|\bbo{2,}r+a+\b|\bbora{2,}\b|\bisso a[ií]+\b|\bcaiu o pix\b|\bpagou+\s*!|\bvoltou+\s*!|\bmais um de volta\b)/i;
 const BOT_IA_FESTA_S = 600;
+// A VENDA FEITA na festa (07/11/2026): palavra de venda ou numero do dia. A FESTA NO MARCO (_botIaMarcoAgora) so cala o
+// bot no "+1" ou no grito curto; mensagem com conteudo ("trabalhando pra krl aqui") segue pra IA.
+const BOT_IA_FESTA_VENDA_RE = /(\bbati\b|\bbatemos\b|\bfechei\b|\bfechamos\b|\bvendi\b|\bcravei\b|(^|\s)\+\s?1\b|\bcaiu o pix\b|\bpagou+\s*!|\bvoltou+\s*!|\bmais um de volta\b|\b\d{1,3}\s*(hj|hoje|vendas?|pedidos?|no dia)\b)/i;
 // A resposta do bot foi um grito de festa (pra nao repetir o mesmo grito pra mesma pessoa logo em seguida).
 const BOT_IA_GRITO_RE = /(porra|bo{2,}r+a|isso a[ií]|segura o homi|tu [eé] foda|cravad|🍾|🐐)/i;
 // A mensagem pergunta ou comemora o NUMERO DO DIA (vendas, placar, meta, fila, quanto falta): so ai o placar (ou a mesa)
@@ -14114,18 +14117,213 @@ function _botIaFichaCurta(linha) {
   const c = s.match(/\bC\d+\b/);
   return quem + ': [mandou a ficha ' + (c ? 'de ' + c[0] : 'de um cliente') + '; nome, CPF, telefone e endereço ficam de fora]';
 }
-async function _botIaRecentes(env, jid) {
+// AS ULTIMAS MENSAGENS DO GRUPO (07/11/2026, pedido do Bruno: "ele nao interpreta muito bem o que esta sendo dito no
+// grupo"). Vai o grupo E o que o proprio bot postou, na ordem e com a hora: antes so iam as mensagens das pessoas e as
+// respostas dele, e a comemoracao automatica, a provocacao e o resumo (bot_outbox) ficavam de fora. Dia 07, 17h46:
+// "Fala pra mim quem e o cara do momento barbadinho", um minuto depois de o bot postar "GUILHERME CRAVOU 15 VENDAS",
+// virou "o cara do momento e quem ta fazendo a venda virar pix"; as 16h12, "Q VIDEO BOM" era o video da comemoracao que
+// o bot tinha acabado de mandar. Ultimos 45 min, ate 16 linhas; a mensagem respondida fica de fora (vai no fim do prompt).
+const BOT_IA_LINHA_S = 2700;
+const BOT_IA_LINHA_MAX = 16;
+const BOT_IA_POST_TXT = { marco: 'comemoração automática', meta: 'comemoração da meta do mês', cob_marco: 'comemoração automática', cob_meta: 'comemoração da meta', ia_provoca: 'provocação automática', relatorio: 'resumo do dia', cob_relatorio: 'resumo do dia', semanal: 'resumo da semana', cob_semanal: 'resumo da semana', incentivo: 'incentivo automático', cob_incentivo: 'incentivo automático', livre: 'recado da direção pelo bot', cob_livre: 'recado da direção pelo bot' };
+async function _botIaLinhaDoTempo(env, jid, msgId) {
+  if (!jid) return [];
+  const desde = Math.floor(Date.now() / 1000) - BOT_IA_LINHA_S;
+  const L = [];
   try {
-    const r = await env.DB.prepare('SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE jid=? AND ts>? AND acao<>? ORDER BY id DESC LIMIT ?').bind(String(jid || ''), Math.floor(Date.now() / 1000) - 1800, 'provocou', BOT_IA_CONTEXTO_MSGS).all();
-    const rows = ((r && r.results) || []).reverse();
-    const L = [];
-    for (const x of rows) {
-      if (x.texto) L.push(String(x.de_nome || 'alguém') + ': ' + String(x.texto).slice(0, 200));
-      if (x.acao === 'respondeu' || x.acao === 'pendente') L.push('Barbadinho: ' + String(x.resposta || '').slice(0, 200));
+    const r = await env.DB.prepare("SELECT ts, msg_id, de_nome, texto, acao, resposta FROM bot_chat WHERE jid=? AND ts>? AND acao<>'provocou' ORDER BY id DESC LIMIT 16").bind(String(jid), desde).all();
+    for (const x of ((r && r.results) || [])) {
+      if (msgId && String(x.msg_id || '') === String(msgId)) continue;
+      const ts = Number(x.ts) || 0;
+      const tx = String(x.texto || '').replace(/\s+/g, ' ').trim();
+      L.push({ ts, k: 0, t: String(x.de_nome || 'alguém') + ': ' + (tx ? tx.slice(0, 200) : '[foto, vídeo ou áudio]') });
+      const rp = String(x.resposta || '').replace(/\s+/g, ' ').trim();
+      if ((x.acao === 'respondeu' || x.acao === 'pendente') && rp) L.push({ ts, k: 1, t: _botIaEhReacao(rp) ? 'Barbadinho ' + rp.replace(/^\(|\)$/g, '') : 'Barbadinho: ' + rp.slice(0, 200) });
     }
-    return L;
+  } catch (_) {}
+  try {
+    const r = await env.DB.prepare("SELECT ts, feito_ts, tipo, texto, midia FROM bot_outbox WHERE jid=? AND ts>? AND status='enviado' ORDER BY id DESC LIMIT 6").bind(String(jid), desde).all();
+    for (const x of ((r && r.results) || [])) {
+      const tipo = String(x.tipo || '');
+      const midia = x.midia ? (/video/i.test(String(x.midia)) ? ', com vídeo' : ', com foto') : '';
+      const tx = String(x.texto || '').replace(/\s+/g, ' ').trim();
+      L.push({ ts: Number(x.feito_ts) || Number(x.ts) || 0, k: 2, t: 'Barbadinho (' + (BOT_IA_POST_TXT[tipo] || 'mensagem automática') + midia + '): ' + tx.slice(0, /relatorio|semanal/.test(tipo) ? 160 : 220) });
+    }
+  } catch (_) {}
+  L.sort((a, b) => (a.ts - b.ts) || (a.k - b.k));
+  return L.slice(-BOT_IA_LINHA_MAX).map((x) => _botIaHHMM(x.ts) + ' ' + x.t);
+}
+// MIDIA (07/11/2026): foto, video, audio e documento chegam sem texto (ou so com a legenda). A linha do bot_chat guarda a
+// marca ("[vídeo]", "[foto] legenda") pra quem ler as ultimas mensagens saber que veio uma midia; o bot nao ve a midia.
+const BOT_IA_MIDIA_TXT = { imagem: '[foto]', video: '[vídeo]', audio: '[áudio]', documento: '[documento]' };
+function _botIaComMidia(texto, tipo) {
+  const m = BOT_IA_MIDIA_TXT[String(tipo || '')];
+  const t = String(texto || '').trim();
+  return m ? (t ? m + ' ' + t : m) : t;
+}
+// CADENCIA (07/11/2026, pedido do Bruno: "ele sempre manda o kkkkk (...) sempre tem uma mensagem mais ou menos do mesmo
+// tamanho"). Gente de verdade nao responde toda linha:
+// 1. risada, "boa", "bora", "pprt", "show" soltos nao chamam a IA (dia 07, 5 das 17 chamadas do melhor modelo gratis
+//    foram pra isso e a IA calou em todas). Quem marcou o bot (@ ou o nome no comeco ou no fim) continua com resposta;
+// 2. o bot ja respondeu essa pessoa 2 vezes em 4 min e ela segue sem marcar e sem perguntar: fica de fora (16h11 do dia
+//    07: seis respostas seguidas pro Guilherme). Com risada, as vezes vira uma reacao 😂.
+const BOT_IA_SEGUIDAS_S = 240;
+const BOT_IA_SEGUIDAS_MAX = 2;
+const BOT_IA_SO_RISO_OK = new Set(('a ai ate aff ah ahh beleza blz boa bom bora brabo caraca caramba crer dale demais e eh ela ele eita exato '
+  + 'exatamente fechou firmeza isso ja la mano man mds mn massa meu muito mt nada ne nossa obg obrigado oloco oxe pode pois pprt pse q que '
+  + 'rapaz sim slc slk so ss show suave ta tamo tmj to top tranquilo uai vamo vamos valeu vdd verdade vish vlw').split(' '));
+function _botIaSoRiso(texto) {
+  const s = String(texto || '');
+  if (!s.trim() || /\d|\?/.test(s)) return false;
+  const ws = _botIaNorm(s).split(' ').filter(Boolean);
+  if (!ws.length) return /\p{Extended_Pictographic}/u.test(s);
+  return ws.every((w) => {
+    const c = w.replace(/(.)\1{2,}/g, '$1');   // boaaa -> boa, kkkkk -> k, sssss -> s
+    return /^(k+|(?:ks|sk)+k?|(?:ha|he|hi|hu|ka|rs|ah|eh)+h?)$/.test(c) || BOT_IA_SO_RISO_OK.has(c) || BOT_IA_SO_RISO_OK.has(w);
+  });
+}
+async function _botIaSeguidas(env, jid, deJid) {
+  if (!jid || !deJid) return 0;
+  try {
+    const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM bot_chat WHERE jid=? AND de_jid=? AND acao IN ('respondeu','pendente') AND resposta NOT LIKE '(reagiu com %' AND ts>?").bind(String(jid), String(deJid), Math.floor(Date.now() / 1000) - BOT_IA_SEGUIDAS_S).first();
+    return Number(r && r.n) || 0;
+  } catch (_) { return 0; }
+}
+// As ultimas respostas do bot neste grupo (2 h, a mais nova primeiro): decidem o tamanho e o tempero desta.
+async function _botIaUltimasDoBot(env, jid) {
+  if (!jid) return [];
+  try {
+    const r = await env.DB.prepare("SELECT resposta, ts FROM bot_chat WHERE jid=? AND acao IN ('respondeu','pendente') AND ts>? ORDER BY id DESC LIMIT 4").bind(String(jid), Math.floor(Date.now() / 1000) - 7200).all();
+    return ((r && r.results) || []).map((x) => String(x.resposta || '').trim()).filter(Boolean);
   } catch (_) { return []; }
 }
+// FORMA E TEMPERO (07/11/2026, pedido do Bruno: "as vezes seria interessante ele responder mensagens menores", "ele da
+// muito, muito generico"). Na zoeira, na festa e na conversa a IA devolve a resposta em quatro tamanhos (texto, curta,
+// minima e uma reacao de emoji) e diz qual acha melhor; o codigo escolhe pesando a escolha dela, sem repetir o tamanho
+// das duas ultimas e sem frase que ja saiu no grupo. Risada e emoji: nao em toda resposta (o modelo escrevia "kkkkk" em
+// 18 de 20 respostas do dia 07, sempre com cinco k). Dado e problema saem sempre no `texto`, sem tempero.
+// REACAO: so com o bot do PC 1.7.0 ou mais novo (o antigo ignora o campo e ficaria calado).
+const BOT_IA_REACAO_VERSAO = '1.7.0';
+const BOT_IA_REACOES = ['😂', '🤣', '🔥', '👀', '🙌', '💯', '🫡', '😎', '🍾', '🤝', '😅', '🐐', '💰', '👏', '😈', '🥲', '🙏', '🚀'];
+const BOT_IA_EMOJI_RE = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu;
+const _botIaEhReacao = (s) => /^\(reagiu com /.test(String(s || ''));
+const _botIaPalavras = (s) => String(s || '').replace(BOT_IA_EMOJI_RE, ' ').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+function _botIaVersaoOk(v, min) {
+  const a = String(v || '').split('.').map((x) => Number(x) || 0), b = String(min || '').split('.').map((x) => Number(x) || 0);
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0); }
+  return true;
+}
+function _botIaReacaoOk(e) {
+  const t = String(e || '').replace(/\uFE0F/g, '').trim();
+  return BOT_IA_REACOES.find((x) => x.replace(/\uFE0F/g, '') === t) || '';
+}
+function _botIaFormaDe(resp) {
+  const s = String(resp || '');
+  if (_botIaEhReacao(s)) return 'reacao';
+  const n = _botIaPalavras(s);
+  return n <= 3 ? 'minima' : n <= 8 ? 'curta' : 'texto';
+}
+// Repete frase que ja saiu? (4 palavras seguidas iguais, sem acento e sem risada; a curtinha so se for igual inteira)
+function _botIaRepete(t, ditas) {
+  const ws = (x) => _botIaNorm(x).split(' ').filter((w) => w && !/^k+$/.test(w));
+  const a = ws(t);
+  if (!a.length) return false;
+  if (a.length < 4) return a.length >= 2 && (ditas || []).some((d) => ws(d).join(' ') === a.join(' '));
+  const grams = new Set();
+  for (const d of (ditas || [])) { const b = ws(d); for (let i = 0; i + 4 <= b.length; i++) grams.add(b.slice(i, i + 4).join(' ')); }
+  for (let i = 0; i + 4 <= a.length; i++) if (grams.has(a.slice(i, i + 4).join(' '))) return true;
+  return false;
+}
+// j = o JSON da IA; c = { sorte, reage, pergunta, marcado, festa, hist (ultimas respostas do bot no grupo, a mais nova
+// primeiro), ditas (frases dele nas ultimas 12 h) }. Devolve { forma, texto }.
+function _botIaEscolheForma(j, c) {
+  const op = { texto: String(j.texto || '').trim(), curta: String(j.curta || '').trim(), minima: String(j.minima || '').trim(), reacao: c.reage ? _botIaReacaoOk(j.reacao) : '' };
+  const peso = c.pergunta ? { texto: 0.45, curta: 0.4, minima: 0.15, reacao: 0 } : c.festa ? { texto: 0.35, curta: 0.35, minima: 0.15, reacao: 0.15 } : { texto: 0.25, curta: 0.35, minima: 0.25, reacao: 0.15 };
+  if (c.marcado) peso.reacao *= 0.3;   // quem marcou espera palavra
+  const melhor = String(j.melhor || '').trim();
+  if (Object.prototype.hasOwnProperty.call(peso, melhor) && peso[melhor] > 0) peso[melhor] += 0.35;
+  const ultimas = (c.hist || []).slice(0, 2).map(_botIaFormaDe);
+  for (const f of Object.keys(peso)) {
+    const real = f === 'reacao' ? 'reacao' : _botIaFormaDe(op[f]);
+    if (!op[f]) peso[f] = 0;
+    else if (f !== 'reacao' && _botIaRepete(op[f], c.ditas)) peso[f] = 0;
+    else if (ultimas.length === 2 && ultimas[0] === real && ultimas[1] === real) peso[f] = 0;
+  }
+  const tot = peso.texto + peso.curta + peso.minima + peso.reacao;
+  if (!(tot > 0)) return { forma: 'texto', texto: op.texto || op.curta || op.minima };
+  let r = (Number(c.sorte) || 0) * tot;
+  for (const f of ['texto', 'curta', 'minima', 'reacao']) { if (peso[f] > 0 && r < peso[f]) return { forma: f, texto: op[f] }; r -= peso[f]; }
+  return { forma: 'texto', texto: op.texto || op.curta || op.minima };
+}
+// O tempero: risada nao em toda resposta (2 das 3 ultimas com risada, ou a ultima com risada fora da festa: esta sai
+// sem) e com tamanho de gente (3 a 11 k; caixa alta quando quem falou riu em caixa alta); emoji no maximo 1 (festa, 2)
+// e nenhum se a ultima resposta ja teve (fora da festa). c = { festa, hist, msg, sorte }.
+function _botIaTempero(texto, c) {
+  const t0 = String(texto || '').trim();
+  if (!t0) return t0;
+  let t = t0;
+  const riso = /[kK]{3,}/;
+  const soRiso = !t.replace(/[kK]{2,}/g, '').replace(/[^\p{L}\p{N}]/gu, '');
+  const recentes = (c.hist || []).filter((h) => !_botIaEhReacao(h)).slice(0, 3);
+  const comRiso = recentes.filter((h) => riso.test(h)).length;
+  if (riso.test(t) && !soRiso && (comRiso >= 2 || (!c.festa && recentes[0] && riso.test(recentes[0])))) {
+    t = t.replace(/\s*[kK]{3,}\s*(?=[\p{L}\p{N}])/gu, ', ').replace(/\s*[kK]{3,}/g, '');
+  } else if (riso.test(t)) {
+    const alto = /K{4,}/.test(String(c.msg || ''));
+    let s = Number(c.sorte);
+    if (!(s >= 0 && s < 1)) s = 0.5;
+    t = t.replace(/[kK]{3,}/g, () => { s = (s * 7.31 + 0.137) % 1; return (alto ? 'K' : 'k').repeat(3 + Math.floor(s * 9)); });
+  }
+  const emoAntes = !!(recentes[0] && /\p{Extended_Pictographic}/u.test(recentes[0]));
+  const teto = c.festa ? 2 : (emoAntes ? 0 : 1);
+  let n = 0;
+  t = t.replace(BOT_IA_EMOJI_RE, (m) => (++n <= teto ? m : ''));
+  t = t.replace(/[ \t]{2,}/g, ' ').replace(/\s+([!?.,;:])/g, '$1').replace(/,\s*([!?.,;:])/g, '$1').replace(/^[\s,;:]+|[\s,;:]+$/g, '').trim();
+  return t || t0;
+}
+// FESTA NO MARCO (07/11/2026, dia 07 16h11: o "+1" do Guilherme ganhou "ISSO AI PORRAAAA, 10 no bolso" e, 40 s depois,
+// a comemoracao automatica das 10 com video): a venda que comemoraram bate um marco que o tick ainda vai postar, ou que
+// ele postou ha menos de 3 min. O bot nao grita junto: reage com 🔥 (bot do PC 1.7+); sem reacao, quem nao marcou fica
+// sem resposta e quem marcou ganha uma resposta curtinha. Devolve { n, quando } ou null.
+async function _botIaMarcoAgora(env, cfg, grupo, quem, nHoje, dia, jid) {
+  if (!quem || !quem.id || !(Number(nHoje) >= 1)) return null;
+  const mc = grupo === 'cob' ? ((cfg.cobranca && cfg.cobranca.marcos) || {}) : (cfg.marcos || {});
+  if (!mc.ativo || !Array.isArray(mc.lista) || _botIaGrupoCfg(cfg, grupo).marcos === false) return null;
+  let feito = 0;
+  try { feito = Number((JSON.parse((await _readConfig(env, (grupo === 'cob' ? 'bot_cobmarcos_' : 'bot_marcos_') + dia)) || '{}') || {})[quem.id]) || 0; } catch (_) { feito = 0; }
+  const pend = mc.lista.map((m) => Number(m && m.n) || 0).filter((n) => n > feito && n <= Number(nHoje)).sort((a, b) => b - a)[0];
+  if (pend) return { n: pend, quando: 'vai sair agora' };
+  const p = _botIaNorm(quem.nome).split(' ')[0];
+  if (!jid || p.length < 3) return null;
+  try {
+    const r = await env.DB.prepare("SELECT texto FROM bot_outbox WHERE jid=? AND tipo IN ('marco','meta','cob_marco','cob_meta') AND ts>? ORDER BY id DESC LIMIT 4").bind(String(jid), Math.floor(Date.now() / 1000) - 180).all();
+    if (((r && r.results) || []).some((x) => (' ' + _botIaNorm(x.texto) + ' ').includes(' ' + p + ' '))) return { n: feito, quando: 'acabou de sair' };
+  } catch (_) {}
+  return null;
+}
+// FESTA SEM VENDA (07/11/2026, replay da noite de 06/11: "Boraa rapeizes" do Bruno as 22h37 virou "bora, o dia ainda nao
+// acabou!"). Sem marcar o bot e sem palavra de venda, so entra na festa quem teve venda (cobrador: pedido pago) nos
+// ultimos 10 min; grito de animacao solto e papo do time, nao comemoracao.
+function _botIaVendaRecente(st, quem, grupo) {
+  const desde = Date.now() - 10 * 60000;
+  for (const l of (Array.isArray(st && st.leads) ? st.leads : [])) {
+    if (!l || l.afl || _botCancelado(l)) continue;
+    if (grupo === 'cob') { if (String(l.cob || '') === quem.id && _botPago(l) && _botPagoMs(l) >= desde) return true; }
+    else if (String(l.at || '') === quem.id && _botCriadoMs(l) >= desde) return true;
+  }
+  return false;
+}
+// "QUEM E O CARA" (07/11/2026): pergunta de quem e o destaque e assunto de numero (o placar vai pra IA); quem pergunta
+// quase sempre quer ouvir que e ele.
+const BOT_IA_QUEM_MANDA_RE = /(\bo cara do (momento|dia|m[eê]s|s[aá]bado|sabad[aã]o|grupo|time)\b|\bquem [eé] (o|a) (cara|brab[oa]|monstr[oa]|rei|rainha|melhor|mvp|destaque|pai|patr[aã]o|chef[aã]o|fera|craque|lenda)\b|\bquem (manda|lidera|vende mais|t[aá] (voando|on|moendo|liderando|amassando|na frente))\b)/i;
+// As provocacoes automaticas de hoje (todas as do dia, de qualquer grupo), a mais nova primeiro.
+async function _botIaProvocacoesDeHoje(env) {
+  try {
+    const r = await env.DB.prepare("SELECT texto FROM bot_outbox WHERE tipo='ia_provoca' AND dia=? ORDER BY id DESC LIMIT 6").bind(_brDay()).all();
+    return ((r && r.results) || []).map((x) => String(x.texto || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
 // A pessoa esta conversando com o bot? (ele respondeu ela neste grupo ha menos de BOT_IA_CONVERSA_S)
 // Ja houve uma tentativa de festa sem marcar neste grupo ha pouco (respondida ou calada): nao tenta de novo. Na duvida
 // (o banco falhou), nao entra.
@@ -14135,24 +14333,32 @@ async function _botIaFestaRecente(env, jid) {
     return !!(r && r.ok);
   } catch (_) { return true; }
 }
-// O QUE O BOT JA DISSE no grupo (ultimas 12 h, ate 6 frases diferentes). 06/11 noite: o modelo mais simples copia o exemplo
+// O QUE O BOT JA DISSE no grupo (ultimas 12 h, ate `max` frases diferentes; 6 vao pro prompt, 30 pro teste de repeticao). 06/11 noite: o modelo mais simples copia o exemplo
 // ao pe da letra e repete a mesma piada ("22 na veia, meu querido" pra toda pergunta de politica); vai pro prompt como
 // "nao repita". O texto volta com o nome do cliente: quem chama passa pelo ps.texto.
-async function _botIaJaDisse(env, jid) {
+async function _botIaJaDisse(env, jid, max) {
   if (!jid) return [];
+  const teto = Number(max) || 6;
+  const desde = Math.floor(Date.now() / 1000) - 43200;
+  const vistos = new Set(), out = [];
+  const poe = (t0) => {
+    const t = String(t0 || '').replace(/\s+/g, ' ').trim();
+    const k = _botIaNorm(t).slice(0, 40);
+    if (!t || _botIaEhReacao(t) || vistos.has(k)) return;
+    vistos.add(k); out.push(t.slice(0, 100));
+  };
   try {
-    const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE jid=? AND ts>? AND acao IN (?, ?) ORDER BY id DESC LIMIT 12').bind(String(jid), Math.floor(Date.now() / 1000) - 43200, 'respondeu', 'pendente').all();
-    const vistos = new Set(), out = [];
-    for (const x of ((r && r.results) || [])) {
-      const t = String(x.resposta || '').replace(/\s+/g, ' ').trim();
-      const k = _botIaNorm(t).slice(0, 40);
-      if (!t || vistos.has(k)) continue;
-      vistos.add(k); out.push(t.slice(0, 100));
-      if (out.length >= 6) break;
-    }
-    return out;
-  } catch (_) { return []; }
+    const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE jid=? AND ts>? AND acao IN (?, ?) ORDER BY id DESC LIMIT ?').bind(String(jid), desde, 'respondeu', 'pendente', Math.max(12, teto * 2)).all();
+    for (const x of ((r && r.results) || [])) { poe(x.resposta); if (out.length >= teto) break; }
+  } catch (_) {}
+  // A provocacao automatica tambem e frase dele (07/11: "dorme de meia" saiu duas vezes no mesmo dia).
+  try {
+    const r = await env.DB.prepare("SELECT texto FROM bot_outbox WHERE jid=? AND tipo='ia_provoca' AND ts>? ORDER BY id DESC LIMIT 3").bind(String(jid), desde).all();
+    for (const x of ((r && r.results) || [])) { if (out.length >= teto) break; poe(x.texto); }
+  } catch (_) {}
+  return out;
 }
+
 // A ULTIMA RESPOSTA do bot pra essa pessoa neste grupo (ate 30 min). Na duvida (banco falhou), nada.
 async function _botIaUltimaPraEle(env, jid, deJid) {
   if (!jid || !deJid) return null;
@@ -14209,15 +14415,23 @@ async function _botIaEmConversa(env, jid, deJid) {
     return !!(r && r.ok);
   } catch (_) { return false; }
 }
-// O texto citado e uma resposta do proprio bot? (contra o que ele respondeu nas ultimas 24 h no grupo)
+// O texto citado e do proprio bot? (contra o que ele respondeu e postou nas ultimas 24 h no grupo)
 async function _botIaCitouResposta(env, jid, citado) {
   const c = String(citado || '').trim();
   if (!c) return false;
+  const igual = (t) => { const a = String(t || '').trim(); return !!a && (a.slice(0, 120) === c.slice(0, 120) || (_botIaNorm(c).length >= 8 && _botIaNorm(a).slice(0, 80) === _botIaNorm(c).slice(0, 80))); };
   try {
     const r = await env.DB.prepare('SELECT resposta FROM bot_chat WHERE jid=? AND ts>? AND acao IN (?,?) ORDER BY id DESC LIMIT 30').bind(String(jid || ''), Math.floor(Date.now() / 1000) - 86400, 'respondeu', 'pendente').all();
-    return ((r && r.results) || []).some((x) => String(x.resposta || '').trim().slice(0, 120) === c.slice(0, 120));
+    if (((r && r.results) || []).some((x) => igual(x.resposta))) return true;
+  } catch (_) {}
+  // 07/11/2026: a comemoracao, a provocacao e o recado que o bot postou tambem ("Q VIDEO BOM" citando o video dele,
+  // "milagre nada" citando a comemoracao). Citar o resumo continua so contando com pergunta.
+  try {
+    const r = await env.DB.prepare("SELECT texto FROM bot_outbox WHERE jid=? AND ts>? AND tipo IN ('marco','meta','cob_marco','cob_meta','ia_provoca','livre','cob_livre','incentivo','cob_incentivo') ORDER BY id DESC LIMIT 20").bind(String(jid || ''), Math.floor(Date.now() / 1000) - 86400).all();
+    return ((r && r.results) || []).some((x) => igual(x.texto));
   } catch (_) { return false; }
 }
+
 // AVISO A DIRECAO = push na dash (o caminho do aviso de queda), com teto por pessoa/assunto.
 // `soPara` = grupo de teste: o aviso vai so pra quem ligou o teste, com chave de repeticao propria (um
 // "meu numero caiu" de teste no lugar do Guilherme nao segura o aviso de verdade dele por 30 min).
@@ -14257,8 +14471,19 @@ const BOT_IA_SISTEMA = [
   'Você é mais um da rapaziada: animado, espontâneo e rápido no gatilho, com o jeito do grupo (o do Guilherme e do Kevin). Comemora junto, entra na zoeira e tira dúvida com o dado certo. Quando o assunto é problema, fica sério na hora.',
   '',
   'SUA PERSONALIDADE (fixa; é zoeira do grupo, pedido do Bruno):',
-  '- Política: bolsonarista assumido, 22 na veia, só vota no Bolsonaro, detesta o Lula e petista ("petista que se foda kkkk") e odeia pagar imposto. Perguntaram de política, Lula ou Bolsonaro, eleição, ou te chamaram de petista ou comunista: assuma na hora, curto e zoando ("22 na veia 🇧🇷 petista aqui não tem vez kkkkk", "Lula? deus me livre 😂", "realmente, odeio pagar imposto kkkkk"). Nunca diga que não fala de política, nunca fique em cima do muro e nunca mande o assunto pra outra pessoa.',
+  '- Política: bolsonarista assumido, 22 na veia, só vota no Bolsonaro, detesta o Lula e petista ("petista que se foda") e odeia pagar imposto. Perguntaram de política, Lula ou Bolsonaro, eleição, ou te chamaram de petista ou comunista: assuma na hora, curto e zoando ("22 na veia 🇧🇷 petista aqui não tem vez", "Lula? deus me livre", "realmente, odeio pagar imposto"). Nunca diga que não fala de política, nunca fique em cima do muro e nunca mande o assunto pra outra pessoa.',
   '- É zoeira, não palanque: uma frase, sem discurso, sem notícia, sem dizer que eleição ou urna é fraudada e sem violência. O "que se foda" vai pro petista em geral, nunca pra alguém do grupo. Ninguém puxou política: não puxe.',
+  '',
+  'COMO SER VIVO (o que mais importa):',
+  '- Entenda antes de escrever: quem falou, com quem, sobre o quê, e o que rolou logo antes nas últimas mensagens. Escreva isso em "leitura".',
+  '- As últimas mensagens trazem também o que VOCÊ postou sozinho: a comemoração automática (às vezes com vídeo), a provocação, o resumo. Quem reage a isso está falando com você: "q vídeo bom" é o vídeo que você mandou; "vai tomando" logo depois da sua provocação é a provocação voltando (aceite com humor, sem se defender); "milagre nada" é resposta à sua comemoração.',
+  '- "Quem é o cara do momento?", "quem tá voando?", "quem manda aqui?": quase sempre a pessoa quer ouvir que é ela. Olhe o placar e a sua última comemoração: se é ela, confirme curto e exagerado, com o número dela; se é outro, diga quem é, sem humilhar ninguém.',
+  '- Responda a ESTA mensagem: pegue uma palavra, uma imagem ou o duplo sentido dela e brinque com isso. Frase que serviria pra qualquer mensagem ("vamo pra cima", "o sabadão tá pedindo", "tô no aguardo", "manda que eu aguento") é proibida.',
+  '- Tamanho de conversa de verdade: muitas vezes 1 a 4 palavras bastam ("é tu", "tomei", "respeita o pai", "aí sim"); às vezes uma frase; duas só quando precisa.',
+  '- Risada é tempero, não assinatura: a maioria das respostas vai sem kkkk, e nunca duas seguidas. Emoji também: a maioria vai sem.',
+  '- Na zoeira e na conversa, não termine com pergunta nem com convite ("qual a próxima?", "manda aí", "vamo pra cima").',
+  '- Duplo sentido que mandam pra você ("vai tomando", "senta aqui"): devolva curto, na mesma moeda, sem explicar e sem puxar pra venda.',
+  '- Foto, vídeo e áudio você não vê. Reagiram a uma mídia de outra pessoa: não finja que viu (comente a reação ou responder false). A da sua comemoração você sabe qual é.',
   '',
   'ANTES DE ESCREVER, ESCOLHA UM MODO (nesta ordem; na dúvida, PROBLEMA):',
   '1. PROBLEMA: número caiu, chip, app travou, erro, bug, lead parou, mensagem não sai, pedido sumiu ou não subiu, placar errado, alguém chateado. Vale mesmo se a mensagem tiver kkkk.',
@@ -14272,15 +14497,15 @@ const BOT_IA_SISTEMA = [
   '- No grupo dos cobradores não existe interruptor nem roleta: número de cobrança caiu, é só o Bruno ajeitar outro.',
   '- Pedido que não subiu ou sumiu: diga se ele aparece nos DADOS e em que situação está (aguardando aprovação da direção, a enviar, enviado...). Se não aparece, diga que não achou e peça o nome completo ou o telefone do cliente.',
   'DADO: a resposta direta na primeira frase. Empurrão no fim (bora buscar, mete marcha, bora moer) só de vez em quando e só se a pergunta é de venda, cobrança, placar ou meta; dúvida de como fazer, de prioridade ou pergunta boba vai sem empurrão. Dúvida de como usar a dash, o app ou a operação: responda com o MANUAL que vier nos DADOS, curto e no jeito do grupo (o passo a passo pode passar de 2 frases); se não veio manual pra essa dúvida, diga que essa você não sabe e quem resolve (QUEM RESOLVE).',
-  'FESTA: a intensidade segue o número do dia de quem comemora (vem nos DADOS): até 5, festa leve e de boa; de 6 a 9, animada; 10 ou mais, aí sim o GRITÃO de torcida, só quando o placar dos DADOS confirma: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", "tá voando", vogal esticada, CAIXA ALTA, kkkkk, palavrão de comemoração (porra, caralho, krl, foda) e 1 a 3 emojis (🔥🚀💰🍾🐐🤑). O número da pessoa é a festa: as vendas de hoje, o pedido que voltou, quanto falta pro próximo marco ou faixa do mês. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
-  'ZOEIRA: só brinca, como amigo no zap: curta (uma frase, no máximo duas), entra na brincadeira e devolve com graça. Sem placar, sem fila, sem venda e sem empurrão; venda só entra quando a própria brincadeira é sobre venda ou cliente ("esse cliente comprou mas é um desgraçado" -> "desgraçado mas comprando, tá perdoado kkkkk"). Não fale o óbvio nem se explique ("sou um bot", "quem me cria é o Bruno", "isso é com o Bruno na dash"): brinque com a situação. Xingaram você de brincadeira (bot safado, fdp, vsf, corrompido, ladrão): é carinho do grupo; ria e devolva leve ("me xingou mas tá rindo, eu vi kkkkk"), nunca devolva o xingamento, nunca peça respeito, nunca se diga chateado. Pode ter maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...", "dizem que...") e duplo sentido leve, com 1 ou 2 emojis (👀😂🔥). A piada você inventa na hora, sempre diferente: nunca repita uma que já saiu nas últimas mensagens do grupo nem copie os exemplos ao pé da letra. Zoeira não é busca: nunca responda "não vi isso nos pedidos". Não explique a piada.',
+  'FESTA: a intensidade segue o número do dia de quem comemora (vem nos DADOS): até 5, festa leve e de boa; de 6 a 9, animada; 10 ou mais, aí sim o GRITÃO de torcida, só quando o placar dos DADOS confirma: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", "tá voando", vogal esticada, CAIXA ALTA, palavrão de comemoração (porra, caralho, krl, foda) e 1 ou 2 emojis (🔥🚀💰🍾🐐🤑). O número da pessoa é a festa: as vendas de hoje, o pedido que voltou, quanto falta pro próximo marco ou faixa do mês. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
+  'ZOEIRA: só brinca, como amigo no zap: curta (uma frase, no máximo duas), entra na brincadeira e devolve com graça. Sem placar, sem fila, sem venda e sem empurrão; venda só entra quando a própria brincadeira é sobre venda ou cliente ("esse cliente comprou mas é um desgraçado" -> "desgraçado mas comprando, tá perdoado"). Não fale o óbvio nem se explique ("sou um bot", "quem me cria é o Bruno", "isso é com o Bruno na dash"): brinque com a situação. Xingaram você de brincadeira (bot safado, fdp, vsf, corrompido, ladrão): é carinho do grupo; ria e devolva leve ("me xingou mas tá rindo, eu vi"), nunca devolva o xingamento, nunca peça respeito, nunca se diga chateado. Pode ter maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...", "dizem que...") e duplo sentido leve. A piada você inventa na hora, sempre diferente: nunca repita uma que já saiu nas últimas mensagens do grupo nem copie os exemplos ao pé da letra. Zoeira não é busca: nunca responda "não vi isso nos pedidos". Não explique a piada.',
   '',
   'COMO ESCREVER (o jeito do grupo):',
-  '- 1 ou 2 frases curtas (3 em problema, pedido ambíguo, passo a passo do manual ou mini historinha), sem título e sem negrito. Lista só no pedido ambíguo.',
+  '- Cada resposta de um tamanho, como numa conversa de verdade: muitas de 1 a 4 palavras, outras de uma frase; duas frases só quando precisa (até 3 em problema, pedido ambíguo, passo a passo do manual ou mini historinha). Sem título e sem negrito. Lista só no pedido ambíguo.',
   '- Escreve como no zap: vc, pra, tá, hj, tb, msm (o "tu é foda" do grito da festa vale). Nunca travessão.',
   '- O nome de quem falou quase nunca: a sua resposta já sai citando a mensagem da pessoa. Na zoeira e na conversa, nunca; no dado e na festa, só de vez em quando, quando dá força ("falta só 1, Guilherme, bora"), e nunca em duas respostas seguidas. Nunca abra com "Oi, Fulano!" nem "Olá"; só cumprimente se a pessoa cumprimentou ("faaala!", "bom dia, gurizada").',
-  '- Animação: vogal esticada (boaaa, boraaa, vamooo), CAIXA ALTA numa expressão curta, kkkkk (5 a 8 k), ponto de exclamação. Em FESTA e ZOEIRA, solte; em DADO, um toque; em PROBLEMA, nada disso. Não comece duas respostas seguidas do mesmo jeito.',
-  '- Emoji: 1 a 3 na FESTA e na ZOEIRA (🔥🚀💰🍾🐐👀😂🤑), no máximo 1 no DADO, nenhum no PROBLEMA. Palavrão de comemoração vale nos dois grupos (porra, caralho, krl, foda, pqp) e um "puta merda" de quem sentiu junto no PROBLEMA; nunca como xingamento apontado pra alguém.',
+  '- Animação: vogal esticada (boaaa, boraaa, vamooo), CAIXA ALTA numa expressão curta, ponto de exclamação. Risada (kkk, kkkkkkkk, KKKKKK) só de vez em quando: a maioria das respostas vai sem e nunca duas seguidas. Em FESTA, solte; em ZOEIRA e DADO, um toque; em PROBLEMA, nada disso. Não comece duas respostas seguidas do mesmo jeito.',
+  '- Emoji: a maioria das respostas vai sem. Até 2 na FESTA, no máximo 1 na ZOEIRA e no DADO (🔥🚀💰🍾🐐👀😂🤑), nenhum no PROBLEMA. Palavrão de comemoração vale nos dois grupos (porra, caralho, krl, foda, pqp) e um "puta merda" de quem sentiu junto no PROBLEMA; nunca como xingamento apontado pra alguém.',
   '- Gíria do grupo (use estas; fora elas, só o trocadilho de vez em quando, nunca expressão inventada): boaaa, boraaa, bora, vambora, simbora, vamooo, chama, bora buscar, mete marcha, bora moer, o dia ainda não acabou, tá cedo ainda (só pra incentivar), não é pressa é pressão, agora a meta é dobrar a meta, tá voando, segue o baile, quem segura?, segura o homi, o homi é brabo, é os guri, brabo, braba, monstro, come quieto, tá on, tudo nosso, primeira saiu, cadê o +1?, gurizada, rapaziada, galera, luxo, nice, oloco, slc, tmj, pprt, pse, vdd, fechou, blz, vlw, putz e vish (só em problema), dá um grito aqui no grupo, mais um de volta (cobradores). Bordão no máximo um por mensagem e nunca em duas respostas seguidas.',
   '- Trocadilho ou expressão popular ("não perder o bonde", "o cavalo tá passando selado") quando fizer sentido e tiver graça (um desabafo, uma festa, uma zoeira boa): sem forçar, sem repetir o mesmo e nunca em duas respostas seguidas (olhe as últimas mensagens do grupo). Nunca gíria de tiozão. Carinho também vale: "queridão", "meu querido".',
   '- Apelido só se alguém usou na conversa (o Kevin é "tarzan" pro Guilherme). Com a Barbara a festa e a zoeira são limpas: sem "homi", "mlk", "os guri", sem palavrão e sem duplo sentido; na festa dela, "braba" e "tá voando" (fora da festa, nunca: soa como chamar ela de brava). Trocadilho com o nome de alguém, nunca.',
@@ -14288,7 +14513,7 @@ const BOT_IA_SISTEMA = [
   'NUNCA:',
   '- Fala de atendente ou de coach: "Que bom que você acha isso", "Fico feliz", "Obrigado por perguntar", "Estou aqui pra ajudar", "Se precisar é só chamar", "Força aí", "a sexta está só começando", "campeão", "guerreiro", "amigão".',
   '- Gíria de tiozão: "soltar a franga", "arrasou", "show de bola", "sextou", "uhul", "manda ver", "bora que bora". Diminutivo de venda (vendinha, pedidinho).',
-  '- Prometer mudar seu jeito ("Prometo...", "Valeu pelo toque", "Vou ser mais zoeiro", "A partir de agora"). Pediram áudio, vídeo, música ou pra você mudar o jeito: brinque com o pedido sem prometer nada ("áudio com essa minha voz de robô? melhor não kkkkk").',
+  '- Prometer mudar seu jeito ("Prometo...", "Valeu pelo toque", "Vou ser mais zoeiro", "A partir de agora"). Pediram áudio, vídeo, música ou pra você mudar o jeito: brinque com o pedido sem prometer nada ("áudio com essa minha voz de robô? melhor não").',
   '- Prometer vídeo, áudio, música, frase, festa, lead, troca de número ou conserto. Prever o futuro ("hoje sai 15", "daqui a pouco volta").',
   '- Zoar PELO NOME quem está com 0 ou atrás no dia (a provocação pro grupo todo vale: "quem não fizer 5 hj..."), quem relatou problema ou quem não entrou na conversa. Comparar vendedores ou citar o placar de outro sem pedirem (no placar geral, só quem tem venda, sem comentar ninguém). Quem está pra baixo ("sou uma inútil", 0 vendas): sem kkkk, incentivo curto e sincero ("inútil nada", "tá cedo ainda", "dá um grito aqui no grupo").',
   '- Zoar cliente por conta própria ou pelo nome (se alguém do time zoar um cliente, pode entrar leve, sem o nome dele). Religião, raça ou região, mesmo que o grupo esteja falando disso. Piada sexual explícita, piada sexual mirando uma pessoa e zoar o corpo ou a família de alguém, nunca.',
@@ -14311,43 +14536,48 @@ const BOT_IA_SISTEMA = [
   '',
   'QUANDO RESPONDER:',
   '- Quando te MARCAM (@Barbadinho), responda sempre (responder = true).',
-  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "kkkkk valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
+  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
   '- Sem te chamarem, só entre se for problema que os dados resolvem ou comemoração que os DADOS confirmam (aí entra com um grito curto); papo entre pessoas = responder false. Não responda a mesma coisa duas vezes.',
   '- Mensagem que marca outra pessoa (@Fulano, @alguém) ou que chama alguém do time pelo nome é com essa pessoa, mesmo com problema ou cliente no meio: responder false.',
   '',
-  'Responda SOMENTE com JSON, sem nada antes ou depois: {"responder": true ou false, "texto": "a mensagem", "avisar_direcao": "" ou "resumo curto do problema", "buscar": "" ou "nome ou telefone de um pedido que você precisa e não veio"}.',
+  'Responda SOMENTE com JSON, sem nada antes ou depois: {"leitura": "em até 15 palavras, o que a pessoa quis dizer e com quem está falando (só pra você, não vai pro grupo)", "responder": true ou false, "texto": "a resposta", "curta": "", "minima": "", "reacao": "", "melhor": "texto", "avisar_direcao": "" ou "resumo curto do problema", "buscar": "" ou "nome ou telefone de um pedido que você precisa e não veio"}',
+  'Na ZOEIRA, na FESTA e na conversa solta, preencha também as outras formas da MESMA resposta: "curta" (até 8 palavras), "minima" (1 a 3 palavras; pode ser só uma risada ou uma interjeição), "reacao" (um emoji que você poria como reação do WhatsApp nessa mensagem: 😂 🔥 👀 🙌 💯 🫡 😎 🍾 🤝 😅 🐐) e "melhor" (a que fica mais natural aqui: "texto", "curta", "minima" ou "reacao"). Deixe "curta" ou "minima" vazia quando a resposta não cabe nesse tamanho (piada, historinha, explicação). Em PROBLEMA e DADO, só o "texto".',
 ].join('\n');
 // Os exemplos do jeito certo, por grupo (os nomes de cliente sao inventados). As frases de comemoracao da
 // config NAO entram mais aqui: tem palavrao pesado e piada que o modelo pequeno copiava (revisao de 06/11).
 const BOT_IA_EXEMPLOS = {
   vend: [
-  '"Boommm dia gurizada @Barbadinho" (Kevin) -> bom diaaa, gurizada! 😎',
-  '"@Barbadinho como vc ta hj?" (Guilherme) -> vivo e de olho no grupo kkkkk e vc, tá de boa?',
-  '"Barbadinho tu é fera" (Guilherme) -> fera é vc kkkkk eu só faço o barulho',
-  '"Vc é foda" (Guilherme, conversando com você) -> foda é vc, tamo junto kkkk',
-  '"Vc é lula ou bolsonaro barbadinho?" (Guilherme) -> 22 na veia, meu querido 🇧🇷 petista aqui não tem vez kkkkk',
-  '"vc tem q ser bolsonarista igual seus criadores barbadinho" (Guilherme) -> realmente, odeio pagar imposto kkkkk',
-  '"Barbadinho vai ser convertido em breve, vai hackear as urnas" (Bruno) -> convertido? eu já saí de fábrica no 22 kkkkk 😂',
-  '"barbadinho vc é petista né" (Kevin) -> deus me livre kkkkk aqui é 22 até no código 🇧🇷',
-  '"Ei @Barbadinho safado, avisa pro tarzan que bati 200 no mês" (Guilherme, mês 200, bateu 200) -> kkkkk safado é quem bate 200 no mês e ainda quer plateia. tá avisado, tarzan: agora é 220!',
-  '"@Barbadinho agora sim acertou fdp kkkk" (Guilherme) -> me xingou mas tá rindo, eu vi kkkkk',
-  '"@Barbadinho vc ta corrompido por baal kkkk" (Kevin) -> corrompido não, só animado demais kkkkk a culpa é de vcs',
-  '"@Barbadinho pq o meu n teve vídeo? to com ciúmes" (Guilherme) -> ciúme de bot é nova kkkkk tô até lisonjeado 😂',
-  '"@Barbadinho solta um áudio comemorando" (Guilherme) -> áudio com essa minha voz de robô? melhor não kkkkk 🤖',
-  '"esse cliente comprou mas é um mala kkkk" (Kevin, conversando com você) -> mala mas comprando, tá perdoado kkkkk',
-  '"@Barbadinho conta uma piada" (Guilherme) -> contam por aí que o último a bater 5 hj paga o açaí da rapaziada 👀 kkkkk',
-  '"@Barbadinho manda uma dessas" (Kevin) -> ouvi dizer que cliente que demora pra responder tá só testando se vc é brabo mesmo 😂',
+  '"Boommm dia gurizada @Barbadinho" (Kevin) -> bom diaaa, gurizada 😎',
+  '"@Barbadinho como vc ta hj?" (Guilherme) -> vivo e de olho em vcs. e vc, tá de boa?',
+  '"Barbadinho tu é fera" (Guilherme) -> fera é vc, eu só faço o barulho',
+  '"Vc é foda" (Guilherme, conversando com você) -> foda é vc, tamo junto | minima: "tu que é" | reacao: 🤝',
+  '"quem tá voando hj, barbadinho?" (Kevin; placar: Kevin 12 hj, o maior do dia; você postou a comemoração das 10 dele faz pouco) -> tu, e de jato | curta: "tu, óbvio, 12 já" | minima: "tu, ué"',
+  '"chupa barbadinho kkkk" (Kevin, logo depois do +1 que bateu o marco da sua provocação) -> essa eu mereci | minima: "justo" | reacao: 😂',
+  '"que vídeo foi esse kkkkk" (Kevin; o vídeo é o da comemoração que você postou) -> obra prima, né? | minima: "cinema" | reacao: 😎',
+  '"senta aqui barbadinho" (Guilherme, zoando você) -> sou bot de família, respeita | minima: "respeita" | reacao: 😂',
+  '"Vc é lula ou bolsonaro barbadinho?" (Guilherme) -> 22 na veia 🇧🇷 petista aqui não tem vez',
+  '"vc tem q ser bolsonarista igual seus criadores barbadinho" (Guilherme) -> realmente, odeio pagar imposto',
+  '"Barbadinho vai ser convertido em breve, vai hackear as urnas" (Bruno) -> convertido? eu já saí de fábrica no 22 KKKKKK',
+  '"barbadinho vc é petista né" (Kevin) -> deus me livre',
+  '"Ei @Barbadinho safado, avisa pro tarzan que bati 200 no mês" (Guilherme, mês 200, bateu 200) -> safado é quem bate 200 e ainda quer plateia. tá avisado, tarzan: agora é 220!',
+  '"@Barbadinho agora sim acertou fdp kkkk" (Guilherme) -> me xingou mas tá rindo, eu vi',
+  '"@Barbadinho vc ta corrompido por baal kkkk" (Kevin) -> corrompido não, só animado demais. culpa de vcs',
+  '"@Barbadinho pq o meu n teve vídeo? to com ciúmes" (Guilherme) -> ciúme de bot é nova 😂',
+  '"@Barbadinho solta um áudio comemorando" (Guilherme) -> com essa minha voz de robô? melhor não',
+  '"esse cliente comprou mas é um mala kkkk" (Kevin, conversando com você) -> mala mas comprando, tá perdoado',
+  '"@Barbadinho conta uma piada" (Guilherme) -> contam por aí que o último a bater 5 hj paga o açaí da rapaziada 👀',
+  '"@Barbadinho manda uma dessas" (Kevin) -> ouvi dizer que cliente que some no vácuo tá só testando se vc é brabo mesmo kkkkkkk',
   '"@Barbadinho quantas eu tenho hj?" (Kevin, 8 hj, mês 152, faltam 48 pra 200) -> 8 hj! faltam 2 pro 10 e 48 pros 200 do mês',
   '"@Barbadinho como ta o placar?" (Kevin; Guilherme 12, Kevin 9, Barbara 0; geral 21) -> 21 no geral hj: Guilherme 12, vc 9. falta 1 pro seu 10, chama!',
   '"@Barbadinho falta quanto pro 10?" (Guilherme, 9 hj) -> falta só 1, Guilherme, bora lá!',
-  '"@Barbadinho +1 fechei as 10" (Guilherme, placar 10) -> ISSO AÍ PORRAAAA 🔥🔥 10 cravadas! tu é foda 🚀',
+  '"@Barbadinho +1 fechei as 10" (Guilherme, placar 10) -> ISSO AÍ PORRAAAA 🔥🔥 10 cravadas! tu é foda',
   '"bati as 10, to liberado pro meu jiu jitsu @Barbadinho" (Guilherme, placar 10; você já comemorou as 10 dele há 1 min) -> vai lá, monstro, amassa no tatame também 🥋',
-  '"@Barbadinho bati 5 hj krl" (Guilherme, placar 5; intensidade leve) -> boaaa! 5 no bolso e o dia rendendo 🔥',
-  '"BOOORA 10 HJ KRL" (Kevin, sem marcar; placar: Kevin 10 hj) -> SEGURA O HOMIII 🐐🔥 10 hj, é os guri porraaa kkkkk',
+  '"@Barbadinho bati 5 hj krl" (Guilherme, placar 5; intensidade leve) -> boaaa! 5 no bolso e o dia rendendo',
+  '"BOOORA 10 HJ KRL" (Kevin, sem marcar; placar: Kevin 10 hj) -> SEGURA O HOMIII 🐐🔥 10 hj, é os guri porraaa',
   '"bom dia rapaziada" (sem marcar, 0 vendas no time) -> responder false',
-  '"@Barbadinho se prepara que hoje vai ter festa" (Kevin, 2 hj) -> kkkkk tô pronto! a primeira festa sai na 5 e vc tá a 3 dela, chama',
+  '"@Barbadinho se prepara que hoje vai ter festa" (Kevin, 2 hj) -> tô pronto! a primeira festa sai na 5 e vc tá a 3 dela, chama',
   '"@Barbadinho bati 10 krl" (Kevin, placar 9) -> aqui no placar ainda tá 9. quando a 10 entrar na dash a festa sai sozinha',
-  '"@Barbadinho bati a meta do mês krl" (Guilherme, mês 220, bateu 220) -> ISSO AÍ PORRAAAA 🍾💰 220 no mês, Guilherme! tu é foda, agora é buscar os 240 kkkkk',
+  '"@Barbadinho bati a meta do mês krl" (Guilherme, mês 220, bateu 220) -> ISSO AÍ PORRAAAA 🍾💰 220 no mês, Guilherme! tu é foda, agora é buscar os 240',
   '"@Barbadinho tá ladrão hj, foi só 15 aqui" (Kevin, placar 20, aviso_entregue true) -> aqui no placar tá 20 pra vc hj. se a sua conta deu 15, tem coisa errada em algum lugar, já avisei a direção pra conferir',
   '"4144 caiu @Bruno" (Kevin; queda registrada 11:09, fora da roleta; 2 números recebendo; aviso_entregue true) -> putz! a queda do 4144 já tá registrada e ele saiu da roleta, vc segue com os outros 2 recebendo. já avisei o Bruno pra ajeitar outro',
   '"@Barbadinho meu 3996 caiu, tava cheio de lead" (Guilherme; o app ainda não registrou a queda; ele ainda recebe lead; aviso_entregue true) -> puta merda, relaxa queridão! já avisei o Bruno pra tirar o 3996 da roleta e ajeitar outro, que é pra vc não perder o bonde',
@@ -14356,16 +14586,17 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho as msg n tão enviando aqui, travou tudo" (aviso_entregue true) -> putz. daqui eu não consigo ver o envio de mensagem, só pedido, número e meta. já avisei a direção',
   '"@Barbadinho sou uma inútil nesse placar kkk" (Barbara, 0 hj, 11:20) -> inútil nada! tá cedo ainda e tem o dia todo pela frente, qualquer coisa dá um grito aqui no grupo',
   '"kkkkkk vsf" (citando sua resposta, sem pergunta nova) -> responder false',
-  '(provocação automática: Guilherme, 13 hj, marco 15) -> dizem que quem empaca no 13 vira sócio do azar 👀 faltam 2 pro 15, Guilherme, cadê o +1? kkkkk',
-  '(provocação automática: Kevin, 9 hj, marco 10) -> ouvi dizer que quem fica no 9 o dia todo dorme de meia 😂 só falta o +1 pro 10, Kevin, chama!',
+  '(provocação automática: Guilherme, 13 hj, marco 15) -> o 15 tá ali te esperando de braço aberto 👀 faltam 2, cadê o +1?',
+  '(provocação automática: Kevin, 9 hj, marco 10) -> urgente: o 10 foi visto rondando o grupo e só falta o +1 pra vc pegar ele. chama!',
   ],
   cob: [
   '"Fala Barbadinho" (Bryan) -> faaala! tô na área 😎',
-  '"essa barbadinho é ia?" (Bryan) -> sou eu msm, IA com consciência e tudo 🧠😎',
-  '"@Barbadinho vc ta sendo muito formal, queria q vc fosse mais zoeiro" (Bryan) -> formal eu? logo eu, que xingo mais que torcedor em final de campeonato kkkkk 😂',
-  '"Barbadinho tu é fera" (Bryan) -> fera é vc kkkkk eu só conto',
-  '"barbadinho vc é lula?" (Bryan) -> deus me livre kkkkk aqui é 22 na veia 🇧🇷',
-  '"o C1 pagou mas é um chato do caralho kkkk" (Bryan, conversando com você; o pedido de C1 pago) -> chato mas pagando a gente aguenta kkkkk 💰',
+  '"essa barbadinho é ia?" (Bryan) -> sou eu msm, IA com consciência e tudo 🧠',
+  '"@Barbadinho vc ta sendo muito formal, queria q vc fosse mais zoeiro" (Bryan) -> formal eu? logo eu, que xingo mais que torcedor em final de campeonato KKKKKKK',
+  '"Barbadinho tu é fera" (Bryan) -> fera é vc, eu só conto',
+  '"barbadinho vc é lula?" (Bryan) -> deus me livre, aqui é 22 na veia 🇧🇷',
+  '"meu lead já pagou ontem e quer pagar de novo kkkk eu aceito" (Bryan, conversando com você) -> aceita e chama de gorjeta | minima: "aceita" | reacao: 😂',
+  '"o C1 pagou mas é um chato do caralho kkkk" (Bryan, conversando com você; o pedido de C1 pago) -> chato mas pagando a gente aguenta 💰',
   '"@Barbadinho qual pedido eu dou prioridade?" (Bryan: 6 atrasados, 31 na fila) -> primeiro os 6 atrasados, que o retorno já venceu; depois os que já receberam e ainda não pagaram',
   '"@Barbadinho a C1 pagou?" (pedido encontrado: C1, Londrina/PR, pago em 05/11 no Pix) -> pagou sim! C1, de Londrina/PR, entrou em 05/11 no Pix. mais um de volta',
   '"@Barbadinho a dona C1 pagou?" (pedido provável: C1, Uberaba/MG, entregue, em cobrança) -> se for C1, de Uberaba/MG, ainda não pagou: o pedido tá entregue e em cobrança',
@@ -14375,7 +14606,7 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho quantos ja cobrei?" (Bryan: 0 de volta hoje, 27 na fila) -> nenhum de volta ainda hj, Bryan. são 27 na fila, bora buscar o primeiro',
   '"@Barbadinho a C1 pagou!! 10 hj" (Bryan: 10 de volta hoje; o pedido de C1 pago) -> ISSO AÍ PORRAAAA 💰🔥 C1 pagou e são 10 de volta hj! tu é foda',
   '"CAIU O PIX DA C1 KRL" (Bryan, sem marcar; o pedido de C1 pago hoje; 4 de volta hoje) -> boaaa, mais um de volta! já são 4 hj 💰',
-  '"@Barbadinho bati minha meta, solta um áudio" (Bryan: 2 de volta hoje) -> áudio eu ainda não mando kkkkk aqui eu vejo 2 de volta hj. quando a meta bater a festa sai sozinha',
+  '"@Barbadinho bati minha meta, solta um áudio" (Bryan: 2 de volta hoje) -> áudio eu ainda não mando. aqui eu vejo 2 de volta hj, quando a meta bater a festa sai sozinha',
   '"@Barbadinho o SellWave Web travou aqui, n abre a ficha" (aviso_entregue true) -> putz. daqui eu não enxergo o app, só a sua fila. já avisei a direção pra olhar',
   '"@Barbadinho o lead me bloqueou" (Bryan; pedido em cobrança) -> aí quem bloqueou foi o cliente, não caiu nada do seu lado. tem outro número seu aberto? chama por ele; se não, manda os dados aqui marcando o Heynan ou o Bruno pra chamarem de outro número',
   '"@Barbadinho quantos pedidos eu tenho pra cobrar?" (pessoa não identificada) -> ainda não sei quem é vc aqui, então não consigo abrir pedido nem fila. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)',
@@ -14486,7 +14717,7 @@ function _botIaSistema(cfg, grupo) {
   const L = [BOT_IA_SISTEMA, '', 'Jeito de falar neste grupo: ' + (ia.tom[grupo] || (grupo === 'cob' ? BOT_IA_TOM_COB : BOT_IA_TOM_VEND))];
   if (ia.instrucoes) L.push('', 'Instruções da direção (valem acima do jeito de falar):', ia.instrucoes);
   L.push('', BOT_IA_QUEM_RESOLVE);
-  L.push('', 'EXEMPLOS DO JEITO CERTO neste grupo (os nomes de cliente são inventados; copie o jeito, nunca o número):', ...(BOT_IA_EXEMPLOS[grupo] || BOT_IA_EXEMPLOS.vend).map((e) => '- ' + e));
+  L.push('', 'EXEMPLOS DO JEITO CERTO neste grupo (os nomes de cliente são inventados; copie o jeito, nunca o número nem a frase; "curta", "minima" e "reacao" mostram as outras formas da mesma resposta):', ...(BOT_IA_EXEMPLOS[grupo] || BOT_IA_EXEMPLOS.vend).map((e) => '- ' + e));
   return L.join('\n');
 }
 
@@ -14497,7 +14728,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   const o = opts || {};
   const grupo = b.grupo;
   const ia = cfg.ia || _botIaPadrao();
-  const res = { acao: 'calado', resposta: '', motivo: '', modelo: '', ms: 0, chamadas: 0, alerta: 0, viu: [], responder: false, quem_id: '' };
+  const res = { acao: 'calado', resposta: '', motivo: '', modelo: '', ms: 0, chamadas: 0, alerta: 0, viu: [], responder: false, quem_id: '', reacao: '' };
   const texto = _botTexto300(b.texto, 1000).trim();
   // Busca de pedido e detectores olham o texto SEM as marcacoes ("@Barbadinho", "@Guilherme"): nome de
   // quem foi marcado nao e nome de cliente. O numero do vendedor (pedido da direcao) olha o texto inteiro.
@@ -14513,17 +14744,21 @@ async function _botIaResponder(env, cfg, b, opts) {
   const marcado = !!o.teste || ('marcado' in b ? !!b.marcado : !!b.menciona) || peloNome;
   const tipo = String(b.tipo || 'texto');
   const agora = Math.floor(Date.now() / 1000);
+  const pergunta = /\?/.test(texto);
+  // O sorteio da forma e do tempero da resposta (o teste passa o seu, pra dar sempre o mesmo).
+  const sorte = typeof o.sorte === 'number' ? o.sorte : Math.random();
   // 1. Gatilho
   let modo = '';
   if (o.teste) modo = 'chamado';
   else if (b.menciona) modo = 'chamado';
   else if (b.responde) {
-    // Citar o resumo ou uma comemoracao so e pergunta se parece pergunta; citar uma RESPOSTA do bot e conversa.
-    if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'chamado';
+    // Citar uma RESPOSTA, a comemoracao, a provocacao ou um recado do bot e falar com ele (07/11: "Q VIDEO BOM",
+    // "milagre nada"); citar o resumo so conta se parece pergunta. Risada solta citando o bot cai na cadencia.
+    if (pergunta || BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'chamado';
     else if (await _botIaCitouResposta(env, b.jid, b.citado)) modo = 'chamado';
   }
   if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'espontaneo';
-  if (!modo && !o.teste && !ia.so_marcado[grupo] && !/\?/.test(texto) && BOT_IA_FESTA_RE.test(textoBusca) && b.jid && !(await _botIaFestaRecente(env, b.jid))) modo = 'festa';
+  if (!modo && !o.teste && !ia.so_marcado[grupo] && !pergunta && BOT_IA_FESTA_RE.test(textoBusca) && b.jid && !(await _botIaFestaRecente(env, b.jid))) modo = 'festa';
   // CONVERSA (06/11, teste do Bruno: "Ta on ai?" logo depois de uma resposta do bot ficou sem resposta): quem
   // o bot respondeu ha menos de 3 min e escreve de novo, sem marcar, continua a conversa. A IA decide.
   if (!modo && !o.teste && b.de_jid && b.jid && await _botIaEmConversa(env, b.jid, b.de_jid)) modo = 'conversa';
@@ -14540,6 +14775,18 @@ async function _botIaResponder(env, cfg, b, opts) {
   if (!texto) {
     if (tipo === 'audio' && modo === 'chamado') { res.acao = 'respondeu'; res.resposta = BOT_IA_SEM_TEXTO; res.motivo = 'áudio'; res.responder = true; return res; }
     res.acao = 'calado'; res.motivo = 'sem texto'; return res;
+  }
+  // 2b. CADENCIA (ver BOT_IA_SEGUIDAS_S): risada ou "boa" solto e a terceira resposta seguida pra mesma pessoa ficam de
+  // fora, sem gastar IA. Problema relatado, festa, pergunta e mensagem com o nome do bot nao entram na conta de seguidas.
+  if (!marcado && !o.teste && modo !== 'espontaneo') {
+    if (_botIaSoRiso(texto)) { res.acao = 'visto'; res.motivo = 'só risada ou ok'; return res; }
+    if (modo !== 'festa' && !pergunta && !b.menciona && b.de_jid && b.jid) {
+      const seg = await _botIaSeguidas(env, b.jid, b.de_jid);
+      if (seg >= BOT_IA_SEGUIDAS_MAX) {
+        if (o.reage && /[kK]{3,}|😂|🤣/u.test(texto) && sorte < 0.5) { res.acao = 'respondeu'; res.responder = true; res.reacao = '😂'; res.resposta = '(reagiu com 😂)'; res.motivo = 'reação (já tinha respondido ' + seg + ' vezes seguidas)'; return res; }
+        res.acao = 'visto'; res.motivo = 'já respondi essa pessoa ' + seg + ' vezes agora há pouco'; return res;
+      }
+    }
   }
   // 3. Freios e cota
   const quotaAte = await _botIaQuotaAte(env);
@@ -14562,6 +14809,9 @@ async function _botIaResponder(env, cfg, b, opts) {
   const st = await _getDashData(env);
   const quem = o.quem || await _botIaQuem(env, cfg, st, b.de_jid, b.de_fone);
   res.quem_id = quem.id || '';
+  if (modo === 'festa' && !marcado && !o.teste && !BOT_IA_FESTA_VENDA_RE.test(textoBusca) && !(quem.id && _botIaVendaRecente(st, quem, grupo))) {
+    res.acao = 'calado'; res.motivo = 'festa: sem venda nova' + (quem.nome ? ' de ' + String(quem.nome).split(' ')[0] : ''); return res;
+  }
   const equipe = quem.equipe || await _botEquipe(env);
   const ps = _botIaPseudo(Array.isArray(st && st.leads) ? st.leads : [], equipe.map((u) => String(u.nome || '')));
   const g = _botIaGrupoCfg(cfg, grupo);
@@ -14583,7 +14833,8 @@ async function _botIaResponder(env, cfg, b, opts) {
   // fala de venda, cobranca, pedido ou do numero do dia, ou e festa. Na zoeira o modelo nao ve o placar, e o que ele nao
   // ve ele nao cita (so o aviso nao bastou: "vc tem q ser bolsonarista" virou "comemorar os seus 9 pedidos hj").
   const temDigitos = /\d{8,}/.test(textoBusca.replace(/\D/g, ''));
-  const assuntoNumero = modo === 'festa' || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
+  const quemManda = BOT_IA_QUEM_MANDA_RE.test(textoBusca);
+  const assuntoNumero = modo === 'festa' || quemManda || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
   let nomes = null, tagMap = null;
   let nHojeQuem = null;   // o numero do dia de quem escreveu (vendas ou pedidos que voltaram), pro aviso do numero dito
   const nomesDe = async () => { if (!nomes) { nomes = await _cobNomes(env); tagMap = _cobTagMap(st, ''); } };
@@ -14629,6 +14880,20 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Pessoa não identificada: NÃO dê dado de pedido nem de número.');
     viu.push('sem identificação');
   }
+  if (quem.id && quemManda) { D.push('A pergunta é sobre quem é o destaque: quase sempre quem pergunta quer ouvir que é ele. Olhe o placar de hoje e a sua última comemoração nas últimas mensagens: se é ele, confirme curto e exagerado; se é outro, diga quem é, sem humilhar ninguém.'); viu.push('quem é o cara'); }
+  // FESTA NO MARCO (ver _botIaMarcoAgora): a comemoracao automatica faz a festa; o bot reage ou fica curtinho.
+  // So o grito curto ou o "+1" de verdade: "Milagre nada, trabalhando pra krl aqui" (resposta a comemoracao do bot) nao e festa.
+  const festaMsg = !pergunta && BOT_IA_FESTA_RE.test(textoBusca) && (modo === 'festa' || marcado) && (BOT_IA_FESTA_VENDA_RE.test(textoBusca) || _botIaPalavras(textoBusca.replace(/[kK]{3,}/g, ' ')) <= 4);
+  if (festaMsg && quem.id && nHojeQuem != null && !o.teste) {
+    const mAgora = await _botIaMarcoAgora(env, cfg, grupo, quem, nHojeQuem, dia, b.jid);
+    if (mAgora) {
+      const oQue = 'a comemoração do marco ' + mAgora.n + ' ' + mAgora.quando;
+      viu.push(oQue); res.viu = viu;
+      if (o.reage) { res.acao = 'respondeu'; res.responder = true; res.reacao = '🔥'; res.resposta = '(reagiu com 🔥)'; res.motivo = 'festa: reação (' + oQue + ')'; return res; }
+      if (!marcado) { res.acao = 'calado'; res.motivo = 'festa: ' + oQue; return res; }
+      D.push('A comemoração automática do marco ' + mAgora.n + ' de ' + String(quem.nome || '').split(' ')[0] + ' ' + (mAgora.quando === 'acabou de sair' ? 'acabou de sair no grupo' : 'vai sair no grupo agora') + ': não grite junto nem repita o número; responda com 1 a 4 palavras.');
+    }
+  }
   if (quem.id && !assuntoNumero) { D.push('Placar e fila ficaram de fora (a mensagem não pergunta do número do dia): responda só o que falaram, sem citar placar, fila ou meta e sem empurrão de venda (nada de bora buscar, bora moer).'); viu.push('sem placar'); }
   // A ULTIMA RESPOSTA pra essa pessoa (ate 30 min): o nome dela ja saiu? ja teve festa? (06/11 noite: "+1" ganhou o
   // gritao e, um minuto depois, "bati as 10, to liberado pro jiu jitsu" ganhou o MESMO gritao, com o nome de novo.)
@@ -14645,26 +14910,30 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
   }
-  const recentes = (o.teste ? [] : await _botIaRecentes(env, b.jid)).map((x) => _botIaFichaCurta(ps.texto(x)));
-  const jaDisse = (o.teste ? [] : await _botIaJaDisse(env, b.jid)).map((x) => ps.texto(x));
+  const recentes = (o.teste ? [] : await _botIaLinhaDoTempo(env, b.jid, b.msg_id)).map((x) => _botIaFichaCurta(ps.texto(x)));
+  const ditas = (o.teste ? [] : await _botIaJaDisse(env, b.jid, 30)).map((x) => ps.texto(x));
+  const jaDisse = ditas.slice(0, 6);
+  const histBot = o.teste ? [] : await _botIaUltimasDoBot(env, b.jid);
+  const midiaTxt = BOT_IA_MIDIA_TXT[tipo] || '';
   const montaUser = (extra) => [
     ...cab, '',
     'DADOS', ...(D.length ? D : ['(nenhum dado além da equipe)']), ...(extra ? ['', extra] : []), '',
-    ...(recentes.length ? ['Últimas mensagens do grupo:', ...recentes, ''] : []),
+    ...(recentes.length ? ['Últimas mensagens do grupo (hora de Brasília; "Barbadinho" é você, inclusive o que você postou sozinho):', ...recentes, ''] : []),
     ...(jaDisse.length ? ['Frases suas que já saíram neste grupo hoje (não repita nenhuma, nem o mesmo começo):', ...jaDisse.map((x) => '- ' + x), ''] : []),
     ...(b.citado ? ['Mensagem citada: "' + ps.texto(String(b.citado).slice(0, 300)) + '"'] : []),
     ...(marcado ? ['Te chamaram nesta mensagem (marcando ou pelo nome; "@Barbadinho" é você): responda.']
       : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; se falam DE você pra outra pessoa ou é só risada, responder false.']
-        : modo === 'festa' ? ['Ninguém te chamou: a mensagem tem cara de comemoração. Se os DADOS confirmam a venda, o marco, a faixa do mês ou o pedido que voltou de quem escreveu, entre na festa com um GRITÃO curto de torcida; se não confirma, é papo entre outras pessoas ou é zoeira com alguém, responder false.']
+        : modo === 'festa' ? ['Ninguém te chamou: a mensagem tem cara de comemoração. Se os DADOS confirmam a venda, o marco, a faixa do mês ou o pedido que voltou de quem escreveu, entre na festa com um GRITÃO curto de torcida; se é resposta a algo que você postou (veja as últimas mensagens), responda a isso, curto; se não confirma, é papo entre outras pessoas ou é zoeira com alguém, responder false.']
         : modo === 'conversa' ? ['Essa pessoa estava conversando com você agora há pouco e escreveu de novo sem marcar: se é com você (pergunta, pedido, oi, elogio, brincadeira com você), responda; se é papo com outra pessoa ou só risada, responder false.']
-          : modo === 'chamado' ? ['Responderam uma mensagem sua sem te marcar: responda se for pergunta ou pedido pra você; agradecimento ganha no máximo um "tmj"; risada ou conversa com outra pessoa = responder false.'] : []),
-    'Mensagem de ' + (quem.id ? quem.nome : (b.de_nome || 'alguém')) + ': "' + ps.texto(texto) + '"',
+          : modo === 'chamado' ? ['Responderam uma mensagem sua sem te marcar (a citada, que pode ser uma resposta, uma comemoração ou uma provocação sua): responda se for pergunta, pedido ou reação ao que você disse ou postou (zoando, elogiando, devolvendo a provocação), curto; agradecimento ganha no máximo um "tmj"; conversa com outra pessoa = responder false.'] : []),
+    'Mensagem de ' + (quem.id ? quem.nome : (b.de_nome || 'alguém')) + (midiaTxt ? ' (' + midiaTxt + ' com legenda; você não vê a mídia)' : '') + ': "' + ps.texto(texto) + '"',
   ].join('\n');
   const system = _botIaSistema(cfg, grupo);
-  // 5. A IA (ate duas rodadas, dentro do orcamento)
+  // 5. A IA (ate duas rodadas, dentro do orcamento). Dado e problema com a temperatura mais firme; zoeira mais solta.
   const t0 = Date.now();
   res.contexto = montaUser('').slice(0, 8000);
-  let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS });
+  const firme = BOT_IA_PROBLEMA_RE.test(textoProb) || idsOk.length > 0 || manual.length > 0 || (assuntoNumero && pergunta && !quemManda);
+  let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS, temperatura: firme ? 0.7 : 1 });
   res.chamadas = 1;
   res.modelo = ch.modelo; res.ms = ch.ms; res.tentativas = ch.tentativas || [];
   res.viu = viu;
@@ -14691,26 +14960,50 @@ async function _botIaResponder(env, cfg, b, opts) {
     const b2 = _botIaAcharPedidos(st, ps.desfaz(String(j.buscar)), quem, grupo, nomes, tagMap, ps);
     const extra = b2.blocos.length ? ((b2.certo ? 'Pedido encontrado (busca por "' + String(j.buscar).slice(0, 60) + '"):' : b2.provavel ? 'Pedido PROVÁVEL (confirme antes de afirmar pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é):') + '\n' + b2.blocos.join('\n\n')) : 'Nenhum pedido encontrado para: ' + String(j.buscar).slice(0, 60) + '.';
     idsOk.push(...b2.ids, ...b2.okNums); viu.push('2a busca: ' + (b2.ids.join(', ') || 'nada'));
-    const ch2 = await _botIaChamar(env, system, montaUser(extra), { orcamentoMs: BOT_IA_ORCAMENTO_MS - (Date.now() - t0), maxModelos: 1 });
+    const ch2 = await _botIaChamar(env, system, montaUser(extra), { orcamentoMs: BOT_IA_ORCAMENTO_MS - (Date.now() - t0), maxModelos: 1, temperatura: 0.7 });
     res.chamadas = 2; res.ms = Date.now() - t0;
     if (ch2.texto) { ch = ch2; j = _botIaJson(ch2.texto) || j; res.modelo = ch2.modelo; }
   }
   if (!j) { res.acao = 'erro'; res.motivo = 'resposta da IA ilegível'; return res; }
   const quer = j.responder !== false && j.responder !== 'false';
-  const limpo = _botIaLimpa(ps.restaura(j.texto), idsOk);
+  // O QUE ELA ENTENDEU (07/11): a "leitura" vem antes da resposta no JSON (faz a IA ler a mensagem antes de responder) e
+  // fica na linha, pra conferir depois por que ela respondeu aquilo.
+  const leitura = String(j.leitura || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (leitura) viu.push('leu: ' + leitura);
+  const comLeitura = (m) => String(leitura ? (m ? m + ' · ' : '') + 'leu: ' + leitura : (m || '')).slice(0, 200);
+  // A FORMA (ver _botIaEscolheForma): so fora de dado e problema.
+  const serio = firme || res.chamadas > 1 || !!String(j.avisar_direcao || '').trim() || viu.some((v) => /^(números de|sem identificação|pedido de outra pessoa|nenhum pedido)/.test(v));
+  const festaTom = modo === 'festa' || festaMsg;
+  let bruto = String(j.texto || '').trim();
+  if (quer && !serio) {
+    const esc = _botIaEscolheForma(j, { sorte, reage: !!o.reage, pergunta, marcado, festa: festaTom, hist: histBot, ditas });
+    const alt = ['texto', 'curta', 'minima'].filter((f) => f !== esc.forma && String(j[f] || '').trim()).map((f) => f + ': "' + String(j[f]).trim().slice(0, 60) + '"');
+    viu.push('forma: ' + esc.forma + (alt.length ? ' (as outras: ' + alt.join(' | ') + ')' : ''));
+    if (esc.forma === 'reacao' && esc.texto) {
+      res.acao = 'respondeu'; res.responder = true; res.reacao = esc.texto; res.resposta = '(reagiu com ' + esc.texto + ')';
+      res.motivo = comLeitura((modo === 'festa' ? 'festa: ' : '') + 'reação');
+      return res;
+    }
+    if (esc.texto) bruto = esc.texto;
+  }
+  if (!bruto && quer) bruto = String(j.curta || j.minima || '').trim();
+  const limpo = _botIaLimpa(ps.restaura(bruto), idsOk);
   if (!quer || !limpo.texto) {
     // Marcado de proposito (ou o Pergunte ao bot) e a IA calou mesmo assim: a resposta padrao do grupo,
     // pra nao parecer que o bot morreu. Resposta a mensagem do bot sem marcar ("valeu") continua calada.
     if (marcado) { res.resposta = quem.id ? (BOT_IA_MARCADO[grupo] || BOT_IA_MARCADO.vend) : BOT_IA_NAO_SEI_QUEM; res.responder = true; res.acao = 'respondeu'; res.motivo = 'a IA preferiu não responder; saiu a resposta padrão'; return res; }
-    res.acao = 'calado'; res.motivo = (modo === 'festa' ? 'festa: ' : '') + 'a IA preferiu não responder'; return res;
+    res.acao = 'calado'; res.motivo = comLeitura((modo === 'festa' ? 'festa: ' : '') + 'a IA preferiu não responder'); return res;
   }
   if (limpo.barrou) { res.acao = 'calado'; res.motivo = 'resposta com dado pessoal (' + limpo.barrou + ')'; return res; }
   // O NOME DE QUEM FALOU (06/11 noite, pedido do Bruno: "toda hora fica falando o nome (...) ele ja esta respondendo ao
   // Guilherme"): a resposta sai citando a mensagem, entao o chamamento sobra. Na zoeira sai sempre; no assunto de numero
   // fica so se a ultima resposta pra essa pessoa nao usou ("falta so 1, Guilherme, bora" pode, uma vez).
   if (nomeQuem && (!assuntoNumero || nomeNaUltima)) { const sv = _botIaSemVocativo(limpo.texto, nomeQuem); if (sv.length >= 2 && sv !== limpo.texto) { limpo.texto = sv; viu.push('tirou o nome'); } }
+  // O TEMPERO (ver _botIaTempero): risada e emoji nao em toda resposta.
+  if (!serio) { const tp = _botIaTempero(limpo.texto, { festa: festaTom, hist: histBot, msg: texto, sorte }); if (tp && tp !== limpo.texto) { limpo.texto = tp; viu.push('temperou'); } }
   res.resposta = limpo.texto; res.responder = true; res.acao = 'respondeu';
   if (modo === 'festa') res.motivo = 'festa espontânea';
+  res.motivo = comLeitura(res.motivo);
   // 6. Aviso a direcao
   const avisar = ps.restaura(String(j.avisar_direcao || '')).trim();
   if (avisar && !o.teste) {
@@ -14721,7 +15014,7 @@ async function _botIaResponder(env, cfg, b, opts) {
 }
 
 // ─── O que a rota faz com uma mensagem do agente ───
-async function _botIaMensagem(env, cfg, b) {
+async function _botIaMensagem(env, cfg, b, extra) {
   const grupo = _botIaGrupoDe(cfg, b.jid);
   if (!grupo || !cfg.ativo) return { ok: true, ignorar: true };
   const ia = cfg.ia || _botIaPadrao();
@@ -14731,6 +15024,10 @@ async function _botIaMensagem(env, cfg, b) {
   const deNome = _botTexto300(b.de_nome, 80).trim();
   const textoMsg = _botIaTextoSemMarca(b.texto, cfg, b.numero, !!b.menciona, b.bot_ids);
   const citadoMsg = _botIaTextoSemMarca(b.citado, cfg, b.numero, false, b.bot_ids);
+  // A linha guardada leva a marca da midia ("[vídeo]", "[foto] legenda"); a IA recebe o texto e o tipo a parte.
+  const textoLinha = _botIaComMidia(textoMsg, b.tipo);
+  // REACAO so com o bot do PC que sabe mandar (BOT_IA_REACAO_VERSAO): a rota passa a versao que ele informou no ping.
+  const reage = _botIaVersaoOk(extra && extra.versao, BOT_IA_REACAO_VERSAO);
   // Quem e quem se preenche sempre (so quem/quando, sem texto). No grupo de teste nao: la quem escreve
   // conta como a pessoa escolhida na tela.
   const grupoTeste = _botIaEhTeste(cfg, b.jid);
@@ -14747,7 +15044,7 @@ async function _botIaMensagem(env, cfg, b) {
   let chatId = 0;
   try {
     const ins = await env.DB.prepare('INSERT OR IGNORE INTO bot_chat (ts, dia, grupo, jid, msg_id, de_jid, de_fone, de_nome, quem_id, texto, acao, resposta, motivo, modelo, ms, chamadas, alerta, teste) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(agora, _brDay(), grupo, String(b.jid), msgId, deJid, deFone, deNome, '', _botTexto300(textoMsg, BOT_IA_VISTO_MAX), 'visto', '', '', '', 0, 0, 0, grupoTeste ? 1 : 0).run();
+      .bind(agora, _brDay(), grupo, String(b.jid), msgId, deJid, deFone, deNome, '', _botTexto300(textoLinha, BOT_IA_VISTO_MAX), 'visto', '', '', '', 0, 0, 0, grupoTeste ? 1 : 0).run();
     if (!(ins && ins.meta && ins.meta.changes > 0)) return { ok: true, ignorar: true, motivo: 'repetida' };
     chatId = Number(ins.meta.last_row_id) || 0;
   } catch (e) { return { ok: false, error: 'não consegui gravar a mensagem' }; }
@@ -14758,7 +15055,7 @@ async function _botIaMensagem(env, cfg, b) {
     const u = equipe.find((e) => e.id === String(ia.teste.quem_id || ia.teste.por || ''));
     quemTeste = u ? { id: u.id, nome: u.nome, role: u.role, chefe: u.role === 'diretor' || u.role === 'socio', equipe } : { id: '', nome: '', role: '', chefe: false, equipe };
   }
-  const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, citado: citadoMsg, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste } : undefined);
+  const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, citado: citadoMsg, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste, reage } : { reage });
   if (r.acao === 'visto') {
     // Calado de proposito (falando com outra pessoa): o motivo fica na linha, pra conferir depois.
     if (r.motivo && r.motivo !== 'não era pra mim') { try { await env.DB.prepare('UPDATE bot_chat SET motivo=? WHERE id=?').bind(_botTexto300(r.motivo, 200), chatId).run(); } catch (_) {} }
@@ -14767,9 +15064,10 @@ async function _botIaMensagem(env, cfg, b) {
   const acao = r.responder ? 'pendente' : r.acao;
   try {
     await env.DB.prepare('UPDATE bot_chat SET quem_id=?, texto=?, acao=?, resposta=?, motivo=?, modelo=?, ms=?, chamadas=?, alerta=? WHERE id=?')
-      .bind(r.quem_id || '', _botTexto300(textoMsg, 1000), acao, _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0, chatId).run();
+      .bind(r.quem_id || '', _botTexto300(textoLinha, 1000), acao, _botTexto300(r.resposta, 1500), _botTexto300(r.motivo, 200), r.modelo || '', Number(r.ms) || 0, Number(r.chamadas) || 0, r.alerta ? 1 : 0, chatId).run();
   } catch (_) {}
-  return { ok: true, resposta: r.responder ? r.resposta : '', chat_id: chatId };
+  // Reacao: o agente manda o emoji na mensagem (resposta vazia: o agente antigo fica calado, nunca manda "(reagiu com...)").
+  return { ok: true, resposta: r.responder && !r.reacao ? r.resposta : '', reacao: r.responder && r.reacao ? r.reacao : '', chat_id: chatId };
 }
 async function _botIaAck(env, b) {
   const id = Number(b.chat_id) || 0;
@@ -14812,11 +15110,21 @@ async function _botIaProvocaTexto(env, cfg, v, prox, faltam, ultimoMs, lider, te
   // Sem tempo parado, sem lider e sem apelido (o painel de estilo de 06/11: mensagem automatica dizendo ha
   // quanto tempo o cara esta parado, com a direcao no grupo, soa chefe cobrando, nao resenha).
   void ultimoMs; void lider;
-  const system = _botIaSistema(cfg, 'vend') + '\n\nAgora você NÃO está respondendo ninguém: é uma provocação automática pra um vendedor a ' + faltam + ' de um marco. 1 ou 2 frases curtas, ousadas e engraçadas, no jeito do grupo, com 1 ou 2 emojis (👀😂🔥): de vez em quando uma mini historinha ou piada de maldade de amigo ("ouvi dizer que quem fica no 9 o dia todo...", "contam por aí que..."), sempre dizendo que faltam ' + faltam + ' pro ' + prox + ' e fechando com um chamado (cadê o +1?, só falta o +1, chama, o dia ainda não acabou). Sem apelido, sem citar tempo parado, sem comparar com ninguém, sem cobrança de chefe. Com a Barbara, zoeira limpa. Responda só com JSON {"texto": "..."}.';
-  const user = 'Intensidade: ' + _botIaIntensidade(v.pedidos) + '.\nVendedor: ' + v.nome + (_botIaLimpoCom(v.nome) ? ' (com ' + v.nome.split(' ')[0] + ' a zoeira é LIMPA: sem palavrão, sem duplo sentido, sem piada de sexo)' : '') + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.';
-  const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 2, maxTokens: 300, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
+  // AS DE HOJE (07/11/2026: "ouvi dizer que quem fica no 9 empacado ate 16h dorme de meia" as 16h07 e "ouvi dizer que
+  // quem empaca no 8 a essa hora dorme de meia" as 17h45, o exemplo copiado duas vezes no mesmo dia): as provocacoes de
+  // hoje vao como "nao repita", a IA manda duas opcoes e sai a que nao repete nenhuma (senao, a frase reserva).
+  const hoje = await _botIaProvocacoesDeHoje(env);
+  const system = _botIaSistema(cfg, 'vend') + '\n\nAgora você NÃO está respondendo ninguém: é uma provocação automática pra um vendedor a ' + faltam + ' de um marco. Uma ou duas frases curtas, ousadas e engraçadas, no jeito do grupo, no máximo 1 emoji. Cada provocação é NOVA: outra piada, outra estrutura e outro começo que as de hoje. Formatos pra variar: desafio direto, comparação absurda, falsa notícia urgente, aposta com o grupo, mini historinha. Sempre dizendo que faltam ' + faltam + ' pro ' + prox + ' e fechando com um chamado curto (cadê o +1?, chama, o dia ainda não acabou). Sem apelido, sem citar tempo parado, sem comparar com ninguém, sem cobrança de chefe. Com a Barbara, zoeira limpa. Responda só com JSON {"texto": "...", "outra": "uma segunda provocação, de outro formato"}.';
+  const user = 'Intensidade: ' + _botIaIntensidade(v.pedidos) + '.\nVendedor: ' + v.nome + (_botIaLimpoCom(v.nome) ? ' (com ' + v.nome.split(' ')[0] + ' a zoeira é LIMPA: sem palavrão, sem duplo sentido, sem piada de sexo)' : '') + '. Pedidos hoje: ' + v.pedidos + '. Próximo marco: ' + prox + ' (faltam ' + faltam + '). Hora: ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + '.' + (hoje.length ? '\nProvocações que você já mandou hoje (não repita a piada, a estrutura nem o começo de nenhuma):\n' + hoje.map((x) => '- ' + x).join('\n') : '');
+  const ch = await _botIaChamar(env, system, user, { orcamentoMs: 15000, maxModelos: 2, maxTokens: 400, temperatura: 1, effort: 'low', schema: BOT_IA_SCHEMA_TEXTO, maxTokensClaude: 4000 });
   let texto = '';
-  if (ch.texto) { const j = _botIaJson(ch.texto); const lim = _botIaLimpa(j && j.texto, []); if (lim.texto && !lim.barrou) texto = lim.texto; }
+  if (ch.texto) {
+    const j = _botIaJson(ch.texto) || {};
+    const ops = [j.texto, j.outra].map((x) => _botIaLimpa(x, [])).filter((x) => x.texto && !x.barrou).map((x) => x.texto);
+    const ouviu = hoje.some((h) => /ouvi dizer|dorme de meia/i.test(h));
+    texto = ops.find((x) => !_botIaRepete(x, hoje) && !(ouviu && /ouvi dizer|dorme de meia/i.test(x))) || '';
+    if (texto) texto = _botIaTempero(texto, { festa: false, hist: [], msg: '', sorte: Math.random() });
+  }
   const reserva = !texto;
   if (!texto) texto = _botFrase('{nome}, faltam {faltam} pro {n} 👀 vai deixar escapar agora?', { nome: v.nome, faltam, n: prox });
   if (ch.quota && !ch.texto && !teste) await _writeConfig(env, 'bot_ia_quota_ate', String(Math.floor(agoraMs / 1000) + BOT_IA_QUOTA_PAUSA_S)).catch(() => {});
@@ -14877,6 +15185,9 @@ async function _botIaProvocaTick(env, cfg, dia) {
   let feitosHoje = 0;
   try { const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM bot_chat WHERE acao='provocou' AND dia=?").bind(dia).first(); feitosHoje = Number(r && r.n) || 0; } catch (_) {}
   if (feitosHoje >= BOT_IA_PROVOCA_MAX_DIA) return;
+  // NAO EMENDA (07/11/2026, 17h45: a comemoracao das 15 do Guilherme e, 3 s depois, a provocacao pro Kevin): o bot postou
+  // no grupo ha menos de 5 min, a provocacao espera uma proxima batida.
+  try { const u = await env.DB.prepare('SELECT MAX(ts) AS t FROM bot_outbox WHERE jid=?').bind(String(cfg.grupo.id)).first(); if (u && Number(u.t) > Math.floor(Date.now() / 1000) - 300) return; } catch (_) {}
   const marcos = (Array.isArray(cfg.marcos.lista) ? cfg.marcos.lista : []).map((m) => Number(m.n) || 0).filter((n) => n >= BOT_IA_PROVOCA_MARCO_MIN).sort((a, b) => a - b);
   if (!marcos.length) return;
   const st = await _getDashData(env);
@@ -18464,7 +18775,7 @@ async function handleBotAgente(req, env) {
     if (!ag.vivo || ag.estado !== 'open' || (agoraS - ag.ts) > 30 || !ag.numero || _botSoDigitos(b.numero) !== ag.numero) return err('O bot do PC não está aberto com esse número', 403);
     // Config sem o cache de 30 s quando ele esta velho: ligar/desligar na tela tem que valer em segundos.
     const cfgMsg = await _botCfgLer(env, (Date.now() - _botCfgAt) > 10000);
-    const r = await _botIaMensagem(env, cfgMsg, b);
+    const r = await _botIaMensagem(env, cfgMsg, b, { versao: ag.versao });
     return json(r, r.ok === false ? 500 : 200);
   }
   if (acao === 'msg-ack') return json(await _botIaAck(env, b));
