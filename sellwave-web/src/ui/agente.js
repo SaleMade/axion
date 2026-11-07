@@ -405,6 +405,9 @@
   //                                        teto de 20 s no total. 42 s -> 10; 60 s -> 14; 186 s -> 20.
   //   IMAGEM LOGO DEPOIS DE AUDIO ........ 60 s (04/11/2026), ou a duracao do audio se ele for mais
   //                                        curto. Ver RESPIRO_IMAGEM.
+  //   VIDEO LOGO DEPOIS DE AUDIO ......... 30 s (07/11/2026), ou a duracao do audio se ele for mais
+  //                                        curto. So o PRIMEIRO video: os outros seguem em 0. Ver
+  //                                        RESPIRO_VIDEO.
   //
   // A conta olha pro audio ANTERIOR e nao pro proximo, e essa e a diferenca que importa: o que o
   // lead precisa e de tempo pra ouvir o que acabou de chegar. Olhando pro proximo, a regra velha
@@ -415,10 +418,18 @@
   // sai o audio do valor (2min26) e a imagem com "R$ 497" chegava junto: o lead via o preco antes
   // de ouvir a explicacao e desistia ("na hora que elas veem a imagem e veem um preco de 497, nao
   // era vontade de comprar"). Ele pediu "mais ou menos 1 minuto de tempo para escutar o audio".
-  // So IMAGEM logo depois de AUDIO: os videos de prova social do "Etapa 3" continuam saindo de uma
-  // vez, e audio mais curto que 60 s espera so a propria duracao. Sem "gravando": e silencio de
-  // proposito, o lead esta ouvindo. O Parar continua soltando na hora (esperaOuPara).
+  // So IMAGEM logo depois de AUDIO (o video tem a regra dele, abaixo), e audio mais curto que 60 s
+  // espera so a propria duracao. Sem "gravando": e silencio de proposito, o lead esta ouvindo. O
+  // Parar continua soltando na hora (esperaOuPara).
   var RESPIRO_IMAGEM = 60
+  // O PRIMEIRO VIDEO ESPERA O LEAD DAR PLAY NO AUDIO (07/11/2026, pedido do Guilherme pelo Bruno). No
+  // "Etapa 3 - Provas Sociais" (H e M) sai o audio "03 Provas Sociais" (2min54) e os tres videos
+  // chegavam logo atras: "muita gente acaba pulando aquele audio ali que e muito importante (...) ve
+  // aquele monte de video, ja sai clicando no video antes de ouvir o audio". Ele pediu "uns 30s no
+  // maximo", "so o tempo pra pessoa dar o play no audio, ai depois o funil envia os videos".
+  // So o video logo depois de AUDIO: video depois de video continua em 0 (os tres chegam juntos,
+  // como antes), e audio mais curto que 30 s espera so a propria duracao. Mesmo silencio da imagem.
+  var RESPIRO_VIDEO = 30
   // O TEMPO QUE O VENDEDOR ESCOLHEU NO FUNIL DELE (05/11/2026). O funil criado no painel tem, em cada
   // passo, "automatico" (null: as regras acima) ou um tempo fixo (`espera`, em segundos, 0 a 120). O
   // tempo escolhido vence as regras, menos no primeiro item: esse continua saindo no clique.
@@ -430,9 +441,10 @@
       return Promise.resolve(Math.max(0, Math.min(ESPERA_TETO, Math.round(Number(item.espera)))))
     }
     var k = String(item.kind || '')
-    if (k === 'image' && ant && ant.kind === 'audio') {
+    if ((k === 'image' || k === 'video') && ant && ant.kind === 'audio') {
+      var cheio = k === 'image' ? RESPIRO_IMAGEM : RESPIRO_VIDEO
       var ouvir = Number(ant.dur) || 0
-      return Promise.resolve(ouvir > 0 ? Math.min(RESPIRO_IMAGEM, Math.ceil(ouvir)) : RESPIRO_IMAGEM)
+      return Promise.resolve(ouvir > 0 ? Math.min(cheio, Math.ceil(ouvir)) : cheio)
     }
     if (k === 'image' || k === 'video' || k === 'document') return Promise.resolve(0)
     var seg = RESPIRO_BASE
@@ -505,9 +517,8 @@
     // TRAVA FINAL DO ENVIO. Mesmo que algo mais acima erre, nada sai pra grupo ou lista.
     if (!ehPessoa(chatId)) return Promise.reject(new Error('essa conversa não é de uma pessoa'))
     if (!podeEnviar()) return Promise.reject(new Error('o motor do WhatsApp não está pronto'))
-    // A PAUSA DO PASSO E DAQUI PRA BAIXO, e quem decide quanto e o `respiroDoItem` (26/10/2026):
-    // audio espera metade da propria duracao, imagem/video/documento nao esperam, texto usa o que
-    // veio do passo do roteiro. Ela virou PROMESSA porque ler a duracao do audio e assincrono.
+    // A PAUSA DO PASSO E DAQUI PRA BAIXO, e quem decide quanto e o `respiroDoItem` (a tabela das
+    // regras esta em cima dele). Ela virou PROMESSA porque ler a duracao do audio e assincrono.
     window.__swParar = false
     var dataUri = item.dataUri
     if (item.tipo !== 'texto' && !dataUri) return Promise.reject(new Error('mídia não veio junto'))
@@ -521,7 +532,7 @@
       item.__dur = durDeste
       return respiroDoItem(item, ant, ehPrimeiro)
     }).then(function (seg) {
-      // O clamp continua, agora com folga de sobra: a regra nova nunca passa de 20 s.
+      // O clamp continua: nenhuma regra passa de 120 s (o maior e o tempo escolhido pelo vendedor).
       var pausaMs = Math.max(0, Math.min(120, Number(seg) || 0)) * 1000
 
       if (item.tipo === 'texto') {

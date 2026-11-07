@@ -14,6 +14,7 @@
 //   AUDIO / TEXTO, do segundo em diante  10 s de base
 //   ANTERIOR FOI AUDIO LONGO ........... +1 s a cada 6 s acima de 40, teto de 20 s no total
 //   IMAGEM LOGO DEPOIS DE AUDIO ........ 60 s, ou a duracao do audio se for menor (04/11/2026)
+//   VIDEO LOGO DEPOIS DE AUDIO ......... 30 s, ou a duracao do audio se for menor (07/11/2026)
 //
 // A conta olha pro audio ANTERIOR, nao pro proximo: o que o lead precisa e de tempo pra OUVIR o que
 // acabou de chegar. Era olhar pro proximo que castigava a abertura do funil.
@@ -62,6 +63,7 @@ const CONST = (nome) => {
 const BASE = CONST('RESPIRO_BASE')
 const TETO = CONST('RESPIRO_TETO')
 const IMG = CONST('RESPIRO_IMAGEM')
+const VID = CONST('RESPIRO_VIDEO')
 const ESPERA_TETO = CONST('ESPERA_TETO')
 conta('o agente declara a base e o teto do respiro', BASE === 10 && TETO === 20, 'base=' + BASE + ' teto=' + TETO)
 
@@ -87,7 +89,7 @@ function montar({ duracao, falha, mudo }) {
   const ctx = vm.createContext({ Audio, Promise, setTimeout, clearTimeout, Number, isFinite, String, Math })
   // As constantes vao com os valores RECORTADOS do agente, nao com numeros digitados aqui: se
   // alguem mudar 10 ou 20 la, o teste passa a medir o valor novo em vez de mentir.
-  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + '; var RESPIRO_IMAGEM = ' + IMG + '; var ESPERA_TETO = ' + ESPERA_TETO + ';\n'
+  vm.runInContext('var RESPIRO_BASE = ' + BASE + '; var RESPIRO_TETO = ' + TETO + '; var RESPIRO_IMAGEM = ' + IMG + '; var RESPIRO_VIDEO = ' + VID + '; var ESPERA_TETO = ' + ESPERA_TETO + ';\n'
     + pecas.duracaoDoAudio + '\n' + pecas.respiroDoItem + '\nthis.R = respiroDoItem\nthis.D = duracaoDoAudio', ctx)
   return ctx
 }
@@ -130,10 +132,11 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
 
   // ── MIDIA SAI DE UMA VEZ SO (regra de 26/10, que fica de pe) ────────────────────────────────
   console.log('\nIMAGEM, VIDEO E DOCUMENTO')
-  for (const k of ['video', 'document']) {
-    conta(k + ' nao espera nada, nem depois de audio longo',
-      (await R(item(k), audio(186), false)) === 0)
-  }
+  conta('documento nao espera nada, nem depois de audio longo',
+    (await R(item('document'), audio(186), false)) === 0)
+  conta('video depois de texto nao espera nada', (await R(item('video'), { kind: '', dur: 0 }, false)) === 0)
+  conta('video depois de imagem nao espera nada', (await R(item('video'), { kind: 'image', dur: 0 }, false)) === 0)
+  conta('video que abre o funil sai na hora', (await R(item('video'), audio(174), true)) === 0)
   conta('imagem depois de texto nao espera nada', (await R(item('image'), { kind: '', dur: 0 }, false)) === 0)
   conta('imagem depois de outra imagem nao espera nada', (await R(item('image'), { kind: 'image', dur: 0 }, false)) === 0)
   conta('imagem que abre o funil sai na hora', (await R(item('image'), audio(146), true)) === 0)
@@ -147,7 +150,21 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   conta('audio de 30 s atras: espera so os 30 s dele', (await R(item('image'), audio(30), false)) === 30)
   conta('audio de 42,3 s arredonda pra cima (43)', (await R(item('image'), audio(42.3), false)) === 43)
   conta('audio que nao disse a duracao: espera o minuto cheio', (await R(item('image'), audio(0), false)) === 60)
-  conta('video depois do mesmo audio continua sem espera (provas sociais)', (await R(item('video'), audio(146), false)) === 0)
+
+  // ── O PRIMEIRO VIDEO ESPERA O LEAD DAR PLAY NO AUDIO (07/11/2026) ───────────────────────────
+  // "Etapa 3 - Provas Sociais" (H e M): audio "03 Provas Sociais" de 173,8 s (medido no arquivo),
+  // tres videos e o audio "04" de 33,5 s. O Guilherme viu o lead clicar nos videos antes de ouvir o
+  // audio e pediu "uns 30s no maximo" antes dos videos. Abaixo, a etapa inteira passo a passo.
+  console.log('\nVIDEO LOGO DEPOIS DE AUDIO (a Etapa 3, passo a passo)')
+  conta('o agente declara a espera do video em 30 s', VID === 30, 'RESPIRO_VIDEO=' + VID)
+  conta('passo 1: o audio "03 Provas Sociais" sai no clique', (await R(item('audio'), null, true)) === 0)
+  conta('passo 2: o primeiro video espera 30 s depois desse audio', (await R(item('video'), audio(173.8), false)) === 30)
+  conta('passos 3 e 4: os outros videos saem logo atras, sem espera', (await R(item('video'), { kind: 'video', dur: 0 }, false)) === 0)
+  conta('passo 5: o audio "04" depois do video fica nos 10 s de base', (await R(item('audio'), { kind: 'video', dur: 0 }, false)) === 10)
+  conta('audio de 20 s atras: o video espera so os 20 dele', (await R(item('video'), audio(20), false)) === 20)
+  conta('audio de 12,2 s arredonda pra cima (13)', (await R(item('video'), audio(12.2), false)) === 13)
+  conta('audio que nao disse a duracao: o video espera os 30 s cheios', (await R(item('video'), audio(0), false)) === 30)
+  conta('a imagem depois de audio continua com o minuto dela', (await R(item('image'), audio(173.8), false)) === 60)
 
   // ── O TEMPO QUE O VENDEDOR ESCOLHEU NO FUNIL DELE (05/11/2026) ──────────────────────────────
   console.log('\nO TEMPO ESCOLHIDO NO FUNIL DO VENDEDOR')
@@ -155,12 +172,15 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   conta('o agente declara o teto da espera escolhida em 120 s', ESPERA_TETO === 120, 'ESPERA_TETO=' + ESPERA_TETO)
   conta('texto com 30 s escolhidos espera 30, nao os 10 da regra', (await R(comEspera('texto', 30), { kind: '', dur: 0 }, false)) === 30)
   conta('audio com 5 s escolhidos espera 5, mesmo depois de audio longo', (await R(comEspera('audio', 5), audio(186), false)) === 5)
-  conta('video com 20 s escolhidos espera 20 (a regra seria 0)', (await R(comEspera('video', 20), audio(30), false)) === 20)
+  conta('video com 20 s escolhidos espera 20 (a regra seria 0)', (await R(comEspera('video', 20), { kind: 'video', dur: 0 }, false)) === 20)
+  conta('video com 10 s escolhidos depois de audio espera 10, nao os 30 da regra', (await R(comEspera('video', 10), audio(174), false)) === 10)
   conta('imagem com 0 escolhido sai na hora, mesmo depois de audio', (await R(comEspera('image', 0), audio(146), false)) === 0)
+  conta('video com 0 escolhido sai na hora, mesmo depois de audio', (await R(comEspera('video', 0), audio(174), false)) === 0)
   conta('espera absurda para no teto de 120', (await R(comEspera('texto', 9999), null, false)) === 120)
   conta('espera negativa vira zero', (await R(comEspera('texto', -5), null, false)) === 0)
   conta('o primeiro item sai no clique mesmo com tempo escolhido', (await R(comEspera('texto', 30), null, true)) === 0)
   conta('automatico (null) segue a regra: imagem depois de audio = 60', (await R(comEspera('image', null), audio(146), false)) === 60)
+  conta('automatico (null) segue a regra: video depois de audio = 30', (await R(comEspera('video', null), audio(174), false)) === 30)
   conta('espera vazia ("") tambem e automatico', (await R(comEspera('texto', ''), { kind: '', dur: 0 }, false)) === 10)
 
   // O main corta o envio que passa do teto dele ("o numero nao respondeu a tempo"). A imagem nao
@@ -173,6 +193,11 @@ const item = (kind) => ({ tipo: kind === 'texto' ? 'texto' : 'midia', kind: kind
   const tetoImg = tetoDoItem ? tetoDoItem({ tipo: 'midia', kind: 'image', pausa: 0 }) : 0
   conta('o teto do app pra imagem cabe os 60 s com pelo menos 1 min pro upload',
     tetoImg >= (IMG + 60) * 1000, 'teto=' + tetoImg + 'ms')
+  // O video tambem nao tem espera no teto do main, mas o tempo de envio dele e o maior (180 s), entao
+  // os 30 s cabem sem build novo do app: a regra sai so pelo agente no R2.
+  const tetoVid = tetoDoItem ? tetoDoItem({ tipo: 'midia', kind: 'video', pausa: 0 }) : 0
+  conta('o teto do app pra video cabe os 30 s com pelo menos 2 min pro upload',
+    tetoVid >= (VID + 120) * 1000, 'teto=' + tetoVid + 'ms')
   for (const k of ['texto', 'audio', 'image', 'video']) {
     const it = { tipo: k === 'texto' ? 'texto' : 'midia', kind: k === 'texto' ? '' : k, pausa: 0, espera: ESPERA_TETO }
     const sem = { ...it, espera: null }
