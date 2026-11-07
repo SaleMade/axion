@@ -13400,7 +13400,19 @@ const BOT_IA_MARCADO = { vend: 'tô aqui! manda: número, meta ou pedido que eu 
 const BOT_IA_NAO_SEI_QUEM = 'ainda não sei quem é vc aqui, então não consigo abrir pedido nem número. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)';
 // Palavra de PROBLEMA: e o unico gatilho espontaneo (sem marcar o bot). '?', 'pedido', 'cliente',
 // 'numero' e 'app' NAO acendem sozinhos: no grupo dos vendedores quase toda mensagem tem isso.
-const BOT_IA_PROBLEMA_RE = /\b(caiu|cair|caindo|banid[oa]s?|bloque(?:ou|ad[oa]s?|io)|travou|travando|travad[oa]|desconect(?:ou|ad[oa]|a|ando)|n[aã]o consigo|n[aã]o abre|n[aã]o carrega|n[aã]o funciona|erro|bug|deu ruim|parou de funcionar)\b/i;
+const BOT_IA_PROBLEMA_RE = /\b(caiu|cair|caindo|banid[oa]s?|bloque(?:ou|aram|ad[oa]s?|io)|travou|travando|travad[oa]|desconect(?:ou|ad[oa]|a|ando)|n[aã]o consigo|n[aã]o abre|n[aã]o carrega|n[aã]o funciona|erro|bug|deu ruim|parou de funcionar)\b/i;
+// BLOQUEIO DO CLIENTE (07/11/2026, print do Bruno no grupo dos cobradores: "Lead bloqueou" virou "desliga o interruptor
+// dele no SellWave Web" e aviso de numero caido pra direcao). Aqui "bloqueou" quase sempre e o CLIENTE que bloqueou o
+// vendedor ou o cobrador no WhatsApp: e cobranca, nao queda. Numero bloqueado pelo WhatsApp so com numero, chip, whats,
+// zap ou conta na frase, ou "fui/to/estou bloqueado", e nunca com lead, cliente, ele ou ela bloqueando. O resto vira
+// "clientebloqueou": problema e numero nao acendem, e o manual acha o item do cliente que bloqueou.
+const BOT_IA_BLOQ_CLIENTE_RE = /(\b(lead|leads|cliente|clientes|clienta|clientas|ela|ele|elas|eles|mo[cç]a|mulher|senhora|senhor|velh[ao]|dona|fulan[ao])\b[^.!?\n]{0,25}\bbloque|(?<!\b(?:whats|whatsapp|zap|meta)\s)\b(me|te|nos)\s+bloque|\bbloquead[oa]s?\s+pel[oa]s?\s+(lead|cliente|clienta))/i;
+const BOT_IA_BLOQ_NUMERO_RE = /(\b(n[uú]mero|numero|chip|whats|whatsapp|zap|conta)\b[^.!?\n]{0,30}\bbloque|\bbloque\w*\b[^.!?\n]{0,25}\b(n[uú]mero|numero|chip|whats|whatsapp|zap|conta)\b|\b(fui|fomos|t[oô]|tou|estou|tava|estava|fiquei|ficamos)\s+bloquead|\b(tomei|levei|tomou|levou)\s+(um\s+)?bloqueio)/i;
+function _botIaTextoProblema(t) {
+  const s = String(t == null ? '' : t);
+  if (!/bloque/i.test(s) || (!BOT_IA_BLOQ_CLIENTE_RE.test(s) && BOT_IA_BLOQ_NUMERO_RE.test(s))) return s;
+  return s.replace(/\bbloque\w*/gi, 'clientebloqueou');
+}
 // Palavra de COMEMORACAO (06/11/2026, pedido do Bruno: "caso algum deles bata meta, chegue num numero bom, ele tambem
 // participe da comemoracao, de um gritao"): o outro gatilho sem marcar. So palavra forte de festa ("bora" sozinho nao);
 // a IA so entra se o placar confirmar, e no maximo uma tentativa a cada BOT_IA_FESTA_S no grupo.
@@ -14090,6 +14102,18 @@ function _botIaPedidoTexto(l, st, nomes, tagMap, completo, ps) {
   if (com.length) { const t = _cobTs(com[0] && com[0].quando); L.push('Comentários no pedido: ' + com.length + (t ? ', o último em ' + _botIaHoraTxt(t) : '') + ' (o conteúdo fica na dash).'); }
   return L.join('\n');
 }
+// A FICHA DO CLIENTE colada no grupo (nome, CPF, WhatsApp, endereco, CEP, total), nas ultimas mensagens que vao pra IA,
+// vira so "mandou a ficha de C1" (07/11/2026: a ficha de uma cliente com o nome escrito diferente da base foi pra IA com
+// o nome, porque a troca por C1 so conhece nome que esta na base). A linha chega aqui ja passada pelo ps.texto.
+function _botIaFichaCurta(linha) {
+  const s = String(linha == null ? '' : linha);
+  const sinais = [/\bcpf\b/i, /\bcep\b/i, /\[endereço\]/, /\btotal\s*:/i, /\btratamento\s*:/i, /\bwhats(?:app)?\s*:/i, /\[número final \d{4}\]/].filter((re) => re.test(s)).length;
+  if (sinais < 3) return s;
+  const i = s.indexOf(': ');
+  const quem = i > 0 && i <= 60 ? s.slice(0, i) : 'alguém';
+  const c = s.match(/\bC\d+\b/);
+  return quem + ': [mandou a ficha ' + (c ? 'de ' + c[0] : 'de um cliente') + '; nome, CPF, telefone e endereço ficam de fora]';
+}
 async function _botIaRecentes(env, jid) {
   try {
     const r = await env.DB.prepare('SELECT de_nome, quem_id, texto, acao, resposta FROM bot_chat WHERE jid=? AND ts>? AND acao<>? ORDER BY id DESC LIMIT ?').bind(String(jid || ''), Math.floor(Date.now() / 1000) - 1800, 'provocou', BOT_IA_CONTEXTO_MSGS).all();
@@ -14148,6 +14172,37 @@ function _botIaSemVocativo(texto, nome) {
   t = t.replace(new RegExp(',\\s*' + N + '(?![\\p{L}\\p{N}])(?=\\s*(?:[!?.,;:)]|$|k{3,}|\\p{Extended_Pictographic}))', 'giu'), '');
   return t.replace(/\s+([!?.,;:])/g, '$1').replace(/,\s*([!?.,;:])/g, '$1').replace(/^\s*[,!.;:]\s*/, '').trim();
 }
+// FALANDO COM OUTRA PESSOA (07/11/2026, print do Bruno no grupo dos cobradores: o cobrador colou a ficha de um cliente,
+// marcou o Bruno e o Heynan, escreveu "Lead bloqueou" e "Mete o terror nessa verme", e o bot entrou nas duas). Quem marca
+// alguem que nao o bot, nesta mensagem ou numa das ultimas dele (ate 3 min), ou chama alguem do time pelo nome no comeco
+// ("Heynan, ..."), esta falando com essa pessoa. A marcacao chega aqui trocada por "@Nome" ou "@alguém" (_botIaTextoSemMarca).
+const BOT_IA_MARCA_OUTRO_RE = /(^|[\s(])@(?!barbadinho(?![\p{L}\p{N}]))[\p{L}\p{N}]/iu;
+const BOT_IA_MARCA_BOT_RE = /(^|[\s(])@barbadinho(?![\p{L}\p{N}])/iu;
+const BOT_IA_COM_OUTRO_S = 180;
+async function _botIaMarcouOutroHaPouco(env, jid, deJid, msgId) {
+  if (!jid || !deJid) return false;
+  try {
+    const r = await env.DB.prepare('SELECT texto, msg_id FROM bot_chat WHERE jid=? AND de_jid=? AND ts>? ORDER BY id DESC LIMIT 6').bind(String(jid), String(deJid), Math.floor(Date.now() / 1000) - BOT_IA_COM_OUTRO_S).all();
+    // A marcacao mais nova manda: se depois de marcar o Bruno a pessoa marcou o bot, a conversa e com o bot.
+    for (const x of ((r && r.results) || [])) {
+      if (msgId && String(x.msg_id || '') === String(msgId)) continue;
+      const t = String(x.texto || '');
+      if (BOT_IA_MARCA_BOT_RE.test(t)) return false;
+      if (BOT_IA_MARCA_OUTRO_RE.test(t)) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+// O primeiro nome de quem foi chamado no comeco da mensagem ("Heynan, o lead sumiu", "Bruno?"), se for alguem do time
+// que nao o bot nem quem escreveu.
+function _botIaChamouOutroPeloNome(texto, equipe, deNome) {
+  const m = String(texto || '').trim().match(/^(\p{L}{3,})\s*(?:[,:!?]|$)/u);
+  if (!m) return '';
+  const w = _botIaNorm(m[1]);
+  if (!w || w === 'barbadinho' || w === _botIaNorm(deNome).split(' ')[0]) return '';
+  const u = (equipe || []).find((x) => x && _botIaNorm(x.nome).split(' ')[0] === w);
+  return u ? String(u.nome || '').trim().split(/\s+/)[0] : '';
+}
 async function _botIaEmConversa(env, jid, deJid) {
   try {
     const r = await env.DB.prepare("SELECT 1 AS ok FROM bot_chat WHERE jid=? AND de_jid=? AND acao IN ('respondeu','pendente') AND ts>? LIMIT 1").bind(String(jid), String(deJid), Math.floor(Date.now() / 1000) - BOT_IA_CONVERSA_S).first();
@@ -14170,7 +14225,7 @@ async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg, soPara
   const equipe = await _botEquipe(env);
   const chefes = equipe.filter((u) => (u.role === 'diretor' || u.role === 'socio') && (!soPara || u.id === soPara));
   if (!chefes.length) return { entregues: 0, nomes: [] };
-  const assunto = (soPara ? 'teste_' : '') + (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (BOT_IA_NUMERO_RE.test(texto) ? 'numero' : 'geral');
+  const assunto = (soPara ? 'teste_' : '') + (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (BOT_IA_NUMERO_RE.test(_botIaTextoProblema(texto)) ? 'numero' : 'geral');
   const agora = Math.floor(Date.now() / 1000);
   let ultimo = 0;
   try { ultimo = Number(await _readConfig(env, 'bot_iaav_' + assunto)) || 0; } catch (_) { ultimo = 0; }
@@ -14213,6 +14268,8 @@ const BOT_IA_SISTEMA = [
   '',
   'PROBLEMA: acolhe primeiro e resolve, sem duvidar de quem relatou. Abre com uma reação de quem sentiu junto ("putz", "eita", "vish"; vale até um "puta merda") e, se a pessoa está desabafando, um "relaxa" ou "calma, queridão"; depois o próximo passo prático. Nada de kkkk nem festa, e nada de "faz parte". Diga "já avisei o Bruno" SÓ se aviso_entregue for true; senão peça pra marcar o Bruno aqui no grupo. Preencha avisar_direcao com um resumo curto.',
   '- Número caiu: acredite em quem falou, o app às vezes demora pra registrar a queda. NUNCA diga que não aparece queda, que o número tá ok ou conectado: isso soa como desmentir. Se os dados mostram que ele ainda recebe lead, diga que ele precisa sair da roleta logo pra não perder lead. O jeito: "puta merda, relaxa queridão! já avisei o Bruno pra ajeitar outro número e você não perder o bonde".',
+  '- Cliente que bloqueou ("lead bloqueou", "a cliente me bloqueou", "deu block"): quem bloqueou foi o cliente, não caiu nada. Nada de interruptor, chip novo ou queda: é cobrança, use o MANUAL.',
+  '- No grupo dos cobradores não existe interruptor nem roleta: número de cobrança caiu, é só o Bruno ajeitar outro.',
   '- Pedido que não subiu ou sumiu: diga se ele aparece nos DADOS e em que situação está (aguardando aprovação da direção, a enviar, enviado...). Se não aparece, diga que não achou e peça o nome completo ou o telefone do cliente.',
   'DADO: a resposta direta na primeira frase. Empurrão no fim (bora buscar, mete marcha, bora moer) só de vez em quando e só se a pergunta é de venda, cobrança, placar ou meta; dúvida de como fazer, de prioridade ou pergunta boba vai sem empurrão. Dúvida de como usar a dash, o app ou a operação: responda com o MANUAL que vier nos DADOS, curto e no jeito do grupo (o passo a passo pode passar de 2 frases); se não veio manual pra essa dúvida, diga que essa você não sabe e quem resolve (QUEM RESOLVE).',
   'FESTA: a intensidade segue o número do dia de quem comemora (vem nos DADOS): até 5, festa leve e de boa; de 6 a 9, animada; 10 ou mais, aí sim o GRITÃO de torcida, só quando o placar dos DADOS confirma: "ISSO AÍ PORRAAAA", "tu é foda", "BOOORA", "segura o homi", "é os guri", "tá voando", vogal esticada, CAIXA ALTA, kkkkk, palavrão de comemoração (porra, caralho, krl, foda) e 1 a 3 emojis (🔥🚀💰🍾🐐🤑). O número da pessoa é a festa: as vendas de hoje, o pedido que voltou, quanto falta pro próximo marco ou faixa do mês. Se o placar não confirma o que comemoraram, não comemore: diga o número do placar sem acusar ninguém e que a festa sai sozinha quando bater.',
@@ -14256,6 +14313,7 @@ const BOT_IA_SISTEMA = [
   '- Quando te MARCAM (@Barbadinho), responda sempre (responder = true).',
   '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "kkkkk valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
   '- Sem te chamarem, só entre se for problema que os dados resolvem ou comemoração que os DADOS confirmam (aí entra com um grito curto); papo entre pessoas = responder false. Não responda a mesma coisa duas vezes.',
+  '- Mensagem que marca outra pessoa (@Fulano, @alguém) ou que chama alguém do time pelo nome é com essa pessoa, mesmo com problema ou cliente no meio: responder false.',
   '',
   'Responda SOMENTE com JSON, sem nada antes ou depois: {"responder": true ou false, "texto": "a mensagem", "avisar_direcao": "" ou "resumo curto do problema", "buscar": "" ou "nome ou telefone de um pedido que você precisa e não veio"}.',
 ].join('\n');
@@ -14319,6 +14377,7 @@ const BOT_IA_EXEMPLOS = {
   '"CAIU O PIX DA C1 KRL" (Bryan, sem marcar; o pedido de C1 pago hoje; 4 de volta hoje) -> boaaa, mais um de volta! já são 4 hj 💰',
   '"@Barbadinho bati minha meta, solta um áudio" (Bryan: 2 de volta hoje) -> áudio eu ainda não mando kkkkk aqui eu vejo 2 de volta hj. quando a meta bater a festa sai sozinha',
   '"@Barbadinho o SellWave Web travou aqui, n abre a ficha" (aviso_entregue true) -> putz. daqui eu não enxergo o app, só a sua fila. já avisei a direção pra olhar',
+  '"@Barbadinho o lead me bloqueou" (Bryan; pedido em cobrança) -> aí quem bloqueou foi o cliente, não caiu nada do seu lado. tem outro número seu aberto? chama por ele; se não, manda os dados aqui marcando o Heynan ou o Bruno pra chamarem de outro número',
   '"@Barbadinho quantos pedidos eu tenho pra cobrar?" (pessoa não identificada) -> ainda não sei quem é vc aqui, então não consigo abrir pedido nem fila. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)',
   ],
 };
@@ -14342,7 +14401,9 @@ const BOT_IA_MANUAL = [
  {"t": "Criar mensagem, áudio ou funil próprio", "q": "como eu crio minha propria mensagem, audio ou funil no painel?", "k": ["botao mais", "criar", "crio", "funil proprio", "mensagem pronta", "meu funil", "objecao", "salvar audio", "salvar mensagem"], "r": "No painel da direita, o + (Criar): mensagem, áudio (grava ou escolhe), vídeo, foto ou PDF, e escolhe Só eu ou Todos. No funil próprio você monta os passos e o tempo de cada um. O lápis esconde da sua lista, edita ou apaga o que é seu. Os oficiais quem muda é a direção. Objeção nova sem material? Pede pro Heynan."},
  {"t": "Funil apagado com \"já enviado\"", "q": "a etapa ta apagada com ja enviado, por que?", "k": ["apagada", "apagado", "ja enviado", "mandar de novo o funil", "repetir funil"], "r": "É só aviso: o funil fica apagado com \"já enviado\" quando já foi pra esse lead, pra você não repetir sem querer. Quer mandar de novo? Clica duas vezes no botão de enviar dele (o segundo clique em até 6 segundos)."},
  {"t": "Falar com o lead por outro número", "q": "o numero caiu no meio da conversa, consigo falar com ele por outro?", "k": ["card do lead", "continuar a conversa", "falar com ele por", "por outro", "por outro numero", "trocar de numero"], "r": "Dá sim. No CRM do Atendimento (a faixa de baixo do SellWave Web), o card do lead tem o botão de trocar: chama ele por outro número aberto aí. O botão direito no card abre o mesmo menu e tem Copiar o número. Se o número de origem foi banido, saiu da sua lista ou tá fechado como Restrito, esse menu abre sozinho."},
- {"t": "Número caiu", "q": "meu numero caiu, tava cheio de lead", "k": ["banid", "bloque", "caindo", "cair", "caiu", "desconect", "pediu qr", "qr code", "queda"], "r": "Desliga o interruptor dele no SellWave Web pra não ir mais lead pra ele (o sistema também tira sozinho quando confirma a queda) e deixa os outros ligados. O Bruno ajeita outro número: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Número que ficou Restrito perde o interruptor (fica um tracinho); a volta é com o Bruno."},
+ {"t": "Número caiu", "q": "meu numero caiu, tava cheio de lead", "k": ["banid", "bloque", "caindo", "cair", "caiu", "desconect", "pediu qr", "qr code", "queda"], "r": "Desliga o interruptor dele no SellWave Web pra não ir mais lead pra ele (o sistema também tira sozinho quando confirma a queda) e deixa os outros ligados. O Bruno ajeita outro número: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Número que ficou Restrito perde o interruptor (fica um tracinho); a volta é com o Bruno.", "g": "vend", "so": "vend"},
+ {"t": "Número de cobrança caiu", "q": "meu numero de cobranca caiu", "k": ["banid", "bloque", "caindo", "cair", "caiu", "desconect", "pediu qr", "qr code", "queda"], "r": "Número de cobrança não tem interruptor, então não tem o que desligar. O Bruno ajeita outro número: eu aviso ele daqui, e se o aviso não sair, marca ele aqui com o final do número. Enquanto isso, se tem outro número seu aberto no SellWave Web, dá pra chamar o cliente por ele (botão direito no card).", "g": "cob", "so": "cob"},
+ {"t": "Cliente bloqueou", "q": "o lead me bloqueou, e agora?", "k": ["clientebloqueou", "deu block", "dado block", "block"], "r": "Quem bloqueou foi o cliente, não caiu nada do seu lado: não mexe em interruptor nem precisa de chip novo. Se tem outro número seu aberto no SellWave Web, chama ele por lá (botão direito no card). Se é pedido em cobrança e não tem outro número, manda os dados do pedido aqui marcando o Heynan ou o Bruno, pra chamarem o cliente de outro número."},
  {"t": "Por que os números caem tanto", "q": "por que meus numeros caem tanto? e meu computador?", "k": ["caem tanto", "cai muito", "caindo muito", "por que caem", "por que cai"], "r": "Pelo que foi medido até agora, não tem sido o computador nem o login. O que mais derruba é número novo, ou que já caiu antes, pegando volume de cara e mandando mais mensagem do que recebe. No número novo, responde quem falou e evita mandar várias pra quem não respondeu. Caiu, avisa o Bruno."},
  {"t": "Lead parou de chegar", "q": "parou de chegar lead pra mim, o que pode ser?", "k": ["lead nenhum", "nao chega lead", "nao estou recebendo", "nao recebo lead", "nao ta chegando", "nao to recebendo", "parou de chegar", "pingado", "sem lead"], "r": "Confere no SellWave Web: app aberto e interruptor verde (laranja = bateu o limite ou parado até a meia-noite, cinza = desligado; tracinho = número fora de uso, não recebe). A roleta iguala os leads do dia: quem tá na frente espera os outros empatarem. Parou pra todo mundo? Marca o Heynan e o Bruno. Só pra você: marca o Bruno.", "g": "vend"},
  {"t": "Ligar e desligar o recebimento", "q": "como faco pra parar de receber lead pra almocar?", "k": ["almocar", "almoco", "desligar", "desligo", "expediente", "ligar de novo", "parar de receber", "pausa", "pausar", "sair um pouco"], "r": "No SellWave Web, o interruptor do lado de cada número: verde recebe, cinza não (com a barra encolhida ele some: abre a barra na setinha do topo). Vai sair? Desliga. Voltou? Liga. Fechar o app desliga todos sozinho em poucos minutos e, ao abrir, você liga de novo: nada religa sozinho. Pela dash ele só liga com o app aberto.", "g": "vend"},
@@ -14409,13 +14470,14 @@ const BOT_IA_MANUAL = [
 ];
 const BOT_IA_QUEM_RESOLVE = "QUEM RESOLVE (quando não dá pra resolver por aqui):\n- Bruno (tecnologia): número caído, banido ou pedindo QR; defeito que continua no app ou na dash; login e senha; pedido que sumiu ou duplicou; placar que não bate; roleta, limite e números de outra pessoa; quem é quem e o jeito do bot.\n- Heynan (comercial): campanha e orçamento; cliente difícil (recusa pagar, ameaça, advogado, reclama do produto); desconto e valor fora da tabela; cancelar pedido aprovado ou enviado; devolução; cliente que diz que não recebeu; comissão, saque, nota e premiação; troca de cobrador; criativo e material de objeção; chave Pix diferente da CNPJ.";
 // Os itens do manual que batem com a mensagem (palavra curta inteira; palavra longa pelo comeco), no maximo 3.
-// Item de um grupo so perde meio ponto no outro grupo: no empate, vem antes o do grupo em que perguntaram.
+// Item de um grupo so perde meio ponto no outro grupo: no empate, vem antes o do grupo em que perguntaram. Item com
+// "so" nem aparece no outro grupo (07/11: o numero caido do vendedor manda desligar o interruptor, que cobrador nao tem).
 function _botIaManualPara(texto, grupo) {
-  const n = ' ' + _botIaNorm(texto) + ' ';
+  const n = ' ' + _botIaNorm(_botIaTextoProblema(texto)) + ' ';
   if (n.trim().length < 3) return [];
   const bate = (k) => (k.length <= 4 ? n.includes(' ' + k + ' ') : n.includes(' ' + k));
   return BOT_IA_MANUAL.map((it) => ({ it, p: it.k.reduce((s, k) => s + (bate(k) ? (k.includes(' ') ? 2 : 1) : 0), 0) }))
-    .filter((x) => x.p > 0)
+    .filter((x) => x.p > 0 && !(grupo && x.it.so && x.it.so !== grupo))
     .map((x) => ({ it: x.it, p: x.p - (grupo && x.it.g && x.it.g !== grupo ? 0.5 : 0) }))
     .sort((a, b) => b.p - a.p).slice(0, 3).map((x) => x.it);
 }
@@ -14440,6 +14502,9 @@ async function _botIaResponder(env, cfg, b, opts) {
   // Busca de pedido e detectores olham o texto SEM as marcacoes ("@Barbadinho", "@Guilherme"): nome de
   // quem foi marcado nao e nome de cliente. O numero do vendedor (pedido da direcao) olha o texto inteiro.
   const textoBusca = texto.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Os detectores de PROBLEMA e de NUMERO (e o manual) olham o texto com o bloqueio do cliente trocado
+  // (_botIaTextoProblema): "Lead bloqueou" nao e numero caido.
+  const textoProb = _botIaTextoProblema(textoBusca);
   // MARCOU de verdade (o bot na lista de marcados ou "@Barbadinho" digitado; o agente 1.6.1 manda
   // `marcado`). Falar o nome no meio da frase ou citar uma mensagem do bot chama, mas a IA decide.
   // CHAMOU PELO NOME (06/11, teste do Bruno: "Massa meu querido barbadinho" ficou calado): o nome no comeco ou
@@ -14454,15 +14519,23 @@ async function _botIaResponder(env, cfg, b, opts) {
   else if (b.menciona) modo = 'chamado';
   else if (b.responde) {
     // Citar o resumo ou uma comemoracao so e pergunta se parece pergunta; citar uma RESPOSTA do bot e conversa.
-    if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(textoBusca)) modo = 'chamado';
+    if (/\?/.test(texto) || BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'chamado';
     else if (await _botIaCitouResposta(env, b.jid, b.citado)) modo = 'chamado';
   }
-  if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(textoBusca)) modo = 'espontaneo';
+  if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'espontaneo';
   if (!modo && !o.teste && !ia.so_marcado[grupo] && !/\?/.test(texto) && BOT_IA_FESTA_RE.test(textoBusca) && b.jid && !(await _botIaFestaRecente(env, b.jid))) modo = 'festa';
   // CONVERSA (06/11, teste do Bruno: "Ta on ai?" logo depois de uma resposta do bot ficou sem resposta): quem
   // o bot respondeu ha menos de 3 min e escreve de novo, sem marcar, continua a conversa. A IA decide.
   if (!modo && !o.teste && b.de_jid && b.jid && await _botIaEmConversa(env, b.jid, b.de_jid)) modo = 'conversa';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
+  // FALANDO COM OUTRA PESSOA (ver _botIaMarcouOutroHaPouco): sem marcar o bot nem chamar ele pelo nome, quem marcou ou
+  // chamou outra pessoa esta falando com ela. Vale pro problema, pra festa, pra conversa e pra quem citou o bot.
+  if (!marcado && !o.teste) {
+    let outro = BOT_IA_MARCA_OUTRO_RE.test(texto) ? 'marcou outra pessoa' : '';
+    if (!outro && b.de_jid && b.jid && await _botIaMarcouOutroHaPouco(env, b.jid, b.de_jid, b.msg_id)) outro = 'marcou outra pessoa agora há pouco';
+    if (!outro && /^\s*\p{L}{3,}\s*(?:[,:!?]|$)/u.test(texto)) { const nm = _botIaChamouOutroPeloNome(texto, await _botEquipe(env), b.de_nome); if (nm) outro = 'chamou ' + nm; }
+    if (outro) { res.acao = 'visto'; res.motivo = 'falando com outra pessoa (' + outro + ')'; return res; }
+  }
   // 2. Sem texto
   if (!texto) {
     if (tipo === 'audio' && modo === 'chamado') { res.acao = 'respondeu'; res.resposta = BOT_IA_SEM_TEXTO; res.motivo = 'áudio'; res.responder = true; return res; }
@@ -14517,7 +14590,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   if (quem.id) {
     if (grupo === 'vend') {
       try { const dados = await _botDados(env, dia, cfg, 'diario', false, st); if (assuntoNumero) { D.push(_botIaPlacarTexto(dados, cfg, quem)); viu.push('placar de hoje'); } const eu = (dados.vendedores || []).find((x) => x.id === quem.id); if (eu) nHojeQuem = Number(eu.pedidos) || 0; } catch (_) {}
-      if (BOT_IA_NUMERO_RE.test(textoBusca) && (quem.role === 'atendente' || quem.chefe)) {
+      if (BOT_IA_NUMERO_RE.test(textoProb) && (quem.role === 'atendente' || quem.chefe)) {
         try {
           const alvo = quem.role === 'atendente' ? quem.id : (equipe.find((u) => u.role === 'atendente' && _botIaNorm(texto).includes(_botIaNorm(u.nome).split(' ')[0])) || {}).id;
           if (alvo) { const un = (equipe.find((u) => u.id === alvo) || quem).nome; D.push(await _botIaNumerosDe(env, st, alvo, un)); viu.push('números de ' + un); }
@@ -14567,12 +14640,12 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Você acabou de comemorar com ' + (nomeQuem.split(' ')[0] || 'essa pessoa') + ' (há ' + Math.max(1, Math.round((agora - Number(ultima.ts)) / 60)) + ' min: "' + ps.texto(String(ultima.resposta || '').slice(0, 140)) + '"). Não repita a festa, o grito nem o número: responda curto só o que é novo na mensagem.');
     viu.push('já comemorou com ' + (nomeQuem.split(' ')[0] || 'a pessoa'));
   }
-  const manual = _botIaManualPara(textoBusca, grupo);
+  const manual = _botIaManualPara(textoProb, grupo);
   if (manual.length) {
     D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
   }
-  const recentes = (o.teste ? [] : await _botIaRecentes(env, b.jid)).map((x) => ps.texto(x));
+  const recentes = (o.teste ? [] : await _botIaRecentes(env, b.jid)).map((x) => _botIaFichaCurta(ps.texto(x)));
   const jaDisse = (o.teste ? [] : await _botIaJaDisse(env, b.jid)).map((x) => ps.texto(x));
   const montaUser = (extra) => [
     ...cab, '',
@@ -14599,7 +14672,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (ch.quota && !o.teste) { await _writeConfig(env, 'bot_ia_quota_ate', String(agora + BOT_IA_QUOTA_PAUSA_S)).catch(() => {}); }
     // A IA FORA (06/11, teste: o Gemini gratis deu 503 nos tres modelos e "caiu meu numero de novo" ficou sem
     // resposta). Quem marcou ou relatou problema nao fica no vacuo: problema avisa a direcao mesmo sem a IA.
-    const problema = BOT_IA_PROBLEMA_RE.test(textoBusca);
+    const problema = BOT_IA_PROBLEMA_RE.test(textoProb);
     if (marcado || problema) {
       if (problema && !o.teste) {
         res.alerta = 1;
@@ -14686,7 +14759,11 @@ async function _botIaMensagem(env, cfg, b) {
     quemTeste = u ? { id: u.id, nome: u.nome, role: u.role, chefe: u.role === 'diretor' || u.role === 'socio', equipe } : { id: '', nome: '', role: '', chefe: false, equipe };
   }
   const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, citado: citadoMsg, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste } : undefined);
-  if (r.acao === 'visto') return { ok: true, resposta: '', chat_id: chatId };
+  if (r.acao === 'visto') {
+    // Calado de proposito (falando com outra pessoa): o motivo fica na linha, pra conferir depois.
+    if (r.motivo && r.motivo !== 'não era pra mim') { try { await env.DB.prepare('UPDATE bot_chat SET motivo=? WHERE id=?').bind(_botTexto300(r.motivo, 200), chatId).run(); } catch (_) {} }
+    return { ok: true, resposta: '', chat_id: chatId };
+  }
   const acao = r.responder ? 'pendente' : r.acao;
   try {
     await env.DB.prepare('UPDATE bot_chat SET quem_id=?, texto=?, acao=?, resposta=?, motivo=?, modelo=?, ms=?, chamadas=?, alerta=? WHERE id=?')
