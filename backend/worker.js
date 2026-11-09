@@ -7768,8 +7768,10 @@ async function handleUpdateLead(req, env, leadId) {
   const now14 = () => `${todayBR()} ${nowTimeBR()}`;   // em BRT, como o resto do historico (21/09/2026)
   // Quem pode ser dono de cobranca, e com que taxa. Consultado UMA vez, fora do laco de CAS: dentro
   // dele seriam ate 10 consultas iguais por salvamento. Mapa vazio quando `cob` nem vem no patch.
+  // Cobradores com a taxa deles e a direcao com ZERO (ver _cobAceitos): o Bruno cobrando no lugar do
+  // cobrador nao paga comissao a ninguem.
   const _cobOk = new Map();
-  if ('cob' in patch) for (const c of await _cobradoresDaCasa(env)) _cobOk.set(String(c.id), Number(c.com_pct) || 0);
+  if ('cob' in patch) for (const c of await _cobAceitos(env)) _cobOk.set(String(c.id), Number(c.com_pct) || 0);
   // Caminho curto (ver _leadRapidoLe): sem troca de coluna, ou com troca pra coluna que NAO e de
   // cancelamento (05/11/2026; antes qualquer `col` ia pelo longo, e o arrasto do cobrador pra
   // Frustrados/Pagos pagava 10 x 1,4 MB em rajada do cron, como o 1792845282163). Entrar em
@@ -7947,19 +7949,31 @@ async function handleUpdateLead(req, env, leadId) {
       // cobrador pro outro moveria o pedido na tela e deixaria o dinheiro com quem nao tem mais ele.
       if ('cob' in patch) {
         const _novo = String(patch.cob || '').trim();
-        if (!_novo) { delete lead.cob; delete lead.cob_pct; }
-        else if (_cobOk.has(_novo)) {
+        // PEDIDO DE AFILIADO NAO TEM COBRADOR DA CASA (09/11/2026, revisao). A varredura nunca
+        // distribui esses (ali a casa fica com 35% e os 3% sairiam caro), mas o campo Cobrador da
+        // ficha aceitava: um pedido do Giovane ja pago ganhava cob_pct e entrava no saque do nosso
+        // cobrador. Recusa com `negados`, como qualquer campo fora do alcance.
+        if (lead.afl) negados.push('cob');
+        else if (!_novo) { delete lead.cob; delete lead.cob_pct; }
+        else if (!_cobOk.has(_novo)) negados.push('cob');
+        // O MESMO DONO DE NOVO NAO MEXE EM NADA (09/11/2026). A confirmacao de pago da dash passou a
+        // mandar "quem cobrou" junto, quase sempre o dono que ja estava: apagar e recarimbar o
+        // `cob_pct` aqui trocaria a taxa congelada pela de hoje (o bug de 06/10) e mover o `cob_ts`
+        // deixaria a conversa de antes sem efeito. Nada mudou, nada se escreve.
+        else if (String(lead.cob || '') !== _novo) {
           // QUANDO TROCOU DE DONO (03/11/2026): a varredura so passa o pedido pra outro cobrador por
           // mensagem do cliente MAIS NOVA que isto, senao desfaria a troca manual na batida seguinte.
-          if (String(lead.cob || '') !== _novo) lead.cob_ts = Date.now();
+          lead.cob_ts = Date.now();
           lead.cob = _novo;
           delete lead.cob_pct;
+          // RECARIMBA SO PRA COBRADOR: a direcao entra no mapa com taxa zero (ver _cobAceitos), entao
+          // um pedido pago que passa pro Bruno fica sem `cob_pct` e nao rende comissao a ninguem.
           const _q = Number(lead.pago_ts) || 0;
           if (_ehPago(lead) && _q >= COB_COMISSAO_DESDE) {
             const _p = _cobOk.get(_novo) || 0;
             if (_p) lead.cob_pct = _p;
           }
-        } else negados.push('cob');
+        }
       }
       if ('at' in patch) lead.at = patch.at;
       // Valor invalido virava 12%, um numero que ninguem combinou. Agora vira VAZIO, e a dash usa
@@ -9208,7 +9222,9 @@ function _saldoComissao(data, uRow, mundo, pctAfl) {
     // O COBRADOR TAMBEM SACA (03/11/2026): o painel dele ganhou o "Solicitar saque" do vendedor, e
     // sem esta linha todo pedido dele nascia marcado "acima do saldo". E a comissaoCobrador do front:
     // a taxa congelada no pedido (cob_pct, so existe de 01/11 em diante) sobre o que foi pago.
-    if (String(l.cob || '') === meu && !mundo) {
+    // `!l.afl` (09/11/2026): pedido de afiliado nunca paga comissao de cobranca da casa, mesmo que um
+    // dia carregue `cob` (o handleUpdateLead recusa desde hoje; o que ja estiver gravado nao conta).
+    if (String(l.cob || '') === meu && !mundo && !l.afl) {
       const reg = (Array.isArray(l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
       ganho += (reg > 0 ? reg : _wpValor(l)) * (Number(l.cob_pct) || 0) / 100;
     }
@@ -35650,11 +35666,40 @@ const _cobEmAberto = (l) => !_ehPago(l) && !FIVE_COL_FIM.includes(_colCanon(l &&
 // Os cobradores ATIVOS da casa, em ordem estavel (o empate sempre cai no mesmo, nao no sorteio).
 async function _cobradoresDaCasa(env) {
   try {
+    // SO GENTE DA CASA (09/11/2026, revisao): o afiliado pode cadastrar cobrador, e sem este corte o
+    // cobrador dele entraria na divisao da casa com carga zero, levando todo pedido novo pra alguem
+    // que nem ve o nosso estado. Mesmo filtro das outras consultas de equipe da casa.
     const r = await env.DB.prepare(
-      "SELECT id, com_pct FROM users WHERE LOWER(role) = 'cobrador' AND (archived IS NULL OR archived = 0) ORDER BY id ASC"
+      "SELECT id, com_pct FROM users WHERE LOWER(role) = 'cobrador' AND (archived IS NULL OR archived = 0) AND (afiliado_id IS NULL OR afiliado_id = '') ORDER BY id ASC"
     ).all();
     return ((r && r.results) || []).filter((c) => c && c.id);
   } catch (_) { return []; }   // banco sem a coluna (dash do amigo): sem cobrador, nada a distribuir
+}
+
+// QUEM PODE SER O DONO DA COBRANCA DE UM PEDIDO (09/11/2026, pedido do Bruno): os cobradores E a
+// direcao. Palavras dele: "as vezes os meus cobradores nao podem estar atendendo e eu tenho que
+// fazer essa cobranca, porem a comissao nao vai para eles, vai para mim". Entao, ao marcar o pedido
+// pago (ou no card do Kanban), ele escolhe quem cobrou de verdade: um cobrador, ele mesmo ou o socio.
+//
+// A DIRECAO ENTRA COM TAXA ZERO, de proposito: pedido cobrado pela direcao nao paga os 3% de ninguem
+// (a comissao fica na casa). O `com_pct` do cadastro do diretor e taxa de VENDA e nao pode vazar pra
+// ca. E SO quem pode ser dono: a varredura (_cronCobrador), a regra de distribuicao e o link de
+// entrega continuam olhando `_cobradoresDaCasa` - a direcao nunca recebe pedido sozinha, so quando
+// alguem a escolhe na mao. E O QUE ELA TOMOU PRA SI, FICA: a varredura nao devolve o pedido pra um
+// cobrador por mensagem do cliente (ver _cronCobrador) e o link de entrega abre o numero dela quando
+// ela tem um (ver handleEntregaLink). `cobsJa` evita repetir a consulta dos cobradores quando quem
+// chama ja a fez.
+async function _cobAceitos(env, cobsJa) {
+  const cobs = cobsJa || await _cobradoresDaCasa(env);
+  let dir = [];
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id FROM users WHERE LOWER(role) IN ('diretor','socio','produtor') AND (archived IS NULL OR archived = 0) AND (afiliado_id IS NULL OR afiliado_id = '') ORDER BY id ASC"
+    ).all();
+    dir = ((r && r.results) || []).filter((x) => x && x.id).map((x) => ({ id: String(x.id), com_pct: 0, direcao: true }));
+  } catch (_) { dir = []; }
+  const ja = new Set(cobs.map((c) => String(c.id)));
+  return cobs.concat(dir.filter((d) => !ja.has(d.id)));
 }
 
 // ══ A REGRA DE DISTRIBUICAO DA COBRANCA (04/11/2026) ══════════════════════════════════════════
@@ -35800,6 +35845,10 @@ async function handleEntregaLink(req, env, codigo) {
   const fone = _entregaFone(codigo);
   const cobs = await _cobradoresDaCasa(env);
   const ids = cobs.map((c) => String(c.id));
+  // A DIRECAO COMO DONA (09/11/2026): pedido que o Bruno tomou pra si abre o numero DELE, se ele tiver
+  // um chip ativo; sem numero, cai na regra como antes (o cobrador atende a conversa, mas o pedido
+  // continua da direcao: a varredura nao o devolve, ver _cronCobrador).
+  const direcao = new Set((await _cobAceitos(env, cobs)).filter((c) => c && c.direcao).map((c) => String(c.id)));
   let data = {};
   try { data = (await _getDashData(env, 0)) || {}; } catch (_) { data = {}; }
   const regra = await _cobRegra(env);
@@ -35815,6 +35864,7 @@ async function handleEntregaLink(req, env, codigo) {
       }
     }
     if (lead && ids.includes(String(lead.cob || ''))) { quem = String(lead.cob); porque = 'dono'; }
+    else if (lead && direcao.has(String(lead.cob || '')) && _cobNumeroDe(data.chips, lead.cob)) { quem = String(lead.cob); porque = 'direcao'; }
     else if (lead) quem = _cobEscolhe(regra, lead, ids, carga, novos);
     else {
       const at = fone ? await resolveAtByPhone(env, fone).catch(() => null) : null;
@@ -35834,6 +35884,9 @@ async function _cronCobrador(env) {
   if (!cobs.length) return;   // sem cobrador cadastrado nao ha o que dividir
   const ids = cobs.map((c) => String(c.id));
   const pctDe = new Map(cobs.map((c) => [String(c.id), Number(c.com_pct) || 0]));
+  // QUEM E DA DIRECAO (09/11/2026): pedido que o Bruno ou o socio tomaram pra si nao volta pra um
+  // cobrador por mensagem do cliente (ver abaixo). Mesma lista do handleUpdateLead (_cobAceitos).
+  const direcao = new Set((await _cobAceitos(env, cobs)).filter((c) => c && c.direcao).map((c) => String(c.id)));
   const regra = await _cobRegra(env);   // ver A REGRA DE DISTRIBUICAO DA COBRANCA, logo acima
   let conv = null, donoDoN8 = null;   // ver "O PEDIDO E DE QUEM O CLIENTE CHAMOU" (uma consulta por batida)
 
@@ -35880,6 +35933,11 @@ async function _cronCobrador(env) {
     if (conv && conv.size) {
       for (const l of data.leads) {
         if (!l || l.afl || !_cobEmAberto(l)) continue;
+        // O QUE A DIRECAO TOMOU PRA SI FICA COM ELA (09/11/2026, pedido do Bruno: "eu tenho que fazer
+        // essa cobranca"). Ele marca a si mesmo no card, cobra do numero dele; se o cliente ainda
+        // escrever pro numero do cobrador de antes, o pedido NAO volta - senao os 3% iriam pra quem nao
+        // cobrou, o contrario do que ele pediu. Pedido da direcao so troca de dono na mao.
+        if (direcao.has(String(l.cob || ''))) continue;
         const c = conv.get(_cobDig(l.wa).slice(-8));
         if (!c || !c.in) continue;
         const quem = donoDoN8.get(c.n8);

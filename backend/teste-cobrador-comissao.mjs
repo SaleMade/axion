@@ -187,6 +187,63 @@ r = await api(TK.dir, 'L7', { cob: 'cob_novo' })
 t(doId('L7').cob === 'cob_novo' && doId('L7').cob_pct === undefined, 'mas o pago em OUTUBRO continua sem comissao depois da troca',
   JSON.stringify({ cob: doId('L7').cob, pct: doId('L7').cob_pct }))
 
+console.log('\nA DIRECAO TAMBEM COBRA (09/11/2026): o Bruno ou o socio ficam com o pedido, e ninguem ganha os 3%')
+user('socio_bruno', 'bruno', 'Bruno', 'socio', 0)
+sq.prepare("UPDATE users SET com_pct=10 WHERE id='dir'").run()   // taxa de VENDA do diretor: nao pode virar taxa de cobranca
+r = await api(TK.dir, 'L10', { cob: 'dir' })
+t(r.st === 200 && !(r.j.negados || []).includes('cob') && doId('L10').cob === 'dir', 'o diretor pode ficar com um pedido pago', JSON.stringify(r.j))
+t(doId('L10').cob_pct === undefined, 'e o pedido deixa de render comissao de cobrador (direcao entra com taxa zero, nunca com os 10% de venda)', String(doId('L10').cob_pct))
+await batida()
+t(doId('L10').cob === 'dir' && doId('L10').cob_pct === undefined, 'a varredura nao devolve o pedido pra um cobrador nem carimba taxa nele',
+  JSON.stringify({ cob: doId('L10').cob, pct: doId('L10').cob_pct }))
+r = await api(TK.dir, 'L1', { cob: 'socio_bruno' })
+t(r.st === 200 && doId('L1').cob === 'socio_bruno' && doId('L1').cob_ts > 0, 'o socio tambem pode ser o dono de um pedido em aberto', JSON.stringify(r.j))
+await batida()
+t(doId('L1').cob === 'socio_bruno', 'pedido em aberto no nome do socio continua com ele depois da varredura', String(doId('L1').cob))
+r = await api(TK.gui, 'L4', { cob: 'socio_bruno' })
+t((r.j.negados || []).includes('cob') && doId('L4').cob !== 'socio_bruno', 'o vendedor continua sem poder escolher quem cobra', JSON.stringify(r.j))
+r = await api(TK.dir, 'L4', { cob: 'gestor_x' })
+t((r.j.negados || []).includes('cob'), 'id que nao e cobrador nem direcao segue recusado', JSON.stringify(r.j))
+user('dir_velho', 'velho', 'Diretor Antigo', 'diretor', 0)
+sq.prepare("UPDATE users SET archived=1 WHERE id='dir_velho'").run()
+r = await api(TK.dir, 'L4', { cob: 'dir_velho' })
+t((r.j.negados || []).includes('cob') && doId('L4').cob !== 'dir_velho', 'direcao ARQUIVADA nao pode ser dona', JSON.stringify(r.j))
+user('cob_afl', 'cobafl', 'Cobrador do Giovane', 'cobrador', 3)
+sq.prepare("UPDATE users SET afiliado_id='afl_3d767329' WHERE id='cob_afl'").run()
+r = await api(TK.dir, 'L4', { cob: 'cob_afl' })
+t((r.j.negados || []).includes('cob') && doId('L4').cob !== 'cob_afl', 'cobrador DE AFILIADO nao e cobrador da casa', JSON.stringify(r.j))
+r = await api(TK.dir, 'L9', { cob: 'cob_haynan' })
+t((r.j.negados || []).includes('cob') && !doId('L9').cob, 'pedido DE AFILIADO nao recebe cobrador da casa nem pela ficha', JSON.stringify({ j: r.j, cob: doId('L9').cob }))
+
+console.log('\nA CONFIRMACAO DE PAGO DA DASH manda valor, Pagos e "quem cobrou" no MESMO patch (09/11/2026)')
+{
+  const d = ler()
+  d.leads.push(lead('P1', { col: 'Cobrança', cob: 'cob_haynan' }))
+  d.leads.push(lead('P2', { col: 'Cobrança', cob: 'cob_haynan' }))
+  d.leads.push(lead('P3', { col: 'Cobrança', cob: 'cob_haynan' }))
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d))
+}
+r = await api(TK.dir, 'P1', { col: 'Pagos', spg: 'Pago', valor_neg: 450, cob: 'dir' })
+t(r.st === 200 && doId('P1').cob === 'dir' && doId('P1').col === 'Pagos' && doId('P1').spg === 'Pago' && doId('P1').pago_ts > 0,
+  'pago, valor e quem cobrou gravam juntos', JSON.stringify({ st: r.st, j: r.j, l: { cob: doId('P1').cob, col: doId('P1').col, spg: doId('P1').spg } }))
+await batida()
+t(doId('P1').cob === 'dir' && doId('P1').cob_pct === undefined, 'cobrado pela direcao: a varredura nao carimba 3% pra ninguem', JSON.stringify({ cob: doId('P1').cob, pct: doId('P1').cob_pct }))
+r = await api(TK.dir, 'P2', { col: 'Pagos', spg: 'Pago', valor_neg: 497, cob: 'cob_novo' })
+await batida()
+t(doId('P2').cob === 'cob_novo' && doId('P2').cob_pct === 4, 'cobrado por OUTRO cobrador: o pedido e a taxa dele (4%) vao pra ele', JSON.stringify({ cob: doId('P2').cob, pct: doId('P2').cob_pct }))
+r = await api(TK.dir, 'P3', { col: 'Pagos', spg: 'Pago', valor_neg: 497, cob: 'cob_haynan' })
+await batida()
+t(doId('P3').cob === 'cob_haynan' && doId('P3').cob_pct === 4 && !doId('P3').cob_ts, 'o mesmo dono confirmado de novo: fica com ele, carimba a taxa, e o cob_ts nao anda (nada trocou)',
+  JSON.stringify({ cob: doId('P3').cob, pct: doId('P3').cob_pct, ts: doId('P3').cob_ts }))
+
+console.log('\nO MESMO DONO DE NOVO NAO MEXE NA TAXA CONGELADA (09/11/2026)')
+{
+  const antes = { ...doId('L8') }   // pago em novembro com 3% congelados; o cadastro do Haynan ja esta em 4%
+  r = await api(TK.dir, 'L8', { cob: antes.cob })
+  t(r.st === 200 && doId('L8').cob_pct === antes.cob_pct && (doId('L8').cob_ts || 0) === (antes.cob_ts || 0),
+    'mandar o dono que ja estava nao apaga os 3% congelados nem move o cob_ts', JSON.stringify({ antes: antes.cob_pct, depois: doId('L8').cob_pct }))
+}
+
 console.log('\nTIRAR O COBRADOR devolve o pedido pra fila')
 r = await api(TK.dir, 'L3', { cob: '' })
 t(doId('L3').cob === undefined, 'o campo saiu do pedido', JSON.stringify(doId('L3').cob))
@@ -205,6 +262,7 @@ const msg = (id, phone, inst, dir, ts) => sq.prepare('INSERT INTO wa_messages (m
   d.leads.push(lead('C3', { col: 'Pagos', spg: 'Pago', pago_ts: DESDE + DIA, wa: '31900000003', cob: 'cob_haynan', cob_pct: 4 }))   // pago: congelado
   d.leads.push(lead('C4', { col: 'Cobrança', wa: '31900000004', cob: 'cob_haynan', cob_ts: Date.now() }))  // trocado na mao DEPOIS da mensagem
   d.leads.push(lead('C5', { col: 'Cobrança', wa: '31900000005', cob: 'cob_haynan' }))                    // o novo mandou e o cliente nunca respondeu
+  d.leads.push(lead('C6', { col: 'Cobrança', wa: '31900000006', cob: 'socio_bruno', cob_ts: Date.now() - 60000 }))   // a DIRECAO tomou pra si; o cliente escreveu pro novo depois
   sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d))
 }
 msg('x1', '5531900000001', 'ax_cob_novo_33334444', 'in', agS - 600)
@@ -212,7 +270,9 @@ msg('x2', '553100000002', 'ax_cob_novo_33334444', 'in', agS - 600)
 msg('x3', '5531900000003', 'ax_cob_novo_33334444', 'in', agS - 600)
 msg('x4', '5531900000004', 'ax_cob_novo_33334444', 'in', agS - 600)
 msg('x5', '5531900000005', 'ax_cob_novo_33334444', 'out', agS - 600)
+msg('x6b', '5531900000006', 'ax_cob_novo_33334444', 'in', agS - 10)
 await batida()
+t(doId('C6').cob === 'socio_bruno' && doId('C6').cob_pct === undefined, 'pedido que a DIRECAO tomou pra si nao volta pro cobrador pela conversa (09/11/2026)', JSON.stringify({ cob: doId('C6').cob }))
 t(doId('C1').cob === 'cob_novo' && doId('C1').cob_ts > 0, 'o pedido do Haynan em que o cliente escreveu pro novo passou pro novo', JSON.stringify({ cob: doId('C1').cob, ts: doId('C1').cob_ts }))
 t(doId('C2').cob === 'cob_novo', 'quem escreveu pro proprio dono continua com ele', doId('C2').cob)
 t(doId('C3').cob === 'cob_haynan' && doId('C3').cob_pct === 4, 'pedido PAGO nao muda de dono (a comissao ja congelou)', JSON.stringify({ cob: doId('C3').cob, pct: doId('C3').cob_pct }))
