@@ -180,6 +180,45 @@ async function rodar(ctx) {
     ctx.vigiaBranco(s2, 300)
     await espera(1000)
     conta('com tela de verdade, nao mexe e zera a contagem', cargas === antes3 && s2.brancos === 0, 'cargas ' + antes3 + '->' + cargas + ' brancos=' + s2.brancos)
+
+    // A TELA DE CARREGAMENTO DO WHATSAPP NAO E BRANCO (09/11/2026, o 9124). Ela mora num bloco proprio
+    // FORA do #app, que so nasce no fim da carga. A vigia de antes via branco ali e recarregava o numero
+    // no meio do carregamento (13 vezes seguidas no 9124, com o QR girando).
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="wa_web_initial_startup" style="height:80px">WhatsApp</div>')
+    const antes4 = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(1500)
+    conta('tela de carregamento do WhatsApp (fora do #app): a vigia espera e nao recarrega', cargas === antes4 && s2.brancos === 0, 'cargas ' + antes4 + '->' + cargas + ' brancos=' + s2.brancos)
+    // Parada na tela de carregamento alem da paciencia e emperro de verdade: volta aos degraus.
+    s2.navEm = Date.now() - 4 * 60000
+    const antes5 = cargas
+    ctx.vigiaBranco(s2, 300, true)
+    await espera(1500)
+    conta('parada na tela de carregamento por mais de 3 min: recarrega', cargas > antes5 && s2.brancos === 1, 'cargas ' + antes5 + '->' + cargas + ' brancos=' + s2.brancos)
+    // Tela de carregamento ESCONDIDA (o WhatsApp esconde quando termina) e #app vazio: branco de verdade.
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="wa_web_initial_startup" style="display:none">WhatsApp</div><div id="app"></div>')
+    s2.brancos = 0
+    const antes6 = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(1500)
+    conta('tela de carregamento escondida e #app vazio: e branco, recarrega', cargas > antes6 && s2.brancos === 1, 'cargas ' + antes6 + '->' + cargas + ' brancos=' + s2.brancos)
+    // Pagina ocupada demais pra responder (o WhatsApp abrindo uma sessao grande, ou ainda carregando:
+    // o executeJavaScript so roda depois que a carga para): esta trabalhando, nao em branco.
+    // O aperto comeca SO DEPOIS da carga e SEM setTimeout: comecando no carregamento, o did-finish-load
+    // esperava o aperto acabar; e o setTimeout de uma view fora da tela pode atrasar ate 1 s (o
+    // Chromium alinha os relogios de pagina escondida), entao a vigia achava a pagina livre e o teste
+    // falhava 2 em 7. O laco roda direto na chamada, sem esperar ela voltar.
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="app"></div>')
+    s2.brancos = 0
+    vb.webContents.executeJavaScript('(function(){var t=Date.now();while(Date.now()-t<7000){}})()').catch(() => {})
+    await espera(50)
+    const antes7 = cargas
+    ctx.vigiaBranco(s2, 300)
+    await espera(4500)
+    conta('pagina ocupada (nao responde em 3 s): espera em vez de recarregar', cargas === antes7 && s2.brancos === 0, 'cargas ' + antes7 + '->' + cargas + ' brancos=' + s2.brancos)
+    await vb.webContents.loadURL('data:text/html,<meta charset="utf-8"><div id="app"><div style="height:50px">WhatsApp</div></div>')
+    ctx.vigiaBranco(s2, 300)
+    await espera(800)
     abertos.delete(NK2)
     try { vb.webContents.close() } catch (_) { /* ok */ }
   }

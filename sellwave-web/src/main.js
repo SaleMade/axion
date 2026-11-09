@@ -1638,23 +1638,52 @@ function vigiaPareamento(s) {
 //      Storage, que ficam) e recarrega sem cache;
 //   3o: fecha e abre o numero, que era o que resolvia na mao (no maximo uma vez a cada 10 min).
 // Qualquer tela de verdade zera a contagem.
+//
+// A TELA DE CARREGAMENTO DO WHATSAPP MUDOU DE LUGAR (09/11/2026, o 9124 do Guilherme). Ela morava
+// dentro do #app, e por isso esta vigia nasceu contando a "tela de abertura com a barrinha" como tela.
+// Agora o WhatsApp manda essa abertura pronta no HTML, num bloco proprio (#wa_web_initial_startup)
+// FORA do #app, e o #app so nasce quando o carregamento acaba. A vigia passou a ver branco num numero
+// que estava so carregando, e o remedio piorava: cada degrau (recarregar, limpar o cache, fechar e
+// abrir) deixa a carga seguinte mais fria e mais lenta, entao ela tambem passava dos 25 s. O 9124
+// voltou do bloqueio com uma sessao morta de 20 MB pra descartar e ficou 10 min nesse laco com o QR
+// girando, ate a vigia desistir; a recarga seguinte mostrou o QR em segundos. O log do PC do Bruno
+// tem o mesmo laco num numero CONECTADO (3213 em 30/10, quatro recargas com o WhatsApp 'pronto') e
+// um 8709 que estava sincronizando e foi pro QR logo depois da limpeza do cache (29/10).
+// Entao a pagina diz o que mostra: 'tela' (o WhatsApp desenhou: QR, conversas, aviso), 'abrindo' (a
+// tela de carregamento dele) ou '' (nada). Carregando nao e branco: a vigia olha de novo a cada 15 s
+// e so segue os degraus se a abertura passar de PACIENCIA_ABRINDO_MS desde a navegacao - ai e emperro
+// de verdade (uma conexao presa na proxy segura a abertura pra sempre).
+// E PAGINA QUE NAO RESPONDE EM 3 S ESTA CARREGANDO, NAO EM BRANCO: o executeJavaScript do Electron so
+// roda o codigo depois que a pagina para de carregar. Medido em 09/11 com os scripts do WhatsApp presos
+// 40 s (o que uma proxy lenta faz): a pergunta ficou 39 s sem resposta, e a vigia antiga contava isso
+// como branco e recarregava aos 25 s, recomecando a carga do zero.
 const reabertoBranco = new Map()   // nk -> quando o app fechou e abriu sozinho por tela branca
 // Escondida (numero aberto em segundo plano) a pagina pode nao ter altura de layout: ali basta o #app ter
 // filho, senao a vigia recarregaria sem parar um numero que esta certo e so nao esta na tela.
-const JS_TEM_TELA = '(function(){var a=document.getElementById("app");return !!(a&&a.children.length&&(document.visibilityState==="hidden"||a.getBoundingClientRect().height>0))})()'
-function vigiaBranco(s, tempo) {
+const JS_TEM_TELA = '(function(){var a=document.getElementById("app");if(a&&a.children.length&&(document.visibilityState==="hidden"||a.getBoundingClientRect().height>0))return "tela";var s=document.getElementById("wa_web_initial_startup");return s&&s.getClientRects().length?"abrindo":""})()'
+const PACIENCIA_ABRINDO_MS = 3 * 60000
+function vigiaBranco(s, tempo, continua) {
   if (!s || !s.view) return
   const gen = (s.vigiaGen = (Number(s.vigiaGen) || 0) + 1)
+  // O relogio da paciencia e o da NAVEGACAO: a volta de "ainda carregando" nao zera.
+  if (!continua || !s.navEm) s.navEm = Date.now()
   const wc = s.view.webContents
+  const prazo = tempo || 25000
   setTimeout(async () => {
     if (gen !== s.vigiaGen || wc.isDestroyed() || abertos.get(s.nk) !== s) return
-    let tem = false
-    try { tem = !!(await Promise.race([wc.executeJavaScript(JS_TEM_TELA), espera(3000).then(() => null)])) } catch (_) { tem = false }
+    let tela = ''
+    try { tela = await Promise.race([wc.executeJavaScript(JS_TEM_TELA), espera(3000).then(() => 'ocupada')]) } catch (_) { tela = '' }
     if (gen !== s.vigiaGen || wc.isDestroyed()) return
-    if (tem) { s.brancos = 0; return }
+    if (tela === 'tela') { s.brancos = 0; return }
+    const faz = Date.now() - s.navEm
+    if ((tela === 'abrindo' || tela === 'ocupada') && faz < PACIENCIA_ABRINDO_MS) {
+      vigiaBranco(s, Math.min(prazo, 15000), true)
+      return
+    }
     s.brancos = (Number(s.brancos) || 0) + 1
     if (s.brancos === 1) {
-      anota('[branco] ' + s.nk + ' sem nada na tela em ' + Math.round((tempo || 25000) / 1000) + ' s: recarregando')
+      anota('[branco] ' + s.nk + (tela === 'abrindo' ? ' parado na tela de carregamento do WhatsApp ha ' : tela === 'ocupada' ? ' ainda carregando ha ' : ' sem nada na tela em ')
+        + Math.round(faz / 1000) + ' s: recarregando')
       try { wc.reload() } catch (_) { /* ok */ }
     } else if (s.brancos === 2) {
       anota('[branco] ' + s.nk + ' branco de novo: limpando o Service Worker e o cache do WhatsApp (o login fica) e recarregando')
@@ -1673,7 +1702,7 @@ function vigiaBranco(s, tempo) {
       try { await despedidas.get(s.nk) } catch (_) { /* ok */ }
       abreNumero(numero, { fundo: !naTela }).catch((e) => anota('[branco] reabrir falhou: ' + ((e && e.message) || e)))
     }
-  }, tempo || 25000)
+  }, prazo)
 }
 
 // O RESTO DO FECHAMENTO, fora da tela.
