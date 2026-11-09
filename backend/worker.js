@@ -16090,6 +16090,443 @@ const _n8sDoDono = (data, at) => [...new Set((Array.isArray(data && data.chips) 
   .filter((c) => c && c.num && String(c.at || '') === String(at))
   .map((c) => String(c.num).replace(/\D/g, '').slice(-8)).filter((x) => x.length === 8))];
 
+// ══ MENSAGENS AUTOMATICAS NOS NUMEROS DOS COBRADORES (09/11/2026) ════════════════════════════════
+//
+// Pedido do Bruno: "caso um lead chame um dos meus cobradores, uma mensagem automatica de recepcao
+// seja mandada para esse lead, mesmo que o cobrador nao esteja online" e "disparada a mensagem para
+// os leads, informando a eles sobre o envio: avisando que o envio ja foi feito e que esse e o codigo
+// de rastreio (...) para leads que ja chamaram eles".
+//
+// QUEM MANDA E O SELLWAVE WEB DO COMPUTADOR QUE ESTA COM O NUMERO ABERTO. Numero de cobranca nao tem
+// API oficial: a mensagem so sai com o WhatsApp Web dele aberto em algum lugar (o cobrador pode estar
+// longe do computador; computador desligado = sai quando ele abrir de novo). O servidor decide O QUE
+// e PRA QUEM, aqui, numa regra so; o app pergunta de minuto em minuto (GET /api/swweb/auto), pega UM
+// por vez (/auto/pega e a trava contra mandar duas vezes), confere a conversa na propria pagina do
+// WhatsApp (o cobrador pode ter respondido pelo celular) e manda pelo mesmo caminho do painel, com
+// "digitando" e pausa; no fim conta como foi (/auto/feito). Cada envio e uma linha em swweb_auto.
+//
+// OS TEXTOS SAO OS DOS PROPRIOS COBRADORES, medidos em wa_messages em 09/11 (1.869 mensagens do Bryan
+// e do Haynan desde 30/10): a primeira resposta mais comum e "Boa tarde <nome>"; "Aqui quem fala e o
+// Elias..." saiu 133 vezes; "Localizei o seu pedido" e "Tenho uma atualizacao do seu Glico Six" sao o
+// Rastreio e o Postado do roteiro de cobranca, colados a mao com o valor e o codigo digitados. Aqui o
+// nome, o valor e o codigo saem do pedido. O cliente esperava muito: mediana de 35 min ate a primeira
+// resposta, 1 em 4 mais de 17 h, e em 09/11 o Bryan respondeu quem tinha escrito em 04/11.
+//
+// AS REGRAS (e o porque de cada uma):
+//  RECEPCAO: o cliente escreveu num numero de cobrador nas ultimas 72 h (cobre o fim de semana com o
+//    app fechado), NENHUM numero de cobrador respondeu ele ate hoje, e ja faz 60 s da primeira
+//    mensagem (da tempo de o cobrador responder ele mesmo). So vai se ele pediu pra acompanhar o pedido
+//    (o texto do link que o vendedor manda) ou se o telefone bate com um pedido nosso: o numero do
+//    Haynan recebe cobranca de banco e mensagem de outra empresa, e o Elias nao responde isso.
+//    Saudacao + apresentacao; com pedido em aberto, pago na entrega e ainda nao entregue, o "Localizei"
+//    com o valor; ja despachado, o codigo vai junto (e a chave do Postado e pega na mesma hora).
+//  POSTADO: pedido da casa em Enviado ou Saiu pra entrega, com codigo, que andou na entrega nos
+//    ultimos 10 dias (Enviado parado ha semanas e status velho, nao novidade), cujo cliente JA escreveu
+//    num numero de cobrador (a regra do Bruno: so quem ja chamou) e pra quem nenhum numero nosso mandou
+//    esse codigo. Sai pelo numero de cobrador em que o cliente falou por ultimo, das 8h as 21h.
+//  TETO: 150 envios por numero em 24 h (mais que o dobro de um dia cheio do Bryan). Bateu, para e
+//    grava no log: e o freio contra uma regra errada falando com a base inteira.
+//  NUMERO NOSSO nunca recebe (vendedor testando, chip conversando com chip).
+//  DESLIGADO ATE A DIRECAO LIGAR: sem `cob_auto` no app_config, ou ilegivel, nada sai.
+const COB_AUTO_KEY = 'cob_auto';
+const COB_AUTO_TXT = {
+  saudacao: '{saudacao} {nome}',
+  apresenta: 'Aqui quem fala é o Elias sou o rapaz responsável pela parte da entrega e financeira do tratamento da GlicoSix.',
+  localizei: 'Localizei o seu pedido do Glico Six por aqui. A partir de agora vou acompanhar sua entrega e te manter atualizado sobre o envio e o rastreio, combinado?\n\n'
+    + 'Só deixando registrado também as condições que foram combinadas no atendimento:\n\n'
+    + '💰 Valor do pedido: R$ {valor}\n📦 Pagamento somente na entrega\n\n'
+    + 'Pix e boleto são à vista.\nO parcelamento é feito somente no cartão de crédito.\n\n'
+    + 'Me manda só um “ok” pra eu saber que recebeu minha mensagem. Assim que tiver atualização do envio, eu aviso por aqui. 👍',
+  postado: 'Tenho uma atualização do seu Glico Six. 📦\n\n'
+    + 'Seu pedido já foi despachado e está a caminho da sua cidade.\n\n'
+    + '📦 Código de rastreio: {codigo}\n🔗 Acompanhar entrega: {link}\n\n'
+    + 'Vou continuar acompanhando o envio por aqui e, quando tiver uma atualização importante, te aviso.\n\n'
+    + 'Qualquer dúvida sobre a entrega, pode falar comigo neste número. 👍',
+};
+const COB_AUTO_JANELA_S = 72 * 3600;
+const COB_AUTO_ESPERA_S = 60;
+const COB_AUTO_ANDOU_MS = 10 * 86400000;
+const COB_AUTO_TETO_DIA = 150;
+const COB_AUTO_POR_VEZ = 10;
+const _COB_AUTO_A_CAMINHO = new Set(['Enviados', 'Saiu para Entrega']);
+const _COB_AUTO_ANTES = new Set(['A Enviar', 'Preparando', 'Enviados', 'Saiu para Entrega']);
+// Texto com variavel que nao foi preenchida nunca sai ("Codigo de rastreio: {codigo}" pro cliente).
+const _COB_AUTO_SOBROU = /\{(saudacao|nome|valor|codigo|link)\}/;
+const _COB_AUTO_PART = new Set(['da', 'das', 'de', 'do', 'dos', 'e', 'di', 'du', 'del']);
+
+let _cobAutoTabOk = false;
+async function _cobAutoTabela(env) {
+  if (_cobAutoTabOk) return;
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS swweb_auto (k TEXT PRIMARY KEY, tipo TEXT, nk TEXT, fone TEXT, pedido TEXT, nome TEXT, status TEXT,'
+    + ' n INTEGER DEFAULT 0, tent INTEGER DEFAULT 0, criado INTEGER, pego_ts INTEGER, feito_ts INTEGER, maquina TEXT, por TEXT, motivo TEXT)'
+  ).run();
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_swweb_auto_nk ON swweb_auto(nk, pego_ts)').run(); } catch (_) { /* sem indice so fica mais lento */ }
+  _cobAutoTabOk = true;
+}
+async function _cobAutoCfg(env) {
+  let c = null;
+  try { const v = await _readConfig(env, COB_AUTO_KEY); c = v ? JSON.parse(v) : null; } catch (_) { c = null; }
+  c = (c && typeof c === 'object') ? c : {};
+  const t = (c.txt && typeof c.txt === 'object') ? c.txt : {};
+  const txt = {};
+  for (const k of Object.keys(COB_AUTO_TXT)) {
+    const v = String(t[k] == null ? '' : t[k]).replace(/\r\n/g, '\n').trim();
+    txt[k] = v ? v.slice(0, 2000) : COB_AUTO_TXT[k];
+  }
+  return { rec: c.rec === true, pos: c.pos === true, txt, por: String(c.por || ''), em: Number(c.em) || 0 };
+}
+// Bom dia / Boa tarde / Boa noite pela hora de Brasilia de QUANDO sai (o app pede na hora de mandar).
+const _cobAutoSaud = (ms) => { const h = new Date(ms - _COB_BRT).getUTCHours(); return (h >= 5 && h < 12) ? 'Bom dia' : (h >= 12 && h < 18) ? 'Boa tarde' : 'Boa noite'; };
+// O NOME COMO O COBRADOR ESCREVE: "Luiz Eduardo da SIlva" vira "Luiz Eduardo da Silva". Nome do
+// WhatsApp com emoji ou numero fica so com as letras; sobrou menos de 2 letras, vai sem nome.
+function _cobAutoNome(v) {
+  const s = String(v || '').normalize('NFC').replace(/[^\p{L}\s'-]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if ((s.match(/\p{L}/gu) || []).length < 2 || s.length > 60) return '';
+  return s.split(' ').slice(0, 6).map((p, i) => {
+    const l = p.toLowerCase();
+    if (i > 0 && _COB_AUTO_PART.has(l)) return l;
+    return l.charAt(0).toUpperCase() + l.slice(1);
+  }).join(' ');
+}
+const _cobAutoBRL = (v) => {
+  const n = Math.round((Number(v) || 0) * 100) / 100;
+  const [i, d] = n.toFixed(2).split('.');
+  return i.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + d;
+};
+function _cobAutoTexto(tpl, vars) {
+  let s = String(tpl || '');
+  for (const [k, v] of Object.entries(vars || {})) s = s.split('{' + k + '}').join(String(v == null ? '' : v));
+  return s.trim();
+}
+// "{saudacao} {nome}" sem nome vira so "Boa tarde"; "Ola, {nome}! Tudo bem?" vira "Ola! Tudo bem?".
+function _cobAutoSaudacao(tpl, ms, nome) {
+  let s = String(tpl || '').split('{saudacao}').join(_cobAutoSaud(ms));
+  if (nome) s = s.split('{nome}').join(nome);
+  else s = s.replace(/[ \t]*,?[ \t]*\{nome\}/g, '');
+  return s.replace(/[ \t]{2,}/g, ' ').trim();
+}
+// O telefone nas duas formas (com e sem o nono digito), como o wa_messages pode ter gravado.
+function _cobAutoVariantes(fone) {
+  const d = String(fone || '').replace(/\D/g, '');
+  const out = new Set(d.length >= 10 ? [d] : []);
+  const n = (d.length >= 12 && d.startsWith('55')) ? d.slice(2) : d;
+  if (n.length === 11 && n[2] === '9') { out.add('55' + n); out.add('55' + n.slice(0, 2) + n.slice(3)); }
+  else if (n.length === 10 && /[6-9]/.test(n[2])) { out.add('55' + n); out.add('55' + n.slice(0, 2) + '9' + n.slice(2)); }
+  return [...out];
+}
+const _cobAutoAberto = (l) => !_cobPago(l) && !_COB_TERMINAIS.has(_cobColId(l && l.col));
+// O pedido de cada telefone (DDD + 8 ultimos digitos): o EM ABERTO mais novo; sem nenhum aberto, o
+// mais novo. So da casa: pedido de afiliado nao e do cobrador da casa.
+function _cobAutoPedidos(data) {
+  const m = new Map();
+  for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
+    if (!l || l.id == null || String(l.afl || '')) continue;
+    const k = _waNumKey(l.wa);
+    if (!k || k.length !== 10) continue;
+    const a = m.get(k);
+    if (!a) { m.set(k, l); continue; }
+    const ab = _cobAutoAberto(l), aa = _cobAutoAberto(a);
+    if (ab !== aa) { if (ab) m.set(k, l); continue; }
+    if ((_cobCriadoTs(l) || 0) > (_cobCriadoTs(a) || 0)) m.set(k, l);
+  }
+  return m;
+}
+// Quando a entrega deu sinal de vida pela ultima vez (ms): o ultimo evento da transportadora
+// (ship_ts) ou a entrada em Enviado / Saiu pra entrega no historico.
+function _cobAutoAndou(l) {
+  const s = Number(l && l.ship_ts) || 0;
+  let t = s > 1e12 ? s : s * 1000;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) {
+    const c = _cobColId(h && h.to);
+    if (c === 'Enviados' || c === 'Saiu para Entrega') { const x = _cobTs(h && h.time); if (x > t) t = x; }
+  }
+  return t;
+}
+// Os textos da recepcao de UM cliente. `l` = o pedido dele (ou null), `nomeWa` = o nome do WhatsApp.
+function _cobAutoRecepcao(cfg, l, nomeWa, agoraMs, semCodigo) {
+  const nome = _cobAutoNome(l && l.nome) || _cobAutoNome(nomeWa);
+  const textos = [_cobAutoSaudacao(cfg.txt.saudacao, agoraMs, nome), _cobAutoTexto(cfg.txt.apresenta, { nome })];
+  let codigo = '';
+  if (l && !String(l.afl || '')) {
+    const col = _cobColId(l.col);
+    if (_COB_AUTO_ANTES.has(col)) {
+      const v = _cobValorCobrar(l);
+      if (String(l.mod || '').toLowerCase() !== 'antecipado' && !_cobPago(l) && v > 0) {
+        textos.push(_cobAutoTexto(cfg.txt.localizei, { valor: _cobAutoBRL(v), nome }));
+      }
+      const tr = String(l.track || '').trim();
+      if (!semCodigo && _COB_AUTO_A_CAMINHO.has(col) && tr.length >= 6) {
+        const t = _cobAutoTexto(cfg.txt.postado, { codigo: tr, link: _cobRastreio(l), nome, valor: _cobAutoBRL(v) });
+        if (t && !_COB_AUTO_SOBROU.test(t)) { textos.push(t); codigo = tr; }
+      }
+    }
+  }
+  return { nome, codigo, textos: textos.map((t) => String(t || '').trim()).filter((t) => t && !_COB_AUTO_SOBROU.test(t)) };
+}
+// Linha em swweb_auto que pode ser tentada de novo: so FALHOU sem nada sair, menos de 3 vezes, ha
+// mais de 10 min. "pego" sem resposta NAO volta: nao da pra saber se saiu, e mandar duas vezes e pior.
+const _cobAutoDeNovo = (row, agoraS) => !!row && row.status === 'falhou' && (Number(row.tent) || 0) < 3 && (Number(row.feito_ts) || 0) < agoraS - 600;
+async function _cobAutoJa(env, ks) {
+  const m = new Map();
+  if (!ks.length) return m;
+  try {
+    const r = await env.DB.prepare('SELECT k, status, tent, feito_ts FROM swweb_auto WHERE k IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ks)).all();
+    for (const x of ((r && r.results) || [])) m.set(String(x.k), x);
+  } catch (_) { return null; }
+  return m;
+}
+// OS NUMEROS DE COBRANCA DA CASA: n8 -> { nk, at }. Dono com cargo cobrador, da casa (sem afiliado
+// no cadastro nem no chip).
+async function _cobAutoNumeros(env, data) {
+  const casa = new Set((await _cobradoresDaCasa(env)).map((c) => String(c.id)));
+  const m = new Map();
+  for (const c of (Array.isArray(data && data.chips) ? data.chips : [])) {
+    if (!c || !c.num || String(c.afl || '') || !casa.has(String(c.at || ''))) continue;
+    const nk = _waNumKey(c.num);
+    if (nk && nk.length === 10) m.set(nk.slice(-8), { nk, at: String(c.at) });
+  }
+  return m;
+}
+
+// O QUE SAI AGORA pelos numeros `n8sAlvo` (os que a maquina que pergunta tem abertos). `opts.previa`
+// = a tela da dash: todos os numeros, sem o horario do Postado e sem teto.
+async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
+  opts = opts || {};
+  const out = [];
+  if (!cfg || (!cfg.rec && !cfg.pos)) return out;
+  const agoraS = Math.floor(agoraMs / 1000);
+  const nums = await _cobAutoNumeros(env, data);
+  const alvo = new Set((n8sAlvo || []).map(String).filter((x) => nums.has(x)));
+  if (!alvo.size) return out;
+  const n8Cob = [...nums.keys()];
+  const instsCob = await _instsDosNumeros(env, data, n8Cob);
+  const chips = Array.isArray(data && data.chips) ? data.chips : [];
+  const nossos = new Set(chips.map((c) => _waNumKey(c && c.num)).filter((k) => k && k.length === 10));
+  const pedidos = _cobAutoPedidos(data);
+  await _cobAutoTabela(env);
+
+  // ── RECEPCAO ──
+  const recKeys = new Set();
+  if (cfg.rec) {
+    const instsAlvo = await _instsDosNumeros(env, data, [...alvo]);
+    let rows = [];
+    try {
+      const r = await env.DB.prepare(
+        "SELECT phone, instance, ts, body, push_name FROM wa_messages WHERE instance IN (SELECT value FROM json_each(?)) AND direction='in' AND ts > ? AND "
+        + _msgDoMundoSql('mundo', '') + ' ORDER BY ts LIMIT 4000'
+      ).bind(JSON.stringify(instsAlvo), agoraS - COB_AUTO_JANELA_S).all();
+      rows = (r && r.results) || [];
+    } catch (_) { rows = []; }
+    const porCli = new Map();
+    for (const x of rows) {
+      const k = _waNumKey(x.phone);
+      if (!k || k.length !== 10 || nossos.has(k)) continue;
+      const ts = Number(x.ts) || 0;
+      const o = porCli.get(k) || { fone: '', n8: '', desde: ts, ultimo: -1, nomeWa: '', acomp: false };
+      // O NUMERO QUE RESPONDE e o da ultima mensagem dele (cliente que escreveu nos dois fala onde esta falando agora).
+      if (ts >= o.ultimo) { o.ultimo = ts; o.fone = String(x.phone || ''); o.n8 = _instNum8(x.instance); }
+      if (ts < o.desde) o.desde = ts;
+      const pn = String(x.push_name || '').trim();
+      if (pn) o.nomeWa = pn;
+      const corpo = String(x.body || '');
+      if (/acomp/i.test(corpo) && /pedid/i.test(corpo)) o.acomp = true;
+      porCli.set(k, o);
+    }
+    const cands = [...porCli.entries()].filter(([, o]) => o.fone && alvo.has(o.n8) && agoraS - o.desde >= COB_AUTO_ESPERA_S);
+    // RESPONDIDO = qualquer numero de cobrador ja mandou qualquer coisa pra ele, em qualquer epoca.
+    const variantes = [...new Set(cands.flatMap(([, o]) => _cobAutoVariantes(o.fone)))];
+    const respondidos = new Set();
+    if (variantes.length) {
+      try {
+        const r = await env.DB.prepare(
+          "SELECT DISTINCT phone FROM wa_messages WHERE phone IN (SELECT value FROM json_each(?)) AND direction='out' AND instance IN (SELECT value FROM json_each(?))"
+        ).bind(JSON.stringify(variantes), JSON.stringify(instsCob)).all();
+        for (const x of ((r && r.results) || [])) respondidos.add(_waNumKey(x.phone));
+      } catch (_) { return out; }   // sem saber quem ja foi respondido, ninguem recebe nada
+    }
+    const rec = [];
+    for (const [k, o] of cands) {
+      if (respondidos.has(k)) continue;
+      const l = pedidos.get(k) || null;
+      if (!o.acomp && !l) continue;
+      rec.push({ k, o, l });
+    }
+    const ks = [];
+    for (const x of rec) {
+      ks.push('rec:' + x.k);
+      const tr = x.l ? String(x.l.track || '').trim() : '';
+      if (tr) ks.push('pos:' + String(x.l.id) + ':' + tr);
+    }
+    const ja = await _cobAutoJa(env, ks);
+    if (!ja) return out;
+    for (const { k, o, l } of rec) {
+      const row = ja.get('rec:' + k);
+      if (row && !_cobAutoDeNovo(row, agoraS)) continue;
+      // O CODIGO QUE JA ESTA COM ALGUEM (o Postado pegou ou mandou) nao vai de novo na recepcao.
+      const tr = l ? String(l.track || '').trim() : '';
+      const rowPos = tr ? ja.get('pos:' + String(l.id) + ':' + tr) : null;
+      const b = _cobAutoRecepcao(cfg, l, o.nomeWa, agoraMs, !!(rowPos && !_cobAutoDeNovo(rowPos, agoraS)));
+      if (b.textos.length < 2) continue;
+      const chaves = ['rec:' + k];
+      if (b.codigo) chaves.push('pos:' + String(l.id) + ':' + b.codigo);
+      recKeys.add(k);
+      out.push({
+        k: 'rec:' + k, tipo: 'recepcao', nk: nums.get(o.n8).nk, fone: o.fone, nome: b.nome, pedido: l ? String(l.id) : '',
+        codigo: b.codigo, desde: o.desde, textos: b.textos, chaves, ord: o.desde,
+      });
+    }
+  }
+
+  // ── POSTADO ── (das 8h as 21h de Brasilia: codigo de rastreio nao e assunto pra meia-noite)
+  const hora = new Date(agoraMs - _COB_BRT).getUTCHours();
+  if (cfg.pos && (opts.previa || (hora >= 8 && hora < 21))) {
+    const lista = [];
+    for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
+      if (!l || l.id == null || String(l.afl || '')) continue;
+      if (!_COB_AUTO_A_CAMINHO.has(_cobColId(l.col))) continue;
+      const tr = String(l.track || '').trim();
+      if (tr.length < 6) continue;
+      const k = _waNumKey(l.wa);
+      if (!k || k.length !== 10 || nossos.has(k) || recKeys.has(k)) continue;
+      const andou = _cobAutoAndou(l);
+      if (!andou || andou < agoraMs - COB_AUTO_ANDOU_MS) continue;
+      lista.push({ l, k, tr, andou });
+    }
+    if (lista.length) {
+      let rows = [];
+      try {
+        const r = await env.DB.prepare(
+          "SELECT phone, instance, MAX(ts) ts FROM wa_messages WHERE instance IN (SELECT value FROM json_each(?)) AND direction='in' AND ts > ? GROUP BY phone, instance"
+        ).bind(JSON.stringify(instsCob), agoraS - 60 * 86400).all();
+        rows = (r && r.results) || [];
+      } catch (_) { rows = []; }
+      // em qual numero de cobranca o cliente falou por ULTIMO
+      const ult = new Map();
+      for (const x of rows) {
+        const k = _waNumKey(x.phone);
+        if (!k || k.length !== 10) continue;
+        const ts = Number(x.ts) || 0;
+        const a = ult.get(k);
+        if (!a || ts > a.ts) ult.set(k, { ts, n8: _instNum8(x.instance), fone: String(x.phone || '') });
+      }
+      const cands = lista.filter((c) => { const u = ult.get(c.k); return u && alvo.has(u.n8); });
+      if (cands.length) {
+        // ESSE CODIGO JA FOI PRA ELE por algum numero nosso (cobrador colou, vendedor mandou)?
+        const pares = [], vistos = new Set();
+        for (const c of cands) {
+          for (const f of _cobAutoVariantes(ult.get(c.k).fone).concat(_cobAutoVariantes(c.l.wa))) {
+            const id = f + '|' + c.tr;
+            if (vistos.has(id)) continue;
+            vistos.add(id);
+            pares.push({ f, c: c.tr, k: c.k });
+          }
+        }
+        let jaTem = null;
+        try {
+          const r = await env.DB.prepare(
+            "SELECT DISTINCT json_extract(j.value,'$.k') k FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM wa_messages m WHERE m.phone = json_extract(j.value,'$.f')"
+            + " AND m.direction='out' AND instr(COALESCE(m.body,''), json_extract(j.value,'$.c')) > 0)"
+          ).bind(JSON.stringify(pares)).all();
+          jaTem = new Set(((r && r.results) || []).map((x) => String(x.k)));
+        } catch (_) { jaTem = null; }   // sem conferir se o codigo ja foi, nao manda
+        const ja = jaTem ? await _cobAutoJa(env, cands.map((c) => 'pos:' + String(c.l.id) + ':' + c.tr)) : null;
+        if (jaTem && ja) {
+          for (const c of cands) {
+            if (jaTem.has(c.k)) continue;
+            const key = 'pos:' + String(c.l.id) + ':' + c.tr;
+            const row = ja.get(key);
+            if (row && !_cobAutoDeNovo(row, agoraS)) continue;
+            const u = ult.get(c.k);
+            const nome = _cobAutoNome(c.l.nome);
+            const t = _cobAutoTexto(cfg.txt.postado, { codigo: c.tr, link: _cobRastreio(c.l), nome, valor: _cobAutoBRL(_cobValorCobrar(c.l)) });
+            if (!t || _COB_AUTO_SOBROU.test(t)) continue;
+            out.push({
+              k: key, tipo: 'postado', nk: nums.get(u.n8).nk, fone: u.fone, nome, pedido: String(c.l.id), codigo: c.tr,
+              desde: 0, textos: [t], chaves: [key], ord: 1e12 + c.andou,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // ── TETO por numero em 24 h ──
+  let lista = out;
+  if (lista.length && !opts.previa) {
+    try {
+      const r = await env.DB.prepare(
+        "SELECT nk, COUNT(*) n FROM swweb_auto WHERE pego_ts > ? AND status IN ('pego','enviado','parcial') GROUP BY nk"
+      ).bind(agoraS - 86400).all();
+      const cheio = new Set(((r && r.results) || []).filter((x) => (Number(x.n) || 0) >= COB_AUTO_TETO_DIA).map((x) => String(x.nk)));
+      if (cheio.size) {
+        console.log('COB_AUTO_TETO nks=' + [...cheio].join(','));
+        lista = lista.filter((x) => !cheio.has(String(x.nk)));
+      }
+    } catch (_) { return []; }
+  }
+  lista.sort((a, b) => a.ord - b.ord);
+  return (opts.previa ? lista : lista.slice(0, COB_AUTO_POR_VEZ)).map(({ ord, ...x }) => x);
+}
+
+// GET/POST /api/cob/auto — A TELA DA DASH (Cobranca > Cobradores): liga e desliga cada mensagem,
+// edita os textos, mostra o que saiu hoje e o que esta esperando o numero abrir. So a direcao da casa.
+async function handleCobAuto(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!isDirector(u) || _mundoDeQuem(u)) return err('Só a direção mexe nas mensagens automáticas', 403);
+  if (req.method === 'POST') {
+    const b = await req.json().catch(() => ({}));
+    const atual = await _cobAutoCfg(env);
+    const t = (b && b.txt && typeof b.txt === 'object') ? b.txt : null;
+    const txt = {};
+    for (const k of Object.keys(COB_AUTO_TXT)) {
+      const v = (t && t[k] != null) ? String(t[k]).replace(/\r\n/g, '\n').trim().slice(0, 2000) : atual.txt[k];
+      // so grava o que difere do padrao: o padrao melhorado chega sozinho em quem nao mexeu
+      if (v && v !== COB_AUTO_TXT[k]) txt[k] = v;
+    }
+    const cfg = {
+      rec: (b && b.rec != null) ? !!b.rec : atual.rec,
+      pos: (b && b.pos != null) ? !!b.pos : atual.pos,
+      txt, por: String(u.name || u.id), em: Date.now(),
+    };
+    await _writeConfig(env, COB_AUTO_KEY, JSON.stringify(cfg));
+    return json({ ok: true, cfg: await _cobAutoCfg(env), padrao: COB_AUTO_TXT });
+  }
+  const cfg = await _cobAutoCfg(env);
+  await _cobAutoTabela(env);
+  const agoraMs = Date.now();
+  const d0 = new Date(agoraMs - _COB_BRT);
+  const iniDiaS = Math.floor((Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate()) + _COB_BRT) / 1000);
+  const hoje = { recepcao: 0, postado: 0, pulado: 0, falhou: 0 };
+  let ultimos = [];
+  try {
+    const r = await env.DB.prepare('SELECT tipo, status, COUNT(*) n FROM swweb_auto WHERE COALESCE(feito_ts, pego_ts) >= ? GROUP BY tipo, status').bind(iniDiaS).all();
+    for (const x of ((r && r.results) || [])) {
+      const n = Number(x.n) || 0;
+      if (x.status === 'enviado') hoje[x.tipo === 'postado' ? 'postado' : 'recepcao'] += n;
+      else if (x.status === 'pulado') hoje.pulado += n;
+      else if (x.status === 'falhou' || x.status === 'parcial') hoje.falhou += n;
+    }
+    const r2 = await env.DB.prepare('SELECT k, tipo, nk, nome, status, n, motivo, COALESCE(feito_ts, pego_ts) ts FROM swweb_auto ORDER BY COALESCE(feito_ts, pego_ts) DESC LIMIT 20').all();
+    ultimos = ((r2 && r2.results) || []).map((x) => ({ tipo: x.tipo, nk: x.nk, nome: x.nome || '', status: x.status, n: Number(x.n) || 0, motivo: x.motivo || '', ts: Number(x.ts) || 0 }));
+  } catch (_) { /* sem historico a tela mostra so a configuracao */ }
+  // O QUE ESTA ESPERANDO: tudo que sairia agora se cada numero de cobrador estivesse aberto, com as
+  // duas mensagens ligadas (pra ver antes de ligar).
+  let fila = [];
+  try {
+    const data = await _getDashData(env);
+    const nums = await _cobAutoNumeros(env, data);
+    const nomes = await _cobNomes(env);
+    const itens = await _cobAutoItens(env, data, { ...cfg, rec: true, pos: true }, [...nums.keys()], agoraMs, { previa: true });
+    fila = itens.slice(0, 60).map((x) => {
+      const dono = [...nums.values()].find((v) => v.nk === x.nk);
+      return { tipo: x.tipo, nome: x.nome, nk: x.nk, cobrador: dono ? (nomes[dono.at] || '') : '', codigo: x.codigo || '', textos: x.textos };
+    });
+  } catch (e) { console.log('COB_AUTO_PREVIA_ERRO ' + String((e && e.message) || e).slice(0, 160)); }
+  return json({ ok: true, cfg, padrao: COB_AUTO_TXT, hoje, ultimos, fila });
+}
+
 // ── O QUE O VENDEDOR CRIA NO PAINEL DO SELLWAVE WEB (05/11/2026, pedido do Bruno) ────────────────
 //
 // "Eu gostaria que os meus vendedores pudessem personalizar a parte de disparos da maneira que eles
@@ -16913,6 +17350,88 @@ async function handleSwWeb(req, env, path) {
     return json({ ok: true, numeros });
   }
 
+
+  // ── AS MENSAGENS AUTOMATICAS DA COBRANCA (09/11/2026, ver _cobAutoItens) ──────────────────────
+  // So os numeros que ESTA maquina tem alugados agora. O aluguel e "um numero, um computador": e ele
+  // que garante que dois apps nao mandem a mesma recepcao pro mesmo cliente.
+  const _cobAutoMeus = async (lista) => {
+    const nks = [...new Set((lista || []).map((x) => String(x || '').replace(/\D/g, '')).filter((x) => x.length === 10))].slice(0, 30);
+    if (!nks.length || !maquina || mundo) return [];
+    try {
+      const r = await env.DB.prepare('SELECT nk FROM swweb_uso WHERE maquina = ? AND ate > ? AND nk IN (SELECT value FROM json_each(?))')
+        .bind(maquina, Math.floor(Date.now() / 1000), JSON.stringify(nks)).all();
+      return ((r && r.results) || []).map((x) => String(x.nk));
+    } catch (_) { return []; }
+  };
+  // GET /api/swweb/auto?nks=<nk>,<nk> — o que mandar AGORA pelos numeros de cobranca abertos aqui.
+  // `proxima` = em quantos segundos perguntar de novo (desligado: 5 min).
+  if (req.method === 'GET' && path === '/api/swweb/auto') {
+    const cfg = await _cobAutoCfg(env);
+    if (!cfg.rec && !cfg.pos) return json({ ok: true, itens: [], proxima: 300 });
+    const meus = await _cobAutoMeus(String(new URL(req.url).searchParams.get('nks') || '').split(','));
+    if (!meus.length) return json({ ok: true, itens: [], proxima: 120 });
+    const data = await _getDashData(env);
+    let itens = [];
+    try { itens = await _cobAutoItens(env, data, cfg, meus.map((nk) => nk.slice(-8)), Date.now(), {}); }
+    catch (e) { console.log('COB_AUTO_ERRO ' + String((e && e.message) || e).slice(0, 160)); itens = []; }
+    return json({ ok: true, itens, proxima: 60 });
+  }
+  // POST /api/swweb/auto/pega {k, chaves, nk, tipo, fone, pedido, nome} — A TRAVA: so um app manda
+  // cada mensagem, uma vez. A chave nasce 'pego'; so volta a ser oferecida se o app contar que FALHOU
+  // sem nada sair (ver _cobAutoDeNovo).
+  // POST /api/swweb/auto/feito {k, chaves, ok, pulado, n, motivo} — como foi.
+  if (req.method === 'POST' && (path === '/api/swweb/auto/pega' || path === '/api/swweb/auto/feito')) {
+    let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+    const chaveOk = (x) => /^(rec|pos):[0-9A-Za-z:._-]{6,160}$/.test(String(x || ''));
+    const k = String((b && b.k) || '');
+    if (!chaveOk(k)) return err('Chave inválida', 400);
+    const extras = (Array.isArray(b && b.chaves) ? b.chaves : []).map(String).filter((x) => x !== k && chaveOk(x)).slice(0, 3);
+    const nk = String((b && b.nk) || '').replace(/\D/g, '');
+    const meus = await _cobAutoMeus([nk]);
+    if (!meus.length) return json({ ok: false, erro: 'esse número não está aberto nesta máquina' });
+    await _cobAutoTabela(env);
+    const agoraS = Math.floor(Date.now() / 1000);
+    const por = String(u.id);
+    if (path === '/api/swweb/auto/pega') {
+      const tipo = String((b && b.tipo) || '') === 'postado' ? 'postado' : 'recepcao';
+      const fone = String((b && b.fone) || '').replace(/\D/g, '').slice(0, 15);
+      const pedido = String((b && b.pedido) || '').slice(0, 40);
+      const nome = String((b && b.nome) || '').slice(0, 80);
+      const r = await env.DB.prepare(
+        "INSERT INTO swweb_auto (k, tipo, nk, fone, pedido, nome, status, n, tent, criado, pego_ts, maquina, por) VALUES (?,?,?,?,?,?,'pego',0,0,?,?,?,?)"
+        + " ON CONFLICT(k) DO UPDATE SET status='pego', nk=excluded.nk, pego_ts=excluded.pego_ts, maquina=excluded.maquina, por=excluded.por, motivo=NULL"
+        + " WHERE swweb_auto.status='falhou' AND COALESCE(swweb_auto.tent,0) < 3 AND COALESCE(swweb_auto.feito_ts,0) < ?"
+      ).bind(k, tipo, nk, fone, pedido, nome, agoraS, agoraS, maquina, por, agoraS - 600).run();
+      if (!(r && r.meta && r.meta.changes)) return json({ ok: false, ja: true });
+      // O CODIGO QUE VAI JUNTO NA RECEPCAO trava o Postado daquele pedido na mesma hora.
+      for (const x of extras) {
+        try {
+          await env.DB.prepare(
+            "INSERT INTO swweb_auto (k, tipo, nk, fone, pedido, nome, status, n, tent, criado, pego_ts, maquina, por) VALUES (?,'postado',?,?,?,?,'pego',0,0,?,?,?,?)"
+            + " ON CONFLICT(k) DO UPDATE SET status='pego', nk=excluded.nk, pego_ts=excluded.pego_ts, maquina=excluded.maquina, por=excluded.por, motivo=NULL"
+            + " WHERE swweb_auto.status='falhou'"
+          ).bind(x, nk, fone, pedido, nome, agoraS, agoraS, maquina, por).run();
+        } catch (_) { /* melhor esforco: o Postado tambem confere se o codigo ja foi na conversa */ }
+      }
+      return json({ ok: true });
+    }
+    const ok = !!(b && b.ok), pulado = !ok && !!(b && b.pulado);
+    const n = Math.max(0, Math.min(20, Math.floor(Number(b && b.n) || 0)));
+    const st = ok ? 'enviado' : pulado ? 'pulado' : (n > 0 ? 'parcial' : 'falhou');
+    const motivo = String((b && b.motivo) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    await env.DB.prepare("UPDATE swweb_auto SET status=?, n=?, motivo=?, feito_ts=?, tent=COALESCE(tent,0)+? WHERE k=? AND maquina=? AND status='pego'")
+      .bind(st, n, motivo || null, agoraS, st === 'falhou' ? 1 : 0, k, maquina).run();
+    for (const x of extras) {
+      try {
+        // Recepcao pulada (o cobrador ja tinha respondido) SOLTA o codigo: o Postado decide sozinho depois.
+        if (pulado) await env.DB.prepare("DELETE FROM swweb_auto WHERE k=? AND maquina=? AND status='pego'").bind(x, maquina).run();
+        else await env.DB.prepare("UPDATE swweb_auto SET status=?, feito_ts=?, tent=COALESCE(tent,0)+? WHERE k=? AND maquina=? AND status='pego'")
+          .bind(ok ? 'enviado' : 'falhou', agoraS, ok ? 0 : 1, x, maquina).run();
+      } catch (_) { /* a linha extra e so trava */ }
+    }
+    if (!ok) console.log('COB_AUTO_' + st.toUpperCase() + ' k=' + k + ' n=' + n + ' por=' + por + ' motivo=' + motivo);
+    return json({ ok: true, status: st });
+  }
 
   // GET /api/swweb/numeros — a lista que a barra lateral do app mostra.
   if (req.method === 'GET' && path === '/api/swweb/numeros') {
@@ -36934,6 +37453,8 @@ export default {
       if (req.method === 'GET' && shortMatch) return handleShortRedirect(req, env, shortMatch[1]);
       // A regra de distribuicao da cobranca e o link de entrega que o vendedor manda (04/11/2026).
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/cob/regra') return handleCobRegra(req, env);
+      // As mensagens automaticas dos numeros de cobranca (09/11/2026, ver _cobAutoItens).
+      if ((req.method === 'GET' || req.method === 'POST') && path === '/api/cob/auto') return handleCobAuto(req, env);
       // /acompanhar-pedido e o endereco que vai na mensagem (04/11/2026, o Bruno: "da a entender que o
       // cliente vai clicar pra acompanhar o pedido"); /entrega fica valendo pra mensagem ja mandada.
       const entregaMatch = path.match(/^\/(?:acompanhar-pedido|entrega)(?:\/([0-9A-Za-z]{1,16}))?\/?$/);

@@ -433,6 +433,22 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   faixa de baixo também). (4) **Ficha**: Entrega, Retorno e Pagamento em caixas com a cor de cada um.
   Testes: painel 360/360 (o do quadro que pisca falha com o código antigo), `npm run teste`.
 
+- **09/11/2026 — MENSAGENS AUTOMÁTICAS DA COBRANÇA (1.26.14).** Pedido do Bruno: o cliente que chama o
+  cobrador recebe a recepção "mesmo que o cobrador não esteja online", e quem já chamou recebe o código de
+  rastreio quando o pedido sai. **O servidor decide, o app manda:** `_cobAutoItens` no worker (quem, o quê,
+  os textos já preenchidos com nome, valor e código) e o laço `autoCobranca` no main, que só roda com número
+  de COBRANÇA aberto, alugado por esta máquina e de pé há 2 min. Cada item: espera o painel terminar um funil
+  naquele número, CONFERE A CONVERSA NA PÁGINA (`__swChatDe` no agente: o cobrador pode ter respondido pelo
+  celular), PEGA no servidor (`/api/swweb/auto/pega`, a trava contra mandar duas vezes), manda texto por texto
+  com "digitando" (`auto: true` + `espera` valem até na primeira, ver `respiroDoItem`) e conta como foi
+  (`/auto/feito`); a barra avisa o cobrador. **O `swp:manda` virou `mandaItem`, com a VEZ DO NÚMERO**
+  (`naVezDoNumero`): painel e automática nunca digitam em duas conversas do mesmo número ao mesmo tempo. A
+  automática tem marca própria (`autoNoAr`) que a hibernação e o "recarregar todos" respeitam; ela NÃO entra
+  no `disparos` do painel (lá cada número tem um dono). Liga e desliga na dash, Cobrança > Cobradores
+  (`/api/cob/auto`, `app_config cob_auto`, desligado sem config). Sem o computador do cobrador ligado com o
+  app aberto, nada sai: a recepção sai quando ele abrir (janela de 72 h). Testes: `src/teste-auto-cobranca.mjs`
+  (61), `backend/teste-cob-auto.mjs` (54).
+
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
 Palavras dele: *"tudo que se diz a respeito do envio de mensagens automáticas, dos itens, dos funis,

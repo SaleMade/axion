@@ -436,6 +436,12 @@
   // Os funis oficiais nao mandam `espera`, entao seguem exatamente como estavam.
   var ESPERA_TETO = 120
   function respiroDoItem(item, ant, ehPrimeiro) {
+    // A MENSAGEM AUTOMATICA DA COBRANCA (09/11/2026) traz o proprio "digitando", inclusive na primeira:
+    // responder um cliente em 0 s, sem ninguem digitando, e cara de robo. Quem decide o tempo e o main
+    // (esperaDoTexto), pelo tamanho do texto.
+    if (item && item.auto && item.espera != null && item.espera !== '' && isFinite(Number(item.espera))) {
+      return Promise.resolve(Math.max(0, Math.min(ESPERA_TETO, Math.round(Number(item.espera)))))
+    }
     if (ehPrimeiro) return Promise.resolve(0)
     if (item.espera !== null && item.espera !== undefined && item.espera !== '' && isFinite(Number(item.espera))) {
       return Promise.resolve(Math.max(0, Math.min(ESPERA_TETO, Math.round(Number(item.espera)))))
@@ -1279,6 +1285,56 @@
         })
       }).catch(function () { return { ok: false } })
     } catch (_) { return Promise.resolve({ ok: false }) }
+  }
+
+  // A CONVERSA DE UM CLIENTE PRA MENSAGEM AUTOMATICA DA COBRANCA (09/11/2026). So LEITURA: o id da
+  // conversa (o envio vai por ele, igual ao funil), quando o cliente escreveu por ultimo, quando NOS
+  // escrevemos por ultimo (o cobrador pode ter respondido pelo celular, e isso so aparece aqui, nunca
+  // no servidor a tempo) e se `codigo` ja esta numa mensagem nossa. Casa pelo DDD + 8 ultimos digitos
+  // (aguenta o 9 a mais ou a menos e a conversa por @lid). Duas conversas do mesmo telefone: a mais
+  // recente.
+  window.__swChatDe = function (fone, codigo) {
+    try {
+      var W = window.WPP
+      if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) {
+        return Promise.resolve({ ok: false, erro: 'o WhatsApp ainda esta carregando' })
+      }
+      var chave = function (v) {
+        var d = String(v || '').replace(/\D/g, '')
+        if (d.length >= 12 && d.slice(0, 2) === '55') d = d.slice(2)
+        return d.length >= 10 ? d.slice(0, 2) + d.slice(-8) : ''
+      }
+      var alvo = chave(fone)
+      if (!alvo) return Promise.resolve({ ok: false, erro: 'telefone invalido' })
+      var cod = String(codigo || '').trim()
+      return Promise.resolve(W.chat.list({})).then(function (chats) {
+        var achado = null
+        ;(Array.isArray(chats) ? chats : []).forEach(function (c) {
+          var id = c && c.id && (c.id._serialized || String(c.id))
+          if (!id || c.isGroup || !ehPessoa(id)) return
+          if (chave(telefoneDoChat(c, id)) !== alvo) return
+          if (!achado || (Number(c.t) || 0) > (Number(achado.c.t) || 0)) achado = { c: c, id: id }
+        })
+        if (!achado) return { ok: true, achou: false }
+        return Promise.resolve(W.chat.getMessages(achado.id, { count: 60 })).then(function (msgs) {
+          var ultIn = 0, ultOut = 0, temCodigo = false, n = 0
+          ;(Array.isArray(msgs) ? msgs : []).forEach(function (m) {
+            if (!m) return
+            var tipo = String(m.type || 'chat')
+            // a cifrada conta: e mensagem do cliente que ainda nao abriu, e ele escreveu
+            if (NAO_E_MSG.test(tipo) && !/^ciphertext$/i.test(tipo)) return
+            var t = Number(m.t || m.timestamp || 0)
+            var deMim = !!(m.fromMe || (m.id && m.id.fromMe))
+            n++
+            if (deMim) {
+              if (t > ultOut) ultOut = t
+              if (cod && String(m.body || m.caption || '').indexOf(cod) >= 0) temCodigo = true
+            } else if (t > ultIn) ultIn = t
+          })
+          return { ok: true, achou: true, chatId: achado.id, ultIn: ultIn, ultOut: ultOut, temCodigo: temCodigo, n: n }
+        }).catch(function (e) { return { ok: false, erro: String((e && e.message) || e).slice(0, 120) } })
+      }).catch(function (e) { return { ok: false, erro: String((e && e.message) || e).slice(0, 120) } })
+    } catch (e) { return Promise.resolve({ ok: false, erro: String((e && e.message) || e).slice(0, 120) }) }
   }
 
   var ligado = null

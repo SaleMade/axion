@@ -1066,7 +1066,7 @@ function candidatosHibernacao() {
   // NA TELA DE QUALQUER JANELA, e com disparo vivo em QUALQUER numero.
   const naTela = new Set([ativoAgora, ...destacados.keys()].filter(Boolean))
   return [...abertos.values()]
-    .filter((s) => !naTela.has(s.nk) && !disparos.has(s.nk))
+    .filter((s) => !naTela.has(s.nk) && !disparos.has(s.nk) && !autoNoAr.has(s.nk))
     .sort((a, b) => (a.ultimoUso || 0) - (b.ultimoUso || 0))
     .map((s) => s.nk)
 }
@@ -3282,6 +3282,7 @@ async function reportaConexao(s, e) {
   const antes = s.connUltimo || ''
   s.connUltimo = st
   if (st === 'pronto') s.jaPronto = true   // ja ficou de pe nesta abertura (ver despedida)
+  if (st === 'pronto') s.prontoEm = Date.now()   // desde quando (as mensagens automaticas esperam 2 min, ver AUTO_PRONTO_MS)
   if (st === 'pronto') crmAbrePendente(s)  // o card do CRM pediu esta conversa antes do numero abrir
   notaPareamento(s, st)                    // QR lido no meio do expediente tambem conta (ver PAREAMENTO_MIN_MS)
   const ruim = (st === 'caiu' || st === 'bloqueado' || st === 'conflito' || st === 'proxy')
@@ -4181,7 +4182,22 @@ const cheioDe = (nk) => {
   return d.length >= 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, -4) + '-' + d.slice(-4) : ''
 }
 
-ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
+// UM ENVIO POR VEZ EM CADA NUMERO (09/11/2026, mensagens automaticas da cobranca). Ate aqui so o painel
+// mandava, e o painel ja tem um consumidor por numero. Com o envio automatico entrando por este mesmo
+// caminho, os dois poderiam ficar "digitando" em duas conversas do mesmo WhatsApp ao mesmo tempo, que
+// e coisa que gente nao faz. A vez e por ITEM: um passo do funil e uma mensagem automatica se
+// alternam, nunca se sobrepoem. A midia baixa ANTES de entrar na vez (baixar nao segura ninguem).
+const vezDoNumero = new Map()   // nk -> promessa do ultimo envio daquele numero
+function naVezDoNumero(nk, fn) {
+  const chave = String(nk || '')
+  const antes = vezDoNumero.get(chave) || Promise.resolve()
+  const agora = antes.catch(() => {}).then(fn)
+  const fim = agora.catch(() => {})
+  vezDoNumero.set(chave, fim)
+  fim.then(() => { if (vezDoNumero.get(chave) === fim) vezDoNumero.delete(chave) })
+  return agora
+}
+async function mandaItem(nk, chatId, item) {
   // O ENVIO VAI PRA VIEW DAQUELE NUMERO, nao pra "a que esta na tela".
   //
   // O funil dura dezenas de segundos (tem pausa e simulacao de digitando). Se o vendedor clicasse
@@ -4197,19 +4213,169 @@ ipcMain.handle('swp:manda', async (_e, { nk, chatId, item }) => {
     catch (e) { return { ok: false, erro: 'nao baixei a midia: ' + ((e && e.message) || e) } }
     delete pedaco.url
   }
-  try {
-    const antes = Date.now()
-    const r = await comTetoNode(wc, String(nk || ''),
-      'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', tetoDoItem(pedaco))
-    if (r && nk) setTimeout(() => confereCaptura(String(nk), antes), CAPTURA_ESPERA_MS)   // ver CAPTURA_ESPERA_MS
-    // A CONVERSA DO LEAD VAI PRA DASH NO DISPARO DO FUNIL (ver COLHEITA). Depois do envio e sem
-    // esperar: o funil nao pode ficar mais lento por causa disto.
-    if (r && nk && chatId) setTimeout(() => { colheConversa(String(nk), String(chatId)).catch(() => {}) }, 1500)
-    return { ok: !!r }
-  } catch (e) {
-    return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
+  return naVezDoNumero(nk, async () => {
+    if (wc.isDestroyed()) return { ok: false, erro: 'o número foi fechado, o funil parou aqui' }
+    try {
+      const antes = Date.now()
+      const r = await comTetoNode(wc, String(nk || ''),
+        'window.__swManda(' + JSON.stringify(String(chatId || '')) + ',' + JSON.stringify(pedaco) + ')', tetoDoItem(pedaco))
+      if (r && nk) setTimeout(() => confereCaptura(String(nk), antes), CAPTURA_ESPERA_MS)   // ver CAPTURA_ESPERA_MS
+      // A CONVERSA DO LEAD VAI PRA DASH NO DISPARO DO FUNIL (ver COLHEITA). Depois do envio e sem
+      // esperar: o funil nao pode ficar mais lento por causa disto.
+      if (r && nk && chatId) setTimeout(() => { colheConversa(String(nk), String(chatId)).catch(() => {}) }, 1500)
+      return { ok: !!r }
+    } catch (e) {
+      return { ok: false, erro: String((e && e.message) || e).replace(/^Error:\s*/, '').slice(0, 160) }
+    }
+  })
+}
+ipcMain.handle('swp:manda', (_e, { nk, chatId, item }) => mandaItem(nk, chatId, item))
+
+// ══ MENSAGENS AUTOMATICAS DA COBRANCA (09/11/2026) ═══════════════════════════════════════════════
+// Pedido do Bruno: o cliente que chama o cobrador recebe a recepcao "mesmo que o cobrador nao esteja
+// online", e quem ja chamou recebe o codigo de rastreio quando o pedido sai. O SERVIDOR decide o que e
+// pra quem (_cobAutoItens no worker); aqui so se manda, pelo mesmo envio do painel.
+//
+// O LACO: a cada 15 s olha se ha numero de COBRANCA aberto aqui, conectado ha pelo menos 2 min (ao
+// abrir, o WhatsApp ainda esta trazendo o que o cobrador respondeu pelo celular com o app fechado) e
+// com o aluguel desta maquina. Tendo, pergunta ao servidor no ritmo que ele mandar (`proxima`). Cada
+// item, um de cada vez:
+//   1. espera o painel terminar um funil naquele numero (ate 3 min);
+//   2. CONFERE A CONVERSA NA PAGINA (__swChatDe): recepcao so se ninguem respondeu depois que o
+//      cliente escreveu; codigo so se ele ainda nao esta na conversa;
+//   3. PEGA no servidor (a trava contra mandar duas vezes) e manda texto por texto, com "digitando";
+//   4. conta como foi, e a barra avisa o cobrador. Respiro de 30 a 60 s entre um cliente e outro.
+// Nao tem botao aqui: ligar e desligar e da direcao, na dash (Cobranca > Cobradores).
+const AUTO_TICK_MS = 15000
+const AUTO_PRONTO_MS = 120000
+const AUTO_POR_RODADA = 4
+let autoRodando = false
+let autoProximaEm = 0
+const autoDepois = new Map()   // k -> voltas em que a pagina pediu "depois"
+// NUMERO MANDANDO MENSAGEM AUTOMATICA AGORA. A hibernacao e o "recarregar todos" pulam ele, como pulam
+// quem esta no meio de um funil. Marca propria, e nao o `disparos` do painel: la cada numero tem UM
+// dono, e o painel recusado ali perderia a protecao do funil dele quando a automatica acabasse.
+const autoNoAr = new Set()
+const ehDeCobranca = (nk) => (config.numeros || []).some((n) => n && n.cobranca && numKey(n.numero) === nk)
+// O "digitando" de cada texto, em segundos: o primeiro de 4 a 7 (ninguem responde em 0 s), os outros
+// pelo tamanho, de 4 a 16.
+function esperaDoTexto(texto, i, sorte) {
+  const r = typeof sorte === 'number' ? sorte : Math.random()
+  if (i === 0) return 4 + Math.round(r * 3)
+  return Math.min(14, 3 + Math.ceil(String(texto || '').length / 40)) + Math.round(r * 2)
+}
+// O que a pagina viu decide: null = pode mandar; { depois } = tenta na proxima volta sem pegar;
+// { pula } = pega e conta como pulado (nao volta mais). `conta` = esse "depois" e da CONVERSA (nao
+// achou, nao carregou) e conta pras 5 voltas; pagina ocupada, agente velho (antes de a pagina
+// recarregar) e cobrador falando agora nao contam: so esperam.
+function confereAuto(it, c, agoraS) {
+  if (!c || !c.ok) return { depois: (c && c.erro) || 'a página não respondeu' }
+  if (!c.achou) return { depois: 'conversa não encontrada', conta: true }
+  if (!c.n) return { depois: 'conversa sem mensagens carregadas', conta: true }
+  if (it.tipo === 'recepcao') {
+    if (!c.ultIn) return { depois: 'a mensagem do cliente ainda não carregou', conta: true }
+    if (c.ultOut && c.ultOut >= (Number(it.desde) || 0) - 5) return { pula: 'já respondido na conversa' }
+    return null
   }
-})
+  if (c.temCodigo) return { pula: 'o código já está na conversa' }
+  if (c.ultOut && agoraS - c.ultOut < 120) return { depois: 'o cobrador está falando com ele agora' }
+  return null
+}
+async function postaAuto(rota, corpo) {
+  try {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + rota, {
+      method: 'POST', headers: cabecalhos(), body: JSON.stringify(corpo), signal: AbortSignal.timeout(20000),
+    })
+    return await r.json().catch(() => null)
+  } catch (_) { return null }
+}
+async function rodaAuto(it) {
+  const s = abertos.get(it.nk)
+  const wc = s && s.view && !s.view.webContents.isDestroyed() ? s.view.webContents : null
+  if (!wc || !prontoCob(it.nk)) return 'fechado'
+  const textos = (Array.isArray(it.textos) ? it.textos : []).map((t) => String(t || '').trim()).filter(Boolean).slice(0, 6)
+  if (!textos.length) return 'vazio'
+  // 1) o painel disparando um funil neste numero: espera ele acabar
+  for (let i = 0; i < 36 && disparos.has(it.nk); i++) await espera(5000)
+  // 2) a conversa, na pagina
+  let c = null
+  try {
+    c = await Promise.race([
+      wc.executeJavaScript('window.__swChatDe ? window.__swChatDe(' + JSON.stringify(String(it.fone || '')) + ',' + JSON.stringify(String(it.codigo || ''))
+        + ') : ({ ok: false, erro: "agente sem __swChatDe" })', true),
+      espera(20000).then(() => null),
+    ])
+  } catch (_) { c = null }
+  const v = confereAuto(it, c, Math.floor(Date.now() / 1000))
+  if (v && v.depois) {
+    if (!v.conta) { anota('[auto] ' + it.k + ' depois: ' + v.depois); return 'depois' }
+    // CONVERSA QUE NUNCA APARECE (telefone que a pagina nao resolve) nao gira pra sempre: na quinta
+    // volta vira pulado.
+    const n = (autoDepois.get(it.k) || 0) + 1
+    autoDepois.set(it.k, n)
+    if (n < 5) { anota('[auto] ' + it.k + ' depois: ' + v.depois); return 'depois' }
+  }
+  autoDepois.delete(it.k)
+  // 3) a trava do servidor
+  const p = await postaAuto('/api/swweb/auto/pega', { k: it.k, chaves: it.chaves, nk: it.nk, tipo: it.tipo, fone: it.fone, pedido: it.pedido || '', nome: it.nome || '' })
+  if (!p || !p.ok) { anota('[auto] ' + it.k + ' nao peguei (' + ((p && (p.erro || (p.ja && 'ja foi'))) || 'sem resposta') + ')'); return 'ja' }
+  if (v) {
+    const motivo = v.pula || v.depois
+    await postaAuto('/api/swweb/auto/feito', { k: it.k, chaves: it.chaves, nk: it.nk, ok: false, pulado: true, n: 0, motivo })
+    anota('[auto] ' + it.k + ' pulado: ' + motivo)
+    return 'pulado'
+  }
+  // protegido da hibernacao e do "recarregar todos" enquanto manda (ver autoNoAr)
+  autoNoAr.add(it.nk)
+  let n = 0, erro = ''
+  try {
+    for (let i = 0; i < textos.length; i++) {
+      const seg = esperaDoTexto(textos[i], i)
+      const r = await mandaItem(it.nk, c.chatId, { tipo: 'texto', texto: textos[i], auto: true, espera: seg, pausa: seg })
+      if (!r || !r.ok) { erro = (r && r.erro) || 'sem resposta'; break }
+      n++
+    }
+  } finally { autoNoAr.delete(it.nk) }
+  const tudo = n === textos.length
+  await postaAuto('/api/swweb/auto/feito', { k: it.k, chaves: it.chaves, nk: it.nk, ok: tudo, n, motivo: erro })
+  anota('[auto] ' + it.k + ' ' + (tudo ? 'enviado (' + n + ')' : 'parou em ' + n + '/' + textos.length + ': ' + erro))
+  if (tudo) {
+    avisaCasca('sw:aviso', {
+      nk: it.nk,
+      texto: (it.tipo === 'postado' ? 'Código de rastreio enviado automaticamente para ' : 'Recepção automática enviada para ') + (it.nome || 'o cliente') + '.',
+    })
+  }
+  return tudo ? 'enviado' : 'falhou'
+}
+async function autoCobranca() {
+  if (autoRodando || !config.token || Date.now() < autoProximaEm) return
+  const nks = [...abertos.keys()].filter((nk) => {
+    const s = abertos.get(nk)
+    return alugados.has(nk) && ehDeCobranca(nk) && prontoCob(nk) && !!(s && s.prontoEm) && Date.now() - s.prontoEm >= AUTO_PRONTO_MS
+  })
+  if (!nks.length) return
+  autoRodando = true
+  try {
+    let d = null
+    try {
+      const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/auto?nks=' + nks.join(','), { headers: cabecalhos(), signal: AbortSignal.timeout(25000) })
+      ajustaRelogio(r)
+      d = r.ok ? await r.json().catch(() => null) : null
+    } catch (_) { d = null }
+    if (!d || !d.ok) { autoProximaEm = Date.now() + 120000; return }
+    autoProximaEm = Date.now() + Math.max(30, Math.min(600, Number(d.proxima) || 60)) * 1000
+    const itens = (Array.isArray(d.itens) ? d.itens : []).filter((x) => x && x.k && nks.includes(String(x.nk))).slice(0, AUTO_POR_RODADA)
+    for (let i = 0; i < itens.length; i++) {
+      let r = ''
+      try { r = await rodaAuto(itens[i]) } catch (e) { anota('[auto] ' + itens[i].k + ' erro: ' + ((e && e.message) || e)) }
+      // O RESPIRO entre um cliente e outro, so depois de mandar de verdade.
+      if (r === 'enviado' && i < itens.length - 1) await espera(30000 + Math.floor(Math.random() * 30000))
+    }
+    // tinha mais na fila: a proxima volta nao espera o minuto inteiro
+    if ((Array.isArray(d.itens) ? d.itens.length : 0) > itens.length) autoProximaEm = Date.now() + 30000
+  } finally { autoRodando = false }
+}
+setInterval(() => { autoCobranca().catch(() => {}) }, AUTO_TICK_MS)
 
 // Fechar e recarregar a sessao que esta na tela, pelo proprio painel: e onde a mao do vendedor ja
 // esta. A sessao fica no disco, entao fechar NAO pede QR de novo depois.
@@ -4254,7 +4420,7 @@ ipcMain.handle('sw:recarregar-todos', () => {
   for (const [nk, s] of [...abertos]) {
     const wc = s && s.view && s.view.webContents
     if (!wc || wc.isDestroyed()) continue
-    if (disparos.has(nk)) { noFunil += 1; continue }
+    if (disparos.has(nk) || autoNoAr.has(nk)) { noFunil += 1; continue }
     try { wc.reload(); feitos += 1 } catch (_) { /* um numero que falha nao para os outros */ }
   }
   anota('[agente] recarreguei ' + feitos + ' numero(s) pro motor novo valer'
